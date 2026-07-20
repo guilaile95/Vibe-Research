@@ -581,3 +581,113 @@ def get_market_breadth() -> dict:
         warnings=base_warns,
         is_stale=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# 板块排名共享缓存 + 状态信封（industry / concept / region）
+# ---------------------------------------------------------------------------
+_BOARD_TYPES = frozenset({"industry", "concept", "region"})
+_BOARD_CACHE_TOP_N = 100  # 缓存固定抓取前 100，页面再切片
+
+
+def get_cached_board_ranking(board_type: str) -> dict:
+    """板块排名底层结果（共享缓存，TTL 同模块 5 分钟）。
+
+    固定调用 ``astock.board_ranking(board_type, top_n=100)``。
+    空结果不缓存；异常向上抛出，由 ``get_board_ranking`` 转为 unavailable。
+    """
+    if board_type not in _BOARD_TYPES:
+        raise ValueError(f"不支持的板块类型：{board_type}")
+
+    def fetch():
+        return astock.board_ranking(board_type, top_n=_BOARD_CACHE_TOP_N)
+
+    # valid：total>0 且有 ranked 才缓存；空/全不可用下次重试
+    def _valid(raw) -> bool:
+        if not isinstance(raw, dict):
+            return False
+        return bool(raw.get("total")) and bool(raw.get("ranked_count"))
+
+    return _cached(f"board_ranking:{board_type}", fetch, valid=_valid)
+
+
+def get_board_ranking(board_type: str = "industry", top_n: int = 20) -> dict:
+    """板块排名状态信封（始终返回统一结构）。
+
+    - 参数非法（类型 / top_n）→ 抛出 ValueError（不转 unavailable）
+    - 数据源/结构异常、无有效排名 → status=unavailable, data=None
+    - 有排名但存在缺涨跌幅 → partial
+    - 全部有涨跌幅 → normal
+
+    缓存抓取 top_n=100，本函数按请求 top_n 切片，不改数值、不重排。
+    """
+    if board_type not in _BOARD_TYPES:
+        raise ValueError(f"不支持的板块类型：{board_type}")
+    if not isinstance(top_n, int) or isinstance(top_n, bool) or not (1 <= top_n <= 100):
+        raise ValueError(f"top_n 必须在 1..100 之间，收到：{top_n!r}")
+
+    try:
+        raw = get_cached_board_ranking(board_type)
+    except ValueError:
+        raise
+    except Exception as e:  # noqa: BLE001 — 外部数据边界
+        return _breadth_envelope(
+            "unavailable",
+            data=None,
+            warnings=[f"板块排名数据不可用：{type(e).__name__}: {e}"],
+            is_stale=False,
+        )
+
+    if not isinstance(raw, dict):
+        return _breadth_envelope(
+            "unavailable",
+            data=None,
+            warnings=["板块排名数据不可用：结果结构异常"],
+            is_stale=False,
+        )
+
+    try:
+        total = int(raw.get("total") or 0)
+        ranked_count = int(raw.get("ranked_count") or 0)
+        unknown_count = int(raw.get("unknown_count") or 0)
+        top = list(raw.get("top") or [])
+        bottom = list(raw.get("bottom") or [])
+    except (TypeError, ValueError) as e:
+        return _breadth_envelope(
+            "unavailable",
+            data=None,
+            warnings=[f"板块排名数据不可用：{type(e).__name__}: {e}"],
+            is_stale=False,
+        )
+
+    if total <= 0 or ranked_count <= 0:
+        return _breadth_envelope(
+            "unavailable",
+            data=None,
+            warnings=["板块排名数据不可用：无有效涨跌幅排名"],
+            is_stale=False,
+        )
+
+    data = {
+        "type": raw.get("type") or board_type,
+        "total": total,
+        "ranked_count": ranked_count,
+        "unknown_count": unknown_count,
+        "top": top[:top_n],
+        "bottom": bottom[:top_n],
+    }
+
+    base_warns = [_WARN_NO_TRADE_META]
+    if unknown_count > 0 or ranked_count < total:
+        return _breadth_envelope(
+            "partial",
+            data=data,
+            warnings=base_warns + [f"有 {unknown_count} 个板块缺少有效涨跌幅"],
+            is_stale=False,
+        )
+    return _breadth_envelope(
+        "normal",
+        data=data,
+        warnings=base_warns,
+        is_stale=False,
+    )
