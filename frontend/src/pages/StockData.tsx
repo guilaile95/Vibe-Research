@@ -7,7 +7,6 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
-import { Disclaimer } from "@/components/ui/Disclaimer";
 import {
   api, ApiError, type Valuation, type Report, type NewsItem, type ValPercentile, type ValMetric,
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
@@ -182,7 +181,7 @@ export function StockData() {
       (fin?.revenue ? `财务(${fin.period ?? "—"})：营收 ${fin.revenue}(同比${fin.revenue_yoy ?? "—"})、净利 ${fin.net_profit ?? "—"}(同比${fin.net_profit_yoy ?? "—"})、ROE ${fin.roe ?? "—"}、毛利率 ${fin.gross_margin ?? "—"}\n` : "") +
       (anns.length ? `近期公告：${anns.slice(0, 5).map((a) => a.title.replace(/^[^:：]*[:：]/, "")).join("；")}\n` : "") +
       `近期研报：${reports.slice(0, 5).map((r) => r.title).join("；") || "无"}`
-    : "还没查询个股。输入 6 位代码后可让 AI 基于客观数据帮你分析。";
+    : "还没查询个股。输入代码后可让 AI 帮你分析。";
 
   const gAiContext = gstock
     ? `个股（${mktName(gstock.market)}）：${gstock.name}（${gstock.code}）\n` +
@@ -196,7 +195,7 @@ export function StockData() {
     <div>
       <PageHeader
         title="个股数据"
-        subtitle="行情 · 估值 · 研报 · 新闻 —— 客观数据配齐，判断交给你的 AI"
+        subtitle="行情 · 估值 · 研报 · 新闻 · 资金面"
         actions={(val || gstock) && (
           <AskAiButton
             context={gstock ? gAiContext : aiContext}
@@ -290,7 +289,7 @@ export function StockData() {
           )}
 
           <p className="text-xs text-muted-foreground/60">
-            美股 / 港股数据来自 <a href="https://github.com/simonlin1212/global-stock-data" target="_blank" rel="noreferrer" className="hover:text-primary">global-stock-data</a>（东财域内源）· 金额为原生币种 · 仅客观数据，不含买卖建议。
+            美股 / 港股数据来自 <a href="https://github.com/simonlin1212/global-stock-data" target="_blank" rel="noreferrer" className="hover:text-primary">global-stock-data</a>（东财域内源）· 金额为原生币种。
           </p>
         </>
       )}
@@ -318,13 +317,12 @@ export function StockData() {
             )}
           </GlassCard>
 
-          {/* 财报速览（结论先行摘要，借鉴 equity-research 的结构纪律，剔除评级/目标价） */}
           <EarningsSnapshot val={val} fin={fin} pctl={pctl} />
 
           {pctl && (pctl.metrics.pe_ttm || pctl.metrics.pb) && (
             <GlassCard glow className="mb-4">
               <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold"><LineChart className="h-4 w-4 text-primary" /> 估值历史分位 · {pctl.period}</h3>
-              <p className="mb-4 text-[11px] text-muted-foreground/60">绿=低估区 / 灰=合理区 / 红=高估区。只显示当前处于历史什么位置，不构成买卖建议。</p>
+              <p className="mb-4 text-[11px] text-muted-foreground/60">绿=低估区 / 灰=合理区 / 红=高估区（相对近 5 年分位）。</p>
               <div className="space-y-4">
                 {pctl.metrics.pe_ttm && <ValBand label="PE-TTM" m={pctl.metrics.pe_ttm} />}
                 {pctl.metrics.pb && <ValBand label="市净率 PB" m={pctl.metrics.pb} />}
@@ -444,7 +442,6 @@ export function StockData() {
                   </div>
                 </div>
               )}
-              <p className="mt-3 text-[11px] text-muted-foreground/60">资金/筹码为公开客观数据，仅供了解该股当前状态，不构成任何买卖建议。</p>
             </GlassCard>
           )}
 
@@ -551,12 +548,10 @@ export function StockData() {
         <GlassCard>
           <div className="py-10 text-center text-sm text-muted-foreground">
             输入一个 6 位股票代码，拉取它的行情、估值、研报与新闻。<br />
-            <span className="text-xs text-muted-foreground/60">数据来自公开源（腾讯行情 / 东财研报 / akshare）；Vibe-Research 不预置任何标的、不做推荐。</span>
+            <span className="text-xs text-muted-foreground/60">数据来自公开源（腾讯行情 / 东财研报 / akshare）。</span>
           </div>
         </GlassCard>
       )}
-
-      <Disclaimer />
     </div>
   );
 }

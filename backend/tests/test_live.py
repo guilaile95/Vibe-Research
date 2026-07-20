@@ -63,7 +63,7 @@ def test_concept_blocks_and_industry():
 
 @pytest.mark.live
 def test_short_term_emotion_shape():
-    """短线情绪：聚合指标 + 连板股清单（客观公开榜单）结构正确。"""
+    """短线情绪：聚合指标 + 连板股清单结构正确。"""
     import market
     e = market.get_short_term_emotion()
     assert isinstance(e, dict)

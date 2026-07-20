@@ -38,7 +38,7 @@ def _num(v) -> int:
 
 
 def _sentiment() -> dict:
-    """市场情绪：涨跌家数/涨停跌停/活跃度 + 大盘宽度、题材投机（客观数据机械分档）。"""
+    """市场情绪：涨跌家数/涨停跌停/活跃度 + 大盘宽度、题材投机。"""
     try:
         # akshare 惰性导入（同 astock 模式）：未装时降级返回空，不挡整个服务启动
         df = astock._akshare().stock_market_activity_legu()
@@ -101,10 +101,9 @@ def get_overview() -> dict:
 
 
 def _emotion() -> dict:
-    """短线情绪（聚合口径，**零个股名**）：连板梯队 / 最高连板 / 炸板率 / 封板率 / 晋级率 / 涨跌停家数。
+    """短线情绪：连板梯队 / 最高连板 / 炸板率 / 封板率 / 晋级率 / 涨跌停家数 + 连板股清单。
 
-    数据源＝东财涨停板四池（push2ex）。只把池子聚合成计数与比率，
-    **不输出任何个股 code/name**——守产品「零标的」红线（个股清单是甩名单，不做）。
+    数据源＝东财涨停板四池（push2ex）。
     """
     # 定位最近交易日：从今天往前回溯，第一日有涨停池即取（非交易日/盘前返空则继续回溯）。
     today = datetime.now(BEIJING).date()
@@ -128,8 +127,7 @@ def _emotion() -> dict:
     tiers = Counter(min(b, 5) for b in lianban)
     ladder = [{"boards": b, "count": tiers[b], "plus": b >= 5} for b in sorted(tiers)]
 
-    # 连板股清单（2 板+，客观公开榜单数据；按连板数、成交额降序）。
-    # 产品定位调整（2026-07-05）：从「零标的」→「展示客观榜单但不推荐/不预测/不评分」。
+    # 连板股清单（2 板+；按连板数、成交额降序）。
     lianban_stocks = sorted(
         ({
             "code": str(p.get("c", "")), "name": p.get("n", ""),
@@ -172,7 +170,7 @@ def get_short_term_emotion() -> dict:
 
 
 def get_turnover_top() -> dict:
-    """全市场成交额榜 Top20（客观公开榜单，含缓存 5 分钟）。"""
+    """全市场成交额榜 Top20（含缓存 5 分钟）。"""
     def build():
         return {
             "stocks": astock.market_turnover_rank(20),

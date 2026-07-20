@@ -1,10 +1,10 @@
 """资讯雷达数据层 —— 移植自 investment-news。
 
-抓 12 赛道 108 个公开 RSS 源 → 合规过滤（赌/预测市场/加密/色情）+ 最近 N 天
+抓 12 赛道 108 个公开 RSS 源 → 内容过滤（赌/预测市场/加密/色情）+ 最近 N 天
 + 按赛道分组、时间倒序。纯标准库 + 线程池，零 key、零个股字段。
 
 AI「今日要点」不在此模块——复用 Vibe-Research 的可插拔 AI 层（前端调 /api/chat，
-把某赛道资讯打包给用户自己的模型提炼）。本模块只出客观资讯。
+把某赛道资讯打包给用户自己的模型提炼）。
 """
 
 from __future__ import annotations
@@ -82,7 +82,7 @@ def _fetch_source(src: dict, per: int, cutoff, redline: list[str]):
             if not d["title"]:
                 continue
             blob = (d["title"] + " " + d["summary"]).lower()
-            if any(k in blob for k in redline):  # 合规红线过滤
+            if any(k in blob for k in redline):  # 内容过滤
                 continue
             dt = _parse_dt(rawtime)
             if dt is not None:

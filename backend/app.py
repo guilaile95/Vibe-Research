@@ -1,7 +1,7 @@
 """Vibe-Research 后端 —— A股数据层 HTTP 接口（FastAPI）。
 
 端点全部在 /api 下，前端 vite 代理 /api → localhost:8900。
-只读、无状态、按用户传入代码返回客观数据。不预置标的、不建议。
+只读、无状态，按用户传入代码返回行情 / 研报 / 资金等数据。
 
 启动：
     uvicorn app:app --host 127.0.0.1 --port 8900
@@ -259,11 +259,7 @@ def market_overview():
 
 @app.get("/api/market/emotion")
 def market_emotion():
-    """短线情绪：连板梯队 / 最高连板 / 炸板率 / 封板率 / 晋级率 / 涨跌停家数。
-
-    含连板梯队个股清单（code/name/连板数等）——2026-07-05 起如实展示客观公开榜单（东财同款），
-    只呈现事实，不附推荐/评分/预测/买卖时机。全站共享缓存 5 分钟。
-    """
+    """短线情绪：连板梯队 / 最高连板 / 炸板率 / 封板率 / 晋级率 / 涨跌停家数 + 连板股清单。全站共享缓存 5 分钟。"""
     try:
         return {"data": market.get_short_term_emotion()}
     except Exception as e:  # noqa: BLE001
@@ -272,7 +268,7 @@ def market_emotion():
 
 @app.get("/api/market/turnover-top")
 def market_turnover_top():
-    """全市场成交额榜 Top20（客观公开榜单数据，非推荐/非预测/不评分）。全站共享缓存 5 分钟。"""
+    """全市场成交额榜 Top20。全站共享缓存 5 分钟。"""
     try:
         return {"data": market.get_turnover_top()}
     except Exception as e:  # noqa: BLE001

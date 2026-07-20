@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Plus, X, RefreshCw, Star } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { Disclaimer } from "@/components/ui/Disclaimer";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { api, type Quote } from "@/lib/api";
 import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
@@ -159,8 +158,6 @@ export function Watchlist() {
           </div>
         )}
       </GlassCard>
-
-      <Disclaimer />
     </div>
   );
 }

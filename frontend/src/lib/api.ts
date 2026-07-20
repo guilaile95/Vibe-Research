@@ -140,7 +140,7 @@ export interface MarketOverview {
   sentiment: MarketSentiment; sectors: SectorFlow[]; updated: string;
 }
 
-// 短线情绪：连板梯队 / 最高连板 / 炸板率 / 封板率 / 晋级率 / 涨跌停家数 + 连板股清单（客观公开榜单）
+// 短线情绪：连板梯队 / 最高连板 / 炸板率 / 封板率 / 晋级率 / 涨跌停家数 + 连板股清单
 export interface EmotionTier { boards: number; count: number; plus: boolean }
 export interface LianbanStock {
   code: string; name: string; boards: number;
@@ -156,7 +156,7 @@ export interface ShortTermEmotion {
   yzt_count: number;
 }
 
-// 全市场成交额榜（客观公开榜单）
+// 全市场成交额榜
 export interface TurnoverStock {
   code: string; name: string;
   price: number | null; pct: number | null;

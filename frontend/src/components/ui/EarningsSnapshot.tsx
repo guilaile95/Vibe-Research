@@ -1,7 +1,5 @@
 // 财报速览：把最新财报 + 前向一致预期 + 估值分位，用「结论先行」的结构收拢成一张速览卡。
-// 纯前端计算（数据都已在个股页 state 里）。合规：只客观机械分档陈述事实，不推荐、不预测、不评级。
-// 「结论先行 + 信号标签」的排版纪律借鉴自 anthropics/financial-services 的 equity-research skill，
-// 但剔除其评级/目标价，只保留 A 股客观指标。
+// 纯前端计算（数据都已在个股页 state 里）。
 
 import { ClipboardList } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -35,7 +33,7 @@ export function EarningsSnapshot({ val, fin, pctl }: Props) {
   const roe = num(fin.roe);
   const pePctile = pctl?.metrics.pe_ttm?.percentile ?? null;
 
-  // 信号标签（客观机械分档，不含买卖倾向）。
+  // 信号标签（按增速 / ROE / 分位等机械分档）。
   const tags: string[] = [];
   if (revYoy != null) tags.push(`营收${revYoy >= 30 ? "高增长" : revYoy >= 0 ? "正增长" : "下滑"}`);
   if (revYoy != null && npYoy != null) tags.push(npYoy >= revYoy ? "利润增速快于营收" : "利润增速慢于营收");
@@ -57,7 +55,7 @@ export function EarningsSnapshot({ val, fin, pctl }: Props) {
         {fin.period && <span className="text-xs font-normal text-muted-foreground/60">· {fin.period}</span>}
       </h3>
       <p className="mb-3 text-[11px] text-muted-foreground/60">
-        最新财报 + 前向一致预期 + 估值位置一眼看全。客观数据机械分档，不构成买卖建议。
+        最新财报 + 前向一致预期 + 估值位置一眼看全。
       </p>
 
       {/* 结论先行：两大头条数字 */}

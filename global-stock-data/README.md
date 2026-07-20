@@ -243,12 +243,6 @@ Yahoo Finance 和 SEC EDGAR 都是境外服务，国内直连可能不稳定。�
 
 ---
 
-## Disclaimer
-
-本项目仅提供数据获取工具，不构成任何投资建议。股市有风险，投资需谨慎。
-
----
-
 ## License
 
 [Apache License 2.0](./LICENSE) — 自由使用，注明出处即可。
@@ -442,12 +436,6 @@ Just tell your AI assistant:
 | SEC EDGAR | HTTPS | None (UA required) | US Filings + XBRL |
 
 > **Architecture:** All sources use direct HTTP API calls. Zero third-party data wrapper dependencies. Yahoo crumb managed automatically. SEC EDGAR requires standard User-Agent only.
-
----
-
-## Disclaimer
-
-This project provides data access tools only and does not constitute investment advice. Investing involves risk.
 
 ---
 

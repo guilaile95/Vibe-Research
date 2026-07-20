@@ -6,8 +6,6 @@ chat.py 里的工具定义。给「订阅接入 / 高手」通道用：agent 用
 
 挂进 Claude Code：
     claude mcp add vibe-research -- /路径/backend/.venv/bin/python /路径/backend/mcp_server.py
-
-合规：工具只返回客观数据，不含建议；判断由调用方 agent 给出。
 """
 
 from __future__ import annotations

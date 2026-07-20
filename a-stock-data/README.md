@@ -330,12 +330,6 @@ V2.1 改为本地自缓存。每次调用自动积累，越跑越丰富。首次
 
 ---
 
-## Disclaimer
-
-本项目仅提供数据获取工具，不构成任何投资建议。股市有风险，投资需谨慎。
-
----
-
 ## License
 
 [Apache License 2.0](./LICENSE) — 自由使用，注明出处即可。
@@ -605,12 +599,6 @@ Just tell your AI assistant:
 > **Architecture:** Except mootdx (TCP binary protocol), all sources use direct HTTP API calls, zero third-party data wrapper dependencies. **Eastmoney APIs are rate-limited; all calls go through `em_get()` for serial throttling. For batch jobs, increase `EM_MIN_INTERVAL`.**
 >
 > **Fallback (V3.4 new):** When any primary source is banned or broken, check the "Backup Sources & Fallback Strategy" section in SKILL.md — every data category has an independent backup on a **different domain and rate-limit plane** (SSE/SZSE official / Sina / THS / HKEX), unaffected when Eastmoney bans you.
-
----
-
-## Disclaimer
-
-This project provides data access tools only and does not constitute investment advice. Investing involves risk.
 
 ---
 

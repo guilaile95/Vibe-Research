@@ -6,7 +6,6 @@ import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
-import { Disclaimer } from "@/components/ui/Disclaimer";
 import { api, ApiError, type IndexQuote, type Quote, type MarketOverview, type ShortTermEmotion, type TurnoverTop, type GlobalIndex } from "@/lib/api";
 import { hasLlm, chatStream } from "@/lib/llm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
@@ -93,9 +92,8 @@ export function DailyReview() {
     setReviewLoading(true);
     setReview("");
     const prompt =
-      `以下是今天 A 股大盘的客观数据：\n${dataSummary}\n\n` +
-      "请用中文做一段当天大盘复盘：整体涨跌、主要指数表现、盘面值得注意的点。" +
-      "只做客观陈述与多视角分析，不预测涨跌、不推荐任何标的、不构成投资建议。";
+      `以下是今天 A 股大盘数据：\n${dataSummary}\n\n` +
+      "请用中文做一段当天大盘复盘：整体涨跌、主要指数表现、盘面值得注意的点，可给出判断与操作倾向。";
     try {
       await chatStream([{ role: "user", content: prompt }], `今日大盘数据：${dataSummary}`, {
         onDelta: (t) => setReview((r) => r + t),
@@ -251,7 +249,7 @@ export function DailyReview() {
             {!reviewLoading && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${today}`} content={review} /></div>}
           </>
         ) : !needConfig && !reviewErr && !reviewLoading ? (
-          <p className="mt-3 text-sm text-muted-foreground">点上方按钮，系统把当天客观数据打包给你的 AI，由它生成复盘。<b className="text-foreground">分析是它给的，我们只负责喂数据。</b></p>
+          <p className="mt-3 text-sm text-muted-foreground">点上方按钮，系统把当天市场数据打包给你的 AI，按结构生成复盘。</p>
         ) : null}
       </GlassCard>
 
@@ -292,7 +290,7 @@ export function DailyReview() {
       {/* 4b. 短线情绪（连板梯队 / 打板情绪，聚合口径零个股名） */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Flame className="h-4 w-4" /> 短线情绪</h3>
-        <span className="text-[11px] text-muted-foreground/50">连板股 · 打板情绪 · 客观公开榜单</span>
+        <span className="text-[11px] text-muted-foreground/50">连板股 · 打板情绪</span>
         {emotion?.date && <span className="ml-auto text-[11px] text-muted-foreground/50">{emotion.date}</span>}
       </div>
       <GlassCard className="mb-6">
@@ -330,9 +328,9 @@ export function DailyReview() {
                 </div>
               ))}
             </div>
-            {/* 连板股清单（2 板以上，客观公开榜单） */}
+            {/* 连板股清单（2 板以上） */}
             <div className="mt-3">
-              <p className="mb-1.5 text-[11px] text-muted-foreground">连板股（2 板以上连续涨停）· 客观公开榜单，非推荐 / 非预测</p>
+              <p className="mb-1.5 text-[11px] text-muted-foreground">连板股（2 板以上连续涨停）</p>
               {emotion.lianban_stocks.length === 0 ? (
                 <p className="text-xs text-muted-foreground/50">今日无 2 板以上个股</p>
               ) : (
@@ -366,10 +364,10 @@ export function DailyReview() {
         )}
       </GlassCard>
 
-      {/* 4c. 全市场成交额 TOP20（客观公开榜单） */}
+      {/* 4c. 全市场成交额 TOP20 */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><BarChart3 className="h-4 w-4" /> 全市场成交额 TOP20</h3>
-        <span className="text-[11px] text-muted-foreground/50">客观公开榜单，非推荐 / 非预测 / 不构成投资建议</span>
+        <span className="text-[11px] text-muted-foreground/50">按成交额降序</span>
         {turnover?.updated && <span className="ml-auto text-[11px] text-muted-foreground/50">{turnover.updated}</span>}
       </div>
       <GlassCard className="mb-6">
@@ -470,7 +468,6 @@ export function DailyReview() {
         ))}
       </div>
 
-      <Disclaimer />
     </div>
   );
 }

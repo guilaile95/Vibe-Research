@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Upload, FileText, Trash2, Download, Loader2, FolderOpen } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { Disclaimer } from "@/components/ui/Disclaimer";
 import { api, ApiError, downloadReport, type MyReport } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -185,8 +184,6 @@ export function MyReports() {
           ))}
         </div>
       )}
-
-      <Disclaimer />
     </div>
   );
 }

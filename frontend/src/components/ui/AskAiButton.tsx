@@ -29,8 +29,7 @@ const argStr = (a: Record<string, unknown>): string => {
 
 interface ToolUse { name: string; arg: string }
 
-// 「问 AI」入口 —— 把当前分栏内容作为上下文，调用户自己配置的模型；
-// AI 可自行调 A股数据工具作答。结论由用户模型给出，本产品不校准、不负责。
+// 「问 AI」入口 —— 把当前分栏内容作为上下文，调用户自己配置的模型；AI 可自行调数据工具作答。
 export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Props) {
   const [open, setOpen] = useState(false);
   const [configured, setConfigured] = useState(false);
@@ -119,10 +118,6 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
             {!configured ? (
               // 未接入 AI：引导去设置
               <div className="flex-1 space-y-4 overflow-auto p-4 text-sm">
-                <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
-                  分析结论由你自己配置的 AI 给出，本产品只负责把本页数据打包成上下文、并让 AI 能调数据工具，
-                  <b className="text-foreground">不校准、不背书、不对结果负责</b>。
-                </div>
                 <div>
                   <p className="mb-1.5 text-xs font-medium text-muted-foreground">将随提问发给 AI 的本页上下文：</p>
                   <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
@@ -138,9 +133,8 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
               <>
                 <div ref={scrollRef} className="flex-1 space-y-3 overflow-auto p-4 text-sm">
                   {msgs.length === 0 && (
-                    <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
-                      AI 可基于本页上下文、并自行调取 A股行情/估值/研报数据作答。结论由你的模型给出，
-                      <b className="text-foreground">不构成投资建议</b>。
+                    <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">
+                      AI 可基于本页上下文，并自行调取行情 / 估值 / 研报等数据作答。
                     </div>
                   )}
                   {msgs.map((m, i) => (

@@ -4,7 +4,6 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { Disclaimer } from "@/components/ui/Disclaimer";
 import { loadNotes, deleteNote, clearNotes, type Note } from "@/lib/notes";
 
 const KIND_COLOR: Record<string, string> = {
@@ -68,8 +67,6 @@ export function Notes() {
           })}
         </div>
       )}
-
-      <Disclaimer />
     </div>
   );
 }
