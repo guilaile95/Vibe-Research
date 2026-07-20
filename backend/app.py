@@ -26,6 +26,7 @@ import newsradar
 import portfolio as pf
 import market
 import myreports as mr
+import review_compare
 import review_history
 
 app = FastAPI(title="Vibe-Research API", version="0.1.3")
@@ -431,6 +432,53 @@ def daily_review_history_latest(
     if snapshot is None:
         raise HTTPException(404, "未找到每日复盘历史快照")
     return {"data": snapshot}
+
+
+@app.get("/api/daily-review/history/compare")
+def daily_review_history_compare(
+    base_id: int = Query(..., ge=1),
+    target_id: int = Query(..., ge=1),
+    board_limit: int = Query(10, ge=1, le=20),
+    stock_limit: int = Query(10, ge=1, le=30),
+):
+    """比较两份历史快照（纯读取，无写库/无 AI）。
+
+    须定义在 {snapshot_id} 之前，避免 compare 被当成 ID。
+    comparison_status 为 normal/partial/unavailable 时均 HTTP 200。
+    允许 base_id == target_id。
+    不接受客户端 db_path。
+    """
+    try:
+        base_snapshot = review_history.get_review_history_snapshot(base_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception:  # noqa: BLE001
+        raise HTTPException(500, "每日复盘历史快照比较失败") from None
+    if base_snapshot is None:
+        raise HTTPException(404, "未找到基础每日复盘历史快照")
+
+    try:
+        target_snapshot = review_history.get_review_history_snapshot(target_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception:  # noqa: BLE001
+        raise HTTPException(500, "每日复盘历史快照比较失败") from None
+    if target_snapshot is None:
+        raise HTTPException(404, "未找到目标每日复盘历史快照")
+
+    try:
+        comparison = review_compare.compare_daily_review_snapshots(
+            base_snapshot,
+            target_snapshot,
+            board_limit=board_limit,
+            stock_limit=stock_limit,
+        )
+    except (TypeError, ValueError):
+        raise HTTPException(400, "每日复盘快照比较参数或数据结构无效") from None
+    except Exception:  # noqa: BLE001
+        raise HTTPException(500, "每日复盘历史快照比较失败") from None
+
+    return {"data": comparison}
 
 
 @app.get("/api/daily-review/history/{snapshot_id}")
