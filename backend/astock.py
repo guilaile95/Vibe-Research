@@ -510,6 +510,32 @@ def _numf(v):
     return v if isinstance(v, (int, float)) else None
 
 
+def _optional_float(value) -> float | None:
+    """通用可选浮点：缺失 / 东财占位符 / 不可解析 → None；真实 0 保留为 0.0。
+
+    比 `_numf` 更完整：可解析数字字符串（如 ``"12.5"``），不把缺失伪装成 0。
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return float(int(value))
+    if isinstance(value, (int, float)):
+        # NaN / Inf 视为无效
+        try:
+            if math.isnan(value) or math.isinf(value):  # type: ignore[arg-type]
+                return None
+        except TypeError:
+            pass
+        return float(value)
+    s = str(value).strip()
+    if not s or s in ("-", "--"):
+        return None
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
 def market_turnover_rank(n: int = 20) -> list[dict]:
     """全市场成交额榜（沪深京 A 股按成交额降序 TopN）。
 
@@ -536,6 +562,170 @@ def market_turnover_rank(n: int = 20) -> list[dict]:
         "amount": _numf(d.get("f6")), "mcap": _numf(d.get("f20")),
         "float_cap": _numf(d.get("f21")), "industry": d.get("f100", "") or "",
     } for d in diff]
+
+
+# ---------------------------------------------------------------------------
+# 全 A 股行情快照（沪深京 · 分页 clist）
+# ---------------------------------------------------------------------------
+_A_SHARE_FS = "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048"
+_A_SHARE_FIELDS = "f2,f3,f4,f5,f6,f7,f8,f12,f13,f14,f15,f16,f17,f18,f20,f21"
+_A_SHARE_PAGE_SIZE = 200
+_A_SHARE_CLIST_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
+
+
+def _normalize_clist_diff(diff) -> list[dict]:
+    """东财 clist `data.diff`：list 或以数字字符串为键的 dict，统一成 list[dict]。"""
+    if diff is None:
+        return []
+    if isinstance(diff, list):
+        return [x for x in diff if isinstance(x, dict)]
+    if isinstance(diff, dict):
+        def _key(k):
+            s = str(k)
+            return (0, int(s)) if s.isdigit() else (1, s)
+
+        return [diff[k] for k in sorted(diff.keys(), key=_key) if isinstance(diff[k], dict)]
+    raise RuntimeError(f"a_share_snapshot: unexpected clist diff type {type(diff).__name__}")
+
+
+def _map_a_share_row(d: dict) -> dict | None:
+    """单条 clist 记录 → 标准快照字段；无效代码/空名称返回 None（过滤）。"""
+    code = str(d.get("f12") or "").strip()
+    name = str(d.get("f14") or "").strip()
+    if not (len(code) == 6 and code.isdigit()):
+        return None
+    if not name:
+        return None
+    market = d.get("f13")
+    if market == "" or market is None:
+        market = None
+    return {
+        "code": code,
+        "name": name,
+        "market": market,
+        "price": _optional_float(d.get("f2")),
+        "change_pct": _optional_float(d.get("f3")),
+        "change": _optional_float(d.get("f4")),
+        "volume": _optional_float(d.get("f5")),
+        "amount": _optional_float(d.get("f6")),
+        "amplitude_pct": _optional_float(d.get("f7")),
+        "turnover_pct": _optional_float(d.get("f8")),
+        "high": _optional_float(d.get("f15")),
+        "low": _optional_float(d.get("f16")),
+        "open": _optional_float(d.get("f17")),
+        "prev_close": _optional_float(d.get("f18")),
+        "market_cap": _optional_float(d.get("f20")),
+        "float_market_cap": _optional_float(d.get("f21")),
+    }
+
+
+def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
+    """一次分页获取沪 / 深 / 京全部 A 股实时或收盘快照。
+
+    数据源：东财 ``/api/qt/clist/get``（经 ``em_get`` 串行限流）。
+    失败不伪装成空市场：网络 / JSON / 结构异常抛出 ``RuntimeError``。
+    ``page_size`` 默认 200；测试可缩小以验证分页逻辑。
+    """
+    if page_size < 1:
+        raise ValueError("page_size must be >= 1")
+
+    out: list[dict] = []
+    fetched = 0  # 原始 diff 条数（过滤前），用于与 total 比较
+    total: int | None = None
+    host = _A_SHARE_CLIST_HOSTS[0]
+    pn = 1
+
+    while True:
+        params = {
+            "pn": str(pn),
+            "pz": str(page_size),
+            "po": "1",
+            "np": "1",
+            "fltt": "2",
+            "invt": "2",
+            "fid": "f3",
+            "fs": _A_SHARE_FS,
+            "fields": _A_SHARE_FIELDS,
+        }
+        headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+
+        # 首页探测 push2 → push2delay；后续页固定可用主机（与 market_turnover_rank 一致）
+        hosts = _A_SHARE_CLIST_HOSTS if pn == 1 else (host,)
+        payload = None
+        last_err: Exception | None = None
+        for h in hosts:
+            try:
+                r = em_get(f"https://{h}/api/qt/clist/get", params=params,
+                           headers=headers, timeout=15)
+                try:
+                    payload = r.json()
+                except Exception as e:  # noqa: BLE001
+                    raise RuntimeError(
+                        f"a_share_snapshot page {pn}: invalid JSON from {h}: {e}"
+                    ) from e
+                host = h
+                last_err = None
+                break
+            except RuntimeError:
+                raise
+            except Exception as e:  # noqa: BLE001 — 网络/超时，尝试下一主机
+                last_err = e
+                continue
+        if payload is None:
+            raise RuntimeError(
+                f"a_share_snapshot page {pn}: request failed: {last_err}"
+            ) from last_err
+
+        if not isinstance(payload, dict):
+            raise RuntimeError(
+                f"a_share_snapshot page {pn}: response is not a dict ({type(payload).__name__})"
+            )
+        if "data" not in payload or payload["data"] is None:
+            raise RuntimeError(f"a_share_snapshot page {pn}: missing data in response")
+        data = payload["data"]
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                f"a_share_snapshot page {pn}: data is not a dict ({type(data).__name__})"
+            )
+
+        if total is None:
+            raw_total = data.get("total")
+            try:
+                total = int(raw_total) if raw_total is not None else 0
+            except (TypeError, ValueError) as e:
+                raise RuntimeError(
+                    f"a_share_snapshot: invalid total {raw_total!r}"
+                ) from e
+
+        try:
+            rows = _normalize_clist_diff(data.get("diff"))
+        except RuntimeError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"a_share_snapshot page {pn}: bad diff: {e}") from e
+
+        if pn == 1 and total > 0 and not rows:
+            raise RuntimeError(
+                f"a_share_snapshot: total={total} but first page is empty"
+            )
+
+        if not rows:
+            break
+
+        fetched += len(rows)
+        for item in rows:
+            mapped = _map_a_share_row(item)
+            if mapped is not None:
+                out.append(mapped)
+
+        if fetched >= total:
+            break
+        if len(rows) < page_size:
+            # 末页不足一页，视为已取尽
+            break
+        pn += 1
+
+    return out
 
 
 def eastmoney_datacenter(report_name: str, columns: str = "ALL", filter_str: str = "",
