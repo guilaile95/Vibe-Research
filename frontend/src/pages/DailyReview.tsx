@@ -10,11 +10,11 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import {
-  api, ApiError,
+  api, ApiError, dailyReviewAnalyzeStream,
   type Quote, type DailyReviewData, type BoardRankItem, type MarketSnapshotItem,
   type DataStatus,
 } from "@/lib/api";
-import { hasLlm, chatStream } from "@/lib/llm";
+import { loadLlm } from "@/lib/llm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
 import { cn } from "@/lib/utils";
@@ -135,6 +135,7 @@ export function DailyReview() {
   const tradeDateLabel = dr?.trade_date ?? "—";
   const generatedAt = dr?.generated_at ?? "—";
 
+  // 顶栏「问 AI」仍用页面指数摘要作通用聊天上下文；AI 当日复盘不再拼装提示词/市场数据。
   const dataSummary = indices.length
     ? indices.map((i) => `${i.name} ${i.price}（${i.change_pct > 0 ? "+" : ""}${i.change_pct}%）`).join("；")
     : "（指数数据未取到）";
@@ -142,16 +143,17 @@ export function DailyReview() {
   const runReview = async () => {
     setReviewErr(null);
     setNeedConfig(false);
-    if (!hasLlm()) { setNeedConfig(true); return; }
+    const llm = loadLlm();
+    if (!llm) { setNeedConfig(true); return; }
+    // 生成中禁用按钮，避免并发流；partial/unavailable 仍允许请求（由后端契约约束输出）
     setReviewLoading(true);
     setReview("");
-    const prompt =
-      `以下是今天 A 股大盘数据：\n${dataSummary}\n\n` +
-      "请用中文做一段当天大盘复盘：整体涨跌、主要指数表现、盘面值得注意的点，可给出判断与操作倾向。";
     try {
-      await chatStream([{ role: "user", content: prompt }], `今日大盘数据：${dataSummary}`, {
-        onDelta: (t) => setReview((r) => r + t),
-      });
+      // 仅发送 user_request + llm；市场上下文与 system prompt 由服务器生成
+      await dailyReviewAnalyzeStream(
+        { user_request: null, llm },
+        { onDelta: (t) => setReview((r) => r + t) },
+      );
     } catch (e) {
       setReviewErr(e instanceof ApiError ? e.message : "复盘失败");
     } finally {
@@ -372,7 +374,7 @@ export function DailyReview() {
         )}
       </GlassCard>
 
-      {/* 3. AI 当日复盘（提示词本步不改） */}
+      {/* 3. AI 当日复盘（POST /api/daily-review/analyze，上下文由服务器生成） */}
       <GlassCard glow className="mb-6">
         <div className="flex items-center justify-between">
           <h3 className="flex items-center gap-1.5 font-semibold"><Sparkles className="h-4 w-4 text-primary" /> AI 当日复盘</h3>
@@ -399,7 +401,7 @@ export function DailyReview() {
             {!reviewLoading && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${dr?.trade_date || today}`} content={review} /></div>}
           </>
         ) : !needConfig && !reviewErr && !reviewLoading ? (
-          <p className="mt-3 text-sm text-muted-foreground">点上方按钮，系统把当天市场数据打包给你的 AI，按结构生成复盘。</p>
+          <p className="mt-3 text-sm text-muted-foreground">点上方按钮，由服务器聚合当日数据并按事实/推断/建议结构生成复盘。</p>
         ) : null}
       </GlassCard>
 

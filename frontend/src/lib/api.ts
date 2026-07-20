@@ -370,6 +370,131 @@ export interface GlobalStock {
   quote: GlobalQuote; metrics: GlobalMetrics | null;
 }
 
+// ---------------------------------------------------------------------------
+// NDJSON 流式（/api/chat 与 /api/daily-review/analyze 共用同一解析协议）
+// ---------------------------------------------------------------------------
+
+/** 与后端 LLMConfig / 前端 LlmConfig 字段对齐（避免 api↔llm 循环依赖） */
+export interface StreamLlmConfig {
+  provider: string;
+  baseURL: string;
+  apiKey: string;
+  model: string;
+}
+
+export interface DailyReviewAnalyzeRequest {
+  user_request?: string | null;
+  llm: StreamLlmConfig;
+}
+
+export interface NdjsonStreamHandlers {
+  onDelta?: (text: string) => void;
+  onTool?: (tool: string, args: Record<string, unknown>) => void;
+}
+
+export interface NdjsonStreamResult {
+  content: string;
+  trace: { tool: string; args: Record<string, unknown> }[];
+  rounds: number;
+}
+
+/**
+ * 共享 NDJSON 流解析：每行一个事件 {type: tool|delta|done|error}。
+ * path 为 /api 之后的路径，如 "/chat"、"/daily-review/analyze"。
+ */
+export async function streamNdjson(
+  path: string,
+  body: unknown,
+  handlers: NdjsonStreamHandlers = {},
+  signal?: AbortSignal,
+): Promise<NdjsonStreamResult> {
+  let resp: Response;
+  try {
+    resp = await fetch(`/api${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    throw new ApiError("连接不到后端，请先启动 backend（uvicorn app:app --port 8900）", 0);
+  }
+  // 配置错误 / 上下文准备失败等：流开始前以 HTTP 状态返回
+  if (!resp.ok) {
+    let payload: any = null;
+    try {
+      payload = await resp.json();
+    } catch {
+      /* ignore */
+    }
+    if (resp.status === 401) {
+      throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
+    }
+    throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
+  }
+  if (!resp.body) throw new ApiError("后端无响应流", 502);
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let content = "";
+  let trace: NdjsonStreamResult["trace"] = [];
+  let rounds = 0;
+  let errMsg: string | null = null;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t) continue;
+      let ev: any;
+      try {
+        ev = JSON.parse(t);
+      } catch {
+        continue;
+      }
+      if (ev.type === "delta") {
+        content += ev.text;
+        handlers.onDelta?.(ev.text);
+      } else if (ev.type === "tool") {
+        handlers.onTool?.(ev.tool, ev.args || {});
+      } else if (ev.type === "done") {
+        trace = ev.trace || [];
+        rounds = ev.rounds || 0;
+      } else if (ev.type === "error") {
+        errMsg = ev.message;
+      }
+    }
+  }
+  if (errMsg) throw new ApiError(errMsg, 502);
+  return { content, trace, rounds };
+}
+
+/**
+ * 每日复盘 AI 流式分析。只发送 user_request + llm；
+ * 市场上下文与 system prompt 由服务器生成，客户端不可注入。
+ */
+export async function dailyReviewAnalyzeStream(
+  request: DailyReviewAnalyzeRequest,
+  handlers: NdjsonStreamHandlers = {},
+  signal?: AbortSignal,
+): Promise<NdjsonStreamResult> {
+  return streamNdjson(
+    "/daily-review/analyze",
+    {
+      user_request: request.user_request ?? null,
+      llm: request.llm,
+    },
+    handlers,
+    signal,
+  );
+}
+
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   indices: () => get<IndexQuote[]>("/indices"),
