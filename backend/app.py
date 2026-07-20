@@ -20,6 +20,7 @@ from pydantic import BaseModel
 import astock
 import chat as chat_layer
 import cli_runtime
+import daily_review
 import gstock
 import newsradar
 import portfolio as pf
@@ -305,6 +306,20 @@ def market_boards(
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"板块排名异常：{e}") from e
+
+
+@app.get("/api/daily-review")
+def daily_review_snapshot():
+    """结构化 A 股每日复盘数据包（当前可获得快照）。
+
+    聚合层已对组件异常做隔离；normal/partial/unavailable 均为 HTTP 200。
+    仅 generate_daily_review() 逃逸的未预期异常 → HTTP 502。
+    本接口不接受 date/refresh 等参数，不支持历史日期查询。
+    """
+    try:
+        return {"data": daily_review.generate_daily_review()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"每日复盘聚合异常：{e}") from e
 
 
 @app.get("/api/global/indices")
