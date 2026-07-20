@@ -536,6 +536,17 @@ def _optional_float(value) -> float | None:
         return None
 
 
+def _optional_int(value) -> int | None:
+    """可选整数：缺失 / 占位符 / 不可解析 → None；真实 0 保留为 0。"""
+    f = _optional_float(value)
+    if f is None:
+        return None
+    try:
+        return int(f)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def market_turnover_rank(n: int = 20) -> list[dict]:
     """全市场成交额榜（沪深京 A 股按成交额降序 TopN）。
 
@@ -726,6 +737,194 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
         pn += 1
 
     return out
+
+
+# ---------------------------------------------------------------------------
+# 行业 / 概念 / 地域板块排名（东财 clist · 分页）
+# ---------------------------------------------------------------------------
+BOARD_FS: dict[str, str] = {
+    "industry": "m:90+t:2",
+    "concept": "m:90+t:3+f:!50",
+    "region": "m:90+t:1+f:!50",
+}
+_BOARD_FIELDS = "f3,f8,f12,f14,f20,f104,f105,f128,f136"
+_BOARD_PAGE_SIZE = 200
+_BOARD_CLIST_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
+
+
+def _map_board_row(d: dict) -> dict | None:
+    """单条板块 clist → 标准记录；代码或名称为空则过滤。"""
+    code = str(d.get("f12") or "").strip()
+    name = str(d.get("f14") or "").strip()
+    if not code or not name:
+        return None
+    up_count = _optional_int(d.get("f104"))
+    down_count = _optional_int(d.get("f105"))
+    # up_ratio 仅基于接口上涨/下跌家数，不含平盘（接口未提供 flat）
+    if (
+        up_count is not None
+        and down_count is not None
+        and (up_count + down_count) > 0
+    ):
+        up_ratio: float | None = round(up_count / (up_count + down_count), 4)
+    else:
+        up_ratio = None
+    leader = d.get("f128")
+    if leader is not None:
+        leader = str(leader).strip() or None
+    return {
+        "code": code,
+        "name": name,
+        "change_pct": _optional_float(d.get("f3")),
+        "turnover_pct": _optional_float(d.get("f8")),
+        "market_cap": _optional_float(d.get("f20")),
+        "up_count": up_count,
+        "down_count": down_count,
+        "up_ratio": up_ratio,
+        "leader": leader,
+        "leader_change_pct": _optional_float(d.get("f136")),
+    }
+
+
+def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: int = _BOARD_PAGE_SIZE) -> dict:
+    """统一行业 / 概念 / 地域板块涨跌幅排名（东财 clist 分页）。
+
+    - ``board_type``: industry | concept | region
+    - ``top_n``: 1..100，取最强 / 最弱各 top_n
+    - 本地按 change_pct 重排，不依赖远端顺序
+    - 无 change_pct 的板块计入 total/unknown_count，不进 top/bottom
+    - ``up_ratio`` = up_count / (up_count + down_count)，不含平盘
+
+    本函数只返回原始统计结构，不含 status 信封（由上层包装）。
+    """
+    if board_type not in BOARD_FS:
+        raise ValueError(f"不支持的板块类型：{board_type}")
+    if not isinstance(top_n, int) or isinstance(top_n, bool) or not (1 <= top_n <= 100):
+        raise ValueError(f"top_n 必须在 1..100 之间，收到：{top_n!r}")
+    if page_size < 1:
+        raise ValueError("page_size must be >= 1")
+
+    fs = BOARD_FS[board_type]
+    raw_items: list[dict] = []
+    fetched = 0
+    total: int | None = None
+    host = _BOARD_CLIST_HOSTS[0]
+    pn = 1
+
+    while True:
+        params = {
+            "pn": str(pn),
+            "pz": str(page_size),
+            "po": "1",
+            "np": "1",
+            "fltt": "2",
+            "invt": "2",
+            "fid": "f3",
+            "fs": fs,
+            "fields": _BOARD_FIELDS,
+        }
+        headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+        hosts = _BOARD_CLIST_HOSTS if pn == 1 else (host,)
+        payload = None
+        last_err: Exception | None = None
+        for h in hosts:
+            try:
+                r = em_get(
+                    f"https://{h}/api/qt/clist/get",
+                    params=params,
+                    headers=headers,
+                    timeout=15,
+                )
+                try:
+                    payload = r.json()
+                except Exception as e:  # noqa: BLE001
+                    raise RuntimeError(
+                        f"board_ranking({board_type}) page {pn}: invalid JSON from {h}: {e}"
+                    ) from e
+                host = h
+                last_err = None
+                break
+            except RuntimeError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                continue
+        if payload is None:
+            raise RuntimeError(
+                f"board_ranking({board_type}) page {pn}: request failed: {last_err}"
+            ) from last_err
+
+        if not isinstance(payload, dict):
+            raise RuntimeError(
+                f"board_ranking({board_type}) page {pn}: response is not a dict"
+            )
+        if "data" not in payload or payload["data"] is None:
+            raise RuntimeError(
+                f"board_ranking({board_type}) page {pn}: missing data in response"
+            )
+        data = payload["data"]
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                f"board_ranking({board_type}) page {pn}: data is not a dict"
+            )
+
+        if total is None:
+            raw_total = data.get("total")
+            try:
+                total = int(raw_total) if raw_total is not None else 0
+            except (TypeError, ValueError) as e:
+                raise RuntimeError(
+                    f"board_ranking({board_type}): invalid total {raw_total!r}"
+                ) from e
+
+        try:
+            rows = _normalize_clist_diff(data.get("diff"))
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"board_ranking({board_type}) page {pn}: {e}"
+            ) from e
+
+        if pn == 1 and total > 0 and not rows:
+            raise RuntimeError(
+                f"board_ranking({board_type}): total={total} but first page is empty"
+            )
+        if not rows:
+            break
+
+        fetched += len(rows)
+        raw_items.extend(rows)
+
+        if fetched >= total:
+            break
+        if len(rows) < page_size:
+            break
+        pn += 1
+
+    # 映射 + 过滤 + 去重（同 code 保留第一条，稳定）
+    seen: set[str] = set()
+    boards: list[dict] = []
+    for item in raw_items:
+        mapped = _map_board_row(item)
+        if mapped is None:
+            continue
+        if mapped["code"] in seen:
+            continue
+        seen.add(mapped["code"])
+        boards.append(mapped)
+
+    ranked = [b for b in boards if b["change_pct"] is not None]
+    unknown_count = len(boards) - len(ranked)
+    ranked_desc = sorted(ranked, key=lambda x: float(x["change_pct"]), reverse=True)
+    ranked_asc = sorted(ranked, key=lambda x: float(x["change_pct"]))
+
+    return {
+        "type": board_type,
+        "total": len(boards),
+        "ranked_count": len(ranked),
+        "unknown_count": unknown_count,
+        "top": ranked_desc[:top_n],
+        "bottom": ranked_asc[:top_n],
+    }
 
 
 def eastmoney_datacenter(report_name: str, columns: str = "ALL", filter_str: str = "",
