@@ -343,6 +343,122 @@ export interface DailyReviewHistoryList {
   count: number;
 }
 
+/** 快照比较元数据 */
+export interface DailyReviewComparisonMeta {
+  id: number | null;
+  trade_date: string | null;
+  schema_version: string | null;
+  generated_at: string | null;
+  status: DataStatus | null;
+}
+
+/** 通用数值比较 */
+export interface NumericComparison {
+  base: number | null;
+  target: number | null;
+  delta: number | null;
+  change_pct: number | null;
+}
+
+export interface RankingEntered<T> {
+  key: string;
+  target_rank: number;
+  item: T;
+}
+
+export interface RankingExited<T> {
+  key: string;
+  base_rank: number;
+  item: T;
+}
+
+export interface RankingChange<T> {
+  key: string;
+  base_rank: number;
+  target_rank: number;
+  rank_delta: number;
+  base_item: T;
+  target_item: T;
+}
+
+export interface RankingComparison<T> {
+  base_count: number;
+  target_count: number;
+  entered: RankingEntered<T>[];
+  exited: RankingExited<T>[];
+  rank_changes: RankingChange<T>[];
+}
+
+export interface HighlightComparison<T> {
+  base: T | null;
+  target: T | null;
+  changed: boolean | null;
+}
+
+/** GET /api/daily-review/history/compare 结果 */
+export interface DailyReviewComparison {
+  schema_version: string;
+  base: DailyReviewComparisonMeta;
+  target: DailyReviewComparisonMeta;
+  comparison_status: DataStatus;
+  schema_compatible: boolean;
+  warnings: string[];
+  market_breadth: {
+    available: boolean;
+    stock_count: NumericComparison;
+    valid_count: NumericComparison;
+    up_count: NumericComparison;
+    down_count: NumericComparison;
+    flat_count: NumericComparison;
+    up_ratio: NumericComparison;
+    up_3pct_count: NumericComparison;
+    down_3pct_count: NumericComparison;
+    total_amount: NumericComparison;
+    amount_valid_count: NumericComparison;
+  };
+  short_term_emotion: {
+    available: boolean;
+    zt_count: NumericComparison;
+    dt_count: NumericComparison;
+    zb_count: NumericComparison;
+    max_boards: NumericComparison;
+    lianban_count: NumericComparison;
+    seal_rate: NumericComparison;
+    break_rate: NumericComparison;
+    promotion_rate: NumericComparison;
+    yzt_count: NumericComparison;
+  };
+  sector_rotation: {
+    industry: {
+      top: RankingComparison<BoardRankItem>;
+      bottom: RankingComparison<BoardRankItem>;
+    };
+    concept: {
+      top: RankingComparison<BoardRankItem>;
+      bottom: RankingComparison<BoardRankItem>;
+    };
+    region: {
+      top: RankingComparison<BoardRankItem>;
+      bottom: RankingComparison<BoardRankItem>;
+    };
+    highlights: {
+      strongest_industry: HighlightComparison<BoardRankItem>;
+      weakest_industry: HighlightComparison<BoardRankItem>;
+      strongest_concept: HighlightComparison<BoardRankItem>;
+      weakest_concept: HighlightComparison<BoardRankItem>;
+      strongest_region: HighlightComparison<BoardRankItem>;
+      weakest_region: HighlightComparison<BoardRankItem>;
+    };
+  };
+  capital_activity: {
+    total_amount: NumericComparison;
+    amount_valid_count: NumericComparison;
+    amount_top: RankingComparison<MarketSnapshotItem>;
+    high_turnover: RankingComparison<MarketSnapshotItem>;
+  };
+  unknowns: string[];
+}
+
 export interface RadarItem {
   title: string; url: string; time: string; source: string; summary?: string; zh?: string;
 }
@@ -564,6 +680,20 @@ export const api = {
   /** 历史快照详情 */
   getDailyReviewHistorySnapshot: (snapshotId: number) =>
     get<DailyReviewHistorySnapshot>(`/daily-review/history/${snapshotId}`),
+  /** 历史快照结构化比较（服务端计算 delta/排名变化） */
+  compareDailyReviewHistory: (params: {
+    base_id: number;
+    target_id: number;
+    board_limit?: number;
+    stock_limit?: number;
+  }) => {
+    const q = new URLSearchParams();
+    q.set("base_id", String(params.base_id));
+    q.set("target_id", String(params.target_id));
+    if (params.board_limit != null) q.set("board_limit", String(params.board_limit));
+    if (params.stock_limit != null) q.set("stock_limit", String(params.stock_limit));
+    return get<DailyReviewComparison>(`/daily-review/history/compare?${q.toString()}`);
+  },
   marketBreadth: () => get<TimedComponentEnvelope<MarketBreadthData>>("/market/breadth"),
   marketBoards: (type: "industry" | "concept" | "region" = "industry", topN = 20) =>
     get<TimedComponentEnvelope<BoardRankingData>>(`/market/boards?type=${type}&top_n=${topN}`),

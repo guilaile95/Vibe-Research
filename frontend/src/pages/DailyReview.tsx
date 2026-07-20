@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, TrendingUp, TrendingDown,
   Plus, X, Flame, BarChart3, Globe, Layers, Save, History, Eye, ChevronLeft, ChevronRight,
+  GitCompare,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -13,6 +14,8 @@ import {
   api, ApiError, dailyReviewAnalyzeStream,
   type Quote, type DailyReviewData, type BoardRankItem, type MarketSnapshotItem,
   type DataStatus, type DailyReviewHistoryItem, type DailyReviewHistorySnapshot,
+  type DailyReviewComparison, type NumericComparison, type RankingComparison,
+  type HighlightComparison,
 } from "@/lib/api";
 import { loadLlm } from "@/lib/llm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
@@ -20,9 +23,43 @@ import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
 import { cn } from "@/lib/utils";
 
 const HISTORY_LIMIT = 20;
+const COMPARE_BOARD_LIMIT = 10;
+const COMPARE_STOCK_LIMIT = 10;
 
 const rateCell = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v) ? "—" : `${(v * 100).toFixed(1)}%`;
+
+/** 相对变化比例 → ±xx.xx%（不重算，只格式化后端 change_pct） */
+const fmtChangePct = (v: number | null | undefined) => {
+  if (v == null || !Number.isFinite(v)) return "—";
+  const p = v * 100;
+  return `${p > 0 ? "+" : ""}${p.toFixed(2)}%`;
+};
+
+const fmtSigned = (v: number | null | undefined, digits = 2) => {
+  if (v == null || !Number.isFinite(v)) return "—";
+  const s = v.toLocaleString("zh-CN", { maximumFractionDigits: digits, minimumFractionDigits: 0 });
+  return v > 0 ? `+${s}` : s;
+};
+
+const fmtYiDelta = (v: number | null | undefined) => {
+  if (v == null || !Number.isFinite(v)) return "—";
+  const yiVal = v / 1e8;
+  const s = yiVal.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+  return `${yiVal > 0 ? "+" : ""}${s} 亿`;
+};
+
+const comparisonStatusLabel = (s: DataStatus | undefined) => {
+  if (s === "normal") return { text: "可完整比较", cls: "bg-muted/40 text-muted-foreground" };
+  if (s === "partial") return { text: "部分数据不可比较", cls: "bg-warning/15 text-warning" };
+  if (s === "unavailable") return { text: "核心数据不可比较", cls: "bg-destructive/15 text-destructive" };
+  return null;
+};
+
+const itemLabel = (it: { name?: string; code?: string } | null | undefined) => {
+  if (!it) return "—";
+  return it.name || it.code || "—";
+};
 
 // A股红涨绿跌。全球市场（美股/港股指数）**也沿用红涨**——与整个看板及东财等中国平台一致。
 const pctColor = (p: number) => (p > 0 ? "text-danger" : p < 0 ? "text-success" : "text-muted-foreground");
@@ -101,6 +138,13 @@ export function DailyReview() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [selectedSnapshot, setSelectedSnapshot] = useState<DailyReviewHistorySnapshot | null>(null);
+
+  // 快照对比（只读；不替换实时 dr / 不触发 AI / 不自动请求）
+  const [baseSnapshot, setBaseSnapshot] = useState<DailyReviewHistoryItem | null>(null);
+  const [targetSnapshot, setTargetSnapshot] = useState<DailyReviewHistoryItem | null>(null);
+  const [comparison, setComparison] = useState<DailyReviewComparison | null>(null);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [comparisonError, setComparisonError] = useState<string | null>(null);
 
   const loadDailyReview = () => {
     setDrDone(false);
@@ -220,9 +264,185 @@ export function DailyReview() {
     loadHistory({ trade_date: value, offset: 0 });
   };
 
+  const clearCompareSelection = () => {
+    setBaseSnapshot(null);
+    setTargetSnapshot(null);
+    setComparison(null);
+    setComparisonError(null);
+  };
+
+  const runCompare = async () => {
+    if (!baseSnapshot || !targetSnapshot || comparisonLoading) return;
+    setComparisonLoading(true);
+    setComparisonError(null);
+    try {
+      // 仅比较接口；不拉详情、不保存、不 AI、不重算 delta
+      const result = await api.compareDailyReviewHistory({
+        base_id: baseSnapshot.id,
+        target_id: targetSnapshot.id,
+        board_limit: COMPARE_BOARD_LIMIT,
+        stock_limit: COMPARE_STOCK_LIMIT,
+      });
+      setComparison(result);
+    } catch (e) {
+      setComparison(null);
+      setComparisonError(e instanceof ApiError ? e.message : "快照对比失败");
+    } finally {
+      setComparisonLoading(false);
+    }
+  };
+
   const histPage = Math.floor(histOffset / HISTORY_LIMIT) + 1;
   const histPrevDisabled = histOffset === 0 || histLoading;
   const histNextDisabled = histCount < HISTORY_LIMIT || histLoading;
+
+  /** 数值比较表行渲染 */
+  const renderNumericTable = (
+    rows: { label: string; c: NumericComparison; kind?: "count" | "ratio" | "rate" | "amount" }[],
+  ) => (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
+            {["指标", "基础值", "目标值", "变化", "相对变化"].map((h) => (
+              <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ label, c, kind = "count" }) => {
+            let baseStr: string | number = "—";
+            let targetStr: string | number = "—";
+            let deltaStr = "—";
+            if (kind === "ratio") {
+              baseStr = formatUpRatio(c.base);
+              targetStr = formatUpRatio(c.target);
+              deltaStr = c.delta == null || !Number.isFinite(c.delta)
+                ? "—"
+                : `${c.delta > 0 ? "+" : ""}${(c.delta * 100).toFixed(2)} 个百分点`;
+            } else if (kind === "rate") {
+              baseStr = rateCell(c.base);
+              targetStr = rateCell(c.target);
+              deltaStr = c.delta == null || !Number.isFinite(c.delta)
+                ? "—"
+                : `${c.delta > 0 ? "+" : ""}${(c.delta * 100).toFixed(2)} 个百分点`;
+            } else if (kind === "amount") {
+              baseStr = yi(c.base);
+              targetStr = yi(c.target);
+              deltaStr = fmtYiDelta(c.delta);
+            } else {
+              baseStr = numCell(c.base);
+              targetStr = numCell(c.target);
+              deltaStr = fmtSigned(c.delta, 4);
+            }
+            return (
+              <tr key={label} className="border-b border-border/30">
+                <td className="px-2 py-2 text-muted-foreground">{label}</td>
+                <td className="px-2 py-2 font-mono">{baseStr}</td>
+                <td className="px-2 py-2 font-mono">{targetStr}</td>
+                <td className={cn(
+                  "px-2 py-2 font-mono",
+                  c.delta != null && c.delta > 0 ? "text-danger" : c.delta != null && c.delta < 0 ? "text-success" : "",
+                )}>{deltaStr}</td>
+                <td className="px-2 py-2 font-mono text-xs">{fmtChangePct(c.change_pct)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderRankingBlock = <T extends { name?: string; code?: string; change_pct?: number | null }>(
+    title: string,
+    ranking: RankingComparison<T> | undefined,
+    extra?: (item: T) => string,
+  ) => {
+    if (!ranking) return null;
+    const entered = ranking.entered ?? [];
+    const exited = ranking.exited ?? [];
+    const changes = ranking.rank_changes ?? [];
+    return (
+      <div className="mb-3">
+        <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+          {title}{" "}
+          <span className="font-normal text-muted-foreground/60">
+            （基础 {ranking.base_count} / 目标 {ranking.target_count}）
+          </span>
+        </p>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <div className="rounded-lg bg-muted/15 p-2">
+            <p className="mb-1 text-[11px] text-primary">新进入</p>
+            {entered.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground/50">无</p>
+            ) : (
+              <ul className="space-y-0.5 text-xs">
+                {entered.map((e) => (
+                  <li key={e.key}>
+                    #{e.target_rank} {itemLabel(e.item)}
+                    {extra ? ` ${extra(e.item)}` : ""}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="rounded-lg bg-muted/15 p-2">
+            <p className="mb-1 text-[11px] text-muted-foreground">退出</p>
+            {exited.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground/50">无</p>
+            ) : (
+              <ul className="space-y-0.5 text-xs">
+                {exited.map((e) => (
+                  <li key={e.key}>
+                    #{e.base_rank} {itemLabel(e.item)}
+                    {extra ? ` ${extra(e.item)}` : ""}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="rounded-lg bg-muted/15 p-2">
+            <p className="mb-1 text-[11px] text-muted-foreground">排名变化</p>
+            {changes.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground/50">无</p>
+            ) : (
+              <ul className="space-y-0.5 text-xs">
+                {changes.map((c) => (
+                  <li key={c.key}>
+                    {itemLabel(c.target_item)} {c.base_rank}→{c.target_rank}{" "}
+                    <span className={cn(
+                      "font-mono",
+                      c.rank_delta > 0 ? "text-danger" : c.rank_delta < 0 ? "text-success" : "",
+                    )}>
+                      ({fmtSigned(c.rank_delta, 0)})
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderHighlight = (label: string, h: HighlightComparison<BoardRankItem> | undefined) => {
+    if (!h) return null;
+    const changedText = h.changed === true ? "已变化" : h.changed === false ? "未变" : "无法判定";
+    return (
+      <div className="rounded-lg bg-muted/20 p-2">
+        <p className="text-[11px] text-muted-foreground">{label} · {changedText}</p>
+        <p className="mt-0.5 text-xs">
+          基：{itemLabel(h.base)}{" "}
+          <span className="font-mono text-muted-foreground">{h.base ? pctCell(h.base.change_pct) : ""}</span>
+        </p>
+        <p className="text-xs">
+          目：{itemLabel(h.target)}{" "}
+          <span className="font-mono text-muted-foreground">{h.target ? pctCell(h.target.change_pct) : ""}</span>
+        </p>
+      </div>
+    );
+  };
 
   const addWatch = () => {
     const { next, added } = addCodes(watchCodes, watchInput);
@@ -821,6 +1041,61 @@ export function DailyReview() {
         <span className="text-[11px] text-muted-foreground/50">仅展示已保存快照 · 不自动写入</span>
       </div>
       <GlassCard className="mb-6">
+        {/* 快照对比控制区 */}
+        <div className="mb-4 rounded-lg border border-border/50 bg-muted/10 p-3">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <h4 className="flex items-center gap-1.5 text-sm font-semibold">
+              <GitCompare className="h-4 w-4 text-primary" /> 快照对比
+            </h4>
+            <span className="text-[11px] text-muted-foreground/50">结构化差异 · 不调用 AI</span>
+          </div>
+          <div className="mb-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+            <p>
+              基础快照：{" "}
+              {baseSnapshot ? (
+                <b className="text-foreground">
+                  {baseSnapshot.trade_date} / {baseSnapshot.generated_at} / #{baseSnapshot.id}
+                </b>
+              ) : (
+                <span className="text-muted-foreground/60">未选择</span>
+              )}
+            </p>
+            <p>
+              目标快照：{" "}
+              {targetSnapshot ? (
+                <b className="text-foreground">
+                  {targetSnapshot.trade_date} / {targetSnapshot.generated_at} / #{targetSnapshot.id}
+                </b>
+              ) : (
+                <span className="text-muted-foreground/60">未选择</span>
+              )}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={runCompare}
+              disabled={!baseSnapshot || !targetSnapshot || comparisonLoading}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25 disabled:opacity-50"
+            >
+              {comparisonLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitCompare className="h-3.5 w-3.5" />}
+              {comparisonLoading ? "对比中…" : "开始对比"}
+            </button>
+            <button
+              type="button"
+              onClick={clearCompareSelection}
+              className="rounded-lg bg-muted/30 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+            >
+              清除选择
+            </button>
+          </div>
+          {comparisonError && (
+            <div className="mt-2 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {comparisonError}
+            </div>
+          )}
+        </div>
+
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <label className="text-xs text-muted-foreground">
             交易日期
@@ -878,9 +1153,25 @@ export function DailyReview() {
               <tbody>
                 {histItems.map((item) => {
                   const badge = statusBadge(item.status);
+                  const isBase = baseSnapshot?.id === item.id;
+                  const isTarget = targetSnapshot?.id === item.id;
                   return (
-                    <tr key={item.id} className="border-b border-border/30">
-                      <td className="whitespace-nowrap px-2 py-2 font-mono font-medium">{item.trade_date}</td>
+                    <tr
+                      key={item.id}
+                      className={cn(
+                        "border-b border-border/30",
+                        (isBase || isTarget) && "bg-primary/5",
+                      )}
+                    >
+                      <td className="whitespace-nowrap px-2 py-2 font-mono font-medium">
+                        {item.trade_date}
+                        {isBase && (
+                          <span className="ml-1 rounded bg-primary/20 px-1 text-[10px] text-primary">基础</span>
+                        )}
+                        {isTarget && (
+                          <span className="ml-1 rounded bg-warning/20 px-1 text-[10px] text-warning">目标</span>
+                        )}
+                      </td>
                       <td className="whitespace-nowrap px-2 py-2 font-mono text-xs text-muted-foreground">{item.generated_at}</td>
                       <td className="whitespace-nowrap px-2 py-2 font-mono text-xs text-muted-foreground">{item.created_at}</td>
                       <td className="px-2 py-2">
@@ -892,13 +1183,29 @@ export function DailyReview() {
                       </td>
                       <td className="whitespace-nowrap px-2 py-2 text-xs text-muted-foreground/70">{item.schema_version}</td>
                       <td className="px-2 py-2 text-right">
-                        <button
-                          type="button"
-                          onClick={() => openHistoryDetail(item.id)}
-                          className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/20"
-                        >
-                          <Eye className="h-3 w-3" /> 查看
-                        </button>
+                        <div className="flex flex-wrap justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setBaseSnapshot(item)}
+                            className="rounded-md bg-muted/40 px-1.5 py-1 text-[11px] text-muted-foreground hover:text-primary"
+                          >
+                            设为基础
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setTargetSnapshot(item)}
+                            className="rounded-md bg-muted/40 px-1.5 py-1 text-[11px] text-muted-foreground hover:text-warning"
+                          >
+                            设为目标
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openHistoryDetail(item.id)}
+                            className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/20"
+                          >
+                            <Eye className="h-3 w-3" /> 查看
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1106,6 +1413,183 @@ export function DailyReview() {
                 </div>
               );
             })()}
+          </div>
+        )}
+
+        {/* 快照对比结果（只读；不替换实时复盘） */}
+        {comparison && (
+          <div className="mt-4 border-t border-border/40 pt-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h4 className="flex items-center gap-1.5 text-sm font-semibold">
+                <GitCompare className="h-4 w-4 text-primary" /> 快照对比结果
+              </h4>
+              <button
+                type="button"
+                onClick={() => { setComparison(null); setComparisonError(null); }}
+                className="text-muted-foreground hover:text-foreground"
+                title="关闭对比结果"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mb-3 flex flex-wrap gap-3 text-xs text-muted-foreground">
+              <span>
+                基础：{comparison.base.trade_date ?? "—"} / {comparison.base.generated_at ?? "—"} /{" "}
+                {comparison.base.status ?? "—"}
+              </span>
+              <span>
+                目标：{comparison.target.trade_date ?? "—"} / {comparison.target.generated_at ?? "—"} /{" "}
+                {comparison.target.status ?? "—"}
+              </span>
+              {comparisonStatusLabel(comparison.comparison_status) && (
+                <span className={cn(
+                  "rounded-full px-2 py-0.5 text-[10px]",
+                  comparisonStatusLabel(comparison.comparison_status)!.cls,
+                )}>
+                  {comparisonStatusLabel(comparison.comparison_status)!.text}
+                </span>
+              )}
+              {!comparison.schema_compatible && (
+                <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning">
+                  快照结构版本不一致
+                </span>
+              )}
+            </div>
+
+            {(comparison.warnings?.length ?? 0) > 0 && (
+              <div className="mb-3 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning">
+                <p className="font-medium">比较提示</p>
+                <ul className="mt-1 list-inside list-disc space-y-0.5 opacity-90">
+                  {comparison.warnings.slice(0, 5).map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+                {comparison.warnings.length > 5 && (
+                  <p className="mt-1 opacity-70">另有 {comparison.warnings.length - 5} 条</p>
+                )}
+              </div>
+            )}
+            {(comparison.unknowns?.length ?? 0) > 0 && (
+              <div className="mb-3 rounded-lg border border-border/50 bg-muted/10 p-3 text-xs text-muted-foreground">
+                <p className="font-medium text-foreground/80">不可比较项</p>
+                <ul className="mt-1 list-inside list-disc space-y-0.5">
+                  {comparison.unknowns.slice(0, 10).map((u, i) => (
+                    <li key={i}>{u}</li>
+                  ))}
+                </ul>
+                {comparison.unknowns.length > 10 && (
+                  <p className="mt-1 opacity-70">另有 {comparison.unknowns.length - 10} 条</p>
+                )}
+              </div>
+            )}
+
+            <div className="mb-4">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">
+                市场广度
+                {!comparison.market_breadth?.available && (
+                  <span className="ml-2 text-warning">市场广度仅部分可比较</span>
+                )}
+              </p>
+              {renderNumericTable([
+                { label: "股票总数", c: comparison.market_breadth.stock_count },
+                { label: "有效涨跌幅数量", c: comparison.market_breadth.valid_count },
+                { label: "上涨家数", c: comparison.market_breadth.up_count },
+                { label: "下跌家数", c: comparison.market_breadth.down_count },
+                { label: "平盘家数", c: comparison.market_breadth.flat_count },
+                { label: "上涨占比", c: comparison.market_breadth.up_ratio, kind: "ratio" },
+                { label: "涨幅≥3%", c: comparison.market_breadth.up_3pct_count },
+                { label: "跌幅≤-3%", c: comparison.market_breadth.down_3pct_count },
+                { label: "全市场成交额", c: comparison.market_breadth.total_amount, kind: "amount" },
+                { label: "有效成交额数量", c: comparison.market_breadth.amount_valid_count },
+              ])}
+            </div>
+
+            <div className="mb-4">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">
+                短线情绪
+                {!comparison.short_term_emotion?.available && (
+                  <span className="ml-2 text-warning">短线情绪仅部分可比较</span>
+                )}
+              </p>
+              {renderNumericTable([
+                { label: "涨停家数", c: comparison.short_term_emotion.zt_count },
+                { label: "跌停家数", c: comparison.short_term_emotion.dt_count },
+                { label: "炸板家数", c: comparison.short_term_emotion.zb_count },
+                { label: "最高连板", c: comparison.short_term_emotion.max_boards },
+                { label: "连板股数量", c: comparison.short_term_emotion.lianban_count },
+                { label: "封板率", c: comparison.short_term_emotion.seal_rate, kind: "rate" },
+                { label: "炸板率", c: comparison.short_term_emotion.break_rate, kind: "rate" },
+                { label: "晋级率", c: comparison.short_term_emotion.promotion_rate, kind: "rate" },
+                { label: "昨日涨停数量", c: comparison.short_term_emotion.yzt_count },
+              ])}
+            </div>
+
+            <div className="mb-4">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">板块亮点</p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {renderHighlight("最强行业", comparison.sector_rotation?.highlights?.strongest_industry)}
+                {renderHighlight("最弱行业", comparison.sector_rotation?.highlights?.weakest_industry)}
+                {renderHighlight("最强概念", comparison.sector_rotation?.highlights?.strongest_concept)}
+                {renderHighlight("最弱概念", comparison.sector_rotation?.highlights?.weakest_concept)}
+                {renderHighlight("最强地域", comparison.sector_rotation?.highlights?.strongest_region)}
+                {renderHighlight("最弱地域", comparison.sector_rotation?.highlights?.weakest_region)}
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">板块排名变化</p>
+              {renderRankingBlock(
+                "行业涨幅 Top",
+                comparison.sector_rotation?.industry?.top,
+                (it) => pctCell(it.change_pct),
+              )}
+              {renderRankingBlock(
+                "行业涨幅 Bottom",
+                comparison.sector_rotation?.industry?.bottom,
+                (it) => pctCell(it.change_pct),
+              )}
+              {renderRankingBlock(
+                "概念涨幅 Top",
+                comparison.sector_rotation?.concept?.top,
+                (it) => pctCell(it.change_pct),
+              )}
+              {renderRankingBlock(
+                "概念涨幅 Bottom",
+                comparison.sector_rotation?.concept?.bottom,
+                (it) => pctCell(it.change_pct),
+              )}
+              {renderRankingBlock(
+                "地域涨幅 Top",
+                comparison.sector_rotation?.region?.top,
+                (it) => pctCell(it.change_pct),
+              )}
+              {renderRankingBlock(
+                "地域涨幅 Bottom",
+                comparison.sector_rotation?.region?.bottom,
+                (it) => pctCell(it.change_pct),
+              )}
+            </div>
+
+            <div className="mb-2">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">成交活跃</p>
+              {renderNumericTable([
+                { label: "全市场成交额", c: comparison.capital_activity.total_amount, kind: "amount" },
+                { label: "有效成交额数量", c: comparison.capital_activity.amount_valid_count },
+              ])}
+              <div className="mt-3">
+                {renderRankingBlock(
+                  "成交额榜",
+                  comparison.capital_activity?.amount_top,
+                  (it) => yi(it.amount),
+                )}
+                {renderRankingBlock(
+                  "高换手榜",
+                  comparison.capital_activity?.high_turnover,
+                  (it) => (it.turnover_pct == null ? "—" : `${it.turnover_pct}%`),
+                )}
+              </div>
+            </div>
           </div>
         )}
       </GlassCard>
