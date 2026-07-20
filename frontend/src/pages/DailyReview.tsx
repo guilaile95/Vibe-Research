@@ -145,6 +145,7 @@ export function DailyReview() {
   const [comparison, setComparison] = useState<DailyReviewComparison | null>(null);
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const [compareBoardTab, setCompareBoardTab] = useState<"industry" | "concept" | "region">("industry");
 
   const loadDailyReview = () => {
     setDrDone(false);
@@ -271,6 +272,18 @@ export function DailyReview() {
     setComparisonError(null);
   };
 
+  /** 更换基础/目标时立即清空旧比较结果，避免与当前选择不一致 */
+  const selectBaseSnapshot = (item: DailyReviewHistoryItem) => {
+    setBaseSnapshot(item);
+    setComparison(null);
+    setComparisonError(null);
+  };
+  const selectTargetSnapshot = (item: DailyReviewHistoryItem) => {
+    setTargetSnapshot(item);
+    setComparison(null);
+    setComparisonError(null);
+  };
+
   const runCompare = async () => {
     if (!baseSnapshot || !targetSnapshot || comparisonLoading) return;
     setComparisonLoading(true);
@@ -286,10 +299,29 @@ export function DailyReview() {
       setComparison(result);
     } catch (e) {
       setComparison(null);
-      setComparisonError(e instanceof ApiError ? e.message : "快照对比失败");
+      if (e instanceof ApiError) {
+        if (e.status === 404) {
+          setComparisonError("选择的历史快照不存在，请刷新历史列表后重试");
+        } else if (e.status === 400 || e.status === 422) {
+          setComparisonError(e.message || "快照对比参数无效");
+        } else if (e.status === 500) {
+          setComparisonError("快照对比失败");
+        } else {
+          setComparisonError(e.message || "快照对比失败");
+        }
+      } else {
+        setComparisonError("快照对比失败");
+      }
     } finally {
       setComparisonLoading(false);
     }
+  };
+
+  /** rank_delta：正=上升、负=下降、0=不变（不重算） */
+  const rankDeltaLabel = (d: number) => {
+    if (d > 0) return `上升${d}位`;
+    if (d < 0) return `下降${Math.abs(d)}位`;
+    return "排名不变";
   };
 
   const histPage = Math.floor(histOffset / HISTORY_LIMIT) + 1;
@@ -353,91 +385,270 @@ export function DailyReview() {
     </div>
   );
 
-  const renderRankingBlock = <T extends { name?: string; code?: string; change_pct?: number | null }>(
+  const renderBoardRanking = (
     title: string,
-    ranking: RankingComparison<T> | undefined,
-    extra?: (item: T) => string,
+    ranking: RankingComparison<BoardRankItem> | undefined,
   ) => {
     if (!ranking) return null;
     const entered = ranking.entered ?? [];
     const exited = ranking.exited ?? [];
     const changes = ranking.rank_changes ?? [];
+    const empty = entered.length === 0 && exited.length === 0 && changes.length === 0;
     return (
-      <div className="mb-3">
+      <div className="mb-4">
         <p className="mb-1.5 text-xs font-medium text-muted-foreground">
           {title}{" "}
           <span className="font-normal text-muted-foreground/60">
             （基础 {ranking.base_count} / 目标 {ranking.target_count}）
           </span>
         </p>
-        <div className="grid gap-2 sm:grid-cols-3">
-          <div className="rounded-lg bg-muted/15 p-2">
-            <p className="mb-1 text-[11px] text-primary">新进入</p>
-            {entered.length === 0 ? (
-              <p className="text-[11px] text-muted-foreground/50">无</p>
-            ) : (
-              <ul className="space-y-0.5 text-xs">
-                {entered.map((e) => (
-                  <li key={e.key}>
-                    #{e.target_rank} {itemLabel(e.item)}
-                    {extra ? ` ${extra(e.item)}` : ""}
-                  </li>
-                ))}
-              </ul>
-            )}
+        {empty ? (
+          <p className="py-2 text-center text-xs text-muted-foreground/50">暂无变化</p>
+        ) : (
+          <div className="space-y-2">
+            <div className="rounded-lg bg-muted/15 p-2">
+              <p className="mb-1 text-[11px] text-primary">新进入</p>
+              {entered.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground/50">暂无变化</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-muted-foreground">
+                        <th className="px-1 py-1">目标排名</th>
+                        <th className="px-1 py-1">板块名称</th>
+                        <th className="px-1 py-1">涨跌幅</th>
+                        <th className="px-1 py-1">领涨股票</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {entered.map((e) => (
+                        <tr key={e.key} className="border-t border-border/20">
+                          <td className="px-1 py-1 font-mono">#{e.target_rank}</td>
+                          <td className="px-1 py-1">{e.item?.name || e.key}</td>
+                          <td className={cn("px-1 py-1 font-mono", e.item?.change_pct != null ? pctColor(e.item.change_pct) : "")}>
+                            {pctCell(e.item?.change_pct)}
+                          </td>
+                          <td className="px-1 py-1 text-muted-foreground">
+                            {e.item?.leader || "—"}
+                            {e.item?.leader_change_pct != null ? (
+                              <span className={cn("ml-1 font-mono", pctColor(e.item.leader_change_pct))}>
+                                {pctCell(e.item.leader_change_pct)}
+                              </span>
+                            ) : null}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div className="rounded-lg bg-muted/15 p-2">
+              <p className="mb-1 text-[11px] text-muted-foreground">退出</p>
+              {exited.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground/50">暂无变化</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-muted-foreground">
+                        <th className="px-1 py-1">原基础排名</th>
+                        <th className="px-1 py-1">板块名称</th>
+                        <th className="px-1 py-1">涨跌幅</th>
+                        <th className="px-1 py-1">领涨股票</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {exited.map((e) => (
+                        <tr key={e.key} className="border-t border-border/20">
+                          <td className="px-1 py-1 font-mono">#{e.base_rank}</td>
+                          <td className="px-1 py-1">{e.item?.name || e.key}</td>
+                          <td className={cn("px-1 py-1 font-mono", e.item?.change_pct != null ? pctColor(e.item.change_pct) : "")}>
+                            {pctCell(e.item?.change_pct)}
+                          </td>
+                          <td className="px-1 py-1 text-muted-foreground">{e.item?.leader || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div className="rounded-lg bg-muted/15 p-2">
+              <p className="mb-1 text-[11px] text-muted-foreground">排名变化</p>
+              {changes.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground/50">暂无变化</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-muted-foreground">
+                        <th className="px-1 py-1">板块名称</th>
+                        <th className="px-1 py-1">基础排名</th>
+                        <th className="px-1 py-1">目标排名</th>
+                        <th className="px-1 py-1">排名变化</th>
+                        <th className="px-1 py-1">目标涨跌幅</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {changes.map((c) => (
+                        <tr key={c.key} className="border-t border-border/20">
+                          <td className="px-1 py-1">{c.target_item?.name || c.key}</td>
+                          <td className="px-1 py-1 font-mono">#{c.base_rank}</td>
+                          <td className="px-1 py-1 font-mono">#{c.target_rank}</td>
+                          <td className={cn(
+                            "px-1 py-1 font-mono",
+                            c.rank_delta > 0 ? "text-danger" : c.rank_delta < 0 ? "text-success" : "",
+                          )}>
+                            {rankDeltaLabel(c.rank_delta)}
+                          </td>
+                          <td className={cn(
+                            "px-1 py-1 font-mono",
+                            c.target_item?.change_pct != null ? pctColor(c.target_item.change_pct) : "",
+                          )}>
+                            {pctCell(c.target_item?.change_pct)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
-          <div className="rounded-lg bg-muted/15 p-2">
-            <p className="mb-1 text-[11px] text-muted-foreground">退出</p>
-            {exited.length === 0 ? (
-              <p className="text-[11px] text-muted-foreground/50">无</p>
-            ) : (
-              <ul className="space-y-0.5 text-xs">
-                {exited.map((e) => (
-                  <li key={e.key}>
-                    #{e.base_rank} {itemLabel(e.item)}
-                    {extra ? ` ${extra(e.item)}` : ""}
-                  </li>
-                ))}
-              </ul>
-            )}
+        )}
+      </div>
+    );
+  };
+
+  const renderStockRanking = (
+    title: string,
+    ranking: RankingComparison<MarketSnapshotItem> | undefined,
+    metric: "amount" | "turnover",
+  ) => {
+    if (!ranking) return null;
+    const entered = ranking.entered ?? [];
+    const exited = ranking.exited ?? [];
+    const changes = ranking.rank_changes ?? [];
+    const empty = entered.length === 0 && exited.length === 0 && changes.length === 0;
+    const metricCell = (it: MarketSnapshotItem | undefined) => {
+      if (!it) return "—";
+      if (metric === "amount") return yi(it.amount);
+      return it.turnover_pct == null ? "—" : `${it.turnover_pct}%`;
+    };
+    return (
+      <div className="mb-4">
+        <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+          {title}{" "}
+          <span className="font-normal text-muted-foreground/60">
+            （基础 {ranking.base_count} / 目标 {ranking.target_count}）
+          </span>
+        </p>
+        {empty ? (
+          <p className="py-2 text-center text-xs text-muted-foreground/50">暂无变化</p>
+        ) : (
+          <div className="space-y-2">
+            <div className="rounded-lg bg-muted/15 p-2">
+              <p className="mb-1 text-[11px] text-primary">新进入</p>
+              {entered.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground/50">暂无变化</p>
+              ) : (
+                <ul className="space-y-0.5 text-xs">
+                  {entered.map((e) => (
+                    <li key={e.key}>
+                      #{e.target_rank} {e.item?.name || "—"}{" "}
+                      <span className="text-muted-foreground/60">{e.item?.code}</span>{" "}
+                      <span className="font-mono">{e.item?.price ?? "—"}</span>{" "}
+                      <span className={cn(e.item?.change_pct != null ? pctColor(e.item.change_pct) : "")}>
+                        {pctCell(e.item?.change_pct)}
+                      </span>{" "}
+                      {metricCell(e.item)}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="rounded-lg bg-muted/15 p-2">
+              <p className="mb-1 text-[11px] text-muted-foreground">退出</p>
+              {exited.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground/50">暂无变化</p>
+              ) : (
+                <ul className="space-y-0.5 text-xs">
+                  {exited.map((e) => (
+                    <li key={e.key}>
+                      #{e.base_rank} {e.item?.name || "—"}{" "}
+                      <span className="text-muted-foreground/60">{e.item?.code}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="rounded-lg bg-muted/15 p-2">
+              <p className="mb-1 text-[11px] text-muted-foreground">排名变化</p>
+              {changes.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground/50">暂无变化</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-muted-foreground">
+                        <th className="px-1 py-1">名称</th>
+                        <th className="px-1 py-1">代码</th>
+                        <th className="px-1 py-1">基础排名</th>
+                        <th className="px-1 py-1">目标排名</th>
+                        <th className="px-1 py-1">排名变化</th>
+                        <th className="px-1 py-1">目标价</th>
+                        <th className="px-1 py-1">目标涨跌</th>
+                        <th className="px-1 py-1">{metric === "amount" ? "成交额" : "换手率"}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {changes.map((c) => (
+                        <tr key={c.key} className="border-t border-border/20">
+                          <td className="px-1 py-1">{c.target_item?.name || "—"}</td>
+                          <td className="px-1 py-1 text-muted-foreground">{c.target_item?.code || c.key}</td>
+                          <td className="px-1 py-1 font-mono">#{c.base_rank}</td>
+                          <td className="px-1 py-1 font-mono">#{c.target_rank}</td>
+                          <td className={cn(
+                            "px-1 py-1 font-mono",
+                            c.rank_delta > 0 ? "text-danger" : c.rank_delta < 0 ? "text-success" : "",
+                          )}>
+                            {rankDeltaLabel(c.rank_delta)}
+                          </td>
+                          <td className="px-1 py-1 font-mono">{c.target_item?.price ?? "—"}</td>
+                          <td className={cn(
+                            "px-1 py-1 font-mono",
+                            c.target_item?.change_pct != null ? pctColor(c.target_item.change_pct) : "",
+                          )}>
+                            {pctCell(c.target_item?.change_pct)}
+                          </td>
+                          <td className="px-1 py-1 font-mono">{metricCell(c.target_item)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
-          <div className="rounded-lg bg-muted/15 p-2">
-            <p className="mb-1 text-[11px] text-muted-foreground">排名变化</p>
-            {changes.length === 0 ? (
-              <p className="text-[11px] text-muted-foreground/50">无</p>
-            ) : (
-              <ul className="space-y-0.5 text-xs">
-                {changes.map((c) => (
-                  <li key={c.key}>
-                    {itemLabel(c.target_item)} {c.base_rank}→{c.target_rank}{" "}
-                    <span className={cn(
-                      "font-mono",
-                      c.rank_delta > 0 ? "text-danger" : c.rank_delta < 0 ? "text-success" : "",
-                    )}>
-                      ({fmtSigned(c.rank_delta, 0)})
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
+        )}
       </div>
     );
   };
 
   const renderHighlight = (label: string, h: HighlightComparison<BoardRankItem> | undefined) => {
     if (!h) return null;
-    const changedText = h.changed === true ? "已变化" : h.changed === false ? "未变" : "无法判定";
+    const changedText = h.changed === true ? "已变化" : h.changed === false ? "未变化" : "无法判断";
     return (
       <div className="rounded-lg bg-muted/20 p-2">
         <p className="text-[11px] text-muted-foreground">{label} · {changedText}</p>
         <p className="mt-0.5 text-xs">
-          基：{itemLabel(h.base)}{" "}
+          基础板块：{itemLabel(h.base)}{" "}
           <span className="font-mono text-muted-foreground">{h.base ? pctCell(h.base.change_pct) : ""}</span>
         </p>
         <p className="text-xs">
-          目：{itemLabel(h.target)}{" "}
+          目标板块：{itemLabel(h.target)}{" "}
           <span className="font-mono text-muted-foreground">{h.target ? pctCell(h.target.change_pct) : ""}</span>
         </p>
       </div>
@@ -1186,14 +1397,14 @@ export function DailyReview() {
                         <div className="flex flex-wrap justify-end gap-1">
                           <button
                             type="button"
-                            onClick={() => setBaseSnapshot(item)}
+                            onClick={() => selectBaseSnapshot(item)}
                             className="rounded-md bg-muted/40 px-1.5 py-1 text-[11px] text-muted-foreground hover:text-primary"
                           >
                             设为基础
                           </button>
                           <button
                             type="button"
-                            onClick={() => setTargetSnapshot(item)}
+                            onClick={() => selectTargetSnapshot(item)}
                             className="rounded-md bg-muted/40 px-1.5 py-1 text-[11px] text-muted-foreground hover:text-warning"
                           >
                             设为目标
@@ -1538,36 +1749,47 @@ export function DailyReview() {
             </div>
 
             <div className="mb-4">
-              <p className="mb-2 text-xs font-medium text-muted-foreground">板块排名变化</p>
-              {renderRankingBlock(
-                "行业涨幅 Top",
-                comparison.sector_rotation?.industry?.top,
-                (it) => pctCell(it.change_pct),
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <p className="text-xs font-medium text-muted-foreground">板块排名变化</p>
+                <div className="flex gap-1">
+                  {([
+                    ["industry", "行业"],
+                    ["concept", "概念"],
+                    ["region", "地域"],
+                  ] as const).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setCompareBoardTab(key)}
+                      className={cn(
+                        "rounded-full px-2.5 py-0.5 text-[11px] transition-colors",
+                        compareBoardTab === key
+                          ? "bg-primary/20 text-primary"
+                          : "bg-muted/30 text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {compareBoardTab === "industry" && (
+                <>
+                  {renderBoardRanking("强势榜变化（top）", comparison.sector_rotation?.industry?.top)}
+                  {renderBoardRanking("弱势榜变化（bottom）", comparison.sector_rotation?.industry?.bottom)}
+                </>
               )}
-              {renderRankingBlock(
-                "行业涨幅 Bottom",
-                comparison.sector_rotation?.industry?.bottom,
-                (it) => pctCell(it.change_pct),
+              {compareBoardTab === "concept" && (
+                <>
+                  {renderBoardRanking("强势榜变化（top）", comparison.sector_rotation?.concept?.top)}
+                  {renderBoardRanking("弱势榜变化（bottom）", comparison.sector_rotation?.concept?.bottom)}
+                </>
               )}
-              {renderRankingBlock(
-                "概念涨幅 Top",
-                comparison.sector_rotation?.concept?.top,
-                (it) => pctCell(it.change_pct),
-              )}
-              {renderRankingBlock(
-                "概念涨幅 Bottom",
-                comparison.sector_rotation?.concept?.bottom,
-                (it) => pctCell(it.change_pct),
-              )}
-              {renderRankingBlock(
-                "地域涨幅 Top",
-                comparison.sector_rotation?.region?.top,
-                (it) => pctCell(it.change_pct),
-              )}
-              {renderRankingBlock(
-                "地域涨幅 Bottom",
-                comparison.sector_rotation?.region?.bottom,
-                (it) => pctCell(it.change_pct),
+              {compareBoardTab === "region" && (
+                <>
+                  {renderBoardRanking("强势榜变化（top）", comparison.sector_rotation?.region?.top)}
+                  {renderBoardRanking("弱势榜变化（bottom）", comparison.sector_rotation?.region?.bottom)}
+                </>
               )}
             </div>
 
@@ -1578,16 +1800,8 @@ export function DailyReview() {
                 { label: "有效成交额数量", c: comparison.capital_activity.amount_valid_count },
               ])}
               <div className="mt-3">
-                {renderRankingBlock(
-                  "成交额榜",
-                  comparison.capital_activity?.amount_top,
-                  (it) => yi(it.amount),
-                )}
-                {renderRankingBlock(
-                  "高换手榜",
-                  comparison.capital_activity?.high_turnover,
-                  (it) => (it.turnover_pct == null ? "—" : `${it.turnover_pct}%`),
-                )}
+                {renderStockRanking("成交额榜变化", comparison.capital_activity?.amount_top, "amount")}
+                {renderStockRanking("高换手榜变化", comparison.capital_activity?.high_turnover, "turnover")}
               </div>
             </div>
           </div>
