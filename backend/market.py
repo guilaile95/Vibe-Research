@@ -317,7 +317,119 @@ def calculate_market_breadth(
     }
 
 
+_BREADTH_ENVELOPE_KEYS = (
+    "status", "source", "trade_date", "data_time",
+    "fetched_at", "is_stale", "warnings", "data",
+)
+_PARTIAL_MIN_STOCKS = 3000
+_PARTIAL_FIELD_RATIO = 0.8
+_SOURCE = "eastmoney_push2"
+_WARN_NO_TRADE_META = "源数据未提供明确交易日期和行情时间"
+
+
+def _breadth_envelope(
+    status: str,
+    *,
+    data: dict | None,
+    warnings: list[str] | None = None,
+    is_stale: bool = False,
+) -> dict:
+    """市场广度统一状态信封（get_market_breadth 唯一出口形状）。"""
+    return {
+        "status": status,
+        "source": _SOURCE,
+        "trade_date": None,
+        "data_time": None,
+        "fetched_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S"),
+        "is_stale": is_stale,
+        "warnings": list(warnings or []),
+        "data": data,
+    }
+
+
+def _partial_warnings(breadth: dict) -> list[str]:
+    """根据覆盖率生成 partial warnings；不足阈值才标记。"""
+    stock_count = int(breadth.get("stock_count") or 0)
+    if stock_count <= 0:
+        return []
+    warns: list[str] = []
+    if stock_count < _PARTIAL_MIN_STOCKS:
+        warns.append(
+            f"全市场股票数量偏少：stock_count={stock_count}（阈值 {_PARTIAL_MIN_STOCKS}）"
+        )
+    valid_count = int(breadth.get("valid_count") or 0)
+    valid_ratio = valid_count / stock_count
+    if valid_ratio < _PARTIAL_FIELD_RATIO:
+        warns.append(
+            f"涨跌幅字段有效比例偏低：valid_count/stock_count="
+            f"{valid_count}/{stock_count}={valid_ratio:.2%}（阈值 {_PARTIAL_FIELD_RATIO:.0%}）"
+        )
+    amount_valid = int(breadth.get("amount_valid_count") or 0)
+    amount_ratio = amount_valid / stock_count
+    if amount_ratio < _PARTIAL_FIELD_RATIO:
+        warns.append(
+            f"成交额字段有效比例偏低：amount_valid_count/stock_count="
+            f"{amount_valid}/{stock_count}={amount_ratio:.2%}（阈值 {_PARTIAL_FIELD_RATIO:.0%}）"
+        )
+    return warns
+
+
 def get_market_breadth() -> dict:
-    """市场广度：取共享全 A 快照后纯计算（快照异常向上抛出）。"""
-    snapshot = get_a_share_snapshot()
-    return calculate_market_breadth(snapshot)
+    """市场广度状态信封（始终返回统一结构，不抛出数据源异常）。
+
+    - normal：覆盖充分的完整统计
+    - partial：有数据但 stock 数或字段覆盖率不足
+    - unavailable：空快照或获取/计算失败（data=None，不伪造全 0）
+    """
+    try:
+        snapshot = get_a_share_snapshot()
+    except Exception as e:  # noqa: BLE001 — 外部数据边界，转 unavailable
+        return _breadth_envelope(
+            "unavailable",
+            data=None,
+            warnings=[f"全市场快照获取失败：{type(e).__name__}: {e}"],
+            is_stale=False,
+        )
+
+    if not snapshot:
+        return _breadth_envelope(
+            "unavailable",
+            data=None,
+            warnings=["全市场快照为空"],
+            is_stale=False,
+        )
+
+    try:
+        breadth = calculate_market_breadth(snapshot)
+    except Exception as e:  # noqa: BLE001
+        return _breadth_envelope(
+            "unavailable",
+            data=None,
+            warnings=[f"全市场快照获取失败：{type(e).__name__}: {e}"],
+            is_stale=False,
+        )
+
+    stock_count = int(breadth.get("stock_count") or 0)
+    if stock_count <= 0:
+        return _breadth_envelope(
+            "unavailable",
+            data=None,
+            warnings=["全市场快照为空"],
+            is_stale=False,
+        )
+
+    partial_warns = _partial_warnings(breadth)
+    base_warns = [_WARN_NO_TRADE_META]
+    if partial_warns:
+        return _breadth_envelope(
+            "partial",
+            data=breadth,
+            warnings=base_warns + partial_warns,
+            is_stale=False,
+        )
+    return _breadth_envelope(
+        "normal",
+        data=breadth,
+        warnings=base_warns,
+        is_stale=False,
+    )
