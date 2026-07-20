@@ -16,7 +16,17 @@ import { cn } from "@/lib/utils";
 // 对中国用户最不易看错（Simon 2026-07-05 确认；非国际绿涨惯例，是有意选择，勿改）。
 const pctColor = (p: number) => (p > 0 ? "text-danger" : p < 0 ? "text-success" : "text-muted-foreground");
 const fmt = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
-const yi = (v: number | null) => (v == null ? "—" : `${fmt(v / 1e8)} 亿`); // 元 → 亿
+const yi = (v: number | null | undefined) => (v == null ? "—" : `${fmt(v / 1e8)} 亿`); // 元 → 亿
+
+/** 数值展示：null/undefined → —；真实 0 → 0 */
+const numCell = (v: number | null | undefined): string | number => (v == null ? "—" : v);
+
+/** 上涨占比：优先 up_ratio，回退 active 字符串 */
+const formatUpRatio = (s: { up_ratio?: number | null; active?: string } | null | undefined): string => {
+  if (s?.up_ratio != null && Number.isFinite(s.up_ratio)) return `${(s.up_ratio * 100).toFixed(1)}%`;
+  if (s?.active) return s.active;
+  return "—";
+};
 
 export function DailyReview() {
   const [indices, setIndices] = useState<IndexQuote[]>([]);
@@ -107,16 +117,20 @@ export function DailyReview() {
 
   const sentiment = overview?.sentiment;
   const sectors = overview?.sectors || [];
+  // 市场情绪明细：去掉重复的「真实涨停/真实跌停」；活跃度 → 上涨占比
   const sentCells = sentiment ? [
-    { k: "上涨家数", v: sentiment.up, up: true },
-    { k: "下跌家数", v: sentiment.down, up: false },
-    { k: "平盘", v: sentiment.flat, up: null },
-    { k: "涨停", v: sentiment.zt, up: true },
-    { k: "真实涨停", v: sentiment.zt_real, up: true },
-    { k: "跌停", v: sentiment.dt, up: false },
-    { k: "真实跌停", v: sentiment.dt_real, up: false },
-    { k: "活跃度", v: sentiment.active, up: null },
+    { k: "上涨家数", v: numCell(sentiment.up), up: true as boolean | null },
+    { k: "下跌家数", v: numCell(sentiment.down), up: false as boolean | null },
+    { k: "平盘家数", v: numCell(sentiment.flat), up: null as boolean | null },
+    { k: "涨停", v: numCell(sentiment.zt), up: true as boolean | null },
+    { k: "跌停", v: numCell(sentiment.dt), up: false as boolean | null },
+    { k: "上涨占比", v: formatUpRatio(sentiment), up: null as boolean | null },
+    { k: "涨幅≥3%", v: numCell(sentiment.up_3pct_count), up: true as boolean | null },
+    { k: "跌幅≤-3%", v: numCell(sentiment.down_3pct_count), up: false as boolean | null },
+    { k: "全市场成交额", v: yi(sentiment.total_amount), up: null as boolean | null },
   ] : [];
+  const sentStatus = sentiment?.status;
+  const sentWarnings = (sentiment?.warnings || []).filter(Boolean);
 
   return (
     <div>
@@ -253,20 +267,59 @@ export function DailyReview() {
         ) : null}
       </GlassCard>
 
-      {/* 4. 市场情绪 */}
+      {/* 4. 市场情绪（全 A 快照广度 + 涨停池；不依赖 AKShare 乐咕） */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Gauge className="h-4 w-4" /> 市场情绪</h3>
         {sentiment?.date && <span className="text-[11px] text-muted-foreground/50">{sentiment.date}</span>}
+        {sentiment && sentStatus === "normal" && (
+          <span className="rounded-full bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground/70">数据正常</span>
+        )}
+        {sentiment && sentStatus === "partial" && (
+          <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning">市场数据部分缺失</span>
+        )}
+        {sentiment && sentStatus === "unavailable" && (
+          <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] text-destructive">市场广度数据暂不可用</span>
+        )}
       </div>
       <GlassCard className="mb-6">
-        {!sentiment?.breadth ? (
-          pending(ovDone)
-        ) : (
+        {/* 请求未完成 / 无 sentiment 对象（勿仅用 breadth 是否为空判断整卡不可用） */}
+        {!sentiment && (
+          ovDone
+            ? <p className="py-4 text-center text-sm text-muted-foreground/60">市场总览暂不可用</p>
+            : pending(false)
+        )}
+        {sentiment && (
           <>
+            {/* 状态与 warnings（partial / unavailable） */}
+            {(sentStatus === "partial" || sentStatus === "unavailable") && (
+              <div
+                className={cn(
+                  "mb-3 rounded-lg border p-3 text-xs",
+                  sentStatus === "unavailable"
+                    ? "border-destructive/30 bg-destructive/5 text-destructive"
+                    : "border-warning/30 bg-warning/5 text-warning",
+                )}
+              >
+                <p className="font-medium">
+                  {sentStatus === "unavailable" ? "市场广度数据暂不可用" : "市场数据部分缺失"}
+                </p>
+                {sentWarnings.length > 0 && (
+                  <ul className="mt-1.5 list-inside list-disc space-y-0.5 text-[11px] opacity-90">
+                    {sentWarnings.slice(0, 3).map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                  </ul>
+                )}
+                {sentWarnings.length > 3 && (
+                  <p className="mt-1 text-[11px] opacity-70">另有 {sentWarnings.length - 3} 条提示</p>
+                )}
+              </div>
+            )}
+
             <div className="grid gap-3 sm:grid-cols-2">
               {[
-                { k: "大盘宽度", v: sentiment.breadth, hint: "冰点 / 偏弱 / 中性 / 偏强 / 普涨" },
-                { k: "题材投机", v: sentiment.speculation, hint: "冰点 / 普通 / 活跃 / 亢奋" },
+                { k: "大盘宽度", v: sentiment.breadth ?? "—", hint: "冰点 / 偏弱 / 中性 / 偏强 / 普涨" },
+                { k: "题材投机", v: sentiment.speculation ?? "—", hint: "冰点 / 普通 / 活跃 / 亢奋" },
               ].map((m) => (
                 <div key={m.k} className="rounded-lg bg-muted/25 p-4">
                   <p className="text-xs text-muted-foreground">{m.k}</p>
@@ -275,7 +328,7 @@ export function DailyReview() {
                 </div>
               ))}
             </div>
-            <div className="mt-3 grid grid-cols-4 gap-2">
+            <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-5">
               {sentCells.map((c) => (
                 <div key={c.k} className="rounded-lg bg-muted/20 p-2 text-center">
                   <p className="truncate text-[11px] text-muted-foreground">{c.k}</p>

@@ -129,9 +129,41 @@ export interface IndexQuote {
   name: string; price: number; change_pct: number; change_amt: number;
 }
 
+/** 市场数据状态（与后端 breadth / sentiment 信封一致） */
+export type MarketDataStatus = "normal" | "partial" | "unavailable";
+
 export interface MarketSentiment {
-  up: number; down: number; flat: number; zt: number; zt_real: number; dt: number; dt_real: number;
-  active: string; breadth: string; speculation: string; date: string;
+  status?: MarketDataStatus;
+  source?: string;
+  warnings?: string[];
+
+  up: number | null;
+  down: number | null;
+  flat: number | null;
+
+  zt: number | null;
+  /** 兼容别名，与 zt 同源，前端不再单独展示 */
+  zt_real?: number | null;
+  dt: number | null;
+  /** 兼容别名，与 dt 同源，前端不再单独展示 */
+  dt_real?: number | null;
+
+  /** 上涨占比字符串（如 "56.8%"）；兼容回退，展示名应为「上涨占比」非「活跃度」 */
+  active: string;
+  active_metric?: string;
+  up_ratio?: number | null;
+
+  breadth: string | null;
+  speculation: string | null;
+
+  stock_count?: number | null;
+  valid_count?: number | null;
+  up_3pct_count?: number | null;
+  down_3pct_count?: number | null;
+  total_amount?: number | null;
+
+  date: string;
+  limit_count_source?: string;
 }
 export interface SectorFlow {
   name: string; pct: number; net: number; inflow: number; outflow: number; firms: number;
