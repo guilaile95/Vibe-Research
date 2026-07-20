@@ -182,3 +182,142 @@ def get_turnover_top() -> dict:
 def get_global_indices() -> list[dict]:
     """全球指数快照（美股 / 港股，含缓存 5 分钟）。空结果不缓存。"""
     return _cached("global_indices", gstock.global_indices, valid=bool)
+
+
+# ---------------------------------------------------------------------------
+# 全 A 股快照共享缓存 + 市场广度（纯计算）
+# ---------------------------------------------------------------------------
+_AMOUNT_TOP_N = 30
+_HIGH_TURNOVER_N = 30
+_HIGH_TURNOVER_MIN = 15.0  # 换手率 %
+
+
+def get_a_share_snapshot() -> list[dict]:
+    """全 A 股行情快照（共享缓存，TTL 同模块 5 分钟）。
+
+    调用 ``astock.a_share_snapshot()``；空列表不缓存；异常向上抛出，不伪装成空市场。
+    同缓存周期内市场广度等调用方应复用本入口，避免重复分页抓取。
+    """
+    return _cached("a_share_snapshot", astock.a_share_snapshot, valid=bool)
+
+
+def _stock_subset(s: dict, *, amount_required: bool) -> dict:
+    """榜单行：从快照取必要字段子集。"""
+    row = {
+        "code": s.get("code", ""),
+        "name": s.get("name", ""),
+        "price": s.get("price"),
+        "change_pct": s.get("change_pct"),
+        "amount": s.get("amount"),
+        "turnover_pct": s.get("turnover_pct"),
+        "market_cap": s.get("market_cap"),
+    }
+    if amount_required:
+        # amount_top 保证 amount 为 float
+        row["amount"] = float(s["amount"])
+    return row
+
+
+def calculate_market_breadth(
+    snapshot: list[dict],
+    *,
+    amount_top_n: int = _AMOUNT_TOP_N,
+    high_turnover_n: int = _HIGH_TURNOVER_N,
+    high_turnover_min: float = _HIGH_TURNOVER_MIN,
+) -> dict:
+    """由全 A 快照纯计算市场广度。不联网、不读缓存。
+
+    涨跌统计仅使用 ``change_pct`` 为有效数值的股票；上涨/下跌/平盘互斥。
+    """
+    if not isinstance(snapshot, list):
+        raise TypeError(f"snapshot must be a list, got {type(snapshot).__name__}")
+
+    stock_count = len(snapshot)
+    up_count = down_count = flat_count = 0
+    up_3pct_count = down_3pct_count = 0
+    valid_count = 0
+
+    total_amount = 0.0
+    amount_valid_count = 0
+    has_amount = False
+
+    amount_candidates: list[dict] = []
+    turnover_candidates: list[dict] = []
+
+    for s in snapshot:
+        if not isinstance(s, dict):
+            continue
+        pct = s.get("change_pct")
+        if isinstance(pct, (int, float)) and not isinstance(pct, bool):
+            # 排除 NaN
+            if pct == pct:  # noqa: PLR0124 — NaN != NaN
+                valid_count += 1
+                if pct > 0:
+                    up_count += 1
+                elif pct < 0:
+                    down_count += 1
+                else:
+                    flat_count += 1
+                if pct >= 3:
+                    up_3pct_count += 1
+                if pct <= -3:
+                    down_3pct_count += 1
+
+        amt = s.get("amount")
+        if isinstance(amt, (int, float)) and not isinstance(amt, bool) and amt == amt and amt >= 0:
+            has_amount = True
+            amount_valid_count += 1
+            total_amount += float(amt)
+            amount_candidates.append(s)
+
+        to = s.get("turnover_pct")
+        if (
+            isinstance(to, (int, float))
+            and not isinstance(to, bool)
+            and to == to
+            and to >= high_turnover_min
+        ):
+            turnover_candidates.append(s)
+
+    up_ratio = round(up_count / valid_count, 4) if valid_count else None
+
+    amount_candidates.sort(key=lambda x: float(x["amount"]), reverse=True)
+    amount_top = [
+        _stock_subset(s, amount_required=True)
+        for s in amount_candidates[: max(0, amount_top_n)]
+    ]
+
+    turnover_candidates.sort(key=lambda x: float(x["turnover_pct"]), reverse=True)
+    high_turnover = [
+        {
+            "code": s.get("code", ""),
+            "name": s.get("name", ""),
+            "price": s.get("price"),
+            "change_pct": s.get("change_pct"),
+            "amount": s.get("amount"),
+            "turnover_pct": float(s["turnover_pct"]),
+            "market_cap": s.get("market_cap"),
+        }
+        for s in turnover_candidates[: max(0, high_turnover_n)]
+    ]
+
+    return {
+        "stock_count": stock_count,
+        "valid_count": valid_count,
+        "up_count": up_count,
+        "down_count": down_count,
+        "flat_count": flat_count,
+        "up_ratio": up_ratio,
+        "up_3pct_count": up_3pct_count,
+        "down_3pct_count": down_3pct_count,
+        "total_amount": total_amount if has_amount else None,
+        "amount_valid_count": amount_valid_count,
+        "amount_top": amount_top,
+        "high_turnover": high_turnover,
+    }
+
+
+def get_market_breadth() -> dict:
+    """市场广度：取共享全 A 快照后纯计算（快照异常向上抛出）。"""
+    snapshot = get_a_share_snapshot()
+    return calculate_market_breadth(snapshot)
