@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -273,6 +274,46 @@ def market_turnover_top():
         return {"data": market.get_turnover_top()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"成交额榜异常：{e}") from e
+
+
+def _as_breadth_payload(result: dict) -> dict:
+    """将 market.get_market_breadth() 结果规范为一层 status 包装。
+
+    - 若市场层已返回含 status + data 的信封（normal/partial/unavailable），原样透传；
+    - 若返回的是纯统计字段（当前实现），则包成 status=normal 的标准结构。
+    未预期异常不在此转换，由路由抛 502。
+    """
+    if (
+        isinstance(result, dict)
+        and "status" in result
+        and "data" in result
+        and result.get("status") in ("normal", "partial", "unavailable")
+    ):
+        return result
+    return {
+        "status": "normal",
+        "source": "eastmoney_push2",
+        "trade_date": None,
+        "data_time": None,
+        "fetched_at": datetime.now(market.BEIJING).strftime("%Y-%m-%d %H:%M:%S"),
+        "is_stale": False,
+        "warnings": ["源数据未提供明确交易日期和行情时间"],
+        "data": result,
+    }
+
+
+@app.get("/api/market/breadth")
+def market_breadth():
+    """全A股市场广度、总成交额、成交额榜与高换手榜。共享缓存 5 分钟。
+
+    - normal / partial / unavailable → HTTP 200（数据状态在 body.status）
+    - 未预期异常 → HTTP 502
+    """
+    try:
+        raw = market.get_market_breadth()
+        return {"data": _as_breadth_payload(raw if isinstance(raw, dict) else {"value": raw})}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"市场广度异常：{e}") from e
 
 
 @app.get("/api/global/indices")
