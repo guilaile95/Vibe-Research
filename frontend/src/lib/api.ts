@@ -129,39 +129,46 @@ export interface IndexQuote {
   name: string; price: number; change_pct: number; change_amt: number;
 }
 
-/** 市场数据状态（与后端 breadth / sentiment 信封一致） */
+/** 市场 / 每日复盘组件数据状态 */
 export type MarketDataStatus = "normal" | "partial" | "unavailable";
+export type DataStatus = MarketDataStatus;
 
+export interface ComponentEnvelope<T> {
+  status: DataStatus;
+  source: string;
+  warnings: string[];
+  data: T | null;
+}
+
+export interface TimedComponentEnvelope<T> extends ComponentEnvelope<T> {
+  trade_date?: string | null;
+  data_time?: string | null;
+  fetched_at?: string | null;
+  is_stale?: boolean;
+}
+
+/** 兼容旧 overview.sentiment（其他页面可能仍用 marketOverview） */
 export interface MarketSentiment {
   status?: MarketDataStatus;
   source?: string;
   warnings?: string[];
-
   up: number | null;
   down: number | null;
   flat: number | null;
-
   zt: number | null;
-  /** 兼容别名，与 zt 同源，前端不再单独展示 */
   zt_real?: number | null;
   dt: number | null;
-  /** 兼容别名，与 dt 同源，前端不再单独展示 */
   dt_real?: number | null;
-
-  /** 上涨占比字符串（如 "56.8%"）；兼容回退，展示名应为「上涨占比」非「活跃度」 */
   active: string;
   active_metric?: string;
   up_ratio?: number | null;
-
   breadth: string | null;
   speculation: string | null;
-
   stock_count?: number | null;
   valid_count?: number | null;
   up_3pct_count?: number | null;
   down_3pct_count?: number | null;
   total_amount?: number | null;
-
   date: string;
   limit_count_source?: string;
 }
@@ -187,14 +194,112 @@ export interface ShortTermEmotion {
   seal_rate: number | null; break_rate: number | null; promotion_rate: number | null;
   yzt_count: number;
 }
+/** 与 ShortTermEmotion 同构，供每日复盘聚合包使用 */
+export type ShortTermEmotionData = ShortTermEmotion;
 
-// 全市场成交额榜
+// 全市场成交额榜（旧榜单 / 快照榜）
 export interface TurnoverStock {
   code: string; name: string;
   price: number | null; pct: number | null;
   amount: number | null; mcap: number | null; float_cap: number | null; industry: string;
 }
 export interface TurnoverTop { stocks: TurnoverStock[]; updated: string }
+
+/** 全 A 快照个股条目（amount_top / high_turnover） */
+export interface MarketSnapshotItem {
+  code: string;
+  name: string;
+  price: number | null;
+  change_pct: number | null;
+  amount: number | null;
+  turnover_pct: number | null;
+  market_cap: number | null;
+}
+
+export interface MarketBreadthData {
+  stock_count: number;
+  valid_count: number;
+  up_count: number;
+  down_count: number;
+  flat_count: number;
+  up_ratio: number | null;
+  up_3pct_count: number;
+  down_3pct_count: number;
+  total_amount: number | null;
+  amount_valid_count: number;
+  amount_top: MarketSnapshotItem[];
+  high_turnover: MarketSnapshotItem[];
+}
+
+export interface BoardRankItem {
+  code: string;
+  name: string;
+  change_pct: number | null;
+  turnover_pct: number | null;
+  market_cap: number | null;
+  up_count: number | null;
+  down_count: number | null;
+  up_ratio: number | null;
+  leader: string | null;
+  leader_change_pct: number | null;
+}
+
+export interface BoardRankingData {
+  type: "industry" | "concept" | "region" | string;
+  total: number;
+  ranked_count: number;
+  unknown_count: number;
+  top: BoardRankItem[];
+  bottom: BoardRankItem[];
+}
+
+/** 结构化每日复盘（GET /api/daily-review） */
+export interface DailyReviewData {
+  schema_version: string;
+  generated_at: string;
+  trade_date: string | null;
+  data_cutoff: string | null;
+  status: DataStatus;
+  warnings: string[];
+  data_health: {
+    components: {
+      indices: DataStatus;
+      global_indices: DataStatus;
+      breadth: DataStatus;
+      emotion: DataStatus;
+      turnover: DataStatus;
+      industry_boards: DataStatus;
+      concept_boards: DataStatus;
+      region_boards: DataStatus;
+    };
+  };
+  market_environment: {
+    indices: ComponentEnvelope<IndexQuote[]>;
+    global_indices: ComponentEnvelope<GlobalIndex[]>;
+    breadth: TimedComponentEnvelope<MarketBreadthData>;
+  };
+  sector_rotation: {
+    industry: TimedComponentEnvelope<BoardRankingData>;
+    concept: TimedComponentEnvelope<BoardRankingData>;
+    region: TimedComponentEnvelope<BoardRankingData>;
+    highlights: {
+      strongest_industry: BoardRankItem | null;
+      weakest_industry: BoardRankItem | null;
+      strongest_concept: BoardRankItem | null;
+      weakest_concept: BoardRankItem | null;
+      strongest_region: BoardRankItem | null;
+      weakest_region: BoardRankItem | null;
+    };
+  };
+  short_term_emotion: ComponentEnvelope<ShortTermEmotionData>;
+  capital_activity: {
+    turnover_top: ComponentEnvelope<TurnoverTop>;
+    total_amount: number | null;
+    amount_valid_count: number | null;
+    amount_top: MarketSnapshotItem[];
+    high_turnover: MarketSnapshotItem[];
+  };
+}
 
 export interface RadarItem {
   title: string; url: string; time: string; source: string; summary?: string; zh?: string;
@@ -271,6 +376,11 @@ export const api = {
   marketOverview: () => get<MarketOverview>("/market/overview"),
   emotion: () => get<ShortTermEmotion>("/market/emotion"),
   turnoverTop: () => get<TurnoverTop>("/market/turnover-top"),
+  /** 结构化每日复盘聚合包（一次请求覆盖指数/广度/情绪/成交/板块） */
+  dailyReview: () => get<DailyReviewData>("/daily-review"),
+  marketBreadth: () => get<TimedComponentEnvelope<MarketBreadthData>>("/market/breadth"),
+  marketBoards: (type: "industry" | "concept" | "region" = "industry", topN = 20) =>
+    get<TimedComponentEnvelope<BoardRankingData>>(`/market/boards?type=${type}&top_n=${topN}`),
   globalIndices: () => get<GlobalIndex[]>("/global/indices"),
   globalStock: (symbol: string) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`),
   radar: () => get<RadarData>("/radar"),
