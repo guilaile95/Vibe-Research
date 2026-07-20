@@ -301,6 +301,48 @@ export interface DailyReviewData {
   };
 }
 
+/** 历史列表元数据（不含完整 review） */
+export interface DailyReviewHistoryItem {
+  id: number;
+  trade_date: string;
+  schema_version: string;
+  generated_at: string;
+  data_cutoff: string | null;
+  status: DataStatus;
+  payload_hash: string;
+  created_at: string;
+}
+
+/** 历史快照详情（含完整 review） */
+export interface DailyReviewHistorySnapshot extends DailyReviewHistoryItem {
+  review: DailyReviewData;
+}
+
+/** POST /api/daily-review/history/save 结果 */
+export interface SaveDailyReviewHistoryResult {
+  snapshot: {
+    id: number;
+    inserted: boolean;
+    trade_date: string;
+    schema_version: string;
+    generated_at: string;
+    status: DataStatus;
+    payload_hash: string;
+    created_at: string;
+  };
+  review_status: "normal" | "partial";
+  review_warnings: string[];
+}
+
+/** GET /api/daily-review/history 列表响应 */
+export interface DailyReviewHistoryList {
+  items: DailyReviewHistoryItem[];
+  trade_date: string | null;
+  limit: number;
+  offset: number;
+  count: number;
+}
+
 export interface RadarItem {
   title: string; url: string; time: string; source: string; summary?: string; zh?: string;
 }
@@ -503,6 +545,25 @@ export const api = {
   turnoverTop: () => get<TurnoverTop>("/market/turnover-top"),
   /** 结构化每日复盘聚合包（一次请求覆盖指数/广度/情绪/成交/板块） */
   dailyReview: () => get<DailyReviewData>("/daily-review"),
+  /** 显式保存当前复盘快照（无请求体；服务器自行聚合校验） */
+  saveDailyReviewHistory: () =>
+    request<SaveDailyReviewHistoryResult>("/daily-review/history/save", "POST"),
+  /** 历史元数据列表 */
+  listDailyReviewHistory: (params?: {
+    trade_date?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.trade_date) q.set("trade_date", params.trade_date);
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return get<DailyReviewHistoryList>(`/daily-review/history${qs ? `?${qs}` : ""}`);
+  },
+  /** 历史快照详情 */
+  getDailyReviewHistorySnapshot: (snapshotId: number) =>
+    get<DailyReviewHistorySnapshot>(`/daily-review/history/${snapshotId}`),
   marketBreadth: () => get<TimedComponentEnvelope<MarketBreadthData>>("/market/breadth"),
   marketBoards: (type: "industry" | "concept" | "region" = "industry", topN = 20) =>
     get<TimedComponentEnvelope<BoardRankingData>>(`/market/boards?type=${type}&top_n=${topN}`),

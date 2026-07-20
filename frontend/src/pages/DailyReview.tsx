@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import {
   Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, TrendingUp, TrendingDown,
-  Plus, X, Flame, BarChart3, Globe, Layers,
+  Plus, X, Flame, BarChart3, Globe, Layers, Save, History, Eye, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -12,12 +12,17 @@ import { AskAiButton } from "@/components/ui/AskAiButton";
 import {
   api, ApiError, dailyReviewAnalyzeStream,
   type Quote, type DailyReviewData, type BoardRankItem, type MarketSnapshotItem,
-  type DataStatus,
+  type DataStatus, type DailyReviewHistoryItem, type DailyReviewHistorySnapshot,
 } from "@/lib/api";
 import { loadLlm } from "@/lib/llm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
 import { cn } from "@/lib/utils";
+
+const HISTORY_LIMIT = 20;
+
+const rateCell = (v: number | null | undefined) =>
+  v == null || !Number.isFinite(v) ? "—" : `${(v * 100).toFixed(1)}%`;
 
 // A股红涨绿跌。全球市场（美股/港股指数）**也沿用红涨**——与整个看板及东财等中国平台一致。
 const pctColor = (p: number) => (p > 0 ? "text-danger" : p < 0 ? "text-success" : "text-muted-foreground");
@@ -77,6 +82,26 @@ export function DailyReview() {
 
   const [boardTab, setBoardTab] = useState<"industry" | "concept" | "region">("industry");
 
+  // 显式保存当前复盘（不自动触发）
+  const [saveLoading, setSaveLoading] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+
+  // 历史列表（与实时复盘独立）
+  const [histItems, setHistItems] = useState<DailyReviewHistoryItem[]>([]);
+  const [histLoading, setHistLoading] = useState(false);
+  const [histDone, setHistDone] = useState(false);
+  const [histErr, setHistErr] = useState<string | null>(null);
+  const [histFilterDate, setHistFilterDate] = useState("");
+  const [histOffset, setHistOffset] = useState(0);
+  const [histCount, setHistCount] = useState(0);
+
+  // 历史详情（只读，不替换当前实时 dr）
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState<number | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [selectedSnapshot, setSelectedSnapshot] = useState<DailyReviewHistorySnapshot | null>(null);
+
   const loadDailyReview = () => {
     setDrDone(false);
     setDrErr(null);
@@ -87,6 +112,33 @@ export function DailyReview() {
         setDrErr(e instanceof ApiError ? e.message : "每日复盘请求失败");
       })
       .finally(() => setDrDone(true));
+  };
+
+  const loadHistory = (opts?: { trade_date?: string; offset?: number }) => {
+    const offset = opts?.offset ?? histOffset;
+    const tradeDate = opts?.trade_date !== undefined ? opts.trade_date : histFilterDate;
+    setHistLoading(true);
+    setHistErr(null);
+    const params: { trade_date?: string; limit: number; offset: number } = {
+      limit: HISTORY_LIMIT,
+      offset,
+    };
+    if (tradeDate) params.trade_date = tradeDate;
+    api.listDailyReviewHistory(params)
+      .then((res) => {
+        setHistItems(res.items || []);
+        setHistCount(res.count ?? (res.items?.length ?? 0));
+        setHistOffset(res.offset ?? offset);
+      })
+      .catch((e) => {
+        setHistItems([]);
+        setHistCount(0);
+        setHistErr(e instanceof ApiError ? e.message : "历史记录加载失败");
+      })
+      .finally(() => {
+        setHistLoading(false);
+        setHistDone(true);
+      });
   };
 
   const pending = (done: boolean, emptyMsg = "暂无数据") => (
@@ -103,8 +155,74 @@ export function DailyReview() {
 
   useEffect(() => {
     loadDailyReview();
+    loadHistory({ trade_date: "", offset: 0 });
     refreshWatch(loadWatch());
+    // 仅首次挂载：不自动保存
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const saveCurrentReview = async () => {
+    if (saveLoading) return;
+    setSaveLoading(true);
+    setSaveMsg(null);
+    setSaveErr(null);
+    try {
+      // 不发送当前页面 dr；服务器自行聚合
+      const result = await api.saveDailyReviewHistory();
+      if (result.snapshot.inserted) {
+        setSaveMsg("当前复盘已保存");
+      } else {
+        setSaveMsg("相同内容的复盘快照已存在");
+      }
+      // 刷新历史列表，不重载当前实时复盘
+      loadHistory({ offset: 0 });
+      setHistOffset(0);
+    } catch (e) {
+      if (e instanceof ApiError) {
+        setSaveErr(e.message || "保存每日复盘失败");
+      } else {
+        setSaveErr("保存每日复盘失败");
+      }
+    } finally {
+      setSaveLoading(false);
+    }
+  };
+
+  const openHistoryDetail = async (id: number) => {
+    setSelectedSnapshotId(id);
+    setSelectedSnapshot(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    try {
+      const snap = await api.getDailyReviewHistorySnapshot(id);
+      setSelectedSnapshot(snap);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        setDetailError("该历史快照不存在");
+      } else {
+        setDetailError(e instanceof ApiError ? e.message : "历史详情加载失败");
+      }
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const closeHistoryDetail = () => {
+    setSelectedSnapshotId(null);
+    setSelectedSnapshot(null);
+    setDetailError(null);
+    setDetailLoading(false);
+  };
+
+  const onHistDateChange = (value: string) => {
+    setHistFilterDate(value);
+    setHistOffset(0);
+    loadHistory({ trade_date: value, offset: 0 });
+  };
+
+  const histPage = Math.floor(histOffset / HISTORY_LIMIT) + 1;
+  const histPrevDisabled = histOffset === 0 || histLoading;
+  const histNextDisabled = histCount < HISTORY_LIMIT || histLoading;
 
   const addWatch = () => {
     const { next, added } = addCodes(watchCodes, watchInput);
@@ -208,6 +326,15 @@ export function DailyReview() {
             <button onClick={loadDailyReview} className="text-muted-foreground hover:text-primary" title="刷新复盘数据">
               <RefreshCw className={cn("h-4 w-4", !drDone && "animate-spin")} />
             </button>
+            <button
+              onClick={saveCurrentReview}
+              disabled={saveLoading}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-muted/40 px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted/60 disabled:opacity-50"
+              title="显式保存当前复盘到历史库（不自动保存）"
+            >
+              {saveLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              {saveLoading ? "保存中…" : "保存当前复盘"}
+            </button>
             <AskAiButton
               context={`今日大盘数据：${dataSummary}`}
               label="问 AI"
@@ -216,6 +343,17 @@ export function DailyReview() {
           </div>
         }
       />
+
+      {saveMsg && (
+        <div className="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary">
+          {saveMsg}
+        </div>
+      )}
+      {saveErr && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+          <AlertCircle className="h-4 w-4 shrink-0" /> {saveErr}
+        </div>
+      )}
 
       {/* 整体状态 */}
       <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -671,6 +809,303 @@ export function DailyReview() {
                 </span>
               ))}
             </div>
+          </div>
+        )}
+      </GlassCard>
+
+      {/* 9. 历史复盘（显式保存；只读浏览；不替换当前实时数据） */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
+          <History className="h-4 w-4" /> 历史复盘
+        </h3>
+        <span className="text-[11px] text-muted-foreground/50">仅展示已保存快照 · 不自动写入</span>
+      </div>
+      <GlassCard className="mb-6">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <label className="text-xs text-muted-foreground">
+            交易日期
+            <input
+              type="date"
+              value={histFilterDate}
+              onChange={(e) => onHistDateChange(e.target.value)}
+              className="ml-2 rounded-lg border border-border bg-black/20 px-2 py-1.5 text-sm outline-none focus:border-primary/50"
+            />
+          </label>
+          {histFilterDate && (
+            <button
+              type="button"
+              onClick={() => onHistDateChange("")}
+              className="text-xs text-muted-foreground hover:text-primary"
+            >
+              清除筛选
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => loadHistory()}
+            disabled={histLoading}
+            className="ml-auto text-muted-foreground hover:text-primary"
+            title="刷新历史列表"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", histLoading && "animate-spin")} />
+          </button>
+        </div>
+
+        {histErr && (
+          <div className="mb-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <AlertCircle className="h-4 w-4 shrink-0" /> 历史记录加载失败：{histErr}
+          </div>
+        )}
+
+        {histLoading && !histDone && pending(false)}
+        {histLoading && histDone && (
+          <p className="py-2 text-center text-xs text-muted-foreground/60">刷新中…</p>
+        )}
+        {!histLoading && histDone && !histErr && histItems.length === 0 && (
+          <p className="py-4 text-center text-sm text-muted-foreground/60">暂无已保存的每日复盘</p>
+        )}
+
+        {histItems.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
+                  {["交易日期", "生成时间", "保存时间", "状态", "schema", ""].map((h) => (
+                    <th key={h || "act"} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {histItems.map((item) => {
+                  const badge = statusBadge(item.status);
+                  return (
+                    <tr key={item.id} className="border-b border-border/30">
+                      <td className="whitespace-nowrap px-2 py-2 font-mono font-medium">{item.trade_date}</td>
+                      <td className="whitespace-nowrap px-2 py-2 font-mono text-xs text-muted-foreground">{item.generated_at}</td>
+                      <td className="whitespace-nowrap px-2 py-2 font-mono text-xs text-muted-foreground">{item.created_at}</td>
+                      <td className="px-2 py-2">
+                        {badge ? (
+                          <span className={cn("rounded-full px-2 py-0.5 text-[10px]", badge.cls)}>{badge.text}</span>
+                        ) : (
+                          item.status
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-2 text-xs text-muted-foreground/70">{item.schema_version}</td>
+                      <td className="px-2 py-2 text-right">
+                        <button
+                          type="button"
+                          onClick={() => openHistoryDetail(item.id)}
+                          className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/20"
+                        >
+                          <Eye className="h-3 w-3" /> 查看
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {(histItems.length > 0 || histOffset > 0) && (
+          <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+            <span>第 {histPage} 页</span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={histPrevDisabled}
+                onClick={() => {
+                  const next = Math.max(0, histOffset - HISTORY_LIMIT);
+                  setHistOffset(next);
+                  loadHistory({ offset: next });
+                }}
+                className="inline-flex items-center gap-1 rounded-md bg-muted/30 px-2 py-1 disabled:opacity-40"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" /> 上一页
+              </button>
+              <button
+                type="button"
+                disabled={histNextDisabled}
+                onClick={() => {
+                  const next = histOffset + HISTORY_LIMIT;
+                  setHistOffset(next);
+                  loadHistory({ offset: next });
+                }}
+                className="inline-flex items-center gap-1 rounded-md bg-muted/30 px-2 py-1 disabled:opacity-40"
+              >
+                下一页 <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 历史详情：页面内只读卡片，不替换当前实时 dr */}
+        {selectedSnapshotId != null && (
+          <div className="mt-4 border-t border-border/40 pt-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h4 className="text-sm font-semibold">历史快照详情 #{selectedSnapshotId}</h4>
+              <button
+                type="button"
+                onClick={closeHistoryDetail}
+                className="text-muted-foreground hover:text-foreground"
+                title="关闭"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            {detailLoading && (
+              <p className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> 加载详情…
+              </p>
+            )}
+            {detailError && (
+              <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4 shrink-0" /> {detailError}
+              </div>
+            )}
+            {selectedSnapshot && !detailLoading && (() => {
+              const snap = selectedSnapshot;
+              const rev = snap.review;
+              const b = rev.market_environment?.breadth?.data;
+              const emo = rev.short_term_emotion?.data;
+              const hl = rev.sector_rotation?.highlights;
+              const cap = rev.capital_activity;
+              const snapBadge = statusBadge(snap.status);
+              const warnList = (rev.warnings || []).filter(Boolean).slice(0, 5);
+              return (
+                <div className="space-y-4 text-sm">
+                  <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                    <span>交易日期：<b className="text-foreground">{snap.trade_date}</b></span>
+                    <span>生成：{snap.generated_at}</span>
+                    <span>保存：{snap.created_at}</span>
+                    <span>schema：{snap.schema_version}</span>
+                    {snapBadge && (
+                      <span className={cn("rounded-full px-2 py-0.5 text-[10px]", snapBadge.cls)}>{snapBadge.text}</span>
+                    )}
+                  </div>
+
+                  {warnList.length > 0 && (
+                    <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning">
+                      <p className="font-medium">warnings</p>
+                      <ul className="mt-1 list-inside list-disc space-y-0.5 opacity-90">
+                        {warnList.map((w, i) => (
+                          <li key={i}>{w}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <div>
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">市场广度</p>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {[
+                        { k: "上涨家数", v: numCell(b?.up_count) },
+                        { k: "下跌家数", v: numCell(b?.down_count) },
+                        { k: "平盘家数", v: numCell(b?.flat_count) },
+                        { k: "上涨占比", v: formatUpRatio(b?.up_ratio) },
+                        { k: "涨幅≥3%", v: numCell(b?.up_3pct_count) },
+                        { k: "跌幅≤-3%", v: numCell(b?.down_3pct_count) },
+                        { k: "全市场成交额", v: yi(cap?.total_amount ?? b?.total_amount) },
+                      ].map((c) => (
+                        <div key={c.k} className="rounded-lg bg-muted/20 p-2 text-center">
+                          <p className="text-[11px] text-muted-foreground">{c.k}</p>
+                          <p className="mt-0.5 font-mono text-sm font-bold">{c.v}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">短线情绪</p>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {[
+                        { k: "涨停", v: numCell(emo?.zt_count) },
+                        { k: "跌停", v: numCell(emo?.dt_count) },
+                        { k: "炸板", v: numCell(emo?.zb_count) },
+                        { k: "最高连板", v: emo?.max_boards == null ? "—" : `${emo.max_boards}` },
+                        { k: "连板股数量", v: numCell(emo?.lianban_count) },
+                        { k: "封板率", v: rateCell(emo?.seal_rate) },
+                        { k: "炸板率", v: rateCell(emo?.break_rate) },
+                      ].map((c) => (
+                        <div key={c.k} className="rounded-lg bg-muted/20 p-2 text-center">
+                          <p className="text-[11px] text-muted-foreground">{c.k}</p>
+                          <p className="mt-0.5 font-mono text-sm font-bold">{c.v}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">板块亮点</p>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {[
+                        ["最强行业", hl?.strongest_industry],
+                        ["最弱行业", hl?.weakest_industry],
+                        ["最强概念", hl?.strongest_concept],
+                        ["最弱概念", hl?.weakest_concept],
+                        ["最强地域", hl?.strongest_region],
+                        ["最弱地域", hl?.weakest_region],
+                      ].map(([label, item]) => {
+                        const it = item as BoardRankItem | null | undefined;
+                        return (
+                          <div key={String(label)} className="rounded-lg bg-muted/20 p-2">
+                            <p className="text-[11px] text-muted-foreground">{label as string}</p>
+                            {it ? (
+                              <>
+                                <p className="truncate text-sm font-medium">{it.name}</p>
+                                <p className={cn("font-mono text-xs", it.change_pct == null ? "" : pctColor(it.change_pct))}>
+                                  {pctCell(it.change_pct)}
+                                </p>
+                              </>
+                            ) : (
+                              <p className="text-sm text-muted-foreground/50">—</p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">
+                      成交活跃 · 全市场成交额 {yi(cap?.total_amount)}
+                    </p>
+                    {(cap?.amount_top?.length ?? 0) > 0 && (
+                      <div className="mb-2">
+                        <p className="mb-1 text-[11px] text-muted-foreground">成交额 Top 10</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(cap?.amount_top ?? []).slice(0, 10).map((s) => (
+                            <span key={s.code} className="rounded-md bg-muted/30 px-2 py-1 text-xs">
+                              {s.name}{" "}
+                              <span className="font-mono text-muted-foreground">{yi(s.amount)}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {(cap?.high_turnover?.length ?? 0) > 0 && (
+                      <div>
+                        <p className="mb-1 text-[11px] text-muted-foreground">高换手 Top 10</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(cap?.high_turnover ?? []).slice(0, 10).map((s) => (
+                            <span key={s.code} className="rounded-md bg-muted/30 px-2 py-1 text-xs">
+                              {s.name}{" "}
+                              <span className="font-mono text-primary">
+                                {s.turnover_pct == null ? "—" : `${s.turnover_pct}%`}
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {(cap?.amount_top?.length ?? 0) === 0 && (cap?.high_turnover?.length ?? 0) === 0 && (
+                      <p className="text-xs text-muted-foreground/50">无成交活跃明细</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
       </GlassCard>
