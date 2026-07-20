@@ -26,6 +26,7 @@ import newsradar
 import portfolio as pf
 import market
 import myreports as mr
+import review_history
 
 app = FastAPI(title="Vibe-Research API", version="0.1.3")
 
@@ -366,6 +367,84 @@ def analyze_daily_review(req: DailyReviewAnalyzeRequest):
             yield json.dumps({"type": "error", "message": f"对话失败：{e}"}, ensure_ascii=False) + "\n"
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+# ---- 每日复盘历史（显式保存；GET /api/daily-review 与 analyze 不写库）----
+
+@app.post("/api/daily-review/history/save")
+def daily_review_history_save():
+    """显式保存当前每日复盘快照到历史库。
+
+    inserted=true/false 均为 HTTP 200（内容去重不算错误）。
+    不可保存（unavailable / 无 trade_date 等）→ HTTP 409。
+    不接受客户端 db_path。
+    """
+    try:
+        return {"data": review_history.save_current_daily_review()}
+    except review_history.ReviewSnapshotNotSavableError as e:
+        raise HTTPException(409, str(e)) from e
+    except Exception:  # noqa: BLE001 — 不向客户端暴露路径/SQL
+        raise HTTPException(500, "每日复盘历史保存失败") from None
+
+
+@app.get("/api/daily-review/history")
+def daily_review_history_list(
+    trade_date: str | None = Query(None),
+    limit: int = Query(30, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    """历史快照元数据列表（不含完整 review）。"""
+    try:
+        items = review_history.list_review_history(
+            trade_date=trade_date,
+            limit=limit,
+            offset=offset,
+        )
+        return {
+            "data": {
+                "items": items,
+                "trade_date": trade_date,
+                "limit": limit,
+                "offset": offset,
+                "count": len(items),
+            }
+        }
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception:  # noqa: BLE001
+        raise HTTPException(500, "每日复盘历史列表读取失败") from None
+
+
+@app.get("/api/daily-review/history/latest")
+def daily_review_history_latest(
+    trade_date: str | None = Query(None),
+):
+    """最新历史快照（含完整 review）。须定义在 {snapshot_id} 之前。"""
+    try:
+        snapshot = review_history.get_latest_review_history_snapshot(
+            trade_date=trade_date,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception:  # noqa: BLE001
+        raise HTTPException(500, "每日复盘最新历史读取失败") from None
+    if snapshot is None:
+        raise HTTPException(404, "未找到每日复盘历史快照")
+    return {"data": snapshot}
+
+
+@app.get("/api/daily-review/history/{snapshot_id}")
+def daily_review_history_detail(snapshot_id: int):
+    """按 ID 读取历史快照详情（含完整 review）。"""
+    try:
+        snapshot = review_history.get_review_history_snapshot(snapshot_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception:  # noqa: BLE001
+        raise HTTPException(500, "每日复盘历史详情读取失败") from None
+    if snapshot is None:
+        raise HTTPException(404, "未找到每日复盘历史快照")
+    return {"data": snapshot}
 
 
 @app.get("/api/global/indices")
