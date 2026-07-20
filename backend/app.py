@@ -322,6 +322,52 @@ def daily_review_snapshot():
         raise HTTPException(502, f"每日复盘聚合异常：{e}") from e
 
 
+class DailyReviewAnalyzeRequest(BaseModel):
+    """每日复盘 AI 分析请求。
+
+    仅接受 user_request；市场上下文由服务器端聚合投影生成，客户端不可注入。
+    llm 复用通用聊天的 LLMConfig（非第二套模型配置字段）。
+    """
+    user_request: str | None = None
+    llm: LLMConfig
+
+
+@app.post("/api/daily-review/analyze")
+def analyze_daily_review(req: DailyReviewAnalyzeRequest):
+    """每日复盘 AI 流式分析（NDJSON，协议与 /api/chat 相同）。
+
+    服务器链路：generate_daily_review → render AI context → build messages → stream_messages。
+    上下文准备失败 → HTTP 502；模型运行时错误 → 流内 error 事件。
+    不接受客户端 context/messages/system_prompt。
+    """
+    if not req.llm.model:
+        raise HTTPException(400, "缺少模型配置，请先在「接入 AI」里选择")
+
+    is_cli = req.llm.provider.startswith("cli-")
+    if is_cli:
+        kind = req.llm.provider[4:]
+        if not cli_runtime.detect_cli(kind):
+            raise HTTPException(400, f"未检测到「{kind}」对应的本机命令。请先安装并登录该 CLI，或改用「API 接入」。")
+    elif not req.llm.apiKey or not req.llm.baseURL:
+        raise HTTPException(400, "缺少 Base URL 或 API Key，请先在「接入 AI」里填写")
+
+    try:
+        messages = chat_layer.prepare_daily_review_messages(req.user_request)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"每日复盘AI上下文准备失败：{e}") from e
+
+    cfg = req.llm.model_dump()
+
+    def gen():
+        try:
+            for ev in chat_layer.stream_messages(cfg, messages, use_tools=False):
+                yield json.dumps(ev, ensure_ascii=False) + "\n"
+        except Exception as e:  # noqa: BLE001 — 运行时错误以流内事件上报，与 /api/chat 一致
+            yield json.dumps({"type": "error", "message": f"对话失败：{e}"}, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
 @app.get("/api/global/indices")
 def global_indices():
     """全球指数快照（道指 / 标普500 / 纳斯达克 / 恒生 / 恒生科技）—— A 股看隔夜外围脸色。缓存 5 分钟。"""

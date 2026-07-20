@@ -16,6 +16,9 @@ import requests
 
 import astock
 import cli_runtime
+import daily_review
+import daily_review_ai_prompt
+import daily_review_context
 import gstock
 
 MAX_ROUNDS = 6  # 工具调用最大轮数，防死循环
@@ -311,14 +314,61 @@ def _iter_sse_deltas(resp):
                 yield choices[0].get("delta") or {}
 
 
-def run_chat_stream(cfg: dict, user_messages: list, context: str = ""):
-    """API 接入流式：function-calling 循环，边流答案边推工具调用事件。"""
-    messages = [{"role": "system", "content": SYSTEM_PROMPT.format(context=context or "（无）")}]
-    messages.extend(user_messages)
+def prepare_daily_review_messages(
+    user_request: str | None = None,
+) -> list[dict[str, str]]:
+    """服务器端组装每日复盘 AI 消息：聚合 → 投影 → 分析契约。
+
+    不修改 review、不重序列化上下文、不追加通用 system / 历史 / assistant 占位。
+    任一步异常向上抛出。partial/unavailable 仍正常构建消息。
+    """
+    review = daily_review.generate_daily_review()
+    context_json = daily_review_context.render_daily_review_ai_context(review)
+    return daily_review_ai_prompt.build_daily_review_messages(
+        context_json,
+        user_request,
+    )
+
+
+def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
+    """底层消息流入口：已组装好的 messages 直接发给模型，不注入 SYSTEM_PROMPT。
+
+    - use_tools=False：单次流式补全（每日复盘等已注入上下文场景）；支持 API 与 cli-*。
+    - use_tools=True：function-calling 循环（通用聊天 API 路径）。
+    事件协议与 /api/chat 一致：{type: tool|delta|done|error}。
+    """
+    provider = str(cfg.get("provider", ""))
+    if not use_tools and provider.startswith("cli-"):
+        kind = provider[4:]
+        system = ""
+        user_parts: list[str] = []
+        for m in messages:
+            role = m.get("role")
+            content = m.get("content") or ""
+            if role == "system":
+                system = content
+            elif role == "user" and content:
+                user_parts.append(content)
+        user = "\n\n".join(user_parts) or "（无问题）"
+        for chunk in cli_runtime.run_cli_stream(kind, system, user):
+            yield {"type": "delta", "text": chunk}
+        yield {"type": "done", "trace": [], "rounds": 1}
+        return
+
+    if not use_tools:
+        resp = _call_llm_stream(cfg, messages, use_tools=False)
+        for delta in _iter_sse_deltas(resp):
+            if delta.get("content"):
+                yield {"type": "delta", "text": delta["content"]}
+        yield {"type": "done", "trace": [], "rounds": 1}
+        return
+
+    # API + tools：function-calling 循环
+    work = list(messages)
     trace: list[dict] = []
 
     for rnd in range(1, MAX_ROUNDS + 1):
-        resp = _call_llm_stream(cfg, messages, use_tools=True)
+        resp = _call_llm_stream(cfg, work, use_tools=True)
         content_parts: list[str] = []
         tool_acc: dict[int, dict] = {}
         for delta in _iter_sse_deltas(resp):
@@ -348,7 +398,7 @@ def run_chat_stream(cfg: dict, user_messages: list, context: str = ""):
             return
 
         # 有工具调用：回填 assistant 消息 + 执行工具 + 推事件
-        messages.append({
+        work.append({
             "role": "assistant",
             "content": "".join(content_parts) or None,
             "tool_calls": [{
@@ -365,15 +415,22 @@ def run_chat_stream(cfg: dict, user_messages: list, context: str = ""):
             yield {"type": "tool", "tool": a["name"], "args": args}
             result = _exec_tool(a["name"], args)
             trace.append({"tool": a["name"], "args": args})
-            messages.append({
+            work.append({
                 "role": "tool", "tool_call_id": a["id"],
                 "content": json.dumps(result, ensure_ascii=False)[:_TOOL_RESULT_CAP],
             })
 
     # 超过最大轮数：不带工具收尾（非流式一次拿完再吐）
-    data = _call_llm(cfg, messages, use_tools=False)
+    data = _call_llm(cfg, work, use_tools=False)
     yield {"type": "delta", "text": data["choices"][0]["message"].get("content") or ""}
     yield {"type": "done", "trace": trace, "rounds": MAX_ROUNDS}
+
+
+def run_chat_stream(cfg: dict, user_messages: list, context: str = ""):
+    """API 接入流式：注入通用 SYSTEM_PROMPT 后走 stream_messages(use_tools=True)。"""
+    messages = [{"role": "system", "content": SYSTEM_PROMPT.format(context=context or "（无）")}]
+    messages.extend(user_messages)
+    yield from stream_messages(cfg, messages, use_tools=True)
 
 
 def run_chat_cli_stream(cfg: dict, user_messages: list, context: str = ""):
