@@ -635,18 +635,29 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
 
     数据源：东财 ``/api/qt/clist/get``（经 ``em_get`` 串行限流）。
     失败不伪装成空市场：网络 / JSON / 结构异常抛出 ``RuntimeError``。
-    ``page_size`` 默认 200；测试可缩小以验证分页逻辑。
+
+    分页说明：
+    - 上游可能强制限制每页最多 100 条，即使请求 ``pz`` 更大；
+    - 在已知 ``total`` 且尚未取完时，**不得**因本页条数 < page_size 而提前结束
+      （否则只拿到第一页 100 条）；
+    - 空页终止；``fetched_raw >= total`` 终止；
+    - 仅当 total 未知/为 0 时，才用「本页短于 page_size」作为取尽信号。
+    - 按 code 去重，保留首次出现顺序；缺 code 记录跳过。
     """
     if page_size < 1:
         raise ValueError("page_size must be >= 1")
 
     out: list[dict] = []
-    fetched = 0  # 原始 diff 条数（过滤前），用于与 total 比较
-    total: int | None = None
+    seen_codes: set[str] = set()
+    fetched_raw = 0  # 原始 diff 条数（过滤/去重前），与上游 total 对齐
+    total: int | None = None  # None=尚未解析；0=未知/缺失
     host = _A_SHARE_CLIST_HOSTS[0]
     pn = 1
+    prev_page_fingerprint: tuple[str, ...] | None = None
+    # 安全上限：避免死循环（约 100 条/页 × 200 页 ≫ 全 A）
+    _MAX_PAGES = 500
 
-    while True:
+    while pn <= _MAX_PAGES:
         params = {
             "pn": str(pn),
             "pz": str(page_size),
@@ -701,12 +712,19 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
 
         if total is None:
             raw_total = data.get("total")
-            try:
-                total = int(raw_total) if raw_total is not None else 0
-            except (TypeError, ValueError) as e:
-                raise RuntimeError(
-                    f"a_share_snapshot: invalid total {raw_total!r}"
-                ) from e
+            if raw_total is None:
+                total = 0  # 未知：仅靠空页/短页（在无可靠 total 时）结束
+            else:
+                try:
+                    total = int(raw_total)
+                except (TypeError, ValueError) as e:
+                    raise RuntimeError(
+                        f"a_share_snapshot: invalid total {raw_total!r}"
+                    ) from e
+                if total < 0:
+                    raise RuntimeError(
+                        f"a_share_snapshot: invalid total {raw_total!r}"
+                    )
 
         try:
             rows = _normalize_clist_diff(data.get("diff"))
@@ -721,20 +739,58 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
             )
 
         if not rows:
+            # 空页：正常结束（total 未知或已取尽）
             break
 
-        fetched += len(rows)
+        # 重复页保护（同一批 code 指纹且无新增唯一股票）
+        page_codes = [
+            str(item.get("f12") or "").strip()
+            for item in rows
+            if isinstance(item, dict)
+        ]
+        fingerprint = tuple(page_codes)
+        if prev_page_fingerprint is not None and fingerprint == prev_page_fingerprint:
+            raise RuntimeError(
+                f"a_share_snapshot page {pn}: repeated page content without progress "
+                f"(same {len(fingerprint)} codes as previous page)"
+            )
+        prev_page_fingerprint = fingerprint
+
+        fetched_raw += len(rows)
+        new_unique = 0
         for item in rows:
             mapped = _map_a_share_row(item)
-            if mapped is not None:
-                out.append(mapped)
+            if mapped is None:
+                continue
+            code = mapped["code"]
+            if code in seen_codes:
+                continue
+            seen_codes.add(code)
+            out.append(mapped)
+            new_unique += 1
 
-        if fetched >= total:
+        if pn > 1 and new_unique == 0:
+            raise RuntimeError(
+                f"a_share_snapshot page {pn}: no new unique codes "
+                f"(fetched_raw={fetched_raw}, unique={len(out)}, total={total})"
+            )
+
+        # 终止：已达到上游 total（按原始条数，避免过滤导致永远 < total）
+        if total > 0 and fetched_raw >= total:
             break
-        if len(rows) < page_size:
-            # 末页不足一页，视为已取尽
+
+        # total 未知时：本页短于请求页大小 → 视为末页
+        # total 已知且未取完：即使上游强制每页 100 < page_size，也必须继续翻页
+        if total <= 0 and len(rows) < page_size:
             break
+
         pn += 1
+
+    if pn > _MAX_PAGES:
+        raise RuntimeError(
+            f"a_share_snapshot: exceeded max pages {_MAX_PAGES} "
+            f"(unique={len(out)}, fetched_raw={fetched_raw}, total={total})"
+        )
 
     return out
 
