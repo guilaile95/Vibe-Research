@@ -288,6 +288,25 @@ def market_breadth():
         raise HTTPException(502, f"市场广度异常：{e}") from e
 
 
+@app.get("/api/market/boards")
+def market_boards(
+    type: str = Query("industry", description="板块类型：industry | concept | region"),
+    top_n: int = Query(20, description="最强/最弱各取前 N（1~100）"),
+):
+    """行业 / 概念 / 地域板块涨跌幅排名。共享缓存 5 分钟（底层固定抓 100，再按 top_n 切片）。
+
+    - normal / partial / unavailable → HTTP 200（状态在 body.data.status）
+    - 非法 type / top_n → HTTP 400
+    - 未预期异常 → HTTP 502
+    """
+    try:
+        return {"data": market.get_board_ranking(type, top_n)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"板块排名异常：{e}") from e
+
+
 @app.get("/api/global/indices")
 def global_indices():
     """全球指数快照（道指 / 标普500 / 纳斯达克 / 恒生 / 恒生科技）—— A 股看隔夜外围脸色。缓存 5 分钟。"""
