@@ -10,54 +10,70 @@ import market
 client = TestClient(app_module.app)
 
 _BREADTH_CORE = {
-    "stock_count": 5,
-    "valid_count": 4,
-    "up_count": 2,
-    "down_count": 1,
-    "flat_count": 1,
-    "up_ratio": 0.5,
-    "up_3pct_count": 1,
-    "down_3pct_count": 0,
-    "total_amount": 1.5e9,
-    "amount_valid_count": 3,
-    "amount_top": [
-        {
-            "code": "600519",
-            "name": "贵州茅台",
-            "price": 1700.0,
-            "change_pct": 1.2,
-            "amount": 1e9,
-            "turnover_pct": 0.5,
-            "market_cap": 2e12,
-        }
-    ],
+    "stock_count": 5000,
+    "valid_count": 4900,
+    "up_count": 3000,
+    "down_count": 1800,
+    "flat_count": 100,
+    "up_ratio": 0.6122,
+    "up_3pct_count": 500,
+    "down_3pct_count": 260,
+    "total_amount": 1250000000000,
+    "amount_valid_count": 4900,
+    "amount_top": [],
     "high_turnover": [],
 }
 
 
-def test_breadth_api_normal_from_raw_stats(monkeypatch):
-    """市场层返回纯统计字段时，API 包装为 status=normal。"""
-    monkeypatch.setattr(market, "get_market_breadth", lambda: dict(_BREADTH_CORE))
+def test_breadth_api_normal_envelope_passthrough_no_rewrite(monkeypatch):
+    """normal 信封透传：HTTP 200，结构正确，数值不被 API 层改写。"""
+    env = {
+        "status": "normal",
+        "source": "eastmoney_push2",
+        "trade_date": None,
+        "data_time": None,
+        "fetched_at": "2026-07-21 15:30:00",
+        "is_stale": False,
+        "warnings": [],
+        "data": dict(_BREADTH_CORE),
+    }
+    monkeypatch.setattr(market, "get_market_breadth", lambda: env)
     r = client.get("/api/market/breadth")
     assert r.status_code == 200
-    body = r.json()
-    assert "data" in body
-    payload = body["data"]
+    payload = r.json()["data"]
     assert payload["status"] == "normal"
     assert payload["source"] == "eastmoney_push2"
     assert payload["trade_date"] is None
     assert payload["data_time"] is None
+    assert payload["fetched_at"] == "2026-07-21 15:30:00"
     assert payload["is_stale"] is False
-    assert isinstance(payload["fetched_at"], str) and len(payload["fetched_at"]) >= 10
-    assert isinstance(payload["warnings"], list) and payload["warnings"]
-    assert payload["data"]["stock_count"] == 5
-    assert payload["data"]["up_count"] == 2
-    assert payload["data"]["up_ratio"] == pytest.approx(0.5)
-    assert payload["data"]["amount_top"][0]["code"] == "600519"
+    assert payload["warnings"] == []
+    # 数值原样，API 层不得改写
+    assert payload["data"] == _BREADTH_CORE
+    assert payload["data"]["stock_count"] == 5000
+    assert payload["data"]["valid_count"] == 4900
+    assert payload["data"]["up_count"] == 3000
+    assert payload["data"]["down_count"] == 1800
+    assert payload["data"]["flat_count"] == 100
 
 
-def test_breadth_api_partial_passthrough(monkeypatch):
-    """市场层已返回 partial 信封时透传，仍 HTTP 200。"""
+def test_breadth_api_normal_from_raw_stats_wraps(monkeypatch):
+    """市场层返回纯统计字段时，API 包装为 status=normal（当前实现兼容）。"""
+    monkeypatch.setattr(market, "get_market_breadth", lambda: dict(_BREADTH_CORE))
+    r = client.get("/api/market/breadth")
+    assert r.status_code == 200
+    payload = r.json()["data"]
+    assert payload["status"] == "normal"
+    assert payload["source"] == "eastmoney_push2"
+    assert payload["data"]["stock_count"] == 5000
+    assert payload["data"]["up_count"] == 3000
+    # 内层数值未被改写
+    assert payload["data"]["up_ratio"] == pytest.approx(0.6122)
+    assert payload["data"]["total_amount"] == 1250000000000
+
+
+def test_breadth_api_partial_status(monkeypatch):
+    """partial：HTTP 200，warnings 完整保留。"""
     env = {
         "status": "partial",
         "source": "eastmoney_push2",
@@ -65,7 +81,7 @@ def test_breadth_api_partial_passthrough(monkeypatch):
         "data_time": None,
         "fetched_at": "2026-07-21 15:30:00",
         "is_stale": False,
-        "warnings": ["部分字段缺失"],
+        "warnings": ["部分字段缺失", "成交额汇总不可用"],
         "data": {**_BREADTH_CORE, "total_amount": None, "amount_valid_count": 0},
     }
     monkeypatch.setattr(market, "get_market_breadth", lambda: env)
@@ -73,20 +89,20 @@ def test_breadth_api_partial_passthrough(monkeypatch):
     assert r.status_code == 200
     payload = r.json()["data"]
     assert payload["status"] == "partial"
-    assert payload["warnings"] == ["部分字段缺失"]
+    assert payload["warnings"] == ["部分字段缺失", "成交额汇总不可用"]
     assert payload["data"]["total_amount"] is None
 
 
-def test_breadth_api_unavailable_still_200(monkeypatch):
-    """unavailable 状态仍 HTTP 200，由 body.status 表达数据源不可用。"""
+def test_breadth_api_unavailable_status(monkeypatch):
+    """unavailable：HTTP 200，data.data is None，错误原因保留。"""
     env = {
         "status": "unavailable",
         "source": "eastmoney_push2",
         "trade_date": None,
         "data_time": None,
         "fetched_at": "2026-07-21 15:30:00",
-        "is_stale": True,
-        "warnings": ["数据源不可用"],
+        "is_stale": False,
+        "warnings": ["全市场快照获取失败：timeout"],
         "data": None,
     }
     monkeypatch.setattr(market, "get_market_breadth", lambda: env)
@@ -95,19 +111,45 @@ def test_breadth_api_unavailable_still_200(monkeypatch):
     payload = r.json()["data"]
     assert payload["status"] == "unavailable"
     assert payload["data"] is None
-    assert payload["is_stale"] is True
+    assert payload["warnings"] == ["全市场快照获取失败：timeout"]
+    assert "timeout" in payload["warnings"][0]
 
 
 def test_breadth_api_unexpected_error_502(monkeypatch):
-    """未预期异常 → 502，不伪造 unavailable。"""
+    """未预期异常 → HTTP 502；detail 含市场广度异常；不伪造市场数据。"""
     def boom():
-        raise RuntimeError("upstream exploded")
+        raise RuntimeError("unexpected")
 
     monkeypatch.setattr(market, "get_market_breadth", boom)
     r = client.get("/api/market/breadth")
     assert r.status_code == 502
-    detail = r.json().get("detail", "")
+    body = r.json()
+    detail = body.get("detail", "")
     assert "市场广度异常" in detail
-    assert "upstream exploded" in detail
-    # 不得伪装成 200 + unavailable
-    assert r.json().get("data", {}).get("status") != "unavailable"
+    assert "unexpected" in detail
+    # 不返回伪造的 unavailable 市场数据
+    assert "data" not in body or body.get("data") is None
+    assert body.get("data", {}).get("status") != "unavailable" if isinstance(body.get("data"), dict) else True
+
+
+def test_breadth_api_calls_get_market_breadth_once(monkeypatch):
+    """一次 API 请求只调用一次 get_market_breadth，不重复快照/广度计算。"""
+    calls = {"n": 0}
+
+    def once():
+        calls["n"] += 1
+        return {
+            "status": "normal",
+            "source": "eastmoney_push2",
+            "trade_date": None,
+            "data_time": None,
+            "fetched_at": "2026-07-21 15:30:00",
+            "is_stale": False,
+            "warnings": [],
+            "data": dict(_BREADTH_CORE),
+        }
+
+    monkeypatch.setattr(market, "get_market_breadth", once)
+    r = client.get("/api/market/breadth")
+    assert r.status_code == 200
+    assert calls["n"] == 1
