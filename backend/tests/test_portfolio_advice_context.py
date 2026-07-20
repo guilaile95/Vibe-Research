@@ -292,6 +292,20 @@ def test_base_limitations_always_present():
     assert "可卖数量" in text or "sellable" in text.lower() or "人工确认" in text
     assert "账户总资产" in text or "可用现金" in text
     assert "催化" in text or "公告" in text
+    # 第一版不做 T：context limitations 不再提做 T 数量
+    assert "做 T" not in text and "做T" not in text
+
+
+def test_context_has_no_t_trade_fields():
+    ctx = build_portfolio_advice_context(
+        _portfolio([_holding("000001", "平安银行", 10.0, 100, 9.0)]),
+        _minimal_review(),
+    )
+    assert "t_trade" not in ctx
+    assert "allow_t_trade" not in ctx
+    for h in ctx["holdings"]:
+        assert "t_trade" not in h
+        assert "allow_t_trade" not in h
 
 
 # ---------------------------------------------------------------------------

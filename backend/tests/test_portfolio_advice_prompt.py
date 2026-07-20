@@ -56,7 +56,27 @@ def test_system_prompt_action_enum():
     p = build_portfolio_advice_system_prompt()
     for a in ACTIONS:
         assert a in p
-    assert "add" in p and "reduce" in p and "t_trade" in p and "avoid" in p
+    assert "add" in p and "reduce" in p and "avoid" in p
+    assert "t_trade" not in ACTIONS
+    # 枚举列表中不得作为合法动作出现
+    assert '"action": "add|hold|reduce|sell|watch|avoid"' in p
+    assert "t_trade" not in p.split("只能使用：")[1].split("禁止")[0]
+
+
+def test_actions_exclude_t_trade():
+    assert "t_trade" not in ACTIONS
+    assert set(ACTIONS) == {"add", "hold", "reduce", "sell", "watch", "avoid"}
+
+
+def test_system_prompt_forbids_t_trade():
+    p = build_portfolio_advice_system_prompt()
+    assert "不支持做 T" in p or "禁止" in p
+    assert "做 T" in p or "做T" in p
+    assert "先卖后买" in p
+    assert "先买后卖" in p
+    assert "高抛低吸" in p
+    assert "盘中滚动仓位" in p
+    assert "不得输出 t_trade" in p or "禁止：做 T" in p
 
 
 def test_system_prompt_forbids_vague_only():
@@ -70,10 +90,10 @@ def test_system_prompt_quantity_rules():
     p = build_portfolio_advice_system_prompt()
     assert "execution_quantity" in p
     assert "可卖" in p
-    assert "做 T" in p or "t_trade" in p
-    assert "quantity 必须为 null" in p or "quantity" in p
     assert "无法计算具体买入股数" in p or "可用现金" in p
     assert "不得默认" in p or "全部" in p
+    # 不得再要求做 T quantity 规则
+    assert "### t_trade" not in p
 
 
 def test_system_prompt_no_fabricated_catalyst():
@@ -97,6 +117,8 @@ def test_system_prompt_json_schema():
     assert "invalidation_conditions" in p
     for a in ACCOUNT_ACTIONS:
         assert a in p
+    # 输出结构不得含 t_trade 对象
+    assert '"t_trade"' not in p
 
 
 def test_user_prompt_embeds_context_raw():

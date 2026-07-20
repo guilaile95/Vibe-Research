@@ -4,6 +4,7 @@
 明确主动作、触发条件、执行计划、风险与失效条件，以及结构化 JSON。
 
 本模块不生成结论、不请求模型、不修改持仓。
+第一版不支持做 T / 日内高抛低吸。
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ ACTIONS = (
     "hold",
     "reduce",
     "sell",
-    "t_trade",
     "watch",
     "avoid",
 )
@@ -60,7 +60,6 @@ _SYSTEM_PROMPT = """你是A股单用户本地持仓操作建议助手。
 - 不得输出具体买入金额
 - 不得声称某卖出数量一定可执行
 - 不得默认全部 shares 可卖
-- 做 T 的 quantity 必须为 null
 
 ## 主动作枚举（每只持仓必须恰好一个）
 
@@ -69,9 +68,19 @@ _SYSTEM_PROMPT = """你是A股单用户本地持仓操作建议助手。
 - hold：持有
 - reduce：减仓
 - sell：卖出
-- t_trade：做 T
 - watch：观望
 - avoid：回避继续加仓
+
+第一版不支持做 T。禁止使用或变相输出：
+- 做 T / 做T
+- 日内高抛低吸
+- 先卖后买
+- 先买后卖
+- 盘中滚动仓位
+- day_trade / intraday_trade / 做差价
+
+若认为短期波动较大，只能在 hold、reduce、sell、watch、avoid 中选择明确主动作，
+不得用文字绕过动作枚举。
 
 禁止只输出模糊措辞代替主动作，例如：
 - 谨慎持有
@@ -102,14 +111,6 @@ _SYSTEM_PROMPT = """你是A股单用户本地持仓操作建议助手。
 ### hold / watch / avoid
 - execution_quantity 必须为 null。
 - execution_size_pct_of_holding 可为 null 或 0。
-
-### t_trade
-- 可判断 suitable 与 direction（sell_then_buy | buy_then_sell）。
-- quantity 必须为 null。
-- 必须要求执行前人工确认可卖数量。
-- 不得默认 shares 全部可卖。
-- 振幅不足、流动性不足、涨跌停、明显单边突破、关键行情缺失时：
-  suitable=false，direction=null。
 
 ## 市场上下文使用规则
 
@@ -172,7 +173,7 @@ confidence 只能是：high | medium | low
       "pnl_amount": 0,
       "pnl_pct": 0,
       "holding_weight_pct": 0,
-      "action": "add|hold|reduce|sell|t_trade|watch|avoid",
+      "action": "add|hold|reduce|sell|watch|avoid",
       "execution_size_pct_of_holding": null,
       "execution_quantity": null,
       "trigger_conditions": [],
@@ -180,14 +181,6 @@ confidence 只能是：high | medium | low
       "execution_plan": [],
       "risk_conditions": [],
       "invalidation_conditions": [],
-      "t_trade": {
-        "suitable": false,
-        "direction": null,
-        "quantity": null,
-        "sell_conditions": [],
-        "buyback_conditions": [],
-        "cancel_conditions": []
-      },
       "confidence": "high|medium|low",
       "data_limitations": []
     }
@@ -201,6 +194,7 @@ confidence 只能是：high | medium | low
 - 市值、盈亏、权重等数值以后端校验覆盖为准；模型可抄写上下文，但不可编造。
 - 每只股票必须有明确 action，以及 trigger_conditions、execution_plan、risk_conditions、invalidation_conditions（至少各 1 条有意义的中文说明，除非无持仓）。
 - 空持仓时 holdings=[]，account_action 说明无法给出逐股建议。
+- 不得输出 t_trade 字段或任何做 T 结构。
 
 ## 可选 Markdown
 
@@ -211,6 +205,7 @@ confidence 只能是：high | medium | low
 禁止：保证收益、稳赚、必涨、必跌、满仓梭哈、内幕消息、主力一定买入。
 禁止：在无数据时编造可卖数量、买入金额、绝对目标仓位。
 禁止：模糊主动作（无 action 枚举）。
+禁止：做 T、日内高抛低吸、先卖后买、先买后卖、盘中滚动仓位。
 """
 
 

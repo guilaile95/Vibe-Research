@@ -97,14 +97,6 @@ def _ai_holding(code="600519", action="hold", **kw):
         "execution_plan": ["计划"],
         "risk_conditions": ["风险"],
         "invalidation_conditions": ["失效"],
-        "t_trade": {
-            "suitable": False,
-            "direction": None,
-            "quantity": 500,
-            "sell_conditions": [],
-            "buyback_conditions": [],
-            "cancel_conditions": [],
-        },
         "confidence": "medium",
         "data_limitations": [],
     }
@@ -266,7 +258,7 @@ def test_quantity_never_exceeds_shares():
 
 
 # ---------------------------------------------------------------------------
-# add / hold / watch / avoid / t_trade 数量
+# add / hold / watch / avoid 数量
 # ---------------------------------------------------------------------------
 
 def test_add_clears_execution_quantity():
@@ -299,55 +291,8 @@ def test_hold_watch_avoid_clear_quantity():
         assert h["execution_size_pct_of_holding"] is None
 
 
-def test_t_trade_quantity_forced_null():
-    ctx = _context()
-    ai = _ai_result(holdings=[
-        _ai_holding(
-            action="t_trade",
-            execution_quantity=300,
-            t_trade={
-                "suitable": True,
-                "direction": "sell_then_buy",
-                "quantity": 300,
-                "sell_conditions": ["冲高减"],
-                "buyback_conditions": ["回落买回"],
-                "cancel_conditions": ["单边涨停"],
-            },
-        )
-    ])
-    out = validate_portfolio_advice(ai, ctx)
-    h = out["holdings"][0]
-    assert h["action"] == "t_trade"
-    assert h["execution_quantity"] is None
-    assert h["t_trade"]["quantity"] is None
-    assert h["t_trade"]["suitable"] is True
-    assert h["t_trade"]["direction"] == "sell_then_buy"
-    assert any("做 T" in m or "quantity" in m or "可卖" in m for m in h["data_limitations"])
-
-
-def test_t_trade_unsuitable_direction_null():
-    ctx = _context()
-    ai = _ai_result(holdings=[
-        _ai_holding(
-            action="t_trade",
-            t_trade={
-                "suitable": False,
-                "direction": "sell_then_buy",
-                "quantity": 100,
-                "sell_conditions": [],
-                "buyback_conditions": [],
-                "cancel_conditions": [],
-            },
-        )
-    ])
-    out = validate_portfolio_advice(ai, ctx)
-    assert out["holdings"][0]["t_trade"]["suitable"] is False
-    assert out["holdings"][0]["t_trade"]["direction"] is None
-    assert out["holdings"][0]["t_trade"]["quantity"] is None
-
-
 # ---------------------------------------------------------------------------
-# 非法 action / 百分比
+# 非法 action / 百分比 / 做 T 拒绝
 # ---------------------------------------------------------------------------
 
 def test_illegal_action_raises():
@@ -355,6 +300,59 @@ def test_illegal_action_raises():
     ai = _ai_result(holdings=[_ai_holding(action="谨慎持有")])
     with pytest.raises(PortfolioAdviceValidationError):
         validate_portfolio_advice(ai, ctx)
+
+
+def test_action_t_trade_rejected():
+    ctx = _context()
+    ai = _ai_result(holdings=[_ai_holding(action="t_trade")])
+    with pytest.raises(PortfolioAdviceValidationError) as ei:
+        validate_portfolio_advice(ai, ctx)
+    assert "t_trade" in str(ei.value)
+    assert "非法 action" in str(ei.value)
+
+
+def test_extra_t_trade_field_stripped():
+    """模型额外输出 t_trade 字段：忽略并从权威结果中删除。"""
+    ctx = _context()
+    ai = _ai_result(holdings=[
+        _ai_holding(
+            action="hold",
+            t_trade={
+                "suitable": True,
+                "direction": "sell_then_buy",
+                "quantity": 300,
+            },
+        )
+    ])
+    out = validate_portfolio_advice(ai, ctx)
+    h = out["holdings"][0]
+    assert "t_trade" not in h
+    assert "t_trade" not in out
+    # 递归确认权威结果无 t_trade 键
+    blob = str(out)
+    # 值层面：键名不得作为结果字段存在（action 已非 t_trade）
+    def _has_t_trade_key(obj):
+        if isinstance(obj, dict):
+            if "t_trade" in obj:
+                return True
+            return any(_has_t_trade_key(v) for v in obj.values())
+        if isinstance(obj, list):
+            return any(_has_t_trade_key(v) for v in obj)
+        return False
+
+    assert _has_t_trade_key(out) is False
+    assert h["action"] == "hold"
+    assert h["execution_quantity"] is None
+
+
+def test_result_never_contains_t_trade_structure():
+    ctx = _context()
+    ai = _ai_result(holdings=[
+        _ai_holding(action="reduce", execution_size_pct_of_holding=20)
+    ])
+    out = validate_portfolio_advice(ai, ctx)
+    assert "t_trade" not in out["holdings"][0]
+    assert "t_trade" not in out
 
 
 def test_illegal_pct_raises():
@@ -370,25 +368,6 @@ def test_negative_pct_raises():
     ctx = _context()
     ai = _ai_result(holdings=[
         _ai_holding(action="reduce", execution_size_pct_of_holding=-5)
-    ])
-    with pytest.raises(PortfolioAdviceValidationError):
-        validate_portfolio_advice(ai, ctx)
-
-
-def test_illegal_t_direction_raises():
-    ctx = _context()
-    ai = _ai_result(holdings=[
-        _ai_holding(
-            action="t_trade",
-            t_trade={
-                "suitable": True,
-                "direction": "sideways",
-                "quantity": None,
-                "sell_conditions": [],
-                "buyback_conditions": [],
-                "cancel_conditions": [],
-            },
-        )
     ])
     with pytest.raises(PortfolioAdviceValidationError):
         validate_portfolio_advice(ai, ctx)
@@ -483,23 +462,3 @@ def test_non_dict_raises():
         validate_portfolio_advice([], _context())
     with pytest.raises(PortfolioAdviceValidationError):
         validate_portfolio_advice({}, [])
-
-
-def test_non_t_trade_action_clears_suitable_t():
-    ctx = _context()
-    ai = _ai_result(holdings=[
-        _ai_holding(
-            action="hold",
-            t_trade={
-                "suitable": True,
-                "direction": "buy_then_sell",
-                "quantity": 100,
-                "sell_conditions": ["x"],
-                "buyback_conditions": [],
-                "cancel_conditions": [],
-            },
-        )
-    ])
-    out = validate_portfolio_advice(ai, ctx)
-    assert out["holdings"][0]["t_trade"]["suitable"] is False
-    assert out["holdings"][0]["t_trade"]["quantity"] is None

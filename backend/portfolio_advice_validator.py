@@ -4,8 +4,9 @@
 - 动作枚举与字段形状校验；
 - 代码重算市值/盈亏/权重（覆盖模型数值）；
 - reduce/sell 数量按 100 股向下取整并截断；
-- add/hold/watch/avoid/t_trade 清空不可靠数量；
-- 自动补充可卖数量等 data_limitations。
+- add/hold/watch/avoid 清空不可靠数量；
+- 自动补充可卖数量等 data_limitations；
+- 忽略并剥离模型额外输出的 t_trade 字段（第一版不支持做 T）。
 
 不信任模型自行计算的数量与盈亏。
 """
@@ -22,10 +23,8 @@ LOT_SIZE = 100
 
 _SELLABLE_LIMITATION = "未提供可卖数量，执行前需要人工确认实际可卖股数。"
 _CASH_LIMITATION = "未提供可用现金和账户总资产，无法计算具体买入股数。"
-_T_TRADE_QTY_LIMITATION = "未提供可卖数量与当日买卖记录，做 T 数量无法可靠计算，quantity 已置空。"
 
 _CONFIDENCE = frozenset({"high", "medium", "low"})
-_T_DIRECTIONS = frozenset({"sell_then_buy", "buy_then_sell"})
 
 
 class PortfolioAdviceValidationError(ValueError):
@@ -117,7 +116,6 @@ def compute_execution_quantity(
         pct = 100.0
     raw = float(shares) * pct / 100.0
     qty = floor_to_lot(raw, lot=lot)
-    max_shares = int(float(shares)) if float(shares) == int(float(shares)) else int(float(shares))
     # 允许非整数 shares（ETF），但仍按 lot 约束；不得超过 shares
     if qty > float(shares):
         qty = floor_to_lot(float(shares), lot=lot)
@@ -177,50 +175,6 @@ def _recompute_fact_fields(ctx_h: dict) -> dict[str, Any]:
     }
 
 
-def _default_t_trade() -> dict[str, Any]:
-    return {
-        "suitable": False,
-        "direction": None,
-        "quantity": None,
-        "sell_conditions": [],
-        "buyback_conditions": [],
-        "cancel_conditions": [],
-    }
-
-
-def _validate_t_trade(raw: Any, limitations: list[str]) -> dict[str, Any]:
-    base = _default_t_trade()
-    if not isinstance(raw, dict):
-        _append_unique(limitations, _T_TRADE_QTY_LIMITATION)
-        return base
-
-    suitable = bool(raw.get("suitable")) if raw.get("suitable") is not None else False
-    direction = raw.get("direction")
-    if direction is not None:
-        if not isinstance(direction, str) or direction not in _T_DIRECTIONS:
-            if direction in ("", "null", "None"):
-                direction = None
-            else:
-                raise PortfolioAdviceValidationError(
-                    f"t_trade.direction 非法：{direction!r}"
-                )
-    if not suitable:
-        direction = None
-
-    out = {
-        "suitable": suitable,
-        "direction": direction,
-        "quantity": None,  # 第一版强制 null
-        "sell_conditions": _str_list(raw.get("sell_conditions")),
-        "buyback_conditions": _str_list(raw.get("buyback_conditions")),
-        "cancel_conditions": _str_list(raw.get("cancel_conditions")),
-    }
-    _append_unique(limitations, _T_TRADE_QTY_LIMITATION)
-    if suitable:
-        _append_unique(limitations, _SELLABLE_LIMITATION)
-    return out
-
-
 def _validate_one_holding(
     ai_h: dict,
     ctx_h: dict,
@@ -257,9 +211,6 @@ def _validate_one_holding(
             # 非操作动作不应带正比例；归一为 null
             size_pct = None
         qty = None
-    elif action == "t_trade":
-        size_pct = _normalize_pct(raw_pct) if raw_pct is not None else None
-        qty = None
     else:
         size_pct = None
         qty = None
@@ -268,13 +219,7 @@ def _validate_one_holding(
     if conf not in _CONFIDENCE:
         conf = "low"
 
-    t_trade = _validate_t_trade(ai_h.get("t_trade"), limitations)
-    if action != "t_trade":
-        # 非做 T 时仍允许 suitable=false 的空结构；若模型乱填 suitable=true 则压回
-        if t_trade.get("suitable"):
-            t_trade = _default_t_trade()
-            _append_unique(limitations, _T_TRADE_QTY_LIMITATION)
-
+    # 权威结果不包含 t_trade；模型若额外输出该字段，在此丢弃
     return {
         **facts,
         "action": action,
@@ -285,7 +230,6 @@ def _validate_one_holding(
         "execution_plan": _str_list(ai_h.get("execution_plan")),
         "risk_conditions": _str_list(ai_h.get("risk_conditions")),
         "invalidation_conditions": _str_list(ai_h.get("invalidation_conditions")),
-        "t_trade": t_trade,
         "confidence": conf,
         "data_limitations": limitations,
     }
@@ -355,11 +299,14 @@ def validate_portfolio_advice(
     Returns
     -------
     规范化后的权威结果 dict（schema_version=portfolio-advice-v0.1）。
+    结果中绝不包含 t_trade 字段。
 
     Notes
     -----
     - 不修改输入对象（内部 deepcopy 工作副本）。
     - 相同输入结果确定。
+    - action=t_trade 视为非法并抛出 PortfolioAdviceValidationError。
+    - 模型额外输出的 t_trade 字段被忽略并从权威结果中移除。
     """
     if not isinstance(ai_result, dict):
         raise PortfolioAdviceValidationError("ai_result 必须是字典")
@@ -395,11 +342,8 @@ def validate_portfolio_advice(
                 "risk_conditions": ["建议不完整"],
                 "invalidation_conditions": ["获得完整建议后重新评估"],
                 "data_limitations": ["模型未覆盖该持仓"],
-                "t_trade": _default_t_trade(),
             }
         validated_holdings.append(_validate_one_holding(ai_h, ctx_h))
-
-    # 非法 action 已在 _validate_one_holding 抛出
 
     summary = _portfolio_summary_from_context(context)
     account_action = _validate_account_action(ai_work.get("account_action"))
