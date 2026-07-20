@@ -37,35 +37,183 @@ def _num(v) -> int:
         return 0
 
 
+def _breadth_label(up_ratio: float | None) -> str | None:
+    """大盘宽度标签（按上涨占比机械分档，不再用绝对家数）。
+
+    up_ratio is None → None
+    <0.25 冰点 · <0.40 偏弱 · <=0.60 中性 · <=0.75 偏强 · >0.75 普涨
+    """
+    if up_ratio is None:
+        return None
+    if not isinstance(up_ratio, (int, float)) or isinstance(up_ratio, bool):
+        return None
+    if up_ratio != up_ratio:  # NaN
+        return None
+    r = float(up_ratio)
+    if r < 0.25:
+        return "冰点"
+    if r < 0.40:
+        return "偏弱"
+    if r <= 0.60:
+        return "中性"
+    if r <= 0.75:
+        return "偏强"
+    return "普涨"
+
+
+def _speculation_label(zt_count: int | None) -> str | None:
+    """题材投机标签（按涨停家数机械分档）。"""
+    if zt_count is None:
+        return None
+    if not isinstance(zt_count, (int, float)) or isinstance(zt_count, bool):
+        return None
+    z = int(zt_count)
+    if z >= 100:
+        return "亢奋"
+    if z >= 60:
+        return "活跃"
+    if z >= 30:
+        return "普通"
+    return "冰点"
+
+
 def _sentiment() -> dict:
-    """市场情绪：涨跌家数/涨停跌停/活跃度 + 大盘宽度、题材投机。"""
+    """市场情绪：涨跌家数来自全 A 快照广度；涨跌停来自东财涨停池。
+
+    **不再调用** ``astock._akshare().stock_market_activity_legu()``。
+    复用 ``get_market_breadth()`` / ``get_short_term_emotion()`` 的共享缓存。
+
+    兼容字段说明：
+    - ``zt_real`` / ``dt_real``：仅为兼容旧前端的别名，等于 ``zt`` / ``dt``；
+      东财涨跌停池本身即进入对应池的股票数，并非两套独立口径。
+    - ``active``：当前表示上涨占比（up_ratio 格式化为百分数字符串），
+      **不再**代表乐咕「活跃度」；后续前端应改名为「上涨占比」。
+    """
+    # —— 广度（涨跌家数）——
     try:
-        # akshare 惰性导入（同 astock 模式）：未装时降级返回空，不挡整个服务启动
-        df = astock._akshare().stock_market_activity_legu()
-        d = {row["item"]: row["value"] for _, row in df.iterrows()}
-    except Exception:
-        return {}
-    up, down, flat = _num(d.get("上涨")), _num(d.get("下跌")), _num(d.get("平盘"))
-    zt, zt_real = _num(d.get("涨停")), _num(d.get("真实涨停"))
-    dt, dt_real = _num(d.get("跌停")), _num(d.get("真实跌停"))
-    r = up / max(down, 1)
-    if up < 600:
-        breadth = "冰点"
-    elif r < 0.7:
-        breadth = "偏弱"
-    elif r < 1.2:
-        breadth = "中性"
-    elif r < 2.5:
-        breadth = "偏强"
+        breadth_payload = get_market_breadth()
+    except Exception as e:  # noqa: BLE001 — 意外逃逸，整段 unavailable
+        return {
+            "status": "unavailable",
+            "source": "eastmoney_push2",
+            "warnings": [f"市场广度异常：{type(e).__name__}: {e}"],
+            "up": None, "down": None, "flat": None,
+            "zt": None, "zt_real": None, "dt": None, "dt_real": None,
+            "active": "", "active_metric": "up_ratio", "up_ratio": None,
+            "breadth": None, "speculation": None,
+            "stock_count": None, "valid_count": None,
+            "up_3pct_count": None, "down_3pct_count": None, "total_amount": None,
+            "date": "",
+            "limit_count_source": "eastmoney_limit_pool",
+        }
+
+    # —— 涨停池（情绪）—— 单独失败不丢广度
+    emotion: dict = {}
+    emotion_warns: list[str] = []
+    try:
+        emotion = get_short_term_emotion() or {}
+        if not isinstance(emotion, dict):
+            emotion = {}
+            emotion_warns.append("涨跌停池数据不可用")
+    except Exception as e:  # noqa: BLE001
+        emotion = {}
+        emotion_warns.append(f"涨跌停池数据不可用：{type(e).__name__}: {e}")
+
+    b_status = breadth_payload.get("status") if isinstance(breadth_payload, dict) else None
+    b_warns = list(breadth_payload.get("warnings") or []) if isinstance(breadth_payload, dict) else []
+    b_data = breadth_payload.get("data") if isinstance(breadth_payload, dict) else None
+    if not isinstance(b_data, dict):
+        b_data = None
+
+    # 涨跌停：东财池计数；zt_real/dt_real 仅为兼容旧字段的别名（非独立来源）
+    zt = emotion.get("zt_count") if emotion else None
+    dt = emotion.get("dt_count") if emotion else None
+    if zt is not None and not isinstance(zt, (int, float)):
+        zt = None
+    if dt is not None and not isinstance(dt, (int, float)):
+        dt = None
+    if isinstance(zt, float):
+        zt = int(zt)
+    if isinstance(dt, float):
+        dt = int(dt)
+    date = str(emotion.get("date") or "") if emotion else ""
+
+    if b_status == "unavailable" or b_data is None:
+        return {
+            "status": "unavailable",
+            "source": "eastmoney_push2",
+            "warnings": b_warns + emotion_warns,
+            "up": None, "down": None, "flat": None,
+            "zt": zt, "zt_real": zt, "dt": dt, "dt_real": dt,
+            "active": "",
+            "active_metric": "up_ratio",
+            "up_ratio": None,
+            "breadth": None,
+            "speculation": _speculation_label(zt),
+            "stock_count": None, "valid_count": None,
+            "up_3pct_count": None, "down_3pct_count": None, "total_amount": None,
+            "date": date,
+            "limit_count_source": "eastmoney_limit_pool",
+        }
+
+    up = b_data.get("up_count")
+    down = b_data.get("down_count")
+    flat = b_data.get("flat_count")
+    up_ratio = b_data.get("up_ratio")
+    stock_count = b_data.get("stock_count")
+    valid_count = b_data.get("valid_count")
+    up_3pct = b_data.get("up_3pct_count")
+    down_3pct = b_data.get("down_3pct_count")
+    total_amount = b_data.get("total_amount")
+
+    # active：上涨占比字符串（兼容旧「活跃度」展示位，语义已变）
+    if isinstance(up_ratio, (int, float)) and not isinstance(up_ratio, bool) and up_ratio == up_ratio:
+        active = f"{float(up_ratio) * 100:.1f}%"
+        up_ratio_f: float | None = float(up_ratio)
     else:
-        breadth = "普涨"
-    speculation = "亢奋" if zt_real >= 100 else "活跃" if zt_real >= 60 else "普通" if zt_real >= 30 else "冰点"
+        active = ""
+        up_ratio_f = None
+
+    warnings = list(b_warns)
+    status = "normal" if b_status == "normal" else "partial"
+    if b_status == "partial":
+        status = "partial"
+
+    # 广度 normal 但情绪池缺失 → partial
+    emotion_ok = (
+        bool(emotion)
+        and emotion.get("zt_count") is not None
+        and emotion.get("dt_count") is not None
+    )
+    if not emotion_ok:
+        status = "partial"
+        if not any("涨跌停池" in w for w in emotion_warns):
+            emotion_warns.append("涨跌停池数据不可用")
+    warnings.extend(emotion_warns)
+
     return {
-        "up": up, "down": down, "flat": flat,
-        "zt": zt, "zt_real": zt_real, "dt": dt, "dt_real": dt_real,
-        "active": str(d.get("活跃度", "")),
-        "breadth": breadth, "speculation": speculation,
-        "date": str(d.get("统计日期", "")),
+        "status": status,
+        "source": "eastmoney_push2",
+        "warnings": warnings,
+        "up": up if isinstance(up, (int, float)) and not isinstance(up, bool) else None,
+        "down": down if isinstance(down, (int, float)) and not isinstance(down, bool) else None,
+        "flat": flat if isinstance(flat, (int, float)) and not isinstance(flat, bool) else None,
+        "zt": zt,
+        "zt_real": zt,  # 兼容别名：与 zt 同源（东财涨停池），非独立统计
+        "dt": dt,
+        "dt_real": dt,  # 兼容别名：与 dt 同源
+        "active": active,
+        "active_metric": "up_ratio",
+        "up_ratio": up_ratio_f,
+        "breadth": _breadth_label(up_ratio_f),
+        "speculation": _speculation_label(zt),
+        "stock_count": stock_count if isinstance(stock_count, (int, float)) else None,
+        "valid_count": valid_count if isinstance(valid_count, (int, float)) else None,
+        "up_3pct_count": up_3pct if isinstance(up_3pct, (int, float)) else None,
+        "down_3pct_count": down_3pct if isinstance(down_3pct, (int, float)) else None,
+        "total_amount": total_amount if isinstance(total_amount, (int, float)) else None,
+        "date": date,
+        "limit_count_source": "eastmoney_limit_pool",
     }
 
 

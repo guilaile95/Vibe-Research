@@ -184,15 +184,45 @@ def test_cached_skips_empty():
     market._CACHE.pop("k_test", None)
 
 
-# ── akshare 未安装：market 降级返回空，不挡服务 ─────────────────────
+# ── akshare 未安装：行业资金降级；涨跌家数已不依赖 akshare ──────────
 
 def test_market_degrades_without_akshare(monkeypatch):
+    """_sectors 仍依赖 akshare → 返回 []；_sentiment 已改走全 A 快照，不得再调 _akshare。"""
+    calls = {"ak": 0}
+
     def boom():
+        calls["ak"] += 1
         raise astock.DependencyMissing("akshare 未安装")
 
     monkeypatch.setattr(astock, "_akshare", boom)
-    assert market._sentiment() == {}
+    # 为 _sentiment 提供广度/情绪桩，验证不触达 akshare
+    monkeypatch.setattr(
+        market, "get_market_breadth",
+        lambda: {
+            "status": "normal", "source": "eastmoney_push2",
+            "trade_date": None, "data_time": None, "fetched_at": "t",
+            "is_stale": False, "warnings": [],
+            "data": {
+                "stock_count": 5000, "valid_count": 5000,
+                "up_count": 10, "down_count": 5, "flat_count": 1,
+                "up_ratio": 0.5, "up_3pct_count": 0, "down_3pct_count": 0,
+                "total_amount": 1.0, "amount_valid_count": 5000,
+                "amount_top": [], "high_turnover": [],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        market, "get_short_term_emotion",
+        lambda: {"zt_count": 40, "dt_count": 3, "date": "2026-07-21"},
+    )
+    sent = market._sentiment()
+    assert sent["status"] == "normal"
+    assert sent["up"] == 10
+    # _sentiment 路径未调用 akshare
+    assert calls["ak"] == 0
+    # 行业资金仍依赖 akshare，缺失时降级为空
     assert market._sectors() == []
+    assert calls["ak"] >= 1
 
 
 # ── 流式工具调用：非标网关不带 index 时按 id 归位、不串参数 ──────────
