@@ -21,11 +21,23 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from portfolio_advice_prompt import ACCOUNT_ACTIONS, ACTIONS, SCHEMA_VERSION
+# 策略常量从公共契约层导入（不再依赖 portfolio_advice_prompt）。
+from portfolio_advice_contracts import (
+    ACCOUNT_ACTIONS,
+    ACTIONS,
+    ADD_TIERS as _ADD_TIERS,
+    CONFIDENCE_CAP as _CONF_MAX,
+    CONFIDENCE_LEVELS as _CONFIDENCE,
+    LOT_SIZE,
+    REDUCE_TIERS as _REDUCE_TIERS,
+    SCHEMA_VERSION,
+    SELL_TIER as _SELL_TIER,
+)
 
-LOT_SIZE = 100
+# ---------------------------------------------------------------------------
+# Validator 展示层文案常量（非策略规则，归属 Validator 自身）
+# ---------------------------------------------------------------------------
 
-# 标准化数据限制文案
 _SELLABLE_LIMITATION = "未提供可卖数量，执行前需要人工确认实际可卖股数。"
 _CASH_LIMITATION = (
     "未提供账户总资产与可用现金，买入数量仅按当前持股比例计算；"
@@ -37,14 +49,6 @@ _ADD_LOT_LIMITATION = "按当前建议比例计算不足一个100股交易单位
 _PRICE_AMOUNT_LIMITATION = "当前价格不可用，无法计算预计所需金额。"
 _AMOUNT_ESTIMATE_NOTE = "预计金额按当前价格计算，不包含手续费和实际成交价偏差。"
 _SHARES_LIMITATION = "持股数量不可用，无法计算具体买入数量。"
-
-_CONFIDENCE = frozenset({"high", "medium", "low"})
-
-# 固定操作比例档位
-_ADD_TIERS = frozenset({10.0, 20.0})
-_REDUCE_TIERS = frozenset({10.0, 20.0, 30.0})
-_SELL_TIER = 100.0
-_CONF_MAX = {"low": 10.0, "medium": 20.0, "high": 30.0}
 
 _CONDITION_FIELDS = (
     "trigger_conditions",

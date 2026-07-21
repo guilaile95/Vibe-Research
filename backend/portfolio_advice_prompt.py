@@ -12,23 +12,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
-SCHEMA_VERSION = "portfolio-advice-v0.1"
-
-ACTIONS = (
-    "add",
-    "hold",
-    "reduce",
-    "sell",
-    "watch",
-    "avoid",
+# 策略常量从公共契约层导入，本模块 re-export 以保持向后兼容。
+# 任何新代码应直接从 portfolio_advice_contracts 导入。
+from portfolio_advice_contracts import (  # noqa: F401
+    ACCOUNT_ACTIONS,
+    ACTIONS,
+    SCHEMA_VERSION,
 )
 
-ACCOUNT_ACTIONS = (
-    "hold",
-    "reduce_risk",
-    "selective_add",
-    "defensive",
-)
 
 _DEFAULT_USER_TASK = (
     "请基于以上持仓与市场上下文，生成账户级操作倾向和逐股明确操作建议。"
