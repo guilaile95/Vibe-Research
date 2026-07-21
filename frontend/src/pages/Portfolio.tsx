@@ -11,6 +11,7 @@ import {
   type PortfolioAdviceHoldingAction,
   type PortfolioAdviceAccountAction,
   type PortfolioAdviceConfidence,
+  type AccountProfileData,
 } from "@/lib/api";
 import { loadLlm } from "@/lib/llm";
 import { cn } from "@/lib/utils";
@@ -232,6 +233,14 @@ function HoldingAdviceCard({ h }: { h: PortfolioAdviceHoldingAdvice }) {
 export function Portfolio() {
   const [data, setData] = useState<PortfolioData | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // 账户资金（手工填写）
+  const [acct, setAcct] = useState<AccountProfileData | null>(null);
+  const [acctConfigured, setAcctConfigured] = useState(false);
+  const [acctOpen, setAcctOpen] = useState(false);
+  const [accTotal, setAccTotal] = useState("");
+  const [accCash, setAccCash] = useState("");
+  const [acctSaving, setAcctSaving] = useState(false);
+  const [acctErr, setAcctErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [code, setCode] = useState("");
   const [shares, setShares] = useState("");
@@ -270,8 +279,16 @@ export function Portfolio() {
     }
   }, [clearAdvice]);
 
+  const loadAcct = useCallback(async () => {
+    try {
+      const resp = await api.getAccountProfile();
+      setAcctConfigured(resp.configured);
+      setAcct(resp.data);
+    } catch { /* 账户资金可选，加载失败不阻塞页面 */ }
+  }, []);
+
   useEffect(() => {
-    // 首次仅加载持仓；不自动请求 advice
+    // 首次加载持仓 + 账户资金；不自动请求 advice
     const boot = async () => {
       try {
         setData(await api.portfolio());
@@ -279,11 +296,12 @@ export function Portfolio() {
       } catch (e) {
         setErr(e instanceof ApiError ? e.message : "加载失败");
       }
+      await loadAcct();
     };
     boot();
     const t = setInterval(() => load(), REFRESH_MS); // 每半小时自动刷新
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, loadAcct]);
 
   const add = async () => {
     if (!/^\d{6}$/.test(code.trim())) { setErr("请输入 6 位股票代码"); return; }
@@ -306,6 +324,42 @@ export function Portfolio() {
       setData(await api.removeHolding(c));
       clearAdvice();
     } catch { /* ignore */ }
+  };
+
+  // 账户资金：打开填写窗口
+  const openAcct = () => {
+    setAccTotal(acct ? fmtCny(acct.total_assets).replace(/[¥,]/g, "") : "");
+    setAccCash(acct ? fmtCny(acct.available_cash).replace(/[¥,]/g, "") : "");
+    setAcctErr(null);
+    setAcctOpen(true);
+  };
+
+  const closeAcct = () => {
+    setAcctOpen(false);
+    setAcctErr(null);
+  };
+
+  // 账户资金：保存
+  const saveAcct = async () => {
+    if (acctSaving) return;
+    const total = parseFloat(accTotal);
+    const cash = parseFloat(accCash);
+    if (!(total > 0)) { setAcctErr("账户总资产必须大于 0"); return; }
+    if (!(cash >= 0)) { setAcctErr("可用现金不能小于 0"); return; }
+    if (cash > total) { setAcctErr("可用现金不能大于账户总资产"); return; }
+    setAcctSaving(true);
+    setAcctErr(null);
+    try {
+      const resp = await api.saveAccountProfile({ total_assets: total, available_cash: cash });
+      setAcctConfigured(true);
+      setAcct(resp.data);
+      setAcctOpen(false);
+    } catch (e) {
+      // 保存失败保留输入内容，仅显示错误
+      setAcctErr(e instanceof ApiError ? e.message : "保存失败");
+    } finally {
+      setAcctSaving(false);
+    }
   };
 
   const addClose = async () => {
@@ -426,6 +480,81 @@ export function Portfolio() {
               <p className={cn("mt-1 font-mono text-lg font-bold", m.c)}>{m.v}</p>
             </GlassCard>
           ))}
+        </div>
+      )}
+
+      {/* 账户资金 */}
+      <GlassCard className="mb-4">
+        <h3 className="mb-3 text-sm font-semibold">账户资金</h3>
+        {acctConfigured && acct ? (
+          <div className="flex flex-wrap items-end gap-4">
+            <div>
+              <p className="mb-1 text-xs text-muted-foreground">账户总资产</p>
+              <p className="font-mono text-lg font-bold text-foreground">{fmtCny(acct.total_assets)}</p>
+            </div>
+            <div>
+              <p className="mb-1 text-xs text-muted-foreground">可用现金</p>
+              <p className="font-mono text-lg font-bold text-foreground">{fmtCny(acct.available_cash)}</p>
+            </div>
+            <div className="ml-auto flex flex-col items-end gap-1">
+              <span className="text-[11px] text-muted-foreground/60">更新于 {acct.updated_at}</span>
+              <button onClick={openAcct}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25">
+                编辑
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">尚未配置账户资金</p>
+            <button onClick={openAcct}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25">
+              填写账户资金
+            </button>
+          </div>
+        )}
+        <p className="mt-2 text-[11px] text-muted-foreground/60">手工填写、存在本地，不上传、不进仓库。用于后续持仓建议参考（本轮仅维护展示）。</p>
+      </GlassCard>
+
+      {/* 账户资金填写窗口 */}
+      {acctOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={closeAcct}>
+          <div className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-4 text-base font-semibold">{acctConfigured ? "编辑账户资金" : "填写账户资金"}</h3>
+            <div className="mb-3">
+              <label className="mb-1 block text-xs text-muted-foreground">账户总资产</label>
+              <input
+                value={accTotal}
+                onChange={(e) => setAccTotal(e.target.value.replace(/[^\d.]/g, ""))}
+                placeholder="如 100000"
+                className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
+              />
+            </div>
+            <div className="mb-3">
+              <label className="mb-1 block text-xs text-muted-foreground">可用现金</label>
+              <input
+                value={accCash}
+                onChange={(e) => setAccCash(e.target.value.replace(/[^\d.]/g, ""))}
+                placeholder="如 20000"
+                className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
+              />
+            </div>
+            {acctErr && (
+              <div className="mb-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2.5 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4 shrink-0" /> {acctErr}
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <button onClick={closeAcct} disabled={acctSaving}
+                className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
+                取消
+              </button>
+              <button onClick={saveAcct} disabled={acctSaving}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
+                {acctSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} 保存
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

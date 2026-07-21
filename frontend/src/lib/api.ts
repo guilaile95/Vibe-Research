@@ -51,7 +51,7 @@ export async function downloadReport(id: string, name: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-async function request<T>(path: string, method: "GET" | "POST" | "DELETE" = "GET", body?: unknown): Promise<T> {
+async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE" = "GET", body?: unknown): Promise<T> {
   let resp: Response;
   const headers: Record<string, string> = { ...authHeaders() };
   const opts: RequestInit = { method };
@@ -81,6 +81,7 @@ async function request<T>(path: string, method: "GET" | "POST" | "DELETE" = "GET
 }
 
 const get = <T>(path: string) => request<T>(path, "GET");
+const put = <T>(path: string, body: unknown) => request<T>(path, "PUT", body);
 
 export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;
@@ -499,6 +500,26 @@ export interface PortfolioData {
 }
 
 // ---------------------------------------------------------------------------
+// 账户资金（手工填写，GET /api/account-profile 与 PUT /api/account-profile）
+// ---------------------------------------------------------------------------
+
+export interface AccountProfileData {
+  total_assets: number;
+  available_cash: number;
+  updated_at: string;
+}
+
+export interface AccountProfileResponse {
+  configured: boolean;
+  data: AccountProfileData | null;
+}
+
+export interface AccountProfileRequest {
+  total_assets: number;
+  available_cash: number;
+}
+
+// ---------------------------------------------------------------------------
 // 持仓操作建议（POST /api/portfolio/advice，普通 JSON，非流式）
 // 契约与 backend portfolio_advice_validator 权威结果对齐
 // ---------------------------------------------------------------------------
@@ -830,6 +851,17 @@ export const api = {
   closePosition: (code: string, date: string, price: number, shares: number, cost: number) =>
     request<PortfolioData>("/portfolio/close", "POST", { code, date, price, shares, cost }),
   removeClosed: (index: number) => request<PortfolioData>(`/portfolio/close?index=${index}`, "DELETE"),
+  /** 账户资金。未配置 → configured=false, data=null；不把未配置解释为 0。 */
+  getAccountProfile: () => get<AccountProfileResponse>("/account-profile"),
+  /**
+   * 保存账户资金（后端校验 + 生成 updated_at）。
+   * 返回 { configured: true, data: { total_assets, available_cash, updated_at } }。
+   */
+  saveAccountProfile: (data: AccountProfileRequest) =>
+    put<AccountProfileResponse>("/account-profile", {
+      total_assets: data.total_assets,
+      available_cash: data.available_cash,
+    }),
   /**
    * 结构化持仓操作建议（普通 JSON）。
    * 只发送 user_request + llm；持仓与市场上下文由服务器读取，不注入 portfolio/context/messages。

@@ -15,6 +15,16 @@
   - 回归：validator/service/api 三套件 136 passed；`npm run build` 成功 ✓
   - 无产品代码改动，验收结束时工作区干净
 
+## 上一任务（已完成）
+
+~~增加「账户资金」手工填写窗口（`feat: add manual account funding input`）。~~
+
+- **状态**：已完成（见 `PROJECT_STATE.md` §13）
+- 后端：`backend/account_profile.py`；`GET`/`PUT /api/account-profile`；校验 + 原子写入；未配置不解释为 0
+- 前端：Portfolio 页「账户资金」区 + 弹窗；未配置不显示 ¥0；保存失败保留输入
+- 回归：account_profile 单元 + API 测试 21 passed；全量离线 638 passed（仅已知 Windows 例外）；`npm run build` 成功
+- 未接入持仓建议 / 加仓数量 / AI prompt；未改持仓增删改逻辑
+
 ## 当前下一任务
 
 **待产品优先级确认**。

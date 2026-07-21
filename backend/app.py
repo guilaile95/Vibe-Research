@@ -13,10 +13,12 @@ import json
 import os
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
+import account_profile
 import astock
 import chat as chat_layer
 import cli_runtime
@@ -48,6 +50,23 @@ app.add_middleware(
 # 可选鉴权：设了 VR_API_KEY 就要求所有 /api/* 带 `Authorization: Bearer <key>`
 #   （本地自托管不设=开放；公网部署务必设，否则别人能读你的持仓/调你的后端）。
 _API_KEY = os.environ.get("VR_API_KEY", "").strip()
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_handler(request: Request, exc: RequestValidationError):
+    """Pydantic 校验失败：仅 /api/account-profile 返回 400（严格类型 + 未知字段统一语义错误）；
+    其它端点保持框架默认 422，避免影响现有契约。"""
+    if request.url.path == "/api/account-profile":
+        errs = exc.errors()
+        msg = "; ".join(
+            (f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg', 'invalid')}") for e in errs
+        ) or "请求参数无效"
+        return JSONResponse(status_code=400, content={"detail": msg})
+    # 非账户资金端点：复用 FastAPI 默认 422 行为
+    return JSONResponse(
+        status_code=422,
+        content={"detail": [{"loc": e.get("loc", []), "msg": e.get("msg", ""), "type": e.get("type", "")} for e in exc.errors()]},
+    )
 
 
 @app.middleware("http")
@@ -196,6 +215,53 @@ def portfolio_add(h: HoldingIn):
 @app.delete("/api/portfolio/holding")
 def portfolio_remove(code: str = Query(...)):
     return {"data": pf.remove_holding(code.strip())}
+
+
+# ---- 账户资金（用户手工填写，存本地、不上传、不进仓库）----
+
+class AccountProfileIn(BaseModel):
+    """账户资金手工填写请求。updated_at 由后端生成，禁止客户端提交。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    total_assets: float
+    available_cash: float
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strict_amounts(cls, values):
+        """严格类型：拒绝字符串、布尔值（Pydantic 默认会强转）。"""
+        if isinstance(values, dict):
+            for field in ("total_assets", "available_cash"):
+                v = values.get(field)
+                if isinstance(v, bool) or isinstance(v, str):
+                    raise ValueError(f"{field} 必须是数字，不能是 {type(v).__name__}")
+        return values
+
+
+@app.get("/api/account-profile")
+def account_profile_get():
+    """账户资金。未配置 → configured=false, data=null；不把未配置解释为 0。"""
+    try:
+        d = account_profile.load_account_profile()
+        if d is None:
+            return {"configured": False, "data": None}
+        return {"configured": True, "data": d}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"账户资金读取异常：{e}") from e
+
+
+@app.put("/api/account-profile")
+def account_profile_save(req: AccountProfileIn):
+    """保存账户资金。后端校验 + 生成 updated_at，返回保存后的数据。"""
+    try:
+        total, cash = account_profile.validate_account_payload(req.model_dump())
+        data = account_profile.save_account_profile(total, cash)
+        return {"configured": True, "data": data}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"账户资金保存异常：{e}") from e
 
 
 # ---- 我的研报（用户上传自己的研报，存本地、不上传、不进开源仓库）----

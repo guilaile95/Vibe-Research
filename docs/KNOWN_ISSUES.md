@@ -43,7 +43,7 @@ tests/test_fixes.py::test_run_cli_stream_timeout
 
 以下位于用户目录或本机配置，**不应提交到 Git**：
 
-- `~/.vibe-research/portfolio.json`、`daily_review_latest.json`
+- `~/.vibe-research/portfolio.json`、`daily_review_latest.json`、`account_profile.json`
 - SQLite 历史库
 - 前端 localStorage 中的 API Key / 模型配置
 - 本机 Clash/代理订阅与密码

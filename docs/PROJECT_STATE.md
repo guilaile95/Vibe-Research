@@ -141,15 +141,27 @@ validator 验证：正确股数/金额通过，错误股数/金额拒绝，「�
 | 页面 | 文件 | 要点 |
 |------|------|------|
 | 每日复盘 | `frontend/src/pages/DailyReview.tsx` | SWR 提示、`cache_meta`、九维 AI 流式分析入口 |
-| 持仓 | `frontend/src/pages/Portfolio.tsx` | 本地持仓 +「生成持仓操作建议」 |
-| API 类型 | `frontend/src/lib/api.ts` | `PortfolioAdviceHoldingAdvice` 含 `execution_quantity`、`estimated_amount` 等 |
+| 持仓 | `frontend/src/pages/Portfolio.tsx` | 本地持仓 +「生成持仓操作建议」 + 账户资金 |
+| API 类型 | `frontend/src/lib/api.ts` | `PortfolioAdviceHoldingAdvice` 含 `execution_quantity`、`estimated_amount` 等；`AccountProfileData` 含 `total_assets`、`available_cash`、`updated_at` |
 
 add 卡片文案：相对当前持股加仓；建议买入数量；预计所需金额（约 ¥…）；执行前确认可用资金。null 时不展示 0 股 / ¥0。
 
-## 13. 最近关键提交（须与 `git log` 一致）
+## 13. 账户资金（手工填写）
+
+- 模块：`backend/account_profile.py`；存储：`~/.vibe-research/account_profile.json`（`VR_DATA_DIR` 可覆盖）
+- 独立于 `portfolio.json`，不重复保存持仓数量或成本价
+- 字段：`total_assets`、`available_cash`、`updated_at`（后端生成，拒绝客户端提交）
+- 校验：`total_assets > 0`；`available_cash >= 0`；`available_cash <= total_assets`；拒绝 NaN/Infinity/字符串/布尔值/未知字段；金额保留两位小数
+- 原子写入（临时文件 + `os.replace`）；UTF-8
+- API：`GET /api/account-profile`（未配置 → `{ configured: false, data: null }`）、`PUT /api/account-profile`（后端校验 + 生成 `updated_at`）
+- 前端：Portfolio 页「账户资金」区；未配置显示「尚未配置账户资金」+「填写账户资金」按钮；已配置显示总资产/可用现金/更新时间 +「编辑」按钮；弹窗与持仓编辑风格一致；可用现金大于总资产时禁止保存；保存失败保留输入；未配置不显示 ¥0
+- 本轮仅手工填写与展示，**未接入**持仓建议 / 加仓数量限制 / 账户仓位计算 / AI prompt
+
+## 14. 最近关键提交（须与 `git log` 一致）
 
 | 短哈希 | 完整哈希（前缀） | 说明 |
 |--------|------------------|------|
+| `<新提交>` | `<待填>` | feat: add manual account funding input |
 | `8eb9225` | `8eb9225b3f0a9806eaba79697db0b89ca0335afc` | feat: upgrade daily review to nine-dimension analysis |
 | `2cf897c` | `2cf897c582fcd8298a176d04dba1665c32199350` | perf: serve persisted daily review while refreshing |
 | `cf535b8` | `cf535b860c33b1afa8eef727f36a3a26b69e6323` | fix: preserve valid review on refresh failure |
@@ -157,7 +169,7 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 | `f2ae80c` | `f2ae80ced6fbb0e69772433b8b30eed311a974e8` | fix: stabilize A-share snapshot paging requests |
 | `5dec970` | `5dec970184ee7af60da38e571245971219551dba` | feat: calculate executable add quantities |
 
-当前分支 HEAD 为 **`82b2096`**（`5dec970` 之后含验收文档提交）。
+当前分支 HEAD 为 **「feat: add manual account funding input」提交**（`5dec970` 之后的下一提交，含账户资金功能 + 文档更新）。
 
 ## 远程协作（文档撰写时）
 
