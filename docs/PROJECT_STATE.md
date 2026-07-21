@@ -121,6 +121,21 @@
 - 示例：1500 股、14.29 元、add 10% → 100 股、1429.00；add 20% → 300 股、4287.00
 - 文字中的建议买入股数/投入金额须与后端一致；禁止账户资金/总资产比例语义
 
+### 受控端到端验收（已完成，`82b2096` 之后）
+
+| 场景 | 输入 | 结果 |
+|------|------|------|
+| A | 持股 1500，现价 14.29，add 10% | `execution_quantity=100`，`estimated_amount=1429.00` ✓ |
+| B | 持股 1500，现价 14.29，add 20% | `execution_quantity=300`，`estimated_amount=4287.00` ✓ |
+| C | 持股 300，现价 14.29，add 10% | `execution_quantity=null`，`estimated_amount=null`，保留 add 与 10% 比例，含不足 100 股限制文案 ✓ |
+| 覆盖 | 模型返回 quantity=999、amount=99999 | 后端重算覆盖为正确值 ✓ |
+
+validator 验证：正确股数/金额通过，错误股数/金额拒绝，「相对当前持股」通过，「使用账户资金比例」拒绝。
+
+浏览器受控展示验证（场景 B）：相对当前持股加仓 20%；建议买入 300 股；预计所需金额约 ¥4,287.00；不显示 0 股或 ¥0。
+
+回归：validator/service/api 三套件 **136 passed**；`npm run build` 成功。无产品代码改动，验收结束时工作区干净。
+
 ## 12. 前端展示
 
 | 页面 | 文件 | 要点 |
@@ -142,7 +157,7 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 | `f2ae80c` | `f2ae80ced6fbb0e69772433b8b30eed311a974e8` | fix: stabilize A-share snapshot paging requests |
 | `5dec970` | `5dec970184ee7af60da38e571245971219551dba` | feat: calculate executable add quantities |
 
-当前分支 HEAD 为 **`5dec970`**。
+当前分支 HEAD 为 **`82b2096`**（`5dec970` 之后含验收文档提交）。
 
 ## 远程协作（文档撰写时）
 

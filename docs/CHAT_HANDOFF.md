@@ -8,7 +8,7 @@
 |----|-----|
 | 仓库（origin） | https://github.com/guilaile95/Vibe-Research |
 | 分支 | `feature/research-system-v01` |
-| 文档撰写时 HEAD | `5dec970184ee7af60da38e571245971219551dba` |
+| 当前 HEAD | `82b2096a3cad7960fbd680bae3e368726872770b` |
 | origin | `https://github.com/guilaile95/Vibe-Research.git` |
 | upstream | `https://github.com/simonlin1212/Vibe-Research.git` |
 | 跟踪 | `origin/feature/research-system-v01` |
@@ -39,7 +39,7 @@
 - 全 A 快照：东财**直连**、分页、页级重试、失败不半截
 - `POST /api/portfolio/advice`：fresh 复盘、breadth unavailable → **503 fail-closed**
 - 固定动作与比例档位；**validator 为执行字段权威**
-- add：后端计算 `execution_quantity` 与 `estimated_amount`（`5dec970`）
+- add：后端计算 `execution_quantity` 与 `estimated_amount`（`5dec970`）— **已实现并完成受控端到端验收**（见 `PROJECT_STATE.md` §11）
 - 前端复盘页 SWR 提示；持仓页结构化建议展示
 
 ## 关键安全边界
@@ -61,7 +61,7 @@
 
 ## 当前下一任务
 
-见 `docs/NEXT_TASK.md`：对 **`5dec970` add 数量/金额** 做受控端到端验收（不改产品代码、不提交临时脚本）。
+`5dec970` add 数量/金额的受控端到端验收**已完成**（见 `PROJECT_STATE.md` §11）。当前下一任务为**待产品优先级确认**（见 `docs/NEXT_TASK.md`）；新会话**不得重复该验收**，也不得自行启动新功能开发。
 
 ## 已知测试例外
 
