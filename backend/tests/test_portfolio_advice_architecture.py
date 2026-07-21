@@ -1,0 +1,110 @@
+"""持仓建议 Policy 与 Validator Pipeline 架构约束测试。"""
+
+from __future__ import annotations
+
+import inspect
+from pathlib import Path
+
+import portfolio_advice_contracts as contracts
+import portfolio_advice_prompt as prompt
+import portfolio_advice_validator as validator
+
+
+BACKEND_DIR = Path(__file__).parent.parent
+
+
+def test_policy_is_strategy_rules_single_source() -> None:
+    import portfolio_advice_policy as policy
+
+    assert policy.POLICY_VERSION == "portfolio-policy-v0.1"
+    assert policy.POLICY.add_tiers == frozenset({10.0, 20.0})
+    assert policy.POLICY.reduce_tiers == frozenset({10.0, 20.0, 30.0})
+    assert policy.POLICY.sell_tier == 100.0
+    assert dict(policy.POLICY.confidence_caps) == {
+        "low": 10.0,
+        "medium": 20.0,
+        "high": 30.0,
+    }
+    assert policy.POLICY.partial_market_add_max == 10.0
+    assert policy.POLICY.partial_market_reduce_max == 20.0
+
+
+def test_contracts_do_not_duplicate_or_reexport_policy_values() -> None:
+    import portfolio_advice_policy as policy
+
+    for name in (
+        "ADD_TIERS",
+        "REDUCE_TIERS",
+        "CONFIDENCE_CAP",
+        "SELL_TIER",
+        "PARTIAL_MARKET_ADD_MAX",
+        "PARTIAL_MARKET_REDUCE_MAX",
+    ):
+        assert not hasattr(contracts, name)
+        assert hasattr(policy, name)
+
+
+def test_prompt_and_pipeline_share_policy() -> None:
+    import portfolio_advice_pipeline as pipeline
+    import portfolio_advice_policy as policy
+
+    assert prompt.POLICY is policy.POLICY
+    assert pipeline.POLICY is policy.POLICY
+
+
+def test_validator_facade_preserves_public_imports() -> None:
+    import portfolio_advice_execution as execution
+    import portfolio_advice_pipeline as pipeline
+
+    assert validator.PortfolioAdviceValidationError is pipeline.PortfolioAdviceValidationError
+    assert validator.validate_portfolio_advice is pipeline.validate_portfolio_advice
+    assert validator.floor_to_lot is execution.floor_to_lot
+    assert validator.compute_execution_quantity is execution.compute_execution_quantity
+    assert validator.compute_add_execution_quantity is execution.compute_add_execution_quantity
+    assert validator.compute_estimated_amount is execution.compute_estimated_amount
+
+
+def test_validator_is_thin_facade_without_business_implementation() -> None:
+    source = (BACKEND_DIR / "portfolio_advice_validator.py").read_text(encoding="utf-8")
+
+    assert "re.compile" not in source
+    assert "Decimal(" not in source
+    assert "def _validate_one_holding" not in source
+    assert "from portfolio_advice_prompt import" not in source
+    assert len(source.splitlines()) <= 50
+
+
+def test_pipeline_stage_order_is_explicit_and_fixed() -> None:
+    import portfolio_advice_pipeline as pipeline
+
+    assert pipeline.PIPELINE_STAGE_NAMES == (
+        "schema_validation",
+        "legacy_compatibility",
+        "fact_reconciliation",
+        "policy_audit",
+        "execution_calculation",
+        "narrative_audit",
+        "final_assembly",
+    )
+    source = inspect.getsource(pipeline.validate_portfolio_advice)
+    positions = [source.index(stage_name) for stage_name in pipeline.PIPELINE_STAGE_NAMES]
+    assert positions == sorted(positions)
+
+
+def test_pipeline_modules_have_single_direction_dependencies() -> None:
+    policy_source = (BACKEND_DIR / "portfolio_advice_policy.py").read_text(
+        encoding="utf-8"
+    )
+    contracts_source = (BACKEND_DIR / "portfolio_advice_contracts.py").read_text(
+        encoding="utf-8"
+    )
+    policy_audit_source = (BACKEND_DIR / "portfolio_advice_policy_audit.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "from portfolio_advice_policy import" not in contracts_source
+    assert "import portfolio_advice_policy" not in contracts_source
+    assert "portfolio_advice_contracts" in policy_source
+    assert "from portfolio_advice_policy import" in policy_audit_source
+    assert "account_funding" not in policy_source
+    assert "available_cash" not in policy_source
