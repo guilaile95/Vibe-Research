@@ -51,7 +51,8 @@ export async function downloadReport(id: string, name: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE" = "GET", body?: unknown): Promise<T> {
+async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE" = "GET", body?: unknown, options?: { unwrapData?: boolean }): Promise<T> {
+  const unwrapData = options?.unwrapData ?? true;
   let resp: Response;
   const headers: Record<string, string> = { ...authHeaders() };
   const opts: RequestInit = { method };
@@ -77,11 +78,12 @@ async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE
     }
     throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
   }
-  return (payload?.data ?? payload) as T;
+  const result = unwrapData ? (payload?.data ?? payload) : payload;
+  return result as T;
 }
 
-const get = <T>(path: string) => request<T>(path, "GET");
-const put = <T>(path: string, body: unknown) => request<T>(path, "PUT", body);
+const get = <T>(path: string, options?: { unwrapData?: boolean }) => request<T>(path, "GET", undefined, options);
+const put = <T>(path: string, body: unknown, options?: { unwrapData?: boolean }) => request<T>(path, "PUT", body, options);
 
 export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;
@@ -852,7 +854,7 @@ export const api = {
     request<PortfolioData>("/portfolio/close", "POST", { code, date, price, shares, cost }),
   removeClosed: (index: number) => request<PortfolioData>(`/portfolio/close?index=${index}`, "DELETE"),
   /** 账户资金。未配置 → configured=false, data=null；不把未配置解释为 0。 */
-  getAccountProfile: () => get<AccountProfileResponse>("/account-profile"),
+  getAccountProfile: () => get<AccountProfileResponse>("/account-profile", { unwrapData: false }),
   /**
    * 保存账户资金（后端校验 + 生成 updated_at）。
    * 返回 { configured: true, data: { total_assets, available_cash, updated_at } }。
@@ -861,7 +863,7 @@ export const api = {
     put<AccountProfileResponse>("/account-profile", {
       total_assets: data.total_assets,
       available_cash: data.available_cash,
-    }),
+    }, { unwrapData: false }),
   /**
    * 结构化持仓操作建议（普通 JSON）。
    * 只发送 user_request + llm；持仓与市场上下文由服务器读取，不注入 portfolio/context/messages。

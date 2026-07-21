@@ -9,9 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import threading
-import time
 from datetime import datetime, timezone, timedelta
 
 CACHE_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
@@ -45,10 +43,23 @@ def save_account_profile(total_assets: float, available_cash: float) -> dict:
     }
     with _LOCK:
         os.makedirs(CACHE_DIR, exist_ok=True)
-        tmp = ACCOUNT_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False)
-        os.replace(tmp, ACCOUNT_FILE)
+        # 使用随机后缀避免跨进程固定文件名冲突
+        tmp = ACCOUNT_FILE + f".tmp.{os.urandom(4).hex()}"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+            os.replace(tmp, ACCOUNT_FILE)
+        except BaseException:
+            # 任何写入或替换失败：尽力清理临时文件，不覆盖原始异常
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass  # 清理临时文件失败只忽略，不掩盖原始写入异常
+            raise
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass  # 成功替换后清理临时文件，清理失败可忽略
     return payload
 
 

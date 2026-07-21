@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle, Sparkles } from "lucide-react";
+import { Plus, ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle, Sparkles, RotateCw } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import {
@@ -236,6 +236,8 @@ export function Portfolio() {
   // 账户资金（手工填写）
   const [acct, setAcct] = useState<AccountProfileData | null>(null);
   const [acctConfigured, setAcctConfigured] = useState(false);
+  const [acctLoading, setAcctLoading] = useState(false);
+  const [acctLoadError, setAcctLoadError] = useState<string | null>(null);
   const [acctOpen, setAcctOpen] = useState(false);
   const [accTotal, setAccTotal] = useState("");
   const [accCash, setAccCash] = useState("");
@@ -280,11 +282,28 @@ export function Portfolio() {
   }, [clearAdvice]);
 
   const loadAcct = useCallback(async () => {
+    setAcctLoading(true);
+    setAcctLoadError(null);
     try {
       const resp = await api.getAccountProfile();
-      setAcctConfigured(resp.configured);
-      setAcct(resp.data);
-    } catch { /* 账户资金可选，加载失败不阻塞页面 */ }
+      // resp 现在是 AccountProfileResponse（{configured, data}），
+      // 因为 getAccountProfile 使用 unwrapData=false。
+      if (resp.configured && resp.data) {
+        setAcctConfigured(true);
+        setAcct(resp.data);
+      } else {
+        setAcctConfigured(false);
+        setAcct(null);
+      }
+      setAcctLoadError(null);
+    } catch (e) {
+      // GET 失败 ≠ 未配置。不重置现有已配置数据。
+      setAcctLoadError(e instanceof ApiError ? e.message : "账户资金加载失败");
+      setAcctConfigured(prev => prev);
+      setAcct(prev => prev);
+    } finally {
+      setAcctLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -351,9 +370,15 @@ export function Portfolio() {
     setAcctErr(null);
     try {
       const resp = await api.saveAccountProfile({ total_assets: total, available_cash: cash });
-      setAcctConfigured(true);
-      setAcct(resp.data);
-      setAcctOpen(false);
+      // resp 现在是 AccountProfileResponse（由于使用了 unwrapData=false）。
+      if (resp.configured && resp.data) {
+        setAcctConfigured(true);
+        setAcct(resp.data);
+        setAcctOpen(false);
+      } else {
+        // 服务端返回非法结构：不关闭弹窗、保留输入、显示错误
+        setAcctErr("服务端返回数据异常，请重试");
+      }
     } catch (e) {
       // 保存失败保留输入内容，仅显示错误
       setAcctErr(e instanceof ApiError ? e.message : "保存失败");
@@ -486,7 +511,24 @@ export function Portfolio() {
       {/* 账户资金 */}
       <GlassCard className="mb-4">
         <h3 className="mb-3 text-sm font-semibold">账户资金</h3>
-        {acctConfigured && acct ? (
+        {acctLoading ? (
+          <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            加载中…
+          </div>
+        ) : acctLoadError ? (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              {acctLoadError}
+            </div>
+            <button onClick={loadAcct} disabled={acctLoading}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
+              <RotateCw className={cn("h-4 w-4", acctLoading && "animate-spin")} />
+              重试
+            </button>
+          </div>
+        ) : acctConfigured && acct ? (
           <div className="flex flex-wrap items-end gap-4">
             <div>
               <p className="mb-1 text-xs text-muted-foreground">账户总资产</p>

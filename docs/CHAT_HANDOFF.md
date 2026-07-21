@@ -42,6 +42,7 @@
 - add：后端计算 `execution_quantity` 与 `estimated_amount`（`5dec970`）— **已实现并完成受控端到端验收**（见 `PROJECT_STATE.md` §11）
 - 前端复盘页 SWR 提示；持仓页结构化建议展示
 - 账户资金手工填写：`GET`/`PUT /api/account-profile`；`account_profile.json`（独立于 `portfolio.json`）；未配置不解释为 0；Portfolio 页展示 + 弹窗编辑（本轮仅手工填写与展示，未接入持仓建议）
+- **fe54b8f Bug**：`request()` 通用解包破坏 account-profile 响应结构，UI 永远显示未配置——已修复（`unwrapData` 选项）
 
 ## 关键安全边界
 

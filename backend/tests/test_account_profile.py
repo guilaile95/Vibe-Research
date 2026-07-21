@@ -168,3 +168,76 @@ def test_validate_cash_equals_total_accepted():
     })
     assert total == 100000.0
     assert cash == 100000.0
+
+
+def test_os_replace_failure_cleans_tmp():
+    """os.replace 失败时：旧文件不变、不残留临时文件。"""
+    _delete_file()
+    account_profile.save_account_profile(99999, 33333)
+    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+        good_bytes = f.read()
+
+    def fail_replace(src, dst):
+        raise OSError("simulated replace failure")
+
+    import unittest.mock as mock
+    with mock.patch("account_profile.os.replace", side_effect=fail_replace):
+        try:
+            account_profile.save_account_profile(111, 22)
+        except OSError:
+            pass
+
+    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+        after = f.read()
+    assert after == good_bytes
+
+    dir_files = os.listdir(account_profile.CACHE_DIR)
+    acc_files = [f for f in dir_files if f.startswith("account_profile")]
+    assert len(acc_files) == 1, f"残留临时文件: {acc_files}"
+
+
+def test_success_no_tmp_residue():
+    """成功写入后不残留临时文件。"""
+    _delete_file()
+    account_profile.save_account_profile(50000, 10000)
+    dir_files = os.listdir(account_profile.CACHE_DIR)
+    acc_files = [f for f in dir_files if f.startswith("account_profile")]
+    assert len(acc_files) == 1
+    assert acc_files[0] == "account_profile.json"
+
+
+def test_concurrent_write_valid():
+    """并发写入后最终文件是完整合法 JSON。"""
+    _delete_file()
+    import threading
+
+    n = 30
+    barrier = threading.Barrier(n)
+    errors = []
+
+    def _put(total):
+        barrier.wait(timeout=5)
+        try:
+            account_profile.save_account_profile(total, total // 10)
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=_put, args=(100000 + i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(errors) == 0, f"并发写入错误: {errors}"
+    import json
+    with open(account_profile.ACCOUNT_FILE, encoding="utf-8") as f:
+        data = json.load(f)
+    assert "total_assets" in data
+    assert "available_cash" in data
+    assert "updated_at" in data
+    assert isinstance(data["total_assets"], (int, float))
+    assert data["total_assets"] >= 100000
+
+    dir_files = os.listdir(account_profile.CACHE_DIR)
+    acc_files = [f for f in dir_files if f.startswith("account_profile")]
+    assert len(acc_files) == 1, f"残留临时文件: {acc_files}"

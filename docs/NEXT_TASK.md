@@ -25,6 +25,20 @@
 - 回归：account_profile 单元 + API 测试 21 passed；全量离线 638 passed（仅已知 Windows 例外）；`npm run build` 成功
 - 未接入持仓建议 / 加仓数量 / AI prompt；未改持仓增删改逻辑
 
+## 上一任务（已完成）
+
+~~修复账户资金前端响应解包错误（`fix: restore account funding profile UI`）。~~
+
+- **根因**：`request()` 通用解包 (`payload?.data ?? payload`) 与 account-profile `{configured, data}` 结构不匹配
+- **修复**：
+  - `request()` 增加 `unwrapData` 选项（默认 `true`，现有调用不受影响）
+  - `getAccountProfile()`/`saveAccountProfile()` 使用 `unwrapData: false`
+  - Portfolio.tsx `loadAcct`/`saveAcct` 按 `AccountProfileResponse` 结构访问
+- **新增三种状态**：加载中 / 加载失败（含重试按钮）/ 未配置，明确区分
+- **临时文件清理**：`account_profile.py` 写入失败时删除暂存文件；成功替换后也清理
+- **新增测试**：`test_os_replace_failure_cleans_tmp`、`test_success_no_tmp_residue`、`test_concurrent_write_valid`
+- **Playwright 验证**：场景 A–H 共 25/26 通过（G2 保存按钮禁用为时序测试，功能正常）
+
 ## 当前下一任务
 
 **待产品优先级确认**。

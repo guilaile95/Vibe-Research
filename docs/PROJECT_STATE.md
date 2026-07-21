@@ -156,11 +156,17 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 - API：`GET /api/account-profile`（未配置 → `{ configured: false, data: null }`）、`PUT /api/account-profile`（后端校验 + 生成 `updated_at`）
 - 前端：Portfolio 页「账户资金」区；未配置显示「尚未配置账户资金」+「填写账户资金」按钮；已配置显示总资产/可用现金/更新时间 +「编辑」按钮；弹窗与持仓编辑风格一致；可用现金大于总资产时禁止保存；保存失败保留输入；未配置不显示 ¥0
 - 本轮仅手工填写与展示，**未接入**持仓建议 / 加仓数量限制 / 账户仓位计算 / AI prompt
+- **已知 BUG**（`fe54b8f`）：前端的 `request()` 通用解包 (`payload?.data ?? payload`) 导致 `getAccountProfile()` 返回内层数据而非 `{configured, data}` 包装，UI 永远显示「尚未配置账户资金」。已修复于 `fix: restore account funding profile UI`（见第 14 节）。
+  - `request()` 增加 `unwrapData` 选项（默认 `true`），account-profile 使用 `unwrapData: false`
+  - `loadAcct`/`saveAcct` 正确按 `AccountProfileResponse` 处理响应
+  - 新增加载中 / 加载失败（含重试按钮）/ 未配置三种状态
+  - `account_profile.py`：写入失败时清理临时文件；新增并发、残留临时文件测试
 
 ## 14. 最近关键提交（须与 `git log` 一致）
 
 | 短哈希 | 完整哈希（前缀） | 说明 |
 |--------|------------------|------|
+| `<新提交>` | `<待填>` | fix: restore account funding profile UI |
 | `fe54b8f` | `fe54b8f68fd870aa5cac41d452c855643e1b25a7` | feat: add manual account funding input |
 | `8eb9225` | `8eb9225b3f0a9806eaba79697db0b89ca0335afc` | feat: upgrade daily review to nine-dimension analysis |
 | `2cf897c` | `2cf897c582fcd8298a176d04dba1665c32199350` | perf: serve persisted daily review while refreshing |
