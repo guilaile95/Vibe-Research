@@ -488,8 +488,16 @@ def build_portfolio_advice_context(
         holdings, market_ctx=market_ctx, evidence=market_evidence
     )
     warnings = list(_as_list(market_ctx.get("data_health", {}).get("warnings")))
-    # 仅保留字符串 warnings，并稳定去重
-    warnings = _dedupe_keep_order(warnings)
+    # 仅保留字符串 warnings，并稳定去重；清洗网络异常泄漏
+    try:
+        from daily_review_errors import sanitize_warning_list
+        warnings = sanitize_warning_list(warnings)
+    except Exception:  # noqa: BLE001
+        warnings = _dedupe_keep_order(
+            [w for w in warnings if isinstance(w, str) and w.strip()]
+        )
+    else:
+        warnings = _dedupe_keep_order(warnings)
 
     ctx = {
         "schema_version": SCHEMA_VERSION,

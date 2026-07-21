@@ -25,6 +25,10 @@ class PortfolioAdviceUnavailableError(ValueError):
     """无有效持仓等业务前置条件不满足。"""
 
 
+class PortfolioAdviceMarketDataError(RuntimeError):
+    """市场核心数据（如广度）不可用，拒绝生成持仓建议。"""
+
+
 class PortfolioAdviceModelError(RuntimeError):
     """模型调用或流式协议失败。"""
 
@@ -37,6 +41,7 @@ _EMPTY_HOLDINGS_MSG = "当前没有持仓，无法生成持仓操作建议"
 _EMPTY_OUTPUT_MSG = "持仓建议模型未返回有效内容"
 _INVALID_JSON_MSG = "持仓建议模型输出不是有效的JSON对象"
 _VALIDATOR_FAIL_MSG = "持仓建议模型输出未通过结构和执行约束校验"
+_MARKET_UNAVAILABLE_MSG = "市场核心数据暂不可用，无法生成可靠的持仓操作建议"
 
 
 def _normalize_user_request(user_request: Any) -> str | None:
@@ -64,6 +69,21 @@ def _context_to_json(context: dict) -> str:
     )
 
 
+def _market_breadth_unavailable(review: dict) -> bool:
+    """市场广度组件是否不可用（失败关闭用）。"""
+    if not isinstance(review, dict):
+        return True
+    health = review.get("data_health") if isinstance(review.get("data_health"), dict) else {}
+    comps = health.get("components") if isinstance(health.get("components"), dict) else {}
+    if comps.get("breadth") == "unavailable":
+        return True
+    me = review.get("market_environment") if isinstance(review.get("market_environment"), dict) else {}
+    breadth = me.get("breadth") if isinstance(me.get("breadth"), dict) else {}
+    if breadth.get("status") == "unavailable":
+        return True
+    return False
+
+
 def prepare_portfolio_advice_messages(
     user_request: str | None = None,
 ) -> dict:
@@ -74,6 +94,11 @@ def prepare_portfolio_advice_messages(
     dict
         ``portfolio`` / ``daily_review`` / ``context`` / ``context_json`` / ``messages``
         仅供后端内部编排与测试使用。
+
+    Raises
+    ------
+    PortfolioAdviceMarketDataError
+        市场广度 unavailable 时，不构建 messages、不调用模型。
     """
     request = _normalize_user_request(user_request)
 
@@ -83,6 +108,9 @@ def prepare_portfolio_advice_messages(
     _require_holdings(portfolio_data)
 
     review = daily_review.generate_daily_review()
+    if _market_breadth_unavailable(review):
+        raise PortfolioAdviceMarketDataError(_MARKET_UNAVAILABLE_MSG)
+
     context = portfolio_advice_context.build_portfolio_advice_context(
         portfolio_data,
         review,

@@ -18,9 +18,14 @@ import threading
 import time
 from datetime import datetime, timezone, timedelta
 
+import logging
+
 import astock
 import daily_review_cache
+import daily_review_errors
 import market
+
+_log = logging.getLogger("vibe.daily_review")
 
 BEIJING = timezone(timedelta(hours=8))
 SCHEMA_VERSION = "daily-review-v0.1"
@@ -41,6 +46,8 @@ _review_lock = threading.Lock()
 # 后台刷新 single-flight（仅展示路径）
 _bg_refresh_lock = threading.Lock()
 _bg_refreshing = False
+_refresh_failed = False
+_refresh_error: str | None = None
 
 # 组件展示前缀
 _PREFIX = {
@@ -80,11 +87,20 @@ def _safe_call(fn, *, source: str, empty_check=None, label: str = ""):
     try:
         raw = fn()
     except Exception as e:  # noqa: BLE001
+        _log.warning("daily_review component failed source=%s: %s", source, e, exc_info=False)
+        safe = daily_review_errors.sanitize_public_message(
+            f"{type(e).__name__}: {e}",
+            default=daily_review_errors.SAFE_MARKET_COMPONENT_UNAVAILABLE,
+        )
+        if "eastmoney" in source or "snapshot" in source or source == "eastmoney_push2":
+            # 广度/东财类优先统一广度文案
+            if "breadth" in label or "市场广度" in label or "clist" in str(e).lower() or "a_share" in str(e).lower():
+                safe = daily_review_errors.SAFE_BREADTH_UNAVAILABLE
         return _wrap(
             "unavailable",
             source=source,
             data=None,
-            warnings=[f"{type(e).__name__}: {e}"],
+            warnings=[safe],
         )
     if empty_check is not None and empty_check(raw):
         return _wrap(
@@ -175,11 +191,11 @@ def _collect_warnings(
             out.append(msg)
 
     for w in top_level:
-        add(w)
+        add(daily_review_errors.sanitize_public_message(str(w)) if w else "")
     for label, warns in labeled:
         prefix = _PREFIX.get(label, label)
         for w in warns or []:
-            text = str(w)
+            text = daily_review_errors.sanitize_public_message(str(w))
             # 已带前缀则不再套一层
             full = text if text.startswith("[") else f"[{prefix}] {text}"
             add(full)
@@ -189,6 +205,25 @@ def _collect_warnings(
 def _clear_review_cache() -> None:
     """清空进程内完整复盘缓存（仅测试 / 运维；默认不删磁盘）。"""
     _review_cache.clear()
+
+
+def _clear_refresh_failure() -> None:
+    global _refresh_failed, _refresh_error
+    with _bg_refresh_lock:
+        _refresh_failed = False
+        _refresh_error = None
+
+
+def _set_refresh_failure(msg: str | None = None) -> None:
+    global _refresh_failed, _refresh_error
+    with _bg_refresh_lock:
+        _refresh_failed = True
+        _refresh_error = msg or daily_review_errors.SAFE_REFRESH_FAILED
+
+
+def _refresh_failure_state() -> tuple[bool, str | None]:
+    with _bg_refresh_lock:
+        return _refresh_failed, _refresh_error
 
 
 def _cached_review() -> dict | None:
@@ -221,12 +256,31 @@ def _should_cache_review(result) -> bool:
     return result.get("status") in ("normal", "partial")
 
 
-def _store_review(result: dict) -> None:
+def _should_replace_memory(result: dict) -> bool:
+    """内存写入质量规则：关键组件不可用不写入；partial 不覆盖已有 normal。"""
     if not _should_cache_review(result):
+        return False
+    if daily_review_cache.has_critical_unavailable(result):
+        return False
+    existing = _cached_review()
+    if (
+        result.get("status") == "partial"
+        and existing is not None
+        and existing.get("status") == "normal"
+    ):
+        return False
+    return True
+
+
+def _store_review(result: dict) -> None:
+    # 清洗对外 warnings，避免泄漏底层网络异常
+    daily_review_errors.sanitize_review_public_fields(result)
+
+    if not _should_replace_memory(result):
         return
     # 存独立副本，避免调用方修改污染缓存
     _review_cache[_REVIEW_CACHE_KEY] = (time.time(), copy.deepcopy(result))
-    # 同步持久化最近成功（失败不影响内存命中）
+    # 同步持久化（内部再判 partial 不覆盖 normal）
     saved_at = result.get("generated_at")
     if not isinstance(saved_at, str) or not saved_at.strip():
         saved_at = _now_str()
@@ -234,7 +288,6 @@ def _store_review(result: dict) -> None:
         daily_review_cache.save_latest_review(result, saved_at=saved_at)
     except Exception:  # noqa: BLE001
         pass
-
 
 def _age_seconds_from_saved_at(saved_at: str | None) -> float | None:
     if not isinstance(saved_at, str) or not saved_at.strip():
@@ -253,23 +306,64 @@ def _is_background_refreshing() -> bool:
         return _bg_refreshing
 
 
-def _kick_background_refresh() -> bool:
-    """启动至多一个后台 fresh 刷新线程。已在刷新或内存已新鲜时返回 False。"""
-    global _bg_refreshing
+def _result_is_refresh_success(result: dict | None) -> bool:
+    """后台刷新是否算成功：normal/partial 且关键组件均可用。"""
+    if not isinstance(result, dict):
+        return False
+    if result.get("status") not in ("normal", "partial"):
+        return False
+    if daily_review_cache.has_critical_unavailable(result):
+        return False
+    return True
+
+
+def _kick_background_refresh(*, force: bool = False) -> bool:
+    """启动至多一个后台 fresh 刷新线程。
+
+    已在刷新 / 内存已新鲜 / 已失败且未 force → 返回 False（避免轮询打满重试）。
+    """
+    global _bg_refreshing, _refresh_failed, _refresh_error
     with _bg_refresh_lock:
         if _bg_refreshing:
             return False
         if _cached_review() is not None:
             return False
+        if _refresh_failed and not force:
+            return False
         _bg_refreshing = True
+        # 新一轮尝试开始时先清失败标记，完成后再按结果设置
+        _refresh_failed = False
+        _refresh_error = None
 
     def worker() -> None:
         global _bg_refreshing
         try:
             # 复用 generate_daily_review 的锁与聚合逻辑
-            generate_daily_review()
-        except Exception:  # noqa: BLE001 — 后台失败保留旧磁盘结果
-            pass
+            result = generate_daily_review()
+            if _result_is_refresh_success(result):
+                # 若因质量规则未写入内存，仍以磁盘/旧内存为准
+                mem = _cached_review()
+                if mem is not None and not daily_review_cache.has_critical_unavailable(mem):
+                    _clear_refresh_failure()
+                elif daily_review_cache.should_persist_review(
+                    result, daily_review_cache.load_latest_review()[0]
+                ):
+                    _clear_refresh_failure()
+                else:
+                    # 生成了降级包且未覆盖旧 normal
+                    if daily_review_cache.load_latest_review()[0] is not None:
+                        _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
+                    else:
+                        _clear_refresh_failure()
+            else:
+                _log.warning("background refresh produced degraded review status=%s",
+                             (result or {}).get("status"))
+                if daily_review_cache.load_latest_review()[0] is not None:
+                    _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
+        except Exception as e:  # noqa: BLE001 — 后台失败保留旧磁盘结果
+            _log.warning("background refresh failed: %s", e, exc_info=False)
+            if daily_review_cache.load_latest_review()[0] is not None:
+                _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
         finally:
             with _bg_refresh_lock:
                 _bg_refreshing = False
@@ -306,6 +400,7 @@ def _build_daily_review() -> dict:
     try:
         breadth_raw = market.get_market_breadth()
     except Exception as e:  # noqa: BLE001
+        _log.warning("get_market_breadth failed: %s", e, exc_info=False)
         breadth_raw = {
             "status": "unavailable",
             "source": "eastmoney_push2",
@@ -313,10 +408,12 @@ def _build_daily_review() -> dict:
             "data_time": None,
             "fetched_at": None,
             "is_stale": False,
-            "warnings": [f"{type(e).__name__}: {e}"],
+            "warnings": [daily_review_errors.SAFE_BREADTH_UNAVAILABLE],
             "data": None,
         }
     breadth = _pass_envelope(breadth_raw)
+    if isinstance(breadth, dict) and isinstance(breadth.get("warnings"), list):
+        breadth["warnings"] = daily_review_errors.sanitize_warning_list(breadth["warnings"])
     labeled_warns.append(("breadth", breadth.get("warnings") or []))
 
     # —— 短线情绪 ——
@@ -485,8 +582,8 @@ def generate_daily_review() -> dict:
 
     进程内完整结果缓存（TTL=300s）+ single-flight：
     - 命中返回 deepcopy（generated_at 为生成时时间，不刷新）；
-    - 仅 normal / partial 写入内存缓存，并持久化最近成功；
-    - unavailable / 异常 / 非法不缓存、不覆盖磁盘；
+    - 仅高质量 normal / partial 写入内存与磁盘；
+    - 关键组件 unavailable 的 partial / unavailable 不覆盖已有 normal；
     - 并发时仅一线程执行真实聚合，其余等锁后读缓存。
 
     注意：持仓建议等必须走本函数，不得使用 get_daily_review_for_display 的 stale 结果。
@@ -500,8 +597,29 @@ def generate_daily_review() -> dict:
         if cached is not None:
             return copy.deepcopy(cached)
         result = _build_daily_review()
+        daily_review_errors.sanitize_review_public_fields(result)
         _store_review(result)
         return copy.deepcopy(result)
+
+
+def _cache_meta(
+    *,
+    source: str,
+    stale: bool,
+    refreshing: bool,
+    saved_at: str | None = None,
+    age_seconds: float | None = None,
+) -> dict:
+    failed, err = _refresh_failure_state()
+    return {
+        "source": source,
+        "stale": stale,
+        "refreshing": refreshing,
+        "saved_at": saved_at,
+        "age_seconds": age_seconds,
+        "refresh_failed": bool(failed and stale),
+        "refresh_error": err if (failed and stale) else None,
+    }
 
 
 def get_daily_review_for_display() -> dict:
@@ -509,56 +627,67 @@ def get_daily_review_for_display() -> dict:
 
     1. 新鲜内存缓存 → 立即返回（stale=false）
     2. 无内存但有持久化成功包 → 返回旧结果（stale=true）并 single-flight 后台刷新
-    3. 皆无 → 同步 generate_daily_review（live）
+    3. 刷新失败时保留旧结果，refresh_failed=true，不再自动无限重试
+    4. 皆无 → 同步 generate_daily_review（live）
     """
     cached = _cached_review()
     if cached is not None:
+        data = copy.deepcopy(cached)
+        daily_review_errors.sanitize_review_public_fields(data)
         return {
-            "data": copy.deepcopy(cached),
-            "cache_meta": {
-                "source": "memory",
-                "stale": False,
-                "refreshing": _is_background_refreshing(),
-                "saved_at": None,
-                "age_seconds": _cached_review_age_seconds(),
-            },
+            "data": data,
+            "cache_meta": _cache_meta(
+                source="memory",
+                stale=False,
+                refreshing=_is_background_refreshing(),
+                saved_at=None,
+                age_seconds=_cached_review_age_seconds(),
+            ),
         }
 
     review, saved_at = daily_review_cache.load_latest_review()
     if review is not None:
+        daily_review_errors.sanitize_review_public_fields(review)
         # 窗口期：后台可能已写入内存
         cached = _cached_review()
         if cached is not None:
+            data = copy.deepcopy(cached)
+            daily_review_errors.sanitize_review_public_fields(data)
             return {
-                "data": copy.deepcopy(cached),
-                "cache_meta": {
-                    "source": "memory",
-                    "stale": False,
-                    "refreshing": _is_background_refreshing(),
-                    "saved_at": None,
-                    "age_seconds": _cached_review_age_seconds(),
-                },
+                "data": data,
+                "cache_meta": _cache_meta(
+                    source="memory",
+                    stale=False,
+                    refreshing=_is_background_refreshing(),
+                    saved_at=None,
+                    age_seconds=_cached_review_age_seconds(),
+                ),
             }
-        _kick_background_refresh()
+        failed, _err = _refresh_failure_state()
+        started = False
+        if not failed:
+            started = _kick_background_refresh()
+        refreshing = started or _is_background_refreshing()
         return {
             "data": copy.deepcopy(review),
-            "cache_meta": {
-                "source": "persisted",
-                "stale": True,
-                "refreshing": True,
-                "saved_at": saved_at,
-                "age_seconds": _age_seconds_from_saved_at(saved_at),
-            },
+            "cache_meta": _cache_meta(
+                source="persisted",
+                stale=True,
+                refreshing=refreshing and not failed,
+                saved_at=saved_at,
+                age_seconds=_age_seconds_from_saved_at(saved_at),
+            ),
         }
 
     data = generate_daily_review()
+    daily_review_errors.sanitize_review_public_fields(data)
     return {
         "data": data,
-        "cache_meta": {
-            "source": "live",
-            "stale": False,
-            "refreshing": False,
-            "saved_at": None,
-            "age_seconds": 0.0,
-        },
+        "cache_meta": _cache_meta(
+            source="live",
+            stale=False,
+            refreshing=False,
+            saved_at=None,
+            age_seconds=0.0,
+        ),
     }

@@ -167,7 +167,9 @@ export function DailyReview() {
     setDr(data);
     setCacheMeta(meta ?? null);
     setDrErr(null);
-    if (meta?.stale) {
+    if (meta?.refresh_failed) {
+      setStaleRefreshNote("最新数据刷新失败，当前继续显示上次成功结果。");
+    } else if (meta?.stale) {
       setStaleRefreshNote("当前显示上次成功结果，后台正在刷新");
     } else {
       setStaleRefreshNote(null);
@@ -193,13 +195,13 @@ export function DailyReview() {
         const res = await api.dailyReview();
         if (!mountedRef.current) return;
         applyDailyReviewPayload(res.data, res.cache_meta);
-        if (!res.cache_meta?.stale) {
+        if (!res.cache_meta?.stale || res.cache_meta?.refresh_failed) {
           clearPoll();
         }
       } catch {
         // 轮询失败：保留旧结果，继续尝试直至超时
         if (mountedRef.current) {
-          setStaleRefreshNote("后台刷新暂时失败，仍显示上次成功结果");
+          setStaleRefreshNote("最新数据刷新失败，当前继续显示上次成功结果。");
         }
       }
     }, 2000);
@@ -212,7 +214,8 @@ export function DailyReview() {
     api.dailyReview()
       .then((res) => {
         applyDailyReviewPayload(res.data, res.cache_meta);
-        if (res.cache_meta?.stale) {
+        // 仅 stale 且未失败时轮询；refresh_failed 停止轮询，避免打满重试
+        if (res.cache_meta?.stale && !res.cache_meta?.refresh_failed) {
           startStalePoll();
         }
       })

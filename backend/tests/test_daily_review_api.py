@@ -19,11 +19,15 @@ def _clear_review_state():
     daily_review._clear_review_cache()
     with daily_review._bg_refresh_lock:
         daily_review._bg_refreshing = False
+        daily_review._refresh_failed = False
+        daily_review._refresh_error = None
     daily_review_cache.clear_latest_review_file()
     yield
     daily_review._clear_review_cache()
     with daily_review._bg_refresh_lock:
         daily_review._bg_refreshing = False
+        daily_review._refresh_failed = False
+        daily_review._refresh_error = None
     daily_review_cache.clear_latest_review_file()
 
 

@@ -3,8 +3,12 @@
 路径：VR_DATA_DIR/daily_review_latest.json
       或默认 ~/.vibe-research/daily_review_latest.json
 
-仅持久化 status 为 normal / partial 的完整复盘包；原子写入；
-坏文件安全忽略。不写 SQLite，不影响历史快照。
+质量规则：
+- normal 可替换 normal / partial
+- partial 不得覆盖已有 normal
+- 关键组件（indices / breadth / emotion）unavailable → 不持久化
+- unavailable 永不持久化
+- 原子写入；坏文件安全忽略；不写 SQLite
 """
 
 from __future__ import annotations
@@ -17,6 +21,9 @@ from typing import Any
 
 CACHE_SCHEMA_VERSION = "daily-review-cache-v0.1"
 CACHE_FILENAME = "daily_review_latest.json"
+
+# 与 daily_review.data_health.components 键对齐
+CRITICAL_COMPONENT_KEYS = ("indices", "breadth", "emotion")
 
 _IO_LOCK = threading.Lock()
 
@@ -31,17 +38,46 @@ def cache_path() -> str:
     return os.path.join(data_dir(), CACHE_FILENAME)
 
 
-def _is_cacheable_review(review: Any) -> bool:
+def has_critical_unavailable(review: Any) -> bool:
+    """关键组件 indices / breadth / emotion 任一无可用则 True。"""
+    if not isinstance(review, dict):
+        return True
+    health = review.get("data_health") if isinstance(review.get("data_health"), dict) else {}
+    comps = health.get("components") if isinstance(health.get("components"), dict) else {}
+    for key in CRITICAL_COMPONENT_KEYS:
+        if comps.get(key) == "unavailable":
+            return True
+    return False
+
+
+def _is_structurally_cacheable(review: Any) -> bool:
     if not isinstance(review, dict):
         return False
     return review.get("status") in ("normal", "partial")
 
 
-def save_latest_review(review: dict, *, saved_at: str) -> bool:
-    """将成功复盘原子写入磁盘。不可缓存时返回 False 且不改动旧文件。"""
-    if not _is_cacheable_review(review):
+def should_persist_review(new_review: Any, existing_review: Any | None = None) -> bool:
+    """是否允许将 new_review 写入磁盘（相对 existing_review）。"""
+    if not _is_structurally_cacheable(new_review):
         return False
+    if new_review.get("status") == "unavailable":
+        return False
+    if has_critical_unavailable(new_review):
+        return False
+    if new_review.get("status") == "partial":
+        if isinstance(existing_review, dict) and existing_review.get("status") == "normal":
+            # partial 不得覆盖 normal
+            return False
+    return True
+
+
+def save_latest_review(review: dict, *, saved_at: str) -> bool:
+    """按质量规则原子写入。不满足时返回 False 且不改动旧文件。"""
     if not isinstance(saved_at, str) or not saved_at.strip():
+        return False
+
+    existing, _ = load_latest_review()
+    if not should_persist_review(review, existing):
         return False
 
     payload = {
@@ -99,9 +135,11 @@ def load_latest_review() -> tuple[dict | None, str | None]:
 
     if not isinstance(raw, dict):
         return None, None
-    # schema 宽松：未知版本仍尝试读取 review
     review = raw.get("review")
-    if not _is_cacheable_review(review):
+    if not _is_structurally_cacheable(review):
+        return None, None
+    # 磁盘上若已是关键组件不可用，视为无效（不删除文件，但拒绝使用）
+    if has_critical_unavailable(review):
         return None, None
     saved_at = raw.get("saved_at")
     if not isinstance(saved_at, str) or not saved_at.strip():

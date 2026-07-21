@@ -260,6 +260,9 @@ export interface DailyReviewCacheMeta {
   refreshing: boolean;
   saved_at: string | null;
   age_seconds: number | null;
+  /** 后台刷新失败：继续展示旧结果 */
+  refresh_failed?: boolean;
+  refresh_error?: string | null;
 }
 
 /** 结构化每日复盘（GET /api/daily-review 的 data 字段） */

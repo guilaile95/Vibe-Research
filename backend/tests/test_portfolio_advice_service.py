@@ -722,7 +722,8 @@ def test_partial_review_still_prepares():
     assert out["daily_review"]["status"] == "partial"
 
 
-def test_unavailable_review_still_prepares():
+def test_unavailable_review_fails_closed_before_context():
+    """市场广度 unavailable 时失败关闭：不构建 context、不调模型。"""
     pf = _portfolio()
     review = _review(status="unavailable")
     with (
@@ -731,14 +732,16 @@ def test_unavailable_review_still_prepares():
         patch.object(
             svc.portfolio_advice_context,
             "build_portfolio_advice_context",
-            return_value={"status": "unavailable", "holdings": []},
         ) as m_ctx,
         patch.object(
-            svc.portfolio_advice_prompt, "build_portfolio_advice_messages", return_value=_msgs()
-        ),
+            svc.portfolio_advice_prompt, "build_portfolio_advice_messages"
+        ) as m_prompt,
     ):
-        prepare_portfolio_advice_messages()
-    m_ctx.assert_called_once_with(pf, review)
+        with pytest.raises(svc.PortfolioAdviceMarketDataError) as ei:
+            prepare_portfolio_advice_messages()
+    assert "市场核心数据暂不可用" in str(ei.value)
+    m_ctx.assert_not_called()
+    m_prompt.assert_not_called()
 
 
 def test_missing_quote_not_filled_by_service():

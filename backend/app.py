@@ -168,6 +168,9 @@ def portfolio_advice(req: PortfolioAdviceRequest):
         return {"data": result}
     except portfolio_advice_service.PortfolioAdviceUnavailableError as e:
         raise HTTPException(409, str(e)) from e
+    except portfolio_advice_service.PortfolioAdviceMarketDataError as e:
+        # 市场核心数据不可用：503 + 安全业务文案（不泄漏底层网络异常）
+        raise HTTPException(503, str(e) or "市场核心数据暂不可用，无法生成可靠的持仓操作建议") from None
     except portfolio_advice_service.PortfolioAdviceModelError:
         raise HTTPException(502, "持仓建议模型调用失败") from None
     except portfolio_advice_service.PortfolioAdviceModelOutputError:

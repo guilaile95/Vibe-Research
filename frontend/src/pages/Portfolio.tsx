@@ -338,6 +338,10 @@ export function Portfolio() {
       if (e instanceof ApiError) {
         if (e.status === 409) {
           setAdviceError(e.message || "当前没有持仓，无法生成持仓操作建议");
+        } else if (e.status === 503) {
+          setAdviceError(
+            e.message || "市场核心数据暂不可用，无法生成可靠的持仓操作建议",
+          );
         } else if (e.status === 502) {
           const d = e.message || "";
           if (d === "持仓建议模型调用失败" || d === "持仓建议模型输出无效") {

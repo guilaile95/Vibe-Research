@@ -46,12 +46,26 @@ def _isolate_cache(tmp_path, monkeypatch):
     # 重置后台刷新标志
     with daily_review._bg_refresh_lock:
         daily_review._bg_refreshing = False
+        daily_review._refresh_failed = False
+        daily_review._refresh_error = None
     daily_review_cache.clear_latest_review_file()
     yield
     daily_review._clear_review_cache()
     with daily_review._bg_refresh_lock:
         daily_review._bg_refreshing = False
+        daily_review._refresh_failed = False
+        daily_review._refresh_error = None
     daily_review_cache.clear_latest_review_file()
+
+
+def _packet_critical_unavailable(status="partial", generated_at="2026-07-21 12:00:00"):
+    p = _packet(status=status, generated_at=generated_at)
+    p["data_health"]["components"]["breadth"] = "unavailable"
+    p["warnings"] = [
+        "RuntimeError: a_share_snapshot page 6 request failed: "
+        "HTTPSConnectionPool(host='push2.eastmoney.com', port=443): ProxyError"
+    ]
+    return p
 
 
 # ── 1/2 persist rules ──────────────────────────────────────────────
@@ -67,6 +81,8 @@ def test_persist_normal_and_partial(tmp_path):
     assert raw["schema_version"] == "daily-review-cache-v0.1"
     assert raw["review"]["status"] == "normal"
 
+    # 无旧 normal 时 partial（关键组件正常）可落盘
+    daily_review_cache.clear_latest_review_file()
     ok_p = daily_review_cache.save_latest_review(
         _packet("partial", generated_at="2026-07-21 11:00:00"),
         saved_at="2026-07-21 11:00:00",
@@ -75,6 +91,33 @@ def test_persist_normal_and_partial(tmp_path):
     review, saved_at = daily_review_cache.load_latest_review()
     assert review["status"] == "partial"
     assert saved_at == "2026-07-21 11:00:00"
+
+
+def test_partial_does_not_overwrite_normal():
+    daily_review_cache.save_latest_review(
+        _packet("normal"), saved_at="2026-07-21 10:00:00"
+    )
+    before = Path(daily_review_cache.cache_path()).read_text(encoding="utf-8")
+    ok = daily_review_cache.save_latest_review(
+        _packet("partial", generated_at="later"),
+        saved_at="2026-07-21 12:00:00",
+    )
+    assert ok is False
+    assert Path(daily_review_cache.cache_path()).read_text(encoding="utf-8") == before
+    rev, _ = daily_review_cache.load_latest_review()
+    assert rev["status"] == "normal"
+    assert rev["generated_at"] == "2026-07-21 10:00:00"
+
+
+def test_critical_unavailable_partial_does_not_overwrite_normal():
+    daily_review_cache.save_latest_review(
+        _packet("normal"), saved_at="2026-07-21 10:00:00"
+    )
+    bad = _packet_critical_unavailable()
+    assert daily_review_cache.save_latest_review(bad, saved_at="2026-07-21 13:00:00") is False
+    rev, _ = daily_review_cache.load_latest_review()
+    assert rev["status"] == "normal"
+    assert rev["generated_at"] == "2026-07-21 10:00:00"
 
 
 def test_unavailable_and_exception_do_not_overwrite():
@@ -196,21 +239,21 @@ def test_background_refresh_single_flight(monkeypatch):
 
 def test_refresh_success_replaces_disk(monkeypatch):
     daily_review_cache.save_latest_review(
-        _packet("normal", generated_at="old"),
+        _packet("partial", generated_at="old"),
         saved_at="2026-07-20 15:00:00",
     )
     daily_review._clear_review_cache()
     monkeypatch.setattr(
         daily_review,
         "_build_daily_review",
-        lambda: _packet("partial", generated_at="new-gen"),
+        lambda: _packet("normal", generated_at="new-gen"),
     )
-    # 同步 fresh 路径直接成功
+    # 同步 fresh 路径：normal 可替换 partial
     out = daily_review.generate_daily_review()
-    assert out["status"] == "partial"
+    assert out["status"] == "normal"
     rev, saved = daily_review_cache.load_latest_review()
     assert rev["generated_at"] == "new-gen"
-    assert rev["status"] == "partial"
+    assert rev["status"] == "normal"
 
 
 def test_refresh_failure_keeps_old(monkeypatch):
@@ -234,6 +277,59 @@ def test_refresh_failure_keeps_old(monkeypatch):
     rev, _ = daily_review_cache.load_latest_review()
     assert rev is not None
     assert rev["generated_at"] == "keep-me"
+    failed, err = daily_review._refresh_failure_state()
+    assert failed is True
+    assert err and "刷新失败" in err
+    # 展示仍返回旧 normal，且 refresh_failed
+    payload = daily_review.get_daily_review_for_display()
+    assert payload["data"]["generated_at"] == "keep-me"
+    assert payload["cache_meta"]["stale"] is True
+    assert payload["cache_meta"]["refreshing"] is False
+    assert payload["cache_meta"]["refresh_failed"] is True
+    assert "ProxyError" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_store_degraded_partial_does_not_replace_memory_normal(monkeypatch):
+    monkeypatch.setattr(
+        daily_review, "_build_daily_review",
+        lambda: _packet("normal", generated_at="good"),
+    )
+    daily_review.generate_daily_review()
+    assert daily_review._cached_review()["generated_at"] == "good"
+
+    bad = _packet_critical_unavailable(generated_at="bad")
+    daily_review._store_review(bad)
+    assert daily_review._cached_review()["generated_at"] == "good"
+    rev, _ = daily_review_cache.load_latest_review()
+    assert rev["generated_at"] == "good"
+
+
+def test_warnings_sanitized_no_proxy_leak(monkeypatch):
+    def leaky():
+        p = _packet("partial", generated_at="x")
+        p["data_health"]["components"]["breadth"] = "unavailable"
+        p["warnings"] = [
+            "RuntimeError: a_share_snapshot page 6 request failed: "
+            "HTTPSConnectionPool(host='push2.eastmoney.com', port=443): "
+            "Max retries exceeded with url: /api/qt/clist/get?pn=6 (Caused by ProxyError(...))"
+        ]
+        p["market_environment"] = {
+            "breadth": {
+                "status": "unavailable",
+                "warnings": ["ProxyError: Unable to connect to proxy"],
+                "data": None,
+            }
+        }
+        return p
+
+    monkeypatch.setattr(daily_review, "_build_daily_review", leaky)
+    out = daily_review.generate_daily_review()
+    blob = json.dumps(out, ensure_ascii=False)
+    assert "ProxyError" not in blob
+    assert "HTTPSConnectionPool" not in blob
+    assert "push2.eastmoney.com" not in blob
+    assert "https://" not in blob
+    assert any("市场广度" in w or "全市场" in w for w in out["warnings"])
 
 
 # ── 9 portfolio advice 不使用 stale ─────────────────────────────────
