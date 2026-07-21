@@ -54,15 +54,15 @@ _API_KEY = os.environ.get("VR_API_KEY", "").strip()
 
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
-    """Pydantic 校验失败：仅 /api/account-profile 返回 400（严格类型 + 未知字段统一语义错误）；
-    其它端点保持框架默认 422，避免影响现有契约。"""
-    if request.url.path == "/api/account-profile":
+    """Pydantic 校验失败：/api/account-profile 与 /api/portfolio/holding 返回 400
+    （严格类型 + 未知字段统一语义错误）；其它端点保持框架默认 422，避免影响现有契约。"""
+    if request.url.path in ("/api/account-profile", "/api/portfolio/holding"):
         errs = exc.errors()
         msg = "; ".join(
             (f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg', 'invalid')}") for e in errs
         ) or "请求参数无效"
         return JSONResponse(status_code=400, content={"detail": msg})
-    # 非账户资金端点：复用 FastAPI 默认 422 行为
+    # 非目标端点：复用 FastAPI 默认 422 行为
     return JSONResponse(
         status_code=422,
         content={"detail": [{"loc": e.get("loc", []), "msg": e.get("msg", ""), "type": e.get("type", "")} for e in exc.errors()]},
@@ -149,6 +149,27 @@ class HoldingIn(BaseModel):
     cost: float
 
 
+class HoldingUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str
+    shares: int
+    cost: float
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strict_types(cls, values):
+        if isinstance(values, dict):
+            for field in ("shares", "cost"):
+                v = values.get(field)
+                if isinstance(v, bool):
+                    raise ValueError(f"{field} 不能是布尔值")
+                if isinstance(v, str):
+                    raise ValueError(f"{field} 不能是字符串")
+            if isinstance(values.get("shares"), float):
+                raise ValueError("shares 不能是小数")
+        return values
+
+
 @app.get("/api/portfolio")
 def portfolio_get():
     """持仓 + 实时盈亏（浮动盈亏红涨绿跌）。"""
@@ -215,6 +236,30 @@ def portfolio_add(h: HoldingIn):
 @app.delete("/api/portfolio/holding")
 def portfolio_remove(code: str = Query(...)):
     return {"data": pf.remove_holding(code.strip())}
+
+
+@app.put("/api/portfolio/holding")
+def portfolio_update(h: HoldingUpdate):
+    """精确替换指定持仓的数量和成本价。不执行加权平均。code 不存在 → 404。
+
+    语义：精确覆盖 shares/cost；不新增不存在代码；不改 code；不写清仓记录；不调用建议。
+    """
+    code = (h.code or "").strip()
+    if not code.isdigit() or len(code) != 6:
+        raise HTTPException(400, "代码必须是 6 位数字")
+    # bool 是 int 子类，model_validator 已拦；此处再保证 >0 正整数
+    if isinstance(h.shares, bool) or not isinstance(h.shares, int) or h.shares <= 0:
+        raise HTTPException(400, "数量必须为正整数")
+    if isinstance(h.cost, bool) or not isinstance(h.cost, (int, float)):
+        raise HTTPException(400, "成本价必须是有效数字")
+    if not (h.cost == h.cost) or h.cost in (float("inf"), float("-inf")):
+        raise HTTPException(400, "成本价必须是有效数字")
+    try:
+        return {"data": pf.update_holding(code, h.shares, float(h.cost))}
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+    except Exception:  # noqa: BLE001 — 不向客户端泄漏路径/traceback
+        raise HTTPException(502, "持仓编辑失败") from None
 
 
 # ---- 账户资金（用户手工填写，存本地、不上传、不进仓库）----

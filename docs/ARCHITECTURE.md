@@ -141,3 +141,27 @@ market / daily_review
 ```
 
 本地环境可另配 Clash Party 等对国内金融域名 DIRECT；**应用层仍以代码直连为准**，不把代理配置写入仓库。
+
+---
+
+## 链路三：持仓手工维护（CRUD）
+
+```
+Portfolio 前端  frontend/src/pages/Portfolio.tsx
+    │
+    ├─ GET    /api/portfolio              → pf.get_portfolio（行情叠加盈亏）
+    ├─ POST   /api/portfolio/holding      → pf.add_holding（同代码加权合并）
+    ├─ PUT    /api/portfolio/holding      → pf.update_holding（精确替换；不存在 404）
+    ├─ DELETE /api/portfolio/holding      → pf.remove_holding（仅移除，不写 closed）
+    ├─ POST   /api/portfolio/close        → pf.close_position（清仓记录，独立）
+    └─ GET/PUT /api/account-profile       → account_profile（独立 JSON，不经 portfolio）
+```
+
+### 存储隔离
+
+| 文件 | 模块 | 内容 |
+|------|------|------|
+| `portfolio.json` | `portfolio.py` | holdings + closed + last_refresh |
+| `account_profile.json` | `account_profile.py` | total_assets / available_cash / updated_at |
+
+两者默认同目录 `~/.vibe-research/`（`VR_DATA_DIR` 可覆盖），**互不写入**。持仓增删改**不**调用 `POST /api/portfolio/advice`。

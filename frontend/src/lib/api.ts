@@ -848,6 +848,8 @@ export const api = {
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
   portfolio: () => get<PortfolioData>("/portfolio"),
   addHolding: (code: string, shares: number, cost: number) => request<PortfolioData>("/portfolio/holding", "POST", { code, shares, cost }),
+  updateHolding: (code: string, shares: number, cost: number) =>
+    request<PortfolioData>("/portfolio/holding", "PUT", { code, shares, cost }),
   removeHolding: (code: string) => request<PortfolioData>(`/portfolio/holding?code=${code}`, "DELETE"),
   refreshPortfolio: () => request<PortfolioData>("/portfolio/refresh", "POST"),
   closePosition: (code: string, date: string, price: number, shares: number, cost: number) =>

@@ -91,6 +91,21 @@ def remove_holding(code: str) -> dict:
     return get_portfolio()
 
 
+def update_holding(code: str, shares: int, cost: float) -> dict:
+    """精确替换指定代码的 shares 和 cost；不执行加权平均；code 不存在时抛 ValueError。"""
+    with _LOCK:
+        d = _load()
+        for h in d["holdings"]:
+            if h["code"] == code:
+                h["shares"] = shares
+                h["cost"] = cost
+                break
+        else:
+            raise ValueError(f"股票代码 {code} 不在持仓中")
+        _save(d)
+    return get_portfolio()
+
+
 def close_position(code: str, date: str, price: float, shares: float, cost: float) -> dict:
     """记一笔已清仓：算已实现盈亏，存入 closed 列表。"""
     pnl = (price - cost) * shares

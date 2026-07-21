@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle, Sparkles, RotateCw } from "lucide-react";
+import { Plus, ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle, Sparkles, RotateCw, Pencil } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import {
@@ -255,6 +255,17 @@ export function Portfolio() {
   const [cShares, setCShares] = useState("");
   const [cCost, setCCost] = useState("");
   const [closing, setClosing] = useState(false);
+  // 持仓编辑
+  const [editCode, setEditCode] = useState("");
+  const [editShares, setEditShares] = useState("");
+  const [editCost, setEditCost] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editErr, setEditErr] = useState<string | null>(null);
+  // 删除确认（code + 展示用名称/数量）
+  const [delConfirm, setDelConfirm] = useState<{ code: string; name: string; shares: number } | null>(null);
+  const [delDeleting, setDelDeleting] = useState(false);
+  const [delErr, setDelErr] = useState<string | null>(null);
 
   // 结构化持仓操作建议
   const [advice, setAdvice] = useState<PortfolioAdviceResult | null>(null);
@@ -322,10 +333,23 @@ export function Portfolio() {
     return () => clearInterval(t);
   }, [load, loadAcct]);
 
+  // 数量校验：空值 / 含非数字字符（除负号和小数点）/ 非整数 / <=0 / NaN·Infinity → 拒绝
+  const validateShares = (raw: string): number | null => {
+    const v = raw.trim();
+    if (!v) return null;
+    if (!/^-?\d+(\.\d+)?$/.test(v)) return null;
+    const n = parseFloat(v);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) return null;
+    return n;
+  };
+
   const add = async () => {
+    if (adding) return;
     if (!/^\d{6}$/.test(code.trim())) { setErr("请输入 6 位股票代码"); return; }
-    const s = parseFloat(shares), c = parseFloat(cost);
-    if (!(s > 0) || !Number.isFinite(c)) { setErr("数量须大于 0，成本价请填数字（可为负）"); return; }
+    const s = validateShares(shares);
+    const c = parseFloat(cost);
+    if (s === null) { setErr("数量必须为正整数"); return; }
+    if (!Number.isFinite(c)) { setErr("成本价请填数字（可为负）"); return; }
     setAdding(true); setErr(null);
     try {
       setData(await api.addHolding(code.trim(), s, c));
@@ -338,11 +362,55 @@ export function Portfolio() {
     }
   };
 
-  const remove = async (c: string) => {
+  // 打开编辑窗口
+  const openEdit = (code: string, shares: number, cost: number) => {
+    setEditCode(code);
+    setEditShares(String(shares));
+    setEditCost(String(cost));
+    setEditErr(null);
+    setEditOpen(true);
+  };
+
+  const closeEdit = () => {
+    setEditOpen(false);
+    setEditErr(null);
+  };
+
+  // 保存编辑
+  const saveEdit = async () => {
+    if (editing) return;
+    const s = validateShares(editShares);
+    const c = parseFloat(editCost);
+    if (s === null) { setEditErr("数量必须为正整数"); return; }
+    if (!Number.isFinite(c)) { setEditErr("成本价请填数字（可为负）"); return; }
+    setEditing(true);
+    setEditErr(null);
+    try {
+      setData(await api.updateHolding(editCode, s, c));
+      clearAdvice();
+      setEditOpen(false);
+    } catch (e) {
+      setEditErr(e instanceof ApiError ? e.message : "保存失败，请重试");
+    } finally {
+      setEditing(false);
+    }
+  };
+
+  // 确认删除（仅一次 DELETE；失败不移除页面记录）
+  const confirmRemove = async () => {
+    if (!delConfirm || delDeleting) return;
+    const c = delConfirm.code;
+    setDelDeleting(true);
+    setDelErr(null);
     try {
       setData(await api.removeHolding(c));
       clearAdvice();
-    } catch { /* ignore */ }
+      setDelConfirm(null);
+    } catch (e) {
+      setDelErr(e instanceof ApiError ? e.message : "删除失败，请重试");
+    } finally {
+      setDelDeleting(false);
+    }
   };
 
   // 账户资金：打开填写窗口
@@ -600,6 +668,82 @@ export function Portfolio() {
         </div>
       )}
 
+      {/* 持仓编辑窗口 */}
+      {editOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={closeEdit}>
+          <div className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-4 text-base font-semibold">编辑持仓</h3>
+            <div className="mb-3">
+              <label className="mb-1 block text-xs text-muted-foreground">股票代码</label>
+              <input value={editCode} readOnly
+                className="w-full rounded-lg border border-border bg-black/10 px-3 py-2 text-sm text-muted-foreground outline-none"
+              />
+            </div>
+            <div className="mb-3">
+              <label className="mb-1 block text-xs text-muted-foreground">持仓数量（股）</label>
+              <input value={editShares} onChange={(e) => setEditShares(e.target.value)} placeholder="如 100"
+                className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
+              />
+            </div>
+            <div className="mb-3">
+              <label className="mb-1 block text-xs text-muted-foreground">成本价</label>
+              <input value={editCost} onChange={(e) => setEditCost(e.target.value)} placeholder="如 12.5，可负"
+                className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
+              />
+            </div>
+            {editErr && (
+              <div className="mb-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2.5 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4 shrink-0" /> {editErr}
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <button onClick={closeEdit} disabled={editing}
+                className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
+                取消
+              </button>
+              <button onClick={saveEdit} disabled={editing}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
+                {editing ? <Loader2 className="h-4 w-4 animate-spin" /> : null} 保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 删除确认窗口 */}
+      {delConfirm !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { if (!delDeleting) { setDelConfirm(null); setDelErr(null); } }}>
+          <div className="w-full max-w-sm rounded-xl border border-border bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-3 text-base font-semibold">确认删除持仓</h3>
+            <p className="mb-2 text-sm text-muted-foreground">
+              确认删除{" "}
+              <span className="font-medium text-foreground">{delConfirm.name}</span>{" "}
+              <span className="font-mono text-foreground">{delConfirm.code}</span>
+              ？当前持仓数量：
+              <span className="font-mono text-foreground">{delConfirm.shares}</span> 股。
+            </p>
+            <p className="mb-3 text-xs text-muted-foreground/80">
+              删除只移除当前持仓记录，不会写入清仓记录，也不影响账户资金。
+            </p>
+            {delErr && (
+              <div className="mb-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2.5 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4 shrink-0" /> {delErr}
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <button onClick={() => { setDelConfirm(null); setDelErr(null); }} disabled={delDeleting}
+                className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
+                取消
+              </button>
+              <button onClick={confirmRemove} disabled={delDeleting}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-danger/15 px-4 py-2 text-sm font-medium text-danger hover:bg-danger/25 disabled:opacity-50">
+                {delDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : null} 确认删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 录入 */}
       <GlassCard className="mb-4">
         <h3 className="mb-3 text-sm font-semibold">添加持仓</h3>
@@ -611,12 +755,12 @@ export function Portfolio() {
           </div>
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">数量（股）</label>
-            <input value={shares} onChange={(e) => setShares(e.target.value.replace(/[^\d.]/g, ""))} placeholder="如 100"
+            <input value={shares} onChange={(e) => setShares(e.target.value)} placeholder="如 100"
               className="w-28 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
           </div>
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">成本价</label>
-            <input value={cost} onChange={(e) => setCost(e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, ""))} placeholder="如 12.5，可负"
+            <input value={cost} onChange={(e) => setCost(e.target.value)} placeholder="如 12.5，可负"
               className="w-28 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
           </div>
           <button onClick={add} disabled={adding}
@@ -665,9 +809,21 @@ export function Portfolio() {
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{fmtSigned(h.pnl)}</td>
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{fmtPct(h.pnl_pct)}</td>
                     <td className="px-2 py-2.5">
-                      <button onClick={() => remove(h.code)} className="text-muted-foreground/50 hover:text-destructive" title="删除">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => openEdit(h.code, h.shares, h.cost)} className="text-muted-foreground/50 hover:text-primary" title="编辑">
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setDelConfirm({ code: h.code, name: h.name, shares: h.shares });
+                            setDelErr(null);
+                          }}
+                          className="text-muted-foreground/50 hover:text-destructive"
+                          title="删除"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

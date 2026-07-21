@@ -86,8 +86,52 @@
 - **原因**：无日内可卖/T+0 账户事实，且产品刻意收窄执行语义。
 - **落点**：`afc6d73` 及后续 prompt/validator。
 
-### 当前未接入账户总资产、可用现金和可靠可卖数量
+### 账户资金可手工维护，但未接入持仓建议
 
-- **决定**：`account_fields_available` 均为 false 量级；限制文案标准化；reduce/sell 提示人工确认可卖。
-- **原因**：本地持仓 JSON 仅有股数与成本类字段，无券商实时接口。
+- **决定**：用户可在 Portfolio 页手工填写 `total_assets` / `available_cash`（`account_profile.json`）；**不**写入持仓建议 context / prompt / validator。
+- **原因**：建议侧仍无自动资金约束；手工维护与 AI 建议分阶段接入，避免半接入导致错误仓位算法。
+- **落点**：`account_profile.py`、`GET`/`PUT /api/account-profile`；advice 链路未引用。
+
+### 可靠可卖数量仍未接入
+
+- **决定**：reduce/sell 数量为理论值，执行前须人工确认可卖。
+- **原因**：本地持仓 JSON 无券商实时可卖字段。
 - **落点**：context / validator 限制文案。
+
+## 持仓手工维护
+
+### POST 加权合并与 PUT 精确替换分离
+
+- **决定**：`POST /api/portfolio/holding` 同代码按加权平均成本合并（加仓）；`PUT /api/portfolio/holding` 精确覆盖 shares/cost，不加权、不新增不存在代码。
+- **原因**：加权合并适合加仓录入；精确编辑不能被合并语义污染，也不能用「删除后新增」模拟（会丢中间态与清仓语义边界）。
+- **落点**：`portfolio.add_holding` / `portfolio.update_holding`；`app.portfolio_add` / `app.portfolio_update`。
+
+### 编辑不存在代码返回 404
+
+- **决定**：PUT 目标 code 不在持仓中 → 404，且不写文件。
+- **原因**：编辑不是 upsert；避免静默新建与前端状态错位。
+- **落点**：`update_holding` 抛 `ValueError` → HTTP 404。
+
+### 数量输入不做静默字符过滤
+
+- **决定**：新增/编辑前端保留用户原始输入字符串，校验为正整数后才请求；非法输入拒绝且不发送。
+- **原因**：`replace(/[^\d.]/g,"")` 会把 `-100` 静默变成 `100`，掩盖用户意图。
+- **落点**：`Portfolio.tsx` `validateShares`；输入 `onChange` 直接 `setState(e.target.value)`。
+
+### 成本价允许负值
+
+- **决定**：前后端不强制 cost > 0（融券/摊薄等既有语义）。
+- **原因**：与历史 `HoldingIn` / 既有测试一致；本任务不擅自收紧。
+- **落点**：`portfolio_add` 注释；PUT 仅要求有限数值。
+
+### 删除须确认且失败可见
+
+- **决定**：删除先弹确认（代码/名称、数量、「删除只移除当前持仓记录」）；确认才 DELETE；失败展示安全错误，禁止空 catch。
+- **原因**：误点不可逆；静默失败会让用户以为已删除。
+- **落点**：`Portfolio.tsx` 删除确认窗；`confirmRemove`。
+
+### 删除不写清仓、不动账户资金、不调建议
+
+- **决定**：`DELETE /api/portfolio/holding` 只从 holdings 移除；不写 `closed`；不改 `account_profile.json`；前端不自动调 advice。
+- **原因**：删除是维护操作，清仓是已实现盈亏记录；账户与建议隔离。
+- **落点**：`remove_holding`；验收 J 场景 advice 请求数=0。

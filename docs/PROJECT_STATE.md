@@ -1,6 +1,6 @@
 # 项目当前状态
 
-> 文档基准：分支 `feature/research-system-v01`，HEAD `5dec970184ee7af60da38e571245971219551dba`
+> 文档基准：分支 `feature/research-system-v01`（以 `git rev-parse HEAD` 为准）
 > 仅描述仓库内已实现能力；不包含密钥、持仓内容或代理敏感配置。
 
 ## 1. 技术栈与数据存储
@@ -162,22 +162,47 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
   - 新增加载中 / 加载失败（含重试按钮）/ 未配置三种状态
   - `account_profile.py`：写入失败时清理临时文件；新增并发、残留临时文件测试
 
-## 14. 最近关键提交（须与 `git log` 一致）
+## 14. 账户资金后续修复提交
 
-| 短哈希 | 完整哈希（前缀） | 说明 |
-|--------|------------------|------|
-| `88a1f83` | `88a1f83cd85dd0840df3732252eef864a8dc297b` | fix: restore account funding profile UI |
-| `fe54b8f` | `fe54b8f68fd870aa5cac41d452c855643e1b25a7` | feat: add manual account funding input |
-| `8eb9225` | `8eb9225b3f0a9806eaba79697db0b89ca0335afc` | feat: upgrade daily review to nine-dimension analysis |
-| `2cf897c` | `2cf897c582fcd8298a176d04dba1665c32199350` | perf: serve persisted daily review while refreshing |
-| `cf535b8` | `cf535b860c33b1afa8eef727f36a3a26b69e6323` | fix: preserve valid review on refresh failure |
-| `082e825` | `082e82547910e022348da3031da4357c1499e89d` | fix: constrain portfolio advice execution rules |
-| `f2ae80c` | `f2ae80ced6fbb0e69772433b8b30eed311a974e8` | fix: stabilize A-share snapshot paging requests |
-| `5dec970` | `5dec970184ee7af60da38e571245971219551dba` | feat: calculate executable add quantities |
+| 短哈希 | 说明 |
+|--------|------|
+| `88a1f83` | fix: restore account funding profile UI（`unwrapData`） |
+| `f3d90af` | fix: harden account funding persistence and submit state |
 
-当前分支 HEAD 为 **`88a1f83`**（`fix: restore account funding profile UI`）。
+## 15. 持仓精确编辑与删除确认
 
-## 远程协作（文档撰写时）
+- **后端**
+  - `portfolio.update_holding(code, shares, cost)`：精确覆盖；不加权；code 不存在 → `ValueError`
+  - `PUT /api/portfolio/holding`：`HoldingUpdate`（`extra=forbid`，shares 严格 int，拒绝 bool/字符串/小数）
+  - 校验：shares > 0 正整数；cost 有限数值（**允许负**）；未知字段 400；不存在 404
+  - 失败不写 `portfolio.json`；不改 `account_profile.json`；不写 closed；不调 advice
+  - `POST` 同代码加权合并行为保留
+- **前端**（`Portfolio.tsx` + `api.updateHolding`）
+  - 每行「编辑」：代码只读、数量/成本可改、保存 PUT、取消不请求
+  - 保存失败：弹窗不关、输入保留、列表旧值不变、安全错误
+  - 删除确认：名称/代码、数量、「删除只移除当前持仓记录」；失败可见，禁止空 catch
+  - 数量：`validateShares` 保留原始字符串；`-100` 不会变成 `100`
+- **测试**：`backend/tests/test_portfolio_edit_api.py`（临时目录隔离）
+- **浏览器验收 A–J**：53/53 通过；验收期 `POST /api/portfolio/advice` 请求数 0；真实用户数据 SHA 前后一致
+- **未做**：账户资金接入建议；未改 advice/daily_review/astock/market
+
+## 16. 最近关键提交（须与 `git log` 一致）
+
+| 短哈希 | 说明 |
+|--------|------|
+| `f3d90af` | fix: harden account funding persistence and submit state |
+| `88a1f83` | fix: restore account funding profile UI |
+| `fe54b8f` | feat: add manual account funding input |
+| `5dec970` | feat: calculate executable add quantities |
+| `f2ae80c` | fix: stabilize A-share snapshot paging requests |
+| `082e825` | fix: constrain portfolio advice execution rules |
+| `cf535b8` | fix: preserve valid review on refresh failure |
+| `2cf897c` | perf: serve persisted daily review while refreshing |
+| `8eb9225` | feat: upgrade daily review to nine-dimension analysis |
+
+接手后请以 `git log --oneline -15` 与 `git rev-parse HEAD` 刷新本节。
+
+## 远程协作
 
 - origin：`https://github.com/guilaile95/Vibe-Research.git`
 - upstream：`https://github.com/simonlin1212/Vibe-Research.git`
