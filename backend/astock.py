@@ -420,67 +420,116 @@ _EM_MIN_INTERVAL = 1.0          # 两次东财请求最小间隔（秒），内�
 _em_last_call = [0.0]
 _EM_SESSIONS: dict = {}         # {direct(bool): requests.Session}
 
-# 数据层连接模式：国内财经站（东财/腾讯/新浪）本应「直连」——很多用户开着 Clash/V2Ray
-# 科学上网，系统代理会把东财这类国内站路由挂掉（典型：push2.eastmoney.com 的 CONNECT 被掐）。
-# 默认 auto：先试直连、失败再降级走系统代理；探测一次后固定，避免每次都重试。
-# 只有少数「必须靠代理才能出网」的环境需要 VR_DATA_PROXY=1 强制走代理。
-# 注意：这只影响数据层；AI 层（可能要调国外模型）仍走各自的系统代理，不受影响。
-_em_mode = ["proxy" if os.environ.get("VR_DATA_PROXY", "").strip().lower() in ("1", "true", "yes") else "auto"]
+# 东财固定直连：Windows 系统代理（Clash 等）常把 push2.eastmoney.com 的 CONNECT 掐断，
+# 导致全 A 快照分页中途 ProxyError。数据层一律 trust_env=False，不读系统/环境代理。
+# AI 层（国外模型）不受影响，仍走各自客户端代理。
+# 模式标记仅供诊断/测试读取；em_get 始终使用 direct 会话。
+_em_mode = ["direct"]
+
+# 全 A 快照分页：单页瞬时网络错误有限重试（不跨页重跑）
+_A_SHARE_PAGE_MAX_ATTEMPTS = 3
+_A_SHARE_PAGE_RETRY_BACKOFF = (0.5, 1.0, 2.0)
 
 
-def _em_session(direct: bool):
-    """东财专用会话。direct=True → `trust_env=False` 忽略 HTTP(S)_PROXY 环境变量、直连。
-
-    直连会话不重试（探测要快，失败即降级）；代理会话保留瞬态错误退避重试。惰性构建、复用。
-    """
+def _em_session(direct: bool = True):
+    """东财专用会话。默认/推荐 direct=True → ``trust_env=False``，忽略系统与环境代理。"""
     if direct in _EM_SESSIONS:
         return _EM_SESSIONS[direct]
     import requests
 
     s = requests.Session()
     s.headers.update({"User-Agent": UA})
-    s.trust_env = not direct     # 直连会话不读环境里的代理配置
+    s.trust_env = not direct  # 直连：不读 HTTP(S)_PROXY / Windows 系统代理
+    # 应用层自管重试；urllib3 层关闭自动重试，避免与分页重试叠加
     try:
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
 
-        retry = Retry(total=0) if direct else Retry(
-            total=3, connect=3, backoff_factor=0.6,
-            status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
-        adapter = HTTPAdapter(max_retries=retry)
+        adapter = HTTPAdapter(max_retries=Retry(total=0))
         s.mount("https://", adapter)
         s.mount("http://", adapter)
     except Exception:
-        pass  # 老版本 urllib3 缺参数时降级为无重试
+        pass
     _EM_SESSIONS[direct] = s
     return s
 
 
 def em_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int = 15):
-    """东财统一请求入口：串行限流 + **直连优先、失败降级系统代理**（避免科学上网代理挂掉国内站）。
+    """东财统一请求入口：串行限流 + **固定直连**（trust_env=False）。
 
-    第一次请求探测：先直连（短超时、不重试），成功即固定走直连；失败则降级走系统代理并固定。
-    探测结果整个进程复用，避免每次重试。`VR_DATA_PROXY=1` 可跳过探测、强制走代理。
+    不读取环境/系统代理，避免 Clash 等代理导致国内站 ProxyError。
+    瞬时失败由调用方（如 a_share_snapshot 分页）做有限页级重试。
     """
     wait = _EM_MIN_INTERVAL - (time.time() - _em_last_call[0])
     if wait > 0:
         time.sleep(wait + random.uniform(0.1, 0.5))
     try:
-        mode = _em_mode[0]
-        if mode != "auto":
-            return _em_session(mode == "direct").get(url, params=params, headers=headers, timeout=timeout)
-        # auto：先直连，成功固定 direct；直连失败再走系统代理、成功固定 proxy。
-        try:
-            r = _em_session(True).get(url, params=params, headers=headers, timeout=min(timeout, 8))
-            _em_mode[0] = "direct"
-            return r
-        except Exception:
-            r = _em_session(False).get(url, params=params, headers=headers, timeout=timeout)
-            _em_mode[0] = "proxy"
-            return r
+        _em_mode[0] = "direct"
+        return _em_session(True).get(url, params=params, headers=headers, timeout=timeout)
     finally:
         _em_last_call[0] = time.time()
 
+
+def _is_transient_network_error(exc: BaseException) -> bool:
+    """判断是否为可重试的瞬时网络错误（不含 JSON/结构/业务解析错误）。"""
+    # 按类型名兼容未 import 的异常类
+    transient_names = {
+        "ProxyError",
+        "ConnectionError",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "Timeout",
+        "TimeoutError",
+        "RemoteDisconnected",
+        "ProtocolError",
+        "ChunkedEncodingError",
+        "SSLError",
+        "NewConnectionError",
+        "MaxRetryError",
+    }
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if type(cur).__name__ in transient_names:
+            return True
+        # requests 常把底层包在 args 里
+        for a in getattr(cur, "args", ()):
+            if isinstance(a, BaseException) and type(a).__name__ in transient_names:
+                return True
+            if isinstance(a, str) and any(
+                k in a for k in ("ProxyError", "RemoteDisconnected", "Connection reset", "timed out")
+            ):
+                return True
+        cur = cur.__cause__ or cur.__context__  # type: ignore[assignment]
+    return False
+
+
+def _em_get_page_with_retries(
+    url: str,
+    *,
+    params: dict | None,
+    headers: dict | None,
+    timeout: int = 15,
+    max_attempts: int = _A_SHARE_PAGE_MAX_ATTEMPTS,
+    backoff: tuple[float, ...] = _A_SHARE_PAGE_RETRY_BACKOFF,
+):
+    """单页请求：瞬时网络错误有限重试；解析/结构类错误不重试。"""
+    last_err: BaseException | None = None
+    attempts = max(1, int(max_attempts))
+    for attempt in range(attempts):
+        try:
+            return em_get(url, params=params, headers=headers, timeout=timeout)
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            if not _is_transient_network_error(e):
+                raise
+            if attempt >= attempts - 1:
+                break
+            delay = backoff[attempt] if attempt < len(backoff) else backoff[-1]
+            time.sleep(delay)
+    assert last_err is not None
+    raise last_err
 
 # ---------------------------------------------------------------------------
 # 打板层 · 涨停/炸板/跌停/昨涨停 原始池（东财 push2ex，走 em_get 限流）
@@ -672,16 +721,21 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
         headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
 
         # 首页探测 push2 → push2delay；后续页固定可用主机（与 market_turnover_rank 一致）
+        # 每页：同一页内有限重试瞬时网络错误；失败换主机；不回到第 1 页重跑
         hosts = _A_SHARE_CLIST_HOSTS if pn == 1 else (host,)
         payload = None
         last_err: Exception | None = None
         for h in hosts:
             try:
-                r = em_get(f"https://{h}/api/qt/clist/get", params=params,
-                           headers=headers, timeout=15)
+                r = _em_get_page_with_retries(
+                    f"https://{h}/api/qt/clist/get",
+                    params=params,
+                    headers=headers,
+                    timeout=15,
+                )
                 try:
                     payload = r.json()
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001 — JSON 解析失败不重试网络
                     raise RuntimeError(
                         f"a_share_snapshot page {pn}: invalid JSON from {h}: {e}"
                     ) from e
@@ -690,10 +744,11 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
                 break
             except RuntimeError:
                 raise
-            except Exception as e:  # noqa: BLE001 — 网络/超时，尝试下一主机
+            except Exception as e:  # noqa: BLE001 — 本主机用尽重试，尝试下一主机
                 last_err = e
                 continue
         if payload is None:
+            # 整页失败：整体失败，不返回已抓到的部分列表
             raise RuntimeError(
                 f"a_share_snapshot page {pn}: request failed: {last_err}"
             ) from last_err

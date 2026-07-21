@@ -341,3 +341,182 @@ def test_failure_does_not_cache_partial(monkeypatch):
         market.get_a_share_snapshot()
     # 失败后缓存不应变成 100 条伪完整
     assert "a_share_snapshot" not in market._CACHE
+
+
+# ---------------------------------------------------------------------------
+# 直连 + 页级重试
+# ---------------------------------------------------------------------------
+
+def test_em_get_fixed_direct_no_system_proxy(monkeypatch):
+    """em_get 固定走 trust_env=False 直连会话，不读系统代理。"""
+    astock._EM_SESSIONS.clear()
+    captured = {}
+
+    class _Sess:
+        def __init__(self):
+            self.trust_env = True  # 故意设反，_em_session 应覆盖
+            self.headers = {}
+
+        def get(self, url, params=None, headers=None, timeout=15):
+            captured["trust_env"] = self.trust_env
+            captured["url"] = url
+            return _FakeResp({"ok": 1})
+
+        def mount(self, *a, **k):
+            return None
+
+    def fake_session_ctor():
+        return _Sess()
+
+    import requests
+
+    monkeypatch.setattr(requests, "Session", fake_session_ctor)
+    monkeypatch.setattr(astock, "_EM_MIN_INTERVAL", 0)
+    monkeypatch.setattr(astock, "_em_last_call", [0.0])
+    # 重新构建会话
+    astock._EM_SESSIONS.clear()
+    # 直接走 _em_session 验证 trust_env
+    s = astock._em_session(True)
+    assert s.trust_env is False
+    r = astock.em_get("https://push2.eastmoney.com/api/qt/clist/get", params={"pn": "1"})
+    assert captured.get("trust_env") is False
+    assert astock._em_mode[0] == "direct"
+    assert r.json() == {"ok": 1}
+
+
+def test_page_retry_first_fail_second_success(monkeypatch):
+    """第 2 页首次 ConnectionError，重试后成功；不回到第 1 页重跑。"""
+    attempts_by_pn: dict[int, int] = {}
+
+    def fake_em_get(url, params=None, headers=None, timeout=15):
+        pn = int((params or {}).get("pn", "0"))
+        attempts_by_pn[pn] = attempts_by_pn.get(pn, 0) + 1
+        if pn == 2 and attempts_by_pn[pn] == 1:
+            raise ConnectionError("transient")
+        if pn == 1:
+            return _FakeResp({"data": {"total": 10, "diff": _codes(5, 0)}})
+        if pn == 2:
+            return _FakeResp({"data": {"total": 10, "diff": _codes(5, 5)}})
+        raise AssertionError(f"unexpected pn={pn}")
+
+    monkeypatch.setattr(astock, "em_get", fake_em_get)
+    monkeypatch.setattr(astock, "_EM_MIN_INTERVAL", 0)
+    monkeypatch.setattr(astock, "_em_last_call", [0.0])
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
+    out = astock.a_share_snapshot(page_size=5)
+    assert len(out) == 10
+    assert attempts_by_pn[1] == 1  # 成功页不重复
+    assert attempts_by_pn[2] == 2  # 失败一次 + 成功一次
+
+
+def test_page_retry_two_fails_third_success(monkeypatch):
+    attempts = {"n": 0}
+
+    def fake_em_get(url, params=None, headers=None, timeout=15):
+        pn = int((params or {}).get("pn", "0"))
+        if pn == 1:
+            return _FakeResp({"data": {"total": 3, "diff": _codes(3, 0)}})
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise ConnectionError(f"fail-{attempts['n']}")
+        return _FakeResp({"data": {"total": 3, "diff": []}})  # empty page end
+
+    monkeypatch.setattr(astock, "em_get", fake_em_get)
+    monkeypatch.setattr(astock, "_EM_MIN_INTERVAL", 0)
+    monkeypatch.setattr(astock, "_em_last_call", [0.0])
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
+    # total=3 page1 has all → may not need page2; force multi-page with larger total
+    def fake_em_get2(url, params=None, headers=None, timeout=15):
+        pn = int((params or {}).get("pn", "0"))
+        if pn == 1:
+            return _FakeResp({"data": {"total": 6, "diff": _codes(3, 0)}})
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise ConnectionError(f"fail-{attempts['n']}")
+        return _FakeResp({"data": {"total": 6, "diff": _codes(3, 3)}})
+
+    attempts["n"] = 0
+    monkeypatch.setattr(astock, "em_get", fake_em_get2)
+    out = astock.a_share_snapshot(page_size=3)
+    assert len(out) == 6
+    assert attempts["n"] == 3
+
+
+def test_page_retry_three_fails_raises_no_partial(monkeypatch):
+    got_partial = {"codes": None}
+
+    def fake_em_get(url, params=None, headers=None, timeout=15):
+        pn = int((params or {}).get("pn", "0"))
+        if pn == 1:
+            return _FakeResp({"data": {"total": 10, "diff": _codes(5, 0)}})
+        raise ConnectionError("always down")
+
+    monkeypatch.setattr(astock, "em_get", fake_em_get)
+    monkeypatch.setattr(astock, "_EM_MIN_INTERVAL", 0)
+    monkeypatch.setattr(astock, "_em_last_call", [0.0])
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
+    # 两个 host × 3 次 = 最多 6 次 page2 调用
+    with pytest.raises(RuntimeError, match="request failed"):
+        try:
+            astock.a_share_snapshot(page_size=5)
+        except RuntimeError:
+            # 确保未把半截列表当作返回值
+            got_partial["codes"] = "raised"
+            raise
+    assert got_partial["codes"] == "raised"
+
+
+def test_retry_stays_on_same_page(monkeypatch):
+    seq: list[int] = []
+
+    def fake_em_get(url, params=None, headers=None, timeout=15):
+        pn = int((params or {}).get("pn", "0"))
+        seq.append(pn)
+        if pn == 2 and seq.count(2) < 2:
+            raise ConnectionError("once")
+        if pn == 1:
+            return _FakeResp({"data": {"total": 6, "diff": _codes(3, 0)}})
+        if pn == 2:
+            return _FakeResp({"data": {"total": 6, "diff": _codes(3, 3)}})
+        raise AssertionError(pn)
+
+    monkeypatch.setattr(astock, "em_get", fake_em_get)
+    monkeypatch.setattr(astock, "_EM_MIN_INTERVAL", 0)
+    monkeypatch.setattr(astock, "_em_last_call", [0.0])
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
+    out = astock.a_share_snapshot(page_size=3)
+    assert len(out) == 6
+    # 第 1 页成功只出现一次；第 2 页失败重试仍是 pn=2
+    assert seq[0] == 1
+    assert seq.count(1) == 1
+    assert 2 in seq
+    assert seq.index(2) > 0
+
+
+def test_json_error_not_retried_as_network(monkeypatch):
+    """JSON 解析错误应立刻失败，不按网络瞬时错误重试。"""
+    calls = {"n": 0}
+
+    class _BadJson:
+        def json(self):
+            calls["n"] += 1
+            raise ValueError("not json")
+
+    def fake_em_get(url, params=None, headers=None, timeout=15):
+        return _BadJson()
+
+    monkeypatch.setattr(astock, "em_get", fake_em_get)
+    monkeypatch.setattr(astock, "_EM_MIN_INTERVAL", 0)
+    monkeypatch.setattr(astock, "_em_last_call", [0.0])
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
+    with pytest.raises(RuntimeError, match="invalid JSON"):
+        astock.a_share_snapshot(page_size=5)
+    # 每主机一次解析失败即 RuntimeError，不进入网络重试循环
+    assert calls["n"] == 1
+
+
+def test_is_transient_network_error_helpers():
+    assert astock._is_transient_network_error(ConnectionError("x")) is True
+    assert astock._is_transient_network_error(TimeoutError("t")) is True
+    assert astock._is_transient_network_error(ValueError("bad")) is False
+    assert astock._is_transient_network_error(RuntimeError("parse")) is False
