@@ -380,6 +380,17 @@ def test_parse_rejects_suffix_text():
         _parse_model_json(text)
 
 
+def test_parse_rejects_fence_then_trailing_markdown():
+    """真实故障形态：fence + 合法 JSON + 尾部 Markdown 摘要 → 拒绝（不 repair）。"""
+    body = json.dumps(
+        {"schema_version": "portfolio-advice-v0.1", "account_action": {"action": "hold"}},
+        ensure_ascii=False,
+    )
+    text = f"```json\n{body}\n```\n\n## Markdown 摘要\n- 风险提示：广度偏弱\n"
+    with pytest.raises(PortfolioAdviceModelOutputError, match="不是有效的JSON"):
+        _parse_model_json(text)
+
+
 def test_parse_rejects_top_array():
     with pytest.raises(PortfolioAdviceModelOutputError, match="不是有效的JSON"):
         _parse_model_json("[1,2,3]")
@@ -503,6 +514,18 @@ def test_generate_rejects_prefix_text_no_validator():
                 {},
                 model_runner=lambda c, m: '说明\n{"a":1}',
             )
+    m_val.assert_not_called()
+
+
+def test_generate_rejects_fence_plus_trailing_markdown_no_validator():
+    patches = _patch_prepare_ok()
+    body = json.dumps(_ai_json_for(action="hold"))
+    raw = f"```json\n{body}\n```\n\n## Markdown 摘要\n风险提示：测试\n"
+    with patches[0], patches[1], patches[2], patches[3], patch.object(
+        svc.portfolio_advice_validator, "validate_portfolio_advice"
+    ) as m_val:
+        with pytest.raises(PortfolioAdviceModelOutputError, match="不是有效的JSON"):
+            generate_portfolio_advice({}, model_runner=lambda c, m: raw)
     m_val.assert_not_called()
 
 

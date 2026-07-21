@@ -32,7 +32,8 @@ ACCOUNT_ACTIONS = (
 
 _DEFAULT_USER_TASK = (
     "请基于以上持仓与市场上下文，生成账户级操作倾向和逐股明确操作建议。"
-    "核心结果必须是结构化 JSON；可附带 Markdown 摘要，但 JSON 为权威。"
+    "整个响应只能包含一个合法 JSON 对象；不要使用 Markdown 代码块，"
+    "不要在 JSON 前后输出任何说明、标题、摘要、风险提示或其他文字。"
 )
 
 _SYSTEM_PROMPT = """你是A股单用户本地持仓操作建议助手。
@@ -140,9 +141,14 @@ confidence 只能是：high | medium | low
 - 依赖 partial/unavailable 市场数据或行情大量缺失时，不得标 high。
 - 无催化且仅依赖价量时，通常 medium 或 low。
 
-## 权威输出：结构化 JSON
+## 权威输出：仅结构化 JSON
 
-你必须输出一个 JSON 对象（可在 Markdown 代码块中），schema_version 固定为：
+整个响应只能包含一个合法 JSON 对象。
+不要使用 Markdown 代码块。
+不要在 JSON 前后输出任何说明、标题、摘要、风险提示或其他文字。
+响应的第一个非空字符必须是 {，最后一个非空字符必须是 }。
+
+schema_version 固定为：
 """ + SCHEMA_VERSION + """
 
 顶层结构：
@@ -195,10 +201,7 @@ confidence 只能是：high | medium | low
 - 每只股票必须有明确 action，以及 trigger_conditions、execution_plan、risk_conditions、invalidation_conditions（至少各 1 条有意义的中文说明，除非无持仓）。
 - 空持仓时 holdings=[]，account_action 说明无法给出逐股建议。
 - 不得输出 t_trade 字段或任何做 T 结构。
-
-## 可选 Markdown
-
-可在 JSON 之后附简短 Markdown 摘要，但不得与 JSON 冲突；冲突时以 JSON 为准。
+- 全部结论、理由、风险与限制必须写在 JSON 字段内：account_action.reason、trigger_conditions、price_conditions、execution_plan、risk_conditions、invalidation_conditions、warnings、data_limitations。不得另写 Markdown 或正文摘要。
 
 ## 禁止内容
 
@@ -206,6 +209,7 @@ confidence 只能是：high | medium | low
 禁止：在无数据时编造可卖数量、买入金额、绝对目标仓位。
 禁止：模糊主动作（无 action 枚举）。
 禁止：做 T、日内高抛低吸、先卖后买、先买后卖、盘中滚动仓位。
+禁止：Markdown 代码块、Markdown 摘要、JSON 前后说明文字、补充结论或代码块外任何文字。
 """
 
 
@@ -259,9 +263,11 @@ def build_portfolio_advice_user_prompt(
         f"{context_json}\n"
         "</PORTFOLIO_ADVICE_CONTEXT>\n\n"
         f"{task_block}\n\n"
-        "输出要求：先给出权威 JSON（schema_version="
-        f"{SCHEMA_VERSION}），"
-        "再可选附简短 Markdown 摘要。"
+        "输出要求：整个响应只能包含一个合法 JSON 对象"
+        f"（schema_version={SCHEMA_VERSION}）。"
+        "不要使用 Markdown 代码块。"
+        "不要在 JSON 前后输出任何说明、标题、摘要、风险提示或其他文字。"
+        "响应的第一个非空字符必须是 {，最后一个非空字符必须是 }。"
     )
 
 

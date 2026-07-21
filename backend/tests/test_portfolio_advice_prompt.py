@@ -121,6 +121,50 @@ def test_system_prompt_json_schema():
     assert '"t_trade"' not in p
 
 
+def test_system_prompt_requires_json_only_response():
+    """Prompt 与 parser 契约：整个响应只能是一个 JSON 对象。"""
+    p = build_portfolio_advice_system_prompt()
+    assert "整个响应只能包含一个合法 JSON 对象" in p
+    assert "第一个非空字符必须是 {" in p
+    assert "最后一个非空字符必须是 }" in p
+    assert "不要使用 Markdown 代码块" in p
+    assert "不要在 JSON 前后输出任何说明" in p
+    # 结论写在 JSON 字段内，不得另写 Markdown
+    assert "account_action.reason" in p
+    assert "不得另写 Markdown" in p or "禁止：Markdown" in p
+
+
+def test_system_prompt_forbids_trailing_markdown_and_prose():
+    p = build_portfolio_advice_system_prompt()
+    # 旧「可选 Markdown / 附加摘要」指令必须移除
+    assert "可选 Markdown" not in p
+    assert "可在 JSON 之后" not in p
+    assert "附简短 Markdown" not in p
+    assert "可附带 Markdown" not in p
+    assert "Markdown 摘要" in p  # 出现在禁止条款中
+    assert "禁止" in p
+    # 不得再鼓励代码块包装
+    assert "可在 Markdown 代码块中" not in p
+
+
+def test_user_prompt_requires_json_only():
+    ctx = _sample_context()
+    user = build_portfolio_advice_user_prompt(ctx)
+    assert "整个响应只能包含一个合法 JSON 对象" in user
+    assert "不要使用 Markdown 代码块" in user
+    assert "第一个非空字符必须是 {" in user
+    assert "最后一个非空字符必须是 }" in user
+    assert "再可选附简短 Markdown 摘要" not in user
+    assert "Markdown 摘要" not in user or "不要" in user
+
+
+def test_default_user_task_json_only():
+    assert "合法 JSON 对象" in _DEFAULT_USER_TASK
+    assert "Markdown 代码块" in _DEFAULT_USER_TASK
+    assert "可附带 Markdown 摘要" not in _DEFAULT_USER_TASK
+    assert "JSON 为权威" not in _DEFAULT_USER_TASK
+
+
 def test_user_prompt_embeds_context_raw():
     ctx = _sample_context()
     user = build_portfolio_advice_user_prompt(ctx)
