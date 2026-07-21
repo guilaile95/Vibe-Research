@@ -169,27 +169,48 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 | `88a1f83` | fix: restore account funding profile UI（`unwrapData`） |
 | `f3d90af` | fix: harden account funding persistence and submit state |
 
-## 15. 持仓精确编辑与删除确认
+## 15. 持仓安全新增 / 精确编辑 / 删除（已验收）
 
-- **后端**
-  - `portfolio.update_holding(code, shares, cost)`：精确覆盖；不加权；code 不存在 → `ValueError`
-  - `PUT /api/portfolio/holding`：`HoldingUpdate`（`extra=forbid`，shares 严格 int，拒绝 bool/字符串/小数）
-  - 校验：shares > 0 正整数；cost 有限数值（**允许负**）；未知字段 400；不存在 404
-  - 失败不写 `portfolio.json`；不改 `account_profile.json`；不写 closed；不调 advice
-  - `POST` 同代码加权合并行为保留
-- **前端**（`Portfolio.tsx` + `api.updateHolding`）
-  - 每行「编辑」：代码只读、数量/成本可改、保存 PUT、取消不请求
-  - 保存失败：弹窗不关、输入保留、列表旧值不变、安全错误
-  - 删除确认：名称/代码、数量、「删除只移除当前持仓记录」；失败可见，禁止空 catch
-  - 数量：`validateShares` 保留原始字符串；`-100` 不会变成 `100`
-- **测试**：`backend/tests/test_portfolio_edit_api.py`（临时目录隔离）
-- **浏览器验收 A–J**：53/53 通过；验收期 `POST /api/portfolio/advice` 请求数 0；真实用户数据 SHA 前后一致
-- **未做**：账户资金接入建议；未改 advice/daily_review/astock/market
+**功能提交**：`9932601` — `feat: add portfolio holding exact edit and delete confirm`  
+（验收后文档刷新见后续 `docs:` 提交；当前能力以该功能提交与代码为准。）
+
+### 能力摘要
+
+| 能力 | 行为 |
+|------|------|
+| 新增 | `POST /api/portfolio/holding`：新代码新增；**同代码仍加权合并**成本 |
+| 精确编辑 | `PUT /api/portfolio/holding`：**精确替换** shares/cost；不加权；不 upsert |
+| 安全删除 | 前端确认弹窗 + 失败可见错误；`DELETE` 只移 holdings，**不写** closed |
+| 数量输入 | 保留原始字符串；**不再**静默把 `-100` 变成 `100` |
+| 账户资金 | 仍可手工维护；**仍未接入**持仓建议 |
+
+### 后端
+
+- `portfolio.update_holding(code, shares, cost)`：精确覆盖；code 不存在 → `ValueError` → HTTP **404**
+- `HoldingUpdate`：`extra=forbid`；shares 严格 **int**；拒绝 bool / 字符串 / 小数
+- shares：必须 `> 0` 正整数；**不要求** 100 股整手
+- cost：有限数值（拒 bool/字符串/NaN/Infinity）；**允许负值**（既有语义）
+- 失败不写 `portfolio.json`；不改 `account_profile.json`；不调 advice
+
+### 前端（`Portfolio.tsx` + `api.updateHolding`）
+
+- 编辑：代码只读预填；保存一次 PUT；取消不请求；失败弹窗不关、输入保留、列表旧值不变
+- 删除：确认展示名称/代码、数量、「删除只移除当前持仓记录」；取消不 DELETE；失败不静默
+- `validateShares`：空/0/负/小数/非数字均拒绝且不发请求
+
+### 验收
+
+- 专项：`tests/test_portfolio_edit_api.py` **23 passed**
+- 全量离线：`pytest -m "not live"` → **667 passed**，1 failed（已知 Windows `test_run_cli_stream_timeout`）
+- 前端：`npm run build` 成功
+- Playwright A–J：**53/53**；验收期 advice 请求数 **0**；真实用户数据 SHA 前后一致
+- **未做**：账户资金 → 持仓建议；未改 advice/daily_review/astock/market
 
 ## 16. 最近关键提交（须与 `git log` 一致）
 
 | 短哈希 | 说明 |
 |--------|------|
+| `9932601` | feat: add portfolio holding exact edit and delete confirm |
 | `f3d90af` | fix: harden account funding persistence and submit state |
 | `88a1f83` | fix: restore account funding profile UI |
 | `fe54b8f` | feat: add manual account funding input |

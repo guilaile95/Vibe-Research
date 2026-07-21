@@ -8,7 +8,7 @@
 |----|-----|
 | 仓库（origin） | https://github.com/guilaile95/Vibe-Research |
 | 分支 | `feature/research-system-v01` |
-| 当前 HEAD | 以 `git rev-parse HEAD` 为准（本轮功能提交前基线：`f3d90af`；提交后请用最新哈希） |
+| 当前 HEAD | 功能提交 `9932601`；文档刷新后以 `git rev-parse HEAD` 为准 |
 | origin | `https://github.com/guilaile95/Vibe-Research.git` |
 | upstream | `https://github.com/simonlin1212/Vibe-Research.git` |
 | 跟踪 | `origin/feature/research-system-v01` |
@@ -42,10 +42,13 @@
 - 固定动作与比例档位；**validator 为执行字段权威**
 - add：后端计算 `execution_quantity` 与 `estimated_amount`（`5dec970`）并已 E2E 验收
 - 账户资金手工填写：`GET`/`PUT /api/account-profile`；**未接入**持仓建议
-- **持仓手工维护完善**：
-  - `PUT /api/portfolio/holding` 精确替换（不加权、不 upsert）
-  - 前端编辑窗口 + 删除确认 + 数量非法不静默转换
-  - DELETE 不写清仓；与 account_profile / advice 隔离
+- **持仓支持新增、精确编辑和安全删除**（`9932601`，已浏览器验收）：
+  - `POST` 新增：同代码仍**加权合并**
+  - `PUT` 编辑：**精确替换** shares/cost（不加权、不 upsert）
+  - 删除：确认弹窗 + 错误反馈；不写清仓记录
+  - 数量输入：**不再静默转换**（如 `-100` 不会变 `100`）
+  - 与 `account_profile` / advice 隔离
+- 账户资金可手工维护；**仍未接入**持仓建议
 
 ## 关键安全边界
 
@@ -56,16 +59,17 @@
 - 无 K 线不得编造技术位；不做 T
 - add 比例 = **相对当前持股**，不是账户仓位/资金比例
 - 真实 `portfolio.json` / `account_profile.json` **不得**用于自动化测试写入
+- 持仓增删改**不**自动调用 `POST /api/portfolio/advice`
 
 ## 最近关键提交（节选）
 
+- `9932601` feat: add portfolio holding exact edit and delete confirm
 - `f3d90af` harden account funding persistence
 - `88a1f83` restore account funding profile UI
 - `fe54b8f` add manual account funding input
 - `5dec970` calculate executable add quantities
 - `f2ae80c` stabilize A-share snapshot paging
 - `082e825` constrain portfolio advice execution rules
-- （持仓精确编辑提交：见最新 `git log`，message 含 portfolio holding edit）
 
 ## 当前下一任务
 

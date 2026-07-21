@@ -18,15 +18,18 @@
 
 ## 上一任务（已完成）
 
-~~完善持仓手工维护：精确编辑 PUT、编辑窗口、删除确认、数量校验、失败可见。~~
+~~完善持仓手工维护：安全新增 / 精确编辑 / 删除确认（`9932601`）。~~
 
-- **状态**：已完成（见 `PROJECT_STATE.md` §15）
-- 后端：`PUT /api/portfolio/holding` → `portfolio.update_holding`（精确替换，不加权，不存在 404）
-- 前端：编辑弹窗、删除确认（代码/名称/数量 + 说明）、`validateShares` 拒绝静默转换
-- 隔离：不动 `account_profile`；不自动 `POST /api/portfolio/advice`；DELETE 不写 closed
-- 测试：`tests/test_portfolio_edit_api.py` 23 passed；全量离线 667 passed（仅已知 Windows 例外）
-- 浏览器验收 A–J：**53/53** 通过；真实用户数据 SHA256 验收前后一致
-- 未接入：账户资金 → 持仓建议；未改 advice / daily_review / astock
+- **状态**：已完成并验收（见 `PROJECT_STATE.md` §15）
+- 持仓支持：**新增**、**精确编辑**、**安全删除**
+- `POST` 新增：同代码仍**加权合并**
+- `PUT` 编辑：**精确替换**（不加权、不 upsert、不存在 404）
+- 删除：确认弹窗 + 失败错误反馈；不写 closed
+- 数量输入：**不再静默转换**
+- 账户资金：**仍未接入**持仓建议
+- 测试：`test_portfolio_edit_api.py` 23 passed；全量离线 667 passed（仅已知 Windows 例外）
+- Playwright A–J：**53/53**；advice 请求数 0；真实数据 SHA 不变
+- 功能提交：`9932601`
 
 ## 当前下一任务
 
