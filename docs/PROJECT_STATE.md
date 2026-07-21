@@ -228,3 +228,25 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 - origin：`https://github.com/guilaile95/Vibe-Research.git`
 - upstream：`https://github.com/simonlin1212/Vibe-Research.git`
 - 跟踪：`origin/feature/research-system-v01`
+
+## 17. 持仓建议架构收口第一阶段（refactor）
+
+分支：refactor/portfolio-advice-architecture-v01（从 feature/research-system-v01 分出）
+
+本轮为纯架构重构，不改变任何产品行为、API 结构或 Prompt 文本。
+
+### 变更内容
+
+- 新建 portfolio_advice_contracts.py：策略常量唯一来源
+- 修改 portfolio_advice_prompt.py：改为 re-export contracts 常量（向后兼容）
+- 修改 portfolio_advice_validator.py：断开对 prompt 的反向依赖，改从 contracts 导入
+- 新建 portfolio_advice_account_metrics.py：将账户指标计算从 Service 迁移至独立模块
+- 修改 portfolio_advice_service.py：纯编排，删除已迁出的实现体
+- 新建 tests/fixtures/portfolio_advice/ + test_portfolio_advice_golden.py：27 个行为快照 + Golden Test 套件
+- 新建 tests/test_portfolio_advice_contracts.py：35 个契约正确性测试
+
+### 验收
+
+- Golden Tests：27/27 passed
+- 契约专项：35 passed
+- 全量离线：702 passed，1 failed（已知 Windows 例外，重构前已存在）
