@@ -1,0 +1,151 @@
+# 项目当前状态
+
+> 文档基准：分支 `feature/research-system-v01`，HEAD `5dec970184ee7af60da38e571245971219551dba`
+> 仅描述仓库内已实现能力；不包含密钥、持仓内容或代理敏感配置。
+
+## 1. 技术栈与数据存储
+
+| 层级 | 技术 | 说明 |
+|------|------|------|
+| 前端 | React 19 + TypeScript + Vite 6 + Tailwind | 默认开发端口 `:5899`（`frontend/vite.config.ts`） |
+| 后端 | FastAPI + Uvicorn | 默认 `:8900`（`backend` + README） |
+| A 股数据 | `backend/astock.py` + 仓库内 `a-stock-data/` | 东财等公开接口；`em_get` 固定直连 |
+| 全球指数/美港股子集 | `backend/gstock.py` + `global-stock-data/` | 复用 `astock.em_get` |
+| 持仓 | `backend/portfolio.py` | 默认 `~/.vibe-research/portfolio.json`（`VR_DATA_DIR` 可覆盖） |
+| 复盘磁盘缓存 | `backend/daily_review_cache.py` | `daily_review_latest.json`（同上数据目录） |
+| 复盘历史 | `review_store` / `review_history` | SQLite（如 Windows 下 `%LOCALAPPDATA%/VibeResearch/daily_reviews.sqlite3`） |
+| 模型接入 | 前端 localStorage `vr-llm` + 后端 `chat` / `cli_runtime` | API 或本机 CLI 订阅；密钥不进仓库 |
+
+版本线索：`frontend/package.json` 为 `0.1.3`；schema 如 `daily-review-v0.1`、`portfolio-advice-v0.1`。
+
+## 2. 每日复盘九维结构
+
+- **客观数据包**（`generate_daily_review`，schema `daily-review-v0.1`）主要包含：
+  - `data_health.components`：indices / global_indices / breadth / emotion / turnover / industry_boards / concept_boards / region_boards
+  - `market_environment`：indices、global_indices、breadth
+  - `sector_rotation`：industry / concept / region + highlights
+  - `short_term_emotion`
+  - `capital_activity`
+  - 顶层 `status`：`normal` | `partial` | `unavailable`
+- **AI 分析输出**（`daily_review_ai_prompt.NINE_DIMENSION_HEADINGS`）固定九个二级标题：
+  1. 市场整体
+  2. 市场情绪与赚钱效应
+  3. 涨停结构
+  4. 主线题材
+  5. 核心与高活跃个股
+  6. 催化与公开信息
+  7. 盘面本质与风险状态
+  8. 明日观察点
+  9. 复盘总结
+
+## 3. GET `/api/daily-review`
+
+- 定义：`backend/app.py` → `daily_review_snapshot`
+- 调用：`daily_review.get_daily_review_for_display()`
+- 响应：`{ "data": <复盘包>, "cache_meta"?: { source, stale, refreshing, saved_at, age_seconds, refresh_failed, refresh_error } }`
+- `normal` / `partial` / `unavailable` 均为 HTTP 200；聚合逃逸异常 → 502
+- **不接受** date/refresh 查询参数；不做历史日期查询
+- 文档注释明确：持仓建议等业务走 `generate_daily_review` fresh 路径，不用本接口 stale 结果
+
+相关：`POST /api/daily-review/analyze`（流式 AI 九维）、历史 save/list/compare 等路由。
+
+## 4. Stale-while-revalidate
+
+展示路径 `get_daily_review_for_display`：
+
+1. 内存新鲜缓存 → 立即返回（`stale=false`）
+2. 无内存但有磁盘「最近成功」包 → 返回旧结果（`stale=true`）并 **single-flight** 后台刷新
+3. 皆无 → 同步 `generate_daily_review`
+
+前端 `frontend/src/pages/DailyReview.tsx` 根据 `cache_meta.stale` 展示「当前显示上次成功结果，后台正在刷新」等提示并轮询。
+
+## 5. 内存缓存与磁盘最近成功复盘
+
+| 机制 | 位置 | 要点 |
+|------|------|------|
+| 进程内复盘缓存 | `daily_review._review_cache` | TTL **300s**；single-flight 聚合锁 |
+| 子模块缓存 | `market._CACHE` 等 | 与复盘共用 TTL 量级 |
+| 磁盘最近成功 | `daily_review_cache` → `daily_review_latest.json` | 重启后可 stale 展示 |
+| SQLite 历史 | `review_store` / 显式 save API | 与运行时缓存分离，GET 展示不自动写库 |
+
+仅高质量 `normal` / `partial` 写入内存与磁盘（见 `generate_daily_review` 文档字符串）。
+
+## 6. normal / partial / unavailable 覆盖规则
+
+- 核心组件：`indices`、`breadth`、`emotion`、`industry_boards`、`concept_boards`
+- 可选组件：`global_indices`、`turnover`、`region_boards`
+- **关键组件 unavailable 的 partial / 整体 unavailable 不覆盖已有 normal**（`cf535b8` 及相关 persist 逻辑）
+- 刷新失败：展示路径可保留旧 normal，并置 `refresh_failed`（不泄漏底层网络栈）
+
+## 7. 全 A 分页、直连、页级重试与完整性
+
+- `astock.a_share_snapshot`：东财 clist 分页；失败 **整页失败则整体抛错**，不返回已抓部分列表
+- `em_get`：**固定直连**，`trust_env=False`，不读系统/环境代理
+- `_em_get_page_with_retries`：同一页内有限重试瞬时网络错误；不回退从第 1 页重跑
+- 提交 `f2ae80c`：`fix: stabilize A-share snapshot paging requests`
+- 验收量级：成功时约 5500–5900 只；冷抓约 80–110 秒（环境相关）
+
+## 8. POST `/api/portfolio/advice`
+
+- 定义：`app.portfolio_advice`
+- 链路：`get_portfolio` → `generate_daily_review`（**fresh**）→ context → prompt → 模型 → `validate_portfolio_advice`
+- 请求：`user_request?` + `llm`（`LLMConfig`）；**禁止**客户端注入 portfolio/context/messages
+- 状态码：空持仓 409；广度不可用等市场核心数据 503；模型/输出无效 502；参数 400；其它 500
+- 不写持仓文件、不写复盘历史
+
+## 9. breadth unavailable 时 503 fail-closed
+
+- `portfolio_advice_service`：`_market_breadth_unavailable` 为真时抛 `PortfolioAdviceMarketDataError`
+- API 映射 **503** + 安全文案，**不调用模型**（见 `test_portfolio_advice_market_guard`）
+
+## 10. 持仓建议动作、比例档位与 validator
+
+- 动作：`add` / `hold` / `reduce` / `sell` / `watch` / `avoid`（`portfolio_advice_prompt.ACTIONS`）
+- 账户层：`hold` / `reduce_risk` / `selective_add` / `defensive`
+- 比例字段：`execution_size_pct_of_holding`（相对**当前该股持股数量**）
+  - add：10 或 20
+  - reduce：10 / 20 / 30
+  - sell：固定 100
+  - hold/watch/avoid：null
+- 置信度上限：low≤10，medium≤20，high≤30；partial 市场时 add 最多 10、reduce 最多 20
+- 条件数字可追溯；禁止无来源阈值、市场冲击类模板话术、reduce/sell 失效条件与风险控制冲突
+- 第一版 **不做 T**（无 `t_trade`）
+
+## 11. add 数量与预计金额
+
+- 提交 `5dec970`：`feat: calculate executable add quantities`
+- 后端重算（覆盖模型结构字段）：
+  - `raw = shares × pct / 100`
+  - `execution_quantity = floor(raw / 100) × 100`；不足 100 股 → null
+  - `estimated_amount = quantity × current_price`（`Decimal`，分位四舍五入）
+- 示例：1500 股、14.29 元、add 10% → 100 股、1429.00；add 20% → 300 股、4287.00
+- 文字中的建议买入股数/投入金额须与后端一致；禁止账户资金/总资产比例语义
+
+## 12. 前端展示
+
+| 页面 | 文件 | 要点 |
+|------|------|------|
+| 每日复盘 | `frontend/src/pages/DailyReview.tsx` | SWR 提示、`cache_meta`、九维 AI 流式分析入口 |
+| 持仓 | `frontend/src/pages/Portfolio.tsx` | 本地持仓 +「生成持仓操作建议」 |
+| API 类型 | `frontend/src/lib/api.ts` | `PortfolioAdviceHoldingAdvice` 含 `execution_quantity`、`estimated_amount` 等 |
+
+add 卡片文案：相对当前持股加仓；建议买入数量；预计所需金额（约 ¥…）；执行前确认可用资金。null 时不展示 0 股 / ¥0。
+
+## 13. 最近关键提交（须与 `git log` 一致）
+
+| 短哈希 | 完整哈希（前缀） | 说明 |
+|--------|------------------|------|
+| `8eb9225` | `8eb9225b3f0a9806eaba79697db0b89ca0335afc` | feat: upgrade daily review to nine-dimension analysis |
+| `2cf897c` | `2cf897c582fcd8298a176d04dba1665c32199350` | perf: serve persisted daily review while refreshing |
+| `cf535b8` | `cf535b860c33b1afa8eef727f36a3a26b69e6323` | fix: preserve valid review on refresh failure |
+| `082e825` | `082e82547910e022348da3031da4357c1499e89d` | fix: constrain portfolio advice execution rules |
+| `f2ae80c` | `f2ae80ced6fbb0e69772433b8b30eed311a974e8` | fix: stabilize A-share snapshot paging requests |
+| `5dec970` | `5dec970184ee7af60da38e571245971219551dba` | feat: calculate executable add quantities |
+
+当前分支 HEAD 为 **`5dec970`**。
+
+## 远程协作（文档撰写时）
+
+- origin：`https://github.com/guilaile95/Vibe-Research.git`
+- upstream：`https://github.com/simonlin1212/Vibe-Research.git`
+- 跟踪：`origin/feature/research-system-v01`
