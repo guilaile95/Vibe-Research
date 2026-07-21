@@ -5,6 +5,9 @@ market.get_overview / _sentiment / _sectors（避免隐式 AKShare）。
 
 完整结果缓存：进程内 TTL 与 market 子缓存一致（300s）；仅缓存
 status 为 normal / partial 的成功包；single-flight 避免并发重复聚合。
+
+展示路径另支持磁盘「最近成功」结果：重启后可立即返回 stale 并后台刷新。
+持仓建议等业务仍调用 generate_daily_review()，只用 fresh 内存/实时聚合。
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 import astock
+import daily_review_cache
 import market
 
 BEIJING = timezone(timedelta(hours=8))
@@ -33,6 +37,10 @@ _REVIEW_TTL = 300
 _REVIEW_CACHE_KEY = "default"
 _review_cache: dict[str, tuple[float, dict]] = {}
 _review_lock = threading.Lock()
+
+# 后台刷新 single-flight（仅展示路径）
+_bg_refresh_lock = threading.Lock()
+_bg_refreshing = False
 
 # 组件展示前缀
 _PREFIX = {
@@ -179,7 +187,7 @@ def _collect_warnings(
 
 
 def _clear_review_cache() -> None:
-    """清空完整复盘缓存（仅测试 / 运维；不写磁盘）。"""
+    """清空进程内完整复盘缓存（仅测试 / 运维；默认不删磁盘）。"""
     _review_cache.clear()
 
 
@@ -196,6 +204,16 @@ def _cached_review() -> dict | None:
     return val
 
 
+def _cached_review_age_seconds() -> float | None:
+    hit = _review_cache.get(_REVIEW_CACHE_KEY)
+    if not hit:
+        return None
+    ts, val = hit
+    if time.time() - ts >= _REVIEW_TTL or not isinstance(val, dict):
+        return None
+    return max(0.0, time.time() - ts)
+
+
 def _should_cache_review(result) -> bool:
     """仅缓存结构合法且 status 为 normal / partial 的成功包。"""
     if not isinstance(result, dict):
@@ -204,10 +222,64 @@ def _should_cache_review(result) -> bool:
 
 
 def _store_review(result: dict) -> None:
-    if _should_cache_review(result):
-        # 存独立副本，避免调用方修改污染缓存
-        _review_cache[_REVIEW_CACHE_KEY] = (time.time(), copy.deepcopy(result))
+    if not _should_cache_review(result):
+        return
+    # 存独立副本，避免调用方修改污染缓存
+    _review_cache[_REVIEW_CACHE_KEY] = (time.time(), copy.deepcopy(result))
+    # 同步持久化最近成功（失败不影响内存命中）
+    saved_at = result.get("generated_at")
+    if not isinstance(saved_at, str) or not saved_at.strip():
+        saved_at = _now_str()
+    try:
+        daily_review_cache.save_latest_review(result, saved_at=saved_at)
+    except Exception:  # noqa: BLE001
+        pass
 
+
+def _age_seconds_from_saved_at(saved_at: str | None) -> float | None:
+    if not isinstance(saved_at, str) or not saved_at.strip():
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            dt = datetime.strptime(saved_at.strip(), fmt).replace(tzinfo=BEIJING)
+            return max(0.0, (datetime.now(BEIJING) - dt).total_seconds())
+        except ValueError:
+            continue
+    return None
+
+
+def _is_background_refreshing() -> bool:
+    with _bg_refresh_lock:
+        return _bg_refreshing
+
+
+def _kick_background_refresh() -> bool:
+    """启动至多一个后台 fresh 刷新线程。已在刷新或内存已新鲜时返回 False。"""
+    global _bg_refreshing
+    with _bg_refresh_lock:
+        if _bg_refreshing:
+            return False
+        if _cached_review() is not None:
+            return False
+        _bg_refreshing = True
+
+    def worker() -> None:
+        global _bg_refreshing
+        try:
+            # 复用 generate_daily_review 的锁与聚合逻辑
+            generate_daily_review()
+        except Exception:  # noqa: BLE001 — 后台失败保留旧磁盘结果
+            pass
+        finally:
+            with _bg_refresh_lock:
+                _bg_refreshing = False
+
+    threading.Thread(
+        target=worker,
+        name="daily-review-bg-refresh",
+        daemon=True,
+    ).start()
+    return True
 
 def _build_daily_review() -> dict:
     """执行真实聚合（无缓存、无锁）。字段契约与历史版本一致。"""
@@ -409,12 +481,15 @@ def _build_daily_review() -> dict:
 
 
 def generate_daily_review() -> dict:
-    """聚合当日复盘客观数据（不调用 AI、不写库、不生成建议）。
+    """聚合当日复盘客观数据（fresh；不调用 AI、不读磁盘 stale）。
 
     进程内完整结果缓存（TTL=300s）+ single-flight：
     - 命中返回 deepcopy（generated_at 为生成时时间，不刷新）；
-    - 仅 normal / partial 写入缓存；unavailable / 异常 / 非法不缓存；
+    - 仅 normal / partial 写入内存缓存，并持久化最近成功；
+    - unavailable / 异常 / 非法不缓存、不覆盖磁盘；
     - 并发时仅一线程执行真实聚合，其余等锁后读缓存。
+
+    注意：持仓建议等必须走本函数，不得使用 get_daily_review_for_display 的 stale 结果。
     """
     cached = _cached_review()
     if cached is not None:
@@ -427,3 +502,63 @@ def generate_daily_review() -> dict:
         result = _build_daily_review()
         _store_review(result)
         return copy.deepcopy(result)
+
+
+def get_daily_review_for_display() -> dict:
+    """页面展示专用：可返回磁盘 stale + 后台刷新；结构 ``{data, cache_meta}``。
+
+    1. 新鲜内存缓存 → 立即返回（stale=false）
+    2. 无内存但有持久化成功包 → 返回旧结果（stale=true）并 single-flight 后台刷新
+    3. 皆无 → 同步 generate_daily_review（live）
+    """
+    cached = _cached_review()
+    if cached is not None:
+        return {
+            "data": copy.deepcopy(cached),
+            "cache_meta": {
+                "source": "memory",
+                "stale": False,
+                "refreshing": _is_background_refreshing(),
+                "saved_at": None,
+                "age_seconds": _cached_review_age_seconds(),
+            },
+        }
+
+    review, saved_at = daily_review_cache.load_latest_review()
+    if review is not None:
+        # 窗口期：后台可能已写入内存
+        cached = _cached_review()
+        if cached is not None:
+            return {
+                "data": copy.deepcopy(cached),
+                "cache_meta": {
+                    "source": "memory",
+                    "stale": False,
+                    "refreshing": _is_background_refreshing(),
+                    "saved_at": None,
+                    "age_seconds": _cached_review_age_seconds(),
+                },
+            }
+        _kick_background_refresh()
+        return {
+            "data": copy.deepcopy(review),
+            "cache_meta": {
+                "source": "persisted",
+                "stale": True,
+                "refreshing": True,
+                "saved_at": saved_at,
+                "age_seconds": _age_seconds_from_saved_at(saved_at),
+            },
+        }
+
+    data = generate_daily_review()
+    return {
+        "data": data,
+        "cache_meta": {
+            "source": "live",
+            "stale": False,
+            "refreshing": False,
+            "saved_at": None,
+            "age_seconds": 0.0,
+        },
+    }

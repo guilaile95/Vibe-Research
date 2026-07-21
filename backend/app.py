@@ -352,14 +352,22 @@ def market_boards(
 
 @app.get("/api/daily-review")
 def daily_review_snapshot():
-    """结构化 A 股每日复盘数据包（当前可获得快照）。
+    """结构化 A 股每日复盘数据包（展示路径，可 stale-while-revalidate）。
 
     聚合层已对组件异常做隔离；normal/partial/unavailable 均为 HTTP 200。
-    仅 generate_daily_review() 逃逸的未预期异常 → HTTP 502。
+    仅展示聚合逃逸的未预期异常 → HTTP 502。
+    响应保持 ``data`` 为复盘包；可选 ``cache_meta``（source/stale/refreshing 等）。
     本接口不接受 date/refresh 等参数，不支持历史日期查询。
+    持仓建议等业务仍走 generate_daily_review fresh 路径，不用本接口 stale 结果。
     """
     try:
-        return {"data": daily_review.generate_daily_review()}
+        payload = daily_review.get_daily_review_for_display()
+        # 保证 data 位置；cache_meta 可选透传
+        out = {"data": payload.get("data")}
+        meta = payload.get("cache_meta")
+        if isinstance(meta, dict):
+            out["cache_meta"] = meta
+        return out
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"每日复盘聚合异常：{e}") from e
 

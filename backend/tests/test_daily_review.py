@@ -14,9 +14,17 @@ import portfolio_advice_service
 @pytest.fixture(autouse=True)
 def _clear_daily_review_cache():
     """每个用例前后清空完整复盘缓存，避免用例间污染。"""
+    import daily_review_cache
+
     daily_review._clear_review_cache()
+    with daily_review._bg_refresh_lock:
+        daily_review._bg_refreshing = False
+    daily_review_cache.clear_latest_review_file()
     yield
     daily_review._clear_review_cache()
+    with daily_review._bg_refresh_lock:
+        daily_review._bg_refreshing = False
+    daily_review_cache.clear_latest_review_file()
 
 
 def _idx():

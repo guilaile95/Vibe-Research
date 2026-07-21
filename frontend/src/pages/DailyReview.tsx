@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Link } from "react-router-dom";
 import {
   Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, TrendingUp, TrendingDown,
@@ -12,7 +12,8 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import {
   api, ApiError, dailyReviewAnalyzeStream,
-  type Quote, type DailyReviewData, type BoardRankItem, type MarketSnapshotItem,
+  type Quote, type DailyReviewData, type DailyReviewCacheMeta,
+  type BoardRankItem, type MarketSnapshotItem,
   type DataStatus, type DailyReviewHistoryItem, type DailyReviewHistorySnapshot,
   type DailyReviewComparison, type NumericComparison, type RankingComparison,
   type HighlightComparison,
@@ -110,6 +111,11 @@ export function DailyReview() {
   const [dr, setDr] = useState<DailyReviewData | null>(null);
   const [drDone, setDrDone] = useState(false);
   const [drErr, setDrErr] = useState<string | null>(null);
+  const [cacheMeta, setCacheMeta] = useState<DailyReviewCacheMeta | null>(null);
+  const [staleRefreshNote, setStaleRefreshNote] = useState<string | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollDeadlineRef = useRef<number>(0);
+  const mountedRef = useRef(true);
 
   // 自选（独立请求）
   const [watchCodes, setWatchCodes] = useState<string[]>(loadWatch);
@@ -147,17 +153,83 @@ export function DailyReview() {
   const [comparisonError, setComparisonError] = useState<string | null>(null);
   const [compareBoardTab, setCompareBoardTab] = useState<"industry" | "concept" | "region">("industry");
 
-  const loadDailyReview = () => {
+  const clearPoll = useCallback(() => {
+    if (pollTimerRef.current != null) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, []);
+
+  const applyDailyReviewPayload = useCallback((
+    data: DailyReviewData,
+    meta?: DailyReviewCacheMeta | null,
+  ) => {
+    setDr(data);
+    setCacheMeta(meta ?? null);
+    setDrErr(null);
+    if (meta?.stale) {
+      setStaleRefreshNote("当前显示上次成功结果，后台正在刷新");
+    } else {
+      setStaleRefreshNote(null);
+    }
+  }, []);
+
+  const startStalePoll = useCallback(() => {
+    clearPoll();
+    pollDeadlineRef.current = Date.now() + 120_000;
+    pollTimerRef.current = setInterval(async () => {
+      if (!mountedRef.current) {
+        clearPoll();
+        return;
+      }
+      if (Date.now() > pollDeadlineRef.current) {
+        clearPoll();
+        setStaleRefreshNote((prev) =>
+          prev ? "后台刷新超时，仍显示上次成功结果" : prev,
+        );
+        return;
+      }
+      try {
+        const res = await api.dailyReview();
+        if (!mountedRef.current) return;
+        applyDailyReviewPayload(res.data, res.cache_meta);
+        if (!res.cache_meta?.stale) {
+          clearPoll();
+        }
+      } catch {
+        // 轮询失败：保留旧结果，继续尝试直至超时
+        if (mountedRef.current) {
+          setStaleRefreshNote("后台刷新暂时失败，仍显示上次成功结果");
+        }
+      }
+    }, 2000);
+  }, [applyDailyReviewPayload, clearPoll]);
+
+  const loadDailyReview = useCallback(() => {
     setDrDone(false);
     setDrErr(null);
+    clearPoll();
     api.dailyReview()
-      .then(setDr)
+      .then((res) => {
+        applyDailyReviewPayload(res.data, res.cache_meta);
+        if (res.cache_meta?.stale) {
+          startStalePoll();
+        }
+      })
       .catch((e) => {
-        setDr(null);
-        setDrErr(e instanceof ApiError ? e.message : "每日复盘请求失败");
+        // 有旧数据时不清空页面
+        setDr((prev) => {
+          if (prev) {
+            setStaleRefreshNote("刷新失败，仍显示上次结果");
+            return prev;
+          }
+          setDrErr(e instanceof ApiError ? e.message : "每日复盘请求失败");
+          return null;
+        });
+        setCacheMeta(null);
       })
       .finally(() => setDrDone(true));
-  };
+  }, [applyDailyReviewPayload, clearPoll, startStalePoll]);
 
   const loadHistory = (opts?: { trade_date?: string; offset?: number }) => {
     const offset = opts?.offset ?? histOffset;
@@ -199,10 +271,15 @@ export function DailyReview() {
   };
 
   useEffect(() => {
+    mountedRef.current = true;
     loadDailyReview();
     loadHistory({ trade_date: "", offset: 0 });
     refreshWatch(loadWatch());
-    // 仅首次挂载：不自动保存
+    // 仅首次挂载：不自动保存、不自动 AI
+    return () => {
+      mountedRef.current = false;
+      clearPoll();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -786,12 +863,36 @@ export function DailyReview() {
         </div>
       )}
 
+      {/* stale-while-revalidate 提示（不自动启动 AI） */}
+      {(cacheMeta?.stale || staleRefreshNote) && (
+        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
+          <p className="font-medium">
+            {staleRefreshNote || "当前显示上次成功结果，后台正在刷新"}
+          </p>
+          <p className="mt-1 text-xs opacity-90">
+            交易日期：{tradeDateLabel}
+            <span className="mx-1.5 opacity-50">·</span>
+            生成时间：{generatedAt}
+            {cacheMeta?.refreshing ? (
+              <span className="ml-2 inline-flex items-center gap-1">
+                <Loader2 className="h-3 w-3 animate-spin" /> 后台刷新中
+              </span>
+            ) : null}
+          </p>
+        </div>
+      )}
+
       {/* 整体状态 */}
       <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>交易日期：<b className="text-foreground">{tradeDateLabel}</b></span>
         <span className="text-muted-foreground/40">·</span>
         <span>生成时间：{generatedAt}</span>
-        {overall === "normal" && (
+        {cacheMeta?.stale && (
+          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
+            上次成功结果
+          </span>
+        )}
+        {overall === "normal" && !cacheMeta?.stale && (
           <span className="rounded-full bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground/70">数据正常</span>
         )}
         {overall === "partial" && (

@@ -253,7 +253,16 @@ export interface BoardRankingData {
   bottom: BoardRankItem[];
 }
 
-/** 结构化每日复盘（GET /api/daily-review） */
+/** GET /api/daily-review 可选缓存元数据（stale-while-revalidate） */
+export interface DailyReviewCacheMeta {
+  source: "live" | "memory" | "persisted" | string;
+  stale: boolean;
+  refreshing: boolean;
+  saved_at: string | null;
+  age_seconds: number | null;
+}
+
+/** 结构化每日复盘（GET /api/daily-review 的 data 字段） */
 export interface DailyReviewData {
   schema_version: string;
   generated_at: string;
@@ -734,8 +743,39 @@ export const api = {
   marketOverview: () => get<MarketOverview>("/market/overview"),
   emotion: () => get<ShortTermEmotion>("/market/emotion"),
   turnoverTop: () => get<TurnoverTop>("/market/turnover-top"),
-  /** 结构化每日复盘聚合包（一次请求覆盖指数/广度/情绪/成交/板块） */
-  dailyReview: () => get<DailyReviewData>("/daily-review"),
+  /**
+   * 结构化每日复盘聚合包（一次请求覆盖指数/广度/情绪/成交/板块）。
+   * 保留 data；附带可选 cache_meta（stale 时前端可轮询）。
+   */
+  dailyReview: async (): Promise<{
+    data: DailyReviewData;
+    cache_meta?: DailyReviewCacheMeta | null;
+  }> => {
+    let resp: Response;
+    const headers: Record<string, string> = { ...authHeaders() };
+    const opts: RequestInit = { method: "GET" };
+    if (Object.keys(headers).length > 0) opts.headers = headers;
+    try {
+      resp = await fetch("/api/daily-review", opts);
+    } catch {
+      throw new ApiError("连接不到后端，请先启动 backend（uvicorn app:app --port 8900）", 0);
+    }
+    let payload: any = null;
+    try {
+      payload = await resp.json();
+    } catch {
+      /* 非 JSON */
+    }
+    if (!resp.ok) {
+      if (resp.status === 401) {
+        throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
+      }
+      throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
+    }
+    const data = (payload?.data ?? payload) as DailyReviewData;
+    const cache_meta = (payload?.cache_meta ?? null) as DailyReviewCacheMeta | null;
+    return { data, cache_meta };
+  },
   /** 显式保存当前复盘快照（无请求体；服务器自行聚合校验） */
   saveDailyReviewHistory: () =>
     request<SaveDailyReviewHistoryResult>("/daily-review/history/save", "POST"),

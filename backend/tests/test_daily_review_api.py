@@ -12,6 +12,21 @@ import market
 client = TestClient(app_module.app)
 
 
+@pytest.fixture(autouse=True)
+def _clear_review_state():
+    import daily_review_cache
+
+    daily_review._clear_review_cache()
+    with daily_review._bg_refresh_lock:
+        daily_review._bg_refreshing = False
+    daily_review_cache.clear_latest_review_file()
+    yield
+    daily_review._clear_review_cache()
+    with daily_review._bg_refresh_lock:
+        daily_review._bg_refreshing = False
+    daily_review_cache.clear_latest_review_file()
+
+
 def _packet(status="normal", warnings=None, components=None):
     comps = components or {
         "indices": "normal",
@@ -46,12 +61,16 @@ def test_daily_review_api_normal_passthrough(monkeypatch):
     r = client.get("/api/daily-review")
     assert r.status_code == 200
     body = r.json()
-    assert set(body.keys()) == {"data"}
+    assert "data" in body
     assert body["data"] == pkt
     assert body["data"]["status"] == "normal"
     assert body["data"]["schema_version"] == "daily-review-v0.1"
     assert body["data"]["warnings"] == ["各数据源尚未提供统一的数据截止时间"]
     assert body["data"]["capital_activity"]["total_amount"] == 1.2e12
+    # 展示路径可附带 cache_meta；不破坏 data 契约
+    if "cache_meta" in body:
+        assert isinstance(body["cache_meta"], dict)
+        assert "stale" in body["cache_meta"]
 
 
 # ── 2 partial ───────────────────────────────────────────────────────
@@ -106,7 +125,8 @@ def test_daily_review_api_unexpected_error_502(monkeypatch):
     def boom():
         raise RuntimeError("unexpected")
 
-    monkeypatch.setattr(daily_review, "generate_daily_review", boom)
+    # 展示路径走 get_daily_review_for_display；mock 其同步 live 分支
+    monkeypatch.setattr(daily_review, "get_daily_review_for_display", boom)
     r = client.get("/api/daily-review")
     assert r.status_code == 502
     detail = r.json().get("detail", "")
@@ -122,9 +142,18 @@ def test_daily_review_api_calls_once(monkeypatch):
 
     def once():
         calls["n"] += 1
-        return _packet()
+        return {
+            "data": _packet(),
+            "cache_meta": {
+                "source": "live",
+                "stale": False,
+                "refreshing": False,
+                "saved_at": None,
+                "age_seconds": 0.0,
+            },
+        }
 
-    monkeypatch.setattr(daily_review, "generate_daily_review", once)
+    monkeypatch.setattr(daily_review, "get_daily_review_for_display", once)
     r = client.get("/api/daily-review")
     assert r.status_code == 200
     assert calls["n"] == 1
@@ -149,17 +178,49 @@ def test_daily_review_api_does_not_call_underlying(monkeypatch):
 # ── 7 多余参数不进入聚合器 ──────────────────────────────────────────
 
 def test_daily_review_api_ignores_date_query(monkeypatch):
-    """当前接口不支持历史 date；多余查询参数不得传入 generate_daily_review()。"""
+    """当前接口不支持历史 date；多余查询参数不得传入展示聚合。"""
     calls = {"args": None, "kwargs": None}
 
     def capture(*args, **kwargs):
         calls["args"] = args
         calls["kwargs"] = kwargs
-        return _packet()
+        return {
+            "data": _packet(),
+            "cache_meta": {
+                "source": "live",
+                "stale": False,
+                "refreshing": False,
+                "saved_at": None,
+                "age_seconds": 0.0,
+            },
+        }
 
-    monkeypatch.setattr(daily_review, "generate_daily_review", capture)
+    monkeypatch.setattr(daily_review, "get_daily_review_for_display", capture)
     r = client.get("/api/daily-review?date=2026-07-20")
     assert r.status_code == 200
     # 无参调用
     assert calls["args"] == ()
     assert calls["kwargs"] == {}
+
+
+def test_daily_review_api_exposes_cache_meta(monkeypatch):
+    monkeypatch.setattr(
+        daily_review,
+        "get_daily_review_for_display",
+        lambda: {
+            "data": _packet(),
+            "cache_meta": {
+                "source": "persisted",
+                "stale": True,
+                "refreshing": True,
+                "saved_at": "2026-07-20 15:00:00",
+                "age_seconds": 3600.0,
+            },
+        },
+    )
+    r = client.get("/api/daily-review")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["data"]["status"] == "normal"
+    assert body["cache_meta"]["stale"] is True
+    assert body["cache_meta"]["source"] == "persisted"
