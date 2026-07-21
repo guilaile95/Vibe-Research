@@ -166,7 +166,7 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 
 | 短哈希 | 完整哈希（前缀） | 说明 |
 |--------|------------------|------|
-| `<新提交>` | `<待填>` | fix: restore account funding profile UI |
+| `88a1f83` | `88a1f83cd85dd0840df3732252eef864a8dc297b` | fix: restore account funding profile UI |
 | `fe54b8f` | `fe54b8f68fd870aa5cac41d452c855643e1b25a7` | feat: add manual account funding input |
 | `8eb9225` | `8eb9225b3f0a9806eaba79697db0b89ca0335afc` | feat: upgrade daily review to nine-dimension analysis |
 | `2cf897c` | `2cf897c582fcd8298a176d04dba1665c32199350` | perf: serve persisted daily review while refreshing |
@@ -175,7 +175,7 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 | `f2ae80c` | `f2ae80ced6fbb0e69772433b8b30eed311a974e8` | fix: stabilize A-share snapshot paging requests |
 | `5dec970` | `5dec970184ee7af60da38e571245971219551dba` | feat: calculate executable add quantities |
 
-当前分支 HEAD 为 **`fe54b8f`**（`feat: add manual account funding input`）。
+当前分支 HEAD 为 **`88a1f83`**（`fix: restore account funding profile UI`）。
 
 ## 远程协作（文档撰写时）
 
