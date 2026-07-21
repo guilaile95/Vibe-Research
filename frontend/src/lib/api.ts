@@ -486,6 +486,79 @@ export interface PortfolioData {
   updated: string; last_refresh: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// 持仓操作建议（POST /api/portfolio/advice，普通 JSON，非流式）
+// 契约与 backend portfolio_advice_validator 权威结果对齐
+// ---------------------------------------------------------------------------
+
+export type PortfolioAdviceHoldingAction =
+  | "add"
+  | "hold"
+  | "reduce"
+  | "sell"
+  | "watch"
+  | "avoid";
+
+export type PortfolioAdviceAccountAction =
+  | "hold"
+  | "reduce_risk"
+  | "selective_add"
+  | "defensive";
+
+export type PortfolioAdviceConfidence = "high" | "medium" | "low";
+
+export interface PortfolioAdviceSummary {
+  holding_count: number;
+  market_value: number;
+  cost: number;
+  pnl: number;
+  pnl_pct: number | null;
+}
+
+export interface PortfolioAdviceAccountDecision {
+  action: PortfolioAdviceAccountAction;
+  reason: string;
+  confidence: PortfolioAdviceConfidence;
+}
+
+export interface PortfolioAdviceHoldingAdvice {
+  code: string;
+  name: string;
+  shares: number;
+  cost_price: number;
+  current_price: number;
+  market_value: number;
+  pnl_amount: number;
+  pnl_pct: number;
+  holding_weight_pct: number;
+  action: PortfolioAdviceHoldingAction;
+  execution_size_pct_of_holding: number | null;
+  execution_quantity: number | null;
+  trigger_conditions: string[];
+  price_conditions: string[];
+  execution_plan: string[];
+  risk_conditions: string[];
+  invalidation_conditions: string[];
+  confidence: PortfolioAdviceConfidence;
+  data_limitations: string[];
+}
+
+export interface PortfolioAdviceResult {
+  schema_version: "portfolio-advice-v0.1";
+  generated_at: string;
+  market_status: MarketDataStatus | string;
+  portfolio_summary: PortfolioAdviceSummary;
+  account_action: PortfolioAdviceAccountDecision;
+  holdings: PortfolioAdviceHoldingAdvice[];
+  warnings: string[];
+  data_limitations: string[];
+}
+
+export interface PortfolioAdviceRequest {
+  user_request: string | null;
+  llm: StreamLlmConfig;
+}
+
 // 资金面 / 筹码 / 信号（v3.3 并入，均为「用户查的那只股」的公开数据）
 export interface MarginRow { date: string; rzye: number; rzmre: number; rzche: number; rqye: number; rqmcl: number; rzrqye: number }
 export interface BlockTradeRow { date: string; price: number; close: number; premium_pct: number; vol: number; amount: number; buyer: string; seller: string }
@@ -708,6 +781,15 @@ export const api = {
   closePosition: (code: string, date: string, price: number, shares: number, cost: number) =>
     request<PortfolioData>("/portfolio/close", "POST", { code, date, price, shares, cost }),
   removeClosed: (index: number) => request<PortfolioData>(`/portfolio/close?index=${index}`, "DELETE"),
+  /**
+   * 结构化持仓操作建议（普通 JSON）。
+   * 只发送 user_request + llm；持仓与市场上下文由服务器读取，不注入 portfolio/context/messages。
+   */
+  portfolioAdvice: (req: PortfolioAdviceRequest) =>
+    request<PortfolioAdviceResult>("/portfolio/advice", "POST", {
+      user_request: req.user_request ?? null,
+      llm: req.llm,
+    }),
   valuation: (code: string) => get<Valuation>(`/valuation?code=${code}`),
   percentile: (code: string) => get<ValPercentile>(`/valuation/percentile?code=${code}`),
   financials: (code: string) => get<Financials>(`/financials?code=${code}`),

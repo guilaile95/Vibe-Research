@@ -1,9 +1,18 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle } from "lucide-react";
+import { Plus, ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle, Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { AskAiButton } from "@/components/ui/AskAiButton";
-import { api, ApiError, type PortfolioData } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  type PortfolioData,
+  type PortfolioAdviceResult,
+  type PortfolioAdviceHoldingAdvice,
+  type PortfolioAdviceHoldingAction,
+  type PortfolioAdviceAccountAction,
+  type PortfolioAdviceConfidence,
+} from "@/lib/api";
+import { loadLlm } from "@/lib/llm";
 import { cn } from "@/lib/utils";
 
 const REFRESH_MS = 30 * 60 * 1000; // 每半小时自动刷新
@@ -11,6 +20,193 @@ const pnlColor = (v: number) => (v > 0 ? "text-danger" : v < 0 ? "text-success" 
 const fmt = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 // 单价类（现价/成本/清仓价）最多 4 位小数：ETF/基金常见 3-4 位，截断成 2 位会与市值/盈亏对不上账
 const fmtPx = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 4 });
+const fmtShares = (v: number) => Math.round(v).toLocaleString("zh-CN");
+const fmtPct = (v: number | null | undefined) => {
+  if (v == null || Number.isNaN(v)) return "—";
+  return `${v > 0 ? "+" : ""}${v}%`;
+};
+const fmtSigned = (v: number) => `${v > 0 ? "+" : ""}${fmt(v)}`;
+
+const HOLDING_ACTION_LABEL: Record<PortfolioAdviceHoldingAction, string> = {
+  add: "加仓",
+  hold: "持有",
+  reduce: "减仓",
+  sell: "卖出",
+  watch: "观望",
+  avoid: "回避继续买入",
+};
+
+const ACCOUNT_ACTION_LABEL: Record<PortfolioAdviceAccountAction, string> = {
+  hold: "保持当前配置",
+  reduce_risk: "降低整体风险",
+  selective_add: "选择性加仓",
+  defensive: "防御为主",
+};
+
+const CONFIDENCE_LABEL: Record<PortfolioAdviceConfidence, string> = {
+  high: "高",
+  medium: "中",
+  low: "低",
+};
+
+const MARKET_STATUS_LABEL: Record<string, string> = {
+  normal: "数据完整",
+  partial: "部分数据缺失",
+  unavailable: "核心数据不足",
+};
+
+function actionBadgeClass(action: string): string {
+  switch (action) {
+    case "add":
+    case "selective_add":
+      return "bg-danger/15 text-danger border-danger/30";
+    case "reduce":
+    case "sell":
+    case "reduce_risk":
+    case "defensive":
+      return "bg-success/15 text-success border-success/30";
+    case "avoid":
+      return "bg-amber-500/15 text-amber-600 border-amber-500/30";
+    case "watch":
+      return "bg-muted/40 text-muted-foreground border-border";
+    default:
+      return "bg-primary/10 text-primary border-primary/25";
+  }
+}
+
+function ConditionList({ title, items, emphasize }: { title: string; items: string[]; emphasize?: boolean }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className={cn(emphasize && "rounded-md border border-amber-500/25 bg-amber-500/5 p-2")}>
+      <p className={cn("mb-1 text-xs font-medium", emphasize ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>
+        {title}
+      </p>
+      <ul className="list-inside list-disc space-y-0.5 text-xs text-foreground/90">
+        {items.map((it, i) => (
+          <li key={i}>{it}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function TruncatedNotes({ title, items }: { title: string; items: string[] }) {
+  if (!items || items.length === 0) return null;
+  const shown = items.slice(0, 8);
+  const rest = items.length - shown.length;
+  return (
+    <div className="rounded-lg border border-border/50 bg-black/10 p-3">
+      <p className="mb-1.5 text-xs font-semibold text-muted-foreground">{title}</p>
+      <ul className="list-inside list-disc space-y-0.5 text-xs text-foreground/90">
+        {shown.map((it, i) => (
+          <li key={i}>{it}</li>
+        ))}
+      </ul>
+      {rest > 0 && <p className="mt-1 text-[11px] text-muted-foreground/70">另有 {rest} 条</p>}
+    </div>
+  );
+}
+
+function HoldingAdviceCard({ h }: { h: PortfolioAdviceHoldingAdvice }) {
+  const actionLabel = HOLDING_ACTION_LABEL[h.action] ?? h.action;
+  const confLabel = CONFIDENCE_LABEL[h.confidence] ?? h.confidence;
+  const showQty = h.action === "reduce" || h.action === "sell";
+  const isAdd = h.action === "add";
+  const isNoQty = h.action === "hold" || h.action === "watch" || h.action === "avoid";
+
+  return (
+    <GlassCard className="p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <span className="text-base font-semibold">{h.name}</span>
+          <span className="ml-2 font-mono text-xs text-muted-foreground">{h.code}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={cn("rounded-md border px-2 py-0.5 text-xs font-semibold", actionBadgeClass(h.action))}>
+            {actionLabel}
+          </span>
+          <span className="text-xs text-muted-foreground">置信度 {confLabel}</span>
+        </div>
+      </div>
+
+      <div className="mb-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+        <div>
+          <p className="text-muted-foreground">持股数量</p>
+          <p className="font-mono font-medium">{fmtShares(h.shares)}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground">成本价</p>
+          <p className="font-mono font-medium">{fmtPx(h.cost_price)}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground">当前价</p>
+          <p className="font-mono font-medium">{fmtPx(h.current_price)}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground">持仓市值</p>
+          <p className="font-mono font-medium">{fmt(h.market_value)}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground">浮动盈亏</p>
+          <p className={cn("font-mono font-medium", pnlColor(h.pnl_amount))}>{fmtSigned(h.pnl_amount)}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground">盈亏比例</p>
+          <p className={cn("font-mono font-medium", pnlColor(h.pnl_amount))}>{fmtPct(h.pnl_pct)}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground">占持仓市值</p>
+          <p className="font-mono font-medium">
+            {h.holding_weight_pct == null ? "—" : `${h.holding_weight_pct}%`}
+          </p>
+        </div>
+        {h.execution_size_pct_of_holding != null && (
+          <div>
+            <p className="text-muted-foreground">建议操作比例</p>
+            <p className="font-mono font-medium">{h.execution_size_pct_of_holding}%</p>
+          </div>
+        )}
+      </div>
+
+      {/* 执行数量 */}
+      <div className="mb-3 rounded-md border border-border/40 bg-black/10 p-2.5 text-xs">
+        {showQty && h.execution_quantity != null && (
+          <>
+            <p className="font-medium text-foreground">
+              建议操作数量：<span className="font-mono text-primary">{fmtShares(h.execution_quantity)}</span> 股
+            </p>
+            <p className="mt-1 text-amber-700 dark:text-amber-400">执行前请确认实际可卖数量</p>
+          </>
+        )}
+        {showQty && h.execution_quantity == null && (
+          <p className="text-muted-foreground">无具体数量操作</p>
+        )}
+        {isAdd && (
+          <>
+            {h.execution_size_pct_of_holding != null && (
+              <p className="font-medium">
+                相对现有持仓建议增幅：{h.execution_size_pct_of_holding}%
+              </p>
+            )}
+            <p className="mt-1 text-amber-700 dark:text-amber-400">
+              当前未配置账户总资产与可用现金，无法计算具体加仓股数
+            </p>
+          </>
+        )}
+        {isNoQty && <p className="text-muted-foreground">无具体数量操作</p>}
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        <ConditionList title="触发条件" items={h.trigger_conditions} />
+        <ConditionList title="价格条件" items={h.price_conditions} />
+        <ConditionList title="执行步骤" items={h.execution_plan} />
+        <ConditionList title="主要风险" items={h.risk_conditions} />
+        <ConditionList title="失效条件" items={h.invalidation_conditions} />
+        <ConditionList title="数据限制" items={h.data_limitations} emphasize />
+      </div>
+    </GlassCard>
+  );
+}
 
 export function Portfolio() {
   const [data, setData] = useState<PortfolioData | null>(null);
@@ -28,20 +224,42 @@ export function Portfolio() {
   const [cCost, setCCost] = useState("");
   const [closing, setClosing] = useState(false);
 
+  // 结构化持仓操作建议
+  const [advice, setAdvice] = useState<PortfolioAdviceResult | null>(null);
+  const [adviceLoading, setAdviceLoading] = useState(false);
+  const [adviceError, setAdviceError] = useState<string | null>(null);
+  const [adviceRequest, setAdviceRequest] = useState("");
+
+  const clearAdvice = useCallback(() => {
+    setAdvice(null);
+    setAdviceError(null);
+  }, []);
+
   const load = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
     try {
       setData(manual ? await api.refreshPortfolio() : await api.portfolio());
       setErr(null);
+      // 行情刷新后直接清除旧建议，避免基于过期事实误导
+      clearAdvice();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "加载失败");
     } finally {
       if (manual) setRefreshing(false);
     }
-  }, []);
+  }, [clearAdvice]);
 
   useEffect(() => {
-    load();
+    // 首次仅加载持仓；不自动请求 advice
+    const boot = async () => {
+      try {
+        setData(await api.portfolio());
+        setErr(null);
+      } catch (e) {
+        setErr(e instanceof ApiError ? e.message : "加载失败");
+      }
+    };
+    boot();
     const t = setInterval(() => load(), REFRESH_MS); // 每半小时自动刷新
     return () => clearInterval(t);
   }, [load]);
@@ -54,6 +272,7 @@ export function Portfolio() {
     try {
       setData(await api.addHolding(code.trim(), s, c));
       setCode(""); setShares(""); setCost("");
+      clearAdvice();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "添加失败");
     } finally {
@@ -62,7 +281,10 @@ export function Portfolio() {
   };
 
   const remove = async (c: string) => {
-    try { setData(await api.removeHolding(c)); } catch { /* ignore */ }
+    try {
+      setData(await api.removeHolding(c));
+      clearAdvice();
+    } catch { /* ignore */ }
   };
 
   const addClose = async () => {
@@ -74,6 +296,7 @@ export function Portfolio() {
     try {
       setData(await api.closePosition(cCode.trim(), cDate, p, s, c));
       setCCode(""); setCDate(""); setCPrice(""); setCShares(""); setCCost("");
+      clearAdvice();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "添加清仓记录失败");
     } finally {
@@ -82,17 +305,66 @@ export function Portfolio() {
   };
 
   const removeClosed = async (i: number) => {
-    try { setData(await api.removeClosed(i)); } catch { /* ignore */ }
+    try {
+      setData(await api.removeClosed(i));
+      clearAdvice();
+    } catch { /* ignore */ }
+  };
+
+  const generateAdvice = async () => {
+    if (adviceLoading) return;
+    const llm = loadLlm();
+    if (!llm) {
+      setAdviceError('请先在“接入 AI”中配置模型');
+      setAdvice(null);
+      return;
+    }
+    const normalized = adviceRequest.trim();
+    setAdviceLoading(true);
+    setAdviceError(null);
+    try {
+      const result = await api.portfolioAdvice({
+        user_request: normalized ? normalized : null,
+        llm: {
+          provider: llm.provider,
+          baseURL: llm.baseURL,
+          apiKey: llm.apiKey,
+          model: llm.model,
+        },
+      });
+      setAdvice(result);
+    } catch (e) {
+      setAdvice(null);
+      if (e instanceof ApiError) {
+        if (e.status === 409) {
+          setAdviceError(e.message || "当前没有持仓，无法生成持仓操作建议");
+        } else if (e.status === 502) {
+          const d = e.message || "";
+          if (d === "持仓建议模型调用失败" || d === "持仓建议模型输出无效") {
+            setAdviceError(d);
+          } else {
+            setAdviceError("持仓建议生成失败，请重试");
+          }
+        } else if (e.status === 500) {
+          setAdviceError("持仓操作建议生成失败");
+        } else if (e.status === 400 && e.message.includes("接入")) {
+          setAdviceError('请先在“接入 AI”中配置模型');
+        } else {
+          setAdviceError(e.message || "持仓建议生成失败，请重试");
+        }
+      } else {
+        setAdviceError("持仓建议生成失败，请重试");
+      }
+    } finally {
+      setAdviceLoading(false);
+    }
   };
 
   const holdings = data?.holdings || [];
   const totals = data?.totals;
   const closed = data?.closed || [];
-
-  const aiContext = totals
-    ? `我的持仓（本地数据）：\n` + holdings.map((h) => `${h.name}(${h.code}) ${h.shares}股 成本${h.cost} 现价${h.price} 浮盈${h.pnl}(${h.pnl_pct}%)`).join("\n") +
-      `\n汇总：市值${totals.market_value} 总浮盈${totals.pnl}(${totals.pnl_pct}%)`
-    : "我的持仓：暂无记录。";
+  const summary = advice?.portfolio_summary;
+  const account = advice?.account_action;
 
   return (
     <div>
@@ -101,10 +373,6 @@ export function Portfolio() {
         subtitle="自己录、存在本地，实时看浮动盈亏"
         actions={
           <div className="flex items-center gap-2">
-            {holdings.length > 0 && (
-              <AskAiButton context={aiContext} label="让 AI 看我的持仓"
-                suggestions={["我的持仓集中在哪些方向", "结构上有什么风险", "帮我梳理一下"]} />
-            )}
             <button onClick={() => load(true)} disabled={refreshing}
               className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
               {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -116,7 +384,7 @@ export function Portfolio() {
 
       <div className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-        <span>持仓<b className="text-foreground">只存在你本地</b>，不上传、不进仓库。行情每半小时自动刷新，也可手动刷新。本产品不提供标的、不给建议，只帮你把自己的账理清楚。</span>
+        <span>持仓<b className="text-foreground">只存在你本地</b>，不上传、不进仓库。行情每半小时自动刷新，也可手动刷新。结构化操作建议由本地配置的 AI 生成，数量与盈亏以代码校验结果为准。</span>
       </div>
 
       {/* 汇总 */}
@@ -125,8 +393,8 @@ export function Portfolio() {
           {[
             { k: "总市值", v: fmt(totals.market_value), c: "text-foreground" },
             { k: "总成本", v: fmt(totals.cost), c: "text-foreground" },
-            { k: "浮动盈亏", v: (totals.pnl > 0 ? "+" : "") + fmt(totals.pnl), c: pnlColor(totals.pnl) },
-            { k: "盈亏比例", v: (totals.pnl_pct > 0 ? "+" : "") + totals.pnl_pct + "%", c: pnlColor(totals.pnl) },
+            { k: "浮动盈亏", v: fmtSigned(totals.pnl), c: pnlColor(totals.pnl) },
+            { k: "盈亏比例", v: fmtPct(totals.pnl_pct), c: pnlColor(totals.pnl) },
           ].map((m) => (
             <GlassCard key={m.k} className="p-3">
               <p className="text-xs text-muted-foreground">{m.k}</p>
@@ -198,8 +466,8 @@ export function Portfolio() {
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(h.shares)}</td>
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmtPx(h.cost)}</td>
                     <td className="px-2 py-2.5 font-mono">{fmt(h.market_value)}</td>
-                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{h.pnl > 0 ? "+" : ""}{fmt(h.pnl)}</td>
-                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{h.pnl_pct > 0 ? "+" : ""}{h.pnl_pct}%</td>
+                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{fmtSigned(h.pnl)}</td>
+                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{fmtPct(h.pnl_pct)}</td>
                     <td className="px-2 py-2.5">
                       <button onClick={() => remove(h.code)} className="text-muted-foreground/50 hover:text-destructive" title="删除">
                         <Trash2 className="h-3.5 w-3.5" />
@@ -209,6 +477,108 @@ export function Portfolio() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+      </GlassCard>
+
+      {/* 持仓操作建议（结构化 API） */}
+      <GlassCard className="mb-4 mt-6">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">持仓操作建议</h3>
+          <span className="text-[11px] text-muted-foreground/70">独立分析，不写入持仓</span>
+        </div>
+        <label className="mb-1 block text-xs text-muted-foreground">补充要求（可选）</label>
+        <textarea
+          value={adviceRequest}
+          onChange={(e) => setAdviceRequest(e.target.value)}
+          rows={2}
+          placeholder="例如：重点判断是否需要减仓，持有周期以短线为主"
+          disabled={adviceLoading}
+          className="mb-3 w-full resize-y rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50 disabled:opacity-50"
+        />
+        <button
+          type="button"
+          onClick={generateAdvice}
+          disabled={adviceLoading}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
+        >
+          {adviceLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+          {adviceLoading ? "分析中…" : "生成持仓操作建议"}
+        </button>
+
+        {adviceError && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{adviceError}</span>
+          </div>
+        )}
+
+        {advice && summary && account && (
+          <div className="mt-4 space-y-4">
+            {/* 总体摘要 */}
+            <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 lg:grid-cols-6">
+              <div className="rounded-md border border-border/40 p-2">
+                <p className="text-muted-foreground">生成时间</p>
+                <p className="font-medium">{advice.generated_at || "—"}</p>
+              </div>
+              <div className="rounded-md border border-border/40 p-2">
+                <p className="text-muted-foreground">市场数据状态</p>
+                <p className="font-medium">
+                  {MARKET_STATUS_LABEL[advice.market_status] ?? (advice.market_status || "—")}
+                </p>
+              </div>
+              <div className="rounded-md border border-border/40 p-2">
+                <p className="text-muted-foreground">持仓数量</p>
+                <p className="font-mono font-medium">{summary.holding_count}</p>
+              </div>
+              <div className="rounded-md border border-border/40 p-2">
+                <p className="text-muted-foreground">持仓市值</p>
+                <p className="font-mono font-medium">{fmt(summary.market_value)}</p>
+              </div>
+              <div className="rounded-md border border-border/40 p-2">
+                <p className="text-muted-foreground">持仓成本</p>
+                <p className="font-mono font-medium">{fmt(summary.cost)}</p>
+              </div>
+              <div className="rounded-md border border-border/40 p-2">
+                <p className="text-muted-foreground">浮动盈亏</p>
+                <p className={cn("font-mono font-medium", pnlColor(summary.pnl))}>
+                  {fmtSigned(summary.pnl)}
+                  <span className="ml-1 text-muted-foreground">({fmtPct(summary.pnl_pct)})</span>
+                </p>
+              </div>
+            </div>
+
+            {/* 账户级建议 */}
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+              <p className="mb-1 text-xs font-semibold text-muted-foreground">账户整体建议</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={cn("rounded-md border px-2 py-0.5 text-sm font-semibold", actionBadgeClass(account.action))}>
+                  {ACCOUNT_ACTION_LABEL[account.action] ?? account.action}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  置信度 {CONFIDENCE_LABEL[account.confidence] ?? account.confidence}
+                </span>
+              </div>
+              {account.reason && (
+                <p className="mt-2 text-sm text-foreground/90">{account.reason}</p>
+              )}
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <TruncatedNotes title="分析提示" items={advice.warnings || []} />
+              <TruncatedNotes title="数据限制" items={advice.data_limitations || []} />
+            </div>
+
+            {/* 逐股建议 */}
+            <div className="space-y-3">
+              <p className="text-xs font-semibold text-muted-foreground">逐股操作建议</p>
+              {(advice.holdings || []).map((h) => (
+                <HoldingAdviceCard key={h.code} h={h} />
+              ))}
+              {(!advice.holdings || advice.holdings.length === 0) && (
+                <p className="text-sm text-muted-foreground">暂无逐股建议</p>
+              )}
+            </div>
           </div>
         )}
       </GlassCard>
@@ -254,7 +624,7 @@ export function Portfolio() {
         <h3 className="text-sm font-semibold text-muted-foreground">已清仓</h3>
         {closed.length > 0 && data && (
           <span className="text-sm">
-            已实现盈亏合计 <b className={cn("font-mono", pnlColor(data.realized_pnl))}>{data.realized_pnl > 0 ? "+" : ""}{fmt(data.realized_pnl)}</b>
+            已实现盈亏合计 <b className={cn("font-mono", pnlColor(data.realized_pnl))}>{fmtSigned(data.realized_pnl)}</b>
           </span>
         )}
       </div>
@@ -282,8 +652,8 @@ export function Portfolio() {
                     <td className="px-2 py-2.5 font-mono">{fmtPx(c.price)}</td>
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(c.shares)}</td>
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmtPx(c.cost)}</td>
-                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{c.pnl > 0 ? "+" : ""}{fmt(c.pnl)}</td>
-                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{c.pnl_pct > 0 ? "+" : ""}{c.pnl_pct}%</td>
+                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{fmtSigned(c.pnl)}</td>
+                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{fmtPct(c.pnl_pct)}</td>
                     <td className="px-2 py-2.5">
                       <button onClick={() => removeClosed(i)} className="text-muted-foreground/50 hover:text-destructive" title="删除">
                         <Trash2 className="h-3.5 w-3.5" />
