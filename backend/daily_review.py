@@ -2,11 +2,17 @@
 
 复用 market / astock 已有缓存入口，不直接请求外部数据源，不调用
 market.get_overview / _sentiment / _sectors（避免隐式 AKShare）。
+
+完整结果缓存：进程内 TTL 与 market 子缓存一致（300s）；仅缓存
+status 为 normal / partial 的成功包；single-flight 避免并发重复聚合。
 """
 
 from __future__ import annotations
 
+import copy
 import re
+import threading
+import time
 from datetime import datetime, timezone, timedelta
 
 import astock
@@ -21,6 +27,12 @@ _CORE_COMPONENTS = ("indices", "breadth", "emotion", "industry_boards", "concept
 _OPTIONAL_COMPONENTS = ("global_indices", "turnover", "region_boards")
 
 _WARN_NO_CUTOFF = "各数据源尚未提供统一的数据截止时间"
+
+# 完整复盘结果缓存（进程内；与 market 子缓存 TTL 对齐）
+_REVIEW_TTL = 300
+_REVIEW_CACHE_KEY = "default"
+_review_cache: dict[str, tuple[float, dict]] = {}
+_review_lock = threading.Lock()
 
 # 组件展示前缀
 _PREFIX = {
@@ -166,8 +178,39 @@ def _collect_warnings(
     return out
 
 
-def generate_daily_review() -> dict:
-    """聚合当日复盘客观数据（不调用 AI、不写库、不生成建议）。"""
+def _clear_review_cache() -> None:
+    """清空完整复盘缓存（仅测试 / 运维；不写磁盘）。"""
+    _review_cache.clear()
+
+
+def _cached_review() -> dict | None:
+    """返回未过期的缓存包（原对象，调用方须 deepcopy）；未命中返回 None。"""
+    hit = _review_cache.get(_REVIEW_CACHE_KEY)
+    if not hit:
+        return None
+    ts, val = hit
+    if time.time() - ts >= _REVIEW_TTL:
+        return None
+    if not isinstance(val, dict):
+        return None
+    return val
+
+
+def _should_cache_review(result) -> bool:
+    """仅缓存结构合法且 status 为 normal / partial 的成功包。"""
+    if not isinstance(result, dict):
+        return False
+    return result.get("status") in ("normal", "partial")
+
+
+def _store_review(result: dict) -> None:
+    if _should_cache_review(result):
+        # 存独立副本，避免调用方修改污染缓存
+        _review_cache[_REVIEW_CACHE_KEY] = (time.time(), copy.deepcopy(result))
+
+
+def _build_daily_review() -> dict:
+    """执行真实聚合（无缓存、无锁）。字段契约与历史版本一致。"""
     top_warnings: list[str] = [_WARN_NO_CUTOFF]
     labeled_warns: list[tuple[str, list[str]]] = []
 
@@ -363,3 +406,24 @@ def generate_daily_review() -> dict:
             "high_turnover": high_turnover,
         },
     }
+
+
+def generate_daily_review() -> dict:
+    """聚合当日复盘客观数据（不调用 AI、不写库、不生成建议）。
+
+    进程内完整结果缓存（TTL=300s）+ single-flight：
+    - 命中返回 deepcopy（generated_at 为生成时时间，不刷新）；
+    - 仅 normal / partial 写入缓存；unavailable / 异常 / 非法不缓存；
+    - 并发时仅一线程执行真实聚合，其余等锁后读缓存。
+    """
+    cached = _cached_review()
+    if cached is not None:
+        return copy.deepcopy(cached)
+
+    with _review_lock:
+        cached = _cached_review()
+        if cached is not None:
+            return copy.deepcopy(cached)
+        result = _build_daily_review()
+        _store_review(result)
+        return copy.deepcopy(result)

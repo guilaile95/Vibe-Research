@@ -1,10 +1,22 @@
 """generate_daily_review 结构化每日复盘聚合器离线测试（全部 Mock，不联网）。"""
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 import daily_review
 import market
+import portfolio_advice_service
+
+
+@pytest.fixture(autouse=True)
+def _clear_daily_review_cache():
+    """每个用例前后清空完整复盘缓存，避免用例间污染。"""
+    daily_review._clear_review_cache()
+    yield
+    daily_review._clear_review_cache()
 
 
 def _idx():
@@ -178,7 +190,7 @@ def test_highlights_extraction(monkeypatch):
     assert h["strongest_industry"]["change_pct"] == 5.0
     assert h["weakest_industry"]["change_pct"] == -3.0
 
-    # 空 top/bottom
+    # 空 top/bottom（需清缓存后重聚合，模拟不同源数据）
     def empty_board(board_type="industry", top_n=20):
         env = _board(board_type)
         env["data"] = {
@@ -190,6 +202,7 @@ def test_highlights_extraction(monkeypatch):
         return env
 
     monkeypatch.setattr(market, "get_board_ranking", empty_board)
+    daily_review._clear_review_cache()
     out2 = daily_review.generate_daily_review()
     h2 = out2["sector_rotation"]["highlights"]
     assert h2["strongest_industry"] is None
@@ -340,3 +353,292 @@ def test_call_counts_once_each(monkeypatch):
     assert len(counts["boards"]) == 3
     assert sorted(t for t, _ in counts["boards"]) == ["concept", "industry", "region"]
     assert all(n == 10 for _, n in counts["boards"])
+
+
+# ── 完整结果缓存 + single-flight ────────────────────────────────────
+
+def test_cache_first_call_runs_aggregation(monkeypatch):
+    counts = _install_all_ok(monkeypatch)
+    out = daily_review.generate_daily_review()
+    assert out["status"] == "normal"
+    assert counts["index"] == 1
+    assert counts["breadth"] == 1
+
+
+def test_cache_second_call_skips_components(monkeypatch):
+    counts = _install_all_ok(monkeypatch)
+    a = daily_review.generate_daily_review()
+    b = daily_review.generate_daily_review()
+    assert a["status"] == "normal"
+    assert b["status"] == "normal"
+    assert a["generated_at"] == b["generated_at"]
+    assert counts["index"] == 1
+    assert counts["global"] == 1
+    assert counts["breadth"] == 1
+    assert counts["emotion"] == 1
+    assert counts["turnover"] == 1
+    assert len(counts["boards"]) == 3
+
+
+def test_cache_returns_deepcopy(monkeypatch):
+    _install_all_ok(monkeypatch)
+    a = daily_review.generate_daily_review()
+    b = daily_review.generate_daily_review()
+    assert a is not b
+    assert a["data_health"] is not b["data_health"]
+    assert a["market_environment"] is not b["market_environment"]
+
+
+def test_cache_mutation_does_not_pollute(monkeypatch):
+    _install_all_ok(monkeypatch)
+    a = daily_review.generate_daily_review()
+    orig_at = a["generated_at"]
+    a["status"] = "hacked"
+    a["generated_at"] = "1999-01-01 00:00:00"
+    a["warnings"].append("pollute")
+    a["market_environment"]["indices"]["status"] = "hacked"
+    b = daily_review.generate_daily_review()
+    assert b["status"] == "normal"
+    assert b["generated_at"] == orig_at
+    assert "pollute" not in b["warnings"]
+    assert b["market_environment"]["indices"]["status"] == "normal"
+
+
+def test_cache_ttl_expiry_regenerates(monkeypatch):
+    counts = _install_all_ok(monkeypatch)
+    monkeypatch.setattr(daily_review, "_REVIEW_TTL", 1)
+    t0 = 1000.0
+    clock = {"now": t0}
+
+    def fake_time():
+        return clock["now"]
+
+    monkeypatch.setattr(daily_review.time, "time", fake_time)
+    daily_review.generate_daily_review()
+    assert counts["index"] == 1
+    clock["now"] = t0 + 0.5
+    daily_review.generate_daily_review()
+    assert counts["index"] == 1
+    clock["now"] = t0 + 1.01
+    daily_review.generate_daily_review()
+    assert counts["index"] == 2
+
+
+def test_cache_stores_normal(monkeypatch):
+    _install_all_ok(monkeypatch)
+    out = daily_review.generate_daily_review()
+    assert out["status"] == "normal"
+    assert daily_review._REVIEW_CACHE_KEY in daily_review._review_cache
+    assert daily_review._review_cache[daily_review._REVIEW_CACHE_KEY][1]["status"] == "normal"
+
+
+def test_cache_stores_partial(monkeypatch):
+    _install_all_ok(monkeypatch)
+
+    def boom_concept(board_type="industry", top_n=20):
+        if board_type == "concept":
+            raise RuntimeError("timeout")
+        return _board(board_type)
+
+    monkeypatch.setattr(market, "get_board_ranking", boom_concept)
+    out = daily_review.generate_daily_review()
+    assert out["status"] == "partial"
+    assert daily_review._REVIEW_CACHE_KEY in daily_review._review_cache
+    assert daily_review._review_cache[daily_review._REVIEW_CACHE_KEY][1]["status"] == "partial"
+    # 第二次应命中缓存，不再调组件
+    counts = {"boards": 0}
+
+    def boards(board_type="industry", top_n=20):
+        counts["boards"] += 1
+        return _board(board_type)
+
+    monkeypatch.setattr(market, "get_board_ranking", boards)
+    out2 = daily_review.generate_daily_review()
+    assert out2["status"] == "partial"
+    assert counts["boards"] == 0
+
+
+def test_cache_skips_unavailable(monkeypatch):
+    def fail(*a, **k):
+        raise RuntimeError("all down")
+
+    monkeypatch.setattr(daily_review.astock, "index_quote", fail)
+    monkeypatch.setattr(market, "get_global_indices", fail)
+    monkeypatch.setattr(market, "get_market_breadth", fail)
+    monkeypatch.setattr(market, "get_short_term_emotion", fail)
+    monkeypatch.setattr(market, "get_turnover_top", fail)
+    monkeypatch.setattr(market, "get_board_ranking", fail)
+    monkeypatch.setattr(market, "get_overview", lambda: (_ for _ in ()).throw(RuntimeError("no")))
+    monkeypatch.setattr(market, "_sectors", lambda: (_ for _ in ()).throw(RuntimeError("no")))
+
+    out = daily_review.generate_daily_review()
+    assert out["status"] == "unavailable"
+    assert daily_review._REVIEW_CACHE_KEY not in daily_review._review_cache
+
+
+def test_cache_skips_on_aggregation_exception(monkeypatch):
+    _install_all_ok(monkeypatch)
+
+    def boom():
+        raise RuntimeError("aggregate boom")
+
+    monkeypatch.setattr(daily_review, "_build_daily_review", boom)
+    with pytest.raises(RuntimeError, match="aggregate boom"):
+        daily_review.generate_daily_review()
+    assert daily_review._REVIEW_CACHE_KEY not in daily_review._review_cache
+
+
+def test_cache_retry_after_failure(monkeypatch):
+    calls = {"n": 0}
+
+    def flaky_build():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("first fail")
+        return {
+            "schema_version": "daily-review-v0.1",
+            "generated_at": "2026-07-21 12:00:00",
+            "trade_date": "2026-07-21",
+            "data_cutoff": None,
+            "status": "normal",
+            "warnings": [],
+            "data_health": {"components": {}},
+            "market_environment": {},
+            "sector_rotation": {},
+            "short_term_emotion": {},
+            "capital_activity": {},
+        }
+
+    monkeypatch.setattr(daily_review, "_build_daily_review", flaky_build)
+    with pytest.raises(RuntimeError, match="first fail"):
+        daily_review.generate_daily_review()
+    out = daily_review.generate_daily_review()
+    assert out["status"] == "normal"
+    assert calls["n"] == 2
+    # 第三次命中缓存
+    out2 = daily_review.generate_daily_review()
+    assert out2["status"] == "normal"
+    assert calls["n"] == 2
+
+
+def test_single_flight_only_one_build(monkeypatch):
+    barrier = threading.Barrier(2)
+    builds = {"n": 0}
+    lock = threading.Lock()
+
+    def slow_build():
+        with lock:
+            builds["n"] += 1
+        time.sleep(0.15)
+        return {
+            "schema_version": "daily-review-v0.1",
+            "generated_at": "2026-07-21 12:00:00",
+            "trade_date": "2026-07-21",
+            "data_cutoff": None,
+            "status": "normal",
+            "warnings": [],
+            "data_health": {"components": {}},
+            "market_environment": {},
+            "sector_rotation": {},
+            "short_term_emotion": {},
+            "capital_activity": {},
+        }
+
+    monkeypatch.setattr(daily_review, "_build_daily_review", slow_build)
+
+    results = []
+    errors = []
+
+    def worker():
+        try:
+            barrier.wait(timeout=5)
+            results.append(daily_review.generate_daily_review())
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    t1 = threading.Thread(target=worker)
+    t2 = threading.Thread(target=worker)
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+    assert not errors
+    assert len(results) == 2
+    assert builds["n"] == 1
+    assert all(r["status"] == "normal" for r in results)
+
+
+def test_single_flight_failure_releases_lock(monkeypatch):
+    calls = {"n": 0}
+    barrier = threading.Barrier(2)
+
+    def boom_then_ok():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("first concurrent fail")
+        return {
+            "schema_version": "daily-review-v0.1",
+            "generated_at": "2026-07-21 12:00:00",
+            "trade_date": "2026-07-21",
+            "data_cutoff": None,
+            "status": "normal",
+            "warnings": [],
+            "data_health": {"components": {}},
+            "market_environment": {},
+            "sector_rotation": {},
+            "short_term_emotion": {},
+            "capital_activity": {},
+        }
+
+    monkeypatch.setattr(daily_review, "_build_daily_review", boom_then_ok)
+
+    outcomes = []
+
+    def worker():
+        barrier.wait(timeout=5)
+        try:
+            outcomes.append(("ok", daily_review.generate_daily_review()))
+        except Exception as e:  # noqa: BLE001
+            outcomes.append(("err", e))
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert len(outcomes) == 2
+    # 首个失败释放锁后，至少一个成功（另一个可能也失败若都在失败窗口内）
+    # 再单独调用应能成功且不死锁
+    out = daily_review.generate_daily_review()
+    assert out["status"] == "normal"
+    assert calls["n"] >= 2
+
+
+def test_portfolio_advice_reuses_daily_review_cache(monkeypatch):
+    """portfolio_advice 调 generate_daily_review，应命中完整复盘缓存。"""
+    counts = _install_all_ok(monkeypatch)
+    review = daily_review.generate_daily_review()
+    assert review["status"] == "normal"
+    assert counts["index"] == 1
+
+    pf = {
+        "holdings": [
+            {
+                "code": "001896",
+                "name": "豫能控股",
+                "shares": 1000,
+                "cost": 5.0,
+                "price": 5.5,
+            }
+        ],
+        "totals": {"market_value": 5500.0, "cost": 5000.0, "pnl": 500.0, "pnl_pct": 10.0},
+    }
+    monkeypatch.setattr(portfolio_advice_service.portfolio, "get_portfolio", lambda: pf)
+    prepared = portfolio_advice_service.prepare_portfolio_advice_messages()
+    assert prepared["daily_review"]["generated_at"] == review["generated_at"]
+    assert prepared["daily_review"]["status"] == "normal"
+    # 未再次拉取任何组件
+    assert counts["index"] == 1
+    assert counts["breadth"] == 1
+    assert counts["emotion"] == 1
