@@ -666,6 +666,9 @@ def test_limited_api_integration(monkeypatch):
     assert by["600519"]["name"] == "贵州茅台"
     assert by["600519"]["shares"] == 1500
     assert by["600519"]["execution_quantity"] == 300
+    assert by["600519"].get("estimated_amount") is None
     assert by["000001"]["action"] == "add"
-    assert by["000001"]["execution_quantity"] is None
+    # add 10% × 1000 股 → 100 股；现价 10 → 预计 1000.00（模型填 500 被覆盖）
+    assert by["000001"]["execution_quantity"] == 100
+    assert by["000001"]["estimated_amount"] == 1000.0
     assert _has_key(data, "t_trade") is False

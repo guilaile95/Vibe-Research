@@ -21,6 +21,8 @@ const fmt = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 2 
 // 单价类（现价/成本/清仓价）最多 4 位小数：ETF/基金常见 3-4 位，截断成 2 位会与市值/盈亏对不上账
 const fmtPx = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 4 });
 const fmtShares = (v: number) => Math.round(v).toLocaleString("zh-CN");
+const fmtCny = (v: number) =>
+  `¥${v.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtPct = (v: number | null | undefined) => {
   if (v == null || Number.isNaN(v)) return "—";
   return `${v > 0 ? "+" : ""}${v}%`;
@@ -160,7 +162,7 @@ function HoldingAdviceCard({ h }: { h: PortfolioAdviceHoldingAdvice }) {
             {h.holding_weight_pct == null ? "—" : `${h.holding_weight_pct}%`}
           </p>
         </div>
-        {h.execution_size_pct_of_holding != null && (
+        {h.execution_size_pct_of_holding != null && !isAdd && (
           <div>
             <p className="text-muted-foreground">建议操作比例</p>
             <p className="font-mono font-medium">{h.execution_size_pct_of_holding}%</p>
@@ -168,7 +170,7 @@ function HoldingAdviceCard({ h }: { h: PortfolioAdviceHoldingAdvice }) {
         )}
       </div>
 
-      {/* 执行数量 */}
+      {/* 执行数量 / add 预计金额 */}
       <div className="mb-3 rounded-md border border-border/40 bg-black/10 p-2.5 text-xs">
         {showQty && h.execution_quantity != null && (
           <>
@@ -185,12 +187,31 @@ function HoldingAdviceCard({ h }: { h: PortfolioAdviceHoldingAdvice }) {
           <>
             {h.execution_size_pct_of_holding != null && (
               <p className="font-medium">
-                相对现有持仓建议增幅：{h.execution_size_pct_of_holding}%
+                相对当前持股加仓：
+                <span className="font-mono text-primary"> {h.execution_size_pct_of_holding}%</span>
               </p>
             )}
-            <p className="mt-1 text-amber-700 dark:text-amber-400">
-              当前未配置账户总资产与可用现金，无法计算具体加仓股数
-            </p>
+            {h.execution_quantity != null && (
+              <p className="mt-1 font-medium text-foreground">
+                建议买入数量：
+                <span className="font-mono text-primary">{fmtShares(h.execution_quantity)}</span>
+                股
+              </p>
+            )}
+            {h.estimated_amount != null && (
+              <p className="mt-1 font-medium text-foreground">
+                预计所需金额：约{" "}
+                <span className="font-mono text-primary">{fmtCny(h.estimated_amount)}</span>
+              </p>
+            )}
+            {(h.execution_quantity != null || h.estimated_amount != null) && (
+              <p className="mt-1 text-amber-700 dark:text-amber-400">执行前确认可用资金</p>
+            )}
+            {h.execution_quantity == null && h.estimated_amount == null && (
+              <p className="mt-1 text-muted-foreground">
+                暂无具体买入数量与预计金额（见数据限制说明）
+              </p>
+            )}
           </>
         )}
         {isNoQty && <p className="text-muted-foreground">无具体数量操作</p>}

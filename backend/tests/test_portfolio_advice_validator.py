@@ -8,6 +8,8 @@ import pytest
 from portfolio_advice_prompt import SCHEMA_VERSION
 from portfolio_advice_validator import (
     PortfolioAdviceValidationError,
+    compute_add_execution_quantity,
+    compute_estimated_amount,
     compute_execution_quantity,
     floor_to_lot,
     validate_portfolio_advice,
@@ -209,7 +211,10 @@ def test_data_limitations_deduped_top_and_holding():
     assert out["data_limitations"].count(dup) == 1
     assert out["data_limitations"].count("模型限制A") == 1
     # 现金类语义归一为标准文案，且只一次
-    cash_std = "未提供账户总资产与可用现金，无法计算账户仓位及具体加仓数量。"
+    cash_std = (
+        "未提供账户总资产与可用现金，买入数量仅按当前持股比例计算；"
+        "执行前需要确认可用资金充足。"
+    )
     assert out["data_limitations"].count(cash_std) == 1
     h_lim = out["holdings"][0]["data_limitations"]
     assert h_lim.count(dup) == 1
@@ -313,34 +318,44 @@ def test_quantity_never_exceeds_shares():
 # add / hold / watch / avoid 数量
 # ---------------------------------------------------------------------------
 
-def test_add_clears_execution_quantity():
-    ctx = _context()
+def test_add_overrides_model_quantity_and_amount():
+    """模型结构化 quantity/amount 一律丢弃，后端按持股比例重算。"""
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
     ai = _ai_result(holdings=[
         _ai_holding(
             action="add",
             execution_size_pct_of_holding=10,
             execution_quantity=500,
+            estimated_amount=99999,
+            confidence="medium",
         )
     ])
     out = validate_portfolio_advice(ai, ctx)
     h = out["holdings"][0]
     assert h["action"] == "add"
     assert h["execution_size_pct_of_holding"] == 10
-    assert h["execution_quantity"] is None
-    assert any("可用现金" in m or "加仓数量" in m or "账户仓位" in m for m in h["data_limitations"])
+    assert h["execution_quantity"] == 100  # 1500*10% → 150 → floor 100
+    assert h["estimated_amount"] == 1429.0
+    assert any("可用现金" in m or "持股比例" in m for m in h["data_limitations"])
 
 
 def test_hold_watch_avoid_clear_quantity():
     for action in ("hold", "watch", "avoid"):
         ctx = _context()
         ai = _ai_result(holdings=[
-            _ai_holding(action=action, execution_quantity=100, execution_size_pct_of_holding=50)
+            _ai_holding(
+                action=action,
+                execution_quantity=100,
+                execution_size_pct_of_holding=50,
+                estimated_amount=1000,
+            )
         ])
         out = validate_portfolio_advice(ai, ctx)
         h = out["holdings"][0]
         assert h["action"] == action
         assert h["execution_quantity"] is None
         assert h["execution_size_pct_of_holding"] is None
+        assert h["estimated_amount"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -564,7 +579,7 @@ def test_context_number_allowed_in_conditions():
 
 
 def test_add_only_allows_10_or_20():
-    ctx = _context()
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
     for pct in (10, 20):
         out = validate_portfolio_advice(
             _ai_result(holdings=[
@@ -573,7 +588,9 @@ def test_add_only_allows_10_or_20():
             ctx,
         )
         assert out["holdings"][0]["execution_size_pct_of_holding"] == pct
-        assert out["holdings"][0]["execution_quantity"] is None
+        expected_qty = 100 if pct == 10 else 300
+        assert out["holdings"][0]["execution_quantity"] == expected_qty
+        assert out["holdings"][0]["estimated_amount"] is not None
     with pytest.raises(PortfolioAdviceValidationError):
         validate_portfolio_advice(
             _ai_result(holdings=[
@@ -728,6 +745,375 @@ def test_limitation_semantic_normalize_four_classes():
     out = validate_portfolio_advice(_ai_result(holdings=[_ai_holding(action="hold")]), ctx)
     lims = out["data_limitations"]
     assert lims.count("未提供可卖数量，执行前需要人工确认实际可卖股数。") == 1
-    assert lims.count("未提供账户总资产与可用现金，无法计算账户仓位及具体加仓数量。") == 1
+    assert lims.count(
+        "未提供账户总资产与可用现金，买入数量仅按当前持股比例计算；"
+        "执行前需要确认可用资金充足。"
+    ) == 1
     assert lims.count("未提供历史K线与技术指标，无法计算趋势、支撑位或压力位。") == 1
     assert lims.count("未接入可靠公告、新闻和机构公开信息，不判断消息催化原因。") == 1
+
+# ---------------------------------------------------------------------------
+# add：买入数量 / 预计金额
+# ---------------------------------------------------------------------------
+
+def test_compute_add_quantity_tiers():
+    assert compute_add_execution_quantity(1500, 10) == 100
+    assert compute_add_execution_quantity(1500, 20) == 300
+    assert compute_add_execution_quantity(300, 10) is None
+    assert compute_add_execution_quantity(600, 20) == 100
+    assert compute_add_execution_quantity(None, 10) is None
+    assert compute_add_execution_quantity(0, 20) is None
+
+
+def test_compute_estimated_amount_precision():
+    assert compute_estimated_amount(300, 14.29) == 4287.0
+    assert compute_estimated_amount(100, 14.29) == 1429.0
+    # 无浮点尾差
+    assert compute_estimated_amount(3, 0.1) == 0.3
+    assert compute_estimated_amount(None, 14.29) is None
+    assert compute_estimated_amount(300, None) is None
+    assert compute_estimated_amount(300, 0) is None
+    assert compute_estimated_amount(300, -1) is None
+
+
+def test_add_1500_10pct_qty_and_amount():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(action="add", execution_size_pct_of_holding=10, confidence="medium",
+                        execution_quantity=None, estimated_amount=None)
+        ]),
+        ctx,
+    )
+    h = out["holdings"][0]
+    assert h["execution_quantity"] == 100
+    assert h["estimated_amount"] == 1429.0
+
+
+def test_add_1500_20pct_qty_and_amount():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(action="add", execution_size_pct_of_holding=20, confidence="medium",
+                        execution_quantity=None, estimated_amount=None)
+        ]),
+        ctx,
+    )
+    h = out["holdings"][0]
+    assert h["execution_quantity"] == 300
+    assert h["estimated_amount"] == 4287.0
+
+
+def test_add_300_10pct_insufficient_lot():
+    ctx = _context(holdings=[_ctx_holding(shares=300, price=14.29)])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(action="add", execution_size_pct_of_holding=10, confidence="medium")
+        ]),
+        ctx,
+    )
+    h = out["holdings"][0]
+    assert h["action"] == "add"
+    assert h["execution_size_pct_of_holding"] == 10
+    assert h["execution_quantity"] is None
+    assert h["estimated_amount"] is None
+    assert any("100股交易单位" in m for m in h["data_limitations"])
+
+
+def test_add_missing_price_qty_ok_amount_null():
+    h0 = _ctx_holding(shares=1500, price=14.29)
+    h0["current_price"] = None
+    ctx = _context(holdings=[h0])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(action="add", execution_size_pct_of_holding=20, confidence="medium")
+        ]),
+        ctx,
+    )
+    h = out["holdings"][0]
+    assert h["execution_quantity"] == 300
+    assert h["estimated_amount"] is None
+    assert any("当前价格不可用" in m for m in h["data_limitations"])
+
+
+def test_add_zero_price_no_amount():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=0)])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(action="add", execution_size_pct_of_holding=10, confidence="medium")
+        ]),
+        ctx,
+    )
+    h = out["holdings"][0]
+    assert h["execution_quantity"] == 100
+    assert h["estimated_amount"] is None
+
+
+def test_add_missing_shares_nulls():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    ctx["holdings"][0]["shares"] = None
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(action="add", execution_size_pct_of_holding=10, confidence="medium")
+        ]),
+        ctx,
+    )
+    h = out["holdings"][0]
+    assert h["execution_quantity"] is None
+    assert h["estimated_amount"] is None
+    assert any("持股数量不可用" in m for m in h["data_limitations"])
+
+
+def test_add_model_null_fields_backend_fills():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(
+                action="add",
+                execution_size_pct_of_holding=20,
+                confidence="medium",
+                execution_quantity=None,
+                estimated_amount=None,
+            )
+        ]),
+        ctx,
+    )
+    h = out["holdings"][0]
+    assert h["execution_quantity"] == 300
+    assert h["estimated_amount"] == 4287.0
+
+
+def test_add_text_buy_qty_match_passes():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(
+                action="add",
+                execution_size_pct_of_holding=10,
+                confidence="medium",
+                execution_plan=["当前持有1500股，建议买入100股"],
+            )
+        ]),
+        ctx,
+    )
+    assert out["holdings"][0]["execution_quantity"] == 100
+
+
+def test_add_text_buy_qty_mismatch_rejects():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    with pytest.raises(PortfolioAdviceValidationError, match="买入股数"):
+        validate_portfolio_advice(
+            _ai_result(holdings=[
+                _ai_holding(
+                    action="add",
+                    execution_size_pct_of_holding=10,
+                    confidence="medium",
+                    execution_plan=["建议买入150股"],
+                )
+            ]),
+            ctx,
+        )
+
+
+def test_add_text_add_qty_300_passes():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(
+                action="add",
+                execution_size_pct_of_holding=20,
+                confidence="medium",
+                execution_plan=["加仓300股"],
+            )
+        ]),
+        ctx,
+    )
+    assert out["holdings"][0]["execution_quantity"] == 300
+
+
+def test_add_text_buy_qty_when_null_rejects():
+    ctx = _context(holdings=[_ctx_holding(shares=300, price=14.29)])
+    with pytest.raises(PortfolioAdviceValidationError, match="无具体买入数量"):
+        validate_portfolio_advice(
+            _ai_result(holdings=[
+                _ai_holding(
+                    action="add",
+                    execution_size_pct_of_holding=10,
+                    confidence="medium",
+                    execution_plan=["买入100股"],
+                )
+            ]),
+            ctx,
+        )
+
+
+def test_add_text_amount_approx_passes():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(
+                action="add",
+                execution_size_pct_of_holding=20,
+                confidence="medium",
+                execution_plan=["预计需要约4287元", "加仓300股"],
+            )
+        ]),
+        ctx,
+    )
+    assert out["holdings"][0]["estimated_amount"] == 4287.0
+
+
+def test_add_text_amount_wan_approx_passes():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(
+                action="add",
+                execution_size_pct_of_holding=20,
+                confidence="medium",
+                execution_plan=["约0.43万元", "加仓300股"],
+            )
+        ]),
+        ctx,
+    )
+    assert out["holdings"][0]["estimated_amount"] == 4287.0
+
+
+def test_add_text_amount_mismatch_rejects():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    with pytest.raises(PortfolioAdviceValidationError, match="投入金额"):
+        validate_portfolio_advice(
+            _ai_result(holdings=[
+                _ai_holding(
+                    action="add",
+                    execution_size_pct_of_holding=20,
+                    confidence="medium",
+                    execution_plan=["预计需要5000元", "加仓300股"],
+                )
+            ]),
+            ctx,
+        )
+
+
+def test_add_text_amount_when_null_rejects():
+    h0 = _ctx_holding(shares=1500, price=14.29)
+    h0["current_price"] = None
+    ctx = _context(holdings=[h0])
+    with pytest.raises(PortfolioAdviceValidationError, match="预计金额"):
+        validate_portfolio_advice(
+            _ai_result(holdings=[
+                _ai_holding(
+                    action="add",
+                    execution_size_pct_of_holding=20,
+                    confidence="medium",
+                    execution_plan=["投入3000元", "加仓300股"],
+                )
+            ]),
+            ctx,
+        )
+
+
+def test_add_current_holdings_not_buy_qty():
+    """「当前持有1500股」不得被当成建议买入1500股。"""
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(
+                action="add",
+                execution_size_pct_of_holding=10,
+                confidence="medium",
+                trigger_conditions=["当前持有1500股，相对当前持股加仓10%"],
+                execution_plan=["建议买入100股"],
+            )
+        ]),
+        ctx,
+    )
+    assert out["holdings"][0]["execution_quantity"] == 100
+
+
+def test_add_relative_holding_pct_language_passes():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(
+                action="add",
+                execution_size_pct_of_holding=20,
+                confidence="medium",
+                execution_plan=["相对当前持股加仓20%", "加仓300股"],
+            )
+        ]),
+        ctx,
+    )
+    assert out["holdings"][0]["action"] == "add"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "使用账户20%资金买入",
+        "将账户仓位提高20%",
+        "投入总资产20%",
+    ],
+)
+def test_add_account_ratio_language_rejects(bad):
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    with pytest.raises(PortfolioAdviceValidationError, match="账户/总资产/可用资金"):
+        validate_portfolio_advice(
+            _ai_result(holdings=[
+                _ai_holding(
+                    action="add",
+                    execution_size_pct_of_holding=20,
+                    confidence="medium",
+                    execution_plan=[bad, "加仓300股"],
+                )
+            ]),
+            ctx,
+        )
+
+
+def test_reduce_sell_estimated_amount_null():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    out_r = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(action="reduce", execution_size_pct_of_holding=20, confidence="medium")
+        ]),
+        ctx,
+    )
+    assert out_r["holdings"][0]["execution_quantity"] == 300
+    assert out_r["holdings"][0]["estimated_amount"] is None
+    out_s = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(action="sell", execution_size_pct_of_holding=100, confidence="low")
+        ]),
+        ctx,
+    )
+    assert out_s["holdings"][0]["execution_quantity"] == 1500
+    assert out_s["holdings"][0]["estimated_amount"] is None
+
+
+def test_add_limitation_notes_once():
+    ctx = _context(holdings=[_ctx_holding(shares=1500, price=14.29)])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(
+                action="add",
+                execution_size_pct_of_holding=20,
+                confidence="medium",
+                data_limitations=[
+                    "未提供账户总资产与可用现金，买入数量仅按当前持股比例计算；执行前需要确认可用资金充足。",
+                    "预计金额按当前价格计算，不包含手续费和实际成交价偏差。",
+                    "预计金额按当前价格计算，不包含手续费和实际成交价偏差。",
+                ],
+            )
+        ]),
+        ctx,
+    )
+    lims = out["holdings"][0]["data_limitations"]
+    assert lims.count(
+        "未提供账户总资产与可用现金，买入数量仅按当前持股比例计算；"
+        "执行前需要确认可用资金充足。"
+    ) == 1
+    assert lims.count("预计金额按当前价格计算，不包含手续费和实际成交价偏差。") == 1
+    # 资金确认已含在现金文案中，不应再额外堆叠同义重复
+    cash_hits = [m for m in lims if "可用资金" in m]
+    assert len(cash_hits) == 1

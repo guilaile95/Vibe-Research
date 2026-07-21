@@ -928,9 +928,11 @@ def test_limited_integration_real_pipeline():
     # reduce 20% × 1500 = 300
     assert by["600519"]["action"] == "reduce"
     assert by["600519"]["execution_quantity"] == 300
-    # add 数量清空
+    assert by["600519"]["estimated_amount"] is None
+    # add 10% × 1000 股 → 100 股；价格 10.0 → 1000.00
     assert by["000001"]["action"] == "add"
-    assert by["000001"]["execution_quantity"] is None
+    assert by["000001"]["execution_quantity"] == 100
+    assert by["000001"]["estimated_amount"] == 1000.0
     # 无 t_trade
     assert "t_trade" not in out
     assert all("t_trade" not in h for h in out["holdings"])

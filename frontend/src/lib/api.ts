@@ -544,8 +544,12 @@ export interface PortfolioAdviceHoldingAdvice {
   pnl_pct: number;
   holding_weight_pct: number;
   action: PortfolioAdviceHoldingAction;
+  /** 相对当前持股数量的操作比例（add/reduce/sell）；非账户总仓位比例 */
   execution_size_pct_of_holding: number | null;
+  /** 后端重算的建议操作股数；不足交易单位或不可算时为 null */
   execution_quantity: number | null;
+  /** 仅 add：后端按 quantity×现价估算的预计所需金额；不可算时为 null */
+  estimated_amount?: number | null;
   trigger_conditions: string[];
   price_conditions: string[];
   execution_plan: string[];

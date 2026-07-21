@@ -6,6 +6,7 @@
 - reduce/sell 失效条件冲突与无依据模板话术拦截；
 - 代码重算市值/盈亏/权重（覆盖模型数值）；
 - reduce/sell 数量按 100 股向下取整并截断；
+- add 按持股比例计算买入股数与预计金额（覆盖模型数值）；
 - 数据限制语义归一化去重；
 - 忽略并剥离模型额外输出的 t_trade 字段（第一版不支持做 T）。
 
@@ -17,17 +18,25 @@ from __future__ import annotations
 import copy
 import math
 import re
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from portfolio_advice_prompt import ACCOUNT_ACTIONS, ACTIONS, SCHEMA_VERSION
 
 LOT_SIZE = 100
 
-# 标准化数据限制文案（四类）
+# 标准化数据限制文案
 _SELLABLE_LIMITATION = "未提供可卖数量，执行前需要人工确认实际可卖股数。"
-_CASH_LIMITATION = "未提供账户总资产与可用现金，无法计算账户仓位及具体加仓数量。"
+_CASH_LIMITATION = (
+    "未提供账户总资产与可用现金，买入数量仅按当前持股比例计算；"
+    "执行前需要确认可用资金充足。"
+)
 _KLINE_LIMITATION = "未提供历史K线与技术指标，无法计算趋势、支撑位或压力位。"
 _CATALYST_LIMITATION = "未接入可靠公告、新闻和机构公开信息，不判断消息催化原因。"
+_ADD_LOT_LIMITATION = "按当前建议比例计算不足一个100股交易单位，暂不生成具体买入数量。"
+_PRICE_AMOUNT_LIMITATION = "当前价格不可用，无法计算预计所需金额。"
+_AMOUNT_ESTIMATE_NOTE = "预计金额按当前价格计算，不包含手续费和实际成交价偏差。"
+_SHARES_LIMITATION = "持股数量不可用，无法计算具体买入数量。"
 
 _CONFIDENCE = frozenset({"high", "medium", "low"})
 
@@ -61,13 +70,69 @@ _MARKET_IMPACT_RE = re.compile(
     r"减少市场冲击|降低冲击成本|避免大单影响|大单影响价格|保护盘口|分批成交以保护"
 )
 
+# add：明确「新增买入」股数（不含「当前持有 N 股」等事实表述）
+_ADD_BUY_QTY_RE = re.compile(
+    r"(?:建议|计划)?"
+    r"(?:买入|加仓|增持|新增|追加)"
+    r"(?:数量)?"
+    r"\s*(\d+(?:\.\d+)?)\s*股"
+)
+
+# add：明确「新增投入」金额（动词/约 + 元/万元/¥）
+# 动词路径：投入/预计需要/… + 金额
+# 约数路径：约/大约 + 金额（排除「价格/成本…」前缀）
+_ADD_AMOUNT_VERB_RE = re.compile(
+    r"(?P<head>投入|预计需要|预计金额|预计所需|所需金额|买入金额|准备|使用|需要|约需|预计投入|买入约|投入约)"
+    r"[^0-9¥￥%]{0,8}"
+    r"(?:"
+    r"[¥￥]\s*(?P<num_sym>\d+(?:\.\d+)?)"
+    r"|"
+    r"(?P<num>\d+(?:\.\d+)?)\s*(?P<unit>万元|元)"
+    r")"
+)
+_ADD_AMOUNT_APPROX_RE = re.compile(
+    r"(?P<head>约|大约)"
+    r"\s*[¥￥]?\s*"
+    r"(?P<num>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>万元|元)"
+)
+_ADD_AMOUNT_SYMBOL_RE = re.compile(
+    r"(?P<head>投入|预计需要|预计金额|预计所需|买入金额|准备|使用|需要|约需|约|大约)"
+    r"[^0-9¥￥%]{0,6}"
+    r"[¥￥]\s*"
+    r"(?P<num>\d+(?:\.\d+)?)"
+    r"(?!\s*万)"
+)
+_PRICE_FACT_PREFIX_RE = re.compile(r"(?:价格|成本|现价|市值|盈亏|报价)\s*$")
+
+# add：禁止把比例解释为账户/总资产/可用资金比例
+_ADD_ACCOUNT_RATIO_FORBIDDEN: list[re.Pattern[str]] = [
+    re.compile(r"账户.{0,12}仓位.{0,16}\d+(?:\.\d+)?\s*%"),
+    re.compile(r"将.{0,8}账户仓位.{0,12}(?:提高|增加|上调).{0,8}\d+(?:\.\d+)?\s*%"),
+    re.compile(r"总资产.{0,16}\d+(?:\.\d+)?\s*%"),
+    re.compile(r"投入总资产.{0,8}\d+(?:\.\d+)?\s*%"),
+    re.compile(r"可用现金.{0,16}\d+(?:\.\d+)?\s*%"),
+    re.compile(r"使用资金.{0,12}(?:10|20)\s*%"),
+    re.compile(r"账户资金.{0,12}(?:10|20)\s*%"),
+    re.compile(r"使用账户.{0,12}(?:10|20)\s*%"),
+    re.compile(r"配置.{0,8}(?:10|20)\s*%.{0,12}账户"),
+    re.compile(r"(?:10|20)\s*%.{0,8}(?:的)?(?:账户资产|可用现金|账户资金)"),
+]
+
 # 数据限制语义归一（按顺序匹配，首次命中归类）
 _LIMIT_NORMALIZE_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"可卖|sellable", re.I), _SELLABLE_LIMITATION),
     (
-        re.compile(r"现金|总资产|买入股数|账户仓位|加仓数量|买入金额|可用资金"),
+        re.compile(
+            r"账户总资产|可用现金|账户仓位|绝对账户|具体买入金额|无法计算账户仓位"
+            r"|买入数量仅按当前持股比例"
+        ),
         _CASH_LIMITATION,
     ),
+    (re.compile(r"不足一个\s*100\s*股|不足一个100股交易单位"), _ADD_LOT_LIMITATION),
+    (re.compile(r"当前价格不可用|无法计算预计所需金额"), _PRICE_AMOUNT_LIMITATION),
+    (re.compile(r"不包含手续费|实际成交价偏差"), _AMOUNT_ESTIMATE_NOTE),
+    (re.compile(r"持股数量不可用"), _SHARES_LIMITATION),
     (
         re.compile(r"历史\s*K|技术指标|支撑位|压力位|均线|N\s*日|趋势"),
         _KLINE_LIMITATION,
@@ -186,6 +251,49 @@ def compute_execution_quantity(
     if qty > float(shares):
         qty = floor_to_lot(float(shares), lot=lot)
     return qty
+
+
+def compute_add_execution_quantity(
+    shares: float | None,
+    size_pct: float | None,
+    *,
+    lot: int = LOT_SIZE,
+) -> int | None:
+    """add：相对当前持股增加 pct% 后向下取整到 lot；不足一个 lot 返回 None。"""
+    if size_pct is None or shares is None:
+        return None
+    sh = float(shares)
+    if sh <= 0 or not math.isfinite(sh):
+        return None
+    pct = float(size_pct)
+    if pct <= 0 or not math.isfinite(pct):
+        return None
+    raw = sh * pct / 100.0
+    qty = floor_to_lot(raw, lot=lot)
+    if qty < lot:
+        return None
+    return qty
+
+
+def compute_estimated_amount(
+    quantity: int | None,
+    current_price: float | None,
+) -> float | None:
+    """execution_quantity × current_price，Decimal 精确到分（四舍五入）。"""
+    if quantity is None or quantity <= 0:
+        return None
+    if current_price is None:
+        return None
+    try:
+        price = Decimal(str(current_price))
+    except Exception:  # noqa: BLE001
+        return None
+    if price <= 0:
+        return None
+    amount = (Decimal(int(quantity)) * price).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    return float(amount)
 
 
 def _normalize_pct(value: Any) -> float | None:
@@ -342,6 +450,130 @@ def _validate_no_market_impact_template(fields: dict[str, list[str]], code: str)
                 )
 
 
+def _join_condition_texts(fields: dict[str, list[str]]) -> str:
+    parts: list[str] = []
+    for key in _CONDITION_FIELDS:
+        for item in fields.get(key) or []:
+            if isinstance(item, str) and item.strip():
+                parts.append(item.strip())
+    return "\n".join(parts)
+
+
+def _strip_add_execution_phrases(text: str) -> str:
+    """去掉 add 买卖数量/金额短语，避免与事实数字混入通用数字追溯。"""
+    t = _ADD_BUY_QTY_RE.sub(" ", text)
+    t = _ADD_AMOUNT_VERB_RE.sub(" ", t)
+    t = _ADD_AMOUNT_APPROX_RE.sub(" ", t)
+    t = _ADD_AMOUNT_SYMBOL_RE.sub(" ", t)
+    return t
+
+
+def _amount_match_to_yuan(m: re.Match[str]) -> tuple[float, bool] | None:
+    gd = m.groupdict()
+    raw = gd.get("num") or gd.get("num_sym") or gd.get("num2")
+    if raw is None:
+        return None
+    try:
+        num = float(raw)
+    except ValueError:
+        return None
+    unit = gd.get("unit") or ""
+    yuan = num * 10000.0 if unit == "万元" else num
+    head = gd.get("head") or ""
+    approx = bool(re.search(r"约|大约|预计|约需", head))
+    return yuan, approx
+
+
+def _iter_add_amount_mentions(text: str) -> list[tuple[float, bool]]:
+    """返回 (金额元, 是否近似表达) 列表。"""
+    hits: list[tuple[float, bool, int, int]] = []
+
+    def _consider(m: re.Match[str], *, check_price_prefix: bool) -> None:
+        if check_price_prefix:
+            prefix = text[max(0, m.start() - 6) : m.start()]
+            if _PRICE_FACT_PREFIX_RE.search(prefix):
+                return
+        parsed = _amount_match_to_yuan(m)
+        if parsed is None:
+            return
+        yuan, approx = parsed
+        # 跳过重叠
+        if any(s <= m.start() < e or s < m.end() <= e for _, _, s, e in hits):
+            return
+        hits.append((yuan, approx, m.start(), m.end()))
+
+    for m in _ADD_AMOUNT_VERB_RE.finditer(text):
+        _consider(m, check_price_prefix=False)
+    for m in _ADD_AMOUNT_APPROX_RE.finditer(text):
+        _consider(m, check_price_prefix=True)
+    for m in _ADD_AMOUNT_SYMBOL_RE.finditer(text):
+        _consider(m, check_price_prefix=True)
+
+    return [(y, a) for y, a, _, _ in hits]
+
+
+def _amount_tolerance(estimated: float, approx: bool) -> float:
+    if approx:
+        return max(1.0, abs(estimated) * 0.005)
+    return 0.01
+
+
+def _validate_add_buy_qty_text(
+    text: str,
+    *,
+    execution_quantity: int | None,
+    code: str,
+) -> None:
+    matches = list(_ADD_BUY_QTY_RE.finditer(text))
+    if execution_quantity is None:
+        if matches:
+            raise PortfolioAdviceValidationError(
+                f"add 无具体买入数量时不得提出新增买入股数（code={code}）"
+            )
+        return
+    target = float(execution_quantity)
+    for m in matches:
+        try:
+            n = float(m.group(1))
+        except ValueError:
+            continue
+        if abs(n - target) > 1e-6:
+            raise PortfolioAdviceValidationError(
+                f"add 文字买入股数与后端计算不一致（code={code}）："
+                f"期望 {execution_quantity}，文字 {m.group(0)!r}"
+            )
+
+
+def _validate_add_amount_text(
+    text: str,
+    *,
+    estimated_amount: float | None,
+    code: str,
+) -> None:
+    mentions = _iter_add_amount_mentions(text)
+    if estimated_amount is None:
+        if mentions:
+            raise PortfolioAdviceValidationError(
+                f"add 无预计金额时不得提出具体新增投入金额（code={code}）"
+            )
+        return
+    for yuan, approx in mentions:
+        tol = _amount_tolerance(float(estimated_amount), approx)
+        if abs(yuan - float(estimated_amount)) > tol + 1e-9:
+            raise PortfolioAdviceValidationError(
+                f"add 文字投入金额与后端计算不一致（code={code}）："
+                f"期望 {estimated_amount}，文字约 {yuan}"
+            )
+
+
+def _validate_add_account_ratio_language(text: str, code: str) -> None:
+    for pat in _ADD_ACCOUNT_RATIO_FORBIDDEN:
+        if pat.search(text):
+            raise PortfolioAdviceValidationError(
+                f"add 禁止将比例表述为账户/总资产/可用资金比例（code={code}）"
+            )
+
+
 def _normalize_limitation_list(items: list[str]) -> list[str]:
     """已知四类限制语义归一，再按类别稳定去重；未知文案原样去重保留。"""
     seen_std: set[str] = set()
@@ -443,11 +675,26 @@ def _validate_one_holding(
     market_partial = _market_is_partial(context)
     raw_pct = ai_h.get("execution_size_pct_of_holding")
 
+    # 持股/价格是否可用于 add 计算（与展示用 facts 解耦：0/缺失视为不可用）
+    shares_for_add = _num_or_none(ctx_h.get("shares"))
+    price_for_add = _num_or_none(ctx_h.get("current_price"))
+    if shares_for_add is not None and shares_for_add <= 0:
+        shares_for_add = None
+    if price_for_add is not None and price_for_add <= 0:
+        price_for_add = None
+
     size_pct: float | None
+    qty: int | None
+    estimated_amount: float | None = None
+    add_shares_missing = False
+    add_price_missing = False
+    add_lot_insufficient = False
+
     if action in ("hold", "watch", "avoid"):
         # 强制清空
         size_pct = None
         qty = None
+        estimated_amount = None
     elif action == "sell":
         # 固定 100；非法非空非 100 拒绝
         if raw_pct is not None:
@@ -460,6 +707,7 @@ def _validate_one_holding(
         qty = compute_execution_quantity(facts["shares"], size_pct)
         if qty is not None and qty > facts["shares"]:
             qty = floor_to_lot(facts["shares"])
+        estimated_amount = None
     elif action == "reduce":
         if raw_pct is None:
             raise PortfolioAdviceValidationError(
@@ -476,6 +724,7 @@ def _validate_one_holding(
         qty = compute_execution_quantity(facts["shares"], size_pct)
         if qty is not None and qty > facts["shares"]:
             qty = floor_to_lot(facts["shares"])
+        estimated_amount = None
     elif action == "add":
         if raw_pct is None:
             raise PortfolioAdviceValidationError(
@@ -489,10 +738,29 @@ def _validate_one_holding(
             market_partial=market_partial,
             code=facts["code"],
         )
-        qty = None
+        # 模型结构化 quantity / amount 一律丢弃，后端重算覆盖
+        if shares_for_add is None:
+            qty = None
+            estimated_amount = None
+            add_shares_missing = True
+        else:
+            qty = compute_add_execution_quantity(shares_for_add, size_pct)
+            if qty is None:
+                # 有持股但不足一个交易单位
+                add_lot_insufficient = True
+                estimated_amount = None
+            else:
+                if price_for_add is None:
+                    estimated_amount = None
+                    add_price_missing = True
+                else:
+                    estimated_amount = compute_estimated_amount(qty, price_for_add)
+                    if estimated_amount is None:
+                        add_price_missing = True
     else:
         size_pct = None
         qty = None
+        estimated_amount = None
 
     trigger = _str_list(ai_h.get("trigger_conditions"))
     price_c = _str_list(ai_h.get("price_conditions"))
@@ -508,12 +776,24 @@ def _validate_one_holding(
         "invalidation_conditions": invalidation,
     }
 
-    # 数字白名单：context + 本条比例/股数
+    # 数字白名单：context + 本条比例/股数/预计金额
     allowed = set(allowed_base_numbers)
     if size_pct is not None:
         allowed.add(float(size_pct))
     if qty is not None:
         allowed.add(float(qty))
+    if estimated_amount is not None:
+        allowed.add(float(estimated_amount))
+        wan = float(estimated_amount) / 10000.0
+        allowed.add(wan)
+        allowed.add(round(wan, 2))
+        allowed.add(round(wan, 1))
+        # 近似金额容差内的整元也可出现在文字中
+        tol = max(1.0, abs(float(estimated_amount)) * 0.005)
+        lo = int(math.floor(float(estimated_amount) - tol))
+        hi = int(math.ceil(float(estimated_amount) + tol))
+        for i in range(lo, hi + 1):
+            allowed.add(float(i))
     # 持仓事实再加一遍
     for k in (
         "shares",
@@ -528,7 +808,28 @@ def _validate_one_holding(
         if isinstance(v, (int, float)) and math.isfinite(float(v)):
             allowed.add(float(v))
 
-    _validate_condition_numbers(cond_fields, allowed_numbers=allowed, code=facts["code"])
+    # add：买卖数量/金额由专用规则校验；从通用数字追溯中剥离对应短语
+    if action == "add":
+        stripped_fields = {
+            k: [_strip_add_execution_phrases(it) for it in items]
+            for k, items in cond_fields.items()
+        }
+        _validate_condition_numbers(
+            stripped_fields, allowed_numbers=allowed, code=facts["code"]
+        )
+        joined = _join_condition_texts(cond_fields)
+        # 先拦账户比例语义，再校验股数/金额，避免「20%」被金额规则误吞
+        _validate_add_account_ratio_language(joined, facts["code"])
+        _validate_add_buy_qty_text(
+            joined, execution_quantity=qty, code=facts["code"]
+        )
+        _validate_add_amount_text(
+            joined, estimated_amount=estimated_amount, code=facts["code"]
+        )
+    else:
+        _validate_condition_numbers(
+            cond_fields, allowed_numbers=allowed, code=facts["code"]
+        )
     _validate_reduce_sell_invalidation(action, invalidation, facts["code"])
     _validate_no_market_impact_template(cond_fields, facts["code"])
 
@@ -537,6 +838,14 @@ def _validate_one_holding(
         _append_unique(limitations, _SELLABLE_LIMITATION)
     if action == "add":
         _append_unique(limitations, _CASH_LIMITATION)
+        if add_shares_missing:
+            _append_unique(limitations, _SHARES_LIMITATION)
+        if add_lot_insufficient:
+            _append_unique(limitations, _ADD_LOT_LIMITATION)
+        if add_price_missing:
+            _append_unique(limitations, _PRICE_AMOUNT_LIMITATION)
+        if estimated_amount is not None:
+            _append_unique(limitations, _AMOUNT_ESTIMATE_NOTE)
     limitations = _normalize_limitation_list(limitations)
 
     return {
@@ -544,6 +853,7 @@ def _validate_one_holding(
         "action": action,
         "execution_size_pct_of_holding": size_pct,
         "execution_quantity": qty,
+        "estimated_amount": estimated_amount,
         "trigger_conditions": trigger,
         "price_conditions": price_c,
         "execution_plan": plan,
