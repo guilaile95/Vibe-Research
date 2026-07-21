@@ -102,15 +102,19 @@ portfolio_advice_service.generate_portfolio_advice(cfg, user_request)
     │
     ├─ 解析纯 JSON 对象
     │
-    └─ portfolio_advice_validator.validate_portfolio_advice
+    ├─ portfolio_advice_validator.validate_portfolio_advice
           ★ 最终裁决：动作、比例档位、execution_quantity、estimated_amount、
             条件数字可追溯、文字股数/金额一致性、账户比例话术等
+    │
+    └─ _attach_account_funding_metrics
+          ★ 装配只读账户资金指标（account_funding 与 account_metrics）
+            高精度 Decimal(ROUND_HALF_UP) 计算；尚未参与动作与比例裁决；未配置/损坏安全降级
     │
     ▼
 { "data": <权威结果 portfolio-advice-v0.1> }
     │
     ▼
-结构化 UI（HoldingAdviceCard 等）
+结构化 UI（HoldingAdviceCard / AccountFundingCard 等）
 ```
 
 ### 权威边界

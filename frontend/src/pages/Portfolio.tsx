@@ -12,6 +12,7 @@ import {
   type PortfolioAdviceAccountAction,
   type PortfolioAdviceConfidence,
   type AccountProfileData,
+  type AccountFundingData,
 } from "@/lib/api";
 import { loadLlm } from "@/lib/llm";
 import { cn } from "@/lib/utils";
@@ -110,6 +111,70 @@ function TruncatedNotes({ title, items }: { title: string; items: string[] }) {
   );
 }
 
+function AccountFundingCard({ funding, corrupted }: { funding?: AccountFundingData | null; corrupted?: boolean }) {
+  if (corrupted) {
+    return (
+      <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive flex items-center gap-2">
+        <AlertCircle className="h-4 w-4 shrink-0" />
+        <span>账户资金配置文件读取失败或损坏，未计算账户级仓位指标。</span>
+      </div>
+    );
+  }
+
+  if (!funding || !funding.configured) {
+    return (
+      <div className="rounded-lg border border-border/50 bg-black/10 p-3 text-xs text-muted-foreground">
+        <p className="font-medium text-foreground/80 mb-0.5">账户资金参考</p>
+        <p>账户资金尚未配置，本次建议未计算账户级仓位。</p>
+      </div>
+    );
+  }
+
+  const cov = funding.quote_coverage;
+  const isComplete = cov?.complete;
+
+  return (
+    <div className="rounded-lg border border-border/50 bg-black/10 p-3.5">
+      <div className="mb-2 flex items-center justify-between">
+        <p className="text-xs font-semibold text-foreground/90">账户资金参考（只读）</p>
+        {funding.updated_at && (
+          <span className="text-[11px] text-muted-foreground">更新于 {funding.updated_at}</span>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+        <div>
+          <p className="text-muted-foreground">账户总资产</p>
+          <p className="font-mono font-medium">{funding.total_assets != null ? fmtCny(funding.total_assets) : "—"}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground">可用现金</p>
+          <p className="font-mono font-medium">
+            {funding.available_cash != null ? fmtCny(funding.available_cash) : "—"}
+            <span className="ml-1 text-muted-foreground/80">({fmtPct(funding.available_cash_pct)})</span>
+          </p>
+        </div>
+        <div>
+          <p className="text-muted-foreground">已跟踪持仓市值</p>
+          <p className="font-mono font-medium">{funding.tracked_stock_market_value != null ? fmt(funding.tracked_stock_market_value) : "—"}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground">已跟踪持仓占总资产比例</p>
+          <p className="font-mono font-medium">
+            {isComplete && funding.tracked_stock_weight_pct != null
+              ? `${funding.tracked_stock_weight_pct}%`
+              : "部分持仓行情不可用"}
+          </p>
+        </div>
+      </div>
+      {cov && !isComplete && (
+        <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-400">
+          行情覆盖：{cov.valid_holdings} / {cov.total_holdings}（部分持仓行情不可用）
+        </p>
+      )}
+    </div>
+  );
+}
+
 function HoldingAdviceCard({ h }: { h: PortfolioAdviceHoldingAdvice }) {
   const actionLabel = HOLDING_ACTION_LABEL[h.action] ?? h.action;
   const confLabel = CONFIDENCE_LABEL[h.confidence] ?? h.confidence;
@@ -163,6 +228,12 @@ function HoldingAdviceCard({ h }: { h: PortfolioAdviceHoldingAdvice }) {
             {h.holding_weight_pct == null ? "—" : `${h.holding_weight_pct}%`}
           </p>
         </div>
+        {h.account_metrics?.account_weight_pct != null && (
+          <div>
+            <p className="text-muted-foreground">占账户总资产比例</p>
+            <p className="font-mono font-medium">{h.account_metrics.account_weight_pct}%</p>
+          </div>
+        )}
         {h.execution_size_pct_of_holding != null && !isAdd && (
           <div>
             <p className="text-muted-foreground">建议操作比例</p>
@@ -905,6 +976,12 @@ export function Portfolio() {
                 </p>
               </div>
             </div>
+
+            {/* 账户资金参考 */}
+            <AccountFundingCard
+              funding={advice.account_funding}
+              corrupted={advice.data_limitations?.some((l) => l.includes("读取失败或损坏"))}
+            />
 
             {/* 账户级建议 */}
             <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">

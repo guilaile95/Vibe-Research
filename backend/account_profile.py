@@ -24,14 +24,52 @@ def _now() -> str:
 
 def load_account_profile() -> dict | None:
     """读账户资金。文件不存在或损坏 → None（未配置，不是 0）。"""
+    st = get_account_profile_status()
+    if st["status"] == "valid":
+        return st["data"]
+    return None
+
+
+def get_account_profile_status() -> dict:
+    """安全读取账户资金并返回状态描述。
+
+    Returns
+    -------
+    dict
+        - status == "valid": {"status": "valid", "data": {"total_assets": ..., "available_cash": ..., "updated_at": ...}}
+        - status == "not_configured": {"status": "not_configured", "data": None}
+        - status == "corrupted": {"status": "corrupted", "data": None}
+    """
+    if not os.path.exists(ACCOUNT_FILE):
+        return {"status": "not_configured", "data": None}
     try:
         with open(ACCOUNT_FILE, encoding="utf-8") as f:
             d = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
+    except (json.JSONDecodeError, OSError):
+        return {"status": "corrupted", "data": None}
+
     if not isinstance(d, dict):
-        return None
-    return d
+        return {"status": "corrupted", "data": None}
+
+    try:
+        total, cash = validate_account_payload({
+            "total_assets": d.get("total_assets"),
+            "available_cash": d.get("available_cash"),
+        })
+        updated_at = d.get("updated_at")
+        if not isinstance(updated_at, str) or not updated_at.strip():
+            return {"status": "corrupted", "data": None}
+        return {
+            "status": "valid",
+            "data": {
+                "total_assets": total,
+                "available_cash": cash,
+                "updated_at": updated_at.strip(),
+            },
+        }
+    except Exception:
+        return {"status": "corrupted", "data": None}
+
 
 
 def save_account_profile(total_assets: float, available_cash: float) -> dict:

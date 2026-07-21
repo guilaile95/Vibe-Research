@@ -31,13 +31,23 @@
 - Playwright A–J：**53/53**；advice 请求数 0；真实数据 SHA 不变
 - 功能提交：`9932601`
 
+## 上一任务（已完成）
+
+~~为持仓建议增加只读账户资金指标（`account_funding` 与 `account_metrics`）。~~
+
+- **状态**：已完成并验收
+- 仅增加只读账户资金指标；**尚未参与动作裁决**；可用现金约束留待下一阶段
+- 动作 (action)、比例 (execution_size_pct_of_holding)、建议数量 (execution_quantity)、预计金额 (estimated_amount) 绝对保持不变
+- Prompt 与 Validator 隔离，纯函数高精度 `Decimal(ROUND_HALF_UP)` 计算
+- 离线专项测试 8 passed；全量离线 675 passed（仅已知 Windows 例外）
+
 ## 当前下一任务
 
 **待产品优先级确认**。
 
 建议候选项（**勿自行开工**，需用户明确指定其一）：
 
-1. 将账户资金接入持仓建议（context / prompt / validator / add 金额约束）——范围大，需单独设计
+1. 将账户资金及可用现金约束接入持仓建议动作与数量裁决（阶段二）——范围大，需单独设计
 2. 其它产品需求
 
 - 不自行选择或开始新的功能开发

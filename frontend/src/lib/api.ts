@@ -556,6 +556,28 @@ export interface PortfolioAdviceAccountDecision {
   confidence: PortfolioAdviceConfidence;
 }
 
+export interface AccountFundingQuoteCoverage {
+  valid_holdings: number;
+  total_holdings: number;
+  complete: boolean;
+}
+
+export interface AccountFundingData {
+  configured: boolean;
+  total_assets: number | null;
+  available_cash: number | null;
+  available_cash_pct: number | null;
+  updated_at: string | null;
+  tracked_stock_market_value: number | null;
+  tracked_stock_weight_pct: number | null;
+  quote_coverage: AccountFundingQuoteCoverage;
+}
+
+export interface PortfolioAdviceHoldingAccountMetrics {
+  market_value: number | null;
+  account_weight_pct: number | null;
+}
+
 export interface PortfolioAdviceHoldingAdvice {
   code: string;
   name: string;
@@ -566,6 +588,7 @@ export interface PortfolioAdviceHoldingAdvice {
   pnl_amount: number;
   pnl_pct: number;
   holding_weight_pct: number;
+  account_metrics?: PortfolioAdviceHoldingAccountMetrics | null;
   action: PortfolioAdviceHoldingAction;
   /** 相对当前持股数量的操作比例（add/reduce/sell）；非账户总仓位比例 */
   execution_size_pct_of_holding: number | null;
@@ -590,6 +613,7 @@ export interface PortfolioAdviceResult {
   market_status: MarketDataStatus | string;
   portfolio_summary: PortfolioAdviceSummary;
   account_action: PortfolioAdviceAccountDecision;
+  account_funding?: AccountFundingData | null;
   holdings: PortfolioAdviceHoldingAdvice[];
   warnings: string[];
   data_limitations: string[];

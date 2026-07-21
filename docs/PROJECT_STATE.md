@@ -181,7 +181,7 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 | 精确编辑 | `PUT /api/portfolio/holding`：**精确替换** shares/cost；不加权；不 upsert |
 | 安全删除 | 前端确认弹窗 + 失败可见错误；`DELETE` 只移 holdings，**不写** closed |
 | 数量输入 | 保留原始字符串；**不再**静默把 `-100` 变成 `100` |
-| 账户资金 | 仍可手工维护；**仍未接入**持仓建议 |
+| 账户资金 | 只读指标已接入持仓建议结果 (`account_funding` & `account_metrics`)；**尚未参与动作裁决**；可用现金约束留待下一阶段 |
 
 ### 后端
 
@@ -190,20 +190,21 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 - shares：必须 `> 0` 正整数；**不要求** 100 股整手
 - cost：有限数值（拒 bool/字符串/NaN/Infinity）；**允许负值**（既有语义）
 - 失败不写 `portfolio.json`；不改 `account_profile.json`；不调 advice
+- 持仓建议只读账户资金指标：在 `validator` 返回权威结果后纯函数装配 `account_funding` 与 `account_metrics`，不触碰模型 Prompt、上下文与 validator。高精度 `Decimal(ROUND_HALF_UP)` 计算。未配置/损坏安全降级。
 
 ### 前端（`Portfolio.tsx` + `api.updateHolding`）
 
 - 编辑：代码只读预填；保存一次 PUT；取消不请求；失败弹窗不关、输入保留、列表旧值不变
 - 删除：确认展示名称/代码、数量、「删除只移除当前持仓记录」；取消不 DELETE；失败不静默
 - `validateShares`：空/0/负/小数/非数字均拒绝且不发请求
+- 持仓建议：增加“账户资金参考”区展示只读指标，单票卡片展示占账户总资产比例。
 
 ### 验收
 
-- 专项：`tests/test_portfolio_edit_api.py` **23 passed**
-- 全量离线：`pytest -m "not live"` → **667 passed**，1 failed（已知 Windows `test_run_cli_stream_timeout`）
+- 专项：`tests/test_portfolio_edit_api.py` **23 passed**，`tests/test_portfolio_advice_account_metrics.py` **8 passed**
+- 全量离线：`pytest -m "not live"` → **675 passed**，1 failed（已知 Windows `test_run_cli_stream_timeout`）
 - 前端：`npm run build` 成功
-- Playwright A–J：**53/53**；验收期 advice 请求数 **0**；真实用户数据 SHA 前后一致
-- **未做**：账户资金 → 持仓建议；未改 advice/daily_review/astock/market
+- **未做**：账户资金参与动作/比例裁决；可用现金约束（留待下一阶段）
 
 ## 16. 最近关键提交（须与 `git log` 一致）
 

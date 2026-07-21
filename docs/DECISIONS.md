@@ -56,6 +56,12 @@
 - **原因**：无可靠市场广度时的操作建议不可信。
 - **落点**：`portfolio_advice_service` + `app.py`；`test_portfolio_advice_market_guard`。
 
+### 持仓建议只读账户资金指标（阶段一）
+
+- **决定**：在 `validator` 返回权威结果后，纯函数追加 `account_funding` 与 `account_metrics` 只读指标，**不改变**任何建议动作和比例。
+- **原因**：账户资金已支持手工维护，在引入可用现金约束之前，先建立不影响已有预测动作与执行计算的只读观测指标。
+- **落点**：`portfolio_advice_service._attach_account_funding_metrics`；`account_profile.get_account_profile_status`；`test_portfolio_advice_account_metrics.py`。
+
 ### 操作比例使用固定档位
 
 - **决定**：add 10/20；reduce 10/20/30；sell 100；其它动作 null；并受 confidence / partial 上限约束。
