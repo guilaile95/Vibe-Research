@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 import portfolio_advice_contracts as contracts
+import portfolio_advice_policy as policy
 
 
 class TestSchemaVersion:
@@ -62,62 +63,62 @@ class TestConfidenceLevels:
 
 class TestAddTiers:
     def test_add_tiers_values(self):
-        assert contracts.ADD_TIERS == frozenset({10.0, 20.0})
+        assert policy.ADD_TIERS == frozenset({10.0, 20.0})
 
     def test_add_tiers_is_frozenset(self):
-        assert isinstance(contracts.ADD_TIERS, frozenset)
+        assert isinstance(policy.ADD_TIERS, frozenset)
 
     def test_add_tiers_are_floats(self):
-        for t in contracts.ADD_TIERS:
+        for t in policy.ADD_TIERS:
             assert isinstance(t, float)
 
 
 class TestReduceTiers:
     def test_reduce_tiers_values(self):
-        assert contracts.REDUCE_TIERS == frozenset({10.0, 20.0, 30.0})
+        assert policy.REDUCE_TIERS == frozenset({10.0, 20.0, 30.0})
 
     def test_reduce_tiers_is_frozenset(self):
-        assert isinstance(contracts.REDUCE_TIERS, frozenset)
+        assert isinstance(policy.REDUCE_TIERS, frozenset)
 
 
 class TestSellTier:
     def test_sell_tier_value(self):
-        assert contracts.SELL_TIER == 100.0
+        assert policy.SELL_TIER == 100.0
 
     def test_sell_tier_is_float(self):
-        assert isinstance(contracts.SELL_TIER, float)
+        assert isinstance(policy.SELL_TIER, float)
 
 
 class TestConfidenceCap:
     def test_confidence_cap_keys(self):
-        assert set(contracts.CONFIDENCE_CAP.keys()) == {"low", "medium", "high"}
+        assert set(policy.CONFIDENCE_CAP.keys()) == {"low", "medium", "high"}
 
     def test_confidence_cap_low(self):
-        assert contracts.CONFIDENCE_CAP["low"] == 10.0
+        assert policy.CONFIDENCE_CAP["low"] == 10.0
 
     def test_confidence_cap_medium(self):
-        assert contracts.CONFIDENCE_CAP["medium"] == 20.0
+        assert policy.CONFIDENCE_CAP["medium"] == 20.0
 
     def test_confidence_cap_high(self):
-        assert contracts.CONFIDENCE_CAP["high"] == 30.0
+        assert policy.CONFIDENCE_CAP["high"] == 30.0
 
     def test_confidence_cap_values_ascending(self):
-        cap = contracts.CONFIDENCE_CAP
+        cap = policy.CONFIDENCE_CAP
         assert cap["low"] < cap["medium"] < cap["high"]
 
 
 class TestPartialMarketLimits:
     def test_partial_add_max(self):
-        assert contracts.PARTIAL_MARKET_ADD_MAX == 10.0
+        assert policy.PARTIAL_MARKET_ADD_MAX == 10.0
 
     def test_partial_reduce_max(self):
-        assert contracts.PARTIAL_MARKET_REDUCE_MAX == 20.0
+        assert policy.PARTIAL_MARKET_REDUCE_MAX == 20.0
 
     def test_partial_add_max_within_add_tiers(self):
-        assert contracts.PARTIAL_MARKET_ADD_MAX in contracts.ADD_TIERS
+        assert policy.PARTIAL_MARKET_ADD_MAX in policy.ADD_TIERS
 
     def test_partial_reduce_max_within_reduce_tiers(self):
-        assert contracts.PARTIAL_MARKET_REDUCE_MAX in contracts.REDUCE_TIERS
+        assert policy.PARTIAL_MARKET_REDUCE_MAX in policy.REDUCE_TIERS
 
 
 class TestLotSize:
@@ -153,10 +154,17 @@ class TestReExportCompat:
             "portfolio_advice_validator should not import from portfolio_advice_prompt"
         )
 
-    def test_validator_imports_contracts(self):
-        """验证 validator 从 contracts 导入。"""
+    def test_policy_imports_contracts(self):
+        """验证 policy 只向下依赖中立 contracts。"""
         import pathlib
-        validator_src = (
-            pathlib.Path(__file__).parent.parent / "portfolio_advice_validator.py"
+        policy_src = (
+            pathlib.Path(__file__).parent.parent / "portfolio_advice_policy.py"
         ).read_text(encoding="utf-8")
-        assert "from portfolio_advice_contracts import" in validator_src
+        assert "from portfolio_advice_contracts import" in policy_src
+
+    def test_contracts_do_not_import_policy(self):
+        import pathlib
+        contracts_src = (
+            pathlib.Path(__file__).parent.parent / "portfolio_advice_contracts.py"
+        ).read_text(encoding="utf-8")
+        assert "from portfolio_advice_policy import" not in contracts_src

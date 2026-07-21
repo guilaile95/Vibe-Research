@@ -25,12 +25,14 @@ from typing import Any
 from portfolio_advice_contracts import (
     ACCOUNT_ACTIONS,
     ACTIONS,
-    ADD_TIERS as _ADD_TIERS,
-    CONFIDENCE_CAP as _CONF_MAX,
     CONFIDENCE_LEVELS as _CONFIDENCE,
     LOT_SIZE,
-    REDUCE_TIERS as _REDUCE_TIERS,
     SCHEMA_VERSION,
+)
+from portfolio_advice_policy import (
+    ADD_TIERS as _ADD_TIERS,
+    CONFIDENCE_CAP as _CONF_MAX,
+    REDUCE_TIERS as _REDUCE_TIERS,
     SELL_TIER as _SELL_TIER,
 )
 

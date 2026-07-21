@@ -19,6 +19,7 @@ from portfolio_advice_contracts import (  # noqa: F401
     ACTIONS,
     SCHEMA_VERSION,
 )
+from portfolio_advice_policy import POLICY  # noqa: F401
 
 
 _DEFAULT_USER_TASK = (
