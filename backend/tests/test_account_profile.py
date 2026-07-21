@@ -241,3 +241,71 @@ def test_concurrent_write_valid():
     dir_files = os.listdir(account_profile.CACHE_DIR)
     acc_files = [f for f in dir_files if f.startswith("account_profile")]
     assert len(acc_files) == 1, f"残留临时文件: {acc_files}"
+
+
+def test_tmp_write_failure_no_residue():
+    """临时文件写入失败（json.dump 抛出 OSError）：原文件不变、不残留临时文件。"""
+    _delete_file()
+    account_profile.save_account_profile(99999, 33333)
+    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+        good_bytes = f.read()
+
+    import unittest.mock as mock
+
+    def fail_dump(*args, **kwargs):
+        raise OSError("simulated write failure")
+
+    with mock.patch("account_profile.json.dump", side_effect=fail_dump):
+        try:
+            account_profile.save_account_profile(111, 22)
+        except OSError:
+            pass
+
+    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+        assert f.read() == good_bytes
+
+    dir_files = os.listdir(account_profile.CACHE_DIR)
+    acc_files = [f for f in dir_files if f.startswith("account_profile")]
+    assert len(acc_files) == 1, f"残留临时文件: {acc_files}"
+
+
+def test_keyboard_interrupt_not_caught():
+    """KeyboardInterrupt 不被捕获为业务异常，临时文件仍被清理。"""
+    _delete_file()
+    account_profile.save_account_profile(99999, 33333)
+    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+        good_bytes = f.read()
+
+    import unittest.mock as mock
+
+    with mock.patch("account_profile.os.replace", side_effect=KeyboardInterrupt()):
+        with pytest.raises(KeyboardInterrupt):
+            account_profile.save_account_profile(111, 22)
+
+    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+        assert f.read() == good_bytes
+
+    dir_files = os.listdir(account_profile.CACHE_DIR)
+    acc_files = [f for f in dir_files if f.startswith("account_profile")]
+    assert len(acc_files) == 1, f"残留临时文件: {acc_files}"
+
+
+def test_system_exit_not_caught():
+    """SystemExit 不被捕获为业务异常，临时文件仍被清理。"""
+    _delete_file()
+    account_profile.save_account_profile(99999, 33333)
+    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+        good_bytes = f.read()
+
+    import unittest.mock as mock
+
+    with mock.patch("account_profile.os.replace", side_effect=SystemExit(1)):
+        with pytest.raises(SystemExit):
+            account_profile.save_account_profile(111, 22)
+
+    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+        assert f.read() == good_bytes
+
+    dir_files = os.listdir(account_profile.CACHE_DIR)
+    acc_files = [f for f in dir_files if f.startswith("account_profile")]
+    assert len(acc_files) == 1, f"残留临时文件: {acc_files}"

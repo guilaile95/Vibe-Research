@@ -49,17 +49,14 @@ def save_account_profile(total_assets: float, available_cash: float) -> dict:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False)
             os.replace(tmp, ACCOUNT_FILE)
-        except BaseException:
-            # 任何写入或替换失败：尽力清理临时文件，不覆盖原始异常
+        finally:
+            # 无论写入/替换成功或失败，都尽力清理临时文件
+            # 使用 try/except 而非 except BaseException，避免捕获 KeyboardInterrupt/SystemExit
             try:
-                os.remove(tmp)
+                if os.path.exists(tmp):
+                    os.remove(tmp)
             except OSError:
-                pass  # 清理临时文件失败只忽略，不掩盖原始写入异常
-            raise
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass  # 成功替换后清理临时文件，清理失败可忽略
+                pass  # 清理失败只忽略，不掩盖原始业务异常
     return payload
 
 
