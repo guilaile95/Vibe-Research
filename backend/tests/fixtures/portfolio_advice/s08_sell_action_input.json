@@ -1,0 +1,80 @@
+{
+  "ai_result": {
+    "schema_version": "portfolio-advice-v0.1",
+    "generated_at": "2026-07-21T15:00:00",
+    "market_status": "normal",
+    "account_action": {
+      "action": "hold",
+      "reason": "市场平稳",
+      "confidence": "high"
+    },
+    "holdings": [
+      {
+        "code": "600519",
+        "action": "sell",
+        "confidence": "high",
+        "execution_size_pct_of_holding": null,
+        "trigger_conditions": [
+          "基本面恶化"
+        ],
+        "price_conditions": [],
+        "execution_plan": [
+          "分批操作"
+        ],
+        "risk_conditions": [
+          "若跌破110元止损"
+        ],
+        "invalidation_conditions": [
+          "若行情反转重新评估"
+        ],
+        "data_limitations": []
+      }
+    ],
+    "warnings": [],
+    "data_limitations": []
+  },
+  "context": {
+    "schema_version": "portfolio-advice-context-v0.1",
+    "portfolio_summary": {
+      "holding_count": 1,
+      "market_value": 165000.0,
+      "cost": 150000.0,
+      "pnl": 15000.0,
+      "pnl_pct": 10.0
+    },
+    "holdings": [
+      {
+        "code": "600519",
+        "name": "贵州茅台",
+        "shares": 1500,
+        "cost_price": 100.0,
+        "current_price": 110.0,
+        "market_value": 165000.0,
+        "pnl_amount": 15000.0,
+        "pnl_pct": 10.0,
+        "holding_weight_pct": 100.0,
+        "distance_to_cost_pct": 10.0,
+        "quote": {},
+        "missing_quote_fields": []
+      }
+    ],
+    "market_context": {
+      "review_metadata": {
+        "status": "normal",
+        "trade_date": "2026-07-21"
+      }
+    },
+    "data_limitations": [
+      "未提供账户总资产与可用现金，无法计算绝对账户仓位与具体买入金额。",
+      "未提供可卖数量（sellable_shares），执行前需人工确认实际可卖股数。"
+    ],
+    "warnings": [],
+    "account_fields_available": {
+      "total_assets": false,
+      "cash_available": false,
+      "sellable_shares": false,
+      "today_buy_shares": false,
+      "today_sell_shares": false
+    }
+  }
+}
