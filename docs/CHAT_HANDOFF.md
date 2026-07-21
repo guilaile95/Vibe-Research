@@ -8,7 +8,7 @@
 |----|-----|
 | 仓库（origin） | https://github.com/guilaile95/Vibe-Research |
 | 分支 | `feature/research-system-v01` |
-| 当前 HEAD | 「feat: add manual account funding input」提交（待填精确哈希） |
+| 当前 HEAD | `fe54b8f68fd870aa5cac41d452c855643e1b25a7` |
 | origin | `https://github.com/guilaile95/Vibe-Research.git` |
 | upstream | `https://github.com/simonlin1212/Vibe-Research.git` |
 | 跟踪 | `origin/feature/research-system-v01` |
