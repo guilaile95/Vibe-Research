@@ -80,6 +80,21 @@ def _str_list(value: Any) -> list[str]:
             s = str(it).strip()
             if s:
                 out.append(s)
+    return _dedupe_str_list(out)
+
+
+def _dedupe_str_list(items: list[str]) -> list[str]:
+    """稳定去重：完全相同文案只保留首次出现。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for s in items:
+        if not isinstance(s, str):
+            continue
+        t = s.strip()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
     return out
 
 
@@ -231,7 +246,7 @@ def _validate_one_holding(
         "risk_conditions": _str_list(ai_h.get("risk_conditions")),
         "invalidation_conditions": _str_list(ai_h.get("invalidation_conditions")),
         "confidence": conf,
-        "data_limitations": limitations,
+        "data_limitations": _dedupe_str_list(limitations),
     }
 
 
@@ -355,11 +370,13 @@ def validate_portfolio_advice(
             _append_unique(top_limitations, msg.strip())
     _append_unique(top_limitations, _SELLABLE_LIMITATION)
     _append_unique(top_limitations, _CASH_LIMITATION)
+    top_limitations = _dedupe_str_list(top_limitations)
 
     warnings = _str_list(ai_work.get("warnings"))
     for w in _as_list(context.get("warnings")):
         if isinstance(w, str):
             _append_unique(warnings, w.strip())
+    warnings = _dedupe_str_list(warnings)
 
     market_status = ai_work.get("market_status")
     if not isinstance(market_status, str):
@@ -374,9 +391,28 @@ def validate_portfolio_advice(
     if not isinstance(ts, str):
         ts = ""
 
+    # 交易日：仅透传上下文已有值，不伪造
+    trade_date: str | None = None
+    meta = _as_dict(context.get("portfolio_meta"))
+    raw_td = meta.get("trade_date")
+    if isinstance(raw_td, str) and raw_td.strip():
+        trade_date = raw_td.strip()
+    else:
+        me = _as_dict(context.get("market_evidence"))
+        raw_td = me.get("trade_date")
+        if isinstance(raw_td, str) and raw_td.strip():
+            trade_date = raw_td.strip()
+        else:
+            mc = _as_dict(context.get("market_context"))
+            rm = _as_dict(mc.get("review_metadata"))
+            raw_td = rm.get("trade_date")
+            if isinstance(raw_td, str) and raw_td.strip():
+                trade_date = raw_td.strip()
+
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": ts,
+        "trade_date": trade_date,
         "market_status": market_status,
         "portfolio_summary": summary,
         "account_action": account_action,

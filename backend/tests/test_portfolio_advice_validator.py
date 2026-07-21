@@ -177,6 +177,55 @@ def test_empty_portfolio_validation():
     assert any("可卖" in m or "人工确认" in m for m in out["data_limitations"])
 
 
+def test_warnings_deduped():
+    ctx = _context(warnings=["同一警告", "另一警告"])
+    ai = _ai_result(
+        warnings=["同一警告", "同一警告", "第三警告", "同一警告"],
+    )
+    out = validate_portfolio_advice(ai, ctx)
+    assert out["warnings"].count("同一警告") == 1
+    assert out["warnings"].count("另一警告") == 1
+    assert out["warnings"].count("第三警告") == 1
+    # 稳定顺序：模型顺序优先，再合并上下文未出现项
+    assert out["warnings"].index("同一警告") < out["warnings"].index("第三警告")
+
+
+def test_data_limitations_deduped_top_and_holding():
+    dup = "未提供可卖数量，执行前需要人工确认实际可卖股数。"
+    ctx = _context(
+        data_limitations=[dup, "账户无现金", dup],
+    )
+    ai = _ai_result(
+        data_limitations=[dup, "模型限制A", dup],
+        holdings=[
+            _ai_holding(
+                action="reduce",
+                execution_size_pct_of_holding=20,
+                data_limitations=[dup, "持股限制", dup],
+            )
+        ],
+    )
+    out = validate_portfolio_advice(ai, ctx)
+    assert out["data_limitations"].count(dup) == 1
+    assert out["data_limitations"].count("模型限制A") == 1
+    assert out["data_limitations"].count("账户无现金") == 1
+    h_lim = out["holdings"][0]["data_limitations"]
+    assert h_lim.count(dup) == 1
+    assert h_lim.count("持股限制") == 1
+
+
+def test_trade_date_passthrough_not_fabricated():
+    ctx = _context(
+        portfolio_meta={"trade_date": "2026-07-20", "updated": None, "last_refresh": None}
+    )
+    out = validate_portfolio_advice(_ai_result(), ctx)
+    assert out["trade_date"] == "2026-07-20"
+
+    ctx2 = _context(portfolio_meta={"updated": None})
+    out2 = validate_portfolio_advice(_ai_result(), ctx2)
+    assert out2["trade_date"] is None
+
+
 # ---------------------------------------------------------------------------
 # 事实字段覆盖
 # ---------------------------------------------------------------------------

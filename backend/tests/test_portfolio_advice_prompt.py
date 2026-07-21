@@ -108,6 +108,35 @@ def test_system_prompt_market_context_rules():
     assert "不得仅根据" in p or "浮动盈亏" in p or "浮盈" in p
 
 
+def test_system_prompt_forbids_tech_without_kline():
+    p = build_portfolio_advice_system_prompt()
+    assert "压力位" in p
+    assert "支撑位" in p
+    assert "均线" in p
+    assert "N日" in p or "20日" in p
+    assert "历史K线" in p
+    assert "禁止" in p
+
+
+def test_system_prompt_cost_not_support():
+    p = build_portfolio_advice_system_prompt()
+    assert "盈亏和风险参考" in p or "盈亏与风险参考" in p or "风险参考" in p
+    assert "技术支撑" in p or "支撑位" in p
+    assert "禁止" in p or "不得" in p
+
+
+def test_system_prompt_forbids_fabricated_numeric_thresholds():
+    p = build_portfolio_advice_system_prompt()
+    assert "可追溯" in p or "追溯" in p
+    assert "valid_count" in p
+    assert "amount_valid_count" in p
+    assert "limit_down_count" in p
+    assert "down_count" in p
+    assert "不得把 down_count 写成" in p or "禁止把 down_count" in p
+    assert "绝对价位" in p or "编造无来源的绝对价位" in p
+    assert "current_price" in p and "cost_price" in p
+
+
 def test_system_prompt_json_schema():
     p = build_portfolio_advice_system_prompt()
     assert SCHEMA_VERSION in p

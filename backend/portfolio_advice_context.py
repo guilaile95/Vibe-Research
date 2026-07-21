@@ -36,7 +36,25 @@ _BASE_LIMITATIONS = (
     "未提供账户总资产与可用现金，无法计算绝对账户仓位与具体买入金额。",
     "未提供可卖数量（sellable_shares），执行前需人工确认实际可卖股数。",
     "第一版未接入公告、新闻、机构与龙虎榜等催化数据，不得猜测消息驱动。",
+    "未提供历史K线与技术指标计算结果，不得编造压力位、支撑位、均线、N日高低点或精确买卖价位区间。",
+    "holding_weight_pct 表示占股票持仓市值比例，不是账户总仓位（无总资产/现金数据）。",
+    "成本价仅作用户盈亏和风险参考，不是技术支撑位。",
 )
+
+# 市场字段语义（写入 context，避免模型混淆 valid_count 与 amount_valid_count、下跌与跌停）
+_FIELD_SEMANTICS = {
+    "stock_count": "全市场快照股票总数",
+    "valid_count": "涨跌幅 change_pct 有效的股票数（与成交额有效数不同）",
+    "amount_valid_count": "成交额 amount 有效的股票数（与 valid_count 不同）",
+    "up_count": "上涨家数（非涨停家数）",
+    "down_count": "下跌家数（非跌停家数）",
+    "flat_count": "平盘家数",
+    "up_ratio": "上涨家数/涨跌幅有效样本数",
+    "limit_up_count": "涨停家数（仅来自短线情绪 zt_count / 涨停池）",
+    "limit_down_count": "跌停家数（仅来自短线情绪 dt_count / 跌停池；不得用 down_count 代替）",
+    "holding_weight_pct": "占股票持仓市值比例，非账户总仓位",
+    "cost_price": "用户持仓成本，仅作盈亏与风险参考，非技术支撑位",
+}
 
 def _as_list(value: Any) -> list:
     return list(value) if isinstance(value, list) else []
@@ -206,21 +224,172 @@ def _portfolio_summary(holdings: list[dict], totals_in: dict) -> dict[str, Any]:
     }
 
 
-def _build_limitations(holdings: list[dict]) -> list[str]:
+def _dedupe_keep_order(items: list[Any]) -> list[str]:
+    """字符串列表稳定去重：保留首次出现顺序。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for it in items:
+        if not isinstance(it, str):
+            continue
+        s = it.strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+def _pick_present(data: dict | None, key: str):
+    """仅当键存在时返回值（含 0）；键缺失返回 None。不把缺失默认成 0。"""
+    if not isinstance(data, dict) or key not in data:
+        return None
+    return data.get(key)
+
+
+def _build_market_evidence(market_ctx: dict) -> dict[str, Any]:
+    """从投影后的 market_context 抽取可审计证据字段（明确命名，避免误读）。"""
+    me = _as_dict(market_ctx.get("market_environment"))
+    breadth = me.get("breadth") if isinstance(me.get("breadth"), dict) else None
+    emotion = (
+        market_ctx.get("short_term_emotion")
+        if isinstance(market_ctx.get("short_term_emotion"), dict)
+        else None
+    )
+    capital = (
+        market_ctx.get("capital_activity")
+        if isinstance(market_ctx.get("capital_activity"), dict)
+        else None
+    )
+    meta = _as_dict(market_ctx.get("review_metadata"))
+
+    breadth_evidence: dict[str, Any] | None
+    if breadth is None:
+        breadth_evidence = None
+    else:
+        breadth_evidence = {
+            "status": breadth.get("status"),
+            "stock_count": _pick_present(breadth, "stock_count"),
+            "valid_count": _pick_present(breadth, "valid_count"),
+            "up_count": _pick_present(breadth, "up_count"),
+            "down_count": _pick_present(breadth, "down_count"),
+            "flat_count": _pick_present(breadth, "flat_count"),
+            "up_ratio": _pick_present(breadth, "up_ratio"),
+            "up_3pct_count": _pick_present(breadth, "up_3pct_count"),
+            "down_3pct_count": _pick_present(breadth, "down_3pct_count"),
+            "total_amount": _pick_present(breadth, "total_amount"),
+            "amount_valid_count": _pick_present(breadth, "amount_valid_count"),
+        }
+
+    limit_stats: dict[str, Any] | None
+    if emotion is None:
+        limit_stats = None
+    else:
+        # 仅当情绪包提供 zt/dt 时写出涨跌停；禁止用 breadth.down_count 冒充跌停
+        limit_stats = {
+            "status": emotion.get("status"),
+            "trade_date": _pick_present(emotion, "date"),
+            "limit_up_count": _pick_present(emotion, "zt_count"),
+            "limit_down_count": _pick_present(emotion, "dt_count"),
+            "break_board_count": _pick_present(emotion, "zb_count"),
+            "source_field_map": {
+                "limit_up_count": "short_term_emotion.zt_count",
+                "limit_down_count": "short_term_emotion.dt_count",
+                "break_board_count": "short_term_emotion.zb_count",
+            },
+            "note": "limit_down_count 仅表示跌停池家数；breadth.down_count 是普通下跌家数，二者不可互换。",
+        }
+
+    amount_valid = None
+    if breadth is not None and "amount_valid_count" in breadth:
+        amount_valid = breadth.get("amount_valid_count")
+    elif capital is not None and "amount_valid_count" in capital:
+        amount_valid = capital.get("amount_valid_count")
+
+    return {
+        "field_semantics": dict(_FIELD_SEMANTICS),
+        "trade_date": meta.get("trade_date"),
+        "review_generated_at": meta.get("generated_at"),
+        "data_cutoff": meta.get("data_cutoff"),
+        "review_status": meta.get("status"),
+        "breadth": breadth_evidence,
+        "limit_stats": limit_stats,
+        "capital_amount_valid_count": amount_valid,
+        "history_kline_available": False,
+        "technical_indicators_available": False,
+        "account_total_assets_available": False,
+    }
+
+
+def _dynamic_market_limitations(market_ctx: dict, evidence: dict) -> list[str]:
+    """根据实际证据追加数据限制（不编造数值）。"""
+    out: list[str] = []
+    breadth = evidence.get("breadth") if isinstance(evidence.get("breadth"), dict) else None
+    if breadth is None:
+        out.append("市场广度数据不可用，不得据此判断多空占优或编造涨跌家数。")
+    else:
+        vc = breadth.get("valid_count")
+        sc = breadth.get("stock_count")
+        if vc is None:
+            out.append("缺少 valid_count（涨跌幅有效样本），不得编造有效比例或空头/多头占优结论。")
+        av = breadth.get("amount_valid_count")
+        if av is None:
+            out.append("缺少 amount_valid_count，不得编造成交额覆盖率。")
+        elif isinstance(av, (int, float)) and av == 0:
+            out.append(
+                "全市场快照成交额有效样本为 0（amount_valid_count=0），"
+                "不得据此判断成交额、资金面或空头占优；注意勿与 valid_count（涨跌幅有效样本）混淆。"
+            )
+        if breadth.get("total_amount") is None:
+            out.append("total_amount 不可用，不得编造全市场成交额数值。")
+        # 防止把 0 有效成交额误写成 valid_count/stock_count
+        if (
+            isinstance(av, (int, float))
+            and av == 0
+            and isinstance(sc, (int, float))
+            and sc
+            and isinstance(vc, (int, float))
+            and vc > 0
+        ):
+            out.append(
+                f"涨跌幅有效样本 valid_count={int(vc)}、股票总数 stock_count={int(sc)}；"
+                "成交额有效样本 amount_valid_count=0。二者口径不同，禁止写成 valid_count/stock_count=0/…。"
+            )
+
+    limit_stats = evidence.get("limit_stats") if isinstance(evidence.get("limit_stats"), dict) else None
+    if limit_stats is None:
+        out.append("短线情绪/涨跌停池不可用，不得编造涨停家数或跌停家数。")
+    else:
+        if limit_stats.get("limit_down_count") is None:
+            out.append("未提供 limit_down_count（跌停池），不得声称跌停家数。")
+        if limit_stats.get("limit_up_count") is None:
+            out.append("未提供 limit_up_count（涨停池），不得声称涨停家数。")
+
+    if not evidence.get("history_kline_available"):
+        out.append(
+            "无历史K线数据：禁止输出压力位、支撑位、均线、连续N日板块强弱、趋势突破或精确买卖价格区间。"
+        )
+    if evidence.get("data_cutoff") is None:
+        out.append("缺少统一数据截止时间 data_cutoff，不得伪造行情更新时刻。")
+    if not evidence.get("trade_date"):
+        out.append("缺少明确交易日期 trade_date，不得伪造交易日。")
+    return out
+
+
+def _build_limitations(
+    holdings: list[dict],
+    *,
+    market_ctx: dict | None = None,
+    evidence: dict | None = None,
+) -> list[str]:
     out: list[str] = list(_BASE_LIMITATIONS)
     if not holdings:
         out.append("当前无持仓，无法生成逐股操作建议。")
     missing_any = any(h.get("missing_quote_fields") for h in holdings)
     if holdings and missing_any:
         out.append("部分持仓缺少完整日内行情字段，缺失值已标记为 null。")
-    # 确定性去重（顺序保留）
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for s in out:
-        if s not in seen:
-            seen.add(s)
-            deduped.append(s)
-    return deduped
+    if market_ctx is not None and evidence is not None:
+        out.extend(_dynamic_market_limitations(market_ctx, evidence))
+    return _dedupe_keep_order(out)
 
 
 def _normalize_quotes(quotes: Any) -> dict[str, dict]:
@@ -313,11 +482,14 @@ def build_portfolio_advice_context(
     market_ctx = build_daily_review_ai_context(
         review, board_limit=board_limit, stock_limit=stock_limit
     )
+    market_evidence = _build_market_evidence(market_ctx)
 
-    limitations = _build_limitations(holdings)
+    limitations = _build_limitations(
+        holdings, market_ctx=market_ctx, evidence=market_evidence
+    )
     warnings = list(_as_list(market_ctx.get("data_health", {}).get("warnings")))
-    # 仅保留字符串 warnings
-    warnings = [w for w in warnings if isinstance(w, str) and w.strip()]
+    # 仅保留字符串 warnings，并稳定去重
+    warnings = _dedupe_keep_order(warnings)
 
     ctx = {
         "schema_version": SCHEMA_VERSION,
@@ -325,6 +497,9 @@ def build_portfolio_advice_context(
             "updated": _str_or_none(portfolio.get("updated")),
             "last_refresh": _str_or_none(portfolio.get("last_refresh")),
             "holding_count": summary["holding_count"],
+            "trade_date": market_evidence.get("trade_date"),
+            "review_generated_at": market_evidence.get("review_generated_at"),
+            "data_cutoff": market_evidence.get("data_cutoff"),
         },
         "portfolio_summary": {
             "holding_count": summary["holding_count"],
@@ -332,9 +507,13 @@ def build_portfolio_advice_context(
             "cost": summary["cost"],
             "pnl": summary["pnl"],
             "pnl_pct": summary["pnl_pct"],
+            # 明确权重分母语义，防止模型写成账户总仓位
+            "weight_basis": "stock_holdings_market_value",
+            "weight_basis_note": "权重分母为股票持仓市值合计，非账户总资产。",
         },
         "holdings": holdings,
         "market_context": market_ctx,
+        "market_evidence": market_evidence,
         "data_limitations": limitations,
         "warnings": warnings,
         # 明确声明无账户层与可卖层字段
@@ -344,6 +523,8 @@ def build_portfolio_advice_context(
             "sellable_shares": False,
             "today_buy_shares": False,
             "today_sell_shares": False,
+            "history_kline": False,
+            "technical_indicators": False,
         },
     }
     return ctx

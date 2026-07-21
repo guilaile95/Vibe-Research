@@ -546,6 +546,8 @@ export interface PortfolioAdviceHoldingAdvice {
 export interface PortfolioAdviceResult {
   schema_version: "portfolio-advice-v0.1";
   generated_at: string;
+  /** 复盘交易日；缺失时为 null/undefined，前端不伪造 */
+  trade_date?: string | null;
   market_status: MarketDataStatus | string;
   portfolio_summary: PortfolioAdviceSummary;
   account_action: PortfolioAdviceAccountDecision;

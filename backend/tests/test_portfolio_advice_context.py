@@ -270,6 +270,82 @@ def test_embeds_market_context():
     assert "short_term_emotion" in mc
 
 
+def test_maps_valid_count_not_zero():
+    """真实 valid_count 应原样投影，不得变成 0。"""
+    review = _minimal_review()
+    review["market_environment"]["breadth"]["data"]["stock_count"] = 5880
+    review["market_environment"]["breadth"]["data"]["valid_count"] = 5526
+    review["market_environment"]["breadth"]["data"]["amount_valid_count"] = 0
+    review["capital_activity"]["amount_valid_count"] = 0
+    ctx = build_portfolio_advice_context(
+        _portfolio([_holding("000001", "平安银行", 10.0, 100, 9.0)]),
+        review,
+    )
+    b = ctx["market_evidence"]["breadth"]
+    assert b["stock_count"] == 5880
+    assert b["valid_count"] == 5526
+    assert b["amount_valid_count"] == 0
+    assert b["valid_count"] != b["amount_valid_count"]
+    # 限制文案应提示勿写成 valid_count/stock_count=0
+    joined = "\n".join(ctx["data_limitations"])
+    assert "valid_count=5526" in joined or "5526" in joined
+    assert "amount_valid_count" in joined
+
+
+def test_missing_breadth_fields_stay_null():
+    """字段缺失保持 null，不默认成 0。"""
+    review = _minimal_review()
+    review["market_environment"]["breadth"]["data"] = {
+        "stock_count": 100,
+        # 故意不给 valid_count / up_count 等
+    }
+    ctx = build_portfolio_advice_context(
+        _portfolio([_holding("000001", "A", 10.0, 100, 9.0)]),
+        review,
+    )
+    b = ctx["market_evidence"]["breadth"]
+    assert b["stock_count"] == 100
+    assert b["valid_count"] is None
+    assert b["up_count"] is None
+    assert b["down_count"] is None
+    assert b["amount_valid_count"] is None
+    assert 0 not in (b["valid_count"], b["up_count"], b["down_count"])
+
+
+def test_limit_stats_not_confused_with_down_count():
+    """跌停家数仅来自 dt_count，不得用 down_count 冒充。"""
+    review = _minimal_review()
+    review["market_environment"]["breadth"]["data"]["down_count"] = 2093
+    review["short_term_emotion"]["data"]["zt_count"] = 53
+    review["short_term_emotion"]["data"]["dt_count"] = 211
+    ctx = build_portfolio_advice_context(
+        _portfolio([_holding("000001", "A", 10.0, 100, 9.0)]),
+        review,
+    )
+    ev = ctx["market_evidence"]
+    assert ev["breadth"]["down_count"] == 2093
+    assert ev["limit_stats"]["limit_up_count"] == 53
+    assert ev["limit_stats"]["limit_down_count"] == 211
+    assert ev["limit_stats"]["limit_down_count"] != ev["breadth"]["down_count"]
+    assert "dt_count" in ev["limit_stats"]["source_field_map"]["limit_down_count"]
+    assert "跌停" in ev["field_semantics"]["limit_down_count"]
+    assert "非跌停" in ev["field_semantics"]["down_count"]
+
+
+def test_no_history_kline_limitation():
+    ctx = build_portfolio_advice_context(
+        _portfolio([_holding("000001", "A", 10.0, 100, 9.0)]),
+        _minimal_review(),
+    )
+    assert ctx["market_evidence"]["history_kline_available"] is False
+    assert ctx["account_fields_available"]["history_kline"] is False
+    text = "\n".join(ctx["data_limitations"])
+    assert "历史K线" in text or "压力位" in text
+    assert "成本" in text and ("盈亏" in text or "风险参考" in text)
+    assert "支撑" in text  # 声明成本价不是支撑
+    assert ctx["portfolio_summary"]["weight_basis"] == "stock_holdings_market_value"
+
+
 # ---------------------------------------------------------------------------
 # 不生成建议 / 固定 limitations
 # ---------------------------------------------------------------------------

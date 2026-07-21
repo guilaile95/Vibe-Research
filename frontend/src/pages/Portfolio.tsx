@@ -155,7 +155,7 @@ function HoldingAdviceCard({ h }: { h: PortfolioAdviceHoldingAdvice }) {
           <p className={cn("font-mono font-medium", pnlColor(h.pnl_amount))}>{fmtPct(h.pnl_pct)}</p>
         </div>
         <div>
-          <p className="text-muted-foreground">占持仓市值</p>
+          <p className="text-muted-foreground">占股票持仓市值</p>
           <p className="font-mono font-medium">
             {h.holding_weight_pct == null ? "—" : `${h.holding_weight_pct}%`}
           </p>
@@ -521,6 +521,12 @@ export function Portfolio() {
                 <p className="text-muted-foreground">生成时间</p>
                 <p className="font-medium">{advice.generated_at || "—"}</p>
               </div>
+              {advice.trade_date ? (
+                <div className="rounded-md border border-border/40 p-2">
+                  <p className="text-muted-foreground">交易日期</p>
+                  <p className="font-medium">{advice.trade_date}</p>
+                </div>
+              ) : null}
               <div className="rounded-md border border-border/40 p-2">
                 <p className="text-muted-foreground">市场数据状态</p>
                 <p className="font-medium">
