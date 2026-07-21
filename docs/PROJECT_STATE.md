@@ -171,9 +171,8 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 
 ## 15. 持仓安全新增 / 精确编辑 / 删除（已验收）
 
-**功能提交**：`9932601` — `feat: add portfolio holding exact edit and delete confirm`  
+**功能提交**：`9932601` — `feat: add portfolio holding exact edit and delete confirm`
 （验收后文档刷新见后续 `docs:` 提交；当前能力以该功能提交与代码为准。）
-
 ### 能力摘要
 
 | 能力 | 行为 |
