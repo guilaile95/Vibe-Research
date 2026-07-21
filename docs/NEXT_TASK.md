@@ -41,6 +41,19 @@
 - Prompt 与 Validator 隔离，纯函数高精度 `Decimal(ROUND_HALF_UP)` 计算
 - 离线专项测试 8 passed；全量离线 675 passed（仅已知 Windows 例外）
 
+## 上一任务（已完成）
+
+~~Vibe-Research 持仓建议架构收口——第一阶段（`refactor/portfolio-advice-architecture-v01`）。~~
+
+- **状态**：已完成
+- **核心变更**：
+  1. 建立 `portfolio_advice_contracts.py` 作为策略常量唯一权威源
+  2. Validator 改从 `contracts` 导入，彻底断开对 Prompt 的反向依赖
+  3. 将只读账户资金指标计算从 Service 拆分为独立纯函数模块 `portfolio_advice_account_metrics.py`
+  4. 新建 Golden Tests (27 个场景快照)，锁定全部输出逻辑，保证重构过程 100% 行为不变
+- **测试**：Golden Tests 27/27 passed；Contracts 专项 35 passed；全量离线 702 passed（仅已知 Windows 例外）
+- **主要提交**：`9fa2428`、`70d2a71`、`67a1fc5`
+
 ## 当前下一任务
 
 **待产品优先级确认**。
@@ -53,3 +66,4 @@
 - 不自行选择或开始新的功能开发
 - 下一功能启动前需确认优先级与范围
 - 如无明确新需求，保持工作区干净
+

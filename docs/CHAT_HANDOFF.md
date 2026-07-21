@@ -49,6 +49,11 @@
   - 数量输入：**不再静默转换**（如 `-100` 不会变 `100`）
   - 与 `account_profile` / advice 隔离
 - 账户资金只读指标已接入持仓建议结果 (`account_funding` & `account_metrics`)；**尚未参与动作裁决**；可用现金约束留待下一阶段
+- **持仓建议架构收口第一阶段完成**（`refactor/portfolio-advice-architecture-v01`）：
+  - 建立公共契约 `portfolio_advice_contracts.py` 为策略常量唯一源
+  - Validator 断开对 Prompt 的反向依赖，改从 Contracts 导入
+  - 账户指标计算拆分为独立模块 `portfolio_advice_account_metrics.py`
+  - Golden Tests (27 个场景快照) 确保重构过程 100% 行为不变
 
 ## 关键安全边界
 
@@ -63,13 +68,14 @@
 
 ## 最近关键提交（节选）
 
+- `67a1fc5` refactor: extract account funding metrics calculation to dedicated module
+- `70d2a71` refactor: extract portfolio advice contracts as strategy constants single source of truth
+- `9fa2428` test: add golden tests to lock portfolio advice validator behavior (27 scenarios)
+- `5752845` feat: add read-only account metrics to portfolio advice
 - `9932601` feat: add portfolio holding exact edit and delete confirm
 - `f3d90af` harden account funding persistence
 - `88a1f83` restore account funding profile UI
 - `fe54b8f` add manual account funding input
-- `5dec970` calculate executable add quantities
-- `f2ae80c` stabilize A-share snapshot paging
-- `082e825` constrain portfolio advice execution rules
 
 ## 当前下一任务
 

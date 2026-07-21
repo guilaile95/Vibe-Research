@@ -56,6 +56,24 @@
 - **原因**：无可靠市场广度时的操作建议不可信。
 - **落点**：`portfolio_advice_service` + `app.py`；`test_portfolio_advice_market_guard`。
 
+### 持仓建议策略常量唯一来源与 Validator 解耦（架构收口第一阶段）
+
+- **决定**：新建 `portfolio_advice_contracts.py` 作为策略常量的唯一权威源；`portfolio_advice_prompt.py` re-export 常量；`portfolio_advice_validator.py` 断开对 Prompt 的反向依赖。
+- **原因**：消除 Validator 对 Prompt 的反向依赖与黑箱循环，建立明确的上下游契约层。
+- **落点**：`portfolio_advice_contracts.py`、`portfolio_advice_prompt.py`、`portfolio_advice_validator.py`；提交 `70d2a71`。
+
+### 账户资金指标计算独立模块拆分
+
+- **决定**：将只读账户资金指标计算从 Service 移至独立模块 `portfolio_advice_account_metrics.py`，Service 仅保留编排职责。
+- **原因**：编排服务与指标计算职责分离，避免编排层膨胀。
+- **落点**：`portfolio_advice_account_metrics.py`、`portfolio_advice_service.py`；提交 `67a1fc5`。
+
+### Golden Tests 行为锁定
+
+- **决定**：建立包含 27 个场景的输入输出快照与 Golden Test 回放套件。
+- **原因**：保证架构重构过程为 100% 纯结构重构，零产品行为与 API 输出变化。
+- **落点**：`backend/tests/fixtures/portfolio_advice/`、`test_portfolio_advice_golden.py`；提交 `9fa2428`。
+
 ### 持仓建议只读账户资金指标（阶段一）
 
 - **决定**：在 `validator` 返回权威结果后，纯函数追加 `account_funding` 与 `account_metrics` 只读指标，**不改变**任何建议动作和比例。

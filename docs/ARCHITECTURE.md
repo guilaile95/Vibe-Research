@@ -96,6 +96,7 @@ portfolio_advice_service.generate_portfolio_advice(cfg, user_request)
     │
     ├─ portfolio_advice_context.build… + render JSON
     ├─ portfolio_advice_prompt.build_portfolio_advice_messages
+    │     (策略常量从 portfolio_advice_contracts 导入/re-export)
     │
     ├─ model_runner / chat.stream_messages(use_tools=False)
     │     API 或 cli-*（cli_runtime）
@@ -103,10 +104,11 @@ portfolio_advice_service.generate_portfolio_advice(cfg, user_request)
     ├─ 解析纯 JSON 对象
     │
     ├─ portfolio_advice_validator.validate_portfolio_advice
-          ★ 最终裁决：动作、比例档位、execution_quantity、estimated_amount、
-            条件数字可追溯、文字股数/金额一致性、账户比例话术等
+    │     ★ 最终裁决：动作、比例档位、execution_quantity、estimated_amount、
+    │       条件数字可追溯、文字股数/金额一致性、账户比例话术等
+    │     (从 portfolio_advice_contracts 读取策略规则，断开 prompt 依赖)
     │
-    └─ _attach_account_funding_metrics
+    └─ portfolio_advice_account_metrics.attach_account_funding_metrics
           ★ 装配只读账户资金指标（account_funding 与 account_metrics）
             高精度 Decimal(ROUND_HALF_UP) 计算；尚未参与动作与比例裁决；未配置/损坏安全降级
     │
