@@ -15,7 +15,7 @@ import os
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 import astock
 import chat as chat_layer
@@ -24,6 +24,7 @@ import daily_review
 import gstock
 import newsradar
 import portfolio as pf
+import portfolio_advice_service
 import market
 import myreports as mr
 import review_compare
@@ -136,6 +137,45 @@ def portfolio_get():
         return {"data": pf.get_portfolio()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"持仓读取异常：{e}") from e
+
+
+class PortfolioAdviceRequest(BaseModel):
+    """持仓操作建议请求。
+
+    持仓与市场上下文由服务器读取/聚合；客户端不可注入 portfolio/context/messages。
+    llm 复用通用聊天的 LLMConfig。禁止额外字段。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_request: str | None = None
+    llm: LLMConfig
+
+
+@app.post("/api/portfolio/advice")
+def portfolio_advice(req: PortfolioAdviceRequest):
+    """独立持仓操作建议（普通 JSON，非流式）。
+
+    服务器链路：get_portfolio → generate_daily_review → context → 模型 → validator。
+    空持仓 → 409；模型调用/输出无效 → 502（通用文案）；未预期异常 → 500。
+    不接受客户端持仓/context/messages；不写持仓与复盘历史。
+    """
+    try:
+        result = portfolio_advice_service.generate_portfolio_advice(
+            req.llm.model_dump(),
+            user_request=req.user_request,
+        )
+        return {"data": result}
+    except portfolio_advice_service.PortfolioAdviceUnavailableError as e:
+        raise HTTPException(409, str(e)) from e
+    except portfolio_advice_service.PortfolioAdviceModelError:
+        raise HTTPException(502, "持仓建议模型调用失败") from None
+    except portfolio_advice_service.PortfolioAdviceModelOutputError:
+        raise HTTPException(502, "持仓建议模型输出无效") from None
+    except (TypeError, ValueError):
+        raise HTTPException(400, "持仓建议请求参数无效") from None
+    except Exception:  # noqa: BLE001 — 不向客户端暴露路径/持仓/密钥
+        raise HTTPException(500, "持仓操作建议生成失败") from None
 
 
 @app.post("/api/portfolio/holding")
