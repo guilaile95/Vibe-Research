@@ -193,7 +193,7 @@ def test_warnings_deduped():
 def test_data_limitations_deduped_top_and_holding():
     dup = "未提供可卖数量，执行前需要人工确认实际可卖股数。"
     ctx = _context(
-        data_limitations=[dup, "账户无现金", dup],
+        data_limitations=[dup, "未提供可用现金无法加仓", dup],
     )
     ai = _ai_result(
         data_limitations=[dup, "模型限制A", dup],
@@ -208,7 +208,9 @@ def test_data_limitations_deduped_top_and_holding():
     out = validate_portfolio_advice(ai, ctx)
     assert out["data_limitations"].count(dup) == 1
     assert out["data_limitations"].count("模型限制A") == 1
-    assert out["data_limitations"].count("账户无现金") == 1
+    # 现金类语义归一为标准文案，且只一次
+    cash_std = "未提供账户总资产与可用现金，无法计算账户仓位及具体加仓数量。"
+    assert out["data_limitations"].count(cash_std) == 1
     h_lim = out["holdings"][0]["data_limitations"]
     assert h_lim.count(dup) == 1
     assert h_lim.count("持股限制") == 1
@@ -277,13 +279,14 @@ def test_reduce_20pct_quantity_300():
     assert any("可卖" in m or "人工确认" in m for m in h["data_limitations"])
 
 
-def test_reduce_25pct_floor_300():
+def test_reduce_25pct_rejected_not_a_tier():
+    """reduce 仅允许 10/20/30 档；25 非法。"""
     ctx = _context(holdings=[_ctx_holding(shares=1500)])
     ai = _ai_result(holdings=[
         _ai_holding(action="reduce", execution_size_pct_of_holding=25)
     ])
-    out = validate_portfolio_advice(ai, ctx)
-    assert out["holdings"][0]["execution_quantity"] == 300
+    with pytest.raises(PortfolioAdviceValidationError):
+        validate_portfolio_advice(ai, ctx)
 
 
 def test_sell_100pct_quantity_1500():
@@ -324,7 +327,7 @@ def test_add_clears_execution_quantity():
     assert h["action"] == "add"
     assert h["execution_size_pct_of_holding"] == 10
     assert h["execution_quantity"] is None
-    assert any("买入股数" in m or "可用现金" in m for m in h["data_limitations"])
+    assert any("可用现金" in m or "加仓数量" in m or "账户仓位" in m for m in h["data_limitations"])
 
 
 def test_hold_watch_avoid_clear_quantity():
@@ -511,3 +514,220 @@ def test_non_dict_raises():
         validate_portfolio_advice([], _context())
     with pytest.raises(PortfolioAdviceValidationError):
         validate_portfolio_advice({}, [])
+
+
+# ---------------------------------------------------------------------------
+# 数字可追溯 / 档位 / 一致性 / 模板话术 / 限制归一
+# ---------------------------------------------------------------------------
+
+def test_untraceable_number_2500_rejected():
+    ctx = _context()
+    ai = _ai_result(holdings=[
+        _ai_holding(
+            action="hold",
+            trigger_conditions=["上涨家数达到2500家"],
+        )
+    ])
+    with pytest.raises(PortfolioAdviceValidationError, match="无法追溯的数字"):
+        validate_portfolio_advice(ai, ctx)
+
+
+def test_untraceable_number_2pct_rejected():
+    ctx = _context()
+    ai = _ai_result(holdings=[
+        _ai_holding(
+            action="hold",
+            risk_conditions=["板块涨幅超过2%"],
+        )
+    ])
+    with pytest.raises(PortfolioAdviceValidationError, match="无法追溯的数字"):
+        validate_portfolio_advice(ai, ctx)
+
+
+def test_context_number_allowed_in_conditions():
+    """context 已有 up_count=3000 时，条件可引用 3000。"""
+    ctx = _context(
+        market_evidence={
+            "breadth": {"up_count": 3000, "stock_count": 5000},
+            "review_status": "normal",
+        }
+    )
+    ai = _ai_result(holdings=[
+        _ai_holding(
+            action="hold",
+            trigger_conditions=["上涨家数约3000家，维持观察"],
+            invalidation_conditions=["市场广度明显修复"],
+        )
+    ])
+    out = validate_portfolio_advice(ai, ctx)
+    assert out["holdings"][0]["action"] == "hold"
+
+
+def test_add_only_allows_10_or_20():
+    ctx = _context()
+    for pct in (10, 20):
+        out = validate_portfolio_advice(
+            _ai_result(holdings=[
+                _ai_holding(action="add", execution_size_pct_of_holding=pct, confidence="high")
+            ]),
+            ctx,
+        )
+        assert out["holdings"][0]["execution_size_pct_of_holding"] == pct
+        assert out["holdings"][0]["execution_quantity"] is None
+    with pytest.raises(PortfolioAdviceValidationError):
+        validate_portfolio_advice(
+            _ai_result(holdings=[
+                _ai_holding(action="add", execution_size_pct_of_holding=15, confidence="high")
+            ]),
+            ctx,
+        )
+
+
+def test_reduce_only_allows_10_20_30():
+    ctx = _context(holdings=[_ctx_holding(shares=1500)])
+    for pct in (10, 20, 30):
+        conf = "high" if pct == 30 else "medium"
+        out = validate_portfolio_advice(
+            _ai_result(holdings=[
+                _ai_holding(action="reduce", execution_size_pct_of_holding=pct, confidence=conf)
+            ]),
+            ctx,
+        )
+        assert out["holdings"][0]["execution_size_pct_of_holding"] == pct
+    with pytest.raises(PortfolioAdviceValidationError):
+        validate_portfolio_advice(
+            _ai_result(holdings=[
+                _ai_holding(action="reduce", execution_size_pct_of_holding=15, confidence="high")
+            ]),
+            ctx,
+        )
+
+
+def test_sell_forced_to_100():
+    ctx = _context(holdings=[_ctx_holding(shares=1500)])
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(action="sell", execution_size_pct_of_holding=None, confidence="low")
+        ]),
+        ctx,
+    )
+    assert out["holdings"][0]["execution_size_pct_of_holding"] == 100
+    assert out["holdings"][0]["execution_quantity"] == 1500
+
+
+def test_confidence_caps_on_reduce():
+    ctx = _context(holdings=[_ctx_holding(shares=1500)])
+    # low 最多 10
+    with pytest.raises(PortfolioAdviceValidationError, match="上限"):
+        validate_portfolio_advice(
+            _ai_result(holdings=[
+                _ai_holding(action="reduce", execution_size_pct_of_holding=20, confidence="low")
+            ]),
+            ctx,
+        )
+    # medium 最多 20，30 拒绝
+    with pytest.raises(PortfolioAdviceValidationError, match="上限"):
+        validate_portfolio_advice(
+            _ai_result(holdings=[
+                _ai_holding(action="reduce", execution_size_pct_of_holding=30, confidence="medium")
+            ]),
+            ctx,
+        )
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(action="reduce", execution_size_pct_of_holding=30, confidence="high")
+        ]),
+        ctx,
+    )
+    assert out["holdings"][0]["execution_size_pct_of_holding"] == 30
+
+
+def test_partial_market_caps_add_and_reduce():
+    ctx = _context(market_context={"review_metadata": {"status": "partial"}})
+    with pytest.raises(PortfolioAdviceValidationError):
+        validate_portfolio_advice(
+            _ai_result(holdings=[
+                _ai_holding(action="add", execution_size_pct_of_holding=20, confidence="high")
+            ]),
+            ctx,
+        )
+    with pytest.raises(PortfolioAdviceValidationError):
+        validate_portfolio_advice(
+            _ai_result(holdings=[
+                _ai_holding(action="reduce", execution_size_pct_of_holding=30, confidence="high")
+            ]),
+            _context(
+                holdings=[_ctx_holding(shares=1500)],
+                market_context={"review_metadata": {"status": "partial"}},
+            ),
+        )
+    out = validate_portfolio_advice(
+        _ai_result(holdings=[
+            _ai_holding(action="add", execution_size_pct_of_holding=10, confidence="high")
+        ]),
+        ctx,
+    )
+    assert out["holdings"][0]["execution_size_pct_of_holding"] == 10
+
+
+def test_reduce_risk_worsen_but_pause_rejected():
+    ctx = _context(holdings=[_ctx_holding(shares=1500)])
+    ai = _ai_result(holdings=[
+        _ai_holding(
+            action="reduce",
+            execution_size_pct_of_holding=20,
+            confidence="medium",
+            invalidation_conditions=["若继续下跌或风险恶化则暂停减仓"],
+        )
+    ])
+    with pytest.raises(PortfolioAdviceValidationError, match="冲突"):
+        validate_portfolio_advice(ai, ctx)
+
+
+def test_legal_invalidation_for_reduce_passes():
+    ctx = _context(holdings=[_ctx_holding(shares=1500)])
+    ai = _ai_result(holdings=[
+        _ai_holding(
+            action="reduce",
+            execution_size_pct_of_holding=20,
+            confidence="medium",
+            invalidation_conditions=["市场广度明显修复后重新评估减仓"],
+            risk_conditions=["市场继续走弱时优先执行减仓"],
+            execution_plan=["执行前确认实际可卖数量，并按计划数量执行"],
+        )
+    ])
+    out = validate_portfolio_advice(ai, ctx)
+    assert out["holdings"][0]["action"] == "reduce"
+    assert out["holdings"][0]["execution_quantity"] == 300
+
+
+def test_market_impact_template_rejected():
+    ctx = _context(holdings=[_ctx_holding(shares=1500)])
+    ai = _ai_result(holdings=[
+        _ai_holding(
+            action="reduce",
+            execution_size_pct_of_holding=20,
+            confidence="medium",
+            execution_plan=["分批卖出以减少市场冲击"],
+        )
+    ])
+    with pytest.raises(PortfolioAdviceValidationError, match="市场冲击"):
+        validate_portfolio_advice(ai, ctx)
+
+
+def test_limitation_semantic_normalize_four_classes():
+    ctx = _context(
+        data_limitations=[
+            "缺少可卖数量 sellable_shares",
+            "没有账户总资产和现金",
+            "无历史K线不能看均线支撑",
+            "没有公告新闻不判断催化",
+            "缺少可卖数量请人工确认",  # 再一次可卖 → 归一后只一次
+        ]
+    )
+    out = validate_portfolio_advice(_ai_result(holdings=[_ai_holding(action="hold")]), ctx)
+    lims = out["data_limitations"]
+    assert lims.count("未提供可卖数量，执行前需要人工确认实际可卖股数。") == 1
+    assert lims.count("未提供账户总资产与可用现金，无法计算账户仓位及具体加仓数量。") == 1
+    assert lims.count("未提供历史K线与技术指标，无法计算趋势、支撑位或压力位。") == 1
+    assert lims.count("未接入可靠公告、新闻和机构公开信息，不判断消息催化原因。") == 1

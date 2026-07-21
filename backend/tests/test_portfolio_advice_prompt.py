@@ -90,10 +90,21 @@ def test_system_prompt_quantity_rules():
     p = build_portfolio_advice_system_prompt()
     assert "execution_quantity" in p
     assert "可卖" in p
-    assert "无法计算具体买入股数" in p or "可用现金" in p
+    assert "可用现金" in p or "账户仓位" in p
     assert "不得默认" in p or "全部" in p
+    # 固定档位
+    assert "10" in p and "20" in p and "30" in p
+    assert "固定 100" in p or "固定100" in p or "sell：固定 100" in p
     # 不得再要求做 T quantity 规则
     assert "### t_trade" not in p
+
+
+def test_system_prompt_execution_constraints():
+    p = build_portfolio_advice_system_prompt()
+    assert "risk_conditions" in p and "invalidation_conditions" in p
+    assert "暂停减仓" in p or "取消卖出" in p
+    assert "市场冲击" in p
+    assert "可追溯" in p or "追溯" in p
 
 
 def test_system_prompt_no_fabricated_catalyst():
@@ -133,8 +144,8 @@ def test_system_prompt_forbids_fabricated_numeric_thresholds():
     assert "limit_down_count" in p
     assert "down_count" in p
     assert "不得把 down_count 写成" in p or "禁止把 down_count" in p
-    assert "绝对价位" in p or "编造无来源的绝对价位" in p
-    assert "current_price" in p and "cost_price" in p
+    assert "无来源数字" in p or "数字阈值" in p or "禁止自行生成" in p
+    assert "current_price" in p or "cost_price" in p
 
 
 def test_system_prompt_json_schema():

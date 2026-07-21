@@ -1,11 +1,12 @@
 """持仓操作建议结构化结果校验与数量约束（纯函数，不联网、不调模型）。
 
 对 AI 输出的 JSON 进行：
-- 动作枚举与字段形状校验；
+- 动作枚举与固定比例档位校验；
+- 条件字段数字来源可追溯校验；
+- reduce/sell 失效条件冲突与无依据模板话术拦截；
 - 代码重算市值/盈亏/权重（覆盖模型数值）；
 - reduce/sell 数量按 100 股向下取整并截断；
-- add/hold/watch/avoid 清空不可靠数量；
-- 自动补充可卖数量等 data_limitations；
+- 数据限制语义归一化去重；
 - 忽略并剥离模型额外输出的 t_trade 字段（第一版不支持做 T）。
 
 不信任模型自行计算的数量与盈亏。
@@ -15,16 +16,67 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 from typing import Any
 
 from portfolio_advice_prompt import ACCOUNT_ACTIONS, ACTIONS, SCHEMA_VERSION
 
 LOT_SIZE = 100
 
+# 标准化数据限制文案（四类）
 _SELLABLE_LIMITATION = "未提供可卖数量，执行前需要人工确认实际可卖股数。"
-_CASH_LIMITATION = "未提供可用现金和账户总资产，无法计算具体买入股数。"
+_CASH_LIMITATION = "未提供账户总资产与可用现金，无法计算账户仓位及具体加仓数量。"
+_KLINE_LIMITATION = "未提供历史K线与技术指标，无法计算趋势、支撑位或压力位。"
+_CATALYST_LIMITATION = "未接入可靠公告、新闻和机构公开信息，不判断消息催化原因。"
 
 _CONFIDENCE = frozenset({"high", "medium", "low"})
+
+# 固定操作比例档位
+_ADD_TIERS = frozenset({10.0, 20.0})
+_REDUCE_TIERS = frozenset({10.0, 20.0, 30.0})
+_SELL_TIER = 100.0
+_CONF_MAX = {"low": 10.0, "medium": 20.0, "high": 30.0}
+
+_CONDITION_FIELDS = (
+    "trigger_conditions",
+    "price_conditions",
+    "execution_plan",
+    "risk_conditions",
+    "invalidation_conditions",
+)
+
+# 从条件文本抽取数字（含可选百分号）
+_NUM_TOKEN_RE = re.compile(r"(?<![A-Za-z_])(\d+(?:\.\d+)?)\s*%?")
+
+# reduce/sell 失效条件冲突：风险扩大却暂停减仓
+_RISK_WORSEN_RE = re.compile(
+    r"风险恶化|继续下跌|跌破|扩大浮亏|市场继续恶化|继续走弱|继续恶化|加速下跌"
+)
+_CANCEL_RISK_ACTION_RE = re.compile(
+    r"暂停减仓|取消卖出|停止减仓|取消减仓|停止卖出|暂停卖出|停止风险|取消风险控制"
+)
+
+# 无盘口数据时禁止的模板话术
+_MARKET_IMPACT_RE = re.compile(
+    r"减少市场冲击|降低冲击成本|避免大单影响|大单影响价格|保护盘口|分批成交以保护"
+)
+
+# 数据限制语义归一（按顺序匹配，首次命中归类）
+_LIMIT_NORMALIZE_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"可卖|sellable", re.I), _SELLABLE_LIMITATION),
+    (
+        re.compile(r"现金|总资产|买入股数|账户仓位|加仓数量|买入金额|可用资金"),
+        _CASH_LIMITATION,
+    ),
+    (
+        re.compile(r"历史\s*K|技术指标|支撑位|压力位|均线|N\s*日|趋势"),
+        _KLINE_LIMITATION,
+    ),
+    (
+        re.compile(r"公告|新闻|机构|催化|龙虎榜"),
+        _CATALYST_LIMITATION,
+    ),
+]
 
 
 class PortfolioAdviceValidationError(ValueError):
@@ -131,10 +183,8 @@ def compute_execution_quantity(
         pct = 100.0
     raw = float(shares) * pct / 100.0
     qty = floor_to_lot(raw, lot=lot)
-    # 允许非整数 shares（ETF），但仍按 lot 约束；不得超过 shares
     if qty > float(shares):
         qty = floor_to_lot(float(shares), lot=lot)
-    # 若 shares 本身不足 1 手且 pct>0，可能得到 0
     return qty
 
 
@@ -190,9 +240,194 @@ def _recompute_fact_fields(ctx_h: dict) -> dict[str, Any]:
     }
 
 
+def _market_status_from_context(context: dict) -> str:
+    mc = _as_dict(context.get("market_context"))
+    rm = _as_dict(mc.get("review_metadata"))
+    st = rm.get("status")
+    if isinstance(st, str) and st:
+        return st
+    me = _as_dict(context.get("market_evidence"))
+    st2 = me.get("review_status")
+    if isinstance(st2, str) and st2:
+        return st2
+    return ""
+
+
+def _market_is_partial(context: dict) -> bool:
+    return _market_status_from_context(context) == "partial"
+
+
+def _collect_context_numbers(obj: Any, out: set[float]) -> None:
+    """递归收集 context 中的数值，供条件字段追溯。"""
+    if isinstance(obj, bool):
+        return
+    if isinstance(obj, (int, float)):
+        v = float(obj)
+        if math.isfinite(v):
+            out.add(v)
+            out.add(abs(v))
+        return
+    if isinstance(obj, str):
+        for m in _NUM_TOKEN_RE.finditer(obj):
+            try:
+                out.add(float(m.group(1)))
+            except ValueError:
+                continue
+        return
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _collect_context_numbers(v, out)
+        return
+    if isinstance(obj, (list, tuple)):
+        for v in obj:
+            _collect_context_numbers(v, out)
+
+
+def _number_allowed(num: float, allowed: set[float]) -> bool:
+    for a in allowed:
+        if abs(a - num) <= 1e-6:
+            return True
+        # 百分比/小数的相对容差
+        scale = max(abs(a), abs(num), 1.0)
+        if abs(a - num) / scale <= 1e-4:
+            return True
+    return False
+
+
+def _extract_numbers_from_text(text: str) -> list[float]:
+    nums: list[float] = []
+    for m in _NUM_TOKEN_RE.finditer(text):
+        try:
+            nums.append(float(m.group(1)))
+        except ValueError:
+            continue
+    return nums
+
+
+def _validate_condition_numbers(
+    fields: dict[str, list[str]],
+    *,
+    allowed_numbers: set[float],
+    code: str,
+) -> None:
+    """条件字段中的数字必须可在 allowed_numbers 中追溯。"""
+    for field, items in fields.items():
+        for item in items:
+            for num in _extract_numbers_from_text(item):
+                if not _number_allowed(num, allowed_numbers):
+                    raise PortfolioAdviceValidationError(
+                        f"条件字段含无法追溯的数字 {num}（field={field}, code={code}）：{item[:80]}"
+                    )
+
+
+def _validate_reduce_sell_invalidation(action: str, invalidation: list[str], code: str) -> None:
+    if action not in ("reduce", "sell"):
+        return
+    text = "；".join(invalidation)
+    if not text:
+        return
+    if _RISK_WORSEN_RE.search(text) and _CANCEL_RISK_ACTION_RE.search(text):
+        raise PortfolioAdviceValidationError(
+            f"reduce/sell 失效条件与风险控制冲突（code={code}）："
+            "不得在风险恶化/继续下跌时暂停减仓或取消卖出"
+        )
+
+
+def _validate_no_market_impact_template(fields: dict[str, list[str]], code: str) -> None:
+    for field, items in fields.items():
+        for item in items:
+            if _MARKET_IMPACT_RE.search(item):
+                raise PortfolioAdviceValidationError(
+                    f"无流动性/盘口数据时禁止市场冲击类话术（field={field}, code={code}）"
+                )
+
+
+def _normalize_limitation_list(items: list[str]) -> list[str]:
+    """已知四类限制语义归一，再按类别稳定去重；未知文案原样去重保留。"""
+    seen_std: set[str] = set()
+    out: list[str] = []
+    for raw in items:
+        if not isinstance(raw, str):
+            continue
+        s = raw.strip()
+        if not s:
+            continue
+        mapped: str | None = None
+        for pat, std in _LIMIT_NORMALIZE_RULES:
+            if pat.search(s):
+                mapped = std
+                break
+        final = mapped if mapped is not None else s
+        if final in seen_std:
+            continue
+        seen_std.add(final)
+        out.append(final)
+    return out
+
+
+def _validate_size_tier(
+    action: str,
+    size_pct: float | None,
+    *,
+    confidence: str,
+    market_partial: bool,
+    code: str,
+) -> float | None:
+    """校验并返回规范后的操作比例。"""
+    if action in ("hold", "watch", "avoid"):
+        return None
+
+    if action == "sell":
+        # 固定 100；模型填 null 也规范为 100
+        return _SELL_TIER
+
+    if size_pct is None:
+        if action in ("add", "reduce"):
+            raise PortfolioAdviceValidationError(
+                f"{action} 必须给出档位比例（code={code}）"
+            )
+        return None
+
+    # 归一到整数比较档位（允许 20.0）
+    tier = float(size_pct)
+    if action == "add":
+        allowed = set(_ADD_TIERS)
+        if market_partial:
+            allowed = {10.0}
+        if tier not in allowed:
+            raise PortfolioAdviceValidationError(
+                f"add 比例仅允许 {sorted(int(x) for x in allowed)}，收到 {tier}（code={code}）"
+            )
+    elif action == "reduce":
+        allowed = set(_REDUCE_TIERS)
+        if market_partial:
+            allowed = {10.0, 20.0}
+        if tier not in allowed:
+            raise PortfolioAdviceValidationError(
+                f"reduce 比例仅允许 {sorted(int(x) for x in allowed)}，收到 {tier}（code={code}）"
+            )
+    else:
+        return tier
+
+    conf = confidence if confidence in _CONF_MAX else "low"
+    cap = _CONF_MAX[conf]
+    if market_partial and action == "add":
+        cap = min(cap, 10.0)
+    if market_partial and action == "reduce":
+        cap = min(cap, 20.0)
+    if tier > cap:
+        raise PortfolioAdviceValidationError(
+            f"{action} 比例 {tier} 超过置信度 {conf} 上限 {int(cap)}（code={code}）"
+        )
+    return tier
+
+
 def _validate_one_holding(
     ai_h: dict,
     ctx_h: dict,
+    *,
+    context: dict,
+    allowed_base_numbers: set[float],
 ) -> dict[str, Any]:
     facts = _recompute_fact_fields(ctx_h)
     action = ai_h.get("action")
@@ -201,52 +436,121 @@ def _validate_one_holding(
             f"非法 action：{action!r}（code={facts['code']}）"
         )
 
-    limitations = _str_list(ai_h.get("data_limitations"))
+    conf = ai_h.get("confidence")
+    if conf not in _CONFIDENCE:
+        conf = "low"
+
+    market_partial = _market_is_partial(context)
+    raw_pct = ai_h.get("execution_size_pct_of_holding")
 
     size_pct: float | None
-    raw_pct = ai_h.get("execution_size_pct_of_holding")
-    if action in ("reduce", "sell"):
-        if raw_pct is None:
-            # 允许 null：则 execution_quantity 也为 null
-            size_pct = None
-        else:
-            size_pct = _normalize_pct(raw_pct)
+    if action in ("hold", "watch", "avoid"):
+        # 强制清空
+        size_pct = None
+        qty = None
+    elif action == "sell":
+        # 固定 100；非法非空非 100 拒绝
+        if raw_pct is not None:
+            n = _normalize_pct(raw_pct)
+            if n is not None and abs(n - _SELL_TIER) > 1e-6:
+                raise PortfolioAdviceValidationError(
+                    f"sell 比例必须为 100，收到 {n}（code={facts['code']}）"
+                )
+        size_pct = _SELL_TIER
         qty = compute_execution_quantity(facts["shares"], size_pct)
-        # 再保险：不得超过 shares
         if qty is not None and qty > facts["shares"]:
             qty = floor_to_lot(facts["shares"])
-        _append_unique(limitations, _SELLABLE_LIMITATION)
+    elif action == "reduce":
+        if raw_pct is None:
+            raise PortfolioAdviceValidationError(
+                f"reduce 必须给出档位比例 10/20/30（code={facts['code']}）"
+            )
+        n = _normalize_pct(raw_pct)
+        size_pct = _validate_size_tier(
+            action,
+            n,
+            confidence=conf,
+            market_partial=market_partial,
+            code=facts["code"],
+        )
+        qty = compute_execution_quantity(facts["shares"], size_pct)
+        if qty is not None and qty > facts["shares"]:
+            qty = floor_to_lot(facts["shares"])
     elif action == "add":
-        size_pct = _normalize_pct(raw_pct) if raw_pct is not None else None
-        qty = None  # 强制清空
-        _append_unique(limitations, _CASH_LIMITATION)
-    elif action in ("hold", "watch", "avoid"):
-        size_pct = _normalize_pct(raw_pct) if raw_pct is not None else None
-        if size_pct is not None and size_pct != 0:
-            # 非操作动作不应带正比例；归一为 null
-            size_pct = None
+        if raw_pct is None:
+            raise PortfolioAdviceValidationError(
+                f"add 必须给出档位比例 10/20（code={facts['code']}）"
+            )
+        n = _normalize_pct(raw_pct)
+        size_pct = _validate_size_tier(
+            action,
+            n,
+            confidence=conf,
+            market_partial=market_partial,
+            code=facts["code"],
+        )
         qty = None
     else:
         size_pct = None
         qty = None
 
-    conf = ai_h.get("confidence")
-    if conf not in _CONFIDENCE:
-        conf = "low"
+    trigger = _str_list(ai_h.get("trigger_conditions"))
+    price_c = _str_list(ai_h.get("price_conditions"))
+    plan = _str_list(ai_h.get("execution_plan"))
+    risk = _str_list(ai_h.get("risk_conditions"))
+    invalidation = _str_list(ai_h.get("invalidation_conditions"))
 
-    # 权威结果不包含 t_trade；模型若额外输出该字段，在此丢弃
+    cond_fields = {
+        "trigger_conditions": trigger,
+        "price_conditions": price_c,
+        "execution_plan": plan,
+        "risk_conditions": risk,
+        "invalidation_conditions": invalidation,
+    }
+
+    # 数字白名单：context + 本条比例/股数
+    allowed = set(allowed_base_numbers)
+    if size_pct is not None:
+        allowed.add(float(size_pct))
+    if qty is not None:
+        allowed.add(float(qty))
+    # 持仓事实再加一遍
+    for k in (
+        "shares",
+        "cost_price",
+        "current_price",
+        "market_value",
+        "pnl_amount",
+        "pnl_pct",
+        "holding_weight_pct",
+    ):
+        v = facts.get(k)
+        if isinstance(v, (int, float)) and math.isfinite(float(v)):
+            allowed.add(float(v))
+
+    _validate_condition_numbers(cond_fields, allowed_numbers=allowed, code=facts["code"])
+    _validate_reduce_sell_invalidation(action, invalidation, facts["code"])
+    _validate_no_market_impact_template(cond_fields, facts["code"])
+
+    limitations = _str_list(ai_h.get("data_limitations"))
+    if action in ("reduce", "sell"):
+        _append_unique(limitations, _SELLABLE_LIMITATION)
+    if action == "add":
+        _append_unique(limitations, _CASH_LIMITATION)
+    limitations = _normalize_limitation_list(limitations)
+
     return {
         **facts,
         "action": action,
         "execution_size_pct_of_holding": size_pct,
         "execution_quantity": qty,
-        "trigger_conditions": _str_list(ai_h.get("trigger_conditions")),
-        "price_conditions": _str_list(ai_h.get("price_conditions")),
-        "execution_plan": _str_list(ai_h.get("execution_plan")),
-        "risk_conditions": _str_list(ai_h.get("risk_conditions")),
-        "invalidation_conditions": _str_list(ai_h.get("invalidation_conditions")),
+        "trigger_conditions": trigger,
+        "price_conditions": price_c,
+        "execution_plan": plan,
+        "risk_conditions": risk,
+        "invalidation_conditions": invalidation,
         "confidence": conf,
-        "data_limitations": _dedupe_str_list(limitations),
+        "data_limitations": limitations,
     }
 
 
@@ -284,7 +588,6 @@ def _validate_account_action(raw: Any) -> dict[str, str]:
     d = _as_dict(raw)
     action = d.get("action")
     if action not in ACCOUNT_ACTIONS:
-        # 宽松回落：非法则 hold + 低置信
         action = "hold"
         reason = str(d.get("reason") or "账户动作非法，已回落为 hold").strip()
         conf = "low"
@@ -315,21 +618,22 @@ def validate_portfolio_advice(
     -------
     规范化后的权威结果 dict（schema_version=portfolio-advice-v0.1）。
     结果中绝不包含 t_trade 字段。
-
-    Notes
-    -----
-    - 不修改输入对象（内部 deepcopy 工作副本）。
-    - 相同输入结果确定。
-    - action=t_trade 视为非法并抛出 PortfolioAdviceValidationError。
-    - 模型额外输出的 t_trade 字段被忽略并从权威结果中移除。
     """
     if not isinstance(ai_result, dict):
         raise PortfolioAdviceValidationError("ai_result 必须是字典")
     if not isinstance(context, dict):
         raise PortfolioAdviceValidationError("context 必须是字典")
 
-    # 不修改调用方输入
     ai_work = copy.deepcopy(ai_result)
+
+    allowed_base: set[float] = set()
+    _collect_context_numbers(context, allowed_base)
+    # 档位本身允许出现在条件/计划中
+    allowed_base.update(_ADD_TIERS)
+    allowed_base.update(_REDUCE_TIERS)
+    allowed_base.add(_SELL_TIER)
+    allowed_base.add(0.0)
+    allowed_base.add(float(LOT_SIZE))
 
     ctx_index = _context_holdings_index(context)
     ai_holdings_raw = _as_list(ai_work.get("holdings"))
@@ -341,12 +645,10 @@ def validate_portfolio_advice(
         if code:
             ai_by_code[code] = h
 
-    # 以上下文持仓为准：不得遗漏；上下文没有的 code 丢弃
     validated_holdings: list[dict] = []
     for code, ctx_h in ctx_index.items():
         ai_h = ai_by_code.get(code)
         if ai_h is None:
-            # 模型遗漏：合成 watch + 低置信，强制 limitation
             ai_h = {
                 "code": code,
                 "action": "watch",
@@ -358,19 +660,26 @@ def validate_portfolio_advice(
                 "invalidation_conditions": ["获得完整建议后重新评估"],
                 "data_limitations": ["模型未覆盖该持仓"],
             }
-        validated_holdings.append(_validate_one_holding(ai_h, ctx_h))
+        validated_holdings.append(
+            _validate_one_holding(
+                ai_h,
+                ctx_h,
+                context=context,
+                allowed_base_numbers=allowed_base,
+            )
+        )
 
     summary = _portfolio_summary_from_context(context)
     account_action = _validate_account_action(ai_work.get("account_action"))
 
     top_limitations = _str_list(ai_work.get("data_limitations"))
-    # 合并上下文固定 limitations
     for msg in _as_list(context.get("data_limitations")):
         if isinstance(msg, str):
             _append_unique(top_limitations, msg.strip())
     _append_unique(top_limitations, _SELLABLE_LIMITATION)
     _append_unique(top_limitations, _CASH_LIMITATION)
-    top_limitations = _dedupe_str_list(top_limitations)
+    # 若 context 声明无历史K/催化，归一时也会收口
+    top_limitations = _normalize_limitation_list(top_limitations)
 
     warnings = _str_list(ai_work.get("warnings"))
     for w in _as_list(context.get("warnings")):
@@ -379,11 +688,8 @@ def validate_portfolio_advice(
     warnings = _dedupe_str_list(warnings)
 
     market_status = ai_work.get("market_status")
-    if not isinstance(market_status, str):
-        # 尝试从市场上下文推断
-        mc = _as_dict(context.get("market_context"))
-        rm = _as_dict(mc.get("review_metadata"))
-        market_status = str(rm.get("status") or "")
+    if not isinstance(market_status, str) or not market_status.strip():
+        market_status = _market_status_from_context(context)
 
     ts = generated_at
     if ts is None:
@@ -391,7 +697,6 @@ def validate_portfolio_advice(
     if not isinstance(ts, str):
         ts = ""
 
-    # 交易日：仅透传上下文已有值，不伪造
     trade_date: str | None = None
     meta = _as_dict(context.get("portfolio_meta"))
     raw_td = meta.get("trade_date")
