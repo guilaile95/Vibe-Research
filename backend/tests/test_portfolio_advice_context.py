@@ -434,14 +434,67 @@ def test_type_errors():
         build_portfolio_advice_context(_portfolio([]), _minimal_review(), board_limit=0)
 
 
-def test_zero_price_holding():
-    """行情/价格为 0 时不崩溃，市值与权重为 0。"""
-    pf = _portfolio([_holding("000001", "A", 0.0, 100, 10.0)])
-    # 手动改 market_value 以匹配 0 价
-    pf["holdings"][0]["market_value"] = 0.0
-    pf["holdings"][0]["pnl"] = -1000.0
-    pf["totals"] = {"market_value": 0.0, "cost": 1000.0, "pnl": -1000.0, "pnl_pct": -100.0}
+def test_invalid_price_holdings_null_safety():
+    """价格为 0、负数、NaN、Infinity、字符串、布尔值或 None 时，视为行情不可用，市值与盈亏为 None。"""
+    invalid_prices = [0, -5.0, float("nan"), float("inf"), "10.0", True, False, None]
+    for invalid_px in invalid_prices:
+        pf = _portfolio([_holding("000001", "A", 10.0, 100, 10.0)])
+        pf["holdings"][0]["price"] = invalid_px
+        ctx = build_portfolio_advice_context(pf, _minimal_review())
+        h = ctx["holdings"][0]
+        assert h["current_price"] is None
+        assert h["market_value"] is None
+        assert h["pnl_amount"] is None
+        assert h["pnl_pct"] is None
+        assert h["distance_to_cost_pct"] is None
+        assert h["holding_weight_pct"] is None
+        assert ctx["portfolio_summary"]["market_value"] is None
+        assert ctx["portfolio_summary"]["pnl"] is None
+        assert ctx["portfolio_summary"]["pnl_pct"] is None
+        assert ctx["portfolio_summary"]["cost"] == 1000.0
+        assert any("缺少有效行情价格" in lim for lim in ctx["data_limitations"])
+
+
+def test_partial_quote_coverage_weights_all_null():
+    """多只持仓中部分行情缺失时，所有持仓的 holding_weight_pct 为 None，不重新归一化。"""
+    pf = _portfolio([
+        _holding("000001", "A", 10.0, 100, 10.0),
+        _holding("000002", "B", 0.0, 100, 10.0),
+    ])
+    pf["holdings"][1]["price"] = None
     ctx = build_portfolio_advice_context(pf, _minimal_review())
+    for h in ctx["holdings"]:
+        assert h["holding_weight_pct"] is None
+    assert ctx["portfolio_summary"]["market_value"] is None
+    assert ctx["portfolio_summary"]["cost"] == 2000.0
+
+
+@pytest.mark.parametrize("invalid_raw_price", [
+    "10.0", True, False, 0, -1, float("nan"), float("inf"), float("-inf"), None
+])
+def test_injected_invalid_quote_price_does_not_override_valid_row_price(invalid_raw_price):
+    """场景 1：row price 有效时，无效注入 quote price 不得覆盖 valid row price。"""
+    pf = _portfolio([_holding("000001", "平安", 10.0, 100, 9.0)])
+    quotes = {"000001": {"price": invalid_raw_price, "open": 9.5}}
+    ctx = build_portfolio_advice_context(pf, _minimal_review(), quotes=quotes)
     h = ctx["holdings"][0]
-    assert h["market_value"] == 0.0
-    assert h["holding_weight_pct"] == 0.0
+    assert h["current_price"] == 10.0
+    assert h["market_value"] == 1000.0
+    assert h["pnl_amount"] == 100.0
+
+
+@pytest.mark.parametrize("invalid_raw_price", [
+    "10.0", True, False, 0, -1, float("nan"), float("inf"), float("-inf"), None
+])
+def test_injected_invalid_quote_price_when_row_price_invalid_remains_null(invalid_raw_price):
+    """场景 2：row price 也无效时，注入 invalid quote price 保持 current_price 等为 None。"""
+    pf = _portfolio([_holding("000001", "平安", 0.0, 100, 9.0)])
+    pf["holdings"][0]["price"] = None
+    quotes = {"000001": {"price": invalid_raw_price}}
+    ctx = build_portfolio_advice_context(pf, _minimal_review(), quotes=quotes)
+    h = ctx["holdings"][0]
+    assert h["current_price"] is None
+    assert h["market_value"] is None
+    assert h["pnl_amount"] is None
+    assert h["pnl_pct"] is None
+    assert h["holding_weight_pct"] is None

@@ -104,31 +104,37 @@ def _empty_quote() -> dict[str, Any]:
     return {k: None for k in _QUOTE_FIELDS}
 
 
+def _is_valid_price(px: Any) -> bool:
+    if isinstance(px, bool) or not isinstance(px, (int, float)):
+        return False
+    if px <= 0 or px != px or px in (float("inf"), float("-inf")):
+        return False
+    return True
+
+
 def _project_quote(raw: Any, *, fallback_price: float | None = None) -> dict[str, Any]:
     """将注入行情投影为固定字段；缺失为 null。不编造。"""
     out = _empty_quote()
-    if not isinstance(raw, dict):
-        if fallback_price is not None:
-            out["price"] = fallback_price
-        return out
+    if isinstance(raw, dict):
+        normalized = dict(raw)
+        if "prev_close" not in normalized and "last_close" in normalized:
+            normalized["prev_close"] = normalized.get("last_close")
 
-    # 兼容 tencent_quote 的 last_close → prev_close
-    normalized = dict(raw)
-    if "prev_close" not in normalized and "last_close" in normalized:
-        normalized["prev_close"] = normalized.get("last_close")
-    # tencent amount_wan → amount（万元；仅原样透传数值字段名 amount 优先）
-    if "amount" not in normalized and "amount_wan" in normalized:
-        # amount_wan 是万元；保持原数字并放入 amount，调用方知悉来源即可
-        # 为避免误解单位，优先仅在有 amount 时写入 amount
-        pass
+        for k in _QUOTE_FIELDS:
+            if k not in normalized:
+                continue
+            raw_val = normalized.get(k)
+            if k == "price":
+                out[k] = float(raw_val) if _is_valid_price(raw_val) else None
+            else:
+                out[k] = _num_or_none(raw_val)
 
-    for k in _QUOTE_FIELDS:
-        if k in normalized:
-            out[k] = _num_or_none(normalized.get(k))
-
-    # 持仓行自带 price 可作回退，仅当 quote.price 仍为 None
-    if out["price"] is None and fallback_price is not None:
-        out["price"] = fallback_price
+    px = out.get("price")
+    if not _is_valid_price(px):
+        if _is_valid_price(fallback_price):
+            out["price"] = float(fallback_price)
+        else:
+            out["price"] = None
 
     return out
 
@@ -144,39 +150,33 @@ def _project_holding(
     shares = _safe_float(row.get("shares"), 0.0)
     cost = _safe_float(row.get("cost"), 0.0)
 
-    row_price = _num_or_none(row.get("price"))
+    row_price = row.get("price")
     q = quotes.get(code) if code else None
     quote = _project_quote(
         q,
-        fallback_price=row_price if row_price is not None else None,
+        fallback_price=row_price if _is_valid_price(row_price) else None,
     )
 
-    # 现价权威顺序：注入 quote.price → 持仓行 price → 0
-    q_price = _num_or_none(quote.get("price"))
-    if q_price is not None:
-        price = float(q_price)
-    elif row_price is not None:
+    q_price = quote.get("price")
+    if _is_valid_price(q_price):
+        price: float | None = float(q_price)
+    elif _is_valid_price(row_price):
         price = float(row_price)
     else:
-        price = 0.0
-    # 回写 quote.price，保证与 current_price 一致
-    if quote.get("price") is None and price:
+        price = None
+
+    if price is not None:
         quote["price"] = price
-
-    # 代码重算市值/盈亏，不信任行内可能陈旧的 market_value/pnl
-    market_value = _round2(price * shares)
-    cost_value = cost * shares
-    pnl_amount = _round2(market_value - cost_value)
-    pnl_pct = _round2(pnl_amount / cost_value * 100) if cost_value else 0.0
-
-    if total_mv > 0:
-        holding_weight_pct = _round2(market_value / total_mv * 100)
+        market_value: float | None = _round2(price * shares)
+        cost_value = cost * shares
+        pnl_amount: float | None = _round2(market_value - cost_value)
+        pnl_pct: float | None = _round2(pnl_amount / cost_value * 100) if cost_value else 0.0
+        distance_to_cost_pct: float | None = _round2((price - cost) / cost * 100) if cost else None
     else:
-        holding_weight_pct = 0.0
-
-    if cost:
-        distance_to_cost_pct = _round2((price - cost) / cost * 100)
-    else:
+        quote["price"] = None
+        market_value = None
+        pnl_amount = None
+        pnl_pct = None
         distance_to_cost_pct = None
 
     missing_quote_fields = [k for k in _QUOTE_FIELDS if quote.get(k) is None]
@@ -190,24 +190,30 @@ def _project_holding(
         "market_value": market_value,
         "pnl_amount": pnl_amount,
         "pnl_pct": pnl_pct,
-        "holding_weight_pct": holding_weight_pct,
+        "holding_weight_pct": None,
         "distance_to_cost_pct": distance_to_cost_pct,
         "quote": quote,
         "missing_quote_fields": missing_quote_fields,
     }
 
 
-def _portfolio_summary(holdings: list[dict], totals_in: dict) -> dict[str, Any]:
+def _portfolio_summary(holdings: list[dict], totals_in: dict, *, complete_coverage: bool = True) -> dict[str, Any]:
     """用投影后的持仓重算汇总；totals 字段仅作对照参考。"""
-    tmv = _round2(sum(_safe_float(h.get("market_value")) for h in holdings))
     tcost = _round2(
         sum(
             _safe_float(h.get("cost_price")) * _safe_float(h.get("shares"))
             for h in holdings
         )
     )
-    tpnl = _round2(tmv - tcost)
-    tpnl_pct = _round2(tpnl / tcost * 100) if tcost else 0.0
+    if complete_coverage or len(holdings) == 0:
+        tmv: float | None = _round2(sum(_safe_float(h.get("market_value")) for h in holdings))
+        tpnl: float | None = _round2(tmv - tcost)
+        tpnl_pct: float | None = _round2(tpnl / tcost * 100) if tcost else 0.0
+    else:
+        tmv = None
+        tpnl = None
+        tpnl_pct = None
+
     return {
         "holding_count": len(holdings),
         "market_value": tmv,
@@ -222,7 +228,6 @@ def _portfolio_summary(holdings: list[dict], totals_in: dict) -> dict[str, Any]:
             "pnl_pct": _num_or_none(totals_in.get("pnl_pct")),
         },
     }
-
 
 def _dedupe_keep_order(items: list[Any]) -> list[str]:
     """字符串列表稳定去重：保留首次出现顺序。"""
@@ -385,6 +390,9 @@ def _build_limitations(
     if not holdings:
         out.append("当前无持仓，无法生成逐股操作建议。")
     missing_any = any(h.get("missing_quote_fields") for h in holdings)
+    missing_prices = any(h.get("current_price") is None for h in holdings)
+    if holdings and missing_prices:
+        out.append("部分持仓缺少有效行情价格，相关市值与浮动盈亏已标记为 null。")
     if holdings and missing_any:
         out.append("部分持仓缺少完整日内行情字段，缺失值已标记为 null。")
     if market_ctx is not None and evidence is not None:
@@ -440,44 +448,34 @@ def build_portfolio_advice_context(
     quote_map = _normalize_quotes(quotes)
 
     raw_holdings = _as_list(portfolio.get("holdings"))
-    # 先按行内 price 估算总市值（用于权重分母）
-    prelim: list[tuple[dict, float]] = []
+    holdings: list[dict] = []
     for row in raw_holdings:
         if not isinstance(row, dict):
             continue
         code = str(row.get("code") or "").strip()
         if not code:
             continue
-        shares = _safe_float(row.get("shares"), 0.0)
-        price = _safe_float(row.get("price"), 0.0)
-        q = quote_map.get(code)
-        if isinstance(q, dict):
-            qp = _num_or_none(q.get("price"))
-            if qp is not None and qp > 0:
-                price = qp
-        prelim.append((row, price * shares))
-
-    total_mv = sum(mv for _, mv in prelim)
-
-    holdings: list[dict] = []
-    for row, _ in prelim:
-        # 用最终 total_mv 重算权重
-        h = _project_holding(row, total_mv=total_mv, quotes=quote_map)
+        h = _project_holding(row, total_mv=0.0, quotes=quote_map)
         holdings.append(h)
 
-    # 若因 quote 回填价格导致市值变化，用最终市值再归一化权重
-    final_tmv = sum(_safe_float(h.get("market_value")) for h in holdings)
-    if final_tmv > 0:
-        for h in holdings:
-            h["holding_weight_pct"] = _round2(
-                _safe_float(h.get("market_value")) / final_tmv * 100
-            )
+    complete_coverage = len(holdings) > 0 and all(h.get("current_price") is not None for h in holdings)
+
+    if complete_coverage:
+        final_tmv = sum(_safe_float(h.get("market_value")) for h in holdings)
+        if final_tmv > 0:
+            for h in holdings:
+                h["holding_weight_pct"] = _round2(
+                    _safe_float(h.get("market_value")) / final_tmv * 100
+                )
+        else:
+            for h in holdings:
+                h["holding_weight_pct"] = 0.0
     else:
         for h in holdings:
-            h["holding_weight_pct"] = 0.0
+            h["holding_weight_pct"] = None
 
     totals_in = _as_dict(portfolio.get("totals"))
-    summary = _portfolio_summary(holdings, totals_in)
+    summary = _portfolio_summary(holdings, totals_in, complete_coverage=complete_coverage)
 
     market_ctx = build_daily_review_ai_context(
         review, board_limit=board_limit, stock_limit=stock_limit

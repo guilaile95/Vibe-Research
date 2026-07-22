@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone, timedelta
+from typing import Any
 
 import astock
 
@@ -135,44 +136,114 @@ def remove_closed(index: int) -> dict:
     return get_portfolio()
 
 
+def _is_valid_price(px: Any) -> bool:
+    if isinstance(px, bool) or not isinstance(px, (int, float)):
+        return False
+    if px <= 0 or px != px or px in (float("inf"), float("-inf")):
+        return False
+    return True
+
+
 def get_portfolio() -> dict:
     """读持仓 + 实时行情，算每笔与汇总的市值/浮动盈亏。"""
     with _LOCK:
         d = _load()
     hs = d.get("holdings", [])
-    rows, tmv, tcost = [], 0.0, 0.0
+    rows = []
+    valid_count = 0
+    tmv_sum = 0.0
+    tcost = 0.0
     if hs:
         try:
             quotes = astock.tencent_quote([h["code"] for h in hs])
         except Exception:
             quotes = {}
+        if not isinstance(quotes, dict):
+            quotes = {}
+
         for h in hs:
-            q = quotes.get(h["code"], {})
-            price = q.get("price", 0.0)
-            mv = price * h["shares"]
-            cv = h["cost"] * h["shares"]
-            pnl = mv - cv
-            rows.append({
-                "code": h["code"], "name": q.get("name", h["code"]),
-                "price": price, "shares": h["shares"], "cost": h["cost"],
-                "market_value": round(mv, 2), "pnl": round(pnl, 2),
-                "pnl_pct": round(pnl / cv * 100, 2) if cv else 0.0,
-            })
-            tmv += mv
+            q = quotes.get(h["code"], {}) if isinstance(quotes, dict) else {}
+            if not isinstance(q, dict):
+                q = {}
+            name = q.get("name", h.get("code", ""))
+            shares = h.get("shares", 0.0)
+            cost = h.get("cost", 0.0)
+            cv = cost * shares
             tcost += cv
-    total_pnl = tmv - tcost
+
+            raw_px = q.get("price")
+            if _is_valid_price(raw_px):
+                price = float(raw_px)
+                mv = price * shares
+                pnl = mv - cv
+                pnl_pct = round((price - cost) / cost * 100, 2) if cost else 0.0
+                rows.append({
+                    "code": h["code"],
+                    "name": name,
+                    "price": price,
+                    "shares": shares,
+                    "cost": cost,
+                    "market_value": round(mv, 2),
+                    "pnl": round(pnl, 2),
+                    "pnl_pct": pnl_pct,
+                    "data_status": "normal",
+                })
+                valid_count += 1
+                tmv_sum += mv
+            else:
+                rows.append({
+                    "code": h["code"],
+                    "name": name,
+                    "price": None,
+                    "shares": shares,
+                    "cost": cost,
+                    "market_value": None,
+                    "pnl": None,
+                    "pnl_pct": None,
+                    "data_status": "unavailable",
+                })
+
+    total_count = len(hs)
+    complete = (total_count > 0 and valid_count == total_count)
+    quote_coverage = {
+        "valid_holdings": valid_count,
+        "total_holdings": total_count,
+        "complete": complete,
+    }
+
+    if total_count == 0 or complete:
+        data_status = "normal"
+    elif valid_count > 0:
+        data_status = "partial"
+    else:
+        data_status = "unavailable"
+
+    if total_count == 0 or complete:
+        total_pnl = tmv_sum - tcost
+        totals = {
+            "market_value": round(tmv_sum, 2),
+            "cost": round(tcost, 2),
+            "pnl": round(total_pnl, 2),
+            "pnl_pct": round(total_pnl / tcost * 100, 2) if tcost else 0.0,
+        }
+    else:
+        totals = {
+            "market_value": None,
+            "cost": round(tcost, 2),
+            "pnl": None,
+            "pnl_pct": None,
+        }
+
     closed = d.get("closed", [])
     return {
         "holdings": rows,
-        "totals": {
-            "market_value": round(tmv, 2), "cost": round(tcost, 2),
-            "pnl": round(total_pnl, 2),
-            "pnl_pct": round(total_pnl / tcost * 100, 2) if tcost else 0.0,
-        },
+        "totals": totals,
         "closed": closed,
         "realized_pnl": round(sum(c.get("pnl", 0) for c in closed), 2),
         "updated": _now(),
         "last_refresh": d.get("last_refresh"),
+        "data_status": data_status,
+        "quote_coverage": quote_coverage,
     }
 
 

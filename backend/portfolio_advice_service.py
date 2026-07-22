@@ -42,6 +42,7 @@ _EMPTY_HOLDINGS_MSG = "当前没有持仓，无法生成持仓操作建议"
 _EMPTY_OUTPUT_MSG = "持仓建议模型未返回有效内容"
 _INVALID_JSON_MSG = "持仓建议模型输出不是有效的JSON对象"
 _VALIDATOR_FAIL_MSG = "持仓建议模型输出未通过结构和执行约束校验"
+_HOLDING_QUOTE_UNAVAILABLE_MSG = "持仓核心行情暂不可用，无法生成可靠的持仓操作建议"
 _MARKET_UNAVAILABLE_MSG = "市场核心数据暂不可用，无法生成可靠的持仓操作建议"
 
 
@@ -85,6 +86,14 @@ def _market_breadth_unavailable(review: dict) -> bool:
     return False
 
 
+def _require_holding_quote_coverage(portfolio_data: dict) -> None:
+    holdings = portfolio_data.get("holdings") if isinstance(portfolio_data, dict) else None
+    if not isinstance(holdings, list) or len(holdings) == 0:
+        raise PortfolioAdviceUnavailableError(_EMPTY_HOLDINGS_MSG)
+    for h in holdings:
+        if not isinstance(h, dict) or not portfolio._is_valid_price(h.get("price")):
+            raise PortfolioAdviceMarketDataError(_HOLDING_QUOTE_UNAVAILABLE_MSG)
+
 def prepare_portfolio_advice_messages(
     user_request: str | None = None,
 ) -> dict:
@@ -107,6 +116,7 @@ def prepare_portfolio_advice_messages(
     if not isinstance(portfolio_data, dict):
         raise PortfolioAdviceUnavailableError(_EMPTY_HOLDINGS_MSG)
     _require_holdings(portfolio_data)
+    _require_holding_quote_coverage(portfolio_data)
 
     review = daily_review.generate_daily_review()
     if _market_breadth_unavailable(review):

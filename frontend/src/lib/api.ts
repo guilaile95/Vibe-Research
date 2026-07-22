@@ -486,8 +486,9 @@ export interface RadarData {
 }
 
 export interface Holding {
-  code: string; name: string; price: number; shares: number; cost: number;
-  market_value: number; pnl: number; pnl_pct: number;
+  code: string; name: string; price: number | null; shares: number; cost: number;
+  market_value: number | null; pnl: number | null; pnl_pct: number | null;
+  data_status?: "normal" | "unavailable";
 }
 export interface ClosedPosition {
   code: string; name: string; date: string; price: number; shares: number; cost: number;
@@ -495,10 +496,12 @@ export interface ClosedPosition {
 }
 export interface PortfolioData {
   holdings: Holding[];
-  totals: { market_value: number; cost: number; pnl: number; pnl_pct: number };
+  totals: { market_value: number | null; cost: number; pnl: number | null; pnl_pct: number | null };
   closed: ClosedPosition[];
   realized_pnl: number;
   updated: string; last_refresh: string | null;
+  data_status?: "normal" | "partial" | "unavailable";
+  quote_coverage?: { valid_holdings: number; total_holdings: number; complete: boolean };
 }
 
 // ---------------------------------------------------------------------------
@@ -544,9 +547,9 @@ export type PortfolioAdviceConfidence = "high" | "medium" | "low";
 
 export interface PortfolioAdviceSummary {
   holding_count: number;
-  market_value: number;
+  market_value: number | null;
   cost: number;
-  pnl: number;
+  pnl: number | null;
   pnl_pct: number | null;
 }
 
@@ -583,11 +586,11 @@ export interface PortfolioAdviceHoldingAdvice {
   name: string;
   shares: number;
   cost_price: number;
-  current_price: number;
-  market_value: number;
-  pnl_amount: number;
-  pnl_pct: number;
-  holding_weight_pct: number;
+  current_price: number | null;
+  market_value: number | null;
+  pnl_amount: number | null;
+  pnl_pct: number | null;
+  holding_weight_pct: number | null;
   account_metrics?: PortfolioAdviceHoldingAccountMetrics | null;
   action: PortfolioAdviceHoldingAction;
   /** 相对当前持股数量的操作比例（add/reduce/sell）；非账户总仓位比例 */

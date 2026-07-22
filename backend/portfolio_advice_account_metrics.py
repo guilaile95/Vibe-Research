@@ -37,9 +37,11 @@ def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
 
     holdings_data = portfolio_data.get("holdings", []) if isinstance(portfolio_data, dict) else []
     holding_price_map: dict[str, Any] = {}
+    holding_shares_map: dict[str, Any] = {}
     for h in holdings_data:
         if isinstance(h, dict) and "code" in h:
             holding_price_map[h["code"]] = h.get("price")
+            holding_shares_map[h["code"]] = h.get("shares")
 
     total_holdings = len(res.get("holdings", []))
     valid_holdings = 0
@@ -70,15 +72,24 @@ def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
         px = holding_price_map.get(code, h_copy.get("current_price"))
 
         price_valid = (
-            isinstance(px, (int, float))
+            not isinstance(px, bool)
+            and isinstance(px, (int, float))
             and px > 0
             and px == px
             and px not in (float("inf"), float("-inf"))
         )
+        pf_shares = holding_shares_map.get(code, shares)
         shares_valid = (
-            isinstance(shares, (int, float))
+            not isinstance(shares, bool)
+            and isinstance(shares, (int, float))
             and shares > 0
             and shares == shares
+            and shares not in (float("inf"), float("-inf"))
+            and not isinstance(pf_shares, bool)
+            and isinstance(pf_shares, (int, float))
+            and pf_shares > 0
+            and pf_shares == pf_shares
+            and pf_shares not in (float("inf"), float("-inf"))
         )
 
         if price_valid and shares_valid:
@@ -110,15 +121,16 @@ def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
     complete = total_holdings > 0 and valid_holdings == total_holdings
 
     if is_valid:
-        tracked_mv_val = float(
-            tracked_stock_mv_sum.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        )
         if complete:
+            tracked_mv_val = float(
+                tracked_stock_mv_sum.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            )
             tracked_weight_dec = (
                 tracked_stock_mv_sum / total_assets_dec * Decimal("100")
             ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             tracked_weight_val = float(tracked_weight_dec)
         else:
+            tracked_mv_val = None
             tracked_weight_val = None
 
         res["account_funding"] = {
