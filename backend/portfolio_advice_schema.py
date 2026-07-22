@@ -137,11 +137,15 @@ def normalize_holding_schema(ai_holding: dict, code: str) -> dict:
 
 def normalize_matching_holdings(ai_work: dict, context_codes: set[str]) -> dict[str, dict]:
     """只校验上下文中的持仓；额外模型代码沿用旧行为直接忽略。"""
-    by_code: dict[str, dict] = {}
+    raw_by_code: dict[str, dict] = {}
     for holding in as_list(ai_work.get("holdings")):
         if not isinstance(holding, dict):
             continue
         code = str(holding.get("code") or "").strip()
         if code and code in context_codes:
-            by_code[code] = normalize_holding_schema(holding, code)
-    return by_code
+            raw_by_code[code] = holding
+
+    return {
+        code: normalize_holding_schema(holding, code)
+        for code, holding in raw_by_code.items()
+    }
