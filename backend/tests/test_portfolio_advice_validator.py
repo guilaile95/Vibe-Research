@@ -498,6 +498,67 @@ def test_extra_ai_code_dropped():
     assert out["holdings"][0]["code"] == "000001"
 
 
+def test_duplicate_code_invalid_first_valid_last_uses_last_entry():
+    ctx = _context(holdings=[_ctx_holding("000001", "A", shares=100, cost=10, price=10)])
+    ai = _ai_result(holdings=[
+        _ai_holding(code="000001", action="not-an-action"),
+        _ai_holding(
+            code="000001",
+            action="reduce",
+            confidence="medium",
+            execution_size_pct_of_holding=20,
+            trigger_conditions=["后出现的建议"],
+        ),
+    ])
+
+    out = validate_portfolio_advice(ai, ctx)
+
+    holding = out["holdings"][0]
+    assert holding["action"] == "reduce"
+    assert holding["confidence"] == "medium"
+    assert holding["trigger_conditions"] == ["后出现的建议"]
+    assert holding["execution_size_pct_of_holding"] == 20
+
+
+def test_duplicate_code_valid_first_invalid_last_rejects_final_entry():
+    ctx = _context(holdings=[_ctx_holding("000001", "A", shares=100, cost=10, price=10)])
+    ai = _ai_result(holdings=[
+        _ai_holding(code="000001", action="hold"),
+        _ai_holding(code="000001", action="not-an-action"),
+    ])
+
+    with pytest.raises(PortfolioAdviceValidationError, match="非法 action"):
+        validate_portfolio_advice(ai, ctx)
+
+
+def test_duplicate_code_valid_last_entry_overrides_all_advice_fields():
+    ctx = _context(holdings=[_ctx_holding("000001", "A", shares=1500, cost=10, price=10)])
+    ai = _ai_result(holdings=[
+        _ai_holding(
+            code="000001",
+            action="hold",
+            confidence="low",
+            trigger_conditions=["第一条建议"],
+        ),
+        _ai_holding(
+            code="000001",
+            action="add",
+            confidence="medium",
+            execution_size_pct_of_holding=10,
+            trigger_conditions=["第二条建议"],
+        ),
+    ])
+
+    out = validate_portfolio_advice(ai, ctx)
+
+    holding = out["holdings"][0]
+    assert holding["action"] == "add"
+    assert holding["confidence"] == "medium"
+    assert holding["trigger_conditions"] == ["第二条建议"]
+    assert holding["execution_size_pct_of_holding"] == 10
+    assert holding["execution_quantity"] == 100
+
+
 # ---------------------------------------------------------------------------
 # 输入不被修改 / 确定性
 # ---------------------------------------------------------------------------

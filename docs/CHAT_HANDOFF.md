@@ -7,11 +7,11 @@
 | 项 | 值 |
 |----|-----|
 | 仓库（origin） | https://github.com/guilaile95/Vibe-Research |
-| 分支 | `feature/research-system-v01` |
-| 当前 HEAD | 功能提交 `9932601`；文档刷新后以 `git rev-parse HEAD` 为准 |
+| 分支 | `refactor/portfolio-advice-architecture-v01` |
+| 架构实现提交 | `0ee21aa`（`refactor: split portfolio advice validator pipeline`）；当前 HEAD 以 `git rev-parse HEAD` 为准 |
 | origin | `https://github.com/guilaile95/Vibe-Research.git` |
 | upstream | `https://github.com/simonlin1212/Vibe-Research.git` |
-| 跟踪 | `origin/feature/research-system-v01` |
+| 交付分支 | `origin/refactor/portfolio-advice-architecture-v01` |
 | 工作区 | 接手后请先 `git status` / `git rev-parse HEAD` 复核 |
 
 > 说明：拼写为 **guilaile95**（非 guiliale95）。
@@ -41,7 +41,7 @@
 - `POST /api/portfolio/advice`：fresh 复盘、breadth unavailable → **503 fail-closed**
 - 固定动作与比例档位；**validator 为执行字段权威**
 - add：后端计算 `execution_quantity` 与 `estimated_amount`（`5dec970`）并已 E2E 验收
-- 账户资金手工填写：`GET`/`PUT /api/account-profile`；**未接入**持仓建议
+- 账户资金手工填写：`GET`/`PUT /api/account-profile`；只读指标已追加到建议结果，但不参与动作、比例或数量裁决
 - **持仓支持新增、精确编辑和安全删除**（`9932601`，已浏览器验收）：
   - `POST` 新增：同代码仍**加权合并**
   - `PUT` 编辑：**精确替换** shares/cost（不加权、不 upsert）
@@ -49,6 +49,14 @@
   - 数量输入：**不再静默转换**（如 `-100` 不会变 `100`）
   - 与 `account_profile` / advice 隔离
 - 账户资金只读指标已接入持仓建议结果 (`account_funding` & `account_metrics`)；**尚未参与动作裁决**；可用现金约束留待下一阶段
+- **持仓建议架构收口完成**（`refactor/portfolio-advice-architecture-v01`）：
+  - `portfolio_advice_contracts.py` 只保留 Schema、枚举和交易单位
+  - `portfolio_advice_policy.py` 为投资政策唯一代码来源
+  - Validator 变为兼容 Facade；真实实现拆为 Schema / Compatibility / Fact / Policy / Execution / Narrative / Pipeline
+  - Pipeline 固定顺序：Schema → Legacy Compatibility → Fact Reconciliation → Policy Audit → Execution → Narrative Audit → Final Assembly
+  - 账户指标计算拆分为独立模块 `portfolio_advice_account_metrics.py`
+  - Golden Tests (27 个场景快照) 确保重构过程 100% 行为不变
+  - Legacy fallback 仍保留：missing holding → `watch`；invalid account action → `hold`
 
 ## 关键安全边界
 
@@ -60,16 +68,21 @@
 - add 比例 = **相对当前持股**，不是账户仓位/资金比例
 - 真实 `portfolio.json` / `account_profile.json` **不得**用于自动化测试写入
 - 持仓增删改**不**自动调用 `POST /api/portfolio/advice`
+- `portfolio-advice-v0.1` API Schema 与 Prompt 最终文本未改变
+- Explainability、Evidence Layer、Signal Ledger 尚未实现
 
 ## 最近关键提交（节选）
 
+- `0ee21aa` refactor: split portfolio advice validator pipeline
+- `e3f44ef` refactor: separate portfolio advice policy from contracts
+- `67a1fc5` refactor: extract account funding metrics calculation to dedicated module
+- `70d2a71` refactor: extract portfolio advice contracts as strategy constants single source of truth
+- `9fa2428` test: add golden tests to lock portfolio advice validator behavior (27 scenarios)
+- `5752845` feat: add read-only account metrics to portfolio advice
 - `9932601` feat: add portfolio holding exact edit and delete confirm
 - `f3d90af` harden account funding persistence
 - `88a1f83` restore account funding profile UI
 - `fe54b8f` add manual account funding input
-- `5dec970` calculate executable add quantities
-- `f2ae80c` stabilize A-share snapshot paging
-- `082e825` constrain portfolio advice execution rules
 
 ## 当前下一任务
 
@@ -82,7 +95,7 @@
 tests/test_fixes.py::test_run_cli_stream_timeout
 ```
 
-Windows 缺少 `python3` 命令，退出码 9009。勿把新失败归入此项。
+Windows 缺少 `python3` 命令，实际错误为 `fake 退出码 9009`。本轮全量离线为 745 passed / 1 failed / 11 deselected / 1 warning；勿把新失败归入此项。
 
 ## 给新会话的强制要求
 

@@ -1,10 +1,12 @@
 """portfolio_advice_prompt 纯函数提示词契约离线测试（不联网、不调模型）。"""
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
 
+from portfolio_advice_policy import PortfolioAdvicePolicy
 from portfolio_advice_prompt import (
     ACTIONS,
     ACCOUNT_ACTIONS,
@@ -12,6 +14,7 @@ from portfolio_advice_prompt import (
     build_portfolio_advice_messages,
     build_portfolio_advice_system_prompt,
     build_portfolio_advice_user_prompt,
+    render_policy_prompt_rules,
     _DEFAULT_USER_TASK,
 )
 
@@ -251,3 +254,51 @@ def test_deterministic_prompts():
     assert build_portfolio_advice_system_prompt() == build_portfolio_advice_system_prompt()
     assert build_portfolio_advice_user_prompt(ctx) == build_portfolio_advice_user_prompt(ctx)
     assert build_portfolio_advice_messages(ctx) == build_portfolio_advice_messages(ctx)
+
+
+def test_policy_prompt_rules_are_derived_from_supplied_policy():
+    custom = PortfolioAdvicePolicy(
+        version="test-policy",
+        add_tiers=frozenset({15.0, 25.0}),
+        reduce_tiers=frozenset({5.0, 15.0, 25.0}),
+        sell_tier=90.0,
+        confidence_caps={"low": 5.0, "medium": 15.0, "high": 25.0},
+        partial_market_add_max=5.0,
+        partial_market_reduce_max=15.0,
+    )
+
+    rendered = render_policy_prompt_rules(custom)
+
+    assert "add：仅 15 或 25" in rendered
+    assert "reduce：仅 5、15 或 25" in rendered
+    assert "sell：固定 90" in rendered
+    assert "confidence=low：比例最多 5" in rendered
+    assert "confidence=medium：比例最多 15" in rendered
+    assert "confidence=high：比例最多 25" in rendered
+    assert "市场状态 partial 时：add 最多 5；reduce 最多 15" in rendered
+    assert "add：仅 10 或 20" not in rendered
+
+
+def test_system_prompt_consumer_uses_supplied_policy():
+    custom = PortfolioAdvicePolicy(
+        version="test-policy",
+        add_tiers=frozenset({15.0, 25.0}),
+        reduce_tiers=frozenset({5.0, 15.0, 25.0}),
+        sell_tier=90.0,
+        confidence_caps={"low": 5.0, "medium": 15.0, "high": 25.0},
+        partial_market_add_max=5.0,
+        partial_market_reduce_max=15.0,
+    )
+
+    rendered = build_portfolio_advice_system_prompt(custom)
+
+    assert "add：仅 15 或 25" in rendered
+    assert "sell：固定 90" in rendered
+    assert "add：仅 10 或 20" not in rendered
+
+
+def test_production_system_prompt_byte_snapshot_is_stable():
+    prompt = build_portfolio_advice_system_prompt()
+    assert hashlib.sha256(prompt.encode("utf-8")).hexdigest() == (
+        "375cfa9640e355e711a4dc9b0bc519d27d3d8c93f8ee9700f3de929cada3cf37"
+    )

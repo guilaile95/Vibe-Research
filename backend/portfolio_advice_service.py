@@ -7,17 +7,16 @@
 
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_HALF_UP
 import json
 from typing import Any, Callable
 
-import account_profile
 import chat
 import daily_review
 import portfolio
 import portfolio_advice_context
 import portfolio_advice_prompt
 import portfolio_advice_validator
+from portfolio_advice_account_metrics import attach_account_funding_metrics
 from portfolio_advice_validator import PortfolioAdviceValidationError
 
 ModelRunner = Callable[[Any, list[dict[str, str]]], str]
@@ -318,7 +317,7 @@ def generate_portfolio_advice(
             ai_result,
             context,
         )
-        return _attach_account_funding_metrics(validated, prepared["portfolio"])
+        return attach_account_funding_metrics(validated, prepared["portfolio"])
     except PortfolioAdviceValidationError as exc:
         raise PortfolioAdviceModelOutputError(_VALIDATOR_FAIL_MSG) from exc
     except PortfolioAdviceModelOutputError:
@@ -326,118 +325,4 @@ def generate_portfolio_advice(
     except Exception as exc:  # noqa: BLE001
         # 非预期异常也包装为输出错误，避免泄漏内部细节
         raise PortfolioAdviceModelOutputError(_VALIDATOR_FAIL_MSG) from exc
-
-
-def _attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
-    """在 validator 返回权威建议结果后，追加只读账户资金指标 account_funding 与 account_metrics。
-    不改动已有 action / action_ratio / execution_quantity / estimated_amount 等字段。
-    """
-    res = result
-    st = account_profile.get_account_profile_status()
-
-    holdings_data = portfolio_data.get("holdings", []) if isinstance(portfolio_data, dict) else []
-    holding_price_map = {}
-    for h in holdings_data:
-        if isinstance(h, dict) and "code" in h:
-            holding_price_map[h["code"]] = h.get("price")
-
-    total_holdings = len(res.get("holdings", []))
-    valid_holdings = 0
-    tracked_stock_mv_sum = Decimal("0")
-
-    is_valid = (st["status"] == "valid" and st["data"] is not None)
-    if is_valid:
-        total_assets_dec = Decimal(str(st["data"]["total_assets"]))
-        cash_dec = Decimal(str(st["data"]["available_cash"]))
-        cash_pct_dec = (cash_dec / total_assets_dec * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        available_cash_pct = float(cash_pct_dec)
-        total_assets_val = st["data"]["total_assets"]
-        available_cash_val = st["data"]["available_cash"]
-        updated_at_val = st["data"]["updated_at"]
-    else:
-        available_cash_pct = None
-        total_assets_val = None
-        available_cash_val = None
-        updated_at_val = None
-
-    new_holdings = []
-    for h in res.get("holdings", []):
-        h_copy = dict(h)
-        code = h_copy.get("code")
-        shares = h_copy.get("shares")
-        px = holding_price_map.get(code, h_copy.get("current_price"))
-
-        price_valid = isinstance(px, (int, float)) and px > 0 and px == px and px not in (float("inf"), float("-inf"))
-        shares_valid = isinstance(shares, (int, float)) and shares > 0 and shares == shares
-
-        if price_valid and shares_valid:
-            valid_holdings += 1
-            mv_dec = (Decimal(str(shares)) * Decimal(str(px))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            tracked_stock_mv_sum += mv_dec
-            mv_val = float(mv_dec)
-            if is_valid:
-                acct_weight_dec = (mv_dec / total_assets_dec * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-                acct_weight_val = float(acct_weight_dec)
-            else:
-                acct_weight_val = None
-            h_copy["account_metrics"] = {
-                "market_value": mv_val,
-                "account_weight_pct": acct_weight_val,
-            }
-        else:
-            h_copy["account_metrics"] = {
-                "market_value": None,
-                "account_weight_pct": None,
-            }
-        new_holdings.append(h_copy)
-
-    res["holdings"] = new_holdings
-    complete = (total_holdings > 0 and valid_holdings == total_holdings)
-
-    if is_valid:
-        tracked_mv_val = float(tracked_stock_mv_sum.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-        if complete:
-            tracked_weight_dec = (tracked_stock_mv_sum / total_assets_dec * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            tracked_weight_val = float(tracked_weight_dec)
-        else:
-            tracked_weight_val = None
-
-        res["account_funding"] = {
-            "configured": True,
-            "total_assets": total_assets_val,
-            "available_cash": available_cash_val,
-            "available_cash_pct": available_cash_pct,
-            "updated_at": updated_at_val,
-            "tracked_stock_market_value": tracked_mv_val,
-            "tracked_stock_weight_pct": tracked_weight_val,
-            "quote_coverage": {
-                "valid_holdings": valid_holdings,
-                "total_holdings": total_holdings,
-                "complete": complete,
-            },
-        }
-    else:
-        res["account_funding"] = {
-            "configured": False,
-            "total_assets": None,
-            "available_cash": None,
-            "available_cash_pct": None,
-            "updated_at": None,
-            "tracked_stock_market_value": None,
-            "tracked_stock_weight_pct": None,
-            "quote_coverage": {
-                "valid_holdings": valid_holdings,
-                "total_holdings": total_holdings,
-                "complete": complete,
-            },
-        }
-
-    data_limitations = list(res.get("data_limitations", []))
-    if st["status"] == "corrupted":
-        data_limitations.append("账户资金配置文件读取失败或损坏，未计算账户级仓位指标")
-    if is_valid and not complete:
-        data_limitations.append("部分持仓行情不可用，已跟踪持仓占总资产比例未计算")
-    res["data_limitations"] = data_limitations
-
-    return res
 

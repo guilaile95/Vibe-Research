@@ -56,6 +56,31 @@
 - **原因**：无可靠市场广度时的操作建议不可信。
 - **落点**：`portfolio_advice_service` + `app.py`；`test_portfolio_advice_market_guard`。
 
+### Contracts 与投资 Policy 分离
+
+- **决定**：`portfolio_advice_contracts.py` 只定义 Schema、枚举和交易单位；`portfolio_advice_policy.py` 是 add/reduce/sell 档位、confidence cap 和 partial 市场上限的唯一代码来源。
+- **原因**：中立输出契约与可演进投资政策是不同职责；Contracts 不应同时承担政策，也不得反向依赖 Policy。
+- **落点**：`portfolio_advice_contracts.py`、`portfolio_advice_policy.py`、`portfolio_advice_prompt.py`；提交 `70d2a71`、`e3f44ef`。
+
+### Validator 使用固定阶段 Pipeline，旧入口保持兼容
+
+- **决定**：`portfolio_advice_validator.py` 只作为 Facade；真实实现按 Schema → Compatibility → Fact Reconciliation → Policy Audit → Execution → Narrative Audit → Final Assembly 固定顺序运行。
+- **原因**：事实重算、投资政策、执行计算和文案审计需要清晰职责 seam，同时不能破坏 Service、测试和外部代码的旧导入路径。
+- **落点**：`portfolio_advice_{schema,compat,fact_reconciler,policy_audit,execution,narrative_audit,pipeline}.py` 与 `portfolio_advice_errors.py`；提交 `0ee21aa`。
+- **兼容约束**：模型遗漏持仓仍为 `watch`，非法账户动作仍为 `hold`；本轮不改变或修复这些 Legacy fallback。
+
+### 账户资金指标计算独立模块拆分
+
+- **决定**：将只读账户资金指标计算从 Service 移至独立模块 `portfolio_advice_account_metrics.py`，Service 仅保留编排职责。
+- **原因**：编排服务与指标计算职责分离，避免编排层膨胀。
+- **落点**：`portfolio_advice_account_metrics.py`、`portfolio_advice_service.py`；提交 `67a1fc5`。
+
+### Golden Tests 行为锁定
+
+- **决定**：建立包含 27 个场景的输入输出快照与 Golden Test 回放套件。
+- **原因**：保证架构重构过程为 100% 纯结构重构，零产品行为与 API 输出变化。
+- **落点**：`backend/tests/fixtures/portfolio_advice/`、`test_portfolio_advice_golden.py`；提交 `9fa2428`。
+
 ### 持仓建议只读账户资金指标（阶段一）
 
 - **决定**：在 `validator` 返回权威结果后，纯函数追加 `account_funding` 与 `account_metrics` 只读指标，**不改变**任何建议动作和比例。
@@ -66,13 +91,13 @@
 
 - **决定**：add 10/20；reduce 10/20/30；sell 100；其它动作 null；并受 confidence / partial 上限约束。
 - **原因**：禁止模型任意百分比，便于审计与执行。
-- **落点**：`portfolio_advice_validator` / prompt；`082e825`。
+- **落点**：`portfolio_advice_policy` / `portfolio_advice_policy_audit` / prompt；`082e825`、`e3f44ef`、`0ee21aa`。
 
 ### add 数量由后端计算
 
 - **决定**：`execution_quantity` / `estimated_amount` 由 validator 按持股与现价重算，覆盖模型结构字段。
 - **原因**：模型不是执行字段权威；需 100 股取整与金额精度一致。
-- **落点**：`5dec970`；`compute_add_execution_quantity` / `compute_estimated_amount`。
+- **落点**：`5dec970`；`portfolio_advice_execution.compute_add_execution_quantity` / `compute_estimated_amount`。
 
 ### add 比例表示相对当前持股
 
@@ -92,11 +117,13 @@
 - **原因**：无日内可卖/T+0 账户事实，且产品刻意收窄执行语义。
 - **落点**：`afc6d73` 及后续 prompt/validator。
 
-### 账户资金可手工维护，但未接入持仓建议
+### 账户资金只读展示，不参与建议裁决（阶段一）
 
-- **决定**：用户可在 Portfolio 页手工填写 `total_assets` / `available_cash`（`account_profile.json`）；**不**写入持仓建议 context / prompt / validator。
-- **原因**：建议侧仍无自动资金约束；手工维护与 AI 建议分阶段接入，避免半接入导致错误仓位算法。
-- **落点**：`account_profile.py`、`GET`/`PUT /api/account-profile`；advice 链路未引用。
+- **决定**：账户资金可手工维护；其数据不进入 advice Context、Prompt、Policy 或 Pipeline。Validator 完成后，Service 仅追加 `account_funding` 与 `account_metrics` 只读结果。
+- **原因**：阶段一只提供观测指标，不引入可用现金约束或账户仓位算法。
+- **落点**：`account_profile.py`、`portfolio_advice_account_metrics.py`、`portfolio_advice_service.py`。
+
+本轮 API Schema、Prompt 最终文本及 Legacy fallback 保持不变；Explainability、Evidence Layer、Signal Ledger 不在本轮实现范围内。
 
 ### 可靠可卖数量仍未接入
 

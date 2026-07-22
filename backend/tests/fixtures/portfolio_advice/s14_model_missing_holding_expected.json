@@ -1,0 +1,87 @@
+{
+  "schema_version": "portfolio-advice-v0.1",
+  "generated_at": "2026-07-21T15:00:00",
+  "trade_date": "2026-07-21",
+  "market_status": "normal",
+  "portfolio_summary": {
+    "holding_count": 2,
+    "market_value": 207000.0,
+    "cost": 186000.0,
+    "pnl": 21000.0,
+    "pnl_pct": 11.29
+  },
+  "account_action": {
+    "action": "hold",
+    "reason": "市场平稳",
+    "confidence": "high"
+  },
+  "holdings": [
+    {
+      "code": "600519",
+      "name": "贵州茅台",
+      "shares": 1500.0,
+      "cost_price": 100.0,
+      "current_price": 110.0,
+      "market_value": 165000.0,
+      "pnl_amount": 15000.0,
+      "pnl_pct": 10.0,
+      "holding_weight_pct": 60.0,
+      "action": "hold",
+      "execution_size_pct_of_holding": null,
+      "execution_quantity": null,
+      "estimated_amount": null,
+      "trigger_conditions": [
+        "市场广度偏强"
+      ],
+      "price_conditions": [],
+      "execution_plan": [
+        "分批操作"
+      ],
+      "risk_conditions": [
+        "若跌破110元止损"
+      ],
+      "invalidation_conditions": [
+        "市场恶化不再操作"
+      ],
+      "confidence": "high",
+      "data_limitations": []
+    },
+    {
+      "code": "000001",
+      "name": "平安银行",
+      "shares": 3000.0,
+      "cost_price": 12.0,
+      "current_price": 14.0,
+      "market_value": 42000.0,
+      "pnl_amount": 6000.0,
+      "pnl_pct": 16.67,
+      "holding_weight_pct": 40.0,
+      "action": "watch",
+      "execution_size_pct_of_holding": null,
+      "execution_quantity": null,
+      "estimated_amount": null,
+      "trigger_conditions": [
+        "模型未返回该持仓建议"
+      ],
+      "price_conditions": [],
+      "execution_plan": [
+        "暂不操作，等待补全建议"
+      ],
+      "risk_conditions": [
+        "建议不完整"
+      ],
+      "invalidation_conditions": [
+        "获得完整建议后重新评估"
+      ],
+      "confidence": "low",
+      "data_limitations": [
+        "模型未覆盖该持仓"
+      ]
+    }
+  ],
+  "warnings": [],
+  "data_limitations": [
+    "未提供账户总资产与可用现金，买入数量仅按当前持股比例计算；执行前需要确认可用资金充足。",
+    "未提供可卖数量，执行前需要人工确认实际可卖股数。"
+  ]
+}
