@@ -52,8 +52,8 @@
   3. Validator 作为兼容 Facade，实际执行固定七阶段 Pipeline
   4. 将只读账户资金指标计算从 Service 拆分为独立纯函数模块 `portfolio_advice_account_metrics.py`
   5. 新建 Golden Tests (27 个场景快照)，锁定全部输出逻辑，保证重构过程行为不变
-- **测试**：持仓建议专项 236 passed、1 warning、exit 0；全量离线 745 passed、1 failed、11 deselected、1 warning，唯一失败为 Windows `python3` 不可用导致 `fake 退出码 9009`
-- **主要提交**：`9fa2428`、`70d2a71`、`67a1fc5`、`e3f44ef`、`0ee21aa`
+- **测试**：持仓建议专项 248 passed、1 warning、exit code 0；全量离线 757 passed、1 failed、11 deselected、1 warning、exit code 1，唯一失败为 `backend/tests/test_fixes.py::test_run_cli_stream_timeout`（Windows `python3` 不可用导致 `fake 退出码 9009`）
+- **主要提交**：`9fa2428`、`70d2a71`、`67a1fc5`、`e3f44ef`、`0ee21aa`、`a749e47`、`5501eb4`、`601129c`、`beba610`、`eeea7b6`
 
 ## 当前下一任务
 
