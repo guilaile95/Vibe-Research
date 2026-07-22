@@ -304,3 +304,67 @@ def test_underlying_json_files_unmodified(tmp_env):
         assert f.read() == pf_bytes_before
     with open(acct_path, "rb") as f:
         assert f.read() == acct_bytes_before
+
+
+@pytest.mark.parametrize("invalid_px", [True, False, "10.0", float("nan"), float("inf"), float("-inf")])
+def test_account_metrics_invalid_price_types_excluded(tmp_env, invalid_px):
+    """price 为 True/False/string/NaN/Infinity 时不计入有效行情覆盖。"""
+    pf_data = {"holdings": [{"code": "000001", "shares": 100, "price": invalid_px}]}
+    _write_acct(tmp_env, 100000.0, 20000.0)
+    mock_val = {
+        "schema_version": "portfolio-advice-v0.1",
+        "generated_at": "2026-01-01 10:00:00",
+        "market_status": "normal",
+        "portfolio_summary": {"holding_count": 1, "market_value": None, "cost": 1000.0, "pnl": None, "pnl_pct": None},
+        "account_action": {"action": "hold", "reason": "稳健", "confidence": "high"},
+        "holdings": [{
+            "code": "000001", "name": "平安", "shares": 100, "cost_price": 10.0, "current_price": None,
+            "market_value": None, "pnl_amount": None, "pnl_pct": None, "holding_weight_pct": None,
+            "action": "hold", "execution_size_pct_of_holding": 10, "execution_quantity": 100, "estimated_amount": 1000.0,
+            "trigger_conditions": [], "price_conditions": [], "execution_plan": [], "risk_conditions": [],
+            "invalidation_conditions": [], "confidence": "high", "data_limitations": [],
+        }],
+        "warnings": [], "data_limitations": [],
+    }
+    res = am.attach_account_funding_metrics(mock_val, pf_data)
+    cov = res["account_funding"]["quote_coverage"]
+    assert cov["valid_holdings"] == 0
+    assert cov["complete"] is False
+    assert res["account_funding"]["tracked_stock_market_value"] is None
+    assert res["account_funding"]["tracked_stock_weight_pct"] is None
+    assert res["holdings"][0]["account_metrics"]["market_value"] is None
+    assert res["holdings"][0]["account_metrics"]["account_weight_pct"] is None
+    # 原 action, ratio, qty, estimated_amount 绝不受影响
+    assert res["holdings"][0]["action"] == "hold"
+    assert res["holdings"][0]["execution_size_pct_of_holding"] == 10
+    assert res["holdings"][0]["execution_quantity"] == 100
+    assert res["holdings"][0]["estimated_amount"] == 1000.0
+
+
+@pytest.mark.parametrize("invalid_shares", [True, False, float("nan"), float("inf"), float("-inf")])
+def test_account_metrics_invalid_shares_types_excluded(tmp_env, invalid_shares):
+    """shares 为 bool/NaN/Infinity 时不计算账户持仓市值。"""
+    pf_data = {"holdings": [{"code": "000001", "shares": invalid_shares, "price": 10.0}]}
+    _write_acct(tmp_env, 100000.0, 20000.0)
+    mock_val = {
+        "schema_version": "portfolio-advice-v0.1",
+        "generated_at": "2026-01-01 10:00:00",
+        "market_status": "normal",
+        "portfolio_summary": {"holding_count": 1, "market_value": None, "cost": 1000.0, "pnl": None, "pnl_pct": None},
+        "account_action": {"action": "hold", "reason": "稳健", "confidence": "high"},
+        "holdings": [{
+            "code": "000001", "name": "平安", "shares": invalid_shares, "cost_price": 10.0, "current_price": 10.0,
+            "market_value": 1000.0, "pnl_amount": 0.0, "pnl_pct": 0.0, "holding_weight_pct": 100.0,
+            "action": "hold", "execution_size_pct_of_holding": None, "execution_quantity": None, "estimated_amount": None,
+            "trigger_conditions": [], "price_conditions": [], "execution_plan": [], "risk_conditions": [],
+            "invalidation_conditions": [], "confidence": "high", "data_limitations": [],
+        }],
+        "warnings": [], "data_limitations": [],
+    }
+    res = am.attach_account_funding_metrics(mock_val, pf_data)
+    cov = res["account_funding"]["quote_coverage"]
+    assert cov["valid_holdings"] == 0
+    assert cov["complete"] is False
+    assert res["account_funding"]["tracked_stock_market_value"] is None
+    assert res["account_funding"]["tracked_stock_weight_pct"] is None
+    assert res["holdings"][0]["account_metrics"]["market_value"] is None

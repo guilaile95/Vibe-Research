@@ -467,3 +467,34 @@ def test_partial_quote_coverage_weights_all_null():
         assert h["holding_weight_pct"] is None
     assert ctx["portfolio_summary"]["market_value"] is None
     assert ctx["portfolio_summary"]["cost"] == 2000.0
+
+
+@pytest.mark.parametrize("invalid_raw_price", [
+    "10.0", True, False, 0, -1, float("nan"), float("inf"), float("-inf"), None
+])
+def test_injected_invalid_quote_price_does_not_override_valid_row_price(invalid_raw_price):
+    """场景 1：row price 有效时，无效注入 quote price 不得覆盖 valid row price。"""
+    pf = _portfolio([_holding("000001", "平安", 10.0, 100, 9.0)])
+    quotes = {"000001": {"price": invalid_raw_price, "open": 9.5}}
+    ctx = build_portfolio_advice_context(pf, _minimal_review(), quotes=quotes)
+    h = ctx["holdings"][0]
+    assert h["current_price"] == 10.0
+    assert h["market_value"] == 1000.0
+    assert h["pnl_amount"] == 100.0
+
+
+@pytest.mark.parametrize("invalid_raw_price", [
+    "10.0", True, False, 0, -1, float("nan"), float("inf"), float("-inf"), None
+])
+def test_injected_invalid_quote_price_when_row_price_invalid_remains_null(invalid_raw_price):
+    """场景 2：row price 也无效时，注入 invalid quote price 保持 current_price 等为 None。"""
+    pf = _portfolio([_holding("000001", "平安", 0.0, 100, 9.0)])
+    pf["holdings"][0]["price"] = None
+    quotes = {"000001": {"price": invalid_raw_price}}
+    ctx = build_portfolio_advice_context(pf, _minimal_review(), quotes=quotes)
+    h = ctx["holdings"][0]
+    assert h["current_price"] is None
+    assert h["market_value"] is None
+    assert h["pnl_amount"] is None
+    assert h["pnl_pct"] is None
+    assert h["holding_weight_pct"] is None

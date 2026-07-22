@@ -121,8 +121,13 @@ def _project_quote(raw: Any, *, fallback_price: float | None = None) -> dict[str
             normalized["prev_close"] = normalized.get("last_close")
 
         for k in _QUOTE_FIELDS:
-            if k in normalized:
-                out[k] = _num_or_none(normalized.get(k))
+            if k not in normalized:
+                continue
+            raw_val = normalized.get(k)
+            if k == "price":
+                out[k] = float(raw_val) if _is_valid_price(raw_val) else None
+            else:
+                out[k] = _num_or_none(raw_val)
 
     px = out.get("price")
     if not _is_valid_price(px):
