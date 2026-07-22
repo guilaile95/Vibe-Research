@@ -262,3 +262,57 @@ def test_final_assembly_only_reads_resolved_state(monkeypatch) -> None:
     assert state.result["trade_date"] == "2026-07-21"
     assert state.result["warnings"] == ["warning"]
     assert state.result["data_limitations"] == ["limitation"]
+
+
+@pytest.mark.parametrize(
+    ("explicit", "model_value", "expected"),
+    [
+        ("explicit-time", "model-time", "explicit-time"),
+        (None, "model-time", "model-time"),
+        (None, 123, ""),
+    ],
+)
+def test_schema_stage_resolves_generated_at_priority(
+    explicit, model_value, expected
+) -> None:
+    import portfolio_advice_pipeline as pipeline
+
+    state = pipeline.PipelineState(
+        ai_result={"generated_at": model_value, "holdings": []},
+        context={"holdings": []},
+        generated_at=explicit,
+    )
+
+    pipeline.schema_validation(state)
+
+    assert state.resolved_generated_at == expected
+
+
+def test_final_assembly_does_not_access_raw_pipeline_inputs() -> None:
+    import portfolio_advice_pipeline as pipeline
+
+    class FailOnAccess(dict):
+        def get(self, *args, **kwargs):
+            raise AssertionError("Final Assembly accessed raw state")
+
+        def __bool__(self):
+            raise AssertionError("Final Assembly inspected raw state")
+
+    state = pipeline.PipelineState(
+        ai_result=FailOnAccess(),
+        context=FailOnAccess(),
+        generated_at=None,
+        ai_work=FailOnAccess(),
+        resolved_generated_at="resolved-time",
+        account_action={"action": "hold", "reason": "r", "confidence": "low"},
+        portfolio_summary={"holding_count": 0},
+        market_status="normal",
+        trade_date="2026-07-21",
+        validated_holdings=[],
+        warnings=[],
+        limitations=[],
+    )
+
+    pipeline.final_assembly(state)
+
+    assert state.result["generated_at"] == "resolved-time"

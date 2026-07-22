@@ -54,7 +54,18 @@ class PipelineState:
     trade_date: str | None = None
     warnings: list[str] | None = None
     limitations: list[str] | None = None
+    resolved_generated_at: str = ""
     result: dict | None = None
+
+
+def resolve_generated_at(
+    explicit_generated_at: str | None,
+    ai_work: dict,
+) -> str:
+    value = explicit_generated_at
+    if value is None:
+        value = ai_work.get("generated_at")
+    return value if isinstance(value, str) else ""
 
 
 def schema_validation(state: PipelineState) -> PipelineState:
@@ -64,6 +75,10 @@ def schema_validation(state: PipelineState) -> PipelineState:
     state.ai_work = ai_work
     state.context = context
     state.context_index = context_index
+    state.resolved_generated_at = resolve_generated_at(
+        state.generated_at,
+        ai_work,
+    )
     state.items = [
         {"schema": schema, "context_holding": context_index[code]}
         for code, schema in normalized.items()
@@ -138,15 +153,9 @@ def narrative_audit(state: PipelineState) -> PipelineState:
 
 
 def final_assembly(state: PipelineState) -> PipelineState:
-    assert state.ai_work is not None
-    timestamp = state.generated_at
-    if timestamp is None:
-        timestamp = state.ai_work.get("generated_at")
-    if not isinstance(timestamp, str):
-        timestamp = ""
     state.result = {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": timestamp,
+        "generated_at": state.resolved_generated_at,
         "trade_date": state.trade_date,
         "market_status": state.market_status,
         "portfolio_summary": state.portfolio_summary or {},
