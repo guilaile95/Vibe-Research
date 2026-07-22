@@ -9,6 +9,13 @@ from portfolio_advice_policy import POLICY, PortfolioAdvicePolicy
 from portfolio_advice_schema import normalize_pct
 
 
+def _format_policy_values(values: frozenset[float], separator: str = "/") -> str:
+    return separator.join(
+        str(int(value)) if float(value).is_integer() else str(value)
+        for value in sorted(values)
+    )
+
+
 def audit_execution_size(
     action: str,
     raw_pct: Any,
@@ -26,11 +33,14 @@ def audit_execution_size(
             number = normalize_pct(raw_pct)
             if number is not None and abs(number - policy.sell_tier) > 1e-6:
                 raise PortfolioAdviceValidationError(
-                    f"sell 比例必须为 100，收到 {number}（code={code}）"
+                    f"sell 比例必须为 {_format_policy_values(frozenset({policy.sell_tier}))}，"
+                    f"收到 {number}（code={code}）"
                 )
         return policy.sell_tier
     if raw_pct is None:
-        tiers = "10/20" if action == "add" else "10/20/30"
+        tiers = _format_policy_values(
+            policy.add_tiers if action == "add" else policy.reduce_tiers
+        )
         raise PortfolioAdviceValidationError(
             f"{action} 必须给出档位比例 {tiers}（code={code}）"
         )

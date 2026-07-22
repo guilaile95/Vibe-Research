@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
+import pytest
 import portfolio_advice_contracts as contracts
 import portfolio_advice_prompt as prompt
 import portfolio_advice_validator as validator
@@ -129,6 +130,41 @@ def test_narrative_add_tier_pattern_is_derived_from_policy() -> None:
     assert pattern.fullmatch("15")
     assert pattern.fullmatch("25")
     assert not pattern.fullmatch("10")
+
+
+def test_policy_audit_errors_are_derived_from_supplied_policy() -> None:
+    import portfolio_advice_policy as policy
+    from portfolio_advice_errors import PortfolioAdviceValidationError
+    from portfolio_advice_policy_audit import audit_execution_size
+
+    custom = policy.PortfolioAdvicePolicy(
+        version="test-policy",
+        add_tiers=frozenset({15.0, 25.0}),
+        reduce_tiers=frozenset({5.0, 15.0, 25.0}),
+        sell_tier=90.0,
+        confidence_caps={"low": 5.0, "medium": 15.0, "high": 25.0},
+        partial_market_add_max=5.0,
+        partial_market_reduce_max=15.0,
+    )
+
+    with pytest.raises(PortfolioAdviceValidationError, match="15/25"):
+        audit_execution_size(
+            "add",
+            None,
+            confidence="high",
+            market_partial=False,
+            code="000001",
+            policy=custom,
+        )
+    with pytest.raises(PortfolioAdviceValidationError, match="90"):
+        audit_execution_size(
+            "sell",
+            100,
+            confidence="high",
+            market_partial=False,
+            code="000001",
+            policy=custom,
+        )
 
 
 def test_compatibility_stage_resolves_account_action() -> None:
