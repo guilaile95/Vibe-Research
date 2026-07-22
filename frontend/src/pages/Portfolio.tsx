@@ -6,7 +6,6 @@ import {
   api,
   ApiError,
   type PortfolioData,
-  type PortfolioAdviceResult,
   type PortfolioAdviceHoldingAdvice,
   type PortfolioAdviceHoldingAction,
   type PortfolioAdviceAccountAction,
@@ -15,6 +14,7 @@ import {
   type AccountFundingData,
 } from "@/lib/api";
 import { loadLlm } from "@/lib/llm";
+import { usePortfolioAdviceTaskStore } from "@/stores/portfolioAdviceTaskStore";
 import { cn } from "@/lib/utils";
 
 const REFRESH_MS = 30 * 60 * 1000; // 每半小时自动刷新
@@ -341,15 +341,10 @@ export function Portfolio() {
   const [delDeleting, setDelDeleting] = useState(false);
   const [delErr, setDelErr] = useState<string | null>(null);
 
-  // 结构化持仓操作建议
-  const [advice, setAdvice] = useState<PortfolioAdviceResult | null>(null);
-  const [adviceLoading, setAdviceLoading] = useState(false);
-  const [adviceError, setAdviceError] = useState<string | null>(null);
   const [adviceRequest, setAdviceRequest] = useState("");
 
   const clearAdvice = useCallback(() => {
-    setAdvice(null);
-    setAdviceError(null);
+    usePortfolioAdviceTaskStore.getState().invalidate();
   }, []);
 
   const load = useCallback(async (manual = false) => {
@@ -553,57 +548,20 @@ export function Portfolio() {
     } catch { /* ignore */ }
   };
 
+  const adviceStatus = usePortfolioAdviceTaskStore((s) => s.status);
+  const advice = usePortfolioAdviceTaskStore((s) => s.result);
+  const adviceError = usePortfolioAdviceTaskStore((s) => s.error);
+  const adviceLoading = adviceStatus === "running";
+
   const generateAdvice = async () => {
     if (adviceLoading) return;
     const llm = loadLlm();
     if (!llm) {
-      setAdviceError('请先在“接入 AI”中配置模型');
-      setAdvice(null);
+      setErr('请先在“接入 AI”中配置模型');
       return;
     }
-    const normalized = adviceRequest.trim();
-    setAdviceLoading(true);
-    setAdviceError(null);
-    try {
-      const result = await api.portfolioAdvice({
-        user_request: normalized ? normalized : null,
-        llm: {
-          provider: llm.provider,
-          baseURL: llm.baseURL,
-          apiKey: llm.apiKey,
-          model: llm.model,
-        },
-      });
-      setAdvice(result);
-    } catch (e) {
-      setAdvice(null);
-      if (e instanceof ApiError) {
-        if (e.status === 409) {
-          setAdviceError(e.message || "当前没有持仓，无法生成持仓操作建议");
-        } else if (e.status === 503) {
-          setAdviceError(
-            e.message || "市场核心数据暂不可用，无法生成可靠的持仓操作建议",
-          );
-        } else if (e.status === 502) {
-          const d = e.message || "";
-          if (d === "持仓建议模型调用失败" || d === "持仓建议模型输出无效") {
-            setAdviceError(d);
-          } else {
-            setAdviceError("持仓建议生成失败，请重试");
-          }
-        } else if (e.status === 500) {
-          setAdviceError("持仓操作建议生成失败");
-        } else if (e.status === 400 && e.message.includes("接入")) {
-          setAdviceError('请先在“接入 AI”中配置模型');
-        } else {
-          setAdviceError(e.message || "持仓建议生成失败，请重试");
-        }
-      } else {
-        setAdviceError("持仓建议生成失败，请重试");
-      }
-    } finally {
-      setAdviceLoading(false);
-    }
+    setErr(null);
+    await usePortfolioAdviceTaskStore.getState().start(llm, adviceRequest);
   };
 
   const holdings = data?.holdings || [];
@@ -929,8 +887,19 @@ export function Portfolio() {
           className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
         >
           {adviceLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-          {adviceLoading ? "分析中…" : "生成持仓操作建议"}
+          {adviceLoading
+            ? "持仓建议分析中…"
+            : adviceStatus === "success" || adviceStatus === "error"
+              ? "重新生成持仓建议"
+              : "生成持仓操作建议"}
         </button>
+
+        {adviceLoading && (
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary">
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+            <span>持仓建议分析中，切换页面后会继续运行。</span>
+          </div>
+        )}
 
         {adviceError && (
           <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">

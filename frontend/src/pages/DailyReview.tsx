@@ -38,6 +38,16 @@ const fmtChangePct = (v: number | null | undefined) => {
   return `${p > 0 ? "+" : ""}${p.toFixed(2)}%`;
 };
 
+const formatTaskDuration = (ms: number): string => {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+};
+
+const formatTaskTime = (date: Date): string =>
+  date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+
 const fmtSigned = (v: number | null | undefined, digits = 2) => {
   if (v == null || !Number.isFinite(v)) return "—";
   const s = v.toLocaleString("zh-CN", { maximumFractionDigits: digits, minimumFractionDigits: 0 });
@@ -770,6 +780,29 @@ export function DailyReview() {
   const taskStatus = useDailyReviewAiTaskStore((s) => s.status);
   const taskContent = useDailyReviewAiTaskStore((s) => s.content);
   const taskError = useDailyReviewAiTaskStore((s) => s.error);
+  const taskStartedAt = useDailyReviewAiTaskStore((s) => s.startedAt);
+  const taskEstimatedDurationMs = useDailyReviewAiTaskStore((s) => s.estimatedDurationMs);
+  const [taskNow, setTaskNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (taskStatus !== "running") return;
+    setTaskNow(Date.now());
+    const id = setInterval(() => setTaskNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [taskStatus]);
+
+  const taskElapsedMs = taskStatus === "running" && taskStartedAt !== null
+    ? taskNow - taskStartedAt
+    : 0;
+  const taskRemainingMs = taskStatus === "running"
+    ? Math.max(0, taskEstimatedDurationMs - taskElapsedMs)
+    : 0;
+  const taskOverTimeMs = taskStatus === "running"
+    ? Math.max(0, taskElapsedMs - taskEstimatedDurationMs)
+    : 0;
+  const taskEta = taskStatus === "running" && taskStartedAt !== null
+    ? new Date(taskStartedAt + taskEstimatedDurationMs)
+    : null;
 
   const runReview = async () => {
     setNeedConfig(false);
@@ -1058,6 +1091,19 @@ export function DailyReview() {
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-muted-foreground">
             <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
             还没接入 AI。<Link to="/settings" className="text-primary">先去接入你的 AI</Link>，之后一键出复盘。
+          </div>
+        )}
+        {taskStatus === "running" && taskEta && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary">
+            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+            <div>
+              <p className="font-medium">AI 复盘正在生成</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {taskOverTimeMs > 0
+                  ? "已超过预计时间 " + formatTaskDuration(taskOverTimeMs) + "，仍在生成"
+                  : "预计 " + formatTaskTime(taskEta) + " 完成 · 剩余 " + formatTaskDuration(taskRemainingMs)}
+              </p>
+            </div>
           </div>
         )}
         {taskError && (
