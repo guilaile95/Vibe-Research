@@ -48,6 +48,12 @@ class PipelineState:
     items: list[dict] | None = None
     allowed_base_numbers: set[float] | None = None
     validated_holdings: list[dict] | None = None
+    account_action: dict | None = None
+    portfolio_summary: dict | None = None
+    market_status: str | None = None
+    trade_date: str | None = None
+    warnings: list[str] | None = None
+    limitations: list[str] | None = None
     result: dict | None = None
 
 
@@ -72,12 +78,20 @@ def legacy_compatibility(state: PipelineState) -> PipelineState:
         item["schema"]["code"]: item["schema"] for item in state.items or []
     }
     state.items = align_holdings(state.context_index, normalized_by_code)
+    state.account_action = normalize_account_action(
+        state.ai_work.get("account_action")
+    )
     return state
 
 
 def fact_reconciliation(state: PipelineState) -> PipelineState:
     for item in state.items or []:
         item["facts"] = reconcile_holding_facts(item["context_holding"])
+    state.portfolio_summary = portfolio_summary_from_context(state.context)
+    state.market_status = (state.ai_work or {}).get("market_status")
+    if not isinstance(state.market_status, str) or not state.market_status.strip():
+        state.market_status = market_status_from_context(state.context)
+    state.trade_date = trade_date_from_context(state.context)
     return state
 
 
@@ -117,15 +131,14 @@ def narrative_audit(state: PipelineState) -> PipelineState:
         audit_holding_narrative(item, allowed_base_numbers=allowed_base)
         for item in state.items or []
     ]
+    state.limitations, state.warnings = normalize_top_level_lists(
+        state.ai_work, state.context
+    )
     return state
 
 
 def final_assembly(state: PipelineState) -> PipelineState:
     assert state.ai_work is not None
-    limitations, warnings = normalize_top_level_lists(state.ai_work, state.context)
-    market_status = state.ai_work.get("market_status")
-    if not isinstance(market_status, str) or not market_status.strip():
-        market_status = market_status_from_context(state.context)
     timestamp = state.generated_at
     if timestamp is None:
         timestamp = state.ai_work.get("generated_at")
@@ -134,15 +147,13 @@ def final_assembly(state: PipelineState) -> PipelineState:
     state.result = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": timestamp,
-        "trade_date": trade_date_from_context(state.context),
-        "market_status": market_status,
-        "portfolio_summary": portfolio_summary_from_context(state.context),
-        "account_action": normalize_account_action(
-            state.ai_work.get("account_action")
-        ),
+        "trade_date": state.trade_date,
+        "market_status": state.market_status,
+        "portfolio_summary": state.portfolio_summary or {},
+        "account_action": state.account_action or {},
         "holdings": state.validated_holdings or [],
-        "warnings": warnings,
-        "data_limitations": limitations,
+        "warnings": state.warnings or [],
+        "data_limitations": state.limitations or [],
     }
     return state
 

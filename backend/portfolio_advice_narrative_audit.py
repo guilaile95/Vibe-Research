@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from portfolio_advice_errors import PortfolioAdviceValidationError
+from portfolio_advice_policy import POLICY, PortfolioAdvicePolicy
 from portfolio_advice_schema import append_unique, dedupe_str_list
 
 
@@ -49,18 +50,35 @@ ADD_AMOUNT_SYMBOL_RE = re.compile(
     r"[^0-9¥￥%]{0,6}[¥￥]\s*(?P<num>\d+(?:\.\d+)?)(?!\s*万)"
 )
 PRICE_FACT_PREFIX_RE = re.compile(r"(?:价格|成本|现价|市值|盈亏|报价)\s*$")
-ADD_ACCOUNT_RATIO_FORBIDDEN: tuple[re.Pattern[str], ...] = (
-    re.compile(r"账户.{0,12}仓位.{0,16}\d+(?:\.\d+)?\s*%"),
-    re.compile(r"将.{0,8}账户仓位.{0,12}(?:提高|增加|上调).{0,8}\d+(?:\.\d+)?\s*%"),
-    re.compile(r"总资产.{0,16}\d+(?:\.\d+)?\s*%"),
-    re.compile(r"投入总资产.{0,8}\d+(?:\.\d+)?\s*%"),
-    re.compile(r"可用现金.{0,16}\d+(?:\.\d+)?\s*%"),
-    re.compile(r"使用资金.{0,12}(?:10|20)\s*%"),
-    re.compile(r"账户资金.{0,12}(?:10|20)\s*%"),
-    re.compile(r"使用账户.{0,12}(?:10|20)\s*%"),
-    re.compile(r"配置.{0,8}(?:10|20)\s*%.{0,12}账户"),
-    re.compile(r"(?:10|20)\s*%.{0,8}(?:的)?(?:账户资产|可用现金|账户资金)"),
-)
+
+
+def build_tier_pattern(values: frozenset[float]) -> re.Pattern[str]:
+    normalized = [
+        str(int(value)) if float(value).is_integer() else str(value)
+        for value in sorted(values)
+    ]
+    return re.compile("(?:" + "|".join(map(re.escape, normalized)) + ")")
+
+
+def build_add_account_ratio_forbidden(
+    policy: PortfolioAdvicePolicy = POLICY,
+) -> tuple[re.Pattern[str], ...]:
+    add_tiers = build_tier_pattern(policy.add_tiers).pattern
+    return (
+        re.compile(r"账户.{0,12}仓位.{0,16}\d+(?:\.\d+)?\s*%"),
+        re.compile(r"将.{0,8}账户仓位.{0,12}(?:提高|增加|上调).{0,8}\d+(?:\.\d+)?\s*%"),
+        re.compile(r"总资产.{0,16}\d+(?:\.\d+)?\s*%"),
+        re.compile(r"投入总资产.{0,8}\d+(?:\.\d+)?\s*%"),
+        re.compile(r"可用现金.{0,16}\d+(?:\.\d+)?\s*%"),
+        re.compile(rf"使用资金.{{0,12}}{add_tiers}\s*%"),
+        re.compile(rf"账户资金.{{0,12}}{add_tiers}\s*%"),
+        re.compile(rf"使用账户.{{0,12}}{add_tiers}\s*%"),
+        re.compile(rf"配置.{{0,8}}{add_tiers}\s*%.{{0,12}}账户"),
+        re.compile(rf"{add_tiers}\s*%.{{0,8}}(?:的)?(?:账户资产|可用现金|账户资金)"),
+    )
+
+
+ADD_ACCOUNT_RATIO_FORBIDDEN = build_add_account_ratio_forbidden()
 LIMIT_NORMALIZE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"可卖|sellable", re.I), SELLABLE_LIMITATION),
     (

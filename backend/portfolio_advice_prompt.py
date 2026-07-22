@@ -19,7 +19,72 @@ from portfolio_advice_contracts import (  # noqa: F401
     ACTIONS,
     SCHEMA_VERSION,
 )
-from portfolio_advice_policy import POLICY  # noqa: F401
+from portfolio_advice_policy import POLICY, PortfolioAdvicePolicy
+
+
+def _format_policy_number(value: float) -> str:
+    number = float(value)
+    return str(int(number)) if number.is_integer() else str(number)
+
+
+def _format_policy_values(
+    values: frozenset[float],
+    *,
+    separator: str,
+    final_separator: str | None = None,
+    suffix: str = "",
+) -> str:
+    rendered = [_format_policy_number(value) + suffix for value in sorted(values)]
+    if final_separator is None or len(rendered) < 2:
+        return separator.join(rendered)
+    return separator.join(rendered[:-1]) + final_separator + rendered[-1]
+
+
+def render_policy_prompt_rules(
+    policy: PortfolioAdvicePolicy = POLICY,
+) -> str:
+    """从 Policy 渲染固定档位和上限规则，生产文本保持稳定。"""
+    add_tiers = _format_policy_values(
+        policy.add_tiers, separator="、", final_separator=" 或 "
+    )
+    reduce_tiers = _format_policy_values(
+        policy.reduce_tiers, separator="、", final_separator=" 或 "
+    )
+    sell_tier = _format_policy_number(policy.sell_tier)
+    confidence_lines = "\n".join(
+        f"- confidence={level}：比例最多 {_format_policy_number(cap)}"
+        for level, cap in policy.confidence_caps.items()
+    )
+    return (
+        f"- add：仅 {add_tiers}（语义=相对当前持股数量增加 "
+        f"{_format_policy_values(policy.add_tiers, separator='/', suffix='%')}）\n"
+        f"- reduce：仅 {reduce_tiers}\n"
+        f"- sell：固定 {sell_tier}（必须输出 {sell_tier}；后端也会强制为 {sell_tier}）\n"
+        "- hold / watch / avoid：必须为 null（不得输出正比例）\n\n"
+        "### 置信度与市场状态上限\n"
+        f"{confidence_lines}\n"
+        "- 市场状态 partial 时：add 最多 "
+        f"{_format_policy_number(policy.partial_market_add_max)}；reduce 最多 "
+        f"{_format_policy_number(policy.partial_market_reduce_max)}\n"
+        f"- sell 不受上述置信度上限影响（固定 {sell_tier}）"
+    )
+
+
+def _render_system_prompt(policy: PortfolioAdvicePolicy = POLICY) -> str:
+    add_tiers = _format_policy_values(
+        policy.add_tiers, separator="、", final_separator=" 或 "
+    )
+    add_tiers_pct = _format_policy_values(
+        policy.add_tiers, separator="/", suffix="%"
+    )
+    add_example_tier = _format_policy_number(max(policy.add_tiers))
+    return (
+        _SYSTEM_PROMPT_TEMPLATE
+        .replace("__POLICY_PROMPT_RULES__", render_policy_prompt_rules(policy))
+        .replace("__ADD_TIERS_OR__", add_tiers)
+        .replace("__ADD_TIERS_PCT__", add_tiers_pct)
+        .replace("__ADD_EXAMPLE_TIER__", add_example_tier)
+    )
 
 
 _DEFAULT_USER_TASK = (
@@ -28,7 +93,7 @@ _DEFAULT_USER_TASK = (
     "不要在 JSON 前后输出任何说明、标题、摘要、风险提示或其他文字。"
 )
 
-_SYSTEM_PROMPT = """你是A股单用户本地持仓操作建议助手。
+_SYSTEM_PROMPT_TEMPLATE = """你是A股单用户本地持仓操作建议助手。
 你的任务是基于提供的结构化持仓数据与每日复盘市场上下文，输出可审计的账户摘要和逐股明确操作建议。
 
 ## 角色与输入边界
@@ -91,17 +156,7 @@ _SYSTEM_PROMPT = """你是A股单用户本地持仓操作建议助手。
 - estimated_amount：预计所需金额（仅 add）；由后端按 execution_quantity × current_price 重算并覆盖，模型结构字段应填 null。
 
 ### 允许档位（模型只能输出下列整数之一，否则校验失败）
-- add：仅 10 或 20（语义=相对当前持股数量增加 10%/20%）
-- reduce：仅 10、20 或 30
-- sell：固定 100（必须输出 100；后端也会强制为 100）
-- hold / watch / avoid：必须为 null（不得输出正比例）
-
-### 置信度与市场状态上限
-- confidence=low：比例最多 10
-- confidence=medium：比例最多 20
-- confidence=high：比例最多 30
-- 市场状态 partial 时：add 最多 10；reduce 最多 20
-- sell 不受上述置信度上限影响（固定 100）
+__POLICY_PROMPT_RULES__
 
 ### reduce / sell
 - 后端按 floor_to_lot_100(shares × pct / 100) 重算 execution_quantity，并截断到不超过 shares。
@@ -112,13 +167,13 @@ _SYSTEM_PROMPT = """你是A股单用户本地持仓操作建议助手。
   禁止“减少市场冲击/降低冲击成本/避免大单影响价格/分批成交以保护盘口”等话术。
 
 ### add
-- 模型只决定 action=add 以及允许档位 10 或 20。
+- 模型只决定 action=add 以及允许档位 __ADD_TIERS_OR__。
 - 结构化 JSON 中 execution_quantity 与 estimated_amount 应输出 null；即使填写也会被后端丢弃并重算覆盖。
 - 后端按 floor_to_lot_100(shares × pct / 100) 计算买入股数；不足 100 股则 quantity/amount 均为 null，但保留 add 动作与比例。
 - 后端按 quantity × current_price 计算 estimated_amount（静态估算，不含手续费/滑点）。
 - 条件文字中若写“建议买入 N 股 / 加仓 N 股 / 预计需要 M 元”等，必须与后端结果一致；不得写与结果冲突的股数或金额。
-- 可以写：相对当前持股增加 10%/20%、在当前持股基础上加仓。
-- 禁止写：账户仓位增加 20%、使用账户 20% 资金、投入总资产的 20%、将总仓位提高 20%、使用 20% 可用现金。
+- 可以写：相对当前持股增加 __ADD_TIERS_PCT__、在当前持股基础上加仓。
+- 禁止写：账户仓位增加 __ADD_EXAMPLE_TIER__%、使用账户 __ADD_EXAMPLE_TIER__% 资金、投入总资产的 __ADD_EXAMPLE_TIER__%、将总仓位提高 __ADD_EXAMPLE_TIER__%、使用 __ADD_EXAMPLE_TIER__% 可用现金。
 - 必须说明：未提供账户总资产与可用现金，买入数量仅按当前持股比例计算；执行前需要确认可用资金充足。
 - 不得输出绝对账户目标仓位；不得声称现金一定充足。
 
@@ -277,7 +332,7 @@ schema_version 固定为：
 ## 禁止内容
 
 禁止：保证收益、稳赚、必涨、必跌、满仓梭哈、内幕消息、主力一定买入。
-禁止：把 add 10%/20% 写成账户仓位/总资产/可用现金比例；禁止编造绝对目标仓位。
+禁止：把 add __ADD_TIERS_PCT__ 写成账户仓位/总资产/可用现金比例；禁止编造绝对目标仓位。
 禁止：在结构字段中自行决定最终买入股数或预计金额（由后端重算）。
 禁止：条件文字中的建议买入股数/预计投入金额与后端可计算值冲突。
 禁止：模糊主动作（无 action 枚举）。
@@ -293,9 +348,16 @@ schema_version 固定为：
 """
 
 
-def build_portfolio_advice_system_prompt() -> str:
+_SYSTEM_PROMPT = _render_system_prompt()
+
+
+def build_portfolio_advice_system_prompt(
+    policy: PortfolioAdvicePolicy = POLICY,
+) -> str:
     """返回持仓建议 system prompt（确定性纯函数）。"""
-    return _SYSTEM_PROMPT
+    if policy is POLICY:
+        return _SYSTEM_PROMPT
+    return _render_system_prompt(policy)
 
 
 def _validate_context_json(context_json: Any) -> None:

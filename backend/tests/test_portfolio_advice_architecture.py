@@ -108,3 +108,121 @@ def test_pipeline_modules_have_single_direction_dependencies() -> None:
     assert "from portfolio_advice_policy import" in policy_audit_source
     assert "account_funding" not in policy_source
     assert "available_cash" not in policy_source
+
+
+def test_narrative_add_tier_pattern_is_derived_from_policy() -> None:
+    import portfolio_advice_narrative_audit as narrative
+    import portfolio_advice_policy as policy
+
+    custom = policy.PortfolioAdvicePolicy(
+        version="test-policy",
+        add_tiers=frozenset({15.0, 25.0}),
+        reduce_tiers=policy.POLICY.reduce_tiers,
+        sell_tier=policy.POLICY.sell_tier,
+        confidence_caps=policy.POLICY.confidence_caps,
+        partial_market_add_max=policy.POLICY.partial_market_add_max,
+        partial_market_reduce_max=policy.POLICY.partial_market_reduce_max,
+    )
+
+    pattern = narrative.build_tier_pattern(custom.add_tiers)
+
+    assert pattern.fullmatch("15")
+    assert pattern.fullmatch("25")
+    assert not pattern.fullmatch("10")
+
+
+def test_compatibility_stage_resolves_account_action() -> None:
+    import portfolio_advice_pipeline as pipeline
+
+    state = pipeline.PipelineState(
+        ai_result={"account_action": {"action": "invalid"}},
+        context={"holdings": []},
+        generated_at=None,
+        ai_work={"account_action": {"action": "invalid"}},
+        context_index={},
+        items=[],
+    )
+
+    pipeline.legacy_compatibility(state)
+
+    assert state.account_action == {
+        "action": "hold",
+        "reason": "账户动作非法，已回落为 hold",
+        "confidence": "low",
+    }
+
+
+def test_fact_stage_resolves_summary_and_context_metadata() -> None:
+    import portfolio_advice_pipeline as pipeline
+
+    context = {
+        "holdings": [],
+        "portfolio_summary": {"holding_count": 0, "market_value": 0},
+        "market_context": {"review_metadata": {"status": "partial"}},
+    }
+    state = pipeline.PipelineState(
+        ai_result={},
+        context=context,
+        generated_at=None,
+        context_index={},
+        items=[],
+    )
+
+    pipeline.fact_reconciliation(state)
+
+    assert state.portfolio_summary is not None
+    assert state.market_status == "partial"
+    assert state.trade_date is None
+
+
+def test_narrative_stage_resolves_top_level_lists() -> None:
+    import portfolio_advice_pipeline as pipeline
+
+    state = pipeline.PipelineState(
+        ai_result={},
+        context={"data_limitations": [], "warnings": []},
+        generated_at=None,
+        ai_work={"data_limitations": [], "warnings": []},
+        items=[],
+    )
+
+    pipeline.narrative_audit(state)
+
+    assert state.limitations is not None
+    assert state.warnings == []
+
+
+def test_final_assembly_only_reads_resolved_state(monkeypatch) -> None:
+    import portfolio_advice_pipeline as pipeline
+
+    def fail(*args, **kwargs):
+        raise AssertionError("final_assembly called a prior-stage function")
+
+    monkeypatch.setattr(pipeline, "normalize_top_level_lists", fail)
+    monkeypatch.setattr(pipeline, "portfolio_summary_from_context", fail)
+    monkeypatch.setattr(pipeline, "normalize_account_action", fail)
+    monkeypatch.setattr(pipeline, "market_status_from_context", fail)
+    monkeypatch.setattr(pipeline, "trade_date_from_context", fail)
+
+    state = pipeline.PipelineState(
+        ai_result={},
+        context={},
+        generated_at=None,
+        ai_work={"generated_at": "generated"},
+        account_action={"action": "hold", "reason": "r", "confidence": "low"},
+        portfolio_summary={"holding_count": 0},
+        market_status="normal",
+        trade_date="2026-07-21",
+        validated_holdings=[],
+        warnings=["warning"],
+        limitations=["limitation"],
+    )
+
+    pipeline.final_assembly(state)
+
+    assert state.result["account_action"]["action"] == "hold"
+    assert state.result["portfolio_summary"] == {"holding_count": 0}
+    assert state.result["market_status"] == "normal"
+    assert state.result["trade_date"] == "2026-07-21"
+    assert state.result["warnings"] == ["warning"]
+    assert state.result["data_limitations"] == ["limitation"]
