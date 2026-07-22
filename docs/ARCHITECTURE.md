@@ -96,17 +96,25 @@ portfolio_advice_service.generate_portfolio_advice(cfg, user_request)
     │
     ├─ portfolio_advice_context.build… + render JSON
     ├─ portfolio_advice_prompt.build_portfolio_advice_messages
-    │     (策略常量从 portfolio_advice_contracts 导入/re-export)
+    │     (中立契约来自 contracts；投资政策来自 policy)
     │
     ├─ model_runner / chat.stream_messages(use_tools=False)
     │     API 或 cli-*（cli_runtime）
     │
     ├─ 解析纯 JSON 对象
     │
-    ├─ portfolio_advice_validator.validate_portfolio_advice
-    │     ★ 最终裁决：动作、比例档位、execution_quantity、estimated_amount、
-    │       条件数字可追溯、文字股数/金额一致性、账户比例话术等
-    │     (从 portfolio_advice_contracts 读取策略规则，断开 prompt 依赖)
+    ├─ portfolio_advice_validator.validate_portfolio_advice  # 兼容 Facade
+    │     └─ portfolio_advice_pipeline（固定顺序）
+    │          1. portfolio_advice_schema             基础 Schema 与清洗
+    │          2. portfolio_advice_compat             v0.1 Legacy fallback
+    │          3. portfolio_advice_fact_reconciler    Context 权威事实重算
+    │          4. portfolio_advice_policy_audit       动作/比例/confidence/partial
+    │          5. portfolio_advice_execution          股数、100 股取整、金额
+    │          6. portfolio_advice_narrative_audit    数字来源、中文文案、limitations
+    │          7. final_assembly                      顺序稳定的最终结果
+    │
+    │     portfolio_advice_policy 是投资政策唯一代码来源；
+    │     portfolio_advice_contracts 只保留 Schema、枚举和交易单位。
     │
     └─ portfolio_advice_account_metrics.attach_account_funding_metrics
           ★ 装配只读账户资金指标（account_funding 与 account_metrics）
@@ -122,8 +130,20 @@ portfolio_advice_service.generate_portfolio_advice(cfg, user_request)
 ### 权威边界
 
 - **模型**：决定是否 add/hold/… 及允许的比例档位等语义建议；结构字段中的数量/金额 **不可信**。
-- **validator**：`execution_size_pct_of_holding` / `execution_quantity` / `estimated_amount` 等执行字段以**后端重算与校验结果**为准。
+- **Policy + Pipeline**：动作比例政策由 `portfolio_advice_policy` 唯一定义；`execution_size_pct_of_holding` / `execution_quantity` / `estimated_amount` 等字段以 Pipeline 后端重算与校验结果为准。
 - **事实字段**（shares、现价、盈亏、权重等）：来自持仓上下文重算，覆盖模型抄写。
+- **Validator Facade**：保留旧导入路径，不承载正则、政策或主流程实现。
+- **Legacy Compatibility**：missing holding → `watch`；invalid account action → `hold`，本轮未修复。
+- **账户资金**：只在 Pipeline 完成后追加只读指标，不进入模型判断、Policy 或执行计算。
+
+### 当前未实现能力
+
+- `portfolio_advice_contracts` 是中立 Schema/枚举/交易单位契约，不是投资政策来源。
+- 投资政策唯一来源是 `portfolio_advice_policy.POLICY`。
+- `portfolio_advice_validator` 仅为兼容 Facade，实际校验由七阶段 Pipeline 执行。
+- 账户资金指标只在 Pipeline 完成后追加，不参与模型输入、动作、比例或数量裁决。
+- Explainability、Evidence Layer、Signal Ledger 尚未实现；现有 `market_evidence` 只是上下文字段，不等同于独立 Evidence 系统。
+- 本轮未改变 API Schema、Prompt 最终文本或 Legacy fallback。
 
 ### 错误码摘要
 

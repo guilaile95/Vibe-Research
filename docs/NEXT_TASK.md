@@ -26,7 +26,7 @@
 - `PUT` 编辑：**精确替换**（不加权、不 upsert、不存在 404）
 - 删除：确认弹窗 + 失败错误反馈；不写 closed
 - 数量输入：**不再静默转换**
-- 账户资金：**仍未接入**持仓建议
+- 账户资金当时未参与持仓建议裁决；当前仅在 Validator 完成后追加只读指标
 - 测试：`test_portfolio_edit_api.py` 23 passed；全量离线 667 passed（仅已知 Windows 例外）
 - Playwright A–J：**53/53**；advice 请求数 0；真实数据 SHA 不变
 - 功能提交：`9932601`
@@ -47,16 +47,26 @@
 
 - **状态**：已完成
 - **核心变更**：
-  1. 建立 `portfolio_advice_contracts.py` 作为策略常量唯一权威源
-  2. Validator 改从 `contracts` 导入，彻底断开对 Prompt 的反向依赖
-  3. 将只读账户资金指标计算从 Service 拆分为独立纯函数模块 `portfolio_advice_account_metrics.py`
-  4. 新建 Golden Tests (27 个场景快照)，锁定全部输出逻辑，保证重构过程 100% 行为不变
-- **测试**：Golden Tests 27/27 passed；Contracts 专项 35 passed；全量离线 702 passed（仅已知 Windows 例外）
-- **主要提交**：`9fa2428`、`70d2a71`、`67a1fc5`
+  1. Contracts 仅负责中立 Schema、枚举和交易单位
+  2. Policy 负责全部投资比例、置信度和 partial 市场约束
+  3. Validator 作为兼容 Facade，实际执行固定七阶段 Pipeline
+  4. 将只读账户资金指标计算从 Service 拆分为独立纯函数模块 `portfolio_advice_account_metrics.py`
+  5. 新建 Golden Tests (27 个场景快照)，锁定全部输出逻辑，保证重构过程行为不变
+- **测试**：持仓建议专项 236 passed、1 warning、exit 0；全量离线 745 passed、1 failed、11 deselected、1 warning，唯一失败为 Windows `python3` 不可用导致 `fake 退出码 9009`
+- **主要提交**：`9fa2428`、`70d2a71`、`67a1fc5`、`e3f44ef`、`0ee21aa`
 
 ## 当前下一任务
 
 **待产品优先级确认**。
+
+本轮持仓建议架构收口已补完：
+
+- Contracts 已收敛为中立契约；Policy 已成为投资政策唯一代码来源
+- Validator 已成为兼容 Facade；职责已拆为固定七阶段 Pipeline
+- `portfolio-advice-v0.1`、Prompt 最终文本、动作/比例/数量/金额和 Legacy fallback 均未改变
+- 账户资金仍只追加只读指标，不参与裁决
+- Explainability、Evidence、Signal Ledger 尚未实现
+- 全量离线唯一失败仍为 Windows 缺少 `python3` 导致 `fake 退出码 9009`
 
 建议候选项（**勿自行开工**，需用户明确指定其一）：
 

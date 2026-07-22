@@ -1,6 +1,6 @@
 # 项目当前状态
 
-> 文档基准：分支 `feature/research-system-v01`（以 `git rev-parse HEAD` 为准）
+> 文档基准：分支 `refactor/portfolio-advice-architecture-v01`；架构实现提交为 `0ee21aa`（当前 HEAD 以 `git rev-parse HEAD` 为准）
 > 仅描述仓库内已实现能力；不包含密钥、持仓内容或代理敏感配置。
 
 ## 1. 技术栈与数据存储
@@ -155,7 +155,7 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 - 原子写入（临时文件 + `os.replace`）；UTF-8
 - API：`GET /api/account-profile`（未配置 → `{ configured: false, data: null }`）、`PUT /api/account-profile`（后端校验 + 生成 `updated_at`）
 - 前端：Portfolio 页「账户资金」区；未配置显示「尚未配置账户资金」+「填写账户资金」按钮；已配置显示总资产/可用现金/更新时间 +「编辑」按钮；弹窗与持仓编辑风格一致；可用现金大于总资产时禁止保存；保存失败保留输入；未配置不显示 ¥0
-- 本轮仅手工填写与展示，**未接入**持仓建议 / 加仓数量限制 / 账户仓位计算 / AI prompt
+- 账户资金手工维护本身不参与 AI Prompt、动作裁决、账户仓位计算或加仓数量限制；持仓建议完成 Validator 后仅追加 `account_funding` / `account_metrics` 只读指标
 - **已知 BUG**（`fe54b8f`）：前端的 `request()` 通用解包 (`payload?.data ?? payload`) 导致 `getAccountProfile()` 返回内层数据而非 `{configured, data}` 包装，UI 永远显示「尚未配置账户资金」。已修复于 `fix: restore account funding profile UI`（见第 14 节）。
   - `request()` 增加 `unwrapData` 选项（默认 `true`），account-profile 使用 `unwrapData: false`
   - `loadAcct`/`saveAcct` 正确按 `AccountProfileResponse` 处理响应
@@ -211,6 +211,8 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 | 短哈希 | 说明 |
 |--------|------|
 | `9932601` | feat: add portfolio holding exact edit and delete confirm |
+| `e3f44ef` | refactor: separate portfolio advice policy from contracts |
+| `0ee21aa` | refactor: split portfolio advice validator pipeline |
 | `f3d90af` | fix: harden account funding persistence and submit state |
 | `88a1f83` | fix: restore account funding profile UI |
 | `fe54b8f` | feat: add manual account funding input |
@@ -227,9 +229,9 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 
 - origin：`https://github.com/guilaile95/Vibe-Research.git`
 - upstream：`https://github.com/simonlin1212/Vibe-Research.git`
-- 跟踪：`origin/feature/research-system-v01`
+- 交付分支：`origin/refactor/portfolio-advice-architecture-v01`
 
-## 17. 持仓建议架构收口第一阶段（refactor）
+## 17. 持仓建议架构收口（refactor）
 
 分支：refactor/portfolio-advice-architecture-v01（从 feature/research-system-v01 分出）
 
@@ -237,16 +239,27 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 
 ### 变更内容
 
-- 新建 portfolio_advice_contracts.py：策略常量唯一来源
-- 修改 portfolio_advice_prompt.py：改为 re-export contracts 常量（向后兼容）
-- 修改 portfolio_advice_validator.py：断开对 prompt 的反向依赖，改从 contracts 导入
+- `portfolio_advice_contracts.py`：只保留 Schema、动作/置信度枚举和交易单位等中立契约
+- `portfolio_advice_policy.py`：投资比例、confidence cap 和 partial 市场限制的唯一代码来源（`portfolio-policy-v0.1`）
+- `portfolio_advice_prompt.py`：继续 re-export Contracts 中的 `SCHEMA_VERSION`、`ACTIONS`、`ACCOUNT_ACTIONS`，并暴露同一 `POLICY` 对象；最终 Prompt 文本未改变
+- `portfolio_advice_validator.py`：成为兼容 Facade，继续导出原校验入口、错误类型和执行计算函数
+- Validator 实现拆为 `schema` → `compat` → `fact_reconciler` → `policy_audit` → `execution` → `narrative_audit` → `pipeline` 最终装配
 - 新建 portfolio_advice_account_metrics.py：将账户指标计算从 Service 迁移至独立模块
 - 修改 portfolio_advice_service.py：纯编排，删除已迁出的实现体
 - 新建 tests/fixtures/portfolio_advice/ + test_portfolio_advice_golden.py：27 个行为快照 + Golden Test 套件
-- 新建 tests/test_portfolio_advice_contracts.py：35 个契约正确性测试
+- 新建 `test_portfolio_advice_architecture.py`：Policy 唯一来源、Facade 兼容与 Pipeline 顺序测试
+
+兼容行为仍保留：模型遗漏持仓 → `watch`；非法账户动作 → `hold`。这是 `portfolio-advice-v0.1` 的 Legacy fallback，不是新增投资判断。
+
+账户资金继续只在 Validator 返回后由 `portfolio_advice_account_metrics` 装配，不进入 Prompt、Context、Policy、Pipeline 或模型输入，也不约束动作和数量。
 
 ### 验收
 
-- Golden Tests：27/27 passed
-- 契约专项：35 passed
-- 全量离线：702 passed，1 failed（已知 Windows 例外，重构前已存在）
+- 持仓建议专项：236 passed，1 warning，exit code 0
+- Golden Tests：27/27 passed；Validator：93 passed；架构：7 passed
+- 全量离线：745 passed，1 failed，11 deselected，1 warning，exit code 1
+- 唯一失败仍为 `test_run_cli_stream_timeout`：Windows 缺少 `python3`，实际 `fake 退出码 9009`
+- 前端 `npm run build`：passed，exit code 0；仅既有空 `vendor-charts` 和 >500kB 警告
+- 浏览器隔离回归：真实页面请求 + 临时响应桩覆盖 add/hold/reduce/sell/watch/avoid、partial 行情、账户已配置/未配置/损坏；Console 无 warn/error。核心 Pipeline 行为由 27 个 Golden 与 93 个 Validator 测试真实执行覆盖
+
+本轮未实现 Explainability、Evidence Layer 或 Signal Ledger；未改变 API Schema、Prompt 最终文本或任何投资政策。
