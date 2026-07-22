@@ -353,3 +353,42 @@ def test_other_api_validation_still_422(tmp_data):
 
     # health 仍正常
     assert client.get("/api/health").status_code == 200
+
+
+
+# ---------------------------------------------------------------------------
+# CORS OPTIONS 预检测试 (PUT)
+# ---------------------------------------------------------------------------
+
+def test_cors_options_preflight_portfolio_holding():
+    """OPTIONS /api/portfolio/holding 支持 PUT 预检。"""
+    r = client.options(
+        "/api/portfolio/holding",
+        headers={
+            "Origin": "https://frontend.example",
+            "Access-Control-Request-Method": "PUT",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert r.status_code == 200
+    allow_methods = r.headers.get("access-control-allow-methods", "")
+    assert "PUT" in [m.strip() for m in allow_methods.split(",")]
+    allow_origin = r.headers.get("access-control-allow-origin", "")
+    assert allow_origin in ("*", "https://frontend.example")
+
+
+def test_cors_options_preflight_account_profile():
+    """OPTIONS /api/account-profile 支持 PUT 预检。"""
+    r = client.options(
+        "/api/account-profile",
+        headers={
+            "Origin": "https://frontend.example",
+            "Access-Control-Request-Method": "PUT",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert r.status_code == 200
+    allow_methods = r.headers.get("access-control-allow-methods", "")
+    assert "PUT" in [m.strip() for m in allow_methods.split(",")]
+    allow_origin = r.headers.get("access-control-allow-origin", "")
+    assert allow_origin in ("*", "https://frontend.example")
