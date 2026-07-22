@@ -256,7 +256,7 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 ### 验收
 
 - 持仓建议专项：236 passed，1 warning，exit code 0
-- Golden Tests：27/27 passed；Validator：93 passed；架构：7 passed
+- 分项收集：架构 7、Golden 27、Contracts/Policy 36、Account Metrics 8、Service 42、Validator 66、Prompt 22、API 28（合计 236）
 - 全量离线：745 passed，1 failed，11 deselected，1 warning，exit code 1
 - 唯一失败仍为 `test_run_cli_stream_timeout`：Windows 缺少 `python3`，实际 `fake 退出码 9009`
 - 前端 `npm run build`：passed，exit code 0；仅既有空 `vendor-charts` 和 >500kB 警告
