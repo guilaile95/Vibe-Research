@@ -110,15 +110,16 @@ def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
     complete = total_holdings > 0 and valid_holdings == total_holdings
 
     if is_valid:
-        tracked_mv_val = float(
-            tracked_stock_mv_sum.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        )
         if complete:
+            tracked_mv_val = float(
+                tracked_stock_mv_sum.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            )
             tracked_weight_dec = (
                 tracked_stock_mv_sum / total_assets_dec * Decimal("100")
             ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             tracked_weight_val = float(tracked_weight_dec)
         else:
+            tracked_mv_val = None
             tracked_weight_val = None
 
         res["account_funding"] = {

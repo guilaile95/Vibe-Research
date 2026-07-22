@@ -434,14 +434,36 @@ def test_type_errors():
         build_portfolio_advice_context(_portfolio([]), _minimal_review(), board_limit=0)
 
 
-def test_zero_price_holding():
-    """行情/价格为 0 时不崩溃，市值与权重为 0。"""
-    pf = _portfolio([_holding("000001", "A", 0.0, 100, 10.0)])
-    # 手动改 market_value 以匹配 0 价
-    pf["holdings"][0]["market_value"] = 0.0
-    pf["holdings"][0]["pnl"] = -1000.0
-    pf["totals"] = {"market_value": 0.0, "cost": 1000.0, "pnl": -1000.0, "pnl_pct": -100.0}
+def test_invalid_price_holdings_null_safety():
+    """价格为 0、负数、NaN、Infinity、字符串、布尔值或 None 时，视为行情不可用，市值与盈亏为 None。"""
+    invalid_prices = [0, -5.0, float("nan"), float("inf"), "10.0", True, False, None]
+    for invalid_px in invalid_prices:
+        pf = _portfolio([_holding("000001", "A", 10.0, 100, 10.0)])
+        pf["holdings"][0]["price"] = invalid_px
+        ctx = build_portfolio_advice_context(pf, _minimal_review())
+        h = ctx["holdings"][0]
+        assert h["current_price"] is None
+        assert h["market_value"] is None
+        assert h["pnl_amount"] is None
+        assert h["pnl_pct"] is None
+        assert h["distance_to_cost_pct"] is None
+        assert h["holding_weight_pct"] is None
+        assert ctx["portfolio_summary"]["market_value"] is None
+        assert ctx["portfolio_summary"]["pnl"] is None
+        assert ctx["portfolio_summary"]["pnl_pct"] is None
+        assert ctx["portfolio_summary"]["cost"] == 1000.0
+        assert any("缺少有效行情价格" in lim for lim in ctx["data_limitations"])
+
+
+def test_partial_quote_coverage_weights_all_null():
+    """多只持仓中部分行情缺失时，所有持仓的 holding_weight_pct 为 None，不重新归一化。"""
+    pf = _portfolio([
+        _holding("000001", "A", 10.0, 100, 10.0),
+        _holding("000002", "B", 0.0, 100, 10.0),
+    ])
+    pf["holdings"][1]["price"] = None
     ctx = build_portfolio_advice_context(pf, _minimal_review())
-    h = ctx["holdings"][0]
-    assert h["market_value"] == 0.0
-    assert h["holding_weight_pct"] == 0.0
+    for h in ctx["holdings"]:
+        assert h["holding_weight_pct"] is None
+    assert ctx["portfolio_summary"]["market_value"] is None
+    assert ctx["portfolio_summary"]["cost"] == 2000.0

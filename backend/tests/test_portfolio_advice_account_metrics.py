@@ -34,6 +34,7 @@ import portfolio as pf
 import portfolio_advice_context
 import portfolio_advice_prompt
 import portfolio_advice_service
+import portfolio_advice_account_metrics as am
 import portfolio_advice_validator
 
 
@@ -175,46 +176,50 @@ def test_valid_account_funding_metrics(tmp_env):
 
 
 def test_partial_quote_coverage(tmp_env):
-    """8. 部分行情缺失时，tracked_stock_weight_pct 为 None，且带有相应 limitation。"""
-    _write_pf(tmp_env, [
+    """8. 部分行情缺失时，tracked_stock_market_value 与 tracked_stock_weight_pct 为 None，且带有相应 limitation。"""
+    pf_data = _write_pf(tmp_env, [
         {"code": "000001", "shares": 1500, "cost": 14.0},
         {"code": "BAD_QUOTE", "shares": 100, "cost": 10.0},
     ])
     _write_acct(tmp_env, 100000.0, 20000.0)
 
-    def mock_runner_two(cfg, messages):
-        return json.dumps({
-            "schema_version": "portfolio-advice-v0.1",
-            "generated_at": "2026-01-01 10:00:00",
-            "market_status": "normal",
-            "portfolio_summary": {"holding_count": 2, "market_value": 15000.0, "cost": 22000.0, "pnl": -7000.0, "pnl_pct": -31.82},
-            "account_action": {"action": "hold", "reason": "稳健", "confidence": "high"},
-            "holdings": [
-                {
-                    "code": "000001", "name": "平安", "shares": 1500, "cost_price": 14.0, "current_price": 10.0,
-                    "market_value": 15000.0, "pnl_amount": -6000.0, "pnl_pct": -28.57, "holding_weight_pct": 100.0,
-                    "action": "hold", "execution_size_pct_of_holding": None, "execution_quantity": None, "estimated_amount": None,
-                    "trigger_conditions": [], "price_conditions": [], "execution_plan": [], "risk_conditions": [],
-                    "invalidation_conditions": [], "confidence": "high", "data_limitations": [],
-                },
-                {
-                    "code": "BAD_QUOTE", "name": "坏行情", "shares": 100, "cost_price": 10.0, "current_price": 0.0,
-                    "market_value": 0.0, "pnl_amount": -1000.0, "pnl_pct": -100.0, "holding_weight_pct": 0.0,
-                    "action": "hold", "execution_size_pct_of_holding": None, "execution_quantity": None, "estimated_amount": None,
-                    "trigger_conditions": [], "price_conditions": [], "execution_plan": [], "risk_conditions": [],
-                    "invalidation_conditions": [], "confidence": "high", "data_limitations": [],
-                },
-            ],
-            "warnings": [], "data_limitations": [],
-        })
+    mock_validated = {
+        "schema_version": "portfolio-advice-v0.1",
+        "generated_at": "2026-01-01 10:00:00",
+        "market_status": "normal",
+        "portfolio_summary": {"holding_count": 2, "market_value": None, "cost": 22000.0, "pnl": None, "pnl_pct": None},
+        "account_action": {"action": "hold", "reason": "稳健", "confidence": "high"},
+        "holdings": [
+            {
+                "code": "000001", "name": "平安", "shares": 1500, "cost_price": 14.0, "current_price": 10.0,
+                "market_value": 15000.0, "pnl_amount": -6000.0, "pnl_pct": -28.57, "holding_weight_pct": None,
+                "action": "hold", "execution_size_pct_of_holding": None, "execution_quantity": None, "estimated_amount": None,
+                "trigger_conditions": [], "price_conditions": [], "execution_plan": [], "risk_conditions": [],
+                "invalidation_conditions": [], "confidence": "high", "data_limitations": [],
+            },
+            {
+                "code": "BAD_QUOTE", "name": "坏行情", "shares": 100, "cost_price": 10.0, "current_price": None,
+                "market_value": None, "pnl_amount": None, "pnl_pct": None, "holding_weight_pct": None,
+                "action": "hold", "execution_size_pct_of_holding": None, "execution_quantity": None, "estimated_amount": None,
+                "trigger_conditions": [], "price_conditions": [], "execution_plan": [], "risk_conditions": [],
+                "invalidation_conditions": [], "confidence": "high", "data_limitations": [],
+            },
+        ],
+        "warnings": [], "data_limitations": [],
+    }
 
-    res = portfolio_advice_service.generate_portfolio_advice({}, model_runner=mock_runner_two)
+    res = am.attach_account_funding_metrics(mock_validated, pf_data)
     af = res["account_funding"]
     assert af["quote_coverage"]["complete"] is False
     assert af["quote_coverage"]["valid_holdings"] == 1
     assert af["quote_coverage"]["total_holdings"] == 2
+    assert af["tracked_stock_market_value"] is None
     assert af["tracked_stock_weight_pct"] is None
     assert any("部分持仓行情不可用" in lim for lim in res["data_limitations"])
+
+    # 生产建议服务在此场景下应 fail-closed 抛出异常
+    with pytest.raises(portfolio_advice_service.PortfolioAdviceMarketDataError):
+        portfolio_advice_service.generate_portfolio_advice({})
 
 
 def test_decimal_rounding_half_up(tmp_env):
