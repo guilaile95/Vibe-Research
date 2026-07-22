@@ -11,7 +11,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import {
-  api, ApiError, dailyReviewAnalyzeStream,
+  api, ApiError,
   type Quote, type DailyReviewData, type DailyReviewCacheMeta,
   type BoardRankItem, type MarketSnapshotItem,
   type DataStatus, type DailyReviewHistoryItem, type DailyReviewHistorySnapshot,
@@ -19,6 +19,7 @@ import {
   type HighlightComparison,
 } from "@/lib/api";
 import { loadLlm } from "@/lib/llm";
+import { useDailyReviewAiTaskStore } from "@/stores/dailyReviewAiTaskStore";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
 import { cn } from "@/lib/utils";
@@ -36,6 +37,16 @@ const fmtChangePct = (v: number | null | undefined) => {
   const p = v * 100;
   return `${p > 0 ? "+" : ""}${p.toFixed(2)}%`;
 };
+
+const formatTaskDuration = (ms: number): string => {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+};
+
+const formatTaskTime = (date: Date): string =>
+  date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 
 const fmtSigned = (v: number | null | undefined, digits = 2) => {
   if (v == null || !Number.isFinite(v)) return "—";
@@ -102,9 +113,6 @@ const statusBadge = (status: DataStatus | undefined) => {
 };
 
 export function DailyReview() {
-  const [review, setReview] = useState("");
-  const [reviewLoading, setReviewLoading] = useState(false);
-  const [reviewErr, setReviewErr] = useState<string | null>(null);
   const [needConfig, setNeedConfig] = useState(false);
 
   // 统一聚合包
@@ -769,25 +777,39 @@ export function DailyReview() {
     ? indices.map((i) => `${i.name} ${i.price}（${i.change_pct > 0 ? "+" : ""}${i.change_pct}%）`).join("；")
     : "（指数数据未取到）";
 
+  const taskStatus = useDailyReviewAiTaskStore((s) => s.status);
+  const taskContent = useDailyReviewAiTaskStore((s) => s.content);
+  const taskError = useDailyReviewAiTaskStore((s) => s.error);
+  const taskStartedAt = useDailyReviewAiTaskStore((s) => s.startedAt);
+  const taskEstimatedDurationMs = useDailyReviewAiTaskStore((s) => s.estimatedDurationMs);
+  const [taskNow, setTaskNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (taskStatus !== "running") return;
+    setTaskNow(Date.now());
+    const id = setInterval(() => setTaskNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [taskStatus]);
+
+  const taskElapsedMs = taskStatus === "running" && taskStartedAt !== null
+    ? taskNow - taskStartedAt
+    : 0;
+  const taskRemainingMs = taskStatus === "running"
+    ? Math.max(0, taskEstimatedDurationMs - taskElapsedMs)
+    : 0;
+  const taskOverTimeMs = taskStatus === "running"
+    ? Math.max(0, taskElapsedMs - taskEstimatedDurationMs)
+    : 0;
+  const taskEta = taskStatus === "running" && taskStartedAt !== null
+    ? new Date(taskStartedAt + taskEstimatedDurationMs)
+    : null;
+
   const runReview = async () => {
-    setReviewErr(null);
     setNeedConfig(false);
     const llm = loadLlm();
     if (!llm) { setNeedConfig(true); return; }
-    // 生成中禁用按钮，避免并发流；partial/unavailable 仍允许请求（由后端契约约束输出）
-    setReviewLoading(true);
-    setReview("");
-    try {
-      // 仅发送 user_request + llm；市场上下文与 system prompt 由服务器生成
-      await dailyReviewAnalyzeStream(
-        { user_request: null, llm },
-        { onDelta: (t) => setReview((r) => r + t) },
-      );
-    } catch (e) {
-      setReviewErr(e instanceof ApiError ? e.message : "复盘失败");
-    } finally {
-      setReviewLoading(false);
-    }
+    const store = useDailyReviewAiTaskStore.getState();
+    await store.start(llm);
   };
 
   // 市场广度指标
@@ -1051,11 +1073,19 @@ export function DailyReview() {
       <GlassCard glow className="mb-6">
         <div className="flex items-center justify-between">
           <h3 className="flex items-center gap-1.5 font-semibold"><Sparkles className="h-4 w-4 text-primary" /> AI 当日复盘</h3>
-          <button onClick={runReview} disabled={reviewLoading}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
-            {reviewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {review ? "重新复盘" : "让 AI 复盘今天"}
-          </button>
+          {taskStatus === "running" ? (
+            <button disabled
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow disabled:opacity-50">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              AI 复盘生成中
+            </button>
+          ) : (
+            <button onClick={runReview}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
+              <Sparkles className="h-4 w-4" />
+              {taskStatus === "success" || taskStatus === "error" ? "重新复盘" : "让 AI 复盘今天"}
+            </button>
+          )}
         </div>
         {needConfig && (
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-muted-foreground">
@@ -1063,17 +1093,30 @@ export function DailyReview() {
             还没接入 AI。<Link to="/settings" className="text-primary">先去接入你的 AI</Link>，之后一键出复盘。
           </div>
         )}
-        {reviewErr && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" /> {reviewErr}
+        {taskStatus === "running" && taskEta && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary">
+            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+            <div>
+              <p className="font-medium">AI 复盘正在生成</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {taskOverTimeMs > 0
+                  ? "已超过预计时间 " + formatTaskDuration(taskOverTimeMs) + "，仍在生成"
+                  : "预计 " + formatTaskTime(taskEta) + " 完成 · 剩余 " + formatTaskDuration(taskRemainingMs)}
+              </p>
+            </div>
           </div>
         )}
-        {review ? (
+        {taskError && (
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <AlertCircle className="h-4 w-4 shrink-0" /> {taskError}
+          </div>
+        )}
+        {taskContent ? (
           <>
-            <div className="prose prose-sm prose-invert mt-4 max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{review}</ReactMarkdown></div>
-            {!reviewLoading && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${dr?.trade_date || today}`} content={review} /></div>}
+            <div className="prose prose-sm prose-invert mt-4 max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{taskContent}</ReactMarkdown></div>
+            {taskStatus === "success" && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${dr?.trade_date || today}`} content={taskContent} /></div>}
           </>
-        ) : !needConfig && !reviewErr && !reviewLoading ? (
+        ) : !needConfig && taskStatus !== "error" && taskStatus !== "running" ? (
           <p className="mt-3 text-sm text-muted-foreground">点上方按钮，由服务器聚合当日数据并按事实/推断/建议结构生成复盘。</p>
         ) : null}
       </GlassCard>
