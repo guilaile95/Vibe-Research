@@ -44,17 +44,6 @@ export const pcbSources: SourceRef[] = [
     note: "2026-07-24 实际打开读取；支撑：5.5G/6G基站、AAU/BBU、超高多层技术、高厚径比、N+N/M+N结构、高速材料混压、埋铜块",
   },
 
-  // 欣興電子
-  {
-    id: "S-UNIMICRON",
-    title: "欣興電子官网首页",
-    org: "欣興電子（UNIMICRON，台湾）",
-    url: "https://www.unimicron.com",
-    sourceType: "company_site",
-    factLevel: "公司口径",
-    note: "2026-07-24 仅访问首页公开信息；SSL证书验证失败，未定位到具体产品/技术子页；产品页面/技术路线图无法访问",
-  },
-
   // 生益科技
   {
     id: "S-SHENGYI-HIGHSPEED",
@@ -63,7 +52,7 @@ export const pcbSources: SourceRef[] = [
     url: "https://www.syst.com.cn/cn/Product/list_255.aspx?parentid=238#pro",
     sourceType: "company_site",
     factLevel: "公司口径",
-    note: "2026-07-24 实际打开读取；支撑：超低/低/中等介质损耗材料分类、Dk/Df/Tg/CTE参数范围、Synamic8GX(Dk3.62/Df0.0016)等具体牌号、无卤/高耐热",
+    note: "2026-07-24 实际打开读取；支撑：超低/低/中等介质损耗材料分类、Dk/Df/Tg/CTE参数范围、Synamic8GX 一般参数 Dk=3.62/Df=0.0016，10GHz 列 Dk@10GHz=3.66/Df@10GHz=0.0033；勿混用",
   },
   {
     id: "S-SHENGYI-RF",

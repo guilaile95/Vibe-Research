@@ -2,7 +2,7 @@
 
 > **研究底稿 = 资料池，非正式展示页。**
 > **生成/修订日期：2026-07-24**
-> **证据状态：实际读取来源数量 = 8（公司官网具体产品/技术页）；研报正文 = 0；技术标准 = 0。**
+> **证据状态：实际读取来源数量 = 7（公司官网具体产品/技术页）；研报正文 = 0；技术标准 = 0。**
 
 ---
 
@@ -14,12 +14,11 @@
 | S-KINWONG-SLP | 景旺电子 - 类载板（SLP）产品页 | 景旺电子（603228） | 公司官网 | `https://www.kinwong.com/products-and-services/slp/` | 2026-07-24 | 实际打开读取；支撑：最高18层Anylayer、线宽/线距30/30μm、激光孔50μm、mSAP/amSAP工艺、应用含AI服务器/≥800G光模块/HPC |
 | S-KINWONG-COMPUTING | 景旺电子 - 计算市场（AI数据中心） | 景旺电子（603228） | 公司官网 | `https://www.kinwong.com/markets/computing/` | 2026-07-24 | 实际打开读取；支撑：AI服务器PCB制造商定位、40层以上N+N结构、70+层高多层、9阶28层HDI、Skip-Via/POFV、背钻、高速板材料库 |
 | S-KINWONG-TELECOM | 景旺电子 - 通信市场能力 | 景旺电子（603228） | 公司官网 | `https://www.kinwong.com/markets/telecom/` | 2026-07-24 | 实际打开读取；支撑：5.5G/6G基站、AAU/BBU、超高多层技术、高厚径比、N+N/M+N结构、高速材料混压、埋铜块 |
-| S-UNIMICRON | 欣興電子官网首页 | 欣興電子（UNIMICRON，台湾） | 公司官网 | `https://www.unimicron.com` | 2026-07-24 | 仅访问首页公开信息；SSL证书验证失败，未定位到具体产品/技术子页；产品页面/技术路线图无法访问 |
-| S-SHENGYI-HIGHSPEED | 生益科技 - 高速产品系列 | 生益科技（600183） | 公司官网 | `https://www.syst.com.cn/cn/Product/list_255.aspx?parentid=238#pro` | 2026-07-24 | 实际打开读取；支撑：超低/低/中等介质损耗材料分类、Dk/Df/Tg/CTE参数范围、Synamic8GX(Dk3.62/Df0.0016)等具体牌号、无卤/高耐热 |
+| S-SHENGYI-HIGHSPEED | 生益科技 - 高速产品系列 | 生益科技（600183） | 公司官网 | `https://www.syst.com.cn/cn/Product/list_255.aspx?parentid=238#pro` | 2026-07-24 | 实际打开读取；支撑：超低/低/中等介质损耗材料分类、Dk/Df/Tg/CTE参数范围、Synamic8GX（一般 Dk=3.62/Df=0.0016；@10GHz Dk=3.66/Df=0.0033）等具体牌号、无卤/高耐热 |
 | S-SHENGYI-RF | 生益科技 - 射频与微波材料 | 生益科技（600183） | 公司官网 | `https://www.syst.com.cn/cn/Product/list_255.aspx?parentid=250#pro` | 2026-07-24 | 实际打开读取；支撑：PTFE/热固性树脂/碳氢系列、mmWave77(Dk3.0/Df0.0010)、mmWaveG(Dk3.15/Df0.002)、毫米波雷达低损耗材料 |
 | S-SHENGYI-IC | 生益科技 - IC封装产品 | 生益科技（600183） | 公司官网 | `https://www.syst.com.cn/cn/Product/list_255.aspx?parentid=248#pro` | 2026-07-24 | 实际打开读取；支撑：SI13U(CTE13/Tg245℃)、SI10US(CTE10/Tg280℃)等封装基板材料、Low CTE基板、高性能基板 |
 
-**正式前端 SourceRef 共 8 项（`frontend/src/data/sectorResearch/pcb/sources.ts`），URL 与上表一致；`note` 字段记录读取日期与具体支撑内容。欣興電子因SSL证书问题无法深入子页面。未增加 IPC/Prismark/未读正文来源。**
+**正式前端 SourceRef 共 7 项（`frontend/src/data/sectorResearch/pcb/sources.ts`），URL 与上表一致；`note` 字段记录读取日期与具体支撑内容。未增加欣興電子、IPC、Prismark 或未读正文来源。**
 
 ---
 
@@ -33,16 +32,12 @@
 - AI数据中心市场：自称”AI服务器PCB制造商”、40层以上N+N结构、70+层高多层PCB、9阶28层HDI、12层Anylayer刚挠板、Skip-Via/POFV技术、背钻、局部厚铜、高速板材料库、超高厚径比、反箔与超低损耗材料
 - 通信市场：5.5G/6G基站产品线、AAU/BBU/载波网络/核心网/光模块、超高多层技术、高厚径比、N+N/M+N结构、高速材料混压、埋铜块、高精度图形
 
-**欣興電子**：
-- 官网首页公开叙述（未能访问具体产品/技术子页，因SSL证书验证失败）
-- 首页层面提及HDI/ELIC/HLC/CSP/FCBGA等技术方向，但未获取具体技术参数或产品规格
-
 **生益科技**：
-- 高速产品系列：超低/低/中等介质损耗材料分类、Dk范围<3.5至>4.5（10GHz测量）、Df范围<0.002至>0.02（10GHz）、Tg≥150℃和≥170℃、Td<340/340-400/>400分类、CTE<3.0至>4.5、导热系数<1.0至>2.0 W/m·K、具体牌号如Synamic8GX(Dk3.62/Df0.0016)、S7439GS(无卤/Tg190℃)、S7045GX(低膨胀系数)
+- 高速产品系列：超低/低/中等介质损耗材料分类、Dk范围<3.5至>4.5（10GHz测量）、Df范围<0.002至>0.02（10GHz）、Tg≥150℃和≥170℃、Td<340/340-400/>400分类、CTE<3.0至>4.5、导热系数<1.0至>2.0 W/m·K、具体牌号如Synamic8GX（一般 Dk=3.62/Df=0.0016；@10GHz Dk=3.66/Df=0.0033）、S7439GS(无卤/Tg190℃)、S7045GX(低膨胀系数)
 - 射频与微波材料：PTFE型/热固性树脂体系/碳氢系列产品、mmWave77(Dk3.0/Df0.0010，毫米波雷达低损耗PTFE CCL)、mmWaveG(Dk3.15/Df0.002，毫米波雷达低损耗PPO CCL)、LNB33C系列(Dk3.30-3.50/Df0.0030-0.0035)、SG7350D/SG7350D2(Dk3.55/Df0.0020-0.0022，高导热)、SCGA-500系列(天线RF用玻璃布增强PTFE，Dk2.20/2.55，Df0.0009/0.0014)
 - IC封装产品：SI13U(Low CTE基板材料，CTE13/Tg245℃/Td>400℃)、SI10US(高性能基板材料，CTE10/Tg280℃/Td>400℃)、WLM1(Mini-LED背光用白色材料，CTE1.9/Tg180℃/Td374℃+)
 
-**未确认（因此不写入”已确认事实”）**：任何具体AI PCB市场规模数字、单卡/单柜美元价值量、谁进入某代机柜量产供应链、毛利率与涨价幅度、欣興電子的具体技术参数（因无法访问子页面）。
+**未确认（因此不写入”已确认事实”）**：任何具体AI PCB市场规模数字、单卡/单柜美元价值量、谁进入某代机柜量产供应链、毛利率与涨价幅度、欣興電子的具体技术参数（未读取具体产品或技术页面）。
 
 ---
 
@@ -51,8 +46,7 @@
 | 公司 | 口径摘要 | 来源 |
 |---|---|---|
 | 景旺电子 | 高多层：80层、M2~M9材料分级、40:1厚径比；SLP：18层Anylayer、30/30μm线宽距、mSAP/amSAP；AI数据中心：自称"AI服务器PCB制造商"、70+层、9阶HDI、高速板材料库；通信：5.5G/6G基站、超高多层、N+N/M+N结构 | S-KINWONG-HLC, S-KINWONG-SLP, S-KINWONG-COMPUTING, S-KINWONG-TELECOM |
-| 欣興電子 | 官网首页层面提及HDI/ELIC/HLC/CSP/FCBGA技术方向；具体产品/技术子页面因SSL证书问题无法访问 | S-UNIMICRON |
-| 生益科技 | 高速：Dk/Df多档位、Synamic8GX(Dk3.62/Df0.0016)；RF：mmWave77/mmWaveG毫米波雷达材料(Df0.0010/0.002)、PTFE/碳氢系列；IC封装：SI13U/SI10US低CTE基板(CTE10-13/Tg245-280℃) | S-SHENGYI-HIGHSPEED, S-SHENGYI-RF, S-SHENGYI-IC |
+| 生益科技 | 高速：Dk/Df多档位、Synamic8GX（一般 Dk=3.62/Df=0.0016；@10GHz Dk=3.66/Df=0.0033）；RF：mmWave77/mmWaveG毫米波雷达材料(Df0.0010/0.002)、PTFE/碳氢系列；IC封装：SI13U/SI10US低CTE基板(CTE10-13/Tg245-280℃) | S-SHENGYI-HIGHSPEED, S-SHENGYI-RF, S-SHENGYI-IC |
 
 > 公司口径 ≠ 订单/份额/财务事实。官网产品页不能替代年报 AI 收入拆分。
 
@@ -148,8 +142,8 @@
 
 ## 已知限制（摘要）
 
-1. 实际读取来源数量 = **8**（公司官网具体产品/技术页）；研报正文 = **0**；技术标准 = **0**。
-2. **欣興電子具体产品/技术页面无法访问**（SSL证书验证失败），仅保留首页层面公开叙述，未获取具体技术参数。
+1. 实际读取来源数量 = **7**（公司官网具体产品/技术页）；研报正文 = **0**；技术标准 = **0**。
+2. **欣興電子具体产品/技术页面未读取**，不进入正式 SourceRef，也不作为前端正式证据。
 3. 部分境外材料厂/标准/机构站点历史上不可达或未抓取；国际材料厂（Panasonic Megtron、Isola、Rogers等）Dk/Df/Rz数据未核验。
 4. 公司官网产品页反映产品版图与技术能力声明，不代表最新业绩/订单/收入拆分。
 5. 前端六 Tag 状态均为 `draft`，与证据成熟度一致。

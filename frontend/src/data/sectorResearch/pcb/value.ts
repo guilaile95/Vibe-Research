@@ -45,7 +45,7 @@ export const valueBlocks: ContentBlock[] = [
   },
   {
     type: "paragraph",
-    text: "公司口径（已读官网产品页）：生益科技高速产品系列覆盖超低/低/中等介质损耗材料分类，Dk范围<3.5至>4.5、Df范围<0.002至>0.02（均为10GHz测量）、Tg≥150℃/≥170℃、导热系数<1.0至>2.0 W/m·K；射频与微波材料包含PTFE/热固性树脂/碳氢系列，如mmWave77(Dk3.0/Df0.0010)、mmWaveG(Dk3.15/Df0.002)；IC封装产品如SI13U(CTE13/Tg245℃)、SI10US(CTE10/Tg280℃)——可支持「材料厂能力覆盖高速/射频方向「的定性判断，但不包含单价、毛利率或 AI 订单金额。",
+    text: "公司口径（已读官网产品页）：生益科技高速产品系列覆盖超低/低/中等介质损耗材料分类，Tg≥150℃/≥170℃、导热系数<1.0至>2.0 W/m·K；射频与微波材料包含PTFE/热固性树脂/碳氢系列，如mmWave77(Dk3.0/Df0.0010)、mmWaveG(Dk3.15/Df0.002)；IC封装产品如SI13U(CTE13/Tg245℃)、SI10US(CTE10/Tg280℃)——可支持「材料厂能力覆盖高速/射频方向」的定性判断，但不包含单价、毛利率或 AI 订单金额。",
     sourceIds: ["S-SHENGYI-HIGHSPEED", "S-SHENGYI-RF", "S-SHENGYI-IC"],
   },
   {

@@ -57,13 +57,13 @@ export const technologyBlocks: ContentBlock[] = [
   },
   {
     type: "paragraph",
-    text: "公司口径（已读官网产品页）：生益科技高速产品系列覆盖超低/低/中等介质损耗材料分类，Dk范围<3.5至>4.5（10GHz）、Df范围<0.002至>0.02（10GHz）、Tg≥150℃/≥170℃、CTE<3.0至>4.5、导热系数<1.0至>2.0 W/m·K；具体牌号如Synamic8GX(Dk3.62/Df0.0016)、射频mmWave77(Dk3.0/Df0.0010)、mmWaveG(Dk3.15/Df0.002)、IC封装SI13U(CTE13/Tg245℃)、SI10US(CTE10/Tg280℃)等——可支撑「国内CCL龙头具备高速/射频材料能力」的定性判断，但官网未披露AI服务器板具体供货数字。",
+    text: "公司口径（已读官网产品页）：生益科技高速产品系列覆盖超低/低/中等介质损耗材料分类，Tg≥150℃/≥170℃、CTE<3.0至>4.5、导热系数<1.0至>2.0 W/m·K；具体牌号如Synamic8GX（一般 Dk=3.62/Df=0.0016；Dk@10GHz=3.66/Df@10GHz=0.0033）、射频mmWave77(Dk3.0/Df0.0010)、mmWaveG(Dk3.15/Df0.002)、IC封装SI13U(CTE13/Tg245℃)、SI10US(CTE10/Tg280℃)等——可支撑「国内CCL龙头具备高速/射频材料能力」的定性判断，但官网未披露AI服务器板具体供货数字。",
     sourceIds: ["S-SHENGYI-HIGHSPEED", "S-SHENGYI-RF", "S-SHENGYI-IC"],
   },
   {
     type: "paragraph",
-    text: "公司口径（已读官网产品页）：景旺电子高多层PCB最高80层、材料分级M2~M9、40:1厚径比、线宽/线距40/40μm、应用含AI服务器/交换机；SLP最高18层Anylayer、30/30μm线宽距、mSAP/amSAP工艺；AI数据中心市场自称「AI服务器PCB制造商」、70+层高多层、9阶HDI、高速板材料库。欣興電子官网首页提及HDI/ELIC/HLC/FCBGA等技术方向，但具体产品页因SSL证书问题无法访问。上述为产品能力表述，不等于已确认的AI机柜量产份额。",
-    sourceIds: ["S-KINWONG-HLC", "S-KINWONG-SLP", "S-KINWONG-COMPUTING", "S-UNIMICRON"],
+    text: "公司口径（已读官网产品页）：景旺电子高多层PCB最高80层、材料分级M2~M9、40:1厚径比、线宽/线距40/40μm、应用含AI服务器/交换机；SLP最高18层Anylayer、30/30μm线宽距、mSAP/amSAP工艺；AI数据中心市场自称「AI服务器PCB制造商」、70+层高多层、9阶HDI、高速板材料库。上述为产品能力表述，不等于已确认的AI机柜量产份额。",
+    sourceIds: ["S-KINWONG-HLC", "S-KINWONG-SLP", "S-KINWONG-COMPUTING"],
   },
   {
     type: "callout",

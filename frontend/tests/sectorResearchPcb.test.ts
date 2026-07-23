@@ -12,13 +12,12 @@ import {
 import { pcbResearch } from "../src/data/sectorResearch/pcb.ts";
 import { getSectorResearchWorkspace } from "../src/data/sectorResearch/index.ts";
 
-/** 正式 SourceRef：景旺具体产品/市场页 + 欣興首页 + 生益材料产品页 */
+/** 正式 SourceRef：景旺具体产品/市场页 + 生益材料产品页 */
 const ALLOWED_SOURCE_IDS = [
   "S-KINWONG-HLC",
   "S-KINWONG-SLP",
   "S-KINWONG-COMPUTING",
   "S-KINWONG-TELECOM",
-  "S-UNIMICRON",
   "S-SHENGYI-HIGHSPEED",
   "S-SHENGYI-RF",
   "S-SHENGYI-IC",
@@ -50,13 +49,14 @@ test("PCB all six tags are draft status", () => {
 
 test("PCB sources are the read company product/tech pages", () => {
   const ids = pcbResearch.sources.map((s) => s.id);
+  assert.equal(pcbResearch.sources.length, 7);
   assert.deepEqual(ids.slice().sort(), [...ALLOWED_SOURCE_IDS].sort());
   assert.equal(pcbResearch.sources.length, ALLOWED_SOURCE_IDS.length);
   for (const s of pcbResearch.sources) {
     assert.equal(s.factLevel, "公司口径");
     assert.equal(s.sourceType, "company_site");
     assert.ok(s.url && s.url.startsWith("http"));
-    assert.ok(s.note && (s.note.includes("实际打开读取") || s.note.includes("仅访问首页")));
+    assert.ok(s.note && s.note.includes("实际打开读取"));
   }
 });
 
@@ -103,4 +103,19 @@ test("resolveOrFallback uses default for missing or illegal tag", () => {
     redirected: false,
   });
   assert.equal(resolveOrFallback("hbm", "overview"), null);
+});
+
+
+test("Synamic8GX general Dk/Df not mislabeled as 10GHz-only", () => {
+  const tech = pcbResearch.tags.find((x) => x.slug === "technology");
+  assert.ok(tech);
+  const blob = JSON.stringify(tech.blocks);
+  // if 3.62 appears, 10GHz column values should also be nearby or general params labeled
+  if (blob.includes("3.62")) {
+    assert.ok(
+      blob.includes("3.66") || blob.includes("一般") || blob.includes("@10GHz") || blob.includes("10GHz"),
+      "must not present 3.62/0.0016 as sole 10GHz measurement",
+    );
+  }
+  assert.equal(blob.includes("S-UNIMICRON"), false);
 });
