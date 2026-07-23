@@ -23,15 +23,15 @@ def _setup(data=None):
     tmp = os.path.join(os.environ.get("TEMP", "/tmp"), f"pf-test-{os.urandom(4).hex()}")
     os.makedirs(tmp, exist_ok=True)
     pf_file = os.path.join(tmp, "portfolio.json")
-    bak_file = pf_file + ".bak"
 
-    with patch.multiple(pf, CACHE_DIR=tmp, PF_FILE=pf_file, BAK_FILE=bak_file):
+    with patch.multiple(pf, CACHE_DIR=tmp, PF_FILE=pf_file):
         if data is not None:
             with open(pf_file, "w", encoding="utf-8") as f:
                 json.dump(data, f)
         yield
 
-    for f in (pf_file, bak_file):
+    _bak = pf_file + ".bak"
+    for f in (pf_file, _bak):
         try:
             os.remove(f)
         except FileNotFoundError:
@@ -66,7 +66,7 @@ def test_missing_file_add_holding_success():
 def test_first_save_does_not_create_bak():
     with _setup():
         pf.add_holding("000001", 100, 10.0)
-        assert not os.path.exists(pf.BAK_FILE)
+        assert not os.path.exists(pf.PF_FILE + ".bak")
 
 
 def test_missing_file_close_position_success():
@@ -84,7 +84,7 @@ def test_normal_save_creates_bak():
     norm = {"holdings": [{"code": "000001", "shares": 100, "cost": 10.0}], "last_refresh": None}
     with _setup(norm):
         pf.add_holding("000002", 200, 20.0)
-        assert os.path.exists(pf.BAK_FILE)
+        assert os.path.exists(pf.PF_FILE + ".bak")
 
 
 def test_bak_bytes_equal_pre_save():
@@ -93,7 +93,7 @@ def test_bak_bytes_equal_pre_save():
         with open(pf.PF_FILE, "rb") as f:
             pre = f.read()
         pf.add_holding("000002", 200, 20.0)
-        with open(pf.BAK_FILE, "rb") as f:
+        with open(pf.PF_FILE + ".bak", "rb") as f:
             bak = f.read()
         assert bak == pre
 
@@ -114,7 +114,7 @@ def test_second_write_updates_bak():
         with open(pf.PF_FILE, "rb") as f:
             pre2 = f.read()
         pf.add_holding("000003", 300, 30.0)
-        with open(pf.BAK_FILE, "rb") as f:
+        with open(pf.PF_FILE + ".bak", "rb") as f:
             bak2 = f.read()
         assert bak2 == pre2
 
@@ -193,7 +193,8 @@ def _corrupted_env():
 
     yield tmp, pf_file, bak_file, corrupted_bytes, bak_bytes
 
-    for f in (pf_file, bak_file):
+    _bak = pf_file + ".bak"
+    for f in (pf_file, _bak):
         try:
             os.remove(f)
         except FileNotFoundError:
@@ -223,7 +224,7 @@ def _verify_corrupted(tmp, pf_file, bak_file, corrupted_bytes, bak_bytes):
 ])
 def test_write_ops_fail_closed(write_op):
     with _corrupted_env() as (tmp, pf_file, bak_file, corrupt_bytes, bak_bytes):
-        with patch.multiple(pf, CACHE_DIR=tmp, PF_FILE=pf_file, BAK_FILE=bak_file):
+        with patch.multiple(pf, CACHE_DIR=tmp, PF_FILE=pf_file):
             with pytest.raises(pf.PortfolioDataCorruptedError):
                 write_op()
         _verify_corrupted(tmp, pf_file, bak_file, corrupt_bytes, bak_bytes)
@@ -243,7 +244,7 @@ def test_write_failure_replace_does_not_damage_original():
         with open(pf_file, "wb") as f:
             f.write(original_bytes)
 
-        with patch.multiple(pf, CACHE_DIR=tmp, PF_FILE=pf_file, BAK_FILE=bak_file):
+        with patch.multiple(pf, CACHE_DIR=tmp, PF_FILE=pf_file):
             real_replace = os.replace
             real_makedirs = os.makedirs
             real_remove = os.remove
@@ -274,7 +275,53 @@ def test_write_failure_replace_does_not_damage_original():
         assert len(tmp_files) == 0, f"残留临时文件: {tmp_files}"
 
     finally:
-        for f in (pf_file, bak_file):
+        _bak2 = pf_file + ".bak"
+        for f in (pf_file, _bak2):
+            try:
+                os.remove(f)
+            except FileNotFoundError:
+                pass
+        try:
+            os.rmdir(tmp)
+        except OSError:
+            pass
+
+def test_real_bak_not_modified_by_test():
+    """既有测试隔离方式（只 patch CACHE_DIR 和 PF_FILE）不会写入真实备份路径。"""
+    # Record real state before test
+    home = os.path.expanduser("~")
+    real_bak = os.path.join(home, ".vibe-research", "portfolio.json.bak")
+    real_bak_existed = os.path.exists(real_bak)
+    real_bak_bytes = open(real_bak, "rb").read() if real_bak_existed else None
+
+    tmp = os.path.join(os.environ.get("TEMP", "/tmp"), f"pf-isolate-{os.urandom(4).hex()}")
+    os.makedirs(tmp, exist_ok=True)
+    pf_file = os.path.join(tmp, "portfolio.json")
+    bak_file = pf_file + ".bak"
+
+    norm = {"holdings": [{"code": "000001", "shares": 100, "cost": 10.0}], "last_refresh": None}
+    with open(pf_file, "w", encoding="utf-8") as f:
+        json.dump(norm, f)
+    pre_bytes = open(pf_file, "rb").read()
+
+    try:
+        # Only patch CACHE_DIR and PF_FILE - like existing tests do
+        with patch.multiple(pf, CACHE_DIR=tmp, PF_FILE=pf_file):
+            pf.add_holding("000002", 200, 20.0)
+
+        # Temp .bak exists and is correct
+        assert os.path.exists(bak_file)
+        with open(bak_file, "rb") as f:
+            assert f.read() == pre_bytes
+
+        # Real .bak unchanged
+        assert os.path.exists(real_bak) == real_bak_existed
+        if real_bak_existed:
+            with open(real_bak, "rb") as f:
+                assert f.read() == real_bak_bytes, "真实备份文件被修改"
+    finally:
+        _bak2 = pf_file + ".bak"
+        for f in (pf_file, _bak2):
             try:
                 os.remove(f)
             except FileNotFoundError:

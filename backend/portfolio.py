@@ -26,7 +26,6 @@ _OLD_PF_FILE = os.path.join(HERE, ".cache", "portfolio.json")  # ≤v0.1.1 旧�
 # CACHE_DIR 名字保留（测试/外部按此名 monkeypatch），实际已是用户数据目录
 CACHE_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
 PF_FILE = os.path.join(CACHE_DIR, "portfolio.json")
-BAK_FILE = PF_FILE + ".bak"
 BEIJING = timezone(timedelta(hours=8))
 _LOCK = threading.Lock()
 
@@ -94,6 +93,10 @@ def _load():
 def _tmp_name(base):
     return f"{base}.tmp.{os.urandom(4).hex()}"
 
+def _bak_path():
+    return PF_FILE + ".bak"
+
+
 
 def _save(d):
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -109,9 +112,10 @@ def _save(d):
                 raise PortfolioDataCorruptedError() from None
             _validate_data(existing_data)
 
-            bak_tmp = _tmp_name(BAK_FILE)
+            bak_file = PF_FILE + ".bak"
+            bak_tmp = _tmp_name(bak_file)
             shutil.copy2(PF_FILE, bak_tmp)
-            os.replace(bak_tmp, BAK_FILE)
+            os.replace(bak_tmp, bak_file)
             bak_tmp = None
 
         data_tmp = _tmp_name(PF_FILE)
