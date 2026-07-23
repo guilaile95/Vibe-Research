@@ -10,11 +10,11 @@
 
 | 来源编号 | 标题 | 机构/公司 | 资料类型 | 公开 URL | 读取日期 | 可信度说明 |
 |---|---|---|---|---|---|---|
-| S-KINWONG | 景旺电子官网（产品/市场/技术） | 景旺电子（603228） | 公司官网 | `https://www.kinwong.com` | 2026-07-23 | 已读取；汽车/通信/服务器/HDI/高多层/类载板等产品线表述 |
-| S-UNIMICRON | 欣興電子官网（产品/技术/研发） | 欣興電子（UNIMICRON，台湾） | 公司官网 | `https://www.unimicron.com` | 2026-07-23 | 已读取；HDI/ELIC/HLC/CSP/FCBGA 技术蓝图；服务器/交换机高速板研发方向 |
-| S-SHENGYI | 生益科技官网（产品/研发/标准） | 生益科技（600183） | 公司官网 | `https://www.syst.com.cn` | 2026-07-23 | 已读取；高速/射频/IC 封装等 CCL 产品线；国家标准与 HDI 交流新闻 |
+| S-KINWONG | 景旺电子官网（产品/市场/技术） | 景旺电子（603228） | 公司官网 | `https://www.kinwong.com` | 2026-07-23 | 2026-07-23 实际打开读取；首页/产品与市场叙述；汽车/通信/服务器/HDI/高多层/类载板等产品线表述 |
+| S-UNIMICRON | 欣興電子官网（产品/技术/研发） | 欣興電子（UNIMICRON，台湾） | 公司官网 | `https://www.unimicron.com` | 2026-07-23 | 2026-07-23 实际打开读取；首页/技术与研发叙述；HDI/ELIC/HLC/CSP/FCBGA 技术蓝图；服务器/交换机高速板研发方向 |
+| S-SHENGYI | 生益科技官网（产品/研发/标准） | 生益科技（600183） | 公司官网 | `https://www.syst.com.cn` | 2026-07-23 | 2026-07-23 实际打开读取；首页/产品与研发叙述；高速/射频/IC 封装等 CCL 产品线；国家标准与 HDI 交流新闻 |
 
-**正式前端 SourceRef 仅保留上述 3 项（`frontend/src/data/sectorResearch/pcb/sources.ts`）。**
+**正式前端 SourceRef 仅保留上述 3 项（`frontend/src/data/sectorResearch/pcb/sources.ts`），URL 与上表一致；`note` 字段记录读取日期与范围。未增加 IPC/Prismark/未读正文来源。**
 
 ---
 

@@ -13,6 +13,7 @@ export const pcbSources: SourceRef[] = [
     url: "https://www.kinwong.com",
     sourceType: "company_site",
     factLevel: "公司口径",
+    note: "2026-07-23 实际打开读取；公司公开首页/产品与市场叙述（未再拆更深层产品子页）",
   },
   {
     id: "S-UNIMICRON",
@@ -21,6 +22,7 @@ export const pcbSources: SourceRef[] = [
     url: "https://www.unimicron.com",
     sourceType: "company_site",
     factLevel: "公司口径",
+    note: "2026-07-23 实际打开读取；公司公开首页/技术与研发叙述（未再拆更深层技术子页）",
   },
   {
     id: "S-SHENGYI",
@@ -29,5 +31,6 @@ export const pcbSources: SourceRef[] = [
     url: "https://www.syst.com.cn",
     sourceType: "company_site",
     factLevel: "公司口径",
+    note: "2026-07-23 实际打开读取；公司公开首页/产品与研发叙述（未再拆更深层产品子页）",
   },
 ];
