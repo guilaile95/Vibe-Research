@@ -1,12 +1,23 @@
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, Navigate } from "react-router-dom";
 import { ArrowLeft, Plus, Wrench } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import sectorsData from "@/data/sectors.json";
+import {
+  getDefaultResearchPath,
+  hasSectorResearchWorkspace,
+} from "@/data/sectorResearch";
 
 export function SectorDetail() {
   const { key } = useParams();
+
+  // 已注册研究工作台的板块：转发到默认 Tag（真实可分享 URL）
+  if (hasSectorResearchWorkspace(key)) {
+    const path = getDefaultResearchPath(key!);
+    if (path) return <Navigate to={path} replace />;
+  }
+
   const sector = sectorsData.sectors.find((s) => s.key === key);
 
   if (!sector) {

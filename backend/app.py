@@ -409,6 +409,22 @@ def account_profile_save(req: AccountProfileIn):
 class ReportIn(BaseModel):
     name: str
     content_b64: str
+    title: str | None = None
+    institution: str | None = None
+    publish_date: str | None = None
+    sector_keys: list[str] | None = None
+    source_url: str | None = None
+    source_kind: str | None = None
+
+
+class ReportMetaPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str | None = None
+    institution: str | None = None
+    publish_date: str | None = None
+    sector_keys: list[str] | None = None
+    source_url: str | None = None
+    source_kind: str | None = None
 
 
 @app.get("/api/myreports")
@@ -418,9 +434,14 @@ def myreports_list():
 
 @app.post("/api/myreports")
 def myreports_upload(r: ReportIn):
-    """上传一份研报（base64）→ 存本地 + 按文件名自动打行业标签。"""
+    """上传一份研报（base64）→ 存本地 + 按文件名自动打行业标签。支持可选丰富元数据。"""
     try:
-        return {"data": mr.save_report(r.name, r.content_b64)}
+        return {"data": mr.save_report(
+            r.name, r.content_b64,
+            title=r.title, institution=r.institution,
+            publish_date=r.publish_date, sector_keys=r.sector_keys,
+            source_url=r.source_url, source_kind=r.source_kind,
+        )}
     except mr.ReportError as e:
         raise HTTPException(400, str(e)) from e
 
@@ -438,6 +459,33 @@ def myreports_file(rid: str):
 @app.delete("/api/myreports/{rid}")
 def myreports_delete(rid: str):
     return {"data": {"ok": mr.delete_report(rid)}}
+
+
+@app.get("/api/myreports/browse")
+def myreports_browse(group: str = Query(...), sector_key: str | None = None):
+    """按 year / industry / institution 分组浏览研报档案。"""
+    try:
+        return {"data": mr.build_browse(mr.list_reports(), group, sector_key=sector_key)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.get("/api/myreports/search")
+def myreports_search(q: str = ""):
+    """全文检索：匹配 name / title / institution / sector_keys。"""
+    return {"data": mr.search_reports(mr.list_reports(), q)}
+
+
+@app.patch("/api/myreports/{rid}")
+def myreports_update(rid: str, body: ReportMetaPatch):
+    """部分更新研报元数据（标题 / 机构 / 发布日期 / 关联赛道 / 来源 / 类型）。"""
+    try:
+        updated = mr.update_report_meta(rid, body.model_dump(exclude_unset=True))
+    except mr.ReportError as e:
+        raise HTTPException(400, str(e)) from e
+    if updated is None:
+        raise HTTPException(404, "研报不存在")
+    return {"data": updated}
 
 
 class CloseIn(BaseModel):

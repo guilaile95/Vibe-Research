@@ -45,6 +45,32 @@ export function unwrapApiPayload(payload: any): any {
 
 export interface MyReport {
   id: string; name: string; industry: string; size: number; ext: string; ts: number;
+  // 丰富元数据（可选，向后兼容：旧存档可能缺失）。
+  title?: string;
+  institution?: string;
+  publish_date?: string;
+  sector_keys?: string[];
+  source_url?: string;
+  source_kind?: string;
+  file_sha256?: string;
+  imported_at?: string;
+  // 同内容去重标记：上传内容与已有归档完全一致时，不写重复文件，返回既有条目 + deduped=true。
+  deduped?: boolean;
+}
+
+export type MyReportsBrowseGroup = "year" | "industry" | "institution";
+
+export interface MyReportsBrowseGroupItem {
+  key: string;
+  label: string;
+  count: number;
+  months?: { key: string; label: string; count: number }[];
+  sector_keys?: string[];
+}
+
+export interface MyReportsBrowseResult {
+  groups: MyReportsBrowseGroupItem[];
+  total: number;
 }
 
 // 下载/预览研报：带鉴权头 fetch → blob → 触发浏览器下载（<a download> 无法带 Authorization，故走 blob）。
@@ -62,7 +88,7 @@ export async function downloadReport(id: string, name: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE" = "GET", body?: unknown, options?: { unwrapData?: boolean }): Promise<T> {
+async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET", body?: unknown, options?: { unwrapData?: boolean }): Promise<T> {
   const unwrapData = options?.unwrapData ?? true;
   let resp: Response;
   const headers: Record<string, string> = { ...authHeaders() };
@@ -1029,7 +1055,35 @@ export const api = {
   investorQa: (code: string) => get<QaRow[]>(`/investor-qa?code=${code}`),
   industry: (top = 20) => get<IndustryData>(`/industry?top=${top}`),
   myReports: () => get<MyReport[]>("/myreports"),
-  uploadReport: (name: string, contentB64: string) =>
-    request<MyReport>("/myreports", "POST", { name, content_b64: contentB64 }),
+  uploadReport: (name: string, contentB64: string, meta?: {
+    title?: string; institution?: string; publish_date?: string;
+    sector_keys?: string[]; source_url?: string; source_kind?: string;
+  }) =>
+    request<MyReport>("/myreports", "POST", {
+      name, content_b64: contentB64,
+      ...(meta?.title != null ? { title: meta.title } : {}),
+      ...(meta?.institution != null ? { institution: meta.institution } : {}),
+      ...(meta?.publish_date != null ? { publish_date: meta.publish_date } : {}),
+      ...(meta?.sector_keys != null ? { sector_keys: meta.sector_keys } : {}),
+      ...(meta?.source_url != null ? { source_url: meta.source_url } : {}),
+      ...(meta?.source_kind != null ? { source_kind: meta.source_kind } : {}),
+    }),
   deleteReport: (id: string) => request<{ ok: boolean }>(`/myreports/${id}`, "DELETE"),
+  browseMyReports: (group: MyReportsBrowseGroup, sectorKey?: string) => {
+    const q = new URLSearchParams({ group });
+    if (sectorKey) q.set("sector_key", sectorKey);
+    return get<MyReportsBrowseResult>(`/api/myreports/browse?${q.toString()}`);
+  },
+  searchMyReports: (q: string) =>
+    get<MyReport[]>(`/api/myreports/search?q=${encodeURIComponent(q)}`),
+  patchReport: (id: string, meta: {
+    title?: string; institution?: string; publish_date?: string;
+    sector_keys?: string[]; source_url?: string; source_kind?: string;
+  }) => {
+    const body: Record<string, unknown> = {};
+    for (const k of ["title", "institution", "publish_date", "sector_keys", "source_url", "source_kind"] as const) {
+      if (meta[k] !== undefined) body[k] = meta[k];
+    }
+    return request<MyReport>(`/myreports/${id}`, "PATCH", body);
+  },
 };

@@ -21,6 +21,15 @@
       "verified": true,
       "nodes": ["AI芯片", "光模块", "CPO光互连", "HBM存储", "先进封装", "PCB", "液冷散热"]
     },
+    {
+      "key": "pcb",
+      "label": "PCB",
+      "tagline": "AI 服务器的骨架公路——承载加速卡、内存、交换芯片、电源与高速互连",
+      "hot": true,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "原理与技术路线", "价值量", "铜中板", "产业格局", "定价权地图"]
+    },
     { "key": "hbm", "label": "HBM", "tagline": "高带宽存储——AI 芯片的内存瓶颈", "hot": true, "verified": false, "nodes": [] },
     { "key": "cpo", "label": "光互联", "tagline": "光电共封装（CPO）——突破铜互连的带宽墙", "hot": true, "verified": false, "nodes": [] },
     { "key": "semiconductor", "label": "半导体国产替代", "tagline": "设备、材料、EDA、制造的自主链条", "hot": true, "verified": false, "nodes": [] },
