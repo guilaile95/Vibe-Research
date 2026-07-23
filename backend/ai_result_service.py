@@ -8,7 +8,7 @@ import json
 import math
 import re
 from datetime import date, datetime
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import ai_result_store
 import daily_review
@@ -44,6 +44,13 @@ _SENSITIVE_KEYS = frozenset(
 
 class AiResultValidationError(ValueError):
     """Business input is not safe or complete enough to persist."""
+
+
+class AiResultCorruptedError(RuntimeError):
+    """A stored record no longer matches its result-type contract."""
+
+    def __init__(self):
+        super().__init__("已保存的 AI 结果数据损坏，无法读取")
 
 
 def _nonempty_string(value: Any, field: str) -> str:
@@ -156,7 +163,241 @@ def _portfolio_holdings(portfolio_data: Any) -> list[dict[str, Any]]:
     return portfolio_data["holdings"]
 
 
-def save_daily_review_ai(review: Any, markdown: Any, cfg: Any) -> dict[str, Any]:
+def _require_exact_object(
+    value: Any,
+    field: str,
+    required: set[str],
+    optional: set[str] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise AiResultValidationError(f"{field} 必须是对象")
+    allowed = required | (optional or set())
+    if not required.issubset(value) or not set(value).issubset(allowed):
+        raise AiResultValidationError(f"{field} 字段不完整或包含未知字段")
+    return value
+
+
+def _finite_number(value: Any, field: str, *, allow_none: bool = False) -> float | int | None:
+    if value is None and allow_none:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise AiResultValidationError(f"{field} 必须是有限数字")
+    return value
+
+
+def _nonnegative_int(value: Any, field: str, *, positive: bool = False) -> int:
+    minimum = 1 if positive else 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise AiResultValidationError(f"{field} 必须是有效整数")
+    return value
+
+
+def _positive_whole_number(value: Any, field: str) -> int | float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+        or not float(value).is_integer()
+    ):
+        raise AiResultValidationError(f"{field} 必须是正整数值")
+    return value
+
+
+def _string_list(value: Any, field: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise AiResultValidationError(f"{field} 必须是字符串数组")
+    return value
+
+
+def _validate_portfolio_authoritative_payload(
+    payload: dict[str, Any],
+    *,
+    trade_date: str,
+    generated_at: str,
+) -> None:
+    top_required = {
+        "schema_version",
+        "generated_at",
+        "trade_date",
+        "market_status",
+        "portfolio_summary",
+        "account_action",
+        "holdings",
+        "warnings",
+        "data_limitations",
+    }
+    _require_exact_object(payload, "payload", top_required, {"account_funding"})
+    if payload["schema_version"] != "portfolio-advice-v0.1":
+        raise AiResultValidationError("portfolio payload schema 不匹配")
+    if payload["trade_date"] != trade_date:
+        raise AiResultValidationError("portfolio payload trade_date 不匹配")
+    if _valid_timestamp(payload["generated_at"], "generated_at") != generated_at:
+        raise AiResultValidationError("portfolio payload generated_at 不匹配")
+    _nonempty_string(payload["market_status"], "market_status")
+
+    summary = _require_exact_object(
+        payload["portfolio_summary"],
+        "portfolio_summary",
+        {"holding_count", "market_value", "cost", "pnl", "pnl_pct"},
+    )
+    _nonnegative_int(summary["holding_count"], "portfolio_summary.holding_count")
+    _finite_number(summary["market_value"], "portfolio_summary.market_value", allow_none=True)
+    _finite_number(summary["cost"], "portfolio_summary.cost")
+    _finite_number(summary["pnl"], "portfolio_summary.pnl", allow_none=True)
+    _finite_number(summary["pnl_pct"], "portfolio_summary.pnl_pct", allow_none=True)
+
+    account_action = _require_exact_object(
+        payload["account_action"],
+        "account_action",
+        {"action", "reason", "confidence"},
+    )
+    if account_action["action"] not in {
+        "hold",
+        "reduce_risk",
+        "selective_add",
+        "defensive",
+    }:
+        raise AiResultValidationError("account_action.action 非法")
+    if not isinstance(account_action["reason"], str):
+        raise AiResultValidationError("account_action.reason 必须是字符串")
+    if account_action["confidence"] not in {"high", "medium", "low"}:
+        raise AiResultValidationError("account_action.confidence 非法")
+
+    holdings = payload["holdings"]
+    if not isinstance(holdings, list):
+        raise AiResultValidationError("holdings 必须是数组")
+    holding_required = {
+        "code",
+        "name",
+        "shares",
+        "cost_price",
+        "current_price",
+        "market_value",
+        "pnl_amount",
+        "pnl_pct",
+        "holding_weight_pct",
+        "action",
+        "execution_size_pct_of_holding",
+        "execution_quantity",
+        "trigger_conditions",
+        "price_conditions",
+        "execution_plan",
+        "risk_conditions",
+        "invalidation_conditions",
+        "confidence",
+        "data_limitations",
+    }
+    for index, holding_value in enumerate(holdings):
+        prefix = f"holdings[{index}]"
+        holding = _require_exact_object(
+            holding_value,
+            prefix,
+            holding_required,
+            {"estimated_amount", "account_metrics"},
+        )
+        if not isinstance(holding["code"], str) or not re.fullmatch(r"\d{6}", holding["code"]):
+            raise AiResultValidationError(f"{prefix}.code 非法")
+        _nonempty_string(holding["name"], f"{prefix}.name")
+        _positive_whole_number(holding["shares"], f"{prefix}.shares")
+        _finite_number(holding["cost_price"], f"{prefix}.cost_price")
+        for field in (
+            "current_price",
+            "market_value",
+            "pnl_amount",
+            "pnl_pct",
+            "holding_weight_pct",
+            "execution_size_pct_of_holding",
+        ):
+            _finite_number(holding[field], f"{prefix}.{field}", allow_none=True)
+        if holding["action"] not in {"add", "hold", "reduce", "sell", "watch", "avoid"}:
+            raise AiResultValidationError(f"{prefix}.action 非法")
+        execution_quantity = holding["execution_quantity"]
+        if execution_quantity is not None:
+            _nonnegative_int(execution_quantity, f"{prefix}.execution_quantity", positive=True)
+        if "estimated_amount" in holding:
+            _finite_number(
+                holding["estimated_amount"],
+                f"{prefix}.estimated_amount",
+                allow_none=True,
+            )
+        for field in (
+            "trigger_conditions",
+            "price_conditions",
+            "execution_plan",
+            "risk_conditions",
+            "invalidation_conditions",
+            "data_limitations",
+        ):
+            _string_list(holding[field], f"{prefix}.{field}")
+        if holding["confidence"] not in {"high", "medium", "low"}:
+            raise AiResultValidationError(f"{prefix}.confidence 非法")
+        if "account_metrics" in holding and holding["account_metrics"] is not None:
+            metrics = _require_exact_object(
+                holding["account_metrics"],
+                f"{prefix}.account_metrics",
+                {"market_value", "account_weight_pct"},
+            )
+            _finite_number(
+                metrics["market_value"],
+                f"{prefix}.account_metrics.market_value",
+                allow_none=True,
+            )
+            _finite_number(
+                metrics["account_weight_pct"],
+                f"{prefix}.account_metrics.account_weight_pct",
+                allow_none=True,
+            )
+    if summary["holding_count"] != len(holdings):
+        raise AiResultValidationError("portfolio_summary.holding_count 与 holdings 不一致")
+
+    _string_list(payload["warnings"], "warnings")
+    _string_list(payload["data_limitations"], "data_limitations")
+    if "account_funding" in payload and payload["account_funding"] is not None:
+        funding = _require_exact_object(
+            payload["account_funding"],
+            "account_funding",
+            {
+                "configured",
+                "total_assets",
+                "available_cash",
+                "available_cash_pct",
+                "updated_at",
+                "tracked_stock_market_value",
+                "tracked_stock_weight_pct",
+                "quote_coverage",
+            },
+        )
+        if not isinstance(funding["configured"], bool):
+            raise AiResultValidationError("account_funding.configured 必须是布尔值")
+        for field in (
+            "total_assets",
+            "available_cash",
+            "available_cash_pct",
+            "tracked_stock_market_value",
+            "tracked_stock_weight_pct",
+        ):
+            _finite_number(funding[field], f"account_funding.{field}", allow_none=True)
+        if funding["updated_at"] is not None:
+            _valid_timestamp(funding["updated_at"], "account_funding.updated_at")
+        coverage = _require_exact_object(
+            funding["quote_coverage"],
+            "account_funding.quote_coverage",
+            {"valid_holdings", "total_holdings", "complete"},
+        )
+        _nonnegative_int(coverage["valid_holdings"], "quote_coverage.valid_holdings")
+        _nonnegative_int(coverage["total_holdings"], "quote_coverage.total_holdings")
+        if not isinstance(coverage["complete"], bool):
+            raise AiResultValidationError("quote_coverage.complete 必须是布尔值")
+
+
+def save_daily_review_ai(
+    review: Any,
+    markdown: Any,
+    cfg: Any,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     if not isinstance(review, dict):
         raise AiResultValidationError("review 必须是对象")
     _, trade_date = validate_result_identity(DAILY_REVIEW_AI, review.get("trade_date"))
@@ -183,7 +424,11 @@ def save_daily_review_ai(review: Any, markdown: Any, cfg: Any) -> dict[str, Any]
         "model_name": model,
         "input_fingerprint": None,
     }
-    return ai_result_store.upsert_result(review_history.resolve_review_db_path(), record)
+    return ai_result_store.upsert_result(
+        review_history.resolve_review_db_path(),
+        record,
+        should_cancel=should_cancel,
+    )
 
 
 def save_portfolio_advice(
@@ -213,6 +458,11 @@ def save_portfolio_advice(
     if payload_trade_date is not None and payload_trade_date != trade_date:
         raise AiResultValidationError("建议交易日与来源复盘不一致")
     generated_at = _valid_timestamp(payload.get("generated_at"), "generated_at")
+    _validate_portfolio_authoritative_payload(
+        payload,
+        trade_date=trade_date,
+        generated_at=generated_at,
+    )
     provider, model = validate_model_info(
         _config_value(cfg, "provider", ""), _config_value(cfg, "model")
     )
@@ -258,6 +508,56 @@ def _safe_api_result(record: dict[str, Any], *, stale: bool) -> dict[str, Any]:
     return result
 
 
+def _validate_restored_record(record: Any, expected_type: str) -> None:
+    """Validate persisted data without exposing the damaged field or value."""
+    try:
+        if not isinstance(record, dict) or record.get("result_type") != expected_type:
+            raise AiResultValidationError("result_type mismatch")
+        expected_schema = {
+            DAILY_REVIEW_AI: "daily_review_ai.v1",
+            PORTFOLIO_ADVICE: "portfolio_advice.v1",
+        }[expected_type]
+        if record.get("schema_version") != expected_schema:
+            raise AiResultValidationError("schema_version mismatch")
+        _, trade_date = validate_result_identity(expected_type, record.get("trade_date"))
+        generated_at = _valid_timestamp(record.get("generated_at"), "generated_at")
+        _nonempty_string(record.get("model_provider"), "model_provider")
+        _nonempty_string(record.get("model_name"), "model_name")
+        payload = _validate_payload(record.get("payload"))
+
+        if expected_type == DAILY_REVIEW_AI:
+            if set(payload) != {
+                "markdown",
+                "source_review_generated_at",
+                "source_data_cutoff",
+            }:
+                raise AiResultValidationError("daily review payload fields mismatch")
+            _nonempty_string(payload.get("markdown"), "markdown")
+            source_generated_at = _valid_timestamp(
+                payload.get("source_review_generated_at"),
+                "source_review_generated_at",
+            )
+            _valid_timestamp(
+                payload.get("source_data_cutoff"),
+                "source_data_cutoff",
+                allow_none=True,
+            )
+            if source_generated_at != generated_at or record.get("input_fingerprint") is not None:
+                raise AiResultValidationError("daily review metadata mismatch")
+            return
+
+        _validate_portfolio_authoritative_payload(
+            payload,
+            trade_date=trade_date,
+            generated_at=generated_at,
+        )
+        fingerprint = record.get("input_fingerprint")
+        if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+            raise AiResultValidationError("portfolio fingerprint mismatch")
+    except (AiResultValidationError, KeyError, TypeError, ValueError):
+        raise AiResultCorruptedError() from None
+
+
 def get_ai_result(
     result_type: Any,
     *,
@@ -278,6 +578,7 @@ def get_ai_result(
             record = ai_result_store.get_latest_result(db_path, result_type)
     if record is None:
         return None
+    _validate_restored_record(record, result_type)
     stale = False
     if result_type == PORTFOLIO_ADVICE:
         if current_portfolio is None:

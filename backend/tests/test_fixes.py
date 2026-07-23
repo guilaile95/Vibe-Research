@@ -296,7 +296,7 @@ def test_run_cli_nonzero_with_stdout_is_failure(monkeypatch):
         cli_runtime.run_cli("fake", "s", "u")
 
 
-def test_run_cli_stream_close_kills_child(monkeypatch):
+def test_run_cli_stream_close_reaps_child_and_closes_pipes(monkeypatch):
     monkeypatch.setitem(cli_runtime._CLI_DEFS, "fake", {
         "bins": [sys.executable],
         "delivery": "stdin",
@@ -305,8 +305,10 @@ def test_run_cli_stream_close_kills_child(monkeypatch):
     })
     proc = MagicMock()
     proc.stdin = MagicMock()
-    proc.stdout = iter(["piece\n"])
+    proc.stdout = MagicMock()
+    proc.stdout.__iter__.return_value = iter(["piece\n"])
     proc.poll.return_value = None
+    proc.wait.return_value = -9
     monkeypatch.setattr(cli_runtime.subprocess, "Popen", lambda *_a, **_k: proc)
 
     stream = cli_runtime.run_cli_stream("fake", "s", "u")
@@ -314,6 +316,43 @@ def test_run_cli_stream_close_kills_child(monkeypatch):
     stream.close()
 
     proc.kill.assert_called_once_with()
+    proc.wait.assert_called()
+    proc.stdin.close.assert_called_once_with()
+    proc.stdout.close.assert_called_once_with()
+
+
+def test_run_cli_stream_close_reaps_real_child_and_reader_thread(monkeypatch):
+    monkeypatch.setitem(cli_runtime._CLI_DEFS, "fake", {
+        "bins": [sys.executable],
+        "delivery": "stdin",
+        "build_args": lambda _: [
+            "-c",
+            "import time\nprint('piece', flush=True)\ntime.sleep(30)",
+        ],
+        "env": {},
+    })
+    real_popen = cli_runtime.subprocess.Popen
+    captured = {}
+
+    def capture_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        captured["proc"] = proc
+        return proc
+
+    monkeypatch.setattr(cli_runtime.subprocess, "Popen", capture_popen)
+
+    stream = cli_runtime.run_cli_stream("fake", "s", "u")
+    assert next(stream).strip() == "piece"
+    stream.close()
+
+    proc = captured["proc"]
+    assert proc.poll() is not None
+    assert proc.stdin.closed
+    assert proc.stdout.closed
+    assert not any(
+        thread.name == "vibe-cli-fake-stdout" and thread.is_alive()
+        for thread in cli_runtime.threading.enumerate()
+    )
 
 
 def test_run_cli_stream_stdout_read_error_is_failure(monkeypatch):

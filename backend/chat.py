@@ -385,7 +385,12 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
             elif role == "user" and content:
                 user_parts.append(content)
         user = "\n\n".join(user_parts) or "（无问题）"
-        for chunk in cli_runtime.run_cli_stream(kind, system, user):
+        for chunk in cli_runtime.run_cli_stream(
+            kind,
+            system,
+            user,
+            cancel_event=cfg.get("_cancel_event"),
+        ):
             yield {"type": "delta", "text": chunk}
         yield {"type": "done", "trace": [], "rounds": 1}
         return

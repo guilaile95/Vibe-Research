@@ -7,6 +7,10 @@ import {
   type StreamLlmConfig,
 } from "@/lib/api";
 import type { LlmConfig } from "@/lib/llm";
+import {
+  PortfolioAdviceRequestCoordinator,
+  requirePersistedPortfolioAdvice,
+} from "./portfolioAdviceRequestCoordinator";
 
 export type PortfolioAdviceTaskStatus =
   | "idle"
@@ -33,7 +37,7 @@ export interface PortfolioAdviceTaskState {
   clear: () => void;
 }
 
-let activeRequestId = 0;
+const requestCoordinator = new PortfolioAdviceRequestCoordinator();
 
 function makeStreamLlmConfig(llm: LlmConfig): StreamLlmConfig {
   return {
@@ -67,15 +71,16 @@ export const usePortfolioAdviceTaskStore = create<PortfolioAdviceTaskState>((set
   requestText: "",
 
   restore: async (tradeDate?: string | null) => {
-    const requestId = ++activeRequestId;
     const current = get();
+    const requestToken = requestCoordinator.beginRestore(current.status === "running");
+    if (requestToken === null) return;
     set({ status: "restoring", error: null, restoreError: null });
     try {
       const restored = await api.aiResult<PortfolioAdviceResult>(
         "portfolio_advice",
         tradeDate || null,
       );
-      if (requestId !== activeRequestId) return;
+      if (!requestCoordinator.canApplyRestore(requestToken, get().status === "running")) return;
       if (!restored) {
         set({ status: "empty", result: null, resultMeta: null, completedAt: Date.now() });
         return;
@@ -88,7 +93,7 @@ export const usePortfolioAdviceTaskStore = create<PortfolioAdviceTaskState>((set
         completedAt: Date.now(),
       });
     } catch (error) {
-      if (requestId !== activeRequestId) return;
+      if (!requestCoordinator.canApplyRestore(requestToken, get().status === "running")) return;
       set({
         status: "restore_error",
         result: current.result,
@@ -100,8 +105,8 @@ export const usePortfolioAdviceTaskStore = create<PortfolioAdviceTaskState>((set
   },
 
   start: async (llm: LlmConfig, requestText: string) => {
-    if (get().status === "running") return;
-    const requestId = ++activeRequestId;
+    const requestToken = requestCoordinator.beginGeneration(get().status === "running");
+    if (requestToken === null) return;
     const normalizedRequest = requestText.trim();
     set({
       status: "running",
@@ -116,25 +121,26 @@ export const usePortfolioAdviceTaskStore = create<PortfolioAdviceTaskState>((set
         user_request: normalizedRequest || null,
         llm: makeStreamLlmConfig(llm),
       });
-      let saved: AiGeneratedResult<PortfolioAdviceResult> | null = null;
-      try {
-        saved = await api.aiResult<PortfolioAdviceResult>(
-          "portfolio_advice",
-          generated.trade_date || null,
-        );
-      } catch {
-        // The POST already guarantees persistence; keep its authoritative response.
+      if (!requestCoordinator.canApplyGeneration(requestToken)) return;
+      if (!generated.trade_date) {
+        throw new Error("持仓建议权威结果读取失败");
       }
-      if (requestId !== activeRequestId) return;
+      const saved = requirePersistedPortfolioAdvice(
+        await api.aiResult<PortfolioAdviceResult>(
+          "portfolio_advice",
+          generated.trade_date,
+        ),
+      );
+      if (!requestCoordinator.canApplyGeneration(requestToken)) return;
       set({
         status: "success",
-        result: saved?.payload || generated,
+        result: saved.payload,
         resultMeta: saved,
         error: null,
         completedAt: Date.now(),
       });
     } catch (error) {
-      if (requestId !== activeRequestId) return;
+      if (!requestCoordinator.canApplyGeneration(requestToken)) return;
       set({
         status: "error",
         error: getPortfolioAdviceErrorMessage(error),
@@ -144,12 +150,12 @@ export const usePortfolioAdviceTaskStore = create<PortfolioAdviceTaskState>((set
   },
 
   invalidate: () => {
-    ++activeRequestId;
+    requestCoordinator.invalidate();
     set({ status: "idle", error: null, restoreError: null });
   },
 
   clear: () => {
-    ++activeRequestId;
+    requestCoordinator.invalidate();
     set({
       status: "idle",
       result: null,

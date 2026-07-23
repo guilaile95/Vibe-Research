@@ -1,7 +1,11 @@
 """POST /api/daily-review/analyze 离线 API 测试（Mock 编排与模型流，不联网）。"""
 from __future__ import annotations
 
+import asyncio
 import json
+import sys
+import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,6 +13,7 @@ from fastapi.testclient import TestClient
 
 import app as app_module
 import chat as chat_layer
+import cli_runtime
 
 client = TestClient(app_module.app)
 
@@ -369,11 +374,13 @@ def test_analyze_persists_full_markdown_before_business_done(monkeypatch):
         yield {"type": "delta", "text": "复盘"}
         yield {"type": "done", "trace": [], "rounds": 1}
 
-    def save(review, markdown, cfg):
+    def save(review, markdown, cfg, *, should_cancel=None):
         order.append("save")
         assert review is _REVIEW
         assert markdown == "# 完整复盘"
         assert cfg["apiKey"] == "sk-test"
+        assert should_cancel is not None
+        assert should_cancel() is False
         return {"trade_date": review["trade_date"]}
 
     monkeypatch.setattr(chat_layer, "stream_messages", stream)
@@ -435,3 +442,236 @@ def test_analyze_save_failure_keeps_partial_delta_but_no_done(monkeypatch):
     assert [event["type"] for event in events] == ["delta", "error"]
     assert "SQL" not in response.text
     assert "private" not in response.text
+
+
+def test_analyze_real_asgi_disconnect_never_saves_or_sends_done(monkeypatch):
+    """ASGI disconnect must cancel the async wrapper before its save boundary.
+
+    The upstream generator deliberately reaches ``done`` only after the server
+    has consumed ``http.disconnect``.  A synchronous StreamingResponse body can
+    still finish that in-flight worker-thread ``next()`` and save the result.
+    """
+    monkeypatch.setattr(
+        chat_layer, "prepare_daily_review_analysis", MagicMock(return_value=_prepared())
+    )
+    disconnect_delivered = threading.Event()
+
+    def stream(*_a, **_k):
+        yield {"type": "delta", "text": "partial"}
+        assert disconnect_delivered.wait(timeout=2)
+        yield {"type": "done", "trace": [], "rounds": 1}
+
+    monkeypatch.setattr(chat_layer, "stream_messages", stream)
+    save = MagicMock(return_value={"trade_date": "2026-07-23"})
+    monkeypatch.setattr(app_module.ai_result_service, "save_daily_review_ai", save)
+
+    sent: list[dict] = []
+
+    async def exercise_disconnect() -> None:
+        first_body_sent = asyncio.Event()
+        request_body_sent = False
+        body = json.dumps({"llm": _LLM}).encode("utf-8")
+
+        async def receive():
+            nonlocal request_body_sent
+            if not request_body_sent:
+                request_body_sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await first_body_sent.wait()
+            disconnect_delivered.set()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            sent.append(message)
+            if message["type"] == "http.response.body" and message.get("body"):
+                first_body_sent.set()
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/daily-review/analyze",
+            "raw_path": b"/api/daily-review/analyze",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "state": {},
+        }
+        await app_module.app(scope, receive, send)
+
+    asyncio.run(exercise_disconnect())
+
+    save.assert_not_called()
+    response_chunks = b"".join(
+        message.get("body", b"")
+        for message in sent
+        if message["type"] == "http.response.body"
+    )
+    assert b'"type": "done"' not in response_chunks
+
+
+def test_analyze_disconnect_during_save_cancels_transaction(monkeypatch):
+    monkeypatch.setattr(
+        chat_layer, "prepare_daily_review_analysis", MagicMock(return_value=_prepared())
+    )
+    monkeypatch.setattr(
+        chat_layer,
+        "stream_messages",
+        _stream_events(
+            {"type": "delta", "text": "complete"},
+            {"type": "done", "trace": [], "rounds": 1},
+        ),
+    )
+    save_started = threading.Event()
+    disconnect_delivered = threading.Event()
+    persisted = threading.Event()
+
+    def save(_review, _markdown, _cfg, *, should_cancel=None):
+        save_started.set()
+        assert disconnect_delivered.wait(timeout=2)
+        if should_cancel is not None and should_cancel():
+            raise RuntimeError("cancelled before commit")
+        persisted.set()
+        return {"trade_date": "2026-07-23"}
+
+    monkeypatch.setattr(app_module.ai_result_service, "save_daily_review_ai", save)
+    sent: list[dict] = []
+
+    async def exercise_disconnect() -> None:
+        request_body_sent = False
+        body = json.dumps({"llm": _LLM}).encode("utf-8")
+
+        async def receive():
+            nonlocal request_body_sent
+            if not request_body_sent:
+                request_body_sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            started = await asyncio.to_thread(save_started.wait, 2)
+            assert started
+            disconnect_delivered.set()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            sent.append(message)
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/daily-review/analyze",
+            "raw_path": b"/api/daily-review/analyze",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "state": {},
+        }
+        await app_module.app(scope, receive, send)
+
+    asyncio.run(exercise_disconnect())
+
+    assert save_started.is_set()
+    assert disconnect_delivered.is_set()
+    assert not persisted.is_set()
+    response_chunks = b"".join(
+        message.get("body", b"")
+        for message in sent
+        if message["type"] == "http.response.body"
+    )
+    assert b'"type": "done"' not in response_chunks
+
+
+def test_analyze_cli_disconnect_without_more_output_reaps_immediately(monkeypatch):
+    monkeypatch.setattr(
+        chat_layer, "prepare_daily_review_analysis", MagicMock(return_value=_prepared())
+    )
+    monkeypatch.setattr(cli_runtime, "_CLI_TIMEOUT_S", 3)
+    monkeypatch.setitem(cli_runtime._CLI_DEFS, "fake", {
+        "bins": [sys.executable],
+        "delivery": "stdin",
+        "build_args": lambda _: [
+            "-c",
+            "import time\nprint('piece', flush=True)\ntime.sleep(30)",
+        ],
+        "env": {},
+    })
+    real_popen = cli_runtime.subprocess.Popen
+    captured = {}
+
+    def capture_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        captured["proc"] = proc
+        return proc
+
+    monkeypatch.setattr(cli_runtime.subprocess, "Popen", capture_popen)
+    body = json.dumps({
+        "llm": {
+            "provider": "cli-fake",
+            "model": "local-test",
+            "baseURL": "",
+            "apiKey": "",
+        }
+    }).encode("utf-8")
+
+    async def exercise_disconnect() -> None:
+        request_body_sent = False
+        first_body_sent = asyncio.Event()
+
+        async def receive():
+            nonlocal request_body_sent
+            if not request_body_sent:
+                request_body_sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await first_body_sent.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.body" and message.get("body"):
+                first_body_sent.set()
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/daily-review/analyze",
+            "raw_path": b"/api/daily-review/analyze",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "state": {},
+        }
+        await app_module.app(scope, receive, send)
+
+    started_at = time.monotonic()
+    asyncio.run(exercise_disconnect())
+    elapsed = time.monotonic() - started_at
+
+    proc = captured["proc"]
+    assert elapsed < 1.5
+    assert proc.poll() is not None
+    assert proc.stdin.closed
+    assert proc.stdout.closed
+    assert not any(
+        thread.name == "vibe-cli-fake-stdout" and thread.is_alive()
+        for thread in cli_runtime.threading.enumerate()
+    )

@@ -10,7 +10,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 class AiResultPayloadCorruptedError(RuntimeError):
@@ -18,6 +18,13 @@ class AiResultPayloadCorruptedError(RuntimeError):
 
     def __init__(self):
         super().__init__("已保存的 AI 结果数据损坏，无法读取")
+
+
+class AiResultWriteCancelledError(RuntimeError):
+    """The caller disconnected before the write transaction committed."""
+
+    def __init__(self):
+        super().__init__("AI 结果保存已取消")
 
 
 _CREATE_TABLE_SQL = """
@@ -69,6 +76,14 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:
+    uri = f"{Path(db_path).resolve().as_uri()}?mode=ro"
+    conn = sqlite3.connect(uri, timeout=30.0, uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
+    return conn
+
+
 def serialize_payload(payload: Any) -> str:
     return json.dumps(
         payload,
@@ -109,7 +124,12 @@ def _decode_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
     }
 
 
-def upsert_result(db_path: str | Path, record: Mapping[str, Any]) -> dict[str, Any]:
+def upsert_result(
+    db_path: str | Path,
+    record: Mapping[str, Any],
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     """Atomically insert or replace the latest result for a type/trade date."""
     payload_json = serialize_payload(record["payload"])
     initialize_store(db_path)
@@ -128,13 +148,19 @@ def upsert_result(db_path: str | Path, record: Mapping[str, Any]) -> dict[str, A
     )
     conn = _connect(db_path)
     try:
+        if should_cancel is not None and should_cancel():
+            raise AiResultWriteCancelledError()
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(_UPSERT_SQL, values)
+        if should_cancel is not None and should_cancel():
+            raise AiResultWriteCancelledError()
         row = conn.execute(
             f"SELECT {_SELECT_COLUMNS} FROM ai_generated_results "
             "WHERE result_type = ? AND trade_date = ?",
             (record["result_type"], record["trade_date"]),
         ).fetchone()
+        if should_cancel is not None and should_cancel():
+            raise AiResultWriteCancelledError()
         conn.commit()
     except BaseException:
         conn.rollback()
@@ -152,8 +178,16 @@ def get_result(
     result_type: str,
     trade_date: str,
 ) -> dict[str, Any] | None:
-    initialize_store(db_path)
-    with _connect(db_path) as conn:
+    path = Path(db_path)
+    if not path.is_file():
+        return None
+    with _connect_readonly(path) as conn:
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("ai_generated_results",),
+        ).fetchone()
+        if table is None:
+            return None
         row = conn.execute(
             f"SELECT {_SELECT_COLUMNS} FROM ai_generated_results "
             "WHERE result_type = ? AND trade_date = ?",
@@ -165,8 +199,16 @@ def get_latest_result(
     db_path: str | Path,
     result_type: str,
 ) -> dict[str, Any] | None:
-    initialize_store(db_path)
-    with _connect(db_path) as conn:
+    path = Path(db_path)
+    if not path.is_file():
+        return None
+    with _connect_readonly(path) as conn:
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("ai_generated_results",),
+        ).fetchone()
+        if table is None:
+            return None
         row = conn.execute(
             f"SELECT {_SELECT_COLUMNS} FROM ai_generated_results "
             "WHERE result_type = ? ORDER BY trade_date DESC, updated_at DESC LIMIT 1",

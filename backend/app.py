@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+
+import anyio
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, model_validator
+from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 import account_profile
 import ai_result_service
@@ -32,6 +36,38 @@ import market
 import myreports as mr
 import review_compare
 import review_history
+
+
+class _DisconnectAwareStreamingResponse(StreamingResponse):
+    """Always observe ASGI disconnects and expose them to blocking workers."""
+
+    def __init__(self, *args, disconnect_event: threading.Event, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.disconnect_event = disconnect_event
+
+    async def __call__(self, scope, receive, send) -> None:
+        async with anyio.create_task_group() as task_group:
+            async def stream() -> None:
+                try:
+                    await self.stream_response(send)
+                except OSError:
+                    self.disconnect_event.set()
+                finally:
+                    task_group.cancel_scope.cancel()
+
+            async def watch_disconnect() -> None:
+                while True:
+                    message = await receive()
+                    if message["type"] == "http.disconnect":
+                        self.disconnect_event.set()
+                        task_group.cancel_scope.cancel()
+                        return
+
+            task_group.start_soon(stream)
+            task_group.start_soon(watch_disconnect)
+
+        if self.background is not None:
+            await self.background()
 
 app = FastAPI(title="Vibe-Research API", version="0.1.3")
 
@@ -556,7 +592,7 @@ class DailyReviewAnalyzeRequest(BaseModel):
 
 
 @app.post("/api/daily-review/analyze")
-def analyze_daily_review(req: DailyReviewAnalyzeRequest):
+async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request):
     """每日复盘 AI 流式分析（NDJSON，协议与 /api/chat 相同）。
 
     服务器链路：generate_daily_review → render AI context → build messages → stream_messages。
@@ -575,21 +611,29 @@ def analyze_daily_review(req: DailyReviewAnalyzeRequest):
         raise HTTPException(400, "缺少 Base URL 或 API Key，请先在「接入 AI」里填写")
 
     try:
-        prepared = chat_layer.prepare_daily_review_analysis(req.user_request)
+        prepared = await run_in_threadpool(
+            chat_layer.prepare_daily_review_analysis,
+            req.user_request,
+        )
         review = prepared["review"]
         messages = prepared["messages"]
     except Exception:  # noqa: BLE001 — no prompt, path, or source error leakage
         raise HTTPException(502, "每日复盘AI上下文准备失败") from None
 
     cfg = req.llm.model_dump()
+    disconnect_event = threading.Event()
+    cfg["_cancel_event"] = disconnect_event
 
-    def gen():
+    async def gen():
+        source = iter(chat_layer.stream_messages(cfg, messages, use_tools=False))
         try:
             parts: list[str] = []
             saw_done = False
             trace: list[dict] = []
             rounds = 0
-            for ev in chat_layer.stream_messages(cfg, messages, use_tools=False):
+            async for ev in iterate_in_threadpool(source):
+                if disconnect_event.is_set():
+                    return
                 if not isinstance(ev, dict):
                     continue
                 event_type = ev.get("type")
@@ -616,18 +660,41 @@ def analyze_daily_review(req: DailyReviewAnalyzeRequest):
             markdown = "".join(parts)
             if not markdown.strip():
                 raise ValueError("empty model output")
-            ai_result_service.save_daily_review_ai(review, markdown, cfg)
+            if disconnect_event.is_set():
+                return
+            await run_in_threadpool(
+                ai_result_service.save_daily_review_ai,
+                review,
+                markdown,
+                cfg,
+                should_cancel=disconnect_event.is_set,
+            )
+            if disconnect_event.is_set():
+                return
             yield json.dumps(
                 {"type": "done", "trace": trace, "rounds": rounds},
                 ensure_ascii=False,
             ) + "\n"
         except Exception:  # noqa: BLE001 — fixed safe stream error; old persisted row remains
+            if disconnect_event.is_set():
+                return
             yield json.dumps(
                 {"type": "error", "message": "对话失败：每日复盘AI生成或保存失败"},
                 ensure_ascii=False,
             ) + "\n"
+        finally:
+            close = getattr(source, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
 
-    return StreamingResponse(gen(), media_type="application/x-ndjson")
+    return _DisconnectAwareStreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        disconnect_event=disconnect_event,
+    )
 
 
 @app.get("/api/ai-results/{result_type}")

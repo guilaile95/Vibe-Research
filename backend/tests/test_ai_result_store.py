@@ -80,6 +80,32 @@ def test_exact_and_latest_reads_are_independent_by_type_and_date(tmp_path):
     assert store.get_latest_result(db, "portfolio_advice")["result_type"] == "portfolio_advice"
 
 
+def test_reads_of_missing_database_are_pure_and_create_nothing(tmp_path):
+    db = tmp_path / "not-created" / "daily_reviews.sqlite3"
+
+    assert store.get_result(db, "daily_review_ai", "2026-07-23") is None
+    assert store.get_latest_result(db, "daily_review_ai") is None
+
+    assert not db.exists()
+    assert not db.parent.exists()
+
+
+def test_reads_of_database_without_ai_table_are_pure(tmp_path):
+    db = tmp_path / "daily_reviews.sqlite3"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)")
+
+    assert store.get_result(db, "daily_review_ai", "2026-07-23") is None
+    assert store.get_latest_result(db, "daily_review_ai") is None
+
+    with sqlite3.connect(db) as conn:
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    assert tables == {"unrelated"}
+
+
 def test_bad_payload_raises_dedicated_corruption_error_without_path_or_sql(tmp_path):
     db = tmp_path / "private" / "daily_reviews.sqlite3"
     store.upsert_result(db, _record())
@@ -104,6 +130,28 @@ def test_serialization_failure_does_not_overwrite_existing_row(tmp_path):
 
     with pytest.raises((TypeError, ValueError)):
         store.upsert_result(db, _record(payload={"bad": {1, 2, 3}}))
+
+    assert store.get_result(db, "daily_review_ai", "2026-07-23")["payload"] == {
+        "markdown": "old"
+    }
+
+
+def test_cancel_before_commit_rolls_back_and_preserves_existing_row(tmp_path):
+    db = tmp_path / "daily_reviews.sqlite3"
+    store.upsert_result(db, _record(payload={"markdown": "old"}))
+    checks = 0
+
+    def should_cancel():
+        nonlocal checks
+        checks += 1
+        return checks >= 2
+
+    with pytest.raises(store.AiResultWriteCancelledError):
+        store.upsert_result(
+            db,
+            _record(payload={"markdown": "must-not-commit"}),
+            should_cancel=should_cancel,
+        )
 
     assert store.get_result(db, "daily_review_ai", "2026-07-23")["payload"] == {
         "markdown": "old"
