@@ -122,15 +122,17 @@ def test_scope_invalid_400():
 
 
 def test_scope_industry_company_all_and_dedup(monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    recent = (datetime.now(timezone.utc).date() - timedelta(days=10)).isoformat()
     industry_raw = [
-        {"title": "PCB 行业", "infoCode": "A", "industryName": "电子", "publishDate": "2025-06-01"},
-        {"title": "覆铜板材料研究", "infoCode": "B", "industryName": "电子", "publishDate": "2025-05-01"},
-        {"title": "无关钢铁", "infoCode": "Z", "industryName": "钢铁", "publishDate": "2025-05-01"},
+        {"title": "PCB 行业", "infoCode": "A", "industryName": "电子", "publishDate": recent},
+        {"title": "覆铜板材料研究", "infoCode": "B", "industryName": "电子", "publishDate": recent},
+        {"title": "无关钢铁", "infoCode": "Z", "industryName": "钢铁", "publishDate": recent},
     ]
     company_raw = {
         "002463": [
-            {"title": "沪电深度", "infoCode": "A", "stockCode": "002463", "publishDate": "2025-07-01"},
-            {"title": "沪电跟踪", "infoCode": "C", "stockCode": "002463", "publishDate": "2025-04-01"},
+            {"title": "沪电深度", "infoCode": "A", "stockCode": "002463", "publishDate": recent},
+            {"title": "沪电跟踪", "infoCode": "C", "stockCode": "002463", "publishDate": recent},
         ],
         "002916": [],
         "300476": [],
@@ -147,35 +149,37 @@ def test_scope_industry_company_all_and_dedup(monkeypatch):
     monkeypatch.setattr(srd.astock, "eastmoney_industry_reports", fake_industry)
     monkeypatch.setattr(srd.astock, "eastmoney_reports", fake_company)
 
-    ind = srd.discover_sector_reports("pcb", scope="industry", max_pages=1)
+    ind = srd.discover_sector_reports("pcb", scope="industry", days=90, max_pages=1)
     assert ind.error is None
     # 行业 scope 关键词过滤：A/B 命中 PCB/覆铜板，Z 被滤掉
     assert {x["external_id"] for x in ind.discovered} == {"A", "B"}
 
-    co = srd.discover_sector_reports("pcb", scope="company", max_pages=1)
+    co = srd.discover_sector_reports("pcb", scope="company", days=90, max_pages=1)
     assert {x["external_id"] for x in co.discovered} == {"A", "C"}
 
-    all_r = srd.discover_sector_reports("pcb", scope="all", max_pages=1)
+    all_r = srd.discover_sector_reports("pcb", scope="all", days=90, max_pages=1)
     ids = [x["external_id"] for x in all_r.discovered]
     assert set(ids) == {"A", "B", "C"}
     assert len(ids) == 3  # external_id 去重
 
 
 def test_sort_stable_score_date_id(monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    d1 = (datetime.now(timezone.utc).date() - timedelta(days=5)).isoformat()
+    d0 = (datetime.now(timezone.utc).date() - timedelta(days=20)).isoformat()
     raw = [
-        {"title": "低相关", "infoCode": "Z", "industryName": "电子", "publishDate": "2025-12-01"},
-        {"title": "PCB 高速覆铜板", "infoCode": "M", "industryName": "电子", "publishDate": "2025-01-01"},
-        {"title": "PCB 高速覆铜板", "infoCode": "A", "industryName": "电子", "publishDate": "2025-01-01"},
+        {"title": "PCB 低相关", "infoCode": "Z", "industryName": "电子", "publishDate": d1},
+        {"title": "PCB 高速覆铜板", "infoCode": "M", "industryName": "电子", "publishDate": d0},
+        {"title": "PCB 高速覆铜板", "infoCode": "A", "industryName": "电子", "publishDate": d0},
     ]
     monkeypatch.setattr(
         srd.astock, "eastmoney_industry_reports",
         lambda **kw: list(raw),
     )
-    res = srd.discover_sector_reports("pcb", scope="industry", max_pages=1)
+    res = srd.discover_sector_reports("pcb", scope="industry", days=90, max_pages=1)
     ids = [x["external_id"] for x in res.discovered]
-    # 高相关在前；同日期同分数时 external_id 升序（A before M）
-    assert ids[0] in ("A", "M")
-    assert res.discovered[0]["relevance_score"] >= res.discovered[-1]["relevance_score"]
+    assert ids[:2] == ["A", "M"]
+    assert ids[-1] == "Z"
 
 
 # ── PDF URL / SSRF ───────────────────────────────────────────────
@@ -650,6 +654,10 @@ def test_get_sector_dynamic_data_keys_and_partial_status(monkeypatch):
     assert ok["status"] == "normal"
     assert isinstance(ok["warnings"], list)
     assert ok["fetched_at"]
+    for company in ok["companies"]:
+        for panel in company["panels"].values():
+            assert set(panel) == {"status", "summary", "error"}
+            assert "data" not in panel
 
     # 部分失败 → partial
     def boom_info(code):
@@ -781,3 +789,122 @@ def test_import_does_not_accept_client_title_or_url(tmp_path, monkeypatch):
         },
     )
     assert r.status_code == 422
+
+
+# ── 发现截断 / days 过滤 / profit_forecast list / panel data=null ──
+
+
+def test_company_scope_applies_days_filter(monkeypatch):
+    """company scope 按 publish_date + days 过滤；缺失日期保留并 date_unknown。"""
+    from datetime import datetime, timezone, timedelta
+    today = datetime.now(timezone.utc).date()
+    old = (today - timedelta(days=400)).isoformat()
+    recent = (today - timedelta(days=10)).isoformat()
+
+    def fake_company(code, max_pages=3):
+        return [
+            {"title": "旧报", "infoCode": "OLD", "stockCode": code, "publishDate": old},
+            {"title": "新报 PCB", "infoCode": "NEW", "stockCode": code, "publishDate": recent},
+            {"title": "无日期 PCB", "infoCode": "NODATE", "stockCode": code},
+        ]
+
+    monkeypatch.setattr(srd.astock, "eastmoney_reports", fake_company)
+    res = srd.discover_sector_reports("pcb", scope="company", days=90, max_pages=1)
+    ids = {x["external_id"] for x in res.discovered}
+    assert "OLD" not in ids
+    assert "NEW" in ids
+    assert "NODATE" in ids
+    nodate = next(x for x in res.discovered if x["external_id"] == "NODATE")
+    assert nodate.get("date_unknown") is True
+
+
+def test_all_scope_company_part_applies_days(monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    today = datetime.now(timezone.utc).date()
+    old = (today - timedelta(days=500)).isoformat()
+    recent = (today - timedelta(days=5)).isoformat()
+
+    monkeypatch.setattr(
+        srd.astock, "eastmoney_industry_reports",
+        lambda **kw: [{"title": "PCB 行业", "infoCode": "I1", "industryName": "电子", "publishDate": recent}],
+    )
+    monkeypatch.setattr(
+        srd.astock, "eastmoney_reports",
+        lambda code, max_pages=3: [
+            {"title": "公司旧", "infoCode": "C_OLD", "stockCode": code, "publishDate": old},
+            {"title": "公司新 PCB", "infoCode": "C_NEW", "stockCode": code, "publishDate": recent},
+        ],
+    )
+    res = srd.discover_sector_reports("pcb", scope="all", days=30, max_pages=1)
+    ids = {x["external_id"] for x in res.discovered}
+    assert "C_OLD" not in ids
+    assert "C_NEW" in ids
+    assert "I1" in ids
+
+
+def test_discovery_truncates_to_max_and_caches_all_returned(tmp_path, monkeypatch):
+    """557 条场景：返回 <= MAX，返回的每条均可缓存导入。"""
+    from datetime import datetime, timezone, timedelta
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
+    app_module._clear_discovery_cache()
+    recent = (datetime.now(timezone.utc).date() - timedelta(days=3)).isoformat()
+    n = 557
+    rows = [
+        {
+            "title": f"PCB 报告 {i}",
+            "infoCode": f"ID{i:04d}",
+            "industryName": "电子",
+            "publishDate": recent,
+            "orgName": "中信",
+        }
+        for i in range(n)
+    ]
+    monkeypatch.setattr(srd.astock, "eastmoney_industry_reports", lambda **kw: list(rows))
+    monkeypatch.setattr(app_module, "_download_pdf", lambda url: _PDF_BYTES)
+
+    r = client.get("/api/sector-research/reports/pcb", params={"days": 365, "scope": "industry"})
+    assert r.status_code == 200
+    body = r.json()["data"]
+    assert body["total_discovered"] == n
+    assert body["returned"] == srd.MAX_DISCOVERY_RESULTS
+    assert body["truncated"] is True
+    assert len(body["discovered"]) == body["returned"]
+    # 每条返回记录应在缓存中
+    for row in body["discovered"]:
+        ext = row["external_id"]
+        assert app_module._get_cached_discovery("pcb", ext) is not None
+    # 被截断的不应在响应中
+    returned_ids = {x["external_id"] for x in body["discovered"]}
+    assert len(returned_ids) == body["returned"]
+    assert f"ID{srd.MAX_DISCOVERY_RESULTS:04d}" not in returned_ids
+    # 导入第一条成功
+    first = body["discovered"][0]["external_id"]
+    imp = client.post("/api/sector-research/import/pcb", json={"external_id": first})
+    assert imp.status_code == 200
+
+
+def test_summarize_profit_forecast_list_shapes():
+    assert srd._summarize_profit_forecast([])["note"]
+    one = srd._summarize_profit_forecast([
+        {"年度": "2026", "均值": "1.23", "预测机构数": "12"},
+    ])
+    assert one.get("year") == "2026"
+    assert one.get("eps") == "1.23" or one.get("forecast") == "1.23"
+    assert one.get("coverage") == "12"
+    assert one.get("record_count") == 1
+    multi = srd._summarize_profit_forecast([
+        {"年度": "2025", "均值": "0.9", "预测机构数": "8"},
+        {"年度": "2027", "均值": "1.5", "预测机构数": "15"},
+    ])
+    assert multi.get("year") == "2027"
+    # 不得把 len 当机构数
+    assert multi.get("coverage") == "15"
+    missing = srd._summarize_profit_forecast([{"foo": "bar"}])
+    assert "note" in missing or missing.get("record_count") == 1
+
+
+def test_panel_ok_has_no_data_or_raw_payload():
+    panel = srd._panel_ok({"name": "x"})
+    assert "data" not in panel
+    assert panel["summary"]["name"] == "x"
+    assert "股票简称" not in panel

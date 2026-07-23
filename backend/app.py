@@ -12,8 +12,10 @@ from __future__ import annotations
 import json
 import os
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import count
 
 import anyio
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -1253,8 +1255,9 @@ _PDF_DOWNLOAD_MAX_REDIRECTS = 5
 _PDF_HOST_ALLOW = frozenset({"pdf.dfcfw.com", "pdfcdn.eastmoney.com"})
 
 # 服务端发现缓存：键 (sector_key, external_id) → 规范化元数据（无 PDF 正文）
+# 容量必须 ≥ MAX_DISCOVERY_RESULTS，保证「前端可见的每一条」在 TTL 内可导入。
 _DISCOVERY_CACHE_TTL_SECONDS = 20 * 60  # 20 分钟
-_DISCOVERY_CACHE_MAX_ENTRIES = 500
+_DISCOVERY_CACHE_MAX_ENTRIES = max(500, int(getattr(srd, "MAX_DISCOVERY_RESULTS", 300)))
 
 
 @dataclass
@@ -1268,14 +1271,20 @@ class CachedDiscovery:
     report_scope: str
     source_provider: str
     discovered_at: datetime
+    seq: int  # 单调序号，避免同秒 FIFO 不明确
 
 
-_DISCOVERY_CACHE: dict[tuple[str, str], CachedDiscovery] = {}
+# OrderedDict 保插入序；seq 用于明确淘汰顺序
+_DISCOVERY_CACHE: OrderedDict[tuple[str, str], CachedDiscovery] = OrderedDict()
 _DISCOVERY_CACHE_LOCK = threading.Lock()
+_DISCOVERY_SEQ = count(1)
 
 
 def _cache_discoveries(sector_key: str, reports: list[dict]) -> None:
-    """把发现结果写入有界短期缓存（不持久化、不含 PDF 正文）。"""
+    """把「实际返回前端」的发现结果写入有界短期缓存。
+
+    只缓存与 API 返回完全相同的列表；不缓存被截断的无关记录。
+    """
     now = datetime.now(timezone.utc)
     with _DISCOVERY_CACHE_LOCK:
         for r in reports:
@@ -1283,6 +1292,9 @@ def _cache_discoveries(sector_key: str, reports: list[dict]) -> None:
             if not ext_id or not isinstance(ext_id, str):
                 continue
             key = (sector_key, ext_id)
+            # 更新时移到队尾（最近写入）
+            if key in _DISCOVERY_CACHE:
+                del _DISCOVERY_CACHE[key]
             _DISCOVERY_CACHE[key] = CachedDiscovery(
                 sector_key=sector_key,
                 external_id=ext_id,
@@ -1295,25 +1307,24 @@ def _cache_discoveries(sector_key: str, reports: list[dict]) -> None:
                 if isinstance(r.get("source_provider"), (str, type(None)))
                 else "eastmoney",
                 discovered_at=now,
+                seq=next(_DISCOVERY_SEQ),
             )
-        # 容量上限：按 discovered_at 升序剔除最旧
-        overflow = len(_DISCOVERY_CACHE) - _DISCOVERY_CACHE_MAX_ENTRIES
-        if overflow > 0:
-            oldest = sorted(_DISCOVERY_CACHE.items(), key=lambda x: x[1].discovered_at)
-            for k, _ in oldest[:overflow]:
-                del _DISCOVERY_CACHE[k]
+        # 容量上限：按 seq 升序剔除最旧（OrderedDict 队头）
+        while len(_DISCOVERY_CACHE) > _DISCOVERY_CACHE_MAX_ENTRIES:
+            _DISCOVERY_CACHE.popitem(last=False)
 
 
 def _get_cached_discovery(sector_key: str, external_id: str) -> CachedDiscovery | None:
-    """读取缓存；过期则删除并返回 None。"""
+    """读取缓存；过期则删除并返回 None。淘汰顺序保持明确 FIFO。"""
     now = datetime.now(timezone.utc)
     with _DISCOVERY_CACHE_LOCK:
-        cached = _DISCOVERY_CACHE.get((sector_key, external_id))
+        key = (sector_key, external_id)
+        cached = _DISCOVERY_CACHE.get(key)
         if cached is None:
             return None
         age = (now - cached.discovered_at).total_seconds()
         if age > _DISCOVERY_CACHE_TTL_SECONDS:
-            del _DISCOVERY_CACHE[(sector_key, external_id)]
+            del _DISCOVERY_CACHE[key]
             return None
         return cached
 
@@ -1334,12 +1345,27 @@ def sector_research_reports(
     """发现板块研报（只返回发现结果，不自动归档）。scope=industry|company|all。"""
     if scope not in _ALLOWED_REPORT_SCOPES:
         raise HTTPException(400, f"scope 无效，支持：{' / '.join(sorted(_ALLOWED_REPORT_SCOPES))}")
-    result = srd.discover_sector_reports(sector_key, days=days, max_pages=max_pages, scope=scope)
-    # 写入发现缓存，供后续 import 按 external_id 精确绑定（含自定义 days）
+    result = srd.discover_sector_reports(
+        sector_key,
+        days=days,
+        max_pages=max_pages,
+        scope=scope,
+        max_results=srd.MAX_DISCOVERY_RESULTS,
+    )
+    # 缓存与返回使用完全相同的列表
     if not result.error:
         _cache_discoveries(sector_key, result.discovered)
-    return {"data": {"sector_key": result.source_key, "discovered": result.discovered,
-                   "filtered": result.filtered, "error": result.error}}
+    return {
+        "data": {
+            "sector_key": result.source_key,
+            "discovered": result.discovered,
+            "filtered": result.filtered,
+            "error": result.error,
+            "total_discovered": result.total_discovered,
+            "returned": result.returned,
+            "truncated": result.truncated,
+        }
+    }
 
 
 @app.get("/api/sector-research/data/{sector_key}")

@@ -11,8 +11,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
 
 import astock
+
+# 单次发现返回上限：必须 ≤ 服务端缓存容量，保证「可见即可导入」。
+MAX_DISCOVERY_RESULTS = 300
 
 # ---------------------------------------------------------------------------
 # PCB 代表公司（代码经校验，禁止混用）
@@ -172,6 +176,41 @@ class DiscoveryResult:
     discovered: list[dict] = field(default_factory=list)
     filtered: list[dict] = field(default_factory=list)
     error: str | None = None
+    total_discovered: int = 0
+    returned: int = 0
+    truncated: bool = False
+
+
+def _parse_publish_date(value: str | None) -> date | None:
+    """解析 YYYY-MM-DD / YYYY-MM / YYYY；非法或空 → None（不伪造）。"""
+    if not value or not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    # 截取日期前缀（东财可能带时间）
+    s = s[:10]
+    for fmt, n in (("%Y-%m-%d", 10), ("%Y-%m", 7), ("%Y", 4)):
+        try:
+            part = s[:n]
+            return datetime.strptime(part, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _within_lookback(publish_date: str | None, lookback_days: int, *, today: date | None = None) -> tuple[bool, bool]:
+    """返回 (keep, date_unknown)。
+
+    合法日期：在 [today-lookback, today] 内保留；更早丢弃。
+    缺失/非法：保留，date_unknown=True（不伪装为今天）。
+    """
+    today = today or datetime.now(timezone.utc).date()
+    d = _parse_publish_date(publish_date)
+    if d is None:
+        return True, True
+    earliest = today - timedelta(days=int(lookback_days))
+    return (earliest <= d <= today), False
 
 
 def _fetch_industry_raw(lookback: int, max_pages: int, keywords: list[str]) -> list[dict]:
@@ -200,9 +239,10 @@ def _fetch_company_raw(company_codes: list[str], max_pages: int) -> list[dict]:
 
 
 def _sort_discovered(rows: list[dict]) -> None:
-    """relevance_score desc, publish_date desc, external_id asc（稳定排序）。"""
+    """relevance_score desc；已知日期 publish_date desc；未知日期排后；external_id 兜底。"""
     rows.sort(key=lambda n: n.get("external_id") or "")
     rows.sort(key=lambda n: n.get("publish_date") or "", reverse=True)
+    rows.sort(key=lambda n: 1 if n.get("date_unknown") else 0)  # 未知日期靠后
     rows.sort(key=lambda n: n.get("relevance_score") or 0, reverse=True)
 
 
@@ -212,14 +252,13 @@ def discover_sector_reports(
     days: int | None = None,
     max_pages: int = 3,
     scope: str = "industry",
+    max_results: int = MAX_DISCOVERY_RESULTS,
 ) -> DiscoveryResult:
     """发现板块研报（只返回发现结果，不自动归档）。
 
     scope: "industry" | "company" | "all"（由调用方校验非法值并返回 400）。
-    - industry: 仅行业研报 + 关键词过滤
-    - company: 顺序拉代表公司研报，external_id 去重
-    - all: 合并 industry + company，按 external_id 去重
-    排序：relevance_score desc, publish_date desc, external_id 作 tiebreaker。
+    industry / company / all 均按 days 回溯过滤 publish_date。
+    排序后截断至 max_results，保证返回列表可全部写入导入缓存。
     """
     src = get_sector_source(sector_key)
     if src is None:
@@ -248,17 +287,40 @@ def discover_sector_reports(
             # 默认 industry（调用方应对非法 scope 返回 400）
             raw_rows = _fetch_industry_raw(lookback, max_pages, keywords)
 
-        result.discovered = [normalize_report(r) for r in raw_rows]
-        for n in result.discovered:
+        normalized: list[dict] = []
+        for r in raw_rows:
+            n = normalize_report(r)
+            keep, date_unknown = _within_lookback(n.get("publish_date"), lookback)
+            if not keep:
+                continue
+            n["date_unknown"] = date_unknown
             n["relevance_score"] = score_report_relevance(n, keywords, company_codes)
-        result.filtered = [
-            n for n in result.discovered
+            normalized.append(n)
+
+        filtered = [
+            n for n in normalized
             if n.get("title") and (
                 n.get("matched_keywords") or n.get("company_code") in company_codes
             )
         ]
-        _sort_discovered(result.discovered)
-        _sort_discovered(result.filtered)
+        _sort_discovered(normalized)
+        _sort_discovered(filtered)
+
+        # 展示与缓存使用同一截断列表（优先 filtered，否则 discovered）
+        primary = filtered if filtered else normalized
+        total = len(primary)
+        limit = max(1, int(max_results)) if max_results else MAX_DISCOVERY_RESULTS
+        truncated = total > limit
+        primary = primary[:limit]
+        # discovered 与 filtered 同步截断后的可见集
+        visible_ids = {n.get("external_id") for n in primary if n.get("external_id")}
+        result.discovered = primary
+        result.filtered = [n for n in filtered if n.get("external_id") in visible_ids][:limit]
+        if not result.filtered:
+            result.filtered = list(primary)
+        result.total_discovered = total
+        result.returned = len(primary)
+        result.truncated = truncated
     except Exception as e:  # noqa: BL001
         result.error = str(e)
     return result
@@ -280,12 +342,13 @@ def _safe_panel_error(exc: BaseException) -> str:
     return msg
 
 
-def _panel_ok(data, summary: dict | None = None) -> dict:
-    return {"status": "ok", "summary": summary or {}, "data": data, "error": None}
+def _panel_ok(summary: dict | None = None) -> dict:
+    """仅返回受控摘要，不附带原始接口响应。"""
+    return {"status": "ok", "summary": summary or {}, "error": None}
 
 
 def _panel_err(exc: BaseException) -> dict:
-    return {"status": "error", "summary": {}, "data": None, "error": _safe_panel_error(exc)}
+    return {"status": "error", "summary": {}, "error": _safe_panel_error(exc)}
 
 
 def _summarize_individual_info(data) -> dict:
@@ -312,25 +375,69 @@ def _summarize_individual_info(data) -> dict:
     return summary
 
 
-def _summarize_profit_forecast(data) -> dict:
-    """从 astock.profit_forecast 返回中提取摘要。"""
-    if not isinstance(data, dict):
+def _summarize_profit_forecast(data: list | dict | None) -> dict:
+    """解析 astock.profit_forecast() 的真实 list[dict]（或偶发 dict）。
+
+    不把列表长度伪装成机构覆盖数；字段缺失不猜测。
+    """
+    if data is None:
+        return {"note": "无一致预期数据"}
+    rows: list[dict]
+    if isinstance(data, list):
+        rows = [r for r in data if isinstance(r, dict)]
+    elif isinstance(data, dict):
+        # 兼容偶发整包 dict
+        inner = data.get("data") or data.get("list") or data.get("records")
+        if isinstance(inner, list):
+            rows = [r for r in inner if isinstance(r, dict)]
+        else:
+            rows = [data]
+    else:
         return {"note": "已取得一致预期数据，暂无法结构化摘要"}
-    summary = {}
-    for k in ("机构数", "coverage", "机构家数"):
-        if data.get(k):
-            summary["coverage"] = str(data[k])[:20]
+
+    if not rows:
+        return {"note": "无一致预期数据"}
+
+    def _year_key(row: dict) -> str:
+        for k in ("年度", "预测年度", "year", "YEAR", "年份", "最新年度"):
+            v = row.get(k)
+            if v is not None and str(v).strip():
+                return str(v).strip()
+        return ""
+
+    # 选「年度」字符串最大者（通常为最新预测年）
+    best = max(rows, key=lambda r: _year_key(r))
+    summary: dict = {"record_count": len(rows)}
+
+    y = _year_key(best)
+    if y:
+        summary["year"] = y[:10]
+
+    # EPS / 均值
+    for k in ("均值", "预测EPS", "EPS", "eps", "预测每股收益", "基本每股收益"):
+        v = best.get(k)
+        if v is not None and str(v).strip() not in ("", "-", "--"):
+            summary["eps"] = str(v).strip()[:50]
+            summary["forecast"] = summary["eps"]
             break
-    for k in ("预测年度", "year", "最新年度"):
-        if data.get(k):
-            summary["year"] = str(data[k])[:10]
+
+    # 机构数：不得用 len(rows)
+    for k in ("预测机构数", "机构数", "机构家数", "coverage", "分析师数"):
+        v = best.get(k)
+        if v is not None and str(v).strip() not in ("", "-", "--"):
+            summary["coverage"] = str(v).strip()[:20]
             break
-    for k in ("预测净利润", "net_profit", "eps", "EPS"):
-        if data.get(k):
-            summary["forecast"] = str(data[k])[:50]
+
+    # 净利润预测（可选）
+    for k in ("预测净利润", "净利润", "net_profit"):
+        v = best.get(k)
+        if v is not None and str(v).strip() not in ("", "-", "--"):
+            if "forecast" not in summary:
+                summary["forecast"] = str(v).strip()[:50]
             break
-    if not summary:
-        summary["note"] = "已取得一致预期数据，暂无法结构化摘要"
+
+    if len(summary) <= 1:  # 仅 record_count
+        return {"note": "已取得一致预期数据，暂无法结构化摘要", "record_count": len(rows)}
     return summary
 
 
@@ -394,7 +501,7 @@ def get_sector_dynamic_data(sector_key: str) -> dict:
             try:
                 data = astock.individual_info(code)
                 summary = _summarize_individual_info(data)
-                company["panels"]["individual_info"] = _panel_ok(data, summary)
+                company["panels"]["individual_info"] = _panel_ok(summary)
                 # 尝试补名称
                 if not company["name"] and summary.get("name"):
                     company["name"] = summary["name"]
@@ -407,7 +514,7 @@ def get_sector_dynamic_data(sector_key: str) -> dict:
             try:
                 data = astock.profit_forecast(code)
                 summary = _summarize_profit_forecast(data)
-                company["panels"]["profit_forecast"] = _panel_ok(data, summary)
+                company["panels"]["profit_forecast"] = _panel_ok(summary)
                 ok_panels += 1
             except Exception as e:  # noqa: BL001
                 company["panels"]["profit_forecast"] = _panel_err(e)
@@ -417,7 +524,7 @@ def get_sector_dynamic_data(sector_key: str) -> dict:
             try:
                 anns = astock.announcements(code, limit=10)
                 summary = _summarize_announcements(anns)
-                company["panels"]["announcements"] = _panel_ok(anns, summary)
+                company["panels"]["announcements"] = _panel_ok(summary)
                 ok_panels += 1
             except Exception as e:  # noqa: BL001
                 company["panels"]["announcements"] = _panel_err(e)
