@@ -15,7 +15,7 @@ export const pricingPowerBlocks: ContentBlock[] = [
         "高端 CCL / 特种材料",
         "有定价权（推断）",
         "认证壁垒高、客户黏性强；紧缺结束后因认证周期长不易完全回吐；材料成本可部分向下转嫁",
-        "生益科技（S-SHENGYI）；日/美/台高端牌号手册未读",
+        "生益科技（S-SHENGYI-HIGHSPEED / S-SHENGYI-RF / S-SHENGYI-IC）；日/美/台高端牌号手册未读",
       ],
       [
         "一线板厂（高端 HDI / 载板 / 高速板）",
@@ -27,7 +27,7 @@ export const pricingPowerBlocks: ContentBlock[] = [
         "二线板厂（通用多层板）",
         "半有定价权（推断）",
         "涨价时部分保留但竞争侵蚀；紧缺结束后易回吐",
-        "景旺电子（S-KINWONG）等；具体档位依产品结构而异",
+        "景旺电子（S-KINWONG-HLC / S-KINWONG-COMPUTING）等；具体档位依产品结构而异",
       ],
       [
         "低端单双面 PCB",
@@ -36,7 +36,7 @@ export const pricingPowerBlocks: ContentBlock[] = [
         "中小板厂（非上市主体为主）",
       ],
     ],
-    sourceIds: ["S-SHENGYI", "S-UNIMICRON", "S-KINWONG"],
+    sourceIds: ["S-SHENGYI-HIGHSPEED", "S-SHENGYI-RF", "S-SHENGYI-IC", "S-UNIMICRON", "S-KINWONG-HLC", "S-KINWONG-COMPUTING"],
   },
   {
     type: "callout",
@@ -52,7 +52,7 @@ export const pricingPowerBlocks: ContentBlock[] = [
       "下一代中板（Midplane）量产节奏（客户验证与良率节点）",
       "后续应用 a-stock-data / 巨潮拉取具体公告与研报正文后再升级 sourceIds",
     ],
-    sourceIds: ["S-SHENGYI", "S-KINWONG", "S-UNIMICRON"],
+    sourceIds: ["S-SHENGYI-HIGHSPEED", "S-SHENGYI-RF", "S-SHENGYI-IC", "S-KINWONG-HLC", "S-KINWONG-COMPUTING", "S-UNIMICRON"],
   },
   {
     type: "risk",
@@ -62,6 +62,6 @@ export const pricingPowerBlocks: ContentBlock[] = [
       "需求回落风险：若 AI 服务器需求放缓，高定价权环节同样面临回吐压力。",
       "公司口径差异：龙头公司公开表态往往偏谨慎，与乐观渠道传闻存在口径差；生益/景旺/欣興官网未给出涨价幅度。",
     ],
-    sourceIds: ["S-SHENGYI"],
+    sourceIds: ["S-SHENGYI-HIGHSPEED", "S-SHENGYI-RF", "S-SHENGYI-IC"],
   },
 ];

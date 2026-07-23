@@ -53,22 +53,22 @@ export const technologyBlocks: ContentBlock[] = [
   {
     type: "paragraph",
     text: "树脂体系与玻纤路线（环氧 → 改性环氧 → PPO/PPE → PTFE 混合；E-Glass → 开纤/扁平玻纤 → 石英布）为高速板常见演进方向，但具体代际对应关系尚无公开资料确认。（分析推断）",
-    sourceIds: ["S-SHENGYI"],
+    sourceIds: ["S-SHENGYI-HIGHSPEED", "S-SHENGYI-RF"],
   },
   {
     type: "paragraph",
-    text: "公司口径（已读官网）：生益科技公开产品线覆盖高速产品、射频与微波材料、IC 封装材料等，并具备工程技术研究中心与实验室体系——可支撑“国内 CCL 龙头具备高速/射频材料能力”的定性判断，但官网未披露 Df/Dk 精确阈值与 AI 服务器板具体供货数字。",
-    sourceIds: ["S-SHENGYI"],
+    text: "公司口径（已读官网产品页）：生益科技高速产品系列覆盖超低/低/中等介质损耗材料分类，Dk范围<3.5至>4.5（10GHz）、Df范围<0.002至>0.02（10GHz）、Tg≥150℃/≥170℃、CTE<3.0至>4.5、导热系数<1.0至>2.0 W/m·K；具体牌号如Synamic8GX(Dk3.62/Df0.0016)、射频mmWave77(Dk3.0/Df0.0010)、mmWaveG(Dk3.15/Df0.002)、IC封装SI13U(CTE13/Tg245℃)、SI10US(CTE10/Tg280℃)等——可支撑「国内CCL龙头具备高速/射频材料能力」的定性判断，但官网未披露AI服务器板具体供货数字。",
+    sourceIds: ["S-SHENGYI-HIGHSPEED", "S-SHENGYI-RF", "S-SHENGYI-IC"],
   },
   {
     type: "paragraph",
-    text: "公司口径（已读官网）：欣興電子公开技术蓝图含 HDI、ELIC、HLC、CSP、FCBGA 等，并提及服务器/交换机高速电路板研发方向；景旺电子公开产品含高多层、HDI、类载板、射频等，通信领域称具备高速板/背板与信号完整性能力。上述为产品能力表述，不等于已确认的 AI 机柜量产份额。",
-    sourceIds: ["S-UNIMICRON", "S-KINWONG"],
+    text: "公司口径（已读官网产品页）：景旺电子高多层PCB最高80层、材料分级M2~M9、40:1厚径比、线宽/线距40/40μm、应用含AI服务器/交换机；SLP最高18层Anylayer、30/30μm线宽距、mSAP/amSAP工艺；AI数据中心市场自称「AI服务器PCB制造商」、70+层高多层、9阶HDI、高速板材料库。欣興電子官网首页提及HDI/ELIC/HLC/FCBGA等技术方向，但具体产品页因SSL证书问题无法访问。上述为产品能力表述，不等于已确认的AI机柜量产份额。",
+    sourceIds: ["S-KINWONG-HLC", "S-KINWONG-SLP", "S-KINWONG-COMPUTING", "S-UNIMICRON"],
   },
   {
     type: "callout",
     tone: "info",
-    text: "关键结论（分析推断）：速率代际上升会收紧 IL 预算，从而推动材料与铜箔等级升级，并抬高客户认证门槛。升级一旦完成通常不易回退，但“不可逆”为分析判断，非机构或公司披露。",
+    text: "关键结论（分析推断）：速率代际上升会收紧 IL 预算，从而推动材料与铜箔等级升级，并抬高客户认证门槛。升级一旦完成通常不易回退，但「不可逆」为分析判断，非机构或公司披露。",
   },
   {
     type: "table",

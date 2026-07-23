@@ -17,9 +17,9 @@ export const overviewBlocks: ContentBlock[] = [
       "速率代际：向 112G/224G PAM4 演进时，奈奎斯特频率按波特率计（PAM4 下 Nyquist ≈ bit_rate/4）；对介质损耗与导体粗糙度要求抬升。（分析推断）",
       "材料升级：从 Mid-loss 向 Ultra-low-loss / Super-low-loss 升级是常见叙事；Df 精确阈值尚无公开资料确认。（分析推断）",
       "线宽线距与铜箔：更高速率通常伴随更细线宽/线距与更低粗糙度铜箔；具体 mil / Rz 数字尚无公开资料确认。（分析推断）",
-      "公司能力锚点（已读官网）：景旺电子公开高多层/HDI/类载板与通信高速板能力；欣興電子公开 HDI/ELIC/载板与服务器交换机高速板研发方向；生益科技公开高速/射频/IC 封装材料产品线。（公司口径）",
+      "公司能力锚点（已读官网具体产品页）：景旺电子最高80层高多层、18层SLP、AI服务器PCB制造商定位；欣興電子首页提及HDI/ELIC/HLC/FCBGA等技术方向（具体产品页因SSL证书问题无法访问）；生益科技高速材料Synamic8GX(Dk3.62/Df0.0016)、射频mmWave77(Df0.0010)、IC封装SI13U/SI10US基板。（公司口径）",
     ],
-    sourceIds: ["S-KINWONG", "S-UNIMICRON", "S-SHENGYI"],
+    sourceIds: ["S-KINWONG-HLC", "S-KINWONG-SLP", "S-KINWONG-COMPUTING", "S-UNIMICRON", "S-SHENGYI-HIGHSPEED", "S-SHENGYI-RF", "S-SHENGYI-IC"],
   },
   {
     type: "callout",

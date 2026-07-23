@@ -41,12 +41,12 @@ export const valueBlocks: ContentBlock[] = [
   {
     type: "paragraph",
     text: "覆铜板（CCL）是 PCB 的核心原材料。CCL 在材料成本与成品价值中的占比，公开渠道存在多种估算，尚无公开资料确认统一比例。AI 服务器 PCB 向更低损耗材料升级，是 CCL 环节量价逻辑中的重要叙事。（分析推断）",
-    sourceIds: ["S-SHENGYI"],
+    sourceIds: ["S-SHENGYI-HIGHSPEED", "S-SHENGYI-RF", "S-SHENGYI-IC"],
   },
   {
     type: "paragraph",
-    text: "公司口径（已读官网）：生益科技定位为国内 CCL 龙头，产品线覆盖高速、射频与微波、IC 封装等材料，并公开主导国家标准与 HDI 技术交流等活动——可支持“材料厂能力覆盖高速/射频方向”的定性判断，但不包含单价、毛利率或 AI 订单金额。",
-    sourceIds: ["S-SHENGYI"],
+    text: "公司口径（已读官网产品页）：生益科技高速产品系列覆盖超低/低/中等介质损耗材料分类，Dk范围<3.5至>4.5、Df范围<0.002至>0.02（均为10GHz测量）、Tg≥150℃/≥170℃、导热系数<1.0至>2.0 W/m·K；射频与微波材料包含PTFE/热固性树脂/碳氢系列，如mmWave77(Dk3.0/Df0.0010)、mmWaveG(Dk3.15/Df0.002)；IC封装产品如SI13U(CTE13/Tg245℃)、SI10US(CTE10/Tg280℃)——可支持「材料厂能力覆盖高速/射频方向「的定性判断，但不包含单价、毛利率或 AI 订单金额。",
+    sourceIds: ["S-SHENGYI-HIGHSPEED", "S-SHENGYI-RF", "S-SHENGYI-IC"],
   },
   {
     type: "table",

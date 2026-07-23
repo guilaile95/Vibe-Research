@@ -14,7 +14,7 @@ export const copperMidplaneBlocks: ContentBlock[] = [
     type: "callout",
     tone: "info",
     text: "本节正式 sourceIds 仅可引用已读公司官网。铜中板规格细节在景旺电子、欣興電子、生益科技官网上均无完整披露；读者应对具体数字保持审慎。券商研报与 TrendForce 正文读取量 = 0。",
-    sourceIds: ["S-UNIMICRON", "S-KINWONG"],
+    sourceIds: ["S-KINWONG-HLC", "S-KINWONG-COMPUTING", "S-UNIMICRON"],
   },
   {
     type: "paragraph",
@@ -56,7 +56,7 @@ export const copperMidplaneBlocks: ContentBlock[] = [
   {
     type: "paragraph",
     text: "4. 层数、压合、材料和线宽难点。铜中板在制造端集中了 PCB 行业的多项极限工艺。（分析推断）",
-    sourceIds: ["S-UNIMICRON", "S-KINWONG"],
+    sourceIds: ["S-KINWONG-HLC", "S-KINWONG-COMPUTING", "S-UNIMICRON"],
   },
   {
     type: "bullets",
@@ -65,9 +65,9 @@ export const copperMidplaneBlocks: ContentBlock[] = [
       "压合：高多层数通常需要多次压合，树脂流动、气泡与分层是良率主瓶颈。（分析推断）",
       "材料：更高速率要求更低损耗覆铜板；材料成本与供应商集中度通常高于常规方案。（分析推断）",
       "线宽/线距：更严阻抗公差要求更细线宽与更严格公差；具体 mil 数字尚无公开资料确认。",
-      "公司能力锚点：欣興電子公开 HDI/ELIC/高速板能力；景旺电子公开高多层/背板/信号完整性能力——均为产品线口径，非铜中板量产规格披露。",
+      "公司能力锚点：景旺电子高多层最高80层、40:1厚径比、线宽/线距40/40μm、应用含AI服务器/交换机；AI数据中心市场40层以上N+N结构、70+层高多层、背钻、高速板材料库；欣興電子首页提及HDI/ELIC/HLC技术方向（具体产品页无法访问）——均为产品线口径，非铜中板量产规格披露。",
     ],
-    sourceIds: ["S-UNIMICRON", "S-KINWONG"],
+    sourceIds: ["S-KINWONG-HLC", "S-KINWONG-COMPUTING", "S-UNIMICRON"],
   },
   {
     type: "compareTable",

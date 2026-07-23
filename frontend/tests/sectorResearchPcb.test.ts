@@ -12,7 +12,17 @@ import {
 import { pcbResearch } from "../src/data/sectorResearch/pcb.ts";
 import { getSectorResearchWorkspace } from "../src/data/sectorResearch/index.ts";
 
-const ALLOWED_SOURCE_IDS = ["S-KINWONG", "S-UNIMICRON", "S-SHENGYI"] as const;
+/** 正式 SourceRef：景旺具体产品/市场页 + 欣興首页 + 生益材料产品页 */
+const ALLOWED_SOURCE_IDS = [
+  "S-KINWONG-HLC",
+  "S-KINWONG-SLP",
+  "S-KINWONG-COMPUTING",
+  "S-KINWONG-TELECOM",
+  "S-UNIMICRON",
+  "S-SHENGYI-HIGHSPEED",
+  "S-SHENGYI-RF",
+  "S-SHENGYI-IC",
+] as const;
 
 test("PCB workspace is registered and only PCB is registered for now", () => {
   assert.deepEqual(registeredResearchKeys(), ["pcb"]);
@@ -38,14 +48,15 @@ test("PCB all six tags are draft status", () => {
   assert.equal(pcbConfigSnapshot().allPlaceholder, false);
 });
 
-test("PCB sources are exactly the three read company sites", () => {
+test("PCB sources are the read company product/tech pages", () => {
   const ids = pcbResearch.sources.map((s) => s.id);
   assert.deepEqual(ids.slice().sort(), [...ALLOWED_SOURCE_IDS].sort());
-  assert.equal(pcbResearch.sources.length, 3);
+  assert.equal(pcbResearch.sources.length, ALLOWED_SOURCE_IDS.length);
   for (const s of pcbResearch.sources) {
     assert.equal(s.factLevel, "公司口径");
     assert.equal(s.sourceType, "company_site");
     assert.ok(s.url && s.url.startsWith("http"));
+    assert.ok(s.note && (s.note.includes("实际打开读取") || s.note.includes("仅访问首页")));
   }
 });
 
@@ -59,7 +70,7 @@ test("checkWorkspace accepts PCB config", () => {
   assert.equal(r.ok, true, r.errors.join("; "));
 });
 
-test("all block sourceIds are within the three allowed sources", () => {
+test("all block sourceIds are within the allowed read sources", () => {
   const allowed = new Set<string>(ALLOWED_SOURCE_IDS);
   for (const tag of pcbResearch.tags) {
     for (const block of tag.blocks) {
