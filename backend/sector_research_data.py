@@ -280,12 +280,79 @@ def _safe_panel_error(exc: BaseException) -> str:
     return msg
 
 
-def _panel_ok(data) -> dict:
-    return {"status": "ok", "data": data, "error": None}
+def _panel_ok(data, summary: dict | None = None) -> dict:
+    return {"status": "ok", "summary": summary or {}, "data": data, "error": None}
 
 
 def _panel_err(exc: BaseException) -> dict:
-    return {"status": "error", "data": None, "error": _safe_panel_error(exc)}
+    return {"status": "error", "summary": {}, "data": None, "error": _safe_panel_error(exc)}
+
+
+def _summarize_individual_info(data) -> dict:
+    """从 astock.individual_info 返回中提取最小摘要。"""
+    if not isinstance(data, dict):
+        return {}
+    summary = {}
+    for k in ("股票简称", "name", "简称", "公司名称"):
+        if data.get(k):
+            summary["name"] = str(data[k])[:50]
+            break
+    for k in ("所属行业", "industry", "行业"):
+        if data.get(k):
+            summary["industry"] = str(data[k])[:80]
+            break
+    for k in ("总市值", "流通市值", "market_cap"):
+        if data.get(k):
+            summary["market_cap"] = str(data[k])[:30]
+            break
+    for k in ("主营业务", "business", "经营范围"):
+        if data.get(k):
+            summary["business"] = str(data[k])[:200]
+            break
+    return summary
+
+
+def _summarize_profit_forecast(data) -> dict:
+    """从 astock.profit_forecast 返回中提取摘要。"""
+    if not isinstance(data, dict):
+        return {"note": "已取得一致预期数据，暂无法结构化摘要"}
+    summary = {}
+    for k in ("机构数", "coverage", "机构家数"):
+        if data.get(k):
+            summary["coverage"] = str(data[k])[:20]
+            break
+    for k in ("预测年度", "year", "最新年度"):
+        if data.get(k):
+            summary["year"] = str(data[k])[:10]
+            break
+    for k in ("预测净利润", "net_profit", "eps", "EPS"):
+        if data.get(k):
+            summary["forecast"] = str(data[k])[:50]
+            break
+    if not summary:
+        summary["note"] = "已取得一致预期数据，暂无法结构化摘要"
+    return summary
+
+
+def _summarize_announcements(data) -> dict:
+    """从 astock.announcements 返回中提取摘要。"""
+    summary = {}
+    if isinstance(data, list):
+        summary["count"] = len(data)
+        if data:
+            first = data[0]
+            if isinstance(first, dict):
+                for k in ("标题", "title", "公告标题"):
+                    if first.get(k):
+                        summary["latest_title"] = str(first[k])[:120]
+                        break
+                for k in ("日期", "date", "公告日期"):
+                    if first.get(k):
+                        summary["latest_date"] = str(first[k])[:20]
+                        break
+    elif isinstance(data, dict) and "list" in data:
+        return _summarize_announcements(data["list"])
+    return summary
 
 
 def get_sector_dynamic_data(sector_key: str) -> dict:
@@ -326,13 +393,11 @@ def get_sector_dynamic_data(sector_key: str) -> dict:
         if "individual_info" in panels_enabled:
             try:
                 data = astock.individual_info(code)
-                company["panels"]["individual_info"] = _panel_ok(data)
+                summary = _summarize_individual_info(data)
+                company["panels"]["individual_info"] = _panel_ok(data, summary)
                 # 尝试补名称
-                if not company["name"] and isinstance(data, dict):
-                    for k in ("股票简称", "name", "简称"):
-                        if data.get(k):
-                            company["name"] = str(data[k])
-                            break
+                if not company["name"] and summary.get("name"):
+                    company["name"] = summary["name"]
                 ok_panels += 1
             except Exception as e:  # noqa: BL001
                 company["panels"]["individual_info"] = _panel_err(e)
@@ -340,7 +405,9 @@ def get_sector_dynamic_data(sector_key: str) -> dict:
                 warnings.append(f"{code} 基本面：{_safe_panel_error(e)}")
         if "profit_forecast" in panels_enabled:
             try:
-                company["panels"]["profit_forecast"] = _panel_ok(astock.profit_forecast(code))
+                data = astock.profit_forecast(code)
+                summary = _summarize_profit_forecast(data)
+                company["panels"]["profit_forecast"] = _panel_ok(data, summary)
                 ok_panels += 1
             except Exception as e:  # noqa: BL001
                 company["panels"]["profit_forecast"] = _panel_err(e)
@@ -349,7 +416,8 @@ def get_sector_dynamic_data(sector_key: str) -> dict:
         if "announcements" in panels_enabled:
             try:
                 anns = astock.announcements(code, limit=10)
-                company["panels"]["announcements"] = _panel_ok(anns)
+                summary = _summarize_announcements(anns)
+                company["panels"]["announcements"] = _panel_ok(anns, summary)
                 ok_panels += 1
             except Exception as e:  # noqa: BL001
                 company["panels"]["announcements"] = _panel_err(e)

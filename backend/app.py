@@ -12,10 +12,10 @@ from __future__ import annotations
 import json
 import os
 import threading
-
-import anyio
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
+import anyio
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -1252,6 +1252,77 @@ _ALLOWED_REPORT_SCOPES = frozenset({"industry", "company", "all"})
 _PDF_DOWNLOAD_MAX_REDIRECTS = 5
 _PDF_HOST_ALLOW = frozenset({"pdf.dfcfw.com", "pdfcdn.eastmoney.com"})
 
+# 服务端发现缓存：键 (sector_key, external_id) → 规范化元数据（无 PDF 正文）
+_DISCOVERY_CACHE_TTL_SECONDS = 20 * 60  # 20 分钟
+_DISCOVERY_CACHE_MAX_ENTRIES = 500
+
+
+@dataclass
+class CachedDiscovery:
+    sector_key: str
+    external_id: str
+    info_code: str
+    title: str
+    institution: str
+    publish_date: str
+    report_scope: str
+    source_provider: str
+    discovered_at: datetime
+
+
+_DISCOVERY_CACHE: dict[tuple[str, str], CachedDiscovery] = {}
+_DISCOVERY_CACHE_LOCK = threading.Lock()
+
+
+def _cache_discoveries(sector_key: str, reports: list[dict]) -> None:
+    """把发现结果写入有界短期缓存（不持久化、不含 PDF 正文）。"""
+    now = datetime.now(timezone.utc)
+    with _DISCOVERY_CACHE_LOCK:
+        for r in reports:
+            ext_id = r.get("external_id")
+            if not ext_id or not isinstance(ext_id, str):
+                continue
+            key = (sector_key, ext_id)
+            _DISCOVERY_CACHE[key] = CachedDiscovery(
+                sector_key=sector_key,
+                external_id=ext_id,
+                info_code=(r.get("info_code") or "") if isinstance(r.get("info_code"), str) else "",
+                title=(r.get("title") or "") if isinstance(r.get("title"), str) else "",
+                institution=(r.get("institution") or "") if isinstance(r.get("institution"), str) else "",
+                publish_date=(r.get("publish_date") or "") if isinstance(r.get("publish_date"), str) else "",
+                report_scope=(r.get("report_scope") or "") if isinstance(r.get("report_scope"), str) else "",
+                source_provider=(r.get("source_provider") or "eastmoney")
+                if isinstance(r.get("source_provider"), (str, type(None)))
+                else "eastmoney",
+                discovered_at=now,
+            )
+        # 容量上限：按 discovered_at 升序剔除最旧
+        overflow = len(_DISCOVERY_CACHE) - _DISCOVERY_CACHE_MAX_ENTRIES
+        if overflow > 0:
+            oldest = sorted(_DISCOVERY_CACHE.items(), key=lambda x: x[1].discovered_at)
+            for k, _ in oldest[:overflow]:
+                del _DISCOVERY_CACHE[k]
+
+
+def _get_cached_discovery(sector_key: str, external_id: str) -> CachedDiscovery | None:
+    """读取缓存；过期则删除并返回 None。"""
+    now = datetime.now(timezone.utc)
+    with _DISCOVERY_CACHE_LOCK:
+        cached = _DISCOVERY_CACHE.get((sector_key, external_id))
+        if cached is None:
+            return None
+        age = (now - cached.discovered_at).total_seconds()
+        if age > _DISCOVERY_CACHE_TTL_SECONDS:
+            del _DISCOVERY_CACHE[(sector_key, external_id)]
+            return None
+        return cached
+
+
+def _clear_discovery_cache() -> None:
+    """测试辅助：清空发现缓存。"""
+    with _DISCOVERY_CACHE_LOCK:
+        _DISCOVERY_CACHE.clear()
+
 
 @app.get("/api/sector-research/reports/{sector_key}")
 def sector_research_reports(
@@ -1264,6 +1335,9 @@ def sector_research_reports(
     if scope not in _ALLOWED_REPORT_SCOPES:
         raise HTTPException(400, f"scope 无效，支持：{' / '.join(sorted(_ALLOWED_REPORT_SCOPES))}")
     result = srd.discover_sector_reports(sector_key, days=days, max_pages=max_pages, scope=scope)
+    # 写入发现缓存，供后续 import 按 external_id 精确绑定（含自定义 days）
+    if not result.error:
+        _cache_discoveries(sector_key, result.discovered)
     return {"data": {"sector_key": result.source_key, "discovered": result.discovered,
                    "filtered": result.filtered, "error": result.error}}
 
@@ -1280,30 +1354,24 @@ def sector_research_data(sector_key: str):
 
 @app.post("/api/sector-research/import/{sector_key}")
 def sector_research_import(sector_key: str, body: SectorReportImportIn):
-    """导入研报：只接受 external_id；身份与元数据严格绑定发现结果。
+    """导入研报：只接受 external_id；优先使用缓存中的发现记录。
 
-    后端以 scope=all 重新核验；PDF 仅由 matched.info_code 生成；不信任前端
-    标题/机构/URL/info_code。原子归档走 mr.import_report_bytes。
+    缓存未命中或过期时返回 400，要求前端重新发现；不静默用默认 days 重发现。
+    PDF 仅由缓存中的 info_code 生成；不信任前端标题/URL/info_code。
     """
     src = srd.get_sector_source(sector_key)
     if src is None:
         raise HTTPException(404, f"未注册的板块：{sector_key}")
-    # 以 all scope 重新发现，覆盖此前 company/industry/all 任一路径
-    result = srd.discover_sector_reports(sector_key, max_pages=3, scope="all")
-    if result.error:
-        raise HTTPException(502, result.error)
-    matched = next(
-        (r for r in result.discovered if r.get("external_id") == body.external_id),
-        None,
-    )
-    if matched is None:
-        raise HTTPException(400, "该 external_id 不在最新发现结果中，请重新发现")
-    # 严格绑定：info_code 仅来自发现结果，不得用 external_id 猜测
-    info_code = matched.get("info_code")
-    if not info_code or not isinstance(info_code, str):
-        raise HTTPException(400, "发现结果缺少 info_code，无法安全下载")
-    external_id = matched.get("external_id") or info_code
-    # 不信任前端 URL：仅由 matched.info_code 生成白名单 PDF 地址
+
+    cached = _get_cached_discovery(sector_key, body.external_id)
+    if cached is None:
+        raise HTTPException(400, "发现结果已过期，请重新点击“开始发现”")
+
+    info_code = cached.info_code
+    if not info_code:
+        raise HTTPException(400, "缓存记录缺少 info_code，无法安全下载")
+    external_id = cached.external_id
+
     pdf_url = astock.pdf_url(info_code)
     if not srd.pdf_url_allowed(pdf_url):
         raise HTTPException(400, "PDF 链接不在允许域名或非 HTTPS")
@@ -1320,8 +1388,7 @@ def sector_research_import(sector_key: str, body: SectorReportImportIn):
         "PCB" if sector_key == "pcb"
         else (src.label.split("（")[0].strip() if src.label else sector_key)
     )
-    # 元数据全部来自同一条 matched 发现结果
-    safe_title = matched.get("title") or info_code
+    safe_title = cached.title or info_code
     safe_name = f"{str(safe_title).replace('/', '_').replace(chr(92), '_')[:180]}.pdf"
     try:
         meta = mr.import_report_bytes(
@@ -1329,15 +1396,15 @@ def sector_research_import(sector_key: str, body: SectorReportImportIn):
             content=blob,
             metadata={
                 "title": safe_title,
-                "institution": matched.get("institution") or "",
-                "publish_date": matched.get("publish_date") or "",
+                "institution": cached.institution,
+                "publish_date": cached.publish_date,
                 "sector_keys": [sector_key],
                 "source_url": pdf_url,
                 "source_kind": "report",
-                "source_provider": "eastmoney",
+                "source_provider": cached.source_provider or "eastmoney",
                 "external_id": external_id,
                 "info_code": info_code,
-                "report_scope": matched.get("report_scope") or "",
+                "report_scope": cached.report_scope,
                 "report_type": "brokerage",
                 "industry": industry_label,
             },

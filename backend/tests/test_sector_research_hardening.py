@@ -443,24 +443,28 @@ def test_patch_old_entry_normalizes_single(tmp_path, monkeypatch):
 # ── API import 走公共方法，不信任前端 ────────────────────────────
 
 
-def test_import_api_uses_public_import_and_scope_all(tmp_path, monkeypatch):
-    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
-
-    def fake_discover(sector_key, **kwargs):
-        assert kwargs.get("scope") == "all"
-        return srd.DiscoveryResult(
-            source_key=sector_key,
-            discovered=[{
-                "external_id": "INFO99",
-                "info_code": "INFO99",
-                "title": "真实标题",
-                "institution": "中信",
-                "publish_date": "2025-07-01",
-                "report_scope": "company",
-            }],
-        )
-
+def _seed_discovery_cache(sector_key: str, rows: list[dict], monkeypatch) -> None:
+    """通过 discover API 写入缓存（mock 数据源）。"""
+    def fake_discover(sk, **kwargs):
+        return srd.DiscoveryResult(source_key=sk, discovered=list(rows))
     monkeypatch.setattr(srd, "discover_sector_reports", fake_discover)
+    r = client.get(f"/api/sector-research/reports/{sector_key}", params={"days": 30, "max_pages": 1})
+    assert r.status_code == 200
+
+
+def test_import_api_uses_public_import_via_cache(tmp_path, monkeypatch):
+    """发现写入缓存后，import 用缓存身份归档（不静默重发现）。"""
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
+    app_module._clear_discovery_cache()
+    _seed_discovery_cache("pcb", [{
+        "external_id": "INFO99",
+        "info_code": "INFO99",
+        "title": "真实标题",
+        "institution": "中信",
+        "publish_date": "2025-07-01",
+        "report_scope": "company",
+        "source_provider": "eastmoney",
+    }], monkeypatch)
     monkeypatch.setattr(app_module, "_download_pdf", lambda url: _PDF_BYTES)
 
     r = client.post(
@@ -478,13 +482,10 @@ def test_import_api_uses_public_import_and_scope_all(tmp_path, monkeypatch):
 
 def test_import_api_missing_external_id_400(tmp_path, monkeypatch):
     monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
-
-    def fake_discover(sector_key, **kwargs):
-        return srd.DiscoveryResult(source_key=sector_key, discovered=[])
-
-    monkeypatch.setattr(srd, "discover_sector_reports", fake_discover)
+    app_module._clear_discovery_cache()
     r = client.post("/api/sector-research/import/pcb", json={"external_id": "NOPE"})
     assert r.status_code == 400
+    assert "过期" in r.json()["detail"] or "重新" in r.json()["detail"]
 
 
 # ── 追加：import 契约 / imported_at / browse / PDF 魔数 / 动态数据 ──
@@ -501,39 +502,27 @@ def test_import_api_extra_info_code_forbidden_422(tmp_path, monkeypatch):
 
 
 def test_import_api_external_id_missing_from_discovery_400(tmp_path, monkeypatch):
-    """discovery 不含该 external_id → 400。"""
+    """缓存中无该 external_id → 400（提示重新发现）。"""
     monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
-
-    def fake_discover(sector_key, **kwargs):
-        return srd.DiscoveryResult(
-            source_key=sector_key,
-            discovered=[{
-                "external_id": "OTHER",
-                "info_code": "OTHER",
-                "title": "其他",
-            }],
-        )
-
-    monkeypatch.setattr(srd, "discover_sector_reports", fake_discover)
+    app_module._clear_discovery_cache()
+    _seed_discovery_cache("pcb", [{
+        "external_id": "OTHER",
+        "info_code": "OTHER",
+        "title": "其他",
+    }], monkeypatch)
     r = client.post("/api/sector-research/import/pcb", json={"external_id": "NOPE"})
     assert r.status_code == 400
 
 
 def test_import_api_matched_without_info_code_400(tmp_path, monkeypatch):
-    """matched 有 external_id 但 info_code 为 null → 400。"""
+    """缓存记录有 external_id 但 info_code 为空 → 400。"""
     monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
-
-    def fake_discover(sector_key, **kwargs):
-        return srd.DiscoveryResult(
-            source_key=sector_key,
-            discovered=[{
-                "external_id": "INFO_NO_CODE",
-                "info_code": None,
-                "title": "缺 info_code",
-            }],
-        )
-
-    monkeypatch.setattr(srd, "discover_sector_reports", fake_discover)
+    app_module._clear_discovery_cache()
+    _seed_discovery_cache("pcb", [{
+        "external_id": "INFO_NO_CODE",
+        "info_code": None,
+        "title": "缺 info_code",
+    }], monkeypatch)
     r = client.post(
         "/api/sector-research/import/pcb",
         json={"external_id": "INFO_NO_CODE"},
@@ -542,28 +531,23 @@ def test_import_api_matched_without_info_code_400(tmp_path, monkeypatch):
 
 
 def test_import_api_uses_matched_info_code_for_pdf(tmp_path, monkeypatch):
-    """import 仅用 matched.info_code 生成 PDF URL（不信任前端）。"""
+    """import 仅用缓存中的 info_code 生成 PDF URL（不信任前端）。"""
     monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
+    app_module._clear_discovery_cache()
     seen_urls: list[str] = []
-
-    def fake_discover(sector_key, **kwargs):
-        return srd.DiscoveryResult(
-            source_key=sector_key,
-            discovered=[{
-                "external_id": "IC_MATCH_42",
-                "info_code": "IC_MATCH_42",
-                "title": "用 info_code 下载",
-                "institution": "中信",
-                "publish_date": "2025-07-01",
-                "report_scope": "company",
-            }],
-        )
+    _seed_discovery_cache("pcb", [{
+        "external_id": "IC_MATCH_42",
+        "info_code": "IC_MATCH_42",
+        "title": "用 info_code 下载",
+        "institution": "中信",
+        "publish_date": "2025-07-01",
+        "report_scope": "company",
+    }], monkeypatch)
 
     def capture_download(url, *a, **k):
         seen_urls.append(url)
         return _PDF_BYTES
 
-    monkeypatch.setattr(srd, "discover_sector_reports", fake_discover)
     monkeypatch.setattr(app_module, "_download_pdf", capture_download)
 
     r = client.post(
@@ -695,3 +679,105 @@ def test_get_sector_dynamic_data_keys_and_partial_status(monkeypatch):
     assert bad["status"] == "unavailable"
     for key in ("source", "fetched_at", "status", "warnings"):
         assert key in bad
+
+
+# ── 发现缓存：自定义 days / 过期 / 隔离 / 容量 ──────────────────
+
+
+def test_discovery_cache_custom_days_then_import(tmp_path, monkeypatch):
+    """days=1000 发现的旧研报写入缓存后可立即导入。"""
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
+    app_module._clear_discovery_cache()
+    seen_days: list = []
+
+    def fake_discover(sector_key, **kwargs):
+        seen_days.append(kwargs.get("days"))
+        return srd.DiscoveryResult(
+            source_key=sector_key,
+            discovered=[{
+                "external_id": "OLD1000",
+                "info_code": "OLD1000",
+                "title": "超一年研报",
+                "institution": "中信",
+                "publish_date": "2023-01-01",
+                "report_scope": "industry",
+                "source_provider": "eastmoney",
+            }],
+        )
+
+    monkeypatch.setattr(srd, "discover_sector_reports", fake_discover)
+    monkeypatch.setattr(app_module, "_download_pdf", lambda url: _PDF_BYTES)
+
+    r = client.get(
+        "/api/sector-research/reports/pcb",
+        params={"days": 1000, "scope": "industry", "max_pages": 1},
+    )
+    assert r.status_code == 200
+    assert 1000 in seen_days
+
+    r2 = client.post("/api/sector-research/import/pcb", json={"external_id": "OLD1000"})
+    assert r2.status_code == 200
+    assert r2.json()["data"]["title"] == "超一年研报"
+    assert r2.json()["data"]["external_id"] == "OLD1000"
+
+
+def test_discovery_cache_expired_rejects_import(tmp_path, monkeypatch):
+    """缓存过期后拒绝导入并提示重新发现。"""
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
+    app_module._clear_discovery_cache()
+    from datetime import timedelta
+
+    _seed_discovery_cache("pcb", [{
+        "external_id": "EXP1",
+        "info_code": "EXP1",
+        "title": "将过期",
+    }], monkeypatch)
+    with app_module._DISCOVERY_CACHE_LOCK:
+        c = app_module._DISCOVERY_CACHE[("pcb", "EXP1")]
+        c.discovered_at = c.discovered_at - timedelta(seconds=app_module._DISCOVERY_CACHE_TTL_SECONDS + 10)
+
+    r = client.post("/api/sector-research/import/pcb", json={"external_id": "EXP1"})
+    assert r.status_code == 400
+    assert "过期" in r.json()["detail"] or "重新" in r.json()["detail"]
+
+
+def test_discovery_cache_sector_isolation(tmp_path, monkeypatch):
+    """不同 sector 不能复用同一 external_id 缓存。"""
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
+    app_module._clear_discovery_cache()
+    _seed_discovery_cache("pcb", [{
+        "external_id": "SHARED",
+        "info_code": "SHARED",
+        "title": "PCB only",
+    }], monkeypatch)
+    r = client.post("/api/sector-research/import/not-a-sector", json={"external_id": "SHARED"})
+    assert r.status_code in (400, 404)
+
+
+def test_discovery_cache_capacity_limit(tmp_path, monkeypatch):
+    """缓存有容量上限。"""
+    app_module._clear_discovery_cache()
+    monkeypatch.setattr(app_module, "_DISCOVERY_CACHE_MAX_ENTRIES", 3)
+    rows = [
+        {"external_id": f"C{i}", "info_code": f"C{i}", "title": f"t{i}"}
+        for i in range(5)
+    ]
+    app_module._cache_discoveries("pcb", rows)
+    with app_module._DISCOVERY_CACHE_LOCK:
+        assert len(app_module._DISCOVERY_CACHE) <= 3
+    app_module._clear_discovery_cache()
+
+
+def test_import_does_not_accept_client_title_or_url(tmp_path, monkeypatch):
+    """前端不能通过 body 覆盖 title/url/info_code。"""
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
+    app_module._clear_discovery_cache()
+    r = client.post(
+        "/api/sector-research/import/pcb",
+        json={
+            "external_id": "X",
+            "title": "HACK",
+            "source_url": "https://evil.com/x.pdf",
+        },
+    )
+    assert r.status_code == 422
