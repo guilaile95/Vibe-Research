@@ -71,6 +71,7 @@ export function MyReports() {
   const [edit, setEdit] = useState<EditForm>(EMPTY_EDIT);
   const [editBusy, setEditBusy] = useState(false);
   const [editErr, setEditErr] = useState<string | null>(null);
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   // URL 查询参数：report（定位高亮）/ sector / institution / year / month。
   const focusReportId = searchParams.get("report") || undefined;
@@ -78,16 +79,17 @@ export function MyReports() {
   const filterInstitution = searchParams.get("institution") || undefined;
   const filterYear = searchParams.get("year") || undefined;
   const filterMonth = searchParams.get("month") || undefined;
-  // 同步过滤参数到 URL（前进/后退/刷新不丢失）。
+  // 同步 report + 过滤参数到 URL（前进/后退/刷新不丢失；不得丢掉 report）。
   useEffect(() => {
     const next = new URLSearchParams();
+    if (focusReportId) next.set("report", focusReportId);
     if (filterSector) next.set("sector", filterSector);
     if (filterInstitution) next.set("institution", filterInstitution);
     if (filterYear) next.set("year", filterYear);
     if (filterMonth) next.set("month", filterMonth);
     const cur = searchParams.toString();
     if (next.toString() !== cur) setSearchParams(next, { replace: true });
-  }, [filterSector, filterInstitution, filterYear, filterMonth]);
+  }, [focusReportId, filterSector, filterInstitution, filterYear, filterMonth, searchParams, setSearchParams]);
   // 由 URL 参数恢复视图：sector/institution/year/month 存在时切换对应视图。
   useEffect(() => {
     if (filterSector) setView("industry");
@@ -104,6 +106,8 @@ export function MyReports() {
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "加载研报列表失败");
       setLoadFailed(true);
+    } finally {
+      setHasLoaded(true);
     }
   };
   useEffect(() => {
@@ -204,13 +208,14 @@ export function MyReports() {
     setEditBusy(true);
     setEditErr(null);
     try {
+      // 始终发送字符串（含 ""）：后端 "" 清空字段，缺省则保留。
       await api.patchReport(id, {
-        title: edit.title || undefined,
-        institution: edit.institution || undefined,
-        publish_date: edit.publish_date || undefined,
+        title: edit.title,
+        institution: edit.institution,
+        publish_date: edit.publish_date,
         sector_keys: edit.sector_keys,
-        source_url: edit.source_url || undefined,
-        source_kind: edit.source_kind || undefined,
+        source_url: edit.source_url,
+        source_kind: edit.source_kind,
       });
       setEditingId(null);
       await refreshAll();
@@ -448,6 +453,11 @@ export function MyReports() {
 
   const showEmpty = !loadFailed && reports.length === 0;
   const listGroups = browse?.groups ?? [];
+  const focusReportMissing =
+    Boolean(focusReportId)
+    && hasLoaded
+    && !loadFailed
+    && !reports.some((r) => r.id === focusReportId);
 
   return (
     <div>
@@ -500,6 +510,12 @@ export function MyReports() {
       {err && (
         <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
           {err}
+        </div>
+      )}
+
+      {focusReportMissing && (
+        <div className="mb-4 rounded-lg border border-border/50 bg-muted/40 p-3 text-sm text-muted-foreground">
+          未找到指定研报 id，可能已删除
         </div>
       )}
 

@@ -54,6 +54,11 @@ export interface MyReport {
   source_kind?: string;
   file_sha256?: string;
   imported_at?: string;
+  source_provider?: string;
+  external_id?: string;
+  info_code?: string;
+  report_scope?: string;
+  report_type?: string;
   // 同内容去重标记：上传内容与已有归档完全一致时，不写重复文件，返回既有条目 + deduped=true。
   deduped?: boolean;
 }
