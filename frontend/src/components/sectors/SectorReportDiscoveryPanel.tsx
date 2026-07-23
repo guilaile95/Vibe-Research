@@ -43,6 +43,7 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [discovered, setDiscovered] = useState<DiscoveredSectorReport[] | null>(null);
   const [filtered, setFiltered] = useState<DiscoveredSectorReport[] | null>(null);
+  const [meta, setMeta] = useState<{ total?: number; returned?: number; truncated?: boolean }>({});
   const [importMap, setImportMap] = useState<Record<string, ImportState>>({});
   const [archived, setArchived] = useState<Map<string, MyReport>>(new Map());
 
@@ -90,11 +91,17 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
       }
       setDiscovered(result.discovered ?? []);
       setFiltered(result.filtered ?? []);
+      setMeta({
+        total: result.total_discovered,
+        returned: result.returned,
+        truncated: result.truncated,
+      });
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
       setError(msg);
       setDiscovered([]);
       setFiltered([]);
+      setMeta({});
     } finally {
       setLoading(false);
     }
@@ -191,7 +198,15 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
       )}
 
       {rows.length > 0 && (
-        <ul className="mt-4 space-y-3">
+        <p className="mt-3 text-xs text-muted-foreground">
+          {meta.truncated && meta.total != null && meta.returned != null
+            ? `共发现 ${meta.total} 条，当前展示前 ${meta.returned} 条（按相关性截断，均可在有效期内导入）`
+            : `当前展示 ${rows.length} 条`}
+        </p>
+      )}
+
+      {rows.length > 0 && (
+        <ul className="mt-2 space-y-3">
           {rows.map((r, i) => {
             const key = reportKey(r, i);
             const st = importMap[key];

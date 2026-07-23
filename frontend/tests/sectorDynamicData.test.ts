@@ -62,8 +62,8 @@ describe("SectorDynamicData rendering logic", () => {
         code: "002463",
         name: "沪电股份",
         panels: {
-          individual_info: { status: "ok", summary: { name: "沪电股份" }, data: null, error: null },
-          profit_forecast: { status: "error", summary: {}, data: null, error: "依赖未安装" },
+          individual_info: { status: "ok", summary: { name: "沪电股份" }, error: null },
+          profit_forecast: { status: "error", summary: {}, error: "依赖未安装" },
         },
       }],
     };

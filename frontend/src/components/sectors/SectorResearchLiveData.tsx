@@ -1,15 +1,20 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { api, ApiError, type SectorDynamicData } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  type SectorDynamicData,
+  type SectorDynamicPanel,
+  type SectorPanelSummary,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type Props = {
   sectorKey: string;
 };
 
-const PANEL_KEYS = ["individual_info", "profit_forecast", "announcements"] as const;
-const PANEL_LABELS: Record<(typeof PANEL_KEYS)[number], string> = {
+const PANEL_LABELS: Record<string, string> = {
   individual_info: "基本面",
   profit_forecast: "一致预期",
   announcements: "公告",
@@ -21,7 +26,7 @@ function statusBadgeClass(status: SectorDynamicData["status"]): string {
   return "border-border/60 bg-muted/30 text-muted-foreground";
 }
 
-function panelOkCount(panels: Record<string, { status: string }> | undefined): {
+function panelOkCount(panels: Record<string, SectorDynamicPanel> | undefined): {
   ok: number;
   total: number;
   errors: string[];
@@ -33,12 +38,19 @@ function panelOkCount(panels: Record<string, { status: string }> | undefined): {
   for (const k of keys) {
     const p = panels[k];
     if (p?.status === "ok") ok += 1;
-    else if (p?.status === "error") {
-      const err = (p as { error?: string | null }).error;
-      if (err) errors.push(`${PANEL_LABELS[k as keyof typeof PANEL_LABELS] || k}: ${err}`);
+    else if (p?.status === "error" && p.error) {
+      errors.push(`${PANEL_LABELS[k] || k}: ${p.error}`);
     }
   }
   return { ok, total: keys.length, errors };
+}
+
+function s(summary: SectorPanelSummary | undefined, key: string): string | undefined {
+  if (!summary) return undefined;
+  const v = summary[key];
+  if (v == null) return undefined;
+  const t = String(v);
+  return t || undefined;
 }
 
 export function SectorResearchLiveData({ sectorKey }: Props) {
@@ -46,31 +58,55 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<SectorDynamicData | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const inflight = useRef(false);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  // sectorKey 变化时清空旧数据
+  useEffect(() => {
+    setData(null);
+    setError(null);
+    setExpanded(false);
+    inflight.current = false;
+  }, [sectorKey]);
 
   const load = useCallback(async () => {
+    if (inflight.current) return;
+    inflight.current = true;
     setLoading(true);
     setError(null);
     try {
       const res = await api.getSectorResearchData(sectorKey);
+      if (!mounted.current) return;
       setData(res);
     } catch (e) {
+      if (!mounted.current) return;
       const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
       setError(msg);
-      // 单次失败不清空已有成功数据
     } finally {
-      setLoading(false);
+      inflight.current = false;
+      if (mounted.current) setLoading(false);
     }
   }, [sectorKey]);
 
   const onToggle = useCallback(() => {
-    setExpanded((prev) => {
-      const next = !prev;
-      if (next && !data && !loading) {
-        void load();
-      }
-      return next;
-    });
-  }, [data, loading, load]);
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !data && !loading) {
+      void load();
+    }
+  }, [expanded, data, loading, load]);
+
+  const onRefresh = useCallback(() => {
+    setExpanded(true);
+    void load();
+  }, [load]);
 
   return (
     <GlassCard className="p-4 sm:p-5">
@@ -84,7 +120,7 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={onRefresh}
             disabled={loading}
             className={cn(
               "inline-flex h-8 items-center gap-1 rounded-lg border border-border/60 px-2.5 text-xs text-muted-foreground",
@@ -147,6 +183,7 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
             <div className="grid grid-cols-1 gap-2 min-[390px]:grid-cols-1 sm:grid-cols-2">
               {data.companies.map((c) => {
                 const { ok, total, errors } = panelOkCount(c.panels);
+                const panelKeys = Object.keys(c.panels || {});
                 return (
                   <div
                     key={c.code}
@@ -164,7 +201,7 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
                       </span>
                     </div>
                     <div className="mt-1.5 flex flex-wrap gap-1">
-                      {PANEL_KEYS.map((pk) => {
+                      {panelKeys.map((pk) => {
                         const p = c.panels?.[pk];
                         const st = p?.status;
                         return (
@@ -178,60 +215,60 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
                             )}
                             title={p?.error || undefined}
                           >
-                            {PANEL_LABELS[pk]}
+                            {PANEL_LABELS[pk] || pk}
                             {st === "ok" ? " ✓" : st === "error" ? " !" : ""}
                           </span>
                         );
                       })}
                     </div>
 
-                    {/* Individual Info Summary */}
-                    {c.panels.individual_info?.status === "ok" && c.panels.individual_info.summary && (
+                    {c.panels.individual_info?.status === "ok" && (
                       <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">
-                        {(c.panels.individual_info.summary as any).industry && (
+                        {s(c.panels.individual_info.summary, "industry") && (
                           <p>
                             <span className="font-medium text-foreground/80">行业：</span>
-                            {String((c.panels.individual_info.summary as any).industry)}
+                            {s(c.panels.individual_info.summary, "industry")}
                           </p>
                         )}
-                        {(c.panels.individual_info.summary as any).market_cap && (
+                        {s(c.panels.individual_info.summary, "market_cap") && (
                           <p>
                             <span className="font-medium text-foreground/80">市值：</span>
-                            {String((c.panels.individual_info.summary as any).market_cap)}
+                            {s(c.panels.individual_info.summary, "market_cap")}
                           </p>
                         )}
-                        {(c.panels.individual_info.summary as any).business && (
+                        {s(c.panels.individual_info.summary, "business") && (
                           <p className="line-clamp-2">
                             <span className="font-medium text-foreground/80">主营：</span>
-                            {String((c.panels.individual_info.summary as any).business)}
+                            {s(c.panels.individual_info.summary, "business")}
                           </p>
                         )}
                       </div>
                     )}
 
-                    {/* Profit Forecast Summary */}
-                    {c.panels.profit_forecast?.status === "ok" && c.panels.profit_forecast.summary && (
+                    {c.panels.profit_forecast?.status === "ok" && (
                       <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">
-                        {(c.panels.profit_forecast.summary as any).note ? (
-                          <p className="italic">{String((c.panels.profit_forecast.summary as any).note)}</p>
+                        {s(c.panels.profit_forecast.summary, "note") ? (
+                          <p className="italic">{s(c.panels.profit_forecast.summary, "note")}</p>
                         ) : (
                           <>
-                            {(c.panels.profit_forecast.summary as any).coverage && (
+                            {s(c.panels.profit_forecast.summary, "coverage") && (
                               <p>
                                 <span className="font-medium text-foreground/80">机构数：</span>
-                                {String((c.panels.profit_forecast.summary as any).coverage)}
+                                {s(c.panels.profit_forecast.summary, "coverage")}
                               </p>
                             )}
-                            {(c.panels.profit_forecast.summary as any).year && (
+                            {s(c.panels.profit_forecast.summary, "year") && (
                               <p>
                                 <span className="font-medium text-foreground/80">预测年度：</span>
-                                {String((c.panels.profit_forecast.summary as any).year)}
+                                {s(c.panels.profit_forecast.summary, "year")}
                               </p>
                             )}
-                            {(c.panels.profit_forecast.summary as any).forecast && (
+                            {(s(c.panels.profit_forecast.summary, "eps")
+                              || s(c.panels.profit_forecast.summary, "forecast")) && (
                               <p>
                                 <span className="font-medium text-foreground/80">预测：</span>
-                                {String((c.panels.profit_forecast.summary as any).forecast)}
+                                {s(c.panels.profit_forecast.summary, "eps")
+                                  || s(c.panels.profit_forecast.summary, "forecast")}
                               </p>
                             )}
                           </>
@@ -239,25 +276,24 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
                       </div>
                     )}
 
-                    {/* Announcements Summary */}
-                    {c.panels.announcements?.status === "ok" && c.panels.announcements.summary && (
+                    {c.panels.announcements?.status === "ok" && (
                       <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">
-                        {(c.panels.announcements.summary as any).count != null && (
+                        {s(c.panels.announcements.summary, "count") != null && (
                           <p>
                             <span className="font-medium text-foreground/80">公告数：</span>
-                            {String((c.panels.announcements.summary as any).count)}
+                            {s(c.panels.announcements.summary, "count")}
                           </p>
                         )}
-                        {(c.panels.announcements.summary as any).latest_date && (
+                        {s(c.panels.announcements.summary, "latest_date") && (
                           <p>
                             <span className="font-medium text-foreground/80">最新日期：</span>
-                            {String((c.panels.announcements.summary as any).latest_date)}
+                            {s(c.panels.announcements.summary, "latest_date")}
                           </p>
                         )}
-                        {(c.panels.announcements.summary as any).latest_title && (
+                        {s(c.panels.announcements.summary, "latest_title") && (
                           <p className="line-clamp-2">
                             <span className="font-medium text-foreground/80">标题：</span>
-                            {String((c.panels.announcements.summary as any).latest_title)}
+                            {s(c.panels.announcements.summary, "latest_title")}
                           </p>
                         )}
                       </div>

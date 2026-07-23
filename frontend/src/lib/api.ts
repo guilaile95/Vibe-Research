@@ -97,6 +97,7 @@ export type DiscoveredSectorReport = {
   matched_keywords?: string[];
   relevance_score?: number;
   rating?: string | null;
+  date_unknown?: boolean;
 };
 
 export type SectorReportsDiscoveryResult = {
@@ -104,12 +105,32 @@ export type SectorReportsDiscoveryResult = {
   discovered: DiscoveredSectorReport[];
   filtered: DiscoveredSectorReport[];
   error: string | null;
+  total_discovered?: number;
+  returned?: number;
+  truncated?: boolean;
+};
+
+/** 动态面板摘要：仅受控字段，无原始 data 倾倒 */
+export type SectorPanelSummary = {
+  name?: string;
+  industry?: string;
+  market_cap?: string;
+  business?: string;
+  coverage?: string;
+  year?: string;
+  eps?: string;
+  forecast?: string;
+  record_count?: number;
+  count?: number;
+  latest_title?: string;
+  latest_date?: string;
+  note?: string;
+  [key: string]: string | number | undefined;
 };
 
 export type SectorDynamicPanel = {
   status: "ok" | "error";
-  summary: Record<string, unknown>;
-  data: unknown;
+  summary: SectorPanelSummary;
   error: string | null;
 };
 
