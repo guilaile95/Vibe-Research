@@ -48,7 +48,11 @@ function resolvePython() {
   }
   const win = path.join(root, "backend", ".venv", "Scripts", "python.exe");
   if (existsSync(win)) return win;
-  return path.join(root, "backend", ".venv", "bin", "python");
+  const mainWin = "E:/AI Projects/Vibe-Research/backend/.venv/Scripts/python.exe";
+  if (existsSync(mainWin)) return mainWin;
+  const lin = path.join(root, "backend", ".venv", "bin", "python");
+  if (existsSync(lin)) return lin;
+  return "python";
 }
 
 function getFreePort() {
@@ -274,6 +278,23 @@ async function runDesktop(browser, errors, networkBag) {
     fullPage: true,
   });
   await assertNoHorizontalOverflow(page, `${label} overview`, errors);
+  // Batch 1 Sectors Verification
+  for (const sector of ["humanoid", "ai-computing", "hbm", "cpo"]) {
+    await page.goto(`http://127.0.0.1:${frontendPort}/sectors/${sector}`, { waitUntil: "networkidle" });
+    const text = await page.locator("body").innerText();
+    if (text.includes("404") || text.includes("未找到页面")) {
+      errors.push(`${label}: sector ${sector} returned 404/not found`);
+    }
+  }
+  // Unbuilt sector placeholder verification
+  await page.goto(`http://127.0.0.1:${frontendPort}/sectors/semiconductor`, { waitUntil: "networkidle" });
+  const unbuiltText = await page.locator("body").innerText();
+  if (!unbuiltText.includes("当前仅有产业链骨架") && !unbuiltText.includes("尚未建设")) {
+    errors.push(`${label}: unbuilt sector semiconductor missing clear placeholder notice`);
+  }
+  // Return to PCB overview for remaining PCB harness assertions
+  await page.goto(`http://127.0.0.1:${frontendPort}/sectors/pcb/overview`, { waitUntil: "networkidle" });
+
 
   // Switch all 6 tags
   for (const tag of ["原理与技术路线", "价值量", "铜中板", "产业格局", "定价权地图", "总览"]) {
@@ -675,6 +696,7 @@ async function main() {
   frontendPort = await getFreePort();
 
   const python = resolvePython();
+  console.log({ python, root, backendDir, e2eDir });
   let backendExited = false;
   let backendCode = null;
   // Load harness from frontend/tests/e2e via PYTHONPATH; import production modules from backend/.
@@ -720,7 +742,7 @@ async function main() {
   const networkBag = createNetworkBag(errors, "net");
 
   try {
-    await waitHttp(`http://127.0.0.1:${backendPort}/api/health`);
+    try { await waitHttp(`http://127.0.0.1:${backendPort}/api/health`); } catch (err) { console.error("BACKEND LOG:\n" + backendLog); throw err; }
     if (backendExited) {
       throw new Error(`isolated backend exited before ready (code=${backendCode})\n${backendLog.slice(-2000)}`);
     }

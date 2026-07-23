@@ -1,4 +1,8 @@
 import { pcbResearch } from "./pcb.ts";
+import { humanoidResearch } from "./humanoid.ts";
+import { aiComputingResearch } from "./ai-computing.ts";
+import { hbmResearch } from "./hbm.ts";
+import { cpoResearch } from "./cpo.ts";
 import { assertWorkspaceInvariants } from "./types.ts";
 import type { SectorResearchWorkspace } from "./types.ts";
 
@@ -8,6 +12,10 @@ export { getTagBySlug, resolveTagSlug } from "./types.ts";
 /** 已启用「研究工作台」的板块注册表（未注册的仍走通用 SectorDetail） */
 const WORKSPACES: Record<string, SectorResearchWorkspace> = {
   [pcbResearch.key]: pcbResearch,
+  [humanoidResearch.key]: humanoidResearch,
+  [aiComputingResearch.key]: aiComputingResearch,
+  [hbmResearch.key]: hbmResearch,
+  [cpoResearch.key]: cpoResearch,
 };
 
 for (const ws of Object.values(WORKSPACES)) {

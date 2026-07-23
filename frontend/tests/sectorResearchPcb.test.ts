@@ -23,11 +23,15 @@ const ALLOWED_SOURCE_IDS = [
   "S-SHENGYI-IC",
 ] as const;
 
-test("PCB workspace is registered and only PCB is registered for now", () => {
-  assert.deepEqual(registeredResearchKeys(), ["pcb"]);
+test("PCB workspace is registered alongside Batch 1 workspaces", () => {
+  const keys = registeredResearchKeys();
+  assert.ok(keys.includes("pcb"));
+  assert.ok(keys.includes("humanoid"));
+  assert.ok(keys.includes("ai-computing"));
+  assert.ok(keys.includes("hbm"));
+  assert.ok(keys.includes("cpo"));
   assert.ok(getSectorResearchWorkspace("pcb"));
-  assert.equal(getSectorResearchWorkspace("hbm"), undefined);
-  assert.equal(getSectorResearchWorkspace("ai-computing"), undefined);
+  assert.equal(getSectorResearchWorkspace("semiconductor"), undefined);
 });
 
 test("PCB has exactly six tags with stable slugs and labels in order", () => {
@@ -102,7 +106,7 @@ test("resolveOrFallback uses default for missing or illegal tag", () => {
     tagSlug: "copper-midplane",
     redirected: false,
   });
-  assert.equal(resolveOrFallback("hbm", "overview"), null);
+  assert.equal(resolveOrFallback("semiconductor", "overview"), null);
 });
 
 

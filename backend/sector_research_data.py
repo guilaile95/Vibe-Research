@@ -62,9 +62,65 @@ PCB_SOURCES = SectorDataSource(
     dynamic_panels=["profit_forecast", "announcements", "individual_info"],
 )
 
+# HUMANOID 数据源
+HUMANOID_SOURCES = SectorDataSource(
+    key="humanoid",
+    label="人形机器人",
+    report_keywords=[
+        "人形机器人", "具身智能", "谐波减速器", "行星滚柱丝杠", "空心杯电机",
+        "灵巧手", "无框力矩电机", "伺服驱动器", "六维力传感器",
+    ],
+    representative_company_codes=["002050", "601689", "002896", "603728", "300124", "688017"],
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# AI-COMPUTING 数据源
+AICOMPUTING_SOURCES = SectorDataSource(
+    key="ai-computing",
+    label="AI算力",
+    report_keywords=[
+        "AI算力", "AI服务器", "智算中心", "算力芯片", "无损网络",
+        "冷板液冷", "浸没液冷", "800G交换机", "NVLink", "液冷服务器",
+    ],
+    representative_company_codes=["000977", "603019", "000938", "601138", "688256", "688041"],
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# HBM 数据源
+HBM_SOURCES = SectorDataSource(
+    key="hbm",
+    label="HBM（高带宽内存）",
+    report_keywords=[
+        "HBM", "高带宽内存", "HBM3e", "HBM4", "TSV", "硅通孔",
+        "MR-MUF", "颗粒塑封料", "GMC", "2.5D", "3D", "CoWoS",
+    ],
+    representative_company_codes=["002409", "300475", "600641", "688535", "600584", "002156"],
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# CPO 数据源
+CPO_SOURCES = SectorDataSource(
+    key="cpo",
+    label="光互联与CPO",
+    report_keywords=[
+        "CPO", "共封装光学", "光模块", "800G光模块", "1.6T光模块",
+        "硅光", "LPO", "EML", "CW激光器", "光芯片", "FA光纤阵列",
+    ],
+    representative_company_codes=["300308", "300502", "300394", "688498", "002281", "000988"],
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
 # 注册表：key -> SectorDataSource。
 SECTOR_SOURCES: dict[str, SectorDataSource] = {
     PCB_SOURCES.key: PCB_SOURCES,
+    HUMANOID_SOURCES.key: HUMANOID_SOURCES,
+    AICOMPUTING_SOURCES.key: AICOMPUTING_SOURCES,
+    HBM_SOURCES.key: HBM_SOURCES,
+    CPO_SOURCES.key: CPO_SOURCES,
 }
 
 
