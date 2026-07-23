@@ -264,32 +264,114 @@ def discover_sector_reports(
     return result
 
 
+def _safe_panel_error(exc: BaseException) -> str:
+    """不向前端暴露堆栈；仅返回简短安全信息。"""
+    name = type(exc).__name__
+    if name == "DependencyMissing":
+        return "依赖未安装"
+    msg = str(exc).strip()
+    if not msg:
+        return f"{name}"
+    # 截断路径与过长内容
+    if len(msg) > 120:
+        msg = msg[:117] + "..."
+    if "Traceback" in msg or "\\" in msg or "/home/" in msg:
+        return name
+    return msg
+
+
+def _panel_ok(data) -> dict:
+    return {"status": "ok", "data": data, "error": None}
+
+
+def _panel_err(exc: BaseException) -> dict:
+    return {"status": "error", "data": None, "error": _safe_panel_error(exc)}
+
+
 def get_sector_dynamic_data(sector_key: str) -> dict:
-    """拉取板块动态数据（一致预期 / 公告 / 新闻）。缺失字段用 null，不猜测。"""
+    """拉取板块动态数据（一致预期 / 公告 / 新闻）。
+
+    合同：
+      source / fetched_at / status(normal|partial|unavailable) / warnings / companies
+    单家失败不导致整包空白。
+    """
+    from datetime import datetime, timezone
+
     src = get_sector_source(sector_key)
     if src is None:
-        return {"error": f"未注册的板块：{sector_key}"}
+        return {
+            "sector_key": sector_key,
+            "source": "a-stock-data",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "status": "unavailable",
+            "warnings": [f"未注册的板块：{sector_key}"],
+            "companies": [],
+            "error": f"未注册的板块：{sector_key}",
+        }
+
     codes = src.representative_company_codes
-    out: dict = {"sector_key": sector_key, "companies": []}
+    name_map = PCB_COMPANY_CODES if sector_key == "pcb" else {}
+    panels_enabled = list(src.dynamic_panels)
+    companies: list[dict] = []
+    warnings: list[str] = []
+    ok_panels = 0
+    fail_panels = 0
+
     for code in codes:
-        company = {"code": code}
-        try:
-            if "individual_info" in src.dynamic_panels:
-                company["info"] = astock.individual_info(code)
-        except Exception as e:  # noqa: BL001
-            company["info_error"] = str(e)
-        try:
-            if "profit_forecast" in src.dynamic_panels:
-                company["profit_forecast"] = astock.profit_forecast(code)
-        except Exception as e:  # noqa: BL001
-            company["profit_forecast_error"] = str(e)
-        try:
-            if "announcements" in src.dynamic_panels:
-                company["announcements"] = astock.announcements(code, limit=10)
-        except Exception as e:  # noqa: BL001
-            company["announcements_error"] = str(e)
-        out["companies"].append(company)
-    return out
+        company: dict = {
+            "code": code,
+            "name": name_map.get(code) or "",
+            "panels": {},
+        }
+        if "individual_info" in panels_enabled:
+            try:
+                data = astock.individual_info(code)
+                company["panels"]["individual_info"] = _panel_ok(data)
+                # 尝试补名称
+                if not company["name"] and isinstance(data, dict):
+                    for k in ("股票简称", "name", "简称"):
+                        if data.get(k):
+                            company["name"] = str(data[k])
+                            break
+                ok_panels += 1
+            except Exception as e:  # noqa: BL001
+                company["panels"]["individual_info"] = _panel_err(e)
+                fail_panels += 1
+                warnings.append(f"{code} 基本面：{_safe_panel_error(e)}")
+        if "profit_forecast" in panels_enabled:
+            try:
+                company["panels"]["profit_forecast"] = _panel_ok(astock.profit_forecast(code))
+                ok_panels += 1
+            except Exception as e:  # noqa: BL001
+                company["panels"]["profit_forecast"] = _panel_err(e)
+                fail_panels += 1
+                warnings.append(f"{code} 一致预期：{_safe_panel_error(e)}")
+        if "announcements" in panels_enabled:
+            try:
+                anns = astock.announcements(code, limit=10)
+                company["panels"]["announcements"] = _panel_ok(anns)
+                ok_panels += 1
+            except Exception as e:  # noqa: BL001
+                company["panels"]["announcements"] = _panel_err(e)
+                fail_panels += 1
+                warnings.append(f"{code} 公告：{_safe_panel_error(e)}")
+        companies.append(company)
+
+    if ok_panels == 0:
+        status = "unavailable"
+    elif fail_panels == 0:
+        status = "normal"
+    else:
+        status = "partial"
+
+    return {
+        "sector_key": sector_key,
+        "source": "a-stock-data",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "status": status,
+        "warnings": warnings[:20],
+        "companies": companies,
+    }
 
 
 def pdf_url_allowed(url: str | None) -> bool:

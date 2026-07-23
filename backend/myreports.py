@@ -260,18 +260,35 @@ def _load_index() -> list[dict]:
 # 目的：旧 index.json 不写回也能读取；缺失的新字段返回安全默认值。
 # ---------------------------------------------------------------------------
 
-def _ms_to_iso(ts: float) -> str:
-    """毫秒 epoch → ISO 8601（UTC）；失败回退到当前时间，绝不返回空串。"""
+def _ms_to_iso_or_empty(ts) -> str:
+    """毫秒 epoch → ISO 8601（UTC）。
+
+    仅合法、正数时间戳返回 ISO；缺失 / 0 / 非法 / 超范围返回空串。
+    禁止用当前时间伪造归档日期。
+    """
+    if ts is None or isinstance(ts, bool):
+        return ""
     try:
-        return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat()
+        n = float(ts)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    try:
+        return datetime.fromtimestamp(n / 1000, tz=timezone.utc).isoformat()
     except (OSError, OverflowError, ValueError):
-        return datetime.now(timezone.utc).isoformat()
+        return ""
+
+
+def _ms_to_iso(ts: float) -> str:
+    """兼容旧调用：合法正数 ts → ISO；否则空串（不再伪造 now）。"""
+    return _ms_to_iso_or_empty(ts)
 
 
 def _normalize_entry_for_read(e: dict) -> dict:
     """把一条旧格式条目补全为新 schema 的只读副本（不写盘、不计算 SHA-256）。返回新 dict。
 
-    关键：已有非空 title 必须保留，不得无条件用文件名覆盖。
+    关键：已有非空 title 必须保留；缺失/非法 ts → imported_at=""（不写当前时间）。
     """
     name = e.get("name", "") if isinstance(e.get("name"), str) else ""
     ext = e.get("ext", "") if isinstance(e.get("ext"), str) else ""
@@ -283,7 +300,12 @@ def _normalize_entry_for_read(e: dict) -> dict:
         normalized["title"] = existing_title
     else:
         normalized["title"] = fallback_title
-    normalized.setdefault("imported_at", _ms_to_iso(e.get("ts", 0) or 0))
+    # imported_at：已有非空字符串保留；否则仅从合法正数 ts 派生，失败为空串
+    existing_ia = e.get("imported_at")
+    if isinstance(existing_ia, str) and existing_ia.strip():
+        normalized["imported_at"] = existing_ia
+    else:
+        normalized["imported_at"] = _ms_to_iso_or_empty(e.get("ts"))
     normalized.setdefault("file_sha256", "")
     normalized.setdefault("institution", "")
     normalized.setdefault("publish_date", "")
@@ -348,7 +370,8 @@ def _upgrade_entry(e: dict) -> None:
     if not (isinstance(e.get("title"), str) and e["title"].strip()):
         title = os.path.splitext(name)[0] if ext else name
         e["title"] = title or name or "未命名"
-    e["imported_at"] = e.get("imported_at") or _ms_to_iso(e.get("ts", 0) or 0)
+    if not (isinstance(e.get("imported_at"), str) and e["imported_at"].strip()):
+        e["imported_at"] = _ms_to_iso_or_empty(e.get("ts"))
     rid = e.get("id", "")
     entity_path = REPORTS_DIR / f"{rid}{ext}" if rid else None
     if not e.get("file_sha256"):
@@ -673,6 +696,9 @@ def import_report_bytes(
     ext = os.path.splitext(fname)[1].lower() or ".pdf"
     if ext not in ALLOWED_EXT:
         raise ReportError(f"不支持的文件类型 {ext}；支持：PDF / Word / txt / md / 表格 / 图片")
+    # 公共入口防御：即使调用方绕过下载层，也拒绝伪 PDF
+    if ext == ".pdf" and not content.startswith(b"%PDF"):
+        raise ReportError("PDF 内容校验失败：缺少 %PDF 魔术字节")
 
     title = meta_in.get("title")
     if title is not None and not isinstance(title, str):
@@ -925,15 +951,19 @@ def update_report_meta(rid: str, changes: dict) -> dict | None:
 
 
 def _report_year_month(e: dict) -> tuple[str | None, str | None]:
-    """从条目提取 (年, 月) 用于时间浏览：优先 publish_date，缺失则回退到 imported_at。"""
-    pd = e.get("publish_date", "")
-    if pd:
-        parts = pd.split("-")
+    """从条目提取 (年, 月) 用于时间浏览。
+
+    优先级：publish_date → imported_at；两者都缺失 → (None, None) 表示「日期未确认」。
+    不得用当前时间伪造。
+    """
+    pd = e.get("publish_date", "") or ""
+    if isinstance(pd, str) and pd.strip():
+        parts = pd.strip().split("-")
         year = parts[0]
         month = "-".join(parts[:2]) if len(parts) >= 2 else None
         return year, month
-    ia = e.get("imported_at", "")
-    if ia:
+    ia = e.get("imported_at", "") or ""
+    if isinstance(ia, str) and ia.strip() and len(ia) >= 4:
         year = ia[:4]
         month = ia[:7] if len(ia) >= 7 else None
         return year, month
@@ -953,7 +983,7 @@ def build_browse(items: list[dict], group: str, sector_key: str | None = None) -
         for e in rows:
             year, month = _report_year_month(e)
             if not year:
-                year = "未知"
+                year = "日期未确认"
             year_count[year] = year_count.get(year, 0) + 1
             if month:
                 year_map.setdefault(year, {})
@@ -963,7 +993,13 @@ def build_browse(items: list[dict], group: str, sector_key: str | None = None) -
             months = [{"key": m, "label": m, "count": c} for m, c in year_map.get(year, {}).items()]
             months.sort(key=lambda x: x["key"], reverse=True)
             groups.append({"key": year, "label": year, "count": year_count[year], "months": months})
-        groups.sort(key=lambda x: x["key"], reverse=True)
+        # 日期未确认排最末，其余年份降序
+        groups.sort(key=lambda x: (x["key"] == "日期未确认", x["key"] == "未知", x["key"]), reverse=True)
+        # 上面 reverse 会把字典序大的年放前，但「日期未确认」因 True 反而排前；再校正
+        known = [g for g in groups if g["key"] not in ("日期未确认", "未知")]
+        unknown = [g for g in groups if g["key"] in ("日期未确认", "未知")]
+        known.sort(key=lambda x: x["key"], reverse=True)
+        groups = known + unknown
         return {"groups": groups, "total": len(rows)}
 
     if group == "industry":

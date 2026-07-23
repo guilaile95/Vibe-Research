@@ -485,3 +485,213 @@ def test_import_api_missing_external_id_400(tmp_path, monkeypatch):
     monkeypatch.setattr(srd, "discover_sector_reports", fake_discover)
     r = client.post("/api/sector-research/import/pcb", json={"external_id": "NOPE"})
     assert r.status_code == 400
+
+
+# ── 追加：import 契约 / imported_at / browse / PDF 魔数 / 动态数据 ──
+
+
+def test_import_api_extra_info_code_forbidden_422(tmp_path, monkeypatch):
+    """POST import 带多余 info_code → extra=forbid → 422。"""
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
+    r = client.post(
+        "/api/sector-research/import/pcb",
+        json={"external_id": "INFO99", "info_code": "INFO99"},
+    )
+    assert r.status_code == 422
+
+
+def test_import_api_external_id_missing_from_discovery_400(tmp_path, monkeypatch):
+    """discovery 不含该 external_id → 400。"""
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
+
+    def fake_discover(sector_key, **kwargs):
+        return srd.DiscoveryResult(
+            source_key=sector_key,
+            discovered=[{
+                "external_id": "OTHER",
+                "info_code": "OTHER",
+                "title": "其他",
+            }],
+        )
+
+    monkeypatch.setattr(srd, "discover_sector_reports", fake_discover)
+    r = client.post("/api/sector-research/import/pcb", json={"external_id": "NOPE"})
+    assert r.status_code == 400
+
+
+def test_import_api_matched_without_info_code_400(tmp_path, monkeypatch):
+    """matched 有 external_id 但 info_code 为 null → 400。"""
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
+
+    def fake_discover(sector_key, **kwargs):
+        return srd.DiscoveryResult(
+            source_key=sector_key,
+            discovered=[{
+                "external_id": "INFO_NO_CODE",
+                "info_code": None,
+                "title": "缺 info_code",
+            }],
+        )
+
+    monkeypatch.setattr(srd, "discover_sector_reports", fake_discover)
+    r = client.post(
+        "/api/sector-research/import/pcb",
+        json={"external_id": "INFO_NO_CODE"},
+    )
+    assert r.status_code == 400
+
+
+def test_import_api_uses_matched_info_code_for_pdf(tmp_path, monkeypatch):
+    """import 仅用 matched.info_code 生成 PDF URL（不信任前端）。"""
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
+    seen_urls: list[str] = []
+
+    def fake_discover(sector_key, **kwargs):
+        return srd.DiscoveryResult(
+            source_key=sector_key,
+            discovered=[{
+                "external_id": "IC_MATCH_42",
+                "info_code": "IC_MATCH_42",
+                "title": "用 info_code 下载",
+                "institution": "中信",
+                "publish_date": "2025-07-01",
+                "report_scope": "company",
+            }],
+        )
+
+    def capture_download(url, *a, **k):
+        seen_urls.append(url)
+        return _PDF_BYTES
+
+    monkeypatch.setattr(srd, "discover_sector_reports", fake_discover)
+    monkeypatch.setattr(app_module, "_download_pdf", capture_download)
+
+    r = client.post(
+        "/api/sector-research/import/pcb",
+        json={"external_id": "IC_MATCH_42"},
+    )
+    assert r.status_code == 200
+    assert seen_urls, "应调用 _download_pdf"
+    assert "IC_MATCH_42" in seen_urls[0]
+    assert seen_urls[0].startswith("https://pdf.dfcfw.com/")
+
+
+def test_list_reports_missing_ts_imported_at_empty(tmp_path, monkeypatch):
+    rdir = tmp_path / "myreports"
+    rdir.mkdir()
+    old = [{"id": "no_ts", "name": "a.pdf", "ext": ".pdf", "size": 1, "industry": "PCB"}]
+    (rdir / "index.json").write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(mr, "REPORTS_DIR", rdir)
+    listed = mr.list_reports()
+    assert listed[0]["imported_at"] == ""
+
+
+def test_list_reports_ts_zero_imported_at_empty(tmp_path, monkeypatch):
+    rdir = tmp_path / "myreports"
+    rdir.mkdir()
+    old = [{"id": "ts0", "name": "a.pdf", "ext": ".pdf", "size": 1, "ts": 0, "industry": "PCB"}]
+    (rdir / "index.json").write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(mr, "REPORTS_DIR", rdir)
+    listed = mr.list_reports()
+    assert listed[0]["imported_at"] == ""
+
+
+def test_list_reports_invalid_huge_ts_imported_at_empty(tmp_path, monkeypatch):
+    rdir = tmp_path / "myreports"
+    rdir.mkdir()
+    # 远超合理 epoch 范围，触发 OverflowError/OSError → 空串
+    old = [{
+        "id": "huge_ts", "name": "a.pdf", "ext": ".pdf", "size": 1,
+        "ts": 10**20, "industry": "PCB",
+    }]
+    (rdir / "index.json").write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(mr, "REPORTS_DIR", rdir)
+    listed = mr.list_reports()
+    assert listed[0]["imported_at"] == ""
+
+
+def test_read_twice_does_not_change_index_content_hash(tmp_path, monkeypatch):
+    rdir = tmp_path / "myreports"
+    rdir.mkdir()
+    old = [{"id": "h1", "name": "旧.pdf", "ext": ".pdf", "size": 1, "ts": 1700000000000, "industry": "PCB"}]
+    ip = rdir / "index.json"
+    raw = json.dumps(old, ensure_ascii=False)
+    ip.write_text(raw, encoding="utf-8")
+    monkeypatch.setattr(mr, "REPORTS_DIR", rdir)
+
+    def _hash() -> str:
+        return hashlib.sha256(ip.read_bytes()).hexdigest()
+
+    h0 = _hash()
+    mr.list_reports()
+    h1 = _hash()
+    mr.list_reports()
+    h2 = _hash()
+    assert h0 == h1 == h2
+    assert ip.read_text(encoding="utf-8") == raw
+
+
+def test_build_browse_year_no_dates_group_key_unconfirmed():
+    items = [{
+        "id": "nd1", "name": "无日期.pdf", "title": "无日期",
+        "industry": "PCB", "institution": "中信",
+        "publish_date": "", "imported_at": "", "sector_keys": ["pcb"],
+    }]
+    out = mr.build_browse(items, "year")
+    assert out["total"] == 1
+    assert out["groups"][0]["key"] == "日期未确认"
+    assert out["groups"][0]["count"] == 1
+
+
+def test_import_report_bytes_rejects_non_pdf_magic_with_pdf_ext(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
+    with pytest.raises(mr.ReportError, match="%PDF|魔术"):
+        mr.import_report_bytes(
+            name="fake.pdf",
+            content=_HTML_BYTES,
+            metadata={"title": "假 PDF"},
+        )
+
+
+def test_get_sector_dynamic_data_keys_and_partial_status(monkeypatch):
+    """返回合同字段；单家失败 → partial/unavailable。"""
+    # 全部成功
+    monkeypatch.setattr(srd.astock, "individual_info", lambda code: {"股票简称": f"名{code}"})
+    monkeypatch.setattr(srd.astock, "profit_forecast", lambda code: {"code": code})
+    monkeypatch.setattr(srd.astock, "announcements", lambda code, limit=10: [])
+    ok = srd.get_sector_dynamic_data("pcb")
+    for key in ("source", "fetched_at", "status", "warnings"):
+        assert key in ok
+    assert ok["source"] == "a-stock-data"
+    assert ok["status"] == "normal"
+    assert isinstance(ok["warnings"], list)
+    assert ok["fetched_at"]
+
+    # 部分失败 → partial
+    def boom_info(code):
+        if code == "002463":
+            raise RuntimeError("upstream down")
+        return {"股票简称": f"名{code}"}
+
+    monkeypatch.setattr(srd.astock, "individual_info", boom_info)
+    partial = srd.get_sector_dynamic_data("pcb")
+    assert partial["status"] == "partial"
+    assert partial["warnings"]
+
+    # 全部失败 → unavailable
+    monkeypatch.setattr(
+        srd.astock, "individual_info",
+        lambda code: (_ for _ in ()).throw(RuntimeError("all down")),
+    )
+    monkeypatch.setattr(
+        srd.astock, "profit_forecast",
+        lambda code: (_ for _ in ()).throw(RuntimeError("all down")),
+    )
+    monkeypatch.setattr(
+        srd.astock, "announcements",
+        lambda code, limit=10: (_ for _ in ()).throw(RuntimeError("all down")),
+    )
+    bad = srd.get_sector_dynamic_data("pcb")
+    assert bad["status"] == "unavailable"
+    for key in ("source", "fetched_at", "status", "warnings"):
+        assert key in bad

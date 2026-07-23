@@ -1243,10 +1243,9 @@ def industry(top: int = Query(20, ge=5, le=50)):
 
 
 class SectorReportImportIn(BaseModel):
-    """导入研报请求：只接受后端发现结果中的 external_id / info_code，禁止任意 URL。"""
+    """导入研报请求：只接受 external_id；禁止 info_code/URL/标题等可改目标字段。"""
     model_config = ConfigDict(extra="forbid")
     external_id: str = Field(..., min_length=1, max_length=64)
-    info_code: str | None = Field(default=None, max_length=64)
 
 
 _ALLOWED_REPORT_SCOPES = frozenset({"industry", "company", "all"})
@@ -1281,10 +1280,10 @@ def sector_research_data(sector_key: str):
 
 @app.post("/api/sector-research/import/{sector_key}")
 def sector_research_import(sector_key: str, body: SectorReportImportIn):
-    """导入研报：只接受后端发现结果中的 external_id。
+    """导入研报：只接受 external_id；身份与元数据严格绑定发现结果。
 
-    后端以 scope=all 重新核验来源仍存在；PDF 域名白名单 + HTTPS + 重定向校验 +
-    魔术字节；通过公共 mr.import_report_bytes 原子归档。不信任前端标题/URL。
+    后端以 scope=all 重新核验；PDF 仅由 matched.info_code 生成；不信任前端
+    标题/机构/URL/info_code。原子归档走 mr.import_report_bytes。
     """
     src = srd.get_sector_source(sector_key)
     if src is None:
@@ -1299,10 +1298,12 @@ def sector_research_import(sector_key: str, body: SectorReportImportIn):
     )
     if matched is None:
         raise HTTPException(400, "该 external_id 不在最新发现结果中，请重新发现")
-    info_code = body.info_code or matched.get("info_code") or body.external_id
-    if not info_code:
-        raise HTTPException(400, "缺少 info_code")
-    # 不信任前端 URL：仅由 info_code 生成白名单 PDF 地址
+    # 严格绑定：info_code 仅来自发现结果，不得用 external_id 猜测
+    info_code = matched.get("info_code")
+    if not info_code or not isinstance(info_code, str):
+        raise HTTPException(400, "发现结果缺少 info_code，无法安全下载")
+    external_id = matched.get("external_id") or info_code
+    # 不信任前端 URL：仅由 matched.info_code 生成白名单 PDF 地址
     pdf_url = astock.pdf_url(info_code)
     if not srd.pdf_url_allowed(pdf_url):
         raise HTTPException(400, "PDF 链接不在允许域名或非 HTTPS")
@@ -1319,8 +1320,8 @@ def sector_research_import(sector_key: str, body: SectorReportImportIn):
         "PCB" if sector_key == "pcb"
         else (src.label.split("（")[0].strip() if src.label else sector_key)
     )
+    # 元数据全部来自同一条 matched 发现结果
     safe_title = matched.get("title") or info_code
-    # 文件名仅作展示，禁止路径字符
     safe_name = f"{str(safe_title).replace('/', '_').replace(chr(92), '_')[:180]}.pdf"
     try:
         meta = mr.import_report_bytes(
@@ -1334,7 +1335,7 @@ def sector_research_import(sector_key: str, body: SectorReportImportIn):
                 "source_url": pdf_url,
                 "source_kind": "report",
                 "source_provider": "eastmoney",
-                "external_id": info_code,
+                "external_id": external_id,
                 "info_code": info_code,
                 "report_scope": matched.get("report_scope") or "",
                 "report_type": "brokerage",
