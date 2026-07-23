@@ -20,7 +20,7 @@ export const dramTsvBlocks: ContentBlock[] = [
       ["HBM2e", "8-Hi", "16GB", "460 GB/s", "微凸块 Microbump + 传统MR-MUF"],
       ["HBM3", "8-Hi / 12-Hi", "24GB", "819 GB/s", "Advanced MR-MUF / NCF"],
       ["HBM3e", "8-Hi / 12-Hi", "24GB - 36GB", "1.2 TB/s", "Advanced MR-MUF / 优化微凸块"],
-      ["HBM4 (下一代)", "12-Hi / 16-Hi", "36GB - 48GB", "2.0+ TB/s", "无凸块混合键合 (Hybrid Bonding) + 2048-bit 接口"],
+      ["HBM4 (下一代，规格待审定)", "12-Hi / 16-Hi（预测）", "36GB - 48GB（预测）", "2.0+ TB/s（预测）", "无凸块混合键合（分析推断）、接口位宽待定"],
     ],
     sourceIds: ["S-HBM-JEDEC-STANDARD", "S-HBM-SHANNON-FILING"],
   },

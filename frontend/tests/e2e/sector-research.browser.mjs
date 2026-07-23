@@ -284,8 +284,48 @@ async function runDesktop(browser, errors, networkBag) {
     const text = await page.locator("body").innerText();
     if (text.includes("404") || text.includes("未找到页面")) {
       errors.push(`${label}: sector ${sector} returned 404/not found`);
+      continue;
     }
+    const url = page.url();
+    if (!url.includes(`/sectors/${sector}/`)) {
+      errors.push(`${label}: sector ${sector} URL missing tag slug: ${url}`);
+    }
+    if (text.length < 200) {
+      errors.push(`${label}: sector ${sector} body too short (${text.length} chars)`);
+    }
+    const sourcesVisible = await page.getByText(/来源|参考资料/).first().isVisible().catch(() => false);
+    if (!sourcesVisible) {
+      errors.push(`${label}: sector ${sector} missing sources section`);
+    }
+    const sourceLinks = await page.locator('a[href*="http"]').count();
+    if (sourceLinks < 2) {
+      errors.push(`${label}: sector ${sector} too few source links (${sourceLinks})`);
+    }
+    await page.screenshot({
+      path: path.join(shotDir, `desktop-${sector}-overview.png`),
+      fullPage: true,
+    });
+    await assertNoHorizontalOverflow(page, `${label} ${sector}`, errors);
   }
+  // Batch 1 Sectors Verification (Mobile)
+  for (const sector of ["humanoid", "ai-computing", "hbm", "cpo"]) {
+    await page.goto(`http://127.0.0.1:${frontendPort}/sectors/${sector}`, { waitUntil: "networkidle" });
+    const text = await page.locator("body").innerText();
+    if (text.includes("404") || text.includes("未找到页面")) {
+      errors.push(`${label}: sector ${sector} returned 404/not found`);
+      continue;
+    }
+    const sourcesVisible = await page.getByText(/来源|参考资料/).first().isVisible().catch(() => false);
+    if (!sourcesVisible) {
+      errors.push(`${label}: sector ${sector} missing sources section`);
+    }
+    await page.screenshot({
+      path: path.join(shotDir, `mobile-${sector}-overview-390.png`),
+      fullPage: true,
+    });
+    await assertNoHorizontalOverflow(page, `${label} ${sector}`, errors);
+  }
+
   // Unbuilt sector placeholder verification
   await page.goto(`http://127.0.0.1:${frontendPort}/sectors/semiconductor`, { waitUntil: "networkidle" });
   const unbuiltText = await page.locator("body").innerText();
@@ -696,7 +736,7 @@ async function main() {
   frontendPort = await getFreePort();
 
   const python = resolvePython();
-  console.log({ python, root, backendDir, e2eDir });
+
   let backendExited = false;
   let backendCode = null;
   // Load harness from frontend/tests/e2e via PYTHONPATH; import production modules from backend/.
@@ -785,6 +825,7 @@ async function main() {
       "",
       "## Covered",
       "- 板块中心进入 PCB",
+      "- 板块中心进入 4 个 Batch 1 板块（人形机器人 / AI算力 / HBM / 光互联与CPO）",
       "- 六个 Tag",
       "- 动态数据展开与刷新",
       "- 研报行业/公司/全部发现",
@@ -801,9 +842,17 @@ async function main() {
       "- desktop-pcb-overview.png",
       "- desktop-report-discovery.png",
       "- desktop-my-reports.png",
+      "- desktop-humanoid-overview.png",
+      "- desktop-ai-computing-overview.png",
+      "- desktop-hbm-overview.png",
+      "- desktop-cpo-overview.png",
       "- mobile-pcb-overview-390.png",
       "- mobile-report-discovery-390.png",
       "- mobile-my-reports-390.png",
+      "- mobile-humanoid-overview-390.png",
+      "- mobile-ai-computing-overview-390.png",
+      "- mobile-hbm-overview-390.png",
+      "- mobile-cpo-overview-390.png",
       "",
       "## Errors",
       errors.length ? errors.map((error) => `- ${error}`).join("\n") : "- none",

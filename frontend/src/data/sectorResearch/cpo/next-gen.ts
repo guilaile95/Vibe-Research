@@ -10,7 +10,7 @@ export const nextGenBlocks: ContentBlock[] = [
   {
     type: "paragraph",
     text: "光互联正从单通道 100G 向单通道 200G 跨越，带动 1.6T 光模块成为下一代算力网络竞争焦点。在 3.2T 节点，CPO 被视为解决板间高密度光电转换与功耗极限的必然趋势。",
-    sourceIds: ["S-CPO-COBO-WHITEPAPER", "S-CPO-INNOTIGHT-FILING"],
+    sourceIds: ["S-CPO-OIF-CPO", "S-CPO-INNOTIGHT-FILING"],
   },
   {
     type: "compareTable",
@@ -22,6 +22,6 @@ export const nextGenBlocks: ContentBlock[] = [
       ["1.6T", "200G PAM4", "8 通道 * 200G", "OSFP-1600", "2024-2025年上量交付"],
       ["3.2T (CPO)", "200G / 400G", "基板级多通道集成", "CPO 共封装架构", "预估 2026+ 随着 1024卡机柜引入"],
     ],
-    sourceIds: ["S-CPO-COBO-WHITEPAPER", "S-CPO-INNOTIGHT-FILING", "S-CPO-EOPTOLINK-FILING"],
+    sourceIds: ["S-CPO-OIF-CPO", "S-CPO-INNOTIGHT-FILING", "S-CPO-EOPTOLINK-FILING"],
   },
 ];

@@ -5,7 +5,7 @@ export const overviewBlocks: ContentBlock[] = [
     type: "callout",
     tone: "info",
     text: "COBO 行业标准定义：CPO（Co-Packaged Optics，共封装光学）是将交换芯片（Switch ASIC）与硅光引擎（Optical Engine）共同封装在同一个高密度基板上的物理架构，旨在将功耗降低30%以上，解决 51.2T/102.4T 交换机端口的功耗瓶颈。",
-    sourceIds: ["S-CPO-COBO-WHITEPAPER"],
+    sourceIds: ["S-CPO-OIF-CPO"],
   },
   {
     type: "paragraph",

@@ -9,6 +9,8 @@ export const humanoidSources: SourceRef[] = [
     sourceType: "official",
     factLevel: "已确认事实",
     publishedAt: "2023-11-02",
+    accessedAt: "2026-07-24",
+    supports: "工信部发〔2023〕193号，明确2025年人形机器人创新体系初步建立、整机达到国际先进水平并实现批量生产",
     note: "工信部发〔2023〕193号；明确2025年人形机器人创新体系初步建立、整机达到国际先进水平并实现批量生产目标",
   },
   {
@@ -19,6 +21,8 @@ export const humanoidSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-26",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露机器人旋转执行器与直线执行器研发进展，与海外头部客户送样验证及产能规划",
     note: "披露聚焦机器人旋转执行器与直线执行器研发，协同海外头部客户送样验证与产能规划",
   },
   {
@@ -29,6 +33,8 @@ export const humanoidSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-29",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露设立机器人事业部，旋转与直线执行器样品多次交付客户验证，规划专用自动化生产线",
     note: "披露设立机器人事业部，旋转与直线执行器样品多次交付客户验证，规划建立专用自动化生产线",
   },
   {
@@ -39,6 +45,8 @@ export const humanoidSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-27",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露微型谐波减速器及机电一体化执行器在人形机器人关节中的适配研发进展",
     note: "国内谐波减速器龙头，披露微型谐波减速器及机电一体化执行器在人形机器人关节中的适配研发",
   },
   {
@@ -49,6 +57,8 @@ export const humanoidSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-26",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露精密行星减速器、RV减速器及伺服驱动一体化产品在机器人关节领域的探索与试样",
     note: "披露精密行星减速器、RV减速器及伺服驱动一体化产品在机器人关节领域的探索与试样",
   },
   {
@@ -59,6 +69,8 @@ export const humanoidSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-27",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露无齿槽空心杯电机与精密微型驱动系统在人形机器人灵巧手中的应用与样机交样",
     note: "披露无齿槽空心杯电机与精密微型驱动系统在人形机器人灵巧手和手套驱动中的应用与样机交样",
   },
   {
@@ -69,6 +81,8 @@ export const humanoidSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-25",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露核心伺服驱动器、无框电机及自动化控制平台在机器人领域的布局与技术积累",
     note: "披露核心伺服驱动器、无框电机及自动化控制平台在机器人领域的布局与技术积累",
   },
 ];

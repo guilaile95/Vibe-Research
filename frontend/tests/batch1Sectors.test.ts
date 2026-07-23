@@ -60,6 +60,8 @@ test("Batch 1 workspaces source integrity and usage", () => {
     for (const s of ws.sources) {
       assert.ok(usedSourceIds.has(s.id), `workspace ${key} source "${s.id}" is orphaned (never referenced)`);
       assert.ok(s.url && s.url.startsWith("http"), `source ${s.id} missing valid http/https url`);
+      assert.ok(s.accessedAt, `source ${s.id} missing accessedAt`);
+      assert.ok(s.supports, `source ${s.id} missing supports`);
     }
   }
 });

@@ -2,14 +2,16 @@ import type { SourceRef } from "../types.ts";
 
 export const cpoSources: SourceRef[] = [
   {
-    id: "S-CPO-COBO-WHITEPAPER",
-    title: "Consortium for On-Board Optics (COBO) Co-Packaged Optics Specification",
-    org: "COBO 行业联盟",
-    url: "https://www.onboardoptics.org/",
+    id: "S-CPO-OIF-CPO",
+    title: "OIF Co-Packaging Framework Implementation Agreement (IA)",
+    org: "OIF（光互连论坛）",
+    url: "https://www.oiforum.com/technical-work/hot-topics/co-packaging/",
     sourceType: "standard",
     factLevel: "已确认事实",
-    publishedAt: "2023-03-15",
-    note: "定义 CPO 架构下激光器外置（ELSFP）、硅光引擎与交换芯片同基板共封装的物理与电气标准",
+    publishedAt: "2023-11-01",
+    accessedAt: "2026-07-24",
+    supports: "定义 CPO 共封装架构的框架协议，涵盖 ELSFP 外置光源模块、硅光引擎与交换芯片共封装的物理尺寸、电气接口与热管理标准",
+    note: "OIF CPO IA 框架协议，定义 ELSFP 外置光源模块、硅光引擎与交换芯片共封装的物理/电气标准",
   },
   {
     id: "S-CPO-INNOTIGHT-FILING",
@@ -19,6 +21,8 @@ export const cpoSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-26",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露 800G 光模块大批量出货、1.6T 光模块研发进展、硅光引擎与 CPO 共封装光学技术研发及样机展示",
     note: "全球光模块龙头，披露800G/1.6T光模块大批量出货，以及硅光引擎与CPO共封装光学的技术研发与样机展示",
   },
   {
@@ -29,6 +33,8 @@ export const cpoSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-26",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露 800G 光模块量产交付、LPO 线性驱动可插拔方案客户测试、硅光方案产品部署进展",
     note: "披露800G光模块量产交付，LPO（线性驱动可插拔）与硅光方案的客户测试与产品部署",
   },
   {
@@ -39,6 +45,8 @@ export const cpoSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-24",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露 FA 光纤阵列、高精度陶瓷套管扩产，CPO 光引擎用精密元件的研发与客户交样",
     note: "定位光器件平台型厂商，披露FA光纤阵列、高精度陶瓷套管及CPO光引擎用精密元件的扩产与交样",
   },
   {
@@ -49,6 +57,8 @@ export const cpoSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-28",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露 100G EML 光芯片研发进展，用于硅光/CPO 的大功率 CW 连续波光源芯片研发与送样进展",
     note: "披露100G EML光芯片及用于硅光/CPO的大功率CW（连续波）光源芯片的研发与送样进展",
   },
   {
@@ -59,6 +69,8 @@ export const cpoSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-26",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露 800G 光模块产品线、硅光芯片研发进展、CPO 共封装技术研发布局",
     note: "国内全产业链光器件龙头，披露800G光模块、硅光芯片及CPO相关共封装技术的研发",
   },
   {
@@ -69,6 +81,8 @@ export const cpoSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-20",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露 800G 硅光模块小批量交付，1.6T 光模块与 CPO 共封装技术处于积极布局阶段",
     note: "披露800G硅光模块小批量交付，积极布局下一代 1.6T 光模块与 CPO 光电共封装技术",
   },
 ];

@@ -26,6 +26,40 @@ _JS_BYTES = b"window.location='https://evil.example/'"
 # ── PCB 公司代码映射 ──────────────────────────────────────────────
 
 
+
+# ── Batch 1 板块注册表完整性 ──────────────────────────────────────────
+
+BATCH1_SECTORS = ["humanoid", "ai-computing", "hbm", "cpo"]
+
+
+def test_registry_contains_all_batch1_sectors():
+    keys = srd.list_sector_source_keys()
+    for k in BATCH1_SECTORS:
+        assert k in keys, f"sector {k} missing from registry"
+    assert "pcb" in keys
+
+
+def test_each_batch1_sector_has_valid_config():
+    keys = srd.list_sector_source_keys()
+    for k in keys:
+        src = srd.get_sector_source(k)
+        assert src is not None
+        assert src.key == k
+        assert src.label
+        assert src.report_keywords
+        assert 1 <= src.report_lookback_days <= 3650
+        assert src.dynamic_panels
+        assert src.representative_company_codes
+        assert src.representative_companies
+        # 所有代码唯一且符合 6 位 A 股代码规则
+        assert len(src.representative_company_codes) == len(set(src.representative_company_codes)), \
+            f"{k}: duplicate company codes"
+        for code in src.representative_company_codes:
+            assert len(code) == 6 and code.isdigit(), f"{k}: invalid code {code}"
+            assert code in src.representative_companies, f"{k}: code {code} missing from name map"
+        for code, name in src.representative_companies.items():
+            assert name, f"{k}: empty name for {code}"
+
 def test_pcb_company_code_mapping_locked():
     assert srd.PCB_COMPANY_CODES == {
         "002463": "沪电股份",
@@ -639,6 +673,26 @@ def test_import_report_bytes_rejects_non_pdf_magic_with_pdf_ext(tmp_path, monkey
             content=_HTML_BYTES,
             metadata={"title": "假 PDF"},
         )
+
+
+
+
+def test_dynamic_data_name_fallback_when_individual_info_fails(monkeypatch):
+    """individual_info 失败时仍保留配置名称；成功时可补充。"""
+    def boom_info(code):
+        raise RuntimeError("upstream down")
+
+    monkeypatch.setattr(srd.astock, "individual_info", boom_info)
+    monkeypatch.setattr(srd.astock, "profit_forecast", lambda code: [])
+    monkeypatch.setattr(srd.astock, "announcements", lambda code, limit=10: [])
+
+    for sector_key in BATCH1_SECTORS:
+        data = srd.get_sector_dynamic_data(sector_key)
+        assert data["status"] in ("normal", "partial", "unavailable")
+        for company in data["companies"]:
+            assert company["name"], f"{sector_key} {company['code']}: name should be non-empty even when individual_info fails"
+            assert company["name"] == srd.get_sector_source(sector_key).representative_companies[company["code"]], \
+                f"{sector_key} {company['code']}: expected configured name"
 
 
 def test_get_sector_dynamic_data_keys_and_partial_status(monkeypatch):

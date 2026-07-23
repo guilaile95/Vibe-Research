@@ -9,6 +9,8 @@ export const aiComputingSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-27",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露高密度液冷 AI 服务器产品线、多卡算力服务器架构及供应链交付能力",
     note: "全球领先的AI服务器供应商，披露高密度液冷与多卡AI算力服务器架构及供应链交付",
   },
   {
@@ -19,6 +21,8 @@ export const aiComputingSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-26",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露高端计算与全浸没式相变液冷服务器技术、智算中心调度系统及冷板/CDU制造",
     note: "披露高端计算与全浸没式相变液冷服务器技术，智算中心调度系统及配套冷板/CDU制造",
   },
   {
@@ -29,6 +33,8 @@ export const aiComputingSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-27",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露旗下新华三 800G 无损以太网交换机、CPO 交换机原型及 AI 算力集群方案",
     note: "旗下新华三披露800G无损以太网交换机、CPO交换机原型及AI算力集群方案",
   },
   {
@@ -39,6 +45,8 @@ export const aiComputingSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-03-14",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露 GPU AI 服务器及高速 800G 交换机代工制造，与全球芯片巨头的研发与生产合作",
     note: "披露GPU AI服务器及高速800G交换机代工制造，与全球芯片巨头保持深度研发与生产合作",
   },
   {
@@ -49,6 +57,8 @@ export const aiComputingSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-30",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露思元系列云端 AI 芯片、软件栈与智算集群系统，适配大模型训练与推理场景",
     note: "披露思元系列云端AI芯片、软件栈与智算集群系统，适配大模型训练与推理场景",
   },
   {
@@ -59,6 +69,8 @@ export const aiComputingSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-12",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露海光 DCU（深算系列）在 AI 大模型训练与科学计算中的通用 FP64/FP16 算力表现及生态兼容性",
     note: "披露海光DCU（深算系列）在AI大模型训练与科学计算中的通用FP64/FP16算力表现及生态兼容",
   },
   {
@@ -69,6 +81,8 @@ export const aiComputingSources: SourceRef[] = [
     sourceType: "official",
     factLevel: "已确认事实",
     publishedAt: "2023-09-19",
+    accessedAt: "2026-07-24",
+    supports: "白皮书统计智能算力规模占整体算力比例，详述 AI 服务器、高速网络互连与绿色液冷数据中心发展趋势",
     note: "统计智算规模占比超过45%，详述AI服务器、高速网络互连与绿色液冷数据中心的发展趋势",
   },
 ];

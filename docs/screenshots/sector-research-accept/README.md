@@ -1,6 +1,6 @@
 # Sector research browser acceptance
 
-Date: 2026-07-23T20:04:38.770Z
+Date: 2026-07-23T21:23:54.377Z
 Browser: local chromium-1228
 Isolated VR_DATA_DIR used: yes
 Isolated VR_REPORTS_DIR used: yes
@@ -15,6 +15,7 @@ Harness load: PYTHONPATH=backend + frontend/tests/e2e; uvicorn harness_app:app (
 
 ## Covered
 - 板块中心进入 PCB
+- 板块中心进入 4 个 Batch 1 板块（人形机器人 / AI算力 / HBM / 光互联与CPO）
 - 六个 Tag
 - 动态数据展开与刷新
 - 研报行业/公司/全部发现
@@ -31,9 +32,17 @@ Harness load: PYTHONPATH=backend + frontend/tests/e2e; uvicorn harness_app:app (
 - desktop-pcb-overview.png
 - desktop-report-discovery.png
 - desktop-my-reports.png
+- desktop-humanoid-overview.png
+- desktop-ai-computing-overview.png
+- desktop-hbm-overview.png
+- desktop-cpo-overview.png
 - mobile-pcb-overview-390.png
 - mobile-report-discovery-390.png
 - mobile-my-reports-390.png
+- mobile-humanoid-overview-390.png
+- mobile-ai-computing-overview-390.png
+- mobile-hbm-overview-390.png
+- mobile-cpo-overview-390.png
 
 ## Errors
 - none

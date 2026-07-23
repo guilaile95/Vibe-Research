@@ -21,6 +21,6 @@ export const nextGenBlocks: ContentBlock[] = [
       ["总线接口位宽", "1024-bit", "2048-bit", "Interposer 中介层布线密度翻倍，PCB/载板层数要求提升"],
       ["堆叠键合技术", "微凸块 (Microbump)", "无凸块混合键合 (Direct Hybrid Bonding)", "抛弃凸块、间距降至<1μm，对清洗与键合设备提出极高要求"],
     ],
-    sourceIds: ["S-HBM-JEDEC-STANDARD", "S-HBM-JCET-FILING"],
+    sourceIds: ["S-HBM-JCET-FILING"],
   },
 ];

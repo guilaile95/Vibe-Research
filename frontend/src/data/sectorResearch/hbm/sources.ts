@@ -9,6 +9,8 @@ export const hbmSources: SourceRef[] = [
     sourceType: "standard",
     factLevel: "已确认事实",
     publishedAt: "2023-08-01",
+    accessedAt: "2026-07-24",
+    supports: "JESD235C 规范定义 HBM3/HBM3E 的 1024-bit 超宽接口、TSV 垂直堆叠、微凸块 Microbump 与混合键合 Hybrid Bonding 技术指标；不涵盖 HBM4 规格",
     note: "规范定义了1024-bit超宽接口、TSV垂直堆叠、微凸块（Microbump）与无凸块（Hybrid Bonding）技术指标",
   },
   {
@@ -19,6 +21,8 @@ export const hbmSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-27",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露 High-K 前驱体及先进封装材料在海外与本土存储大厂的供应情况",
     note: "前驱体与半导体封装材料供应商，披露High-K前驱体及先进封装材料在海外与本土存储大厂的供应",
   },
   {
@@ -29,6 +33,8 @@ export const hbmSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-25",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露作为 SK 海力士核心分销商，企业级存储与 HBM 相关供应链分销业务及客户拓展",
     note: "SK海力士核心分销商，披露企业级存储与HBM相关供应链分销业务及客户拓展",
   },
   {
@@ -39,6 +45,8 @@ export const hbmSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-26",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露旗下海力士半导体（无锡）后工序封测服务，传统与先进 DRAM 封装测试的长期合作",
     note: "旗下海力士半导体（无锡）后工序封测服务，披露传统与先进DRAM封装测试的长期合作",
   },
   {
@@ -49,6 +57,8 @@ export const hbmSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-29",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露颗粒状环氧塑封料 GMC 及应用于先进封装的高热导率包封材料的研发与送样验证",
     note: "披露颗粒状环氧塑封料（GMC）及应用于HBM/先进封装的高热导率包封材料的研发与送样验证",
   },
   {
@@ -59,6 +69,8 @@ export const hbmSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-20",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露 X-DFOI 2.5D/3D Chiplet 高密度集成封装方案，具备高密度转接板与多芯片堆叠封测能力",
     note: "披露X-DFOI 2.5D/3D Chiplet高密度集成封装方案，具备高密度转接板与多芯片堆叠封测能力",
   },
   {
@@ -69,6 +81,8 @@ export const hbmSources: SourceRef[] = [
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-26",
+    accessedAt: "2026-07-24",
+    supports: "公司年报披露作为 AMD 封测核心合作伙伴，大尺寸 2.5D/3D Chiplet 封装及 GPU 与 HBM 集成封测的大批量生产",
     note: "AMD封测核心合作伙伴，披露大尺寸2.5D/3D Chiplet封装及GPU与HBM集成封测的大批量生产",
   },
 ];
