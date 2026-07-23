@@ -69,6 +69,12 @@ async def _validation_handler(request: Request, exc: RequestValidationError):
     )
 
 
+
+@app.exception_handler(pf.PortfolioDataCorruptedError)
+async def _portfolio_corrupted_handler(request: Request, exc: pf.PortfolioDataCorruptedError):
+    """持仓数据文件损坏：HTTP 500 + 固定安全文案（不透文件路径/内容/traceback）。"""
+    return JSONResponse(status_code=500, content={"detail": pf.PortfolioDataCorruptedError.MESSAGE})
+
 @app.middleware("http")
 async def _require_api_key(request: Request, call_next):
     if (
@@ -190,6 +196,8 @@ def portfolio_get():
     """持仓 + 实时盈亏（浮动盈亏红涨绿跌）。"""
     try:
         return {"data": pf.get_portfolio()}
+    except pf.PortfolioDataCorruptedError:
+        raise
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"持仓读取异常：{e}") from e
 
@@ -232,6 +240,8 @@ def portfolio_advice(req: PortfolioAdviceRequest):
         raise HTTPException(502, "持仓建议模型输出无效") from None
     except (TypeError, ValueError):
         raise HTTPException(400, "持仓建议请求参数无效") from None
+    except pf.PortfolioDataCorruptedError:
+        raise
     except Exception:  # noqa: BLE001 — 不向客户端暴露路径/持仓/密钥
         raise HTTPException(500, "持仓操作建议生成失败") from None
 
@@ -275,6 +285,8 @@ def portfolio_update(h: HoldingUpdate):
         return {"data": pf.update_holding(code, h.shares, float(h.cost))}
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
+    except pf.PortfolioDataCorruptedError:
+        raise
     except Exception:  # noqa: BLE001 — 不向客户端泄漏路径/traceback
         raise HTTPException(502, "持仓编辑失败") from None
 
@@ -420,6 +432,8 @@ def portfolio_refresh():
     """手动刷新：立即重拉行情算盈亏。"""
     try:
         return {"data": pf.get_portfolio()}
+    except pf.PortfolioDataCorruptedError:
+        raise
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"刷新失败：{e}") from e
 
