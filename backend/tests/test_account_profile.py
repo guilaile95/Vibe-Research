@@ -1,4 +1,4 @@
-"""account_profile 数据层离线测试（存储 + 校验，不联网、不改 portfolio.json）。"""
+"""account_profile 数据层离线测试（存储 + 校验，不联网、不改真实用户目录）。"""
 from __future__ import annotations
 
 import json
@@ -9,22 +9,24 @@ import pytest
 import account_profile
 
 
-def _delete_file() -> None:
-    try:
-        os.remove(account_profile.ACCOUNT_FILE)
-    except FileNotFoundError:
-        pass
+@pytest.fixture(autouse=True)
+def isolated_account_dir(tmp_path, monkeypatch):
+    """每个测试在临时 CACHE_DIR 内操作，不影响真实 ~/.vibe-research。"""
+    monkeypatch.setattr(account_profile, "CACHE_DIR", str(tmp_path / "data"))
+
+
+def _account_file() -> str:
+    return account_profile._account_path()
 
 
 def test_unconfigured_returns_none():
     """文件不存在 → None（未配置，不是 0）。"""
-    _delete_file()
+    assert not os.path.exists(_account_file())
     assert account_profile.load_account_profile() is None
 
 
 def test_save_and_load_round_trip():
     """正常保存 → 读取一致，含 updated_at。"""
-    _delete_file()
     saved = account_profile.save_account_profile(100000, 20000)
     assert saved["total_assets"] == 100000.0
     assert saved["available_cash"] == 20000.0
@@ -40,7 +42,6 @@ def test_save_and_load_round_trip():
 
 def test_available_cash_zero_is_valid():
     """available_cash=0 合法。"""
-    _delete_file()
     saved = account_profile.save_account_profile(50000, 0)
     assert saved["available_cash"] == 0.0
     assert account_profile.load_account_profile()["available_cash"] == 0.0
@@ -48,9 +49,7 @@ def test_available_cash_zero_is_valid():
 
 def test_save_does_not_modify_portfolio():
     """保存账户资金不改 portfolio.json（文件路径隔离）。"""
-    _delete_file()
     portfolio_file = os.path.join(account_profile.CACHE_DIR, "portfolio.json")
-    # 写入一个标记文件，确认后续不被覆盖
     os.makedirs(account_profile.CACHE_DIR, exist_ok=True)
     sentinel = {"holdings": [], "last_refresh": "sentinel"}
     with open(portfolio_file, "w", encoding="utf-8") as f:
@@ -155,7 +154,6 @@ def test_validate_updated_at_rejected():
 
 def test_validate_rounds_to_two_decimals():
     """金额保留两位小数。"""
-    _delete_file()
     saved = account_profile.save_account_profile(100000.999, 20000.555)
     assert saved["total_assets"] == 100001.0  # round(100000.999, 2) == 100001.0
     assert saved["available_cash"] == 20000.56  # round(20000.555, 2) == 20000.56
@@ -172,9 +170,8 @@ def test_validate_cash_equals_total_accepted():
 
 def test_os_replace_failure_cleans_tmp():
     """os.replace 失败时：旧文件不变、不残留临时文件。"""
-    _delete_file()
     account_profile.save_account_profile(99999, 33333)
-    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+    with open(_account_file(), "rb") as f:
         good_bytes = f.read()
 
     def fail_replace(src, dst):
@@ -187,7 +184,7 @@ def test_os_replace_failure_cleans_tmp():
         except OSError:
             pass
 
-    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+    with open(_account_file(), "rb") as f:
         after = f.read()
     assert after == good_bytes
 
@@ -198,7 +195,6 @@ def test_os_replace_failure_cleans_tmp():
 
 def test_success_no_tmp_residue():
     """成功写入后不残留临时文件。"""
-    _delete_file()
     account_profile.save_account_profile(50000, 10000)
     dir_files = os.listdir(account_profile.CACHE_DIR)
     acc_files = [f for f in dir_files if f.startswith("account_profile")]
@@ -208,7 +204,6 @@ def test_success_no_tmp_residue():
 
 def test_concurrent_write_valid():
     """并发写入后最终文件是完整合法 JSON。"""
-    _delete_file()
     import threading
 
     n = 30
@@ -230,7 +225,7 @@ def test_concurrent_write_valid():
 
     assert len(errors) == 0, f"并发写入错误: {errors}"
     import json
-    with open(account_profile.ACCOUNT_FILE, encoding="utf-8") as f:
+    with open(_account_file(), encoding="utf-8") as f:
         data = json.load(f)
     assert "total_assets" in data
     assert "available_cash" in data
@@ -245,9 +240,8 @@ def test_concurrent_write_valid():
 
 def test_tmp_write_failure_no_residue():
     """临时文件写入失败（json.dump 抛出 OSError）：原文件不变、不残留临时文件。"""
-    _delete_file()
     account_profile.save_account_profile(99999, 33333)
-    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+    with open(_account_file(), "rb") as f:
         good_bytes = f.read()
 
     import unittest.mock as mock
@@ -261,7 +255,7 @@ def test_tmp_write_failure_no_residue():
         except OSError:
             pass
 
-    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+    with open(_account_file(), "rb") as f:
         assert f.read() == good_bytes
 
     dir_files = os.listdir(account_profile.CACHE_DIR)
@@ -271,9 +265,8 @@ def test_tmp_write_failure_no_residue():
 
 def test_keyboard_interrupt_not_caught():
     """KeyboardInterrupt 不被捕获为业务异常，临时文件仍被清理。"""
-    _delete_file()
     account_profile.save_account_profile(99999, 33333)
-    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+    with open(_account_file(), "rb") as f:
         good_bytes = f.read()
 
     import unittest.mock as mock
@@ -282,7 +275,7 @@ def test_keyboard_interrupt_not_caught():
         with pytest.raises(KeyboardInterrupt):
             account_profile.save_account_profile(111, 22)
 
-    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+    with open(_account_file(), "rb") as f:
         assert f.read() == good_bytes
 
     dir_files = os.listdir(account_profile.CACHE_DIR)
@@ -292,9 +285,8 @@ def test_keyboard_interrupt_not_caught():
 
 def test_system_exit_not_caught():
     """SystemExit 不被捕获为业务异常，临时文件仍被清理。"""
-    _delete_file()
     account_profile.save_account_profile(99999, 33333)
-    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+    with open(_account_file(), "rb") as f:
         good_bytes = f.read()
 
     import unittest.mock as mock
@@ -303,9 +295,47 @@ def test_system_exit_not_caught():
         with pytest.raises(SystemExit):
             account_profile.save_account_profile(111, 22)
 
-    with open(account_profile.ACCOUNT_FILE, "rb") as f:
+    with open(_account_file(), "rb") as f:
         assert f.read() == good_bytes
 
     dir_files = os.listdir(account_profile.CACHE_DIR)
     acc_files = [f for f in dir_files if f.startswith("account_profile")]
     assert len(acc_files) == 1, f"残留临时文件: {acc_files}"
+
+
+# ---- 隔离回归测试 ----
+
+def test_dynamic_path_follows_cache_dir(tmp_path):
+    """_account_path() 的值随 CACHE_DIR 动态变化，不影响其他目录。"""
+    old_dir = tmp_path / "old"
+    isolated_dir = tmp_path / "isolated"
+    old_dir.mkdir()
+    isolated_dir.mkdir()
+
+    # 在 old_dir 放 sentinel
+    old_acct = old_dir / "account_profile.json"
+    old_acct.write_text('{"total_assets": 1, "available_cash": 1, "updated_at": "old"}', encoding="utf-8")
+    old_portfolio = old_dir / "portfolio.json"
+    old_portfolio.write_text('{"holdings": [], "last_refresh": "old"}', encoding="utf-8")
+    old_bytes_initial = old_acct.read_bytes()
+    old_pf_bytes_initial = old_portfolio.read_bytes()
+
+    # 切换 CACHE_DIR 到 isolated_dir 并保存
+    import account_profile as ap
+    ap.CACHE_DIR = str(isolated_dir)
+    saved = ap.save_account_profile(200000, 50000)
+
+    # isolated_dir 生成了新文件
+    target = isolated_dir / "account_profile.json"
+    assert target.exists(), "新文件应生成在 isolated_dir"
+    assert json.loads(target.read_text(encoding="utf-8"))["total_assets"] == 200000.0
+
+    # old_dir 的两个 sentinel 完全不变
+    assert old_acct.read_bytes() == old_bytes_initial, "old_dir 的 account_profile 不应被修改"
+    assert old_portfolio.read_bytes() == old_pf_bytes_initial, "old_dir 的 portfolio 不应被修改"
+
+    # 无临时文件残留（只允许 account_profile.json）
+    isolated_files = [f.name for f in isolated_dir.iterdir()]
+    assert "account_profile.json" in isolated_files
+    tmp_files = [f for f in isolated_files if ".tmp." in f]
+    assert len(tmp_files) == 0, f"有残留临时文件: {tmp_files}"

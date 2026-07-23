@@ -1,31 +1,31 @@
-"""GET /api/account-profile 与 PUT /api/account-profile 离线 API 测试。"""
+"""GET /api/account-profile 与 PUT /api/account-profile 离线 API 测试（不接触真实用户目录）。"""
 from __future__ import annotations
 
 import os
+import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
+import account_profile
 
 client = TestClient(app_module.app)
 
 
+@pytest.fixture(autouse=True)
+def isolated_account_dir(tmp_path, monkeypatch):
+    """每个测试在临时 CACHE_DIR 内操作，不影响真实 ~/.vibe-research。"""
+    monkeypatch.setattr(account_profile, "CACHE_DIR", str(tmp_path / "data"))
+
+
 def _account_file() -> str:
-    # 与 account_profile 模块路径一致
-    import account_profile
-    return account_profile.ACCOUNT_FILE
-
-
-def _delete() -> None:
-    try:
-        os.remove(_account_file())
-    except FileNotFoundError:
-        pass
+    return account_profile._account_path()
 
 
 def test_get_unconfigured():
     """未配置 → configured=false, data=null。"""
-    _delete()
+    assert not os.path.exists(_account_file())
     resp = client.get("/api/account-profile")
     assert resp.status_code == 200
     assert resp.json() == {"configured": False, "data": None}
@@ -33,7 +33,6 @@ def test_get_unconfigured():
 
 def test_put_and_get_round_trip():
     """正常保存 → 读取一致。"""
-    _delete()
     resp = client.put("/api/account-profile", json={
         "total_assets": 100000, "available_cash": 20000,
     })
@@ -52,7 +51,6 @@ def test_put_and_get_round_trip():
 
 def test_put_rejects_invalid():
     """各类非法输入 → 400，不写文件。"""
-    _delete()
     cases = [
         {"total_assets": 0, "available_cash": 0},
         {"total_assets": -100, "available_cash": 0},
@@ -74,8 +72,7 @@ def test_put_rejects_invalid():
 
 
 def test_put_extra_fields_forbidden():
-    """Pydantic extra=forbid 拒绝未知字段（覆盖 unknown 路径）。"""
-    _delete()
+    """Pydantic extra=forbid 拒绝未知字段。"""
     resp = client.put("/api/account-profile", json={
         "total_assets": 100000, "available_cash": 20000, "foo": "bar",
     })
@@ -83,13 +80,10 @@ def test_put_extra_fields_forbidden():
 
 
 def test_put_does_not_modify_portfolio():
-    """保存账户资金不改 portfolio.json。"""
-    _delete()
-    import account_profile
+    """保存账户资金不改临时 CACHE_DIR 内的 portfolio.json sentinel。"""
     portfolio_file = os.path.join(account_profile.CACHE_DIR, "portfolio.json")
     os.makedirs(account_profile.CACHE_DIR, exist_ok=True)
     sentinel = {"holdings": [], "last_refresh": "sentinel"}
-    import json
     with open(portfolio_file, "w", encoding="utf-8") as f:
         json.dump(sentinel, f)
 
@@ -100,3 +94,30 @@ def test_put_does_not_modify_portfolio():
     with open(portfolio_file, encoding="utf-8") as f:
         after = json.load(f)
     assert after == sentinel
+
+
+def test_api_only_writes_tmp_cache_dir(tmp_path):
+    """PUT 只写入临时 CACHE_DIR，不写外部路径。"""
+    # 在临时目录放一个 portfolio sentinel 用于验证
+    portfolio_file = os.path.join(account_profile.CACHE_DIR, "portfolio.json")
+    os.makedirs(account_profile.CACHE_DIR, exist_ok=True)
+    sentinel = {"holdings": [], "last_refresh": "sentinel"}
+    with open(portfolio_file, "w", encoding="utf-8") as f:
+        json.dump(sentinel, f)
+
+    client.put("/api/account-profile", json={
+        "total_assets": 500000, "available_cash": 100000,
+    })
+
+    # 账户文件只应在 CACHE_DIR 内
+    acct_file = os.path.join(account_profile.CACHE_DIR, "account_profile.json")
+    assert os.path.exists(acct_file), "账户文件应生成在临时 CACHE_DIR"
+
+    # portfolio sentinel 不变
+    with open(portfolio_file, encoding="utf-8") as f:
+        assert json.load(f) == sentinel
+
+    # CACHE_DIR 外不应有 account_profile 写入（不读取真实 HOME 来验证）
+    dir_files = os.listdir(account_profile.CACHE_DIR)
+    tmp_files = [f for f in dir_files if f.startswith("account_profile") and ".tmp." in f]
+    assert len(tmp_files) == 0, f"有残留临时文件: {tmp_files}"
