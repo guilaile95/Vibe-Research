@@ -27,7 +27,8 @@ def test_classify_by_filename():
     assert mr.classify("随手记.txt") == "未分类"
 
 
-def test_report_roundtrip_and_delete():
+def test_report_roundtrip_and_delete(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "myreports")
     r = client.post("/api/myreports", json={"name": "长鑫_HBM_深度.pdf", "content_b64": _B64})
     assert r.status_code == 200
     meta = r.json()["data"]

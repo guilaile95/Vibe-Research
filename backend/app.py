@@ -75,6 +75,13 @@ async def _portfolio_corrupted_handler(request: Request, exc: pf.PortfolioDataCo
     """持仓数据文件损坏：HTTP 500 + 固定安全文案（不透文件路径/内容/traceback）。"""
     return JSONResponse(status_code=500, content={"detail": pf.PortfolioDataCorruptedError.MESSAGE})
 
+
+@app.exception_handler(mr.ReportIndexCorruptedError)
+async def _reports_corrupted_handler(request, exc):
+    """研报索引文件损坏：HTTP 500 + 固定安全文案。"""
+    return JSONResponse(status_code=500, content={"detail": mr.ReportIndexCorruptedError.MESSAGE})
+
+
 @app.middleware("http")
 async def _require_api_key(request: Request, call_next):
     if (
