@@ -27,7 +27,6 @@ _DATA_DIR = Path(os.environ.get("VR_DATA_DIR") or Path.home() / ".vibe-research"
 _DEFAULT_DIR = _DATA_DIR / "myreports"
 # 空串视同未设置（与 VR_DATA_DIR 语义一致，避免 Path("") 落到进程工作目录）
 REPORTS_DIR = Path(os.environ.get("VR_REPORTS_DIR") or str(_DEFAULT_DIR))
-_INDEX = REPORTS_DIR / "index.json"
 
 
 def _migrate_legacy() -> None:
@@ -74,25 +73,104 @@ class ReportError(ValueError):
     """上传/校验类错误（对应 HTTP 400/413）。"""
 
 
+class ReportIndexCorruptedError(RuntimeError):
+    """研报索引文件损坏，已停止读写以避免覆盖。"""
+    MESSAGE = (
+        "本地研报索引文件损坏，已停止读写以避免覆盖；"
+        "请检查 index.json，并在有备份时从 index.json.bak 恢复"
+    )
+
+    def __init__(self):
+        super().__init__(self.MESSAGE)
+
+
+def _index_path() -> Path:
+    return REPORTS_DIR / "index.json"
+
+
+def _tmp_name(base: str) -> str:
+    return f"{base}.tmp.{os.urandom(4).hex()}"
+
+
+def _validate_index_data(data):
+    if not isinstance(data, list):
+        raise ReportIndexCorruptedError()
+    for entry in data:
+        if not isinstance(entry, dict):
+            raise ReportIndexCorruptedError()
+        rid = entry.get("id")
+        if not isinstance(rid, str) or not rid:
+            raise ReportIndexCorruptedError()
+        ext = entry.get("ext")
+        if not isinstance(ext, str):
+            raise ReportIndexCorruptedError()
+    return data
+
 def _ensure_dir() -> None:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _load_index() -> list[dict]:
-    if not _INDEX.exists():
+    ip = _index_path()
+    if not ip.exists():
         return []
     try:
-        data = json.loads(_INDEX.read_text("utf-8"))
-        return data if isinstance(data, list) else []
-    except (json.JSONDecodeError, OSError):
-        return []
+        raw = ip.read_bytes()
+    except OSError:
+        raise
+    try:
+        text = raw.decode("utf-8")
+    except (UnicodeDecodeError, UnicodeError):
+        raise ReportIndexCorruptedError() from None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        raise ReportIndexCorruptedError() from None
+    return _validate_index_data(data)
 
 
 def _save_index(items: list[dict]) -> None:
-    _ensure_dir()
-    tmp = _INDEX.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), "utf-8")
-    os.replace(tmp, _INDEX)  # 原子改名，避免半截写入损坏索引（进程被 kill / OOM）
+    # 先验证待保存的新数据，非法则立即抛错，不动任何文件
+    _validate_index_data(items)
+
+    ip = _index_path()
+    ip.parent.mkdir(parents=True, exist_ok=True)
+    bak_path = ip.with_name(ip.name + ".bak")
+    bak_tmp = None
+    data_tmp = None
+    try:
+        if ip.exists():
+            try:
+                existing_raw = ip.read_bytes()
+            except OSError:
+                raise
+            try:
+                existing_text = existing_raw.decode("utf-8")
+                existing_data = json.loads(existing_text)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise ReportIndexCorruptedError() from None
+            _validate_index_data(existing_data)
+
+            bak_tmp = _tmp_name(str(bak_path))
+            shutil.copy2(ip, bak_tmp)
+            os.replace(bak_tmp, bak_path)
+            bak_tmp = None
+
+        data_tmp = _tmp_name(str(ip))
+        text = json.dumps(items, ensure_ascii=False, indent=2)
+        with open(data_tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(data_tmp, ip)
+        data_tmp = None
+    finally:
+        for tmp in (bak_tmp, data_tmp):
+            if tmp is not None and os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
 
 
 def classify(filename: str) -> str:
@@ -138,9 +216,7 @@ def save_report(name: str, content_b64: str) -> dict:
     if len(blob) > MAX_BYTES:
         raise ReportError(f"文件过大（{len(blob) // 1024 // 1024}MB），上限 {MAX_BYTES // 1024 // 1024}MB")
 
-    _ensure_dir()
     rid = uuid.uuid4().hex
-    (REPORTS_DIR / f"{rid}{ext}").write_bytes(blob)
     meta = {
         "id": rid,
         "name": fname,
@@ -149,12 +225,39 @@ def save_report(name: str, content_b64: str) -> dict:
         "ext": ext,
         "ts": int(time.time() * 1000),
     }
+
     with _LOCK:
         items = _load_index()
-        items.append(meta)
-        _save_index(items)
-    return meta
 
+        # 写实体文件
+        _ensure_dir()
+        entity_tmp = _tmp_name(str(REPORTS_DIR / rid))
+        try:
+            with open(entity_tmp, "wb") as f:
+                f.write(blob)
+                f.flush()
+                os.fsync(f.fileno())
+            entity_path = REPORTS_DIR / f"{rid}{ext}"
+            os.replace(entity_tmp, entity_path)
+            entity_tmp = None
+        finally:
+            if entity_tmp is not None and os.path.exists(entity_tmp):
+                try:
+                    os.remove(entity_tmp)
+                except OSError:
+                    pass
+
+        items.append(meta)
+        try:
+            _save_index(items)
+        except Exception:
+            ep = REPORTS_DIR / f"{rid}{ext}"
+            try:
+                ep.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+    return meta
 
 def report_path(rid: str) -> tuple[Path, str] | None:
     """按 id 取 (磁盘路径, 原始文件名)；不存在返回 None。"""
@@ -172,10 +275,13 @@ def delete_report(rid: str) -> bool:
         hit = next((r for r in items if r.get("id") == rid), None)
         if hit is None:
             return False
+
+        new_items = [r for r in items if r.get("id") != rid]
+        _save_index(new_items)
+
         fp = REPORTS_DIR / f"{rid}{hit.get('ext', '')}"
         try:
             fp.unlink(missing_ok=True)
         except OSError:
             pass
-        _save_index([r for r in items if r.get("id") != rid])
     return True

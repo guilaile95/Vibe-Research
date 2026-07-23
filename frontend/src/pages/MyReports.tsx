@@ -23,14 +23,19 @@ export function MyReports() {
   const [reports, setReports] = useState<MyReport[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [drag, setDrag] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
     try {
-      setReports(await api.myReports());
+      const data = await api.myReports();
+      setReports(data);
+      setLoadFailed(false);
+      setErr(null);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "加载研报列表失败");
+      setLoadFailed(true);
     }
   };
   useEffect(() => {
@@ -138,7 +143,7 @@ export function MyReports() {
       )}
 
       {/* 列表（按行业分组） */}
-      {reports.length === 0 ? (
+      {!loadFailed && reports.length === 0 ? (
         <GlassCard>
           <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
             <FolderOpen className="h-8 w-8 text-muted-foreground/40" />
