@@ -56,7 +56,7 @@ _API_KEY = os.environ.get("VR_API_KEY", "").strip()
 async def _validation_handler(request: Request, exc: RequestValidationError):
     """Pydantic 校验失败：/api/account-profile 与 /api/portfolio/holding 返回 400
     （严格类型 + 未知字段统一语义错误）；其它端点保持框架默认 422，避免影响现有契约。"""
-    if request.url.path in ("/api/account-profile", "/api/portfolio/holding"):
+    if request.url.path in ("/api/account-profile", "/api/portfolio/holding", "/api/portfolio/close"):
         errs = exc.errors()
         msg = "; ".join(
             (f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg', 'invalid')}") for e in errs
@@ -143,10 +143,29 @@ def chat(req: ChatReq):
     return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
+def _reject_bool_str(v, field: str) -> None:
+    """拒绝布尔值和字符串类型的字段值。"""
+    if isinstance(v, bool):
+        raise ValueError(f"{field} 不能是布尔值")
+    if isinstance(v, str):
+        raise ValueError(f"{field} 不能是字符串")
+
+
 class HoldingIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     code: str
-    shares: float
+    shares: int
     cost: float
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strict_types(cls, values):
+        if isinstance(values, dict):
+            _reject_bool_str(values.get("shares"), "shares")
+            _reject_bool_str(values.get("cost"), "cost")
+            if isinstance(values.get("shares"), float):
+                raise ValueError("shares 不能是小数")
+        return values
 
 
 class HoldingUpdate(BaseModel):
@@ -159,12 +178,8 @@ class HoldingUpdate(BaseModel):
     @classmethod
     def _strict_types(cls, values):
         if isinstance(values, dict):
-            for field in ("shares", "cost"):
-                v = values.get(field)
-                if isinstance(v, bool):
-                    raise ValueError(f"{field} 不能是布尔值")
-                if isinstance(v, str):
-                    raise ValueError(f"{field} 不能是字符串")
+            _reject_bool_str(values.get("shares"), "shares")
+            _reject_bool_str(values.get("cost"), "cost")
             if isinstance(values.get("shares"), float):
                 raise ValueError("shares 不能是小数")
         return values
@@ -229,7 +244,9 @@ def portfolio_add(h: HoldingIn):
         raise HTTPException(400, "代码必须是 6 位数字")
     if h.shares <= 0:
         raise HTTPException(400, "数量必须大于 0")
-    # 成本价不限正负：融券 / 返息 / 摊薄后为负成本等情形按结果计算，用户想怎么输就怎么输。
+    # 成本价不限正负，但必须是有限数字
+    if h.cost != h.cost or h.cost in (float("inf"), float("-inf")):
+        raise HTTPException(400, "成本价必须是有效数字")
     return {"data": pf.add_holding(code, h.shares, h.cost)}
 
 
@@ -346,11 +363,23 @@ def myreports_delete(rid: str):
 
 
 class CloseIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     code: str
     date: str
     price: float
-    shares: float
+    shares: int
     cost: float
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strict_types(cls, values):
+        if isinstance(values, dict):
+            _reject_bool_str(values.get("price"), "price")
+            _reject_bool_str(values.get("shares"), "shares")
+            _reject_bool_str(values.get("cost"), "cost")
+            if isinstance(values.get("shares"), float):
+                raise ValueError("shares 不能是小数")
+        return values
 
 
 @app.post("/api/portfolio/close")
@@ -359,8 +388,16 @@ def portfolio_close(c: CloseIn):
     code = (c.code or "").strip()
     if not code.isdigit() or len(code) != 6:
         raise HTTPException(400, "代码必须是 6 位数字")
-    if c.price <= 0 or c.shares <= 0:
-        raise HTTPException(400, "清仓价与股数必须大于 0")
+    if isinstance(c.price, bool) or not isinstance(c.price, (int, float)):
+        raise HTTPException(400, "清仓价必须是有效数字")
+    if c.price <= 0 or c.price != c.price or c.price in (float("inf"), float("-inf")):
+        raise HTTPException(400, "清仓价必须大于 0")
+    if isinstance(c.shares, bool) or not isinstance(c.shares, int) or c.shares <= 0:
+        raise HTTPException(400, "股数必须为正整数")
+    if isinstance(c.cost, bool) or not isinstance(c.cost, (int, float)):
+        raise HTTPException(400, "成本价必须是有效数字")
+    if c.cost != c.cost or c.cost in (float("inf"), float("-inf")):
+        raise HTTPException(400, "成本价必须是有效数字")
     # 买入成本不限正负（同持仓录入）：按 (清仓价 - 成本) × 股数 的结果计算已实现盈亏。
     date = (c.date or "").strip()
     if not date:

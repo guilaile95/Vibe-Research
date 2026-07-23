@@ -526,9 +526,11 @@ export function Portfolio() {
 
   const addClose = async () => {
     if (!/^\d{6}$/.test(cCode.trim())) { setErr("清仓记录：请输入 6 位代码"); return; }
-    const p = parseFloat(cPrice), s = parseFloat(cShares), c = parseFloat(cCost);
+    const p = parseFloat(cPrice), s = validateShares(cShares), c = parseFloat(cCost);
     if (!cDate) { setErr("请选清仓日期"); return; }
-    if (!(p > 0) || !(s > 0) || !Number.isFinite(c)) { setErr("清仓价 / 股数须大于 0，成本请填数字（可为负）"); return; }
+    if (!(p > 0) || !Number.isFinite(p)) { setErr("清仓价必须大于 0"); return; }
+    if (s === null) { setErr("股数必须为正整数"); return; }
+    if (!Number.isFinite(c)) { setErr("成本请填数字（可为负）"); return; }
     setClosing(true); setErr(null);
     try {
       setData(await api.closePosition(cCode.trim(), cDate, p, s, c));
@@ -1011,7 +1013,7 @@ export function Portfolio() {
           </div>
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">股数</label>
-            <input value={cShares} onChange={(e) => setCShares(e.target.value.replace(/[^\d.]/g, ""))} placeholder="如 100"
+            <input value={cShares} onChange={(e) => setCShares(e.target.value.replace(/\D/g, ""))} placeholder="如 100"
               className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
           </div>
           <div>
