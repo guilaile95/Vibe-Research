@@ -108,6 +108,7 @@ export type SectorReportsDiscoveryResult = {
 
 export type SectorDynamicPanel = {
   status: "ok" | "error";
+  summary: Record<string, unknown>;
   data: unknown;
   error: string | null;
 };

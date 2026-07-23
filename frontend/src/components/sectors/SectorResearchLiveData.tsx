@@ -26,15 +26,16 @@ function panelOkCount(panels: Record<string, { status: string }> | undefined): {
   total: number;
   errors: string[];
 } {
-  const keys = PANEL_KEYS;
+  if (!panels) return { ok: 0, total: 0, errors: [] };
+  const keys = Object.keys(panels);
   let ok = 0;
   const errors: string[] = [];
   for (const k of keys) {
-    const p = panels?.[k];
+    const p = panels[k];
     if (p?.status === "ok") ok += 1;
     else if (p?.status === "error") {
       const err = (p as { error?: string | null }).error;
-      if (err) errors.push(`${PANEL_LABELS[k]}: ${err}`);
+      if (err) errors.push(`${PANEL_LABELS[k as keyof typeof PANEL_LABELS] || k}: ${err}`);
     }
   }
   return { ok, total: keys.length, errors };
@@ -183,6 +184,85 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
                         );
                       })}
                     </div>
+
+                    {/* Individual Info Summary */}
+                    {c.panels.individual_info?.status === "ok" && c.panels.individual_info.summary && (
+                      <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">
+                        {(c.panels.individual_info.summary as any).industry && (
+                          <p>
+                            <span className="font-medium text-foreground/80">行业：</span>
+                            {String((c.panels.individual_info.summary as any).industry)}
+                          </p>
+                        )}
+                        {(c.panels.individual_info.summary as any).market_cap && (
+                          <p>
+                            <span className="font-medium text-foreground/80">市值：</span>
+                            {String((c.panels.individual_info.summary as any).market_cap)}
+                          </p>
+                        )}
+                        {(c.panels.individual_info.summary as any).business && (
+                          <p className="line-clamp-2">
+                            <span className="font-medium text-foreground/80">主营：</span>
+                            {String((c.panels.individual_info.summary as any).business)}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Profit Forecast Summary */}
+                    {c.panels.profit_forecast?.status === "ok" && c.panels.profit_forecast.summary && (
+                      <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">
+                        {(c.panels.profit_forecast.summary as any).note ? (
+                          <p className="italic">{String((c.panels.profit_forecast.summary as any).note)}</p>
+                        ) : (
+                          <>
+                            {(c.panels.profit_forecast.summary as any).coverage && (
+                              <p>
+                                <span className="font-medium text-foreground/80">机构数：</span>
+                                {String((c.panels.profit_forecast.summary as any).coverage)}
+                              </p>
+                            )}
+                            {(c.panels.profit_forecast.summary as any).year && (
+                              <p>
+                                <span className="font-medium text-foreground/80">预测年度：</span>
+                                {String((c.panels.profit_forecast.summary as any).year)}
+                              </p>
+                            )}
+                            {(c.panels.profit_forecast.summary as any).forecast && (
+                              <p>
+                                <span className="font-medium text-foreground/80">预测：</span>
+                                {String((c.panels.profit_forecast.summary as any).forecast)}
+                              </p>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Announcements Summary */}
+                    {c.panels.announcements?.status === "ok" && c.panels.announcements.summary && (
+                      <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">
+                        {(c.panels.announcements.summary as any).count != null && (
+                          <p>
+                            <span className="font-medium text-foreground/80">公告数：</span>
+                            {String((c.panels.announcements.summary as any).count)}
+                          </p>
+                        )}
+                        {(c.panels.announcements.summary as any).latest_date && (
+                          <p>
+                            <span className="font-medium text-foreground/80">最新日期：</span>
+                            {String((c.panels.announcements.summary as any).latest_date)}
+                          </p>
+                        )}
+                        {(c.panels.announcements.summary as any).latest_title && (
+                          <p className="line-clamp-2">
+                            <span className="font-medium text-foreground/80">标题：</span>
+                            {String((c.panels.announcements.summary as any).latest_title)}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
                     {errors.length > 0 && (
                       <p className="mt-1 line-clamp-2 text-[10px] text-muted-foreground">
                         {errors.join(" · ")}
