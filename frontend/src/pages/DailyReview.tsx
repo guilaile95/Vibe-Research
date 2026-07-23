@@ -864,7 +864,7 @@ export function DailyReview() {
         title="每日复盘"
         subtitle={`${tradeDateLabel !== "—" ? tradeDateLabel : today} · 大盘 / 情绪 / 板块涨幅一屏看全`}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
             <button onClick={loadDailyReview} className="text-muted-foreground hover:text-primary" title="刷新复盘数据">
               <RefreshCw className={cn("h-4 w-4", !drDone && "animate-spin")} />
             </button>
