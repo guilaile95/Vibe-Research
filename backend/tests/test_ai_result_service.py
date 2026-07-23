@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import json
+import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -153,6 +155,25 @@ def test_daily_review_save_uses_safe_payload_and_no_sensitive_config(tmp_path, m
     assert "Bearer" not in serialized
 
 
+def test_daily_review_record_generated_at_is_ai_completion_time_not_source_review_time(
+    tmp_path,
+    monkeypatch,
+):
+    db = tmp_path / "daily_reviews.sqlite3"
+    monkeypatch.setattr(service.review_history, "resolve_review_db_path", lambda: db)
+    review = _review(generated_at="2026-07-22 09:00:00", data_cutoff="2026-07-22 15:00:00")
+
+    saved = service.save_daily_review_ai(review, "# 权威复盘", {"model": "safe-model"})
+
+    assert saved["payload"]["source_review_generated_at"] == "2026-07-22 09:00:00"
+    assert saved["payload"]["source_data_cutoff"] == "2026-07-22 15:00:00"
+    assert saved["generated_at"] != saved["payload"]["source_review_generated_at"]
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", saved["generated_at"])
+    restored = service.get_ai_result("daily_review_ai", trade_date="2026-07-23")
+    assert restored["generated_at"] == saved["generated_at"]
+    assert restored["payload"]["source_review_generated_at"] == "2026-07-22 09:00:00"
+
+
 def test_daily_review_validation_happens_before_old_row_can_be_overwritten(tmp_path, monkeypatch):
     db = tmp_path / "daily_reviews.sqlite3"
     monkeypatch.setattr(service.review_history, "resolve_review_db_path", lambda: db)
@@ -193,6 +214,38 @@ def test_portfolio_save_and_stale_matrix(tmp_path, monkeypatch):
         )
         assert result["stale"] is True
         assert result["stale_message"] == service.PORTFOLIO_STALE_MESSAGE
+
+
+def test_portfolio_advice_restore_uses_static_holdings_snapshot_without_quotes(
+    tmp_path,
+    monkeypatch,
+):
+    db = tmp_path / "daily_reviews.sqlite3"
+    pf_file = tmp_path / "portfolio.json"
+    monkeypatch.setattr(service.review_history, "resolve_review_db_path", lambda: db)
+    monkeypatch.setattr(service.portfolio, "PF_FILE", str(pf_file))
+    monkeypatch.setattr(service.portfolio, "CACHE_DIR", str(tmp_path))
+    portfolio_data = _portfolio([{"code": "600519", "shares": 100, "cost": 1500.5}])
+    pf_file.write_text(
+        json.dumps({"holdings": portfolio_data["holdings"], "last_refresh": "old"}),
+        encoding="utf-8",
+    )
+    service.save_portfolio_advice(
+        portfolio_data,
+        _review(),
+        _advice_payload(),
+        {"provider": "cli-codex", "model": "gpt"},
+    )
+
+    def boom_quote(*_args, **_kwargs):
+        raise AssertionError("restore must not request live quotes")
+
+    monkeypatch.setattr(service.portfolio.astock, "tencent_quote", boom_quote)
+
+    restored = service.get_ai_result("portfolio_advice", trade_date="2026-07-23")
+
+    assert restored["stale"] is False
+    assert json.loads(pf_file.read_text(encoding="utf-8"))["last_refresh"] == "old"
 
 
 def test_get_exact_none_and_latest_without_fresh_aggregation(tmp_path, monkeypatch):

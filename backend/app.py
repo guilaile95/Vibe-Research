@@ -69,6 +69,28 @@ class _DisconnectAwareStreamingResponse(StreamingResponse):
         if self.background is not None:
             await self.background()
 
+
+def _safe_daily_review_ai_done_result(record) -> dict[str, str]:
+    if not isinstance(record, dict):
+        raise ai_result_service.AiResultValidationError("missing committed result")
+    result_type, trade_date = ai_result_service.validate_result_identity(
+        record.get("result_type"),
+        record.get("trade_date"),
+    )
+    if result_type != ai_result_service.DAILY_REVIEW_AI:
+        raise ai_result_service.AiResultValidationError("unexpected committed result type")
+    schema_version = record.get("schema_version")
+    if schema_version != "daily_review_ai.v1":
+        raise ai_result_service.AiResultValidationError("unexpected committed schema")
+    generated_at = ai_result_service._valid_timestamp(record.get("generated_at"), "generated_at")
+    return {
+        "result_type": result_type,
+        "trade_date": trade_date,
+        "schema_version": schema_version,
+        "generated_at": generated_at,
+    }
+
+
 app = FastAPI(title="Vibe-Research API", version="0.1.3")
 
 # 每半小时后台刷新持仓数据
@@ -662,7 +684,7 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
                 raise ValueError("empty model output")
             if disconnect_event.is_set():
                 return
-            await run_in_threadpool(
+            saved_record = await run_in_threadpool(
                 ai_result_service.save_daily_review_ai,
                 review,
                 markdown,
@@ -671,8 +693,9 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
             )
             if disconnect_event.is_set():
                 return
+            result = _safe_daily_review_ai_done_result(saved_record)
             yield json.dumps(
-                {"type": "done", "trace": trace, "rounds": rounds},
+                {"type": "done", "trace": trace, "rounds": rounds, "result": result},
                 ensure_ascii=False,
             ) + "\n"
         except Exception:  # noqa: BLE001 — fixed safe stream error; old persisted row remains

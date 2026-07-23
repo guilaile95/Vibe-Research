@@ -8,6 +8,7 @@ import {
   type StreamLlmConfig,
 } from "@/lib/api";
 import type { LlmConfig } from "@/lib/llm";
+import { getDailyReviewAiRestoreTradeDate } from "@/stores/dailyReviewAiResultMetadata";
 
 export type DailyReviewAiTaskStatus =
   | "idle"
@@ -157,7 +158,7 @@ export const useDailyReviewAiTaskStore = create<DailyReviewAiTaskState>((set, ge
     }
   },
 
-  start: async (llm: LlmConfig, tradeDate: string) => {
+  start: async (llm: LlmConfig, _tradeDate: string) => {
     if (get().status === "running") return;
     const requestId = ++activeRequestId;
     activeController?.abort();
@@ -185,7 +186,9 @@ export const useDailyReviewAiTaskStore = create<DailyReviewAiTaskState>((set, ge
         },
         controller.signal,
       );
-      const saved = await api.aiResult<DailyReviewAiPayload>("daily_review_ai", tradeDate);
+      const restoreTradeDate = getDailyReviewAiRestoreTradeDate(streamed.result);
+      if (!restoreTradeDate) throw new ApiError("生成完成但缺少已保存结果元数据", 502);
+      const saved = await api.aiResult<DailyReviewAiPayload>("daily_review_ai", restoreTradeDate);
       if (!saved) throw new ApiError("生成完成但未能恢复已保存结果", 502);
       if (requestId !== activeRequestId) return;
       const startedAt = get().startedAt;

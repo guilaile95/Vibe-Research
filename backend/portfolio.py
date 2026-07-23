@@ -16,6 +16,7 @@ import shutil
 import sys
 import threading
 import time
+import copy
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
@@ -208,6 +209,13 @@ def _is_valid_price(px: Any) -> bool:
     if px <= 0 or px != px or px in (float("inf"), float("-inf")):
         return False
     return True
+
+
+def get_portfolio_holdings_snapshot() -> dict:
+    """Read local holdings only; no quotes, calculations, writes, or timestamp updates."""
+    with _LOCK:
+        d = _load()
+    return {"holdings": copy.deepcopy(d.get("holdings", []))}
 
 
 def get_portfolio() -> dict:

@@ -43,7 +43,12 @@ def _prepared():
 
 @pytest.fixture(autouse=True)
 def _never_write_real_ai_db(monkeypatch):
-    save = MagicMock(return_value={"trade_date": "2026-07-23"})
+    save = MagicMock(return_value={
+        "result_type": "daily_review_ai",
+        "trade_date": "2026-07-23",
+        "schema_version": "daily_review_ai.v1",
+        "generated_at": "2026-07-23 16:02:15",
+    })
     monkeypatch.setattr(app_module.ai_result_service, "save_daily_review_ai", save)
     return save
 
@@ -381,7 +386,12 @@ def test_analyze_persists_full_markdown_before_business_done(monkeypatch):
         assert cfg["apiKey"] == "sk-test"
         assert should_cancel is not None
         assert should_cancel() is False
-        return {"trade_date": review["trade_date"]}
+        return {
+            "result_type": "daily_review_ai",
+            "trade_date": review["trade_date"],
+            "schema_version": "daily_review_ai.v1",
+            "generated_at": "2026-07-23 16:02:15",
+        }
 
     monkeypatch.setattr(chat_layer, "stream_messages", stream)
     monkeypatch.setattr(app_module.ai_result_service, "save_daily_review_ai", save)
@@ -389,6 +399,75 @@ def test_analyze_persists_full_markdown_before_business_done(monkeypatch):
     events = [json.loads(line) for line in response.text.splitlines()]
     assert order == ["save"]
     assert [event["type"] for event in events] == ["delta", "delta", "done"]
+
+
+def test_analyze_done_includes_committed_daily_review_ai_result_metadata(monkeypatch):
+    monkeypatch.setattr(
+        chat_layer, "prepare_daily_review_analysis", MagicMock(return_value=_prepared())
+    )
+    monkeypatch.setattr(
+        chat_layer,
+        "stream_messages",
+        _stream_events(
+            {"type": "delta", "text": "# 完整复盘"},
+            {"type": "done", "trace": [], "rounds": 1},
+        ),
+    )
+    committed = {
+        "result_type": "daily_review_ai",
+        "trade_date": "2026-07-23",
+        "schema_version": "daily_review_ai.v1",
+        "generated_at": "2026-07-23 16:02:15",
+        "payload": {"markdown": "# 完整复盘"},
+        "model_provider": "api-compatible",
+        "model_name": "deepseek-chat",
+    }
+    monkeypatch.setattr(
+        app_module.ai_result_service,
+        "save_daily_review_ai",
+        MagicMock(return_value=committed),
+    )
+
+    response = client.post("/api/daily-review/analyze", json={"llm": _LLM})
+    events = [json.loads(line) for line in response.text.splitlines()]
+
+    assert events[-1] == {
+        "type": "done",
+        "trace": [],
+        "rounds": 1,
+        "result": {
+            "result_type": "daily_review_ai",
+            "trade_date": "2026-07-23",
+            "schema_version": "daily_review_ai.v1",
+            "generated_at": "2026-07-23 16:02:15",
+        },
+    }
+    assert "payload" not in events[-1]["result"]
+    assert "model_provider" not in events[-1]["result"]
+
+
+def test_analyze_missing_committed_result_metadata_fails_without_done(monkeypatch):
+    monkeypatch.setattr(
+        chat_layer, "prepare_daily_review_analysis", MagicMock(return_value=_prepared())
+    )
+    monkeypatch.setattr(
+        chat_layer,
+        "stream_messages",
+        _stream_events(
+            {"type": "delta", "text": "# 完整复盘"},
+            {"type": "done", "trace": [], "rounds": 1},
+        ),
+    )
+    monkeypatch.setattr(
+        app_module.ai_result_service,
+        "save_daily_review_ai",
+        MagicMock(return_value={"trade_date": "2026-07-23"}),
+    )
+
+    response = client.post("/api/daily-review/analyze", json={"llm": _LLM})
+    events = [json.loads(line) for line in response.text.splitlines()]
+
+    assert [event["type"] for event in events] == ["delta", "error"]
 
 
 @pytest.mark.parametrize(
@@ -462,7 +541,12 @@ def test_analyze_real_asgi_disconnect_never_saves_or_sends_done(monkeypatch):
         yield {"type": "done", "trace": [], "rounds": 1}
 
     monkeypatch.setattr(chat_layer, "stream_messages", stream)
-    save = MagicMock(return_value={"trade_date": "2026-07-23"})
+    save = MagicMock(return_value={
+        "result_type": "daily_review_ai",
+        "trade_date": "2026-07-23",
+        "schema_version": "daily_review_ai.v1",
+        "generated_at": "2026-07-23 16:02:15",
+    })
     monkeypatch.setattr(app_module.ai_result_service, "save_daily_review_ai", save)
 
     sent: list[dict] = []

@@ -658,6 +658,13 @@ export interface AiGeneratedResult<TPayload> {
   stale_message?: string;
 }
 
+export interface AiGeneratedResultMetadata {
+  result_type: AiResultType;
+  trade_date: string;
+  schema_version: string;
+  generated_at: string;
+}
+
 // 资金面 / 筹码 / 信号（v3.3 并入，均为「用户查的那只股」的公开数据）
 export interface MarginRow { date: string; rzye: number; rzmre: number; rzche: number; rqye: number; rqmcl: number; rzrqye: number }
 export interface BlockTradeRow { date: string; price: number; close: number; premium_pct: number; vol: number; amount: number; buyer: string; seller: string }
@@ -726,6 +733,7 @@ export interface NdjsonStreamResult {
   content: string;
   trace: { tool: string; args: Record<string, unknown> }[];
   rounds: number;
+  result?: AiGeneratedResultMetadata;
 }
 
 export interface NdjsonProtocolState extends NdjsonStreamResult {
@@ -790,6 +798,9 @@ export function applyNdjsonLine(
     state.sawDone = true;
     state.trace = Array.isArray(event.trace) ? event.trace : [];
     state.rounds = Number.isInteger(event.rounds) ? event.rounds : 0;
+    if (event.result && typeof event.result === "object") {
+      state.result = event.result as AiGeneratedResultMetadata;
+    }
   } else if (event.type === "error") {
     state.sawError = true;
     state.errorMessage = typeof event.message === "string" && event.message.trim()
@@ -864,7 +875,7 @@ export async function streamNdjson(
   }
   if (state.sawError) throw new ApiError(state.errorMessage || "后端返回错误", 502);
   if (!state.sawDone) throw new ApiError("后端响应流未返回完成信号", 502);
-  return { content: state.content, trace: state.trace, rounds: state.rounds };
+  return { content: state.content, trace: state.trace, rounds: state.rounds, result: state.result };
 }
 
 /**

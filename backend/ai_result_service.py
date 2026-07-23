@@ -7,7 +7,7 @@ import hashlib
 import json
 import math
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 
 import ai_result_store
@@ -21,6 +21,7 @@ DAILY_REVIEW_AI = "daily_review_ai"
 PORTFOLIO_ADVICE = "portfolio_advice"
 ALLOWED_RESULT_TYPES = frozenset({DAILY_REVIEW_AI, PORTFOLIO_ADVICE})
 PORTFOLIO_STALE_MESSAGE = "持仓已发生变化，该建议基于生成时的持仓，可能已经过期。"
+BEIJING = timezone(timedelta(hours=8))
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _SENSITIVE_KEYS = frozenset(
@@ -68,6 +69,10 @@ def _valid_timestamp(value: Any, field: str, *, allow_none: bool = False) -> str
     except ValueError as exc:
         raise AiResultValidationError(f"{field} 不是合法时间") from exc
     return text
+
+
+def _now_beijing_timestamp() -> str:
+    return datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def validate_result_identity(result_type: Any, trade_date: Any) -> tuple[str, str]:
@@ -401,8 +406,9 @@ def save_daily_review_ai(
     if not isinstance(review, dict):
         raise AiResultValidationError("review 必须是对象")
     _, trade_date = validate_result_identity(DAILY_REVIEW_AI, review.get("trade_date"))
-    generated_at = _valid_timestamp(review.get("generated_at"), "source_review_generated_at")
+    source_generated_at = _valid_timestamp(review.get("generated_at"), "source_review_generated_at")
     cutoff = _valid_timestamp(review.get("data_cutoff"), "source_data_cutoff", allow_none=True)
+    generated_at = _now_beijing_timestamp()
     markdown_text = _nonempty_string(markdown, "markdown")
     provider, model = validate_model_info(
         _config_value(cfg, "provider", ""), _config_value(cfg, "model")
@@ -410,7 +416,7 @@ def save_daily_review_ai(
     payload = _validate_payload(
         {
             "markdown": markdown_text,
-            "source_review_generated_at": generated_at,
+            "source_review_generated_at": source_generated_at,
             "source_data_cutoff": cutoff,
         }
     )
@@ -533,7 +539,7 @@ def _validate_restored_record(record: Any, expected_type: str) -> None:
             }:
                 raise AiResultValidationError("daily review payload fields mismatch")
             _nonempty_string(payload.get("markdown"), "markdown")
-            source_generated_at = _valid_timestamp(
+            _valid_timestamp(
                 payload.get("source_review_generated_at"),
                 "source_review_generated_at",
             )
@@ -542,7 +548,7 @@ def _validate_restored_record(record: Any, expected_type: str) -> None:
                 "source_data_cutoff",
                 allow_none=True,
             )
-            if source_generated_at != generated_at or record.get("input_fingerprint") is not None:
+            if record.get("input_fingerprint") is not None:
                 raise AiResultValidationError("daily review metadata mismatch")
             return
 
@@ -582,7 +588,7 @@ def get_ai_result(
     stale = False
     if result_type == PORTFOLIO_ADVICE:
         if current_portfolio is None:
-            current_portfolio = portfolio.get_portfolio()
+            current_portfolio = portfolio.get_portfolio_holdings_snapshot()
         current_fingerprint = compute_portfolio_fingerprint(
             _portfolio_holdings(current_portfolio)
         )
