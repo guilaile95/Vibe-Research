@@ -7,8 +7,15 @@ import sectorsData from "@/data/sectors.json";
 import { cn } from "@/lib/utils";
 import {
   api, ApiError, downloadReport,
-  type MyReport, type MyReportsBrowseResult, type MyReportsBrowseGroup,
+  type MyReport, type MyReportsBrowseGroup,
 } from "@/lib/api";
+import {
+  filterReports,
+  groupReportsByIndustry,
+  groupReportsByInstitution,
+  groupReportsByYearMonth,
+  type ReportViewItem,
+} from "@/lib/myReportsView";
 
 const fmtSize = (b: number) =>
   b < 1024 ? `${b}B` : b < 1048576 ? `${(b / 1024).toFixed(0)}KB` : `${(b / 1048576).toFixed(1)}MB`;
@@ -60,8 +67,6 @@ export function MyReports() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [view, setView] = useState<MyReportsBrowseGroup>("industry");
-  const [browse, setBrowse] = useState<MyReportsBrowseResult | null>(null);
-  const [browseErr, setBrowseErr] = useState<string | null>(null);
 
   const [q, setQ] = useState("");
   const [searching, setSearching] = useState(false);
@@ -114,20 +119,6 @@ export function MyReports() {
     load();
   }, []);
 
-  // 加载分组浏览数据（切换视图 / 上传删除后刷新）。搜索激活时隐藏分组视图。
-  const loadBrowse = async (group: MyReportsBrowseGroup) => {
-    try {
-      const data = await api.browseMyReports(group);
-      setBrowse(data);
-      setBrowseErr(null);
-    } catch (e) {
-      setBrowseErr(e instanceof ApiError ? e.message : "加载浏览数据失败");
-    }
-  };
-  useEffect(() => {
-    if (!searching) loadBrowse(view);
-  }, [view, searching]);
-
   useEffect(() => {
     if (!q.trim()) {
       setSearching(false);
@@ -144,7 +135,6 @@ export function MyReports() {
 
   const refreshAll = async () => {
     await load();
-    if (!searching) await loadBrowse(view);
   };
 
   const upload = async (files: FileList | File[]) => {
@@ -225,15 +215,6 @@ export function MyReports() {
       setEditBusy(false);
     }
   };
-
-  // 默认（产业）视图保留旧有的按行业分组列表 UX，确保加载时体验不变。
-  const grouped = useMemo(() => {
-    const g: Record<string, MyReport[]> = {};
-    for (const r of reports) (g[r.industry] ||= []).push(r);
-    return Object.entries(g).sort((a, b) =>
-      a[0] === "未分类" ? 1 : b[0] === "未分类" ? -1 : b[1].length - a[1].length,
-    );
-  }, [reports]);
 
   const displayTitle = (r: MyReport) => r.title || r.name;
   const displayInstitution = (r: MyReport) => r.institution || "未确认机构";
@@ -416,32 +397,29 @@ export function MyReports() {
     );
   };
 
-  // 按 URL 参数过滤后的研报列表。
-  const filteredReports = useMemo(() => {
-    return reports.filter((r) => {
-      if (filterSector && !(r.sector_keys ?? []).includes(filterSector)) return false;
-      if (filterInstitution) {
-        const inst = r.institution || "";
-        if ((inst ? inst : "__unknown__") !== filterInstitution) return false;
-      }
-      if (filterYear || filterMonth) {
-        let year: string | null = null;
-        let month: string | null = null;
-        if (r.publish_date) {
-          year = r.publish_date.slice(0, 4);
-          month = r.publish_date.slice(0, 7);
-        } else if (r.imported_at) {
-          year = r.imported_at.slice(0, 4);
-          month = r.imported_at.slice(0, 7);
-        } else if (r.ts) {
-          year = new Date(r.ts).getFullYear().toString();
-        }
-        if (filterYear && year !== filterYear) return false;
-        if (filterMonth && month !== filterMonth) return false;
-      }
-      return true;
-    });
-  }, [reports, filterSector, filterInstitution, filterYear, filterMonth]);
+  // 按 URL 参数过滤后的研报列表；所有分组均从此派生。
+  const filteredReports = useMemo(
+    () => filterReports(reports as unknown as ReportViewItem[], {
+      sector: filterSector,
+      institution: filterInstitution,
+      year: filterYear,
+      month: filterMonth,
+    }) as unknown as MyReport[],
+    [reports, filterSector, filterInstitution, filterYear, filterMonth],
+  );
+
+  const industryGroups = useMemo(
+    () => groupReportsByIndustry(filteredReports as unknown as ReportViewItem[]),
+    [filteredReports],
+  );
+  const institutionGroups = useMemo(
+    () => groupReportsByInstitution(filteredReports as unknown as ReportViewItem[]),
+    [filteredReports],
+  );
+  const yearGroups = useMemo(
+    () => groupReportsByYearMonth(filteredReports as unknown as ReportViewItem[]),
+    [filteredReports],
+  );
 
   // 定位高亮：报告在过滤列表中才滚动。
   useEffect(() => {
@@ -452,7 +430,8 @@ export function MyReports() {
   }, [focusReportId, filteredReports]);
 
   const showEmpty = !loadFailed && reports.length === 0;
-  const listGroups = browse?.groups ?? [];
+  const showFilterEmpty =
+    !searching && reports.length > 0 && filteredReports.length === 0;
   const focusReportMissing =
     Boolean(focusReportId)
     && hasLoaded
@@ -566,7 +545,7 @@ export function MyReports() {
         </div>
       )}
 
-      {/* 分组浏览（默认产业视图保持旧有 UX） */}
+      {/* 分组浏览：全部由 filteredReports 派生 */}
       {!searching && showEmpty ? (
         <GlassCard>
           <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
@@ -574,105 +553,73 @@ export function MyReports() {
             还没有归档的研报。把你收集的研报拖进上面的框，会自动按行业分好类。
           </div>
         </GlassCard>
-      ) : !searching && view === "industry" && grouped.length > 0 ? (
+      ) : showFilterEmpty ? (
+        <GlassCard>
+          <div className="py-6 text-center text-sm text-muted-foreground">
+            当前筛选条件下没有研报
+          </div>
+        </GlassCard>
+      ) : !searching && view === "industry" ? (
         <div className="space-y-4">
-          {grouped.map(([industry, items]) => {
-            const sectorItems = items.filter((r) =>
-              filteredReports.some((f) => f.id === r.id),
-            );
-            if (sectorItems.length === 0 && filteredReports.length > 0) return null;
-            return (
-              <GlassCard key={industry}>
-                <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                  <span className="rounded bg-primary/15 px-2 py-0.5 text-xs text-primary">{industry}</span>
-                  <span className="text-xs font-normal text-muted-foreground">{sectorItems.length} 份</span>
-                </h3>
-                <div className="divide-y divide-border/30">
-                  {sectorItems.map(renderReportRow)}
-                </div>
-              </GlassCard>
-            );
-          })}
+          {industryGroups.map((g) => (
+            <GlassCard key={g.key}>
+              <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                <span className="rounded bg-primary/15 px-2 py-0.5 text-xs text-primary">{g.label}</span>
+                <span className="text-xs font-normal text-muted-foreground">{g.count} 份</span>
+              </h3>
+              <div className="divide-y divide-border/30">
+                {(g.reports as unknown as MyReport[]).map(renderReportRow)}
+              </div>
+            </GlassCard>
+          ))}
         </div>
-      ) : !searching ? (
+      ) : !searching && view === "year" ? (
         <div className="space-y-4">
-          {browseErr && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-              {browseErr}
-            </div>
-          )}
-          {view === "year" || view === "institution" ? (
-            listGroups.length > 0 ? (
-              listGroups.map((g) => (
-                <GlassCard key={g.key}>
-                  <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                    <span className="rounded bg-primary/15 px-2 py-0.5 text-xs text-primary">{g.label}</span>
-                    <span className="text-xs font-normal text-muted-foreground">{g.count} 份</span>
-                  </h3>
-                  {view === "year" && g.months && g.months.length > 0 && (
-                    <div className="mb-3 space-y-2">
-                      {g.months.map((m) => {
-                        const monthReports = filteredReports.filter((r) => {
-                          const month = r.publish_date
-                            ? r.publish_date.slice(0, 7)
-                            : r.imported_at
-                              ? r.imported_at.slice(0, 7)
-                              : null;
-                          return month === m.key;
-                        });
-                        return (
-                          <div key={m.key} className="rounded-lg border border-border/40 p-2">
-                            <p className="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">
-                              <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground">
-                                {m.label}（{m.count}）
-                              </span>
-                              <span className="text-[10px] text-muted-foreground/60">发布日期未确认时按归档时间</span>
-                            </p>
-                            <div className="divide-y divide-border/30">
-                              {monthReports.map(renderReportRow)}
-                            </div>
-                          </div>
-                        );
-                      })}
+          {yearGroups.map((g) => (
+            <GlassCard key={g.key}>
+              <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                <span className="rounded bg-primary/15 px-2 py-0.5 text-xs text-primary">{g.label}</span>
+                <span className="text-xs font-normal text-muted-foreground">{g.count} 份</span>
+              </h3>
+              {g.unknownDate || g.months.length === 0 ? (
+                <div className="divide-y divide-border/30">
+                  {(g.reports as unknown as MyReport[]).map(renderReportRow)}
+                </div>
+              ) : (
+                <div className="mb-3 space-y-2">
+                  {g.months.map((m) => (
+                    <div key={m.key} className="rounded-lg border border-border/40 p-2">
+                      <p className="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">
+                        <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground">
+                          {m.label}（{m.count}）
+                        </span>
+                        <span className="text-[10px] text-muted-foreground/60">发布日期未确认时按归档时间</span>
+                      </p>
+                      <div className="divide-y divide-border/30">
+                        {(m.reports as unknown as MyReport[]).map(renderReportRow)}
+                      </div>
                     </div>
-                  )}
-                  {view !== "year" && (
-                    <div className="divide-y divide-border/30">
-                      {filteredReports
-                        .filter((r) => matchesGroup(r, g.key, view))
-                        .map(renderReportRow)}
-                    </div>
-                  )}
-                </GlassCard>
-              ))
-            ) : (
-              <GlassCard>
-                <div className="py-6 text-center text-sm text-muted-foreground">该视角下暂无研报。</div>
-              </GlassCard>
-            )
-          ) : null}
+                  ))}
+                </div>
+              )}
+            </GlassCard>
+          ))}
+        </div>
+      ) : !searching && view === "institution" ? (
+        <div className="space-y-4">
+          {institutionGroups.map((g) => (
+            <GlassCard key={g.key}>
+              <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                <span className="rounded bg-primary/15 px-2 py-0.5 text-xs text-primary">{g.label}</span>
+                <span className="text-xs font-normal text-muted-foreground">{g.count} 份</span>
+              </h3>
+              <div className="divide-y divide-border/30">
+                {(g.reports as unknown as MyReport[]).map(renderReportRow)}
+              </div>
+            </GlassCard>
+          ))}
         </div>
       ) : null}
     </div>
   );
-}
-
-// 判断某条研报是否属于当前分组视图下的某个分组 key。
-function matchesGroup(r: MyReport, key: string, view: MyReportsBrowseGroup): boolean {
-  if (view === "industry") return (r.industry || "未分类") === key;
-  if (view === "institution") {
-    const inst = r.institution || "";
-    return (inst ? inst : "__unknown__") === key;
-  }
-  if (view === "year") {
-    if (key === "__unknown__" || key === "未知") {
-      return !r.publish_date && !r.imported_at && !r.ts;
-    }
-    let year: string | null = null;
-    if (r.publish_date) year = r.publish_date.slice(0, 4);
-    else if (r.imported_at) year = r.imported_at.slice(0, 4);
-    else if (r.ts) year = new Date(r.ts).getFullYear().toString();
-    return year === key;
-  }
-  return false;
 }
