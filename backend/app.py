@@ -9,11 +9,9 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import threading
-import uuid
 
 import anyio
 from datetime import datetime, timezone
@@ -1251,6 +1249,11 @@ class SectorReportImportIn(BaseModel):
     info_code: str | None = Field(default=None, max_length=64)
 
 
+_ALLOWED_REPORT_SCOPES = frozenset({"industry", "company", "all"})
+_PDF_DOWNLOAD_MAX_REDIRECTS = 5
+_PDF_HOST_ALLOW = frozenset({"pdf.dfcfw.com", "pdfcdn.eastmoney.com"})
+
+
 @app.get("/api/sector-research/reports/{sector_key}")
 def sector_research_reports(
     sector_key: str,
@@ -1258,7 +1261,9 @@ def sector_research_reports(
     max_pages: int = Query(3, ge=1, le=10),
     scope: str = Query("industry"),
 ):
-    """发现板块研报（只返回发现结果，不自动归档）。支持 days / max_pages / scope。"""
+    """发现板块研报（只返回发现结果，不自动归档）。scope=industry|company|all。"""
+    if scope not in _ALLOWED_REPORT_SCOPES:
+        raise HTTPException(400, f"scope 无效，支持：{' / '.join(sorted(_ALLOWED_REPORT_SCOPES))}")
     result = srd.discover_sector_reports(sector_key, days=days, max_pages=max_pages, scope=scope)
     return {"data": {"sector_key": result.source_key, "discovered": result.discovered,
                    "filtered": result.filtered, "error": result.error}}
@@ -1276,12 +1281,16 @@ def sector_research_data(sector_key: str):
 
 @app.post("/api/sector-research/import/{sector_key}")
 def sector_research_import(sector_key: str, body: SectorReportImportIn):
-    """导入研报：只接受后端发现结果中的 external_id。后端重新核验来源仍存在、PDF 域名白名单、HTTPS、PDF 类型、≤25MB、SHA-256。"""
+    """导入研报：只接受后端发现结果中的 external_id。
+
+    后端以 scope=all 重新核验来源仍存在；PDF 域名白名单 + HTTPS + 重定向校验 +
+    魔术字节；通过公共 mr.import_report_bytes 原子归档。不信任前端标题/URL。
+    """
     src = srd.get_sector_source(sector_key)
     if src is None:
         raise HTTPException(404, f"未注册的板块：{sector_key}")
-    # 校验该 external_id 仍在发现结果中存在
-    result = srd.discover_sector_reports(sector_key, max_pages=3)
+    # 以 all scope 重新发现，覆盖此前 company/industry/all 任一路径
+    result = srd.discover_sector_reports(sector_key, max_pages=3, scope="all")
     if result.error:
         raise HTTPException(502, result.error)
     matched = next(
@@ -1290,87 +1299,147 @@ def sector_research_import(sector_key: str, body: SectorReportImportIn):
     )
     if matched is None:
         raise HTTPException(400, "该 external_id 不在最新发现结果中，请重新发现")
-    info_code = body.info_code or matched.get("info_code")
+    info_code = body.info_code or matched.get("info_code") or body.external_id
     if not info_code:
         raise HTTPException(400, "缺少 info_code")
+    # 不信任前端 URL：仅由 info_code 生成白名单 PDF 地址
     pdf_url = astock.pdf_url(info_code)
     if not srd.pdf_url_allowed(pdf_url):
         raise HTTPException(400, "PDF 链接不在允许域名或非 HTTPS")
     try:
         blob = _download_pdf(pdf_url)
+    except mr.ReportError as e:
+        raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BL001
         raise HTTPException(502, f"PDF 下载失败：{e}") from e
     if not blob:
         raise HTTPException(502, "PDF 内容为空")
-    file_sha256 = hashlib.sha256(blob).hexdigest()
-    rid = uuid.uuid4().hex
-    now_ms = int(_time.time() * 1000)
-    # 元数据归一化（a-stock 导入值）
+
     industry_label = (
         "PCB" if sector_key == "pcb"
-        else src.label.split("（")[0].strip() if src.label else sector_key
+        else (src.label.split("（")[0].strip() if src.label else sector_key)
     )
-    meta = {
-        "id": rid,
-        "name": f"{matched.get('title', info_code)}.pdf",
-        "industry": industry_label,
-        "size": len(blob),
-        "ext": ".pdf",
-        "ts": now_ms,
-        "file_sha256": file_sha256,
-        "imported_at": datetime.now(timezone.utc).isoformat(),
-        "title": matched.get("title") or info_code,
-        "institution": matched.get("institution") or "",
-        "publish_date": matched.get("publish_date") or "",
-        "sector_keys": [sector_key],
-        "source_url": pdf_url,
-        "source_kind": "report",
-        "source_provider": "eastmoney",
-        "external_id": info_code,
-        "info_code": info_code,
-        "report_scope": matched.get("report_scope"),
-        "report_type": "brokerage",
-    }
-    mr._validate_report_entry(meta)
-    with mr._LOCK:
-        items = mr._load_index()
-        # SHA-256 去重
-        for e in items:
-            if e.get("file_sha256") == file_sha256:
-                return {"data": {**e, "deduped": True}}
-        mr._ensure_dir()
-        entity_tmp = mr._tmp_name(str(mr.REPORTS_DIR / rid))
-        try:
-            with open(entity_tmp, "wb") as f:
-                f.write(blob)
-                f.flush()
-                os.fsync(f.fileno())
-            entity_path = mr.REPORTS_DIR / f"{rid}.pdf"
-            os.replace(entity_tmp, entity_path)
-        except Exception:
-            pass
-        items.append(meta)
-        mr._save_index(items)
+    safe_title = matched.get("title") or info_code
+    # 文件名仅作展示，禁止路径字符
+    safe_name = f"{str(safe_title).replace('/', '_').replace(chr(92), '_')[:180]}.pdf"
+    try:
+        meta = mr.import_report_bytes(
+            name=safe_name,
+            content=blob,
+            metadata={
+                "title": safe_title,
+                "institution": matched.get("institution") or "",
+                "publish_date": matched.get("publish_date") or "",
+                "sector_keys": [sector_key],
+                "source_url": pdf_url,
+                "source_kind": "report",
+                "source_provider": "eastmoney",
+                "external_id": info_code,
+                "info_code": info_code,
+                "report_scope": matched.get("report_scope") or "",
+                "report_type": "brokerage",
+                "industry": industry_label,
+            },
+        )
+    except mr.ReportError as e:
+        raise HTTPException(400, str(e)) from e
     return {"data": meta}
 
 
 def _report_download_session():
     import requests
     s = requests.Session()
-    s.headers.update({"User-Agent": getattr(astock, "UA", "Mozilla/5.0"),
-                     "Referer": "https://data.eastmoney.com/"})
+    s.headers.update({
+        "User-Agent": getattr(astock, "UA", "Mozilla/5.0"),
+        "Referer": "https://data.eastmoney.com/",
+    })
+    # 应用层自管重定向，便于校验每一跳最终 URL
+    s.max_redirects = _PDF_DOWNLOAD_MAX_REDIRECTS
     return s
 
 
+def _pdf_url_host_ok(url: str) -> bool:
+    """HTTPS + 允许域名 + 拒绝 IP / userinfo / 非默认端口 / 本地地址。"""
+    from urllib.parse import urlparse
+    try:
+        p = urlparse(url)
+    except Exception:
+        return False
+    if (p.scheme or "").lower() != "https":
+        return False
+    if p.username is not None or p.password is not None:
+        return False
+    host = (p.hostname or "").lower()
+    if not host:
+        return False
+    if host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local"):
+        return False
+    # 拒绝纯 IP（IPv4 / 简单 IPv6）
+    if all(c.isdigit() or c == "." for c in host) or ":" in host:
+        return False
+    if p.port is not None and p.port != 443:
+        return False
+    return host in _PDF_HOST_ALLOW
+
+
 def _download_pdf(url: str, max_bytes: int = 25 * 1024 * 1024) -> bytes:
-    """下载 PDF，限制大小；失败抛错由调用方处理。"""
-    r = _report_download_session().get(url, timeout=60, stream=True)
-    r.raise_for_status()
-    blob = b""
-    for chunk in r.iter_content(chunk_size=1 << 16):
+    """安全下载 PDF：HTTPS 白名单、重定向校验、流式累计、魔术字节。
+
+    失败抛 mr.ReportError（业务/安全）或底层网络异常。
+    不写任何实体文件或索引。
+    """
+    import requests
+    from urllib.parse import urljoin
+
+    if not _pdf_url_host_ok(url):
+        raise mr.ReportError("PDF URL 未通过 SSRF 防护校验")
+
+    session = _report_download_session()
+    current = url
+    resp = None
+    for _ in range(_PDF_DOWNLOAD_MAX_REDIRECTS + 1):
+        if not _pdf_url_host_ok(current):
+            raise mr.ReportError("重定向目标不在允许域名或非 HTTPS")
+        try:
+            resp = session.get(current, timeout=60, stream=True, allow_redirects=False)
+        except requests.RequestException as e:
+            raise mr.ReportError(f"PDF 下载网络错误：{e}") from e
+        if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
+            loc = resp.headers.get("Location")
+            if not loc:
+                raise mr.ReportError("重定向缺少 Location")
+            current = urljoin(current, loc)
+            continue
+        break
+    else:
+        raise mr.ReportError(f"重定向次数超过上限 {_PDF_DOWNLOAD_MAX_REDIRECTS}")
+
+    assert resp is not None
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        raise mr.ReportError(f"PDF 下载 HTTP 错误：{e}") from e
+
+    # 最终 URL 再校验一次
+    final_url = getattr(resp, "url", None) or current
+    if not _pdf_url_host_ok(str(final_url)):
+        raise mr.ReportError("最终下载 URL 未通过 SSRF 防护校验")
+
+    ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+    if ctype and ctype not in ("application/pdf", "application/octet-stream", "binary/octet-stream"):
+        # 不唯依赖 Content-Type，但明确 HTML/JS 直接拒绝
+        if "html" in ctype or "javascript" in ctype or "json" in ctype or "text/" in ctype:
+            raise mr.ReportError(f"响应 Content-Type 非 PDF：{ctype}")
+
+    buf = bytearray()
+    for chunk in resp.iter_content(chunk_size=1 << 16):
         if not chunk:
-            break
-        blob += chunk
-        if len(blob) > max_bytes:
-            raise ReportError(f"文件过大，上限 {max_bytes // 1024 // 1024}MB")
-    return blob
+            continue
+        buf.extend(chunk)
+        if len(buf) > max_bytes:
+            raise mr.ReportError(f"文件过大，上限 {max_bytes // 1024 // 1024}MB")
+    if not buf:
+        raise mr.ReportError("PDF 内容为空")
+    if not bytes(buf[:4]).startswith(b"%PDF"):
+        raise mr.ReportError("响应非 PDF 内容（可能为反爬拦截页），已拒绝")
+    return bytes(buf)

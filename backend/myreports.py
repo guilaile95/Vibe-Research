@@ -126,6 +126,12 @@ class ReportEntry(TypedDict):
     sector_keys: list[str]
     source_url: str
     source_kind: str
+    # a-stock-data 外部研报元数据（导入时填充，可选 / 向后兼容）。
+    source_provider: str
+    external_id: str
+    info_code: str
+    report_scope: str
+    report_type: str
 
 
 def _index_path() -> Path:
@@ -160,6 +166,7 @@ def _validate_report_entry(entry) -> None:
         "id", "name", "ext", "size", "ts", "industry",
         "file_sha256", "imported_at", "title", "institution",
         "publish_date", "sector_keys", "source_url", "source_kind",
+        "source_provider", "external_id", "info_code", "report_scope", "report_type",
     }
     extra = set(entry.keys()) - allowed
     if extra:
@@ -190,6 +197,11 @@ def _validate_report_entry(entry) -> None:
     _check_str("publish_date")
     _check_str("source_url")
     _check_str("source_kind")
+    # 外部元数据字段（a-stock-data 导入）：可选；存在时必须是字符串。
+    for _opt in ("source_provider", "external_id", "info_code", "report_scope", "report_type"):
+        if _opt in entry:
+            if not isinstance(entry[_opt], str):
+                raise ReportIndexCorruptedError()
     sector_keys = entry.get("sector_keys")
     if not isinstance(sector_keys, list):
         raise ReportIndexCorruptedError()
@@ -257,20 +269,35 @@ def _ms_to_iso(ts: float) -> str:
 
 
 def _normalize_entry_for_read(e: dict) -> dict:
-    """把一条旧格式条目就地补全为新 schema的只读副本（不写盘、不计算 SHA-256）。返回新 dict。"""
-    name = e.get("name", "")
-    ext = e.get("ext", "")
-    # 展示标题：默认取文件名去掉扩展名；无扩展名则用文件名本身。
-    title = os.path.splitext(name)[0] if ext else name
+    """把一条旧格式条目补全为新 schema 的只读副本（不写盘、不计算 SHA-256）。返回新 dict。
+
+    关键：已有非空 title 必须保留，不得无条件用文件名覆盖。
+    """
+    name = e.get("name", "") if isinstance(e.get("name"), str) else ""
+    ext = e.get("ext", "") if isinstance(e.get("ext"), str) else ""
+    fallback_title = os.path.splitext(name)[0] if ext else name
+    fallback_title = fallback_title or name or "未命名"
     normalized = dict(e)  # 浅拷贝，不动原条目
-    normalized["title"] = title or name
-    normalized.setdefault("imported_at", _ms_to_iso(e.get("ts", 0)))
+    existing_title = e.get("title")
+    if isinstance(existing_title, str) and existing_title.strip():
+        normalized["title"] = existing_title
+    else:
+        normalized["title"] = fallback_title
+    normalized.setdefault("imported_at", _ms_to_iso(e.get("ts", 0) or 0))
     normalized.setdefault("file_sha256", "")
     normalized.setdefault("institution", "")
     normalized.setdefault("publish_date", "")
     normalized.setdefault("sector_keys", [])
     normalized.setdefault("source_url", "")
     normalized.setdefault("source_kind", "")
+    # a-stock 外部元数据：缺省安全默认值
+    normalized.setdefault("source_provider", "")
+    normalized.setdefault("external_id", "")
+    normalized.setdefault("info_code", "")
+    normalized.setdefault("report_scope", "")
+    normalized.setdefault("report_type", "")
+    if not isinstance(normalized.get("sector_keys"), list):
+        normalized["sector_keys"] = []
     return normalized
 
 
@@ -315,26 +342,33 @@ def _migrate_index() -> None:
 
 
 def _upgrade_entry(e: dict) -> None:
-    """把一条旧格式条目就地补全为新 schema（写盘前用）。会计算 SHA-256。"""
-    name = e.get("name", "")
-    ext = e.get("ext", "")
-    title = os.path.splitext(name)[0] if ext else name
-    e["title"] = title or name
-    e["imported_at"] = _ms_to_iso(e.get("ts", 0))
+    """把一条旧格式条目就地补全为新 schema（写盘前用）。会计算 SHA-256。保留已有 title。"""
+    name = e.get("name", "") if isinstance(e.get("name"), str) else ""
+    ext = e.get("ext", "") if isinstance(e.get("ext"), str) else ""
+    if not (isinstance(e.get("title"), str) and e["title"].strip()):
+        title = os.path.splitext(name)[0] if ext else name
+        e["title"] = title or name or "未命名"
+    e["imported_at"] = e.get("imported_at") or _ms_to_iso(e.get("ts", 0) or 0)
     rid = e.get("id", "")
     entity_path = REPORTS_DIR / f"{rid}{ext}" if rid else None
-    if entity_path is not None and entity_path.exists():
-        try:
-            e["file_sha256"] = hashlib.sha256(entity_path.read_bytes()).hexdigest()
-        except OSError:
+    if not e.get("file_sha256"):
+        if entity_path is not None and entity_path.exists():
+            try:
+                e["file_sha256"] = hashlib.sha256(entity_path.read_bytes()).hexdigest()
+            except OSError:
+                e["file_sha256"] = ""
+        else:
             e["file_sha256"] = ""
-    else:
-        e["file_sha256"] = ""
     e.setdefault("institution", "")
     e.setdefault("publish_date", "")
     e.setdefault("sector_keys", [])
     e.setdefault("source_url", "")
     e.setdefault("source_kind", "")
+    e.setdefault("source_provider", "")
+    e.setdefault("external_id", "")
+    e.setdefault("info_code", "")
+    e.setdefault("report_scope", "")
+    e.setdefault("report_type", "")
 
 
 def _save_index(items: list[dict]) -> None:
@@ -532,6 +566,11 @@ def save_report(
         "sector_keys": norm_keys,
         "source_url": source_url or "",
         "source_kind": source_kind or "",
+        "source_provider": "",
+        "external_id": "",
+        "info_code": "",
+        "report_scope": "",
+        "report_type": "",
     }
     # 新条目写入前严格校验（确保进入索引的每条数据都符合 schema）。
     _validate_report_entry(meta)
@@ -602,6 +641,198 @@ def report_path(rid: str) -> tuple[Path, str] | None:
     return None
 
 
+def _merge_empty_fields(entry: dict, incoming: dict, keys: tuple[str, ...]) -> None:
+    """仅把 incoming 中非空值补进 entry 的空字段；不覆盖已有非空。"""
+    for k in keys:
+        if not entry.get(k) and incoming.get(k):
+            entry[k] = incoming[k]
+
+
+def import_report_bytes(
+    *,
+    name: str,
+    content: bytes,
+    metadata: dict | None = None,
+) -> dict:
+    """正式公共导入入口：原子写实体 + 索引，支持 external_id / SHA-256 去重。
+
+    由 app 层完成请求校验与 PDF 下载后调用。本函数负责：
+    - 元数据校验
+    - 去重优先级：source_provider+external_id → file_sha256 →（不创建新文件）
+    - sector_keys 合并
+    - 实体/索引原子写；失败回滚；临时文件清理
+    - 返回条目，重复时带 deduped=True
+    """
+    if not content:
+        raise ReportError("文件内容为空")
+    if len(content) > MAX_BYTES:
+        raise ReportError(f"文件过大（{len(content) // 1024 // 1024}MB），上限 {MAX_BYTES // 1024 // 1024}MB")
+
+    meta_in = dict(metadata or {})
+    fname = _sanitize_name(name)
+    ext = os.path.splitext(fname)[1].lower() or ".pdf"
+    if ext not in ALLOWED_EXT:
+        raise ReportError(f"不支持的文件类型 {ext}；支持：PDF / Word / txt / md / 表格 / 图片")
+
+    title = meta_in.get("title")
+    if title is not None and not isinstance(title, str):
+        raise ReportError("title 必须是字符串")
+    institution = meta_in.get("institution") or ""
+    publish_date = meta_in.get("publish_date") or ""
+    source_url = meta_in.get("source_url") or ""
+    source_kind = meta_in.get("source_kind") or "report"
+    sector_keys_raw = meta_in.get("sector_keys")
+    source_provider = meta_in.get("source_provider") or ""
+    external_id = meta_in.get("external_id") or ""
+    info_code = meta_in.get("info_code") or ""
+    report_scope = meta_in.get("report_scope") or ""
+    report_type = meta_in.get("report_type") or ""
+    industry = meta_in.get("industry") or classify(fname)
+
+    if publish_date and not _is_valid_publish_date(publish_date):
+        raise ReportError("发布日期格式无效或为不存在日期；应为 YYYY-MM-DD / YYYY-MM / YYYY")
+    if source_url and not _is_valid_source_url(source_url):
+        raise ReportError("来源链接仅允许 http:// 或 https://")
+    if source_kind and source_kind not in _SOURCE_KINDS:
+        raise ReportError(f"source_kind 无效，支持：{' / '.join(_SOURCE_KINDS)}")
+    if title is not None and len(title) > FIELD_MAX_LENGTH["title"]:
+        raise ReportError(f"标题过长（{len(title)}），上限 {FIELD_MAX_LENGTH['title']}")
+    if institution and len(institution) > FIELD_MAX_LENGTH["institution"]:
+        raise ReportError(f"机构过长（{len(institution)}），上限 {FIELD_MAX_LENGTH['institution']}")
+    if source_url and len(source_url) > FIELD_MAX_LENGTH["source_url"]:
+        raise ReportError(f"来源链接过长（{len(source_url)}），上限 {FIELD_MAX_LENGTH['source_url']}")
+
+    if sector_keys_raw is None:
+        norm_keys: list[str] = []
+    else:
+        norm_keys = _normalize_sector_keys(list(sector_keys_raw))
+        if norm_keys is None:
+            raise ReportError(f"sector_keys 须为非空字符串列表，每项 ≤{MAX_SECTOR_KEYS} 项")
+        allowed_keys = _valid_sector_keys()
+        if allowed_keys is not None:
+            bad = [k for k in norm_keys if k not in allowed_keys]
+            if bad:
+                raise ReportError(f"sector_keys 含未知板块：{', '.join(bad)}")
+
+    file_sha256 = hashlib.sha256(content).hexdigest()
+    display_title = (title.strip() if isinstance(title, str) and title.strip() else None) or (
+        os.path.splitext(fname)[0] or fname
+    )
+
+    fill_fields = (
+        "institution", "publish_date", "source_url", "source_kind",
+        "source_provider", "external_id", "info_code", "report_scope", "report_type",
+    )
+    incoming_fill = {
+        "institution": institution,
+        "publish_date": publish_date,
+        "source_url": source_url,
+        "source_kind": source_kind,
+        "source_provider": source_provider,
+        "external_id": external_id,
+        "info_code": info_code,
+        "report_scope": report_scope if isinstance(report_scope, str) else "",
+        "report_type": report_type,
+        "title": display_title,
+    }
+
+    with _LOCK:
+        items = _load_index()
+
+        # 1) external identity 去重
+        if source_provider and external_id:
+            for e in items:
+                if e.get("source_provider") == source_provider and e.get("external_id") == external_id:
+                    merged_keys = list(e.get("sector_keys") or [])
+                    for k in norm_keys:
+                        if k not in merged_keys:
+                            merged_keys.append(k)
+                    e["sector_keys"] = merged_keys
+                    _merge_empty_fields(e, incoming_fill, fill_fields)
+                    if not e.get("title") or e["title"] == os.path.splitext(e.get("name", "") or "")[0]:
+                        e["title"] = display_title
+                    _upgrade_entry(e)
+                    _validate_report_entry(e)
+                    _save_index(items)
+                    return {**e, "deduped": True}
+
+        # 2) SHA-256 去重
+        for e in items:
+            if e.get("file_sha256") == file_sha256:
+                merged_keys = list(e.get("sector_keys") or [])
+                for k in norm_keys:
+                    if k not in merged_keys:
+                        merged_keys.append(k)
+                e["sector_keys"] = merged_keys
+                _merge_empty_fields(e, incoming_fill, fill_fields)
+                if not e.get("title") or e["title"] == os.path.splitext(e.get("name", "") or "")[0]:
+                    e["title"] = display_title
+                _upgrade_entry(e)
+                _validate_report_entry(e)
+                _save_index(items)
+                return {**e, "deduped": True}
+
+        rid = uuid.uuid4().hex
+        now_ms = int(time.time() * 1000)
+        meta: dict = {
+            "id": rid,
+            "name": fname,
+            "industry": industry if isinstance(industry, str) else classify(fname),
+            "size": len(content),
+            "ext": ext,
+            "ts": now_ms,
+            "file_sha256": file_sha256,
+            "imported_at": datetime.now(timezone.utc).isoformat(),
+            "title": display_title,
+            "institution": institution,
+            "publish_date": publish_date,
+            "sector_keys": norm_keys,
+            "source_url": source_url,
+            "source_kind": source_kind,
+            "source_provider": source_provider,
+            "external_id": external_id,
+            "info_code": info_code,
+            "report_scope": report_scope if isinstance(report_scope, str) else "",
+            "report_type": report_type,
+        }
+        _validate_report_entry(meta)
+
+        _ensure_dir()
+        entity_tmp = _tmp_name(str(REPORTS_DIR / rid))
+        entity_path = REPORTS_DIR / f"{rid}{ext}"
+        try:
+            with open(entity_tmp, "wb") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(entity_tmp, entity_path)
+            entity_tmp = None
+        except Exception:
+            if entity_tmp is not None and os.path.exists(entity_tmp):
+                try:
+                    os.remove(entity_tmp)
+                except OSError:
+                    pass
+            raise
+        finally:
+            if entity_tmp is not None and os.path.exists(entity_tmp):
+                try:
+                    os.remove(entity_tmp)
+                except OSError:
+                    pass
+
+        items.append(meta)
+        try:
+            _save_index(items)
+        except Exception:
+            try:
+                entity_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        return meta
+
+
 def delete_report(rid: str) -> bool:
     """删文件 + 移除索引条目。删成功（或本就不在）返回是否命中。"""
     with _LOCK:
@@ -627,7 +858,9 @@ def update_report_meta(rid: str, changes: dict) -> dict | None:
     语义：
       - 字段未出现（exclude_unset）：保持原值；
       - 字符串字段传 ""：明确清空；sector_keys 传 []：明确清空；
-      - 任意字段传 null：拒绝 HTTP 400。
+      - 任意字段传 null：拒绝 HTTP 400；
+      - 标题传 ""：拒绝 400（禁止无法展示的空标题）。
+    只规范化当前待写记录，不批量迁移整个索引。
     不允许改 id / name / ext / size / ts / 内容；条目不存在返回 None。
     """
     allowed = {"title", "institution", "publish_date", "sector_keys", "source_url", "source_kind"}
@@ -640,6 +873,12 @@ def update_report_meta(rid: str, changes: dict) -> dict | None:
         if v is None:
             raise ReportError(f"字段 {k} 不允许为 null；如需清空字符串请传 ''")
 
+    if "title" in changes:
+        t = changes["title"]
+        if not isinstance(t, str) or not t.strip():
+            raise ReportError("标题不能为空")
+        if len(t) > FIELD_MAX_LENGTH["title"]:
+            raise ReportError(f"标题过长（{len(t)}），上限 {FIELD_MAX_LENGTH['title']}")
     if "publish_date" in changes:
         pd = changes["publish_date"]
         if pd and not _is_valid_publish_date(pd):
@@ -648,22 +887,16 @@ def update_report_meta(rid: str, changes: dict) -> dict | None:
         su = changes["source_url"]
         if su and not _is_valid_source_url(su):
             raise ReportError("来源链接仅允许 http:// 或 https://")
+        if su and len(su) > FIELD_MAX_LENGTH["source_url"]:
+            raise ReportError(f"来源链接过长（{len(su)}），上限 {FIELD_MAX_LENGTH['source_url']}")
     if "source_kind" in changes:
         sk = changes["source_kind"]
         if sk and sk not in _SOURCE_KINDS:
             raise ReportError(f"source_kind 无效，支持：{' / '.join(_SOURCE_KINDS)}")
-    if "title" in changes:
-        t = changes["title"]
-        if t and len(t) > FIELD_MAX_LENGTH["title"]:
-            raise ReportError(f"标题过长（{len(t)}），上限 {FIELD_MAX_LENGTH['title']}")
     if "institution" in changes:
         inst = changes["institution"]
         if inst and len(inst) > FIELD_MAX_LENGTH["institution"]:
             raise ReportError(f"机构过长（{len(inst)}），上限 {FIELD_MAX_LENGTH['institution']}")
-    if "source_url" in changes:
-        su = changes["source_url"]
-        if su and len(su) > FIELD_MAX_LENGTH["source_url"]:
-            raise ReportError(f"来源链接过长（{len(su)}），上限 {FIELD_MAX_LENGTH['source_url']}")
 
     # sector_keys 规范化 + 白名单校验。
     if "sector_keys" in changes:
@@ -682,6 +915,8 @@ def update_report_meta(rid: str, changes: dict) -> dict | None:
         entry = next((e for e in items if e.get("id") == rid), None)
         if entry is None:
             return None
+        # 旧条目 PATCH 时只规范化当前记录，不要求整库迁移。
+        _upgrade_entry(entry)
         for k, v in changes.items():
             entry[k] = v
         _validate_report_entry(entry)
