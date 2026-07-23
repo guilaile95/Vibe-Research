@@ -1,8 +1,8 @@
 ## Draft PR #11 — sector research workbench
 
-**Branch:** `zcode/sector-research-workbench`  
-**Base:** `feature/research-system-v01`  
-**Head:** (see latest commit after push)  
+**Branch:** `zcode/sector-research-workbench`
+**Base:** `feature/research-system-v01`
+**Head:** (see latest commit after push)
 **Status:** Draft — do not merge / Ready
 
 ### Latest verification
