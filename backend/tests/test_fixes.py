@@ -65,11 +65,13 @@ def test_portfolio_add_validation(tmp_pf):
     assert client.post("/api/portfolio/holding", json={"code": "600519", "shares": 0, "cost": 1}).status_code == 400
 
 
-def test_portfolio_corrupt_file_returns_empty(tmp_pf):
+def test_portfolio_corrupt_file_returns_500(tmp_pf):
     (tmp_pf / "portfolio.json").write_text("{broken json", encoding="utf-8")
     r = client.get("/api/portfolio")
-    assert r.status_code == 200
-    assert r.json()["data"]["holdings"] == []
+    assert r.status_code == 500
+    assert "损坏" in r.json()["detail"]
+    assert "portfolio.json" in r.json()["detail"]
+    assert "bak" in r.json()["detail"]
 
 
 # ── issue #13：加仓合并成本保留 4 位小数（ETF/基金成本常见 3-4 位） ──

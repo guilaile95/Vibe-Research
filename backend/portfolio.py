@@ -26,8 +26,10 @@ _OLD_PF_FILE = os.path.join(HERE, ".cache", "portfolio.json")  # ≤v0.1.1 旧�
 # CACHE_DIR 名字保留（测试/外部按此名 monkeypatch），实际已是用户数据目录
 CACHE_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
 PF_FILE = os.path.join(CACHE_DIR, "portfolio.json")
+BAK_FILE = PF_FILE + ".bak"
 BEIJING = timezone(timedelta(hours=8))
 _LOCK = threading.Lock()
+
 
 
 def _migrate_legacy() -> None:
@@ -50,21 +52,82 @@ def _now() -> str:
     return datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M")
 
 
-def _load() -> dict:
+
+class PortfolioDataCorruptedError(RuntimeError):
+    """持仓数据文件损坏，已停止读写以避免覆盖。"""
+    MESSAGE = (
+        "本地持仓数据文件损坏，已停止读写以避免覆盖；"
+        "请检查 portfolio.json，并在有备份时从 portfolio.json.bak 恢复"
+    )
+
+    def __init__(self):
+        super().__init__(self.MESSAGE)
+
+
+def _validate_data(data):
+    if not isinstance(data, dict):
+        raise PortfolioDataCorruptedError()
+    hs = data.get("holdings")
+    if hs is None or not isinstance(hs, list):
+        raise PortfolioDataCorruptedError()
+    closed = data.get("closed")
+    if closed is not None and not isinstance(closed, list):
+        raise PortfolioDataCorruptedError()
+
+
+def _load():
     try:
         with open(PF_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+            raw = f.read()
+    except FileNotFoundError:
         return {"holdings": [], "last_refresh": None}
+    except (UnicodeDecodeError, UnicodeError):
+        raise PortfolioDataCorruptedError() from None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise PortfolioDataCorruptedError() from None
+    _validate_data(data)
+    return data
 
 
-def _save(d: dict) -> None:
-    # 先写临时文件再原子改名：并发读若撞上写中途的半截 JSON，会被 _load 静默当成空持仓
+def _tmp_name(base):
+    return f"{base}.tmp.{os.urandom(4).hex()}"
+
+
+def _save(d):
     os.makedirs(CACHE_DIR, exist_ok=True)
-    tmp = PF_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False)
-    os.replace(tmp, PF_FILE)
+    bak_tmp = None
+    data_tmp = None
+    try:
+        if os.path.exists(PF_FILE):
+            with open(PF_FILE, encoding="utf-8") as f:
+                existing_raw = f.read()
+            try:
+                existing_data = json.loads(existing_raw)
+            except (json.JSONDecodeError, UnicodeDecodeError, UnicodeError):
+                raise PortfolioDataCorruptedError() from None
+            _validate_data(existing_data)
+
+            bak_tmp = _tmp_name(BAK_FILE)
+            shutil.copy2(PF_FILE, bak_tmp)
+            os.replace(bak_tmp, BAK_FILE)
+            bak_tmp = None
+
+        data_tmp = _tmp_name(PF_FILE)
+        with open(data_tmp, "w", encoding="utf-8", newline="") as f:
+            json.dump(d, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(data_tmp, PF_FILE)
+        data_tmp = None
+    finally:
+        for tmp in (bak_tmp, data_tmp):
+            if tmp is not None and os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
 
 
 def add_holding(code: str, shares: float, cost: float) -> dict:
