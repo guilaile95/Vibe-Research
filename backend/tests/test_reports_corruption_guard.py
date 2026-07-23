@@ -243,7 +243,8 @@ def test_second_save_creates_bak():
             mr.save_report("a.pdf", _B64_SMALL)
             bak = os.path.join(rdir, "index.json.bak")
             assert not os.path.exists(bak), "首次不应创建 bak"
-            mr.save_report("b.pdf", _B64_SMALL)
+            # 用不同内容触发第二次真实写入（同内容会被 SHA-256 去重跳过索引写入，不会产生 bak）。
+            mr.save_report("b.pdf", _B64_SMALL2)
             assert os.path.exists(bak), "第二次应创建 bak"
     finally:
         import shutil; shutil.rmtree(tmp, ignore_errors=True)
@@ -257,7 +258,8 @@ def test_bak_matches_pre_save():
             idx_path = os.path.join(rdir, "index.json")
             with open(idx_path, "rb") as f:
                 before = f.read()
-            mr.save_report("b.pdf", _B64_SMALL)
+            # 用不同内容触发第二次真实写入（同内容会被 SHA-256 去重跳过索引写入，不会产生 bak）。
+            mr.save_report("b.pdf", _B64_SMALL2)
             bak_path = os.path.join(rdir, "index.json.bak")
             with open(bak_path, "rb") as f:
                 bak = f.read()

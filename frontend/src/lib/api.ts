@@ -45,7 +45,110 @@ export function unwrapApiPayload(payload: any): any {
 
 export interface MyReport {
   id: string; name: string; industry: string; size: number; ext: string; ts: number;
+  // 丰富元数据（可选，向后兼容：旧存档可能缺失）。
+  title?: string;
+  institution?: string;
+  publish_date?: string;
+  sector_keys?: string[];
+  source_url?: string;
+  source_kind?: string;
+  file_sha256?: string;
+  imported_at?: string;
+  source_provider?: string;
+  external_id?: string;
+  info_code?: string;
+  report_scope?: string;
+  report_type?: string;
+  // 同内容去重标记：上传内容与已有归档完全一致时，不写重复文件，返回既有条目 + deduped=true。
+  deduped?: boolean;
 }
+
+export type MyReportsBrowseGroup = "year" | "industry" | "institution";
+
+export interface MyReportsBrowseGroupItem {
+  key: string;
+  label: string;
+  count: number;
+  months?: { key: string; label: string; count: number }[];
+  sector_keys?: string[];
+}
+
+export interface MyReportsBrowseResult {
+  groups: MyReportsBrowseGroupItem[];
+  total: number;
+}
+
+/** 板块研报发现 scope：行业 / 公司 / 全部 */
+export type SectorReportScope = "industry" | "company" | "all";
+
+export type DiscoveredSectorReport = {
+  source_provider?: string;
+  external_id: string | null;
+  info_code: string | null;
+  title: string | null;
+  institution: string | null;
+  publish_date: string | null;
+  industry_name?: string | null;
+  company_code?: string | null;
+  company_name?: string | null;
+  pdf_url?: string | null;
+  report_scope?: string | null;
+  report_type?: string | null;
+  matched_keywords?: string[];
+  relevance_score?: number;
+  rating?: string | null;
+  date_unknown?: boolean;
+};
+
+export type SectorReportsDiscoveryResult = {
+  sector_key: string;
+  discovered: DiscoveredSectorReport[];
+  filtered: DiscoveredSectorReport[];
+  error: string | null;
+  total_discovered?: number;
+  returned?: number;
+  truncated?: boolean;
+};
+
+/** 动态面板摘要：仅受控字段，无原始 data 倾倒 */
+export type SectorPanelSummary = {
+  name?: string;
+  industry?: string;
+  market_cap?: string;
+  business?: string;
+  coverage?: string;
+  year?: string;
+  eps?: string;
+  forecast?: string;
+  record_count?: number;
+  count?: number;
+  latest_title?: string;
+  latest_date?: string;
+  note?: string;
+  [key: string]: string | number | undefined;
+};
+
+export type SectorDynamicPanel = {
+  status: "ok" | "error";
+  summary: SectorPanelSummary;
+  error: string | null;
+};
+
+export type SectorDynamicCompany = {
+  code: string;
+  name?: string;
+  panels: Record<string, SectorDynamicPanel>;
+};
+
+export type SectorDynamicData = {
+  sector_key: string;
+  source: string;
+  fetched_at: string;
+  status: "normal" | "partial" | "unavailable";
+  warnings: string[];
+  companies: SectorDynamicCompany[];
+  error?: string;
+};
 
 // 下载/预览研报：带鉴权头 fetch → blob → 触发浏览器下载（<a download> 无法带 Authorization，故走 blob）。
 export async function downloadReport(id: string, name: string): Promise<void> {
@@ -62,7 +165,7 @@ export async function downloadReport(id: string, name: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE" = "GET", body?: unknown, options?: { unwrapData?: boolean }): Promise<T> {
+async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET", body?: unknown, options?: { unwrapData?: boolean }): Promise<T> {
   const unwrapData = options?.unwrapData ?? true;
   let resp: Response;
   const headers: Record<string, string> = { ...authHeaders() };
@@ -1029,7 +1132,64 @@ export const api = {
   investorQa: (code: string) => get<QaRow[]>(`/investor-qa?code=${code}`),
   industry: (top = 20) => get<IndustryData>(`/industry?top=${top}`),
   myReports: () => get<MyReport[]>("/myreports"),
-  uploadReport: (name: string, contentB64: string) =>
-    request<MyReport>("/myreports", "POST", { name, content_b64: contentB64 }),
+  uploadReport: (name: string, contentB64: string, meta?: {
+    title?: string; institution?: string; publish_date?: string;
+    sector_keys?: string[]; source_url?: string; source_kind?: string;
+  }) =>
+    request<MyReport>("/myreports", "POST", {
+      name, content_b64: contentB64,
+      ...(meta?.title != null ? { title: meta.title } : {}),
+      ...(meta?.institution != null ? { institution: meta.institution } : {}),
+      ...(meta?.publish_date != null ? { publish_date: meta.publish_date } : {}),
+      ...(meta?.sector_keys != null ? { sector_keys: meta.sector_keys } : {}),
+      ...(meta?.source_url != null ? { source_url: meta.source_url } : {}),
+      ...(meta?.source_kind != null ? { source_kind: meta.source_kind } : {}),
+    }),
   deleteReport: (id: string) => request<{ ok: boolean }>(`/myreports/${id}`, "DELETE"),
+  // 注意：get()/request() 已自动加 /api 前缀，这里只传 /myreports/... 即可，禁止重复 /api。
+  browseMyReports: (group: MyReportsBrowseGroup, sectorKey?: string) => {
+    const q = new URLSearchParams({ group });
+    if (sectorKey) q.set("sector_key", sectorKey);
+    return get<MyReportsBrowseResult>(`/myreports/browse?${q.toString()}`);
+  },
+  searchMyReports: (q: string) =>
+    get<MyReport[]>(`/myreports/search?q=${encodeURIComponent(q)}`),
+  patchReport: (id: string, meta: {
+    title?: string; institution?: string; publish_date?: string;
+    sector_keys?: string[]; source_url?: string; source_kind?: string;
+  }) => {
+    const body: Record<string, unknown> = {};
+    for (const k of ["title", "institution", "publish_date", "sector_keys", "source_url", "source_kind"] as const) {
+      if (meta[k] !== undefined) body[k] = meta[k];
+    }
+    return request<MyReport>(`/myreports/${id}`, "PATCH", body);
+  },
+
+  /**
+   * 板块研报发现（不自动归档）。
+   * 注意：get()/request() 已自动加 /api 前缀，路径禁止写 /api/...
+   */
+  discoverSectorReports: (
+    sectorKey: string,
+    opts?: { days?: number; maxPages?: number; scope?: SectorReportScope },
+  ) => {
+    const q = new URLSearchParams();
+    if (opts?.days != null) q.set("days", String(opts.days));
+    if (opts?.maxPages != null) q.set("max_pages", String(opts.maxPages));
+    if (opts?.scope) q.set("scope", opts.scope);
+    const qs = q.toString();
+    return get<SectorReportsDiscoveryResult>(
+      `/sector-research/reports/${encodeURIComponent(sectorKey)}${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  /** 导入发现研报到我的研报：body 仅 { external_id } */
+  importSectorReport: (sectorKey: string, externalId: string) =>
+    request<MyReport>(`/sector-research/import/${encodeURIComponent(sectorKey)}`, "POST", {
+      external_id: externalId,
+    }),
+
+  /** 板块动态数据（一致预期 / 公告等） */
+  getSectorResearchData: (sectorKey: string) =>
+    get<SectorDynamicData>(`/sector-research/data/${encodeURIComponent(sectorKey)}`),
 };

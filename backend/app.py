@@ -12,14 +12,17 @@ from __future__ import annotations
 import json
 import os
 import threading
+from collections import OrderedDict
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from itertools import count
 
 import anyio
-
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 import account_profile
@@ -36,6 +39,7 @@ import market
 import myreports as mr
 import review_compare
 import review_history
+import sector_research_data as srd
 
 
 class _DisconnectAwareStreamingResponse(StreamingResponse):
@@ -102,7 +106,7 @@ _ORIGINS = [o.strip() for o in os.environ.get("VR_ALLOW_ORIGINS", "*").split(","
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ORIGINS,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -409,6 +413,24 @@ def account_profile_save(req: AccountProfileIn):
 class ReportIn(BaseModel):
     name: str
     content_b64: str
+    title: str | None = None
+    institution: str | None = None
+    publish_date: str | None = None
+    sector_keys: list[str] | None = None
+    source_url: str | None = None
+    source_kind: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+
+class ReportMetaPatch(BaseModel):
+    """PATCH 元数据：字段未出现 = 保持原值；"" / [] = 明确清空；null = 由路由拒绝 400。"""
+    model_config = ConfigDict(extra="forbid")
+    title: str | None = None
+    institution: str | None = None
+    publish_date: str | None = None
+    sector_keys: list[str] | None = None
+    source_url: str | None = None
+    source_kind: str | None = None
 
 
 @app.get("/api/myreports")
@@ -418,9 +440,14 @@ def myreports_list():
 
 @app.post("/api/myreports")
 def myreports_upload(r: ReportIn):
-    """上传一份研报（base64）→ 存本地 + 按文件名自动打行业标签。"""
+    """上传一份研报（base64）→ 存本地 + 按文件名自动打行业标签。支持可选丰富元数据。"""
     try:
-        return {"data": mr.save_report(r.name, r.content_b64)}
+        return {"data": mr.save_report(
+            r.name, r.content_b64,
+            title=r.title, institution=r.institution,
+            publish_date=r.publish_date, sector_keys=r.sector_keys,
+            source_url=r.source_url, source_kind=r.source_kind,
+        )}
     except mr.ReportError as e:
         raise HTTPException(400, str(e)) from e
 
@@ -438,6 +465,33 @@ def myreports_file(rid: str):
 @app.delete("/api/myreports/{rid}")
 def myreports_delete(rid: str):
     return {"data": {"ok": mr.delete_report(rid)}}
+
+
+@app.get("/api/myreports/browse")
+def myreports_browse(group: str = Query(...), sector_key: str | None = None):
+    """按 year / industry / institution 分组浏览研报档案。"""
+    try:
+        return {"data": mr.build_browse(mr.list_reports(), group, sector_key=sector_key)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.get("/api/myreports/search")
+def myreports_search(q: str = ""):
+    """全文检索：匹配 name / title / institution / sector_keys。"""
+    return {"data": mr.search_reports(mr.list_reports(), q)}
+
+
+@app.patch("/api/myreports/{rid}")
+def myreports_update(rid: str, body: ReportMetaPatch):
+    """部分更新研报元数据（标题 / 机构 / 发布日期 / 关联赛道 / 来源 / 类型）。"""
+    try:
+        updated = mr.update_report_meta(rid, body.model_dump(exclude_unset=True))
+    except mr.ReportError as e:
+        raise HTTPException(400, str(e)) from e
+    if updated is None:
+        raise HTTPException(404, "研报不存在")
+    return {"data": updated}
 
 
 class CloseIn(BaseModel):
@@ -1181,5 +1235,305 @@ def industry(top: int = Query(20, ge=5, le=50)):
         data = astock.industry_comparison(top_n=top)
         _DC_CACHE[key] = (_time.time(), data)
         return {"data": data}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BL001
         raise HTTPException(502, f"行业排名异常：{e}") from e
+
+
+# ---------------------------------------------------------------------------
+# 板块研究工作台：研报发现 / 导入 / 动态数据（第一批仅 PCB 真实可用）
+# ---------------------------------------------------------------------------
+
+
+class SectorReportImportIn(BaseModel):
+    """导入研报请求：只接受 external_id；禁止 info_code/URL/标题等可改目标字段。"""
+    model_config = ConfigDict(extra="forbid")
+    external_id: str = Field(..., min_length=1, max_length=64)
+
+
+_ALLOWED_REPORT_SCOPES = frozenset({"industry", "company", "all"})
+_PDF_DOWNLOAD_MAX_REDIRECTS = 5
+_PDF_HOST_ALLOW = frozenset({"pdf.dfcfw.com", "pdfcdn.eastmoney.com"})
+
+# 服务端发现缓存：键 (sector_key, external_id) → 规范化元数据（无 PDF 正文）
+# 容量必须 ≥ MAX_DISCOVERY_RESULTS，保证「前端可见的每一条」在 TTL 内可导入。
+_DISCOVERY_CACHE_TTL_SECONDS = 20 * 60  # 20 分钟
+_DISCOVERY_CACHE_MAX_ENTRIES = max(500, int(getattr(srd, "MAX_DISCOVERY_RESULTS", 300)))
+
+
+@dataclass
+class CachedDiscovery:
+    sector_key: str
+    external_id: str
+    info_code: str
+    title: str
+    institution: str
+    publish_date: str
+    report_scope: str
+    source_provider: str
+    discovered_at: datetime
+    seq: int  # 单调序号，避免同秒 FIFO 不明确
+
+
+# OrderedDict 保插入序；seq 用于明确淘汰顺序
+_DISCOVERY_CACHE: OrderedDict[tuple[str, str], CachedDiscovery] = OrderedDict()
+_DISCOVERY_CACHE_LOCK = threading.Lock()
+_DISCOVERY_SEQ = count(1)
+
+
+def _cache_discoveries(sector_key: str, reports: list[dict]) -> None:
+    """把「实际返回前端」的发现结果写入有界短期缓存。
+
+    只缓存与 API 返回完全相同的列表；不缓存被截断的无关记录。
+    """
+    now = datetime.now(timezone.utc)
+    with _DISCOVERY_CACHE_LOCK:
+        for r in reports:
+            ext_id = r.get("external_id")
+            if not ext_id or not isinstance(ext_id, str):
+                continue
+            key = (sector_key, ext_id)
+            # 更新时移到队尾（最近写入）
+            if key in _DISCOVERY_CACHE:
+                del _DISCOVERY_CACHE[key]
+            _DISCOVERY_CACHE[key] = CachedDiscovery(
+                sector_key=sector_key,
+                external_id=ext_id,
+                info_code=(r.get("info_code") or "") if isinstance(r.get("info_code"), str) else "",
+                title=(r.get("title") or "") if isinstance(r.get("title"), str) else "",
+                institution=(r.get("institution") or "") if isinstance(r.get("institution"), str) else "",
+                publish_date=(r.get("publish_date") or "") if isinstance(r.get("publish_date"), str) else "",
+                report_scope=(r.get("report_scope") or "") if isinstance(r.get("report_scope"), str) else "",
+                source_provider=(r.get("source_provider") or "eastmoney")
+                if isinstance(r.get("source_provider"), (str, type(None)))
+                else "eastmoney",
+                discovered_at=now,
+                seq=next(_DISCOVERY_SEQ),
+            )
+        # 容量上限：按 seq 升序剔除最旧（OrderedDict 队头）
+        while len(_DISCOVERY_CACHE) > _DISCOVERY_CACHE_MAX_ENTRIES:
+            _DISCOVERY_CACHE.popitem(last=False)
+
+
+def _get_cached_discovery(sector_key: str, external_id: str) -> CachedDiscovery | None:
+    """读取缓存；过期则删除并返回 None。淘汰顺序保持明确 FIFO。"""
+    now = datetime.now(timezone.utc)
+    with _DISCOVERY_CACHE_LOCK:
+        key = (sector_key, external_id)
+        cached = _DISCOVERY_CACHE.get(key)
+        if cached is None:
+            return None
+        age = (now - cached.discovered_at).total_seconds()
+        if age > _DISCOVERY_CACHE_TTL_SECONDS:
+            del _DISCOVERY_CACHE[key]
+            return None
+        return cached
+
+
+def _clear_discovery_cache() -> None:
+    """测试辅助：清空发现缓存。"""
+    with _DISCOVERY_CACHE_LOCK:
+        _DISCOVERY_CACHE.clear()
+
+
+@app.get("/api/sector-research/reports/{sector_key}")
+def sector_research_reports(
+    sector_key: str,
+    days: int | None = Query(None, ge=1, le=3650),
+    max_pages: int = Query(3, ge=1, le=10),
+    scope: str = Query("industry"),
+):
+    """发现板块研报（只返回发现结果，不自动归档）。scope=industry|company|all。"""
+    if scope not in _ALLOWED_REPORT_SCOPES:
+        raise HTTPException(400, f"scope 无效，支持：{' / '.join(sorted(_ALLOWED_REPORT_SCOPES))}")
+    result = srd.discover_sector_reports(
+        sector_key,
+        days=days,
+        max_pages=max_pages,
+        scope=scope,
+        max_results=srd.MAX_DISCOVERY_RESULTS,
+    )
+    # 缓存与返回使用完全相同的列表
+    if not result.error:
+        _cache_discoveries(sector_key, result.discovered)
+    return {
+        "data": {
+            "sector_key": result.source_key,
+            "discovered": result.discovered,
+            "filtered": result.filtered,
+            "error": result.error,
+            "total_discovered": result.total_discovered,
+            "returned": result.returned,
+            "truncated": result.truncated,
+        }
+    }
+
+
+@app.get("/api/sector-research/data/{sector_key}")
+def sector_research_data(sector_key: str):
+    """板块动态数据（一致预期 / 公告 / 新闻）。缺失字段用 null，不猜测。"""
+    try:
+        data = srd.get_sector_dynamic_data(sector_key)
+    except Exception as e:  # noqa: BL001
+        raise HTTPException(502, f"板块动态数据异常：{e}") from e
+    return {"data": data}
+
+
+@app.post("/api/sector-research/import/{sector_key}")
+def sector_research_import(sector_key: str, body: SectorReportImportIn):
+    """导入研报：只接受 external_id；优先使用缓存中的发现记录。
+
+    缓存未命中或过期时返回 400，要求前端重新发现；不静默用默认 days 重发现。
+    PDF 仅由缓存中的 info_code 生成；不信任前端标题/URL/info_code。
+    """
+    src = srd.get_sector_source(sector_key)
+    if src is None:
+        raise HTTPException(404, f"未注册的板块：{sector_key}")
+
+    cached = _get_cached_discovery(sector_key, body.external_id)
+    if cached is None:
+        raise HTTPException(400, "发现结果已过期，请重新点击“开始发现”")
+
+    info_code = cached.info_code
+    if not info_code:
+        raise HTTPException(400, "缓存记录缺少 info_code，无法安全下载")
+    external_id = cached.external_id
+
+    pdf_url = astock.pdf_url(info_code)
+    if not srd.pdf_url_allowed(pdf_url):
+        raise HTTPException(400, "PDF 链接不在允许域名或非 HTTPS")
+    try:
+        blob = _download_pdf(pdf_url)
+    except mr.ReportError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BL001
+        raise HTTPException(502, f"PDF 下载失败：{e}") from e
+    if not blob:
+        raise HTTPException(502, "PDF 内容为空")
+
+    industry_label = (
+        "PCB" if sector_key == "pcb"
+        else (src.label.split("（")[0].strip() if src.label else sector_key)
+    )
+    safe_title = cached.title or info_code
+    safe_name = f"{str(safe_title).replace('/', '_').replace(chr(92), '_')[:180]}.pdf"
+    try:
+        meta = mr.import_report_bytes(
+            name=safe_name,
+            content=blob,
+            metadata={
+                "title": safe_title,
+                "institution": cached.institution,
+                "publish_date": cached.publish_date,
+                "sector_keys": [sector_key],
+                "source_url": pdf_url,
+                "source_kind": "report",
+                "source_provider": cached.source_provider or "eastmoney",
+                "external_id": external_id,
+                "info_code": info_code,
+                "report_scope": cached.report_scope,
+                "report_type": "brokerage",
+                "industry": industry_label,
+            },
+        )
+    except mr.ReportError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"data": meta}
+
+
+def _report_download_session():
+    import requests
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": getattr(astock, "UA", "Mozilla/5.0"),
+        "Referer": "https://data.eastmoney.com/",
+    })
+    # 应用层自管重定向，便于校验每一跳最终 URL
+    s.max_redirects = _PDF_DOWNLOAD_MAX_REDIRECTS
+    return s
+
+
+def _pdf_url_host_ok(url: str) -> bool:
+    """HTTPS + 允许域名 + 拒绝 IP / userinfo / 非默认端口 / 本地地址。"""
+    from urllib.parse import urlparse
+    try:
+        p = urlparse(url)
+    except Exception:
+        return False
+    if (p.scheme or "").lower() != "https":
+        return False
+    if p.username is not None or p.password is not None:
+        return False
+    host = (p.hostname or "").lower()
+    if not host:
+        return False
+    if host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local"):
+        return False
+    # 拒绝纯 IP（IPv4 / 简单 IPv6）
+    if all(c.isdigit() or c == "." for c in host) or ":" in host:
+        return False
+    if p.port is not None and p.port != 443:
+        return False
+    return host in _PDF_HOST_ALLOW
+
+
+def _download_pdf(url: str, max_bytes: int = 25 * 1024 * 1024) -> bytes:
+    """安全下载 PDF：HTTPS 白名单、重定向校验、流式累计、魔术字节。
+
+    失败抛 mr.ReportError（业务/安全）或底层网络异常。
+    不写任何实体文件或索引。
+    """
+    import requests
+    from urllib.parse import urljoin
+
+    if not _pdf_url_host_ok(url):
+        raise mr.ReportError("PDF URL 未通过 SSRF 防护校验")
+
+    session = _report_download_session()
+    current = url
+    resp = None
+    for _ in range(_PDF_DOWNLOAD_MAX_REDIRECTS + 1):
+        if not _pdf_url_host_ok(current):
+            raise mr.ReportError("重定向目标不在允许域名或非 HTTPS")
+        try:
+            resp = session.get(current, timeout=60, stream=True, allow_redirects=False)
+        except requests.RequestException as e:
+            raise mr.ReportError(f"PDF 下载网络错误：{e}") from e
+        if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
+            loc = resp.headers.get("Location")
+            if not loc:
+                raise mr.ReportError("重定向缺少 Location")
+            current = urljoin(current, loc)
+            continue
+        break
+    else:
+        raise mr.ReportError(f"重定向次数超过上限 {_PDF_DOWNLOAD_MAX_REDIRECTS}")
+
+    assert resp is not None
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        raise mr.ReportError(f"PDF 下载 HTTP 错误：{e}") from e
+
+    # 最终 URL 再校验一次
+    final_url = getattr(resp, "url", None) or current
+    if not _pdf_url_host_ok(str(final_url)):
+        raise mr.ReportError("最终下载 URL 未通过 SSRF 防护校验")
+
+    ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+    if ctype and ctype not in ("application/pdf", "application/octet-stream", "binary/octet-stream"):
+        # 不唯依赖 Content-Type，但明确 HTML/JS 直接拒绝
+        if "html" in ctype or "javascript" in ctype or "json" in ctype or "text/" in ctype:
+            raise mr.ReportError(f"响应 Content-Type 非 PDF：{ctype}")
+
+    buf = bytearray()
+    for chunk in resp.iter_content(chunk_size=1 << 16):
+        if not chunk:
+            continue
+        buf.extend(chunk)
+        if len(buf) > max_bytes:
+            raise mr.ReportError(f"文件过大，上限 {max_bytes // 1024 // 1024}MB")
+    if not buf:
+        raise mr.ReportError("PDF 内容为空")
+    if not bytes(buf[:4]).startswith(b"%PDF"):
+        raise mr.ReportError("响应非 PDF 内容（可能为反爬拦截页），已拒绝")
+    return bytes(buf)
