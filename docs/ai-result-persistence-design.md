@@ -1,9 +1,21 @@
 # AI 生成结果持久化与每日复盘页面重排设计
 
-状态：设计已确认，尚未开始功能编码。
+状态：已实施并通过离线回归；本文同时保留实施前事实和最终实现约束。
 
 基础分支：`feature/research-system-v01`
 基础提交：`feba6fedd3a17a8275b0aa9bbd760bd891b0e028`
+
+## 0. 实施结果（2026-07-23）
+
+- 新增 `backend/ai_result_store.py`：显式 `db_path`、幂等建表、确定性 JSON、`BEGIN IMMEDIATE` 单事务 UPSERT、精确/最新读取和损坏 payload 检测。
+- 新增 `backend/ai_result_service.py`：结果/日期/模型校验、provider 规范化、敏感字段拒绝、每日复盘与持仓权威保存、持仓 SHA-256 指纹、stale 和安全返回对象。
+- `chat.prepare_daily_review_analysis()` 只聚合一次 review；API SSE 必须真实收到 `[DONE]`，否则抛 `ModelStreamIncompleteError`。
+- `POST /api/daily-review/analyze` 累计 Markdown，在真实完成、内容/元数据校验及 SQLite 提交成功后才发送业务层 `done`。
+- `POST /api/portfolio/advice` 在读取并校验同一份持仓快照后固定指纹，保存 validator、执行约束和账户指标后的最终权威结果，保存成功后才返回 200。
+- 新增 `GET /api/ai-results/{result_type}?trade_date=YYYY-MM-DD`；恢复路径不调用模型、不启动 fresh 每日复盘聚合。
+- 前端公共 NDJSON 解析器实现 `sawDone` / `sawError`、尾缓冲、异常流和 reader 清理；两个 Zustand store 实现恢复、失败保旧和旧请求防护。
+- 每日复盘页面按“指数、全球、广度、情绪、成交额榜、板块亮点、板块排名、关注股票、AI 结果、历史”展示；原有模块、详情和对比能力保留。
+- 项目没有前端单测运行器；协议状态转换已拆为导出纯函数，并以 TypeScript 生产构建和真实浏览器验证覆盖。
 
 ## 1. 目标与非目标
 
@@ -24,9 +36,9 @@
 - 不以 `localStorage` 作为权威或唯一存储。
 - 不保存 API Key、Authorization、Base URL、完整 Prompt、完整模型上下文或未经校验的模型原始响应。
 - 不自动定时生成、不在页面打开时调用模型、不因持仓变化自动删除或重新生成建议。
-- 本设计阶段不创建数据库表、不修改 API、不修改前端流解析器、不编写功能或测试代码，也不执行功能测试。
+- 不新增允许客户端直接提交 Markdown 或自定义建议 payload 的写入 API。
 
-## 2. 现有架构事实
+## 2. 实施前架构事实
 
 - 每日复盘历史使用 `daily_reviews.sqlite3` 中的 `daily_review_snapshots` 表，一天可保存多份不同内容的市场快照。
 - `POST /api/daily-review/analyze` 当前通过 NDJSON 输出 `delta`、`done`、`error`。
@@ -340,7 +352,7 @@ restored | empty → generating → success | generation_error
 
 可以新增市场核心摘要，但不替代或删除原始明细。持仓页保留持仓表、账户指标、账户级建议和逐股建议。
 
-## 16. 预计修改文件
+## 16. 实际主要修改文件
 
 新增：
 
@@ -352,7 +364,7 @@ backend/tests/test_ai_result_service.py
 backend/tests/test_ai_result_api.py
 ```
 
-预计修改：
+修改：
 
 ```text
 backend/app.py
@@ -362,6 +374,7 @@ backend/portfolio_advice_service.py
 backend/tests/test_daily_review_ai_api.py
 backend/tests/test_daily_review_ai_chat.py
 backend/tests/test_portfolio_advice_api.py
+backend/conftest.py
 frontend/src/lib/api.ts
 frontend/src/stores/dailyReviewAiTaskStore.ts
 frontend/src/stores/portfolioAdviceTaskStore.ts
@@ -369,7 +382,7 @@ frontend/src/pages/DailyReview.tsx
 frontend/src/pages/Portfolio.tsx
 ```
 
-可能修改两个任务状态指示组件。除非路径解析确需抽取，否则不修改 `review_store.py`、`review_history.py`。
+未修改 `review_store.py` 或 `daily_review_snapshots` schema；仅同步了 `review_history.py` 对 analyze 写入边界的文档说明。
 
 ## 17. 测试矩阵
 
@@ -417,9 +430,9 @@ frontend/src/pages/Portfolio.tsx
 - sawDone / sawError 四种组合符合规则。
 - 重复点击防护、持仓过期提示、移动端无横向溢出。
 
-## 18. Git 实施流程
+## 18. Git 实施与验证流程
 
-设计文档先在 `codex/ai-result-persistence` 单独提交并推送。主审通过 GitHub 连接创建 Draft PR，Base 为 `feature/research-system-v01`。设计审核通过后，继续在同一分支和同一 Draft PR 中添加实现 commit。
+设计与实现均在 `codex/ai-result-persistence` 和现有 Draft PR #10 中完成，Base 为 `feature/research-system-v01`；不创建、转 Ready 或合并 PR。
 
 实施前再次核验基线和工作区；只提交本任务文件。完成实现后运行：
 
@@ -439,7 +452,8 @@ git diff --check origin/feature/research-system-v01...HEAD
 
 ## 19. 明确不做内容
 
-- 本设计提交不含后端、前端、测试、数据库 schema、CI、依赖或 lockfile 改动。
-- 不声称功能已完成或测试已通过。
+- 不修改 `daily_review_snapshots` 表，不引入第二个 SQLite 文件。
+- 不引入前端测试框架、数据库框架、外部存储服务、依赖或 lockfile 改动。
+- 不将 API Key、Authorization、Base URL、Prompt、模型上下文、原始响应、路径、SQL 或 traceback 写入结果表或恢复响应。
 - 不转 Ready、不合并 PR、不删除分支、不修改稳定分支。
 - 不在设计审核前编写逐步实施计划或开始功能编码。

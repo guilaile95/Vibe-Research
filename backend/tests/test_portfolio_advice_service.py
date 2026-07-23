@@ -22,6 +22,13 @@ from portfolio_advice_service import (
 from portfolio_advice_validator import PortfolioAdviceValidationError
 
 
+@pytest.fixture(autouse=True)
+def _never_write_real_ai_result_db(monkeypatch):
+    save = MagicMock(return_value={"trade_date": "2026-07-21"})
+    monkeypatch.setattr(svc.ai_result_service, "save_portfolio_advice", save)
+    return save
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -203,6 +210,11 @@ def test_prepare_full_chain_and_structure():
         order.append("daily_review")
         return review
 
+    def fingerprint(holdings):
+        order.append("fingerprint")
+        assert holdings is pf["holdings"]
+        return "f" * 64
+
     def build_ctx(p, r, **kw):
         order.append("context")
         assert p is pf
@@ -215,6 +227,9 @@ def test_prepare_full_chain_and_structure():
 
     with (
         patch.object(svc.portfolio, "get_portfolio", side_effect=get_pf) as m_pf,
+        patch.object(
+            svc.ai_result_service, "compute_portfolio_fingerprint", side_effect=fingerprint
+        ) as m_fp,
         patch.object(svc.daily_review, "generate_daily_review", side_effect=gen_rev) as m_dr,
         patch.object(
             svc.portfolio_advice_context, "build_portfolio_advice_context", side_effect=build_ctx
@@ -225,14 +240,16 @@ def test_prepare_full_chain_and_structure():
     ):
         out = prepare_portfolio_advice_messages("重点看减仓")
 
-    assert order == ["portfolio", "daily_review", "context", "prompt"]
+    assert order == ["portfolio", "fingerprint", "daily_review", "context", "prompt"]
     m_pf.assert_called_once_with()
+    m_fp.assert_called_once_with(pf["holdings"])
     m_dr.assert_called_once_with()
     m_ctx.assert_called_once()
     m_pr.assert_called_once()
     assert set(out.keys()) == {
-        "portfolio", "daily_review", "context", "context_json", "messages",
+        "portfolio", "input_fingerprint", "daily_review", "context", "context_json", "messages",
     }
+    assert out["input_fingerprint"] == "f" * 64
     assert out["portfolio"] is pf
     assert out["daily_review"] is review
     assert out["context"] is ctx
@@ -342,6 +359,67 @@ def test_user_request_blank_to_none():
 def test_user_request_invalid_type():
     with pytest.raises(TypeError):
         prepare_portfolio_advice_messages(123)  # type: ignore[arg-type]
+
+
+def test_generate_saves_final_authoritative_result_from_same_snapshot(monkeypatch):
+    portfolio_snapshot = _portfolio()
+    review = _review()
+    prepared = {
+        "portfolio": portfolio_snapshot,
+        "input_fingerprint": "a" * 64,
+        "daily_review": review,
+        "context": {"holdings": [{"code": "600519"}]},
+        "context_json": "{}",
+        "messages": _msgs(),
+    }
+    validated = _ai_json_for()
+    authoritative = copy.deepcopy(validated)
+    authoritative["account_funding"] = {"configured": True}
+    save = MagicMock(return_value={"trade_date": "2026-07-21"})
+    monkeypatch.setattr(svc, "prepare_portfolio_advice_messages", lambda _request=None: prepared)
+    monkeypatch.setattr(svc.portfolio_advice_validator, "validate_portfolio_advice", lambda *_a: validated)
+    monkeypatch.setattr(svc, "attach_account_funding_metrics", lambda *_a: authoritative)
+    monkeypatch.setattr(svc.ai_result_service, "save_portfolio_advice", save)
+
+    result = generate_portfolio_advice(
+        {"provider": "deepseek", "model": "m"},
+        model_runner=lambda *_a: json.dumps(_ai_json_for()),
+    )
+
+    assert result is authoritative
+    save.assert_called_once_with(
+        portfolio_snapshot,
+        review,
+        authoritative,
+        {"provider": "deepseek", "model": "m"},
+        input_fingerprint="a" * 64,
+    )
+    assert save.call_args.args[2] is not validated
+
+
+def test_generate_save_failure_is_failure_not_success(monkeypatch):
+    prepared = {
+        "portfolio": _portfolio(),
+        "input_fingerprint": "b" * 64,
+        "daily_review": _review(),
+        "context": {"holdings": [{"code": "600519"}]},
+        "context_json": "{}",
+        "messages": _msgs(),
+    }
+    monkeypatch.setattr(svc, "prepare_portfolio_advice_messages", lambda _request=None: prepared)
+    monkeypatch.setattr(svc.portfolio_advice_validator, "validate_portfolio_advice", lambda *_a: _ai_json_for())
+    monkeypatch.setattr(svc, "attach_account_funding_metrics", lambda result, _pf: result)
+    monkeypatch.setattr(
+        svc.ai_result_service,
+        "save_portfolio_advice",
+        MagicMock(side_effect=RuntimeError("database unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        generate_portfolio_advice(
+            {"provider": "deepseek", "model": "m"},
+            model_runner=lambda *_a: json.dumps(_ai_json_for()),
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -60,6 +60,10 @@ class CliUnavailable(RuntimeError):
     """本机未检测到对应 CLI（未安装 / 不在 PATH）。"""
 
 
+class _StreamReadFailure:
+    pass
+
+
 def _find_bin(name: str) -> str | None:
     hit = shutil.which(name)
     if hit:
@@ -129,9 +133,8 @@ def run_cli(kind: str, system_prompt: str, user_prompt: str) -> str:
             raise RuntimeError(f"{kind} 生成超时（>{_CLI_TIMEOUT_S}s）") from e
 
         out = (proc.stdout or "").strip()
-        if proc.returncode != 0 and not out:
-            err = (proc.stderr or "").strip()[:300]
-            raise RuntimeError(f"{kind} 退出码 {proc.returncode}{'：' + err if err else ''}")
+        if proc.returncode != 0:
+            raise RuntimeError(f"{kind} 退出码 {proc.returncode}")
         return out
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -187,7 +190,7 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
                 for ln in stdout:
                     q.put(ln)
             except Exception:
-                pass
+                q.put(_StreamReadFailure())
             finally:
                 q.put(None)  # EOF 哨兵
 
@@ -203,6 +206,8 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
                 continue
             if line is None:
                 break
+            if isinstance(line, _StreamReadFailure):
+                raise RuntimeError(f"{kind} 输出读取失败")
             yield line
         try:
             rc = proc.wait(timeout=10)

@@ -24,6 +24,24 @@ _MESSAGES = [
     {"role": "user", "content": "user-prompt"},
 ]
 
+_REVIEW = {
+    "status": "normal",
+    "trade_date": "2026-07-23",
+    "generated_at": "2026-07-23 15:30:00",
+    "data_cutoff": "2026-07-23 15:00:00",
+}
+
+
+def _prepared():
+    return {"review": _REVIEW, "context_json": "{}", "messages": _MESSAGES}
+
+
+@pytest.fixture(autouse=True)
+def _never_write_real_ai_db(monkeypatch):
+    save = MagicMock(return_value={"trade_date": "2026-07-23"})
+    monkeypatch.setattr(app_module.ai_result_service, "save_daily_review_ai", save)
+    return save
+
 
 def _stream_events(*events):
     def _gen(*_a, **_k):
@@ -37,7 +55,7 @@ def _stream_events(*events):
 # ---------------------------------------------------------------------------
 
 def test_analyze_stream_ok(monkeypatch):
-    prepare = MagicMock(return_value=_MESSAGES)
+    prepare = MagicMock(return_value=_prepared())
     stream_calls = []
 
     def fake_stream(cfg, messages, *, use_tools=False):
@@ -46,7 +64,7 @@ def test_analyze_stream_ok(monkeypatch):
         yield {"type": "delta", "text": "正文"}
         yield {"type": "done", "trace": [], "rounds": 1}
 
-    monkeypatch.setattr(chat_layer, "prepare_daily_review_messages", prepare)
+    monkeypatch.setattr(chat_layer, "prepare_daily_review_analysis", prepare)
     monkeypatch.setattr(chat_layer, "stream_messages", fake_stream)
 
     r = client.post("/api/daily-review/analyze", json={"llm": _LLM})
@@ -71,8 +89,8 @@ def test_analyze_stream_ok(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_analyze_custom_user_request(monkeypatch):
-    prepare = MagicMock(return_value=_MESSAGES)
-    monkeypatch.setattr(chat_layer, "prepare_daily_review_messages", prepare)
+    prepare = MagicMock(return_value=_prepared())
+    monkeypatch.setattr(chat_layer, "prepare_daily_review_analysis", prepare)
     monkeypatch.setattr(
         chat_layer,
         "stream_messages",
@@ -94,8 +112,8 @@ def test_analyze_custom_user_request(monkeypatch):
 
 def test_analyze_missing_user_request_is_none(monkeypatch):
     """无 user_request 字段时传入 None（llm 仍必填以复用现有模型配置）。"""
-    prepare = MagicMock(return_value=_MESSAGES)
-    monkeypatch.setattr(chat_layer, "prepare_daily_review_messages", prepare)
+    prepare = MagicMock(return_value=_prepared())
+    monkeypatch.setattr(chat_layer, "prepare_daily_review_analysis", prepare)
     monkeypatch.setattr(
         chat_layer,
         "stream_messages",
@@ -108,8 +126,8 @@ def test_analyze_missing_user_request_is_none(monkeypatch):
 
 
 def test_analyze_explicit_null_user_request(monkeypatch):
-    prepare = MagicMock(return_value=_MESSAGES)
-    monkeypatch.setattr(chat_layer, "prepare_daily_review_messages", prepare)
+    prepare = MagicMock(return_value=_prepared())
+    monkeypatch.setattr(chat_layer, "prepare_daily_review_analysis", prepare)
     monkeypatch.setattr(
         chat_layer,
         "stream_messages",
@@ -129,8 +147,8 @@ def test_analyze_explicit_null_user_request(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_analyze_partial_still_200(monkeypatch):
-    prepare = MagicMock(return_value=_MESSAGES)
-    monkeypatch.setattr(chat_layer, "prepare_daily_review_messages", prepare)
+    prepare = MagicMock(return_value=_prepared())
+    monkeypatch.setattr(chat_layer, "prepare_daily_review_analysis", prepare)
     monkeypatch.setattr(
         chat_layer,
         "stream_messages",
@@ -142,8 +160,8 @@ def test_analyze_partial_still_200(monkeypatch):
 
 
 def test_analyze_unavailable_still_200(monkeypatch):
-    prepare = MagicMock(return_value=_MESSAGES)
-    monkeypatch.setattr(chat_layer, "prepare_daily_review_messages", prepare)
+    prepare = MagicMock(return_value=_prepared())
+    monkeypatch.setattr(chat_layer, "prepare_daily_review_analysis", prepare)
     monkeypatch.setattr(
         chat_layer,
         "stream_messages",
@@ -160,14 +178,14 @@ def test_analyze_unavailable_still_200(monkeypatch):
 def test_analyze_prepare_error_502(monkeypatch):
     prepare = MagicMock(side_effect=RuntimeError("context failed"))
     stream = MagicMock()
-    monkeypatch.setattr(chat_layer, "prepare_daily_review_messages", prepare)
+    monkeypatch.setattr(chat_layer, "prepare_daily_review_analysis", prepare)
     monkeypatch.setattr(chat_layer, "stream_messages", stream)
 
     r = client.post("/api/daily-review/analyze", json={"llm": _LLM})
     assert r.status_code == 502
     detail = r.json()["detail"]
-    assert "每日复盘AI上下文准备失败" in detail
-    assert "context failed" in detail
+    assert detail == "每日复盘AI上下文准备失败"
+    assert "context failed" not in detail
     stream.assert_not_called()
 
 
@@ -176,14 +194,14 @@ def test_analyze_prepare_error_502(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_analyze_ignores_client_context_fields(monkeypatch):
-    prepare = MagicMock(return_value=_MESSAGES)
+    prepare = MagicMock(return_value=_prepared())
     stream_calls = []
 
     def fake_stream(cfg, messages, *, use_tools=False):
         stream_calls.append(messages)
         yield {"type": "done", "trace": [], "rounds": 1}
 
-    monkeypatch.setattr(chat_layer, "prepare_daily_review_messages", prepare)
+    monkeypatch.setattr(chat_layer, "prepare_daily_review_analysis", prepare)
     monkeypatch.setattr(chat_layer, "stream_messages", fake_stream)
 
     r = client.post(
@@ -215,8 +233,8 @@ def test_analyze_api_only_calls_chat_orchestration(monkeypatch):
     monkeypatch.setattr("daily_review_context.render_daily_review_ai_context", _boom)
     monkeypatch.setattr("daily_review_ai_prompt.build_daily_review_messages", _boom)
 
-    prepare = MagicMock(return_value=_MESSAGES)
-    monkeypatch.setattr(chat_layer, "prepare_daily_review_messages", prepare)
+    prepare = MagicMock(return_value=_prepared())
+    monkeypatch.setattr(chat_layer, "prepare_daily_review_analysis", prepare)
     monkeypatch.setattr(
         chat_layer,
         "stream_messages",
@@ -233,12 +251,12 @@ def test_analyze_api_only_calls_chat_orchestration(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_analyze_single_prepare_and_stream(monkeypatch):
-    prepare = MagicMock(return_value=_MESSAGES)
+    prepare = MagicMock(return_value=_prepared())
     stream = MagicMock(side_effect=_stream_events(
         {"type": "delta", "text": "x"},
         {"type": "done", "trace": [], "rounds": 1},
     ))
-    monkeypatch.setattr(chat_layer, "prepare_daily_review_messages", prepare)
+    monkeypatch.setattr(chat_layer, "prepare_daily_review_analysis", prepare)
     monkeypatch.setattr(chat_layer, "stream_messages", stream)
 
     r = client.post("/api/daily-review/analyze", json={"user_request": "a", "llm": _LLM})
@@ -324,7 +342,7 @@ def test_stream_messages_used_by_run_chat_stream(monkeypatch):
 def test_analyze_stream_error_uses_chat_protocol(monkeypatch):
     """模型流启动后错误 → 流内 error 事件（非 HTTP 502）。"""
     monkeypatch.setattr(
-        chat_layer, "prepare_daily_review_messages", MagicMock(return_value=_MESSAGES)
+        chat_layer, "prepare_daily_review_analysis", MagicMock(return_value=_prepared())
     )
 
     def boom_stream(*_a, **_k):
@@ -338,3 +356,82 @@ def test_analyze_stream_error_uses_chat_protocol(monkeypatch):
     events = [json.loads(ln) for ln in r.text.splitlines() if ln.strip()]
     assert events[0]["type"] == "error"
     assert "对话失败" in events[0]["message"]
+
+
+def test_analyze_persists_full_markdown_before_business_done(monkeypatch):
+    order = []
+    monkeypatch.setattr(
+        chat_layer, "prepare_daily_review_analysis", MagicMock(return_value=_prepared())
+    )
+
+    def stream(*_a, **_k):
+        yield {"type": "delta", "text": "# 完整"}
+        yield {"type": "delta", "text": "复盘"}
+        yield {"type": "done", "trace": [], "rounds": 1}
+
+    def save(review, markdown, cfg):
+        order.append("save")
+        assert review is _REVIEW
+        assert markdown == "# 完整复盘"
+        assert cfg["apiKey"] == "sk-test"
+        return {"trade_date": review["trade_date"]}
+
+    monkeypatch.setattr(chat_layer, "stream_messages", stream)
+    monkeypatch.setattr(app_module.ai_result_service, "save_daily_review_ai", save)
+    response = client.post("/api/daily-review/analyze", json={"llm": _LLM})
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert order == ["save"]
+    assert [event["type"] for event in events] == ["delta", "delta", "done"]
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [{"type": "delta", "text": "half"}],
+        [
+            {"type": "error", "message": "Authorization: Bearer sk-leak"},
+            {"type": "done"},
+        ],
+        [{"type": "done"}],
+    ],
+)
+def test_analyze_incomplete_error_or_empty_never_saves_or_sends_done(monkeypatch, events):
+    monkeypatch.setattr(
+        chat_layer, "prepare_daily_review_analysis", MagicMock(return_value=_prepared())
+    )
+    monkeypatch.setattr(chat_layer, "stream_messages", _stream_events(*events))
+    save = MagicMock()
+    monkeypatch.setattr(app_module.ai_result_service, "save_daily_review_ai", save)
+
+    response = client.post("/api/daily-review/analyze", json={"llm": _LLM})
+    response_events = [json.loads(line) for line in response.text.splitlines()]
+    assert response_events[-1]["type"] == "error"
+    assert all(event["type"] != "done" for event in response_events)
+    assert "sk-leak" not in response.text
+    assert "Authorization" not in response.text
+    save.assert_not_called()
+
+
+def test_analyze_save_failure_keeps_partial_delta_but_no_done(monkeypatch):
+    monkeypatch.setattr(
+        chat_layer, "prepare_daily_review_analysis", MagicMock(return_value=_prepared())
+    )
+    monkeypatch.setattr(
+        chat_layer,
+        "stream_messages",
+        _stream_events(
+            {"type": "delta", "text": "candidate"},
+            {"type": "done", "trace": [], "rounds": 1},
+        ),
+    )
+    monkeypatch.setattr(
+        app_module.ai_result_service,
+        "save_daily_review_ai",
+        MagicMock(side_effect=RuntimeError(r"SQL C:\private\daily_reviews.sqlite3")),
+    )
+
+    response = client.post("/api/daily-review/analyze", json={"llm": _LLM})
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert [event["type"] for event in events] == ["delta", "error"]
+    assert "SQL" not in response.text
+    assert "private" not in response.text

@@ -45,6 +45,11 @@ def tmp_env(tmp_path, monkeypatch):
     monkeypatch.setattr(pf, "PF_FILE", str(tmp_path / "portfolio.json"))
     monkeypatch.setattr(account_profile, "CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(account_profile, "ACCOUNT_FILE", str(tmp_path / "account_profile.json"))
+    monkeypatch.setattr(
+        portfolio_advice_service.ai_result_service,
+        "save_portfolio_advice",
+        lambda *_a, **_k: {"trade_date": "2026-01-01"},
+    )
 
     def mock_quote(codes):
         q = {}

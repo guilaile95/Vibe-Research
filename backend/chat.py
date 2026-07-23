@@ -21,6 +21,13 @@ import daily_review_ai_prompt
 import daily_review_context
 import gstock
 
+
+class ModelStreamIncompleteError(RuntimeError):
+    """The upstream stream ended without its explicit completion signal."""
+
+    def __init__(self):
+        super().__init__("模型响应流未完整结束")
+
 MAX_ROUNDS = 6  # 工具调用最大轮数，防死循环
 _TOOL_RESULT_CAP = 6000  # 单次工具结果注入上限（控 token）
 
@@ -286,6 +293,23 @@ def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
     return r
 
 
+def _parse_sse_line(raw: bytes) -> tuple[bool, dict | None]:
+    line = raw.decode("utf-8", errors="replace").strip()
+    if not line.startswith("data:"):
+        return False, None
+    data = line[5:].strip()
+    if data == "[DONE]":
+        return True, None
+    try:
+        parsed = json.loads(data)
+    except json.JSONDecodeError:
+        return False, None
+    choices = parsed.get("choices") or []
+    if not choices:
+        return False, None
+    return False, choices[0].get("delta") or {}
+
+
 def _iter_sse_deltas(resp):
     """解析上游 SSE 流，逐个 yield choices[0].delta。
 
@@ -299,19 +323,35 @@ def _iter_sse_deltas(resp):
         buf += chunk
         while b"\n" in buf:
             raw, buf = buf.split(b"\n", 1)
-            line = raw.decode("utf-8", errors="replace").strip()
-            if not line.startswith("data:"):
-                continue
-            data = line[5:].strip()
-            if data == "[DONE]":
+            done, delta = _parse_sse_line(raw)
+            if done:
                 return
-            try:
-                j = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            choices = j.get("choices") or []
-            if choices:
-                yield choices[0].get("delta") or {}
+            if delta is not None:
+                yield delta
+    if buf.strip():
+        done, delta = _parse_sse_line(buf)
+        if done:
+            return
+        if delta is not None:
+            yield delta
+    raise ModelStreamIncompleteError()
+
+
+def prepare_daily_review_analysis(
+    user_request: str | None = None,
+) -> dict:
+    """Build one immutable analysis bundle from exactly one fresh review."""
+    review = daily_review.generate_daily_review()
+    context_json = daily_review_context.render_daily_review_ai_context(review)
+    messages = daily_review_ai_prompt.build_daily_review_messages(
+        context_json,
+        user_request,
+    )
+    return {
+        "review": review,
+        "context_json": context_json,
+        "messages": messages,
+    }
 
 
 def prepare_daily_review_messages(
@@ -322,12 +362,7 @@ def prepare_daily_review_messages(
     不修改 review、不重序列化上下文、不追加通用 system / 历史 / assistant 占位。
     任一步异常向上抛出。partial/unavailable 仍正常构建消息。
     """
-    review = daily_review.generate_daily_review()
-    context_json = daily_review_context.render_daily_review_ai_context(review)
-    return daily_review_ai_prompt.build_daily_review_messages(
-        context_json,
-        user_request,
-    )
+    return prepare_daily_review_analysis(user_request)["messages"]
 
 
 def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):

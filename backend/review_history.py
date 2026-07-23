@@ -5,7 +5,8 @@
 保存策略（必须遵守）：
 - 每日复盘历史采用显式保存策略。
 - GET /api/daily-review 不产生写入。
-- POST /api/daily-review/analyze 不产生写入。
+- POST /api/daily-review/analyze 不写 daily_review_snapshots；其已校验 AI 正文由
+  独立 ai_generated_results 表按交易日保存。
 - 只有显式调用 save_current_daily_review() 才会写入快照。
 
 本模块不实现自动收盘保存、页面打开自动保存、AI 分析前自动保存、

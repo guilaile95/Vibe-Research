@@ -3,6 +3,8 @@
 空结果不缓存 / akshare 缺失降级 / 无 index 工具调用归位 / CLI 流式超时。
 """
 import pytest
+import sys
+from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 
 import app as app_module
@@ -264,7 +266,7 @@ def test_stream_tool_calls_without_index(monkeypatch):
 def test_run_cli_stream_timeout(monkeypatch):
     monkeypatch.setattr(cli_runtime, "_CLI_TIMEOUT_S", 1)
     monkeypatch.setitem(cli_runtime._CLI_DEFS, "fake", {
-        "bins": ["python3"],
+        "bins": [sys.executable],
         "delivery": "stdin",
         "build_args": lambda _: ["-c", "import time\nprint('x', flush=True)\ntime.sleep(30)"],
         "env": {},
@@ -274,3 +276,67 @@ def test_run_cli_stream_timeout(monkeypatch):
         for line in cli_runtime.run_cli_stream("fake", "s", "u"):
             chunks.append(line)
     assert chunks and chunks[0].strip() == "x"  # 挂起前的输出已正常流出
+
+
+def test_run_cli_nonzero_with_stdout_is_failure(monkeypatch):
+    monkeypatch.setitem(cli_runtime._CLI_DEFS, "fake", {
+        "bins": [sys.executable],
+        "delivery": "stdin",
+        "build_args": lambda _: [],
+        "env": {},
+    })
+    monkeypatch.setattr(
+        cli_runtime.subprocess,
+        "run",
+        lambda *_a, **_k: cli_runtime.subprocess.CompletedProcess(
+            args=[], returncode=7, stdout="partial output", stderr="secret detail"
+        ),
+    )
+    with pytest.raises(RuntimeError, match="退出码 7"):
+        cli_runtime.run_cli("fake", "s", "u")
+
+
+def test_run_cli_stream_close_kills_child(monkeypatch):
+    monkeypatch.setitem(cli_runtime._CLI_DEFS, "fake", {
+        "bins": [sys.executable],
+        "delivery": "stdin",
+        "build_args": lambda _: [],
+        "env": {},
+    })
+    proc = MagicMock()
+    proc.stdin = MagicMock()
+    proc.stdout = iter(["piece\n"])
+    proc.poll.return_value = None
+    monkeypatch.setattr(cli_runtime.subprocess, "Popen", lambda *_a, **_k: proc)
+
+    stream = cli_runtime.run_cli_stream("fake", "s", "u")
+    assert next(stream) == "piece\n"
+    stream.close()
+
+    proc.kill.assert_called_once_with()
+
+
+def test_run_cli_stream_stdout_read_error_is_failure(monkeypatch):
+    monkeypatch.setitem(cli_runtime._CLI_DEFS, "fake", {
+        "bins": [sys.executable],
+        "delivery": "stdin",
+        "build_args": lambda _: [],
+        "env": {},
+    })
+
+    class BrokenStdout:
+        def __iter__(self):
+            yield "piece\n"
+            raise OSError("pipe closed unexpectedly")
+
+    proc = MagicMock()
+    proc.stdin = MagicMock()
+    proc.stdout = BrokenStdout()
+    proc.poll.return_value = None
+    proc.wait.return_value = 0
+    monkeypatch.setattr(cli_runtime.subprocess, "Popen", lambda *_a, **_k: proc)
+
+    stream = cli_runtime.run_cli_stream("fake", "s", "u")
+    assert next(stream) == "piece\n"
+    with pytest.raises(RuntimeError, match="输出读取失败"):
+        next(stream)
