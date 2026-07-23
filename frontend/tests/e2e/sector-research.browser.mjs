@@ -4,21 +4,21 @@
  * Architecture:
  * - Playwright loads the Vite build from a Node static server
  * - Static server reverse-proxies /api/* to an isolated FastAPI process
- * - FastAPI is uvicorn harness_app:app (temp copy of harness_app.py into backend/)
+ * - FastAPI is uvicorn harness_app:app loaded via PYTHONPATH
+ *   (backend + frontend/tests/e2e); no copy into backend/, no worktree delete
  * - harness monkeypatches only external IO (discover / dynamic / PDF download)
+ *   and directed cache miss for external_id ERR
  * - VR_DATA_DIR and VR_REPORTS_DIR are mkdtemp-isolated
  * - NO page.route for application APIs; NO production E2E endpoints
  */
 import { chromium } from "playwright";
 import { spawn } from "node:child_process";
 import {
-  copyFile,
   mkdir,
   writeFile,
   mkdtemp,
   rm,
   readFile,
-  unlink,
 } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import http, { createServer } from "node:http";
@@ -31,7 +31,8 @@ const root = path.resolve(__dirname, "../../..");
 const frontendDist = path.join(root, "frontend", "dist");
 const shotDir = path.join(root, "docs", "screenshots", "sector-research-accept");
 const harnessSrc = path.join(__dirname, "harness_app.py");
-const harnessDst = path.join(root, "backend", "harness_app.py");
+const backendDir = path.join(root, "backend");
+const e2eDir = __dirname;
 
 let backendPort = 0;
 let frontendPort = 0;
@@ -339,11 +340,13 @@ async function runDesktop(browser, errors, networkBag) {
   });
   await assertNoHorizontalOverflow(page, `${label} discovery`, errors);
 
-  // Save first OK-* row
+  // Save first OK-* row (real cache → import_report_bytes)
   await page.getByRole("button", { name: /保存到我的研报/ }).first().click();
   await page.getByText(/已保存到我的研报|已存在/).waitFor({ timeout: 15000 });
+  // ERR row: harness-directed cache miss → production import 400 → UI expiry copy
+  // Avoid /过期|重新/ — title "PCB 过期缓存错误样本" also matches and breaks strict mode.
   await page.getByRole("button", { name: /保存到我的研报/ }).nth(1).click();
-  await page.getByText(/过期|重新/).waitFor({ timeout: 15000 });
+  await page.getByText("发现结果已过期，请重新点击“开始发现”").waitFor({ timeout: 15000 });
 
   // Navigate to my-reports (prefer in-page link)
   const archivedLink = page.getByRole("link", { name: /查看已归档研报/ }).first();
@@ -529,7 +532,7 @@ async function runMobile(browser, errors, networkBag) {
   await page.getByRole("button", { name: /保存到我的研报/ }).first().click();
   await page.getByText(/已保存到我的研报|已存在/).waitFor({ timeout: 15000 });
   await page.getByRole("button", { name: /保存到我的研报/ }).nth(1).click();
-  await page.getByText(/过期|重新/).waitFor({ timeout: 15000 });
+  await page.getByText("发现结果已过期，请重新点击“开始发现”").waitFor({ timeout: 15000 });
 
   const archivedLink = page.getByRole("link", { name: /查看已归档研报/ }).first();
   if (await archivedLink.isVisible().catch(() => false)) {
@@ -639,12 +642,29 @@ async function assertReportsDir(reportsDir, errors) {
   }
 }
 
+function buildPythonPath() {
+  const sep = process.platform === "win32" ? ";" : ":";
+  const existing = process.env.PYTHONPATH || "";
+  // backend first (app, sector_research_data), then e2e (harness_app)
+  const parts = [backendDir, e2eDir];
+  if (existing) parts.push(existing);
+  return parts.join(sep);
+}
+
 async function main() {
   if (!existsSync(frontendDist)) {
     throw new Error("frontend/dist missing; run npm run build first");
   }
   if (!existsSync(harnessSrc)) {
     throw new Error(`harness missing: ${harnessSrc}`);
+  }
+  // Guard: never write harness into backend/
+  const forbiddenHarness = path.join(backendDir, "harness_app.py");
+  if (existsSync(forbiddenHarness)) {
+    throw new Error(
+      `backend/harness_app.py must not exist in the worktree before E2E `
+      + `(found ${forbiddenHarness}); remove it and re-run`,
+    );
   }
 
   await mkdir(shotDir, { recursive: true });
@@ -654,18 +674,27 @@ async function main() {
   backendPort = await getFreePort();
   frontendPort = await getFreePort();
 
-  await copyFile(harnessSrc, harnessDst);
-
   const python = resolvePython();
   let backendExited = false;
   let backendCode = null;
+  // Load harness from frontend/tests/e2e via PYTHONPATH; import production modules from backend/.
+  // cwd = repo root so relative paths and imports resolve without copying into backend/.
   const backend = spawn(
     python,
-    ["-m", "uvicorn", "harness_app:app", "--host", "127.0.0.1", "--port", String(backendPort)],
+    [
+      "-m",
+      "uvicorn",
+      "harness_app:app",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(backendPort),
+    ],
     {
-      cwd: path.join(root, "backend"),
+      cwd: root,
       env: {
         ...process.env,
+        PYTHONPATH: buildPythonPath(),
         VR_DATA_DIR: dataDir,
         VR_REPORTS_DIR: reportsDir,
       },
@@ -695,6 +724,9 @@ async function main() {
     if (backendExited) {
       throw new Error(`isolated backend exited before ready (code=${backendCode})\n${backendLog.slice(-2000)}`);
     }
+    if (existsSync(forbiddenHarness)) {
+      throw new Error("E2E must not create backend/harness_app.py");
+    }
     await waitHttp(`http://127.0.0.1:${frontendPort}/`);
 
     const browser = await launchBrowser();
@@ -708,6 +740,10 @@ async function main() {
     assertNetworkBag(networkBag.bag, errors);
     await assertReportsDir(reportsDir, errors);
 
+    if (existsSync(forbiddenHarness)) {
+      errors.push("backend/harness_app.py was created during E2E (forbidden)");
+    }
+
     // README: record acceptance evidence without full temp paths or private data.
     const readme = [
       "# Sector research browser acceptance",
@@ -717,6 +753,14 @@ async function main() {
       "Isolated VR_DATA_DIR used: yes",
       "Isolated VR_REPORTS_DIR used: yes",
       "",
+      "## Transport",
+      "API transport: real reverse proxy",
+      "FastAPI routes: production routes",
+      "External IO: test harness stubs",
+      "Expired-cache case: harness-directed cache miss for ERR",
+      "Worktree files created/deleted: none",
+      "Harness load: PYTHONPATH=backend + frontend/tests/e2e; uvicorn harness_app:app (cwd=repo root)",
+      "",
       "## Covered",
       "- 板块中心进入 PCB",
       "- 六个 Tag",
@@ -724,7 +768,7 @@ async function main() {
       "- 研报行业/公司/全部发现",
       "- 自定义 days",
       "- 截断数量提示",
-      "- 缓存导入与导入错误反馈",
+      "- 缓存导入与导入错误反馈（ERR 可见行 → harness 定向 miss → 生产 import 400 → 重新发现提示）",
       "- 我的研报定位",
       "- 按时间/产业/机构分类",
       "- 元数据清空",
@@ -770,11 +814,7 @@ async function main() {
       }
     }
     await sleep(300);
-    try {
-      if (existsSync(harnessDst)) await unlink(harnessDst);
-    } catch {
-      /* ignore */
-    }
+    // Only remove mkdtemp dirs — never delete or overwrite worktree files.
     await rm(dataDir, { recursive: true, force: true }).catch(() => {});
     await rm(reportsDir, { recursive: true, force: true }).catch(() => {});
   }

@@ -1,7 +1,9 @@
 """E2E-only uvicorn entry: real app routes + offline stubs for external IO.
 
-Not a production module. Launched only by sector-research.browser.mjs with
-isolated VR_DATA_DIR / VR_REPORTS_DIR. Does not add E2E-only HTTP endpoints.
+Not a production module. Loaded only by sector-research.browser.mjs via
+PYTHONPATH / --app-dir (frontend/tests/e2e). Isolated VR_DATA_DIR /
+VR_REPORTS_DIR. Does not add E2E-only HTTP endpoints and never writes into
+backend/ or the product workspace.
 """
 from __future__ import annotations
 
@@ -14,6 +16,9 @@ import sector_research_data as srd
 app = app_module.app
 
 _PDF_BYTES = b"%PDF-1.4 e2e-fixture-report\n"
+
+# Preserve production cache lookup; only ERR is forced to miss (UI expiry path).
+_original_get_cached_discovery = app_module._get_cached_discovery
 
 
 def _fake_discover(sector_key: str, **kwargs):
@@ -139,7 +144,15 @@ def _fake_download_pdf(url: str, max_bytes: int = 25 * 1024 * 1024) -> bytes:
     return _PDF_BYTES
 
 
+def _e2e_get_cached_discovery(sector_key: str, external_id: str):
+    """Directed cache miss for visible ERR row only; OK-* still use real cache."""
+    if external_id == "ERR":
+        return None
+    return _original_get_cached_discovery(sector_key, external_id)
+
+
 # Monkeypatch external IO before uvicorn serves traffic.
 srd.discover_sector_reports = _fake_discover  # type: ignore[assignment]
 srd.get_sector_dynamic_data = _fake_dynamic  # type: ignore[assignment]
 app_module._download_pdf = _fake_download_pdf  # type: ignore[assignment]
+app_module._get_cached_discovery = _e2e_get_cached_discovery  # type: ignore[assignment]
