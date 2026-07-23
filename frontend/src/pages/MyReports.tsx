@@ -29,8 +29,10 @@ export function MyReports() {
 
   const load = async () => {
     try {
-      setReports(await api.myReports());
+      const data = await api.myReports();
+      setReports(data);
       setLoadFailed(false);
+      setErr(null);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "加载研报列表失败");
       setLoadFailed(true);

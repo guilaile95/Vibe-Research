@@ -130,6 +130,9 @@ def _load_index() -> list[dict]:
 
 
 def _save_index(items: list[dict]) -> None:
+    # 先验证待保存的新数据，非法则立即抛错，不动任何文件
+    _validate_index_data(items)
+
     ip = _index_path()
     ip.parent.mkdir(parents=True, exist_ok=True)
     bak_path = ip.with_name(ip.name + ".bak")
@@ -149,7 +152,6 @@ def _save_index(items: list[dict]) -> None:
             _validate_index_data(existing_data)
 
             bak_tmp = _tmp_name(str(bak_path))
-            import shutil
             shutil.copy2(ip, bak_tmp)
             os.replace(bak_tmp, bak_path)
             bak_tmp = None
