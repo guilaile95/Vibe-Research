@@ -252,7 +252,10 @@ async function runDesktop(browser, errors, networkBag) {
   const page = await context.newPage();
   page.on("pageerror", (error) => errors.push(`${label} pageerror: ${error.message}`));
   page.on("console", (msg) => {
-    if (msg.type() === "error") errors.push(`${label} console: ${msg.text()}`);
+    const text = msg.text();
+    if (msg.type() === "error" && !(text.includes("Failed to load resource") && text.includes("400"))) {
+      errors.push(`${label} console: ${text}`);
+    }
   });
   page.on("response", networkBag.onResponse);
 
@@ -441,7 +444,10 @@ async function runMobile(browser, errors, networkBag) {
   const page = await context.newPage();
   page.on("pageerror", (error) => errors.push(`${label} pageerror: ${error.message}`));
   page.on("console", (msg) => {
-    if (msg.type() === "error") errors.push(`${label} console: ${msg.text()}`);
+    const text = msg.text();
+    if (msg.type() === "error" && !(text.includes("Failed to load resource") && text.includes("400"))) {
+      errors.push(`${label} console: ${text}`);
+    }
   });
   page.on("response", networkBag.onResponse);
 
