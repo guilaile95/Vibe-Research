@@ -2,8 +2,10 @@
 // 后端未启动或数据源异常时抛 ApiError，页面据此优雅降级。
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  readonly status: number;
+  constructor(message: string, status: number) {
     super(message);
+    this.status = status;
   }
 }
 
@@ -165,7 +167,7 @@ export async function downloadReport(id: string, name: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET", body?: unknown, options?: { unwrapData?: boolean }): Promise<T> {
+export async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET", body?: unknown, options?: { unwrapData?: boolean }): Promise<T> {
   const unwrapData = options?.unwrapData ?? true;
   let resp: Response;
   const headers: Record<string, string> = { ...authHeaders() };
@@ -196,8 +198,8 @@ async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH"
   return result as T;
 }
 
-const get = <T>(path: string, options?: { unwrapData?: boolean }) => request<T>(path, "GET", undefined, options);
-const put = <T>(path: string, body: unknown, options?: { unwrapData?: boolean }) => request<T>(path, "PUT", body, options);
+export const get = <T>(path: string, options?: { unwrapData?: boolean }) => request<T>(path, "GET", undefined, options);
+export const put = <T>(path: string, body: unknown, options?: { unwrapData?: boolean }) => request<T>(path, "PUT", body, options);
 
 export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;

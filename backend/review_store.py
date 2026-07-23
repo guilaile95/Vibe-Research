@@ -79,6 +79,36 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:
+    """只读连接（URI ?mode=ro）。文件不存在直接抛 FileNotFoundError。"""
+    path = _as_path(db_path)
+    if not Path(path).exists():
+        raise FileNotFoundError(f"review db 不存在：{path}")
+    uri = f"{Path(path).resolve().as_uri()}?mode=ro"
+    conn = sqlite3.connect(uri, timeout=5, uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    return conn
+
+
+def _db_file_exists(db_path: str | Path) -> bool:
+    """db 文件是否存在（不创建文件/目录）。"""
+    try:
+        return Path(_as_path(db_path)).is_file()
+    except TypeError:
+        return False
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    """当前连接上指定表是否存在。"""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (name,),
+    ).fetchone()
+    return row is not None
+
+
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     """在当前连接上幂等建表/索引（:memory: 必须与读写同连接）。"""
     conn.execute(_CREATE_TABLE)
@@ -287,11 +317,13 @@ def get_daily_review_snapshot(
     if snapshot_id < 1:
         raise ValueError("snapshot_id 必须是正整数")
 
-    _ensure_parent_dir(db_path)
-    conn = _connect(db_path)
+    # 只读路径：不建目录、不建表；文件/表缺失返回 None。
+    if not _db_file_exists(db_path):
+        return None
+    conn = _connect_readonly(db_path)
     try:
-        with conn:
-            _ensure_schema(conn)
+        if not _table_exists(conn, "daily_review_snapshots"):
+            return None
         row = conn.execute(
             """
             SELECT id, trade_date, schema_version, generated_at, data_cutoff,
@@ -311,12 +343,13 @@ def get_latest_daily_review_snapshot(
     db_path: str | Path,
     trade_date: str | None = None,
 ) -> dict | None:
-    """读取最新快照；可按交易日过滤。无记录返回 None。"""
-    _ensure_parent_dir(db_path)
-    conn = _connect(db_path)
+    """读取最新快照；可按交易日过滤。无记录返回 None（只读，不建目录/表）。"""
+    if not _db_file_exists(db_path):
+        return None
+    conn = _connect_readonly(db_path)
     try:
-        with conn:
-            _ensure_schema(conn)
+        if not _table_exists(conn, "daily_review_snapshots"):
+            return None
         if trade_date is not None:
             td = _validate_trade_date(trade_date)
             row = conn.execute(
@@ -359,11 +392,13 @@ def list_daily_review_snapshots(
     if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
         raise ValueError("offset 必须是 >= 0 的整数")
 
-    _ensure_parent_dir(db_path)
-    conn = _connect(db_path)
+    # 只读路径：不建目录、不建表；文件/表缺失返回 []。
+    if not _db_file_exists(db_path):
+        return []
+    conn = _connect_readonly(db_path)
     try:
-        with conn:
-            _ensure_schema(conn)
+        if not _table_exists(conn, "daily_review_snapshots"):
+            return []
         if trade_date is not None:
             td = _validate_trade_date(trade_date)
             rows = conn.execute(

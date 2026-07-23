@@ -27,3 +27,8 @@ export function addCodes(existing: string[], raw: string): { next: string[]; add
   const incoming = parseCodes(raw).filter((c) => !existing.includes(c));
   return { next: [...existing, ...incoming], added: incoming.length };
 }
+
+// 读取前端 localStorage 草稿（原始数组，可能为空）。供「显式并入后端」迁移入口使用。
+export function loadLocalDraft(): string[] {
+  return loadWatch();
+}

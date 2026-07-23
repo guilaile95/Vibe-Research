@@ -40,6 +40,18 @@ import myreports as mr
 import review_compare
 import review_history
 import sector_research_data as srd
+import watchlist_store
+from decision_cockpit_service import (
+    generate_tomorrow_plan,
+    freeze_tomorrow_plan,
+    get_current_plan as dc_get_current_plan,
+    get_overview,
+    get_plan as dc_get_plan,
+    list_plans as dc_list_plans,
+    DecisionCockpitError,
+    DecisionCockpitMarketDataError,
+    DecisionCockpitModelError,
+)
 
 
 class _DisconnectAwareStreamingResponse(StreamingResponse):
@@ -633,6 +645,182 @@ def market_boards(
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"板块排名异常：{e}") from e
+
+
+# ---------------------------------------------------------------------------
+# 自选股（后端权威 JSON，前端 localStorage 仅作缓存/草稿）
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/watchlist")
+def watchlist_get():
+    """后端权威自选股 + etag。未配置 → status=not_configured, data=null。"""
+    try:
+        return {"data": watchlist_store.get_watchlist_status()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"自选股读取异常：{e}") from e
+
+
+class WatchlistIn(BaseModel):
+    """全量保存自选股。updated_at 由后端生成，禁止客户端提交。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    codes: list[str]
+    expected_etag: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strict_codes(cls, values):
+        if isinstance(values, dict):
+            codes = values.get("codes")
+            if codes is not None and not isinstance(codes, list):
+                raise ValueError("codes 必须是数组")
+        return values
+
+
+@app.put("/api/watchlist")
+def watchlist_save(req: WatchlistIn):
+    """全量保存自选股（原子写入 + 可选 etag 乐观锁）。冲突 → 409。"""
+    try:
+        result = watchlist_store.save_watchlist(req.codes, expected_etag=req.expected_etag)
+        return {"data": result}
+    except watchlist_store.WatchlistVersionConflictError as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"自选股保存异常：{e}") from e
+
+
+class WatchlistImportLocalIn(BaseModel):
+    """显式把前端 localStorage 草稿并入后端。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    codes: list[str]
+    expected_etag: str | None = None
+
+
+@app.post("/api/watchlist/import-local")
+def watchlist_import_local(req: WatchlistImportLocalIn):
+    """并入前端 localStorage → 后端（保留后端已有 + 去重并入）。冲突 → 409。"""
+    try:
+        result = watchlist_store.merge_watchlist(req.codes, expected_etag=req.expected_etag)
+        return {"data": result}
+    except watchlist_store.WatchlistVersionConflictError as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"自选股并入异常：{e}") from e
+
+
+# ---------------------------------------------------------------------------
+# 明日决策驱动舱（tomorrow-plan）
+# ---------------------------------------------------------------------------
+
+
+class TomorrowPlanGenerateIn(BaseModel):
+    """生成明日计划请求。trade_date 由客户端指定；llm 可选。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trade_date: str
+    llm: LLMConfig | None = None
+    force: bool = False
+
+
+@app.get("/api/decision-cockpit/overview")
+def decision_cockpit_overview(
+    trade_date: str = Query(..., description="交易日 YYYY-MM-DD"),
+):
+    """驱动舱总览（只读聚合）：市场 / 账户 / 持仓建议 / 当前计划 / 候选池。"""
+    try:
+        return {"data": get_overview(trade_date)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"驱动舱总览异常：{e}") from e
+
+
+@app.post("/api/decision-cockpit/tomorrow-plan/generate")
+def decision_cockpit_generate(req: TomorrowPlanGenerateIn):
+    """生成新的明日计划版本（候选池 + 信号 + 解释 + 持久化）。
+
+    - 市场广度不可用 → 503
+    - 候选池为空 → 409
+    - LLM 调用失败 → 自动回退确定性摘要（仍返回 200，但 explanation.source=deterministic）
+    """
+    try:
+        cfg = req.llm.model_dump() if req.llm else None
+        result = generate_tomorrow_plan(req.trade_date, cfg=cfg, force=req.force)
+        return {"data": result}
+    except DecisionCockpitMarketDataError as e:
+        raise HTTPException(503, str(e) or "市场核心数据暂不可用，无法生成明日计划") from None
+    except DecisionCockpitModelError as e:
+        raise HTTPException(502, f"明日计划解释生成失败：{e}") from e
+    except DecisionCockpitError as e:
+        raise HTTPException(409, str(e)) from e
+    except Exception:  # noqa: BLE001 — 不向客户端暴露内部细节
+        raise HTTPException(500, "明日计划生成失败") from None
+
+
+@app.get("/api/decision-cockpit/tomorrow-plan/current")
+def decision_cockpit_current(
+    trade_date: str = Query(..., description="交易日 YYYY-MM-DD"),
+):
+    """读取指定交易日的 current 计划（含信号）；不存在返回 data=null。"""
+    try:
+        plan = dc_get_current_plan(trade_date)
+        return {"data": plan}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"读取当前计划异常：{e}") from e
+
+
+@app.get("/api/decision-cockpit/tomorrow-plan/history")
+def decision_cockpit_history(
+    trade_date: str | None = Query(None, description="按交易日过滤"),
+    limit: int = Query(30, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    """列计划元数据（不含 payload，只读）。"""
+    try:
+        return {"data": dc_list_plans(trade_date, limit=limit, offset=offset)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"计划历史异常：{e}") from e
+
+
+@app.get("/api/decision-cockpit/tomorrow-plan/{plan_id}")
+def decision_cockpit_get(plan_id: int):
+    """按主键读取单个计划（含信号）。不存在 → 404。"""
+    try:
+        plan = dc_get_plan(plan_id)
+        if plan is None:
+            raise HTTPException(404, "计划不存在")
+        return {"data": plan}
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"读取计划异常：{e}") from e
+
+
+class FreezePlanIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int
+
+
+@app.post("/api/decision-cockpit/tomorrow-plan/{plan_id}/freeze")
+def decision_cockpit_freeze(plan_id: int, req: FreezePlanIn):
+    """冻结指定计划（draft → frozen）。版本冲突 / 状态不符 → 409。"""
+    try:
+        plan = freeze_tomorrow_plan(plan_id, req.expected_version)
+        return {"data": plan}
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"冻结计划异常：{e}") from e
 
 
 @app.get("/api/daily-review")
