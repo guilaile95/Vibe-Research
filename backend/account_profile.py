@@ -13,6 +13,7 @@ import threading
 from datetime import datetime, timezone, timedelta
 
 CACHE_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+# 向后兼容常量；新代码优先用 _account_path() 动态获取，以便测试隔离
 ACCOUNT_FILE = os.path.join(CACHE_DIR, "account_profile.json")
 BEIJING = timezone(timedelta(hours=8))
 _LOCK = threading.Lock()
@@ -20,6 +21,11 @@ _LOCK = threading.Lock()
 
 def _now() -> str:
     return datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _account_path() -> str:
+    """返回当前 account_profile.json 完整路径（跟随 CACHE_DIR 变化）。"""
+    return os.path.join(CACHE_DIR, "account_profile.json")
 
 
 def load_account_profile() -> dict | None:
@@ -40,10 +46,11 @@ def get_account_profile_status() -> dict:
         - status == "not_configured": {"status": "not_configured", "data": None}
         - status == "corrupted": {"status": "corrupted", "data": None}
     """
-    if not os.path.exists(ACCOUNT_FILE):
+    account_file = _account_path()
+    if not os.path.exists(account_file):
         return {"status": "not_configured", "data": None}
     try:
-        with open(ACCOUNT_FILE, encoding="utf-8") as f:
+        with open(account_file, encoding="utf-8") as f:
             d = json.load(f)
     except (json.JSONDecodeError, OSError):
         return {"status": "corrupted", "data": None}
@@ -79,14 +86,15 @@ def save_account_profile(total_assets: float, available_cash: float) -> dict:
         "available_cash": round(float(available_cash), 2),
         "updated_at": _now(),
     }
+    account_file = _account_path()
     with _LOCK:
         os.makedirs(CACHE_DIR, exist_ok=True)
         # 使用随机后缀避免跨进程固定文件名冲突
-        tmp = ACCOUNT_FILE + f".tmp.{os.urandom(4).hex()}"
+        tmp = account_file + f".tmp.{os.urandom(4).hex()}"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False)
-            os.replace(tmp, ACCOUNT_FILE)
+            os.replace(tmp, account_file)
         finally:
             # 无论写入/替换成功或失败，都尽力清理临时文件
             # 使用 try/except 而非 except BaseException，避免捕获 KeyboardInterrupt/SystemExit
