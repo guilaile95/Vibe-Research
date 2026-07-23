@@ -25,8 +25,10 @@ export function checkWorkspace(ws: SectorResearchWorkspace): WorkspaceCheckResul
     if (!t.slug || !t.label || !t.title) {
       errors.push(`tag incomplete: ${t.slug || "(empty slug)"}`);
     }
-    if (!t.blocks.length) errors.push(`tag "${t.slug}" has no blocks`);
-    errors.push(...checkBlockInvariants(t.slug, t.blocks, sourceIds));
+    // blocks 可为空（子智能体填充前）；有内容时校验结构。
+    if (t.blocks.length > 0) {
+      errors.push(...checkBlockInvariants(t.slug, t.blocks, sourceIds));
+    }
   }
   return { ok: errors.length === 0, errors };
 }

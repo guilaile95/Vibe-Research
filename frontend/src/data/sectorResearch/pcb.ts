@@ -9,7 +9,7 @@ import { industryBlocks } from "./pcb/industry.ts";
 import { pricingPowerBlocks } from "./pcb/pricing-power.ts";
 
 /**
- * PCB（印制电路板）研究工作台 —— 六 Tag 正式内容。
+ * PCB（印制电路板）研究工作台 —— 六 Tag 正式内容（证据草案状态）。
  * 内容按 Tag 分拆到 pcb/<slug>.ts，共享来源注册表在 pcb/sources.ts。
  */
 export const pcbResearch: SectorResearchWorkspace = {
@@ -24,42 +24,42 @@ export const pcbResearch: SectorResearchWorkspace = {
       slug: "overview",
       label: "总览",
       title: "总览",
-      status: "ready",
+      status: "draft",
       blocks: overviewBlocks,
     },
     {
       slug: "technology",
       label: "原理与技术路线",
       title: "原理与技术路线",
-      status: "ready",
+      status: "draft",
       blocks: technologyBlocks,
     },
     {
       slug: "value",
       label: "价值量",
       title: "价值量",
-      status: "ready",
+      status: "draft",
       blocks: valueBlocks,
     },
     {
       slug: "copper-midplane",
       label: "铜中板",
       title: "铜中板",
-      status: "ready",
+      status: "draft",
       blocks: copperMidplaneBlocks,
     },
     {
       slug: "industry",
       label: "产业格局",
       title: "产业格局",
-      status: "ready",
+      status: "draft",
       blocks: industryBlocks,
     },
     {
       slug: "pricing-power",
       label: "定价权地图",
       title: "定价权地图",
-      status: "ready",
+      status: "draft",
       blocks: pricingPowerBlocks,
     },
   ],
