@@ -250,7 +250,7 @@ def save_report(name: str, content_b64: str) -> dict:
         items.append(meta)
         try:
             _save_index(items)
-        except BaseException:
+        except Exception:
             ep = REPORTS_DIR / f"{rid}{ext}"
             try:
                 ep.unlink(missing_ok=True)
@@ -258,7 +258,6 @@ def save_report(name: str, content_b64: str) -> dict:
                 pass
             raise
     return meta
-
 
 def report_path(rid: str) -> tuple[Path, str] | None:
     """按 id 取 (磁盘路径, 原始文件名)；不存在返回 None。"""

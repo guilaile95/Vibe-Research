@@ -461,6 +461,42 @@ def test_delete_unlink_failure_keeps_ok():
 
 
 # ============================
+
+def test_upload_keyboard_interrupt_does_not_delete_entity():
+    """进程级中断（KeyboardInterrupt）发生在 _save_index 时：不删除已写入的实体文件，旧索引字节不变。"""
+    import uuid
+    tmp, rdir = _make_reports_dir()
+    try:
+        os.makedirs(rdir, exist_ok=True)
+        idx_path = os.path.join(rdir, "index.json")
+        with open(idx_path, "w", encoding="utf-8") as f:
+            json.dump([{"id": "old_report", "ext": ".pdf", "name": "old.pdf"}], f)
+        with open(idx_path, "rb") as f:
+            idx_bytes_before = f.read()
+
+        fixed_hex = "fixed_uuid_1234"
+        mock_uuid = type("MockUUID", (), {"hex": fixed_hex})
+
+        with patch.object(mr, "REPORTS_DIR", Path(rdir)):
+            with patch.object(uuid, "uuid4", lambda: mock_uuid):
+                with patch.object(mr, "_save_index", side_effect=KeyboardInterrupt()):
+                    with pytest.raises(KeyboardInterrupt):
+                        mr.save_report("new.pdf", _B64_SMALL)
+
+        entity_path = Path(rdir) / f"{fixed_hex}.pdf"
+        assert entity_path.exists(), "进程级中断时实体文件不应被删除"
+        assert entity_path.read_bytes() == b"test report content", "实体文件内容应保持写入值"
+
+        with open(idx_path, "rb") as f:
+            assert f.read() == idx_bytes_before, "旧主索引字节不变"
+
+        tmp_files = [f for f in os.listdir(rdir) if ".tmp." in f]
+        assert len(tmp_files) == 0, f"不应残留临时文件: {tmp_files}"
+    finally:
+        import shutil; shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ============================
 # API 损坏契约测试
 # ============================
 
