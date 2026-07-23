@@ -779,10 +779,18 @@ export function DailyReview() {
 
   const taskStatus = useDailyReviewAiTaskStore((s) => s.status);
   const taskContent = useDailyReviewAiTaskStore((s) => s.content);
+  const taskStreamContent = useDailyReviewAiTaskStore((s) => s.streamContent);
+  const taskResultMeta = useDailyReviewAiTaskStore((s) => s.resultMeta);
   const taskError = useDailyReviewAiTaskStore((s) => s.error);
+  const taskRestoreError = useDailyReviewAiTaskStore((s) => s.restoreError);
   const taskStartedAt = useDailyReviewAiTaskStore((s) => s.startedAt);
   const taskEstimatedDurationMs = useDailyReviewAiTaskStore((s) => s.estimatedDurationMs);
   const [taskNow, setTaskNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!dr?.trade_date) return;
+    void useDailyReviewAiTaskStore.getState().restore(dr.trade_date);
+  }, [dr?.trade_date]);
 
   useEffect(() => {
     if (taskStatus !== "running") return;
@@ -808,8 +816,9 @@ export function DailyReview() {
     setNeedConfig(false);
     const llm = loadLlm();
     if (!llm) { setNeedConfig(true); return; }
+    if (!dr?.trade_date) return;
     const store = useDailyReviewAiTaskStore.getState();
-    await store.start(llm);
+    await store.start(llm, dr.trade_date);
   };
 
   // 市场广度指标
@@ -855,7 +864,7 @@ export function DailyReview() {
         title="每日复盘"
         subtitle={`${tradeDateLabel !== "—" ? tradeDateLabel : today} · 大盘 / 情绪 / 板块涨幅一屏看全`}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
             <button onClick={loadDailyReview} className="text-muted-foreground hover:text-primary" title="刷新复盘数据">
               <RefreshCw className={cn("h-4 w-4", !drDone && "animate-spin")} />
             </button>
@@ -1022,7 +1031,10 @@ export function DailyReview() {
         </>
       )}
 
-      {/* 2. 关注股票（独立请求） */}
+      <div className="flex flex-col">
+      {[
+      /* 8. 关注股票（独立请求） */
+      { order: 8, node: (<section key="watch" className="order-[8]">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-muted-foreground">关注股票</h3>
         {watchCodes.length > 0 && (
@@ -1068,10 +1080,12 @@ export function DailyReview() {
           </div>
         )}
       </GlassCard>
+      </section>) },
 
-      {/* 3. AI 当日复盘（POST /api/daily-review/analyze，上下文由服务器生成） */}
+      /* 9. AI 当日复盘（恢复与生成分离；生成成功后后端持久化） */
+      { order: 9, node: (<section key="ai" className="order-[9]">
       <GlassCard glow className="mb-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="flex items-center gap-1.5 font-semibold"><Sparkles className="h-4 w-4 text-primary" /> AI 当日复盘</h3>
           {taskStatus === "running" ? (
             <button disabled
@@ -1080,13 +1094,26 @@ export function DailyReview() {
               AI 复盘生成中
             </button>
           ) : (
-            <button onClick={runReview}
+            <button onClick={runReview} disabled={!dr?.trade_date || taskStatus === "restoring"}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
               <Sparkles className="h-4 w-4" />
-              {taskStatus === "success" || taskStatus === "error" ? "重新复盘" : "让 AI 复盘今天"}
+              {taskContent ? "重新复盘" : "让 AI 复盘今天"}
             </button>
           )}
         </div>
+        {taskStatus === "restoring" && (
+          <p className="mt-3 inline-flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> 正在恢复已保存的 AI 复盘…
+          </p>
+        )}
+        {taskStatus === "empty" && (
+          <p className="mt-3 text-sm text-muted-foreground">今日尚未生成 AI 复盘，不会自动调用模型。</p>
+        )}
+        {taskRestoreError && (
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <AlertCircle className="h-4 w-4 shrink-0" /> 恢复失败：{taskRestoreError}
+          </div>
+        )}
         {needConfig && (
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-muted-foreground">
             <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
@@ -1108,20 +1135,37 @@ export function DailyReview() {
         )}
         {taskError && (
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" /> {taskError}
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            {taskContent ? `重新生成失败，继续显示旧结果：${taskError}` : taskError}
+          </div>
+        )}
+        {taskResultMeta && (
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+            <span>结果交易日：{taskResultMeta.trade_date}</span>
+            <span>生成时间：{taskResultMeta.generated_at}</span>
+            <span>模型：{taskResultMeta.model_provider} / {taskResultMeta.model_name}</span>
+            <span>依据数据时间：{taskResultMeta.payload.source_data_cutoff || taskResultMeta.payload.source_review_generated_at}</span>
           </div>
         )}
         {taskContent ? (
           <>
             <div className="prose prose-sm prose-invert mt-4 max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{taskContent}</ReactMarkdown></div>
-            {taskStatus === "success" && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${dr?.trade_date || today}`} content={taskContent} /></div>}
+            {(taskStatus === "success" || taskStatus === "restored") && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${dr?.trade_date || today}`} content={taskContent} /></div>}
           </>
-        ) : !needConfig && taskStatus !== "error" && taskStatus !== "running" ? (
+        ) : !needConfig && taskStatus === "idle" ? (
           <p className="mt-3 text-sm text-muted-foreground">点上方按钮，由服务器聚合当日数据并按事实/推断/建议结构生成复盘。</p>
         ) : null}
+        {taskStatus === "running" && taskStreamContent && (
+          <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
+            <p className="mb-2 text-xs font-medium text-primary">新结果临时预览（完成并保存后才会替换旧结果）</p>
+            <div className="prose prose-sm prose-invert max-w-none text-foreground/90"><ReactMarkdown remarkPlugins={[remarkGfm]}>{taskStreamContent}</ReactMarkdown></div>
+          </div>
+        )}
       </GlassCard>
+      </section>) },
 
-      {/* 4. 市场广度 */}
+      /* 3. 市场广度 */
+      { order: 3, node: (<section key="breadth" className="order-[3]">
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Gauge className="h-4 w-4" /> 市场广度</h3>
         {statusBadge(breadthEnv?.status || dr?.data_health?.components?.breadth) && (
@@ -1160,8 +1204,10 @@ export function DailyReview() {
           </>
         )}
       </GlassCard>
+      </section>) },
 
-      {/* 5. 短线情绪 */}
+      /* 4. 短线情绪 */
+      { order: 4, node: (<section key="emotion" className="order-[4]">
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Flame className="h-4 w-4" /> 短线情绪</h3>
         <span className="text-[11px] text-muted-foreground/50">连板股 · 打板情绪</span>
@@ -1239,8 +1285,10 @@ export function DailyReview() {
           </>
         )}
       </GlassCard>
+      </section>) },
 
-      {/* 6. 全市场成交额榜（优先 amount_top） */}
+      /* 5. 全市场成交额榜（优先 amount_top） */
+      { order: 5, node: (<section key="turnover" className="order-[5]">
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
           <BarChart3 className="h-4 w-4" /> 全市场成交额榜
@@ -1291,8 +1339,10 @@ export function DailyReview() {
           </div>
         )}
       </GlassCard>
+      </section>) },
 
-      {/* 7. 板块强弱亮点 */}
+      /* 6. 板块强弱亮点 */
+      { order: 6, node: (<section key="highlights" className="order-[6]">
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
           <TrendingUp className="h-4 w-4" /> 板块强弱亮点
@@ -1307,8 +1357,10 @@ export function DailyReview() {
         {highlightCard("最强地域", highlights?.strongest_region)}
         {highlightCard("最弱地域", highlights?.weakest_region)}
       </div>
+      </section>) },
 
-      {/* 8. 板块涨幅排名 */}
+      /* 7. 板块涨幅排名 */
+      { order: 7, node: (<section key="rankings" className="order-[7]">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
           <Layers className="h-4 w-4" /> 板块涨幅排名
@@ -1390,8 +1442,11 @@ export function DailyReview() {
           </div>
         )}
       </GlassCard>
+      </section>) },
+      ].sort((a, b) => a.order - b.order).map((item) => item.node)}
+      </div>
 
-      {/* 9. 历史复盘（显式保存；只读浏览；不替换当前实时数据） */}
+      {/* 10. 历史复盘（显式保存；只读浏览；不替换当前实时数据） */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
           <History className="h-4 w-4" /> 历史复盘

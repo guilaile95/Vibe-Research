@@ -60,6 +60,10 @@ class CliUnavailable(RuntimeError):
     """本机未检测到对应 CLI（未安装 / 不在 PATH）。"""
 
 
+class _StreamReadFailure:
+    pass
+
+
 def _find_bin(name: str) -> str | None:
     hit = shutil.which(name)
     if hit:
@@ -129,15 +133,20 @@ def run_cli(kind: str, system_prompt: str, user_prompt: str) -> str:
             raise RuntimeError(f"{kind} 生成超时（>{_CLI_TIMEOUT_S}s）") from e
 
         out = (proc.stdout or "").strip()
-        if proc.returncode != 0 and not out:
-            err = (proc.stderr or "").strip()[:300]
-            raise RuntimeError(f"{kind} 退出码 {proc.returncode}{'：' + err if err else ''}")
+        if proc.returncode != 0:
+            raise RuntimeError(f"{kind} 退出码 {proc.returncode}")
         return out
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
+def run_cli_stream(
+    kind: str,
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    cancel_event=None,
+):
     """流式版：起 CLI 子进程，stdout 边出边 yield 纯文本块。失败抛异常。"""
     d = _CLI_DEFS.get(kind)
     bin_path = detect_cli(kind)
@@ -150,6 +159,8 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
     env = {**os.environ, **d.get("env", {})}
     tmpdir = tempfile.mkdtemp(prefix="vibe-cli-")
     proc = None
+    reader_thread = None
+    stdin_closed = False
     try:
         if d["delivery"] == "system-file":
             sys_file = str(Path(tmpdir) / "system.txt")
@@ -176,6 +187,7 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
                 pass
         if proc.stdin:
             proc.stdin.close()
+            stdin_closed = True
 
         # 读线程 + 队列：让 _CLI_TIMEOUT_S 约束整个流式过程。
         # 直接 `for line in proc.stdout` 是无限期阻塞读——CLI 挂起时永远走不到
@@ -187,22 +199,32 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
                 for ln in stdout:
                     q.put(ln)
             except Exception:
-                pass
+                q.put(_StreamReadFailure())
             finally:
                 q.put(None)  # EOF 哨兵
 
-        threading.Thread(target=_pump, daemon=True).start()
+        reader_thread = threading.Thread(
+            target=_pump,
+            name=f"vibe-cli-{kind}-stdout",
+            daemon=True,
+        )
+        reader_thread.start()
         deadline = time.monotonic() + _CLI_TIMEOUT_S
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError(f"{kind} 生成已取消")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise RuntimeError(f"{kind} 生成超时（>{_CLI_TIMEOUT_S}s）")
             try:
-                line = q.get(timeout=min(remaining, 1.0))
+                poll_interval = 0.05 if cancel_event is not None else 1.0
+                line = q.get(timeout=min(remaining, poll_interval))
             except queue.Empty:
                 continue
             if line is None:
                 break
+            if isinstance(line, _StreamReadFailure):
+                raise RuntimeError(f"{kind} 输出读取失败")
             yield line
         try:
             rc = proc.wait(timeout=10)
@@ -211,6 +233,32 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
         if rc != 0:
             raise RuntimeError(f"{kind} 退出码 {rc}")
     finally:
-        if proc and proc.poll() is None:
-            proc.kill()
+        if proc:
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            try:
+                proc.wait(timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                if proc.poll() is None:
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+                try:
+                    proc.wait(timeout=10)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            pipes = (proc.stdout,) if stdin_closed else (proc.stdin, proc.stdout)
+            for pipe in pipes:
+                close = getattr(pipe, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except OSError:
+                        pass
+        if reader_thread is not None and reader_thread.is_alive():
+            reader_thread.join(timeout=10)
         shutil.rmtree(tmpdir, ignore_errors=True)

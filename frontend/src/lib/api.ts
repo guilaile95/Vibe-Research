@@ -32,6 +32,17 @@ export function authHeaders(): Record<string, string> {
   return k ? { Authorization: `Bearer ${k}` } : {};
 }
 
+export function unwrapApiPayload(payload: any): any {
+  if (
+    payload !== null
+    && typeof payload === "object"
+    && Object.prototype.hasOwnProperty.call(payload, "data")
+  ) {
+    return payload.data;
+  }
+  return payload;
+}
+
 export interface MyReport {
   id: string; name: string; industry: string; size: number; ext: string; ts: number;
 }
@@ -78,7 +89,7 @@ async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE
     }
     throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
   }
-  const result = unwrapData ? (payload?.data ?? payload) : payload;
+  const result = unwrapData ? unwrapApiPayload(payload) : payload;
   return result as T;
 }
 
@@ -627,6 +638,33 @@ export interface PortfolioAdviceRequest {
   llm: StreamLlmConfig;
 }
 
+export type AiResultType = "daily_review_ai" | "portfolio_advice";
+
+export interface DailyReviewAiPayload {
+  markdown: string;
+  source_review_generated_at: string;
+  source_data_cutoff: string | null;
+}
+
+export interface AiGeneratedResult<TPayload> {
+  result_type: AiResultType;
+  trade_date: string;
+  schema_version: string;
+  payload: TPayload;
+  generated_at: string;
+  model_provider: string;
+  model_name: string;
+  stale: boolean;
+  stale_message?: string;
+}
+
+export interface AiGeneratedResultMetadata {
+  result_type: AiResultType;
+  trade_date: string;
+  schema_version: string;
+  generated_at: string;
+}
+
 // 资金面 / 筹码 / 信号（v3.3 并入，均为「用户查的那只股」的公开数据）
 export interface MarginRow { date: string; rzye: number; rzmre: number; rzche: number; rqye: number; rqmcl: number; rzrqye: number }
 export interface BlockTradeRow { date: string; price: number; close: number; premium_pct: number; vol: number; amount: number; buyer: string; seller: string }
@@ -695,6 +733,83 @@ export interface NdjsonStreamResult {
   content: string;
   trace: { tool: string; args: Record<string, unknown> }[];
   rounds: number;
+  result?: AiGeneratedResultMetadata;
+}
+
+export interface NdjsonProtocolState extends NdjsonStreamResult {
+  sawDone: boolean;
+  sawError: boolean;
+  errorMessage: string | null;
+}
+
+export function createNdjsonProtocolState(): NdjsonProtocolState {
+  return {
+    content: "",
+    trace: [],
+    rounds: 0,
+    sawDone: false,
+    sawError: false,
+    errorMessage: null,
+  };
+}
+
+/** Pure protocol transition used by streamNdjson and suitable for isolated tests. */
+export function applyNdjsonLine(
+  state: NdjsonProtocolState,
+  line: string,
+  handlers: NdjsonStreamHandlers = {},
+): void {
+  const text = line.trim();
+  if (!text) return;
+  let event: any;
+  try {
+    event = JSON.parse(text);
+  } catch {
+    state.sawError = true;
+    state.errorMessage = "后端响应格式错误";
+    return;
+  }
+  if (!event || typeof event !== "object") {
+    state.sawError = true;
+    state.errorMessage = "后端响应格式错误";
+    return;
+  }
+  if (event.type === "delta") {
+    if (state.sawDone || typeof event.text !== "string") {
+      state.sawError = true;
+      state.errorMessage = "后端响应完成顺序异常";
+      return;
+    }
+    state.content += event.text;
+    handlers.onDelta?.(event.text);
+  } else if (event.type === "tool") {
+    if (state.sawDone) {
+      state.sawError = true;
+      state.errorMessage = "后端响应完成顺序异常";
+      return;
+    }
+    handlers.onTool?.(String(event.tool || ""), event.args || {});
+  } else if (event.type === "done") {
+    if (state.sawDone) {
+      state.sawError = true;
+      state.errorMessage = "后端重复发送完成信号";
+      return;
+    }
+    state.sawDone = true;
+    state.trace = Array.isArray(event.trace) ? event.trace : [];
+    state.rounds = Number.isInteger(event.rounds) ? event.rounds : 0;
+    if (event.result && typeof event.result === "object") {
+      state.result = event.result as AiGeneratedResultMetadata;
+    }
+  } else if (event.type === "error") {
+    state.sawError = true;
+    state.errorMessage = typeof event.message === "string" && event.message.trim()
+      ? event.message
+      : "后端返回错误";
+  } else {
+    state.sawError = true;
+    state.errorMessage = "后端响应包含未知事件";
+  }
 }
 
 /**
@@ -736,42 +851,31 @@ export async function streamNdjson(
 
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
+  const state = createNdjsonProtocolState();
   let buf = "";
-  let content = "";
-  let trace: NdjsonStreamResult["trace"] = [];
-  let rounds = 0;
-  let errMsg: string | null = null;
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const lines = buf.split("\n");
-    buf = lines.pop() ?? "";
-    for (const line of lines) {
-      const t = line.trim();
-      if (!t) continue;
-      let ev: any;
-      try {
-        ev = JSON.parse(t);
-      } catch {
-        continue;
-      }
-      if (ev.type === "delta") {
-        content += ev.text;
-        handlers.onDelta?.(ev.text);
-      } else if (ev.type === "tool") {
-        handlers.onTool?.(ev.tool, ev.args || {});
-      } else if (ev.type === "done") {
-        trace = ev.trace || [];
-        rounds = ev.rounds || 0;
-      } else if (ev.type === "error") {
-        errMsg = ev.message;
-      }
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) applyNdjsonLine(state, line, handlers);
     }
+    buf += decoder.decode();
+    if (buf.trim()) applyNdjsonLine(state, buf, handlers);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (typeof error === "object" && error !== null && "name" in error && error.name === "AbortError") {
+      throw error;
+    }
+    throw new ApiError("后端响应流意外中断", 502);
+  } finally {
+    reader.releaseLock();
   }
-  if (errMsg) throw new ApiError(errMsg, 502);
-  return { content, trace, rounds };
+  if (state.sawError) throw new ApiError(state.errorMessage || "后端返回错误", 502);
+  if (!state.sawDone) throw new ApiError("后端响应流未返回完成信号", 502);
+  return { content: state.content, trace: state.trace, rounds: state.rounds, result: state.result };
 }
 
 /**
@@ -902,6 +1006,10 @@ export const api = {
       user_request: req.user_request ?? null,
       llm: req.llm,
     }),
+  aiResult: <TPayload>(resultType: AiResultType, tradeDate?: string | null) => {
+    const query = tradeDate ? `?trade_date=${encodeURIComponent(tradeDate)}` : "";
+    return get<AiGeneratedResult<TPayload> | null>(`/ai-results/${resultType}${query}`);
+  },
   valuation: (code: string) => get<Valuation>(`/valuation?code=${code}`),
   percentile: (code: string) => get<ValPercentile>(`/valuation/percentile?code=${code}`),
   financials: (code: string) => get<Financials>(`/financials?code=${code}`),

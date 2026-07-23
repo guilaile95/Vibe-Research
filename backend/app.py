@@ -11,14 +11,19 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+
+import anyio
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, model_validator
+from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 import account_profile
+import ai_result_service
 import astock
 import chat as chat_layer
 import cli_runtime
@@ -31,6 +36,60 @@ import market
 import myreports as mr
 import review_compare
 import review_history
+
+
+class _DisconnectAwareStreamingResponse(StreamingResponse):
+    """Always observe ASGI disconnects and expose them to blocking workers."""
+
+    def __init__(self, *args, disconnect_event: threading.Event, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.disconnect_event = disconnect_event
+
+    async def __call__(self, scope, receive, send) -> None:
+        async with anyio.create_task_group() as task_group:
+            async def stream() -> None:
+                try:
+                    await self.stream_response(send)
+                except OSError:
+                    self.disconnect_event.set()
+                finally:
+                    task_group.cancel_scope.cancel()
+
+            async def watch_disconnect() -> None:
+                while True:
+                    message = await receive()
+                    if message["type"] == "http.disconnect":
+                        self.disconnect_event.set()
+                        task_group.cancel_scope.cancel()
+                        return
+
+            task_group.start_soon(stream)
+            task_group.start_soon(watch_disconnect)
+
+        if self.background is not None:
+            await self.background()
+
+
+def _safe_daily_review_ai_done_result(record) -> dict[str, str]:
+    if not isinstance(record, dict):
+        raise ai_result_service.AiResultValidationError("missing committed result")
+    result_type, trade_date = ai_result_service.validate_result_identity(
+        record.get("result_type"),
+        record.get("trade_date"),
+    )
+    if result_type != ai_result_service.DAILY_REVIEW_AI:
+        raise ai_result_service.AiResultValidationError("unexpected committed result type")
+    schema_version = record.get("schema_version")
+    if schema_version != "daily_review_ai.v1":
+        raise ai_result_service.AiResultValidationError("unexpected committed schema")
+    generated_at = ai_result_service._valid_timestamp(record.get("generated_at"), "generated_at")
+    return {
+        "result_type": result_type,
+        "trade_date": trade_date,
+        "schema_version": schema_version,
+        "generated_at": generated_at,
+    }
+
 
 app = FastAPI(title="Vibe-Research API", version="0.1.3")
 
@@ -555,7 +614,7 @@ class DailyReviewAnalyzeRequest(BaseModel):
 
 
 @app.post("/api/daily-review/analyze")
-def analyze_daily_review(req: DailyReviewAnalyzeRequest):
+async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request):
     """每日复盘 AI 流式分析（NDJSON，协议与 /api/chat 相同）。
 
     服务器链路：generate_daily_review → render AI context → build messages → stream_messages。
@@ -574,23 +633,112 @@ def analyze_daily_review(req: DailyReviewAnalyzeRequest):
         raise HTTPException(400, "缺少 Base URL 或 API Key，请先在「接入 AI」里填写")
 
     try:
-        messages = chat_layer.prepare_daily_review_messages(req.user_request)
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"每日复盘AI上下文准备失败：{e}") from e
+        prepared = await run_in_threadpool(
+            chat_layer.prepare_daily_review_analysis,
+            req.user_request,
+        )
+        review = prepared["review"]
+        messages = prepared["messages"]
+    except Exception:  # noqa: BLE001 — no prompt, path, or source error leakage
+        raise HTTPException(502, "每日复盘AI上下文准备失败") from None
 
     cfg = req.llm.model_dump()
+    disconnect_event = threading.Event()
+    cfg["_cancel_event"] = disconnect_event
 
-    def gen():
+    async def gen():
+        source = iter(chat_layer.stream_messages(cfg, messages, use_tools=False))
         try:
-            for ev in chat_layer.stream_messages(cfg, messages, use_tools=False):
-                yield json.dumps(ev, ensure_ascii=False) + "\n"
-        except Exception as e:  # noqa: BLE001 — 运行时错误以流内事件上报，与 /api/chat 一致
-            yield json.dumps({"type": "error", "message": f"对话失败：{e}"}, ensure_ascii=False) + "\n"
+            parts: list[str] = []
+            saw_done = False
+            trace: list[dict] = []
+            rounds = 0
+            async for ev in iterate_in_threadpool(source):
+                if disconnect_event.is_set():
+                    return
+                if not isinstance(ev, dict):
+                    continue
+                event_type = ev.get("type")
+                if event_type == "delta":
+                    if saw_done:
+                        raise chat_layer.ModelStreamIncompleteError()
+                    text = ev.get("text")
+                    if text is None:
+                        continue
+                    if not isinstance(text, str):
+                        text = str(text)
+                    parts.append(text)
+                    yield json.dumps({"type": "delta", "text": text}, ensure_ascii=False) + "\n"
+                elif event_type == "error":
+                    raise RuntimeError("upstream stream error")
+                elif event_type == "done":
+                    if saw_done:
+                        raise chat_layer.ModelStreamIncompleteError()
+                    saw_done = True
+                    trace = ev.get("trace") if isinstance(ev.get("trace"), list) else []
+                    rounds = ev.get("rounds") if isinstance(ev.get("rounds"), int) else 0
+            if not saw_done:
+                raise chat_layer.ModelStreamIncompleteError()
+            markdown = "".join(parts)
+            if not markdown.strip():
+                raise ValueError("empty model output")
+            if disconnect_event.is_set():
+                return
+            saved_record = await run_in_threadpool(
+                ai_result_service.save_daily_review_ai,
+                review,
+                markdown,
+                cfg,
+                should_cancel=disconnect_event.is_set,
+            )
+            if disconnect_event.is_set():
+                return
+            result = _safe_daily_review_ai_done_result(saved_record)
+            yield json.dumps(
+                {"type": "done", "trace": trace, "rounds": rounds, "result": result},
+                ensure_ascii=False,
+            ) + "\n"
+        except Exception:  # noqa: BLE001 — fixed safe stream error; old persisted row remains
+            if disconnect_event.is_set():
+                return
+            yield json.dumps(
+                {"type": "error", "message": "对话失败：每日复盘AI生成或保存失败"},
+                ensure_ascii=False,
+            ) + "\n"
+        finally:
+            close = getattr(source, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
 
-    return StreamingResponse(gen(), media_type="application/x-ndjson")
+    return _DisconnectAwareStreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        disconnect_event=disconnect_event,
+    )
 
 
-# ---- 每日复盘历史（显式保存；GET /api/daily-review 与 analyze 不写库）----
+@app.get("/api/ai-results/{result_type}")
+def get_ai_result(
+    result_type: str,
+    trade_date: str | None = Query(None),
+):
+    """Restore one authoritative AI result without model or fresh aggregation."""
+    try:
+        result = ai_result_service.get_ai_result(
+            result_type,
+            trade_date=trade_date,
+        )
+        return {"data": result}
+    except ai_result_service.AiResultValidationError:
+        raise HTTPException(422, "AI结果查询参数无效") from None
+    except Exception:  # noqa: BLE001 — never expose path, SQL, payload, or traceback
+        raise HTTPException(500, "AI结果读取失败") from None
+
+
+# ---- 每日复盘历史（显式保存；GET 与 analyze 均不写 daily_review_snapshots）----
 
 @app.post("/api/daily-review/history/save")
 def daily_review_history_save():

@@ -343,8 +343,8 @@ export function Portfolio() {
 
   const [adviceRequest, setAdviceRequest] = useState("");
 
-  const clearAdvice = useCallback(() => {
-    usePortfolioAdviceTaskStore.getState().invalidate();
+  const refreshSavedAdvice = useCallback(async () => {
+    await usePortfolioAdviceTaskStore.getState().restore();
   }, []);
 
   const load = useCallback(async (manual = false) => {
@@ -352,14 +352,13 @@ export function Portfolio() {
     try {
       setData(manual ? await api.refreshPortfolio() : await api.portfolio());
       setErr(null);
-      // 行情刷新后直接清除旧建议，避免基于过期事实误导
-      clearAdvice();
+      await refreshSavedAdvice();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "加载失败");
     } finally {
       if (manual) setRefreshing(false);
     }
-  }, [clearAdvice]);
+  }, [refreshSavedAdvice]);
 
   const loadAcct = useCallback(async () => {
     setAcctLoading(true);
@@ -392,6 +391,7 @@ export function Portfolio() {
       try {
         setData(await api.portfolio());
         setErr(null);
+        await refreshSavedAdvice();
       } catch (e) {
         setErr(e instanceof ApiError ? e.message : "加载失败");
       }
@@ -400,7 +400,7 @@ export function Portfolio() {
     boot();
     const t = setInterval(() => load(), REFRESH_MS); // 每半小时自动刷新
     return () => clearInterval(t);
-  }, [load, loadAcct]);
+  }, [load, loadAcct, refreshSavedAdvice]);
 
   // 数量校验：空值 / 含非数字字符（除负号和小数点）/ 非整数 / <=0 / NaN·Infinity → 拒绝
   const validateShares = (raw: string): number | null => {
@@ -423,7 +423,7 @@ export function Portfolio() {
     try {
       setData(await api.addHolding(code.trim(), s, c));
       setCode(""); setShares(""); setCost("");
-      clearAdvice();
+      await refreshSavedAdvice();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "添加失败");
     } finally {
@@ -456,7 +456,7 @@ export function Portfolio() {
     setEditErr(null);
     try {
       setData(await api.updateHolding(editCode, s, c));
-      clearAdvice();
+      await refreshSavedAdvice();
       setEditOpen(false);
     } catch (e) {
       setEditErr(e instanceof ApiError ? e.message : "保存失败，请重试");
@@ -473,7 +473,7 @@ export function Portfolio() {
     setDelErr(null);
     try {
       setData(await api.removeHolding(c));
-      clearAdvice();
+      await refreshSavedAdvice();
       setDelConfirm(null);
     } catch (e) {
       setDelErr(e instanceof ApiError ? e.message : "删除失败，请重试");
@@ -535,7 +535,7 @@ export function Portfolio() {
     try {
       setData(await api.closePosition(cCode.trim(), cDate, p, s, c));
       setCCode(""); setCDate(""); setCPrice(""); setCShares(""); setCCost("");
-      clearAdvice();
+      await refreshSavedAdvice();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "添加清仓记录失败");
     } finally {
@@ -546,13 +546,15 @@ export function Portfolio() {
   const removeClosed = async (i: number) => {
     try {
       setData(await api.removeClosed(i));
-      clearAdvice();
+      await refreshSavedAdvice();
     } catch { /* ignore */ }
   };
 
   const adviceStatus = usePortfolioAdviceTaskStore((s) => s.status);
   const advice = usePortfolioAdviceTaskStore((s) => s.result);
+  const adviceMeta = usePortfolioAdviceTaskStore((s) => s.resultMeta);
   const adviceError = usePortfolioAdviceTaskStore((s) => s.error);
+  const adviceRestoreError = usePortfolioAdviceTaskStore((s) => s.restoreError);
   const adviceLoading = adviceStatus === "running";
 
   const generateAdvice = async () => {
@@ -891,22 +893,45 @@ export function Portfolio() {
           {adviceLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           {adviceLoading
             ? "持仓建议分析中…"
-            : adviceStatus === "success" || adviceStatus === "error"
+            : advice
               ? "重新生成持仓建议"
               : "生成持仓操作建议"}
         </button>
 
+        {adviceStatus === "restoring" && (
+          <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> 正在恢复已保存的持仓建议…
+          </div>
+        )}
+
+        {adviceStatus === "empty" && (
+          <p className="mt-3 text-sm text-muted-foreground">暂无已保存建议，不会自动调用模型。</p>
+        )}
+
+        {adviceRestoreError && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>恢复失败：{adviceRestoreError}</span>
+          </div>
+        )}
+
         {adviceLoading && (
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary">
             <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-            <span>持仓建议分析中，切换页面后会继续运行。</span>
+            <span>{advice ? "正在重新生成，旧建议会保留到新结果成功。" : "持仓建议分析中，切换页面后会继续运行。"}</span>
           </div>
         )}
 
         {adviceError && (
           <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{adviceError}</span>
+            <span>{advice ? `重新生成失败，继续显示旧建议：${adviceError}` : adviceError}</span>
+          </div>
+        )}
+
+        {adviceMeta?.stale && (
+          <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
+            {adviceMeta.stale_message || "持仓已发生变化，该建议基于生成时的持仓，可能已经过期。"}
           </div>
         )}
 
@@ -918,6 +943,12 @@ export function Portfolio() {
                 <p className="text-muted-foreground">生成时间</p>
                 <p className="font-medium">{advice.generated_at || "—"}</p>
               </div>
+              {adviceMeta && (
+                <div className="rounded-md border border-border/40 p-2">
+                  <p className="text-muted-foreground">生成模型</p>
+                  <p className="truncate font-medium">{adviceMeta.model_provider} / {adviceMeta.model_name}</p>
+                </div>
+              )}
               {advice.trade_date ? (
                 <div className="rounded-md border border-border/40 p-2">
                   <p className="text-muted-foreground">交易日期</p>

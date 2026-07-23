@@ -49,6 +49,58 @@ def test_prepare_full_call_chain():
     assert mock_build.call_count == 1
 
 
+def test_prepare_analysis_returns_same_review_context_and_messages_once():
+    review = {
+        "status": "normal",
+        "trade_date": "2026-07-23",
+        "generated_at": "2026-07-23 15:30:00",
+        "data_cutoff": "2026-07-23 15:00:00",
+    }
+    messages = _msgs()
+    with (
+        patch.object(daily_review, "generate_daily_review", return_value=review) as mock_gen,
+        patch.object(
+            daily_review_context, "render_daily_review_ai_context", return_value="context-once"
+        ) as mock_render,
+        patch.object(
+            daily_review_ai_prompt, "build_daily_review_messages", return_value=messages
+        ) as mock_build,
+    ):
+        result = chat.prepare_daily_review_analysis("重点")
+
+    assert result == {
+        "review": review,
+        "context_json": "context-once",
+        "messages": messages,
+    }
+    mock_gen.assert_called_once_with()
+    mock_render.assert_called_once_with(review)
+    mock_build.assert_called_once_with("context-once", "重点")
+
+
+class _SseResponse:
+    def __init__(self, *chunks: bytes):
+        self._chunks = chunks
+
+    def iter_content(self, chunk_size=None):
+        assert chunk_size is None
+        yield from self._chunks
+
+
+def test_sse_requires_explicit_done_even_after_valid_delta():
+    response = _SseResponse(b'data: {"choices":[{"delta":{"content":"half"}}]}\n')
+    with pytest.raises(chat.ModelStreamIncompleteError):
+        list(chat._iter_sse_deltas(response))
+
+
+def test_sse_accepts_done_in_final_unterminated_buffer():
+    response = _SseResponse(
+        b'data: {"choices":[{"delta":{"content":"ok"}}]}\n',
+        b"data: [DONE]",
+    )
+    assert list(chat._iter_sse_deltas(response)) == [{"content": "ok"}]
+
+
 # ---------------------------------------------------------------------------
 # 2. 默认用户请求 None
 # ---------------------------------------------------------------------------

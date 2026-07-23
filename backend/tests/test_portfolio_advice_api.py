@@ -434,10 +434,18 @@ def test_advice_no_history_save(monkeypatch):
 
 def test_daily_review_analyze_unchanged_and_no_portfolio_advice(monkeypatch):
     prepare = MagicMock(
-        return_value=[
-            {"role": "system", "content": "s"},
-            {"role": "user", "content": "u"},
-        ]
+        return_value={
+            "review": {
+                "trade_date": "2026-07-23",
+                "generated_at": "2026-07-23 15:30:00",
+                "data_cutoff": None,
+            },
+            "context_json": "{}",
+            "messages": [
+                {"role": "system", "content": "s"},
+                {"role": "user", "content": "u"},
+            ],
+        }
     )
     advice_gen = MagicMock(side_effect=AssertionError("must not call portfolio advice"))
 
@@ -445,8 +453,13 @@ def test_daily_review_analyze_unchanged_and_no_portfolio_advice(monkeypatch):
         yield {"type": "delta", "text": "ok"}
         yield {"type": "done", "trace": [], "rounds": 1}
 
-    monkeypatch.setattr(chat_layer, "prepare_daily_review_messages", prepare)
+    monkeypatch.setattr(chat_layer, "prepare_daily_review_analysis", prepare)
     monkeypatch.setattr(chat_layer, "stream_messages", fake_stream)
+    monkeypatch.setattr(
+        app_module.ai_result_service,
+        "save_daily_review_ai",
+        MagicMock(return_value={"trade_date": "2026-07-23"}),
+    )
     monkeypatch.setattr(
         app_module.portfolio_advice_service, "generate_portfolio_advice", advice_gen
     )

@@ -1,7 +1,7 @@
 """持仓操作建议 AI 编排服务（读取持仓 + 每日复盘 → 上下文 → 模型 → 校验）。
 
 本模块只做编排，不复制 context / prompt / validator 业务规则。
-不修改 portfolio.json、不写历史、不提供 HTTP API。
+不修改 portfolio.json、不写复盘历史；最终权威建议写入独立 AI 结果表。
 第一版不支持做 T。
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
+import ai_result_service
 import chat
 import daily_review
 import portfolio
@@ -117,6 +118,9 @@ def prepare_portfolio_advice_messages(
         raise PortfolioAdviceUnavailableError(_EMPTY_HOLDINGS_MSG)
     _require_holdings(portfolio_data)
     _require_holding_quote_coverage(portfolio_data)
+    input_fingerprint = ai_result_service.compute_portfolio_fingerprint(
+        portfolio_data["holdings"]
+    )
 
     review = daily_review.generate_daily_review()
     if _market_breadth_unavailable(review):
@@ -133,6 +137,7 @@ def prepare_portfolio_advice_messages(
     )
     return {
         "portfolio": portfolio_data,
+        "input_fingerprint": input_fingerprint,
         "daily_review": review,
         "context": context,
         "context_json": context_json,
@@ -327,7 +332,7 @@ def generate_portfolio_advice(
             ai_result,
             context,
         )
-        return attach_account_funding_metrics(validated, prepared["portfolio"])
+        authoritative = attach_account_funding_metrics(validated, prepared["portfolio"])
     except PortfolioAdviceValidationError as exc:
         raise PortfolioAdviceModelOutputError(_VALIDATOR_FAIL_MSG) from exc
     except PortfolioAdviceModelOutputError:
@@ -335,4 +340,13 @@ def generate_portfolio_advice(
     except Exception as exc:  # noqa: BLE001
         # 非预期异常也包装为输出错误，避免泄漏内部细节
         raise PortfolioAdviceModelOutputError(_VALIDATOR_FAIL_MSG) from exc
+
+    ai_result_service.save_portfolio_advice(
+        prepared["portfolio"],
+        prepared["daily_review"],
+        authoritative,
+        cfg,
+        input_fingerprint=prepared["input_fingerprint"],
+    )
+    return authoritative
 
