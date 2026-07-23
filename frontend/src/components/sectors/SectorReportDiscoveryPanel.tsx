@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Download, ExternalLink, Loader2, Search } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -46,13 +46,23 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
   const [meta, setMeta] = useState<{ total?: number; returned?: number; truncated?: boolean }>({});
   const [importMap, setImportMap] = useState<Record<string, ImportState>>({});
   const [archived, setArchived] = useState<Map<string, MyReport>>(new Map());
+  const mounted = useRef(true);
+  const discoverSeq = useRef(0);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   // 可选：加载已归档 external_id，用于列表标记「已保存」。
   useEffect(() => {
-    let cancelled = false;
+    const seq = discoverSeq.current + 1;
+    discoverSeq.current = seq;
     api.myReports()
       .then((list) => {
-        if (cancelled) return;
+        if (!mounted.current || discoverSeq.current !== seq) return;
         const map = new Map<string, MyReport>();
         for (const r of list) {
           const k = archivedKey(r.source_provider, r.external_id ?? null);
@@ -64,7 +74,7 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
         /* 归档列表失败不阻断发现 */
       });
     return () => {
-      cancelled = true;
+      discoverSeq.current += 1;
     };
   }, [sectorKey]);
 
@@ -76,6 +86,8 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
   }, [discovered, filtered]);
 
   const onDiscover = useCallback(async () => {
+    const seq = discoverSeq.current + 1;
+    discoverSeq.current = seq;
     setLoading(true);
     setError(null);
     setDiscovered(null);
@@ -86,6 +98,7 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
         days: Number.isFinite(days) && days > 0 ? days : 365,
         scope,
       });
+      if (!mounted.current || discoverSeq.current !== seq) return;
       if (result.error) {
         setError(result.error);
       }
@@ -97,13 +110,14 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
         truncated: result.truncated,
       });
     } catch (e) {
+      if (!mounted.current || discoverSeq.current !== seq) return;
       const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
       setError(msg);
       setDiscovered([]);
       setFiltered([]);
       setMeta({});
     } finally {
-      setLoading(false);
+      if (mounted.current && discoverSeq.current === seq) setLoading(false);
     }
   }, [sectorKey, days, scope]);
 
@@ -117,6 +131,7 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
     }));
     try {
       const saved = await api.importSectorReport(sectorKey, ext);
+      if (!mounted.current) return;
       setImportMap((prev) => ({
         ...prev,
         [key]: { loading: false, error: null, success: saved },
@@ -130,6 +145,7 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
         });
       }
     } catch (e) {
+      if (!mounted.current) return;
       const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
       setImportMap((prev) => ({
         ...prev,

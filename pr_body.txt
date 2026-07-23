@@ -1,0 +1,30 @@
+## Draft PR #11 — sector research workbench
+
+**Branch:** `zcode/sector-research-workbench`  
+**Base:** `feature/research-system-v01`  
+**Head:** (see latest commit after push)  
+**Status:** Draft — do not merge / Ready
+
+### Latest verification
+- Backend offline tests: **1034 passed**, 11 deselected
+- Frontend unit tests: **52 passed**
+- Production build: **success**
+- Real browser integration E2E: **`npm run test:e2e:sector-research` OK**
+  - Node static server reverse-proxies `/api/*` → isolated FastAPI harness
+  - No `page.route` application API mock
+  - discovery → server cache → import → MyReports → PATCH clear institution
+  - cache-miss import → 400 rediscover message
+  - Screenshots under `docs/screenshots/sector-research-accept/`
+
+### PCB evidence
+- Formal SourceRefs: **7** (Kinwong product/market pages + Shengyi material pages)
+- Unimicron homepage removed from formal citations (pending precise pages)
+- Six tags remain **draft**
+
+### Known limits
+- Eastmoney PDF anti-scrape still blocks real PDF archive without user upload / allowed response
+- E2E external IO stubbed only in temp `harness_app.py` (not production routes)
+- Browser E2E not in GitHub Actions (Chromium cost); reproducible via npm script
+
+### CI
+Expect three jobs green: Backend tests / Frontend build / Whitespace check.

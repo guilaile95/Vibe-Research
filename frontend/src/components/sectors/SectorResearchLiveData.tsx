@@ -60,6 +60,7 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
   const [expanded, setExpanded] = useState(false);
   const inflight = useRef(false);
   const mounted = useRef(true);
+  const requestSeq = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -70,28 +71,34 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
 
   // sectorKey 变化时清空旧数据
   useEffect(() => {
+    requestSeq.current += 1;
     setData(null);
     setError(null);
     setExpanded(false);
+    setLoading(false);
     inflight.current = false;
   }, [sectorKey]);
 
   const load = useCallback(async () => {
     if (inflight.current) return;
+    const seq = requestSeq.current + 1;
+    requestSeq.current = seq;
     inflight.current = true;
     setLoading(true);
     setError(null);
     try {
       const res = await api.getSectorResearchData(sectorKey);
-      if (!mounted.current) return;
+      if (!mounted.current || requestSeq.current !== seq) return;
       setData(res);
     } catch (e) {
-      if (!mounted.current) return;
+      if (!mounted.current || requestSeq.current !== seq) return;
       const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
       setError(msg);
     } finally {
-      inflight.current = false;
-      if (mounted.current) setLoading(false);
+      if (requestSeq.current === seq) {
+        inflight.current = false;
+        if (mounted.current) setLoading(false);
+      }
     }
   }, [sectorKey]);
 

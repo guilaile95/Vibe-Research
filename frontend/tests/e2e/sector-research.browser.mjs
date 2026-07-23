@@ -1,15 +1,27 @@
 /**
- * Sector research browser acceptance.
+ * Sector research browser acceptance — REAL integration.
  *
- * Uses real Playwright Chromium and isolated backend process. External-heavy
- * sector-research/myreports API responses are fulfilled in the browser route
- * layer so the UI flow is deterministic and never writes real user data.
+ * Architecture:
+ * - Playwright loads the Vite build from a Node static server
+ * - Static server reverse-proxies /api/* to an isolated FastAPI process
+ * - FastAPI is uvicorn harness_app:app (temp copy of harness_app.py into backend/)
+ * - harness monkeypatches only external IO (discover / dynamic / PDF download)
+ * - VR_DATA_DIR and VR_REPORTS_DIR are mkdtemp-isolated
+ * - NO page.route for application APIs; NO production E2E endpoints
  */
 import { chromium } from "playwright";
 import { spawn } from "node:child_process";
-import { mkdir, writeFile, mkdtemp, rm } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  writeFile,
+  mkdtemp,
+  rm,
+  readFile,
+  unlink,
+} from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
-import { createServer } from "node:http";
+import http, { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,52 +30,24 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
 const frontendDist = path.join(root, "frontend", "dist");
 const shotDir = path.join(root, "docs", "screenshots", "sector-research-accept");
+const harnessSrc = path.join(__dirname, "harness_app.py");
+const harnessDst = path.join(root, "backend", "harness_app.py");
 
 let backendPort = 0;
 let frontendPort = 0;
+let browserLabel = "unknown";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitHttp(url, attempts = 60) {
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const response = await fetch(url);
-      if (response.ok || response.status < 500) return;
-    } catch {
-      /* retry */
-    }
-    await sleep(500);
+function resolvePython() {
+  if (process.env.VR_PYTHON && process.env.VR_PYTHON.trim()) {
+    return process.env.VR_PYTHON.trim();
   }
-  throw new Error(`timeout waiting ${url}`);
-}
-
-function startStaticServer(dir, port) {
-  const mime = {
-    ".css": "text/css",
-    ".html": "text/html",
-    ".js": "text/javascript",
-    ".json": "application/json",
-    ".png": "image/png",
-    ".svg": "image/svg+xml",
-  };
-  const server = createServer((req, res) => {
-    let urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
-    if (urlPath === "/") urlPath = "/index.html";
-    const file = path.join(dir, urlPath);
-    if (!file.startsWith(dir) || !existsSync(file)) {
-      const index = path.join(dir, "index.html");
-      res.writeHead(200, { "Content-Type": "text/html" });
-      createReadStream(index).pipe(res);
-      return;
-    }
-    res.writeHead(200, { "Content-Type": mime[path.extname(file)] || "application/octet-stream" });
-    createReadStream(file).pipe(res);
-  });
-  return new Promise((resolve) => {
-    server.listen(port, "127.0.0.1", () => resolve(server));
-  });
+  const win = path.join(root, "backend", ".venv", "Scripts", "python.exe");
+  if (existsSync(win)) return win;
+  return path.join(root, "backend", ".venv", "bin", "python");
 }
 
 function getFreePort() {
@@ -78,244 +62,403 @@ function getFreePort() {
   });
 }
 
-function jsonResponse(route, payload, status = 200) {
-  return route.fulfill({
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
-    body: JSON.stringify(payload),
+async function waitHttp(url, attempts = 80) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const response = await fetch(url);
+      if (response.ok || response.status < 500) return;
+    } catch {
+      /* retry */
+    }
+    await sleep(400);
+  }
+  throw new Error(`timeout waiting ${url}`);
+}
+
+function startStaticServer(dir, port, apiBackendPort) {
+  const mime = {
+    ".css": "text/css",
+    ".html": "text/html",
+    ".js": "text/javascript",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".map": "application/json",
+  };
+
+  const server = createServer((req, res) => {
+    const rawUrl = req.url || "/";
+    const urlPath = decodeURIComponent(rawUrl.split("?")[0] || "/");
+
+    // Reverse-proxy application APIs to isolated FastAPI (pipe request body).
+    if (urlPath === "/api" || urlPath.startsWith("/api/")) {
+      const headers = { ...req.headers, host: `127.0.0.1:${apiBackendPort}` };
+      const proxyReq = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: apiBackendPort,
+          path: rawUrl,
+          method: req.method,
+          headers,
+        },
+        (proxyRes) => {
+          res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+          proxyRes.pipe(res);
+        },
+      );
+      proxyReq.on("error", (err) => {
+        if (!res.headersSent) {
+          res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+        }
+        res.end(`proxy error: ${err.message}`);
+      });
+      req.pipe(proxyReq);
+      return;
+    }
+
+    const filePath = urlPath === "/" ? "/index.html" : urlPath;
+    const rootDir = path.resolve(dir);
+    const file = path.resolve(path.join(rootDir, filePath));
+    const spaFallback = () => {
+      const index = path.join(rootDir, "index.html");
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      createReadStream(index).pipe(res);
+    };
+    if (!file.startsWith(rootDir + path.sep) && file !== rootDir) {
+      res.writeHead(403).end("forbidden");
+      return;
+    }
+    // Only serve real files with extensions; SPA client routes fall back to index.html
+    if (!existsSync(file) || !path.extname(filePath)) {
+      spaFallback();
+      return;
+    }
+    res.writeHead(200, {
+      "Content-Type": mime[path.extname(file)] || "application/octet-stream",
+    });
+    createReadStream(file).pipe(res);
+  });
+
+  return new Promise((resolve) => {
+    server.listen(port, "127.0.0.1", () => resolve(server));
   });
 }
 
-function makeDiscovery(scope, days) {
-  const common = {
-    source_provider: "eastmoney",
-    info_code: null,
-    institution: "中信证券",
-    publish_date: "2026-07-20",
-    industry_name: "电子",
-    company_code: null,
-    company_name: null,
-    pdf_url: "https://pdf.dfcfw.com/pdf/H3_AP202607200001_1.pdf",
-    report_type: "brokerage",
-    matched_keywords: ["PCB"],
-    rating: "买入",
-    date_unknown: false,
-  };
-  const suffix = `${scope}-${days}`;
-  return [
-    {
-      ...common,
-      external_id: `OK-${suffix}`,
-      info_code: `OK-${suffix}`,
-      title: `PCB ${scope} ${days}天 研究`,
-      report_scope: scope === "company" ? "company" : "industry",
-      relevance_score: 21,
-    },
-    {
-      ...common,
-      external_id: "ERR",
-      info_code: "ERR",
-      title: "PCB 过期缓存错误样本",
-      report_scope: scope === "company" ? "company" : "industry",
-      relevance_score: 18,
-    },
-  ];
-}
+async function launchBrowser() {
+  const candidates = [];
 
-function makeApiFixture() {
-  const reports = [
-    {
-      id: "seed-report",
-      name: "seed.pdf",
-      industry: "PCB",
-      size: 2048,
-      ext: ".pdf",
-      ts: 1784678400000,
-      title: "既有PCB归档研报",
-      institution: "华泰证券",
-      publish_date: "2026-07-19",
-      sector_keys: ["pcb"],
-      source_url: "https://example.com/seed.pdf",
-      source_kind: "report",
-      imported_at: "2026-07-20T10:00:00+08:00",
-      source_provider: "eastmoney",
-      external_id: "SEED",
-      info_code: "SEED",
-      report_scope: "industry",
-      report_type: "brokerage",
-    },
-  ];
-
-  const discoveryRequests = [];
-  const importRequests = [];
-  const patchRequests = [];
-  let liveDataRequests = 0;
-
-  async function handle(route) {
-    const request = route.request();
-    const url = new URL(request.url());
-    if (url.pathname.includes("/api/api")) {
-      throw new Error(`double api path: ${url.href}`);
-    }
-
-    if (url.pathname === "/api/sector-research/data/pcb") {
-      liveDataRequests += 1;
-      return jsonResponse(route, {
-        data: {
-          sector_key: "pcb",
-          source: "a-stock-data",
-          fetched_at: "2026-07-24T08:30:00Z",
-          status: "partial",
-          warnings: ["002463 一致预期：依赖未安装"],
-          companies: [
-            {
-              code: "002463",
-              name: "沪电股份",
-              panels: {
-                individual_info: {
-                  status: "ok",
-                  summary: { name: "沪电股份", industry: "电子", market_cap: "1000亿" },
-                  error: null,
-                },
-                profit_forecast: {
-                  status: "ok",
-                  summary: { year: "2027", eps: "1.50", coverage: "15", record_count: 2 },
-                  error: null,
-                },
-                announcements: {
-                  status: "error",
-                  summary: {},
-                  error: "依赖未安装",
-                },
-              },
-            },
-          ],
-        },
-      });
-    }
-
-    if (url.pathname === "/api/sector-research/reports/pcb") {
-      const scope = url.searchParams.get("scope") || "industry";
-      const days = url.searchParams.get("days") || "365";
-      discoveryRequests.push({ scope, days });
-      const rows = makeDiscovery(scope, days);
-      return jsonResponse(route, {
-        data: {
-          sector_key: "pcb",
-          discovered: rows,
-          filtered: rows,
-          error: null,
-          total_discovered: 557,
-          returned: rows.length,
-          truncated: true,
-        },
-      });
-    }
-
-    if (url.pathname === "/api/sector-research/import/pcb") {
-      const body = JSON.parse(request.postData() || "{}");
-      importRequests.push(body);
-      if (body.external_id === "ERR") {
-        return jsonResponse(route, { detail: "发现结果已过期，请重新点击“开始发现”" }, 400);
-      }
-      const saved = {
-        id: "imported-report",
-        name: "imported.pdf",
-        industry: "PCB",
-        size: 4096,
-        ext: ".pdf",
-        ts: 1784764800000,
-        title: "PCB 导入成功研报",
-        institution: "中信证券",
-        publish_date: "2026-07-20",
-        sector_keys: ["pcb"],
-        source_url: "https://pdf.dfcfw.com/pdf/H3_IMPORTED_1.pdf",
-        source_kind: "report",
-        imported_at: "2026-07-21T10:00:00+08:00",
-        source_provider: "eastmoney",
-        external_id: body.external_id,
-        info_code: body.external_id,
-        report_scope: "industry",
-        report_type: "brokerage",
-      };
-      if (!reports.some((item) => item.id === saved.id)) reports.unshift(saved);
-      return jsonResponse(route, { data: saved });
-    }
-
-    if (url.pathname === "/api/myreports" && request.method() === "GET") {
-      return jsonResponse(route, { data: reports });
-    }
-
-    if (url.pathname.startsWith("/api/myreports/") && request.method() === "PATCH") {
-      const id = url.pathname.split("/").pop();
-      const body = JSON.parse(request.postData() || "{}");
-      patchRequests.push({ id, body });
-      const found = reports.find((item) => item.id === id);
-      if (!found) return jsonResponse(route, { detail: "研报不存在" }, 404);
-      Object.assign(found, body);
-      return jsonResponse(route, { data: found });
-    }
-
-    if (url.pathname === "/api/myreports/search") {
-      return jsonResponse(route, { data: reports });
-    }
-
-    return route.continue();
+  if (process.env.PLAYWRIGHT_CHROME_PATH) {
+    candidates.push({
+      label: "PLAYWRIGHT_CHROME_PATH",
+      opts: { executablePath: process.env.PLAYWRIGHT_CHROME_PATH, headless: true },
+    });
   }
 
-  return {
-    handle,
-    stats: {
-      get discoveryRequests() {
-        return discoveryRequests;
-      },
-      get importRequests() {
-        return importRequests;
-      },
-      get patchRequests() {
-        return patchRequests;
-      },
-      get liveDataRequests() {
-        return liveDataRequests;
-      },
-    },
+  const localAppData = process.env.LOCALAPPDATA || "";
+  const chromium1228 = path.join(
+    localAppData,
+    "ms-playwright",
+    "chromium-1228",
+    "chrome-win64",
+    "chrome.exe",
+  );
+  if (existsSync(chromium1228)) {
+    candidates.push({
+      label: "local chromium-1228",
+      opts: { executablePath: chromium1228, headless: true },
+    });
+  }
+
+  candidates.push({ label: "bundled chromium", opts: { headless: true } });
+  candidates.push({ label: "channel chrome", opts: { channel: "chrome", headless: true } });
+  candidates.push({ label: "channel msedge", opts: { channel: "msedge", headless: true } });
+
+  let lastError;
+  for (const c of candidates) {
+    try {
+      const browser = await chromium.launch(c.opts);
+      browserLabel = c.label;
+      return browser;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("failed to launch any Chromium");
+}
+
+function createNetworkBag(errors, label) {
+  const bag = {
+    dataPcb: 0,
+    reportsPcb: 0,
+    importPost: 0,
+    myreportsGet: 0,
+    myreportsPatch: 0,
+    badStatuses: [],
   };
+
+  function onResponse(response) {
+    const url = response.url();
+    if (!url.includes("/api")) return;
+    if (url.includes("/api/api")) {
+      errors.push(`${label} double api path: ${url}`);
+    }
+    const status = response.status();
+    // Intentional client errors (e.g. expired import 400) are allowed; hard failures are not.
+    if (status === 404 || status === 422 || status >= 500) {
+      bag.badStatuses.push(`${status} ${url}`);
+      errors.push(`${label} unexpected HTTP ${status}: ${url}`);
+    }
+    try {
+      const u = new URL(url);
+      const p = u.pathname;
+      const method = response.request().method();
+      if (p.includes("/sector-research/data/pcb") && method === "GET") bag.dataPcb += 1;
+      if (p.includes("/sector-research/reports/pcb") && method === "GET") bag.reportsPcb += 1;
+      if (p.includes("/sector-research/import/pcb") && method === "POST") bag.importPost += 1;
+      if (
+        (p === "/api/myreports" || p === "/api/myreports/")
+        && method === "GET"
+      ) {
+        bag.myreportsGet += 1;
+      }
+      if (p.startsWith("/api/myreports/") && method === "PATCH") bag.myreportsPatch += 1;
+    } catch {
+      /* ignore parse errors */
+    }
+  }
+
+  return { bag, onResponse };
+}
+
+async function expectVisibleTexts(page, texts, label, errors) {
+  for (const text of texts) {
+    const ok = await page.getByText(text, { exact: false }).first().isVisible().catch(() => false);
+    if (!ok) errors.push(`${label}: missing visible text ${text}`);
+  }
 }
 
 async function assertNoHorizontalOverflow(page, label, errors) {
-  const overflow = await page.evaluate(() => (
-    document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
-  ));
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+  );
   if (overflow) errors.push(`${label}: horizontal overflow`);
 }
 
-async function runViewport(browser, name, width, height, errors) {
-  const fixture = makeApiFixture();
-  const context = await browser.newContext({ viewport: { width, height } });
+async function runDesktop(browser, errors, networkBag) {
+  const label = "desktop";
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
-  page.on("pageerror", (error) => errors.push(`${name} pageerror: ${error.message}`));
+  page.on("pageerror", (error) => errors.push(`${label} pageerror: ${error.message}`));
   page.on("console", (msg) => {
-    if (msg.type() === "error") errors.push(`${name} console: ${msg.text()}`);
+    if (msg.type() === "error") errors.push(`${label} console: ${msg.text()}`);
   });
-  page.on("response", (response) => {
-    const url = response.url();
-    if (url.includes("/api/api")) errors.push(`${name} double api: ${url}`);
-    if (response.status() >= 400 && !url.includes("/api/sector-research/import/pcb")) {
-      errors.push(`${name} unexpected HTTP ${response.status()}: ${url}`);
-    }
-  });
-  await page.route("**/api/**", fixture.handle);
+  page.on("response", networkBag.onResponse);
 
-  await page.goto(`http://127.0.0.1:${frontendPort}/sectors`, { waitUntil: "networkidle" });
-  await page.getByText("PCB", { exact: false }).first().click({ timeout: 15000 }).catch(async () => {
-    await page.goto(`http://127.0.0.1:${FRONT_PORT}/sectors/pcb/overview`, { waitUntil: "networkidle" });
+  await page.goto(`http://127.0.0.1:${frontendPort}/sectors/pcb/overview`, {
+    waitUntil: "networkidle",
   });
-  if (!page.url().includes("/sectors/pcb")) {
-    await page.goto(`http://127.0.0.1:${FRONT_PORT}/sectors/pcb/overview`, { waitUntil: "networkidle" });
+  await expectVisibleTexts(
+    page,
+    ["总览", "原理与技术路线", "价值量", "铜中板", "产业格局", "定价权地图"],
+    label,
+    errors,
+  );
+  await page.screenshot({
+    path: path.join(shotDir, "desktop-pcb-overview.png"),
+    fullPage: true,
+  });
+  await assertNoHorizontalOverflow(page, `${label} overview`, errors);
+
+  // Switch all 6 tags
+  for (const tag of ["原理与技术路线", "价值量", "铜中板", "产业格局", "定价权地图", "总览"]) {
+    await page.getByRole("link", { name: tag }).click();
+    await page.waitForLoadState("networkidle");
+  }
+  await page.goBack();
+  await page.goForward();
+  await page.reload({ waitUntil: "networkidle" });
+
+  // Expand live data + refresh
+  const dataBeforeExpand = networkBag.bag.dataPcb;
+  const expand = page.getByRole("button", { name: /展开/ }).last();
+  await expand.click();
+  await page.waitForTimeout(1200);
+  if (networkBag.bag.dataPcb !== dataBeforeExpand + 1) {
+    errors.push(
+      `${label}: first expand expected exactly one dynamic request; `
+      + `before=${dataBeforeExpand}, after=${networkBag.bag.dataPcb}`,
+    );
+  }
+  const bodyAfterExpand = await page.locator("body").innerText();
+  if (!bodyAfterExpand.includes("机构数") || !bodyAfterExpand.includes("1.50")) {
+    errors.push(
+      `${label}: dynamic summary missing after expand; `
+      + `text=${bodyAfterExpand.slice(0, 800).replace(/\s+/g, " ")}`,
+    );
+  }
+  // Collapse then re-expand (cached — no extra requirement here beyond refresh)
+  const collapse = page.getByRole("button", { name: /收起/ }).last();
+  if (await collapse.isVisible().catch(() => false)) {
+    await collapse.click();
+    const dataBeforeReopen = networkBag.bag.dataPcb;
+    await expand.click();
+    await page.waitForTimeout(400);
+    if (networkBag.bag.dataPcb !== dataBeforeReopen) {
+      errors.push(`${label}: cached re-open issued another dynamic request`);
+    }
+  }
+  const dataBeforeRefresh = networkBag.bag.dataPcb;
+  await page.getByRole("button", { name: /刷新/ }).last().click();
+  await page.waitForTimeout(800);
+  if (networkBag.bag.dataPcb !== dataBeforeRefresh + 1) {
+    errors.push(`${label}: refresh expected exactly one dynamic request`);
+  }
+
+  // Discovery scopes 行业 / 公司 / 全部
+  const scopeSelect = page.locator("select").first();
+  const daysInput = page.locator("input[type=number]").first();
+  for (const [scopeValue, days] of [
+    ["industry", "365"],
+    ["company", "30"],
+    ["all", "730"],
+  ]) {
+    await scopeSelect.selectOption(scopeValue);
+    await daysInput.fill(days);
+    await page.getByRole("button", { name: /开始发现/ }).click();
+    await page.getByText("共发现 557 条").waitFor({ timeout: 15000 });
+  }
+
+  await page.screenshot({
+    path: path.join(shotDir, "desktop-report-discovery.png"),
+    fullPage: true,
+  });
+  await assertNoHorizontalOverflow(page, `${label} discovery`, errors);
+
+  // Save first OK-* row
+  await page.getByRole("button", { name: /保存到我的研报/ }).first().click();
+  await page.getByText(/已保存到我的研报|已存在/).waitFor({ timeout: 15000 });
+  await page.getByRole("button", { name: /保存到我的研报/ }).nth(1).click();
+  await page.getByText(/过期|重新/).waitFor({ timeout: 15000 });
+
+  // Navigate to my-reports (prefer in-page link)
+  const archivedLink = page.getByRole("link", { name: /查看已归档研报/ }).first();
+  if (await archivedLink.isVisible().catch(() => false)) {
+    await archivedLink.click();
+  } else {
+    await page.goto(`http://127.0.0.1:${frontendPort}/my-reports`, {
+      waitUntil: "networkidle",
+    });
   }
   await page.waitForLoadState("networkidle");
-  await expectText(page, ["总览", "原理与技术路线", "价值量", "铜中板", "产业格局", "定价权地图"], name, errors);
-  await page.screenshot({ path: path.join(shotDir, `${name}-pcb-overview.png`), fullPage: true });
+  await page.waitForTimeout(600);
+  await expectVisibleTexts(page, ["按时间", "按产业", "按机构"], label, errors);
+  await page.getByRole("button", { name: "按时间" }).click();
+  await page.getByRole("button", { name: "按产业" }).click();
+  await page.getByRole("button", { name: "按机构" }).click();
+  await assertNoHorizontalOverflow(page, `${label} my-reports before patch`, errors);
+
+  // GET /api/myreports via page.evaluate fetch; find OK-*; PATCH institution ""; re-GET
+  const list1 = await page.evaluate(async () => {
+    const res = await fetch("/api/myreports");
+    const json = await res.json();
+    return { status: res.status, data: json.data ?? json };
+  });
+  if (list1.status !== 200) {
+    errors.push(`${label}: GET /api/myreports status ${list1.status}`);
+  }
+  const rows = Array.isArray(list1.data) ? list1.data : [];
+  const okRow = rows.find((r) => String(r.external_id || "").startsWith("OK-"));
+  if (!okRow) {
+    errors.push(`${label}: no OK-* external_id in myreports list`);
+  } else {
+    await page.goto(
+      `http://127.0.0.1:${frontendPort}/my-reports?report=${encodeURIComponent(okRow.id)}`,
+      { waitUntil: "networkidle" },
+    );
+    if (!page.url().includes(`report=${encodeURIComponent(okRow.id)}`)) {
+      errors.push(`${label}: imported report query not preserved in URL`);
+    }
+    const patch = await page.evaluate(async (id) => {
+      const res = await fetch(`/api/myreports/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ institution: "" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      return { status: res.status, data: json.data ?? json };
+    }, okRow.id);
+    if (patch.status !== 200) {
+      errors.push(`${label}: PATCH institution failed status ${patch.status}`);
+    }
+    const list2 = await page.evaluate(async () => {
+      const res = await fetch("/api/myreports");
+      const json = await res.json();
+      return { status: res.status, data: json.data ?? json };
+    });
+    const again = (Array.isArray(list2.data) ? list2.data : []).find((r) => r.id === okRow.id);
+    if (!again || again.institution !== "") {
+      errors.push(
+        `${label}: institution not cleared after PATCH; got ${JSON.stringify(again?.institution)}`,
+      );
+    }
+  }
+
+  await page.reload({ waitUntil: "networkidle" });
+  if (okRow && !page.url().includes(`report=${encodeURIComponent(okRow.id)}`)) {
+    errors.push(`${label}: refresh lost report query`);
+  }
+  await page.screenshot({
+    path: path.join(shotDir, "desktop-my-reports.png"),
+    fullPage: true,
+  });
+  await assertNoHorizontalOverflow(page, `${label} my-reports`, errors);
+
+  // POST import with NOT-IN-CACHE-XYZ → 400 containing 过期/重新
+  const badImport = await page.evaluate(async () => {
+    const res = await fetch("/api/sector-research/import/pcb", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ external_id: "NOT-IN-CACHE-XYZ" }),
+    });
+    const text = await res.text();
+    return { status: res.status, text };
+  });
+  if (badImport.status !== 400) {
+    errors.push(`${label}: NOT-IN-CACHE import expected 400, got ${badImport.status}`);
+  } else if (!/过期|重新/.test(badImport.text)) {
+    errors.push(`${label}: NOT-IN-CACHE body missing 过期/重新: ${badImport.text.slice(0, 200)}`);
+  }
+
+  await assertNoHorizontalOverflow(page, label, errors);
+  await context.close();
+}
+
+async function runMobile(browser, errors, networkBag) {
+  const label = "mobile-390";
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  page.on("pageerror", (error) => errors.push(`${label} pageerror: ${error.message}`));
+  page.on("console", (msg) => {
+    if (msg.type() === "error") errors.push(`${label} console: ${msg.text()}`);
+  });
+  page.on("response", networkBag.onResponse);
+
+  await page.goto(`http://127.0.0.1:${frontendPort}/sectors/pcb/overview`, {
+    waitUntil: "networkidle",
+  });
+  await expectVisibleTexts(
+    page,
+    ["总览", "原理与技术路线", "价值量", "铜中板", "产业格局", "定价权地图"],
+    label,
+    errors,
+  );
+  await page.screenshot({
+    path: path.join(shotDir, "mobile-pcb-overview-390.png"),
+    fullPage: true,
+  });
+  await assertNoHorizontalOverflow(page, `${label} overview`, errors);
 
   for (const tag of ["原理与技术路线", "价值量", "铜中板", "产业格局", "定价权地图", "总览"]) {
     await page.getByRole("link", { name: tag }).click();
@@ -325,75 +468,167 @@ async function runViewport(browser, name, width, height, errors) {
   await page.goForward();
   await page.reload({ waitUntil: "networkidle" });
 
+  const dataBeforeExpand = networkBag.bag.dataPcb;
   const expand = page.getByRole("button", { name: /展开/ }).last();
   await expand.click();
-  await page.getByText("沪电股份").waitFor({ timeout: 5000 });
-  if (fixture.stats.liveDataRequests !== 1) {
-    errors.push(`${name}: expected one live data request on first expand, got ${fixture.stats.liveDataRequests}`);
+  await page.waitForTimeout(1200);
+  if (networkBag.bag.dataPcb !== dataBeforeExpand + 1) {
+    errors.push(
+      `${label}: first expand expected exactly one dynamic request; `
+      + `before=${dataBeforeExpand}, after=${networkBag.bag.dataPcb}`,
+    );
   }
-  await page.getByRole("button", { name: /收起/ }).last().click();
-  await expand.click();
-  if (fixture.stats.liveDataRequests !== 1) {
-    errors.push(`${name}: reopening with cached data requested again`);
+  const bodyAfterExpand = await page.locator("body").innerText();
+  if (!bodyAfterExpand.includes("机构数") || !bodyAfterExpand.includes("1.50")) {
+    errors.push(
+      `${label}: dynamic summary missing after expand; `
+      + `text=${bodyAfterExpand.slice(0, 800).replace(/\s+/g, " ")}`,
+    );
   }
+  const collapse = page.getByRole("button", { name: /收起/ }).last();
+  if (await collapse.isVisible().catch(() => false)) {
+    await collapse.click();
+    const dataBeforeReopen = networkBag.bag.dataPcb;
+    await expand.click();
+    await page.waitForTimeout(400);
+    if (networkBag.bag.dataPcb !== dataBeforeReopen) {
+      errors.push(`${label}: cached re-open issued another dynamic request`);
+    }
+  }
+  const dataBeforeRefresh = networkBag.bag.dataPcb;
   await page.getByRole("button", { name: /刷新/ }).last().click();
-  await page.waitForTimeout(250);
-  if (fixture.stats.liveDataRequests !== 2) {
-    errors.push(`${name}: refresh did not issue exactly one live data request`);
+  await page.waitForTimeout(800);
+  if (networkBag.bag.dataPcb !== dataBeforeRefresh + 1) {
+    errors.push(`${label}: refresh expected exactly one dynamic request`);
   }
 
-  const scope = page.locator("select").first();
+  const scopeSelect = page.locator("select").first();
   const daysInput = page.locator("input[type=number]").first();
-  for (const [scopeValue, days] of [["industry", "365"], ["company", "30"], ["all", "730"]]) {
-    await scope.selectOption(scopeValue);
+  for (const [scopeValue, days] of [
+    ["industry", "365"],
+    ["company", "30"],
+    ["all", "730"],
+  ]) {
+    await scopeSelect.selectOption(scopeValue);
     await daysInput.fill(days);
     await page.getByRole("button", { name: /开始发现/ }).click();
-    await page.getByText("共发现 557 条").waitFor({ timeout: 5000 });
+    await page.getByText("共发现 557 条").waitFor({ timeout: 15000 });
   }
-  const seen = fixture.stats.discoveryRequests.map((item) => `${item.scope}:${item.days}`);
-  for (const expected of ["industry:365", "company:30", "all:730"]) {
-    if (!seen.includes(expected)) errors.push(`${name}: missing discovery request ${expected}`);
-  }
+  await page.screenshot({
+    path: path.join(shotDir, "mobile-report-discovery-390.png"),
+    fullPage: true,
+  });
+  await assertNoHorizontalOverflow(page, `${label} discovery`, errors);
 
   await page.getByRole("button", { name: /保存到我的研报/ }).first().click();
-  await page.getByText("已保存到我的研报").waitFor({ timeout: 5000 });
+  await page.getByText(/已保存到我的研报|已存在/).waitFor({ timeout: 15000 });
   await page.getByRole("button", { name: /保存到我的研报/ }).nth(1).click();
-  await page.getByText("发现结果已过期").waitFor({ timeout: 5000 });
-  if (!fixture.stats.importRequests.some((body) => body.external_id && !("title" in body))) {
-    errors.push(`${name}: import body was not external_id-only`);
-  }
-  await page.screenshot({ path: path.join(shotDir, `${name}-report-discovery.png`), fullPage: true });
+  await page.getByText(/过期|重新/).waitFor({ timeout: 15000 });
 
-  await page.getByRole("link", { name: /查看已归档研报/ }).first().click();
-  await page.waitForLoadState("networkidle");
-  if (!page.url().includes("/my-reports?report=imported-report")) {
-    errors.push(`${name}: imported report link did not preserve report query`);
+  const archivedLink = page.getByRole("link", { name: /查看已归档研报/ }).first();
+  if (await archivedLink.isVisible().catch(() => false)) {
+    await archivedLink.click();
+  } else {
+    await page.goto(`http://127.0.0.1:${frontendPort}/my-reports`, {
+      waitUntil: "networkidle",
+    });
   }
-  await expectText(page, ["按时间", "按产业", "按机构", "PCB 导入成功研报"], name, errors);
+  await page.waitForLoadState("networkidle");
+  await page.waitForTimeout(600);
+  await expectVisibleTexts(page, ["按时间", "按产业", "按机构"], label, errors);
   await page.getByRole("button", { name: "按时间" }).click();
   await page.getByRole("button", { name: "按产业" }).click();
   await page.getByRole("button", { name: "按机构" }).click();
-  await page.reload({ waitUntil: "networkidle" });
-  if (!page.url().includes("report=imported-report")) {
-    errors.push(`${name}: refresh lost report query`);
-  }
-  await page.getByRole("button", { name: "编辑" }).first().click();
-  await page.locator('input[placeholder="未确认机构"]').fill("");
-  await page.getByRole("button", { name: /保存/ }).first().click();
-  await page.waitForTimeout(500);
-  if (!fixture.stats.patchRequests.some((entry) => entry.body.institution === "")) {
-    errors.push(`${name}: metadata clear did not send empty institution`);
-  }
-  await page.screenshot({ path: path.join(shotDir, `${name}-my-reports.png`), fullPage: true });
 
-  await assertNoHorizontalOverflow(page, name, errors);
+  const list1 = await page.evaluate(async () => {
+    const res = await fetch("/api/myreports");
+    const json = await res.json();
+    return { status: res.status, data: json.data ?? json };
+  });
+  const rows = Array.isArray(list1.data) ? list1.data : [];
+  const okRow = rows.find((r) => String(r.external_id || "").startsWith("OK-"));
+  if (!okRow) {
+    errors.push(`${label}: no OK-* external_id in myreports list`);
+  } else {
+    await page.goto(
+      `http://127.0.0.1:${frontendPort}/my-reports?report=${encodeURIComponent(okRow.id)}`,
+      { waitUntil: "networkidle" },
+    );
+    const patch = await page.evaluate(async (id) => {
+      const res = await fetch(`/api/myreports/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ institution: "" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      return { status: res.status, data: json.data ?? json };
+    }, okRow.id);
+    if (patch.status !== 200) {
+      errors.push(`${label}: PATCH institution failed status ${patch.status}`);
+    }
+    await page.reload({ waitUntil: "networkidle" });
+    if (!page.url().includes(`report=${encodeURIComponent(okRow.id)}`)) {
+      errors.push(`${label}: refresh lost report query`);
+    }
+  }
+
+  await page.screenshot({
+    path: path.join(shotDir, "mobile-my-reports-390.png"),
+    fullPage: true,
+  });
+  await assertNoHorizontalOverflow(page, `${label} my-reports`, errors);
   await context.close();
 }
 
-async function expectText(page, texts, label, errors) {
-  for (const text of texts) {
-    if (!(await page.getByText(text, { exact: false }).first().isVisible().catch(() => false))) {
-      errors.push(`${label}: missing visible text ${text}`);
+function assertNetworkBag(bag, errors) {
+  if (bag.dataPcb < 1) errors.push(`network: data/pcb GET expected >=1, got ${bag.dataPcb}`);
+  if (bag.reportsPcb < 3) errors.push(`network: reports/pcb GET expected >=3, got ${bag.reportsPcb}`);
+  if (bag.importPost < 1) errors.push(`network: import POST expected >=1, got ${bag.importPost}`);
+  if (bag.myreportsGet < 1) errors.push(`network: myreports GET expected >=1, got ${bag.myreportsGet}`);
+  if (bag.myreportsPatch < 1) errors.push(`network: myreports PATCH expected >=1, got ${bag.myreportsPatch}`);
+}
+
+async function assertReportsDir(reportsDir, errors) {
+  const indexPath = path.join(reportsDir, "index.json");
+  if (!existsSync(indexPath)) {
+    errors.push("reportsDir/index.json missing after browser flow");
+    return;
+  }
+  const index = JSON.parse(await readFile(indexPath, "utf8"));
+  const items = Array.isArray(index) ? index : index.reports || index.items || [];
+  const okItems = items.filter((r) => String(r.external_id || "").startsWith("OK-"));
+  if (okItems.length < 1) {
+    errors.push(`expected >=1 OK-* report in index.json, got ${items.length} total`);
+    return;
+  }
+  const report = okItems[0];
+  if (!Array.isArray(report.sector_keys) || !report.sector_keys.includes("pcb")) {
+    errors.push(`OK-* sector_keys missing pcb: ${JSON.stringify(report.sector_keys)}`);
+  }
+  if (report.source_provider !== "eastmoney") {
+    errors.push(`OK-* source_provider expected eastmoney, got ${report.source_provider}`);
+  }
+  if (report.institution !== "") {
+    errors.push(`OK-* institution expected "", got ${JSON.stringify(report.institution)}`);
+  }
+  const pdfPath = path.join(reportsDir, `${report.id}.pdf`);
+  const altPdf = path.join(reportsDir, report.name || "");
+  const pdfFile = existsSync(pdfPath) ? pdfPath : (existsSync(altPdf) ? altPdf : null);
+  if (!pdfFile) {
+    // try any ${id}.*
+    const candidate = path.join(reportsDir, `${report.id}${report.ext || ".pdf"}`);
+    if (existsSync(candidate)) {
+      const head = await readFile(candidate);
+      if (!head.slice(0, 4).toString("utf8").startsWith("%PDF")) {
+        errors.push(`PDF magic missing in ${candidate}`);
+      }
+    } else {
+      errors.push(`PDF file missing for report id ${report.id}`);
+    }
+  } else {
+    const head = await readFile(pdfFile);
+    if (!head.slice(0, 4).toString("utf8").startsWith("%PDF")) {
+      errors.push(`PDF magic missing in ${pdfFile}`);
     }
   }
 }
@@ -402,80 +637,138 @@ async function main() {
   if (!existsSync(frontendDist)) {
     throw new Error("frontend/dist missing; run npm run build first");
   }
+  if (!existsSync(harnessSrc)) {
+    throw new Error(`harness missing: ${harnessSrc}`);
+  }
+
   await mkdir(shotDir, { recursive: true });
 
   const dataDir = await mkdtemp(path.join(tmpdir(), "vr-e2e-data-"));
   const reportsDir = await mkdtemp(path.join(tmpdir(), "vr-e2e-reports-"));
   backendPort = await getFreePort();
   frontendPort = await getFreePort();
+
+  await copyFile(harnessSrc, harnessDst);
+
+  const python = resolvePython();
   let backendExited = false;
+  let backendCode = null;
   const backend = spawn(
-    path.join(root, "backend", ".venv", "Scripts", "python.exe"),
-    ["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", String(backendPort)],
+    python,
+    ["-m", "uvicorn", "harness_app:app", "--host", "127.0.0.1", "--port", String(backendPort)],
     {
       cwd: path.join(root, "backend"),
-      env: { ...process.env, VR_DATA_DIR: dataDir, VR_REPORTS_DIR: reportsDir },
+      env: {
+        ...process.env,
+        VR_DATA_DIR: dataDir,
+        VR_REPORTS_DIR: reportsDir,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  backend.stderr.on("data", (data) => process.stderr.write(data));
-  backend.on("exit", () => {
+  let backendLog = "";
+  backend.stdout.on("data", (d) => {
+    backendLog += d.toString();
+  });
+  backend.stderr.on("data", (d) => {
+    const s = d.toString();
+    backendLog += s;
+    process.stderr.write(s);
+  });
+  backend.on("exit", (code) => {
     backendExited = true;
+    backendCode = code;
   });
 
-  const staticServer = await startStaticServer(frontendDist, frontendPort);
+  const staticServer = await startStaticServer(frontendDist, frontendPort, backendPort);
   const errors = [];
+  const networkBag = createNetworkBag(errors, "net");
 
   try {
     await waitHttp(`http://127.0.0.1:${backendPort}/api/health`);
-    if (backendExited) throw new Error("isolated backend exited before acceptance");
+    if (backendExited) {
+      throw new Error(`isolated backend exited before ready (code=${backendCode})\n${backendLog.slice(-2000)}`);
+    }
     await waitHttp(`http://127.0.0.1:${frontendPort}/`);
-    const browser = await chromium.launch({ headless: true });
-    await runViewport(browser, "desktop", 1440, 900, errors);
-    await runViewport(browser, "mobile-390", 390, 844, errors);
-    await browser.close();
 
-    const readme = `# Sector research browser acceptance
+    const browser = await launchBrowser();
+    try {
+      await runDesktop(browser, errors, networkBag);
+      await runMobile(browser, errors, networkBag);
+    } finally {
+      await browser.close().catch(() => {});
+    }
 
-Date: ${new Date().toISOString()}
-Backend: http://127.0.0.1:${backendPort}
-Frontend: http://127.0.0.1:${frontendPort}
-VR_DATA_DIR: ${dataDir}
-VR_REPORTS_DIR: ${reportsDir}
+    assertNetworkBag(networkBag.bag, errors);
+    await assertReportsDir(reportsDir, errors);
 
-## Covered
-- 板块中心进入 PCB
-- 六个 Tag
-- 动态数据展开与刷新
-- 研报行业/公司/全部发现
-- 自定义 days
-- 截断数量提示
-- 缓存导入与导入错误反馈
-- 我的研报定位
-- 按时间/产业/机构分类
-- 元数据清空
-- 前进后退与刷新恢复
-- 桌面 1440px 与移动 390px 无整体横向滚动
-
-## Screenshots
-- desktop-pcb-overview.png
-- desktop-report-discovery.png
-- desktop-my-reports.png
-- mobile-390-pcb-overview.png
-- mobile-390-report-discovery.png
-- mobile-390-my-reports.png
-
-## Errors
-${errors.length ? errors.map((error) => `- ${error}`).join("\n") : "- none"}
-`;
+    // README: record acceptance evidence without full temp paths or private data.
+    const readme = [
+      "# Sector research browser acceptance",
+      "",
+      `Date: ${new Date().toISOString()}`,
+      `Browser: ${browserLabel}`,
+      "Isolated VR_DATA_DIR used: yes",
+      "Isolated VR_REPORTS_DIR used: yes",
+      "",
+      "## Covered",
+      "- 板块中心进入 PCB",
+      "- 六个 Tag",
+      "- 动态数据展开与刷新",
+      "- 研报行业/公司/全部发现",
+      "- 自定义 days",
+      "- 截断数量提示",
+      "- 缓存导入与导入错误反馈",
+      "- 我的研报定位",
+      "- 按时间/产业/机构分类",
+      "- 元数据清空",
+      "- 前进后退与刷新恢复",
+      "- 桌面 1440px 与移动 390px 无整体横向滚动",
+      "",
+      "## Screenshots",
+      "- desktop-pcb-overview.png",
+      "- desktop-report-discovery.png",
+      "- desktop-my-reports.png",
+      "- mobile-pcb-overview-390.png",
+      "- mobile-report-discovery-390.png",
+      "- mobile-my-reports-390.png",
+      "",
+      "## Errors",
+      errors.length ? errors.map((error) => `- ${error}`).join("\n") : "- none",
+      "",
+    ].join("\n");
     await writeFile(path.join(shotDir, "README.md"), readme, "utf8");
+
     if (errors.length) {
       throw new Error(`browser acceptance failed:\n${errors.join("\n")}`);
     }
-    console.log(`Browser acceptance OK; screenshots in ${shotDir}`);
+    console.log(`Browser acceptance OK; screenshots in ${shotDir}; browser=${browserLabel}`);
   } finally {
     staticServer.close();
-    backend.kill("SIGTERM");
+    if (!backendExited) {
+      try {
+        backend.kill("SIGTERM");
+      } catch {
+        /* ignore */
+      }
+      // Windows fallback
+      if (process.platform === "win32" && backend.pid) {
+        try {
+          spawn("taskkill", ["/pid", String(backend.pid), "/t", "/f"], {
+            stdio: "ignore",
+            windowsHide: true,
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    await sleep(300);
+    try {
+      if (existsSync(harnessDst)) await unlink(harnessDst);
+    } catch {
+      /* ignore */
+    }
     await rm(dataDir, { recursive: true, force: true }).catch(() => {});
     await rm(reportsDir, { recursive: true, force: true }).catch(() => {});
   }
