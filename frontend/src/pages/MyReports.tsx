@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Upload, FileText, Trash2, Download, Loader2, FolderOpen, Search, Pencil, ExternalLink, Save, X } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -51,6 +51,7 @@ const fileToB64 = (file: File): Promise<string> =>
   });
 
 export function MyReports() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [reports, setReports] = useState<MyReport[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -70,6 +71,29 @@ export function MyReports() {
   const [edit, setEdit] = useState<EditForm>(EMPTY_EDIT);
   const [editBusy, setEditBusy] = useState(false);
   const [editErr, setEditErr] = useState<string | null>(null);
+
+  // URL 查询参数：report（定位高亮）/ sector / institution / year / month。
+  const focusReportId = searchParams.get("report") || undefined;
+  const filterSector = searchParams.get("sector") || undefined;
+  const filterInstitution = searchParams.get("institution") || undefined;
+  const filterYear = searchParams.get("year") || undefined;
+  const filterMonth = searchParams.get("month") || undefined;
+  // 同步过滤参数到 URL（前进/后退/刷新不丢失）。
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (filterSector) next.set("sector", filterSector);
+    if (filterInstitution) next.set("institution", filterInstitution);
+    if (filterYear) next.set("year", filterYear);
+    if (filterMonth) next.set("month", filterMonth);
+    const cur = searchParams.toString();
+    if (next.toString() !== cur) setSearchParams(next, { replace: true });
+  }, [filterSector, filterInstitution, filterYear, filterMonth]);
+  // 由 URL 参数恢复视图：sector/institution/year/month 存在时切换对应视图。
+  useEffect(() => {
+    if (filterSector) setView("industry");
+    else if (filterInstitution) setView("institution");
+    else if (filterYear || filterMonth) setView("year");
+  }, [filterSector, filterInstitution, filterYear, filterMonth]);
 
   const load = async () => {
     try {
@@ -218,8 +242,16 @@ export function MyReports() {
   const renderReportRow = (r: MyReport) => {
     const date = dateOf(r);
     const editing = editingId === r.id;
+    const highlighted = focusReportId === r.id;
     return (
-      <div key={r.id} className="border-b border-border/20 last:border-b-0">
+      <div
+        key={r.id}
+        id={`report-${r.id}`}
+        className={cn(
+          "border-b border-border/20 last:border-b-0 transition-colors",
+          highlighted && "bg-primary/5 ring-1 ring-primary/30",
+        )}
+      >
         <div className="flex items-start gap-2.5 py-2.5">
           <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
           <div className="min-w-0 flex-1">
@@ -379,6 +411,41 @@ export function MyReports() {
     );
   };
 
+  // 按 URL 参数过滤后的研报列表。
+  const filteredReports = useMemo(() => {
+    return reports.filter((r) => {
+      if (filterSector && !(r.sector_keys ?? []).includes(filterSector)) return false;
+      if (filterInstitution) {
+        const inst = r.institution || "";
+        if ((inst ? inst : "__unknown__") !== filterInstitution) return false;
+      }
+      if (filterYear || filterMonth) {
+        let year: string | null = null;
+        let month: string | null = null;
+        if (r.publish_date) {
+          year = r.publish_date.slice(0, 4);
+          month = r.publish_date.slice(0, 7);
+        } else if (r.imported_at) {
+          year = r.imported_at.slice(0, 4);
+          month = r.imported_at.slice(0, 7);
+        } else if (r.ts) {
+          year = new Date(r.ts).getFullYear().toString();
+        }
+        if (filterYear && year !== filterYear) return false;
+        if (filterMonth && month !== filterMonth) return false;
+      }
+      return true;
+    });
+  }, [reports, filterSector, filterInstitution, filterYear, filterMonth]);
+
+  // 定位高亮：报告在过滤列表中才滚动。
+  useEffect(() => {
+    if (focusReportId && filteredReports.some((r) => r.id === focusReportId)) {
+      const el = document.getElementById(`report-${focusReportId}`);
+      if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [focusReportId, filteredReports]);
+
   const showEmpty = !loadFailed && reports.length === 0;
   const listGroups = browse?.groups ?? [];
 
@@ -493,17 +560,23 @@ export function MyReports() {
         </GlassCard>
       ) : !searching && view === "industry" && grouped.length > 0 ? (
         <div className="space-y-4">
-          {grouped.map(([industry, items]) => (
-            <GlassCard key={industry}>
-              <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                <span className="rounded bg-primary/15 px-2 py-0.5 text-xs text-primary">{industry}</span>
-                <span className="text-xs font-normal text-muted-foreground">{items.length} 份</span>
-              </h3>
-              <div className="divide-y divide-border/30">
-                {items.map(renderReportRow)}
-              </div>
-            </GlassCard>
-          ))}
+          {grouped.map(([industry, items]) => {
+            const sectorItems = items.filter((r) =>
+              filteredReports.some((f) => f.id === r.id),
+            );
+            if (sectorItems.length === 0 && filteredReports.length > 0) return null;
+            return (
+              <GlassCard key={industry}>
+                <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                  <span className="rounded bg-primary/15 px-2 py-0.5 text-xs text-primary">{industry}</span>
+                  <span className="text-xs font-normal text-muted-foreground">{sectorItems.length} 份</span>
+                </h3>
+                <div className="divide-y divide-border/30">
+                  {sectorItems.map(renderReportRow)}
+                </div>
+              </GlassCard>
+            );
+          })}
         </div>
       ) : !searching ? (
         <div className="space-y-4">
@@ -521,20 +594,39 @@ export function MyReports() {
                     <span className="text-xs font-normal text-muted-foreground">{g.count} 份</span>
                   </h3>
                   {view === "year" && g.months && g.months.length > 0 && (
-                    <p className="mb-2 flex flex-wrap gap-1">
-                      {g.months.map((m) => (
-                        <span key={m.key} className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground">
-                          {m.label}（{m.count}）
-                        </span>
-                      ))}
-                    </p>
+                    <div className="mb-3 space-y-2">
+                      {g.months.map((m) => {
+                        const monthReports = filteredReports.filter((r) => {
+                          const month = r.publish_date
+                            ? r.publish_date.slice(0, 7)
+                            : r.imported_at
+                              ? r.imported_at.slice(0, 7)
+                              : null;
+                          return month === m.key;
+                        });
+                        return (
+                          <div key={m.key} className="rounded-lg border border-border/40 p-2">
+                            <p className="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">
+                              <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground">
+                                {m.label}（{m.count}）
+                              </span>
+                              <span className="text-[10px] text-muted-foreground/60">发布日期未确认时按归档时间</span>
+                            </p>
+                            <div className="divide-y divide-border/30">
+                              {monthReports.map(renderReportRow)}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
-                  <div className="divide-y divide-border/30">
-                    {/* 时间/机构视图：从全量 reports 中筛出属于该分组的条目渲染。 */}
-                    {reports
-                      .filter((r) => matchesGroup(r, g.key, view))
-                      .map(renderReportRow)}
-                  </div>
+                  {view !== "year" && (
+                    <div className="divide-y divide-border/30">
+                      {filteredReports
+                        .filter((r) => matchesGroup(r, g.key, view))
+                        .map(renderReportRow)}
+                    </div>
+                  )}
                 </GlassCard>
               ))
             ) : (

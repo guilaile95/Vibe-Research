@@ -1,14 +1,57 @@
+import { Link } from "react-router-dom";
 import type { ContentBlock, ResearchTag, SourceRef } from "@/data/sectorResearch";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { cn } from "@/lib/utils";
 
 function sourceFootnote(ids: string[] | undefined, sources: SourceRef[]): string | null {
-  if (!ids?.length) return null;
+  if (!ids?.length) return null
   const labels = ids.map((id) => {
     const s = sources.find((x) => x.id === id);
     return s ? s.id : id;
   });
   return labels.map((l) => `[${l}]`).join("");
+}
+
+function SourceLinks({ ids, sources }: { ids: string[] | undefined; sources: SourceRef[] }) {
+  if (!ids?.length) return null;
+  const found = ids
+    .map((id) => sources.find((x) => x.id === id))
+    .filter((s): s is SourceRef => Boolean(s));
+  if (!found.length) return null;
+  return (
+    <span className="ml-1 inline-flex flex-wrap gap-1.5">
+      {found.map((s) => {
+        const inner = <span className="font-medium">{s.id}</span>;
+        if (s.myReportId) {
+          return (
+            <Link
+              key={s.id}
+              to={`/my-reports?report=${s.myReportId}`}
+              className="text-[10px] text-primary hover:underline"
+              title={s.title}
+            >
+              [{inner}]
+            </Link>
+          );
+        }
+        if (s.url) {
+          return (
+            <a
+              key={s.id}
+              href={s.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[10px] text-primary hover:underline"
+              title={s.title}
+            >
+              [{inner}]
+            </a>
+          );
+        }
+        return <span key={s.id} className="text-[10px]">[{inner}]</span>;
+      })}
+    </span>
+  );
 }
 
 function BlockView({ block, sources }: { block: ContentBlock; sources: SourceRef[] }) {
@@ -56,6 +99,7 @@ function BlockView({ block, sources }: { block: ContentBlock; sources: SourceRef
           )}
         >
           {block.text}
+          <SourceLinks ids={block.sourceIds} sources={sources} />
         </div>
       );
     }
@@ -88,6 +132,7 @@ function BlockView({ block, sources }: { block: ContentBlock; sources: SourceRef
               ))}
             </tbody>
           </table>
+          <SourceLinks ids={block.sourceIds} sources={sources} />
         </div>
       );
     case "risk":
@@ -99,6 +144,7 @@ function BlockView({ block, sources }: { block: ContentBlock; sources: SourceRef
               <li key={i}>{item}</li>
             ))}
           </ul>
+          <SourceLinks ids={block.sourceIds} sources={sources} />
         </div>
       );
     default: {

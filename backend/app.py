@@ -9,17 +9,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
+import uuid
 
 import anyio
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 import account_profile
@@ -36,6 +39,7 @@ import market
 import myreports as mr
 import review_compare
 import review_history
+import sector_research_data as srd
 
 
 class _DisconnectAwareStreamingResponse(StreamingResponse):
@@ -102,7 +106,7 @@ _ORIGINS = [o.strip() for o in os.environ.get("VR_ALLOW_ORIGINS", "*").split(","
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ORIGINS,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -415,9 +419,11 @@ class ReportIn(BaseModel):
     sector_keys: list[str] | None = None
     source_url: str | None = None
     source_kind: str | None = None
+    model_config = ConfigDict(extra="forbid")
 
 
 class ReportMetaPatch(BaseModel):
+    """PATCH 元数据：字段未出现 = 保持原值；"" / [] = 明确清空；null = 由路由拒绝 400。"""
     model_config = ConfigDict(extra="forbid")
     title: str | None = None
     institution: str | None = None
@@ -1229,5 +1235,142 @@ def industry(top: int = Query(20, ge=5, le=50)):
         data = astock.industry_comparison(top_n=top)
         _DC_CACHE[key] = (_time.time(), data)
         return {"data": data}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BL001
         raise HTTPException(502, f"行业排名异常：{e}") from e
+
+
+# ---------------------------------------------------------------------------
+# 板块研究工作台：研报发现 / 导入 / 动态数据（第一批仅 PCB 真实可用）
+# ---------------------------------------------------------------------------
+
+
+class SectorReportImportIn(BaseModel):
+    """导入研报请求：只接受后端发现结果中的 external_id / info_code，禁止任意 URL。"""
+    model_config = ConfigDict(extra="forbid")
+    external_id: str = Field(..., min_length=1, max_length=64)
+    info_code: str | None = Field(default=None, max_length=64)
+
+
+@app.get("/api/sector-research/reports/{sector_key}")
+def sector_research_reports(
+    sector_key: str,
+    days: int | None = Query(None, ge=1, le=3650),
+    max_pages: int = Query(3, ge=1, le=10),
+    scope: str = Query("industry"),
+):
+    """发现板块研报（只返回发现结果，不自动归档）。支持 days / max_pages / scope。"""
+    result = srd.discover_sector_reports(sector_key, days=days, max_pages=max_pages, scope=scope)
+    return {"data": {"sector_key": result.source_key, "discovered": result.discovered,
+                   "filtered": result.filtered, "error": result.error}}
+
+
+@app.get("/api/sector-research/data/{sector_key}")
+def sector_research_data(sector_key: str):
+    """板块动态数据（一致预期 / 公告 / 新闻）。缺失字段用 null，不猜测。"""
+    try:
+        data = srd.get_sector_dynamic_data(sector_key)
+    except Exception as e:  # noqa: BL001
+        raise HTTPException(502, f"板块动态数据异常：{e}") from e
+    return {"data": data}
+
+
+@app.post("/api/sector-research/import/{sector_key}")
+def sector_research_import(sector_key: str, body: SectorReportImportIn):
+    """导入研报：只接受后端发现结果中的 external_id。后端重新核验来源仍存在、PDF 域名白名单、HTTPS、PDF 类型、≤25MB、SHA-256。"""
+    src = srd.get_sector_source(sector_key)
+    if src is None:
+        raise HTTPException(404, f"未注册的板块：{sector_key}")
+    # 校验该 external_id 仍在发现结果中存在
+    result = srd.discover_sector_reports(sector_key, max_pages=3)
+    if result.error:
+        raise HTTPException(502, result.error)
+    matched = next(
+        (r for r in result.discovered if r.get("external_id") == body.external_id),
+        None,
+    )
+    if matched is None:
+        raise HTTPException(400, "该 external_id 不在最新发现结果中，请重新发现")
+    info_code = body.info_code or matched.get("info_code")
+    if not info_code:
+        raise HTTPException(400, "缺少 info_code")
+    pdf_url = astock.pdf_url(info_code)
+    if not srd.pdf_url_allowed(pdf_url):
+        raise HTTPException(400, "PDF 链接不在允许域名或非 HTTPS")
+    try:
+        blob = _download_pdf(pdf_url)
+    except Exception as e:  # noqa: BL001
+        raise HTTPException(502, f"PDF 下载失败：{e}") from e
+    if not blob:
+        raise HTTPException(502, "PDF 内容为空")
+    file_sha256 = hashlib.sha256(blob).hexdigest()
+    rid = uuid.uuid4().hex
+    now_ms = int(_time.time() * 1000)
+    # 元数据归一化（a-stock 导入值）
+    industry_label = (
+        "PCB" if sector_key == "pcb"
+        else src.label.split("（")[0].strip() if src.label else sector_key
+    )
+    meta = {
+        "id": rid,
+        "name": f"{matched.get('title', info_code)}.pdf",
+        "industry": industry_label,
+        "size": len(blob),
+        "ext": ".pdf",
+        "ts": now_ms,
+        "file_sha256": file_sha256,
+        "imported_at": datetime.now(timezone.utc).isoformat(),
+        "title": matched.get("title") or info_code,
+        "institution": matched.get("institution") or "",
+        "publish_date": matched.get("publish_date") or "",
+        "sector_keys": [sector_key],
+        "source_url": pdf_url,
+        "source_kind": "report",
+        "source_provider": "eastmoney",
+        "external_id": info_code,
+        "info_code": info_code,
+        "report_scope": matched.get("report_scope"),
+        "report_type": "brokerage",
+    }
+    mr._validate_report_entry(meta)
+    with mr._LOCK:
+        items = mr._load_index()
+        # SHA-256 去重
+        for e in items:
+            if e.get("file_sha256") == file_sha256:
+                return {"data": {**e, "deduped": True}}
+        mr._ensure_dir()
+        entity_tmp = mr._tmp_name(str(mr.REPORTS_DIR / rid))
+        try:
+            with open(entity_tmp, "wb") as f:
+                f.write(blob)
+                f.flush()
+                os.fsync(f.fileno())
+            entity_path = mr.REPORTS_DIR / f"{rid}.pdf"
+            os.replace(entity_tmp, entity_path)
+        except Exception:
+            pass
+        items.append(meta)
+        mr._save_index(items)
+    return {"data": meta}
+
+
+def _report_download_session():
+    import requests
+    s = requests.Session()
+    s.headers.update({"User-Agent": getattr(astock, "UA", "Mozilla/5.0"),
+                     "Referer": "https://data.eastmoney.com/"})
+    return s
+
+
+def _download_pdf(url: str, max_bytes: int = 25 * 1024 * 1024) -> bytes:
+    """下载 PDF，限制大小；失败抛错由调用方处理。"""
+    r = _report_download_session().get(url, timeout=60, stream=True)
+    r.raise_for_status()
+    blob = b""
+    for chunk in r.iter_content(chunk_size=1 << 16):
+        if not chunk:
+            break
+        blob += chunk
+        if len(blob) > max_bytes:
+            raise ReportError(f"文件过大，上限 {max_bytes // 1024 // 1024}MB")
+    return blob

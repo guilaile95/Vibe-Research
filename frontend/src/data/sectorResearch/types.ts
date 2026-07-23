@@ -5,11 +5,20 @@
 
 export type ResearchTagStatus = "placeholder" | "draft" | "ready";
 
+export type SourceFactLevel = "已确认事实" | "公司口径" | "机构预测" | "产业传闻" | "分析推断";
+
 export type SourceRef = {
   id: string;
   title: string;
   org?: string;
+  /** 公开可访问 URL（http/https） */
   url?: string;
+  /** 关联的本地研报 id → 页面内链接到 /my-reports?report=<id> */
+  myReportId?: string;
+  /** 来源类型：report / whitepaper / company_filing / news / standard / other */
+  sourceType?: string;
+  /** 事实等级 */
+  factLevel?: SourceFactLevel;
   publishedAt?: string;
   note?: string;
 };

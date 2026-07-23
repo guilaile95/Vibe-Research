@@ -1069,13 +1069,14 @@ export const api = {
       ...(meta?.source_kind != null ? { source_kind: meta.source_kind } : {}),
     }),
   deleteReport: (id: string) => request<{ ok: boolean }>(`/myreports/${id}`, "DELETE"),
+  // 注意：get()/request() 已自动加 /api 前缀，这里只传 /myreports/... 即可，禁止重复 /api。
   browseMyReports: (group: MyReportsBrowseGroup, sectorKey?: string) => {
     const q = new URLSearchParams({ group });
     if (sectorKey) q.set("sector_key", sectorKey);
-    return get<MyReportsBrowseResult>(`/api/myreports/browse?${q.toString()}`);
+    return get<MyReportsBrowseResult>(`/myreports/browse?${q.toString()}`);
   },
   searchMyReports: (q: string) =>
-    get<MyReport[]>(`/api/myreports/search?q=${encodeURIComponent(q)}`),
+    get<MyReport[]>(`/myreports/search?q=${encodeURIComponent(q)}`),
   patchReport: (id: string, meta: {
     title?: string; institution?: string; publish_date?: string;
     sector_keys?: string[]; source_url?: string; source_kind?: string;

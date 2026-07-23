@@ -6,7 +6,8 @@
   放仓库外，重新下载/覆盖项目文件夹不会丢（issue #12）；≤v0.1.1 存 backend/.cache/myreports/，首次启动自动迁移（复制，旧目录保留作备份）。
 - 元数据存目录内 index.json；按文件名关键词自动打「行业」标签（best-effort，未命中记「未分类」）。
 - 统一研档档案：支持丰富元数据（标题 / 机构 / 发布日期 / 关联赛道 / 来源 / 类型）、SHA-256 去重、按时间·产业·机构浏览、全文检索。
-  新字段全部可选、向后兼容：旧 index.json 在首次启动时一次性自动升级（幂等、原子写、失败不阻塞启动）。
+- 新字段全部可选、向后兼容：旧 index.json 在读取时即时规范化（不写回、不创建 .bak、不计算 SHA-256），
+  用户显式上传 / 编辑 / 删除时才写索引。禁止在 import / 启动 / 只读 GET 时重写用户真实 index.json。
 
 研报是用户私有数据，只落本地磁盘。
 """
@@ -85,13 +86,21 @@ _PUBLISH_DATE_RE = re.compile(
     r"^\d{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?)?$"
 )
 
+# 来源链接 scheme 白名单：只允许空串、http://、https://。拒绝 javascript: / data: / file: / ftp: 与无 scheme 的本地路径。
+_SOURCE_URL_RE = re.compile(r"^(?:|https?://.+)$", re.IGNORECASE)
+
+# 元数据字段长度上限（防滥用 / 注入）。
+FIELD_MAX_LENGTH = {"title": 500, "institution": 200, "source_url": 2000, "source_kind": 50}
+# sector_keys 条目上限。
+MAX_SECTOR_KEYS = 20
+
 
 class ReportError(ValueError):
     """上传/校验类错误（对应 HTTP 400/413）。"""
 
 
 class ReportIndexCorruptedError(RuntimeError):
-    """研报索引文件损坏，已停止读写以避免覆盖。"""
+    """本地研报索引文件损坏，已停止读写以避免覆盖。"""
     MESSAGE = (
         "本地研报索引文件损坏，已停止读写以避免覆盖；"
         "请检查 index.json，并在有备份时从 index.json.bak 恢复"
@@ -189,12 +198,33 @@ def _validate_report_entry(entry) -> None:
             raise ReportIndexCorruptedError()
 
 
+# ---------------------------------------------------------------------------
+# 板块注册表（用于 sector_keys 白名单校验）。
+# 从 sectors.json 读取，失败时降级为不校验（不阻塞研报功能）。
+# ---------------------------------------------------------------------------
+_SECTOR_KEYS_CACHE: frozenset[str] | None = None
+
+
+def _valid_sector_keys() -> frozenset[str] | None:
+    """返回合法 sector key 集合；读取失败返回 None（降级为不校验）。"""
+    global _SECTOR_KEYS_CACHE
+    if _SECTOR_KEYS_CACHE is not None:
+        return _SECTOR_KEYS_CACHE
+    try:
+        sectors_json = Path(__file__).resolve().parent.parent / "frontend" / "src" / "data" / "sectors.json"
+        raw = json.loads(sectors_json.read_text(encoding="utf-8"))
+        _SECTOR_KEYS_CACHE = frozenset(s["key"] for s in raw.get("sectors", []))
+    except Exception:
+        _SECTOR_KEYS_CACHE = None
+    return _SECTOR_KEYS_CACHE
+
+
 def _ensure_dir() -> None:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _load_index() -> list[dict]:
-    """按 id 取 (磁盘路径, 原始文件名)；不存在返回 None。"""
+    """加载并严格校验 index.json（写入前必须经过此函数）。"""
     ip = _index_path()
     if not ip.exists():
         return []
@@ -211,6 +241,100 @@ def _load_index() -> list[dict]:
     except json.JSONDecodeError:
         raise ReportIndexCorruptedError() from None
     return _validate_index_data(data)
+
+
+# ---------------------------------------------------------------------------
+# 读时规范化（不写回、不计算 SHA-256、不创建 .bak）。
+# 目的：旧 index.json 不写回也能读取；缺失的新字段返回安全默认值。
+# ---------------------------------------------------------------------------
+
+def _ms_to_iso(ts: float) -> str:
+    """毫秒 epoch → ISO 8601（UTC）；失败回退到当前时间，绝不返回空串。"""
+    try:
+        return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat()
+    except (OSError, OverflowError, ValueError):
+        return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_entry_for_read(e: dict) -> dict:
+    """把一条旧格式条目就地补全为新 schema的只读副本（不写盘、不计算 SHA-256）。返回新 dict。"""
+    name = e.get("name", "")
+    ext = e.get("ext", "")
+    # 展示标题：默认取文件名去掉扩展名；无扩展名则用文件名本身。
+    title = os.path.splitext(name)[0] if ext else name
+    normalized = dict(e)  # 浅拷贝，不动原条目
+    normalized["title"] = title or name
+    normalized.setdefault("imported_at", _ms_to_iso(e.get("ts", 0)))
+    normalized.setdefault("file_sha256", "")
+    normalized.setdefault("institution", "")
+    normalized.setdefault("publish_date", "")
+    normalized.setdefault("sector_keys", [])
+    normalized.setdefault("source_url", "")
+    normalized.setdefault("source_kind", "")
+    return normalized
+
+
+def _load_index_normalized() -> list[dict]:
+    out: list[dict] = []
+    for e in _load_index():
+        out.append(_normalize_entry_for_read(e))
+    return out
+
+
+def _load_index_raw() -> list[dict]:
+    """读时规范化加载：旧 index.json 不写回也能读取，缺失字段返回安全默认值。"""
+    return _load_index_normalized()
+
+
+# ---------------------------------------------------------------------------
+# 显式迁移（仅用户调用或测试触发，禁止在 import / 只读 GET 时自动执行）。
+# ---------------------------------------------------------------------------
+
+def _migrate_index() -> None:
+    """一次性把旧 index.json 升级为新 schema。幂等、原子写、失败不阻塞启动（告警后继续）。"""
+    try:
+        ip = _index_path()
+        if not ip.exists():
+            return
+        items = _load_index()
+        changed = False
+        for e in items:
+            if "imported_at" in e:
+                continue  # 已升级，跳过
+            _upgrade_entry(e)
+            changed = True
+        if not changed:
+            return
+        # 升级后严格校验全部条目，确保写回去的是合法数据。
+        for e in items:
+            _validate_report_entry(e)
+        _save_index(items)
+    except Exception as e:  # noqa: BLE001
+        # 迁移失败不阻塞启动；旧条目原样保留，下次启动会重试。
+        print(f"[vibe-research] 研报索引元数据迁移失败（旧条目保留，不影响启动）：{e}", file=sys.stderr)
+
+
+def _upgrade_entry(e: dict) -> None:
+    """把一条旧格式条目就地补全为新 schema（写盘前用）。会计算 SHA-256。"""
+    name = e.get("name", "")
+    ext = e.get("ext", "")
+    title = os.path.splitext(name)[0] if ext else name
+    e["title"] = title or name
+    e["imported_at"] = _ms_to_iso(e.get("ts", 0))
+    rid = e.get("id", "")
+    entity_path = REPORTS_DIR / f"{rid}{ext}" if rid else None
+    if entity_path is not None and entity_path.exists():
+        try:
+            e["file_sha256"] = hashlib.sha256(entity_path.read_bytes()).hexdigest()
+        except OSError:
+            e["file_sha256"] = ""
+    else:
+        e["file_sha256"] = ""
+    e.setdefault("institution", "")
+    e.setdefault("publish_date", "")
+    e.setdefault("sector_keys", [])
+    e.setdefault("source_url", "")
+    e.setdefault("source_kind", "")
 
 
 def _save_index(items: list[dict]) -> None:
@@ -257,66 +381,51 @@ def _save_index(items: list[dict]) -> None:
                     pass
 
 
-def _ms_to_iso(ts: float) -> str:
-    """毫秒 epoch → ISO 8601（UTC）；失败回退到当前时间，绝不返回空串。"""
+# ---------------------------------------------------------------------------
+# 校验辅助
+# ---------------------------------------------------------------------------
+
+def _is_valid_publish_date(value: str) -> bool:
+    """真实日历校验：YYYY / YYYY-MM / YYYY-MM-DD，拒绝 2026-02-31、2026-13、0000 等。"""
+    if not _PUBLISH_DATE_RE.match(value):
+        return False
+    year = int(value[:4])
+    if year == 0:
+        return False
+    parts = value.split("-")
     try:
-        return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat()
-    except (OSError, OverflowError, ValueError):
-        return datetime.now(timezone.utc).isoformat()
+        if len(parts) == 1:
+            datetime(year, 1, 1)
+        elif len(parts) == 2:
+            datetime(year, int(parts[1]), 1)
+        else:
+            datetime(year, int(parts[1]), int(parts[2]))
+        return True
+    except ValueError:
+        return False
 
 
-def _upgrade_entry(e: dict) -> None:
-    """把一条旧格式条目就地补全为新 schema（不写盘）。"""
-    name = e.get("name", "")
-    ext = e.get("ext", "")
-    # 展示标题：默认取文件名去掉扩展名；无扩展名则用文件名本身。
-    title = os.path.splitext(name)[0] if ext else name
-    e["title"] = title or name
-    # 归档日期：从旧 ts（毫秒 epoch）派生，服务器设定。
-    e["imported_at"] = _ms_to_iso(e.get("ts", 0))
-    # SHA-256：实体文件还在就算一个，否则留空（不伪造）。
-    rid = e.get("id", "")
-    entity_path = REPORTS_DIR / f"{rid}{ext}" if rid else None
-    if entity_path is not None and entity_path.exists():
-        try:
-            e["file_sha256"] = hashlib.sha256(entity_path.read_bytes()).hexdigest()
-        except OSError:
-            e["file_sha256"] = ""
-    else:
-        e["file_sha256"] = ""
-    e.setdefault("institution", "")
-    e.setdefault("publish_date", "")
-    e.setdefault("sector_keys", [])
-    e.setdefault("source_url", "")
-    e.setdefault("source_kind", "")
+def _is_valid_source_url(value: str) -> bool:
+    """来源链接 scheme校验：只允许空串、http://、https://。"""
+    return bool(_SOURCE_URL_RE.match(value))
 
 
-def _migrate_index() -> None:
-    """首次启动一次性把旧 index.json 升级到新 schema。幂等、原子写、失败不阻塞启动（告警后继续）。"""
-    try:
-        ip = _index_path()
-        if not ip.exists():
-            return
-        items = _load_index()
-        changed = False
-        for e in items:
-            if "imported_at" in e:
-                continue  # 已升级，跳过
-            _upgrade_entry(e)
-            changed = True
-        if not changed:
-            return
-        # 升级后严格校验全部条目，确保写回去的是合法数据。
-        for e in items:
-            _validate_report_entry(e)
-        _save_index(items)
-    except Exception as e:  # noqa: BLE001
-        # 迁移失败不阻塞启动；旧条目原样保留，下次启动会重试。
-        print(f"[vibe-research] 研报索引元数据迁移失败（旧条目保留，不影响启动）：{e}", file=sys.stderr)
-
-
-# 首次启动一次性迁移（与 _migrate_legacy 同在 import 时运行，模块级幂等）。
-_migrate_index()
+def _normalize_sector_keys(value: list[str] | None) -> list[str]:
+    """sector_keys 去重 + 保持顺序；返回 None 表示输入非法。"""
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) > MAX_SECTOR_KEYS:
+        return None
+    for v in value:
+        if not isinstance(v, str) or not v:
+            return None
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in value:
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
 
 
 def classify(filename: str) -> str:
@@ -335,8 +444,9 @@ def _sanitize_name(name: str) -> str:
 
 
 def list_reports() -> list[dict]:
-    """按上传时间倒序返回元数据列表。"""
-    return sorted(_load_index(), key=lambda r: r.get("ts", 0), reverse=True)
+    """按上传时间降序返回元数据的规范化只读副本（不写盘）。"""
+    items = _load_index_raw()
+    return sorted(items, key=lambda r: r.get("ts", 0), reverse=True)
 
 
 def save_report(
@@ -377,13 +487,31 @@ def save_report(
 
     # 元数据校验（fail-closed：非法输入立即 400，不写任何文件）。
     if publish_date:
-        if not _PUBLISH_DATE_RE.match(publish_date):
-            raise ReportError("发布日期格式应为 YYYY-MM-DD / YYYY-MM / YYYY")
-    if sector_keys is not None:
-        if not isinstance(sector_keys, list) or any(not isinstance(x, str) for x in sector_keys):
-            raise ReportError("sector_keys 须为字符串列表")
+        if not _is_valid_publish_date(publish_date):
+            raise ReportError("发布日期格式无效或为不存在日期；应为 YYYY-MM-DD / YYYY-MM / YYYY")
+    if source_url and not _is_valid_source_url(source_url):
+        raise ReportError("来源链接仅允许 http:// 或 https://")
     if source_kind is not None and source_kind not in _SOURCE_KINDS:
         raise ReportError(f"source_kind 无效，支持：{' / '.join(_SOURCE_KINDS)}")
+    if title is not None and len(title) > FIELD_MAX_LENGTH["title"]:
+        raise ReportError(f"标题过长（{len(title)}），上限 {FIELD_MAX_LENGTH['title']}")
+    if institution is not None and len(institution) > FIELD_MAX_LENGTH["institution"]:
+        raise ReportError(f"机构过长（{len(institution)}），上限 {FIELD_MAX_LENGTH['institution']}")
+    if source_url is not None and len(source_url) > FIELD_MAX_LENGTH["source_url"]:
+        raise ReportError(f"来源链接过长（{len(source_url)}），上限 {FIELD_MAX_LENGTH['source_url']}")
+
+    # sector_keys 规范化 + 白名单校验。未提供（None）→ 默认 []。
+    if sector_keys is None:
+        norm_keys: list[str] = []
+    else:
+        norm_keys = _normalize_sector_keys(list(sector_keys))
+        if norm_keys is None:
+            raise ReportError(f"sector_keys 须为非空字符串列表，每项 ≤{MAX_SECTOR_KEYS} 项")
+        allowed_keys = _valid_sector_keys()
+        if allowed_keys is not None:
+            bad = [k for k in norm_keys if k not in allowed_keys]
+            if bad:
+                raise ReportError(f"sector_keys 含未知板块：{', '.join(bad)}")
 
     file_sha256 = hashlib.sha256(blob).hexdigest()
     rid = uuid.uuid4().hex
@@ -401,7 +529,7 @@ def save_report(
         "title": title if title else (os.path.splitext(fname)[0] or fname),
         "institution": institution or "",
         "publish_date": publish_date or "",
-        "sector_keys": list(sector_keys) if sector_keys else [],
+        "sector_keys": norm_keys,
         "source_url": source_url or "",
         "source_kind": source_kind or "",
     }
@@ -411,9 +539,27 @@ def save_report(
     with _LOCK:
         items = _load_index()
 
-        # SHA-256 去重：同内容已归档则不再写重复文件，返回既有条目 + deduped 标记。
+        # SHA-256 去重：同内容已归档则合并 sector_keys + 仅补空字段，不写重复文件。
         for e in items:
             if e.get("file_sha256") == file_sha256:
+                merged_keys = list(e.get("sector_keys", []))
+                for k in norm_keys:
+                    if k not in merged_keys:
+                        merged_keys.append(k)
+                e["sector_keys"] = merged_keys
+                # 仅补旧记录中为空的合法元数据，不静默覆盖用户已有非空元数据。
+                if not e.get("institution") and institution:
+                    e["institution"] = institution
+                if not e.get("publish_date") and publish_date:
+                    e["publish_date"] = publish_date
+                if not e.get("source_url") and source_url:
+                    e["source_url"] = source_url
+                if not e.get("source_kind") and source_kind:
+                    e["source_kind"] = source_kind
+                if not e.get("title") or e["title"] == os.path.splitext(e.get("name", ""))[0]:
+                    if title:
+                        e["title"] = title
+                _save_index(items)
                 return {**e, "deduped": True}
 
         # 写实体文件
@@ -476,25 +622,60 @@ def delete_report(rid: str) -> bool:
 
 
 def update_report_meta(rid: str, changes: dict) -> dict | None:
-    """部分更新元数据（PATCH）。不允许改 id / name / ext / size / ts / 内容；更新后严格校验。
-    条目不存在返回 None。"""
+    """部分更新元数据（PATCH）。
+
+    语义：
+      - 字段未出现（exclude_unset）：保持原值；
+      - 字符串字段传 ""：明确清空；sector_keys 传 []：明确清空；
+      - 任意字段传 null：拒绝 HTTP 400。
+    不允许改 id / name / ext / size / ts / 内容；条目不存在返回 None。
+    """
     allowed = {"title", "institution", "publish_date", "sector_keys", "source_url", "source_kind"}
     unknown = set(changes) - allowed
     if unknown:
         raise ReportError(f"不可修改的字段：{', '.join(sorted(unknown))}")
 
+    # null 明确拒绝（HTTP 400）。
+    for k, v in changes.items():
+        if v is None:
+            raise ReportError(f"字段 {k} 不允许为 null；如需清空字符串请传 ''")
+
     if "publish_date" in changes:
         pd = changes["publish_date"]
-        if pd and not _PUBLISH_DATE_RE.match(pd):
-            raise ReportError("发布日期格式应为 YYYY-MM-DD / YYYY-MM / YYYY")
-    if "sector_keys" in changes:
-        sk = changes["sector_keys"]
-        if not isinstance(sk, list) or any(not isinstance(x, str) for x in sk):
-            raise ReportError("sector_keys 须为字符串列表")
+        if pd and not _is_valid_publish_date(pd):
+            raise ReportError("发布日期格式无效或为不存在日期；应为 YYYY-MM-DD / YYYY-MM / YYYY")
+    if "source_url" in changes:
+        su = changes["source_url"]
+        if su and not _is_valid_source_url(su):
+            raise ReportError("来源链接仅允许 http:// 或 https://")
     if "source_kind" in changes:
         sk = changes["source_kind"]
         if sk and sk not in _SOURCE_KINDS:
             raise ReportError(f"source_kind 无效，支持：{' / '.join(_SOURCE_KINDS)}")
+    if "title" in changes:
+        t = changes["title"]
+        if t and len(t) > FIELD_MAX_LENGTH["title"]:
+            raise ReportError(f"标题过长（{len(t)}），上限 {FIELD_MAX_LENGTH['title']}")
+    if "institution" in changes:
+        inst = changes["institution"]
+        if inst and len(inst) > FIELD_MAX_LENGTH["institution"]:
+            raise ReportError(f"机构过长（{len(inst)}），上限 {FIELD_MAX_LENGTH['institution']}")
+    if "source_url" in changes:
+        su = changes["source_url"]
+        if su and len(su) > FIELD_MAX_LENGTH["source_url"]:
+            raise ReportError(f"来源链接过长（{len(su)}），上限 {FIELD_MAX_LENGTH['source_url']}")
+
+    # sector_keys 规范化 + 白名单校验。
+    if "sector_keys" in changes:
+        norm = _normalize_sector_keys(changes["sector_keys"])
+        if norm is None:
+            raise ReportError(f"sector_keys 须为非空字符串列表，每项 ≤{MAX_SECTOR_KEYS} 项")
+        allowed_keys = _valid_sector_keys()
+        if allowed_keys is not None:
+            bad = [k for k in norm if k not in allowed_keys]
+            if bad:
+                raise ReportError(f"sector_keys 含未知板块：{', '.join(bad)}")
+        changes["sector_keys"] = norm
 
     with _LOCK:
         items = _load_index()

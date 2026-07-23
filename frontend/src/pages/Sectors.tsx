@@ -34,9 +34,12 @@ export function Sectors() {
             ? getDefaultResearchPath(s.key) ?? `/sectors/${s.key}`
             : `/sectors/${s.key}`;
 
+          // 区分：仅有 Tag 规划（未落地）≠ 已有真实内容。避免"已规划 6 个栏目"误导用户以为有内容。
           let footer: string;
-          if (tagCount > 0) {
+          if (workspace) {
             footer = `${tagCount} 个研究栏目`;
+          } else if (tagCount > 0) {
+            footer = `已规划 ${tagCount} 个栏目`;
           } else if (s.verified) {
             footer = `${s.nodes.length} 个环节`;
           } else {

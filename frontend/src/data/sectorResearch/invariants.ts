@@ -20,13 +20,47 @@ export function checkWorkspace(ws: SectorResearchWorkspace): WorkspaceCheckResul
   if (!slugs.includes(ws.defaultTag)) {
     errors.push(`defaultTag "${ws.defaultTag}" not in tags`);
   }
+  const sourceIds = new Set(ws.sources.map((s) => s.id));
   for (const t of ws.tags) {
     if (!t.slug || !t.label || !t.title) {
       errors.push(`tag incomplete: ${t.slug || "(empty slug)"}`);
     }
     if (!t.blocks.length) errors.push(`tag "${t.slug}" has no blocks`);
+    errors.push(...checkBlockInvariants(t.slug, t.blocks, sourceIds));
   }
   return { ok: errors.length === 0, errors };
+}
+
+/** 校验内容块：sourceIds 必须存在于 workspace.sources；table 行列数与 headers 一致；source id 不重复。 */
+export function checkBlockInvariants(
+  tagSlug: string,
+  blocks: import("./types.ts").ContentBlock[],
+  sourceIds: Set<string>,
+): string[] {
+  const errors: string[] = [];
+  for (const block of blocks) {
+    if (block.type === "placeholder") continue;
+    const ids = block.sourceIds;
+    if (ids) {
+      if (new Set(ids).size !== ids.length) {
+        errors.push(`tag "${tagSlug}" ${block.type} has duplicate sourceIds`);
+      }
+      for (const id of ids) {
+        if (!sourceIds.has(id)) {
+          errors.push(`tag "${tagSlug}" ${block.type} sourceId "${id}" not in workspace.sources`);
+        }
+      }
+    }
+    if (block.type === "table" || block.type === "compareTable") {
+      const expected = block.headers.length;
+      for (const row of block.rows) {
+        if (row.length !== expected) {
+          errors.push(`tag "${tagSlug}" ${block.type} row length ${row.length} != headers ${expected}`);
+        }
+      }
+    }
+  }
+  return errors;
 }
 
 export function expectedPcbTagSlugs(): string[] {
