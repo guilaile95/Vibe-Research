@@ -286,47 +286,59 @@ def test_write_failure_replace_does_not_damage_original():
         except OSError:
             pass
 
+
+
 def test_real_bak_not_modified_by_test():
-    """既有测试隔离方式（只 patch CACHE_DIR 和 PF_FILE）不会写入真实备份路径。"""
-    # Record real state before test
-    home = os.path.expanduser("~")
-    real_bak = os.path.join(home, ".vibe-research", "portfolio.json.bak")
-    real_bak_existed = os.path.exists(real_bak)
-    real_bak_bytes = open(real_bak, "rb").read() if real_bak_existed else None
+    """只 patch CACHE_DIR 和 PF_FILE 时，备份路径跟随 PF_FILE，不会写到其他目录。"""
+    import tempfile
+    old_dir = tempfile.mkdtemp()
+    isolated_dir = tempfile.mkdtemp()
 
-    tmp = os.path.join(os.environ.get("TEMP", "/tmp"), f"pf-isolate-{os.urandom(4).hex()}")
-    os.makedirs(tmp, exist_ok=True)
-    pf_file = os.path.join(tmp, "portfolio.json")
-    bak_file = pf_file + ".bak"
+    old_pf = os.path.join(old_dir, "portfolio.json")
+    old_bak = old_pf + ".bak"
+    isolated_pf = os.path.join(isolated_dir, "portfolio.json")
+    isolated_bak = isolated_pf + ".bak"
 
+    # Write original sentinel data + sentinel .bak
     norm = {"holdings": [{"code": "000001", "shares": 100, "cost": 10.0}], "last_refresh": None}
-    with open(pf_file, "w", encoding="utf-8") as f:
+    with open(old_pf, "w", encoding="utf-8") as f:
         json.dump(norm, f)
-    pre_bytes = open(pf_file, "rb").read()
+    pre_bytes = open(old_pf, "rb").read()
+    # Sentinel .bak that should remain untouched
+    with open(old_bak, "w", encoding="utf-8") as f:
+        json.dump({"sentinel": True}, f)
+    sentinel_bytes = open(old_bak, "rb").read()
+    # Also write the same norm to isolated path
+    with open(isolated_pf, "w", encoding="utf-8") as f:
+        json.dump(norm, f)
+    isolated_pre_bytes = open(isolated_pf, "rb").read()
 
     try:
-        # Only patch CACHE_DIR and PF_FILE - like existing tests do
-        with patch.multiple(pf, CACHE_DIR=tmp, PF_FILE=pf_file):
+        # Only patch CACHE_DIR and PF_FILE — same as existing tests
+        with patch.multiple(pf, CACHE_DIR=isolated_dir, PF_FILE=isolated_pf):
             pf.add_holding("000002", 200, 20.0)
 
-        # Temp .bak exists and is correct
-        assert os.path.exists(bak_file)
-        with open(bak_file, "rb") as f:
-            assert f.read() == pre_bytes
+        # Isolated dir: .bak was created and matches pre-save
+        assert os.path.exists(isolated_bak), "隔离目录应生成 .bak"
+        with open(isolated_bak, "rb") as f:
+            assert f.read() == isolated_pre_bytes, "隔离目录 .bak 应等于修改前主文件"
 
-        # Real .bak unchanged
-        assert os.path.exists(real_bak) == real_bak_existed
-        if real_bak_existed:
-            with open(real_bak, "rb") as f:
-                assert f.read() == real_bak_bytes, "真实备份文件被修改"
+        # Old dir: sentinel .bak unchanged, no new files
+        with open(old_bak, "rb") as f:
+            assert f.read() == sentinel_bytes, "旧目录 sentinel .bak 被修改"
+        # No .bak.tmp should remain anywhere
+        for d in (old_dir, isolated_dir):
+            tmp_files = [fn for fn in os.listdir(d) if ".tmp." in fn]
+            assert len(tmp_files) == 0, f"{d} 有残留临时文件: {tmp_files}"
+
     finally:
-        _bak2 = pf_file + ".bak"
-        for f in (pf_file, _bak2):
+        for d in (old_dir, isolated_dir):
+            for f in os.listdir(d):
+                try:
+                    os.remove(os.path.join(d, f))
+                except OSError:
+                    pass
             try:
-                os.remove(f)
-            except FileNotFoundError:
+                os.rmdir(d)
+            except OSError:
                 pass
-        try:
-            os.rmdir(tmp)
-        except OSError:
-            pass

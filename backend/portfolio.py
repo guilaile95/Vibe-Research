@@ -93,8 +93,7 @@ def _load():
 def _tmp_name(base):
     return f"{base}.tmp.{os.urandom(4).hex()}"
 
-def _bak_path():
-    return PF_FILE + ".bak"
+
 
 
 
