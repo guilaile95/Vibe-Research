@@ -78,6 +78,56 @@ export interface MyReportsBrowseResult {
   total: number;
 }
 
+/** 板块研报发现 scope：行业 / 公司 / 全部 */
+export type SectorReportScope = "industry" | "company" | "all";
+
+export type DiscoveredSectorReport = {
+  source_provider?: string;
+  external_id: string | null;
+  info_code: string | null;
+  title: string | null;
+  institution: string | null;
+  publish_date: string | null;
+  industry_name?: string | null;
+  company_code?: string | null;
+  company_name?: string | null;
+  pdf_url?: string | null;
+  report_scope?: string | null;
+  report_type?: string | null;
+  matched_keywords?: string[];
+  relevance_score?: number;
+  rating?: string | null;
+};
+
+export type SectorReportsDiscoveryResult = {
+  sector_key: string;
+  discovered: DiscoveredSectorReport[];
+  filtered: DiscoveredSectorReport[];
+  error: string | null;
+};
+
+export type SectorDynamicPanel = {
+  status: "ok" | "error";
+  data: unknown;
+  error: string | null;
+};
+
+export type SectorDynamicCompany = {
+  code: string;
+  name?: string;
+  panels: Record<string, SectorDynamicPanel>;
+};
+
+export type SectorDynamicData = {
+  sector_key: string;
+  source: string;
+  fetched_at: string;
+  status: "normal" | "partial" | "unavailable";
+  warnings: string[];
+  companies: SectorDynamicCompany[];
+  error?: string;
+};
+
 // 下载/预览研报：带鉴权头 fetch → blob → 触发浏览器下载（<a download> 无法带 Authorization，故走 blob）。
 export async function downloadReport(id: string, name: string): Promise<void> {
   const resp = await fetch(`/api/myreports/file/${id}`, { headers: authHeaders() });
@@ -1092,4 +1142,32 @@ export const api = {
     }
     return request<MyReport>(`/myreports/${id}`, "PATCH", body);
   },
+
+  /**
+   * 板块研报发现（不自动归档）。
+   * 注意：get()/request() 已自动加 /api 前缀，路径禁止写 /api/...
+   */
+  discoverSectorReports: (
+    sectorKey: string,
+    opts?: { days?: number; maxPages?: number; scope?: SectorReportScope },
+  ) => {
+    const q = new URLSearchParams();
+    if (opts?.days != null) q.set("days", String(opts.days));
+    if (opts?.maxPages != null) q.set("max_pages", String(opts.maxPages));
+    if (opts?.scope) q.set("scope", opts.scope);
+    const qs = q.toString();
+    return get<SectorReportsDiscoveryResult>(
+      `/sector-research/reports/${encodeURIComponent(sectorKey)}${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  /** 导入发现研报到我的研报：body 仅 { external_id } */
+  importSectorReport: (sectorKey: string, externalId: string) =>
+    request<MyReport>(`/sector-research/import/${encodeURIComponent(sectorKey)}`, "POST", {
+      external_id: externalId,
+    }),
+
+  /** 板块动态数据（一致预期 / 公告等） */
+  getSectorResearchData: (sectorKey: string) =>
+    get<SectorDynamicData>(`/sector-research/data/${encodeURIComponent(sectorKey)}`),
 };

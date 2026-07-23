@@ -8,6 +8,8 @@ import {
   resolveTagSlug,
 } from "@/data/sectorResearch";
 import { SectorResearchContent } from "./SectorResearchContent";
+import { SectorReportDiscoveryPanel } from "./SectorReportDiscoveryPanel";
+import { SectorResearchLiveData } from "./SectorResearchLiveData";
 import { cn } from "@/lib/utils";
 
 /**
@@ -96,6 +98,12 @@ export function SectorResearchLayout() {
       </nav>
 
       <SectorResearchContent tag={activeTag} sources={workspace.sources} />
+
+      <div className="mt-8 space-y-4">
+        <h2 className="text-sm font-semibold">最新资料</h2>
+        <SectorReportDiscoveryPanel sectorKey={workspace.key} />
+        <SectorResearchLiveData sectorKey={workspace.key} />
+      </div>
     </div>
   );
 }
