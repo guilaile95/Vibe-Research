@@ -92,9 +92,9 @@ export const smartDrivingSources: SourceRef[] = [
     url: "https://www.mee.gov.cn/zcwj/gwywj/202011/t20201103_806156.shtml",
     sourceType: "official",
     factLevel: "\u5df2\u786e\u8ba4\u4e8b\u5b9e",
-    publishedAt: "2020-11-02",
+    publishedAt: "2020-11-03",
     accessedAt: "2026-07-24",
     supports: "\u89c4\u5212\u660e\u786e\u9ad8\u5ea6\u81ea\u52a8\u9a7e\u9a76\u6c7d\u8f66\u613f\u666f\u3001\u667a\u80fd\u7f51\u8054\u6c7d\u8f66\u6807\u51c6\u4f53\u7cfb\u4e0e\u8f66\u8f7d\u64cd\u4f5c\u7cfb\u7edf/\u57df\u63a7\u53d1\u5c55\u65b9\u5411",
-    note: "\u65b0\u80fd\u6e90\u6c7d\u8f66\u4ea7\u4e1a\u53d1\u5c55\u89c4\u5212\u667a\u80fd\u7f51\u8054\u4e13\u7ae0",
+    note: "\u65b0\u80fd\u6e90\u6c7d\u8f66\u4ea7\u4e1a\u53d1\u5c55\u89c4\u5212\u667a\u80fd\u7f51\u8054\u4e13\u7ae0\uff08\u7f51\u9875\u53d1\u5e03\u65e5\u671f\uff1a2020-11-03\uff09",
   },
 ];

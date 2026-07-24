@@ -126,14 +126,22 @@ test("Batch 2 source integrity, block type diversity, and sourceId rules", () =>
     for (const s of ws.sources) {
       assert.ok(usedSourceIds.has(s.id), `workspace ${key} source "${s.id}" is orphaned`);
       assert.ok(s.url && s.url.startsWith("http"), `source ${s.id} missing valid http/https url: ${s.url}`);
-      // Forbid generic root/category URLs
       assert.equal(FORBIDDEN_ROOT_URLS.includes(s.url), false, `source ${s.id} uses forbidden generic root/category URL: ${s.url}`);
       assert.ok(s.accessedAt, `source ${s.id} missing accessedAt`);
       if (s.publishedAt) assert.ok(!isNaN(Date.parse(s.publishedAt)), `${key} source "${s.id}" invalid publishedAt`);
       if (s.accessedAt) assert.ok(!isNaN(Date.parse(s.accessedAt)), `${key} source "${s.id}" invalid accessedAt`);
       assert.ok(s.supports, `source ${s.id} missing supports`);
-      // Forbid unbacked phrasing like 固态电池专章
       assert.equal(s.title.includes("固态电池专章") || (s.note && s.note.includes("固态电池专章")), false, `source ${s.id} uses unsupported phrase 固态电池专章`);
+      // Domain hard assertions for specific orgs
+      if (s.org.includes("中国民用航空局") && s.sourceType === "official") {
+        assert.equal(s.url.includes("cninfo.com.cn"), false, `CAAC official source ${s.id} must not use cninfo URL`);
+      }
+      if (s.org.includes("FAA")) {
+        assert.ok(s.url.includes("faa.gov") || s.url.includes("federalregister.gov"), `FAA source ${s.id} domain must be faa.gov or federalregister.gov`);
+      }
+      if (s.org.includes("RTCA")) {
+        assert.ok(s.url.includes("rtca.org"), `RTCA source ${s.id} domain must be rtca.org`);
+      }
     }
   }
 });
@@ -181,7 +189,7 @@ test("Batch 2 verified announcement IDs whitelist (hard fail)", () => {
 });
 
 test("Batch 2 policy and standard SourceRef identity & mapping rules", () => {
-  const policyItems = [{"id": "S-SEMI-MIIT-POLICY", "domain": "mee.gov.cn", "urlKw": "t20200806_792957.shtml", "titleKw": "\u56fd\u53d1\u30142020\u30158\u53f7", "org": "\u56fd\u52a1\u9662 / \u5de5\u4fe1\u90e8", "pub": "2020-08-04"}, {"id": "S-DRIVE-MIIT-POLICY", "domain": "mee.gov.cn", "urlKw": "806156", "titleKw": "\u56fd\u529e\u53d1\u30142020\u301539\u53f7", "org": "\u56fd\u52a1\u9662\u529e\u516c\u5385", "pub": "2020-11-02"}, {"id": "S-SSBAT-POLICY-NEV", "domain": "gov.cn", "urlKw": "content_5556716.htm", "titleKw": "\u56fd\u529e\u53d1\u30142020\u301539\u53f7", "org": "\u56fd\u52a1\u9662\u529e\u516c\u5385", "pub": "2020-11-02"}, {"id": "S-LOWALT-POLICY-FRAMEWORK", "domain": "ncsti.gov.cn", "urlKw": "t20240402_152639.html", "titleKw": "\u5de5\u4fe1\u90e8\u8054\u91cd\u88c5\u30142024\u301552\u53f7", "org": "\u5de5\u4e1a\u548c\u4fe1\u606f\u5316\u90e8", "pub": "2024-03-27"}, {"id": "S-LOWALT-CAAC-CCAR21", "domain": "gov.cn", "urlKw": "content_5669049.htm", "titleKw": "CCAR-21-R5", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40 / \u4ea4\u901a\u8fd0\u8f93\u90e8", "pub": "2024-02-18"}, {"id": "S-LOWALT-CAAC-CCAR91", "domain": "mee.gov.cn", "urlKw": "t20211026_957884.shtml", "titleKw": "CCAR-91-R4", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40 / \u4ea4\u901a\u8fd0\u8f93\u90e8", "pub": "2022-01-04"}, {"id": "S-LOWALT-CAAC-CCAR135", "domain": "mee.gov.cn", "urlKw": "t20220119_967664.shtml", "titleKw": "CCAR-135\u90e8", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40 / \u4ea4\u901a\u8fd0\u8f93\u90e8", "pub": "2020-01-16"}, {"id": "S-LOWALT-EH216-TC", "domain": "cninfo.com.cn", "urlKw": "1219800529", "titleKw": "EH216-S", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40", "pub": "2023-10-13"}, {"id": "S-LOWALT-EASA-SC-VTOL", "domain": "easa.europa.eu", "urlKw": "20857", "titleKw": "SC-VTOL-01", "org": "EASA\uff08\u6b27\u6d32\u822a\u7a7a\u5b89\u5168\u5c40\uff09", "pub": "2019-07-02"}, {"id": "S-LOWALT-ISO26262-STD", "domain": "iso.org", "urlKw": "26262", "titleKw": "ISO 26262", "org": "ISO\uff08\u56fd\u9645\u6807\u51c6\u5316\u7ec4\u7ec7\uff09", "pub": "2018-12-01"}];
+  const policyItems = [{"id": "S-SEMI-MIIT-POLICY", "domain": "mee.gov.cn", "urlKw": "t20200806_792957.shtml", "titleKw": "\u56fd\u53d1\u30142020\u30158\u53f7", "org": "\u56fd\u52a1\u9662 / \u5de5\u4fe1\u90e8", "pub": "2020-08-04"}, {"id": "S-DRIVE-MIIT-POLICY", "domain": "mee.gov.cn", "urlKw": "806156", "titleKw": "\u56fd\u529e\u53d1\u30142020\u301539\u53f7", "org": "\u56fd\u52a1\u9662\u529e\u516c\u5385", "pub": "2020-11-03"}, {"id": "S-SSBAT-POLICY-NEV", "domain": "gov.cn", "urlKw": "content_5556716.htm", "titleKw": "\u56fd\u529e\u53d1\u30142020\u301539\u53f7", "org": "\u56fd\u52a1\u9662\u529e\u516c\u5385", "pub": "2020-11-02"}, {"id": "S-LOWALT-POLICY-FRAMEWORK", "domain": "ncsti.gov.cn", "urlKw": "t20240402_152639.html", "titleKw": "\u5de5\u4fe1\u90e8\u8054\u91cd\u88c5\u30142024\u301552\u53f7", "org": "\u5de5\u4e1a\u548c\u4fe1\u606f\u5316\u90e8", "pub": "2024-03-27"}, {"id": "S-LOWALT-CAAC-CCAR21", "domain": "caac.gov.cn", "urlKw": "t20240313_223201.html", "titleKw": "CCAR-21-R5", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40 / \u4ea4\u901a\u8fd0\u8f93\u90e8", "pub": "2024-02-18"}, {"id": "S-LOWALT-CAAC-CCAR91", "domain": "caac.gov.cn", "urlKw": "t20220209_211633.html", "titleKw": "CCAR-91-R4", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40 / \u4ea4\u901a\u8fd0\u8f93\u90e8", "pub": "2022-01-04"}, {"id": "S-LOWALT-CAAC-CCAR135", "domain": "caac.gov.cn", "urlKw": "t20220209_211634.html", "titleKw": "CCAR-135R3", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40 / \u4ea4\u901a\u8fd0\u8f93\u90e8", "pub": "2022-01-04"}, {"id": "S-LOWALT-EH216-TC", "domain": "zn.caac.gov.cn", "urlKw": "t20240416_223537.html", "titleKw": "EH216-S", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40", "pub": "2024-04-16"}, {"id": "S-LOWALT-EHANG-RELEASE", "domain": "ir.ehang.com", "urlKw": "ehang-successfully-obtains-type-certificate-eh216-s-passenger", "titleKw": "EH216-S", "org": "\u4ebf\u822a\u667a\u80fd\uff08EHang\uff09", "pub": "2023-10-13"}, {"id": "S-LOWALT-EASA-SC-VTOL", "domain": "easa.europa.eu", "urlKw": "20857", "titleKw": "SC-VTOL-01", "org": "EASA\uff08\u6b27\u6d32\u822a\u7a7a\u5b89\u5168\u5c40\uff09", "pub": "2019-07-02"}, {"id": "S-LOWALT-FAA-21-17B", "domain": "faa.gov", "urlKw": "1044836", "titleKw": "AC 21.17-4", "org": "FAA\uff08\u7f8e\u56fd\u8054\u90a6\u822a\u7a7a\u5c40\uff09", "pub": "2025-07-18"}, {"id": "S-LOWALT-ISO26262-STD", "domain": "iso.org", "urlKw": "26262", "titleKw": "ISO 26262", "org": "ISO\uff08\u56fd\u9645\u6807\u51c6\u5316\u7ec4\u7ec7\uff09", "pub": "2018-12-01"}, {"id": "S-LOWALT-DO-178C", "domain": "rtca.org", "urlKw": "a1B36000001IcmqEAC", "titleKw": "DO-178C", "org": "RTCA", "pub": "2011-12-13"}, {"id": "S-LOWALT-DO-254", "domain": "rtca.org", "urlKw": "a1B36000001IcjTEAS", "titleKw": "DO-254", "org": "RTCA", "pub": "2000-04-19"}];
   for (const item of policyItems) {
     let found = false;
     for (const key of BATCH2_KEYS) {
@@ -199,10 +207,22 @@ test("Batch 2 policy and standard SourceRef identity & mapping rules", () => {
     assert.ok(found, `Policy SourceRef ${item.id} not found in any Batch 2 workspace`);
   }
 
+  // Ensure NCSTI 52号文 URL is ONLY used by S-LOWALT-POLICY-FRAMEWORK
+  const ncstiUrl = "https://www.ncsti.gov.cn/kjdt/tzgg/202404/t20240402_152639.html";
+  for (const key of BATCH2_KEYS) {
+    const ws = getSectorResearchWorkspace(key)!;
+    for (const s of ws.sources) {
+      if (s.url === ncstiUrl) {
+        assert.equal(s.id, "S-LOWALT-POLICY-FRAMEWORK", `NCSTI URL misassigned to ${s.id} in ${key}`);
+      }
+    }
+  }
+
   // Forbid composite standards & removed unbacked sources
   for (const key of BATCH2_KEYS) {
     const ws = getSectorResearchWorkspace(key)!;
     assert.equal(ws.sources.find((s) => s.id === "S-LOWALT-EASA-FAA-STD"), undefined, `Forbidden composite standard source S-LOWALT-EASA-FAA-STD in ${key}`);
+    assert.equal(ws.sources.find((s) => s.id === "S-LOWALT-DO-178C-254"), undefined, `Forbidden composite standard source S-LOWALT-DO-178C-254 in ${key}`);
     assert.equal(ws.sources.find((s) => s.id === "S-SEMI-EMP2024"), undefined, `Forbidden unbacked source S-SEMI-EMP2024 in ${key}`);
   }
 });
