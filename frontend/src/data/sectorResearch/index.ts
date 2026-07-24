@@ -56,4 +56,3 @@ export function getDefaultResearchPath(key: string): string | undefined {
   if (!ws) return undefined;
   return `/sectors/${ws.key}/${ws.defaultTag}`;
 }
-

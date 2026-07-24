@@ -110,4 +110,3 @@ export function resolveOrFallback(
 export function registeredResearchKeys(): string[] {
   return listSectorResearchKeys();
 }
-
