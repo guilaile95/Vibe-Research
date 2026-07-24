@@ -375,7 +375,7 @@ def test_unavailable_result_does_not_replace_old(monkeypatch):
     )
     with pytest.raises(daily_review.DailyReviewRefreshError) as ei:
         daily_review.refresh_daily_review_for_display()
-    assert ei.value.reason == "quality_rejected"
+    assert ei.value.reason in ("unavailable", "critical_unavailable")
 
     mem = daily_review._cached_review()
     assert mem is not None
@@ -467,3 +467,150 @@ def test_refresh_api_unavailable_not_200_success(monkeypatch):
     # body must not present degraded as successful data replacement contract
     # (error detail only)
     assert "data" not in r.json() or r.json().get("data") is None or r.status_code != 200
+
+
+# ---------------------------------------------------------------------------
+# Unified quality judgment: partial must not replace an existing normal
+# (fresh memory, expired memory, or on disk)
+# ---------------------------------------------------------------------------
+
+
+def _seed_memory_normal(gen: str = "2026-07-24 10:00:00") -> None:
+    """直接写入内存缓存，模拟已存在 normal 成功。"""
+    daily_review._review_cache[daily_review._REVIEW_CACHE_KEY] = (
+        time.time(),
+        _packet(gen),
+    )
+
+
+def _seed_disk_normal(gen: str = "2026-07-24 10:00:00") -> None:
+    """写入磁盘最近成功 normal。"""
+    daily_review_cache.save_latest_review(_packet(gen), saved_at=gen)
+
+
+def _non_critical_partial(gen: str) -> dict:
+    """构造一个非关键组件降级的 partial（仅 turnover 不可用，关键组件仍可用）。"""
+    pkt = _packet(gen, status="partial")
+    # 仅让一个非关键组件不可用，关键组件保持 normal
+    pkt["data_health"]["components"] = {
+        "indices": "normal",
+        "global_indices": "normal",
+        "breadth": "normal",
+        "emotion": "normal",
+        "turnover": "unavailable",
+        "industry_boards": "normal",
+        "concept_boards": "normal",
+        "region_boards": "normal",
+    }
+    return pkt
+
+
+def test_partial_rejected_when_memory_has_normal(monkeypatch):
+    """内存有 normal + 新非关键 partial → 503，内存/磁盘保持 old normal。"""
+    _seed_memory_normal("2026-07-24 23:00:00")
+    _seed_disk_normal("2026-07-24 23:00:00")
+    monkeypatch.setattr(
+        daily_review,
+        "_build_daily_review",
+        lambda: _non_critical_partial("2026-07-24 23:30:00"),
+    )
+    with pytest.raises(daily_review.DailyReviewRefreshError) as ei:
+        daily_review.refresh_daily_review_for_display()
+    assert ei.value.reason == "partial_with_existing_normal"
+    # 内存仍是 old normal
+    assert daily_review._cached_review()["generated_at"] == "2026-07-24 23:00:00"
+    # 磁盘仍是 old normal
+    disk, _ = daily_review_cache.load_latest_review()
+    assert disk["generated_at"] == "2026-07-24 23:00:00"
+    # GET 返回 old normal
+    disp = daily_review.get_daily_review_for_display()
+    assert disp["data"]["generated_at"] == "2026-07-24 23:00:00"
+    assert disp["data"]["status"] == "normal"
+
+
+def test_partial_rejected_when_disk_has_normal_and_memory_expired(monkeypatch):
+    """内存 normal 已过期 + 磁盘 normal + 新 partial → 503，不写内存，GET 返回 old normal。"""
+    # 写入一个已过 TTL 的内存 normal
+    daily_review._review_cache[daily_review._REVIEW_CACHE_KEY] = (
+        time.time() - daily_review._REVIEW_TTL - 10,
+        _packet("2026-07-24 23:00:00"),
+    )
+    _seed_disk_normal("2026-07-24 23:00:00")
+    monkeypatch.setattr(
+        daily_review,
+        "_build_daily_review",
+        lambda: _non_critical_partial("2026-07-24 23:40:00"),
+    )
+    with pytest.raises(daily_review.DailyReviewRefreshError) as ei:
+        daily_review.refresh_daily_review_for_display()
+    assert ei.value.reason == "partial_with_existing_normal"
+    # 内存不应被 partial 覆盖（仍是旧 normal）
+    mem = daily_review._cached_review()  # 过期返回 None
+    # 即使 _cached_review 因过期返回 None，内存槽位仍应是旧 normal
+    raw = daily_review._review_cache[daily_review._REVIEW_CACHE_KEY][1]
+    assert raw["generated_at"] == "2026-07-24 23:00:00"
+    assert raw["status"] == "normal"
+    # GET 返回旧 normal（来自磁盘）
+    disp = daily_review.get_daily_review_for_display()
+    assert disp["data"]["generated_at"] == "2026-07-24 23:00:00"
+
+
+def test_partial_rejected_when_only_disk_normal_after_restart(monkeypatch):
+    """模拟进程重启：内存空 + 磁盘 normal + 新 partial → 503，GET 返回磁盘 old normal。"""
+    # 内存保持空（不 seed）
+    _seed_disk_normal("2026-07-24 23:00:00")
+    monkeypatch.setattr(
+        daily_review,
+        "_build_daily_review",
+        lambda: _non_critical_partial("2026-07-24 23:50:00"),
+    )
+    with pytest.raises(daily_review.DailyReviewRefreshError) as ei:
+        daily_review.refresh_daily_review_for_display()
+    assert ei.value.reason == "partial_with_existing_normal"
+    # GET 返回磁盘 old normal
+    disp = daily_review.get_daily_review_for_display()
+    assert disp["data"]["generated_at"] == "2026-07-24 23:00:00"
+    assert disp["data"]["status"] == "normal"
+
+
+def test_partial_accepted_when_no_prior_normal(monkeypatch):
+    """无旧 normal + 健康 partial（非关键组件降级） → 200。"""
+    assert not daily_review._review_cache
+    disk, _ = daily_review_cache.load_latest_review()
+    assert disk is None
+    monkeypatch.setattr(
+        daily_review,
+        "_build_daily_review",
+        lambda: _non_critical_partial("2026-07-25 00:00:00"),
+    )
+    r = daily_review.refresh_daily_review_for_display()
+    assert r["data"]["generated_at"] == "2026-07-25 00:00:00"
+    assert r["data"]["status"] == "partial"
+    assert r["cache_meta"]["source"] == "refresh"
+
+
+def test_persist_failure_keeps_old_normal_and_returns_503(monkeypatch):
+    """磁盘持久化失败时不得返回伪成功，也不可把 partial 写入内存。"""
+    _seed_memory_normal("2026-07-25 01:00:00")
+    _seed_disk_normal("2026-07-25 01:00:00")
+
+    def persist_fails(review, *, saved_at):
+        return False
+
+    monkeypatch.setattr(
+        daily_review_cache,
+        "save_latest_review",
+        persist_fails,
+    )
+    monkeypatch.setattr(
+        daily_review,
+        "_build_daily_review",
+        lambda: _packet("2026-07-25 01:30:00"),  # 新 normal
+    )
+    with pytest.raises(daily_review.DailyReviewRefreshError) as ei:
+        daily_review.refresh_daily_review_for_display()
+    assert ei.value.reason == "persist_failed"
+    # 内存仍是旧 normal
+    assert daily_review._cached_review()["generated_at"] == "2026-07-25 01:00:00"
+    disk, _ = daily_review_cache.load_latest_review()
+    assert disk["generated_at"] == "2026-07-25 01:00:00"

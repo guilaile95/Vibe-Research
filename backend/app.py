@@ -916,7 +916,15 @@ def daily_review_refresh():
     except daily_review.DailyReviewRefreshError as e:
         # 不把降级包当成功返回；旧成功仍在内存/磁盘，供后续 GET
         reason = getattr(e, "reason", "") or ""
-        if reason in ("quality_rejected", "store_rejected", "invalid_result"):
+        if reason in (
+            "unavailable",
+            "critical_unavailable",
+            "partial_with_existing_normal",
+            "persist_failed",
+            "store_rejected",
+            "invalid_result",
+            "invalid_status",
+        ):
             raise HTTPException(
                 503,
                 str(e) or "市场核心数据暂不可用，无法刷新每日复盘",

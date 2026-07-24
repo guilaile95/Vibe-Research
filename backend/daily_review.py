@@ -278,8 +278,28 @@ def _should_cache_review(result) -> bool:
     return result.get("status") in ("normal", "partial")
 
 
+def _any_normal_in_memory() -> bool:
+    """内存中（含已过 TTL 但结构仍有效的旧包）是否存在 normal。"""
+    hit = _review_cache.get(_REVIEW_CACHE_KEY)
+    if not hit:
+        return False
+    val = hit[1]
+    return isinstance(val, dict) and val.get("status") == "normal"
+
+
+def _existing_normal_anywhere() -> bool:
+    """是否存在任意旧 normal：新鲜内存、过期内存或磁盘最近成功。"""
+    if _any_normal_in_memory():
+        return True
+    existing_disk, _ = daily_review_cache.load_latest_review()
+    return isinstance(existing_disk, dict) and existing_disk.get("status") == "normal"
+
+
 def _should_replace_memory(result: dict) -> bool:
-    """内存写入质量规则：关键组件不可用不写入；partial 不覆盖已有 normal。"""
+    """内存写入质量规则：关键组件不可用不写入；partial 不覆盖已有 normal。
+
+    仅检查新鲜内存（兼容旧逻辑）。
+    """
     if not _should_cache_review(result):
         return False
     if daily_review_cache.has_critical_unavailable(result):
@@ -292,6 +312,34 @@ def _should_replace_memory(result: dict) -> bool:
     ):
         return False
     return True
+
+
+def _refresh_accepts_result(new_result: dict) -> tuple[bool, str]:
+    """显式刷新是否接受新结果（统一质量判定）。
+
+    同时检查新鲜内存、过期内存与磁盘最近成功，避免状态分裂。
+
+    规则：
+    - normal：接受（可替换旧 normal/partial）
+    - partial：仅当「任意旧来源均不存在 normal」时接受；否则拒绝
+    - unavailable / 关键组件不可用：拒绝
+
+    Returns ``(accepted, reason)``。
+    """
+    if not isinstance(new_result, dict):
+        return False, "invalid_result"
+    status = new_result.get("status")
+    if status == "normal":
+        return True, "normal"
+    if status == "unavailable":
+        return False, "unavailable"
+    if daily_review_cache.has_critical_unavailable(new_result):
+        return False, "critical_unavailable"
+    if status == "partial":
+        if _existing_normal_anywhere():
+            return False, "partial_with_existing_normal"
+        return True, "partial_no_prior_normal"
+    return False, "invalid_status"
 
 
 def _store_review(result: dict) -> None:
@@ -310,6 +358,27 @@ def _store_review(result: dict) -> None:
         daily_review_cache.save_latest_review(result, saved_at=saved_at)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _store_review_on_refresh(result: dict) -> bool:
+    """显式刷新路径的原子写入：内存 + 磁盘。
+
+    仅当新结果被接受时调用。返回 True 表示内存与磁盘均已一致更新。
+    若磁盘持久化失败，则回滚内存写入并返回 False（避免状态分裂）。
+    """
+    daily_review_errors.sanitize_review_public_fields(result)
+    saved_at = result.get("generated_at")
+    if not isinstance(saved_at, str) or not saved_at.strip():
+        saved_at = _now_str()
+    # 先写磁盘；失败则不写内存（保持旧成功）
+    try:
+        persisted = daily_review_cache.save_latest_review(result, saved_at=saved_at)
+    except Exception:  # noqa: BLE001
+        persisted = False
+    if not persisted:
+        return False
+    _review_cache[_REVIEW_CACHE_KEY] = (time.time(), copy.deepcopy(result))
+    return True
 
 def _age_seconds_from_saved_at(saved_at: str | None) -> float | None:
     if not isinstance(saved_at, str) or not saved_at.strip():
@@ -677,27 +746,25 @@ def _run_explicit_refresh_build() -> dict:
 
     daily_review_errors.sanitize_review_public_fields(result)
 
-    # 质量判定：不可用 / 关键组件不可用 → 不替换旧成功，也不把降级包当成功返回
-    if not _result_is_refresh_success(result):
+    # 统一质量判定：同时检查新鲜内存、过期内存与磁盘最近成功
+    accepted, reason = _refresh_accepts_result(result)
+    if not accepted:
         _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
         raise DailyReviewRefreshError(
             daily_review_errors.SAFE_REFRESH_FAILED,
-            reason="quality_rejected",
+            reason=reason,
         )
 
-    # 原子替换：仅当 _should_replace_memory 允许时写入；否则仍视为刷新失败（保留旧包）
+    # 原子替换：先写磁盘，成功再写内存；磁盘失败则保持旧成功（避免状态分裂）
     with _review_lock:
-        if not _should_replace_memory(result):
+        if not _store_review_on_refresh(result):
             _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
             raise DailyReviewRefreshError(
                 daily_review_errors.SAFE_REFRESH_FAILED,
-                reason="quality_rejected",
+                reason="persist_failed",
             )
-        # 直接写入（_store_review 内部再次检查质量 + 写磁盘）
-        _store_review(result)
         stored = _cached_review()
         if stored is None:
-            # 极端：写入被拒绝 — 不得返回降级包
             _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
             raise DailyReviewRefreshError(
                 daily_review_errors.SAFE_REFRESH_FAILED,
