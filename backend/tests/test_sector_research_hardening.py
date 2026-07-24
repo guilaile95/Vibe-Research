@@ -962,3 +962,30 @@ def test_panel_ok_has_no_data_or_raw_payload():
     assert "data" not in panel
     assert panel["summary"]["name"] == "x"
     assert "股票简称" not in panel
+
+
+def test_unregistered_sector_source_returns_none():
+    assert srd.get_sector_source("semiconductor") is None
+    assert srd.get_sector_dynamic_data("semiconductor")["status"] == "unavailable"
+
+
+def test_each_sector_report_discovery_uses_own_config(monkeypatch):
+    seen_keywords = {}
+    seen_codes = {}
+
+    def fake_industry(days, max_pages, keywords):
+        seen_keywords["kw"] = keywords
+        return []
+
+    def fake_company(codes, max_pages):
+        seen_codes["codes"] = codes
+        return []
+
+    monkeypatch.setattr(srd, "_fetch_industry_raw", fake_industry)
+    monkeypatch.setattr(srd, "_fetch_company_raw", fake_company)
+
+    srd.discover_sector_reports("humanoid", scope="industry", days=30)
+    assert "具身智能" in seen_keywords["kw"]
+
+    srd.discover_sector_reports("hbm", scope="company", days=30)
+    assert "002409" in seen_codes["codes"]
