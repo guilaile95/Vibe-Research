@@ -94,8 +94,8 @@ test("Batch 1 workspace required content components", () => {
 });
 
 test("Unregistered sectors display placeholder without workspace", () => {
-  assert.equal(getSectorResearchWorkspace("semiconductor"), undefined);
-  assert.equal(resolveOrFallback("semiconductor", "overview"), null);
+  assert.equal(getSectorResearchWorkspace("nonexistent"), undefined);
+  assert.equal(resolveOrFallback("nonexistent", "overview"), null);
 });
 
 test("Batch 1 source metadata formats", () => {

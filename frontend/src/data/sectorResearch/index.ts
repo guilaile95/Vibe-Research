@@ -3,6 +3,10 @@ import { humanoidResearch } from "./humanoid.ts";
 import { aiComputingResearch } from "./ai-computing.ts";
 import { hbmResearch } from "./hbm.ts";
 import { cpoResearch } from "./cpo.ts";
+import { smartDrivingResearch } from "./smart-driving.ts";
+import { lowAltitudeResearch } from "./low-altitude.ts";
+import { semiconductorResearch } from "./semiconductor.ts";
+import { ssBatteryResearch } from "./solid-state-battery.ts";
 import { assertWorkspaceInvariants } from "./types.ts";
 import type { SectorResearchWorkspace } from "./types.ts";
 
@@ -15,7 +19,11 @@ const WORKSPACES: Record<string, SectorResearchWorkspace> = {
   [humanoidResearch.key]: humanoidResearch,
   [aiComputingResearch.key]: aiComputingResearch,
   [hbmResearch.key]: hbmResearch,
+  [semiconductorResearch.key]: semiconductorResearch,
+  [ssBatteryResearch.key]: ssBatteryResearch,
   [cpoResearch.key]: cpoResearch,
+  [smartDrivingResearch.key]: smartDrivingResearch,
+  [lowAltitudeResearch.key]: lowAltitudeResearch,
 };
 
 for (const ws of Object.values(WORKSPACES)) {
@@ -48,3 +56,4 @@ export function getDefaultResearchPath(key: string): string | undefined {
   if (!ws) return undefined;
   return `/sectors/${ws.key}/${ws.defaultTag}`;
 }
+
