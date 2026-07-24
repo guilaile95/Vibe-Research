@@ -122,12 +122,14 @@ export function DailyReview() {
   // 统一聚合包
   const [dr, setDr] = useState<DailyReviewData | null>(null);
   const [drDone, setDrDone] = useState(false);
+  const [drRefreshing, setDrRefreshing] = useState(false);
   const [drErr, setDrErr] = useState<string | null>(null);
   const [cacheMeta, setCacheMeta] = useState<DailyReviewCacheMeta | null>(null);
   const [staleRefreshNote, setStaleRefreshNote] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollDeadlineRef = useRef<number>(0);
   const mountedRef = useRef(true);
+  const drRefreshingRef = useRef(false);
 
   // 自选（后端权威；启动时一次性迁移 localStorage）
   const [watchCodes, setWatchCodes] = useState<string[]>([]);
@@ -220,6 +222,7 @@ export function DailyReview() {
     }, 2000);
   }, [applyDailyReviewPayload, clearPoll]);
 
+  // 初始加载：只读 GET（可 stale-while-revalidate）
   const loadDailyReview = useCallback(() => {
     setDrDone(false);
     setDrErr(null);
@@ -236,16 +239,43 @@ export function DailyReview() {
         // 有旧数据时不清空页面
         setDr((prev) => {
           if (prev) {
-            setStaleRefreshNote("刷新失败，仍显示上次结果");
+            setStaleRefreshNote("最新数据刷新失败，当前继续显示上次成功结果");
             return prev;
           }
           setDrErr(e instanceof ApiError ? e.message : "每日复盘请求失败");
           return null;
         });
-        setCacheMeta(null);
       })
       .finally(() => setDrDone(true));
   }, [applyDailyReviewPayload, clearPoll, startStalePoll]);
+
+  // 用户显式刷新：POST /api/daily-review/refresh（绕过完整包缓存）；防连点
+  const refreshDailyReview = useCallback(() => {
+    if (drRefreshingRef.current) return;
+    drRefreshingRef.current = true;
+    setDrRefreshing(true);
+    setDrErr(null);
+    clearPoll();
+    api.dailyReviewRefresh()
+      .then((res) => {
+        applyDailyReviewPayload(res.data, res.cache_meta);
+        setStaleRefreshNote(null);
+      })
+      .catch(() => {
+        setDr((prev) => {
+          if (prev) {
+            setStaleRefreshNote("最新数据刷新失败，当前继续显示上次成功结果");
+            return prev;
+          }
+          setDrErr("最新数据刷新失败，当前继续显示上次成功结果");
+          return null;
+        });
+      })
+      .finally(() => {
+        drRefreshingRef.current = false;
+        setDrRefreshing(false);
+      });
+  }, [applyDailyReviewPayload, clearPoll]);
 
   const loadHistory = (opts?: { trade_date?: string; offset?: number }) => {
     const offset = opts?.offset ?? histOffset;
@@ -898,8 +928,14 @@ export function DailyReview() {
         subtitle={`${tradeDateLabel !== "—" ? tradeDateLabel : today} · 大盘 / 情绪 / 板块涨幅一屏看全`}
         actions={
           <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
-            <button onClick={loadDailyReview} className="text-muted-foreground hover:text-primary" title="刷新复盘数据">
-              <RefreshCw className={cn("h-4 w-4", !drDone && "animate-spin")} />
+            <button
+              onClick={refreshDailyReview}
+              disabled={drRefreshing || !drDone}
+              className="text-muted-foreground hover:text-primary disabled:opacity-50"
+              title="刷新复盘数据（绕过缓存）"
+              data-testid="daily-review-refresh"
+            >
+              <RefreshCw className={cn("h-4 w-4", (drRefreshing || !drDone) && "animate-spin")} />
             </button>
             <button
               onClick={saveCurrentReview}

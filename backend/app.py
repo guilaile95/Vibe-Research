@@ -302,10 +302,14 @@ class PortfolioAdviceRequest(BaseModel):
 def portfolio_advice(req: PortfolioAdviceRequest):
     """独立持仓操作建议（普通 JSON，非流式）。
 
-    服务器链路：get_portfolio → generate_daily_review → context → 模型 → validator。
-    空持仓 → 409；模型调用/输出无效 → 502（通用文案）；未预期异常 → 500。
-    不接受客户端持仓/context/messages；不写持仓与复盘历史。
+    服务器链路：get_portfolio → generate_daily_review → context → 模型 → validator → save。
+    空持仓 → 409；行情/市场不可用 → 503；模型/输出/validator → 502；
+    内部 TypeError/ValueError → 500（安全日志，不再误报「请求参数无效」）。
+    请求结构错误由 Pydantic → 422。不接受客户端持仓/context/messages。
     """
+    import logging
+
+    log = logging.getLogger("portfolio_advice")
     try:
         result = portfolio_advice_service.generate_portfolio_advice(
             req.llm.model_dump(),
@@ -315,17 +319,35 @@ def portfolio_advice(req: PortfolioAdviceRequest):
     except portfolio_advice_service.PortfolioAdviceUnavailableError as e:
         raise HTTPException(409, str(e)) from e
     except portfolio_advice_service.PortfolioAdviceMarketDataError as e:
-        # 市场核心数据不可用：503 + 安全业务文案（不泄漏底层网络异常）
-        raise HTTPException(503, str(e) or "市场核心数据暂不可用，无法生成可靠的持仓操作建议") from None
+        # 市场核心数据 / 复盘交易日不可用：503 + 安全业务文案
+        raise HTTPException(
+            503, str(e) or "市场核心数据暂不可用，无法生成可靠的持仓操作建议"
+        ) from None
     except portfolio_advice_service.PortfolioAdviceModelError:
         raise HTTPException(502, "持仓建议模型调用失败") from None
     except portfolio_advice_service.PortfolioAdviceModelOutputError:
         raise HTTPException(502, "持仓建议模型输出无效") from None
-    except (TypeError, ValueError):
-        raise HTTPException(400, "持仓建议请求参数无效") from None
+    except portfolio_advice_service.PortfolioAdvicePersistError as e:
+        log.warning(
+            "portfolio_advice persist failed stage=%s type=%s",
+            getattr(e, "stage", "persist"),
+            type(e.__cause__ or e).__name__,
+        )
+        raise HTTPException(500, "持仓建议结果保存失败") from None
     except pf.PortfolioDataCorruptedError:
         raise
-    except Exception:  # noqa: BLE001 — 不向客户端暴露路径/持仓/密钥
+    except (TypeError, ValueError) as e:
+        # 服务内部编程/数据契约错误：500，禁止伪装成客户端参数错误
+        log.exception(
+            "portfolio_advice internal error type=%s stage=handler",
+            type(e).__name__,
+        )
+        raise HTTPException(500, "持仓操作建议生成失败") from None
+    except Exception as e:  # noqa: BLE001 — 不向客户端暴露路径/持仓/密钥
+        log.exception(
+            "portfolio_advice unexpected error type=%s",
+            type(e).__name__,
+        )
         raise HTTPException(500, "持仓操作建议生成失败") from None
 
 
@@ -871,6 +893,30 @@ def daily_review_snapshot():
         return out
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"每日复盘聚合异常：{e}") from e
+
+
+@app.post("/api/daily-review/refresh")
+def daily_review_refresh():
+    """用户显式刷新复盘完整包：绕过 300s 内存缓存，single-flight 重建。
+
+    不调用 AI、不写 daily_review_snapshots、不生成持仓建议。
+    正常/部分可用 → 200；核心不可用且无结果由聚合层返回包；未预期 → 502。
+    """
+    try:
+        payload = daily_review.refresh_daily_review_for_display()
+        out = {"data": payload.get("data")}
+        meta = payload.get("cache_meta")
+        if isinstance(meta, dict):
+            out["cache_meta"] = meta
+        # 核心完全不可用且 data 缺失 → 503
+        data = out.get("data")
+        if not isinstance(data, dict):
+            raise HTTPException(503, "市场核心数据暂不可用，无法刷新每日复盘")
+        return out
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"每日复盘刷新异常：{e}") from e
 
 
 class DailyReviewAnalyzeRequest(BaseModel):

@@ -1042,6 +1042,44 @@ export const api = {
     const cache_meta = (payload?.cache_meta ?? null) as DailyReviewCacheMeta | null;
     return { data, cache_meta };
   },
+  /**
+   * 用户显式刷新每日复盘完整包（绕过 300s 内存缓存）。
+   * 与 GET 返回形状一致：{ data, cache_meta }；不写历史、不调用 AI。
+   */
+  dailyReviewRefresh: async (): Promise<{
+    data: DailyReviewData;
+    cache_meta?: DailyReviewCacheMeta | null;
+  }> => {
+    let resp: Response;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    };
+    try {
+      resp = await fetch("/api/daily-review/refresh", {
+        method: "POST",
+        headers,
+        body: "{}",
+      });
+    } catch {
+      throw new ApiError("连接不到后端，请先启动 backend（uvicorn app:app --port 8900）", 0);
+    }
+    let payload: any = null;
+    try {
+      payload = await resp.json();
+    } catch {
+      /* 非 JSON */
+    }
+    if (!resp.ok) {
+      if (resp.status === 401) {
+        throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
+      }
+      throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
+    }
+    const data = (payload?.data ?? payload) as DailyReviewData;
+    const cache_meta = (payload?.cache_meta ?? null) as DailyReviewCacheMeta | null;
+    return { data, cache_meta };
+  },
   /** 显式保存当前复盘快照（无请求体；服务器自行聚合校验） */
   saveDailyReviewHistory: () =>
     request<SaveDailyReviewHistoryResult>("/daily-review/history/save", "POST"),

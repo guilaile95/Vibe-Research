@@ -146,8 +146,18 @@ def compute_portfolio_fingerprint(holdings: Any) -> str:
         if code in seen:
             raise AiResultValidationError("持仓代码不能重复")
         seen.add(code)
-        if isinstance(shares, bool) or not isinstance(shares, int) or shares <= 0:
+        # 接受正整数或等价正整数值 float（如 1000.0），规范化后再指纹
+        if isinstance(shares, bool):
             raise AiResultValidationError("持仓数量必须是正整数")
+        if isinstance(shares, int):
+            if shares <= 0:
+                raise AiResultValidationError("持仓数量必须是正整数")
+            shares_i = shares
+        elif isinstance(shares, float) and math.isfinite(shares) and shares > 0 and shares == int(shares):
+            shares_i = int(shares)
+        else:
+            raise AiResultValidationError("持仓数量必须是正整数")
+        shares = shares_i
         if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost):
             raise AiResultValidationError("持仓成本必须是有限数字")
         canonical.append({"code": code, "shares": shares, "cost": cost})

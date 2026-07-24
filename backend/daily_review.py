@@ -602,6 +602,34 @@ def generate_daily_review() -> dict:
         return copy.deepcopy(result)
 
 
+def refresh_daily_review_for_display() -> dict:
+    """用户显式刷新：绕过完整包 300s 内存缓存，single-flight 重建一次。
+
+    - 不调用 AI；不写 daily_review_snapshots 历史；不生成持仓建议
+    - 成功后更新内存与 daily_review_latest.json（走既有质量规则）
+    - 返回结构与 GET 一致：``{data, cache_meta}``，stale=false
+    - 并发 POST 共用 ``_review_lock``，只聚合一次
+    """
+    with _review_lock:
+        _clear_review_cache()
+        _clear_refresh_failure()
+        result = _build_daily_review()
+        daily_review_errors.sanitize_review_public_fields(result)
+        _store_review(result)
+        # 若质量规则拒绝写入内存，仍返回本次聚合结果（调用方可见最新 attempt）
+        data = copy.deepcopy(result)
+        return {
+            "data": data,
+            "cache_meta": _cache_meta(
+                source="refresh",
+                stale=False,
+                refreshing=False,
+                saved_at=None,
+                age_seconds=0.0,
+            ),
+        }
+
+
 def _cache_meta(
     *,
     source: str,

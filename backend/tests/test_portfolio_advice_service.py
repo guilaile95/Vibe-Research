@@ -415,7 +415,7 @@ def test_generate_save_failure_is_failure_not_success(monkeypatch):
         MagicMock(side_effect=RuntimeError("database unavailable")),
     )
 
-    with pytest.raises(RuntimeError, match="database unavailable"):
+    with pytest.raises(svc.PortfolioAdvicePersistError, match="持仓建议结果保存失败"):
         generate_portfolio_advice(
             {"provider": "deepseek", "model": "m"},
             model_runner=lambda *_a: json.dumps(_ai_json_for()),
