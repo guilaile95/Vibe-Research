@@ -380,11 +380,12 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
   }
 
   // 6. Report discovery: full scope/days matrix with URL query verification
+  // 4 combos — each scope has explicit days, all verified in URL
   const SCOPE_DAYS = [
-    { scope: "industry", days: null },
+    { scope: "industry", days: "30" },
     { scope: "company", days: "30" },
     { scope: "company", days: "180" },
-    { scope: "all", days: null },
+    { scope: "all", days: "180" },
   ];
   for (const { scope, days } of SCOPE_DAYS) {
     const scopeSelect = page.locator("select").first();
@@ -392,13 +393,11 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
       await scopeSelect.selectOption(scope);
       await page.waitForTimeout(200);
     }
-    if (days !== null) {
-      const daysInput = page.locator("input[type=number]").first();
-      if (await daysInput.isVisible().catch(() => false)) {
-        await daysInput.click({ clickCount: 3 });
-        await daysInput.fill(String(days));
-        await page.waitForTimeout(500);
-      }
+    const daysInput = page.locator("input[type=number]").first();
+    if (await daysInput.isVisible().catch(() => false)) {
+      await daysInput.click({ clickCount: 3 });
+      await daysInput.fill(String(days));
+      await page.waitForTimeout(500);
     }
     const before = networkBag.bag.sectorReportsRequests[sectorKey] || 0;
     const startBtn = page.getByRole("button", { name: "开始发现" }).first();
@@ -421,7 +420,7 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
         if (qScope !== scope) {
           errors.push(`${label}: scope="${scope}" but request URL has scope="${qScope}"`);
         }
-        if (days !== null && qDays !== days) {
+        if (qDays !== days) {
           errors.push(`${label}: days="${days}" but request URL has days="${qDays}"`);
         }
         // Verify sector key appears in URL path
