@@ -8,8 +8,7 @@ export const pricingBlocks: ContentBlock[] = [
     sourceIds: ["S-AICOMP-MIIT-WHITE-PAPER", "S-AICOMP-INSPUR-FILING"],
   },
   {
-    type: "callout",
-    tone: "info",
+    type: "paragraph",
     text: "仍待验证事项区：1) 本土算力芯片在大模型万卡并行训练中的实际 MFU（模型算力利用率）指标；2) 先进制程晶圆代工与 CoWoS 封测产能对国产芯片出货的约束上限。",
     sourceIds: ["S-AICOMP-HYGON-FILING", "S-AICOMP-CAMBRICON-FILING"],
   },

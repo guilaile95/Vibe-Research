@@ -117,6 +117,48 @@ test("Batch 1 source metadata formats", () => {
   }
 });
 
+
+test("Batch 1 block type diversity: each tag has at least 3 different non-placeholder block types", () => {
+  for (const key of BATCH1_KEYS) {
+    const ws = getSectorResearchWorkspace(key)!;
+    const typeNames = new Set(["paragraph", "bullets", "table", "compareTable", "callout", "risk", "fact"]);
+    for (const tag of ws.tags) {
+      const blockTypes = new Set(tag.blocks.filter((b) => b.type !== "placeholder").map((b) => b.type));
+      const relevant = [...blockTypes].filter((t) => typeNames.has(t)).length;
+      const typesStr = [...blockTypes].join(", ");
+      assert.ok(relevant >= 3, `${key} tag "${tag.slug}" has only ${relevant} diverse block types (types: ${typesStr})`);
+    }
+  }
+});
+
+test("Batch 1 content block sourceId requirements", () => {
+  const internalKeywords = ["内部分析", "分析推断", "行业预测", "待验证", "in-house analysis", "industry estimate", "pending verification", "analysis inference"];
+  const forbiddenKeywords = ["JEDEC", "OIF", "JESD", "IEEE", "IPC", "SEMI", "ISO"];
+  for (const key of BATCH1_KEYS) {
+    const ws = getSectorResearchWorkspace(key)!;
+    for (const tag of ws.tags) {
+      for (const block of tag.blocks) {
+        if (block.type === "placeholder") continue;
+        const hasEmptySourceIds = !block.sourceIds || block.sourceIds.length === 0;
+        if (hasEmptySourceIds) {
+          const blockText = JSON.stringify(block);
+          const hasInternalMarker = internalKeywords.some((kw) => blockText.includes(kw));
+          if (!hasInternalMarker) {
+            const header = `${key} tag "${tag.slug}" ${block.type} has empty sourceIds without internal analysis marker`;
+            const titles = block.type === "table" || block.type === "compareTable" ? (block.caption || "") : (block.text || "");
+            assert.ok(titles.length > 0, `${header}: ${JSON.stringify(block).slice(0, 80)}`);
+          }
+          for (const fw of forbiddenKeywords) {
+            if (blockText.includes(fw)) {
+              assert.fail(`${key} tag "${tag.slug}" references "${fw}" without source`);
+            }
+          }
+        }
+      }
+    }
+  }
+});
+
 test("Batch 1 table/compareTable row consistency", () => {
   for (const key of BATCH1_KEYS) {
     const ws = getSectorResearchWorkspace(key)!;

@@ -8,8 +8,7 @@ export const pricingBlocks: ContentBlock[] = [
     sourceIds: ["S-HBM-JEDEC-STANDARD", "S-HBM-SHANNON-FILING"],
   },
   {
-    type: "callout",
-    tone: "info",
+    type: "paragraph",
     text: "仍待验证事项区：1) 2025年 HBM4 规范定稿与混合键合（Hybrid Bonding）良率表现；2) 本土材料厂商 GMC 塑封料在 HBM 场景中的实际量产导入进展。",
     sourceIds: ["S-HBM-HUAHAI-FILING", "S-HBM-YAKU-FILING"],
   },

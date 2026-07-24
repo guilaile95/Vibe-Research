@@ -163,6 +163,7 @@ function createNetworkBag(errors, label) {
     sectorDataRequests: {},
     sectorReportsRequests: {},
     sectorImportRequests: {},
+    sectorReportsDetails: [],
     badStatuses: [],
   };
 
@@ -190,7 +191,10 @@ function createNetworkBag(errors, label) {
       }
       if (p.includes("/sector-research/reports/") && method === "GET") {
         const sk = p.split("/sector-research/reports/")[1];
-        if (sk) bag.sectorReportsRequests[sk] = (bag.sectorReportsRequests[sk] || 0) + 1;
+        if (sk) {
+          bag.sectorReportsRequests[sk] = (bag.sectorReportsRequests[sk] || 0) + 1;
+          bag.sectorReportsDetails.push({ sectorKey: sk, url: url, status: status, ts: Date.now() });
+        }
       }
       if (p.includes("/sector-research/import/") && method === "POST") {
         const sk = p.split("/sector-research/import/")[1];
@@ -375,21 +379,35 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
     errors.push(`${label}: expand button not visible`);
   }
 
-  // 6. Report discovery (scope select + 开始发现 button)
-  const discScopeSelect = page.locator("select").first();
-  if (await discScopeSelect.isVisible().catch(() => false)) {
-    await discScopeSelect.selectOption("company");
-    await page.waitForTimeout(300);
+  // 6. Report discovery: scope industry/company/all + days filter
+  const SCOPES = ["industry", "company", "all"];
+  for (const scope of SCOPES) {
+    const scopeSelect = page.locator("select").first();
+    if (await scopeSelect.isVisible().catch(() => false)) {
+      await scopeSelect.selectOption(scope);
+      await page.waitForTimeout(200);
+    }
+    if (scope === "company") {
+      const daysInput = page.getByPlaceholder("回溯天数").first();
+      if (await daysInput.isVisible().catch(() => false)) {
+        await daysInput.fill("180");
+        await daysInput.press("Enter");
+        await page.waitForTimeout(200);
+      }
+    }
+    const before = networkBag.bag.sectorReportsRequests[sectorKey] || 0;
+    const startBtn = page.getByRole("button", { name: "开始发现" }).first();
+    if (await startBtn.isVisible().catch(() => false)) {
+      await startBtn.click();
+      await page.waitForTimeout(1500);
+    }
+    const after = networkBag.bag.sectorReportsRequests[sectorKey] || 0;
+    if (after <= before) {
+      errors.push(`${label}: scope="${scope}" discovery click did not issue request`);
+    }
   }
-  const repReqBefore = networkBag.bag.sectorReportsRequests[sectorKey] || 0;
-  const startDiscoverBtn = page.getByRole("button", { name: "开始发现" }).first();
-  if (await startDiscoverBtn.isVisible().catch(() => false)) {
-    await startDiscoverBtn.click();
-    await page.waitForTimeout(1000);
-  }
-  const repReqAfter = networkBag.bag.sectorReportsRequests[sectorKey] || 0;
-  if (repReqAfter <= repReqBefore) {
-    errors.push(`${label}: report discovery button click did not issue request (before=${repReqBefore}, after=${repReqAfter})`);
+  if ((networkBag.bag.sectorReportsRequests[sectorKey] || 0) < 3) {
+    errors.push(`${label}: expected at least 3 report discovery requests, got ${networkBag.bag.sectorReportsRequests[sectorKey]}`);
   }
 }
 

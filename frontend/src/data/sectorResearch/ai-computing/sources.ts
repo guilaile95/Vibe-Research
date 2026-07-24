@@ -29,7 +29,7 @@ export const aiComputingSources: SourceRef[] = [
     id: "S-AICOMP-UNIS-FILING",
     title: "紫光股份 - 2023年年度报告与新华三AI交换机/服务器披露",
     org: "紫光股份（000938）",
-    url: "http://www.cninfo.com.cn/new/disclosure/detail?stockCode=000938&announcementId=1219593000",
+    url: "http://www.cninfo.com.cn/new/disclosure/detail?stockCode=000938&announcementId=1219912267",
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-27",

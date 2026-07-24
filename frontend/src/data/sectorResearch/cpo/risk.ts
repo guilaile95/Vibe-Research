@@ -8,8 +8,7 @@ export const riskBlocks: ContentBlock[] = [
     sourceIds: ["S-CPO-OIF-CPO", "S-CPO-INNOTIGHT-FILING"],
   },
   {
-    type: "callout",
-    tone: "info",
+    type: "paragraph",
     text: "仍待验证事项区：1) 2025年 1.6T 光模块在北美云巨头智算中心中的实际部署节奏；2) 硅光方案在 1.6T 时代的成本与良率优势相比传统 EML 方案是否确立。",
     sourceIds: ["S-CPO-EOPTOLINK-FILING", "S-CPO-TFC-FILING"],
   },
