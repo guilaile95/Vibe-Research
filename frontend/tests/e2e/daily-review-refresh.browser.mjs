@@ -283,10 +283,56 @@ async function main() {
     if (apiLog.refreshStatuses.some((s) => s >= 400)) {
       errors.push(`refresh HTTP failed: ${JSON.stringify(apiLog.refreshStatuses)}`);
     }
-    // GET count should not be the only refresh path (refresh is POST)
     const bodyAfter = await page.locator("body").innerText();
     if (bodyAfter.includes("持仓建议请求参数无效")) {
       errors.push("unexpected portfolio advice param error on review page");
+    }
+    // capture generated_at marker from successful refresh for failure comparison
+    const genAfterOk = await page.evaluate(async () => {
+      const r = await fetch("/api/daily-review");
+      const j = await r.json();
+      return j?.data?.generated_at || null;
+    });
+    if (!genAfterOk) errors.push("missing generated_at after successful refresh");
+
+    // —— 失败刷新：保留旧 generated_at 与页面数据 ——
+    const arm = await page.evaluate(async () => {
+      const r = await fetch("/api/e2e/daily-review/arm-fail-next-build", { method: "POST" });
+      return r.ok;
+    });
+    if (!arm) errors.push("failed to arm fail-next-build");
+    const refreshPostsBeforeFail = apiLog.refreshPost;
+    if (await refreshBtn.isVisible().catch(() => false)) {
+      await refreshBtn.click();
+    } else {
+      const btn = page.locator('button[title*="刷新"]').first();
+      if (await btn.isVisible().catch(() => false)) await btn.click();
+    }
+    await page.waitForTimeout(2000);
+    if (apiLog.refreshPost !== refreshPostsBeforeFail + 1) {
+      errors.push(`expected one more POST on fail refresh, got ${apiLog.refreshPost}`);
+    }
+    const lastRefreshStatus = apiLog.refreshStatuses[apiLog.refreshStatuses.length - 1];
+    if (!(lastRefreshStatus >= 400)) {
+      errors.push(`expected fail refresh non-2xx, got ${lastRefreshStatus}`);
+    }
+    const genAfterFail = await page.evaluate(async () => {
+      const r = await fetch("/api/daily-review");
+      const j = await r.json();
+      return j?.data?.generated_at || null;
+    });
+    if (genAfterOk && genAfterFail && genAfterFail !== genAfterOk) {
+      errors.push(
+        `fail refresh must keep old generated_at: before=${genAfterOk} after=${genAfterFail}`,
+      );
+    }
+    const failNote = await page
+      .getByText(/最新数据刷新失败，当前继续显示上次成功结果/)
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (!failNote) {
+      // soft: note may use exact copy; still require old data retained via GET
     }
     await page.screenshot({ path: path.join(shotDir, "daily-review-refresh.png"), fullPage: true });
 

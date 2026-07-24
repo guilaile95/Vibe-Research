@@ -49,6 +49,15 @@ _bg_refreshing = False
 _refresh_failed = False
 _refresh_error: str | None = None
 
+# 用户显式刷新：真正 single-flight（共享同一次 build 结果 / 异常）
+# 不得仅靠互斥锁把多次 build 串行化。
+_explicit_refresh_gate = threading.Lock()
+_explicit_refresh_cond = threading.Condition(_explicit_refresh_gate)
+_explicit_refresh_inflight = False
+_explicit_refresh_result: dict | None = None  # 成功时的 display payload
+_explicit_refresh_error: BaseException | None = None
+_explicit_refresh_gen = 0  # 每次完成（成功/失败）递增，便于测试观测
+
 # 组件展示前缀
 _PREFIX = {
     "indices": "大盘指数",
@@ -602,32 +611,153 @@ def generate_daily_review() -> dict:
         return copy.deepcopy(result)
 
 
-def refresh_daily_review_for_display() -> dict:
-    """用户显式刷新：绕过完整包 300s 内存缓存，single-flight 重建一次。
+class DailyReviewRefreshError(RuntimeError):
+    """显式刷新失败（保留上次成功结果；由 API 映射为非 2xx）。"""
 
-    - 不调用 AI；不写 daily_review_snapshots 历史；不生成持仓建议
-    - 成功后更新内存与 daily_review_latest.json（走既有质量规则）
-    - 返回结构与 GET 一致：``{data, cache_meta}``，stale=false
-    - 并发 POST 共用 ``_review_lock``，只聚合一次
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        reason: str = "refresh_failed",
+    ):
+        super().__init__(message or daily_review_errors.SAFE_REFRESH_FAILED)
+        self.reason = reason
+
+
+def _success_payload_for_display(data: dict, *, source: str) -> dict:
+    daily_review_errors.sanitize_review_public_fields(data)
+    return {
+        "data": copy.deepcopy(data),
+        "cache_meta": _cache_meta(
+            source=source,
+            stale=False,
+            refreshing=False,
+            saved_at=None,
+            age_seconds=0.0 if source == "refresh" else _cached_review_age_seconds(),
+        ),
+    }
+
+
+def _run_explicit_refresh_build() -> dict:
+    """执行一次显式刷新构建（调用方已是 single-flight leader）。
+
+    不破坏性清除上次成功内存/磁盘；仅当新结果通过质量规则时原子替换。
+    未预期异常 / unavailable / 关键组件不可用 → 抛 DailyReviewRefreshError，
+    旧成功缓存保持不变。
     """
-    with _review_lock:
-        _clear_review_cache()
-        _clear_refresh_failure()
+    # 在 _review_lock 外可先快照「是否曾有成功」；替换本身仍走 _store_review 质量规则
+    try:
         result = _build_daily_review()
-        daily_review_errors.sanitize_review_public_fields(result)
+    except Exception as exc:  # noqa: BLE001
+        _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
+        raise DailyReviewRefreshError(
+            daily_review_errors.SAFE_REFRESH_FAILED,
+            reason="build_exception",
+        ) from exc
+
+    if not isinstance(result, dict):
+        _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
+        raise DailyReviewRefreshError(
+            daily_review_errors.SAFE_REFRESH_FAILED,
+            reason="invalid_result",
+        )
+
+    daily_review_errors.sanitize_review_public_fields(result)
+
+    # 质量判定：不可用 / 关键组件不可用 → 不替换旧成功，也不把降级包当成功返回
+    if not _result_is_refresh_success(result):
+        _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
+        raise DailyReviewRefreshError(
+            daily_review_errors.SAFE_REFRESH_FAILED,
+            reason="quality_rejected",
+        )
+
+    # 原子替换：仅当 _should_replace_memory 允许时写入；否则仍视为刷新失败（保留旧包）
+    with _review_lock:
+        if not _should_replace_memory(result):
+            _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
+            raise DailyReviewRefreshError(
+                daily_review_errors.SAFE_REFRESH_FAILED,
+                reason="quality_rejected",
+            )
+        # 直接写入（_store_review 内部再次检查质量 + 写磁盘）
         _store_review(result)
-        # 若质量规则拒绝写入内存，仍返回本次聚合结果（调用方可见最新 attempt）
-        data = copy.deepcopy(result)
-        return {
-            "data": data,
-            "cache_meta": _cache_meta(
-                source="refresh",
-                stale=False,
-                refreshing=False,
-                saved_at=None,
-                age_seconds=0.0,
-            ),
-        }
+        stored = _cached_review()
+        if stored is None:
+            # 极端：写入被拒绝 — 不得返回降级包
+            _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
+            raise DailyReviewRefreshError(
+                daily_review_errors.SAFE_REFRESH_FAILED,
+                reason="store_rejected",
+            )
+        _clear_refresh_failure()
+        return _success_payload_for_display(stored, source="refresh")
+
+
+def refresh_daily_review_for_display() -> dict:
+    """用户显式刷新：绕过完整包 300s 内存缓存；真正 single-flight。
+
+    - 并发重叠的 POST **只执行一次** ``_build_daily_review``；等待方复用同一次
+      成功结果或同一次异常（非串行多次 build）。
+    - 上一次刷新完全结束后，下一次独立点击仍重新构建一次。
+    - 构建前 **不** 破坏性清除上次成功内存/磁盘。
+    - 仅成功质量结果原子替换内存 + latest.json；失败保留旧成功。
+    - 不调用 AI；不写 daily_review_snapshots；不生成持仓建议。
+    - 成功返回 ``{data, cache_meta}``（stale=false, source=refresh）。
+    - 失败抛 ``DailyReviewRefreshError``（API → 非 2xx；前端保留旧 UI）。
+    """
+    global _explicit_refresh_inflight, _explicit_refresh_result
+    global _explicit_refresh_error, _explicit_refresh_gen
+
+    with _explicit_refresh_cond:
+        # 已有 in-flight：等待并复用
+        if _explicit_refresh_inflight:
+            while _explicit_refresh_inflight:
+                _explicit_refresh_cond.wait(timeout=120)
+            if _explicit_refresh_error is not None:
+                raise _explicit_refresh_error
+            if _explicit_refresh_result is None:
+                raise DailyReviewRefreshError(
+                    daily_review_errors.SAFE_REFRESH_FAILED,
+                    reason="empty_shared_result",
+                )
+            return copy.deepcopy(_explicit_refresh_result)
+
+        # 成为 leader
+        _explicit_refresh_inflight = True
+        _explicit_refresh_result = None
+        _explicit_refresh_error = None
+
+    try:
+        payload = _run_explicit_refresh_build()
+        with _explicit_refresh_cond:
+            _explicit_refresh_result = payload
+            _explicit_refresh_error = None
+            _explicit_refresh_gen += 1
+            _explicit_refresh_inflight = False
+            _explicit_refresh_cond.notify_all()
+        return copy.deepcopy(payload)
+    except DailyReviewRefreshError as exc:
+        with _explicit_refresh_cond:
+            _explicit_refresh_result = None
+            _explicit_refresh_error = exc
+            _explicit_refresh_gen += 1
+            _explicit_refresh_inflight = False
+            _explicit_refresh_cond.notify_all()
+        raise
+    except Exception as exc:  # noqa: BLE001
+        wrapped = DailyReviewRefreshError(
+            daily_review_errors.SAFE_REFRESH_FAILED,
+            reason="unexpected",
+        )
+        wrapped.__cause__ = exc
+        with _explicit_refresh_cond:
+            _explicit_refresh_result = None
+            _explicit_refresh_error = wrapped
+            _explicit_refresh_gen += 1
+            _explicit_refresh_inflight = False
+            _explicit_refresh_cond.notify_all()
+        raise wrapped from exc
 
 
 def _cache_meta(

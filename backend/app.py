@@ -897,10 +897,11 @@ def daily_review_snapshot():
 
 @app.post("/api/daily-review/refresh")
 def daily_review_refresh():
-    """用户显式刷新复盘完整包：绕过 300s 内存缓存，single-flight 重建。
+    """用户显式刷新复盘完整包：绕过 300s 内存缓存，真正 single-flight。
 
     不调用 AI、不写 daily_review_snapshots、不生成持仓建议。
-    正常/部分可用 → 200；核心不可用且无结果由聚合层返回包；未预期 → 502。
+    成功质量结果 → 200 + 新 data；失败保留服务端上次成功，返回非 2xx
+    （前端保留旧 UI 并提示「最新数据刷新失败…」）。
     """
     try:
         payload = daily_review.refresh_daily_review_for_display()
@@ -908,15 +909,26 @@ def daily_review_refresh():
         meta = payload.get("cache_meta")
         if isinstance(meta, dict):
             out["cache_meta"] = meta
-        # 核心完全不可用且 data 缺失 → 503
         data = out.get("data")
         if not isinstance(data, dict):
             raise HTTPException(503, "市场核心数据暂不可用，无法刷新每日复盘")
         return out
+    except daily_review.DailyReviewRefreshError as e:
+        # 不把降级包当成功返回；旧成功仍在内存/磁盘，供后续 GET
+        reason = getattr(e, "reason", "") or ""
+        if reason in ("quality_rejected", "store_rejected", "invalid_result"):
+            raise HTTPException(
+                503,
+                str(e) or "市场核心数据暂不可用，无法刷新每日复盘",
+            ) from None
+        raise HTTPException(
+            502,
+            str(e) or "市场数据刷新失败，请稍后重试",
+        ) from None
     except HTTPException:
         raise
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"每日复盘刷新异常：{e}") from e
+    except Exception:  # noqa: BLE001 — 不向客户端暴露内部细节
+        raise HTTPException(502, "每日复盘刷新异常") from None
 
 
 class DailyReviewAnalyzeRequest(BaseModel):

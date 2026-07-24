@@ -19,6 +19,8 @@ app = app_module.app
 
 BEIJING = timezone(timedelta(hours=8))
 _gen_counter = {"n": 0}
+# When True, next _build_daily_review raises (for failure-retention E2E).
+_fail_next_build = {"on": False}
 
 
 def _now() -> str:
@@ -72,8 +74,27 @@ def _packet() -> dict:
     }
 
 
-# Bypass real aggregation; still exercise cache + refresh_daily_review_for_display lock path
-daily_review._build_daily_review = _packet  # type: ignore[assignment]
+def _build_packet_or_fail() -> dict:
+    if _fail_next_build["on"]:
+        _fail_next_build["on"] = False
+        raise RuntimeError("e2e forced refresh failure")
+    return _packet()
+
+
+# Bypass real aggregation; still exercise cache + true single-flight refresh path
+daily_review._build_daily_review = _build_packet_or_fail  # type: ignore[assignment]
+
+
+@app.post("/api/e2e/daily-review/arm-fail-next-build")
+def e2e_arm_fail_next_build():
+    """Test-only: next full-package build raises (does not clear success cache)."""
+    _fail_next_build["on"] = True
+    return {"data": {"armed": True, "build_count": _gen_counter["n"]}}
+
+
+@app.get("/api/e2e/daily-review/build-count")
+def e2e_build_count():
+    return {"data": {"n": _gen_counter["n"]}}
 
 
 def _seed_portfolio() -> None:
