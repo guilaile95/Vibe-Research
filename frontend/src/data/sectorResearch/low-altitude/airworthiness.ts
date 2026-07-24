@@ -22,13 +22,13 @@ export const airworthinessBlocks: ContentBlock[] = [
   {
     type: "paragraph",
     text: "全球 eVTOL 适航进展概览：EASA 发布了 SC-VTOL-01 专用条件基准，FAA 制定了 AC 21.17-4 专用类 Powered-lift 审定指南，CAAC 也在推进 eVTOL 型号合格审定（CCAR-21-R5）。亿航智能 EH216-S 于 2023 年 10 月取得 CAAC 颁发的型号合格证（TC），为全球首张无人驾驶载人 eVTOL 型号合格证（公司口径披露）；国内其他主要 eVTOL 项目（如沃飞长空、峰飞航空等）尚在适航取证过程中，具体阶段节点需以后续官方公告为准。（分析推断）",
-    sourceIds: ["S-LOWALT-CAAC-CCAR21", "S-LOWALT-EH216-TC", "S-LOWALT-EHANG-RELEASE", "S-LOWALT-EASA-SC-VTOL", "S-LOWALT-FAA-21-17B"],
+    sourceIds: ["S-LOWALT-CAAC-CCAR21", "S-LOWALT-EH216-PC", "S-LOWALT-EHANG-RELEASE", "S-LOWALT-EASA-SC-VTOL", "S-LOWALT-FAA-21-17B"],
   },
   {
     type: "callout",
     tone: "info",
     text: "待验证：除亿航 EH216-S 已取得 CAAC TC 为已确认事实外，国内其他 eVTOL 项目的具体适航阶段（已受理/已审定/已通过部分特定条件/即将 TC）在公开渠道中披露不完整。各制造商官网和公告中的表述差异大，需交叉验证。万丰奥威年报中提及 eVTOL 研发进展但未披露适航阶段的具体时间表。（待验证）",
-    sourceIds: ["S-LOWALT-WANFENG-FILING", "S-LOWALT-EH216-TC"],
+    sourceIds: ["S-LOWALT-WANFENG-FILING", "S-LOWALT-EH216-PC"],
   },
   {
     type: "paragraph",
