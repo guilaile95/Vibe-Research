@@ -10,6 +10,9 @@
 - 信号按 ``(plan_id, candidate_code, dimension, label)`` 唯一；覆盖式更新。
 - 明日计划按 ``(trade_date, version)`` 唯一；每 ``trade_date`` 至多一个
   ``is_current=1``（partial unique index 强约束）。
+- draft 永不是 current（``is_current=0``）；仅 ``freeze_plan`` 将 draft 提升为
+  frozen + current，并在同一事务 supersede 旧 frozen。同日可多 draft、仅一个
+  current frozen。
 """
 
 from __future__ import annotations
@@ -393,15 +396,16 @@ def create_plan(
     *,
     trade_date: str,
     payload: dict,
-    expected_version: int | None = None,
     generated_at: str | None = None,
 ) -> dict:
     """新建一个 draft 版本的明日计划（同一 trade_date 下一个 version）。
 
-    - ``expected_version`` 乐观锁：若不为 None，必须等于当前最新版本号，
-      否则抛 ``TomorrowPlanConflictError``（防并发写入产生两个 current）。
-    - 新 plan ``is_current=1``；同 trade_date 旧 current 在同一事务内被置 0
-      （由 partial unique index 双重保证至多一个 current）。
+    draft 永不是 current（``is_current=0``），因此：
+
+    - 生成 draft 不会 supersede 同交易日已有的 frozen；
+    - 同日允许存在多个 draft；
+    - 只有 ``freeze_plan`` 才会把某个 draft 提升为 current frozen，并在同一事务
+      内把旧 frozen 降为 superseded。
     """
     if not isinstance(payload, dict):
         raise TypeError("plan payload 必须是字典")
@@ -415,37 +419,20 @@ def create_plan(
     _initialize_if_missing(db_path)
     conn = _connect(db_path)
     try:
-        if expected_version is not None:
-            cur = conn.execute(
-                "SELECT MAX(version) AS v FROM tomorrow_plans WHERE trade_date = ?",
+        with conn:
+            ver_row = conn.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 AS v FROM tomorrow_plans "
+                "WHERE trade_date = ?",
                 (trade_date,),
             ).fetchone()
-            current_v = int(cur["v"]) if cur["v"] else 0
-            if current_v != expected_version:
-                raise TomorrowPlanConflictError(
-                    f"版本已变更：期望 {expected_version}，实际 {current_v}"
-                )
-        ver_row = conn.execute(
-            "SELECT COALESCE(MAX(version), 0) + 1 AS v FROM tomorrow_plans "
-            "WHERE trade_date = ?",
-            (trade_date,),
-        ).fetchone()
-        version = int(ver_row["v"])
-
-        with conn:
-            # 先把该交易日所有 current 置 0，再写入新的 current=1
-            conn.execute(
-                "UPDATE tomorrow_plans SET is_current = 0, status = 'superseded', "
-                "updated_at = ? WHERE trade_date = ? AND is_current = 1",
-                (now, trade_date),
-            )
+            version = int(ver_row[0])
             cur = conn.execute(
                 """
                 INSERT INTO tomorrow_plans
                     (trade_date, version, is_current, status, generated_at,
                      input_fingerprint, payload_hash, payload_json, created_at,
                      updated_at)
-                VALUES (?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, 0, 'draft', ?, ?, ?, ?, ?, ?)
                 """,
                 (trade_date, version, generated_at, input_fingerprint,
                  payload_hash, payload_json, now, now),
@@ -457,7 +444,7 @@ def create_plan(
         "id": plan_id,
         "trade_date": trade_date,
         "version": version,
-        "is_current": 1,
+        "is_current": 0,
         "status": "draft",
         "generated_at": generated_at,
         "input_fingerprint": input_fingerprint,
@@ -466,10 +453,15 @@ def create_plan(
 
 
 def freeze_plan(db_path: Any, plan_id: int, *, expected_version: int) -> dict:
-    """冻结指定计划：status='draft' → 'frozen'，仅当版本号未变。
+    """冻结指定 draft：status draft → frozen，并设为该 trade_date 唯一 current。
 
-    冻结后该版本仍 ``is_current=1``；新 create_plan 会把它 supersed为
-    ``superseded``。
+    同一事务内：
+    - 校验 plan 仍为 draft 且 version 匹配（乐观锁）；
+    - 将该 trade_date 上既有 ``is_current=1`` 行置 0 且 status=superseded；
+    - 将目标 draft 升为 frozen + is_current=1。
+
+    因此同日可有多个 draft，但至多一个 current frozen；生成 draft 不会
+    抢占已 frozen 的 current。
     """
     if not isinstance(plan_id, int) or isinstance(plan_id, bool) or plan_id < 1:
         raise ValueError("plan_id 必须是正整数")
@@ -484,7 +476,8 @@ def freeze_plan(db_path: Any, plan_id: int, *, expected_version: int) -> dict:
             raise TomorrowPlanConflictError("计划不存在")
         with conn:
             row = conn.execute(
-                "SELECT id, version, status FROM tomorrow_plans WHERE id = ?",
+                "SELECT id, trade_date, version, status, is_current "
+                "FROM tomorrow_plans WHERE id = ?",
                 (plan_id,),
             ).fetchone()
             if row is None:
@@ -492,15 +485,32 @@ def freeze_plan(db_path: Any, plan_id: int, *, expected_version: int) -> dict:
             if int(row["version"]) != expected_version:
                 raise TomorrowPlanConflictError("版本已变更，请刷新后重试")
             if row["status"] != "draft":
-                raise TomorrowPlanConflictError(f"仅 draft 可冻结，当前状态：{row['status']}")
+                raise TomorrowPlanConflictError(
+                    f"仅 draft 可冻结，当前状态：{row['status']}"
+                )
+            trade_date = row["trade_date"]
+            # 先让出 current（partial unique index 要求至多一个 is_current=1）
             conn.execute(
                 """
                 UPDATE tomorrow_plans
-                   SET status = 'frozen', updated_at = ?
+                   SET is_current = 0,
+                       status = CASE WHEN status = 'frozen' THEN 'superseded'
+                                     ELSE status END,
+                       updated_at = ?
+                 WHERE trade_date = ? AND is_current = 1 AND id != ?
+                """,
+                (now, trade_date, plan_id),
+            )
+            cur = conn.execute(
+                """
+                UPDATE tomorrow_plans
+                   SET status = 'frozen', is_current = 1, updated_at = ?
                  WHERE id = ? AND version = ? AND status = 'draft'
                 """,
                 (now, plan_id, expected_version),
             )
+            if cur.rowcount != 1:
+                raise TomorrowPlanConflictError("冻结失败：状态已变更，请刷新后重试")
     finally:
         conn.close()
     return get_plan(db_path, plan_id)

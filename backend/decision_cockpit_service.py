@@ -3,7 +3,7 @@
 本模块是唯一对外编排入口；所有业务规则拆分到：
 - ``decision_cockpit_signals``：纯阈值信号评估（strong/medium/weak/unknown）。
 - ``decision_cockpit_store``：证据 / 信号 / 计划持久化。
-- ``ai_result_store`` / ``portfolio_advice_account_metrics``：持仓建议只读摘要与账户资金。
+- ``ai_result_service``：持仓建议只读全量快照（plan 内固化，UPSERT 不影响旧 plan）。
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from typing import Any, Callable
 
 import account_profile
@@ -27,6 +28,7 @@ from decision_cockpit_signals import (
     MAX_CANDIDATES,
     build_candidate_pool,
     compute_cash_exec,
+    evaluate_candidate_short,
     evaluate_market_short,
     evaluate_trend,
     evaluate_value,
@@ -55,6 +57,13 @@ class DecisionCockpitModelError(DecisionCockpitError):
     """模型调用失败。"""
 
 
+class DecisionCockpitSnapshotError(DecisionCockpitError):
+    """缺少不可变每日复盘快照，无法生成计划。"""
+
+
+_TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def _now_beijing() -> str:
     from datetime import datetime, timezone, timedelta
     return datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
@@ -67,6 +76,19 @@ def _db_path() -> Any:
 def _codes_fingerprint(codes: list[str]) -> str:
     blob = json.dumps(sorted(set(codes)), ensure_ascii=False, separators=(",", ":")).encode()
     return hashlib.sha256(blob).hexdigest()
+
+
+def _validate_trade_date(trade_date: Any) -> str:
+    if not isinstance(trade_date, str) or not _TRADE_DATE_RE.match(trade_date.strip()):
+        raise DecisionCockpitError("trade_date 必须是 YYYY-MM-DD 格式")
+    return trade_date.strip()
+
+
+def _safe_call(fn: Callable[[], Any]) -> Any:
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001
+        return {"_error": f"{type(e).__name__}: {e}"}
 
 
 # ---------------------------------------------------------------------------
@@ -100,22 +122,99 @@ def _get_candidate_pool_inputs() -> dict:
     turnover_top = _safe_call(market.get_turnover_top) or {}
     lianban = list(emotion.get("lianban_stocks") or []) if isinstance(emotion, dict) else []
     tt_stocks = list(turnover_top.get("stocks") or []) if isinstance(turnover_top, dict) else []
-    high_turnover = list((breadth.get("data") or {}).get("high_turnover") or []) if isinstance(breadth, dict) else []
+    high_turnover = (
+        list((breadth.get("data") or {}).get("high_turnover") or [])
+        if isinstance(breadth, dict)
+        else []
+    )
+    amount_top = (
+        list((breadth.get("data") or {}).get("amount_top") or [])
+        if isinstance(breadth, dict)
+        else []
+    )
     return {
         "holdings": holdings,
         "watchlist": wl,
         "sector_codes": sector_codes,
         "lianban": lianban,
-        "turnover_top": tt_stocks,
+        "turnover_top": tt_stocks or amount_top,
         "high_turnover": high_turnover,
+        "emotion": emotion if isinstance(emotion, dict) else {},
+        "breadth": breadth if isinstance(breadth, dict) else {},
     }
 
 
-def _safe_call(fn: Callable[[], Any]) -> Any:
-    try:
-        return fn()
-    except Exception as e:  # noqa: BLE001
-        return {"_error": f"{type(e).__name__}: {e}"}
+def _code_set(items: list[dict] | None) -> set[str]:
+    out: set[str] = set()
+    for it in items or []:
+        if isinstance(it, dict):
+            c = it.get("code")
+            if isinstance(c, str) and len(c) == 6 and c.isdigit():
+                out.add(c)
+    return out
+
+
+def _lianban_meta_map(lianban: list[dict] | None) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for it in lianban or []:
+        if not isinstance(it, dict):
+            continue
+        c = it.get("code")
+        if isinstance(c, str) and len(c) == 6:
+            out[c] = it
+    return out
+
+
+def _industry_rank_for_code(code: str, board_rows: list[dict] | None) -> int | None:
+    """若候选在行业榜中有精确 code 匹配则返回 rank；否则 None。
+
+    行业榜通常是板块级，不一定含个股 code；有则用，无则 unknown。
+    """
+    if not board_rows:
+        return None
+    for i, row in enumerate(board_rows):
+        if not isinstance(row, dict):
+            continue
+        if row.get("code") == code:
+            return int(row.get("rank") or (i + 1))
+        # 部分源把成分在 members 里
+        members = row.get("members") or row.get("stocks") or []
+        if isinstance(members, list):
+            for m in members:
+                mc = m.get("code") if isinstance(m, dict) else m
+                if mc == code:
+                    return int(row.get("rank") or (i + 1))
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 不可变复盘快照绑定（P2）
+# ---------------------------------------------------------------------------
+
+
+def _bind_review_snapshot(trade_date: str) -> dict:
+    """绑定已存在的每日复盘历史快照；缺失 → DecisionCockpitSnapshotError(409)。
+
+    绝不重新生成复盘或伪造 snapshot。
+    """
+    snap = review_history.get_latest_review_history_snapshot(trade_date=trade_date)
+    if snap is None:
+        raise DecisionCockpitSnapshotError(
+            f"交易日 {trade_date} 尚无不可变每日复盘快照，请先生成并保存复盘后再生成明日计划"
+        )
+    snap_id = snap.get("id")
+    payload_hash = snap.get("payload_hash")
+    if snap_id is None or not payload_hash:
+        raise DecisionCockpitSnapshotError(
+            f"交易日 {trade_date} 复盘快照缺少 id/payload_hash，拒绝绑定"
+        )
+    return {
+        "source_review_id": int(snap_id),
+        "source_review_hash": str(payload_hash),
+        "source_review_cutoff_at": snap.get("data_cutoff"),
+        "source_review_generated_at": snap.get("generated_at"),
+        "source_review_trade_date": snap.get("trade_date") or trade_date,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -140,32 +239,40 @@ def _evidence_path(code: str, kind: str) -> str:
 def compute_candidate_signals(
     candidate: dict,
     *,
+    market_short: dict | None = None,
+    short_ctx: dict | None = None,
     evidence_log: list[dict] | None = None,
 ) -> list[dict]:
-    """单个候选：拉 K 线 / 财务 / 估值分位 → 价值 + 趋势信号。
+    """单个候选：价值 + 趋势 + 短线信号。
 
-    任何数据源失败不抛异常，按 unknown 兜底并把失败登记到证据日志。"""
+    任何数据源失败不抛异常，按 unknown 兜底并把失败登记到证据日志。
+    """
     code = candidate.get("code", "")
     sigs: list[dict] = []
+    ctx = short_ctx or {}
 
-    # K 线（趋势）
+    # K 线（趋势，不复权）
     bars: list[dict] = []
     try:
         bars = astock.kline(code, category=4, offset=80) or []
         if bars:
             upsert_evidence(_db_path(), _evidence_path(code, "kline"), {
                 "n": len(bars), "first": bars[0], "last": bars[-1],
+                "price_adjustment": "none",
             })
             if evidence_log is not None:
                 evidence_log.append({"path": _evidence_path(code, "kline"), "ok": True})
     except Exception as e:  # noqa: BLE001
         if evidence_log is not None:
-            evidence_log.append({"path": _evidence_path(code, "kline"), "ok": False, "error": str(e)})
+            evidence_log.append({
+                "path": _evidence_path(code, "kline"), "ok": False, "error": str(e),
+            })
     sigs.extend(evaluate_trend(code, bars))
 
-    # 财务 + 估值分位（价值）
+    # 财务 + 估值分位 + full_valuation（价值）
     financials: dict = {}
     valuation: dict = {}
+    full_val: dict = {}
     try:
         financials = astock.financials(code) or {}
         if financials:
@@ -175,21 +282,86 @@ def compute_candidate_signals(
     try:
         valuation = astock.valuation_percentile(code) or {}
         if valuation:
-            upsert_evidence(_db_path(), _evidence_path(code, "valuation_percentile"), valuation)
+            upsert_evidence(
+                _db_path(), _evidence_path(code, "valuation_percentile"), valuation,
+            )
     except Exception:  # noqa: BLE001
         valuation = {}
-    sigs.extend(evaluate_value(code, valuation, financials))
+    try:
+        full_val = astock.full_valuation(code) or {}
+        if full_val:
+            upsert_evidence(
+                _db_path(), _evidence_path(code, "full_valuation"), full_val,
+            )
+    except Exception:  # noqa: BLE001
+        full_val = {}
+    sigs.extend(evaluate_value(code, valuation, financials, full_val or None))
+
+    # 候选级短线
+    sigs.extend(evaluate_candidate_short(
+        code,
+        market_short=market_short,
+        lianban_codes=ctx.get("lianban_codes"),
+        turnover_top_codes=ctx.get("turnover_top_codes"),
+        high_turnover_codes=ctx.get("high_turnover_codes"),
+        sector_rank=ctx.get("sector_rank_by_code", {}).get(code),
+        lianban_meta=ctx.get("lianban_meta", {}).get(code),
+    ))
 
     return sigs
 
 
-def _compute_all_signals(candidates: list[dict]) -> tuple[str, list[dict]]:
+def _build_short_context(inp: dict) -> dict:
+    lianban = inp.get("lianban") or []
+    turnover = inp.get("turnover_top") or []
+    high_to = inp.get("high_turnover") or []
+    sector_rank_by_code: dict[str, int] = {}
+    board = _safe_call(lambda: market.get_board_ranking("industry", top_n=100))
+    board_rows: list[dict] = []
+    if isinstance(board, dict):
+        data = board.get("data")
+        if isinstance(data, list):
+            board_rows = data
+        elif isinstance(data, dict) and isinstance(data.get("items"), list):
+            board_rows = data["items"]
+    return {
+        "lianban_codes": _code_set(lianban),
+        "turnover_top_codes": _code_set(turnover),
+        "high_turnover_codes": _code_set(high_to),
+        "lianban_meta": _lianban_meta_map(lianban),
+        "sector_rank_by_code": sector_rank_by_code,
+        "board_rows": board_rows,
+    }
+
+
+def _compute_all_signals(
+    candidates: list[dict],
+    *,
+    market_short: dict,
+    short_ctx: dict,
+) -> tuple[str, list[dict]]:
     """为候选池全量计算信号，按 plan_id 落库。返回 (plan_id, signals)。"""
     plan_id = f"cockpit-{_codes_fingerprint([c['code'] for c in candidates])}-{_now_beijing()}"
     evidence_log: list[dict] = []
     all_sigs: list[dict] = []
+    # 预填行业 rank（若 board 含个股 code）
+    board_rows = short_ctx.get("board_rows") or []
+    rank_map = dict(short_ctx.get("sector_rank_by_code") or {})
     for c in candidates:
-        sigs = compute_candidate_signals(c, evidence_log=evidence_log)
+        code = c["code"]
+        if code not in rank_map:
+            r = _industry_rank_for_code(code, board_rows)
+            if r is not None:
+                rank_map[code] = r
+    short_ctx = {**short_ctx, "sector_rank_by_code": rank_map}
+
+    for c in candidates:
+        sigs = compute_candidate_signals(
+            c,
+            market_short=market_short,
+            short_ctx=short_ctx,
+            evidence_log=evidence_log,
+        )
         for s in sigs:
             rec = {"plan_id": plan_id, "candidate_code": c["code"], **s}
             upsert_signal(
@@ -207,7 +379,7 @@ def _compute_all_signals(candidates: list[dict]) -> tuple[str, list[dict]]:
 
 
 # ---------------------------------------------------------------------------
-# 市场 + 账户 + 持仓建议 只读摘要
+# 市场 + 账户 + 持仓建议全量快照 + 现金可执行性
 # ---------------------------------------------------------------------------
 
 
@@ -223,11 +395,148 @@ def _market_short_summary() -> dict:
 def _account_funding_summary() -> dict:
     st = account_profile.get_account_profile_status()
     if st["status"] != "valid":
-        return {"configured": False, "data": None}
-    return {"configured": True, "data": st["data"]}
+        return {"configured": False, "data": None, "status": st.get("status")}
+    return {"configured": True, "data": st["data"], "status": "valid"}
 
 
-def _portfolio_summary() -> dict:
+def _payload_hash(obj: Any) -> str:
+    blob = json.dumps(
+        obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def _portfolio_advice_full_snapshot(trade_date: str | None = None) -> dict | None:
+    """持仓建议完整快照（P3）。
+
+    包含 result_type / trade_date / generated_at / input_fingerprint /
+    payload_hash / validated payload。后续 UPSERT 不会改写已固化进 plan 的副本。
+    """
+    try:
+        if trade_date:
+            rec = ai_result_service.get_ai_result(
+                ai_result_service.PORTFOLIO_ADVICE, trade_date=trade_date,
+            )
+            if rec is None:
+                # 允许用最新建议，但会标注 trade_date 可能不同
+                rec = ai_result_service.get_ai_result(ai_result_service.PORTFOLIO_ADVICE)
+        else:
+            rec = ai_result_service.get_ai_result(ai_result_service.PORTFOLIO_ADVICE)
+    except ai_result_service.AiResultCorruptedError:
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+    if rec is None:
+        return None
+
+    payload = rec.get("payload")
+    if not isinstance(payload, dict):
+        return None
+
+    # get_ai_result 的安全出口不含 input_fingerprint；从 store 再读一次补齐
+    fingerprint = None
+    try:
+        db = review_history.resolve_review_db_path()
+        from ai_result_store import get_result, get_latest_result
+        raw = None
+        td = rec.get("trade_date")
+        if td:
+            raw = get_result(db, ai_result_service.PORTFOLIO_ADVICE, td)
+        if raw is None:
+            raw = get_latest_result(db, ai_result_service.PORTFOLIO_ADVICE)
+        if isinstance(raw, dict):
+            fingerprint = raw.get("input_fingerprint")
+    except Exception:  # noqa: BLE001
+        fingerprint = None
+
+    snapshot = {
+        "result_type": rec.get("result_type") or ai_result_service.PORTFOLIO_ADVICE,
+        "trade_date": rec.get("trade_date"),
+        "generated_at": rec.get("generated_at"),
+        "schema_version": rec.get("schema_version"),
+        "model_provider": rec.get("model_provider"),
+        "model_name": rec.get("model_name"),
+        "input_fingerprint": fingerprint,
+        "payload": copy.deepcopy(payload),
+        "stale": bool(rec.get("stale")),
+    }
+    snapshot["payload_hash"] = _payload_hash(snapshot["payload"])
+    return snapshot
+
+
+def _advice_buy_actions(advice_snapshot: dict | None) -> list[dict]:
+    """从建议 payload 提取买入类动作（add），携带 execution_quantity / estimated_amount。"""
+    if not isinstance(advice_snapshot, dict):
+        return []
+    payload = advice_snapshot.get("payload") or {}
+    holdings = payload.get("holdings") if isinstance(payload, dict) else None
+    if not isinstance(holdings, list):
+        return []
+    actions: list[dict] = []
+    for h in holdings:
+        if not isinstance(h, dict):
+            continue
+        action = h.get("action")
+        if action not in ("add", "buy"):
+            continue
+        actions.append({
+            "code": h.get("code"),
+            "name": h.get("name"),
+            "action": action,
+            "execution_quantity": h.get("execution_quantity"),
+            "estimated_amount": h.get("estimated_amount"),
+            "execution_size_pct_of_holding": h.get("execution_size_pct_of_holding"),
+            "current_price": h.get("current_price"),
+        })
+    return actions
+
+
+def _quote_map(codes: list[str]) -> dict[str, dict]:
+    if not codes:
+        return {}
+    try:
+        q = astock.tencent_quote(codes)
+        return q if isinstance(q, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _cash_executability_from_advice(
+    advice_snapshot: dict | None,
+    available_cash: float | None,
+) -> dict:
+    """P7：按建议原始买入动作算现金可执行性，不用当前持仓股数当买入需求。"""
+    actions = _advice_buy_actions(advice_snapshot)
+    codes = [a["code"] for a in actions if isinstance(a.get("code"), str)]
+    quotes = _quote_map(codes)
+    items: list[dict] = []
+    for a in actions:
+        code = a.get("code")
+        q = quotes.get(code) if isinstance(code, str) else None
+        price = None
+        if isinstance(q, dict):
+            price = q.get("price")
+        if price is None:
+            price = a.get("current_price")
+        intended = a.get("execution_quantity")
+        exe = compute_cash_exec(intended, price, available_cash)
+        items.append({
+            "code": code,
+            "name": a.get("name"),
+            "action": a.get("action"),
+            "intended_quantity": intended,
+            "estimated_amount_from_advice": a.get("estimated_amount"),
+            **exe,
+        })
+    return {
+        "available_cash": available_cash,
+        "cash_configured": available_cash is not None,
+        "actions": items,
+    }
+
+
+def _portfolio_summary(advice_snapshot: dict | None = None) -> dict:
+    """持仓只读摘要 + 基于建议动作的现金可执行性。"""
     snap = pf.get_portfolio_holdings_snapshot().get("holdings", [])
     cash = _account_funding_summary()
     cash_avail = cash["data"]["available_cash"] if cash["configured"] else None
@@ -235,40 +544,23 @@ def _portfolio_summary() -> dict:
     for h in snap:
         if not isinstance(h, dict):
             continue
-        shares = h.get("shares")
-        price = h.get("price")
-        exe = compute_cash_exec(shares, price, cash_avail)
         holdings_view.append({
             "code": h.get("code"),
             "name": h.get("name"),
-            "shares": shares,
+            "shares": h.get("shares"),
             "cost": h.get("cost"),
-            "price": price,
-            "cash_executable": exe,
+            "price": h.get("price"),
         })
-    return {"cash": cash, "holdings": holdings_view}
-
-
-def _portfolio_advice_summary() -> dict | None:
-    """最新持仓建议只读摘要（无建议返回 None）。"""
-    try:
-        rec = ai_result_service.get_ai_result(ai_result_service.PORTFOLIO_ADVICE)
-    except ai_result_service.AiResultCorruptedError:
-        return None
-    except Exception:  # noqa: BLE001
-        return None
-    if rec is None:
-        return None
+    cash_exec = _cash_executability_from_advice(advice_snapshot, cash_avail)
     return {
-        "trade_date": rec.get("trade_date"),
-        "generated_at": rec.get("generated_at"),
-        "schema_version": rec.get("schema_version"),
-        "stale": bool(rec.get("stale")),
+        "cash": cash,
+        "holdings": holdings_view,
+        "cash_executability": cash_exec,
     }
 
 
 # ---------------------------------------------------------------------------
-# LLM 解释（含确定性兜底）
+# LLM 解释（仅解释，不改确定性结果）
 # ---------------------------------------------------------------------------
 
 
@@ -276,11 +568,11 @@ def _deterministic_explanation(market_short: dict, signals: list[dict]) -> str:
     """LLM 不可用时的纯文本摘要（基于信号统计）。"""
     counts = {"strong": 0, "medium": 0, "weak": 0, "unknown": 0}
     for s in signals:
-        counts[s.get("assessment", "unknown")] += 1
+        counts[s.get("assessment", "unknown")] = counts.get(s.get("assessment", "unknown"), 0) + 1
     parts = [
         f"市场状态：{market_short.get('status', 'unknown')}；"
-        f"信号合计 {len(signals)} 条（强 {counts['strong']} / 中 "
-        f"{counts['medium']} / 弱 {counts['weak']} / 未知 {counts['unknown']}）。",
+        f"信号合计 {len(signals)} 条（强 {counts.get('strong', 0)} / 中 "
+        f"{counts.get('medium', 0)} / 弱 {counts.get('weak', 0)} / 未知 {counts.get('unknown', 0)}）。",
     ]
     top_strong = [s for s in signals if s.get("assessment") == "strong"]
     top_weak = [s for s in signals if s.get("assessment") == "weak"]
@@ -296,7 +588,7 @@ def _deterministic_explanation(market_short: dict, signals: list[dict]) -> str:
 def _build_explanation_prompt(trade_date: str, market_short: dict, signals: list[dict]) -> list[dict]:
     summary = {
         "trade_date": trade_date,
-        "market_short": market_short,
+        "market_short": {"status": market_short.get("status")},
         "signal_counts": {},
         "top_strong": [],
         "top_weak": [],
@@ -317,16 +609,18 @@ def _build_explanation_prompt(trade_date: str, market_short: dict, signals: list
     return [
         {
             "role": "system",
-            "content": "你是 A 股投资决策助手。根据提供的明日计划摘要（信号统计 + 市场状态），"
-                       "用简洁的中文给出 3-5 句投资备忘，不要给出具体买卖指令，"
-                       "不要编造数据。仅输出纯文本。",
+            "content": (
+                "你是 A 股投资决策助手。根据提供的明日计划摘要（信号统计 + 市场状态），"
+                "用简洁的中文给出 3-5 句投资备忘，不要给出具体买卖指令，"
+                "不要编造数据，不要修改或覆盖任何确定性信号。仅输出纯文本。"
+            ),
         },
         {"role": "user", "content": json.dumps(summary, ensure_ascii=False)},
     ]
 
 
 def generate_explanation(cfg: Any, trade_date: str, market_short: dict, signals: list[dict]) -> dict:
-    """尝试 LLM 生成解释；失败回退到确定性摘要。"""
+    """尝试 LLM 生成解释；失败回退到确定性摘要。LLM 只解释，不改信号/候选/动作。"""
     fallback_text = _deterministic_explanation(market_short, signals)
     result = {"text": fallback_text, "source": "deterministic", "model": None}
     if cfg is None:
@@ -343,16 +637,15 @@ def generate_explanation(cfg: Any, trade_date: str, market_short: dict, signals:
                 if isinstance(t, str):
                     parts.append(t)
             elif etype == "error":
-                raise DecisionCockpitModelError(str(ev.get("message", ""))[:200])
+                # 解释失败不抛 502：仍返回确定性兜底
+                return result
             elif etype == "done":
                 break
         text = "".join(parts).strip()
         if text:
             result = {"text": text, "source": "llm", "model": cfg.get("model")}
         return result
-    except DecisionCockpitModelError:
-        return result
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — explain-only fail-open
         return result
 
 
@@ -367,20 +660,25 @@ def generate_tomorrow_plan(
     *,
     force: bool = False,
 ) -> dict:
-    """生成一个新的明日计划版本（候选池 + 信号 + 解释 + 持久化）。
+    """生成一个新的明日计划 draft（候选池 + 信号 + 解释 + 持久化）。
 
-    - 市场广度不可用 → 抛 ``DecisionCockpitMarketDataError``。
-    - ``force=False`` 时，若当日已有 frozen 计划则不重复生成。
+    - trade_date 必须 YYYY-MM-DD；
+    - 必须绑定已有 daily_review_snapshots（缺失 → 409）；
+    - 市场广度不可用 → ``DecisionCockpitMarketDataError``；
+    - ``force=False`` 时，若当日已有 frozen 计划则跳过（不生成新 draft 也可返回提示）；
+    - 新 draft 不 supersede frozen，不成为 current（见 store.create_plan）；
+    - LLM 仅解释，失败回退确定性文本。
     """
+    trade_date = _validate_trade_date(trade_date)
+
+    # P2：绑定不可变复盘快照（先于任何写操作）
+    review_binding = _bind_review_snapshot(trade_date)
+
     market_short = _market_short_summary()
     if market_short.get("status") == "unavailable":
         raise DecisionCockpitMarketDataError("市场核心数据暂不可用，无法生成明日计划")
 
-    candidates = assemble_candidate_pool()
-    if not candidates:
-        raise DecisionCockpitError("候选池为空：请至少配置持仓、自选股或板块代表公司")
-
-    # 重复生成保护
+    # 重复生成保护：已有 frozen 且未 force → 返回现有 frozen（不写）
     if not force:
         existing = store_get_current_plan(_db_path(), trade_date)
         if existing and existing.get("status") == "frozen":
@@ -389,11 +687,27 @@ def generate_tomorrow_plan(
                 "trade_date": trade_date,
                 "version": existing["version"],
                 "status": existing["status"],
+                "is_current": existing.get("is_current", 1),
                 "skipped": True,
                 "reason": "frozen_exists",
             }
 
-    signal_plan_id, signals = _compute_all_signals(candidates)
+    inp = _get_candidate_pool_inputs()
+    candidates = build_candidate_pool(
+        inp["holdings"], inp["watchlist"], inp["sector_codes"],
+        inp["lianban"], inp["turnover_top"], inp["high_turnover"],
+    )
+    if not candidates:
+        raise DecisionCockpitError("候选池为空：请至少配置持仓、自选股或板块代表公司")
+
+    short_ctx = _build_short_context(inp)
+    signal_plan_id, signals = _compute_all_signals(
+        candidates, market_short=market_short, short_ctx=short_ctx,
+    )
+
+    # P3：完整建议快照（优先同 trade_date）
+    advice_snapshot = _portfolio_advice_full_snapshot(trade_date)
+    portfolio = _portfolio_summary(advice_snapshot)
     explanation = generate_explanation(cfg, trade_date, market_short, signals)
 
     payload = {
@@ -401,15 +715,29 @@ def generate_tomorrow_plan(
         "trade_date": trade_date,
         "generated_at": _now_beijing(),
         "signal_plan_id": signal_plan_id,
+        # P2 绑定
+        "source_review_id": review_binding["source_review_id"],
+        "source_review_hash": review_binding["source_review_hash"],
+        "source_review_cutoff_at": review_binding["source_review_cutoff_at"],
+        "source_review_generated_at": review_binding.get("source_review_generated_at"),
         "market_short": market_short,
-        "account_funding": _account_funding_summary(),
-        "portfolio": _portfolio_summary(),
-        "advice": _portfolio_advice_summary(),
+        "account_funding": portfolio["cash"],
+        "portfolio": {
+            "holdings": portfolio["holdings"],
+            "cash_executability": portfolio["cash_executability"],
+        },
+        # P3：完整建议快照（非薄摘要）
+        "source_advice_snapshot": advice_snapshot,
         "candidates": candidates,
         "signals": signals,
         "explanation": explanation,
     }
-    plan = store_create_plan(_db_path(), trade_date=trade_date, payload=payload, generated_at=payload["generated_at"])
+    plan = store_create_plan(
+        _db_path(),
+        trade_date=trade_date,
+        payload=payload,
+        generated_at=payload["generated_at"],
+    )
     return {**plan, "skipped": False}
 
 
@@ -418,7 +746,7 @@ def freeze_tomorrow_plan(plan_id: int, expected_version: int) -> dict:
 
 
 def get_current_plan(trade_date: str) -> dict | None:
-    """读取当前计划（含信号）。"""
+    """读取当前计划（含信号）。无 current frozen 时返回 None。"""
     plan = store_get_current_plan(_db_path(), trade_date)
     if plan is None:
         return None
@@ -442,7 +770,10 @@ def list_plans(trade_date: str | None = None, limit: int = 30, offset: int = 0) 
 
 
 def get_overview(trade_date: str) -> dict:
-    """总览（只读聚合）：市场 / 账户 / 持仓建议 / 当前计划 / 候选池构成。"""
+    """总览（只读聚合）：市场 / 账户 / 持仓建议 / 当前计划 / 候选池构成。
+
+    只读路径不写文件、不建表、不生成计划。
+    """
     market_short = _market_short_summary()
     current = store_get_current_plan(_db_path(), trade_date)
     inp = _get_candidate_pool_inputs()
@@ -450,11 +781,23 @@ def get_overview(trade_date: str) -> dict:
         inp["holdings"], inp["watchlist"], inp["sector_codes"],
         inp["lianban"], inp["turnover_top"], inp["high_turnover"],
     )
+    advice = _portfolio_advice_full_snapshot(trade_date)
+    advice_summary = None
+    if advice:
+        advice_summary = {
+            "result_type": advice.get("result_type"),
+            "trade_date": advice.get("trade_date"),
+            "generated_at": advice.get("generated_at"),
+            "input_fingerprint": advice.get("input_fingerprint"),
+            "payload_hash": advice.get("payload_hash"),
+            "stale": advice.get("stale"),
+            "schema_version": advice.get("schema_version"),
+        }
     return {
         "trade_date": trade_date,
         "market_short": market_short,
         "account_funding": _account_funding_summary(),
-        "advice": _portfolio_advice_summary(),
+        "advice": advice_summary,
         "current_plan": current,
         "candidate_pool": pool,
     }

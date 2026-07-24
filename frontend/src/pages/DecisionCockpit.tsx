@@ -94,18 +94,30 @@ export function DecisionCockpit() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  const loadPlanById = async (planId: number) => {
+    const p = await getPlan(planId);
+    if (p) setPlan(p);
+    return p;
+  };
+
   const generate = async () => {
     setGenerating(true);
     setError(null);
     setInfo(null);
     try {
       const res = await generateTomorrowPlan(tradeDate, llm, false);
-      setInfo(res.skipped ? "该计划日已冻结计划，未重复生成（可点强制重新生成）" : "已生成新版本");
-      await refresh();
+      if (res.skipped) {
+        setInfo("该计划日已有冻结计划，未重复生成（可点强制重新生成，或从历史打开草稿）");
+        await refresh();
+      } else {
+        setInfo(`已生成草稿 v${res.version}（草稿不是 current；冻结后才成为当前计划）`);
+        await refresh();
+        // draft 不是 is_current，必须按 id 加载才能冻结/查看
+        if (res.id) await loadPlanById(res.id);
+      }
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
-        // frozen exists → offer force
-        setError("该计划日已有冻结计划。如需重新生成，请点「强制重新生成」。");
+        setError(e.message || "无法生成：缺少复盘快照或候选池为空。");
       } else {
         setError(e instanceof ApiError ? e.message : "生成失败");
       }
@@ -119,9 +131,14 @@ export function DecisionCockpit() {
     setError(null);
     setInfo(null);
     try {
-      await generateTomorrowPlan(tradeDate, llm, true);
-      setInfo("已强制重新生成新版本（旧版本保留在历史中）");
+      const res = await generateTomorrowPlan(tradeDate, llm, true);
+      setInfo(
+        res.skipped
+          ? "强制生成被跳过"
+          : `已强制生成草稿 v${res.version}（不影响已冻结 current；冻结本草稿会 supersede 旧 frozen）`,
+      );
       await refresh();
+      if (res.id && !res.skipped) await loadPlanById(res.id);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "生成失败");
     } finally {
@@ -130,13 +147,14 @@ export function DecisionCockpit() {
   };
 
   const freeze = async () => {
-    if (!plan) return;
+    if (!plan || plan.status !== "draft") return;
     setFreezing(true);
     setError(null);
     try {
       const updated = await freezePlan(plan.id, plan.version);
-      setInfo("已冻结当前版本（后续生成会创建新版本，旧版本保留）");
-      setPlan({ ...plan, status: updated.status });
+      setInfo("已冻结该草稿：现为当前计划（同日仅一个 current frozen）");
+      setPlan({ ...plan, ...updated, status: updated.status, is_current: updated.is_current ?? 1 });
+      await refresh();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "冻结失败");
     } finally {
@@ -283,28 +301,34 @@ export function DecisionCockpit() {
             </div>
             <p className="text-xs text-muted-foreground">
               候选池由持仓 + 自选 + 板块代表（受保护）+ 连板 / 成交额 / 高换手组成；
-              价值 / 趋势 信号为纯阈值规则、不复权、LLM 不可用时自动回退确定性摘要。
+              价值 / 趋势 / 短线 三维信号为纯阈值规则、K 线不复权；生成需绑定不可变复盘快照；
+              LLM 仅解释、不可用时自动回退确定性摘要。草稿不会覆盖已冻结计划。
             </p>
           </GlassCard>
 
-          {/* 当前计划 */}
+          {/* 当前计划 / 正在查看的草稿 */}
           {!plan && !loading ? (
             <GlassCard className="flex flex-col items-center gap-2 py-10 text-center text-muted-foreground">
               <Clock className="h-8 w-8 opacity-40" />
-              <p className="text-sm">该交易日还没有明日计划。</p>
-              <p className="text-xs">点「生成明日计划」开始。</p>
+              <p className="text-sm">该交易日还没有已冻结的 current 计划。</p>
+              <p className="text-xs">点「生成明日计划」创建草稿，再点「冻结」设为当前。</p>
             </GlassCard>
           ) : plan ? (
-            <GlassCard className="space-y-3">
+            <GlassCard className="space-y-3" data-testid="plan-panel">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <h2 className="text-base font-semibold">当前计划</h2>
-                  <span className={cn("rounded px-2 py-0.5 text-xs font-medium",
+                  <h2 className="text-base font-semibold">
+                    {plan.status === "frozen" && plan.is_current ? "当前计划" : "计划详情"}
+                  </h2>
+                  <span
+                    data-testid="plan-status"
+                    className={cn("rounded px-2 py-0.5 text-xs font-medium",
                     plan.status === "draft" ? "bg-primary/10 text-primary" :
                     plan.status === "frozen" ? "bg-success/10 text-success" :
                     "bg-muted text-muted-foreground")}
                   >
                     v{plan.version} · {plan.status === "draft" ? "草稿" : plan.status === "frozen" ? "已冻结" : "已废弃"}
+                    {plan.is_current ? " · current" : ""}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -329,17 +353,28 @@ export function DecisionCockpit() {
                 生成时间 {plan.generated_at} · 信号 {plan.signals?.length ?? 0} 条（强 {strongCount} / 弱 {weakCount}）
               </p>
 
-              {/* 信号网格 */}
-              <div>
-                <h3 className="mb-2 text-xs font-semibold text-muted-foreground">信号一览</h3>
-                <div className="flex flex-wrap gap-1.5">
-                  {(plan.signals ?? []).map((s, i) => (
-                    <SignalBadge key={`${s.candidate_code}-${s.dimension}-${s.label}-${i}`} s={s} />
-                  ))}
-                  {!(plan.signals ?? []).length && (
-                    <span className="text-xs text-muted-foreground">无信号</span>
-                  )}
-                </div>
+              {/* 三维信号：价值 / 趋势 / 短线 */}
+              <div data-testid="signals-3d">
+                <h3 className="mb-2 text-xs font-semibold text-muted-foreground">
+                  信号一览（价值 · 趋势 · 短线）
+                </h3>
+                {(["value", "trend", "short"] as const).map((dim) => {
+                  const dimLabel = dim === "value" ? "价值" : dim === "trend" ? "趋势" : "短线";
+                  const dimSigs = (plan.signals ?? []).filter((s) => s.dimension === dim);
+                  return (
+                    <div key={dim} className="mb-2" data-testid={`signals-${dim}`}>
+                      <div className="mb-1 text-[11px] font-medium text-muted-foreground">{dimLabel}</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {dimSigs.map((s, i) => (
+                          <SignalBadge key={`${s.candidate_code}-${s.dimension}-${s.label}-${i}`} s={s} />
+                        ))}
+                        {!dimSigs.length && (
+                          <span className="text-xs text-muted-foreground">无</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
               {/* 候选池 */}
@@ -438,7 +473,9 @@ function SummaryBlock({ account, advice }: { account: Overview["account_funding"
           <ShieldCheck className="h-3.5 w-3.5" /> 账户资金（只读）
         </h3>
         {!account.configured ? (
-          <p className="text-xs text-muted-foreground">未配置。请到「我的持仓」填写账户总资产与可用现金。</p>
+          <p className="text-xs text-muted-foreground" data-testid="cash-unconfigured">
+            未配置。请到「我的持仓」填写账户总资产与可用现金。现金可执行性将标记为 cash_unconfigured。
+          </p>
         ) : (
           <div className="grid grid-cols-2 gap-2 text-xs">
             <span className="text-muted-foreground">总资产</span><span className="font-mono">{account.data.total_assets}</span>
@@ -454,10 +491,23 @@ function SummaryBlock({ account, advice }: { account: Overview["account_funding"
         {!advice ? (
           <p className="text-xs text-muted-foreground">暂无持仓建议。请到「我的持仓」生成。</p>
         ) : (
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <span className="text-muted-foreground">交易日</span><span className="font-mono">{advice.trade_date ?? "—"}</span>
-            <span className="text-muted-foreground">版本</span><span className="font-mono">{advice.schema_version}</span>
-            <span className="text-muted-foreground">生成时间</span><span className="font-mono">{advice.generated_at}</span>
+          <div className="grid grid-cols-2 gap-2 text-xs" data-testid="advice-summary">
+            <span className="text-muted-foreground">类型</span>
+            <span className="font-mono">{advice.result_type ?? "portfolio_advice"}</span>
+            <span className="text-muted-foreground">交易日</span>
+            <span className="font-mono">{advice.trade_date ?? "—"}</span>
+            <span className="text-muted-foreground">版本</span>
+            <span className="font-mono">{advice.schema_version ?? "—"}</span>
+            <span className="text-muted-foreground">生成时间</span>
+            <span className="font-mono">{advice.generated_at ?? "—"}</span>
+            <span className="text-muted-foreground">指纹</span>
+            <span className="font-mono truncate" title={advice.input_fingerprint ?? ""}>
+              {advice.input_fingerprint ? String(advice.input_fingerprint).slice(0, 12) + "…" : "—"}
+            </span>
+            <span className="text-muted-foreground">payload</span>
+            <span className="font-mono truncate" title={advice.payload_hash ?? ""}>
+              {advice.payload_hash ? String(advice.payload_hash).slice(0, 12) + "…" : "—"}
+            </span>
             <span className="text-muted-foreground">状态</span>
             <span className={cn("font-mono", advice.stale ? "text-danger" : "text-success")}>
               {advice.stale ? "已过期" : "有效"}

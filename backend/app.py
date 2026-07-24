@@ -51,6 +51,7 @@ from decision_cockpit_service import (
     DecisionCockpitError,
     DecisionCockpitMarketDataError,
     DecisionCockpitModelError,
+    DecisionCockpitSnapshotError,
 )
 
 
@@ -687,6 +688,8 @@ def watchlist_save(req: WatchlistIn):
         return {"data": result}
     except watchlist_store.WatchlistVersionConflictError as e:
         raise HTTPException(409, str(e)) from e
+    except watchlist_store.WatchlistLimitExceededError as e:
+        raise HTTPException(400, str(e)) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
@@ -710,6 +713,8 @@ def watchlist_import_local(req: WatchlistImportLocalIn):
         return {"data": result}
     except watchlist_store.WatchlistVersionConflictError as e:
         raise HTTPException(409, str(e)) from e
+    except watchlist_store.WatchlistLimitExceededError as e:
+        raise HTTPException(400, str(e)) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
@@ -756,6 +761,8 @@ def decision_cockpit_generate(req: TomorrowPlanGenerateIn):
         return {"data": result}
     except DecisionCockpitMarketDataError as e:
         raise HTTPException(503, str(e) or "市场核心数据暂不可用，无法生成明日计划") from None
+    except DecisionCockpitSnapshotError as e:
+        raise HTTPException(409, str(e)) from e
     except DecisionCockpitModelError as e:
         raise HTTPException(502, f"明日计划解释生成失败：{e}") from e
     except DecisionCockpitError as e:
