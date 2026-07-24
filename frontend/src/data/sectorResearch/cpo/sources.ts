@@ -3,15 +3,15 @@ import type { SourceRef } from "../types.ts";
 export const cpoSources: SourceRef[] = [
   {
     id: "S-CPO-OIF-CPO",
-    title: "OIF Releases Co-Packaging Framework Implementation Agreement",
+    title: "OIF Co-Packaging Framework Document (OIF-Co-Packaging-FD-01.0)",
     org: "OIF（光互连论坛）",
-    url: "https://www.oiforum.com/oif-releases-co-packaging-framework-implementation-agreement/",
+    url: "https://www.oiforum.com/wp-content/uploads/OIF-Co-Packaging-FD-01.0.pdf",
     sourceType: "standard",
     factLevel: "已确认事实",
     publishedAt: "2022-02-10",
     accessedAt: "2026-07-24",
-    supports: "OIF Co-Packaging Framework FD-01.0 定义 CPO 共封装架构的应用场景、物理形态、光电接口规范及热管理与可靠性基本要求，为 3.2T 以上节点提供 CPO 系统性框架",
-    note: "OIF CPO Framework IA 框架协议，定义共封装架构的应用空间、电气与光学接口、热/机械设计与互操作性指南",
+    supports: "OIF-Co-Packaging-FD-01.0 为 OIF 发布的 CPO 共封装 Informative Document，定义共封装光学的应用场景、物理架构、电气与光学接口规范，以及热管理、机械设计与可靠性基本要求",
+    note: "OIF CPO Framework Document（Informative Document），定义共封装架构的应用空间、物理/电气/光学接口、热/机械设计与可靠性指南；不含 3.2T Module IA 或 ELSFP IA 内容",
   },
   {
     id: "S-CPO-INNOTIGHT-FILING",

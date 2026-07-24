@@ -140,18 +140,24 @@ test("Batch 1 content block sourceId requirements", () => {
       for (const block of tag.blocks) {
         if (block.type === "placeholder") continue;
         const hasEmptySourceIds = !block.sourceIds || block.sourceIds.length === 0;
+        const blockText = JSON.stringify(block);
+        const hasInternalMarker = internalKeywords.some((kw) => blockText.includes(kw));
         if (hasEmptySourceIds) {
-          const blockText = JSON.stringify(block);
-          const hasInternalMarker = internalKeywords.some((kw) => blockText.includes(kw));
+          // Empty sourceIds block must have internal analysis marker or fail
           if (!hasInternalMarker) {
-            const header = `${key} tag "${tag.slug}" ${block.type} has empty sourceIds without internal analysis marker`;
-            const titles = block.type === "table" || block.type === "compareTable" ? (block.caption || "") : (block.text || "");
-            assert.ok(titles.length > 0, `${header}: ${JSON.stringify(block).slice(0, 80)}`);
+            assert.fail(`${key} tag "${tag.slug}" ${block.type} has empty sourceIds without internal analysis marker: ${blockText.slice(0, 120)}`);
           }
+          // Empty sourceIds blocks must not include external org attribution
           for (const fw of forbiddenKeywords) {
             if (blockText.includes(fw)) {
               assert.fail(`${key} tag "${tag.slug}" references "${fw}" without source`);
             }
+          }
+        } else {
+          // Non-empty sourceIds: fact blocks must have at least one sourceId
+          // If a block has sourceIds but also has internal markers, it is still required to have valid sources
+          if (!hasInternalMarker && block.sourceIds && block.sourceIds.length === 0) {
+            assert.fail(`${key} tag "${tag.slug}" ${block.type} has no sourceIds and no internal analysis marker`);
           }
         }
       }
@@ -159,6 +165,43 @@ test("Batch 1 content block sourceId requirements", () => {
   }
 });
 
+test("Batch 1 verified announcement IDs whitelist", () => {
+  const verified: Record<string, Array<{ id: string; stock: string; aid: string; name: string }>> = {
+    humanoid: [
+      { id: "S-HUMANOID-SANHUA-FILING",       stock: "002050", aid: "1219912907", name: "三花智控" },
+      { id: "S-HUMANOID-TOPPU-FILING",        stock: "601689", aid: "1219742972", name: "拓普集团" },
+      { id: "S-HUMANOID-GREENHARMONIC-FILING", stock: "688017", aid: "1219925766", name: "绿的谐波" },
+      { id: "S-HUMANOID-INOVANCE-FILING",     stock: "300124", aid: "1219748593", name: "汇川技术" },
+    ],
+    "ai-computing": [
+      { id: "S-AICOMP-UNIS-FILING",           stock: "000938", aid: "1219912267", name: "紫光股份" },
+    ],
+    hbm: [
+      { id: "S-HBM-YAKU-FILING",              stock: "002409", aid: "1219853209", name: "雅克科技" },
+      { id: "S-HBM-SHANNON-FILING",           stock: "300475", aid: "1219801503", name: "香农芯创" },
+      { id: "S-HBM-HUAHAI-FILING",            stock: "688535", aid: "1219493941", name: "华海诚科" },
+      { id: "S-HBM-JCET-FILING",              stock: "600584", aid: "1219664953", name: "长电科技" },
+      { id: "S-HBM-TFME-FILING",              stock: "002156", aid: "1219598327", name: "通富微电" },
+    ],
+    cpo: [
+      { id: "S-CPO-INNOTIGHT-FILING",         stock: "300308", aid: "1219703026", name: "中际旭创" },
+      { id: "S-CPO-ACCELINK-FILING",          stock: "002281", aid: "1219826062", name: "光迅科技" },
+      { id: "S-CPO-HGTECH-FILING",            stock: "000988", aid: "1219428932", name: "华工科技" },
+    ],
+  };
+  for (const key of BATCH1_KEYS) {
+    const ws = getSectorResearchWorkspace(key)!;
+    const entries = verified[key];
+    assert.ok(entries, `no whitelist entries for ${key}`);
+    for (const v of entries) {
+      const src = ws.sources.find((s) => s.id === v.id);
+      assert.ok(src, `workspace ${key} missing source ${v.id} (${v.name})`);
+      const url = src.url;
+      assert.ok(url.includes(`stockCode=${v.stock}`), `${v.id} URL missing stockCode=${v.stock}: ${url}`);
+      assert.ok(url.includes(`announcementId=${v.aid}`), `${v.id} URL missing announcementId=${v.aid}: ${url}`);
+    }
+  }
+});
 test("Batch 1 table/compareTable row consistency", () => {
   for (const key of BATCH1_KEYS) {
     const ws = getSectorResearchWorkspace(key)!;

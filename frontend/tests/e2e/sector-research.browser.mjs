@@ -379,20 +379,25 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
     errors.push(`${label}: expand button not visible`);
   }
 
-  // 6. Report discovery: scope industry/company/all + days filter
-  const SCOPES = ["industry", "company", "all"];
-  for (const scope of SCOPES) {
+  // 6. Report discovery: full scope/days matrix with URL query verification
+  const SCOPE_DAYS = [
+    { scope: "industry", days: null },
+    { scope: "company", days: "30" },
+    { scope: "company", days: "180" },
+    { scope: "all", days: null },
+  ];
+  for (const { scope, days } of SCOPE_DAYS) {
     const scopeSelect = page.locator("select").first();
     if (await scopeSelect.isVisible().catch(() => false)) {
       await scopeSelect.selectOption(scope);
       await page.waitForTimeout(200);
     }
-    if (scope === "company") {
-      const daysInput = page.getByPlaceholder("回溯天数").first();
+    if (days !== null) {
+      const daysInput = page.locator("input[type=number]").first();
       if (await daysInput.isVisible().catch(() => false)) {
-        await daysInput.fill("180");
-        await daysInput.press("Enter");
-        await page.waitForTimeout(200);
+        await daysInput.click({ clickCount: 3 });
+        await daysInput.fill(String(days));
+        await page.waitForTimeout(500);
       }
     }
     const before = networkBag.bag.sectorReportsRequests[sectorKey] || 0;
@@ -402,12 +407,33 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
       await page.waitForTimeout(1500);
     }
     const after = networkBag.bag.sectorReportsRequests[sectorKey] || 0;
-    if (after <= before) {
-      errors.push(`${label}: scope="${scope}" discovery click did not issue request`);
+    if (after !== before + 1) {
+      errors.push(`${label}: scope="${scope}" days="${days}" expected +1 request (before=${before}, after=${after})`);
     }
-  }
-  if ((networkBag.bag.sectorReportsRequests[sectorKey] || 0) < 3) {
-    errors.push(`${label}: expected at least 3 report discovery requests, got ${networkBag.bag.sectorReportsRequests[sectorKey]}`);
+    // Verify URL query params from last captured request
+    const details = networkBag.bag.sectorReportsDetails;
+    const lastReq = details.filter((d) => d.sectorKey === sectorKey).pop();
+    if (lastReq) {
+      try {
+        const parsed = new URL(lastReq.url);
+        const qScope = parsed.searchParams.get("scope") || "";
+        const qDays = parsed.searchParams.get("days") || "";
+        if (qScope !== scope) {
+          errors.push(`${label}: scope="${scope}" but request URL has scope="${qScope}"`);
+        }
+        if (days !== null && qDays !== days) {
+          errors.push(`${label}: days="${days}" but request URL has days="${qDays}"`);
+        }
+        // Verify sector key appears in URL path
+        if (!lastReq.url.includes(`/sector-research/reports/${sectorKey}`)) {
+          errors.push(`${label}: request URL does not contain sector key "${sectorKey}": ${lastReq.url}`);
+        }
+      } catch {
+        errors.push(`${label}: failed to parse request URL: ${lastReq.url}`);
+      }
+    } else {
+      errors.push(`${label}: no request detail found for sector ${sectorKey}`);
+    }
   }
 }
 
@@ -461,7 +487,7 @@ async function runDesktop(browser, errors, networkBag) {
     errors.push(`${label}: company scope expected +1 discovery request (before=${discoveryBefore}, after=${networkBag.bag.reportsPcb})`);
   }
 
-  const daysInput = page.getByPlaceholder("回溯天数").first();
+  const daysInput = page.locator("input[type=number]").first();
   if (await daysInput.isVisible().catch(() => false)) {
     await daysInput.fill("180");
     await daysInput.press("Enter");
