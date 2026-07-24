@@ -18,6 +18,7 @@ export const pricingBlocks: ContentBlock[] = [
       ["材料成本占比", "电解质成本上升（推断）", "电解质成本占比显著提升（推断）", "尚无公开资料确认"],
       ["规模效应曲线", "尚无公开资料确认", "预计陡峭（从零起步）", "尚无公开资料确认"],
     ],
+    sourceIds: ["S-SSBAT-CATL-FILING", "S-SSBAT-POLICY-NEV"],
   },
   {
     type: "callout",
@@ -55,5 +56,6 @@ export const pricingBlocks: ContentBlock[] = [
       "国际贸易/技术管制可能影响关键设备与材料（如高端硫化物原料）的跨境供应。",
       "锂金属负极的循环寿命问题（锂枝晶/死锂/体积膨胀）尚无工程化解决方案公开。",
     ],
+    sourceIds: ["S-SSBAT-CATL-FILING", "S-SSBAT-POLICY-NEV"],
   },
 ];

@@ -37,6 +37,7 @@ export const valueBlocks: ContentBlock[] = [
       ["单位能耗成本", "中", "中", "低（电动）", "低（但利用率低）"],
       ["典型航距", "短途", "中短途", "30–100 km", "试验阶段"],
     ],
+    sourceIds: ["S-LOWALT-LAISI-FILING", "S-LOWALT-POLICY-FRAMEWORK"],
   },
   {
     type: "paragraph",
@@ -76,5 +77,6 @@ export const valueBlocks: ContentBlock[] = [
       "基建投资错配风险：提前建设的高规格垂直起降场可能因型号适航滞后而短期闲置。",
       "替代路径风险：若地面自动驾驶（Robotaxi）成本下降更快，eVTOL 在出行场景的 CPSK 优势可能被削弱。",
     ],
+    sourceIds: ["S-LOWALT-LAISI-FILING", "S-LOWALT-POLICY-FRAMEWORK"],
   },
 ];

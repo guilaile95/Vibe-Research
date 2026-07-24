@@ -5,6 +5,7 @@ export const nextGenBlocks: ContentBlock[] = [
   {
     type: "paragraph",
     text: "智能驾驶当前最热的技术主线是（1）端到端（End-to-End）模型代替传统模块化架构；（2）城市导航辅助驾驶（城市 NOA）从少数高端车型向主流价格带渗透；（3）Robotaxi 商业模式在中国特定城市加速试点。三个方向之间存在强烈的协同——端到端提升城市 NOA 泛化能力，城市 NOA 积累的数据又成为 Robotaxi 算法的基础。",
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "bullets",
@@ -27,6 +28,7 @@ export const nextGenBlocks: ContentBlock[] = [
       ["国内代表阵营", "华为+Momenta（部分）、Waymo", "Tesla FSD、华为 ADS 3.0（部分端到端）、小鹏"],
       ["量产进展", "多数已量产", "少数已量产/部分上车"],
     ],
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "paragraph",
@@ -36,6 +38,7 @@ export const nextGenBlocks: ContentBlock[] = [
     type: "callout",
     tone: "info",
     text: "城市 NOA 的渗透率预测是券商分析中分歧较大的指标。核心变量包括：高速 NOA 用户升级意愿（自然过渡率）、城市 NOA 作为选配/标配的比例、用户实际订阅率。在上述变量中，尚无公开数据可验证具体渗透率曲线。本工作台不采用未经交叉验证的渗透率数字。",
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "table",
@@ -49,11 +52,13 @@ export const nextGenBlocks: ContentBlock[] = [
       ["单车成本", "较高（多激光雷达方案）", "较高", "取决传感器配置"],
       ["盈亏平衡时间", "尚无公开资料确认", "尚无公开资料确认", "尚无公开资料确认"],
     ],
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "callout",
     tone: "warning",
     text: "Robotaxi 商业模式的可验证风险：当前 Robotaxi 运营收入远不足以覆盖车辆折旧+传感器+安全员+电费+后台运营成本。去安全员是盈亏平衡的关键前提，但法规审批节奏高度不确定；单车成本下降依赖于激光雷达等感知硬件的规模降本。目前公开资料尚不能确认 Robotaxi 业务本身的盈利时间节点。",
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "risk",
@@ -63,5 +68,6 @@ export const nextGenBlocks: ContentBlock[] = [
       "Robotaxi 法案推进速度滞后于技术成熟度，L3/L4 事故责任认定仍在讨论中。",
       "部分城市对 Robotaxi 的运营许可持谨慎态度，可能限制试点城市数量与车队规模。",
     ],
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
 ];

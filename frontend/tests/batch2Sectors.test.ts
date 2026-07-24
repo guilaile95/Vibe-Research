@@ -10,7 +10,7 @@ import { getSectorResearchWorkspace } from "../src/data/sectorResearch/index.ts"
 
 const BATCH2_KEYS = ["semiconductor", "smart-driving", "solid-state-battery", "low-altitude"] as const;
 
-const VERIFIED_ANNS: Record<string, Array<{ id: string; stock: string; aid: string; name: string }>> = {
+const VERIFIED_ANNOUNCEMENTS: Record<string, Array<{ id: string; stock: string; aid: string; name: string }>> = {
   "semiconductor": [
     { id: "S-SEMI-NAURA-FILING", stock: "002371", aid: "1219908921", name: "\u5317\u65b9\u534e\u521b" },
     { id: "S-SEMI-AMEC-FILING", stock: "688012", aid: "1219329946", name: "\u4e2d\u5fae\u516c\u53f8" },
@@ -46,56 +46,124 @@ const VERIFIED_ANNS: Record<string, Array<{ id: string; stock: string; aid: stri
   ],
 };
 
-test("Batch 2 workspace registration", () => {
+test("Batch 2 workspaces are all registered and satisfy invariants", () => {
+  const registered = registeredResearchKeys();
   for (const key of BATCH2_KEYS) {
-    assert.ok(registeredResearchKeys().includes(key), `${key} should be registered`);
+    assert.ok(registered.includes(key), `workspace ${key} should be registered`);
     const ws = getSectorResearchWorkspace(key);
-    assert.ok(ws, `${key} exists`);
-    assert.equal(ws.tags.length, 6, `${key} has 6 tags`);
-    const r = checkWorkspace(ws!);
-    assert.equal(r.ok, true, `${key}: ${r.errors.join("; ")}`);
+    assert.ok(ws, `workspace ${key} should exist`);
+    assert.equal(ws.key, key);
+    assert.equal(ws.tags.length, 6, `workspace ${key} should have 6 tags`);
+    assert.equal(ws.tags[0].slug, ws.defaultTag, `${key} defaultTag should be first slug`);
+    const checkRes = checkWorkspace(ws);
+    assert.equal(checkRes.ok, true, `checkWorkspace for ${key} failed: ${checkRes.errors.join("; ")}`);
   }
 });
 
-test("Batch 2 source integrity and announcement whitelist", () => {
+test("Batch 2 source integrity, block type diversity, and sourceId rules", () => {
+  const internalKeywords = ["内部分析", "分析推断", "行业预测", "待验证", "in-house analysis", "industry estimate", "pending verification", "analysis inference"];
+  const externalKeywords = ["JEDEC", "OIF", "JESD", "IEEE", "IPC", "SEMI", "ISO", "CCAR", "EASA", "FAA", "DO-178C", "DO-254", "ASPICE"];
   for (const key of BATCH2_KEYS) {
     const ws = getSectorResearchWorkspace(key)!;
-    const sids = new Set(ws.sources.map(s => s.id));
-    assert.equal(sids.size, ws.sources.length, `${key} has duplicate source IDs`);
-    const used = new Set<string>();
+    const sourceIds = new Set(ws.sources.map((s) => s.id));
+    assert.equal(sourceIds.size, ws.sources.length, `workspace ${key} has duplicate source ids`);
+    const usedSourceIds = new Set<string>();
     for (const tag of ws.tags) {
+      assert.ok(tag.slug && tag.label && tag.title, `tag incomplete in ${key}`);
+      assert.ok(tag.status !== "placeholder", `tag ${tag.slug} in ${key} should not be placeholder`);
+
+      const validTypes = ["paragraph", "bullets", "table", "compareTable", "callout", "risk", "fact"];
+      const blockTypes = new Set(tag.blocks.filter((b) => b.type !== "placeholder").map((b) => b.type));
+      const relevant = [...blockTypes].filter((t) => validTypes.includes(t)).length;
+      assert.ok(relevant >= 3, `${key} tag "${tag.slug}" has only ${relevant} diverse block types`);
+
       for (const block of tag.blocks) {
-        if (block.type === "placeholder") continue;
-        for (const id of (block.sourceIds ?? [])) {
-          assert.ok(sids.has(id), `${key} ${tag.slug} uses unknown ID "${id}"`);
-          used.add(id);
+        assert.notEqual(block.type, "placeholder", `tag ${tag.slug} in ${key} contains forbidden placeholder block`);
+        const ids = block.sourceIds ?? [];
+        assert.equal(new Set(ids).size, ids.length, `tag ${tag.slug} has duplicate sourceIds`);
+        for (const id of ids) {
+          assert.ok(sourceIds.has(id), `tag ${tag.slug} in ${key} uses unknown sourceId "${id}"`);
+          usedSourceIds.add(id);
         }
-        // table/compareTable row consistency
-        if ((block.type === "table" || block.type === "compareTable") && block.rows) {
-          assert.ok(block.headers.length > 0, `empty headers in ${key} ${tag.slug}`);
-          assert.ok(block.rows.length > 0, `empty rows in ${key} ${tag.slug}`);
-          for (const row of block.rows) assert.equal(row.length, block.headers.length, `row mismatch in ${key} ${tag.slug}`);
+
+        const hasEmptySourceIds = !block.sourceIds || block.sourceIds.length === 0;
+        const blockText = JSON.stringify(block);
+        const hasInternalMarker = internalKeywords.some((kw) => blockText.includes(kw));
+        if (hasEmptySourceIds) {
+          if (!hasInternalMarker) {
+            assert.fail(`${key} tag "${tag.slug}" ${block.type} has empty sourceIds without internal marker: ${blockText.slice(0, 120)}`);
+          }
+          for (const kw of externalKeywords) {
+            if (blockText.includes(kw)) {
+              assert.fail(`${key} tag "${tag.slug}" empty sourceIds block references external standard/org "${kw}" without citation`);
+            }
+          }
+        }
+
+        if (block.type === "table" || block.type === "compareTable") {
+          assert.ok(block.headers.length > 0, `table in ${tag.slug} has empty headers`);
+          assert.ok(block.rows.length > 0, `table in ${tag.slug} has empty rows`);
+          for (const row of block.rows) {
+            assert.equal(row.length, block.headers.length, `table row length mismatch in ${tag.slug}`);
+          }
         }
       }
     }
+
     for (const s of ws.sources) {
-      assert.ok(used.has(s.id), `${key} source "${s.id}" orphaned`);
-      assert.ok(s.url?.startsWith("http"), `${s.id} invalid URL`);
-      assert.ok(s.accessedAt, `${s.id} missing accessedAt`);
-      assert.ok(s.supports, `${s.id} missing supports`);
-    }
-    // Whitelist check
-    const anns = VERIFIED_ANNS[key];
-    for (const a of anns) {
-      const src = ws.sources.find(s => s.id === a.id);
-      assert.ok(src, `${key} missing whitelist source ${a.id} (${a.name})`);
-      assert.ok(src.url!.includes(`stockCode=${a.stock}`), `${a.id} wrong stockCode`);
-      assert.ok(src.url!.includes(`announcementId=${a.aid}`), `${a.id} wrong announcementId`);
+      assert.ok(usedSourceIds.has(s.id), `workspace ${key} source "${s.id}" is orphaned`);
+      assert.ok(s.url && s.url.startsWith("http"), `source ${s.id} missing valid http/https url: ${s.url}`);
+      assert.ok(s.accessedAt, `source ${s.id} missing accessedAt`);
+      if (s.publishedAt) assert.ok(!isNaN(Date.parse(s.publishedAt)), `${key} source "${s.id}" invalid publishedAt`);
+      if (s.accessedAt) assert.ok(!isNaN(Date.parse(s.accessedAt)), `${key} source "${s.id}" invalid accessedAt`);
+      assert.ok(s.supports, `source ${s.id} missing supports`);
     }
   }
 });
 
-test("Unregistered sector shows placeholder", () => {
+test("Batch 2 workspace required content components", () => {
+  for (const key of BATCH2_KEYS) {
+    const ws = getSectorResearchWorkspace(key)!;
+    let hasTable = false;
+    let hasCompareTable = false;
+    let hasRisk = false;
+    let hasFalsification = false;
+    let hasPendingVerification = false;
+
+    for (const tag of ws.tags) {
+      for (const block of tag.blocks) {
+        if (block.type === "table") hasTable = true;
+        if (block.type === "compareTable") hasCompareTable = true;
+        if (block.type === "risk") hasRisk = true;
+        if (block.type === "callout" && block.tone === "warning") hasFalsification = true;
+        if (block.type === "callout" && block.tone === "info") hasPendingVerification = true;
+      }
+    }
+
+    assert.ok(hasTable, `workspace ${key} missing table`);
+    assert.ok(hasCompareTable, `workspace ${key} missing compareTable`);
+    assert.ok(hasRisk, `workspace ${key} missing risk list`);
+    assert.ok(hasFalsification, `workspace ${key} missing falsification callout`);
+    assert.ok(hasPendingVerification, `workspace ${key} missing pending verification callout`);
+  }
+});
+
+test("Batch 2 verified announcement IDs whitelist (hard fail)", () => {
+  for (const key of BATCH2_KEYS) {
+    const ws = getSectorResearchWorkspace(key)!;
+    const entries = VERIFIED_ANNOUNCEMENTS[key];
+    assert.ok(entries && entries.length > 0, `no whitelist entries for ${key}`);
+    for (const v of entries) {
+      const src = ws.sources.find((s) => s.id === v.id);
+      assert.ok(src, `workspace ${key} missing whitelisted source ${v.id} (${v.name})`);
+      const url = src.url;
+      assert.ok(url.includes(`stockCode=${v.stock}`), `${v.id} URL missing stockCode=${v.stock}: ${url}`);
+      assert.ok(url.includes(`announcementId=${v.aid}`), `${v.id} URL missing announcementId=${v.aid}: ${url}`);
+    }
+  }
+});
+
+test("Unregistered sectors display placeholder without workspace", () => {
   assert.equal(getSectorResearchWorkspace("nonexistent"), undefined);
   assert.equal(resolveOrFallback("nonexistent", "overview"), null);
 });

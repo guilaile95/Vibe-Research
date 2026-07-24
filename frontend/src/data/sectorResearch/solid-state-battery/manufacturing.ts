@@ -14,6 +14,7 @@ export const manufacturingBlocks: ContentBlock[] = [
       "电池组装：全固态电池通常需要加压（等静压/辊压）改善固-固界面接触；传统叠片/卷绕工艺可能被压力层叠法取代或改造。",
       "后端处理：全固态电池无需化成老化工序中的加液/排气环节，但可能需要活化/界面优化热处理。",
     ],
+    sourceIds: ["S-SSBAT-CATL-FILING", "S-SSBAT-POLICY-NEV"],
   },
   {
     type: "table",
@@ -56,5 +57,6 @@ export const manufacturingBlocks: ContentBlock[] = [
       "现有液态电池产线改造为固态产线的可行性尚无大规模验证。",
       "固态电池制造成本曲线尚无可靠数据可供建模预测。",
     ],
+    sourceIds: ["S-SSBAT-CATL-FILING", "S-SSBAT-POLICY-NEV"],
   },
 ];

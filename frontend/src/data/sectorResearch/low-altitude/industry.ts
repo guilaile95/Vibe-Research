@@ -80,5 +80,6 @@ export const industryBlocks: ContentBlock[] = [
       "格局收敛慢：适航周期长导致格局收敛速度远慢于汽车/消费电子行业。",
       "海外竞争优势：Joby/Archer 等美股上市公司在融资和 FAA 进度上可能领先国内对标。",
     ],
+    sourceIds: ["S-LOWALT-LAISI-FILING", "S-LOWALT-POLICY-FRAMEWORK"],
   },
 ];

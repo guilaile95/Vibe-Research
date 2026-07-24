@@ -32,6 +32,7 @@ export const overviewBlocks: ContentBlock[] = [
     type: "callout",
     tone: "warning",
     text: "数据质量提示：全固态电池量产时间、成本、能量密度上限等数字在业内存在较大分歧。机构预测与实际进展之间的差距尚未收敛。本工作台不使用未经交叉验证的具体年份或金额数字，宜重点关注技术瓶颈突破信号而非时间表预测。",
+    sourceIds: ["S-SSBAT-CATL-FILING", "S-SSBAT-POLICY-NEV"],
   },
   {
     type: "callout",
@@ -47,5 +48,6 @@ export const overviewBlocks: ContentBlock[] = [
       "钠电池、LMFP 等下一代液态体系可能降低行业转向固态的紧迫性。",
       "国际竞争加剧：丰田、三星 SDI、QuantumScape 等日韩美企业同样在加速，中国企业领先地位尚未锁定。",
     ],
+    sourceIds: ["S-SSBAT-CATL-FILING", "S-SSBAT-POLICY-NEV"],
   },
 ];

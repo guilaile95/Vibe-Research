@@ -25,6 +25,7 @@ export const industryBlocks: ContentBlock[] = [
   {
     type: "paragraph",
     text: "分环节讨论：",
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "bullets",
@@ -56,5 +57,6 @@ export const industryBlocks: ContentBlock[] = [
       "线控制动国内份额提升速度取决于定点量产节奏，与博世产品的性能/成本竞争可能拉长替代周期。",
       "车载镜头行业进入门槛相对较低，若供给过剩可能导致毛利率承压。",
     ],
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
 ];

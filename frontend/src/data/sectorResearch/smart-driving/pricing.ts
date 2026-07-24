@@ -5,6 +5,7 @@ export const pricingBlocks: ContentBlock[] = [
   {
     type: "paragraph",
     text: "智能驾驶的定价权分析需区分硬件（域控、传感器、执行器）与软件（NOA 订阅、功能 OTA、数据运营）两个维度。硬件端与传统汽车零部件定价逻辑类似——依赖客户认证、规模效应、技术代差；软件端则是新兴的商业模式，车企通过 NOA 订阅/买断、功能解锁与数据服务试图将智驾成本转嫁给用户。",
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "table",
@@ -32,6 +33,7 @@ export const pricingBlocks: ContentBlock[] = [
     type: "callout",
     tone: "warning",
     text: "软件付费的盈利模型风险提示：当前智驾软件的实际付费率（付费用户/具备硬件车型销量）尚无公开权威数据。车企公布的用户数据通常为「选装率」而非实际持续订阅率。NOA 订阅在 30 万以上车型的选装率相对较高，但在 20 万以下车型能否形成规模付费仍需验证。本工作台不采用未经独立交叉验证的付费率/渗透率假设。",
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "compareTable",
@@ -44,6 +46,7 @@ export const pricingBlocks: ContentBlock[] = [
       ["付费率", "暂无公开确认数据", "暂无公开确认数据", "暂无公开确认数据", "暂无公开确认数据"],
       ["与硬件绑定", "HW3/HW4", "硬件包（英伟达 Orin）", "AD Max 硬件包", "ADS 硬件预埋"],
     ],
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "paragraph",
@@ -58,5 +61,6 @@ export const pricingBlocks: ContentBlock[] = [
       "软件付费渗透率低可能导致车企将更多成本向 Tier 1 转嫁，压缩零部件端毛利率。",
       "国际地缘政治风险：若关键芯片（Orin、Snapdragon）或制造设备受出口管制，可能影响国内 L3+/城市 NOA 的研发与量产节奏。",
     ],
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
 ];

@@ -44,6 +44,7 @@ export const pricingBlocks: ContentBlock[] = [
     type: "callout",
     tone: "warning",
     text: "订单质量风险提示：当前公开渠道披露的 eVTOL「订单」多为 MoU/意向/框架协议。实际订单转化为公司收入的确认条件包括：订金支付/批次约定交付时间/违约条款。多数意向订单的转化率、交付时间表和价格条款均不透明。截至目前（基于已读来源），尚无公开可核验的大型 eVTOL 批量确认订单或交付数据。",
+    sourceIds: ["S-LOWALT-LAISI-FILING", "S-LOWALT-POLICY-FRAMEWORK"],
   },
   {
     type: "paragraph",
@@ -76,6 +77,7 @@ export const pricingBlocks: ContentBlock[] = [
       ["资本密集度", "整车工厂+充电网络", "认证+研发+制造+垂直起降场网络"],
       ["退补后存活", "部分企业淘汰", "尚无数据可参考"],
     ],
+    sourceIds: ["S-LOWALT-LAISI-FILING", "S-LOWALT-POLICY-FRAMEWORK"],
   },
   {
     type: "risk",
@@ -86,5 +88,6 @@ export const pricingBlocks: ContentBlock[] = [
       "政策转向风险：若出现安全事故或监管收紧，政策支持力度可能阶段性回落。",
       "地方财政约束：基建投资高度依赖地方财政，债务约束可能延迟低空基础设施落地节奏。",
     ],
+    sourceIds: ["S-LOWALT-LAISI-FILING", "S-LOWALT-POLICY-FRAMEWORK"],
   },
 ];

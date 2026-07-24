@@ -5,6 +5,7 @@ export const architectureBlocks: ContentBlock[] = [
   {
     type: "paragraph",
     text: "智能驾驶系统架构按功能逻辑分为四个层级：感知层（摄像头、毫米波雷达、激光雷达、超声波雷达）、计算决策层（域控制器、SoC 芯片、ADAS 算法）、规划控制层（路径规划、行为决策、运动控制）、执行层（线控制动、线控转向、驱动控制）。系统从感知输入到执行输出形成闭环。",
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "paragraph",
@@ -33,6 +34,7 @@ export const architectureBlocks: ContentBlock[] = [
       ["国产化程度", "较高（联创电子等）", "中等（华域等）", "中等（禾赛/速腾）"],
       ["L3+ 必要性", "必需", "必需", "视方案而定"],
     ],
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "table",
@@ -43,6 +45,7 @@ export const architectureBlocks: ContentBlock[] = [
       ["EMB（电子机械制动）", "完全取消液压，电机直接夹紧制动盘", "亚太股份（S-DRIVE-ASIA-FILING）", "Bosch、ZF、Brembo"],
       ["ESC/ESP 集成制动", "基于现有 ESC 系统的附加制动功能", "伯特利 ESC（S-DRIVE-BTL-FILING）", "Bosch ESP、Continental ESC"],
     ],
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "callout",
@@ -56,5 +59,6 @@ export const architectureBlocks: ContentBlock[] = [
       "线控执行（EMB）的安全冗余法规尚未明确：国内 L3/L4 法规对线控制动的冗余要求可能影响量产节奏。",
       "端到端智驾方案的安全验证方法论仍在探索中，尚无统一标准。",
     ],
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
 ];

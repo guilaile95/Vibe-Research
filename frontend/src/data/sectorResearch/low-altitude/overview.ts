@@ -24,6 +24,7 @@ export const overviewBlocks: ContentBlock[] = [
       ["材料与零部件", "航空复合材料、动力系统、航电系统", "中航高科（600862）", "成熟配套+产品升级"],
       ["运营应用", "物流动脉/支线、巡检安防、城市出行、农业植保", "中信海直（000099）", "物流试点→出行探索"],
     ],
+    sourceIds: ["S-LOWALT-LAISI-FILING", "S-LOWALT-POLICY-FRAMEWORK"],
   },
   {
     type: "compareTable",
@@ -43,6 +44,7 @@ export const overviewBlocks: ContentBlock[] = [
     type: "callout",
     tone: "warning",
     text: "数据质量提示：低空经济万亿市场规模预测来源多样，统计口径差异大（是否含航空器制造、基建投资、运营收入、带动的上下游产业等）。目前公开资料尚不能确认统一口径下的精确规模数字。本工作台对市场空间仅作定性结构分析，不采用未经交叉验证的具体金额。",
+    sourceIds: ["S-LOWALT-LAISI-FILING", "S-LOWALT-POLICY-FRAMEWORK"],
   },
   {
     type: "callout",
@@ -71,5 +73,6 @@ export const overviewBlocks: ContentBlock[] = [
       "基建滞后风险：垂直起降场、5G-A 网络等基础设施建设周期长于预计。",
       "竞争格局不确定性：现有航空巨头、跨界科技公司、初创企业同时入场，格局尚未收敛。",
     ],
+    sourceIds: ["S-LOWALT-LAISI-FILING", "S-LOWALT-POLICY-FRAMEWORK"],
   },
 ];

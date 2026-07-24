@@ -19,6 +19,7 @@ export const chemistryBlocks: ContentBlock[] = [
       ["界面接触", "烧结/加压可改善", "固-固刚性接触差", "与电极接触较好"],
       ["国内代表企业", "宁德时代、国轩高科", "赣锋锂业、天赐材料", "尚无公开资料确认"],
     ],
+    sourceIds: ["S-SSBAT-CATL-FILING", "S-SSBAT-POLICY-NEV"],
   },
   {
     type: "table",

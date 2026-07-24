@@ -19,6 +19,7 @@ export const valueBlocks: ContentBlock[] = [
       ["线控转向", "无", "无", "L3+ 方向（尚无公开量产值）"],
       ["智驾软件/算法授权", "基础功能免费", "高速 NOA 付费升级", "城市 NOA 订阅/买断"],
     ],
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "paragraph",
@@ -29,6 +30,7 @@ export const valueBlocks: ContentBlock[] = [
     type: "callout",
     tone: "warning",
     text: "价值量估算风险提示：单车价值量是智驾研究中最易失实的指标之一。表中「数百元/千元级/数千元级」为定性区间，非精确数字。实际价格受（1）车企采购量；（2）芯片/传感器成本下降速度；（3）BOM 集成度（行泊一体、舱驾一体）影响显著。各环节具体金额应以公司公告披露或供应链调研为据，本工作台尚未完成相关数据核实。",
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "compareTable",
@@ -41,6 +43,7 @@ export const valueBlocks: ContentBlock[] = [
       ["软件算法成本", "低（嵌入硬件）", "中（算法授权）", "高（订阅/买断）"],
       ["单车智能驾驶价值量级", "千元级", "数千元级", "万元级"],
     ],
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
   {
     type: "callout",
@@ -55,5 +58,6 @@ export const valueBlocks: ContentBlock[] = [
       "软件付费的渗透率（实际付费用户/车主比例）尚无公开权威数据。",
       "线控转向因法规限制，短期内不会形成实质价值量。",
     ],
+    sourceIds: ["S-DRIVE-DESAY-FILING", "S-DRIVE-MIIT-POLICY"],
   },
 ];

@@ -33,6 +33,7 @@ export const industryBlocks: ContentBlock[] = [
       ["专利储备", "尚无公开资料确认具体数据", "Toyota 专利数最多（公开信息）", "尚无公开资料确认"],
       ["资本投入", "已有公开量产线规划", "多数仍处于中试线阶段", "目前无显著差距（推断）"],
     ],
+    sourceIds: ["S-SSBAT-CATL-FILING", "S-SSBAT-POLICY-NEV"],
   },
   {
     type: "bullets",
@@ -51,5 +52,6 @@ export const industryBlocks: ContentBlock[] = [
       "丰田等海外企业若先实现全固态量产，可能重演锂电领域日韩先发而后中国追赶的竞争格局。",
       "锂电池产业链向固态转型过程中，现有产能投资的减值风险不可忽视（液态产线可能过早淘汰）。",
     ],
+    sourceIds: ["S-SSBAT-CATL-FILING", "S-SSBAT-POLICY-NEV"],
   },
 ];

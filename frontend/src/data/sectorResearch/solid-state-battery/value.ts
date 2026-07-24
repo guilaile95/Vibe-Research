@@ -45,5 +45,6 @@ export const valueBlocks: ContentBlock[] = [
       "正极超高镍化、硅碳负极、固态电解质等均有其他应用场景（如消费电子），价值量增量不完全归属固态电池产业。",
       "如果固态电池量产节点持续后延，材料企业可能在前置研发投入中承担减值风险。",
     ],
+    sourceIds: ["S-SSBAT-CATL-FILING", "S-SSBAT-POLICY-NEV"],
   },
 ];

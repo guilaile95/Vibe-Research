@@ -27,6 +27,7 @@ export const architectureBlocks: ContentBlock[] = [
       ["倾转旋翼（Tiltrotor）", "Joby S4", "高（≈200+ km/h）", "长（≈150 km+）", "最高", "航程/速度最优；结构与飞控最复杂"],
       ["倾转涵道（Tilt-duct）", "Lilium Jet", "高（≈200+ km/h）", "中→长", "高", "涵道风扇降低噪音；认证路径尚待明确"],
     ],
+    sourceIds: ["S-LOWALT-LAISI-FILING", "S-LOWALT-POLICY-FRAMEWORK"],
   },
   {
     type: "paragraph",
@@ -65,6 +66,7 @@ export const architectureBlocks: ContentBlock[] = [
       ["气象要求", "CAVOK 标准", "低空风切变监测+多源融合"],
       ["维修体系", "MRO 网络（航空级）", "分布式维修单元（简化版）"],
     ],
+    sourceIds: ["S-LOWALT-LAISI-FILING", "S-LOWALT-POLICY-FRAMEWORK"],
   },
   {
     type: "callout",
@@ -81,5 +83,6 @@ export const architectureBlocks: ContentBlock[] = [
       "网络安全风险：数字化空管架构面临更大的网络攻击面；调度系统单点故障后果严重。",
       "频谱资源分配：5G-A 通感一体化需要额外频谱资源，与现有移动通信的频谱分配方案尚未完全明确。",
     ],
+    sourceIds: ["S-LOWALT-LAISI-FILING", "S-LOWALT-POLICY-FRAMEWORK"],
   },
 ];
