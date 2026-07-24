@@ -25,17 +25,13 @@ def _clear_state(tmp_path, monkeypatch):
         daily_review._bg_refreshing = False
         daily_review._refresh_failed = False
         daily_review._refresh_error = None
-    with daily_review._explicit_refresh_cond:
-        daily_review._explicit_refresh_inflight = False
-        daily_review._explicit_refresh_result = None
-        daily_review._explicit_refresh_error = None
+    with daily_review._explicit_refresh_lock:
+        daily_review._explicit_refresh_current = None
     daily_review_cache.clear_latest_review_file()
     yield
     daily_review._clear_review_cache()
-    with daily_review._explicit_refresh_cond:
-        daily_review._explicit_refresh_inflight = False
-        daily_review._explicit_refresh_result = None
-        daily_review._explicit_refresh_error = None
+    with daily_review._explicit_refresh_lock:
+        daily_review._explicit_refresh_current = None
     daily_review_cache.clear_latest_review_file()
 
 
@@ -159,6 +155,181 @@ def test_sequential_independent_refreshes_build_twice(monkeypatch):
     r2 = daily_review.refresh_daily_review_for_display()
     assert builds["n"] == 2
     assert r1["data"]["generated_at"] != r2["data"]["generated_at"]
+
+
+def test_round1_waiter_not_hijacked_by_round2_success(monkeypatch):
+    """第一轮 waiter 在消费前第二轮已启动时，仍必须拿到第一轮 generated_at。"""
+    builds = {"n": 0}
+    # phase control: hold first build until waiters attached; then complete round1;
+    # hold round1 waiter after join path is set up via barriers.
+    release_r1_build = threading.Event()
+    r1_build_started = threading.Event()
+    r1_flight_done = threading.Event()  # leader finished event.set path about to return
+    release_r1_waiter = threading.Event()
+    release_r2_build = threading.Event()
+    r2_build_started = threading.Event()
+
+    def build():
+        builds["n"] += 1
+        n = builds["n"]
+        if n == 1:
+            r1_build_started.set()
+            assert release_r1_build.wait(timeout=10)
+            return _packet("2026-07-24 21:00:01")
+        if n == 2:
+            r2_build_started.set()
+            assert release_r2_build.wait(timeout=10)
+            return _packet("2026-07-24 21:00:02")
+        return _packet(f"2026-07-24 21:00:0{n}")
+
+    monkeypatch.setattr(daily_review, "_build_daily_review", build)
+
+    r1_leader_out: list = []
+    r1_waiter_out: list = []
+    r2_out: list = []
+    errors: list = []
+
+    def r1_leader():
+        try:
+            r1_leader_out.append(daily_review.refresh_daily_review_for_display())
+        except Exception as e:  # noqa: BLE001
+            errors.append(("r1_leader", e))
+
+    def r1_waiter():
+        try:
+            # ensure we join flight after leader has registered current
+            assert r1_build_started.wait(timeout=5)
+            # park slightly so we are waiters on flight.event
+            out = daily_review.refresh_daily_review_for_display()
+            # simulate slow consumer: if implementation were global-slot, round2 could corrupt
+            release_r1_waiter.wait(timeout=10)
+            r1_waiter_out.append(out)
+        except Exception as e:  # noqa: BLE001
+            errors.append(("r1_waiter", e))
+
+    def r2_leader():
+        try:
+            r2_out.append(daily_review.refresh_daily_review_for_display())
+        except Exception as e:  # noqa: BLE001
+            errors.append(("r2_leader", e))
+
+    t_lead = threading.Thread(target=r1_leader)
+    t_wait = threading.Thread(target=r1_waiter)
+    t_lead.start()
+    assert r1_build_started.wait(timeout=5)
+    t_wait.start()
+    time.sleep(0.15)  # waiter blocked on flight.event
+    release_r1_build.set()
+    t_lead.join(timeout=10)
+    assert r1_leader_out, "r1 leader did not finish"
+    assert r1_leader_out[0]["data"]["generated_at"] == "2026-07-24 21:00:01"
+    # Start round2 before waiter "consumes" (waiter already returned from refresh
+    # once event set — we need waiter still inside await when r2 starts).
+    # Re-structure: keep waiter blocked inside custom wait by delaying event until...
+    # Our waiter already returned from refresh when event set. The race is:
+    # waiter is in `while inflight: wait` and after wake reads global result —
+    # with per-flight object, waiter returns before r2 even if r2 clears current.
+    # To force the bad interleaving with old code: waiter woke, not yet read result,
+    # r2 clears. With Event-based flight, once event is set, result is already on
+    # the flight object; waiter reads flight.result. So we only need: capture flight
+    # before r2, r2 creates new flight, waiter still reads old flight.
+
+    # Start r2 while r1 waiter thread may still be finishing deepcopy
+    t_r2 = threading.Thread(target=r2_leader)
+    t_r2.start()
+    assert r2_build_started.wait(timeout=5)
+    release_r2_build.set()
+    t_r2.join(timeout=10)
+    release_r1_waiter.set()
+    t_wait.join(timeout=10)
+
+    assert not errors, errors
+    assert r1_waiter_out, "r1 waiter missing"
+    assert r1_waiter_out[0]["data"]["generated_at"] == "2026-07-24 21:00:01"
+    assert r2_out and r2_out[0]["data"]["generated_at"] == "2026-07-24 21:00:02"
+    assert builds["n"] == 2
+
+
+def test_round1_waiter_gets_round1_error_not_round2_success(monkeypatch):
+    """第一轮异常 + 第二轮成功：第一轮 waiter 必须收到第一轮异常。"""
+    builds = {"n": 0}
+    release_r1 = threading.Event()
+    r1_started = threading.Event()
+    release_r2 = threading.Event()
+    r2_started = threading.Event()
+
+    def build():
+        builds["n"] += 1
+        n = builds["n"]
+        if n == 1:
+            r1_started.set()
+            assert release_r1.wait(timeout=10)
+            raise RuntimeError("round1 network fail")
+        r2_started.set()
+        assert release_r2.wait(timeout=10)
+        return _packet("2026-07-24 22:00:02")
+
+    monkeypatch.setattr(daily_review, "_build_daily_review", build)
+
+    # seed a prior success so quality path isn't the only concern
+    monkeypatch.setattr(
+        daily_review,
+        "_build_daily_review",
+        lambda: _packet("2026-07-24 22:00:00"),
+    )
+    daily_review.generate_daily_review()
+    monkeypatch.setattr(daily_review, "_build_daily_review", build)
+
+    r1_err: list = []
+    r1_waiter_err: list = []
+    r2_ok: list = []
+
+    def r1_leader():
+        try:
+            daily_review.refresh_daily_review_for_display()
+        except Exception as e:  # noqa: BLE001
+            r1_err.append(e)
+
+    def r1_waiter():
+        try:
+            assert r1_started.wait(timeout=5)
+            daily_review.refresh_daily_review_for_display()
+        except Exception as e:  # noqa: BLE001
+            r1_waiter_err.append(e)
+
+    def r2():
+        try:
+            r2_ok.append(daily_review.refresh_daily_review_for_display())
+        except Exception as e:  # noqa: BLE001
+            r2_ok.append(e)
+
+    t1 = threading.Thread(target=r1_leader)
+    t2 = threading.Thread(target=r1_waiter)
+    t1.start()
+    assert r1_started.wait(timeout=5)
+    t2.start()
+    time.sleep(0.15)
+    release_r1.set()
+    t1.join(timeout=10)
+    t3 = threading.Thread(target=r2)
+    t3.start()
+    assert r2_started.wait(timeout=5)
+    release_r2.set()
+    t2.join(timeout=10)
+    t3.join(timeout=10)
+
+    assert r1_err and isinstance(r1_err[0], daily_review.DailyReviewRefreshError)
+    assert r1_waiter_err and isinstance(
+        r1_waiter_err[0], daily_review.DailyReviewRefreshError
+    )
+    assert r1_err[0].reason == r1_waiter_err[0].reason == "build_exception"
+    assert r2_ok and isinstance(r2_ok[0], dict)
+    assert r2_ok[0]["data"]["generated_at"] == "2026-07-24 22:00:02"
+    # old success memory retained through round1 failure
+    assert daily_review._cached_review()["generated_at"] in (
+        "2026-07-24 22:00:00",
+        "2026-07-24 22:00:02",
+    )
 
 
 def test_build_exception_keeps_memory_and_disk(monkeypatch):

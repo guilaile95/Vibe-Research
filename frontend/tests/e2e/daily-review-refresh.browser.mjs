@@ -327,12 +327,14 @@ async function main() {
       );
     }
     const failNote = await page
-      .getByText(/最新数据刷新失败，当前继续显示上次成功结果/)
+      .getByText("最新数据刷新失败，当前继续显示上次成功结果")
       .first()
       .isVisible()
       .catch(() => false);
     if (!failNote) {
-      // soft: note may use exact copy; still require old data retained via GET
+      errors.push(
+        "fail refresh UI must show hard message: 最新数据刷新失败，当前继续显示上次成功结果",
+      );
     }
     await page.screenshot({ path: path.join(shotDir, "daily-review-refresh.png"), fullPage: true });
 

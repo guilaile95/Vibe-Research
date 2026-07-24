@@ -49,14 +49,27 @@ _bg_refreshing = False
 _refresh_failed = False
 _refresh_error: str | None = None
 
-# 用户显式刷新：真正 single-flight（共享同一次 build 结果 / 异常）
-# 不得仅靠互斥锁把多次 build 串行化。
-_explicit_refresh_gate = threading.Lock()
-_explicit_refresh_cond = threading.Condition(_explicit_refresh_gate)
-_explicit_refresh_inflight = False
-_explicit_refresh_result: dict | None = None  # 成功时的 display payload
-_explicit_refresh_error: BaseException | None = None
-_explicit_refresh_gen = 0  # 每次完成（成功/失败）递增，便于测试观测
+# 用户显式刷新：真正 single-flight（每轮独立 flight 对象）
+# - 调用者进入时捕获当前 flight 引用，只等待/复用该对象
+# - 新一轮可替换 current，但不得覆盖旧 flight 的 result/error
+# - 不得仅靠互斥锁把多次 build 串行化到全局槽位
+
+
+class _ExplicitRefreshFlight:
+    """单轮显式刷新的共享状态（结果/异常绑定在本对象，不被下一轮覆盖）。"""
+
+    __slots__ = ("event", "result", "error", "gen")
+
+    def __init__(self, gen: int) -> None:
+        self.event = threading.Event()
+        self.result: dict | None = None
+        self.error: BaseException | None = None
+        self.gen = gen
+
+
+_explicit_refresh_lock = threading.Lock()
+_explicit_refresh_current: _ExplicitRefreshFlight | None = None
+_explicit_refresh_gen = 0  # 每启动一轮 leader 递增
 
 # 组件展示前缀
 _PREFIX = {
@@ -694,56 +707,63 @@ def _run_explicit_refresh_build() -> dict:
         return _success_payload_for_display(stored, source="refresh")
 
 
+def _await_explicit_refresh_flight(flight: _ExplicitRefreshFlight) -> dict:
+    """等待已捕获的 flight；只读该对象，不受后续轮次 current 替换影响。"""
+    if not flight.event.wait(timeout=120):
+        raise DailyReviewRefreshError(
+            daily_review_errors.SAFE_REFRESH_FAILED,
+            reason="flight_timeout",
+        )
+    if flight.error is not None:
+        raise flight.error
+    if flight.result is None:
+        raise DailyReviewRefreshError(
+            daily_review_errors.SAFE_REFRESH_FAILED,
+            reason="empty_shared_result",
+        )
+    return copy.deepcopy(flight.result)
+
+
 def refresh_daily_review_for_display() -> dict:
     """用户显式刷新：绕过完整包 300s 内存缓存；真正 single-flight。
 
-    - 并发重叠的 POST **只执行一次** ``_build_daily_review``；等待方复用同一次
-      成功结果或同一次异常（非串行多次 build）。
-    - 上一次刷新完全结束后，下一次独立点击仍重新构建一次。
+    - 并发重叠的 POST **只执行一次** ``_build_daily_review``；等待方捕获同一
+      ``_ExplicitRefreshFlight`` 并复用该轮 result/error（不被下一轮清空/覆盖）。
+    - 上一次 flight 完成后，下一次独立点击创建新 flight 并重新构建。
     - 构建前 **不** 破坏性清除上次成功内存/磁盘。
     - 仅成功质量结果原子替换内存 + latest.json；失败保留旧成功。
     - 不调用 AI；不写 daily_review_snapshots；不生成持仓建议。
     - 成功返回 ``{data, cache_meta}``（stale=false, source=refresh）。
     - 失败抛 ``DailyReviewRefreshError``（API → 非 2xx；前端保留旧 UI）。
     """
-    global _explicit_refresh_inflight, _explicit_refresh_result
-    global _explicit_refresh_error, _explicit_refresh_gen
+    global _explicit_refresh_current, _explicit_refresh_gen
 
-    with _explicit_refresh_cond:
-        # 已有 in-flight：等待并复用
-        if _explicit_refresh_inflight:
-            while _explicit_refresh_inflight:
-                _explicit_refresh_cond.wait(timeout=120)
-            if _explicit_refresh_error is not None:
-                raise _explicit_refresh_error
-            if _explicit_refresh_result is None:
-                raise DailyReviewRefreshError(
-                    daily_review_errors.SAFE_REFRESH_FAILED,
-                    reason="empty_shared_result",
-                )
-            return copy.deepcopy(_explicit_refresh_result)
+    with _explicit_refresh_lock:
+        cur = _explicit_refresh_current
+        if cur is not None and not cur.event.is_set():
+            # 加入进行中的一轮：只持有该 flight 引用
+            flight = cur
+            is_leader = False
+        else:
+            _explicit_refresh_gen += 1
+            flight = _ExplicitRefreshFlight(_explicit_refresh_gen)
+            _explicit_refresh_current = flight
+            is_leader = True
 
-        # 成为 leader
-        _explicit_refresh_inflight = True
-        _explicit_refresh_result = None
-        _explicit_refresh_error = None
+    if not is_leader:
+        return _await_explicit_refresh_flight(flight)
 
+    # Leader：执行唯一一次 build，结果写入本 flight 对象
     try:
         payload = _run_explicit_refresh_build()
-        with _explicit_refresh_cond:
-            _explicit_refresh_result = payload
-            _explicit_refresh_error = None
-            _explicit_refresh_gen += 1
-            _explicit_refresh_inflight = False
-            _explicit_refresh_cond.notify_all()
+        flight.result = payload
+        flight.error = None
+        flight.event.set()
         return copy.deepcopy(payload)
     except DailyReviewRefreshError as exc:
-        with _explicit_refresh_cond:
-            _explicit_refresh_result = None
-            _explicit_refresh_error = exc
-            _explicit_refresh_gen += 1
-            _explicit_refresh_inflight = False
-            _explicit_refresh_cond.notify_all()
+        flight.error = exc
+        flight.result = None
+        flight.event.set()
         raise
     except Exception as exc:  # noqa: BLE001
         wrapped = DailyReviewRefreshError(
@@ -751,13 +771,15 @@ def refresh_daily_review_for_display() -> dict:
             reason="unexpected",
         )
         wrapped.__cause__ = exc
-        with _explicit_refresh_cond:
-            _explicit_refresh_result = None
-            _explicit_refresh_error = wrapped
-            _explicit_refresh_gen += 1
-            _explicit_refresh_inflight = False
-            _explicit_refresh_cond.notify_all()
+        flight.error = wrapped
+        flight.result = None
+        flight.event.set()
         raise wrapped from exc
+    finally:
+        # 允许下一轮独立请求创建新 flight；旧 flight 对象仍可被其 waiter 安全读取
+        with _explicit_refresh_lock:
+            if _explicit_refresh_current is flight:
+                _explicit_refresh_current = None
 
 
 def _cache_meta(
