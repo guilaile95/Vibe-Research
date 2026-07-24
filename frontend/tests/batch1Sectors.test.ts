@@ -97,3 +97,37 @@ test("Unregistered sectors display placeholder without workspace", () => {
   assert.equal(getSectorResearchWorkspace("semiconductor"), undefined);
   assert.equal(resolveOrFallback("semiconductor", "overview"), null);
 });
+
+test("Batch 1 source metadata formats", () => {
+  for (const key of BATCH1_KEYS) {
+    const ws = getSectorResearchWorkspace(key)!;
+    for (const s of ws.sources) {
+      // accessedAt must be valid ISO date
+      assert.ok(s.accessedAt && !isNaN(Date.parse(s.accessedAt)), `${key} source "${s.id}" missing valid accessedAt`);
+      // publishedAt if present must be valid
+      if (s.publishedAt) assert.ok(!isNaN(Date.parse(s.publishedAt)), `${key} source "${s.id}" invalid publishedAt`);
+      // supports must be non-empty string or array
+      const supp = typeof s.supports === "string" ? [s.supports] : s.supports;
+      assert.ok(Array.isArray(supp) && supp.length > 0 && supp.every((x) => typeof x === "string" && x.trim().length > 0), `${key} source "${s.id}" missing supports`);
+      // URL must be http/https
+      assert.ok(/^https?:\/\//.test(s.url), `${key} source "${s.id}" URL not http/https: ${s.url}`);
+      // Forbidden domains
+      assert.equal(s.url.includes("onboardoptics.org"), false, `${key} source "${s.id}" uses forbidden domain`);
+    }
+  }
+});
+
+test("Batch 1 table/compareTable row consistency", () => {
+  for (const key of BATCH1_KEYS) {
+    const ws = getSectorResearchWorkspace(key)!;
+    for (const tag of ws.tags) {
+      for (const block of tag.blocks) {
+        if (block.type === "table" || block.type === "compareTable") {
+          for (const row of block.rows) {
+            assert.equal(row.length, block.headers.length, `${key} ${tag.slug} ${block.type} row length mismatch`);
+          }
+        }
+      }
+    }
+  }
+});

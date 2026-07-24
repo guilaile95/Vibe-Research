@@ -48,8 +48,6 @@ function resolvePython() {
   }
   const win = path.join(root, "backend", ".venv", "Scripts", "python.exe");
   if (existsSync(win)) return win;
-  const parentWin = path.join(root, "..", "Vibe-Research", "backend", ".venv", "Scripts", "python.exe");
-  if (existsSync(parentWin)) return parentWin;
   const lin = path.join(root, "backend", ".venv", "bin", "python");
   if (existsSync(lin)) return lin;
   return process.platform === "win32" ? "python.exe" : "python3";
@@ -377,7 +375,12 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
     errors.push(`${label}: expand button not visible`);
   }
 
-  // 6. Report discovery (click 开始发现 button)
+  // 6. Report discovery (scope select + 开始发现 button)
+  const discScopeSelect = page.locator("select").first();
+  if (await discScopeSelect.isVisible().catch(() => false)) {
+    await discScopeSelect.selectOption("company");
+    await page.waitForTimeout(300);
+  }
   const repReqBefore = networkBag.bag.sectorReportsRequests[sectorKey] || 0;
   const startDiscoverBtn = page.getByRole("button", { name: "开始发现" }).first();
   if (await startDiscoverBtn.isVisible().catch(() => false)) {
@@ -425,10 +428,15 @@ async function runDesktop(browser, errors, networkBag) {
   await page.goto(`http://127.0.0.1:${frontendPort}/sectors/pcb/overview`, { waitUntil: "networkidle" });
 
   // PCB Discovery & Import
+  const pcbScopeSelect = page.locator("select").first();
+  if (await pcbScopeSelect.isVisible().catch(() => false)) {
+    await pcbScopeSelect.selectOption("company");
+    await page.waitForTimeout(500);
+  }
   const discoveryBefore = networkBag.bag.reportsPcb;
-  const startDiscoverBtn = page.getByRole("button", { name: "开始发现" }).first();
-  if (await startDiscoverBtn.isVisible().catch(() => false)) {
-    await startDiscoverBtn.click();
+  const pcbDiscBtn = page.getByRole("button", { name: "开始发现" }).first();
+  if (await pcbDiscBtn.isVisible().catch(() => false)) {
+    await pcbDiscBtn.click();
     await page.waitForTimeout(1000);
   }
   if (networkBag.bag.reportsPcb < discoveryBefore + 1) {

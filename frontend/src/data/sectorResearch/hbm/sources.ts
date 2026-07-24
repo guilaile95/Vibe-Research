@@ -41,7 +41,7 @@ export const hbmSources: SourceRef[] = [
     id: "S-HBM-TAIJI-FILING",
     title: "太极实业 - 2023年年度报告与海力士封测合作",
     org: "太极实业（600641）",
-    url: "http://www.cninfo.com.cn/new/disclosure/detail?stockCode=600641&announcementId=1219565000",
+    url: "http://www.cninfo.com.cn/new/disclosure/detail?stockCode=600641&announcementId=1219876281",
     sourceType: "company_filing",
     factLevel: "公司口径",
     publishedAt: "2024-04-26",
