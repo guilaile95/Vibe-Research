@@ -404,3 +404,139 @@ class TestDecisionCockpitSignals:
             s["assessment"] == "unknown"
             for s in sigs2 if s["label"] != "market_environment"
         )
+
+    def test_rule_version_stamped(self):
+        sigs = signals.evaluate_value(
+            "600519",
+            {"metrics": {"pe_ttm": {"percentile": 10, "current": 1}}},
+            {},
+        )
+        assert all(s.get("rule_version") == signals.RULE_VERSION_VALUE for s in sigs)
+        bars = [{"open": 1, "close": 1 + i * 0.01, "high": 2, "low": 0.5, "volume": 1000} for i in range(80)]
+        tsigs = signals.evaluate_trend("600519", bars)
+        assert all(s.get("rule_version") == signals.RULE_VERSION_TREND for s in tsigs)
+
+    def test_candidate_dimension_summary_threshold(self):
+        """≥3 可用信号才聚合；否则 unknown。"""
+        cands = [{"code": "600519", "name": "x", "sources": ["holding"]}]
+        few = [
+            {"candidate_code": "600519", "dimension": "value", "label": "a", "assessment": "strong"},
+            {"candidate_code": "600519", "dimension": "value", "label": "b", "assessment": "strong"},
+        ]
+        r = signals.aggregate_candidate_dimensions(cands, few)
+        assert r[0]["dimensions"]["value"]["assessment"] == "unknown"
+        few.append(
+            {"candidate_code": "600519", "dimension": "value", "label": "c", "assessment": "strong"}
+        )
+        r2 = signals.aggregate_candidate_dimensions(cands, few)
+        assert r2[0]["dimensions"]["value"]["assessment"] == "strong"
+
+    def test_cash_exec_estimated_amount_path(self):
+        """无 execution_quantity 时由 estimated_amount + price 反推（在 service 层）；
+        底层 compute_cash_exec 仍接受股数。"""
+        r = signals.compute_cash_exec(300, 50.0, 20000)
+        assert r["required_cash"] == 15000.0
+        assert r["is_executable"] is True
+
+
+# ---------------------------------------------------------------------------
+# decision_cockpit_service 关键门禁 / 无跨日 advice
+# ---------------------------------------------------------------------------
+
+
+class TestDecisionCockpitServiceGates:
+    @pytest.fixture(autouse=True)
+    def _iso(self, tmp_path, monkeypatch):
+        db = tmp_path / "daily_reviews.sqlite3"
+        monkeypatch.setenv("VIBE_RESEARCH_REVIEW_DB", str(db))
+        monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(watchlist_store, "_CACHE_DIR", str(tmp_path))
+        self.db = str(db)
+
+    def test_illegal_iso_date_rejected(self):
+        import decision_cockpit_service as svc
+
+        with pytest.raises(svc.DecisionCockpitError):
+            svc._validate_trade_date("2026-02-30")
+        with pytest.raises(svc.DecisionCockpitError):
+            svc._validate_trade_date("")
+        with pytest.raises(svc.DecisionCockpitError):
+            svc._validate_trade_date("2026/07/24")
+        with pytest.raises(svc.DecisionCockpitError):
+            svc._validate_trade_date("2099-01-01")  # future
+
+    def test_generate_rejects_non_latest_review(self, monkeypatch):
+        import decision_cockpit_service as svc
+        import review_store
+        import review_history
+
+        db = self.db
+        # seed two review days; latest is 2026-07-20
+        for td, gen in (("2026-07-18", "2026-07-18 18:00:00"), ("2026-07-20", "2026-07-20 18:00:00")):
+            review_store.save_daily_review_snapshot(
+                {
+                    "schema_version": "daily-review.v1",
+                    "trade_date": td,
+                    "generated_at": gen,
+                    "data_cutoff": gen,
+                    "status": "normal",
+                    "sections": {},
+                },
+                db,
+            )
+        monkeypatch.setattr(review_history, "resolve_review_db_path", lambda *a, **k: db)
+        with pytest.raises(svc.DecisionCockpitSnapshotError) as ei:
+            svc._bind_review_snapshot("2026-07-18")
+        assert "最新已保存复盘" in str(ei.value)
+        ok = svc._bind_review_snapshot("2026-07-20")
+        assert ok["source_review_trade_date"] == "2026-07-20"
+
+    def test_advice_no_cross_day_fallback(self, monkeypatch):
+        import decision_cockpit_service as svc
+        import ai_result_service
+
+        def fake_get(result_type, trade_date=None):
+            if trade_date == "2026-07-20":
+                return None
+            # latest without trade_date would return other day — service must not call this path
+            return {
+                "result_type": result_type,
+                "trade_date": "2026-07-19",
+                "payload": {"holdings": []},
+            }
+
+        monkeypatch.setattr(ai_result_service, "get_ai_result", fake_get)
+        assert svc._portfolio_advice_full_snapshot("2026-07-20") is None
+        assert svc._portfolio_advice_full_snapshot(None) is None
+
+    def test_signal_schema_persists_rule_version_and_refs(self, tmp_path):
+        db = self.db
+        store.upsert_evidence(db, "kline/600519", {"n": 10})
+        store.upsert_signal(
+            db,
+            plan_id="p-schema",
+            candidate_code="600519",
+            dimension="trend",
+            label="ma_alignment",
+            assessment="strong",
+            confidence=0.6,
+            evidence_refs=["kline/600519"],
+            raw_value={"ma20": 1},
+            context={"price_adjustment": "none"},
+            data_status="normal",
+            rule_version=signals.RULE_VERSION_TREND,
+        )
+        sigs = store.get_signals_for_plan(db, "p-schema")
+        assert len(sigs) == 1
+        s = sigs[0]
+        assert s["rule_version"] == signals.RULE_VERSION_TREND
+        assert s["evidence_refs"] == ["kline/600519"]
+        assert s["raw_value"] == {"ma20": 1}
+        assert s["context"]["price_adjustment"] == "none"
+        assert store.evidence_exists(db, "kline/600519") is True
+        assert store.evidence_exists(db, "value/600519") is False
+
+    def test_get_signals_readonly_no_migration_on_missing_cols(self, tmp_path):
+        """GET 路径不建表迁移：空库返回 []。"""
+        missing = str(tmp_path / "nope" / "x.sqlite3")
+        assert store.get_signals_for_plan(missing, "p") == []

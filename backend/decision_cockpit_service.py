@@ -26,6 +26,10 @@ import watchlist_store
 
 from decision_cockpit_signals import (
     MAX_CANDIDATES,
+    RULE_VERSION_SHORT,
+    RULE_VERSION_TREND,
+    RULE_VERSION_VALUE,
+    aggregate_candidate_dimensions,
     build_candidate_pool,
     compute_cash_exec,
     evaluate_candidate_short,
@@ -35,6 +39,7 @@ from decision_cockpit_signals import (
 )
 from decision_cockpit_store import (
     create_plan as store_create_plan,
+    evidence_exists,
     freeze_plan as store_freeze_plan,
     get_current_plan as store_get_current_plan,
     get_plan as store_get_plan,
@@ -79,9 +84,61 @@ def _codes_fingerprint(codes: list[str]) -> str:
 
 
 def _validate_trade_date(trade_date: Any) -> str:
-    if not isinstance(trade_date, str) or not _TRADE_DATE_RE.match(trade_date.strip()):
+    """严格校验：date.fromisoformat；拒绝空/非法日历/未来日。"""
+    if not isinstance(trade_date, str) or not trade_date.strip():
+        raise DecisionCockpitError("trade_date 不能为空")
+    raw = trade_date.strip()
+    if not _TRADE_DATE_RE.match(raw):
         raise DecisionCockpitError("trade_date 必须是 YYYY-MM-DD 格式")
-    return trade_date.strip()
+    try:
+        from datetime import date as _date
+        d = _date.fromisoformat(raw)
+    except ValueError as e:
+        raise DecisionCockpitError(f"trade_date 非法日历日期：{raw}") from e
+    # 规范化回 ISO（fromisoformat 已保证合法）
+    normalized = d.isoformat()
+    if normalized != raw:
+        raise DecisionCockpitError(f"trade_date 非法：{raw}")
+    today = _beijing_today()
+    if d > today:
+        raise DecisionCockpitError(f"trade_date 不能是未来日期：{raw}")
+    return normalized
+
+
+def _beijing_today():
+    from datetime import datetime, timezone, timedelta, date as _date
+    return datetime.now(timezone(timedelta(hours=8))).date()
+
+
+def _require_latest_review_trade_date(trade_date: str) -> dict:
+    """生成仅允许最新已保存不可变复盘快照的 trade_date。
+
+    不一致 → DecisionCockpitSnapshotError(409)
+    「明日计划只能基于最新已保存复盘生成」
+    """
+    latest = review_history.get_latest_review_history_snapshot(trade_date=None)
+    if latest is None:
+        raise DecisionCockpitSnapshotError(
+            "尚无已保存的每日复盘快照，请先生成并保存复盘后再生成明日计划"
+        )
+    latest_td = latest.get("trade_date")
+    if not latest_td or str(latest_td) != trade_date:
+        raise DecisionCockpitSnapshotError(
+            "明日计划只能基于最新已保存复盘生成"
+        )
+    snap_id = latest.get("id")
+    payload_hash = latest.get("payload_hash")
+    if snap_id is None or not payload_hash:
+        raise DecisionCockpitSnapshotError(
+            f"最新复盘快照缺少 id/payload_hash，拒绝绑定（trade_date={trade_date}）"
+        )
+    return {
+        "source_review_id": int(snap_id),
+        "source_review_hash": str(payload_hash),
+        "source_review_cutoff_at": latest.get("data_cutoff"),
+        "source_review_generated_at": latest.get("generated_at"),
+        "source_review_trade_date": str(latest_td),
+    }
 
 
 def _safe_call(fn: Callable[[], Any]) -> Any:
@@ -193,28 +250,11 @@ def _industry_rank_for_code(code: str, board_rows: list[dict] | None) -> int | N
 
 
 def _bind_review_snapshot(trade_date: str) -> dict:
-    """绑定已存在的每日复盘历史快照；缺失 → DecisionCockpitSnapshotError(409)。
+    """绑定最新已保存不可变复盘快照；trade_date 必须与最新快照完全一致。
 
-    绝不重新生成复盘或伪造 snapshot。
+    绝不重新生成复盘或伪造 snapshot。非最新 → 409。
     """
-    snap = review_history.get_latest_review_history_snapshot(trade_date=trade_date)
-    if snap is None:
-        raise DecisionCockpitSnapshotError(
-            f"交易日 {trade_date} 尚无不可变每日复盘快照，请先生成并保存复盘后再生成明日计划"
-        )
-    snap_id = snap.get("id")
-    payload_hash = snap.get("payload_hash")
-    if snap_id is None or not payload_hash:
-        raise DecisionCockpitSnapshotError(
-            f"交易日 {trade_date} 复盘快照缺少 id/payload_hash，拒绝绑定"
-        )
-    return {
-        "source_review_id": int(snap_id),
-        "source_review_hash": str(payload_hash),
-        "source_review_cutoff_at": snap.get("data_cutoff"),
-        "source_review_generated_at": snap.get("generated_at"),
-        "source_review_trade_date": snap.get("trade_date") or trade_date,
-    }
+    return _require_latest_review_trade_date(trade_date)
 
 
 # ---------------------------------------------------------------------------
@@ -363,16 +403,70 @@ def _compute_all_signals(
             evidence_log=evidence_log,
         )
         for s in sigs:
-            rec = {"plan_id": plan_id, "candidate_code": c["code"], **s}
+            dim = s["dimension"]
+            refs = list(s.get("evidence_refs") or [])
+            if not refs:
+                # 按维度映射到真实 evidence 路径（禁止 value/{code} 这种维度伪路径）
+                if dim == "value":
+                    refs = [
+                        _evidence_path(c["code"], "financials"),
+                        _evidence_path(c["code"], "valuation_percentile"),
+                        _evidence_path(c["code"], "full_valuation"),
+                    ]
+                elif dim == "trend":
+                    refs = [_evidence_path(c["code"], "kline")]
+                elif dim == "short":
+                    refs = ["market/short"]
+                else:
+                    refs = []
+            # 只保留已落库的 evidence（避免悬空引用）
+            live_refs = [p for p in refs if evidence_exists(_db_path(), p) or p.startswith("market/")]
+            if not live_refs and refs:
+                # 数据缺口：仍写信号但 evidence_refs 空 + data_status unknown
+                live_refs = []
+            rule_ver = s.get("rule_version")
+            if not rule_ver:
+                if dim == "value":
+                    rule_ver = RULE_VERSION_VALUE
+                elif dim == "trend":
+                    rule_ver = RULE_VERSION_TREND
+                elif dim == "short":
+                    rule_ver = RULE_VERSION_SHORT
+            data_status = s.get("data_status")
+            if data_status is None:
+                if s.get("assessment") == "unknown":
+                    data_status = "unknown"
+                elif live_refs:
+                    data_status = "normal"
+                else:
+                    data_status = "partial"
+            raw_value = s.get("value") if "value" in s else s.get("raw_value")
+            ctx = s.get("context") if isinstance(s.get("context"), dict) else None
+            counter = s.get("counter_evidence")
+            rec = {
+                "plan_id": plan_id,
+                "candidate_code": c["code"],
+                **s,
+                "evidence_refs": live_refs,
+                "evidence_paths": live_refs,
+                "rule_version": rule_ver,
+                "data_status": data_status,
+                "raw_value": raw_value,
+            }
             upsert_signal(
                 _db_path(),
                 plan_id=plan_id,
                 candidate_code=c["code"],
-                dimension=s["dimension"],
+                dimension=dim,
                 label=s["label"],
                 assessment=s["assessment"],
                 confidence=s.get("confidence"),
-                evidence_paths=[_evidence_path(c["code"], s["dimension"])],
+                evidence_refs=live_refs,
+                raw_value=raw_value,
+                context=ctx,
+                counter_evidence=counter if isinstance(counter, list) else None,
+                data_status=data_status,
+                rule_version=rule_ver,
             )
             all_sigs.append(rec)
     return plan_id, all_sigs
@@ -407,43 +501,37 @@ def _payload_hash(obj: Any) -> str:
 
 
 def _portfolio_advice_full_snapshot(trade_date: str | None = None) -> dict | None:
-    """持仓建议完整快照（P3）。
+    """持仓建议完整快照（仅精确 trade_date，无跨日 fallback）。
 
     包含 result_type / trade_date / generated_at / input_fingerprint /
     payload_hash / validated payload。后续 UPSERT 不会改写已固化进 plan 的副本。
+    无精确匹配 → None（调用方写 warning）。
     """
+    if not trade_date:
+        return None
     try:
-        if trade_date:
-            rec = ai_result_service.get_ai_result(
-                ai_result_service.PORTFOLIO_ADVICE, trade_date=trade_date,
-            )
-            if rec is None:
-                # 允许用最新建议，但会标注 trade_date 可能不同
-                rec = ai_result_service.get_ai_result(ai_result_service.PORTFOLIO_ADVICE)
-        else:
-            rec = ai_result_service.get_ai_result(ai_result_service.PORTFOLIO_ADVICE)
+        rec = ai_result_service.get_ai_result(
+            ai_result_service.PORTFOLIO_ADVICE, trade_date=trade_date,
+        )
     except ai_result_service.AiResultCorruptedError:
         return None
     except Exception:  # noqa: BLE001
         return None
     if rec is None:
         return None
+    # 二次校验：绝不接受其他 trade_date
+    if str(rec.get("trade_date") or "") != str(trade_date):
+        return None
 
     payload = rec.get("payload")
     if not isinstance(payload, dict):
         return None
 
-    # get_ai_result 的安全出口不含 input_fingerprint；从 store 再读一次补齐
     fingerprint = None
     try:
         db = review_history.resolve_review_db_path()
-        from ai_result_store import get_result, get_latest_result
-        raw = None
-        td = rec.get("trade_date")
-        if td:
-            raw = get_result(db, ai_result_service.PORTFOLIO_ADVICE, td)
-        if raw is None:
-            raw = get_latest_result(db, ai_result_service.PORTFOLIO_ADVICE)
+        from ai_result_store import get_result
+        raw = get_result(db, ai_result_service.PORTFOLIO_ADVICE, trade_date)
         if isinstance(raw, dict):
             fingerprint = raw.get("input_fingerprint")
     except Exception:  # noqa: BLE001
@@ -505,7 +593,19 @@ def _cash_executability_from_advice(
     advice_snapshot: dict | None,
     available_cash: float | None,
 ) -> dict:
-    """P7：按建议原始买入动作算现金可执行性，不用当前持仓股数当买入需求。"""
+    """P7：按建议原始买入动作算现金可执行性，不用当前持仓股数当买入需求。
+
+    支持 execution_quantity；若无数量但有 estimated_amount + 最新价，
+    则反推股数（floor 到 100 股）。现金未配置 → data_status=unavailable。
+    """
+    if advice_snapshot is None:
+        return {
+            "available_cash": available_cash,
+            "cash_configured": available_cash is not None,
+            "data_status": "unavailable" if available_cash is None else "normal",
+            "warning": "该交易日没有已保存持仓建议",
+            "actions": [],
+        }
     actions = _advice_buy_actions(advice_snapshot)
     codes = [a["code"] for a in actions if isinstance(a.get("code"), str)]
     quotes = _quote_map(codes)
@@ -519,18 +619,44 @@ def _cash_executability_from_advice(
         if price is None:
             price = a.get("current_price")
         intended = a.get("execution_quantity")
+        est_amt = a.get("estimated_amount")
+        # estimated_amount → 反推股数（当无 execution_quantity）
+        if (intended is None or intended <= 0) and est_amt is not None and price:
+            try:
+                p = float(price)
+                amt = float(est_amt)
+                if p > 0 and amt > 0:
+                    intended = int(amt // p)
+            except (TypeError, ValueError):
+                pass
         exe = compute_cash_exec(intended, price, available_cash)
+        if available_cash is None:
+            exe["data_status"] = "unavailable"
+        elif exe.get("reason") == "invalid_inputs":
+            exe["data_status"] = "unknown"
+        elif exe.get("reason") in ("insufficient_cash", "partial"):
+            exe["data_status"] = "partial"
+        else:
+            exe["data_status"] = "normal"
         items.append({
             "code": code,
             "name": a.get("name"),
             "action": a.get("action"),
             "intended_quantity": intended,
-            "estimated_amount_from_advice": a.get("estimated_amount"),
+            "execution_quantity": a.get("execution_quantity"),
+            "estimated_amount": est_amt,
+            "estimated_amount_from_advice": est_amt,
             **exe,
         })
+    data_status = "normal"
+    if available_cash is None:
+        data_status = "unavailable"
+    elif not items:
+        data_status = "normal"
     return {
         "available_cash": available_cash,
         "cash_configured": available_cash is not None,
+        "data_status": data_status,
         "actions": items,
     }
 
@@ -671,12 +797,22 @@ def generate_tomorrow_plan(
     """
     trade_date = _validate_trade_date(trade_date)
 
-    # P2：绑定不可变复盘快照（先于任何写操作）
+    # P2：仅允许最新已保存复盘 trade_date（先于任何写操作 / 市场拉取）
     review_binding = _bind_review_snapshot(trade_date)
 
     market_short = _market_short_summary()
     if market_short.get("status") == "unavailable":
         raise DecisionCockpitMarketDataError("市场核心数据暂不可用，无法生成明日计划")
+
+    # 市场短线证据（供 short 维度 evidence_refs）
+    try:
+        upsert_evidence(_db_path(), "market/short", {
+            "status": market_short.get("status"),
+            "warnings": market_short.get("warnings"),
+            "trade_date": trade_date,
+        })
+    except Exception:  # noqa: BLE001
+        pass
 
     # 重复生成保护：已有 frozen 且未 force → 返回现有 frozen（不写）
     if not force:
@@ -705,10 +841,16 @@ def generate_tomorrow_plan(
         candidates, market_short=market_short, short_ctx=short_ctx,
     )
 
-    # P3：完整建议快照（优先同 trade_date）
+    # P3：仅精确 trade_date 建议；无则 None + warning（不跨日、不触发 LLM）
+    warnings: list[str] = []
     advice_snapshot = _portfolio_advice_full_snapshot(trade_date)
+    if advice_snapshot is None:
+        warnings.append("该交易日没有已保存持仓建议")
     portfolio = _portfolio_summary(advice_snapshot)
     explanation = generate_explanation(cfg, trade_date, market_short, signals)
+
+    # 候选级三维摘要（value/trend/short；≥3 可用信号才聚合，否则 unknown）
+    candidate_summaries = aggregate_candidate_dimensions(candidates, signals)
 
     payload = {
         "schema_version": "tomorrow-plan.v1",
@@ -726,9 +868,11 @@ def generate_tomorrow_plan(
             "holdings": portfolio["holdings"],
             "cash_executability": portfolio["cash_executability"],
         },
-        # P3：完整建议快照（非薄摘要）
+        # P3：完整建议快照（非薄摘要；可为 null）
         "source_advice_snapshot": advice_snapshot,
+        "warnings": warnings,
         "candidates": candidates,
+        "candidate_summaries": candidate_summaries,
         "signals": signals,
         "explanation": explanation,
     }
@@ -772,18 +916,55 @@ def list_plans(trade_date: str | None = None, limit: int = 30, offset: int = 0) 
 def get_overview(trade_date: str) -> dict:
     """总览（只读聚合）：市场 / 账户 / 持仓建议 / 当前计划 / 候选池构成。
 
-    只读路径不写文件、不建表、不生成计划。
+    只读路径不写文件、不建表、不生成计划、不迁移 schema。
+    历史 trade_date（非最新复盘日）只读已保存计划，不把「今日」实时
+    市场/候选池伪装成历史数据。
     """
-    market_short = _market_short_summary()
+    try:
+        trade_date = _validate_trade_date(trade_date)
+    except DecisionCockpitError:
+        # 非法日期：仍返回空壳（HTTP 层可 400；此处兜底）
+        raise
+
+    latest = review_history.get_latest_review_history_snapshot(trade_date=None)
+    latest_td = str(latest.get("trade_date")) if latest else None
+    is_latest_review_day = (latest_td is not None and trade_date == latest_td)
+
+    plans = store_list_plans(_db_path(), trade_date, limit=20, offset=0)
     current = store_get_current_plan(_db_path(), trade_date)
-    inp = _get_candidate_pool_inputs()
-    pool = build_candidate_pool(
-        inp["holdings"], inp["watchlist"], inp["sector_codes"],
-        inp["lianban"], inp["turnover_top"], inp["high_turnover"],
-    )
-    advice = _portfolio_advice_full_snapshot(trade_date)
+
+    warnings: list[str] = []
+    if is_latest_review_day:
+        market_short = _market_short_summary()
+        inp = _get_candidate_pool_inputs()
+        pool = build_candidate_pool(
+            inp["holdings"], inp["watchlist"], inp["sector_codes"],
+            inp["lianban"], inp["turnover_top"], inp["high_turnover"],
+        )
+        account = _account_funding_summary()
+        advice = _portfolio_advice_full_snapshot(trade_date)
+    else:
+        # 历史日：只读已保存计划内固化的快照；不拉 live 市场/K 线/财务
+        market_short = None
+        pool = []
+        account = {"configured": False, "data": None, "status": "historical_readonly"}
+        advice = None
+        if current and isinstance(current.get("payload"), dict):
+            pl = current["payload"]
+            market_short = pl.get("market_short")
+            pool = list(pl.get("candidates") or [])
+            account = pl.get("account_funding") or account
+            advice = pl.get("source_advice_snapshot")
+        elif plans:
+            # 无 current 时仍不伪造 live pool
+            pass
+        warnings.append("历史交易日仅展示已保存计划，不混入今日实时行情")
+
+    if advice is None and is_latest_review_day:
+        warnings.append("该交易日没有已保存持仓建议")
+
     advice_summary = None
-    if advice:
+    if isinstance(advice, dict):
         advice_summary = {
             "result_type": advice.get("result_type"),
             "trade_date": advice.get("trade_date"),
@@ -793,11 +974,16 @@ def get_overview(trade_date: str) -> dict:
             "stale": advice.get("stale"),
             "schema_version": advice.get("schema_version"),
         }
+
     return {
         "trade_date": trade_date,
+        "is_latest_review_day": is_latest_review_day,
+        "latest_review_trade_date": latest_td,
         "market_short": market_short,
-        "account_funding": _account_funding_summary(),
+        "account_funding": account,
         "advice": advice_summary,
         "current_plan": current,
         "candidate_pool": pool,
+        "plans": plans,
+        "warnings": warnings,
     }

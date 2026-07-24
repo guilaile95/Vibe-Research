@@ -740,9 +740,15 @@ class TomorrowPlanGenerateIn(BaseModel):
 def decision_cockpit_overview(
     trade_date: str = Query(..., description="交易日 YYYY-MM-DD"),
 ):
-    """驱动舱总览（只读聚合）：市场 / 账户 / 持仓建议 / 当前计划 / 候选池。"""
+    """驱动舱总览（只读聚合）：市场 / 账户 / 持仓建议 / 当前计划 / 候选池。
+
+    非法 trade_date → 400；历史日只读已保存计划，不混入今日实时行情。
+    """
     try:
         return {"data": get_overview(trade_date)}
+    except DecisionCockpitError as e:
+        # trade_date 非法 / 未来日等
+        raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"驱动舱总览异常：{e}") from e
 
@@ -751,6 +757,8 @@ def decision_cockpit_overview(
 def decision_cockpit_generate(req: TomorrowPlanGenerateIn):
     """生成新的明日计划版本（候选池 + 信号 + 解释 + 持久化）。
 
+    - 非法 trade_date → 400
+    - 非最新复盘 trade_date / 缺快照 → 409（明日计划只能基于最新已保存复盘生成）
     - 市场广度不可用 → 503
     - 候选池为空 → 409
     - LLM 调用失败 → 自动回退确定性摘要（仍返回 200，但 explanation.source=deterministic）
@@ -766,7 +774,20 @@ def decision_cockpit_generate(req: TomorrowPlanGenerateIn):
     except DecisionCockpitModelError as e:
         raise HTTPException(502, f"明日计划解释生成失败：{e}") from e
     except DecisionCockpitError as e:
-        raise HTTPException(409, str(e)) from e
+        msg = str(e)
+        # 日期格式/日历/未来日 → 400；业务拒绝（空池等）→ 409
+        if any(
+            k in msg
+            for k in (
+                "trade_date",
+                "YYYY-MM-DD",
+                "非法",
+                "未来",
+                "不能为空",
+            )
+        ) and "候选池" not in msg:
+            raise HTTPException(400, msg) from e
+        raise HTTPException(409, msg) from e
     except Exception:  # noqa: BLE001 — 不向客户端暴露内部细节
         raise HTTPException(500, "明日计划生成失败") from None
 

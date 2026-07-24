@@ -38,15 +38,33 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Python resolution order (no hard-coded main worktree absolute path):
+ * 1. VR_E2E_PYTHON
+ * 2. VR_PYTHON
+ * 3. worktree backend/.venv (Scripts/python.exe | bin/python)
+ * 4. system `python` / `python3`
+ */
 function resolvePython() {
-  if (process.env.VR_PYTHON && process.env.VR_PYTHON.trim()) {
-    return process.env.VR_PYTHON.trim();
+  const candidates = [];
+  if (process.env.VR_E2E_PYTHON && process.env.VR_E2E_PYTHON.trim()) {
+    candidates.push(process.env.VR_E2E_PYTHON.trim());
   }
-  const winMain = path.join("E:", "AI Projects", "Vibe-Research", "backend", ".venv", "Scripts", "python.exe");
-  if (existsSync(winMain)) return winMain;
-  const win = path.join(root, "backend", ".venv", "Scripts", "python.exe");
-  if (existsSync(win)) return win;
-  return path.join(root, "backend", ".venv", "bin", "python");
+  if (process.env.VR_PYTHON && process.env.VR_PYTHON.trim()) {
+    candidates.push(process.env.VR_PYTHON.trim());
+  }
+  candidates.push(
+    path.join(root, "backend", ".venv", "Scripts", "python.exe"),
+    path.join(root, "backend", ".venv", "bin", "python"),
+    path.join(root, "backend", ".venv", "bin", "python3"),
+    "python",
+    "python3",
+  );
+  for (const c of candidates) {
+    if (c === "python" || c === "python3") return c;
+    if (existsSync(c)) return c;
+  }
+  return "python";
 }
 
 function getFreePort() {
@@ -201,13 +219,24 @@ function attachPageGuards(page, label, errors, bag) {
     try {
       const p = new URL(url).pathname;
       if (p.includes("/decision-cockpit/overview") && method === "GET") bag.overviewGet += 1;
-      if (p.includes("/tomorrow-plan/generate") && method === "POST") bag.generatePost += 1;
+      if (p.includes("/tomorrow-plan/generate") && method === "POST") {
+        bag.generatePost += 1;
+        bag.generateStatuses.push(status);
+      }
       if (p.includes("/freeze") && method === "POST") bag.freezePost += 1;
       if (p.includes("/watchlist") && method === "POST") bag.watchlistWrite += 1;
       if (p.includes("/watchlist") && method === "PUT") bag.watchlistWrite += 1;
     } catch { /* ignore */ }
-    // generate may 409 if snapshot missing — harness seeds it; still track 5xx
+    // 不 blanket 忽略 4xx：生成/冻结 的 4xx 视为失败；overview 非法日期 400 可接受仅当非本流程
     if (status >= 500) {
+      bag.badStatuses.push(`${status} ${method} ${url}`);
+      errors.push(`${label} unexpected HTTP ${status}: ${method} ${url}`);
+    } else if (
+      status >= 400 &&
+      (url.includes("/tomorrow-plan/generate") ||
+        url.includes("/freeze") ||
+        (url.includes("/decision-cockpit/overview") && method === "GET" && status !== 400))
+    ) {
       bag.badStatuses.push(`${status} ${method} ${url}`);
       errors.push(`${label} unexpected HTTP ${status}: ${method} ${url}`);
     }
@@ -218,6 +247,7 @@ async function runViewport(browser, errors, { width, height, label }) {
   const bag = {
     overviewGet: 0,
     generatePost: 0,
+    generateStatuses: [],
     freezePost: 0,
     watchlistWrite: 0,
     badStatuses: [],
@@ -260,25 +290,72 @@ async function runViewport(browser, errors, { width, height, label }) {
     fullPage: true,
   });
 
+  // Isolation counters before generate
+  const readE2eStatus = async () => {
+    try {
+      return await page.evaluate(async () => {
+        const r = await fetch("/api/decision-cockpit/e2e-status");
+        if (!r.ok) return null;
+        const j = await r.json();
+        return j?.data ?? j;
+      });
+    } catch {
+      return null;
+    }
+  };
+  const before = await readE2eStatus();
+  const plansBefore = before?.plan_count ?? null;
+
   // 2) Explicit generate → draft
+  const genPostsBefore = bag.generatePost;
   await page.getByRole("button", { name: /生成明日计划/ }).click();
-  await page.waitForTimeout(2500);
+  // wait until generate POST observed or UI shows draft (up to ~12s)
+  for (let i = 0; i < 30; i++) {
+    if (bag.generatePost > genPostsBefore) break;
+    await page.waitForTimeout(400);
+  }
+  await page.waitForTimeout(1500);
   // Accept either draft panel or info banner
   const draftOk =
     (await page.getByTestId("plan-status").isVisible().catch(() => false)) ||
-    (await page.getByText(/草稿|已生成/).first().isVisible().catch(() => false));
+    (await page.getByText(/草稿|已生成草稿|已生成/).first().isVisible().catch(() => false));
   if (!draftOk) {
     const body = await page.locator("body").innerText().catch(() => "");
-    errors.push(`${label}: generate did not show draft; body=${body.slice(0, 400)}`);
+    errors.push(
+      `${label}: generate did not show draft; statuses=${JSON.stringify(bag.generateStatuses)}; body=${body.slice(0, 400)}`,
+    );
   } else {
-    // 3D labels
+    // 3D labels + candidate summary cards
     for (const dim of ["价值", "趋势", "短线"]) {
       const ok = await page.getByText(dim, { exact: false }).first().isVisible().catch(() => false);
       if (!ok) errors.push(`${label}: missing 3D label ${dim}`);
     }
   }
 
-  // 3) Freeze if draft button present
+  // Isolation: generate POST must have fired with 2xx; plan_count should rise when endpoint available
+  if (bag.generatePost <= genPostsBefore) {
+    errors.push(`${label}: generate button did not POST /tomorrow-plan/generate`);
+  }
+  if (bag.generateStatuses.some((s) => s >= 400)) {
+    errors.push(`${label}: generate HTTP failed: ${JSON.stringify(bag.generateStatuses)}`);
+  }
+  // Isolation DB: first viewport must create ≥1 plan; later viewports may skip when frozen exists.
+  if (plansBefore != null) {
+    let plansAfter = null;
+    for (let i = 0; i < 15; i++) {
+      const st2 = await readE2eStatus();
+      plansAfter = st2?.plan_count ?? null;
+      if (plansAfter != null && (plansAfter > plansBefore || plansAfter > 0)) break;
+      await page.waitForTimeout(400);
+    }
+    if (plansBefore === 0 && (plansAfter == null || plansAfter <= 0)) {
+      errors.push(
+        `${label}: isolated plan_count stayed empty after generate; genStatuses=${JSON.stringify(bag.generateStatuses)}`,
+      );
+    }
+  }
+
+  // 3) Freeze if draft button present — supersede semantics checked via status
   const freezeBtn = page.getByRole("button", { name: /^冻结$/ });
   if (await freezeBtn.isVisible().catch(() => false)) {
     await freezeBtn.click();

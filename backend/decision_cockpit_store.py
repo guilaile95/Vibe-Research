@@ -55,6 +55,12 @@ _DECISION_TABLES = (
         confidence REAL,
         evidence_paths_json TEXT NOT NULL,
         computed_at TEXT NOT NULL,
+        raw_value_json TEXT,
+        context_json TEXT,
+        counter_evidence_json TEXT,
+        data_status TEXT,
+        rule_version TEXT,
+        evidence_refs_json TEXT,
         UNIQUE (plan_id, candidate_code, dimension, label)
     )
     """,
@@ -158,29 +164,62 @@ def _payload_hash(obj: Any) -> str:
     return hashlib.sha256(_canonical_json(obj).encode("utf-8")).hexdigest()
 
 
+# 信号表扩展列（写路径幂等迁移；GET 只读绝不调用）
+_SIGNAL_EXTRA_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("raw_value_json", "TEXT"),
+    ("context_json", "TEXT"),
+    ("counter_evidence_json", "TEXT"),
+    ("data_status", "TEXT"),
+    ("rule_version", "TEXT"),
+    ("evidence_refs_json", "TEXT"),
+)
+
+
+def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {r[1] for r in rows}
+
+
+def _migrate_signals_schema(conn: sqlite3.Connection) -> None:
+    """写路径幂等补齐 decision_signals 扩展列。"""
+    if not _table_exists(conn, "decision_signals"):
+        return
+    existing = _column_names(conn, "decision_signals")
+    for col, col_type in _SIGNAL_EXTRA_COLUMNS:
+        if col not in existing:
+            conn.execute(
+                f"ALTER TABLE decision_signals ADD COLUMN {col} {col_type}"
+            )
+
+
 def initialize_decision_tables(db_path: Any) -> None:
-    """幂等建三张表与索引。"""
+    """幂等建三张表与索引（写路径）。"""
     _ensure_parent_dir(db_path)
     conn = _connect(db_path)
     try:
         with conn:
             for stmt in _DECISION_TABLES:
                 conn.execute(stmt)
+            _migrate_signals_schema(conn)
     finally:
         conn.close()
 
 
 def _initialize_if_missing(db_path: Any) -> None:
-    """文件存在但表未建时补建；文件不存在时创建目录+表。"""
+    """写路径：文件不存在则建表；存在则幂等补列。GET 不得调用。"""
     if not _db_file_exists(db_path):
         initialize_decision_tables(db_path)
         return
     conn = _connect(db_path)
     try:
-        if not _table_exists(conn, "tomorrow_plans"):
-            with conn:
+        with conn:
+            if not _table_exists(conn, "tomorrow_plans"):
                 for stmt in _DECISION_TABLES:
                     conn.execute(stmt)
+            elif not _table_exists(conn, "decision_signals"):
+                for stmt in _DECISION_TABLES:
+                    conn.execute(stmt)
+            _migrate_signals_schema(conn)
     finally:
         conn.close()
 
@@ -276,8 +315,18 @@ def upsert_signal(
     assessment: str,
     confidence: float | None = None,
     evidence_paths: list[str] | None = None,
+    evidence_refs: list[str] | None = None,
+    raw_value: Any = None,
+    context: dict | None = None,
+    counter_evidence: list | None = None,
+    data_status: str | None = None,
+    rule_version: str | None = None,
 ) -> dict:
-    """按 (plan_id, candidate_code, dimension, label) 唯一覆盖式更新信号。"""
+    """按 (plan_id, candidate_code, dimension, label) 唯一覆盖式更新信号。
+
+    ``evidence_refs`` / ``evidence_paths`` 均指向真实 evidence_path
+    （如 ``kline/{code}``）；优先使用 evidence_refs。
+    """
     if not isinstance(plan_id, str) or not plan_id.strip():
         raise ValueError("plan_id 必须是非空字符串")
     if not isinstance(candidate_code, str) or len(candidate_code) != 6:
@@ -293,31 +342,53 @@ def upsert_signal(
         if not (0.0 <= float(confidence) <= 1.0):
             raise ValueError("confidence 必须在 [0, 1] 区间")
         confidence = round(float(confidence), 4)
-    paths = list(evidence_paths or [])
-    if not all(isinstance(p, str) and p for p in paths):
-        raise ValueError("evidence_paths 必须是非空字符串列表")
-    evidence_json = _canonical_json(paths)
+    refs = list(evidence_refs if evidence_refs is not None else (evidence_paths or []))
+    if not all(isinstance(p, str) and p for p in refs):
+        raise ValueError("evidence_refs 必须是非空字符串列表")
+    if data_status is not None and data_status not in (
+        "normal", "partial", "unavailable", "unknown",
+    ):
+        raise ValueError("data_status 非法")
+    evidence_json = _canonical_json(refs)
+    raw_value_json = _canonical_json(raw_value) if raw_value is not None else None
+    context_json = _canonical_json(context) if context is not None else None
+    counter_json = (
+        _canonical_json(counter_evidence) if counter_evidence is not None else None
+    )
     computed_at = _now()
 
     _initialize_if_missing(db_path)
     conn = _connect(db_path)
     try:
         with conn:
+            _migrate_signals_schema(conn)
             conn.execute(
                 """
                 INSERT INTO decision_signals
                     (plan_id, candidate_code, dimension, label, assessment,
-                     confidence, evidence_paths_json, computed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     confidence, evidence_paths_json, computed_at,
+                     raw_value_json, context_json, counter_evidence_json,
+                     data_status, rule_version, evidence_refs_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(plan_id, candidate_code, dimension, label)
                 DO UPDATE SET
                     assessment = excluded.assessment,
                     confidence = excluded.confidence,
                     evidence_paths_json = excluded.evidence_paths_json,
-                    computed_at = excluded.computed_at
+                    computed_at = excluded.computed_at,
+                    raw_value_json = excluded.raw_value_json,
+                    context_json = excluded.context_json,
+                    counter_evidence_json = excluded.counter_evidence_json,
+                    data_status = excluded.data_status,
+                    rule_version = excluded.rule_version,
+                    evidence_refs_json = excluded.evidence_refs_json
                 """,
-                (plan_id, candidate_code, dimension, label, assessment,
-                 confidence, evidence_json, computed_at),
+                (
+                    plan_id, candidate_code, dimension, label, assessment,
+                    confidence, evidence_json, computed_at,
+                    raw_value_json, context_json, counter_json,
+                    data_status, rule_version, evidence_json,
+                ),
             )
     finally:
         conn.close()
@@ -328,41 +399,123 @@ def upsert_signal(
         "label": label,
         "assessment": assessment,
         "confidence": confidence,
-        "evidence_paths": paths,
+        "evidence_paths": refs,
+        "evidence_refs": refs,
+        "raw_value": raw_value,
+        "context": context,
+        "counter_evidence": counter_evidence,
+        "data_status": data_status,
+        "rule_version": rule_version,
         "computed_at": computed_at,
     }
 
 
+def _safe_json_load(text: Any, default: Any = None) -> Any:
+    if text is None or text == "":
+        return default
+    try:
+        return json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        return default
+
+
 def get_signals_for_plan(db_path: Any, plan_id: str) -> list[dict]:
-    """读取指定 plan_id 的全部信号（只读）。"""
+    """读取指定 plan_id 的全部信号（只读，不迁移 schema）。"""
     if not _db_file_exists(db_path):
         return []
     conn = _connect_readonly(db_path)
     try:
         if not _table_exists(conn, "decision_signals"):
             return []
+        cols = _column_names(conn, "decision_signals")
+        extra = [
+            c for c, _ in _SIGNAL_EXTRA_COLUMNS if c in cols
+        ]
+        base = (
+            "plan_id, candidate_code, dimension, label, assessment, "
+            "confidence, evidence_paths_json, computed_at"
+        )
+        select = base + ((", " + ", ".join(extra)) if extra else "")
         rows = conn.execute(
-            """
-            SELECT plan_id, candidate_code, dimension, label, assessment,
-                   confidence, evidence_paths_json, computed_at
+            f"""
+            SELECT {select}
             FROM decision_signals WHERE plan_id = ?
             ORDER BY candidate_code, dimension, label
             """,
             (plan_id,),
         ).fetchall()
-        return [
-            {
+        out: list[dict] = []
+        for r in rows:
+            paths = _safe_json_load(r["evidence_paths_json"], [])
+            refs = paths
+            if "evidence_refs_json" in cols and r["evidence_refs_json"]:
+                refs = _safe_json_load(r["evidence_refs_json"], paths)
+            item = {
                 "plan_id": r["plan_id"],
                 "candidate_code": r["candidate_code"],
                 "dimension": r["dimension"],
                 "label": r["label"],
                 "assessment": r["assessment"],
                 "confidence": r["confidence"],
-                "evidence_paths": json.loads(r["evidence_paths_json"]),
+                "evidence_paths": paths if isinstance(paths, list) else [],
+                "evidence_refs": refs if isinstance(refs, list) else [],
                 "computed_at": r["computed_at"],
             }
-            for r in rows
-        ]
+            if "raw_value_json" in cols:
+                item["raw_value"] = _safe_json_load(r["raw_value_json"])
+            if "context_json" in cols:
+                item["context"] = _safe_json_load(r["context_json"])
+            if "counter_evidence_json" in cols:
+                item["counter_evidence"] = _safe_json_load(r["counter_evidence_json"], [])
+            if "data_status" in cols:
+                item["data_status"] = r["data_status"]
+            if "rule_version" in cols:
+                item["rule_version"] = r["rule_version"]
+            out.append(item)
+        return out
+    finally:
+        conn.close()
+
+
+def evidence_exists(db_path: Any, evidence_path: str) -> bool:
+    """只读：evidence_path 是否已有记录。"""
+    if not _db_file_exists(db_path):
+        return False
+    conn = _connect_readonly(db_path)
+    try:
+        if not _table_exists(conn, "decision_evidence"):
+            return False
+        row = conn.execute(
+            "SELECT 1 FROM decision_evidence WHERE evidence_path = ?",
+            (evidence_path,),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def count_plans(db_path: Any) -> int:
+    """只读：tomorrow_plans 行数（E2E 状态接口用）。"""
+    if not _db_file_exists(db_path):
+        return 0
+    conn = _connect_readonly(db_path)
+    try:
+        if not _table_exists(conn, "tomorrow_plans"):
+            return 0
+        return int(conn.execute("SELECT COUNT(*) FROM tomorrow_plans").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def count_signals(db_path: Any) -> int:
+    """只读：decision_signals 行数（E2E 状态接口用）。"""
+    if not _db_file_exists(db_path):
+        return 0
+    conn = _connect_readonly(db_path)
+    try:
+        if not _table_exists(conn, "decision_signals"):
+            return 0
+        return int(conn.execute("SELECT COUNT(*) FROM decision_signals").fetchone()[0])
     finally:
         conn.close()
 

@@ -13,7 +13,11 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { loadLlm, type LlmConfig } from "@/lib/llm";
-import { loadLocalDraft } from "@/lib/watchlist";
+import {
+  loadLocalDraft,
+  clearLocalDraft,
+  loadWatchAuthoritative,
+} from "@/lib/watchlist";
 import {
   getOverview,
   getCurrentPlan,
@@ -32,7 +36,21 @@ import { cn } from "@/lib/utils";
 
 type Tab = "tomorrow" | "today";
 
-const today = () => new Date().toISOString().slice(0, 10);
+/** 北京/本地日历日，禁止 toISOString().slice(0,10)（UTC 会错日）。 */
+const today = () => {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+  } catch {
+    const d = new Date();
+    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 10);
+  }
+};
 
 const assessColor = (a: Signal["assessment"]) =>
   a === "strong"
@@ -162,16 +180,30 @@ export function DecisionCockpit() {
     }
   };
 
-  // 前端草稿并入后端自选股（显式迁移入口，刷新候选池）。
+  // 启动时：后端权威自选 + 一次性 localStorage 迁移（成功后删 KEY）。
+  useEffect(() => {
+    loadWatchAuthoritative()
+      .then((r) => {
+        if (r.migrated) {
+          setInfo(`已迁移本地自选草稿至后端（共 ${r.codes.length} 只）`);
+        }
+      })
+      .catch(() => { /* 静默；用户仍可手动同步 */ });
+  }, []);
+
+  // 前端草稿并入后端自选股（显式迁移入口，刷新候选池）；成功后删除 local KEY。
   const importLocalDraft = async () => {
     setInfo(null);
     setError(null);
     try {
-      // 尝试读取既有 localStorage 草稿，并入后端；无草稿则静默。
       const local = loadLocalDraft();
-      if (!local.length) { setInfo("没有检测到本地自选草稿"); return; }
+      if (!local.length) {
+        setInfo("没有检测到本地自选草稿（后端权威已生效）");
+        return;
+      }
       const res = await importLocalWatchlist(local);
-      setInfo(`已并入后端：新增 ${res.added.length} 只，共 ${res.codes.length} 只`);
+      clearLocalDraft();
+      setInfo(`已并入后端：新增 ${res.added.length} 只，共 ${res.codes.length} 只（本地草稿已清除）`);
       await refresh();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "并入失败");
@@ -353,6 +385,9 @@ export function DecisionCockpit() {
                 生成时间 {plan.generated_at} · 信号 {plan.signals?.length ?? 0} 条（强 {strongCount} / 弱 {weakCount}）
               </p>
 
+              {/* 候选三维摘要卡片 */}
+              <CandidateSummaryCards plan={plan} />
+
               {/* 三维信号：价值 / 趋势 / 短线 */}
               <div data-testid="signals-3d">
                 <h3 className="mb-2 text-xs font-semibold text-muted-foreground">
@@ -434,6 +469,133 @@ function TodayPlaceholder() {
   );
 }
 
+type DimKey = "value" | "trend" | "short";
+type DimSummary = {
+  assessment: Signal["assessment"];
+  usable_count?: number;
+  total_count?: number;
+  min_required?: number;
+  reason?: string;
+};
+
+function CandidateSummaryCards({
+  plan,
+}: {
+  plan: TomorrowPlanMeta & { signals?: Signal[]; payload?: any };
+}) {
+  type CandidateDimCard = {
+    code: string;
+    name?: string;
+    dimensions: Record<DimKey, DimSummary>;
+  };
+  const summaries: CandidateDimCard[] =
+    (plan as any)?.payload?.candidate_summaries ??
+    (plan as any)?.candidate_summaries ??
+    [];
+
+  // 若 payload 未展开，从 signals 前端兜底聚合（与后端规则一致：≥3 可用才非 unknown）
+  const fallback = useMemo((): CandidateDimCard[] => {
+    if (summaries.length) return summaries;
+    const byCode: Record<string, Signal[]> = {};
+    for (const s of plan.signals ?? []) {
+      (byCode[s.candidate_code] ||= []).push(s);
+    }
+    return Object.entries(byCode).map(([code, sigs]) => {
+      const dims = {} as Record<DimKey, DimSummary>;
+      for (const dim of ["value", "trend", "short"] as DimKey[]) {
+        const ds = sigs.filter((x) => x.dimension === dim);
+        const usable = ds.filter((x) => x.assessment !== "unknown");
+        if (usable.length < 3) {
+          dims[dim] = {
+            assessment: "unknown",
+            usable_count: usable.length,
+            total_count: ds.length,
+            min_required: 3,
+            reason: "insufficient_usable_signals",
+          };
+        } else {
+          const counts = { strong: 0, medium: 0, weak: 0 };
+          for (const u of usable) {
+            if (u.assessment in counts) counts[u.assessment as "strong"] += 1;
+          }
+          let assessment: Signal["assessment"] = "medium";
+          if (counts.strong > 0 && counts.weak === 0) {
+            assessment = counts.strong >= counts.medium ? "strong" : "medium";
+          } else if (counts.weak > 0 && counts.strong === 0) {
+            assessment = counts.weak >= counts.medium ? "weak" : "medium";
+          }
+          dims[dim] = {
+            assessment,
+            usable_count: usable.length,
+            total_count: ds.length,
+            min_required: 3,
+            reason: "aggregated",
+          };
+        }
+      }
+      return { code, name: undefined, dimensions: dims };
+    });
+  }, [plan.signals, summaries]);
+
+  if (!fallback.length) return null;
+  const dimLabel: Record<DimKey, string> = {
+    value: "价值",
+    trend: "趋势",
+    short: "短线",
+  };
+  return (
+    <div data-testid="candidate-summaries" className="space-y-2">
+      <h3 className="text-xs font-semibold text-muted-foreground">
+        候选三维摘要（≥3 可用信号才评级，否则未知；无星级）
+      </h3>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {fallback.slice(0, 24).map((c) => (
+          <div
+            key={c.code}
+            className="rounded-lg border border-border/60 bg-muted/20 px-2.5 py-2"
+            data-testid={`candidate-card-${c.code}`}
+          >
+            <div className="mb-1.5 flex items-baseline gap-1.5">
+              <span className="font-mono text-sm font-medium">{c.code}</span>
+              {c.name ? (
+                <span className="truncate text-xs text-muted-foreground">{c.name}</span>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {(["value", "trend", "short"] as DimKey[]).map((dim) => {
+                const d = c.dimensions[dim];
+                const a = d?.assessment ?? "unknown";
+                return (
+                  <span
+                    key={dim}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px]",
+                      a === "strong"
+                        ? "bg-success/10 text-success"
+                        : a === "weak"
+                          ? "bg-danger/10 text-danger"
+                          : a === "medium"
+                            ? "bg-yellow-400/10 text-yellow-400"
+                            : "bg-muted text-muted-foreground",
+                    )}
+                    title={
+                      d?.reason === "insufficient_usable_signals"
+                        ? `可用信号 ${d.usable_count ?? 0}/${d.min_required ?? 3}`
+                        : undefined
+                    }
+                  >
+                    {dimLabel[dim]} · {assessLabel[a]}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function CandidatePoolBlock({ pool }: { pool: Candidate[] }) {
   const [open, setOpen] = useState(false);
   const preview = pool.slice(0, 12);
@@ -489,7 +651,9 @@ function SummaryBlock({ account, advice }: { account: Overview["account_funding"
           <History className="h-3.5 w-3.5" /> 持仓建议（只读摘要）
         </h3>
         {!advice ? (
-          <p className="text-xs text-muted-foreground">暂无持仓建议。请到「我的持仓」生成。</p>
+          <p className="text-xs text-muted-foreground" data-testid="advice-missing">
+            该交易日没有已保存持仓建议。请到「我的持仓」生成（不跨日回退）。
+          </p>
         ) : (
           <div className="grid grid-cols-2 gap-2 text-xs" data-testid="advice-summary">
             <span className="text-muted-foreground">类型</span>

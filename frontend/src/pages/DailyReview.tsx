@@ -21,7 +21,11 @@ import {
 import { loadLlm } from "@/lib/llm";
 import { useDailyReviewAiTaskStore } from "@/stores/dailyReviewAiTaskStore";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
-import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
+import {
+  loadWatchAuthoritative,
+  saveWatchAuthoritative,
+  addCodes,
+} from "@/lib/watchlist";
 import { cn } from "@/lib/utils";
 
 const HISTORY_LIMIT = 20;
@@ -125,8 +129,9 @@ export function DailyReview() {
   const pollDeadlineRef = useRef<number>(0);
   const mountedRef = useRef(true);
 
-  // 自选（独立请求）
-  const [watchCodes, setWatchCodes] = useState<string[]>(loadWatch);
+  // 自选（后端权威；启动时一次性迁移 localStorage）
+  const [watchCodes, setWatchCodes] = useState<string[]>([]);
+  const [watchEtag, setWatchEtag] = useState<string | null>(null);
   const [watchQuotes, setWatchQuotes] = useState<Record<string, Quote>>({});
   const [watchInput, setWatchInput] = useState("");
   const [watchLoading, setWatchLoading] = useState(false);
@@ -285,7 +290,16 @@ export function DailyReview() {
     mountedRef.current = true;
     loadDailyReview();
     loadHistory({ trade_date: "", offset: 0 });
-    refreshWatch(loadWatch());
+    loadWatchAuthoritative()
+      .then((r) => {
+        setWatchCodes(r.codes);
+        setWatchEtag(r.etag);
+        refreshWatch(r.codes);
+      })
+      .catch(() => {
+        setWatchCodes([]);
+        setWatchEtag(null);
+      });
     // 仅首次挂载：不自动保存、不自动 AI
     return () => {
       mountedRef.current = false;
@@ -743,16 +757,35 @@ export function DailyReview() {
     );
   };
 
+  const persistWatch = async (next: string[]) => {
+    try {
+      const r = await saveWatchAuthoritative(next, watchEtag);
+      setWatchCodes(r.codes);
+      setWatchEtag(r.etag);
+      refreshWatch(r.codes);
+    } catch {
+      // 版本冲突时重载权威列表
+      try {
+        const r = await loadWatchAuthoritative();
+        setWatchCodes(r.codes);
+        setWatchEtag(r.etag);
+        refreshWatch(r.codes);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
   const addWatch = () => {
     const { next, added } = addCodes(watchCodes, watchInput);
     setWatchInput("");
     if (!added) return;
-    setWatchCodes(next); saveWatch(next); refreshWatch(next);
+    void persistWatch(next);
   };
 
   const removeWatch = (c: string) => {
     const next = watchCodes.filter((x) => x !== c);
-    setWatchCodes(next); saveWatch(next); refreshWatch(next);
+    void persistWatch(next);
   };
 
   // —— 从聚合包取数 ——

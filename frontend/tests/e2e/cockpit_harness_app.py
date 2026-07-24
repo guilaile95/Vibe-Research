@@ -22,20 +22,21 @@ TRADE_DATE = datetime.now(BEIJING).strftime("%Y-%m-%d")
 
 
 def _seed_review_snapshot() -> None:
-    """Seed review for Beijing today and UTC today (frontend today() is UTC ISO date)."""
+    """Seed最新不可变复盘：仅北京今日（前端 today() 也用 Asia/Shanghai）。
+
+    生成接口只允许最新已保存复盘 trade_date，故只种一条最新日。
+    """
     db = review_history.resolve_review_db_path()
     now_bj = datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
-    dates = {TRADE_DATE, datetime.now(timezone.utc).strftime("%Y-%m-%d")}
-    for td in dates:
-        review = {
-            "schema_version": "daily-review.v1",
-            "trade_date": td,
-            "generated_at": now_bj,
-            "data_cutoff": now_bj,
-            "status": "normal",
-            "sections": {"summary": "e2e fixture review", "trade_date": td},
-        }
-        review_store.save_daily_review_snapshot(review, db)
+    review = {
+        "schema_version": "daily-review.v1",
+        "trade_date": TRADE_DATE,
+        "generated_at": now_bj,
+        "data_cutoff": now_bj,
+        "status": "normal",
+        "sections": {"summary": "e2e fixture review", "trade_date": TRADE_DATE},
+    }
+    review_store.save_daily_review_snapshot(review, db)
 
 
 def _seed_watchlist() -> None:
@@ -156,3 +157,19 @@ astock.tencent_quote = _fake_tencent_quote  # type: ignore[assignment]
 
 _seed_review_snapshot()
 _seed_watchlist()
+
+
+@app.get("/api/decision-cockpit/e2e-status")
+def e2e_status():
+    """隔离验收计数（非生产）。"""
+    import decision_cockpit_store as dcs
+
+    db = review_history.resolve_review_db_path()
+    return {
+        "data": {
+            "trade_date": TRADE_DATE,
+            "plan_count": dcs.count_plans(db),
+            "signal_count": dcs.count_signals(db),
+            "review_db": str(db),
+        }
+    }

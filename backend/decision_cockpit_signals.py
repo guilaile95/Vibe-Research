@@ -12,6 +12,26 @@ from __future__ import annotations
 
 from typing import Any
 
+
+# ---------------------------------------------------------------------------
+# 规则版本（写库时写入 decision_signals.rule_version）
+# ---------------------------------------------------------------------------
+
+RULE_VERSION_VALUE = "value-v0.2"
+RULE_VERSION_TREND = "trend-v0.2-unadjusted"
+RULE_VERSION_SHORT = "short-v0.2"
+
+MIN_USABLE_SIGNALS_FOR_DIM = 3  # 候选级维度聚合最少可用信号数
+
+
+def _stamp_rule_version(sigs: list[dict], version: str) -> list[dict]:
+    for s in sigs:
+        if isinstance(s, dict) and not s.get("rule_version"):
+            s["rule_version"] = version
+    return sigs
+
+
+
 # ---------------------------------------------------------------------------
 # 公共小工具
 # ---------------------------------------------------------------------------
@@ -254,7 +274,7 @@ def evaluate_value(
             },
         })
 
-    return sigs
+    return _stamp_rule_version(sigs, RULE_VERSION_VALUE)
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +373,7 @@ def evaluate_trend(code: str, kline_bars: list[dict]) -> list[dict]:
                 "price_adjustment": price_adj,
             },
         })
-        return sigs
+        return _stamp_rule_version(sigs, RULE_VERSION_TREND)
 
     # 不复权断点：核心趋势评估降为 unknown（避免除权缺口误判）
     if has_discontinuity:
@@ -392,7 +412,7 @@ def evaluate_trend(code: str, kline_bars: list[dict]) -> list[dict]:
                 "note": "negative_gap_not_strong",
             },
         })
-        return sigs
+        return _stamp_rule_version(sigs, RULE_VERSION_TREND)
 
     # MA 排列
     if last_close > ma20 > ma60:
@@ -513,7 +533,7 @@ def evaluate_trend(code: str, kline_bars: list[dict]) -> list[dict]:
                 },
             })
 
-    return sigs
+    return _stamp_rule_version(sigs, RULE_VERSION_TREND)
 
 
 # ---------------------------------------------------------------------------
@@ -737,7 +757,7 @@ def evaluate_candidate_short(
                 "assessment": "unknown", "confidence": None, "value": None,
                 "context": {"reason": "insufficient_data"},
             })
-        return sigs
+        return _stamp_rule_version(sigs, RULE_VERSION_SHORT)
 
     # 连板
     if code in lianban:
@@ -834,4 +854,92 @@ def evaluate_candidate_short(
             "context": {"industry_rank": sector_rank},
         })
 
-    return sigs
+    return _stamp_rule_version(sigs, RULE_VERSION_SHORT)
+
+
+def _usable_assessment(assessment: str | None) -> bool:
+    """可用信号：非 unknown 且 assessment 合法。"""
+    return assessment in ("strong", "medium", "weak")
+
+
+def _dim_summary_from_signals(dim_signals: list[dict]) -> dict:
+    """对单维度信号列表做透明聚合（无星级打分）。
+
+    规则：
+    - 可用信号数 < MIN_USABLE_SIGNALS_FOR_DIM → assessment=unknown
+    - 否则：若有 strong 且无 weak 偏 strong；strong/weak 并存 → medium；
+      全 weak → weak；否则取众数（strong>medium>weak 优先）。
+    """
+    usable = [s for s in dim_signals if _usable_assessment(s.get("assessment"))]
+    n_usable = len(usable)
+    n_total = len(dim_signals)
+    base = {
+        "usable_count": n_usable,
+        "total_count": n_total,
+        "min_required": MIN_USABLE_SIGNALS_FOR_DIM,
+        "labels": [s.get("label") for s in dim_signals],
+    }
+    if n_usable < MIN_USABLE_SIGNALS_FOR_DIM:
+        return {
+            "assessment": "unknown",
+            "reason": "insufficient_usable_signals",
+            **base,
+        }
+    counts = {"strong": 0, "medium": 0, "weak": 0}
+    for s in usable:
+        counts[s["assessment"]] = counts.get(s["assessment"], 0) + 1
+    if counts["strong"] > 0 and counts["weak"] == 0:
+        assess = "strong" if counts["strong"] >= counts["medium"] else "medium"
+    elif counts["weak"] > 0 and counts["strong"] == 0:
+        assess = "weak" if counts["weak"] >= counts["medium"] else "medium"
+    elif counts["strong"] > 0 and counts["weak"] > 0:
+        assess = "medium"
+    else:
+        assess = "medium"
+    return {
+        "assessment": assess,
+        "counts": counts,
+        "reason": "aggregated",
+        **base,
+    }
+
+
+def aggregate_candidate_dimensions(
+    candidates: list[dict],
+    signals: list[dict],
+) -> list[dict]:
+    """候选级 value/trend/short 三维摘要。
+
+    透明规则：每维 ≥3 条可用信号才给出 strong/medium/weak，否则 unknown。
+    不输出星级分数。
+    """
+    by_code: dict[str, list[dict]] = {}
+    for s in signals or []:
+        code = s.get("candidate_code") or s.get("code")
+        if not isinstance(code, str):
+            continue
+        by_code.setdefault(code, []).append(s)
+
+    out: list[dict] = []
+    for c in candidates or []:
+        code = c.get("code") if isinstance(c, dict) else None
+        if not isinstance(code, str):
+            continue
+        sigs = by_code.get(code, [])
+        dims: dict[str, dict] = {}
+        for dim, rule_ver in (
+            ("value", RULE_VERSION_VALUE),
+            ("trend", RULE_VERSION_TREND),
+            ("short", RULE_VERSION_SHORT),
+        ):
+            dim_sigs = [s for s in sigs if s.get("dimension") == dim]
+            summary = _dim_summary_from_signals(dim_sigs)
+            summary["rule_version"] = rule_ver
+            dims[dim] = summary
+        out.append({
+            "code": code,
+            "name": (c.get("name") if isinstance(c, dict) else "") or "",
+            "sources": list(c.get("sources") or []) if isinstance(c, dict) else [],
+            "dimensions": dims,
+        })
+    return out
