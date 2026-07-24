@@ -84,6 +84,8 @@ export function SectorResearchLayout() {
             <Link
               key={t.slug}
               to={`/sectors/${workspace.key}/${t.slug}`}
+              aria-current={active ? "page" : undefined}
+              data-active={active ? "true" : "false"}
               className={cn(
                 "shrink-0 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors",
                 active

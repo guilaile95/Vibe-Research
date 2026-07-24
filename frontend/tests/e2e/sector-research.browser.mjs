@@ -320,6 +320,7 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
   }
 
   // 2. Click through all 6 tags & verify URL, active state, non-empty body, sources section & links
+  let prevTagBtn = null;
   for (const tag of tags) {
     const tagBtn = page.getByRole("link", { name: tag.label }).first();
     if (!(await tagBtn.isVisible().catch(() => false))) {
@@ -332,6 +333,22 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
     if (!url.includes(`/sectors/${sectorKey}/${tag.slug}`)) {
       errors.push(`${label}: tag "${tag.label}" click expected URL with ${tag.slug}, got ${url}`);
     }
+
+    // Active state hard assertions
+    const ariaCurrent = await tagBtn.getAttribute("aria-current");
+    const dataActive = await tagBtn.getAttribute("data-active");
+    if (ariaCurrent !== "page" || dataActive !== "true") {
+      errors.push(`${label}: tag "${tag.label}" missing active state attributes (aria-current=${ariaCurrent}, data-active=${dataActive})`);
+    }
+
+    if (prevTagBtn) {
+      const prevAriaCurrent = await prevTagBtn.getAttribute("aria-current");
+      const prevDataActive = await prevTagBtn.getAttribute("data-active");
+      if (prevAriaCurrent === "page" || prevDataActive === "true") {
+        errors.push(`${label}: previous tag retained active state after switching to "${tag.label}"`);
+      }
+    }
+    prevTagBtn = tagBtn;
 
     const bodyText = await page.locator("body").innerText();
     if (bodyText.length < 200) {

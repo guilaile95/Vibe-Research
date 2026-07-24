@@ -46,6 +46,19 @@ const VERIFIED_ANNOUNCEMENTS: Record<string, Array<{ id: string; stock: string; 
   ],
 };
 
+const FORBIDDEN_ROOT_URLS = [
+  "https://www.gov.cn/zhengce/",
+  "https://www.gov.cn/zhengce",
+  "https://www.csia.net.cn/",
+  "https://www.csia.net.cn",
+  "https://www.miit.gov.cn/",
+  "https://www.miit.gov.cn",
+  "https://www.caac.gov.cn/",
+  "https://www.caac.gov.cn",
+  "https://www.easa.europa.eu/",
+  "https://www.easa.europa.eu",
+];
+
 test("Batch 2 workspaces are all registered and satisfy invariants", () => {
   const registered = registeredResearchKeys();
   for (const key of BATCH2_KEYS) {
@@ -113,6 +126,8 @@ test("Batch 2 source integrity, block type diversity, and sourceId rules", () =>
     for (const s of ws.sources) {
       assert.ok(usedSourceIds.has(s.id), `workspace ${key} source "${s.id}" is orphaned`);
       assert.ok(s.url && s.url.startsWith("http"), `source ${s.id} missing valid http/https url: ${s.url}`);
+      // Forbid generic root/category URLs
+      assert.equal(FORBIDDEN_ROOT_URLS.includes(s.url), false, `source ${s.id} uses forbidden generic root/category URL: ${s.url}`);
       assert.ok(s.accessedAt, `source ${s.id} missing accessedAt`);
       if (s.publishedAt) assert.ok(!isNaN(Date.parse(s.publishedAt)), `${key} source "${s.id}" invalid publishedAt`);
       if (s.accessedAt) assert.ok(!isNaN(Date.parse(s.accessedAt)), `${key} source "${s.id}" invalid accessedAt`);
@@ -160,6 +175,32 @@ test("Batch 2 verified announcement IDs whitelist (hard fail)", () => {
       assert.ok(url.includes(`stockCode=${v.stock}`), `${v.id} URL missing stockCode=${v.stock}: ${url}`);
       assert.ok(url.includes(`announcementId=${v.aid}`), `${v.id} URL missing announcementId=${v.aid}: ${url}`);
     }
+  }
+});
+
+test("Batch 2 policy and standard SourceRef identity & mapping rules", () => {
+  const policyItems = [{"id": "S-SEMI-MIIT-POLICY", "domain": "mee.gov.cn", "titleKw": "\u56fd\u53d1\u30142020\u30158\u53f7", "org": "\u56fd\u52a1\u9662 / \u5de5\u4fe1\u90e8", "pub": "2020-08-04"}, {"id": "S-SEMI-EMP2024", "domain": "ncsti.gov.cn", "titleKw": "\u96c6\u6210\u7535\u8def\u88c5\u5907", "org": "\u79d1\u6280\u90e8 / \u5de5\u4fe1\u90e8", "pub": "2024-03-27"}, {"id": "S-DRIVE-MIIT-POLICY", "domain": "mee.gov.cn", "titleKw": "\u56fd\u529e\u53d1\u30142020\u301539\u53f7", "org": "\u56fd\u52a1\u9662\u529e\u516c\u5385", "pub": "2020-11-02"}, {"id": "S-SSBAT-POLICY-NEV", "domain": "gov.cn", "titleKw": "\u56fd\u529e\u53d1\u30142020\u301539\u53f7", "org": "\u56fd\u52a1\u9662\u529e\u516c\u5385", "pub": "2020-11-02"}, {"id": "S-LOWALT-POLICY-FRAMEWORK", "domain": "ncsti.gov.cn", "titleKw": "\u5de5\u4fe1\u90e8\u8054\u91cd\u88c5\u30142024\u301552\u53f7", "org": "\u5de5\u4e1a\u548c\u4fe1\u606f\u5316\u90e8", "pub": "2024-03-27"}, {"id": "S-LOWALT-CAAC-CCAR21", "domain": "gov.cn", "titleKw": "CCAR-21R5", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40", "pub": "2017-05-01"}, {"id": "S-LOWALT-CAAC-CCAR91", "domain": "mee.gov.cn", "titleKw": "CCAR-91", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40", "pub": "2020-01-01"}, {"id": "S-LOWALT-CAAC-CCAR135", "domain": "mee.gov.cn", "titleKw": "CCAR-135", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40", "pub": "2020-01-01"}, {"id": "S-LOWALT-EASA-SC-VTOL", "domain": "easa.europa.eu", "titleKw": "SC-VTOL-01", "org": "EASA\uff08\u6b27\u6d32\u822a\u7a7a\u5b89\u5168\u5c40\uff09", "pub": "2019-07-02"}, {"id": "S-LOWALT-ISO26262-STD", "domain": "iso.org", "titleKw": "ISO 26262", "org": "ISO / RTCA", "pub": "2018-12-01"}];
+  for (const item of policyItems) {
+    let found = false;
+    for (const key of BATCH2_KEYS) {
+      const ws = getSectorResearchWorkspace(key)!;
+      const src = ws.sources.find((s) => s.id === item.id);
+      if (src) {
+        found = true;
+        assert.ok(src.url.includes(item.domain), `${item.id} URL ${src.url} does not contain domain ${item.domain}`);
+        assert.ok(src.title.includes(item.titleKw), `${item.id} title ${src.title} missing keyword ${item.titleKw}`);
+        assert.equal(src.org, item.org, `${item.id} org mismatch: ${src.org} != ${item.org}`);
+        assert.equal(src.publishedAt, item.pub, `${item.id} publishedAt mismatch: ${src.publishedAt} != ${item.pub}`);
+      }
+    }
+    assert.ok(found, `Policy SourceRef ${item.id} not found in any Batch 2 workspace`);
+  }
+
+  // Forbid composite standards like S-LOWALT-EASA-FAA-STD
+  for (const key of BATCH2_KEYS) {
+    const ws = getSectorResearchWorkspace(key)!;
+    const composite = ws.sources.find((s) => s.id === "S-LOWALT-EASA-FAA-STD");
+    assert.equal(composite, undefined, `Forbidden composite standard source S-LOWALT-EASA-FAA-STD found in ${key}`);
   }
 });
 
