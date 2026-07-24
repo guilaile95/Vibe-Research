@@ -87,9 +87,9 @@ export const smartDrivingSources: SourceRef[] = [
   },
   {
     id: "S-DRIVE-MIIT-POLICY",
-    title: "\u56fd\u52a1\u9662\u529e\u516c\u5385\u300a\u65b0\u80fd\u6e90\u6c7d\u8f66\u4ea7\u4e1a\u53d1\u5c55\u89c4\u5212\uff082021\u20142035\u5e74\uff09\u300b\uff08\u56fd\u529e\u53d1\u30142020\u301539\u53f7\uff0c\u667a\u80fd\u7f51\u8054\u4e13\u7ae0\uff09",
+    title: "\u56fd\u52a1\u9662\u529e\u516c\u5385\u300a\u65b0\u80fd\u6e90\u6c7d\u8f66\u4ea7\u4e1a\u53d1\u5c55\u89c4\u5212\uff082021\u20142035\u5e74\uff09\u300b\uff08\u56fd\u529e\u53d1\u30142020\u301539\u53f7\uff0c\u667a\u80fd\u7f51\u8054\u6c7d\u8f66\u4e13\u7ae0\uff09",
     org: "\u56fd\u52a1\u9662\u529e\u516c\u5385",
-    url: "https://www.mee.gov.cn/zcwj/gwywj/202011/t20201103_806087.shtml",
+    url: "https://www.mee.gov.cn/zcwj/gwywj/202011/t20201103_806156.shtml",
     sourceType: "official",
     factLevel: "\u5df2\u786e\u8ba4\u4e8b\u5b9e",
     publishedAt: "2020-11-02",

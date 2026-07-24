@@ -132,6 +132,8 @@ test("Batch 2 source integrity, block type diversity, and sourceId rules", () =>
       if (s.publishedAt) assert.ok(!isNaN(Date.parse(s.publishedAt)), `${key} source "${s.id}" invalid publishedAt`);
       if (s.accessedAt) assert.ok(!isNaN(Date.parse(s.accessedAt)), `${key} source "${s.id}" invalid accessedAt`);
       assert.ok(s.supports, `source ${s.id} missing supports`);
+      // Forbid unbacked phrasing like 固态电池专章
+      assert.equal(s.title.includes("固态电池专章") || (s.note && s.note.includes("固态电池专章")), false, `source ${s.id} uses unsupported phrase 固态电池专章`);
     }
   }
 });
@@ -179,7 +181,7 @@ test("Batch 2 verified announcement IDs whitelist (hard fail)", () => {
 });
 
 test("Batch 2 policy and standard SourceRef identity & mapping rules", () => {
-  const policyItems = [{"id": "S-SEMI-MIIT-POLICY", "domain": "mee.gov.cn", "titleKw": "\u56fd\u53d1\u30142020\u30158\u53f7", "org": "\u56fd\u52a1\u9662 / \u5de5\u4fe1\u90e8", "pub": "2020-08-04"}, {"id": "S-SEMI-EMP2024", "domain": "ncsti.gov.cn", "titleKw": "\u96c6\u6210\u7535\u8def\u88c5\u5907", "org": "\u79d1\u6280\u90e8 / \u5de5\u4fe1\u90e8", "pub": "2024-03-27"}, {"id": "S-DRIVE-MIIT-POLICY", "domain": "mee.gov.cn", "titleKw": "\u56fd\u529e\u53d1\u30142020\u301539\u53f7", "org": "\u56fd\u52a1\u9662\u529e\u516c\u5385", "pub": "2020-11-02"}, {"id": "S-SSBAT-POLICY-NEV", "domain": "gov.cn", "titleKw": "\u56fd\u529e\u53d1\u30142020\u301539\u53f7", "org": "\u56fd\u52a1\u9662\u529e\u516c\u5385", "pub": "2020-11-02"}, {"id": "S-LOWALT-POLICY-FRAMEWORK", "domain": "ncsti.gov.cn", "titleKw": "\u5de5\u4fe1\u90e8\u8054\u91cd\u88c5\u30142024\u301552\u53f7", "org": "\u5de5\u4e1a\u548c\u4fe1\u606f\u5316\u90e8", "pub": "2024-03-27"}, {"id": "S-LOWALT-CAAC-CCAR21", "domain": "gov.cn", "titleKw": "CCAR-21R5", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40", "pub": "2017-05-01"}, {"id": "S-LOWALT-CAAC-CCAR91", "domain": "mee.gov.cn", "titleKw": "CCAR-91", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40", "pub": "2020-01-01"}, {"id": "S-LOWALT-CAAC-CCAR135", "domain": "mee.gov.cn", "titleKw": "CCAR-135", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40", "pub": "2020-01-01"}, {"id": "S-LOWALT-EASA-SC-VTOL", "domain": "easa.europa.eu", "titleKw": "SC-VTOL-01", "org": "EASA\uff08\u6b27\u6d32\u822a\u7a7a\u5b89\u5168\u5c40\uff09", "pub": "2019-07-02"}, {"id": "S-LOWALT-ISO26262-STD", "domain": "iso.org", "titleKw": "ISO 26262", "org": "ISO / RTCA", "pub": "2018-12-01"}];
+  const policyItems = [{"id": "S-SEMI-MIIT-POLICY", "domain": "mee.gov.cn", "urlKw": "t20200806_792957.shtml", "titleKw": "\u56fd\u53d1\u30142020\u30158\u53f7", "org": "\u56fd\u52a1\u9662 / \u5de5\u4fe1\u90e8", "pub": "2020-08-04"}, {"id": "S-DRIVE-MIIT-POLICY", "domain": "mee.gov.cn", "urlKw": "806156", "titleKw": "\u56fd\u529e\u53d1\u30142020\u301539\u53f7", "org": "\u56fd\u52a1\u9662\u529e\u516c\u5385", "pub": "2020-11-02"}, {"id": "S-SSBAT-POLICY-NEV", "domain": "gov.cn", "urlKw": "content_5556716.htm", "titleKw": "\u56fd\u529e\u53d1\u30142020\u301539\u53f7", "org": "\u56fd\u52a1\u9662\u529e\u516c\u5385", "pub": "2020-11-02"}, {"id": "S-LOWALT-POLICY-FRAMEWORK", "domain": "ncsti.gov.cn", "urlKw": "t20240402_152639.html", "titleKw": "\u5de5\u4fe1\u90e8\u8054\u91cd\u88c5\u30142024\u301552\u53f7", "org": "\u5de5\u4e1a\u548c\u4fe1\u606f\u5316\u90e8", "pub": "2024-03-27"}, {"id": "S-LOWALT-CAAC-CCAR21", "domain": "gov.cn", "urlKw": "content_5669049.htm", "titleKw": "CCAR-21-R5", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40 / \u4ea4\u901a\u8fd0\u8f93\u90e8", "pub": "2024-02-18"}, {"id": "S-LOWALT-CAAC-CCAR91", "domain": "mee.gov.cn", "urlKw": "t20211026_957884.shtml", "titleKw": "CCAR-91-R4", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40 / \u4ea4\u901a\u8fd0\u8f93\u90e8", "pub": "2022-01-04"}, {"id": "S-LOWALT-CAAC-CCAR135", "domain": "mee.gov.cn", "urlKw": "t20220119_967664.shtml", "titleKw": "CCAR-135\u90e8", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40 / \u4ea4\u901a\u8fd0\u8f93\u90e8", "pub": "2020-01-16"}, {"id": "S-LOWALT-EH216-TC", "domain": "cninfo.com.cn", "urlKw": "1219800529", "titleKw": "EH216-S", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40", "pub": "2023-10-13"}, {"id": "S-LOWALT-EASA-SC-VTOL", "domain": "easa.europa.eu", "urlKw": "20857", "titleKw": "SC-VTOL-01", "org": "EASA\uff08\u6b27\u6d32\u822a\u7a7a\u5b89\u5168\u5c40\uff09", "pub": "2019-07-02"}, {"id": "S-LOWALT-ISO26262-STD", "domain": "iso.org", "urlKw": "26262", "titleKw": "ISO 26262", "org": "ISO\uff08\u56fd\u9645\u6807\u51c6\u5316\u7ec4\u7ec7\uff09", "pub": "2018-12-01"}];
   for (const item of policyItems) {
     let found = false;
     for (const key of BATCH2_KEYS) {
@@ -188,6 +190,7 @@ test("Batch 2 policy and standard SourceRef identity & mapping rules", () => {
       if (src) {
         found = true;
         assert.ok(src.url.includes(item.domain), `${item.id} URL ${src.url} does not contain domain ${item.domain}`);
+        assert.ok(src.url.includes(item.urlKw), `${item.id} URL ${src.url} does not contain specific page ID / keyword ${item.urlKw}`);
         assert.ok(src.title.includes(item.titleKw), `${item.id} title ${src.title} missing keyword ${item.titleKw}`);
         assert.equal(src.org, item.org, `${item.id} org mismatch: ${src.org} != ${item.org}`);
         assert.equal(src.publishedAt, item.pub, `${item.id} publishedAt mismatch: ${src.publishedAt} != ${item.pub}`);
@@ -196,11 +199,11 @@ test("Batch 2 policy and standard SourceRef identity & mapping rules", () => {
     assert.ok(found, `Policy SourceRef ${item.id} not found in any Batch 2 workspace`);
   }
 
-  // Forbid composite standards like S-LOWALT-EASA-FAA-STD
+  // Forbid composite standards & removed unbacked sources
   for (const key of BATCH2_KEYS) {
     const ws = getSectorResearchWorkspace(key)!;
-    const composite = ws.sources.find((s) => s.id === "S-LOWALT-EASA-FAA-STD");
-    assert.equal(composite, undefined, `Forbidden composite standard source S-LOWALT-EASA-FAA-STD found in ${key}`);
+    assert.equal(ws.sources.find((s) => s.id === "S-LOWALT-EASA-FAA-STD"), undefined, `Forbidden composite standard source S-LOWALT-EASA-FAA-STD in ${key}`);
+    assert.equal(ws.sources.find((s) => s.id === "S-SEMI-EMP2024"), undefined, `Forbidden unbacked source S-SEMI-EMP2024 in ${key}`);
   }
 });
 

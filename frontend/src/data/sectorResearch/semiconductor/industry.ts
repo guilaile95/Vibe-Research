@@ -4,7 +4,7 @@ export const industryBlocks: ContentBlock[] = [
   {
     type: "paragraph",
     text: "Global semiconductor: US leads EDA/IP, Japan materials, Netherlands lithography, Korea/Taiwan memory and foundry.",
-    sourceIds: ["S-SEMI-EMP2024"],
+    sourceIds: ["S-SEMI-MIIT-POLICY"],
   },
   {
     type: "bullets",

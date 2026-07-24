@@ -4,7 +4,7 @@ export const overviewBlocks: ContentBlock[] = [
   {
     type: "paragraph",
     text: "半导体是全球科技产业的硬件基础。中国是全球最大半导体消费市场，但在设备、材料、EDA和先进制程环节仍高度依赖进口，国产替代是当前最大的产业主线。",
-    sourceIds: ["S-SEMI-MIIT-POLICY", "S-SEMI-EMP2024"],
+    sourceIds: ["S-SEMI-MIIT-POLICY"],
   },
   {
     type: "bullets",
@@ -14,7 +14,7 @@ export const overviewBlocks: ContentBlock[] = [
       "EDA/IP 国产化率：低于 10%，生态壁垒是核心挑战。",
       "先进制程：7nm 以下仍受 EUV 光刻机出口管制限制。",
     ],
-    sourceIds: ["S-SEMI-EMP2024"],
+    sourceIds: ["S-SEMI-MIIT-POLICY"],
   },
   {
     type: "table",
@@ -27,7 +27,7 @@ export const overviewBlocks: ContentBlock[] = [
       ["半导体材料", "20-25%", "大硅片/光刻胶纯度", "中等"],
       ["先进封装", "25-30%", "2.5D/3D 封装良率与经验", "中等"],
     ],
-    sourceIds: ["S-SEMI-EMP2024"],
+    sourceIds: ["S-SEMI-MIIT-POLICY"],
   },
   {
     type: "compareTable",
@@ -59,6 +59,6 @@ export const overviewBlocks: ContentBlock[] = [
       "先进制程突破不确定性风险：7nm 以下攻关需要长期积累。",
       "产能利用率周期波动风险：全球半导体下行周期影响成熟制程需求。",
     ],
-    sourceIds: ["S-SEMI-SMIC-FILING", "S-SEMI-EMP2024"],
+    sourceIds: ["S-SEMI-SMIC-FILING", "S-SEMI-MIIT-POLICY"],
   },
 ];

@@ -4,7 +4,7 @@ export const pricingBlocks: ContentBlock[] = [
   {
     type: "paragraph",
     text: "Pricing power comes from technology irreplaceability, verification barriers, and policy. The cycle: breakthrough-qualification-share-scale.",
-    sourceIds: ["S-SEMI-NAURA-FILING", "S-SEMI-AMEC-FILING", "S-SEMI-EMP2024"],
+    sourceIds: ["S-SEMI-NAURA-FILING", "S-SEMI-AMEC-FILING", "S-SEMI-MIIT-POLICY"],
   },
   {
     type: "callout",
