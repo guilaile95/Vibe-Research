@@ -965,8 +965,8 @@ def test_panel_ok_has_no_data_or_raw_payload():
 
 
 def test_unregistered_sector_source_returns_none():
-    assert srd.get_sector_source("semiconductor") is None
-    assert srd.get_sector_dynamic_data("semiconductor")["status"] == "unavailable"
+    assert srd.get_sector_source("fusion") is None
+    assert srd.get_sector_dynamic_data("fusion")["status"] == "unavailable"
 
 
 def test_each_sector_report_discovery_uses_own_config(monkeypatch):

@@ -154,6 +154,91 @@ CPO_SOURCES = SectorDataSource(
     dynamic_panels=["profit_forecast", "announcements", "individual_info"],
 )
 
+# SEMICONDUCTOR 数据源
+SEMICONDUCTOR_SOURCES = SectorDataSource(
+    key="semiconductor",
+    label="半导体国产替代",
+    report_keywords=[
+        "半导体", "晶圆制造", "刻蚀机", "薄膜沉积", "CMP", "光刻机",
+        "EDA", "光刻胶", "溅射靶材", "抛光液", "电子特气", "半导体材料",
+        "半导体设备", "国产替代", "中芯国际", "北方华创", "中微公司",
+    ],
+    representative_company_codes=["688981", "002371", "688012", "688019"],
+    representative_companies={
+        "688981": "中芯国际",
+        "002371": "北方华创",
+        "688012": "中微公司",
+        "688019": "安集科技",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# SMART-DRIVING 数据源
+SMARTDRIVING_SOURCES = SectorDataSource(
+    key="smart-driving",
+    label="智能驾驶",
+    report_keywords=[
+        "智能驾驶", "自动驾驶", "ADAS", "域控制器", "线控制动",
+        "激光雷达", "毫米波雷达", "车载摄像头", "高精地图", "V2X",
+        "智能座舱", "HUD", "德赛西威", "经纬恒润",
+    ],
+    representative_company_codes=["002920", "688326", "300496", "603596", "002284"],
+    representative_companies={
+        "002920": "德赛西威",
+        "688326": "经纬恒润",
+        "300496": "中科创达",
+        "603596": "伯特利",
+        "002284": "亚太股份",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# SOLID-STATE-BATTERY 数据源
+SSBATTERY_SOURCES = SectorDataSource(
+    key="solid-state-battery",
+    label="固态电池",
+    report_keywords=[
+        "固态电池", "半固态电池", "硫化物电解质", "氧化物电解质",
+        "锂金属负极", "硅碳负极", "电解液", "锂盐", "LiFSI",
+        "宁德时代", "国轩高科", "赣锋锂业", "当升科技",
+    ],
+    representative_company_codes=["300750", "002074", "002460", "300073", "002709", "300037", "300450"],
+    representative_companies={
+        "300750": "宁德时代",
+        "002074": "国轩高科",
+        "002460": "赣锋锂业",
+        "300073": "当升科技",
+        "002709": "天赐材料",
+        "300037": "新宙邦",
+        "300450": "先导智能",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# LOW-ALTITUDE 数据源
+LOWALTITUDE_SOURCES = SectorDataSource(
+    key="low-altitude",
+    label="低空经济",
+    report_keywords=[
+        "低空经济", "eVTOL", "通航", "无人机", "空中交通",
+        "直升机", "飞行汽车", "空管系统", "航空运营",
+        "亿航", "峰飞", "中直股份", "中信海直",
+    ],
+    representative_company_codes=["600038", "000099", "688631", "301091", "002085"],
+    representative_companies={
+        "600038": "中直股份",
+        "000099": "中信海直",
+        "688631": "莱斯信息",
+        "301091": "深城交",
+        "002085": "万丰奥威",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
 # 注册表：key -> SectorDataSource。
 SECTOR_SOURCES: dict[str, SectorDataSource] = {
     PCB_SOURCES.key: PCB_SOURCES,
@@ -161,6 +246,10 @@ SECTOR_SOURCES: dict[str, SectorDataSource] = {
     AICOMPUTING_SOURCES.key: AICOMPUTING_SOURCES,
     HBM_SOURCES.key: HBM_SOURCES,
     CPO_SOURCES.key: CPO_SOURCES,
+    SEMICONDUCTOR_SOURCES.key: SEMICONDUCTOR_SOURCES,
+    SMARTDRIVING_SOURCES.key: SMARTDRIVING_SOURCES,
+    SSBATTERY_SOURCES.key: SSBATTERY_SOURCES,
+    LOWALTITUDE_SOURCES.key: LOWALTITUDE_SOURCES,
 }
 
 
