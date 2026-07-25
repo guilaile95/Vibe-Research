@@ -725,6 +725,11 @@ export interface PortfolioAdviceHoldingAdvice {
   execution_size_pct_of_holding: number | null;
   /** 后端重算的建议操作股数；不足交易单位或不可算时为 null */
   execution_quantity: number | null;
+  /**
+   * reduce/sell 建议可卖上限（理论/advisory，非券商真可卖）。
+   * 一般为 min(execution_quantity, shares)；不可算时为 null。
+   */
+  sellable_quantity_advisory?: number | null;
   /** 仅 add：后端按 quantity×现价估算的预计所需金额；不可算时为 null */
   estimated_amount?: number | null;
   trigger_conditions: string[];

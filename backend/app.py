@@ -53,6 +53,7 @@ from decision_cockpit_service import (
     DecisionCockpitModelError,
     DecisionCockpitSnapshotError,
 )
+from decision_cockpit_today import get_today_actions
 
 
 class _DisconnectAwareStreamingResponse(StreamingResponse):
@@ -802,6 +803,22 @@ def decision_cockpit_overview(
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"驱动舱总览异常：{e}") from e
+
+
+@app.get("/api/decision-cockpit/today-actions")
+def decision_cockpit_today_actions(
+    trade_date: str = Query(..., description="交易日 YYYY-MM-DD"),
+):
+    """今日实时行动（只读聚合）：持仓 + 当前计划信号 + 建议 + 自选异动。
+
+    不生成计划、不调模型、不写 sqlite。非法 trade_date → 400；其它异常 → 500。
+    """
+    try:
+        return {"data": get_today_actions(trade_date)}
+    except DecisionCockpitError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception:  # noqa: BLE001 — 不向客户端暴露内部细节
+        raise HTTPException(500, "今日实时行动聚合失败") from None
 
 
 @app.post("/api/decision-cockpit/tomorrow-plan/generate")

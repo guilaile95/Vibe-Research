@@ -24,9 +24,47 @@ export default defineConfig(({ mode }) => {
     build: {
       rollupOptions: {
         output: {
-          manualChunks: {
-            "vendor-react": ["react", "react-dom", "react-router-dom"],
-            "vendor-charts": ["echarts"],
+          manualChunks(id) {
+            const normalized = id.replace(/\\/g, "/");
+
+            // 板块研究数据体量大：按路径拆到独立 chunk（含 Windows 路径）
+            if (normalized.includes("/src/data/sectorResearch")) {
+              return "sector-research";
+            }
+
+            if (!normalized.includes("/node_modules/")) {
+              return;
+            }
+
+            // echarts + zrender
+            if (
+              normalized.includes("/echarts/") ||
+              normalized.includes("/zrender/")
+            ) {
+              return "vendor-charts";
+            }
+
+            // markdown 渲染栈（react-markdown / remark-gfm 及其常见依赖）
+            if (
+              /\/node_modules\/(react-markdown|remark-gfm|remark-parse|remark-rehype|remark-stringify|rehype-raw|rehype-sanitize|mdast-|micromark|micromark-|unist-|hast-|vfile|vfile-|unified|bail|trough|extend|is-plain-obj|ccount|devlop|longest-streak|markdown-table|trim-lines|zwitch|decode-named-character-reference|character-entities|property-information|space-separated-tokens|comma-separated-tokens|style-to-object|inline-style-parser|html-url-attributes|mdast-util-|hast-util-|unist-util-)[^/]*\//.test(
+                normalized,
+              )
+            ) {
+              return "vendor-markdown";
+            }
+
+            if (normalized.includes("/zustand/")) {
+              return "vendor-zustand";
+            }
+
+            // React 核心 + 路由
+            if (
+              /\/node_modules\/(react|react-dom|react-router|react-router-dom|scheduler)\//.test(
+                normalized,
+              )
+            ) {
+              return "vendor-react";
+            }
           },
         },
       },

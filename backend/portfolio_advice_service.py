@@ -20,6 +20,7 @@ import portfolio_advice_validator
 from portfolio_advice_account_metrics import attach_account_funding_metrics
 from portfolio_advice_cash_constraint import apply_available_cash_constraints
 from portfolio_advice_errors import public_model_error_detail
+from portfolio_advice_sellable import apply_sellable_quantity_advisory
 from portfolio_advice_validator import PortfolioAdviceValidationError
 
 ModelRunner = Callable[[Any, list[dict[str, str]]], str]
@@ -351,6 +352,10 @@ def generate_portfolio_advice(
         )
         authoritative = attach_account_funding_metrics(validated, prepared["portfolio"])
         authoritative = apply_available_cash_constraints(authoritative)
+        authoritative = apply_sellable_quantity_advisory(
+            authoritative,
+            prepared["portfolio"],
+        )
     except PortfolioAdviceValidationError as exc:
         raise PortfolioAdviceModelOutputError(_VALIDATOR_FAIL_MSG) from exc
     except PortfolioAdviceModelOutputError:

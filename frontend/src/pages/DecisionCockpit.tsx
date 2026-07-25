@@ -1,5 +1,4 @@
-// 决策舱（/cockpit）—— PR A 范围：「明日行动计划」建设；
-// 「今日实时行动」留作 PR B 占位（"将在后续 PR B 建设"）。
+// 决策舱（/cockpit）：「明日行动计划」+「今日实时行动」只读面板。
 //
 // 前端绝不提交候选池 / 持仓快照 / 信号 / 证据 / actions / trade_date_override；
 // 所有权威数据由后端读取与计算，前端只提交 trade_date + 可选 llm + force。
@@ -26,11 +25,13 @@ import {
   freezePlan,
   listPlans,
   importLocalWatchlist,
+  getTodayActions,
   ApiError,
   type Overview,
   type TomorrowPlanMeta,
   type Signal,
   type Candidate,
+  type TodayActions,
 } from "@/lib/decisionCockpit";
 import { cn } from "@/lib/utils";
 
@@ -267,7 +268,7 @@ export function DecisionCockpit() {
         </button>
       </div>
 
-      {tab === "today" ? <TodayPlaceholder /> : null}
+      {tab === "today" ? <TodayActionsPanel tradeDate={tradeDate} onTradeDateChange={setTradeDate} /> : null}
 
       {tab === "tomorrow" ? (
         <div className="space-y-4">
@@ -456,16 +457,244 @@ export function DecisionCockpit() {
 // 子组件
 // ---------------------------------------------------------------------------
 
-function TodayPlaceholder() {
+const fmtPct = (v: number | null | undefined) => {
+  if (v == null || Number.isNaN(v)) return "—";
+  const sign = v > 0 ? "+" : "";
+  return `${sign}${v.toFixed(2)}%`;
+};
+
+const pctTone = (v: number | null | undefined) =>
+  v == null || Number.isNaN(v) || v === 0
+    ? "text-muted-foreground"
+    : v > 0
+      ? "text-danger"
+      : "text-success";
+
+const fmtPrice = (v: number | null | undefined) =>
+  v == null || Number.isNaN(v) ? "—" : v.toFixed(2);
+
+function TodayActionsPanel({
+  tradeDate,
+  onTradeDateChange,
+}: {
+  tradeDate: string;
+  onTradeDateChange: (d: string) => void;
+}) {
+  const [data, setData] = useState<TodayActions | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await getTodayActions(tradeDate);
+      setData(res);
+    } catch (e) {
+      setData(null);
+      setError(e instanceof ApiError ? e.message : "加载今日实时行动失败");
+    } finally {
+      setLoading(false);
+    }
+  }, [tradeDate]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
   return (
-    <GlassCard className="flex flex-col items-center gap-2 py-12 text-center">
-      <Clock className="h-10 w-10 text-muted-foreground/40" />
-      <h2 className="text-base font-semibold">今日实时行动</h2>
-      <p className="max-w-md text-sm text-muted-foreground">
-        该模块将在后续 PR B 建设。本期 PR A 聚焦「明日行动计划」：基于收盘后
-        候选池与多维度确定性信号，生成次日的可执行计划草稿。
-      </p>
-    </GlassCard>
+    <div className="space-y-4" data-testid="today-actions-panel">
+      <GlassCard className="space-y-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            交易日
+            <input
+              type="date"
+              value={tradeDate}
+              max={today()}
+              onChange={(e) => onTradeDateChange(e.target.value || today())}
+              className="rounded border border-border bg-card px-2 py-1 text-sm text-foreground"
+            />
+          </label>
+          <div className="flex flex-1 justify-end">
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={loading}
+              className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm transition-colors hover:border-primary hover:text-primary disabled:opacity-50"
+              title="手动刷新（不自动轮询）"
+            >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              刷新
+            </button>
+          </div>
+        </div>
+        {data?.as_of ? (
+          <p className="text-xs text-muted-foreground">数据截至（北京时间）{data.as_of}</p>
+        ) : null}
+      </GlassCard>
+
+      {error ? (
+        <GlassCard className="flex items-start gap-2 border-danger/30 text-sm text-danger">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{error}</span>
+        </GlassCard>
+      ) : null}
+
+      {loading && !data ? (
+        <GlassCard className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> 加载今日实时行动…
+        </GlassCard>
+      ) : null}
+
+      {data ? (
+        <>
+          <GlassCard className="space-y-2" data-testid="today-plan-binding">
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-semibold">计划绑定</h2>
+              {data.plan ? (
+                <span className="rounded bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
+                  v{data.plan.version} · {data.plan.status}
+                  {data.plan.is_current ? " · current" : ""}
+                </span>
+              ) : (
+                <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                  无当前计划
+                </span>
+              )}
+            </div>
+            {data.plan ? (
+              <p className="text-xs text-muted-foreground">
+                计划 #{data.plan.id} · 生成于 {data.plan.generated_at}
+              </p>
+            ) : null}
+            {data.plan_note ? (
+              <p className="text-sm text-muted-foreground">{data.plan_note}</p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                已绑定当日冻结计划；持仓信号摘要来自该计划。
+              </p>
+            )}
+          </GlassCard>
+
+          {(data.warnings?.length ?? 0) > 0 ? (
+            <GlassCard className="space-y-1 text-sm text-yellow-400">
+              {data.warnings.map((w, i) => (
+                <div key={`${w}-${i}`} className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>{w}</span>
+                </div>
+              ))}
+            </GlassCard>
+          ) : null}
+
+          <GlassCard className="space-y-3" data-testid="today-holdings">
+            <h2 className="text-base font-semibold">持仓行动</h2>
+            {data.holdings.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">暂无持仓</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[720px] text-left text-sm">
+                  <thead className="text-xs text-muted-foreground">
+                    <tr className="border-b border-border">
+                      <th className="px-2 py-2 font-medium">代码/名称</th>
+                      <th className="px-2 py-2 font-medium">现价</th>
+                      <th className="px-2 py-2 font-medium">当日</th>
+                      <th className="px-2 py-2 font-medium">浮盈%</th>
+                      <th className="px-2 py-2 font-medium">建议</th>
+                      <th className="px-2 py-2 font-medium">计划信号</th>
+                      <th className="px-2 py-2 font-medium">标签</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.holdings.map((h) => (
+                      <tr key={h.code} className="border-b border-border/60">
+                        <td className="px-2 py-2">
+                          <div className="font-mono text-xs">{h.code}</div>
+                          <div className="text-muted-foreground">{h.name}</div>
+                        </td>
+                        <td className="px-2 py-2 font-mono">{fmtPrice(h.price)}</td>
+                        <td className={cn("px-2 py-2 font-mono", pctTone(h.change_pct))}>
+                          {fmtPct(h.change_pct)}
+                        </td>
+                        <td className={cn("px-2 py-2 font-mono", pctTone(h.pnl_pct))}>
+                          {fmtPct(h.pnl_pct)}
+                        </td>
+                        <td className="px-2 py-2">
+                          {h.advice_action ? (
+                            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
+                              {h.advice_action}
+                              {h.advice_qty != null ? ` · ${h.advice_qty}` : ""}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-2 text-xs text-muted-foreground">
+                          {h.plan_signals_summary ?? "—"}
+                        </td>
+                        <td className="px-2 py-2">
+                          <div className="flex flex-wrap gap-1">
+                            {(h.flags ?? []).map((f) => (
+                              <span
+                                key={f}
+                                className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                              >
+                                {f}
+                              </span>
+                            ))}
+                            {(h.flags ?? []).length === 0 ? (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </GlassCard>
+
+          <GlassCard className="space-y-3" data-testid="today-watchlist-movers">
+            <h2 className="text-base font-semibold">自选异动</h2>
+            {data.watchlist_movers.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">暂无自选或无行情</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[480px] text-left text-sm">
+                  <thead className="text-xs text-muted-foreground">
+                    <tr className="border-b border-border">
+                      <th className="px-2 py-2 font-medium">代码/名称</th>
+                      <th className="px-2 py-2 font-medium">现价</th>
+                      <th className="px-2 py-2 font-medium">涨跌幅</th>
+                      <th className="px-2 py-2 font-medium">标记</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.watchlist_movers.map((m) => (
+                      <tr key={m.code} className="border-b border-border/60">
+                        <td className="px-2 py-2">
+                          <div className="font-mono text-xs">{m.code}</div>
+                          <div className="text-muted-foreground">{m.name}</div>
+                        </td>
+                        <td className="px-2 py-2 font-mono">{fmtPrice(m.price)}</td>
+                        <td className={cn("px-2 py-2 font-mono", pctTone(m.change_pct))}>
+                          {fmtPct(m.change_pct)}
+                        </td>
+                        <td className="px-2 py-2 text-xs text-muted-foreground">
+                          {m.flag ?? "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </GlassCard>
+        </>
+      ) : null}
+    </div>
   );
 }
 

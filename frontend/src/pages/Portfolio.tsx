@@ -262,6 +262,12 @@ function HoldingAdviceCard({ h }: { h: PortfolioAdviceHoldingAdvice }) {
             <p className="font-medium text-foreground">
               建议操作数量：<span className="font-mono text-primary">{fmtShares(h.execution_quantity)}</span> 股
             </p>
+            {h.sellable_quantity_advisory != null && (
+              <p className="mt-1 font-medium text-foreground">
+                建议可卖上限（理论）：
+                <span className="font-mono text-primary">{fmtShares(h.sellable_quantity_advisory)}</span> 股
+              </p>
+            )}
             <p className="mt-1 text-amber-700 dark:text-amber-400">执行前请确认实际可卖数量</p>
           </>
         )}

@@ -142,4 +142,51 @@ export async function freezePlan(planId: number, expectedVersion: number) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// 今日实时行动（只读）
+// ---------------------------------------------------------------------------
+
+export interface TodayHoldingAction {
+  code: string;
+  name: string;
+  shares: number | null;
+  price: number | null;
+  change_pct?: number | null;
+  pnl_pct?: number | null;
+  plan_signals_summary: string | null;
+  advice_action: string | null;
+  advice_qty: number | null;
+  flags: string[];
+}
+
+export interface TodayWatchlistMover {
+  code: string;
+  name: string;
+  price: number | null;
+  change_pct: number | null;
+  flag: string | null;
+}
+
+export interface TodayActions {
+  trade_date: string;
+  as_of: string;
+  plan: {
+    id: number;
+    status: string;
+    version: number;
+    generated_at: string;
+    is_current: number | boolean;
+  } | null;
+  plan_note: string | null;
+  holdings: TodayHoldingAction[];
+  watchlist_movers: TodayWatchlistMover[];
+  warnings: string[];
+}
+
+export async function getTodayActions(tradeDate: string): Promise<TodayActions> {
+  return get<TodayActions>(
+    `/decision-cockpit/today-actions?trade_date=${encodeURIComponent(tradeDate)}`,
+  );
+}
+
 export { ApiError, unwrapApiPayload };

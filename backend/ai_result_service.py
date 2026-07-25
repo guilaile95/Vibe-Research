@@ -309,7 +309,7 @@ def _validate_portfolio_authoritative_payload(
             holding_value,
             prefix,
             holding_required,
-            {"estimated_amount", "account_metrics"},
+            {"estimated_amount", "account_metrics", "sellable_quantity_advisory"},
         )
         if not isinstance(holding["code"], str) or not re.fullmatch(r"\d{6}", holding["code"]):
             raise AiResultValidationError(f"{prefix}.code 非法")
@@ -330,6 +330,14 @@ def _validate_portfolio_authoritative_payload(
         execution_quantity = holding["execution_quantity"]
         if execution_quantity is not None:
             _nonnegative_int(execution_quantity, f"{prefix}.execution_quantity", positive=True)
+        if "sellable_quantity_advisory" in holding:
+            advisory = holding["sellable_quantity_advisory"]
+            if advisory is not None:
+                _nonnegative_int(
+                    advisory,
+                    f"{prefix}.sellable_quantity_advisory",
+                    positive=True,
+                )
         if "estimated_amount" in holding:
             _finite_number(
                 holding["estimated_amount"],
