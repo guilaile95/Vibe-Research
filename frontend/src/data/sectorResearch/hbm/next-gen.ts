@@ -10,7 +10,7 @@ export const nextGenBlocks: ContentBlock[] = [
     type: "callout",
     tone: "warning",
     text: "不确定性声明：本页讨论的 HBM4 / 下一代堆叠仅为行业路线图讨论与内部分析，并非已生效的统一标准文本。公开可引用的 JEDEC 规范（如 JESD235C）覆盖的是 HBM3 / HBM3E 一代；HBM4 的接口位宽、Base Die 制程、键合方式等参数在不同厂商路演与媒体报道中存在分歧，以下内容不得理解为「标准已规定」或「JEDEC 已确认」。",
-    sourceIds: [],
+    sourceIds: ["S-HBM-JEDEC-STANDARD"],
   },
   {
     type: "callout",
@@ -20,7 +20,7 @@ export const nextGenBlocks: ContentBlock[] = [
   },
   {
     type: "paragraph",
-    text: "在「若 HBM4 路线图部分假设成立」的前提下，产业分析认为 Base Die 有可能更多采用逻辑晶圆代工而非传统 DRAM 工艺制造，从而推动存储原厂与晶圆代工厂在 2.5D / 3D Chiplet 共封上的协作加深。此段为条件性推断，不是对任何厂商量产承诺的复述，亦无官方定稿可引用。",
+    text: "在「若 HBM4 路线图部分假设成立」的前提下，产业分析认为 Base Die 有可能更多采用逻辑晶圆代工而非传统 DRAM 工艺制造，从而推动存储原厂与晶代工厂在 2.5D / 3D Chiplet 共封上的协作加深。此段为条件性推断（内部分析，非官方定稿），不是对任何厂商量产承诺的复述，亦无官方定稿可引用。",
     sourceIds: [],
   },
   {
@@ -59,6 +59,6 @@ export const nextGenBlocks: ContentBlock[] = [
     type: "callout",
     tone: "info",
     text: "阅读提示（内部分析）：表格右侧「HBM4」列全部为预测性表述；左侧 HBM3e 相关描述亦应与 JEDEC 等正式规范及原厂数据手册交叉核对，本页不单独构成标准解读。若后续出现正式标准文本或原厂量产规格，应以新公开文件为准并回写本页。",
-    sourceIds: [],
+    sourceIds: ["S-HBM-JEDEC-STANDARD"],
   },
 ];

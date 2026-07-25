@@ -176,7 +176,7 @@ export const lowAltitudeSources: SourceRef[] = [
     url: "https://www.faa.gov/regulations_policies/advisory_circulars/index.cfm/go/document.information/documentID/1044836",
     sourceType: "standard",
     factLevel: "\u5df2\u786e\u8ba4\u4e8b\u5b9e",
-    publishedAt: "2022-09-08",
+    publishedAt: "2025-07-18",
     accessedAt: "2026-07-24",
     supports: "FAA \u4f9d\u636e 14 CFR Part 21.17(b) \u4e3a\u503e\u8f6c\u65cb\u7ffc\u4e0e\u590d\u5408\u7ffc\u7b49\u7279\u6b8a\u7c7b Powered-Lift / eVTOL \u5236\u5b9a\u4e13\u7528\u578b\u53f7\u5ba1\u5b9a\u6307\u5bfc\u6587\u4ef6 AC 21.17-4",
     note: "FAA AC 21.17-4 Powered-lift \u5ba1\u5b9a\u6307\u5357",

@@ -6,15 +6,15 @@ import {
   registeredResearchKeys,
   resolveOrFallback,
 } from "../src/data/sectorResearch/invariants.ts";
-import { getSectorResearchWorkspace } from "../src/data/sectorResearch/index.ts";
+import { loadSectorResearchWorkspace } from "../src/data/sectorResearch/index.ts";
 
 const BATCH1_KEYS = ["humanoid", "ai-computing", "hbm", "cpo"] as const;
 
-test("Batch 1 workspaces are all registered and satisfy invariants", () => {
+test("Batch 1 workspaces are all registered and satisfy invariants", async () => {
   const registered = registeredResearchKeys();
   for (const key of BATCH1_KEYS) {
     assert.ok(registered.includes(key), `workspace ${key} should be registered`);
-    const ws = getSectorResearchWorkspace(key);
+    const ws = await loadSectorResearchWorkspace(key);
     assert.ok(ws, `workspace ${key} should exist`);
     assert.equal(ws.key, key);
     assert.equal(ws.tags.length, 6, `workspace ${key} should have 6 tags`);
@@ -24,9 +24,9 @@ test("Batch 1 workspaces are all registered and satisfy invariants", () => {
   }
 });
 
-test("Batch 1 workspaces source integrity and usage", () => {
+test("Batch 1 workspaces source integrity and usage", async () => {
   for (const key of BATCH1_KEYS) {
-    const ws = getSectorResearchWorkspace(key)!;
+    const ws = await loadSectorResearchWorkspace(key)!;
     const sourceIds = new Set(ws.sources.map((s) => s.id));
     assert.equal(sourceIds.size, ws.sources.length, `workspace ${key} has duplicate source ids`);
 
@@ -66,9 +66,9 @@ test("Batch 1 workspaces source integrity and usage", () => {
   }
 });
 
-test("Batch 1 workspace required content components", () => {
+test("Batch 1 workspace required content components", async () => {
   for (const key of BATCH1_KEYS) {
-    const ws = getSectorResearchWorkspace(key)!;
+    const ws = await loadSectorResearchWorkspace(key)!;
     let hasTable = false;
     let hasCompareTable = false;
     let hasRisk = false;
@@ -93,14 +93,14 @@ test("Batch 1 workspace required content components", () => {
   }
 });
 
-test("Unregistered sectors display placeholder without workspace", () => {
-  assert.equal(getSectorResearchWorkspace("nonexistent"), undefined);
+test("Unregistered sectors display placeholder without workspace", async () => {
+  assert.equal(await loadSectorResearchWorkspace("nonexistent"), undefined);
   assert.equal(resolveOrFallback("nonexistent", "overview"), null);
 });
 
-test("Batch 1 source metadata formats", () => {
+test("Batch 1 source metadata formats", async () => {
   for (const key of BATCH1_KEYS) {
-    const ws = getSectorResearchWorkspace(key)!;
+    const ws = await loadSectorResearchWorkspace(key)!;
     for (const s of ws.sources) {
       // accessedAt must be valid ISO date
       assert.ok(s.accessedAt && !isNaN(Date.parse(s.accessedAt)), `${key} source "${s.id}" missing valid accessedAt`);
@@ -118,9 +118,9 @@ test("Batch 1 source metadata formats", () => {
 });
 
 
-test("Batch 1 block type diversity: each tag has at least 3 different non-placeholder block types", () => {
+test("Batch 1 block type diversity: each tag has at least 3 different non-placeholder block types", async () => {
   for (const key of BATCH1_KEYS) {
-    const ws = getSectorResearchWorkspace(key)!;
+    const ws = await loadSectorResearchWorkspace(key)!;
     const typeNames = new Set(["paragraph", "bullets", "table", "compareTable", "callout", "risk", "fact"]);
     for (const tag of ws.tags) {
       const blockTypes = new Set(tag.blocks.filter((b) => b.type !== "placeholder").map((b) => b.type));
@@ -131,11 +131,11 @@ test("Batch 1 block type diversity: each tag has at least 3 different non-placeh
   }
 });
 
-test("Batch 1 content block sourceId requirements", () => {
+test("Batch 1 content block sourceId requirements", async () => {
   const internalKeywords = ["内部分析", "分析推断", "行业预测", "待验证", "in-house analysis", "industry estimate", "pending verification", "analysis inference"];
   const forbiddenKeywords = ["JEDEC", "OIF", "JESD", "IEEE", "IPC", "SEMI", "ISO"];
   for (const key of BATCH1_KEYS) {
-    const ws = getSectorResearchWorkspace(key)!;
+    const ws = await loadSectorResearchWorkspace(key)!;
     for (const tag of ws.tags) {
       for (const block of tag.blocks) {
         if (block.type === "placeholder") continue;
@@ -165,7 +165,7 @@ test("Batch 1 content block sourceId requirements", () => {
   }
 });
 
-test("Batch 1 verified announcement IDs whitelist", () => {
+test("Batch 1 verified announcement IDs whitelist", async () => {
   const verified: Record<string, Array<{ id: string; stock: string; aid: string; name: string }>> = {
     humanoid: [
       { id: "S-HUMANOID-SANHUA-FILING",       stock: "002050", aid: "1219912907", name: "三花智控" },
@@ -190,7 +190,7 @@ test("Batch 1 verified announcement IDs whitelist", () => {
     ],
   };
   for (const key of BATCH1_KEYS) {
-    const ws = getSectorResearchWorkspace(key)!;
+    const ws = await loadSectorResearchWorkspace(key)!;
     const entries = verified[key];
     assert.ok(entries, `no whitelist entries for ${key}`);
     for (const v of entries) {
@@ -202,9 +202,9 @@ test("Batch 1 verified announcement IDs whitelist", () => {
     }
   }
 });
-test("Batch 1 table/compareTable row consistency", () => {
+test("Batch 1 table/compareTable row consistency", async () => {
   for (const key of BATCH1_KEYS) {
-    const ws = getSectorResearchWorkspace(key)!;
+    const ws = await loadSectorResearchWorkspace(key)!;
     for (const tag of ws.tags) {
       for (const block of tag.blocks) {
         if (block.type === "table" || block.type === "compareTable") {

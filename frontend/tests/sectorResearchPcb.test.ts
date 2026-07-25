@@ -10,7 +10,7 @@ import {
   resolveOrFallback,
 } from "../src/data/sectorResearch/invariants.ts";
 import { pcbResearch } from "../src/data/sectorResearch/pcb.ts";
-import { getSectorResearchWorkspace } from "../src/data/sectorResearch/index.ts";
+import { loadSectorResearchWorkspace } from "../src/data/sectorResearch/index.ts";
 
 /** 正式 SourceRef：景旺具体产品/市场页 + 生益材料产品页 */
 const ALLOWED_SOURCE_IDS = [
@@ -23,18 +23,18 @@ const ALLOWED_SOURCE_IDS = [
   "S-SHENGYI-IC",
 ] as const;
 
-test("PCB workspace is registered alongside Batch 1 workspaces", () => {
+test("PCB workspace is registered alongside Batch 1 workspaces", async () => {
   const keys = registeredResearchKeys();
   assert.ok(keys.includes("pcb"));
   assert.ok(keys.includes("humanoid"));
   assert.ok(keys.includes("ai-computing"));
   assert.ok(keys.includes("hbm"));
   assert.ok(keys.includes("cpo"));
-  assert.ok(getSectorResearchWorkspace("pcb"));
-  assert.equal(getSectorResearchWorkspace("nonexistent"), undefined);
+  assert.ok(await loadSectorResearchWorkspace("pcb"));
+  assert.equal(await loadSectorResearchWorkspace("nonexistent"), undefined);
 });
 
-test("PCB has exactly six tags with stable slugs and labels in order", () => {
+test("PCB has exactly six tags with stable slugs and labels in order", async () => {
   const snap = pcbConfigSnapshot();
   assert.equal(snap.key, "pcb");
   assert.equal(snap.defaultTag, "overview");
@@ -43,7 +43,7 @@ test("PCB has exactly six tags with stable slugs and labels in order", () => {
   assert.deepEqual(snap.labels, expectedPcbTagLabels());
 });
 
-test("PCB all six tags are draft status", () => {
+test("PCB all six tags are draft status", async () => {
   assert.equal(pcbResearch.tags.length, 6);
   for (const t of pcbResearch.tags) {
     assert.equal(t.status, "draft", `tag ${t.slug} should be draft`);
@@ -51,7 +51,7 @@ test("PCB all six tags are draft status", () => {
   assert.equal(pcbConfigSnapshot().allPlaceholder, false);
 });
 
-test("PCB sources are the read company product/tech pages", () => {
+test("PCB sources are the read company product/tech pages", async () => {
   const ids = pcbResearch.sources.map((s) => s.id);
   assert.equal(pcbResearch.sources.length, 7);
   assert.deepEqual(ids.slice().sort(), [...ALLOWED_SOURCE_IDS].sort());
@@ -64,17 +64,17 @@ test("PCB sources are the read company product/tech pages", () => {
   }
 });
 
-test("PCB tag slugs are unique", () => {
+test("PCB tag slugs are unique", async () => {
   const slugs = pcbResearch.tags.map((t) => t.slug);
   assert.equal(new Set(slugs).size, slugs.length);
 });
 
-test("checkWorkspace accepts PCB config", () => {
+test("checkWorkspace accepts PCB config", async () => {
   const r = checkWorkspace(pcbResearch);
   assert.equal(r.ok, true, r.errors.join("; "));
 });
 
-test("all block sourceIds are within the allowed read sources", () => {
+test("all block sourceIds are within the allowed read sources", async () => {
   const allowed = new Set<string>(ALLOWED_SOURCE_IDS);
   for (const tag of pcbResearch.tags) {
     for (const block of tag.blocks) {
@@ -90,7 +90,7 @@ test("all block sourceIds are within the allowed read sources", () => {
   }
 });
 
-test("resolveOrFallback uses default for missing or illegal tag", () => {
+test("resolveOrFallback uses default for missing or illegal tag", async () => {
   assert.deepEqual(resolveOrFallback("pcb", undefined), {
     workspaceKey: "pcb",
     tagSlug: "overview",
@@ -110,7 +110,7 @@ test("resolveOrFallback uses default for missing or illegal tag", () => {
 });
 
 
-test("Synamic8GX general Dk/Df not mislabeled as 10GHz-only", () => {
+test("Synamic8GX general Dk/Df not mislabeled as 10GHz-only", async () => {
   const tech = pcbResearch.tags.find((x) => x.slug === "technology");
   assert.ok(tech);
   const blob = JSON.stringify(tech.blocks);

@@ -3,7 +3,7 @@
  * 不依赖 React。
  */
 import type { SectorResearchWorkspace } from "./types.ts";
-import { getSectorResearchWorkspace, listSectorResearchKeys } from "./index.ts";
+import { resolveSectorTagMeta, listSectorResearchKeys } from "./index.ts";
 import { pcbResearch } from "./pcb.ts";
 
 export type WorkspaceCheckResult = {
@@ -97,14 +97,7 @@ export function resolveOrFallback(
   key: string,
   slug: string | undefined,
 ): { workspaceKey: string; tagSlug: string; redirected: boolean } | null {
-  const ws = getSectorResearchWorkspace(key);
-  if (!ws) return null;
-  const resolved = slug && ws.tags.some((t) => t.slug === slug) ? slug : ws.defaultTag;
-  return {
-    workspaceKey: ws.key,
-    tagSlug: resolved,
-    redirected: resolved !== slug,
-  };
+  return resolveSectorTagMeta(key, slug);
 }
 
 export function registeredResearchKeys(): string[] {

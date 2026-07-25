@@ -808,6 +808,18 @@ export interface QaRow { company: string; question: string; answer: string | nul
 export interface IndustryRow { rank: number; name: string; change_pct: number; code: string; up_count: number; down_count: number }
 export interface IndustryData { top: IndustryRow[]; bottom: IndustryRow[]; total: number }
 
+/** K 线 Bar（mootdx）：标准 OHLC；字段名按 mootdx DataFrame 列。 */
+export interface KlineBar {
+  date?: string; datetime?: string; open?: number; close?: number;
+  high?: number; low?: number; volume?: number; amount?: number;
+  [key: string]: string | number | undefined;
+}
+/** 巨潮公告全文项（akshare cninfo）。 */
+export interface DisclosureItem {
+  title?: string; info?: string; date?: string; url?: string;
+  [key: string]: string | number | boolean | null | undefined;
+}
+
 // 全球市场（美股 / 港股，移植自 global-stock-data · 东财域内源）
 export interface GlobalIndex {
   key: string; name: string; region: string;
@@ -1192,6 +1204,15 @@ export const api = {
   hotConcepts: (code: string) => get<HotConcept[]>(`/hot-concepts?code=${code}`),
   investorQa: (code: string) => get<QaRow[]>(`/investor-qa?code=${code}`),
   industry: (top = 20) => get<IndustryData>(`/industry?top=${top}`),
+  /** K 线（需 mootdx）：category 4=日 5=周 6=月 11=60分钟；依赖缺失抛 501。 */
+  kline: (code: string, category = 4, offset = 60) =>
+    get<KlineBar[]>(`/kline?code=${code}&category=${category}&offset=${offset}`),
+  /** 季报财务快照（需 mootdx，37 字段）；依赖缺失抛 501。 */
+  finance: (code: string) => get<Record<string, string | number | null>>(`/finance?code=${code}`),
+  /** 个股基本面：行业 / 总股本 / 上市时间等（需 akshare）；依赖缺失抛 501。 */
+  info: (code: string) => get<Record<string, string | number>>(`/info?code=${code}`),
+  /** 巨潮公告全文列表（需 akshare，备用源）；依赖缺失抛 501。 */
+  disclosure: (code: string) => get<DisclosureItem[]>(`/disclosure?code=${code}`),
   myReports: () => get<MyReport[]>("/myreports"),
   uploadReport: (name: string, contentB64: string, meta?: {
     title?: string; institution?: string; publish_date?: string;

@@ -6,7 +6,7 @@ import {
   registeredResearchKeys,
   resolveOrFallback,
 } from "../src/data/sectorResearch/invariants.ts";
-import { getSectorResearchWorkspace } from "../src/data/sectorResearch/index.ts";
+import { loadSectorResearchWorkspace } from "../src/data/sectorResearch/index.ts";
 
 const BATCH2_KEYS = ["semiconductor", "smart-driving", "solid-state-battery", "low-altitude"] as const;
 
@@ -59,11 +59,11 @@ const FORBIDDEN_ROOT_URLS = [
   "https://www.easa.europa.eu",
 ];
 
-test("Batch 2 workspaces are all registered and satisfy invariants", () => {
+test("Batch 2 workspaces are all registered and satisfy invariants", async () => {
   const registered = registeredResearchKeys();
   for (const key of BATCH2_KEYS) {
     assert.ok(registered.includes(key), `workspace ${key} should be registered`);
-    const ws = getSectorResearchWorkspace(key);
+    const ws = await loadSectorResearchWorkspace(key);
     assert.ok(ws, `workspace ${key} should exist`);
     assert.equal(ws.key, key);
     assert.equal(ws.tags.length, 6, `workspace ${key} should have 6 tags`);
@@ -73,11 +73,11 @@ test("Batch 2 workspaces are all registered and satisfy invariants", () => {
   }
 });
 
-test("Batch 2 source integrity, block type diversity, and sourceId rules", () => {
+test("Batch 2 source integrity, block type diversity, and sourceId rules", async () => {
   const internalKeywords = ["内部分析", "分析推断", "行业预测", "待验证", "in-house analysis", "industry estimate", "pending verification", "analysis inference"];
   const externalKeywords = ["JEDEC", "OIF", "JESD", "IEEE", "IPC", "SEMI", "ISO", "CCAR", "EASA", "FAA", "DO-178C", "DO-254", "ASPICE"];
   for (const key of BATCH2_KEYS) {
-    const ws = getSectorResearchWorkspace(key)!;
+    const ws = await loadSectorResearchWorkspace(key)!;
     const sourceIds = new Set(ws.sources.map((s) => s.id));
     assert.equal(sourceIds.size, ws.sources.length, `workspace ${key} has duplicate source ids`);
     const usedSourceIds = new Set<string>();
@@ -154,9 +154,9 @@ test("Batch 2 source integrity, block type diversity, and sourceId rules", () =>
   }
 });
 
-test("Batch 2 workspace required content components", () => {
+test("Batch 2 workspace required content components", async () => {
   for (const key of BATCH2_KEYS) {
-    const ws = getSectorResearchWorkspace(key)!;
+    const ws = await loadSectorResearchWorkspace(key)!;
     let hasTable = false;
     let hasCompareTable = false;
     let hasRisk = false;
@@ -181,9 +181,9 @@ test("Batch 2 workspace required content components", () => {
   }
 });
 
-test("Batch 2 verified announcement IDs whitelist (hard fail)", () => {
+test("Batch 2 verified announcement IDs whitelist (hard fail)", async () => {
   for (const key of BATCH2_KEYS) {
-    const ws = getSectorResearchWorkspace(key)!;
+    const ws = await loadSectorResearchWorkspace(key)!;
     const entries = VERIFIED_ANNOUNCEMENTS[key];
     assert.ok(entries && entries.length > 0, `no whitelist entries for ${key}`);
     for (const v of entries) {
@@ -196,12 +196,12 @@ test("Batch 2 verified announcement IDs whitelist (hard fail)", () => {
   }
 });
 
-test("Batch 2 policy and standard SourceRef identity & mapping rules", () => {
+test("Batch 2 policy and standard SourceRef identity & mapping rules", async () => {
   const policyItems = [{"id": "S-SEMI-MIIT-POLICY", "domain": "mee.gov.cn", "urlKw": "t20200806_792957.shtml", "titleKw": "\u56fd\u53d1\u30142020\u30158\u53f7", "org": "\u56fd\u52a1\u9662 / \u5de5\u4fe1\u90e8", "pub": "2020-08-04"}, {"id": "S-DRIVE-MIIT-POLICY", "domain": "mee.gov.cn", "urlKw": "806156", "titleKw": "\u56fd\u529e\u53d1\u30142020\u301539\u53f7", "org": "\u56fd\u52a1\u9662\u529e\u516c\u5385", "pub": "2020-11-03"}, {"id": "S-SSBAT-POLICY-NEV", "domain": "gov.cn", "urlKw": "content_5556716.htm", "titleKw": "\u56fd\u529e\u53d1\u30142020\u301539\u53f7", "org": "\u56fd\u52a1\u9662\u529e\u516c\u5385", "pub": "2020-11-02"}, {"id": "S-LOWALT-POLICY-FRAMEWORK", "domain": "ncsti.gov.cn", "urlKw": "t20240402_152639.html", "titleKw": "\u5de5\u4fe1\u90e8\u8054\u91cd\u88c5\u30142024\u301552\u53f7", "org": "\u5de5\u4e1a\u548c\u4fe1\u606f\u5316\u90e8", "pub": "2024-03-27"}, {"id": "S-LOWALT-CAAC-CCAR21", "domain": "caac.gov.cn", "urlKw": "t20240313_223201.html", "titleKw": "CCAR-21-R5", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40 / \u4ea4\u901a\u8fd0\u8f93\u90e8", "pub": "2024-02-18"}, {"id": "S-LOWALT-CAAC-CCAR91", "domain": "caac.gov.cn", "urlKw": "t20220209_211633.html", "titleKw": "CCAR-91-R4", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40 / \u4ea4\u901a\u8fd0\u8f93\u90e8", "pub": "2022-01-04"}, {"id": "S-LOWALT-CAAC-CCAR135", "domain": "caac.gov.cn", "urlKw": "t20220209_211634.html", "titleKw": "CCAR-135R3", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40 / \u4ea4\u901a\u8fd0\u8f93\u90e8", "pub": "2022-01-04"}, {"id": "S-LOWALT-EH216-PC", "domain": "zn.caac.gov.cn", "urlKw": "t20240416_223537.html", "titleKw": "EH216-S", "org": "\u4e2d\u56fd\u6c11\u7528\u822a\u7a7a\u5c40", "pub": "2024-04-16"}, {"id": "S-LOWALT-EHANG-RELEASE", "domain": "ir.ehang.com", "urlKw": "ehang-successfully-obtains-type-certificate-eh216-s-passenger", "titleKw": "EH216-S", "org": "\u4ebf\u822a\u667a\u80fd\uff08EHang\uff09", "pub": "2023-10-13"}, {"id": "S-LOWALT-EASA-SC-VTOL", "domain": "easa.europa.eu", "urlKw": "20857", "titleKw": "SC-VTOL-01", "org": "EASA\uff08\u6b27\u6d32\u822a\u7a7a\u5b89\u5168\u5c40\uff09", "pub": "2019-07-02"}, {"id": "S-LOWALT-FAA-21-17B", "domain": "faa.gov", "urlKw": "1044836", "titleKw": "AC 21.17-4", "org": "FAA\uff08\u7f8e\u56fd\u8054\u90a6\u822a\u7a7a\u5c40\uff09", "pub": "2025-07-18"}, {"id": "S-LOWALT-ISO26262-STD", "domain": "iso.org", "urlKw": "26262", "titleKw": "ISO 26262", "org": "ISO\uff08\u56fd\u9645\u6807\u51c6\u5316\u7ec4\u7ec7\uff09", "pub": "2018-12-17"}, {"id": "S-LOWALT-DO-178C", "domain": "rtca.org", "urlKw": "a1B36000001IcmqEAC", "titleKw": "DO-178C", "org": "RTCA", "pub": "2011-12-13"}, {"id": "S-LOWALT-DO-254", "domain": "rtca.org", "urlKw": "a1B36000001IcjTEAS", "titleKw": "DO-254", "org": "RTCA", "pub": "2000-04-19"}];
   for (const item of policyItems) {
     let found = false;
     for (const key of BATCH2_KEYS) {
-      const ws = getSectorResearchWorkspace(key)!;
+      const ws = await loadSectorResearchWorkspace(key)!;
       const src = ws.sources.find((s) => s.id === item.id);
       if (src) {
         found = true;
@@ -218,7 +218,7 @@ test("Batch 2 policy and standard SourceRef identity & mapping rules", () => {
   // Ensure NCSTI 52号文 URL is ONLY used by S-LOWALT-POLICY-FRAMEWORK
   const ncstiUrl = "https://www.ncsti.gov.cn/kjdt/tzgg/202404/t20240402_152639.html";
   for (const key of BATCH2_KEYS) {
-    const ws = getSectorResearchWorkspace(key)!;
+    const ws = await loadSectorResearchWorkspace(key)!;
     for (const s of ws.sources) {
       if (s.url === ncstiUrl) {
         assert.equal(s.id, "S-LOWALT-POLICY-FRAMEWORK", `NCSTI URL misassigned to ${s.id} in ${key}`);
@@ -228,14 +228,14 @@ test("Batch 2 policy and standard SourceRef identity & mapping rules", () => {
 
   // Forbid composite standards & removed unbacked sources
   for (const key of BATCH2_KEYS) {
-    const ws = getSectorResearchWorkspace(key)!;
+    const ws = await loadSectorResearchWorkspace(key)!;
     assert.equal(ws.sources.find((s) => s.id === "S-LOWALT-EASA-FAA-STD"), undefined, `Forbidden composite standard source S-LOWALT-EASA-FAA-STD in ${key}`);
     assert.equal(ws.sources.find((s) => s.id === "S-LOWALT-DO-178C-254"), undefined, `Forbidden composite standard source S-LOWALT-DO-178C-254 in ${key}`);
     assert.equal(ws.sources.find((s) => s.id === "S-SEMI-EMP2024"), undefined, `Forbidden unbacked source S-SEMI-EMP2024 in ${key}`);
   }
 });
 
-test("Unregistered sectors display placeholder without workspace", () => {
-  assert.equal(getSectorResearchWorkspace("nonexistent"), undefined);
+test("Unregistered sectors display placeholder without workspace", async () => {
+  assert.equal(await loadSectorResearchWorkspace("nonexistent"), undefined);
   assert.equal(resolveOrFallback("nonexistent", "overview"), null);
 });

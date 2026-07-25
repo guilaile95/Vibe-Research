@@ -869,9 +869,9 @@ function SummaryBlock({ account, advice }: { account: Overview["account_funding"
           </p>
         ) : (
           <div className="grid grid-cols-2 gap-2 text-xs">
-            <span className="text-muted-foreground">总资产</span><span className="font-mono">{account.data.total_assets}</span>
-            <span className="text-muted-foreground">可用现金</span><span className="font-mono">{account.data.available_cash}</span>
-            <span className="text-muted-foreground">更新时间</span><span className="font-mono">{account.data.updated_at}</span>
+            <span className="text-muted-foreground">总资产</span><span className="font-mono">{account.data?.total_assets ?? "—"}</span>
+            <span className="text-muted-foreground">可用现金</span><span className="font-mono">{account.data?.available_cash ?? "—"}</span>
+            <span className="text-muted-foreground">更新时间</span><span className="font-mono">{account.data?.updated_at ?? "—"}</span>
           </div>
         )}
       </GlassCard>

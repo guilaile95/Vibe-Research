@@ -47,13 +47,43 @@ export interface TomorrowPlanMeta {
   signals?: Signal[];
 }
 
+/** 市场短线评估信封：status ∈ normal/partial/unavailable；data 为 {breadth, emotion} 或 null。 */
+export interface MarketShortEnvelope {
+  status: "normal" | "partial" | "unavailable" | string;
+  is_stale?: boolean;
+  warnings: string[];
+  data: { breadth: Record<string, unknown> | null; emotion: Record<string, unknown> | null } | null;
+}
+
+/** 账户资金：未配置时 configured=false/data=null；已配置时 data 含 total_assets/available_cash/updated_at。 */
+export interface AccountFundingEnvelope {
+  configured: boolean;
+  status?: string;
+  data: { total_assets: number; available_cash: number; updated_at: string } | null;
+}
+
+/** 顶层持仓建议摘要（快照字段子集，只读展示）。 */
+export interface OverviewAdviceSummary {
+  result_type?: string | null;
+  trade_date?: string | null;
+  generated_at?: string | null;
+  input_fingerprint?: string | null;
+  payload_hash?: string | null;
+  stale?: boolean | null;
+  schema_version?: string | null;
+}
+
 export interface Overview {
   trade_date: string;
-  market_short: { status: string; warnings: string[]; data: any };
-  account_funding: { configured: boolean; data: any };
-  advice: any | null;
+  is_latest_review_day?: boolean;
+  latest_review_trade_date?: string | null;
+  market_short: MarketShortEnvelope;
+  account_funding: AccountFundingEnvelope;
+  advice: OverviewAdviceSummary | null;
   current_plan: (TomorrowPlanMeta & { signals?: Signal[] }) | null;
   candidate_pool: Candidate[];
+  plans?: TomorrowPlanMeta[];
+  warnings?: string[];
 }
 
 // ---------------------------------------------------------------------------
