@@ -20,6 +20,7 @@ import portfolio_advice_validator
 from portfolio_advice_account_metrics import attach_account_funding_metrics
 from portfolio_advice_cash_constraint import apply_available_cash_constraints
 from portfolio_advice_errors import public_model_error_detail
+from portfolio_advice_prompt import _normalize_user_request
 from portfolio_advice_sellable import apply_sellable_quantity_advisory
 from portfolio_advice_validator import PortfolioAdviceValidationError
 
@@ -71,15 +72,6 @@ _INVALID_JSON_MSG = "持仓建议模型输出不是有效的JSON对象"
 _VALIDATOR_FAIL_MSG = "持仓建议模型输出未通过结构和执行约束校验"
 _HOLDING_QUOTE_UNAVAILABLE_MSG = "持仓核心行情暂不可用，无法生成可靠的持仓操作建议"
 _MARKET_UNAVAILABLE_MSG = "市场核心数据暂不可用，无法生成可靠的持仓操作建议"
-
-
-def _normalize_user_request(user_request: Any) -> str | None:
-    if user_request is None:
-        return None
-    if not isinstance(user_request, str):
-        raise TypeError("user_request 必须是字符串或None")
-    stripped = user_request.strip()
-    return stripped if stripped else None
 
 
 def _require_holdings(portfolio_data: dict) -> None:

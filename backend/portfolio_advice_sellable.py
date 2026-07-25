@@ -11,16 +11,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from portfolio_advice_cash_constraint import _append_limitation
+
 _LIMITATION_ADVISORY = (
     "系统无券商可卖数量与 T+1 明细，建议操作数量为理论值，执行前请以券商可卖为准"
 )
 
 _REDUCE_SELL_ACTIONS = frozenset({"reduce", "sell"})
-
-
-def _append_limitation(target: list[str], message: str) -> None:
-    if message not in target:
-        target.append(message)
 
 
 def _is_non_bool_number(value: Any) -> bool:

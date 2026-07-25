@@ -9,7 +9,7 @@ from portfolio_advice_policy import POLICY, PortfolioAdvicePolicy
 from portfolio_advice_schema import normalize_pct
 
 
-def _format_policy_values(values: frozenset[float], separator: str = "/") -> str:
+def _format_policy_tiers(values: frozenset[float], separator: str = "/") -> str:
     return separator.join(
         str(int(value)) if float(value).is_integer() else str(value)
         for value in sorted(values)
@@ -33,12 +33,12 @@ def audit_execution_size(
             number = normalize_pct(raw_pct)
             if number is not None and abs(number - policy.sell_tier) > 1e-6:
                 raise PortfolioAdviceValidationError(
-                    f"sell 比例必须为 {_format_policy_values(frozenset({policy.sell_tier}))}，"
+                    f"sell 比例必须为 {_format_policy_tiers(frozenset({policy.sell_tier}))}，"
                     f"收到 {number}（code={code}）"
                 )
         return policy.sell_tier
     if raw_pct is None:
-        tiers = _format_policy_values(
+        tiers = _format_policy_tiers(
             policy.add_tiers if action == "add" else policy.reduce_tiers
         )
         raise PortfolioAdviceValidationError(
