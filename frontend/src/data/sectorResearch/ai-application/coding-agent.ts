@@ -2,36 +2,120 @@ import type { ContentBlock } from "../types.ts";
 
 export const codingAgentBlocks: ContentBlock[] = [
   {
-    type: "paragraph",
-    text: "AI编程Agent正重塑软件开发范式。从代码补全到端到端需求实现，AI编程工具可覆盖代码生成、调试、测试、重构全流程，显著提升开发者效率。",
-    sourceIds: ["S-AIAPP-AGENT-TREND"],
+    "type": "paragraph",
+    "text": "编程Agent从代码补全扩展到测例生成、重构、排错与任务级实现，直接作用于软件工程生产率。对企业客户而言，核心矛盾是提效幅度 vs 代码泄露、供应链安全与可控部署（分析推断）。",
+    "sourceIds": [
+      "S-AIAPP-GENERATIVE-AI-SERVICE",
+      "S-AIAPP-CAC"
+    ]
   },
   {
-    type: "compareTable",
-    caption: "主流AI编程工具对比",
-    headers: ["产品", "核心能力", "适用场景", "商业模式"],
-    rows: [
-      ["GitHub Copilot", "代码补全/对话/Agent模式", "全栈开发", "个人/企业订阅"],
-      ["Cursor", "多文件编辑/Composer/Agent", "复杂项目开发", "订阅制"],
-      ["Claude Code", "终端原生/长上下文推理", "系统级编程/重构", "API+订阅"],
-      ["通义灵码/豆包MarsCode", "中文理解/企业定制/安全合规", "国内企业开发", "订阅/私有化部署"],
+    "type": "bullets",
+    "items": [
+      "个人开发者：插件订阅与IDE集成决定渗透。",
+      "企业：私有化/专有云、代码审计、权限与知识库对接是成交关键。",
+      "质量评估应看合并率/返工率/缺陷率，而不是生成速度演示。",
+      "与DevOps、测试平台、文档系统打通后，才从工具变成Agent。"
     ],
-    sourceIds: ["S-AIAPP-AGENT-TREND"],
+    "sourceIds": [
+      "S-AIAPP-GENERATIVE-AI-SERVICE",
+      "S-AIAPP-IFLYTEK-FILING"
+    ]
   },
   {
-    type: "bullets",
-    items: [
-      "代码补全：实时代码建议与智能推断，减少重复性编码工作。",
-      "代码对话：自然语言描述需求，生成完整函数/模块/测试用例。",
-      "Agent模式：自主规划、执行、调试多步骤编程任务。",
-      "代码审查：自动检测Bug、安全漏洞与性能问题。",
+    "type": "table",
+    "caption": "编程Agent场景与价值",
+    "headers": [
+      "场景",
+      "价值点",
+      "主要风险",
+      "付费意愿（定性）"
     ],
-    sourceIds: ["S-AIAPP-AGENT-TREND"],
+    "rows": [
+      [
+        "补全与生成",
+        "减少样板代码",
+        "风格不一致",
+        "中高"
+      ],
+      [
+        "调试排错",
+        "缩短定位时间",
+        "误导性建议",
+        "高"
+      ],
+      [
+        "测试生成",
+        "提高覆盖率",
+        "无效测试",
+        "中"
+      ],
+      [
+        "遗留系统改造",
+        "降低人力",
+        "幻觉改坏关键逻辑",
+        "需强人工把关"
+      ]
+    ],
+    "sourceIds": [
+      "S-AIAPP-GENERATIVE-AI-SERVICE"
+    ]
   },
   {
-    type: "callout",
-    tone: "warning",
-    text: "风险提示：1) 代码版权与合规风险（训练数据版权争议）；2) AI生成代码的安全漏洞风险；3) 工具同质化与订阅定价压力。",
-    sourceIds: ["S-AIAPP-GENERATIVE-AI-SERVICE", "S-AIAPP-AGENT-TREND"],
+    "type": "compareTable",
+    "caption": "通用编程助手 vs 企业定制代码助手",
+    "headers": [
+      "维度",
+      "通用助手",
+      "企业定制"
+    ],
+    "rows": [
+      [
+        "数据",
+        "公网与通用语料",
+        "私有仓库与规范"
+      ],
+      [
+        "部署",
+        "SaaS为主",
+        "私有化/专有云常见"
+      ],
+      [
+        "合规",
+        "内容与备案",
+        "代码出境、保密、审计"
+      ],
+      [
+        "竞争",
+        "国际产品强",
+        "集成与安全成本土机会"
+      ]
+    ],
+    "sourceIds": [
+      "S-AIAPP-CAC",
+      "S-AIAPP-GENERATIVE-AI-SERVICE"
+    ]
   },
+  {
+    "type": "callout",
+    "tone": "info",
+    "text": "A股映射上，编程Agent更多体现为软件IDE/云厂商/安全与私有化交付能力的间接受益；需避免把海外产品热度直接线性外推到国内订单（内部分析）。",
+    "sourceIds": [
+      "S-AIAPP-GENERATIVE-AI-SERVICE",
+      "S-AIAPP-TRS-FILING"
+    ]
+  },
+  {
+    "type": "risk",
+    "items": [
+      "代码幻觉引入安全漏洞。",
+      "企业禁止代码上传导致SaaS渗透受阻。",
+      "开源与免费策略压制独立工具定价。",
+      "评估指标缺失使ROI难证明，续费不稳。"
+    ],
+    "sourceIds": [
+      "S-AIAPP-CAC",
+      "S-AIAPP-GENERATIVE-AI-SERVICE"
+    ]
+  }
 ];

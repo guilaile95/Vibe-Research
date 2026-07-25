@@ -2,42 +2,144 @@ import type { ContentBlock } from "../types.ts";
 
 export const industryBlocks: ContentBlock[] = [
   {
-    type: "paragraph",
-    text: "AI应用板块由「基础大模型厂商+垂直应用厂商+AI应用海外出海」三股力量构成。基础大模型走向开源与API化，垂直应用厂商凭借行业Know-How构建壁垒，海外AI应用出海则受益于全球市场空间。",
-    sourceIds: ["S-AIAPP-IFLYTEK-FILING", "S-AIAPP-WPS-FILING", "S-AIAPP-KUNLUN-FILING"],
+    "type": "paragraph",
+    "text": "格局上呈现「基础模型能力提供者 + 垂直应用与分发渠道 + 海外消费应用」三股力量。A股更易映射到有用户入口或行业交付能力的公司，而非纯模型实验室（分析推断）。",
+    "sourceIds": [
+      "S-AIAPP-IFLYTEK-FILING",
+      "S-AIAPP-WPS-FILING",
+      "S-AIAPP-KUNLUN-FILING"
+    ]
   },
   {
-    type: "bullets",
-    items: [
-      "科大讯飞：星火大模型+四大行业（政务/教育/医疗/汽车）垂直落地，AI开放平台开发者生态规模领先（公司口径）。",
-      "金山办公：WPS AI 2.0深度嵌入办公全流程，C端付费用户与B端政企双轮驱动（公司口径）。",
-      "同花顺：问财AI大模型赋能iFind金融终端，AI投顾与智能客服提升用户粘性（公司口径）。",
-      "拓尔思：天渊大模型在政务/金融/媒体垂直落地，数据要素业务协同（公司口径）。",
-      "昆仑万维：天工大模型+AI音乐/Mureka+AI社交/Opera AI矩阵，海外AIGC商业化领先（公司口径）。",
+    "type": "bullets",
+    "items": [
+      "科大讯飞：模型+行业应用双轮，教育医疗政务汽车等（公司口径）。",
+      "金山办公：办公分发入口，AI功能服务订阅与政企（公司口径）。",
+      "同花顺：金融数据与流量，AI问句与终端增值（公司口径）。",
+      "拓尔思：政企知识智能与大模型应用（公司口径）。",
+      "昆仑万维：AI应用矩阵与海外方向（公司口径）。"
     ],
-    sourceIds: ["S-AIAPP-IFLYTEK-FILING", "S-AIAPP-WPS-FILING", "S-AIAPP-THS-FILING", "S-AIAPP-TRS-FILING", "S-AIAPP-KUNLUN-FILING"],
+    "sourceIds": [
+      "S-AIAPP-IFLYTEK-FILING",
+      "S-AIAPP-WPS-FILING",
+      "S-AIAPP-THS-FILING",
+      "S-AIAPP-TRS-FILING",
+      "S-AIAPP-KUNLUN-FILING"
+    ]
   },
   {
-    type: "table",
-    caption: "AI应用核心厂商竞争力矩阵",
-    headers: ["厂商", "核心赛道", "护城河", "商业化进展", "事实/口径等级"],
-    rows: [
-      ["科大讯飞", "通用大模型+行业AI", "行业Know-Now+开发者生态", "行业落地+开放平台", "公司口径（年报披露）"],
-      ["金山办公", "办公Agent", "用户基础+产品生态", "C端付费+B端政企", "公司口径（年报披露）"],
-      ["同花顺", "金融AI", "金融数据+用户规模", "AI投顾+智能客服", "公司口径（年报披露）"],
-      ["拓尔思", "垂直行业AI", "数据资产+行业经验", "政务/金融/媒体落地", "公司口径（年报披露）"],
-      ["昆仑万维", "海外AI应用", "产品矩阵+海外渠道", "AI音乐/社交商业化", "公司口径（年报披露）"],
+    "type": "table",
+    "caption": "核心厂商观察矩阵",
+    "headers": [
+      "厂商",
+      "核心入口",
+      "AI看点",
+      "验证指标",
+      "口径"
     ],
-    sourceIds: ["S-AIAPP-IFLYTEK-FILING", "S-AIAPP-WPS-FILING", "S-AIAPP-THS-FILING", "S-AIAPP-TRS-FILING", "S-AIAPP-KUNLUN-FILING"],
+    "rows": [
+      [
+        "科大讯飞",
+        "行业+消费者设备",
+        "星火落地与订单",
+        "行业收入/毛利",
+        "公司口径"
+      ],
+      [
+        "金山办公",
+        "WPS用户",
+        "AI渗透与ARPU",
+        "订阅与企业授权",
+        "公司口径"
+      ],
+      [
+        "同花顺",
+        "金融用户",
+        "AI功能付费",
+        "增值服务",
+        "公司口径"
+      ],
+      [
+        "拓尔思",
+        "政企客户",
+        "项目落地",
+        "新签与回款",
+        "公司口径"
+      ],
+      [
+        "昆仑万维",
+        "消费/海外",
+        "应用商业化",
+        "海外收入质量",
+        "公司口径"
+      ]
+    ],
+    "sourceIds": [
+      "S-AIAPP-IFLYTEK-FILING",
+      "S-AIAPP-WPS-FILING",
+      "S-AIAPP-THS-FILING",
+      "S-AIAPP-TRS-FILING",
+      "S-AIAPP-KUNLUN-FILING"
+    ]
   },
   {
-    type: "risk",
-    items: [
-      "大模型迭代风险：基础大模型能力快速迭代，垂直应用厂商需持续跟进技术升级。",
-      "商业化节奏风险：部分AI应用付费意愿仍待培育，商业化节奏可能低于预期。",
-      "政策合规风险：生成式AI服务备案、内容安全与数据合规要求趋严。",
-      "海外竞争风险：海外市场面临OpenAI/Anthropic等头部厂商直接竞争。",
+    "type": "compareTable",
+    "caption": "应用层护城河来源（内部分析）",
+    "headers": [
+      "来源",
+      "含义",
+      "可被模型厂替代性"
     ],
-    sourceIds: ["S-AIAPP-GENERATIVE-AI-SERVICE", "S-AIAPP-AGENT-TREND", "S-AIAPP-KUNLUN-FILING"],
+    "rows": [
+      [
+        "分发入口",
+        "日活与默认工作流",
+        "中（可被预装挑战）"
+      ],
+      [
+        "行业数据",
+        "专有语料与标注",
+        "较低"
+      ],
+      [
+        "合规与交付",
+        "过审、私有化、集成",
+        "较低"
+      ],
+      [
+        "品牌信任",
+        "高风险行业更关键",
+        "中"
+      ]
+    ],
+    "sourceIds": [
+      "S-AIAPP-WPS-FILING",
+      "S-AIAPP-IFLYTEK-FILING",
+      "S-AIAPP-GENERATIVE-AI-SERVICE"
+    ]
   },
+  {
+    "type": "callout",
+    "tone": "emphasis",
+    "text": "内部分析抓手：用「付费用户/席位 × 使用深度 × 毛利率」三角验证，而不是用参数量或发布会次数。",
+    "sourceIds": [
+      "S-AIAPP-WPS-FILING",
+      "S-AIAPP-IFLYTEK-FILING"
+    ]
+  },
+  {
+    "type": "risk",
+    "items": [
+      "大厂免费或低价策略冲击独立应用。",
+      "监管与备案提高上线与运营成本。",
+      "算力成本与价格战双杀利润。",
+      "项目制公司收入波动大。",
+      "主题退潮后流动性与估值中枢下移。"
+    ],
+    "sourceIds": [
+      "S-AIAPP-GENERATIVE-AI-SERVICE",
+      "S-AIAPP-CAC",
+      "S-AIAPP-IFLYTEK-FILING"
+    ]
+  }
 ];

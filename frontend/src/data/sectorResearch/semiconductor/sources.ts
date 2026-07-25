@@ -1,64 +1,128 @@
 import type { SourceRef } from "../types.ts";
 
+/**
+ * 半导体国产替代研究工作台 — 共享来源注册表。
+ * 保留已有年报 filing；补充官方政策页与公司官网/IR 公开页。
+ * 未核验到真实 announcementId 的公告不伪造 id。
+ */
 export const semiconductorSources: SourceRef[] = [
   {
     id: "S-SEMI-NAURA-FILING",
-    title: "\u5317\u65b9\u534e\u521b - 2023\u5e74\u5e74\u5ea6\u62a5\u544a",
-    org: "\u5317\u65b9\u534e\u521b\uff08002371\uff09",
+    title: "北方华创 - 2023年年度报告",
+    org: "北方华创（002371）",
     url: "http://www.cninfo.com.cn/new/disclosure/detail?stockCode=002371&announcementId=1219908921",
     sourceType: "company_filing",
-    factLevel: "\u516c\u53f8\u53e3\u5f84",
+    factLevel: "公司口径",
     publishedAt: "2024-04-30",
     accessedAt: "2026-07-24",
-    supports: "\u516c\u53f8\u5e74\u62a5\u62ab\u9732\u523b\u8680\u3001\u8584\u819c\u6c89\u79ef\u3001\u6e05\u6d17\u3001\u70ed\u5904\u7406\u7b49\u591a\u7c7b\u534a\u5bfc\u4f53\u6838\u5fc3\u8bbe\u5907\u7684\u7814\u53d1\u8fdb\u5c55\u4e0e\u51fa\u8d27\u91cf\u589e\u957f",
-    note: "\u5317\u65b9\u534e\u521b2023\u5e74\u5e74\u62a5",
+    supports:
+      "公司年报披露刻蚀、薄膜沉积、清洗、热处理等多类半导体核心设备的研发进展与出货量增长",
+    note: "北方华创2023年年报",
   },
   {
     id: "S-SEMI-AMEC-FILING",
-    title: "\u4e2d\u5fae\u516c\u53f8 - 2023\u5e74\u5e74\u5ea6\u62a5\u544a",
-    org: "\u4e2d\u5fae\u516c\u53f8\uff08688012\uff09",
+    title: "中微公司 - 2023年年度报告",
+    org: "中微公司（688012）",
     url: "http://www.cninfo.com.cn/new/disclosure/detail?stockCode=688012&announcementId=1219329946",
     sourceType: "company_filing",
-    factLevel: "\u516c\u53f8\u53e3\u5f84",
+    factLevel: "公司口径",
     publishedAt: "2024-03-19",
     accessedAt: "2026-07-24",
-    supports: "\u516c\u53f8\u5e74\u62a5\u62ab\u9732 CCP \u523b\u8680\u673a\u4e0e MOCVD \u8bbe\u5907\u5728\u903b\u8f91\u3001\u5b58\u50a8\u53ca\u5148\u8fdb\u5c01\u88c5\u9886\u57df\u7684\u9ad8\u7aef\u5de5\u827a\u5e94\u7528\u4e0e\u51fa\u8d27\u91cf",
-    note: "\u4e2d\u5fae\u516c\u53f82023\u5e74\u5e74\u62a5",
+    supports:
+      "公司年报披露 CCP 刻蚀机与 MOCVD 设备在逻辑、存储及先进封装领域的高端工艺应用与出货量",
+    note: "中微公司2023年年报",
   },
   {
     id: "S-SEMI-ANJI-FILING",
-    title: "\u5b89\u96c6\u79d1\u6280 - 2023\u5e74\u5e74\u5ea6\u62a5\u544a",
-    org: "\u5b89\u96c6\u79d1\u6280\uff08688019\uff09",
+    title: "安集科技 - 2023年年度报告",
+    org: "安集科技（688019）",
     url: "http://www.cninfo.com.cn/new/disclosure/detail?stockCode=688019&announcementId=1219623534",
     sourceType: "company_filing",
-    factLevel: "\u516c\u53f8\u53e3\u5f84",
+    factLevel: "公司口径",
     publishedAt: "2024-04-16",
     accessedAt: "2026-07-24",
-    supports: "\u516c\u53f8\u5e74\u62a5\u62ab\u9732CMP\u629b\u5149\u6db2\u3001\u5149\u523b\u80f6\u53bb\u9664\u5242\u53ca\u529f\u80fd\u6027\u6e7f\u7535\u5b50\u5316\u5b66\u54c1\u572814nm\u4ee5\u4e0b\u5148\u8fdb\u5236\u7a0b\u9a8c\u8bc1\u4e0e\u5bfc\u5165\u8fdb\u5c55",
-    note: "\u5b89\u96c6\u79d1\u62802023\u5e74\u5e74\u62a5",
+    supports:
+      "公司年报披露CMP抛光液、光刻胶去除剂及功能性湿电子化学品在14nm以下先进制程验证与导入进展",
+    note: "安集科技2023年年报",
   },
   {
     id: "S-SEMI-SMIC-FILING",
-    title: "\u4e2d\u82af\u56fd\u9645 - 2023\u5e74\u5e74\u5ea6\u62a5\u544a",
-    org: "\u4e2d\u82af\u56fd\u9645\uff08688981\uff09",
+    title: "中芯国际 - 2023年年度报告",
+    org: "中芯国际（688981）",
     url: "http://www.cninfo.com.cn/new/disclosure/detail?stockCode=688981&announcementId=1219447098",
     sourceType: "company_filing",
-    factLevel: "\u516c\u53f8\u53e3\u5f84",
+    factLevel: "公司口径",
     publishedAt: "2024-03-29",
     accessedAt: "2026-07-24",
-    supports: "\u516c\u53f8\u5e74\u62a5\u62ab\u9732\u6210\u719f\u5236\u7a0b\u6676\u5706\u4ee3\u5de5\u4ea7\u80fd\u5229\u7528\u7387\u3001\u8d44\u672c\u5f00\u652f\u8ba1\u5212\u4e0e\u4ea7\u80fd\u6269\u5f20\u8def\u5f84\uff0c\u4ee5\u53ca\u5148\u8fdb\u5236\u7a0b\u7814\u53d1\u8fdb\u5c55",
-    note: "\u4e2d\u82af\u56fd\u96452023\u5e74\u5e74\u62a5",
+    supports:
+      "公司年报披露成熟制程晶圆代工产能利用率、资本开支计划与产能扩张路径，以及先进制程研发进展",
+    note: "中芯国际2023年年报",
   },
   {
     id: "S-SEMI-MIIT-POLICY",
-    title: "\u56fd\u52a1\u9662\u300a\u65b0\u65f6\u671f\u4fc3\u8fdb\u96c6\u6210\u7535\u8def\u4ea7\u4e1a\u548c\u8f6f\u4ef6\u4ea7\u4e1a\u9ad8\u8d28\u91cf\u53d1\u5c55\u7684\u82e5\u5e72\u653f\u7b56\u300b\uff08\u56fd\u53d1\u30142020\u30158\u53f7\uff09",
-    org: "\u56fd\u52a1\u9662 / \u5de5\u4fe1\u90e8",
+    title:
+      "国务院《新时期促进集成电路产业和软件产业高质量发展的若干政策》（国发〔2020〕8号）",
+    org: "国务院 / 工信部",
     url: "https://www.mee.gov.cn/zcwj/gwywj/202008/t20200806_792957.shtml",
     sourceType: "official",
-    factLevel: "\u5df2\u786e\u8ba4\u4e8b\u5b9e",
+    factLevel: "已确认事实",
     publishedAt: "2020-08-04",
     accessedAt: "2026-07-24",
-    supports: "\u56fd\u52a1\u9662\u53d1\u5e03\u96c6\u6210\u7535\u8def\u4ea7\u4e1a\u9ad8\u8d28\u91cf\u53d1\u5c55\u653f\u7b56\uff0c\u660e\u786e\u8d22\u7a0e\u3001\u6295\u878d\u8d44\u3001\u7814\u53d1\u3001\u8fdb\u51fa\u53e3\u3001\u4eba\u624d\u3001\u77e5\u8bc6\u4ea7\u6743\u3001\u5e02\u573a\u5e94\u7528\u3001\u56fd\u9645\u5408\u4f5c\u7b49\u516b\u65b9\u9762\u652f\u6301\u63aa\u65bd",
-    note: "\u96c6\u6210\u7535\u8def\u4ea7\u4e1a\u653f\u7b56\u7eb2\u9886\u6027\u6587\u4ef6",
+    supports:
+      "国务院发布集成电路产业高质量发展政策，明确财税、投融资、研发、进出口、人才、知识产权、市场应用、国际合作等八方面支持措施",
+    note: "集成电路产业政策纲领性文件（生态环境部转载页）",
+  },
+  {
+    id: "S-SEMI-GOV-POLICY",
+    title:
+      "中国政府网转载：新时期促进集成电路产业和软件产业高质量发展的若干政策",
+    org: "中国政府网 / 国务院",
+    url: "https://www.gov.cn/zhengce/content/2020-08/04/content_5532370.htm",
+    sourceType: "official",
+    factLevel: "已确认事实",
+    publishedAt: "2020-08-04",
+    accessedAt: "2026-07-25",
+    supports:
+      "与国发〔2020〕8号政策文本一致，可作为政策目标与支持方向的权威公开页；不提供分环节国产化率统计",
+    note: "gov.cn 政策公开页，用于政策方向引用，不支撑具体百分比",
+  },
+  {
+    id: "S-SEMI-NAURA-SITE",
+    title: "北方华创官网 — 公司与半导体装备业务介绍",
+    org: "北方华创（002371）",
+    url: "https://www.naura.com/",
+    sourceType: "company_site",
+    factLevel: "公司口径",
+    publishedAt: undefined,
+    accessedAt: "2026-07-25",
+    supports:
+      "公司官网披露半导体工艺装备覆盖刻蚀、薄膜、清洗、热处理等前道核心工艺环节的产品与业务定位",
+    note: "公司官网公开信息，用于设备品类与业务范围定性，不作市场份额断言",
+  },
+  {
+    id: "S-SEMI-AMEC-SITE",
+    title: "中微公司官网 — 刻蚀与薄膜设备产品介绍",
+    org: "中微公司（688012）",
+    url: "https://www.amec-inc.com/",
+    sourceType: "company_site",
+    factLevel: "公司口径",
+    publishedAt: undefined,
+    accessedAt: "2026-07-25",
+    supports:
+      "公司官网披露 CCP 等离子体刻蚀、MOCVD 等设备面向逻辑、存储与化合物半导体工艺的产品定位",
+    note: "公司官网公开信息，用于设备品类与应用领域定性",
+  },
+  {
+    id: "S-SEMI-SMIC-SITE",
+    title: "中芯国际官网 — 晶圆代工与制造服务介绍",
+    org: "中芯国际（688981）",
+    url: "https://www.smics.com/",
+    sourceType: "company_site",
+    factLevel: "公司口径",
+    publishedAt: undefined,
+    accessedAt: "2026-07-25",
+    supports:
+      "公司官网披露晶圆代工服务、工艺平台与产能布局的公开介绍；不构成对先进节点量产时间表的官方确认",
+    note: "公司官网公开信息，用于代工定位与工艺平台定性",
   },
 ];

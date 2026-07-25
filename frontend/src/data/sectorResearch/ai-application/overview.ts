@@ -2,37 +2,145 @@ import type { ContentBlock } from "../types.ts";
 
 export const overviewBlocks: ContentBlock[] = [
   {
-    type: "callout",
-    tone: "info",
-    text: "政策与产业信号：七部门《生成式人工智能服务管理暂行办法》为AI应用商业化提供合规框架。机构预测2025-2027年AI Agent将在办公、编程、客服等场景实现规模化落地，大模型应用进入价值兑现期。",
-    sourceIds: ["S-AIAPP-GENERATIVE-AI-SERVICE", "S-AIAPP-AGENT-TREND"],
+    "type": "callout",
+    "tone": "info",
+    "text": "合规框架：七部门《生成式人工智能服务管理暂行办法》明确备案、安全评估与提供者责任，AI应用从「能做」进入「合规可运营」。产业上，办公Agent、编程Agent、垂直行业助手与多模态内容生成是当前兑现较快的几类场景（官方口径/公司口径）。",
+    "sourceIds": [
+      "S-AIAPP-GENERATIVE-AI-SERVICE",
+      "S-AIAPP-CAC"
+    ]
   },
   {
-    type: "paragraph",
-    text: "AI应用板块涵盖通用大模型落地、办公Agent、编程Agent、垂直行业AI应用与多模态生成四大方向。国内大模型已从参数竞赛转向场景落地，Agent智能体与多模态能力成为下一阶段核心竞争力。",
-    sourceIds: ["S-AIAPP-IFLYTEK-FILING", "S-AIAPP-WPS-FILING", "S-AIAPP-KUNLUN-FILING"],
+    "type": "paragraph",
+    "text": "AI应用板块关注「模型能力 → 工作流嵌入 → 付费转化」。基础大模型走向API/开源双轨，价值更可能沉淀在具备数据、渠道与行业know-how的应用层。国内代表路径包括讯飞行业落地、金山办公套件AI化、同花顺金融问答、拓尔思政企知识服务、昆仑万维消费与海外应用等（公司口径/分析推断）。",
+    "sourceIds": [
+      "S-AIAPP-IFLYTEK-FILING",
+      "S-AIAPP-WPS-FILING",
+      "S-AIAPP-THS-FILING",
+      "S-AIAPP-TRS-FILING",
+      "S-AIAPP-KUNLUN-FILING"
+    ]
   },
   {
-    type: "bullets",
-    items: [
-      "通用大模型：国产大模型技术能力接近GPT-4级别，竞争焦点从参数规模转向长上下文、推理效率与Agent能力。",
-      "办公Agent：WPS AI、飞书智能伙伴等将AI嵌入文档/表格/会议全流程，释放办公场景生产力。",
-      "编程Agent：Copilot、Cursor等AI编程助手在国内形成开发者生态，代码生成与调试效率显著提升。",
-      "垂直AI应用：金融投顾、医疗辅助、法律检索、教育个性化等场景形成差异化竞争壁垒。",
-      "多模态能力：文生图、文生视频、语音克隆等AIGC应用加速商业化。",
+    "type": "bullets",
+    "items": [
+      "办公Agent：写作、PPT、表格、会议纪要等嵌入高频工作流，订阅转化路径清晰。",
+      "编程Agent：代码补全到任务级实现，改变软件工程人效，但对企业代码安全与私有化提出要求。",
+      "行业AI：教育/医疗/政务/金融等强知识与强合规场景，拼的是数据与交付，而非参数规模口号。",
+      "多模态：图文音视频理解与生成打开营销、传媒、设计等增量，版权与幻觉仍是约束。",
+      "出海应用：消费级AI产品在海外支付与流量环境可能更快验证ARPU（分析推断）。"
     ],
-    sourceIds: ["S-AIAPP-WPS-FILING", "S-AIAPP-THS-FILING", "S-AIAPP-TRS-FILING"],
+    "sourceIds": [
+      "S-AIAPP-WPS-FILING",
+      "S-AIAPP-IFLYTEK-FILING",
+      "S-AIAPP-THS-FILING",
+      "S-AIAPP-KUNLUN-FILING"
+    ]
   },
   {
-    type: "table",
-    caption: "AI应用四大核心赛道与代表厂商",
-    headers: ["赛道", "核心能力", "商业化阶段", "代表A股厂商"],
-    rows: [
-      ["通用大模型", "对话/推理/Agent能力", "API+订阅商业化", "科大讯飞、昆仑万维"],
-      ["办公Agent", "文档/表格/会议AI化", "付费用户增长", "金山办公、科大讯飞"],
-      ["垂直行业AI", "行业Know-How+大模型", "订阅/项目制", "同花顺、拓尔思"],
-      ["多模态AIGC", "文生图/视频/音乐", "订阅/API商业化", "昆仑万维、科大讯飞"],
+    "type": "table",
+    "caption": "AI应用主赛道与代表厂商",
+    "headers": [
+      "赛道",
+      "关键产品形态",
+      "变现方式",
+      "代表A股",
+      "口径"
     ],
-    sourceIds: ["S-AIAPP-IFLYTEK-FILING", "S-AIAPP-WPS-FILING", "S-AIAPP-THS-FILING", "S-AIAPP-TRS-FILING", "S-AIAPP-KUNLUN-FILING"],
+    "rows": [
+      [
+        "办公Agent",
+        "套件内AI功能",
+        "C端订阅+B端许可",
+        "金山办公",
+        "公司口径"
+      ],
+      [
+        "行业大模型应用",
+        "垂直助手/平台",
+        "项目+订阅混合",
+        "科大讯飞、拓尔思",
+        "公司口径"
+      ],
+      [
+        "金融AI",
+        "问句检索/投顾辅助",
+        "增值服务/终端",
+        "同花顺",
+        "公司口径"
+      ],
+      [
+        "消费/出海AI",
+        "内容与社交应用",
+        "广告/订阅/内购",
+        "昆仑万维",
+        "公司口径"
+      ],
+      [
+        "编程Agent",
+        "IDE插件/平台",
+        "席位订阅",
+        "相关软件与云厂商（观察）",
+        "分析推断"
+      ]
+    ],
+    "sourceIds": [
+      "S-AIAPP-WPS-FILING",
+      "S-AIAPP-IFLYTEK-FILING",
+      "S-AIAPP-THS-FILING",
+      "S-AIAPP-TRS-FILING",
+      "S-AIAPP-KUNLUN-FILING"
+    ]
   },
+  {
+    "type": "compareTable",
+    "caption": "ToC应用 vs ToB行业应用（内部分析）",
+    "headers": [
+      "维度",
+      "ToC应用",
+      "ToB行业应用"
+    ],
+    "rows": [
+      [
+        "增长杠杆",
+        "流量、产品体验、支付",
+        "客户关系、数据、交付"
+      ],
+      [
+        "合规重点",
+        "内容安全、备案",
+        "等保、行业监管、私有化"
+      ],
+      [
+        "收入质量",
+        "ARPU与留存",
+        "续费与人天/许可结构"
+      ],
+      [
+        "风险",
+        "同质化与获客成本",
+        "项目制回款与定制成本"
+      ]
+    ],
+    "sourceIds": [
+      "S-AIAPP-GENERATIVE-AI-SERVICE",
+      "S-AIAPP-WPS-FILING",
+      "S-AIAPP-IFLYTEK-FILING"
+    ]
+  },
+  {
+    "type": "risk",
+    "items": [
+      "幻觉与可靠性不足导致高风险场景难规模化。",
+      "算力与推理成本侵蚀应用毛利。",
+      "备案与内容安全监管趋严，影响上线节奏。",
+      "大厂免费策略挤压独立应用定价。",
+      "主题炒作期估值与订单脱节。"
+    ],
+    "sourceIds": [
+      "S-AIAPP-GENERATIVE-AI-SERVICE",
+      "S-AIAPP-CAC",
+      "S-AIAPP-IFLYTEK-FILING"
+    ]
+  }
 ];
