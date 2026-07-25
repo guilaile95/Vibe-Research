@@ -18,6 +18,7 @@ import portfolio_advice_context
 import portfolio_advice_prompt
 import portfolio_advice_validator
 from portfolio_advice_account_metrics import attach_account_funding_metrics
+from portfolio_advice_errors import public_model_error_detail
 from portfolio_advice_validator import PortfolioAdviceValidationError
 
 ModelRunner = Callable[[Any, list[dict[str, str]]], str]
@@ -45,6 +46,19 @@ class PortfolioAdvicePersistError(RuntimeError):
     def __init__(self, message: str = "持仓建议结果保存失败", *, stage: str = "persist"):
         super().__init__(message)
         self.stage = stage
+
+
+# 兼容：历史调用方从 service 导入 public_model_error_detail
+__all__ = [
+    "PortfolioAdviceUnavailableError",
+    "PortfolioAdviceMarketDataError",
+    "PortfolioAdviceModelError",
+    "PortfolioAdviceModelOutputError",
+    "PortfolioAdvicePersistError",
+    "prepare_portfolio_advice_messages",
+    "generate_portfolio_advice",
+    "public_model_error_detail",
+]
 
 
 _EMPTY_HOLDINGS_MSG = "当前没有持仓，无法生成持仓操作建议"
@@ -248,33 +262,6 @@ def _parse_model_json(text: Any) -> dict:
     return obj
 
 
-def _safe_error_message(exc: BaseException, *, fallback: str) -> str:
-    """生成不含密钥/路径等敏感信息的短错误说明。"""
-    name = type(exc).__name__
-    raw = str(exc) if exc is not None else ""
-    # 粗略过滤常见敏感片段
-    lower = raw.lower()
-    if any(
-        k in lower
-        for k in (
-            "api-key",
-            "apikey",
-            "api_key",
-            "authorization",
-            "bearer ",
-            "sk-",
-        )
-    ):
-        return f"{fallback}（{name}）"
-    # 截断，避免把大段持仓/请求塞进异常
-    msg = raw.replace("\n", " ").strip()
-    if len(msg) > 200:
-        msg = msg[:200] + "…"
-    if not msg:
-        return f"{fallback}（{name}）"
-    return f"{fallback}：{msg}"
-
-
 def _default_model_runner(cfg: Any, messages: list[dict[str, str]]) -> str:
     """复用 chat.stream_messages(use_tools=False) 收集完整文本。"""
     parts: list[str] = []
@@ -298,16 +285,17 @@ def _default_model_runner(cfg: Any, messages: list[dict[str, str]]) -> str:
                 em = event.get("message")
                 if not isinstance(em, str) or not em.strip():
                     em = "模型流返回错误"
-                # 不再拼接已收到的半截 JSON
-                raise PortfolioAdviceModelError(em[:200])
+                # 流内 error：用分类器生成安全公开文案，不回传可能含密钥的原文
+                raise PortfolioAdviceModelError(
+                    public_model_error_detail(RuntimeError(em[:200]))
+                )
             elif etype == "done":
                 break
     except PortfolioAdviceModelError:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise PortfolioAdviceModelError(
-            _safe_error_message(exc, fallback="持仓建议模型调用失败")
-        ) from exc
+        # 保留 __cause__ 供 public_model_error_detail 分类；对外 message 已是安全文案
+        raise PortfolioAdviceModelError(public_model_error_detail(exc)) from exc
     return "".join(parts)
 
 
@@ -346,9 +334,7 @@ def generate_portfolio_advice(
     except PortfolioAdviceModelOutputError:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise PortfolioAdviceModelError(
-            _safe_error_message(exc, fallback="持仓建议模型调用失败")
-        ) from exc
+        raise PortfolioAdviceModelError(public_model_error_detail(exc)) from exc
 
     if raw_text is None:
         raise PortfolioAdviceModelOutputError(_EMPTY_OUTPUT_MSG)

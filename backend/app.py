@@ -192,6 +192,30 @@ class LLMConfig(BaseModel):
     model: str
 
 
+def _require_llm_ready(llm: LLMConfig) -> bool:
+    """校验接入 AI 配置是否可调用；不通过则抛 HTTP 400。
+
+    Returns
+    -------
+    bool
+        True 表示订阅 CLI 路径；False 表示 API 路径。
+    """
+    if not (llm.model or "").strip():
+        raise HTTPException(400, "缺少模型配置，请先在「接入 AI」里选择")
+    is_cli = (llm.provider or "").startswith("cli-")
+    if is_cli:
+        kind = llm.provider[4:]
+        if not cli_runtime.detect_cli(kind):
+            raise HTTPException(
+                400,
+                f"未检测到「{kind}」对应的本机命令。请先安装并登录该 CLI，或改用「API 接入」。",
+            )
+        return True
+    if not (llm.apiKey or "").strip() or not (llm.baseURL or "").strip():
+        raise HTTPException(400, "缺少 Base URL 或 API Key，请先在「接入 AI」里填写")
+    return False
+
+
 class ChatReq(BaseModel):
     messages: list[dict]
     context: str = ""
@@ -208,16 +232,7 @@ def chat(req: ChatReq):
     """
     if not req.messages:
         raise HTTPException(400, "messages 不能为空")
-    if not req.llm.model:
-        raise HTTPException(400, "缺少模型配置，请先在「接入 AI」里选择")
-
-    is_cli = req.llm.provider.startswith("cli-")
-    if is_cli:
-        kind = req.llm.provider[4:]
-        if not cli_runtime.detect_cli(kind):
-            raise HTTPException(400, f"未检测到「{kind}」对应的本机命令。请先安装并登录该 CLI，或改用「API 接入」。")
-    elif not req.llm.apiKey or not req.llm.baseURL:
-        raise HTTPException(400, "缺少 Base URL 或 API Key，请先在「接入 AI」里填写")
+    is_cli = _require_llm_ready(req.llm)
 
     cfg = req.llm.model_dump()
 
@@ -302,14 +317,19 @@ class PortfolioAdviceRequest(BaseModel):
 def portfolio_advice(req: PortfolioAdviceRequest):
     """独立持仓操作建议（普通 JSON，非流式）。
 
-    服务器链路：get_portfolio → generate_daily_review → context → 模型 → validator → save。
-    空持仓 → 409；行情/市场不可用 → 503；模型/输出/validator → 502；
+    服务器链路：校验 LLM → get_portfolio → generate_daily_review → context → 模型 → validator → save。
+    未配置模型 / 缺 key / 未装 CLI → 400；
+    空持仓 → 409；行情/市场不可用 → 503；
+    模型调用失败 → 502（区分鉴权/网络/CLI/通用，不回传密钥与上游 body）；
+    模型输出无效 → 502；
     内部 TypeError/ValueError → 500（安全日志，不再误报「请求参数无效」）。
     请求结构错误由 Pydantic → 422。不接受客户端持仓/context/messages。
     """
     import logging
 
     log = logging.getLogger("portfolio_advice")
+    # 与 /api/chat、/api/daily-review/analyze 对齐：配置问题先 400，避免伪装成模型 502
+    _require_llm_ready(req.llm)
     try:
         result = portfolio_advice_service.generate_portfolio_advice(
             req.llm.model_dump(),
@@ -323,8 +343,17 @@ def portfolio_advice(req: PortfolioAdviceRequest):
         raise HTTPException(
             503, str(e) or "市场核心数据暂不可用，无法生成可靠的持仓操作建议"
         ) from None
-    except portfolio_advice_service.PortfolioAdviceModelError:
-        raise HTTPException(502, "持仓建议模型调用失败") from None
+    except portfolio_advice_service.PortfolioAdviceModelError as e:
+        # 固定安全分类文案；不透传可能含密钥/路径的原始异常
+        from portfolio_advice_errors import public_model_error_detail
+
+        detail = public_model_error_detail(e)
+        log.warning(
+            "portfolio_advice model error class=%s type=%s",
+            detail,
+            type(e.__cause__ or e).__name__,
+        )
+        raise HTTPException(502, detail) from None
     except portfolio_advice_service.PortfolioAdviceModelOutputError:
         raise HTTPException(502, "持仓建议模型输出无效") from None
     except portfolio_advice_service.PortfolioAdvicePersistError as e:
@@ -957,16 +986,7 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
     上下文准备失败 → HTTP 502；模型运行时错误 → 流内 error 事件。
     不接受客户端 context/messages/system_prompt。
     """
-    if not req.llm.model:
-        raise HTTPException(400, "缺少模型配置，请先在「接入 AI」里选择")
-
-    is_cli = req.llm.provider.startswith("cli-")
-    if is_cli:
-        kind = req.llm.provider[4:]
-        if not cli_runtime.detect_cli(kind):
-            raise HTTPException(400, f"未检测到「{kind}」对应的本机命令。请先安装并登录该 CLI，或改用「API 接入」。")
-    elif not req.llm.apiKey or not req.llm.baseURL:
-        raise HTTPException(400, "缺少 Base URL 或 API Key，请先在「接入 AI」里填写")
+    _require_llm_ready(req.llm)
 
     try:
         prepared = await run_in_threadpool(

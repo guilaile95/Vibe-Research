@@ -11,7 +11,8 @@
       "tagline": "从减速器到灵巧手，AI 具身智能的物理载体",
       "hot": true,
       "verified": true,
-      "nodes": ["谐波减速器", "行星滚柱丝杠", "无框力矩电机", "灵巧手", "六维力传感器", "具身大模型"]
+      "researchWorkspace": true,
+      "nodes": ["总览", "机械、电控和具身智能架构", "单机 BOM 与价值量", "执行器、丝杠和灵巧手", "零部件、整机与客户格局", "降本能力、客户认证和量产信号"]
     },
     {
       "key": "ai-computing",
@@ -19,7 +20,8 @@
       "tagline": "算力基建的产业链——芯片、光互连、封装、散热",
       "hot": true,
       "verified": true,
-      "nodes": ["AI芯片", "光模块", "CPO光互连", "HBM存储", "先进封装", "PCB", "液冷散热"]
+      "researchWorkspace": true,
+      "nodes": ["总览", "算力系统架构", "单机、单柜与集群价值量", "Scale-up 网络与机柜架构", "芯片、服务器、网络、散热产业格局", "供给约束、定价权与资本开支信号"]
     },
     {
       "key": "pcb",
@@ -30,22 +32,158 @@
       "researchWorkspace": true,
       "nodes": ["总览", "原理与技术路线", "价值量", "铜中板", "产业格局", "定价权地图"]
     },
-    { "key": "hbm", "label": "HBM", "tagline": "高带宽存储——AI 芯片的内存瓶颈", "hot": true, "verified": false, "nodes": [] },
-    { "key": "cpo", "label": "光互联", "tagline": "光电共封装（CPO）——突破铜互连的带宽墙", "hot": true, "verified": false, "nodes": [] },
-    { "key": "semiconductor", "label": "半导体国产替代", "tagline": "设备、材料、EDA、制造的自主链条", "hot": true, "verified": false, "nodes": [] },
-    { "key": "solid-state-battery", "label": "固态电池", "tagline": "下一代电池的材料与工艺路线", "hot": true, "verified": false, "nodes": [] },
-    { "key": "low-altitude", "label": "低空经济", "tagline": "eVTOL、空管、基建与运营", "hot": true, "verified": false, "nodes": [] },
-    { "key": "smart-driving", "label": "智能驾驶", "tagline": "感知、算力、线控与整车", "hot": true, "verified": false, "nodes": [] },
-    { "key": "innovative-drug", "label": "创新药", "tagline": "靶点、临床、CXO 与出海", "hot": true, "verified": false, "nodes": [] },
-    { "key": "power-grid", "label": "电网与特高压", "tagline": "输配电设备与新型电力系统", "hot": false, "verified": false, "nodes": [] },
-    { "key": "defense", "label": "军工", "tagline": "航空、航天、船舶与信息化", "hot": false, "verified": false, "nodes": [] },
-    { "key": "fusion", "label": "可控核聚变", "tagline": "磁约束、超导与第一壁材料", "hot": true, "verified": false, "nodes": [] },
-    { "key": "business-space", "label": "商业航天", "tagline": "火箭、卫星制造与卫星互联网", "hot": true, "verified": false, "nodes": [] },
-    { "key": "ai-pharma", "label": "生物医药", "tagline": "创新药、AI 制药与生物技术", "hot": true, "verified": false, "nodes": [] },
-    { "key": "resources", "label": "资源卡口", "tagline": "稀土、锗、铟等被卡的关键资源", "hot": false, "verified": false, "nodes": [] },
-    { "key": "ai-application", "label": "AI 应用", "tagline": "大模型落地的应用与 Agent", "hot": true, "verified": false, "nodes": [] },
-    { "key": "ai-hardware", "label": "AI 硬件", "tagline": "端侧、AI 眼镜与消费终端", "hot": true, "verified": false, "nodes": [] },
-    { "key": "energy-storage", "label": "储能", "tagline": "电化学储能与电网侧调峰", "hot": false, "verified": false, "nodes": [] },
-    { "key": "data-element", "label": "数据要素", "tagline": "数据确权、交易与流通基建", "hot": false, "verified": false, "nodes": [] }
+    {
+      "key": "hbm",
+      "label": "HBM",
+      "tagline": "高带宽存储——AI 芯片的内存瓶颈",
+      "hot": true,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "DRAM 堆叠与 TSV 原理", "单颗 GPU 和系统价值量", "HBM4 / HBM4E 与下一代堆叠", "DRAM、封装、设备与材料格局", "产能分配、合约价与定价权"]
+    },
+    {
+      "key": "cpo",
+      "label": "光互联",
+      "tagline": "光电共封装（CPO）——突破铜互连的带宽墙",
+      "hot": true,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "光模块、硅光和 CPO 原理", "单端口和单集群价值量", "1.6T / 3.2T / CPO", "光芯片、器件、模块和代工格局", "供需、良率、价格与技术替代风险"]
+    },
+    {
+      "key": "semiconductor",
+      "label": "半导体国产替代",
+      "tagline": "设备、材料、EDA、制造的自主链条",
+      "hot": true,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "晶圆制造流程与核心技术", "设备和材料价值量", "先进制程、先进封装和关键设备突破", "全球供应链与国产化梯队", "全球不可替代性与国产替代溢价"]
+    },
+    {
+      "key": "solid-state-battery",
+      "label": "固态电池",
+      "tagline": "下一代电池的材料与工艺路线",
+      "hot": true,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "硫化物、氧化物和聚合物路线", "单机与材料价值量", "电解质、设备和量产工艺", "材料、电池厂和设备格局", "良率、成本、专利与量产信号"]
+    },
+    {
+      "key": "low-altitude",
+      "label": "低空经济",
+      "tagline": "eVTOL、空管、基建与运营",
+      "hot": true,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "飞行器、空域和运营体系", "eVTOL 与基础设施价值量", "适航、量产和商业运营", "整机、零部件、空管和运营格局", "政策依赖、订单质量和盈利路径"]
+    },
+    {
+      "key": "smart-driving",
+      "label": "智能驾驶",
+      "tagline": "感知、算力、线控与整车",
+      "hot": true,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "感知、计算、规划与线控", "单车价值量", "端到端、城市 NOA 与 Robotaxi", "芯片、算法、零部件与车企格局", "软件收费、成本转嫁和监管风险"]
+    },
+    {
+      "key": "innovative-drug",
+      "label": "创新药",
+      "tagline": "靶点、临床、CXO 与出海",
+      "hot": true,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "靶点与前沿技术", "临床管线", "CXO 一体化服务", "出海与授权", "产业格局"]
+    },
+    {
+      "key": "power-grid",
+      "label": "电网与特高压",
+      "tagline": "输配电设备与新型电力系统",
+      "hot": false,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "特高压", "输配电", "新能源接入", "智能化", "产业格局"]
+    },
+    {
+      "key": "defense",
+      "label": "军工",
+      "tagline": "航空、航天、船舶与信息化",
+      "hot": false,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "航空", "航天", "船舶", "信息化", "产业格局"]
+    },
+    {
+      "key": "fusion",
+      "label": "可控核聚变",
+      "tagline": "磁约束、超导与第一壁材料",
+      "hot": true,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "磁约束", "超导材料", "第一壁", "等离子体", "产业格局"]
+    },
+    {
+      "key": "business-space",
+      "label": "商业航天",
+      "tagline": "火箭、卫星制造与卫星互联网",
+      "hot": true,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "火箭", "卫星制造", "卫星互联网", "测控", "产业格局"]
+    },
+    {
+      "key": "ai-pharma",
+      "label": "生物医药",
+      "tagline": "创新药、AI 制药与生物技术",
+      "hot": true,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "AI制药", "基因治疗", "CXO", "医疗器械", "产业格局"]
+    },
+    {
+      "key": "resources",
+      "label": "资源卡口",
+      "tagline": "稀土、锗、铟等被卡的关键资源",
+      "hot": false,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "稀土", "锗铟镓", "锂钴镍", "钨钼", "产业格局"]
+    },
+    {
+      "key": "ai-application",
+      "label": "AI 应用",
+      "tagline": "大模型落地的应用与 Agent",
+      "hot": true,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "办公Agent", "编程Agent", "行业应用", "多模态", "产业格局"]
+    },
+    {
+      "key": "ai-hardware",
+      "label": "AI 硬件",
+      "tagline": "端侧、AI 眼镜与消费终端",
+      "hot": true,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "AI眼镜", "端侧芯片", "可穿戴", "智能家居", "产业格局"]
+    },
+    {
+      "key": "energy-storage",
+      "label": "储能",
+      "tagline": "电化学储能与电网侧调峰",
+      "hot": false,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "电化学储能", "系统集成", "变流器", "电网侧", "产业格局"]
+    },
+    {
+      "key": "data-element",
+      "label": "数据要素",
+      "tagline": "数据确权、交易与流通基建",
+      "hot": false,
+      "verified": true,
+      "researchWorkspace": true,
+      "nodes": ["总览", "确权", "交易平台", "公共数据", "数据安全", "产业格局"]
+    }
   ]
 }

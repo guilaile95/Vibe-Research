@@ -27,19 +27,43 @@ _JS_BYTES = b"window.location='https://evil.example/'"
 
 
 
-# ── Batch 1 板块注册表完整性 ──────────────────────────────────────────
+# ── 板块注册表完整性（全部已注册 key）────────────────────────────────
 
-BATCH1_SECTORS = ["humanoid", "ai-computing", "hbm", "cpo"]
+ALL_REGISTERED_SECTORS = [
+    "pcb",
+    "humanoid",
+    "ai-computing",
+    "hbm",
+    "cpo",
+    "semiconductor",
+    "smart-driving",
+    "solid-state-battery",
+    "low-altitude",
+    "innovative-drug",
+    "fusion",
+    "defense",
+    "business-space",
+    "power-grid",
+    "ai-application",
+    "ai-hardware",
+    "energy-storage",
+    "data-element",
+    "resources",
+    "ai-pharma",
+]
+
+# 兼容旧测试名引用
+BATCH1_SECTORS = ALL_REGISTERED_SECTORS
 
 
-def test_registry_contains_all_batch1_sectors():
+def test_registry_contains_all_registered_sectors():
     keys = srd.list_sector_source_keys()
-    for k in BATCH1_SECTORS:
+    for k in ALL_REGISTERED_SECTORS:
         assert k in keys, f"sector {k} missing from registry"
-    assert "pcb" in keys
+    assert set(keys) == set(ALL_REGISTERED_SECTORS)
 
 
-def test_each_batch1_sector_has_valid_config():
+def test_each_registered_sector_has_valid_config():
     keys = srd.list_sector_source_keys()
     for k in keys:
         src = srd.get_sector_source(k)
@@ -965,8 +989,9 @@ def test_panel_ok_has_no_data_or_raw_payload():
 
 
 def test_unregistered_sector_source_returns_none():
-    assert srd.get_sector_source("fusion") is None
-    assert srd.get_sector_dynamic_data("fusion")["status"] == "unavailable"
+    # 使用真正未注册的 key（不得使用已在 SECTOR_SOURCES 中的板块）
+    assert srd.get_sector_source("not-a-real-sector") is None
+    assert srd.get_sector_dynamic_data("not-a-real-sector")["status"] == "unavailable"
 
 
 def test_each_sector_report_discovery_uses_own_config(monkeypatch):

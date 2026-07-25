@@ -239,6 +239,238 @@ LOWALTITUDE_SOURCES = SectorDataSource(
     dynamic_panels=["profit_forecast", "announcements", "individual_info"],
 )
 
+# INNOVATIVE-DRUG 数据源
+INNOVATIVEDRUG_SOURCES = SectorDataSource(
+    key="innovative-drug",
+    label="创新药",
+    report_keywords=[
+        "创新药", "ADC", "双抗", "PD-1", "License-out", "出海",
+        "临床管线", "靶点", "CXO", "CRDMO", "恒瑞医药", "百济神州",
+        "药明康德", "凯莱英", "荣昌生物",
+    ],
+    representative_company_codes=["600276", "603259", "688235", "688331", "002821"],
+    representative_companies={
+        "600276": "恒瑞医药",
+        "603259": "药明康德",
+        "688235": "百济神州",
+        "688331": "荣昌生物",
+        "002821": "凯莱英",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# FUSION 数据源
+FUSION_SOURCES = SectorDataSource(
+    key="fusion",
+    label="可控核聚变",
+    report_keywords=[
+        "可控核聚变", "核聚变", "托卡马克", "磁约束", "超导磁体",
+        "第一壁", "偏滤器", "等离子体", "ITER", "聚变堆",
+        "西部超导", "联创光电", "安泰科技", "国光电气",
+    ],
+    representative_company_codes=["600363", "000969", "688776", "688122", "601611"],
+    representative_companies={
+        "600363": "联创光电",
+        "000969": "安泰科技",
+        "688776": "国光电气",
+        "688122": "西部超导",
+        "601611": "中国核建",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# DEFENSE 数据源
+DEFENSE_SOURCES = SectorDataSource(
+    key="defense",
+    label="军工",
+    report_keywords=[
+        "军工", "国防军工", "航空发动机", "军工信息化", "军用航空",
+        "舰船", "航天装备", "主机厂", "航发动力", "中航沈飞",
+        "中国船舶", "中航光电", "航天电器",
+    ],
+    representative_company_codes=["600760", "600150", "002025", "002179", "600893", "688563"],
+    representative_companies={
+        "600760": "中航沈飞",
+        "600150": "中国船舶",
+        "002025": "航天电器",
+        "002179": "中航光电",
+        "600893": "航发动力",
+        "688563": "航材股份",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# BUSINESS-SPACE 数据源
+BUSINESSSPACE_SOURCES = SectorDataSource(
+    key="business-space",
+    label="商业航天",
+    report_keywords=[
+        "商业航天", "运载火箭", "可复用火箭", "卫星制造", "卫星互联网",
+        "星座", "测控", "航天电子", "中国卫星", "航天宏图",
+        "银河电子", "欧比特", "天银机电",
+    ],
+    representative_company_codes=["002519", "688066", "300342", "300053", "600118", "600879"],
+    representative_companies={
+        "002519": "银河电子",
+        "688066": "航天宏图",
+        "300342": "天银机电",
+        "300053": "欧比特",
+        "600118": "中国卫星",
+        "600879": "航天电子",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# POWER-GRID 数据源
+POWERGRID_SOURCES = SectorDataSource(
+    key="power-grid",
+    label="电网与特高压",
+    report_keywords=[
+        "特高压", "电网", "输配电", "柔直", "变压器",
+        "组合电器", "智能电网", "新能源接入", "国电南瑞",
+        "许继电气", "特变电工", "思源电气", "平高电气",
+    ],
+    representative_company_codes=["600406", "000400", "600089", "002028", "600312"],
+    representative_companies={
+        "600406": "国电南瑞",
+        "000400": "许继电气",
+        "600089": "特变电工",
+        "002028": "思源电气",
+        "600312": "平高电气",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# AI-APPLICATION 数据源
+AIAPPLICATION_SOURCES = SectorDataSource(
+    key="ai-application",
+    label="AI应用",
+    report_keywords=[
+        "AI应用", "大模型应用", "Agent", "办公AI", "编程Agent",
+        "多模态", "垂直大模型", "AI软件", "科大讯飞", "金山办公",
+        "同花顺", "拓尔思", "昆仑万维",
+    ],
+    representative_company_codes=["002230", "688111", "300033", "300229", "300418"],
+    representative_companies={
+        "002230": "科大讯飞",
+        "688111": "金山办公",
+        "300033": "同花顺",
+        "300229": "拓尔思",
+        "300418": "昆仑万维",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# AI-HARDWARE 数据源
+AIHARDWARE_SOURCES = SectorDataSource(
+    key="ai-hardware",
+    label="AI硬件",
+    report_keywords=[
+        "AI硬件", "AI眼镜", "端侧AI", "端侧芯片", "可穿戴",
+        "智能家居", "边缘计算", "AIoT", "歌尔股份", "瑞芯微",
+        "全志科技", "科大讯飞",
+    ],
+    representative_company_codes=["002241", "603893", "300458", "002230"],
+    representative_companies={
+        "002241": "歌尔股份",
+        "603893": "瑞芯微",
+        "300458": "全志科技",
+        "002230": "科大讯飞",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# ENERGY-STORAGE 数据源
+ENERGYSTORAGE_SOURCES = SectorDataSource(
+    key="energy-storage",
+    label="储能",
+    report_keywords=[
+        "储能", "电化学储能", "新型储能", "储能系统", "PCS",
+        "变流器", "电网侧储能", "储能集成", "宁德时代", "阳光电源",
+        "比亚迪", "科士达", "盛弘股份",
+    ],
+    representative_company_codes=["300750", "300274", "002594", "002518", "300693"],
+    representative_companies={
+        "300750": "宁德时代",
+        "300274": "阳光电源",
+        "002594": "比亚迪",
+        "002518": "科士达",
+        "300693": "盛弘股份",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# DATA-ELEMENT 数据源
+DATAELEMENT_SOURCES = SectorDataSource(
+    key="data-element",
+    label="数据要素",
+    report_keywords=[
+        "数据要素", "数据确权", "数据交易", "数据交易所", "公共数据",
+        "数据安全", "数据资产", "数据流通", "易华录", "人民网",
+        "上海钢联", "云赛智联", "深桑达",
+    ],
+    representative_company_codes=["300212", "603000", "300226", "600602", "000032"],
+    representative_companies={
+        "300212": "易华录",
+        "603000": "人民网",
+        "300226": "上海钢联",
+        "600602": "云赛智联",
+        "000032": "深桑达A",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# RESOURCES 数据源
+RESOURCES_SOURCES = SectorDataSource(
+    key="resources",
+    label="资源卡口",
+    report_keywords=[
+        "稀土", "锗", "铟", "镓", "钨", "钼", "锂", "钴", "镍",
+        "关键矿产", "战略资源", "北方稀土", "中国稀土",
+        "云南锗业", "华友钴业", "株冶集团",
+    ],
+    representative_company_codes=["600111", "000831", "002428", "600961", "603799"],
+    representative_companies={
+        "600111": "北方稀土",
+        "000831": "中国稀土",
+        "002428": "云南锗业",
+        "600961": "株冶集团",
+        "603799": "华友钴业",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# AI-PHARMA 数据源
+AIPHARMA_SOURCES = SectorDataSource(
+    key="ai-pharma",
+    label="生物医药",
+    report_keywords=[
+        "生物医药", "AI制药", "基因治疗", "细胞治疗", "CXO",
+        "医疗器械", "生物技术", "药明康德", "泰格医药",
+        "华大基因", "迈瑞医疗", "联影医疗",
+    ],
+    representative_company_codes=["603259", "300347", "300676", "300760", "688271"],
+    representative_companies={
+        "603259": "药明康德",
+        "300347": "泰格医药",
+        "300676": "华大基因",
+        "300760": "迈瑞医疗",
+        "688271": "联影医疗",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
 # 注册表：key -> SectorDataSource。
 SECTOR_SOURCES: dict[str, SectorDataSource] = {
     PCB_SOURCES.key: PCB_SOURCES,
@@ -250,6 +482,17 @@ SECTOR_SOURCES: dict[str, SectorDataSource] = {
     SMARTDRIVING_SOURCES.key: SMARTDRIVING_SOURCES,
     SSBATTERY_SOURCES.key: SSBATTERY_SOURCES,
     LOWALTITUDE_SOURCES.key: LOWALTITUDE_SOURCES,
+    INNOVATIVEDRUG_SOURCES.key: INNOVATIVEDRUG_SOURCES,
+    FUSION_SOURCES.key: FUSION_SOURCES,
+    DEFENSE_SOURCES.key: DEFENSE_SOURCES,
+    BUSINESSSPACE_SOURCES.key: BUSINESSSPACE_SOURCES,
+    POWERGRID_SOURCES.key: POWERGRID_SOURCES,
+    AIAPPLICATION_SOURCES.key: AIAPPLICATION_SOURCES,
+    AIHARDWARE_SOURCES.key: AIHARDWARE_SOURCES,
+    ENERGYSTORAGE_SOURCES.key: ENERGYSTORAGE_SOURCES,
+    DATAELEMENT_SOURCES.key: DATAELEMENT_SOURCES,
+    RESOURCES_SOURCES.key: RESOURCES_SOURCES,
+    AIPHARMA_SOURCES.key: AIPHARMA_SOURCES,
 }
 
 

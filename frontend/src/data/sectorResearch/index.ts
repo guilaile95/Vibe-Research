@@ -7,6 +7,17 @@ import { smartDrivingResearch } from "./smart-driving.ts";
 import { lowAltitudeResearch } from "./low-altitude.ts";
 import { semiconductorResearch } from "./semiconductor.ts";
 import { ssBatteryResearch } from "./solid-state-battery.ts";
+import { innovativeDrugResearch } from "./innovative-drug/innovative-drug.ts";
+import { fusionResearch } from "./fusion/fusion.ts";
+import { defenseResearch } from "./defense/defense.ts";
+import { businessSpaceResearch } from "./business-space/business-space.ts";
+import { powerGridResearch } from "./power-grid/power-grid.ts";
+import { aiApplicationResearch } from "./ai-application/ai-application.ts";
+import { aiHardwareResearch } from "./ai-hardware/ai-hardware.ts";
+import { energyStorageResearch } from "./energy-storage/energy-storage.ts";
+import { dataElementResearch } from "./data-element/data-element.ts";
+import { resourcesResearch } from "./resources/resources.ts";
+import { aiPharmaResearch } from "./ai-pharma/ai-pharma.ts";
 import { assertWorkspaceInvariants } from "./types.ts";
 import type { SectorResearchWorkspace } from "./types.ts";
 
@@ -24,6 +35,17 @@ const WORKSPACES: Record<string, SectorResearchWorkspace> = {
   [cpoResearch.key]: cpoResearch,
   [smartDrivingResearch.key]: smartDrivingResearch,
   [lowAltitudeResearch.key]: lowAltitudeResearch,
+  [innovativeDrugResearch.key]: innovativeDrugResearch,
+  [fusionResearch.key]: fusionResearch,
+  [defenseResearch.key]: defenseResearch,
+  [businessSpaceResearch.key]: businessSpaceResearch,
+  [powerGridResearch.key]: powerGridResearch,
+  [aiApplicationResearch.key]: aiApplicationResearch,
+  [aiHardwareResearch.key]: aiHardwareResearch,
+  [energyStorageResearch.key]: energyStorageResearch,
+  [dataElementResearch.key]: dataElementResearch,
+  [resourcesResearch.key]: resourcesResearch,
+  [aiPharmaResearch.key]: aiPharmaResearch,
 };
 
 for (const ws of Object.values(WORKSPACES)) {

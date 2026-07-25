@@ -719,8 +719,27 @@ def test_default_runner_error_event():
     ), patch.object(
         svc.portfolio_advice_validator, "validate_portfolio_advice"
     ) as m_val:
-        with pytest.raises(PortfolioAdviceModelError, match="上游失败"):
+        # 流内 error 原文不直接外泄；映射为公开安全文案
+        with pytest.raises(PortfolioAdviceModelError, match="持仓建议模型调用失败"):
             generate_portfolio_advice({})
+    m_val.assert_not_called()
+
+
+def test_default_runner_auth_error_classified():
+    patches = _patch_prepare_ok()
+    with patches[0], patches[1], patches[2], patches[3], patch.object(
+        svc.chat,
+        "stream_messages",
+        side_effect=RuntimeError(
+            '模型接口 HTTP 401: {"error":{"message":"Authentication Fails, Your api key: sk-leak is invalid"}}'
+        ),
+    ), patch.object(
+        svc.portfolio_advice_validator, "validate_portfolio_advice"
+    ) as m_val:
+        with pytest.raises(PortfolioAdviceModelError) as ei:
+            generate_portfolio_advice({})
+        assert str(ei.value) == "持仓建议模型鉴权失败，请检查 API Key 或重新登录 CLI"
+        assert "sk-leak" not in str(ei.value)
     m_val.assert_not_called()
 
 
