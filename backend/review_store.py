@@ -80,7 +80,6 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
 
 
 def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:
-<<<<<<< Updated upstream
     """只读连接（URI ?mode=ro）。文件不存在直接抛 FileNotFoundError。"""
     path = _as_path(db_path)
     if not Path(path).exists():
@@ -89,20 +88,10 @@ def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(uri, timeout=5, uri=True)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-=======
-    """只读连接。不创建文件、不建表、不写库。"""
-    path = _as_path(db_path)
-    if path != ":memory:" and not Path(path).exists():
-        raise FileNotFoundError(path)
-    uri = Path(path).resolve().as_uri() + "?mode=ro"
-    conn = sqlite3.connect(uri, timeout=5, uri=True)
-    conn.row_factory = sqlite3.Row
->>>>>>> Stashed changes
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
-<<<<<<< Updated upstream
 def _db_file_exists(db_path: str | Path) -> bool:
     """db 文件是否存在（不创建文件/目录）。"""
     try:
@@ -120,30 +109,11 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     return row is not None
 
 
-=======
->>>>>>> Stashed changes
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     """在当前连接上幂等建表/索引（:memory: 必须与读写同连接）。"""
     conn.execute(_CREATE_TABLE)
     conn.execute(_CREATE_IDX_TRADE)
     conn.execute(_CREATE_IDX_GEN)
-
-
-def _table_exists(conn: sqlite3.Connection) -> bool:
-    """检查 daily_review_snapshots 表是否存在。"""
-    row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-        ("daily_review_snapshots",),
-    ).fetchone()
-    return row is not None
-
-
-def _db_file_exists(db_path: str | Path) -> bool:
-    """判断 SQLite 数据库文件是否已存在（:memory: 始终存在）。"""
-    path = _as_path(db_path)
-    if path == ":memory:":
-        return True
-    return Path(path).exists()
 
 
 def initialize_review_store(db_path: str | Path) -> None:
@@ -341,30 +311,18 @@ def get_daily_review_snapshot(
     snapshot_id: int,
     db_path: str | Path,
 ) -> dict | None:
-    """按主键读取完整快照；不存在返回 None。
-
-    真正只读：数据库文件不存在、表不存在时返回 None，不创建文件/目录/表。
-    """
+    """按主键读取完整快照；不存在返回 None。"""
     if not isinstance(snapshot_id, int) or isinstance(snapshot_id, bool):
         raise ValueError("snapshot_id 必须是正整数")
     if snapshot_id < 1:
         raise ValueError("snapshot_id 必须是正整数")
 
-<<<<<<< Updated upstream
     # 只读路径：不建目录、不建表；文件/表缺失返回 None。
     if not _db_file_exists(db_path):
         return None
     conn = _connect_readonly(db_path)
     try:
         if not _table_exists(conn, "daily_review_snapshots"):
-=======
-    if not _db_file_exists(db_path):
-        return None
-
-    conn = _connect_readonly(db_path)
-    try:
-        if not _table_exists(conn):
->>>>>>> Stashed changes
             return None
         row = conn.execute(
             """
@@ -385,23 +343,12 @@ def get_latest_daily_review_snapshot(
     db_path: str | Path,
     trade_date: str | None = None,
 ) -> dict | None:
-<<<<<<< Updated upstream
     """读取最新快照；可按交易日过滤。无记录返回 None（只读，不建目录/表）。"""
-=======
-    """读取最新快照；可按交易日过滤。无记录返回 None。
-
-    真正只读：数据库文件不存在、表不存在时返回 None，不创建文件/目录/表。
-    """
->>>>>>> Stashed changes
     if not _db_file_exists(db_path):
         return None
     conn = _connect_readonly(db_path)
     try:
-<<<<<<< Updated upstream
         if not _table_exists(conn, "daily_review_snapshots"):
-=======
-        if not _table_exists(conn):
->>>>>>> Stashed changes
             return None
         if trade_date is not None:
             td = _validate_trade_date(trade_date)
@@ -445,19 +392,12 @@ def list_daily_review_snapshots(
     if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
         raise ValueError("offset 必须是 >= 0 的整数")
 
-<<<<<<< Updated upstream
     # 只读路径：不建目录、不建表；文件/表缺失返回 []。
-=======
->>>>>>> Stashed changes
     if not _db_file_exists(db_path):
         return []
     conn = _connect_readonly(db_path)
     try:
-<<<<<<< Updated upstream
         if not _table_exists(conn, "daily_review_snapshots"):
-=======
-        if not _table_exists(conn):
->>>>>>> Stashed changes
             return []
         if trade_date is not None:
             td = _validate_trade_date(trade_date)
