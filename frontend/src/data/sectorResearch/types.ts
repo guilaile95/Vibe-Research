@@ -11,6 +11,10 @@ export type SourceRef = {
   id: string;
   title: string;
   org?: string;
+  /** 实际访问日期（合法 ISO 日期） */
+  accessedAt?: string;
+  /** 来源实际支持的事实范围（非空字符串或字符串数组；不得写入投资结论） */
+  supports?: string | string[];
   /** 公开可访问 URL（http/https） */
   url?: string;
   /** 关联的本地研报 id → 页面内链接到 /my-reports?report=<id> */

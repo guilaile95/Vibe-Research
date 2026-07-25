@@ -44,6 +44,7 @@ class SectorDataSource:
     label: str
     report_keywords: list[str] = field(default_factory=list)
     representative_company_codes: list[str] = field(default_factory=list)
+    representative_companies: dict[str, str] = field(default_factory=dict)
     report_lookback_days: int = 365
     dynamic_panels: list[str] = field(default_factory=list)
 
@@ -58,6 +59,97 @@ PCB_SOURCES = SectorDataSource(
         "低轮廓铜箔", "112G", "224G", "448G", "覆铜板材料",
     ],
     representative_company_codes=["002463", "002916", "300476", "603228", "600183"],
+    representative_companies={
+        "002463": "沪电股份",
+        "002916": "深南电路",
+        "300476": "胜宏科技",
+        "603228": "景旺电子",
+        "600183": "生益科技",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# HUMANOID 数据源
+HUMANOID_SOURCES = SectorDataSource(
+    key="humanoid",
+    label="人形机器人",
+    report_keywords=[
+        "人形机器人", "具身智能", "谐波减速器", "行星滚柱丝杠", "空心杯电机",
+        "灵巧手", "无框力矩电机", "伺服驱动器", "六维力传感器",
+    ],
+    representative_company_codes=["002050", "601689", "002896", "603728", "300124", "688017"],
+    representative_companies={
+        "002050": "三花智控",
+        "601689": "拓普集团",
+        "002896": "中大力德",
+        "603728": "鸣志电器",
+        "300124": "汇川技术",
+        "688017": "绿的谐波",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# AI-COMPUTING 数据源
+AICOMPUTING_SOURCES = SectorDataSource(
+    key="ai-computing",
+    label="AI算力",
+    report_keywords=[
+        "AI算力", "AI服务器", "智算中心", "算力芯片", "无损网络",
+        "冷板液冷", "浸没液冷", "800G交换机", "NVLink", "液冷服务器",
+    ],
+    representative_company_codes=["000977", "603019", "000938", "601138", "688256", "688041"],
+    representative_companies={
+        "000977": "浪潮信息",
+        "603019": "中科曙光",
+        "000938": "紫光股份",
+        "601138": "工业富联",
+        "688256": "寒武纪",
+        "688041": "海光信息",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# HBM 数据源
+HBM_SOURCES = SectorDataSource(
+    key="hbm",
+    label="HBM（高带宽内存）",
+    report_keywords=[
+        "HBM", "高带宽内存", "HBM3e", "HBM4", "TSV", "硅通孔",
+        "MR-MUF", "颗粒塑封料", "GMC", "2.5D", "3D", "CoWoS",
+    ],
+    representative_company_codes=["002409", "300475", "600641", "688535", "600584", "002156"],
+    representative_companies={
+        "002409": "雅克科技",
+        "300475": "香农芯创",
+        "600641": "太极实业",
+        "688535": "华海诚科",
+        "600584": "长电科技",
+        "002156": "通富微电",
+    },
+    report_lookback_days=365,
+    dynamic_panels=["profit_forecast", "announcements", "individual_info"],
+)
+
+# CPO 数据源
+CPO_SOURCES = SectorDataSource(
+    key="cpo",
+    label="光互联与CPO",
+    report_keywords=[
+        "CPO", "共封装光学", "光模块", "800G光模块", "1.6T光模块",
+        "硅光", "LPO", "EML", "CW激光器", "光芯片", "FA光纤阵列",
+    ],
+    representative_company_codes=["300308", "300502", "300394", "688498", "002281", "000988"],
+    representative_companies={
+        "300308": "中际旭创",
+        "300502": "新易盛",
+        "300394": "天孚通信",
+        "688498": "源杰科技",
+        "002281": "光迅科技",
+        "000988": "华工科技",
+    },
     report_lookback_days=365,
     dynamic_panels=["profit_forecast", "announcements", "individual_info"],
 )
@@ -65,6 +157,10 @@ PCB_SOURCES = SectorDataSource(
 # 注册表：key -> SectorDataSource。
 SECTOR_SOURCES: dict[str, SectorDataSource] = {
     PCB_SOURCES.key: PCB_SOURCES,
+    HUMANOID_SOURCES.key: HUMANOID_SOURCES,
+    AICOMPUTING_SOURCES.key: AICOMPUTING_SOURCES,
+    HBM_SOURCES.key: HBM_SOURCES,
+    CPO_SOURCES.key: CPO_SOURCES,
 }
 
 
@@ -484,7 +580,7 @@ def get_sector_dynamic_data(sector_key: str) -> dict:
         }
 
     codes = src.representative_company_codes
-    name_map = PCB_COMPANY_CODES if sector_key == "pcb" else {}
+    name_map = src.representative_companies
     panels_enabled = list(src.dynamic_panels)
     companies: list[dict] = []
     warnings: list[str] = []
