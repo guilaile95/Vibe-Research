@@ -23,6 +23,7 @@ class PortfolioAdvicePolicy:
     confidence_caps: Mapping[str, float]
     partial_market_add_max: float
     partial_market_reduce_max: float
+    cash_reserve_pct: float
 
 
 ADD_TIERS: frozenset[float] = frozenset({10.0, 20.0})
@@ -37,6 +38,8 @@ CONFIDENCE_CAP: Mapping[str, float] = MappingProxyType(
 )
 PARTIAL_MARKET_ADD_MAX: float = 10.0
 PARTIAL_MARKET_REDUCE_MAX: float = 20.0
+#: 建议加仓时保留的现金安全垫比例（不用于本次建议加仓）
+CASH_RESERVE_PCT: float = 0.10
 
 
 if set(CONFIDENCE_CAP) != set(CONFIDENCE_LEVELS):
@@ -51,4 +54,5 @@ POLICY = PortfolioAdvicePolicy(
     confidence_caps=CONFIDENCE_CAP,
     partial_market_add_max=PARTIAL_MARKET_ADD_MAX,
     partial_market_reduce_max=PARTIAL_MARKET_REDUCE_MAX,
+    cash_reserve_pct=CASH_RESERVE_PCT,
 )

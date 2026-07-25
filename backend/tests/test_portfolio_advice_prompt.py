@@ -265,6 +265,7 @@ def test_policy_prompt_rules_are_derived_from_supplied_policy():
         confidence_caps={"low": 5.0, "medium": 15.0, "high": 25.0},
         partial_market_add_max=5.0,
         partial_market_reduce_max=15.0,
+        cash_reserve_pct=0.10,
     )
 
     rendered = render_policy_prompt_rules(custom)
@@ -288,6 +289,7 @@ def test_system_prompt_consumer_uses_supplied_policy():
         confidence_caps={"low": 5.0, "medium": 15.0, "high": 25.0},
         partial_market_add_max=5.0,
         partial_market_reduce_max=15.0,
+        cash_reserve_pct=0.10,
     )
 
     rendered = build_portfolio_advice_system_prompt(custom)

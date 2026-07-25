@@ -28,6 +28,8 @@ def test_policy_is_strategy_rules_single_source() -> None:
     }
     assert policy.POLICY.partial_market_add_max == 10.0
     assert policy.POLICY.partial_market_reduce_max == 20.0
+    assert policy.POLICY.cash_reserve_pct == 0.10
+    assert policy.CASH_RESERVE_PCT == 0.10
 
 
 def test_contracts_do_not_duplicate_or_reexport_policy_values() -> None:
@@ -123,6 +125,7 @@ def test_narrative_add_tier_pattern_is_derived_from_policy() -> None:
         confidence_caps=policy.POLICY.confidence_caps,
         partial_market_add_max=policy.POLICY.partial_market_add_max,
         partial_market_reduce_max=policy.POLICY.partial_market_reduce_max,
+        cash_reserve_pct=policy.POLICY.cash_reserve_pct,
     )
 
     pattern = narrative.build_tier_pattern(custom.add_tiers)
@@ -145,6 +148,7 @@ def test_policy_audit_errors_are_derived_from_supplied_policy() -> None:
         confidence_caps={"low": 5.0, "medium": 15.0, "high": 25.0},
         partial_market_add_max=5.0,
         partial_market_reduce_max=15.0,
+        cash_reserve_pct=0.10,
     )
 
     with pytest.raises(PortfolioAdviceValidationError, match="15/25"):

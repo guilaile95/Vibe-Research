@@ -34,6 +34,16 @@ const fmtSigned = (v: number | null | undefined) => {
   return s === "—" ? "—" : `${v > 0 ? "+" : ""}${s}`;
 };
 
+const formatAdviceDuration = (ms: number): string => {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+};
+
+const formatAdviceEta = (date: Date): string =>
+  date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+
 const HOLDING_ACTION_LABEL: Record<PortfolioAdviceHoldingAction, string> = {
   add: "加仓",
   hold: "持有",
@@ -555,7 +565,30 @@ export function Portfolio() {
   const adviceMeta = usePortfolioAdviceTaskStore((s) => s.resultMeta);
   const adviceError = usePortfolioAdviceTaskStore((s) => s.error);
   const adviceRestoreError = usePortfolioAdviceTaskStore((s) => s.restoreError);
+  const adviceStartedAt = usePortfolioAdviceTaskStore((s) => s.startedAt);
+  const adviceEstimatedDurationMs = usePortfolioAdviceTaskStore((s) => s.estimatedDurationMs);
   const adviceLoading = adviceStatus === "running";
+  const [adviceNow, setAdviceNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!adviceLoading) return;
+    setAdviceNow(Date.now());
+    const id = setInterval(() => setAdviceNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [adviceLoading]);
+
+  const adviceElapsedMs = adviceLoading && adviceStartedAt !== null
+    ? adviceNow - adviceStartedAt
+    : 0;
+  const adviceRemainingMs = adviceLoading
+    ? Math.max(0, adviceEstimatedDurationMs - adviceElapsedMs)
+    : 0;
+  const adviceOverTimeMs = adviceLoading
+    ? Math.max(0, adviceElapsedMs - adviceEstimatedDurationMs)
+    : 0;
+  const adviceEta = adviceLoading && adviceStartedAt !== null
+    ? new Date(adviceStartedAt + adviceEstimatedDurationMs)
+    : null;
 
   const generateAdvice = async () => {
     if (adviceLoading) return;
@@ -566,6 +599,10 @@ export function Portfolio() {
     }
     setErr(null);
     await usePortfolioAdviceTaskStore.getState().start(llm, adviceRequest);
+  };
+
+  const cancelAdvice = () => {
+    usePortfolioAdviceTaskStore.getState().cancel();
   };
 
   const holdings = data?.holdings || [];
@@ -884,19 +921,30 @@ export function Portfolio() {
           disabled={adviceLoading}
           className="mb-3 w-full resize-y rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50 disabled:opacity-50"
         />
-        <button
-          type="button"
-          onClick={generateAdvice}
-          disabled={adviceLoading}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
-        >
-          {adviceLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-          {adviceLoading
-            ? "持仓建议分析中…"
-            : advice
-              ? "重新生成持仓建议"
-              : "生成持仓操作建议"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={generateAdvice}
+            disabled={adviceLoading}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
+          >
+            {adviceLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {adviceLoading
+              ? "持仓建议分析中…"
+              : advice
+                ? "重新生成持仓建议"
+                : "生成持仓操作建议"}
+          </button>
+          {adviceLoading && (
+            <button
+              type="button"
+              onClick={cancelAdvice}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
+            >
+              取消
+            </button>
+          )}
+        </div>
 
         {adviceStatus === "restoring" && (
           <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
@@ -916,9 +964,21 @@ export function Portfolio() {
         )}
 
         {adviceLoading && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary">
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-            <span>{advice ? "正在重新生成，旧建议会保留到新结果成功。" : "持仓建议分析中，切换页面后会继续运行。"}</span>
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary">
+            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+            <div>
+              <p className="font-medium">
+                {advice ? "正在重新生成，旧建议会保留到新结果成功。" : "持仓建议分析中，切换页面后会继续运行。"}
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                已用 {formatAdviceDuration(adviceElapsedMs)}
+                {adviceEta
+                  ? adviceOverTimeMs > 0
+                    ? ` · 已超过预计时间 ${formatAdviceDuration(adviceOverTimeMs)}，仍在生成`
+                    : ` · 预计 ${formatAdviceEta(adviceEta)} 完成 · 剩余 ${formatAdviceDuration(adviceRemainingMs)}`
+                  : null}
+              </p>
+            </div>
           </div>
         )}
 

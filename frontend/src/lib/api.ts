@@ -167,7 +167,12 @@ export async function downloadReport(id: string, name: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-export async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET", body?: unknown, options?: { unwrapData?: boolean }): Promise<T> {
+export async function request<T>(
+  path: string,
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET",
+  body?: unknown,
+  options?: { unwrapData?: boolean; signal?: AbortSignal },
+): Promise<T> {
   const unwrapData = options?.unwrapData ?? true;
   let resp: Response;
   const headers: Record<string, string> = { ...authHeaders() };
@@ -176,10 +181,15 @@ export async function request<T>(path: string, method: "GET" | "POST" | "PUT" | 
     headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
+  if (options?.signal) opts.signal = options.signal;
   if (Object.keys(headers).length > 0) opts.headers = headers;
   try {
     resp = await fetch(`/api${path}`, opts);
-  } catch {
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    if (typeof e === "object" && e !== null && "name" in e && (e as { name: string }).name === "AbortError") {
+      throw e;
+    }
     throw new ApiError("连接不到后端，请先启动 backend（uvicorn app:app --port 8900）", 0);
   }
   let payload: any = null;
@@ -198,8 +208,10 @@ export async function request<T>(path: string, method: "GET" | "POST" | "PUT" | 
   return result as T;
 }
 
-export const get = <T>(path: string, options?: { unwrapData?: boolean }) => request<T>(path, "GET", undefined, options);
-export const put = <T>(path: string, body: unknown, options?: { unwrapData?: boolean }) => request<T>(path, "PUT", body, options);
+export const get = <T>(path: string, options?: { unwrapData?: boolean; signal?: AbortSignal }) =>
+  request<T>(path, "GET", undefined, options);
+export const put = <T>(path: string, body: unknown, options?: { unwrapData?: boolean; signal?: AbortSignal }) =>
+  request<T>(path, "PUT", body, options);
 
 export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;
@@ -1144,14 +1156,18 @@ export const api = {
    * 结构化持仓操作建议（普通 JSON）。
    * 只发送 user_request + llm；持仓与市场上下文由服务器读取，不注入 portfolio/context/messages。
    */
-  portfolioAdvice: (req: PortfolioAdviceRequest) =>
+  portfolioAdvice: (req: PortfolioAdviceRequest, signal?: AbortSignal) =>
     request<PortfolioAdviceResult>("/portfolio/advice", "POST", {
       user_request: req.user_request ?? null,
       llm: req.llm,
-    }),
-  aiResult: <TPayload>(resultType: AiResultType, tradeDate?: string | null) => {
+    }, { signal }),
+  aiResult: <TPayload>(
+    resultType: AiResultType,
+    tradeDate?: string | null,
+    signal?: AbortSignal,
+  ) => {
     const query = tradeDate ? `?trade_date=${encodeURIComponent(tradeDate)}` : "";
-    return get<AiGeneratedResult<TPayload> | null>(`/ai-results/${resultType}${query}`);
+    return get<AiGeneratedResult<TPayload> | null>(`/ai-results/${resultType}${query}`, { signal });
   },
   valuation: (code: string) => get<Valuation>(`/valuation?code=${code}`),
   percentile: (code: string) => get<ValPercentile>(`/valuation/percentile?code=${code}`),

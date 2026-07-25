@@ -18,6 +18,7 @@ import portfolio_advice_context
 import portfolio_advice_prompt
 import portfolio_advice_validator
 from portfolio_advice_account_metrics import attach_account_funding_metrics
+from portfolio_advice_cash_constraint import apply_available_cash_constraints
 from portfolio_advice_errors import public_model_error_detail
 from portfolio_advice_validator import PortfolioAdviceValidationError
 
@@ -349,6 +350,7 @@ def generate_portfolio_advice(
             context,
         )
         authoritative = attach_account_funding_metrics(validated, prepared["portfolio"])
+        authoritative = apply_available_cash_constraints(authoritative)
     except PortfolioAdviceValidationError as exc:
         raise PortfolioAdviceModelOutputError(_VALIDATOR_FAIL_MSG) from exc
     except PortfolioAdviceModelOutputError:
