@@ -39,7 +39,17 @@ class PortfolioAdviceModelOutputError(ValueError):
     """模型输出无法解析或未通过结构/执行约束校验。"""
 
 
+class PortfolioAdvicePersistError(RuntimeError):
+    """建议已生成但 AI result 持久化失败（非客户端参数错误）。"""
+
+    def __init__(self, message: str = "持仓建议结果保存失败", *, stage: str = "persist"):
+        super().__init__(message)
+        self.stage = stage
+
+
 _EMPTY_HOLDINGS_MSG = "当前没有持仓，无法生成持仓操作建议"
+_REVIEW_TRADE_DATE_MSG = "复盘交易日不可用，无法生成可靠的持仓操作建议"
+_HOLDINGS_SHAPE_MSG = "持仓数据不完整，无法生成持仓操作建议"
 _EMPTY_OUTPUT_MSG = "持仓建议模型未返回有效内容"
 _INVALID_JSON_MSG = "持仓建议模型输出不是有效的JSON对象"
 _VALIDATOR_FAIL_MSG = "持仓建议模型输出未通过结构和执行约束校验"
@@ -118,23 +128,43 @@ def prepare_portfolio_advice_messages(
         raise PortfolioAdviceUnavailableError(_EMPTY_HOLDINGS_MSG)
     _require_holdings(portfolio_data)
     _require_holding_quote_coverage(portfolio_data)
-    input_fingerprint = ai_result_service.compute_portfolio_fingerprint(
-        portfolio_data["holdings"]
-    )
+    # 规范化 shares 为 int（add_holding 可能留下 float），避免 fingerprint 误杀
+    holdings = portfolio_data.get("holdings") or []
+    if isinstance(holdings, list):
+        for h in holdings:
+            if not isinstance(h, dict):
+                continue
+            sh = h.get("shares")
+            if isinstance(sh, float) and not isinstance(sh, bool) and sh == int(sh) and sh > 0:
+                h["shares"] = int(sh)
+    try:
+        input_fingerprint = ai_result_service.compute_portfolio_fingerprint(
+            portfolio_data["holdings"]
+        )
+    except ai_result_service.AiResultValidationError as exc:
+        raise PortfolioAdviceUnavailableError(_HOLDINGS_SHAPE_MSG) from exc
 
     review = daily_review.generate_daily_review()
     if _market_breadth_unavailable(review):
         raise PortfolioAdviceMarketDataError(_MARKET_UNAVAILABLE_MSG)
+    # 保存路径要求 YYYY-MM-DD trade_date；缺失则在调用模型前失败关闭
+    td = review.get("trade_date") if isinstance(review, dict) else None
+    if not isinstance(td, str) or not td.strip():
+        raise PortfolioAdviceMarketDataError(_REVIEW_TRADE_DATE_MSG)
 
-    context = portfolio_advice_context.build_portfolio_advice_context(
-        portfolio_data,
-        review,
-    )
-    context_json = _context_to_json(context)
-    messages = portfolio_advice_prompt.build_portfolio_advice_messages(
-        context_json,
-        user_request=request,
-    )
+    try:
+        context = portfolio_advice_context.build_portfolio_advice_context(
+            portfolio_data,
+            review,
+        )
+        context_json = _context_to_json(context)
+        messages = portfolio_advice_prompt.build_portfolio_advice_messages(
+            context_json,
+            user_request=request,
+        )
+    except (TypeError, ValueError) as exc:
+        # 上下文/提示构建失败：业务数据不可用，非客户端参数错误
+        raise PortfolioAdviceMarketDataError(_MARKET_UNAVAILABLE_MSG) from exc
     return {
         "portfolio": portfolio_data,
         "input_fingerprint": input_fingerprint,
@@ -341,12 +371,21 @@ def generate_portfolio_advice(
         # 非预期异常也包装为输出错误，避免泄漏内部细节
         raise PortfolioAdviceModelOutputError(_VALIDATOR_FAIL_MSG) from exc
 
-    ai_result_service.save_portfolio_advice(
-        prepared["portfolio"],
-        prepared["daily_review"],
-        authoritative,
-        cfg,
-        input_fingerprint=prepared["input_fingerprint"],
-    )
+    try:
+        ai_result_service.save_portfolio_advice(
+            prepared["portfolio"],
+            prepared["daily_review"],
+            authoritative,
+            cfg,
+            input_fingerprint=prepared["input_fingerprint"],
+        )
+    except ai_result_service.AiResultValidationError as exc:
+        raise PortfolioAdvicePersistError(
+            "持仓建议结果保存失败", stage="save_validation"
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise PortfolioAdvicePersistError(
+            "持仓建议结果保存失败", stage="save"
+        ) from exc
     return authoritative
 

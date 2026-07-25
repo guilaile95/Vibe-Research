@@ -6,6 +6,7 @@ import { Sectors } from "@/pages/Sectors";
 import { SectorDetail } from "@/pages/SectorDetail";
 import { SectorResearchPage } from "@/pages/SectorResearchPage";
 import { Portfolio } from "@/pages/Portfolio";
+import { DecisionCockpit } from "@/pages/DecisionCockpit";
 import { StockData } from "@/pages/StockData";
 import { Watchlist } from "@/pages/Watchlist";
 import { MyReports } from "@/pages/MyReports";
@@ -37,6 +38,7 @@ export const router = createBrowserRouter([
       { path: "/sectors/:key/:tag", element: <SectorResearchTagRoute /> },
       { path: "/sectors/:key", element: <SectorDetail /> },
       { path: "/portfolio", element: <Portfolio /> },
+      { path: "/cockpit", element: <DecisionCockpit /> },
       { path: "/stock-data", element: <StockData /> },
       { path: "/watchlist", element: <Watchlist /> },
       { path: "/my-reports", element: <MyReports /> },

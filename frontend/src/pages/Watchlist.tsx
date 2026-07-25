@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, X, RefreshCw, Star } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { api, type Quote } from "@/lib/api";
-import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
+import {
+  addCodes,
+  loadWatchAuthoritative,
+  saveWatchAuthoritative,
+} from "@/lib/watchlist";
 import { cn } from "@/lib/utils";
 
 // A 股红涨绿跌（与整个看板一致）。
@@ -13,18 +17,64 @@ const color = (v: number | undefined) =>
 const pct = (v: number | undefined) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v}%`);
 
 export function Watchlist() {
-  const [codes, setCodes] = useState<string[]>(loadWatch);
+  const [codes, setCodes] = useState<string[]>([]);
+  const [etag, setEtag] = useState<string | null>(null);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
 
-  const refresh = (cs: string[]) => {
-    if (!cs.length) { setQuotes({}); return; }
+  const refreshQuotes = useCallback((cs: string[]) => {
+    if (!cs.length) {
+      setQuotes({});
+      return;
+    }
     setLoading(true);
-    api.quote(cs.join(",")).then(setQuotes).catch(() => {}).finally(() => setLoading(false));
+    api
+      .quote(cs.join(","))
+      .then(setQuotes)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await loadWatchAuthoritative();
+      setCodes(r.codes);
+      setEtag(r.etag);
+      if (r.migrated) {
+        setHint(`已从本地草稿迁移至后端权威自选（共 ${r.codes.length} 只）`);
+      }
+      refreshQuotes(r.codes);
+    } catch (e) {
+      setHint(e instanceof Error ? e.message : "加载自选失败");
+    } finally {
+      setLoading(false);
+    }
+  }, [refreshQuotes]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const persist = async (next: string[], msg?: string) => {
+    setSaving(true);
+    setHint(null);
+    try {
+      const r = await saveWatchAuthoritative(next, etag);
+      setCodes(r.codes);
+      setEtag(r.etag);
+      if (msg) setHint(msg);
+      refreshQuotes(r.codes);
+    } catch (e) {
+      setHint(e instanceof Error ? e.message : "保存失败（可能版本冲突，请刷新）");
+      await load();
+    } finally {
+      setSaving(false);
+    }
   };
-  useEffect(() => { refresh(loadWatch()); }, []);
 
   const add = () => {
     const { next, added } = addCodes(codes, input);
@@ -33,18 +83,19 @@ export function Watchlist() {
       setInput("");
       return;
     }
-    setCodes(next); saveWatch(next); setInput(""); setHint(`已添加 ${added} 只`);
-    refresh(next);
+    setInput("");
+    void persist(next, `已添加 ${added} 只（后端权威）`);
   };
+
   const remove = (c: string) => {
     const next = codes.filter((x) => x !== c);
-    setCodes(next); saveWatch(next); refresh(next);
+    void persist(next);
   };
 
   const aiContext = useMemo(
     () =>
       codes.length
-        ? "我的自选股（本地）：\n" +
+        ? "我的自选股（后端权威）：\n" +
           codes
             .map((c) => {
               const q = quotes[c];
@@ -61,7 +112,7 @@ export function Watchlist() {
     <div>
       <PageHeader
         title="自选股"
-        subtitle="批量添加、一屏总览你关注的标的。数据只存本地、不上传。"
+        subtitle="批量添加、一屏总览你关注的标的。数据存后端权威自选（迁移后清除本地草稿）。"
         actions={
           codes.length > 0 && (
             <AskAiButton
@@ -90,7 +141,8 @@ export function Watchlist() {
           />
           <button
             onClick={add}
-            className="inline-flex h-9 shrink-0 items-center gap-1.5 self-start rounded-lg bg-primary/15 px-4 text-sm font-medium text-primary shadow-glow hover:bg-primary/25"
+            disabled={saving}
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 self-start rounded-lg bg-primary/15 px-4 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
           >
             <Plus className="h-4 w-4" /> 添加
           </button>
@@ -105,7 +157,7 @@ export function Watchlist() {
             <span className="text-xs font-normal text-muted-foreground">（{codes.length}）</span>
           </h3>
           <button
-            onClick={() => refresh(codes)}
+            onClick={() => refreshQuotes(codes)}
             disabled={loading}
             className="text-muted-foreground hover:text-primary"
             title="刷新价格"
@@ -118,43 +170,34 @@ export function Watchlist() {
             还没有自选股，用上面的框粘贴一串代码批量添加。
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-                  {["名称", "代码", "现价", "涨跌%", "PE(TTM)", "PB", "换手%", ""].map((h) => (
-                    <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {codes.map((c) => {
-                  const q = quotes[c];
-                  return (
-                    <tr key={c} className="border-b border-border/30">
-                      <td className="px-2 py-2.5 font-medium">{q?.name || "—"}</td>
-                      <td className="px-2 py-2.5 font-mono text-xs text-muted-foreground">{c}</td>
-                      <td className={cn("px-2 py-2.5 font-mono", color(q?.change_pct))}>{q ? q.price : "—"}</td>
-                      <td className={cn("px-2 py-2.5 font-mono", color(q?.change_pct))}>{q ? pct(q.change_pct) : "—"}</td>
-                      <td className="px-2 py-2.5 font-mono text-muted-foreground">{q?.pe_ttm ?? "—"}</td>
-                      <td className="px-2 py-2.5 font-mono text-muted-foreground">{q?.pb ?? "—"}</td>
-                      <td className="px-2 py-2.5 font-mono text-muted-foreground">{q?.turnover_pct ?? "—"}</td>
-                      <td className="px-2 py-2.5">
-                        <button
-                          onClick={() => remove(c)}
-                          className="text-muted-foreground/50 hover:text-destructive"
-                          title="移除"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="divide-y divide-border/40">
+            {codes.map((c) => {
+              const q = quotes[c];
+              return (
+                <div key={c} className="flex items-center justify-between gap-2 py-2 text-sm">
+                  <div className="min-w-0">
+                    <span className="font-mono">{c}</span>
+                    {q?.name && (
+                      <span className="ml-2 text-muted-foreground">{q.name}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono">{q?.price ?? "—"}</span>
+                    <span className={cn("font-mono", color(q?.change_pct))}>
+                      {pct(q?.change_pct)}
+                    </span>
+                    <button
+                      onClick={() => remove(c)}
+                      disabled={saving}
+                      className="text-muted-foreground hover:text-danger disabled:opacity-50"
+                      title="移除"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </GlassCard>

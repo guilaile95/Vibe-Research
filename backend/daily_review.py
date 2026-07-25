@@ -49,6 +49,28 @@ _bg_refreshing = False
 _refresh_failed = False
 _refresh_error: str | None = None
 
+# 用户显式刷新：真正 single-flight（每轮独立 flight 对象）
+# - 调用者进入时捕获当前 flight 引用，只等待/复用该对象
+# - 新一轮可替换 current，但不得覆盖旧 flight 的 result/error
+# - 不得仅靠互斥锁把多次 build 串行化到全局槽位
+
+
+class _ExplicitRefreshFlight:
+    """单轮显式刷新的共享状态（结果/异常绑定在本对象，不被下一轮覆盖）。"""
+
+    __slots__ = ("event", "result", "error", "gen")
+
+    def __init__(self, gen: int) -> None:
+        self.event = threading.Event()
+        self.result: dict | None = None
+        self.error: BaseException | None = None
+        self.gen = gen
+
+
+_explicit_refresh_lock = threading.Lock()
+_explicit_refresh_current: _ExplicitRefreshFlight | None = None
+_explicit_refresh_gen = 0  # 每启动一轮 leader 递增
+
 # 组件展示前缀
 _PREFIX = {
     "indices": "大盘指数",
@@ -256,8 +278,28 @@ def _should_cache_review(result) -> bool:
     return result.get("status") in ("normal", "partial")
 
 
+def _any_normal_in_memory() -> bool:
+    """内存中（含已过 TTL 但结构仍有效的旧包）是否存在 normal。"""
+    hit = _review_cache.get(_REVIEW_CACHE_KEY)
+    if not hit:
+        return False
+    val = hit[1]
+    return isinstance(val, dict) and val.get("status") == "normal"
+
+
+def _existing_normal_anywhere() -> bool:
+    """是否存在任意旧 normal：新鲜内存、过期内存或磁盘最近成功。"""
+    if _any_normal_in_memory():
+        return True
+    existing_disk, _ = daily_review_cache.load_latest_review()
+    return isinstance(existing_disk, dict) and existing_disk.get("status") == "normal"
+
+
 def _should_replace_memory(result: dict) -> bool:
-    """内存写入质量规则：关键组件不可用不写入；partial 不覆盖已有 normal。"""
+    """内存写入质量规则：关键组件不可用不写入；partial 不覆盖已有 normal。
+
+    仅检查新鲜内存（兼容旧逻辑）。
+    """
     if not _should_cache_review(result):
         return False
     if daily_review_cache.has_critical_unavailable(result):
@@ -270,6 +312,34 @@ def _should_replace_memory(result: dict) -> bool:
     ):
         return False
     return True
+
+
+def _refresh_accepts_result(new_result: dict) -> tuple[bool, str]:
+    """显式刷新是否接受新结果（统一质量判定）。
+
+    同时检查新鲜内存、过期内存与磁盘最近成功，避免状态分裂。
+
+    规则：
+    - normal：接受（可替换旧 normal/partial）
+    - partial：仅当「任意旧来源均不存在 normal」时接受；否则拒绝
+    - unavailable / 关键组件不可用：拒绝
+
+    Returns ``(accepted, reason)``。
+    """
+    if not isinstance(new_result, dict):
+        return False, "invalid_result"
+    status = new_result.get("status")
+    if status == "normal":
+        return True, "normal"
+    if status == "unavailable":
+        return False, "unavailable"
+    if daily_review_cache.has_critical_unavailable(new_result):
+        return False, "critical_unavailable"
+    if status == "partial":
+        if _existing_normal_anywhere():
+            return False, "partial_with_existing_normal"
+        return True, "partial_no_prior_normal"
+    return False, "invalid_status"
 
 
 def _store_review(result: dict) -> None:
@@ -288,6 +358,27 @@ def _store_review(result: dict) -> None:
         daily_review_cache.save_latest_review(result, saved_at=saved_at)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _store_review_on_refresh(result: dict) -> bool:
+    """显式刷新路径的原子写入：内存 + 磁盘。
+
+    仅当新结果被接受时调用。返回 True 表示内存与磁盘均已一致更新。
+    若磁盘持久化失败，则回滚内存写入并返回 False（避免状态分裂）。
+    """
+    daily_review_errors.sanitize_review_public_fields(result)
+    saved_at = result.get("generated_at")
+    if not isinstance(saved_at, str) or not saved_at.strip():
+        saved_at = _now_str()
+    # 先写磁盘；失败则不写内存（保持旧成功）
+    try:
+        persisted = daily_review_cache.save_latest_review(result, saved_at=saved_at)
+    except Exception:  # noqa: BLE001
+        persisted = False
+    if not persisted:
+        return False
+    _review_cache[_REVIEW_CACHE_KEY] = (time.time(), copy.deepcopy(result))
+    return True
 
 def _age_seconds_from_saved_at(saved_at: str | None) -> float | None:
     if not isinstance(saved_at, str) or not saved_at.strip():
@@ -600,6 +691,162 @@ def generate_daily_review() -> dict:
         daily_review_errors.sanitize_review_public_fields(result)
         _store_review(result)
         return copy.deepcopy(result)
+
+
+class DailyReviewRefreshError(RuntimeError):
+    """显式刷新失败（保留上次成功结果；由 API 映射为非 2xx）。"""
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        reason: str = "refresh_failed",
+    ):
+        super().__init__(message or daily_review_errors.SAFE_REFRESH_FAILED)
+        self.reason = reason
+
+
+def _success_payload_for_display(data: dict, *, source: str) -> dict:
+    daily_review_errors.sanitize_review_public_fields(data)
+    return {
+        "data": copy.deepcopy(data),
+        "cache_meta": _cache_meta(
+            source=source,
+            stale=False,
+            refreshing=False,
+            saved_at=None,
+            age_seconds=0.0 if source == "refresh" else _cached_review_age_seconds(),
+        ),
+    }
+
+
+def _run_explicit_refresh_build() -> dict:
+    """执行一次显式刷新构建（调用方已是 single-flight leader）。
+
+    不破坏性清除上次成功内存/磁盘；仅当新结果通过质量规则时原子替换。
+    未预期异常 / unavailable / 关键组件不可用 → 抛 DailyReviewRefreshError，
+    旧成功缓存保持不变。
+    """
+    # 在 _review_lock 外可先快照「是否曾有成功」；替换本身仍走 _store_review 质量规则
+    try:
+        result = _build_daily_review()
+    except Exception as exc:  # noqa: BLE001
+        _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
+        raise DailyReviewRefreshError(
+            daily_review_errors.SAFE_REFRESH_FAILED,
+            reason="build_exception",
+        ) from exc
+
+    if not isinstance(result, dict):
+        _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
+        raise DailyReviewRefreshError(
+            daily_review_errors.SAFE_REFRESH_FAILED,
+            reason="invalid_result",
+        )
+
+    daily_review_errors.sanitize_review_public_fields(result)
+
+    # 统一质量判定：同时检查新鲜内存、过期内存与磁盘最近成功
+    accepted, reason = _refresh_accepts_result(result)
+    if not accepted:
+        _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
+        raise DailyReviewRefreshError(
+            daily_review_errors.SAFE_REFRESH_FAILED,
+            reason=reason,
+        )
+
+    # 原子替换：先写磁盘，成功再写内存；磁盘失败则保持旧成功（避免状态分裂）
+    with _review_lock:
+        if not _store_review_on_refresh(result):
+            _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
+            raise DailyReviewRefreshError(
+                daily_review_errors.SAFE_REFRESH_FAILED,
+                reason="persist_failed",
+            )
+        stored = _cached_review()
+        if stored is None:
+            _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
+            raise DailyReviewRefreshError(
+                daily_review_errors.SAFE_REFRESH_FAILED,
+                reason="store_rejected",
+            )
+        _clear_refresh_failure()
+        return _success_payload_for_display(stored, source="refresh")
+
+
+def _await_explicit_refresh_flight(flight: _ExplicitRefreshFlight) -> dict:
+    """等待已捕获的 flight；只读该对象，不受后续轮次 current 替换影响。"""
+    if not flight.event.wait(timeout=120):
+        raise DailyReviewRefreshError(
+            daily_review_errors.SAFE_REFRESH_FAILED,
+            reason="flight_timeout",
+        )
+    if flight.error is not None:
+        raise flight.error
+    if flight.result is None:
+        raise DailyReviewRefreshError(
+            daily_review_errors.SAFE_REFRESH_FAILED,
+            reason="empty_shared_result",
+        )
+    return copy.deepcopy(flight.result)
+
+
+def refresh_daily_review_for_display() -> dict:
+    """用户显式刷新：绕过完整包 300s 内存缓存；真正 single-flight。
+
+    - 并发重叠的 POST **只执行一次** ``_build_daily_review``；等待方捕获同一
+      ``_ExplicitRefreshFlight`` 并复用该轮 result/error（不被下一轮清空/覆盖）。
+    - 上一次 flight 完成后，下一次独立点击创建新 flight 并重新构建。
+    - 构建前 **不** 破坏性清除上次成功内存/磁盘。
+    - 仅成功质量结果原子替换内存 + latest.json；失败保留旧成功。
+    - 不调用 AI；不写 daily_review_snapshots；不生成持仓建议。
+    - 成功返回 ``{data, cache_meta}``（stale=false, source=refresh）。
+    - 失败抛 ``DailyReviewRefreshError``（API → 非 2xx；前端保留旧 UI）。
+    """
+    global _explicit_refresh_current, _explicit_refresh_gen
+
+    with _explicit_refresh_lock:
+        cur = _explicit_refresh_current
+        if cur is not None and not cur.event.is_set():
+            # 加入进行中的一轮：只持有该 flight 引用
+            flight = cur
+            is_leader = False
+        else:
+            _explicit_refresh_gen += 1
+            flight = _ExplicitRefreshFlight(_explicit_refresh_gen)
+            _explicit_refresh_current = flight
+            is_leader = True
+
+    if not is_leader:
+        return _await_explicit_refresh_flight(flight)
+
+    # Leader：执行唯一一次 build，结果写入本 flight 对象
+    try:
+        payload = _run_explicit_refresh_build()
+        flight.result = payload
+        flight.error = None
+        flight.event.set()
+        return copy.deepcopy(payload)
+    except DailyReviewRefreshError as exc:
+        flight.error = exc
+        flight.result = None
+        flight.event.set()
+        raise
+    except Exception as exc:  # noqa: BLE001
+        wrapped = DailyReviewRefreshError(
+            daily_review_errors.SAFE_REFRESH_FAILED,
+            reason="unexpected",
+        )
+        wrapped.__cause__ = exc
+        flight.error = wrapped
+        flight.result = None
+        flight.event.set()
+        raise wrapped from exc
+    finally:
+        # 允许下一轮独立请求创建新 flight；旧 flight 对象仍可被其 waiter 安全读取
+        with _explicit_refresh_lock:
+            if _explicit_refresh_current is flight:
+                _explicit_refresh_current = None
 
 
 def _cache_meta(

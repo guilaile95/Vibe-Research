@@ -69,6 +69,8 @@ def tmp_env(tmp_path, monkeypatch):
     def mock_review():
         return {
             "status": "normal",
+            "trade_date": "2026-01-01",
+            "generated_at": "2026-01-01 15:00:00",
             "data_health": {"components": {"breadth": "normal"}},
             "market_environment": {"breadth": {"status": "normal"}},
         }

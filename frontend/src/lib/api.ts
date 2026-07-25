@@ -2,8 +2,10 @@
 // 后端未启动或数据源异常时抛 ApiError，页面据此优雅降级。
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  readonly status: number;
+  constructor(message: string, status: number) {
     super(message);
+    this.status = status;
   }
 }
 
@@ -165,7 +167,7 @@ export async function downloadReport(id: string, name: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET", body?: unknown, options?: { unwrapData?: boolean }): Promise<T> {
+export async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET", body?: unknown, options?: { unwrapData?: boolean }): Promise<T> {
   const unwrapData = options?.unwrapData ?? true;
   let resp: Response;
   const headers: Record<string, string> = { ...authHeaders() };
@@ -196,8 +198,8 @@ async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "PATCH"
   return result as T;
 }
 
-const get = <T>(path: string, options?: { unwrapData?: boolean }) => request<T>(path, "GET", undefined, options);
-const put = <T>(path: string, body: unknown, options?: { unwrapData?: boolean }) => request<T>(path, "PUT", body, options);
+export const get = <T>(path: string, options?: { unwrapData?: boolean }) => request<T>(path, "GET", undefined, options);
+export const put = <T>(path: string, body: unknown, options?: { unwrapData?: boolean }) => request<T>(path, "PUT", body, options);
 
 export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;
@@ -1021,6 +1023,44 @@ export const api = {
     if (Object.keys(headers).length > 0) opts.headers = headers;
     try {
       resp = await fetch("/api/daily-review", opts);
+    } catch {
+      throw new ApiError("连接不到后端，请先启动 backend（uvicorn app:app --port 8900）", 0);
+    }
+    let payload: any = null;
+    try {
+      payload = await resp.json();
+    } catch {
+      /* 非 JSON */
+    }
+    if (!resp.ok) {
+      if (resp.status === 401) {
+        throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
+      }
+      throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
+    }
+    const data = (payload?.data ?? payload) as DailyReviewData;
+    const cache_meta = (payload?.cache_meta ?? null) as DailyReviewCacheMeta | null;
+    return { data, cache_meta };
+  },
+  /**
+   * 用户显式刷新每日复盘完整包（绕过 300s 内存缓存）。
+   * 与 GET 返回形状一致：{ data, cache_meta }；不写历史、不调用 AI。
+   */
+  dailyReviewRefresh: async (): Promise<{
+    data: DailyReviewData;
+    cache_meta?: DailyReviewCacheMeta | null;
+  }> => {
+    let resp: Response;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    };
+    try {
+      resp = await fetch("/api/daily-review/refresh", {
+        method: "POST",
+        headers,
+        body: "{}",
+      });
     } catch {
       throw new ApiError("连接不到后端，请先启动 backend（uvicorn app:app --port 8900）", 0);
     }

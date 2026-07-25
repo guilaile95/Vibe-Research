@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { api, ApiError, type RadarData, type Industry, type Announcement, type NewsItem } from "@/lib/api";
-import { loadWatch } from "@/lib/watchlist";
+import { loadWatchAuthoritative } from "@/lib/watchlist";
 import { hasLlm, chatStream } from "@/lib/llm";
 import { cn } from "@/lib/utils";
 
@@ -184,7 +184,7 @@ interface FeedRow { code: string; name: string; when: string; title: string; met
 const MAX_ROWS = 60;
 
 function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
-  const [codes, setCodes] = useState<string[]>(loadWatch);
+  const [codes, setCodes] = useState<string[]>([]);
   const [rows, setRows] = useState<FeedRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -240,9 +240,26 @@ function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
     }
   }, [kind]);
 
-  useEffect(() => { const cs = loadWatch(); setCodes(cs); load(cs); }, [load]);
+  useEffect(() => {
+    loadWatchAuthoritative()
+      .then((r) => {
+        setCodes(r.codes);
+        load(r.codes);
+      })
+      .catch(() => {
+        setCodes([]);
+        load([]);
+      });
+  }, [load]);
 
-  const refresh = () => { const cs = loadWatch(); setCodes(cs); load(cs); };
+  const refresh = () => {
+    loadWatchAuthoritative()
+      .then((r) => {
+        setCodes(r.codes);
+        load(r.codes);
+      })
+      .catch(() => load(codes));
+  };
 
   if (!codes.length) {
     return (
