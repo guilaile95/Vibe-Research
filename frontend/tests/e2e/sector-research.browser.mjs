@@ -274,6 +274,38 @@ const SECTOR_TAG_MAP = {
     { label: "光芯片、器件、模块和代工格局", slug: "industry" },
     { label: "供需、良率、价格与技术替代风险", slug: "risk" },
   ],
+  semiconductor: [
+    { label: "总览", slug: "overview" },
+    { label: "晶圆制造流程与核心技术", slug: "process" },
+    { label: "设备和材料价值量", slug: "value" },
+    { label: "先进制程、先进封装和关键设备突破", slug: "breakthrough" },
+    { label: "全球供应链与国产化梯队", slug: "industry" },
+    { label: "全球不可替代性与国产替代溢价", slug: "pricing" },
+  ],
+  "smart-driving": [
+    { label: "总览", slug: "overview" },
+    { label: "感知、计算、规划与线控", slug: "architecture" },
+    { label: "单车价值量", slug: "value" },
+    { label: "端到端、城市 NOA 与 Robotaxi", slug: "next-gen" },
+    { label: "芯片、算法、零部件与车企格局", slug: "industry" },
+    { label: "软件收费、成本转嫁和监管风险", slug: "pricing" },
+  ],
+  "solid-state-battery": [
+    { label: "总览", slug: "overview" },
+    { label: "硫化物、氧化物和聚合物路线", slug: "chemistry" },
+    { label: "单机与材料价值量", slug: "value" },
+    { label: "电解质、设备和量产工艺", slug: "manufacturing" },
+    { label: "材料、电池厂和设备格局", slug: "industry" },
+    { label: "良率、成本、专利与量产信号", slug: "pricing" },
+  ],
+  "low-altitude": [
+    { label: "总览", slug: "overview" },
+    { label: "飞行器、空域和运营体系", slug: "architecture" },
+    { label: "eVTOL 与基础设施价值量", slug: "value" },
+    { label: "适航、量产和商业运营", slug: "airworthiness" },
+    { label: "整机、零部件、空管和运营格局", slug: "industry" },
+    { label: "政策依赖、订单质量和盈利路径", slug: "pricing" },
+  ],
 };
 
 async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, networkBag) {
@@ -288,6 +320,7 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
   }
 
   // 2. Click through all 6 tags & verify URL, active state, non-empty body, sources section & links
+  let prevTagBtn = null;
   for (const tag of tags) {
     const tagBtn = page.getByRole("link", { name: tag.label }).first();
     if (!(await tagBtn.isVisible().catch(() => false))) {
@@ -300,6 +333,22 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
     if (!url.includes(`/sectors/${sectorKey}/${tag.slug}`)) {
       errors.push(`${label}: tag "${tag.label}" click expected URL with ${tag.slug}, got ${url}`);
     }
+
+    // Active state hard assertions
+    const ariaCurrent = await tagBtn.getAttribute("aria-current");
+    const dataActive = await tagBtn.getAttribute("data-active");
+    if (ariaCurrent !== "page" || dataActive !== "true") {
+      errors.push(`${label}: tag "${tag.label}" missing active state attributes (aria-current=${ariaCurrent}, data-active=${dataActive})`);
+    }
+
+    if (prevTagBtn) {
+      const prevAriaCurrent = await prevTagBtn.getAttribute("aria-current");
+      const prevDataActive = await prevTagBtn.getAttribute("data-active");
+      if (prevAriaCurrent === "page" || prevDataActive === "true") {
+        errors.push(`${label}: previous tag retained active state after switching to "${tag.label}"`);
+      }
+    }
+    prevTagBtn = tagBtn;
 
     const bodyText = await page.locator("body").innerText();
     if (bodyText.length < 200) {
@@ -464,15 +513,15 @@ async function runDesktop(browser, errors, networkBag) {
   await assertNoHorizontalOverflow(page, `${label} overview`, errors);
 
   // 2. Batch 1 4 Sectors Desktop Workflow
-  for (const sectorKey of ["humanoid", "ai-computing", "hbm", "cpo"]) {
+  for (const sectorKey of ["humanoid", "ai-computing", "hbm", "cpo", "semiconductor", "smart-driving", "solid-state-battery", "low-altitude"]) {
     await testSectorFullWorkflow(page, sectorKey, false, errors, networkBag);
   }
 
   // 3. Unbuilt sector placeholder verification
-  await page.goto(`http://127.0.0.1:${frontendPort}/sectors/semiconductor`, { waitUntil: "networkidle" });
+  await page.goto(`http://127.0.0.1:${frontendPort}/sectors/nonexistent`, { waitUntil: "networkidle" });
   const unbuiltText = await page.locator("body").innerText();
-  if (!unbuiltText.includes("当前仅有产业链骨架") && !unbuiltText.includes("尚未建设")) {
-    errors.push(`${label}: unbuilt sector semiconductor missing clear placeholder notice`);
+  if (!unbuiltText.includes("当前仅有产业链骨架") && !unbuiltText.includes("尚未建设") && !unbuiltText.includes("未找到")) {
+    errors.push(`${label}: unbuilt sector nonexistent missing clear placeholder notice`);
   }
 
   // Return to PCB for remaining harness checks (report discovery import & My Reports)
@@ -541,7 +590,7 @@ async function runMobile(browser, errors, networkBag) {
   await assertNoHorizontalOverflow(page, `${label} pcb`, errors);
 
   // 2. Batch 1 4 Sectors Mobile Workflow
-  for (const sectorKey of ["humanoid", "ai-computing", "hbm", "cpo"]) {
+  for (const sectorKey of ["humanoid", "ai-computing", "hbm", "cpo", "semiconductor", "smart-driving", "solid-state-battery", "low-altitude"]) {
     await testSectorFullWorkflow(page, sectorKey, true, errors, networkBag);
   }
 
@@ -645,7 +694,7 @@ async function main() {
       "",
       "## Covered",
       "- 板块中心进入 PCB",
-      "- 板块中心进入 4 个 Batch 1 板块（人形机器人 / AI算力 / HBM / 光互联与CPO）",
+      "- 板块中心进入 8 个已建设板块（Batch 1 + Batch 2：人形机器人 / AI算力 / HBM / 光互联 / 半导体 / 智能驾驶 / 固态电池 / 低空经济）",
       "- 桌面 1440px 与移动 390px 完整 6 Tag 导航、URL 匹配与刷新/前后退",
       "- 动态数据展开、缓存复用与手动刷新",
       "- 研报发现行业 / 代表公司 / 全部 范围切换与 days 过滤",
@@ -661,6 +710,10 @@ async function main() {
       "- desktop-ai-computing-overview.png",
       "- desktop-hbm-overview.png",
       "- desktop-cpo-overview.png",
+      "- desktop-semiconductor-overview.png",
+      "- desktop-smart-driving-overview.png",
+      "- desktop-solid-state-battery-overview.png",
+      "- desktop-low-altitude-overview.png",
       "- mobile-pcb-overview-390.png",
       "- mobile-report-discovery-390.png",
       "- mobile-my-reports-390.png",
@@ -668,6 +721,10 @@ async function main() {
       "- mobile-ai-computing-overview-390.png",
       "- mobile-hbm-overview-390.png",
       "- mobile-cpo-overview-390.png",
+      "- mobile-semiconductor-overview-390.png",
+      "- mobile-smart-driving-overview-390.png",
+      "- mobile-solid-state-battery-overview-390.png",
+      "- mobile-low-altitude-overview-390.png",
       "",
       "## Errors",
       errors.length ? errors.map((error) => `- ${error}`).join("\n") : "- none",

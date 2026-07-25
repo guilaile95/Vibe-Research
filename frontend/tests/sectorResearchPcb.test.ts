@@ -31,7 +31,7 @@ test("PCB workspace is registered alongside Batch 1 workspaces", () => {
   assert.ok(keys.includes("hbm"));
   assert.ok(keys.includes("cpo"));
   assert.ok(getSectorResearchWorkspace("pcb"));
-  assert.equal(getSectorResearchWorkspace("semiconductor"), undefined);
+  assert.equal(getSectorResearchWorkspace("nonexistent"), undefined);
 });
 
 test("PCB has exactly six tags with stable slugs and labels in order", () => {
@@ -106,7 +106,7 @@ test("resolveOrFallback uses default for missing or illegal tag", () => {
     tagSlug: "copper-midplane",
     redirected: false,
   });
-  assert.equal(resolveOrFallback("semiconductor", "overview"), null);
+  assert.equal(resolveOrFallback("nonexistent", "overview"), null);
 });
 
 
