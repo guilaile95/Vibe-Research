@@ -4,7 +4,7 @@ export const nextGenBlocks: ContentBlock[] = [
   {
     type: "callout",
     tone: "info",
-    text: "HBM4 跨代演进展望（行业预测 / 内部分析）：根据行业公开讨论与产业路线图分析，下一代 HBM4 预计将接口位宽由 1024-bit 扩展至 2048-bit，基础逻辑层（Base Die）或将引入先进制程晶圆代工与无凸块混合键合（Hybrid Bonding）技术。标准尚未正式定稿，以下内容为基于现有路线图的合理推测，不具确定性。",
+    text: "HBM4 跨代演进展望（行业预测 / 内部分析）：部分行业讨论与产业路线图分析推测，下一代 HBM4 可能将接口位宽由 1024-bit 扩展至 2048-bit，基础逻辑层（Base Die）或有机会引入先进制程晶圆代工与无凸块混合键合（Hybrid Bonding）技术。标准尚未正式定稿，以下内容为基于现有公开信息的合理推测，不具确定性，且具体参数尚未经官方确认。",
     sourceIds: [],
   },
   {

@@ -116,6 +116,14 @@ function startStaticServer(dir, port, apiBackendPort) {
     let pathname = rawUrl.split("?")[0];
     if (pathname === "/") pathname = "/index.html";
     let target = path.join(dir, pathname);
+    // 路径遍历防护：确保解析后的 target 仍在 dir 内
+    const resolvedDir = path.resolve(dir);
+    const resolvedTarget = path.resolve(target);
+    if (!resolvedTarget.startsWith(resolvedDir + path.sep) && resolvedTarget !== resolvedDir) {
+      res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+      res.end("forbidden");
+      return;
+    }
     if (!existsSync(target) || (existsSync(target) && path.extname(target) === "")) {
       target = path.join(dir, "index.html");
     }
