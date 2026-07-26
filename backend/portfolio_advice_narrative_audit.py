@@ -11,7 +11,7 @@ from portfolio_advice_policy import POLICY, PortfolioAdvicePolicy
 from portfolio_advice_schema import append_unique, dedupe_str_list
 
 
-SELLABLE_LIMITATION = "未提供可卖数量，执行前需要人工确认实际可卖股数。"
+SELLABLE_LIMITATION = "未提供理论建议卖出数量（非券商可卖数量），执行前请以券商实际可卖数量为准。"
 CASH_LIMITATION = (
     "未提供账户总资产与可用现金，买入数量仅按当前持股比例计算；"
     "执行前需要确认可用资金充足。"

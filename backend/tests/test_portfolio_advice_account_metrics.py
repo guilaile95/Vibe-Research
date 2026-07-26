@@ -241,7 +241,10 @@ def test_decimal_rounding_half_up(tmp_env):
 
 
 def test_action_and_ratios_unchanged(tmp_env):
-    """10-13. 确认接入只读账户资金前后，原 action, execution_size_pct_of_holding, execution_quantity, estimated_amount 绝对不变。"""
+    """10-13. 账户资金接入后 action/比例不变；未配置时 add 可执行 qty/amount 须为 null。
+
+    现金约束语义：未配置账户无法形成可执行加仓数量；配置后且现金充足则 qty/amount 可执行。
+    """
     _write_pf(tmp_env, [{"code": "000001", "shares": 1500, "cost": 14.0}])
 
     res_before = portfolio_advice_service.generate_portfolio_advice({}, model_runner=_mock_runner)
@@ -253,8 +256,12 @@ def test_action_and_ratios_unchanged(tmp_env):
 
     assert h_before["action"] == h_after["action"] == "add"
     assert h_before["execution_size_pct_of_holding"] == h_after["execution_size_pct_of_holding"] == 10
-    assert h_before["execution_quantity"] == h_after["execution_quantity"] == 100
-    assert h_before["estimated_amount"] == h_after["estimated_amount"] == 1000.0
+    # 未配置：不得返回看起来可执行的加仓数量
+    assert h_before["execution_quantity"] is None
+    assert h_before["estimated_amount"] is None
+    # 已配置且 usable=4500 > 1000：可执行数量保留
+    assert h_after["execution_quantity"] == 100
+    assert h_after["estimated_amount"] == 1000.0
 
 
 def test_prompt_and_validator_isolation(tmp_env):

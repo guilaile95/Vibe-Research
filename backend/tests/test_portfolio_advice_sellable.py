@@ -77,6 +77,9 @@ def test_reduce_advisory_min_qty_and_shares() -> None:
     assert out["execution_quantity"] == 300  # 不修改
     assert out["sellable_quantity_advisory"] == 300
     assert _LIMITATION_ADVISORY in res["data_limitations"]
+    # 理论建议卖出数量（非券商可卖数量）——不得仅写「可卖数量」
+    assert "理论建议卖出数量" in _LIMITATION_ADVISORY
+    assert "非券商可卖" in _LIMITATION_ADVISORY
 
 
 def test_sell_advisory_caps_at_shares() -> None:
@@ -280,4 +283,22 @@ def test_service_reduce_gets_sellable_advisory(tmp_env) -> None:
     assert h["execution_quantity"] is not None
     assert h["sellable_quantity_advisory"] == min(h["execution_quantity"], h["shares"])
     assert h["sellable_quantity_advisory"] <= h["shares"]
-    assert any("券商可卖" in m or "T+1" in m for m in res["data_limitations"])
+    assert any("理论建议卖出数量" in m for m in res["data_limitations"])
+    assert any("非券商可卖" in m for m in res["data_limitations"])
+    # advisory 语义：非真实券商可卖 / 无 T+1
+    assert any("T+1" in m for m in res["data_limitations"])
+
+
+def test_advisory_field_semantics_not_broker_sellable() -> None:
+    """sellable_quantity_advisory 字段语义 = 理论建议，非券商可卖。"""
+    h = _holding(action="sell", shares=400, qty=500)
+    res = apply_sellable_quantity_advisory(_base_result(holdings=[h]), {"closed": []})
+    out = res["holdings"][0]
+    # 公式 min(qty, shares)，无 T+1 扣减
+    assert out["sellable_quantity_advisory"] == 400
+    assert out["execution_quantity"] == 500  # 不改 execution
+    lim = " ".join(res["data_limitations"])
+    assert "理论建议卖出数量" in lim
+    assert "非券商可卖" in lim
+    # 不得暗示已是券商真实可卖（limitation 应含否定语义）
+    assert "非券商可卖数量" in lim or "非券商可卖" in lim

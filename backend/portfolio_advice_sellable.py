@@ -1,10 +1,13 @@
-"""持仓建议「建议可卖数量」标注（advisory，非券商真可卖）。
+"""持仓建议「理论建议卖出数量（非券商可卖数量）」标注。
 
 在现金约束之后追加：
-- holding 级 sellable_quantity_advisory
-- 顶层 data_limitations 中的 T+1 / 券商可卖说明
+- holding 级 sellable_quantity_advisory = min(建议数量, 持股数)
+- 顶层 data_limitations 说明：理论值，非券商可卖 / 无 T+1 明细
 
-不修改 execution_quantity，不做真 T+1 计算。
+语义（advisory only）：
+- 公式仅为 min(execution_quantity, shares)，不做 T+1、不做券商冻结股计算。
+- 不得单独表述为「可卖数量」；必须标明理论建议、非券商可卖。
+- 不修改 execution_quantity。
 """
 
 from __future__ import annotations
@@ -13,8 +16,10 @@ from typing import Any
 
 from portfolio_advice_cash_constraint import _append_limitation
 
+# 用户可见：明确理论建议卖出数量，非券商可卖数量
 _LIMITATION_ADVISORY = (
-    "系统无券商可卖数量与 T+1 明细，建议操作数量为理论值，执行前请以券商可卖为准"
+    "理论建议卖出数量（非券商可卖数量）：系统无券商可卖与 T+1 明细，"
+    "sellable_quantity_advisory 仅为 min(建议数量, 持股数) 的理论值，执行前请以券商可卖为准"
 )
 
 _REDUCE_SELL_ACTIONS = frozenset({"reduce", "sell"})
@@ -52,7 +57,7 @@ def _closed_same_day_codes(
     """portfolio.closed 中清仓日期等于建议 trade_date 的 code 集合。
 
     当日清仓记录仅作「信息不足」标记；不改变 advisory 计算公式，
-    也不假装可精确推算 T+1 可卖。
+    也不假装可精确推算 T+1 / 券商可卖。
     """
     if not isinstance(portfolio_data, dict):
         return set()
@@ -82,7 +87,10 @@ def _compute_advisory(
     execution_quantity: Any,
     shares: Any,
 ) -> int | None:
-    """reduce/sell：min(execution_quantity, shares)；数量空则 null。"""
+    """理论建议卖出数量（非券商可卖数量）= min(execution_quantity, shares)。
+
+    数量空则 null。无 T+1、无券商冻结股逻辑。
+    """
     h = _as_non_negative_int(shares)
     if h is None:
         return None
@@ -114,6 +122,11 @@ def apply_sellable_quantity_advisory(
     -------
     dict
         追加 advisory 字段后的结果。不修改 execution_quantity。
+
+    Notes
+    -----
+    sellable_quantity_advisory 是「理论建议卖出数量（非券商可卖数量）」，
+    公式 min(建议数量, 持股数)，不得当作券商真实可卖。
     """
     if not isinstance(result, dict):
         return result
@@ -137,7 +150,7 @@ def apply_sellable_quantity_advisory(
         h = dict(item)
         action = h.get("action")
         if action not in _REDUCE_SELL_ACTIONS:
-            # 非减仓/卖出不挂 advisory 字段，避免前端误读
+            # 非减仓/卖出不挂 advisory 字段，避免前端误读为券商可卖
             h.pop("sellable_quantity_advisory", None)
             new_holdings.append(h)
             continue

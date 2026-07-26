@@ -7,7 +7,19 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
-import { OptionalDataPanel, type PanelStatus } from "@/components/ui/OptionalDataPanel";
+import { OptionalDataPanel } from "@/components/ui/OptionalDataPanel";
+import {
+  type PanelId,
+  type PanelStates,
+  canApplyPanelResult,
+  createInitialPanelStates,
+  resetPanelStates,
+  resolvePanelError,
+  resolvePanelSuccess,
+  retryPanelState,
+  startPanelRequest,
+  togglePanelState,
+} from "@/components/ui/optionalDataPanelState";
 import {
   api, ApiError, type Valuation, type Report, type NewsItem, type ValPercentile, type ValMetric,
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
@@ -15,28 +27,6 @@ import {
   type GlobalStock, type KlineBar, type DisclosureItem,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
-
-// ---------------------------------------------------------------------------
-// 可选面板状态机类型
-// ---------------------------------------------------------------------------
-type PanelId = "kline" | "finance" | "info" | "disclosure";
-
-interface PanelState {
-  expanded: boolean;
-  status: PanelStatus;
-  /** 发起请求时的股票代码，用于判断数据是否匹配当前股票 */
-  requestCode: string | null;
-  error: string | null;
-}
-
-type PanelStates = Record<PanelId, PanelState>;
-
-const INITIAL_PANEL_STATES: PanelStates = {
-  kline:     { expanded: false, status: "idle", requestCode: null, error: null },
-  finance:   { expanded: false, status: "idle", requestCode: null, error: null },
-  info:      { expanded: false, status: "idle", requestCode: null, error: null },
-  disclosure:{ expanded: false, status: "idle", requestCode: null, error: null },
-};
 
 // 金额格式化（后端资金单位：元 / 万元）
 const yi = (v: number) => `${(v / 1e8).toFixed(2)} 亿`;
@@ -101,6 +91,8 @@ function ValBand({ label, m }: { label: string; m: ValMetric }) {
 
 export function StockData() {
   const [code, setCode] = useState("");
+  /** 已提交查询的代码；面板请求只读此值，输入框改动不改 activeCode */
+  const [activeCode, setActiveCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [val, setVal] = useState<Valuation | null>(null);
@@ -132,102 +124,132 @@ export function StockData() {
   const [infoErr, setInfoErr] = useState<string | null>(null);
   const [disc, setDisc] = useState<DisclosureItem[]>([]);
   const [discErr, setDiscErr] = useState<string | null>(null);
-  const [panelStates, setPanelStates] = useState<PanelStates>(INITIAL_PANEL_STATES);
+  const [panelStates, setPanelStates] = useState<PanelStates>(() => createInitialPanelStates());
   const runIdRef = useRef(0);
+  /** 最新 activeCode 的 ref，供异步回调读取（避免闭包过期） */
+  const activeCodeRef = useRef("");
 
-  // 获取指定面板的数据（由 togglePanel / retryPanel 调用，不做并发检查——由 status 守卫）
-  const fetchPanelData = useCallback((key: PanelId) => {
-    const c = code.trim();
-    if (!/^\d{6}$/.test(c)) return;
+  // 面板请求必须用 activeCode，绝不读可编辑输入 code
+  const fetchPanelData = useCallback((key: PanelId, requestCode: string) => {
+    if (!/^\d{6}$/.test(requestCode)) return;
     const rid = runIdRef.current;
+    const boundCode = requestCode;
+
+    setPanelStates((prev) => startPanelRequest(prev, key, boundCode));
 
     (async () => {
       try {
         let result: unknown;
         switch (key) {
-          case "kline":       result = await api.kline(c); break;
-          case "finance":     result = await api.finance(c); break;
-          case "info":        result = await api.info(c); break;
-          case "disclosure":  result = await api.disclosure(c); break;
+          case "kline":       result = await api.kline(boundCode); break;
+          case "finance":     result = await api.finance(boundCode); break;
+          case "info":        result = await api.info(boundCode); break;
+          case "disclosure":  result = await api.disclosure(boundCode); break;
         }
-        if (rid !== runIdRef.current) return; // 竞态：旧请求不回填
 
-        // 判断空结果
+        // 先用 ref 快路径拒绝明显过期的 generation / activeCode
+        if (rid !== runIdRef.current || boundCode !== activeCodeRef.current) return;
+
         let isEmpty = false;
-        if (Array.isArray(result)) {
-          isEmpty = result.length === 0;
-        } else if (result && typeof result === "object") {
-          isEmpty = Object.keys(result).length === 0;
-        }
+        if (Array.isArray(result)) isEmpty = result.length === 0;
+        else if (result && typeof result === "object") isEmpty = Object.keys(result).length === 0;
 
-        // 更新具体数据
+        setPanelStates((prev) => {
+          if (!canApplyPanelResult(
+            prev[key],
+            boundCode,
+            activeCodeRef.current,
+            rid,
+            runIdRef.current,
+          )) {
+            return prev;
+          }
+          return resolvePanelSuccess(prev, key, boundCode, isEmpty) ?? prev;
+        });
+
+        // 数据与状态同一批写入条件：generation + activeCode 仍匹配
+        // （panel requestCode 再由 resolve 内守卫；数据写入用相同快路径）
+        if (rid !== runIdRef.current || boundCode !== activeCodeRef.current) return;
         if (key === "kline")       setKline(result as KlineBar[]);
         else if (key === "finance") setFinance(result as Record<string, string | number | null>);
         else if (key === "info")   setInfo(result as Record<string, string | number>);
         else if (key === "disclosure") setDisc(result as DisclosureItem[]);
-
-        setPanelStates((prev) => ({
-          ...prev,
-          [key]: { ...prev[key], status: isEmpty ? "empty" : "success", requestCode: c, error: null },
-        }));
       } catch (e) {
-        if (rid !== runIdRef.current) return;
         const msg = e instanceof ApiError ? e.message : "加载失败";
+        if (rid !== runIdRef.current || boundCode !== activeCodeRef.current) return;
+
+        setPanelStates((prev) => {
+          if (!canApplyPanelResult(
+            prev[key],
+            boundCode,
+            activeCodeRef.current,
+            rid,
+            runIdRef.current,
+          )) {
+            return prev;
+          }
+          return resolvePanelError(prev, key, boundCode, msg) ?? prev;
+        });
+
+        if (rid !== runIdRef.current || boundCode !== activeCodeRef.current) return;
         if (key === "kline")       setKlineErr(msg);
         else if (key === "finance") setFinanceErr(msg);
         else if (key === "info")   setInfoErr(msg);
         else if (key === "disclosure") setDiscErr(msg);
-
-        setPanelStates((prev) => ({
-          ...prev,
-          [key]: { ...prev[key], status: "error", error: msg },
-        }));
       }
     })();
-  }, [code]);
+  }, []);
 
-  // 展开/收起切换：首次展开触发请求，已加载直接展示
+  // 展开/收起：纯状态机 + 仅 idle 首次展开才 fetch(activeCode，非输入框 code)
   const togglePanel = useCallback((key: PanelId) => {
-    const current = panelStates[key];
-    if (current.expanded) {
-      // 收起
-      setPanelStates((prev) => ({ ...prev, [key]: { ...prev[key], expanded: false } }));
-      return;
-    }
-    // 展开——根据状态决定是否请求
-    if (current.status === "idle") {
-      setPanelStates((prev) => ({ ...prev, [key]: { ...prev[key], expanded: true, status: "loading" } }));
-      fetchPanelData(key);
-    } else {
-      // success / empty / error：直接展示缓存，不再请求
-      setPanelStates((prev) => ({ ...prev, [key]: { ...prev[key], expanded: true } }));
-    }
-  }, [panelStates, fetchPanelData]);
+    const target = activeCode;
+    setPanelStates((prev) => {
+      const { states, shouldFetch } = togglePanelState(prev, key);
+      if (!shouldFetch) return states;
+      // 无已提交 A 股代码时不进入 loading，避免卡死
+      if (!/^\d{6}$/.test(target)) {
+        return { ...states, [key]: { ...prev[key], expanded: true, status: "idle", error: null } };
+      }
+      queueMicrotask(() => {
+        if (activeCodeRef.current === target) fetchPanelData(key, target);
+      });
+      return states;
+    });
+  }, [fetchPanelData, activeCode]);
 
   // 从 error 状态显式重试
   const retryPanel = useCallback((key: PanelId) => {
-    // 清空旧错误
     if (key === "kline")       setKlineErr(null);
     else if (key === "finance") setFinanceErr(null);
     else if (key === "info")   setInfoErr(null);
     else if (key === "disclosure") setDiscErr(null);
 
-    setPanelStates((prev) => ({
-      ...prev,
-      [key]: { ...prev[key], status: "loading", error: null },
-    }));
-    fetchPanelData(key);
-  }, [fetchPanelData]);
+    const target = activeCode;
+    if (!/^\d{6}$/.test(target)) return;
+
+    setPanelStates((prev) => {
+      const { states, shouldFetch } = retryPanelState(prev, key);
+      if (shouldFetch) {
+        queueMicrotask(() => {
+          if (activeCodeRef.current === target) fetchPanelData(key, target);
+        });
+      }
+      return states;
+    });
+  }, [fetchPanelData, activeCode]);
 
   const run = async () => {
     const c = code.trim().toUpperCase();
     if (!c) { setErr("请输入代码"); return; }
     const rid = ++runIdRef.current;
+    // 正式换股：绑定 activeCode，重置全部可选面板
+    setActiveCode(c);
+    activeCodeRef.current = c;
     setLoading(true); setErr(null); setDepNote(null); setVal(null); setReports([]); setNews([]); setPctl(null); setFin(null); setAnns([]);
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
     setGStock(null);
     setKline([]); setKlineErr(null); setFinance({}); setFinanceErr(null); setInfo({}); setInfoErr(null); setDisc([]); setDiscErr(null);
-    setPanelStates(INITIAL_PANEL_STATES);
+    setPanelStates(resetPanelStates());
 
     // 6 位纯数字 = A 股；否则（字母 / 港股短代码）走美股 / 港股（global-stock-data）
     if (!/^\d{6}$/.test(c)) {

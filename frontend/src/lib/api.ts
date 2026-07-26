@@ -1,9 +1,6 @@
 // Vibe-Research 后端 API 客户端。/api → vite 代理到本地 FastAPI（默认 8900）。
 // 后端未启动或数据源异常时抛 ApiError，页面据此优雅降级。
-//
-// 类型定义已提取到 ./api/types.ts，仍通过本文件统一导出以保持向后兼容。
-
-export * from "./api/types.ts";
+// 类型定义与客户端同文件，单一来源。
 
 export class ApiError extends Error {
   readonly status: number;

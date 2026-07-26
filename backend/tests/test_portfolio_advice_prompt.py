@@ -302,5 +302,5 @@ def test_system_prompt_consumer_uses_supplied_policy():
 def test_production_system_prompt_byte_snapshot_is_stable():
     prompt = build_portfolio_advice_system_prompt()
     assert hashlib.sha256(prompt.encode("utf-8")).hexdigest() == (
-        "375cfa9640e355e711a4dc9b0bc519d27d3d8c93f8ee9700f3de929cada3cf37"
+        "6ab948ce5d7dd291bbeae350c796e9aadbdd3484527f0584b30f421fa61b25d5"
     )

@@ -11,19 +11,9 @@ import {
 import type { DisclosureItem, KlineBar } from "@/lib/api";
 import { GlassCard } from "./GlassCard";
 import { KlineChart } from "./KlineChart";
+import type { PanelId, PanelState, PanelStatus } from "./optionalDataPanelState";
 
-// ---------------------------------------------------------------------------
-// 面板状态机类型
-// ---------------------------------------------------------------------------
-export type PanelStatus = "idle" | "loading" | "success" | "empty" | "error";
-
-type PanelId = "kline" | "finance" | "info" | "disclosure";
-
-interface PanelState {
-  expanded: boolean;
-  status: PanelStatus;
-  error: string | null;
-}
+export type { PanelId, PanelStatus, PanelState } from "./optionalDataPanelState";
 
 interface Props {
   onToggle: (key: PanelId) => void;
@@ -66,27 +56,34 @@ function SubToggle({ icon, title, hint, status, expandKey, expanded, onToggle, o
     }
   };
 
+  // 展开时渲染 body：loading / success / empty / error 均展示（loading 显示 spinner）
+  const showBody = expanded && status !== "idle";
+
   return (
     <div className="border-b border-border/40 last:border-0">
-      <button
-        onClick={() => onToggle(expandKey)}
-        className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-muted/20"
-      >
-        {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-        {icon}
-        <span className="font-medium">{title}</span>
-        <span className="ml-auto text-xs text-muted-foreground/60">{statusLabel()}</span>
+      <div className="flex w-full items-center gap-1 px-4 py-2.5">
+        <button
+          type="button"
+          onClick={() => onToggle(expandKey)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm hover:bg-muted/20 rounded-md -ml-1 px-1 py-0.5"
+        >
+          {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
+          {icon}
+          <span className="font-medium">{title}</span>
+          <span className="ml-auto text-xs text-muted-foreground/60">{statusLabel()}</span>
+        </button>
         {status === "error" && (
           <button
-            onClick={(e) => { e.stopPropagation(); onRetry(expandKey); }}
-            className="rounded p-1 text-warning hover:bg-warning/10"
+            type="button"
+            onClick={() => onRetry(expandKey)}
+            className="shrink-0 rounded p-1 text-warning hover:bg-warning/10"
             title="重试"
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
         )}
-      </button>
-      {expanded && ["success", "empty", "error"].includes(status) && (
+      </div>
+      {showBody && (
         <div className="px-4 pb-3">{children}</div>
       )}
     </div>

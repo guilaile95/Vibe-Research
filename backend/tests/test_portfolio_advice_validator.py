@@ -193,7 +193,7 @@ def test_warnings_deduped():
 
 
 def test_data_limitations_deduped_top_and_holding():
-    dup = "未提供可卖数量，执行前需要人工确认实际可卖股数。"
+    dup = "未提供理论建议卖出数量（非券商可卖数量），执行前请以券商实际可卖数量为准。"
     ctx = _context(
         data_limitations=[dup, "未提供可用现金无法加仓", dup],
     )
@@ -805,7 +805,7 @@ def test_limitation_semantic_normalize_four_classes():
     )
     out = validate_portfolio_advice(_ai_result(holdings=[_ai_holding(action="hold")]), ctx)
     lims = out["data_limitations"]
-    assert lims.count("未提供可卖数量，执行前需要人工确认实际可卖股数。") == 1
+    assert lims.count("未提供理论建议卖出数量（非券商可卖数量），执行前请以券商实际可卖数量为准。") == 1
     assert lims.count(
         "未提供账户总资产与可用现金，买入数量仅按当前持股比例计算；"
         "执行前需要确认可用资金充足。"

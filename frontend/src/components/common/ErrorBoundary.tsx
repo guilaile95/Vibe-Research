@@ -1,5 +1,6 @@
 import { Component, type ReactNode } from "react";
 import { AlertTriangle, RotateCcw, RefreshCw } from "lucide-react";
+import { classifyError } from "./errorBoundaryUtils";
 
 interface Props { children: ReactNode; fallback?: ReactNode; }
 interface State { hasError: boolean; error?: Error; rebuildKey: number; }
@@ -8,15 +9,15 @@ interface State { hasError: boolean; error?: Error; rebuildKey: number; }
  * 错误边界：捕获子树渲染异常。
  *
  * 行为：
- * - chunk 加载错误（ChunkLoadError / import promise rejected）
- *   → 显示错误 +「重新加载页面」按钮（window.location.reload）
+ * - chunk 加载错误（ChunkLoadError / 动态 import 失败）
+ *   → 显示错误 +「重新加载页面」（window.location.reload）
  * - 普通渲染错误
- *   → 显示错误 +「重试」按钮（remount key++，重新执行 lazy import）
- * - 也支持外部传入自定义 fallback（不强制重试）。
+ *   → 显示错误 +「重试重新挂载」（key++ remount 子树，不保证一定恢复）
+ * - 支持外部自定义 fallback。
  *
- * 为什么对 chunk 错误用 reload：React.lazy 会缓存已拒绝的 import Promise，
- * 单纯重置 state + remount key 无法让浏览器重新请求 JS chunk，
- * 只有 reload 能强制浏览器重新发起 chunk 请求。
+ * 说明：React.lazy 会缓存已拒绝的 import Promise，单纯 remount 无法重新请求
+ * 已失败的 JS chunk；chunk 类错误必须 reload。普通渲染错误 remount 只是清掉
+ * 出错子树的 state 再挂一次，不声称能修复 lazy 失败。
  */
 export class ErrorBoundary extends Component<Props, State> {
   state: State = { hasError: false, rebuildKey: 0 };
@@ -25,23 +26,12 @@ export class ErrorBoundary extends Component<Props, State> {
     return { hasError: true, error };
   }
 
-  private isChunkLoadError(error?: Error): boolean {
-    if (!error) return false;
-    // Webpack: ChunkLoadError; Vite: 动态 import 失败时 message 含 "Failed to fetch" 或 "Loading chunk"
-    return (
-      error.name === "ChunkLoadError" ||
-      /Loading chunk.*failed/i.test(error.message) ||
-      /Failed to fetch (dynamically )?import/i.test(error.message) ||
-      /Importing a module script failed/i.test(error.message)
-    );
-  }
-
   retry = () => {
-    if (this.isChunkLoadError(this.state.error)) {
+    if (classifyError(this.state.error) === "chunk") {
       window.location.reload();
       return;
     }
-    // 对于普通渲染错误 + lazy import 拒绝：remount key 强制重新执行 import factory
+    // 普通渲染错误：递增 key 强制 remount 子树（不保证恢复）
     this.setState((prev) => ({
       hasError: false,
       error: undefined,
@@ -53,7 +43,7 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       if (this.props.fallback !== undefined) return this.props.fallback;
 
-      const isChunk = this.isChunkLoadError(this.state.error);
+      const isChunk = classifyError(this.state.error) === "chunk";
 
       return (
         <div className="m-4 flex items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
@@ -70,17 +60,15 @@ export class ErrorBoundary extends Component<Props, State> {
             {isChunk ? (
               <><RefreshCw className="h-3 w-3" /> 重新加载页面</>
             ) : (
-              <><RotateCcw className="h-3 w-3" /> 重试</>
+              <><RotateCcw className="h-3 w-3" /> 重试重新挂载</>
             )}
           </button>
         </div>
       );
     }
 
-    // rebuildKey 递增后 React 会 unmount + remount 子树，
-    // 让 React.lazy 的 import factory 有机会重新执行（虽然 lazy 有缓存，
-    // 但 remount + ErrorBoundary 重置后子树重建，lazy 组件重新挂载时
-    // 会重新走 React.lazy 的 resolve 逻辑）。
+    // rebuildKey 递增后 React unmount + remount 子树，用于普通渲染错误的重试。
+    // 这不会让已拒绝的 React.lazy import 重新拉 chunk。
     return <div key={this.state.rebuildKey}>{this.props.children}</div>;
   }
 }

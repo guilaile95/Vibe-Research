@@ -59,7 +59,7 @@ def _advice_payload(**overrides):
                 "invalidation_conditions": [],
                 "confidence": "medium",
                 "data_limitations": [
-                    "未提供可卖数量，执行前需要人工确认实际可卖股数。"
+                    "未提供理论建议卖出数量（非券商可卖数量），执行前请以券商实际可卖数量为准。"
                 ],
             }
         ],
@@ -681,7 +681,8 @@ def test_limited_api_integration(monkeypatch):
     assert by["600519"]["execution_quantity"] == 300
     assert by["600519"].get("estimated_amount") is None
     assert by["000001"]["action"] == "add"
-    # add 10% × 1000 股 → 100 股；现价 10 → 预计 1000.00（模型填 500 被覆盖）
-    assert by["000001"]["execution_quantity"] == 100
-    assert by["000001"]["estimated_amount"] == 1000.0
+    # 账户资金未配置：保留 add 方向，可执行数量/金额必须为 null
+    assert by["000001"]["execution_quantity"] is None
+    assert by["000001"].get("estimated_amount") is None
+    assert any("未配置账户资金" in x for x in (data.get("data_limitations") or []))
     assert _has_key(data, "t_trade") is False
