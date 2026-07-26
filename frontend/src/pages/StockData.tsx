@@ -125,6 +125,8 @@ export function StockData() {
   const [disc, setDisc] = useState<DisclosureItem[]>([]);
   const [discErr, setDiscErr] = useState<string | null>(null);
   const [panelStates, setPanelStates] = useState<PanelStates>(() => createInitialPanelStates());
+  /** 与 panelStates 同步的镜像，供事件处理器在 setState 外做纯决策（不在 updater 里写副作用） */
+  const panelStatesRef = useRef<PanelStates>(createInitialPanelStates());
   const runIdRef = useRef(0);
   /** 最新 activeCode 的 ref，供异步回调读取（避免闭包过期） */
   const activeCodeRef = useRef("");
@@ -138,6 +140,11 @@ export function StockData() {
     disclosure: 0,
   });
 
+  const commitPanelStates = useCallback((next: PanelStates) => {
+    panelStatesRef.current = next;
+    setPanelStates(next);
+  }, []);
+
   // 面板请求必须用 activeCode，绝不读可编辑输入 code
   const fetchPanelData = useCallback((key: PanelId, requestCode: string) => {
     if (!/^\d{6}$/.test(requestCode)) return;
@@ -146,7 +153,7 @@ export function StockData() {
     const requestId = ++panelRequestSeqRef.current;
     latestPanelRequestIdRef.current[key] = requestId;
 
-    setPanelStates((prev) => startPanelRequest(prev, key, boundCode, requestId));
+    commitPanelStates(startPanelRequest(panelStatesRef.current, key, boundCode, requestId));
 
     (async () => {
       const isStale = () =>
@@ -172,19 +179,22 @@ export function StockData() {
 
         if (isStale()) return;
 
-        setPanelStates((prev) => {
-          if (!canApplyPanelResult(
-            prev[key],
-            boundCode,
-            activeCodeRef.current,
-            rid,
-            runIdRef.current,
-            requestId,
-          )) {
-            return prev;
-          }
-          return resolvePanelSuccess(prev, key, boundCode, requestId, isEmpty) ?? prev;
-        });
+        const prev = panelStatesRef.current;
+        if (!canApplyPanelResult(
+          prev[key],
+          boundCode,
+          activeCodeRef.current,
+          rid,
+          runIdRef.current,
+          requestId,
+        )) {
+          return;
+        }
+        const next = resolvePanelSuccess(prev, key, boundCode, requestId, isEmpty);
+        if (!next) return;
+        // 再检一次：resolve 与 commit 之间可能已有更新请求
+        if (isStale()) return;
+        commitPanelStates(next);
 
         if (isStale()) return;
         if (key === "kline")       setKline(result as KlineBar[]);
@@ -195,19 +205,21 @@ export function StockData() {
         const msg = e instanceof ApiError ? e.message : "加载失败";
         if (isStale()) return;
 
-        setPanelStates((prev) => {
-          if (!canApplyPanelResult(
-            prev[key],
-            boundCode,
-            activeCodeRef.current,
-            rid,
-            runIdRef.current,
-            requestId,
-          )) {
-            return prev;
-          }
-          return resolvePanelError(prev, key, boundCode, requestId, msg) ?? prev;
-        });
+        const prev = panelStatesRef.current;
+        if (!canApplyPanelResult(
+          prev[key],
+          boundCode,
+          activeCodeRef.current,
+          rid,
+          runIdRef.current,
+          requestId,
+        )) {
+          return;
+        }
+        const next = resolvePanelError(prev, key, boundCode, requestId, msg);
+        if (!next) return;
+        if (isStale()) return;
+        commitPanelStates(next);
 
         if (isStale()) return;
         if (key === "kline")       setKlineErr(msg);
@@ -216,48 +228,47 @@ export function StockData() {
         else if (key === "disclosure") setDiscErr(msg);
       }
     })();
-  }, []);
+  }, [commitPanelStates]);
 
-  // 展开/收起：纯状态机 + 仅 idle 首次展开才 fetch(activeCode，非输入框 code)
-  // fetch 调度在 setState updater 外，避免 StrictMode 重复调度
+  // 展开/收起：在 setState 外用 ref 做纯决策，再 commit；仅 idle 首次展开才 fetch(activeCode)
   const togglePanel = useCallback((key: PanelId) => {
-    const target = activeCode;
-    let shouldFetch = false;
-    setPanelStates((prev) => {
-      const { states, shouldFetch: sf } = togglePanelState(prev, key);
-      if (!sf) return states;
-      // 无已提交 A 股代码时不进入 loading，避免卡死
-      if (!/^\d{6}$/.test(target)) {
-        return { ...states, [key]: { ...prev[key], expanded: true, status: "idle", error: null } };
-      }
-      shouldFetch = true;
-      return states; // pure — no fetch scheduling inside updater
-    });
-    if (shouldFetch && activeCodeRef.current === target) {
+    const target = activeCodeRef.current;
+    const prev = panelStatesRef.current;
+    const { states, shouldFetch } = togglePanelState(prev, key);
+    if (!shouldFetch) {
+      commitPanelStates(states);
+      return;
+    }
+    // 无已提交 A 股代码时不进入 loading，避免卡死
+    if (!/^\d{6}$/.test(target)) {
+      commitPanelStates({
+        ...states,
+        [key]: { ...prev[key], expanded: true, status: "idle", error: null },
+      });
+      return;
+    }
+    commitPanelStates(states);
+    if (activeCodeRef.current === target) {
       fetchPanelData(key, target);
     }
-  }, [fetchPanelData, activeCode]);
+  }, [commitPanelStates, fetchPanelData]);
 
-  // 从 error 状态显式重试
+  // 从 error 状态显式重试（调度在 setState 外）
   const retryPanel = useCallback((key: PanelId) => {
     if (key === "kline")       setKlineErr(null);
     else if (key === "finance") setFinanceErr(null);
     else if (key === "info")   setInfoErr(null);
     else if (key === "disclosure") setDiscErr(null);
 
-    const target = activeCode;
+    const target = activeCodeRef.current;
     if (!/^\d{6}$/.test(target)) return;
 
-    let shouldFetch = false;
-    setPanelStates((prev) => {
-      const { states, shouldFetch: sf } = retryPanelState(prev, key);
-      if (sf) shouldFetch = true;
-      return states; // pure — no fetch scheduling inside updater
-    });
+    const { states, shouldFetch } = retryPanelState(panelStatesRef.current, key);
+    commitPanelStates(states);
     if (shouldFetch && activeCodeRef.current === target) {
       fetchPanelData(key, target);
     }
-  }, [fetchPanelData, activeCode]);
+  }, [commitPanelStates, fetchPanelData]);
 
   const run = async () => {
     const c = code.trim().toUpperCase();
@@ -270,7 +281,7 @@ export function StockData() {
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
     setGStock(null);
     setKline([]); setKlineErr(null); setFinance({}); setFinanceErr(null); setInfo({}); setInfoErr(null); setDisc([]); setDiscErr(null);
-    setPanelStates(resetPanelStates());
+    commitPanelStates(resetPanelStates());
 
     // 6 位纯数字 = A 股；否则（字母 / 港股短代码）走美股 / 港股（global-stock-data）
     if (!/^\d{6}$/.test(c)) {
@@ -356,7 +367,7 @@ export function StockData() {
     : "";
 
   return (
-    <div>
+    <div data-active-code={activeCode || undefined}>
       <PageHeader
         title="个股数据"
         subtitle="行情 · 估值 · 研报 · 新闻 · 资金面"
