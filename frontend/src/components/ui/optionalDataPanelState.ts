@@ -12,6 +12,8 @@ export interface PanelState {
   status: PanelStatus;
   /** 发起请求时绑定的股票代码，用于结果回填校验 */
   requestCode: string | null;
+  /** 单调递增的请求序号（非股票代码），区分同股并发请求 */
+  requestId: number | null;
   error: string | null;
 }
 
@@ -21,6 +23,7 @@ const EMPTY_PANEL: PanelState = {
   expanded: false,
   status: "idle",
   requestCode: null,
+  requestId: null,
   error: null,
 };
 
@@ -86,11 +89,12 @@ export function togglePanelState(
   };
 }
 
-/** 正式发起请求前写入 binding（expanded + loading + requestCode） */
+/** 正式发起请求前写入 binding（expanded + loading + requestCode + requestId） */
 export function startPanelRequest(
   states: PanelStates,
   key: PanelId,
   requestCode: string,
+  requestId: number,
 ): PanelStates {
   return {
     ...states,
@@ -99,20 +103,26 @@ export function startPanelRequest(
       expanded: true,
       status: "loading",
       requestCode,
+      requestId,
       error: null,
     },
   };
 }
 
-/** 成功回填；requestCode 与面板当前绑定不一致则忽略 */
+/** 成功回填；status/requestCode/requestId 与面板当前绑定不一致则忽略 */
 export function resolvePanelSuccess(
   states: PanelStates,
   key: PanelId,
   requestCode: string,
+  requestId: number,
   isEmpty: boolean,
 ): PanelStates | null {
   const current = states[key];
-  if (current.status !== "loading" || current.requestCode !== requestCode) {
+  if (
+    current.status !== "loading" ||
+    current.requestCode !== requestCode ||
+    current.requestId !== requestId
+  ) {
     return null;
   }
   return {
@@ -125,15 +135,20 @@ export function resolvePanelSuccess(
   };
 }
 
-/** 失败回填；code 不匹配则忽略 */
+/** 失败回填；status/requestCode/requestId 不匹配则忽略 */
 export function resolvePanelError(
   states: PanelStates,
   key: PanelId,
   requestCode: string,
+  requestId: number,
   error: string,
 ): PanelStates | null {
   const current = states[key];
-  if (current.status !== "loading" || current.requestCode !== requestCode) {
+  if (
+    current.status !== "loading" ||
+    current.requestCode !== requestCode ||
+    current.requestId !== requestId
+  ) {
     return null;
   }
   return {
@@ -146,7 +161,7 @@ export function resolvePanelError(
   };
 }
 
-/** 仅从 error 显式重试 */
+/** 仅从 error 显式重试（不发明 requestId；由 startPanelRequest 写入） */
 export function retryPanelState(
   states: PanelStates,
   key: PanelId,
@@ -168,7 +183,7 @@ export function retryPanelState(
 
 /**
  * 竞态守卫：generation 一致 + 请求 code 等于当前 activeCode +
- * 面板仍处于 loading 且 requestCode 匹配本次请求。
+ * 面板仍处于 loading 且 requestCode/requestId 匹配本次请求。
  */
 export function canApplyPanelResult(
   state: PanelState,
@@ -176,11 +191,13 @@ export function canApplyPanelResult(
   activeCode: string,
   requestGeneration: number,
   currentGeneration: number,
+  requestId: number,
 ): boolean {
   return (
     requestGeneration === currentGeneration &&
     requestCode === activeCode &&
     state.status === "loading" &&
-    state.requestCode === requestCode
+    state.requestCode === requestCode &&
+    state.requestId === requestId
   );
 }
