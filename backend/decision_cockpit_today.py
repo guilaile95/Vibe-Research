@@ -74,8 +74,8 @@ def _compress_plan_signals(signals: list[dict] | None, code: str) -> str | None:
         if dim not in _DIM_LABEL:
             continue
         assess = str(sig.get("assessment") or "unknown")
-        # 同维多条：优先 strong > weak > medium > unknown；保留最后一条也行，这里取「最强」
-        rank = {"strong": 3, "weak": 2, "medium": 1, "unknown": 0}
+        # 同维多条：优先 strong > medium > weak > unknown；保留最后一条也行，这里取「最强」
+        rank = {"strong": 3, "medium": 2, "weak": 1, "unknown": 0}
         prev = by_dim.get(dim)
         if prev is None or rank.get(assess, 0) >= rank.get(prev, 0):
             by_dim[dim] = assess

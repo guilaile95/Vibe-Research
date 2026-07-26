@@ -1026,10 +1026,11 @@ def test_limited_integration_real_pipeline():
     assert by["600519"]["action"] == "reduce"
     assert by["600519"]["execution_quantity"] == 300
     assert by["600519"]["estimated_amount"] is None
-    # add 10% × 1000 股 → 100 股；价格 10.0 → 1000.00
+    # 账户资金未配置：保留 add 方向，可执行数量/金额必须为 null
     assert by["000001"]["action"] == "add"
-    assert by["000001"]["execution_quantity"] == 100
-    assert by["000001"]["estimated_amount"] == 1000.0
+    assert by["000001"]["execution_quantity"] is None
+    assert by["000001"].get("estimated_amount") is None
+    assert any("未配置账户资金" in x for x in (out.get("data_limitations") or []))
     # 无 t_trade
     assert "t_trade" not in out
     assert all("t_trade" not in h for h in out["holdings"])

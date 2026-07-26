@@ -161,7 +161,7 @@ __POLICY_PROMPT_RULES__
 ### reduce / sell
 - 后端按 floor_to_lot_100(shares × pct / 100) 重算 execution_quantity，并截断到不超过 shares。
 - estimated_amount 必须为 null（本版不计算预计卖出金额）。
-- 必须在 data_limitations 声明：未提供可卖数量，执行前需要人工确认实际可卖股数。
+- 必须在 data_limitations 声明：未提供理论建议卖出数量（非券商可卖数量），执行前请以券商实际可卖数量为准。
 - 不得声称该数量一定可以卖出。
 - 无盘口/流动性数据时，执行计划只写：执行前确认实际可卖数量，并按计划数量执行。
   禁止“减少市场冲击/降低冲击成本/避免大单影响价格/分批成交以保护盘口”等话术。

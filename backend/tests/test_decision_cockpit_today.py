@@ -229,3 +229,51 @@ class TestGetTodayActions:
         # 最大 |change| 优先：11,10,9,...
         assert movers[0]["change_pct"] == 11.0
         assert movers[1]["change_pct"] == 10.0
+
+
+def test_compress_plan_signals_rank_strong_medium_weak_unknown():
+    """同维度：strong > medium > weak > unknown；medium 高于 weak。"""
+    code = "600519"
+    # medium 后出现 weak：应保留 medium
+    mid_over_weak = today._compress_plan_signals(
+        [
+            {"candidate_code": code, "dimension": "trend", "assessment": "medium"},
+            {"candidate_code": code, "dimension": "trend", "assessment": "weak"},
+        ],
+        code,
+    )
+    assert mid_over_weak == "趋势中"
+
+    # weak 后出现 medium：仍保留 medium
+    weak_then_mid = today._compress_plan_signals(
+        [
+            {"candidate_code": code, "dimension": "value", "assessment": "weak"},
+            {"candidate_code": code, "dimension": "value", "assessment": "medium"},
+        ],
+        code,
+    )
+    assert weak_then_mid == "价值中"
+
+    # strong 压过 medium/weak/unknown
+    strong_wins = today._compress_plan_signals(
+        [
+            {"candidate_code": code, "dimension": "short", "assessment": "unknown"},
+            {"candidate_code": code, "dimension": "short", "assessment": "weak"},
+            {"candidate_code": code, "dimension": "short", "assessment": "medium"},
+            {"candidate_code": code, "dimension": "short", "assessment": "strong"},
+        ],
+        code,
+    )
+    assert strong_wins == "短线强"
+
+    # 多维压缩顺序固定 value → trend → short
+    multi = today._compress_plan_signals(
+        [
+            {"candidate_code": code, "dimension": "short", "assessment": "weak"},
+            {"candidate_code": code, "dimension": "value", "assessment": "strong"},
+            {"candidate_code": code, "dimension": "trend", "assessment": "medium"},
+            {"candidate_code": code, "dimension": "value", "assessment": "weak"},
+        ],
+        code,
+    )
+    assert multi == "价值强 / 趋势中 / 短线弱"

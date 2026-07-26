@@ -1,4 +1,10 @@
-"""持仓建议加仓可用现金约束纯函数与服务集成测试。"""
+"""持仓建议加仓可用现金约束纯函数与服务集成测试。
+
+语义：
+- spendable = available_cash * 0.9 为「可用现金安全垫」，非总资产 10%。
+- 未配置账户 + add：qty/amount 置 null。
+- 多笔 add：不按模型顺序静默分配，全部 null。
+"""
 
 from __future__ import annotations
 
@@ -99,13 +105,16 @@ def _add_holding(
     }
 
 
-def test_policy_cash_reserve_constant() -> None:
+def test_policy_cash_reserve_is_available_cash_pad_not_total_assets() -> None:
+    """安全垫是可用现金比例，不是总资产 10%。"""
     assert CASH_RESERVE_PCT == 0.10
     assert POLICY.cash_reserve_pct == 0.10
+    # 注释/常量语义：1 - reserve = 90% 可用现金可花
+    assert abs((1.0 - CASH_RESERVE_PCT) - 0.9) < 1e-9
 
 
 def test_cash_sufficient_unchanged() -> None:
-    """现金充足：数量/金额/action 均不变。"""
+    """单笔 add，现金充足：数量/金额/action 均不变。"""
     # usable = 20000 * 0.9 = 18000 > 1000
     h = _add_holding(qty=100, amount=1000.0, price=10.0)
     res = apply_available_cash_constraints(
@@ -121,7 +130,7 @@ def test_cash_sufficient_unchanged() -> None:
 
 
 def test_cash_insufficient_floor_to_lot() -> None:
-    """现金不足：按现价向下取整到整手，并说明已下调。"""
+    """单笔 add，现金不足：按现价向下取整到整手，并说明已下调。"""
     # usable = 2000 * 0.9 = 1800；原 300 股 * 10 = 3000 > 1800 → max 100 股
     h = _add_holding(qty=300, amount=3000.0, price=10.0)
     res = apply_available_cash_constraints(
@@ -136,7 +145,7 @@ def test_cash_insufficient_floor_to_lot() -> None:
 
 
 def test_cash_too_low_clears_quantity() -> None:
-    """现金过少：不足一手时清空数量与金额，保留 action=add。"""
+    """单笔 add，现金过少：不足一手时清空数量与金额，保留 action=add。"""
     # usable = 500 * 0.9 = 450 < 10*100 → 无法形成 100 股
     h = _add_holding(qty=100, amount=1000.0, price=10.0)
     res = apply_available_cash_constraints(
@@ -150,29 +159,28 @@ def test_cash_too_low_clears_quantity() -> None:
     assert any("可用现金不足" in m for m in out["data_limitations"])
 
 
-def test_unconfigured_account_keeps_qty_with_top_limitation() -> None:
-    """未配置账户：不改数量，顶层一条 limitation。"""
+def test_unconfigured_account_add_nulls_executable_qty() -> None:
+    """未配置账户 + add：action 保留，execution_quantity/estimated_amount 必须 null。"""
     h = _add_holding(qty=100, amount=1000.0, price=10.0)
     res = apply_available_cash_constraints(
         _base_result(holdings=[h], cash=None, configured=False)
     )
     out = res["holdings"][0]
     assert out["action"] == "add"
-    assert out["execution_quantity"] == 100
-    assert out["estimated_amount"] == 1000.0
-    assert any("账户资金未配置" in m for m in res["data_limitations"])
+    assert out["execution_quantity"] is None
+    assert out["estimated_amount"] is None
+    assert out["execution_size_pct_of_holding"] == 10  # 方向性参考保留
+    assert any("未配置账户资金" in m for m in res["data_limitations"])
+    assert any("无法形成可执行加仓数量" in m for m in res["data_limitations"])
     assert res["data_limitations"].count(
         cash_constraint._LIMITATION_UNCONFIGURED
     ) == 1
+    # 不得出现「看起来可执行」的数量
+    assert out["execution_quantity"] is None
 
 
-def test_multiple_adds_consume_cash_in_order() -> None:
-    """多笔 add 按 holdings 顺序消耗 usable。"""
-    # usable = 5000 * 0.9 = 4500
-    # first 2000 ok → remaining 2500
-    # second 3000 > 2500 → floor 2500/10=250 → 200 股, amount 2000
-    # third 1500 <= remaining after second (500) ? wait: remaining after second = 2500-2000=500
-    # third 1500 > 500 → floor 500/10=50 < 100 → clear
+def test_multiple_adds_do_not_silent_allocate_by_order() -> None:
+    """多笔 add：不按 holdings 顺序静默瓜分现金，全部 qty/amount 置 null。"""
     h1 = _add_holding("000001", qty=200, amount=2000.0, price=10.0)
     h2 = _add_holding("000002", qty=300, amount=3000.0, price=10.0)
     h3 = _add_holding("000003", qty=150, amount=1500.0, price=10.0)
@@ -180,16 +188,20 @@ def test_multiple_adds_consume_cash_in_order() -> None:
         _base_result(holdings=[h1, h2, h3], cash=5000.0)
     )
     a, b, c = res["holdings"]
-    assert a["execution_quantity"] == 200
-    assert a["estimated_amount"] == 2000.0
-    assert b["execution_quantity"] == 200
-    assert b["estimated_amount"] == 2000.0
-    assert any("下调" in m for m in b["data_limitations"])
+    assert a["action"] == b["action"] == c["action"] == "add"
+    assert a["execution_quantity"] is None
+    assert a["estimated_amount"] is None
+    assert b["execution_quantity"] is None
+    assert b["estimated_amount"] is None
     assert c["execution_quantity"] is None
     assert c["estimated_amount"] is None
-    assert any("可用现金不足" in m for m in c["data_limitations"])
-    # action 均保持 add
-    assert a["action"] == b["action"] == c["action"] == "add"
+    # 方向性比例仍保留
+    assert a["execution_size_pct_of_holding"] == 10
+    assert b["execution_size_pct_of_holding"] == 10
+    assert c["execution_size_pct_of_holding"] == 10
+    assert cash_constraint._LIMITATION_MULTI_ADD in res["data_limitations"]
+    assert any("多个加仓方向" in m for m in res["data_limitations"])
+    assert any("资金分配优先级" in m for m in res["data_limitations"])
 
 
 def test_non_add_actions_untouched() -> None:
@@ -211,7 +223,7 @@ def test_non_add_actions_untouched() -> None:
 
 
 def test_exact_boundary_uses_full_usable() -> None:
-    """estimated_amount 恰好等于 remaining usable 时不动并扣减。"""
+    """单笔 add：estimated_amount 恰好等于 remaining usable 时不动。"""
     # usable = 10000 * 0.9 = 9000；amount=9000 → 不动
     h = _add_holding(qty=900, amount=9000.0, price=10.0)
     res = apply_available_cash_constraints(
@@ -223,8 +235,22 @@ def test_exact_boundary_uses_full_usable() -> None:
     assert out["data_limitations"] == []
 
 
+def test_reserve_is_of_available_cash_not_total_assets() -> None:
+    """可用额度 = 可用现金 * 0.9，与 total_assets 无关（非总资产 10%）。"""
+    # cash=1000 → usable=900；amount=1000 → 下调
+    # 若错误按 total_assets*0.1=10000 则会错误地通过
+    h = _add_holding(qty=100, amount=1000.0, price=10.0)
+    res = apply_available_cash_constraints(
+        _base_result(holdings=[h], cash=1000.0)
+    )
+    out = res["holdings"][0]
+    # usable 900 / 10 = 90 股 < 一手 → null
+    assert out["execution_quantity"] is None
+    assert out["estimated_amount"] is None
+
+
 # ---------------------------------------------------------------------------
-# 服务集成：现金 5000、加仓 1000 仍不变（account_metrics 回归场景）
+# 服务集成
 # ---------------------------------------------------------------------------
 
 
@@ -336,10 +362,14 @@ def test_service_cash_5000_add_1000_unchanged(tmp_env) -> None:
     assert h["estimated_amount"] == 1000.0
 
 
-def test_service_unconfigured_adds_top_limitation(tmp_env) -> None:
+def test_service_unconfigured_nulls_add_qty(tmp_env) -> None:
+    """服务集成：未配置账户时 add 可执行数量/金额为 null。"""
     _write_pf(tmp_env, [{"code": "000001", "shares": 1500, "cost": 14.0}])
     res = portfolio_advice_service.generate_portfolio_advice({}, model_runner=_mock_runner)
     h = res["holdings"][0]
-    assert h["execution_quantity"] == 100
-    assert h["estimated_amount"] == 1000.0
-    assert any("账户资金未配置" in m for m in res["data_limitations"])
+    assert h["action"] == "add"
+    assert h["execution_quantity"] is None
+    assert h["estimated_amount"] is None
+    assert h["execution_size_pct_of_holding"] == 10
+    assert any("未配置账户资金" in m for m in res["data_limitations"])
+    assert any("无法形成可执行加仓数量" in m for m in res["data_limitations"])

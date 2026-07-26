@@ -38,7 +38,8 @@ CONFIDENCE_CAP: Mapping[str, float] = MappingProxyType(
 )
 PARTIAL_MARKET_ADD_MAX: float = 10.0
 PARTIAL_MARKET_REDUCE_MAX: float = 20.0
-#: 建议加仓时保留的现金安全垫比例（不用于本次建议加仓）
+#: 可用现金安全垫比例：spendable = 可用现金 * (1 - 该值)。
+#: 仅作用于「可用现金」，不是总资产现金仓位目标，也不是「保留总资产 10%」。
 CASH_RESERVE_PCT: float = 0.10
 
 

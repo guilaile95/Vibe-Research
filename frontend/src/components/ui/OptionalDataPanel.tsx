@@ -6,16 +6,19 @@ import {
   LineChart,
   Loader2,
   Megaphone,
+  RefreshCw,
 } from "lucide-react";
 import type { DisclosureItem, KlineBar } from "@/lib/api";
 import { GlassCard } from "./GlassCard";
 import { KlineChart } from "./KlineChart";
+import type { PanelId, PanelState, PanelStatus } from "./optionalDataPanelState";
 
-type OptKey = "kline" | "finance" | "info" | "disclosure";
+export type { PanelId, PanelStatus, PanelState } from "./optionalDataPanelState";
 
 interface Props {
-  onLoad: (key: OptKey) => void;
-  expanded: Record<string, boolean>;
+  onToggle: (key: PanelId) => void;
+  onRetry: (key: PanelId) => void;
+  panelStates: Record<PanelId, PanelState>;
   kline: KlineBar[];
   klineErr: string | null;
   finance: Record<string, string | number | null>;
@@ -34,38 +37,74 @@ interface SubToggleProps {
   icon: React.ReactNode;
   title: string;
   hint: string;
-  loaded: boolean;      // 已有数据或报错即视为已加载
-  expandKey: OptKey;
+  status: PanelStatus;
+  expandKey: PanelId;
   expanded: boolean;
-  onToggle: (key: OptKey) => void;
+  onToggle: (key: PanelId) => void;
+  onRetry: (key: PanelId) => void;
   children: React.ReactNode;
 }
 
-function SubToggle({ icon, title, hint, loaded, expandKey, expanded, onToggle, children }: SubToggleProps) {
+function SubToggle({ icon, title, hint, status, expandKey, expanded, onToggle, onRetry, children }: SubToggleProps) {
+  const statusLabel = () => {
+    switch (status) {
+      case "loading": return "加载中…";
+      case "success": return "已加载";
+      case "empty":   return "暂无数据";
+      case "error":   return "加载失败";
+      default:        return hint;
+    }
+  };
+
+  // 展开时渲染 body：loading / success / empty / error 均展示（loading 显示 spinner）
+  const showBody = expanded && status !== "idle";
+
   return (
     <div className="border-b border-border/40 last:border-0">
-      <button
-        onClick={() => onToggle(expandKey)}
-        className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-muted/20"
-      >
-        {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-        {icon}
-        <span className="font-medium">{title}</span>
-        <span className="ml-auto text-xs text-muted-foreground/60">{loaded ? "已加载" : hint}</span>
-      </button>
-      {loaded && expanded && <div className="px-4 pb-3">{children}</div>}
+      <div className="flex w-full items-center gap-1 px-4 py-2.5">
+        <button
+          type="button"
+          onClick={() => onToggle(expandKey)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm hover:bg-muted/20 rounded-md -ml-1 px-1 py-0.5"
+        >
+          {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
+          {icon}
+          <span className="font-medium">{title}</span>
+          <span className="ml-auto text-xs text-muted-foreground/60">{statusLabel()}</span>
+        </button>
+        {status === "error" && (
+          <button
+            type="button"
+            onClick={() => onRetry(expandKey)}
+            className="shrink-0 rounded p-1 text-warning hover:bg-warning/10"
+            title="重试"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {showBody && (
+        <div className="px-4 pb-3">{children}</div>
+      )}
     </div>
   );
 }
 
 /**
  * 个股数据「扩展数据」折叠面板：包含 K 线 / 季报财务 / 基本面 / 巨潮公告 四个子项，
- * 均为可选依赖（mootdx / akshare）。默认收起，首次展开才发起请求，
- * 避免每次查询都触发 501。
+ * 均为可选依赖（mootdx / akshare）。每个子项有独立状态机：
+ *
+ *   idle → loading → success / empty / error
+ *
+ * - 默认收起，首次展开才发起请求。
+ * - 已加载的面板再次展开不会重复请求。
+ * - 错误状态可显式重试。
+ * - 切换股票时状态由父组件清空。
  */
 export function OptionalDataPanel({
-  onLoad,
-  expanded,
+  onToggle,
+  onRetry,
+  panelStates,
   kline,
   klineErr,
   finance,
@@ -75,20 +114,7 @@ export function OptionalDataPanel({
   disc,
   discErr,
 }: Props) {
-  // 面板是否已加载过（有数据或有错误即视为已加载）
-  const loaded = {
-    kline: kline.length > 0 || !!klineErr,
-    finance: Object.keys(finance).length > 0 || !!financeErr,
-    info: Object.keys(info).length > 0 || !!infoErr,
-    disc: disc.length > 0 || !!discErr,
-  };
-  // 简易加载态：展开但尚未加载完成
-  const loading = {
-    kline: !!expanded.kline && !loaded.kline,
-    finance: !!expanded.finance && !loaded.finance,
-    info: !!expanded.info && !loaded.info,
-    disc: !!expanded.disc && !loaded.disc,
-  };
+  const state = (k: PanelId) => panelStates[k]?.status ?? "idle";
 
   return (
     <GlassCard className="mb-4 divide-y divide-border/40 overflow-hidden !p-0">
@@ -100,33 +126,41 @@ export function OptionalDataPanel({
         icon={<LineChart className="h-4 w-4 text-primary" />}
         title="历史 K 线"
         hint="mootdx"
-        loaded={loaded.kline}
+        status={state("kline")}
         expandKey="kline"
-        expanded={!!expanded.kline}
-        onToggle={onLoad}
+        expanded={!!panelStates.kline?.expanded}
+        onToggle={onToggle}
+        onRetry={onRetry}
       >
-        {loading.kline ? <Loading /> : klineErr ? (
-          <p className="text-xs text-warning">{klineErr}（安装 mootdx 后可用）</p>
-        ) : (
+        <PanelContent
+          status={state("kline")}
+          loadingHint="安装 mootdx 后可用"
+          errorMsg={klineErr}
+          isEmpty={kline.length === 0}
+        >
           <div className="space-y-2">
             <p className="text-[11px] text-muted-foreground/60">最近 {kline.length} 个交易日 OHLC。</p>
             <KlineChart bars={kline} />
           </div>
-        )}
+        </PanelContent>
       </SubToggle>
 
       <SubToggle
         icon={<BarChart3 className="h-4 w-4 text-primary" />}
         title="季报财务快照"
         hint="mootdx"
-        loaded={loaded.finance}
+        status={state("finance")}
         expandKey="finance"
-        expanded={!!expanded.finance}
-        onToggle={onLoad}
+        expanded={!!panelStates.finance?.expanded}
+        onToggle={onToggle}
+        onRetry={onRetry}
       >
-        {loading.finance ? <Loading /> : financeErr ? (
-          <p className="text-xs text-warning">{financeErr}（安装 mootdx 后可用）</p>
-        ) : (
+        <PanelContent
+          status={state("finance")}
+          loadingHint="安装 mootdx 后可用"
+          errorMsg={financeErr}
+          isEmpty={Object.keys(finance).length === 0}
+        >
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             {Object.entries(finance).map(([k, v]) => (
               <div key={k} className="rounded-lg bg-muted/30 p-2.5">
@@ -135,21 +169,25 @@ export function OptionalDataPanel({
               </div>
             ))}
           </div>
-        )}
+        </PanelContent>
       </SubToggle>
 
       <SubToggle
         icon={<Boxes className="h-4 w-4 text-primary" />}
         title="个股基本面"
         hint="akshare"
-        loaded={loaded.info}
+        status={state("info")}
         expandKey="info"
-        expanded={!!expanded.info}
-        onToggle={onLoad}
+        expanded={!!panelStates.info?.expanded}
+        onToggle={onToggle}
+        onRetry={onRetry}
       >
-        {loading.info ? <Loading /> : infoErr ? (
-          <p className="text-xs text-warning">{infoErr}（安装 akshare 后可用）</p>
-        ) : (
+        <PanelContent
+          status={state("info")}
+          loadingHint="安装 akshare 后可用"
+          errorMsg={infoErr}
+          isEmpty={Object.keys(info).length === 0}
+        >
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             {Object.entries(info).map(([k, v]) => (
               <div key={k} className="rounded-lg bg-muted/30 p-2.5">
@@ -158,23 +196,25 @@ export function OptionalDataPanel({
               </div>
             ))}
           </div>
-        )}
+        </PanelContent>
       </SubToggle>
 
       <SubToggle
         icon={<Megaphone className="h-4 w-4 text-primary" />}
         title="巨潮公告"
         hint="akshare"
-        loaded={loaded.disc}
+        status={state("disclosure")}
         expandKey="disclosure"
-        expanded={!!expanded.disc}
-        onToggle={onLoad}
+        expanded={!!panelStates.disclosure?.expanded}
+        onToggle={onToggle}
+        onRetry={onRetry}
       >
-        {loading.disc ? <Loading /> : discErr ? (
-          <p className="text-xs text-warning">{discErr}（安装 akshare 后可用）</p>
-        ) : disc.length === 0 ? (
-          <p className="text-xs text-muted-foreground/60">暂无公告记录。</p>
-        ) : (
+        <PanelContent
+          status={state("disclosure")}
+          loadingHint="安装 akshare 后可用"
+          errorMsg={discErr}
+          isEmpty={disc.length === 0}
+        >
           <div className="space-y-2">
             <p className="text-[11px] text-muted-foreground/60">环境不稳时可能为空。</p>
             {disc.slice(0, 10).map((d, i) => (
@@ -188,10 +228,39 @@ export function OptionalDataPanel({
               </div>
             ))}
           </div>
-        )}
+        </PanelContent>
       </SubToggle>
     </GlassCard>
   );
+}
+
+// ---------------------------------------------------------------------------
+// 面板内容渲染：处理 loading / error / empty / success
+// ---------------------------------------------------------------------------
+
+function PanelContent({
+  status,
+  loadingHint,
+  errorMsg,
+  isEmpty,
+  children,
+}: {
+  status: PanelStatus;
+  loadingHint: string;
+  errorMsg: string | null;
+  isEmpty: boolean;
+  children: React.ReactNode;
+}) {
+  if (status === "loading") {
+    return <Loading />;
+  }
+  if (status === "error") {
+    return <p className="text-xs text-warning">{errorMsg ?? "加载失败"}（{loadingHint}）</p>;
+  }
+  if (status === "empty" || isEmpty) {
+    return <p className="text-xs text-muted-foreground/60">暂无数据。</p>;
+  }
+  return <>{children}</>;
 }
 
 function Loading() {
@@ -201,4 +270,3 @@ function Loading() {
     </div>
   );
 }
-

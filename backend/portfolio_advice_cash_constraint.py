@@ -1,8 +1,15 @@
 """持仓建议加仓可用现金约束（确定性后端计算，不改模型 prompt、不写文件）。
 
-在 attach_account_funding_metrics 之后，按账户可用现金与现金安全垫，
-约束 action=add 的 execution_quantity / estimated_amount。
-不修改 action 字段。
+在 attach_account_funding_metrics 之后，按账户「可用现金安全垫」约束
+action=add 的 execution_quantity / estimated_amount。
+
+语义（安全约定，非新策略）：
+- spendable = available_cash * (1 - cash_reserve_pct)，默认 90% 可用现金可作建议加仓。
+- cash_reserve_pct 是「可用现金安全垫」，**不是**「总资产现金仓位目标」，
+  也**不得**表述为保留总资产 10%。
+- 不修改 action / execution_size_pct_of_holding。
+- 多笔 action=add：不按模型输出顺序静默瓜分现金；全部可执行数量置 null。
+- 账户未配置：加仓方向保留，可执行数量/金额置 null。
 """
 
 from __future__ import annotations
@@ -13,11 +20,15 @@ from portfolio_advice_contracts import LOT_SIZE
 from portfolio_advice_execution import compute_estimated_amount, floor_to_lot
 from portfolio_advice_policy import CASH_RESERVE_PCT, POLICY
 
-_LIMITATION_UNCONFIGURED = "账户资金未配置，加仓金额未校验可用现金"
+# 未配置账户：无法形成可执行加仓数量（方向性 action 仍保留）
+_LIMITATION_UNCONFIGURED = "未配置账户资金，无法形成可执行加仓数量"
 _LIMITATION_INSUFFICIENT = (
-    "可用现金不足（已预留现金安全垫），本次加仓无法形成可执行数量"
+    "可用现金不足（已预留可用现金安全垫），本次加仓无法形成可执行数量"
 )
-_LIMITATION_ADJUSTED = "已按现金安全垫与可用现金下调加仓数量与金额"
+_LIMITATION_ADJUSTED = "已按可用现金安全垫与可用现金下调加仓数量与金额"
+_LIMITATION_MULTI_ADD = (
+    "存在多个加仓方向，尚未建立资金分配优先级，未生成可执行数量"
+)
 
 
 def _is_valid_positive_number(value: Any) -> bool:
@@ -59,7 +70,10 @@ def _resolve_add_amount(holding: dict[str, Any]) -> float | None:
 def _funding_usable_cash(result: dict) -> tuple[bool, float | None]:
     """返回 (funding_valid, usable_cash)。
 
-    funding 无效时 usable 为 None；有效时 usable = max(0, cash * (1 - reserve)).
+    funding 无效时 usable 为 None。
+    有效时 usable = max(0, available_cash * (1 - reserve))，
+    即「可用现金」扣除「可用现金安全垫」后的可建议花费额度
+    （与总资产无关，不是总资产 10%）。
     """
     funding = result.get("account_funding")
     if not isinstance(funding, dict):
@@ -79,8 +93,17 @@ def _funding_usable_cash(result: dict) -> tuple[bool, float | None]:
     reserve = float(getattr(POLICY, "cash_reserve_pct", CASH_RESERVE_PCT))
     if reserve < 0 or reserve >= 1:
         reserve = float(CASH_RESERVE_PCT)
+    # 可用现金安全垫：仅作用于 available_cash，非总资产比例
     usable = max(0.0, float(cash) * (1.0 - reserve))
     return True, usable
+
+
+def _null_add_executables(holding: dict[str, Any]) -> dict[str, Any]:
+    """清空加仓可执行数量/金额，保留 action 与方向性比例。"""
+    h = dict(holding)
+    h["execution_quantity"] = None
+    h["estimated_amount"] = None
+    return h
 
 
 def apply_available_cash_constraints(result: dict) -> dict:
@@ -95,6 +118,14 @@ def apply_available_cash_constraints(result: dict) -> dict:
     -------
     dict
         约束后的结果。action / execution_size_pct_of_holding 不变。
+
+    Rules
+    -----
+    - 账户未配置且存在 add：全部 add 的 execution_quantity/estimated_amount 置 null，
+      顶层 limitation 说明无法形成可执行加仓数量。
+    - 同一建议中存在多笔 add：不按顺序静默分配现金，全部置 null，顶层 limitation。
+    - 单笔 add：spendable = available_cash * 0.9（可用现金安全垫），可下调或清空。
+    - 非 add 动作不受影响。
     """
     if not isinstance(result, dict):
         return result
@@ -106,17 +137,48 @@ def apply_available_cash_constraints(result: dict) -> dict:
     top_limitations = list(result.get("data_limitations") or [])
     funding_valid, remaining = _funding_usable_cash(result)
 
-    has_add = any(
-        isinstance(h, dict) and h.get("action") == "add" for h in holdings
-    )
+    add_indices = [
+        i
+        for i, h in enumerate(holdings)
+        if isinstance(h, dict) and h.get("action") == "add"
+    ]
+    has_add = len(add_indices) > 0
+    multi_add = len(add_indices) > 1
+
+    # 1) 账户未配置：方向保留，可执行数量/金额清空
     if not funding_valid:
         if has_add:
+            new_holdings: list[Any] = []
+            for item in holdings:
+                if isinstance(item, dict) and item.get("action") == "add":
+                    new_holdings.append(_null_add_executables(item))
+                elif isinstance(item, dict):
+                    new_holdings.append(dict(item))
+                else:
+                    new_holdings.append(item)
+            result["holdings"] = new_holdings
             _append_limitation(top_limitations, _LIMITATION_UNCONFIGURED)
             result["data_limitations"] = top_limitations
         return result
 
+    # 2) 多笔加仓：禁止按模型顺序静默瓜分现金
+    if multi_add:
+        new_holdings = []
+        for item in holdings:
+            if isinstance(item, dict) and item.get("action") == "add":
+                new_holdings.append(_null_add_executables(item))
+            elif isinstance(item, dict):
+                new_holdings.append(dict(item))
+            else:
+                new_holdings.append(item)
+        result["holdings"] = new_holdings
+        _append_limitation(top_limitations, _LIMITATION_MULTI_ADD)
+        result["data_limitations"] = top_limitations
+        return result
+
+    # 3) 单笔（或零笔）add：按可用现金安全垫约束
     assert remaining is not None
-    new_holdings: list[Any] = []
+    new_holdings = []
     for item in holdings:
         if not isinstance(item, dict):
             new_holdings.append(item)
