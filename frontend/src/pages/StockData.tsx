@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
-import { KlineChart } from "@/components/ui/KlineChart";
+import { OptionalDataPanel } from "@/components/ui/OptionalDataPanel";
 import {
   api, ApiError, type Valuation, type Report, type NewsItem, type ValPercentile, type ValMetric,
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
@@ -109,7 +109,44 @@ export function StockData() {
   const [infoErr, setInfoErr] = useState<string | null>(null);
   const [disc, setDisc] = useState<DisclosureItem[]>([]);
   const [discErr, setDiscErr] = useState<string | null>(null);
+  // 可选依赖面板按需展开：记录已展开过的 key，首次展开时才发起请求
+  const [optExpanded, setOptExpanded] = useState<Record<string, boolean>>({});
   const runIdRef = useRef(0);
+  const optLoading = useRef<Record<string, boolean>>({});
+
+  // 按需加载可选依赖面板：首次展开触发，已加载过直接展示
+  const loadOptional = async (key: "kline" | "finance" | "info" | "disclosure") => {
+    setOptExpanded((prev) => ({ ...prev, [key]: true }));
+    if (optLoading.current[key]) return;
+    const c = code.trim();
+    if (!/^\d{6}$/.test(c)) return;
+    optLoading.current[key] = true;
+    const rid = runIdRef.current;
+    try {
+      if (key === "kline") {
+        const v = await api.kline(c);
+        if (rid === runIdRef.current) setKline(v);
+      } else if (key === "finance") {
+        const v = await api.finance(c);
+        if (rid === runIdRef.current) setFinance(v);
+      } else if (key === "info") {
+        const v = await api.info(c);
+        if (rid === runIdRef.current) setInfo(v);
+      } else if (key === "disclosure") {
+        const v = await api.disclosure(c);
+        if (rid === runIdRef.current) setDisc(v);
+      }
+    } catch (e) {
+      if (rid !== runIdRef.current) return;
+      const msg = e instanceof ApiError ? e.message : "加载失败";
+      if (key === "kline") setKlineErr(msg);
+      if (key === "finance") setFinanceErr(msg);
+      if (key === "info") setInfoErr(msg);
+      if (key === "disclosure") setDiscErr(msg);
+    } finally {
+      optLoading.current[key] = false;
+    }
+  };
 
   const run = async () => {
     const c = code.trim().toUpperCase();
@@ -119,6 +156,7 @@ export function StockData() {
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
     setGStock(null);
     setKline([]); setKlineErr(null); setFinance({}); setFinanceErr(null); setInfo({}); setInfoErr(null); setDisc([]); setDiscErr(null);
+    setOptExpanded({});
 
     // 6 位纯数字 = A 股；否则（字母 / 港股短代码）走美股 / 港股（global-stock-data）
     if (!/^\d{6}$/.test(c)) {
@@ -145,23 +183,7 @@ export function StockData() {
     api.blocks(c).then(ok(setBlocks)).catch(() => {});
     api.hotConcepts(c).then(ok(setHotCon)).catch(() => {});
     api.investorQa(c).then(ok(setQa)).catch(() => {});
-    // K 线 / 季报财务 / 基本面 / 巨潮公告：均为可选依赖，独立降级（501=依赖缺失，不阻塞其它面板）
-    api
-      .kline(c)
-      .then(ok(setKline))
-      .catch((e) => { if (rid === runIdRef.current) setKlineErr(e instanceof ApiError ? e.message : "K 线加载失败"); });
-    api
-      .finance(c)
-      .then(ok((v: Record<string, string | number | null>) => setFinance(v)))
-      .catch((e) => { if (rid === runIdRef.current) setFinanceErr(e instanceof ApiError ? e.message : "季报财务加载失败"); });
-    api
-      .info(c)
-      .then(ok((v: Record<string, string | number>) => setInfo(v)))
-      .catch((e) => { if (rid === runIdRef.current) setInfoErr(e instanceof ApiError ? e.message : "基本面加载失败"); });
-    api
-      .disclosure(c)
-      .then(ok(setDisc))
-      .catch((e) => { if (rid === runIdRef.current) setDiscErr(e instanceof ApiError ? e.message : "巨潮公告加载失败"); });
+    // K 线 / 季报财务 / 基本面 / 巨潮公告：均为可选依赖，改为按需展开加载（避免每次查询都发 501）
     try {
       // 行情+估值+研报+历史分位+财务+公告（新闻单独降级）
       const [v, r, p, f, a] = await Promise.all([
@@ -570,90 +592,19 @@ export function StockData() {
             </GlassCard>
           )}
 
-          {/* 历史 K 线（mootdx；依赖缺失时降级提示） */}
-          {(kline.length > 0 || klineErr) && (
-            <GlassCard className="mb-4">
-              <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold">
-                <LineChart className="h-4 w-4 text-primary" /> 历史 K 线 · 日均线（{kline.length}）
-              </h3>
-              <p className="mb-3 text-[11px] text-muted-foreground/60">mootdx 最近 {kline.length} 个交易日 OHLC；需安装 mootdx。</p>
-              {klineErr ? (
-                <p className="text-xs text-warning">{klineErr}（安装 mootdx 后可用）</p>
-              ) : (
-                <KlineChart bars={kline} />
-              )}
-            </GlassCard>
-          )}
-
-          {/* 季报财务快照（mootdx，37 字段） */}
-          {Object.keys(finance).length > 0 && (
-            <GlassCard className="mb-4">
-              <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold">
-                <BarChart3 className="h-4 w-4 text-primary" /> 季报财务快照（mootdx）
-              </h3>
-              {financeErr ? (
-                <p className="text-xs text-warning">{financeErr}（安装 mootdx 后可用）</p>
-              ) : (
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                  {Object.entries(finance).map(([k, v]) => (
-                    <div key={k} className="rounded-lg bg-muted/30 p-2.5">
-                      <p className="text-[11px] text-muted-foreground">{k}</p>
-                      <p className="mt-0.5 font-mono text-sm font-bold">{v == null ? "—" : String(v)}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </GlassCard>
-          )}
-
-          {/* 个股基本面（akshare） */}
-          {Object.keys(info).length > 0 && (
-            <GlassCard className="mb-4">
-              <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold">
-                <Boxes className="h-4 w-4 text-primary" /> 个股基本面（akshare）
-              </h3>
-              {infoErr ? (
-                <p className="text-xs text-warning">{infoErr}（安装 akshare 后可用）</p>
-              ) : (
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                  {Object.entries(info).map(([k, v]) => (
-                    <div key={k} className="rounded-lg bg-muted/30 p-2.5">
-                      <p className="text-[11px] text-muted-foreground">{k}</p>
-                      <p className="mt-0.5 font-mono text-sm font-bold">{String(v)}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </GlassCard>
-          )}
-
-          {/* 巨潮公告（akshare，备用源） */}
-          {(disc.length > 0 || discErr) && (
-            <GlassCard className="mb-4">
-              <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold">
-                <Megaphone className="h-4 w-4 text-primary" /> 巨潮公告（备用源）
-              </h3>
-              <p className="mb-3 text-[11px] text-muted-foreground/60">akshare 巨潮公告全文，环境不稳时可能为空；需安装 akshare。</p>
-              {discErr ? (
-                <p className="text-xs text-warning">{discErr}（安装 akshare 后可用）</p>
-              ) : disc.length === 0 ? (
-                <p className="text-xs text-muted-foreground/60">暂无公告记录。</p>
-              ) : (
-                <div className="space-y-2">
-                  {disc.slice(0, 10).map((d, i) => (
-                    <div key={i} className="flex items-start gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
-                      <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">{String(d.date ?? d.NoticeDate ?? "").slice(0, 10)}</span>
-                      {d.url ? (
-                        <a href={String(d.url)} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{String(d.title ?? d.title)}</a>
-                      ) : (
-                        <span className="flex-1 truncate">{String(d.title ?? "")}</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </GlassCard>
-          )}
+          {/* 扩展数据（可选依赖）：按需展开，避免每次查询都触发 mootdx/akshare 请求 */}
+          <OptionalDataPanel
+            onLoad={loadOptional}
+            expanded={optExpanded}
+            kline={kline}
+            klineErr={klineErr}
+            finance={finance}
+            financeErr={financeErr}
+            info={info}
+            infoErr={infoErr}
+            disc={disc}
+            discErr={discErr}
+          />
         </>
       )}
 

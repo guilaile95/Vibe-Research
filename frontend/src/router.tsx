@@ -1,6 +1,7 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { createBrowserRouter, Navigate, useParams } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
+import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { hasSectorResearchWorkspace } from "@/data/sectorResearch";
 
 /** 页面级懒加载：保持 named export 映射为 default 供 React.lazy */
@@ -54,7 +55,11 @@ function PageFallback() {
 }
 
 function withSuspense(node: ReactNode) {
-  return <Suspense fallback={<PageFallback />}>{node}</Suspense>;
+  return (
+    <ErrorBoundary>
+      <Suspense fallback={<PageFallback />}>{node}</Suspense>
+    </ErrorBoundary>
+  );
 }
 
 /**
