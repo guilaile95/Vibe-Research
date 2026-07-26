@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   Search, FileText, Newspaper, Loader2, AlertCircle, LineChart, BarChart3, Megaphone,
   Wallet, Trophy, CalendarClock, Boxes, MessageSquare,
@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
-import { OptionalDataPanel } from "@/components/ui/OptionalDataPanel";
+import { OptionalDataPanel, type PanelStatus } from "@/components/ui/OptionalDataPanel";
 import {
   api, ApiError, type Valuation, type Report, type NewsItem, type ValPercentile, type ValMetric,
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
@@ -15,6 +15,28 @@ import {
   type GlobalStock, type KlineBar, type DisclosureItem,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+// ---------------------------------------------------------------------------
+// 可选面板状态机类型
+// ---------------------------------------------------------------------------
+type PanelId = "kline" | "finance" | "info" | "disclosure";
+
+interface PanelState {
+  expanded: boolean;
+  status: PanelStatus;
+  /** 发起请求时的股票代码，用于判断数据是否匹配当前股票 */
+  requestCode: string | null;
+  error: string | null;
+}
+
+type PanelStates = Record<PanelId, PanelState>;
+
+const INITIAL_PANEL_STATES: PanelStates = {
+  kline:     { expanded: false, status: "idle", requestCode: null, error: null },
+  finance:   { expanded: false, status: "idle", requestCode: null, error: null },
+  info:      { expanded: false, status: "idle", requestCode: null, error: null },
+  disclosure:{ expanded: false, status: "idle", requestCode: null, error: null },
+};
 
 // 金额格式化（后端资金单位：元 / 万元）
 const yi = (v: number) => `${(v / 1e8).toFixed(2)} 亿`;
@@ -100,7 +122,8 @@ export function StockData() {
   const [hotCon, setHotCon] = useState<HotConcept[]>([]);
   const [qa, setQa] = useState<QaRow[]>([]);
   const [gstock, setGStock] = useState<GlobalStock | null>(null);  // 美股 / 港股
-  // 历史 K 线 / 季报财务 / 基本面 / 巨潮公告（均为可选依赖，缺失时 501 降级）
+  // 可选依赖面板：历史 K 线 / 季报财务 / 基本面 / 巨潮公告（缺失时 501 降级）
+  // 每个面板有独立状态机：idle → loading → success/empty/error
   const [kline, setKline] = useState<KlineBar[]>([]);
   const [klineErr, setKlineErr] = useState<string | null>(null);
   const [finance, setFinance] = useState<Record<string, string | number | null>>({});
@@ -109,44 +132,92 @@ export function StockData() {
   const [infoErr, setInfoErr] = useState<string | null>(null);
   const [disc, setDisc] = useState<DisclosureItem[]>([]);
   const [discErr, setDiscErr] = useState<string | null>(null);
-  // 可选依赖面板按需展开：记录已展开过的 key，首次展开时才发起请求
-  const [optExpanded, setOptExpanded] = useState<Record<string, boolean>>({});
+  const [panelStates, setPanelStates] = useState<PanelStates>(INITIAL_PANEL_STATES);
   const runIdRef = useRef(0);
-  const optLoading = useRef<Record<string, boolean>>({});
 
-  // 按需加载可选依赖面板：首次展开触发，已加载过直接展示
-  const loadOptional = async (key: "kline" | "finance" | "info" | "disclosure") => {
-    setOptExpanded((prev) => ({ ...prev, [key]: true }));
-    if (optLoading.current[key]) return;
+  // 获取指定面板的数据（由 togglePanel / retryPanel 调用，不做并发检查——由 status 守卫）
+  const fetchPanelData = useCallback((key: PanelId) => {
     const c = code.trim();
     if (!/^\d{6}$/.test(c)) return;
-    optLoading.current[key] = true;
     const rid = runIdRef.current;
-    try {
-      if (key === "kline") {
-        const v = await api.kline(c);
-        if (rid === runIdRef.current) setKline(v);
-      } else if (key === "finance") {
-        const v = await api.finance(c);
-        if (rid === runIdRef.current) setFinance(v);
-      } else if (key === "info") {
-        const v = await api.info(c);
-        if (rid === runIdRef.current) setInfo(v);
-      } else if (key === "disclosure") {
-        const v = await api.disclosure(c);
-        if (rid === runIdRef.current) setDisc(v);
+
+    (async () => {
+      try {
+        let result: unknown;
+        switch (key) {
+          case "kline":       result = await api.kline(c); break;
+          case "finance":     result = await api.finance(c); break;
+          case "info":        result = await api.info(c); break;
+          case "disclosure":  result = await api.disclosure(c); break;
+        }
+        if (rid !== runIdRef.current) return; // 竞态：旧请求不回填
+
+        // 判断空结果
+        let isEmpty = false;
+        if (Array.isArray(result)) {
+          isEmpty = result.length === 0;
+        } else if (result && typeof result === "object") {
+          isEmpty = Object.keys(result).length === 0;
+        }
+
+        // 更新具体数据
+        if (key === "kline")       setKline(result as KlineBar[]);
+        else if (key === "finance") setFinance(result as Record<string, string | number | null>);
+        else if (key === "info")   setInfo(result as Record<string, string | number>);
+        else if (key === "disclosure") setDisc(result as DisclosureItem[]);
+
+        setPanelStates((prev) => ({
+          ...prev,
+          [key]: { ...prev[key], status: isEmpty ? "empty" : "success", requestCode: c, error: null },
+        }));
+      } catch (e) {
+        if (rid !== runIdRef.current) return;
+        const msg = e instanceof ApiError ? e.message : "加载失败";
+        if (key === "kline")       setKlineErr(msg);
+        else if (key === "finance") setFinanceErr(msg);
+        else if (key === "info")   setInfoErr(msg);
+        else if (key === "disclosure") setDiscErr(msg);
+
+        setPanelStates((prev) => ({
+          ...prev,
+          [key]: { ...prev[key], status: "error", error: msg },
+        }));
       }
-    } catch (e) {
-      if (rid !== runIdRef.current) return;
-      const msg = e instanceof ApiError ? e.message : "加载失败";
-      if (key === "kline") setKlineErr(msg);
-      if (key === "finance") setFinanceErr(msg);
-      if (key === "info") setInfoErr(msg);
-      if (key === "disclosure") setDiscErr(msg);
-    } finally {
-      optLoading.current[key] = false;
+    })();
+  }, [code]);
+
+  // 展开/收起切换：首次展开触发请求，已加载直接展示
+  const togglePanel = useCallback((key: PanelId) => {
+    const current = panelStates[key];
+    if (current.expanded) {
+      // 收起
+      setPanelStates((prev) => ({ ...prev, [key]: { ...prev[key], expanded: false } }));
+      return;
     }
-  };
+    // 展开——根据状态决定是否请求
+    if (current.status === "idle") {
+      setPanelStates((prev) => ({ ...prev, [key]: { ...prev[key], expanded: true, status: "loading" } }));
+      fetchPanelData(key);
+    } else {
+      // success / empty / error：直接展示缓存，不再请求
+      setPanelStates((prev) => ({ ...prev, [key]: { ...prev[key], expanded: true } }));
+    }
+  }, [panelStates, fetchPanelData]);
+
+  // 从 error 状态显式重试
+  const retryPanel = useCallback((key: PanelId) => {
+    // 清空旧错误
+    if (key === "kline")       setKlineErr(null);
+    else if (key === "finance") setFinanceErr(null);
+    else if (key === "info")   setInfoErr(null);
+    else if (key === "disclosure") setDiscErr(null);
+
+    setPanelStates((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], status: "loading", error: null },
+    }));
+    fetchPanelData(key);
+  }, [fetchPanelData]);
 
   const run = async () => {
     const c = code.trim().toUpperCase();
@@ -156,7 +227,7 @@ export function StockData() {
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
     setGStock(null);
     setKline([]); setKlineErr(null); setFinance({}); setFinanceErr(null); setInfo({}); setInfoErr(null); setDisc([]); setDiscErr(null);
-    setOptExpanded({});
+    setPanelStates(INITIAL_PANEL_STATES);
 
     // 6 位纯数字 = A 股；否则（字母 / 港股短代码）走美股 / 港股（global-stock-data）
     if (!/^\d{6}$/.test(c)) {
@@ -594,8 +665,9 @@ export function StockData() {
 
           {/* 扩展数据（可选依赖）：按需展开，避免每次查询都触发 mootdx/akshare 请求 */}
           <OptionalDataPanel
-            onLoad={loadOptional}
-            expanded={optExpanded}
+            panelStates={panelStates}
+            onToggle={togglePanel}
+            onRetry={retryPanel}
             kline={kline}
             klineErr={klineErr}
             finance={finance}

@@ -34,7 +34,7 @@ jobs:
         run: python -m pytest -m "not live"
 
   frontend:
-    name: Frontend build
+    name: Frontend build & test
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -43,7 +43,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -54,6 +54,10 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+
+      - name: Run frontend unit tests
+        working-directory: frontend
+        run: npm test
 
   whitespace:
     name: Whitespace check

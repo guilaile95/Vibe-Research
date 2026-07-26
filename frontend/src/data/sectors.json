@@ -91,7 +91,7 @@
       "label": "创新药",
       "tagline": "靶点、临床、CXO 与出海",
       "hot": true,
-      "verified": true,
+      "verified": false,
       "researchWorkspace": true,
       "nodes": ["总览", "靶点与前沿技术", "临床管线", "CXO 一体化服务", "出海与授权", "产业格局"]
     },
@@ -100,7 +100,7 @@
       "label": "电网与特高压",
       "tagline": "输配电设备与新型电力系统",
       "hot": false,
-      "verified": true,
+      "verified": false,
       "researchWorkspace": true,
       "nodes": ["总览", "特高压", "输配电", "新能源接入", "智能化", "产业格局"]
     },
@@ -109,7 +109,7 @@
       "label": "军工",
       "tagline": "航空、航天、船舶与信息化",
       "hot": false,
-      "verified": true,
+      "verified": false,
       "researchWorkspace": true,
       "nodes": ["总览", "航空", "航天", "船舶", "信息化", "产业格局"]
     },
@@ -118,7 +118,7 @@
       "label": "可控核聚变",
       "tagline": "磁约束、超导与第一壁材料",
       "hot": true,
-      "verified": true,
+      "verified": false,
       "researchWorkspace": true,
       "nodes": ["总览", "磁约束", "超导材料", "第一壁", "等离子体", "产业格局"]
     },
@@ -127,7 +127,7 @@
       "label": "商业航天",
       "tagline": "火箭、卫星制造与卫星互联网",
       "hot": true,
-      "verified": true,
+      "verified": false,
       "researchWorkspace": true,
       "nodes": ["总览", "火箭", "卫星制造", "卫星互联网", "测控", "产业格局"]
     },
@@ -136,7 +136,7 @@
       "label": "生物医药",
       "tagline": "创新药、AI 制药与生物技术",
       "hot": true,
-      "verified": true,
+      "verified": false,
       "researchWorkspace": true,
       "nodes": ["总览", "AI制药", "基因治疗", "CXO", "医疗器械", "产业格局"]
     },
@@ -145,7 +145,7 @@
       "label": "资源卡口",
       "tagline": "稀土、锗、铟等被卡的关键资源",
       "hot": false,
-      "verified": true,
+      "verified": false,
       "researchWorkspace": true,
       "nodes": ["总览", "稀土", "锗铟镓", "锂钴镍", "钨钼", "产业格局"]
     },
@@ -154,7 +154,7 @@
       "label": "AI 应用",
       "tagline": "大模型落地的应用与 Agent",
       "hot": true,
-      "verified": true,
+      "verified": false,
       "researchWorkspace": true,
       "nodes": ["总览", "办公Agent", "编程Agent", "行业应用", "多模态", "产业格局"]
     },
@@ -163,7 +163,7 @@
       "label": "AI 硬件",
       "tagline": "端侧、AI 眼镜与消费终端",
       "hot": true,
-      "verified": true,
+      "verified": false,
       "researchWorkspace": true,
       "nodes": ["总览", "AI眼镜", "端侧芯片", "可穿戴", "智能家居", "产业格局"]
     },
@@ -172,7 +172,7 @@
       "label": "储能",
       "tagline": "电化学储能与电网侧调峰",
       "hot": false,
-      "verified": true,
+      "verified": false,
       "researchWorkspace": true,
       "nodes": ["总览", "电化学储能", "系统集成", "变流器", "电网侧", "产业格局"]
     },
@@ -181,7 +181,7 @@
       "label": "数据要素",
       "tagline": "数据确权、交易与流通基建",
       "hot": false,
-      "verified": true,
+      "verified": false,
       "researchWorkspace": true,
       "nodes": ["总览", "确权", "交易平台", "公共数据", "数据安全", "产业格局"]
     }
