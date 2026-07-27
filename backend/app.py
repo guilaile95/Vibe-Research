@@ -114,7 +114,7 @@ def _safe_daily_review_ai_done_result(record) -> dict[str, str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期：启动时开启持仓后台刷新，关闭时停止。"""
+    """应用启动时确保后台刷新调度器已启动（幂等）。"""
     pf.start_scheduler(1800)
     yield
 
@@ -1309,20 +1309,6 @@ class TTLCache:
             if key in self._data:
                 self._data.move_to_end(key)
             self._data[key] = (time.time(), val)
-            while len(self._data) > self._max:
-                self._data.popitem(last=False)
-
-    def get_raw(self, key):
-        """读取原始 (ts, val) 元组，不做 TTL 检查（用于既有 _cached 辅助函数）。"""
-        with self._lock:
-            return self._data.get(key)
-
-    def set_raw(self, key, ts, val):
-        """写入原始 (ts, val) 元组（用于既有 _cached 辅助函数）。"""
-        with self._lock:
-            if key in self._data:
-                self._data.move_to_end(key)
-            self._data[key] = (ts, val)
             while len(self._data) > self._max:
                 self._data.popitem(last=False)
 

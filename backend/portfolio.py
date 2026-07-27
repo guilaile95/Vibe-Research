@@ -329,8 +329,18 @@ def _refresh_snapshot() -> None:
         _save(d)
 
 
+_scheduler_started = False
+_scheduler_lock = threading.Lock()
+
+
 def start_scheduler(interval: int = 1800) -> None:
-    """每半小时后台刷新一次持仓数据（daemon 线程）。"""
+    """启动持仓后台刷新调度器（daemon 线程，幂等：重复调用不会创建多个线程）。"""
+    global _scheduler_started
+    with _scheduler_lock:
+        if _scheduler_started:
+            return
+        _scheduler_started = True
+
     def loop():
         while True:
             time.sleep(interval)
@@ -338,4 +348,4 @@ def start_scheduler(interval: int = 1800) -> None:
                 _refresh_snapshot()
             except Exception:
                 pass
-    threading.Thread(target=loop, daemon=True).start()
+    threading.Thread(target=loop, daemon=True, name="portfolio-refresh").start()
