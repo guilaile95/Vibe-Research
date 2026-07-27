@@ -117,11 +117,11 @@ function startBackend(dbPath, port) {
       VIBE_RESEARCH_API_PORT: String(port),
     };
 
-    const proc = spawn("uvicorn", ["app:app", `--port=${port}`, "--host=127.0.0.1"], {
+    const proc = spawn("py", ["-3", "-m", "uvicorn", "app:app", `--port=${port}`, "--host=127.0.0.1"], {
       cwd: backendDir,
       env,
       stdio: ["ignore", "pipe", "pipe"],
-      shell: true,
+      shell: false,
     });
 
     let started = false;
@@ -134,6 +134,7 @@ function startBackend(dbPath, port) {
 
     proc.stdout.on("data", (data) => {
       const msg = data.toString();
+      console.log(`Backend stdout: ${msg.trim()}`);
       if (msg.includes("Uvicorn running") || msg.includes("Application startup complete")) {
         if (!started) {
           started = true;
@@ -144,7 +145,15 @@ function startBackend(dbPath, port) {
     });
 
     proc.stderr.on("data", (data) => {
-      console.error(`Backend stderr: ${data}`);
+      const msg = data.toString();
+      console.error(`Backend stderr: ${msg.trim()}`);
+      if (msg.includes("Uvicorn running") || msg.includes("Application startup complete")) {
+        if (!started) {
+          started = true;
+          clearTimeout(timeout);
+          resolve(proc);
+        }
+      }
     });
 
     proc.on("error", (err) => {
@@ -168,7 +177,7 @@ async function main() {
 
   const tempDir = mkdtempSync(join(tmpdir(), "vr-thesis-e2e-"));
   const dbPath = join(tempDir, "evidence_thesis.db");
-  const backendPort = 8901;
+  const backendPort = await getFreePort();
   const frontendPort = await getFreePort();
   const baseUrl = `http://127.0.0.1:${frontendPort}`;
 
@@ -193,8 +202,12 @@ async function main() {
     await waitHttp(baseUrl);
     console.log("[E2E] Frontend server ready");
 
-    // Launch Playwright
-    browser = await chromium.launch({ headless: true });
+    // Launch Playwright (use chromium-1228 which is installed)
+    const chromiumPath = "C:\\Users\\DINOL\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe";
+    browser = await chromium.launch({ 
+      headless: true,
+      executablePath: chromiumPath
+    });
     const context = await browser.newContext({ baseURL: baseUrl });
     const page = await context.newPage();
 
@@ -228,16 +241,21 @@ async function main() {
 
     // ==== Test Flow ====
     
-    // 1. Create evidence with source_date
+    // 1. Navigate to evidence page directly
     console.log("[E2E] 1. Create evidence");
-    await page.click('a[href="/evidence"]');
-    await page.waitForURL(/\/evidence$/);
-    await page.click('a[href="/evidence/new"]');
+    await page.goto(`${baseUrl}/evidence/new`);
     await page.waitForURL(/\/evidence\/new$/);
     
-    await page.selectOption('select[value="stock"]', "stock");
+    // Wait for form to load
+    await page.waitForSelector('select');
+    
+    // Fill form - subject_type is already "stock" by default
     await page.fill('input[placeholder*="600519"]', "600519");
-    await page.selectOption('select >> nth=1', "news");
+    
+    // Select evidence_type "news" (second select)
+    const selects = await page.locator('select').all();
+    await selects[1].selectOption("news");
+    
     await page.fill('textarea[placeholder*="一句话"]', "公司2024Q3营收同比+25%");
     await page.fill('input[placeholder*="XX公司"]', "茅台Q3财报点评");
     await page.fill('input[placeholder*="https://"]', "https://example.com/maotai-q3");
