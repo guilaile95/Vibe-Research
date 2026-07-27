@@ -143,7 +143,7 @@ export function ThesisNew() {
             主体类型 <span className="text-destructive">*</span>
             <select
               value={form.subject_type}
-              onChange={(e) => set("subject_type", e.target.value as any)}
+              onChange={(e) => set("subject_type", e.target.value as "stock" | "sector" | "theme")}
               className={inputCls}
             >
               {SUBJECT_TYPES.map((t) => (

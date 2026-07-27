@@ -76,10 +76,18 @@ export function EvidenceList() {
     setLoading(true);
     setErr(null);
     try {
-      const params: Record<string, unknown> = { limit: PAGE_SIZE, offset: off };
-      if (subjectType) params.subject_type = subjectType;
-      if (subjectId.trim()) params.subject_id = subjectId.trim();
-      const r = await api.evidenceList(params as any);
+      const params: {
+        subject_type?: string;
+        subject_id?: string;
+        limit: number;
+        offset: number;
+      } = { limit: PAGE_SIZE, offset: off };
+      // subject_id 与 subject_type 成对提交
+      if (subjectType && subjectId.trim()) {
+        params.subject_type = subjectType;
+        params.subject_id = subjectId.trim();
+      }
+      const r = await api.evidenceList(params);
       if (rid !== runIdRef.current) return;
       setItems(r.items ?? []);
       setTotal(r.total ?? 0);

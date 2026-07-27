@@ -141,15 +141,24 @@ async function main() {
 
     // Proxy ALL /api/* to real backend (NO mock)
     let updateBodyCapture = null;
-    await page.route("**/api/evidence/**", async (route, request) => {
-      if (request.method() === "PUT") updateBodyCapture = request.postDataJSON();
+    await page.route("**/api/**", async (route) => {
+      const request = route.request();
       const url = request.url();
-      const p = new URL(url).pathname + new URL(url).search;
+      const parsed = new URL(url);
+      const p = parsed.pathname + parsed.search;
+      // Capture Evidence PUT body for hard assert (no subject fields)
+      if (request.method() === "PUT" && /\/api\/evidence\/[^/]+$/.test(parsed.pathname)) {
+        try {
+          updateBodyCapture = request.postDataJSON();
+        } catch {
+          updateBodyCapture = null;
+        }
+      }
       const target = `${apiUrl}${p}`;
       try {
         const resp = await fetch(target, {
           method: request.method(),
-          headers: { ...request.headers(), "host": undefined },
+          headers: { ...request.headers(), host: undefined },
           body: request.postDataBuffer() || undefined,
         });
         await route.fulfill({
@@ -157,25 +166,10 @@ async function main() {
           headers: Object.fromEntries([...resp.headers.entries()].filter(([k]) => k !== "transfer-encoding")),
           body: Buffer.from(await resp.arrayBuffer()),
         });
-      } catch (e) { console.error(`[E2E] Proxy error: ${e.message}`); await route.abort(); }
-    });
-
-    await page.route("**/api/**", async (route) => {
-      const url = route.request().url();
-      const p = new URL(url).pathname + new URL(url).search;
-      const target = `${apiUrl}${p}`;
-      try {
-        const resp = await fetch(target, {
-          method: route.request().method(),
-          headers: { ...route.request().headers(), "host": undefined },
-          body: route.request().postDataBuffer() || undefined,
-        });
-        await route.fulfill({
-          status: resp.status,
-          headers: Object.fromEntries([...resp.headers.entries()].filter(([k]) => k !== "transfer-encoding")),
-          body: Buffer.from(await resp.arrayBuffer()),
-        });
-      } catch (e) { console.error(`[E2E] Proxy error: ${e.message}`); await route.abort(); }
+      } catch (e) {
+        console.error(`[E2E] Proxy error: ${e.message}`);
+        await route.abort();
+      }
     });
 
     await page.goto(baseUrl);
@@ -240,19 +234,20 @@ async function main() {
     await page.waitForURL(/\/evidence\/[a-f0-9-]+$/);
     await page.waitForTimeout(300);
 
-    // Verify update body does NOT contain subject fields
-    if (updateBodyCapture) {
-      if (updateBodyCapture.subject_type !== undefined) {
-        throw new Error(`Update body must not contain subject_type: ${JSON.stringify(updateBodyCapture)}`);
-      }
-      if (updateBodyCapture.subject_id !== undefined) {
-        throw new Error(`Update body must not contain subject_id: ${JSON.stringify(updateBodyCapture)}`);
-      }
-      if (updateBodyCapture.source_date !== "2024-11-15") {
-        throw new Error(`source_date must be original YYYY-MM-DD, got: ${updateBodyCapture.source_date}`);
-      }
-      console.log("  ✓ Update body correct: no subject fields, source_date preserved");
+    // Hard assert: update body does NOT contain subject fields (must capture PUT)
+    if (!updateBodyCapture) {
+      throw new Error("Evidence update PUT body was not captured — cannot verify no subject fields");
     }
+    if (updateBodyCapture.subject_type !== undefined) {
+      throw new Error(`Update body must not contain subject_type: ${JSON.stringify(updateBodyCapture)}`);
+    }
+    if (updateBodyCapture.subject_id !== undefined) {
+      throw new Error(`Update body must not contain subject_id: ${JSON.stringify(updateBodyCapture)}`);
+    }
+    if (updateBodyCapture.source_date !== "2024-11-15") {
+      throw new Error(`source_date must be original YYYY-MM-DD, got: ${updateBodyCapture.source_date}`);
+    }
+    console.log("  ✓ Update body correct: no subject fields, source_date preserved");
 
     // Verify updated text visible
     const evText2 = await page.locator("body").innerText();
@@ -403,39 +398,59 @@ async function main() {
     console.log(`  ✓ Thesis edited, revision ${agg3.data.thesis.current_revision}`);
 
     // ═══════════════════════════════════════════════
-    //  7. Revision diff — UI tab
+    //  7. Revision diff — UI tab（真实字段变化硬断言）
     // ═══════════════════════════════════════════════
     console.log("\n[E2E] 7. Revision diff (UI tab)");
     await page.goto(`${baseUrl}/thesis/${thesisId}`);
     await page.waitForLoadState("networkidle");
 
     const diffTab = page.locator('button:has-text("版本对比")');
-    if (await diffTab.count() > 0) {
-      await diffTab.click();
-      await page.waitForTimeout(300);
+    if (await diffTab.count() === 0) {
+      throw new Error("版本对比 Tab not found");
+    }
+    await diffTab.click();
+    await page.waitForTimeout(400);
 
-      // Select from/to versions
-      const fromSelect = page.locator("label:has-text('从版本') select, label:has-text('起始版本') select").first();
-      const toSelect = page.locator("label:has-text('到版本') select, label:has-text('目标版本') select").first();
-      if (await fromSelect.count() > 0) {
-        await fromSelect.selectOption("3");
-      }
-      if (await toSelect.count() > 0) {
-        await toSelect.selectOption("4");
-      }
+    // 起始版本 / 目标版本 — 与 ThesisDetail UI 文案一致
+    const fromSelect = page.locator("label:has-text('起始版本') select").first();
+    const toSelect = page.locator("label:has-text('目标版本') select").first();
+    if (await fromSelect.count() === 0 || await toSelect.count() === 0) {
+      throw new Error("from/to revision selects not found on diff tab");
+    }
+    await fromSelect.selectOption("3");
+    await toSelect.selectOption("4");
 
-      const loadDiffBtn = page.locator('button:has-text("加载对比")');
-      if (await loadDiffBtn.count() > 0) {
-        await loadDiffBtn.click();
-        await page.waitForTimeout(500);
-      }
+    // 按钮文案是「对比」，不是「加载对比」；不存在假路由 /revisions/3/compare/4
+    const loadDiffBtn = page.locator('button:has-text("对比")').filter({ hasNotText: "版本对比" });
+    if (await loadDiffBtn.count() === 0) {
+      // fallback: any enabled 对比 button in the tab area
+      const alt = page.getByRole("button", { name: "对比", exact: true });
+      if (await alt.count() === 0) throw new Error("对比 button not found");
+      await alt.click();
+    } else {
+      await loadDiffBtn.first().click();
+    }
+    await page.waitForTimeout(600);
 
-      const diffText = await page.locator("body").innerText();
-      if (diffText.includes("摘要") || diffText.includes("summary") || diffText.includes("变更")) {
-        console.log("  ✓ Revision diff shows content changes");
+    const diffText = await page.locator("body").innerText();
+    // 硬断言：显示对比范围与字段变化（summary 编辑内容）
+    if (!diffText.includes("对比 v3") && !diffText.includes("v3 → v4") && !diffText.includes("对比 v3 → v4")) {
+      // 页面可能显示「对比 v3 → v4」
+      if (!/对比\s*v?3/.test(diffText)) {
+        console.log(`  [debug] diff text excerpt: ${diffText.substring(0, 500)}`);
+        throw new Error("Diff panel must show comparison of revision 3→4");
       }
     }
-    console.log("  ✓ Revision diff performed");
+    const hasFieldChange =
+      diffText.includes("逻辑字段变化") ||
+      diffText.includes("summary") ||
+      diffText.includes("摘要") ||
+      diffText.includes("毛利率稳定");
+    if (!hasFieldChange) {
+      console.log(`  [debug] diff body: ${diffText.substring(0, 800)}`);
+      throw new Error("Diff page must show expected field changes (summary edit)");
+    }
+    console.log("  ✓ Revision diff shows expected field changes (hard assert)");
 
     // ═══════════════════════════════════════════════
     //  8. Soft delete evidence — UI

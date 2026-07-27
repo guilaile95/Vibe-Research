@@ -40,46 +40,82 @@ const fmtDate = (s: string | null) => {
   }
 };
 
+function readFiltersFromParams(sp: URLSearchParams) {
+  return {
+    subjectType: sp.get("subject_type") || "",
+    subjectId: sp.get("subject_id") || "",
+    status: sp.get("status") || "",
+  };
+}
+
+function buildFilterParams(subjectType: string, subjectId: string, status: string) {
+  const params: {
+    subject_type?: string;
+    subject_id?: string;
+    status?: string;
+  } = {};
+  // subject_id 与 subject_type 成对提交
+  const typeOk = Boolean(subjectType);
+  const idOk = Boolean(subjectId.trim());
+  if (typeOk && idOk) {
+    params.subject_type = subjectType;
+    params.subject_id = subjectId.trim();
+  }
+  if (status) params.status = status;
+  return params;
+}
+
+function filtersToSearchParams(subjectType: string, subjectId: string, status: string): URLSearchParams {
+  const next = new URLSearchParams();
+  const typeOk = Boolean(subjectType);
+  const idOk = Boolean(subjectId.trim());
+  if (typeOk && idOk) {
+    next.set("subject_type", subjectType);
+    next.set("subject_id", subjectId.trim());
+  }
+  if (status) next.set("status", status);
+  return next;
+}
+
 export function ThesisList() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initial = readFiltersFromParams(searchParams);
   const [items, setItems] = useState<InvestmentThesis[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const [subjectType, setSubjectType] = useState("");
-  const [subjectId, setSubjectId] = useState("");
-  const [status, setStatus] = useState("");
+  const [subjectType, setSubjectType] = useState(initial.subjectType);
+  const [subjectId, setSubjectId] = useState(initial.subjectId);
+  const [status, setStatus] = useState(initial.status);
 
   const runIdRef = useRef(0);
+  const skipUrlSyncRef = useRef(true);
 
-  // 从 URL query 参数读取初始筛选值（仅首次挂载时）
+  // 筛选变更时同步 URL，保证刷新后状态不丢失
   useEffect(() => {
-    const st = searchParams.get("subject_type");
-    const si = searchParams.get("subject_id");
-    const s = searchParams.get("status");
-    if (st) setSubjectType(st);
-    if (si) setSubjectId(si);
-    if (s) setStatus(s);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (skipUrlSyncRef.current) {
+      skipUrlSyncRef.current = false;
+      return;
+    }
+    const next = filtersToSearchParams(subjectType, subjectId, status);
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [subjectType, subjectId, status, searchParams, setSearchParams]);
 
   const load = useCallback(async (off: number) => {
     const rid = ++runIdRef.current;
     setLoading(true);
     setErr(null);
     try {
-      const params: {
-        subject_type?: string;
-        subject_id?: string;
-        status?: string;
-        limit: number;
-        offset: number;
-      } = { limit: PAGE_SIZE, offset: off };
-      if (subjectType) params.subject_type = subjectType;
-      if (subjectId.trim()) params.subject_id = subjectId.trim();
-      if (status) params.status = status;
-      const r = await api.thesisList(params);
+      const filterParams = buildFilterParams(subjectType, subjectId, status);
+      const r = await api.thesisList({
+        ...filterParams,
+        limit: PAGE_SIZE,
+        offset: off,
+      });
       if (rid !== runIdRef.current) return;
       setItems(r.items ?? []);
       setTotal(r.total ?? 0);

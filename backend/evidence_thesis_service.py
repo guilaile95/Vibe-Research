@@ -90,6 +90,8 @@ def resolve_db_path(db_path: str | Path | None = None) -> Path:
 _THEME_SLUG_RE = re.compile(r"^[a-z0-9_-]+$")
 _KR_SUFFIXES = (".KS", ".KQ", ".KR")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# 美股 ticker：1–5 位大写字母，可选一位 class share 后缀（如 BRK.B）
+_US_TICKER_RE = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
 
 _VALID_SUBJECT_TYPES = frozenset({"stock", "sector", "theme"})
 _VALID_EVIDENCE_TYPES = frozenset({"news", "announcement", "report", "research_note", "financial_filing", "other"})
@@ -138,9 +140,9 @@ def normalize_subject(subject_type: str, subject_id: str) -> tuple[str, str, str
 def _normalize_stock_code(raw: str) -> tuple[str, str]:
     """规范化股票代码并解析市场。返回 (normalized_code, market)。
 
-    A股: 600519 → CN (6位数字，明确前缀规则)
+    A股: 600519 → CN (6位数字，明确前缀规则；含 301xxx 创业板注册制、688xxx 科创板)
     港股: 00700 → HK (5位及以下数字)
-    美股: AAPL → US (包含字母，无韩股后缀)
+    美股: AAPL / BRK.B → US (明确 ticker 正则，不得仅因含字母通过)
     韩股: 005930.KS → KR (明确 .KS/.KQ/.KR 后缀)
     """
     code = raw.strip().upper()
@@ -176,9 +178,9 @@ def _normalize_stock_code(raw: str) -> tuple[str, str]:
     if code.isdigit():
         if len(code) == 6:
             # A股：明确前缀规则
-            # 6xxxxx: 沪市主板
+            # 6xxxxx: 沪市主板 / 科创板(688)
             # 000xxx, 001xxx, 002xxx, 003xxx: 深市
-            # 300xxx: 创业板
+            # 300xxx / 301xxx: 创业板
             first_three = code[:3]
             if code[0] == '6' or first_three in ('000', '001', '002', '003', '300', '301'):
                 return code, "CN"
@@ -190,8 +192,8 @@ def _normalize_stock_code(raw: str) -> tuple[str, str]:
         else:
             raise ValidationError(f"无法识别的股票代码：{raw}")
 
-    # 包含字母且无韩股后缀 → 美股
-    if any(c.isalpha() for c in code):
+    # 美股：明确 ticker 正则（不得仅因「包含字母」通过）
+    if _US_TICKER_RE.match(code):
         return code, "US"
 
     raise ValidationError(f"无法识别的股票代码：{raw}")

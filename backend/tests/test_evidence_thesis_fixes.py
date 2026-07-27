@@ -332,10 +332,16 @@ class TestArchiveFreeze:
 
 class TestStockCodeValidation:
     def test_cn_stock_codes(self):
-        """A 股代码正确识别。"""
+        """A 股代码正确识别（含 301xxx 与科创板 688xxx）。"""
         assert svc.normalize_subject("stock", "600519") == ("stock", "600519", "CN")
         assert svc.normalize_subject("stock", "000001") == ("stock", "000001", "CN")
         assert svc.normalize_subject("stock", "300750") == ("stock", "300750", "CN")
+        # 创业板注册制 301xxx（个股数据页可接受的 A 股）
+        assert svc.normalize_subject("stock", "301091") == ("stock", "301091", "CN")
+        assert svc.normalize_subject("stock", "301236") == ("stock", "301236", "CN")
+        # 科创板 688xxx（6 开头，项目个股页常用）
+        assert svc.normalize_subject("stock", "688256") == ("stock", "688256", "CN")
+        assert svc.normalize_subject("stock", "688041") == ("stock", "688041", "CN")
 
     def test_hk_stock_codes(self):
         """港股代码正确识别和规范化。"""
@@ -344,9 +350,21 @@ class TestStockCodeValidation:
         assert svc.normalize_subject("stock", "00001") == ("stock", "00001", "HK")
 
     def test_us_stock_codes(self):
-        """美股代码正确识别。"""
+        """美股代码正确识别（明确 ticker 正则）。"""
         assert svc.normalize_subject("stock", "AAPL") == ("stock", "AAPL", "US")
         assert svc.normalize_subject("stock", "BRK.B") == ("stock", "BRK.B", "US")
+        assert svc.normalize_subject("stock", "GOOGL") == ("stock", "GOOGL", "US")
+
+    def test_us_ticker_rejects_non_ticker_letters(self):
+        """含字母但不符合美股 ticker 正则的字符串必须拒绝（不得仅因含字母通过）。"""
+        with pytest.raises(svc.ValidationError, match="无法识别"):
+            svc.normalize_subject("stock", "NOTAVALIDTICKER")
+        with pytest.raises(svc.ValidationError, match="无法识别"):
+            svc.normalize_subject("stock", "AAPL1")
+        with pytest.raises(svc.ValidationError, match="无法识别"):
+            svc.normalize_subject("stock", "HELLO-WORLD")
+        with pytest.raises(svc.ValidationError, match="无法识别"):
+            svc.normalize_subject("stock", "BRK.BB")
 
     def test_kr_stock_codes(self):
         """韩股代码正确识别。"""

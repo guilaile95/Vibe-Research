@@ -145,13 +145,51 @@ test("evidenceGet 路径含 id", async () => {
   assert.equal(r.url, "/api/evidence/ev-1");
 });
 
-test("evidenceUpdate 使用 PUT", async () => {
+test("evidenceUpdate 使用 PUT 且 body 为完整 EvidenceUpdateInput", async () => {
   reset();
-  await api.evidenceUpdate("ev-1", { claim: "new claim" });
+  const body = {
+    evidence_type: "news" as const,
+    claim: "new claim",
+    source_title: "src",
+    source_url: "https://example.com",
+    source_date: "2024-11-15",
+    accessed_at: "2024-11-15T10:00:00Z",
+    classification: "fact" as const,
+    confidence: "high" as const,
+  };
+  await api.evidenceUpdate("ev-1", body);
   const r = lastReq();
   assert.equal(r.method, "PUT");
   assert.equal(r.url, "/api/evidence/ev-1");
-  assert.equal(JSON.parse(r.body as string).claim, "new claim");
+  const parsed = JSON.parse(r.body as string);
+  assert.equal(parsed.claim, "new claim");
+  assert.equal(parsed.evidence_type, "news");
+  assert.equal(parsed.source_date, "2024-11-15");
+  assert.equal(parsed.classification, "fact");
+  assert.equal(parsed.confidence, "high");
+  assert.equal(parsed.subject_type, undefined, "update body 不得含 subject_type");
+  assert.equal(parsed.subject_id, undefined, "update body 不得含 subject_id");
+});
+
+test("thesisCreate body 不含 market/status（由服务端决定）", async () => {
+  reset();
+  const body = {
+    subject_type: "stock" as const,
+    subject_id: "600519",
+    title: "T",
+    summary: "S",
+    core_claims: ["c1"],
+    catalysts: [] as string[],
+    risks: [] as string[],
+    invalidation_conditions: [] as string[],
+    change_summary: "init",
+  };
+  await api.thesisCreate(body);
+  const parsed = JSON.parse(lastReq().body as string);
+  assert.equal(parsed.market, undefined);
+  assert.equal(parsed.status, undefined);
+  assert.equal(parsed.subject_type, "stock");
+  assert.equal(parsed.subject_id, "600519");
 });
 
 test("evidenceDelete 路径包含 confirm=true 查询参数", async () => {

@@ -60,6 +60,7 @@ import type {
   NdjsonStreamResult,
   NdjsonProtocolState,
   EvidenceRecord,
+  EvidenceCreateInput,
   EvidenceUpdateInput,
   EvidenceListResult,
   ThesisCreateInput,
@@ -612,7 +613,7 @@ export const api = {
     const qs = q.toString();
     return get<EvidenceListResult>(`/evidence${qs ? `?${qs}` : ""}`);
   },
-  evidenceCreate: (body: Omit<EvidenceRecord, "id" | "created_at" | "updated_at" | "deleted" | "deleted_at">) =>
+  evidenceCreate: (body: EvidenceCreateInput) =>
     request<EvidenceRecord>("/evidence", "POST", body),
   evidenceGet: (id: string) => get<EvidenceRecord>(`/evidence/${id}`),
   evidenceUpdate: (id: string, body: EvidenceUpdateInput) =>
