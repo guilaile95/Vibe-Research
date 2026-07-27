@@ -71,19 +71,19 @@ export function EvidenceNew() {
     setBusy(true);
     setErr(null);
     try {
-      const body = {
+      const body: import("@/lib/api").EvidenceCreateInput = {
         subject_type: form.subject_type,
         subject_id: form.subject_id.trim(),
         evidence_type: form.evidence_type,
         claim: form.claim.trim(),
         source_title: form.source_title.trim(),
         source_url: form.source_url.trim() || null,
-        source_date: form.source_date ? new Date(form.source_date).toISOString() : null,
+        source_date: form.source_date || null,
         accessed_at: new Date(form.accessed_at).toISOString(),
         classification: form.classification,
         confidence: form.confidence,
       };
-      const r = await api.evidenceCreate(body as any);
+      const r = await api.evidenceCreate(body);
       nav(`/evidence/${r.id}`);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "保存失败");

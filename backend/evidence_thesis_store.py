@@ -30,6 +30,15 @@ class EvidenceLedgerCorruptedError(RuntimeError):
         super().__init__(self.MESSAGE)
 
 
+class EvidenceLedgerSchemaVersionError(Exception):
+    """Schema version incompatible"""
+
+    MESSAGE = "投资逻辑数据库版本不兼容，请升级客户端"
+
+    def __init__(self):
+        super().__init__(self.MESSAGE)
+
+
 # ---------------------------------------------------------------------------
 # Schema DDL
 # ---------------------------------------------------------------------------
@@ -231,21 +240,69 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
 # Schema 初始化与版本管理
 # ---------------------------------------------------------------------------
 
-def _ensure_schema(conn: sqlite3.Connection) -> None:
-    """幂等建表/索引。"""
-    for ddl in _ALL_DDL:
-        conn.execute(ddl)
-    conn.execute(
-        "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', ?)",
-        (SCHEMA_VERSION,),
-    )
-
-
 def _read_schema_version(conn: sqlite3.Connection) -> str | None:
+    """读取 schema_meta 表中的 schema_version。"""
     row = conn.execute(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'"
     ).fetchone()
     return row["value"] if row else None
+
+
+def _validate_and_prepare_schema(conn: sqlite3.Connection, is_write: bool) -> None:
+    """统一 Schema 验证和准备入口。
+    
+    - 已存在 schema_meta 时先读版本，高于代码版本拒绝
+    - 拒绝前不执行任何 DDL
+    - 当前版本正常读写
+    - 新建空数据库初始化为 v1
+    - 非空数据库缺 schema_meta 时拒绝
+    """
+    # 检查是否已有 schema_meta 表
+    has_schema_meta = _table_exists(conn, "schema_meta")
+    
+    if has_schema_meta:
+        # 已有 schema_meta，先读版本再决定
+        version = _read_schema_version(conn)
+        if version is None:
+            # schema_meta 表存在但无 schema_version 记录，视为损坏
+            raise EvidenceLedgerCorruptedError()
+        
+        # 版本号比较：提取 v 后的数字
+        def _extract_version_number(v: str) -> int:
+            import re
+            m = re.search(r'_v(\d+)$', v)
+            return int(m.group(1)) if m else 0
+        
+        current_ver = _extract_version_number(SCHEMA_VERSION)
+        db_ver = _extract_version_number(version)
+        
+        if db_ver > current_ver:
+            # 数据库版本高于代码版本，拒绝打开
+            raise EvidenceLedgerSchemaVersionError()
+        elif db_ver < current_ver:
+            # 数据库版本低于代码版本，需要迁移
+            # 当前无旧版本迁移逻辑，明确拒绝
+            raise EvidenceLedgerSchemaVersionError()
+        # db_ver == current_ver: 正常继续
+    else:
+        # 没有 schema_meta 表
+        # 检查是否是全新数据库（没有任何表）
+        has_any_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name != 'sqlite_sequence' LIMIT 1"
+        ).fetchone() is not None
+        
+        if has_any_table:
+            # 非空数据库但没有 schema_meta，拒绝
+            raise EvidenceLedgerCorruptedError()
+        
+        # 全新数据库，仅在写模式下执行 DDL
+        if is_write:
+            for ddl in _ALL_DDL:
+                conn.execute(ddl)
+            conn.execute(
+                "INSERT INTO schema_meta(key, value) VALUES ('schema_version', ?)",
+                (SCHEMA_VERSION,),
+            )
 
 
 def initialize_store(db_path: str | Path) -> None:
@@ -254,25 +311,7 @@ def initialize_store(db_path: str | Path) -> None:
     conn = _connect_wal_init(db_path)
     try:
         with conn:
-            _ensure_schema(conn)
-            version = _read_schema_version(conn)
-            if version is not None and version != SCHEMA_VERSION:
-                raise EvidenceLedgerCorruptedError()
-    finally:
-        conn.close()
-
-
-def check_schema_version(db_path: str | Path) -> None:
-    """打开数据库检查 schema 版本；高于代码版本拒绝打开。"""
-    if not _db_file_exists(db_path):
-        return  # 新数据库，initialize_store 会处理
-    conn = _connect_readonly(db_path)
-    try:
-        if not _table_exists(conn, "schema_meta"):
-            return  # 空数据库或旧数据库无 schema_meta
-        version = _read_schema_version(conn)
-        if version is not None and version != SCHEMA_VERSION:
-            raise EvidenceLedgerCorruptedError()
+            _validate_and_prepare_schema(conn, is_write=True)
     finally:
         conn.close()
 
@@ -297,7 +336,10 @@ def integrity_check(db_path: str | Path) -> None:
 # ---------------------------------------------------------------------------
 
 def backup_database(db_path: str | Path) -> None:
-    """使用 SQLite backup API 生成一致性备份；失败不回滚已提交业务写入。"""
+    """使用 SQLite backup API 生成一致性备份；失败不回滚已提交业务写入。
+    
+    失败时清理临时文件，保留既有 .bak，并重新抛出异常供调用方记录日志。
+    """
     path = _as_path(db_path)
     if path == ":memory:":
         return
@@ -317,12 +359,14 @@ def backup_database(db_path: str | Path) -> None:
             src.close()
         os.replace(bak_tmp, bak_final)
     except Exception:
-        # 备份失败不回滚业务写入，但记录（不删除已有成功备份）
+        # 清理临时文件，保留既有 .bak
         if Path(bak_tmp).exists():
             try:
                 Path(bak_tmp).unlink()
             except OSError:
                 pass
+        # 重新抛出，供 write_transaction 记录安全日志
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +400,7 @@ def _open_for_write(db_path: str | Path) -> sqlite3.Connection:
     conn = _connect(db_path)
     try:
         with conn:
-            _ensure_schema(conn)
+            _validate_and_prepare_schema(conn, is_write=True)
         # 损坏检测
         row = conn.execute("PRAGMA integrity_check").fetchone()
         if row is None or row[0] != "ok":
@@ -365,6 +409,9 @@ def _open_for_write(db_path: str | Path) -> sqlite3.Connection:
     except sqlite3.DatabaseError:
         conn.close()
         raise EvidenceLedgerCorruptedError()
+    except (EvidenceLedgerSchemaVersionError, EvidenceLedgerCorruptedError):
+        conn.close()
+        raise
     return conn
 
 
@@ -373,26 +420,25 @@ def write_transaction(db_path: str | Path, fn) -> Any:
 
     fn 接收一个已开启 BEGIN IMMEDIATE 的 conn，返回业务结果。
     异常自动 ROLLBACK。备份失败不影响业务提交（仅记录安全日志）。
+    连接在 finally 块中关闭，确保所有异常路径都正确释放资源。
     """
     with _LOCK:
         conn = _open_for_write(db_path)
         try:
             with _Tx(conn):
                 result = fn(conn)
-        except EvidenceLedgerCorruptedError:
-            conn.close()
-            raise
-        except sqlite3.DatabaseError:
-            conn.close()
-            raise EvidenceLedgerCorruptedError()
-        else:
-            conn.close()
             # 事务提交成功后备份；失败不影响业务写入
             try:
                 backup_database(db_path)
             except Exception as e:  # noqa: BLE001 — 备份失败不能影响业务
                 _log_backup_failure(db_path, e)
             return result
+        except (EvidenceLedgerCorruptedError, EvidenceLedgerSchemaVersionError):
+            raise
+        except sqlite3.DatabaseError:
+            raise EvidenceLedgerCorruptedError()
+        finally:
+            conn.close()
 
 
 def _log_backup_failure(db_path: str | Path, err: Exception) -> None:
@@ -409,9 +455,10 @@ def read_transaction(db_path: str | Path, fn) -> Any:
         raise FileNotFoundError(f"evidence_thesis db 不存在：{db_path}")
     conn = _connect_readonly(db_path)
     try:
-        if not _table_exists(conn, "schema_meta"):
-            raise EvidenceLedgerCorruptedError()
+        _validate_and_prepare_schema(conn, is_write=False)
         return fn(conn)
+    except (EvidenceLedgerCorruptedError, EvidenceLedgerSchemaVersionError):
+        raise
     except sqlite3.DatabaseError:
         raise EvidenceLedgerCorruptedError()
     finally:
@@ -795,7 +842,7 @@ def _get_link_row(conn: sqlite3.Connection, thesis_id: str, evidence_id: str) ->
 
 def _list_links_for_thesis(conn: sqlite3.Connection, thesis_id: str) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT * FROM thesis_evidence_links WHERE thesis_id = ?",
+        "SELECT * FROM thesis_evidence_links WHERE thesis_id = ? ORDER BY evidence_id",
         (thesis_id,),
     ).fetchall()
 

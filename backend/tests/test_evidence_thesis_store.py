@@ -368,11 +368,12 @@ class TestSchemaVersion:
             conn.commit()
         finally:
             conn.close()
-        with pytest.raises(store.EvidenceLedgerCorruptedError):
-            store.check_schema_version(db_path)
+        with pytest.raises(store.EvidenceLedgerSchemaVersionError):
+            store.read_transaction(db_path, lambda conn: None)
 
     def test_matching_schema_version_ok(self, initialized_db):
-        store.check_schema_version(initialized_db)
+        # Current version should work fine
+        store.read_transaction(initialized_db, lambda conn: None)
 
 
 # ---------------------------------------------------------------------------

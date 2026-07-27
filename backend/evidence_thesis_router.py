@@ -63,11 +63,11 @@ class ThesisUpdateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str
     summary: str
-    status: str = "active"
-    core_claims: list[str] = Field(default_factory=list)
-    catalysts: list[str] = Field(default_factory=list)
-    risks: list[str] = Field(default_factory=list)
-    invalidation_conditions: list[str] = Field(default_factory=list)
+    status: str
+    core_claims: list[str]
+    catalysts: list[str]
+    risks: list[str]
+    invalidation_conditions: list[str]
     expected_revision: int
     change_summary: str | None = None
 
@@ -123,6 +123,8 @@ def _raise_service_error(e: Exception):
         raise HTTPException(status_code=400, detail=str(e))
     if isinstance(e, store.EvidenceLedgerCorruptedError):
         raise HTTPException(status_code=500, detail=store.EvidenceLedgerCorruptedError.MESSAGE)
+    if isinstance(e, store.EvidenceLedgerSchemaVersionError):
+        raise HTTPException(status_code=500, detail=store.EvidenceLedgerSchemaVersionError.MESSAGE)
     raise HTTPException(status_code=500, detail="内部错误")
 
 

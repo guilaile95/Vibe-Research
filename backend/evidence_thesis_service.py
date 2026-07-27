@@ -104,6 +104,7 @@ def normalize_subject(subject_type: str, subject_id: str) -> tuple[str, str, str
 
     返回 (normalized_type, normalized_id, market)。
     market 仅 stock 类型有值，sector/theme 为 None。
+    subject_id 与 subject_type 必须成对提供。
     """
     if subject_type not in _VALID_SUBJECT_TYPES:
         raise ValidationError(f"subject_type 必须是 {sorted(_VALID_SUBJECT_TYPES)} 之一")
@@ -137,27 +138,52 @@ def normalize_subject(subject_type: str, subject_id: str) -> tuple[str, str, str
 def _normalize_stock_code(raw: str) -> tuple[str, str]:
     """规范化股票代码并解析市场。返回 (normalized_code, market)。
 
-    A股: 600519 → CN
-    港股: 00700 → HK
-    美股: AAPL → US
-    韩股: 005930.KS → KR
+    A股: 600519 → CN (6位数字，明确前缀规则)
+    港股: 00700 → HK (5位及以下数字)
+    美股: AAPL → US (包含字母，无韩股后缀)
+    韩股: 005930.KS → KR (明确 .KS/.KQ/.KR 后缀)
     """
     code = raw.strip().upper()
     if not code:
         raise ValidationError("股票代码不能为空")
+    
+    # 拒绝明显非法字符
+    if any(c in code for c in ('$', '/', ' ', '\t', '\n')):
+        raise ValidationError(f"股票代码包含非法字符：{raw}")
+    
+    # 长度检查
+    if len(code) > 20:
+        raise ValidationError(f"股票代码过长：{raw}")
 
     # 韩股：检查 .KS/.KQ/.KR 后缀
     for suf in _KR_SUFFIXES:
         if code.endswith(suf):
             bare = code[: -len(suf)]
-            if not bare:
-                raise ValidationError("韩股代码后缀前必须有代码")
+            if not bare or not bare.isdigit():
+                raise ValidationError(f"韩股代码后缀前必须是数字：{raw}")
             return code, "KR"
+    
+    # 检查是否包含点号但不是合法韩股后缀
+    if '.' in code:
+        # 如果有点号，检查是否是纯数字+未知后缀的情况
+        parts = code.split('.')
+        if len(parts) == 2 and parts[0].isdigit():
+            # 纯数字 + 点号 + 后缀，但不是 .KS/.KQ/.KR
+            raise ValidationError(f"无法识别的股票代码后缀：{raw}（支持的韩股后缀：.KS .KQ .KR）")
+        # 其他情况（如 BRK.B）继续往下判断
 
-    # 纯数字：A股（6位）或港股（5位及以下补零到5位）
+    # 纯数字：A股（6位，明确前缀）或港股（5位及以下补零到5位）
     if code.isdigit():
         if len(code) == 6:
-            return code, "CN"
+            # A股：明确前缀规则
+            # 6xxxxx: 沪市主板
+            # 000xxx, 001xxx, 002xxx, 003xxx: 深市
+            # 300xxx: 创业板
+            first_three = code[:3]
+            if code[0] == '6' or first_three in ('000', '001', '002', '003', '300'):
+                return code, "CN"
+            else:
+                raise ValidationError(f"无法识别的6位数字股票代码：{raw}（可能是韩股，需添加 .KS/.KQ 后缀）")
         elif len(code) <= 5:
             # 港股补零到 5 位
             return code.zfill(5), "HK"
@@ -186,13 +212,21 @@ def _validate_iso_date(value: str | None, field: str, allow_none: bool = True) -
 
 
 def _validate_iso_datetime(value: str, field: str) -> str:
+    """验证 ISO 8601 datetime，必须带时区，保存时转换为 UTC。"""
     if not isinstance(value, str) or not value:
         raise ValidationError(f"{field} 不能为空")
     try:
-        datetime.fromisoformat(value)
+        dt = datetime.fromisoformat(value)
     except ValueError as e:
         raise ValidationError(f"{field} 必须是 ISO 8601 datetime") from e
-    return value
+    
+    # 必须带时区
+    if dt.tzinfo is None:
+        raise ValidationError(f"{field} 必须包含时区信息 (如 +00:00 或 Z)")
+    
+    # 转换为 UTC 并返回 ISO 格式
+    utc_dt = dt.astimezone(timezone.utc)
+    return utc_dt.isoformat(timespec="microseconds")
 
 
 def _utc_now_iso() -> str:
@@ -443,6 +477,12 @@ def list_evidence(db_path, subject_type: str | None = None, subject_id: str | No
         norm_type = subject_type
         if subject_id is not None:
             norm_type, norm_id, _ = normalize_subject(subject_type, subject_id)
+        else:
+            # subject_type 提供但 subject_id 未提供，拒绝
+            raise ValidationError("提供 subject_type 时必须同时提供 subject_id")
+    elif subject_id is not None:
+        # subject_id 提供但 subject_type 未提供，拒绝
+        raise ValidationError("提供 subject_id 时必须同时提供 subject_type")
 
     def _do(conn):
         rows = store._list_evidence_rows(conn, norm_type, norm_id, limit, offset, include_deleted=False)
@@ -586,6 +626,10 @@ def archive_thesis(db_path, thesis_id: str, expected_revision: int, change_summa
         if thesis_row is None:
             raise ThesisNotFoundError(f"投资逻辑 {thesis_id} 不存在")
 
+        # 检查是否已归档
+        if thesis_row["status"] == "archived":
+            raise ArchivedThesisError()
+
         current_rev = int(thesis_row["current_revision"])
         if expected_revision != current_rev:
             raise RevisionConflictError(
@@ -661,6 +705,12 @@ def list_thesis(db_path, subject_type: str | None = None, subject_id: str | None
         norm_type = subject_type
         if subject_id is not None:
             norm_type, norm_id, _ = normalize_subject(subject_type, subject_id)
+        else:
+            # subject_type 提供但 subject_id 未提供，拒绝
+            raise ValidationError("提供 subject_type 时必须同时提供 subject_id")
+    elif subject_id is not None:
+        # subject_id 提供但 subject_type 未提供，拒绝
+        raise ValidationError("提供 subject_id 时必须同时提供 subject_type")
 
     def _do(conn):
         rows = store._list_thesis_rows(conn, norm_type, norm_id, status, limit, offset)

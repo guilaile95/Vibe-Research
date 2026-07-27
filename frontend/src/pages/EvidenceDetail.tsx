@@ -57,13 +57,20 @@ const fmtDate = (s: string | null) => {
   }
 };
 
+const fmtDateOnly = (s: string | null) => {
+  if (!s) return "—";
+  try {
+    // source_date is YYYY-MM-DD, display as-is without timezone conversion
+    return s;
+  } catch {
+    return s;
+  }
+};
+
 const toDateInput = (s: string | null) => {
   if (!s) return "";
-  try {
-    return new Date(s).toISOString().slice(0, 10);
-  } catch {
-    return "";
-  }
+  // source_date is already YYYY-MM-DD, use as-is
+  return s;
 };
 
 const toDateTimeLocal = (s: string | null) => {
@@ -137,24 +144,21 @@ export function EvidenceDetail() {
 
   const save = async () => {
     if (!id || !record) return;
-    if (!form.subject_id?.trim()) { setEditErr("请填写主体代码/标识"); return; }
     if (!form.claim?.trim()) { setEditErr("请填写证据论断"); return; }
     if (!form.source_title?.trim()) { setEditErr("请填写来源标题"); return; }
 
     setBusy(true);
     setEditErr(null);
     try {
-      const body: Partial<EvidenceRecord> = {
-        subject_type: form.subject_type,
-        subject_id: form.subject_id.trim(),
-        evidence_type: form.evidence_type,
+      const body: import("@/lib/api").EvidenceUpdateInput = {
+        evidence_type: form.evidence_type!,
         claim: form.claim.trim(),
         source_title: form.source_title.trim(),
         source_url: form.source_url?.trim() || null,
-        source_date: form.source_date ? new Date(form.source_date).toISOString() : null,
+        source_date: form.source_date as string || null,
         accessed_at: form.accessed_at ? new Date(form.accessed_at).toISOString() : record.accessed_at,
-        classification: form.classification,
-        confidence: form.confidence,
+        classification: form.classification!,
+        confidence: form.confidence!,
       };
       const r = await api.evidenceUpdate(id, body);
       setRecord(r);
@@ -168,7 +172,7 @@ export function EvidenceDetail() {
 
   const remove = async () => {
     if (!id || !record) return;
-    if (!confirm(`删除证据「${record.claim.slice(0, 40)}${record.claim.length > 40 ? "…" : ""}」？此操作可恢复（软删除）。`)) return;
+    if (!confirm(`删除证据「${record.claim.slice(0, 40)}${record.claim.length > 40 ? "…" : ""}」？\n\n证据将从当前列表移除，但历史版本中的证据快照仍会保留。`)) return;
     setBusy(true);
     setEditErr(null);
     try {
@@ -291,7 +295,7 @@ export function EvidenceDetail() {
                   </a>
                 )}
                 <p className="mt-1 text-[11px] text-muted-foreground/70">
-                  来源日期：{fmtDate(record.source_date)} · 查阅于：{fmtDate(record.accessed_at)}
+                  来源日期：{fmtDateOnly(record.source_date)} · 查阅于：{fmtDate(record.accessed_at)}
                 </p>
               </div>
             </div>
@@ -305,11 +309,11 @@ export function EvidenceDetail() {
           <div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className={labelCls}>
-                主体类型
+                主体类型 <span className="text-xs text-muted-foreground/70">(只读)</span>
                 <select
                   value={form.subject_type ?? "stock"}
-                  onChange={(e) => set("subject_type", e.target.value as EvidenceRecord["subject_type"])}
-                  className={inputCls}
+                  disabled
+                  className={`${inputCls} opacity-60 cursor-not-allowed`}
                 >
                   {SUBJECT_TYPES.map((t) => (
                     <option key={t.value} value={t.value}>{t.label}</option>
@@ -317,11 +321,11 @@ export function EvidenceDetail() {
                 </select>
               </label>
               <label className={labelCls}>
-                主体代码/标识
+                主体代码/标识 <span className="text-xs text-muted-foreground/70">(只读)</span>
                 <input
                   value={form.subject_id ?? ""}
-                  onChange={(e) => set("subject_id", e.target.value)}
-                  className={inputCls}
+                  disabled
+                  className={`${inputCls} opacity-60 cursor-not-allowed`}
                 />
               </label>
               <label className={labelCls}>
