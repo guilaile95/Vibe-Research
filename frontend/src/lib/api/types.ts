@@ -247,99 +247,153 @@ export interface ShortTermEmotion {
   ladder: EmotionTier[];
   lianban_stocks: LianbanStock[];
   seal_rate: number | null; break_rate: number | null; promotion_rate: number | null;
-  yzt_count: number | null;
+  yzt_count: number;
+}
+
+/** 与 ShortTermEmotion 同构，供每日复盘聚合包使用 */
+export type ShortTermEmotionData = ShortTermEmotion;
+
+
+// 全市场成交额榜（旧榜单 / 快照榜）
+export interface TurnoverStock {
+  code: string; name: string;
+  price: number | null; pct: number | null;
+  amount: number | null; mcap: number | null; float_cap: number | null; industry: string;
+}
+
+export interface TurnoverTop { stocks: TurnoverStock[]; updated: string }
+
+
+/** 全 A 快照个股条目（amount_top / high_turnover） */
+export interface MarketSnapshotItem {
+  code: string;
+  name: string;
+  price: number | null;
+  change_pct: number | null;
+  amount: number | null;
+  turnover_pct: number | null;
+  market_cap: number | null;
 }
 
 
-// 成交额排行（每日复盘 → 资金活跃度）
-export interface TurnoverTop { symbol: string; name: string; turnover: number; pct: number }
-
-
-// 市场宽度（参与度）
 export interface MarketBreadthData {
-  date: string;
-  stock_count: number | null;
-  valid_count: number | null;
+  stock_count: number;
+  valid_count: number;
+  up_count: number;
+  down_count: number;
+  flat_count: number;
+  up_ratio: number | null;
+  up_3pct_count: number;
+  down_3pct_count: number;
+  total_amount: number | null;
+  amount_valid_count: number;
+  amount_top: MarketSnapshotItem[];
+  high_turnover: MarketSnapshotItem[];
+}
+
+
+export interface BoardRankItem {
+  code: string;
+  name: string;
+  change_pct: number | null;
+  turnover_pct: number | null;
+  market_cap: number | null;
   up_count: number | null;
   down_count: number | null;
-  flat_count: number | null;
   up_ratio: number | null;
-  up_3pct_count: number | null;
-  down_3pct_count: number | null;
-  total_amount: number | null;
-  amount_valid_count: number | null;
+  leader: string | null;
+  leader_change_pct: number | null;
 }
 
-
-// 板块轮动（行业 / 概念 / 地域）
-export interface BoardRankItem {
-  key: string; name: string; pct: number;
-  amount: number | null; up: number; down: number; flat: number;
-}
 
 export interface BoardRankingData {
-  date: string;
-  industry: { top: BoardRankItem[]; bottom: BoardRankItem[] };
-  concept: { top: BoardRankItem[]; bottom: BoardRankItem[] };
-  region: { top: BoardRankItem[]; bottom: BoardRankItem[] };
+  type: "industry" | "concept" | "region" | string;
+  total: number;
+  ranked_count: number;
+  unknown_count: number;
+  top: BoardRankItem[];
+  bottom: BoardRankItem[];
 }
 
 
-// 市场快照（资金流向 / 成交额/换手率 Top）
-export interface MarketSnapshotItem { code: string; name: string; value: number; pct: number | null }
+/** GET /api/daily-review 可选缓存元数据（stale-while-revalidate） */
+export interface DailyReviewCacheMeta {
+  source: "live" | "memory" | "persisted" | string;
+  stale: boolean;
+  refreshing: boolean;
+  saved_at: string | null;
+  age_seconds: number | null;
+  /** 后台刷新失败：继续展示旧结果 */
+  refresh_failed?: boolean;
+  refresh_error?: string | null;
+}
 
 
-/** 每日复盘数据聚合包（主指数 + 市场宽度 + 短线情绪 + 板块轮动 + 成交额 Top） */
+/** 结构化每日复盘（GET /api/daily-review 的 data 字段） */
 export interface DailyReviewData {
   schema_version: string;
-  trade_date: string;
   generated_at: string;
+  trade_date: string | null;
+  data_cutoff: string | null;
   status: DataStatus;
   warnings: string[];
-  indices: { status: DataStatus; warnings: string[]; data: IndexQuote[] | null };
-  market_breadth: TimedComponentEnvelope<MarketBreadthData>;
-  short_term_emotion: TimedComponentEnvelope<ShortTermEmotion>;
-  sector_rotation: TimedComponentEnvelope<BoardRankingData>;
+  data_health: {
+    components: {
+      indices: DataStatus;
+      global_indices: DataStatus;
+      breadth: DataStatus;
+      emotion: DataStatus;
+      turnover: DataStatus;
+      industry_boards: DataStatus;
+      concept_boards: DataStatus;
+      region_boards: DataStatus;
+    };
+  };
+  market_environment: {
+    indices: ComponentEnvelope<IndexQuote[]>;
+    global_indices: ComponentEnvelope<GlobalIndex[]>;
+    breadth: TimedComponentEnvelope<MarketBreadthData>;
+  };
+  sector_rotation: {
+    industry: TimedComponentEnvelope<BoardRankingData>;
+    concept: TimedComponentEnvelope<BoardRankingData>;
+    region: TimedComponentEnvelope<BoardRankingData>;
+    highlights: {
+      strongest_industry: BoardRankItem | null;
+      weakest_industry: BoardRankItem | null;
+      strongest_concept: BoardRankItem | null;
+      weakest_concept: BoardRankItem | null;
+      strongest_region: BoardRankItem | null;
+      weakest_region: BoardRankItem | null;
+    };
+  };
+  short_term_emotion: ComponentEnvelope<ShortTermEmotionData>;
   capital_activity: {
-    status: DataStatus; warnings: string[];
-    trade_date?: string | null; data_time?: string | null; fetched_at?: string | null;
-    total_amount: number | null; amount_valid_count: number | null;
+    turnover_top: ComponentEnvelope<TurnoverTop>;
+    total_amount: number | null;
+    amount_valid_count: number | null;
     amount_top: MarketSnapshotItem[];
     high_turnover: MarketSnapshotItem[];
   };
 }
 
 
-/** 可选的缓存元数据：何时过期（300s 内存缓存） */
-export interface DailyReviewCacheMeta {
-  generated_at: string;
-  expires_in_seconds: number | null;
-  is_stale: boolean;
-}
-
-
-/** 历史快照列表单项 */
+/** 历史列表元数据（不含完整 review） */
 export interface DailyReviewHistoryItem {
   id: number;
   trade_date: string;
   schema_version: string;
   generated_at: string;
+  data_cutoff: string | null;
   status: DataStatus;
   payload_hash: string;
   created_at: string;
 }
 
 
-/** GET /api/daily-review/history/{id} 单条快照详情 */
-export interface DailyReviewHistorySnapshot {
-  id: number;
-  trade_date: string;
-  schema_version: string;
-  generated_at: string;
-  status: DataStatus;
-  payload_hash: string;
-  created_at: string;
-  payload: DailyReviewData;
+/** 历史快照详情（含完整 review） */
+export interface DailyReviewHistorySnapshot extends DailyReviewHistoryItem {
+  review: DailyReviewData;
 }
 
 
@@ -494,225 +548,327 @@ export interface DailyReviewComparison {
 }
 
 
+export interface RadarItem {
+  title: string; url: string; time: string; source: string; summary?: string; zh?: string;
+}
+
+export interface Industry {
+  key: string; name: string; accent: string; total: number; items: RadarItem[];
+}
+
 export interface RadarData {
-  updated: string;
-  hotConcepts: { name: string; pct: number; count: number }[];
-  northFlow: { date: string; net: number }[];
-  dragonTiger: { code: string; name: string; net_buy: number; pct: number }[];
-  newHighs: { code: string; name: string; pct: number; price: number }[];
+  generated_at: string | null; recent_days: number; industries: Industry[];
+  stats: { industries: number; total_sources: number; failed_sources?: number };
 }
 
 
-export interface HoldingRow {
-  code: string; name: string; shares: number; cost: number; price: number; current: number; profit: number; profit_pct: number;
+export interface Holding {
+  code: string; name: string; price: number | null; shares: number; cost: number;
+  market_value: number | null; pnl: number | null; pnl_pct: number | null;
+  data_status?: "normal" | "unavailable";
 }
 
-
-export interface ClosedRow {
-  code: string; name: string; date: string; shares: number; cost: number; sell_price: number; profit: number; profit_pct: number;
+export interface ClosedPosition {
+  code: string; name: string; date: string; price: number; shares: number; cost: number;
+  pnl: number; pnl_pct: number;
 }
-
 
 export interface PortfolioData {
-  updated: string;
-  holdings: HoldingRow[];
-  closed: ClosedRow[];
-  total_cost: number;
-  total_current: number;
-  total_profit: number;
-  total_profit_pct: number;
+  holdings: Holding[];
+  totals: { market_value: number | null; cost: number; pnl: number | null; pnl_pct: number | null };
+  closed: ClosedPosition[];
+  realized_pnl: number;
+  updated: string; last_refresh: string | null;
+  data_status?: "normal" | "partial" | "unavailable";
+  quote_coverage?: { valid_holdings: number; total_holdings: number; complete: boolean };
 }
 
 
-/** 账户资金配置（总资产 / 可用现金） */
-export interface AccountProfile {
+// ---------------------------------------------------------------------------
+// 账户资金（手工填写，GET /api/account-profile 与 PUT /api/account-profile）
+// ---------------------------------------------------------------------------
+
+export interface AccountProfileData {
   total_assets: number;
   available_cash: number;
   updated_at: string;
 }
 
 
-/** GET /api/account-profile 顶层响应（未配置时 configured=false） */
 export interface AccountProfileResponse {
   configured: boolean;
-  data: AccountProfile | null;
+  data: AccountProfileData | null;
 }
 
 
-/** PUT /api/account-profile 请求体（只写 assets 和 cash） */
 export interface AccountProfileRequest {
   total_assets: number;
   available_cash: number;
 }
 
 
-/** 结构化持仓操作建议响应 */
+// ---------------------------------------------------------------------------
+// 持仓操作建议（POST /api/portfolio/advice，普通 JSON，非流式）
+// 契约与 backend portfolio_advice_validator 权威结果对齐
+// ---------------------------------------------------------------------------
+
+export type PortfolioAdviceHoldingAction =
+  | "add"
+  | "hold"
+  | "reduce"
+  | "sell"
+  | "watch"
+  | "avoid";
+
+
+export type PortfolioAdviceAccountAction =
+  | "hold"
+  | "reduce_risk"
+  | "selective_add"
+  | "defensive";
+
+
+export type PortfolioAdviceConfidence = "high" | "medium" | "low";
+
+
+export interface PortfolioAdviceSummary {
+  holding_count: number;
+  market_value: number | null;
+  cost: number;
+  pnl: number | null;
+  pnl_pct: number | null;
+}
+
+
+export interface PortfolioAdviceAccountDecision {
+  action: PortfolioAdviceAccountAction;
+  reason: string;
+  confidence: PortfolioAdviceConfidence;
+}
+
+
+export interface AccountFundingQuoteCoverage {
+  valid_holdings: number;
+  total_holdings: number;
+  complete: boolean;
+}
+
+
+export interface AccountFundingData {
+  configured: boolean;
+  total_assets: number | null;
+  available_cash: number | null;
+  available_cash_pct: number | null;
+  updated_at: string | null;
+  tracked_stock_market_value: number | null;
+  tracked_stock_weight_pct: number | null;
+  quote_coverage: AccountFundingQuoteCoverage;
+}
+
+
+export interface PortfolioAdviceHoldingAccountMetrics {
+  market_value: number | null;
+  account_weight_pct: number | null;
+}
+
+
+export interface PortfolioAdviceHoldingAdvice {
+  code: string;
+  name: string;
+  shares: number;
+  cost_price: number;
+  current_price: number | null;
+  market_value: number | null;
+  pnl_amount: number | null;
+  pnl_pct: number | null;
+  holding_weight_pct: number | null;
+  account_metrics?: PortfolioAdviceHoldingAccountMetrics | null;
+  action: PortfolioAdviceHoldingAction;
+  /** 相对当前持股数量的操作比例（add/reduce/sell）；非账户总仓位比例 */
+  execution_size_pct_of_holding: number | null;
+  /** 后端重算的建议操作股数；不足交易单位或不可算时为 null */
+  execution_quantity: number | null;
+  /**
+   * reduce/sell 建议可卖上限（理论/advisory，非券商真可卖）。
+   * 一般为 min(execution_quantity, shares)；不可算时为 null。
+   */
+  sellable_quantity_advisory?: number | null;
+  /** 仅 add：后端按 quantity×现价估算的预计所需金额；不可算时为 null */
+  estimated_amount?: number | null;
+  trigger_conditions: string[];
+  price_conditions: string[];
+  execution_plan: string[];
+  risk_conditions: string[];
+  invalidation_conditions: string[];
+  confidence: PortfolioAdviceConfidence;
+  data_limitations: string[];
+}
+
+
 export interface PortfolioAdviceResult {
-  llm: string;
-  user_request: string | null;
-  advice: string;
-  suggestions: {
-    action: "buy" | "sell" | "hold" | "reduce";
-    symbol: string | null;
-    ticker: string | null;
-    target_weight: number | null;
-    reason: string;
-  }[];
-  reasoning: string;
-  risks: string[];
-  model_input_tokens: number | null;
-  model_output_tokens: number | null;
-  total_cost_cny: number | null;
-  cached_at: string | null;
+  schema_version: "portfolio-advice-v0.1";
   generated_at: string;
+  /** 复盘交易日；缺失时为 null/undefined，前端不伪造 */
+  trade_date?: string | null;
+  market_status: MarketDataStatus | string;
+  portfolio_summary: PortfolioAdviceSummary;
+  account_action: PortfolioAdviceAccountDecision;
+  account_funding?: AccountFundingData | null;
+  holdings: PortfolioAdviceHoldingAdvice[];
+  warnings: string[];
+  data_limitations: string[];
 }
 
 
 export interface PortfolioAdviceRequest {
   user_request: string | null;
-  llm: string;
+  llm: StreamLlmConfig;
 }
 
 
-/** AI 生成内容类型枚举 */
-export type AiResultType = "daily_review" | "portfolio_advice";
+export type AiResultType = "daily_review_ai" | "portfolio_advice";
 
 
-/** AI 元数据（可选，成本 / token 计数由后端记录） */
-export interface AiGeneratedResultMetadata {
-  model_input_tokens?: number | null;
-  model_output_tokens?: number | null;
-  total_cost_cny?: number | null;
+export interface DailyReviewAiPayload {
+  markdown: string;
+  source_review_generated_at: string;
+  source_data_cutoff: string | null;
 }
 
 
-/** AI 缓存结果（泛型 payload） */
 export interface AiGeneratedResult<TPayload> {
-  id: string;
   result_type: AiResultType;
-  trade_date: string | null;
-  llm: string;
+  trade_date: string;
+  schema_version: string;
   payload: TPayload;
-  metadata: AiGeneratedResultMetadata;
-  created_at: string;
+  generated_at: string;
+  model_provider: string;
+  model_name: string;
+  stale: boolean;
+  stale_message?: string;
 }
 
 
-/** 每日复盘 AI 请求（上下文由服务器生成，只传 user_request + llm） */
+export interface AiGeneratedResultMetadata {
+  result_type: AiResultType;
+  trade_date: string;
+  schema_version: string;
+  generated_at: string;
+}
+
+
+// 资金面 / 筹码 / 信号（v3.3 并入，均为「用户查的那只股」的公开数据）
+export interface MarginRow { date: string; rzye: number; rzmre: number; rzche: number; rqye: number; rqmcl: number; rzrqye: number }
+
+export interface BlockTradeRow { date: string; price: number; close: number; premium_pct: number; vol: number; amount: number; buyer: string; seller: string }
+
+export interface HolderRow { date: string; holder_num: number; change_ratio: number; avg_shares: number }
+
+export interface DividendRow { date: string; bonus_rmb: number; transfer_ratio: number; bonus_ratio: number | null; plan: string }
+
+export interface FundFlowRow { date: string; main_net: number; small_net: number; mid_net: number; large_net: number; super_net: number }
+
+export interface DtSeat { name: string; buy_amt: number; sell_amt: number; net: number }
+
+export interface DragonTiger {
+  records: { date: string; reason: string; net_buy: number; turnover: number }[];
+  seats: { buy: DtSeat[]; sell: DtSeat[] };
+  institution: { buy_amt: number; sell_amt: number; net_amt: number };
+}
+
+export interface LockupRow { date: string; type: string; shares: number; able_shares: number; ratio: number }
+
+export interface Lockup { history: LockupRow[]; upcoming: LockupRow[] }
+
+export interface Board { name: string; code: string; change_pct: number | string; lead_stock: string }
+
+export interface Blocks { total: number; boards: Board[]; concept_tags: string[] }
+
+export interface HotConcept { concept: string; bk: string; hit: number }
+
+export interface QaRow { company: string; question: string; answer: string | null; answerer: string; ask_time: string }
+
+export interface IndustryRow { rank: number; name: string; change_pct: number; code: string; up_count: number; down_count: number }
+
+export interface IndustryData { top: IndustryRow[]; bottom: IndustryRow[]; total: number }
+
+
+/** K 线 Bar（mootdx）：标准 OHLC；字段名按 mootdx DataFrame 列。 */
+export interface KlineBar {
+  date?: string; datetime?: string; open?: number; close?: number;
+  high?: number; low?: number; volume?: number; amount?: number;
+  [key: string]: string | number | undefined;
+}
+
+/** 巨潮公告全文项（akshare cninfo）。 */
+export interface DisclosureItem {
+  title?: string; info?: string; date?: string; url?: string;
+  [key: string]: string | number | boolean | null | undefined;
+}
+
+
+// 全球市场（美股 / 港股，移植自 global-stock-data · 东财域内源）
+export interface GlobalIndex {
+  key: string; name: string; region: string;
+  price: number | null; change_pct: number | null;
+}
+
+export interface GlobalQuote {
+  code: string; name: string;
+  price: number | null; open: number | null; high: number | null; low: number | null;
+  prev_close: number | null; amount: number | null; mcap: number | null; change_pct: number | null;
+}
+
+export interface GlobalMetrics {
+  report_date: string;
+  revenue: number | null; revenue_yoy: number | null; net_profit: number | null;
+  eps: number | null; roe: number | null; gross_margin: number | null;
+  net_margin: number | null; debt_ratio: number | null;
+}
+
+export interface GlobalStock {
+  code: string; name: string; market: string;
+  quote: GlobalQuote; metrics: GlobalMetrics | null;
+}
+
+
+// ---------------------------------------------------------------------------
+// NDJSON 流式（/api/chat 与 /api/daily-review/analyze 共用同一解析协议）
+// ---------------------------------------------------------------------------
+
+/** 与后端 LLMConfig / 前端 LlmConfig 字段对齐（避免 api↔llm 循环依赖） */
+export interface StreamLlmConfig {
+  provider: string;
+  baseURL: string;
+  apiKey: string;
+  model: string;
+}
+
+
 export interface DailyReviewAnalyzeRequest {
-  user_request: string | null;
-  llm: string;
+  user_request?: string | null;
+  llm: StreamLlmConfig;
 }
 
 
-/** NDJSON 流事件处理器 */
 export interface NdjsonStreamHandlers {
   onDelta?: (text: string) => void;
   onTool?: (tool: string, args: Record<string, unknown>) => void;
 }
 
 
-/** NDJSON 流结果（最终聚合状态） */
 export interface NdjsonStreamResult {
   content: string;
-  trace: any[];
+  trace: { tool: string; args: Record<string, unknown> }[];
   rounds: number;
   result?: AiGeneratedResultMetadata;
 }
 
 
-/** NDJSON 协议状态（可序列化、可测试） */
-export interface NdjsonProtocolState {
-  content: string;
-  trace: any[];
-  rounds: number;
+export interface NdjsonProtocolState extends NdjsonStreamResult {
   sawDone: boolean;
   sawError: boolean;
   errorMessage: string | null;
-  result?: AiGeneratedResultMetadata;
-}
-
-
-export interface MarginRow {
-  date: string; rzye: number; rqye: number; rzrqye: number; rzrqye_pct: number;
-}
-
-
-export interface BlockTradeRow {
-  date: string; price: number; volume: number; premium: number; buyer: string; seller: string;
-}
-
-
-export interface HolderRow {
-  date: string; holder: string; shares: number; pct: number; nature: string;
-}
-
-
-export interface DividendRow {
-  date: string; plan: string; ex_date: string; record_date: string; pay_date: string;
-}
-
-
-export interface FundFlowRow {
-  date: string; main_net: number; small_net: number; mid_net: number; large_net: number; huge_net: number;
-}
-
-
-export interface DragonTiger {
-  date: string; reason: string;
-  buy_seats: { name: string; amount: number }[];
-  sell_seats: { name: string; amount: number }[];
-}
-
-
-export interface Lockup {
-  date: string | null;
-  holders: { holder: string; shares: number; lockup_type: string; lift_date: string }[];
-}
-
-
-export interface Blocks {
-  concept: string[];
-  industry: string[];
-}
-
-
-export interface HotConcept {
-  concept: string; date: string; avg_pct: number; stocks: string[];
-}
-
-
-export interface QaRow {
-  date: string; question: string; answer: string; source: string;
-}
-
-
-export interface IndustryData {
-  top: { name: string; pct: number }[];
-  bottom: { name: string; pct: number }[];
-  date: string;
-}
-
-
-export interface KlineBar {
-  date: string; open: number; high: number; low: number; close: number; volume: number;
-}
-
-
-export interface DisclosureItem {
-  date: string; title: string; category: string; url: string;
-}
-
-
-export interface GlobalIndex {
-  symbol: string; name: string; price: number; change_pct: number;
-}
-
-
-export interface GlobalStock {
-  symbol: string; name: string; price: number; change_pct: number;
-  open: number; high: number; low: number; volume: number;
-  market_cap: number; pe: number | null; div_yield: number | null;
 }
 
 
