@@ -1,14 +1,25 @@
-# 投资逻辑与证据账本 — MVP 技术设计（草案）
+# 投资逻辑与证据账本 — MVP 技术设计（草案 v2）
 
-> 状态：**设计草案，非最终定案**。所有字段、表结构和 API 路由均为候选提案，需通过审查后方可进入实现阶段。
+> 状态：**设计草案 v2，非最终定案**。所有字段、表结构和 API 路由均为候选提案，需通过审查后方可进入实现阶段。
 >
 > 基线：`feature/research-system-v01` @ `2aed400623072750dabac0d3f5849aaaf142ff58`
 >
 > 路线来源：`docs/research/product-roadmap-next-phase.md` §三（P0：投资逻辑与证据账本）
 
+## 仓库状态约定
+
+```text
+稳定分支：feature/research-system-v01
+稳定 SHA：2aed400623072750dabac0d3f5849aaaf142ff58
+PR #17：已合并（前端 API 类型拆分）
+PR #18：已合并（后端缓存与 lifespan 加固）
+PR #19：已合并（下一阶段产品路线图）
+PR #20：当前设计 Draft PR
+```
+
 ## 一、设计目标
 
-为每只股票、行业或主题维护一份持续更新的投资逻辑，使投资判断可追溯、可更新、可证伪。第一版只做**手工**创建、编辑、关联和版本化，不涉及自动抓取或 AI 自动修改。
+为每只股票、板块或主题维护一份持续更新的投资逻辑，使投资判断可追溯、可更新、可证伪。第一版只做**手工**创建、编辑、关联和版本化，不涉及自动抓取或 AI 自动修改。
 
 核心原则（继承自路线图）：
 
@@ -32,6 +43,8 @@
 - 独立存储表，不修改现有 `portfolio.json`、`ai_generated_results`、`daily_review_snapshots` 等表。
 - 独立 API 路由前缀，不污染现有端点。
 - 不引入向量数据库、知识图谱或复杂全文搜索。
+- 新功能路由不直接写入 `app.py`，使用独立 `evidence_thesis_router.py`，`app.py` 只做 `app.include_router(...)` 最小接入。
+- 不引入新第三方依赖（包括 ULID 库）。
 
 ## 三、核心数据对象（候选字段）
 
@@ -39,23 +52,26 @@
 
 ### 3.1 EvidenceRecord
 
-证据记录：一条可追溯的信息单元，关联到某个研究对象，支持或反对某条投资逻辑。
+证据记录：一条可追溯的信息单元，关联到某个研究对象。
+
+> **重要**：证据本身**不携带**立场（support/oppose/neutral）。立场属于"证据与投资逻辑的关联关系"，见 §3.4 `thesis_evidence_links.stance`。同一条证据可以分别以不同立场关联到不同的投资逻辑。
 
 ```text
-id                  主键，全局唯一
-subject_type        研究对象类型：stock | sector | industry | theme
-subject_id          研究对象标识（股票代码 / 行业 slug / 主题 slug）
+id                  主键，全局唯一（uuid.uuid4().hex）
+subject_type        研究对象类型：stock | sector | theme
+subject_id          研究对象标识（股票规范化代码 / 板块 slug / 主题 slug）
 evidence_type       证据类型：news | announcement | report | research_note | financial_filing | other
 claim               证据核心主张（简短自然语言摘要，非原文复制）
 source_title        来源标题
 source_url          来源 URL（可选，本地文件类证据无 URL）
-source_date         来源发布日期（ISO 8601 date）
-accessed_at         获取时间（ISO 8601 datetime，用户录入或系统记录）
+source_date         来源发布日期（ISO 8601 date；research_note/口头信息/无发布日期材料允许为空）
+accessed_at         获取时间（ISO 8601 datetime，UTC，始终必填）
 classification      分类：fact | inference | unknown
 confidence          置信度：high | medium | low
-supports            立场：support | oppose | neutral
-created_at          记录创建时间
-updated_at          记录最后更新时间
+created_at          记录创建时间（UTC ISO 8601）
+updated_at          记录最后更新时间（UTC ISO 8601）
+deleted             软删除标记：0=正常, 1=已删除（CHECK 约束）
+deleted_at          软删除时间（可空）
 ```
 
 **classification 语义**
@@ -64,20 +80,15 @@ updated_at          记录最后更新时间
 - `inference`：基于事实的推断（如"毛利率下降可能反映竞争加剧"）。
 - `unknown`：信息不足或来源不可靠，暂无法分类。
 
-**supports 语义**
-
-- `support`：支持某条投资逻辑。
-- `oppose`：反对某条投资逻辑。
-- `neutral`：与投资逻辑相关但无明确方向（如中性事实背景）。
-
 ### 3.2 InvestmentThesis
 
 投资逻辑：针对某个研究对象的持续性研究结论，引用证据，有失效条件。
 
 ```text
-id                      主键，全局唯一
+id                      主键，全局唯一（uuid.uuid4().hex）
 subject_type            研究对象类型（同 EvidenceRecord）
-subject_id              研究对象标识（同 EvidenceRecord）
+subject_id              研究对象标识（同 EvidenceRecord，规范化规则见 §5.9）
+market                  市场标识：CN | HK | US | KR（仅 stock 类型由服务端解析，不由客户端填写）
 title                   投资逻辑标题
 summary                 投资逻辑摘要
 status                  状态：active | weakened | invalidated | archived
@@ -85,9 +96,9 @@ core_claims             核心观点列表（JSON array of strings）
 catalysts               催化因素列表（JSON array of strings）
 risks                   主要风险列表（JSON array of strings）
 invalidation_conditions 失效条件列表（JSON array of strings）
-created_at              创建时间
-updated_at              最后更新时间
-current_revision        当前版本号（整数，从 1 开始）
+created_at              创建时间（UTC ISO 8601）
+updated_at              最后更新时间（UTC ISO 8601）
+current_revision        当前版本号（整数，从 1 开始；始终对应一条 thesis_revisions 行）
 ```
 
 **status 语义**
@@ -99,18 +110,39 @@ current_revision        当前版本号（整数，从 1 开始）
 
 ### 3.3 ThesisRevision
 
-投资逻辑版本：每次编辑投资逻辑时生成的不可变快照。
+投资逻辑版本：每次创建或编辑投资逻辑时生成的不可变快照。
 
 ```text
-id                  主键，全局唯一
+id                  主键，全局唯一（uuid.uuid4().hex）
 thesis_id           关联的投资逻辑 ID
 revision_number     版本号（从 1 递增）
-snapshot            该版本的完整投资逻辑快照（JSON，包含 title/summary/core_claims 等）
-change_summary      变更摘要（用户输入或自动生成）
-created_at          版本创建时间
+snapshot            该版本的完整快照（JSON，含 thesis 字段 + 当时所有有效关联证据的完整内容，见 §5.11.2）
+change_summary      变更摘要（用户填写；可提供默认值 "更新投资逻辑"，但第一版不称为 AI 自动生成）
+created_at          版本创建时间（UTC ISO 8601）
 ```
 
-**不可变性**：ThesisRevision 记录一旦创建，不允许修改或删除（删除证据时也不删除历史版本，见 §4.12）。
+**不可变性**：ThesisRevision 记录一旦创建，不允许修改或删除（删除证据时也不删除历史版本，见 §5.12）。
+
+**版本对应关系**：`investment_theses.current_revision` 始终对应一条已经存在的、不可变的 `thesis_revisions.revision_number`。不存在"当前版本只在主表、版本表中缺失"的状态。
+
+### 3.4 ThesisEvidenceLink（证据-投资逻辑关联）
+
+```text
+thesis_id           关联的投资逻辑 ID
+evidence_id         关联的证据 ID
+stance              立场：support | oppose | neutral（属于关联关系，不属于证据本身）
+created_at          关联创建时间（UTC ISO 8601）
+updated_at          关联最后更新时间（UTC ISO 8601，用于追踪 stance 修改）
+PRIMARY KEY (thesis_id, evidence_id)
+```
+
+**stance 语义**
+
+- `support`：该证据支持此投资逻辑。
+- `oppose`：该证据反对此投资逻辑。
+- `neutral`：该证据与此投资逻辑相关，但无明确方向。
+
+**约束**：关联时 thesis 与 evidence 的 `(subject_type, subject_id)` 必须一致，防止把其他股票的证据误关联到当前股票逻辑（见 §5.16）。
 
 ## 四、第一版能力范围
 
@@ -118,28 +150,29 @@ created_at          版本创建时间
 
 1. 手工创建和编辑投资逻辑（InvestmentThesis）。
 2. 手工添加证据（EvidenceRecord）。
-3. 证据关联股票或行业（subject_type + subject_id）。
-4. 证据支持或反对某条投资逻辑（supports 字段 + 关联表）。
-5. 保存投资逻辑版本（ThesisRevision，每次编辑自动生成快照）。
-6. 查看两个版本之间的变化（diff snapshot）。
+3. 证据关联股票或板块（subject_type + subject_id）。
+4. 证据以指定立场（stance）关联到某条投资逻辑；同一条证据可以不同立场关联不同逻辑。
+5. 创建投资逻辑时即生成 revision 1；每次编辑自动生成新版本快照（ThesisRevision）。
+6. 查看两个版本之间的字段级 diff（纯文本 + 数组差异，不支持 Markdown 富文本）。
 7. 展示事实、推断和未知项（classification 字段）。
 8. 数据全部本地存储（SQLite，不云端同步）。
-9. 删除操作有确认（前端二次确认 + 后端软删除）。
+9. 删除操作有确认（前端二次确认 + 后端软删除 + `deleted_at` 时间戳）。
 10. 写入失败不破坏旧数据（事务回滚 + 原子写入）。
+11. 编辑投资逻辑支持乐观并发控制（`expected_revision`），防止丢失更新。
 
 ### 4.2 第一版暂不包含
 
 - 自动抓取新闻并自动生成证据。
-- AI 自动修改投资逻辑。
+- AI 自动修改投资逻辑或自动生成 change_summary。
 - 持仓建议自动引用证据。
-- 自动交易。
-- 自动触发卖出。
-- 复杂知识图谱。
-- 向量数据库。
-- 多用户权限。
-- 云端同步。
-- 复杂全文搜索。
+- 自动交易或自动触发卖出。
+- 复杂知识图谱、向量数据库或复杂全文搜索。
+- 多用户权限或云端同步。
 - 与 free-stockdb 集成。
+- 跨模块引用每日复盘结论。
+- `core_claims` 逐条关联证据（第一版只做 thesis-level 关联）。
+- 行业（industry）分类（第一版只保留 stock/sector/theme，见 §5.9）。
+- 多份历史备份（第一版只保留最近一份一致性备份，见 §5.13）。
 
 ## 五、技术决策（必须回答的 16 个问题）
 
@@ -149,18 +182,18 @@ created_at          版本创建时间
 
 理由：
 
-- 证据账本需要按 `subject_type`、`subject_id`、`classification`、`supports`、`thesis_id` 等多维度查询，SQLite 的索引和 WHERE 过滤远优于 JSON 全量扫描。
+- 证据账本需要按 `subject_type`、`subject_id`、`classification`、`thesis_id` 等多维度查询，SQLite 的索引和 WHERE 过滤远优于 JSON 全量扫描。
 - 版本快照（ThesisRevision）会随时间增长，JSON 文件全量读写成本线性上升；SQLite 按行存取更稳定。
 - 需要事务保证（编辑投资逻辑 + 生成版本快照必须原子完成），SQLite 原生支持事务，JSON 文件需要手动实现 tmp + rename。
 - 项目已有成熟的 SQLite 存储模式（`ai_result_store.py`、`review_store.py`），复用一致性高。
 
-JSON 仅用于 SQLite 行内的 `payload_json` / `snapshot` 字段（存复杂嵌套结构），不作为顶层存储。
+JSON 仅用于 SQLite 行内的 `snapshot` 字段（存复杂嵌套结构），不作为顶层存储。
 
 ### 5.2 是否复用现有 SQLite 基础设施
 
 **提案：复用模式，但不复用同一数据库文件。**
 
-- **复用模式**：参照 `review_store.py` / `ai_result_store.py` 的"纯存储层"设计——显式接收 `db_path`、无 ORM、`CREATE TABLE IF NOT EXISTS`、CHECK 约束、损坏检测异常类。
+- **复用模式**：参照 `review_store.py` / `ai_result_store.py` 的"纯存储层"设计——显式接收 `db_path`、无 ORM、`CREATE TABLE IF NOT EXISTS`、CHECK 约束、损坏检测异常类、只读连接使用 `?mode=ro`。
 - **独立数据库文件**：使用独立文件 `~/.vibe-research/evidence_thesis.db`（可用 `VR_DATA_DIR` 覆盖），不与 `ai_results.db` / `daily_review.db` 共享文件，避免跨模块迁移风险。
 - **不修改现有表**：不触碰 `ai_generated_results`、`daily_review_snapshots`、`portfolio.json` 等现有存储。
 
@@ -169,40 +202,47 @@ JSON 仅用于 SQLite 行内的 `payload_json` / `snapshot` 字段（存复杂�
 **候选表结构**：
 
 ```sql
+-- schema 元信息
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 -- 证据表
 CREATE TABLE IF NOT EXISTS evidence_records (
     id TEXT PRIMARY KEY,
-    subject_type TEXT NOT NULL CHECK (subject_type IN ('stock','sector','industry','theme')),
+    subject_type TEXT NOT NULL CHECK (subject_type IN ('stock','sector','theme')),
     subject_id TEXT NOT NULL,
     evidence_type TEXT NOT NULL CHECK (evidence_type IN ('news','announcement','report','research_note','financial_filing','other')),
     claim TEXT NOT NULL,
     source_title TEXT NOT NULL,
     source_url TEXT,
-    source_date TEXT NOT NULL,
-    accessed_at TEXT NOT NULL,
+    source_date TEXT,                       -- 允许为空（research_note/口头信息/无发布日期材料）
+    accessed_at TEXT NOT NULL,              -- UTC ISO 8601，始终必填
     classification TEXT NOT NULL CHECK (classification IN ('fact','inference','unknown')),
     confidence TEXT NOT NULL CHECK (confidence IN ('high','medium','low')),
-    supports TEXT NOT NULL CHECK (supports IN ('support','oppose','neutral')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    deleted INTEGER NOT NULL DEFAULT 0  -- 软删除标记：0=正常, 1=已删除
+    deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    deleted_at TEXT
 );
 
 -- 投资逻辑表
 CREATE TABLE IF NOT EXISTS investment_theses (
     id TEXT PRIMARY KEY,
-    subject_type TEXT NOT NULL CHECK (subject_type IN ('stock','sector','industry','theme')),
+    subject_type TEXT NOT NULL CHECK (subject_type IN ('stock','sector','theme')),
     subject_id TEXT NOT NULL,
+    market TEXT CHECK (market IN ('CN','HK','US','KR') OR market IS NULL),  -- 仅 stock 由服务端解析写入
     title TEXT NOT NULL,
     summary TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('active','weakened','invalidated','archived')),
-    core_claims TEXT NOT NULL,           -- JSON array
-    catalysts TEXT NOT NULL,             -- JSON array
-    risks TEXT NOT NULL,                 -- JSON array
-    invalidation_conditions TEXT NOT NULL, -- JSON array
+    core_claims TEXT NOT NULL,                  -- JSON array
+    catalysts TEXT NOT NULL,                    -- JSON array
+    risks TEXT NOT NULL,                        -- JSON array
+    invalidation_conditions TEXT NOT NULL,      -- JSON array
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    current_revision INTEGER NOT NULL DEFAULT 1
+    current_revision INTEGER NOT NULL DEFAULT 1  -- 始终对应一条已存在的 thesis_revisions.revision_number
 );
 
 -- 投资逻辑版本表（不可变）
@@ -210,7 +250,7 @@ CREATE TABLE IF NOT EXISTS thesis_revisions (
     id TEXT PRIMARY KEY,
     thesis_id TEXT NOT NULL,
     revision_number INTEGER NOT NULL,
-    snapshot TEXT NOT NULL,              -- 完整 InvestmentThesis JSON 快照
+    snapshot TEXT NOT NULL,                      -- 完整快照：thesis 字段 + 当时所有关联证据的完整内容
     change_summary TEXT NOT NULL,
     created_at TEXT NOT NULL,
     FOREIGN KEY (thesis_id) REFERENCES investment_theses(id),
@@ -221,7 +261,9 @@ CREATE TABLE IF NOT EXISTS thesis_revisions (
 CREATE TABLE IF NOT EXISTS thesis_evidence_links (
     thesis_id TEXT NOT NULL,
     evidence_id TEXT NOT NULL,
+    stance TEXT NOT NULL CHECK (stance IN ('support','oppose','neutral')),
     created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
     PRIMARY KEY (thesis_id, evidence_id),
     FOREIGN KEY (thesis_id) REFERENCES investment_theses(id),
     FOREIGN KEY (evidence_id) REFERENCES evidence_records(id)
@@ -237,83 +279,134 @@ CREATE INDEX IF NOT EXISTS idx_thesis_subject ON investment_theses(subject_type,
 CREATE INDEX IF NOT EXISTS idx_thesis_status ON investment_theses(status);
 CREATE INDEX IF NOT EXISTS idx_revisions_thesis ON thesis_revisions(thesis_id, revision_number);
 CREATE INDEX IF NOT EXISTS idx_links_evidence ON thesis_evidence_links(evidence_id);
+CREATE INDEX IF NOT EXISTS idx_links_thesis ON thesis_evidence_links(thesis_id);
 ```
 
 ### 5.4 ID 生成规则
 
-**提案：ULID（Universally Unique Lexicographically Sortable Identifier）。**
+**提案：标准库 `uuid.uuid4().hex`。**
 
-- 全局唯一，无需中央分配。
-- 可按时间排序（26 字符 Crockford Base32），便于按创建顺序展示。
-- 比 UUID v4 更易调试（肉眼可读时间前缀）。
-- 实现用纯 Python 库 `ulid-py` 或手写（ULID 规范简单，无外部依赖也可实现）。
+```python
+import uuid
+new_id = uuid.uuid4().hex  # 32 字符十六进制
+```
 
-**回退方案**：若不引入 `ulid-py`，用 `uuid.uuid4().hex`（32 字符十六进制），牺牲可排序性。
+理由：
 
-ID 示例：`01H8XGJF2KQ3M4N5P6R7S8T9V0`（ULID）。
+- 已有 `created_at` 字段用于排序，不依赖 ID 实现时间排序。
+- 避免新增 `ulid-py` 等第三方依赖。
+- 避免手写 ULID 算法带来的实现风险。
+- MVP 场景无中央分配需求，UUID v4 全局唯一即可。
 
 ### 5.5 Schema 版本
 
 **提案：在数据库中维护 `schema_meta` 表。**
 
 ```sql
-CREATE TABLE IF NOT EXISTS schema_meta (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
--- 初始化时写入：INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', 'evidence_thesis_ledger_v1');
+-- 初始化时写入
+INSERT OR IGNORE INTO schema_meta(key, value)
+VALUES ('schema_version', 'evidence_thesis_ledger_v1');
 ```
 
 - 当前版本：`evidence_thesis_ledger_v1`。
 - 后续升级时版本号递增（`v2`, `v3`...），迁移脚本按版本号分支执行。
-- 打开数据库时先读 `schema_version`，若版本不匹配则拒绝写入并提示用户升级（避免降级损坏）。
+- **打开数据库时先读 `schema_version`**：
+  - 版本低于代码预期 → 执行前向迁移。
+  - 版本高于代码版本 → **拒绝打开**（避免降级损坏）。
+  - 版本匹配 → 正常使用。
 
 ### 5.6 原子写入和事务边界
 
-**提案：SQLite WAL 模式 + 显式事务。**
+**提案：SQLite WAL 模式 + 显式事务 + 每连接启用外键。**
 
-- 打开数据库时 `PRAGMA journal_mode=WAL`（并发读不阻塞写）。
-- 每个写操作包裹在 `BEGIN IMMEDIATE ... COMMIT` 中：
-  - **编辑投资逻辑**：在同一事务内更新 `investment_theses` 行 + 插入 `thesis_revisions` 快照。任一失败则 `ROLLBACK`，旧数据不受影响。
-  - **删除证据**：在同一事务内设置 `evidence_records.deleted=1` + 不删除 `thesis_evidence_links`（保留历史引用）。
+**每连接 PRAGMA（不仅建库时设置）**：
+
+```python
+conn = sqlite3.connect(path, timeout=5)
+conn.row_factory = sqlite3.Row
+conn.execute("PRAGMA foreign_keys = ON")     # 每连接必须启用
+conn.execute("PRAGMA busy_timeout = 5000")   # 每连接必须设置
+conn.execute("PRAGMA journal_mode = WAL")    -- 建库时设置一次即可，持久化
+```
+
+**事务边界**：
+
+- 每个写操作包裹在 `BEGIN IMMEDIATE ... COMMIT` 中。
+- **编辑投资逻辑**：在同一事务内更新 `investment_theses` 行 + 插入 `thesis_revisions` 快照 + 校验 `expected_revision`。任一失败则 `ROLLBACK`，旧数据不受影响。
+- **删除证据**：在同一事务内设置 `evidence_records.deleted=1` + 写入 `deleted_at`；**不删除** `thesis_evidence_links`（保留历史引用，见 §5.12）。
+- **关联证据**：在同一事务内校验 `(subject_type, subject_id)` 一致 + 插入 `thesis_evidence_links`。
 - 连接级别用 `threading.Lock` 保护（参照 `portfolio.py` 的 `_LOCK` 模式），避免 SQLite "database is locked"。
-- 写入后不额外 `fsync`（SQLite 在 WAL 模式下自行管理持久化；极端崩溃场景由 WAL checkpoint 恢复）。
+- 外键约束失败 → 返回明确的业务错误（不抛裸 SQL 错误）。
+- 写入后不额外 `fsync`（SQLite 在 WAL 模式下自行管理持久化）。
 
 ### 5.7 API 路由
 
-**候选路由**（全部在 `/api/thesis` 和 `/api/evidence` 前缀下）：
+**候选路由**（全部在 `/api/thesis` 和 `/api/evidence` 前缀下；通过独立 `evidence_thesis_router.py` 暴露，`app.py` 仅 `app.include_router(...)`）：
 
 ```text
 # 证据
-GET    /api/evidence?subject_type=stock&subject_id=600519   列出证据（按研究对象过滤）
-POST   /api/evidence                                         创建证据
-GET    /api/evidence/{id}                                    获取证据详情
-PUT    /api/evidence/{id}                                    更新证据
-DELETE /api/evidence/{id}                                    软删除证据（需 confirm=true 查询参数）
+GET    /api/evidence?subject_type=stock&subject_id=600519&limit=50&offset=0
+POST   /api/evidence
+GET    /api/evidence/{id}
+PUT    /api/evidence/{id}
+DELETE /api/evidence/{id}?confirm=true           # 软删除（写 deleted_at）
 
 # 投资逻辑
-GET    /api/thesis?subject_type=stock&subject_id=600519      列出投资逻辑（按研究对象过滤）
-POST   /api/thesis                                            创建投资逻辑
-GET    /api/thesis/{id}                                       获取投资逻辑详情（含关联证据）
-PUT    /api/thesis/{id}                                       更新投资逻辑（自动生成版本快照）
-DELETE /api/thesis/{id}                                       归档投资逻辑（status→archived，不物理删除）
+GET    /api/thesis?subject_type=stock&subject_id=600519&limit=50&offset=0
+POST   /api/thesis                                # 创建时同步生成 revision 1
+GET    /api/thesis/{id}                           # 详情含当前关联证据列表
+PUT    /api/thesis/{id}                           # 必须携带 expected_revision；生成新 revision
+DELETE /api/thesis/{id}?confirm=true              # 归档（status→archived，不物理删除）
 
 # 投资逻辑版本
-GET    /api/thesis/{id}/revisions                             列出所有版本
-GET    /api/thesis/{id}/revisions/{rev}                       获取指定版本快照
-GET    /api/thesis/{id}/diff?from=1&to=2                      比较两个版本的差异
+GET    /api/thesis/{id}/revisions                 # 列出所有版本（按 revision_number 升序）
+GET    /api/thesis/{id}/revisions/{rev}           # 获取指定版本快照（含当时证据完整内容）
+GET    /api/thesis/{id}/diff?from=1&to=2          # 比较两个版本的字段级差异
 
 # 证据关联
-POST   /api/thesis/{id}/evidence                              关联证据到投资逻辑
-DELETE /api/thesis/{id}/evidence/{evidence_id}                取消关联
+POST   /api/thesis/{id}/evidence                  # body: {evidence_id, stance}
+PUT    /api/thesis/{id}/evidence/{evidence_id}    # 修改关联 stance（不修改证据原始内容）
+DELETE /api/thesis/{id}/evidence/{evidence_id}    # 取消关联
 ```
 
-**约束**：
+**通用约束**：
 
-- DELETE 操作必须带 `confirm=true` 查询参数，否则返回 400。
+- 所有列表接口必须支持分页：
+  - `limit`：默认 50，最大 200，超出截断并返回 400。
+  - `offset`：默认 0，必须 ≥ 0。
+  - 默认排序：`updated_at DESC, id DESC`。
+- DELETE 操作必须带 `confirm=true` 查询参数，否则返回 400。`confirm=true` **只是防误调用机制**，不能替代权限校验或事务校验。
 - 所有写操作返回最新数据快照（不返回裸状态码）。
 - 错误用与现有端点一致的 `{detail: "..."}` 格式。
-- 不接受客户端传入 `id`、`created_at`、`updated_at`、`current_revision`（服务端生成）。
+- 不接受客户端传入 `id`、`created_at`、`updated_at`、`deleted_at`、`current_revision`、`market`（服务端生成或解析）。
+
+**乐观并发**：
+
+更新 thesis 必须携带：
+
+```json
+{
+  "expected_revision": 3,
+  "change_summary": "更新盈利假设",
+  "title": "...",
+  "summary": "...",
+  "...": "..."
+}
+```
+
+服务端在事务内校验 `expected_revision == current_revision`：
+
+- 不相等 → 返回 **HTTP 409** + 当前 `current_revision`，前端提示用户重新加载。
+- 相等 → 进入更新流程，`new_revision = current_revision + 1`。
+
+**版本冲突响应示例**：
+
+```json
+{
+  "detail": "投资逻辑已被其他会话修改，请重新加载后重试",
+  "current_revision": 4
+}
+```
 
 ### 5.8 前端页面入口
 
@@ -334,111 +427,275 @@ DELETE /api/thesis/{id}/evidence/{evidence_id}                取消关联
 - 路由懒加载（与现有板块研究页一致），不影响首屏体积。
 - 不修改现有页面的核心逻辑，只在个股页新增一个可折叠面板。
 
-### 5.9 股票与行业的统一 subject 表达
+### 5.9 研究对象的统一 subject 表达
 
-**提案：`subject_type` + `subject_id` 二元组。**
+**提案：`subject_type` + `subject_id` 二元组，第一版只保留 `stock | sector | theme`。**
 
 | subject_type | subject_id 示例 | 说明 |
 |---|---|---|
-| `stock` | `600519` | A股 6 位代码（与现有 `_CODE_RE = ^\d{6}$` 一致） |
-| `sector` | `pcb` | 板块 slug（与现有 `sector_research_data` 的 workspace slug 一致） |
-| `industry` | `semiconductors` | 行业 slug（若与 sector 区分需要） |
+| `stock` | `600519` / `00700` / `AAPL` / `005930.KS` | 项目现有股票规范化代码（见 §5.9.1） |
+| `sector` | `pcb` | 现有板块研究 workspace slug |
 | `theme` | `ai_inference` | 自由主题 slug（用户自定义） |
 
-- 同一证据或投资逻辑只能关联一个 subject（不支持跨 subject 的"组合逻辑"，留待后续版本）。
-- subject_id 不做外键约束（股票/行业数据来自外部数据源，可能动态变化）；只做格式校验（stock 必须是 6 位数字，sector/industry/theme 必须是合法 slug）。
-- 前端通过 subject_type 决定跳转目标（stock → 个股页，sector → 板块页）。
+**MVP 删除 `industry`**。理由：
+
+- 当前没有独立的行业 slug 注册表；
+- 同一对象可能被写成 `sector=semiconductor` / `industry=semiconductors` / `theme=semiconductor`，导致重复账本；
+- 未来确有独立行业分类体系时，再通过 schema migration 增加 `industry` 类型，不在 MVP 预留重复类型。
+
+**主题 slug 规范**：
+
+- 小写；
+- 仅允许字母、数字、短横线（`-`）或下划线（`_`）；
+- 最大长度 64；
+- 去除首尾空白；
+- 不允许空字符串。
+
+#### 5.9.1 股票标识必须覆盖项目现有市场
+
+**不再使用只支持 A 股 6 位数字的新正则**。`subject_id` 必须使用项目现有股票输入的规范化标识：
+
+| 市场 | 示例 subject_id | market（服务端解析） |
+|---|---|---|
+| A 股 | `600519` | `CN` |
+| 港股 | `00700` | `HK` |
+| 美股 | `AAPL` | `US` |
+| 韩股 | `005930.KS` | `KR` |
+
+**规范化规则**：
+
+- 英文字母统一大写；
+- 去除首尾空格；
+- 后缀（如 `.KS`）统一大写；
+- **不允许静默把韩股代码当作 A 股**（例如 `005930` 必须保留 `.KS` 后缀，不能截断为 6 位数字）；
+- 使用项目现有股票代码识别逻辑（不重新定义只支持 A 股的正则）。
+
+**market 字段**：
+
+- 不由客户端自由填写；
+- 由服务端解析 `subject_id` 后写入 `investment_theses.market`；
+- 在快照和 API 返回中附加，便于前端按市场分组展示；
+- `sector` 和 `theme` 类型的 `market` 为 `NULL`。
 
 ### 5.10 证据来源字段如何保持可追溯
 
-**提案：四个必填来源字段 + 一个可选 URL。**
+**提案：必填字段 + 可选 URL + source_date 允许为空。**
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `source_title` | 是 | 来源标题（用户录入，如"贵州茅台 2025 年三季报"） |
 | `source_url` | 否 | 来源 URL（本地文件或口头信息可留空） |
-| `source_date` | 是 | 来源发布日期（区分"信息产生时间"与"用户录入时间"） |
-| `accessed_at` | 是 | 用户获取该信息的时间（证明"何时看到"，即使 source_date 很早） |
+| `source_date` | 否 | 来源发布日期（ISO 8601 date）；`research_note`、口头信息、无发布日期材料允许为空 |
+| `accessed_at` | 是 | 用户获取该信息的时间（UTC ISO 8601，证明"何时看到"，即使 source_date 为空也始终必填） |
 
-- `source_date` 和 `accessed_at` 分开，避免把"旧新闻当新证据"。
-- `claim` 字段存用户摘要（非原文复制），避免版权问题，同时保留可追溯的 source_url。
-- 若来源是本地文件（如 PDF 研报），`source_url` 留空，`source_title` 写文件名，未来可扩展 `source_file_id` 字段关联文件存储。
+**约束**：
+
+- `source_date` 有值时必须是有效 ISO 8601 date（`YYYY-MM-DD`）。
+- `accessed_at` 始终必填，UTC ISO 8601 datetime。
+- `source_date` 与 `accessed_at` 分开，避免把"旧新闻当新证据"。
+- `claim` 字段存用户摘要（非原文复制），避免版权问题，同时保留可追溯的 `source_url`。
+- 若来源是本地文件（如 PDF 研报），`source_url` 留空，`source_title` 写文件名。
 
 ### 5.11 版本变更如何生成
 
-**提案：每次 PUT /api/thesis/{id} 自动生成一个 ThesisRevision。**
+#### 5.11.1 创建投资逻辑
 
-流程：
+同一事务内：
 
-1. 客户端 PUT 请求携带修改后的 thesis 字段。
-2. 服务端在事务内：
-   a. 读取当前 thesis 行（含 `current_revision`）。
-   b. 将当前 thesis 完整快照存入 `thesis_revisions`（`revision_number = current_revision`，作为修改前的存档）。
-   c. 更新 `investment_theses` 行为新字段，`current_revision += 1`。
-   d. 若客户端提供了 `change_summary`，写入 revision；否则用默认值"编辑投资逻辑"。
-3. 事务提交。任一步失败则回滚，旧版本和旧快照不受影响。
+1. 创建 `investment_theses` 行，`current_revision = 1`。
+2. 创建 `thesis_revisions` 行，`revision_number = 1`。
+3. revision 1 的 `snapshot` 是创建后的完整状态（含 thesis 字段 + 当时所有关联证据的完整内容；创建时关联证据通常为空数组）。
+4. `change_summary` 由用户填写，可提供默认值 `"创建投资逻辑"`。
 
-**diff 视图**：`GET /api/thesis/{id}/diff?from=1&to=2` 返回两个 snapshot 的字段级 diff（新增/删除/修改的字段值），前端渲染为对比表格。
+#### 5.11.2 编辑投资逻辑
 
-**限制**：第一版 diff 只做字段级比较（字符串/数组变化），不做语义级 diff。
+客户端必须提交：
+
+```text
+expected_revision
+change_summary
+...其他字段
+```
+
+服务端在事务内：
+
+1. 读取当前 thesis 行（含 `current_revision`）。
+2. 验证 `expected_revision == current_revision`：
+   - 不相等 → 返回 HTTP 409 + 当前 `current_revision`，事务回滚，**不覆盖其他页面或标签页的新修改**。
+3. 更新 `investment_theses` 行为新字段，`updated_at` 刷新。
+4. `new_revision = current_revision + 1`。
+5. 插入 `thesis_revisions` 行，`revision_number = new_revision`，`snapshot` 为更新后的完整状态（含当时所有有效关联证据的完整内容，见 §5.11.3）。
+6. 将主表 `current_revision` 更新为 `new_revision`。
+7. 整个事务一起提交。任一步失败则回滚，旧版本和旧快照不受影响。
+
+**最终保证**：
+
+```text
+investment_theses.current_revision
+```
+
+始终对应一条已经存在的、不可变的：
+
+```text
+thesis_revisions.revision_number
+```
+
+#### 5.11.3 历史 snapshot 必须保存当时的证据状态
+
+**问题**：仅在 snapshot 中保存 evidence ID 不够，因为 EvidenceRecord 后续可能被编辑、取消关联或软删除。历史版本将无法回答"当时引用了哪些证据？当时 claim 是什么？当时该证据是支持还是反对？"
+
+**MVP 方案**：不新增 EvidenceRevision 表。在 `ThesisRevision.snapshot` 中增加不可变的证据快照数组：
+
+```json
+{
+  "thesis": {
+    "id": "...",
+    "subject_type": "stock",
+    "subject_id": "600519",
+    "market": "CN",
+    "title": "...",
+    "summary": "...",
+    "status": "active",
+    "core_claims": ["..."],
+    "catalysts": ["..."],
+    "risks": ["..."],
+    "invalidation_conditions": ["..."],
+    "current_revision": 2,
+    "created_at": "...",
+    "updated_at": "..."
+  },
+  "evidence_links": [
+    {
+      "evidence_id": "...",
+      "stance": "support",
+      "claim": "...",
+      "classification": "fact",
+      "confidence": "high",
+      "source_title": "...",
+      "source_url": "...",
+      "source_date": "...",
+      "accessed_at": "..."
+    }
+  ]
+}
+```
+
+**创建或更新 ThesisRevision 时**，把当时所有有效（未软删除、已关联）的证据的必要字段复制进 snapshot。历史版本和 diff **只读取 snapshot**，不依赖当前 EvidenceRecord。
+
+这样即使证据之后被编辑、被软删除、被取消关联，历史版本仍可完整还原。
+
+#### 5.11.4 diff 视图
+
+`GET /api/thesis/{id}/diff?from=1&to=2` 返回两个 snapshot 的字段级 diff（新增/删除/修改的字段值），前端渲染为对比表格。
+
+**第一版限制**：
+
+- 只做字段级比较（字符串/数组变化）；
+- **不支持 Markdown 富文本渲染**；
+- 不做语义级 diff；
+- 证据列表 diff 展示为"新增/移除/stance 变化/字段变化"。
 
 ### 5.12 删除证据后如何处理历史版本
 
 **提案：软删除 + 历史快照不清理。**
 
-- 删除证据 = 设置 `evidence_records.deleted = 1`，不物理删除行，不删除 `thesis_evidence_links`。
-- 查询证据列表时 `WHERE deleted = 0` 过滤；但历史 `thesis_revisions.snapshot` 中引用的证据 ID 仍然保留（快照是不可变的完整 JSON，不因后续删除而改写）。
-- diff 视图展示历史版本时，若某条证据已被删除，标注"该证据已删除"但不影响 diff 内容。
+- 删除证据 = 设置 `evidence_records.deleted = 1` + 写入 `deleted_at`，不物理删除行，不删除 `thesis_evidence_links`。
+- 查询证据列表时 `WHERE deleted = 0` 过滤；但历史 `thesis_revisions.snapshot.evidence_links` 中引用的证据内容仍然保留（snapshot 是不可变的完整 JSON，不因后续删除而改写）。
+- diff 视图展示历史版本时，若某条证据已被删除，标注"该证据已删除"但不影响 diff 内容（因 snapshot 已包含完整证据内容）。
 - 投资逻辑详情页的"当前证据列表"不展示已删除证据。
 - **不提供"级联恢复"**：恢复已删除证据是手动操作，不自动重新关联到投资逻辑。
 
-### 5.13 数据损坏时如何降级
+### 5.13 数据损坏时如何降级与备份
 
-**提案：检测即停止 + 安全文案 + 不覆盖。**
+#### 5.13.1 损坏检测与降级
 
 参照 `portfolio.py` 的 `PortfolioDataCorruptedError` 模式：
 
 - 打开数据库时执行 `PRAGMA integrity_check`；若失败，抛 `EvidenceLedgerCorruptedError`。
 - 所有读写操作捕获 `sqlite3.DatabaseError`，转换为 `EvidenceLedgerCorruptedError`。
 - HTTP 层捕获该异常，返回 500 + 固定安全文案（不透传 SQL 错误或路径）：
+
   ```text
   投资逻辑数据文件损坏，已停止读写以避免覆盖；请检查 evidence_thesis.db
   ```
-- **不自动修复、不自动重建**：损坏后只读模式，要求用户手动从备份恢复。
-- 备份策略：每次成功写入后，异步复制一份 `evidence_thesis.db.bak`（参照 `portfolio.py` 的 `.bak` 模式），保留最近一次完整状态。
+
+- **完整性检查失败时停止该模块的所有读写**，不声称仍处于"只读模式"。
+- **不自动修复、不自动重建**：损坏后必须由用户手动从备份恢复。
+
+#### 5.13.2 备份策略（WAL 安全）
+
+**禁止使用普通文件复制作为 SQLite WAL 备份**。原因：WAL 模式下最新已提交数据可能仍在 `evidence_thesis.db-wal` 中，只复制 `.db` 主文件会得到缺少最新事务或不一致的备份。
+
+**使用 Python SQLite backup API**：
+
+```python
+source_connection.backup(destination_connection)
+```
+
+**建议流程**：
+
+1. 主事务成功提交；
+2. 打开临时备份数据库 `evidence_thesis.db.bak.tmp`；
+3. 使用 SQLite backup API 生成一致性备份；
+4. 备份成功后 `os.replace()` 为 `evidence_thesis.db.bak`（原子替换）；
+5. 备份失败**不回滚**已经成功的业务写入，但必须记录安全日志；
+6. 不启动无限后台线程（备份在写入事务后同步触发或通过短生命周期任务触发）；
+7. **第一版只保留最近一份完整备份**，不保留多份历史备份。
 
 ### 5.14 测试策略
 
-**提案：三层测试。**
+**提案：四层测试。**
 
-**第一层：存储层专项单测**（参照 `test_ttl_cache.py` 模式）
+#### 第一层：存储层专项单测（参照 `test_ttl_cache.py` 模式）
 
-- 证据 CRUD：创建、读取、更新、软删除。
-- 投资逻辑 CRUD + 版本快照生成。
+- 证据 CRUD：创建、读取、更新、软删除（含 `deleted_at`）。
+- 投资逻辑 CRUD + 版本快照生成（创建即生成 revision 1；编辑生成新 revision）。
 - 版本 diff：字段级差异正确性。
-- 关联表：多对多关联、取消关联。
+- 关联表：多对多关联、取消关联、stance 修改。
 - 软删除后查询过滤正确性。
 - 事务回滚：模拟写入中途失败，旧数据不变。
+- `expected_revision` 冲突 → 409 + 不丢失其他会话修改。
 - 损坏检测：注入损坏数据库文件，确认抛出正确异常。
+- 完整性检查失败时模块停止读写（不进入只读模式）。
+- 外键约束：跨 subject 关联被拒绝。
 - 并发写：多线程同时编辑同一 thesis，确认锁保护有效。
+- 历史快照内容完整性：编辑后旧 snapshot 不变，新 snapshot 含当时证据完整内容。
 
-**第二层：API 层集成测试**（参照 `test_portfolio_advice_api.py` 模式）
+#### 第二层：API 层集成测试（参照 `test_portfolio_advice_api.py` 模式）
 
 - 每个 API 路由的 happy path。
-- 校验失败：缺字段、非法枚举值、非法 subject_id 格式 → 400/422。
+- 校验失败：缺字段、非法枚举值、非法 subject_id 格式、limit 超过 200 → 400/422。
 - DELETE 无 `confirm=true` → 400。
 - 未找到资源 → 404。
 - 损坏数据库 → 500 + 安全文案。
+- `expected_revision` 不匹配 → 409 + 返回 `current_revision`。
+- 分页参数边界：limit=0、limit=201、offset=-1。
 
-**第三层：前端关键路径**（参照现有 `node --test` 模式）
+#### 第三层：前端单元测试（参照现有 `node --test` 模式）
 
 - API 客户端调用正确性（请求方法、URL、body 字段）。
 - diff 视图渲染逻辑（输入两个 snapshot，输出正确 diff 结构）。
+- 乐观并发冲突的重试 UI 流程。
 
-**不做的测试**：
+#### 第四层：Playwright E2E smoke（至少一条）
 
-- 不做 E2E（第一版功能简单，单测 + 集成测试覆盖足够）。
-- 不做性能测试（数据量小，SQLite 单文件足够）。
+**至少一条真实 E2E smoke**：
+
+1. 打开投资逻辑页面；
+2. 创建一条 thesis；
+3. 创建并关联一条 evidence（携带 stance）；
+4. 编辑 thesis，生成新 revision；
+5. 查看 revision diff；
+6. 软删除 evidence；
+7. 当前证据列表不再展示该证据；
+8. 历史 revision 仍能展示当时证据快照。
+
+**继续要求**：
+
+- 全量后端回归（`pytest -m "not live"`）；
+- 全量前端测试（`npm test`）；
+- build；
+- 既有 stock-data smoke E2E 不退化。
 
 ### 5.15 迁移策略
 
@@ -447,10 +704,10 @@ DELETE /api/thesis/{id}/evidence/{evidence_id}                取消关联
 - 首次打开数据库：`CREATE TABLE IF NOT EXISTS` 创建所有表 + 写入 `schema_meta`。
 - 后续升级：
   - 打开数据库读 `schema_version`。
-  - 若版本低于代码预期，执行迁移脚本（`migrate_v1_to_v2.py` 等）。
+  - 版本低于代码预期 → 执行迁移脚本（`migrate_v1_to_v2.py` 等）。
   - 迁移在事务内完成，失败则回滚。
   - 迁移成功后更新 `schema_meta.schema_version`。
-- **不支持降级**：若数据库版本高于代码预期，拒绝打开并提示用户升级代码。
+- **版本高于代码版本 → 拒绝打开**（避免降级损坏）。
 - **第一版无历史数据迁移**：v1 是初始版本，无旧数据需迁移。
 - 与现有模块的迁移隔离：不动 `ai_results.db` / `daily_review.db` 的迁移逻辑。
 
@@ -460,40 +717,61 @@ DELETE /api/thesis/{id}/evidence/{evidence_id}                取消关联
 
 1. **独立数据库文件**：`evidence_thesis.db` 与 `portfolio.json`、`ai_results.db`、`daily_review.db` 物理隔离，不共享表、不共享连接。
 2. **独立 API 路由前缀**：`/api/thesis` 和 `/api/evidence` 不与 `/api/portfolio`、`/api/portfolio/advice`、`/api/daily-review` 等现有路由冲突。
-3. **独立存储模块**：新增 `evidence_thesis_store.py`，不 import `portfolio.py`、`portfolio_advice_service.py`、`ai_result_service.py`、`daily_review_cache.py` 等现有模块。
+3. **独立存储模块**：新增 `evidence_thesis_store.py` / `evidence_thesis_service.py` / `evidence_thesis_router.py`，**不 import** `portfolio_advice_service`、`portfolio_advice_policy`、`daily_review`、`chat` 等现有模块。
 4. **不修改现有表结构**：不 `ALTER` 任何现有表，不添加外键指向现有表。
 5. **不修改现有前端页面核心逻辑**：只在个股页新增可折叠面板（懒加载），不改现有组件状态管理。
 6. **独立测试套件**：新增 `test_evidence_thesis_store.py` / `test_evidence_thesis_api.py`，不修改现有测试文件。
-7. **回归验证**：实现 PR 的 CI 必须包含现有全部测试（`pytest -m "not live"` + `npm test`），证明现有功能未受影响。
+7. **回归验证**：实现 PR 的 CI 必须包含现有全部测试（`pytest -m "not live"` + `npm test` + build + 既有 stock-data smoke E2E），证明现有功能未受影响。
+8. **关联一致性约束**：`thesis_evidence_links` 关联时校验 thesis 与 evidence 的 `(subject_type, subject_id)` 一致，防止把其他股票的证据误关联到当前股票逻辑；不一致时返回业务错误（不抛裸 SQL 错误）。
+9. **新功能路由不写入 app.py**：通过独立 `evidence_thesis_router.py` 暴露，`app.py` 只做 `app.include_router(...)` 最小接入；这不是重构现有全部路由，也不启动 APIRouter 大拆分，仅保证新功能不继续扩大单文件。
 
 ## 六、开放问题（实现阶段需确认）
 
-1. `theme` 类型的 `subject_id` 是否需要预定义列表，还是完全自由输入？
+1. `theme` 类型的 `subject_id` 是否需要预定义列表，还是完全自由输入？（MVP 采用自由 slug + 规范化规则，不做预定义列表。）
 2. 证据 `claim` 字段是否需要最大长度限制？
-3. 投资逻辑 `core_claims` 等数组字段是否需要逐条关联到具体证据（第一版只做 thesis-level 关联）？
-4. 版本 diff 是否需要支持富文本（Markdown）渲染？
-5. 备份策略是否需要保留多个历史备份（而非仅最近一份）？
-6. 是否需要在投资逻辑详情页展示"相关复盘结论"（跨模块引用，第一版不做）？
+3. 投资逻辑 `core_claims` 是否需要逐条关联到具体证据？（第一版只做 thesis-level 关联，不做逐条 claim 关联。）
+4. 版本 diff 是否需要支持富文本（Markdown）渲染？（第一版只显示纯文本和数组差异，不支持。）
+5. 备份策略是否需要保留多个历史备份？（第一版只保留最近一份一致性备份。）
+6. 是否需要在投资逻辑详情页展示"相关复盘结论"？（第一版不做跨模块引用。）
 
 ## 七、非目标与暂缓
 
 - 不做自动证据抓取。
-- 不做 AI 自动生成或修改投资逻辑。
+- 不做 AI 自动生成或修改投资逻辑（包括 `change_summary` 不由 AI 生成）。
 - 不做持仓建议自动引用证据（路线图后续阶段）。
 - 不做复杂知识图谱或向量搜索。
 - 不做多用户权限或云端同步。
 - 不做与 free-stockdb 集成。
+- 不做跨模块引用每日复盘结论。
+- 不引入 `industry` 类型（MVP 只保留 stock/sector/theme）。
+- 不引入 ULID 或其他第三方 ID 库（使用标准库 `uuid.uuid4().hex`）。
 - 不修改路线图（`product-roadmap-next-phase.md`）的优先级顺序。
 
-## 八、下一步
+## 八、文档内部一致性核对
+
+- `supports` 字段已从 EvidenceRecord 移除，立场改为 `thesis_evidence_links.stance`。
+- `current_revision` 始终对应一条已存在的 `thesis_revisions.revision_number`，不存在"主表当前版本在版本表中缺失"的状态。
+- 创建 thesis 即生成 revision 1（不再有"revision 1 不存在"的情况）。
+- `source_date` 允许为空（research_note、口头信息、无发布日期材料）；`accessed_at` 始终必填。
+- `source_date` 有值时必须是有效 ISO 8601 date。
+- 所有服务端 datetime 使用 UTC ISO 8601。
+- `change_summary` 第一版由用户填写，可提供默认值，但不称为 AI 自动生成。
+- `core_claims` 第一版采用 thesis-level 证据关联，不增加逐条 claim 关联。
+- diff 第一版只显示纯文本和数组差异，不支持 Markdown 富文本渲染。
+- 第一版不跨模块引用每日复盘结论。
+- 第一版备份只保留最近一份一致性备份。
+- 之前的"见 §4.12"应为"见 §5.12"（本文档统一使用 §5.x 编号）。
+
+## 九、下一步
 
 本设计文档通过审查后：
 
 1. 在 `design/evidence-thesis-ledger-mvp` 分支基础上创建实现分支（如 `feat/evidence-thesis-ledger-mvp`）。
 2. 按 §5.3 表结构实现存储层 `evidence_thesis_store.py`。
-3. 按 §5.7 路由实现 API 层。
-4. 按 §5.8 页面入口实现前端。
-5. 按 §5.14 测试策略编写三层测试。
-6. 建立 Draft PR，CI 全绿后申请合并。
+3. 按业务规则实现服务层 `evidence_thesis_service.py`（事务、乐观并发、关联校验、备份）。
+4. 按 §5.7 路由实现 API 层 `evidence_thesis_router.py`，在 `app.py` 中仅 `app.include_router(...)`。
+5. 按 §5.8 页面入口实现前端。
+6. 按 §5.14 测试策略编写四层测试。
+7. 建立 Draft PR，CI 全绿后申请合并。
 
 实现阶段仍遵守"不并行启动多个功能"的治理要求。
