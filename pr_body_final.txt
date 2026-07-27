@@ -15,10 +15,10 @@ PR #21 保持 **Draft**，尚未合并到 `feature/research-system-v01`。
 | PR | #21 |
 | Draft | ✅ |
 | Base | `feature/research-system-v01` `bbbb7bb2d1d69126d40c18ac1f26821505e14705` |
-| Head SHA | `1531bfa860b5dfc540cc58fd709980d72559f07e` |
-| Commits | 12 |
+| Head SHA | `6ddaa3b8941703c5d80a6322212265012eba5d21` |
+| Commits | 13 |
 | Changed files | 28 |
-| Diff stats | 28 files changed, 10225 insertions(+), 2 deletions(-) |
+| Diff stats | 28 files changed, 10227 insertions(+), 2 deletions(-) |
 
 ### 自 8f1ac1c 起的提交序列（全部列出）
 
@@ -30,6 +30,7 @@ cba5cf7 fix(evidence-thesis): close storage and API contract blockers
 96a41a7 fix(evidence-thesis): complete real backend E2E and restore frontend build
 482e8a3 fix(evidence-thesis): align UI workflow and CI integration
 1531bfa fix(evidence-thesis): align UI workflow and CI integration
+6ddaa3b docs(pr21): finalize PR description with head 1531bfa
 ```
 
 ---
@@ -101,7 +102,7 @@ idx_links_evidence
 
 ## CI 状态
 
-以 **Head `1531bfa860b5dfc540cc58fd709980d72559f07e`** 对应最新 Run 为准。
+以 **Head `6ddaa3b8941703c5d80a6322212265012eba5d21`** 对应最新 Run 为准。
 
 **不得**将历史失败 Run `30278264107` 或旧 Run `30261400233` 作为通过证据。
 
