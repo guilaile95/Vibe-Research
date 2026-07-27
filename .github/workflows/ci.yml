@@ -93,6 +93,36 @@ jobs:
         working-directory: frontend
         run: npm run test:e2e:smoke
 
+  e2e-thesis-smoke:
+    name: Playwright thesis smoke E2E
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install chromium --with-deps
+
+      - name: Run evidence-thesis smoke E2E
+        working-directory: frontend
+        run: npm run test:e2e:thesis
+
   whitespace:
     name: Whitespace check
     runs-on: ubuntu-latest
