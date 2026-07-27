@@ -870,3 +870,99 @@ export interface NdjsonProtocolState extends NdjsonStreamResult {
   sawError: boolean;
   errorMessage: string | null;
 }
+
+
+// ---------------------------------------------------------------------------
+// 投资逻辑与证据账本（Investment Thesis & Evidence Ledger）
+// ---------------------------------------------------------------------------
+
+// 证据记录
+export interface EvidenceRecord {
+  id: string;
+  subject_type: "stock" | "sector" | "theme";
+  subject_id: string;
+  evidence_type: "news" | "announcement" | "report" | "research_note" | "financial_filing" | "other";
+  claim: string;
+  source_title: string;
+  source_url: string | null;
+  source_date: string | null;
+  accessed_at: string;
+  classification: "fact" | "inference" | "unknown";
+  confidence: "high" | "medium" | "low";
+  created_at: string;
+  updated_at: string;
+  deleted: number;
+  deleted_at: string | null;
+}
+
+// 投资逻辑（主表字段）
+export interface InvestmentThesis {
+  id: string;
+  subject_type: "stock" | "sector" | "theme";
+  subject_id: string;
+  market: "CN" | "HK" | "US" | "KR" | null;
+  title: string;
+  summary: string;
+  status: "active" | "weakened" | "invalidated" | "archived";
+  core_claims: string[];
+  catalysts: string[];
+  risks: string[];
+  invalidation_conditions: string[];
+  created_at: string;
+  updated_at: string;
+  current_revision: number;
+}
+
+// 证据关联（含证据快照字段）
+export interface EvidenceLink {
+  evidence_id: string;
+  evidence_type: string;
+  stance: "support" | "oppose" | "neutral";
+  claim: string;
+  classification: string;
+  confidence: string;
+  source_title: string;
+  source_url: string | null;
+  source_date: string | null;
+  accessed_at: string;
+}
+
+// 投资逻辑聚合状态（thesis 详情返回）
+export interface ThesisAggregate {
+  thesis: InvestmentThesis;
+  evidence_links: EvidenceLink[];
+}
+
+// 版本快照
+export interface ThesisRevision {
+  id: string;
+  thesis_id: string;
+  revision_number: number;
+  snapshot: ThesisAggregate;
+  change_summary: string;
+  created_at: string;
+}
+
+// 版本列表项
+export interface ThesisRevisionListItem {
+  id: string;
+  thesis_id: string;
+  revision_number: number;
+  change_summary: string;
+  created_at: string;
+}
+
+// Diff 结果
+export interface ThesisDiff {
+  from_revision: number;
+  to_revision: number;
+  thesis_changes: Record<string, { from: any; to: any }>;
+  evidence_added: { evidence_id: string; to: EvidenceLink }[];
+  evidence_removed: { evidence_id: string; from: EvidenceLink }[];
+  evidence_changed: { evidence_id: string; changes: Record<string, { from: any; to: any }> }[];
+}
+
+// 列表响应
+export interface EvidenceListResult { items: EvidenceRecord[]; total: number; limit: number; offset: number; }
+export interface ThesisListResult { items: InvestmentThesis[]; total: number; limit: number; offset: number; }
+export interface RevisionListResult { items: ThesisRevisionListItem[]; total: number; }

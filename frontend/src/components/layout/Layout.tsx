@@ -4,7 +4,7 @@ import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search, NotebookPen,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, UserRound,
   Cog, Cpu, Database, Cable, Rocket, FlaskConical, Star, FileText,
-  Target,
+  Target, BookOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -25,6 +25,7 @@ const NAV = [
   { to: "/cockpit", icon: Target, label: "决策舱" },
   { to: "/my-reports", icon: FileText, label: "我的研报" },
   { to: "/notes", icon: NotebookPen, label: "研究记录" },
+  { to: "/thesis", icon: BookOpen, label: "投资逻辑" },
   { to: "/settings", icon: Settings, label: "接入 AI" },
 ];
 
