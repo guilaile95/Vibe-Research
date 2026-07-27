@@ -7,7 +7,7 @@ import threading
 from types import SimpleNamespace
 
 import app
-from app import TTLCache
+from app import TTLCache, _CACHE_MISS
 
 
 class _FakeClock:
@@ -48,13 +48,13 @@ def test_get_hit_within_ttl(monkeypatch):
     assert cache.get("k", ttl=10) == 42
 
 
-# 3. TTL 过期后返回 miss
+# 3. TTL 过期后返回 miss sentinel
 def test_get_miss_after_ttl_expired(monkeypatch):
     clock = _install_clock(monkeypatch)
     cache = TTLCache()
     cache.set("k", "v")
     clock.advance(10)  # time.time() - ts == 10，不满足 < ttl(=10) → 过期
-    assert cache.get("k", ttl=10) is None
+    assert cache.get("k", ttl=10) is _CACHE_MISS
 
 
 # 4. 过期项从缓存中删除
@@ -63,7 +63,7 @@ def test_expired_entry_evicted_from_data(monkeypatch):
     cache = TTLCache()
     cache.set("k", "v")
     clock.advance(10)
-    assert cache.get("k", ttl=10) is None
+    assert cache.get("k", ttl=10) is _CACHE_MISS
     assert "k" not in cache._data
 
 
@@ -77,7 +77,7 @@ def test_lru_eviction_when_over_capacity(monkeypatch):
     assert "a" not in cache._data
     assert "b" in cache._data
     assert "c" in cache._data
-    assert cache.get("a", ttl=10) is None
+    assert cache.get("a", ttl=10) is _CACHE_MISS
 
 
 # 6. get() 命中后更新 LRU 顺序
@@ -109,7 +109,7 @@ def test_empty_list_cacheable(monkeypatch):
     cache = TTLCache()
     cache.set("k", [])
     val = cache.get("k", ttl=10)
-    assert val is not None  # 显式校验不是 None（避免 == [] 被误判）
+    assert val is not _CACHE_MISS
     assert val == []
 
 
@@ -119,7 +119,7 @@ def test_empty_dict_cacheable(monkeypatch):
     cache = TTLCache()
     cache.set("k", {})
     val = cache.get("k", ttl=10)
-    assert val is not None
+    assert val is not _CACHE_MISS
     assert val == {}
 
 
@@ -136,7 +136,7 @@ def test_falsy_values_cacheable(monkeypatch):
 
     false_val = cache.get("false", ttl=10)
     assert false_val is False
-    assert false_val is not None
+    assert false_val is not _CACHE_MISS
 
 
 # 11. 基本并发读写不破坏内部结构
@@ -162,3 +162,65 @@ def test_concurrent_access_does_not_corrupt(monkeypatch):
     assert errors == [], f"并发读写抛出异常: {errors}"
     # 结构不变量：条目数不超过容量上限
     assert len(cache._data) <= cache._max
+
+
+# 12. None 可以作为合法缓存值命中
+def test_none_value_cacheable(monkeypatch):
+    _install_clock(monkeypatch)
+    cache = TTLCache()
+    cache.set("k", None)
+    val = cache.get("k", ttl=10)
+    assert val is None  # 实际值就是 None
+    assert val is not _CACHE_MISS  # 但不是 miss sentinel
+
+
+# 13. 不存在的 key 返回 _CACHE_MISS 而非 None
+def test_missing_key_returns_miss_sentinel(monkeypatch):
+    _install_clock(monkeypatch)
+    cache = TTLCache()
+    result = cache.get("missing", ttl=10)
+    assert result is _CACHE_MISS
+    assert result is not None
+
+
+# 14. _cached() 辅助函数：fetch 返回 None 时缓存命中，不重复调用 fetch
+def test_cached_caches_none_and_skips_refetch(monkeypatch):
+    """_cached() 第一次 fetch 返回 None，第二次应命中缓存不再 fetch。"""
+    _install_clock(monkeypatch)
+    call_count = 0
+
+    def fetch():
+        nonlocal call_count
+        call_count += 1
+        return None
+
+    # 第一次调用：执行 fetch
+    result1 = app._cached("test_endpoint", "test_code", 1800, fetch)
+    assert result1 is None
+    assert call_count == 1
+
+    # 第二次调用：应命中缓存，不再执行 fetch
+    result2 = app._cached("test_endpoint", "test_code", 1800, fetch)
+    assert result2 is None
+    assert call_count == 1, "TTL 内第二次调用不应再执行 fetch"
+
+
+# 15. _cached() 辅助函数：TTL 过期后重新 fetch
+def test_cached_refetches_after_ttl_expiry(monkeypatch):
+    """_cached() TTL 过期后应重新执行 fetch。"""
+    clock = _install_clock(monkeypatch)
+    call_count = 0
+
+    def fetch():
+        nonlocal call_count
+        call_count += 1
+        return {"data": call_count}
+
+    result1 = app._cached("ep", "code", 10, fetch)
+    assert result1 == {"data": 1}
+    assert call_count == 1
+
+    clock.advance(10)  # 过期
+    result2 = app._cached("ep", "code", 10, fetch)
+    assert result2 == {"data": 2}
+    assert call_count == 2

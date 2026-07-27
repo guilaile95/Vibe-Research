@@ -1284,6 +1284,9 @@ def quote(codes: str = Query(..., description="逗号分隔的 6 位代码")):
         raise HTTPException(502, f"行情源异常：{e}") from e
 
 
+_CACHE_MISS = object()
+
+
 class TTLCache:
     """带 TTL 过期和容量上限的 LRU 缓存，避免长期运行内存无限增长。"""
 
@@ -1294,15 +1297,15 @@ class TTLCache:
 
     def get(self, key, ttl: float):
         with self._lock:
-            hit = self._data.get(key)
-            if hit is None:
-                return None
+            hit = self._data.get(key, _CACHE_MISS)
+            if hit is _CACHE_MISS:
+                return _CACHE_MISS
             ts, val = hit
             if time.time() - ts < ttl:
                 self._data.move_to_end(key)
                 return val
             del self._data[key]
-            return None
+            return _CACHE_MISS
 
     def set(self, key, val):
         with self._lock:
@@ -1321,7 +1324,7 @@ def valuation_percentile(code: str = Query(...)):
     """PE-TTM / PB 历史分位（近5年）。全站缓存 30 分钟/代码（历史序列日频、变化慢）。"""
     code = _validate(code)
     hit = _PCT_CACHE.get(code, 1800)
-    if hit is not None:
+    if hit is not _CACHE_MISS:
         return {"data": hit}
     try:
         data = astock.valuation_percentile(code)
@@ -1341,7 +1344,7 @@ def announcements(code: str = Query(...)):
     """个股近期公告（东财，仅 requests）。缓存 15 分钟/代码。"""
     code = _validate(code)
     hit = _ANN_CACHE.get(code, 900)
-    if hit is not None:
+    if hit is not _CACHE_MISS:
         return {"data": hit}
     try:
         data = astock.announcements(code)
@@ -1359,7 +1362,7 @@ def financials(code: str = Query(...)):
     """财务关键指标（同花顺财务摘要，最新报告期）。缓存 30 分钟/代码。"""
     code = _validate(code)
     hit = _FIN_CACHE.get(code, 1800)
-    if hit is not None:
+    if hit is not _CACHE_MISS:
         return {"data": hit}
     try:
         data = astock.financials(code)
@@ -1467,7 +1470,7 @@ _DC_CACHE = TTLCache(max_entries=1024)  # key=(endpoint, code) -> (ts, data)
 def _cached(endpoint: str, code: str, ttl: int, fetch):
     key = (endpoint, code)
     hit = _DC_CACHE.get(key, ttl)
-    if hit is not None:
+    if hit is not _CACHE_MISS:
         return hit
     data = fetch()
     _DC_CACHE.set(key, data)
@@ -1580,7 +1583,7 @@ def industry(top: int = Query(20, ge=5, le=50)):
     """全行业涨跌幅排名（东财行业板块，板块级、零个股名单）。缓存 5 分钟。"""
     key = ("industry", str(top))
     hit = _DC_CACHE.get(key, 300)
-    if hit is not None:
+    if hit is not _CACHE_MISS:
         return {"data": hit}
     try:
         data = astock.industry_comparison(top_n=top)

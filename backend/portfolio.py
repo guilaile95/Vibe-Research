@@ -334,18 +334,22 @@ _scheduler_lock = threading.Lock()
 
 
 def start_scheduler(interval: int = 1800) -> None:
-    """启动持仓后台刷新调度器（daemon 线程，幂等：重复调用不会创建多个线程）。"""
+    """启动持仓后台刷新调度器（daemon 线程，幂等：重复调用不会创建多个线程）。
+
+    线程 start() 成功后才置 _scheduler_started=True；若 start() 抛异常，
+    标志保持 False，锁正常释放，后续调用可重新尝试。
+    """
     global _scheduler_started
     with _scheduler_lock:
         if _scheduler_started:
             return
-        _scheduler_started = True
 
-    def loop():
-        while True:
-            time.sleep(interval)
-            try:
-                _refresh_snapshot()
-            except Exception:
-                pass
-    threading.Thread(target=loop, daemon=True, name="portfolio-refresh").start()
+        def loop():
+            while True:
+                time.sleep(interval)
+                try:
+                    _refresh_snapshot()
+                except Exception:
+                    pass
+        threading.Thread(target=loop, daemon=True, name="portfolio-refresh").start()
+        _scheduler_started = True
