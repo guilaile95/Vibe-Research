@@ -625,24 +625,18 @@ async function runSmoke(page, mock, errors) {
   await linkBtn.waitFor({ state: "visible", timeout: 10000 });
   await linkBtn.click();
 
-  // 选择证据（select）
-  const evSelect = page.locator("select").filter({ has: page.getByText(/Q3 营收/) }).first();
-  if (await evSelect.isVisible().catch(() => false)) {
-    await evSelect.selectOption({ value: evId });
-  } else {
-    // fallback：直接选最后一个 option
-    const allSelects = page.locator("select");
-    const count = await allSelects.count();
-    if (count > 0) {
-      const opts = await allSelects.first().locator("option").all();
-      const last = opts[opts.length - 1];
-      const val = await last.getAttribute("value");
-      if (val) await allSelects.first().selectOption(val);
-    }
-  }
-  // 点击关联面板里的「关联」按钮（不同于顶部按钮，应避免点击 disabled 的顶部按钮）
+  // 等待证据列表加载完成（加载中时 select 不渲染，仅显示 spinner）
+  await page.getByText("加载证据列表…").waitFor({ state: "detached", timeout: 15000 }).catch(() => {});
+  // 等待证据 option 出现，确保 select 已渲染
+  await page.locator(`option[value="${evId}"]`).waitFor({ state: "attached", timeout: 15000 });
+  // 找到包含该 option 的 select 并选择
+  const evSelect = page.locator("select").filter({ has: page.locator(`option[value="${evId}"]`) }).first();
+  await evSelect.selectOption({ value: evId });
+
+  // 点击关联面板里的「关联」按钮（等待 enabled 后再点击）
   const confirmBtn = page.getByRole("button", { name: /^关联$/ }).first();
-  await confirmBtn.click();
+  await confirmBtn.waitFor({ state: "visible", timeout: 10000 });
+  await confirmBtn.click({ timeout: 15000 });
 
   // 等待 revision 变成 2
   await waitForRevision(page, 2);
