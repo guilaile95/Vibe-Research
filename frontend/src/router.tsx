@@ -45,6 +45,27 @@ const Notes = lazy(() =>
 const Settings = lazy(() =>
   import("@/pages/Settings").then((m) => ({ default: m.Settings })),
 );
+const ThesisList = lazy(() =>
+  import("@/pages/ThesisList").then((m) => ({ default: m.ThesisList })),
+);
+const ThesisNew = lazy(() =>
+  import("@/pages/ThesisNew").then((m) => ({ default: m.ThesisNew })),
+);
+const ThesisDetail = lazy(() =>
+  import("@/pages/ThesisDetail").then((m) => ({ default: m.ThesisDetail })),
+);
+const ThesisRevision = lazy(() =>
+  import("@/pages/ThesisRevision").then((m) => ({ default: m.ThesisRevision })),
+);
+const EvidenceList = lazy(() =>
+  import("@/pages/EvidenceList").then((m) => ({ default: m.EvidenceList })),
+);
+const EvidenceNew = lazy(() =>
+  import("@/pages/EvidenceNew").then((m) => ({ default: m.EvidenceNew })),
+);
+const EvidenceDetail = lazy(() =>
+  import("@/pages/EvidenceDetail").then((m) => ({ default: m.EvidenceDetail })),
+);
 
 function PageFallback() {
   return (
@@ -92,6 +113,13 @@ export const router = createBrowserRouter([
       { path: "/watchlist", element: withSuspense(<Watchlist />) },
       { path: "/my-reports", element: withSuspense(<MyReports />) },
       { path: "/notes", element: withSuspense(<Notes />) },
+      { path: "/thesis", element: withSuspense(<ThesisList />) },
+      { path: "/thesis/new", element: withSuspense(<ThesisNew />) },
+      { path: "/thesis/:id", element: withSuspense(<ThesisDetail />) },
+      { path: "/thesis/:id/revision/:rev", element: withSuspense(<ThesisRevision />) },
+      { path: "/evidence", element: withSuspense(<EvidenceList />) },
+      { path: "/evidence/new", element: withSuspense(<EvidenceNew />) },
+      { path: "/evidence/:id", element: withSuspense(<EvidenceDetail />) },
       { path: "/settings", element: withSuspense(<Settings />) },
     ],
   },

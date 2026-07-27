@@ -8,6 +8,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
 import { OptionalDataPanel } from "@/components/ui/OptionalDataPanel";
+import { StockThesisPanel } from "@/components/stock/StockThesisPanel";
 import {
   type PanelId,
   type PanelStates,
@@ -731,6 +732,9 @@ export function StockData() {
             disc={disc}
             discErr={discErr}
           />
+
+          {/* 投资逻辑面板（独立、可折叠、懒加载） */}
+          <StockThesisPanel code={activeCode} />
         </>
       )}
 

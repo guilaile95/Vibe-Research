@@ -59,6 +59,19 @@ import type {
   NdjsonStreamHandlers,
   NdjsonStreamResult,
   NdjsonProtocolState,
+  EvidenceRecord,
+  EvidenceCreateInput,
+  EvidenceUpdateInput,
+  EvidenceListResult,
+  ThesisCreateInput,
+  ThesisUpdateInput,
+  ThesisAggregate,
+  ThesisListResult,
+  ThesisRevision,
+  RevisionListResult,
+  ThesisDiff,
+  LinkEvidenceInput,
+  UpdateStanceInput,
 } from "./api/types.ts";
 
 
@@ -579,4 +592,73 @@ export const api = {
   /** 板块动态数据（一致预期 / 公告等） */
   getSectorResearchData: (sectorKey: string) =>
     get<SectorDynamicData>(`/sector-research/data/${encodeURIComponent(sectorKey)}`),
+
+  // -------------------------------------------------------------------------
+  // 投资逻辑与证据账本（Investment Thesis & Evidence Ledger）
+  // 注意：get()/request() 已自动加 /api 前缀，路径禁止写 /api/...
+  // -------------------------------------------------------------------------
+
+  // ---- Evidence ----
+  evidenceList: (params?: {
+    subject_type?: string;
+    subject_id?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.subject_type) q.set("subject_type", params.subject_type);
+    if (params?.subject_id) q.set("subject_id", params.subject_id);
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return get<EvidenceListResult>(`/evidence${qs ? `?${qs}` : ""}`);
+  },
+  evidenceCreate: (body: EvidenceCreateInput) =>
+    request<EvidenceRecord>("/evidence", "POST", body),
+  evidenceGet: (id: string) => get<EvidenceRecord>(`/evidence/${id}`),
+  evidenceUpdate: (id: string, body: EvidenceUpdateInput) =>
+    request<EvidenceRecord>(`/evidence/${id}`, "PUT", body),
+  evidenceDelete: (id: string) =>
+    request<EvidenceRecord>(`/evidence/${id}?confirm=true`, "DELETE"),
+
+  // ---- Thesis ----
+  thesisList: (params?: {
+    subject_type?: string;
+    subject_id?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.subject_type) q.set("subject_type", params.subject_type);
+    if (params?.subject_id) q.set("subject_id", params.subject_id);
+    if (params?.status) q.set("status", params.status);
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return get<ThesisListResult>(`/thesis${qs ? `?${qs}` : ""}`);
+  },
+  thesisCreate: (body: ThesisCreateInput) => request<ThesisAggregate>("/thesis", "POST", body),
+  thesisGet: (id: string) => get<ThesisAggregate>(`/thesis/${id}`),
+  thesisUpdate: (id: string, body: ThesisUpdateInput) => request<ThesisAggregate>(`/thesis/${id}`, "PUT", body),
+  thesisArchive: (id: string, expected_revision: number, change_summary?: string) => {
+    const q = new URLSearchParams({ confirm: "true", expected_revision: String(expected_revision) });
+    if (change_summary) q.set("change_summary", change_summary);
+    return request<ThesisAggregate>(`/thesis/${id}?${q.toString()}`, "DELETE");
+  },
+  thesisRevisions: (id: string) => get<RevisionListResult>(`/thesis/${id}/revisions`),
+  thesisRevision: (id: string, rev: number) => get<ThesisRevision>(`/thesis/${id}/revisions/${rev}`),
+  thesisDiff: (id: string, fromRev: number, toRev: number) =>
+    get<ThesisDiff>(`/thesis/${id}/diff?from=${fromRev}&to=${toRev}`),
+
+  // ---- Thesis ↔ Evidence Link ----
+  thesisLinkEvidence: (id: string, body: LinkEvidenceInput) =>
+    request<ThesisAggregate>(`/thesis/${id}/evidence`, "POST", body),
+  thesisUpdateStance: (id: string, evidenceId: string, body: UpdateStanceInput) =>
+    request<ThesisAggregate>(`/thesis/${id}/evidence/${evidenceId}`, "PUT", body),
+  thesisUnlinkEvidence: (id: string, evidenceId: string, expected_revision: number, change_summary?: string) => {
+    const q = new URLSearchParams({ expected_revision: String(expected_revision) });
+    if (change_summary) q.set("change_summary", change_summary);
+    return request<ThesisAggregate>(`/thesis/${id}/evidence/${evidenceId}?${q.toString()}`, "DELETE");
+  },
 };

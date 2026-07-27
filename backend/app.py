@@ -44,6 +44,7 @@ import review_compare
 import review_history
 import sector_research_data as srd
 import watchlist_store
+import evidence_thesis_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -130,6 +131,18 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# 投资逻辑与证据账本：独立路由模块最小接入
+app.include_router(evidence_thesis_router.router)
+
+
+@app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)
+async def _revision_conflict_handler(request: Request, exc: evidence_thesis_router.RevisionConflictHTTPException):
+    """409 响应：body = {"detail": ..., "current_revision": ...}（顶层 current_revision）。"""
+    return JSONResponse(
+        status_code=409,
+        content={"detail": exc.message, "current_revision": exc.current_revision},
+    )
 
 # 可选鉴权：设了 VR_API_KEY 就要求所有 /api/* 带 `Authorization: Bearer <key>`
 #   （本地自托管不设=开放；公网部署务必设，否则别人能读你的持仓/调你的后端）。
