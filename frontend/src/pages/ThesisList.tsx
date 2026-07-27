@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Plus, Loader2, BookOpen, Filter, ChevronLeft, ChevronRight, Lock } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -41,6 +41,7 @@ const fmtDate = (s: string | null) => {
 };
 
 export function ThesisList() {
+  const [searchParams] = useSearchParams();
   const [items, setItems] = useState<InvestmentThesis[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -53,16 +54,32 @@ export function ThesisList() {
 
   const runIdRef = useRef(0);
 
+  // 从 URL query 参数读取初始筛选值（仅首次挂载时）
+  useEffect(() => {
+    const st = searchParams.get("subject_type");
+    const si = searchParams.get("subject_id");
+    const s = searchParams.get("status");
+    if (st) setSubjectType(st);
+    if (si) setSubjectId(si);
+    if (s) setStatus(s);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const load = useCallback(async (off: number) => {
     const rid = ++runIdRef.current;
     setLoading(true);
     setErr(null);
     try {
-      const params: Record<string, unknown> = { limit: PAGE_SIZE, offset: off };
+      const params: {
+        subject_type?: string;
+        subject_id?: string;
+        status?: string;
+        limit: number;
+        offset: number;
+      } = { limit: PAGE_SIZE, offset: off };
       if (subjectType) params.subject_type = subjectType;
       if (subjectId.trim()) params.subject_id = subjectId.trim();
       if (status) params.status = status;
-      const r = await api.thesisList(params as any);
+      const r = await api.thesisList(params);
       if (rid !== runIdRef.current) return;
       setItems(r.items ?? []);
       setTotal(r.total ?? 0);

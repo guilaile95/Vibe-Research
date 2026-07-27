@@ -146,11 +146,11 @@ def _normalize_stock_code(raw: str) -> tuple[str, str]:
     code = raw.strip().upper()
     if not code:
         raise ValidationError("股票代码不能为空")
-    
+
     # 拒绝明显非法字符
     if any(c in code for c in ('$', '/', ' ', '\t', '\n')):
         raise ValidationError(f"股票代码包含非法字符：{raw}")
-    
+
     # 长度检查
     if len(code) > 20:
         raise ValidationError(f"股票代码过长：{raw}")
@@ -162,7 +162,7 @@ def _normalize_stock_code(raw: str) -> tuple[str, str]:
             if not bare or not bare.isdigit():
                 raise ValidationError(f"韩股代码后缀前必须是数字：{raw}")
             return code, "KR"
-    
+
     # 检查是否包含点号但不是合法韩股后缀
     if '.' in code:
         # 如果有点号，检查是否是纯数字+未知后缀的情况
@@ -180,7 +180,7 @@ def _normalize_stock_code(raw: str) -> tuple[str, str]:
             # 000xxx, 001xxx, 002xxx, 003xxx: 深市
             # 300xxx: 创业板
             first_three = code[:3]
-            if code[0] == '6' or first_three in ('000', '001', '002', '003', '300'):
+            if code[0] == '6' or first_three in ('000', '001', '002', '003', '300', '301'):
                 return code, "CN"
             else:
                 raise ValidationError(f"无法识别的6位数字股票代码：{raw}（可能是韩股，需添加 .KS/.KQ 后缀）")
@@ -219,11 +219,11 @@ def _validate_iso_datetime(value: str, field: str) -> str:
         dt = datetime.fromisoformat(value)
     except ValueError as e:
         raise ValidationError(f"{field} 必须是 ISO 8601 datetime") from e
-    
+
     # 必须带时区
     if dt.tzinfo is None:
         raise ValidationError(f"{field} 必须包含时区信息 (如 +00:00 或 Z)")
-    
+
     # 转换为 UTC 并返回 ISO 格式
     utc_dt = dt.astimezone(timezone.utc)
     return utc_dt.isoformat(timespec="microseconds")

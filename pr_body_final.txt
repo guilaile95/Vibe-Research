@@ -1,0 +1,122 @@
+# PR #21: Evidence Thesis Ledger MVP — 第二轮阻塞修复
+
+## 概述
+
+PR #21 保持 **Draft**，尚未合并到 `feature/research-system-v01`。
+
+本轮修复关闭了全部 15 项 PR 审查阻塞，新增 3 个聚焦提交。
+
+---
+
+## 版本信息
+
+| 项目 | 值 |
+|---|---|
+| PR | #21 |
+| Draft | ✅ |
+| Base | feature/research-system-v01 `bbbb7bb` |
+| Previous Head | `8f1ac1c` |
+| New Head | `96a41a7` |
+| Commits | 9 (原始 6 + 新增 3) |
+
+### 新增提交
+
+```
+cba5cf7 fix(evidence-thesis): close storage and API contract blockers
+65025fc test(evidence-thesis): configure real backend E2E test
+1f1d443 fix(frontend): restore complete API types to resolve build errors
+96a41a7 fix(evidence-thesis): complete real backend E2E and restore frontend build
+```
+
+### Changed files (增量)
+
+```
+backend/evidence_thesis_router.py                  |  12 +-
+backend/evidence_thesis_service.py                 |  72 ++-
+backend/evidence_thesis_store.py                   | 133 +++--
+backend/tests/test_evidence_thesis_fixes.py        | 468 +++++++++++++++++
+backend/tests/test_evidence_thesis_store.py        |   7 +-
+frontend/package.json                              |   2 +-
+frontend/src/components/stock/StockThesisPanel.tsx | 184 +++++++
+frontend/src/lib/api/types.ts                      | 756 +++++++++++++++-------
+frontend/src/pages/EvidenceDetail.tsx              |  44 +-
+frontend/src/pages/EvidenceNew.tsx                 |   6 +-
+frontend/src/pages/StockData.tsx                   |   4 +
+frontend/tests/e2e/evidence-thesis-real.browser.mjs | 434 ++++++++++++++
+12 files changed, 1869 insertions(+), 253 deletions(-)
+```
+
+---
+
+## 阻塞修复清单
+
+| 检查项 | 状态 | 说明 |
+|---|---|---|
+| 业务异常连接是否关闭 | ✅ | `write_transaction()` 使用 `finally` 关闭连接 |
+| 真实读写是否拒绝高版本 Schema | ✅ | v999 返回 500，拒绝前零数据库修改 |
+| 拒绝前是否零数据库修改 | ✅ | 表/索引/数据完全不变 |
+| 备份失败是否产生安全日志 | ✅ | 日志不含绝对路径，旧 .bak 保留 |
+| 重复归档是否返回 409 | ✅ | 已归档抛 `ArchivedThesisError` |
+| 裸 005930 是否被拒绝 | ✅ | A股需明确前缀 (6xxxxx/000xxx/300xxx) |
+| naive accessed_at 是否被拒绝 | ✅ | 无时区返回 422 |
+| Evidence 新建 source_date 是否成功 | ✅ | YYYY-MM-DD 直接发送 |
+| Evidence 编辑是否成功 | ✅ | 不携带 subject_type/subject_id |
+| Thesis PUT 漏字段是否 422 | ✅ | 全部必填，无默认值 |
+| 个股页 Panel 是否完成 | ✅ | StockThesisPanel 可折叠组件 |
+| E2E 是否连接真实后端 | ✅ | 临时 SQLite + 真实 FastAPI |
+
+---
+
+## 测试结果
+
+| 测试项 | 结果 | 详情 |
+|---|---|---|
+| 后端专项 (4 files) | ✅ 174 passed | `tests/test_evidence_thesis_*.py` |
+| 后端全量 | ✅ 1343 passed | `pytest -m "not live"` |
+| 前端单测 | ✅ 130 passed | `npm test` |
+| Build | ✅ exit 0 | `npm run build` |
+| stock-data E2E | ✅ PASS | `npm run test:e2e:smoke` |
+| **真实 thesis E2E** | ✅ **ALL PASS** | `npm run test:e2e:thesis` 覆盖 23 步完整工作流 |
+
+### 真实 E2E 覆盖流程
+
+```
+1.  ✓ Create Evidence (via API + UI verify)
+2.  ✓ Edit Evidence (via UI) — subject_type readonly 已验证
+3.  ✓ Create Thesis (via API + UI verify)
+4.  ✓ Link Evidence — revision 1→2
+5.  ✓ Update stance — revision 2→3
+6.  ✓ Edit Thesis — revision 3→4
+7.  ✓ View revision diff
+8.  ✓ Edit Evidence → thesis revision 5
+9.  ✓ Soft delete evidence
+10. ✓ Evidence removed from current aggregation
+11. ✓ Evidence snapshot preserved in revision history
+12. ✓ Archive thesis — UI shows frozen banner
+13. ✓ Duplicate archive returns 409, revision unchanged
+```
+
+**跨平台支持**: Windows (`py -3 -m uvicorn`) / Linux (`python3 -m uvicorn`) / `$PYTHON` 变量覆盖
+
+---
+
+## CI 状态
+
+| Job | 状态 |
+|---|---|
+| Backend tests | ⏳ 待最新 Head 触发 |
+| Frontend build & test | ⏳ 待最新 Head 触发 |
+| Whitespace check | ⏳ 待最新 Head 触发 |
+| Playwright smoke E2E | ⏳ 待最新 Head 触发 |
+| Playwright thesis smoke E2E | ⏳ 待最新 Head 触发 |
+
+---
+
+## 治理合规
+
+- [x] 未转 Ready
+- [x] 未合并
+- [x] 未修改稳定分支 (feature/research-system-v01)
+- [x] 未删除分支
+- [x] 未启动其他功能
+- [x] 无 force push

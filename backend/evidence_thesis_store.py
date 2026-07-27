@@ -250,7 +250,7 @@ def _read_schema_version(conn: sqlite3.Connection) -> str | None:
 
 def _validate_and_prepare_schema(conn: sqlite3.Connection, is_write: bool) -> None:
     """统一 Schema 验证和准备入口。
-    
+
     - 已存在 schema_meta 时先读版本，高于代码版本拒绝
     - 拒绝前不执行任何 DDL
     - 当前版本正常读写
@@ -259,23 +259,23 @@ def _validate_and_prepare_schema(conn: sqlite3.Connection, is_write: bool) -> No
     """
     # 检查是否已有 schema_meta 表
     has_schema_meta = _table_exists(conn, "schema_meta")
-    
+
     if has_schema_meta:
         # 已有 schema_meta，先读版本再决定
         version = _read_schema_version(conn)
         if version is None:
             # schema_meta 表存在但无 schema_version 记录，视为损坏
             raise EvidenceLedgerCorruptedError()
-        
+
         # 版本号比较：提取 v 后的数字
         def _extract_version_number(v: str) -> int:
             import re
             m = re.search(r'_v(\d+)$', v)
             return int(m.group(1)) if m else 0
-        
+
         current_ver = _extract_version_number(SCHEMA_VERSION)
         db_ver = _extract_version_number(version)
-        
+
         if db_ver > current_ver:
             # 数据库版本高于代码版本，拒绝打开
             raise EvidenceLedgerSchemaVersionError()
@@ -290,11 +290,11 @@ def _validate_and_prepare_schema(conn: sqlite3.Connection, is_write: bool) -> No
         has_any_table = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name != 'sqlite_sequence' LIMIT 1"
         ).fetchone() is not None
-        
+
         if has_any_table:
             # 非空数据库但没有 schema_meta，拒绝
             raise EvidenceLedgerCorruptedError()
-        
+
         # 全新数据库，仅在写模式下执行 DDL
         if is_write:
             for ddl in _ALL_DDL:
@@ -337,7 +337,7 @@ def integrity_check(db_path: str | Path) -> None:
 
 def backup_database(db_path: str | Path) -> None:
     """使用 SQLite backup API 生成一致性备份；失败不回滚已提交业务写入。
-    
+
     失败时清理临时文件，保留既有 .bak，并重新抛出异常供调用方记录日志。
     """
     path = _as_path(db_path)

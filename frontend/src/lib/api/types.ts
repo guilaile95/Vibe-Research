@@ -996,26 +996,24 @@ export interface EvidenceUpdateInput {
   confidence: "high" | "medium" | "low";
 }
 
-/** POST /api/thesis - 创建逻辑请求 */
+/** POST /api/thesis - 创建逻辑请求（服务端自动设置 market 和 status） */
 export interface ThesisCreateInput {
   subject_type: "stock" | "sector" | "theme";
   subject_id: string;
-  market: "CN" | "HK" | "US" | "KR" | null;
   title: string;
   summary: string;
-  status: "active" | "weakened" | "invalidated" | "archived";
   core_claims: string[];
   catalysts: string[];
   risks: string[];
   invalidation_conditions: string[];
+  change_summary?: string;
 }
 
-/** PUT /api/thesis/{id} - 更新逻辑请求 */
+/** PUT /api/thesis/{id} - 更新逻辑请求（服务端自动设置 market） */
 export interface ThesisUpdateInput {
-  market: "CN" | "HK" | "US" | "KR" | null;
   title: string;
   summary: string;
-  status: "active" | "weakened" | "invalidated" | "archived";
+  status: "active" | "weakened" | "invalidated";
   core_claims: string[];
   catalysts: string[];
   risks: string[];

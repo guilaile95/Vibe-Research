@@ -100,6 +100,20 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install -r backend/requirements.txt
+          python -m pip install -r backend/requirements-dev.txt
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -119,8 +133,13 @@ jobs:
         working-directory: frontend
         run: npx playwright install chromium --with-deps
 
-      - name: Run evidence-thesis smoke E2E
+      - name: Run evidence-thesis real E2E
         working-directory: frontend
+        env:
+          PYTHON: python
+          VR_DATA_DIR: ${{ runner.temp }}/vr-data
+          VR_REPORTS_DIR: ${{ runner.temp }}/vr-reports
+          VIBE_RESEARCH_REVIEW_DB: ${{ runner.temp }}/review.db
         run: npm run test:e2e:thesis
 
   whitespace:

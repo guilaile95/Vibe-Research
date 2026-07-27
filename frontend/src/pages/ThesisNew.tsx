@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Save, Loader2, Plus, X } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -9,20 +9,6 @@ const SUBJECT_TYPES = [
   { value: "stock", label: "个股" },
   { value: "sector", label: "板块" },
   { value: "theme", label: "主题" },
-];
-
-const STATUSES = [
-  { value: "active", label: "生效中" },
-  { value: "weakened", label: "走弱" },
-  { value: "invalidated", label: "已失效" },
-];
-
-const MARKETS = [
-  { value: "", label: "未指定" },
-  { value: "CN", label: "A 股" },
-  { value: "HK", label: "港股" },
-  { value: "US", label: "美股" },
-  { value: "KR", label: "韩股" },
 ];
 
 const inputCls = "mt-0.5 w-full rounded border border-border/50 bg-background px-2 py-1.5 text-sm outline-none focus:border-primary/50";
@@ -90,13 +76,14 @@ function ArrayEditor({ label, placeholder, items, onChange }: ArrayEditorProps) 
 
 export function ThesisNew() {
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
+  const initSubjectType = (searchParams.get("subject_type") as "stock" | "sector" | "theme") || "stock";
+  const initSubjectId = searchParams.get("subject_id") || "";
   const [form, setForm] = useState({
-    subject_type: "stock" as "stock" | "sector" | "theme",
-    subject_id: "",
-    market: "" as "" | "CN" | "HK" | "US" | "KR",
+    subject_type: initSubjectType,
+    subject_id: initSubjectId,
     title: "",
     summary: "",
-    status: "active" as "active" | "weakened" | "invalidated",
     core_claims: [] as string[],
     catalysts: [] as string[],
     risks: [] as string[],
@@ -119,10 +106,8 @@ export function ThesisNew() {
       const body = {
         subject_type: form.subject_type,
         subject_id: form.subject_id.trim(),
-        market: form.market || null,
         title: form.title.trim(),
         summary: form.summary.trim(),
-        status: form.status,
         core_claims: form.core_claims,
         catalysts: form.catalysts,
         risks: form.risks,
@@ -175,29 +160,10 @@ export function ThesisNew() {
               className={inputCls}
             />
           </label>
-          <label className={labelCls}>
-            市场
-            <select
-              value={form.market}
-              onChange={(e) => set("market", e.target.value as any)}
-              className={inputCls}
-            >
-              {MARKETS.map((t) => (
-                <option key={t.value} value={t.value}>{t.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className={labelCls}>
-            状态 <span className="text-destructive">*</span>
-            <select
-              value={form.status}
-              onChange={(e) => set("status", e.target.value as any)}
-              className={inputCls}
-            >
-              {STATUSES.map((t) => (
-                <option key={t.value} value={t.value}>{t.label}</option>
-              ))}
-            </select>
+          <label className={`${labelCls} sm:col-span-2`}>
+            <p className="text-xs text-muted-foreground/60 -mt-0.5 mb-1">
+              市场由股票代码自动识别；新建逻辑初始状态为 active。
+            </p>
           </label>
           <label className={`${labelCls} sm:col-span-2`}>
             标题 <span className="text-destructive">*</span>

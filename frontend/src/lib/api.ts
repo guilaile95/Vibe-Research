@@ -60,12 +60,17 @@ import type {
   NdjsonStreamResult,
   NdjsonProtocolState,
   EvidenceRecord,
+  EvidenceUpdateInput,
   EvidenceListResult,
+  ThesisCreateInput,
+  ThesisUpdateInput,
   ThesisAggregate,
   ThesisListResult,
   ThesisRevision,
   RevisionListResult,
   ThesisDiff,
+  LinkEvidenceInput,
+  UpdateStanceInput,
 } from "./api/types.ts";
 
 
@@ -610,7 +615,7 @@ export const api = {
   evidenceCreate: (body: Omit<EvidenceRecord, "id" | "created_at" | "updated_at" | "deleted" | "deleted_at">) =>
     request<EvidenceRecord>("/evidence", "POST", body),
   evidenceGet: (id: string) => get<EvidenceRecord>(`/evidence/${id}`),
-  evidenceUpdate: (id: string, body: Partial<EvidenceRecord>) =>
+  evidenceUpdate: (id: string, body: EvidenceUpdateInput) =>
     request<EvidenceRecord>(`/evidence/${id}`, "PUT", body),
   evidenceDelete: (id: string) =>
     request<EvidenceRecord>(`/evidence/${id}?confirm=true`, "DELETE"),
@@ -632,9 +637,9 @@ export const api = {
     const qs = q.toString();
     return get<ThesisListResult>(`/thesis${qs ? `?${qs}` : ""}`);
   },
-  thesisCreate: (body: any) => request<ThesisAggregate>("/thesis", "POST", body),
+  thesisCreate: (body: ThesisCreateInput) => request<ThesisAggregate>("/thesis", "POST", body),
   thesisGet: (id: string) => get<ThesisAggregate>(`/thesis/${id}`),
-  thesisUpdate: (id: string, body: any) => request<ThesisAggregate>(`/thesis/${id}`, "PUT", body),
+  thesisUpdate: (id: string, body: ThesisUpdateInput) => request<ThesisAggregate>(`/thesis/${id}`, "PUT", body),
   thesisArchive: (id: string, expected_revision: number, change_summary?: string) => {
     const q = new URLSearchParams({ confirm: "true", expected_revision: String(expected_revision) });
     if (change_summary) q.set("change_summary", change_summary);
@@ -646,9 +651,9 @@ export const api = {
     get<ThesisDiff>(`/thesis/${id}/diff?from=${fromRev}&to=${toRev}`),
 
   // ---- Thesis ↔ Evidence Link ----
-  thesisLinkEvidence: (id: string, body: any) =>
+  thesisLinkEvidence: (id: string, body: LinkEvidenceInput) =>
     request<ThesisAggregate>(`/thesis/${id}/evidence`, "POST", body),
-  thesisUpdateStance: (id: string, evidenceId: string, body: any) =>
+  thesisUpdateStance: (id: string, evidenceId: string, body: UpdateStanceInput) =>
     request<ThesisAggregate>(`/thesis/${id}/evidence/${evidenceId}`, "PUT", body),
   thesisUnlinkEvidence: (id: string, evidenceId: string, expected_revision: number, change_summary?: string) => {
     const q = new URLSearchParams({ expected_revision: String(expected_revision) });

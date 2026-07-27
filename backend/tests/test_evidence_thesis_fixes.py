@@ -32,7 +32,7 @@ def initialized_db(db_path) -> Path:
 def thesis_with_evidence(initialized_db) -> tuple[str, str]:
     """创建一个 thesis 和一个关联的 evidence，返回 (thesis_id, evidence_id)。"""
     now = "2025-01-01T00:00:00+00:00"
-    
+
     # 创建 thesis
     thesis_data = {
         "subject_type": "stock",
@@ -46,7 +46,7 @@ def thesis_with_evidence(initialized_db) -> tuple[str, str]:
     }
     thesis = svc.create_thesis(initialized_db, thesis_data)
     thesis_id = thesis["thesis"]["id"]
-    
+
     # 创建 evidence
     evidence_data = {
         "subject_type": "stock",
@@ -62,10 +62,10 @@ def thesis_with_evidence(initialized_db) -> tuple[str, str]:
     }
     evidence = svc.create_evidence(initialized_db, evidence_data)
     evidence_id = evidence["id"]
-    
+
     # 关联
     svc.link_evidence(initialized_db, thesis_id, evidence_id, "support", 1, "link")
-    
+
     return thesis_id, evidence_id
 
 
@@ -77,7 +77,7 @@ class TestConnectionLeak:
     def test_revision_conflict_closes_connection(self, initialized_db, thesis_with_evidence):
         """revision 冲突时 close 1次。"""
         thesis_id, _ = thesis_with_evidence
-        
+
         with pytest.raises(svc.RevisionConflictError):
             svc.update_thesis(initialized_db, thesis_id, {
                 "title": "new",
@@ -92,10 +92,10 @@ class TestConnectionLeak:
     def test_archived_error_closes_connection(self, initialized_db, thesis_with_evidence):
         """archived 异常时 close 1次。"""
         thesis_id, _ = thesis_with_evidence
-        
+
         # 先归档
         svc.archive_thesis(initialized_db, thesis_id, 2, "archive")
-        
+
         # 再次尝试修改
         with pytest.raises(svc.ArchivedThesisError):
             svc.update_thesis(initialized_db, thesis_id, {
@@ -131,7 +131,7 @@ class TestSchemaProtection:
     def test_v999_database_rejects_read(self, db_path):
         """v999 数据库读取被拒绝。"""
         store.initialize_store(db_path)
-        
+
         # 修改版本为 v999
         conn = store._connect(db_path)
         try:
@@ -139,14 +139,14 @@ class TestSchemaProtection:
             conn.commit()
         finally:
             conn.close()
-        
+
         with pytest.raises(store.EvidenceLedgerSchemaVersionError):
             svc.list_evidence(db_path)
 
     def test_v999_database_rejects_write(self, db_path):
         """v999 数据库写入被拒绝。"""
         store.initialize_store(db_path)
-        
+
         # 修改版本为 v999
         conn = store._connect(db_path)
         try:
@@ -154,7 +154,7 @@ class TestSchemaProtection:
             conn.commit()
         finally:
             conn.close()
-        
+
         with pytest.raises(store.EvidenceLedgerSchemaVersionError):
             svc.create_evidence(db_path, {
                 "subject_type": "stock",
@@ -170,7 +170,7 @@ class TestSchemaProtection:
     def test_v999_does_not_modify_schema(self, db_path):
         """拒绝前后 schema/table/data 完全不变。"""
         store.initialize_store(db_path)
-        
+
         # 记录原始表列表
         conn = store._connect_readonly(db_path)
         try:
@@ -179,7 +179,7 @@ class TestSchemaProtection:
             ).fetchall()
         finally:
             conn.close()
-        
+
         # 修改版本为 v999
         conn = store._connect(db_path)
         try:
@@ -187,13 +187,13 @@ class TestSchemaProtection:
             conn.commit()
         finally:
             conn.close()
-        
+
         # 尝试读取（会被拒绝）
         try:
             svc.list_evidence(db_path)
         except store.EvidenceLedgerSchemaVersionError:
             pass
-        
+
         # 验证表列表未变化
         conn = store._connect_readonly(db_path)
         try:
@@ -202,7 +202,7 @@ class TestSchemaProtection:
             ).fetchall()
         finally:
             conn.close()
-        
+
         assert original_tables == new_tables
 
     def test_current_v1_works(self, initialized_db):
@@ -219,7 +219,7 @@ class TestSchemaProtection:
             conn.commit()
         finally:
             conn.close()
-        
+
         with pytest.raises(store.EvidenceLedgerCorruptedError):
             svc.list_evidence(db_path)
 
@@ -234,9 +234,9 @@ class TestBackupFailureLogging:
         # 让 backup_database 抛异常
         def failing_backup(path):
             raise OSError("simulated backup failure")
-        
+
         monkeypatch.setattr(store, "backup_database", failing_backup)
-        
+
         with caplog.at_level(logging.WARNING):
             now = "2025-01-01T00:00:00+00:00"
             data = {
@@ -248,10 +248,10 @@ class TestBackupFailureLogging:
                 "created_at": now, "updated_at": now,
             }
             store.write_transaction(initialized_db, lambda conn: store._insert_evidence(conn, data))
-        
+
         # 验证产生了 warning 日志
         assert any("backup failed" in record.message for record in caplog.records)
-        
+
         # 验证日志不含绝对路径
         for record in caplog.records:
             if "backup failed" in record.message:
@@ -266,11 +266,11 @@ class TestArchiveFreeze:
     def test_first_archive_succeeds(self, initialized_db, thesis_with_evidence):
         """第一次归档成功并生成最终 revision。"""
         thesis_id, _ = thesis_with_evidence
-        
+
         # 当前 revision 应为 2 (创建=1, 关联=2)
         thesis = svc.get_thesis(initialized_db, thesis_id)
         assert thesis["thesis"]["current_revision"] == 2
-        
+
         # 归档
         result = svc.archive_thesis(initialized_db, thesis_id, 2, "archive")
         assert result["thesis"]["status"] == "archived"
@@ -279,10 +279,10 @@ class TestArchiveFreeze:
     def test_second_archive_returns_409(self, initialized_db, thesis_with_evidence):
         """第二次归档返回 409。"""
         thesis_id, _ = thesis_with_evidence
-        
+
         # 第一次归档
         svc.archive_thesis(initialized_db, thesis_id, 2, "first archive")
-        
+
         # 第二次归档应抛 ArchivedThesisError
         with pytest.raises(svc.ArchivedThesisError):
             svc.archive_thesis(initialized_db, thesis_id, 3, "second archive")
@@ -290,18 +290,18 @@ class TestArchiveFreeze:
     def test_second_archive_no_new_revision(self, initialized_db, thesis_with_evidence):
         """第二次归档后 revision 数量不变。"""
         thesis_id, _ = thesis_with_evidence
-        
+
         # 第一次归档
         svc.archive_thesis(initialized_db, thesis_id, 2, "first archive")
         revisions_after_first = svc.list_revisions(initialized_db, thesis_id)
         first_count = revisions_after_first["total"]
-        
+
         # 尝试第二次归档
         try:
             svc.archive_thesis(initialized_db, thesis_id, 3, "second archive")
         except svc.ArchivedThesisError:
             pass
-        
+
         # 验证 revision 数量未增加
         revisions_after_second = svc.list_revisions(initialized_db, thesis_id)
         assert revisions_after_second["total"] == first_count
@@ -309,18 +309,18 @@ class TestArchiveFreeze:
     def test_second_archive_no_revision_increment(self, initialized_db, thesis_with_evidence):
         """第二次归档后 current_revision 不变。"""
         thesis_id, _ = thesis_with_evidence
-        
+
         # 第一次归档
         svc.archive_thesis(initialized_db, thesis_id, 2, "first archive")
         thesis_after_first = svc.get_thesis(initialized_db, thesis_id)
         first_revision = thesis_after_first["thesis"]["current_revision"]
-        
+
         # 尝试第二次归档
         try:
             svc.archive_thesis(initialized_db, thesis_id, first_revision, "second archive")
         except svc.ArchivedThesisError:
             pass
-        
+
         # 验证 current_revision 未增加
         thesis_after_second = svc.get_thesis(initialized_db, thesis_id)
         assert thesis_after_second["thesis"]["current_revision"] == first_revision
@@ -440,7 +440,7 @@ class TestThesisUpdateValidation:
     def test_missing_field_validation(self, initialized_db, thesis_with_evidence):
         """漏字段时服务层校验失败。"""
         thesis_id, _ = thesis_with_evidence
-        
+
         # 缺少 core_claims
         with pytest.raises(svc.ValidationError, match="core_claims"):
             svc.update_thesis(initialized_db, thesis_id, {
@@ -455,7 +455,7 @@ class TestThesisUpdateValidation:
     def test_bool_as_revision_rejected(self, initialized_db, thesis_with_evidence):
         """布尔值作为 expected_revision 被拒绝。"""
         thesis_id, _ = thesis_with_evidence
-        
+
         with pytest.raises(svc.ValidationError, match="必须是整数"):
             svc.update_thesis(initialized_db, thesis_id, {
                 "title": "new",
