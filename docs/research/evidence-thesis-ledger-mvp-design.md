@@ -106,7 +106,7 @@ current_revision        当前版本号（整数，从 1 开始；始终对应�
 - `active`：当前有效。
 - `weakened`：部分失效条件已触发，但逻辑未完全推翻。
 - `invalidated`：失效条件已满足，逻辑不再成立（保留历史，不删除）。
-- `archived`：用户主动归档（如已清仓且不再跟踪）。
+- `archived`：**冻结状态**。用户主动归档（如已清仓且不再跟踪）。归档后 `current_revision` 和对应 snapshot 成为冻结的最终聚合状态，不再因任何原因生成新 revision（详见 §5.11.7）。
 
 ### 3.3 ThesisRevision（聚合状态版本）
 
@@ -178,7 +178,7 @@ PRIMARY KEY (thesis_id, evidence_id)
 2. 手工添加证据（EvidenceRecord）。
 3. 证据关联股票或板块（subject_type + subject_id）。
 4. 证据以指定立场（stance）关联到某条投资逻辑；同一条证据可以不同立场关联不同逻辑。
-5. **所有 thesis 聚合状态 mutation 都会生成新 revision**（创建、编辑、归档、关联、修改 stance、取消关联，以及因 EvidenceRecord 编辑/软删除触发的联动更新）。
+5. **所有非归档 thesis 的聚合状态 mutation 都会生成新 revision**（创建、编辑、归档、关联、修改 stance、取消关联，以及因 EvidenceRecord 编辑/软删除触发的联动更新）。**archived thesis 冻结**，不再生成新 revision（详见 §5.11.7）。
 6. 查看两个版本之间的字段级 diff（纯文本 + 数组差异，不支持 Markdown 富文本）。
 7. 展示事实、推断和未知项（classification 字段）。
 8. 数据全部本地存储（SQLite，不云端同步）。
@@ -409,16 +409,16 @@ DELETE /api/evidence/{id}?confirm=true           # 软删除 + 联动更新所�
 # 投资逻辑
 GET    /api/thesis?subject_type=stock&subject_id=600519&limit=50&offset=0
 POST   /api/thesis                                # 创建时同步生成 revision 1
-GET    /api/thesis/{id}                           # 详情含当前关联证据列表（≡ current_revision snapshot）
-PUT    /api/thesis/{id}                           # 必须携带 expected_revision；生成新 revision
-DELETE /api/thesis/{id}?confirm=true              # 归档：必须携带 expected_revision；生成新 revision
+GET    /api/thesis/{id}                           # 详情≡ current_revision snapshot；archived 时以 snapshot 为权威（详见 §5.11.8）
+PUT    /api/thesis/{id}                           # 必须携带 expected_revision；archived 返回 409；否则生成新 revision
+DELETE /api/thesis/{id}?confirm=true              # 归档：必须携带 expected_revision；生成新 revision（从此进入冻结状态）
 
 # 投资逻辑版本
 GET    /api/thesis/{id}/revisions                 # 列出所有版本（按 revision_number ASC）
 GET    /api/thesis/{id}/revisions/{rev}           # 获取指定版本快照（含当时证据最小字段集）
 GET    /api/thesis/{id}/diff?from=1&to=2          # 比较两个版本的字段级差异
 
-# 证据关联
+# 证据关联（archived thesis 一律返回 409，详见 §5.11.8）
 POST   /api/thesis/{id}/evidence                  # body: {evidence_id, stance, expected_revision, change_summary}
 PUT    /api/thesis/{id}/evidence/{evidence_id}    # body: {stance, expected_revision, change_summary}
 DELETE /api/thesis/{id}/evidence/{evidence_id}    # query: expected_revision + change_summary
@@ -690,12 +690,12 @@ ROLLBACK
 
 #### 5.11.6 EvidenceRecord 修改的联动版本
 
-一条证据可能关联多个 thesis。编辑或软删除 EvidenceRecord 时，必须在同一事务内为**所有关联该证据的 thesis** 生成新 revision。
+一条证据可能关联多个 thesis。编辑或软删除 EvidenceRecord 时，必须在同一事务内为**所有非归档（status ∈ {active, weakened, invalidated}）的关联 thesis** 生成新 revision。**archived thesis 不联动**（见 §5.11.7）。
 
 **编辑 EvidenceRecord（`PUT /api/evidence/{id}`）**，同一事务内：
 
 1. 更新 `evidence_records` 行（刷新 `updated_at`）。
-2. 查询所有仍关联该证据的 thesis（`thesis_evidence_links` 中存在且 thesis 未归档）。
+2. 查询所有仍关联该证据且 `status != 'archived'` 的 thesis。
 3. 对每个 thesis 读取当前完整聚合状态。
 4. 为每个 thesis 创建下一 revision（`revision_number = current_revision + 1`）。
 5. 更新每个 thesis 的 `current_revision`。
@@ -711,7 +711,7 @@ ROLLBACK
 
 1. 设置 `evidence_records.deleted = 1`。
 2. 写入 `evidence_records.deleted_at`。
-3. 查询所有关联 thesis。
+3. 查询所有仍关联该证据且 `status != 'archived'` 的 thesis。
 4. 为每个 thesis 创建下一 revision。
 5. **新 snapshot 不再包含已删除证据**（`evidence_links` 数组中移除该 evidence_id）。
 6. **旧 revision 继续保存删除前的证据快照**（不可变）。
@@ -724,9 +724,50 @@ ROLLBACK
 删除关联证据：{evidence_id}
 ```
 
+> **联动范围一致性**：编辑和软删除使用**完全一致**的 thesis 查询范围（`status != 'archived'`）。archived thesis 既不联动编辑也不联动软删除。
+
 > **注意**：EvidenceRecord 编辑和删除**不使用单个 thesis 的 `expected_revision`**（一条证据可能关联多个 thesis，无法让客户端同时为所有 thesis 提供一致的 expected_revision）。一致性由单事务 + 写锁保证。
 
-#### 5.11.7 diff 视图
+#### 5.11.7 archived thesis 冻结语义
+
+**archived thesis 定义为冻结状态**。当 thesis 状态变为 `archived` 后，其 `current_revision` 和对应 snapshot 成为冻结的最终聚合状态。
+
+**归档后禁止的 mutation**（统一返回 HTTP 409）：
+
+- 编辑 thesis（`PUT /api/thesis/{id}`）
+- 关联证据（`POST /api/thesis/{id}/evidence`）
+- 取消关联（`DELETE /api/thesis/{id}/evidence/{evidence_id}`）
+- 修改 stance（`PUT /api/thesis/{id}/evidence/{evidence_id}`）
+- EvidenceRecord 编辑联动（§5.11.6 自动跳过）
+- EvidenceRecord 软删除联动（§5.11.6 自动跳过）
+
+**409 响应文案**：
+
+```json
+{
+  "detail": "已归档的投资逻辑不可修改"
+}
+```
+
+**archived thesis 的读取方式**：
+
+`GET /api/thesis/{id}` 遇到 archived thesis 时：
+
+- 以 `current_revision` 对应的 snapshot 为权威状态；
+- **不通过当前 EvidenceRecord 和当前关联表重新组装内容**；
+- 即使证据后来被编辑或软删除，归档 thesis 仍展示归档时的历史证据状态。
+
+这样同时满足：
+
+```text
+归档状态冻结
+current_revision snapshot 与详情等价
+历史证据不受全局证据变化影响
+```
+
+**归档是不可逆的最终操作**：归档后不能重新激活（`archived → active` 不允许）。若需重新跟踪，应创建新 thesis。
+
+#### 5.11.8 diff 视图
 
 `GET /api/thesis/{id}/diff?from=1&to=2` 返回两个 snapshot 的字段级 diff（新增/删除/修改的字段值），前端渲染为对比表格。
 
@@ -871,6 +912,14 @@ source_connection.backup(destination_connection)
 current_revision 每增加一次，必须存在对应的唯一 thesis_revisions 行。
 ```
 
+#### archived thesis 冻结测试（必须新增）
+
+1. 归档 thesis 后编辑 EvidenceRecord，**不增加**该 thesis 的 revision；
+2. 归档 thesis 后软删除 EvidenceRecord，**不增加**该 thesis 的 revision；
+3. archived thesis 详情仍显示归档时的证据快照（即使证据已被全局编辑或软删除）；
+4. 对 archived thesis 执行编辑、关联、取消关联或 stance 修改，统一返回 **HTTP 409** + `{"detail": "已归档的投资逻辑不可修改"}`；
+5. 同一 EvidenceRecord 同时关联 active 和 archived thesis 时，编辑/软删除 EvidenceRecord **只更新 active thesis 的 revision**，archived thesis 的 `current_revision` 保持不变。
+
 ### 5.15 迁移策略
 
 **提案：schema_version 表 + 前向迁移脚本。**
@@ -925,9 +974,11 @@ current_revision 每增加一次，必须存在对应的唯一 thesis_revisions 
 
 - `supports` 字段已从 EvidenceRecord 移除，立场改为 `thesis_evidence_links.stance`。
 - **ThesisRevision 定义为聚合状态版本**（thesis 主表 + 当前有效关联 + 当时 EvidenceRecord 最小字段集）。
-- **所有 thesis 聚合状态 mutation 都会生成新 revision**（创建、编辑、归档、关联、修改 stance、取消关联、evidence 编辑联动、evidence 软删除联动）。
+- **所有非归档 thesis 的聚合状态 mutation 都会生成新 revision**（创建、编辑、归档、关联、修改 stance、取消关联、evidence 编辑联动、evidence 软删除联动）。
+- **archived thesis 冻结**：归档后 `current_revision` 不再变化，所有 mutation 返回 409，EvidenceRecord 编辑/软删除不联动 archived thesis。
+- **EvidenceRecord 编辑和软删除使用完全一致的联动范围**（`status != 'archived'`），不存在"编辑跳过 archived、软删除联动所有"的矛盾。
 - `current_revision` 始终对应一条已存在的 `thesis_revisions.revision_number`，不存在"主表当前版本在版本表中缺失"的状态。
-- **`GET /api/thesis/{id}` 返回的当前聚合状态 ≡ `current_revision` 对应的 `ThesisRevision.snapshot`**。
+- **`GET /api/thesis/{id}` 返回的当前聚合状态 ≡ `current_revision` 对应的 `ThesisRevision.snapshot`**（archived thesis 以 snapshot 为权威，不重新组装）。
 - 创建 thesis 即生成 revision 1（不再有"revision 1 不存在"的情况）。
 - `source_date` 允许为空（research_note、口头信息、无发布日期材料）；`accessed_at` 始终必填。
 - `source_date` 有值时必须是有效 ISO 8601 date。
