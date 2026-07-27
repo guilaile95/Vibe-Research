@@ -10,9 +10,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
+import time
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import count
@@ -109,10 +112,14 @@ def _safe_daily_review_ai_done_result(record) -> dict[str, str]:
     }
 
 
-app = FastAPI(title="Vibe-Research API", version="0.1.3")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用启动时确保后台刷新调度器已启动（幂等）。"""
+    pf.start_scheduler(1800)
+    yield
 
-# 每半小时后台刷新持仓数据
-pf.start_scheduler(1800)
+
+app = FastAPI(title="Vibe-Research API", version="0.1.3", lifespan=lifespan)
 
 # CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
 #   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）
@@ -326,8 +333,6 @@ def portfolio_advice(req: PortfolioAdviceRequest):
     内部 TypeError/ValueError → 500（安全日志，不再误报「请求参数无效」）。
     请求结构错误由 Pydantic → 422。不接受客户端持仓/context/messages。
     """
-    import logging
-
     log = logging.getLogger("portfolio_advice")
     # 与 /api/chat、/api/daily-review/analyze 对齐：配置问题先 400，避免伪装成模型 502
     _require_llm_ready(req.llm)
@@ -599,7 +604,6 @@ def portfolio_close(c: CloseIn):
     date = (c.date or "").strip()
     if not date:
         raise HTTPException(400, "请填清仓日期")
-    from datetime import datetime
     try:
         datetime.strptime(date, "%Y-%m-%d")
     except ValueError:
@@ -1280,20 +1284,51 @@ def quote(codes: str = Query(..., description="逗号分隔的 6 位代码")):
         raise HTTPException(502, f"行情源异常：{e}") from e
 
 
-import time as _time
-_PCT_CACHE: dict = {}
+_CACHE_MISS = object()
+
+
+class TTLCache:
+    """带 TTL 过期和容量上限的 LRU 缓存，避免长期运行内存无限增长。"""
+
+    def __init__(self, max_entries: int = 512):
+        self._data: OrderedDict = OrderedDict()
+        self._max = max_entries
+        self._lock = threading.Lock()
+
+    def get(self, key, ttl: float):
+        with self._lock:
+            hit = self._data.get(key, _CACHE_MISS)
+            if hit is _CACHE_MISS:
+                return _CACHE_MISS
+            ts, val = hit
+            if time.time() - ts < ttl:
+                self._data.move_to_end(key)
+                return val
+            del self._data[key]
+            return _CACHE_MISS
+
+    def set(self, key, val):
+        with self._lock:
+            if key in self._data:
+                self._data.move_to_end(key)
+            self._data[key] = (time.time(), val)
+            while len(self._data) > self._max:
+                self._data.popitem(last=False)
+
+
+_PCT_CACHE = TTLCache()
 
 
 @app.get("/api/valuation/percentile")
 def valuation_percentile(code: str = Query(...)):
     """PE-TTM / PB 历史分位（近5年）。全站缓存 30 分钟/代码（历史序列日频、变化慢）。"""
     code = _validate(code)
-    hit = _PCT_CACHE.get(code)
-    if hit and _time.time() - hit[0] < 1800:
-        return {"data": hit[1]}
+    hit = _PCT_CACHE.get(code, 1800)
+    if hit is not _CACHE_MISS:
+        return {"data": hit}
     try:
         data = astock.valuation_percentile(code)
-        _PCT_CACHE[code] = (_time.time(), data)
+        _PCT_CACHE.set(code, data)
         return {"data": data}
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
@@ -1301,37 +1336,37 @@ def valuation_percentile(code: str = Query(...)):
         raise HTTPException(502, f"估值分位异常：{e}") from e
 
 
-_ANN_CACHE: dict = {}
+_ANN_CACHE = TTLCache()
 
 
 @app.get("/api/announcements")
 def announcements(code: str = Query(...)):
     """个股近期公告（东财，仅 requests）。缓存 15 分钟/代码。"""
     code = _validate(code)
-    hit = _ANN_CACHE.get(code)
-    if hit and _time.time() - hit[0] < 900:
-        return {"data": hit[1]}
+    hit = _ANN_CACHE.get(code, 900)
+    if hit is not _CACHE_MISS:
+        return {"data": hit}
     try:
         data = astock.announcements(code)
-        _ANN_CACHE[code] = (_time.time(), data)
+        _ANN_CACHE.set(code, data)
         return {"data": data}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"公告源异常：{e}") from e
 
 
-_FIN_CACHE: dict = {}
+_FIN_CACHE = TTLCache()
 
 
 @app.get("/api/financials")
 def financials(code: str = Query(...)):
     """财务关键指标（同花顺财务摘要，最新报告期）。缓存 30 分钟/代码。"""
     code = _validate(code)
-    hit = _FIN_CACHE.get(code)
-    if hit and _time.time() - hit[0] < 1800:
-        return {"data": hit[1]}
+    hit = _FIN_CACHE.get(code, 1800)
+    if hit is not _CACHE_MISS:
+        return {"data": hit}
     try:
         data = astock.financials(code)
-        _FIN_CACHE[code] = (_time.time(), data)
+        _FIN_CACHE.set(code, data)
         return {"data": data}
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
@@ -1429,16 +1464,16 @@ def finance(code: str = Query(...)):
 # 东财有 1s 限流，这些多为日/季级静态数据，统一走 30 分钟缓存，进一步降低被封风险。
 # ---------------------------------------------------------------------------
 
-_DC_CACHE: dict = {}  # key=(endpoint, code) -> (ts, data)
+_DC_CACHE = TTLCache(max_entries=1024)  # key=(endpoint, code) -> (ts, data)
 
 
 def _cached(endpoint: str, code: str, ttl: int, fetch):
     key = (endpoint, code)
-    hit = _DC_CACHE.get(key)
-    if hit and _time.time() - hit[0] < ttl:
-        return hit[1]
+    hit = _DC_CACHE.get(key, ttl)
+    if hit is not _CACHE_MISS:
+        return hit
     data = fetch()
-    _DC_CACHE[key] = (_time.time(), data)
+    _DC_CACHE.set(key, data)
     return data
 
 
@@ -1547,12 +1582,12 @@ def investor_qa(code: str = Query(...)):
 def industry(top: int = Query(20, ge=5, le=50)):
     """全行业涨跌幅排名（东财行业板块，板块级、零个股名单）。缓存 5 分钟。"""
     key = ("industry", str(top))
-    hit = _DC_CACHE.get(key)
-    if hit and _time.time() - hit[0] < 300:
-        return {"data": hit[1]}
+    hit = _DC_CACHE.get(key, 300)
+    if hit is not _CACHE_MISS:
+        return {"data": hit}
     try:
         data = astock.industry_comparison(top_n=top)
-        _DC_CACHE[key] = (_time.time(), data)
+        _DC_CACHE.set(key, data)
         return {"data": data}
     except Exception as e:  # noqa: BL001
         raise HTTPException(502, f"行业排名异常：{e}") from e
