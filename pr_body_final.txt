@@ -4,7 +4,7 @@
 
 PR #21 保持 **Draft**，尚未合并到 `feature/research-system-v01`。
 
-本 PR 交付投资逻辑与证据账本 MVP：SQLite 存储、revision 聚合服务、REST API、前端账本工作流、真实后端 E2E，以及第二轮审查阻塞修复。
+本 PR 交付投资逻辑与证据账本 MVP：SQLite 存储、revision 聚合服务、REST API、前端账本工作流、真实后端 E2E，以及审查阻塞修复。
 
 ---
 
@@ -15,12 +15,12 @@ PR #21 保持 **Draft**，尚未合并到 `feature/research-system-v01`。
 | PR | #21 |
 | Draft | ✅ |
 | Base | `feature/research-system-v01` `bbbb7bb2d1d69126d40c18ac1f26821505e14705` |
-| Head SHA | `PLACEHOLDER_HEAD` |
-| Commits | PLACEHOLDER_COMMITS |
-| Changed files | PLACEHOLDER_FILES |
-| Diff stats | PLACEHOLDER_STATS |
+| Head SHA | `1531bfa860b5dfc540cc58fd709980d72559f07e` |
+| Commits | 12 |
+| Changed files | 28 |
+| Diff stats | 28 files changed, 10225 insertions(+), 2 deletions(-) |
 
-### 自 8f1ac1c 起的聚焦修复提交（含）
+### 自 8f1ac1c 起的提交序列（全部列出）
 
 ```
 8f1ac1c fix(evidence-thesis): wait for evidence list to load before selecting in E2E
@@ -29,7 +29,7 @@ cba5cf7 fix(evidence-thesis): close storage and API contract blockers
 1f1d443 fix(frontend): restore complete API types to resolve build errors
 96a41a7 fix(evidence-thesis): complete real backend E2E and restore frontend build
 482e8a3 fix(evidence-thesis): align UI workflow and CI integration
-PLACEHOLDER_LATEST_COMMIT
+1531bfa fix(evidence-thesis): align UI workflow and CI integration
 ```
 
 ---
@@ -78,7 +78,7 @@ idx_links_evidence
 4.  Link Evidence (UI)
 5.  Update stance (UI)
 6.  Edit Thesis (UI)
-7.  Revision diff (UI tab：起始/目标版本 +「对比」按钮；非假路由)
+7.  Revision diff (UI tab：起始/目标版本 +「对比」按钮；非假路由 /revisions/3/compare/4)
 8.  Soft delete Evidence (UI only，无 API 回退)
 9.  Archive Thesis (UI) — banner + 编辑/关联禁用
 10. Duplicate archive → 409（API 读校验）
@@ -101,7 +101,9 @@ idx_links_evidence
 
 ## CI 状态
 
-以 **Head `PLACEHOLDER_HEAD`** 对应最新 Run 为准（不以历史失败 Run `30278264107` 或旧 Run `30261400233` 作为通过证据）。
+以 **Head `1531bfa860b5dfc540cc58fd709980d72559f07e`** 对应最新 Run 为准。
+
+**不得**将历史失败 Run `30278264107` 或旧 Run `30261400233` 作为通过证据。
 
 | Job | 期望 |
 |---|---|
