@@ -101,6 +101,17 @@ _VALID_STANCES = frozenset({"support", "oppose", "neutral"})
 _VALID_STATUSES = frozenset({"active", "weakened", "invalidated", "archived"})
 
 
+def _validate_expected_revision(value: object) -> int:
+    """服务层防御：expected_revision 必须是严格正整数（拒绝 bool / 0 / 负数）。"""
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value <= 0
+    ):
+        raise ValidationError("expected_revision 必须是正整数")
+    return value
+
+
 def normalize_subject(subject_type: str, subject_id: str) -> tuple[str, str, str | None]:
     """规范化 (subject_type, subject_id) 并解析 market。
 
@@ -571,8 +582,7 @@ def create_thesis(db_path, data: dict) -> dict:
 def update_thesis(db_path, thesis_id: str, data: dict, expected_revision: int) -> dict:
     """编辑投资逻辑，生成新 revision。"""
     _validate_thesis_fields(data, is_create=False)
-    if not isinstance(expected_revision, int) or isinstance(expected_revision, bool):
-        raise ValidationError("expected_revision 必须是整数")
+    expected_revision = _validate_expected_revision(expected_revision)
 
     now = _utc_now_iso()
     change_summary = (data.get("change_summary") or "更新投资逻辑").strip() or "更新投资逻辑"
@@ -617,8 +627,7 @@ def update_thesis(db_path, thesis_id: str, data: dict, expected_revision: int) -
 
 def archive_thesis(db_path, thesis_id: str, expected_revision: int, change_summary: str | None = None) -> dict:
     """归档投资逻辑，生成最终 revision。"""
-    if not isinstance(expected_revision, int) or isinstance(expected_revision, bool):
-        raise ValidationError("expected_revision 必须是整数")
+    expected_revision = _validate_expected_revision(expected_revision)
 
     now = _utc_now_iso()
     summary = (change_summary or "归档投资逻辑").strip() or "归档投资逻辑"
@@ -740,8 +749,7 @@ def link_evidence(db_path, thesis_id: str, evidence_id: str, stance: str,
     """关联证据到投资逻辑，生成新 revision。"""
     if stance not in _VALID_STANCES:
         raise ValidationError(f"stance 必须是 {sorted(_VALID_STANCES)} 之一")
-    if not isinstance(expected_revision, int) or isinstance(expected_revision, bool):
-        raise ValidationError("expected_revision 必须是整数")
+    expected_revision = _validate_expected_revision(expected_revision)
     summary = (change_summary or "关联证据").strip() or "关联证据"
     now = _utc_now_iso()
 
@@ -793,8 +801,7 @@ def update_stance(db_path, thesis_id: str, evidence_id: str, stance: str,
     """修改关联证据的 stance，生成新 revision。"""
     if stance not in _VALID_STANCES:
         raise ValidationError(f"stance 必须是 {sorted(_VALID_STANCES)} 之一")
-    if not isinstance(expected_revision, int) or isinstance(expected_revision, bool):
-        raise ValidationError("expected_revision 必须是整数")
+    expected_revision = _validate_expected_revision(expected_revision)
     summary = (change_summary or "修改证据立场").strip() or "修改证据立场"
     now = _utc_now_iso()
 
@@ -826,8 +833,7 @@ def update_stance(db_path, thesis_id: str, evidence_id: str, stance: str,
 def unlink_evidence(db_path, thesis_id: str, evidence_id: str,
                     expected_revision: int, change_summary: str | None = None) -> dict:
     """取消证据关联，生成新 revision。"""
-    if not isinstance(expected_revision, int) or isinstance(expected_revision, bool):
-        raise ValidationError("expected_revision 必须是整数")
+    expected_revision = _validate_expected_revision(expected_revision)
     summary = (change_summary or "取消关联证据").strip() or "取消关联证据"
 
     def _do(conn):

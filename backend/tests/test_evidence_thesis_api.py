@@ -409,6 +409,134 @@ class TestValidationError:
 
 
 # ---------------------------------------------------------------------------
+# expected_revision 严格正整数（HTTP 边界，TestClient）
+# ---------------------------------------------------------------------------
+
+def _thesis_update_body(expected_revision) -> dict:
+    return {
+        "title": "t",
+        "summary": "s",
+        "status": "active",
+        "core_claims": [],
+        "catalysts": [],
+        "risks": [],
+        "invalidation_conditions": [],
+        "expected_revision": expected_revision,
+        "change_summary": "x",
+    }
+
+
+class TestExpectedRevisionStrictHttp:
+    """JSON body / Query 中非法 expected_revision 必须 422；合法 1 正常。"""
+
+    def test_put_thesis_rejects_true_false_zero_negative_string(self, client):
+        thesis = _create_thesis(client)
+        tid = thesis["thesis"]["id"]
+        for bad in (True, False, 0, -1, "1"):
+            r = client.put(f"/api/thesis/{tid}", json=_thesis_update_body(bad))
+            assert r.status_code == 422, f"expected_revision={bad!r} should be 422, got {r.status_code}: {r.text}"
+
+    def test_put_thesis_accepts_positive_int(self, client):
+        thesis = _create_thesis(client)
+        tid = thesis["thesis"]["id"]
+        r = client.put(f"/api/thesis/{tid}", json=_thesis_update_body(1))
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["thesis"]["current_revision"] == 2
+
+    def test_post_link_rejects_true_zero_negative(self, client):
+        thesis = _create_thesis(client)
+        ev = _create_evidence(client)
+        tid = thesis["thesis"]["id"]
+        for bad in (True, 0, -1):
+            r = client.post(f"/api/thesis/{tid}/evidence", json={
+                "evidence_id": ev["id"],
+                "stance": "support",
+                "expected_revision": bad,
+                "change_summary": "x",
+            })
+            assert r.status_code == 422, f"link expected_revision={bad!r} → {r.status_code}"
+
+    def test_post_link_accepts_positive_int(self, client):
+        thesis = _create_thesis(client)
+        ev = _create_evidence(client)
+        tid = thesis["thesis"]["id"]
+        r = client.post(f"/api/thesis/{tid}/evidence", json={
+            "evidence_id": ev["id"],
+            "stance": "support",
+            "expected_revision": 1,
+            "change_summary": "link",
+        })
+        assert r.status_code == 200, r.text
+
+    def test_put_stance_rejects_true_zero_negative(self, client):
+        thesis = _create_thesis(client)
+        ev = _create_evidence(client)
+        tid = thesis["thesis"]["id"]
+        assert client.post(f"/api/thesis/{tid}/evidence", json={
+            "evidence_id": ev["id"], "stance": "support",
+            "expected_revision": 1, "change_summary": "link",
+        }).status_code == 200
+        for bad in (True, 0, -1):
+            r = client.put(f"/api/thesis/{tid}/evidence/{ev['id']}", json={
+                "stance": "neutral",
+                "expected_revision": bad,
+                "change_summary": "x",
+            })
+            assert r.status_code == 422, f"stance expected_revision={bad!r} → {r.status_code}"
+
+    def test_put_stance_accepts_positive_int(self, client):
+        thesis = _create_thesis(client)
+        ev = _create_evidence(client)
+        tid = thesis["thesis"]["id"]
+        assert client.post(f"/api/thesis/{tid}/evidence", json={
+            "evidence_id": ev["id"], "stance": "support",
+            "expected_revision": 1, "change_summary": "link",
+        }).status_code == 200
+        r = client.put(f"/api/thesis/{tid}/evidence/{ev['id']}", json={
+            "stance": "oppose",
+            "expected_revision": 2,
+            "change_summary": "stance",
+        })
+        assert r.status_code == 200, r.text
+
+    def test_delete_thesis_query_rejects_zero_negative_true(self, client):
+        thesis = _create_thesis(client)
+        tid = thesis["thesis"]["id"]
+        for bad in ("0", "-1", "true"):
+            r = client.delete(f"/api/thesis/{tid}?confirm=true&expected_revision={bad}")
+            assert r.status_code == 422, f"archive expected_revision={bad!r} → {r.status_code}: {r.text}"
+
+    def test_delete_thesis_query_accepts_positive_int(self, client):
+        thesis = _create_thesis(client)
+        tid = thesis["thesis"]["id"]
+        r = client.delete(f"/api/thesis/{tid}?confirm=true&expected_revision=1")
+        assert r.status_code == 200, r.text
+
+    def test_delete_unlink_query_rejects_zero_negative_true(self, client):
+        thesis = _create_thesis(client)
+        ev = _create_evidence(client)
+        tid = thesis["thesis"]["id"]
+        assert client.post(f"/api/thesis/{tid}/evidence", json={
+            "evidence_id": ev["id"], "stance": "support",
+            "expected_revision": 1, "change_summary": "link",
+        }).status_code == 200
+        for bad in ("0", "-1", "true"):
+            r = client.delete(f"/api/thesis/{tid}/evidence/{ev['id']}?expected_revision={bad}")
+            assert r.status_code == 422, f"unlink expected_revision={bad!r} → {r.status_code}: {r.text}"
+
+    def test_delete_unlink_query_accepts_positive_int(self, client):
+        thesis = _create_thesis(client)
+        ev = _create_evidence(client)
+        tid = thesis["thesis"]["id"]
+        assert client.post(f"/api/thesis/{tid}/evidence", json={
+            "evidence_id": ev["id"], "stance": "support",
+            "expected_revision": 1, "change_summary": "link",
+        }).status_code == 200
+        r = client.delete(f"/api/thesis/{tid}/evidence/{ev['id']}?expected_revision=2")
+        assert r.status_code == 200, r.text
+
+
+# ---------------------------------------------------------------------------
 # 分页边界
 # ---------------------------------------------------------------------------
 

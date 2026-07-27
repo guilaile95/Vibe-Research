@@ -6,14 +6,22 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 import evidence_thesis_service as svc
 import evidence_thesis_store as store
 
 router = APIRouter(prefix="/api", tags=["evidence-thesis"])
+
+# JSON body：严格正整数（拒绝 bool / 0 / 负数 / 字符串数字）
+StrictPositiveInt = Annotated[
+    StrictInt,
+    Field(gt=0),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -68,13 +76,7 @@ class ThesisUpdateIn(BaseModel):
     catalysts: list[str]
     risks: list[str]
     invalidation_conditions: list[str]
-    expected_revision: int
-    change_summary: str | None = None
-
-
-class ThesisArchiveIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    expected_revision: int
+    expected_revision: StrictPositiveInt
     change_summary: str | None = None
 
 
@@ -82,20 +84,14 @@ class LinkEvidenceIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     evidence_id: str
     stance: str
-    expected_revision: int
+    expected_revision: StrictPositiveInt
     change_summary: str | None = None
 
 
 class UpdateStanceIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     stance: str
-    expected_revision: int
-    change_summary: str | None = None
-
-
-class UnlinkEvidenceIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    expected_revision: int
+    expected_revision: StrictPositiveInt
     change_summary: str | None = None
 
 
@@ -266,7 +262,7 @@ def update_thesis(thesis_id: str, body: ThesisUpdateIn):
 def delete_thesis(
     thesis_id: str,
     confirm: bool = Query(False),
-    expected_revision: int = Query(...),
+    expected_revision: int = Query(..., ge=1),
     change_summary: str | None = Query(None),
 ):
     if not confirm:
@@ -363,7 +359,7 @@ def update_stance(thesis_id: str, evidence_id: str, body: UpdateStanceIn):
 def unlink_evidence(
     thesis_id: str,
     evidence_id: str,
-    expected_revision: int = Query(...),
+    expected_revision: int = Query(..., ge=1),
     change_summary: str | None = Query(None),
 ):
     db = _resolve_db()

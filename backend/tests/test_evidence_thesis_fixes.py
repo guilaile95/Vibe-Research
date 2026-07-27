@@ -474,7 +474,7 @@ class TestThesisUpdateValidation:
         """布尔值作为 expected_revision 被拒绝。"""
         thesis_id, _ = thesis_with_evidence
 
-        with pytest.raises(svc.ValidationError, match="必须是整数"):
+        with pytest.raises(svc.ValidationError, match="正整数|必须是整数"):
             svc.update_thesis(initialized_db, thesis_id, {
                 "title": "new",
                 "summary": "new",
