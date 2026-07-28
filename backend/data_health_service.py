@@ -483,6 +483,12 @@ def map_gate_event(
     Returns
     -------
     status, blocks_advice, block_reason, last_error_code, last_success_at, last_error_at, observed_at
+
+    Fail-closed 策略：
+    - Gate 业务码必须满足：last_success_at == last_error_at 非 null
+    - Gate 运行失败码必须满足：last_error_at 非 null 且不被解释为业务阻断
+    - 非法 Gate 状态形状 → status=unavailable, blocks_advice=false,
+      last_error_code=SOURCE_CORRUPTED（不再显示业务阻断摘要）
     """
     if not event:
         return (
@@ -509,27 +515,34 @@ def map_gate_event(
     ls_s = format_utc(ls_dt) if ls_dt else None
     le_s = format_utc(le_dt) if le_dt else None
 
+    # Gate 业务阻断码
+    if code in GATE_BUSINESS_CODES:
+        # 阻断状态：last_success_at == last_error_at 非 null
+        if ls_dt is not None and le_dt is not None and ls_dt == le_dt:
+            summary = error_summary(code)
+            return ("normal", True, summary, code, ls_s, le_s, observed_at)
+        # 恢复状态：last_success_at > last_error_at（业务码为历史保留）
+        if ls_dt is not None and (le_dt is None or ls_dt > le_dt):
+            return ("normal", False, None, code, ls_s, le_s, observed_at)
+        # 非法状态：业务码但 last_error_at > last_success_at 或 last_success_at is None
+        # → fail-closed（业务码不得由 record_failure 写入）
+        return ("unavailable", False, None, "SOURCE_CORRUPTED", None, None, None)
+
     # 允许：success 严格晚于 error（或仅有 success）
     if ls_dt is not None and (le_dt is None or ls_dt > le_dt):
         return ("normal", False, None, code, ls_s, le_s, observed_at)
 
-    # 明确阻断：两时间相等 + 业务码
-    if (
-        ls_dt is not None
-        and le_dt is not None
-        and ls_dt == le_dt
-        and code in GATE_BUSINESS_CODES
-    ):
-        summary = error_summary(code)
-        return ("normal", True, summary, code, ls_s, le_s, observed_at)
-
-    # 运行失败
+    # 运行失败码：last_error_at 非 null，不得解释成业务阻断
     if le_dt is not None and (ls_dt is None or le_dt >= ls_dt):
+        # Gate 运行失败只允许 SOURCE_TIMEOUT / SOURCE_UNAVAILABLE
+        if code not in ("SOURCE_TIMEOUT", "SOURCE_UNAVAILABLE"):
+            # 非法 Gate 状态形状 → fail-closed
+            return ("unavailable", False, None, "SOURCE_CORRUPTED", None, None, None)
         return (
             "unavailable",
             False,
             None,
-            code if code in ("SOURCE_TIMEOUT", "SOURCE_UNAVAILABLE") else (code or "SOURCE_UNAVAILABLE"),
+            code,
             ls_s,
             le_s,
             observed_at,

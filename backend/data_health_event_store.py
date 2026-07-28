@@ -364,13 +364,27 @@ def record_failure(
     *,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Hard failure：只更新 last_error_at/code，保留 last_success_at。"""
+    """Hard failure：只更新 last_error_at/code，保留 last_success_at。
+
+    Gate 业务阻断码（NO_HOLDINGS / HOLDING_QUOTES_UNAVAILABLE /
+    MARKET_BREADTH_UNAVAILABLE / REVIEW_TRADE_DATE_UNAVAILABLE）只能通过
+    record_gate_blocked() 写入；通过 record_failure 写入视为编程错误。
+    """
     if error_code == "SOURCE_NOT_INITIALIZED":
         raise DataHealthEventStoreError("illegal error_code")
     if source_id not in EVENT_SOURCE_IDS:
         raise DataHealthEventStoreError("unknown source_id")
-    if error_code not in allowed_error_codes_for(source_id):
-        raise DataHealthEventStoreError("illegal error_code for source")
+    if source_id == "portfolio_advice_gate":
+        # 当 source_id == portfolio_advice_gate：只允许 SOURCE_TIMEOUT / SOURCE_UNAVAILABLE
+        if error_code in GATE_BUSINESS_CODES:
+            raise DataHealthEventStoreError(
+                "gate business code must go through record_gate_blocked"
+            )
+        if error_code not in ("SOURCE_TIMEOUT", "SOURCE_UNAVAILABLE"):
+            raise DataHealthEventStoreError("illegal error_code for gate")
+    else:
+        if error_code not in allowed_error_codes_for(source_id):
+            raise DataHealthEventStoreError("illegal error_code for source")
 
     def mut(rec: dict[str, Any], obs: datetime) -> None:
         rec["last_error_at"] = _format_utc(obs)

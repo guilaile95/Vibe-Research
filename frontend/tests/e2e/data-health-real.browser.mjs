@@ -13,14 +13,12 @@ import {
   writeFileSync,
   mkdirSync,
   statSync,
-  readFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import path from "node:path";
-import { createRequire } from "node:module";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
@@ -134,12 +132,15 @@ function findChromium() {
 
 function snapshotFs(rootDir) {
   const files = {};
+  const dirs = new Set();
   const walk = (dir) => {
     if (!existsSync(dir)) return;
+    dirs.add(path.relative(rootDir, dir) || ".");
     for (const name of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, name.name);
-      if (name.isDirectory()) walk(p);
-      else {
+      if (name.isDirectory()) {
+        walk(p);
+      } else {
         const st = statSync(p);
         files[path.relative(rootDir, p)] = {
           size: st.size,
@@ -149,31 +150,68 @@ function snapshotFs(rootDir) {
     }
   };
   walk(rootDir);
-  return files;
+  return { dirs, files };
 }
 
 function assertFsUnchanged(before, after, label) {
-  const beforeKeys = Object.keys(before).sort();
-  const afterKeys = Object.keys(after).sort();
+  // directory set must be strictly equal
+  const beforeDirs = [...before.dirs].sort();
+  const afterDirs = [...after.dirs].sort();
+  if (JSON.stringify(beforeDirs) !== JSON.stringify(afterDirs)) {
+    throw new Error(
+      `${label}: directory set changed: ${JSON.stringify(beforeDirs)} vs ${JSON.stringify(afterDirs)}`,
+    );
+  }
+  // file set must be strictly equal
+  const beforeKeys = Object.keys(before.files).sort();
+  const afterKeys = Object.keys(after.files).sort();
   if (JSON.stringify(beforeKeys) !== JSON.stringify(afterKeys)) {
     throw new Error(
       `${label}: filesystem file set changed: ${JSON.stringify(beforeKeys)} vs ${JSON.stringify(afterKeys)}`,
     );
   }
   for (const k of beforeKeys) {
-    if (before[k].size !== after[k].size) {
+    if (before.files[k].size !== after.files[k].size) {
       throw new Error(`${label}: file size changed: ${k}`);
     }
-    if (before[k].mtimeNs !== after[k].mtimeNs) {
+    if (before.files[k].mtimeNs !== after.files[k].mtimeNs) {
       throw new Error(`${label}: file mtime changed: ${k}`);
     }
   }
 }
 
-function sqliteTables(dbPath) {
-  if (!existsSync(dbPath)) return [];
-  // Use python one-shot for portable table list without native sqlite3 binding in node
-  return null; // filled via python helper below
+// snapshot db / -wal / -shm existence + size + mtimeMs
+function snapshotDbArtifacts(dbPath) {
+  const out = {};
+  const base = dbPath.replace(/\.db$/i, "");
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const p = suffix === "" ? dbPath : base + suffix;
+    if (existsSync(p)) {
+      const st = statSync(p);
+      out[suffix || "db"] = { exists: true, size: st.size, mtimeMs: st.mtimeMs };
+    } else {
+      out[suffix || "db"] = { exists: false, size: 0, mtimeMs: 0 };
+    }
+  }
+  return out;
+}
+
+function assertDbArtifactsUnchanged(before, after, label) {
+  for (const k of ["db", "-wal", "-shm"]) {
+    const b = before[k];
+    const a = after[k];
+    if (b.exists !== a.exists) {
+      throw new Error(`${label}: ${k} existence changed: ${b.exists} -> ${a.exists}`);
+    }
+    if (b.exists) {
+      if (b.size !== a.size) {
+        throw new Error(`${label}: ${k} size changed: ${b.size} -> ${a.size}`);
+      }
+      if (b.mtimeMs !== a.mtimeMs) {
+        throw new Error(`${label}: ${k} mtime changed: ${b.mtimeMs} -> ${a.mtimeMs}`);
+      }
+    }
+  }
 }
 
 async function listSqliteTablesViaPython(dbPath, env) {
@@ -474,6 +512,7 @@ async function main() {
     // Snapshot AFTER health probe + table probe, BEFORE any data-health GET
     const beforeFs = snapshotFs(tempDir);
     const beforeDbStat = statSync(evidenceDb);
+    const beforeDbArtifacts = snapshotDbArtifacts(evidenceDb);
 
     console.log("[E2E] First GET /api/data-health");
     const healthRes = await fetch(`${apiUrl}/api/data-health`);
@@ -494,6 +533,8 @@ async function main() {
     ) {
       throw new Error("evidence db size/mtime changed after first GET");
     }
+    const afterFirstDbArtifacts = snapshotDbArtifacts(evidenceDb);
+    assertDbArtifactsUnchanged(beforeDbArtifacts, afterFirstDbArtifacts, "after first list GET");
 
     // Hard assertions
     if (!data || !Array.isArray(data.items) || data.items.length !== 11) {
@@ -554,6 +595,8 @@ async function main() {
     ) {
       throw new Error("evidence db changed after detail GET");
     }
+    const afterDetailDbArtifacts = snapshotDbArtifacts(evidenceDb);
+    assertDbArtifactsUnchanged(beforeDbArtifacts, afterDetailDbArtifacts, "after detail GET");
 
     console.log("[E2E] Starting frontend static server...");
     frontendServer = await startStaticServer(frontendDist, frontendPort);
@@ -631,6 +674,8 @@ async function main() {
     ) {
       throw new Error("evidence db changed after browser");
     }
+    const afterBrowserDbArtifacts = snapshotDbArtifacts(evidenceDb);
+    assertDbArtifactsUnchanged(beforeDbArtifacts, afterBrowserDbArtifacts, "after browser");
 
     // repo radar untouched
     if (repoRadarExisted) {

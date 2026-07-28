@@ -145,3 +145,106 @@ def test_prompt_builder_valueerror_is_runtime_failure(events_dir, monkeypatch):
     st, blocks, *_ = svc.map_gate_event(ev)
     assert st == "unavailable"
     assert blocks is False
+
+from pathlib import Path
+
+
+
+# ---------------------------------------------------------------------------
+# Gate 业务码不得通过 record_failure 写入 + fail-closed 形状
+# ---------------------------------------------------------------------------
+
+def test_record_failure_rejects_gate_business_codes(events_dir):
+    """record_failure(portfolio_advice_gate, business_code) must raise."""
+    for code in ("NO_HOLDINGS", "HOLDING_QUOTES_UNAVAILABLE",
+                 "MARKET_BREADTH_UNAVAILABLE", "REVIEW_TRADE_DATE_UNAVAILABLE"):
+        with pytest.raises(store.DataHealthEventStoreError):
+            store.record_failure("portfolio_advice_gate", code)
+
+
+def test_record_failure_gate_only_allows_timeout_unavailable(events_dir):
+    """Gate 只允许 SOURCE_TIMEOUT / SOURCE_UNAVAILABLE 通过 record_failure。"""
+    for code in ("SOURCE_PARTIAL", "SOURCE_DEGRADED", "SOURCE_STALE",
+                 "SOURCE_CORRUPTED", "SOURCE_SCHEMA_INCOMPATIBLE"):
+        with pytest.raises(store.DataHealthEventStoreError):
+            store.record_failure("portfolio_advice_gate", code)
+    # 允许
+    store.record_failure("portfolio_advice_gate", "SOURCE_TIMEOUT")
+    store.record_failure("portfolio_advice_gate", "SOURCE_UNAVAILABLE")
+
+
+def test_map_gate_event_business_code_no_success_fail_closed():
+    """业务码 + last_error_at only (no last_success_at) → fail-closed SOURCE_CORRUPTED。"""
+    e = {
+        "last_success_at": None,
+        "last_error_at": "2026-07-28T01:00:00.000000Z",
+        "last_error_code": "NO_HOLDINGS",
+    }
+    st, blocks, reason, code, *_ = svc.map_gate_event(e)
+    assert st == "unavailable"
+    assert blocks is False
+    assert code == "SOURCE_CORRUPTED"
+    assert reason is None  # 不得显示业务阻断摘要
+
+
+def test_map_gate_event_business_code_error_after_success_fail_closed():
+    """业务码 + last_error_at > last_success_at → fail-closed。"""
+    e = {
+        "last_success_at": "2026-07-28T01:00:00.000000Z",
+        "last_error_at": "2026-07-28T02:00:00.000000Z",
+        "last_error_code": "HOLDING_QUOTES_UNAVAILABLE",
+    }
+    st, blocks, reason, code, *_ = svc.map_gate_event(e)
+    assert st == "unavailable"
+    assert blocks is False
+    assert code == "SOURCE_CORRUPTED"
+    assert reason is None
+
+
+def test_map_gate_event_runtime_failure_not_block():
+    """Gate 运行失败码（SOURCE_TIMEOUT）不得解释为业务阻断。"""
+    e = {
+        "last_success_at": None,
+        "last_error_at": "2026-07-28T01:00:00.000000Z",
+        "last_error_code": "SOURCE_TIMEOUT",
+    }
+    st, blocks, reason, code, *_ = svc.map_gate_event(e)
+    assert st == "unavailable"
+    assert blocks is False
+    assert code == "SOURCE_TIMEOUT"
+    assert reason is None
+
+
+def test_map_gate_event_runtime_failure_illegal_code_fail_closed():
+    """Gate 运行失败位置但非法错误码 → fail-closed SOURCE_CORRUPTED。"""
+    e = {
+        "last_success_at": None,
+        "last_error_at": "2026-07-28T01:00:00.000000Z",
+        "last_error_code": "SOURCE_PARTIAL",  # Gate 不允许
+    }
+    st, blocks, reason, code, *_ = svc.map_gate_event(e)
+    assert st == "unavailable"
+    assert blocks is False
+    assert code == "SOURCE_CORRUPTED"
+    assert reason is None
+
+
+def test_record_failure_rejection_preserves_event_file(events_dir):
+    """拒绝写入后原事件文件内容、size 和 mtime 不变。"""
+    path = Path(store.events_path())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}", encoding="utf-8")
+    snap_size = path.stat().st_size
+    snap_mtime = path.stat().st_mtime_ns
+
+    for code in ("NO_HOLDINGS", "HOLDING_QUOTES_UNAVAILABLE",
+                 "MARKET_BREADTH_UNAVAILABLE", "REVIEW_TRADE_DATE_UNAVAILABLE"):
+        try:
+            store.record_failure("portfolio_advice_gate", code)
+        except store.DataHealthEventStoreError:
+            pass
+
+    assert path.exists()
+    assert path.stat().st_size == snap_size, "event file size must be unchanged"
+    assert path.stat().st_mtime_ns == snap_mtime, "event file mtime must be unchanged"
+    assert path.read_text(encoding="utf-8") == "{}"

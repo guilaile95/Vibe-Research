@@ -399,3 +399,230 @@ def test_evidence_ledger_mtime_strict(data_env):
     assert _sqlite_tables(db) == tables_before
     assert db.stat().st_size == snap.st_size
     assert db.stat().st_mtime_ns == snap.st_mtime_ns
+
+
+
+# ---------------------------------------------------------------------------
+# WAL-aware readonly_health_snapshot
+# ---------------------------------------------------------------------------
+
+def _snap_db_files(db_path: Path) -> dict:
+    """快照 db / wal / shm 的 (exists, size, mtime_ns)。"""
+    out = {}
+    for suffix in ("", "-wal", "-shm"):
+        p = db_path.with_suffix(db_path.suffix + suffix) if suffix else db_path
+        if p.exists():
+            st = p.stat()
+            out[suffix or "db"] = (True, st.st_size, st.st_mtime_ns)
+        else:
+            out[suffix or "db"] = (False, 0, 0)
+    return out
+
+
+def test_wal_snapshot_empty_db_no_sidecar(data_env):
+    """空、已 checkpoint DB → normal，且不创建 wal/shm。"""
+    db = data_env / "evidence_thesis.db"
+    et_store.initialize_store(db)
+    # 初始化后可能产生 wal/shm，先 checkpoint 关闭
+    conn = sqlite3.connect(str(db), timeout=5)
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        conn.close()
+    # 删除可能残留的 wal/shm
+    for suffix in ("-wal", "-shm"):
+        p = db.with_suffix(db.suffix + suffix)
+        if p.exists():
+            p.unlink()
+
+    snap_before = _snap_db_files(db)
+    rec = adapters.EvidenceLedgerAdapter().read(
+        adapters.HealthReadContext(now_utc=datetime.now(timezone.utc))
+    )
+    assert rec["status"] == "normal"
+    snap_after = _snap_db_files(db)
+    # 不创建 wal/shm
+    assert not snap_after["-wal"][0], "WAL must not be created"
+    assert not snap_after["-shm"][0], "SHM must not be created"
+    # db 文件 size/mtime 不变
+    assert snap_after["db"][1] == snap_before["db"][1]
+    assert snap_after["db"][2] == snap_before["db"][2]
+
+
+def test_wal_row_visible_through_snapshot(data_env):
+    """Evidence written only to WAL must be visible through readonly_health_snapshot."""
+    db = data_env / "evidence_thesis.db"
+    et_store.initialize_store(db)
+
+    # 打开一个写连接并关闭 auto-checkpoint
+    write_conn = sqlite3.connect(str(db), timeout=5)
+    write_conn.row_factory = sqlite3.Row
+    write_conn.execute("PRAGMA journal_mode = WAL")
+    write_conn.execute("PRAGMA wal_autocheckpoint = 0")
+    write_conn.execute("BEGIN IMMEDIATE")
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    write_conn.execute(
+        """
+        INSERT INTO evidence_records (
+            id, subject_type, subject_id, evidence_type, claim,
+            source_title, source_url, source_date, accessed_at,
+            classification, confidence, created_at, updated_at, deleted, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+        """,
+        (
+            "wal-test-1", "stock", "600519", "news", "WAL-only claim",
+            "source", None, None, now_iso,
+            "fact", "high", now_iso, now_iso,
+        ),
+    )
+    write_conn.commit()
+    # 不关闭 write_conn，保持 WAL 活动
+
+    try:
+        wal_path = db.with_suffix(db.suffix + "-wal")
+        assert wal_path.exists() and wal_path.stat().st_size > 0, "WAL should be non-empty"
+
+        # readonly_health_snapshot 必须读到 WAL 行
+        with et_store.readonly_health_snapshot(db) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM evidence_records WHERE deleted = 0"
+            ).fetchone()
+            assert row[0] >= 1, "WAL row must be visible through snapshot"
+    finally:
+        write_conn.close()
+
+
+def test_wal_snapshot_files_unchanged(data_env):
+    """读取前后 db/wal/shm 文件集合、size、mtime 不变。"""
+    db = data_env / "evidence_thesis.db"
+    et_store.initialize_store(db)
+
+    # 创建非空 WAL
+    write_conn = sqlite3.connect(str(db), timeout=5)
+    write_conn.row_factory = sqlite3.Row
+    write_conn.execute("PRAGMA journal_mode = WAL")
+    write_conn.execute("PRAGMA wal_autocheckpoint = 0")
+    write_conn.execute("BEGIN IMMEDIATE")
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    write_conn.execute(
+        """
+        INSERT INTO evidence_records (
+            id, subject_type, subject_id, evidence_type, claim,
+            source_title, source_url, source_date, accessed_at,
+            classification, confidence, created_at, updated_at, deleted, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+        """,
+        (
+            "wal-test-2", "stock", "600519", "news", "WAL-only claim 2",
+            "source", None, None, now_iso,
+            "fact", "high", now_iso, now_iso,
+        ),
+    )
+    write_conn.commit()
+
+    try:
+        wal_path = db.with_suffix(db.suffix + "-wal")
+        shm_path = db.with_suffix(db.suffix + "-shm")
+        assert wal_path.exists() and wal_path.stat().st_size > 0
+
+        # 确保 shm 存在（连接打开时会创建）
+        # 等待 shm 文件出现
+        import time as _t
+        for _ in range(20):
+            if shm_path.exists():
+                break
+            _t.sleep(0.05)
+
+        snap_before = _snap_db_files(db)
+        # 读取快照
+        with et_store.readonly_health_snapshot(db) as conn:
+            conn.execute("SELECT COUNT(*) FROM evidence_records WHERE deleted = 0").fetchone()
+        snap_after = _snap_db_files(db)
+
+        # 文件集合不变
+        assert snap_before.keys() == snap_after.keys()
+        for k in snap_before:
+            assert snap_before[k][0] == snap_after[k][0], f"file existence changed: {k}"
+            assert snap_before[k][1] == snap_after[k][1], f"size changed: {k}"
+            assert snap_before[k][2] == snap_after[k][2], f"mtime changed: {k}"
+    finally:
+        write_conn.close()
+
+
+def test_wal_present_shm_missing_unavailable(data_env):
+    """WAL 存在但 shm 缺失 → 安全 unavailable，且不创建 shm。"""
+    db = data_env / "evidence_thesis.db"
+    et_store.initialize_store(db)
+
+    # 创建非空 WAL
+    write_conn = sqlite3.connect(str(db), timeout=5)
+    write_conn.row_factory = sqlite3.Row
+    write_conn.execute("PRAGMA journal_mode = WAL")
+    write_conn.execute("PRAGMA wal_autocheckpoint = 0")
+    write_conn.execute("BEGIN IMMEDIATE")
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    write_conn.execute(
+        """
+        INSERT INTO evidence_records (
+            id, subject_type, subject_id, evidence_type, claim,
+            source_title, source_url, source_date, accessed_at,
+            classification, confidence, created_at, updated_at, deleted, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+        """,
+        (
+            "wal-test-3", "stock", "600519", "news", "WAL-only claim 3",
+            "source", None, None, now_iso,
+            "fact", "high", now_iso, now_iso,
+        ),
+    )
+    write_conn.commit()
+    # 关闭连接，让 shm 可能保留
+    write_conn.close()
+
+    wal_path = db.with_suffix(db.suffix + "-wal")
+    shm_path = db.with_suffix(db.suffix + "-shm")
+    if not wal_path.exists() or wal_path.stat().st_size == 0:
+        # WAL 已被 checkpoint，跳过本测试
+        return
+    # 删除 shm
+    if shm_path.exists():
+        shm_path.unlink()
+
+    # 读取应返回 SOURCE_UNAVAILABLE
+    rec = adapters.EvidenceLedgerAdapter().read(
+        adapters.HealthReadContext(now_utc=datetime.now(timezone.utc))
+    )
+    assert rec["last_error_code"] == "SOURCE_UNAVAILABLE"
+    # 不创建 shm
+    assert not shm_path.exists(), "SHM must not be created"
+
+
+def test_real_evidence_coverage_increments(data_env):
+    """真实 E2E：创建一条 Evidence 后 coverage_current >= 1。"""
+    db = data_env / "evidence_thesis.db"
+    et_store.initialize_store(db)
+
+    import evidence_thesis_service as ets
+    import os as _os
+    _os.environ["VIBE_RESEARCH_EVIDENCE_THESIS_DB"] = str(db)
+
+    # 通过 service 写入一条 Evidence
+    ets.create_evidence(
+        db,
+        {
+            "subject_type": "stock",
+            "subject_id": "600519",
+            "evidence_type": "news",
+            "claim": "真实证据条目",
+            "source_title": "test",
+            "classification": "fact",
+            "confidence": "high",
+            "accessed_at": "2026-07-28T08:00:00+00:00",
+        },
+    )
+
+    rec = adapters.EvidenceLedgerAdapter().read(
+        adapters.HealthReadContext(now_utc=datetime.now(timezone.utc))
+    )
+    assert rec["status"] == "normal"
+    assert rec["coverage_current"] >= 1, "coverage_current must reflect real evidence"

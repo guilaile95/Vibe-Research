@@ -269,3 +269,185 @@ def test_registry_error_500(client, monkeypatch):
     r = c.get("/api/data-health")
     assert r.status_code == 500
     assert r.json()["detail"] == "数据健康服务暂不可用"
+
+
+
+# ---------------------------------------------------------------------------
+# 严格校验 500 场景：非法 record 字段必须返回 HTTP 500，不进入响应体
+# ---------------------------------------------------------------------------
+
+def _base_valid_record():
+    """返回一份合法的 quotes record（字段集合与类型完全规范）。"""
+    import data_health_service as svc
+    return svc.make_record(
+        source_id="quotes",
+        module="个股行情",
+        display_name="个股行情",
+        status="normal",
+        is_stale=False,
+        observed_at="2026-07-28T08:00:00.000000Z",
+        last_success_at="2026-07-28T08:00:00.000000Z",
+        stale_after_seconds=300,
+        is_cached=True,
+        is_degraded=False,
+        coverage_current=10,
+        coverage_expected=10,
+        last_error_code=None,
+        last_error_at=None,
+        blocks_advice=False,
+        block_reason=None,
+        detail_path="/quotes",
+    )
+
+
+def _patch_quotes_adapter(monkeypatch, factory):
+    """用 factory() 替换 quotes adapter，其它 adapter 保持原样。"""
+    import data_health_adapters as adapters
+
+    class _Wrapper:
+        source_id = "quotes"
+        module = "个股行情"
+        display_name = "个股行情"
+
+        def read(self, context):
+            return factory()
+
+    real = adapters.build_adapters()
+    patched = [_Wrapper() if ad.source_id == "quotes" else ad for ad in real]
+    monkeypatch.setattr(adapters, "get_adapters", lambda: patched)
+
+
+def test_extra_traceback_field_500(client, monkeypatch):
+    c, _ = client
+
+    def bad():
+        rec = _base_valid_record()
+        rec["traceback"] = "secret stack"
+        return rec
+
+    _patch_quotes_adapter(monkeypatch, bad)
+    r = c.get("/api/data-health")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "数据健康服务暂不可用"
+    # 响应不得泄露 traceback 内容
+    assert "secret" not in r.text
+    assert "traceback" not in r.text.lower()
+
+
+def test_wrong_source_id_500(client, monkeypatch):
+    c, _ = client
+
+    def bad():
+        rec = _base_valid_record()
+        rec["source_id"] = "daily_review"  # 与 quotes adapter 不一致
+        return rec
+
+    _patch_quotes_adapter(monkeypatch, bad)
+    r = c.get("/api/data-health")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "数据健康服务暂不可用"
+
+
+def test_duplicate_adapter_source_id_500(client, monkeypatch):
+    c, _ = client
+    import data_health_adapters as adapters
+
+    class _Dup:
+        source_id = "quotes"  # 与 QuotesAdapter 重复
+        module = "个股行情"
+        display_name = "个股行情"
+
+        def read(self, context):
+            return _base_valid_record()
+
+    real = adapters.build_adapters()
+    # 在 quotes 之后插入重复 adapter
+    patched = []
+    inserted = False
+    for ad in real:
+        patched.append(ad)
+        if ad.source_id == "quotes" and not inserted:
+            patched.append(_Dup())
+            inserted = True
+    monkeypatch.setattr(adapters, "get_adapters", lambda: patched)
+    r = c.get("/api/data-health")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "数据健康服务暂不可用"
+
+
+def test_non_gate_blocks_advice_true_500(client, monkeypatch):
+    c, _ = client
+
+    def bad():
+        rec = _base_valid_record()
+        rec["blocks_advice"] = True  # 非 Gate 不得阻断
+        rec["block_reason"] = "不应出现"
+        return rec
+
+    _patch_quotes_adapter(monkeypatch, bad)
+    r = c.get("/api/data-health")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "数据健康服务暂不可用"
+
+
+def test_unknown_last_error_code_500(client, monkeypatch):
+    c, _ = client
+
+    def bad():
+        rec = _base_valid_record()
+        rec["last_error_code"] = "SOURCE_UNKNOWN_BOGUS"
+        rec["last_error_summary"] = "任意"
+        rec["status"] = "unavailable"
+        rec["last_success_at"] = None
+        return rec
+
+    _patch_quotes_adapter(monkeypatch, bad)
+    r = c.get("/api/data-health")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "数据健康服务暂不可用"
+
+
+def test_is_stale_string_false_500(client, monkeypatch):
+    c, _ = client
+
+    def bad():
+        rec = _base_valid_record()
+        rec["is_stale"] = "false"  # 字符串，非严格 bool
+        return rec
+
+    _patch_quotes_adapter(monkeypatch, bad)
+    r = c.get("/api/data-health")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "数据健康服务暂不可用"
+
+
+def test_coverage_current_bool_true_500(client, monkeypatch):
+    c, _ = client
+
+    def bad():
+        rec = _base_valid_record()
+        rec["coverage_current"] = True  # bool 不得当作 int
+        return rec
+
+    _patch_quotes_adapter(monkeypatch, bad)
+    r = c.get("/api/data-health")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "数据健康服务暂不可用"
+
+
+def test_last_error_summary_mismatch_500(client, monkeypatch):
+    c, _ = client
+
+    def bad():
+        rec = _base_valid_record()
+        rec["status"] = "unavailable"
+        rec["last_error_code"] = "SOURCE_UNAVAILABLE"
+        rec["last_error_summary"] = "与 error_code 不一致的摘要"
+        rec["last_success_at"] = None
+        rec["last_error_at"] = "2026-07-28T08:00:00.000000Z"
+        return rec
+
+    _patch_quotes_adapter(monkeypatch, bad)
+    r = c.get("/api/data-health")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "数据健康服务暂不可用"

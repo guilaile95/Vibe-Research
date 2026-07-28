@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Iterator, Protocol
 
 import data_health_event_store as event_store
 import data_health_service as svc
@@ -39,11 +41,50 @@ _REQUIRED_RECORD_KEYS = frozenset({
     "detail_path",
 })
 
+# AdapterReadError 只允许这四个稳定公开错误码
+_ALLOWED_ADAPTER_ERROR_CODES = frozenset({
+    "SOURCE_UNAVAILABLE",
+    "SOURCE_CORRUPTED",
+    "SOURCE_SCHEMA_INCOMPATIBLE",
+    "SOURCE_TIMEOUT",
+})
+
+# last_error_code 允许的稳定公开错误码集合（含 None 与初始化码）
+_ALLOWED_RECORD_ERROR_CODES = frozenset({
+    "SOURCE_NOT_INITIALIZED",
+    "SOURCE_STALE",
+    "SOURCE_PARTIAL",
+    "SOURCE_UNAVAILABLE",
+    "SOURCE_CORRUPTED",
+    "SOURCE_SCHEMA_INCOMPATIBLE",
+    "SOURCE_TIMEOUT",
+    "SOURCE_DEGRADED",
+    "NO_HOLDINGS",
+    "HOLDING_QUOTES_UNAVAILABLE",
+    "MARKET_BREADTH_UNAVAILABLE",
+    "REVIEW_TRADE_DATE_UNAVAILABLE",
+})
+
+# 规范 UTC：YYYY-MM-DDTHH:MM:SS.ffffffZ
+_CANONICAL_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
+# 仅日期：YYYY-MM-DD
+_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 
 class AdapterReadError(Exception):
-    """可预期的单 Adapter 读取失败（仅此异常由聚合层隔离为 unavailable）。"""
+    """可预期的单 Adapter 读取失败（仅此异常由聚合层隔离为 unavailable）。
+
+    仅允许四种稳定公开错误码：SOURCE_UNAVAILABLE / SOURCE_CORRUPTED /
+    SOURCE_SCHEMA_INCOMPATIBLE / SOURCE_TIMEOUT。其它错误码视为编程错误。
+    """
 
     def __init__(self, error_code: str = "SOURCE_UNAVAILABLE"):
+        if error_code not in _ALLOWED_ADAPTER_ERROR_CODES:
+            raise ValueError(
+                f"illegal AdapterReadError code: {error_code!r}; "
+                "must be one of SOURCE_UNAVAILABLE/SOURCE_CORRUPTED/"
+                "SOURCE_SCHEMA_INCOMPATIBLE/SOURCE_TIMEOUT"
+            )
         super().__init__(error_code)
         self.error_code = error_code
 
@@ -71,14 +112,161 @@ def _meta(source_id: str) -> dict[str, str]:
     return {"source_id": source_id, "module": source_id, "display_name": source_id}
 
 
-def is_valid_data_health_record(record: Any) -> bool:
+def _is_strict_bool(v: Any) -> bool:
+    """严格 bool：拒绝 0/1/None/其它类型。"""
+    return isinstance(v, bool)
+
+
+def _is_optional_bool(v: Any) -> bool:
+    """bool 或 None；拒绝 0/1。"""
+    return v is None or isinstance(v, bool)
+
+
+def _is_canonical_utc_or_none(v: Any) -> bool:
+    if v is None:
+        return True
+    if not isinstance(v, str):
+        return False
+    return bool(_CANONICAL_UTC_RE.match(v))
+
+
+def _is_date_only_or_none(v: Any) -> bool:
+    if v is None:
+        return True
+    if not isinstance(v, str):
+        return False
+    return bool(_DATE_ONLY_RE.match(v))
+
+
+def _is_non_negative_int_or_none(v: Any) -> bool:
+    """非负 int 或 None；bool 不得当作 int。"""
+    if v is None:
+        return True
+    if isinstance(v, bool):
+        return False
+    if not isinstance(v, int):
+        return False
+    return v >= 0
+
+
+def validate_data_health_record(
+    adapter: "DataHealthAdapter",
+    record: Any,
+) -> svc.DataHealthRecord:
+    """严格校验 DataHealthRecord。
+
+    校验失败抛 RuntimeError，由聚合层映射为 HTTP 500（不进入响应体）。
+    """
     if not isinstance(record, dict):
-        return False
-    if not _REQUIRED_RECORD_KEYS.issubset(record.keys()):
-        return False
-    if record.get("status") not in ("normal", "partial", "unavailable"):
-        return False
-    return True
+        raise RuntimeError("invalid DataHealthRecord: not a mapping")
+
+    # 1. 字段集合精确相等
+    if set(record.keys()) != _REQUIRED_RECORD_KEYS:
+        missing = _REQUIRED_RECORD_KEYS - set(record.keys())
+        extra = set(record.keys()) - _REQUIRED_RECORD_KEYS
+        raise RuntimeError(
+            "invalid DataHealthRecord: keys mismatch "
+            f"(missing={sorted(missing)}, extra={sorted(extra)})"
+        )
+
+    # 2. source_id 与 adapter 一致
+    sid = record["source_id"]
+    if not isinstance(sid, str) or sid != adapter.source_id:
+        raise RuntimeError("invalid DataHealthRecord: source_id mismatch")
+
+    # 3. source_id 必须在注册表
+    if sid not in svc.REGISTERED_SOURCE_IDS:
+        raise RuntimeError("invalid DataHealthRecord: source_id not in registry")
+
+    # 4. module / display_name 与注册表完全一致
+    meta = _meta(sid)
+    if record["module"] != meta["module"]:
+        raise RuntimeError("invalid DataHealthRecord: module mismatch")
+    if record["display_name"] != meta["display_name"]:
+        raise RuntimeError("invalid DataHealthRecord: display_name mismatch")
+
+    # 5. status 是三态之一
+    status = record["status"]
+    if status not in svc.VALID_STATUSES:
+        raise RuntimeError("invalid DataHealthRecord: illegal status")
+
+    # 6. is_stale / blocks_advice 必须是严格 bool
+    if not _is_strict_bool(record["is_stale"]):
+        raise RuntimeError("invalid DataHealthRecord: is_stale must be strict bool")
+    if not _is_strict_bool(record["blocks_advice"]):
+        raise RuntimeError("invalid DataHealthRecord: blocks_advice must be strict bool")
+
+    # 7. is_cached / is_degraded 必须是 bool 或 null
+    if not _is_optional_bool(record["is_cached"]):
+        raise RuntimeError("invalid DataHealthRecord: is_cached must be bool or null")
+    if not _is_optional_bool(record["is_degraded"]):
+        raise RuntimeError("invalid DataHealthRecord: is_degraded must be bool or null")
+
+    # 8. 时间字段必须是规范 UTC、date-only 或 null
+    for key in ("observed_at", "last_success_at", "last_error_at"):
+        if not _is_canonical_utc_or_none(record[key]):
+            raise RuntimeError(f"invalid DataHealthRecord: {key} must be canonical UTC or null")
+    for key in ("data_trade_date", "data_cutoff"):
+        if not _is_date_only_or_none(record[key]):
+            raise RuntimeError(f"invalid DataHealthRecord: {key} must be date-only or null")
+
+    # 9. stale_after_seconds 必须是非负 int 或 null
+    sas = record["stale_after_seconds"]
+    if sas is not None:
+        if isinstance(sas, bool) or not isinstance(sas, int) or sas < 0:
+            raise RuntimeError("invalid DataHealthRecord: stale_after_seconds must be non-negative int or null")
+
+    # 10. coverage 必须是非负 int 或 null，bool 不得当作 int
+    cov_c = record["coverage_current"]
+    cov_e = record["coverage_expected"]
+    if not _is_non_negative_int_or_none(cov_c):
+        raise RuntimeError("invalid DataHealthRecord: coverage_current must be non-negative int or null")
+    if not _is_non_negative_int_or_none(cov_e):
+        raise RuntimeError("invalid DataHealthRecord: coverage_expected must be non-negative int or null")
+    # 两个 coverage 都存在时 current <= expected
+    if cov_c is not None and cov_e is not None and cov_c > cov_e:
+        raise RuntimeError("invalid DataHealthRecord: coverage_current > coverage_expected")
+
+    # 11. last_error_code 必须是稳定公开错误码或 null
+    code = record["last_error_code"]
+    if code is not None:
+        if not isinstance(code, str) or code not in _ALLOWED_RECORD_ERROR_CODES:
+            raise RuntimeError("invalid DataHealthRecord: illegal last_error_code")
+
+    # 12. last_error_summary 必须等于该错误码的安全映射
+    expected_summary = svc.error_summary(code)
+    if record["last_error_summary"] != expected_summary:
+        raise RuntimeError("invalid DataHealthRecord: last_error_summary mismatch")
+
+    # 13. detail_path 必须以 / 开头或为 null
+    dp = record["detail_path"]
+    if dp is not None:
+        if not isinstance(dp, str) or not dp.startswith("/"):
+            raise RuntimeError("invalid DataHealthRecord: detail_path must start with / or be null")
+
+    # 14. Gate 不变量
+    is_gate = sid == "portfolio_advice_gate"
+    blocks = record["blocks_advice"]
+    block_reason = record["block_reason"]
+    if not is_gate:
+        if blocks is not False:
+            raise RuntimeError("invalid DataHealthRecord: non-gate blocks_advice must be false")
+        if block_reason is not None:
+            raise RuntimeError("invalid DataHealthRecord: non-gate block_reason must be null")
+    else:
+        if blocks is True:
+            # blocks_advice=true 时必须是四项业务码
+            if code not in svc.GATE_BUSINESS_CODES:
+                raise RuntimeError("invalid DataHealthRecord: gate blocks_advice=true requires business code")
+            # blocks_advice=true 时 block_reason 必须等于安全摘要
+            if block_reason != svc.error_summary(code):
+                raise RuntimeError("invalid DataHealthRecord: gate block_reason must equal safe summary")
+        else:
+            # blocks_advice=false 时 block_reason 必须为 null
+            if block_reason is not None:
+                raise RuntimeError("invalid DataHealthRecord: gate block_reason must be null when not blocking")
+
+    return record  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -747,114 +935,101 @@ class EvidenceLedgerAdapter:
                 detail_path="/thesis",
             )
 
+        # WAL-aware 只读快照：在 store._LOCK 内安全读取主文件 + WAL
         try:
-            # 只读 + immutable：避免 mode=ro 在 WAL 库上创建 -wal/-shm 副作用文件
-            path = Path(db_path)
-            if not path.exists():
-                return svc.not_initialized_record(
-                    m["source_id"], m["module"], m["display_name"],
+            with store.readonly_health_snapshot(db_path) as conn:
+                # 只读 schema 校验：不执行 DDL
+                try:
+                    if not store._table_exists(conn, "schema_meta"):
+                        return svc.unavailable_record(
+                            m["source_id"], m["module"], m["display_name"],
+                            "SOURCE_CORRUPTED", detail_path="/thesis",
+                        )
+                    ver = store._read_schema_version(conn)
+                except store.EvidenceLedgerSchemaVersionError:
+                    return svc.unavailable_record(
+                        m["source_id"], m["module"], m["display_name"],
+                        "SOURCE_SCHEMA_INCOMPATIBLE", detail_path="/thesis",
+                    )
+                except store.EvidenceLedgerCorruptedError:
+                    return svc.unavailable_record(
+                        m["source_id"], m["module"], m["display_name"],
+                        "SOURCE_CORRUPTED", detail_path="/thesis",
+                    )
+                except sqlite3.DatabaseError as exc:
+                    raise AdapterReadError("SOURCE_CORRUPTED") from exc
+
+                if ver is None:
+                    return svc.unavailable_record(
+                        m["source_id"], m["module"], m["display_name"],
+                        "SOURCE_CORRUPTED", detail_path="/thesis",
+                    )
+                if ver != store.SCHEMA_VERSION:
+                    return svc.unavailable_record(
+                        m["source_id"], m["module"], m["display_name"],
+                        "SOURCE_SCHEMA_INCOMPATIBLE", detail_path="/thesis",
+                    )
+
+                try:
+                    row = conn.execute("PRAGMA integrity_check").fetchone()
+                except sqlite3.DatabaseError as exc:
+                    raise AdapterReadError("SOURCE_CORRUPTED") from exc
+                if row is None or str(row[0]).lower() != "ok":
+                    return svc.unavailable_record(
+                        m["source_id"], m["module"], m["display_name"],
+                        "SOURCE_CORRUPTED", detail_path="/thesis",
+                    )
+
+                try:
+                    ecount = conn.execute(
+                        "SELECT COUNT(*) FROM evidence_records WHERE deleted = 0"
+                    ).fetchone()[0]
+                    tcount = conn.execute(
+                        "SELECT COUNT(*) FROM investment_theses"
+                    ).fetchone()[0]
+                    max_u = conn.execute(
+                        """
+                        SELECT MAX(u) FROM (
+                            SELECT MAX(updated_at) AS u FROM evidence_records WHERE deleted = 0
+                            UNION ALL
+                            SELECT MAX(updated_at) AS u FROM investment_theses
+                        )
+                        """
+                    ).fetchone()[0]
+                except sqlite3.DatabaseError as exc:
+                    raise AdapterReadError("SOURCE_UNAVAILABLE") from exc
+
+                max_dt = svc.parse_flexible_time(max_u, naive_as="utc")
+                observed = svc.format_utc(max_dt)
+                total = int(ecount or 0) + int(tcount or 0)
+                return svc.make_record(
+                    source_id=m["source_id"],
+                    module=m["module"],
+                    display_name=m["display_name"],
+                    status="normal",
+                    is_stale=False,
+                    observed_at=observed,
+                    last_success_at=observed,
+                    stale_after_seconds=None,
+                    is_cached=None,
+                    is_degraded=None,
+                    coverage_current=total,
+                    coverage_expected=total,
+                    last_error_code=None,
+                    last_error_at=None,
+                    blocks_advice=False,
+                    block_reason=None,
                     detail_path="/thesis",
                 )
-            uri = f"{path.resolve().as_uri()}?mode=ro&immutable=1"
-            conn = sqlite3.connect(uri, timeout=5, uri=True)
-            conn.row_factory = sqlite3.Row
         except FileNotFoundError:
             return svc.not_initialized_record(
                 m["source_id"], m["module"], m["display_name"],
                 detail_path="/thesis",
             )
-        except (OSError, sqlite3.DatabaseError, sqlite3.OperationalError) as exc:
+        except store._ReadonlySnapshotUnavailable as exc:
+            raise AdapterReadError("SOURCE_UNAVAILABLE") from exc
+        except (OSError, sqlite3.DatabaseError) as exc:
             raise AdapterReadError("SOURCE_CORRUPTED") from exc
-
-        try:
-            # 只读 schema 校验：不执行 DDL
-            try:
-                if not store._table_exists(conn, "schema_meta"):
-                    return svc.unavailable_record(
-                        m["source_id"], m["module"], m["display_name"],
-                        "SOURCE_CORRUPTED", detail_path="/thesis",
-                    )
-                ver = store._read_schema_version(conn)
-            except store.EvidenceLedgerSchemaVersionError:
-                return svc.unavailable_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    "SOURCE_SCHEMA_INCOMPATIBLE", detail_path="/thesis",
-                )
-            except store.EvidenceLedgerCorruptedError:
-                return svc.unavailable_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    "SOURCE_CORRUPTED", detail_path="/thesis",
-                )
-            except sqlite3.DatabaseError as exc:
-                raise AdapterReadError("SOURCE_CORRUPTED") from exc
-
-            if ver is None:
-                return svc.unavailable_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    "SOURCE_CORRUPTED", detail_path="/thesis",
-                )
-            if ver != store.SCHEMA_VERSION:
-                return svc.unavailable_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    "SOURCE_SCHEMA_INCOMPATIBLE", detail_path="/thesis",
-                )
-
-            try:
-                row = conn.execute("PRAGMA integrity_check").fetchone()
-            except sqlite3.DatabaseError as exc:
-                raise AdapterReadError("SOURCE_CORRUPTED") from exc
-            if row is None or str(row[0]).lower() != "ok":
-                return svc.unavailable_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    "SOURCE_CORRUPTED", detail_path="/thesis",
-                )
-
-            try:
-                ecount = conn.execute(
-                    "SELECT COUNT(*) FROM evidence_records WHERE deleted = 0"
-                ).fetchone()[0]
-                tcount = conn.execute(
-                    "SELECT COUNT(*) FROM investment_theses"
-                ).fetchone()[0]
-                max_u = conn.execute(
-                    """
-                    SELECT MAX(u) FROM (
-                        SELECT MAX(updated_at) AS u FROM evidence_records WHERE deleted = 0
-                        UNION ALL
-                        SELECT MAX(updated_at) AS u FROM investment_theses
-                    )
-                    """
-                ).fetchone()[0]
-            except sqlite3.DatabaseError as exc:
-                raise AdapterReadError("SOURCE_UNAVAILABLE") from exc
-
-            max_dt = svc.parse_flexible_time(max_u, naive_as="utc")
-            observed = svc.format_utc(max_dt)
-            total = int(ecount or 0) + int(tcount or 0)
-            return svc.make_record(
-                source_id=m["source_id"],
-                module=m["module"],
-                display_name=m["display_name"],
-                status="normal",
-                is_stale=False,
-                observed_at=observed,
-                last_success_at=observed,
-                stale_after_seconds=None,
-                is_cached=None,
-                is_degraded=None,
-                coverage_current=total,
-                coverage_expected=total,
-                last_error_code=None,
-                last_error_at=None,
-                blocks_advice=False,
-                block_reason=None,
-                detail_path="/thesis",
-            )
-        finally:
-            try:
-                conn.close()
-            except sqlite3.Error:
-                pass
 
 
 # ---------------------------------------------------------------------------
@@ -900,14 +1075,43 @@ def _safe_adapter_read(
     try:
         rec = adapter.read(context)
     except AdapterReadError as exc:
+        if exc.error_code not in _ALLOWED_ADAPTER_ERROR_CODES:
+            # 不应发生：AdapterReadError 构造时已校验
+            raise RuntimeError("illegal AdapterReadError code") from exc
         m = _meta(adapter.source_id)
         return svc.unavailable_record(
             m["source_id"], m["module"], m["display_name"],
-            exc.error_code or "SOURCE_UNAVAILABLE",
+            exc.error_code,
         )
-    if not is_valid_data_health_record(rec):
-        raise RuntimeError("invalid DataHealthRecord")
-    return rec
+    # 严格校验：失败抛 RuntimeError → HTTP 500（不进入响应体）
+    return validate_data_health_record(adapter, rec)
+
+
+def _validate_adapter_registry(adapters_list: list[DataHealthAdapter]) -> None:
+    """严格校验 Adapter 注册表：
+    - 数量恰好为 11
+    - source_id 集合与 SOURCE_REGISTRY 完全相等
+    - 不允许重复 source_id
+    - 顺序与注册表一致
+    """
+    if len(adapters_list) != len(svc.SOURCE_REGISTRY):
+        raise RuntimeError(
+            f"adapter registry size invalid: {len(adapters_list)} != {len(svc.SOURCE_REGISTRY)}"
+        )
+    expected_ids = [s["source_id"] for s in svc.SOURCE_REGISTRY]
+    actual_ids = [getattr(ad, "source_id", None) for ad in adapters_list]
+    if len(set(actual_ids)) != len(actual_ids):
+        raise RuntimeError("adapter registry has duplicate source_id")
+    if set(actual_ids) != set(expected_ids):
+        raise RuntimeError("adapter registry source_id set mismatch")
+    if actual_ids != expected_ids:
+        raise RuntimeError("adapter registry order mismatch")
+    # module / display_name 与注册表完全一致
+    for ad, expected in zip(adapters_list, svc.SOURCE_REGISTRY):
+        if getattr(ad, "module", None) != expected["module"]:
+            raise RuntimeError(f"adapter module mismatch for {expected['source_id']}")
+        if getattr(ad, "display_name", None) != expected["display_name"]:
+            raise RuntimeError(f"adapter display_name mismatch for {expected['source_id']}")
 
 
 def collect_all_records(
@@ -929,8 +1133,7 @@ def collect_all_records(
         events_load_error=events_err,
     )
     adapters = get_adapters()
-    if len(adapters) != 11:
-        raise RuntimeError("adapter registry size invalid")
+    _validate_adapter_registry(adapters)
     items: list[svc.DataHealthRecord] = []
     for ad in adapters:
         items.append(_safe_adapter_read(ad, context))
