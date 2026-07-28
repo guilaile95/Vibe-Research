@@ -72,6 +72,8 @@ import type {
   ThesisDiff,
   LinkEvidenceInput,
   UpdateStanceInput,
+  DataHealthOverviewResult,
+  DataHealthDetailResult,
 } from "./api/types.ts";
 
 
@@ -661,4 +663,22 @@ export const api = {
     if (change_summary) q.set("change_summary", change_summary);
     return request<ThesisAggregate>(`/thesis/${id}/evidence/${evidenceId}?${q.toString()}`, "DELETE");
   },
+
+  // ---- 数据健康中心（只读）----
+  getDataHealth: (params?: {
+    module?: string;
+    status?: string;
+    is_stale?: boolean;
+    blocks_advice?: boolean;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.module) q.set("module", params.module);
+    if (params?.status) q.set("status", params.status);
+    if (params?.is_stale != null) q.set("is_stale", String(params.is_stale));
+    if (params?.blocks_advice != null) q.set("blocks_advice", String(params.blocks_advice));
+    const qs = q.toString();
+    return get<DataHealthOverviewResult>(`/data-health${qs ? `?${qs}` : ""}`);
+  },
+  getDataHealthSource: (sourceId: string) =>
+    get<DataHealthDetailResult>(`/data-health/${encodeURIComponent(sourceId)}`),
 };

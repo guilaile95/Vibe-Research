@@ -729,6 +729,63 @@ export interface PortfolioAdviceRequest {
 export type AiResultType = "daily_review_ai" | "portfolio_advice";
 
 
+// ---------------------------------------------------------------------------
+// 数据健康中心
+// ---------------------------------------------------------------------------
+
+export type DataHealthStatus = "normal" | "partial" | "unavailable";
+
+export interface DataHealthRecordDto {
+  source_id: string;
+  module: string;
+  display_name: string;
+  status: DataHealthStatus;
+  is_stale: boolean;
+  observed_at: string | null;
+  last_success_at: string | null;
+  data_trade_date: string | null;
+  data_cutoff: string | null;
+  stale_after_seconds: number | null;
+  is_cached: boolean | null;
+  is_degraded: boolean | null;
+  coverage_current: number | null;
+  coverage_expected: number | null;
+  last_error_code: string | null;
+  last_error_summary: string | null;
+  last_error_at: string | null;
+  blocks_advice: boolean;
+  block_reason: string | null;
+  detail_path: string | null;
+}
+
+export interface DataHealthOverviewResult {
+  overall_status: DataHealthStatus;
+  blocks_advice: boolean;
+  block_reasons: Array<{ source_id: string; error_code: string; summary: string }>;
+  summary: {
+    normal: number;
+    partial: number;
+    unavailable: number;
+    stale: number;
+    not_initialized: number;
+  };
+  items: DataHealthRecordDto[];
+}
+
+export interface DataHealthDetailResult {
+  record: DataHealthRecordDto;
+  calculation: {
+    quality_basis?: string[];
+    freshness_basis?: string;
+    calendar_type?: string;
+    rule_summary?: string;
+    disclaimer?: string;
+  };
+  related_pages: Array<{ label: string; path: string }>;
+}
+
+
+
 export interface DailyReviewAiPayload {
   markdown: string;
   source_review_generated_at: string;
