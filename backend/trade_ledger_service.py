@@ -23,6 +23,8 @@ _MAX_REASON_LEN = 500
 _CODE_RE = re.compile(r"^[0-9]{6}$")
 _OPERATIONS = frozenset({"buy", "add", "reduce", "sell"})
 _EXECUTION_STATUSES = frozenset({"full", "partial", "not_executed"})
+_ACTIONS = frozenset({"add", "hold", "reduce", "sell", "watch", "avoid"})
+_CONFIDENCES = frozenset({"high", "medium", "low"})
 _ADVICE_SNAPSHOT_KEYS = frozenset({
     "action",
     "execution_quantity",
@@ -42,13 +44,12 @@ class TradeValidationError(ValueError):
     pass
 
 
-class TradeNotFoundError(LookupError):
+class TradeNotFoundError(store.TradeNotFoundError):
     pass
 
 
-class TradeAlreadyVoidedError(RuntimeError):
-    def __init__(self):
-        super().__init__("交易记录已作废")
+class TradeAlreadyVoidedError(store.TradeAlreadyVoidedError):
+    pass
 
 
 class AdviceNotFoundError(LookupError):
@@ -92,7 +93,10 @@ def resolve_db_path(db_path: str | Path | None = None) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _require_str(value: Any, field: str, *, max_len: int | None = None) -> str:
+def _require_str(data: dict[str, Any], field: str, *, max_len: int | None = None) -> str:
+    if field not in data or data[field] is None:
+        raise TradeValidationError(f"{field} 必填")
+    value = data[field]
     if not isinstance(value, str) or not value.strip():
         raise TradeValidationError(f"{field} 必须是非空字符串")
     text = value.strip()
@@ -105,7 +109,7 @@ def _optional_str(value: Any, field: str, *, max_len: int | None = None) -> str 
     if value is None:
         return None
     if not isinstance(value, str):
-        raise TradeValidationError(f"{field} 必须是字符串或null")
+        raise TradeValidationError(f"{field} 必须是字符串或 null")
     text = value.strip()
     if not text:
         return None
@@ -124,7 +128,7 @@ def _optional_int(value: Any, field: str) -> int | None:
     if value is None:
         return None
     if not isinstance(value, int) or isinstance(value, bool):
-        raise TradeValidationError(f"{field} 必须是整数或null")
+        raise TradeValidationError(f"{field} 必须是整数或 null")
     return value
 
 
@@ -140,20 +144,25 @@ def _optional_number(value: Any, field: str) -> float | None:
     if value is None:
         return None
     if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TradeValidationError(f"{field} 必须是数字或null")
+        raise TradeValidationError(f"{field} 必须是数字或 null")
     if value != value or value == float("inf") or value == float("-inf"):
         raise TradeValidationError(f"{field} 必须是有限数字")
     return float(value)
 
 
-def _valid_timestamp(value: Any, field: str) -> str:
+def _parse_and_format_utc_executed_at(value: Any) -> str:
+    """Parse executed_at ISO string, require timezone, and convert to UTC ISO string."""
     if not isinstance(value, str) or not value.strip():
-        raise TradeValidationError(f"{field} 必须是合法时间")
+        raise TradeValidationError("executed_at 必须是非空字符串")
+    text = value.strip()
     try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise TradeValidationError(f"{field} 不是合法时间") from exc
-    return value.strip()
+        raise TradeValidationError("executed_at 不是合法 ISO 8601 时间") from exc
+    if dt.tzinfo is None:
+        raise TradeValidationError("executed_at 必须包含时区信息")
+    utc_dt = dt.astimezone(timezone.utc)
+    return utc_dt.isoformat(timespec="microseconds")
 
 
 # ---------------------------------------------------------------------------
@@ -175,18 +184,18 @@ def validate_and_build_record(data: dict[str, Any]) -> dict[str, Any]:
     }
     unknown = set(data.keys()) - allowed
     if unknown:
-        raise TradeValidationError(f"未知字段: {" + ", ".join(sorted(unknown)) + "}")
+        raise TradeValidationError(f"未知字段: {', '.join(sorted(unknown))}")
 
-    code = _require_str(data["code"], "code")
+    code = _require_str(data, "code")
     if not _CODE_RE.fullmatch(code):
         raise TradeValidationError("code 必须是 6 位数字股票代码")
 
-    name = _require_str(data["name"], "name", max_len=64)
-    operation = _require_str(data["operation"], "operation")
+    name = _require_str(data, "name", max_len=64)
+    operation = _require_str(data, "operation")
     if operation not in _OPERATIONS:
         raise TradeValidationError(f"operation 必须是 {sorted(_OPERATIONS)}")
 
-    execution_status = _require_str(data["execution_status"], "execution_status")
+    execution_status = _require_str(data, "execution_status")
     if execution_status not in _EXECUTION_STATUSES:
         raise TradeValidationError(f"execution_status 必须是 {sorted(_EXECUTION_STATUSES)}")
 
@@ -194,13 +203,19 @@ def validate_and_build_record(data: dict[str, Any]) -> dict[str, Any]:
     planned_quantity = _optional_int(data.get("planned_quantity"), "planned_quantity")
     actual_price = _optional_number(data.get("actual_price"), "actual_price")
     actual_quantity = _optional_int(data.get("actual_quantity"), "actual_quantity") or 0
-    executed_at = _optional_str(data.get("executed_at"), "executed_at")
     fee = _optional_number(data.get("fee"), "fee") or 0.0
     other_cost = _optional_number(data.get("other_cost"), "other_cost") or 0.0
     unexecuted_reason = _optional_str(data.get("unexecuted_reason"), "unexecuted_reason", max_len=_MAX_REASON_LEN)
     note = _optional_str(data.get("note"), "note", max_len=_MAX_NOTE_LEN)
 
-    # --- Status-specific rules ---
+    # Status-specific executed_at and numeric rules
+    if execution_status in ("full", "partial"):
+        if "executed_at" not in data or data["executed_at"] is None:
+            raise TradeValidationError("full 和 partial 状态要求 executed_at 必填")
+        executed_at = _parse_and_format_utc_executed_at(data["executed_at"])
+    else:
+        executed_at = None
+
     if execution_status == "full":
         if actual_price is None or actual_price <= 0:
             raise TradeValidationError("full 状态要求 actual_price > 0")
@@ -230,7 +245,7 @@ def validate_and_build_record(data: dict[str, Any]) -> dict[str, Any]:
         fee = 0.0
         other_cost = 0.0
 
-    # Common rules
+    # Common bounds
     if planned_price is not None and planned_price <= 0:
         raise TradeValidationError("planned_price 必须大于 0")
     if planned_quantity is not None and planned_quantity <= 0:
@@ -244,7 +259,7 @@ def validate_and_build_record(data: dict[str, Any]) -> dict[str, Any]:
     if other_cost < 0:
         raise TradeValidationError("other_cost 不能为负")
 
-    # --- Advice reference ---
+    # Advice reference
     advice_trade_date = None
     advice_generated_at = None
     advice_snapshot = None
@@ -254,7 +269,7 @@ def validate_and_build_record(data: dict[str, Any]) -> dict[str, Any]:
             advice_ref, code
         )
 
-    # --- Thesis reference ---
+    # Thesis reference
     thesis_id = None
     thesis_revision = None
     thesis_ref = data.get("thesis_ref")
@@ -295,14 +310,19 @@ def validate_and_build_record(data: dict[str, Any]) -> dict[str, Any]:
 def _resolve_advice_ref(advice_ref: Any, code: str) -> tuple[str, str, str]:
     if not isinstance(advice_ref, dict):
         raise TradeValidationError("advice_ref 必须是对象")
+
+    allowed = {"trade_date", "generated_at"}
+    unknown = set(advice_ref.keys()) - allowed
+    if unknown:
+        raise TradeValidationError(f"advice_ref 含有未知字段: {', '.join(sorted(unknown))}")
+
     trade_date = advice_ref.get("trade_date")
     generated_at = advice_ref.get("generated_at")
-    if not trade_date or not isinstance(trade_date, str):
+    if not trade_date or not isinstance(trade_date, str) or not re.fullmatch(r"^\d{4}-\d{2}-\d{2}$", trade_date):
         raise TradeValidationError("advice_ref.trade_date 必须是 YYYY-MM-DD")
-    if not generated_at or not isinstance(generated_at, str):
-        raise TradeValidationError("advice_ref.generated_at 必须是时间戳")
+    if not generated_at or not isinstance(generated_at, str) or not generated_at.strip():
+        raise TradeValidationError("advice_ref.generated_at 必须是非空字符串")
 
-    # Read portfolio_advice from ai_generated_results
     review_db = _resolve_review_db_path()
     record = ai_result_store.get_result(review_db, "portfolio_advice", trade_date)
     if record is None:
@@ -316,6 +336,9 @@ def _resolve_advice_ref(advice_ref: Any, code: str) -> tuple[str, str, str]:
     if not isinstance(payload, dict):
         raise TradeValidationError("建议 payload 格式错误")
 
+    if payload.get("trade_date") != trade_date or payload.get("generated_at") != generated_at:
+        raise AdviceConflictError()
+
     holdings = payload.get("holdings")
     if not isinstance(holdings, list):
         raise TradeValidationError("建议缺少 holdings")
@@ -328,16 +351,65 @@ def _resolve_advice_ref(advice_ref: Any, code: str) -> tuple[str, str, str]:
     if matched is None:
         raise AdviceHoldingNotFoundError()
 
-    snapshot = {}
-    for key in _ADVICE_SNAPSHOT_KEYS:
-        if key in matched:
-            snapshot[key] = matched[key]
+    # Verify and extract exact 7 fields
+    snapshot = _validate_and_extract_advice_snapshot(matched)
 
-    return trade_date, generated_at, json.dumps(snapshot, ensure_ascii=False)
+    snapshot_json = json.dumps(
+        snapshot,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return trade_date, generated_at, snapshot_json
+
+
+def _validate_and_extract_advice_snapshot(holding: dict[str, Any]) -> dict[str, Any]:
+    missing = _ADVICE_SNAPSHOT_KEYS - set(holding.keys())
+    if missing:
+        raise TradeValidationError(f"建议持仓缺少必需字段: {', '.join(sorted(missing))}")
+
+    action = holding["action"]
+    if action not in _ACTIONS:
+        raise TradeValidationError(f"建议 action 非法: {action}")
+
+    execution_quantity = holding["execution_quantity"]
+    if execution_quantity is not None:
+        if not isinstance(execution_quantity, int) or isinstance(execution_quantity, bool) or execution_quantity <= 0:
+            raise TradeValidationError("建议 execution_quantity 必须是正整数或 null")
+
+    def _str_list(val: Any, name: str) -> list[str]:
+        if not isinstance(val, list):
+            raise TradeValidationError(f"建议 {name} 必须是数组")
+        output = []
+        for item in val:
+            if not isinstance(item, str):
+                raise TradeValidationError(f"建议 {name} 必须包含字符串")
+            output.append(item)
+        return output
+
+    price_conditions = _str_list(holding["price_conditions"], "price_conditions")
+    execution_plan = _str_list(holding["execution_plan"], "execution_plan")
+    risk_conditions = _str_list(holding["risk_conditions"], "risk_conditions")
+    invalidation_conditions = _str_list(holding["invalidation_conditions"], "invalidation_conditions")
+
+    confidence = holding["confidence"]
+    if confidence not in _CONFIDENCES:
+        raise TradeValidationError(f"建议 confidence 非法: {confidence}")
+
+    return {
+        "action": action,
+        "execution_quantity": execution_quantity,
+        "price_conditions": price_conditions,
+        "execution_plan": execution_plan,
+        "risk_conditions": risk_conditions,
+        "invalidation_conditions": invalidation_conditions,
+        "confidence": confidence,
+    }
 
 
 def _resolve_review_db_path() -> Path:
-    """Resolve the ai_generated_results DB path (same as review_history)."""
+    """Resolve the ai_generated_results DB path."""
     env_val = os.environ.get("VIBE_RESEARCH_REVIEW_DB")
     if env_val and str(env_val).strip():
         return Path(str(env_val).strip())
@@ -353,49 +425,55 @@ def _resolve_review_db_path() -> Path:
 def _resolve_thesis_ref(thesis_ref: Any) -> tuple[str, int]:
     if not isinstance(thesis_ref, dict):
         raise TradeValidationError("thesis_ref 必须是对象")
+
+    allowed = {"thesis_id", "revision_number"}
+    unknown = set(thesis_ref.keys()) - allowed
+    if unknown:
+        raise TradeValidationError(f"thesis_ref 含有未知字段: {', '.join(sorted(unknown))}")
+
     thesis_id = thesis_ref.get("thesis_id")
     revision_number = thesis_ref.get("revision_number")
-    if not thesis_id or not isinstance(thesis_id, str):
+    if not thesis_id or not isinstance(thesis_id, str) or not thesis_id.strip():
         raise TradeValidationError("thesis_ref.thesis_id 必须是非空字符串")
     if not isinstance(revision_number, int) or isinstance(revision_number, bool) or revision_number < 1:
         raise TradeValidationError("thesis_ref.revision_number 必须是正整数")
 
     db_path = evidence_thesis_service.resolve_db_path()
-    revision = evidence_thesis_service.get_revision(db_path, thesis_id, revision_number)
+    revision = evidence_thesis_service.get_revision(db_path, thesis_id.strip(), revision_number)
     if revision is None:
-        thesis = evidence_thesis_service.get_thesis(db_path, thesis_id)
+        thesis = evidence_thesis_service.get_thesis(db_path, thesis_id.strip())
         if thesis is None:
             raise ThesisNotFoundError()
         raise ThesisRevisionNotFoundError()
 
-    return thesis_id, revision_number
+    return thesis_id.strip(), revision_number
 
 
 # ---------------------------------------------------------------------------
-# Computed fields
+# Computed fields & Snapshot deserialization
 # ---------------------------------------------------------------------------
 
 
 def compute_fields(record: dict[str, Any]) -> dict[str, Any]:
-    """Add computed fields to a record for API response."""
+    """Add computed fields to a record and parse advice_snapshot JSON."""
     operation = record["operation"]
     status = record["execution_status"]
-    actual_price = record.get("actual_price") or 0
+    actual_price = record.get("actual_price") or 0.0
     actual_quantity = record.get("actual_quantity") or 0
     planned_price = record.get("planned_price")
     planned_quantity = record.get("planned_quantity")
-    fee = record.get("fee") or 0
-    other_cost = record.get("other_cost") or 0
+    fee = record.get("fee") or 0.0
+    other_cost = record.get("other_cost") or 0.0
 
     gross_amount = round(actual_price * actual_quantity, 2)
+    total_cost = round(fee + other_cost, 2)
 
     if operation in ("buy", "add"):
-        total_cost = round(gross_amount + fee + other_cost, 2)
-        net_cash_flow = round(-total_cost, 2)
+        net_cash_flow = round(-(gross_amount + total_cost), 2)
     elif operation in ("reduce", "sell"):
-        total_cost = round(gross_amount - fee - other_cost, 2)
-        net_cash_flow = round(total_cost, 2)
+        net_cash_flow = round(gross_amount - total_cost, 2)
     else:
+        gross_amount = 0.0
         total_cost = 0.0
         net_cash_flow = 0.0
 
@@ -409,6 +487,22 @@ def compute_fields(record: dict[str, Any]) -> dict[str, Any]:
     if planned_quantity and planned_quantity > 0 and status != "not_executed":
         quantity_completion_pct = round(actual_quantity / planned_quantity * 100, 2)
 
+    raw_snapshot = record.get("advice_snapshot")
+    deserialized_snapshot = None
+    if raw_snapshot is not None:
+        if isinstance(raw_snapshot, dict):
+            deserialized_snapshot = raw_snapshot
+        elif isinstance(raw_snapshot, str):
+            try:
+                parsed = json.loads(raw_snapshot)
+                if not isinstance(parsed, dict):
+                    raise store.TradeLedgerCorruptedError()
+                deserialized_snapshot = parsed
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise store.TradeLedgerCorruptedError() from exc
+        else:
+            raise store.TradeLedgerCorruptedError()
+
     result = dict(record)
     result.update({
         "gross_amount": gross_amount,
@@ -417,6 +511,7 @@ def compute_fields(record: dict[str, Any]) -> dict[str, Any]:
         "price_variance": price_variance,
         "price_variance_pct": price_variance_pct,
         "quantity_completion_pct": quantity_completion_pct,
+        "advice_snapshot": deserialized_snapshot,
     })
     return result
 
@@ -468,15 +563,12 @@ def list_trades(
 
 
 def void_trade(trade_id: str, reason: str) -> dict[str, Any]:
-    reason_clean = _require_str(reason, "reason", max_len=_MAX_REASON_LEN)
-    db_path = resolve_db_path()
-    record = store.get_record(db_path, trade_id)
-    if record is None:
-        raise TradeNotFoundError()
-    if record.get("voided_at") is not None:
-        raise TradeAlreadyVoidedError()
-    store.void_record(db_path, trade_id, reason_clean)
-    record["voided_at"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
-    record["void_reason"] = reason_clean
-    return compute_fields(record)
+    if not isinstance(reason, str) or not reason.strip():
+        raise TradeValidationError("reason 必填且必须是非空字符串")
+    reason_clean = reason.strip()
+    if len(reason_clean) > _MAX_REASON_LEN:
+        raise TradeValidationError(f"reason 超过最大长度 {_MAX_REASON_LEN}")
 
+    db_path = resolve_db_path()
+    updated_record = store.void_record_atomic(db_path, trade_id, reason_clean)
+    return compute_fields(updated_record)

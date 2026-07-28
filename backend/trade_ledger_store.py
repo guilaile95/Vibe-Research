@@ -50,7 +50,7 @@ INSERT INTO trade_records (
 
 _SELECT_BY_ID = "SELECT * FROM trade_records WHERE trade_id = ?"
 _SELECT_LIST_BASE = "SELECT * FROM trade_records"
-_VOID_SQL = """
+_VOID_UPDATE_SQL = """
 UPDATE trade_records
    SET voided_at = ?, void_reason = ?
  WHERE trade_id = ? AND voided_at IS NULL
@@ -66,6 +66,15 @@ class TradeLedgerCorruptedError(TradeLedgerError):
         super().__init__("交易流水数据损坏，无法读取")
 
 
+class TradeNotFoundError(TradeLedgerError, LookupError):
+    pass
+
+
+class TradeAlreadyVoidedError(TradeLedgerError):
+    def __init__(self):
+        super().__init__("交易记录已作废")
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
@@ -75,6 +84,16 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:
+    path = Path(db_path).resolve()
+    uri = f"{path.as_uri()}?mode=ro"
+    conn = sqlite3.connect(uri, timeout=30.0, uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only = ON")
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
@@ -90,33 +109,36 @@ def insert_record(db_path: str | Path, record: dict[str, Any]) -> None:
     with _LOCK:
         path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with _connect(path) as conn:
-            _ensure_table(conn)
-            conn.execute(_INSERT_SQL, (
-                record["trade_id"],
-                record["code"],
-                record["name"],
-                record["operation"],
-                record["execution_status"],
-                record.get("planned_price"),
-                record.get("planned_quantity"),
-                record.get("actual_price"),
-                record.get("actual_quantity", 0),
-                record.get("executed_at"),
-                record.get("fee", 0),
-                record.get("other_cost", 0),
-                record.get("unexecuted_reason"),
-                record.get("note"),
-                record.get("advice_trade_date"),
-                record.get("advice_generated_at"),
-                record.get("advice_snapshot"),
-                record.get("thesis_id"),
-                record.get("thesis_revision"),
-                record["created_at"],
-                None,
-                None,
-            ))
-            conn.commit()
+        try:
+            with _connect(path) as conn:
+                _ensure_table(conn)
+                conn.execute(_INSERT_SQL, (
+                    record["trade_id"],
+                    record["code"],
+                    record["name"],
+                    record["operation"],
+                    record["execution_status"],
+                    record.get("planned_price"),
+                    record.get("planned_quantity"),
+                    record.get("actual_price"),
+                    record.get("actual_quantity", 0),
+                    record.get("executed_at"),
+                    record.get("fee", 0.0),
+                    record.get("other_cost", 0.0),
+                    record.get("unexecuted_reason"),
+                    record.get("note"),
+                    record.get("advice_trade_date"),
+                    record.get("advice_generated_at"),
+                    record.get("advice_snapshot"),
+                    record.get("thesis_id"),
+                    record.get("thesis_revision"),
+                    record["created_at"],
+                    None,
+                    None,
+                ))
+                conn.commit()
+        except sqlite3.DatabaseError as exc:
+            raise TradeLedgerCorruptedError() from exc
 
 
 def get_record(db_path: str | Path, trade_id: str) -> dict[str, Any] | None:
@@ -124,7 +146,7 @@ def get_record(db_path: str | Path, trade_id: str) -> dict[str, Any] | None:
     if not path.is_file():
         return None
     try:
-        with _connect(path) as conn:
+        with _connect_readonly(path) as conn:
             table = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
                 ("trade_records",),
@@ -153,7 +175,7 @@ def list_records(
     if not path.is_file():
         return []
     try:
-        with _connect(path) as conn:
+        with _connect_readonly(path) as conn:
             table = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
                 ("trade_records",),
@@ -175,10 +197,10 @@ def list_records(
                 clauses.append("execution_status = ?")
                 params.append(execution_status)
             if date_from is not None:
-                clauses.append("created_at >= ?")
+                clauses.append("date(COALESCE(executed_at, created_at)) >= ?")
                 params.append(date_from)
             if date_to is not None:
-                clauses.append("created_at <= ?")
+                clauses.append("date(COALESCE(executed_at, created_at)) <= ?")
                 params.append(date_to)
             if clauses:
                 sql += " WHERE " + " AND ".join(clauses)
@@ -195,15 +217,16 @@ def list_records(
         raise TradeLedgerCorruptedError() from exc
 
 
-def void_record(
+def void_record_atomic(
     db_path: str | Path,
     trade_id: str,
     reason: str,
-) -> bool:
+) -> dict[str, Any]:
+    """Atomic void operation inside a single _LOCK and transaction."""
     with _LOCK:
         path = Path(db_path)
         if not path.is_file():
-            return False
+            raise TradeNotFoundError()
         try:
             with _connect(path) as conn:
                 table = conn.execute(
@@ -211,10 +234,20 @@ def void_record(
                     ("trade_records",),
                 ).fetchone()
                 if table is None:
-                    return False
+                    raise TradeNotFoundError()
+
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(_SELECT_BY_ID, (trade_id,)).fetchone()
+                if row is None:
+                    raise TradeNotFoundError()
+                rec = _row_to_dict(row)
+                if rec.get("voided_at") is not None:
+                    raise TradeAlreadyVoidedError()
+
                 now = _utc_now()
-                cur = conn.execute(_VOID_SQL, (now, reason, trade_id))
+                conn.execute(_VOID_UPDATE_SQL, (now, reason, trade_id))
+                updated_row = conn.execute(_SELECT_BY_ID, (trade_id,)).fetchone()
                 conn.commit()
-                return cur.rowcount == 1
+                return _row_to_dict(updated_row)
         except sqlite3.DatabaseError as exc:
             raise TradeLedgerCorruptedError() from exc

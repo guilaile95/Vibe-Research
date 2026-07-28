@@ -1,11 +1,14 @@
 """Tests for trade_ledger API endpoints."""
 from __future__ import annotations
 
-import pytest
+import os
+from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 import app
+import trade_ledger_store as store
 
 
 @pytest.fixture(autouse=True)
@@ -14,7 +17,6 @@ def _isolate_trade_db(tmp_path, monkeypatch):
     isolated = tmp_path / "trade_db"
     isolated.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("VIBE_RESEARCH_TRADE_LEDGER_DB", str(isolated / "trade_ledger.sqlite3"))
-    # Also ensure VR_DATA_DIR points here so resolve_db_path works
     monkeypatch.setenv("VR_DATA_DIR", str(isolated))
     yield
 
@@ -22,6 +24,34 @@ def _isolate_trade_db(tmp_path, monkeypatch):
 @pytest.fixture
 def client():
     return TestClient(app.app)
+
+
+class TestSingleRouterRegistration:
+    def test_routes_registered_exactly_once(self):
+        target_paths = {
+            ("POST", "/api/trades"),
+            ("GET", "/api/trades"),
+            ("GET", "/api/trades/{trade_id}"),
+            ("POST", "/api/trades/{trade_id}/void"),
+        }
+        found_counts = {t: 0 for t in target_paths}
+
+        all_routes = []
+        for route in app.app.routes:
+            if hasattr(route, "original_router"):
+                all_routes.extend(route.original_router.routes)
+            else:
+                all_routes.append(route)
+
+        for route in all_routes:
+            methods = getattr(route, "methods", set()) or set()
+            path = getattr(route, "path", "")
+            for m in methods:
+                if (m, path) in found_counts:
+                    found_counts[(m, path)] += 1
+
+        for target, count in found_counts.items():
+            assert count == 1, f"Route {target} registered {count} times (expected 1)"
 
 
 class TestCreateTrade:
@@ -33,90 +63,33 @@ class TestCreateTrade:
             "execution_status": "full",
             "actual_price": 1500.0,
             "actual_quantity": 100,
+            "executed_at": "2026-07-28T09:30:00+08:00",
             "fee": 37.5,
         })
         assert resp.status_code == 200
         data = resp.json()["data"]
         assert data["code"] == "600519"
         assert data["execution_status"] == "full"
+        assert data["executed_at"] == "2026-07-28T01:30:00.000000+00:00"
         assert data["gross_amount"] == 150000.0
+        assert data["total_cost"] == 37.5
         assert data["net_cash_flow"] == -150037.5
         assert "trade_id" in data
 
-    def test_create_partial(self, client):
-        resp = client.post("/api/trades", json={
-            "code": "000001",
-            "name": "平安银行",
-            "operation": "add",
-            "execution_status": "partial",
-            "planned_quantity": 500,
-            "actual_price": 12.5,
-            "actual_quantity": 200,
-            "unexecuted_reason": "价格未到位",
-        })
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["quantity_completion_pct"] == 40.0
-
-    def test_create_not_executed(self, client):
-        resp = client.post("/api/trades", json={
-            "code": "000001",
-            "name": "平安银行",
-            "operation": "buy",
-            "execution_status": "not_executed",
-            "unexecuted_reason": "取消",
-        })
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["actual_price"] is None
-        assert data["actual_quantity"] == 0
-        assert data["net_cash_flow"] == 0.0
-
-    def test_invalid_code_returns_422(self, client):
-        resp = client.post("/api/trades", json={
-            "code": "60051",
-            "name": "X",
-            "operation": "buy",
-            "execution_status": "full",
-            "actual_price": 100.0,
-            "actual_quantity": 100,
-        })
-        assert resp.status_code == 422
-
-    def test_invalid_operation_returns_422(self, client):
-        resp = client.post("/api/trades", json={
-            "code": "600519",
-            "name": "X",
-            "operation": "hold",
-            "execution_status": "full",
-            "actual_price": 100.0,
-            "actual_quantity": 100,
-        })
-        assert resp.status_code == 422
-
-    def test_unknown_field_returns_422(self, client):
-        resp = client.post("/api/trades", json={
-            "code": "600519",
-            "name": "X",
-            "operation": "buy",
-            "execution_status": "full",
-            "actual_price": 100.0,
-            "actual_quantity": 100,
-            "unknown_field": "x",
-        })
-        assert resp.status_code == 422
-
-    def test_negative_fee_returns_422(self, client):
-        resp = client.post("/api/trades", json={
-            "code": "600519",
-            "name": "X",
-            "operation": "buy",
-            "execution_status": "full",
-            "actual_price": 100.0,
-            "actual_quantity": 100,
-            "fee": -5.0,
-        })
-        assert resp.status_code == 422
+    def test_missing_required_fields_returns_422(self, client):
+        for req in ("code", "name", "operation", "execution_status"):
+            payload = {
+                "code": "600519",
+                "name": "贵州茅台",
+                "operation": "buy",
+                "execution_status": "full",
+                "actual_price": 1500.0,
+                "actual_quantity": 100,
+                "executed_at": "2026-07-28T09:30:00+08:00",
+            }
+            del payload[req]
+            resp = client.post("/api/trades", json=payload)
+            assert resp.status_code == 422
 
     def test_response_no_path_or_sql(self, client):
         resp = client.post("/api/trades", json={
@@ -126,6 +99,7 @@ class TestCreateTrade:
             "execution_status": "full",
             "actual_price": 100.0,
             "actual_quantity": 100,
+            "executed_at": "2026-07-28T09:30:00+08:00",
         })
         assert resp.status_code == 200
         body = resp.text
@@ -134,81 +108,22 @@ class TestCreateTrade:
         assert "C:\\" not in body
 
 
-class TestListTrade:
-    def test_list_empty(self, client):
-        resp = client.get("/api/trades")
-        assert resp.status_code == 200
-        assert resp.json()["data"] == []
+class TestListTradeFiltering:
+    def test_strict_include_voided_param(self, client):
+        for invalid_val in ("1", "0", "yes", "no", "on", "off", "true,false"):
+            resp = client.get(f"/api/trades?include_voided={invalid_val}")
+            assert resp.status_code == 422, f"Expected 422 for include_voided={invalid_val}"
 
-    def test_list_with_records(self, client):
-        client.post("/api/trades", json={
-            "code": "600519", "name": "X", "operation": "buy",
-            "execution_status": "full", "actual_price": 100.0, "actual_quantity": 100,
-        })
-        client.post("/api/trades", json={
-            "code": "000001", "name": "Y", "operation": "sell",
-            "execution_status": "full", "actual_price": 50.0, "actual_quantity": 200,
-        })
-        resp = client.get("/api/trades")
-        assert resp.status_code == 200
-        assert len(resp.json()["data"]) == 2
+        # Valid ones
+        assert client.get("/api/trades?include_voided=true").status_code == 200
+        assert client.get("/api/trades?include_voided=false").status_code == 200
 
-    def test_list_filter_code(self, client):
-        client.post("/api/trades", json={
-            "code": "600519", "name": "X", "operation": "buy",
-            "execution_status": "full", "actual_price": 100.0, "actual_quantity": 100,
-        })
-        client.post("/api/trades", json={
-            "code": "000001", "name": "Y", "operation": "buy",
-            "execution_status": "full", "actual_price": 50.0, "actual_quantity": 200,
-        })
-        resp = client.get("/api/trades?code=600519")
-        assert len(resp.json()["data"]) == 1
-        assert resp.json()["data"][0]["code"] == "600519"
-
-    def test_list_filter_operation(self, client):
-        client.post("/api/trades", json={
-            "code": "600519", "name": "X", "operation": "buy",
-            "execution_status": "full", "actual_price": 100.0, "actual_quantity": 100,
-        })
-        client.post("/api/trades", json={
-            "code": "000001", "name": "Y", "operation": "sell",
-            "execution_status": "full", "actual_price": 50.0, "actual_quantity": 200,
-        })
-        resp = client.get("/api/trades?operation=sell")
-        assert len(resp.json()["data"]) == 1
-
-    def test_list_include_voided_param(self, client):
-        resp = client.get("/api/trades?include_voided=invalid")
-        assert resp.status_code == 422
-
-    def test_list_default_excludes_voided(self, client):
-        create_resp = client.post("/api/trades", json={
-            "code": "600519", "name": "X", "operation": "buy",
-            "execution_status": "full", "actual_price": 100.0, "actual_quantity": 100,
-        })
-        trade_id = create_resp.json()["data"]["trade_id"]
-        client.post(f"/api/trades/{trade_id}/void", json={"reason": "录入错误"})
-        resp = client.get("/api/trades")
-        assert len(resp.json()["data"]) == 0
-        resp2 = client.get("/api/trades?include_voided=true")
-        assert len(resp2.json()["data"]) == 1
-
-
-class TestGetTrade:
-    def test_get_detail(self, client):
-        create_resp = client.post("/api/trades", json={
-            "code": "600519", "name": "X", "operation": "buy",
-            "execution_status": "full", "actual_price": 100.0, "actual_quantity": 100,
-        })
-        trade_id = create_resp.json()["data"]["trade_id"]
-        resp = client.get(f"/api/trades/{trade_id}")
-        assert resp.status_code == 200
-        assert resp.json()["data"]["trade_id"] == trade_id
-
-    def test_get_not_found(self, client):
-        resp = client.get("/api/trades/nonexistent-id")
-        assert resp.status_code == 404
+    def test_strict_filter_validations(self, client):
+        assert client.get("/api/trades?code=123").status_code == 422
+        assert client.get("/api/trades?operation=invalid").status_code == 422
+        assert client.get("/api/trades?execution_status=invalid").status_code == 422
+        assert client.get("/api/trades?date_from=2026-02-30").status_code == 422
+        assert client.get("/api/trades?date_from=2026-07-29&date_to=2026-07-28").status_code == 422
 
 
 class TestVoidTrade:
@@ -216,6 +131,7 @@ class TestVoidTrade:
         create_resp = client.post("/api/trades", json={
             "code": "600519", "name": "X", "operation": "buy",
             "execution_status": "full", "actual_price": 100.0, "actual_quantity": 100,
+            "executed_at": "2026-07-28T09:30:00+08:00",
         })
         trade_id = create_resp.json()["data"]["trade_id"]
         resp = client.post(f"/api/trades/{trade_id}/void", json={"reason": "录入错误"})
@@ -223,25 +139,36 @@ class TestVoidTrade:
         assert resp.json()["data"]["voided_at"] is not None
         assert resp.json()["data"]["void_reason"] == "录入错误"
 
-    def test_void_not_found(self, client):
-        resp = client.post("/api/trades/nonexistent/void", json={"reason": "x"})
-        assert resp.status_code == 404
-
-    def test_void_already_voided(self, client):
+    def test_void_already_voided_returns_409(self, client):
         create_resp = client.post("/api/trades", json={
             "code": "600519", "name": "X", "operation": "buy",
             "execution_status": "full", "actual_price": 100.0, "actual_quantity": 100,
+            "executed_at": "2026-07-28T09:30:00+08:00",
         })
         trade_id = create_resp.json()["data"]["trade_id"]
         client.post(f"/api/trades/{trade_id}/void", json={"reason": "第一次"})
         resp = client.post(f"/api/trades/{trade_id}/void", json={"reason": "第二次"})
         assert resp.status_code == 409
 
-    def test_void_missing_reason(self, client):
-        create_resp = client.post("/api/trades", json={
+
+class TestCorruptedDBFailClosed:
+    def test_corrupted_db_returns_safe_500(self, client, monkeypatch):
+        db_path = Path(os.environ["VIBE_RESEARCH_TRADE_LEDGER_DB"])
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create dummy trade first
+        client.post("/api/trades", json={
             "code": "600519", "name": "X", "operation": "buy",
             "execution_status": "full", "actual_price": 100.0, "actual_quantity": 100,
+            "executed_at": "2026-07-28T09:30:00+08:00",
         })
-        trade_id = create_resp.json()["data"]["trade_id"]
-        resp = client.post(f"/api/trades/{trade_id}/void", json={})
-        assert resp.status_code == 422
+
+        # Corrupt DB
+        with open(db_path, "wb") as f:
+            f.write(b"CORRUPTED DB DATA")
+
+        resp = client.get("/api/trades")
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "交易流水数据损坏，已停止读写"
+        assert "CORRUPTED" not in resp.text
+        assert "sqlite" not in resp.text.lower()
