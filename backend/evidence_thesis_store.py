@@ -14,6 +14,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from contextlib import contextmanager
 from typing import Any, Iterator
 
 SCHEMA_VERSION = "evidence_thesis_ledger_v1"
@@ -463,6 +464,78 @@ def read_transaction(db_path: str | Path, fn) -> Any:
         raise EvidenceLedgerCorruptedError()
     finally:
         conn.close()
+
+
+class _ReadonlySnapshotUnavailable(Exception):
+    """无法在不创建 sidecar 的情况下安全读取 WAL 数据库。
+
+    调用方应映射为 SOURCE_UNAVAILABLE，不得读取旧主文件。
+    """
+
+
+def _wal_files_state(db_path: str | Path) -> tuple[bool, bool]:
+    """返回 (wal_exists_nonempty, shm_exists)。"""
+    path = Path(_as_path(db_path))
+    wal = path.with_suffix(path.suffix + "-wal")
+    shm = path.with_suffix(path.suffix + "-shm")
+    wal_nonempty = wal.is_file() and wal.stat().st_size > 0
+    shm_exists = shm.is_file()
+    return wal_nonempty, shm_exists
+
+
+@contextmanager
+def readonly_health_snapshot(db_path: str | Path) -> Iterator[sqlite3.Connection]:
+    """WAL-aware 只读快照上下文管理器。
+
+    策略：
+    1. 在证据账本 `_LOCK` 内完成整个健康查询；
+    2. 不执行 DDL、checkpoint 或业务写入；
+    3. 数据库没有待处理 WAL 时，可以在锁内读取主数据库；
+    4. 存在非空 `-wal` 时，必须读取包含 WAL 的当前已提交快照；
+    5. 不得忽略 `-wal`；
+    6. 若无法在不创建 sidecar 的情况下安全读取，返回稳定 unavailable；
+    7. 不创建或修改 DB、`-wal`、`-shm`、备份或目录；
+    8. 连接必须在 finally 中关闭。
+    """
+    path = Path(_as_path(db_path))
+    if not path.exists():
+        raise FileNotFoundError(f"evidence_thesis db 不存在：{path}")
+
+    with _LOCK:
+        wal_nonempty, shm_exists = _wal_files_state(path)
+        conn: sqlite3.Connection | None = None
+        try:
+            if not wal_nonempty:
+                # 无非空 WAL：锁内 immutable 读取主文件
+                # 因锁内没有本进程写入，读取期间文件保持不变
+                uri = f"{path.resolve().as_uri()}?mode=ro&immutable=1"
+                conn = sqlite3.connect(uri, timeout=5, uri=True)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA foreign_keys = ON")
+                conn.execute("PRAGMA busy_timeout = 5000")
+                yield conn
+            else:
+                # 存在非空 WAL：要求可读的 -wal 和 -shm 已存在
+                # 使用 mode=ro，不使用 immutable
+                # 读取包含 WAL 的当前快照
+                if not shm_exists:
+                    # WAL 存在但 shm 缺失：无法安全读取，返回稳定 unavailable
+                    # 不创建 shm
+                    raise _ReadonlySnapshotUnavailable(
+                        "WAL present but -shm missing; cannot read safely"
+                    )
+                uri = f"{path.resolve().as_uri()}?mode=ro"
+                conn = sqlite3.connect(uri, timeout=5, uri=True)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA foreign_keys = ON")
+                conn.execute("PRAGMA busy_timeout = 5000")
+                yield conn
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,23 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SOURCES_FILE = os.path.join(HERE, "news_sources.json")
 CACHE_DIR = os.path.join(HERE, ".cache")
 CACHE_FILE = os.path.join(CACHE_DIR, "radar.json")
+_NEWS_RADAR_CACHE_ENV = "VIBE_RESEARCH_NEWS_RADAR_CACHE"
+
+
+def get_cache_dir() -> str:
+    """资讯雷达缓存目录；可用 VIBE_RESEARCH_NEWS_RADAR_CACHE 覆盖完整文件路径。"""
+    override = os.environ.get(_NEWS_RADAR_CACHE_ENV, "").strip()
+    if override:
+        return os.path.dirname(os.path.abspath(override)) or "."
+    return CACHE_DIR
+
+
+def get_cache_file() -> str:
+    """资讯雷达缓存文件路径；默认 backend/.cache/radar.json。"""
+    override = os.environ.get(_NEWS_RADAR_CACHE_ENV, "").strip()
+    if override:
+        return os.path.abspath(override)
+    return CACHE_FILE
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -135,17 +152,19 @@ def fetch_radar() -> dict:
         "industries": industries,
         "stats": {"industries": len(cfg["industries"]), "total_sources": len(cfg["sources"]), "failed_sources": failed},
     }
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    tmp = CACHE_FILE + ".tmp"
+    cdir = get_cache_dir()
+    cfile = get_cache_file()
+    os.makedirs(cdir, exist_ok=True)
+    tmp = cfile + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False)
-    os.replace(tmp, CACHE_FILE)  # 原子改名，防两次并发刷新交错写坏缓存
+    os.replace(tmp, cfile)  # 原子改名，防两次并发刷新交错写坏缓存
     return data
 
 
 def load_cache():
     try:
-        with open(CACHE_FILE, encoding="utf-8") as f:
+        with open(get_cache_file(), encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return None

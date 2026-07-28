@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { Plus, ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle, Sparkles, RotateCw, Pencil } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -12,10 +13,67 @@ import {
   type PortfolioAdviceConfidence,
   type AccountProfileData,
   type AccountFundingData,
+  type DataHealthRecordDto,
 } from "@/lib/api";
 import { loadLlm } from "@/lib/llm";
 import { usePortfolioAdviceTaskStore } from "@/stores/portfolioAdviceTaskStore";
 import { cn } from "@/lib/utils";
+import { gateAdviceLabel, gateAdviceState } from "@/lib/dataHealthView";
+
+/** 持仓页轻量入口：最近 Gate 评估，不替代实时 preflight */
+function PortfolioGateHealthEntry() {
+  const [gate, setGate] = useState<DataHealthRecordDto | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getDataHealthSource("portfolio_advice_gate")
+      .then((d) => {
+        if (!cancelled) setGate(d.record);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const state = gateAdviceState(gate);
+  const label = gateAdviceLabel(state);
+
+  return (
+    <GlassCard className="mb-4 mt-6 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold">建议可用性</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            最近 Gate 评估：
+            <span className="ml-1 font-medium text-foreground">{failed ? "读取失败" : label}</span>
+            {gate?.is_stale && (
+              <span className="ml-2 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-300">
+                评估已陈旧
+              </span>
+            )}
+          </p>
+          {gate?.blocks_advice && gate.block_reason && (
+            <p className="mt-1 text-[11px] text-amber-200">{gate.block_reason}</p>
+          )}
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            下一次生成仍会重新执行实时 preflight。
+          </p>
+        </div>
+        <Link
+          to="/data-health"
+          className="text-xs text-primary hover:underline"
+        >
+          查看数据健康详情
+        </Link>
+      </div>
+    </GlassCard>
+  );
+}
 
 const REFRESH_MS = 30 * 60 * 1000; // 每半小时自动刷新
 const pnlColor = (v: number | null | undefined) => (v == null || Number.isNaN(v) || v === 0 ? "text-muted-foreground" : v > 0 ? "text-danger" : "text-success");
@@ -911,6 +969,9 @@ export function Portfolio() {
           </div>
         )}
       </GlassCard>
+
+      {/* 建议可用性（数据健康轻量入口，不替代实时 gate） */}
+      <PortfolioGateHealthEntry />
 
       {/* 持仓操作建议（结构化 API） */}
       <GlassCard className="mb-4 mt-6">

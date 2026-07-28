@@ -990,6 +990,23 @@ export function DailyReview() {
         <span>交易日期：<b className="text-foreground">{tradeDateLabel}</b></span>
         <span className="text-muted-foreground/40">·</span>
         <span>生成时间：{generatedAt}</span>
+        <span className="text-muted-foreground/40">·</span>
+        <span>
+          数据截至：
+          <b className="text-foreground">
+            {dr?.data_cutoff ?? generatedAt}
+          </b>
+        </span>
+        {cacheMeta?.source && (cacheMeta.source === "memory" || cacheMeta.source === "persisted") && (
+          <span className="rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px] text-slate-300">
+            缓存结果
+          </span>
+        )}
+        {cacheMeta?.stale && (
+          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
+            数据陈旧
+          </span>
+        )}
         {cacheMeta?.stale && (
           <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
             上次成功结果
@@ -1004,6 +1021,12 @@ export function DailyReview() {
         {overall === "unavailable" && (
           <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] text-destructive">每日复盘数据暂不可用</span>
         )}
+        <Link
+          to="/data-health?module=%E6%AF%8F%E6%97%A5%E5%A4%8D%E7%9B%98"
+          className="text-primary hover:underline"
+        >
+          查看数据健康详情
+        </Link>
       </div>
 
       {drErr && (

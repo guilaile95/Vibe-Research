@@ -66,6 +66,9 @@ const EvidenceNew = lazy(() =>
 const EvidenceDetail = lazy(() =>
   import("@/pages/EvidenceDetail").then((m) => ({ default: m.EvidenceDetail })),
 );
+const DataHealth = lazy(() =>
+  import("@/pages/DataHealth").then((m) => ({ default: m.DataHealth })),
+);
 
 function PageFallback() {
   return (
@@ -121,6 +124,7 @@ export const router = createBrowserRouter([
       { path: "/evidence/new", element: withSuspense(<EvidenceNew />) },
       { path: "/evidence/:id", element: withSuspense(<EvidenceDetail />) },
       { path: "/settings", element: withSuspense(<Settings />) },
+      { path: "/data-health", element: withSuspense(<DataHealth />) },
     ],
   },
 ]);

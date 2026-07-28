@@ -113,6 +113,30 @@ def _require_holding_quote_coverage(portfolio_data: dict) -> None:
         if not isinstance(h, dict) or not portfolio._is_valid_price(h.get("price")):
             raise PortfolioAdviceMarketDataError(_HOLDING_QUOTE_UNAVAILABLE_MSG)
 
+def _record_gate_blocked(error_code: str) -> None:
+    try:
+        import data_health_event_store as _dhes
+        _dhes.safe_call(_dhes.record_gate_blocked, error_code)
+    except Exception:
+        pass
+
+
+def _record_gate_allowed() -> None:
+    try:
+        import data_health_event_store as _dhes
+        _dhes.safe_call(_dhes.record_gate_allowed)
+    except Exception:
+        pass
+
+
+def _record_gate_failure(error_code: str = "SOURCE_UNAVAILABLE") -> None:
+    try:
+        import data_health_event_store as _dhes
+        _dhes.safe_call(_dhes.record_gate_failure, error_code)
+    except Exception:
+        pass
+
+
 def prepare_portfolio_advice_messages(
     user_request: str | None = None,
 ) -> dict:
@@ -131,56 +155,81 @@ def prepare_portfolio_advice_messages(
     """
     request = _normalize_user_request(user_request)
 
-    portfolio_data = portfolio.get_portfolio()
-    if not isinstance(portfolio_data, dict):
-        raise PortfolioAdviceUnavailableError(_EMPTY_HOLDINGS_MSG)
-    _require_holdings(portfolio_data)
-    _require_holding_quote_coverage(portfolio_data)
-    # 规范化 shares 为 int（add_holding 可能留下 float），避免 fingerprint 误杀
-    holdings = portfolio_data.get("holdings") or []
-    if isinstance(holdings, list):
-        for h in holdings:
-            if not isinstance(h, dict):
-                continue
-            sh = h.get("shares")
-            if isinstance(sh, float) and not isinstance(sh, bool) and sh == int(sh) and sh > 0:
-                h["shares"] = int(sh)
     try:
-        input_fingerprint = ai_result_service.compute_portfolio_fingerprint(
-            portfolio_data["holdings"]
-        )
-    except ai_result_service.AiResultValidationError as exc:
-        raise PortfolioAdviceUnavailableError(_HOLDINGS_SHAPE_MSG) from exc
+        portfolio_data = portfolio.get_portfolio()
+        if not isinstance(portfolio_data, dict):
+            _record_gate_blocked("NO_HOLDINGS")
+            raise PortfolioAdviceUnavailableError(_EMPTY_HOLDINGS_MSG)
+        try:
+            _require_holdings(portfolio_data)
+        except PortfolioAdviceUnavailableError:
+            _record_gate_blocked("NO_HOLDINGS")
+            raise
+        try:
+            _require_holding_quote_coverage(portfolio_data)
+        except PortfolioAdviceMarketDataError:
+            _record_gate_blocked("HOLDING_QUOTES_UNAVAILABLE")
+            raise
+        except PortfolioAdviceUnavailableError:
+            _record_gate_blocked("NO_HOLDINGS")
+            raise
+        # 规范化 shares 为 int（add_holding 可能留下 float），避免 fingerprint 误杀
+        holdings = portfolio_data.get("holdings") or []
+        if isinstance(holdings, list):
+            for h in holdings:
+                if not isinstance(h, dict):
+                    continue
+                sh = h.get("shares")
+                if isinstance(sh, float) and not isinstance(sh, bool) and sh == int(sh) and sh > 0:
+                    h["shares"] = int(sh)
+        try:
+            input_fingerprint = ai_result_service.compute_portfolio_fingerprint(
+                portfolio_data["holdings"]
+            )
+        except ai_result_service.AiResultValidationError as exc:
+            _record_gate_failure("SOURCE_UNAVAILABLE")
+            raise PortfolioAdviceUnavailableError(_HOLDINGS_SHAPE_MSG) from exc
 
-    review = daily_review.generate_daily_review()
-    if _market_breadth_unavailable(review):
-        raise PortfolioAdviceMarketDataError(_MARKET_UNAVAILABLE_MSG)
-    # 保存路径要求 YYYY-MM-DD trade_date；缺失则在调用模型前失败关闭
-    td = review.get("trade_date") if isinstance(review, dict) else None
-    if not isinstance(td, str) or not td.strip():
-        raise PortfolioAdviceMarketDataError(_REVIEW_TRADE_DATE_MSG)
+        review = daily_review.generate_daily_review()
+        if _market_breadth_unavailable(review):
+            _record_gate_blocked("MARKET_BREADTH_UNAVAILABLE")
+            raise PortfolioAdviceMarketDataError(_MARKET_UNAVAILABLE_MSG)
+        # 保存路径要求 YYYY-MM-DD trade_date；缺失则在调用模型前失败关闭
+        td = review.get("trade_date") if isinstance(review, dict) else None
+        if not isinstance(td, str) or not td.strip():
+            _record_gate_blocked("REVIEW_TRADE_DATE_UNAVAILABLE")
+            raise PortfolioAdviceMarketDataError(_REVIEW_TRADE_DATE_MSG)
 
-    try:
-        context = portfolio_advice_context.build_portfolio_advice_context(
-            portfolio_data,
-            review,
-        )
-        context_json = _context_to_json(context)
-        messages = portfolio_advice_prompt.build_portfolio_advice_messages(
-            context_json,
-            user_request=request,
-        )
-    except (TypeError, ValueError) as exc:
-        # 上下文/提示构建失败：业务数据不可用，非客户端参数错误
-        raise PortfolioAdviceMarketDataError(_MARKET_UNAVAILABLE_MSG) from exc
-    return {
-        "portfolio": portfolio_data,
-        "input_fingerprint": input_fingerprint,
-        "daily_review": review,
-        "context": context,
-        "context_json": context_json,
-        "messages": messages,
-    }
+        try:
+            context = portfolio_advice_context.build_portfolio_advice_context(
+                portfolio_data,
+                review,
+            )
+            context_json = _context_to_json(context)
+            messages = portfolio_advice_prompt.build_portfolio_advice_messages(
+                context_json,
+                user_request=request,
+            )
+        except (TypeError, ValueError) as exc:
+            # 上下文/提示构建失败：对外文案保持业务不可用，健康事件记为 Gate 运行失败
+            _record_gate_failure("SOURCE_UNAVAILABLE")
+            raise PortfolioAdviceMarketDataError(_MARKET_UNAVAILABLE_MSG) from exc
+        _record_gate_allowed()
+        return {
+            "portfolio": portfolio_data,
+            "input_fingerprint": input_fingerprint,
+            "daily_review": review,
+            "context": context,
+            "context_json": context_json,
+            "messages": messages,
+        }
+    except (PortfolioAdviceUnavailableError, PortfolioAdviceMarketDataError):
+        raise
+    except Exception:
+        # Gate 运行失败（非业务阻断）
+        _record_gate_failure("SOURCE_UNAVAILABLE")
+        raise
+
 
 
 def _strip_single_fence(stripped: str) -> str | None:

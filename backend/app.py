@@ -45,6 +45,7 @@ import review_history
 import sector_research_data as srd
 import watchlist_store
 import evidence_thesis_router
+import data_health_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -134,6 +135,8 @@ app.add_middleware(
 
 # 投资逻辑与证据账本：独立路由模块最小接入
 app.include_router(evidence_thesis_router.router)
+# 数据健康中心：只读聚合 API
+app.include_router(data_health_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)
@@ -1292,8 +1295,25 @@ def quote(codes: str = Query(..., description="逗号分隔的 6 位代码")):
     if not lst or any(not c.isdigit() or len(c) != 6 for c in lst):
         raise HTTPException(400, "codes 必须是逗号分隔的 6 位数字")
     try:
-        return {"data": astock.tencent_quote(lst)}
+        data = astock.tencent_quote(lst)
+        # 健康事件：最近一次真实 quotes 调用（覆盖不持久化）
+        try:
+            import data_health_event_store as _dhes
+            if not isinstance(data, dict) or not data:
+                _dhes.safe_call(_dhes.record_failure, "quotes", "SOURCE_UNAVAILABLE")
+            elif any(c not in data for c in lst):
+                _dhes.safe_call(_dhes.record_partial, "quotes")
+            else:
+                _dhes.safe_call(_dhes.record_success, "quotes")
+        except Exception:
+            pass
+        return {"data": data}
     except Exception as e:  # noqa: BLE001 — 边界统一兜底
+        try:
+            import data_health_event_store as _dhes
+            _dhes.safe_call(_dhes.record_failure, "quotes", "SOURCE_UNAVAILABLE")
+        except Exception:
+            pass
         raise HTTPException(502, f"行情源异常：{e}") from e
 
 
@@ -1362,8 +1382,19 @@ def announcements(code: str = Query(...)):
     try:
         data = astock.announcements(code)
         _ANN_CACHE.set(code, data)
+        try:
+            import data_health_event_store as _dhes
+            # 合法空列表是 normal
+            _dhes.safe_call(_dhes.record_success, "announcements")
+        except Exception:
+            pass
         return {"data": data}
     except Exception as e:  # noqa: BLE001
+        try:
+            import data_health_event_store as _dhes
+            _dhes.safe_call(_dhes.record_failure, "announcements", "SOURCE_UNAVAILABLE")
+        except Exception:
+            pass
         raise HTTPException(502, f"公告源异常：{e}") from e
 
 
@@ -1380,10 +1411,30 @@ def financials(code: str = Query(...)):
     try:
         data = astock.financials(code)
         _FIN_CACHE.set(code, data)
+        try:
+            import data_health_event_store as _dhes
+            if not isinstance(data, dict) or not data:
+                _dhes.safe_call(_dhes.record_failure, "financials", "SOURCE_UNAVAILABLE")
+            elif data.get("revenue") is None and data.get("net_profit") is None:
+                _dhes.safe_call(_dhes.record_partial, "financials")
+            else:
+                _dhes.safe_call(_dhes.record_success, "financials")
+        except Exception:
+            pass
         return {"data": data}
     except astock.DependencyMissing as e:
+        try:
+            import data_health_event_store as _dhes
+            _dhes.safe_call(_dhes.record_failure, "financials", "SOURCE_UNAVAILABLE")
+        except Exception:
+            pass
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
+        try:
+            import data_health_event_store as _dhes
+            _dhes.safe_call(_dhes.record_failure, "financials", "SOURCE_UNAVAILABLE")
+        except Exception:
+            pass
         raise HTTPException(502, f"财务摘要异常：{e}") from e
 
 
@@ -1740,7 +1791,23 @@ def sector_research_data(sector_key: str):
     """板块动态数据（一致预期 / 公告 / 新闻）。缺失字段用 null，不猜测。"""
     try:
         data = srd.get_sector_dynamic_data(sector_key)
+        try:
+            import data_health_event_store as _dhes
+            st = data.get("status") if isinstance(data, dict) else None
+            if st == "normal":
+                _dhes.safe_call(_dhes.record_success, "sector_research")
+            elif st == "partial":
+                _dhes.safe_call(_dhes.record_partial, "sector_research")
+            else:
+                _dhes.safe_call(_dhes.record_failure, "sector_research", "SOURCE_UNAVAILABLE")
+        except Exception:
+            pass
     except Exception as e:  # noqa: BL001
+        try:
+            import data_health_event_store as _dhes
+            _dhes.safe_call(_dhes.record_failure, "sector_research", "SOURCE_UNAVAILABLE")
+        except Exception:
+            pass
         raise HTTPException(502, f"板块动态数据异常：{e}") from e
     return {"data": data}
 
