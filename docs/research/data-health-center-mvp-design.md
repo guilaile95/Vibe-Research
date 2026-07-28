@@ -348,16 +348,53 @@ schema：data-health-events.v1
 4. hard failure 只更新 `last_error_at/last_error_code`，保留以前的 `last_success_at`；
 5. 文件不存在时允许创建 `data-health-events.v1`；文件存在时必须先完整读取并严格校验；
 6. JSON 损坏、schema 高于支持版本、顶层或记录含额外字段、未知 `source_id` 时拒绝写入；不得把损坏文件当成空集合；
-7. 拒绝写入时不得删除、重命名、覆盖、恢复或静默清洗原文件，原内容、size 和 mtime 必须保持不变；
-8. 使用单 Python 进程内线程锁、临时文件、`fsync` 和 `os.replace` 原子写入；MVP 仅支持单应用实例/单 Python 进程，不宣称跨进程锁或多 worker 写安全；
-9. 并发更新不同 `source_id` 必须在同一线程锁内完成 read-validate-modify-write，不丢失已提交事件；
-10. 事件写入失败不得改变原业务接口的成功或失败语义；只写安全日志中的异常类型；
-11. 健康 GET 只调用 `load_events_readonly()`；文件不存在直接返回空事件集合，不创建目录或文件；
-12. 独立存储不复用 `daily_reviews.sqlite3`、`evidence_thesis.db` 或其他业务数据库。
+7. `SOURCE_NOT_INITIALIZED` 仅由 Adapter 在缺记录时合成，所有来源的事件写入器均拒绝持久化该值；
+8. 拒绝写入时不得删除、重命名、覆盖、恢复或静默清洗原文件，原内容、size 和 mtime 必须保持不变；
+9. 使用单 Python 进程内线程锁、临时文件、`fsync` 和 `os.replace` 原子写入；MVP 仅支持单应用实例/单 Python 进程，不宣称跨进程锁或多 worker 写安全；
+10. 并发更新不同 `source_id` 必须在同一线程锁内完成 read-validate-modify-write，不丢失已提交事件；
+11. 事件写入失败不得改变原业务接口的成功或失败语义；只写安全日志中的异常类型；
+12. 健康 GET 只调用 `load_events_readonly()`；文件不存在直接返回空事件集合，不创建目录或文件；
+13. 独立存储不复用 `daily_reviews.sqlite3`、`evidence_thesis.db` 或其他业务数据库。
+
+#### 每个来源的 observation_time 严格单调
+
+写入器不得依赖墙上时钟自然递增。每次写入先解析该 `source_id` 的现有时间：
+
+```python
+existing_max = max(last_success_at, last_error_at)
+candidate = now_utc
+
+if candidate <= existing_max:
+    observation_time = existing_max + timedelta(microseconds=1)
+else:
+    observation_time = candidate
+```
+
+规则固定为：
+
+- 同一次 partial、degraded 或 gate-block 写入的 `last_success_at/last_error_at` 使用同一个 `observation_time`；
+- 后续完整成功必须使用严格更晚的时间，因此冻结时间测试也能从 partial/degraded/block 恢复；
+- 不增加第五个持久化字段；
+- 时间单调性按 `source_id` 独立维护，不要求不同来源之间排序；
+- 并发调用在线程锁内串行完成读取、单调时间计算和原子替换，保证同一来源每次已提交观察时间严格递增。
 
 ## 8. 首批数据源清单
 
 首批 Adapter 固定为 11 个，不在实现阶段扩容。
+
+### 8.1 按请求来源的观察范围
+
+`quotes`、`announcements`、`financials`、`sector_research` 统一表示“最近一次任意真实业务调用的来源级观察状态”。该语义不按股票代码、板块标识或请求对象细分：
+
+- 不代表所有股票、所有板块或所有请求对象均正常；
+- 不持久化股票代码、板块标识、请求参数或覆盖明细；
+- 这四个事件型 Adapter 的 `coverage_current/coverage_expected` 默认为 `null`；
+- `/data-health` 卡片固定显示“最近一次真实调用”；
+- 详情固定显示：“该状态来自此数据源最近一次真实业务调用，不代表全部股票或板块均已验证。”
+
+`portfolio_quotes` 是持仓场景专用来源，表示最近一次持仓行情覆盖观察；它与通用 `quotes` 分开记录、分开展示，不互相覆盖或推导。
+
+### 8.2 Adapter 明细
 
 | source_id | 权威模块/读取函数 | 只读行为 | 缺文件/记录 | 损坏 | 无数据 | partial 判定 | stale 判定 | 建议字段规则 |
 |---|---|---|---|---|---|---|---|---|
@@ -487,12 +524,12 @@ else:
 
 | 参数 | 类型 | 允许值 |
 |---|---|---|
-| `module` | string，可重复或逗号分隔二选一；实现固定为单值精确匹配 | Adapter 注册的 module |
+| `module` | 单个 string | 精确匹配一个已注册 module；MVP 不支持重复参数、逗号分隔或多 module 筛选 |
 | `status` | string | `normal/partial/unavailable` |
 | `is_stale` | bool | `true/false` |
 | `blocks_advice` | bool | `true/false` |
 
-未知 `module` 或非法枚举/布尔值返回 422。筛选只影响 `items`；`summary` 仍统计完整 11 个来源，顶层 `overall_status`、`blocks_advice` 和 `block_reasons` 也始终基于完整 11 个来源，防止筛选改变全局结论。
+未知 `module`、重复 `module`、逗号分隔 module、多 module 请求或非法枚举/布尔值均返回 422。筛选只影响 `items`；`summary` 仍统计完整 11 个来源，顶层 `overall_status`、`blocks_advice` 和 `block_reasons` 也始终基于完整 11 个来源，防止筛选改变全局结论。
 
 响应：
 
@@ -521,6 +558,21 @@ else:
 ```
 
 列表稳定按 Adapter 注册顺序返回，不按健康状态动态排序，避免页面跳动；前端异常区自行筛选。
+
+`summary` 的质量状态满足：
+
+```text
+normal + partial + unavailable = 11
+```
+
+`stale` 与 `not_initialized` 是正交/子集统计，不是第四、第五种质量状态：
+
+```text
+not_initialized 是 unavailable 的子集
+stale 可与 normal / partial / unavailable 任一状态重叠
+```
+
+因此示例中的 summary 数字全部相加可能超过 11，前端不得把它们绘制成互斥分区。
 
 ### 11.2 `GET /api/data-health/{source_id}`
 
@@ -656,6 +708,37 @@ portfolio_advice_gate Adapter
 - `overall_status != normal` 不能作为新 gate；
 - 每次实际生成建议仍执行原有实时 gate，健康页面最后状态不提供放行保证。
 
+### 13.1 Gate 事件专用编码
+
+`portfolio_advice_gate` 不使用第 10.1 节的通用错误状态机；它必须同时表达“preflight 是否成功运行”和“成功运行后的业务结论”。`SOURCE_NOT_INITIALIZED` 是 Adapter 在缺记录时合成的值，不得写入事件文件。
+
+| 情形 | 事件文件写入 | Gate Adapter 映射 |
+|---|---|---|
+| 尚未评估 | 无事件记录 | `status=unavailable`、`last_error_code=SOURCE_NOT_INITIALIZED`、`blocks_advice=false`、`block_reason=null` |
+| 评估允许 | `last_success_at=observation_time`；保留历史 `last_error_at/last_error_code` | `last_success_at > last_error_at` → `status=normal`、`blocks_advice=false`、`block_reason=null` |
+| 评估明确阻断 | 同一次成功 preflight 写入 `last_success_at=last_error_at=observation_time`，`last_error_code=<gate business code>` | 两个时间相等且 code 属于四项业务码 → `status=normal`、`blocks_advice=true`、`block_reason=稳定安全摘要` |
+| Gate 运行失败 | 只写 `last_error_at=observation_time` 和 `SOURCE_TIMEOUT/SOURCE_UNAVAILABLE`，不更新 `last_success_at` | `last_error_at >= last_success_at` 且不是业务码 → `status=unavailable`、`blocks_advice=false`；页面显示最近 Gate 运行失败，不伪造允许或阻断 |
+
+Gate business code 固定为：
+
+```text
+NO_HOLDINGS
+HOLDING_QUOTES_UNAVAILABLE
+MARKET_BREADTH_UNAVAILABLE
+REVIEW_TRADE_DATE_UNAVAILABLE
+```
+
+Gate 事件恢复流程：
+
+| 转移 | 写入 | 结果 |
+|---|---|---|
+| 阻断 → 允许 | 使用严格更晚 `observation_time` 更新 `last_success_at`，保留旧业务码 | `status=normal, blocks_advice=false` |
+| 允许 → 阻断 | 使用同一新时间写成功时间、错误时间和业务码 | `status=normal, blocks_advice=true` |
+| 运行失败 → 允许 | 使用严格更晚时间更新 `last_success_at` | `status=normal, blocks_advice=false` |
+| 运行失败 → 阻断 | 使用同一严格更晚时间更新成功时间、错误时间和业务码 | `status=normal, blocks_advice=true` |
+
+上述恢复依赖第 7.3 节的按来源单调时间：即使测试冻结 `now_utc`，新观察时间也严格晚于现有最大时间。
+
 ## 14. 安全错误模型
 
 ### 14.1 稳定错误码
@@ -739,6 +822,14 @@ backend/tests/test_data_health_api.py
 30. 高版本文件 + 失败业务调用：原业务失败语义不变且事件文件不变；
 31. 含额外字段的文件不被下一次写入静默清洗；
 32. 并发更新不同 `source_id` 不丢失任何已提交事件。
+33. 冻结在相同时钟下 partial → success，写入器自动增加 1 微秒并恢复 normal；
+34. 冻结在相同时钟下 blocked → allow，后续成功时间严格更晚且恢复 `blocks_advice=false`；
+35. 并发调用经线程锁串行后，同一 `source_id` 的 observation time 严格递增；
+36. Gate 允许、四项业务阻断、运行失败和四条恢复路径逐项验证；
+37. `SOURCE_NOT_INITIALIZED` 只由 Adapter 合成，事件文件 schema 拒绝持久化该值；
+38. 四个按请求来源的 coverage 固定为 `null`，详情包含来源级观察免责声明；
+39. `module` 仅接受单个精确值，重复、逗号分隔和未知 module 均返回 422；
+40. summary 满足三项质量计数合计 11，`not_initialized` 是 unavailable 子集，stale 可跨状态重叠。
 
 只读测试必须在调用前后比较：
 
@@ -767,6 +858,7 @@ SQLite 表集合
 - gate 尚未评估；
 - 未知 `source_id` 返回 404；
 - 非法 `module/status/is_stale/blocks_advice` 返回 422；
+- 重复 `module`、逗号分隔 module 和多 module 请求返回 422；
 - 筛选不改变全局状态与全局 gate；
 - 单 Adapter 可预期读取失败只降级该来源，其他来源继续返回；
 - 注册表、序列化或聚合框架异常固定返回 HTTP 500 和“数据健康服务暂不可用”；
@@ -792,6 +884,8 @@ frontend/tests/e2e/data-health-real.browser.mjs
 - 建议允许、阻断、尚未评估；
 - `NO_HOLDINGS` 显示为已完成评估且阻断，不显示为数据源运行失败；
 - gate 依赖更新后同时显示最近结论与“评估已陈旧”；
+- 按请求来源卡片显示“最近一次真实调用”，详情显示不代表全部股票或板块均已验证；
+- summary 不把 stale/not_initialized 与质量三态绘制成互斥分区；
 - 多个阻断原因；
 - 空系统引导；
 - 加载失败保留旧数据；
@@ -845,6 +939,7 @@ E2E 不 mock `/api/data-health`：
 | 事件写入失败 | 最近状态缺失 | 不影响业务；健康显示未初始化或旧观察状态 |
 | 最后一次成功后又失败 | 用户误以为仍正常 | 比较 error/success 时间，失败更新为 unavailable；旧业务数据若权威模块仍可读才允许 partial/degraded |
 | 多进程写 JSON | 丢事件 | MVP 明确只支持单应用实例/单 Python 进程；仅使用线程锁，不宣称跨进程安全；多 worker 不在支持范围 |
+| 墙上时钟不递增或回拨 | 新成功无法覆盖旧 partial/block | 写入器按 source_id 比较现有最大时间，必要时增加 1 微秒，不依赖自然时钟递增 |
 | 健康页面最后 gate 与下一次生成时刻不同 | 放行误解 | 显示“最近评估”，每次生成仍执行现有 gate；gate 记录有 300 秒 stale |
 | Adapter 意外调用初始化函数 | GET 产生副作用 | 文件/表/mtime 前后对比测试和只读 SQLite URI |
 | 一个事件文件损坏影响多个来源 | 多来源同时 unavailable | 每个来源返回安全损坏状态；不影响直接读取权威状态的 Adapter |
@@ -861,6 +956,9 @@ E2E 不 mock `/api/data-health`：
 - **哪些 Adapter 可写建议字段？** 只有 `portfolio_advice_gate`；其他十个固定 `false/null`。
 - **gate 阻断是否代表运行异常？** 否；成功评估出的允许和阻断均为 status normal。
 - **缓存/降级未知如何表示？** `null`，不得解释为实时或未降级。
+- **按请求来源代表什么？** 只代表最近一次任意真实调用，不代表全部股票或板块已经验证。
+- **module 如何筛选？** 只允许单个精确值，多值和逗号分隔均为 422。
+- **summary 是否互斥？** 仅 normal/partial/unavailable 互斥且合计 11；stale 正交，not_initialized 是 unavailable 子集。
 - **首批范围？** 固定 11 个 Adapter。
 - **首批页面入口？** 每日复盘与我的持仓。
 - **是否新增刷新 API？** 否。
@@ -885,6 +983,9 @@ E2E 不 mock `/api/data-health`：
 - [x] 仅 `portfolio_advice_gate` 可输出建议阻断字段，gate 运行健康与业务结论已分离；
 - [x] 缓存/降级采用 `true/false/null`，未知不伪装为实时；
 - [x] 事件写入对损坏、高版本、额外字段和未知来源 fail-closed；
+- [x] Gate 四类编码、四条恢复路径和严格单调 observation time 已固定；
+- [x] 按请求来源的观察范围、coverage=null 和免责声明已固定；
+- [x] module 单值筛选与 summary 重叠关系已固定；
 - [x] 前端 MVP 和首批页面入口明确；
 - [x] 安全错误边界和稳定错误码明确；
 - [x] 真实后端 E2E 不 mock 聚合 API；
@@ -908,3 +1009,7 @@ E2E 不 mock `/api/data-health`：
 12. 全部未初始化、可选未初始化和已初始化全不可用三种 overall 语义均通过测试；
 13. 损坏、高版本或额外字段事件文件不会被下一次业务调用覆盖或清洗；
 14. gate 依赖更新只将最近评估标 stale，不篡改允许/阻断结论。
+15. Gate 允许、阻断、运行失败和恢复均按专用事件编码稳定映射；
+16. 同一来源的每次 observation time 严格递增，冻结时间下也能恢复；
+17. 四个按请求来源只表达最近一次真实调用，coverage 为 null 且不泄露请求对象；
+18. module 只允许单个精确值，summary 三态合计 11，重叠统计关系有前后端测试。
