@@ -1,4 +1,4 @@
-# 数据健康中心 MVP 技术设计（草案 v1）
+# 数据健康中心 MVP 技术设计（草案 v2）
 
 > 基线分支：`feature/research-system-v01`
 > 基线提交：`cdd1a0fb589e4decb3b7196894fae9e1753ed0db`
@@ -186,8 +186,8 @@ class DataHealthRecord(TypedDict):
     data_cutoff: str | None
 
     stale_after_seconds: int | None
-    is_cached: bool
-    is_degraded: bool
+    is_cached: bool | None
+    is_degraded: bool | None
 
     coverage_current: int | None
     coverage_expected: int | None
@@ -210,8 +210,10 @@ class DataHealthRecord(TypedDict):
 - `observed_at` 表示权威状态被业务路径观察或保存的时间，不等同于数据发生时间；
 - `last_success_at` 表示最近一次真实业务调用成功或权威结果成功保存时间；
 - `coverage_current/coverage_expected` 只从当前权威结果即时读取，不进入健康事件存储；
-- `is_cached` 只在权威模块明确证明缓存命中时为 `true`；
-- `is_degraded` 表示当前仍有可用结果但权威模块明确使用降级路径，不能由 `is_cached` 推断；
+- `is_cached/is_degraded=true` 表示权威模块或当前有效事件能够明确证明；`false` 表示权威模块能够明确证明未使用；`null` 表示当前只读信息不足；
+- `null` 不得被解释或展示成“实时数据”或“未降级”；
+- `daily_review` 根据权威 `cache_meta` 给出 `is_cached=true/false`；`news_radar` 读取磁盘缓存时为 `true`；仅有四字段事件的 `announcements/financials` 无法证明 cache hit，必须为 `null`；
+- 当前有效 `SOURCE_DEGRADED` 映射 `status=partial, is_degraded=true`；当前有效 `SOURCE_PARTIAL` 映射 `status=partial, is_degraded=false`；其他 normal/partial 来源没有权威降级证据时为 `null`，只有权威模块明确未降级才为 `false`；
 - `last_error_summary` 仅由稳定 `error_code` 映射，不接收原始异常文本；
 - `blocks_advice` 与 `block_reason` 只映射现有 gate 最近一次真实评估，不使用 `overall_status` 推导。
 
@@ -242,7 +244,7 @@ calendar_type
 | source_id | freshness_basis（优先顺序） | 建议阈值 | calendar_type | 说明 |
 |---|---|---:|---|---|
 | `daily_review` | `cache_meta.stale` → `data_trade_date` → `saved_at/generated_at` | 交易日规则；时间回退 36 小时 | `CN_MARKET_CONSERVATIVE` | 不修改现有 300 秒内存 TTL；展示缓存 stale 继续权威 |
-| `portfolio_advice_gate` | 最小事件 `last_success_at/last_error_at` | 300 秒 | `CONTINUOUS` | 持仓文件 mtime 晚于 gate 观察时间时也 stale |
+| `portfolio_advice_gate` | `observed_at=max(last_success_at,last_error_at)` | 300 秒 | `CONTINUOUS` | 超过 300 秒，或持仓文件、`portfolio_quotes`、`daily_review` 任一观察时间更新时 stale；stale 不改变最近 gate 结论 |
 | `portfolio_quotes` | 最小事件 `last_success_at/last_error_at` | 300 秒（交易时段） | `CN_MARKET_CONSERVATIVE` | 非交易时段延续最近收盘观察，下一交易时段开始后重新计时 |
 | `quotes` | 最小事件 `last_success_at/last_error_at` | 300 秒（交易时段） | `CN_MARKET_CONSERVATIVE` | 只记录真实行情调用，不主动探测 |
 | `announcements` | 最小事件 `last_success_at/last_error_at` | 86400 秒 | `CONTINUOUS` | 不把 15 分钟业务 TTL 当作公告业务日期 |
@@ -341,31 +343,35 @@ schema：data-health-events.v1
 写入约束：
 
 1. 只有现有业务真实调用路径完成后才能记录；
-2. 成功更新 `last_success_at`，不清除更晚的错误；
-3. 明确部分成功同时更新 `last_success_at`、`last_error_at` 和 `last_error_code=SOURCE_PARTIAL`；
-4. 失败只更新 `last_error_at/last_error_code`，保留以前的 `last_success_at`；
-5. 使用进程锁、临时文件、`fsync` 和 `os.replace` 原子写入；
-6. 事件写入失败不得改变业务接口成功/失败结果；只写安全日志中的异常类型；
-7. 健康 GET 只调用 `load_events_readonly()`；文件不存在直接返回空事件集合，不创建目录或文件；
-8. 独立存储不复用 `daily_reviews.sqlite3`、`evidence_thesis.db` 或其他业务数据库。
+2. 成功更新 `last_success_at`，保留历史 `last_error_at/last_error_code`；完整成功是否恢复 normal 由时间比较决定；
+3. 明确部分成功同时更新 `last_success_at`、`last_error_at` 和 `last_error_code=SOURCE_PARTIAL`；明确降级成功同理记录 `SOURCE_DEGRADED`；相同时间戳时部分/降级事件优先；
+4. hard failure 只更新 `last_error_at/last_error_code`，保留以前的 `last_success_at`；
+5. 文件不存在时允许创建 `data-health-events.v1`；文件存在时必须先完整读取并严格校验；
+6. JSON 损坏、schema 高于支持版本、顶层或记录含额外字段、未知 `source_id` 时拒绝写入；不得把损坏文件当成空集合；
+7. 拒绝写入时不得删除、重命名、覆盖、恢复或静默清洗原文件，原内容、size 和 mtime 必须保持不变；
+8. 使用单 Python 进程内线程锁、临时文件、`fsync` 和 `os.replace` 原子写入；MVP 仅支持单应用实例/单 Python 进程，不宣称跨进程锁或多 worker 写安全；
+9. 并发更新不同 `source_id` 必须在同一线程锁内完成 read-validate-modify-write，不丢失已提交事件；
+10. 事件写入失败不得改变原业务接口的成功或失败语义；只写安全日志中的异常类型；
+11. 健康 GET 只调用 `load_events_readonly()`；文件不存在直接返回空事件集合，不创建目录或文件；
+12. 独立存储不复用 `daily_reviews.sqlite3`、`evidence_thesis.db` 或其他业务数据库。
 
 ## 8. 首批数据源清单
 
 首批 Adapter 固定为 11 个，不在实现阶段扩容。
 
-| source_id | 权威模块/读取函数 | 只读行为 | 缺文件/记录 | 损坏 | 无数据 | partial 判定 | stale 判定 | blocks_advice 来源 |
+| source_id | 权威模块/读取函数 | 只读行为 | 缺文件/记录 | 损坏 | 无数据 | partial 判定 | stale 判定 | 建议字段规则 |
 |---|---|---|---|---|---|---|---|---|
-| `daily_review` | `daily_review._cached_review()` 与 `daily_review_cache.load_latest_review()`；不得调用 generate | 先读有效内存结果，再读最近成功磁盘缓存 | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED`；Adapter 需区分文件存在但 loader 拒绝 | 已初始化的合法空组件按现有 status | 直接使用权威顶层 status | `cache_meta` 同义规则；磁盘结果 stale；交易日回退规则 | 仅映射广度和交易日这两个现有 gate 条件 |
-| `portfolio_advice_gate` | `portfolio_advice_service` 现有 preflight 的最后真实事件；同时只读持仓文件 mtime | 不调用 prepare/generate；读取最后 gate 成功或稳定失败码 | `unavailable/SOURCE_NOT_INITIALIZED`，`blocks_advice=false`，表示尚未评估而非允许 | 事件文件损坏按该来源 unavailable，但不替代业务 gate | `NO_HOLDINGS` 是现有阻断，不视为存储损坏 | 不产生 partial；最近评估允许为 normal，明确阻断为 unavailable | 300 秒或持仓文件晚于事件 | 直接来自现有四项 preflight；稳定码映射 `NO_HOLDINGS/HOLDING_QUOTES_UNAVAILABLE/MARKET_BREADTH_UNAVAILABLE/REVIEW_TRADE_DATE_UNAVAILABLE` |
-| `portfolio_quotes` | `portfolio.get_portfolio()` 真实调用完成时记录事件；Adapter 只读事件 | 不重新取行情 | `unavailable/SOURCE_NOT_INITIALIZED` | 事件文件损坏安全失败 | 无持仓时权威 `data_status=normal`，但 gate 另行阻断 | 当次 `data_status=partial` 记录 `SOURCE_PARTIAL` | 交易时段 300 秒 | 最近真实 gate 评估使用相同覆盖结论；健康中心不重算 |
-| `quotes` | `astock.tencent_quote()` 真实调用边界记录事件；Adapter 只读事件 | 不构造股票池，不调用行情源 | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED` | 当次请求空响应由业务路径记录 `SOURCE_UNAVAILABLE` | 返回部分请求代码时记录 `SOURCE_PARTIAL`，覆盖数不持久化 | 交易时段 300 秒 | 不直接；持仓专用覆盖由 `portfolio_quotes` 表达 |
-| `announcements` | `astock.announcements()` 真实调用边界记录事件 | 不读取 `_ANN_CACHE` 私有内容，不联网 | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED` | 合法空列表是 normal | 业务路径明确部分结果时才记录 `SOURCE_PARTIAL` | 86400 秒 | 不阻断 |
-| `financials` | `astock.financials()` 真实调用边界记录事件 | 不读取 `_FIN_CACHE` 私有内容，不联网 | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED` | 结构有效但无已披露指标为 partial，不假装 unavailable | 关键财务字段缺失时记录 `SOURCE_PARTIAL` | 604800 秒 | 不阻断 |
-| `news_radar` | 只读 `newsradar.CACHE_FILE`；解析现有 `generated_at/stats` | 不调用 `get_radar()`，避免 skeleton 混淆；不刷新 | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED` | 成功缓存且 items 为 0 仍可 normal | `failed_sources>0` 且小于 total；全部失败 unavailable | 86400 秒 | 不阻断 |
-| `sector_research` | `get_sector_dynamic_data()` 真实调用完成后记录聚合事件；Adapter 只读事件 | 不调用板块动态数据和研报发现 | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED` | 注册板块暂无结果不是损坏 | 当次 status=partial 记录 `SOURCE_PARTIAL` | 86400 秒 | 不阻断 |
-| `my_reports` | `myreports._load_index_normalized()` 的只读等价入口；实现时新增公开只读摘要函数，禁止迁移/回写 | 文件存在时只读校验索引，聚合 count/max(imported_at) | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED` | 合法空索引 normal，coverage 0/0 | 索引合法但部分文件缺失为 partial | 不自动 stale | 不阻断 |
-| `watchlist_portfolio_storage` | `watchlist_store.get_watchlist_status()`；持仓使用只读结构校验，不调用带行情的 getter | 读取 JSON，不刷新、不迁移、不写备份 | 两者均未配置：`unavailable/SOURCE_NOT_INITIALIZED`；其中一个有效则 partial | 任一权威文件损坏且另一个有效为 partial；两者均不可读为 unavailable | 已初始化的空自选/空持仓 normal；gate 另行解释无持仓 | 两个子存储一好一坏/未配置 | 不自动 stale | 只将现有“无持仓/持仓损坏”映射给 gate；自选股不阻断 |
-| `evidence_ledger` | `evidence_thesis_store.read_transaction()` 或等价 `mode=ro` 摘要查询 | 只读 schema version、integrity、evidence/thesis count 和最大 updated_at | `unavailable/SOURCE_NOT_INITIALIZED`；不得初始化 DB | `SOURCE_CORRUPTED` 或 `SOURCE_SCHEMA_INCOMPATIBLE` | 已初始化空库 normal，coverage 0/0 | schema 可读但单项计数查询失败不降级吞错，整体 unavailable | 不自动 stale | 不阻断 |
+| `daily_review` | `daily_review._cached_review()` 与 `daily_review_cache.load_latest_review()`；不得调用 generate | 先读有效内存结果，再读最近成功磁盘缓存 | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED`；Adapter 需区分文件存在但 loader 拒绝 | 已初始化的合法空组件按现有 status | 直接使用权威顶层 status | `cache_meta` 同义规则；磁盘结果 stale；交易日回退规则 | 固定 `blocks_advice=false, block_reason=null`；详情说明它是 preflight 输入 |
+| `portfolio_advice_gate` | `portfolio_advice_service` 现有 preflight 的最后真实事件；同时读取依赖观察时间 | 不调用 prepare/generate；读取最近真实 gate 评估 | `unavailable/SOURCE_NOT_INITIALIZED`，`blocks_advice=false`，页面显示尚未评估 | 事件文件损坏时 status unavailable，但不伪造业务阻断 | `NO_HOLDINGS` 是成功完成的业务评估 | gate 运行健康不产生 partial；业务允许或阻断均为 normal | 300 秒，或持仓文件、portfolio quotes、daily review 更新 | 唯一可输出建议字段；四项稳定业务码映射最近 gate 结论 |
+| `portfolio_quotes` | `portfolio.get_portfolio()` 真实调用完成时记录事件；Adapter 只读事件 | 不重新取行情 | `unavailable/SOURCE_NOT_INITIALIZED` | 事件文件损坏安全失败 | 无持仓时权威 `data_status=normal`，但 gate 另行评估 | 当次 `data_status=partial` 记录 `SOURCE_PARTIAL` | 交易时段 300 秒 | 固定 `false/null`；详情说明它是 preflight 输入 |
+| `quotes` | `astock.tencent_quote()` 真实调用边界记录事件；Adapter 只读事件 | 不构造股票池，不调用行情源 | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED` | 当次请求空响应由业务路径记录 `SOURCE_UNAVAILABLE` | 返回部分请求代码时记录 `SOURCE_PARTIAL`，覆盖数不持久化 | 交易时段 300 秒 | 固定 `false/null` |
+| `announcements` | `astock.announcements()` 真实调用边界记录事件 | 不读取 `_ANN_CACHE` 私有内容，不联网 | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED` | 合法空列表是 normal | 业务路径明确部分结果时才记录 `SOURCE_PARTIAL` | 86400 秒 | 固定 `false/null` |
+| `financials` | `astock.financials()` 真实调用边界记录事件 | 不读取 `_FIN_CACHE` 私有内容，不联网 | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED` | 结构有效但无已披露指标为 partial，不假装 unavailable | 关键财务字段缺失时记录 `SOURCE_PARTIAL` | 604800 秒 | 固定 `false/null` |
+| `news_radar` | 只读 `newsradar.CACHE_FILE`；解析现有 `generated_at/stats` | 不调用 `get_radar()`，避免 skeleton 混淆；不刷新 | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED` | 成功缓存且 items 为 0 仍可 normal | `failed_sources>0` 且小于 total；全部失败 unavailable | 86400 秒 | 固定 `false/null` |
+| `sector_research` | `get_sector_dynamic_data()` 真实调用完成后记录聚合事件；Adapter 只读事件 | 不调用板块动态数据和研报发现 | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED` | 注册板块暂无结果不是损坏 | 当次 status=partial 记录 `SOURCE_PARTIAL` | 86400 秒 | 固定 `false/null` |
+| `my_reports` | `myreports._load_index_normalized()` 的只读等价入口；实现时新增公开只读摘要函数，禁止迁移/回写 | 文件存在时只读校验索引，聚合 count/max(imported_at) | `unavailable/SOURCE_NOT_INITIALIZED` | `unavailable/SOURCE_CORRUPTED` | 合法空索引 normal，coverage 0/0 | 索引合法但部分文件缺失为 partial | 不自动 stale | 固定 `false/null` |
+| `watchlist_portfolio_storage` | `watchlist_store.get_watchlist_status()`；持仓使用只读结构校验，不调用带行情的 getter | 读取 JSON，不刷新、不迁移、不写备份 | 两者均未配置：`unavailable/SOURCE_NOT_INITIALIZED`；其中一个有效则 partial | 任一权威文件损坏且另一个有效为 partial；两者均不可读为 unavailable | 已初始化的空自选/空持仓 normal；gate 另行解释无持仓 | 两个子存储一好一坏/未配置 | 不自动 stale | 固定 `false/null`；详情说明持仓是 preflight 输入 |
+| `evidence_ledger` | `evidence_thesis_store.read_transaction()` 或等价 `mode=ro` 摘要查询 | 只读 schema version、integrity、evidence/thesis count 和最大 updated_at | `unavailable/SOURCE_NOT_INITIALIZED`；不得初始化 DB | `SOURCE_CORRUPTED` 或 `SOURCE_SCHEMA_INCOMPATIBLE` | 已初始化空库 normal，coverage 0/0 | schema 可读但单项计数查询失败不降级吞错，整体 unavailable | 不自动 stale | 固定 `false/null` |
 
 ## 9. 持久化决策
 
@@ -383,49 +389,87 @@ schema：data-health-events.v1
 
 ### 10.1 单来源事件归一化
 
-对最小事件来源：
+下列通用状态机适用于 `portfolio_quotes/quotes/announcements/financials/sector_research`。`portfolio_advice_gate` 的 error code 表示业务结论而非运行错误，必须使用第 13 节的专用映射：成功完成评估的允许与阻断均为 status normal。
 
 ```text
 无记录
   → unavailable + SOURCE_NOT_INITIALIZED
 
-last_error_code == SOURCE_PARTIAL
-且 last_success_at 存在
-  → partial
+存在 last_error_at，且不存在 last_success_at
+  → hard error: unavailable
+  → SOURCE_PARTIAL / SOURCE_DEGRADED: unavailable
+    （没有可用成功结果，不能称为部分可用）
 
-last_error_at 晚于 last_success_at
-且 last_error_code != SOURCE_PARTIAL
-  → unavailable
-
-last_success_at 存在
-且不存在更晚失败
+last_success_at > last_error_at
   → normal
+  → 保留历史 last_error_code/last_error_at 供详情展示，
+    但旧错误不决定当前质量状态
+
+last_error_at >= last_success_at
+且 last_error_code == SOURCE_PARTIAL
+  → partial
+  → is_degraded = false
+
+last_error_at >= last_success_at
+且 last_error_code == SOURCE_DEGRADED
+  → partial
+  → is_degraded = true
+
+last_error_at >= last_success_at
+且为其他错误码
+  → unavailable
 ```
+
+两个时间字符串必须先解析为带时区 UTC datetime，再比较；无效时间 fail-closed 为 `unavailable + SOURCE_CORRUPTED`，不得按字符串静默排序。相同时间戳时最后写入的 `SOURCE_PARTIAL/SOURCE_DEGRADED` 优先。`observed_at=max(last_success_at,last_error_at)`。完整成功可以保留历史错误，但只要成功时间更新得更晚，当前质量就恢复 normal。
+
+状态转移表：
+
+| 转移 | 事件结果 | 当前状态 |
+|---|---|---|
+| 未初始化 → 成功 | 仅 `last_success_at` | normal |
+| 未初始化 → 失败 | 仅 `last_error_at` | unavailable；partial/degraded 也因无成功结果而 unavailable |
+| 成功 → partial | 同时写成功与 `SOURCE_PARTIAL` 错误时间 | partial，`is_degraded=false` |
+| partial → 完整成功 | 更新为更晚 `last_success_at`，保留历史错误 | normal |
+| 成功 → degraded | 同时写成功与 `SOURCE_DEGRADED` 错误时间 | partial，`is_degraded=true` |
+| degraded → 完整成功 | 更新为更晚 `last_success_at`，保留历史错误 | normal |
+| 成功 → hard failure | 更新更晚 `last_error_at` | unavailable |
+| hard failure → 完整成功 | 更新更晚 `last_success_at`，保留历史错误 | normal |
 
 `is_stale` 在上述结果之后独立计算。事件文件整体损坏时，依赖该文件的来源分别返回 `SOURCE_CORRUPTED`；已有权威文件 Adapter 不受影响。
 
 ### 10.2 总体状态
 
+先区分：
+
+```text
+initialized_items：last_error_code != SOURCE_NOT_INITIALIZED
+not_initialized_items：last_error_code == SOURCE_NOT_INITIALIZED
+```
+
 聚合顺序固定为：
 
 ```python
-if any(item.blocks_advice and item.status == "unavailable" for item in items):
+initialized = [
+    item for item in items
+    if item.last_error_code != "SOURCE_NOT_INITIALIZED"
+]
+
+if not initialized:
+    overall_status = "unavailable"
+elif all(item.status == "unavailable" for item in initialized):
     overall_status = "unavailable"
 elif any(
-    item.blocks_advice and (item.status == "partial" or item.is_stale)
-    for item in items
-):
-    overall_status = "partial"
-elif any(
     item.status in {"partial", "unavailable"} or item.is_stale
-    for item in items
+    for item in initialized
 ):
     overall_status = "partial"
 else:
     overall_status = "normal"
 ```
 
-全局 `blocks_advice` 不是从 `overall_status` 推导，而是：
+未使用的可选来源不会永久拖低 overall status；11 个来源全部未初始化时为 unavailable；存在已初始化来源但它们全部 unavailable 时仍为 unavailable。`portfolio_advice_gate` 的允许或阻断不参与 overall status 计算。
+
+全局 `blocks_advice` 不是从 `overall_status` 推导，并且只能来自 `portfolio_advice_gate`：
 
 ```text
 最近一次现有 portfolio advice gate 明确阻断 → true
@@ -433,7 +477,7 @@ else:
 尚未运行 gate                         → false，并显示“尚未评估”
 ```
 
-这意味着 `overall_status=partial` 时可能仍允许建议，`overall_status=normal` 也不用于替代下一次建议请求中的实时 gate 检查。
+其余十个 Adapter 必须固定 `blocks_advice=false, block_reason=null`。`block_reasons` 也只能包含最近一次 `portfolio_advice_gate` 的稳定业务结论。这意味着 `overall_status=partial` 时可能仍允许建议，`overall_status=normal` 也不用于替代下一次建议请求中的实时 gate 检查。
 
 ## 11. API 设计
 
@@ -448,7 +492,7 @@ else:
 | `is_stale` | bool | `true/false` |
 | `blocks_advice` | bool | `true/false` |
 
-未知 `module` 或非法枚举/布尔值返回 422。筛选只影响 `items` 与筛选后 `summary`；顶层 `overall_status`、`blocks_advice` 和 `block_reasons` 始终基于完整 11 个来源，防止筛选改变全局结论。
+未知 `module` 或非法枚举/布尔值返回 422。筛选只影响 `items`；`summary` 仍统计完整 11 个来源，顶层 `overall_status`、`blocks_advice` 和 `block_reasons` 也始终基于完整 11 个来源，防止筛选改变全局结论。
 
 响应：
 
@@ -468,7 +512,8 @@ else:
       "normal": 5,
       "partial": 2,
       "unavailable": 4,
-      "stale": 3
+      "stale": 3,
+      "not_initialized": 2
     },
     "items": []
   }
@@ -498,7 +543,19 @@ else:
 }
 ```
 
-未知 `source_id` 返回 404。内部异常统一映射为安全 `SOURCE_UNAVAILABLE` 记录或 500 通用 detail；不得返回 traceback、绝对路径或 SQLite 原始文本。
+未知 `source_id` 返回 404。异常边界固定为：
+
+```text
+单个 Adapter 的可预期读取失败
+  → 该来源返回 unavailable + 稳定安全错误码
+  → 不影响其余来源
+
+Adapter 注册表、响应序列化或聚合框架自身异常
+  → HTTP 500
+  → {"detail": "数据健康服务暂不可用"}
+```
+
+编程错误不得伪装成 `SOURCE_UNAVAILABLE`。任何路径都不得返回 traceback、绝对路径或 SQLite 原始文本。
 
 ### 11.3 明确不提供 Refresh API
 
@@ -554,6 +611,8 @@ MVP 不提供 `POST /api/data-health/refresh`。数据刷新继续使用已有�
 - 首次加载显示 skeleton，不用“正常”占位；
 - API 加载失败显示“数据健康服务暂不可用”，不覆盖上一次成功页面数据；
 - 11 个来源均未初始化时显示引导文字，但仍展示每个来源的 `SOURCE_NOT_INITIALIZED`；
+- `is_cached/is_degraded=true` 显示对应标签，`false` 不显示，`null` 只在详情显示“当前来源未提供该信息”；不得把 `null` 展示为“实时数据”或“未降级”；
+- 建议区同时显示“最近一次评估结果”“该评估是否已经陈旧”“下一次生成仍会重新执行实时 preflight”；gate stale 只标记评估时效，不改写最近允许/阻断结论；
 - 筛选在 URL query 中持久化，非法 query 由前端清理为默认值，API 仍保持 422 契约；
 - 页面没有刷新数据源按钮；仅可重新读取健康 API。
 
@@ -579,14 +638,20 @@ portfolio_advice_service 现有 preflight gate
 portfolio_advice_gate Adapter
                   │
                   ▼
-blocks_advice / block_reason（只读展示）
+运行健康 status + 业务结论 blocks_advice / block_reason（只读展示）
 ```
 
 实现约束：
 
 - 将现有四项 gate 结果映射为稳定错误码，但不修改判断条件或异常类型；
+- gate 成功完成 preflight 评估时，无论业务结论是允许还是阻断，`status=normal`；`NO_HOLDINGS` 是有效业务评估结果，因此为 `status=normal, blocks_advice=true`；
+- 尚未评估时为 `status=unavailable, last_error_code=SOURCE_NOT_INITIALIZED, blocks_advice=false`，页面显示“尚未评估”；
+- gate 业务阻断码可复用事件记录的 `last_error_code`，但这些代码表示最近业务结论，不代表事件存储损坏；
 - 只有实际持仓建议 preflight 执行时记录 gate 事件；
 - 健康中心不得为了更新 gate 状态调用 preflight；
+- 只有 `portfolio_advice_gate` 可以输出 `blocks_advice/block_reason`；其他十个 Adapter 即使自身 unavailable/partial 也固定为 `false/null`，仅在详情说明“该来源是 preflight 输入之一，最终是否阻断以最近一次 gate 评估为准”；
+- gate `is_stale=true` 当且仅当当前时间超过 `observed_at` 300 秒、持仓文件 mtime、`portfolio_quotes.observed_at` 或 `daily_review.observed_at` 中任一晚于 gate `observed_at`；
+- gate stale 不自动改变 `blocks_advice/block_reason`；
 - 模型供应商、模型输出和结果持久化错误不属于市场数据 gate，不映射为 `blocks_advice`；
 - `overall_status != normal` 不能作为新 gate；
 - 每次实际生成建议仍执行原有实时 gate，健康页面最后状态不提供放行保证。
@@ -660,6 +725,20 @@ backend/tests/test_data_health_api.py
 16. 事件成功、部分、失败的原子更新；
 17. 事件写失败不影响原业务结果；
 18. 事件 schema 拒绝额外字段，证明没有业务数据落盘。
+19. partial 后完整成功恢复 normal，历史错误仍保留；
+20. degraded 后完整成功恢复 normal；
+21. 当前有效 `SOURCE_DEGRADED` 映射 partial + `is_degraded=true`；
+22. 相同时间戳的 partial/degraded 事件优先，无效时间 fail-closed；
+23. 11 个来源全部未初始化时 overall unavailable；
+24. 部分来源未初始化、其余已初始化来源全部正常时 overall normal；
+25. 所有已初始化来源 unavailable 时 overall unavailable；
+26. `NO_HOLDINGS` 映射 gate status normal + `blocks_advice=true`；
+27. daily review unavailable、portfolio quotes partial 均不得直接设置 `blocks_advice`；
+28. gate 任一依赖观察时间更新后 `is_stale=true`，但业务结论不变；
+29. 损坏文件 + 成功业务调用：业务成功且事件文件内容、size、mtime 不变；
+30. 高版本文件 + 失败业务调用：原业务失败语义不变且事件文件不变；
+31. 含额外字段的文件不被下一次写入静默清洗；
+32. 并发更新不同 `source_id` 不丢失任何已提交事件。
 
 只读测试必须在调用前后比较：
 
@@ -689,6 +768,8 @@ SQLite 表集合
 - 未知 `source_id` 返回 404；
 - 非法 `module/status/is_stale/blocks_advice` 返回 422；
 - 筛选不改变全局状态与全局 gate；
+- 单 Adapter 可预期读取失败只降级该来源，其他来源继续返回；
+- 注册表、序列化或聚合框架异常固定返回 HTTP 500 和“数据健康服务暂不可用”；
 - 内部异常不泄漏敏感信息；
 - 两个 GET 不创建事件文件、业务数据库、目录或表。
 
@@ -705,9 +786,12 @@ frontend/tests/e2e/data-health-real.browser.mjs
 
 - 正常、部分可用、不可用的可见文字；
 - stale、缓存、降级标签；
+- cache/degraded 为 `null` 时详情显示“当前来源未提供该信息”，列表不得显示“实时数据”；
 - 交易日、截止时间、最近成功时间；
 - 覆盖数量和“未提供”；
 - 建议允许、阻断、尚未评估；
+- `NO_HOLDINGS` 显示为已完成评估且阻断，不显示为数据源运行失败；
+- gate 依赖更新后同时显示最近结论与“评估已陈旧”；
 - 多个阻断原因；
 - 空系统引导；
 - 加载失败保留旧数据；
@@ -760,7 +844,7 @@ E2E 不 mock `/api/data-health`：
 | 无完整交易日历 | 节假日可能误标 stale | 使用保守规则、详情披露限制，不误判损坏 |
 | 事件写入失败 | 最近状态缺失 | 不影响业务；健康显示未初始化或旧观察状态 |
 | 最后一次成功后又失败 | 用户误以为仍正常 | 比较 error/success 时间，失败更新为 unavailable；旧业务数据若权威模块仍可读才允许 partial/degraded |
-| 多进程写 JSON | 丢事件 | MVP 单实例假设下进程锁+原子替换；多实例部署不在 MVP，未来再换专用存储 |
+| 多进程写 JSON | 丢事件 | MVP 明确只支持单应用实例/单 Python 进程；仅使用线程锁，不宣称跨进程安全；多 worker 不在支持范围 |
 | 健康页面最后 gate 与下一次生成时刻不同 | 放行误解 | 显示“最近评估”，每次生成仍执行现有 gate；gate 记录有 300 秒 stale |
 | Adapter 意外调用初始化函数 | GET 产生副作用 | 文件/表/mtime 前后对比测试和只读 SQLite URI |
 | 一个事件文件损坏影响多个来源 | 多来源同时 unavailable | 每个来源返回安全损坏状态；不影响直接读取权威状态的 Adapter |
@@ -774,6 +858,9 @@ E2E 不 mock `/api/data-health`：
 - **是否保存错误摘要？** 不保存；由稳定 error_code 映射。
 - **是否保存覆盖明细？** 不保存；仅在已有权威结果可读时即时填充统一字段。
 - **是否由 overall_status 决定建议？** 否；继续使用现有 gate。
+- **哪些 Adapter 可写建议字段？** 只有 `portfolio_advice_gate`；其他十个固定 `false/null`。
+- **gate 阻断是否代表运行异常？** 否；成功评估出的允许和阻断均为 status normal。
+- **缓存/降级未知如何表示？** `null`，不得解释为实时或未降级。
 - **首批范围？** 固定 11 个 Adapter。
 - **首批页面入口？** 每日复盘与我的持仓。
 - **是否新增刷新 API？** 否。
@@ -795,6 +882,9 @@ E2E 不 mock `/api/data-health`：
 - [x] API 响应与筛选语义明确；
 - [x] 总体状态算法确定；
 - [x] 持仓建议 gate 保持现有权威；
+- [x] 仅 `portfolio_advice_gate` 可输出建议阻断字段，gate 运行健康与业务结论已分离；
+- [x] 缓存/降级采用 `true/false/null`，未知不伪装为实时；
+- [x] 事件写入对损坏、高版本、额外字段和未知来源 fail-closed；
 - [x] 前端 MVP 和首批页面入口明确；
 - [x] 安全错误边界和稳定错误码明确；
 - [x] 真实后端 E2E 不 mock 聚合 API；
@@ -806,11 +896,15 @@ E2E 不 mock `/api/data-health`：
 
 1. 两个 GET 在空系统、缺文件和损坏场景都不创建或修改任何文件、目录、表或缓存；
 2. 11 个 Adapter 均返回结构完整的 `DataHealthRecord`；
-3. 状态、stale、缓存、降级和覆盖语义彼此独立；
-4. 现有持仓建议 gate 的四项条件和业务行为不变；
+3. 状态、stale、缓存、降级和覆盖语义彼此独立，缓存/降级未知均为 `null`；
+4. 现有持仓建议 gate 的四项条件和业务行为不变，且仅该 Adapter 可输出建议字段；
 5. 事件文件只包含批准的四个字段，无业务响应和原始异常；
 6. `/data-health` 同时以文字和视觉标识展示状态；
 7. `/daily-review`、`/portfolio` 只增加轻量入口，不删除现有数据；
-8. 未知来源 404、非法筛选 422、内部异常不泄密；
+8. 未知来源 404、非法筛选 422；Adapter 可预期失败局部隔离，框架异常固定安全 500；
 9. 真实 E2E 验证 normal、partial、stale、unavailable 和建议阻断；
-10. 后端离线测试、前端单元测试、前端构建和 Playwright E2E 全部通过。
+10. 后端离线测试、前端单元测试、前端构建和 Playwright E2E 全部通过；
+11. partial/degraded 可由更晚完整成功恢复 normal，历史错误仍可审计；
+12. 全部未初始化、可选未初始化和已初始化全不可用三种 overall 语义均通过测试；
+13. 损坏、高版本或额外字段事件文件不会被下一次业务调用覆盖或清洗；
+14. gate 依赖更新只将最近评估标 stale，不篡改允许/阻断结论。
