@@ -309,7 +309,7 @@ def get_portfolio() -> dict:
         }
 
     closed = d.get("closed", [])
-    return {
+    result = {
         "holdings": rows,
         "totals": totals,
         "closed": closed,
@@ -319,6 +319,18 @@ def get_portfolio() -> dict:
         "data_status": data_status,
         "quote_coverage": quote_coverage,
     }
+    # 数据健康：记录持仓行情覆盖观察（失败不影响业务结果）
+    try:
+        import data_health_event_store as _dhes
+        if data_status == "normal":
+            _dhes.safe_call(_dhes.record_success, "portfolio_quotes")
+        elif data_status == "partial":
+            _dhes.safe_call(_dhes.record_partial, "portfolio_quotes")
+        else:
+            _dhes.safe_call(_dhes.record_failure, "portfolio_quotes", "SOURCE_UNAVAILABLE")
+    except Exception:
+        pass
+    return result
 
 
 def _refresh_snapshot() -> None:
