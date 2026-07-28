@@ -234,3 +234,86 @@ def test_same_source_monotonic_under_concurrency(events_dir):
     assert len(times) == 60
     assert times == sorted(times)
     assert len(set(times)) == 60
+
+
+def _write_raw(events_dir, payload: dict):
+    path = Path(store.events_path())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_cross_source_error_code_rejected(events_dir):
+    with pytest.raises(store.DataHealthEventStoreError):
+        store.record_failure("quotes", "NO_HOLDINGS")
+    with pytest.raises(store.DataHealthEventStoreError):
+        store.record_failure("portfolio_advice_gate", "SOURCE_PARTIAL")
+
+
+def test_unpaired_error_fields_rejected(events_dir):
+    path = _write_raw(events_dir, {
+        "schema_version": store.SCHEMA_VERSION,
+        "events": {
+            "quotes": {
+                "source_id": "quotes",
+                "last_success_at": "2026-07-28T01:00:00.000000Z",
+                "last_error_at": None,
+                "last_error_code": "SOURCE_PARTIAL",
+            }
+        },
+    })
+    before = path.read_text(encoding="utf-8")
+    st = path.stat()
+    with pytest.raises(store.DataHealthEventStoreError):
+        store.record_success("quotes")
+    assert path.read_text(encoding="utf-8") == before
+    assert path.stat().st_size == st.st_size
+    assert path.stat().st_mtime_ns == st.st_mtime_ns
+
+    path2 = _write_raw(events_dir, {
+        "schema_version": store.SCHEMA_VERSION,
+        "events": {
+            "quotes": {
+                "source_id": "quotes",
+                "last_success_at": "2026-07-28T01:00:00.000000Z",
+                "last_error_at": "2026-07-28T01:00:00.000000Z",
+                "last_error_code": None,
+            }
+        },
+    })
+    before2 = path2.read_text(encoding="utf-8")
+    st2 = path2.stat()
+    with pytest.raises(store.DataHealthEventStoreError):
+        store.record_success("announcements")
+    assert path2.read_text(encoding="utf-8") == before2
+    assert path2.stat().st_mtime_ns == st2.st_mtime_ns
+
+
+def test_non_canonical_utc_rejected(events_dir):
+    bad_times = [
+        "2026-07-28 09:30:00",
+        "2026-07-28T09:30:00",
+        "2026-07-28T01:00:00+08:00",
+        "2026-07-28T01:00:00Z",  # 无微秒
+        "",
+        "not-a-date",
+    ]
+    for bad in bad_times:
+        path = _write_raw(events_dir, {
+            "schema_version": store.SCHEMA_VERSION,
+            "events": {
+                "quotes": {
+                    "source_id": "quotes",
+                    "last_success_at": bad,
+                    "last_error_at": None,
+                    "last_error_code": None,
+                }
+            },
+        })
+        before = path.read_text(encoding="utf-8")
+        st = path.stat()
+        with pytest.raises(store.DataHealthEventStoreError):
+            store.record_success("quotes")
+        assert path.read_text(encoding="utf-8") == before
+        assert path.stat().st_size == st.st_size
+        assert path.stat().st_mtime_ns == st.st_mtime_ns

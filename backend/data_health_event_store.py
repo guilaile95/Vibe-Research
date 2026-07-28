@@ -28,26 +28,36 @@ EVENT_SOURCE_IDS = frozenset({
     "sector_research",
 })
 
-# 允许持久化的 error_code（不含 Adapter 合成的 SOURCE_NOT_INITIALIZED / SOURCE_STALE）
-ALLOWED_PERSISTED_ERROR_CODES = frozenset({
-    "SOURCE_PARTIAL",
-    "SOURCE_DEGRADED",
-    "SOURCE_UNAVAILABLE",
-    "SOURCE_CORRUPTED",
-    "SOURCE_SCHEMA_INCOMPATIBLE",
-    "SOURCE_TIMEOUT",
-    "NO_HOLDINGS",
-    "HOLDING_QUOTES_UNAVAILABLE",
-    "MARKET_BREADTH_UNAVAILABLE",
-    "REVIEW_TRADE_DATE_UNAVAILABLE",
-})
-
 GATE_BUSINESS_CODES = frozenset({
     "NO_HOLDINGS",
     "HOLDING_QUOTES_UNAVAILABLE",
     "MARKET_BREADTH_UNAVAILABLE",
     "REVIEW_TRADE_DATE_UNAVAILABLE",
 })
+
+# Gate 可持久化 error_code
+GATE_ALLOWED_ERROR_CODES = GATE_BUSINESS_CODES | frozenset({
+    "SOURCE_TIMEOUT",
+    "SOURCE_UNAVAILABLE",
+})
+
+# 非 Gate 事件来源可持久化 error_code（禁止四项 Gate 业务码）
+NON_GATE_ALLOWED_ERROR_CODES = frozenset({
+    "SOURCE_PARTIAL",
+    "SOURCE_DEGRADED",
+    "SOURCE_UNAVAILABLE",
+    "SOURCE_CORRUPTED",
+    "SOURCE_SCHEMA_INCOMPATIBLE",
+    "SOURCE_TIMEOUT",
+})
+
+# 兼容旧名：全集（仅作文档/测试参考，校验走 source-specific）
+ALLOWED_PERSISTED_ERROR_CODES = GATE_ALLOWED_ERROR_CODES | NON_GATE_ALLOWED_ERROR_CODES
+
+# 规范 UTC：YYYY-MM-DDTHH:MM:SS.ffffffZ
+_CANONICAL_UTC_RE = __import__("re").compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$"
+)
 
 _RECORD_KEYS = frozenset({
     "source_id",
@@ -88,23 +98,30 @@ def _format_utc(dt: datetime) -> str:
 
 
 def parse_utc(value: str | None) -> datetime | None:
-    """解析存储中的 UTC ISO 时间；非法返回 None。"""
+    """仅接受规范 UTC：YYYY-MM-DDTHH:MM:SS.ffffffZ。非法返回 None。"""
     if value is None:
         return None
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str):
         return None
     s = value.strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
+    if not s or not _CANONICAL_UTC_RE.match(s):
+        return None
     try:
-        dt = datetime.fromisoformat(s)
+        dt = datetime(
+            int(s[0:4]), int(s[5:7]), int(s[8:10]),
+            int(s[11:13]), int(s[14:16]), int(s[17:19]),
+            int(s[20:26]),
+            tzinfo=timezone.utc,
+        )
     except (TypeError, ValueError):
         return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
     return dt
+
+
+def allowed_error_codes_for(source_id: str) -> frozenset[str]:
+    if source_id == "portfolio_advice_gate":
+        return GATE_ALLOWED_ERROR_CODES
+    return NON_GATE_ALLOWED_ERROR_CODES
 
 
 def _max_existing_time(rec: dict[str, Any]) -> datetime | None:
@@ -166,11 +183,18 @@ def _validate_record(source_id: str, rec: Any) -> dict[str, Any]:
     _validate_time_field(rec.get("last_success_at"))
     _validate_time_field(rec.get("last_error_at"))
     code = rec.get("last_error_code")
+    err_at = rec.get("last_error_at")
+    # error 字段必须成对：at is None ⇔ code is None
+    if (err_at is None) != (code is None):
+        raise DataHealthEventStoreError("error fields unpaired")
     if code is not None:
-        if not isinstance(code, str) or code not in ALLOWED_PERSISTED_ERROR_CODES:
+        if not isinstance(code, str):
             raise DataHealthEventStoreError("illegal error_code")
         if code == "SOURCE_NOT_INITIALIZED":
             raise DataHealthEventStoreError("illegal error_code")
+        allowed = allowed_error_codes_for(source_id)
+        if code not in allowed:
+            raise DataHealthEventStoreError("illegal error_code for source")
     # 至少一个时间字段有值
     if rec.get("last_success_at") is None and rec.get("last_error_at") is None:
         raise DataHealthEventStoreError("empty record times")
@@ -341,10 +365,12 @@ def record_failure(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Hard failure：只更新 last_error_at/code，保留 last_success_at。"""
-    if error_code not in ALLOWED_PERSISTED_ERROR_CODES:
-        raise DataHealthEventStoreError("illegal error_code")
     if error_code == "SOURCE_NOT_INITIALIZED":
         raise DataHealthEventStoreError("illegal error_code")
+    if source_id not in EVENT_SOURCE_IDS:
+        raise DataHealthEventStoreError("unknown source_id")
+    if error_code not in allowed_error_codes_for(source_id):
+        raise DataHealthEventStoreError("illegal error_code for source")
 
     def mut(rec: dict[str, Any], obs: datetime) -> None:
         rec["last_error_at"] = _format_utc(obs)

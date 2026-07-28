@@ -18,9 +18,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("VR_REPORTS_DIR", str(tmp_path / "myreports"))
     monkeypatch.setenv("VIBE_RESEARCH_EVIDENCE_THESIS_DB", str(tmp_path / "evidence_thesis.db"))
-    import newsradar
-    monkeypatch.setattr(newsradar, "CACHE_FILE", str(tmp_path / "radar.json"))
-    monkeypatch.setattr(newsradar, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("VIBE_RESEARCH_NEWS_RADAR_CACHE", str(tmp_path / "radar.json"))
     import portfolio as pf
     monkeypatch.setattr(pf, "PF_FILE", str(tmp_path / "portfolio.json"))
     monkeypatch.setattr(pf, "CACHE_DIR", str(tmp_path))
@@ -117,10 +115,19 @@ def test_invalid_filters_422(client):
     assert c.get("/api/data-health", params={"module": "不存在的模块"}).status_code == 422
     assert c.get("/api/data-health", params={"is_stale": "maybe"}).status_code == 422
     assert c.get("/api/data-health", params={"blocks_advice": "yes"}).status_code == 422
+    # strict bool: only true/false
+    for bad in ("1", "0", "yes", "no", "on", "off", ""):
+        assert c.get("/api/data-health", params={"is_stale": bad}).status_code == 422
+        assert c.get("/api/data-health", params={"blocks_advice": bad}).status_code == 422
     # comma module
     assert c.get("/api/data-health?module=a,b").status_code == 422
     # duplicate module
     assert c.get("/api/data-health?module=每日复盘&module=持仓建议").status_code == 422
+    # duplicate bool params
+    assert c.get("/api/data-health?is_stale=true&is_stale=false").status_code == 422
+    assert c.get("/api/data-health?blocks_advice=true&blocks_advice=false").status_code == 422
+    # comma bool
+    assert c.get("/api/data-health?is_stale=true,false").status_code == 422
 
 
 def test_source_detail(client):
@@ -178,3 +185,87 @@ def test_get_does_not_create_event_file(client):
     c.get("/api/data-health")
     c.get("/api/data-health/daily_review")
     assert not (root / "data_health_events.json").exists()
+
+
+def test_adapter_read_error_isolated(client, monkeypatch):
+    c, _ = client
+    import data_health_adapters as adapters
+
+    class BoomAdapter:
+        source_id = "quotes"
+        module = "个股行情"
+        display_name = "个股行情"
+
+        def read(self, context):
+            raise adapters.AdapterReadError("SOURCE_UNAVAILABLE")
+
+    real = adapters.build_adapters()
+    # replace quotes adapter only
+    patched = []
+    for ad in real:
+        if ad.source_id == "quotes":
+            patched.append(BoomAdapter())
+        else:
+            patched.append(ad)
+    monkeypatch.setattr(adapters, "get_adapters", lambda: patched)
+    r = c.get("/api/data-health")
+    assert r.status_code == 200
+    items = r.json()["data"]["items"]
+    assert len(items) == 11
+    by = {it["source_id"]: it for it in items}
+    assert by["quotes"]["status"] == "unavailable"
+    assert by["quotes"]["last_error_code"] == "SOURCE_UNAVAILABLE"
+    # others still present
+    assert by["daily_review"]["source_id"] == "daily_review"
+
+
+def test_adapter_programming_error_500(client, monkeypatch):
+    c, _ = client
+    import data_health_adapters as adapters
+
+    class BadAdapter:
+        source_id = "quotes"
+        module = "个股行情"
+        display_name = "个股行情"
+
+        def read(self, context):
+            raise AttributeError("programming bug")
+
+    real = adapters.build_adapters()
+    patched = [BadAdapter() if ad.source_id == "quotes" else ad for ad in real]
+    monkeypatch.setattr(adapters, "get_adapters", lambda: patched)
+    r = c.get("/api/data-health")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "数据健康服务暂不可用"
+    assert "programming bug" not in r.text
+    assert "AttributeError" not in r.text
+
+
+def test_invalid_record_500(client, monkeypatch):
+    c, _ = client
+    import data_health_adapters as adapters
+
+    class IncompleteAdapter:
+        source_id = "quotes"
+        module = "个股行情"
+        display_name = "个股行情"
+
+        def read(self, context):
+            return {"source_id": "quotes"}  # missing required fields
+
+    real = adapters.build_adapters()
+    patched = [IncompleteAdapter() if ad.source_id == "quotes" else ad for ad in real]
+    monkeypatch.setattr(adapters, "get_adapters", lambda: patched)
+    r = c.get("/api/data-health")
+    # invalid record raises RuntimeError → 500
+    assert r.status_code == 500
+    assert r.json()["detail"] == "数据健康服务暂不可用"
+
+
+def test_registry_error_500(client, monkeypatch):
+    c, _ = client
+    import data_health_adapters as adapters
+    monkeypatch.setattr(adapters, "get_adapters", lambda: [])  # not 11
+    r = c.get("/api/data-health")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "数据健康服务暂不可用"

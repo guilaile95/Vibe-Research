@@ -192,3 +192,46 @@ def test_cn_expected_trade_date_weekend():
     # convert: BJ is UTC+8 → Sunday 18:00
     d = svc.expected_cn_trade_date(now)
     assert d  # Friday before
+
+
+def _bj(y, m, d, hh, mm, ss=0):
+    """构造 Asia/Shanghai 墙钟对应的 UTC datetime。"""
+    from zoneinfo import ZoneInfo
+    return datetime(y, m, d, hh, mm, ss, tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(
+        timezone.utc
+    )
+
+
+def test_cn_trade_date_grace_15_00_to_15_30():
+    # 周二 15:10 + 周一数据 → fresh
+    now = _bj(2026, 7, 28, 15, 10)  # Tuesday
+    assert svc.is_stale_cn_trade_date("2026-07-27", None, now) is False
+    # 周二 15:30 + 周一数据 → stale
+    now2 = _bj(2026, 7, 28, 15, 30)
+    assert svc.is_stale_cn_trade_date("2026-07-27", None, now2) is True
+
+
+def test_cn_intraday_off_session_stale_rules():
+    # 周二收盘后 + 上周行情观察 → stale
+    now = _bj(2026, 7, 28, 16, 0)  # Tue after close
+    old = _bj(2026, 7, 21, 10, 0)  # previous week
+    assert svc.is_stale_cn_intraday_observation(old, now, 300) is True
+
+    # 周五收盘观察 + 周末 → fresh
+    fri_obs = _bj(2026, 7, 24, 14, 30)  # Friday
+    sat = _bj(2026, 7, 25, 12, 0)
+    assert svc.is_stale_cn_intraday_observation(fri_obs, sat, 300) is False
+
+    # 午休 + 当日上午观察 → fresh
+    lunch = _bj(2026, 7, 28, 12, 0)
+    morning = _bj(2026, 7, 28, 10, 0)
+    assert svc.is_stale_cn_intraday_observation(morning, lunch, 300) is False
+
+    # 午休 + 上一交易日观察 → stale
+    prev = _bj(2026, 7, 27, 10, 0)
+    assert svc.is_stale_cn_intraday_observation(prev, lunch, 300) is True
+
+    # 盘中超过 300 秒 → stale
+    session = _bj(2026, 7, 28, 10, 30)
+    old_sess = _bj(2026, 7, 28, 10, 20)  # 10 min earlier
+    assert svc.is_stale_cn_intraday_observation(old_sess, session, 300) is True

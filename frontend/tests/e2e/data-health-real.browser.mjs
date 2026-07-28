@@ -1,11 +1,19 @@
 /**
  * 数据健康中心 — 真实后端 E2E（禁止 mock /api/data-health）
+ * 所有 fixture 位于临时目录；不写仓库内 backend/.cache。
  */
 import { chromium } from "playwright";
 import { spawn } from "node:child_process";
 import {
-  mkdtempSync, rmSync, existsSync, readdirSync, createReadStream,
-  writeFileSync, mkdirSync, statSync, readFileSync,
+  mkdtempSync,
+  rmSync,
+  existsSync,
+  readdirSync,
+  createReadStream,
+  writeFileSync,
+  mkdirSync,
+  statSync,
+  readFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -19,14 +27,18 @@ const root = path.resolve(__dirname, "../../..");
 const frontendDist = path.join(root, "frontend", "dist");
 const backendDir = path.join(root, "backend");
 
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 async function waitHttp(url, attempts = 80) {
   for (let i = 0; i < attempts; i++) {
     try {
       const r = await fetch(url);
       if (r.ok || r.status < 500) return r;
-    } catch { /* retry */ }
+    } catch {
+      /* retry */
+    }
     await sleep(400);
   }
   throw new Error(`timeout waiting ${url}`);
@@ -101,11 +113,21 @@ function findChromium() {
           if (existsSync(exe)) return exe;
           const linux = join(base, d, "chrome-linux", "chrome");
           if (existsSync(linux)) return linux;
-          const mac = join(base, d, "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium");
+          const mac = join(
+            base,
+            d,
+            "chrome-mac",
+            "Chromium.app",
+            "Contents",
+            "MacOS",
+            "Chromium",
+          );
           if (existsSync(mac)) return mac;
         }
       }
-    } catch { /* next */ }
+    } catch {
+      /* next */
+    }
   }
   return undefined;
 }
@@ -119,12 +141,83 @@ function snapshotFs(rootDir) {
       if (name.isDirectory()) walk(p);
       else {
         const st = statSync(p);
-        files[path.relative(rootDir, p)] = { size: st.size, mtime: st.mtimeMs };
+        files[path.relative(rootDir, p)] = {
+          size: st.size,
+          mtimeNs: st.mtimeMs,
+        };
       }
     }
   };
   walk(rootDir);
   return files;
+}
+
+function assertFsUnchanged(before, after, label) {
+  const beforeKeys = Object.keys(before).sort();
+  const afterKeys = Object.keys(after).sort();
+  if (JSON.stringify(beforeKeys) !== JSON.stringify(afterKeys)) {
+    throw new Error(
+      `${label}: filesystem file set changed: ${JSON.stringify(beforeKeys)} vs ${JSON.stringify(afterKeys)}`,
+    );
+  }
+  for (const k of beforeKeys) {
+    if (before[k].size !== after[k].size) {
+      throw new Error(`${label}: file size changed: ${k}`);
+    }
+    if (before[k].mtimeNs !== after[k].mtimeNs) {
+      throw new Error(`${label}: file mtime changed: ${k}`);
+    }
+  }
+}
+
+function sqliteTables(dbPath) {
+  if (!existsSync(dbPath)) return [];
+  // Use python one-shot for portable table list without native sqlite3 binding in node
+  return null; // filled via python helper below
+}
+
+async function listSqliteTablesViaPython(dbPath, env) {
+  const { cmd, extraArgs } = getPythonConfig();
+  // drop uvicorn from extraArgs — getPythonConfig returns uvicorn args; use pure python
+  const pyCmd = env.PYTHON || (process.platform === "win32" ? "py" : "python3");
+  const pyArgs =
+    process.platform === "win32" && pyCmd === "py"
+      ? ["-3", "-c"]
+      : ["-c"];
+  const script = `
+import sqlite3, json, sys
+from pathlib import Path
+p = Path(r'''${dbPath.replace(/\\/g, "\\\\")}''')
+uri = p.resolve().as_uri() + "?mode=ro&immutable=1"
+conn = sqlite3.connect(uri, uri=True)
+rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
+conn.close()
+print(json.dumps([r[0] for r in rows]))
+`;
+  return new Promise((resolve, reject) => {
+    const proc = spawn(pyCmd, [...pyArgs, script], {
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    let err = "";
+    proc.stdout.on("data", (d) => {
+      out += d.toString();
+    });
+    proc.stderr.on("data", (d) => {
+      err += d.toString();
+    });
+    proc.on("exit", (code) => {
+      if (code !== 0) reject(new Error(`sqlite list failed: ${err || code}`));
+      else {
+        try {
+          resolve(JSON.parse(out.trim()));
+        } catch (e) {
+          reject(e);
+        }
+      }
+    });
+  });
 }
 
 function startBackend(env, port) {
@@ -146,7 +239,10 @@ function startBackend(env, port) {
     }, 45000);
     const onData = (msg) => {
       if (started) return;
-      if (msg.includes("Uvicorn running") || msg.includes("Application startup complete")) {
+      if (
+        msg.includes("Uvicorn running") ||
+        msg.includes("Application startup complete")
+      ) {
         started = true;
         clearTimeout(timeout);
         resolve(proc);
@@ -170,8 +266,31 @@ function startBackend(env, port) {
   });
 }
 
-function seedFixtures(dataDir) {
-  // daily review normal cache
+async function waitProcessExit(proc, ms = 15000) {
+  if (!proc || proc.killed || proc.exitCode != null) return;
+  return new Promise((resolve) => {
+    const t = setTimeout(() => {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        /* */
+      }
+      resolve();
+    }, ms);
+    proc.once("exit", () => {
+      clearTimeout(t);
+      resolve();
+    });
+    try {
+      proc.kill();
+    } catch {
+      clearTimeout(t);
+      resolve();
+    }
+  });
+}
+
+function seedFixtures(dataDir, radarPath, evidenceDb) {
   const review = {
     schema_version: "daily-review-cache-v0.1",
     saved_at: "2026-07-25T08:00:00+00:00",
@@ -194,15 +313,33 @@ function seedFixtures(dataDir) {
           region_boards: "normal",
         },
       },
-      market_environment: { indices: { data: [] }, global_indices: { data: [] }, breadth: { data: null } },
-      sector_rotation: { industry: { data: null }, concept: { data: null }, region: { data: null }, highlights: {} },
+      market_environment: {
+        indices: { data: [] },
+        global_indices: { data: [] },
+        breadth: { data: null },
+      },
+      sector_rotation: {
+        industry: { data: null },
+        concept: { data: null },
+        region: { data: null },
+        highlights: {},
+      },
       short_term_emotion: { data: null },
-      capital_activity: { turnover_top: { data: null }, total_amount: null, amount_valid_count: null, amount_top: [], high_turnover: [] },
+      capital_activity: {
+        turnover_top: { data: null },
+        total_amount: null,
+        amount_valid_count: null,
+        amount_top: [],
+        high_turnover: [],
+      },
     },
   };
-  writeFileSync(join(dataDir, "daily_review_latest.json"), JSON.stringify(review, null, 2), "utf8");
+  writeFileSync(
+    join(dataDir, "daily_review_latest.json"),
+    JSON.stringify(review, null, 2),
+    "utf8",
+  );
 
-  // events: quotes partial, gate blocked; announcements left uninitialized
   const obsPartial = "2026-07-28T01:00:00.000000Z";
   const obsGate = "2026-07-28T01:05:00.000000Z";
   const events = {
@@ -222,25 +359,75 @@ function seedFixtures(dataDir) {
       },
     },
   };
-  writeFileSync(join(dataDir, "data_health_events.json"), JSON.stringify(events, null, 2), "utf8");
+  writeFileSync(
+    join(dataDir, "data_health_events.json"),
+    JSON.stringify(events, null, 2),
+    "utf8",
+  );
 
-  // stale news radar — write into backend/.cache via env is hard; write under dataDir
-  // and rely on monkeypatch... For real E2E we put radar where newsradar expects:
-  // backend/.cache/radar.json — avoid polluting; instead inject via Python after start
-  // We'll use a companion seed script run with PYTHONPATH.
-  return { eventsPath: join(dataDir, "data_health_events.json") };
+  // stale news radar in temp path only
+  mkdirSync(dirname(radarPath), { recursive: true });
+  writeFileSync(
+    radarPath,
+    JSON.stringify({
+      generated_at: "2026-06-01 10:00",
+      recent_days: 7,
+      industries: [{ key: "ai", name: "AI", items: [{ title: "t" }] }],
+      stats: { industries: 1, total_sources: 10, "failed_sources": 0 },
+    }),
+    "utf8",
+  );
 }
 
-async function seedNewsRadar(dataDir) {
-  // Create radar cache under a path we control by writing to backend/.cache only if empty?
-  // Prefer: run python to write via newsradar.CACHE_FILE temporarily — but that pollutes.
-  // Write to VR-relative path won't work. Use process that patches:
-  // For E2E, write backend/.cache/radar.json with stale data and restore after.
+async function initEvidenceDb(evidenceDb, env) {
+  const pyCmd =
+    process.env.PYTHON || (process.platform === "win32" ? "py" : "python3");
+  const pyArgs =
+    process.platform === "win32" && pyCmd === "py" ? ["-3", "-c"] : ["-c"];
+  const script = `
+import sys
+sys.path.insert(0, r'''${backendDir.replace(/\\/g, "\\\\")}''')
+import evidence_thesis_store as s
+s.initialize_store(r'''${evidenceDb.replace(/\\/g, "\\\\")}''')
+print("ok")
+`;
+  await new Promise((resolve, reject) => {
+    const proc = spawn(pyCmd, [...pyArgs, script], {
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+      cwd: backendDir,
+    });
+    let err = "";
+    proc.stderr.on("data", (d) => {
+      err += d.toString();
+    });
+    proc.on("exit", (code) => {
+      if (code !== 0) reject(new Error(`init evidence db failed: ${err || code}`));
+      else resolve();
+    });
+  });
+}
+
+function assertNoSensitive(text, tempDir) {
+  for (const bad of [
+    "Traceback",
+    "sqlite3",
+    "TEST_SECRET",
+    "Authorization",
+  ]) {
+    if (text.includes(bad)) throw new Error(`sensitive leak: ${bad}`);
+  }
+  // do not require tempDir absence if path separators vary — check basename markers
+  if (text.includes("vr-data-health-e2e-")) {
+    throw new Error("response leaks temp directory name");
+  }
 }
 
 async function main() {
   if (!existsSync(frontendDist)) {
-    throw new Error(`Frontend dist not found: ${frontendDist}. Run 'npm run build' first.`);
+    throw new Error(
+      `Frontend dist not found: ${frontendDist}. Run 'npm run build' first.`,
+    );
   }
 
   const tempDir = mkdtempSync(join(tmpdir(), "vr-data-health-e2e-"));
@@ -248,31 +435,18 @@ async function main() {
   mkdirSync(reportsDir, { recursive: true });
   const evidenceDb = join(tempDir, "evidence_thesis.db");
   const reviewDb = join(tempDir, "daily_reviews.sqlite3");
+  const radarPath = join(tempDir, "radar", "radar.json");
 
-  seedFixtures(tempDir);
+  const env = {
+    VR_DATA_DIR: tempDir,
+    VR_REPORTS_DIR: reportsDir,
+    VIBE_RESEARCH_REVIEW_DB: reviewDb,
+    VIBE_RESEARCH_EVIDENCE_THESIS_DB: evidenceDb,
+    VIBE_RESEARCH_NEWS_RADAR_CACHE: radarPath,
+  };
 
-  // Stale news radar: place file and set NEWS_RADAR override via symlink — newsradar uses fixed CACHE_FILE.
-  // Write stale cache into backend/.cache with backup restore.
-  const radarCacheDir = path.join(backendDir, ".cache");
-  const radarFile = path.join(radarCacheDir, "radar.json");
-  let radarBackup = null;
-  let radarExisted = false;
-  mkdirSync(radarCacheDir, { recursive: true });
-  if (existsSync(radarFile)) {
-    radarExisted = true;
-    radarBackup = readFileSync(radarFile);
-  }
-  const oldGen = "2026-06-01 10:00";
-  writeFileSync(
-    radarFile,
-    JSON.stringify({
-      generated_at: oldGen,
-      recent_days: 7,
-      industries: [{ key: "ai", name: "AI", items: [{ title: "t" }] }],
-      stats: { industries: 1, total_sources: 10, failed_sources: 0 },
-    }),
-    "utf8",
-  );
+  seedFixtures(tempDir, radarPath, evidenceDb);
+  await initEvidenceDb(evidenceDb, env);
 
   const backendPort = await getFreePort();
   const frontendPort = await getFreePort();
@@ -283,50 +457,103 @@ async function main() {
   let browser;
   let frontendServer;
 
-  const env = {
-    VR_DATA_DIR: tempDir,
-    VR_REPORTS_DIR: reportsDir,
-    VIBE_RESEARCH_REVIEW_DB: reviewDb,
-    VIBE_RESEARCH_EVIDENCE_THESIS_DB: evidenceDb,
-  };
+  // ensure repo radar untouched baseline
+  const repoRadar = path.join(backendDir, ".cache", "radar.json");
+  const repoRadarExisted = existsSync(repoRadar);
+  const repoRadarBefore = repoRadarExisted
+    ? { size: statSync(repoRadar).size, mtime: statSync(repoRadar).mtimeMs }
+    : null;
 
   try {
     console.log("[E2E] Starting real FastAPI...");
     backend = await startBackend(env, backendPort);
     await waitHttp(`${apiUrl}/api/health`);
 
-    // API-level seed check (no mock)
+    // 预读表集合（immutable 只读，不改文件），再拍基线快照
+    const beforeTables = await listSqliteTablesViaPython(evidenceDb, env);
+    // Snapshot AFTER health probe + table probe, BEFORE any data-health GET
+    const beforeFs = snapshotFs(tempDir);
+    const beforeDbStat = statSync(evidenceDb);
+
+    console.log("[E2E] First GET /api/data-health");
     const healthRes = await fetch(`${apiUrl}/api/data-health`);
     if (!healthRes.ok) throw new Error(`data-health HTTP ${healthRes.status}`);
     const healthJson = await healthRes.json();
     const data = healthJson.data;
+
+    const afterFirstFs = snapshotFs(tempDir);
+    assertFsUnchanged(beforeFs, afterFirstFs, "after first list GET");
+    const afterFirstTables = await listSqliteTablesViaPython(evidenceDb, env);
+    if (JSON.stringify(beforeTables) !== JSON.stringify(afterFirstTables)) {
+      throw new Error("sqlite tables changed after first GET");
+    }
+    const afterFirstDb = statSync(evidenceDb);
+    if (
+      afterFirstDb.size !== beforeDbStat.size ||
+      afterFirstDb.mtimeMs !== beforeDbStat.mtimeMs
+    ) {
+      throw new Error("evidence db size/mtime changed after first GET");
+    }
+
+    // Hard assertions
     if (!data || !Array.isArray(data.items) || data.items.length !== 11) {
       throw new Error(`expected 11 items, got ${data?.items?.length}`);
-    }
-    if (data.blocks_advice !== true) throw new Error("expected gate blocks_advice");
-    const byId = Object.fromEntries(data.items.map((i) => [i.source_id, i]));
-    if (byId.quotes?.status !== "partial") throw new Error("quotes should be partial");
-    if (byId.announcements?.last_error_code !== "SOURCE_NOT_INITIALIZED") {
-      throw new Error("announcements should be not initialized");
-    }
-    if (byId.news_radar && byId.news_radar.is_stale !== true) {
-      console.warn("[E2E] news_radar is_stale expected true, got", byId.news_radar.is_stale, byId.news_radar);
-    }
-    if (byId.daily_review?.status !== "normal") {
-      throw new Error(`daily_review expected normal, got ${byId.daily_review?.status}`);
     }
     if (data.overall_status !== "partial") {
       throw new Error(`overall expected partial, got ${data.overall_status}`);
     }
-
-    // Sensitive leak check on API body
-    const bodyText = JSON.stringify(healthJson);
-    for (const bad of ["Traceback", "sqlite3", tempDir, "TEST_SECRET", "Authorization"]) {
-      if (bodyText.includes(bad)) throw new Error(`sensitive leak: ${bad}`);
+    if (data.blocks_advice !== true) {
+      throw new Error("expected gate blocks_advice=true");
+    }
+    const byId = Object.fromEntries(data.items.map((i) => [i.source_id, i]));
+    if (byId.daily_review?.status !== "normal") {
+      throw new Error(`daily_review expected normal, got ${byId.daily_review?.status}`);
+    }
+    if (byId.quotes?.status !== "partial") {
+      throw new Error(`quotes expected partial, got ${byId.quotes?.status}`);
+    }
+    if (byId.announcements?.last_error_code !== "SOURCE_NOT_INITIALIZED") {
+      throw new Error("announcements should be not initialized");
+    }
+    if (byId.news_radar?.is_stale !== true) {
+      throw new Error(
+        `news_radar is_stale expected true, got ${byId.news_radar?.is_stale}`,
+      );
+    }
+    if (byId.portfolio_advice_gate?.blocks_advice !== true) {
+      throw new Error("gate should block advice");
+    }
+    if (byId.portfolio_advice_gate?.last_error_code !== "HOLDING_QUOTES_UNAVAILABLE") {
+      throw new Error("gate error code mismatch");
     }
 
-    // Readonly snapshot before browser GETs
-    const beforeFs = snapshotFs(tempDir);
+    assertNoSensitive(JSON.stringify(healthJson), tempDir);
+
+    console.log("[E2E] Detail GET");
+    const detailRes = await fetch(`${apiUrl}/api/data-health/quotes`);
+    if (!detailRes.ok) throw new Error(`detail HTTP ${detailRes.status}`);
+    const detailJson = await detailRes.json();
+    const disc =
+      detailJson?.data?.calculation?.disclaimer ||
+      JSON.stringify(detailJson);
+    if (!String(disc).includes("不代表全部股票或板块均已验证")) {
+      throw new Error("missing request-scope disclaimer in detail");
+    }
+    assertNoSensitive(JSON.stringify(detailJson), tempDir);
+
+    const afterDetailFs = snapshotFs(tempDir);
+    assertFsUnchanged(beforeFs, afterDetailFs, "after detail GET");
+    const afterDetailTables = await listSqliteTablesViaPython(evidenceDb, env);
+    if (JSON.stringify(beforeTables) !== JSON.stringify(afterDetailTables)) {
+      throw new Error("sqlite tables changed after detail GET");
+    }
+    const afterDetailDb = statSync(evidenceDb);
+    if (
+      afterDetailDb.size !== beforeDbStat.size ||
+      afterDetailDb.mtimeMs !== beforeDbStat.mtimeMs
+    ) {
+      throw new Error("evidence db changed after detail GET");
+    }
 
     console.log("[E2E] Starting frontend static server...");
     frontendServer = await startStaticServer(frontendDist, frontendPort);
@@ -339,7 +566,6 @@ async function main() {
     const context = await browser.newContext({ baseURL: baseUrl });
     const page = await context.newPage();
 
-    // Proxy ALL /api/* to real backend — NO mock of data-health
     await page.route("**/api/**", async (route) => {
       const request = route.request();
       const url = request.url();
@@ -347,10 +573,7 @@ async function main() {
       const p = parsed.pathname + parsed.search;
       const headers = { ...request.headers() };
       delete headers["host"];
-      const init = {
-        method: request.method(),
-        headers,
-      };
+      const init = { method: request.method(), headers };
       if (request.method() !== "GET" && request.method() !== "HEAD") {
         init.body = request.postDataBuffer();
       }
@@ -367,7 +590,6 @@ async function main() {
     await page.goto("/data-health", { waitUntil: "networkidle" });
     await page.waitForSelector("text=数据健康", { timeout: 15000 });
 
-    // 11 sources visible by display names / cards
     const sourceNames = [
       "每日复盘",
       "持仓建议 Gate",
@@ -382,67 +604,71 @@ async function main() {
       "投资逻辑与证据账本",
     ];
     for (const name of sourceNames) {
-      const loc = page.getByText(name, { exact: false }).first();
-      await loc.waitFor({ timeout: 10000 });
+      await page.getByText(name, { exact: false }).first().waitFor({ timeout: 10000 });
     }
-
-    // overall partial + gate blocked text
     await page.getByText("部分可用", { exact: false }).first().waitFor();
     await page.getByText("当前阻止", { exact: false }).first().waitFor();
     await page.getByText("部分持仓缺少有效行情", { exact: false }).first().waitFor();
-
-    // open quotes detail for disclaimer
     await page.getByText("个股行情", { exact: true }).first().click();
-    await page.getByText("不代表全部股票或板块均已验证", { exact: false }).first().waitFor({ timeout: 10000 });
+    await page
+      .getByText("不代表全部股票或板块均已验证", { exact: false })
+      .first()
+      .waitFor({ timeout: 10000 });
 
-    // page should not show sensitive strings
     const pageText = await page.locator("body").innerText();
-    for (const bad of ["Traceback", "sqlite3", "TEST_SECRET"]) {
-      if (pageText.includes(bad)) throw new Error(`page leak: ${bad}`);
+    assertNoSensitive(pageText, tempDir);
+
+    const afterBrowserFs = snapshotFs(tempDir);
+    assertFsUnchanged(beforeFs, afterBrowserFs, "after browser");
+    const afterBrowserTables = await listSqliteTablesViaPython(evidenceDb, env);
+    if (JSON.stringify(beforeTables) !== JSON.stringify(afterBrowserTables)) {
+      throw new Error("sqlite tables changed after browser");
     }
-    if (pageText.includes(tempDir.replace(/\\/g, "\\"))) {
-      // path leak
-      throw new Error("page leaks temp path");
+    const afterBrowserDb = statSync(evidenceDb);
+    if (
+      afterBrowserDb.size !== beforeDbStat.size ||
+      afterBrowserDb.mtimeMs !== beforeDbStat.mtimeMs
+    ) {
+      throw new Error("evidence db changed after browser");
     }
 
-    // GET readonly: compare fs after
-    const afterFs = snapshotFs(tempDir);
-    const beforeKeys = Object.keys(beforeFs).sort();
-    const afterKeys = Object.keys(afterFs).sort();
-    if (JSON.stringify(beforeKeys) !== JSON.stringify(afterKeys)) {
-      throw new Error(`filesystem file set changed after GET: ${beforeKeys} vs ${afterKeys}`);
-    }
-    for (const k of beforeKeys) {
-      if (beforeFs[k].size !== afterFs[k].size) {
-        throw new Error(`file size changed: ${k}`);
+    // repo radar untouched
+    if (repoRadarExisted) {
+      const st = statSync(repoRadar);
+      if (
+        st.size !== repoRadarBefore.size ||
+        st.mtimeMs !== repoRadarBefore.mtime
+      ) {
+        throw new Error("repository backend/.cache/radar.json was modified");
       }
-      if (beforeFs[k].mtime !== afterFs[k].mtime) {
-        throw new Error(`file mtime changed: ${k}`);
-      }
-    }
-
-    // evidence db should not appear (never initialized)
-    if (existsSync(evidenceDb)) {
-      throw new Error("evidence db was created by health GET");
+    } else if (existsSync(repoRadar)) {
+      throw new Error("repository radar.json was created during E2E");
     }
 
     console.log("[E2E] data-health real E2E PASSED");
   } finally {
-    try { if (browser) await browser.close(); } catch { /* */ }
-    try { if (frontendServer) frontendServer.close(); } catch { /* */ }
-    try { if (backend) backend.kill(); } catch { /* */ }
-    // restore radar cache
     try {
-      if (radarExisted && radarBackup) writeFileSync(radarFile, radarBackup);
-      else if (existsSync(radarFile) && !radarExisted) {
-        // only remove if we created it and no prior file — leave if was empty write over our content
-        try {
-          const { unlinkSync } = await import("node:fs");
-          unlinkSync(radarFile);
-        } catch { /* */ }
+      if (browser) await browser.close();
+    } catch {
+      /* */
+    }
+    try {
+      if (frontendServer) frontendServer.close();
+    } catch {
+      /* */
+    }
+    await waitProcessExit(backend);
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort after process exit */
+      await sleep(500);
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        /* */
       }
-    } catch { /* */ }
-    try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* */ }
+    }
   }
 }
 

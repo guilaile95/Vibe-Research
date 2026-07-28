@@ -16,6 +16,37 @@ from typing import Any, Callable, Protocol
 import data_health_event_store as event_store
 import data_health_service as svc
 
+_REQUIRED_RECORD_KEYS = frozenset({
+    "source_id",
+    "module",
+    "display_name",
+    "status",
+    "is_stale",
+    "observed_at",
+    "last_success_at",
+    "data_trade_date",
+    "data_cutoff",
+    "stale_after_seconds",
+    "is_cached",
+    "is_degraded",
+    "coverage_current",
+    "coverage_expected",
+    "last_error_code",
+    "last_error_summary",
+    "last_error_at",
+    "blocks_advice",
+    "block_reason",
+    "detail_path",
+})
+
+
+class AdapterReadError(Exception):
+    """可预期的单 Adapter 读取失败（仅此异常由聚合层隔离为 unavailable）。"""
+
+    def __init__(self, error_code: str = "SOURCE_UNAVAILABLE"):
+        super().__init__(error_code)
+        self.error_code = error_code
+
 
 @dataclass
 class HealthReadContext:
@@ -40,6 +71,16 @@ def _meta(source_id: str) -> dict[str, str]:
     return {"source_id": source_id, "module": source_id, "display_name": source_id}
 
 
+def is_valid_data_health_record(record: Any) -> bool:
+    if not isinstance(record, dict):
+        return False
+    if not _REQUIRED_RECORD_KEYS.issubset(record.keys()):
+        return False
+    if record.get("status") not in ("normal", "partial", "unavailable"):
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # daily_review
 # ---------------------------------------------------------------------------
@@ -51,15 +92,8 @@ class DailyReviewAdapter:
 
     def read(self, context: HealthReadContext) -> svc.DataHealthRecord:
         m = _meta(self.source_id)
-        try:
-            import daily_review as dr
-            import daily_review_cache as drc
-        except Exception:
-            return svc.unavailable_record(
-                m["source_id"], m["module"], m["display_name"],
-                "SOURCE_UNAVAILABLE", detail_path="/daily-review",
-                stale_after_seconds=None,
-            )
+        import daily_review as dr
+        import daily_review_cache as drc
 
         review: dict | None = None
         cache_meta: dict | None = None
@@ -67,24 +101,21 @@ class DailyReviewAdapter:
         source_kind: str | None = None
 
         # 先读有效内存结果（不触发 generate）
-        try:
-            mem = dr._cached_review()
-            if isinstance(mem, dict):
-                review = mem
-                source_kind = "memory"
-                cache_meta = {
-                    "source": "memory",
-                    "stale": False,
-                    "saved_at": None,
-                }
-        except Exception:
-            review = None
+        mem = dr._cached_review()
+        if isinstance(mem, dict):
+            review = mem
+            source_kind = "memory"
+            cache_meta = {
+                "source": "memory",
+                "stale": False,
+                "saved_at": None,
+            }
 
         if review is None:
             try:
                 disk_review, disk_saved = drc.load_latest_review()
-            except Exception:
-                disk_review, disk_saved = None, None
+            except (OSError, json.JSONDecodeError, UnicodeError) as exc:
+                raise AdapterReadError("SOURCE_CORRUPTED") from exc
             if disk_review is None:
                 # 文件存在但 loader 拒绝 → 可能损坏
                 path = drc.cache_path()
@@ -226,11 +257,9 @@ class EventSourceAdapter:
         thr = self.stale_after_seconds
         if thr is not None and basis is not None:
             if self.calendar_type == "CN_MARKET_CONSERVATIVE":
-                # 非交易时段：不因时间流逝立即 stale（延续最近收盘观察）
-                if svc.is_cn_trading_session(context.now_utc):
-                    is_stale = svc.is_stale_continuous(basis, context.now_utc, thr)
-                else:
-                    is_stale = False
+                is_stale = svc.is_stale_cn_intraday_observation(
+                    basis, context.now_utc, stale_after_seconds=thr,
+                )
             else:
                 is_stale = svc.is_stale_continuous(basis, context.now_utc, thr)
 
@@ -345,15 +374,15 @@ class PortfolioAdviceGateAdapter:
                 # 依赖观察时间更新
                 dep_times: list[datetime] = []
                 # portfolio file mtime
-                try:
-                    import portfolio as pf
-                    if os.path.isfile(pf.PF_FILE):
+                import portfolio as pf
+                if os.path.isfile(pf.PF_FILE):
+                    try:
                         mtime = datetime.fromtimestamp(
                             os.path.getmtime(pf.PF_FILE), tz=timezone.utc
                         )
                         dep_times.append(mtime)
-                except Exception:
-                    pass
+                    except OSError:
+                        pass
                 # portfolio_quotes observed
                 pq = context.events.get("portfolio_quotes") if not context.events_load_error else None
                 if pq:
@@ -368,7 +397,7 @@ class PortfolioAdviceGateAdapter:
                     dr_dt = svc.parse_flexible_time(dr_rec.get("observed_at"), naive_as="utc")
                     if dr_dt:
                         dep_times.append(dr_dt)
-                except Exception:
+                except AdapterReadError:
                     pass
                 for dep in dep_times:
                     if dep > basis:
@@ -407,99 +436,89 @@ class NewsRadarAdapter:
 
     def read(self, context: HealthReadContext) -> svc.DataHealthRecord:
         m = _meta(self.source_id)
-        try:
-            import newsradar
-            path = newsradar.CACHE_FILE
-            if not os.path.isfile(path):
-                return svc.not_initialized_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    detail_path="/intel",
-                    stale_after_seconds=86400,
-                )
-            try:
-                with open(path, encoding="utf-8") as f:
-                    data = json.load(f)
-            except (json.JSONDecodeError, OSError, UnicodeError):
-                return svc.unavailable_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    "SOURCE_CORRUPTED", detail_path="/intel",
-                    stale_after_seconds=86400,
-                )
-            if not isinstance(data, dict):
-                return svc.unavailable_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    "SOURCE_CORRUPTED", detail_path="/intel",
-                    stale_after_seconds=86400,
-                )
-            # skeleton has generated_at None — treat as not initialized if no generated_at
-            gen = data.get("generated_at")
-            if gen is None or (isinstance(gen, str) and not gen.strip()):
-                return svc.not_initialized_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    detail_path="/intel",
-                    stale_after_seconds=86400,
-                )
-            gen_dt = svc.parse_flexible_time(gen, naive_as="beijing")
-            if gen_dt is None:
-                return svc.unavailable_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    "SOURCE_CORRUPTED", detail_path="/intel",
-                    stale_after_seconds=86400,
-                )
-            stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
-            failed = stats.get("failed_sources", 0) or 0
-            total = stats.get("total_sources", 0) or 0
-            try:
-                failed = int(failed)
-                total = int(total)
-            except (TypeError, ValueError):
-                failed, total = 0, 0
-
-            if total > 0 and failed >= total:
-                status: svc.DataHealthStatus = "unavailable"
-                code = "SOURCE_UNAVAILABLE"
-                is_degraded = None
-            elif failed > 0:
-                status = "partial"
-                code = "SOURCE_PARTIAL"
-                is_degraded = False
-            else:
-                status = "normal"
-                code = None
-                is_degraded = None
-
-            observed = svc.format_utc(gen_dt)
-            is_stale = svc.is_stale_continuous(gen_dt, context.now_utc, 86400)
-            industries = data.get("industries") if isinstance(data.get("industries"), list) else []
-            item_count = 0
-            for ind in industries:
-                if isinstance(ind, dict) and isinstance(ind.get("items"), list):
-                    item_count += len(ind["items"])
-
-            return svc.make_record(
-                source_id=m["source_id"],
-                module=m["module"],
-                display_name=m["display_name"],
-                status=status,
-                is_stale=is_stale,
-                observed_at=observed,
-                last_success_at=observed if status in ("normal", "partial") else None,
-                stale_after_seconds=86400,
-                is_cached=True,
-                is_degraded=is_degraded,
-                coverage_current=total - failed if total else item_count,
-                coverage_expected=total if total else None,
-                last_error_code=code,
-                last_error_at=None,
-                blocks_advice=False,
-                block_reason=None,
+        import newsradar
+        path = newsradar.get_cache_file()
+        if not os.path.isfile(path):
+            return svc.not_initialized_record(
+                m["source_id"], m["module"], m["display_name"],
                 detail_path="/intel",
+                stale_after_seconds=86400,
             )
-        except Exception:
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError, UnicodeError) as exc:
+            raise AdapterReadError("SOURCE_CORRUPTED") from exc
+        if not isinstance(data, dict):
             return svc.unavailable_record(
                 m["source_id"], m["module"], m["display_name"],
-                "SOURCE_UNAVAILABLE", detail_path="/intel",
+                "SOURCE_CORRUPTED", detail_path="/intel",
+                stale_after_seconds=86400,
             )
+        # skeleton has generated_at None — treat as not initialized if no generated_at
+        gen = data.get("generated_at")
+        if gen is None or (isinstance(gen, str) and not gen.strip()):
+            return svc.not_initialized_record(
+                m["source_id"], m["module"], m["display_name"],
+                detail_path="/intel",
+                stale_after_seconds=86400,
+            )
+        gen_dt = svc.parse_flexible_time(gen, naive_as="beijing")
+        if gen_dt is None:
+            return svc.unavailable_record(
+                m["source_id"], m["module"], m["display_name"],
+                "SOURCE_CORRUPTED", detail_path="/intel",
+                stale_after_seconds=86400,
+            )
+        stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
+        failed = stats.get("failed_sources", 0) or 0
+        total = stats.get("total_sources", 0) or 0
+        try:
+            failed = int(failed)
+            total = int(total)
+        except (TypeError, ValueError):
+            failed, total = 0, 0
+
+        if total > 0 and failed >= total:
+            status: svc.DataHealthStatus = "unavailable"
+            code = "SOURCE_UNAVAILABLE"
+            is_degraded = None
+        elif failed > 0:
+            status = "partial"
+            code = "SOURCE_PARTIAL"
+            is_degraded = False
+        else:
+            status = "normal"
+            code = None
+            is_degraded = None
+
+        observed = svc.format_utc(gen_dt)
+        is_stale = svc.is_stale_continuous(gen_dt, context.now_utc, 86400)
+        industries = data.get("industries") if isinstance(data.get("industries"), list) else []
+        item_count = 0
+        for ind in industries:
+            if isinstance(ind, dict) and isinstance(ind.get("items"), list):
+                item_count += len(ind["items"])
+
+        return svc.make_record(
+            source_id=m["source_id"],
+            module=m["module"],
+            display_name=m["display_name"],
+            status=status,
+            is_stale=is_stale,
+            observed_at=observed,
+            last_success_at=observed if status in ("normal", "partial") else None,
+            stale_after_seconds=86400,
+            is_cached=True,
+            is_degraded=is_degraded,
+            coverage_current=total - failed if total else item_count,
+            coverage_expected=total if total else None,
+            last_error_code=code,
+            last_error_at=None,
+            blocks_advice=False,
+            block_reason=None,
+            detail_path="/intel",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -513,96 +532,87 @@ class MyReportsAdapter:
 
     def read(self, context: HealthReadContext) -> svc.DataHealthRecord:
         m = _meta(self.source_id)
-        try:
-            import myreports
-        except Exception:
-            return svc.unavailable_record(
+        import myreports
+
+        index_path = myreports._index_path()
+        if not index_path.exists():
+            return svc.not_initialized_record(
                 m["source_id"], m["module"], m["display_name"],
-                "SOURCE_UNAVAILABLE", detail_path="/my-reports",
-            )
-        try:
-            index_path = myreports._index_path()
-            if not index_path.exists():
-                return svc.not_initialized_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    detail_path="/my-reports",
-                )
-            # 只读：不迁移、不写回
-            try:
-                entries = myreports._load_index_normalized()
-            except myreports.ReportIndexCorruptedError:
-                return svc.unavailable_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    "SOURCE_CORRUPTED", detail_path="/my-reports",
-                )
-            except OSError:
-                return svc.unavailable_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    "SOURCE_UNAVAILABLE", detail_path="/my-reports",
-                )
-
-            count = len(entries)
-            max_imported: datetime | None = None
-            missing_files = 0
-            for e in entries:
-                ia = e.get("imported_at")
-                dt = svc.parse_flexible_time(ia, naive_as="utc")
-                if dt and (max_imported is None or dt > max_imported):
-                    max_imported = dt
-                # 部分文件缺失 → partial
-                name = e.get("id") or e.get("name")
-                if name:
-                    try:
-                        fpath = myreports.REPORTS_DIR / str(e.get("id", ""))
-                        # 文件名可能是 id+ext
-                        rid = e.get("id")
-                        ext = e.get("ext") or ""
-                        if rid:
-                            candidate = myreports.REPORTS_DIR / f"{rid}{ext if ext.startswith('.') else ('.' + ext if ext else '')}"
-                            if not candidate.exists():
-                                # try without guessing
-                                found = any(
-                                    p.name.startswith(str(rid))
-                                    for p in myreports.REPORTS_DIR.iterdir()
-                                    if p.is_file()
-                                ) if myreports.REPORTS_DIR.exists() else False
-                                if not found and not candidate.exists():
-                                    missing_files += 1
-                    except Exception:
-                        pass
-
-            if missing_files > 0 and count > 0:
-                status: svc.DataHealthStatus = "partial"
-                code = "SOURCE_PARTIAL"
-            else:
-                status = "normal"
-                code = None
-
-            observed = svc.format_utc(max_imported)
-            return svc.make_record(
-                source_id=m["source_id"],
-                module=m["module"],
-                display_name=m["display_name"],
-                status=status,
-                is_stale=False,
-                observed_at=observed,
-                last_success_at=observed,
-                stale_after_seconds=None,
-                is_cached=None,
-                is_degraded=None,
-                coverage_current=count,
-                coverage_expected=count,
-                last_error_code=code,
-                last_error_at=None,
-                blocks_advice=False,
-                block_reason=None,
                 detail_path="/my-reports",
             )
-        except Exception:
+        # 只读：不迁移、不写回
+        try:
+            entries = myreports._load_index_normalized()
+        except myreports.ReportIndexCorruptedError:
             return svc.unavailable_record(
                 m["source_id"], m["module"], m["display_name"],
-                "SOURCE_UNAVAILABLE", detail_path="/my-reports",
+                "SOURCE_CORRUPTED", detail_path="/my-reports",
             )
+        except (OSError, UnicodeError) as exc:
+            raise AdapterReadError("SOURCE_UNAVAILABLE") from exc
+
+        index_entry_count = len(entries)
+        max_imported: datetime | None = None
+        missing_files = 0
+        for e in entries:
+            ia = e.get("imported_at")
+            dt = svc.parse_flexible_time(ia, naive_as="utc")
+            if dt and (max_imported is None or dt > max_imported):
+                max_imported = dt
+            rid = e.get("id")
+            if not rid:
+                missing_files += 1
+                continue
+            ext = e.get("ext") or ""
+            if ext and not str(ext).startswith("."):
+                ext = "." + str(ext)
+            candidate = myreports.REPORTS_DIR / f"{rid}{ext}"
+            try:
+                if candidate.exists():
+                    continue
+                # 兼容仅 id 前缀的落盘名
+                found = False
+                if myreports.REPORTS_DIR.exists():
+                    for p in myreports.REPORTS_DIR.iterdir():
+                        if p.is_file() and (
+                            p.name == f"{rid}{ext}" or p.stem == str(rid)
+                        ):
+                            found = True
+                            break
+                if not found:
+                    missing_files += 1
+            except OSError:
+                missing_files += 1
+
+        coverage_expected = index_entry_count
+        coverage_current = index_entry_count - missing_files
+        if missing_files > 0 and index_entry_count > 0:
+            status: svc.DataHealthStatus = "partial"
+            code = "SOURCE_PARTIAL"
+        else:
+            status = "normal"
+            code = None
+
+        observed = svc.format_utc(max_imported)
+        return svc.make_record(
+            source_id=m["source_id"],
+            module=m["module"],
+            display_name=m["display_name"],
+            status=status,
+            is_stale=False,
+            observed_at=observed,
+            last_success_at=observed,
+            stale_after_seconds=None,
+            is_cached=None,
+            is_degraded=None,
+            coverage_current=coverage_current,
+            coverage_expected=coverage_expected,
+            last_error_code=code,
+            last_error_at=None,
+            blocks_advice=False,
+            block_reason=None,
+            detail_path="/my-reports",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -616,11 +626,13 @@ class WatchlistPortfolioStorageAdapter:
 
     def read(self, context: HealthReadContext) -> svc.DataHealthRecord:
         m = _meta(self.source_id)
+        import watchlist_store
+        import portfolio as pf
+
         wl_status = "not_configured"
         wl_updated: datetime | None = None
         wl_count = 0
         try:
-            import watchlist_store
             st = watchlist_store.get_watchlist_status()
             wl_status = st.get("status") or "not_configured"
             if wl_status == "valid" and isinstance(st.get("data"), dict):
@@ -629,34 +641,29 @@ class WatchlistPortfolioStorageAdapter:
                 wl_updated = svc.parse_flexible_time(
                     st["data"].get("updated_at"), naive_as="utc"
                 )
-        except Exception:
+        except (OSError, json.JSONDecodeError, UnicodeError):
             wl_status = "corrupted"
 
         pf_state = "not_configured"  # not_configured | valid | corrupted
         pf_count = 0
         pf_mtime: datetime | None = None
-        try:
-            import portfolio as pf
-            if not os.path.isfile(pf.PF_FILE):
-                pf_state = "not_configured"
-            else:
+        if not os.path.isfile(pf.PF_FILE):
+            pf_state = "not_configured"
+        else:
+            try:
                 pf_mtime = datetime.fromtimestamp(
                     os.path.getmtime(pf.PF_FILE), tz=timezone.utc
                 )
-                try:
-                    # 只读结构校验，不取行情
-                    with open(pf.PF_FILE, encoding="utf-8") as f:
-                        data = json.load(f)
-                    pf._validate_data(data)
-                    hs = data.get("holdings") or []
-                    pf_count = len(hs) if isinstance(hs, list) else 0
-                    pf_state = "valid"
-                except pf.PortfolioDataCorruptedError:
-                    pf_state = "corrupted"
-                except (json.JSONDecodeError, OSError, UnicodeError):
-                    pf_state = "corrupted"
-        except Exception:
-            pf_state = "corrupted"
+                with open(pf.PF_FILE, encoding="utf-8") as f:
+                    data = json.load(f)
+                pf._validate_data(data)
+                hs = data.get("holdings") or []
+                pf_count = len(hs) if isinstance(hs, list) else 0
+                pf_state = "valid"
+            except pf.PortfolioDataCorruptedError:
+                pf_state = "corrupted"
+            except (json.JSONDecodeError, OSError, UnicodeError):
+                pf_state = "corrupted"
 
         # 映射
         if wl_status == "not_configured" and pf_state == "not_configured":
@@ -730,14 +737,8 @@ class EvidenceLedgerAdapter:
 
     def read(self, context: HealthReadContext) -> svc.DataHealthRecord:
         m = _meta(self.source_id)
-        try:
-            import evidence_thesis_service as ets
-            import evidence_thesis_store as store
-        except Exception:
-            return svc.unavailable_record(
-                m["source_id"], m["module"], m["display_name"],
-                "SOURCE_UNAVAILABLE", detail_path="/thesis",
-            )
+        import evidence_thesis_service as ets
+        import evidence_thesis_store as store
 
         db_path = ets.resolve_db_path()
         if not Path(db_path).exists():
@@ -747,38 +748,33 @@ class EvidenceLedgerAdapter:
             )
 
         try:
-            # 只读打开，不 initialize
-            conn = store._connect_readonly(db_path)
+            # 只读 + immutable：避免 mode=ro 在 WAL 库上创建 -wal/-shm 副作用文件
+            path = Path(db_path)
+            if not path.exists():
+                return svc.not_initialized_record(
+                    m["source_id"], m["module"], m["display_name"],
+                    detail_path="/thesis",
+                )
+            uri = f"{path.resolve().as_uri()}?mode=ro&immutable=1"
+            conn = sqlite3.connect(uri, timeout=5, uri=True)
+            conn.row_factory = sqlite3.Row
         except FileNotFoundError:
             return svc.not_initialized_record(
                 m["source_id"], m["module"], m["display_name"],
                 detail_path="/thesis",
             )
-        except Exception:
-            return svc.unavailable_record(
-                m["source_id"], m["module"], m["display_name"],
-                "SOURCE_CORRUPTED", detail_path="/thesis",
-            )
+        except (OSError, sqlite3.DatabaseError, sqlite3.OperationalError) as exc:
+            raise AdapterReadError("SOURCE_CORRUPTED") from exc
 
         try:
+            # 只读 schema 校验：不执行 DDL
             try:
-                # 只读 schema 校验：不执行 DDL
                 if not store._table_exists(conn, "schema_meta"):
                     return svc.unavailable_record(
                         m["source_id"], m["module"], m["display_name"],
                         "SOURCE_CORRUPTED", detail_path="/thesis",
                     )
                 ver = store._read_schema_version(conn)
-                if ver is None:
-                    return svc.unavailable_record(
-                        m["source_id"], m["module"], m["display_name"],
-                        "SOURCE_CORRUPTED", detail_path="/thesis",
-                    )
-                if ver != store.SCHEMA_VERSION:
-                    return svc.unavailable_record(
-                        m["source_id"], m["module"], m["display_name"],
-                        "SOURCE_SCHEMA_INCOMPATIBLE", detail_path="/thesis",
-                    )
             except store.EvidenceLedgerSchemaVersionError:
                 return svc.unavailable_record(
                     m["source_id"], m["module"], m["display_name"],
@@ -789,16 +785,25 @@ class EvidenceLedgerAdapter:
                     m["source_id"], m["module"], m["display_name"],
                     "SOURCE_CORRUPTED", detail_path="/thesis",
                 )
+            except sqlite3.DatabaseError as exc:
+                raise AdapterReadError("SOURCE_CORRUPTED") from exc
+
+            if ver is None:
+                return svc.unavailable_record(
+                    m["source_id"], m["module"], m["display_name"],
+                    "SOURCE_CORRUPTED", detail_path="/thesis",
+                )
+            if ver != store.SCHEMA_VERSION:
+                return svc.unavailable_record(
+                    m["source_id"], m["module"], m["display_name"],
+                    "SOURCE_SCHEMA_INCOMPATIBLE", detail_path="/thesis",
+                )
 
             try:
-                # integrity_check
                 row = conn.execute("PRAGMA integrity_check").fetchone()
-                if row is None or str(row[0]).lower() != "ok":
-                    return svc.unavailable_record(
-                        m["source_id"], m["module"], m["display_name"],
-                        "SOURCE_CORRUPTED", detail_path="/thesis",
-                    )
-            except Exception:
+            except sqlite3.DatabaseError as exc:
+                raise AdapterReadError("SOURCE_CORRUPTED") from exc
+            if row is None or str(row[0]).lower() != "ok":
                 return svc.unavailable_record(
                     m["source_id"], m["module"], m["display_name"],
                     "SOURCE_CORRUPTED", detail_path="/thesis",
@@ -820,11 +825,8 @@ class EvidenceLedgerAdapter:
                     )
                     """
                 ).fetchone()[0]
-            except Exception:
-                return svc.unavailable_record(
-                    m["source_id"], m["module"], m["display_name"],
-                    "SOURCE_UNAVAILABLE", detail_path="/thesis",
-                )
+            except sqlite3.DatabaseError as exc:
+                raise AdapterReadError("SOURCE_UNAVAILABLE") from exc
 
             max_dt = svc.parse_flexible_time(max_u, naive_as="utc")
             observed = svc.format_utc(max_dt)
@@ -851,7 +853,7 @@ class EvidenceLedgerAdapter:
         finally:
             try:
                 conn.close()
-            except Exception:
+            except sqlite3.Error:
                 pass
 
 
@@ -890,28 +892,22 @@ def reset_adapters_for_tests() -> None:
     _ADAPTERS = None
 
 
-class AdapterReadError(Exception):
-    """可预期的单 Adapter 读取失败。"""
-
-
 def _safe_adapter_read(
     adapter: DataHealthAdapter,
     context: HealthReadContext,
 ) -> svc.DataHealthRecord:
-    """可预期失败 → 安全 unavailable；编程错误向上抛。"""
+    """仅隔离 AdapterReadError；编程错误 / 非法 record 向上冒泡 → HTTP 500。"""
     try:
         rec = adapter.read(context)
-        if not isinstance(rec, dict) or "source_id" not in rec:
-            raise TypeError("invalid DataHealthRecord")
-        return rec
-    except (OSError, json.JSONDecodeError, UnicodeError, KeyError, ValueError, TypeError) as exc:
-        # 可预期读取失败
+    except AdapterReadError as exc:
         m = _meta(adapter.source_id)
         return svc.unavailable_record(
             m["source_id"], m["module"], m["display_name"],
-            "SOURCE_UNAVAILABLE",
+            exc.error_code or "SOURCE_UNAVAILABLE",
         )
-    # 其它 Exception（含 AttributeError 等编程错误）向上冒泡
+    if not is_valid_data_health_record(rec):
+        raise RuntimeError("invalid DataHealthRecord")
+    return rec
 
 
 def collect_all_records(

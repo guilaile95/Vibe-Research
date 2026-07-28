@@ -52,9 +52,7 @@ def data_env(tmp_path, monkeypatch):
     monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("VR_REPORTS_DIR", str(tmp_path / "myreports"))
     monkeypatch.setenv("VIBE_RESEARCH_EVIDENCE_THESIS_DB", str(tmp_path / "evidence_thesis.db"))
-    import newsradar
-    monkeypatch.setattr(newsradar, "CACHE_FILE", str(tmp_path / "radar.json"))
-    monkeypatch.setattr(newsradar, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("VIBE_RESEARCH_NEWS_RADAR_CACHE", str(tmp_path / "radar.json"))
     import portfolio as pf
     monkeypatch.setattr(pf, "PF_FILE", str(tmp_path / "portfolio.json"))
     monkeypatch.setattr(pf, "CACHE_DIR", str(tmp_path))
@@ -171,10 +169,7 @@ def test_gate_runtime_failure(data_env):
 
 
 def test_news_radar_stale(data_env, monkeypatch):
-    import newsradar
-    cache_dir = data_env / "radar_cache"
-    cache_dir.mkdir()
-    cache_file = cache_dir / "radar.json"
+    cache_file = data_env / "radar.json"
     old = (datetime.now(timezone.utc) - timedelta(days=3)).astimezone(
         timezone(timedelta(hours=8))
     ).strftime("%Y-%m-%d %H:%M")
@@ -185,8 +180,7 @@ def test_news_radar_stale(data_env, monkeypatch):
         "stats": {"industries": 1, "total_sources": 10, "failed_sources": 2},
     }
     cache_file.write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setattr(newsradar, "CACHE_FILE", str(cache_file))
-    monkeypatch.setattr(newsradar, "CACHE_DIR", str(cache_dir))
+    monkeypatch.setenv("VIBE_RESEARCH_NEWS_RADAR_CACHE", str(cache_file))
     rec = adapters.NewsRadarAdapter().read(
         adapters.HealthReadContext(now_utc=datetime.now(timezone.utc))
     )
@@ -196,8 +190,9 @@ def test_news_radar_stale(data_env, monkeypatch):
 
 
 def test_news_radar_missing(data_env, monkeypatch):
-    import newsradar
-    monkeypatch.setattr(newsradar, "CACHE_FILE", str(data_env / "nope" / "radar.json"))
+    monkeypatch.setenv(
+        "VIBE_RESEARCH_NEWS_RADAR_CACHE", str(data_env / "nope" / "radar.json")
+    )
     rec = adapters.NewsRadarAdapter().read(
         adapters.HealthReadContext(now_utc=datetime.now(timezone.utc))
     )
@@ -271,13 +266,13 @@ def test_evidence_ledger_empty_db_readonly(data_env):
     assert rec["coverage_current"] == 0
     assert _sqlite_tables(db) == tables_before
     assert db.stat().st_size == snap.st_size
-    # mtime may change on some FS for reads? mode=ro should not; allow size match
-    assert db.stat().st_mtime_ns == snap.st_mtime_ns or True  # best-effort
+    assert db.stat().st_mtime_ns == snap.st_mtime_ns
 
 
 def test_corrupted_events_only_affect_event_sources(data_env, monkeypatch):
-    import newsradar
-    monkeypatch.setattr(newsradar, "CACHE_FILE", str(data_env / "no-radar.json"))
+    monkeypatch.setenv(
+        "VIBE_RESEARCH_NEWS_RADAR_CACHE", str(data_env / "no-radar.json")
+    )
     path = Path(store.events_path())
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("NOTJSON", encoding="utf-8")
@@ -312,7 +307,6 @@ def test_only_gate_sets_blocks_advice(data_env):
 
 
 def test_utc_conversion_beijing_generated_at(data_env, monkeypatch):
-    import newsradar
     cache_file = data_env / "radar.json"
     cache_file.write_text(
         json.dumps({
@@ -322,7 +316,7 @@ def test_utc_conversion_beijing_generated_at(data_env, monkeypatch):
         }),
         encoding="utf-8",
     )
-    monkeypatch.setattr(newsradar, "CACHE_FILE", str(cache_file))
+    monkeypatch.setenv("VIBE_RESEARCH_NEWS_RADAR_CACHE", str(cache_file))
     rec = adapters.NewsRadarAdapter().read(
         adapters.HealthReadContext(now_utc=datetime(2026, 7, 28, 4, 30, tzinfo=timezone.utc))
     )
@@ -330,3 +324,78 @@ def test_utc_conversion_beijing_generated_at(data_env, monkeypatch):
     assert rec["observed_at"].endswith("Z")
     # 12:00 BJ = 04:00 UTC
     assert rec["observed_at"].startswith("2026-07-28T04:00:00")
+
+
+def test_my_reports_partial_coverage(data_env, monkeypatch):
+    import myreports
+    myreports.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    # 合法 index 两条，仅一条文件存在
+    entries = [
+        {
+            "id": "r1",
+            "name": "a.pdf",
+            "ext": ".pdf",
+            "size": 1,
+            "ts": 1,
+            "industry": "",
+            "title": "A",
+            "institution": "",
+            "publish_date": "",
+            "sector_keys": [],
+            "source_url": "",
+            "source_kind": "",
+            "file_sha256": "a" * 64,
+            "imported_at": "2026-07-28T01:00:00+00:00",
+            "source_provider": "",
+            "external_id": "",
+            "info_code": "",
+            "report_scope": "",
+            "report_type": "",
+        },
+        {
+            "id": "r2",
+            "name": "b.pdf",
+            "ext": ".pdf",
+            "size": 1,
+            "ts": 2,
+            "industry": "",
+            "title": "B",
+            "institution": "",
+            "publish_date": "",
+            "sector_keys": [],
+            "source_url": "",
+            "source_kind": "",
+            "file_sha256": "b" * 64,
+            "imported_at": "2026-07-28T02:00:00+00:00",
+            "source_provider": "",
+            "external_id": "",
+            "info_code": "",
+            "report_scope": "",
+            "report_type": "",
+        },
+    ]
+    # use strict schema via direct write if validate is strict - write via module
+    (myreports.REPORTS_DIR / "r1.pdf").write_bytes(b"%PDF-1.4")
+    myreports._index_path().write_text(
+        json.dumps(entries, ensure_ascii=False), encoding="utf-8"
+    )
+    rec = adapters.MyReportsAdapter().read(
+        adapters.HealthReadContext(now_utc=datetime.now(timezone.utc))
+    )
+    assert rec["status"] == "partial"
+    assert rec["coverage_expected"] == 2
+    assert rec["coverage_current"] == 1
+
+
+def test_evidence_ledger_mtime_strict(data_env):
+    db = data_env / "evidence_thesis.db"
+    et_store.initialize_store(db)
+    tables_before = _sqlite_tables(db)
+    snap = db.stat()
+    rec = adapters.EvidenceLedgerAdapter().read(
+        adapters.HealthReadContext(now_utc=datetime.now(timezone.utc))
+    )
+    assert rec["status"] == "normal"
+    assert _sqlite_tables(db) == tables_before
+    assert db.stat().st_size == snap.st_size
+    assert db.stat().st_mtime_ns == snap.st_mtime_ns

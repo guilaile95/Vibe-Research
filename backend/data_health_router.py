@@ -16,12 +16,13 @@ _SERVICE_UNAVAILABLE_DETAIL = "数据健康服务暂不可用"
 
 
 def _parse_bool_param(name: str, raw: str | None) -> bool | None:
+    """仅接受字面量 true/false（大小写不敏感）；1/0/yes/no/空串等一律 422。"""
     if raw is None:
         return None
-    v = raw.strip().lower()
-    if v in ("true", "1"):
+    v = raw.strip()
+    if v == "true":
         return True
-    if v in ("false", "0"):
+    if v == "false":
         return False
     raise HTTPException(status_code=422, detail=f"非法参数 {name}")
 

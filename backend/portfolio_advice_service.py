@@ -211,8 +211,8 @@ def prepare_portfolio_advice_messages(
                 user_request=request,
             )
         except (TypeError, ValueError) as exc:
-            # 上下文/提示构建失败：业务数据不可用，非客户端参数错误
-            _record_gate_blocked("MARKET_BREADTH_UNAVAILABLE")
+            # 上下文/提示构建失败：对外文案保持业务不可用，健康事件记为 Gate 运行失败
+            _record_gate_failure("SOURCE_UNAVAILABLE")
             raise PortfolioAdviceMarketDataError(_MARKET_UNAVAILABLE_MSG) from exc
         _record_gate_allowed()
         return {

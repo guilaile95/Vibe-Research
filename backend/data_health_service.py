@@ -206,22 +206,18 @@ def is_stale_cn_trade_date(
 ) -> bool:
     """日级 CN 来源 stale：优先交易日规则，否则 36h 回退。"""
     if data_trade_date and isinstance(data_trade_date, str) and len(data_trade_date) >= 10:
+        td = data_trade_date[:10]
         expected = expected_cn_trade_date(now_utc)
         bj = now_utc.astimezone(BEIJING)
-        # 15:00–15:30 落地宽限：当天期望尚未强制
+        # 15:00–15:30 落地宽限：允许上一期望交易日，更早则 stale
         if bj.weekday() < 5 and (15, 0) <= (bj.hour, bj.minute) < (15, 30):
-            # 允许上一工作日
-            if data_trade_date[:10] >= previous_weekday(bj.date() - timedelta(days=0)).isoformat():
-                # 若 trade_date 为今天或更近上一工作日，不 stale
-                prev = previous_weekday(bj.date() - timedelta(days=1))
-                if data_trade_date[:10] >= prev.isoformat():
-                    return False
+            previous_trade_date = previous_weekday(bj.date() - timedelta(days=1))
+            return td < previous_trade_date.isoformat()
         # 工作日 15:30 后期望当天
         if bj.weekday() < 5 and (bj.hour, bj.minute) >= (15, 30):
-            return data_trade_date[:10] < expected
+            return td < expected
         # 其它时段：落后于期望则 stale
-        if data_trade_date[:10] < expected:
-            # 周末持有周五：expected 已是周五，相等则不 stale
+        if td < expected:
             return True
         return False
     if basis is None:
@@ -236,6 +232,94 @@ def is_cn_trading_session(now_utc: datetime) -> bool:
     hm = (bj.hour, bj.minute)
     # 简化：09:30–11:30 或 13:00–15:00
     return ((9, 30) <= hm <= (11, 30)) or ((13, 0) <= hm <= (15, 0))
+
+
+def _obs_in_cn_session_hours(bj_obs: datetime) -> bool:
+    """观察时间是否落在当日交易时段（含午休前的上午与下午）。"""
+    if bj_obs.weekday() >= 5:
+        return False
+    hm = (bj_obs.hour, bj_obs.minute)
+    return ((9, 30) <= hm <= (11, 30)) or ((13, 0) <= hm <= (15, 0))
+
+
+def is_stale_cn_intraday_observation(
+    observed_at: datetime | None,
+    now_utc: datetime,
+    stale_after_seconds: int = 300,
+) -> bool:
+    """A 股分钟级观察 stale（quotes / portfolio_quotes）。
+
+    - 盘中：超过阈值 → stale
+    - 午休：当日上午观察可继续使用；更早交易日 → stale
+    - 收盘后：当日交易时段观察 → fresh；早于期望交易日 → stale
+    - 盘前：上一期望交易日观察 → fresh；更早 → stale
+    - 周末：最近周五观察 → fresh；更早 → stale
+    """
+    if observed_at is None:
+        return False
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=UTC)
+    else:
+        observed_at = observed_at.astimezone(UTC)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=UTC)
+    else:
+        now_utc = now_utc.astimezone(UTC)
+
+    bj_now = now_utc.astimezone(BEIJING)
+    bj_obs = observed_at.astimezone(BEIJING)
+    obs_date = bj_obs.date()
+    now_date = bj_now.date()
+    hm = (bj_now.hour, bj_now.minute)
+
+    # 周末：最近周五观察 fresh
+    if bj_now.weekday() >= 5:
+        last_friday = previous_weekday(now_date)
+        if obs_date == last_friday and _obs_in_cn_session_hours(bj_obs):
+            return False
+        if obs_date == last_friday:
+            return False
+        return True
+
+    # 盘前 < 09:30：上一期望交易日观察 fresh
+    if hm < (9, 30):
+        expected = expected_cn_trade_date(now_utc)  # 上一工作日
+        if obs_date.isoformat() >= expected:
+            return False
+        return True
+
+    # 盘中：连续阈值
+    if is_cn_trading_session(now_utc):
+        return (now_utc - observed_at).total_seconds() > stale_after_seconds
+
+    # 午休 11:30–13:00（严格开区间，11:30 仍算盘中边界）
+    if (11, 30) < hm < (13, 0):
+        # 当日上午观察可继续使用
+        if obs_date == now_date and (bj_obs.hour, bj_obs.minute) <= (11, 30):
+            return False
+        # 更早交易日
+        return True
+
+    # 收盘后（含 15:00 起）
+    if hm >= (15, 0):
+        expected = expected_cn_trade_date(now_utc)
+        # 当日交易时段观察 → fresh
+        if obs_date == now_date and _obs_in_cn_session_hours(bj_obs):
+            return False
+        # 当日午休观察也可视为当日会话内
+        if obs_date == now_date and (11, 30) < (bj_obs.hour, bj_obs.minute) < (13, 0):
+            return False
+        # 早于当前期望交易日 → stale
+        if obs_date.isoformat() < expected:
+            return True
+        # 期望交易日当天但非交易时段观察（如盘前）
+        if obs_date.isoformat() == expected and not _obs_in_cn_session_hours(bj_obs):
+            # 盘前观察在收盘后视为过旧于“当日行情”
+            if (bj_obs.hour, bj_obs.minute) < (9, 30):
+                return True
+        return obs_date.isoformat() < expected
+
+    return False
 
 
 def make_record(
