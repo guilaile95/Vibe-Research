@@ -2,42 +2,18 @@
 
 ## 上一任务（已完成）
 
-~~P1-1 & P1-2 交易流水全栈流程与原作者信息清理（PR #25，Merge SHA `bd0214ab2ebd9a54eaa1f5965d8cf4441640df9f`）。~~
+~~P2-1 Explainability / Evidence Layer（决策依据层）。~~
 
-- **状态**：已完成并合并至 `feature/research-system-v01`
-- 交易流水前端 `/trades` 与后端 `trade_ledger.sqlite3` 已上线
-- 原作者个人元数据及宣传信息已彻底清理
-
-## 上一任务（已完成）
-
-~~P1-3 决策反馈 MVP 基础工作流（PR #26，Merge SHA `30abb5b31d45e1e6a0de9cd27cfe741cc6b32530`）。~~
-
-- **状态**：已完成并合并至 `feature/research-system-v01`
-- 决策反馈前端 `/decision-feedback` 与后端 `decision_feedback.sqlite3` 基础功能上线
-
-## 上一任务（已完成）
-
-~~P1-3 决策反馈 Hardening 加固工程（PR #27）。~~
-
-- **状态**：已完成全栈加固与 PR 提交
-- 包含严格请求体契约 (`extra="forbid"`)、全量 UUID 标识、`BEGIN IMMEDIATE` 原子作废、来源数据隔离测试及 Playwright 错误路径 E2E 测试
+- **状态**：已完成开发与测试全覆盖
+- 数据库 `decision_trace.sqlite3` (`decision_runs`, `evidence_items`, `explanation_items`)
+- REST API: `GET /api/decision-evidence`, `GET /api/decision-evidence/{id}`, `GET /api/decision-evidence/by-advice`
+- 前端 `/decision-evidence` 探索看板与运行详情 Modal，持仓页打通「查看决策依据」跳转
 
 ## 当前下一任务
 
-**下一产品任务待优先级确认**。
+**P2-2 Signal Ledger (信号账本)**
 
-本轮 P1-1、P1-2 交易流水与 P1-3 决策反馈闭环已全量上线并完成 Hardening 加固：
-
-- PR #25 与 PR #26 均已采用标准 Merge 顺畅合并至稳定分支 `feature/research-system-v01`
-- 决策反馈严格拦截未知字段与非标准 payload (HTTP 422)
-- 前后端单元测试、构建、真实 E2E 与模拟错误路径 E2E 全量通过
-- 不自行启动：账户资金参与动作裁决、Explainability、Evidence Layer、Signal Ledger、收益归因、模型训练或自动调权
-
-建议候选项（**勿自行开工**，需用户明确指定其一）：
-
-1. 将账户资金及可用现金约束接入持仓建议动作与数量裁决（阶段二）——范围大，需单独设计
-2. 其它产品需求
-
-- 不自行选择或开始新的功能开发
-- 下一功能启动前需确认优先级与范围
-- 如无明确新需求，保持工作区干净
+- **描述**：记录系统内部实际发生的信号、规则和裁决过程，解答信号对决策的支持、限制或阻止效应。
+- **关联数据库**：`decision_trace.sqlite3` (新增 `signal_entries` 与 `decision_outcomes` 数据表)
+- **要求**：不虚构无来源的综合得分或权重；不改变 Validator 规则与 Prompt 审计语义。
+- **自动推进**：P2-1 PR 合并后从最新稳定 SHA 创建分支 `feat/signal-ledger` 并全自动推进，无需重复等待确认。
