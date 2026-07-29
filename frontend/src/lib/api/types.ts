@@ -1093,3 +1093,89 @@ export interface UpdateStanceInput {
   expected_revision: number;
   change_summary?: string;
 }
+
+
+// ---- 交易流水 (P1-1 / P1-2) ----
+
+export type TradeOperation = "buy" | "add" | "reduce" | "sell";
+
+export type TradeExecutionStatus = "full" | "partial" | "not_executed";
+
+export interface TradeAdviceSnapshot {
+  action: "add" | "hold" | "reduce" | "sell" | "watch" | "avoid";
+  execution_quantity: number | null;
+  price_conditions: string[];
+  execution_plan: string[];
+  risk_conditions: string[];
+  invalidation_conditions: string[];
+  confidence: "high" | "medium" | "low";
+}
+
+export interface TradeRecord {
+  trade_id: string;
+  code: string;
+  name: string;
+
+  operation: TradeOperation;
+  execution_status: TradeExecutionStatus;
+
+  planned_price: number | null;
+  planned_quantity: number | null;
+
+  actual_price: number | null;
+  actual_quantity: number;
+  executed_at: string | null;
+
+  fee: number;
+  other_cost: number;
+  unexecuted_reason: string | null;
+  note: string | null;
+
+  advice_trade_date: string | null;
+  advice_generated_at: string | null;
+  advice_snapshot: TradeAdviceSnapshot | null;
+
+  thesis_id: string | null;
+  thesis_revision: number | null;
+
+  created_at: string;
+  voided_at: string | null;
+  void_reason: string | null;
+
+  gross_amount: number;
+  total_cost: number;
+  net_cash_flow: number;
+
+  price_variance: number | null;
+  price_variance_pct: number | null;
+  quantity_completion_pct: number | null;
+}
+
+export interface TradeCreateInput {
+  code: string;
+  name: string;
+  operation: TradeOperation;
+  execution_status: TradeExecutionStatus;
+
+  planned_price?: number | null;
+  planned_quantity?: number | null;
+
+  actual_price?: number | null;
+  actual_quantity?: number;
+  executed_at?: string | null;
+
+  fee?: number;
+  other_cost?: number;
+  unexecuted_reason?: string | null;
+  note?: string | null;
+
+  advice_ref?: {
+    trade_date: string;
+    generated_at: string;
+  };
+
+  thesis_ref?: {
+    thesis_id: string;
+    revision_number: number;
+  };
+}

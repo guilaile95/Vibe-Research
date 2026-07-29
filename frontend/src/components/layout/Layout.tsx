@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search, NotebookPen,
-  Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, UserRound,
+  Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github,
   Cog, Cpu, Database, Cable, Rocket, FlaskConical, Star, FileText,
-  Target, BookOpen, HeartPulse,
+  Target, BookOpen, HeartPulse, ReceiptText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -12,8 +12,7 @@ import { DailyReviewAiTaskIndicator } from "./DailyReviewAiTaskIndicator";
 import { PortfolioAdviceTaskIndicator } from "./PortfolioAdviceTaskIndicator";
 
 const APP_VERSION = "v0.1.3";
-const REPO_URL = "https://github.com/simonlin1212/Vibe-Research";
-const SITE_URL = "https://www.simonlin.net"; // 作者主页
+const REPO_URL = "https://github.com/guilaile95/Vibe-Research";
 
 const NAV = [
   { to: "/daily-review", icon: Activity, label: "每日复盘" },
@@ -22,6 +21,7 @@ const NAV = [
   { to: "/stock-data", icon: Search, label: "个股数据" },
   { to: "/watchlist", icon: Star, label: "自选股" },
   { to: "/portfolio", icon: Wallet, label: "我的持仓" },
+  { to: "/trades", icon: ReceiptText, label: "交易流水" },
   { to: "/cockpit", icon: Target, label: "决策舱" },
   { to: "/my-reports", icon: FileText, label: "我的研报" },
   { to: "/notes", icon: NotebookPen, label: "研究记录" },
@@ -127,9 +127,6 @@ export function Layout() {
               <button onClick={toggle} className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground" title={dark ? "亮色" : "暗色"}>
                 {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
               </button>
-              <a href={SITE_URL} target="_blank" rel="noreferrer" className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground" title="联系作者">
-                <UserRound className="h-4 w-4" />
-              </a>
               <button onClick={() => setCollapsed(false)} className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground" title="展开">
                 <ChevronsRight className="h-4 w-4" />
               </button>
@@ -142,9 +139,6 @@ export function Layout() {
                   {dark ? "亮色" : "暗色"}
                 </button>
                 <div className="flex items-center gap-2">
-                  <a href={SITE_URL} target="_blank" rel="noreferrer" className="text-muted-foreground transition-colors hover:text-foreground" title="联系作者">
-                    <UserRound className="h-3.5 w-3.5" />
-                  </a>
                   <a href={REPO_URL} target="_blank" rel="noreferrer" className="text-muted-foreground transition-colors hover:text-foreground" title="GitHub">
                     <Github className="h-3.5 w-3.5" />
                   </a>
@@ -153,9 +147,6 @@ export function Layout() {
                   </button>
                 </div>
               </div>
-              <a href={SITE_URL} target="_blank" rel="noreferrer" className="block text-[11px] text-primary/80 transition-colors hover:text-primary">
-                联系作者 · simonlin.net
-              </a>
               <p className="text-[11px] leading-relaxed text-muted-foreground/60">
                 {APP_VERSION}
               </p>

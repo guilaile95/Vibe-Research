@@ -5,10 +5,6 @@ origin: custom
 version: 3.4.0
 ---
 
-> 📦 项目主页：https://github.com/simonlin1212/a-stock-data — 更新、反馈、支持作者
-> 
-> 作者：Simon 林 · 抖音「Simon林」· 公众号「硅基世纪」
-
 # A股全栈数据工具包 V3.4.0
 
 十层数据架构，43 个端点实测可用（40 主端点 + 3 官方备胎，2026-07 验证），覆盖主板/中小板/科创板/ST。每类数据在「备用源速查」列有独立备胎，主源被封时可降级。
@@ -2811,5 +2807,3 @@ export IWENCAI_API_KEY="your_key_here"
 ```
 
 ---
-
-> 📦 https://github.com/simonlin1212/a-stock-data — Star ⭐ 是最好的支持

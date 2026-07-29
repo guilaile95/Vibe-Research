@@ -10,7 +10,6 @@
 | 分支 | `refactor/portfolio-advice-architecture-v01` |
 | 架构实现提交 | `0ee21aa`（`refactor: split portfolio advice validator pipeline`）；当前 HEAD 以 `git rev-parse HEAD` 为准 |
 | origin | `https://github.com/guilaile95/Vibe-Research.git` |
-| upstream | `https://github.com/simonlin1212/Vibe-Research.git` |
 | 交付分支 | `origin/refactor/portfolio-advice-architecture-v01` |
 | 工作区 | 接手后请先 `git status` / `git rev-parse HEAD` 复核 |
 
