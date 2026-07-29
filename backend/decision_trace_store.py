@@ -151,6 +151,34 @@ def init_db(db_path: str | Path | None = None) -> None:
                         """
                     )
                     conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS signal_entries (
+                            entry_id TEXT PRIMARY KEY,
+                            decision_run_id TEXT NOT NULL,
+                            stage TEXT NOT NULL,
+                            code TEXT,
+                            signal_type TEXT NOT NULL,
+                            severity TEXT NOT NULL,
+                            payload_json TEXT NOT NULL,
+                            created_at TEXT NOT NULL
+                        )
+                        """
+                    )
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS decision_outcomes (
+                            outcome_id TEXT PRIMARY KEY,
+                            decision_run_id TEXT NOT NULL,
+                            code TEXT NOT NULL,
+                            action TEXT NOT NULL,
+                            target_ratio REAL,
+                            reason TEXT NOT NULL,
+                            constraints_applied_json TEXT NOT NULL,
+                            created_at TEXT NOT NULL
+                        )
+                        """
+                    )
+                    conn.execute(
                         "CREATE INDEX IF NOT EXISTS idx_decision_runs_trade_date ON decision_runs(trade_date)"
                     )
                     conn.execute(
@@ -158,6 +186,18 @@ def init_db(db_path: str | Path | None = None) -> None:
                     )
                     conn.execute(
                         "CREATE INDEX IF NOT EXISTS idx_explanation_items_run_code ON explanation_items(decision_run_id, code)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_signal_entries_run ON signal_entries(decision_run_id)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_signal_entries_run_stage ON signal_entries(decision_run_id, stage)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_decision_outcomes_run ON decision_outcomes(decision_run_id)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_decision_outcomes_run_code ON decision_outcomes(decision_run_id, code)"
                     )
                     now_str = _utc_now()
                     conn.execute(

@@ -18,6 +18,7 @@ import portfolio
 import portfolio_advice_context
 import portfolio_advice_prompt
 import portfolio_advice_validator
+import signal_ledger_service
 from portfolio_advice_account_metrics import attach_account_funding_metrics
 from portfolio_advice_cash_constraint import apply_available_cash_constraints
 from portfolio_advice_errors import public_model_error_detail
@@ -431,6 +432,15 @@ def generate_portfolio_advice(
     except Exception as exc:  # noqa: BLE001
         import logging
         logging.getLogger(__name__).warning("Archive decision evidence failed: %s", exc)
+
+    try:
+        signal_ledger_service.archive_signal_ledger(
+            authoritative,
+            context_data=prepared.get("context"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning("Archive signal ledger failed: %s", exc)
 
     return authoritative
 

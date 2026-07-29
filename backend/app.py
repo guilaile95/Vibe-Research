@@ -49,7 +49,9 @@ import data_health_router
 import trade_ledger_router
 import decision_feedback_router
 import decision_evidence_router
+import signal_ledger_router
 import decision_trace_store
+import signal_ledger_store
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -147,6 +149,8 @@ app.include_router(trade_ledger_router.router)
 app.include_router(decision_feedback_router.router)
 # 决策追踪与证据表达：只读 API
 app.include_router(decision_evidence_router.router)
+# 信号账本：只读 API
+app.include_router(signal_ledger_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)
@@ -196,6 +200,12 @@ async def _reports_corrupted_handler(request, exc):
 async def _decision_trace_corrupted_handler(request, exc):
     """决策追踪数据损坏：HTTP 500 + 固定安全文案。"""
     return JSONResponse(status_code=500, content={"detail": decision_trace_store.DecisionTraceCorruptedError.MESSAGE})
+
+
+@app.exception_handler(signal_ledger_store.SignalLedgerCorruptedError)
+async def _signal_ledger_corrupted_handler(request, exc):
+    """信号账本数据损坏：HTTP 500 + 固定安全文案。"""
+    return JSONResponse(status_code=500, content={"detail": signal_ledger_store.SignalLedgerCorruptedError.MESSAGE})
 
 
 @app.middleware("http")
