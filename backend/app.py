@@ -46,6 +46,7 @@ import sector_research_data as srd
 import watchlist_store
 import evidence_thesis_router
 import data_health_router
+import trade_ledger_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -137,6 +138,8 @@ app.add_middleware(
 app.include_router(evidence_thesis_router.router)
 # 数据健康中心：只读聚合 API
 app.include_router(data_health_router.router)
+# 交易流水：独立存储与 API
+app.include_router(trade_ledger_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)
