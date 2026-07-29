@@ -13,6 +13,7 @@ from typing import Any, Callable
 import ai_result_service
 import chat
 import daily_review
+import decision_evidence_service
 import portfolio
 import portfolio_advice_context
 import portfolio_advice_prompt
@@ -421,5 +422,15 @@ def generate_portfolio_advice(
         raise PortfolioAdvicePersistError(
             "持仓建议结果保存失败", stage="save"
         ) from exc
+
+    try:
+        decision_evidence_service.archive_decision_evidence(
+            authoritative,
+            context_data=prepared.get("context"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning("Archive decision evidence failed: %s", exc)
+
     return authoritative
 

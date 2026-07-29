@@ -8,7 +8,7 @@
 |----|-----|
 | 仓库（origin） | https://github.com/guilaile95/Vibe-Research |
 | 主分支 | `feature/research-system-v01` |
-| 最新合并提交 | `30abb5b` (`Merge pull request #26 from guilaile95/feat/decision-feedback-mvp`)；当前 HEAD 以 `git rev-parse HEAD` 为准 |
+| 最新合并提交 | `dedf99b` (`Merge pull request #27 from guilaile95/fix/decision-feedback-hardening`)；当前 HEAD 以 `git rev-parse HEAD` 为准 |
 | 工作区 | 接手后请先 `git status` / `git rev-parse HEAD` 复核 |
 
 > 说明：拼写为 **guilaile95**（非 guiliale95）。
@@ -31,20 +31,14 @@
 
 ## 已完成能力（摘要）
 
-- **P1-1 & P1-2 交易流水 (Trade Ledger)**（已完成，PR #25，Merge SHA `bd0214a`）：
-  - 独立 `trade_ledger.sqlite3` 数据库与 REST API (`/api/trades`)
-  - 实现 `/trades` 前端页面（列表、条件筛选、新建、详情结构化展示 `advice_snapshot`、作废及分页）
-  - 前端纯逻辑与后端契约完全对齐，`not_executed` 状态不发成交字段
-- **P1-3 决策反馈 (Decision Feedback MVP & Hardening)**（MVP 已合并 PR #26；Hardening 已完成 PR #27）：
-  - 独立 `decision_feedback.sqlite3` 数据库与 REST API (`/api/decision-feedback`)
-  - 严格 Pydantic 契约 (`extra="forbid"`)，只允许规范请求字段，拒绝顶层未知字段及未知嵌套 `advice_ref`
-  - 全量 128-bit UUID 标识与 `BEGIN IMMEDIATE` 显式 SQLite 事务原子作废 (200/409)
-  - 来源数据库零副作用隔离（建议库、交易库、`portfolio.json` 与 `account_profile.json` 保持严格只读）
-  - 数据库损坏 Fail-Closed 防护，返回 HTTP 500
-  - 前端 `/decision-feedback` 页面与导航支持、`not_evaluated` 默认结果、Playwright 真实/错误路径双 E2E 测试全过
-- **每日复盘九维结构 + GET /api/daily-review SWR 缓存机制**
-- **持仓支持新增、精确编辑和安全删除**（`9932601`）
-- **持仓建议 Validator 拆分与 Golden 测试套件**（`0ee21aa`）
+- **P2-1 决策依据层 (Decision Evidence Layer)**（已完成）：
+  - 独立 `decision_trace.sqlite3` 数据库与 REST API (`/api/decision-evidence`)
+  - 确定性 `decision_run_id` 衍生算法 (`dr_` + sha256)
+  - 自动化归档结构化事实证据 (market, sector, stock, portfolio, account, risk) 与规则推演链
+  - 前端 `/decision-evidence` 探索看板，支持筛选、运行详情、支持/限制证据关联与可视化展示
+  - 持仓建议结果打通「查看决策依据」只读跳转入口
+- **P1-1 & P1-2 交易流水 (Trade Ledger)**（已合并，PR #25，Merge SHA `bd0214a`）
+- **P1-3 决策反馈 (Decision Feedback)**（已合并，PR #26 & #27，Merge SHA `dedf99b`）
 
 ## 关键安全边界
 
@@ -54,8 +48,7 @@
 - 无 K 线不得编造技术位；不做 T（无 `t_trade`）
 - `add` 比例为**相对当前持股数量**，不是账户仓位/资金比例
 - 真实 `portfolio.json` / `account_profile.json` **不得**用于自动化测试写入
-- API 请求严格拦截未在 Schema 中定义的顶层及嵌套未知字段 (HTTP 422)
-- 决策反馈与交易流水采用独立 SQLite 数据库存储，严禁修改既有 `portfolio.json` 或 `review_history`
+- 决策依据层、决策反馈与交易流水采用独立 SQLite 数据库存储，严禁修改既有 `portfolio.json` 或 `review_history`
 - 不向客户端泄漏 ProxyError / 完整 URL / traceback / SQL 语句
 - 明确不做：收益率计算、建议准确率、模型训练、自动调权、自动归因
 
@@ -68,12 +61,5 @@ Windows 环境缺少 `python3` 命令，实际错误为 `fake 退出码 9009`。
 
 ## 当前下一任务
 
-见 `docs/NEXT_TASK.md`：**下一产品任务待优先级确认**。
-不得自行启动账户资金参与动作裁决、Explainability、Evidence Layer、Signal Ledger、收益归因、模型训练或自动调权。
-
-## 给新会话的强制要求
-
-1. 先读上述 `docs/*`，并用 `git log` / 代码路径核对，**不要凭记忆扩写事实**。
-2. 先 `git status`、`git rev-parse HEAD`、`git remote -v`。
-3. **不要重复**已在文档与提交中标明完成的大功能。
-4. 未经用户确认，**不扩大任务范围**、不 force push、不改无关模块。
+P2 路线全量授权已开启，P2-1 完成后自动进入 **P2-2 Signal Ledger**。
+根据自动推进规则，完成 P2-1 合并后从新稳定 SHA 启动 P2-2，无需停顿等待额外授权。

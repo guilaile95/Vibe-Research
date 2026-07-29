@@ -82,6 +82,8 @@ import type {
   UpdateStanceInput,
   DataHealthOverviewResult,
   DataHealthDetailResult,
+  DecisionEvidenceDetailResult,
+  DecisionEvidenceListResult,
 } from "./api/types.ts";
 
 
@@ -753,4 +755,114 @@ export const api = {
       "POST",
       reason != null ? { reason } : {},
     ),
+
+  // ---- 决策依据与可解释性 (P2-1) ----
+  listDecisionEvidence: (params?: {
+    code?: string;
+    symbol?: string;
+    trade_date?: string;
+    quality_status?: string;
+    trace_status?: string;
+    page?: number;
+    limit?: number;
+    offset?: number;
+    page_size?: number;
+  }) => listDecisionEvidence(params),
+  getDecisionEvidence: (runId: string) => getDecisionEvidence(runId),
+  getDecisionEvidenceByAdvice: (params: string | { advice_id?: string; trade_date?: string; generated_at?: string; code?: string; symbol?: string }) =>
+    getDecisionEvidenceByAdvice(params),
 };
+
+export async function listDecisionEvidence(params?: {
+  code?: string;
+  symbol?: string;
+  trade_date?: string;
+  quality_status?: string;
+  trace_status?: string;
+  page?: number;
+  limit?: number;
+  offset?: number;
+  page_size?: number;
+}): Promise<DecisionEvidenceListResult> {
+  const q = new URLSearchParams();
+  const stockCode = params?.code || params?.symbol;
+  if (stockCode) q.set("code", stockCode);
+  if (params?.trade_date) q.set("trade_date", params.trade_date);
+  if (params?.quality_status) q.set("quality_status", params.quality_status);
+  if (params?.trace_status) q.set("trace_status", params.trace_status);
+
+  const limitVal = params?.limit || params?.page_size || 50;
+  const offsetVal = params?.offset ?? ((params?.page ? params.page - 1 : 0) * limitVal);
+  q.set("limit", String(limitVal));
+  q.set("offset", String(offsetVal));
+
+  const qs = q.toString();
+  const res = await get<any>(`/decision-evidence${qs ? `?${qs}` : ""}`);
+  if (Array.isArray(res)) {
+    return {
+      items: res,
+      total: res.length,
+      page: params?.page || 1,
+      limit: limitVal,
+      offset: offsetVal,
+      total_pages: Math.ceil(res.length / limitVal) || 1,
+    };
+  }
+  if (res && Array.isArray(res.items)) {
+    const total = typeof res.total === "number" ? res.total : res.items.length;
+    const page = params?.page || Math.floor((res.offset ?? offsetVal) / limitVal) + 1;
+    return {
+      items: res.items,
+      total,
+      page,
+      limit: res.limit || limitVal,
+      offset: res.offset ?? offsetVal,
+      total_pages: Math.ceil(total / limitVal) || 1,
+    };
+  }
+  return (res as DecisionEvidenceListResult) || { items: [], total: 0, page: 1, limit: limitVal };
+}
+
+export async function getDecisionEvidence(runId: string): Promise<DecisionEvidenceDetailResult> {
+  const res = await get<any>(`/decision-evidence/${encodeURIComponent(runId)}`);
+  const data = unwrapApiPayload(res);
+  return {
+    run: data?.run || data?.decision_run,
+    decision_run: data?.decision_run || data?.run,
+    evidence_items: data?.evidence_items || [],
+    explanations: data?.explanations || data?.explanation_items || [],
+    explanation_items: data?.explanation_items || data?.explanations || [],
+    missing_evidences: data?.missing_evidences || (data?.evidence_items ? data.evidence_items.filter((i: any) => i.is_missing || i.quality_status === "missing") : []),
+  };
+}
+
+export async function getDecisionEvidenceByAdvice(params: string | {
+  advice_id?: string;
+  trade_date?: string;
+  generated_at?: string;
+  code?: string;
+  symbol?: string;
+}): Promise<DecisionEvidenceDetailResult> {
+  let url = "";
+  if (typeof params === "string") {
+    url = `/decision-evidence/by-advice?advice_id=${encodeURIComponent(params)}`;
+  } else {
+    const q = new URLSearchParams();
+    if (params.advice_id) q.set("advice_id", params.advice_id);
+    if (params.trade_date) q.set("trade_date", params.trade_date);
+    if (params.generated_at) q.set("generated_at", params.generated_at);
+    const stockCode = params.code || params.symbol;
+    if (stockCode) q.set("code", stockCode);
+    url = `/decision-evidence/by-advice?${q.toString()}`;
+  }
+  const res = await get<any>(url);
+  const data = unwrapApiPayload(res);
+  return {
+    run: data?.run || data?.decision_run,
+    decision_run: data?.decision_run || data?.run,
+    evidence_items: data?.evidence_items || [],
+    explanations: data?.explanations || data?.explanation_items || [],
+    explanation_items: data?.explanation_items || data?.explanations || [],
+    missing_evidences: data?.missing_evidences || (data?.evidence_items ? data.evidence_items.filter((i: any) => i.is_missing || i.quality_status === "missing") : []),
+  };
+}

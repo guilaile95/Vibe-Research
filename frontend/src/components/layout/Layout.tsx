@@ -4,7 +4,7 @@ import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search, NotebookPen,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github,
   Cog, Cpu, Database, Cable, Rocket, FlaskConical, Star, FileText,
-  Target, BookOpen, HeartPulse, ReceiptText, MessageSquareCode,
+  Target, BookOpen, HeartPulse, ReceiptText, MessageSquareCode, ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -23,6 +23,7 @@ const NAV = [
   { to: "/portfolio", icon: Wallet, label: "我的持仓" },
   { to: "/trades", icon: ReceiptText, label: "交易流水" },
   { to: "/decision-feedback", icon: MessageSquareCode, label: "决策反馈" },
+  { to: "/decision-evidence", icon: ShieldCheck, label: "决策依据" },
   { to: "/cockpit", icon: Target, label: "决策舱" },
   { to: "/my-reports", icon: FileText, label: "我的研报" },
   { to: "/notes", icon: NotebookPen, label: "研究记录" },

@@ -75,6 +75,9 @@ const Trades = lazy(() =>
 const DecisionFeedback = lazy(() =>
   import("@/pages/DecisionFeedback").then((m) => ({ default: m.DecisionFeedback })),
 );
+const DecisionEvidence = lazy(() =>
+  import("@/pages/DecisionEvidence").then((m) => ({ default: m.default })),
+);
 
 function PageFallback() {
   return (
@@ -116,10 +119,11 @@ export const router = createBrowserRouter([
       // 更具体的 :key/:tag 必须排在 :key 之前
       { path: "/sectors/:key/:tag", element: <SectorResearchTagRoute /> },
       { path: "/sectors/:key", element: withSuspense(<SectorDetail />) },
-      { path: "/portfolio", element: withSuspense(<Portfolio />) },
-      { path: "/trades", element: withSuspense(<Trades />) },
-      { path: "/decision-feedback", element: withSuspense(<DecisionFeedback />) },
-      { path: "/cockpit", element: withSuspense(<DecisionCockpit />) },
+	      { path: "/portfolio", element: withSuspense(<Portfolio />) },
+	      { path: "/trades", element: withSuspense(<Trades />) },
+	      { path: "/decision-feedback", element: withSuspense(<DecisionFeedback />) },
+	      { path: "/decision-evidence", element: withSuspense(<DecisionEvidence />) },
+	      { path: "/cockpit", element: withSuspense(<DecisionCockpit />) },
       { path: "/stock-data", element: withSuspense(<StockData />) },
       { path: "/watchlist", element: withSuspense(<Watchlist />) },
       { path: "/my-reports", element: withSuspense(<MyReports />) },
