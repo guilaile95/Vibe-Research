@@ -65,6 +65,10 @@ import type {
   EvidenceListResult,
   ThesisCreateInput,
   ThesisUpdateInput,
+  TradeOperation,
+  TradeExecutionStatus,
+  TradeRecord,
+  TradeCreateInput,
   ThesisAggregate,
   ThesisListResult,
   ThesisRevision,
@@ -681,4 +685,32 @@ export const api = {
   },
   getDataHealthSource: (sourceId: string) =>
     get<DataHealthDetailResult>(`/data-health/${encodeURIComponent(sourceId)}`),
+
+  // ---- 交易流水 ----
+  listTrades: (params?: {
+    code?: string;
+    operation?: TradeOperation;
+    execution_status?: TradeExecutionStatus;
+    date_from?: string;
+    date_to?: string;
+    include_voided?: boolean;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.code) q.set("code", params.code);
+    if (params?.operation) q.set("operation", params.operation);
+    if (params?.execution_status) q.set("execution_status", params.execution_status);
+    if (params?.date_from) q.set("date_from", params.date_from);
+    if (params?.date_to) q.set("date_to", params.date_to);
+    if (params?.include_voided != null) q.set("include_voided", String(params.include_voided));
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return get<TradeRecord[]>(`/trades${qs ? `?${qs}` : ""}`);
+  },
+  getTrade: (tradeId: string) => get<TradeRecord>(`/trades/${encodeURIComponent(tradeId)}`),
+  createTrade: (body: TradeCreateInput) => request<TradeRecord>("/trades", "POST", body),
+  voidTrade: (tradeId: string, reason: string) =>
+    request<TradeRecord>(`/trades/${encodeURIComponent(tradeId)}/void`, "POST", { reason }),
 };
