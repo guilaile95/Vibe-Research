@@ -83,10 +83,15 @@ def archive_signal_ledger(
     trade_date = str(advice_result.get("trade_date") or "").strip()
     generated_at = str(advice_result.get("generated_at") or "").strip()
 
+    # Identity fields are required for decision_run_id / cross-store linkage.
+    # Fail closed: no clock fill-in, no decision_run_id, no SQLite writes.
     if not trade_date or not generated_at:
-        now_iso = _utc_now()
-        trade_date = trade_date or now_iso[:10]
-        generated_at = generated_at or now_iso
+        logger.warning(
+            "archive_signal_ledger missing decision identity trade_date=%r generated_at=%r",
+            trade_date,
+            generated_at,
+        )
+        return {"status": "failed", "reason": "missing_decision_identity"}
 
     decision_run_id = decision_evidence_service.generate_decision_run_id(
         trade_date, generated_at
@@ -114,23 +119,17 @@ def archive_signal_ledger(
     account_funding, _funding_quality = adapter.parse_account_funding(advice_result)
     constraint_state = adapter.extract_constraint_state(advice_result)
 
-    # Honest stage status for this archive snapshot
-    has_required_keys = bool(trade_date and generated_at)
-    schema_status = "passed" if has_required_keys else "unavailable"
-    # compatibility: final assembled authoritative dict present → recorded snapshot
-    compatibility_status = "passed" if has_required_keys else "unavailable"
-
     signal_entries: list[dict[str, Any]] = []
     decision_outcomes: list[dict[str, Any]] = []
 
-    # 1. schema
+    # 1. schema — only reached after identity validation
     signal_entries.append(
         _entry(
             decision_run_id=decision_run_id,
             stage="schema",
             signal_type="json_schema_validation",
             payload={
-                "status": schema_status,
+                "status": "passed",
                 "schema_version": schema_version,
                 "trade_date": trade_date,
                 "generated_at": generated_at,
@@ -146,7 +145,7 @@ def archive_signal_ledger(
             stage="compatibility",
             signal_type="compatibility_check",
             payload={
-                "status": compatibility_status,
+                "status": "passed",
                 "note": "final_authoritative_snapshot",
             },
             created_at=now_str,
@@ -180,6 +179,14 @@ def archive_signal_ledger(
         )
         reason = adapter.summarize_holding_reason(holding)
 
+        policy_payload = {
+            "name": payload["name"],
+            "action": action,
+            "execution_size_pct_of_holding": payload["execution_size_pct_of_holding"],
+            "confidence": payload["confidence"],
+        }
+        if payload.get("execution_size_invalid"):
+            policy_payload["execution_size_invalid"] = True
         signal_entries.append(
             _entry(
                 decision_run_id=decision_run_id,
@@ -187,18 +194,12 @@ def archive_signal_ledger(
                 signal_type="policy_audit_holding",
                 code=code,
                 salt=idx,
-                payload={
-                    "name": payload["name"],
-                    "action": action,
-                    "execution_size_pct_of_holding": payload[
-                        "execution_size_pct_of_holding"
-                    ],
-                    "confidence": payload["confidence"],
-                },
+                payload=policy_payload,
                 created_at=now_str,
             )
         )
 
+        # Use normalized payload as-is (includes execution_size_invalid when set)
         signal_entries.append(
             _entry(
                 decision_run_id=decision_run_id,
@@ -207,27 +208,7 @@ def archive_signal_ledger(
                 code=code,
                 salt=idx,
                 severity="info" if action != "sell" else "warning",
-                payload={
-                    "name": payload["name"],
-                    "action": action,
-                    "execution_size_pct_of_holding": payload[
-                        "execution_size_pct_of_holding"
-                    ],
-                    "execution_quantity": payload["execution_quantity"],
-                    "estimated_amount": payload["estimated_amount"],
-                    "sellable_quantity_advisory": payload[
-                        "sellable_quantity_advisory"
-                    ]
-                    if "sellable_quantity_advisory" in holding
-                    else None,
-                    "confidence": payload["confidence"],
-                    "trigger_conditions": payload["trigger_conditions"],
-                    "price_conditions": payload["price_conditions"],
-                    "execution_plan": payload["execution_plan"],
-                    "risk_conditions": payload["risk_conditions"],
-                    "invalidation_conditions": payload["invalidation_conditions"],
-                    "data_limitations": payload["data_limitations"],
-                },
+                payload=payload,
                 created_at=now_str,
             )
         )

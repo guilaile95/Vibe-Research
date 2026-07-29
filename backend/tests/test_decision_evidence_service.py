@@ -101,6 +101,19 @@ def test_archive_decision_evidence_error_resilience(tmp_path):
     valid_advice = {
         "trade_date": "2026-07-29",
         "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "market_status": "normal",
+        "holdings": [],
     }
     res2 = svc.archive_decision_evidence(valid_advice, db_path=corrupt_db)
     assert res2["status"] == "failed"
+
+
+def test_archive_decision_evidence_missing_identity_no_write(tmp_path):
+    db_path = tmp_path / "missing_id.sqlite3"
+    res = svc.archive_decision_evidence(
+        {"holdings": [], "market_status": "normal"},
+        db_path=db_path,
+    )
+    assert res["status"] == "failed"
+    assert res["reason"] == "missing_decision_identity"
+    assert not db_path.exists()

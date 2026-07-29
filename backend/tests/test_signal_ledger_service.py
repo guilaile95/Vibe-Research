@@ -77,3 +77,14 @@ def test_archive_signal_ledger_null_sellable_advisory(tmp_path, monkeypatch):
 def test_archive_signal_ledger_malformed_non_dict(tmp_path):
     res = svc.archive_signal_ledger("bad", db_path=tmp_path / "x.sqlite3")
     assert res["status"] == "failed"
+
+
+def test_archive_signal_ledger_missing_identity_no_write(tmp_path):
+    db_path = tmp_path / "missing_id.sqlite3"
+    res = svc.archive_signal_ledger(
+        {"holdings": [], "market_status": "normal"},
+        db_path=db_path,
+    )
+    assert res["status"] == "failed"
+    assert res["reason"] == "missing_decision_identity"
+    assert not db_path.exists()

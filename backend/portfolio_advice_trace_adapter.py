@@ -53,34 +53,53 @@ def iter_authoritative_holdings(advice_result: Mapping[str, Any]) -> list[dict[s
     return out
 
 
-def execution_size_to_target_ratio(execution_size_pct_of_holding: Any) -> float | None:
-    """Map execution_size_pct_of_holding (0-100) to target_ratio fraction (0-1).
+def normalize_execution_size_pct(value: Any) -> float | None:
+    """Normalize execution_size_pct_of_holding to a finite float in [0, 100].
 
     Rejects bool, non-finite, negative, >100, and non-numeric values.
+    Valid 0 is preserved as 0.0.
     """
-    if execution_size_pct_of_holding is None:
+    if value is None:
         return None
-    # bool is a subclass of int — must reject before numeric conversion
-    if isinstance(execution_size_pct_of_holding, bool):
+    # bool is a subclass of int — reject before numeric conversion
+    if isinstance(value, bool):
         return None
-    if isinstance(execution_size_pct_of_holding, str):
-        text = execution_size_pct_of_holding.strip()
+    if isinstance(value, str):
+        text = value.strip()
         if not text:
             return None
         try:
-            value = float(text)
+            number = float(text)
         except ValueError:
             return None
-    elif isinstance(execution_size_pct_of_holding, (int, float)):
-        value = float(execution_size_pct_of_holding)
+    elif isinstance(value, (int, float)):
+        number = float(value)
     else:
         return None
 
-    if not math.isfinite(value):
+    if not math.isfinite(number):
         return None
-    if value < 0.0 or value > 100.0:
+    if number < 0.0 or number > 100.0:
         return None
-    return value / 100.0
+    return number
+
+
+def execution_size_invalid(holding: Mapping[str, Any]) -> bool:
+    """True when raw size field is present and non-null but cannot be normalized."""
+    if "execution_size_pct_of_holding" not in holding:
+        return False
+    raw = holding.get("execution_size_pct_of_holding")
+    if raw is None:
+        return False
+    return normalize_execution_size_pct(raw) is None
+
+
+def execution_size_to_target_ratio(execution_size_pct_of_holding: Any) -> float | None:
+    """Map execution_size_pct_of_holding (0-100) to target_ratio fraction (0-1)."""
+    normalized = normalize_execution_size_pct(execution_size_pct_of_holding)
+    if normalized is None:
+        return None
+    return normalized / 100.0
 
 
 def _append_text_parts(parts: list[str], value: Any, *, max_parts: int) -> bool:
@@ -123,7 +142,6 @@ def count_condition_fields(holding: Mapping[str, Any]) -> dict[str, int]:
     for key in CONDITION_COUNT_KEYS:
         value = holding.get(key)
         if isinstance(value, list):
-            # count only non-empty strings for honesty
             counts[f"{key}_count"] = sum(
                 1 for item in value if isinstance(item, str) and item.strip()
             )
@@ -207,16 +225,8 @@ def extract_constraint_state(advice_result: Mapping[str, Any]) -> dict[str, Any]
             continue
         if "sellable_quantity_advisory" in holding:
             sellable_advisory_count += 1
-        action = str(holding.get("action") or "").lower()
-        size = holding.get("execution_size_pct_of_holding")
-        qty = holding.get("execution_quantity")
-        if action == "add" and size is not None and not isinstance(size, bool):
-            try:
-                size_val = float(size)
-            except (TypeError, ValueError):
-                size_val = 0.0
-            if math.isfinite(size_val) and size_val > 0 and qty is None:
-                constrained_add_count += 1
+        if holding_is_cash_constrained(holding):
+            constrained_add_count += 1
 
     return {
         "account_funding_available": funding_present,
@@ -231,7 +241,7 @@ def extract_constraint_state(advice_result: Mapping[str, Any]) -> dict[str, Any]
 def holding_is_cash_constrained(holding: Mapping[str, Any]) -> bool:
     """Conservative cash-constraint signal for a single holding.
 
-    Only true when action=add, size>0, and execution_quantity is null.
+    Only true when action=add, normalized size>0, and execution_quantity is null.
     Does not claim the exact cash reason (unconfigured / multi-add / lot / price).
     """
     action = str(holding.get("action") or "").lower()
@@ -239,22 +249,22 @@ def holding_is_cash_constrained(holding: Mapping[str, Any]) -> bool:
         return False
     if holding.get("execution_quantity") is not None:
         return False
-    size = holding.get("execution_size_pct_of_holding")
-    if size is None or isinstance(size, bool):
-        return False
-    try:
-        size_val = float(size)
-    except (TypeError, ValueError):
-        return False
-    return math.isfinite(size_val) and size_val > 0
+    size = normalize_execution_size_pct(holding.get("execution_size_pct_of_holding"))
+    return size is not None and size > 0.0
 
 
 def holding_execution_payload(holding: Mapping[str, Any]) -> dict[str, Any]:
-    """Payload fields for execution / outcome archive."""
-    return {
+    """Payload fields for execution / outcome archive.
+
+    Always uses normalized execution_size_pct_of_holding (never raw invalid values).
+    """
+    normalized_size = normalize_execution_size_pct(
+        holding.get("execution_size_pct_of_holding")
+    )
+    payload: dict[str, Any] = {
         "name": holding.get("name"),
         "action": str(holding.get("action") or "hold").lower(),
-        "execution_size_pct_of_holding": holding.get("execution_size_pct_of_holding"),
+        "execution_size_pct_of_holding": normalized_size,
         "execution_quantity": holding.get("execution_quantity"),
         "estimated_amount": holding.get("estimated_amount"),
         "sellable_quantity_advisory": holding.get("sellable_quantity_advisory")
@@ -268,3 +278,6 @@ def holding_execution_payload(holding: Mapping[str, Any]) -> dict[str, Any]:
         "invalidation_conditions": holding.get("invalidation_conditions") or [],
         "data_limitations": holding.get("data_limitations") or [],
     }
+    if execution_size_invalid(holding):
+        payload["execution_size_invalid"] = True
+    return payload

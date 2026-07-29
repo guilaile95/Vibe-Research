@@ -58,10 +58,15 @@ def archive_decision_evidence(
     trade_date = str(advice_result.get("trade_date") or "").strip()
     generated_at = str(advice_result.get("generated_at") or "").strip()
 
+    # Identity fields required for decision_run_id / cross-store linkage.
+    # Fail closed: no clock fill-in, no SQLite writes.
     if not trade_date or not generated_at:
-        now_iso = _utc_now()
-        trade_date = trade_date or now_iso[:10]
-        generated_at = generated_at or now_iso
+        logger.warning(
+            "archive_decision_evidence missing decision identity trade_date=%r generated_at=%r",
+            trade_date,
+            generated_at,
+        )
+        return {"status": "failed", "reason": "missing_decision_identity"}
 
     run_id = generate_decision_run_id(trade_date, generated_at)
     now_str = _utc_now()
@@ -186,17 +191,20 @@ def archive_decision_evidence(
             ):
                 q_status = "valid"
 
-            value_json = {
+            normalized_size = adapter.normalize_execution_size_pct(
+                item.get("execution_size_pct_of_holding")
+            )
+            value_json: dict[str, Any] = {
                 "name": item.get("name"),
                 "price": price,
                 "holding_weight_pct": item.get("holding_weight_pct"),
                 "shares": item.get("shares"),
-                "execution_size_pct_of_holding": item.get(
-                    "execution_size_pct_of_holding"
-                ),
+                "execution_size_pct_of_holding": normalized_size,
                 "execution_quantity": item.get("execution_quantity"),
                 "estimated_amount": item.get("estimated_amount"),
             }
+            if adapter.execution_size_invalid(item):
+                value_json["execution_size_invalid"] = True
             if "sellable_quantity_advisory" in item:
                 value_json["sellable_quantity_advisory"] = item.get(
                     "sellable_quantity_advisory"
@@ -224,10 +232,10 @@ def archive_decision_evidence(
 
             action = str(item.get("action") or "hold").lower()
             reason = adapter.summarize_holding_reason(item)
-            # Neutral attribution: only claim size rule when size present;
+            # Neutral attribution: only claim size rule when normalized size present;
             # for null add qty use generic execution_quantity_null (not cash-only).
             rule_id = None
-            if item.get("execution_size_pct_of_holding") is not None:
+            if normalized_size is not None:
                 rule_id = "rule_execution_size"
             if adapter.holding_is_cash_constrained(item):
                 rule_id = "rule_add_quantity_null"
