@@ -90,6 +90,10 @@ import type {
   AdoptionSummary,
   OutcomeSummary,
   StockAnalyticsItem,
+  AttributionResult,
+  AttributionSnapshotSummary,
+  AttributionSnapshotListResult,
+  AttributionSnapshotDetailResult,
 } from "./api/types.ts";
 
 
@@ -815,6 +819,15 @@ export const api = {
   }): Promise<StockAnalyticsItem[]> {
     return getStockAnalytics(params);
   },
+
+  // ---- 收益归因 (P2-4B) ----
+  getPerformanceAttribution: (params?: { date_from?: string; date_to?: string }) =>
+    getPerformanceAttribution(params),
+  createAttributionSnapshot: (body?: { date_from?: string; date_to?: string; price_map?: Record<string, number> }) =>
+    createAttributionSnapshot(body),
+  listAttributionSnapshots: (params?: { date_from?: string; date_to?: string; limit?: number; offset?: number }) =>
+    listAttributionSnapshots(params),
+  getAttributionSnapshot: (snapshotId: string) => getAttributionSnapshot(snapshotId),
 };
 
 export async function listDecisionEvidence(params?: {
@@ -990,4 +1003,50 @@ export async function getStockAnalytics(params?: {
   if (params?.limit != null) q.set("limit", String(params.limit));
   const qs = q.toString();
   return get<StockAnalyticsItem[]>(`/decision-analytics/stocks${qs ? `?${qs}` : ""}`);
+}
+
+// ---- 收益归因 (P2-4B) ----
+
+export async function getPerformanceAttribution(params?: {
+  date_from?: string;
+  date_to?: string;
+}): Promise<AttributionResult> {
+  const q = new URLSearchParams();
+  if (params?.date_from) q.set("date_from", params.date_from);
+  if (params?.date_to) q.set("date_to", params.date_to);
+  const qs = q.toString();
+  return get<AttributionResult>(`/performance-attribution${qs ? `?${qs}` : ""}`);
+}
+
+export async function createAttributionSnapshot(body?: {
+  date_from?: string;
+  date_to?: string;
+  price_map?: Record<string, number>;
+}): Promise<{ snapshot: AttributionSnapshotSummary; attribution: AttributionResult }> {
+  return request<{ snapshot: AttributionSnapshotSummary; attribution: AttributionResult }>(
+    "/performance-attribution/snapshot",
+    "POST",
+    body ?? {},
+  );
+}
+
+export async function listAttributionSnapshots(params?: {
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<AttributionSnapshotListResult> {
+  const q = new URLSearchParams();
+  if (params?.date_from) q.set("date_from", params.date_from);
+  if (params?.date_to) q.set("date_to", params.date_to);
+  if (params?.limit != null) q.set("limit", String(params.limit));
+  if (params?.offset != null) q.set("offset", String(params.offset));
+  const qs = q.toString();
+  return get<AttributionSnapshotListResult>(`/performance-attribution/snapshots${qs ? `?${qs}` : ""}`);
+}
+
+export async function getAttributionSnapshot(snapshotId: string): Promise<AttributionSnapshotDetailResult> {
+  return get<AttributionSnapshotDetailResult>(
+    `/performance-attribution/snapshots/${encodeURIComponent(snapshotId)}`,
+  );
 }

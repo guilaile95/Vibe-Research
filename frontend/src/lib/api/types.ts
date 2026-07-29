@@ -1408,3 +1408,57 @@ export interface StockAnalyticsItem {
   outcome_positive_count: number;
   outcome_positive_rate: number | null;
 }
+
+// ---- 收益归因 (P2-4B) ----
+
+export interface AttributionPosition {
+  code: string;
+  name: string;
+  closed_quantity: number;
+  realized_pnl: number;
+  remaining_quantity: number;
+  avg_cost: number | null;
+  cost_basis: number;
+  total_fees: number;
+  unrealized_pnl: number | null;
+  data_limitations: string[];
+}
+
+export interface AttributionTotals {
+  total_realized_pnl: number;
+  total_unrealized_pnl: number | null;
+  total_fees: number;
+  total_cost_basis: number;
+  position_count: number;
+}
+
+export interface AttributionResult {
+  as_of_date: string;
+  date_from: string | null;
+  date_to: string | null;
+  positions: AttributionPosition[];
+  totals: AttributionTotals;
+  data_limitations: string[];
+}
+
+export interface AttributionSnapshotSummary {
+  snapshot_id: string;
+  as_of_date: string;
+  created_at: string;
+  total_realized_pnl: number;
+  total_unrealized_pnl: number | null;
+  total_fees: number;
+  total_cost_basis: number;
+  position_count: number;
+}
+
+export interface AttributionSnapshotListResult {
+  items: AttributionSnapshotSummary[];
+  limit: number;
+  offset: number;
+}
+
+export interface AttributionSnapshotDetailResult {
+  snapshot: AttributionSnapshotSummary & { payload: AttributionResult };
+  positions: AttributionPosition[];
+}

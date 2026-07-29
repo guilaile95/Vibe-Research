@@ -5,7 +5,7 @@ import {
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github,
   Cog, Cpu, Database, Cable, Rocket, FlaskConical, Star, FileText,
   Target, BookOpen, HeartPulse, ReceiptText, MessageSquareCode, ShieldCheck,
-  Settings2, BarChart3,
+  Settings2, BarChart3, PieChart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -25,6 +25,7 @@ const NAV = [
   { to: "/trades", icon: ReceiptText, label: "交易流水" },
   { to: "/decision-feedback", icon: MessageSquareCode, label: "决策反馈" },
   { to: "/decision-performance", icon: BarChart3, label: "决策绩效" },
+  { to: "/performance-attribution", icon: PieChart, label: "收益归因" },
   { to: "/decision-evidence", icon: ShieldCheck, label: "决策依据" },
   { to: "/signal-ledger", icon: Activity, label: "信号账本" },
   { to: "/account-policy", icon: Settings2, label: "执行策略" },
