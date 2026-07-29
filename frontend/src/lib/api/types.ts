@@ -1369,3 +1369,42 @@ export interface AccountExecutionPolicy {
   tie_breaker_order: "code_asc" | "code_desc" | "proportional";
   allow_partial_execution: boolean;
 }
+
+
+// ---- 决策绩效分析 (Decision Feedback Analytics P2-4A) ----
+
+export interface AdoptionSummary {
+  total: number;
+  counts: {
+    followed: number;
+    partially_followed: number;
+    not_followed: number;
+    not_applicable: number;
+  };
+  adoption_rate: number | null;
+  date_from: string | null;
+  date_to: string | null;
+}
+
+export interface OutcomeSummary {
+  total: number;
+  counts: {
+    better_than_expected: number;
+    as_expected: number;
+    worse_than_expected: number;
+    not_evaluated: number;
+  };
+  positive_rate: number | null;
+  adoption_status: string | null;
+  date_from: string | null;
+  date_to: string | null;
+}
+
+export interface StockAnalyticsItem {
+  code: string;
+  total: number;
+  adoption_followed_count: number;
+  adoption_rate: number | null;
+  outcome_positive_count: number;
+  outcome_positive_rate: number | null;
+}

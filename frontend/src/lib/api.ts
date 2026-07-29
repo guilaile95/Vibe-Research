@@ -87,6 +87,9 @@ import type {
   SignalLedgerQueryResult,
   SignalLedgerRunDetailResult,
   AccountExecutionPolicy,
+  AdoptionSummary,
+  OutcomeSummary,
+  StockAnalyticsItem,
 } from "./api/types.ts";
 
 
@@ -793,6 +796,25 @@ export const api = {
   updateAccountExecutionPolicy(body: AccountExecutionPolicy): Promise<AccountExecutionPolicy> {
     return request<AccountExecutionPolicy>("/account-execution-policy", "PUT", body);
   },
+
+  // ---- 决策绩效分析 (P2-4A) ----
+  getAdoptionSummary(params?: { date_from?: string; date_to?: string }): Promise<AdoptionSummary> {
+    return getAdoptionSummary(params);
+  },
+  getOutcomeSummary(params?: {
+    adoption_status?: string;
+    date_from?: string;
+    date_to?: string;
+  }): Promise<OutcomeSummary> {
+    return getOutcomeSummary(params);
+  },
+  getStockAnalytics(params?: {
+    date_from?: string;
+    date_to?: string;
+    limit?: number;
+  }): Promise<StockAnalyticsItem[]> {
+    return getStockAnalytics(params);
+  },
 };
 
 export async function listDecisionEvidence(params?: {
@@ -931,4 +953,41 @@ export async function getAccountExecutionPolicy(): Promise<AccountExecutionPolic
 
 export async function updateAccountExecutionPolicy(body: AccountExecutionPolicy): Promise<AccountExecutionPolicy> {
   return api.updateAccountExecutionPolicy(body);
+}
+
+export async function getAdoptionSummary(params?: {
+  date_from?: string;
+  date_to?: string;
+}): Promise<AdoptionSummary> {
+  const q = new URLSearchParams();
+  if (params?.date_from) q.set("date_from", params.date_from);
+  if (params?.date_to) q.set("date_to", params.date_to);
+  const qs = q.toString();
+  return get<AdoptionSummary>(`/decision-analytics/adoption${qs ? `?${qs}` : ""}`);
+}
+
+export async function getOutcomeSummary(params?: {
+  adoption_status?: string;
+  date_from?: string;
+  date_to?: string;
+}): Promise<OutcomeSummary> {
+  const q = new URLSearchParams();
+  if (params?.adoption_status) q.set("adoption_status", params.adoption_status);
+  if (params?.date_from) q.set("date_from", params.date_from);
+  if (params?.date_to) q.set("date_to", params.date_to);
+  const qs = q.toString();
+  return get<OutcomeSummary>(`/decision-analytics/outcome${qs ? `?${qs}` : ""}`);
+}
+
+export async function getStockAnalytics(params?: {
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+}): Promise<StockAnalyticsItem[]> {
+  const q = new URLSearchParams();
+  if (params?.date_from) q.set("date_from", params.date_from);
+  if (params?.date_to) q.set("date_to", params.date_to);
+  if (params?.limit != null) q.set("limit", String(params.limit));
+  const qs = q.toString();
+  return get<StockAnalyticsItem[]>(`/decision-analytics/stocks${qs ? `?${qs}` : ""}`);
 }
