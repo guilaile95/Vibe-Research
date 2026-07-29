@@ -1307,3 +1307,52 @@ export interface DecisionEvidenceListResult {
   offset?: number;
   total_pages?: number;
 }
+
+
+// ---- 信号账本 (Signal Ledger P2-2) ----
+
+export type SignalStage =
+  | "schema"
+  | "compatibility"
+  | "fact_reconciliation"
+  | "policy_audit"
+  | "execution"
+  | "narrative_audit"
+  | "account_constraint";
+
+export type SignalSeverity = "info" | "warning" | "error";
+
+export interface SignalEntryRecord {
+  entry_id: string;
+  decision_run_id: string;
+  stage: SignalStage | string;
+  code?: string | null;
+  signal_type: string;
+  severity: SignalSeverity | string;
+  payload_json: Record<string, any>;
+  created_at: string;
+}
+
+export interface DecisionOutcomeRecord {
+  outcome_id: string;
+  decision_run_id: string;
+  code: string;
+  action: string;
+  target_ratio?: number | null;
+  reason: string;
+  constraints_applied_json: string[];
+  created_at: string;
+}
+
+export interface SignalLedgerRunDetailResult {
+  run: DecisionRunRecord;
+  signal_entries: SignalEntryRecord[];
+  decision_outcomes: DecisionOutcomeRecord[];
+}
+
+export interface SignalLedgerQueryResult {
+  items: SignalEntryRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+}

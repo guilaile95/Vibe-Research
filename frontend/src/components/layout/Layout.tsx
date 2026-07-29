@@ -24,6 +24,7 @@ const NAV = [
   { to: "/trades", icon: ReceiptText, label: "交易流水" },
   { to: "/decision-feedback", icon: MessageSquareCode, label: "决策反馈" },
   { to: "/decision-evidence", icon: ShieldCheck, label: "决策依据" },
+  { to: "/signal-ledger", icon: Activity, label: "信号账本" },
   { to: "/cockpit", icon: Target, label: "决策舱" },
   { to: "/my-reports", icon: FileText, label: "我的研报" },
   { to: "/notes", icon: NotebookPen, label: "研究记录" },
