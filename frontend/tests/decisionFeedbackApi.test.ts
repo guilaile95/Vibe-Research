@@ -97,20 +97,30 @@ test("getDecisionFeedback encodes feedback_id", async () => {
 
 test("createDecisionFeedback posts payload correctly", async () => {
   reset({ status: 200, body: { data: { feedback_id: "fb_123" } } });
-  const body = {
+  const input = {
     code: "600519",
     advice_trade_date: "2026-07-29",
     advice_generated_at: "2026-07-29T08:00:00Z",
+    advice_ref: {
+      trade_date: "2026-07-29",
+      generated_at: "2026-07-29T08:00:00Z",
+    },
     adoption_status: "followed" as const,
     outcome_status: "as_expected" as const,
     note: "测试决策反馈",
   };
-  await api.createDecisionFeedback(body);
+  await api.createDecisionFeedback(input);
 
   const request = lastRequest();
   assert.equal(request.method, "POST");
   assert.equal(request.url, "/api/decision-feedback");
-  assert.deepEqual(JSON.parse(request.body || "{}"), body);
+  const parsed = JSON.parse(request.body || "{}");
+  assert.equal(parsed.advice_trade_date, undefined);
+  assert.equal(parsed.advice_generated_at, undefined);
+  assert.deepEqual(parsed.advice_ref, {
+    trade_date: "2026-07-29",
+    generated_at: "2026-07-29T08:00:00Z",
+  });
 });
 
 test("voidDecisionFeedback posts void reason", async () => {

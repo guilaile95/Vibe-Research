@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "test:e2e:sector-research": "node tests/e2e/sector-research.browser.mjs",
+    "test:e2e:decision-feedback-failure": "node tests/e2e/decision-feedback-failure.browser.mjs",
     "test:e2e:smoke": "node tests/e2e/stock-data-panel.smoke.browser.mjs",
     "test:e2e:thesis": "node tests/e2e/evidence-thesis-real.browser.mjs",
     "test:e2e:data-health": "node tests/e2e/data-health-real.browser.mjs"
