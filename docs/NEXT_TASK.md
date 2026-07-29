@@ -2,17 +2,17 @@
 
 ## 上一任务（已完成）
 
-~~P2-2 Signal Ledger（信号账本）。~~
+~~P2-4B Performance Attribution（收益归因）。~~
 
 - **状态**：已完成开发与测试全覆盖
-- 数据库 `decision_trace.sqlite3` (新增 `signal_entries` 与 `decision_outcomes` 数据表)
-- REST API: `GET /api/signal-ledger`, `GET /api/signal-ledger/run/{decision_run_id}`
-- 前端 `/signal-ledger` 页面与 7 阶段流水时间线，最终裁决结果卡片与参数回显
+- 独立 SQLite 库 `performance_attribution.sqlite3`，加权平均成本法
+- REST API: `GET /api/performance-attribution`, `POST /api/performance-attribution/snapshot`, `GET /api/performance-attribution/snapshots`, `GET /api/performance-attribution/snapshots/{id}`
+- 前端 `/performance-attribution` 收益归因看板
 
 ## 当前下一任务
 
-**P2-3 Account Capital Constraints (账户资金与可用现金参与决策裁决)**
+**Scheduler import 测试顺序隔离修复**（`fix/scheduler-test-isolation`）。
 
-- **描述**：引入 `account_execution_policy.json`，在建议计算中应用资金分配与仓位整手限制（按 100 股向下取整、按代码字典序仲裁）。
-- **要求**：不修改外部接口，不向网络泄露账户资产。
-- **自动推进**：P2-2 合并后自动进入 P2-3，无需重新发起确认。
+- **描述**：`test_import_app_does_not_start_scheduler` 原方案检查当前 pytest 进程的全局线程状态，导致测试间顺序依赖；改为独立 `sys.executable` 子进程验证 `import app`。
+- **要求**：不修改 Scheduler 产品逻辑；两次全量 not-live 回归 0 failed。
+- **自动推进**：合并后进入下一项。
