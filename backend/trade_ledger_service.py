@@ -5,7 +5,7 @@ import json
 import os
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -320,6 +320,11 @@ def _resolve_advice_ref(advice_ref: Any, code: str) -> tuple[str, str, str]:
     generated_at = advice_ref.get("generated_at")
     if not trade_date or not isinstance(trade_date, str) or not re.fullmatch(r"^\d{4}-\d{2}-\d{2}$", trade_date):
         raise TradeValidationError("advice_ref.trade_date 必须是 YYYY-MM-DD")
+    try:
+        y, m, d = map(int, trade_date.split("-"))
+        date(y, m, d)
+    except ValueError as exc:
+        raise TradeValidationError("advice_ref.trade_date 不是有效日历日期") from exc
     if not generated_at or not isinstance(generated_at, str) or not generated_at.strip():
         raise TradeValidationError("advice_ref.generated_at 必须是非空字符串")
 

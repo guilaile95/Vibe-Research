@@ -1,12 +1,32 @@
-"""Tests for trade_ledger_service validation and computed fields."""
+"""Tests for trade_ledger_service validation, linking, and computed fields."""
 from __future__ import annotations
 
 import json
+import os
+import sqlite3
 from pathlib import Path
 
 import pytest
 
+import ai_result_store
+import evidence_thesis_service
 import trade_ledger_service as svc
+
+
+@pytest.fixture(autouse=True)
+def _isolate_dbs(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    trade_db = data_dir / "trade_ledger.sqlite3"
+    review_db = data_dir / "daily_reviews.sqlite3"
+    thesis_db = data_dir / "evidence_thesis.db"
+
+    monkeypatch.setenv("VR_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("VIBE_RESEARCH_TRADE_LEDGER_DB", str(trade_db))
+    monkeypatch.setenv("VIBE_RESEARCH_REVIEW_DB", str(review_db))
+    monkeypatch.setenv("VIBE_RESEARCH_EVIDENCE_THESIS_DB", str(thesis_db))
+    yield
 
 
 class TestValidation:
@@ -40,7 +60,6 @@ class TestValidation:
             assert f"{req} 必填" in str(exc.value)
 
     def test_executed_at_timezone_required(self):
-        # Naive ISO string without timezone -> rejected
         with pytest.raises(svc.TradeValidationError) as exc:
             svc.validate_and_build_record(self._base_input(executed_at="2026-07-28T09:30:00"))
         assert "时区" in str(exc.value)
@@ -79,53 +98,213 @@ class TestAdviceRefValidation:
             svc._resolve_advice_ref(ref, "600519")
         assert "advice_ref 含有未知字段" in str(exc.value)
 
+    def test_invalid_calendar_date_rejected(self):
+        for bad_date in ("2026-02-30", "2026-13-01", "2026-00-01", "2026-7-1"):
+            ref = {"trade_date": bad_date, "generated_at": "2026-07-28 09:00:00"}
+            with pytest.raises(svc.TradeValidationError) as exc:
+                svc._resolve_advice_ref(ref, "600519")
+            assert "advice_ref.trade_date" in str(exc.value)
 
-class TestAdviceSnapshotStructure:
-    def test_valid_advice_snapshot_extraction(self):
-        holding = {
-            "code": "600519",
-            "action": "add",
-            "execution_quantity": 100,
-            "price_conditions": ["低于1500"],
-            "execution_plan": ["分批建仓"],
-            "risk_conditions": ["回撤不超5%"],
-            "invalidation_conditions": ["基本面恶化"],
-            "confidence": "high",
-        }
-        extracted = svc._validate_and_extract_advice_snapshot(holding)
-        assert extracted["action"] == "add"
-        assert extracted["confidence"] == "high"
 
-    def test_advice_snapshot_missing_key_rejected(self):
-        holding = {
-            "code": "600519",
-            "action": "add",
-            # missing confidence and other keys
+class TestRealAdviceReference:
+    def _create_sample_advice(self, trade_date="2026-07-28", generated_at="2026-07-28 09:00:00"):
+        review_db = Path(os.environ["VIBE_RESEARCH_REVIEW_DB"])
+        payload = {
+            "trade_date": trade_date,
+            "generated_at": generated_at,
+            "holdings": [
+                {
+                    "code": "600519",
+                    "action": "add",
+                    "execution_quantity": 100,
+                    "price_conditions": ["低于1500"],
+                    "execution_plan": ["分批建仓"],
+                    "risk_conditions": ["止损点1400"],
+                    "invalidation_conditions": ["财报转亏"],
+                    "confidence": "high",
+                }
+            ],
         }
+        record = {
+            "result_type": "portfolio_advice",
+            "trade_date": trade_date,
+            "schema_version": "portfolio_advice.v1",
+            "payload": payload,
+            "generated_at": generated_at,
+            "model_provider": "api-compatible",
+            "model_name": "gpt-4",
+        }
+        ai_result_store.upsert_result(review_db, record)
+
+    def test_real_advice_ref_success(self):
+        self._create_sample_advice()
+        ref = {"trade_date": "2026-07-28", "generated_at": "2026-07-28 09:00:00"}
+        date_out, gen_out, snapshot_json = svc._resolve_advice_ref(ref, "600519")
+        assert date_out == "2026-07-28"
+        assert gen_out == "2026-07-28 09:00:00"
+
+        snapshot = json.loads(snapshot_json)
+        assert set(snapshot.keys()) == {
+            "action", "execution_quantity", "price_conditions",
+            "execution_plan", "risk_conditions", "invalidation_conditions", "confidence",
+        }
+        assert snapshot["action"] == "add"
+        assert snapshot["execution_quantity"] == 100
+        assert snapshot["confidence"] == "high"
+
+    def test_real_advice_ref_not_found(self):
+        ref = {"trade_date": "2026-07-28", "generated_at": "2026-07-28 09:00:00"}
+        with pytest.raises(svc.AdviceNotFoundError):
+            svc._resolve_advice_ref(ref, "600519")
+
+    def test_real_advice_ref_generated_at_conflict(self):
+        self._create_sample_advice(generated_at="2026-07-28 09:00:00")
+        ref = {"trade_date": "2026-07-28", "generated_at": "2026-07-28 10:00:00"}
+        with pytest.raises(svc.AdviceConflictError):
+            svc._resolve_advice_ref(ref, "600519")
+
+    def test_real_advice_ref_payload_trade_date_conflict(self):
+        review_db = Path(os.environ["VIBE_RESEARCH_REVIEW_DB"])
+        payload = {
+            "trade_date": "2026-07-27",  # Mismatch with record trade_date
+            "generated_at": "2026-07-28 09:00:00",
+            "holdings": [{"code": "600519"}],
+        }
+        record = {
+            "result_type": "portfolio_advice",
+            "trade_date": "2026-07-28",
+            "schema_version": "portfolio_advice.v1",
+            "payload": payload,
+            "generated_at": "2026-07-28 09:00:00",
+            "model_provider": "api-compatible",
+            "model_name": "gpt-4",
+        }
+        ai_result_store.upsert_result(review_db, record)
+
+        ref = {"trade_date": "2026-07-28", "generated_at": "2026-07-28 09:00:00"}
+        with pytest.raises(svc.AdviceConflictError):
+            svc._resolve_advice_ref(ref, "600519")
+
+    def test_real_advice_ref_stock_not_found(self):
+        self._create_sample_advice()
+        ref = {"trade_date": "2026-07-28", "generated_at": "2026-07-28 09:00:00"}
+        with pytest.raises(svc.AdviceHoldingNotFoundError):
+            svc._resolve_advice_ref(ref, "000001")
+
+    def test_real_advice_ref_missing_snapshot_field(self):
+        review_db = Path(os.environ["VIBE_RESEARCH_REVIEW_DB"])
+        payload = {
+            "trade_date": "2026-07-28",
+            "generated_at": "2026-07-28 09:00:00",
+            "holdings": [
+                {
+                    "code": "600519",
+                    "action": "add",
+                    # Missing 6 other fields
+                }
+            ],
+        }
+        record = {
+            "result_type": "portfolio_advice",
+            "trade_date": "2026-07-28",
+            "schema_version": "portfolio_advice.v1",
+            "payload": payload,
+            "generated_at": "2026-07-28 09:00:00",
+            "model_provider": "api-compatible",
+            "model_name": "gpt-4",
+        }
+        ai_result_store.upsert_result(review_db, record)
+
+        ref = {"trade_date": "2026-07-28", "generated_at": "2026-07-28 09:00:00"}
         with pytest.raises(svc.TradeValidationError) as exc:
-            svc._validate_and_extract_advice_snapshot(holding)
-        assert "建议持仓缺少必需字段" in str(exc.value)
+            svc._resolve_advice_ref(ref, "600519")
+        assert "缺少必需字段" in str(exc.value)
 
 
-class TestThesisRefValidation:
-    def test_thesis_ref_extra_field_rejected(self):
-        ref = {
-            "thesis_id": "th-123",
-            "revision_number": 1,
-            "extra_key": "x",
-        }
-        with pytest.raises(svc.TradeValidationError) as exc:
-            svc._resolve_thesis_ref(ref)
-        assert "thesis_ref 含有未知字段" in str(exc.value)
+class TestRealThesisReference:
+    def test_real_thesis_ref_success(self):
+        thesis_db = Path(os.environ["VIBE_RESEARCH_EVIDENCE_THESIS_DB"])
+        created = evidence_thesis_service.create_thesis(thesis_db, {
+            "subject_type": "stock",
+            "subject_id": "600519",
+            "title": "茅台投资逻辑",
+            "summary": "龙头溢价",
+            "core_claims": ["核心主张"],
+            "catalysts": ["催化剂"],
+            "risks": ["风险点"],
+            "invalidation_conditions": ["证伪条件"],
+        })
+        thesis_id = created["thesis"]["id"]
+        updated = evidence_thesis_service.update_thesis(thesis_db, thesis_id, {
+            "title": "茅台投资逻辑 v2",
+            "summary": "龙头溢价+渠道改革",
+            "core_claims": ["核心主张"],
+            "catalysts": ["催化剂"],
+            "risks": ["风险点"],
+            "invalidation_conditions": ["证伪条件"],
+        }, expected_revision=1)
+        assert updated["thesis"]["current_revision"] == 2
 
-    def test_thesis_ref_bool_revision_rejected(self):
-        ref = {
-            "thesis_id": "th-123",
-            "revision_number": True,
-        }
-        with pytest.raises(svc.TradeValidationError) as exc:
-            svc._resolve_thesis_ref(ref)
-        assert "revision_number 必须是正整数" in str(exc.value)
+        tid_out, rev_out = svc._resolve_thesis_ref({
+            "thesis_id": thesis_id,
+            "revision_number": 2,
+        })
+        assert tid_out == thesis_id
+        assert rev_out == 2
+
+    def test_real_thesis_ref_thesis_not_found(self):
+        with pytest.raises(svc.ThesisNotFoundError):
+            svc._resolve_thesis_ref({"thesis_id": "nonexistent-id", "revision_number": 1})
+
+    def test_real_thesis_ref_revision_not_found(self):
+        thesis_db = Path(os.environ["VIBE_RESEARCH_EVIDENCE_THESIS_DB"])
+        created = evidence_thesis_service.create_thesis(thesis_db, {
+            "subject_type": "stock",
+            "subject_id": "600519",
+            "title": "茅台投资逻辑",
+            "summary": "龙头溢价",
+            "core_claims": ["核心主张"],
+            "catalysts": ["催化剂"],
+            "risks": ["风险点"],
+            "invalidation_conditions": ["证伪条件"],
+        })
+        thesis_id = created["thesis"]["id"]
+
+        with pytest.raises(svc.ThesisRevisionNotFoundError):
+            svc._resolve_thesis_ref({"thesis_id": thesis_id, "revision_number": 999})
+
+    def test_thesis_db_unmodified_by_reference_read(self):
+        thesis_db = Path(os.environ["VIBE_RESEARCH_EVIDENCE_THESIS_DB"])
+        created = evidence_thesis_service.create_thesis(thesis_db, {
+            "subject_type": "stock",
+            "subject_id": "600519",
+            "title": "茅台投资逻辑",
+            "summary": "龙头溢价",
+            "core_claims": ["核心主张"],
+            "catalysts": ["催化剂"],
+            "risks": ["风险点"],
+            "invalidation_conditions": ["证伪条件"],
+        })
+        thesis_id = created["thesis"]["id"]
+
+        # Record file size, mtime, and sqlite tables before reading
+        stat_before = thesis_db.stat()
+        conn = sqlite3.connect(str(thesis_db))
+        tables_before = set(conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+        conn.close()
+
+        # Execute thesis reference resolution
+        svc._resolve_thesis_ref({"thesis_id": thesis_id, "revision_number": 1})
+
+        # Verify source DB completely untouched
+        stat_after = thesis_db.stat()
+        conn2 = sqlite3.connect(str(thesis_db))
+        tables_after = set(conn2.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+        conn2.close()
+
+        assert stat_before.st_size == stat_after.st_size
+        assert stat_before.st_mtime == stat_after.st_mtime
+        assert tables_before == tables_after
 
 
 class TestTotalCostAndCashFlowSemantics:
@@ -175,7 +354,6 @@ class TestPortfolioJsonZeroSideEffects:
 
         stat_before = portfolio_file.stat()
 
-        # Run trade service operations
         data = {
             "code": "600519",
             "name": "贵州茅台",
