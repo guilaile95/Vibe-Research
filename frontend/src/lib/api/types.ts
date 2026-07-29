@@ -1210,13 +1210,13 @@ export interface DecisionFeedbackRecord {
 
 export interface DecisionFeedbackCreateInput {
   code: string;
-  advice_trade_date: string;
-  advice_generated_at: string;
+  advice_trade_date?: string;
+  advice_generated_at?: string;
   trade_id?: string | null;
   adoption_status: DecisionFeedbackAdoptionStatus;
   outcome_status: DecisionFeedbackOutcomeStatus;
   note?: string | null;
-  advice_ref?: {
+  advice_ref: {
     trade_date: string;
     generated_at: string;
   };

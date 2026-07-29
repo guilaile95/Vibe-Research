@@ -66,7 +66,7 @@ def _utc_now() -> str:
 
 
 def _connect(db_path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(Path(db_path)), timeout=30.0)
+    conn = sqlite3.connect(str(Path(db_path)), timeout=30.0, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA foreign_keys = ON")
@@ -95,28 +95,38 @@ def insert_record(db_path: str | Path, record: dict[str, Any]) -> None:
     with _LOCK:
         path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        conn = None
         try:
-            with _connect(path) as conn:
-                _ensure_table(conn)
-                conn.execute(
-                    _INSERT_SQL,
-                    (
-                        record["feedback_id"],
-                        record["code"],
-                        record["advice_trade_date"],
-                        record["advice_generated_at"],
-                        record.get("trade_id"),
-                        record["adoption_status"],
-                        record["outcome_status"],
-                        record.get("note"),
-                        record["created_at"],
-                        record.get("voided_at"),
-                        record.get("void_reason"),
-                    ),
-                )
-                conn.commit()
+            conn = _connect(path)
+            conn.execute("BEGIN IMMEDIATE")
+            _ensure_table(conn)
+            conn.execute(
+                _INSERT_SQL,
+                (
+                    record["feedback_id"],
+                    record["code"],
+                    record["advice_trade_date"],
+                    record["advice_generated_at"],
+                    record.get("trade_id"),
+                    record["adoption_status"],
+                    record["outcome_status"],
+                    record.get("note"),
+                    record["created_at"],
+                    record.get("voided_at"),
+                    record.get("void_reason"),
+                ),
+            )
+            conn.execute("COMMIT")
         except (sqlite3.DatabaseError, sqlite3.OperationalError) as exc:
+            if conn:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
             raise DecisionFeedbackCorruptedError() from exc
+        finally:
+            if conn:
+                conn.close()
 
 
 def get_record(db_path: str | Path, feedback_id: str) -> dict[str, Any] | None:
@@ -201,35 +211,48 @@ def void_record(
     *,
     void_reason: str | None = None,
 ) -> dict[str, Any]:
-    with _LOCK:
-        path = Path(db_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            with _connect(path) as conn:
-                _ensure_table(conn)
-                row = conn.execute(_SELECT_BY_ID, (feedback_id,)).fetchone()
-                if row is None:
-                    raise DecisionFeedbackNotFoundError("决策反馈不存在")
-                existing = _row_to_dict(row)
-                if existing.get("voided_at") is not None:
-                    raise DecisionFeedbackAlreadyVoidedError()
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = None
+    try:
+        conn = _connect(path)
+        conn.execute("BEGIN IMMEDIATE")
+        _ensure_table(conn)
 
-                now = _utc_now()
-                cursor = conn.execute(
-                    _VOID_UPDATE_SQL,
-                    (now, void_reason, feedback_id),
-                )
-                if cursor.rowcount == 0:
-                    # Race condition check
-                    row_check = conn.execute(_SELECT_BY_ID, (feedback_id,)).fetchone()
-                    if row_check and dict(row_check).get("voided_at") is not None:
-                        raise DecisionFeedbackAlreadyVoidedError()
-                    raise DecisionFeedbackNotFoundError("决策反馈不存在")
-                conn.commit()
+        row = conn.execute(_SELECT_BY_ID, (feedback_id,)).fetchone()
+        if row is None:
+            conn.execute("ROLLBACK")
+            raise DecisionFeedbackNotFoundError("决策反馈不存在")
 
-                updated_row = conn.execute(_SELECT_BY_ID, (feedback_id,)).fetchone()
-                return _row_to_dict(updated_row)
-        except (DecisionFeedbackNotFoundError, DecisionFeedbackAlreadyVoidedError):
-            raise
-        except (sqlite3.DatabaseError, sqlite3.OperationalError) as exc:
-            raise DecisionFeedbackCorruptedError() from exc
+        existing = _row_to_dict(row)
+        if existing.get("voided_at") is not None:
+            conn.execute("ROLLBACK")
+            raise DecisionFeedbackAlreadyVoidedError()
+
+        now = _utc_now()
+        cursor = conn.execute(
+            _VOID_UPDATE_SQL,
+            (now, void_reason, feedback_id),
+        )
+        if cursor.rowcount == 0:
+            row_check = conn.execute(_SELECT_BY_ID, (feedback_id,)).fetchone()
+            conn.execute("ROLLBACK")
+            if row_check and dict(row_check).get("voided_at") is not None:
+                raise DecisionFeedbackAlreadyVoidedError()
+            raise DecisionFeedbackNotFoundError("决策反馈不存在")
+
+        updated_row = conn.execute(_SELECT_BY_ID, (feedback_id,)).fetchone()
+        conn.execute("COMMIT")
+        return _row_to_dict(updated_row)
+    except (DecisionFeedbackNotFoundError, DecisionFeedbackAlreadyVoidedError):
+        raise
+    except (sqlite3.DatabaseError, sqlite3.OperationalError) as exc:
+        if conn:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+        raise DecisionFeedbackCorruptedError() from exc
+    finally:
+        if conn:
+            conn.close()

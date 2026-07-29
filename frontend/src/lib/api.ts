@@ -743,8 +743,10 @@ export const api = {
   },
   getDecisionFeedback: (feedbackId: string) =>
     get<DecisionFeedbackRecord>(`/decision-feedback/${encodeURIComponent(feedbackId)}`),
-  createDecisionFeedback: (body: DecisionFeedbackCreateInput) =>
-    request<DecisionFeedbackRecord>("/decision-feedback", "POST", body),
+  createDecisionFeedback: (body: DecisionFeedbackCreateInput) => {
+    const { advice_trade_date, advice_generated_at, ...payload } = body as any;
+    return request<DecisionFeedbackRecord>("/decision-feedback", "POST", payload);
+  },
   voidDecisionFeedback: (feedbackId: string, reason?: string) =>
     request<DecisionFeedbackRecord>(
       `/decision-feedback/${encodeURIComponent(feedbackId)}/void`,

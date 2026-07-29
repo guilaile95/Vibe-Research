@@ -1251,7 +1251,7 @@ export function Trades() {
                         to={`/decision-feedback?code=${detailTrade.code}`}
                         className="ml-2 inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/20 transition-colors shrink-0"
                       >
-                        查看关联反馈
+                        查看该股票反馈
                       </Link>
                     )}
                   </div>
