@@ -84,6 +84,8 @@ import type {
   DataHealthDetailResult,
   DecisionEvidenceDetailResult,
   DecisionEvidenceListResult,
+  SignalLedgerQueryResult,
+  SignalLedgerRunDetailResult,
 } from "./api/types.ts";
 
 
@@ -771,6 +773,17 @@ export const api = {
   getDecisionEvidence: (runId: string) => getDecisionEvidence(runId),
   getDecisionEvidenceByAdvice: (params: string | { advice_id?: string; trade_date?: string; generated_at?: string; code?: string; symbol?: string }) =>
     getDecisionEvidenceByAdvice(params),
+
+  // ---- 信号账本 (P2-2) ----
+  listSignalEntries: (params?: {
+    decision_run_id?: string;
+    stage?: string;
+    code?: string;
+    severity?: string;
+    limit?: number;
+    offset?: number;
+  }) => listSignalEntries(params),
+  getRunSignalLedger: (decisionRunId: string) => getRunSignalLedger(decisionRunId),
 };
 
 export async function listDecisionEvidence(params?: {
@@ -864,5 +877,41 @@ export async function getDecisionEvidenceByAdvice(params: string | {
     explanations: data?.explanations || data?.explanation_items || [],
     explanation_items: data?.explanation_items || data?.explanations || [],
     missing_evidences: data?.missing_evidences || (data?.evidence_items ? data.evidence_items.filter((i: any) => i.is_missing || i.quality_status === "missing") : []),
+  };
+}
+
+export async function listSignalEntries(params?: {
+  decision_run_id?: string;
+  stage?: string;
+  code?: string;
+  severity?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<SignalLedgerQueryResult> {
+  const q = new URLSearchParams();
+  if (params?.decision_run_id) q.set("decision_run_id", params.decision_run_id);
+  if (params?.stage) q.set("stage", params.stage);
+  if (params?.code) q.set("code", params.code);
+  if (params?.severity) q.set("severity", params.severity);
+  if (params?.limit != null) q.set("limit", String(params.limit));
+  if (params?.offset != null) q.set("offset", String(params.offset));
+  const qs = q.toString();
+  const res = await get<any>(`/signal-ledger${qs ? `?${qs}` : ""}`);
+  const data = unwrapApiPayload(res);
+  return {
+    items: data?.items || [],
+    total: typeof data?.total === "number" ? data.total : (data?.items?.length || 0),
+    limit: data?.limit || params?.limit || 50,
+    offset: data?.offset || params?.offset || 0,
+  };
+}
+
+export async function getRunSignalLedger(decisionRunId: string): Promise<SignalLedgerRunDetailResult> {
+  const res = await get<any>(`/signal-ledger/run/${encodeURIComponent(decisionRunId)}`);
+  const data = unwrapApiPayload(res);
+  return {
+    run: data?.run || {},
+    signal_entries: data?.signal_entries || [],
+    decision_outcomes: data?.decision_outcomes || [],
   };
 }
