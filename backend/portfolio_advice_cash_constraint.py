@@ -16,9 +16,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from account_execution_policy import get_account_execution_policy
 from portfolio_advice_contracts import LOT_SIZE
 from portfolio_advice_execution import compute_estimated_amount, floor_to_lot
-from portfolio_advice_policy import CASH_RESERVE_PCT, POLICY
+from portfolio_advice_policy import CASH_RESERVE_PCT
 
 # 未配置账户：无法形成可执行加仓数量（方向性 action 仍保留）
 _LIMITATION_UNCONFIGURED = "未配置账户资金，无法形成可执行加仓数量"
@@ -26,8 +27,9 @@ _LIMITATION_INSUFFICIENT = (
     "可用现金不足（已预留可用现金安全垫），本次加仓无法形成可执行数量"
 )
 _LIMITATION_ADJUSTED = "已按可用现金安全垫与可用现金下调加仓数量与金额"
+_LIMITATION_ALLOCATED_BY_POLICY = "已按账户资金执行策略及代码字典序完成加仓资金分配"
 _LIMITATION_MULTI_ADD = (
-    "存在多个加仓方向，尚未建立资金分配优先级，未生成可执行数量"
+    "存在多个加仓方向，资金分配优先级无法由系统自动确定，可执行数量已置空，请人工决策分配"
 )
 
 
@@ -67,7 +69,7 @@ def _resolve_add_amount(holding: dict[str, Any]) -> float | None:
     return None
 
 
-def _funding_usable_cash(result: dict) -> tuple[bool, float | None]:
+def _funding_usable_cash(result: dict, policy: dict[str, Any] | None = None) -> tuple[bool, float | None]:
     """返回 (funding_valid, usable_cash)。
 
     funding 无效时 usable 为 None。
@@ -90,7 +92,8 @@ def _funding_usable_cash(result: dict) -> tuple[bool, float | None]:
     ):
         return False, None
 
-    reserve = float(getattr(POLICY, "cash_reserve_pct", CASH_RESERVE_PCT))
+    pol = policy or get_account_execution_policy()
+    reserve = float(pol.get("min_cash_reserve_pct", CASH_RESERVE_PCT))
     if reserve < 0 or reserve >= 1:
         reserve = float(CASH_RESERVE_PCT)
     # 可用现金安全垫：仅作用于 available_cash，非总资产比例
@@ -107,7 +110,7 @@ def _null_add_executables(holding: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_available_cash_constraints(result: dict) -> dict:
-    """按可用现金约束各 add 持仓的可执行数量与金额。
+    """按可用现金与账户执行策略约束各 add 持仓的可执行数量与金额。
 
     Parameters
     ----------
@@ -118,14 +121,6 @@ def apply_available_cash_constraints(result: dict) -> dict:
     -------
     dict
         约束后的结果。action / execution_size_pct_of_holding 不变。
-
-    Rules
-    -----
-    - 账户未配置且存在 add：全部 add 的 execution_quantity/estimated_amount 置 null，
-      顶层 limitation 说明无法形成可执行加仓数量。
-    - 同一建议中存在多笔 add：不按顺序静默分配现金，全部置 null，顶层 limitation。
-    - 单笔 add：spendable = available_cash * 0.9（可用现金安全垫），可下调或清空。
-    - 非 add 动作不受影响。
     """
     if not isinstance(result, dict):
         return result
@@ -134,8 +129,11 @@ def apply_available_cash_constraints(result: dict) -> dict:
     if not isinstance(holdings, list):
         return result
 
+    policy = get_account_execution_policy()
+    lot_unit = int(policy.get("lot_size", LOT_SIZE))
+
     top_limitations = list(result.get("data_limitations") or [])
-    funding_valid, remaining = _funding_usable_cash(result)
+    funding_valid, remaining = _funding_usable_cash(result, policy=policy)
 
     add_indices = [
         i
@@ -161,73 +159,61 @@ def apply_available_cash_constraints(result: dict) -> dict:
             result["data_limitations"] = top_limitations
         return result
 
-    # 2) 多笔加仓：禁止按模型顺序静默瓜分现金
+    assert remaining is not None
+    new_holdings = [dict(h) if isinstance(h, dict) else h for h in holdings]
+
+    # 2) 多笔加仓：不按顺序静默瓜分现金，全部可执行数量/金额置 null
     if multi_add:
-        new_holdings = []
-        for item in holdings:
-            if isinstance(item, dict) and item.get("action") == "add":
-                new_holdings.append(_null_add_executables(item))
-            elif isinstance(item, dict):
-                new_holdings.append(dict(item))
-            else:
-                new_holdings.append(item)
-        result["holdings"] = new_holdings
+        for idx in add_indices:
+            item = new_holdings[idx]
+            if not isinstance(item, dict):
+                continue
+            item["execution_quantity"] = None
+            item["estimated_amount"] = None
         _append_limitation(top_limitations, _LIMITATION_MULTI_ADD)
+        result["holdings"] = new_holdings
         result["data_limitations"] = top_limitations
         return result
 
-    # 3) 单笔（或零笔）add：按可用现金安全垫约束
-    assert remaining is not None
-    new_holdings = []
-    for item in holdings:
+    # 3) 单笔加仓：按可用现金约束
+    for idx in add_indices:
+        item = new_holdings[idx]
         if not isinstance(item, dict):
-            new_holdings.append(item)
             continue
 
-        h = dict(item)
-        if h.get("action") != "add":
-            new_holdings.append(h)
-            continue
-
-        amount = _resolve_add_amount(h)
+        amount = _resolve_add_amount(item)
         if amount is None:
-            # 无金额可约束（数量本就不可执行），不消耗额度
-            new_holdings.append(h)
             continue
 
         if amount <= remaining:
             remaining -= amount
-            new_holdings.append(h)
             continue
 
         # 超额：按现价向下取整到整手
-        price = h.get("current_price")
-        holding_lims = list(h.get("data_limitations") or [])
+        price = item.get("current_price")
+        holding_lims = list(item.get("data_limitations") or [])
         if not _is_valid_positive_number(price):
-            h["execution_quantity"] = None
-            h["estimated_amount"] = None
+            item["execution_quantity"] = None
+            item["estimated_amount"] = None
             _append_limitation(holding_lims, _LIMITATION_INSUFFICIENT)
-            h["data_limitations"] = holding_lims
-            new_holdings.append(h)
+            item["data_limitations"] = holding_lims
             continue
 
-        max_qty = floor_to_lot(remaining / float(price), lot=LOT_SIZE)
-        if max_qty < LOT_SIZE:
-            h["execution_quantity"] = None
-            h["estimated_amount"] = None
+        max_qty = floor_to_lot(remaining / float(price), lot=lot_unit)
+        if max_qty < lot_unit:
+            item["execution_quantity"] = None
+            item["estimated_amount"] = None
             _append_limitation(holding_lims, _LIMITATION_INSUFFICIENT)
-            h["data_limitations"] = holding_lims
-            new_holdings.append(h)
+            item["data_limitations"] = holding_lims
             continue
 
         new_amount = compute_estimated_amount(max_qty, float(price))
-        h["execution_quantity"] = max_qty
-        h["estimated_amount"] = new_amount
+        item["execution_quantity"] = max_qty
+        item["estimated_amount"] = new_amount
         _append_limitation(holding_lims, _LIMITATION_ADJUSTED)
-        h["data_limitations"] = holding_lims
+        item["data_limitations"] = holding_lims
         if new_amount is not None and new_amount > 0:
             remaining = max(0.0, remaining - float(new_amount))
-        new_holdings.append(h)
 
     result["holdings"] = new_holdings
     result["data_limitations"] = top_limitations
