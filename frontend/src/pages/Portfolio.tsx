@@ -1064,6 +1064,18 @@ export function Portfolio() {
 
         {advice && summary && account && (
           <div className="mt-4 space-y-4">
+            {advice.generated_at && (
+              <div className="flex items-center justify-between border-b border-border/40 pb-2">
+                <span className="text-xs font-medium text-muted-foreground">持仓决策依据追溯</span>
+                <Link
+                  to={`/decision-evidence?trade_date=${encodeURIComponent(advice.trade_date || "")}&generated_at=${encodeURIComponent(advice.generated_at)}`}
+                  className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline font-medium"
+                >
+                  <ShieldCheck className="h-4 w-4" />
+                  查看决策依据
+                </Link>
+              </div>
+            )}
             {/* 总体摘要 */}
             <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 lg:grid-cols-6">
               <div className="rounded-md border border-border/40 p-2">

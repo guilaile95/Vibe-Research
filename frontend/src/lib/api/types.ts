@@ -1219,3 +1219,91 @@ export interface DecisionFeedbackCreateInput {
   outcome_status: DecisionFeedbackOutcomeStatus;
   note?: string | null;
 }
+
+
+// ---- 决策依据与可解释性 (Decision Evidence & Explainability P2-1) ----
+
+export type DecisionTraceStatus = "complete" | "partial" | "failed" | "archived";
+
+export type EvidenceQualityStatus = "valid" | "partial" | "missing" | "stale" | "unavailable";
+
+export type EvidenceScope = "market" | "sector" | "stock" | "portfolio" | "account" | "risk";
+
+export interface DecisionRunRecord {
+  id?: string;
+  decision_run_id?: string;
+  advice_id?: string | null;
+  symbol?: string | null;
+  code?: string | null;
+  trade_date: string;
+  generated_at: string;
+  trace_status: DecisionTraceStatus | string;
+  quality_status?: EvidenceQualityStatus | string;
+  summary?: string | null;
+  decision_type?: string | null;
+  action?: string | null;
+  evidence_count?: number;
+  missing_count?: number;
+  created_at?: string | null;
+}
+
+export interface EvidenceItemRecord {
+  id?: string;
+  evidence_id?: string;
+  decision_run_id: string;
+  scope: EvidenceScope | string;
+  category?: string | null;
+  evidence_key?: string | null;
+  evidence_type?: string | null;
+  code?: string | null;
+  symbol?: string | null;
+  name?: string | null;
+  metric_name?: string | null;
+  title?: string | null;
+  content?: string | Record<string, any> | null;
+  value_json?: string | Record<string, any> | null;
+  source?: string | null;
+  source_ref_json?: any;
+  quality_status: EvidenceQualityStatus | string;
+  observation_time?: string | null;
+  data_timestamp?: string | null;
+  is_missing?: boolean;
+  missing_reason?: string | null;
+  impact_weight?: number | null;
+  created_at?: string | null;
+}
+
+export interface ExplanationItemRecord {
+  id?: string;
+  explanation_id?: string;
+  decision_run_id: string;
+  code?: string | null;
+  claim?: string | null;
+  conclusion?: string | null;
+  conclusion_type?: string | null;
+  conclusion_value?: string | null;
+  explanation_text?: string | null;
+  supporting_evidence_ids?: string[];
+  limiting_evidence_ids?: string[];
+  reasoning?: string | null;
+  confidence_score?: number | null;
+  created_at?: string | null;
+}
+
+export interface DecisionEvidenceDetailResult {
+  run?: DecisionRunRecord;
+  decision_run?: DecisionRunRecord;
+  evidence_items: EvidenceItemRecord[];
+  explanations?: ExplanationItemRecord[];
+  explanation_items?: ExplanationItemRecord[];
+  missing_evidences?: EvidenceItemRecord[];
+}
+
+export interface DecisionEvidenceListResult {
+  items: Array<DecisionRunRecord | EvidenceItemRecord | Record<string, any>>;
+  total: number;
+  page?: number;
+  limit?: number;
+  offset?: number;
+  total_pages?: number;
+}
