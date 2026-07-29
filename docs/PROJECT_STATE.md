@@ -22,7 +22,21 @@
 
 版本线索：`frontend/package.json` 为 `0.1.3`；schema 如 `daily-review-v0.1`、`portfolio-advice-v0.1`。
 
-## 2. 决策依据层 (P2-1 Evidence Layer) 核心能力
+## 2. 信号账本与流水 (P2-2 Signal Ledger) 核心能力
+
+- **后端存储与 API (P2-2)**:
+  - 复用/扩展 SQLite 数据库 `decision_trace.sqlite3`，新增 `signal_entries` 与 `decision_outcomes` 数据表及高效索引。
+  - 完整记录决策管道 7 大阶段 (`schema`, `compatibility`, `fact_reconciliation`, `policy_audit`, `execution`, `narrative_audit`, `account_constraint`) 的中间信号与警告/错误事件。
+  - 自动提取并持久化个股最终决策裁决结果 (`decision_outcomes`)、目标仓位及应用的约束规则列表。
+  - 提供只读 REST API：`GET /api/signal-ledger` (支持 `decision_run_id`, `stage`, `code`, `severity` 筛选与分页) 和 `GET /api/signal-ledger/run/{decision_run_id}` (获取完整运行时间线)。
+- **前端页面与交互 (P2-2)**:
+  - 新增 `/signal-ledger` 信号账本页面与侧边栏导航「信号账本」。
+  - 包含决策 Run 元信息卡片、最终裁决结果网格卡片及 7 阶段流水节点时间线。
+  - 支持多条件筛选、状态徽章、JSON 结构化载荷展平与参数回显。
+- **验证**:
+  - 后端信号账本测试 7 passed；全量后端单测除已知 Windows 线程环境例外外全过；前端 214 单测全部通过；Vite 生产构建成功；Playwright 真实 FastAPI E2E `signal-ledger-real.browser.mjs` 通过。
+
+## 3. 决策依据层 (P2-1 Evidence Layer) 核心能力
 
 - **后端存储与 API (P2-1)**:
   - 独立 SQLite 数据库 `decision_trace.sqlite3`（包含 `decision_runs`, `evidence_items`, `explanation_items` 数据表与索引）。
