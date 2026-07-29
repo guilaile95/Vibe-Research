@@ -6,6 +6,7 @@ for Signal Ledger and Decision Evidence archive services.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Mapping
 
 REASON_FALLBACK = "结构化执行条件已归档"
@@ -26,6 +27,16 @@ CONDITION_COUNT_KEYS = (
     "data_limitations",
 )
 
+# Advice-result schema (not decision_trace store schema)
+ADVICE_SCHEMA_VERSION_DEFAULT = "portfolio-advice-v0.1"
+
+
+def resolve_advice_schema_version(advice_result: Mapping[str, Any]) -> str:
+    raw = advice_result.get("schema_version")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return ADVICE_SCHEMA_VERSION_DEFAULT
+
 
 def iter_authoritative_holdings(advice_result: Mapping[str, Any]) -> list[dict[str, Any]]:
     holdings = advice_result.get("holdings")
@@ -43,28 +54,55 @@ def iter_authoritative_holdings(advice_result: Mapping[str, Any]) -> list[dict[s
 
 
 def execution_size_to_target_ratio(execution_size_pct_of_holding: Any) -> float | None:
-    """Map execution_size_pct_of_holding (0-100) to target_ratio fraction (0-1)."""
+    """Map execution_size_pct_of_holding (0-100) to target_ratio fraction (0-1).
+
+    Rejects bool, non-finite, negative, >100, and non-numeric values.
+    """
     if execution_size_pct_of_holding is None:
         return None
-    try:
-        return float(execution_size_pct_of_holding) / 100.0
-    except (TypeError, ValueError):
+    # bool is a subclass of int — must reject before numeric conversion
+    if isinstance(execution_size_pct_of_holding, bool):
         return None
+    if isinstance(execution_size_pct_of_holding, str):
+        text = execution_size_pct_of_holding.strip()
+        if not text:
+            return None
+        try:
+            value = float(text)
+        except ValueError:
+            return None
+    elif isinstance(execution_size_pct_of_holding, (int, float)):
+        value = float(execution_size_pct_of_holding)
+    else:
+        return None
+
+    if not math.isfinite(value):
+        return None
+    if value < 0.0 or value > 100.0:
+        return None
+    return value / 100.0
 
 
 def _append_text_parts(parts: list[str], value: Any, *, max_parts: int) -> bool:
-    """Append non-empty strings from value into parts. Return True if full."""
+    """Append non-empty *strings only* from value into parts. Return True if full.
+
+    Does not stringify dict/list/bool/int — those are skipped.
+    """
     if isinstance(value, list):
         for item in value:
-            text = str(item).strip() if item is not None else ""
+            if not isinstance(item, str):
+                continue
+            text = item.strip()
             if not text:
                 continue
+            if text in parts:
+                continue  # stable de-dupe of identical lines
             parts.append(text)
             if len(parts) >= max_parts:
                 return True
     elif isinstance(value, str):
         text = value.strip()
-        if text:
+        if text and text not in parts:
             parts.append(text)
             if len(parts) >= max_parts:
                 return True
@@ -85,7 +123,10 @@ def count_condition_fields(holding: Mapping[str, Any]) -> dict[str, int]:
     for key in CONDITION_COUNT_KEYS:
         value = holding.get(key)
         if isinstance(value, list):
-            counts[f"{key}_count"] = len(value)
+            # count only non-empty strings for honesty
+            counts[f"{key}_count"] = sum(
+                1 for item in value if isinstance(item, str) and item.strip()
+            )
         elif isinstance(value, str) and value.strip():
             counts[f"{key}_count"] = 1
         else:
@@ -105,8 +146,12 @@ def parse_account_funding(
     funding = advice_result.get("account_funding")
     if not isinstance(funding, dict):
         return None, "missing"
-    if funding.get("configured") is True:
+    configured = funding.get("configured")
+    if configured is True:
         return funding, "valid"
+    if configured is False:
+        return funding, "partial"
+    # configured missing / non-bool → partial (present but not trustworthy)
     return funding, "partial"
 
 
@@ -142,12 +187,18 @@ def parse_account_action(advice_result: Mapping[str, Any]) -> dict[str, Any] | N
 
 
 def extract_constraint_state(advice_result: Mapping[str, Any]) -> dict[str, Any]:
-    """Constraint evaluation flags from authoritative holdings + funding."""
+    """Constraint evaluation flags from authoritative holdings + funding.
+
+    These are *evaluated* flags, not claims that constraints changed quantities.
+    """
     holdings = advice_result.get("holdings")
     if not isinstance(holdings, list):
         holdings = []
 
-    funding_present = isinstance(advice_result.get("account_funding"), dict)
+    funding = advice_result.get("account_funding")
+    funding_present = isinstance(funding, dict)
+    funding_configured = funding_present and funding.get("configured") is True
+
     sellable_advisory_count = 0
     constrained_add_count = 0
 
@@ -159,21 +210,43 @@ def extract_constraint_state(advice_result: Mapping[str, Any]) -> dict[str, Any]
         action = str(holding.get("action") or "").lower()
         size = holding.get("execution_size_pct_of_holding")
         qty = holding.get("execution_quantity")
-        if action == "add" and size is not None:
+        if action == "add" and size is not None and not isinstance(size, bool):
             try:
                 size_val = float(size)
             except (TypeError, ValueError):
                 size_val = 0.0
-            if size_val > 0 and qty is None:
+            if math.isfinite(size_val) and size_val > 0 and qty is None:
                 constrained_add_count += 1
 
     return {
         "account_funding_available": funding_present,
+        "account_funding_configured": funding_configured,
         "cash_constraint_evaluated": funding_present,
         "sellable_quantity_evaluated": sellable_advisory_count > 0,
         "constrained_add_count": constrained_add_count,
         "sellable_advisory_count": sellable_advisory_count,
     }
+
+
+def holding_is_cash_constrained(holding: Mapping[str, Any]) -> bool:
+    """Conservative cash-constraint signal for a single holding.
+
+    Only true when action=add, size>0, and execution_quantity is null.
+    Does not claim the exact cash reason (unconfigured / multi-add / lot / price).
+    """
+    action = str(holding.get("action") or "").lower()
+    if action != "add":
+        return False
+    if holding.get("execution_quantity") is not None:
+        return False
+    size = holding.get("execution_size_pct_of_holding")
+    if size is None or isinstance(size, bool):
+        return False
+    try:
+        size_val = float(size)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(size_val) and size_val > 0
 
 
 def holding_execution_payload(holding: Mapping[str, Any]) -> dict[str, Any]:

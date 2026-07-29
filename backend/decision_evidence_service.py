@@ -47,7 +47,9 @@ def archive_decision_evidence(
     Guaranteed not to raise exceptions to the caller; if archiving fails, logs a warning,
     marks trace_status as 'failed' if feasible, and returns a safe metadata dict.
     """
-    del context_data  # reserved; authoritative result is the source of truth
+    # context_data intentionally unused: authoritative advice result is sole source.
+    # Production may still pass prepared context; do not reintroduce unvalidated fields.
+    del context_data
 
     if not isinstance(advice_result, dict):
         logger.warning("archive_decision_evidence received non-dict advice_result")
@@ -71,11 +73,12 @@ def archive_decision_evidence(
         # 1. Market scope evidence
         mkt_status = str(advice_result.get("market_status") or "normal").lower()
         mkt_ev_id = _gen_id("ev", run_id, "market", "status")
-        mkt_quality = (
-            "valid"
-            if mkt_status == "normal"
-            else ("partial" if mkt_status == "partial" else "unavailable")
-        )
+        if mkt_status == "normal":
+            mkt_quality = "valid"
+        elif mkt_status == "partial":
+            mkt_quality = "partial"
+        else:
+            mkt_quality = "unavailable"
         evidence_items.append(
             {
                 "evidence_id": mkt_ev_id,
@@ -173,7 +176,15 @@ def archive_decision_evidence(
             code = str(item.get("code") or "").strip()
             stock_ev_id = _gen_id("ev", run_id, "stock", code, "quote")
             price = item.get("current_price")
-            q_status = "valid" if price is not None else "partial"
+            q_status = "partial"
+            if (
+                not isinstance(price, bool)
+                and isinstance(price, (int, float))
+                and price == price  # not NaN
+                and price not in (float("inf"), float("-inf"))
+                and price > 0
+            ):
+                q_status = "valid"
 
             value_json = {
                 "name": item.get("name"),
@@ -213,11 +224,13 @@ def archive_decision_evidence(
 
             action = str(item.get("action") or "hold").lower()
             reason = adapter.summarize_holding_reason(item)
+            # Neutral attribution: only claim size rule when size present;
+            # for null add qty use generic execution_quantity_null (not cash-only).
             rule_id = None
             if item.get("execution_size_pct_of_holding") is not None:
                 rule_id = "rule_execution_size"
-            if action == "add" and item.get("execution_quantity") is None:
-                rule_id = "rule_cash_constraint"
+            if adapter.holding_is_cash_constrained(item):
+                rule_id = "rule_add_quantity_null"
 
             exp_id = _gen_id("exp", run_id, code, "action", idx)
             explanation_items.append(
@@ -264,7 +277,8 @@ def archive_decision_evidence(
             "trade_date": trade_date,
             "generated_at": generated_at,
             "result_type": "portfolio_advice",
-            "schema_version": advice_result.get("schema_version") or store.SCHEMA_VERSION,
+            # Use advice schema, not decision_trace store schema constant
+            "schema_version": adapter.resolve_advice_schema_version(advice_result),
             "market_status": mkt_status,
             "source_fingerprint": advice_result.get("source_fingerprint")
             or advice_result.get("input_fingerprint"),

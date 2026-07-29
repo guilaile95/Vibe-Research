@@ -27,6 +27,7 @@ def test_archive_signal_ledger_authoritative_contract(tmp_path, monkeypatch):
     assert abs(float(outcome["target_ratio"]) - 0.30) < 1e-9
     assert outcome["reason"]
     assert "sellable_quantity_advisory" in (outcome.get("constraints_applied_json") or [])
+    # 0% size would still archive as 0.0 if present; golden reduce is 30
 
     fact = next(
         e for e in timeline["signal_entries"] if e["stage"] == "fact_reconciliation"

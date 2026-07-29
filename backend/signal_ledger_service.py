@@ -70,8 +70,11 @@ def archive_signal_ledger(
     """Extract signal entries and outcomes from authoritative advice and archive.
 
     Does not raise exceptions; returns status metadata dict.
+
+    ``context_data`` is intentionally unused: the authoritative advice result is
+    the sole source of truth for production archives.
     """
-    del context_data  # reserved for future context enrichment; not required
+    del context_data
 
     if not isinstance(advice_result, dict):
         logger.warning("archive_signal_ledger received non-dict advice_result")
@@ -89,12 +92,14 @@ def archive_signal_ledger(
         trade_date, generated_at
     )
     now_str = _utc_now()
-    schema_version = str(advice_result.get("schema_version") or "portfolio-advice-v0.1")
+    schema_version = adapter.resolve_advice_schema_version(advice_result)
     market_status = str(advice_result.get("market_status") or "normal").lower()
     source_fingerprint = (
         advice_result.get("source_fingerprint")
         or advice_result.get("input_fingerprint")
     )
+    if source_fingerprint is not None:
+        source_fingerprint = str(source_fingerprint)
 
     holdings = adapter.iter_authoritative_holdings(advice_result)
     portfolio_summary = advice_result.get("portfolio_summary")
@@ -109,6 +114,12 @@ def archive_signal_ledger(
     account_funding, _funding_quality = adapter.parse_account_funding(advice_result)
     constraint_state = adapter.extract_constraint_state(advice_result)
 
+    # Honest stage status for this archive snapshot
+    has_required_keys = bool(trade_date and generated_at)
+    schema_status = "passed" if has_required_keys else "unavailable"
+    # compatibility: final assembled authoritative dict present → recorded snapshot
+    compatibility_status = "passed" if has_required_keys else "unavailable"
+
     signal_entries: list[dict[str, Any]] = []
     decision_outcomes: list[dict[str, Any]] = []
 
@@ -119,7 +130,7 @@ def archive_signal_ledger(
             stage="schema",
             signal_type="json_schema_validation",
             payload={
-                "status": "passed",
+                "status": schema_status,
                 "schema_version": schema_version,
                 "trade_date": trade_date,
                 "generated_at": generated_at,
@@ -128,13 +139,16 @@ def archive_signal_ledger(
         )
     )
 
-    # 2. compatibility — authoritative result already assembled successfully
+    # 2. compatibility — snapshot of successful final assembly only
     signal_entries.append(
         _entry(
             decision_run_id=decision_run_id,
             stage="compatibility",
             signal_type="compatibility_check",
-            payload={"status": "passed"},
+            payload={
+                "status": compatibility_status,
+                "note": "final_authoritative_snapshot",
+            },
             created_at=now_str,
         )
     )
@@ -230,9 +244,10 @@ def archive_signal_ledger(
             )
         )
 
-        constraints_applied: list[str] = []
+        # constraints_evaluated (not "applied") — honest naming in outcome JSON
+        constraints_evaluated: list[str] = []
         if "sellable_quantity_advisory" in holding and action in ("reduce", "sell"):
-            constraints_applied.append("sellable_quantity_advisory")
+            constraints_evaluated.append("sellable_quantity_advisory")
             signal_entries.append(
                 _entry(
                     decision_run_id=decision_run_id,
@@ -254,21 +269,26 @@ def archive_signal_ledger(
 
         account_metrics = holding.get("account_metrics")
         if isinstance(account_metrics, dict):
-            constraints_applied.append("account_metrics")
+            constraints_evaluated.append("account_metrics_present")
+
+        if adapter.holding_is_cash_constrained(holding):
+            constraints_evaluated.append("add_quantity_null_with_positive_size")
 
         decision_outcomes.append(
             {
-                "outcome_id": _gen_id("out", decision_run_id, code),
+                "outcome_id": _gen_id("out", decision_run_id, code, idx),
                 "code": code,
                 "action": action,
                 "target_ratio": target_ratio,
                 "reason": reason,
-                "constraints_applied_json": constraints_applied,
+                # column name remains constraints_applied_json (no schema migration)
+                # values are evaluation tags, not claims of quantity mutation
+                "constraints_applied_json": constraints_evaluated,
                 "created_at": now_str,
             }
         )
 
-    # account_constraint funding summary (always when funding object present)
+    # account_constraint funding summary (always present for stage completeness)
     if account_funding is not None:
         severity = adapter.account_funding_severity(account_funding) or "warning"
         signal_entries.append(
@@ -285,7 +305,6 @@ def archive_signal_ledger(
             )
         )
     else:
-        # Ensure stage exists even without funding object
         signal_entries.append(
             _entry(
                 decision_run_id=decision_run_id,
@@ -296,12 +315,13 @@ def archive_signal_ledger(
                     "account_funding": None,
                     "constraint_state": constraint_state,
                     "note": "account_funding missing",
+                    "status": "not_applicable",
                 },
                 created_at=now_str,
             )
         )
 
-    # Ensure every stage is present even with zero holdings
+    # Fill missing per-holding stages with not_applicable (not passed)
     present_stages = {entry["stage"] for entry in signal_entries}
     for stage in VALID_STAGES:
         if stage in present_stages:
@@ -311,7 +331,10 @@ def archive_signal_ledger(
                 decision_run_id=decision_run_id,
                 stage=stage,
                 signal_type=f"{stage}_placeholder",
-                payload={"status": "passed", "note": "no_holdings"},
+                payload={
+                    "status": "not_applicable",
+                    "note": "no_valid_holdings",
+                },
                 created_at=now_str,
             )
         )

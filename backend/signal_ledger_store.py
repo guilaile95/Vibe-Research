@@ -73,7 +73,7 @@ def save_signal_ledger_bundle(
                             trade_date or now_str[:10],
                             generated_at or now_str,
                             "portfolio_advice",
-                            schema_version or "v1",
+                            schema_version or "portfolio-advice-v0.1",
                             market_status or "normal",
                             source_fingerprint,
                             "archived",
