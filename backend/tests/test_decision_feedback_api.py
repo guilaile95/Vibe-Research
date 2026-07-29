@@ -18,6 +18,7 @@ def client(tmp_path, monkeypatch):
     review_db = tmp_path / "review_history.sqlite3"
     trade_db = tmp_path / "trade_ledger.sqlite3"
 
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("VIBE_RESEARCH_DECISION_FEEDBACK_DB", str(feedback_db))
     monkeypatch.setenv("VIBE_RESEARCH_REVIEW_DB", str(review_db))
     monkeypatch.setenv("VIBE_RESEARCH_TRADE_LEDGER_DB", str(trade_db))

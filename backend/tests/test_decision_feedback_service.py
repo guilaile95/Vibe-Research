@@ -25,6 +25,7 @@ def test_dbs(tmp_path, monkeypatch):
     portfolio_json.write_text('{"holdings": [{"code": "600519"}]}', encoding="utf-8")
     account_profile_json.write_text('{"total_cash": 100000.0}', encoding="utf-8")
 
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("VIBE_RESEARCH_DECISION_FEEDBACK_DB", str(feedback_db))
     monkeypatch.setenv("VIBE_RESEARCH_REVIEW_DB", str(review_db))
     monkeypatch.setenv("VIBE_RESEARCH_TRADE_LEDGER_DB", str(trade_db))

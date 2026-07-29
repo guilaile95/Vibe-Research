@@ -10,11 +10,17 @@
 
 ## 上一任务（已完成）
 
-~~P1-3 决策反馈 MVP 与全栈流程（PR #26，Merge SHA `30abb5b31d45e1e6a0de9cd27cfe741cc6b32530`）。~~
+~~P1-3 决策反馈 MVP 基础工作流（PR #26，Merge SHA `30abb5b31d45e1e6a0de9cd27cfe741cc6b32530`）。~~
 
 - **状态**：已完成并合并至 `feature/research-system-v01`
-- 决策反馈前端 `/decision-feedback` 与后端 `decision_feedback.sqlite3` 已上线
-- 包含严格请求体契约 (`extra="forbid"`)、全量 UUID 标识、`BEGIN IMMEDIATE` 原子作废与 Playwright E2E 双套件测试
+- 决策反馈前端 `/decision-feedback` 与后端 `decision_feedback.sqlite3` 基础功能上线
+
+## 上一任务（已完成）
+
+~~P1-3 决策反馈 Hardening 加固工程（PR #27）。~~
+
+- **状态**：已完成全栈加固与 PR 提交
+- 包含严格请求体契约 (`extra="forbid"`)、全量 UUID 标识、`BEGIN IMMEDIATE` 原子作废、来源数据隔离测试及 Playwright 错误路径 E2E 测试
 
 ## 当前下一任务
 

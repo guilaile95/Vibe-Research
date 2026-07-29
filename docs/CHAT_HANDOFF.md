@@ -35,31 +35,36 @@
   - 独立 `trade_ledger.sqlite3` 数据库与 REST API (`/api/trades`)
   - 实现 `/trades` 前端页面（列表、条件筛选、新建、详情结构化展示 `advice_snapshot`、作废及分页）
   - 前端纯逻辑与后端契约完全对齐，`not_executed` 状态不发成交字段
-- **P1-3 决策反馈 (Decision Feedback)**（已完成，PR #26，Merge SHA `30abb5b`）：
+- **P1-3 决策反馈 (Decision Feedback MVP & Hardening)**（MVP 已合并 PR #26；Hardening 已完成 PR #27）：
   - 独立 `decision_feedback.sqlite3` 数据库与 REST API (`/api/decision-feedback`)
-  - 严格 Pydantic 契约 (`extra="forbid"`)，嵌套 `advice_ref: { trade_date, generated_at }`
-  - 全量 128-bit UUID 标识与 `BEGIN IMMEDIATE` 显式 SQLite 事务原子作废
+  - 严格 Pydantic 契约 (`extra="forbid"`)，只允许规范请求字段，拒绝顶层未知字段及未知嵌套 `advice_ref`
+  - 全量 128-bit UUID 标识与 `BEGIN IMMEDIATE` 显式 SQLite 事务原子作废 (200/409)
+  - 来源数据库零副作用隔离（建议库、交易库、`portfolio.json` 与 `account_profile.json` 保持严格只读）
   - 数据库损坏 Fail-Closed 防护，返回 HTTP 500
-  - 前端 `/decision-feedback` 页面与导航支持、`not_evaluated` 默认结果、Playwright 真实/错误路径 E2E 验证全过
+  - 前端 `/decision-feedback` 页面与导航支持、`not_evaluated` 默认结果、Playwright 真实/错误路径双 E2E 测试全过
 - **每日复盘九维结构 + GET /api/daily-review SWR 缓存机制**
 - **持仓支持新增、精确编辑和安全删除**（`9932601`）
 - **持仓建议 Validator 拆分与 Golden 测试套件**（`0ee21aa`）
 
 ## 关键安全边界
 
-- 决策反馈与交易流水采用独立 SQLite 数据库存储，严禁修改既有 `portfolio.json` 或 `review_history`
+- 持仓建议**禁止**使用 stale 磁盘复盘；`breadth unavailable` 必须 **503 fail-closed**
+- 账户资金手工维护已接入只读指标，但**建议裁决链路仍未接入**总资产/可用现金限制
+- 无可靠可卖数量 → `reduce`/`sell` 须人工确认
+- 无 K 线不得编造技术位；不做 T（无 `t_trade`）
+- `add` 比例为**相对当前持股数量**，不是账户仓位/资金比例
+- 真实 `portfolio.json` / `account_profile.json` **不得**用于自动化测试写入
 - API 请求严格拦截未在 Schema 中定义的顶层及嵌套未知字段 (HTTP 422)
+- 决策反馈与交易流水采用独立 SQLite 数据库存储，严禁修改既有 `portfolio.json` 或 `review_history`
 - 不向客户端泄漏 ProxyError / 完整 URL / traceback / SQL 语句
 - 明确不做：收益率计算、建议准确率、模型训练、自动调权、自动归因
 
-## 最近关键提交（节选）
+## 已知测试例外
 
-- `30abb5b` Merge pull request #26 from guilaile95/feat/decision-feedback-mvp
-- `b2f32b3` feat(frontend): add decision feedback workflow
-- `75a47ee` feat(feedback): add decision feedback storage and API
-- `bd0214a` Merge pull request #25 from guilaile95/feat/trade-ledger-frontend
-- `60d22ac` chore: remove legacy project author metadata
-- `718cf17` feat(frontend): add trade ledger workflow
+```text
+backend/tests/test_fixes.py::test_run_cli_stream_timeout
+```
+Windows 环境缺少 `python3` 命令，实际错误为 `fake 退出码 9009`。
 
 ## 当前下一任务
 
