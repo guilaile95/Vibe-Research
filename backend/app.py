@@ -47,6 +47,7 @@ import watchlist_store
 import evidence_thesis_router
 import data_health_router
 import trade_ledger_router
+import decision_feedback_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -140,6 +141,8 @@ app.include_router(evidence_thesis_router.router)
 app.include_router(data_health_router.router)
 # 交易流水：独立存储与 API
 app.include_router(trade_ledger_router.router)
+# 决策反馈：独立存储与 API
+app.include_router(decision_feedback_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)
