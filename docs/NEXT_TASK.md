@@ -2,6 +2,11 @@
 
 ## 上一任务（已完成）
 
+~~Scheduler import 测试顺序隔离修复~~（`fix/scheduler-test-isolation`，PR #33，Merge SHA `e857d43`）。
+
+- **状态**：已完成。独立 `sys.executable` 子进程探针验证 `import app`，消除测试间顺序依赖。
+- 后端 not-live 全量测试连续两次 1606 passed, 0 failed。
+
 ~~P2-4B Performance Attribution（收益归因）。~~
 
 - **状态**：已完成开发与测试全覆盖
@@ -11,8 +16,11 @@
 
 ## 当前下一任务
 
-**Scheduler import 测试顺序隔离修复**（`fix/scheduler-test-isolation`）。
+**无已授权产品任务。** 等待产品优先级指令。
 
-- **描述**：`test_import_app_does_not_start_scheduler` 原方案检查当前 pytest 进程的全局线程状态，导致测试间顺序依赖；改为独立 `sys.executable` 子进程验证 `import app`。
-- **要求**：不修改 Scheduler 产品逻辑；两次全量 not-live 回归 0 failed。
-- **自动推进**：合并后进入下一项。
+## 待决定
+
+| 目录 | 说明 | 建议 |
+|---|---|---|
+| `Vibe-Research-visual-overhaul-20260729` | 含未提交前端改动（`frontend/index.html`, `Layout.tsx`, `GlassCard.tsx`） | 继续开发形成 PR，或确认废弃后安全备份/删除 |
+| `Vibe-Research-data-health-design` | PR #23 的 Data Health design worktree，主仓库功能已完成 | 审计其中是否有稳定分支没有的有效设计文档；没有则回收 |

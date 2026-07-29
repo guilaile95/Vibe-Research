@@ -8,7 +8,7 @@
 |----|-----|
 | 仓库（origin） | https://github.com/guilaile95/Vibe-Research |
 | 主分支 | `feature/research-system-v01` |
-| 最新合并提交 | `06594c2` (`Merge pull request #32 from guilaile95/feat/performance-attribution`)；当前 HEAD 以 `git rev-parse HEAD` 为准 |
+| 最新合并提交 | `e857d43` (`Merge pull request #33 from guilaile95/fix/scheduler-test-isolation`)；当前 HEAD 以 `git rev-parse HEAD` 为准 |
 | 工作区 | 接手后请先 `git status` / `git rev-parse HEAD` 复核 |
 
 > 说明：拼写为 **guilaile95**（非 guiliale95）。
@@ -57,14 +57,14 @@
 ## 关键安全边界
 
 - 持仓建议**禁止**使用 stale 磁盘复盘；`breadth unavailable` 必须 **503 fail-closed**
-- 账户资金手工维护已接入只读指标，但**建议裁决链路仍未接入**总资产/可用现金限制
+- 账户资金手工维护已接入只读指标与执行策略（`account_execution_policy`，`add` 金额受可用现金安全垫与整手约束（P2-3）
 - 无可靠可卖数量 → `reduce`/`sell` 须人工确认
 - 无 K 线不得编造技术位；不做 T（无 `t_trade`）
 - `add` 比例为**相对当前持股数量**，不是账户仓位/资金比例
 - 真实 `portfolio.json` / `account_profile.json` **不得**用于自动化测试写入
 - 决策依据层、决策反馈与交易流水采用独立 SQLite 数据库存储，严禁修改既有 `portfolio.json` 或 `review_history`
 - 不向客户端泄漏 ProxyError / 完整 URL / traceback / SQL 语句
-- 明确不做：收益率计算、建议准确率、模型训练、自动调权、自动归因
+- 明确不做：收益率计算、建议准确率、模型训练、自动归权
 
 ## 已知测试例外
 
@@ -75,5 +75,11 @@ Windows 环境缺少 `python3` 命令，实际错误为 `fake 退出码 9009`。
 
 ## 当前下一任务
 
-Scheduler import 测试顺序隔离修复（`fix/scheduler-test-isolation`）。
-`backend/tests/test_scheduler_lifespan.py::test_import_app_does_not_start_scheduler` 原方案依赖当前 pytest 进程全局线程状态，导致测试间顺序依赖；改为独立 `sys.executable` 子进程验证 `import app`，不修改 Scheduler 产品逻辑。
+**无已授权产品任务。** 等待产品优先级指令。
+
+## 待决定
+
+| 目录 | 说明 | 建议 |
+|---|---|---|
+| `Vibe-Research-visual-overhaul-20260729` | 含未提交前端改动（`frontend/index.html`, `Layout.tsx`, `GlassCard.tsx`） | 继续开发形成 PR，或确认废弃后安全备份/删除 |
+| `Vibe-Research-data-health-design` | PR #23 的 Data Health design worktree，主仓库功能已完成 | 审计其中是否有稳定支没有的有效设计文档；没有则回收 |

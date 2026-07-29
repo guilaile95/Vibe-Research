@@ -1,6 +1,6 @@
 # 项目当前状态
 
-> 文档基准：主分支 `feature/research-system-v01`；最新合并提交为 `06594c2`（当前 HEAD 以 `git rev-parse HEAD` 为准）
+> 文档基准：主分支 `feature/research-system-v01`；最新合并提交为 `e857d43`（当前 HEAD 以 `git rev-parse HEAD` 为准）
 > 仅描述仓库内已实现能力；不包含密钥、持仓内容或代理敏感配置。
 
 ## 1. 技术栈与数据存储
@@ -36,7 +36,7 @@
 - **验证**:
   - 后端信号账本测试 7 passed；后端 not-live 全量测试连续两次 **1606 passed, 0 failed**；前端 214 单测全部通过；Vite 生产构建成功；Playwright 真实 FastAPI E2E `signal-ledger-real.browser.mjs` 通过。
 
-## 2. 账户资金执行策略 (P2-3 Account Capital Constraints) 核心能力
+## 3. 账户资金执行策略 (P2-3 Account Capital Constraints) 核心能力
 
 - **后端策略与约束 (P2-3)**:
   - 新增独立策略文件 `account_execution_policy.py`，五字段策略：`lot_size`、`min_cash_reserve_pct`、`max_single_stock_allocation_pct`、`tie_breaker_order`、`allow_partial_execution`。
@@ -49,7 +49,7 @@
 - **验证**:
   - 后端策略专项测试 11 passed；全量后端测试全绿。
 
-## 3. 决策依据层 (P2-1 Evidence Layer) 核心能力
+## 4. 决策依据层 (P2-1 Evidence Layer) 核心能力
 
 - **后端存储与 API (P2-1)**:
   - 独立 SQLite 数据库 `decision_trace.sqlite3`（包含 `decision_runs`, `evidence_items`, `explanation_items` 数据表与索引）。
@@ -63,7 +63,7 @@
 - **验证**:
   - 后端决策依据专项测试 15 passed；前端单元测试 207 passed；Vite 构建成功；Playwright 真实 FastAPI E2E 全流程通过。
 
-## 4. 决策反馈分析 (P2-4A Feedback Analytics) 核心能力
+## 5. 决策反馈分析 (P2-4A Feedback Analytics) 核心能力
 
 - **后端只读聚合 (P2-4A)**:
   - 新增 `decision_analytics_service.py`，只读聚合 `decision_feedback` 表（`mode=ro` + `PRAGMA query_only=ON`）。
@@ -77,7 +77,7 @@
 - **验证**:
   - 后端分析专项测试 20 passed；全量后端测试全绿。
 
-## 5. 收益归因 (P2-4B Performance Attribution) 核心能力
+## 6. 收益归因 (P2-4B Performance Attribution) 核心能力
 
 - **后端归因计算 + 快照 (P2-4B)**:
   - 独立 SQLite 库 `performance_attribution.sqlite3`（`VIBE_RESEARCH_PERFORMANCE_ATTRIBUTION_DB` 可覆盖）。
@@ -91,7 +91,7 @@
 - **验证**:
   - 后端归因专项测试 24 passed；全量后端测试全绿。
 
-## 6. 交易流水 (P1-1 / P1-2) 核心能力
+## 7. 交易流水 (P1-1 / P1-2) 核心能力
 
 - **后端存储与 API (PR #25，Merge SHA `bd0214a`)**:
   - 独立 SQLite 数据库 `trade_ledger.sqlite3`。
@@ -99,27 +99,28 @@
 - **前端页面与交互 (PR #25)**:
   - 实现 `/trades` 页面，包含列表、多条件筛选、创建 Modal、详情 Modal、作废确认 Modal 及分页控制。
 
-## 7. 决策反馈 (P1-3 MVP & Hardening)
+## 8. 决策反馈 (P1-3 MVP & Hardening)
 
 - **PR #26 (P1-3 MVP) & PR #27 (P1-3 Hardening，Merge SHA `dedf99b`)**:
   - 独立 SQLite 数据库 `decision_feedback.sqlite3`。
   - 严格 Pydantic 契约 (`extra="forbid"`)，全量 128-bit UUID 标识 (`fb_` + 32 位 hex)，`BEGIN IMMEDIATE` 显式事务原子作废。
   - 前端 `/decision-feedback` 页面，支持列表、筛选、创建、详情与作废全流程，默认 `outcome_status = "not_evaluated"`。
 
-## 8. 每日复盘 SWR 机制与九维结构
+## 9. 每日复盘 SWR 机制与九维结构
 
 - **Stale-while-revalidate 展示路径**: 内存新鲜缓存 → 磁盘最近成功包 (stale) + single-flight 后台刷新 → 同步抓取聚合。
 - **normal / partial / unavailable 覆盖规则**: 关键组件 unavailable 不覆盖已有 normal 包。
 
-## 9. 持仓建议架构
+## 10. 持仓建议架构
 
 - Validator 采用固定七阶段 Pipeline（Schema → Compatibility → Fact Reconciliation → Policy Audit → Execution → Narrative Audit → Final Assembly）。
 - `portfolio_advice_policy.py` 为投资政策唯一代码来源；27 个 Golden Tests 场景锁定输出规范。
 
-## 10. 最近关键提交
+## 11. 最近关键提交
 
 | 短哈希 | 说明 |
 |--------|------|
+| `e857d43` | Merge pull request #33 from guilaile95/fix/scheduler-test-isolation |
 | `06594c2` | Merge pull request #32 from guilaile95/feat/performance-attribution |
 | `24117d6` | Merge pull request #31 from guilaile95/feat/decision-feedback-analytics |
 | `ecd101b` | Merge pull request #30 from guilaile95/feat/account-capital-constraints |
