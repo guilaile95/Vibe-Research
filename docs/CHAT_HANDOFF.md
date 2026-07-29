@@ -8,7 +8,7 @@
 |----|-----|
 | 仓库（origin） | https://github.com/guilaile95/Vibe-Research |
 | 主分支 | `feature/research-system-v01` |
-| 最新合并提交 | `e857d43` (`Merge pull request #33 from guilaile95/fix/scheduler-test-isolation`)；当前 HEAD 以 `git rev-parse HEAD` 为准 |
+| 最新合并提交 | `b24c6ee` (`docs: finalize P2 project state and clear next task`)；当前 HEAD 以 `git rev-parse HEAD` 为准 |
 | 工作区 | 接手后请先 `git status` / `git rev-parse HEAD` 复核 |
 
 > 说明：拼写为 **guilaile95**（非 guiliale95）。
@@ -28,6 +28,7 @@
 3. `docs/DECISIONS.md` — 设计决定
 4. `docs/KNOWN_ISSUES.md` — 限制与已知测试例外
 5. `docs/NEXT_TASK.md` — **当前下一任务**
+6. `docs/PRODUCT_BACKLOG.md` — 长期产品候选池（BK-01 ~ BK-10，未授权）
 
 ## 已完成能力（摘要）
 

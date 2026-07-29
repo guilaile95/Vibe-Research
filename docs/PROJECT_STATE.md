@@ -1,6 +1,6 @@
 # 项目当前状态
 
-> 文档基准：主分支 `feature/research-system-v01`；最新合并提交为 `e857d43`（当前 HEAD 以 `git rev-parse HEAD` 为准）
+> 文档基准：主分支 `feature/research-system-v01`；最新合并提交为 `b24c6ee`（当前 HEAD 以 `git rev-parse HEAD` 为准）
 > 仅描述仓库内已实现能力；不包含密钥、持仓内容或代理敏感配置。
 
 ## 1. 技术栈与数据存储
@@ -116,10 +116,15 @@
 - Validator 采用固定七阶段 Pipeline（Schema → Compatibility → Fact Reconciliation → Policy Audit → Execution → Narrative Audit → Final Assembly）。
 - `portfolio_advice_policy.py` 为投资政策唯一代码来源；27 个 Golden Tests 场景锁定输出规范。
 
-## 11. 最近关键提交
+## 11. 产品候选池
+
+长期产品候选（BK-01 ~ BK-10，**未获开发授权**）见 [`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)。候选边界、当前实现状态、依赖关系、推荐顺序均以该文档为准。已授权任务仅包含 0.2 节所列活跃 worktree。
+
+## 12. 最近关键提交
 
 | 短哈希 | 说明 |
 |--------|------|
+| `b24c6ee` | docs: finalize P2 project state and clear next task |
 | `e857d43` | Merge pull request #33 from guilaile95/fix/scheduler-test-isolation |
 | `06594c2` | Merge pull request #32 from guilaile95/feat/performance-attribution |
 | `24117d6` | Merge pull request #31 from guilaile95/feat/decision-feedback-analytics |
