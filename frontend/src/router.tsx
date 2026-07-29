@@ -72,6 +72,9 @@ const DataHealth = lazy(() =>
 const Trades = lazy(() =>
   import("@/pages/Trades").then((m) => ({ default: m.Trades })),
 );
+const DecisionFeedback = lazy(() =>
+  import("@/pages/DecisionFeedback").then((m) => ({ default: m.DecisionFeedback })),
+);
 
 function PageFallback() {
   return (
@@ -115,6 +118,7 @@ export const router = createBrowserRouter([
       { path: "/sectors/:key", element: withSuspense(<SectorDetail />) },
       { path: "/portfolio", element: withSuspense(<Portfolio />) },
       { path: "/trades", element: withSuspense(<Trades />) },
+      { path: "/decision-feedback", element: withSuspense(<DecisionFeedback />) },
       { path: "/cockpit", element: withSuspense(<DecisionCockpit />) },
       { path: "/stock-data", element: withSuspense(<StockData />) },
       { path: "/watchlist", element: withSuspense(<Watchlist />) },
