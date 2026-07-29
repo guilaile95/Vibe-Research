@@ -54,6 +54,8 @@ import decision_trace_store
 import signal_ledger_store
 import account_execution_policy_router
 import decision_analytics_router
+import performance_attribution_router
+import performance_attribution_store
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -157,6 +159,8 @@ app.include_router(signal_ledger_router.router)
 app.include_router(account_execution_policy_router.router)
 # 决策反馈分析：只读聚合 API
 app.include_router(decision_analytics_router.router)
+# 收益归因：计算 + 快照 API
+app.include_router(performance_attribution_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)
@@ -212,6 +216,12 @@ async def _decision_trace_corrupted_handler(request, exc):
 async def _signal_ledger_corrupted_handler(request, exc):
     """信号账本数据损坏：HTTP 500 + 固定安全文案。"""
     return JSONResponse(status_code=500, content={"detail": signal_ledger_store.SignalLedgerCorruptedError.MESSAGE})
+
+
+@app.exception_handler(performance_attribution_store.PerformanceAttributionCorruptedError)
+async def _performance_attribution_corrupted_handler(request, exc):
+    """收益归因数据损坏：HTTP 500 + 固定安全文案。"""
+    return JSONResponse(status_code=500, content={"detail": performance_attribution_store.PerformanceAttributionCorruptedError.MESSAGE})
 
 
 @app.middleware("http")
