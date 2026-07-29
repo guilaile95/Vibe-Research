@@ -87,6 +87,9 @@ const AccountPolicy = lazy(() =>
 const DecisionPerformance = lazy(() =>
   import("@/pages/DecisionPerformance").then((m) => ({ default: m.default })),
 );
+const PerformanceAttribution = lazy(() =>
+  import("@/pages/PerformanceAttribution").then((m) => ({ default: m.default })),
+);
 
 function PageFallback() {
   return (
@@ -135,6 +138,7 @@ export const router = createBrowserRouter([
 		      { path: "/signal-ledger", element: withSuspense(<SignalLedger />) },
 		      { path: "/account-policy", element: withSuspense(<AccountPolicy />) },
 		      { path: "/decision-performance", element: withSuspense(<DecisionPerformance />) },
+		      { path: "/performance-attribution", element: withSuspense(<PerformanceAttribution />) },
 	      { path: "/cockpit", element: withSuspense(<DecisionCockpit />) },
       { path: "/stock-data", element: withSuspense(<StockData />) },
       { path: "/watchlist", element: withSuspense(<Watchlist />) },
