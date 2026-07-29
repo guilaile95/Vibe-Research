@@ -86,6 +86,7 @@ import type {
   DecisionEvidenceListResult,
   SignalLedgerQueryResult,
   SignalLedgerRunDetailResult,
+  AccountExecutionPolicy,
 } from "./api/types.ts";
 
 
@@ -784,6 +785,14 @@ export const api = {
     offset?: number;
   }) => listSignalEntries(params),
   getRunSignalLedger: (decisionRunId: string) => getRunSignalLedger(decisionRunId),
+
+  // ---- 账户资金执行策略 (P2-3) ----
+  getAccountExecutionPolicy(): Promise<AccountExecutionPolicy> {
+    return get<AccountExecutionPolicy>("/account-execution-policy");
+  },
+  updateAccountExecutionPolicy(body: AccountExecutionPolicy): Promise<AccountExecutionPolicy> {
+    return request<AccountExecutionPolicy>("/account-execution-policy", "PUT", body);
+  },
 };
 
 export async function listDecisionEvidence(params?: {
@@ -914,4 +923,12 @@ export async function getRunSignalLedger(decisionRunId: string): Promise<SignalL
     signal_entries: data?.signal_entries || [],
     decision_outcomes: data?.decision_outcomes || [],
   };
+}
+
+export async function getAccountExecutionPolicy(): Promise<AccountExecutionPolicy> {
+  return api.getAccountExecutionPolicy();
+}
+
+export async function updateAccountExecutionPolicy(body: AccountExecutionPolicy): Promise<AccountExecutionPolicy> {
+  return api.updateAccountExecutionPolicy(body);
 }
