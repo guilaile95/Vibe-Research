@@ -2,71 +2,30 @@
 
 ## 上一任务（已完成）
 
-~~对提交 **`5dec970`**（`feat: calculate executable add quantities`）做受控端到端验收。~~
+~~P1-1 & P1-2 交易流水全栈流程与原作者信息清理（PR #25，Merge SHA `bd0214ab2ebd9a54eaa1f5965d8cf4441640df9f`）。~~
 
-- **状态**：已完成（见 `PROJECT_STATE.md` §11 验收记录）
-
-## 上一任务（已完成）
-
-~~增加「账户资金」手工填写窗口（`feat: add manual account funding input`）。~~
-
-- **状态**：已完成（见 `PROJECT_STATE.md` §13）
+- **状态**：已完成并合并至 `feature/research-system-v01`
+- 交易流水前端 `/trades` 与后端 `trade_ledger.sqlite3` 已上线
+- 原作者个人元数据及宣传信息已彻底清理
 
 ## 上一任务（已完成）
 
-~~修复账户资金前端响应解包与持久化 hardening（`88a1f83` / `f3d90af`）。~~
+~~P1-3 决策反馈 MVP 与全栈流程（PR #26，Merge SHA `30abb5b31d45e1e6a0de9cd27cfe741cc6b32530`）。~~
 
-## 上一任务（已完成）
-
-~~完善持仓手工维护：安全新增 / 精确编辑 / 删除确认（`9932601`）。~~
-
-- **状态**：已完成并验收（见 `PROJECT_STATE.md` §15）
-- 持仓支持：**新增**、**精确编辑**、**安全删除**
-- `POST` 新增：同代码仍**加权合并**
-- `PUT` 编辑：**精确替换**（不加权、不 upsert、不存在 404）
-- 删除：确认弹窗 + 失败错误反馈；不写 closed
-- 数量输入：**不再静默转换**
-- 账户资金当时未参与持仓建议裁决；当前仅在 Validator 完成后追加只读指标
-- 测试：`test_portfolio_edit_api.py` 23 passed；全量离线 667 passed（仅已知 Windows 例外）
-- Playwright A–J：**53/53**；advice 请求数 0；真实数据 SHA 不变
-- 功能提交：`9932601`
-
-## 上一任务（已完成）
-
-~~为持仓建议增加只读账户资金指标（`account_funding` 与 `account_metrics`）。~~
-
-- **状态**：已完成并验收
-- 仅增加只读账户资金指标；**尚未参与动作裁决**；可用现金约束留待下一阶段
-- 动作 (action)、比例 (execution_size_pct_of_holding)、建议数量 (execution_quantity)、预计金额 (estimated_amount) 绝对保持不变
-- Prompt 与 Validator 隔离，纯函数高精度 `Decimal(ROUND_HALF_UP)` 计算
-- 离线专项测试 8 passed；全量离线 675 passed（仅已知 Windows 例外）
-
-## 上一任务（已完成）
-
-~~Vibe-Research 持仓建议架构收口——第一阶段（`refactor/portfolio-advice-architecture-v01`）。~~
-
-- **状态**：已完成
-- **核心变更**：
-  1. Contracts 仅负责中立 Schema、枚举和交易单位
-  2. Policy 负责全部投资比例、置信度和 partial 市场约束
-  3. Validator 作为兼容 Facade，实际执行固定七阶段 Pipeline
-  4. 将只读账户资金指标计算从 Service 拆分为独立纯函数模块 `portfolio_advice_account_metrics.py`
-  5. 新建 Golden Tests (27 个场景快照)，锁定全部输出逻辑，保证重构过程行为不变
-- **测试**：持仓建议专项 252 passed、1 warning、exit code 0；全量离线 761 passed、1 failed、11 deselected、1 warning、exit code 1，唯一失败为 `backend/tests/test_fixes.py::test_run_cli_stream_timeout`（Windows `python3` 不可用导致 `fake 退出码 9009`）
-- **主要提交**：`9fa2428`、`70d2a71`、`67a1fc5`、`e3f44ef`、`0ee21aa`、`a749e47`、`5501eb4`、`601129c`、`beba610`、`eeea7b6`
+- **状态**：已完成并合并至 `feature/research-system-v01`
+- 决策反馈前端 `/decision-feedback` 与后端 `decision_feedback.sqlite3` 已上线
+- 包含严格请求体契约 (`extra="forbid"`)、全量 UUID 标识、`BEGIN IMMEDIATE` 原子作废与 Playwright E2E 双套件测试
 
 ## 当前下一任务
 
-**待产品优先级确认**。
+**下一产品任务待优先级确认**。
 
-本轮持仓建议架构收口已补完：
+本轮 P1-1、P1-2 交易流水与 P1-3 决策反馈闭环已全量上线并完成 Hardening 加固：
 
-- Contracts 已收敛为中立契约；Policy 已成为投资政策唯一代码来源
-- Validator 已成为兼容 Facade；职责已拆为固定七阶段 Pipeline
-- `portfolio-advice-v0.1`、Prompt 最终文本、动作/比例/数量/金额和 Legacy fallback 均未改变
-- 账户资金仍只追加只读指标，不参与裁决
-- Explainability、Evidence、Signal Ledger 尚未实现
-- 全量离线唯一失败仍为 Windows 缺少 `python3` 导致 `fake 退出码 9009`
+- PR #25 与 PR #26 均已采用标准 Merge 顺畅合并至稳定分支 `feature/research-system-v01`
+- 决策反馈严格拦截未知字段与非标准 payload (HTTP 422)
+- 前后端单元测试、构建、真实 E2E 与模拟错误路径 E2E 全量通过
+- 不自行启动：账户资金参与动作裁决、Explainability、Evidence Layer、Signal Ledger、收益归因、模型训练或自动调权
 
 建议候选项（**勿自行开工**，需用户明确指定其一）：
 
