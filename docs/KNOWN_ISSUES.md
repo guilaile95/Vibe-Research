@@ -37,8 +37,7 @@ tests/test_fixes.py::test_run_cli_stream_timeout
 - **原因**：Windows 环境常缺少 `python3` 可执行名，子进程退出码 **9009**（命令未找到）。
 - **处理**：视为环境已知问题；**不得**把其它失败归入此项。
 
-其余 `pytest -m "not live"` 应以当前分支绿测为准（除上述已知项外）。
-参考：`feature/research-system-v01` 持仓编辑任务验收时 **667 passed**，仅上述 1 项失败。
+其余 `pytest -m "not live"` 应以当前分支绿测为准（连续两次全量 1606 passed, 0 failed, 11 deselected）。
 
 ## 持仓维护 UX 注意
 

@@ -8,7 +8,7 @@
 |----|-----|
 | 仓库（origin） | https://github.com/guilaile95/Vibe-Research |
 | 主分支 | `feature/research-system-v01` |
-| 最新合并提交 | `dedf99b` (`Merge pull request #27 from guilaile95/fix/decision-feedback-hardening`)；当前 HEAD 以 `git rev-parse HEAD` 为准 |
+| 最新合并提交 | `06594c2` (`Merge pull request #32 from guilaile95/feat/performance-attribution`)；当前 HEAD 以 `git rev-parse HEAD` 为准 |
 | 工作区 | 接手后请先 `git status` / `git rev-parse HEAD` 复核 |
 
 > 说明：拼写为 **guilaile95**（非 guiliale95）。
@@ -37,6 +37,20 @@
   - 自动化归档结构化事实证据 (market, sector, stock, portfolio, account, risk) 与规则推演链
   - 前端 `/decision-evidence` 探索看板，支持筛选、运行详情、支持/限制证据关联与可视化展示
   - 持仓建议结果打通「查看决策依据」只读跳转入口
+- **P2-2 信号账本 (Signal Ledger)**（已完成）：
+  - 扩展 `decision_trace.sqlite3`，新增 `signal_entries` 与 `decision_outcomes` 数据表
+  - REST API: `GET /api/signal-ledger`, `GET /api/signal-ledger/run/{decision_run_id}`
+  - 前端 `/signal-ledger` 信号账本页面与 7 阶段流水时间线
+- **P2-3 账户资金执行策略 (Account Capital Constraints)**（已完成）：
+  - 独立策略文件 `account_execution_policy.py`，五字段策略持久化于 `VR_DATA_DIR`
+  - REST API: `GET/PUT /api/account-execution-policy`
+  - 前端 `/account-policy` 策略编辑器
+- **P2-4A 决策反馈分析 (Feedback Analytics)**（已完成）：
+  - 只读聚合 `decision_feedback` 表，三端点 `/api/decision-analytics/{adoption,outcome,stocks}`
+  - 前端 `/decision-performance` 决策绩效看板
+- **P2-4B 收益归因 (Performance Attribution)**（已完成）：
+  - 独立 `performance_attribution.sqlite3`，加权平均成本法四端点
+  - 前端 `/performance-attribution` 收益归因看板
 - **P1-1 & P1-2 交易流水 (Trade Ledger)**（已合并，PR #25，Merge SHA `bd0214a`）
 - **P1-3 决策反馈 (Decision Feedback)**（已合并，PR #26 & #27，Merge SHA `dedf99b`）
 
@@ -61,5 +75,5 @@ Windows 环境缺少 `python3` 命令，实际错误为 `fake 退出码 9009`。
 
 ## 当前下一任务
 
-P2 路线全量授权已开启，P2-1 完成后自动进入 **P2-2 Signal Ledger**。
-根据自动推进规则，完成 P2-1 合并后从新稳定 SHA 启动 P2-2，无需停顿等待额外授权。
+Scheduler import 测试顺序隔离修复（`fix/scheduler-test-isolation`）。
+`backend/tests/test_scheduler_lifespan.py::test_import_app_does_not_start_scheduler` 原方案依赖当前 pytest 进程全局线程状态，导致测试间顺序依赖；改为独立 `sys.executable` 子进程验证 `import app`，不修改 Scheduler 产品逻辑。

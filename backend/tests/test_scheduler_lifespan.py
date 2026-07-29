@@ -18,7 +18,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import subprocess
+import sys
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -68,6 +73,90 @@ class FailingFakeThread(FakeThread):
 def _real_portfolio_refresh_threads() -> list[threading.Thread]:
     """真实 threading.enumerate() 中名为 portfolio-refresh 的线程列表。"""
     return [t for t in threading.enumerate() if t.name == "portfolio-refresh"]
+
+
+# ---------------------------------------------------------------------------
+# 子进程 Import Probe：在独立解释器中验证 import app 不启动 Scheduler
+# ---------------------------------------------------------------------------
+def _run_app_import_probe(tmp_path: Path) -> dict[str, object]:
+    """在独立 Python 子进程中执行 import app，返回 probe 结果。
+
+    使用 sys.executable 确保与当前测试相同的解释器；使用独立 cwd 与
+    VR_DATA_DIR 避免污染主仓库或测试/fixtures。子进程仅做一次 probe，
+    不启动 Scheduler、不写盘、不留 daemon线程。
+
+    实现要点：
+    - 通过 ``python -c`` 直接运行探针源码，不生成临时 ``.py`` 文件，
+      避免修改源码工作树、避免进程异常终止时残留文件、避免并行竞争。
+    - 线程基线（``before``）在任何项目模块导入前采集，确保
+      ``portfolio``/``app`` 导入阶段创建的线程不被归入既有线程，
+      严格验证"全新解释器导入不启动调度器"。
+    - 通过 ``PYTHONPATH`` 环境变量让子进程能找到 ``backend`` 包，
+      无需向源码目录写入 ``sys.path`` 相关的探码文件。
+    """
+    backend_dir = Path(__file__).resolve().parents[1]
+
+    probe_source = r"""
+import json
+import threading
+
+before = {
+    id(thread)
+    for thread in threading.enumerate()
+    if thread.name == "portfolio-refresh"
+}
+
+import app
+import portfolio
+
+after = [
+    thread
+    for thread in threading.enumerate()
+    if thread.name == "portfolio-refresh"
+    and id(thread) not in before
+]
+
+print(
+    "SCHEDULER_IMPORT_PROBE="
+    + json.dumps({
+        "scheduler_started": portfolio._scheduler_started,
+        "new_portfolio_refresh_threads": len(after),
+    })
+)
+"""
+
+    env = os.environ.copy()
+    env["VR_DATA_DIR"] = str(tmp_path)
+    env["PYTHONPATH"] = (
+        str(backend_dir) + os.pathsep + env.get("PYTHONPATH", "")
+    )
+
+    proc = subprocess.run(
+        [sys.executable, "-c", probe_source],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"scheduler import probe failed: returncode={proc.returncode}\n"
+            f"stdout={proc.stdout}\n"
+            f"stderr={proc.stderr}"
+        )
+
+    marker = "SCHEDULER_IMPORT_PROBE="
+    for line in proc.stdout.splitlines():
+        if line.startswith(marker):
+            return json.loads(line[len(marker):])
+
+    raise RuntimeError(
+        f"probe output missing SCHEDULER_IMPORT_PROBE marker\n"
+        f"stdout={proc.stdout}\n"
+        f"stderr={proc.stderr}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -188,16 +277,28 @@ def test_no_real_thread_created(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 场景 9：import app.py 不启动调度器（方案 B：静态调用路径验证）
+# 场景 9：import app.py 不启动调度器（独立子进程验证）
 # ---------------------------------------------------------------------------
-def test_import_app_does_not_start_scheduler():
-    """app 已在模块顶部导入。若导入触发了 start_scheduler，会有真实线程残留。
+def test_import_app_does_not_start_scheduler(tmp_path: Path):
+    """验证在全新的 Python 解释器中 import app 不启动 Scheduler。
 
-    方案 B：静态调用路径验证——检查标志和真实线程数。
+    原方案检查当前 pytest 进程的全局线程状态，导致测试间顺序依赖：
+    其他测试若已启动 portfolio-refresh daemon 线程，本测试会误判为失败。
+
+    现方案：在独立子进程（sys.executable + 独立 cwd + 独立 VR_DATA_DIR）中
+    import app，验证：
+      - _scheduler_started 为 False
+      - 未创建新的 portfolio-refresh 真实线程
+    子进程退出后不留下 daemon 线程，完全与父测试进程隔离。
     """
-    assert pf._scheduler_started is False
-    assert len(_real_portfolio_refresh_threads()) == 0, \
-        "导入 app 不应创建 portfolio-refresh 线程"
+    result = _run_app_import_probe(tmp_path)
+
+    assert result["scheduler_started"] is False, (
+        f"import app 不应启动 scheduler，probe 返回: {result}"
+    )
+    assert result["new_portfolio_refresh_threads"] == 0, (
+        f"import app 不应创建 portfolio-refresh 线程，probe 返回: {result}"
+    )
 
 
 # ---------------------------------------------------------------------------
