@@ -74,7 +74,7 @@ export function DecisionFeedback() {
     advice_generated_at: new Date().toISOString(),
     trade_id: "",
     adoption_status: "followed",
-    outcome_status: "as_expected",
+    outcome_status: "not_evaluated",
     note: "",
   });
   const [createLoading, setCreateLoading] = useState(false);
@@ -95,8 +95,8 @@ export function DecisionFeedback() {
       const data = await api.listDecisionFeedbacks(query);
       setFeedbacks(data);
     } catch (e) {
-      if (e instanceof ApiError) {
-        setError(e.message);
+      if (e instanceof ApiError || (e && typeof (e as any).status === "number")) {
+        setError((e as any).message);
       } else if (e instanceof Error) {
         setError(e.message);
       } else {
@@ -119,8 +119,8 @@ export function DecisionFeedback() {
       const record = await api.getDecisionFeedback(id);
       setDetailFeedback(record);
     } catch (e) {
-      if (e instanceof ApiError) {
-        setDetailError(e.message);
+      if (e instanceof ApiError || (e && typeof (e as any).status === "number")) {
+        setDetailError((e as any).message);
       } else if (e instanceof Error) {
         setDetailError(e.message);
       } else {
@@ -176,7 +176,7 @@ export function DecisionFeedback() {
       advice_generated_at: new Date().toISOString(),
       trade_id: "",
       adoption_status: "followed",
-      outcome_status: "as_expected",
+      outcome_status: "not_evaluated",
       note: "",
     });
     setCreateError(null);
@@ -201,16 +201,13 @@ export function DecisionFeedback() {
       setTimeout(() => setSuccessMsg(null), 3000);
       loadFeedbacks();
     } catch (e) {
-      if (e instanceof ApiError) {
-        if (e.status === 404) {
-          setCreateError("关联数据不存在（持仓建议或交易记录）");
-        } else if (e.status === 409) {
-          setCreateError("建议发生变化，生成时间不一致");
-        } else {
-          setCreateError(e.message);
-        }
-      } else if (e instanceof Error) {
-        setCreateError(e.message);
+      const status = (e as any)?.status;
+      if (status === 404) {
+        setCreateError("关联数据不存在（持仓建议或交易记录）");
+      } else if (status === 409) {
+        setCreateError("建议发生变化，生成时间不一致");
+      } else if (e instanceof Error || (e && (e as any).message)) {
+        setCreateError((e as any).message);
       } else {
         setCreateError("创建决策反馈失败");
       }
@@ -243,8 +240,8 @@ export function DecisionFeedback() {
         loadDetail(voidedId);
       }
     } catch (e) {
-      if (e instanceof ApiError) {
-        setVoidError(e.message);
+      if (e instanceof ApiError || (e && typeof (e as any).status === "number")) {
+        setVoidError((e as any).message);
       } else if (e instanceof Error) {
         setVoidError(e.message);
       } else {

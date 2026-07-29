@@ -1,7 +1,9 @@
 """Unit tests for decision_feedback_store.py."""
 from __future__ import annotations
 
+import concurrent.futures
 import sqlite3
+import uuid
 import pytest
 
 import decision_feedback_store as store
@@ -133,9 +135,49 @@ def test_void_record(tmp_path):
     # Include voided returns it
     assert len(store.list_records(db_path, include_voided=True)) == 1
 
-    # Voiding already voided raises 409
+    # Voiding already voided raises 409 exception
     with pytest.raises(store.DecisionFeedbackAlreadyVoidedError):
         store.void_record(db_path, "fb_201")
+
+
+def test_concurrent_void_record(tmp_path):
+    db_path = tmp_path / "concurrent_test.sqlite3"
+    fb_id = f"fb_{uuid.uuid4().hex}"
+    rec = {
+        "feedback_id": fb_id,
+        "code": "600519",
+        "advice_trade_date": "2026-07-29",
+        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "trade_id": None,
+        "adoption_status": "followed",
+        "outcome_status": "as_expected",
+        "note": None,
+        "created_at": "2026-07-29T10:00:00.000000+00:00",
+        "voided_at": None,
+        "void_reason": None,
+    }
+    store.insert_record(db_path, rec)
+
+    results = []
+    errors = []
+
+    def _do_void(reason: str):
+        try:
+            res = store.void_record(db_path, fb_id, void_reason=reason)
+            results.append(res)
+        except Exception as exc:
+            errors.append(exc)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f1 = executor.submit(_do_void, "reason 1")
+        f2 = executor.submit(_do_void, "reason 2")
+        f1.result()
+        f2.result()
+
+    assert len(results) == 1
+    assert len(errors) == 1
+    assert isinstance(errors[0], store.DecisionFeedbackAlreadyVoidedError)
+    assert not isinstance(errors[0], store.DecisionFeedbackCorruptedError)
 
 
 def test_corrupted_database_handling(tmp_path):

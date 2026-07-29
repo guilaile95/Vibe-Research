@@ -8,6 +8,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, ValidationError
+
 import ai_result_store
 import decision_feedback_store as store
 import review_history
@@ -26,6 +28,30 @@ ADOPTION_STATUSES = frozenset(
 OUTCOME_STATUSES = frozenset(
     {"better_than_expected", "as_expected", "worse_than_expected", "not_evaluated"}
 )
+
+
+class AdviceRefInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    trade_date: str
+    generated_at: str
+
+
+class CreateFeedbackInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    advice_ref: AdviceRefInput
+    trade_id: str | None = None
+    adoption_status: str
+    outcome_status: str
+    note: str | None = None
+
+
+class VoidFeedbackInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = None
 
 
 class DecisionFeedbackValidationError(ValueError):
@@ -143,57 +169,42 @@ def create_feedback(
     if not isinstance(data, dict):
         raise DecisionFeedbackValidationError("请求数据必须是字典")
 
-    # Code validation
-    code = data.get("code")
-    if not isinstance(code, str) or not _CODE_RE.fullmatch(code.strip()):
+    try:
+        validated = CreateFeedbackInput.model_validate(data)
+    except ValidationError as exc:
+        raise DecisionFeedbackValidationError(str(exc))
+
+    code = validated.code.strip()
+    if not _CODE_RE.fullmatch(code):
         raise DecisionFeedbackValidationError("code 必须为 6 位数字")
-    code = code.strip()
 
-    # Advice ref extraction & validation
-    advice_ref = data.get("advice_ref")
-    if isinstance(advice_ref, dict):
-        advice_trade_date = advice_ref.get("trade_date")
-        advice_generated_at = advice_ref.get("generated_at")
-    else:
-        advice_trade_date = data.get("advice_trade_date")
-        advice_generated_at = data.get("advice_generated_at")
-
-    advice_trade_date = _validate_date_str(advice_trade_date, "advice_trade_date")
-    if not isinstance(advice_generated_at, str) or not advice_generated_at.strip():
+    advice_trade_date = _validate_date_str(validated.advice_ref.trade_date, "advice_trade_date")
+    advice_generated_at = validated.advice_ref.generated_at.strip()
+    if not advice_generated_at:
         raise DecisionFeedbackValidationError("advice_generated_at 必须是非空字符串")
-    advice_generated_at = advice_generated_at.strip()
 
     _verify_advice_ref(code, advice_trade_date, advice_generated_at)
 
-    # Trade ID validation (optional)
-    raw_trade_id = data.get("trade_id")
     trade_id: str | None = None
-    if raw_trade_id is not None:
-        if not isinstance(raw_trade_id, str) or not raw_trade_id.strip():
+    if validated.trade_id is not None:
+        trade_id = validated.trade_id.strip()
+        if not trade_id:
             raise DecisionFeedbackValidationError("trade_id 必须为非空字符串")
-        trade_id = raw_trade_id.strip()
         _verify_trade_id(trade_id, code, advice_trade_date, advice_generated_at)
 
-    # Status enums
-    adoption_status = data.get("adoption_status")
-    if adoption_status not in ADOPTION_STATUSES:
+    if validated.adoption_status not in ADOPTION_STATUSES:
         raise DecisionFeedbackValidationError(
             f"adoption_status 必须是 {sorted(ADOPTION_STATUSES)} 之一"
         )
 
-    outcome_status = data.get("outcome_status")
-    if outcome_status not in OUTCOME_STATUSES:
+    if validated.outcome_status not in OUTCOME_STATUSES:
         raise DecisionFeedbackValidationError(
             f"outcome_status 必须是 {sorted(OUTCOME_STATUSES)} 之一"
         )
 
-    # Note
-    raw_note = data.get("note")
     note: str | None = None
-    if raw_note is not None:
-        if not isinstance(raw_note, str):
-            raise DecisionFeedbackValidationError("note 必须是字符串")
-        stripped = raw_note.strip()
+    if validated.note is not None:
+        stripped = validated.note.strip()
         if len(stripped) > _MAX_NOTE_LEN:
             raise DecisionFeedbackValidationError(
                 f"note 长度不能超过 {_MAX_NOTE_LEN} 字符"
@@ -202,7 +213,7 @@ def create_feedback(
             note = stripped
 
     now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
-    feedback_id = f"fb_{uuid.uuid4().hex[:12]}"
+    feedback_id = f"fb_{uuid.uuid4().hex}"
 
     record = {
         "feedback_id": feedback_id,
@@ -210,8 +221,8 @@ def create_feedback(
         "advice_trade_date": advice_trade_date,
         "advice_generated_at": advice_generated_at,
         "trade_id": trade_id,
-        "adoption_status": adoption_status,
-        "outcome_status": outcome_status,
+        "adoption_status": validated.adoption_status,
+        "outcome_status": validated.outcome_status,
         "note": note,
         "created_at": now,
         "voided_at": None,
@@ -282,21 +293,32 @@ def list_feedbacks(
 
 def void_feedback(
     feedback_id: str,
-    void_reason: str | None = None,
+    data: dict[str, Any] | str | None = None,
     *,
+    void_reason: str | None = None,
     db_path: str | Path | None = None,
 ) -> dict[str, Any]:
     reason: str | None = None
-    if void_reason is not None:
-        if not isinstance(void_reason, str):
-            raise DecisionFeedbackValidationError("void_reason 必须是字符串")
-        stripped = void_reason.strip()
+    if isinstance(data, dict):
+        try:
+            validated = VoidFeedbackInput.model_validate(data)
+            reason = validated.reason
+        except ValidationError as exc:
+            raise DecisionFeedbackValidationError(str(exc))
+    elif isinstance(data, str):
+        reason = data
+    elif void_reason is not None:
+        reason = void_reason
+
+    if reason is not None:
+        if not isinstance(reason, str):
+            raise DecisionFeedbackValidationError("reason 必须是字符串")
+        stripped = reason.strip()
         if len(stripped) > _MAX_REASON_LEN:
             raise DecisionFeedbackValidationError(
                 f"void_reason 长度不能超过 {_MAX_REASON_LEN} 字符"
             )
-        if stripped:
-            reason = stripped
+        reason = stripped if stripped else None
 
     target_db = resolve_db_path(db_path)
     return store.void_record(target_db, feedback_id, void_reason=reason)

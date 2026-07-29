@@ -80,8 +80,6 @@ describe("decisionFeedbackView pure helpers", () => {
     const input = buildFeedbackCreateInput(draft);
     assert.deepEqual(input, {
       code: "000001",
-      advice_trade_date: "2026-07-29",
-      advice_generated_at: "2026-07-29T08:00:00Z",
       trade_id: "trade_123",
       adoption_status: "followed",
       outcome_status: "better_than_expected",

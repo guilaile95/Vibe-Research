@@ -1,6 +1,8 @@
 """API integration tests for decision_feedback_router.py using FastAPI TestClient."""
 from __future__ import annotations
 
+import concurrent.futures
+import re
 import pytest
 from fastapi.testclient import TestClient
 
@@ -16,6 +18,7 @@ def client(tmp_path, monkeypatch):
     review_db = tmp_path / "review_history.sqlite3"
     trade_db = tmp_path / "trade_ledger.sqlite3"
 
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("VIBE_RESEARCH_DECISION_FEEDBACK_DB", str(feedback_db))
     monkeypatch.setenv("VIBE_RESEARCH_REVIEW_DB", str(review_db))
     monkeypatch.setenv("VIBE_RESEARCH_TRADE_LEDGER_DB", str(trade_db))
@@ -95,6 +98,8 @@ def test_post_decision_feedback_success(client):
     assert res.status_code == 200
     data = res.json()["data"]
     assert data["feedback_id"].startswith("fb_")
+    assert len(data["feedback_id"]) == 35
+    assert re.fullmatch(r"^fb_[0-9a-f]{32}$", data["feedback_id"])
     assert data["code"] == "600519"
     assert data["adoption_status"] == "followed"
 
@@ -107,11 +112,38 @@ def test_post_decision_feedback_errors(client):
     res = tc.post("/api/decision-feedback", content="not json")
     assert res.status_code == 400
 
-    # 404 Advice missing
+    # 422 Top-level advice_trade_date forbidden by extra="forbid"
     payload = {
         "code": "600519",
-        "advice_trade_date": "2026-01-01",
-        "advice_generated_at": "2026-01-01T10:00:00.000000+00:00",
+        "advice_trade_date": "2026-07-29",
+        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "adoption_status": "followed",
+        "outcome_status": "as_expected",
+    }
+    res = tc.post("/api/decision-feedback", json=payload)
+    assert res.status_code == 422
+
+    # 422 Extra field inside advice_ref forbidden
+    payload = {
+        "code": "600519",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+            "extra_key": "val",
+        },
+        "adoption_status": "followed",
+        "outcome_status": "as_expected",
+    }
+    res = tc.post("/api/decision-feedback", json=payload)
+    assert res.status_code == 422
+
+    # 404 Advice missing for trade_date
+    payload = {
+        "code": "600519",
+        "advice_ref": {
+            "trade_date": "2026-01-01",
+            "generated_at": "2026-01-01T10:00:00.000000+00:00",
+        },
         "adoption_status": "followed",
         "outcome_status": "as_expected",
     }
@@ -121,8 +153,10 @@ def test_post_decision_feedback_errors(client):
     # 409 Advice timestamp conflict
     payload = {
         "code": "600519",
-        "advice_trade_date": "2026-07-29",
-        "advice_generated_at": "2026-07-29T11:11:11.000000+00:00",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T11:11:11.000000+00:00",
+        },
         "adoption_status": "followed",
         "outcome_status": "as_expected",
     }
@@ -133,8 +167,10 @@ def test_post_decision_feedback_errors(client):
     _seed_advice(client["review_db"], trade_date="2026-07-30", holdings=[{"code": "000001"}])
     payload = {
         "code": "600519",
-        "advice_trade_date": "2026-07-30",
-        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "advice_ref": {
+            "trade_date": "2026-07-30",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        },
         "adoption_status": "followed",
         "outcome_status": "as_expected",
     }
@@ -144,8 +180,10 @@ def test_post_decision_feedback_errors(client):
     # 422 Invalid enum status
     payload = {
         "code": "600519",
-        "advice_trade_date": "2026-07-29",
-        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        },
         "adoption_status": "invalid_status",
         "outcome_status": "as_expected",
     }
@@ -159,8 +197,10 @@ def test_get_and_list_feedbacks(client):
 
     payload = {
         "code": "600519",
-        "advice_trade_date": "2026-07-29",
-        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        },
         "adoption_status": "followed",
         "outcome_status": "as_expected",
     }
@@ -193,15 +233,21 @@ def test_void_feedback(client):
 
     payload = {
         "code": "600519",
-        "advice_trade_date": "2026-07-29",
-        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        },
         "adoption_status": "followed",
         "outcome_status": "as_expected",
     }
     create_res = tc.post("/api/decision-feedback", json=payload)
     fb_id = create_res.json()["data"]["feedback_id"]
 
-    # Voiding
+    # Voiding with forbidden field void_reason -> 422
+    res = tc.post(f"/api/decision-feedback/{fb_id}/void", json={"void_reason": "User requested"})
+    assert res.status_code == 422
+
+    # Voiding valid with reason -> 200
     res = tc.post(f"/api/decision-feedback/{fb_id}/void", json={"reason": "User requested"})
     assert res.status_code == 200
     data = res.json()["data"]
@@ -215,6 +261,38 @@ def test_void_feedback(client):
     # Voiding missing -> 404
     res = tc.post("/api/decision-feedback/fb_missing/void", json={})
     assert res.status_code == 404
+
+
+def test_concurrent_api_void_record(client):
+    tc = client["client"]
+    _seed_advice(client["review_db"])
+
+    payload = {
+        "code": "600519",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        },
+        "adoption_status": "followed",
+        "outcome_status": "as_expected",
+    }
+    create_res = tc.post("/api/decision-feedback", json=payload)
+    assert create_res.status_code == 200
+    fb_id = create_res.json()["data"]["feedback_id"]
+
+    status_codes = []
+
+    def _call_void(reason: str):
+        res = tc.post(f"/api/decision-feedback/{fb_id}/void", json={"reason": reason})
+        status_codes.append(res.status_code)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f1 = executor.submit(_call_void, "reason A")
+        f2 = executor.submit(_call_void, "reason B")
+        f1.result()
+        f2.result()
+
+    assert sorted(status_codes) == [200, 409]
 
 
 def test_corrupted_db_response_500(client):

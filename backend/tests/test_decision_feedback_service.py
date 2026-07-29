@@ -1,7 +1,9 @@
 """Unit tests for decision_feedback_service.py."""
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import pytest
 
 import ai_result_store
@@ -17,7 +19,13 @@ def test_dbs(tmp_path, monkeypatch):
     feedback_db = tmp_path / "decision_feedback.sqlite3"
     review_db = tmp_path / "review_history.sqlite3"
     trade_db = tmp_path / "trade_ledger.sqlite3"
+    portfolio_json = tmp_path / "portfolio.json"
+    account_profile_json = tmp_path / "account_profile.json"
 
+    portfolio_json.write_text('{"holdings": [{"code": "600519"}]}', encoding="utf-8")
+    account_profile_json.write_text('{"total_cash": 100000.0}', encoding="utf-8")
+
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("VIBE_RESEARCH_DECISION_FEEDBACK_DB", str(feedback_db))
     monkeypatch.setenv("VIBE_RESEARCH_REVIEW_DB", str(review_db))
     monkeypatch.setenv("VIBE_RESEARCH_TRADE_LEDGER_DB", str(trade_db))
@@ -26,6 +34,8 @@ def test_dbs(tmp_path, monkeypatch):
         "feedback_db": feedback_db,
         "review_db": review_db,
         "trade_db": trade_db,
+        "portfolio_json": portfolio_json,
+        "account_profile_json": account_profile_json,
     }
 
 
@@ -107,7 +117,10 @@ def test_create_feedback_success(test_dbs):
     }
 
     rec = svc.create_feedback(data)
+    # Check 128-bit UUID format: 'fb_' + 32 hex chars = 35 chars
     assert rec["feedback_id"].startswith("fb_")
+    assert len(rec["feedback_id"]) == 35
+    assert re.fullmatch(r"^fb_[0-9a-f]{32}$", rec["feedback_id"])
     assert rec["code"] == "600519"
     assert rec["advice_trade_date"] == "2026-07-29"
     assert rec["advice_generated_at"] == "2026-07-29T10:00:00.000000+00:00"
@@ -121,8 +134,10 @@ def test_create_feedback_success(test_dbs):
 def test_create_feedback_advice_not_found(test_dbs):
     data = {
         "code": "600519",
-        "advice_trade_date": "2026-07-29",
-        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        },
         "adoption_status": "followed",
         "outcome_status": "as_expected",
     }
@@ -134,8 +149,10 @@ def test_create_feedback_advice_conflict(test_dbs):
     _seed_advice(test_dbs["review_db"], generated_at="2026-07-29T10:00:00.000000+00:00")
     data = {
         "code": "600519",
-        "advice_trade_date": "2026-07-29",
-        "advice_generated_at": "2026-07-29T12:00:00.000000+00:00",  # mismatched timestamp
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T12:00:00.000000+00:00",  # mismatched timestamp
+        },
         "adoption_status": "followed",
         "outcome_status": "as_expected",
     }
@@ -147,8 +164,10 @@ def test_create_feedback_advice_holding_not_found(test_dbs):
     _seed_advice(test_dbs["review_db"], holdings=[{"code": "000001", "name": "平安银行"}])
     data = {
         "code": "600519",
-        "advice_trade_date": "2026-07-29",
-        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        },
         "adoption_status": "followed",
         "outcome_status": "as_expected",
     }
@@ -160,8 +179,10 @@ def test_create_feedback_trade_not_found(test_dbs):
     _seed_advice(test_dbs["review_db"])
     data = {
         "code": "600519",
-        "advice_trade_date": "2026-07-29",
-        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        },
         "trade_id": "tr_nonexistent",
         "adoption_status": "followed",
         "outcome_status": "as_expected",
@@ -175,8 +196,10 @@ def test_create_feedback_trade_code_mismatch(test_dbs):
     _seed_trade(test_dbs["trade_db"], trade_id="tr_200", code="000001")
     data = {
         "code": "600519",
-        "advice_trade_date": "2026-07-29",
-        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        },
         "trade_id": "tr_200",
         "adoption_status": "followed",
         "outcome_status": "as_expected",
@@ -191,8 +214,10 @@ def test_create_feedback_trade_no_advice_ref(test_dbs):
     _seed_trade(test_dbs["trade_db"], trade_id="tr_300", advice_trade_date=None, advice_generated_at=None)
     data = {
         "code": "600519",
-        "advice_trade_date": "2026-07-29",
-        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        },
         "trade_id": "tr_300",
         "adoption_status": "followed",
         "outcome_status": "as_expected",
@@ -202,14 +227,59 @@ def test_create_feedback_trade_no_advice_ref(test_dbs):
     assert "无持仓建议信息" in str(exc_info.value)
 
 
+def test_create_feedback_pydantic_extra_forbid(test_dbs):
+    _seed_advice(test_dbs["review_db"])
+
+    # Forbidden top-level field advice_trade_date
+    data = {
+        "code": "600519",
+        "advice_trade_date": "2026-07-29",
+        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "adoption_status": "followed",
+        "outcome_status": "as_expected",
+    }
+    with pytest.raises(svc.DecisionFeedbackValidationError):
+        svc.create_feedback(data)
+
+    # Forbidden top-level field feedback_id
+    data = {
+        "code": "600519",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        },
+        "feedback_id": "fb_123",
+        "adoption_status": "followed",
+        "outcome_status": "as_expected",
+    }
+    with pytest.raises(svc.DecisionFeedbackValidationError):
+        svc.create_feedback(data)
+
+    # Forbidden extra field inside advice_ref
+    data = {
+        "code": "600519",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+            "extra_field": "not_allowed",
+        },
+        "adoption_status": "followed",
+        "outcome_status": "as_expected",
+    }
+    with pytest.raises(svc.DecisionFeedbackValidationError):
+        svc.create_feedback(data)
+
+
 def test_create_feedback_field_validations(test_dbs):
     _seed_advice(test_dbs["review_db"])
 
     # Invalid code
     data = {
         "code": "123",
-        "advice_trade_date": "2026-07-29",
-        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        },
         "adoption_status": "followed",
         "outcome_status": "as_expected",
     }
@@ -239,8 +309,10 @@ def test_service_list_get_void(test_dbs):
     _seed_advice(test_dbs["review_db"])
     data = {
         "code": "600519",
-        "advice_trade_date": "2026-07-29",
-        "advice_generated_at": "2026-07-29T10:00:00.000000+00:00",
+        "advice_ref": {
+            "trade_date": "2026-07-29",
+            "generated_at": "2026-07-29T10:00:00.000000+00:00",
+        },
         "adoption_status": "followed",
         "outcome_status": "as_expected",
     }
@@ -254,9 +326,54 @@ def test_service_list_get_void(test_dbs):
     lst = svc.list_feedbacks(code="600519")
     assert len(lst) == 1
 
-    voided = svc.void_feedback(fb_id, "Mistake")
+    voided = svc.void_feedback(fb_id, {"reason": "Mistake"})
     assert voided["voided_at"] is not None
     assert voided["void_reason"] == "Mistake"
 
     with pytest.raises(svc.DecisionFeedbackAlreadyVoidedError):
         svc.void_feedback(fb_id)
+
+
+def test_source_data_no_side_effects(test_dbs):
+    """Verify create and void feedback operations cause ZERO changes/side effects to source data files."""
+    _seed_advice(test_dbs["review_db"])
+    _seed_trade(test_dbs["trade_db"], trade_id="tr_side_effect")
+
+    review_db = test_dbs["review_db"]
+    trade_db = test_dbs["trade_db"]
+    portfolio_json = test_dbs["portfolio_json"]
+    account_json = test_dbs["account_profile_json"]
+
+    def _get_hashes():
+        return {
+            "review": hashlib.sha256(review_db.read_bytes()).hexdigest(),
+            "trade": hashlib.sha256(trade_db.read_bytes()).hexdigest(),
+            "portfolio": hashlib.sha256(portfolio_json.read_bytes()).hexdigest(),
+            "account": hashlib.sha256(account_json.read_bytes()).hexdigest(),
+        }
+
+    initial_hashes = _get_hashes()
+
+    # Perform create
+    rec = svc.create_feedback(
+        {
+            "code": "600519",
+            "advice_ref": {
+                "trade_date": "2026-07-29",
+                "generated_at": "2026-07-29T10:00:00.000000+00:00",
+            },
+            "trade_id": "tr_side_effect",
+            "adoption_status": "followed",
+            "outcome_status": "as_expected",
+            "note": "Side effect test",
+        }
+    )
+
+    post_create_hashes = _get_hashes()
+    assert initial_hashes == post_create_hashes
+
+    # Perform void
+    svc.void_feedback(rec["feedback_id"], {"reason": "Testing side effects"})
+
+    post_void_hashes = _get_hashes()
+    assert initial_hashes == post_void_hashes

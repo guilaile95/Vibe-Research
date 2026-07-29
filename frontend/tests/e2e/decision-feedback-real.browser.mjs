@@ -259,7 +259,7 @@ conn.close()
     // 确认新建成功与列表出现对应代码
     await page.waitForSelector("td:has-text('600519')");
     await page.waitForSelector("td:has-text('按照建议执行')");
-    await page.waitForSelector("td:has-text('符合预期')");
+    await page.waitForSelector("td:has-text('暂未评估')");
 
     // 3. 打开详情 Modal
     console.log("[E2E] 4. Opening detail modal...");

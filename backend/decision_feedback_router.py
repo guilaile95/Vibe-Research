@@ -43,7 +43,12 @@ def _validate_date_str(val: str, field_name: str) -> str:
 @router.post("/decision-feedback")
 async def create_feedback(request: Request):
     try:
+        raw_body = await request.body()
+        if not raw_body:
+            raise HTTPException(status_code=400, detail="请求体必须是 JSON")
         data = await request.json()
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=400, detail="请求体必须是 JSON")
 
@@ -151,12 +156,8 @@ async def void_feedback(feedback_id: str, request: Request):
     if not isinstance(data, dict):
         raise HTTPException(status_code=422, detail="请求体必须是 JSON 对象")
 
-    reason = data.get("reason") or data.get("void_reason")
-    if reason is not None and not isinstance(reason, str):
-        raise HTTPException(status_code=422, detail="reason 必须是字符串")
-
     try:
-        record = svc.void_feedback(feedback_id, void_reason=reason)
+        record = svc.void_feedback(feedback_id, data)
     except (svc.DecisionFeedbackNotFoundError, store.DecisionFeedbackNotFoundError):
         raise HTTPException(status_code=404, detail="决策反馈不存在")
     except (svc.DecisionFeedbackAlreadyVoidedError, store.DecisionFeedbackAlreadyVoidedError):

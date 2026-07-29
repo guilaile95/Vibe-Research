@@ -134,8 +134,6 @@ export function buildFeedbackCreateInput(
 
   return {
     code,
-    advice_trade_date,
-    advice_generated_at,
     trade_id,
     adoption_status: draft.adoption_status,
     outcome_status: draft.outcome_status,
