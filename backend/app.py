@@ -52,6 +52,7 @@ import decision_evidence_router
 import signal_ledger_router
 import decision_trace_store
 import signal_ledger_store
+import account_execution_policy_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -151,6 +152,8 @@ app.include_router(decision_feedback_router.router)
 app.include_router(decision_evidence_router.router)
 # 信号账本：只读 API
 app.include_router(signal_ledger_router.router)
+# 账户资金执行策略：GET/PUT /api/account-execution-policy
+app.include_router(account_execution_policy_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)
