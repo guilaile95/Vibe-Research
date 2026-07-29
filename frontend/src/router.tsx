@@ -81,6 +81,9 @@ const DecisionEvidence = lazy(() =>
 const SignalLedger = lazy(() =>
   import("@/pages/SignalLedger").then((m) => ({ default: m.default })),
 );
+const AccountPolicy = lazy(() =>
+  import("@/pages/AccountPolicy").then((m) => ({ default: m.default })),
+);
 
 function PageFallback() {
   return (
@@ -127,6 +130,7 @@ export const router = createBrowserRouter([
 	      { path: "/decision-feedback", element: withSuspense(<DecisionFeedback />) },
 		      { path: "/decision-evidence", element: withSuspense(<DecisionEvidence />) },
 		      { path: "/signal-ledger", element: withSuspense(<SignalLedger />) },
+		      { path: "/account-policy", element: withSuspense(<AccountPolicy />) },
 	      { path: "/cockpit", element: withSuspense(<DecisionCockpit />) },
       { path: "/stock-data", element: withSuspense(<StockData />) },
       { path: "/watchlist", element: withSuspense(<Watchlist />) },

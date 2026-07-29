@@ -1356,3 +1356,16 @@ export interface SignalLedgerQueryResult {
   limit: number;
   offset: number;
 }
+
+
+// ---------------------------------------------------------------------------
+// 账户资金执行策略（GET/PUT /api/account-execution-policy）
+// ---------------------------------------------------------------------------
+
+export interface AccountExecutionPolicy {
+  lot_size: number;
+  min_cash_reserve_pct: number;
+  max_single_stock_allocation_pct: number;
+  tie_breaker_order: "code_asc" | "code_desc" | "proportional";
+  allow_partial_execution: boolean;
+}
