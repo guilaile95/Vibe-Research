@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError, type TradeRecord } from "@/lib/api";
@@ -1236,13 +1237,23 @@ export function Trades() {
 
                 {/* 关联引用 */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
-                  <div className="border border-border/40 rounded-lg p-2.5 bg-muted/10">
-                    <span className="text-muted-foreground">建议引用：</span>
-                    <span className="ml-1 text-foreground font-mono">
-                      {detailTrade.advice_trade_date
-                        ? `${detailTrade.advice_trade_date} (${formatTradeTime(detailTrade.advice_generated_at)})`
-                        : "无"}
-                    </span>
+                  <div className="border border-border/40 rounded-lg p-2.5 bg-muted/10 flex items-center justify-between">
+                    <div>
+                      <span className="text-muted-foreground">建议引用：</span>
+                      <span className="ml-1 text-foreground font-mono">
+                        {detailTrade.advice_trade_date
+                          ? `${detailTrade.advice_trade_date} (${formatTradeTime(detailTrade.advice_generated_at)})`
+                          : "无"}
+                      </span>
+                    </div>
+                    {detailTrade.advice_trade_date && (
+                      <Link
+                        to={`/decision-feedback?code=${detailTrade.code}`}
+                        className="ml-2 inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/20 transition-colors shrink-0"
+                      >
+                        查看关联反馈
+                      </Link>
+                    )}
                   </div>
                   <div className="border border-border/40 rounded-lg p-2.5 bg-muted/10">
                     <span className="text-muted-foreground">Thesis 引用：</span>

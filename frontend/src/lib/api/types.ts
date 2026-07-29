@@ -1179,3 +1179,45 @@ export interface TradeCreateInput {
     revision_number: number;
   };
 }
+
+// ---- 决策反馈 (Decision Feedback P1-3) ----
+
+export type DecisionFeedbackAdoptionStatus =
+  | "followed"
+  | "partially_followed"
+  | "not_followed"
+  | "not_applicable";
+
+export type DecisionFeedbackOutcomeStatus =
+  | "better_than_expected"
+  | "as_expected"
+  | "worse_than_expected"
+  | "not_evaluated";
+
+export interface DecisionFeedbackRecord {
+  feedback_id: string;
+  code: string;
+  advice_trade_date: string;
+  advice_generated_at: string;
+  trade_id: string | null;
+  adoption_status: DecisionFeedbackAdoptionStatus;
+  outcome_status: DecisionFeedbackOutcomeStatus;
+  note: string | null;
+  created_at: string;
+  voided_at: string | null;
+  void_reason: string | null;
+}
+
+export interface DecisionFeedbackCreateInput {
+  code: string;
+  advice_trade_date: string;
+  advice_generated_at: string;
+  trade_id?: string | null;
+  adoption_status: DecisionFeedbackAdoptionStatus;
+  outcome_status: DecisionFeedbackOutcomeStatus;
+  note?: string | null;
+  advice_ref?: {
+    trade_date: string;
+    generated_at: string;
+  };
+}

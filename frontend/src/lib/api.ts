@@ -69,6 +69,10 @@ import type {
   TradeExecutionStatus,
   TradeRecord,
   TradeCreateInput,
+  DecisionFeedbackAdoptionStatus,
+  DecisionFeedbackOutcomeStatus,
+  DecisionFeedbackRecord,
+  DecisionFeedbackCreateInput,
   ThesisAggregate,
   ThesisListResult,
   ThesisRevision,
@@ -713,4 +717,38 @@ export const api = {
   createTrade: (body: TradeCreateInput) => request<TradeRecord>("/trades", "POST", body),
   voidTrade: (tradeId: string, reason: string) =>
     request<TradeRecord>(`/trades/${encodeURIComponent(tradeId)}/void`, "POST", { reason }),
+
+  // ---- 决策反馈 ----
+  listDecisionFeedbacks: (params?: {
+    code?: string;
+    adoption_status?: DecisionFeedbackAdoptionStatus | string;
+    outcome_status?: DecisionFeedbackOutcomeStatus | string;
+    date_from?: string;
+    date_to?: string;
+    include_voided?: boolean;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.code) q.set("code", params.code);
+    if (params?.adoption_status) q.set("adoption_status", params.adoption_status);
+    if (params?.outcome_status) q.set("outcome_status", params.outcome_status);
+    if (params?.date_from) q.set("date_from", params.date_from);
+    if (params?.date_to) q.set("date_to", params.date_to);
+    if (params?.include_voided != null) q.set("include_voided", String(params.include_voided));
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return get<DecisionFeedbackRecord[]>(`/decision-feedback${qs ? `?${qs}` : ""}`);
+  },
+  getDecisionFeedback: (feedbackId: string) =>
+    get<DecisionFeedbackRecord>(`/decision-feedback/${encodeURIComponent(feedbackId)}`),
+  createDecisionFeedback: (body: DecisionFeedbackCreateInput) =>
+    request<DecisionFeedbackRecord>("/decision-feedback", "POST", body),
+  voidDecisionFeedback: (feedbackId: string, reason?: string) =>
+    request<DecisionFeedbackRecord>(
+      `/decision-feedback/${encodeURIComponent(feedbackId)}/void`,
+      "POST",
+      reason != null ? { reason } : {},
+    ),
 };
