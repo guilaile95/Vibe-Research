@@ -228,7 +228,6 @@ add 卡片文案：相对当前持股加仓；建议买入数量；预计所需�
 ## 远程协作
 
 - origin：`https://github.com/guilaile95/Vibe-Research.git`
-- upstream：`https://github.com/simonlin1212/Vibe-Research.git`
 - 交付分支：`origin/refactor/portfolio-advice-architecture-v01`
 
 ## 17. 持仓建议架构收口（refactor）

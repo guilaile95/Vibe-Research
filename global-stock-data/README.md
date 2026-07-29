@@ -37,9 +37,8 @@
 # 1. 创建 skill 目录
 mkdir -p ~/.claude/skills/global-stock-data
 
-# 2. 把 SKILL.md 放进去
-curl -o ~/.claude/skills/global-stock-data/SKILL.md \
-  https://raw.githubusercontent.com/simonlin1212/global-stock-data/main/SKILL.md
+# 2. 从当前仓库复制 SKILL.md
+cp ./SKILL.md ~/.claude/skills/global-stock-data/SKILL.md
 
 # 3. 安装依赖
 pip install requests
@@ -227,27 +226,9 @@ Yahoo Finance 和 SEC EDGAR 都是境外服务，国内直连可能不稳定。�
 
 ---
 
-## Donate
-
-如果这个工具帮到了你的投研工作流，欢迎请作者喝杯咖啡 ☕
-
-<p align="center">
-  <img src="./assets/wechat-sponsor.jpg" width="240" alt="微信赞赏码">
-</p>
-<p align="center">
-  <a href="https://ifdian.net/a/simonlin">爱发电</a> ·
-  <a href="https://buymeacoffee.com/simonlin1212">Buy Me a Coffee</a>
-</p>
-
-> 想要什么数据端点？欢迎开 [Issue](https://github.com/simonlin1212/global-stock-data/issues) 提需求，赞助者的 Issue 优先处理。
-
----
-
 ## License
 
-[Apache License 2.0](./LICENSE) — 自由使用，注明出处即可。
-
-**作者：** Simon 林 · 抖音「Simon林」 · 公众号「硅基世纪」
+[Apache License 2.0](./LICENSE) — 使用与署名要求以许可证文本为准。
 
 ---
 
@@ -293,9 +274,8 @@ US & HK Stock Full-Stack Data · 8-Layer Architecture · V1.0.1
 # 1. Create skill directory
 mkdir -p ~/.claude/skills/global-stock-data
 
-# 2. Download SKILL.md
-curl -o ~/.claude/skills/global-stock-data/SKILL.md \
-  https://raw.githubusercontent.com/simonlin1212/global-stock-data/main/SKILL.md
+# 2. Copy SKILL.md from this repository
+cp ./SKILL.md ~/.claude/skills/global-stock-data/SKILL.md
 
 # 3. Install dependencies
 pip install requests
@@ -442,7 +422,5 @@ Just tell your AI assistant:
 ## License
 
 [Apache License 2.0](./LICENSE)
-
-**Author:** Simon Lin · TikTok [@simonlin121212](https://www.tiktok.com/@simonlin121212) · Douyin "Simon林" · WeChat Official Account "硅基世纪"
 
 </details>
