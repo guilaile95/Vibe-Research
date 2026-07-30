@@ -14,6 +14,8 @@ Phase 1 影子模式：signal 恒为 unknown，不参与任何加权 composite s
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -36,8 +38,9 @@ _CONFIG_PATH = __import__("os").path.join(
 _ENGINE: Optional[TopRiskEngine] = None
 _ENGINE_LOCK = threading.Lock()
 
-# 简单 TTL 缓存：key=(code, days) → (fetched_at, envelope_dict)
-_CACHE: dict[tuple[str, int], tuple[float, dict]] = {}
+# 简单 TTL 缓存：key=(code, days, config_hash) → (cached_at, envelope_dict)。
+# 缓存命中直接返回已归档信封，不重新计算、不重复写 decision_trace_store。
+_CACHE: dict[tuple[str, int, str], tuple[float, dict]] = {}
 _CACHE_TTL = 900.0  # 15 分钟
 _CACHE_LOCK = threading.Lock()
 
@@ -74,6 +77,44 @@ def _now_ts() -> float:
     return datetime.now(timezone.utc).timestamp()
 
 
+def _canonical_number(value: Any) -> float | None:
+    num = _num(value)
+    return round(num, 8) if num is not None else None
+
+
+def _canonical_rows(rows: Optional[list[dict]], fields: tuple[str, ...]) -> list[dict]:
+    normalized: list[dict] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        normalized.append({key: _canonical_number(row.get(key)) for key in fields})
+    return normalized
+
+
+def make_input_fingerprint(facts: TopRiskFact) -> str:
+    """仅对标准化必要事实做稳定哈希；不含请求时间、路径、异常或敏感信息。"""
+    valuation: dict[str, dict[str, float | None]] = {}
+    for metric in ("pe_ttm", "pb"):
+        raw = (facts.valuation or {}).get(metric) or {}
+        valuation[metric] = {
+            "current": _canonical_number(raw.get("current")),
+            "percentile": _canonical_number(raw.get("percentile")),
+        }
+    payload = {
+        "code": facts.code,
+        "trade_date": facts.trade_date,
+        "prices": [_canonical_number(v) for v in (facts.price_history or [])],
+        "volumes": [_canonical_number(v) for v in (facts.volume_history or [])],
+        "valuation": valuation,
+        "fund_flow": _canonical_rows(facts.fund_flow, ("main_net", "large_net", "super_net")),
+        "margin_trading": _canonical_rows(facts.margin_trading, ("rzye", "rzmre", "rzche")),
+        "events": facts.events or [],
+        "sentiment_series": facts.sentiment_series or [],
+    }
+    canon = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "inp_" + hashlib.sha256(canon.encode("utf-8")).hexdigest()[:24]
+
+
 def _unavailable_envelope(
     code: str, limitations: list[dict], name: Optional[str] = None
 ) -> TopRiskEnvelope:
@@ -94,6 +135,7 @@ def _unavailable_envelope(
         signal="unknown",
         signal_eligible=False,
         config_hash=None,
+        input_fingerprint=None,
         decision_run_id=None,
         trace_archive_status="skipped",
         warnings=[],
@@ -147,9 +189,9 @@ def _build_facts(code: str, days: int) -> tuple[TopRiskFact, list[dict]]:
             limitations.append(
                 {"field": "price_history", "reason_code": "SOURCE_PARTIAL", "detail": "K线返回为空"}
             )
-    except Exception as exc:
+    except Exception:
         limitations.append(
-            {"field": "price_history", "reason_code": "SOURCE_UNAVAILABLE", "detail": str(exc)[:160]}
+            {"field": "price_history", "reason_code": "SOURCE_UNAVAILABLE", "detail": "核心行情数据当前不可用。"}
         )
 
     # 估值分位
@@ -164,9 +206,9 @@ def _build_facts(code: str, days: int) -> tuple[TopRiskFact, list[dict]]:
             limitations.append(
                 {"field": "valuation", "reason_code": "SOURCE_PARTIAL", "detail": "估值分位无数据"}
             )
-    except Exception as exc:
+    except Exception:
         limitations.append(
-            {"field": "valuation", "reason_code": "SOURCE_UNAVAILABLE", "detail": str(exc)[:160]}
+            {"field": "valuation", "reason_code": "SOURCE_UNAVAILABLE", "detail": "估值数据当前不可用。"}
         )
 
     # 资金流
@@ -179,9 +221,9 @@ def _build_facts(code: str, days: int) -> tuple[TopRiskFact, list[dict]]:
             limitations.append(
                 {"field": "fund_flow", "reason_code": "SOURCE_PARTIAL", "detail": "资金流为空"}
             )
-    except Exception as exc:
+    except Exception:
         limitations.append(
-            {"field": "fund_flow", "reason_code": "SOURCE_UNAVAILABLE", "detail": str(exc)[:160]}
+            {"field": "fund_flow", "reason_code": "SOURCE_UNAVAILABLE", "detail": "资金流数据当前不可用。"}
         )
 
     # 融资融券
@@ -194,9 +236,9 @@ def _build_facts(code: str, days: int) -> tuple[TopRiskFact, list[dict]]:
             limitations.append(
                 {"field": "margin_trading", "reason_code": "SOURCE_PARTIAL", "detail": "融资融券为空"}
             )
-    except Exception as exc:
+    except Exception:
         limitations.append(
-            {"field": "margin_trading", "reason_code": "SOURCE_UNAVAILABLE", "detail": str(exc)[:160]}
+            {"field": "margin_trading", "reason_code": "SOURCE_UNAVAILABLE", "detail": "融资融券数据当前不可用。"}
         )
 
     facts = TopRiskFact(
@@ -230,19 +272,27 @@ def _build_narrative(result: TopRiskResult, risk_drivers, safety_signals) -> Opt
     return "；".join(parts) + "。"
 
 
-def _record_health(status: str, code: str) -> None:
-    """Data Health 事件（fail-closed，不阻塞响应）。"""
+def _record_health(service_status: str) -> None:
+    """记录服务级能力健康；不把单只股票自身数据缺失映射为全局故障。"""
     try:
         import data_health_event_store as _dhes
 
-        if status == "normal":
+        if service_status == "normal":
             _dhes.safe_call(_dhes.record_success, "top_risk_analysis")
-        elif status == "partial":
+        elif service_status == "partial":
             _dhes.safe_call(_dhes.record_partial, "top_risk_analysis")
         else:
             _dhes.safe_call(_dhes.record_failure, "top_risk_analysis", "SOURCE_UNAVAILABLE")
     except Exception:
         pass
+
+
+def _service_health_from_run(facts: TopRiskFact, _result: TopRiskResult) -> str:
+    """按引擎/配置/核心行情能力评估全局服务，不采纳单标的 optional 缺失。"""
+    if not facts.price_history or not facts.trade_date:
+        return "unavailable"
+    # 有核心行情且引擎已成功执行，即使该标的某 optional 步骤不适用，服务仍健康。
+    return "normal"
 
 
 def _attach_trace(envelope: TopRiskEnvelope) -> None:
@@ -264,27 +314,38 @@ def analyze_top_risk(code: str, days: int = 120) -> TopRiskEnvelope:
 
     try:
         engine = _get_engine()
-    except Exception as exc:
+    except Exception:
+        _record_health("unavailable")
         env = _unavailable_envelope(
             code,
-            [{"field": "config", "reason_code": "CONFIG_ERROR", "detail": str(exc)[:160]}],
+            [{"field": "config", "reason_code": "CONFIG_ERROR", "detail": "顶部风险配置当前不可用。"}],
         )
         _attach_trace(env)
         return env
 
+    cache_key = (code, days, engine.config_hash)
+    with _CACHE_LOCK:
+        cached = _CACHE.get(cache_key)
+        if cached and _now_ts() - cached[0] <= _CACHE_TTL:
+            return TopRiskEnvelope(**cached[1])
+        if cached:
+            _CACHE.pop(cache_key, None)
+
     facts, build_limitations = _build_facts(code, days)
     try:
         result = engine.run(facts)
-    except Exception as exc:
+    except Exception:
+        _record_health("unavailable")
         env = _unavailable_envelope(
             code,
-            [{"field": "engine", "reason_code": "ENGINE_ERROR", "detail": str(exc)[:160]}],
+            [{"field": "engine", "reason_code": "ENGINE_ERROR", "detail": "顶部风险引擎当前不可执行。"}],
             name=facts.name,
         )
         _attach_trace(env)
         return env
 
     all_limits = list(build_limitations) + result.limitations
+    input_fingerprint = make_input_fingerprint(facts)
 
     # 步骤 trace + 汇总
     trace = [
@@ -330,6 +391,7 @@ def analyze_top_risk(code: str, days: int = 120) -> TopRiskEnvelope:
         signal="unknown",
         signal_eligible=False,
         config_hash=engine.config_hash,
+        input_fingerprint=input_fingerprint,
         decision_run_id=None,
         trace_archive_status=None,
         warnings=[],
@@ -338,13 +400,12 @@ def analyze_top_risk(code: str, days: int = 120) -> TopRiskEnvelope:
         trace=trace,
     )
 
-    # Data Health 事件 + 决策追踪归档（均 fail-closed）
-    _record_health(result.status, code)
+    # Data Health 记录服务级能力；单标的 optional 缺失只保留在 envelope limitations。
+    _record_health(_service_health_from_run(facts, result))
     _attach_trace(envelope)
 
-    # 写缓存（unavailable 不缓存）
+    # 写缓存（unavailable 不缓存）；缓存命中直接返回，避免重复归档。
     if envelope.status != "unavailable":
-        cache_key = (code, days)
         with _CACHE_LOCK:
             _CACHE[cache_key] = (_now_ts(), envelope.model_dump())
 

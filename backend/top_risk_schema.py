@@ -126,6 +126,8 @@ class TopRiskEnvelope(BaseModel):
     signal_eligible: bool = False
     # 追踪身份（影子模式接入主项目决策追踪层）
     config_hash: Optional[str] = None
+    # 标准化必要事实的安全稳定指纹；不含请求时间、路径、异常或完整 DataFrame。
+    input_fingerprint: Optional[str] = None
     decision_run_id: Optional[str] = None
     # archived=已归档 / failed=归档异常（不影响分析） / skipped=unavailable 明确不归档
     trace_archive_status: Optional[str] = None

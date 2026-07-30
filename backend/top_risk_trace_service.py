@@ -32,16 +32,16 @@ def _short_hash(s: str) -> str:
 def make_decision_run_id(
     code: str,
     trade_date: Optional[str],
-    generated_at: Optional[str],
+    input_fingerprint: Optional[str],
     config_hash: Optional[str],
 ) -> str:
-    """稳定种子：必须包含类型前缀，避免与 portfolio_advice 等其它 run 碰撞。"""
+    """按逻辑输入生成稳定身份，不使用每次请求的 generated_at。"""
     seed = "|".join(
         [
             TRACE_RESULT_TYPE,
             code or "",
             trade_date or "",
-            generated_at or "",
+            input_fingerprint or "",
             config_hash or "",
         ]
     )
@@ -66,8 +66,9 @@ def build_bundle(envelope: TopRiskEnvelope) -> Optional[dict]:
 
     generated_at = envelope.fetched_at or _utc_now()
     config_hash = getattr(envelope, "config_hash", None)
+    input_fingerprint = getattr(envelope, "input_fingerprint", None)
     run_id = make_decision_run_id(
-        envelope.code, envelope.trade_date, generated_at, config_hash
+        envelope.code, envelope.trade_date, input_fingerprint, config_hash
     )
 
     run_record = {
@@ -77,7 +78,7 @@ def build_bundle(envelope: TopRiskEnvelope) -> Optional[dict]:
         "result_type": TRACE_RESULT_TYPE,
         "schema_version": envelope.schema_version,
         "market_status": envelope.status,
-        "source_fingerprint": config_hash,
+        "source_fingerprint": input_fingerprint,
         "trace_status": "archived",
         "created_at": _utc_now(),
     }
@@ -131,6 +132,7 @@ def build_bundle(envelope: TopRiskEnvelope) -> Optional[dict]:
         "signal_eligible": envelope.signal_eligible,
         "config_version": envelope.schema_version,
         "config_hash": config_hash,
+        "input_fingerprint": input_fingerprint,
         "limitations": [l.model_dump() for l in envelope.limitations],
     }
     evidence_items.append(

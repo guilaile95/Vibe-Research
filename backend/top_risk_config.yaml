@@ -2,19 +2,26 @@ schema_version: top-risk-analysis-v0.1
 # 顶部风险分析链路配置（声明式）。
 # 与旧 SignalModule / CATEGORY_WEIGHT / aggregator 无关；
 # 每个步骤由 top_risk_evaluators.EVALUATORS 中的同名函数实现。
+# enabled=false：当前版本不执行、不进入 coverage 分母，并输出 limitation。
+# enabled=true + required=false：缺输入时 status=partial。
+# enabled=true + required=true：缺输入/执行失败时 status=unavailable。
 # weight 仅用于风险分加权，不影响风险分数的理论范围（0-100）。
 steps:
   - id: narrative_divergence
     label: 叙事背离
     evaluator: narrative_divergence
+    enabled: false
+    required: false
+    limitation: sentiment_source_not_connected
     weight: 1.0
     params:
-      # Phase 1 无可靠舆情来源：sentiment_series 缺失时该步骤 skipped。
       sentiment_required: true
 
   - id: crowding
     label: 拥挤度
     evaluator: crowding
+    enabled: true
+    required: false
     weight: 1.2
     params:
       margin_window: 20          # 融资余额对比窗口（交易日）
@@ -24,6 +31,8 @@ steps:
   - id: runup_exhaustion
     label: 涨幅耗竭
     evaluator: runup_exhaustion
+    enabled: true
+    required: true
     weight: 1.2
     params:
       window: 60                # 回看窗口（与 kline offset 对齐）
@@ -34,14 +43,18 @@ steps:
   - id: catalyst_priced_in
     label: 利好兑现
     evaluator: catalyst_priced_in
+    enabled: false
+    required: false
+    limitation: event_source_not_connected
     weight: 1.0
     params:
-      # Phase 1 无可靠事件来源：events 缺失时该步骤 skipped。
       events_required: true
 
   - id: valuation_cap
     label: 估值硬顶
     evaluator: valuation_cap
+    enabled: true
+    required: false
     weight: 1.0
     params:
       pe_percentile_high: 90.0   # PE-TTM 历史分位 >=90% 视为估值硬顶

@@ -31,6 +31,14 @@ import data_health_service as dh_svc
 import decision_evidence_service as des
 
 
+@pytest.fixture(autouse=True)
+def _clear_top_risk_cache():
+    # 隔离模块级缓存：测试通过 stub _build_facts 注入不同事实，
+    # 若不清缓存，(code, days, config_hash) 键会跨测试串味导致状态错判。
+    trs._CACHE.clear()
+    yield
+
+
 # ---------------------------------------------------------------------------
 # 合成 Fact 构造
 # ---------------------------------------------------------------------------
@@ -78,10 +86,12 @@ def _partial_fact():
 # ---------------------------------------------------------------------------
 def test_engine_high_risk_is_normal_with_high_score():
     eng = TopRiskEngine.from_yaml(trs._CONFIG_PATH)
+    enabled_count = len([s for s in eng.steps if s.get("enabled", True) is not False])
     r = eng.run(_high_risk_fact())
     assert r.status == "normal"
     assert r.risk_score is not None and r.risk_score > 0
-    assert r.coverage["completed"] == 3 and r.coverage["total"] == 5
+    # disabled 步骤不进入 coverage 分母；全部 enabled 步骤成功 → total == completed == enabled_count
+    assert r.coverage["completed"] == enabled_count and r.coverage["total"] == enabled_count
     assert any(s.direction == "RISK" for s in r.steps)
 
 
@@ -111,6 +121,48 @@ def test_engine_score_clamped_0_100():
     eng = TopRiskEngine.from_yaml(trs._CONFIG_PATH)
     r = eng.run(_high_risk_fact())
     assert 0 <= r.risk_score <= 100
+
+
+# ---------------------------------------------------------------------------
+# 配置驱动步骤语义（Phase 1：情绪背离 / 事件兑现未启用，不计入评分分母）
+# ---------------------------------------------------------------------------
+def test_disabled_steps_drop_from_coverage_and_emit_limitation():
+    eng = TopRiskEngine.from_yaml(trs._CONFIG_PATH)
+    disabled = [s for s in eng.steps if s.get("enabled", True) is False]
+    assert len(disabled) == 2  # narrative_divergence, catalyst_priced_in
+    assert {s.get("id") for s in disabled} == {"narrative_divergence", "catalyst_priced_in"}
+
+    enabled_count = len(eng.steps) - len(disabled)
+    r = eng.run(_high_risk_fact())
+    # disabled 步骤产生 CAPABILITY_NOT_ENABLED limitation，且不进入 coverage 分母
+    cap_lims = [l for l in r.limitations if l.get("reason_code") == "CAPABILITY_NOT_ENABLED"]
+    assert len(cap_lims) == 2
+    assert r.coverage["total"] == enabled_count
+    assert r.coverage["completed"] == enabled_count
+    assert r.status == "normal"
+
+
+def test_make_input_fingerprint_stable_and_distinct():
+    f = _high_risk_fact()
+    fp1 = trs.make_input_fingerprint(f)
+    fp2 = trs.make_input_fingerprint(f)
+    assert fp1 == fp2  # 相同输入 → 稳定指纹（不依赖请求时间/路径/异常）
+    assert fp1.startswith("inp_")
+    other = _low_risk_fact()
+    assert trs.make_input_fingerprint(other) != fp1  # 不同输入 → 不同指纹
+
+
+def test_decision_run_id_idempotent_and_input_dependent():
+    fp = "inp_abc123"
+    cfg = "cfg_xyz789"
+    id_a = trace_svc.make_decision_run_id("600519", "2026-07-27", fp, cfg)
+    id_b = trace_svc.make_decision_run_id("600519", "2026-07-27", fp, cfg)
+    assert id_a == id_b  # 相同逻辑输入 → 同一身份（幂等，不随请求时间变化）
+    assert id_a.startswith("tr_")
+    # 任一逻辑输入变化 → 不同身份
+    assert trace_svc.make_decision_run_id("600519", "2026-07-28", fp, cfg) != id_a
+    assert trace_svc.make_decision_run_id("600519", "2026-07-27", "inp_other", cfg) != id_a
+    assert trace_svc.make_decision_run_id("600519", "2026-07-27", fp, "cfg_other") != id_a
 
 
 # ---------------------------------------------------------------------------
