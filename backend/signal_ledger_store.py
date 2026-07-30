@@ -40,9 +40,16 @@ def save_signal_ledger_bundle(
     decision_outcomes: list[Mapping[str, Any]],
     trade_date: str | None = None,
     generated_at: str | None = None,
+    schema_version: str | None = None,
+    market_status: str | None = None,
+    source_fingerprint: str | None = None,
     db_path: str | Path | None = None,
 ) -> None:
-    """Save signal entries and decision outcomes atomically into decision_trace DB."""
+    """Save signal entries and decision outcomes atomically into decision_trace DB.
+
+    Optional schema_version / market_status / source_fingerprint default to prior
+    values for backward-compatible callers. No schema migration.
+    """
     path = trace_store.resolve_decision_trace_db_path(db_path)
     trace_store.init_db(path)
 
@@ -66,9 +73,9 @@ def save_signal_ledger_bundle(
                             trade_date or now_str[:10],
                             generated_at or now_str,
                             "portfolio_advice",
-                            "v1",
-                            "normal",
-                            None,
+                            schema_version or "portfolio-advice-v0.1",
+                            market_status or "normal",
+                            source_fingerprint,
                             "archived",
                             now_str,
                         ),

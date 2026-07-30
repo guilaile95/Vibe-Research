@@ -283,7 +283,10 @@ export default function SignalLedger() {
 
                 {doRecord.target_ratio != null && (
                   <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-                    目标仓位比例：<span className="font-semibold text-gray-800 dark:text-gray-200">{(doRecord.target_ratio * 100).toFixed(1)}%</span>
+                    执行比例（相对当前持股）：
+                    <span className="font-semibold text-gray-800 dark:text-gray-200">
+                      {(doRecord.target_ratio * 100).toFixed(1)}%
+                    </span>
                   </p>
                 )}
 

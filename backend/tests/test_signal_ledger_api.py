@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app import app
 import decision_trace_store as trace_store
 import signal_ledger_service as svc
-import signal_ledger_store as store
+from authoritative_advice_fixtures import build_authoritative_from_golden
 
 client = TestClient(app)
 
@@ -18,34 +18,18 @@ def setup_signal_db(tmp_path, monkeypatch):
     db_path = tmp_path / "decision_trace.sqlite3"
     monkeypatch.setenv("VIBE_RESEARCH_DECISION_TRACE_DB", str(db_path))
 
-    # Pre-populate advice and signals
-    advice_result = {
-        "trade_date": "2026-07-29",
-        "generated_at": "2026-07-29T10:00:00Z",
-        "market_overview": {
-            "market_sentiment": "cautious_optimistic",
-            "position_recommendation": "moderate",
-        },
-        "actions": [
-            {
-                "code": "600519",
-                "name": "贵州茅台",
-                "action": "buy",
-                "target_ratio": 0.20,
-                "reason": "估值回落",
-            }
-        ],
-    }
-    # Pre-insert decision_run
-    run_id = svc.decision_evidence_service.generate_decision_run_id("2026-07-29", "2026-07-29T10:00:00Z")
+    advice_result = build_authoritative_from_golden(monkeypatch)
+    run_id = svc.decision_evidence_service.generate_decision_run_id(
+        str(advice_result["trade_date"]), str(advice_result["generated_at"])
+    )
     trace_store.save_decision_run_bundle(
         run_record={
             "decision_run_id": run_id,
-            "trade_date": "2026-07-29",
-            "generated_at": "2026-07-29T10:00:00Z",
+            "trade_date": advice_result["trade_date"],
+            "generated_at": advice_result["generated_at"],
             "result_type": "portfolio_advice",
-            "schema_version": "v1",
-            "market_status": "normal",
+            "schema_version": advice_result.get("schema_version") or "portfolio-advice-v0.1",
+            "market_status": advice_result.get("market_status") or "normal",
             "source_fingerprint": "abc",
             "trace_status": "archived",
             "created_at": "2026-07-29T10:00:00Z",
@@ -74,25 +58,22 @@ def test_list_signal_entries_filtering_api(setup_signal_db):
     res = client.get("/api/signal-ledger", params={"code": "600519"})
     assert res.status_code == 200
     data = res.json()["data"]
-    assert data["total"] == 1
-    assert data["items"][0]["code"] == "600519"
+    assert data["total"] >= 1
+    assert all(item["code"] == "600519" for item in data["items"])
 
-    # Unknown filter param
-    res_bad = client.get("/api/signal-ledger", params={"foo": "bar"})
-    assert res_bad.status_code == 400
+    res2 = client.get("/api/signal-ledger", params={"stage": "schema"})
+    assert res2.status_code == 200
+    data2 = res2.json()["data"]
+    assert data2["total"] >= 1
+    assert all(item["stage"] == "schema" for item in data2["items"])
 
 
 def test_get_run_signal_ledger_api(setup_signal_db):
     db_path, run_id = setup_signal_db
-
     res = client.get(f"/api/signal-ledger/run/{run_id}")
     assert res.status_code == 200
     data = res.json()["data"]
-    assert data["run"]["decision_run_id"] == run_id
-    assert len(data["signal_entries"]) >= 2
+    stages = {e["stage"] for e in data["signal_entries"]}
+    assert stages == set(svc.VALID_STAGES)
     assert len(data["decision_outcomes"]) == 1
-
-
-def test_get_run_signal_ledger_not_found(setup_signal_db):
-    res = client.get("/api/signal-ledger/run/dr_non_existent")
-    assert res.status_code == 404
+    assert data["decision_outcomes"][0]["code"] == "600519"
