@@ -945,6 +945,70 @@ export type NorthboundCapitalFlow = {
 
 
 // ---------------------------------------------------------------------------
+// 技术指标与价格触发（GET /api/market/technical-indicators）
+// ---------------------------------------------------------------------------
+
+export type TechnicalIndicatorTriggerType =
+  | "close_above_20d_high"
+  | "close_below_20d_low"
+  | "sma_golden_cross"
+  | "sma_death_cross"
+  | "volume_spike";
+
+export interface TechnicalIndicatorTrigger {
+  type: TechnicalIndicatorTriggerType | string;
+  message: string;
+  value: number | null;
+}
+
+export interface TechnicalIndicatorLatest {
+  close: number | null;
+  sma5: number | null;
+  sma10: number | null;
+  sma20: number | null;
+  sma60: number | null;
+  ema12: number | null;
+  ema26: number | null;
+  macd_dif: number | null;
+  macd_dea: number | null;
+  macd_histogram: number | null;
+  rsi14: number | null;
+  bollinger_upper: number | null;
+  bollinger_middle: number | null;
+  bollinger_lower: number | null;
+  volume_ratio_5_20: number | null;
+}
+
+export interface TechnicalIndicatorSeriesPoint {
+  date: string;
+  sma20: number | null;
+  sma60: number | null;
+  bollinger_upper: number | null;
+  bollinger_middle: number | null;
+  bollinger_lower: number | null;
+  macd_dif: number | null;
+  macd_dea: number | null;
+  macd_histogram: number | null;
+  rsi14: number | null;
+  volume_ratio_5_20: number | null;
+}
+
+export interface TechnicalIndicators {
+  schema_version: string;
+  code: string;
+  period: string;
+  trade_date: string | null;
+  fetched_at: string;
+  status: "normal" | "partial" | "unavailable";
+  warnings: string[];
+  limitations: Array<{ field?: string; reason_code?: string; detail?: string }>;
+  latest: TechnicalIndicatorLatest;
+  triggers: TechnicalIndicatorTrigger[];
+  series: TechnicalIndicatorSeriesPoint[];
+}
+
+
+// ---------------------------------------------------------------------------
 // NDJSON 流式（/api/chat 与 /api/daily-review/analyze 共用同一解析协议）
 // ---------------------------------------------------------------------------
 

@@ -56,6 +56,7 @@ import type {
   GlobalIndex,
   GlobalStock,
   NorthboundCapitalFlow,
+  TechnicalIndicators,
   DailyReviewAnalyzeRequest,
   NdjsonStreamHandlers,
   NdjsonStreamResult,
@@ -549,6 +550,9 @@ export const api = {
   /** K 线（需 mootdx）：category 4=日 5=周 6=月 11=60分钟；依赖缺失抛 501。 */
   kline: (code: string, category = 4, offset = 60) =>
     get<KlineBar[]>(`/kline?code=${code}&category=${category}&offset=${offset}`),
+  /** 技术指标与价格触发（SMA/EMA/MACD/RSI/布林带/量比）；依赖缺失抛 501。 */
+  technicalIndicators: (code: string, period = "daily", days = 120) =>
+    get<TechnicalIndicators>(`/market/technical-indicators?code=${code}&period=${period}&days=${days}`),
   /** 季报财务快照（需 mootdx，37 字段）；依赖缺失抛 501。 */
   finance: (code: string) => get<Record<string, string | number | null>>(`/finance?code=${code}`),
   /** 个股基本面：行业 / 总股本 / 上市时间等（需 akshare）；依赖缺失抛 501。 */

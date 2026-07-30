@@ -545,6 +545,21 @@ class NorthboundCapitalFlowAdapter(EventSourceAdapter):
 
 
 # ---------------------------------------------------------------------------
+# technical_indicators
+# ---------------------------------------------------------------------------
+
+
+class TechnicalIndicatorsAdapter(EventSourceAdapter):
+    source_id = "technical_indicators"
+    module = "技术指标"
+    display_name = "技术指标"
+    stale_after_seconds = 86400
+    calendar_type = "CN_MARKET_CONSERVATIVE"
+    detail_path = "/stock-data"
+    force_null_coverage = True
+
+
+# ---------------------------------------------------------------------------
 # portfolio_advice_gate
 # ---------------------------------------------------------------------------
 
@@ -1060,6 +1075,7 @@ def build_adapters() -> list[DataHealthAdapter]:
         WatchlistPortfolioStorageAdapter(),
         EvidenceLedgerAdapter(),
         NorthboundCapitalFlowAdapter(),
+        TechnicalIndicatorsAdapter(),
     ]
 
 

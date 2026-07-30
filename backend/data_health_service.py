@@ -49,6 +49,7 @@ SOURCE_REGISTRY: list[dict[str, str]] = [
     {"source_id": "watchlist_portfolio_storage", "module": "本地存储", "display_name": "自选股与持仓存储"},
     {"source_id": "evidence_ledger", "module": "证据账本", "display_name": "投资逻辑与证据账本"},
     {"source_id": "northbound_capital_flow", "module": "北向资金", "display_name": "北向资金"},
+    {"source_id": "technical_indicators", "module": "技术指标", "display_name": "技术指标"},
 ]
 
 REGISTERED_SOURCE_IDS = frozenset(s["source_id"] for s in SOURCE_REGISTRY)
@@ -694,6 +695,12 @@ SOURCE_CALCULATION: dict[str, dict[str, Any]] = {
         "calendar_type": "CN_MARKET_CONSERVATIVE",
         "rule_summary": "按 HKEX 官方日统计与 A 股交易日判断 stale。",
     },
+    "technical_indicators": {
+        "quality_basis": ["technical_indicators event from mootdx K-line"],
+        "freshness_basis": "trade_date and CN trading calendar rule",
+        "calendar_type": "CN_MARKET_CONSERVATIVE",
+        "rule_summary": "按 mootdx 日 K 线与 A 股交易日判断 stale。",
+    },
 }
 
 SOURCE_RELATED_PAGES: dict[str, list[dict[str, str]]] = {
@@ -715,4 +722,5 @@ SOURCE_RELATED_PAGES: dict[str, list[dict[str, str]]] = {
         {"label": "证据", "path": "/evidence"},
     ],
     "northbound_capital_flow": [{"label": "每日复盘", "path": "/daily-review"}],
+    "technical_indicators": [{"label": "个股详情", "path": "/stock-data"}],
 }
