@@ -67,7 +67,7 @@ def data_env(tmp_path, monkeypatch):
 def test_all_not_initialized(data_env):
     now = datetime(2026, 7, 28, 4, 0, tzinfo=timezone.utc)
     items = adapters.collect_all_records(now_utc=now)
-    assert len(items) == 11
+    assert len(items) == len(svc.SOURCE_REGISTRY)
     for it in items:
         assert set(it.keys()) >= {
             "source_id", "module", "display_name", "status", "is_stale",

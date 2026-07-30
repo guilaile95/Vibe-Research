@@ -43,6 +43,7 @@ import myreports as mr
 import review_compare
 import review_history
 import sector_research_data as srd
+import northbound_capital_flow as ncf
 import watchlist_store
 import evidence_thesis_router
 import data_health_router
@@ -760,6 +761,42 @@ def market_boards(
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"板块排名异常：{e}") from e
+
+
+@app.get("/api/market/northbound")
+def market_northbound():
+    """北向资金（沪股通 / 深股通）权威日统计。共享缓存 15 分钟（unavailable 不缓存）。
+
+    - 正常 / 部分 / 不可用 → 均返回 HTTP 200，状态以 body.data.status 为准。
+    - 上游失败不抛 5xx，降级为 unavailable 信封。
+    """
+    key = ("market_northbound", "")
+    hit = _DC_CACHE.get(key, 900)
+    if hit is not _CACHE_MISS:
+        return {"data": hit}
+
+    try:
+        data = ncf.get_northbound_capital_flow()
+    except Exception:  # noqa: BLE001
+        data = ncf.unavailable_envelope(reason_code="UPSTREAM_UNAVAILABLE")
+
+    st = data.get("status") if isinstance(data, dict) else None
+    if st != "unavailable":
+        # unavailable 不缓存，下次直接重试
+        _DC_CACHE.set(key, data)
+
+    try:
+        import data_health_event_store as _dhes
+        if st == "normal":
+            _dhes.safe_call(_dhes.record_success, "northbound_capital_flow")
+        elif st == "partial":
+            _dhes.safe_call(_dhes.record_partial, "northbound_capital_flow")
+        else:
+            _dhes.safe_call(_dhes.record_failure, "northbound_capital_flow", "SOURCE_UNAVAILABLE")
+    except Exception:
+        pass
+
+    return {"data": data}
 
 
 # ---------------------------------------------------------------------------

@@ -890,6 +890,61 @@ export interface GlobalStock {
 
 
 // ---------------------------------------------------------------------------
+// 北向资金（GET /api/market/northbound）
+// ---------------------------------------------------------------------------
+
+export type NorthboundLimitation = {
+  field: string;
+  reason_code: string;
+  detail: string;
+};
+
+export type NorthboundMarketLeg = {
+  market: "SSE" | "SZSE";
+  total_turnover_mn: number | null;
+  trade_count: number | null;
+  etf_turnover_mn: number | null;
+  daily_quota_balance_mn: number | null;
+  net_buy_mn: null;
+};
+
+export type NorthboundActiveStock = {
+  market: "SSE" | "SZSE";
+  rank: number;
+  code: string;
+  name: string;
+  total_turnover_yuan: number | null;
+  net_buy_yuan: null;
+};
+
+export type NorthboundCapitalFlow = {
+  schema_version: string;
+  source: string;
+  source_tier: "authoritative" | "reference";
+  trade_date: string | null;
+  fetched_at: string;
+  status: "normal" | "partial" | "unavailable";
+  is_stale: boolean;
+  currency: string;
+  amount_unit: string;
+  warnings: string[];
+  limitations: NorthboundLimitation[];
+  data: {
+    northbound: {
+      total_turnover_mn: number | null;
+      trade_count: number | null;
+      etf_turnover_mn: number | null;
+      net_buy_mn: null;
+    };
+    shanghai_connect: NorthboundMarketLeg;
+    shenzhen_connect: NorthboundMarketLeg;
+    active_stocks: NorthboundActiveStock[];
+  };
+};
+
+
+
+// ---------------------------------------------------------------------------
 // NDJSON 流式（/api/chat 与 /api/daily-review/analyze 共用同一解析协议）
 // ---------------------------------------------------------------------------
 
