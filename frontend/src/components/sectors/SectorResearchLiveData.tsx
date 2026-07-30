@@ -70,9 +70,11 @@ function flowValueClass(value: number): string {
 }
 
 function capitalErrorMessage(error: unknown): string {
-  if (error instanceof ApiError) return error.message;
-  if (error instanceof Error) return error.message;
-  return String(error);
+  if (error instanceof ApiError) {
+    if (error.status === 0) return "后端连接不可用";
+    if (error.status === 501) return "资金流依赖未就绪";
+  }
+  return "资金流暂不可用";
 }
 
 export function SectorResearchLiveData({ sectorKey }: Props) {
