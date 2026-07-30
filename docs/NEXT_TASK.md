@@ -2,22 +2,14 @@
 
 ## 最近完成
 
+- BK-03 切片 2「北向资金权威数据契约」：PR #40，分支 `feat/northbound-capital-flow-v1`，Head `f209688`。建立 HKEX 官方日统计权威源 adapter（`backend/northbound_capital_flow.py`）+ `GET /api/market/northbound` + 每日复盘北向资金卡片；净买入字段固定 None + limitation 说明。
 - BK-03 切片 1「板块代表公司主力资金流」：PR #38，Merge SHA `838bd6cec40fd861bc286e8322e22298c7fd0ea6`。
 - DRY 与端到端交付治理：PR #37，Merge SHA `632117b348a8f27505c84e89c10d3df380b4e119`。
 - 应用视觉系统与移动导航：PR #36，Merge SHA `1d31e5639989220c7cb51d44954f8f4d940e9874`。
 
 ## 当前已授权任务
 
-**BK-03 资金维度增强 · 切片 2：北向资金权威数据契约。**
-
-- **分支**：`feat/northbound-capital-flow-v1`
-- **基线**：`838bd6cec40fd861bc286e8322e22298c7fd0ea6`
-- **目标**：建立北向资金可验证、可降级的数据合同，再接入市场/板块页面。
-- **数据边界**：HKEX 日统计作为权威日级源；同花顺沪股通盘中序列只能作为当日情绪参考；深股通盘中数据近期不可靠，不得伪装为权威净流入。
-- **第一交付物**：服务端标准化 DTO、来源/时间/状态/警告字段、失败关闭与单元测试；确认契约后再接 UI。
-- **禁止**：使用 2024 年 8 月后长期返回 0/NaN 的东财北向净买额字段；用本地当前日期填补缺失交易日；把成交额误写成净买额。
-
-长期候选边界与依赖关系见 [`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)。
+**当前已授权产品开发任务：无。** 下一任务见 [`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)。
 
 ## 本地目录边界
 

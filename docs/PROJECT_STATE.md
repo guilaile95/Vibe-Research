@@ -1,7 +1,7 @@
 # 项目当前状态
 
 > 稳定分支：`feature/research-system-v01`
-> 功能基线：`838bd6cec40fd861bc286e8322e22298c7fd0ea6`（PR #38）
+> 功能基线：`12db498394e84d6104c805a16d50c0fa48ff61e9`（PR #40 合并后）
 > 当前任务与停止点：[`docs/NEXT_TASK.md`](NEXT_TASK.md)
 > 长期候选与依赖：[`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)
 > 工程执行规则：根目录 [`AGENTS.md`](../AGENTS.md)
