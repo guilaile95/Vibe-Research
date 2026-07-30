@@ -8,15 +8,14 @@ interface Props {
   onClick?: () => void;
 }
 
-// 玻璃卡：半透明填充 + 发丝边框 + 柔投影 + 顶部内高光（科技玻璃暖橙风的基础容器）。
 export function GlassCard({ children, className, glow, onClick }: Props) {
   return (
     <div
       onClick={onClick}
       className={cn(
-        "glass p-5",
+        "card-surface p-5",
         glow && "glass-glow",
-        onClick && "cursor-pointer transition-transform hover:-translate-y-0.5",
+        onClick && "cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover",
         className,
       )}
     >

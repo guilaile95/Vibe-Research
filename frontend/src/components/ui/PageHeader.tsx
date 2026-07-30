@@ -8,10 +8,12 @@ interface Props {
 
 export function PageHeader({ title, subtitle, actions }: Props) {
   return (
-    <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+    <div className="mb-8 flex flex-wrap items-end justify-between gap-4 animate-fade-up">
       <div className="min-w-0 max-w-full">
-        <h1 className="text-2xl font-extrabold tracking-tight text-glow">{title}</h1>
-        {subtitle && <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>}
+        <h1 className="font-display text-[1.75rem] font-bold leading-tight tracking-tight text-foreground">
+          {title}
+        </h1>
+        {subtitle && <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{subtitle}</p>}
       </div>
       {actions && (
         <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">

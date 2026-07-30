@@ -93,8 +93,31 @@ const PerformanceAttribution = lazy(() =>
 
 function PageFallback() {
   return (
-    <div className="flex min-h-[40vh] items-center justify-center p-6 text-sm text-slate-500">
-      加载中…
+    <div
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      className="animate-fade-up space-y-6"
+    >
+      <span className="sr-only">页面加载中</span>
+      <div className="space-y-2">
+        <div className="skeleton h-8 w-48" />
+        <div className="skeleton h-4 w-72" />
+      </div>
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        {[1, 2, 3, 4].map((i) => (
+          <div key={i} className="card-surface space-y-3 p-4">
+            <div className="skeleton h-3 w-16" />
+            <div className="skeleton h-6 w-24" />
+          </div>
+        ))}
+      </div>
+      <div className="card-surface space-y-4 p-5">
+        <div className="skeleton h-4 w-32" />
+        <div className="skeleton h-3 w-full" />
+        <div className="skeleton h-3 w-5/6" />
+        <div className="skeleton h-3 w-4/6" />
+      </div>
     </div>
   );
 }
