@@ -1,34 +1,24 @@
 # 当前下一任务
 
-## 上一任务（已完成）
+## 最近完成
 
-~~Decision Trace 权威契约修复~~（`fix/decision-trace-authoritative-contract`，PR #35，Merge SHA `f5f4206`）。
+- DRY 与端到端交付治理：PR #37，Merge SHA `632117b348a8f27505c84e89c10d3df380b4e119`。
+- 应用视觉系统与移动导航：PR #36，Merge SHA `1d31e5639989220c7cb51d44954f8f4d940e9874`。
+- Decision Trace 权威契约修复：PR #35，Merge SHA `f5f420662e3246f56d371e6020efa4de725679e9`。
 
-- **状态**：已完成并合并。
-- Signal Ledger / Decision Evidence 对齐生产权威持仓建议契约。
-- 非法 `execution_size` 不再进入 Outcome/Signal/Evidence payload。
-- 缺失 `trade_date` / `generated_at` 失败关闭，不补当前时间、不写库。
-- 后端 not-live 全量 **1625 passed**；前端 214 passed；Vite build passed。
-- **历史错误归档记录未回填**。
+## 当前已授权任务
 
-~~Scheduler import 测试顺序隔离修复~~（`fix/scheduler-test-isolation`，PR #33，Merge SHA `e857d43`）。
+**BK-03 资金维度增强 · 切片 1：板块代表公司主力资金流。**
 
-~~P2-4B Performance Attribution（收益归因）。~~
+- **分支**：`feat/sector-capital-flow-v1`
+- **基线**：`1d31e5639989220c7cb51d44954f8f4d940e9874`
+- **目标**：在现有板块研究工作台中展示代表公司主力资金流摘要，复用既有 `/api/fund-flow`，不新增重复后端接口。
+- **范围**：最新主力净流入、近 5/20 个有效交易日累计、近 20 日净流入天数；单家公司失败独立降级。
+- **验证**：纯函数单元测试、前端全量测试、生产构建、CI。
+- **停止点**：完成 Draft PR、CI 与审查后，按本轮完整授权合并；北向资金数据源接入留作 BK-03 后续切片。
 
-## 当前下一任务
+长期候选边界与依赖关系见 [`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)。
 
-**当前已授权产品任务：无。**
+## 本地目录边界
 
-> 长期候选池见 [`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)（BK-01 ~ BK-10）。
-> **候选事项不代表开发授权。**
-> visual-overhaul 仍待用户决策。
-
-## 待决定 / 本地目录
-
-| 目录 | 状态 | 建议 |
-|---|---|---|
-| `Vibe-Research-visual-overhaul-20260729` | 活跃 worktree；本地实验；未提交 7 个前端文件 | 待用户决策是继续开发还是废弃 |
-| `Vibe-Research-decision-trace-contract` | PR #35 已合并；worktree 与残留目录均已回收 | 已不存在本地残留 |
-| `Vibe-Research-data-health-design` | worktree 已注销；本地仍含完整源码副本 | 未确认可安全删除，继续保留等待独立审计 |
-| `Vibe-Research-decision-feedback-hardening` | 空目录残留；受 Windows 锁定 | 重启后重新确认为空再删除 |
-| `Vibe-Research-trade-ledger-ui-git-backup-20260729-105111` | Git 备份；价值未最终确认 | **继续保留** |
+本文件不维护瞬时 worktree/备份清单。历史本地目录只有在可访问 Windows 文件系统并完成现场核验后才允许清理；远端开发不因此阻塞。
