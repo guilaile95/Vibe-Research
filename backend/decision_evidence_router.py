@@ -44,11 +44,12 @@ async def list_decision_evidence(
     trade_date: str | None = None,
     quality_status: str | None = None,
     trace_status: str | None = None,
+    result_type: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
     _check_allowed_params(
-        request, {"code", "trade_date", "quality_status", "trace_status", "limit", "offset"}
+        request, {"code", "trade_date", "quality_status", "trace_status", "result_type", "limit", "offset"}
     )
 
     if code is not None:
@@ -74,6 +75,7 @@ async def list_decision_evidence(
             trade_date=trade_date,
             quality_status=quality_status,
             trace_status=trace_status,
+            result_type=result_type,
             limit=limit,
             offset=offset,
         )
