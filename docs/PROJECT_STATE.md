@@ -1,6 +1,8 @@
 # 项目当前状态
 
-> 文档基准：主分支 `feature/research-system-v01`；最新合并提交为 `e857d43`（当前 HEAD 以 `git rev-parse HEAD` 为准）
+> 功能审计基线：PR #35 Merge SHA `f5f420662e3246f56d371e6020efa4de725679e9`
+> 实时稳定 HEAD：运行 `git rev-parse origin/feature/research-system-v01`
+> 产品候选池由 PR #34 引入。
 > 仅描述仓库内已实现能力；不包含密钥、持仓内容或代理敏感配置。
 
 ## 1. 技术栈与数据存储
@@ -116,15 +118,51 @@
 - Validator 采用固定七阶段 Pipeline（Schema → Compatibility → Fact Reconciliation → Policy Audit → Execution → Narrative Audit → Final Assembly）。
 - `portfolio_advice_policy.py` 为投资政策唯一代码来源；27 个 Golden Tests 场景锁定输出规范。
 
-## 11. 最近关键提交
+## 11. Decision Trace 生产契约修复（PR #35）
+
+- **Merge SHA**：`f5f420662e3246f56d371e6020efa4de725679e9`（squash）
+- **范围**：
+  - 新增 `portfolio_advice_trace_adapter.py` 统一归一化
+  - Signal Ledger / Decision Evidence 读取权威 `holdings` / `account_funding` / `market_status`
+  - 非法 `execution_size_pct_of_holding` 不进入 Outcome / Signal / Evidence payload
+  - 缺失 `trade_date` / `generated_at` → `missing_decision_identity` 失败关闭
+- **验证（合并后稳定分支）**：
+  - 专项后端 36 passed
+  - not-live 全量 1625 passed
+  - 前端 214 passed；Vite build passed
+- **历史归档**：不回填、不删除、不重写
+
+## 12. 产品候选池
+
+长期产品候选（BK-01 ~ BK-10，**未获开发授权**）见 [`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)。
+
+必须区分：
+- **实现状态**（已上线 / 部分实现 / 尚未实现 / 本地实验 …）
+- **当前执行授权**（已授权 / 未授权 / 待用户决策）
+
+**当前已授权产品开发任务：无。** 不得把 BK 候选写入已实现能力章节。
+
+## 13. 目录治理当前状态
+
+| 目录 | 状态 |
+|------|------|
+| `visual-overhaul-20260729` | 活跃 worktree；本地实验；7 个未提交前端文件；待用户决策 |
+| `decision-trace-contract` | PR #35 已合并；已回收，不再存在本地残留 |
+| `data-health-design` | worktree 已注销；本地仍含完整源码副本；继续保留 |
+| `decision-feedback-hardening` | 空目录残留；受 Windows 锁定；重启后处理 |
+| `trade-ledger-ui-git-backup-20260729-105111` | 备份保留，价值未最终确认 |
+
+## 14. 最近关键提交
 
 | 短哈希 | 说明 |
 |--------|------|
+| `f5f4206` | fix: align decision trace with authoritative advice contract (#35) |
+| `b24c6ee` | docs: finalize P2 project state and clear next task |
 | `e857d43` | Merge pull request #33 from guilaile95/fix/scheduler-test-isolation |
 | `06594c2` | Merge pull request #32 from guilaile95/feat/performance-attribution |
 | `24117d6` | Merge pull request #31 from guilaile95/feat/decision-feedback-analytics |
 | `ecd101b` | Merge pull request #30 from guilaile95/feat/account-capital-constraints |
 | `eecbf56` | Merge pull request #29 from guilaile95/feat/signal-ledger |
+| `fe954a78` | P2-1 Decision Evidence（PR #28） |
 | `dedf99b` | Merge pull request #27 from guilaile95/fix/decision-feedback-hardening |
-| `30abb5b` | Merge pull request #26 from guilaile95/feat/decision-feedback-mvp |
 | `bd0214a` | Merge pull request #25 from guilaile95/feat/trade-ledger-frontend |
