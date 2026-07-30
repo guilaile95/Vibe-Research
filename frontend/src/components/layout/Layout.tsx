@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search, NotebookPen,
@@ -72,12 +72,33 @@ function isActive(pathname: string, to: string) {
   return pathname === to || pathname.startsWith(to + "/");
 }
 
+const DESKTOP_QUERY = "(min-width: 768px)";
+
+/** SSR / 测试环境可能没有 matchMedia，缺失时按桌面处理（与旧行为一致）。 */
+function readDesktop() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
+  return window.matchMedia(DESKTOP_QUERY).matches;
+}
+
+/** 抽屉内可聚焦元素（用于焦点约束），跳过隐藏元素。 */
+function focusableIn(container: HTMLElement | null) {
+  if (!container) return [] as HTMLElement[];
+  const nodes = container.querySelectorAll<HTMLElement>(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  );
+  return Array.from(nodes).filter((el) => el.offsetParent !== null || el.getClientRects().length > 0);
+}
+
 export function Layout() {
   const { pathname } = useLocation();
   const { dark, toggle } = useDarkMode();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("vr-sidebar") === "collapsed");
-  // 窄屏抽屉（md 以下）。桌面端始终为 false，不影响原有行为。
+  // 窄屏抽屉（md 以下）。桌面断点下强制为 false。
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(readDesktop);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     localStorage.setItem("vr-sidebar", collapsed ? "collapsed" : "expanded");
@@ -88,14 +109,92 @@ export function Layout() {
     setMobileOpen(false);
   }, [pathname]);
 
-  // 抽屉展开时按图标模式收起会让内容不可读，故窄屏抽屉内始终显示完整标签
-  const compact = collapsed && !mobileOpen;
+  // 断点监听：进入桌面断点必须关闭移动抽屉，否则会污染桌面侧栏状态
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mql = window.matchMedia(DESKTOP_QUERY);
+    const apply = (matches: boolean) => {
+      setIsDesktop(matches);
+      if (matches) setMobileOpen(false);
+    };
+    apply(mql.matches);
+    const handler = (event: MediaQueryListEvent) => apply(event.matches);
+    if (typeof mql.addEventListener === "function") {
+      mql.addEventListener("change", handler);
+      return () => mql.removeEventListener("change", handler);
+    }
+    // 旧版 Safari / jsdom 兼容
+    mql.addListener(handler);
+    return () => mql.removeListener(handler);
+  }, []);
+
+  // 抽屉打开：焦点进入、Escape 关闭、焦点约束、背景 inert + body 锁滚动（清理全在同一 cleanup）
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const trigger = triggerRef.current;
+    const main = mainRef.current;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    if (main) {
+      main.setAttribute("inert", "");
+      main.setAttribute("aria-hidden", "true");
+    }
+
+    const first = focusableIn(drawerRef.current)[0];
+    if (first) first.focus();
+    else drawerRef.current?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMobileOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusableIn(drawerRef.current);
+      if (!items.length) {
+        event.preventDefault();
+        return;
+      }
+      const active = document.activeElement as HTMLElement | null;
+      const index = active ? items.indexOf(active) : -1;
+      if (index === -1) {
+        event.preventDefault();
+        items[event.shiftKey ? items.length - 1 : 0].focus();
+        return;
+      }
+      if (event.shiftKey && index === 0) {
+        event.preventDefault();
+        items[items.length - 1].focus();
+      } else if (!event.shiftKey && index === items.length - 1) {
+        event.preventDefault();
+        items[0].focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.body.style.overflow = prevOverflow;
+      if (main) {
+        main.removeAttribute("inert");
+        main.removeAttribute("aria-hidden");
+      }
+      if (trigger && document.body.contains(trigger)) trigger.focus();
+    };
+  }, [mobileOpen]);
+
+  // 图标模式仅属于桌面折叠态；移动抽屉内始终显示完整标签。
+  // 桌面宽度只由 collapsed 决定（见 aside class），与 mobileOpen 无关。
+  const compact = isDesktop && collapsed;
 
   return (
     <div className="flex h-screen">
       {/* 窄屏汉堡按钮 */}
       <button
+        ref={triggerRef}
         type="button"
+        data-testid="nav-drawer-trigger"
         onClick={() => setMobileOpen((v) => !v)}
         aria-label={mobileOpen ? "关闭导航菜单" : "打开导航菜单"}
         aria-expanded={mobileOpen}
@@ -109,6 +208,7 @@ export function Layout() {
       {mobileOpen && (
         <div
           aria-hidden="true"
+          data-testid="nav-drawer-overlay"
           onClick={() => setMobileOpen(false)}
           className="fixed inset-0 z-30 bg-black/60 md:hidden"
         />
@@ -117,14 +217,33 @@ export function Layout() {
       {/* Sidebar */}
       <aside
         id="app-sidebar"
+        ref={drawerRef}
+        tabIndex={-1}
+        data-testid="app-sidebar"
+        data-mobile-open={mobileOpen ? "true" : "false"}
+        role={mobileOpen ? "dialog" : undefined}
+        aria-modal={mobileOpen ? true : undefined}
+        aria-label={mobileOpen ? "导航菜单" : undefined}
         className={cn(
           "glass z-40 flex flex-col rounded-2xl transition-all duration-200",
           "fixed inset-y-2 left-2 w-60",
           "md:static md:m-2 md:inset-auto md:shrink-0",
           mobileOpen ? "flex" : "hidden md:flex",
-          compact ? "md:w-14" : "md:w-60",
+          collapsed ? "md:w-14" : "md:w-60",
         )}
       >
+        {/* 抽屉内的键盘可达关闭控件（焦点约束的第一个目标） */}
+        {mobileOpen && (
+          <button
+            type="button"
+            data-testid="nav-drawer-close"
+            onClick={() => setMobileOpen(false)}
+            className="sr-only md:hidden"
+          >
+            关闭导航菜单
+          </button>
+        )}
+
         {/* Brand */}
         <div className={cn("border-b border-border/40", compact ? "flex justify-center p-3" : "p-4")}>
           <Link to="/daily-review" className={cn("flex items-center", compact ? "justify-center" : "gap-2.5")}>
@@ -240,7 +359,7 @@ export function Layout() {
       </aside>
 
       {/* Main */}
-      <main className="flex-1 overflow-auto">
+      <main ref={mainRef} className="flex-1 overflow-auto">
         <div className="mx-auto max-w-6xl px-4 pb-8 pt-16 sm:px-6 md:pt-8">
           <DailyReviewAiTaskIndicator />
           <PortfolioAdviceTaskIndicator />
