@@ -55,6 +55,7 @@ import type {
   DisclosureItem,
   GlobalIndex,
   GlobalStock,
+  NorthboundCapitalFlow,
   DailyReviewAnalyzeRequest,
   NdjsonStreamHandlers,
   NdjsonStreamResult,
@@ -483,6 +484,7 @@ export const api = {
     return get<DailyReviewComparison>(`/daily-review/history/compare?${q.toString()}`);
   },
   marketBreadth: () => get<TimedComponentEnvelope<MarketBreadthData>>("/market/breadth"),
+  marketNorthbound: () => get<NorthboundCapitalFlow>("/market/northbound"),
   marketBoards: (type: "industry" | "concept" | "region" = "industry", topN = 20) =>
     get<TimedComponentEnvelope<BoardRankingData>>(`/market/boards?type=${type}&top_n=${topN}`),
   globalIndices: () => get<GlobalIndex[]>("/global/indices"),

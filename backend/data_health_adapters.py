@@ -534,6 +534,16 @@ class SectorResearchAdapter(EventSourceAdapter):
     force_null_coverage = True
 
 
+class NorthboundCapitalFlowAdapter(EventSourceAdapter):
+    source_id = "northbound_capital_flow"
+    module = "北向资金"
+    display_name = "北向资金"
+    stale_after_seconds = 86400
+    calendar_type = "CN_MARKET_CONSERVATIVE"
+    detail_path = "/daily-review"
+    force_null_coverage = True
+
+
 # ---------------------------------------------------------------------------
 # portfolio_advice_gate
 # ---------------------------------------------------------------------------
@@ -1049,6 +1059,7 @@ def build_adapters() -> list[DataHealthAdapter]:
         MyReportsAdapter(),
         WatchlistPortfolioStorageAdapter(),
         EvidenceLedgerAdapter(),
+        NorthboundCapitalFlowAdapter(),
     ]
 
 

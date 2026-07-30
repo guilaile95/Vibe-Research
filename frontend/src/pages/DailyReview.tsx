@@ -16,8 +16,10 @@ import {
   type BoardRankItem, type MarketSnapshotItem,
   type DataStatus, type DailyReviewHistoryItem, type DailyReviewHistorySnapshot,
   type DailyReviewComparison, type NumericComparison, type RankingComparison,
-  type HighlightComparison,
+  type HighlightComparison, type NorthboundCapitalFlow,
 } from "@/lib/api";
+import { NorthboundCapitalFlowCard } from "@/components/market/NorthboundCapitalFlowCard";
+import { northboundErrorMessage } from "@/lib/northboundView";
 import { loadLlm } from "@/lib/llm";
 import { useDailyReviewAiTaskStore } from "@/stores/dailyReviewAiTaskStore";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
@@ -167,6 +169,31 @@ export function DailyReview() {
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
   const [compareBoardTab, setCompareBoardTab] = useState<"industry" | "concept" | "region">("industry");
+
+  // 北向资金（独立 endpoint）
+  const [northboundEnv, setNorthboundEnv] = useState<NorthboundCapitalFlow | null>(null);
+  const [northboundLoading, setNorthboundLoading] = useState(false);
+  const [northboundError, setNorthboundError] = useState<string | null>(null);
+
+  const loadNorthbound = useCallback(() => {
+    setNorthboundLoading(true);
+    setNorthboundError(null);
+    api.marketNorthbound()
+      .then((res) => {
+        if (!mountedRef.current) return;
+        setNorthboundEnv(res);
+      })
+      .catch((e) => {
+        if (!mountedRef.current) return;
+        setNorthboundEnv(null);
+        setNorthboundError(northboundErrorMessage(e instanceof ApiError ? e.status : undefined));
+      })
+      .finally(() => {
+        if (mountedRef.current) {
+          setNorthboundLoading(false);
+        }
+      });
+  }, []);
 
   const clearPoll = useCallback(() => {
     if (pollTimerRef.current != null) {
@@ -319,6 +346,7 @@ export function DailyReview() {
   useEffect(() => {
     mountedRef.current = true;
     loadDailyReview();
+    loadNorthbound();
     loadHistory({ trade_date: "", offset: 0 });
     loadWatchAuthoritative()
       .then((r) => {
@@ -1125,8 +1153,8 @@ export function DailyReview() {
 
       <div className="flex flex-col">
       {[
-      /* 8. 关注股票（独立请求） */
-      { order: 8, node: (<section key="watch" className="order-[8]">
+	      /* 9. 关注股票（独立请求） */
+	      { order: 9, node: (<section key="watch" className="order-[9]">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-muted-foreground">关注股票</h3>
         {watchCodes.length > 0 && (
@@ -1174,8 +1202,8 @@ export function DailyReview() {
       </GlassCard>
       </section>) },
 
-      /* 9. AI 当日复盘（恢复与生成分离；生成成功后后端持久化） */
-      { order: 9, node: (<section key="ai" className="order-[9]">
+	      /* 10. AI 当日复盘（恢复与生成分离；生成成功后后端持久化） */
+	      { order: 10, node: (<section key="ai" className="order-[10]">
       <GlassCard glow className="mb-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="flex items-center gap-1.5 font-semibold"><Sparkles className="h-4 w-4 text-primary" /> AI 当日复盘</h3>
@@ -1430,29 +1458,34 @@ export function DailyReview() {
             </div>
           </div>
         )}
-      </GlassCard>
+	      </GlassCard>
+	      </section>) },
+
+      /* 6. 北向资金（独立请求） */
+      { order: 6, node: (<section key="northbound" className="order-[6]">
+      <NorthboundCapitalFlowCard env={northboundEnv} loading={northboundLoading} error={northboundError} />
       </section>) },
 
-      /* 6. 板块强弱亮点 */
-      { order: 6, node: (<section key="highlights" className="order-[6]">
-      <div className="mb-3 flex items-center gap-2">
-        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-          <TrendingUp className="h-4 w-4" /> 板块强弱亮点
-        </h3>
-        <span className="text-[11px] text-muted-foreground/50">按涨跌幅 · 非资金流</span>
-      </div>
-      <div className="mb-6 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        {highlightCard("最强行业", highlights?.strongest_industry)}
-        {highlightCard("最弱行业", highlights?.weakest_industry)}
-        {highlightCard("最强概念", highlights?.strongest_concept)}
-        {highlightCard("最弱概念", highlights?.weakest_concept)}
-        {highlightCard("最强地域", highlights?.strongest_region)}
-        {highlightCard("最弱地域", highlights?.weakest_region)}
-      </div>
-      </section>) },
+	      /* 7. 板块强弱亮点 */
+	      { order: 7, node: (<section key="highlights" className="order-[7]">
+	      <div className="mb-3 flex items-center gap-2">
+	        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
+	          <TrendingUp className="h-4 w-4" /> 板块强弱亮点
+	        </h3>
+	        <span className="text-[11px] text-muted-foreground/50">按涨跌幅 · 非资金流</span>
+	      </div>
+	      <div className="mb-6 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+	        {highlightCard("最强行业", highlights?.strongest_industry)}
+	        {highlightCard("最弱行业", highlights?.weakest_industry)}
+	        {highlightCard("最强概念", highlights?.strongest_concept)}
+	        {highlightCard("最弱概念", highlights?.weakest_concept)}
+	        {highlightCard("最强地域", highlights?.strongest_region)}
+	        {highlightCard("最弱地域", highlights?.weakest_region)}
+	      </div>
+	      </section>) },
 
-      /* 7. 板块涨幅排名 */
-      { order: 7, node: (<section key="rankings" className="order-[7]">
+	      /* 8. 板块涨幅排名 */
+	      { order: 8, node: (<section key="rankings" className="order-[8]">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
           <Layers className="h-4 w-4" /> 板块涨幅排名
