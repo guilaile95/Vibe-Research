@@ -8,10 +8,20 @@ import {
   type SectorDynamicPanel,
   type SectorPanelSummary,
 } from "@/lib/api";
+import {
+  formatCapitalFlowAmount,
+  summarizeSectorCapitalFlow,
+  type SectorCapitalFlowSummary,
+} from "@/lib/sectorCapitalFlow";
 import { cn } from "@/lib/utils";
 
 type Props = {
   sectorKey: string;
+};
+
+type CapitalFlowResult = {
+  summary: SectorCapitalFlowSummary | null;
+  error: string | null;
 };
 
 const PANEL_LABELS: Record<string, string> = {
@@ -53,11 +63,25 @@ function s(summary: SectorPanelSummary | undefined, key: string): string | undef
   return t || undefined;
 }
 
+function flowValueClass(value: number): string {
+  if (value > 0) return "text-rose-600 dark:text-rose-400";
+  if (value < 0) return "text-emerald-600 dark:text-emerald-400";
+  return "text-muted-foreground";
+}
+
+function capitalErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message;
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
 export function SectorResearchLiveData({ sectorKey }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<SectorDynamicData | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [capitalLoading, setCapitalLoading] = useState(false);
+  const [capitalFlowByCode, setCapitalFlowByCode] = useState<Record<string, CapitalFlowResult>>({});
   const inflight = useRef(false);
   const mounted = useRef(true);
   const requestSeq = useRef(0);
@@ -76,8 +100,52 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
     setError(null);
     setExpanded(false);
     setLoading(false);
+    setCapitalLoading(false);
+    setCapitalFlowByCode({});
     inflight.current = false;
   }, [sectorKey]);
+
+  const loadCapitalFlows = useCallback(
+    async (companies: SectorDynamicData["companies"], seq: number) => {
+      if (!companies?.length) {
+        if (mounted.current && requestSeq.current === seq) {
+          setCapitalFlowByCode({});
+          setCapitalLoading(false);
+        }
+        return;
+      }
+
+      setCapitalLoading(true);
+      const entries = await Promise.all(
+        companies.map(async (company): Promise<[string, CapitalFlowResult]> => {
+          try {
+            const rows = await api.fundFlow(company.code);
+            const summary = summarizeSectorCapitalFlow(rows);
+            return [
+              company.code,
+              {
+                summary,
+                error: summary ? null : "暂无可用资金流数据",
+              },
+            ];
+          } catch (flowError) {
+            return [
+              company.code,
+              {
+                summary: null,
+                error: capitalErrorMessage(flowError),
+              },
+            ];
+          }
+        }),
+      );
+
+      if (!mounted.current || requestSeq.current !== seq) return;
+      setCapitalFlowByCode(Object.fromEntries(entries));
+      setCapitalLoading(false);
+    },
+    [],
+  );
 
   const load = useCallback(async () => {
     if (inflight.current) return;
@@ -85,11 +153,14 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
     requestSeq.current = seq;
     inflight.current = true;
     setLoading(true);
+    setCapitalLoading(false);
+    setCapitalFlowByCode({});
     setError(null);
     try {
       const res = await api.getSectorResearchData(sectorKey);
       if (!mounted.current || requestSeq.current !== seq) return;
       setData(res);
+      void loadCapitalFlows(res.companies ?? [], seq);
     } catch (e) {
       if (!mounted.current || requestSeq.current !== seq) return;
       const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
@@ -100,7 +171,7 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
         if (mounted.current) setLoading(false);
       }
     }
-  }, [sectorKey]);
+  }, [loadCapitalFlows, sectorKey]);
 
   const onToggle = useCallback(() => {
     const next = !expanded;
@@ -115,13 +186,17 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
     void load();
   }, [load]);
 
+  const capitalTotal = data?.companies?.length ?? 0;
+  const capitalResolved = Object.values(capitalFlowByCode);
+  const capitalOk = capitalResolved.filter((item) => item.summary != null).length;
+
   return (
     <GlassCard className="p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="text-sm font-semibold text-foreground">动态数据</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            代表公司 · 一致预期 / 公告 · 单家失败不空白整板
+            代表公司 · 一致预期 / 公告 / 主力资金 · 单家失败不空白整板
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -164,6 +239,9 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
             >
               {data.status}
             </span>
+            <span className="rounded-full border border-border/60 bg-muted/20 px-2 py-0.5 text-[11px] text-muted-foreground">
+              资金流 {capitalLoading ? "加载中" : `${capitalOk}/${capitalTotal}`}
+            </span>
             {data.fetched_at && (
               <span className="text-[11px] text-muted-foreground">
                 更新 {data.fetched_at.slice(0, 19).replace("T", " ")}
@@ -191,6 +269,10 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
               {data.companies.map((c) => {
                 const { ok, total, errors } = panelOkCount(c.panels);
                 const panelKeys = Object.keys(c.panels || {});
+                const capital = capitalFlowByCode[c.code];
+                const capitalSummary = capital?.summary;
+                const combinedOk = ok + (capitalSummary ? 1 : 0);
+                const combinedTotal = total + 1;
                 return (
                   <div
                     key={c.code}
@@ -204,7 +286,7 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
                         </span>
                       </p>
                       <span className="shrink-0 text-[11px] text-muted-foreground">
-                        面板 {ok}/{total}
+                        数据 {combinedOk}/{combinedTotal}
                       </span>
                     </div>
                     <div className="mt-1.5 flex flex-wrap gap-1">
@@ -227,6 +309,17 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
                           </span>
                         );
                       })}
+                      <span
+                        className={cn(
+                          "rounded-full border px-1.5 py-0.5 text-[10px]",
+                          capitalLoading && !capital && "border-border/50 text-muted-foreground",
+                          capitalSummary && "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+                          capital?.error && "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+                        )}
+                        title={capital?.error || undefined}
+                      >
+                        主力资金 {capitalLoading && !capital ? "…" : capitalSummary ? "✓" : "!"}
+                      </span>
                     </div>
 
                     {c.panels.individual_info?.status === "ok" && (
@@ -305,6 +398,51 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
                         )}
                       </div>
                     )}
+
+                    <div className="mt-2 rounded-lg border border-border/40 bg-background/30 px-2.5 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] font-medium text-foreground/80">主力资金</p>
+                        {capitalSummary?.latestDate && (
+                          <span className="text-[10px] text-muted-foreground">截至 {capitalSummary.latestDate}</span>
+                        )}
+                      </div>
+                      {capitalLoading && !capital ? (
+                        <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                          <Loader2 className="h-3 w-3 animate-spin" /> 加载资金流…
+                        </div>
+                      ) : capitalSummary ? (
+                        <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                          <p className="text-muted-foreground">
+                            最新：
+                            <span className={cn("font-medium", flowValueClass(capitalSummary.latestMainNet))}>
+                              {formatCapitalFlowAmount(capitalSummary.latestMainNet)}
+                            </span>
+                          </p>
+                          <p className="text-muted-foreground">
+                            近 {capitalSummary.sampleSize5} 日：
+                            <span className={cn("font-medium", flowValueClass(capitalSummary.net5d))}>
+                              {formatCapitalFlowAmount(capitalSummary.net5d)}
+                            </span>
+                          </p>
+                          <p className="text-muted-foreground">
+                            近 {capitalSummary.sampleSize20} 日：
+                            <span className={cn("font-medium", flowValueClass(capitalSummary.net20d))}>
+                              {formatCapitalFlowAmount(capitalSummary.net20d)}
+                            </span>
+                          </p>
+                          <p className="text-muted-foreground">
+                            净流入天数：
+                            <span className="font-medium text-foreground/80">
+                              {capitalSummary.positiveDays20}/{capitalSummary.sampleSize20}
+                            </span>
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="mt-1.5 line-clamp-2 text-[10px] text-muted-foreground">
+                          {capital?.error || "暂无资金流数据"}
+                        </p>
+                      )}
+                    </div>
 
                     {errors.length > 0 && (
                       <p className="mt-1 line-clamp-2 text-[10px] text-muted-foreground">
