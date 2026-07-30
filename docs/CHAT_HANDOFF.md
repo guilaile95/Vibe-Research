@@ -8,10 +8,13 @@
 |----|-----|
 | 仓库（origin） | https://github.com/guilaile95/Vibe-Research |
 | 主分支 | `feature/research-system-v01` |
-| 最新合并提交 | `b24c6ee` (`docs: finalize P2 project state and clear next task`)；当前 HEAD 以 `git rev-parse HEAD` 为准 |
+| 稳定功能基线 | PR #35 Merge SHA `f5f420662e3246f56d371e6020efa4de725679e9` |
+| 实时稳定 HEAD | 运行 `git rev-parse origin/feature/research-system-v01` |
+| 当前 Draft PR | #34 `docs/product-backlog-reconstruction`（文档候选，非稳定 HEAD） |
 | 工作区 | 接手后请先 `git status` / `git rev-parse HEAD` 复核 |
 
 > 说明：拼写为 **guilaile95**（非 guiliale95）。
+> 不要把 PR #34 文档 Head 写成稳定分支 Head。
 
 ## 协作方式
 
@@ -32,33 +35,23 @@
 
 ## 已完成能力（摘要）
 
-- **P2-1 决策依据层 (Decision Evidence Layer)**（已完成）：
-  - 独立 `decision_trace.sqlite3` 数据库与 REST API (`/api/decision-evidence`)
-  - 确定性 `decision_run_id` 衍生算法 (`dr_` + sha256)
-  - 自动化归档结构化事实证据 (market, sector, stock, portfolio, account, risk) 与规则推演链
-  - 前端 `/decision-evidence` 探索看板，支持筛选、运行详情、支持/限制证据关联与可视化展示
-  - 持仓建议结果打通「查看决策依据」只读跳转入口
-- **P2-2 信号账本 (Signal Ledger)**（已完成）：
-  - 扩展 `decision_trace.sqlite3`，新增 `signal_entries` 与 `decision_outcomes` 数据表
-  - REST API: `GET /api/signal-ledger`, `GET /api/signal-ledger/run/{decision_run_id}`
-  - 前端 `/signal-ledger` 信号账本页面与 7 阶段流水时间线
-- **P2-3 账户资金执行策略 (Account Capital Constraints)**（已完成）：
-  - 独立策略文件 `account_execution_policy.py`，五字段策略持久化于 `VR_DATA_DIR`
-  - REST API: `GET/PUT /api/account-execution-policy`
-  - 前端 `/account-policy` 策略编辑器
-- **P2-4A 决策反馈分析 (Feedback Analytics)**（已完成）：
-  - 只读聚合 `decision_feedback` 表，三端点 `/api/decision-analytics/{adoption,outcome,stocks}`
-  - 前端 `/decision-performance` 决策绩效看板
-- **P2-4B 收益归因 (Performance Attribution)**（已完成）：
-  - 独立 `performance_attribution.sqlite3`，加权平均成本法四端点
-  - 前端 `/performance-attribution` 收益归因看板
-- **P1-1 & P1-2 交易流水 (Trade Ledger)**（已合并，PR #25，Merge SHA `bd0214a`）
-- **P1-3 决策反馈 (Decision Feedback)**（已合并，PR #26 & #27，Merge SHA `dedf99b`）
+- **P2-1 决策依据层 (Decision Evidence Layer)**（已上线，PR #28 / `fe954a78`）
+- **P2-2 信号账本 (Signal Ledger)**（已上线，PR #29 / `eecbf56`）
+- **Decision Trace 生产契约修复**（已上线，PR #35 / `f5f4206`）：
+  - 权威字段：`holdings` / `account_funding` / `market_status`
+  - 统一 `normalize_execution_size_pct()`；非法比例不进入 Outcome/Signal/Evidence payload
+  - 缺失 `trade_date`/`generated_at` → `missing_decision_identity` 失败关闭
+  - 历史错误归档**不回填**
+- **P2-3 账户资金执行策略**（PR #30 / `ecd101b`）
+- **P2-4A 决策反馈分析**（PR #31 / `24117d6`）
+- **P2-4B 收益归因**（PR #32 / `06594c2`）
+- **P1-1 & P1-2 交易流水**（PR #25 / `bd0214a`）
+- **P1-3 决策反馈**（PR #26 & #27 / `dedf99b`）
 
 ## 关键安全边界
 
 - 持仓建议**禁止**使用 stale 磁盘复盘；`breadth unavailable` 必须 **503 fail-closed**
-- 账户资金手工维护已接入只读指标与执行策略（`account_execution_policy`，`add` 金额受可用现金安全垫与整手约束（P2-3）
+- 账户资金手工维护已接入只读指标与执行策略（`account_execution_policy`）；`add` 金额受可用现金安全垫与整手约束（P2-3）
 - 无可靠可卖数量 → `reduce`/`sell` 须人工确认
 - 无 K 线不得编造技术位；不做 T（无 `t_trade`）
 - `add` 比例为**相对当前持股数量**，不是账户仓位/资金比例
@@ -76,11 +69,14 @@ Windows 环境缺少 `python3` 命令，实际错误为 `fake 退出码 9009`。
 
 ## 当前下一任务
 
-**无已授权产品任务。** 等待产品优先级指令。
+**当前已授权产品任务：无。**
 
-## 待决定
+## 本地目录（阶段 C 实际结果）
 
-| 目录 | 说明 | 建议 |
-|---|---|---|
-| `Vibe-Research-visual-overhaul-20260729` | 含未提交前端改动（`frontend/index.html`, `Layout.tsx`, `GlassCard.tsx`） | 继续开发形成 PR，或确认废弃后安全备份/删除 |
-| `Vibe-Research-data-health-design` | PR #23 的 Data Health design worktree，主仓库功能已完成 | 审计其中是否有稳定支没有的有效设计文档；没有则回收 |
+| 目录 | 状态 |
+|---|---|
+| `decision-trace-contract` | PR #35 合并后 worktree 已回收 |
+| `visual-overhaul-20260729` | 本地实验；未提交 7 文件；**待用户决策** |
+| `data-health-design` | 内容已吸收；worktree 已注销；目录可能锁定残留 |
+| `decision-feedback-hardening` | 空残留；删除锁定失败 → 重启后删除 |
+| `trade-ledger-ui-git-backup-20260729-105111` | 备份保留，价值未最终确认 |

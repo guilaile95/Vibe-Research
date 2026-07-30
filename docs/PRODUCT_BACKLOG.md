@@ -1,49 +1,75 @@
 # 产品候选池 (Product Backlog)
 
-> **文档基准**：主分支 `feature/research-system-v01`；最新稳定提交 `b24c6ee`（文档同步收口）
+> **功能审计基线**：PR #35 Merge SHA `f5f420662e3246f56d371e6020efa4de725679e9`
+> **文档候选**：PR #34（本分支）；**实时稳定 HEAD**：`git rev-parse origin/feature/research-system-v01`
 > **仅描述仓库内已实现能力边界与外部候选差距；不包含密钥、持仓内容或代理敏感配置**
-> **授权状态**：`已授权` = 已上线；`开发中` = 已授权未上线；`候选` = 未授权
+> **维度拆分**：实现状态 ≠ 当前执行授权
 
 ---
 
-## 0. 授权状态总览
+## 0. 状态模型
 
-| 状态 | 含义 | 是否可开发 |
-|------|------|-----------|
-| **已授权 / 已上线** | 功能已完成、测试通过、合并至稳定分支、可交付使用 | ✅ 已完成 |
-| **开发中** | 已授权、有活跃 worktree、未合并至稳定分支 | ⚠️ 仅限既有 worktree |
-| **候选** | 产品候选池中存在，**未获得开发授权** | ❌ 禁止开发 |
+### 0.1 实现状态（代码是否在稳定分支可用）
 
-### 0.1 已授权 / 已上线（P1 + P2 全部完成）
+| 实现状态 | 含义 |
+|----------|------|
+| **已上线** | 功能已合并至稳定分支并可交付 |
+| **部分实现** | 稳定分支有基础能力，仍缺关键增量 |
+| **尚未实现** | 稳定分支无对应产品能力 |
+| **本地实验** | 仅存在于本地 worktree / 未提交改动 |
+| **已被稳定分支吸收** | 曾独立存在，内容已进入稳定分支 |
+| **需要复核** | 备份/残留，价值未最终确认 |
 
-| 代号 | 名称 | 合并提交 | 关键文件 |
-|------|------|----------|----------|
-| P1-1/2 | 交易流水 (Trade Ledger) | `bd0214a` (PR #25) | `trade_ledger_*.py`, `Trades.tsx` |
-| P1-3 | 决策反馈 (Decision Feedback) | `dedf99b` (PR #26/#27) | `decision_feedback_*.py`, `DecisionFeedback.tsx` |
-| P2-1 | 决策依据层 (Decision Evidence) | `eecbf56` (PR #29) | `decision_trace_store.py`, `decision_evidence_*.py` |
-| P2-2 | 信号账本 (Signal Ledger) | `eecbf56` (PR #29) | `signal_ledger_*.py`, `SignalLedger.tsx` |
-| P2-3 | 账户资金执行策略 | `ecd101b` (PR #30) | `account_execution_policy.*`, `AccountPolicy.tsx` |
-| P2-4A | 决策反馈分析 (Feedback Analytics) | `24117d6` (PR #31) | `decision_analytics_*.py`, `DecisionPerformance.tsx` |
-| P2-4B | 收益归因 (Performance Attribution) | `06594c2` (PR #32) | `performance_attribution_*.py`, `PerformanceAttribution.tsx` |
-| — | Scheduler 测试隔离修复 | `e857d43` (PR #33) | `test_scheduler_lifespan.py` |
-| — | 数据健康中心 (Data Health) | PR #23 | `data_health_*.py`, `DataHealth.tsx` |
-| — | 投资论文与证据 (Evidence Thesis) | 已合并 | `evidence_thesis_*.py`, `Thesis*.tsx` |
-| — | 投资论文修订与差异 | 已合并 | `ThesisRevision.tsx`, 完整修订链 |
-| — | 行业研究数据中心 | 已合并 | `sector_research_data.py`, `Sectors.tsx` |
-| — | 每日复盘 SWR | 已合并 | `daily_review_*.py`, `DailyReview.tsx` |
+### 0.2 当前执行授权（现在能否开发）
 
-### 0.2 开发中（已授权、有活跃 worktree、未合并）
+| 当前执行授权 | 含义 | 是否可开发 |
+|--------------|------|-----------|
+| **已授权** | 已获明确开发授权 | ✅ |
+| **未授权** | 仅候选规划 | ❌ |
+| **待用户决策** | 本地实验/备份，需用户决定去留 | ❌ 不得当授权任务推进 |
 
-| 代号 | 名称 | Worktree | 状态 |
-|------|------|----------|------|
-| — | 视觉 overhaul（前端观感重构） | `Vibe-Research-visual-overhaul-20260729` | 含未提交前端改动（`frontend/index.html`, `Layout.tsx`, `GlassCard.tsx`）|
-| — | Data Health 设计文档恢复 | `Vibe-Research-data-health-design` | PR #23 功能已完成；审计是否有稳定分支没有的设计文档 |
+**当前已授权产品开发任务：无。**
 
-> **规则**：上述 worktree 之外的任何候选均**未获授权**，禁止启动新功能开发。
+历史上已上线的功能，不代表当前仍有开发授权。
 
-### 0.3 候选池（未授权、仅规划）
+### 0.3 已上线能力（P1 + P2 + 契约修复）
 
-即下方 BK-01 ~ BK-10 全部条目。**当前已授权任务：无。**
+| 代号 | 名称 | 实现状态 | 合并记录 | 关键文件 |
+|------|------|----------|----------|----------|
+| P1-1/2 | 交易流水 (Trade Ledger) | 已上线 | PR #25 / `bd0214a` | `trade_ledger_*.py`, `Trades.tsx` |
+| P1-3 | 决策反馈 (Decision Feedback) | 已上线 | PR #26/#27 / `dedf99b` | `decision_feedback_*.py`, `DecisionFeedback.tsx` |
+| P2-1 | 决策依据层 (Decision Evidence) | 已上线 | **PR #28 / `fe954a78`** | `decision_trace_store.py`, `decision_evidence_*.py` |
+| P2-2 | 信号账本 (Signal Ledger) | 已上线 | **PR #29 / `eecbf56`** | `signal_ledger_*.py`, `SignalLedger.tsx` |
+| P2-3 | 账户资金执行策略 | 已上线 | PR #30 / `ecd101b` | `account_execution_policy.*`, `AccountPolicy.tsx` |
+| P2-4A | 决策反馈分析 (Feedback Analytics) | 已上线 | PR #31 / `24117d6` | `decision_analytics_*.py`, `DecisionPerformance.tsx` |
+| P2-4B | 收益归因 (Performance Attribution) | 已上线 | PR #32 / `06594c2` | `performance_attribution_*.py`, `PerformanceAttribution.tsx` |
+| — | Scheduler 测试隔离修复 | 已上线 | PR #33 / `e857d43` | `test_scheduler_lifespan.py` |
+| — | Decision Trace 生产契约修复 | 已上线 | **PR #35 / `f5f4206`** | `portfolio_advice_trace_adapter.py`, `signal_ledger_*`, `decision_evidence_service.py` |
+| — | 数据健康中心 (Data Health) | 已上线 | PR #23 | `data_health_*.py`, `DataHealth.tsx` |
+| — | 投资论文与证据 (Evidence Thesis) | 已上线 | 已合并 | `evidence_thesis_*.py`, `Thesis*.tsx` |
+| — | 行业研究数据中心 | 已上线 | 已合并 | `sector_research_data.py`, `Sectors.tsx` |
+| — | 每日复盘 SWR | 已上线 | 已合并 | `daily_review_*.py`, `DailyReview.tsx` |
+
+**P2-1 / P2-2 说明**：
+- 功能已完成并上线（PR #28 / PR #29）
+- PR #35 已关闭权威建议契约错位、非法比例归档和身份字段补值问题
+- 新生成的 Decision Evidence 与 Signal Ledger 使用权威结果契约
+- **历史错误归档记录未回填**
+
+### 0.4 本地目录与实验（非产品开发授权）
+
+| 目录 | 实现状态 | 当前执行授权 | 说明 |
+|------|----------|--------------|------|
+| `Vibe-Research-visual-overhaul-20260729` | 本地实验 | 待用户决策 | 未提交 7 文件：`frontend/index.html`, `frontend/src/components/layout/Layout.tsx`, `frontend/src/components/ui/GlassCard.tsx`, `frontend/src/components/ui/PageHeader.tsx`, `frontend/src/index.css`, `frontend/src/router.tsx`, `frontend/tailwind.config.ts` |
+| `Vibe-Research-data-health-design` | 已被稳定分支吸收 | 未授权 | 设计文档 blob 已在稳定分支；worktree 已注销；目录可能仍受 Windows 锁定残留 |
+| `Vibe-Research-decision-feedback-hardening` | 需要复核 | 未授权 | 空残留（仅空 `frontend/`）；删除受进程锁定失败 → 重启后删除 |
+| `Vibe-Research-decision-trace-contract` | 已被稳定分支吸收 | 未授权 | PR #35 合并后 worktree 已回收 |
+| `Vibe-Research-trade-ledger-ui-git-backup-20260729-105111` | 需要复核 | 未授权 | Git 管理元数据/本地对象备份；价值未最终确认；**继续保留** |
+| `Vibe-Research-product-backlog-docs` | 文档候选 | 未授权（仅文档） | PR #34 Draft worktree |
+
+### 0.5 候选池（未授权、仅规划）
+
+即下方 BK-01 ~ BK-10。**当前已授权产品开发任务：无。**
 
 ---
 
@@ -200,11 +226,11 @@
 
 | 项 | 值 |
 |----|-----|
-| **授权状态** | 候选（未授权，但已有活跃 worktree）|
-| **当前实现** | **已有成熟设计系统**（非「待重构」状态）|
+| **实现状态** | 部分实现（稳定分支已有成熟设计系统）+ 本地实验（visual-overhaul 未提交 7 文件）|
+| **当前执行授权** | 待用户决策（本地实验）/ 未授权（产品增量）|
 | **已实现组件** | Tailwind CSS 3.4 + 完整 HSL CSS 变量 token 体系（浅色/深色）；暗色模式默认 + 切换 + localStorage 持久化；共享 Layout + GlassCard + PageHeader + `cn()` 工具；Lucide React 图标（单一来源）；Inter + JetBrains Mono 字体；玻璃暖橙美学（径向渐变环境背景 + 毛玻璃 + 发光阴影）|
 | **核心差距** | **无障碍（a11y）体系**（仅 3 文件 aria-* 属性，非系统化）；无 focus-visible 样式；无 skip links；无屏幕阅读器模式；无设计 token 文档 |
-| **依赖** | 前端 worktree `Vibe-Research-visual-overhaul-20260729`（含未提交改动）|
+| **依赖** | 前端 worktree `Vibe-Research-visual-overhaul-20260729`（含未提交 7 文件，非已授权开发）|
 | **价值假设** | 视觉体系已建立，重构决策应聚焦 a11y 系统化 + 设计 token 文档化，而非「换皮」 |
 
 **MVP 范围（若授权）**：
@@ -332,6 +358,9 @@ BK-08 (视觉) ──▶ 全部前端候选
 | 2026-07-30 | BK-03/05/09 标记「已有实质实现」 | 审计发现这三个候选并非从零开始，而是已有生产级基础，仅缺增量 |
 | 2026-07-30 | BK-08 标记「已有成熟设计系统」 | 视觉 overhaul 需求非「换皮」而是 a11y 系统化 |
 | 2026-07-30 | 候选开发需逐项单独授权 | 防止范围蔓延；每个 BK 应独立评审成本/收益 |
+| 2026-07-30 | 拆分实现状态与当前执行授权 | 避免把已上线/有 worktree 误读为当前开发授权 |
+| 2026-07-30 | 修正 P2-1/P2-2 Merge SHA | P2-1=`fe954a78`(PR #28)；P2-2=`eecbf56`(PR #29) |
+| 2026-07-30 | 记录 PR #35 契约修复 | Merge `f5f4206`；历史归档不回填 |
 
 ---
 
