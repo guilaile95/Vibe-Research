@@ -61,11 +61,14 @@
 | 目录 | 实现状态 | 当前执行授权 | 说明 |
 |------|----------|--------------|------|
 | `Vibe-Research-visual-overhaul-20260729` | 本地实验 | 待用户决策 | 未提交 7 文件：`frontend/index.html`, `frontend/src/components/layout/Layout.tsx`, `frontend/src/components/ui/GlassCard.tsx`, `frontend/src/components/ui/PageHeader.tsx`, `frontend/src/index.css`, `frontend/src/router.tsx`, `frontend/tailwind.config.ts` |
-| `Vibe-Research-data-health-design` | 已被稳定分支吸收 | 未授权 | 设计文档 blob 已在稳定分支；worktree 已注销；目录可能仍受 Windows 锁定残留 |
-| `Vibe-Research-decision-feedback-hardening` | 需要复核 | 未授权 | 空残留（仅空 `frontend/`）；删除受进程锁定失败 → 重启后删除 |
-| `Vibe-Research-decision-trace-contract` | 已被稳定分支吸收 | 未授权 | PR #35 合并后 worktree 已回收 |
+| `Vibe-Research-data-health-design` | 需要复核 | 未授权 | worktree 已注销；本地仍含完整源码副本（111 .py / 205 .ts / 37 .tsx / 15 .md）；未确认可安全删除，继续保留等待独立审计 |
+| `Vibe-Research-decision-feedback-hardening` | 需要复核 | 未授权 | 空目录残留；受 Windows 进程锁定；重启后重新确认为空再删除 |
+| `Vibe-Research-decision-trace-contract` | 已被稳定分支吸收 | 未授权 | PR #35 已合并；worktree 与残留目录均已回收 |
 | `Vibe-Research-trade-ledger-ui-git-backup-20260729-105111` | 需要复核 | 未授权 | Git 管理元数据/本地对象备份；价值未最终确认；**继续保留** |
-| `Vibe-Research-product-backlog-docs` | 文档候选 | 未授权（仅文档） | PR #34 Draft worktree |
+### 文档维护 worktree
+
+`Vibe-Research-product-backlog-docs` 用于 PR #34 文档审查与维护，
+不属于产品候选，不适用产品开发授权状态。
 
 ### 0.5 候选池（未授权、仅规划）
 

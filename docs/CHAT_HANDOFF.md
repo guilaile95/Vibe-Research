@@ -75,9 +75,9 @@ Windows 环境缺少 `python3` 命令，实际错误为 `fake 退出码 9009`。
 
 | 目录 | 状态 |
 |---|---|
-| `product-backlog-docs` | PR #34 Draft worktree（文档候选） |
+| `product-backlog-docs` | PR #34 文档维护 worktree；保留等待审查 |
 | `visual-overhaul-20260729` | 活跃 worktree；本地实验；未提交 7 文件；**待用户决策** |
-| `decision-trace-contract` | PR #35 已回收；残留仅空 `frontend/`（可删） |
-| `data-health-design` | worktree 已注销；仍含完整源码拷贝（不安全删除） |
-| `decision-feedback-hardening` | 空残留（仅空 `frontend/`）（可删） |
+| `decision-trace-contract` | PR #35 已合并；已回收，不再存在本地残留 |
+| `data-health-design` | worktree 已注销；本地仍含完整源码副本；继续保留 |
+| `decision-feedback-hardening` | 空目录残留；受 Windows 锁定；重启后处理 |
 | `trade-ledger-ui-git-backup-20260729-105111` | 备份保留，价值未最终确认 |

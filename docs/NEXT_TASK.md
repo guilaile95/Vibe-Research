@@ -27,9 +27,9 @@
 
 | 目录 | 状态 | 建议 |
 |---|---|---|
+| `Vibe-Research-product-backlog-docs` | PR #34 文档维护 worktree | 保留等待审查；不属于产品候选 |
 | `Vibe-Research-visual-overhaul-20260729` | 活跃 worktree；本地实验；未提交 7 个前端文件 | 待用户决策是继续开发还是废弃 |
-| `Vibe-Research-product-backlog-docs` | PR #34 Draft worktree（文档候选） | 保留等待审查 |
-| `Vibe-Research-decision-trace-contract` | PR #35 worktree 已回收；残留仅空 `frontend/` | 安全可删除（见任务 B） |
-| `Vibe-Research-data-health-design` | worktree 已注销；仍含完整源码拷贝 | 不安全删除；保留等待确认可回收 |
-| `Vibe-Research-decision-feedback-hardening` | 空残留（仅空 `frontend/`） | 安全可删除（见任务 B） |
+| `Vibe-Research-decision-trace-contract` | PR #35 已合并；worktree 与残留目录均已回收 | 已不存在本地残留 |
+| `Vibe-Research-data-health-design` | worktree 已注销；本地仍含完整源码副本 | 未确认可安全删除，继续保留等待独立审计 |
+| `Vibe-Research-decision-feedback-hardening` | 空目录残留；受 Windows 锁定 | 重启后重新确认为空再删除 |
 | `Vibe-Research-trade-ledger-ui-git-backup-20260729-105111` | Git 备份；价值未最终确认 | **继续保留** |
