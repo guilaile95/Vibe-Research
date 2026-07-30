@@ -146,10 +146,11 @@
 
 | 目录 | 状态 |
 |------|------|
-| `decision-trace-contract` | PR #35 worktree 已回收 |
-| `visual-overhaul-20260729` | 本地实验；7 个未提交前端文件；待用户决策 |
-| `data-health-design` | 文档内容已吸收；worktree 已注销；目录可能锁定残留 |
-| `decision-feedback-hardening` | 空残留；删除锁定失败 → 重启后删除 |
+| `product-backlog-docs` | PR #34 Draft worktree（文档候选） |
+| `visual-overhaul-20260729` | 活跃 worktree；本地实验；7 个未提交前端文件；待用户决策 |
+| `decision-trace-contract` | PR #35 已回收；残留仅空 `frontend/`（可删） |
+| `data-health-design` | worktree 已注销；仍含完整源码拷贝（不安全删除） |
+| `decision-feedback-hardening` | 空残留（仅空 `frontend/`）（可删） |
 | `trade-ledger-ui-git-backup-20260729-105111` | 备份保留，价值未最终确认 |
 
 ## 14. 最近关键提交
