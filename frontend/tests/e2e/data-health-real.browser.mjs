@@ -537,8 +537,8 @@ async function main() {
     assertDbArtifactsUnchanged(beforeDbArtifacts, afterFirstDbArtifacts, "after first list GET");
 
     // Hard assertions
-    if (!data || !Array.isArray(data.items) || data.items.length !== 11) {
-      throw new Error(`expected 11 items, got ${data?.items?.length}`);
+    if (!data || !Array.isArray(data.items) || data.items.length !== 12) {
+      throw new Error(`expected 12 items, got ${data?.items?.length}`);
     }
     if (data.overall_status !== "partial") {
       throw new Error(`overall expected partial, got ${data.overall_status}`);
