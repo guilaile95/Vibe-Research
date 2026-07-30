@@ -72,6 +72,19 @@ function isActive(pathname: string, to: string) {
   return pathname === to || pathname.startsWith(to + "/");
 }
 
+const NAV_PATHS = [
+  ...NAV_GROUPS.flatMap((group) => group.items.map((item) => item.to)),
+  ...SECTOR_LINKS.map((item) => item.to),
+];
+
+/** aria-current 只标记最长匹配路径；父级仍可保持视觉高亮。 */
+function getCurrentNavPath(pathname: string) {
+  return NAV_PATHS.reduce<string | null>((best, to) => {
+    if (!isActive(pathname, to)) return best;
+    return !best || to.length > best.length ? to : best;
+  }, null);
+}
+
 const DESKTOP_QUERY = "(min-width: 768px)";
 
 /** SSR / 测试环境可能没有 matchMedia，缺失时按桌面处理（与旧行为一致）。 */
@@ -187,6 +200,7 @@ export function Layout() {
   // 图标模式仅属于桌面折叠态；移动抽屉内始终显示完整标签。
   // 桌面宽度只由 collapsed 决定（见 aside class），与 mobileOpen 无关。
   const compact = isDesktop && collapsed;
+  const currentNavPath = getCurrentNavPath(pathname);
 
   return (
     <div className="flex h-screen">
@@ -278,7 +292,7 @@ export function Layout() {
                       <Link
                         to={to}
                         title={compact ? label : undefined}
-                        aria-current={active ? "page" : undefined}
+                        aria-current={currentNavPath === to ? "page" : undefined}
                         className={cn(
                           "flex items-center rounded-lg text-[13px] transition-colors duration-150",
                           compact ? "justify-center p-2.5" : "gap-2.5 px-3 py-2",
@@ -295,13 +309,13 @@ export function Layout() {
                       {to === "/sectors" && (
                         <div className={cn("mt-0.5 space-y-0.5", !compact && "ml-4 border-l border-border/30 pl-1.5")}>
                           {SECTOR_LINKS.map(({ to: st, icon: SIcon, label: slabel }) => {
-                            const sactive = pathname === st;
+                            const sactive = isActive(pathname, st);
                             return (
                               <Link
                                 key={st}
                                 to={st}
                                 title={compact ? slabel : undefined}
-                                aria-current={sactive ? "page" : undefined}
+                                aria-current={currentNavPath === st ? "page" : undefined}
                                 className={cn(
                                   "flex items-center rounded-md transition-colors",
                                   compact ? "justify-center p-2" : "gap-2 px-2.5 py-1.5 text-xs",
