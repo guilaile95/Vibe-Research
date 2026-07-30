@@ -2,7 +2,7 @@
 
 > 功能审计基线：PR #35 Merge SHA `f5f420662e3246f56d371e6020efa4de725679e9`
 > 实时稳定 HEAD：运行 `git rev-parse origin/feature/research-system-v01`
-> 文档候选：PR #34（不得把文档 Head 当作稳定 HEAD）
+> 产品候选池由 PR #34 引入。
 > 仅描述仓库内已实现能力；不包含密钥、持仓内容或代理敏感配置。
 
 ## 1. 技术栈与数据存储
@@ -146,7 +146,6 @@
 
 | 目录 | 状态 |
 |------|------|
-| `product-backlog-docs` | PR #34 文档维护 worktree |
 | `visual-overhaul-20260729` | 活跃 worktree；本地实验；7 个未提交前端文件；待用户决策 |
 | `decision-trace-contract` | PR #35 已合并；已回收，不再存在本地残留 |
 | `data-health-design` | worktree 已注销；本地仍含完整源码副本；继续保留 |

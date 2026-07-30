@@ -27,7 +27,6 @@
 
 | 目录 | 状态 | 建议 |
 |---|---|---|
-| `Vibe-Research-product-backlog-docs` | PR #34 文档维护 worktree | 保留等待审查；不属于产品候选 |
 | `Vibe-Research-visual-overhaul-20260729` | 活跃 worktree；本地实验；未提交 7 个前端文件 | 待用户决策是继续开发还是废弃 |
 | `Vibe-Research-decision-trace-contract` | PR #35 已合并；worktree 与残留目录均已回收 | 已不存在本地残留 |
 | `Vibe-Research-data-health-design` | worktree 已注销；本地仍含完整源码副本 | 未确认可安全删除，继续保留等待独立审计 |

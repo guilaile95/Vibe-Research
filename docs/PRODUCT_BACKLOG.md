@@ -1,7 +1,7 @@
 # 产品候选池 (Product Backlog)
 
 > **功能审计基线**：PR #35 Merge SHA `f5f420662e3246f56d371e6020efa4de725679e9`
-> **文档候选**：PR #34（本分支）；**实时稳定 HEAD**：`git rev-parse origin/feature/research-system-v01`
+> **候选池维护历史**：由 PR #34 引入；**实时稳定 HEAD**：`git rev-parse origin/feature/research-system-v01`
 > **仅描述仓库内已实现能力边界与外部候选差距；不包含密钥、持仓内容或代理敏感配置**
 > **维度拆分**：实现状态 ≠ 当前执行授权
 
@@ -65,10 +65,6 @@
 | `Vibe-Research-decision-feedback-hardening` | 需要复核 | 未授权 | 空目录残留；受 Windows 进程锁定；重启后重新确认为空再删除 |
 | `Vibe-Research-decision-trace-contract` | 已被稳定分支吸收 | 未授权 | PR #35 已合并；worktree 与残留目录均已回收 |
 | `Vibe-Research-trade-ledger-ui-git-backup-20260729-105111` | 需要复核 | 未授权 | Git 管理元数据/本地对象备份；价值未最终确认；**继续保留** |
-### 文档维护 worktree
-
-`Vibe-Research-product-backlog-docs` 用于 PR #34 文档审查与维护，
-不属于产品候选，不适用产品开发授权状态。
 
 ### 0.5 候选池（未授权、仅规划）
 

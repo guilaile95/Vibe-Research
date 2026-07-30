@@ -10,11 +10,10 @@
 | 主分支 | `feature/research-system-v01` |
 | 稳定功能基线 | PR #35 Merge SHA `f5f420662e3246f56d371e6020efa4de725679e9` |
 | 实时稳定 HEAD | 运行 `git rev-parse origin/feature/research-system-v01` |
-| 当前 Draft PR | #34 `docs/product-backlog-reconstruction`（文档候选，非稳定 HEAD） |
+| 产品候选池 | `docs/PRODUCT_BACKLOG.md`，由 PR #34 引入 |
 | 工作区 | 接手后请先 `git status` / `git rev-parse HEAD` 复核 |
 
 > 说明：拼写为 **guilaile95**（非 guiliale95）。
-> 不要把 PR #34 文档 Head 写成稳定分支 Head。
 
 ## 协作方式
 
@@ -71,13 +70,12 @@ Windows 环境缺少 `python3` 命令，实际错误为 `fake 退出码 9009`。
 
 **当前已授权产品任务：无。**
 
-## 本地目录（阶段 C 实际结果）
+## 本地目录（长期保留）
 
 | 目录 | 状态 |
 |---|---|
-| `product-backlog-docs` | PR #34 文档维护 worktree；保留等待审查 |
 | `visual-overhaul-20260729` | 活跃 worktree；本地实验；未提交 7 文件；**待用户决策** |
-| `decision-trace-contract` | PR #35 已合并；已回收，不再存在本地残留 |
 | `data-health-design` | worktree 已注销；本地仍含完整源码副本；继续保留 |
+| `decision-trace-contract` | PR #35 已合并；已回收，不再存在本地残留 |
 | `decision-feedback-hardening` | 空目录残留；受 Windows 锁定；重启后处理 |
 | `trade-ledger-ui-git-backup-20260729-105111` | 备份保留，价值未最终确认 |
