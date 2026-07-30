@@ -537,8 +537,30 @@ async function main() {
     assertDbArtifactsUnchanged(beforeDbArtifacts, afterFirstDbArtifacts, "after first list GET");
 
     // Hard assertions
-    if (!data || !Array.isArray(data.items) || data.items.length !== 12) {
-      throw new Error(`expected 12 items, got ${data?.items?.length}`);
+    if (!data || !Array.isArray(data.items) || data.items.length !== 13) {
+      throw new Error(`expected 13 items, got ${data?.items?.length}`);
+    }
+    // Assert the full expected source ID set (guards against silent source removal)
+    const expectedSourceIds = new Set([
+      "daily_review",
+      "portfolio_advice_gate",
+      "portfolio_quotes",
+      "quotes",
+      "announcements",
+      "financials",
+      "news_radar",
+      "sector_research",
+      "my_reports",
+      "watchlist_portfolio_storage",
+      "evidence_ledger",
+      "northbound_capital_flow",
+      "technical_indicators",
+    ]);
+    const actualSourceIds = new Set(data.items.map((i) => i.source_id));
+    for (const id of expectedSourceIds) {
+      if (!actualSourceIds.has(id)) {
+        throw new Error(`missing expected source_id: ${id}`);
+      }
     }
     if (data.overall_status !== "partial") {
       throw new Error(`overall expected partial, got ${data.overall_status}`);
@@ -645,6 +667,8 @@ async function main() {
       "我的研报",
       "自选股与持仓存储",
       "投资逻辑与证据账本",
+      "北向资金",
+      "技术指标",
     ];
     for (const name of sourceNames) {
       await page.getByText(name, { exact: false }).first().waitFor({ timeout: 10000 });

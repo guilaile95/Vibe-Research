@@ -77,11 +77,11 @@ test("rsiZoneLabel zones: >=70 high / <=30 low / between neutral / null", () => 
 test("triggerLines map triggers to messages and ignore empty", () => {
   const lines = triggerLines([
     { type: "sma_golden_cross", message: "检测到 SMA5 上穿 SMA10 的金叉", value: 1 },
-    { type: "volume_spike", message: "量比显著高于 20 日均量", value: 2.35 },
+    { type: "volume_spike", message: "5 日平均成交量超过 20 日平均成交量的 2 倍", value: 2.35 },
   ]);
   assert.deepEqual(lines, [
     "检测到 SMA5 上穿 SMA10 的金叉",
-    "量比显著高于 20 日均量",
+    "5 日平均成交量超过 20 日平均成交量的 2 倍",
   ]);
 
   assert.deepEqual(triggerLines([]), []);

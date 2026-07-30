@@ -246,7 +246,7 @@ def _bollinger(
 def _volume_ratio(
     volumes: list[float | None], short_n: int = 5, long_n: int = 20
 ) -> list[float | None]:
-    """量比 = SMA(vol, 5) / SMA(vol, 20)。"""
+    """5/20 日均量比 = SMA(vol, 5) / SMA(vol, 20)。"""
     sma_short = _sma(volumes, short_n)
     sma_long = _sma(volumes, long_n)
 
@@ -337,13 +337,13 @@ def _detect_triggers(
                     }
                 )
 
-    # 4. 量比触发
+    # 4. 5/20 日均量比触发
     vr = volume_ratio[idx] if idx < len(volume_ratio) else None
     if vr is not None and vr > 2.0:
         triggers.append(
             {
                 "type": "volume_spike",
-                "message": f"量比 {vr:.2f}，5 日均量显著高于 20 日均量",
+                "message": f"5 日平均成交量超过 20 日平均成交量的 2 倍（5/20 日均量比 {vr:.2f}）",
                 "value": vr,
             }
         )

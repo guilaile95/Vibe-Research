@@ -14,7 +14,7 @@ export function formatIndicator(v: number | null | undefined, digits = 2): strin
   return v.toFixed(digits);
 }
 
-/** 量比格式化：保留 2 位 + `x` 后缀（如 `2.35x`）；null / NaN → "—"。 */
+/** 5/20 日均量比格式化：保留 2 位 + `x` 后缀（如 `2.35x`）；null / NaN → "—"。 */
 export function formatVolumeRatio(v: number | null | undefined): string {
   if (typeof v !== "number" || !Number.isFinite(v)) return "—";
   return `${v.toFixed(2)}x`;

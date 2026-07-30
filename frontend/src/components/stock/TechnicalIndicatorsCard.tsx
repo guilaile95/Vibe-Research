@@ -153,7 +153,7 @@ export function TechnicalIndicatorsCard({ env, loading, error }: Props) {
     { k: "EMA12", v: formatPrice(latest.ema12) },
     { k: "EMA26", v: formatPrice(latest.ema26) },
     { k: "RSI14", v: formatIndicator(latest.rsi14), sub: rsi.text, subCls: rsi.cls },
-    { k: "量比", v: formatVolumeRatio(latest.volume_ratio_5_20) },
+    { k: "5/20 日均量比", v: formatVolumeRatio(latest.volume_ratio_5_20) },
   ];
 
   return (

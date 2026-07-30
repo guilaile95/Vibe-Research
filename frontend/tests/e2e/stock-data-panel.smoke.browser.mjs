@@ -332,6 +332,45 @@ function createApiMockController() {
       return;
     }
 
+    // 技术指标与价格触发：返回完整 normal envelope（覆盖默认 {data:{}} 兜底）
+    if (pathname.includes("/technical-indicators")) {
+      await route.fulfill(
+        jsonOk({
+          schema_version: "technical-indicators-v1",
+          code,
+          period: "daily",
+          trade_date: "2026-07-28",
+          fetched_at: "2026-07-28T10:00:00Z",
+          status: "normal",
+          warnings: [],
+          limitations: [],
+          latest: {
+            sma5: 11.2, sma10: 11.1, sma20: 11.0, sma60: 10.8,
+            ema12: 11.15, ema26: 10.95,
+            macd_dif: 0.12, macd_dea: 0.08, macd_histogram: 0.08,
+            rsi14: 55.0,
+            bollinger_upper: 11.5, bollinger_middle: 11.0, bollinger_lower: 10.5,
+            volume_ratio_5_20: 1.2,
+          },
+          triggers: [
+            { type: "volume_spike", message: "5 日平均成交量超过 20 日平均成交量的 2 倍", value: 2.1 },
+          ],
+          series: [
+            { date: "2026-07-20", sma20: 10.9, sma60: 10.7 },
+            { date: "2026-07-21", sma20: 10.92, sma60: 10.71 },
+            { date: "2026-07-22", sma20: 10.94, sma60: 10.72 },
+            { date: "2026-07-23", sma20: 10.96, sma60: 10.73 },
+            { date: "2026-07-24", sma20: 10.98, sma60: 10.74 },
+            { date: "2026-07-25", sma20: 11.0, sma60: 10.75 },
+            { date: "2026-07-26", sma20: 11.0, sma60: 10.76 },
+            { date: "2026-07-27", sma20: 11.0, sma60: 10.77 },
+            { date: "2026-07-28", sma20: 11.0, sma60: 10.8 },
+          ],
+        }),
+      );
+      return;
+    }
+
     if (pathname.includes("/disclosure")) {
       await route.fulfill(
         jsonOk([{ date: "2026-07-01", title: "巨潮公告示例", url: "https://example.com" }]),
@@ -457,6 +496,17 @@ async function runSmoke(page, mock, errors) {
   const ext = page.getByText("扩展数据（可选依赖 · 按需加载）");
   if (!(await ext.isVisible().catch(() => false))) {
     errors.push(`${label}: 扩展数据 section not visible after query`);
+  }
+
+  // 技术指标接口必须已请求（独立 fetch，不阻塞主数据渲染）
+  await sleep(500);
+  const tiHeading = page.getByText("技术指标").first();
+  if (!(await tiHeading.isVisible().catch(() => false))) {
+    errors.push(`${label}: 技术指标 card heading not visible after query`);
+  }
+  // 主页面标题不受技术指标影响
+  if (!(await page.getByRole("heading", { name: "平安银行" }).isVisible().catch(() => false))) {
+    errors.push(`${label}: 平安银行 header hidden (TI fetch broke main page)`);
   }
 
   // 2) Change input to 000002 without clicking query
