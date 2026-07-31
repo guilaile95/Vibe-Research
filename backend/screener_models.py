@@ -12,6 +12,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SCHEMA_VERSION = "screener-v0.1"
+SOURCES_SCHEMA_VERSION = "screener-sources-v0.1"
 MAX_CODES = 30
 MIN_CODES = 1
 MAX_CONDITIONS = 20
@@ -225,6 +226,14 @@ class ScreenerEvaluateOut(_StrictModel):
     unavailable: list[StockResultOut]
     limitations: list[str] = Field(default_factory=list)
     schema_version: Literal["screener-v0.1"] = SCHEMA_VERSION
+
+
+class SectorRepresentativesOut(_StrictModel):
+    """Read-only sector representative code list — no signals, scores, or research URLs."""
+
+    codes: list[str]
+    count: int
+    schema_version: Literal["screener-sources-v0.1"] = SOURCES_SCHEMA_VERSION
 
 
 # Forbidden top-level / nested keys (asserted in tests)

@@ -68,6 +68,9 @@ test("loadSourceCodes: source path may truncate with explicit hint", () => {
   assert.equal(loaded.codes.length, 30);
   assert.ok(loaded.hint.includes("来源共有 103 个代码"));
   assert.ok(loaded.hint.includes("本次载入前 30 个"));
+  // First 30 ascending after normalize
+  assert.equal(loaded.codes[0], "000001");
+  assert.equal(loaded.codes[29], "000030");
 });
 
 test("buildEvaluatePayload condition construction", () => {

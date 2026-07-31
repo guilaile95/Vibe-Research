@@ -149,6 +149,7 @@ async function main() {
 
   let postCount = 0;
   let failOnce = false;
+  let sectorRepsFail = false;
 
   await page.route("**/api/**", async (route) => {
     const req = route.request();
@@ -190,12 +191,24 @@ async function main() {
       return;
     }
     if (url.includes("/api/screener/sources/sector-representatives")) {
+      if (sectorRepsFail) {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "读取板块代表公司失败" }),
+        });
+        return;
+      }
       // Mock authoritative backend list (not frontend text scrape)
       const codes = Array.from({ length: 103 }, (_, i) => String(i + 1).padStart(6, "0"));
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ codes, count: codes.length }),
+        body: JSON.stringify({
+          codes,
+          count: codes.length,
+          schema_version: "screener-sources-v0.1",
+        }),
       });
       return;
     }
@@ -228,10 +241,60 @@ async function main() {
     }
     console.log("✓ 31 raw / 30 unique shows 30/30 and enables run");
 
-    // Enter codes for main flow
+    // --- Load-hint lifecycle: sector load → truncate hint → clear on edit/run ---
+    await page.locator("button:has-text('从板块代表载入')").click();
+    await page.waitForSelector("text=来源共有 103 个代码，本次载入前 30 个");
+    console.log("✓ sector load shows truncate hint");
+
+    await page.locator("textarea").fill("000001 600519");
+    await sleep(100);
+    if ((await page.locator("text=来源共有 103 个代码").count()) !== 0) {
+      throw new Error("load hint must clear after manual code edit");
+    }
+    console.log("✓ manual edit clears load hint");
+
+    await page.locator("button:has-text('从板块代表载入')").click();
+    await page.waitForSelector("text=来源共有 103 个代码，本次载入前 30 个");
+    await page.locator("button:has-text('添加条件')").click();
+    await sleep(100);
+    if ((await page.locator("text=来源共有 103 个代码").count()) !== 0) {
+      throw new Error("load hint must clear after add condition");
+    }
+    console.log("✓ add condition clears load hint");
+
+    // Remove extra condition if added (rsi_between) so default stays simple
+    const trashBtns = page.locator("button[aria-label^='删除条件']");
+    if ((await trashBtns.count()) > 1) {
+      await trashBtns.last().click();
+    }
+
+    await page.locator("button:has-text('从板块代表载入')").click();
+    await page.waitForSelector("text=来源共有 103 个代码，本次载入前 30 个");
+    // Sector fail must not wipe codes
+    const codesBeforeFail = await page.locator("textarea").inputValue();
+    sectorRepsFail = true;
+    await page.locator("button:has-text('从板块代表载入')").click();
+    await page.waitForSelector("text=载入板块代表失败");
+    const codesAfterFail = await page.locator("textarea").inputValue();
+    if (codesAfterFail !== codesBeforeFail) {
+      throw new Error("codes draft must be preserved on sector load failure");
+    }
+    sectorRepsFail = false;
+    console.log("✓ sector load failure keeps codes and shows fixed error");
+
+    // Reload success then clear on run
+    await page.locator("button:has-text('从板块代表载入')").click();
+    await page.waitForSelector("text=来源共有 103 个代码，本次载入前 30 个");
+    // Use three codes for main flow
     await page.locator("textarea").fill("000001 600519 000002");
+    // Enter codes for main flow
     // default condition price_gt_sma20 already present
     await page.locator("button:has-text('运行筛选')").click();
+    await sleep(150);
+    if ((await page.locator("text=来源共有 103 个代码").count()) !== 0) {
+      throw new Error("load hint must clear after run");
+    }
+    console.log("✓ run clears load hint");
 
     await page.waitForSelector("text=命中");
     await page.waitForSelector("text=000001");

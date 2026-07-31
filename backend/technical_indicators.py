@@ -16,6 +16,9 @@ from datetime import date, datetime, time, timezone
 SCHEMA_VERSION = "technical-indicators-v0.1"
 MAX_SERIES_POINTS = 60
 
+# Public stable prefix for incomplete 20d high/low window (consumed by screener)
+PRICE_RANGE_TRIGGER_UNAVAILABLE_PREFIX = "价格区间触发不可评估"
+
 
 # ---------------------------------------------------------------------------
 # 工具函数
@@ -478,7 +481,9 @@ def _compute_indicators_inner(
         if not has_volume_ratio:
             limitations.append("成交量历史不足，5/20 日均量比不可用")
         if not trigger_window_complete:
-            limitations.append("价格区间触发不可评估：过去 20 个交易日的 high/low 数据不完整")
+            limitations.append(
+                f"{PRICE_RANGE_TRIGGER_UNAVAILABLE_PREFIX}：过去 20 个交易日的 high/low 数据不完整"
+            )
         if not has_sma_cross_history:
             limitations.append("均线交叉不可评估：缺少前一交易日 SMA60")
     else:

@@ -224,6 +224,7 @@ export interface ScreenerEvaluateResult {
 export interface ScreenerSectorRepresentativesResult {
   codes: string[];
   count: number;
+  schema_version: "screener-sources-v0.1";
 }
 
 

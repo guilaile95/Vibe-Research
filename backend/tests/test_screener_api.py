@@ -325,14 +325,48 @@ def test_nan_infinity_422():
 
 
 def test_sector_representatives_endpoint():
+    import sector_research_data as srd
+
     r = client.get("/api/screener/sources/sector-representatives")
     assert r.status_code == 200
     data = r.json()
+    assert data.get("schema_version") == "screener-sources-v0.1"
     assert "codes" in data and "count" in data
     assert data["count"] == len(data["codes"])
-    assert data["count"] == 103
     assert data["codes"] == sorted(data["codes"])
     assert all(isinstance(c, str) and len(c) == 6 and c.isdigit() for c in data["codes"])
+    # Uniqueness
+    assert len(data["codes"]) == len(set(data["codes"]))
+
+    # Expected only from public sector_research_data getters — never SourceRef parsing
+    expected: list[str] = []
+    seen: set[str] = set()
+    for key in srd.list_sector_source_keys():
+        src = srd.get_sector_source(key)
+        assert src is not None
+        for raw in src.representative_company_codes or []:
+            code = str(raw).strip()
+            if code.isdigit() and len(code) == 6 and code not in seen:
+                seen.add(code)
+                expected.append(code)
+    expected.sort()
+    assert data["codes"] == expected
+    assert data["count"] == 103
+
+    # Must include known representatives
+    for code in ("002463", "002916", "300476"):
+        assert code in data["codes"]
+
+    # Must exclude known false-positives from frontend text scrape era
+    for code in ("002036", "002466", "600549", "600741", "600862", "601126", "688070"):
+        assert code not in data["codes"]
+
+    # No forbidden research/trade fields
+    for forbidden in (
+        "buy", "sell", "score", "weight", "url", "sources", "holdings",
+        "signal", "expected_return", "target_position",
+    ):
+        assert forbidden not in data
 
 
 def test_determinism_excluding_evaluated_at(monkeypatch):

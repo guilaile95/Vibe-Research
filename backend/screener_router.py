@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 import screener_service as svc
-from screener_models import ScreenerEvaluateIn
+from screener_models import ScreenerEvaluateIn, SectorRepresentativesOut
 
 router = APIRouter(prefix="/api/screener", tags=["screener"])
 
@@ -24,12 +24,12 @@ def evaluate_screener_endpoint(body: ScreenerEvaluateIn):
         )
 
 
-@router.get("/sources/sector-representatives")
+@router.get("/sources/sector-representatives", response_model=SectorRepresentativesOut)
 def sector_representatives_endpoint():
     """Read-only list of sector representative codes (authoritative backend registry)."""
     try:
         codes = svc.list_sector_representative_codes()
-        return {"codes": codes, "count": len(codes)}
+        return SectorRepresentativesOut(codes=codes, count=len(codes))
     except Exception:
         return JSONResponse(
             status_code=500,

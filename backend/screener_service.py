@@ -30,14 +30,11 @@ _MAX_WORKERS = 4
 _TRIGGER_BREAKOUT = "close_above_20d_high"
 _TRIGGER_BREAKDOWN = "close_below_20d_low"
 
-# Prefix from technical_indicators when 20d high/low window is incomplete
-_PRICE_RANGE_LIMITATION_PREFIX = "价格区间触发不可评估"
-
-
 def _price_range_trigger_unevaluable(envelope: dict) -> bool:
     """True when compute_indicators reports incomplete high/low window for range triggers."""
+    prefix = ti.PRICE_RANGE_TRIGGER_UNAVAILABLE_PREFIX
     for lim in envelope.get("limitations") or []:
-        if isinstance(lim, str) and lim.startswith(_PRICE_RANGE_LIMITATION_PREFIX):
+        if isinstance(lim, str) and lim.startswith(prefix):
             return True
     return False
 

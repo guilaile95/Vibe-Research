@@ -149,38 +149,40 @@ export function Screener() {
     setError(null);
   }, []);
 
+  const clearLoadHint = useCallback(() => setLoadHint(null), []);
+
   const loadWatchlist = async () => {
-    setLoadHint(null);
     try {
       const w = await loadWatchAuthoritative();
       applySourceLoad(w.codes || []);
-    } catch (e) {
-      setLoadHint(e instanceof ApiError ? e.message : "载入自选股失败");
+    } catch {
+      // Clear prior success hint; keep codes draft
+      setLoadHint("载入自选股失败");
     }
   };
 
   const loadHoldings = async () => {
-    setLoadHint(null);
     try {
       const pf = await api.portfolio();
       const hs = (pf?.holdings || []).map((h) => h.code).filter(Boolean);
       applySourceLoad(hs);
-    } catch (e) {
-      setLoadHint(e instanceof ApiError ? e.message : "载入持仓失败");
+    } catch {
+      setLoadHint("载入持仓失败");
     }
   };
 
   const loadSectorReps = async () => {
-    setLoadHint(null);
     try {
       const res = await api.getScreenerSectorRepresentatives();
       applySourceLoad(res.codes || []);
-    } catch (e) {
-      setLoadHint(e instanceof ApiError ? e.message : "载入板块代表失败");
+    } catch {
+      // Must not modify codes draft; replace success hint with fixed error
+      setLoadHint("载入板块代表失败");
     }
   };
 
   const addCondition = () => {
+    clearLoadHint();
     if (conditions.some((c) => c.id === addId)) {
       setError("条件 id 不能重复");
       return;
@@ -194,16 +196,19 @@ export function Screener() {
   };
 
   const removeCondition = (id: string) => {
+    clearLoadHint();
     setConditions((cs) => cs.filter((c) => c.id !== id));
   };
 
   const updateConditionParams = (id: string, patch: Record<string, number>) => {
+    clearLoadHint();
     setConditions((cs) =>
       cs.map((c) => (c.id === id ? { ...c, params: { ...c.params, ...patch } } : c)),
     );
   };
 
   const run = async () => {
+    clearLoadHint();
     // Direct input overflow / invalid draft: block POST (no silent truncate)
     if (draftError) {
       setError(draftError);
@@ -270,12 +275,24 @@ export function Screener() {
         </div>
         <textarea
           value={codeText}
-          onChange={(e) => setCodeText(e.target.value)}
+          onChange={(e) => {
+            clearLoadHint();
+            setCodeText(e.target.value);
+          }}
           rows={3}
           placeholder="粘贴六位代码，空格/逗号/换行分隔，例如 000001 600519"
           className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none focus:ring-1 focus:ring-primary"
         />
-        {loadHint && <p className="text-xs text-muted-foreground">{loadHint}</p>}
+        {loadHint && (
+          <p
+            className={cn(
+              "text-xs",
+              loadHint.includes("失败") ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {loadHint}
+          </p>
+        )}
       </GlassCard>
 
       <GlassCard className="space-y-3 p-4">
@@ -333,7 +350,10 @@ export function Screener() {
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={addId}
-            onChange={(e) => setAddId(e.target.value as ScreenerConditionId)}
+            onChange={(e) => {
+              clearLoadHint();
+              setAddId(e.target.value as ScreenerConditionId);
+            }}
             className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
           >
             {CONDITION_CATALOG.map((c) => (

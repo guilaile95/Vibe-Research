@@ -123,15 +123,62 @@ def test_breakdown_uses_exact_trigger_key():
 
 def test_breakout_unevaluable_when_price_range_limitation():
     """partial + incomplete high/low + no trigger → unevaluable → unavailable if sole cond."""
+    import technical_indicators as ti
+
     env = _envelope(
         status="partial",
         triggers=[],
-        limitations=["价格区间触发不可评估：过去 20 个交易日的 high/low 数据不完整"],
+        limitations=[
+            f"{ti.PRICE_RANGE_TRIGGER_UNAVAILABLE_PREFIX}：过去 20 个交易日的 high/low 数据不完整"
+        ],
     )
     r = svc.evaluate_condition(CondBreakout20dHigh(id="breakout_20d_high"), env)
     assert r["evaluable"] is False
     assert r["passed"] is None
     assert svc.classify_stock([r], "partial") == "unavailable"
+
+
+def test_cross_module_price_range_limitation_contract():
+    """technical_indicators limitation text must be recognized by screener via shared constant."""
+    from datetime import date, timedelta
+
+    import technical_indicators as ti
+
+    # Shared constant is public and non-empty
+    assert ti.PRICE_RANGE_TRIGGER_UNAVAILABLE_PREFIX
+    assert not hasattr(svc, "_PRICE_RANGE_LIMITATION_PREFIX")  # no local hardcode
+
+    # Real compute_indicators path produces the prefix when high/low incomplete
+    # ≥20 bars with missing high/low inside prior-20 window
+    bars = []
+    base = date(2026, 6, 1)
+    for i in range(25):
+        bars.append(
+            {
+                "datetime": (base + timedelta(days=i)).isoformat(),
+                "close": 10.0 + i * 0.01,
+                "high": None if i >= 15 else 11.0,  # last 10 bars missing high
+                "low": None if i >= 15 else 9.0,
+                "volume": 1000.0,
+            }
+        )
+    env = ti.compute_indicators(
+        bars,
+        code="000001",
+        period="daily",
+        days=120,
+        trade_date=None,
+        fetched_at="2026-07-31T00:00:00Z",
+    )
+    lims = env.get("limitations") or []
+    assert any(
+        isinstance(x, str) and x.startswith(ti.PRICE_RANGE_TRIGGER_UNAVAILABLE_PREFIX)
+        for x in lims
+    ), lims
+    # Screener must treat as unevaluable
+    r = svc.evaluate_condition(CondBreakout20dHigh(id="breakout_20d_high"), env)
+    assert r["evaluable"] is False
+    assert r["passed"] is None
 
 
 def test_breakout_evaluable_false_when_partial_unrelated_to_price_range():
