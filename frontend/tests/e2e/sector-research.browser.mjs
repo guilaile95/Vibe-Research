@@ -409,12 +409,32 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
     errors.push(`${label}: second tag "${secondTag.label}" not visible for reload test`);
   }
 
-  // Return to overview for screenshot & dynamic/discovery tests
-  const overviewLink = page.getByRole("link", { name: "总览" }).first();
-  if (await overviewLink.isVisible().catch(() => false)) {
-    await overviewLink.click({ timeout: 15000 });
+  // Return to overview for screenshot & dynamic/discovery tests.
+  // Use the sector's authoritative first tag label (may be "总览" or "overview").
+  // goto is only a recovery path after recording the missing-entry failure.
+  const overviewTag = tags[0];
+  const overviewLinks = page.getByRole("link", { name: overviewTag.label });
+  const overviewLinkCount = await overviewLinks.count();
+  let visibleOverviewLink = null;
+  for (let i = 0; i < overviewLinkCount; i++) {
+    const candidate = overviewLinks.nth(i);
+    if (await candidate.isVisible().catch(() => false)) {
+      visibleOverviewLink = candidate;
+      break;
+    }
+  }
+  if (visibleOverviewLink) {
+    await visibleOverviewLink.click({ timeout: 15000 });
     await page.waitForLoadState("networkidle");
+    if (!page.url().includes(`/sectors/${sectorKey}/overview`)) {
+      errors.push(
+        `${label}: overview tag "${overviewTag.label}" click did not reach /overview, URL: ${page.url()}`,
+      );
+    }
   } else {
+    errors.push(
+      `${label}: overview tag "${overviewTag.label}" not visible for return navigation`,
+    );
     await page.goto(`http://127.0.0.1:${frontendPort}/sectors/${sectorKey}/overview`, {
       waitUntil: "networkidle",
     });
@@ -469,19 +489,51 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
       if (barCount !== 3) {
         errors.push(`${label}: expected 3 capital flow bars from fixture, got ${barCount}`);
       }
-      const signs = [];
-      for (let i = 0; i < barCount; i++) {
-        signs.push(await bars.nth(i).getAttribute("data-sign"));
+      // Fixture: 2026-07-28 +1e6, 2026-07-29 -5e5, 2026-07-30 0
+      // formatCapitalFlowAmount: +100.0万 / -50.00万 / 0
+      const signs = await bars.evaluateAll((nodes) =>
+        nodes.map((node) => node.getAttribute("data-sign")),
+      );
+      for (const expectedSign of ["pos", "neg", "zero"]) {
+        if (!signs.includes(expectedSign)) {
+          errors.push(
+            `${label}: expected data-sign "${expectedSign}" among bars, signs=${signs.join(",")}`,
+          );
+        }
       }
-      if (!signs.includes("pos") || !signs.includes("neg")) {
-        errors.push(`${label}: expected both positive and negative bars, signs=${signs.join(",")}`);
-      }
-      // Tooltip/title on first bar
-      if (barCount > 0) {
-        const titleEl = bars.first().locator("title");
-        const tip = (await titleEl.textContent().catch(() => "")) || "";
-        if (!tip.includes("2026-07-") || !tip.includes("覆盖")) {
-          errors.push(`${label}: bar title missing date/coverage: ${tip}`);
+      const expectedTitles = [
+        "2026-07-28\n主力净流入合计 +100.0万\n当日覆盖 1/1 家",
+        "2026-07-29\n主力净流入合计 -50.00万\n当日覆盖 1/1 家",
+        "2026-07-30\n主力净流入合计 0\n当日覆盖 1/1 家",
+      ];
+      const titleChecks = [
+        {
+          date: "2026-07-28",
+          amount: "主力净流入合计 +100.0万",
+          coverage: "当日覆盖 1/1 家",
+        },
+        {
+          date: "2026-07-29",
+          amount: "主力净流入合计 -50.00万",
+          coverage: "当日覆盖 1/1 家",
+        },
+        {
+          date: "2026-07-30",
+          amount: "主力净流入合计 0",
+          coverage: "当日覆盖 1/1 家",
+        },
+      ];
+      for (let i = 0; i < Math.min(barCount, expectedTitles.length); i++) {
+        const tip = (await bars.nth(i).locator("title").textContent().catch(() => "")) || "";
+        const expected = expectedTitles[i];
+        const check = titleChecks[i];
+        const hasDate = tip.includes(check.date);
+        const hasAmount = tip.includes(check.amount);
+        const hasCoverage = tip.includes(check.coverage);
+        if (!hasDate || !hasAmount || !hasCoverage || tip.trim() !== expected) {
+          errors.push(
+            `${label}: bar[${i}] title mismatch (expected exact tooltip with date/amount/coverage). got=${JSON.stringify(tip)} expected=${JSON.stringify(expected)}`,
+          );
         }
       }
     }
