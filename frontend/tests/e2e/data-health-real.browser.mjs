@@ -536,31 +536,37 @@ async function main() {
     const afterFirstDbArtifacts = snapshotDbArtifacts(evidenceDb);
     assertDbArtifactsUnchanged(beforeDbArtifacts, afterFirstDbArtifacts, "after first list GET");
 
-    // Hard assertions
-    if (!data || !Array.isArray(data.items) || data.items.length !== 13) {
-      throw new Error(`expected 13 items, got ${data?.items?.length}`);
+    // Hard assertions: source ID set must be exact, complete, and unique.
+    if (!data || !Array.isArray(data.items)) {
+      throw new Error(`expected array, got ${typeof data?.items}`);
     }
-    // Assert the full expected source ID set (guards against silent source removal)
-    const expectedSourceIds = new Set([
+    const expectedSourceIds = [
+      "announcements",
       "daily_review",
+      "evidence_ledger",
+      "financials",
+      "my_reports",
+      "news_radar",
+      "northbound_capital_flow",
       "portfolio_advice_gate",
       "portfolio_quotes",
       "quotes",
-      "announcements",
-      "financials",
-      "news_radar",
       "sector_research",
-      "my_reports",
-      "watchlist_portfolio_storage",
-      "evidence_ledger",
-      "northbound_capital_flow",
       "technical_indicators",
-    ]);
-    const actualSourceIds = new Set(data.items.map((i) => i.source_id));
-    for (const id of expectedSourceIds) {
-      if (!actualSourceIds.has(id)) {
-        throw new Error(`missing expected source_id: ${id}`);
-      }
+      "top_risk_analysis",
+      "watchlist_portfolio_storage",
+    ];
+    const actualSourceIds = data.items.map((i) => i.source_id).sort();
+    const actualSourceIdSet = new Set(actualSourceIds);
+    if (actualSourceIdSet.size !== data.items.length) {
+      throw new Error(
+        `duplicate source IDs: expected unique ${expectedSourceIds.join(",")}; found ${actualSourceIds.join(",")}`,
+      );
+    }
+    if (JSON.stringify(actualSourceIds) !== JSON.stringify(expectedSourceIds)) {
+      throw new Error(
+        `source ID mismatch: expected ${expectedSourceIds.join(",")}; found ${actualSourceIds.join(",")}`,
+      );
     }
     if (data.overall_status !== "partial") {
       throw new Error(`overall expected partial, got ${data.overall_status}`);
@@ -669,6 +675,7 @@ async function main() {
       "投资逻辑与证据账本",
       "北向资金",
       "技术指标",
+      "顶部风险分析",
     ];
     for (const name of sourceNames) {
       await page.getByText(name, { exact: false }).first().waitFor({ timeout: 10000 });

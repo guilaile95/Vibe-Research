@@ -541,6 +541,15 @@ class NorthboundCapitalFlowAdapter(EventSourceAdapter):
     stale_after_seconds = 86400
     calendar_type = "CN_MARKET_CONSERVATIVE"
     detail_path = "/daily-review"
+
+
+class TopRiskAnalysisAdapter(EventSourceAdapter):
+    source_id = "top_risk_analysis"
+    module = "顶部风险分析"
+    display_name = "顶部风险分析"
+    stale_after_seconds = 86400
+    calendar_type = "CN_MARKET_CONSERVATIVE"
+    detail_path = "/stock-data"
     force_null_coverage = True
 
 
@@ -1076,6 +1085,7 @@ def build_adapters() -> list[DataHealthAdapter]:
         EvidenceLedgerAdapter(),
         NorthboundCapitalFlowAdapter(),
         TechnicalIndicatorsAdapter(),
+        TopRiskAnalysisAdapter(),
     ]
 
 

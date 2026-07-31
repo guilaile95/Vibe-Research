@@ -28,6 +28,7 @@ EVENT_SOURCE_IDS = frozenset({
     "sector_research",
     "northbound_capital_flow",
     "technical_indicators",
+    "top_risk_analysis",
 })
 
 GATE_BUSINESS_CODES = frozenset({

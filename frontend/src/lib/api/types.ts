@@ -1006,6 +1006,67 @@ export interface TechnicalIndicators {
   triggers: TechnicalIndicatorTrigger[];
   series: TechnicalIndicatorSeriesPoint[];
 }
+// 顶部风险分析（GET /api/market/top-risk，影子模式 Phase 1）
+// 契约与 backend top_risk_schema.TopRiskEnvelope 对齐
+// ---------------------------------------------------------------------------
+
+export type TopRiskStatus = "normal" | "partial" | "unavailable";
+
+export type TopRiskDirection = "RISK" | "SAFE" | "NEUTRAL";
+
+export type TopRiskLimitation = {
+  field: string;
+  reason_code: string;
+  detail: string;
+};
+
+export type TopRiskStepTrace = {
+  step_id: string;
+  label: string;
+  direction: TopRiskDirection | string;
+  weight: number;
+  step_risk: number;
+  confidence: number;
+  skipped: boolean;
+  skip_reason?: string | null;
+  reasons: string[];
+  details: Record<string, unknown>;
+};
+
+export type TopRiskData = {
+  name?: string | null;
+  completed_steps: number;
+  total_steps: number;
+  risk_drivers: string[];
+  safety_signals: string[];
+  narrative?: string | null;
+};
+
+export type TopRiskAnalysis = {
+  schema_version: string;
+  source: string;
+  source_tier: string;
+  code: string;
+  name?: string | null;
+  trade_date?: string | null;
+  fetched_at: string;
+  status: TopRiskStatus | string;
+  is_stale: boolean;
+  risk_score: number | null;
+  confidence: number | null;
+  coverage: { completed: number; total: number; ratio: number } | null;
+  signal: string;
+  signal_eligible: boolean;
+  /** 影子模式接入主项目决策追踪层：决策运行 id（unavailable 时为 null） */
+  config_hash?: string | null;
+  decision_run_id?: string | null;
+  /** archived=已归档 / failed=归档异常（不影响分析） / skipped=unavailable 明确不归档 */
+  trace_archive_status?: "archived" | "failed" | "skipped" | string | null;
+  warnings: string[];
+  limitations: TopRiskLimitation[];
+  data: TopRiskData | null;
+  trace: TopRiskStepTrace[];
+};
 
 
 // ---------------------------------------------------------------------------

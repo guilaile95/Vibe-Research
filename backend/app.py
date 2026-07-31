@@ -44,6 +44,7 @@ import review_compare
 import review_history
 import sector_research_data as srd
 import northbound_capital_flow as ncf
+import top_risk_service as trs
 import watchlist_store
 import evidence_thesis_router
 import data_health_router
@@ -800,6 +801,32 @@ def market_northbound():
         pass
 
     return {"data": data}
+
+
+@app.get("/api/market/top-risk")
+def market_top_risk(
+    code: str = Query(..., min_length=1, max_length=16, description="6 位股票代码"),
+    days: int = Query(120, ge=10, le=800, description="回看交易日数"),
+):
+    """顶部风险分析（影子模式，第一版）。
+
+    - 正常 / 部分 / 不可用 → 均返回 HTTP 200，状态以 body.data.status 为准；
+    - signal 恒为 unknown，signal_eligible 恒为 False（不改最终交易结论 / 仓位）；
+    - 上游失败不抛 5xx，降级为 unavailable 信封（fail-closed）。
+    """
+    code = (code or "").strip()
+    if not code:
+        raise HTTPException(400, "code 不能为空")
+    try:
+        env = trs.analyze_top_risk(code, days)
+    except Exception:  # noqa: BLE001 — 不应发生，仍兜底为不可用（通过公开函数）
+        env = trs.attach_trace_and_archive(
+            trs.unavailable_envelope(
+                code,
+                [{"field": "service", "reason_code": "UPSTREAM_UNAVAILABLE", "detail": "顶部风险服务当前不可用。"}],
+            )
+        )
+    return {"data": env.model_dump()}
 
 
 # ---------------------------------------------------------------------------

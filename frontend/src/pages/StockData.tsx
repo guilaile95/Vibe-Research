@@ -10,6 +10,7 @@ import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
 import { OptionalDataPanel } from "@/components/ui/OptionalDataPanel";
 import { StockThesisPanel } from "@/components/stock/StockThesisPanel";
 import { TechnicalIndicatorsCard } from "@/components/stock/TechnicalIndicatorsCard";
+import { TopRiskAnalysisCard } from "@/components/market/TopRiskAnalysisCard";
 import {
   type PanelId,
   type PanelStates,
@@ -26,7 +27,7 @@ import {
   api, ApiError, type Valuation, type Report, type NewsItem, type ValPercentile, type ValMetric,
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
   type DividendRow, type FundFlowRow, type DragonTiger, type Lockup, type Blocks, type HotConcept, type QaRow,
-  type GlobalStock, type KlineBar, type DisclosureItem, type TechnicalIndicators,
+  type GlobalStock, type KlineBar, type DisclosureItem, type TechnicalIndicators, type TopRiskAnalysis,
 } from "@/lib/api";
 import { indicatorErrorMessage } from "@/lib/technicalIndicatorsView";
 import { cn } from "@/lib/utils";
@@ -127,6 +128,9 @@ export function StockData() {
   const [infoErr, setInfoErr] = useState<string | null>(null);
   const [disc, setDisc] = useState<DisclosureItem[]>([]);
   const [discErr, setDiscErr] = useState<string | null>(null);
+  const [topRisk, setTopRisk] = useState<TopRiskAnalysis | null>(null);
+  const [topRiskErr, setTopRiskErr] = useState<string | null>(null);
+  const [topRiskLoading, setTopRiskLoading] = useState(false);
   const [panelStates, setPanelStates] = useState<PanelStates>(() => createInitialPanelStates());
   // 技术指标与价格触发（独立 fetch，与 K 线面板解耦）
   const [tiEnv, setTiEnv] = useState<TechnicalIndicators | null>(null);
@@ -339,6 +343,15 @@ export function StockData() {
     api.blocks(c).then(ok(setBlocks)).catch(() => {});
     api.hotConcepts(c).then(ok(setHotCon)).catch(() => {});
     api.investorQa(c).then(ok(setQa)).catch(() => {});
+    // 顶部风险（影子模式）：独立加载/错误，不影响主页面数据
+    setTopRiskLoading(true);
+    setTopRiskErr(null);
+    setTopRisk(null);
+    api.topRisk(c).then(ok(setTopRisk)).catch((e) => {
+      if (rid === runIdRef.current) setTopRiskErr(e instanceof ApiError ? e.message : "顶部风险分析失败");
+    }).finally(() => {
+      if (rid === runIdRef.current) setTopRiskLoading(false);
+    });
     // K 线 / 季报财务 / 基本面 / 巨潮公告：均为可选依赖，改为按需展开加载（避免每次查询都发 501）
     try {
       // 行情+估值+研报+历史分位+财务+公告（新闻单独降级）
@@ -522,6 +535,8 @@ export function StockData() {
               <p className="mt-3 text-xs text-warning">{val.forecast_note}</p>
             )}
           </GlassCard>
+
+          <TopRiskAnalysisCard env={topRisk} loading={topRiskLoading} error={topRiskErr} />
 
           <EarningsSnapshot val={val} fin={fin} pctl={pctl} />
 

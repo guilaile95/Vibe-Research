@@ -50,6 +50,7 @@ SOURCE_REGISTRY: list[dict[str, str]] = [
     {"source_id": "evidence_ledger", "module": "证据账本", "display_name": "投资逻辑与证据账本"},
     {"source_id": "northbound_capital_flow", "module": "北向资金", "display_name": "北向资金"},
     {"source_id": "technical_indicators", "module": "技术指标", "display_name": "技术指标"},
+    {"source_id": "top_risk_analysis", "module": "顶部风险分析", "display_name": "顶部风险分析"},
 ]
 
 REGISTERED_SOURCE_IDS = frozenset(s["source_id"] for s in SOURCE_REGISTRY)
@@ -701,6 +702,12 @@ SOURCE_CALCULATION: dict[str, dict[str, Any]] = {
         "calendar_type": "CN_MARKET_CONSERVATIVE",
         "rule_summary": "按 mootdx 日 K 线与 A 股交易日判断 stale。",
     },
+    "top_risk_analysis": {
+        "quality_basis": ["top_risk engine envelope status (normal/partial/unavailable)"],
+        "freshness_basis": "trade_date and CN trading calendar rule",
+        "calendar_type": "CN_MARKET_CONSERVATIVE",
+        "rule_summary": "按顶部风险引擎 envelope 状态判断：normal=健康，partial=部分数据缺失，unavailable=数据不足。",
+    },
 }
 
 SOURCE_RELATED_PAGES: dict[str, list[dict[str, str]]] = {
@@ -723,4 +730,5 @@ SOURCE_RELATED_PAGES: dict[str, list[dict[str, str]]] = {
     ],
     "northbound_capital_flow": [{"label": "每日复盘", "path": "/daily-review"}],
     "technical_indicators": [{"label": "个股详情", "path": "/stock-data"}],
+    "top_risk_analysis": [{"label": "查看个股数据", "path": "/stock-data"}],
 }
