@@ -151,8 +151,19 @@ def _e2e_get_cached_discovery(sector_key: str, external_id: str):
     return _original_get_cached_discovery(sector_key, external_id)
 
 
+def _fake_stock_fund_flow_120d(code: str):
+    """Fixed multi-day fund-flow for chart E2E: positive, negative, zero days."""
+    # Three deterministic dates shared by all codes so aggregate is stable
+    return [
+        {"date": "2026-07-28", "main_net": 1_000_000.0},   # positive
+        {"date": "2026-07-29", "main_net": -500_000.0},    # negative
+        {"date": "2026-07-30", "main_net": 0.0},           # zero
+    ]
+
+
 # Monkeypatch external IO before uvicorn serves traffic.
 srd.discover_sector_reports = _fake_discover  # type: ignore[assignment]
 srd.get_sector_dynamic_data = _fake_dynamic  # type: ignore[assignment]
 app_module._download_pdf = _fake_download_pdf  # type: ignore[assignment]
 app_module._get_cached_discovery = _e2e_get_cached_discovery  # type: ignore[assignment]
+app_module.astock.stock_fund_flow_120d = _fake_stock_fund_flow_120d  # type: ignore[assignment]

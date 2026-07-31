@@ -200,6 +200,15 @@ jobs:
           VIBE_RESEARCH_EVIDENCE_THESIS_DB: ${{ runner.temp }}/vr-dh-evidence.db
         run: npm run test:e2e:data-health
 
+      - name: Run sector research real E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+          VR_DATA_DIR: ${{ runner.temp }}/vr-sector-data
+          VR_REPORTS_DIR: ${{ runner.temp }}/vr-sector-reports
+          VIBE_RESEARCH_REVIEW_DB: ${{ runner.temp }}/vr-sector-review.db
+        run: npm run test:e2e:sector-research
+
   e2e-intel-digest-smoke:
     name: Playwright Intel digest E2E
     runs-on: ubuntu-latest

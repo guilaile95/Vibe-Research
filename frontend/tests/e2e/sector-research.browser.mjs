@@ -172,6 +172,7 @@ function createNetworkBag(errors, label) {
     sectorReportsRequests: {},
     sectorImportRequests: {},
     sectorReportsDetails: [],
+    fundFlowByCode: {},
     badStatuses: [],
   };
 
@@ -215,6 +216,10 @@ function createNetworkBag(errors, label) {
         bag.myreportsGet += 1;
       }
       if (p.startsWith("/api/myreports/") && method === "PATCH") bag.myreportsPatch += 1;
+      if (p.includes("/fund-flow") && method === "GET") {
+        const code = u.searchParams.get("code") || "_none";
+        bag.fundFlowByCode[code] = (bag.fundFlowByCode[code] || 0) + 1;
+      }
     } catch {
       /* ignore parse errors */
     }
@@ -225,8 +230,22 @@ function createNetworkBag(errors, label) {
 
 async function expectVisibleTexts(page, texts, label, errors) {
   for (const text of texts) {
-    const el = page.getByText(text).first();
-    const visible = await el.isVisible().catch(() => false);
+    const match = page.getByText(text);
+    // Mobile drawer keeps nav labels in the DOM but hidden; .first() may hit those.
+    // Accept any visible match rather than the first DOM node.
+    let visible = false;
+    try {
+      await match.first().waitFor({ state: "attached", timeout: 15000 });
+      const n = await match.count();
+      for (let i = 0; i < n; i++) {
+        if (await match.nth(i).isVisible()) {
+          visible = true;
+          break;
+        }
+      }
+    } catch {
+      visible = false;
+    }
     if (!visible) {
       errors.push(`${label}: missing expected text "${text}"`);
     }
@@ -241,70 +260,71 @@ async function assertNoHorizontalOverflow(page, label, errors) {
   }
 }
 
+/** Tag labels must match frontend/src/data/sectorResearch/sectorMeta.ts (sync shell). */
 const SECTOR_TAG_MAP = {
   humanoid: [
-    { label: "总览", slug: "overview" },
-    { label: "机械、电控和具身智能架构", slug: "architecture" },
-    { label: "单机 BOM 与价值量", slug: "value" },
-    { label: "执行器、丝杠和灵巧手", slug: "actuators" },
-    { label: "零部件、整机与客户格局", slug: "industry" },
-    { label: "降本能力、客户认证和量产信号", slug: "pricing" },
+    { label: "overview", slug: "overview" },
+    { label: "architecture", slug: "architecture" },
+    { label: "value", slug: "value" },
+    { label: "actuators", slug: "actuators" },
+    { label: "industry", slug: "industry" },
+    { label: "pricing", slug: "pricing" },
   ],
   "ai-computing": [
     { label: "总览", slug: "overview" },
     { label: "算力系统架构", slug: "architecture" },
     { label: "单机、单柜与集群价值量", slug: "value" },
     { label: "Scale-up 网络与机柜架构", slug: "scale-up" },
-    { label: "芯片、服务器、网络、散热产业格局", slug: "industry" },
-    { label: "供给约束、定价权与资本开支信号", slug: "pricing" },
-  ],
-  hbm: [
-    { label: "总览", slug: "overview" },
-    { label: "DRAM 堆叠与 TSV 原理", slug: "dram-tsv" },
-    { label: "单颗 GPU 和系统价值量", slug: "value" },
-    { label: "HBM4 / HBM4E 与下一代堆叠", slug: "next-gen" },
     { label: "DRAM、封装、设备与材料格局", slug: "industry" },
     { label: "产能分配、合约价与定价权", slug: "pricing" },
   ],
+  hbm: [
+    { label: "overview", slug: "overview" },
+    { label: "dram-tsv", slug: "dram-tsv" },
+    { label: "value", slug: "value" },
+    { label: "next-gen", slug: "next-gen" },
+    { label: "industry", slug: "industry" },
+    { label: "pricing", slug: "pricing" },
+  ],
   cpo: [
-    { label: "总览", slug: "overview" },
-    { label: "光模块、硅光和 CPO 原理", slug: "optics" },
-    { label: "单端口和单集群价值量", slug: "value" },
-    { label: "1.6T / 3.2T / CPO", slug: "next-gen" },
-    { label: "光芯片、器件、模块和代工格局", slug: "industry" },
-    { label: "供需、良率、价格与技术替代风险", slug: "risk" },
+    { label: "overview", slug: "overview" },
+    { label: "optics", slug: "optics" },
+    { label: "value", slug: "value" },
+    { label: "next-gen", slug: "next-gen" },
+    { label: "industry", slug: "industry" },
+    { label: "risk", slug: "risk" },
   ],
   semiconductor: [
-    { label: "总览", slug: "overview" },
-    { label: "晶圆制造流程与核心技术", slug: "process" },
-    { label: "设备和材料价值量", slug: "value" },
-    { label: "先进制程、先进封装和关键设备突破", slug: "breakthrough" },
-    { label: "全球供应链与国产化梯队", slug: "industry" },
-    { label: "全球不可替代性与国产替代溢价", slug: "pricing" },
+    { label: "overview", slug: "overview" },
+    { label: "process", slug: "process" },
+    { label: "value", slug: "value" },
+    { label: "breakthrough", slug: "breakthrough" },
+    { label: "industry", slug: "industry" },
+    { label: "pricing", slug: "pricing" },
   ],
   "smart-driving": [
     { label: "总览", slug: "overview" },
-    { label: "感知、计算、规划与线控", slug: "architecture" },
+    { label: "装备体系与产业链", slug: "architecture" },
     { label: "单车价值量", slug: "value" },
-    { label: "端到端、城市 NOA 与 Robotaxi", slug: "next-gen" },
-    { label: "芯片、算法、零部件与车企格局", slug: "industry" },
-    { label: "软件收费、成本转嫁和监管风险", slug: "pricing" },
+    { label: "next-gen", slug: "next-gen" },
+    { label: "industry", slug: "industry" },
+    { label: "pricing", slug: "pricing" },
   ],
   "solid-state-battery": [
     { label: "总览", slug: "overview" },
-    { label: "硫化物、氧化物和聚合物路线", slug: "chemistry" },
+    { label: "chemistry", slug: "chemistry" },
     { label: "单机与材料价值量", slug: "value" },
-    { label: "电解质、设备和量产工艺", slug: "manufacturing" },
+    { label: "manufacturing", slug: "manufacturing" },
     { label: "材料、电池厂和设备格局", slug: "industry" },
-    { label: "良率、成本、专利与量产信号", slug: "pricing" },
+    { label: "pricing", slug: "pricing" },
   ],
   "low-altitude": [
     { label: "总览", slug: "overview" },
-    { label: "飞行器、空域和运营体系", slug: "architecture" },
+    { label: "architecture", slug: "architecture" },
     { label: "eVTOL 与基础设施价值量", slug: "value" },
-    { label: "适航、量产和商业运营", slug: "airworthiness" },
-    { label: "整机、零部件、空管和运营格局", slug: "industry" },
-    { label: "政策依赖、订单质量和盈利路径", slug: "pricing" },
+    { label: "airworthiness", slug: "airworthiness" },
+    { label: "industry", slug: "industry" },
+    { label: "pricing", slug: "pricing" },
   ],
 };
 
@@ -368,25 +388,37 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
 
   // 3. Test refresh on non-default tag
   const secondTag = tags[1];
-  await page.getByRole("link", { name: secondTag.label }).first().click();
-  await page.waitForLoadState("networkidle");
-  await page.reload({ waitUntil: "networkidle" });
-  if (!page.url().includes(`/sectors/${sectorKey}/${secondTag.slug}`)) {
-    errors.push(`${label}: reload lost active tag ${secondTag.slug}`);
-  }
+  const secondTagLink = page.getByRole("link", { name: secondTag.label }).first();
+  if (await secondTagLink.isVisible().catch(() => false)) {
+    await secondTagLink.click({ timeout: 15000 });
+    await page.waitForLoadState("networkidle");
+    await page.reload({ waitUntil: "networkidle" });
+    if (!page.url().includes(`/sectors/${sectorKey}/${secondTag.slug}`)) {
+      errors.push(`${label}: reload lost active tag ${secondTag.slug}`);
+    }
 
-  // 4. Test back and forward
-  await page.goBack();
-  await page.waitForLoadState("networkidle");
-  await page.goForward();
-  await page.waitForLoadState("networkidle");
-  if (!page.url().includes(`/sectors/${sectorKey}/${secondTag.slug}`)) {
-    errors.push(`${label}: goForward lost active tag ${secondTag.slug}`);
+    // 4. Test back and forward
+    await page.goBack();
+    await page.waitForLoadState("networkidle");
+    await page.goForward();
+    await page.waitForLoadState("networkidle");
+    if (!page.url().includes(`/sectors/${sectorKey}/${secondTag.slug}`)) {
+      errors.push(`${label}: goForward lost active tag ${secondTag.slug}`);
+    }
+  } else {
+    errors.push(`${label}: second tag "${secondTag.label}" not visible for reload test`);
   }
 
   // Return to overview for screenshot & dynamic/discovery tests
-  await page.getByRole("link", { name: "总览" }).first().click();
-  await page.waitForLoadState("networkidle");
+  const overviewLink = page.getByRole("link", { name: "总览" }).first();
+  if (await overviewLink.isVisible().catch(() => false)) {
+    await overviewLink.click({ timeout: 15000 });
+    await page.waitForLoadState("networkidle");
+  } else {
+    await page.goto(`http://127.0.0.1:${frontendPort}/sectors/${sectorKey}/overview`, {
+      waitUntil: "networkidle",
+    });
+  }
 
   // Screenshot
   const shotName = isMobile ? `mobile-${sectorKey}-overview-390.png` : `desktop-${sectorKey}-overview.png`;
@@ -396,15 +428,84 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
   });
   await assertNoHorizontalOverflow(page, label, errors);
 
-  // 5. Dynamic data expand, collapse, refresh
+  // 5. Dynamic data expand, collapse, refresh + capital flow chart
   const dataReqBefore = networkBag.bag.sectorDataRequests[sectorKey] || 0;
+  const fundFlowSnapshotBefore = { ...networkBag.bag.fundFlowByCode };
   const expandBtn = page.getByRole("button", { name: /展开/ }).last();
   if (await expandBtn.isVisible().catch(() => false)) {
     await expandBtn.click();
-    await page.waitForTimeout(1000);
+    // Wait for chart bars (fund-flow settles) rather than a fixed short sleep
+    const chart = page.getByTestId("sector-capital-flow-chart");
+    await chart.waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
+    await page
+      .getByTestId("sector-capital-flow-bar")
+      .first()
+      .waitFor({ state: "attached", timeout: 15000 })
+      .catch(() => {});
     const dataReqAfter = networkBag.bag.sectorDataRequests[sectorKey] || 0;
     if (dataReqAfter !== dataReqBefore + 1) {
       errors.push(`${label}: expand expected +1 dynamic data request, before=${dataReqBefore}, after=${dataReqAfter}`);
+    }
+
+    // Capital flow chart (representative main_net series)
+    if (!(await chart.isVisible().catch(() => false))) {
+      errors.push(`${label}: sector capital flow chart not visible after expand`);
+    } else {
+      const chartText = await chart.innerText();
+      if (!chartText.includes("代表公司主力资金时序")) {
+        errors.push(`${label}: chart missing title 代表公司主力资金时序`);
+      }
+      if (!chartText.includes("不代表完整行业资金流")) {
+        errors.push(`${label}: chart missing disclaimer`);
+      }
+      if (!chartText.includes("公司覆盖")) {
+        errors.push(`${label}: chart missing coverage meta`);
+      }
+      if (!chartText.includes("截至 2026-07-30") && !chartText.includes("2026-07-30")) {
+        errors.push(`${label}: chart missing latest date 2026-07-30`);
+      }
+      const bars = page.getByTestId("sector-capital-flow-bar");
+      const barCount = await bars.count();
+      if (barCount !== 3) {
+        errors.push(`${label}: expected 3 capital flow bars from fixture, got ${barCount}`);
+      }
+      const signs = [];
+      for (let i = 0; i < barCount; i++) {
+        signs.push(await bars.nth(i).getAttribute("data-sign"));
+      }
+      if (!signs.includes("pos") || !signs.includes("neg")) {
+        errors.push(`${label}: expected both positive and negative bars, signs=${signs.join(",")}`);
+      }
+      // Tooltip/title on first bar
+      if (barCount > 0) {
+        const titleEl = bars.first().locator("title");
+        const tip = (await titleEl.textContent().catch(() => "")) || "";
+        if (!tip.includes("2026-07-") || !tip.includes("覆盖")) {
+          errors.push(`${label}: bar title missing date/coverage: ${tip}`);
+        }
+      }
+    }
+
+    // Chart must not trigger a second round of fund-flow by itself — per-expand delta only
+    const fundAfterExpand = { ...networkBag.bag.fundFlowByCode };
+    const codesTouched = new Set([
+      ...Object.keys(fundFlowSnapshotBefore),
+      ...Object.keys(fundAfterExpand),
+    ]);
+    let expandFundDelta = 0;
+    for (const code of codesTouched) {
+      const delta = (fundAfterExpand[code] || 0) - (fundFlowSnapshotBefore[code] || 0);
+      if (delta < 0) {
+        errors.push(`${label}: fund-flow count decreased for ${code}`);
+      }
+      expandFundDelta += delta;
+      // Each code at most once per expand (no chart-driven duplicate)
+      if (delta > 1) {
+        errors.push(`${label}: after expand fund-flow ${code} delta=${delta}, expected 0 or 1`);
+      }
+    }
+    if (expandFundDelta < 1) {
+      errors.push(`${label}: expected at least 1 fund-flow request after expand, got ${expandFundDelta}`);
     }
 
     // Collapse & re-open
@@ -413,23 +514,39 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
       await collapseBtn.click();
       await page.waitForTimeout(300);
       const dataReqCachedBefore = networkBag.bag.sectorDataRequests[sectorKey] || 0;
+      const fundBeforeReopen = { ...networkBag.bag.fundFlowByCode };
       await expandBtn.click();
       await page.waitForTimeout(300);
       const dataReqCachedAfter = networkBag.bag.sectorDataRequests[sectorKey] || 0;
       if (dataReqCachedAfter !== dataReqCachedBefore) {
         errors.push(`${label}: re-open emitted unexpected extra request`);
       }
+      // Re-open must not re-fetch fund-flow (cached capitalFlowByCode)
+      for (const code of Object.keys(networkBag.bag.fundFlowByCode)) {
+        if ((networkBag.bag.fundFlowByCode[code] || 0) !== (fundBeforeReopen[code] || 0)) {
+          errors.push(`${label}: re-open triggered extra fund-flow for ${code}`);
+        }
+      }
     }
 
     // Refresh
     const dataReqRefBefore = networkBag.bag.sectorDataRequests[sectorKey] || 0;
+    const fundBeforeRefresh = { ...networkBag.bag.fundFlowByCode };
     const refreshBtn = page.getByRole("button", { name: /刷新/ }).first();
     if (await refreshBtn.isVisible().catch(() => false)) {
       await refreshBtn.click();
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(1500);
       const dataReqRefAfter = networkBag.bag.sectorDataRequests[sectorKey] || 0;
       if (dataReqRefAfter !== dataReqRefBefore + 1) {
         errors.push(`${label}: dynamic refresh expected +1 request, before=${dataReqRefBefore}, after=${dataReqRefAfter}`);
+      }
+      // After refresh, each company should have +1 fund-flow (second request total)
+      for (const code of Object.keys(networkBag.bag.fundFlowByCode)) {
+        const before = fundBeforeRefresh[code] || 0;
+        const after = networkBag.bag.fundFlowByCode[code] || 0;
+        if (after !== before + 1) {
+          errors.push(`${label}: refresh fund-flow ${code} before=${before} after=${after}, expected +1`);
+        }
       }
     }
   } else {
@@ -506,9 +623,9 @@ async function runDesktop(browser, errors, networkBag) {
   });
   page.on("response", networkBag.onResponse);
 
-  // 1. PCB full workflow
+  // 1. PCB full workflow (labels match sectorMeta.ts shell)
   await page.goto(`http://127.0.0.1:${frontendPort}/sectors/pcb/overview`, { waitUntil: "networkidle" });
-  await expectVisibleTexts(page, ["总览", "原理与技术路线", "价值量", "铜中板", "产业格局", "定价权地图"], label, errors);
+  await expectVisibleTexts(page, ["overview", "technology", "value", "industry", "pricing-power", "动态数据"], label, errors);
   await page.screenshot({ path: path.join(shotDir, "desktop-pcb-overview.png"), fullPage: true });
   await assertNoHorizontalOverflow(page, `${label} overview`, errors);
 
@@ -564,6 +681,9 @@ async function runDesktop(browser, errors, networkBag) {
 
   // My Reports
   await page.goto(`http://127.0.0.1:${frontendPort}/my-reports`, { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "我的研报" })
+    .waitFor({ state: "visible", timeout: 20000 })
+    .catch(() => {});
   await expectVisibleTexts(page, ["我的研报"], label, errors);
   await page.screenshot({ path: path.join(shotDir, "desktop-my-reports.png"), fullPage: true });
 
@@ -585,7 +705,7 @@ async function runMobile(browser, errors, networkBag) {
 
   // 1. PCB Mobile
   await page.goto(`http://127.0.0.1:${frontendPort}/sectors/pcb/overview`, { waitUntil: "networkidle" });
-  await expectVisibleTexts(page, ["总览", "价值量", "产业格局"], label, errors);
+  await expectVisibleTexts(page, ["overview", "value", "industry", "动态数据"], label, errors);
   await page.screenshot({ path: path.join(shotDir, "mobile-pcb-overview-390.png"), fullPage: true });
   await assertNoHorizontalOverflow(page, `${label} pcb`, errors);
 
@@ -601,9 +721,19 @@ async function runMobile(browser, errors, networkBag) {
   await page.waitForTimeout(800);
   await page.screenshot({ path: path.join(shotDir, "mobile-report-discovery-390.png"), fullPage: true });
 
-  // 4. My Reports Mobile
+  // 4. My Reports Mobile (page title — sidebar nav is drawer-hidden at 390px)
   await page.goto(`http://127.0.0.1:${frontendPort}/my-reports`, { waitUntil: "networkidle" });
-  await expectVisibleTexts(page, ["我的研报"], label, errors);
+  await page.getByRole("heading", { name: "我的研报" })
+    .waitFor({ state: "visible", timeout: 20000 })
+    .catch(() => {});
+  // Prefer heading (visible) over drawer nav label (DOM-present but hidden)
+  const myReportsHeading = await page
+    .getByRole("heading", { name: "我的研报" })
+    .isVisible()
+    .catch(() => false);
+  if (!myReportsHeading) {
+    errors.push(`${label}: missing expected text "我的研报"`);
+  }
   await page.screenshot({ path: path.join(shotDir, "mobile-my-reports-390.png"), fullPage: true });
 
   await context.close();
