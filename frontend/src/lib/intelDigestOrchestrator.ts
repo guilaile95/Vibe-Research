@@ -2,13 +2,13 @@
  * Intel Daily Digest Generation Orchestrator.
  *
  * Orchestrates chatStream LLM call, prompt context construction, signal cancellation,
- * generation ID race checks, and backend persistence.
+ * generation ID race checks, phase transitions (generating -> saving), and backend persistence.
  * Used by both UI components and unit tests.
  */
 
 import { api, type Industry, type IntelDigest, type IntelDigestSaveIn, type IntelDigestSaveResult } from "./api.ts";
 import { chatStream } from "./llm.ts";
-import { buildDigestInputItems, buildDigestSourceRefs, shouldSaveDigest } from "./intelDigestView.ts";
+import { prepareDigestItems, shouldSaveDigest } from "./intelDigestView.ts";
 
 export interface RunIntelDigestGenerationParams {
   industry: Industry;
@@ -17,7 +17,8 @@ export interface RunIntelDigestGenerationParams {
   getCurrentGenerationId: () => number;
   isMounted: () => boolean;
   onDelta?: (text: string) => void;
-  saveApi?: (payload: IntelDigestSaveIn) => Promise<IntelDigestSaveResult>;
+  onPhaseChange?: (phase: "generating" | "saving") => void;
+  saveApi?: (payload: IntelDigestSaveIn, signal?: AbortSignal) => Promise<IntelDigestSaveResult>;
   chatStreamFn?: typeof chatStream;
 }
 
@@ -38,7 +39,8 @@ export async function runIntelDigestGeneration(
     getCurrentGenerationId,
     isMounted,
     onDelta,
-    saveApi = (payload) => api.saveIntelDigest(payload),
+    onPhaseChange,
+    saveApi = (payload, sig) => api.saveIntelDigest(payload, sig),
     chatStreamFn = chatStream,
   } = params;
 
@@ -46,19 +48,14 @@ export async function runIntelDigestGeneration(
     return { status: "cancelled" };
   }
 
-  const inputItems = buildDigestInputItems(industry.items);
-  const sourceRefs = buildDigestSourceRefs(industry.items);
-
-  const ctx = industry.items
-    .slice(0, 25)
-    .map((it) => `[${it.time}] ${it.source}｜${it.zh || it.title}`)
-    .join("\n");
+  const { promptContext, inputItems, sourceRefs } = prepareDigestItems(industry.items);
 
   const prompt =
     `以下是「${industry.name}」赛道近期资讯。请提炼「今日要点」3-5 条：每条一句话（≤40 字），` +
-    `抓住重要事件、趋势与可能影响。直接用「- 」列点，不要多余前后缀。\n\n${ctx}`;
+    `抓住重要事件、趋势与可能影响。直接用「- 」列点，不要多余前后缀。\n\n${promptContext}`;
 
   let accText = "";
+  onPhaseChange?.("generating");
 
   try {
     const streamResult = await chatStreamFn(
@@ -76,11 +73,11 @@ export async function runIntelDigestGeneration(
     );
 
     if (signal.aborted || !isMounted()) {
-      return { status: "cancelled" };
+      return { status: "cancelled", summaryText: accText };
     }
 
     if (getCurrentGenerationId() !== generationId) {
-      return { status: "superseded" };
+      return { status: "superseded", summaryText: accText };
     }
 
     const finalText = (streamResult?.content || accText).trim();
@@ -88,22 +85,27 @@ export async function runIntelDigestGeneration(
       return { status: "empty" };
     }
 
-    // Call save API after stream resolves
+    // Phase transition to "saving" - Point of no return in UI
+    onPhaseChange?.("saving");
+
     try {
-      const saveRes = await saveApi({
-        sector_key: industry.key,
-        status: "normal",
-        summary_text: finalText,
-        source_refs: sourceRefs,
-        input_items: inputItems,
-      });
+      const saveRes = await saveApi(
+        {
+          sector_key: industry.key,
+          status: "normal",
+          summary_text: finalText,
+          source_refs: sourceRefs,
+          input_items: inputItems,
+        },
+        signal
+      );
 
       if (signal.aborted || !isMounted()) {
-        return { status: "cancelled" };
+        return { status: "cancelled", summaryText: finalText };
       }
 
       if (getCurrentGenerationId() !== generationId) {
-        return { status: "superseded" };
+        return { status: "superseded", summaryText: finalText };
       }
 
       if (saveRes.error) {
@@ -121,10 +123,10 @@ export async function runIntelDigestGeneration(
       };
     } catch (saveErr) {
       if (signal.aborted || !isMounted()) {
-        return { status: "cancelled" };
+        return { status: "cancelled", summaryText: finalText };
       }
       if (getCurrentGenerationId() !== generationId) {
-        return { status: "superseded" };
+        return { status: "superseded", summaryText: finalText };
       }
       const errMsg = saveErr instanceof Error ? saveErr.message : "保存失败";
       return {
@@ -141,7 +143,7 @@ export async function runIntelDigestGeneration(
         "name" in streamErr &&
         streamErr.name === "AbortError")
     ) {
-      return { status: "cancelled" };
+      return { status: "cancelled", summaryText: accText };
     }
 
     const errMsg = streamErr instanceof Error ? streamErr.message : "生成失败";

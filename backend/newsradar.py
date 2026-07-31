@@ -105,9 +105,11 @@ def _fetch_source(src: dict, per: int, cutoff, redline: list[str]):
             if dt is not None:
                 if cutoff and dt < cutoff:
                     continue
+                d["published_at"] = dt.astimezone(BEIJING).isoformat()
                 d["time"] = dt.astimezone(BEIJING).strftime("%m-%d %H:%M")
                 d["ts"] = int(dt.timestamp())
             else:
+                d["published_at"] = datetime.now(BEIJING).isoformat()
                 d["time"] = "—"
             out.append(d)
         return out

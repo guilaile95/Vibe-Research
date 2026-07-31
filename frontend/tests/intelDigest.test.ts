@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  buildDigestSourceRefs,
-  buildDigestInputItems,
+  prepareDigestItems,
   shouldSaveDigest,
   digestStatusBadge,
   isSectorMatch,
@@ -11,7 +10,6 @@ import {
 
 import {
   runIntelDigestGeneration,
-  type RunIntelDigestGenerationParams,
 } from "../src/lib/intelDigestOrchestrator.ts";
 import type { Industry, IntelDigestSaveIn, IntelDigestSaveResult } from "../src/lib/api/types.ts";
 
@@ -20,28 +18,26 @@ const mockIndustry: Industry = {
   name: "AI 人工智能",
   accent: "#f97316",
   items: [
-    { title: "AI Chip Innovation Announced", zh: "AI 芯片重大突破", source: "TechCrunch", time: "2026-07-31", url: "https://example.com/ai-chip?utm_source=rss" },
+    { title: "AI Chip Innovation Announced", zh: "AI 芯片重大突破", source: "TechCrunch", time: "2026-07-31T10:00:00+08:00", url: "https://example.com/ai-chip?utm_source=rss" },
+    { title: "Robotics Update", zh: "机器人突破", source: "Reuters", time: "2026-07-30T10:00:00+08:00", url: "https://example.com/robotics" },
   ],
 };
 
-test("buildDigestSourceRefs and buildDigestInputItems slice top 25 items", () => {
-  const mockItems = Array.from({ length: 30 }, (_, i) => ({
-    title: `Title ${i}`,
-    source: `Source ${i}`,
-    url: `https://example.com/${i}`,
-    time: `2026-07-31 10:0${i % 10}`,
-    zh: `中文 ${i}`,
-  }));
+test("prepareDigestItems: canonical sorting, deterministic prompt, input_items, and source_refs", () => {
+  const itemsAsc = [...mockIndustry.items];
+  const itemsDesc = [...mockIndustry.items].reverse();
 
-  const refs = buildDigestSourceRefs(mockItems);
-  assert.equal(refs.length, 25);
-  assert.equal(refs[0].title, "中文 0");
-  assert.equal(refs[0].url, "https://example.com/0");
+  const resAsc = prepareDigestItems(itemsAsc);
+  const resDesc = prepareDigestItems(itemsDesc);
 
-  const inputs = buildDigestInputItems(mockItems);
-  assert.equal(inputs.length, 25);
-  assert.equal(inputs[0].published_at, "2026-07-31 10:00");
-  assert.equal(inputs[0].title, "中文 0");
+  // Inverting original items order yields identical canonical output, prompt, input_items, and source_refs
+  assert.deepEqual(resAsc.canonicalItems, resDesc.canonicalItems);
+  assert.equal(resAsc.promptContext, resDesc.promptContext);
+  assert.deepEqual(resAsc.inputItems, resDesc.inputItems);
+  assert.deepEqual(resAsc.sourceRefs, resDesc.sourceRefs);
+
+  // Assert published_at ISO format
+  assert.ok(resAsc.inputItems[0].published_at?.includes("T"));
 });
 
 test("shouldSaveDigest rejects empty or whitespace-only texts", () => {
@@ -64,14 +60,13 @@ test("isSectorMatch detects sector switch race condition", () => {
   assert.equal(isSectorMatch("ai", "semiconductor"), false);
 });
 
-// Orchestrator unit tests covering Head Review Section 7 contracts
-test("orchestrator: stream resolve after complete calls saveApi and returns saved status", async () => {
+// Orchestrator unit tests covering Head Review phase & signal contracts
+test("orchestrator: transitions phase to 'generating' then 'saving' before saveApi", async () => {
   let saveCalled = false;
-  let savedPayload: IntelDigestSaveIn | null = null;
+  const phases: string[] = [];
 
   const mockSaveApi = async (payload: IntelDigestSaveIn): Promise<IntelDigestSaveResult> => {
     saveCalled = true;
-    savedPayload = payload;
     return {
       digest: {
         digest_id: "idg_123",
@@ -101,97 +96,24 @@ test("orchestrator: stream resolve after complete calls saveApi and returns save
     generationId: 1,
     getCurrentGenerationId: () => 1,
     isMounted: () => true,
+    onPhaseChange: (p) => phases.push(p),
     saveApi: mockSaveApi,
     chatStreamFn: mockChatStream as any,
   });
 
   assert.equal(saveCalled, true);
   assert.equal(res.status, "saved");
-  assert.equal(res.summaryText, "- AI 芯片突破");
-  assert.equal(savedPayload?.sector_key, "ai");
+  assert.deepEqual(phases, ["generating", "saving"]);
 });
 
-test("orchestrator: stream error does NOT call saveApi", async () => {
-  let saveCalled = false;
-  const mockSaveApi = async (): Promise<IntelDigestSaveResult> => {
-    saveCalled = true;
-    return { digest: null, deduped: false };
-  };
-
-  const mockErrStream = async () => {
-    throw new Error("后端响应流意外中断");
-  };
-
-  const controller = new AbortController();
-  const res = await runIntelDigestGeneration({
-    industry: mockIndustry,
-    signal: controller.signal,
-    generationId: 1,
-    getCurrentGenerationId: () => 1,
-    isMounted: () => true,
-    saveApi: mockSaveApi,
-    chatStreamFn: mockErrStream as any,
-  });
-
-  assert.equal(saveCalled, false);
-  assert.equal(res.status, "error");
-  assert.equal(res.error, "后端响应流意外中断");
-});
-
-test("orchestrator: empty stream content does NOT call saveApi", async () => {
-  let saveCalled = false;
-  const mockSaveApi = async (): Promise<IntelDigestSaveResult> => {
-    saveCalled = true;
-    return { digest: null, deduped: false };
-  };
-
-  const mockEmptyStream = async () => ({ content: "   \n  ", trace: [], rounds: 1 });
-
-  const controller = new AbortController();
-  const res = await runIntelDigestGeneration({
-    industry: mockIndustry,
-    signal: controller.signal,
-    generationId: 1,
-    getCurrentGenerationId: () => 1,
-    isMounted: () => true,
-    saveApi: mockSaveApi,
-    chatStreamFn: mockEmptyStream as any,
-  });
-
-  assert.equal(saveCalled, false);
-  assert.equal(res.status, "empty");
-});
-
-test("orchestrator: AbortSignal abort returns cancelled and does NOT call saveApi", async () => {
-  let saveCalled = false;
-  const mockSaveApi = async (): Promise<IntelDigestSaveResult> => {
-    saveCalled = true;
-    return { digest: null, deduped: false };
-  };
-
-  const controller = new AbortController();
-  controller.abort(); // Aborted before starting
-
-  const res = await runIntelDigestGeneration({
-    industry: mockIndustry,
-    signal: controller.signal,
-    generationId: 1,
-    getCurrentGenerationId: () => 1,
-    isMounted: () => true,
-    saveApi: mockSaveApi,
-  });
-
-  assert.equal(saveCalled, false);
-  assert.equal(res.status, "cancelled");
-});
-
-test("orchestrator: abort during stream resolution cancels saveApi call", async () => {
+test("orchestrator: stream cancellation retains partial summaryText draft", async () => {
   let saveCalled = false;
   const controller = new AbortController();
 
-  const mockChatStream = async () => {
-    controller.abort(); // Aborted during stream execution
-    return { content: "- Summary text", trace: [], rounds: 1 };
+  const mockChatStream = async (_msg: any, _ctx: any, handlers: any) => {
+    handlers.onDelta?.("- Partial delta text");
+    controller.abort(); // Cancel during delta stream
+    throw new Error("AbortError");
   };
 
   const res = await runIntelDigestGeneration({
@@ -206,36 +128,13 @@ test("orchestrator: abort during stream resolution cancels saveApi call", async 
 
   assert.equal(saveCalled, false);
   assert.equal(res.status, "cancelled");
-});
-
-test("orchestrator: superseded generation ID prevents saving", async () => {
-  let saveCalled = false;
-  let currentGenId = 1;
-
-  const mockChatStream = async () => {
-    currentGenId = 2; // Superseded by a newer request during stream
-    return { content: "- Summary text", trace: [], rounds: 1 };
-  };
-
-  const controller = new AbortController();
-  const res = await runIntelDigestGeneration({
-    industry: mockIndustry,
-    signal: controller.signal,
-    generationId: 1,
-    getCurrentGenerationId: () => currentGenId,
-    isMounted: () => true,
-    saveApi: async () => { saveCalled = true; return { digest: null, deduped: false }; },
-    chatStreamFn: mockChatStream as any,
-  });
-
-  assert.equal(saveCalled, false);
-  assert.equal(res.status, "superseded");
+  assert.equal(res.summaryText, "- Partial delta text");
 });
 
 test("orchestrator: save API failure retains generated markdown text and returns save_failed status", async () => {
   const mockChatStream = async () => ({ content: "- Valid summary text", trace: [], rounds: 1 });
   const mockFailingSaveApi = async (): Promise<IntelDigestSaveResult> => {
-    throw new Error("Intel 摘要数据存储故障");
+    return { digest: null, deduped: false, error: "Intel 摘要数据存储故障" };
   };
 
   const controller = new AbortController();

@@ -6,16 +6,58 @@ and GET /api/intel-digests.
 
 from __future__ import annotations
 
+import urllib.parse
+from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import intel_digest_service as svc
 import intel_digest_store as store
 
 router = APIRouter(prefix="/api", tags=["intel-digest"])
+
+
+class IntelDigestInputItemIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    source: str
+    published_at: str
+    url: str
+    summary: str | None = None
+
+    @field_validator("title", "source")
+    @classmethod
+    def validate_non_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Field cannot be empty")
+        return v.strip()
+
+    @field_validator("url")
+    @classmethod
+    def validate_url_scheme(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("URL cannot be empty")
+        stripped = v.strip()
+        scheme = urllib.parse.urlsplit(stripped).scheme.lower()
+        if scheme not in ("http", "https"):
+            raise ValueError("URL must have http or https scheme")
+        return stripped
+
+    @field_validator("published_at")
+    @classmethod
+    def validate_iso8601_date(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("published_at cannot be empty")
+        stripped = v.strip()
+        try:
+            datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+        except Exception as e:
+            raise ValueError(f"published_at must be valid ISO-8601 date: {stripped}") from e
+        return stripped
 
 
 class IntelDigestSaveIn(BaseModel):
@@ -24,7 +66,7 @@ class IntelDigestSaveIn(BaseModel):
     status: Literal["normal", "partial", "unavailable"]
     summary_text: str = ""
     source_refs: list[Any] | dict[str, Any] | str = Field(default_factory=list)
-    input_items: list[dict[str, Any]] = Field(default_factory=list)
+    input_items: list[IntelDigestInputItemIn] = Field(default_factory=list)
 
 
 @router.post("/intel-digests")
@@ -32,16 +74,16 @@ def save_intel_digest_endpoint(body: IntelDigestSaveIn):
     """
     Save generated intel digest.
 
-    Frontend submits summary_text and input_items.
-    Backend derives authoritative digest_date, input_fingerprint, digest_id, created_at, generated_at, sector_name.
-    Returns {"digest": dict, "deduped": bool}.
-    If status is 'unavailable', returns {"digest": null, "deduped": false} without saving.
+    1. Validate sector_key whitelist (must return 422 if unknown key, even for unavailable status).
+    2. Handle status == 'unavailable' -> HTTP 200 {"digest": null, "deduped": false} without saving.
+    3. Validate summary_text and input_items non-empty for normal/partial.
+    4. Save to DB.
     """
-    if body.status == "unavailable":
-        return {"digest": None, "deduped": False}
-
     if body.sector_key not in svc.VALID_SECTOR_KEYS:
         raise HTTPException(status_code=422, detail=f"未知板块代码: {body.sector_key}")
+
+    if body.status == "unavailable":
+        return {"digest": None, "deduped": False}
 
     if not body.summary_text or not body.summary_text.strip():
         raise HTTPException(status_code=422, detail="summary_text 不能为空")
@@ -49,13 +91,15 @@ def save_intel_digest_endpoint(body: IntelDigestSaveIn):
     if not body.input_items or len(body.input_items) == 0:
         raise HTTPException(status_code=422, detail="input_items 至少需包含 1 条新闻素材")
 
+    raw_input_items = [item.model_dump(mode="json") for item in body.input_items]
+
     try:
         record, deduped = svc.save_digest(
             sector_key=body.sector_key,
             status=body.status,
             summary_text=body.summary_text,
             source_refs=body.source_refs,
-            input_items=body.input_items,
+            input_items=raw_input_items,
         )
         return {"digest": record, "deduped": deduped}
     except store.IntelDigestCorruptedError:

@@ -174,7 +174,7 @@ async function main() {
               name: "AI 人工智能",
               accent: "#f97316",
               items: [
-                { title: "AI Chip Innovation Announced", zh: "AI 芯片重大突破发布", source: "TechCrunch", time: "2026-07-31", url: "https://example.com/ai-chip" }
+                { title: "AI Chip Innovation Announced", zh: "AI 芯片重大突破发布", source: "TechCrunch", time: "2026-07-31 10:00:00", published_at: "2026-07-31T10:00:00+08:00", url: "https://example.com/ai-chip" }
               ]
             }
           ]
@@ -226,12 +226,10 @@ async function main() {
     if (saveCallCount !== 2) throw new Error(`Expected 2 save POST calls, got ${saveCallCount}`);
 
     // Test 3: Cancellation via UI Cancel button
-    let chatCallCount = 0;
     await page.route("**/api/chat", async (route) => {
-      chatCallCount++;
       await sleep(2000); // Delayed stream response so user can click cancel
       const streamData = [
-        JSON.stringify({ type: "delta", text: "- Slow digest text" }),
+        JSON.stringify({ type: "delta", text: "- Partial delta text" }),
         JSON.stringify({ type: "done", trace: [], rounds: 1 })
       ].join("\n") + "\n";
       await route.fulfill({ status: 200, contentType: "application/x-ndjson", body: streamData });
@@ -244,14 +242,14 @@ async function main() {
     await cancelButton.waitFor({ state: "visible" });
     await cancelButton.click();
 
-    await page.waitForSelector("text=已取消生成");
+    await page.waitForSelector("span:has-text('生成已取消')");
     await sleep(2200); // Wait out the delayed chat response to ensure no POST occurred
     if (saveCallCount !== preCancelSaveCount) {
       throw new Error("Cancelled generation should NOT trigger POST save!");
     }
-    console.log("✓ User cancellation correctly aborted generation and avoided POST save");
+    console.log("✓ User cancellation correctly aborted generation, displayed status banner, and avoided POST save");
 
-    // Test 4: Rapid double-click on generate button -> duplicate invocation guarded
+    // Test 4: Rapid double-click on generate button -> hard assertion chatCallCount === before + 1
     await page.route("**/api/chat", async (route) => {
       const streamData = [
         JSON.stringify({ type: "delta", text: "- 今日 AI 芯片重大突破" }),
@@ -260,27 +258,50 @@ async function main() {
       await route.fulfill({ status: 200, contentType: "application/x-ndjson", body: streamData });
     });
 
-    chatCallCount = 0;
+    let chatCallCount = 0;
     page.on("request", (req) => {
       if (req.url().includes("/api/chat")) {
         chatCallCount++;
       }
     });
 
-    const preDoubleCount = chatCallCount;
-    // Click twice in rapid succession
-    await Promise.all([
-      regenButton.click().catch(() => {}),
-      regenButton.click().catch(() => {}),
-    ]);
-    await page.waitForTimeout(500);
-    // Duplicate click during generation should be guarded so at most 1 additional chat call occurred
-    console.log("✓ Rapid double click guarded against concurrent generation");
+    const beforeChatCalls = chatCallCount;
+    await regenButton.evaluate((el) => {
+      el.click();
+      el.click();
+    });
+    await page.waitForTimeout(600);
 
-    // Test 5: Page reload -> loads latest digest from API
+    // Hard assertion for Head Review Section 8
+    if (chatCallCount !== beforeChatCalls + 1) {
+      throw new Error(`Expected chatCallCount === before + 1 (${beforeChatCalls + 1}), got ${chatCallCount}`);
+    }
+    console.log(`✓ Hard assertion verified: rapid double click triggered exactly 1 chat call (${chatCallCount})`);
+
+    // Test 5: Save API 500 error -> text retained, error badge shown
+    await page.route("**/api/intel-digests", async (route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ digest: null, error: "Intel 摘要数据存储故障" }),
+        });
+      } else {
+        await route.fallback();
+      }
+    });
+
+    await regenButton.click();
+    await page.waitForSelector("text=Intel 摘要数据存储故障");
+    await page.waitForSelector("text=今日 AI 芯片重大突破"); // Markdown summary text is retained
+    console.log("✓ Save 500 error retained summary text and displayed error badge");
+
+    // Test 6: Page reload -> loads latest digest from API
+    await page.unroute("**/api/intel-digests"); // restore real backend handling
     await page.reload();
-    await page.waitForSelector("text=今日 AI 芯片重大突破");
-    await page.waitForSelector("span:has-text('已保存')");
+    await page.waitForSelector("span:has-text('已保存')", { timeout: 10000 });
+    await page.waitForSelector("text=今日 AI 芯片重大突破", { timeout: 10000 });
+    console.log("✓ Page reload successfully loaded latest digest from API");
     console.log("✓ Page reload successfully loaded latest digest from API");
 
     await browser.close();
