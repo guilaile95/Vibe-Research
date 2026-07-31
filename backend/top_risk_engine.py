@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import yaml
+from dataclasses import replace
 from typing import Any
 
 from top_risk_schema import (
@@ -51,6 +53,18 @@ def _disabled_limitation(cfg: dict[str, Any], step_id: str) -> dict[str, str]:
 class TopRiskEngine:
     def __init__(self, steps: list[dict[str, Any]]):
         self.steps = steps or []
+        for cfg in self.steps:
+            step_id = str(cfg.get("id", "unknown"))
+            try:
+                weight = float(cfg.get("weight", 1.0))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(
+                    f"step {step_id} weight must be a finite positive number"
+                ) from exc
+            if not math.isfinite(weight) or weight <= 0:
+                raise ValueError(
+                    f"step {step_id} weight must be a finite positive number"
+                )
         self.config_hash = _config_hash(self.steps)
 
     @classmethod
@@ -104,6 +118,9 @@ class TopRiskEngine:
 
             try:
                 res = evaluator(facts, cfg.get("params", {}) or {})
+                if not isinstance(res, TopRiskStepResult):
+                    raise TypeError("evaluator must return TopRiskStepResult")
+                res = replace(res, step_id=step_id, label=label, weight=weight)
             except Exception:  # noqa: BLE001 — 步骤级隔离，绝不扩散
                 step_results.append(
                     TopRiskStepResult(

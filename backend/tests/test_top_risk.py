@@ -23,6 +23,7 @@ from top_risk_schema import (
     TopRiskData,
     TopRiskEnvelope,
     TopRiskFact,
+    TopRiskStepResult,
     TopRiskStepTrace,
 )
 
@@ -124,6 +125,184 @@ def test_engine_score_clamped_0_100():
     assert 0 <= r.risk_score <= 100
 
 
+@pytest.mark.parametrize(
+    "weight",
+    ["not-a-number", 0, -1, float("nan"), float("inf"), float("-inf")],
+)
+def test_engine_rejects_non_positive_or_non_finite_step_weight(weight):
+    with pytest.raises(ValueError, match="weight"):
+        TopRiskEngine([{"id": "invalid-weight", "weight": weight}])
+
+
+def test_engine_accepts_missing_weight_as_default_one():
+    engine = TopRiskEngine([
+        {"id": "default-weight", "label": "缺省权重", "evaluator": "missing"}
+    ])
+
+    result = engine.run(_fact())
+
+    assert result.steps[0].weight == 1.0
+
+
+def test_engine_overrides_successful_evaluator_metadata_from_step_config(monkeypatch):
+    seen_params = []
+
+    def wrong_metadata_evaluator(_facts, params):
+        seen_params.append(params)
+        return TopRiskStepResult(
+            step_id="hard-coded-wrong-id",
+            label="错误标签",
+            direction="RISK",
+            weight=1.0,
+            step_risk=0.5,
+            confidence=80.0,
+            skipped=False,
+        )
+
+    monkeypatch.setitem(ev.EVALUATORS, "wrong_metadata", wrong_metadata_evaluator)
+    eng = TopRiskEngine([
+        {
+            "id": "configured-id",
+            "label": "配置标签",
+            "evaluator": "wrong_metadata",
+            "weight": 2.5,
+            "params": {"weight": 9},
+        }
+    ])
+
+    result = eng.run(_fact())
+
+    assert seen_params == [{"weight": 9}]
+    assert len(result.steps) == 1
+    assert result.steps[0].step_id == "configured-id"
+    assert result.steps[0].label == "配置标签"
+    assert result.steps[0].weight == 2.5
+
+
+def test_engine_aggregates_with_top_level_weights_not_params_weights(monkeypatch):
+    def configured_signal(_facts, params):
+        return TopRiskStepResult(
+            step_id="hard-coded-wrong-id",
+            label="错误标签",
+            direction="RISK" if params["risk"] else "NEUTRAL",
+            weight=float(params["weight"]),
+            step_risk=float(params["risk"]),
+            confidence=float(params["confidence"]),
+            skipped=False,
+        )
+
+    monkeypatch.setitem(ev.EVALUATORS, "configured_signal", configured_signal)
+    eng = TopRiskEngine([
+        {
+            "id": "dominant",
+            "label": "主步骤",
+            "evaluator": "configured_signal",
+            "weight": 3,
+            "params": {"weight": 9, "risk": 1, "confidence": 90},
+        },
+        {
+            "id": "secondary",
+            "label": "次步骤",
+            "evaluator": "configured_signal",
+            "weight": 1,
+            "params": {"weight": 9, "risk": 0, "confidence": 30},
+        },
+    ])
+
+    result = eng.run(_fact())
+
+    assert [(step.step_id, step.label, step.weight) for step in result.steps] == [
+        ("dominant", "主步骤", 3.0),
+        ("secondary", "次步骤", 1.0),
+    ]
+    assert result.risk_score == 75
+    assert result.confidence == 75
+
+
+@pytest.mark.parametrize("bad_result", [None, {"direction": "RISK"}])
+def test_engine_isolates_evaluator_returning_wrong_type(monkeypatch, bad_result):
+    monkeypatch.setitem(
+        ev.EVALUATORS,
+        "wrong_return_type",
+        lambda _facts, _params: bad_result,
+    )
+    engine = TopRiskEngine([
+        {
+            "id": "configured-id",
+            "label": "配置标签",
+            "evaluator": "wrong_return_type",
+            "weight": 2.5,
+        }
+    ])
+
+    result = engine.run(_fact())
+
+    assert result.status == "unavailable"
+    assert len(result.steps) == 1
+    assert result.steps[0].step_id == "configured-id"
+    assert result.steps[0].label == "配置标签"
+    assert result.steps[0].weight == 2.5
+    assert result.steps[0].skipped is True
+    assert result.steps[0].skip_reason == "分析步骤执行失败"
+    assert result.limitations == [{
+        "field": "configured-id",
+        "reason_code": "EVALUATOR_ERROR",
+        "detail": "分析步骤执行失败。",
+    }]
+
+
+def test_engine_isolates_evaluator_exception(monkeypatch):
+    def raises(_facts, _params):
+        raise RuntimeError("boom")
+
+    monkeypatch.setitem(ev.EVALUATORS, "raises", raises)
+    engine = TopRiskEngine([
+        {
+            "id": "configured-id",
+            "label": "配置标签",
+            "evaluator": "raises",
+            "weight": 2,
+        }
+    ])
+
+    result = engine.run(_fact())
+
+    assert result.status == "unavailable"
+    assert result.steps[0].skipped is True
+    assert result.limitations[0]["reason_code"] == "EVALUATOR_ERROR"
+
+
+def test_engine_overrides_skipped_evaluator_metadata_from_step_config(monkeypatch):
+    def skipped_with_wrong_metadata(_facts, _params):
+        return TopRiskStepResult(
+            step_id="hard-coded-wrong-id",
+            label="错误标签",
+            direction="NEUTRAL",
+            weight=9,
+            step_risk=0,
+            confidence=0,
+            skipped=True,
+            skip_reason="测试跳过",
+        )
+
+    monkeypatch.setitem(ev.EVALUATORS, "skipped_wrong_metadata", skipped_with_wrong_metadata)
+    engine = TopRiskEngine([
+        {
+            "id": "configured-id",
+            "label": "配置标签",
+            "evaluator": "skipped_wrong_metadata",
+            "weight": 2.5,
+        }
+    ])
+
+    result = engine.run(_fact())
+
+    assert result.steps[0].step_id == "configured-id"
+    assert result.steps[0].label == "配置标签"
+    assert result.steps[0].weight == 2.5
+    assert result.steps[0].skipped is True
+
+
 # ---------------------------------------------------------------------------
 # 配置驱动步骤语义（Phase 1：情绪背离 / 事件兑现未启用，不计入评分分母）
 # ---------------------------------------------------------------------------
@@ -197,6 +376,179 @@ def test_crowding_skipped_when_no_volume_and_no_margin():
     f = _fact(price=[1, 2, 3], vol=None, margin=None)
     r = ev.crowding(f, {"weight": 1.0})
     assert r.skipped is True
+
+
+def test_crowding_single_valid_margin_point_without_volume_is_skipped():
+    result = ev.crowding(
+        _fact(vol=None, margin=[{"rzye": 100}]),
+        {"margin_window": 20, "weight": 1.0},
+    )
+
+    assert result.skipped is True
+    assert result.details == {
+        "volume_points": 0,
+        "recent_volume_points": 0,
+        "margin_points": 1,
+    }
+
+
+def test_crowding_does_not_pull_old_valid_volume_into_empty_recent_window():
+    volumes = [100] * 15 + [None] * 5
+
+    result = ev.crowding(_fact(vol=volumes, margin=None), {"weight": 1.0})
+
+    assert result.skipped is True
+    assert result.details["volume_points"] == 15
+    assert result.details["recent_volume_points"] == 0
+    assert result.details["margin_points"] == 0
+
+
+def test_crowding_skips_when_recent_volume_and_margin_are_both_insufficient():
+    volumes = [100] * 15 + [None, 200, None, 200, None]
+    margin = [{"rzye": 100}, {"rzye": None}]
+
+    result = ev.crowding(_fact(vol=volumes, margin=margin), {"weight": 1.0})
+
+    assert result.skipped is True
+    assert result.details["volume_points"] == 17
+    assert result.details["recent_volume_points"] == 2
+    assert result.details["margin_points"] == 1
+
+
+def test_crowding_uses_valid_margin_when_recent_volume_is_insufficient():
+    volumes = [100] * 15 + [None, 200, None, 200, None]
+    margin = [
+        {"rzye": 10},
+        {"rzye": 20},
+        {"rzye": 100},
+        {"rzye": 120},
+        {"rzye": 140},
+    ]
+
+    result = ev.crowding(
+        _fact(vol=volumes, margin=margin),
+        {"margin_window": 3, "margin_rise_threshold": 0.25, "weight": 1.0},
+    )
+
+    assert result.skipped is False
+    assert result.direction == "RISK"
+    assert result.details["volume_points"] == 17
+    assert result.details["recent_volume_points"] == 2
+    assert result.details["margin_points"] == 3
+    assert result.details["margin_rise_ratio"] == 0.4
+
+
+def test_crowding_recent_volume_filtering_does_not_cross_raw_window_boundary():
+    volumes = [100] * 20 + [None, None, 300, 400, 500]
+
+    result = ev.crowding(
+        _fact(vol=volumes, margin=None),
+        {"turnover_z_threshold": 2.0, "weight": 1.0},
+    )
+
+    assert result.skipped is False
+    assert result.direction == "RISK"
+    assert result.details["volume_points"] == 23
+    assert result.details["recent_volume_points"] == 3
+
+
+@pytest.mark.parametrize(
+    ("margin_values", "expected_points"),
+    [([0, 100], 2), ([-100, -140], 0)],
+)
+def test_crowding_skips_when_margin_has_no_positive_base(
+    margin_values, expected_points
+):
+    margin = [{"rzye": value} for value in margin_values]
+
+    result = ev.crowding(_fact(vol=None, margin=margin), {"weight": 1.0})
+
+    assert result.skipped is True
+    assert result.details["margin_points"] == expected_points
+
+
+def test_crowding_excludes_infinite_volume_and_margin_points():
+    volumes = [100] * 10 + [float("inf")] * 5
+    margin = [{"rzye": 100}, {"rzye": float("inf")}]
+
+    result = ev.crowding(_fact(vol=volumes, margin=margin), {"weight": 1.0})
+
+    assert result.skipped is True
+    assert result.details == {
+        "volume_points": 10,
+        "recent_volume_points": 0,
+        "margin_points": 1,
+    }
+
+
+def test_crowding_allows_margin_to_fall_from_positive_base_to_zero():
+    margin = [{"rzye": 100}, {"rzye": 0}]
+
+    result = ev.crowding(
+        _fact(vol=None, margin=margin),
+        {"margin_rise_threshold": 0.25, "weight": 1.0},
+    )
+
+    assert result.skipped is False
+    assert result.direction == "SAFE"
+    assert result.details["margin_points"] == 2
+    assert result.details["margin_rise_ratio"] == -1.0
+
+
+def test_crowding_keeps_constant_finite_volume_available():
+    result = ev.crowding(_fact(vol=[100] * 10, margin=None), {"weight": 1.0})
+
+    assert result.skipped is False
+    assert result.direction == "NEUTRAL"
+    assert result.details["volume_points"] == 10
+    assert result.details["recent_volume_points"] == 5
+
+
+def test_engine_is_partial_when_optional_crowding_has_no_usable_subsignal():
+    prices = [10 + index * 0.1 for index in range(20)]
+    volumes = [100] * 15 + [None] * 5
+    engine = TopRiskEngine([
+        {
+            "id": "crowding",
+            "label": "拥挤度",
+            "evaluator": "crowding",
+            "required": False,
+            "weight": 1,
+            "params": {},
+        },
+        {
+            "id": "runup_exhaustion",
+            "label": "涨幅耗竭",
+            "evaluator": "runup_exhaustion",
+            "required": True,
+            "weight": 1,
+            "params": {"window": 20},
+        },
+        {
+            "id": "valuation_cap",
+            "label": "估值天花板",
+            "evaluator": "valuation_cap",
+            "required": False,
+            "weight": 1,
+            "params": {},
+        },
+    ])
+    facts = _fact(
+        price=prices,
+        vol=volumes,
+        valuation={"pe_ttm": {"percentile": 50}, "pb": {"percentile": 50}},
+        margin=None,
+    )
+
+    result = engine.run(facts)
+
+    assert result.status == "partial"
+    assert result.coverage == {"completed": 2, "total": 3, "ratio": 0.667}
+    assert any(
+        limitation["field"] == "crowding"
+        and limitation["reason_code"] == "OPTIONAL_DATA_MISSING"
+        for limitation in result.limitations
+    )
 
 
 def test_valuation_cap_risk_at_high_percentile():

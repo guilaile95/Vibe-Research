@@ -12,6 +12,7 @@ Phase 1 边界：
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Callable, Dict, Optional
 
 from top_risk_schema import TopRiskFact, TopRiskStepResult
@@ -35,7 +36,7 @@ def _num(v: Any) -> Optional[float]:
         return None
     try:
         f = float(v)
-        return f if f == f else None  # NaN → None
+        return f if math.isfinite(f) else None
     except (TypeError, ValueError):
         return None
 
@@ -115,17 +116,38 @@ def narrative_divergence(facts: TopRiskFact, params: dict) -> TopRiskStepResult:
 @register("crowding")
 def crowding(facts: TopRiskFact, params: dict) -> TopRiskStepResult:
     weight = float(params.get("weight", 1.0))
-    margin_window = int(params.get("margin_window", 20))
+    margin_window = max(1, int(params.get("margin_window", 20)))
     margin_rise_threshold = float(params.get("margin_rise_threshold", 0.25))
     z_threshold = float(params.get("turnover_z_threshold", 2.0))
 
-    vol = [v for v in (facts.volume_history or []) if v is not None and v > 0]
-    margin = facts.margin_trading or []
+    raw_volumes: list[Optional[float]] = []
+    for value in facts.volume_history or []:
+        parsed = _num(value)
+        raw_volumes.append(parsed if parsed is not None and parsed > 0 else None)
+    recent_period_count = max(5, len(raw_volumes) // 5)
+    vol = [value for value in raw_volumes if value is not None]
+    recent_vol = [
+        value for value in _last_n(raw_volumes, recent_period_count)
+        if value is not None
+    ]
+
+    margin = list(facts.margin_trading or [])[-margin_window:]
+    rzye_series = [_num(row.get("rzye")) for row in margin]
+    rzye_series = [
+        value for value in rzye_series
+        if value is not None and value >= 0
+    ]
+
+    margin_rise: Optional[float] = None
+    if len(rzye_series) >= 2 and rzye_series[0] > 0:
+        margin_rise = (rzye_series[-1] - rzye_series[0]) / rzye_series[0]
 
     # 数据可用性评估
-    has_vol = len(vol) >= 10
-    has_margin = len(margin) >= 2 and any(
-        _num(m.get("rzye")) is not None for m in margin
+    has_vol = len(vol) >= 10 and len(recent_vol) >= 3
+    has_margin = (
+        len(rzye_series) >= 2
+        and rzye_series[0] > 0
+        and margin_rise is not None
     )
     if not has_vol and not has_margin:
         return TopRiskStepResult(
@@ -136,18 +158,22 @@ def crowding(facts: TopRiskFact, params: dict) -> TopRiskStepResult:
             step_risk=0.0,
             confidence=0.0,
             skipped=True,
-            skip_reason="量能与融资余额均缺失",
+            skip_reason="量能与融资余额均不足",
+            details={
+                "volume_points": len(vol),
+                "recent_volume_points": len(recent_vol),
+                "margin_points": len(rzye_series),
+            },
         )
 
     reasons: list[str] = []
     turnover_z: Optional[float] = None
-    margin_rise: Optional[float] = None
 
     # 近期均量 z 分数（相对全样本基线）
     if has_vol:
         m = _mean(vol)
         s = _std(vol)
-        recent_avg = _mean(_last_n(vol, max(5, len(vol) // 5)))
+        recent_avg = _mean(recent_vol)
         turnover_z = _z(recent_avg, m, s)
         if turnover_z is not None and turnover_z >= z_threshold:
             reasons.append(
@@ -155,22 +181,15 @@ def crowding(facts: TopRiskFact, params: dict) -> TopRiskStepResult:
             )
 
     # 融资余额相对窗口初值涨幅
-    if has_margin:
-        rzye_series = [_num(m.get("rzye")) for m in margin]
-        rzye_series = [x for x in rzye_series if x is not None]
-        if len(rzye_series) >= 2:
-            base = rzye_series[0]
-            latest = rzye_series[-1]
-            if base and latest is not None:
-                margin_rise = (latest - base) / abs(base)
-                if margin_rise >= margin_rise_threshold:
-                    reasons.append(
-                        f"融资余额较 {margin_window} 日初值上涨 {margin_rise*100:.0f}%（杠杆资金快速涌入）"
-                    )
-                elif margin_rise <= -margin_rise_threshold:
-                    reasons.append(
-                        f"融资余额较窗口初值下降 {abs(margin_rise)*100:.0f}%（杠杆去化）"
-                    )
+    if has_margin and margin_rise is not None:
+        if margin_rise >= margin_rise_threshold:
+            reasons.append(
+                f"融资余额较 {margin_window} 日初值上涨 {margin_rise*100:.0f}%（杠杆资金快速涌入）"
+            )
+        elif margin_rise <= -margin_rise_threshold:
+            reasons.append(
+                f"融资余额较窗口初值下降 {abs(margin_rise)*100:.0f}%（杠杆去化）"
+            )
 
     # 风险分构建
     step_risk = 0.0
@@ -215,7 +234,8 @@ def crowding(facts: TopRiskFact, params: dict) -> TopRiskStepResult:
             "turnover_z": round(turnover_z, 3) if turnover_z is not None else None,
             "margin_rise_ratio": round(margin_rise, 4) if margin_rise is not None else None,
             "volume_points": len(vol),
-            "margin_points": len(rzye_series) if has_margin else 0,
+            "recent_volume_points": len(recent_vol),
+            "margin_points": len(rzye_series),
         },
     )
 
