@@ -33,6 +33,9 @@ const DecisionCockpit = lazy(() =>
 const StockData = lazy(() =>
   import("@/pages/StockData").then((m) => ({ default: m.StockData })),
 );
+const Screener = lazy(() =>
+  import("@/pages/Screener").then((m) => ({ default: m.Screener })),
+);
 const Watchlist = lazy(() =>
   import("@/pages/Watchlist").then((m) => ({ default: m.Watchlist })),
 );
@@ -164,6 +167,7 @@ export const router = createBrowserRouter([
 		      { path: "/performance-attribution", element: withSuspense(<PerformanceAttribution />) },
 	      { path: "/cockpit", element: withSuspense(<DecisionCockpit />) },
       { path: "/stock-data", element: withSuspense(<StockData />) },
+      { path: "/screener", element: withSuspense(<Screener />) },
       { path: "/watchlist", element: withSuspense(<Watchlist />) },
       { path: "/my-reports", element: withSuspense(<MyReports />) },
       { path: "/notes", element: withSuspense(<Notes />) },

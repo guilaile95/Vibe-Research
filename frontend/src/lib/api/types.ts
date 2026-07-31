@@ -160,6 +160,67 @@ export interface IntelDigestLatestResult {
   digest: IntelDigest | null;
 }
 
+// ---------------------------------------------------------------------------
+// Candidate signal screener v0.1
+// ---------------------------------------------------------------------------
+
+export type ScreenerConditionId =
+  | "price_gt_sma20"
+  | "price_lt_sma20"
+  | "price_gt_sma60"
+  | "price_lt_sma60"
+  | "sma20_gt_sma60"
+  | "sma20_lt_sma60"
+  | "macd_hist_positive"
+  | "macd_hist_negative"
+  | "breakout_20d_high"
+  | "breakdown_20d_low"
+  | "rsi_between"
+  | "volume_ratio_gte"
+  | "volume_ratio_lte";
+
+export interface ScreenerCondition {
+  id: ScreenerConditionId;
+  params?: {
+    min?: number;
+    max?: number;
+    threshold?: number;
+  };
+}
+
+export interface ScreenerEvaluateIn {
+  codes: string[];
+  conditions: ScreenerCondition[];
+}
+
+export interface ScreenerConditionResult {
+  id: string;
+  evaluable: boolean;
+  passed: boolean | null;
+  evidence: Record<string, unknown>;
+}
+
+export interface ScreenerStockResult {
+  code: string;
+  bucket: "matched" | "rejected" | "unavailable";
+  matched: boolean | null;
+  technical_status: string;
+  trade_date: string | null;
+  condition_results: ScreenerConditionResult[];
+  limitations: string[];
+}
+
+export interface ScreenerEvaluateResult {
+  status: "normal" | "partial" | "unavailable";
+  evaluated_at: string;
+  logic: "AND";
+  matched: ScreenerStockResult[];
+  rejected: ScreenerStockResult[];
+  unavailable: ScreenerStockResult[];
+  limitations: string[];
+  schema_version: "screener-v0.1";
+}
+
 
 export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;

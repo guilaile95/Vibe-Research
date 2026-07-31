@@ -100,6 +100,8 @@ import type {
   AttributionSnapshotSummary,
   AttributionSnapshotListResult,
   AttributionSnapshotDetailResult,
+  ScreenerEvaluateIn,
+  ScreenerEvaluateResult,
 } from "./api/types.ts";
 
 
@@ -566,6 +568,9 @@ export const api = {
   /** 技术指标与价格触发（SMA/EMA/MACD/RSI/布林带/5-20 日均量比）；依赖缺失抛 501。 */
   technicalIndicators: (code: string, period = "daily", days = 120) =>
     get<TechnicalIndicators>(`/market/technical-indicators?code=${code}&period=${period}&days=${days}`),
+  /** 候选股票技术条件筛选（AND）；不读写持仓/自选。 */
+  evaluateScreener: (payload: ScreenerEvaluateIn, signal?: AbortSignal) =>
+    request<ScreenerEvaluateResult>("/screener/evaluate", "POST", payload, { signal, unwrapData: false }),
   /** 季报财务快照（需 mootdx，37 字段）；依赖缺失抛 501。 */
   finance: (code: string) => get<Record<string, string | number | null>>(`/finance?code=${code}`),
   /** 个股基本面：行业 / 总股本 / 上市时间等（需 akshare）；依赖缺失抛 501。 */

@@ -5,7 +5,7 @@ import {
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github,
   Cog, Cpu, Database, Cable, Rocket, FlaskConical, Star, FileText,
   Target, BookOpen, HeartPulse, ReceiptText, MessageSquareCode, ShieldCheck,
-  Settings2, BarChart3, PieChart, Menu, X,
+  Settings2, BarChart3, PieChart, Menu, X, Filter,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -15,7 +15,7 @@ import { PortfolioAdviceTaskIndicator } from "./PortfolioAdviceTaskIndicator";
 const APP_VERSION = "v0.1.3";
 const REPO_URL = "https://github.com/guilaile95/Vibe-Research";
 
-/** 三组导航：市场 / 研究 / 管理。路径集合与 router.tsx 保持一致（19 项）。 */
+/** 三组导航：市场 / 研究 / 管理。路径集合与 router.tsx 保持一致。 */
 const NAV_GROUPS = [
   {
     id: "nav-group-market",
@@ -25,6 +25,7 @@ const NAV_GROUPS = [
       { to: "/intel", icon: Radar, label: "资讯雷达" },
       { to: "/sectors", icon: LayoutGrid, label: "板块中心" },
       { to: "/stock-data", icon: Search, label: "个股数据" },
+      { to: "/screener", icon: Filter, label: "信号筛选" },
       { to: "/watchlist", icon: Star, label: "自选股" },
       { to: "/signal-ledger", icon: Activity, label: "信号账本" },
     ],
