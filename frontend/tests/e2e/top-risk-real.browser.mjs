@@ -155,7 +155,7 @@ function jsonErr(status, detail) {
 
 function technicalIndicatorsEnvelope(code) {
   return {
-    schema_version: "technical-indicators-v1",
+    schema_version: "technical-indicators-v0.1",
     code,
     period: "daily",
     trade_date: "2026-07-29",

@@ -136,6 +136,7 @@ export function StockData() {
   const [tiEnv, setTiEnv] = useState<TechnicalIndicators | null>(null);
   const [tiLoading, setTiLoading] = useState(false);
   const [tiError, setTiError] = useState<string | null>(null);
+  const [tiQueryVersion, setTiQueryVersion] = useState(0);
   /** 与 panelStates 同步的镜像，供事件处理器在 setState 外做纯决策（不在 updater 里写副作用） */
   const panelStatesRef = useRef<PanelStates>(createInitialPanelStates());
   const runIdRef = useRef(0);
@@ -302,7 +303,7 @@ export function StockData() {
         if (rid === runIdRef.current && code === activeCodeRef.current) setTiLoading(false);
       }
     })();
-  }, [activeCode]);
+  }, [activeCode, tiQueryVersion]);
 
   const run = async () => {
     const c = code.trim().toUpperCase();
@@ -310,6 +311,7 @@ export function StockData() {
     const rid = ++runIdRef.current;
     // 正式换股：绑定 activeCode，重置全部可选面板
     setActiveCode(c);
+    setTiQueryVersion((version) => version + 1);
     activeCodeRef.current = c;
     setLoading(true); setErr(null); setDepNote(null); setVal(null); setReports([]); setNews([]); setPctl(null); setFin(null); setAnns([]);
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);

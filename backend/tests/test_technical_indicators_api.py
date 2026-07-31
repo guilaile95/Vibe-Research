@@ -1,19 +1,23 @@
 """HTTP 路由测试：TestClient + monkeypatch astock.kline，禁止真实网络。"""
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
 import astock
+import data_health_event_store
 
 client = TestClient(app_module.app)
 
 
 def _make_klines(n, base_close=10.0, step=0.1):
+    start = date(2026, 1, 1)
     return [
         {
-            "datetime": f"2026-01-{i+1:02d}",
+            "datetime": (start + timedelta(days=i)).isoformat(),
             "open": base_close + i * step,
             "close": base_close + i * step,
             "high": base_close + i * step + 0.05,
@@ -26,7 +30,8 @@ def _make_klines(n, base_close=10.0, step=0.1):
 
 
 @pytest.fixture(autouse=True)
-def _clear_cache():
+def _clear_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
     app_module._DC_CACHE = app_module.TTLCache(max_entries=1024)
     yield
     app_module._DC_CACHE = app_module.TTLCache(max_entries=1024)
@@ -102,17 +107,41 @@ def test_days_clamp_high(monkeypatch):
     assert any("clamp" in w for w in env["warnings"])
 
 
-# ── 5 上游异常 → HTTP 502 ──────────────────────────────────────────
+# ── 5 上游异常 → HTTP 200 unavailable ───────────────────────────────
 
 
-def test_upstream_failure(monkeypatch):
+def test_upstream_failure_returns_safe_unavailable_and_records_failure(monkeypatch):
+    failures = []
+    monkeypatch.setattr(data_health_event_store, "record_failure", lambda *args: failures.append(args))
+
     def _raise(*args, **kwargs):
         raise RuntimeError("mootdx connection refused")
 
     monkeypatch.setattr(astock, "kline", _raise)
 
     resp = client.get("/api/market/technical-indicators?code=000001&period=daily")
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    env = resp.json()["data"]
+    assert env["status"] == "unavailable"
+    assert all(value is None for value in env["latest"].values())
+    assert env["triggers"] == []
+    assert env["series"] == []
+    assert "mootdx connection refused" not in resp.text
+    assert failures == [("technical_indicators", "SOURCE_UNAVAILABLE")]
+
+
+def test_upstream_failure_is_not_cached_and_retries(monkeypatch):
+    calls = 0
+
+    def _raise(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("private upstream detail")
+
+    monkeypatch.setattr(astock, "kline", _raise)
+    assert client.get("/api/market/technical-indicators?code=000001").status_code == 200
+    assert client.get("/api/market/technical-indicators?code=000001").status_code == 200
+    assert calls == 2
 
 
 # ── 6 缓存命中不重复调用上游 ──────────────────────────────────────
@@ -175,3 +204,16 @@ def test_unavailable_not_cached(monkeypatch):
     assert resp2.status_code == 200
     assert resp2.json()["data"]["status"] == "unavailable"
     assert call_count == 2  # unavailable 不缓存，再次调用
+
+
+def test_clamp_warning_is_request_scoped_on_cache_hits(monkeypatch):
+    klines = _make_klines(70)
+    monkeypatch.setattr(astock, "kline", lambda code, category=4, offset=60: list(klines))
+
+    clamped = client.get("/api/market/technical-indicators?code=000001&days=5").json()["data"]
+    exact = client.get("/api/market/technical-indicators?code=000001&days=20").json()["data"]
+    clamped_again = client.get("/api/market/technical-indicators?code=000001&days=5").json()["data"]
+
+    assert any("clamp" in warning for warning in clamped["warnings"])
+    assert not any("clamp" in warning for warning in exact["warnings"])
+    assert any("clamp" in warning for warning in clamped_again["warnings"])

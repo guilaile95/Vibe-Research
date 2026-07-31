@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import date, datetime, time, timezone
 
 # ---------------------------------------------------------------------------
 # 常量
@@ -36,59 +36,63 @@ def _clean_float(v) -> float | None:
 
 
 def _parse_klines(raw: list[dict]) -> list[dict]:
-    """清洗并标准化 K 线：datetime→date, vol→volume, 数值转 float。
-
-    去重（按 date）、去空行、按 datetime 升序排序。
-    """
+    """清洗、确定性去重并按真实交易日升序标准化 K 线。"""
     if not raw:
         return []
 
-    cleaned: list[dict] = []
-    seen_dates: set[str] = set()
+    candidates: dict[str, list[tuple[tuple, dict]]] = {}
 
     for row in raw:
         if not row:
             continue
 
-        # 日期键：支持 datetime 或 date
         dt_raw = row.get("datetime") or row.get("date")
-        if dt_raw is None:
+        parsed = _parse_datetime_value(dt_raw)
+        if parsed is None:
             continue
-        if isinstance(dt_raw, datetime):
-            date_str = dt_raw.strftime("%Y-%m-%d")
-        else:
-            date_str = str(dt_raw)
-            # 只取 YYYY-MM-DD 部分
-            if len(date_str) > 10:
-                date_str = date_str[:10]
-
-        if date_str in seen_dates:
-            continue
-        seen_dates.add(date_str)
 
         close = _clean_float(row.get("close"))
         if close is None:
-            # close 缺失则跳过该行
             continue
 
         high = _clean_float(row.get("high"))
         low = _clean_float(row.get("low"))
-        # vol 键名是 vol 不是 volume
-        vol = _clean_float(row.get("vol"))
+        volume = _clean_float(row.get("volume"))
+        if volume is None:
+            volume = _clean_float(row.get("vol"))
 
-        cleaned.append(
-            {
-                "date": date_str,
-                "close": close,
-                "high": high,
-                "low": low,
-                "volume": vol,
-            }
-        )
+        date_str, timestamp = parsed
+        normalized = {"date": date_str, "close": close, "high": high, "low": low, "volume": volume}
+        completeness = sum(value is not None for value in (high, low, volume))
+        canonical = tuple("" if value is None else f"{value:.12g}" for value in (close, high, low, volume))
+        key = (close is not None, completeness, timestamp, canonical)
+        candidates.setdefault(date_str, []).append((key, normalized))
 
-    # 按 date 升序排序
-    cleaned.sort(key=lambda r: r["date"])
+    cleaned = [max(options, key=lambda item: item[0])[1] for options in candidates.values()]
+    cleaned.sort(key=lambda row: row["date"])
     return cleaned
+
+
+def _parse_datetime_value(value) -> tuple[str, datetime] | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, date):
+        parsed = datetime.combine(value, time.min)
+    else:
+        text = str(value).strip()
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = datetime.combine(date.fromisoformat(text), time.min)
+            except ValueError:
+                return None
+    calendar_date = parsed.date().isoformat()
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return calendar_date, parsed
 
 
 def _is_finite(v) -> bool:
@@ -192,7 +196,7 @@ def _rsi(closes: list[float | None], n: int = 14) -> list[float | None]:
 
     # RSI 在第 n 个变化处（索引 n）产出第一个值
     if avg_loss == 0:
-        result[n] = 100.0
+        result[n] = 50.0 if avg_gain == 0 else 100.0
     else:
         rs = avg_gain / avg_loss
         result[n] = 100.0 - 100.0 / (1.0 + rs)
@@ -208,7 +212,7 @@ def _rsi(closes: list[float | None], n: int = 14) -> list[float | None]:
         avg_gain = (avg_gain * (n - 1) + gain) / n
         avg_loss = (avg_loss * (n - 1) + loss) / n
         if avg_loss == 0:
-            result[i] = 100.0
+            result[i] = 50.0 if avg_gain == 0 else 100.0
         else:
             rs = avg_gain / avg_loss
             result[i] = 100.0 - 100.0 / (1.0 + rs)
@@ -287,7 +291,7 @@ def _detect_triggers(
             for j in range(idx - 20, idx)
             if klines[j].get("high") is not None
         ]
-        if historical_highs and close > max(historical_highs):
+        if len(historical_highs) == 20 and close > max(historical_highs):
             triggers.append(
                 {
                     "type": "close_above_20d_high",
@@ -303,7 +307,7 @@ def _detect_triggers(
             for j in range(idx - 20, idx)
             if klines[j].get("low") is not None
         ]
-        if historical_lows and close < min(historical_lows):
+        if len(historical_lows) == 20 and close < min(historical_lows):
             triggers.append(
                 {
                     "type": "close_below_20d_low",
@@ -362,7 +366,7 @@ def compute_indicators(
     code: str,
     period: str,
     days: int,
-    trade_date: str,
+    trade_date: str | None = None,
     fetched_at: str,
 ) -> dict:
     """入口：原始 K 线 → 清洗 → 逐指标计算 → 触发检测 → envelope。永不抛异常。"""
@@ -374,7 +378,7 @@ def compute_indicators(
             "schema_version": SCHEMA_VERSION,
             "code": code,
             "period": period,
-            "trade_date": trade_date,
+            "trade_date": None,
             "fetched_at": fetched_at,
             "status": "unavailable",
             "warnings": [],
@@ -411,17 +415,18 @@ def _compute_indicators_inner(
     code: str,
     period: str,
     days: int,
-    trade_date: str,
+    trade_date: str | None,
     fetched_at: str,
 ) -> dict:
     klines = _parse_klines(raw_klines)
+    normalized_trade_date = klines[-1]["date"] if klines else None
 
     if not klines:
         return {
             "schema_version": SCHEMA_VERSION,
             "code": code,
             "period": period,
-            "trade_date": trade_date,
+            "trade_date": normalized_trade_date,
             "fetched_at": fetched_at,
             "status": "unavailable",
             "warnings": [],
@@ -456,7 +461,13 @@ def _compute_indicators_inner(
     has_rsi = rsi14[idx] is not None
     has_bollinger = bollinger_middle[idx] is not None
 
-    if len(klines) >= 60 and all([has_sma60, has_macd, has_rsi, has_bollinger]):
+    has_volume_ratio = vr_5_20[idx] is not None
+    has_sma_cross_history = idx >= 60 and sma20[idx - 1] is not None and sma60[idx - 1] is not None
+    historical_highs = [klines[j].get("high") for j in range(max(0, idx - 20), idx) if klines[j].get("high") is not None]
+    historical_lows = [klines[j].get("low") for j in range(max(0, idx - 20), idx) if klines[j].get("low") is not None]
+    trigger_window_complete = idx >= 20 and len(historical_highs) == 20 and len(historical_lows) == 20
+
+    if len(klines) >= 60 and all([has_sma60, has_macd, has_rsi, has_bollinger, has_volume_ratio, trigger_window_complete, has_sma_cross_history]):
         status = "normal"
     elif len(klines) >= 20:
         status = "partial"
@@ -464,6 +475,12 @@ def _compute_indicators_inner(
             limitations.append(f"历史长度 {len(klines)} 不足 60 个交易日，SMA60 不可用")
         if not has_rsi:
             limitations.append("历史长度不足 15 个交易日，RSI14 不可用")
+        if not has_volume_ratio:
+            limitations.append("成交量历史不足，5/20 日均量比不可用")
+        if not trigger_window_complete:
+            limitations.append("价格区间触发不可评估：过去 20 个交易日的 high/low 数据不完整")
+        if not has_sma_cross_history:
+            limitations.append("均线交叉不可评估：缺少前一交易日 SMA60")
     else:
         status = "unavailable"
         limitations.append(f"历史长度 {len(klines)} 不足 20 个交易日，无法计算主要指标")
@@ -514,7 +531,7 @@ def _compute_indicators_inner(
         "schema_version": SCHEMA_VERSION,
         "code": code,
         "period": period,
-        "trade_date": trade_date,
+        "trade_date": normalized_trade_date,
         "fetched_at": fetched_at,
         "status": status,
         "warnings": [],

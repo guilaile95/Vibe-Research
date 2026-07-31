@@ -104,6 +104,10 @@ test("limitationLines map limitations to readable text", () => {
   assert.deepEqual(limitationLines(null), []);
   assert.deepEqual(limitationLines(undefined), []);
   assert.deepEqual(limitationLines({ limitations: [] }), []);
+  assert.deepEqual(
+    limitationLines({ limitations: ["成交量历史不足，5/20 日均量比不可用"] }),
+    ["成交量历史不足，5/20 日均量比不可用"],
+  );
 });
 
 test("indicatorErrorMessage three branches", () => {

@@ -66,11 +66,12 @@ export function triggerLines(
 
 /** limitation 列表 → 人类可读行。 */
 export function limitationLines(
-  env: { limitations?: Array<{ field?: string; reason_code?: string; detail?: string } | null> | null } | null | undefined,
+  env: { limitations?: Array<string | { field?: string; reason_code?: string; detail?: string } | null> | null } | null | undefined,
 ): string[] {
   if (!env?.limitations || !Array.isArray(env.limitations)) return [];
   return env.limitations.map((lim) => {
     if (!lim) return "";
+    if (typeof lim === "string") return lim.trim();
     const field = (lim.field ?? "").trim();
     const detail = (lim.detail ?? "").trim();
     if (field && detail) return `${field}: ${detail}`;

@@ -1001,7 +1001,7 @@ export interface TechnicalIndicators {
   fetched_at: string;
   status: "normal" | "partial" | "unavailable";
   warnings: string[];
-  limitations: Array<{ field?: string; reason_code?: string; detail?: string }>;
+  limitations: Array<string | { field?: string; reason_code?: string; detail?: string }>;
   latest: TechnicalIndicatorLatest;
   triggers: TechnicalIndicatorTrigger[];
   series: TechnicalIndicatorSeriesPoint[];

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime
 
 import pytest
 
@@ -105,6 +106,13 @@ class TestRSI:
         result = ti.compute_indicators(klines, code="000001", period="daily", days=20, trade_date="2026-01-20", fetched_at="2026-01-20T00:00:00")
         assert result["latest"]["rsi14"] is not None
         assert result["latest"]["rsi14"] < 20
+
+    def test_flat_market_is_neutral(self):
+        result = ti.compute_indicators(
+            _klines_from_closes([10.0] * 20), code="000001", period="daily", days=20,
+            trade_date="ignored", fetched_at="2026-01-20T00:00:00Z",
+        )
+        assert result["latest"]["rsi14"] == pytest.approx(50.0)
 
 
 # ── Bollinger ─────────────────────────────────────────────────────────
@@ -287,3 +295,96 @@ class TestInputSanitization:
         assert result["latest"]["sma60"] is not None
         assert result["latest"]["rsi14"] is not None
         assert result["latest"]["bollinger_middle"] is not None
+
+    def test_sixty_rows_are_partial_until_previous_sma60_exists(self):
+        result = ti.compute_indicators(
+            _klines_from_closes([10.0] * 60), code="000001", period="daily", days=60,
+            trade_date="ignored", fetched_at="2026-03-01T00:00:00Z",
+        )
+        assert result["status"] == "partial"
+        assert any("均线交叉不可评估" in item for item in result["limitations"])
+
+    def test_trade_date_comes_from_normalized_latest_row(self):
+        klines = _klines_from_closes([10.0] * 20)
+        result = ti.compute_indicators(
+            list(reversed(klines)), code="000001", period="daily", days=20,
+            trade_date="caller-is-ignored", fetched_at="2026-01-20T00:00:00Z",
+        )
+        assert result["trade_date"] == "2026-01-20"
+        assert result["series"][-1]["date"] == result["trade_date"]
+
+    def test_invalid_calendar_date_is_discarded(self):
+        klines = _klines_from_closes([10.0] * 20)
+        klines[0]["datetime"] = "2026-01-32"
+        result = ti.compute_indicators(
+            klines, code="000001", period="daily", days=20,
+            trade_date="ignored", fetched_at="2026-01-20T00:00:00Z",
+        )
+        assert result["trade_date"] != "2026-01-32"
+        assert all(point["date"] != "2026-01-32" for point in result["series"])
+
+    def test_timezone_datetime_keeps_market_calendar_date(self):
+        rows = _klines_from_closes([10.0] * 20)
+        rows[-1]["datetime"] = "2026-01-20T00:00:00+08:00"
+        result = ti.compute_indicators(rows, code="000001", period="daily", days=20, trade_date="ignored", fetched_at="2026-01-20T00:00:00Z")
+        assert result["trade_date"] == "2026-01-20"
+
+    def test_duplicate_date_selection_is_order_independent(self):
+        base = _klines_from_closes([10.0] * 20)
+        duplicate_a = {"datetime": "2026-01-21T09:00:00", "close": 11.0, "high": 11.1, "low": 10.9, "volume": 100}
+        duplicate_b = {"datetime": "2026-01-21T15:00:00", "close": 12.0, "high": 12.1, "low": 11.9, "volume": 200}
+        first = ti.compute_indicators(base + [duplicate_a, duplicate_b], code="000001", period="daily", days=22, trade_date="ignored", fetched_at="2026-01-22T00:00:00Z")
+        second = ti.compute_indicators(base + [duplicate_b, duplicate_a], code="000001", period="daily", days=22, trade_date="ignored", fetched_at="2026-01-22T00:00:00Z")
+        assert first["series"] == second["series"]
+        assert first["latest"] == second["latest"]
+
+    def test_invalid_duplicate_before_valid_duplicate_does_not_hide_valid(self):
+        raw = [{"datetime": "2026-01-01", "close": None}]
+        raw.extend(_klines_from_closes([10.0] * 19))
+        result = ti.compute_indicators(raw, code="000001", period="daily", days=20, trade_date="ignored", fetched_at="2026-01-20T00:00:00Z")
+        assert result["trade_date"] == "2026-01-19"
+        assert result["latest"]["close"] == 10.0
+
+    def test_volume_and_vol_are_supported_but_amount_is_not_volume(self):
+        rows = _klines_from_closes([10.0] * 20)
+        for row in rows:
+            row.pop("vol", None)
+            row["volume"] = 1000
+            row["amount"] = 999999
+        via_volume = ti.compute_indicators(rows, code="000001", period="daily", days=20, trade_date="ignored", fetched_at="2026-01-20T00:00:00Z")
+        assert via_volume["latest"]["volume_ratio_5_20"] == pytest.approx(1.0)
+        for row in rows:
+            row.pop("volume", None)
+            row["amount"] = 999999
+        via_amount_only = ti.compute_indicators(rows, code="000001", period="daily", days=20, trade_date="ignored", fetched_at="2026-01-20T00:00:00Z")
+        assert via_amount_only["latest"]["volume_ratio_5_20"] is None
+
+    def test_missing_volume_for_long_history_is_partial(self):
+        rows = _klines_from_closes([10.0] * 70)
+        for row in rows:
+            row.pop("vol", None)
+        result = ti.compute_indicators(rows, code="000001", period="daily", days=70, trade_date="ignored", fetched_at="2026-01-20T00:00:00Z")
+        assert result["status"] == "partial"
+        assert any("成交量历史不足" in item for item in result["limitations"])
+
+    @pytest.mark.parametrize("field", ["high", "low"])
+    def test_incomplete_20_day_trigger_window_is_not_evaluated(self, field):
+        rows = _klines_from_closes([10.0] * 21)
+        rows[0][field] = None
+        result = ti.compute_indicators(rows, code="000001", period="daily", days=21, trade_date="ignored", fetched_at="2026-01-21T00:00:00Z")
+        assert not any(trigger["type"].startswith("close_") for trigger in result["triggers"])
+        assert result["status"] == "partial"
+        assert any("价格区间触发不可评估" in item for item in result["limitations"])
+
+    def test_complete_20_day_high_low_window_allows_price_trigger(self):
+        rows = _klines_from_closes([10.0] * 20 + [11.0])
+        result = ti.compute_indicators(rows, code="000001", period="daily", days=21, trade_date="ignored", fetched_at="2026-01-21T00:00:00Z")
+        assert any(trigger["type"] == "close_above_20d_high" for trigger in result["triggers"])
+
+    def test_fetched_at_is_utc_and_microsecond_parseable(self):
+        from technical_indicators_router import _utc_now_iso
+        value = _utc_now_iso()
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        assert parsed.tzinfo is not None
+        assert value.endswith("Z")
+        assert len(value.split(".")[-1].removesuffix("Z")) == 6

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -23,6 +23,34 @@ _DAYS_MIN = 20
 _DAYS_MAX = 240
 _DAYS_DEFAULT = 120
 _CACHE_TTL = 900  # 15 分钟
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _record_failure() -> None:
+    try:
+        import data_health_event_store as _dhes
+        _dhes.safe_call(_dhes.record_failure, "technical_indicators", "SOURCE_UNAVAILABLE")
+    except Exception:
+        pass
+
+
+def _upstream_unavailable_envelope(code: str, period: str, fetched_at: str, warnings: list[str]) -> dict:
+    return {
+        "schema_version": ti.SCHEMA_VERSION,
+        "code": code,
+        "period": period,
+        "trade_date": None,
+        "fetched_at": fetched_at,
+        "status": "unavailable",
+        "warnings": warnings,
+        "limitations": ["核心行情数据当前不可用。"],
+        "latest": ti._empty_latest(),
+        "triggers": [],
+        "series": [],
+    }
 
 
 @router.get("")
@@ -52,35 +80,35 @@ def get_technical_indicators(
     cache_key = ("technical_indicators", f"{code}:{period}:{days}")
     hit = app_module._DC_CACHE.get(cache_key, _CACHE_TTL)
     if hit is not app_module._CACHE_MISS:
-        return {"data": hit}
+        response = dict(hit)
+        if warnings:
+            response["warnings"] = warnings + list(hit.get("warnings", []))
+        return {"data": response}
 
     # 4. 拉一次 K 线
     try:
         raw_klines = astock.kline(code, category=4, offset=days)
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"行情源异常：{e}") from e
+    except Exception:  # noqa: BLE001
+        fetched_at = _utc_now_iso()
+        _record_failure()
+        return {"data": _upstream_unavailable_envelope(code, period, fetched_at, warnings)}
 
     # 5. 计算
-    fetched_at = datetime.now().isoformat(timespec="seconds")
-    trade_date = ""
-    if raw_klines:
-        last = raw_klines[-1]
-        dt_raw = last.get("datetime") or last.get("date")
-        if dt_raw:
-            trade_date = str(dt_raw)[:10]
+    fetched_at = _utc_now_iso()
 
     envelope = ti.compute_indicators(
         raw_klines,
         code=code,
         period=period,
         days=days,
-        trade_date=trade_date,
+        trade_date=None,
         fetched_at=fetched_at,
     )
 
-    # 合并 warning
+    # 请求级 warning 不写入共享缓存，避免不同 days 请求互相污染。
+    response_envelope = dict(envelope)
     if warnings:
-        envelope["warnings"] = warnings + list(envelope.get("warnings", []))
+        response_envelope["warnings"] = warnings + list(envelope.get("warnings", []))
 
     # 6. 缓存（unavailable 不缓存）
     st = envelope.get("status")
@@ -99,4 +127,4 @@ def get_technical_indicators(
     except Exception:
         pass
 
-    return {"data": envelope}
+    return {"data": response_envelope}
