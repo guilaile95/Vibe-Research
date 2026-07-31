@@ -148,7 +148,6 @@ export interface IntelDigestSaveIn {
   summary_text: string;
   source_refs?: unknown;
   input_items?: IntelDigestInputItem[];
-  sector_name?: string;
 }
 
 export interface IntelDigestSaveResult {

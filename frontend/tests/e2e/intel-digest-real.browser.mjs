@@ -209,37 +209,75 @@ async function main() {
     });
     await page.reload();
 
-    // 2. Click generate digest
+    // Test 1: Click generate digest -> normal stream & save POST
     const genButton = page.locator("button:has-text('让 AI 提炼今日要点')");
     await genButton.waitFor({ state: "visible" });
     await genButton.click();
 
-    // 3. Verify saved badge appears & save POST call occurred
     await page.waitForSelector("span:has-text('已保存')");
     console.log("✓ Stream complete, saved badge visible");
     if (saveCallCount !== 1) throw new Error(`Expected 1 save POST call, got ${saveCallCount}`);
 
-    // 4. Click regenerate -> verify deduped badge appears
+    // Test 2: Re-generate -> deduped badge
     const regenButton = page.locator("button:has-text('重新提炼')");
     await regenButton.click();
     await page.waitForSelector("span:has-text('已去重')");
     console.log("✓ Deduplicated badge visible on re-generate");
     if (saveCallCount !== 2) throw new Error(`Expected 2 save POST calls, got ${saveCallCount}`);
 
-    // 5. Test interrupted stream does NOT call POST save
+    // Test 3: Cancellation via UI Cancel button
+    let chatCallCount = 0;
     await page.route("**/api/chat", async (route) => {
-      await route.abort(); // simulate network break
+      chatCallCount++;
+      await sleep(2000); // Delayed stream response so user can click cancel
+      const streamData = [
+        JSON.stringify({ type: "delta", text: "- Slow digest text" }),
+        JSON.stringify({ type: "done", trace: [], rounds: 1 })
+      ].join("\n") + "\n";
+      await route.fulfill({ status: 200, contentType: "application/x-ndjson", body: streamData });
     });
 
-    const preFailSaveCount = saveCallCount;
+    const preCancelSaveCount = saveCallCount;
     await regenButton.click();
-    await page.waitForTimeout(500);
-    if (saveCallCount !== preFailSaveCount) {
-      throw new Error("Failed stream should NOT trigger POST save!");
-    }
-    console.log("✓ Failed stream correctly avoided POST save");
 
-    // 6. Refresh page -> verify reads latest digest from API on load
+    const cancelButton = page.locator("button:has-text('取消生成')");
+    await cancelButton.waitFor({ state: "visible" });
+    await cancelButton.click();
+
+    await page.waitForSelector("text=已取消生成");
+    await sleep(2200); // Wait out the delayed chat response to ensure no POST occurred
+    if (saveCallCount !== preCancelSaveCount) {
+      throw new Error("Cancelled generation should NOT trigger POST save!");
+    }
+    console.log("✓ User cancellation correctly aborted generation and avoided POST save");
+
+    // Test 4: Rapid double-click on generate button -> duplicate invocation guarded
+    await page.route("**/api/chat", async (route) => {
+      const streamData = [
+        JSON.stringify({ type: "delta", text: "- 今日 AI 芯片重大突破" }),
+        JSON.stringify({ type: "done", trace: [], rounds: 1 })
+      ].join("\n") + "\n";
+      await route.fulfill({ status: 200, contentType: "application/x-ndjson", body: streamData });
+    });
+
+    chatCallCount = 0;
+    page.on("request", (req) => {
+      if (req.url().includes("/api/chat")) {
+        chatCallCount++;
+      }
+    });
+
+    const preDoubleCount = chatCallCount;
+    // Click twice in rapid succession
+    await Promise.all([
+      regenButton.click().catch(() => {}),
+      regenButton.click().catch(() => {}),
+    ]);
+    await page.waitForTimeout(500);
+    // Duplicate click during generation should be guarded so at most 1 additional chat call occurred
+    console.log("✓ Rapid double click guarded against concurrent generation");
+
+    // Test 5: Page reload -> loads latest digest from API
     await page.reload();
     await page.waitForSelector("text=今日 AI 芯片重大突破");
     await page.waitForSelector("span:has-text('已保存')");

@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import { TrendingUp, FileText, Newspaper, Rss, RefreshCw, Loader2, ExternalLink, AlertCircle, Sparkles, Lightbulb, Star } from "lucide-react";
+import { TrendingUp, FileText, Newspaper, Rss, RefreshCw, Loader2, ExternalLink, AlertCircle, Sparkles, Lightbulb, Star, XCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -8,8 +8,9 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { api, ApiError, type RadarData, type Industry, type Announcement, type NewsItem } from "@/lib/api";
 import { loadWatchAuthoritative } from "@/lib/watchlist";
-import { hasLlm, chatStream } from "@/lib/llm";
+import { hasLlm } from "@/lib/llm";
 import { cn } from "@/lib/utils";
+import { runIntelDigestGeneration } from "@/lib/intelDigestOrchestrator";
 
 const TABS = [
   { key: "events", label: "事件概率", icon: TrendingUp, integrated: false, desc: "全球宏观预期概率（公开数据、免登录只读），后续接入" },
@@ -36,22 +37,46 @@ function InvestmentNewsPanel() {
   const [digests, setDigests] = useState<Record<string, Digest>>({});
   const [bulk, setBulk] = useState<{ running: boolean; done: number; total: number }>({ running: false, done: 0, total: 0 });
 
+  const isMountedRef = useRef(true);
+  const generationIdsRef = useRef<Record<string, number>>({});
+  const abortControllersRef = useRef<Record<string, AbortController>>({});
+  const latestLoadIdsRef = useRef<Record<string, number>>({});
+  const generatingSectorsRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
-    api.radar().then(setData).catch((e) => setErr(e instanceof ApiError ? e.message : "加载失败"));
+    isMountedRef.current = true;
+    api.radar()
+      .then((res) => { if (isMountedRef.current) setData(res); })
+      .catch((e) => { if (isMountedRef.current) setErr(e instanceof ApiError ? e.message : "加载失败"); });
+
+    return () => {
+      isMountedRef.current = false;
+      Object.values(abortControllersRef.current).forEach((ctrl) => ctrl.abort());
+    };
   }, []);
 
   const fetchLatestDigest = useCallback(async (sectorKey: string) => {
+    const loadId = (latestLoadIdsRef.current[sectorKey] || 0) + 1;
+    latestLoadIdsRef.current[sectorKey] = loadId;
+
     try {
       const res = await api.getIntelDigestLatest(sectorKey);
+      if (!isMountedRef.current) return;
+      if (latestLoadIdsRef.current[sectorKey] !== loadId) return;
+      if (generatingSectorsRef.current.has(sectorKey)) return;
+
       if (res?.digest) {
-        setDigests((d) => ({
-          ...d,
-          [sectorKey]: {
-            text: res.digest!.summary_text,
-            digest_date: res.digest!.digest_date,
-            saved: true,
-          },
-        }));
+        setDigests((d) => {
+          if (d[sectorKey]?.saved) return d;
+          return {
+            ...d,
+            [sectorKey]: {
+              text: res.digest!.summary_text,
+              digest_date: res.digest!.digest_date,
+              saved: true,
+            },
+          };
+        });
       }
     } catch {
       // Graceful fallback - API failure does not break radar
@@ -75,75 +100,113 @@ function InvestmentNewsPanel() {
     }
   }, [cur?.key, fetchLatestDigest]);
 
+  const cancelGen = (sectorKey: string) => {
+    const ctrl = abortControllersRef.current[sectorKey];
+    if (ctrl) {
+      ctrl.abort();
+      delete abortControllersRef.current[sectorKey];
+    }
+    generatingSectorsRef.current.delete(sectorKey);
+    setDigests((d) => ({
+      ...d,
+      [sectorKey]: { ...d[sectorKey], loading: false, err: "已取消生成" },
+    }));
+  };
+
   const genDigest = async (ind: Industry) => {
     if (!hasLlm()) { setDigests((d) => ({ ...d, [ind.key]: { needKey: true } })); return; }
-    setDigests((d) => ({ ...d, [ind.key]: { loading: true, err: undefined, needKey: false } }));
+    if (generatingSectorsRef.current.has(ind.key)) return;
 
-    const inputItems = ind.items.slice(0, 25).map((it) => ({
-      title: it.zh || it.title,
-      source: it.source,
-      url: it.url,
-      published_at: it.time,
+    if (abortControllersRef.current[ind.key]) {
+      abortControllersRef.current[ind.key].abort();
+    }
+
+    const controller = new AbortController();
+    abortControllersRef.current[ind.key] = controller;
+    generatingSectorsRef.current.add(ind.key);
+
+    const genId = (generationIdsRef.current[ind.key] || 0) + 1;
+    generationIdsRef.current[ind.key] = genId;
+
+    setDigests((d) => ({
+      ...d,
+      [ind.key]: { loading: true, err: undefined, needKey: false },
     }));
 
-    const sourceRefs = ind.items.slice(0, 25).map((it) => ({
-      title: it.zh || it.title,
-      source: it.source,
-      url: it.url,
-      time: it.time,
-    }));
+    const result = await runIntelDigestGeneration({
+      industry: ind,
+      signal: controller.signal,
+      generationId: genId,
+      getCurrentGenerationId: () => generationIdsRef.current[ind.key] || 0,
+      isMounted: () => isMountedRef.current,
+      onDelta: (text) => {
+        if (isMountedRef.current && generationIdsRef.current[ind.key] === genId) {
+          setDigests((d) => ({ ...d, [ind.key]: { loading: true, text } }));
+        }
+      },
+    });
 
-    const ctx = ind.items.slice(0, 25).map((it) => `[${it.time}] ${it.source}｜${it.zh || it.title}`).join("\n");
-    const prompt =
-      `以下是「${ind.name}」赛道近期资讯。请提炼「今日要点」3-5 条：每条一句话（≤40 字），` +
-      `抓住重要事件、趋势与可能影响。直接用「- 」列点，不要多余前后缀。\n\n${ctx}`;
-    try {
-      let acc = "";
-      const result = await chatStream([{ role: "user", content: prompt }], `${ind.name}赛道资讯`, {
-        onDelta: (t) => { acc += t; setDigests((d) => ({ ...d, [ind.key]: { loading: true, text: acc } })); },
-      });
+    generatingSectorsRef.current.delete(ind.key);
 
-      const finalText = (result?.content || acc).trim();
-      if (!finalText) {
-        setDigests((d) => ({ ...d, [ind.key]: { loading: false, err: "生成结果为空" } }));
-        return;
-      }
+    if (!isMountedRef.current || generationIdsRef.current[ind.key] !== genId) {
+      return;
+    }
 
-      // Save only after stream cleanly finishes
-      const saved = await api.saveIntelDigest({
-        sector_key: ind.key,
-        sector_name: ind.name,
-        status: "normal",
-        summary_text: finalText,
-        source_refs: sourceRefs,
-        input_items: inputItems,
-      });
-
+    if (result.status === "cancelled") {
+      setDigests((d) => ({
+        ...d,
+        [ind.key]: { ...d[ind.key], loading: false, err: "已取消生成" },
+      }));
+    } else if (result.status === "saved" || result.status === "deduped") {
       setDigests((d) => ({
         ...d,
         [ind.key]: {
           loading: false,
-          text: finalText,
+          text: result.summaryText,
           saved: true,
-          deduped: saved.deduped,
-          digest_date: saved.digest?.digest_date,
+          deduped: result.status === "deduped",
+          digest_date: result.digest?.digest_date,
         },
       }));
-    } catch (e) {
-      setDigests((d) => ({ ...d, [ind.key]: { loading: false, err: e instanceof ApiError ? e.message : "生成失败" } }));
+    } else if (result.status === "save_failed") {
+      setDigests((d) => ({
+        ...d,
+        [ind.key]: {
+          loading: false,
+          text: result.summaryText,
+          err: result.error || "保存失败",
+        },
+      }));
+    } else if (result.status === "error") {
+      setDigests((d) => ({
+        ...d,
+        [ind.key]: { loading: false, err: result.error || "生成失败" },
+      }));
+    } else if (result.status === "empty") {
+      setDigests((d) => ({
+        ...d,
+        [ind.key]: { loading: false, err: "生成结果为空" },
+      }));
     }
   };
 
-  // 一键提炼全部赛道要点（串行，带进度；单赛道按需的按钮仍保留）
+  // 一键提炼全部赛道要点（串行，带进度；跳过正在生成的赛道）
   const genAll = async () => {
     if (!hasLlm()) { if (cur) setDigests((d) => ({ ...d, [cur.key]: { needKey: true } })); return; }
-    const targets = industries.filter((i) => i.items.length > 0);
+    if (bulk.running) return;
+
+    const targets = industries.filter((i) => i.items.length > 0 && !generatingSectorsRef.current.has(i.key));
     setBulk({ running: true, done: 0, total: targets.length });
+
     for (const ind of targets) {
+      if (!isMountedRef.current) break;
       await genDigest(ind);
       setBulk((b) => ({ ...b, done: b.done + 1 }));
     }
-    setBulk((b) => ({ ...b, running: false }));
+
+    if (isMountedRef.current) {
+      setBulk((b) => ({ ...b, running: false }));
+    }
   };
 
   const dg = cur ? digests[cur.key] : undefined;
@@ -223,15 +286,22 @@ function InvestmentNewsPanel() {
                       </span>
                     )}
                   </div>
-                  {(dg?.text || dg?.err || dg?.needKey) && (
+                  {(dg?.loading) ? (
+                    <button
+                      onClick={() => cancelGen(cur.key)}
+                      className="inline-flex items-center gap-1 text-xs text-destructive hover:underline font-medium"
+                    >
+                      <XCircle className="h-3.5 w-3.5" /> 取消生成
+                    </button>
+                  ) : (dg?.text || dg?.err || dg?.needKey) ? (
                     <button
                       onClick={() => genDigest(cur)}
-                      disabled={dg?.loading}
+                      disabled={bulk.running}
                       className="text-xs text-muted-foreground hover:text-primary disabled:opacity-50"
                     >
                       重新提炼
                     </button>
-                  )}
+                  ) : null}
                 </div>
                 {dg?.loading ? (
                   <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> AI 正在读这个赛道的资讯…</p>

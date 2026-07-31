@@ -23,12 +23,10 @@ TRACKING_PARAMS = frozenset(
         "utm_campaign",
         "utm_term",
         "utm_content",
-        "spm",
-        "from",
-        "ref",
         "fbclid",
         "gclid",
-        "v",
+        "msclkid",
+        "spm",
         "_hsenc",
         "_hsmi",
         "mkt_tok",
@@ -50,18 +48,21 @@ SECTOR_NAME_MAP = {
     "space": "商业航天 / 卫星",
 }
 
+VALID_SECTOR_KEYS = frozenset(SECTOR_NAME_MAP.keys())
+
 
 def normalize_url(raw_url: str) -> str:
     """
-    Normalize URL per spec section IX:
+    Normalize URL per spec section IX & Head Review section 2:
     - Scheme and hostname lowercase
     - Path casing preserved
     - Fragment removed
-    - Common tracking parameters removed
+    - Conservative tracking parameters removed (utm_*, fbclid, gclid, msclkid, spm, _hsenc, _hsmi, mkt_tok)
     - Default port normalized (http 80, https 443 removed)
     - Non-default port preserved
+    - IPv6 netloc correctly handled
     - Query parameters deterministically sorted
-    - NO url.rstrip(":")
+    - Reconstruct netloc via parts.hostname / parts.port / parts.username / parts.password
     """
     if not raw_url:
         return ""
@@ -71,15 +72,31 @@ def normalize_url(raw_url: str) -> str:
 
     parts = urllib.parse.urlsplit(stripped)
     scheme = parts.scheme.lower()
-    netloc = parts.netloc.lower()
+    hostname = (parts.hostname or "").lower()
+    port = parts.port
+    username = parts.username
+    password = parts.password
 
-    if ":" in netloc:
-        host, port_str = netloc.split(":", 1)
-        if (scheme == "http" and port_str == "80") or (
-            scheme == "https" and port_str == "443"
-        ):
-            netloc = host
+    # Normalize default ports
+    if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
+        port = None
 
+    netloc_parts = []
+    if username is not None:
+        user_info = username
+        if password is not None:
+            user_info += f":{password}"
+        netloc_parts.append(f"{user_info}@")
+
+    if ":" in hostname:  # IPv6 address
+        netloc_parts.append(f"[{hostname}]")
+    else:
+        netloc_parts.append(hostname)
+
+    if port is not None:
+        netloc_parts.append(f":{port}")
+
+    netloc = "".join(netloc_parts)
     path = parts.path  # preserve path casing
 
     query_params = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
@@ -96,7 +113,7 @@ def compute_input_fingerprint(
     """
     Compute input fingerprint per spec section VIII.
 
-    Input includes: sector_key, news title, source, published_at, normalized URL, snippet.
+    Input includes: sector_key, news title, source, published_at, normalized URL, summary.
     Input items are deterministically sorted so ordering variations produce identical fingerprint.
     """
     normalized_items = []
@@ -176,8 +193,8 @@ def save_digest(
     summary_text: str,
     source_refs: list[Any] | dict[str, Any] | str,
     input_items: list[dict[str, Any]],
-    sector_name: str | None = None,
     db_path: str | Path | None = None,
+    now_dt: datetime | None = None,
 ) -> tuple[dict[str, Any] | None, bool]:
     """
     Save intel digest with derived authoritative fields.
@@ -188,15 +205,12 @@ def save_digest(
     if status not in ("normal", "partial"):
         return None, False
 
-    now_shanghai = get_shanghai_now()
+    shanghai_tz = zoneinfo.ZoneInfo("Asia/Shanghai")
+    now_shanghai = (now_dt.astimezone(shanghai_tz) if now_dt else get_shanghai_now())
     digest_date = now_shanghai.strftime("%Y-%m-%d")
     iso_now = now_shanghai.isoformat()
 
-    resolved_sector_name = (
-        sector_name.strip()
-        if sector_name and sector_name.strip()
-        else SECTOR_NAME_MAP.get(sector_key, sector_key)
-    )
+    resolved_sector_name = SECTOR_NAME_MAP[sector_key]
     input_fp = compute_input_fingerprint(sector_key, input_items)
     digest_id = compute_digest_id(digest_date, sector_key, input_fp)
 

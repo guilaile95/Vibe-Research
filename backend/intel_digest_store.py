@@ -103,11 +103,10 @@ def save_intel_digest(
     db_path: str | Path | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """
-    Save an intel digest record.
+    Save an intel digest record using atomic SQLite ON CONFLICT DO NOTHING in a single transaction.
 
-    If a record with matching (digest_date, sector_key, input_fingerprint) exists,
-    returns the existing record with deduped=True without overwriting.
-    Otherwise inserts and returns the new record with deduped=False.
+    If inserted (rowcount=1), returns the inserted record with deduped=False.
+    If conflict (rowcount=0), returns the existing record with deduped=True without overwriting.
     """
     path = Path(db_path) if db_path else get_default_db_path()
     initialize_store(path)
@@ -130,48 +129,46 @@ def save_intel_digest(
     with _LOCK:
         try:
             with _connect(path) as conn:
-                # Check for existing record matching unique constraint (digest_date, sector_key, input_fingerprint)
-                existing = conn.execute(
-                    """
-                    SELECT * FROM intel_daily_digests
-                    WHERE digest_date = ? AND sector_key = ? AND input_fingerprint = ?
-                    LIMIT 1
-                    """,
-                    (digest_date, sector_key, input_fingerprint),
-                ).fetchone()
+                with conn:
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO intel_daily_digests (
+                            digest_id, digest_date, sector_key, sector_name, status,
+                            summary_text, source_refs, input_fingerprint, generated_at, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(digest_date, sector_key, input_fingerprint)
+                        DO NOTHING
+                        """,
+                        (
+                            digest_id,
+                            digest_date,
+                            sector_key,
+                            sector_name,
+                            status,
+                            summary_text,
+                            source_refs_str,
+                            input_fingerprint,
+                            generated_at,
+                            created_at,
+                        ),
+                    )
 
-                if existing:
-                    return _row_to_dict(existing), True
-
-                # Insert new record
-                conn.execute(
-                    """
-                    INSERT INTO intel_daily_digests (
-                        digest_id, digest_date, sector_key, sector_name, status,
-                        summary_text, source_refs, input_fingerprint, generated_at, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        digest_id,
-                        digest_date,
-                        sector_key,
-                        sector_name,
-                        status,
-                        summary_text,
-                        source_refs_str,
-                        input_fingerprint,
-                        generated_at,
-                        created_at,
-                    ),
-                )
-                conn.commit()
-
-                # Fetch back inserted record
-                row = conn.execute(
-                    "SELECT * FROM intel_daily_digests WHERE digest_id = ?",
-                    (digest_id,),
-                ).fetchone()
-                return _row_to_dict(row), False
+                    if cursor.rowcount == 1:
+                        row = conn.execute(
+                            "SELECT * FROM intel_daily_digests WHERE digest_id = ?",
+                            (digest_id,),
+                        ).fetchone()
+                        return _row_to_dict(row), False
+                    else:
+                        existing = conn.execute(
+                            """
+                            SELECT * FROM intel_daily_digests
+                            WHERE digest_date = ? AND sector_key = ? AND input_fingerprint = ?
+                            LIMIT 1
+                            """,
+                            (digest_date, sector_key, input_fingerprint),
+                        ).fetchone()
+                        return _row_to_dict(existing), True
 
         except sqlite3.DatabaseError as e:
             raise IntelDigestCorruptedError() from e
