@@ -9,6 +9,21 @@ import {
   isSectorMatch,
 } from "../src/lib/intelDigestView.ts";
 
+import {
+  runIntelDigestGeneration,
+  type RunIntelDigestGenerationParams,
+} from "../src/lib/intelDigestOrchestrator.ts";
+import type { Industry, IntelDigestSaveIn, IntelDigestSaveResult } from "../src/lib/api/types.ts";
+
+const mockIndustry: Industry = {
+  key: "ai",
+  name: "AI 人工智能",
+  accent: "#f97316",
+  items: [
+    { title: "AI Chip Innovation Announced", zh: "AI 芯片重大突破", source: "TechCrunch", time: "2026-07-31", url: "https://example.com/ai-chip?utm_source=rss" },
+  ],
+};
+
 test("buildDigestSourceRefs and buildDigestInputItems slice top 25 items", () => {
   const mockItems = Array.from({ length: 30 }, (_, i) => ({
     title: `Title ${i}`,
@@ -49,41 +64,192 @@ test("isSectorMatch detects sector switch race condition", () => {
   assert.equal(isSectorMatch("ai", "semiconductor"), false);
 });
 
-test("stream resolve contract: empty/aborted/errored stream does not trigger save", async () => {
-  let savedCalled = false;
-  const mockSaveApi = async () => {
-    savedCalled = true;
+// Orchestrator unit tests covering Head Review Section 7 contracts
+test("orchestrator: stream resolve after complete calls saveApi and returns saved status", async () => {
+  let saveCalled = false;
+  let savedPayload: IntelDigestSaveIn | null = null;
+
+  const mockSaveApi = async (payload: IntelDigestSaveIn): Promise<IntelDigestSaveResult> => {
+    saveCalled = true;
+    savedPayload = payload;
+    return {
+      digest: {
+        digest_id: "idg_123",
+        digest_date: "2026-07-31",
+        sector_key: "ai",
+        sector_name: "AI 人工智能",
+        status: "normal",
+        summary_text: payload.summary_text,
+        source_refs: payload.source_refs,
+        input_fingerprint: "fp123",
+        generated_at: "2026-07-31T10:00:00+08:00",
+        created_at: "2026-07-31T10:00:00+08:00",
+      },
+      deduped: false,
+    };
+  };
+
+  const mockChatStream = async (_msg: any, _ctx: any, handlers: any) => {
+    handlers.onDelta?.("- AI 芯片突破");
+    return { content: "- AI 芯片突破", trace: [], rounds: 1 };
+  };
+
+  const controller = new AbortController();
+  const res = await runIntelDigestGeneration({
+    industry: mockIndustry,
+    signal: controller.signal,
+    generationId: 1,
+    getCurrentGenerationId: () => 1,
+    isMounted: () => true,
+    saveApi: mockSaveApi,
+    chatStreamFn: mockChatStream as any,
+  });
+
+  assert.equal(saveCalled, true);
+  assert.equal(res.status, "saved");
+  assert.equal(res.summaryText, "- AI 芯片突破");
+  assert.equal(savedPayload?.sector_key, "ai");
+});
+
+test("orchestrator: stream error does NOT call saveApi", async () => {
+  let saveCalled = false;
+  const mockSaveApi = async (): Promise<IntelDigestSaveResult> => {
+    saveCalled = true;
     return { digest: null, deduped: false };
   };
 
-  // 1. Errored stream throws -> save NOT called
-  const erroredStream = async () => {
-    throw new Error("Stream error");
+  const mockErrStream = async () => {
+    throw new Error("后端响应流意外中断");
   };
 
-  try {
-    const text = await erroredStream();
-    if (shouldSaveDigest(text)) {
-      await mockSaveApi();
-    }
-  } catch {
-    /* expected stream error handling */
-  }
-  assert.equal(savedCalled, false);
+  const controller = new AbortController();
+  const res = await runIntelDigestGeneration({
+    industry: mockIndustry,
+    signal: controller.signal,
+    generationId: 1,
+    getCurrentGenerationId: () => 1,
+    isMounted: () => true,
+    saveApi: mockSaveApi,
+    chatStreamFn: mockErrStream as any,
+  });
 
-  // 2. Empty stream -> save NOT called
-  const emptyStream = async () => "";
-  const emptyText = await emptyStream();
-  if (shouldSaveDigest(emptyText)) {
-    await mockSaveApi();
-  }
-  assert.equal(savedCalled, false);
+  assert.equal(saveCalled, false);
+  assert.equal(res.status, "error");
+  assert.equal(res.error, "后端响应流意外中断");
+});
 
-  // 3. Normal stream -> save called after resolve
-  const validStream = async () => "- Point 1\n- Point 2";
-  const validText = await validStream();
-  if (shouldSaveDigest(validText)) {
-    await mockSaveApi();
-  }
-  assert.equal(savedCalled, true);
+test("orchestrator: empty stream content does NOT call saveApi", async () => {
+  let saveCalled = false;
+  const mockSaveApi = async (): Promise<IntelDigestSaveResult> => {
+    saveCalled = true;
+    return { digest: null, deduped: false };
+  };
+
+  const mockEmptyStream = async () => ({ content: "   \n  ", trace: [], rounds: 1 });
+
+  const controller = new AbortController();
+  const res = await runIntelDigestGeneration({
+    industry: mockIndustry,
+    signal: controller.signal,
+    generationId: 1,
+    getCurrentGenerationId: () => 1,
+    isMounted: () => true,
+    saveApi: mockSaveApi,
+    chatStreamFn: mockEmptyStream as any,
+  });
+
+  assert.equal(saveCalled, false);
+  assert.equal(res.status, "empty");
+});
+
+test("orchestrator: AbortSignal abort returns cancelled and does NOT call saveApi", async () => {
+  let saveCalled = false;
+  const mockSaveApi = async (): Promise<IntelDigestSaveResult> => {
+    saveCalled = true;
+    return { digest: null, deduped: false };
+  };
+
+  const controller = new AbortController();
+  controller.abort(); // Aborted before starting
+
+  const res = await runIntelDigestGeneration({
+    industry: mockIndustry,
+    signal: controller.signal,
+    generationId: 1,
+    getCurrentGenerationId: () => 1,
+    isMounted: () => true,
+    saveApi: mockSaveApi,
+  });
+
+  assert.equal(saveCalled, false);
+  assert.equal(res.status, "cancelled");
+});
+
+test("orchestrator: abort during stream resolution cancels saveApi call", async () => {
+  let saveCalled = false;
+  const controller = new AbortController();
+
+  const mockChatStream = async () => {
+    controller.abort(); // Aborted during stream execution
+    return { content: "- Summary text", trace: [], rounds: 1 };
+  };
+
+  const res = await runIntelDigestGeneration({
+    industry: mockIndustry,
+    signal: controller.signal,
+    generationId: 1,
+    getCurrentGenerationId: () => 1,
+    isMounted: () => true,
+    saveApi: async () => { saveCalled = true; return { digest: null, deduped: false }; },
+    chatStreamFn: mockChatStream as any,
+  });
+
+  assert.equal(saveCalled, false);
+  assert.equal(res.status, "cancelled");
+});
+
+test("orchestrator: superseded generation ID prevents saving", async () => {
+  let saveCalled = false;
+  let currentGenId = 1;
+
+  const mockChatStream = async () => {
+    currentGenId = 2; // Superseded by a newer request during stream
+    return { content: "- Summary text", trace: [], rounds: 1 };
+  };
+
+  const controller = new AbortController();
+  const res = await runIntelDigestGeneration({
+    industry: mockIndustry,
+    signal: controller.signal,
+    generationId: 1,
+    getCurrentGenerationId: () => currentGenId,
+    isMounted: () => true,
+    saveApi: async () => { saveCalled = true; return { digest: null, deduped: false }; },
+    chatStreamFn: mockChatStream as any,
+  });
+
+  assert.equal(saveCalled, false);
+  assert.equal(res.status, "superseded");
+});
+
+test("orchestrator: save API failure retains generated markdown text and returns save_failed status", async () => {
+  const mockChatStream = async () => ({ content: "- Valid summary text", trace: [], rounds: 1 });
+  const mockFailingSaveApi = async (): Promise<IntelDigestSaveResult> => {
+    throw new Error("Intel 摘要数据存储故障");
+  };
+
+  const controller = new AbortController();
+  const res = await runIntelDigestGeneration({
+    industry: mockIndustry,
+    signal: controller.signal,
+    generationId: 1,
+    getCurrentGenerationId: () => 1,
+    isMounted: () => true,
+    saveApi: mockFailingSaveApi,
+    chatStreamFn: mockChatStream as any,
+  });
+
+  assert.equal(res.status, "save_failed");
+  assert.equal(res.summaryText, "- Valid summary text");
+  assert.equal(res.error, "Intel 摘要数据存储故障");
 });
