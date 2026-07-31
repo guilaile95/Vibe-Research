@@ -38,25 +38,49 @@ class IntelDigestInputItemIn(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def validate_url_scheme(cls, v: str) -> str:
+    def validate_url(cls, v: str) -> str:
+        """Require http/https scheme, non-empty hostname, and a legal port.
+
+        Accessing urlsplit(...).port may raise ValueError for illegal ports
+        (e.g. 'bad-port'); convert that to a Pydantic validation error (422)
+        so it never becomes a 500 inside the service layer.
+        """
         if not v or not v.strip():
             raise ValueError("URL cannot be empty")
         stripped = v.strip()
-        scheme = urllib.parse.urlsplit(stripped).scheme.lower()
+        parts = urllib.parse.urlsplit(stripped)
+        scheme = parts.scheme.lower()
         if scheme not in ("http", "https"):
             raise ValueError("URL must have http or https scheme")
+        hostname = parts.hostname
+        if not hostname:
+            raise ValueError("URL must have a non-empty hostname")
+        try:
+            _ = parts.port  # raises ValueError on illegal port strings
+        except ValueError as e:
+            raise ValueError(f"URL has invalid port: {stripped}") from e
         return stripped
 
     @field_validator("published_at")
     @classmethod
     def validate_iso8601_date(cls, v: str) -> str:
+        """Require parseable ISO-8601 with timezone offset or Z.
+
+        Rejects bare dates ('2026-07-31') and naive datetimes
+        ('2026-07-31T10:00:00') that lack timezone info.
+        """
         if not v or not v.strip():
             raise ValueError("published_at cannot be empty")
         stripped = v.strip()
         try:
-            datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
         except Exception as e:
             raise ValueError(f"published_at must be valid ISO-8601 date: {stripped}") from e
+        if dt.tzinfo is None:
+            raise ValueError(
+                "published_at must include timezone offset or Z "
+                f"(got naive datetime: {stripped})"
+            )
         return stripped
 
 

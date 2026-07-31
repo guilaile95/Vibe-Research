@@ -591,7 +591,16 @@ export interface DailyReviewComparison {
 
 
 export interface RadarItem {
-  title: string; url: string; time: string; source: string; summary?: string; zh?: string;
+  title: string;
+  url: string;
+  time: string;
+  source: string;
+  summary?: string;
+  zh?: string;
+  /** Authoritative ISO-8601 publish time with timezone; null when unknown. */
+  published_at?: string | null;
+  /** Unix epoch seconds; used only when published_at is missing (old cache migration). */
+  ts?: number;
 }
 
 export interface Industry {
