@@ -93,6 +93,10 @@ jobs:
         working-directory: frontend
         run: npm run test:e2e:smoke
 
+      - name: Run top-risk real E2E
+        working-directory: frontend
+        run: npm run test:e2e:top-risk
+
   e2e-thesis-smoke:
     name: Playwright thesis smoke E2E
     runs-on: ubuntu-latest

@@ -116,7 +116,8 @@ export function topRiskDirectionLabel(
   if (direction === "RISK") return "风险";
   if (direction === "SAFE") return "安全";
   if (direction === "NEUTRAL") return "中性";
-  return direction || "—";
+  // unknown / null / other → 显示为"—"（影子模式下恒为 unknown）
+  return "—";
 }
 
 export type { TopRiskAnalysis };

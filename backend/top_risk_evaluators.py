@@ -226,13 +226,19 @@ def crowding(facts: TopRiskFact, params: dict) -> TopRiskStepResult:
 @register("runup_exhaustion")
 def runup_exhaustion(facts: TopRiskFact, params: dict) -> TopRiskStepResult:
     weight = float(params.get("weight", 1.0))
-    window = int(params.get("window", 60))
+    window = max(1, int(params.get("window", 60)))
     runup_strong = float(params.get("runup_strong", 0.5))
     runup_medium = float(params.get("runup_medium", 0.25))
     vol_shrink_ratio = float(params.get("vol_shrink_ratio", 0.7))
 
-    prices = [p for p in (facts.price_history or []) if p is not None and p > 0]
-    vols = [v for v in (facts.volume_history or []) if v is not None and v > 0]
+    # 标准化 price/volume 已按索引对齐：先截取同一尾部窗口，再过滤。
+    price_window = list(facts.price_history or [])[-window:]
+    volume_window = list(facts.volume_history or [])[-window:]
+    prices = [p for p in price_window if p is not None and p > 0]
+    vols: list[Optional[float]] = []
+    for value in volume_window:
+        parsed = _num(value)
+        vols.append(parsed if parsed is not None and parsed > 0 else None)
 
     if len(prices) < max(10, window // 2):
         return TopRiskStepResult(

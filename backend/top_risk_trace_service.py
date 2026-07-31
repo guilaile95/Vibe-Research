@@ -12,17 +12,12 @@ Phase1 影子模式：
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 import decision_trace_store as store
-from top_risk_schema import TopRiskEnvelope
+from top_risk_schema import TopRiskEnvelope, _utc_now
 
 TRACE_RESULT_TYPE = "top_risk_analysis"
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _short_hash(s: str) -> str:

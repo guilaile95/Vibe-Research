@@ -28,9 +28,11 @@ from top_risk_schema import (
     TopRiskLimitation,
     TopRiskResult,
     TopRiskStepTrace,
+    _utc_now,
 )
 from top_risk_engine import TopRiskEngine
 from top_risk_trace_service import archive_top_risk
+from data_health_service import is_stale_cn_trade_date
 
 _CONFIG_PATH = __import__("os").path.join(
     __import__("os").path.dirname(__file__), "top_risk_config.yaml"
@@ -43,6 +45,9 @@ _ENGINE_LOCK = threading.Lock()
 _CACHE: dict[tuple[str, int, str], tuple[float, dict]] = {}
 _CACHE_TTL = 900.0  # 15 分钟
 _CACHE_LOCK = threading.Lock()
+
+_FUND_FLOW_TIE_FIELDS = ("main_net", "large_net", "super_net")
+_MARGIN_TIE_FIELDS = ("rzye", "rzmre", "rzche")
 
 
 def _num(v: Any) -> Optional[float]:
@@ -77,6 +82,10 @@ def _now_ts() -> float:
     return datetime.now(timezone.utc).timestamp()
 
 
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _canonical_number(value: Any) -> float | None:
     num = _num(value)
     return round(num, 8) if num is not None else None
@@ -106,8 +115,14 @@ def make_input_fingerprint(facts: TopRiskFact) -> str:
         "prices": [_canonical_number(v) for v in (facts.price_history or [])],
         "volumes": [_canonical_number(v) for v in (facts.volume_history or [])],
         "valuation": valuation,
-        "fund_flow": _canonical_rows(facts.fund_flow, ("main_net", "large_net", "super_net")),
-        "margin_trading": _canonical_rows(facts.margin_trading, ("rzye", "rzmre", "rzche")),
+        "fund_flow": _canonical_rows(
+            _sort_by_date(facts.fund_flow, tie_fields=_FUND_FLOW_TIE_FIELDS),
+            _FUND_FLOW_TIE_FIELDS,
+        ),
+        "margin_trading": _canonical_rows(
+            _sort_by_date(facts.margin_trading, tie_fields=_MARGIN_TIE_FIELDS),
+            _MARGIN_TIE_FIELDS,
+        ),
         "events": facts.events or [],
         "sentiment_series": facts.sentiment_series or [],
     }
@@ -115,10 +130,10 @@ def make_input_fingerprint(facts: TopRiskFact) -> str:
     return "inp_" + hashlib.sha256(canon.encode("utf-8")).hexdigest()[:24]
 
 
-def _unavailable_envelope(
+def unavailable_envelope(
     code: str, limitations: list[dict], name: Optional[str] = None
 ) -> TopRiskEnvelope:
-    now = datetime.now(timezone.utc)
+    """构造统一的 fail-closed unavailable 信封，供 service 与 API 路由复用。"""
     return TopRiskEnvelope(
         schema_version=SCHEMA_VERSION,
         source="Vibe-Research top-risk engine",
@@ -126,9 +141,9 @@ def _unavailable_envelope(
         code=code,
         name=name,
         trade_date=None,
-        fetched_at=now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond:06d}Z",
+        fetched_at=_utc_now(),
         status="unavailable",
-        is_stale=False,
+        is_stale=True,
         risk_score=None,
         confidence=None,
         coverage={"completed": 0, "total": 0, "ratio": 0.0},
@@ -145,12 +160,103 @@ def _unavailable_envelope(
     )
 
 
+def _normalize_kline(bars: list[dict]) -> tuple[list[float], list[Optional[float]], Optional[str]]:
+    """标准化 K 线数据。
+
+    规则：
+    - 同时支持 datetime 和 date 字段；
+    - 丢弃无有效日期或无 close 的行；
+    - 同日选优与输入顺序无关：有效 volume > 较晚完整 datetime > 数值 tie-break；
+    - 按交易日期升序排序；
+    - price_history 与 volume_history 保持一一对齐；
+    - volume 只允许读取 volume 或 vol，严禁把 amount 当作 volume；
+    - 缺失 volume 保留 None，严禁转换为 0；
+    - trade_date 使用排序后最后一条有效交易日期。
+    """
+    # 解析每条 bar，提取 (date_key, close, volume, duplicate_priority)
+    parsed: list[tuple[str, float, Optional[float], tuple]] = []
+    for b in bars or []:
+        if not isinstance(b, dict):
+            continue
+        # 日期：兼容 datetime / date 字段
+        date_raw = b.get("datetime") or b.get("date")
+        if date_raw is None:
+            continue
+        date_str = str(date_raw).strip()
+        # 提取日期部分（YYYY-MM-DD），兼容 datetime 格式
+        date_key = date_str[:10]
+        if len(date_key) != 10 or date_key.count("-") != 2:
+            continue
+
+        close_val = b.get("close", b.get("Close"))
+        close_num = _num(close_val)
+        if close_num is None:
+            continue  # 无有效 close → 丢弃
+
+        # volume 仅读取 volume / vol；绝不使用 amount
+        vol_val = b.get("volume", b.get("vol"))
+        vol_num = _num(vol_val)  # 缺失或无效 → None
+
+        datetime_part = date_str[10:].lstrip(" T")
+        duplicate_priority = (
+            vol_num is not None,
+            bool(datetime_part),
+            datetime_part,
+            close_num,
+            vol_num if vol_num is not None else float("-inf"),
+        )
+        parsed.append((date_key, close_num, vol_num, duplicate_priority))
+
+    if not parsed:
+        return [], [], None
+
+    # 先按明确优先级选优，再按日期去重；不依赖上游返回顺序。
+    seen: dict[str, tuple[float, Optional[float], tuple]] = {}
+    for date_key, close_num, vol_num, priority in parsed:
+        current = seen.get(date_key)
+        if current is None or priority > current[2]:
+            seen[date_key] = (close_num, vol_num, priority)
+
+    # 按日期升序排序
+    sorted_dates = sorted(seen.keys())
+
+    prices: list[float] = []
+    volumes: list[Optional[float]] = []
+    for dk in sorted_dates:
+        c, v, _priority = seen[dk]
+        prices.append(c)
+        volumes.append(v)
+
+    trade_date = sorted_dates[-1] if sorted_dates else None
+    return prices, volumes, trade_date
+
+
+def _sort_by_date(
+    rows: Optional[list[dict]],
+    date_field: str = "date",
+    tie_fields: tuple[str, ...] = _FUND_FLOW_TIE_FIELDS,
+) -> list[dict]:
+    """按日期与明确业务投影排序；无关元数据不参与次级键。"""
+
+    def _date_key(row: dict) -> tuple:
+        d = row.get(date_field) if row else None
+        business_tie = tuple(
+            (value is None, value if value is not None else 0.0)
+            for value in (_canonical_number(row.get(field)) for field in tie_fields)
+        )
+        return (d is None, str(d) if d is not None else "", business_tie)
+
+    if not rows:
+        return []
+    return sorted(rows, key=_date_key)
+
+
 def _build_facts(code: str, days: int) -> tuple[TopRiskFact, list[dict]]:
     """从主项目数据层构建标准化事实。任一来源失败 → None + limitation（不抛）。"""
     limitations: list[dict] = []
     name: Optional[str] = None
     price_history: Optional[list[float]] = None
-    volume_history: Optional[list[float]] = None
+    volume_history: Optional[list[Optional[float]]] = None
     trade_date: Optional[str] = None
     valuation: Optional[dict] = None
     fund_flow: Optional[list[dict]] = None
@@ -170,21 +276,11 @@ def _build_facts(code: str, days: int) -> tuple[TopRiskFact, list[dict]]:
         from astock import kline
 
         bars = kline(code, category=4, offset=max(days, 60))
-        closes: list[float] = []
-        vols: list[float] = []
-        dates: list[str] = []
-        for b in bars or []:
-            c = _num(b.get("close", b.get("Close")))
-            v = _num(b.get("volume", b.get("vol", b.get("amount"))))
-            d = b.get("date")
-            if c is not None:
-                closes.append(c)
-                vols.append(v if v is not None else 0.0)
-                dates.append(str(d) if d is not None else "")
-        if closes:
-            price_history = closes
+        prices, vols, tdate = _normalize_kline(bars)
+        if prices:
+            price_history = prices
             volume_history = vols
-            trade_date = dates[-1][:10] if dates and dates[-1] else None
+            trade_date = tdate
         else:
             limitations.append(
                 {"field": "price_history", "reason_code": "SOURCE_PARTIAL", "detail": "K线返回为空"}
@@ -211,13 +307,14 @@ def _build_facts(code: str, days: int) -> tuple[TopRiskFact, list[dict]]:
             {"field": "valuation", "reason_code": "SOURCE_UNAVAILABLE", "detail": "估值数据当前不可用。"}
         )
 
-    # 资金流
+    # 资金流（按日期升序排序，保证指纹确定性）
     try:
         from astock import stock_fund_flow_120d
 
         ff = stock_fund_flow_120d(code)
-        fund_flow = ff if ff else None
-        if not ff:
+        if ff:
+            fund_flow = _sort_by_date(ff, tie_fields=_FUND_FLOW_TIE_FIELDS)
+        else:
             limitations.append(
                 {"field": "fund_flow", "reason_code": "SOURCE_PARTIAL", "detail": "资金流为空"}
             )
@@ -226,13 +323,14 @@ def _build_facts(code: str, days: int) -> tuple[TopRiskFact, list[dict]]:
             {"field": "fund_flow", "reason_code": "SOURCE_UNAVAILABLE", "detail": "资金流数据当前不可用。"}
         )
 
-    # 融资融券
+    # 融资融券（按日期升序排序，保证引擎读到的时间序列方向正确）
     try:
         from astock import margin_trading
 
         mt = margin_trading(code, page_size=30)
-        margin = mt if mt else None
-        if not mt:
+        if mt:
+            margin = _sort_by_date(mt, tie_fields=_MARGIN_TIE_FIELDS)
+        else:
             limitations.append(
                 {"field": "margin_trading", "reason_code": "SOURCE_PARTIAL", "detail": "融资融券为空"}
             )
@@ -245,7 +343,7 @@ def _build_facts(code: str, days: int) -> tuple[TopRiskFact, list[dict]]:
         code=code,
         name=name,
         trade_date=trade_date,
-        fetched_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + "Z",
+        fetched_at=_utc_now(),
         price_history=price_history,
         volume_history=volume_history,
         valuation=valuation,
@@ -295,39 +393,49 @@ def _service_health_from_run(facts: TopRiskFact, _result: TopRiskResult) -> str:
     return "normal"
 
 
-def _attach_trace(envelope: TopRiskEnvelope) -> None:
-    """归档到决策追踪层（fail-closed），回填追踪身份。"""
+def _compute_is_stale(
+    trade_date: Optional[str], now_utc: Optional[datetime] = None
+) -> bool:
+    """复用 Data Health 的权威 A 股交易日 freshness 规则。"""
+    if not trade_date:
+        return True
+    return is_stale_cn_trade_date(trade_date, None, now_utc or _now_utc())
+
+
+def attach_trace_and_archive(envelope: TopRiskEnvelope) -> TopRiskEnvelope:
+    """归档并回填追踪身份；路由只依赖该公开 service 入口。"""
     run_id, status = archive_top_risk(envelope)
     envelope.decision_run_id = run_id
     envelope.trace_archive_status = status
+    return envelope
 
 
 def analyze_top_risk(code: str, days: int = 120) -> TopRiskEnvelope:
     """顶部风险分析权威入口（影子模式）。返回 Pydantic 信封，绝不抛未捕获异常。"""
     code = (code or "").strip()
     if not code:
-        env = _unavailable_envelope(
+        env = unavailable_envelope(
             code, [{"field": "code", "reason_code": "INVALID_INPUT", "detail": "代码为空"}]
         )
-        _attach_trace(env)
-        return env
+        return attach_trace_and_archive(env)
 
     try:
         engine = _get_engine()
     except Exception:
         _record_health("unavailable")
-        env = _unavailable_envelope(
+        env = unavailable_envelope(
             code,
             [{"field": "config", "reason_code": "CONFIG_ERROR", "detail": "顶部风险配置当前不可用。"}],
         )
-        _attach_trace(env)
-        return env
+        return attach_trace_and_archive(env)
 
     cache_key = (code, days, engine.config_hash)
     with _CACHE_LOCK:
         cached = _CACHE.get(cache_key)
         if cached and _now_ts() - cached[0] <= _CACHE_TTL:
-            return TopRiskEnvelope(**cached[1])
+            cached_envelope = TopRiskEnvelope(**cached[1])
+            cached_envelope.is_stale = _compute_is_stale(cached_envelope.trade_date)
+            return cached_envelope
         if cached:
             _CACHE.pop(cache_key, None)
 
@@ -336,13 +444,12 @@ def analyze_top_risk(code: str, days: int = 120) -> TopRiskEnvelope:
         result = engine.run(facts)
     except Exception:
         _record_health("unavailable")
-        env = _unavailable_envelope(
+        env = unavailable_envelope(
             code,
             [{"field": "engine", "reason_code": "ENGINE_ERROR", "detail": "顶部风险引擎当前不可执行。"}],
             name=facts.name,
         )
-        _attach_trace(env)
-        return env
+        return attach_trace_and_archive(env)
 
     all_limits = list(build_limitations) + result.limitations
     input_fingerprint = make_input_fingerprint(facts)
@@ -384,7 +491,7 @@ def analyze_top_risk(code: str, days: int = 120) -> TopRiskEnvelope:
         trade_date=facts.trade_date,
         fetched_at=facts.fetched_at,
         status=result.status,
-        is_stale=False,
+        is_stale=_compute_is_stale(facts.trade_date),
         risk_score=result.risk_score,
         confidence=result.confidence,
         coverage=result.coverage,
@@ -402,7 +509,7 @@ def analyze_top_risk(code: str, days: int = 120) -> TopRiskEnvelope:
 
     # Data Health 记录服务级能力；单标的 optional 缺失只保留在 envelope limitations。
     _record_health(_service_health_from_run(facts, result))
-    _attach_trace(envelope)
+    attach_trace_and_archive(envelope)
 
     # 写缓存（unavailable 不缓存）；缓存命中直接返回，避免重复归档。
     if envelope.status != "unavailable":

@@ -13,8 +13,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
 from datetime import datetime, timezone
+from typing import Any, Literal, Optional
 
 TopRiskStatus = Literal["normal", "partial", "unavailable"]
 SignalDirection = Literal["RISK", "SAFE", "NEUTRAL"]
@@ -23,8 +23,15 @@ SCHEMA_VERSION = "top-risk-analysis-v0.1"
 
 
 def _utc_now() -> str:
-    now = datetime.now(timezone.utc)
-    return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond:06d}Z"
+    """统一 UTC 时间生成函数。
+
+    格式：2026-07-30T09:30:12.123456Z
+    """
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
 
 
 @dataclass
@@ -40,10 +47,10 @@ class TopRiskFact:
     trade_date: Optional[str] = None  # 最新交易日 YYYY-MM-DD（来自 price_history 末项）
     fetched_at: str = field(default_factory=_utc_now)
     price_history: Optional[list[float]] = None  # 收盘价，按时间升序
-    volume_history: Optional[list[float]] = None  # 成交量，与 price_history 对齐
+    volume_history: Optional[list[Optional[float]]] = None  # 成交量，与 price_history 对齐；缺失为 None
     valuation: Optional[dict] = None  # {"pe_ttm": {current, percentile, ...}, "pb": {...}}
-    fund_flow: Optional[list[dict]] = None  # [{date, main_net, ...}]
-    margin_trading: Optional[list[dict]] = None  # [{date, rzye, rzmre, ...}]
+    fund_flow: Optional[list[dict]] = None  # [{date, main_net, ...}]，按日期升序
+    margin_trading: Optional[list[dict]] = None  # [{date, rzye, rzmre, ...}]，按日期升序
     events: Optional[list[dict]] = None  # Phase1：主项目无可靠来源 → None
     sentiment_series: Optional[list[dict]] = None  # Phase1：主项目无可靠来源 → None
 

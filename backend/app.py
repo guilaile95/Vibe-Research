@@ -816,12 +816,13 @@ def market_top_risk(
         raise HTTPException(400, "code 不能为空")
     try:
         env = trs.analyze_top_risk(code, days)
-    except Exception:  # noqa: BLE001 — 不应发生，仍兜底为不可用
-        env = trs._unavailable_envelope(
-            code,
-            [{"field": "service", "reason_code": "UPSTREAM_UNAVAILABLE", "detail": "分析失败"}],
+    except Exception:  # noqa: BLE001 — 不应发生，仍兜底为不可用（通过公开函数）
+        env = trs.attach_trace_and_archive(
+            trs.unavailable_envelope(
+                code,
+                [{"field": "service", "reason_code": "UPSTREAM_UNAVAILABLE", "detail": "顶部风险服务当前不可用。"}],
+            )
         )
-        trs._attach_trace(env)
     return {"data": env.model_dump()}
 
 
