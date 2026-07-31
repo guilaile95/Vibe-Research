@@ -24,6 +24,9 @@ public/user-data/
 **/node_modules/
 **/__pycache__/
 **/.pytest_cache/
+.pytest-tmp/
+.pytest-run-*/
+**/.pytest-*/
 *.pyc
 dist/
 build/

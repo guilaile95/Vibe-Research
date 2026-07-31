@@ -56,6 +56,7 @@ import type {
   GlobalIndex,
   GlobalStock,
   NorthboundCapitalFlow,
+  TopRiskAnalysis,
   DailyReviewAnalyzeRequest,
   NdjsonStreamHandlers,
   NdjsonStreamResult,
@@ -485,6 +486,11 @@ export const api = {
   },
   marketBreadth: () => get<TimedComponentEnvelope<MarketBreadthData>>("/market/breadth"),
   marketNorthbound: () => get<NorthboundCapitalFlow>("/market/northbound"),
+  /** 顶部风险分析（影子模式，第一版）：按股票代码分析，signal 恒 unknown、不参与最终结论。 */
+  topRisk: (code: string, days = 120) =>
+    get<TopRiskAnalysis>(
+      `/market/top-risk?code=${encodeURIComponent(code)}${days != null ? `&days=${days}` : ""}`,
+    ),
   marketBoards: (type: "industry" | "concept" | "region" = "industry", topN = 20) =>
     get<TimedComponentEnvelope<BoardRankingData>>(`/market/boards?type=${type}&top_n=${topN}`),
   globalIndices: () => get<GlobalIndex[]>("/global/indices"),

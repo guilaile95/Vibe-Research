@@ -339,6 +339,53 @@ function createApiMockController() {
       return;
     }
 
+    // Top-risk analysis: explicit mock with normal envelope (deterministic)
+    if (pathname.endsWith("/api/market/top-risk") || pathname.endsWith("/top-risk")) {
+      await route.fulfill(
+        jsonOk({
+          schema_version: "top-risk-analysis-v0.1",
+          source: "Vibe-Research top-risk engine",
+          source_tier: "reference",
+          code,
+          name: stockName(code),
+          trade_date: "2026-07-30",
+          fetched_at: new Date().toISOString(),
+          status: "normal",
+          is_stale: false,
+          risk_score: 42,
+          confidence: 70,
+          coverage: { completed: 4, total: 5, ratio: 0.8 },
+          signal: "unknown",
+          signal_eligible: false,
+          trace_archive_status: "archived",
+          warnings: [],
+          limitations: [],
+          data: {
+            name: stockName(code),
+            completed_steps: 4,
+            total_steps: 5,
+            risk_drivers: ["估值百分位过高"],
+            safety_signals: ["机构持仓稳定"],
+            narrative: "测试顶部风险分析结论",
+          },
+          trace: [
+            {
+              step_id: "valuation_percentile",
+              label: "估值百分位",
+              direction: "SAFE",
+              weight: 1.0,
+              step_risk: -0.2,
+              confidence: 75,
+              skipped: false,
+              reasons: ["估值处于历史低位"],
+              details: {},
+            },
+          ],
+        }),
+      );
+      return;
+    }
+
     // Auto-fired side panels: empty success
     if (
       pathname.includes("/margin")

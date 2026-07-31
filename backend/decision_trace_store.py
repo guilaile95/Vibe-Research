@@ -403,11 +403,16 @@ def list_evidence_items(
     trade_date: str | None = None,
     quality_status: str | None = None,
     trace_status: str | None = None,
+    result_type: str | None = None,
     limit: int = 50,
     offset: int = 0,
     db_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Query evidence items with filtering and pagination."""
+    """Query evidence items with filtering and pagination.
+
+    result_type 为可选筛选（如 "portfolio_advice" / "top_risk_analysis"），
+    不传时保持原始行为。
+    """
     path = resolve_decision_trace_db_path(db_path)
     try:
         conn = _get_read_connection(path)
@@ -431,6 +436,10 @@ def list_evidence_items(
                 where_clauses.append("r.trace_status = ?")
                 params.append(trace_status)
 
+            if result_type:
+                where_clauses.append("r.result_type = ?")
+                params.append(result_type)
+
             where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
             count_sql = f"""
@@ -442,7 +451,7 @@ def list_evidence_items(
             total = conn.execute(count_sql, params).fetchone()["cnt"]
 
             query_sql = f"""
-                SELECT e.*, r.trade_date, r.trace_status
+                SELECT e.*, r.trade_date, r.trace_status, r.result_type
                 FROM evidence_items e
                 JOIN decision_runs r ON e.decision_run_id = r.decision_run_id
                 {where_sql}
