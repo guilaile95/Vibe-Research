@@ -118,6 +118,49 @@ export type SectorDynamicData = {
   error?: string;
 };
 
+export interface IntelDigestInputItem {
+  title?: string;
+  source?: string;
+  published_at?: string;
+  url?: string;
+  summary?: string;
+  time?: string;
+  zh?: string;
+  [key: string]: unknown;
+}
+
+export interface IntelDigest {
+  digest_id: string;
+  digest_date: string;
+  sector_key: string;
+  sector_name: string;
+  status: "normal" | "partial" | "unavailable";
+  summary_text: string;
+  source_refs: unknown;
+  input_fingerprint: string;
+  generated_at: string;
+  created_at: string;
+}
+
+export interface IntelDigestSaveIn {
+  sector_key: string;
+  status: "normal" | "partial" | "unavailable";
+  summary_text: string;
+  source_refs?: unknown;
+  input_items?: IntelDigestInputItem[];
+  sector_name?: string;
+}
+
+export interface IntelDigestSaveResult {
+  digest: IntelDigest | null;
+  deduped: boolean;
+  error?: string;
+}
+
+export interface IntelDigestLatestResult {
+  digest: IntelDigest | null;
+}
+
 
 export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;

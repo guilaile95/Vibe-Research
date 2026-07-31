@@ -6,6 +6,9 @@ export type * from "./api/types.ts";
 
 import type {
   MyReport,
+  IntelDigestLatestResult,
+  IntelDigestSaveIn,
+  IntelDigestSaveResult,
   MyReportsBrowseGroup,
   MyReportsBrowseResult,
   SectorReportScope,
@@ -505,6 +508,10 @@ export const api = {
   globalStock: (symbol: string) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`),
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
+  getIntelDigestLatest: (sectorKey: string) =>
+    get<IntelDigestLatestResult>(`/intel-digests/latest?sector_key=${encodeURIComponent(sectorKey)}`, { unwrapData: false }),
+  saveIntelDigest: (payload: IntelDigestSaveIn) =>
+    request<IntelDigestSaveResult>("/intel-digests", "POST", payload),
   portfolio: () => get<PortfolioData>("/portfolio"),
   addHolding: (code: string, shares: number, cost: number) => request<PortfolioData>("/portfolio/holding", "POST", { code, shares, cost }),
   updateHolding: (code: string, shares: number, cost: number) =>
