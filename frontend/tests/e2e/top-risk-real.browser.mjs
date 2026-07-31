@@ -153,6 +153,29 @@ function jsonErr(status, detail) {
   };
 }
 
+function technicalIndicatorsEnvelope(code) {
+  return {
+    schema_version: "technical-indicators-v0.1",
+    code,
+    period: "daily",
+    trade_date: "2026-07-29",
+    fetched_at: "2026-07-30T09:30:12.123456Z",
+    status: "normal",
+    warnings: [],
+    limitations: [],
+    latest: {
+      sma5: 11.2, sma10: 11.1, sma20: 11.0, sma60: 10.8,
+      ema12: 11.15, ema26: 10.95,
+      macd_dif: 0.12, macd_dea: 0.08, macd_histogram: 0.08,
+      rsi14: 55.0,
+      bollinger_upper: 11.5, bollinger_middle: 11.0, bollinger_lower: 10.5,
+      volume_ratio_5_20: 1.2,
+    },
+    triggers: [],
+    series: [],
+  };
+}
+
 /**
  * Build a realistic normal top risk envelope.
  */
@@ -349,6 +372,14 @@ function createApiMockController() {
     // Top risk endpoint: explicit mock
     if (pathname === "/api/market/top-risk") {
       await handleTopRisk(route);
+      return;
+    }
+
+    // StockData also requests technical indicators; keep this unrelated panel
+    // explicit so the top-risk E2E remains fully mocked after integration.
+    if (pathname === "/api/market/technical-indicators") {
+      const code = new URL(url).searchParams.get("code") || "000001";
+      await route.fulfill(jsonOk(technicalIndicatorsEnvelope(code)));
       return;
     }
 

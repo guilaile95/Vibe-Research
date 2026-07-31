@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Search, FileText, Newspaper, Loader2, AlertCircle, LineChart, BarChart3, Megaphone,
   Wallet, Trophy, CalendarClock, Boxes, MessageSquare,
@@ -9,6 +9,7 @@ import { AskAiButton } from "@/components/ui/AskAiButton";
 import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
 import { OptionalDataPanel } from "@/components/ui/OptionalDataPanel";
 import { StockThesisPanel } from "@/components/stock/StockThesisPanel";
+import { TechnicalIndicatorsCard } from "@/components/stock/TechnicalIndicatorsCard";
 import { TopRiskAnalysisCard } from "@/components/market/TopRiskAnalysisCard";
 import {
   type PanelId,
@@ -26,8 +27,9 @@ import {
   api, ApiError, type Valuation, type Report, type NewsItem, type ValPercentile, type ValMetric,
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
   type DividendRow, type FundFlowRow, type DragonTiger, type Lockup, type Blocks, type HotConcept, type QaRow,
-  type GlobalStock, type KlineBar, type DisclosureItem, type TopRiskAnalysis,
+  type GlobalStock, type KlineBar, type DisclosureItem, type TechnicalIndicators, type TopRiskAnalysis,
 } from "@/lib/api";
+import { indicatorErrorMessage } from "@/lib/technicalIndicatorsView";
 import { cn } from "@/lib/utils";
 
 // 金额格式化（后端资金单位：元 / 万元）
@@ -130,6 +132,11 @@ export function StockData() {
   const [topRiskErr, setTopRiskErr] = useState<string | null>(null);
   const [topRiskLoading, setTopRiskLoading] = useState(false);
   const [panelStates, setPanelStates] = useState<PanelStates>(() => createInitialPanelStates());
+  // 技术指标与价格触发（独立 fetch，与 K 线面板解耦）
+  const [tiEnv, setTiEnv] = useState<TechnicalIndicators | null>(null);
+  const [tiLoading, setTiLoading] = useState(false);
+  const [tiError, setTiError] = useState<string | null>(null);
+  const [tiQueryVersion, setTiQueryVersion] = useState(0);
   /** 与 panelStates 同步的镜像，供事件处理器在 setState 外做纯决策（不在 updater 里写副作用） */
   const panelStatesRef = useRef<PanelStates>(createInitialPanelStates());
   const runIdRef = useRef(0);
@@ -275,17 +282,42 @@ export function StockData() {
     }
   }, [commitPanelStates, fetchPanelData]);
 
+  // 技术指标独立 fetch：与 K 线面板解耦，单独 loading/error，失败不影响其他区域
+  useEffect(() => {
+    const code = activeCode;
+    if (!/^\d{6}$/.test(code)) return;
+    const rid = runIdRef.current;
+    setTiLoading(true);
+    setTiError(null);
+    (async () => {
+      try {
+        const env = await api.technicalIndicators(code);
+        if (rid !== runIdRef.current || code !== activeCodeRef.current) return;
+        setTiEnv(env);
+        setTiError(null);
+      } catch (e) {
+        if (rid !== runIdRef.current || code !== activeCodeRef.current) return;
+        const status = e instanceof ApiError ? e.status : undefined;
+        setTiError(indicatorErrorMessage(status));
+      } finally {
+        if (rid === runIdRef.current && code === activeCodeRef.current) setTiLoading(false);
+      }
+    })();
+  }, [activeCode, tiQueryVersion]);
+
   const run = async () => {
     const c = code.trim().toUpperCase();
     if (!c) { setErr("请输入代码"); return; }
     const rid = ++runIdRef.current;
     // 正式换股：绑定 activeCode，重置全部可选面板
     setActiveCode(c);
+    setTiQueryVersion((version) => version + 1);
     activeCodeRef.current = c;
     setLoading(true); setErr(null); setDepNote(null); setVal(null); setReports([]); setNews([]); setPctl(null); setFin(null); setAnns([]);
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
     setGStock(null);
     setKline([]); setKlineErr(null); setFinance({}); setFinanceErr(null); setInfo({}); setInfoErr(null); setDisc([]); setDiscErr(null);
+    setTiEnv(null); setTiLoading(false); setTiError(null);
     commitPanelStates(resetPanelStates());
 
     // 6 位纯数字 = A 股；否则（字母 / 港股短代码）走美股 / 港股（global-stock-data）
@@ -747,6 +779,9 @@ export function StockData() {
             disc={disc}
             discErr={discErr}
           />
+
+          {/* 技术指标与价格触发（独立 fetch，与 K 线面板解耦） */}
+          <TechnicalIndicatorsCard env={tiEnv} loading={tiLoading} error={tiError} />
 
           {/* 投资逻辑面板（独立、可折叠、懒加载） */}
           <StockThesisPanel code={activeCode} />
