@@ -19,8 +19,12 @@ const TABS = [
   { key: "investment-news", label: "Investment News", icon: Rss, integrated: true, desc: "12 赛道全球公开 RSS 资讯（集成自 investment-news 仓库）" },
 ];
 
+export type DigestPhase = "idle" | "generating" | "saving" | "saved" | "cancelled" | "error" | "save_failed" | "empty";
+
 interface Digest {
+  phase?: DigestPhase;
   loading?: boolean;
+  saving?: boolean;
   text?: string;
   err?: string;
   needKey?: boolean;
@@ -41,6 +45,7 @@ function InvestmentNewsPanel() {
   const generationIdsRef = useRef<Record<string, number>>({});
   const abortControllersRef = useRef<Record<string, AbortController>>({});
   const latestLoadIdsRef = useRef<Record<string, number>>({});
+  const sectorStateVersionRef = useRef<Record<string, number>>({});
   const generatingSectorsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -58,19 +63,24 @@ function InvestmentNewsPanel() {
   const fetchLatestDigest = useCallback(async (sectorKey: string) => {
     const loadId = (latestLoadIdsRef.current[sectorKey] || 0) + 1;
     latestLoadIdsRef.current[sectorKey] = loadId;
+    const capturedVersion = sectorStateVersionRef.current[sectorKey] || 0;
 
     try {
       const res = await api.getIntelDigestLatest(sectorKey);
       if (!isMountedRef.current) return;
       if (latestLoadIdsRef.current[sectorKey] !== loadId) return;
-      if (generatingSectorsRef.current.has(sectorKey)) return;
+      const currentVersion = sectorStateVersionRef.current[sectorKey] || 0;
+      if (currentVersion !== capturedVersion) return;
 
       if (res?.digest) {
         setDigests((d) => {
-          if (d[sectorKey]?.saved) return d;
+          const currentPhase = d[sectorKey]?.phase;
+          if (currentPhase && currentPhase !== "idle") return d;
+
           return {
             ...d,
             [sectorKey]: {
+              phase: "saved",
               text: res.digest!.summary_text,
               digest_date: res.digest!.digest_date,
               saved: true,
@@ -101,6 +111,10 @@ function InvestmentNewsPanel() {
   }, [cur?.key, fetchLatestDigest]);
 
   const cancelGen = (sectorKey: string) => {
+    if (digests[sectorKey]?.phase === "saving") return;
+
+    sectorStateVersionRef.current[sectorKey] = (sectorStateVersionRef.current[sectorKey] || 0) + 1;
+
     const ctrl = abortControllersRef.current[sectorKey];
     if (ctrl) {
       ctrl.abort();
@@ -109,17 +123,25 @@ function InvestmentNewsPanel() {
     generatingSectorsRef.current.delete(sectorKey);
     setDigests((d) => ({
       ...d,
-      [sectorKey]: { ...d[sectorKey], loading: false, err: "已取消生成" },
+      [sectorKey]: {
+        ...d[sectorKey],
+        phase: "cancelled",
+        loading: false,
+        saving: false,
+        err: "生成已取消",
+      },
     }));
   };
 
   const genDigest = async (ind: Industry) => {
     if (!hasLlm()) { setDigests((d) => ({ ...d, [ind.key]: { needKey: true } })); return; }
-    if (generatingSectorsRef.current.has(ind.key)) return;
+    if (bulk.running || generatingSectorsRef.current.has(ind.key)) return;
 
     if (abortControllersRef.current[ind.key]) {
       abortControllersRef.current[ind.key].abort();
     }
+
+    sectorStateVersionRef.current[ind.key] = (sectorStateVersionRef.current[ind.key] || 0) + 1;
 
     const controller = new AbortController();
     abortControllersRef.current[ind.key] = controller;
@@ -130,7 +152,7 @@ function InvestmentNewsPanel() {
 
     setDigests((d) => ({
       ...d,
-      [ind.key]: { loading: true, err: undefined, needKey: false },
+      [ind.key]: { phase: "generating", loading: true, saving: false, err: undefined, needKey: false },
     }));
 
     const result = await runIntelDigestGeneration({
@@ -139,9 +161,22 @@ function InvestmentNewsPanel() {
       generationId: genId,
       getCurrentGenerationId: () => generationIdsRef.current[ind.key] || 0,
       isMounted: () => isMountedRef.current,
+      onPhaseChange: (phase) => {
+        if (isMountedRef.current && generationIdsRef.current[ind.key] === genId) {
+          setDigests((d) => ({
+            ...d,
+            [ind.key]: {
+              ...d[ind.key],
+              phase,
+              loading: true,
+              saving: phase === "saving",
+            },
+          }));
+        }
+      },
       onDelta: (text) => {
         if (isMountedRef.current && generationIdsRef.current[ind.key] === genId) {
-          setDigests((d) => ({ ...d, [ind.key]: { loading: true, text } }));
+          setDigests((d) => ({ ...d, [ind.key]: { ...d[ind.key], text } }));
         }
       },
     });
@@ -155,13 +190,21 @@ function InvestmentNewsPanel() {
     if (result.status === "cancelled") {
       setDigests((d) => ({
         ...d,
-        [ind.key]: { ...d[ind.key], loading: false, err: "已取消生成" },
+        [ind.key]: {
+          ...d[ind.key],
+          phase: "cancelled",
+          loading: false,
+          saving: false,
+          err: "生成已取消",
+        },
       }));
     } else if (result.status === "saved" || result.status === "deduped") {
       setDigests((d) => ({
         ...d,
         [ind.key]: {
+          phase: "saved",
           loading: false,
+          saving: false,
           text: result.summaryText,
           saved: true,
           deduped: result.status === "deduped",
@@ -172,7 +215,9 @@ function InvestmentNewsPanel() {
       setDigests((d) => ({
         ...d,
         [ind.key]: {
+          phase: "save_failed",
           loading: false,
+          saving: false,
           text: result.summaryText,
           err: result.error || "保存失败",
         },
@@ -180,12 +225,12 @@ function InvestmentNewsPanel() {
     } else if (result.status === "error") {
       setDigests((d) => ({
         ...d,
-        [ind.key]: { loading: false, err: result.error || "生成失败" },
+        [ind.key]: { phase: "error", loading: false, saving: false, err: result.error || "生成失败" },
       }));
     } else if (result.status === "empty") {
       setDigests((d) => ({
         ...d,
-        [ind.key]: { loading: false, err: "生成结果为空" },
+        [ind.key]: { phase: "empty", loading: false, saving: false, err: "生成结果为空" },
       }));
     }
   };
@@ -285,8 +330,17 @@ function InvestmentNewsPanel() {
                         已去重
                       </span>
                     )}
+                    {dg?.phase === "cancelled" && (
+                      <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-xs font-medium text-destructive">
+                        生成已取消
+                      </span>
+                    )}
                   </div>
-                  {(dg?.loading) ? (
+                  {dg?.phase === "saving" ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-primary font-medium">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> 保存中…
+                    </span>
+                  ) : dg?.phase === "generating" ? (
                     <button
                       onClick={() => cancelGen(cur.key)}
                       className="inline-flex items-center gap-1 text-xs text-destructive hover:underline font-medium"
@@ -296,17 +350,29 @@ function InvestmentNewsPanel() {
                   ) : (dg?.text || dg?.err || dg?.needKey) ? (
                     <button
                       onClick={() => genDigest(cur)}
-                      disabled={bulk.running}
+                      disabled={bulk.running || generatingSectorsRef.current.has(cur.key)}
                       className="text-xs text-muted-foreground hover:text-primary disabled:opacity-50"
                     >
                       重新提炼
                     </button>
                   ) : null}
                 </div>
-                {dg?.loading ? (
+                {dg?.phase === "generating" ? (
                   <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> AI 正在读这个赛道的资讯…</p>
+                ) : dg?.phase === "saving" ? (
+                  <div className="space-y-2">
+                    <p className="flex items-center gap-2 text-sm text-primary"><Loader2 className="h-3.5 w-3.5 animate-spin" /> 摘要已生成，正在保存到数据库…</p>
+                    {dg?.text && (
+                      <div className="prose prose-sm prose-invert max-w-none text-foreground opacity-80"><ReactMarkdown remarkPlugins={[remarkGfm]}>{dg.text}</ReactMarkdown></div>
+                    )}
+                  </div>
                 ) : dg?.text ? (
                   <>
+                    {dg?.err && (
+                      <div className="mb-2 flex items-center gap-1.5 rounded bg-destructive/10 p-2 text-xs text-destructive">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {dg.err}
+                      </div>
+                    )}
                     <div className="prose prose-sm prose-invert max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{dg.text}</ReactMarkdown></div>
                     <div className="mt-2"><SaveNoteButton kind="今日要点" title={`${cur.name} 今日要点`} content={dg.text} /></div>
                   </>
