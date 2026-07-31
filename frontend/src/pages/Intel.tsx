@@ -18,7 +18,15 @@ const TABS = [
   { key: "investment-news", label: "Investment News", icon: Rss, integrated: true, desc: "12 赛道全球公开 RSS 资讯（集成自 investment-news 仓库）" },
 ];
 
-interface Digest { loading?: boolean; text?: string; err?: string; needKey?: boolean }
+interface Digest {
+  loading?: boolean;
+  text?: string;
+  err?: string;
+  needKey?: boolean;
+  saved?: boolean;
+  deduped?: boolean;
+  digest_date?: string;
+}
 
 function InvestmentNewsPanel() {
   const [data, setData] = useState<RadarData | null>(null);
@@ -32,6 +40,24 @@ function InvestmentNewsPanel() {
     api.radar().then(setData).catch((e) => setErr(e instanceof ApiError ? e.message : "加载失败"));
   }, []);
 
+  const fetchLatestDigest = useCallback(async (sectorKey: string) => {
+    try {
+      const res = await api.getIntelDigestLatest(sectorKey);
+      if (res?.digest) {
+        setDigests((d) => ({
+          ...d,
+          [sectorKey]: {
+            text: res.digest!.summary_text,
+            digest_date: res.digest!.digest_date,
+            saved: true,
+          },
+        }));
+      }
+    } catch {
+      // Graceful fallback - API failure does not break radar
+    }
+  }, []);
+
   const refresh = async () => {
     setRefreshing(true); setErr(null);
     try { setData(await api.radarRefresh()); }
@@ -43,20 +69,68 @@ function InvestmentNewsPanel() {
   const cur = industries.find((i) => i.key === active) || industries[0];
   const hasData = !!data?.generated_at;
 
+  useEffect(() => {
+    if (cur?.key) {
+      fetchLatestDigest(cur.key);
+    }
+  }, [cur?.key, fetchLatestDigest]);
+
   const genDigest = async (ind: Industry) => {
     if (!hasLlm()) { setDigests((d) => ({ ...d, [ind.key]: { needKey: true } })); return; }
-    setDigests((d) => ({ ...d, [ind.key]: { loading: true } }));
+    setDigests((d) => ({ ...d, [ind.key]: { loading: true, err: undefined, needKey: false } }));
+
+    const inputItems = ind.items.slice(0, 25).map((it) => ({
+      title: it.zh || it.title,
+      source: it.source,
+      url: it.url,
+      published_at: it.time,
+    }));
+
+    const sourceRefs = ind.items.slice(0, 25).map((it) => ({
+      title: it.zh || it.title,
+      source: it.source,
+      url: it.url,
+      time: it.time,
+    }));
+
     const ctx = ind.items.slice(0, 25).map((it) => `[${it.time}] ${it.source}｜${it.zh || it.title}`).join("\n");
     const prompt =
       `以下是「${ind.name}」赛道近期资讯。请提炼「今日要点」3-5 条：每条一句话（≤40 字），` +
       `抓住重要事件、趋势与可能影响。直接用「- 」列点，不要多余前后缀。\n\n${ctx}`;
     try {
       let acc = "";
-      await chatStream([{ role: "user", content: prompt }], `${ind.name}赛道资讯`, {
-        onDelta: (t) => { acc += t; setDigests((d) => ({ ...d, [ind.key]: { text: acc } })); },
+      const result = await chatStream([{ role: "user", content: prompt }], `${ind.name}赛道资讯`, {
+        onDelta: (t) => { acc += t; setDigests((d) => ({ ...d, [ind.key]: { loading: true, text: acc } })); },
       });
+
+      const finalText = (result?.content || acc).trim();
+      if (!finalText) {
+        setDigests((d) => ({ ...d, [ind.key]: { loading: false, err: "生成结果为空" } }));
+        return;
+      }
+
+      // Save only after stream cleanly finishes
+      const saved = await api.saveIntelDigest({
+        sector_key: ind.key,
+        sector_name: ind.name,
+        status: "normal",
+        summary_text: finalText,
+        source_refs: sourceRefs,
+        input_items: inputItems,
+      });
+
+      setDigests((d) => ({
+        ...d,
+        [ind.key]: {
+          loading: false,
+          text: finalText,
+          saved: true,
+          deduped: saved.deduped,
+          digest_date: saved.digest?.digest_date,
+        },
+      }));
     } catch (e) {
-      setDigests((d) => ({ ...d, [ind.key]: { err: e instanceof ApiError ? e.message : "生成失败" } }));
+      setDigests((d) => ({ ...d, [ind.key]: { loading: false, err: e instanceof ApiError ? e.message : "生成失败" } }));
     }
   };
 
@@ -129,11 +203,34 @@ function InvestmentNewsPanel() {
               {/* 今日要点总结框（暖橙框） */}
               <div className="mb-4 rounded-xl border border-primary/30 bg-primary/5 p-4">
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5 text-sm font-semibold text-primary">
-                    <Lightbulb className="h-4 w-4" /> 今日要点 · {cur.name}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center gap-1.5 text-sm font-semibold text-primary">
+                      <Lightbulb className="h-4 w-4" /> 今日要点 · {cur.name}
+                    </span>
+                    {dg?.digest_date && (
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {dg.digest_date}
+                      </span>
+                    )}
+                    {dg?.saved && (
+                      <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-xs font-medium text-emerald-500">
+                        已保存
+                      </span>
+                    )}
+                    {dg?.deduped && (
+                      <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-xs font-medium text-blue-400">
+                        已去重
+                      </span>
+                    )}
+                  </div>
                   {(dg?.text || dg?.err || dg?.needKey) && (
-                    <button onClick={() => genDigest(cur)} className="text-xs text-muted-foreground hover:text-primary">重新提炼</button>
+                    <button
+                      onClick={() => genDigest(cur)}
+                      disabled={dg?.loading}
+                      className="text-xs text-muted-foreground hover:text-primary disabled:opacity-50"
+                    >
+                      重新提炼
+                    </button>
                   )}
                 </div>
                 {dg?.loading ? (

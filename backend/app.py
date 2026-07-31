@@ -59,6 +59,7 @@ import decision_analytics_router
 import performance_attribution_router
 import performance_attribution_store
 import technical_indicators_router
+import intel_digest_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -166,6 +167,7 @@ app.include_router(decision_analytics_router.router)
 app.include_router(performance_attribution_router.router)
 # 技术指标与价格触发
 app.include_router(technical_indicators_router.router)
+app.include_router(intel_digest_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)
