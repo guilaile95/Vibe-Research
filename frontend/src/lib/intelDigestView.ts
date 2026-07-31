@@ -1,5 +1,11 @@
 /**
  * Pure functions for Intel Daily Digest UI state, input normalization, canonical items, and badges.
+ *
+ * Time integrity rules (Round 4):
+ * - Never fabricate published_at from fixed dates, "now", scrape time, or page-open time.
+ * - Never reverse-engineer from display fields ("07-31 10:00", "—", "2 小时前").
+ * - Only accept timezone-aware ISO-8601 published_at, or ts > 0 converted to Asia/Shanghai ISO.
+ * - Invalid items are filtered before prompt / chatStream / input_items construction.
  */
 
 import type { Industry, IntelDigestInputItem } from "./api/types.ts";
@@ -21,6 +27,104 @@ export interface IntelDigestSourceRef {
   time: string;
 }
 
+export type DigestMaterialStatus = "normal" | "partial" | "unavailable";
+
+export interface PrepareDigestItemsResult {
+  canonicalItems: CanonicalDigestItem[];
+  promptContext: string;
+  inputItems: IntelDigestInputItem[];
+  sourceRefs: IntelDigestSourceRef[];
+  droppedCount: number;
+  status: DigestMaterialStatus;
+}
+
+const TRACKING_PARAMS = new Set([
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_term",
+  "utm_content",
+  "fbclid",
+  "gclid",
+  "msclkid",
+  "spm",
+  "_hsenc",
+  "_hsmi",
+  "mkt_tok",
+]);
+
+/** Absolute http/https URL with non-empty hostname. */
+export function isValidHttpUrl(rawUrl: string): boolean {
+  if (!rawUrl || !String(rawUrl).trim()) return false;
+  try {
+    const parsed = new URL(String(rawUrl).trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    if (!parsed.hostname) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True only for parseable ISO-8601 datetimes that include a timezone offset or Z.
+ * Rejects bare dates ("2026-07-31") and naive local datetimes ("2026-07-31T10:00:00").
+ */
+export function isValidTimezoneAwareIso(value: string): boolean {
+  if (!value || !String(value).trim()) return false;
+  const stripped = String(value).trim();
+  if (!stripped.includes("T")) return false;
+  const hasTz =
+    stripped.endsWith("Z") ||
+    /[+-]\d{2}:\d{2}$/.test(stripped) ||
+    /[+-]\d{4}$/.test(stripped);
+  if (!hasTz) return false;
+  const ms = Date.parse(stripped);
+  return !Number.isNaN(ms);
+}
+
+/** Convert unix seconds to Asia/Shanghai ISO-8601 with +08:00 offset. */
+export function toShanghaiIsoFromTs(tsSeconds: number): string {
+  const d = new Date(tsSeconds * 1000);
+  const fmt = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  // sv-SE → "2026-07-31 10:00:00"
+  const wall = fmt.format(d).replace(" ", "T");
+  return `${wall}+08:00`;
+}
+
+/**
+ * Resolve authoritative published_at from a radar item.
+ * Accepts only:
+ *   1. Valid timezone-aware ISO published_at / iso_time
+ *   2. ts > 0 (unix seconds) → Asia/Shanghai ISO
+ * Never uses display time, fixed dates, or Date.now().
+ */
+export function resolvePublishedAt(it: Record<string, unknown>): string | null {
+  const candidates = [it.published_at, it.iso_time];
+  for (const c of candidates) {
+    if (typeof c === "string" && isValidTimezoneAwareIso(c)) {
+      return c.trim().replace(" ", "T");
+    }
+  }
+
+  const rawTs = it.ts;
+  const ts = typeof rawTs === "number" ? rawTs : typeof rawTs === "string" ? Number(rawTs) : NaN;
+  if (Number.isFinite(ts) && ts > 0) {
+    return toShanghaiIsoFromTs(ts);
+  }
+
+  return null;
+}
+
 export function normalizeUrlFrontend(rawUrl: string): string {
   if (!rawUrl) return "";
   const str = String(rawUrl).trim();
@@ -38,21 +142,6 @@ export function normalizeUrlFrontend(rawUrl: string): string {
       hostname += `:${port}`;
     }
 
-    const TRACKING_PARAMS = new Set([
-      "utm_source",
-      "utm_medium",
-      "utm_campaign",
-      "utm_term",
-      "utm_content",
-      "fbclid",
-      "gclid",
-      "msclkid",
-      "spm",
-      "_hsenc",
-      "_hsmi",
-      "mkt_tok",
-    ]);
-
     const params: [string, string][] = [];
     parsed.searchParams.forEach((val, key) => {
       if (!TRACKING_PARAMS.has(key.toLowerCase())) {
@@ -69,41 +158,45 @@ export function normalizeUrlFrontend(rawUrl: string): string {
   }
 }
 
-export function prepareDigestItems(items: Industry["items"]): {
-  canonicalItems: CanonicalDigestItem[];
-  promptContext: string;
-  inputItems: IntelDigestInputItem[];
-  sourceRefs: IntelDigestSourceRef[];
-} {
+/**
+ * Build canonical digest materials.
+ * Filters out items missing title, source, valid http(s) URL, or timezone-aware published_at
+ * BEFORE prompt / chatStream / input_items construction.
+ */
+export function prepareDigestItems(items: Industry["items"]): PrepareDigestItemsResult {
   const rawList = items || [];
-  const normalizedList: CanonicalDigestItem[] = rawList.map((it: any) => {
-    const title = (it.zh || it.title || "").trim();
-    const source = (it.source || "").trim();
-    const url = (it.url || it.source_url || "").trim();
-    const rawPublishedAt = (it.published_at || it.iso_time || (it.time ? String(it.time).trim() : "")).trim();
+  const totalInput = rawList.length;
+  const valid: CanonicalDigestItem[] = [];
 
-    let isoDate = rawPublishedAt ? rawPublishedAt.replace(" ", "T") : "";
-    if (!isoDate || isoDate === "—") {
-      isoDate = "2026-07-31T10:00:00+08:00";
-    } else if (!isoDate.includes("T")) {
-      isoDate = `${isoDate}T00:00:00+08:00`;
-    } else if (!isoDate.includes("+") && !isoDate.includes("-", 10) && !isoDate.endsWith("Z")) {
-      isoDate = `${isoDate}+08:00`;
-    }
+  for (const raw of rawList) {
+    const it = raw as unknown as Record<string, unknown>;
+    const title = String(it.zh || it.title || "").trim();
+    const source = String(it.source || "").trim();
+    const url = String(it.url || it.source_url || "").trim();
+    const published_at = resolvePublishedAt(it);
 
-    return {
+    if (!title || !source) continue;
+    if (!isValidHttpUrl(url)) continue;
+    if (!published_at) continue;
+
+    const displayTime =
+      (typeof it.time === "string" && it.time.trim() && it.time !== "—")
+        ? it.time.trim()
+        : published_at;
+
+    valid.push({
       title,
       source,
       url,
-      published_at: isoDate,
-      time: it.time || rawPublishedAt,
-      summary: (it.summary || it.snippet || "").trim(),
+      published_at,
+      time: displayTime,
+      summary: String(it.summary || it.snippet || "").trim(),
       normalized_url: normalizeUrlFrontend(url),
-    };
-  });
+    });
+  }
 
   // Sort deterministically: published_at desc, normalized_url asc, title asc, source asc
-  normalizedList.sort((a, b) => {
+  valid.sort((a, b) => {
     if (a.published_at !== b.published_at) {
       return b.published_at.localeCompare(a.published_at);
     }
@@ -116,7 +209,17 @@ export function prepareDigestItems(items: Industry["items"]): {
     return a.source.localeCompare(b.source);
   });
 
-  const canonicalItems = normalizedList.slice(0, 25);
+  const canonicalItems = valid.slice(0, 25);
+  const droppedCount = totalInput - valid.length;
+
+  let status: DigestMaterialStatus;
+  if (canonicalItems.length === 0) {
+    status = "unavailable";
+  } else if (droppedCount > 0) {
+    status = "partial";
+  } else {
+    status = "normal";
+  }
 
   const promptContext = canonicalItems
     .map((it) => `[${it.time}] ${it.source}｜${it.title}`)
@@ -142,6 +245,8 @@ export function prepareDigestItems(items: Industry["items"]): {
     promptContext,
     inputItems,
     sourceRefs,
+    droppedCount,
+    status,
   };
 }
 

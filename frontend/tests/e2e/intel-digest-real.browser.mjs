@@ -1,5 +1,10 @@
 /**
  * Intel Daily Digest v0.1 — Real Backend & Playwright Browser E2E Test
+ *
+ * Round 4 additions:
+ * - Old cache with only ts → can generate and save
+ * - Saving phase shows "保存中…", no "取消生成" button
+ * - Delayed latest must not overwrite save_failed
  */
 
 import { chromium } from "playwright";
@@ -88,6 +93,9 @@ function getPythonConfig() {
     : { cmd: "python3", extraArgs: ["-m", "uvicorn"] };
 }
 
+/** 2026-07-31 10:00:00+08:00 as unix seconds */
+const OLD_CACHE_TS = Math.floor(Date.UTC(2026, 6, 31, 2, 0, 0) / 1000);
+
 async function main() {
   console.log("=== Running Intel Digest Real Backend E2E Test ===");
 
@@ -159,7 +167,7 @@ async function main() {
       }
     });
 
-    // 2. Mock /api/radar so InvestmentNewsPanel has industries data immediately
+    // 2. Mock /api/radar — includes both ISO published_at and old-cache ts-only items
     await page.route("**/api/radar", async (route) => {
       await route.fulfill({
         status: 200,
@@ -174,11 +182,27 @@ async function main() {
               name: "AI 人工智能",
               accent: "#f97316",
               items: [
-                { title: "AI Chip Innovation Announced", zh: "AI 芯片重大突破发布", source: "TechCrunch", time: "2026-07-31 10:00:00", published_at: "2026-07-31T10:00:00+08:00", url: "https://example.com/ai-chip" }
-              ]
-            }
-          ]
-        })
+                {
+                  title: "AI Chip Innovation Announced",
+                  zh: "AI 芯片重大突破发布",
+                  source: "TechCrunch",
+                  time: "07-31 10:00",
+                  published_at: "2026-07-31T10:00:00+08:00",
+                  url: "https://example.com/ai-chip",
+                },
+                {
+                  // Old cache shape: only ts, no published_at
+                  title: "Legacy Cache Item",
+                  zh: "旧缓存资讯",
+                  source: "LegacyWire",
+                  time: "07-30 09:00",
+                  ts: OLD_CACHE_TS,
+                  url: "https://example.com/legacy-cache",
+                },
+              ],
+            },
+          ],
+        }),
       });
     });
 
@@ -186,7 +210,7 @@ async function main() {
     await page.route("**/api/chat", async (route) => {
       const streamData = [
         JSON.stringify({ type: "delta", text: "- 今日 AI 芯片重大突破" }),
-        JSON.stringify({ type: "done", trace: [], rounds: 1 })
+        JSON.stringify({ type: "done", trace: [], rounds: 1 }),
       ].join("\n") + "\n";
       await route.fulfill({
         status: 200,
@@ -230,7 +254,7 @@ async function main() {
       await sleep(2000); // Delayed stream response so user can click cancel
       const streamData = [
         JSON.stringify({ type: "delta", text: "- Partial delta text" }),
-        JSON.stringify({ type: "done", trace: [], rounds: 1 })
+        JSON.stringify({ type: "done", trace: [], rounds: 1 }),
       ].join("\n") + "\n";
       await route.fulfill({ status: 200, contentType: "application/x-ndjson", body: streamData });
     });
@@ -253,7 +277,7 @@ async function main() {
     await page.route("**/api/chat", async (route) => {
       const streamData = [
         JSON.stringify({ type: "delta", text: "- 今日 AI 芯片重大突破" }),
-        JSON.stringify({ type: "done", trace: [], rounds: 1 })
+        JSON.stringify({ type: "done", trace: [], rounds: 1 }),
       ].join("\n") + "\n";
       await route.fulfill({ status: 200, contentType: "application/x-ndjson", body: streamData });
     });
@@ -272,7 +296,6 @@ async function main() {
     });
     await page.waitForTimeout(600);
 
-    // Hard assertion for Head Review Section 8
     if (chatCallCount !== beforeChatCalls + 1) {
       throw new Error(`Expected chatCallCount === before + 1 (${beforeChatCalls + 1}), got ${chatCallCount}`);
     }
@@ -293,16 +316,189 @@ async function main() {
 
     await regenButton.click();
     await page.waitForSelector("text=Intel 摘要数据存储故障");
-    await page.waitForSelector("text=今日 AI 芯片重大突破"); // Markdown summary text is retained
+    await page.waitForSelector("text=今日 AI 芯片重大突破");
     console.log("✓ Save 500 error retained summary text and displayed error badge");
 
     // Test 6: Page reload -> loads latest digest from API
-    await page.unroute("**/api/intel-digests"); // restore real backend handling
+    await page.unroute("**/api/intel-digests");
     await page.reload();
     await page.waitForSelector("span:has-text('已保存')", { timeout: 10000 });
     await page.waitForSelector("text=今日 AI 芯片重大突破", { timeout: 10000 });
     console.log("✓ Page reload successfully loaded latest digest from API");
-    console.log("✓ Page reload successfully loaded latest digest from API");
+
+    // ── Round 4 new scenarios ──────────────────────────────────────────────
+
+    // Test 7: Old cache only-ts item can generate & save (radar mock already includes ts item)
+    // Clear prior digest state by regenerating; assert POST body includes legacy URL
+    let lastSaveBody = null;
+    await page.route("**/api/intel-digests", async (route) => {
+      if (route.request().method() === "POST") {
+        lastSaveBody = route.request().postDataJSON();
+        // Proxy to real backend
+        const url = route.request().url().replace(
+          `http://127.0.0.1:${frontendPort}`,
+          `http://127.0.0.1:${backendPort}`
+        );
+        const response = await fetch(url, {
+          method: "POST",
+          headers: route.request().headers(),
+          body: route.request().postDataBuffer(),
+        });
+        const headers = {};
+        response.headers.forEach((v, k) => { headers[k] = v; });
+        await route.fulfill({
+          status: response.status,
+          headers,
+          body: Buffer.from(await response.arrayBuffer()),
+        });
+      } else {
+        await route.fallback();
+      }
+    });
+    await page.route("**/api/chat", async (route) => {
+      const streamData = [
+        JSON.stringify({ type: "delta", text: "- 旧缓存资讯可提炼" }),
+        JSON.stringify({ type: "done", trace: [], rounds: 1 }),
+      ].join("\n") + "\n";
+      await route.fulfill({ status: 200, contentType: "application/x-ndjson", body: streamData });
+    });
+
+    const regen2 = page.locator("button:has-text('重新提炼')");
+    await regen2.click();
+    await page.waitForSelector("text=旧缓存资讯可提炼", { timeout: 10000 });
+    // Wait for save to complete
+    await sleep(800);
+    if (!lastSaveBody) throw new Error("Expected a save POST after old-cache generation");
+    const urls = (lastSaveBody.input_items || []).map((i) => i.url);
+    if (!urls.includes("https://example.com/legacy-cache") && !urls.includes("https://example.com/ai-chip")) {
+      throw new Error(`Expected save input_items to include radar URLs, got ${JSON.stringify(urls)}`);
+    }
+    // All input_items must have timezone-aware published_at
+    for (const it of lastSaveBody.input_items || []) {
+      if (!it.published_at || (!it.published_at.includes("+") && !it.published_at.endsWith("Z"))) {
+        throw new Error(`input_item missing timezone-aware published_at: ${JSON.stringify(it)}`);
+      }
+    }
+    console.log("✓ Old cache ts-only item produced valid dated input_items and saved");
+
+    // Test 8: Saving phase shows "保存中…", no "取消生成" button
+    let resolveSave;
+    const saveGate = new Promise((r) => { resolveSave = r; });
+    await page.route("**/api/intel-digests", async (route) => {
+      if (route.request().method() === "POST") {
+        await saveGate; // hold save until we inspect UI
+        const url = route.request().url().replace(
+          `http://127.0.0.1:${frontendPort}`,
+          `http://127.0.0.1:${backendPort}`
+        );
+        const response = await fetch(url, {
+          method: "POST",
+          headers: route.request().headers(),
+          body: route.request().postDataBuffer(),
+        });
+        const headers = {};
+        response.headers.forEach((v, k) => { headers[k] = v; });
+        await route.fulfill({
+          status: response.status,
+          headers,
+          body: Buffer.from(await response.arrayBuffer()),
+        });
+      } else {
+        await route.fallback();
+      }
+    });
+    await page.route("**/api/chat", async (route) => {
+      // Instant stream so we enter saving quickly
+      const streamData = [
+        JSON.stringify({ type: "delta", text: "- 保存中阶段检查" }),
+        JSON.stringify({ type: "done", trace: [], rounds: 1 }),
+      ].join("\n") + "\n";
+      await route.fulfill({ status: 200, contentType: "application/x-ndjson", body: streamData });
+    });
+
+    await page.locator("button:has-text('重新提炼')").click();
+    // Wait for saving UI
+    await page.waitForSelector("text=保存中", { timeout: 8000 });
+    const cancelDuringSave = await page.locator("button:has-text('取消生成')").count();
+    if (cancelDuringSave !== 0) {
+      throw new Error("Cancel button must NOT be visible during saving phase");
+    }
+    console.log("✓ Saving phase shows '保存中…' and no cancel button");
+    resolveSave(); // release save
+    await sleep(600);
+
+    // Test 9: Delayed latest must not overwrite save_failed
+    // Race: reload starts fetchLatestDigest (held), then generate hits save 500,
+    // then release latest — save_failed UI must survive.
+    let latestResolve;
+    const latestGate = new Promise((r) => { latestResolve = r; });
+
+    await page.unroute("**/api/intel-digests");
+    await page.unroute("**/api/intel-digests**");
+    await page.route("**/api/intel-digests**", async (route) => {
+      const req = route.request();
+      const u = req.url();
+      if (req.method() === "GET" && u.includes("latest")) {
+        await latestGate;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            digest: {
+              digest_id: "should-not-appear",
+              digest_date: "2026-07-01",
+              sector_key: "ai",
+              sector_name: "AI",
+              status: "normal",
+              summary_text: "- STALE LATEST OVERWRITE",
+              source_refs: [],
+              input_fingerprint: "stale",
+              generated_at: "2026-07-01T00:00:00+08:00",
+              created_at: "2026-07-01T00:00:00+08:00",
+            },
+          }),
+        });
+        return;
+      }
+      if (req.method() === "POST") {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ digest: null, error: "Intel 摘要数据存储故障" }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+    await page.route("**/api/chat", async (route) => {
+      const streamData = [
+        JSON.stringify({ type: "delta", text: "- 失败保留摘要文本" }),
+        JSON.stringify({ type: "done", trace: [], rounds: 1 }),
+      ].join("\n") + "\n";
+      await route.fulfill({ status: 200, contentType: "application/x-ndjson", body: streamData });
+    });
+
+    // Reload so fetchLatestDigest is in-flight (held by latestGate)
+    await page.reload();
+    await sleep(400); // let radar + latest request start
+
+    // Generate while latest is still pending
+    const genBtn = page.locator("button:has-text('让 AI 提炼今日要点'), button:has-text('重新提炼')").first();
+    await genBtn.waitFor({ state: "visible", timeout: 8000 });
+    await genBtn.click();
+    await page.waitForSelector("text=Intel 摘要数据存储故障", { timeout: 8000 });
+    await page.waitForSelector("text=失败保留摘要文本");
+
+    // Release delayed latest — must NOT overwrite save_failed UI
+    latestResolve();
+    await sleep(1000);
+
+    const staleText = await page.locator("text=STALE LATEST OVERWRITE").count();
+    if (staleText !== 0) {
+      throw new Error("Delayed latest must NOT overwrite save_failed state");
+    }
+    await page.waitForSelector("text=Intel 摘要数据存储故障");
+    console.log("✓ Delayed latest did not overwrite save_failed state");
 
     await browser.close();
     console.log("=== All E2E assertions passed successfully ===");

@@ -75,6 +75,7 @@ function InvestmentNewsPanel() {
       if (res?.digest) {
         setDigests((d) => {
           const currentPhase = d[sectorKey]?.phase;
+          // Never overwrite active/error states (including save_failed, cancelled, generating, saving)
           if (currentPhase && currentPhase !== "idle") return d;
 
           return {
@@ -220,6 +221,16 @@ function InvestmentNewsPanel() {
           saving: false,
           text: result.summaryText,
           err: result.error || "保存失败",
+        },
+      }));
+    } else if (result.status === "unavailable") {
+      setDigests((d) => ({
+        ...d,
+        [ind.key]: {
+          phase: "empty",
+          loading: false,
+          saving: false,
+          err: result.error || "没有可用于摘要的有效带日期资讯",
         },
       }));
     } else if (result.status === "error") {
