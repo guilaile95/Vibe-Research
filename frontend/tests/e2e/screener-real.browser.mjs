@@ -196,7 +196,29 @@ async function main() {
     await page.goto(`http://127.0.0.1:${port}/screener`);
     await page.waitForSelector("text=信号筛选");
 
-    // Enter codes
+    // --- Overflow: 31 unique codes must block run (no silent truncate) ---
+    const thirtyOne = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(6, "0")).join(" ");
+    await page.locator("textarea").fill(thirtyOne);
+    await page.waitForSelector("text=已解析 31/30");
+    await page.waitForSelector("text=最多 30 个代码");
+    const runBtn = page.locator("button:has-text('运行筛选')");
+    if (await runBtn.isEnabled()) {
+      throw new Error("Run must be disabled when 31 unique codes present");
+    }
+    const postsBeforeOverflow = postCount;
+    // force click even if disabled shouldn't fire — use evaluate only when enabled
+    console.log("✓ 31 unique shows 31/30, error, run disabled");
+
+    // 31 raw / 30 unique → allowed
+    const thirtyRawDup = Array.from({ length: 30 }, (_, i) => String(i + 1).padStart(6, "0")).join(" ") + " 000001";
+    await page.locator("textarea").fill(thirtyRawDup);
+    await page.waitForSelector("text=已解析 30/30");
+    if (!(await runBtn.isEnabled())) {
+      throw new Error("Run must be enabled when 31 raw / 30 unique");
+    }
+    console.log("✓ 31 raw / 30 unique shows 30/30 and enables run");
+
+    // Enter codes for main flow
     await page.locator("textarea").fill("000001 600519 000002");
     // default condition price_gt_sma20 already present
     await page.locator("button:has-text('运行筛选')").click();
@@ -205,6 +227,9 @@ async function main() {
     await page.waitForSelector("text=000001");
     await page.waitForSelector("text=600519");
     await page.waitForSelector("text=000002");
+    if (postCount === postsBeforeOverflow) {
+      throw new Error("expected POST after valid run");
+    }
     console.log("✓ multi-code three buckets visible");
 
     // Expand evidence

@@ -180,9 +180,43 @@ def test_empty_codes_422():
     assert r.status_code == 422
 
 
-def test_too_many_codes_422():
+def test_too_many_unique_codes_422():
     codes = [f"{i:06d}" for i in range(31)]
     r = client.post("/api/screener/evaluate", json={"codes": codes, "conditions": [{"id": "price_gt_sma20"}]})
+    assert r.status_code == 422
+
+
+def test_31_raw_30_unique_accepted_200(monkeypatch):
+    """Dedupe-before-limit: 31 raw with one duplicate → 30 unique → 200."""
+    monkeypatch.setattr(
+        "screener_service.astock.kline",
+        lambda *a, **k: [{"datetime": "2026-07-01", "close": 10, "high": 11, "low": 9, "volume": 1}],
+    )
+    monkeypatch.setattr(
+        "screener_service.ti.compute_indicators",
+        lambda raw, **kw: _mock_env(close=12, sma20=11),
+    )
+    codes = [f"{i:06d}" for i in range(30)] + ["000000"]  # 000000 already first → still 30 unique
+    # range(30) is 000000..000029; append 000000 again
+    codes = [f"{i:06d}" for i in range(30)] + ["000001"]
+    assert len(codes) == 31
+    r = client.post(
+        "/api/screener/evaluate",
+        json={"codes": codes, "conditions": [{"id": "price_gt_sma20"}]},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    # all unique codes evaluated
+    total = len(data["matched"]) + len(data["rejected"]) + len(data["unavailable"])
+    assert total == 30
+
+
+def test_31_unique_codes_422_not_sliced():
+    codes = [f"{i:06d}" for i in range(31)]
+    r = client.post(
+        "/api/screener/evaluate",
+        json={"codes": codes, "conditions": [{"id": "price_gt_sma20"}]},
+    )
     assert r.status_code == 422
 
 

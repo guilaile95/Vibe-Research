@@ -6,23 +6,72 @@ import {
   bucketsAreDisjoint,
   buildEvaluatePayload,
   groupResults,
-  mergeCodes,
+  loadSourceCodes,
   normalizeCodes,
   parseCodeDraft,
   validateConditionDraft,
   validateScreenerDraft,
   defaultCondition,
+  MAX_CODES,
 } from "../src/lib/screenerView.ts";
 import type { ScreenerEvaluateResult } from "../src/lib/api/types.ts";
+import {
+  extractCodesFromSourceRef,
+  getSectorRepresentativeCodes,
+} from "../src/data/sectorResearch/index.ts";
 
-test("parse and normalize codes: dedupe + sort + cap", () => {
+test("parse and normalize codes: dedupe + sort WITHOUT truncate", () => {
   const parsed = parseCodeDraft("600519, 000001 600519 abc 12");
   assert.deepEqual(parsed, ["600519", "000001", "600519"]);
   assert.deepEqual(normalizeCodes(parsed), ["000001", "600519"]);
+
+  // 31 unique codes must all be retained (no silent slice)
+  const thirtyOne = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(6, "0"));
+  const norm = normalizeCodes(thirtyOne);
+  assert.equal(norm.length, 31);
+  assert.equal(norm[0], "000001");
+  assert.equal(norm[30], "000031");
 });
 
-test("mergeCodes from multiple sources", () => {
-  assert.deepEqual(mergeCodes(["600519"], ["000001", "600519"]), ["000001", "600519"]);
+test("validateScreenerDraft: 31 unique → overflow error; 30 unique ok", () => {
+  const thirtyOne = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(6, "0"));
+  const err = validateScreenerDraft(thirtyOne, [defaultCondition("price_gt_sma20")]);
+  assert.ok(err);
+  assert.ok(err!.includes("最多 30 个代码"));
+
+  const thirty = thirtyOne.slice(0, 30);
+  assert.equal(validateScreenerDraft(thirty, [defaultCondition("price_gt_sma20")]), null);
+});
+
+test("31 raw / 30 unique after dedupe → valid", () => {
+  const raw = [
+    ...Array.from({ length: 30 }, (_, i) => String(i + 1).padStart(6, "0")),
+    "000001", // duplicate
+  ];
+  assert.equal(raw.length, 31);
+  const norm = normalizeCodes(raw);
+  assert.equal(norm.length, 30);
+  assert.equal(validateScreenerDraft(norm, [defaultCondition("price_gt_sma20")]), null);
+  const payload = buildEvaluatePayload(norm, [defaultCondition("price_gt_sma20")]);
+  assert.equal(payload.codes.length, 30);
+});
+
+test("buildEvaluatePayload refuses overflow (no silent truncate)", () => {
+  const thirtyOne = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(6, "0"));
+  assert.throws(
+    () => buildEvaluatePayload(thirtyOne, [defaultCondition("price_gt_sma20")]),
+    /最多 30 个代码/,
+  );
+});
+
+test("loadSourceCodes: source path may truncate with explicit hint", () => {
+  const many = Array.from({ length: 103 }, (_, i) => String(i + 1).padStart(6, "0"));
+  const loaded = loadSourceCodes(many, MAX_CODES);
+  assert.equal(loaded.truncated, true);
+  assert.equal(loaded.sourceTotal, 103);
+  assert.equal(loaded.codes.length, 30);
+  assert.ok(loaded.hint.includes("来源共有 103 个代码"));
+  assert.ok(loaded.hint.includes("本次载入前 30 个"));
 });
 
 test("buildEvaluatePayload condition construction", () => {
@@ -80,19 +129,12 @@ test("illegal param precheck", () => {
   assert.equal(validateConditionDraft({ id: "price_gt_sma20" }), null);
   assert.ok(validateScreenerDraft([], [defaultCondition("price_gt_sma20")]));
   assert.ok(validateScreenerDraft(["000001"], []));
-  assert.ok(
-    validateScreenerDraft(
-      ["000001"],
-      [defaultCondition("price_gt_sma20"), defaultCondition("price_gt_sma20")],
-    ),
-  );
 });
 
 test("ScreenerRequestGate: single-flight while loading", () => {
   const gate = new ScreenerRequestGate();
   const t1 = gate.beginIfIdle("idle");
   assert.ok(t1);
-  // Second click before end() must be ignored (sync, no React phase needed)
   const t2 = gate.beginIfIdle("idle");
   assert.equal(t2, null);
   gate.end(t1!.generation);
@@ -103,18 +145,46 @@ test("ScreenerRequestGate: single-flight while loading", () => {
 test("ScreenerRequestGate: stale generation discarded", () => {
   const gate = new ScreenerRequestGate();
   const t1 = gate.begin();
-  const t2 = gate.begin(); // force supersede
+  const t2 = gate.begin();
   assert.equal(gate.isCurrent(t1.generation), false);
   assert.equal(gate.isCurrent(t2.generation), true);
   gate.end(t2.generation);
 });
 
 test("error path preserves draft conceptually via pure validation still working", () => {
-  // Draft codes/conditions remain valid independently of phase
   const codes = ["000001"];
   const conditions = [defaultCondition("price_gt_sma20")];
   assert.equal(validateScreenerDraft(codes, conditions), null);
-  // After "error", same draft still builds payload
   const payload = buildEvaluatePayload(codes, conditions);
   assert.equal(payload.codes[0], "000001");
+});
+
+test("sector codes derived from authoritative sectorResearch sources, not hand list", async () => {
+  // No SECTOR_REPRESENTATIVE_CODES export on screenerView
+  const sv = await import("../src/lib/screenerView.ts");
+  assert.equal("SECTOR_REPRESENTATIVE_CODES" in sv, false);
+
+  const fromUrl = extractCodesFromSourceRef({
+    id: "s1",
+    title: "x",
+    url: "http://www.cninfo.com.cn/new/disclosure/stock?stockCode=002230",
+  });
+  assert.deepEqual(fromUrl, ["002230"]);
+
+  const fromOrg = extractCodesFromSourceRef({
+    id: "s2",
+    title: "t",
+    org: "科大讯飞（002230）",
+  });
+  assert.deepEqual(fromOrg, ["002230"]);
+
+  const codes = await getSectorRepresentativeCodes();
+  assert.ok(codes.length > 0, "expected derived sector codes");
+  assert.equal(codes.length, new Set(codes).size, "deduped");
+  // ascending
+  const sorted = [...codes].sort();
+  assert.deepEqual(codes, sorted);
+  for (const c of codes) {
+    assert.ok(/^\d{6}$/.test(c));
+  }
 });

@@ -33,29 +33,15 @@ export const CONDITION_CATALOG: {
   { id: "volume_ratio_lte", label: "量比 ≤ 阈值", needsParams: "threshold" },
 ];
 
-/** Static mirror of backend sector_research_data representative codes (protected sources only). */
-export const SECTOR_REPRESENTATIVE_CODES: string[] = [
-  "002463", "002916", "300476", "603228", "600183", "002050", "601689", "002896",
-  "603728", "300124", "688017", "000977", "603019", "000938", "601138", "688256",
-  "688041", "002409", "300475", "600641", "688535", "600584", "002156", "300308",
-  "300502", "300394", "688498", "002281", "000988", "688981", "002371", "688012",
-  "688019", "002920", "688326", "300496", "603596", "002284", "300750", "002074",
-  "002460", "300073", "002709", "300037", "300450", "600038", "000099", "688631",
-  "301091", "002085", "600276", "603259", "688235", "688331", "002821", "600363",
-  "000969", "688776", "688122", "601611", "600760", "600150", "002025", "002179",
-  "600893", "688563", "002519", "688066", "300342", "300053", "600118", "600879",
-  "600406", "000400", "600089", "002028", "600312", "002230", "688111", "300033",
-  "300229", "300418", "002241", "603893", "300458", "300274", "002594", "002518",
-  "300693", "300212", "603000", "300226", "600602", "000032", "600111", "000831",
-  "002428", "600961", "603799", "300347", "300676", "300760", "688271",
-];
-
 export function parseCodeDraft(raw: string): string[] {
   const tokens = raw.split(/[^\d]+/).filter(Boolean);
   return tokens.filter((t) => /^\d{6}$/.test(t));
 }
 
-/** Dedupe + ascending sort + cap at MAX_CODES. */
+/**
+ * Direct-input normalization: 6-digit filter + dedupe + ascending sort.
+ * Never silently truncates — overflow is a validation error.
+ */
 export function normalizeCodes(codes: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -66,11 +52,32 @@ export function normalizeCodes(codes: string[]): string[] {
     out.push(code);
   }
   out.sort();
-  return out.slice(0, MAX_CODES);
+  return out;
 }
 
-export function mergeCodes(existing: string[], incoming: string[]): string[] {
-  return normalizeCodes([...existing, ...incoming]);
+/**
+ * Source-load path (watchlist / holdings / sector reps):
+ * allow deterministic take of first `limit` after normalize, with explicit truncation meta.
+ */
+export function loadSourceCodes(
+  incoming: string[],
+  limit: number = MAX_CODES,
+): { codes: string[]; sourceTotal: number; truncated: boolean; hint: string } {
+  const full = normalizeCodes(incoming);
+  if (full.length <= limit) {
+    return {
+      codes: full,
+      sourceTotal: full.length,
+      truncated: false,
+      hint: `已载入 ${full.length} 个代码（草稿，未运行）`,
+    };
+  }
+  return {
+    codes: full.slice(0, limit),
+    sourceTotal: full.length,
+    truncated: true,
+    hint: `来源共有 ${full.length} 个代码，本次载入前 ${limit} 个`,
+  };
 }
 
 export function isFiniteNumber(v: unknown): v is number {
@@ -95,13 +102,19 @@ export function validateConditionDraft(c: ScreenerCondition): string | null {
   return null;
 }
 
+/**
+ * Validate full deduped code list (no silent slice).
+ * 0 → error; 1–30 → ok; ≥31 → error mentioning 最多 30 个代码.
+ */
 export function validateScreenerDraft(
   codes: string[],
   conditions: ScreenerCondition[],
 ): string | null {
   const norm = normalizeCodes(codes);
   if (norm.length === 0) return "请至少输入 1 个六位股票代码";
-  if (norm.length > MAX_CODES) return `最多 ${MAX_CODES} 个代码`;
+  if (norm.length > MAX_CODES) {
+    return `最多 30 个代码（当前去重后 ${norm.length} 个，请删减后再运行）`;
+  }
   if (!conditions.length) return "请至少添加 1 个筛选条件";
   if (conditions.length > MAX_CONDITIONS) return `最多 ${MAX_CONDITIONS} 个条件`;
   const ids = conditions.map((c) => c.id);
@@ -113,7 +126,15 @@ export function validateScreenerDraft(
   return null;
 }
 
+/**
+ * Build request body only after draft validation.
+ * Does not truncate codes.
+ */
 export function buildEvaluatePayload(codes: string[], conditions: ScreenerCondition[]) {
+  const err = validateScreenerDraft(codes, conditions);
+  if (err) {
+    throw new Error(err);
+  }
   return {
     codes: normalizeCodes(codes),
     conditions: conditions.map((c) => {

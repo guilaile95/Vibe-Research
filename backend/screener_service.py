@@ -25,6 +25,17 @@ _MAX_WORKERS = 4
 _TRIGGER_BREAKOUT = "close_above_20d_high"
 _TRIGGER_BREAKDOWN = "close_below_20d_low"
 
+# Prefix from technical_indicators when 20d high/low window is incomplete
+_PRICE_RANGE_LIMITATION_PREFIX = "价格区间触发不可评估"
+
+
+def _price_range_trigger_unevaluable(envelope: dict) -> bool:
+    """True when compute_indicators reports incomplete high/low window for range triggers."""
+    for lim in envelope.get("limitations") or []:
+        if isinstance(lim, str) and lim.startswith(_PRICE_RANGE_LIMITATION_PREFIX):
+            return True
+    return False
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
@@ -105,20 +116,37 @@ def evaluate_condition(condition: ScreenerCondition, envelope: dict) -> dict:
         return ok(macd_hist < 0, {"macd_histogram": macd_hist})
 
     if cid == "breakout_20d_high":
-        # Only true when trigger present; missing trigger with enough data = false
-        # If technical envelope is unavailable, caller short-circuits before conditions.
-        # When status is normal/partial but no trigger, treat as evaluable false
-        # unless we cannot know (no close) → unevaluable
+        # Do not recompute 20d high/low — only trigger keys + limitation prefix.
+        if _TRIGGER_BREAKOUT in triggers:
+            return ok(True, {"trigger": _TRIGGER_BREAKOUT, "present": True, "close": close})
         if close is None:
             return unevaluable({"trigger": _TRIGGER_BREAKOUT, "present": False, "close": close})
-        present = _TRIGGER_BREAKOUT in triggers
-        return ok(present, {"trigger": _TRIGGER_BREAKOUT, "present": present, "close": close})
+        if _price_range_trigger_unevaluable(envelope):
+            return unevaluable(
+                {
+                    "trigger": _TRIGGER_BREAKOUT,
+                    "present": False,
+                    "close": close,
+                    "reason": "price_range_incomplete",
+                }
+            )
+        return ok(False, {"trigger": _TRIGGER_BREAKOUT, "present": False, "close": close})
 
     if cid == "breakdown_20d_low":
+        if _TRIGGER_BREAKDOWN in triggers:
+            return ok(True, {"trigger": _TRIGGER_BREAKDOWN, "present": True, "close": close})
         if close is None:
             return unevaluable({"trigger": _TRIGGER_BREAKDOWN, "present": False, "close": close})
-        present = _TRIGGER_BREAKDOWN in triggers
-        return ok(present, {"trigger": _TRIGGER_BREAKDOWN, "present": present, "close": close})
+        if _price_range_trigger_unevaluable(envelope):
+            return unevaluable(
+                {
+                    "trigger": _TRIGGER_BREAKDOWN,
+                    "present": False,
+                    "close": close,
+                    "reason": "price_range_incomplete",
+                }
+            )
+        return ok(False, {"trigger": _TRIGGER_BREAKDOWN, "present": False, "close": close})
 
     if cid == "rsi_between":
         params = condition.params  # type: ignore[attr-defined]

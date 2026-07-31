@@ -147,7 +147,8 @@ ScreenerCondition = Annotated[
 
 
 class ScreenerEvaluateIn(_StrictModel):
-    codes: list[str] = Field(..., min_length=MIN_CODES, max_length=MAX_CODES)
+    # No max_length on raw list: limit applies only after dedupe (see validator).
+    codes: list[str] = Field(..., min_length=MIN_CODES)
     conditions: list[ScreenerCondition] = Field(
         ..., min_length=MIN_CONDITIONS, max_length=MAX_CONDITIONS
     )
@@ -155,10 +156,13 @@ class ScreenerEvaluateIn(_StrictModel):
     @field_validator("codes")
     @classmethod
     def validate_and_normalize_codes(cls, v: list[str]) -> list[str]:
+        """Validate → dedupe → sort → then enforce unique count ≤ 30.
+
+        Order is intentional: 31 raw with 30 unique must succeed; 31 unique → 422.
+        Never pre-slice.
+        """
         if not v:
             raise ValueError("codes must contain at least 1 code")
-        if len(v) > MAX_CODES:
-            raise ValueError(f"codes must contain at most {MAX_CODES} items")
         normalized: list[str] = []
         seen: set[str] = set()
         for raw in v:
@@ -174,6 +178,11 @@ class ScreenerEvaluateIn(_StrictModel):
             raise ValueError("codes must contain at least 1 valid code")
         # Deterministic ascending order after dedupe
         normalized.sort()
+        if len(normalized) > MAX_CODES:
+            raise ValueError(
+                f"codes must contain at most {MAX_CODES} unique items "
+                f"(got {len(normalized)} after dedupe)"
+            )
         return normalized
 
     @field_validator("conditions")

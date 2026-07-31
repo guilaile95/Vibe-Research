@@ -121,6 +121,43 @@ def test_breakdown_uses_exact_trigger_key():
     assert r["evidence"]["trigger"] == "close_below_20d_low"
 
 
+def test_breakout_unevaluable_when_price_range_limitation():
+    """partial + incomplete high/low + no trigger → unevaluable → unavailable if sole cond."""
+    env = _envelope(
+        status="partial",
+        triggers=[],
+        limitations=["价格区间触发不可评估：过去 20 个交易日的 high/low 数据不完整"],
+    )
+    r = svc.evaluate_condition(CondBreakout20dHigh(id="breakout_20d_high"), env)
+    assert r["evaluable"] is False
+    assert r["passed"] is None
+    assert svc.classify_stock([r], "partial") == "unavailable"
+
+
+def test_breakout_evaluable_false_when_partial_unrelated_to_price_range():
+    """partial only due to SMA60/volume — price window complete, no trigger → rejected."""
+    env = _envelope(
+        status="partial",
+        triggers=[],
+        limitations=["历史长度 40 不足 60 个交易日，SMA60 不可用"],
+    )
+    r = svc.evaluate_condition(CondBreakout20dHigh(id="breakout_20d_high"), env)
+    assert r["evaluable"] is True
+    assert r["passed"] is False
+    assert svc.classify_stock([r], "partial") == "rejected"
+
+
+def test_breakout_trigger_present_passed_true_even_with_other_limitations():
+    env = _envelope(
+        status="partial",
+        triggers=[{"type": "close_above_20d_high"}],
+        limitations=["成交量历史不足，5/20 日均量比不可用"],
+    )
+    r = svc.evaluate_condition(CondBreakout20dHigh(id="breakout_20d_high"), env)
+    assert r["evaluable"] is True
+    assert r["passed"] is True
+
+
 def test_macd_hist_negative():
     env = _envelope(macd_histogram=-0.3)
     r = svc.evaluate_condition(CondMacdHistNegative(id="macd_hist_negative"), env)

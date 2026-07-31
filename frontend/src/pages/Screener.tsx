@@ -9,16 +9,16 @@ import { cn } from "@/lib/utils";
 import { api, ApiError } from "@/lib/api";
 import type { ScreenerCondition, ScreenerConditionId, ScreenerEvaluateResult, ScreenerStockResult } from "@/lib/api/types";
 import { loadWatchAuthoritative } from "@/lib/watchlist";
+import { getSectorRepresentativeCodes } from "@/data/sectorResearch";
 import {
   CONDITION_CATALOG,
   MAX_CODES,
   ScreenerRequestGate,
-  SECTOR_REPRESENTATIVE_CODES,
   buildEvaluatePayload,
   conditionLabel,
   defaultCondition,
   groupResults,
-  mergeCodes,
+  loadSourceCodes,
   normalizeCodes,
   parseCodeDraft,
   type ScreenerUiPhase,
@@ -135,22 +135,26 @@ export function Screener() {
     };
   }, []);
 
+  // Direct input: full deduped list (never silently truncated)
   const codes = useMemo(() => normalizeCodes(parseCodeDraft(codeText)), [codeText]);
+  const draftError = useMemo(
+    () => validateScreenerDraft(codes, conditions),
+    [codes, conditions],
+  );
+  const runDisabled = phase === "loading" || !!draftError;
 
-  const setCodesDraft = useCallback((next: string[]) => {
-    const norm = normalizeCodes(next);
-    setCodeText(norm.join(" "));
-    if (next.length > MAX_CODES) {
-      setLoadHint(`已截断至 ${MAX_CODES} 个代码（接口上限）`);
-    }
+  const applySourceLoad = useCallback((incoming: string[]) => {
+    const loaded = loadSourceCodes(incoming, MAX_CODES);
+    setCodeText(loaded.codes.join(" "));
+    setLoadHint(loaded.hint);
+    setError(null);
   }, []);
 
   const loadWatchlist = async () => {
     setLoadHint(null);
     try {
       const w = await loadWatchAuthoritative();
-      setCodesDraft(mergeCodes(codes, w.codes || []));
-      setLoadHint(`已从自选股载入 ${w.codes?.length || 0} 个代码（草稿，未运行）`);
+      applySourceLoad(w.codes || []);
     } catch (e) {
       setLoadHint(e instanceof ApiError ? e.message : "载入自选股失败");
     }
@@ -161,17 +165,20 @@ export function Screener() {
     try {
       const pf = await api.portfolio();
       const hs = (pf?.holdings || []).map((h) => h.code).filter(Boolean);
-      setCodesDraft(mergeCodes(codes, hs));
-      setLoadHint(`已从持仓载入 ${hs.length} 个代码（草稿，未运行）`);
+      applySourceLoad(hs);
     } catch (e) {
       setLoadHint(e instanceof ApiError ? e.message : "载入持仓失败");
     }
   };
 
-  const loadSectorReps = () => {
+  const loadSectorReps = async () => {
     setLoadHint(null);
-    setCodesDraft(mergeCodes(codes, SECTOR_REPRESENTATIVE_CODES));
-    setLoadHint(`已从板块代表公司载入（草稿，上限 ${MAX_CODES}，未运行）`);
+    try {
+      const reps = await getSectorRepresentativeCodes();
+      applySourceLoad(reps);
+    } catch (e) {
+      setLoadHint(e instanceof Error ? e.message : "载入板块代表失败");
+    }
   };
 
   const addCondition = () => {
@@ -198,9 +205,9 @@ export function Screener() {
   };
 
   const run = async () => {
-    const draftErr = validateScreenerDraft(codes, conditions);
-    if (draftErr) {
-      setError(draftErr);
+    // Direct input overflow / invalid draft: block POST (no silent truncate)
+    if (draftError) {
+      setError(draftError);
       return;
     }
 
@@ -242,7 +249,14 @@ export function Screener() {
       <GlassCard className="space-y-3 p-4">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium">股票代码</span>
-          <span className="text-xs text-muted-foreground">已解析 {codes.length}/{MAX_CODES}</span>
+          <span
+            className={cn(
+              "text-xs",
+              codes.length > MAX_CODES ? "font-medium text-destructive" : "text-muted-foreground",
+            )}
+          >
+            已解析 {codes.length}/{MAX_CODES}
+          </span>
           <div className="ml-auto flex flex-wrap gap-2">
             <button type="button" onClick={loadWatchlist} className="rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-muted/40">
               从自选股载入
@@ -337,7 +351,7 @@ export function Screener() {
           <button
             type="button"
             onClick={run}
-            disabled={phase === "loading"}
+            disabled={runDisabled}
             className={cn(
               "ml-auto inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25 disabled:opacity-50",
             )}
@@ -346,9 +360,14 @@ export function Screener() {
             {phase === "loading" ? "筛选中…" : "运行筛选"}
           </button>
         </div>
-        {error && (
+        {(error || (codes.length > MAX_CODES && draftError)) && (
           <div className="flex items-center gap-1.5 rounded bg-destructive/10 p-2 text-xs text-destructive">
-            <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {error}
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {error || draftError}
+          </div>
+        )}
+        {!error && draftError && codes.length <= MAX_CODES && (
+          <div className="flex items-center gap-1.5 rounded bg-amber-500/10 p-2 text-xs text-amber-500">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {draftError}
           </div>
         )}
       </GlassCard>
