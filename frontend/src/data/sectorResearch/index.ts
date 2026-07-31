@@ -17,7 +17,7 @@ import {
   resolveSectorTagMeta,
 } from "./sectorMeta.ts";
 import { assertWorkspaceInvariants } from "./types.ts";
-import type { SectorResearchWorkspace, SourceRef } from "./types.ts";
+import type { SectorResearchWorkspace } from "./types.ts";
 
 export type {
   ContentBlock,
@@ -80,47 +80,4 @@ export async function loadSectorResearchWorkspace(
   const ws = await loader();
   assertWorkspaceInvariants(ws);
   return ws;
-}
-
-/**
- * Extract A-share codes from a research SourceRef without inventing tickers.
- * Prefers stockCode= query params and parenthetical codes in title/org
- * (e.g. "科大讯飞（002230）") — avoids bare 6-digit dates in prose.
- */
-export function extractCodesFromSourceRef(source: SourceRef): string[] {
-  const out: string[] = [];
-  if (source.url) {
-    const m = /stockCode=(\d{6})/i.exec(source.url);
-    if (m) out.push(m[1]);
-  }
-  for (const text of [source.title, source.org]) {
-    if (!text) continue;
-    for (const m of text.matchAll(/[（(](\d{6})[）)]/g)) {
-      out.push(m[1]);
-    }
-  }
-  return out;
-}
-
-/**
- * Aggregate representative company codes from all registered sector research workspaces.
- * Derived from existing frontend sectorResearch sources — not a hand-maintained list.
- */
-export async function getSectorRepresentativeCodes(): Promise<string[]> {
-  const keys = listSectorResearchKeys();
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const key of keys) {
-    const ws = await loadSectorResearchWorkspace(key);
-    if (!ws) continue;
-    for (const src of ws.sources || []) {
-      for (const code of extractCodesFromSourceRef(src)) {
-        if (!/^\d{6}$/.test(code) || seen.has(code)) continue;
-        seen.add(code);
-        out.push(code);
-      }
-    }
-  }
-  out.sort();
-  return out;
 }

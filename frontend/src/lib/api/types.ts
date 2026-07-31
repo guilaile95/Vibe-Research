@@ -221,6 +221,11 @@ export interface ScreenerEvaluateResult {
   schema_version: "screener-v0.1";
 }
 
+export interface ScreenerSectorRepresentativesResult {
+  codes: string[];
+  count: number;
+}
+
 
 export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;

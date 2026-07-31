@@ -15,10 +15,6 @@ import {
   MAX_CODES,
 } from "../src/lib/screenerView.ts";
 import type { ScreenerEvaluateResult } from "../src/lib/api/types.ts";
-import {
-  extractCodesFromSourceRef,
-  getSectorRepresentativeCodes,
-} from "../src/data/sectorResearch/index.ts";
 
 test("parse and normalize codes: dedupe + sort WITHOUT truncate", () => {
   const parsed = parseCodeDraft("600519, 000001 600519 abc 12");
@@ -159,32 +155,11 @@ test("error path preserves draft conceptually via pure validation still working"
   assert.equal(payload.codes[0], "000001");
 });
 
-test("sector codes derived from authoritative sectorResearch sources, not hand list", async () => {
-  // No SECTOR_REPRESENTATIVE_CODES export on screenerView
+test("sector representatives not embedded in frontend screenerView", async () => {
   const sv = await import("../src/lib/screenerView.ts");
   assert.equal("SECTOR_REPRESENTATIVE_CODES" in sv, false);
-
-  const fromUrl = extractCodesFromSourceRef({
-    id: "s1",
-    title: "x",
-    url: "http://www.cninfo.com.cn/new/disclosure/stock?stockCode=002230",
-  });
-  assert.deepEqual(fromUrl, ["002230"]);
-
-  const fromOrg = extractCodesFromSourceRef({
-    id: "s2",
-    title: "t",
-    org: "科大讯飞（002230）",
-  });
-  assert.deepEqual(fromOrg, ["002230"]);
-
-  const codes = await getSectorRepresentativeCodes();
-  assert.ok(codes.length > 0, "expected derived sector codes");
-  assert.equal(codes.length, new Set(codes).size, "deduped");
-  // ascending
-  const sorted = [...codes].sort();
-  assert.deepEqual(codes, sorted);
-  for (const c of codes) {
-    assert.ok(/^\d{6}$/.test(c));
-  }
+  // Research index must not re-export text-parsing helpers
+  const idx = await import("../src/data/sectorResearch/index.ts");
+  assert.equal("getSectorRepresentativeCodes" in idx, false);
+  assert.equal("extractCodesFromSourceRef" in idx, false);
 });

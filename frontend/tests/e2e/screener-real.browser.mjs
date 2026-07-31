@@ -189,6 +189,16 @@ async function main() {
       });
       return;
     }
+    if (url.includes("/api/screener/sources/sector-representatives")) {
+      // Mock authoritative backend list (not frontend text scrape)
+      const codes = Array.from({ length: 103 }, (_, i) => String(i + 1).padStart(6, "0"));
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ codes, count: codes.length }),
+      });
+      return;
+    }
     await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
   });
 

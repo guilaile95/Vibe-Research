@@ -22,3 +22,16 @@ def evaluate_screener_endpoint(body: ScreenerEvaluateIn):
             status_code=500,
             content={"detail": "筛选服务暂时不可用"},
         )
+
+
+@router.get("/sources/sector-representatives")
+def sector_representatives_endpoint():
+    """Read-only list of sector representative codes (authoritative backend registry)."""
+    try:
+        codes = svc.list_sector_representative_codes()
+        return {"codes": codes, "count": len(codes)}
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "读取板块代表公司失败"},
+        )

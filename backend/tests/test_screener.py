@@ -221,3 +221,31 @@ def test_price_lt_sma20():
     env = _envelope(close=10, sma20=11)
     r = svc.evaluate_condition(CondPriceLtSma20(id="price_lt_sma20"), env)
     assert r["passed"] is True
+
+
+def test_list_sector_representative_codes_authoritative():
+    """Codes come from sector_research_data public API; sorted, 6-digit, deduped."""
+    import sector_research_data as srd
+
+    codes = svc.list_sector_representative_codes()
+    assert len(codes) > 0
+    assert codes == sorted(codes)
+    assert len(codes) == len(set(codes))
+    for c in codes:
+        assert isinstance(c, str) and len(c) == 6 and c.isdigit()
+
+    # Rebuild expected from public getters (not private SECTOR_SOURCES)
+    expected: list[str] = []
+    seen: set[str] = set()
+    for key in srd.list_sector_source_keys():
+        src = srd.get_sector_source(key)
+        assert src is not None
+        for raw in src.representative_company_codes or []:
+            code = str(raw).strip()
+            if code.isdigit() and len(code) == 6 and code not in seen:
+                seen.add(code)
+                expected.append(code)
+    expected.sort()
+    assert codes == expected
+    # Known registry size at design time was 103 unique
+    assert len(codes) == 103

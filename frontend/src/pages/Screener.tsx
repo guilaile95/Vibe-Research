@@ -9,7 +9,6 @@ import { cn } from "@/lib/utils";
 import { api, ApiError } from "@/lib/api";
 import type { ScreenerCondition, ScreenerConditionId, ScreenerEvaluateResult, ScreenerStockResult } from "@/lib/api/types";
 import { loadWatchAuthoritative } from "@/lib/watchlist";
-import { getSectorRepresentativeCodes } from "@/data/sectorResearch";
 import {
   CONDITION_CATALOG,
   MAX_CODES,
@@ -174,10 +173,10 @@ export function Screener() {
   const loadSectorReps = async () => {
     setLoadHint(null);
     try {
-      const reps = await getSectorRepresentativeCodes();
-      applySourceLoad(reps);
+      const res = await api.getScreenerSectorRepresentatives();
+      applySourceLoad(res.codes || []);
     } catch (e) {
-      setLoadHint(e instanceof Error ? e.message : "载入板块代表失败");
+      setLoadHint(e instanceof ApiError ? e.message : "载入板块代表失败");
     }
   };
 

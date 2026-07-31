@@ -10,7 +10,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
+import re
+
 import astock
+import sector_research_data as srd
 import technical_indicators as ti
 from screener_models import (
     SCHEMA_VERSION,
@@ -18,6 +21,8 @@ from screener_models import (
     ScreenerCondition,
     ScreenerEvaluateIn,
 )
+
+_CODE_RE = re.compile(r"^\d{6}$")
 
 _MAX_WORKERS = 4
 
@@ -39,6 +44,28 @@ def _price_range_trigger_unevaluable(envelope: dict) -> bool:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def list_sector_representative_codes() -> list[str]:
+    """Authoritative sector representative codes from sector_research_data.
+
+    Uses public list_sector_source_keys() + get_sector_source() only.
+    Filters strict 6-digit codes, dedupes, returns ascending order.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for key in srd.list_sector_source_keys():
+        src = srd.get_sector_source(key)
+        if src is None:
+            continue
+        for raw in src.representative_company_codes or []:
+            code = str(raw).strip()
+            if not _CODE_RE.fullmatch(code) or code in seen:
+                continue
+            seen.add(code)
+            out.append(code)
+    out.sort()
+    return out
 
 
 def _trigger_types(envelope: dict) -> set[str]:

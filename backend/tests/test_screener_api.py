@@ -324,6 +324,17 @@ def test_nan_infinity_422():
     assert r2.status_code == 422
 
 
+def test_sector_representatives_endpoint():
+    r = client.get("/api/screener/sources/sector-representatives")
+    assert r.status_code == 200
+    data = r.json()
+    assert "codes" in data and "count" in data
+    assert data["count"] == len(data["codes"])
+    assert data["count"] == 103
+    assert data["codes"] == sorted(data["codes"])
+    assert all(isinstance(c, str) and len(c) == 6 and c.isdigit() for c in data["codes"])
+
+
 def test_determinism_excluding_evaluated_at(monkeypatch):
     monkeypatch.setattr(
         "screener_service.astock.kline",
