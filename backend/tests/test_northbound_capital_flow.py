@@ -590,3 +590,325 @@ def test_is_stale_behavior():
     # trade_date 2026-07-29 is previous trading day -> not stale if expected is 2026-07-30 12:00 (before 15:00 close)
     stale = ncf._stale_flag("2026-07-29", now_utc)
     assert isinstance(stale, bool)
+
+# ---------------------------------------------------------------------------
+# Northbound turnover history (v0.1)
+# ---------------------------------------------------------------------------
+
+from datetime import date
+from copy import deepcopy
+
+
+def _history_js(trade_date: str, total: float, count: int | None = 1000, etf: float | None = 10.0) -> str:
+    count_cell = "N/A" if count is None else f"{count}"
+    etf_cell = "-" if etf is None else f"{etf}"
+    half = total / 2
+    return (
+        "tabData = [\n"
+        "  {\n"
+        '    "market": "SSE Northbound",\n'
+        f'    "date": "{trade_date}",\n'
+        '    "content": [\n'
+        "      {\n"
+        '        "style": 1,\n'
+        '        "table": {\n'
+        '          "classname": "tradingTable",\n'
+        '          "schema": ["Total Turnover", "Total Trade Count", "DQB", "ETF Turnover"],\n'
+        f'          "tr": [{{"td": [["{half}"], ["{count_cell}"], ["999,999,999"], ["{etf_cell}"]]}}]\n'
+        "        }\n"
+        "      }\n"
+        "    ]\n"
+        "  },\n"
+        "  {\n"
+        '    "market": "SZSE Northbound",\n'
+        f'    "date": "{trade_date}",\n'
+        '    "content": [\n'
+        "      {\n"
+        '        "style": 1,\n'
+        '        "table": {\n'
+        '          "classname": "tradingTable",\n'
+        '          "schema": ["Total Turnover", "Total Trade Count", "DQB", "ETF Turnover"],\n'
+        f'          "tr": [{{"td": [["{half}"], ["{count_cell}"], ["999,999,999"], ["{etf_cell}"]]}}]\n'
+        "        }\n"
+        "      }\n"
+        "    ]\n"
+        "  }\n"
+        "];\n"
+    )
+
+
+def test_history_days_only_10_20_30():
+    for d in (10, 20, 30):
+        assert ncf.validate_history_days(d) == d
+    for bad in (0, 1, 11, 31, 15, -1):
+        with pytest.raises(ncf.NorthboundHistoryDaysError) as ei:
+            ncf.validate_history_days(bad)
+        assert str(ei.value) == ncf.HISTORY_DAYS_ERROR
+
+
+def test_history_weekends_skip_fetch(monkeypatch):
+    # Anchor on Sunday 2026-08-02 so first two calendar days are weekend.
+    calls = []
+
+    def mock_fetch(dt):
+        calls.append(dt)
+        return _history_js(dt, 100.0)
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 8, 2))
+    assert "2026-08-02" not in calls  # Sunday
+    assert "2026-08-01" not in calls  # Saturday
+    assert all(date.fromisoformat(c).weekday() < 5 for c in calls)
+    assert env["returned_points"] == 10
+
+
+def test_history_normal_trading_day_points(monkeypatch):
+    monkeypatch.setattr(
+        ncf,
+        "_fetch_daily_stat_js",
+        lambda dt: _history_js(dt, 200.0, count=123, etf=4.5),
+    )
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))  # Friday
+    assert env["status"] == "normal"
+    assert env["requested_days"] == 10
+    assert env["returned_points"] == 10
+    assert env["returned_points"] == len(env["series"])
+    assert env["schema_version"] == "northbound-history-v0.1"
+    assert env["source"] == ncf.SOURCE_NAME
+    assert env["source_tier"] == ncf.SOURCE_TIER
+    for p in env["series"]:
+        assert p["total_turnover_mn"] == 200.0
+        assert p["trade_count"] == 246  # both legs
+        assert p["etf_turnover_mn"] == 9.0
+        assert "net_buy_mn" not in p
+
+
+def test_history_none_fetch_skips(monkeypatch):
+    def mock_fetch(dt):
+        if dt == "2026-07-30":
+            return None
+        return _history_js(dt, 100.0)
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    dates = [p["trade_date"] for p in env["series"]]
+    assert "2026-07-30" not in dates
+    assert env["returned_points"] == 10
+
+
+def test_history_unavailable_envelope_skips(monkeypatch):
+    def mock_fetch(dt):
+        if dt == "2026-07-29":
+            return "tabData = [];"
+        return _history_js(dt, 100.0)
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    dates = [p["trade_date"] for p in env["series"]]
+    assert "2026-07-29" not in dates
+    assert env["returned_points"] == 10
+
+
+def test_history_parse_failure_skips(monkeypatch):
+    def mock_fetch(dt):
+        if dt == "2026-07-28":
+            return "not-a-valid-tabData"
+        return _history_js(dt, 100.0)
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    dates = [p["trade_date"] for p in env["series"]]
+    assert "2026-07-28" not in dates
+    assert env["returned_points"] == 10
+
+
+def test_history_one_failure_does_not_block(monkeypatch):
+    def mock_fetch(dt):
+        if dt.endswith("27"):
+            raise RuntimeError("boom")
+        return _history_js(dt, 50.0)
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["returned_points"] == 10
+    assert env["status"] in ("normal", "partial")
+
+
+def test_history_series_sorted_ascending(monkeypatch):
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", lambda dt: _history_js(dt, 10.0))
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    dates = [p["trade_date"] for p in env["series"]]
+    assert dates == sorted(dates)
+
+
+def test_history_dedupe_same_trade_date(monkeypatch):
+    # Force two calendar days to map to the same payload trade_date.
+    def mock_fetch(dt):
+        return _history_js("2026-07-20", 100.0)
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    dates = [p["trade_date"] for p in env["series"]]
+    assert dates.count("2026-07-20") == 1
+    assert env["status"] in ("partial", "unavailable")
+
+
+def test_history_full_points_normal(monkeypatch):
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", lambda dt: _history_js(dt, 100.0, 10, 1.0))
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["status"] == "normal"
+    assert env["returned_points"] == 10
+
+
+def test_history_partial_when_short(monkeypatch):
+    # Only return files for 3 weekdays then None.
+    good = {"2026-07-31", "2026-07-30", "2026-07-29"}
+
+    def mock_fetch(dt):
+        if dt in good:
+            return _history_js(dt, 100.0)
+        return None
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["status"] == "partial"
+    assert env["returned_points"] == 3
+    codes = {lim["reason_code"] for lim in env["limitations"]}
+    assert "INSUFFICIENT_HISTORY_POINTS" in codes
+
+
+def test_history_no_points_unavailable(monkeypatch):
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", lambda dt: None)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["status"] == "unavailable"
+    assert env["series"] == []
+    assert env["returned_points"] == 0
+
+
+def test_history_missing_trade_count_partial(monkeypatch):
+    monkeypatch.setattr(
+        ncf,
+        "_fetch_daily_stat_js",
+        lambda dt: _history_js(dt, 100.0, count=None, etf=2.0),
+    )
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["status"] == "partial"
+    assert env["returned_points"] == 10
+    assert all(p["trade_count"] is None for p in env["series"])
+    fields = {lim["field"] for lim in env["limitations"]}
+    assert "series[].trade_count" in fields
+    assert sum(1 for lim in env["limitations"] if lim["field"] == "series[].trade_count") == 1
+
+
+def test_history_missing_etf_partial(monkeypatch):
+    monkeypatch.setattr(
+        ncf,
+        "_fetch_daily_stat_js",
+        lambda dt: _history_js(dt, 100.0, count=5, etf=None),
+    )
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["status"] == "partial"
+    assert all(p["etf_turnover_mn"] is None for p in env["series"])
+    fields = {lim["field"] for lim in env["limitations"]}
+    assert "series[].etf_turnover_mn" in fields
+
+
+def test_history_missing_total_point_dropped(monkeypatch):
+    def mock_fetch(dt):
+        return (
+            "tabData = [\n"
+            f'  {{"market":"SSE Northbound","date":"{dt}","content":[{{"style":1,"table":{{"classname":"tradingTable","schema":["Total Turnover","Total Trade Count","DQB","ETF Turnover"],"tr":[{{"td":[["-"],["1"],["999,999,999"],["1"]}}]}}}}]}},\n'
+            f'  {{"market":"SZSE Northbound","date":"{dt}","content":[{{"style":1,"table":{{"classname":"tradingTable","schema":["Total Turnover","Total Trade Count","DQB","ETF Turnover"],"tr":[{{"td":[["N/A"],["1"],["999,999,999"],["1"]}}]}}}}]}}\n'
+            "];\n"
+        )
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["status"] == "unavailable"
+    assert env["series"] == []
+
+
+def test_history_trade_date_not_from_request_date(monkeypatch):
+    # Payload dates fixed to 2026-07-01 regardless of request calendar day.
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", lambda dt: _history_js("2026-07-01", 100.0))
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["series"]
+    assert all(p["trade_date"] == "2026-07-01" for p in env["series"])
+    assert env["returned_points"] == 1  # deduped
+
+
+def test_history_scan_hard_cap_days_times_two(monkeypatch):
+    calls = []
+
+    def mock_fetch(dt):
+        calls.append(dt)
+        return None
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    # Max calendar days = 20; weekends skipped so fetch calls <= weekdays in window.
+    assert len(calls) <= 20
+    # Ensure we did not scan beyond 20 calendar days from anchor.
+    scanned = [date.fromisoformat(c) for c in calls]
+    assert max((date(2026, 7, 31) - d).days for d in scanned) < 20
+    assert env["status"] == "unavailable"
+
+
+def test_history_insufficient_points_limitation(monkeypatch):
+    good = {"2026-07-31", "2026-07-30"}
+
+    def mock_fetch(dt):
+        return _history_js(dt, 10.0) if dt in good else None
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["status"] == "partial"
+    codes = {lim["reason_code"] for lim in env["limitations"]}
+    assert "INSUFFICIENT_HISTORY_POINTS" in codes
+    detail = next(lim["detail"] for lim in env["limitations"] if lim["reason_code"] == "INSUFFICIENT_HISTORY_POINTS")
+    assert "2/10" in detail
+
+
+def test_history_no_net_buy_field(monkeypatch):
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", lambda dt: _history_js(dt, 10.0))
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    for p in env["series"]:
+        assert "net_buy_mn" not in p
+        assert "daily_quota_balance_mn" not in p
+        assert "active_stocks" not in p
+
+
+def test_history_fixed_unverified_semantics_limitation(monkeypatch):
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", lambda dt: _history_js(dt, 10.0))
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    codes = [lim["reason_code"] for lim in env["limitations"]]
+    assert "UNVERIFIED_SOURCE_SEMANTICS" in codes
+    assert "NOT_PUBLISHED_BY_SOURCE" not in codes
+
+
+def test_history_returned_points_equals_len(monkeypatch):
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", lambda dt: _history_js(dt, 10.0))
+    env = ncf.get_northbound_history(20, today=date(2026, 7, 31))
+    assert env["returned_points"] == len(env["series"])
+
+
+def test_history_point_does_not_mutate_envelope():
+    tab = ncf.parse_daily_stat_js(SAMPLE_HKEX_JS)
+    env = ncf.build_envelope(tab, fetched_at="2026-07-30T12:00:00+00:00")
+    before = deepcopy(env)
+    point = ncf._history_point_from_envelope(env)
+    assert point is not None
+    assert env == before
+
+
+def test_history_unexpected_exception_safe(monkeypatch):
+    def mock_fetch(dt):
+        raise RuntimeError("secret-url-or-trace")
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["status"] == "unavailable"
+    assert env["series"] == []
+    blob = str(env)
+    assert "secret-url-or-trace" not in blob
+    assert "RuntimeError" not in blob

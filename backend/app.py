@@ -808,6 +808,64 @@ def market_northbound():
     return {"data": data}
 
 
+@app.get("/api/market/northbound/history")
+def market_northbound_history(
+    days: int = Query(20, description="历史交易日点数，仅支持 10、20、30"),
+):
+    """北向成交历史（成交额 / 成交笔数 / ETF 成交额）。
+
+    - 不提供净买入 / 净流入历史。
+    - 正常 / 部分 / 不可用 → 均返回 HTTP 200，状态以 body.data.status 为准。
+    - unavailable 不缓存；normal / partial 缓存 15 分钟。
+    - 非法 days 返回 HTTP 400。
+    """
+    try:
+        days_n = ncf.validate_history_days(days)
+    except ncf.NorthboundHistoryDaysError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+    key = ("market_northbound_history", str(days_n))
+    hit = _DC_CACHE.get(key, 900)
+    if hit is not _CACHE_MISS:
+        return {"data": hit}
+
+    try:
+        data = ncf.get_northbound_history(days_n)
+    except Exception:  # noqa: BLE001
+        data = {
+            "schema_version": ncf.HISTORY_SCHEMA_VERSION,
+            "source": ncf.SOURCE_NAME,
+            "source_tier": ncf.SOURCE_TIER,
+            "status": "unavailable",
+            "fetched_at": ncf._now_iso(),
+            "requested_days": days_n,
+            "returned_points": 0,
+            "limitations": [dict(ncf.LIMITATION_HISTORY_NET_BUY)],
+            "series": [],
+        }
+
+    st = data.get("status") if isinstance(data, dict) else None
+    if st != "unavailable":
+        _DC_CACHE.set(key, data)
+
+    try:
+        import data_health_event_store as _dhes
+        if st == "normal":
+            _dhes.safe_call(_dhes.record_success, "northbound_capital_flow_history")
+        elif st == "partial":
+            _dhes.safe_call(_dhes.record_partial, "northbound_capital_flow_history")
+        else:
+            _dhes.safe_call(
+                _dhes.record_failure,
+                "northbound_capital_flow_history",
+                "SOURCE_UNAVAILABLE",
+            )
+    except Exception:
+        pass
+
+    return {"data": data}
+
+
 @app.get("/api/market/top-risk")
 def market_top_risk(
     code: str = Query(..., min_length=1, max_length=16, description="6 位股票代码"),

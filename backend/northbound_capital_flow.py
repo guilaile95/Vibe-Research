@@ -699,3 +699,214 @@ def get_northbound_capital_flow() -> dict:
             reason_code=ERR_PARSE_FAILED,
             warnings=[f"上游不可用：{ERR_PARSE_FAILED}"],
         )
+
+
+# ---------------------------------------------------------------------------
+# 北向成交历史（成交额 / 成交笔数 / ETF 成交额）—— 不含净买入
+# ---------------------------------------------------------------------------
+
+HISTORY_SCHEMA_VERSION = "northbound-history-v0.1"
+HISTORY_ALLOWED_DAYS = frozenset({10, 20, 30})
+HISTORY_DAYS_ERROR = "days 仅支持 10、20、30"
+
+LIMITATION_HISTORY_NET_BUY = {
+    "field": "series[].net_buy_mn",
+    "reason_code": "UNVERIFIED_SOURCE_SEMANTICS",
+    "detail": (
+        "HKEX payload 可能包含 Buy/Sell Turnover，但本版本未验证其历史单位与口径一致性，"
+        "因此北向成交历史接口不提供净买入字段。"
+    ),
+}
+
+
+class NorthboundHistoryDaysError(ValueError):
+    """Invalid history days parameter (safe fixed message only)."""
+
+
+def validate_history_days(days: Any) -> int:
+    """Validate days for the history endpoint. Raises NorthboundHistoryDaysError."""
+    if isinstance(days, bool) or not isinstance(days, int):
+        raise NorthboundHistoryDaysError(HISTORY_DAYS_ERROR)
+    if days not in HISTORY_ALLOWED_DAYS:
+        raise NorthboundHistoryDaysError(HISTORY_DAYS_ERROR)
+    return days
+
+
+def _history_point_from_envelope(env: dict) -> dict | None:
+    """Extract one northbound turnover history point from a daily envelope.
+
+    Requires a real payload trade_date and finite non-negative northbound total.
+    Does not mutate the input envelope. Never invents net_buy fields.
+    """
+    if not isinstance(env, dict):
+        return None
+    trade_date = env.get("trade_date")
+    if not isinstance(trade_date, str) or not _is_valid_trade_date(trade_date):
+        return None
+    data = env.get("data")
+    if not isinstance(data, dict):
+        return None
+    nb = data.get("northbound")
+    if not isinstance(nb, dict):
+        return None
+    total = _nonneg_finite(nb.get("total_turnover_mn"))
+    if total is None:
+        return None
+    trade_count = _nonneg_finite_int(nb.get("trade_count"))
+    etf = _nonneg_finite(nb.get("etf_turnover_mn"))
+    return {
+        "trade_date": trade_date,
+        "total_turnover_mn": total,
+        "trade_count": trade_count,
+        "etf_turnover_mn": etf,
+    }
+
+
+def _unavailable_history_envelope(
+    *,
+    requested_days: int,
+    fetched_at: str | None = None,
+    limitations: list[dict] | None = None,
+) -> dict:
+    lims = [dict(LIMITATION_HISTORY_NET_BUY)]
+    if limitations:
+        for item in limitations:
+            if isinstance(item, dict):
+                lims.append(dict(item))
+    return {
+        "schema_version": HISTORY_SCHEMA_VERSION,
+        "source": SOURCE_NAME,
+        "source_tier": SOURCE_TIER,
+        "status": "unavailable",
+        "fetched_at": fetched_at or _now_iso(),
+        "requested_days": requested_days,
+        "returned_points": 0,
+        "limitations": lims,
+        "series": [],
+    }
+
+
+def get_northbound_history(days: int, *, today: date | None = None) -> dict:
+    """Fetch northbound turnover history (not net-buy history).
+
+    ``today`` is for deterministic unit tests only; never expose as HTTP param.
+    """
+    try:
+        requested_days = validate_history_days(days)
+    except NorthboundHistoryDaysError:
+        # Callers (HTTP) should validate first; keep fail-closed if misused internally.
+        raise
+
+    fetched_at = _now_iso()
+    anchor = today if isinstance(today, date) else datetime.now(dhs.BEIJING).date()
+    max_calendar_days = requested_days * 2
+
+    points_newest_first: list[dict] = []
+    seen_dates: set[str] = set()
+    calendar_scanned = 0
+    had_scan_issue = False  # parse/unavailable/fetch failures (weekends excluded)
+
+    for offset in range(max_calendar_days):
+        calendar_scanned += 1
+        day = anchor - timedelta(days=offset)
+
+        # Weekends: skip without external request.
+        if day.weekday() >= 5:
+            continue
+
+        date_str = day.isoformat()
+        try:
+            text = _fetch_daily_stat_js(date_str)
+        except Exception:  # noqa: BLE001
+            had_scan_issue = True
+            continue
+        if not text:
+            # 404 / empty / non-200 — holiday or missing file; continue.
+            continue
+
+        try:
+            tab_data = parse_daily_stat_js(text)
+            env = build_envelope(tab_data, trade_date=None, fetched_at=fetched_at)
+        except Exception:  # noqa: BLE001
+            had_scan_issue = True
+            continue
+
+        if not isinstance(env, dict) or env.get("status") == "unavailable":
+            had_scan_issue = True
+            continue
+
+        point = _history_point_from_envelope(env)
+        if point is None:
+            had_scan_issue = True
+            continue
+
+        td = point["trade_date"]
+        if td in seen_dates:
+            continue
+        seen_dates.add(td)
+        points_newest_first.append(point)
+
+        if len(points_newest_first) >= requested_days:
+            break
+
+    # Keep newest requested_days points, return ascending by trade_date.
+    selected = points_newest_first[:requested_days]
+    series = sorted(selected, key=lambda p: p["trade_date"])
+
+    limitations: list[dict] = [dict(LIMITATION_HISTORY_NET_BUY)]
+    missing_trade_count = any(p.get("trade_count") is None for p in series)
+    missing_etf = any(p.get("etf_turnover_mn") is None for p in series)
+    if missing_trade_count:
+        limitations.append({
+            "field": "series[].trade_count",
+            "reason_code": "FIELD_UNAVAILABLE",
+            "detail": "至少一个历史点的成交笔数缺失或无法解析为有效非负整数。",
+        })
+    if missing_etf:
+        limitations.append({
+            "field": "series[].etf_turnover_mn",
+            "reason_code": "FIELD_UNAVAILABLE",
+            "detail": "至少一个历史点的 ETF 成交额缺失或无法解析为有效非负有限值。",
+        })
+
+    hit_scan_cap = (
+        calendar_scanned >= max_calendar_days
+        and len(series) < requested_days
+    )
+    if hit_scan_cap:
+        limitations.append({
+            "field": "series",
+            "reason_code": "INSUFFICIENT_HISTORY_POINTS",
+            "detail": (
+                f"达到历史扫描上限，仅返回 {len(series)}/{requested_days} 个有效交易日。"
+            ),
+        })
+
+    if not series:
+        return _unavailable_history_envelope(
+            requested_days=requested_days,
+            fetched_at=fetched_at,
+            limitations=[lim for lim in limitations if lim.get("reason_code") != "UNVERIFIED_SOURCE_SEMANTICS"],
+        )
+
+    complete = (
+        len(series) == requested_days
+        and not missing_trade_count
+        and not missing_etf
+    )
+    # Normal weekends / ordinary missing holiday files do not force partial when full.
+    status = "normal" if complete else "partial"
+    if had_scan_issue and not complete:
+        status = "partial"
+
+    return {
+        "schema_version": HISTORY_SCHEMA_VERSION,
+        "source": SOURCE_NAME,
+        "source_tier": SOURCE_TIER,
+        "status": status,
+        "fetched_at": fetched_at,
+        "requested_days": requested_days,
+        "returned_points": len(series),
+        "limitations": limitations,
+        "series": series,
+    }
