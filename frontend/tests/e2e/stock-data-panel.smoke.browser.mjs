@@ -157,7 +157,7 @@ function technicalIndicatorsEnvelope(code, { status = "normal" } = {}) {
   const bars = klineBars(code);
   if (status === "unavailable") {
     return {
-      schema_version: "technical-indicators-v0.1",
+      schema_version: "technical-indicators-v0.2",
       code,
       period: "daily",
       trade_date: null,
@@ -173,6 +173,7 @@ function technicalIndicatorsEnvelope(code, { status = "normal" } = {}) {
         rsi14: null,
         bollinger_upper: null, bollinger_middle: null, bollinger_lower: null,
         volume_ratio_5_20: null,
+        kdj_k: null, kdj_d: null, kdj_j: null,
       },
       triggers: [],
       series: [],
@@ -198,11 +199,14 @@ function technicalIndicatorsEnvelope(code, { status = "normal" } = {}) {
       macd_histogram: 0.05,
       rsi14: 55,
       volume_ratio_5_20: 1.1,
+      kdj_k: 60 + i,
+      kdj_d: 55 + i * 0.5,
+      kdj_j: 70 + i,
     };
   });
 
   return {
-    schema_version: "technical-indicators-v0.1",
+    schema_version: "technical-indicators-v0.2",
     code,
     period: "daily",
     trade_date: bars[bars.length - 1]?.date ?? "2026-07-24",
@@ -218,6 +222,9 @@ function technicalIndicatorsEnvelope(code, { status = "normal" } = {}) {
       rsi14: 55.0,
       bollinger_upper: 11.5, bollinger_middle: 11.0, bollinger_lower: 10.5,
       volume_ratio_5_20: 1.2,
+      kdj_k: 65.25,
+      kdj_d: 58.50,
+      kdj_j: 78.75,
     },
     triggers: [
       { type: "volume_spike", message: "5 日平均成交量超过 20 日平均成交量的 2 倍", value: 2.1 },
@@ -613,6 +620,24 @@ async function runSmoke(page, mock, errors) {
   const tiHeading = page.getByText("技术指标").first();
   if (!(await tiHeading.isVisible().catch(() => false))) {
     errors.push(`${label}: 技术指标 card heading not visible after query`);
+  }
+  if (!(await page.getByText("KDJ (9,3,3)").first().isVisible().catch(() => false))) {
+    errors.push(`${label}: KDJ (9,3,3) label not visible`);
+  }
+  for (const kdjLabel of ["K", "D", "J"]) {
+    const count = await page.getByText(kdjLabel, { exact: true }).count();
+    if (count < 1) errors.push(`${label}: KDJ label ${kdjLabel} not visible`);
+  }
+  for (const val of ["65.25", "58.50", "78.75"]) {
+    if (!(await page.getByText(val, { exact: true }).first().isVisible().catch(() => false))) {
+      errors.push(`${label}: KDJ value ${val} not visible`);
+    }
+  }
+  const bodyTextForKdj = await page.locator("body").innerText();
+  for (const forbidden of ["KDJ 买入", "KDJ 卖出", "KDJ 金叉", "KDJ 死叉"]) {
+    if (bodyTextForKdj.includes(forbidden)) {
+      errors.push(`${label}: forbidden wording present: ${forbidden}`);
+    }
   }
   // 主页面标题不受技术指标影响
   if (!(await page.getByRole("heading", { name: "平安银行" }).isVisible().catch(() => false))) {
