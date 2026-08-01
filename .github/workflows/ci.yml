@@ -93,6 +93,10 @@ jobs:
         working-directory: frontend
         run: npm run test:e2e:smoke
 
+      - name: Run northbound history chart E2E
+        working-directory: frontend
+        run: npm run test:e2e:northbound-history
+
       - name: Run top-risk real E2E
         working-directory: frontend
         run: npm run test:e2e:top-risk
