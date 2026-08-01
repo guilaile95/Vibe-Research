@@ -111,7 +111,18 @@ def test_rule_id_contract(rule_id, ok):
             ar.AlertRule.model_validate(payload)
 
 
-@pytest.mark.parametrize("code,ok", [("000001", True), ("600000", True), ("sh600000", False), ("12345", False), (" 000001", False)])
+@pytest.mark.parametrize(
+    "code,ok",
+    [
+        ("000001", True),
+        ("600000", True),
+        ("sh600000", False),
+        ("12345", False),
+        (" 000001", False),
+        ("０００００１", False),
+        ("１２３４５６", False),
+    ],
+)
 def test_code_contract(code, ok):
     payload = {
         "rule_id": "r1",
@@ -123,6 +134,17 @@ def test_code_contract(code, ok):
     else:
         with pytest.raises(ValidationError):
             ar.AlertRule.model_validate(payload)
+    snapshot_payload = {
+        "code": code,
+        "trade_date": "2026-08-01",
+        "technical_status": "normal",
+        "metrics": metrics().model_dump(),
+    }
+    if ok:
+        ar.AlertFactSnapshot.model_validate(snapshot_payload)
+    else:
+        with pytest.raises(ValidationError):
+            ar.AlertFactSnapshot.model_validate(snapshot_payload)
 
 
 @pytest.mark.parametrize("enabled", [0, 1, "true", "false", None])
