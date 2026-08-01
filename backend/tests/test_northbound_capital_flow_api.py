@@ -353,13 +353,131 @@ def test_history_api_unavailable_not_cached(client, monkeypatch):
 
 
 def test_history_api_exception_safe(client, monkeypatch):
+    calls = []
+
     def boom(days, **kwargs):
+        calls.append(days)
         raise RuntimeError("internal-trace-or-url")
 
     monkeypatch.setattr(ncf, "get_northbound_history", boom)
-    resp = client.get("/api/market/northbound/history?days=10")
-    assert resp.status_code == 200
-    env = resp.json()["data"]
+    resp1 = client.get("/api/market/northbound/history?days=10")
+    assert resp1.status_code == 200
+    env = resp1.json()["data"]
     assert env["status"] == "unavailable"
+    assert env["requested_days"] == 10
+    assert env["returned_points"] == 0
     assert env["series"] == []
-    assert "internal-trace-or-url" not in resp.text
+    codes = {lim["reason_code"] for lim in env["limitations"]}
+    assert "UNVERIFIED_SOURCE_SEMANTICS" in codes
+    assert "SOURCE_UNAVAILABLE" in codes
+    assert "internal-trace-or-url" not in resp1.text
+
+    # unavailable must not be cached
+    resp2 = client.get("/api/market/northbound/history?days=10")
+    assert resp2.status_code == 200
+    assert resp2.json()["data"]["status"] == "unavailable"
+    assert calls == [10, 10]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        None,
+        [],
+        {},
+        {"status": "normal"},
+        {
+            "schema_version": "wrong-schema",
+            "status": "normal",
+            "requested_days": 10,
+            "returned_points": 10,
+            "limitations": [],
+            "series": [
+                {
+                    "trade_date": f"2026-07-{i:02d}",
+                    "total_turnover_mn": 1.0,
+                    "trade_count": 1,
+                    "etf_turnover_mn": 1.0,
+                }
+                for i in range(1, 11)
+            ],
+        },
+        {
+            "schema_version": ncf.HISTORY_SCHEMA_VERSION,
+            "status": "normal",
+            "requested_days": 10,
+            "returned_points": 1,
+            "limitations": [],
+            "series": [
+                {
+                    "trade_date": "2026-07-01",
+                    "total_turnover_mn": 1.0,
+                    "trade_count": 1,
+                    "etf_turnover_mn": 1.0,
+                },
+                {
+                    "trade_date": "2026-07-02",
+                    "total_turnover_mn": 1.0,
+                    "trade_count": 1,
+                    "etf_turnover_mn": 1.0,
+                },
+            ],
+        },
+        {
+            "schema_version": ncf.HISTORY_SCHEMA_VERSION,
+            "status": "unavailable",
+            "requested_days": 10,
+            "returned_points": 1,
+            "limitations": [],
+            "series": [
+                {
+                    "trade_date": "2026-07-01",
+                    "total_turnover_mn": 1.0,
+                    "trade_count": 1,
+                    "etf_turnover_mn": 1.0,
+                }
+            ],
+        },
+        {
+            "schema_version": ncf.HISTORY_SCHEMA_VERSION,
+            "status": "normal",
+            "requested_days": 10,
+            "returned_points": 1,
+            "limitations": [],
+            "series": [
+                {
+                    "trade_date": "2026-07-01",
+                    "total_turnover_mn": 1.0,
+                    "trade_count": 1,
+                    "etf_turnover_mn": 1.0,
+                }
+            ],
+        },
+    ],
+)
+def test_history_api_invalid_internal_return_fail_closed(client, monkeypatch, bad):
+    calls = []
+
+    def mock_hist(days, **kwargs):
+        calls.append(days)
+        return bad
+
+    monkeypatch.setattr(ncf, "get_northbound_history", mock_hist)
+    r1 = client.get("/api/market/northbound/history?days=10")
+    assert r1.status_code == 200
+    env1 = r1.json()["data"]
+    assert env1["status"] == "unavailable"
+    assert env1["requested_days"] == 10
+    assert env1["returned_points"] == 0
+    assert env1["series"] == []
+    assert env1["schema_version"] == ncf.HISTORY_SCHEMA_VERSION
+    codes = {lim["reason_code"] for lim in env1["limitations"]}
+    assert "UNVERIFIED_SOURCE_SEMANTICS" in codes
+    assert "SOURCE_UNAVAILABLE" in codes
+    # must not pass through the illegal payload
+    assert env1 != bad
+
+    r2 = client.get("/api/market/northbound/history?days=10")
+    assert r2.status_code == 200
+    assert r2.json()["data"]["status"] == "unavailable"
+    assert calls == [10, 10]

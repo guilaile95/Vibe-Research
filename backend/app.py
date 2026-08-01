@@ -829,10 +829,8 @@ def market_northbound_history(
     if hit is not _CACHE_MISS:
         return {"data": hit}
 
-    try:
-        data = ncf.get_northbound_history(days_n)
-    except Exception:  # noqa: BLE001
-        data = {
+    def _safe_unavailable_history():
+        return {
             "schema_version": ncf.HISTORY_SCHEMA_VERSION,
             "source": ncf.SOURCE_NAME,
             "source_tier": ncf.SOURCE_TIER,
@@ -840,9 +838,20 @@ def market_northbound_history(
             "fetched_at": ncf._now_iso(),
             "requested_days": days_n,
             "returned_points": 0,
-            "limitations": [dict(ncf.LIMITATION_HISTORY_NET_BUY)],
+            "limitations": [
+                dict(ncf.LIMITATION_HISTORY_NET_BUY),
+                dict(ncf.LIMITATION_HISTORY_SOURCE_UNAVAILABLE),
+            ],
             "series": [],
         }
+
+    try:
+        data = ncf.get_northbound_history(days_n)
+    except Exception:  # noqa: BLE001
+        data = _safe_unavailable_history()
+
+    if not ncf._is_valid_history_envelope(data, days_n):
+        data = _safe_unavailable_history()
 
     st = data.get("status") if isinstance(data, dict) else None
     if st != "unavailable":

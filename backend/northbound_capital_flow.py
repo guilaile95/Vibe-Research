@@ -717,6 +717,16 @@ LIMITATION_HISTORY_NET_BUY = {
         "因此北向成交历史接口不提供净买入字段。"
     ),
 }
+LIMITATION_HISTORY_SOURCE_UNAVAILABLE = {
+    "field": "series",
+    "reason_code": "SOURCE_UNAVAILABLE",
+    "detail": "北向成交历史生成暂不可用，请稍后重试。",
+}
+LIMITATION_HISTORY_PARTIAL_SOURCE_FAILURE = {
+    "field": "series",
+    "reason_code": "PARTIAL_SOURCE_FAILURE",
+    "detail": "扫描历史期间有部分日期抓取或解析失败，已返回其余可用交易日。",
+}
 
 
 class NorthboundHistoryDaysError(ValueError):
@@ -730,6 +740,35 @@ def validate_history_days(days: Any) -> int:
     if days not in HISTORY_ALLOWED_DAYS:
         raise NorthboundHistoryDaysError(HISTORY_DAYS_ERROR)
     return days
+
+
+def _is_valid_history_envelope(data: Any, requested_days: int) -> bool:
+    """Minimal fail-closed shape check for history envelopes returned to the route."""
+    if not isinstance(data, dict):
+        return False
+    if data.get("schema_version") != HISTORY_SCHEMA_VERSION:
+        return False
+    status = data.get("status")
+    if status not in {"normal", "partial", "unavailable"}:
+        return False
+    if data.get("requested_days") != requested_days:
+        return False
+    series = data.get("series")
+    limitations = data.get("limitations")
+    if not isinstance(series, list) or not isinstance(limitations, list):
+        return False
+    returned = data.get("returned_points")
+    if not isinstance(returned, int) or isinstance(returned, bool) or returned < 0:
+        return False
+    if returned != len(series):
+        return False
+    if status == "unavailable" and series:
+        return False
+    if status == "normal" and returned != requested_days:
+        return False
+    if status == "partial" and not series:
+        return False
+    return True
 
 
 def _history_point_from_envelope(env: dict) -> dict | None:
@@ -882,6 +921,10 @@ def get_northbound_history(days: int, *, today: date | None = None) -> dict:
             ),
         })
 
+    # Real scan faults only (not weekends / fetch None). Add once when any points remain.
+    if had_scan_issue and series:
+        limitations.append(dict(LIMITATION_HISTORY_PARTIAL_SOURCE_FAILURE))
+
     if not series:
         return _unavailable_history_envelope(
             requested_days=requested_days,
@@ -894,10 +937,9 @@ def get_northbound_history(days: int, *, today: date | None = None) -> dict:
         and not missing_trade_count
         and not missing_etf
     )
-    # Normal weekends / ordinary missing holiday files do not force partial when full.
-    status = "normal" if complete else "partial"
-    if had_scan_issue and not complete:
-        status = "partial"
+    # Weekends / ordinary missing files (fetch None) do not force partial.
+    # Real parse/build/semantic/fetch exceptions force partial even when points are full.
+    status = "normal" if complete and not had_scan_issue else "partial"
 
     return {
         "schema_version": HISTORY_SCHEMA_VERSION,

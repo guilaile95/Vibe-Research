@@ -660,6 +660,9 @@ def test_history_weekends_skip_fetch(monkeypatch):
     assert "2026-08-01" not in calls  # Saturday
     assert all(date.fromisoformat(c).weekday() < 5 for c in calls)
     assert env["returned_points"] == 10
+    assert env["status"] == "normal"
+    codes = [lim["reason_code"] for lim in env["limitations"]]
+    assert "PARTIAL_SOURCE_FAILURE" not in codes
 
 
 def test_history_normal_trading_day_points(monkeypatch):
@@ -694,6 +697,10 @@ def test_history_none_fetch_skips(monkeypatch):
     dates = [p["trade_date"] for p in env["series"]]
     assert "2026-07-30" not in dates
     assert env["returned_points"] == 10
+    # Ordinary missing file does not force partial once points are complete.
+    assert env["status"] == "normal"
+    codes = [lim["reason_code"] for lim in env["limitations"]]
+    assert "PARTIAL_SOURCE_FAILURE" not in codes
 
 
 def test_history_unavailable_envelope_skips(monkeypatch):
@@ -707,6 +714,10 @@ def test_history_unavailable_envelope_skips(monkeypatch):
     dates = [p["trade_date"] for p in env["series"]]
     assert "2026-07-29" not in dates
     assert env["returned_points"] == 10
+    # Non-empty payload that becomes unavailable is a real scan fault.
+    assert env["status"] == "partial"
+    codes = [lim["reason_code"] for lim in env["limitations"]]
+    assert codes.count("PARTIAL_SOURCE_FAILURE") == 1
 
 
 def test_history_parse_failure_skips(monkeypatch):
@@ -720,6 +731,9 @@ def test_history_parse_failure_skips(monkeypatch):
     dates = [p["trade_date"] for p in env["series"]]
     assert "2026-07-28" not in dates
     assert env["returned_points"] == 10
+    assert env["status"] == "partial"
+    codes = [lim["reason_code"] for lim in env["limitations"]]
+    assert codes.count("PARTIAL_SOURCE_FAILURE") == 1
 
 
 def test_history_one_failure_does_not_block(monkeypatch):
@@ -731,7 +745,9 @@ def test_history_one_failure_does_not_block(monkeypatch):
     monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
     env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
     assert env["returned_points"] == 10
-    assert env["status"] in ("normal", "partial")
+    assert env["status"] == "partial"
+    codes = [lim["reason_code"] for lim in env["limitations"]]
+    assert codes.count("PARTIAL_SOURCE_FAILURE") == 1
 
 
 def test_history_series_sorted_ascending(monkeypatch):
@@ -912,3 +928,73 @@ def test_history_unexpected_exception_safe(monkeypatch):
     blob = str(env)
     assert "secret-url-or-trace" not in blob
     assert "RuntimeError" not in blob
+
+
+def test_history_parse_failure_then_full_is_partial(monkeypatch):
+    """First weekday parse fails; subsequent days still fill 10 complete points."""
+    calls = []
+
+    def mock_fetch(dt):
+        calls.append(dt)
+        if len(calls) == 1:
+            return "not-a-valid-tabData"
+        return _history_js(dt, 100.0)
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["status"] == "partial"
+    assert env["returned_points"] == 10
+    codes = [lim["reason_code"] for lim in env["limitations"]]
+    assert codes.count("PARTIAL_SOURCE_FAILURE") == 1
+
+
+def test_history_semantic_unavailable_then_full_is_partial(monkeypatch):
+    """First weekday returns non-empty malformed payload -> unavailable; still fills 10 points."""
+    calls = []
+
+    def mock_fetch(dt):
+        calls.append(dt)
+        if len(calls) == 1:
+            return "tabData = [];"
+        return _history_js(dt, 100.0)
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["status"] == "partial"
+    assert env["returned_points"] == 10
+    codes = [lim["reason_code"] for lim in env["limitations"]]
+    assert codes.count("PARTIAL_SOURCE_FAILURE") == 1
+
+
+def test_history_fetch_exception_then_full_is_partial(monkeypatch):
+    calls = []
+
+    def mock_fetch(dt):
+        calls.append(dt)
+        if len(calls) == 1:
+            raise RuntimeError("transient")
+        return _history_js(dt, 100.0)
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["status"] == "partial"
+    assert env["returned_points"] == 10
+    codes = [lim["reason_code"] for lim in env["limitations"]]
+    assert codes.count("PARTIAL_SOURCE_FAILURE") == 1
+
+
+def test_history_fetch_none_then_full_is_normal(monkeypatch):
+    calls = []
+
+    def mock_fetch(dt):
+        calls.append(dt)
+        if len(calls) == 1:
+            return None
+        return _history_js(dt, 100.0)
+
+    monkeypatch.setattr(ncf, "_fetch_daily_stat_js", mock_fetch)
+    env = ncf.get_northbound_history(10, today=date(2026, 7, 31))
+    assert env["status"] == "normal"
+    assert env["returned_points"] == 10
+    codes = [lim["reason_code"] for lim in env["limitations"]]
+    assert "PARTIAL_SOURCE_FAILURE" not in codes
