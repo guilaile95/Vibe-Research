@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -41,6 +42,10 @@ _SELECT_COLUMNS = ", ".join(_ROW_COLUMNS)
 
 LIST_LIMIT_MIN = 1
 LIST_LIMIT_MAX = 200
+
+# 合法并发初始化等待参数：总量不超过 SQLite busy timeout 量级。
+_OPEN_WAIT_TOTAL_SECONDS = 10.0
+_OPEN_WAIT_INTERVAL_SECONDS = 0.02
 
 
 class AlertRuleStoreError(RuntimeError):
@@ -225,6 +230,65 @@ def _canonical_sql(sql: str) -> str:
     return "".join(sql.split()).lower()
 
 
+def _validate_constraint_semantics(create_sql: str) -> None:
+    """在独立内存库中复现 alert_rules DDL，用探针 INSERT 验证约束语义。
+
+    只读写 :memory: 连接，绝不触碰真实数据库。CHECK/主键是否真实存在以
+    SQLite 实际执行的语义为准，注释、字符串默认值中的伪装文本无法通过。
+    """
+    try:
+        mem = sqlite3.connect(":memory:", isolation_level=None)
+    except sqlite3.Error as exc:
+        raise AlertRuleStoreCorruptedError() from exc
+    try:
+        mem.execute(create_sql)
+        probe_sql = (
+            "INSERT INTO alert_rules (rule_id, code, enabled, condition_kind, "
+            "rule_json, revision, created_at, updated_at, deleted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        base = (
+            "000001",
+            1,
+            "technical_trigger",
+            '{"probe": true}',
+            1,
+            "2026-08-01T00:00:00.000000Z",
+            "2026-08-01T00:00:00.000000Z",
+            None,
+        )
+        # 合法值必须可写入（额外 NOT NULL 无默认列会使此处失败 → schema 不兼容）。
+        mem.execute(probe_sql, ("probe.1", *base))
+        mem.execute(probe_sql, ("probe.2", "000001", 0, *base[2:]))
+        # enabled=2 必须被约束拒绝。
+        try:
+            mem.execute(probe_sql, ("probe.3", "000001", 2, *base[2:]))
+        except sqlite3.IntegrityError:
+            pass
+        else:
+            raise AlertRuleStoreCorruptedError()
+        # revision=0 必须被约束拒绝。
+        try:
+            mem.execute(probe_sql, ("probe.4", *base[:4], 0, *base[5:]))
+        except sqlite3.IntegrityError:
+            pass
+        else:
+            raise AlertRuleStoreCorruptedError()
+        # 重复 rule_id 必须被主键拒绝。
+        try:
+            mem.execute(probe_sql, ("probe.1", *base))
+        except sqlite3.IntegrityError:
+            pass
+        else:
+            raise AlertRuleStoreCorruptedError()
+    except AlertRuleStoreCorruptedError:
+        raise
+    except sqlite3.Error as exc:
+        raise AlertRuleStoreCorruptedError() from exc
+    finally:
+        mem.close()
+
+
 def _assert_schema(conn: sqlite3.Connection) -> None:
     """校验已有 schema 结构完整性，任何异常都 fail-closed，不自动迁移或重建。"""
     tables = _existing_tables(conn)
@@ -255,18 +319,14 @@ def _assert_schema(conn: sqlite3.Connection) -> None:
             if (actual_pk > 0) != (exp_pk > 0):
                 raise AlertRuleStoreCorruptedError()
 
-        # --- CHECK constraint validation via sqlite_master.sql ---
+        # --- CHECK/PK constraint validation via independent in-memory probe ---
         sql_row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'alert_rules'"
         ).fetchone()
         if sql_row is None or sql_row[0] is None:
             raise AlertRuleStoreCorruptedError()
         create_sql = sql_row[0]
-        canonical_sql = _canonical_sql(create_sql)
-        if "check(enabledin(0,1))" not in canonical_sql:
-            raise AlertRuleStoreCorruptedError()
-        if "check(revision>=1)" not in canonical_sql:
-            raise AlertRuleStoreCorruptedError()
+        _validate_constraint_semantics(create_sql)
 
         # --- Index validation ---
         idx_rows = conn.execute(
@@ -309,58 +369,93 @@ def _safe_rollback(conn: sqlite3.Connection) -> None:
         pass
 
 
+def _acquire_initialization_ownership(path: Path) -> bool:
+    """通过原子文件创建获取初始化资格。
+
+    返回 True 表示当前调用方独占创建了文件，拥有初始化资格；
+    返回 False 表示文件已被其他调用方创建，当前调用方不得初始化。
+    所有 OSError 都包装为固定存储异常。
+    """
+    flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    try:
+        fd = os.open(str(path), flags, 0o600)
+    except FileExistsError:
+        return False
+    except OSError as exc:
+        raise AlertRuleStoreError("告警规则数据库不可用") from exc
+    try:
+        os.close(fd)
+    except OSError as exc:
+        raise AlertRuleStoreError("告警规则数据库不可用") from exc
+    return True
+
+
 def _open_write_connection() -> sqlite3.Connection:
     """只有写操作才允许触发目录创建与 schema 初始化。
 
-    初始化资格：只有调用开始时路径确实不存在，才允许初始化。
-    任何调用开始时已经存在的文件，都必须按已有数据库校验。
-    使用 BEGIN IMMEDIATE 保护初始化竞态。
+    初始化资格只能通过 O_EXCL 原子文件创建获得，path.exists() 不构成权限。
+    - 调用开始时已存在：立即按已有数据库验证，空库/不完整库 fail-closed。
+    - 调用开始时不存在但 O_EXCL 失败：可能是合法并发初始化者，有界等待其完成；
+      等待者任何情况下都不得调用 _initialize。
+    - O_EXCL 成功：当前调用方持有初始化资格。
     """
     path = Path(alert_rule_db_path())
-    path_existed_before = path.exists()
+    existed_at_start = path.exists()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise AlertRuleStoreError("告警规则数据库不可用") from exc
-    try:
-        conn = sqlite3.connect(str(path), isolation_level=None, timeout=10.0)
-    except (sqlite3.Error, OSError) as exc:
-        raise AlertRuleStoreError("告警规则数据库不可用") from exc
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-    except sqlite3.Error as exc:
-        conn.close()
-        raise AlertRuleStoreCorruptedError() from exc
-    try:
-        tables = _existing_tables(conn)
-        if tables == {"schema_meta", "alert_rules"}:
-            # Schema present — validate fully
-            _assert_schema(conn)
-        elif not tables and not _all_user_tables(conn):
-            # Completely empty database
-            if path_existed_before:
-                # Pre-existing empty file: must NOT initialize
+    owned = _acquire_initialization_ownership(path)
+    deadline = time.monotonic() + _OPEN_WAIT_TOTAL_SECONDS
+    while True:
+        try:
+            conn = sqlite3.connect(str(path), isolation_level=None, timeout=10.0)
+        except (sqlite3.Error, OSError) as exc:
+            raise AlertRuleStoreError("告警规则数据库不可用") from exc
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.Error as exc:
+            conn.close()
+            raise AlertRuleStoreCorruptedError() from exc
+        try:
+            tables = _existing_tables(conn)
+            if tables == {"schema_meta", "alert_rules"}:
+                # Schema present — validate fully
+                _assert_schema(conn)
+                conn.execute("COMMIT")
+                return conn
+            if tables or _all_user_tables(conn):
+                # 无关表或部分项目 schema：任何情况下都不得初始化，直接 fail-closed。
                 raise AlertRuleStoreCorruptedError()
-            # New path: we have initialization authority
-            _initialize(conn)
-        else:
-            # Has some tables but not the complete project schema
-            raise AlertRuleStoreCorruptedError()
-        conn.execute("COMMIT")
-    except AlertRuleStoreError:
-        _safe_rollback(conn)
-        conn.close()
-        raise
-    except sqlite3.Error as exc:
-        _safe_rollback(conn)
-        conn.close()
-        raise AlertRuleStoreError("告警规则数据库不可用") from exc
-    except BaseException:
-        _safe_rollback(conn)
-        conn.close()
-        raise
-    return conn
+            # 完全空数据库：只有 O_EXCL 持有者可以初始化。
+            if owned:
+                _initialize(conn)
+                conn.execute("COMMIT")
+                return conn
+            if existed_at_start:
+                raise AlertRuleStoreCorruptedError()
+            # 其他合法初始化者可能正在进行：有界等待，绝不初始化。
+            if time.monotonic() >= deadline:
+                raise AlertRuleStoreCorruptedError()
+            _safe_rollback(conn)
+            conn.close()
+            time.sleep(_OPEN_WAIT_INTERVAL_SECONDS)
+            continue
+        except AlertRuleStoreError:
+            _safe_rollback(conn)
+            conn.close()
+            raise
+        except sqlite3.Error as exc:
+            _safe_rollback(conn)
+            conn.close()
+            raise AlertRuleStoreError("告警规则数据库不可用") from exc
+        except BaseException:
+            _safe_rollback(conn)
+            conn.close()
+            raise
 
 
 def _read_only_uri(path: Path) -> str:
