@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -115,27 +116,21 @@ def test_route_registration(client):
         else:
             all_routes.append(route)
     for route in all_routes:
-        methods = sorted(getattr(route, "methods", set()) or set())
         path = getattr(route, "path", "")
-        if path.startswith("/api/alert-rules"):
-            for method in methods:
-                found.add((method, path))
-    expected = {
+        if not path.startswith("/api/alert-rules"):
+            continue
+        for method in getattr(route, "methods", set()) or set():
+            # 排除 FastAPI 自动生成的 HEAD/OPTIONS，产品路由集合必须精确相等。
+            if method in ("HEAD", "OPTIONS"):
+                continue
+            found.add((method, path))
+    assert found == {
         ("POST", "/api/alert-rules"),
         ("GET", "/api/alert-rules"),
         ("GET", "/api/alert-rules/{rule_id}"),
         ("PUT", "/api/alert-rules/{rule_id}"),
         ("DELETE", "/api/alert-rules/{rule_id}"),
-    }
-    assert expected <= found, found
-    assert not any(
-        ("PATCH", p) in found for p in ["/api/alert-rules", "/api/alert-rules/{rule_id}"]
-    )
-    assert not any(
-        "restore" in p or "evaluate" in p or "history" in p or "scan" in p
-        or "notification" in p
-        for _, p in found
-    )
+    }, found
 
 
 def test_import_has_no_filesystem_side_effect(tmp_path, monkeypatch):
@@ -798,3 +793,498 @@ def test_restore_and_evaluate_routes_absent(client):
     seed_rule("rule.a")
     assert c.post("/api/alert-rules/rule.a/restore").status_code in (404, 405)
     assert c.post("/api/alert-rules/rule.a/evaluate").status_code in (404, 405)
+
+
+# ---------------------------------------------------------------------------
+# 复审修复：PUT 必须显式包含全部必需字段
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("missing", ["rule_id", "code", "enabled", "condition"])
+def test_put_missing_required_field_422_no_side_effects(client, monkeypatch, missing):
+    c, _, _ = client
+    seed_rule("rule.a", enabled=False)
+    before = store.get_alert_rule("rule.a")
+    calls = {"n": 0}
+    real_replace = store.replace_alert_rule
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real_replace(*args, **kwargs)
+
+    monkeypatch.setattr(store, "replace_alert_rule", counting)
+    body = payload(rule_id="rule.a", enabled=False)
+    body.pop(missing)
+    r = c.put(
+        "/api/alert-rules/rule.a",
+        params={"expected_revision": "1"},
+        json=body,
+    )
+    assert r.status_code == 422, missing
+    if missing == "enabled":
+        # 只有 enabled 缺失时能通过 Pydantic（有默认值），由端点显式检查给出固定 detail。
+        assert r.json()["detail"] == "告警规则参数无效"
+    assert calls["n"] == 0
+    after = store.get_alert_rule("rule.a")
+    assert after == before
+    assert after.rule.enabled is False
+    assert after.revision == 1
+    assert after.deleted_at is None
+
+
+# ---------------------------------------------------------------------------
+# 复审修复：超长整数与固定上限
+# ---------------------------------------------------------------------------
+
+
+HUGE_INTEGER_VALUES = [
+    "9" * 100,
+    "9" * 1000,
+    "9" * 5000,
+    "9" * 10000,
+    str(2**63 - 1),
+    str(2**63),
+    "1" + "0" * 30,
+]
+
+
+@pytest.mark.parametrize("huge", HUGE_INTEGER_VALUES)
+def test_list_huge_limit_422_store_not_called(client, monkeypatch, huge):
+    c, _, db_path = client
+    calls = {"n": 0}
+    real_list = store.list_alert_rules
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real_list(*args, **kwargs)
+
+    monkeypatch.setattr(store, "list_alert_rules", counting)
+    r = c.get("/api/alert-rules", params={"limit": huge})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "告警规则参数无效"
+    assert calls["n"] == 0
+    assert not db_path.exists()
+
+
+@pytest.mark.parametrize("huge", HUGE_INTEGER_VALUES)
+def test_list_huge_offset_422_store_not_called(client, monkeypatch, huge):
+    c, _, db_path = client
+    calls = {"n": 0}
+    real_list = store.list_alert_rules
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real_list(*args, **kwargs)
+
+    monkeypatch.setattr(store, "list_alert_rules", counting)
+    r = c.get("/api/alert-rules", params={"offset": huge})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "告警规则参数无效"
+    assert calls["n"] == 0
+    assert not db_path.exists()
+
+
+@pytest.mark.parametrize("huge", HUGE_INTEGER_VALUES)
+def test_put_huge_expected_revision_422_store_not_called(client, monkeypatch, huge):
+    c, _, db_path = client
+    calls = {"n": 0}
+    real_replace = store.replace_alert_rule
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real_replace(*args, **kwargs)
+
+    monkeypatch.setattr(store, "replace_alert_rule", counting)
+    r = c.put(
+        "/api/alert-rules/rule.a",
+        params={"expected_revision": huge},
+        json=payload(rule_id="rule.a"),
+    )
+    assert r.status_code == 422
+    assert r.json()["detail"] == "告警规则参数无效"
+    assert calls["n"] == 0
+    assert not db_path.exists()
+
+
+@pytest.mark.parametrize("huge", HUGE_INTEGER_VALUES)
+def test_delete_huge_expected_revision_422_store_not_called(client, monkeypatch, huge):
+    c, _, db_path = client
+    calls = {"n": 0}
+    real_delete = store.delete_alert_rule
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real_delete(*args, **kwargs)
+
+    monkeypatch.setattr(store, "delete_alert_rule", counting)
+    r = c.delete("/api/alert-rules/rule.a", params={"expected_revision": huge})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "告警规则参数无效"
+    assert calls["n"] == 0
+    assert not db_path.exists()
+
+
+def test_integer_boundary_maximums_accepted(client):
+    c, _, _ = client
+    seed_rule("rule.a")
+    # offset 上限与 expected_revision 上限：合法值必须正常进入 Store 路径
+    r = c.get("/api/alert-rules", params={"offset": "2147483647"})
+    assert r.status_code == 200
+    r = c.put(
+        "/api/alert-rules/rule.a",
+        params={"expected_revision": "1"},
+        json=payload(rule_id="rule.a"),
+    )
+    assert r.status_code == 200
+    # 2147483648 越界
+    assert (
+        c.get("/api/alert-rules", params={"offset": "2147483648"}).status_code == 422
+    )
+    assert (
+        c.put(
+            "/api/alert-rules/rule.a",
+            params={"expected_revision": "2147483648"},
+            json=payload(rule_id="rule.a"),
+        ).status_code
+        == 422
+    )
+
+
+# ---------------------------------------------------------------------------
+# 复审修复：DELETE 拒绝任何请求体
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{}",
+        '{"unexpected": true}',
+        "[]",
+        '"string"',
+        "null",
+        "   ",
+        "\n",
+        "{bad json",
+        "not json at all",
+    ],
+)
+def test_delete_with_any_body_422_store_not_called(client, monkeypatch, content):
+    c, _, _ = client
+    seed_rule("rule.a")
+    calls = {"n": 0}
+    real_delete = store.delete_alert_rule
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real_delete(*args, **kwargs)
+
+    monkeypatch.setattr(store, "delete_alert_rule", counting)
+    r = c.request(
+        "DELETE",
+        "/api/alert-rules/rule.a",
+        params={"expected_revision": "1"},
+        content=content,
+    )
+    assert r.status_code == 422, content
+    assert r.json()["detail"] == "告警规则参数无效"
+    assert calls["n"] == 0
+    rec = store.get_alert_rule("rule.a", include_deleted=True)
+    assert rec is not None
+    assert rec.deleted_at is None
+    assert rec.revision == 1
+
+
+def test_delete_without_body_still_works(client):
+    c, _, _ = client
+    seed_rule("rule.a")
+    r = c.request(
+        "DELETE",
+        "/api/alert-rules/rule.a",
+        params={"expected_revision": "1"},
+    )
+    assert r.status_code == 200
+    assert store.get_alert_rule("rule.a", include_deleted=True).deleted_at is not None
+
+
+# ---------------------------------------------------------------------------
+# 复审修复：序列化异常封闭
+# ---------------------------------------------------------------------------
+
+
+class StubRecord:
+    """按行为模拟损坏的 record 对象。"""
+
+    def __init__(self, behavior: str):
+        self._behavior = behavior
+
+    def model_dump(self, mode="python"):
+        if self._behavior == "raise":
+            raise RuntimeError("secret path C:\\Users\\secret\\db.sqlite3")
+        if self._behavior == "non_dict":
+            return ["not", "a", "dict"]
+        if self._behavior == "non_json":
+            return {"bad": object()}
+        if self._behavior == "nan":
+            return {"value": float("nan")}
+        return {"ok": True}
+
+
+@pytest.mark.parametrize(
+    "behavior",
+    ["missing", "raise", "non_dict", "non_json", "nan"],
+)
+def test_post_serialization_failure_500(client, monkeypatch, behavior):
+    c, _, _ = client
+    record = object() if behavior == "missing" else StubRecord(behavior)
+    monkeypatch.setattr(store, "create_alert_rule", lambda *a, **k: record)
+    r = c.post("/api/alert-rules", json=payload())
+    assert r.status_code == 500
+    assert r.json()["detail"] == "告警规则服务内部错误"
+    assert "secret" not in r.text
+    assert "C:\\Users" not in r.text
+    assert "Traceback" not in r.text
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        [StubRecord("ok"), StubRecord("raise")],
+        [StubRecord("ok"), StubRecord("non_dict")],
+        [StubRecord("ok"), StubRecord("non_json")],
+        [StubRecord("ok"), StubRecord("nan")],
+        42,
+        None,
+    ],
+)
+def test_list_serialization_failure_500(client, monkeypatch, records):
+    c, _, _ = client
+    monkeypatch.setattr(store, "list_alert_rules", lambda *a, **k: records)
+    r = c.get("/api/alert-rules")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "告警规则服务内部错误"
+    assert "Traceback" not in r.text
+
+
+@pytest.mark.parametrize("behavior", ["missing", "raise", "non_dict", "non_json"])
+def test_get_serialization_failure_500(client, monkeypatch, behavior):
+    c, _, _ = client
+    record = object() if behavior == "missing" else StubRecord(behavior)
+    monkeypatch.setattr(store, "get_alert_rule", lambda *a, **k: record)
+    r = c.get("/api/alert-rules/rule.a")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "告警规则服务内部错误"
+    assert "secret" not in r.text
+
+
+def test_put_serialization_failure_500(client, monkeypatch):
+    c, _, _ = client
+    monkeypatch.setattr(
+        store, "replace_alert_rule", lambda *a, **k: StubRecord("raise")
+    )
+    r = c.put(
+        "/api/alert-rules/rule.a",
+        params={"expected_revision": "1"},
+        json=payload(rule_id="rule.a"),
+    )
+    assert r.status_code == 500
+    assert r.json()["detail"] == "告警规则服务内部错误"
+    assert "secret" not in r.text
+
+
+def test_delete_serialization_failure_500(client, monkeypatch):
+    c, _, _ = client
+    monkeypatch.setattr(
+        store, "delete_alert_rule", lambda *a, **k: StubRecord("raise")
+    )
+    r = c.delete("/api/alert-rules/rule.a", params={"expected_revision": "1"})
+    assert r.status_code == 500
+    assert r.json()["detail"] == "告警规则服务内部错误"
+    assert "secret" not in r.text
+
+
+# ---------------------------------------------------------------------------
+# 复审修复：非法输入 Store 零调用
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_inputs_do_not_call_store(client, monkeypatch):
+    c, _, db_path = client
+    calls = {"create": 0, "list": 0, "get": 0, "replace": 0, "delete": 0}
+    targets = {
+        "create_alert_rule": store.create_alert_rule,
+        "list_alert_rules": store.list_alert_rules,
+        "get_alert_rule": store.get_alert_rule,
+        "replace_alert_rule": store.replace_alert_rule,
+        "delete_alert_rule": store.delete_alert_rule,
+    }
+    for func_name, real in targets.items():
+
+        def counting(*args, _name=func_name, _real=real, **kwargs):
+            calls[_name] += 1
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr(store, func_name, counting)
+
+    assert c.post("/api/alert-rules", json={"rule_id": 123}).status_code == 422
+    assert c.post("/api/alert-rules", json=payload(rule_id="bad id")).status_code == 422
+    assert c.get("/api/alert-rules/bad id").status_code == 422
+    assert (
+        c.put(
+            "/api/alert-rules/bad id",
+            params={"expected_revision": "1"},
+            json=payload(rule_id="bad id"),
+        ).status_code
+        == 422
+    )
+    assert (
+        c.delete("/api/alert-rules/bad id", params={"expected_revision": "1"}).status_code
+        == 422
+    )
+    assert c.get("/api/alert-rules", params={"code": "00000"}).status_code == 422
+    assert c.get("/api/alert-rules", params={"enabled": "1"}).status_code == 422
+    assert c.get("/api/alert-rules", params={"limit": "0"}).status_code == 422
+    assert c.get("/api/alert-rules", params={"offset": "-1"}).status_code == 422
+    assert (
+        c.get(
+            "/api/alert-rules",
+            params=[("limit", "1"), ("limit", "2")],
+        ).status_code
+        == 422
+    )
+    assert (
+        c.put(
+            "/api/alert-rules/rule.a",
+            params={"expected_revision": "0"},
+            json=payload(rule_id="rule.a"),
+        ).status_code
+        == 422
+    )
+    assert (
+        c.delete(
+            "/api/alert-rules/rule.a",
+            params={"expected_revision": "0"},
+        ).status_code
+        == 422
+    )
+    assert calls == {"create": 0, "list": 0, "get": 0, "replace": 0, "delete": 0}
+    assert not db_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# 复审修复：API Key 实际继承
+# ---------------------------------------------------------------------------
+
+
+def test_api_key_inheritance(client):
+    c, _, _ = client
+    import app as app_module
+
+    original_key = app_module._API_KEY
+    app_module._API_KEY = "test-secret-key"
+    try:
+        assert c.get("/api/alert-rules").status_code == 401
+        assert c.post("/api/alert-rules", json=payload()).status_code == 401
+        assert (
+            c.delete("/api/alert-rules/rule.a", params={"expected_revision": "1"}).status_code
+            == 401
+        )
+        assert (
+            c.get(
+                "/api/alert-rules",
+                headers={"authorization": "Bearer wrong-key"},
+            ).status_code
+            == 401
+        )
+        assert (
+            c.get(
+                "/api/alert-rules",
+                headers={"authorization": "Bearer test-secret-key"},
+            ).status_code
+            == 200
+        )
+        assert (
+            c.post(
+                "/api/alert-rules",
+                headers={"authorization": "Bearer test-secret-key"},
+                json=payload(),
+            ).status_code
+            == 201
+        )
+        assert (
+            c.delete(
+                "/api/alert-rules/rule.sma-cross",
+                headers={"authorization": "Bearer test-secret-key"},
+                params={"expected_revision": "1"},
+            ).status_code
+            == 200
+        )
+        # OPTIONS 与 /api/health 豁免鉴权
+        assert c.options("/api/alert-rules").status_code != 401
+        assert c.get("/api/health").status_code != 401
+    finally:
+        app_module._API_KEY = original_key
+
+
+# ---------------------------------------------------------------------------
+# 复审修复：API 并发乐观锁
+# ---------------------------------------------------------------------------
+
+
+def test_api_put_concurrent_optimistic_lock(client):
+    c, _, _ = client
+    rounds = 20
+    for round_idx in range(rounds):
+        rule_id = f"rule.cput.{round_idx}"
+        seed_rule(rule_id)
+        results: list[int] = []
+        barrier = threading.Barrier(2)
+
+        def worker():
+            barrier.wait()
+            r = c.put(
+                f"/api/alert-rules/{rule_id}",
+                params={"expected_revision": "1"},
+                json=payload(rule_id=rule_id, code="600000"),
+            )
+            results.append(r.status_code)
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start()
+        t2.start()
+        t1.join(timeout=15)
+        t2.join(timeout=15)
+        assert not t1.is_alive() and not t2.is_alive()
+        assert sorted(results) == [200, 409], (round_idx, results)
+        rec = store.get_alert_rule(rule_id)
+        assert rec is not None and rec.revision == 2
+
+
+def test_api_delete_concurrent_optimistic_lock(client):
+    c, _, _ = client
+    rounds = 20
+    for round_idx in range(rounds):
+        rule_id = f"rule.cdel.{round_idx}"
+        seed_rule(rule_id)
+        results: list[int] = []
+        barrier = threading.Barrier(2)
+
+        def worker():
+            barrier.wait()
+            r = c.delete(
+                f"/api/alert-rules/{rule_id}",
+                params={"expected_revision": "1"},
+            )
+            results.append(r.status_code)
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start()
+        t2.start()
+        t1.join(timeout=15)
+        t2.join(timeout=15)
+        assert not t1.is_alive() and not t2.is_alive()
+        assert sorted(results) == [200, 404], (round_idx, results)
+        rec = store.get_alert_rule(rule_id, include_deleted=True)
+        assert rec is not None and rec.deleted_at is not None and rec.revision == 2
