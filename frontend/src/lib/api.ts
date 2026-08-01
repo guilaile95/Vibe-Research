@@ -59,6 +59,7 @@ import type {
   GlobalIndex,
   GlobalStock,
   NorthboundCapitalFlow,
+  NorthboundHistoryEnvelope,
   TechnicalIndicators,
   TopRiskAnalysis,
   DailyReviewAnalyzeRequest,
@@ -493,6 +494,9 @@ export const api = {
   },
   marketBreadth: () => get<TimedComponentEnvelope<MarketBreadthData>>("/market/breadth"),
   marketNorthbound: () => get<NorthboundCapitalFlow>("/market/northbound"),
+  /** 北向成交历史（成交额 / 成交笔数 / ETF 成交额），非净买入。仅允许 10|20|30。 */
+  marketNorthboundHistory: (days: 10 | 20 | 30 = 20) =>
+    get<NorthboundHistoryEnvelope>(`/market/northbound/history?days=${days}`),
   /** 顶部风险分析（影子模式，第一版）：按股票代码分析，signal 恒 unknown、不参与最终结论。 */
   topRisk: (code: string, days = 120) =>
     get<TopRiskAnalysis>(

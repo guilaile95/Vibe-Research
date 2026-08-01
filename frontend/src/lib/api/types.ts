@@ -1060,6 +1060,34 @@ export type NorthboundCapitalFlow = {
   };
 };
 
+// ---------------------------------------------------------------------------
+// 北向成交历史（GET /api/market/northbound/history）
+// ---------------------------------------------------------------------------
+
+export type NorthboundHistoryStatus =
+  | "normal"
+  | "partial"
+  | "unavailable";
+
+export type NorthboundHistoryPoint = {
+  trade_date: string;
+  total_turnover_mn: number;
+  trade_count: number | null;
+  etf_turnover_mn: number | null;
+};
+
+export type NorthboundHistoryEnvelope = {
+  schema_version: "northbound-history-v0.1" | string;
+  source: string;
+  source_tier: "authoritative" | "reference" | string;
+  status: NorthboundHistoryStatus;
+  fetched_at: string;
+  requested_days: number;
+  returned_points: number;
+  limitations: NorthboundLimitation[];
+  series: NorthboundHistoryPoint[];
+};
+
 
 
 // ---------------------------------------------------------------------------

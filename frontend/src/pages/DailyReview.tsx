@@ -17,8 +17,10 @@ import {
   type DataStatus, type DailyReviewHistoryItem, type DailyReviewHistorySnapshot,
   type DailyReviewComparison, type NumericComparison, type RankingComparison,
   type HighlightComparison, type NorthboundCapitalFlow,
+  type NorthboundHistoryEnvelope,
 } from "@/lib/api";
 import { NorthboundCapitalFlowCard } from "@/components/market/NorthboundCapitalFlowCard";
+import { NorthboundTurnoverHistoryChart } from "@/components/market/NorthboundTurnoverHistoryChart";
 import { northboundErrorMessage } from "@/lib/northboundView";
 import { loadLlm } from "@/lib/llm";
 import { useDailyReviewAiTaskStore } from "@/stores/dailyReviewAiTaskStore";
@@ -175,6 +177,11 @@ export function DailyReview() {
   const [northboundLoading, setNorthboundLoading] = useState(false);
   const [northboundError, setNorthboundError] = useState<string | null>(null);
 
+  // 北向成交额历史（独立 endpoint，与日数据卡片互不影响）
+  const [northboundHistoryEnv, setNorthboundHistoryEnv] = useState<NorthboundHistoryEnvelope | null>(null);
+  const [northboundHistoryLoading, setNorthboundHistoryLoading] = useState(false);
+  const [northboundHistoryError, setNorthboundHistoryError] = useState<string | null>(null);
+
   const loadNorthbound = useCallback(() => {
     setNorthboundLoading(true);
     setNorthboundError(null);
@@ -191,6 +198,26 @@ export function DailyReview() {
       .finally(() => {
         if (mountedRef.current) {
           setNorthboundLoading(false);
+        }
+      });
+  }, []);
+
+  const loadNorthboundHistory = useCallback(() => {
+    setNorthboundHistoryLoading(true);
+    setNorthboundHistoryError(null);
+    api.marketNorthboundHistory(20)
+      .then((res) => {
+        if (!mountedRef.current) return;
+        setNorthboundHistoryEnv(res);
+      })
+      .catch(() => {
+        if (!mountedRef.current) return;
+        setNorthboundHistoryEnv(null);
+        setNorthboundHistoryError("北向成交历史暂不可用");
+      })
+      .finally(() => {
+        if (mountedRef.current) {
+          setNorthboundHistoryLoading(false);
         }
       });
   }, []);
@@ -347,6 +374,7 @@ export function DailyReview() {
     mountedRef.current = true;
     loadDailyReview();
     loadNorthbound();
+    loadNorthboundHistory();
     loadHistory({ trade_date: "", offset: 0 });
     loadWatchAuthoritative()
       .then((r) => {
@@ -1461,9 +1489,14 @@ export function DailyReview() {
 	      </GlassCard>
 	      </section>) },
 
-      /* 6. 北向资金（独立请求） */
+      /* 6. 北向资金（独立请求） + 北向成交额历史图 */
       { order: 6, node: (<section key="northbound" className="order-[6]">
       <NorthboundCapitalFlowCard env={northboundEnv} loading={northboundLoading} error={northboundError} />
+      <NorthboundTurnoverHistoryChart
+        env={northboundHistoryEnv}
+        loading={northboundHistoryLoading}
+        error={northboundHistoryError}
+      />
       </section>) },
 
 	      /* 7. 板块强弱亮点 */
