@@ -6,10 +6,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, NoReturn
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from alert_rules import CODE_PATTERN, RULE_ID_PATTERN, AlertRule
 import alert_rule_store as store
@@ -22,6 +23,9 @@ router = APIRouter(
 _LIMIT_PATTERN = re.compile(r"^[1-9][0-9]*$")
 _OFFSET_PATTERN = re.compile(r"^(0|[1-9][0-9]*)$")
 _REVISION_PATTERN = re.compile(r"^[1-9][0-9]*$")
+
+# API 整数上限：任何整型 query 参数都不得超过该值，超长/超界一律 422。
+_MAX_API_INTEGER = 2_147_483_647
 
 _INVALID_INPUT_DETAIL = "告警规则参数无效"
 _NOT_FOUND_DETAIL = "告警规则不存在"
@@ -46,6 +50,31 @@ def _parse_bool_query(request: Request, name: str) -> bool | None:
     raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL)
 
 
+def _parse_bounded_integer_literal(
+    value: str,
+    *,
+    pattern: re.Pattern[str],
+    minimum: int,
+    maximum: int,
+) -> int:
+    """把规范 ASCII 整数字面量转换为 int，转换前先做长度边界检查。
+
+    正则不匹配、长度超过 str(maximum)、字面值越界、int() 异常均统一 422。
+    不依赖进程级 sys.set_int_max_str_digits 配置。
+    """
+    if not pattern.fullmatch(value):
+        raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL)
+    if len(value) > len(str(maximum)):
+        raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL)
+    try:
+        number = int(value)
+    except (ValueError, OverflowError):
+        raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL) from None
+    if number < minimum or number > maximum:
+        raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL)
+    return number
+
+
 def _parse_int_query(
     request: Request,
     name: str,
@@ -62,12 +91,12 @@ def _parse_int_query(
     if len(values) != 1:
         raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL)
     value = values[0]
-    if not pattern.fullmatch(value):
-        raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL)
-    number = int(value)
-    if number < minimum or (maximum is not None and number > maximum):
-        raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL)
-    return number
+    return _parse_bounded_integer_literal(
+        value,
+        pattern=pattern,
+        minimum=minimum,
+        maximum=maximum if maximum is not None else _MAX_API_INTEGER,
+    )
 
 
 def _parse_required_revision(request: Request) -> int:
@@ -78,9 +107,12 @@ def _parse_required_revision(request: Request) -> int:
     if len(values) != 1:
         raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL)
     value = values[0]
-    if not _REVISION_PATTERN.fullmatch(value):
-        raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL)
-    return int(value)
+    return _parse_bounded_integer_literal(
+        value,
+        pattern=_REVISION_PATTERN,
+        minimum=1,
+        maximum=_MAX_API_INTEGER,
+    )
 
 
 def _parse_code_query(request: Request) -> str | None:
@@ -99,6 +131,40 @@ def _parse_code_query(request: Request) -> str | None:
 def _validated_rule_id(rule_id: str) -> None:
     """路径 rule_id 必须匹配既有 RULE_ID_PATTERN，非法值在触碰数据库前 422。"""
     if not isinstance(rule_id, str) or not RULE_ID_PATTERN.fullmatch(rule_id):
+        raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL)
+
+
+def _serialize_record(record: object) -> dict[str, Any]:
+    """把记录序列化为 JSON object；任何序列化异常统一安全 500。"""
+    try:
+        payload = record.model_dump(mode="json")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR_DETAIL) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR_DETAIL)
+    try:
+        json.dumps(payload, ensure_ascii=False, allow_nan=False)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR_DETAIL) from exc
+    return payload
+
+
+def _serialize_records(records: object) -> list[dict[str, Any]]:
+    """把记录列表整体序列化；任何失败统一安全 500，绝不返回部分成功列表。"""
+    try:
+        items = list(records)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR_DETAIL) from exc
+    return [_serialize_record(item) for item in items]
+
+
+_REPLACE_REQUIRED_FIELDS = frozenset({"rule_id", "code", "enabled", "condition"})
+
+
+async def _reject_request_body(request: Request) -> None:
+    """DELETE 不允许任何请求体；只要原始 body 非空就 422，不解析内容。"""
+    raw = await request.body()
+    if raw:
         raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL)
 
 
@@ -130,9 +196,12 @@ def create_alert_rule(body: AlertRule) -> dict[str, Any]:
     """创建告警规则；重复 rule_id（含软删除）返回 409。"""
     try:
         record = store.create_alert_rule(body)
+        data = _serialize_record(record)
+    except HTTPException:
+        raise
     except Exception as exc:
         _raise_store_error(exc)
-    return {"data": record.model_dump(mode="json")}
+    return {"data": data}
 
 
 @router.get("/alert-rules")
@@ -155,6 +224,7 @@ def list_alert_rules(request: Request) -> dict[str, Any]:
         pattern=_OFFSET_PATTERN,
         default=0,
         minimum=0,
+        maximum=_MAX_API_INTEGER,
     )
     try:
         records = store.list_alert_rules(
@@ -164,9 +234,12 @@ def list_alert_rules(request: Request) -> dict[str, Any]:
             limit=limit,
             offset=offset,
         )
+        data = _serialize_records(records)
+    except HTTPException:
+        raise
     except Exception as exc:
         _raise_store_error(exc)
-    return {"data": [record.model_dump(mode="json") for record in records]}
+    return {"data": data}
 
 
 @router.get("/alert-rules/{rule_id}")
@@ -176,11 +249,14 @@ def get_alert_rule(rule_id: str, request: Request) -> dict[str, Any]:
     include_deleted = _parse_bool_query(request, "include_deleted") or False
     try:
         record = store.get_alert_rule(rule_id, include_deleted=include_deleted)
+        if record is None:
+            raise HTTPException(status_code=404, detail=_NOT_FOUND_DETAIL)
+        data = _serialize_record(record)
+    except HTTPException:
+        raise
     except Exception as exc:
         _raise_store_error(exc)
-    if record is None:
-        raise HTTPException(status_code=404, detail=_NOT_FOUND_DETAIL)
-    return {"data": record.model_dump(mode="json")}
+    return {"data": data}
 
 
 @router.put("/alert-rules/{rule_id}")
@@ -190,19 +266,28 @@ def replace_alert_rule(
     """完整替换；路径 rule_id 必须等于 body.rule_id；乐观锁走 expected_revision。"""
     _validated_rule_id(rule_id)
     expected_revision = _parse_required_revision(request)
+    if not _REPLACE_REQUIRED_FIELDS.issubset(body.model_fields_set):
+        raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL)
     if body.rule_id != rule_id:
         raise HTTPException(status_code=422, detail=_INVALID_INPUT_DETAIL)
     try:
         record = store.replace_alert_rule(
             rule_id, body, expected_revision=expected_revision
         )
+        data = _serialize_record(record)
+    except HTTPException:
+        raise
     except Exception as exc:
         _raise_store_error(exc)
-    return {"data": record.model_dump(mode="json")}
+    return {"data": data}
 
 
 @router.delete("/alert-rules/{rule_id}")
-def delete_alert_rule(rule_id: str, request: Request) -> dict[str, Any]:
+def delete_alert_rule(
+    rule_id: str,
+    request: Request,
+    _body_guard: None = Depends(_reject_request_body),
+) -> dict[str, Any]:
     """软删除；不接收 JSON body；返回软删除后的完整记录。"""
     _validated_rule_id(rule_id)
     expected_revision = _parse_required_revision(request)
@@ -210,6 +295,9 @@ def delete_alert_rule(rule_id: str, request: Request) -> dict[str, Any]:
         record = store.delete_alert_rule(
             rule_id, expected_revision=expected_revision
         )
+        data = _serialize_record(record)
+    except HTTPException:
+        raise
     except Exception as exc:
         _raise_store_error(exc)
-    return {"data": record.model_dump(mode="json")}
+    return {"data": data}
