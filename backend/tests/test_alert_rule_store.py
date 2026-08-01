@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import importlib
+import multiprocessing
 import re
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -646,8 +648,614 @@ def test_reads_do_not_touch_existing_database(db_path):
     assert after[2] == ["alert_rules.sqlite3"]
 
 
+# ---------------------------------------------------------------------------
+# 已存在数据库保护 (P1)
+# ---------------------------------------------------------------------------
 
 
+def test_preexisting_zero_byte_file_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.write_bytes(b"")
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.get_alert_rule("rule.1")
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+    assert db_fingerprint(db_path) == before
 
 
+def test_preexisting_empty_sqlite_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.close()
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.get_alert_rule("rule.1")
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+    assert db_fingerprint(db_path) == before
 
+
+def test_preexisting_unrelated_table_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), isolation_level=None)
+    conn.execute("CREATE TABLE other_app (id INTEGER PRIMARY KEY, data TEXT)")
+    conn.execute("INSERT INTO other_app (data) VALUES ('hello')")
+    conn.close()
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+    assert db_fingerprint(db_path) == before
+    # Verify unrelated table is intact
+    conn = sqlite3.connect(str(db_path))
+    rows = conn.execute("SELECT data FROM other_app").fetchall()
+    conn.close()
+    assert rows == [("hello",)]
+
+
+def test_preexisting_only_schema_meta_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), isolation_level=None)
+    conn.execute("CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute(
+        "INSERT INTO schema_meta (key, value) VALUES ('schema_version', 'alert-rule-store.v0.1')"
+    )
+    conn.close()
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+    assert db_fingerprint(db_path) == before
+
+
+def test_preexisting_only_alert_rules_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), isolation_level=None)
+    conn.execute(
+        "CREATE TABLE alert_rules (rule_id TEXT PRIMARY KEY, code TEXT NOT NULL, "
+        "enabled INTEGER NOT NULL, condition_kind TEXT NOT NULL, rule_json TEXT NOT NULL, "
+        "revision INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+        "deleted_at TEXT)"
+    )
+    conn.close()
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+    assert db_fingerprint(db_path) == before
+
+
+# ---------------------------------------------------------------------------
+# Schema 结构验证 (P2)
+# ---------------------------------------------------------------------------
+
+
+def _create_valid_db(path: Path) -> None:
+    """Create a valid database using the store itself."""
+    conn = sqlite3.connect(str(path), isolation_level=None)
+    for stmt in store._DDL:
+        conn.execute(stmt)
+    conn.execute(
+        "INSERT INTO schema_meta (key, value) VALUES (?, ?)",
+        ("schema_version", store.ALERT_RULE_STORE_SCHEMA_VERSION),
+    )
+    conn.close()
+
+
+def test_missing_code_index_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _create_valid_db(db_path)
+    tamper(db_path, "DROP INDEX idx_alert_rules_code")
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+    assert db_fingerprint(db_path) == before
+
+
+def test_missing_enabled_index_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _create_valid_db(db_path)
+    tamper(db_path, "DROP INDEX idx_alert_rules_enabled")
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+    assert db_fingerprint(db_path) == before
+
+
+def test_missing_updated_at_index_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _create_valid_db(db_path)
+    tamper(db_path, "DROP INDEX idx_alert_rules_updated_at")
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+    assert db_fingerprint(db_path) == before
+
+
+def test_wrong_column_index_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _create_valid_db(db_path)
+    tamper(db_path, "DROP INDEX idx_alert_rules_code")
+    tamper(db_path, "CREATE INDEX idx_alert_rules_code ON alert_rules (rule_id)")
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+    assert db_fingerprint(db_path) == before
+
+
+def test_rule_id_without_primary_key_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), isolation_level=None)
+    conn.execute(
+        "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE alert_rules (rule_id TEXT, code TEXT NOT NULL, "
+        "enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)), "
+        "condition_kind TEXT NOT NULL, rule_json TEXT NOT NULL, "
+        "revision INTEGER NOT NULL CHECK (revision >= 1), "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)"
+    )
+    conn.execute("CREATE INDEX idx_alert_rules_code ON alert_rules (code)")
+    conn.execute("CREATE INDEX idx_alert_rules_enabled ON alert_rules (enabled)")
+    conn.execute("CREATE INDEX idx_alert_rules_updated_at ON alert_rules (updated_at)")
+    conn.execute(
+        "INSERT INTO schema_meta (key, value) VALUES ('schema_version', 'alert-rule-store.v0.1')"
+    )
+    conn.close()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+
+
+def test_enabled_without_check_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), isolation_level=None)
+    conn.execute(
+        "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE alert_rules (rule_id TEXT PRIMARY KEY, code TEXT NOT NULL, "
+        "enabled INTEGER NOT NULL, "
+        "condition_kind TEXT NOT NULL, rule_json TEXT NOT NULL, "
+        "revision INTEGER NOT NULL CHECK (revision >= 1), "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)"
+    )
+    conn.execute("CREATE INDEX idx_alert_rules_code ON alert_rules (code)")
+    conn.execute("CREATE INDEX idx_alert_rules_enabled ON alert_rules (enabled)")
+    conn.execute("CREATE INDEX idx_alert_rules_updated_at ON alert_rules (updated_at)")
+    conn.execute(
+        "INSERT INTO schema_meta (key, value) VALUES ('schema_version', 'alert-rule-store.v0.1')"
+    )
+    conn.close()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+
+
+def test_revision_without_check_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), isolation_level=None)
+    conn.execute(
+        "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE alert_rules (rule_id TEXT PRIMARY KEY, code TEXT NOT NULL, "
+        "enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)), "
+        "condition_kind TEXT NOT NULL, rule_json TEXT NOT NULL, "
+        "revision INTEGER NOT NULL, "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)"
+    )
+    conn.execute("CREATE INDEX idx_alert_rules_code ON alert_rules (code)")
+    conn.execute("CREATE INDEX idx_alert_rules_enabled ON alert_rules (enabled)")
+    conn.execute("CREATE INDEX idx_alert_rules_updated_at ON alert_rules (updated_at)")
+    conn.execute(
+        "INSERT INTO schema_meta (key, value) VALUES ('schema_version', 'alert-rule-store.v0.1')"
+    )
+    conn.close()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+
+
+# ---------------------------------------------------------------------------
+# 并发测试 (P2)
+# ---------------------------------------------------------------------------
+
+
+def _concurrent_create_worker(db_path_str: str, rule_id: str, result_queue):
+    """Worker for concurrent tests - runs in a separate thread."""
+    import os
+    os.environ["VIBE_RESEARCH_ALERT_RULE_DB"] = db_path_str
+    try:
+        importlib.reload(store)
+        r = ar.AlertRule(
+            rule_id=rule_id,
+            code="000001",
+            enabled=True,
+            condition=ar.TechnicalTriggerCondition(
+                kind="technical_trigger", trigger="sma_golden_cross"
+            ),
+        )
+        store.create_alert_rule(r, now=T0)
+        result_queue.append("ok")
+    except store.AlertRuleAlreadyExistsError:
+        result_queue.append("duplicate")
+    except store.AlertRuleStoreError as exc:
+        result_queue.append(f"error:{type(exc).__name__}")
+    except Exception as exc:
+        result_queue.append(f"unexpected:{type(exc).__name__}:{exc}")
+
+
+def test_concurrent_first_initialization(db_path):
+    """Two threads race to initialize the same new database."""
+    rounds = 5
+    for round_idx in range(rounds):
+        round_path = db_path.parent / f"round_{round_idx}" / "alert_rules.sqlite3"
+        round_path.parent.mkdir(parents=True, exist_ok=True)
+        db_str = str(round_path)
+
+        results: list[str] = []
+        barrier = threading.Barrier(2, timeout=10)
+
+        def worker(path_str=db_str, results_list=results):
+            import os
+            os.environ["VIBE_RESEARCH_ALERT_RULE_DB"] = path_str
+            importlib.reload(store)
+            barrier.wait()
+            try:
+                r = ar.AlertRule(
+                    rule_id="race.rule",
+                    code="000001",
+                    enabled=True,
+                    condition=ar.TechnicalTriggerCondition(
+                        kind="technical_trigger", trigger="sma_golden_cross"
+                    ),
+                )
+                store.create_alert_rule(r, now=T0)
+                results_list.append("ok")
+            except store.AlertRuleAlreadyExistsError:
+                results_list.append("duplicate")
+            except store.AlertRuleStoreError as exc:
+                results_list.append(f"error:{type(exc).__name__}")
+            except Exception as exc:
+                results_list.append(f"unexpected:{type(exc).__name__}:{exc}")
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start()
+        t2.start()
+        t1.join(timeout=15)
+        t2.join(timeout=15)
+
+        assert sorted(results) == ["duplicate", "ok"], f"Round {round_idx}: {results}"
+
+        # Verify database state
+        import os
+        os.environ["VIBE_RESEARCH_ALERT_RULE_DB"] = db_str
+        importlib.reload(store)
+        records = store.list_alert_rules()
+        assert len(records) == 1
+        assert records[0].rule.rule_id == "race.rule"
+        assert records[0].revision == 1
+
+
+def test_concurrent_create_same_rule_id(db_path):
+    """Two threads race to create the same rule_id on an already-initialized db."""
+    store.create_alert_rule(rule(rule_id="seed"), now=T0)  # initialize db
+    rounds = 5
+    for round_idx in range(rounds):
+        target_id = f"race.{round_idx}"
+        results: list[str] = []
+        barrier = threading.Barrier(2, timeout=10)
+
+        def worker(rid=target_id, results_list=results):
+            barrier.wait()
+            try:
+                r = ar.AlertRule(
+                    rule_id=rid,
+                    code="000001",
+                    enabled=True,
+                    condition=ar.TechnicalTriggerCondition(
+                        kind="technical_trigger", trigger="sma_golden_cross"
+                    ),
+                )
+                store.create_alert_rule(r, now=T0)
+                results_list.append("ok")
+            except store.AlertRuleAlreadyExistsError:
+                results_list.append("duplicate")
+            except store.AlertRuleStoreError as exc:
+                results_list.append(f"error:{type(exc).__name__}")
+            except Exception as exc:
+                results_list.append(f"unexpected:{type(exc).__name__}:{exc}")
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start()
+        t2.start()
+        t1.join(timeout=15)
+        t2.join(timeout=15)
+
+        assert sorted(results) == ["duplicate", "ok"], f"Round {round_idx}: {results}"
+        rec = store.get_alert_rule(target_id)
+        assert rec is not None
+        assert rec.revision == 1
+
+
+# ---------------------------------------------------------------------------
+# URI 特殊字符 (P2)
+# ---------------------------------------------------------------------------
+
+
+def test_uri_space_in_path(tmp_path, monkeypatch):
+    space_dir = tmp_path / "dir with spaces"
+    db = space_dir / "alert rules.sqlite3"
+    monkeypatch.setenv(_DB_ENV, str(db))
+    monkeypatch.delenv("VR_DATA_DIR", raising=False)
+    record = store.create_alert_rule(rule(), now=T0)
+    assert store.get_alert_rule("rule.1") == record
+    assert store.list_alert_rules() == [record]
+
+
+def test_uri_unicode_in_path(tmp_path, monkeypatch):
+    uni_dir = tmp_path / "数据目录"
+    db = uni_dir / "告警规则.sqlite3"
+    monkeypatch.setenv(_DB_ENV, str(db))
+    monkeypatch.delenv("VR_DATA_DIR", raising=False)
+    record = store.create_alert_rule(rule(), now=T0)
+    assert store.get_alert_rule("rule.1") == record
+    assert store.list_alert_rules() == [record]
+
+
+def test_uri_hash_in_path(tmp_path, monkeypatch):
+    hash_dir = tmp_path / "dir#fragment"
+    db = hash_dir / "alert#rules.sqlite3"
+    monkeypatch.setenv(_DB_ENV, str(db))
+    monkeypatch.delenv("VR_DATA_DIR", raising=False)
+    record = store.create_alert_rule(rule(), now=T0)
+    assert store.get_alert_rule("rule.1") == record
+    assert store.list_alert_rules() == [record]
+    # Verify no wrong-prefix file was created
+    assert sorted(p.name for p in hash_dir.iterdir()) == ["alert#rules.sqlite3"]
+
+
+def test_uri_windows_question_mark_safe_failure(tmp_path, monkeypatch):
+    """On Windows, '?' is illegal in filenames. Must fail with wrapped error."""
+    bad_dir = tmp_path / "normal"
+    bad_db = bad_dir / "bad?name.sqlite3"
+    monkeypatch.setenv(_DB_ENV, str(bad_db))
+    monkeypatch.delenv("VR_DATA_DIR", raising=False)
+    with pytest.raises(store.AlertRuleStoreError):
+        store.create_alert_rule(rule(), now=T0)
+    # Must not create a truncated file
+    if bad_dir.exists():
+        assert not any(p.name.startswith("bad") for p in bad_dir.iterdir())
+
+
+# ---------------------------------------------------------------------------
+# 时间上限 (P2)
+# ---------------------------------------------------------------------------
+
+
+MAX_TS = datetime(9999, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc)
+
+
+def test_year_9999_replace_raises_store_error(db_path):
+    store.create_alert_rule(rule(), now=MAX_TS)
+    with pytest.raises(store.AlertRuleStoreError) as exc_info:
+        store.replace_alert_rule(
+            "rule.1", rule(code="600000"), expected_revision=1, now=MAX_TS
+        )
+    assert "Traceback" not in str(exc_info.value)
+    # Data unchanged
+    rec = store.get_alert_rule("rule.1")
+    assert rec.revision == 1
+    assert rec.rule.code == "000001"
+    # No lock residue - subsequent read works
+    assert store.list_alert_rules() == [rec]
+
+
+def test_year_9999_delete_raises_store_error(db_path):
+    store.create_alert_rule(rule(), now=MAX_TS)
+    with pytest.raises(store.AlertRuleStoreError) as exc_info:
+        store.delete_alert_rule("rule.1", expected_revision=1, now=MAX_TS)
+    assert "Traceback" not in str(exc_info.value)
+    # Data unchanged
+    rec = store.get_alert_rule("rule.1")
+    assert rec.revision == 1
+    assert rec.deleted_at is None
+    # No lock residue
+    assert store.list_alert_rules() == [rec]
+
+
+def test_year_9999_no_lock_residue_after_failure(db_path):
+    store.create_alert_rule(rule(), now=MAX_TS)
+    with pytest.raises(store.AlertRuleStoreError):
+        store.replace_alert_rule(
+            "rule.1", rule(code="600000"), expected_revision=1, now=MAX_TS
+        )
+    # Subsequent operations work without "database locked"
+    with pytest.raises(store.AlertRuleStoreError):
+        store.delete_alert_rule("rule.1", expected_revision=1, now=MAX_TS)
+    # A normal-time operation still works
+    rec = store.get_alert_rule("rule.1")
+    assert rec is not None
+
+
+# ---------------------------------------------------------------------------
+# 补充边界测试：并发不同 rule_id、索引/列变体、等价 DDL、路径异常包装
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_create_different_rule_ids(db_path):
+    """Two threads concurrently create different rule_ids on a fresh database."""
+    rounds = 5
+    for round_idx in range(rounds):
+        round_path = db_path.parent / f"diff_{round_idx}" / "alert_rules.sqlite3"
+        round_path.parent.mkdir(parents=True, exist_ok=True)
+        db_str = str(round_path)
+        results: list[str] = []
+        barrier = threading.Barrier(2, timeout=10)
+
+        def worker(rule_id, path_str=db_str, results_list=results):
+            import os
+
+            os.environ["VIBE_RESEARCH_ALERT_RULE_DB"] = path_str
+            importlib.reload(store)
+            barrier.wait()
+            try:
+                r = ar.AlertRule(
+                    rule_id=rule_id,
+                    code="000001",
+                    enabled=True,
+                    condition=ar.TechnicalTriggerCondition(
+                        kind="technical_trigger", trigger="sma_golden_cross"
+                    ),
+                )
+                store.create_alert_rule(r, now=T0)
+                results_list.append("ok")
+            except Exception as exc:
+                results_list.append(f"error:{type(exc).__name__}:{exc}")
+
+        t1 = threading.Thread(target=worker, args=("diff.a",))
+        t2 = threading.Thread(target=worker, args=("diff.b",))
+        t1.start()
+        t2.start()
+        t1.join(timeout=15)
+        t2.join(timeout=15)
+
+        assert results == ["ok", "ok"], f"Round {round_idx}: {results}"
+        import os
+
+        os.environ["VIBE_RESEARCH_ALERT_RULE_DB"] = db_str
+        importlib.reload(store)
+        records = store.list_alert_rules()
+        assert {rec.rule.rule_id for rec in records} == {"diff.a", "diff.b"}
+        assert all(rec.revision == 1 for rec in records)
+
+
+def _create_schema_variant(path: Path, table_sql: str) -> None:
+    """Create schema_meta + a custom alert_rules table + the three indexes."""
+    conn = sqlite3.connect(str(path), isolation_level=None)
+    conn.execute("CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute(table_sql)
+    conn.execute("CREATE INDEX idx_alert_rules_code ON alert_rules (code)")
+    conn.execute("CREATE INDEX idx_alert_rules_enabled ON alert_rules (enabled)")
+    conn.execute("CREATE INDEX idx_alert_rules_updated_at ON alert_rules (updated_at)")
+    conn.execute(
+        "INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?)",
+        (store.ALERT_RULE_STORE_SCHEMA_VERSION,),
+    )
+    conn.close()
+
+
+def test_partial_index_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _create_valid_db(db_path)
+    tamper(db_path, "DROP INDEX idx_alert_rules_code")
+    tamper(
+        db_path,
+        "CREATE INDEX idx_alert_rules_code ON alert_rules (code) WHERE enabled = 1",
+    )
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(rule_id="rule.2"), now=T0)
+    assert db_fingerprint(db_path) == before
+
+
+def test_composite_index_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _create_valid_db(db_path)
+    tamper(db_path, "DROP INDEX idx_alert_rules_code")
+    tamper(db_path, "CREATE INDEX idx_alert_rules_code ON alert_rules (code, enabled)")
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(rule_id="rule.2"), now=T0)
+    assert db_fingerprint(db_path) == before
+
+
+def test_wrong_column_type_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _create_schema_variant(
+        db_path,
+        "CREATE TABLE alert_rules (rule_id TEXT PRIMARY KEY, code INTEGER NOT NULL, "
+        "enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)), "
+        "condition_kind TEXT NOT NULL, rule_json TEXT NOT NULL, "
+        "revision INTEGER NOT NULL CHECK (revision >= 1), "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)",
+    )
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(rule_id="rule.2"), now=T0)
+    assert db_fingerprint(db_path) == before
+
+
+def test_removed_not_null_fails_closed(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _create_schema_variant(
+        db_path,
+        "CREATE TABLE alert_rules (rule_id TEXT PRIMARY KEY, code TEXT, "
+        "enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)), "
+        "condition_kind TEXT NOT NULL, rule_json TEXT NOT NULL, "
+        "revision INTEGER NOT NULL CHECK (revision >= 1), "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)",
+    )
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(rule_id="rule.2"), now=T0)
+    assert db_fingerprint(db_path) == before
+
+
+def test_equivalent_check_format_accepted(db_path):
+    """Same constraints with different spacing/case must still validate."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _create_schema_variant(
+        db_path,
+        "CREATE TABLE alert_rules (rule_id TEXT PRIMARY KEY, code TEXT NOT NULL, "
+        "enabled INTEGER NOT NULL CHECK(enabled IN (0,1)), "
+        "condition_kind TEXT NOT NULL, rule_json TEXT NOT NULL, "
+        "revision INTEGER NOT NULL check (revision>=1), "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)",
+    )
+    assert store.list_alert_rules() == []
+    record = store.create_alert_rule(rule(), now=T0)
+    assert store.get_alert_rule("rule.1") == record
+
+
+def test_mkdir_parent_blocked_wrapped(tmp_path, monkeypatch):
+    """Parent path component is a file: must raise AlertRuleStoreError, not OSError."""
+    blocker = tmp_path / "blocker"
+    blocker.write_bytes(b"x")
+    blocked_path = blocker / "alert_rules.sqlite3"
+    monkeypatch.setenv(_DB_ENV, str(blocked_path))
+    monkeypatch.delenv("VR_DATA_DIR", raising=False)
+    with pytest.raises(store.AlertRuleStoreError):
+        store.create_alert_rule(rule(), now=T0)
+    assert store.list_alert_rules() == []
