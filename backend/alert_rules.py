@@ -87,11 +87,15 @@ AlertReasonCode = Literal[
 ]
 
 _RULE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-_CODE_RE = re.compile(r"^\d{6}$")
+_CODE_RE = re.compile(r"^[0-9]{6}$")
 _SOURCE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 _PRICE_METRICS = frozenset({"close", "sma20", "sma60"})
+
+# 供持久化层复用同一套标识符与代码格式，避免规则格式在多处硬编码。
+RULE_ID_PATTERN = _RULE_ID_RE
+CODE_PATTERN = _CODE_RE
 
 
 def _strict_finite_number(value: Any, *, field_name: str) -> float:
