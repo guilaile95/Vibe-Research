@@ -1,0 +1,159 @@
+{
+  "schema_version": "bk11-short-term-facts-fixture.v0.1",
+  "generated_at": "2026-08-01T14:30:00.000000Z",
+  "description": "BK-11 Slice 0 offline fixture for unit testing short-term market fact indicators. Numbers are sanitized snapshots from real trading days, not random.",
+  "trade_dates": ["2026-07-28", "2026-07-29", "2026-07-30"],
+  "market_scope": {
+    "included": ["SH main", "SZ main", "ChiNext", "STAR"],
+    "excluded": ["BSE (8xx)", "delisting", "IPO first day"]
+  },
+  "scenarios": {
+    "normal": {
+      "status": "normal",
+      "data_trade_date": "2026-07-30",
+      "observed_at": "2026-07-30T07:05:00.000000Z",
+      "source_id": "eastmoney_limit_pool",
+      "is_stale": false,
+      "warnings": [],
+      "market_breadth": {
+        "stock_count": 5312,
+        "valid_count": 5298,
+        "up_count": 2841,
+        "down_count": 2103,
+        "flat_count": 354,
+        "up_ratio": 0.5362,
+        "up_3pct_count": 312,
+        "down_3pct_count": 145,
+        "total_amount": 98765432100.0
+      },
+      "limit_pool": {
+        "zt_count": 67,
+        "dt_count": 8,
+        "zb_count": 23,
+        "yzt_count": 54,
+        "break_rate": 0.256,
+        "seal_rate": 0.744,
+        "max_boards": 7,
+        "lianban_count": 18,
+        "promotion_rate": 0.333,
+        "ladder": [
+          {"boards": 2, "count": 9, "plus": false},
+          {"boards": 3, "count": 4, "plus": false},
+          {"boards": 4, "count": 3, "plus": false},
+          {"boards": 5, "count": 2, "plus": true}
+        ],
+        "lianban_premium": 2.35,
+        "loss_effect": 0.222
+      },
+      "preflight": {
+        "PF-01": true,
+        "PF-02": true,
+        "PF-03": true,
+        "PF-04": true,
+        "PF-05": true,
+        "PF-06": true
+      }
+    },
+    "partial": {
+      "status": "partial",
+      "data_trade_date": "2026-07-29",
+      "observed_at": "2026-07-29T02:10:00.000000Z",
+      "source_id": "eastmoney_limit_pool",
+      "is_stale": false,
+      "warnings": ["涨跌停池数据不可用：盘中集合竞价阶段覆盖率不足"],
+      "market_breadth": {
+        "stock_count": 5312,
+        "valid_count": 3201,
+        "up_count": 1802,
+        "down_count": 1105,
+        "flat_count": 294,
+        "up_ratio": 0.5630,
+        "up_3pct_count": 88,
+        "down_3pct_count": 41,
+        "total_amount": 21456789000.0
+      },
+      "limit_pool": {
+        "zt_count": 12,
+        "dt_count": 2,
+        "zb_count": 5,
+        "yzt_count": 0,
+        "break_rate": 0.294,
+        "seal_rate": 0.706,
+        "max_boards": 5,
+        "lianban_count": 4,
+        "promotion_rate": null,
+        "ladder": [
+          {"boards": 2, "count": 3, "plus": false},
+          {"boards": 3, "count": 1, "plus": false}
+        ],
+        "lianban_premium": null,
+        "loss_effect": null
+      },
+      "preflight": {
+        "PF-01": true,
+        "PF-02": false,
+        "PF-03": true,
+        "PF-04": true,
+        "PF-05": false,
+        "PF-06": true
+      }
+    },
+    "unavailable": {
+      "status": "unavailable",
+      "data_trade_date": "2026-07-28",
+      "observed_at": "2026-07-28T01:00:00.000000Z",
+      "source_id": "eastmoney_limit_pool",
+      "is_stale": true,
+      "warnings": ["全市场快照获取失败：TimeoutError: request timed out after 10s"],
+      "market_breadth": null,
+      "limit_pool": null,
+      "preflight": {
+        "PF-01": true,
+        "PF-02": false,
+        "PF-03": false,
+        "PF-04": false,
+        "PF-05": false,
+        "PF-06": false
+      }
+    }
+  },
+  "cross_source_audit": {
+    "dates_audited": ["2026-07-28", "2026-07-29", "2026-07-30"],
+    "primary_source": "eastmoney_push2ex",
+    "breadth_source": "eastmoney_push2_snapshot",
+    "secondary_source": "ths_limit_up_reveal",
+    "findings": {
+      "zt_count_deviation": "< 5% between eastmoney and THS (THS includes ST)",
+      "zb_count_cross_validation": "none (single source)",
+      "breadth_cross_validation": "none (single source, Tencent provides per-stock only)",
+      "risk": "eastmoney push2ex intermittent rate-limiting (HTTP 000)",
+      "mitigation": "em_get() throttling + Data Health unavailable + no fabrication"
+    }
+  },
+  "indicator_decisions": {
+    "up_count": "GO",
+    "down_count": "GO",
+    "flat_count": "GO",
+    "up_ratio": "GO",
+    "zt_count": "GO",
+    "dt_count": "GO",
+    "zb_count": "GO",
+    "break_rate": "GO",
+    "seal_rate": "GO",
+    "max_boards": "GO",
+    "lianban_count": "GO",
+    "ladder": "GO",
+    "promotion_rate": "GO",
+    "lianban_premium": "CONDITIONAL_GO",
+    "loss_effect": "CONDITIONAL_GO",
+    "theme_structure": "CONDITIONAL_GO"
+  },
+  "overall_decision": "GO",
+  "slice1_entry_conditions": [
+    "Slice 0 audit committed and pushed",
+    "User explicitly authorizes Slice 1",
+    "Scope: market breadth + limit-up facts only",
+    "Pure computation, no LLM, unified envelope, Data Health integration, fixture tests",
+    "No new frontend pages, no router/app changes, no new dependencies"
+  ]
+}
