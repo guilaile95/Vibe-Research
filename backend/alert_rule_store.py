@@ -186,34 +186,119 @@ def _existing_tables(conn: sqlite3.Connection) -> set[str]:
     return {row[0] for row in rows}
 
 
+def _all_user_tables(conn: sqlite3.Connection) -> set[str]:
+    """Return all user-defined table names (excluding sqlite internal)."""
+    try:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise AlertRuleStoreCorruptedError() from exc
+    return {row[0] for row in rows}
+
+
+_REQUIRED_COLUMNS: dict[str, tuple[str, int, int]] = {
+    # name -> (type, notnull, pk)
+    "rule_id": ("TEXT", 0, 1),
+    "code": ("TEXT", 1, 0),
+    "enabled": ("INTEGER", 1, 0),
+    "condition_kind": ("TEXT", 1, 0),
+    "rule_json": ("TEXT", 1, 0),
+    "revision": ("INTEGER", 1, 0),
+    "created_at": ("TEXT", 1, 0),
+    "updated_at": ("TEXT", 1, 0),
+    "deleted_at": ("TEXT", 0, 0),
+}
+
+_REQUIRED_INDEXES: dict[str, str] = {
+    "idx_alert_rules_code": "createindexidx_alert_rules_codeonalert_rules(code)",
+    "idx_alert_rules_enabled": "createindexidx_alert_rules_enabledonalert_rules(enabled)",
+    "idx_alert_rules_updated_at": (
+        "createindexidx_alert_rules_updated_atonalert_rules(updated_at)"
+    ),
+}
+
+
+def _canonical_sql(sql: str) -> str:
+    """把 SQLite 保存的 DDL 归一化为小写无空白形式，容忍等价格式差异。"""
+    return "".join(sql.split()).lower()
+
+
 def _assert_schema(conn: sqlite3.Connection) -> None:
-    """校验已有 schema，任何异常都 fail-closed，不自动迁移或重建。"""
+    """校验已有 schema 结构完整性，任何异常都 fail-closed，不自动迁移或重建。"""
     tables = _existing_tables(conn)
     if tables != {"schema_meta", "alert_rules"}:
         raise AlertRuleStoreCorruptedError()
     try:
+        # --- schema_meta validation ---
         rows = conn.execute(
             "SELECT value FROM schema_meta WHERE key = ?", ("schema_version",)
         ).fetchall()
+        if len(rows) != 1 or rows[0][0] != ALERT_RULE_STORE_SCHEMA_VERSION:
+            raise AlertRuleStoreCorruptedError()
+
+        # --- alert_rules column validation via PRAGMA table_info ---
+        col_rows = conn.execute("PRAGMA table_info(alert_rules)").fetchall()
+        col_map: dict[str, tuple[str, int, int]] = {}
+        for crow in col_rows:
+            # cid, name, type, notnull, dflt_value, pk
+            col_map[crow[1]] = (crow[2].upper(), crow[3], crow[5])
+        for col_name, (exp_type, exp_notnull, exp_pk) in _REQUIRED_COLUMNS.items():
+            if col_name not in col_map:
+                raise AlertRuleStoreCorruptedError()
+            actual_type, actual_notnull, actual_pk = col_map[col_name]
+            if actual_type != exp_type:
+                raise AlertRuleStoreCorruptedError()
+            if actual_notnull != exp_notnull:
+                raise AlertRuleStoreCorruptedError()
+            if (actual_pk > 0) != (exp_pk > 0):
+                raise AlertRuleStoreCorruptedError()
+
+        # --- CHECK constraint validation via sqlite_master.sql ---
+        sql_row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'alert_rules'"
+        ).fetchone()
+        if sql_row is None or sql_row[0] is None:
+            raise AlertRuleStoreCorruptedError()
+        create_sql = sql_row[0]
+        canonical_sql = _canonical_sql(create_sql)
+        if "check(enabledin(0,1))" not in canonical_sql:
+            raise AlertRuleStoreCorruptedError()
+        if "check(revision>=1)" not in canonical_sql:
+            raise AlertRuleStoreCorruptedError()
+
+        # --- Index validation ---
+        idx_rows = conn.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type = 'index' AND tbl_name = 'alert_rules'"
+        ).fetchall()
+        found_index_sql = {row[0]: row[1] for row in idx_rows}
+        for idx_name, expected_sql in _REQUIRED_INDEXES.items():
+            actual_sql = found_index_sql.get(idx_name)
+            if actual_sql is None:
+                raise AlertRuleStoreCorruptedError()
+            if _canonical_sql(actual_sql) != expected_sql:
+                raise AlertRuleStoreCorruptedError()
+
+        # --- Verify SELECT works ---
         conn.execute(f"SELECT {_SELECT_COLUMNS} FROM alert_rules LIMIT 0").fetchall()
+    except AlertRuleStoreCorruptedError:
+        raise
     except sqlite3.Error as exc:
         raise AlertRuleStoreCorruptedError() from exc
-    if len(rows) != 1 or rows[0][0] != ALERT_RULE_STORE_SCHEMA_VERSION:
-        raise AlertRuleStoreCorruptedError()
 
 
 def _initialize(conn: sqlite3.Connection) -> None:
+    """在已持有写锁的连接上执行 schema 初始化。调用方负责 BEGIN IMMEDIATE。"""
     try:
-        conn.execute("BEGIN IMMEDIATE")
         for statement in _DDL:
             conn.execute(statement)
         conn.execute(
             "INSERT INTO schema_meta (key, value) VALUES (?, ?)",
             ("schema_version", ALERT_RULE_STORE_SCHEMA_VERSION),
         )
-        conn.execute("COMMIT")
     except sqlite3.Error as exc:
-        _safe_rollback(conn)
         raise AlertRuleStoreError("告警规则数据库初始化失败") from exc
 
 
@@ -225,23 +310,65 @@ def _safe_rollback(conn: sqlite3.Connection) -> None:
 
 
 def _open_write_connection() -> sqlite3.Connection:
-    """只有写操作才允许触发目录创建与 schema 初始化。"""
+    """只有写操作才允许触发目录创建与 schema 初始化。
+
+    初始化资格：只有调用开始时路径确实不存在，才允许初始化。
+    任何调用开始时已经存在的文件，都必须按已有数据库校验。
+    使用 BEGIN IMMEDIATE 保护初始化竞态。
+    """
     path = Path(alert_rule_db_path())
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path_existed_before = path.exists()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise AlertRuleStoreError("告警规则数据库不可用") from exc
     try:
         conn = sqlite3.connect(str(path), isolation_level=None, timeout=10.0)
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, OSError) as exc:
         raise AlertRuleStoreError("告警规则数据库不可用") from exc
     conn.row_factory = sqlite3.Row
     try:
-        if _existing_tables(conn):
+        conn.execute("BEGIN IMMEDIATE")
+    except sqlite3.Error as exc:
+        conn.close()
+        raise AlertRuleStoreCorruptedError() from exc
+    try:
+        tables = _existing_tables(conn)
+        if tables == {"schema_meta", "alert_rules"}:
+            # Schema present — validate fully
             _assert_schema(conn)
-        else:
+        elif not tables and not _all_user_tables(conn):
+            # Completely empty database
+            if path_existed_before:
+                # Pre-existing empty file: must NOT initialize
+                raise AlertRuleStoreCorruptedError()
+            # New path: we have initialization authority
             _initialize(conn)
-    except Exception:
+        else:
+            # Has some tables but not the complete project schema
+            raise AlertRuleStoreCorruptedError()
+        conn.execute("COMMIT")
+    except AlertRuleStoreError:
+        _safe_rollback(conn)
+        conn.close()
+        raise
+    except sqlite3.Error as exc:
+        _safe_rollback(conn)
+        conn.close()
+        raise AlertRuleStoreError("告警规则数据库不可用") from exc
+    except BaseException:
+        _safe_rollback(conn)
         conn.close()
         raise
     return conn
+
+
+def _read_only_uri(path: Path) -> str:
+    """构造安全的只读 SQLite file URI，正确转义特殊字符。"""
+    resolved = path.resolve()
+    # Use as_uri() for proper encoding, then append mode=ro
+    base = resolved.as_uri()
+    return f"{base}?mode=ro"
 
 
 def _open_read_connection() -> sqlite3.Connection | None:
@@ -250,8 +377,9 @@ def _open_read_connection() -> sqlite3.Connection | None:
     if not path.is_file():
         return None
     try:
-        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=10.0)
-    except sqlite3.Error as exc:
+        uri = _read_only_uri(path)
+        conn = sqlite3.connect(uri, uri=True, timeout=10.0)
+    except (sqlite3.Error, OSError) as exc:
         raise AlertRuleStoreCorruptedError() from exc
     conn.row_factory = sqlite3.Row
     try:
@@ -449,7 +577,10 @@ def _monotonic_timestamp(previous: str, requested: str) -> str:
     """保证 updated_at 严格单调，即使调用方给出更早的时间。"""
     if requested > previous:
         return requested
-    return _format_timestamp(_parse_timestamp(previous) + _MIN_TICK)
+    try:
+        return _format_timestamp(_parse_timestamp(previous) + _MIN_TICK)
+    except (OverflowError, OSError) as exc:
+        raise AlertRuleStoreError("时间戳超出可表示范围") from exc
 
 
 def _live_record(conn: sqlite3.Connection, rule_id: str) -> AlertRuleRecord:
@@ -579,10 +710,3 @@ def delete_alert_rule(
     finally:
         conn.close()
     return record
-
-
-
-
-
-
-
