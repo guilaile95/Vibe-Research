@@ -4,8 +4,8 @@
     https://www.hkex.com.hk/eng/csm/DailyStat/data_tab_daily_YYYYMMDDe.js
 
 真实性边界（硬约束，勿"优化"掉）：
-- HKEX 北向 tradingTable 只发布 Total Turnover / Total Trade Count / DQB / ETF Turnover，
-  没有 Buy/Sell 拆分，因此「净买入」在权威源里不存在也无法推导 → net_* 字段固定 None。
+- 当前 HKEX payload 可能包含 Buy/Sell Turnover 列；本版本未验证这些列在历史日期、
+  单位和口径上的一致性，因此不据此生成 net_buy 字段 → net_* 字段固定 None。
 - 成交额绝不能命名或解释为「净流入 / 净买入」。
 - DQB 实测恒为占位值 999,999,999，不是真实额度余额 → 置 None 并记 limitation。
 - 东财 NET_DEAL_AMT / FUND_INFLOW / BUY_AMT / SELL_AMT / NET_BUY_AMT 自 2024-08-19 起
@@ -13,11 +13,14 @@
 - trade_date 只能取自上游 payload 的 date 字段，绝不用本地当前日期伪装。
 - 缺失一律 None，禁止用 0 代表缺失。
 - 上游原文 / URL / traceback 绝不透传给调用方，错误只用固定安全分类字符串。
+- 腿级成功至少要求 total_turnover_mn 为有限非负数；否则该腿视为解析失败。
 """
 
 from __future__ import annotations
 
 import json
+import math
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -39,6 +42,7 @@ _MAX_BYTES = 2 * 1024 * 1024
 _LOOKBACK_DAYS = 7
 
 _DQB_PLACEHOLDER = 999_999_999.0
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 _NB_SSE = "SSE Northbound"
 _NB_SZSE = "SZSE Northbound"
@@ -49,15 +53,20 @@ ERR_PARSE_FAILED = "PARSE_FAILED"
 
 _NULL_PLACEHOLDERS = frozenset({"", "-", "--", "n/a", "na", "n.a.", "null", "none"})
 
+_NET_BUY_DETAIL = (
+    "当前 HKEX payload 可能包含 Buy/Sell Turnover 列；"
+    "本版本未验证这些列在历史日期、单位和口径上的一致性，因此不据此生成 net_buy 字段。"
+)
+
 LIMITATION_NET_BUY = {
     "field": "data.northbound.net_buy_mn",
     "reason_code": "NOT_PUBLISHED_BY_SOURCE",
-    "detail": "HKEX 北向日统计仅发布成交额，未发布买入/卖出拆分，净买入无法计算。",
+    "detail": _NET_BUY_DETAIL,
 }
 LIMITATION_ACTIVE_STOCKS_NET_BUY = {
     "field": "data.active_stocks[].net_buy_yuan",
     "reason_code": "NOT_PUBLISHED_BY_SOURCE",
-    "detail": "HKEX 十大成交股仅发布成交额，未发布买入/卖出拆分，净买入无法计算。",
+    "detail": _NET_BUY_DETAIL,
 }
 
 
@@ -81,6 +90,16 @@ def _to_float(raw: Any) -> float | None:
         return None
 
 
+def _nonneg_finite(raw: Any) -> float | None:
+    """Parse a value and accept only finite, non-negative numbers."""
+    v = _to_float(raw)
+    if v is None:
+        return None
+    if not math.isfinite(v) or v < 0:
+        return None
+    return v
+
+
 def _to_int(raw: Any) -> int | None:
     v = _to_float(raw)
     if v is None:
@@ -89,6 +108,26 @@ def _to_int(raw: Any) -> int | None:
         return int(round(v))
     except (ValueError, OverflowError):
         return None
+
+
+def _nonneg_finite_int(raw: Any) -> int | None:
+    v = _nonneg_finite(raw)
+    if v is None:
+        return None
+    try:
+        return int(round(v))
+    except (ValueError, OverflowError):
+        return None
+
+
+def _is_valid_trade_date(value: str | None) -> bool:
+    if not value or not _DATE_RE.match(value):
+        return False
+    try:
+        date.fromisoformat(value)
+        return True
+    except ValueError:
+        return False
 
 
 def _fetch_daily_stat_js(date_str: str) -> str | None:
@@ -138,17 +177,17 @@ def parse_daily_stat_js(text: str) -> list[dict]:
     eq = text.find("=", idx + len("tabData"))
     if eq < 0:
         raise NorthboundParseError(ERR_PARSE_FAILED)
-    rhs = text[eq + 1:].strip()
+    rhs = text[eq + 1 :].strip()
     start = rhs.find("[")
     if start < 0:
         raise NorthboundParseError(ERR_PARSE_FAILED)
     end = rhs.rfind("]")
     if end <= start:
         raise NorthboundParseError(ERR_PARSE_FAILED)
-    payload = rhs[start:end + 1]
+    payload = rhs[start : end + 1]
     try:
         parsed = json.loads(payload)
-    except Exception as exc:
+    except Exception:
         raise NorthboundParseError(ERR_PARSE_FAILED) from None
     if not isinstance(parsed, list):
         raise NorthboundParseError(ERR_PARSE_FAILED)
@@ -189,12 +228,52 @@ def _tables(entry: dict) -> tuple[dict | None, dict | None]:
     return trading, top10
 
 
+def _normalize_schema_labels(schema: Any) -> list[str]:
+    """Normalize HKEX table schema into ordered string labels.
+
+    Compatible shapes:
+    - flat: ["Total Turnover", ...]
+    - one-level nested: [["Total Turnover", ...]]
+    - dict columns: [{"ref": "..."}] / label / name
+    """
+    if not isinstance(schema, list):
+        return []
+    cols = schema
+    # Unwrap exactly one nesting level when schema is a single list cell.
+    if len(cols) == 1 and isinstance(cols[0], list):
+        cols = cols[0]
+
+    labels: list[str] = []
+    for col in cols:
+        if isinstance(col, dict):
+            labels.append(str(col.get("ref") or col.get("label") or col.get("name") or "").strip())
+        elif isinstance(col, list):
+            # Unknown deeper nesting: keep positional slot with empty label.
+            labels.append("")
+        elif col is None:
+            labels.append("")
+        else:
+            labels.append(str(col).strip())
+    return labels
+
+
 def _row_cells(row: Any) -> list[Any]:
+    """Normalize one table row's cells.
+
+    Compatible shapes:
+    - per-cell wrap: {"td": [["159,927.12"], ["1,234"], ...]}
+    - whole-row wrap: {"td": [["159,927.12", "1,234", ...]]}
+    """
     if not isinstance(row, dict):
         return []
     td = row.get("td")
     if not isinstance(td, list):
         return []
+
+    # Whole-row wrapper: single cell that is itself the full row list.
+    if len(td) == 1 and isinstance(td[0], list):
+        return list(td[0])
+
     cells: list[Any] = []
     for cell in td:
         if isinstance(cell, list):
@@ -205,32 +284,47 @@ def _row_cells(row: Any) -> list[Any]:
 
 
 def _schema_labels(table: dict) -> list[str]:
-    schema = table.get("schema")
-    labels: list[str] = []
-    if isinstance(schema, list):
-        for col in schema:
-            if isinstance(col, dict):
-                labels.append(str(col.get("ref") or col.get("label") or col.get("name") or "").strip())
-            else:
-                labels.append(str(col).strip())
-    return labels
+    return _normalize_schema_labels(table.get("schema"))
 
 
 def _trading_values(table: dict | None) -> dict[str, Any]:
+    """Map tradingTable labels to values.
+
+    Compatible shapes:
+    - one data row, N cells (legacy flat / whole-row nested)
+    - N data rows, each contributing one value (observed live HKEX shape)
+    """
     out: dict[str, Any] = {}
     if not isinstance(table, dict):
         return out
     labels = _schema_labels(table)
     rows = table.get("tr")
-    if not isinstance(rows, list) or not rows:
+    if not isinstance(rows, list) or not rows or not labels:
         return out
-    cells = _row_cells(rows[0])
+
+    # Single row → align cells[i] to labels[i]
+    if len(rows) == 1:
+        cells = _row_cells(rows[0])
+        for i, label in enumerate(labels):
+            if not label:
+                continue
+            out[label] = cells[i] if i < len(cells) else None
+        return out
+
+    # Multi-row → each row's first cell maps to the same-index label.
     for i, label in enumerate(labels):
-        out[label] = cells[i] if i < len(cells) else None
+        if not label:
+            continue
+        if i >= len(rows):
+            out[label] = None
+            continue
+        cells = _row_cells(rows[i])
+        out[label] = cells[0] if cells else None
     return out
 
 
 def _leg_metrics(entry: dict | None) -> dict[str, Any] | None:
+    """Parse one northbound leg. Requires finite non-negative total_turnover_mn."""
     if not isinstance(entry, dict):
         return None
     trading, _ = _tables(entry)
@@ -239,15 +333,50 @@ def _leg_metrics(entry: dict | None) -> dict[str, Any] | None:
     vals = _trading_values(trading)
     if not vals:
         return None
-    dqb_raw = _to_float(vals.get("DQB"))
+
+    total_turnover = _nonneg_finite(vals.get("Total Turnover"))
+    if total_turnover is None:
+        # Core field missing/invalid → leg parse failure (do not emit empty "success").
+        return None
+
+    dqb_raw = _nonneg_finite(vals.get("DQB"))
     dqb_is_placeholder = dqb_raw is not None and abs(dqb_raw - _DQB_PLACEHOLDER) < 0.5
+
     return {
-        "total_turnover_mn": _to_float(vals.get("Total Turnover")),
-        "trade_count": _to_int(vals.get("Total Trade Count")),
-        "etf_turnover_mn": _to_float(vals.get("ETF Turnover")),
+        "total_turnover_mn": total_turnover,
+        "trade_count": _nonneg_finite_int(vals.get("Total Trade Count")),
+        "etf_turnover_mn": _nonneg_finite(vals.get("ETF Turnover")),
         "daily_quota_balance_mn": None if dqb_is_placeholder else dqb_raw,
         "dqb_is_placeholder": dqb_is_placeholder,
     }
+
+
+def _leg_optional_complete(leg: dict[str, Any] | None) -> bool:
+    if leg is None:
+        return False
+    return leg.get("trade_count") is not None and leg.get("etf_turnover_mn") is not None
+
+
+def _field_unavailable(field: str) -> dict:
+    return {
+        "field": field,
+        "reason_code": "FIELD_UNAVAILABLE",
+        "detail": "该字段在当前 HKEX 日统计中缺失或无法解析为有效非负有限值。",
+    }
+
+
+def _append_optional_field_limitations(
+    limitations: list[dict],
+    *,
+    leg: dict[str, Any] | None,
+    leg_key: str,
+) -> None:
+    if leg is None:
+        return
+    if leg.get("trade_count") is None:
+        limitations.append(_field_unavailable(f"data.{leg_key}.trade_count"))
+    if leg.get("etf_turnover_mn") is None:
+        limitations.append(_field_unavailable(f"data.{leg_key}.etf_turnover_mn"))
 
 
 def _leg_active_stocks(entry: dict | None, market: str) -> list[dict]:
@@ -266,7 +395,7 @@ def _leg_active_stocks(entry: dict | None, market: str) -> list[dict]:
         if not cells:
             continue
         rec = {labels[i] if i < len(labels) else f"col{i}": cells[i] for i in range(len(cells))}
-        rank = _to_int(rec.get("Rank"))
+        rank = _nonneg_finite_int(rec.get("Rank"))
         code = rec.get("Stock Code")
         name = rec.get("Stock Name")
         out.append({
@@ -274,7 +403,7 @@ def _leg_active_stocks(entry: dict | None, market: str) -> list[dict]:
             "rank": rank,
             "code": "" if code is None else str(code).strip(),
             "name": "" if name is None else str(name).strip(),
-            "total_turnover_yuan": _to_float(rec.get("Total Turnover")),
+            "total_turnover_yuan": _nonneg_finite(rec.get("Total Turnover")),
             "net_buy_yuan": None,
         })
     return out
@@ -366,10 +495,17 @@ def _stale_flag(trade_date: str | None, now_utc: datetime) -> bool:
     return bool(dhs.is_stale_cn_trade_date(trade_date, None, now_utc))
 
 
+def _payload_date(entry: dict | None) -> str:
+    if not isinstance(entry, dict):
+        return ""
+    raw = str(entry.get("date") or "").strip()[:10]
+    return raw if _is_valid_trade_date(raw) else ""
+
+
 def build_envelope(
     tab_data: list[dict],
     *,
-    trade_date: str | None = None,
+    trade_date: str | None = None,  # noqa: ARG001 — kept for call-site compatibility; never fills trade_date
     fetched_at: str | None = None,
 ) -> dict:
     fetched_at_str = fetched_at or _now_iso()
@@ -379,8 +515,8 @@ def build_envelope(
     sse = _leg_metrics(sse_entry)
     szse = _leg_metrics(szse_entry)
 
-    sse_date = str(sse_entry.get("date") or "").strip()[:10] if isinstance(sse_entry, dict) else ""
-    szse_date = str(szse_entry.get("date") or "").strip()[:10] if isinstance(szse_entry, dict) else ""
+    sse_date = _payload_date(sse_entry)
+    szse_date = _payload_date(szse_entry)
 
     sse_ok = sse is not None
     szse_ok = szse is not None
@@ -400,22 +536,46 @@ def build_envelope(
             data=_empty_data(),
         )
 
-    resolved_date: str | None = None
-    if sse_ok and szse_ok:
-        if sse_date and sse_date == szse_date:
-            resolved_date = sse_date
-        else:
-            resolved_date = sse_date or szse_date or trade_date
-            warnings.append("沪股通与深股通 trade_date 不一致，合计字段不做相加")
-    elif sse_ok:
-        resolved_date = sse_date or trade_date
-        warnings.append("深股通北向日统计缺失或解析失败，北向合计不可用")
-    else:
-        resolved_date = szse_date or trade_date
-        warnings.append("沪股通北向日统计缺失或解析失败，北向合计不可用")
+    dates_aligned = bool(sse_ok and szse_ok and sse_date and szse_date and sse_date == szse_date)
 
-    dates_aligned = bool(sse_ok and szse_ok and sse_date and sse_date == szse_date)
-    if sse_ok and szse_ok and not dates_aligned:
+    resolved_date: str | None = None
+    if dates_aligned:
+        resolved_date = sse_date
+    elif sse_ok and not szse_ok and sse_date:
+        resolved_date = sse_date
+        warnings.append("深股通北向日统计缺失或解析失败，北向合计不可用")
+    elif szse_ok and not sse_ok and szse_date:
+        resolved_date = szse_date
+        warnings.append("沪股通北向日统计缺失或解析失败，北向合计不可用")
+    elif sse_ok and szse_ok:
+        # Both cores present but dates missing/mismatched — fail-closed partial.
+        status = "partial"
+        if sse_date and szse_date and sse_date != szse_date:
+            warnings.append("沪股通与深股通 trade_date 不一致，合计字段不做相加")
+        else:
+            warnings.append("沪股通与深股通 trade_date 缺失或非法，合计字段不做相加")
+    else:
+        # Single-leg without valid payload date.
+        if sse_ok and not sse_date:
+            warnings.append("沪股通 trade_date 缺失或非法")
+        if szse_ok and not szse_date:
+            warnings.append("深股通 trade_date 缺失或非法")
+        if not szse_ok:
+            warnings.append("深股通北向日统计缺失或解析失败，北向合计不可用")
+        if not sse_ok:
+            warnings.append("沪股通北向日统计缺失或解析失败，北向合计不可用")
+
+    # Optional-field completeness: missing trade_count / etf_turnover cannot be normal.
+    if sse_ok:
+        _append_optional_field_limitations(limitations, leg=sse, leg_key="shanghai_connect")
+    if szse_ok:
+        _append_optional_field_limitations(limitations, leg=szse, leg_key="shenzhen_connect")
+
+    optionals_complete = (
+        (not sse_ok or _leg_optional_complete(sse))
+        and (not szse_ok or _leg_optional_complete(szse))
+    )
+    if status == "normal" and (not dates_aligned or not optionals_complete):
         status = "partial"
 
     def _leg_out(leg: dict | None, market: str) -> dict:
@@ -459,6 +619,10 @@ def build_envelope(
         })
     if active_stocks:
         limitations.append(dict(LIMITATION_ACTIVE_STOCKS_NET_BUY))
+
+    # Guard: never emit normal with null northbound total_turnover.
+    if status == "normal" and total_sum is None:
+        status = "partial"
 
     try:
         now_utc = datetime.fromisoformat(fetched_at_str)
