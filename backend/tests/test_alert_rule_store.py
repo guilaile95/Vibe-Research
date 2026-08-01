@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib
 import multiprocessing
+import os
 import re
 import sqlite3
 import threading
@@ -734,6 +735,123 @@ def test_preexisting_only_alert_rules_fails_closed(db_path):
 
 
 # ---------------------------------------------------------------------------
+# TOCTOU 原子初始化资格 (P1)
+# ---------------------------------------------------------------------------
+
+
+def test_toctou_external_empty_file_race(db_path, monkeypatch):
+    """A observes a missing path, B creates an empty SQLite file, A must fail-closed."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(store, "_OPEN_WAIT_TOTAL_SECONDS", 0.3)
+    real_open = os.open
+
+    def fake_open(path, flags, *args, **kwargs):
+        # B creates a legal empty SQLite database at the race point
+        sqlite3.connect(str(path)).close()
+        raise FileExistsError(f"[Errno 17] File exists: {str(path)}")
+
+    monkeypatch.setattr(store.os, "open", fake_open)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+
+    fp1 = db_fingerprint(db_path)
+    # B's file must be untouched: still empty, no project objects
+    assert len(fp1[1]) == 0
+    conn = sqlite3.connect(str(db_path))
+    objects = conn.execute(
+        "SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"
+    ).fetchall()
+    conn.close()
+    assert objects == []
+
+    # Second attempt (file now pre-existing) also fails closed and changes nothing
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(rule_id="rule.2"), now=T0)
+    fp2 = db_fingerprint(db_path)
+    assert fp2 == fp1
+
+
+def test_toctou_external_unrelated_db_race(db_path, monkeypatch):
+    """A observes a missing path, B creates an unrelated database, A must fail-closed."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    real_open = os.open
+
+    def fake_open(path, flags, *args, **kwargs):
+        conn = sqlite3.connect(str(path))
+        conn.execute("CREATE TABLE other_app (id INTEGER PRIMARY KEY, data TEXT)")
+        conn.execute("INSERT INTO other_app (data) VALUES ('hello')")
+        conn.commit()
+        conn.close()
+        raise FileExistsError(f"[Errno 17] File exists: {str(path)}")
+
+    monkeypatch.setattr(store.os, "open", fake_open)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+
+    conn = sqlite3.connect(str(db_path))
+    assert conn.execute("SELECT data FROM other_app").fetchall() == [("hello",)]
+    names = [
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    ]
+    conn.close()
+    assert "alert_rules" not in names
+    assert "schema_meta" not in names
+
+
+def test_toctou_legitimate_concurrent_initialization(db_path, monkeypatch):
+    """A and B both see a missing path; B wins O_EXCL, A waits and re-validates."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    real_open = os.open
+    started = threading.Event()
+    release = threading.Event()
+    results: dict[str, str] = {}
+
+    def fake_open(path, flags, *args, **kwargs):
+        if not started.is_set():
+            # First caller (A) is parked before its O_EXCL so B wins the race.
+            started.set()
+            assert release.wait(timeout=10), "A was not released in time"
+        return real_open(path, flags, *args, **kwargs)
+
+    def worker_a():
+        try:
+            store.create_alert_rule(rule(rule_id="race.1"), now=T0)
+            results["a"] = "ok"
+        except Exception as exc:
+            results["a"] = type(exc).__name__
+
+    def worker_b():
+        try:
+            store.create_alert_rule(rule(rule_id="race.1"), now=T0)
+            results["b"] = "ok"
+        except Exception as exc:
+            results["b"] = type(exc).__name__
+
+    monkeypatch.setattr(store.os, "open", fake_open)
+    try:
+        t_a = threading.Thread(target=worker_a)
+        t_a.start()
+        assert started.wait(timeout=5), "A never reached the race point"
+        t_b = threading.Thread(target=worker_b)
+        t_b.start()
+        t_b.join(timeout=15)
+        assert results["b"] == "ok", results
+        release.set()
+        t_a.join(timeout=15)
+        assert results["a"] == "AlertRuleAlreadyExistsError", results
+    finally:
+        release.set()
+
+    records = store.list_alert_rules()
+    assert len(records) == 1
+    assert records[0].rule.rule_id == "race.1"
+    assert records[0].revision == 1
+
+
+# ---------------------------------------------------------------------------
 # Schema 结构验证 (P2)
 # ---------------------------------------------------------------------------
 
@@ -877,6 +995,151 @@ def test_revision_without_check_fails_closed(db_path):
         store.create_alert_rule(rule(), now=T0)
 
 
+def test_check_block_comment_fake_fails_closed(db_path):
+    """CHECK text inside /* */ comments is not a real constraint."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _create_schema_variant(
+        db_path,
+        "CREATE TABLE alert_rules (rule_id TEXT PRIMARY KEY, code TEXT NOT NULL, "
+        "enabled INTEGER NOT NULL /* CHECK (enabled IN (0, 1)) */, "
+        "condition_kind TEXT NOT NULL, rule_json TEXT NOT NULL, "
+        "revision INTEGER NOT NULL /* CHECK (revision >= 1) */, "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)",
+    )
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+    assert db_fingerprint(db_path) == before
+
+
+def test_check_line_comment_fake_fails_closed(db_path):
+    """CHECK text inside -- comments is not a real constraint."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _create_schema_variant(
+        db_path,
+        "CREATE TABLE alert_rules (rule_id TEXT PRIMARY KEY, code TEXT NOT NULL,\n"
+        "enabled INTEGER NOT NULL -- CHECK (enabled IN (0, 1))\n"
+        ", condition_kind TEXT NOT NULL, rule_json TEXT NOT NULL,\n"
+        "revision INTEGER NOT NULL -- CHECK (revision >= 1)\n"
+        ", created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)",
+    )
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+    assert db_fingerprint(db_path) == before
+
+
+def test_check_string_default_fake_fails_closed(db_path):
+    """CHECK-like text inside string defaults is not a real constraint."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _create_schema_variant(
+        db_path,
+        "CREATE TABLE alert_rules (rule_id TEXT PRIMARY KEY, code TEXT NOT NULL "
+        "DEFAULT 'CHECK (enabled IN (0, 1))', "
+        "enabled INTEGER NOT NULL, "
+        "condition_kind TEXT NOT NULL, rule_json TEXT NOT NULL, "
+        "revision INTEGER NOT NULL DEFAULT 0, "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)",
+    )
+    before = db_fingerprint(db_path)
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(), now=T0)
+    assert db_fingerprint(db_path) == before
+
+
+# ---------------------------------------------------------------------------
+# 初始化原子性 (P2)
+# ---------------------------------------------------------------------------
+
+
+def _run_initialization_failure(db_path, monkeypatch, target: str) -> None:
+    """让 _initialize 的指定语句失败，验证回滚、无锁残留、半成品不被复用。"""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    real_connect = sqlite3.connect
+    armed = {"on": True}
+
+    class FailingConnection:
+        """把 execute 拦截至目标语句；其余能力透传真实连接。"""
+
+        def __init__(self, conn):
+            self._conn = conn
+
+        @property
+        def row_factory(self):
+            return self._conn.row_factory
+
+        @row_factory.setter
+        def row_factory(self, value):
+            self._conn.row_factory = value
+
+        def execute(self, sql, *params):
+            if armed["on"] and isinstance(sql, str) and target in sql:
+                raise sqlite3.OperationalError("simulated failure")
+            return self._conn.execute(sql, *params)
+
+        def close(self):
+            return self._conn.close()
+
+    def failing_connect(*args, **kwargs):
+        return FailingConnection(real_connect(*args, **kwargs))
+
+    monkeypatch.setattr(store.sqlite3, "connect", failing_connect)
+    try:
+        with pytest.raises(store.AlertRuleStoreError):
+            store.create_alert_rule(rule(), now=T0)
+    finally:
+        armed["on"] = False
+
+    # 无部分项目 schema（表、索引、metadata 均不残留）
+    conn = real_connect(str(db_path))
+    objects = conn.execute(
+        "SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"
+    ).fetchall()
+    conn.close()
+    bad = [
+        name
+        for _, name in objects
+        if name in ("schema_meta", "alert_rules") or name.startswith("idx_alert_rules")
+    ]
+    assert bad == [], f"partial schema objects remain: {bad}"
+
+    # 无锁残留：新连接立即可取写锁
+    conn = real_connect(str(db_path), isolation_level=None)
+    conn.execute("BEGIN IMMEDIATE")
+    conn.execute("ROLLBACK")
+    conn.close()
+
+    # 半成品文件永远不会被当作合法数据库或再次初始化
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.list_alert_rules()
+    with pytest.raises(store.AlertRuleStoreCorruptedError):
+        store.create_alert_rule(rule(rule_id="rule.2"), now=T0)
+
+
+def test_initialization_table_failure_rolls_back(db_path, monkeypatch):
+    _run_initialization_failure(db_path, monkeypatch, "CREATE TABLE alert_rules")
+
+
+def test_initialization_index_failure_rolls_back(db_path, monkeypatch):
+    _run_initialization_failure(
+        db_path, monkeypatch, "CREATE INDEX idx_alert_rules_code"
+    )
+
+
+def test_initialization_metadata_failure_rolls_back(db_path, monkeypatch):
+    _run_initialization_failure(db_path, monkeypatch, "INSERT INTO schema_meta")
+
+
+def test_initialization_commit_failure_rolls_back(db_path, monkeypatch):
+    _run_initialization_failure(db_path, monkeypatch, "COMMIT")
+
+
 # ---------------------------------------------------------------------------
 # 并发测试 (P2)
 # ---------------------------------------------------------------------------
@@ -962,7 +1225,7 @@ def test_concurrent_first_initialization(db_path):
 def test_concurrent_create_same_rule_id(db_path):
     """Two threads race to create the same rule_id on an already-initialized db."""
     store.create_alert_rule(rule(rule_id="seed"), now=T0)  # initialize db
-    rounds = 5
+    rounds = 20
     for round_idx in range(rounds):
         target_id = f"race.{round_idx}"
         results: list[str] = []
@@ -1038,6 +1301,28 @@ def test_uri_hash_in_path(tmp_path, monkeypatch):
     assert sorted(p.name for p in hash_dir.iterdir()) == ["alert#rules.sqlite3"]
 
 
+def test_uri_percent_in_path(tmp_path, monkeypatch):
+    pct_dir = tmp_path / "dir%with%percent"
+    db = pct_dir / "alert%rules.sqlite3"
+    monkeypatch.setenv(_DB_ENV, str(db))
+    monkeypatch.delenv("VR_DATA_DIR", raising=False)
+    record = store.create_alert_rule(rule(), now=T0)
+    assert store.get_alert_rule("rule.1") == record
+    assert store.list_alert_rules() == [record]
+    assert sorted(p.name for p in pct_dir.iterdir()) == ["alert%rules.sqlite3"]
+
+
+def test_uri_quote_in_path(tmp_path, monkeypatch):
+    quote_dir = tmp_path / "dir'quote"
+    db = quote_dir / "alert'rules.sqlite3"
+    monkeypatch.setenv(_DB_ENV, str(db))
+    monkeypatch.delenv("VR_DATA_DIR", raising=False)
+    record = store.create_alert_rule(rule(), now=T0)
+    assert store.get_alert_rule("rule.1") == record
+    assert store.list_alert_rules() == [record]
+    assert sorted(p.name for p in quote_dir.iterdir()) == ["alert'rules.sqlite3"]
+
+
 def test_uri_windows_question_mark_safe_failure(tmp_path, monkeypatch):
     """On Windows, '?' is illegal in filenames. Must fail with wrapped error."""
     bad_dir = tmp_path / "normal"
@@ -1108,7 +1393,7 @@ def test_year_9999_no_lock_residue_after_failure(db_path):
 
 def test_concurrent_create_different_rule_ids(db_path):
     """Two threads concurrently create different rule_ids on a fresh database."""
-    rounds = 5
+    rounds = 10
     for round_idx in range(rounds):
         round_path = db_path.parent / f"diff_{round_idx}" / "alert_rules.sqlite3"
         round_path.parent.mkdir(parents=True, exist_ok=True)
