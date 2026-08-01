@@ -8,7 +8,7 @@ import {
   Megaphone,
   RefreshCw,
 } from "lucide-react";
-import type { DisclosureItem, KlineBar } from "@/lib/api";
+import type { DisclosureItem, KlineBar, TechnicalIndicators } from "@/lib/api";
 import { GlassCard } from "./GlassCard";
 import { KlineChart } from "./KlineChart";
 import type { PanelId, PanelState, PanelStatus } from "./optionalDataPanelState";
@@ -27,6 +27,7 @@ interface Props {
   infoErr: string | null;
   disc: DisclosureItem[];
   discErr: string | null;
+  technicalIndicators: TechnicalIndicators | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +114,7 @@ export function OptionalDataPanel({
   infoErr,
   disc,
   discErr,
+  technicalIndicators,
 }: Props) {
   const state = (k: PanelId) => panelStates[k]?.status ?? "idle";
 
@@ -140,7 +142,7 @@ export function OptionalDataPanel({
         >
           <div className="space-y-2">
             <p className="text-[11px] text-muted-foreground/60">最近 {kline.length} 个交易日 OHLC。</p>
-            <KlineChart bars={kline} />
+            <KlineChart bars={kline} indicators={technicalIndicators} />
           </div>
         </PanelContent>
       </SubToggle>
