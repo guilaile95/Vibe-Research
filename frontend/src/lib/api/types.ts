@@ -977,6 +977,9 @@ export interface TechnicalIndicatorLatest {
   bollinger_middle: number | null;
   bollinger_lower: number | null;
   volume_ratio_5_20: number | null;
+  kdj_k: number | null;
+  kdj_d: number | null;
+  kdj_j: number | null;
 }
 
 export interface TechnicalIndicatorSeriesPoint {
@@ -991,6 +994,9 @@ export interface TechnicalIndicatorSeriesPoint {
   macd_histogram: number | null;
   rsi14: number | null;
   volume_ratio_5_20: number | null;
+  kdj_k: number | null;
+  kdj_d: number | null;
+  kdj_j: number | null;
 }
 
 export interface TechnicalIndicators {

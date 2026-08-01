@@ -219,6 +219,30 @@ export function TechnicalIndicatorsCard({ env, loading, error }: Props) {
         </div>
       </div>
 
+      <div className="mt-4 rounded-lg bg-muted/30 p-3">
+        <p className="mb-2 text-xs font-medium text-muted-foreground">KDJ (9,3,3)</p>
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <p className="text-xs text-muted-foreground">K</p>
+            <p className="mt-0.5 font-mono text-sm font-bold text-foreground">
+              {formatIndicator(latest.kdj_k)}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">D</p>
+            <p className="mt-0.5 font-mono text-sm font-bold text-foreground">
+              {formatIndicator(latest.kdj_d)}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">J</p>
+            <p className="mt-0.5 font-mono text-sm font-bold text-foreground">
+              {formatIndicator(latest.kdj_j)}
+            </p>
+          </div>
+        </div>
+      </div>
+
       <div className="mt-4 flex items-center gap-3 rounded-lg bg-muted/30 p-3">
         <span className="text-xs text-muted-foreground">RSI14</span>
         <MiniBar value={latest.rsi14} min={0} max={100} />
