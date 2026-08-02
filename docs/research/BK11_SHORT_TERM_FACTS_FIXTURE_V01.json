@@ -1,14 +1,17 @@
 {
   "schema_version": "bk11-short-term-facts-fixture.v0.1",
+  "fixture_kind": "synthetic-normalized",
   "generated_at": "2026-08-01T14:30:00.000000Z",
-  "description": "BK-11 Slice 0 offline fixture for unit testing short-term market fact indicators. Numbers are sanitized snapshots from real trading days, not random.",
+  "description": "BK-11 Slice 0 offline fixture for unit testing short-term market fact indicators. All numeric values are manually constructed synthetic values used only to test schema and calculation consistency. They do not represent actual historical market data.",
   "trade_dates": ["2026-07-28", "2026-07-29", "2026-07-30"],
   "market_scope": {
     "included": ["SH main", "SZ main", "ChiNext", "STAR"],
     "excluded": ["BSE (8xx)", "delisting", "IPO first day"]
   },
-  "scenarios": {
-    "normal": {
+  "cases": [
+    {
+      "case_id": "normal",
+      "case_name": "正常交易日收盘后快照",
       "status": "normal",
       "data_trade_date": "2026-07-30",
       "observed_at": "2026-07-30T07:05:00.000000Z",
@@ -33,7 +36,7 @@
         "yzt_count": 54,
         "break_rate": 0.256,
         "seal_rate": 0.744,
-        "max_boards": 7,
+        "max_boards": 5,
         "lianban_count": 18,
         "promotion_rate": 0.333,
         "ladder": [
@@ -54,7 +57,9 @@
         "PF-06": true
       }
     },
-    "partial": {
+    {
+      "case_id": "partial",
+      "case_name": "盘中集合竞价覆盖率不足",
       "status": "partial",
       "data_trade_date": "2026-07-29",
       "observed_at": "2026-07-29T02:10:00.000000Z",
@@ -79,7 +84,7 @@
         "yzt_count": 0,
         "break_rate": 0.294,
         "seal_rate": 0.706,
-        "max_boards": 5,
+        "max_boards": 3,
         "lianban_count": 4,
         "promotion_rate": null,
         "ladder": [
@@ -98,7 +103,9 @@
         "PF-06": true
       }
     },
-    "unavailable": {
+    {
+      "case_id": "unavailable",
+      "case_name": "全市场快照获取失败",
       "status": "unavailable",
       "data_trade_date": "2026-07-28",
       "observed_at": "2026-07-28T01:00:00.000000Z",
@@ -116,7 +123,7 @@
         "PF-06": false
       }
     }
-  },
+  ],
   "cross_source_audit": {
     "dates_audited": ["2026-07-28", "2026-07-29", "2026-07-30"],
     "primary_source": "eastmoney_push2ex",
@@ -148,7 +155,7 @@
     "loss_effect": "CONDITIONAL_GO",
     "theme_structure": "CONDITIONAL_GO"
   },
-  "overall_decision": "GO",
+  "overall_decision": "CONDITIONAL_GO",
   "slice1_entry_conditions": [
     "Slice 0 audit committed and pushed",
     "User explicitly authorizes Slice 1",
