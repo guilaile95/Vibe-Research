@@ -16,6 +16,13 @@
 
 整体决策为 `CONDITIONAL GO`。Slice 1 仅允许实现市场宽度、涨停数量、跌停数量、炸板数量、基础 break/seal 比例。其余指标（晋级率、premium、loss_effect、seal quality、题材结构、历史回补、T+1 闭环）在合同未完成验证前继续阻断。
 
+Slice 1 blocked scope 显式包含：
+
+```text
+- touched_limit_down_count：NO-GO；现有来源无法区分收盘跌停与盘中触及跌停后打开，不得进入 Slice 1。
+- seal_quality_full：NO-GO；完整封板质量未定义（九项子字段合同见 §8.6，其中 seal_volume 与 seal_ratio 为 NO-GO）。
+```
+
 进入 Slice 1 的硬约束：
 
 ```text
@@ -348,7 +355,7 @@ advance_count + decline_count + flat_count = valid_count
 
 ## 8. Metric Contract Matrix
 
-每个指标具备完整 16 字段合同。未验证项标 `unclear` / `not verified`。不得使用"同上/见前文/按通用规则/N/A"等模糊值，除非字段确实不适用并写明原因。
+每个指标具备完整 16 字段合同（共 34 个 metric_id 合同，数量以机械统计为准，见 §8.8）。未验证项标 `unclear` / `not verified`。不得使用"同上/见前文/按通用规则/N/A"等模糊值，除非字段确实不适用并写明原因。
 
 ### 8.1 市场宽度指标
 
@@ -847,18 +854,191 @@ zb_pool 是否为触板未封: not independently verified
 decision: CONDITIONAL GO
 ```
 
-seal_rate 不等同于完整封板质量。逐字段审计：
+seal_rate 不等同于完整封板质量。候选字段存在性审计：
 
-| 字段 | 来源 | decision | 依据 |
+| 字段 | 来源 | 存在性 | 依据 |
 |------|------|---------|------|
-| first_limit_up_time | 东财 fbt | GO | 字段存在 |
-| last_limit_up_time | unclear | NO-GO | 来源未确认 |
-| open_count（开板次数） | 东财 zttj / THS open_num | CONDITIONAL GO | 字段存在但语义未独立验证 |
-| seal_amount（封单金额） | 东财 fund | CONDITIONAL GO | 字段存在但未验证 |
-| seal_volume（封单量） | unclear | NO-GO | 来源未确认 |
-| seal_ratio（封单比） | unclear | NO-GO | 需计算，来源字段不全 |
-| turnover（换手率） | 全A快照 | GO | 字段存在 |
-| float_market_cap（流通市值） | 全A快照 | GO | 字段存在 |
+| first_limit_up_time | 东财 fbt | 存在 | 字段存在 |
+| last_limit_up_time | unclear | 未确认 | 来源未确认 |
+| open_count（开板次数） | 东财 zttj / THS open_num | 存在 | 字段存在但语义未独立验证 |
+| seal_amount（封单金额） | 东财 fund | 存在 | 字段存在但未验证 |
+| seal_volume（封单量） | unclear | 未确认 | 来源未确认 |
+| seal_ratio（封单比） | unclear | 未确认 | 需计算，来源字段不全 |
+| turnover（成交额/换手率） | 全A快照 | 存在 | 字段存在；拆分为 turnover_amount 与 turnover_rate |
+| float_market_cap（流通市值） | 全A快照 | 存在 | 字段存在 |
+
+以下为封板质量子字段完整合同。turnover 因单位必须区分 CNY 与 percentage 而拆分为 turnover_amount 与 turnover_rate 两项合同。九项子字段均未完成来源语义独立验证，不得升级为无条件 GO；seal_quality_full 保持 NO-GO；这些合同不扩大 Slice 1 允许范围。
+
+```text
+metric_id: first_limit_up_time
+definition: 当日首次触及涨停价的交易所本地时间
+unit: Asia/Shanghai time
+numerator: not applicable; timestamp fact, not a ratio
+denominator: not applicable; timestamp fact, not a ratio
+universe: zt_pool
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 候选供应商首次封板时间字段（东财 push2ex getTopicZTPool 字段 fbt）；semantics not independently verified
+formula: 供应商字段直接读取
+missing_semantics: 字段缺失时 null
+partial_condition: transport 成功但字段缺失时 null
+unavailable_condition: 池 transport 失败时 null
+limitations: 字段语义未独立验证；不得冒充交易所官方时间戳
+slice: 2
+decision: CONDITIONAL GO
+```
+
+```text
+metric_id: last_limit_up_time
+definition: 当日最后一次封住涨停价的交易所本地时间
+unit: Asia/Shanghai time
+numerator: not applicable; timestamp fact, not a ratio
+denominator: not applicable; timestamp fact, not a ratio
+universe: zt_pool
+trade_date: current_trade_date（当前快照交易日）
+session: final only
+source_fields: unclear（来源未提供该字段）
+formula: 供应商字段直接读取（若未来确认来源）
+missing_semantics: 来源字段未确认时 null
+partial_condition: null（字段未确认前无 partial 语义）
+unavailable_condition: 来源字段未确认，无法计算
+limitations: 必须区分最后触板、最后封板和收盘封板；当前语义未独立确认
+slice: 2
+decision: NO-GO
+```
+
+```text
+metric_id: open_count
+definition: 首次封板后再次打开涨停的次数
+unit: count
+numerator: not applicable; per-stock count fact, not a ratio
+denominator: not applicable; per-stock count fact, not a ratio
+universe: zt_pool
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 候选开板次数字段（东财 push2ex zttj / THS limit_up_pool 字段 open_num）；semantics not independently verified
+formula: 供应商字段直接读取，或基于逐笔/分钟行情计算
+missing_semantics: 字段缺失时 null
+partial_condition: transport 成功但字段缺失时 null
+unavailable_condition: 池 transport 失败时 null
+limitations: 当前来源字段语义未独立确认；不得与炸板数量（failed_limit_up_count）混用
+slice: 2
+decision: CONDITIONAL GO
+```
+
+```text
+metric_id: seal_amount
+definition: 封单金额
+unit: CNY
+numerator: not applicable; absolute amount, not a ratio
+denominator: not applicable; absolute amount, not a ratio
+universe: zt_pool
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 候选封单资金字段（东财 push2ex getTopicZTPool 字段 fund）；semantics not independently verified
+formula: 供应商字段直接读取
+missing_semantics: 字段缺失时 null
+partial_condition: transport 成功但字段缺失时 null
+unavailable_condition: 池 transport 失败时 null
+limitations: 买一挂单金额、总委托金额和供应商估算值必须区分；当前未确认字段属于哪一种
+slice: 2
+decision: CONDITIONAL GO
+```
+
+```text
+metric_id: seal_volume
+definition: 封单数量
+unit: shares 或 lots（必须明确来源单位，当前未确认）
+numerator: not applicable; absolute quantity, not a ratio
+denominator: not applicable; absolute quantity, not a ratio
+universe: zt_pool
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: unclear（来源未提供该字段）
+formula: 供应商字段直接读取（若未来确认来源）
+missing_semantics: 来源字段未确认时 null
+partial_condition: null（字段未确认前无 partial 语义）
+unavailable_condition: 来源字段未确认，无法计算
+limitations: 单位与复权语义未验证
+slice: 2
+decision: NO-GO
+```
+
+```text
+metric_id: seal_ratio
+definition: 封单比（候选定义：seal_amount / float_market_cap；备选 seal_volume / float_shares，未确定唯一权威定义）
+unit: ratio [0,1]（候选分母为 float_market_cap 时）
+numerator: seal_amount
+denominator: float_market_cap（候选；备选 float_shares，未确定）
+universe: zt_pool
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: unclear（seal_volume/float_shares 候选字段未确认；seal_amount 与 float_market_cap 见各自合同）
+formula: seal_amount / float_market_cap（候选）
+missing_semantics: 分母为 0 或分子缺失时 null
+partial_condition: 任一输入字段缺失时 null
+unavailable_condition: 来源字段未确认，无法计算
+limitations: 无唯一权威分母定义；不得输出无分母的"封单比例"；分子 seal_amount 语义未独立验证
+slice: 2
+decision: NO-GO as a standardized metric
+```
+
+```text
+metric_id: turnover_amount
+definition: 当日成交额（turnover 拆分项之一；turnover 因单位必须区分 CNY 与 percentage 而拆分为 turnover_amount 与 turnover_rate）
+unit: CNY
+numerator: not applicable; absolute amount, not a ratio
+denominator: not applicable; absolute amount, not a ratio
+universe: zt_pool（封板质量语境下按 zt_pool 过滤）
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 全A快照成交额字段（东财 push2，候选 semantics not verified）
+formula: 供应商字段直接读取
+missing_semantics: 字段缺失时 null
+partial_condition: transport 成功但字段缺失时 null
+unavailable_condition: 快照 transport 失败时 null
+limitations: 不得与换手率（turnover_rate）混为同一指标；复权与停牌语义未验证
+slice: 2
+decision: CONDITIONAL GO
+```
+
+```text
+metric_id: turnover_rate
+definition: 当日换手率（turnover 拆分项之二；与 turnover_amount 分单位立约）
+unit: percentage
+numerator: not applicable; percentage field, not an aggregated ratio
+denominator: not applicable; percentage field, not an aggregated ratio
+universe: zt_pool（封板质量语境下按 zt_pool 过滤）
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 全A快照换手率字段（东财 push2，候选 semantics not verified）
+formula: 供应商字段直接读取
+missing_semantics: 字段缺失时 null
+partial_condition: transport 成功但字段缺失时 null
+unavailable_condition: 快照 transport 失败时 null
+limitations: 不得与成交额（turnover_amount）混为同一指标；分母口径（流通股本）未独立验证
+slice: 2
+decision: CONDITIONAL GO
+```
+
+```text
+metric_id: float_market_cap
+definition: 流通市值
+unit: CNY
+numerator: not applicable; absolute amount, not a ratio
+denominator: not applicable; absolute amount, not a ratio
+universe: zt_pool（封板质量语境下按 zt_pool 过滤）
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 候选流通市值字段（东财 push2 全A快照，semantics not verified）
+formula: 供应商字段直接读取
+missing_semantics: 字段缺失时 null
+partial_condition: transport 成功但字段缺失时 null
+unavailable_condition: 快照 transport 失败时 null
+limitations: 来源时间点、单位缩放和停牌证券语义未验证
+slice: 2
+decision: CONDITIONAL GO
+```
 
 ### 8.7 Premium 与 Loss Effect 详细定义
 
@@ -901,6 +1081,16 @@ loss_effect 完整定义应比较（均未验证）：
 最小定义（昨日涨停股次日下跌比例）仅代表该比例，不代表完整亏钱效应。
 ```
 
+### 8.8 合同数量统计
+
+```text
+完整 16 字段 metric_id 合同总数：34
+（原有 25 项 + 封板质量子字段 9 项：first_limit_up_time / last_limit_up_time / open_count /
+ seal_amount / seal_volume / seal_ratio / turnover_amount / turnover_rate / float_market_cap；
+ 其中 turnover 按单位拆分为 turnover_amount 与 turnover_rate 两项）
+数量以机械统计 metric_id 唯一值为准；seal_quality_full 为聚合能力标识，保持 NO-GO，不在 34 项合同之内。
+```
+
 ---
 
 ## 9. Exact Numerators and Denominators
@@ -920,6 +1110,15 @@ loss_effect 完整定义应比较（均未验证）：
 | failed_board_rate | failed_limit_up_count | limit_up_count + failed_limit_up_count | null（合法零值） |
 | sealed_limit_up_count | len(zt_pool) | not applicable | — |
 | seal_rate | sealed_limit_up_count | limit_up_count + failed_limit_up_count | null（合法零值） |
+| first_limit_up_time | not applicable; timestamp fact, not a ratio | not applicable; timestamp fact, not a ratio | — |
+| last_limit_up_time | not applicable; timestamp fact, not a ratio | not applicable; timestamp fact, not a ratio | — |
+| open_count | not applicable; per-stock count fact, not a ratio | not applicable; per-stock count fact, not a ratio | — |
+| seal_amount | not applicable; absolute amount, not a ratio | not applicable; absolute amount, not a ratio | — |
+| seal_volume | not applicable; absolute quantity, not a ratio | not applicable; absolute quantity, not a ratio | — |
+| seal_ratio | seal_amount | float_market_cap（候选；备选 float_shares，未确定） | null |
+| turnover_amount | not applicable; absolute amount, not a ratio | not applicable; absolute amount, not a ratio | — |
+| turnover_rate | not applicable; percentage field, not an aggregated ratio | not applicable; percentage field, not an aggregated ratio | — |
+| float_market_cap | not applicable; absolute amount, not a ratio | not applicable; absolute amount, not a ratio | — |
 | up_ratio | advance_count | valid_count | null |
 | layered_promotion_rates | 昨日N板→今日N+1板匹配数 | 昨日N板总数 | null |
 | next_open_return | 次日开盘价 - baseline_price | baseline_price | null |
@@ -1213,7 +1412,7 @@ fixture 中的数字为手动构造的合成值，仅用于测试 schema 和计�
 | touched limit up | CONDITIONAL GO | zt/zb 互斥性未独立验证 |
 | touched limit down | NO-GO | 现有来源无法区分收盘跌停与盘中触及跌停 |
 | failed boards (zb) | GO | 炸板池已实现 |
-| seal quality | NO-GO | 完整封板质量未定义（seal_rate 仅基础比例） |
+| seal quality | NO-GO | 完整封板质量未定义；九项子字段合同见 §8.6（seal_volume 与 seal_ratio 为 NO-GO，其余 CONDITIONAL GO） |
 | ladder | GO | 涨停池 lbc 已实现 |
 | promotion | CONDITIONAL GO | 跨日身份匹配未机械验证 |
 | premium (next_open/next_high) | NO-GO as currently specified | 来源字段未确认，baseline unclear |
@@ -1259,7 +1458,8 @@ fixture 中的数字为手动构造的合成值，仅用于测试 schema 和计�
 - 错误总体晋级率（需分层转换）
 - 未确认 premium
 - 未定义 loss_effect（完整版）
-- 完整 seal quality
+- touched_limit_down_count：NO-GO；现有来源无法区分收盘跌停与盘中触及跌停后打开，不得进入 Slice 1
+- 完整 seal quality（seal_quality_full：NO-GO；九项子字段合同见 §8.6）
 - theme structure
 - 历史回补
 - T+1 闭环
@@ -1275,7 +1475,7 @@ fixture 中的数字为手动构造的合成值，仅用于测试 schema 和计�
 3. 许可仍为 unclear，仅用于受控研究环境。
 4. 保留 provenance（source_id / trade_date / fetched_at / snapshot_at）。
 5. Data Health 可降级，合法零值不判失败。
-6. 不实现未通过指标。
+6. 不实现未通过指标；touched_limit_down_count 与 seal_quality_full 为 NO-GO，显式阻断于 Slice 1 blocked scope。
 7. Slice 1 范围：市场宽度 + 涨跌停 + 炸板 + 基础 break/seal。
 8. Slice 1 必须：纯计算、无 LLM、统一 envelope、接入 Data Health、固定 fixture 测试。
 9. Slice 1 不得：新建前端页面、修改 router/app、引入新依赖。
@@ -1291,7 +1491,7 @@ fixture 中的数字为手动构造的合成值，仅用于测试 schema 和计�
 3. THS 三日数值未完整验证：Q 未本轮机械验证，标 not verified。
 4. final 时点未验证：稳定窗口为建议值，来源未提供 is_final。
 5. 合法零值需响应状态区分：0 涨停不得自动视为 partial。
-6. 供应商池语义未独立确认：zt_pool 是否收盘封板、zb_pool 是否触板未封、二者互斥性、二者之和是否等于 touched_limit_up_count 均 not independently verified。
+6. 供应商池语义未独立确认：zt_pool 是否收盘封板、zb_pool 是否触板未封、二者互斥性、二者之和是否等于 touched_limit_up_count 均 not independently verified。封板质量九项子字段（first_limit_up_time / last_limit_up_time / open_count / seal_amount / seal_volume / seal_ratio / turnover_amount / turnover_rate / float_market_cap）已具备完整 16 字段合同（§8.6），但来源语义均未独立验证；seal_quality_full 保持 NO-GO，touched_limit_down_count 保持 NO-GO 且显式阻断于 Slice 1。
 7. zdp 语义未确认：候选字段 zdp 的含义（今日涨幅 vs 次日收益）未确认。
 8. 历史回补未审计：Slice 4 范围。
 9. 题材归一化未审计：同义词、重复概念、主线条规则均未定义。
