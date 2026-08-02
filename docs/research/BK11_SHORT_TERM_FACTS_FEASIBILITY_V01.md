@@ -80,13 +80,14 @@ Tier C: 社区库、包装器、逆向客户端或非正式来源
 
 ### 4.2 来源分级
 
-| 来源 | Tier | 依据 |
+| source_id | Tier | 依据 |
 |------|------|------|
-| Eastmoney push2/push2ex | Tier B | 商业数据供应商（东方财富）公开接口，非交易所直发 |
-| THS 10jqka | Tier B | 商业数据供应商（同花顺）公开页面 |
-| Tencent qt.gtimg.cn | Tier B | 商业数据供应商（腾讯）公开行情接口 |
-| mootdx | Tier C | 社区逆向通达信客户端协议的第三方库 |
-| a-stock-data SKILL | 包装层 | 不是独立来源，是对上述来源的封装 |
+| eastmoney_limit_pool | Tier B | 商业数据供应商（东方财富）涨停板四池公开接口，非交易所直发 |
+| eastmoney_market_breadth | Tier B | 商业数据供应商（东方财富）全A快照公开接口，非交易所直发 |
+| ths_limit_up_reveal | Tier B | 商业数据供应商（同花顺）公开页面 |
+| tencent_quote | Tier B | 商业数据供应商（腾讯）公开行情接口 |
+| mootdx_client | Tier C | 社区逆向通达信客户端协议的第三方库 |
+| a_stock_data_wrapper | 包装层 | 不是独立来源，是对上述来源的封装 |
 
 ### 4.3 Tier A 核心来源
 
@@ -125,7 +126,7 @@ cache_status: unclear
 persistence_status: unclear
 ui_display_status: unclear
 redistribution_status: unclear
-anti_bot_or_failure_behavior: 间歇 403/429/HTTP 000/空响应
+anti_bot_or_failure_behavior: 存在限流、空响应或访问控制风险；具体策略 not verified
 recommended_use: 涨停/炸板/跌停/昨涨停数量与连板梯队
 verification_status: reviewer-provided evidence, not independently reverified by Q
 ```
@@ -155,7 +156,7 @@ cache_status: unclear
 persistence_status: unclear
 ui_display_status: unclear
 redistribution_status: unclear
-anti_bot_or_failure_behavior: 同 push2ex
+anti_bot_or_failure_behavior: 存在限流、空响应或访问控制风险；具体策略 not verified
 recommended_use: 市场宽度（涨跌家数、成交额）
 verification_status: reviewer-provided evidence, not independently reverified by Q
 ```
@@ -185,7 +186,7 @@ cache_status: unclear
 persistence_status: unclear
 ui_display_status: unclear
 redistribution_status: unclear
-anti_bot_or_failure_behavior: unclear
+anti_bot_or_failure_behavior: 存在限流、空响应或访问控制风险；具体策略 not verified
 recommended_use: 题材归因增强（非涨停数硬交叉源，含 ST 口径差异）
 verification_status: not verified（Q 未本轮机械验证）
 ```
@@ -208,14 +209,14 @@ source_updated_at_field: unclear
 intraday_semantics: 盘中实时
 final_semantics: 收盘后最终值，来源未显式标记 is_final
 history_depth: 无涨停板池能力
-rate_limit: unclear（社区报告不封 IP，但无官方条款）
+rate_limit: unclear
 stability: unclear
 licensing_status: unclear
 cache_status: unclear
 persistence_status: unclear
 ui_display_status: unclear
 redistribution_status: unclear
-anti_bot_or_failure_behavior: unclear
+anti_bot_or_failure_behavior: 存在限流、空响应或访问控制风险；具体策略 not verified
 recommended_use: 个股行情校验，不提供全市场统计或涨停池
 verification_status: not verified
 ```
@@ -223,7 +224,7 @@ verification_status: not verified
 ### 5.5 mootdx
 
 ```text
-source_id: mootdx
+source_id: mootdx_client
 source_name: 通达信协议社区库
 tier: C
 authority: 社区逆向客户端，非官方
@@ -245,7 +246,7 @@ cache_status: unclear
 persistence_status: unclear
 ui_display_status: unclear
 redistribution_status: unclear
-anti_bot_or_failure_behavior: IP 老化导致连接失败
+anti_bot_or_failure_behavior: 存在限流、空响应或访问控制风险；具体策略 not verified
 recommended_use: 不作为短线事实源（无涨停板池）
 verification_status: not verified
 ```
@@ -347,7 +348,7 @@ advance_count + decline_count + flat_count = valid_count
 
 ## 8. Metric Contract Matrix
 
-每个指标具备完整合同。未验证项标 `unclear` / `not verified`。
+每个指标具备完整 16 字段合同。未验证项标 `unclear` / `not verified`。不得使用"同上/见前文/按通用规则/N/A"等模糊值，除非字段确实不适用并写明原因。
 
 ### 8.1 市场宽度指标
 
@@ -356,16 +357,16 @@ metric_id: advance_count
 definition: 当日上涨股票数
 unit: 股
 numerator: valid_count 中 change_pct > 0 的股票数
-denominator: 无（计数）
+denominator: not applicable; 计数指标，非比率
 universe: breadth_universe
-trade_date: 请求日期
-session: 当前场次
-source_fields: 全A快照 change_pct
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final（盘中可初步计算，收盘后稳定）
+source_fields: 全A快照 change_pct（东财 push2 字段 f3）
 formula: count(change_pct > 0)
 missing_semantics: null（不缺失）
 partial_condition: valid_count 覆盖率不足时 status=partial
-unavailable_condition: 快照不可达时 null
-limitations: 单源（东财）
+unavailable_condition: 快照 transport 失败时 null
+limitations: 单源（东财），无交叉验证
 slice: 1
 decision: GO
 ```
@@ -375,13 +376,16 @@ metric_id: decline_count
 definition: 当日下跌股票数
 unit: 股
 numerator: valid_count 中 change_pct < 0 的股票数
-denominator: 无
+denominator: not applicable; 计数指标，非比率
 universe: breadth_universe
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 全A快照 change_pct（东财 push2 字段 f3）
 formula: count(change_pct < 0)
 missing_semantics: null
-partial_condition: 同 advance_count
-unavailable_condition: 同 advance_count
-limitations: 单源
+partial_condition: valid_count 覆盖率不足时 status=partial
+unavailable_condition: 快照 transport 失败时 null
+limitations: 单源（东财）
 slice: 1
 decision: GO
 ```
@@ -391,13 +395,16 @@ metric_id: flat_count
 definition: 当日平盘股票数
 unit: 股
 numerator: valid_count 中 change_pct == 0 的股票数
-denominator: 无
+denominator: not applicable; 计数指标，非比率
 universe: breadth_universe
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 全A快照 change_pct（东财 push2 字段 f3）
 formula: count(change_pct == 0)
 missing_semantics: null
-partial_condition: 同 advance_count
-unavailable_condition: 同 advance_count
-limitations: 单源
+partial_condition: valid_count 覆盖率不足时 status=partial
+unavailable_condition: 快照 transport 失败时 null
+limitations: 单源（东财）
 slice: 1
 decision: GO
 ```
@@ -407,13 +414,16 @@ metric_id: suspended_count
 definition: 当日停牌股票数
 unit: 股
 numerator: eligible_count 中无有效涨跌幅的股票数
-denominator: 无
+denominator: not applicable; 计数指标，非比率
 universe: breadth_universe
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 全A快照 停牌标记（东财 push2 字段，候选 semantics not verified）
 formula: eligible_count - valid_count
 missing_semantics: null
-partial_condition: 同 advance_count
-unavailable_condition: 同 advance_count
-limitations: 单源
+partial_condition: valid_count 覆盖率不足时 status=partial
+unavailable_condition: 快照 transport 失败时 null
+limitations: 单源（东财）；停牌标记字段 semantics not verified
 slice: 1
 decision: GO
 ```
@@ -422,14 +432,17 @@ decision: GO
 metric_id: eligible_count
 definition: breadth_universe 总股票数
 unit: 股
-numerator: 无
-denominator: 无
+numerator: not applicable; 计数指标，非比率
+denominator: not applicable; 计数指标，非比率
 universe: breadth_universe
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 全A快照 股票代码列表（东财 push2 字段 f12）
 formula: count(breadth_universe)
 missing_semantics: null
-partial_condition: 同 advance_count
-unavailable_condition: null
-limitations: 单源
+partial_condition: valid_count 覆盖率不足时 status=partial
+unavailable_condition: 快照 transport 失败时 null
+limitations: 单源（东财）
 slice: 1
 decision: GO
 ```
@@ -441,12 +454,15 @@ metric_id: limit_up_count
 definition: 当日涨停股票数（收盘封板）
 unit: 股
 numerator: limit_pool_universe 中 zt_pool 的股票数
-denominator: 无
+denominator: not applicable; 计数指标，非比率
 universe: limit_pool_universe
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final（盘中动态变化，final 为稳定值）
+source_fields: 东财 push2ex getTopicZTPool 返回的 pool 数组
 formula: len(zt_pool)
 missing_semantics: null
-partial_condition: 池请求成功但 trade_date 不匹配时 partial
-unavailable_condition: 池请求失败时 null
+partial_condition: transport 成功但 trade_date 不匹配时 partial
+unavailable_condition: 池 transport 失败时 null
 limitations: 单源（东财），zt_pool 是否为收盘封板 not independently verified
 slice: 1
 decision: GO
@@ -457,13 +473,16 @@ metric_id: limit_down_count
 definition: 当日跌停股票数
 unit: 股
 numerator: limit_pool_universe 中 dt_pool 的股票数
-denominator: 无
+denominator: not applicable; 计数指标，非比率
 universe: limit_pool_universe
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 东财 push2ex getTopicDTPool 返回的 pool 数组
 formula: len(dt_pool)
 missing_semantics: null
-partial_condition: 同 limit_up_count
-unavailable_condition: 同 limit_up_count
-limitations: 单源
+partial_condition: transport 成功但 trade_date 不匹配时 partial
+unavailable_condition: 池 transport 失败时 null
+limitations: 单源（东财）
 slice: 1
 decision: GO
 ```
@@ -473,15 +492,37 @@ metric_id: touched_limit_up_count
 definition: 当日触及涨停的股票数（封板 + 炸板）
 unit: 股
 numerator: limit_up_count + failed_limit_up_count
-denominator: 无
+denominator: not applicable; 计数指标，非比率
 universe: limit_pool_universe
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 东财 push2ex getTopicZTPool + getTopicZBPool 返回的 pool 数组
 formula: len(zt_pool) + len(zb_pool)
 missing_semantics: null
-partial_condition: 同 limit_up_count
-unavailable_condition: null
+partial_condition: transport 成功但 zt/zb 任一缺失时 null
+unavailable_condition: 池 transport 失败时 null
 limitations: zt_pool 与 zb_pool 是否互斥 not independently verified；二者之和是否等于 touched_limit_up_count not independently verified
 slice: 1
 decision: CONDITIONAL GO
+```
+
+```text
+metric_id: touched_limit_down_count
+definition: 盘中曾触及跌停价的证券数量
+unit: 股
+numerator: 触及跌停的唯一证券数
+denominator: not applicable; 计数指标，非比率
+universe: limit_pool_universe
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 候选跌停池/触及跌停字段（东财 push2ex），当前未机械确认；semantics not verified
+formula: count(触及跌停价)
+missing_semantics: 候选字段未确认时 null
+partial_condition: transport 成功但字段缺失时 null
+unavailable_condition: 池 transport 失败时 null
+limitations: 现有来源无法明确区分收盘跌停与盘中触及跌停后打开；semantics not independently verified
+slice: 1
+decision: NO-GO
 ```
 
 ```text
@@ -489,13 +530,16 @@ metric_id: failed_limit_up_count
 definition: 当日炸板股票数（触涨停后开板）
 unit: 股
 numerator: limit_pool_universe 中 zb_pool 的股票数
-denominator: 无
+denominator: not applicable; 计数指标，非比率
 universe: limit_pool_universe
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 东财 push2ex getTopicZBPool 返回的 pool 数组
 formula: len(zb_pool)
 missing_semantics: null
-partial_condition: 同 limit_up_count
-unavailable_condition: null
-limitations: 单源；zb_pool 语义（触板未封）not independently verified
+partial_condition: transport 成功但 trade_date 不匹配时 partial
+unavailable_condition: 池 transport 失败时 null
+limitations: 单源（东财）；zb_pool 语义（触板未封）not independently verified
 slice: 1
 decision: GO
 ```
@@ -507,10 +551,13 @@ unit: ratio [0,1]
 numerator: failed_limit_up_count
 denominator: limit_up_count + failed_limit_up_count
 universe: limit_pool_universe
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 东财 push2ex getTopicZTPool + getTopicZBPool 返回的 pool 数组
 formula: zb_count / (zt_count + zb_count)
-missing_semantics: 分母为 0 时 null
+missing_semantics: 分母为 0 时 null（合法零值）
 partial_condition: 分母为 0 时 null（合法零值）
-unavailable_condition: 池不可达时 null
+unavailable_condition: 池 transport 失败时 null
 limitations: 单源；zt/zb 互斥性未验证
 slice: 1
 decision: GO
@@ -521,13 +568,16 @@ metric_id: sealed_limit_up_count
 definition: 当日封板涨停股票数
 unit: 股
 numerator: limit_up_count
-denominator: 无
+denominator: not applicable; 计数指标，非比率
 universe: limit_pool_universe
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 东财 push2ex getTopicZTPool 返回的 pool 数组
 formula: len(zt_pool)
 missing_semantics: null
-partial_condition: 同 limit_up_count
-unavailable_condition: null
-limitations: 等同 limit_up_count；seal quality 完整定义见 §11
+partial_condition: transport 成功但 trade_date 不匹配时 partial
+unavailable_condition: 池 transport 失败时 null
+limitations: 等同 limit_up_count；seal quality 完整定义见 §8.6
 slice: 1
 decision: GO
 ```
@@ -539,11 +589,14 @@ unit: ratio [0,1]
 numerator: sealed_limit_up_count
 denominator: limit_up_count + failed_limit_up_count
 universe: limit_pool_universe
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 东财 push2ex getTopicZTPool + getTopicZBPool 返回的 pool 数组
 formula: zt_count / (zt_count + zb_count)
-missing_semantics: 分母为 0 时 null
+missing_semantics: 分母为 0 时 null（合法零值）
 partial_condition: 分母为 0 时 null（合法零值）
-unavailable_condition: 池不可达时 null
-limitations: 不等同于完整封板质量
+unavailable_condition: 池 transport 失败时 null
+limitations: 不等同于完整封板质量（见 §8.6）
 slice: 1
 decision: GO
 ```
@@ -554,15 +607,17 @@ decision: GO
 metric_id: consecutive_limit_up_days
 definition: 涨停股连板天数
 unit: 日
-numerator: 无
-denominator: 无
+numerator: not applicable; 每股属性，非聚合比率
+denominator: not applicable; 每股属性，非聚合比率
 universe: zt_pool
-source_fields: lbc
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 东财 push2ex getTopicZTPool 字段 lbc（连板数）
 formula: zt_pool 各股 lbc 值
 missing_semantics: lbc 为 null 时该股排除
-partial_condition: 同 limit_up_count
-unavailable_condition: null
-limitations: 单源
+partial_condition: transport 成功但 lbc 字段缺失时 partial
+unavailable_condition: 池 transport 失败时 null
+limitations: 单源（东财）
 slice: 2
 decision: GO
 ```
@@ -571,14 +626,17 @@ decision: GO
 metric_id: ladder
 definition: 连板梯队
 unit: list[{boards, count}]
-numerator: 无
-denominator: 无
+numerator: not applicable; 分档计数，非比率
+denominator: not applicable; 分档计数，非比率
 universe: zt_pool
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 东财 push2ex getTopicZTPool 字段 lbc
 formula: 按 lbc 分档计数
 missing_semantics: lbc 为 null 排除
-partial_condition: 同 limit_up_count
-unavailable_condition: null
-limitations: 单源
+partial_condition: transport 成功但 lbc 字段缺失时 partial
+unavailable_condition: 池 transport 失败时 null
+limitations: 单源（东财）
 slice: 2
 decision: GO
 ```
@@ -590,10 +648,13 @@ unit: list[{from_level, to_level, numerator, denominator, sample_count, rate}]
 numerator: 昨日 N 板中今日 N+1 板的股票数（跨日身份匹配）
 denominator: 昨日 N 板股票数
 universe: zt_pool(今日) + yzt_pool(昨日)
+trade_date: current_trade_date + previous_trade_date（当前 + 前一交易日组合）
+session: final only（需今日 final + 昨日 final 跨日匹配）
+source_fields: 东财 push2ex getTopicZTPool 字段 lbc + getYesterdayZTPool 字段 lbc（跨日身份匹配）
 formula: 分层转换，昨日首板→今日二板、昨日二板→今日三板、昨日三板→今日四板...
 missing_semantics: 分母为 0 时该层 null
 partial_condition: 跨日匹配未完成时 null
-unavailable_condition: 昨涨停池不可达时 null
+unavailable_condition: 昨涨停池 transport 失败时 null
 limitations: 跨日股票身份匹配尚未机械验证
 slice: 2
 decision: CONDITIONAL GO
@@ -608,12 +669,14 @@ unit: ratio
 numerator: 次日开盘价 - baseline_price
 denominator: baseline_price
 universe: yzt_pool
+trade_date: T+1 trade_date（次日交易日）
+session: final only（需次日 final 开盘价）
 source_fields: unclear（来源未提供明确的次日开盘字段）
 formula: (next_open - baseline) / baseline
 missing_semantics: null
 partial_condition: null
-unavailable_condition: null
-limitations: baseline_price 定义 unclear；调整方法 unclear；来源字段未确认
+unavailable_condition: 来源字段未确认，无法计算
+limitations: baseline_price 定义 unclear；adjustment_method unclear；suspension_handling unclear；one_price_limit_handling unclear；outlier_handling unclear；来源字段未确认
 slice: 2
 decision: NO-GO as currently specified
 ```
@@ -625,12 +688,14 @@ unit: ratio
 numerator: 次日收盘价 - baseline_price
 denominator: baseline_price
 universe: yzt_pool
-source_fields: zdp（候选，语义未确认）
+trade_date: T+1 trade_date（次日交易日）
+session: final only（需次日 final 收盘价）
+source_fields: zdp（候选，semantics not verified）
 formula: (next_close - baseline) / baseline
 missing_semantics: null
-partial_condition: null
-unavailable_condition: null
-limitations: zdp 语义未确认；baseline_price unclear；停牌处理 unclear；一字板处理 unclear；离群值处理 unclear
+partial_condition: zdp 语义未确认时 null
+unavailable_condition: 来源字段不可达时 null
+limitations: zdp 语义未确认；baseline_price unclear；adjustment_method unclear；suspension_handling unclear；one_price_limit_handling unclear；outlier_handling unclear
 slice: 2
 decision: CONDITIONAL GO
 ```
@@ -642,12 +707,14 @@ unit: ratio
 numerator: 次日最高价 - baseline_price
 denominator: baseline_price
 universe: yzt_pool
-source_fields: unclear
+trade_date: T+1 trade_date（次日交易日）
+session: final only（需次日 final 最高价）
+source_fields: unclear（来源未提供明确的次日最高价字段）
 formula: (next_high - baseline) / baseline
 missing_semantics: null
 partial_condition: null
-unavailable_condition: null
-limitations: 来源字段未确认
+unavailable_condition: 来源字段未确认，无法计算
+limitations: baseline_price unclear；adjustment_method unclear；suspension_handling unclear；one_price_limit_handling unclear；outlier_handling unclear；来源字段未确认
 slice: 2
 decision: NO-GO as currently specified
 ```
@@ -659,10 +726,13 @@ unit: ratio
 numerator: yzt_pool 中次日收益 < 0 的股票数
 denominator: yzt_pool 总数
 universe: yzt_pool
+trade_date: T+1 trade_date（次日交易日）
+session: final only（需次日 final 收益数据）
+source_fields: zdp（候选，semantics not verified）
 formula: count(return < 0) / len(yzt_pool)
 missing_semantics: 分母为 0 时 null
-partial_condition: null
-unavailable_condition: null
+partial_condition: zdp 语义未确认时 null
+unavailable_condition: 来源字段不可达时 null
 limitations: 最小定义仅代表"昨日涨停股次日下跌比例"，不代表完整亏钱效应（应含次日平均收益、中位收益、炸板股次日收益、最高连板股次日收益、跌停数量、大跌数量、高位股回撤，但这些均未验证）
 slice: 2
 decision: CONDITIONAL GO
@@ -672,15 +742,95 @@ decision: CONDITIONAL GO
 
 ```text
 metric_id: theme_structure
-definition: 题材结构
+definition: 题材结构（题材聚合容器）
 unit: list[theme]
+numerator: not applicable; 聚合容器，非比率
+denominator: not applicable; 聚合容器，非比率
 universe: zt_pool
-source_fields: reason_type(THS), hybk(东财)
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: reason_type（THS，semantics not verified）, hybk（东财，semantics not verified）
 formula: 按 reason_type/hybk 归类统计
 missing_semantics: 来源不可用时 null
 partial_condition: THS 不可用时 hybk 降级
 unavailable_condition: 双源均不可用时 null
 limitations: theme_name_source 归一化未审计；stock_theme_many_to_many 未审计；synonym_handling 未审计；duplicate_concepts 未审计；objective_mainline_rule 未定义；missing_source_semantics 未定义
+slice: 2
+decision: CONDITIONAL GO
+```
+
+```text
+metric_id: theme_limit_up_count
+definition: 题材内符合 limit_up_count 口径的唯一股票数
+unit: 股
+numerator: 题材内符合 limit_up_count 口径的唯一股票数
+denominator: not applicable; 计数指标，非比率
+universe: zt_pool（按题材过滤）
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: reason_type（THS）, hybk（东财）, 东财 push2ex getTopicZTPool pool 数组
+formula: count(zt_pool 中属于该题材的股票)
+missing_semantics: 题材映射不可用时 null
+partial_condition: THS 不可用时 hybk 降级
+unavailable_condition: 双源均不可用时 null
+limitations: 题材归一化未审计；同义词处理未审计；重复概念未审计
+slice: 2
+decision: CONDITIONAL GO
+```
+
+```text
+metric_id: theme_ladder_height
+definition: 题材内最高 consecutive_limit_up_days
+unit: 日
+numerator: not applicable; 每题材属性，非比率
+denominator: not applicable; 每题材属性，非比率
+universe: zt_pool（按题材过滤）
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: 东财 push2ex getTopicZTPool 字段 lbc, reason_type（THS）, hybk（东财）
+formula: max(题材内 zt_pool 各股 lbc)
+missing_semantics: 题材映射不可用时 null
+partial_condition: THS 不可用时 hybk 降级
+unavailable_condition: 双源均不可用时 null
+limitations: 题材归一化未审计；lbc 字段 semantics not independently verified
+slice: 2
+decision: CONDITIONAL GO
+```
+
+```text
+metric_id: theme_stock_count
+definition: 归一化题材映射后的唯一股票数
+unit: 股
+numerator: not applicable; 计数指标，非比率
+denominator: not applicable; 计数指标，非比率
+universe: zt_pool（按题材过滤）
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: reason_type（THS）, hybk（东财）, 东财 push2ex getTopicZTPool pool 数组
+formula: count(归一化题材映射后的唯一股票)
+missing_semantics: 题材映射不可用时 null
+partial_condition: THS 不可用时 hybk 降级
+unavailable_condition: 双源均不可用时 null
+limitations: 题材归一化未审计；同义词处理未审计；重复概念未审计
+slice: 2
+decision: CONDITIONAL GO
+```
+
+```text
+metric_id: theme_internal_breadth
+definition: 题材内部上涨比例
+unit: ratio [0,1]
+numerator: 题材内上涨股票数
+denominator: 题材内有效股票数
+universe: zt_pool（按题材过滤）
+trade_date: current_trade_date（当前快照交易日）
+session: intraday_preliminary + close_pending + final
+source_fields: reason_type（THS）, hybk（东财）, 全A快照 change_pct
+formula: count(题材内 change_pct > 0) / count(题材内有效股票)
+missing_semantics: 分母为 0 时 null
+partial_condition: 题材映射不可用时 null
+unavailable_condition: 双源均不可用时 null
+limitations: 题材归一化未审计；同义词处理未审计；重复概念未审计
 slice: 2
 decision: CONDITIONAL GO
 ```
@@ -757,18 +907,29 @@ loss_effect 完整定义应比较（均未验证）：
 
 | metric_id | numerator | denominator | 分母为 0 时 |
 |-----------|-----------|-------------|-----------|
-| advance_count | count(change_pct>0) | — | — |
-| decline_count | count(change_pct<0) | — | — |
-| flat_count | count(change_pct==0) | — | — |
-| suspended_count | eligible - valid | — | — |
-| limit_up_count | len(zt_pool) | — | — |
-| limit_down_count | len(dt_pool) | — | — |
-| failed_limit_up_count | len(zb_pool) | — | — |
+| advance_count | count(change_pct>0) | not applicable | — |
+| decline_count | count(change_pct<0) | not applicable | — |
+| flat_count | count(change_pct==0) | not applicable | — |
+| suspended_count | eligible - valid | not applicable | — |
+| eligible_count | count(breadth_universe) | not applicable | — |
+| limit_up_count | len(zt_pool) | not applicable | — |
+| limit_down_count | len(dt_pool) | not applicable | — |
+| touched_limit_up_count | len(zt_pool)+len(zb_pool) | not applicable | — |
+| touched_limit_down_count | count(触及跌停价) | not applicable | — |
+| failed_limit_up_count | len(zb_pool) | not applicable | — |
 | failed_board_rate | failed_limit_up_count | limit_up_count + failed_limit_up_count | null（合法零值） |
+| sealed_limit_up_count | len(zt_pool) | not applicable | — |
 | seal_rate | sealed_limit_up_count | limit_up_count + failed_limit_up_count | null（合法零值） |
 | up_ratio | advance_count | valid_count | null |
 | layered_promotion_rates | 昨日N板→今日N+1板匹配数 | 昨日N板总数 | null |
+| next_open_return | 次日开盘价 - baseline_price | baseline_price | null |
+| next_close_return | 次日收盘价 - baseline_price | baseline_price | null |
+| next_high_return | 次日最高价 - baseline_price | baseline_price | null |
 | loss_effect | count(return<0) | len(yzt_pool) | null |
+| theme_limit_up_count | 题材内涨停股票数 | not applicable | — |
+| theme_ladder_height | not applicable | not applicable | — |
+| theme_stock_count | not applicable | not applicable | — |
+| theme_internal_breadth | 题材内上涨股票数 | 题材内有效股票数 | null |
 
 ---
 
@@ -912,7 +1073,7 @@ data_array_present: 数据数组是否存在
 trade_date_match: trade_date 是否与请求日期一致
 row_count: 返回行数
 legal_zero: 合法零值（0 涨停等，交易日无涨停是合法的）
-upstream_null: 上游返回 null
+upstream_null: 只有 transport_success=true、parse_success=true，且上游明确返回 null 时才为 true。transport 失败时 upstream_null=false。不得将"没有收到响应"解释为"上游返回 null"。
 unexplained_empty: 无法解释的空
 ```
 
@@ -958,7 +1119,7 @@ coverage_ratio: valid_count / eligible_count（proposal, 阈值待验证）
 |---------|------|---------|
 | PF-01 | data_trade_date 为有效交易日 | status = unavailable |
 | PF-02 | 全 A 快照 valid_count 覆盖率达标（proposal） | status = partial, warning |
-| PF-03 | 涨停池 transport_success + data_array_present（非 upstream_null） | status = partial, warning |
+| PF-03 | 涨停池 transport_success + data_array_present（非 upstream_null） | transport 失败 → unavailable；data_array 缺失 → partial, warning |
 | PF-04 | 涨停池 + 炸板池至少一个 data_array_present | break_rate = null |
 | PF-05 | 昨涨停池非空（计算晋级率时） | promotion_rate = null |
 | PF-06 | observed_at 与当前时间差 < stale_after_seconds | is_stale = True |
@@ -975,9 +1136,11 @@ row_count=0 是 legal_zero，不是 partial。
 
 ```text
 normal: PF-01 ~ PF-03 全部满足（row_count 可为 0）
-partial: PF-01 满足但 PF-02 或 PF-03 不满足
-unavailable: PF-01 不满足，或数据源完全不可达
+partial: PF-01 满足，transport 成功 + 解析成功 + 核心身份字段存在，但可选字段缺失或覆盖率不足
+unavailable: PF-01 不满足，或 transport 失败，或 parse 失败，或 upstream_null，或 unexplained_empty
 ```
+
+transport 失败必须为 unavailable，不得为 partial。只有 transport 成功、解析成功、核心身份字段存在但可选字段缺失或覆盖率不足时才可为 partial。
 
 ---
 
@@ -1047,14 +1210,20 @@ fixture 中的数字为手动构造的合成值，仅用于测试 schema 和计�
 | breadth (advance/decline/flat/suspended/eligible) | GO | 全A快照已实现，纯计算 |
 | limit up count | GO | 涨停池已实现 |
 | limit down count | GO | 跌停池已实现 |
-| touched limits | CONDITIONAL GO | zt/zb 互斥性未独立验证 |
+| touched limit up | CONDITIONAL GO | zt/zb 互斥性未独立验证 |
+| touched limit down | NO-GO | 现有来源无法区分收盘跌停与盘中触及跌停 |
 | failed boards (zb) | GO | 炸板池已实现 |
 | seal quality | NO-GO | 完整封板质量未定义（seal_rate 仅基础比例） |
 | ladder | GO | 涨停池 lbc 已实现 |
 | promotion | CONDITIONAL GO | 跨日身份匹配未机械验证 |
-| premium | NO-GO as currently specified | 来源字段未确认，baseline unclear |
+| premium (next_open/next_high) | NO-GO as currently specified | 来源字段未确认，baseline unclear |
+| premium (next_close) | CONDITIONAL GO | zdp 候选语义未确认 |
 | loss effect | CONDITIONAL GO | 最小定义可计算，完整定义未验证 |
-| themes | CONDITIONAL GO | 归一化未审计 |
+| theme_structure | CONDITIONAL GO | 归一化未审计 |
+| theme_limit_up_count | CONDITIONAL GO | 题材归一化未审计 |
+| theme_ladder_height | CONDITIONAL GO | 题材归一化未审计 |
+| theme_stock_count | CONDITIONAL GO | 题材归一化未审计 |
+| theme_internal_breadth | CONDITIONAL GO | 题材归一化未审计 |
 | intraday | CONDITIONAL GO | 盘中数据动态变化，需 session 标记 |
 | final | CONDITIONAL GO | final 判定为保守合同，稳定窗口为建议值 |
 | history | NO-GO | 历史回补未审计（Slice 4） |

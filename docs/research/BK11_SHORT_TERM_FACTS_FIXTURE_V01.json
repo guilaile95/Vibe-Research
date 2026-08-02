@@ -90,8 +90,8 @@
       "session": "call_auction",
       "is_final": false,
       "source_ids": ["eastmoney_limit_pool", "eastmoney_market_breadth"],
-      "fetched_at": "2026-07-29T01:10:00.000000Z",
-      "snapshot_at": "2026-07-29T01:15:00.000000Z",
+      "fetched_at": "2026-07-29T01:27:00.000000Z",
+      "snapshot_at": "2026-07-29T01:28:00.000000Z",
       "universe": {
         "breadth_universe": ["SH main", "SZ main", "ChiNext", "STAR"],
         "limit_pool_universe": ["SH main", "SZ main", "ChiNext", "STAR"],
@@ -106,7 +106,7 @@
         "advance_count": 1802,
         "decline_count": 1105,
         "flat_count": 294,
-        "up_ratio": 0.5630,
+        "up_ratio": 0.5629,
         "total_amount": 21456789000.0
       },
       "limit_activity": {
@@ -171,7 +171,7 @@
         "trade_date_match": false,
         "row_count": 0,
         "legal_zero": false,
-        "upstream_null": true,
+        "upstream_null": false,
         "unexplained_empty": false
       },
       "limitations": [
@@ -186,9 +186,12 @@
   ],
   "cross_source_audit": {
     "dates_audited": ["2026-07-28", "2026-07-29", "2026-07-30"],
-    "primary_source": "eastmoney_push2ex",
-    "breadth_source": "eastmoney_push2_snapshot",
+    "primary_source": "eastmoney_limit_pool",
+    "primary_source_endpoint_family": "push2ex",
+    "breadth_source": "eastmoney_market_breadth",
+    "breadth_source_endpoint_family": "push2",
     "secondary_source": "ths_limit_up_reveal",
+    "secondary_source_endpoint_family": "10jqka_dataapi",
     "findings": {
       "zt_count_deviation": "not verified (Q did not independently reverify THS)",
       "zb_count_cross_validation": "none (single source)",
