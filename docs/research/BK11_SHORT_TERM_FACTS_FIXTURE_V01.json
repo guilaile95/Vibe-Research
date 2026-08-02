@@ -210,6 +210,7 @@
     "limit_down_count": "GO",
     "failed_limit_up_count": "GO",
     "touched_limit_up_count": "CONDITIONAL_GO",
+    "touched_limit_down_count": "NO-GO",
     "failed_board_rate": "GO",
     "seal_rate": "GO",
     "seal_quality_full": "NO-GO",
