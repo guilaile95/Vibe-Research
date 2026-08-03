@@ -258,16 +258,13 @@ def _normalize_metadata(snapshot: Dict[str, Any], codes: Any) -> Dict[str, Any]:
         codes.add("METADATA_INVALID")
         session = "unavailable"
 
-    is_final = snapshot.get("is_final")
-    if not isinstance(is_final, bool):
+    # is_final 必须由归一化后的 session 强制决定，绝不保留调用方冲突值。
+    raw_is_final = snapshot.get("is_final")
+    if not isinstance(raw_is_final, bool):
         codes.add("METADATA_INVALID")
-        is_final = False
-
-    # session 与 is_final 一致性：final 必须 is_final=true，其余必须 false
-    if session == "final" and is_final is not True:
+    elif raw_is_final != (session == "final"):
         codes.add("METADATA_INVALID")
-    elif session != "final" and is_final is not False:
-        codes.add("METADATA_INVALID")
+    is_final = session == "final"
 
     fetched_at = _normalize_utc_timestamp(snapshot.get("fetched_at"))
     if fetched_at is None and snapshot.get("fetched_at") is not None:

@@ -643,6 +643,8 @@ class TestMetadata:
         snap["session"] = "final"
         snap["is_final"] = False
         result = compute_short_term_market_facts(snap)
+        assert result["session"] == "final"
+        assert result["is_final"] is True
         assert "METADATA_INVALID" in result["reason_codes"]
         assert result["status"] == "partial"
 
@@ -651,6 +653,8 @@ class TestMetadata:
         snap["session"] = "call_auction"
         snap["is_final"] = True
         result = compute_short_term_market_facts(snap)
+        assert result["session"] == "call_auction"
+        assert result["is_final"] is False
         assert "METADATA_INVALID" in result["reason_codes"]
         assert result["status"] == "partial"
 
@@ -809,6 +813,7 @@ class TestSessionValidation:
         snap["is_final"] = True
         result = compute_short_term_market_facts(snap)
         assert result["session"] == "unavailable"
+        assert result["is_final"] is False
         assert "METADATA_INVALID" in result["reason_codes"]
         assert result["status"] == "partial"
 
@@ -817,6 +822,8 @@ class TestSessionValidation:
         snap["session"] = "unknown"
         snap["data_health"]["transport_success"] = False
         result = compute_short_term_market_facts(snap)
+        assert result["session"] == "unavailable"
+        assert result["is_final"] is False
         assert result["status"] == "unavailable"
         assert "METADATA_INVALID" in result["reason_codes"]
         assert "SOURCE_UNAVAILABLE" in result["reason_codes"]
@@ -825,8 +832,126 @@ class TestSessionValidation:
         snap = _base_snapshot()
         del snap["is_final"]
         result = compute_short_term_market_facts(snap)
+        assert result["is_final"] is True
         assert "METADATA_INVALID" in result["reason_codes"]
         assert result["status"] == "partial"
+
+
+# ---------------------------------------------------------------------------
+# 13.11b Session / is_final 强制不变量
+# ---------------------------------------------------------------------------
+
+
+class TestSessionIsFinalInvariant:
+    """is_final 必须由归一化后的 session 强制决定，绝不保留调用方冲突值。"""
+
+    @pytest.mark.parametrize(
+        "session_in,is_final_in,exp_session,exp_is_final",
+        [
+            (None, True, "unavailable", False),
+            ("unknown", True, "unavailable", False),
+            ("unavailable", True, "unavailable", False),
+            ("final", False, "final", True),
+            ("final", None, "final", True),
+            ("afternoon_session", True, "afternoon_session", False),
+            ("morning_session", None, "morning_session", False),
+        ],
+    )
+    def test_conflict_pairs_normalize_to_session(self, session_in, is_final_in, exp_session, exp_is_final):
+        snap = _base_snapshot()
+        snap["session"] = session_in
+        if is_final_in is not None:
+            snap["is_final"] = is_final_in
+        else:
+            del snap["is_final"]
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == exp_session
+        assert result["is_final"] is exp_is_final
+        assert "METADATA_INVALID" in result["reason_codes"]
+        assert result["status"] in {"partial", "unavailable"}
+
+    def test_final_session_missing_is_final(self):
+        snap = _base_snapshot()
+        snap["session"] = "final"
+        del snap["is_final"]
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "final"
+        assert result["is_final"] is True
+        assert "METADATA_INVALID" in result["reason_codes"]
+        assert result["status"] == "partial"
+
+    @pytest.mark.parametrize("bad_is_final", [0, 1, "true", [], {}])
+    def test_final_session_non_bool_is_final(self, bad_is_final):
+        snap = _base_snapshot()
+        snap["session"] = "final"
+        snap["is_final"] = bad_is_final
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "final"
+        assert result["is_final"] is True
+        assert "METADATA_INVALID" in result["reason_codes"]
+        assert result["status"] == "partial"
+
+    @pytest.mark.parametrize("bad_is_final", [0, 1, "true", [], {}])
+    def test_non_final_session_non_bool_is_final(self, bad_is_final):
+        snap = _base_snapshot()
+        snap["session"] = "morning_session"
+        snap["is_final"] = bad_is_final
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "morning_session"
+        assert result["is_final"] is False
+        assert "METADATA_INVALID" in result["reason_codes"]
+        assert result["status"] == "partial"
+
+    @pytest.mark.parametrize(
+        "session,exp_is_final",
+        [
+            ("pre_open", False),
+            ("call_auction", False),
+            ("morning_session", False),
+            ("midday_break", False),
+            ("afternoon_session", False),
+            ("close_pending", False),
+            ("final", True),
+            ("unavailable", False),
+        ],
+    )
+    def test_allowed_sessions_legal_is_final_no_metadata_invalid(self, session, exp_is_final):
+        snap = _base_snapshot()
+        snap["session"] = session
+        snap["is_final"] = exp_is_final
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == session
+        assert result["is_final"] is exp_is_final
+        assert "METADATA_INVALID" not in result["reason_codes"]
+
+    def test_global_failure_with_invalid_session_and_is_final_true(self):
+        snap = _base_snapshot()
+        snap["session"] = "unknown"
+        snap["is_final"] = True
+        snap["data_health"]["transport_success"] = False
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "unavailable"
+        assert result["is_final"] is False
+        assert result["status"] == "unavailable"
+        assert "SOURCE_UNAVAILABLE" in result["reason_codes"]
+        assert "METADATA_INVALID" in result["reason_codes"]
+
+    @pytest.mark.parametrize("bad_input", [None, [], [1, 2, 3], "snapshot", 42, 3.14, object()])
+    def test_fallback_session_is_final_invariant(self, bad_input):
+        result = compute_short_term_market_facts(bad_input)
+        assert result["session"] == "unavailable"
+        assert result["is_final"] is False
+        assert result["status"] == "unavailable"
+
+    def test_fallback_malicious_dict_subclass(self):
+        class Exploding(dict):
+            def get(self, *args, **kwargs):
+                raise RuntimeError("secret-internal-detail")
+
+        result = compute_short_term_market_facts(Exploding())
+        assert result["session"] == "unavailable"
+        assert result["is_final"] is False
+        assert result["status"] == "unavailable"
 
 
 # ---------------------------------------------------------------------------
