@@ -11,6 +11,7 @@ import bisect
 import json
 import os
 import sys
+import threading
 from datetime import date
 
 import pytest
@@ -226,7 +227,7 @@ class TestNonTradingDays:
 
     def test_future_date(self):
         tc._today_shanghai = lambda: date(2026, 8, 3)
-        # 2026-08-04 is Monday and within range but future
+        # 2026-08-04 is Tuesday and within range but future
         assert tc.previous_trade_date("2026-08-04") is None
 
     def test_today_is_allowed(self):
@@ -422,3 +423,292 @@ class TestYearBoundaries:
         result = tc.previous_trade_date(last)
         assert result is not None
         assert result < last
+
+
+# ---------------------------------------------------------------------------
+# Metadata corruption (runtime validation, fail-closed)
+# ---------------------------------------------------------------------------
+
+def _valid_artifact(sessions: list[str]) -> dict:
+    """Build a minimal valid artifact that passes all runtime metadata checks."""
+    return {
+        "schema_version": "cn-a-share-trade-calendar-v0.1",
+        "calendar_id": "CN_A_SHARE",
+        "timezone": "Asia/Shanghai",
+        "source_policy": "SSE_SZSE_OFFICIAL_CONSENSUS",
+        "supported_start_date": "2024-01-01",
+        "supported_end_date": "2026-12-31",
+        "sources": [
+            {"exchange": "SSE",  "year": 2024, "title": "SSE 2024",
+             "announcement_date": "2023-12-26",
+             "reference_number": "上证公告〔2023〕47号",
+             "URL": "https://www.sse.com.cn/x/y.shtml",
+             "retrieved_at": "2026-08-03T00:00:00Z",
+             "verification_status": "verified_direct_official"},
+            {"exchange": "SZSE", "year": 2024, "title": "SZSE 2024",
+             "announcement_date": "2023-12-26",
+             "reference_number": "深证会〔2023〕409号",
+             "URL": "https://www.szse.cn/x/y.html",
+             "retrieved_at": "2026-08-03T00:00:00Z",
+             "verification_status": "verified_direct_official"},
+            {"exchange": "SSE",  "year": 2025, "title": "SSE 2025",
+             "announcement_date": "2024-12-23",
+             "reference_number": "上证公告〔2024〕38号",
+             "URL": "https://www.sse.com.cn/x/z.shtml",
+             "retrieved_at": "2026-08-03T00:00:00Z",
+             "verification_status": "verified_direct_official"},
+            {"exchange": "SZSE", "year": 2025, "title": "SZSE 2025",
+             "announcement_date": "2024-12-23",
+             "reference_number": "深证会〔2024〕413号",
+             "URL": "https://www.szse.cn/x/z.html",
+             "retrieved_at": "2026-08-03T00:00:00Z",
+             "verification_status": "verified_direct_official"},
+            {"exchange": "SSE",  "year": 2026, "title": "SSE 2026",
+             "announcement_date": "2025-12-22",
+             "reference_number": "上证公告〔2025〕45号",
+             "URL": "https://www.sse.com.cn/x/w.shtml",
+             "retrieved_at": "2026-08-03T00:00:00Z",
+             "verification_status": "verified_direct_official"},
+            {"exchange": "SZSE", "year": 2026, "title": "SZSE 2026",
+             "announcement_date": "2025-12-22",
+             "reference_number": "深证会〔2025〕481号",
+             "URL": "https://www.szse.cn/x/w.html",
+             "retrieved_at": "2026-08-03T00:00:00Z",
+             "verification_status": "verified_direct_official"},
+        ],
+        "sessions": sessions,
+    }
+
+
+class TestMetadataCorruption:
+    def _patch_and_assert_none(self, tmp_path, monkeypatch, data):
+        bad_file = tmp_path / "bad_calendar.json"
+        with open(bad_file, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        tc._calendar_cache = None
+        monkeypatch.setattr(tc, "_DATA_PATH", str(bad_file))
+        assert tc.previous_trade_date("2024-01-03") is None
+
+    def test_invalid_utf8_returns_none(self, tmp_path, monkeypatch):
+        bad_file = tmp_path / "bad_calendar.json"
+        bad_file.write_bytes(b"\xff\xfe\x80\x81not-utf8")
+        tc._calendar_cache = None
+        monkeypatch.setattr(tc, "_DATA_PATH", str(bad_file))
+        assert tc.previous_trade_date("2024-01-03") is None
+
+    def test_top_level_json_list_returns_none(self, tmp_path, monkeypatch):
+        bad_file = tmp_path / "bad_calendar.json"
+        with open(bad_file, "w", encoding="utf-8") as f:
+            json.dump(["not", "a", "dict"], f)
+        tc._calendar_cache = None
+        monkeypatch.setattr(tc, "_DATA_PATH", str(bad_file))
+        assert tc.previous_trade_date("2024-01-03") is None
+
+    def test_wrong_timezone(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["timezone"] = "UTC"
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_wrong_source_policy(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["source_policy"] = "OTHER"
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_wrong_supported_start_date(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["supported_start_date"] = "2024-01-02"
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_wrong_supported_end_date(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["supported_end_date"] = "2026-12-30"
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_sources_missing(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        del data["sources"]
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_sources_not_list(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["sources"] = {}
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_sources_empty(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["sources"] = []
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_sources_missing_exchange_year(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["sources"] = data["sources"][:5]  # drop one required (exchange,year)
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_sources_duplicate_exchange_year(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["sources"].append(data["sources"][0])
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_sources_url_empty(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["sources"][0]["URL"] = ""
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_sources_url_non_official_host(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["sources"][0]["URL"] = "https://example.com/x.shtml"
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_source_title_empty(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["sources"][0]["title"] = ""
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_source_announcement_date_invalid(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["sources"][0]["announcement_date"] = "2023/12/26"
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_source_reference_number_empty(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["sources"][0]["reference_number"] = ""
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_source_verification_status_wrong(self, tmp_path, monkeypatch, sessions):
+        data = _valid_artifact(sessions)
+        data["sources"][0]["verification_status"] = "verified"
+        self._patch_and_assert_none(tmp_path, monkeypatch, data)
+
+    def test_cache_is_tuple_on_success(self, sessions):
+        tc._calendar_cache = None
+        result = tc.previous_trade_date("2024-01-03")
+        assert result == "2024-01-02"
+        assert isinstance(tc._calendar_cache, tuple)
+
+
+# ---------------------------------------------------------------------------
+# Concurrency
+# ---------------------------------------------------------------------------
+
+class TestConcurrency:
+    def test_20_threads_first_load_consistent(self, sessions):
+        """20 threads concurrently first-load; all results identical, no exception."""
+        tc._calendar_cache = None
+        results: list = []
+        errors: list = []
+
+        def worker():
+            try:
+                r = tc.previous_trade_date("2025-03-17")
+                results.append(r)
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        assert len(results) == 20
+        assert all(r == results[0] for r in results)
+        assert results[0] is not None
+        assert isinstance(tc._calendar_cache, tuple)
+
+
+# ---------------------------------------------------------------------------
+# Independent official-closure contract
+# ---------------------------------------------------------------------------
+
+# Official closed weekday ranges (Mon-Fri only) derived independently from the
+# six SSE/SZSE annual notices (sse.com.cn + szse.cn). NOT derived from the
+# artifact sessions.
+OFFICIAL_CLOSED_WEEKDAYS_2024: list[str] = [
+    # 元旦: 2024-01-01 (Mon)
+    "2024-01-01",
+    # 春节: 2024-02-09 (Fri), 2024-02-12 (Mon), 2024-02-13 (Tue),
+    #        2024-02-14 (Wed), 2024-02-15 (Thu), 2024-02-16 (Fri)
+    "2024-02-09", "2024-02-12", "2024-02-13",
+    "2024-02-14", "2024-02-15", "2024-02-16",
+    # 清明节: 2024-04-04 (Thu), 2024-04-05 (Fri)
+    "2024-04-04", "2024-04-05",
+    # 劳动节: 2024-05-01 (Wed), 2024-05-02 (Thu), 2024-05-03 (Fri)
+    "2024-05-01", "2024-05-02", "2024-05-03",
+    # 端午节: 2024-06-10 (Mon)
+    "2024-06-10",
+    # 中秋节: 2024-09-16 (Mon), 2024-09-17 (Tue)
+    "2024-09-16", "2024-09-17",
+    # 国庆节: 2024-10-01 (Tue) - 2024-10-04 (Fri), 2024-10-07 (Mon)
+    "2024-10-01", "2024-10-02", "2024-10-03", "2024-10-04", "2024-10-07",
+]
+OFFICIAL_CLOSED_WEEKDAYS_2025: list[str] = [
+    # 元旦: 2025-01-01 (Wed)
+    "2025-01-01",
+    # 春节: 2025-01-28 (Tue), 2025-01-29 (Wed), 2025-01-30 (Thu),
+    #        2025-01-31 (Fri), 2025-02-03 (Mon), 2025-02-04 (Tue)
+    "2025-01-28", "2025-01-29", "2025-01-30",
+    "2025-01-31", "2025-02-03", "2025-02-04",
+    # 清明节: 2025-04-04 (Fri)
+    "2025-04-04",
+    # 劳动节: 2025-05-01 (Thu), 2025-05-02 (Fri), 2025-05-05 (Mon)
+    "2025-05-01", "2025-05-02", "2025-05-05",
+    # 端午节: 2025-06-02 (Mon)
+    "2025-06-02",
+    # 国庆节+中秋节: 2025-10-01 (Wed) - 2025-10-03 (Fri), 2025-10-06 (Mon),
+    #                 2025-10-07 (Tue), 2025-10-08 (Wed)
+    "2025-10-01", "2025-10-02", "2025-10-03",
+    "2025-10-06", "2025-10-07", "2025-10-08",
+]
+OFFICIAL_CLOSED_WEEKDAYS_2026: list[str] = [
+    # 元旦: 2026-01-01 (Thu), 2026-01-02 (Fri)
+    "2026-01-01", "2026-01-02",
+    # 春节: 2026-02-16 (Mon), 2026-02-17 (Tue), 2026-02-18 (Wed),
+    #        2026-02-19 (Thu), 2026-02-20 (Fri), 2026-02-23 (Mon)
+    "2026-02-16", "2026-02-17", "2026-02-18",
+    "2026-02-19", "2026-02-20", "2026-02-23",
+    # 清明节: 2026-04-06 (Mon)
+    "2026-04-06",
+    # 劳动节: 2026-05-01 (Fri), 2026-05-04 (Mon), 2026-05-05 (Tue)
+    "2026-05-01", "2026-05-04", "2026-05-05",
+    # 端午节: 2026-06-19 (Fri)
+    "2026-06-19",
+    # 中秋节: 2026-09-25 (Fri)
+    "2026-09-25",
+    # 国庆节: 2026-10-01 (Thu), 2026-10-02 (Fri), 2026-10-05 (Mon),
+    #         2026-10-06 (Tue), 2026-10-07 (Wed)
+    "2026-10-01", "2026-10-02", "2026-10-05",
+    "2026-10-06", "2026-10-07",
+]
+
+
+def _build_expected_sessions() -> list[str]:
+    """Build sessions independently from official closed weekday sets.
+
+    expected = Mon-Fri in [2024-01-01..2026-12-31] - OFFICIAL_CLOSED_WEEKDAYS
+    """
+    closed: set[str] = set(
+        OFFICIAL_CLOSED_WEEKDAYS_2024
+        + OFFICIAL_CLOSED_WEEKDAYS_2025
+        + OFFICIAL_CLOSED_WEEKDAYS_2026
+    )
+    expected: list[str] = []
+    current = date(2024, 1, 1)
+    end = date(2026, 12, 31)
+    while current <= end:
+        if current.weekday() < 5 and current.isoformat() not in closed:
+            expected.append(current.isoformat())
+        current = date.fromordinal(current.toordinal() + 1)
+    return expected
+
+
+class TestIndependentOfficialClosure:
+    def test_artifact_matches_official_closure_contract(self, sessions):
+        """Independent official-closure rebuild must equal artifact sessions."""
+        expected = _build_expected_sessions()
+        assert sessions == expected, (
+            f"artifact differs from independent official-closure rebuild: "
+            f"artifact_len={len(sessions)} expected_len={len(expected)} "
+            f"missing_in_artifact={sorted(set(expected) - set(sessions))[:5]} "
+            f"extra_in_artifact={sorted(set(sessions) - set(expected))[:5]}"
+        )
