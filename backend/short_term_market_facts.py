@@ -140,6 +140,23 @@ _TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _WARNING_UNAVAILABLE = "snapshot unavailable; no facts emitted"
 _WARNING_PARTIAL = "snapshot partially available; see reason_codes"
 _WARNING_INTERNAL = "internal computation failed; snapshot marked unavailable"
+_LIMITATION_FILTERED_WARNING = "部分输入限制说明因包含不安全细节已过滤。"
+
+# limitations 安全清洗：识别 URL、本地路径、异常原文
+_UNSAFE_LIMITATION_PATTERNS: Tuple[re.Pattern, ...] = (
+    re.compile(r"https?://", re.IGNORECASE),
+    re.compile(r"ftp://", re.IGNORECASE),
+    re.compile(r"www\.", re.IGNORECASE),
+    re.compile(r"[A-Za-z]:[\\/]"),
+    re.compile(r"\\\\"),
+    re.compile(r"/home/"),
+    re.compile(r"/tmp/"),
+    re.compile(r"/var/"),
+    re.compile(r"/Users/"),
+    re.compile(r"\bTraceback\b"),
+    re.compile(r"\b\w*Error\b"),
+    re.compile(r"\b\w*Exception\b"),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -237,21 +254,19 @@ def _normalize_metadata(snapshot: Dict[str, Any], codes: Any) -> Dict[str, Any]:
         trade_date = None
 
     session = snapshot.get("session")
-    if session not in _ALLOWED_SESSIONS:
-        if session is not None:
-            codes.add("METADATA_INVALID")
-        session = None
+    if not isinstance(session, str) or session not in _ALLOWED_SESSIONS:
+        codes.add("METADATA_INVALID")
+        session = "unavailable"
 
     is_final = snapshot.get("is_final")
     if not isinstance(is_final, bool):
-        if is_final is not None:
-            codes.add("METADATA_INVALID")
+        codes.add("METADATA_INVALID")
         is_final = False
 
     # session 与 is_final 一致性：final 必须 is_final=true，其余必须 false
     if session == "final" and is_final is not True:
         codes.add("METADATA_INVALID")
-    elif session is not None and session != "final" and is_final is not False:
+    elif session != "final" and is_final is not False:
         codes.add("METADATA_INVALID")
 
     fetched_at = _normalize_utc_timestamp(snapshot.get("fetched_at"))
@@ -417,18 +432,40 @@ def _compute_limits(snapshot: Dict[str, Any], codes: Any) -> Optional[Dict[str, 
     }
 
 
-def _normalize_limitations(snapshot: Dict[str, Any]) -> List[str]:
+def _is_unsafe_limitation(text: str) -> bool:
+    """检测 limitation 字符串是否包含 URL、本地路径或异常原文。"""
+    for pattern in _UNSAFE_LIMITATION_PATTERNS:
+        if pattern.search(text):
+            return True
+    return False
+
+
+def _normalize_limitations(
+    snapshot: Dict[str, Any], codes: Any
+) -> Tuple[List[str], bool]:
+    """过滤不安全 limitations，返回 (保留列表, 是否过滤了不安全项)。"""
     raw = snapshot.get("limitations")
     kept: List[str] = []
-    seen = set()
+    seen: set = set()
+    any_unsafe = False
     if isinstance(raw, list):
         for item in raw:
-            if isinstance(item, str) and item and item not in seen:
-                seen.add(item)
-                kept.append(item)
+            if not isinstance(item, str):
+                continue
+            text = item.strip()
+            if not text:
+                continue
+            if _is_unsafe_limitation(text):
+                any_unsafe = True
+                continue
+            if text not in seen:
+                seen.add(text)
+                kept.append(text)
     if _MODULE_LIMITATION not in seen:
         kept.append(_MODULE_LIMITATION)
-    return kept
+    if any_unsafe:
+        codes.add("METADATA_INVALID")
+    return kept, any_unsafe
 
 
 def _assemble_facts(
@@ -473,7 +510,7 @@ def _fallback_envelope(snapshot: Any) -> Dict[str, Any]:
     codes = {"SOURCE_UNAVAILABLE"}
     metadata = {
         "trade_date": None,
-        "session": None,
+        "session": "unavailable",
         "is_final": False,
         "source_ids": [],
         "fetched_at": None,
@@ -509,26 +546,24 @@ def _fallback_envelope(snapshot: Any) -> Dict[str, Any]:
 def _compute(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     codes: set = set()
 
-    # 保留输入中已有的稳定公开 reason code（如 PARTIAL_COVERAGE）
-    raw_reason_codes = snapshot.get("reason_codes")
-    if isinstance(raw_reason_codes, list):
-        for code in raw_reason_codes:
-            if isinstance(code, str) and code in _KNOWN_REASON_CODES:
-                codes.add(code)
-
+    # reason_codes 完全由本模块计算，不回显调用方输入。
     metadata = _normalize_metadata(snapshot, codes)
     health = _normalize_data_health(snapshot)
-    limitations = _normalize_limitations(snapshot)
+    limitations, limitation_unsafe = _normalize_limitations(snapshot, codes)
 
     # 全局 transport/parse/必需字段/数据数组/upstream_null 失败：
     # 无论局部计数看似有效，一律 unavailable，不使用失败响应中的残留数据。
     if _global_health_failure(health):
         codes.add("SOURCE_UNAVAILABLE")
+        warnings: List[str] = []
+        if limitation_unsafe:
+            warnings.append(_LIMITATION_FILTERED_WARNING)
+        warnings.append(_WARNING_UNAVAILABLE)
         return _build_envelope(
             metadata=metadata,
             status=_STATUS_UNAVAILABLE,
             codes=codes,
-            warnings=[_WARNING_UNAVAILABLE],
+            warnings=warnings,
             limitations=limitations,
             health=health,
             facts=_null_facts(),
@@ -538,11 +573,15 @@ def _compute(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     limits = _compute_limits(snapshot, codes)
 
     if breadth is None and limits is None:
+        warnings = []
+        if limitation_unsafe:
+            warnings.append(_LIMITATION_FILTERED_WARNING)
+        warnings.append(_WARNING_UNAVAILABLE)
         return _build_envelope(
             metadata=metadata,
             status=_STATUS_UNAVAILABLE,
             codes=codes,
-            warnings=[_WARNING_UNAVAILABLE],
+            warnings=warnings,
             limitations=limitations,
             health=health,
             facts=_null_facts(),
@@ -564,11 +603,12 @@ def _compute(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         degraded = True
 
     status = _STATUS_PARTIAL if degraded else _STATUS_NORMAL
+    warnings = []
+    if limitation_unsafe:
+        warnings.append(_LIMITATION_FILTERED_WARNING)
     if status == _STATUS_PARTIAL:
         codes.add("SOURCE_PARTIAL")
-        warnings = [_WARNING_PARTIAL]
-    else:
-        warnings = []
+        warnings.append(_WARNING_PARTIAL)
 
     return _build_envelope(
         metadata=metadata,

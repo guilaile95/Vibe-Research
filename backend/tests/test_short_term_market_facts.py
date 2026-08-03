@@ -658,7 +658,7 @@ class TestMetadata:
         snap = _base_snapshot()
         snap["session"] = "lunch_time"
         result = compute_short_term_market_facts(snap)
-        assert result["session"] is None
+        assert result["session"] == "unavailable"
         assert "METADATA_INVALID" in result["reason_codes"]
 
     def test_invalid_trade_date_degraded(self):
@@ -744,3 +744,232 @@ class TestBlockedScope:
         result = compute_short_term_market_facts(snap)
         assert result["facts"] == baseline["facts"]
         assert result["status"] == baseline["status"]
+
+
+# ---------------------------------------------------------------------------
+# 13.11 Session 缺失与非法值
+# ---------------------------------------------------------------------------
+
+
+class TestSessionValidation:
+    def test_session_missing(self):
+        snap = _base_snapshot()
+        del snap["session"]
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "unavailable"
+        assert "METADATA_INVALID" in result["reason_codes"]
+        assert result["status"] == "partial"
+
+    def test_session_none(self):
+        snap = _base_snapshot()
+        snap["session"] = None
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "unavailable"
+        assert "METADATA_INVALID" in result["reason_codes"]
+        assert result["status"] == "partial"
+
+    def test_session_empty_string(self):
+        snap = _base_snapshot()
+        snap["session"] = ""
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "unavailable"
+        assert "METADATA_INVALID" in result["reason_codes"]
+
+    def test_session_uppercase_final(self):
+        snap = _base_snapshot()
+        snap["session"] = "FINAL"
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "unavailable"
+        assert "METADATA_INVALID" in result["reason_codes"]
+
+    def test_session_with_spaces(self):
+        snap = _base_snapshot()
+        snap["session"] = " final "
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "unavailable"
+        assert "METADATA_INVALID" in result["reason_codes"]
+
+    def test_session_list(self):
+        snap = _base_snapshot()
+        snap["session"] = []
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "unavailable"
+        assert "METADATA_INVALID" in result["reason_codes"]
+
+    def test_session_unknown_string(self):
+        snap = _base_snapshot()
+        snap["session"] = "unknown"
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "unavailable"
+        assert "METADATA_INVALID" in result["reason_codes"]
+
+    def test_session_none_with_is_final_true(self):
+        snap = _base_snapshot()
+        snap["session"] = None
+        snap["is_final"] = True
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "unavailable"
+        assert "METADATA_INVALID" in result["reason_codes"]
+        assert result["status"] == "partial"
+
+    def test_invalid_session_with_global_failure(self):
+        snap = _base_snapshot()
+        snap["session"] = "unknown"
+        snap["data_health"]["transport_success"] = False
+        result = compute_short_term_market_facts(snap)
+        assert result["status"] == "unavailable"
+        assert "METADATA_INVALID" in result["reason_codes"]
+        assert "SOURCE_UNAVAILABLE" in result["reason_codes"]
+
+    def test_missing_is_final_degraded(self):
+        snap = _base_snapshot()
+        del snap["is_final"]
+        result = compute_short_term_market_facts(snap)
+        assert "METADATA_INVALID" in result["reason_codes"]
+        assert result["status"] == "partial"
+
+
+# ---------------------------------------------------------------------------
+# 13.12 Limitations 安全清洗
+# ---------------------------------------------------------------------------
+
+
+class TestLimitationSanitization:
+    @pytest.mark.parametrize(
+        "unsafe",
+        [
+            "http://internal.host/secret",
+            "https://example.invalid/x",
+            "ftp://files.example/data",
+            "www.evil.com/path",
+            "C:\\tmp\\path",
+            "C:/tmp/path",
+            "\\\\server\\share\\file",
+            "/home/user/token.txt",
+            "/tmp/debug.log",
+            "/var/log/app.log",
+            "/Users/admin/.ssh/id_rsa",
+            "TimeoutError: boom",
+            "ConnectionError: refused",
+            "ProxyError: connect failed",
+            "HTTPError: 502",
+            "FileNotFoundError: missing.txt",
+            "CustomProviderException: failed",
+            "Traceback (most recent call last)",
+        ],
+    )
+    def test_unsafe_limitations_filtered(self, unsafe):
+        snap = _base_snapshot()
+        snap["limitations"] = ["safe text", unsafe]
+        result = compute_short_term_market_facts(snap)
+        blob = json.dumps(result, ensure_ascii=False)
+        assert unsafe not in blob
+        assert "safe text" in result["limitations"]
+        assert "METADATA_INVALID" in result["reason_codes"]
+        assert result["status"] == "partial"
+        assert _has_filtered_warning(result["warnings"])
+
+    def test_safe_limitations_preserved(self):
+        snap = _base_snapshot()
+        snap["limitations"] = [
+            "single-source, not cross-validated",
+            "licensing_status: unclear",
+        ]
+        result = compute_short_term_market_facts(snap)
+        assert "single-source, not cross-validated" in result["limitations"]
+        assert "licensing_status: unclear" in result["limitations"]
+        assert "METADATA_INVALID" not in result["reason_codes"]
+        assert result["status"] == "normal"
+
+    def test_filtered_warning_only_once(self):
+        snap = _base_snapshot()
+        snap["limitations"] = [
+            "http://a.com",
+            "https://b.com",
+            "/tmp/x",
+            "TimeoutError",
+        ]
+        result = compute_short_term_market_facts(snap)
+        warning = "部分输入限制说明因包含不安全细节已过滤。"
+        assert result["warnings"].count(warning) == 1
+
+    def test_unsafe_in_unavailable_case(self):
+        snap = _base_snapshot()
+        snap["data_health"]["transport_success"] = False
+        snap["limitations"] = ["https://secret.url/path", "safe note"]
+        result = compute_short_term_market_facts(snap)
+        assert result["status"] == "unavailable"
+        assert "METADATA_INVALID" in result["reason_codes"]
+        assert "SOURCE_UNAVAILABLE" in result["reason_codes"]
+        assert "safe note" in result["limitations"]
+        assert "https://secret.url/path" not in json.dumps(result, ensure_ascii=False)
+        assert _has_filtered_warning(result["warnings"])
+
+
+def _has_filtered_warning(warnings):
+    return "部分输入限制说明因包含不安全细节已过滤。" in warnings
+
+
+# ---------------------------------------------------------------------------
+# 13.13 Reason codes 由模块计算
+# ---------------------------------------------------------------------------
+
+
+class TestReasonCodeIsolation:
+    def test_normal_with_injected_source_unavailable(self):
+        snap = _base_snapshot()
+        snap["reason_codes"] = ["SOURCE_UNAVAILABLE"]
+        result = compute_short_term_market_facts(snap)
+        assert result["status"] == "normal"
+        assert result["reason_codes"] == []
+
+    def test_normal_with_injected_partial_coverage(self):
+        snap = _base_snapshot()
+        snap["reason_codes"] = ["PARTIAL_COVERAGE"]
+        result = compute_short_term_market_facts(snap)
+        assert result["status"] == "normal"
+        assert result["reason_codes"] == []
+
+    def test_normal_with_injected_unknown_code(self):
+        snap = _base_snapshot()
+        snap["reason_codes"] = ["ARBITRARY_CODE"]
+        result = compute_short_term_market_facts(snap)
+        assert result["status"] == "normal"
+        assert result["reason_codes"] == []
+
+    def test_normal_with_injected_duplicate_codes(self):
+        snap = _base_snapshot()
+        snap["reason_codes"] = [
+            "SOURCE_UNAVAILABLE",
+            "SOURCE_UNAVAILABLE",
+            "PARTIAL_COVERAGE",
+            "BREADTH_UNAVAILABLE",
+        ]
+        result = compute_short_term_market_facts(snap)
+        assert result["status"] == "normal"
+        assert result["reason_codes"] == []
+
+    def test_true_unavailable_with_empty_input_codes(self):
+        snap = _base_snapshot()
+        snap["data_health"]["transport_success"] = False
+        snap["reason_codes"] = []
+        result = compute_short_term_market_facts(snap)
+        assert result["status"] == "unavailable"
+        assert "SOURCE_UNAVAILABLE" in result["reason_codes"]
+
+    def test_true_partial_with_contradictory_input_codes(self):
+        snap = _base_snapshot()
+        snap["data_health"]["coverage_warning"] = True
+        snap["reason_codes"] = ["SOURCE_UNAVAILABLE"]
+        result = compute_short_term_market_facts(snap)
+        assert result["status"] == "partial"
+        assert "PARTIAL_COVERAGE" in result["reason_codes"]
+        assert "SOURCE_UNAVAILABLE" not in result["reason_codes"]
+
+    def test_fixture_partial_not_echoed(self, fixture_cases):
+        case = copy.deepcopy(fixture_cases["partial"])
+        case["reason_codes"] = ["SOURCE_UNAVAILABLE", "BREADTH_UNAVAILABLE"]
+        result = compute_short_term_market_facts(case)
+        assert "PARTIAL_COVERAGE" in result["reason_codes"]
+        assert "SOURCE_UNAVAILABLE" not in result["reason_codes"]
+        assert "BREADTH_UNAVAILABLE" not in result["reason_codes"]
