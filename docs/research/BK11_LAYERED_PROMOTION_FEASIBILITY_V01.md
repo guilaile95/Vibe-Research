@@ -2,19 +2,27 @@
 
 ## 1. Executive Decision
 
-**Overall Decision: CONDITIONAL GO**
+```
+overall: CONDITIONAL GO
+implementation_allowed: false
+```
 
-分层晋级率 `layered_promotion_rates` 的计算合同可以完整定义，且现有仓库代码已确认具备
-取得历史 final 涨停池、昨涨停池、连板数字段、股票代码字段的能力。但存在一个可封闭的
-工程前置条件：**项目缺乏可靠的 A 股交易日历**（现有 `previous_weekday` 仅处理周末，
-无法处理法定节假日、临时休市、长假后首个交易日）。
+**结论**：
 
-在下一独立子阶段实现最小交易日历接口后，可重新评估进入生产实现的条件。具体关闭办法
-与验收证据见第 18 节。
+- 计算公式合同已经可以定义；
+- 来源、日历、final、适配器和跨日验证尚未闭合；
+- 当前不得进入 `layered_promotion_rates` 生产实现。
 
-除交易日历外，实现还需满足：final 状态由调用方传入 `session="final"`（不依赖时间判断）；
-合法零值需通过 `legal_zero` 标记区分（昨日合法零涨停 → `rates=[]`，今日合法零涨停 →
-每层 `rate=0.0`）；部分覆盖（`coverage_warning=true`）不输出指标（`rates=null`）。
+不得保留任何等价暗示（如"调用方传入 final 后即可实现"、"交易日历完成后即可实现"、
+"关闭某一个条件后即可直接生产"）。
+
+完整阻断条件清单见第 17.1 节（Implementation Entry Conditions）与第 18.2 节（最终
+Decision），三处使用同一份九项清单，不得在某一章节勾选已满足而在另一章节又列为未满足。
+
+universe 合同：本审计以已批准的 Slice 0 可行性文档 universe 表为权威合同。
+Slice 0 fixture 中 ST/*ST excluded 属既有不一致，不在本轮采用，也不构成新的 universe
+决策。ST/*ST 状态不由股票代码前缀决定；ST/*ST 是否进入分母会直接改变 denominator。
+本轮无新证据支持偏离 Slice 0，因此保持 included。
 
 ## 2. Scope and Non-goals
 
@@ -132,45 +140,73 @@ for back in range(8):
 
 | 能力 | 复用点 | 状态 |
 |------|--------|------|
-| 涨停池取得（含历史） | `astock.em_zt_topic_pool` | 代码已确认 |
-| 昨涨停池取得 | `astock.em_zt_topic_pool("getYesterdayZTPool", ...)` | 代码已确认 |
-| 连板数字段 | 池内 `lbc` 字段 | 代码已确认 |
-| 股票代码字段 | 池内 `c` 字段 | 代码已确认 |
-| 代码标准化 | `watchlist_store._normalize_codes` / `astock._map_a_share_row` | 代码已确认 |
-| 交易日历 | `data_health_service.previous_weekday` | 代码已确认 - 不完整（仅周末） |
-| final 判定 | 无显式实现，仅回溯逻辑 | 推断 |
+| 涨停池取得（含历史） | `astock.em_zt_topic_pool` | verified（函数存在、date 参数被传递） |
+| 昨涨停池取得 | `astock.em_zt_topic_pool("getYesterdayZTPool", ...)` | verified（仓库使用） |
+| 连板数字段 | 池内 `lbc` 字段 | verified as repository usage（上游类型 partially_verified） |
+| 股票代码字段 | 池内 `c` 字段 | verified as repository usage（上游类型 partially_verified） |
+| 代码标准化 | `watchlist_store._normalize_codes` / `astock._map_a_share_row` | verified |
+| 交易日历 | `data_health_service.previous_weekday` | verified - 不完整（仅周末） |
+| final 判定 | 无显式实现，仅回溯逻辑 | not_verified（无可信 final 生产者） |
 
 ## 4. Source and Endpoint Evidence
+
+证据状态必须区分三类：仓库使用（repository usage）、上游类型（upstream type）、
+上游语义（upstream semantics）。代码阅读只能确认仓库使用，不能直接确认上游语义。
 
 ### 4.1 端点证据表
 
 | 端点 | URL | 用途 | 历史日期支持 | 验证方法 | 验证状态 |
 |------|-----|------|-------------|----------|----------|
-| `getTopicZTPool` | `https://push2ex.eastmoney.com/getTopicZTPool` | 当日/历史涨停池 | 是（`date` 参数） | 代码阅读 | verified |
-| `getYesterdayZTPool` | `https://push2ex.eastmoney.com/getYesterdayZTPool` | 昨涨停池 | 是（`date` 参数） | 代码阅读 | verified |
-| `getTopicZBPool` | `https://push2ex.eastmoney.com/getTopicZBPool` | 炸板池 | 是 | 代码阅读 | verified |
-| `getTopicDTPool` | `https://push2ex.eastmoney.com/getTopicDTPool` | 跌停池 | 是 | 代码阅读 | verified |
+| `getTopicZTPool` | `https://push2ex.eastmoney.com/getTopicZTPool` | 当日/历史涨停池 | 仓库传递 `date` 参数 | 代码阅读 | verified（函数存在、date 参数被传递） |
+| `getYesterdayZTPool` | `https://push2ex.eastmoney.com/getYesterdayZTPool` | 昨涨停池 | 仓库传递 `date` 参数 | 代码阅读 | verified（仓库使用） |
+| `getTopicZBPool` | `https://push2ex.eastmoney.com/getTopicZBPool` | 炸板池 | 仓库传递 `date` 参数 | 代码阅读 | verified（仓库使用） |
+| `getTopicDTPool` | `https://push2ex.eastmoney.com/getTopicDTPool` | 跌停池 | 仓库传递 `date` 参数 | 代码阅读 | verified（仓库使用） |
+
+注：`verified` 仅指仓库使用层面。`getTopicZTPool` 历史日期可用性为
+`partially_verified`（见 4.3 reviewer-provided probe）；`getYesterdayZTPool`
+与指定前一交易日池的关系为 `not_verified`。
 
 ### 4.2 字段证据表
 
 | field_name | source_endpoint | raw_key | raw_type | sample_value_shape | trade_date_semantics | session_semantics | missing_behavior | duplicate_behavior | verification_method | verification_status | limitations |
 |------------|-----------------|---------|----------|-------------------|---------------------|-------------------|------------------|-------------------|---------------------|---------------------|-------------|
-| stock_code | getTopicZTPool | `c` | string | `"600000"` | 由 `date` 参数决定交易日 | final 池为收盘后稳定 | 缺失 → 该行无效 | 池内重复 → 需去重 | 代码阅读 `market.py:280` | verified | 6 位数字字符串，无交易所前缀 |
-| consecutive_limit_up_days | getTopicZTPool | `lbc` | int | `1`, `2`, `3` | 由 `date` 参数决定交易日 | final 池为收盘后稳定 | 缺失 → `market.py:271` 用 `_num(p.get("lbc")) or 1` 默认 1 板 | 不适用 | 代码阅读 `market.py:271,281` | verified | 首板为 1，连板 >= 2 |
-| trade_date | 请求参数 | `date` | string | `"20260730"` | 传入即返回该日数据 | 非交易日返回空池 | 非交易日 → `[]` | 不适用 | 代码阅读 `astock.py:544` | verified | YYYYMMDD 格式 |
-| pool array | 响应 `data.pool` | `pool` | list | `[{...}, {...}]` | 由 `date` 参数决定 | final 池为收盘后稳定 | 缺失 → `[]` | 池内可能有重复 | 代码阅读 `astock.py:552` | verified | 每页 10000 条 |
+| stock_code | getTopicZTPool | `c` | string（仓库读取） | `"600000"` | 由 `date` 参数决定交易日 | final 池为收盘后稳定（未验证） | 缺失 → 该行无效 | 池内重复 → 需去重 | 代码阅读 `market.py:280` | partially_verified（仓库使用 verified；上游完整语义 not_verified） | 6 位数字字符串，无交易所前缀 |
+| consecutive_limit_up_days | getTopicZTPool | `lbc` | int（仓库读取） | `1`, `2`, `3` | 由 `date` 参数决定交易日 | final 池为收盘后稳定（未验证） | 缺失 → `market.py:271` 用 `_num(p.get("lbc")) or 1` 默认 1 板 | 不适用 | 代码阅读 `market.py:271,281` | partially_verified（仓库使用 verified；上游类型 partially_verified；首板/连板及跨日晋级语义 not_verified） | 首板为 1，连板 >= 2 |
+| trade_date | 请求参数 | `date` | string | `"20260730"` | 传入即返回该日数据 | 非交易日返回空池（未验证） | 非交易日 → `[]`（未验证） | 不适用 | 代码阅读 `astock.py:544` | partially_verified | YYYYMMDD 格式 |
+| pool array | 响应 `data.pool` | `pool` | list | `[{...}, {...}]` | 由 `date` 参数决定 | final 池为收盘后稳定（未验证） | 缺失 → `[]` | 池内可能有重复 | 代码阅读 `astock.py:552` | partially_verified | 每页 10000 条 |
 | source update time | 响应无显式字段 | N/A | N/A | N/A | N/A | N/A | N/A | N/A | 代码阅读 | not_verified | 端点无显式更新时间字段，需依赖 `date` 参数 |
+| empty array semantics | 响应 `data.pool == []` | N/A | list | `[]` | N/A | N/A | N/A | N/A | 未验证 | not_verified | `[]` 可能代表合法零涨停/非交易日/请求失败/解析失败/限流/访问控制，适配器尚未能区分 |
 
 ### 4.3 受控探针结果
 
-本轮未执行实时网络探针。理由：
+```
+probes_performed_by_Q = 0
+```
 
-1. **代码证据已充分**：`em_zt_topic_pool` 的历史日期支持、字段结构、调用路径均已在代码中确认
-2. **风险控制**：实时探针可能触发东财反爬机制，且现有 `_emotion()` 已在生产使用该端点
-3. **非必要**：本任务是合同固化，不是字段发现
+Q 本轮未执行实时网络探针，不得声称自行复验了以下结果。
+
+#### reviewer-provided evidence（not independently re-run by Q）
+
+审查者提供了以下历史探针结果（Q 未独立复验）：
+
+```
+getTopicZTPool("20260729") → 81 rows
+getTopicZTPool("20260730") → 52 rows
+getYesterdayZTPool("20260730") → 0 rows
+```
+
+该证据的覆盖范围明确如下：
+
+- 仅支持 `getTopicZTPool` 历史日期参数 `partially_verified`（两个历史日期返回了非空池）
+- **不证明** `getYesterdayZTPool` 的前一交易日关系（返回 0 rows，语义未确认）
+- **不证明** 空数组是合法零值（`getYesterdayZTPool("20260730") → 0 rows` 可能是
+  非交易日、请求失败、限流、访问控制或参数错误）
+- **未完成** 3 组相邻交易日的跨日身份与 lbc 晋级关系机械验证
+
+#### 实现阶段需补充的验证
 
 若后续实现阶段需要验证，建议执行：
-- 选择 3 组相邻交易日（如 2026-07-28/29/30）
+- 选择 3 组相邻交易日（含节假日边界）
 - 对每组调用 `getTopicZTPool(date)` 和 `getYesterdayZTPool(date)`
 - 验证 `getYesterdayZTPool(date)` 返回的池是否等于 `getTopicZTPool(previous_date)` 的池
 - 验证 `lbc` 字段在两日的值是否满足晋级关系
@@ -180,15 +216,27 @@ for back in range(8):
 ### 5.1 前一交易日定义
 
 ```
-previous_trade_date(current_trade_date) → previous_trade_date
+previous_trade_date(current_trade_date: str) -> str | None
 ```
+
+时区：`Asia/Shanghai`。
+
+`current_trade_date` 必须是已确认交易日。不得自动把任意非交易日先向前滚动，
+再继续求前一交易日。
+
+返回值语义：
+- 非法格式 → `None`
+- 非交易日输入 → `None`
+- 来源不可用 → `None`
+- 超出覆盖年份 → `None`
+- 未来日期 → `None`
+- 已确认交易日 → 前一交易日（YYYY-MM-DD）
 
 必须覆盖：
 - 周末（周六、周日）
 - 法定节假日（国庆、春节、劳动节、元旦、清明、端午、中秋等）
 - 临时休市（罕见但存在）
 - 长假后首个交易日（如春节长假后第一天，前一交易日可能距今 7-10 天）
-- 非交易日输入（应返回 None 或抛异常）
 
 ### 5.2 现有能力评估
 
@@ -205,22 +253,52 @@ def previous_trade_date(current_trade_date: str) -> str | None:
     """返回前一交易日（YYYY-MM-DD）。非交易日输入返回 None。"""
 ```
 
-### 5.4 关闭办法
+### 5.4 下一阶段必须选择唯一方案
 
-1. 新增 `backend/trade_calendar.py`，实现 `previous_trade_date`
-2. 数据源选项（按优先级）：
-   - 内置静态节假日表（每年维护，简单可靠）
-   - 从东财交易日历 API 取（`dataapi.eastmoney.com/eastmoney/calendar`）
-   - 从 `akshare` 取（已存在依赖？需检查）
-3. 失败时返回 `None`，调用方降级为 `unavailable`
+下一阶段必须选择唯一方案，并记录以下字段：
+
+```
+data source
+licensing boundary
+supported years
+future-year behavior
+update mechanism
+offline test strategy
+source-unavailable semantics
+```
 
 ### 5.5 验收证据
 
-关闭后需验证：
-- 2026-10-08（国庆后首个交易日）的 `previous_trade_date` 应为 2026-09-30
-- 2026-02-05（春节后首个交易日，假设）的 `previous_trade_date` 应为 2026-02-05 前最后一个交易日
-- 周末输入返回前一交易日
-- 非交易日输入返回 `None`
+具体日期案例必须等唯一日历源选定后再固化。本轮不采用任何无来源的具体日期案例。
+
+可改成抽象测试：
+
+```
+长假后第一个已确认交易日
+→ 返回假期前最后一个已确认交易日
+```
+
+```
+普通相邻工作日（无节假日）
+→ 返回前一个工作日
+```
+
+```
+周末输入
+→ 返回 None（非交易日输入）
+```
+
+```
+非交易日输入
+→ 返回 None
+```
+
+已删除以下事实错误或无来源的确定性案例（不得仅加"假设"后继续作为验收案例）：
+
+- 春节后首个交易日的具体日期假设
+- 国庆后首个交易日返回节前最后交易日的具体日期案例
+
+具体日期必须等唯一日历源选定后再固化。
 
 ## 6. Stock Identity Contract
 
@@ -253,16 +331,21 @@ raw code
 | 北交所代码是否可能进入响应 | 是，8xxxxx/4xxxxx 可能在响应中，但项目 universe 排除 BSE | `fixture V01 market_scope.excluded: ["BSE"]` |
 | 重复行如何处理 | 保留首次合法记录，忽略后续重复 | `short_term_limit_up_ladder.py` 已实现 |
 
-### 6.4 universe 排除规则
+### 6.4 universe 合同
 
-根据 `fixture V01` 的 `market_scope`：
+本审计以已批准的 Slice 0 可行性文档 universe 表为权威合同。
+Slice 0 fixture 中 ST/*ST excluded 属既有不一致，不在本轮采用，也不构成新的 universe 决策。
 
 ```
-included: SH main, SZ main, ChiNext, STAR
-excluded: BSE, ST, *ST, IPO no-limit period, delisting period, B shares, ETF, LOF, convertible bonds, funds, indexes
+included: SH main, SZ main, ChiNext, STAR, ST, *ST
+excluded: BSE, IPO no-limit period, delisting period, B shares, ETF, LOF, convertible bonds, funds, indexes
 ```
 
-北交所（8xxxxx/4xxxxx）应排除。但东财涨停池通常已排除 B 股、ETF、基金等，仍需校验代码区间。
+ST/*ST 状态不由股票代码前缀决定。ST/*ST 是否进入分母会直接改变 denominator。
+本轮无新证据支持偏离 Slice 0，因此保持 included。
+
+北交所（`4xxxxx`、`8xxxxx`、`920xxx`）应排除。代码前缀仅为辅助校验；
+长期市场身份应由明确的目标交易所/universe 规则决定，不能只依赖前缀。
 
 ### 6.5 前导零风险
 
@@ -295,28 +378,55 @@ current_pool = astock.em_zt_topic_pool("getTopicZTPool", current_date_yyyymmdd, 
 注意：不使用 `getYesterdayZTPool`，因为该端点返回的是"相对于参数日期的前一交易日"的池，
 而我们需要的是"任意指定历史日"的池。使用 `getTopicZTPool(date)` 传入历史日期更明确。
 
-### 7.3 final 判定
+### 7.3 可信 final 合同
 
 ```
-previous_is_final = true
-current_is_final = true
+仓库当前不存在已验证的 layered-promotion final snapshot producer。
+调用方传入 session="final" 或 is_final=true 只是声明，不能证明来源快照已 final。
 ```
 
-判定方式：
-- `session == "final"`
-- `is_final == true`
-- 两日 `trade_date` 正确且 `previous = previous_trade_date(current)`
-- 必需池字段完整（`c` 和 `lbc`）
-- 稳定窗口满足（收盘后）
+实施前置条件必须包括：
+
+```
+previous snapshot final producer
+current snapshot final producer
+trade_date 来源校验
+必需字段完整性校验
+连续稳定窗口
+失败和超时语义
+```
+
+只有以下条件全部成立才允许计算：
+
+```
+previous.session == final
+previous.is_final == true
+current.session == final
+current.is_final == true
+两侧 trade_date 正确
+两侧字段完整
+两侧稳定窗口满足
+```
+
+以下状态均不得计算：
+
+```
+pre_open
+call_auction
+morning_session
+midday_break
+afternoon_session
+close_pending
+仅时间 >= 15:00
+调用方任意布尔声明
+```
 
 ### 7.4 稳定窗口
 
 A 股收盘时间为北京时间 15:00。收盘后涨停池稳定，但实际数据源更新可能有延迟。
 
-建议稳定窗口：
-- 收盘后 15:00-15:10 为过渡期
-- 15:10 后视为 final
-- 但本模块不依赖时间判断，而是依赖调用方传入 `session="final"`
+稳定窗口判定属于 final 生产者职责，尚未实现。本模块不依赖时间判断，也不把调用方传入
+`session="final"` 当作可信 final 证据。
 
 ## 8. Exact Denominator and Numerator Definition
 
@@ -474,11 +584,53 @@ rate = round(numerator / denominator, 4)
 
 ## 11. Legal Zero and Missing Semantics
 
-### 11.1 昨日合法零涨停
+### 11.1 空数组的歧义性
+
+现有 `em_zt_topic_pool(...) → []` 可能代表：
+
+```
+合法零涨停
+非交易日
+请求失败
+解析失败
+限流
+访问控制
+参数错误
+字段缺失
+```
+
+因此：
+
+```
+仅凭 [] 不得设置 legal_zero=true。
+```
+
+合法零值适配器生产者尚未存在，列为阻断条件（见第 17.1 节）。
+
+### 11.2 适配器前置条件
+
+未来适配器至少输出：
+
+```
+transport_success
+parse_success
+required_field_present
+data_array_present
+trade_date_match
+row_count
+legal_zero
+upstream_null
+unexplained_empty
+coverage_warning
+```
+
+只有适配器可靠确认 `legal_zero=true`，才允许按以下规则处理。
+
+### 11.3 昨日合法零涨停
 
 ```
 昨日 limit_up_pool = []
-昨日 legal_zero = true
+昨日 legal_zero = true（适配器确认）
 昨日 row_count = 0
 ```
 
@@ -490,12 +642,12 @@ status = normal
 
 理由：昨日无涨停股，分母全为 0，无层可输出，结果为空列表，状态正常。
 
-### 11.2 今日合法零涨停
+### 11.4 今日合法零涨停
 
 ```
 昨日有分母（denominator > 0）
 今日 limit_up_pool = []
-今日 legal_zero = true
+今日 legal_zero = true（适配器确认）
 今日 row_count = 0
 ```
 
@@ -509,7 +661,7 @@ status = normal
 理由：昨日有涨停股，但今日无任何涨停（合法零值），所有昨日涨停股今日均未晋级，
 numerator 全为 0，rate 全为 0.0。
 
-### 11.3 今日未解释空池
+### 11.5 今日未解释空池
 
 ```
 今日 limit_up_pool = []
@@ -521,12 +673,12 @@ numerator 全为 0，rate 全为 0.0。
 ```
 layered_promotion_rates = null
 status = partial
-reason_codes 包含 UNEXPLAINED_EMPTY
+reason_codes 包含 UNEXPLAINED_EMPTY, SOURCE_PARTIAL
 ```
 
 理由：今日空池无法确认是合法零值还是数据缺失，不能简单视为未晋级。
 
-### 11.4 今日普通空池
+### 11.6 今日普通空池
 
 ```
 今日 limit_up_pool = []
@@ -538,7 +690,7 @@ reason_codes 包含 UNEXPLAINED_EMPTY
 ```
 layered_promotion_rates = null
 status = unavailable
-reason_codes 包含 CURRENT_SNAPSHOT_UNAVAILABLE
+reason_codes 包含 SOURCE_UNAVAILABLE, CURRENT_SNAPSHOT_UNAVAILABLE
 ```
 
 ## 12. Data Health Contract
@@ -582,18 +734,42 @@ reason_codes 包含 CURRENT_SNAPSHOT_UNAVAILABLE
 |------|--------|---------|--------------|
 | 昨日来源失败 | unavailable | null | SOURCE_UNAVAILABLE, PREVIOUS_SNAPSHOT_UNAVAILABLE |
 | 今日来源失败 | unavailable | null | SOURCE_UNAVAILABLE, CURRENT_SNAPSHOT_UNAVAILABLE |
+| 交易日历不可用 | unavailable | null | TRADING_CALENDAR_UNAVAILABLE, SOURCE_UNAVAILABLE |
+| 两侧 trade_date 不匹配 | unavailable | null | TRADE_DATE_MISMATCH, SOURCE_UNAVAILABLE |
+| 任一侧非 final | unavailable | null | NOT_FINAL, SOURCE_UNAVAILABLE |
 | 昨日合法零涨停 | normal | [] | （无） |
 | 今日合法零涨停 | normal | 正常计算（numerator全0, rate=0.0） | （无） |
-| 昨日空池未解释 | partial | null | UNEXPLAINED_EMPTY, PREVIOUS_SNAPSHOT_UNAVAILABLE |
-| 今日空池未解释 | partial | null | UNEXPLAINED_EMPTY, CURRENT_SNAPSHOT_UNAVAILABLE |
+| 昨日空池未解释 | partial | null | SOURCE_PARTIAL, UNEXPLAINED_EMPTY, PREVIOUS_SNAPSHOT_UNAVAILABLE |
+| 今日空池未解释 | partial | null | SOURCE_PARTIAL, UNEXPLAINED_EMPTY, CURRENT_SNAPSHOT_UNAVAILABLE |
 | coverage_warning=true（任一侧） | partial | null | SOURCE_PARTIAL, PARTIAL_COVERAGE |
-| 昨日部分非法行 | partial | null | INVALID_POOL_ROW, PARTIAL_COVERAGE |
-| 今日部分非法行 | partial | null | INVALID_POOL_ROW, PARTIAL_COVERAGE |
-| row_count 不匹配 | partial | null | PARTIAL_COVERAGE |
+| 昨日部分非法行 | partial | null | SOURCE_PARTIAL, INVALID_POOL_ROW, PARTIAL_COVERAGE |
+| 今日部分非法行 | partial | null | SOURCE_PARTIAL, INVALID_POOL_ROW, PARTIAL_COVERAGE |
+| 昨日池内重复代码 | partial | null | SOURCE_PARTIAL, DUPLICATE_STOCK_CODE, PARTIAL_COVERAGE |
+| 今日池内重复代码 | partial | null | SOURCE_PARTIAL, DUPLICATE_STOCK_CODE, PARTIAL_COVERAGE |
+| 身份匹配不完整 | partial | null | SOURCE_PARTIAL, IDENTITY_MATCH_INCOMPLETE, PARTIAL_COVERAGE |
+| row_count 不匹配 | partial | null | SOURCE_PARTIAL, PARTIAL_COVERAGE |
 
-**关键决策**：partial 状态下 `layered_promotion_rates = null`。理由：部分覆盖意味着
-样本不完整，若强行计算会产出误导性比率（分母或分子可能缺失）。调用方应根据
-`reason_codes` 判断是否需要重试或降级展示。
+**统一 partial 语义**：所有 `status=partial` → `layered_promotion_rates=null`。
+
+包括：`SOURCE_PARTIAL`、`PARTIAL_COVERAGE`、`INVALID_POOL_ROW`、
+`DUPLICATE_STOCK_CODE`、`IDENTITY_MATCH_INCOMPLETE`、`UNEXPLAINED_EMPTY`、
+`row_count mismatch`、`coverage_warning`。
+
+不得保留以下表述：
+- partial 状态下仍输出计算结果
+- 仅重复代码的 partial 仍输出计算结果
+- 部分覆盖后使用合法行继续计算精确比例
+
+理由：任何 partial 都可能使 numerator 或 denominator 不完整。本模块是精确晋级率合同，
+不输出可能系统性偏低的近似比例。
+
+**partial 与 unavailable 的 metrics 一致性**：两者均输出 `metrics = null`。
+区别在于 `reason_codes`：partial 表示来源部分可用但覆盖不完整，
+unavailable 表示来源全局失败或非 final / 日期不匹配。调用方应通过 `reason_codes`
+区分降级原因。
+
+**TRADE_DATE_MISMATCH / NOT_FINAL 合同**：该指标要求两个精确 final 交易日，
+日期不符或非 final 时不能输出部分比例，必须 `unavailable` + `rates=null`。
 
 ### 12.3 双侧 row_count
 
@@ -602,41 +778,63 @@ reason_codes 包含 CURRENT_SNAPSHOT_UNAVAILABLE
 
 ## 13. Reason Codes and Status Semantics
 
-### 13.1 建议错误码
+### 13.1 完整 reason-code 映射表
 
-| 错误码 | 语义 | 类别 |
-|--------|------|------|
-| `SOURCE_UNAVAILABLE` | 全局来源失败 | 全局 unavailable |
-| `SOURCE_PARTIAL` | 部分可用 | 可计算 partial |
-| `PREVIOUS_SNAPSHOT_UNAVAILABLE` | 昨日快照不可用 | 全局 unavailable |
-| `CURRENT_SNAPSHOT_UNAVAILABLE` | 今日快照不可用 | 全局 unavailable |
-| `TRADE_DATE_MISMATCH` | 交易日不匹配 | 可计算 partial（若仅一侧） |
-| `NOT_FINAL` | 非 final 状态 | 全局 unavailable |
-| `PARTIAL_COVERAGE` | 部分覆盖 | 可计算 partial |
-| `INVALID_POOL_ROW` | 池行非法 | 可计算 partial |
-| `DUPLICATE_STOCK_CODE` | 重复代码 | 可计算 partial |
-| `IDENTITY_MATCH_INCOMPLETE` | 身份匹配不完整 | 可计算 partial |
-| `TRADING_CALENDAR_UNAVAILABLE` | 交易日历不可用 | 全局 unavailable |
-| `UNEXPLAINED_EMPTY` | 未解释空池 | 可计算 partial |
+| reason_code | trigger | side | status | rates_output | priority | combined_with | notes |
+|-------------|---------|------|--------|--------------|----------|---------------|-------|
+| `SOURCE_UNAVAILABLE` | 全局来源失败（传输/解析/超时/访问控制） | both | unavailable | null | 1 | 对应侧码 | 全局总括码 |
+| `PREVIOUS_SNAPSHOT_UNAVAILABLE` | 昨日快照不可用 | previous | unavailable | null | 2 | SOURCE_UNAVAILABLE | previous 侧原因码 |
+| `CURRENT_SNAPSHOT_UNAVAILABLE` | 今日快照不可用 | current | unavailable | null | 3 | SOURCE_UNAVAILABLE | current 侧原因码 |
+| `TRADING_CALENDAR_UNAVAILABLE` | 交易日历不可用 | both | unavailable | null | 4 | SOURCE_UNAVAILABLE | 无法确定 previous_trade_date |
+| `TRADE_DATE_MISMATCH` | 两侧 trade_date 不匹配 | both | unavailable | null | 5 | SOURCE_UNAVAILABLE | 该指标要求两个精确 final 交易日 |
+| `NOT_FINAL` | 任一侧非 final | both | unavailable | null | 6 | SOURCE_UNAVAILABLE | 见第 7.3 节可信 final 合同 |
+| `SOURCE_PARTIAL` | 部分可用 | both | partial | null | 7 | 具体部分覆盖码 | partial 总括码 |
+| `PARTIAL_COVERAGE` | 部分覆盖（coverage_warning） | both | partial | null | 8 | SOURCE_PARTIAL | 来源无法区分未涨停与未被覆盖 |
+| `IDENTITY_MATCH_INCOMPLETE` | 身份匹配不完整 | both | partial | null | 9 | SOURCE_PARTIAL | 跨日匹配存在无法对齐的样本 |
+| `INVALID_POOL_ROW` | 池行非法（代码/连板数缺失或非法） | previous/current | partial | null | 10 | SOURCE_PARTIAL | 该行排除 |
+| `DUPLICATE_STOCK_CODE` | 池内重复代码 | previous/current | partial | null | 11 | SOURCE_PARTIAL | 保留首次合法记录 |
+| `UNEXPLAINED_EMPTY` | 空池未解释 | previous/current | partial | null | 12 | SOURCE_PARTIAL | 空池无法确认合法零值 |
 
-### 13.2 优先级排序
+### 13.2 组合规则
+
+```
+SOURCE_UNAVAILABLE:
+全局总括码
+
+PREVIOUS_SNAPSHOT_UNAVAILABLE:
+previous 侧原因码
+
+CURRENT_SNAPSHOT_UNAVAILABLE:
+current 侧原因码
+
+一侧全局失败时：
+同时输出 SOURCE_UNAVAILABLE + 对应侧码
+
+SOURCE_PARTIAL:
+partial 总括码
+
+具体 partial 原因码：
+与 SOURCE_PARTIAL 同时输出
+```
+
+### 13.3 优先级排序
 
 ```
 SOURCE_UNAVAILABLE
 PREVIOUS_SNAPSHOT_UNAVAILABLE
 CURRENT_SNAPSHOT_UNAVAILABLE
 TRADING_CALENDAR_UNAVAILABLE
-NOT_FINAL
 TRADE_DATE_MISMATCH
+NOT_FINAL
 SOURCE_PARTIAL
 PARTIAL_COVERAGE
-UNEXPLAINED_EMPTY
+IDENTITY_MATCH_INCOMPLETE
 INVALID_POOL_ROW
 DUPLICATE_STOCK_CODE
-IDENTITY_MATCH_INCOMPLETE
+UNEXPLAINED_EMPTY
 ```
 
-### 13.3 状态规则
+### 13.4 状态规则
 
 ```
 normal:
@@ -645,29 +843,47 @@ normal:
   metrics = 正常计算（含空列表 [] 表示昨日合法零涨停）
 
 partial:
-  reason_codes 至少包含 SOURCE_PARTIAL 或对应部分覆盖码
+  reason_codes 至少包含 SOURCE_PARTIAL + 具体部分覆盖码
   warnings = ["snapshot partially available; rates suppressed due to coverage_warning"]
   metrics = null
 
 unavailable:
-  reason_codes 至少包含 SOURCE_UNAVAILABLE
+  reason_codes 至少包含 SOURCE_UNAVAILABLE（或 TRADE_DATE_MISMATCH / NOT_FINAL / TRADING_CALENDAR_UNAVAILABLE）+ 对应侧码
   warnings = ["snapshot unavailable; no layered promotion rates emitted"]
   metrics = null
 ```
 
-**partial 与 unavailable 的 metrics 一致性**：两者均输出 `metrics = null`。
-区别在于 `reason_codes`：partial 表示来源部分可用但覆盖不完整，
-unavailable 表示来源全局失败。调用方应通过 `reason_codes` 区分降级原因。
+### 13.5 rates 输出规则汇总
+
+```
+unavailable → rates=null
+partial → rates=null
+previous legal zero → rates=[]
+current legal zero → concrete zero-rate array（每层 rate=0.0）
+normal → reason_codes=[]，rates 正常计算
+```
 
 ## 14. Controlled Probe Results
 
-本轮未执行实时网络探针。理由见第 4.3 节。
+```
+probes_performed_by_Q = 0
+```
 
-代码证据已充分确认：
-- `em_zt_topic_pool` 支持历史日期
-- `getTopicZTPool` 返回当日涨停池
-- `getYesterdayZTPool` 返回昨涨停池
-- 池内字段 `c`（代码）和 `lbc`（连板数）已确认
+本轮未执行实时网络探针。详见第 4.3 节 reviewer-provided evidence。
+
+仓库使用层面已确认：
+- `em_zt_topic_pool` 传递 `date` 参数
+- `getTopicZTPool` 端点用于当日/历史涨停池
+- `getYesterdayZTPool` 端点用于昨涨停池
+- 池内字段 `c`（代码）和 `lbc`（连板数）被仓库读取
+
+上游语义层面尚未确认：
+- `getTopicZTPool` 历史日期可用性：partially_verified（reviewer-provided，Q 未复验）
+- `getYesterdayZTPool` 与指定前一交易日池的关系：not_verified
+- `lbc` 首板/连板及跨日晋级语义：not_verified
+- 空数组语义：not_verified
+- final 稳定状态：not_verified
+- source update time：not_verified
 
 若实现阶段需要补充验证，建议按第 4.3 节的方案执行受控探针。
 
@@ -709,8 +925,13 @@ unavailable 表示来源全局失败。调用方应通过 `reason_codes` 区分�
 ### 15.3 代码前缀合同
 
 fixture 正常样本仅使用 `60/00/30/68` 前缀（沪市主板/深市主板/创业板/科创板）。
-不使用 `9/4/8/920` 前缀作为正常样本。`identity_edge` case 中的前导零、重复、
-非法代码场景由 `edge_case_notes` 说明，实际池行仍使用合法前缀以保持校验一致性。
+不使用 `9/4/8/920` 前缀作为正常样本。前缀合同用于市场板块形状校验，
+**不用于排除 ST/*ST**。ST/*ST 使用相同的市场代码前缀。
+
+`identity_edge` case 中的前导零、重复、非法代码场景由 `edge_case_notes` 说明，
+实际池行仍使用合法前缀以保持校验一致性。`identity_edge` 是 normal case，
+其实际池不得包含重复或非法行；重复、非法只可作为合同说明，不得声称该 normal case
+实际执行了这些 partial 情形。
 
 ## 16. Risks and Licensing Boundary
 
@@ -721,7 +942,7 @@ fixture 正常样本仅使用 `60/00/30/68` 前缀（沪市主板/深市主板/�
 | 交易日历不完整（节假日） | 高 | 必须先实现交易日历接口 |
 | 东财端点反爬 | 中 | 控制请求频率，复用现有缓存机制 |
 | 跨日身份匹配不完整 | 中 | 标记 PARTIAL_COVERAGE，不假设缺失=未晋级 |
-| final 判定不准 | 中 | 依赖调用方传入 session="final"，不自行判断时间 |
+| final 判定不准 | 中 | 需实现可信 final 生产者，不依赖调用方声明 |
 | 停牌股无法区分 | 低 | 标记 PARTIAL_COVERAGE，若有独立停牌源可升级 |
 
 ### 16.2 许可边界
@@ -735,60 +956,129 @@ fixture 正常样本仅使用 `60/00/30/68` 前缀（沪市主板/深市主板/�
 
 ## 17. Implementation Entry Conditions
 
-### 17.1 必须满足
+```
+implementation_allowed: false
+```
 
-- [x] 股票身份字段明确：`c` 字段，6 位数字字符串
-- [x] 昨日和今日池均可按交易日取得：`em_zt_topic_pool("getTopicZTPool", date, ...)`
-- [x] 连板数字段语义确认：`lbc` 字段，int，>= 1
-- [ ] 跨日匹配至少机械验证 3 组相邻交易日：待实现阶段执行
-- [ ] 交易日历路径明确：合同已定义，但实现未完成
-- [x] final 判定路径明确：依赖调用方传入 session="final"
-- [x] 合法零值语义明确
-- [x] 缺失与部分覆盖语义明确
-- [x] 精确分母合同无歧义
+### 17.1 完整阻断条件清单（九项）
 
-### 17.2 前置依赖
+以下九项必须全部闭合后才允许进入 `layered_promotion_rates` 生产实现。
+Executive Decision、本节、第 18.2 节使用同一份清单。
+
+#### 1. 交易日历的唯一来源、许可、覆盖年份、更新机制和接口尚未实现
+
+- risk: 节假日后首个交易日使用错误的昨日快照，产出错误的晋级率
+- closure action: 选择唯一交易日历源，实现 `previous_trade_date`，记录第 5.4 节字段
+- acceptance evidence: 抽象测试通过（长假后首日、周末输入、非交易日输入、未来日期、超出覆盖年份）
+
+#### 2. 至少 3 组相邻交易日的股票身份与 lbc 跨日关系尚未机械验证
+
+- risk: `lbc` 跨日晋级语义未验证，numerator 可能系统性错误
+- closure action: 执行第 4.3 节受控探针，覆盖 3 组相邻交易日（含节假日边界）
+- acceptance evidence: 3 组探针结果记录、跨日身份匹配一致、lbc 满足 N→N+1 关系
+
+#### 3. getTopicZTPool 历史日期语义仍仅 partially_verified
+
+- risk: 历史日期返回的池可能不是 final 稳定快照
+- closure action: 补充受控探针，验证历史日期返回的池为 final 稳定
+- acceptance evidence: 探针结果记录、final 稳定性确认
+
+#### 4. getYesterdayZTPool 与指定前一交易日池的关系仍为 not_verified
+
+- risk: 本合同不使用 `getYesterdayZTPool`，但若未来考虑使用，需验证其语义
+- closure action: 若不使用则标记为不采用；若使用则验证与 `getTopicZTPool(previous_date)` 一致
+- acceptance evidence: 决策记录或探针结果
+
+#### 5. previous/current 可信 final 快照生产者和稳定窗口尚不存在
+
+- risk: 调用方传入 `session="final"` 只是声明，不能证明来源快照已 final
+- closure action: 实现 final 快照生产者，含 trade_date 校验、字段完整性、稳定窗口、失败和超时语义
+- acceptance evidence: 生产者实现、稳定窗口判定逻辑、失败降级测试
+
+#### 6. 来源适配器尚不能区分 legal zero、非交易日、传输失败、解析失败、限流和访问控制
+
+- risk: 空数组被误判为合法零涨停，产出错误的 `rates=[]`
+- closure action: 实现适配器，输出第 11.2 节十字段
+- acceptance evidence: 适配器实现、各失败场景测试、legal_zero 仅在适配器确认时为 true
+
+#### 7. ST/*ST、BSE 等 universe 必须与 Slice 0 权威合同一致
+
+- risk: universe 偏离导致 denominator 计算错误
+- closure action: 以 Slice 0 可行性文档 universe 表为权威，ST/*ST included，BSE excluded
+- acceptance evidence: universe 合同一致、代码校验通过
+
+#### 8. partial 覆盖时 rates=null 的保守合同必须完整落地
+
+- risk: partial 强行计算产出系统性偏低的近似比例
+- closure action: 落地第 12.2 节统一 partial 语义，所有 partial → rates=null
+- acceptance evidence: 测试覆盖所有 partial reason-code、rates 均为 null
+
+#### 9. fixture、reason-code 和状态映射必须通过机械验证
+
+- risk: 合同内部不一致
+- closure action: 执行第 15 节 fixture 校验、第 16 节文档扫描
+- acceptance evidence: JSON 校验通过、合同校验脚本通过、文档扫描无命中
+
+### 17.2 检查清单
+
+```
+[ ] 1. 交易日历实现
+[ ] 2. 3 组相邻交易日跨日验证
+[ ] 3. getTopicZTPool 历史日期语义验证
+[ ] 4. getYesterdayZTPool 关系验证（或不采用决策）
+[ ] 5. final 快照生产者及稳定窗口明确
+[ ] 6. 来源适配器区分 legal zero / 失败
+[ ] 7. universe 与 Slice 0 一致
+[ ] 8. partial rates=null 落地
+[ ] 9. fixture / reason-code / 状态映射机械验证
+```
+
+不得保留：
+```
+[x] final 判定路径明确：依赖调用方传入 session="final"
+```
+
+### 17.3 前置依赖
 
 - **必须先实现** `backend/trade_calendar.py` 的 `previous_trade_date` 函数
-- 建议在下一独立子阶段（Slice 2B-1）实现
+- **必须先实现** final 快照生产者
+- **必须先实现** 来源适配器（含 legal_zero 区分）
+- 建议在下一独立子阶段实现
 
 ## 18. GO / CONDITIONAL GO / NO-GO Decision
 
 ### 18.1 决策
 
-**CONDITIONAL GO**
-
-### 18.2 未满足条件
-
 ```
-交易日历实现未完成
+overall: CONDITIONAL GO
+implementation_allowed: false
 ```
 
-`data_health_service.previous_weekday` 仅处理周末，无法处理法定节假日。
-在节假日后首个交易日，`previous_trade_date` 会返回错误的日期（跳过节假日），
-导致分层晋级率使用错误的昨日快照。
+### 18.2 完整阻断条件清单（九项）
 
-### 18.3 风险
+与第 1 节 Executive Decision、第 17.1 节使用同一份清单。
 
-- 节假日后首个交易日的分层晋级率会使用错误的昨日数据
-- 例如：国庆后首个交易日（如 10-08），`previous_weekday` 返回 10-07（非交易日），
-  而实际前一交易日是 09-30
+```
+1. 交易日历的唯一来源、许可、覆盖年份、更新机制和接口尚未实现
+2. 至少 3 组相邻交易日的股票身份与 lbc 跨日关系尚未机械验证
+3. getTopicZTPool 历史日期语义仍仅 partially_verified
+4. getYesterdayZTPool 与指定前一交易日池的关系仍为 not_verified
+5. previous/current 可信 final 快照生产者和稳定窗口尚不存在
+6. 来源适配器尚不能区分 legal zero、非交易日、传输失败、解析失败、限流和访问控制
+7. ST/*ST、BSE 等 universe 必须与 Slice 0 权威合同一致
+8. partial 覆盖时 rates=null 的保守合同必须完整落地
+9. fixture、reason-code 和状态映射必须通过机械验证
+```
 
-### 18.4 具体关闭办法
+每项的 risk、closure action、acceptance evidence 见第 17.1 节。
 
-1. 新增 `backend/trade_calendar.py`
-2. 实现 `previous_trade_date(current_trade_date: str) -> str | None`
-3. 数据源：内置静态节假日表（每年维护）或东财交易日历 API
-4. 失败时返回 `None`，调用方降级为 `unavailable` + `TRADING_CALENDAR_UNAVAILABLE`
+### 18.3 内部一致性
 
-### 18.5 关闭后的验收证据
+- 计算公式合同已经可以定义
+- 来源、日历、final、适配器和跨日验证尚未闭合
+- 当前不得进入 `layered_promotion_rates` 生产实现
+- 不得在某一章节勾选已满足，而在另一章节又列为未满足
 
-- `previous_trade_date("2026-10-08")` 返回 `"2026-09-30"`（假设 10-01 至 10-07 为国庆假期）
-- `previous_trade_date("2026-02-05")` 返回春节前最后一个交易日
-- `previous_trade_date("2026-07-30")` 返回 `"2026-07-29"`（普通工作日）
-- 周末输入返回前一交易日
-- 非交易日输入返回 `None`
+### 18.4 关闭后流程
 
-关闭该条件后，可重新评估 `layered_promotion_rates` 进入生产实现的条件。仍需确认：
-跨日匹配至少机械验证 3 组相邻交易日（含节假日边界）、final 判定路径由调用方显式传入、
-合法零值与部分覆盖的降级语义已落地。
+九项全部闭合后，重新评估进入生产实现的条件。不得仅关闭其中一项即直接生产。

@@ -5,8 +5,9 @@
   "description": "BK-11 Slice 2B offline fixture for layered promotion rate contract validation. All stock codes and numeric values are manually constructed synthetic values used only to test schema and calculation consistency. They do not represent actual historical market data. Normal-sample stock codes use 60/00/30/68 prefixes aligned with the A-share universe (SH main / SZ main / ChiNext / STAR); they are synthetic and do not correspond to real securities.",
   "trade_dates": ["2026-07-29", "2026-07-30"],
   "market_scope": {
-    "included": ["SH main", "SZ main", "ChiNext", "STAR"],
-    "excluded": ["BSE", "ST", "*ST", "IPO no-limit period", "delisting period", "B shares", "ETF", "LOF", "convertible bonds", "funds", "indexes"]
+    "included": ["SH main", "SZ main", "ChiNext", "STAR", "ST", "*ST"],
+    "excluded": ["BSE", "IPO no-limit period", "delisting period", "B shares", "ETF", "LOF", "convertible bonds", "funds", "indexes"],
+    "st_rule": "ST/*ST 状态不由股票代码前缀决定；ST/*ST 使用与正常股相同的市场代码前缀（60/00/30/68）。ST/*ST 是否进入分母会直接改变 denominator。本审计以已批准的 Slice 0 可行性文档 universe 表为权威合同；Slice 0 fixture 中 ST/*ST excluded 属既有不一致，不在本轮采用，也不构成新的 universe 决策。"
   },
   "code_prefix_contract": {
     "sh_main": "60xxxx",
@@ -14,7 +15,8 @@
     "chinext": "30xxxx",
     "star": "68xxxx",
     "excluded_prefixes": ["4xxxxx", "8xxxxx", "920xxx", "9xxxxx"],
-    "normalization": "trim → keep string → validate 6 digits → accept only 60/00/30/68 prefixes"
+    "normalization": "trim → keep string → validate 6 digits → accept only 60/00/30/68 prefixes",
+    "note": "前缀合同用于市场板块形状校验，不用于排除 ST/*ST。ST/*ST 使用相同的市场代码前缀。代码前缀仅为辅助校验；长期市场身份应由明确的目标交易所/universe 规则决定，不能只依赖前缀。"
   },
   "cases": [
     {
