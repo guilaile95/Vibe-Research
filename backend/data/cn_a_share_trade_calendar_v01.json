@@ -13,48 +13,60 @@
       "year": 2024,
       "title": "关于上海证券交易所2024年部分节假日休市安排的通知",
       "announcement_date": "2023-12-26",
+      "reference_number": "上证公告〔2023〕47号",
       "URL": "https://www.sse.com.cn/disclosure/announcement/general/c/c_20231226_5733939.shtml",
-      "retrieved_at": "2026-08-03T00:00:00Z"
+      "retrieved_at": "2026-08-03T00:00:00Z",
+      "verification_status": "verified_direct_official"
     },
     {
       "exchange": "SZSE",
       "year": 2024,
       "title": "关于2024年部分节假日休市安排的通知",
       "announcement_date": "2023-12-26",
-      "URL": "http://www.szse.cn/disclosure/notice/general/t20240201_605828.html",
-      "retrieved_at": "2026-08-03T00:00:00Z"
+      "reference_number": "深证会〔2023〕409号",
+      "URL": "https://www.szse.cn/disclosure/notice/general/t20231226_605108.html",
+      "retrieved_at": "2026-08-03T00:00:00Z",
+      "verification_status": "verified_direct_official"
     },
     {
       "exchange": "SSE",
       "year": 2025,
       "title": "关于上海证券交易所2025年部分节假日休市安排的通知",
       "announcement_date": "2024-12-23",
+      "reference_number": "上证公告〔2024〕38号",
       "URL": "https://www.sse.com.cn/disclosure/announcement/general/c/c_20241223_10767108.shtml",
-      "retrieved_at": "2026-08-03T00:00:00Z"
+      "retrieved_at": "2026-08-03T00:00:00Z",
+      "verification_status": "verified_direct_official"
     },
     {
       "exchange": "SZSE",
       "year": 2025,
       "title": "关于2025年部分节假日休市安排的通知",
       "announcement_date": "2024-12-23",
+      "reference_number": "深证会〔2024〕413号",
       "URL": "https://www.szse.cn/disclosure/notice/general/t20241223_611283.html",
-      "retrieved_at": "2026-08-03T00:00:00Z"
+      "retrieved_at": "2026-08-03T00:00:00Z",
+      "verification_status": "verified_direct_official"
     },
     {
       "exchange": "SSE",
       "year": 2026,
       "title": "关于上海证券交易所2026年部分节假日休市安排的通知",
       "announcement_date": "2025-12-22",
+      "reference_number": "上证公告〔2025〕45号",
       "URL": "https://www.sse.com.cn/disclosure/announcement/general/c/c_20251222_10802507.shtml",
-      "retrieved_at": "2026-08-03T00:00:00Z"
+      "retrieved_at": "2026-08-03T00:00:00Z",
+      "verification_status": "verified_direct_official"
     },
     {
       "exchange": "SZSE",
       "year": 2026,
       "title": "关于2026年部分节假日休市安排的通知",
       "announcement_date": "2025-12-22",
-      "URL": "http://www.szse.cn/disclosure/notice/general/t20260423_620142.html",
-      "retrieved_at": "2026-08-03T00:00:00Z"
+      "reference_number": "深证会〔2025〕481号",
+      "URL": "https://www.szse.cn/disclosure/notice/general/t20251222_618087.html",
+      "retrieved_at": "2026-08-03T00:00:00Z",
+      "verification_status": "verified_direct_official"
     }
   ],
   "sessions": [

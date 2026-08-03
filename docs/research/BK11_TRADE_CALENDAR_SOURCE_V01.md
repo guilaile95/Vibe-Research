@@ -142,9 +142,9 @@ Covered holidays (closed ranges):
 | announcement title | 关于2024年部分节假日休市安排的通知 |
 | announcement date | 2023-12-26 |
 | reference number | 深证会〔2023〕409号 |
-| source URL | http://www.szse.cn/disclosure/notice/general/t20240201_605828.html |
+| source URL | https://www.szse.cn/disclosure/notice/general/t20231226_605108.html |
 | retrieved_at | 2026-08-03T00:00:00Z |
-| verification status | verified (annual notice full text confirmed via multiple official secondary sources: 中国经济网 ce.cn, 上观新闻 jfdaily.com, 财联社 eastmoney.com; sub-notice URL on szse.cn references 深证会〔2023〕409号) |
+| verification status | verified_direct_official (direct annual notice on szse.cn) |
 
 Covered holidays: identical to SSE 2024.
 
@@ -171,10 +171,10 @@ Covered holidays: identical to SSE 2025.
 | year | 2026 |
 | announcement title | 关于2026年部分节假日休市安排的通知 |
 | announcement date | 2025-12-22 |
-| reference number | 深证会〔2025〕481号 (based on 证监办发〔2025〕130号) |
-| source URL | http://www.szse.cn/disclosure/notice/general/t20260423_620142.html |
+| reference number | 深证会〔2025〕481号 |
+| source URL | https://www.szse.cn/disclosure/notice/general/t20251222_618087.html |
 | retrieved_at | 2026-08-03T00:00:00Z |
-| verification status | verified (annual notice full text confirmed via multiple official secondary sources: 经济日报 jingjiribao.cn, 证券时报 stcn.com, 央广网 cnr.cn; sub-notice URL on szse.cn references 证监办发〔2025〕130号) |
+| verification status | verified_direct_official (direct annual notice on szse.cn; references 证监办发〔2025〕130号) |
 
 Covered holidays: identical to SSE 2026.
 
@@ -267,22 +267,50 @@ incorporated unless they were already reflected in the annual announcement.
 
 Future versions may add a supplementary-closure update mechanism.
 
+## 10a. Supplementary Notice Audit (2024-01-01 to 2026-08-03)
+
+**Search scope**:
+- SSE official site (sse.com.cn): disclosure/announcement listings, news releases
+- SZSE official site (szse.cn): disclosure/notice listings, news releases
+- CSRC (csrc.gov.cn): national-level trading suspension notices
+- Time window: 2024-01-01 to current review date (2026-08-03)
+
+**Official notices found that change A-share whole-market sessions**: none.
+
+Between 2024-01-01 and 2026-08-03, no supplementary SSE/SZSE announcements
+were identified that altered A-share whole-market sessions beyond the
+already-documented annual holiday arrangements. Specifically:
+- Typhoon-related closures in 2024 (e.g., Yagi in September) affected only
+  the Hong Kong Stock Exchange; SSE and SZSE remained open.
+- National mourning or system-failure full-market closures did not occur.
+- No CSRC supplementary closure directive was issued for A-share whole-market
+  sessions within the review window.
+
+**Artifact impact**: none; the offline calendar does not need adjustment.
+
+**Limitations**:
+- This audit was performed via web-based searches on szse.cn, sse.com.cn
+  and CSRC announcement listings.
+- The reviewer did not exhaustively scrape every page of the two exchanges'
+  news archives; the result is best-effort, not a guaranteed-complete scan.
+- A future round should perform a structured supplementary-notice sweep
+  (e.g., RSS or official API) before each artifact version bump.
+
 ## 11. Licensing and Redistribution Boundary
 
-This artifact contains only:
-- Source metadata (exchange, year, title, announcement date, URL)
-- Standardised closed date ranges (derived from official announcements)
-- Standardised trading date list (derived from the above)
-- Contract documentation
+本仓库只提交自行标准化的事实性日期集合、来源元数据和短篇概括。
+
+未取得交易所对公告正文的明确再分发许可。
+
+不提交公告全文、完整 HTML、PDF 或大段逐字内容。
+
+本文件不作版权或再分发法律结论。
 
 It does NOT contain:
 - Cookie, Token, or access-control parameters
 - Full webpage HTML, PDF, or raw response bodies
 - Complete copied text of official announcements
-- Any copyrighted material beyond factual date data
-
-Trading date facts are derived from official public announcements and are
-not subject to copyright restriction.
+- Any copyrighted material beyond factual date data and source metadata
 
 ## 12. Offline Artifact Schema
 
@@ -457,10 +485,18 @@ cross-check; if conflicts arise, official announcements take precedence.
 
 ## Note on SZSE Annual Notice URLs
 
-For SZSE 2024 and 2026, the direct annual-notice URL on szse.cn was not
-located during this round. The full annual-notice text was verified via
-multiple official secondary sources (中国经济网, 上观新闻, 财联社 for 2024;
-经济日报, 证券时报, 央广网 for 2026), and individual sub-notices on szse.cn
-reference the annual notice numbers (深证会〔2023〕409号 and
-深证会〔2025〕481号 respectively). The SZSE 2025 annual notice direct URL
-was located on szse.cn.
+Both SZSE 2024 and SZSE 2026 direct annual-notice URLs on szse.cn
+have been located and verified by opening each page directly:
+
+- SZSE 2024: https://www.szse.cn/disclosure/notice/general/t20231226_605108.html
+  (深证会〔2023〕409号, published 2023-12-26)
+- SZSE 2025: https://www.szse.cn/disclosure/notice/general/t20241223_611283.html
+  (深证会〔2024〕413号, published 2024-12-23)
+- SZSE 2026: https://www.szse.cn/disclosure/notice/general/t20251222_618087.html
+  (深证会〔2025〕481号, published 2025-12-22)
+
+Previous placeholder sub-notice URLs (t20240201_605828.html for 2024 and
+t20260423_620142.html for 2026) have been replaced with the direct annual
+notice URLs. Third-party media sources previously used for cross-check
+(中国经济网, 上观新闻, 财联社, 经济日报, 证券时报, 央广网) are no
+longer part of the authoritative evidence chain.
