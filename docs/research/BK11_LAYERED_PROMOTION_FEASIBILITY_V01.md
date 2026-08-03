@@ -71,9 +71,13 @@ def em_zt_topic_pool(endpoint: str, date: str, sort: str = "fbt:asc") -> list[di
 yzt = astock.em_zt_topic_pool("getYesterdayZTPool", resolved, "zs:desc")  # 昨涨停池
 ```
 
-`getYesterdayZTPool` 端点返回前一交易日的涨停池。但注意：
-- 该端点返回的是 **前一交易日** 的涨停池，不是任意历史日
-- 若需要任意历史日 N 的涨停池，应使用 `getTopicZTPool` 传入历史日期 `date`
+仓库按"昨涨停池"用途调用 `getYesterdayZTPool`（调用路径与使用目的已确认）。
+
+根据端点命名，预期其表示前一交易日相关池；但真实日期关系尚未完成机械验证，
+当前状态为 `not_verified`。
+
+在完成阻断条件 4 前，不得将该端点作为精确 previous-day 分母来源。
+若需要任意历史日 N 的涨停池，应使用 `getTopicZTPool` 传入历史日期 `date`。
 
 ### 3.3 涨停池字段（代码已确认）
 
@@ -328,7 +332,7 @@ raw code
 | 代码字段是否始终稳定 | 是，6 位代码为 A 股稳定身份 | 代码已确认 |
 | ST 与 *ST 是否仍使用同一代码 | 是，ST/*ST 仅影响涨跌停限制，代码不变 | 通用知识 |
 | 退市整理期是否可能进入池 | 否，退市整理期股票不在涨停池 | 推断（东财涨停池不含退市股） |
-| 北交所代码是否可能进入响应 | 是，8xxxxx/4xxxxx 可能在响应中，但项目 universe 排除 BSE | `fixture V01 market_scope.excluded: ["BSE"]` |
+| 北交所代码是否可能进入响应 | 是，4xxxxx/8xxxxx/920xxx 可能在响应中，但项目 universe 排除 BSE | 代码前缀仅用于辅助校验，长期市场身份由明确的交易所和 universe 规则决定 |
 | 重复行如何处理 | 保留首次合法记录，忽略后续重复 | `short_term_limit_up_ladder.py` 已实现 |
 
 ### 6.4 universe 合同
@@ -375,8 +379,10 @@ previous_pool = astock.em_zt_topic_pool("getTopicZTPool", previous_date_yyyymmdd
 current_pool = astock.em_zt_topic_pool("getTopicZTPool", current_date_yyyymmdd, "fbt:asc")
 ```
 
-注意：不使用 `getYesterdayZTPool`，因为该端点返回的是"相对于参数日期的前一交易日"的池，
-而我们需要的是"任意指定历史日"的池。使用 `getTopicZTPool(date)` 传入历史日期更明确。
+注意：不使用 `getYesterdayZTPool` 作为精确 previous-day 分母来源。根据端点命名，
+预期其表示前一交易日相关池，但真实日期关系尚未完成机械验证（`not_verified`，
+见阻断条件 4）；在验证完成前，需要"任意指定历史日"的池时使用
+`getTopicZTPool(date)` 传入历史日期更明确。
 
 ### 7.3 可信 final 合同
 
@@ -661,7 +667,7 @@ status = normal
 理由：昨日有涨停股，但今日无任何涨停（合法零值），所有昨日涨停股今日均未晋级，
 numerator 全为 0，rate 全为 0.0。
 
-### 11.5 今日未解释空池
+### 11.5 未解释空池（previous 或 current）
 
 ```
 今日 limit_up_pool = []
@@ -669,14 +675,17 @@ numerator 全为 0，rate 全为 0.0。
 今日 unexplained_empty = true
 ```
 
-处理：
+处理（previous 与 current 侧相同）：
 ```
 layered_promotion_rates = null
 status = partial
-reason_codes 包含 UNEXPLAINED_EMPTY, SOURCE_PARTIAL
+reason_codes = [SOURCE_PARTIAL, UNEXPLAINED_EMPTY]
 ```
 
-理由：今日空池无法确认是合法零值还是数据缺失，不能简单视为未晋级。
+理由：空池无法确认是合法零值还是数据缺失，不能简单视为未晋级。
+侧别由对应侧 data_health 标识（`UNEXPLAINED_EMPTY` 的 side 为 previous 或 current），
+不包含 `PREVIOUS_SNAPSHOT_UNAVAILABLE` / `CURRENT_SNAPSHOT_UNAVAILABLE`
+（这两个 unavailable 侧码仅用于全局失败场景，见第 13.1 节）。
 
 ### 11.6 今日普通空池
 
@@ -739,8 +748,8 @@ reason_codes 包含 SOURCE_UNAVAILABLE, CURRENT_SNAPSHOT_UNAVAILABLE
 | 任一侧非 final | unavailable | null | NOT_FINAL, SOURCE_UNAVAILABLE |
 | 昨日合法零涨停 | normal | [] | （无） |
 | 今日合法零涨停 | normal | 正常计算（numerator全0, rate=0.0） | （无） |
-| 昨日空池未解释 | partial | null | SOURCE_PARTIAL, UNEXPLAINED_EMPTY, PREVIOUS_SNAPSHOT_UNAVAILABLE |
-| 今日空池未解释 | partial | null | SOURCE_PARTIAL, UNEXPLAINED_EMPTY, CURRENT_SNAPSHOT_UNAVAILABLE |
+| 昨日空池未解释 | partial | null | SOURCE_PARTIAL, UNEXPLAINED_EMPTY |
+| 今日空池未解释 | partial | null | SOURCE_PARTIAL, UNEXPLAINED_EMPTY |
 | coverage_warning=true（任一侧） | partial | null | SOURCE_PARTIAL, PARTIAL_COVERAGE |
 | 昨日部分非法行 | partial | null | SOURCE_PARTIAL, INVALID_POOL_ROW, PARTIAL_COVERAGE |
 | 今日部分非法行 | partial | null | SOURCE_PARTIAL, INVALID_POOL_ROW, PARTIAL_COVERAGE |
@@ -793,7 +802,7 @@ unavailable 表示来源全局失败或非 final / 日期不匹配。调用方�
 | `IDENTITY_MATCH_INCOMPLETE` | 身份匹配不完整 | both | partial | null | 9 | SOURCE_PARTIAL | 跨日匹配存在无法对齐的样本 |
 | `INVALID_POOL_ROW` | 池行非法（代码/连板数缺失或非法） | previous/current | partial | null | 10 | SOURCE_PARTIAL | 该行排除 |
 | `DUPLICATE_STOCK_CODE` | 池内重复代码 | previous/current | partial | null | 11 | SOURCE_PARTIAL | 保留首次合法记录 |
-| `UNEXPLAINED_EMPTY` | 空池未解释 | previous/current | partial | null | 12 | SOURCE_PARTIAL | 空池无法确认合法零值 |
+| `UNEXPLAINED_EMPTY` | 任一侧池为空，legal_zero=false，且无法解释为空 | previous or current，由对应侧 data_health 标识 | partial | null | 12 | SOURCE_PARTIAL | 空池无法确认合法零值；不包含 unavailable 侧码 |
 
 ### 13.2 组合规则
 
@@ -815,6 +824,10 @@ partial 总括码
 
 具体 partial 原因码：
 与 SOURCE_PARTIAL 同时输出
+
+partial unexplained empty：
+SOURCE_PARTIAL + UNEXPLAINED_EMPTY
+（不包含 PREVIOUS_SNAPSHOT_UNAVAILABLE / CURRENT_SNAPSHOT_UNAVAILABLE）
 ```
 
 ### 13.3 优先级排序
