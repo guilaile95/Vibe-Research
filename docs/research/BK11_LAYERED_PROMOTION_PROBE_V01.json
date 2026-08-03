@@ -1,0 +1,440 @@
+{
+  "schema_version": "bk11-layered-promotion-probe.v0.1",
+  "generated_at": "2026-08-03T17:17:59Z",
+  "timezone": "Asia/Shanghai",
+  "review_date": "2026-08-04",
+  "source_endpoint": "getTopicZTPool",
+  "source_base_url": "https://push2ex.eastmoney.com/getTopicZTPool",
+  "sort": "fbt:asc",
+  "request_discipline": {
+    "serialization": "serial",
+    "min_interval_seconds": 2.0,
+    "max_retries_per_request": 3,
+    "timeout_seconds": 10
+  },
+  "get_yesterday_policy": "NOT_ADOPTED_IN_V0_1",
+  "normalization_contract": {
+    "identity_key": "stock_code",
+    "stock_code_format": "six-digit zero-padded string",
+    "lbc_format": "positive integer, missing/invalid counted as invalid_lbc_count",
+    "dedup_rule": "first valid record per stock_code kept",
+    "sort_rule": "stock_code ascending",
+    "hash_input": "deterministic JSON (sorted keys, no whitespace, UTF-8)"
+  },
+  "pairs": [
+    {
+      "pair_id": "A",
+      "boundary_type": "ordinary_consecutive",
+      "selection_rule": "latest (Tue-Fri) adjacent trading days before review date",
+      "previous_date": "2026-07-30",
+      "current_date": "2026-07-31",
+      "calendar_evidence": {
+        "trade_calendar_api": "trade_calendar.previous_trade_date",
+        "previous_trade_date_of_current": "2026-07-30",
+        "matches_declared_previous": true,
+        "calendar_verified": true
+      },
+      "previous_probe": {
+        "round1": {
+          "requested_at": "2026-08-03T17:17:31Z",
+          "completed_at": "2026-08-03T17:17:32Z",
+          "elapsed_seconds": 0.64,
+          "transport_success": true,
+          "parse_success": true,
+          "row_count": 52,
+          "raw_payload_sha256": "891162dbbc4d69145578ec6145ddc270bd89636063e4f9db33f83f34247776cb",
+          "normalized_payload_sha256": "a986e2a8eb5ca462f444a7c12c947d9e3f6d354e89c03f773eebc3ebcaf0971e",
+          "duplicate_code_count": 0,
+          "invalid_code_count": 0,
+          "invalid_lbc_count": 0,
+          "empty_result": false,
+          "error_class": "NONE"
+        },
+        "round2": {
+          "requested_at": "2026-08-03T17:17:34Z",
+          "completed_at": "2026-08-03T17:17:34Z",
+          "elapsed_seconds": 0.047,
+          "transport_success": true,
+          "parse_success": true,
+          "row_count": 52,
+          "raw_payload_sha256": "891162dbbc4d69145578ec6145ddc270bd89636063e4f9db33f83f34247776cb",
+          "normalized_payload_sha256": "a986e2a8eb5ca462f444a7c12c947d9e3f6d354e89c03f773eebc3ebcaf0971e",
+          "duplicate_code_count": 0,
+          "invalid_code_count": 0,
+          "invalid_lbc_count": 0,
+          "empty_result": false,
+          "error_class": "NONE"
+        },
+        "normalized_hash_equal": true,
+        "raw_hash_equal": true
+      },
+      "current_probe": {
+        "round1": {
+          "requested_at": "2026-08-03T17:17:36Z",
+          "completed_at": "2026-08-03T17:17:37Z",
+          "elapsed_seconds": 0.463,
+          "transport_success": true,
+          "parse_success": true,
+          "row_count": 99,
+          "raw_payload_sha256": "fee4a71d691077d277aa49e40a01a128c64ddab50aa1cdc5e0e1f10ff4a61e90",
+          "normalized_payload_sha256": "8e28f950b45ac957513c42fbf0aae4be830e1384bfbe29f983b6f557e8b085b9",
+          "duplicate_code_count": 0,
+          "invalid_code_count": 0,
+          "invalid_lbc_count": 0,
+          "empty_result": false,
+          "error_class": "NONE"
+        },
+        "round2": {
+          "requested_at": "2026-08-03T17:17:39Z",
+          "completed_at": "2026-08-03T17:17:39Z",
+          "elapsed_seconds": 0.043,
+          "transport_success": true,
+          "parse_success": true,
+          "row_count": 99,
+          "raw_payload_sha256": "fee4a71d691077d277aa49e40a01a128c64ddab50aa1cdc5e0e1f10ff4a61e90",
+          "normalized_payload_sha256": "8e28f950b45ac957513c42fbf0aae4be830e1384bfbe29f983b6f557e8b085b9",
+          "duplicate_code_count": 0,
+          "invalid_code_count": 0,
+          "invalid_lbc_count": 0,
+          "empty_result": false,
+          "error_class": "NONE"
+        },
+        "normalized_hash_equal": true,
+        "raw_hash_equal": true
+      },
+      "stability": {
+        "previous_date": "STABLE",
+        "current_date": "STABLE",
+        "pair_usable_for_cross_day": true
+      },
+      "promotion_rates": {
+        "identity_match_basis": "round1 normalized rows, stock_code identity only",
+        "levels": [
+          {
+            "from_level": 1,
+            "to_level": 2,
+            "denominator": 6,
+            "numerator": 6,
+            "sample_count": 6,
+            "rate": 1.0,
+            "matched_stock_codes": ["000009", "000820", "300996", "600162", "603039", "603171"]
+          },
+          {
+            "from_level": 2,
+            "to_level": 3,
+            "denominator": 1,
+            "numerator": 1,
+            "sample_count": 1,
+            "rate": 1.0,
+            "matched_stock_codes": ["002827"]
+          },
+          {
+            "from_level": 3,
+            "to_level": 4,
+            "denominator": 1,
+            "numerator": 1,
+            "sample_count": 1,
+            "rate": 1.0,
+            "matched_stock_codes": ["605179"]
+          },
+          {
+            "from_level": 4,
+            "to_level": 5,
+            "denominator": 1,
+            "numerator": 1,
+            "sample_count": 1,
+            "rate": 1.0,
+            "matched_stock_codes": ["003032"]
+          },
+          {
+            "from_level": 8,
+            "to_level": 9,
+            "denominator": 1,
+            "numerator": 1,
+            "sample_count": 1,
+            "rate": 1.0,
+            "matched_stock_codes": ["603221"]
+          }
+        ],
+        "anomalies": {
+          "same_level_count": 0,
+          "skipped_level_count": 0,
+          "missing_current_count": 42,
+          "unexpected_decrease_count": 0,
+          "duplicate_affected_count": 0,
+          "invalid_affected_count": 0
+        },
+        "real_promotion_observed": true
+      },
+      "decision": {
+        "cross_day_identity_verified": true,
+        "promotion_formula_reproducible": true,
+        "contributes_to_blocker_2": true
+      }
+    },
+    {
+      "pair_id": "B",
+      "boundary_type": "cross_weekend",
+      "selection_rule": "latest Monday trading day + previous_trade_date before review date",
+      "previous_date": "2026-07-24",
+      "current_date": "2026-07-27",
+      "calendar_evidence": {
+        "trade_calendar_api": "trade_calendar.previous_trade_date",
+        "previous_trade_date_of_current": "2026-07-24",
+        "matches_declared_previous": true,
+        "calendar_verified": true
+      },
+      "previous_probe": {
+        "round1": {
+          "requested_at": "2026-08-03T17:17:41Z",
+          "completed_at": "2026-08-03T17:17:42Z",
+          "elapsed_seconds": 0.472,
+          "transport_success": true,
+          "parse_success": true,
+          "row_count": 40,
+          "raw_payload_sha256": "358e63465411654c8c5af5897198d96afda2236d05f156032a774c1272a656d7",
+          "normalized_payload_sha256": "33c06378a1a69fc80b7a9ae98b177db1807a01d43f386d79c70a53a9d35a0981",
+          "duplicate_code_count": 0,
+          "invalid_code_count": 0,
+          "invalid_lbc_count": 0,
+          "empty_result": false,
+          "error_class": "NONE"
+        },
+        "round2": {
+          "requested_at": "2026-08-03T17:17:44Z",
+          "completed_at": "2026-08-03T17:17:45Z",
+          "elapsed_seconds": 0.045,
+          "transport_success": true,
+          "parse_success": true,
+          "row_count": 40,
+          "raw_payload_sha256": "358e63465411654c8c5af5897198d96afda2236d05f156032a774c1272a656d7",
+          "normalized_payload_sha256": "33c06378a1a69fc80b7a9ae98b177db1807a01d43f386d79c70a53a9d35a0981",
+          "duplicate_code_count": 0,
+          "invalid_code_count": 0,
+          "invalid_lbc_count": 0,
+          "empty_result": false,
+          "error_class": "NONE"
+        },
+        "normalized_hash_equal": true,
+        "raw_hash_equal": true
+      },
+      "current_probe": {
+        "round1": {
+          "requested_at": "2026-08-03T17:17:47Z",
+          "completed_at": "2026-08-03T17:17:47Z",
+          "elapsed_seconds": 0.479,
+          "transport_success": true,
+          "parse_success": true,
+          "row_count": 111,
+          "raw_payload_sha256": "9cc61034f22b4a165b14b3d76fdff155ad9a4dc9a410a1ae99411a5d84c00854",
+          "normalized_payload_sha256": "00c9745ac571a0274ae592077c6b4a6f28750cf288d8b92cc5777a30ed240d98",
+          "duplicate_code_count": 0,
+          "invalid_code_count": 0,
+          "invalid_lbc_count": 0,
+          "empty_result": false,
+          "error_class": "NONE"
+        },
+        "round2": {
+          "requested_at": "2026-08-03T17:17:49Z",
+          "completed_at": "2026-08-03T17:17:50Z",
+          "elapsed_seconds": 0.045,
+          "transport_success": true,
+          "parse_success": true,
+          "row_count": 111,
+          "raw_payload_sha256": "9cc61034f22b4a165b14b3d76fdff155ad9a4dc9a410a1ae99411a5d84c00854",
+          "normalized_payload_sha256": "00c9745ac571a0274ae592077c6b4a6f28750cf288d8b92cc5777a30ed240d98",
+          "duplicate_code_count": 0,
+          "invalid_code_count": 0,
+          "invalid_lbc_count": 0,
+          "empty_result": false,
+          "error_class": "NONE"
+        },
+        "normalized_hash_equal": true,
+        "raw_hash_equal": true
+      },
+      "stability": {
+        "previous_date": "STABLE",
+        "current_date": "STABLE",
+        "pair_usable_for_cross_day": true
+      },
+      "promotion_rates": {
+        "identity_match_basis": "round1 normalized rows, stock_code identity only",
+        "levels": [
+          {
+            "from_level": 1,
+            "to_level": 2,
+            "denominator": 3,
+            "numerator": 3,
+            "sample_count": 3,
+            "rate": 1.0,
+            "matched_stock_codes": ["002388", "600617", "603690"]
+          },
+          {
+            "from_level": 2,
+            "to_level": 3,
+            "denominator": 2,
+            "numerator": 2,
+            "sample_count": 2,
+            "rate": 1.0,
+            "matched_stock_codes": ["000533", "601606"]
+          },
+          {
+            "from_level": 3,
+            "to_level": 4,
+            "denominator": 1,
+            "numerator": 1,
+            "sample_count": 1,
+            "rate": 1.0,
+            "matched_stock_codes": ["301234"]
+          },
+          {
+            "from_level": 4,
+            "to_level": 5,
+            "denominator": 2,
+            "numerator": 2,
+            "sample_count": 2,
+            "rate": 1.0,
+            "matched_stock_codes": ["002879", "603221"]
+          }
+        ],
+        "anomalies": {
+          "same_level_count": 0,
+          "skipped_level_count": 0,
+          "missing_current_count": 32,
+          "unexpected_decrease_count": 0,
+          "duplicate_affected_count": 0,
+          "invalid_affected_count": 0
+        },
+        "real_promotion_observed": true
+      },
+      "decision": {
+        "cross_day_identity_verified": true,
+        "promotion_formula_reproducible": true,
+        "contributes_to_blocker_2": true
+      }
+    },
+    {
+      "pair_id": "C",
+      "boundary_type": "post_holiday",
+      "selection_rule": "2026 first trading day after Dragon Boat Festival + previous_trade_date",
+      "previous_date": "2026-06-18",
+      "current_date": "2026-06-22",
+      "calendar_evidence": {
+        "trade_calendar_api": "trade_calendar.previous_trade_date",
+        "previous_trade_date_of_current": "2026-06-18",
+        "matches_declared_previous": true,
+        "calendar_verified": true,
+        "holiday_reference": "2026-06-19 Dragon Boat Festival"
+      },
+      "previous_probe": {
+        "round1": {
+          "requested_at": "2026-08-03T17:17:52Z",
+          "completed_at": "2026-08-03T17:17:52Z",
+          "elapsed_seconds": 0.05,
+          "transport_success": true,
+          "parse_success": true,
+          "row_count": 0,
+          "raw_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "normalized_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "duplicate_code_count": 0,
+          "invalid_code_count": 0,
+          "invalid_lbc_count": 0,
+          "empty_result": true,
+          "error_class": "EMPTY_UNEXPLAINED"
+        },
+        "round2": {
+          "requested_at": "2026-08-03T17:17:54Z",
+          "completed_at": "2026-08-03T17:17:55Z",
+          "elapsed_seconds": 0.043,
+          "transport_success": true,
+          "parse_success": true,
+          "row_count": 0,
+          "raw_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "normalized_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "duplicate_code_count": 0,
+          "invalid_code_count": 0,
+          "invalid_lbc_count": 0,
+          "empty_result": true,
+          "error_class": "EMPTY_UNEXPLAINED"
+        },
+        "normalized_hash_equal": true,
+        "raw_hash_equal": true
+      },
+      "current_probe": {
+        "round1": {
+          "requested_at": "2026-08-03T17:17:57Z",
+          "completed_at": "2026-08-03T17:17:57Z",
+          "elapsed_seconds": 0.046,
+          "transport_success": true,
+          "parse_success": true,
+          "row_count": 0,
+          "raw_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "normalized_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "duplicate_code_count": 0,
+          "invalid_code_count": 0,
+          "invalid_lbc_count": 0,
+          "empty_result": true,
+          "error_class": "EMPTY_UNEXPLAINED"
+        },
+        "round2": {
+          "requested_at": "2026-08-03T17:17:59Z",
+          "completed_at": "2026-08-03T17:18:00Z",
+          "elapsed_seconds": 0.044,
+          "transport_success": true,
+          "parse_success": true,
+          "row_count": 0,
+          "raw_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "normalized_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "duplicate_code_count": 0,
+          "invalid_code_count": 0,
+          "invalid_lbc_count": 0,
+          "empty_result": true,
+          "error_class": "EMPTY_UNEXPLAINED"
+        },
+        "normalized_hash_equal": true,
+        "raw_hash_equal": true
+      },
+      "stability": {
+        "previous_date": "EMPTY_UNEXPLAINED",
+        "current_date": "EMPTY_UNEXPLAINED",
+        "pair_usable_for_cross_day": false
+      },
+      "promotion_rates": {
+        "identity_match_basis": "round1 normalized rows (both empty)",
+        "levels": [],
+        "anomalies": {
+          "same_level_count": 0,
+          "skipped_level_count": 0,
+          "missing_current_count": 0,
+          "unexpected_decrease_count": 0,
+          "duplicate_affected_count": 0,
+          "invalid_affected_count": 0
+        },
+        "real_promotion_observed": false
+      },
+      "decision": {
+        "cross_day_identity_verified": false,
+        "promotion_formula_reproducible": false,
+        "contributes_to_blocker_2": false,
+        "failure_reason": "source does not return historical data for dates ~40+ days in the past; both dates return empty pool with transport success"
+      }
+    }
+  ],
+  "historical_semantics": {
+    "repository_usage": "verified — astock.em_zt_topic_pool('getTopicZTPool', date_yyyymmdd, 'fbt:asc') passes date parameter through to upstream API",
+    "different_dates_produce_different_results": "verified — pair A and B normalized hashes differ across dates",
+    "same_date_repeat_stable": "verified for 4 recent dates; pair C returns empty consistently",
+    "requested_date_binding": "partially_verified — response has no verifiable trade_date field, date binding inferred from parameter passthrough and stable per-date content",
+    "final_snapshot_evidence": "partially_verified — stable historical results consistent with post-close final pool, but no direct timestamp or final-state marker in payload"
+  },
+  "decision": {
+    "blocker_2": "OPEN",
+    "blocker_2_reason": "post_holiday pair (C) returns EMPTY_UNEXPLAINED for both dates; criterion 'six dates each at least once successful and parseable with non-empty content' not met; boundary type cannot be substituted",
+    "blocker_3": "OPEN",
+    "blocker_3_reason": "requested_date_binding and final_snapshot_evidence both partially_verified (no explicit trade_date/timestamp field in payload)",
+    "blocker_4": "CLOSED_BY_NON_ADOPTION",
+    "blocker_4_reason": "getYesterdayZTPool explicitly not adopted in v0.1; future re-adoption requires equivalence proof against getTopicZTPool(previous_trade_date(current_date))",
+    "implementation_allowed": false,
+    "implementation_blockers_remaining": [2, 3, 5, 6, 7, 8, 9]
+  }
+}
