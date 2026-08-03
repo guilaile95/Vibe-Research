@@ -29,9 +29,21 @@ _SHANGHAI_TZ = timezone(timedelta(hours=8))
 _SUPPORTED_START = date(2024, 1, 1)
 _SUPPORTED_END = date(2026, 12, 31)
 
-_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_TIMEZONE = "Asia/Shanghai"
+_SOURCE_POLICY = "SSE_SZSE_OFFICIAL_CONSENSUS"
+_SUPPORTED_START_DATE = "2024-01-01"
+_SUPPORTED_END_DATE = "2026-12-31"
+_REQUIRED_EXCHANGE_YEARS = {
+    ("SSE", 2024), ("SZSE", 2024),
+    ("SSE", 2025), ("SZSE", 2025),
+    ("SSE", 2026), ("SZSE", 2026),
+}
+_ALLOWED_OFFICIAL_HOSTS = {"www.sse.com.cn", "sse.com.cn", "www.szse.cn", "szse.cn"}
 
-_calendar_cache: Optional[list[str]] = None
+_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_URL_HOST_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://([^/?#]+)", re.IGNORECASE)
+
+_calendar_cache: Optional[tuple[str, ...]] = None
 _cache_lock = threading.Lock()
 
 
@@ -79,7 +91,71 @@ def _validate_sessions(raw: object) -> Optional[list[str]]:
     return validated
 
 
-def _load_calendar() -> Optional[list[str]]:
+def _url_host_official(url: object) -> bool:
+    """Return True when *url* is a non-empty string whose host is SSE/SZSE official."""
+    if not isinstance(url, str) or not url:
+        return False
+    m = _URL_HOST_RE.match(url)
+    if m is None:
+        return False
+    return m.group(1).lower() in _ALLOWED_OFFICIAL_HOSTS
+
+
+def _validate_sources(raw: object) -> bool:
+    """Validate the ``sources`` value from JSON; return True on success only."""
+    if not isinstance(raw, list) or not raw:
+        return False
+    seen: set[tuple[str, int]] = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            return False
+        exchange = entry.get("exchange")
+        if exchange not in ("SSE", "SZSE"):
+            return False
+        year = entry.get("year")
+        if year not in (2024, 2025, 2026):
+            return False
+        key = (exchange, year)
+        if key in seen:
+            return False
+        seen.add(key)
+        title = entry.get("title")
+        if not isinstance(title, str) or not title:
+            return False
+        announcement_date = entry.get("announcement_date")
+        if not isinstance(announcement_date, str) or _DATE_RE.match(announcement_date) is None:
+            return False
+        if _parse_strict_date(announcement_date) is None:
+            return False
+        reference_number = entry.get("reference_number")
+        if not isinstance(reference_number, str) or not reference_number:
+            return False
+        if not _url_host_official(entry.get("URL")):
+            return False
+        retrieved_at = entry.get("retrieved_at")
+        if not isinstance(retrieved_at, str) or not retrieved_at:
+            return False
+        if entry.get("verification_status") != "verified_direct_official":
+            return False
+    return seen == _REQUIRED_EXCHANGE_YEARS
+
+
+def _validate_metadata(data: dict) -> bool:
+    """Validate runtime metadata beyond schema/calendar_id/sessions."""
+    if data.get("timezone") != _TIMEZONE:
+        return False
+    if data.get("source_policy") != _SOURCE_POLICY:
+        return False
+    if data.get("supported_start_date") != _SUPPORTED_START_DATE:
+        return False
+    if data.get("supported_end_date") != _SUPPORTED_END_DATE:
+        return False
+    if not _validate_sources(data.get("sources")):
+        return False
+    return True
+
+
+def _load_calendar() -> Optional[tuple[str, ...]]:
     """Load and validate the trade calendar; cache on success only."""
     global _calendar_cache
     if _calendar_cache is not None:
@@ -90,7 +166,7 @@ def _load_calendar() -> Optional[list[str]]:
         try:
             with open(_DATA_PATH, encoding="utf-8") as f:
                 data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError, OSError):
             return None
         if not isinstance(data, dict):
             return None
@@ -98,10 +174,13 @@ def _load_calendar() -> Optional[list[str]]:
             return None
         if data.get("calendar_id") != _CALENDAR_ID:
             return None
+        if not _validate_metadata(data):
+            return None
         sessions = _validate_sessions(data.get("sessions"))
         if sessions is None:
             return None
-        _calendar_cache = sessions
+        cached: tuple[str, ...] = tuple(sessions)
+        _calendar_cache = cached
         return _calendar_cache
 
 
