@@ -9,8 +9,12 @@
 工程前置条件：**项目缺乏可靠的 A 股交易日历**（现有 `previous_weekday` 仅处理周末，
 无法处理法定节假日、临时休市、长假后首个交易日）。
 
-在下一独立子阶段实现最小交易日历接口后，即可进入生产实现。具体关闭办法与验收证据
-见第 18 节。
+在下一独立子阶段实现最小交易日历接口后，可重新评估进入生产实现的条件。具体关闭办法
+与验收证据见第 18 节。
+
+除交易日历外，实现还需满足：final 状态由调用方传入 `session="final"`（不依赖时间判断）；
+合法零值需通过 `legal_zero` 标记区分（昨日合法零涨停 → `rates=[]`，今日合法零涨停 →
+每层 `rate=0.0`）；部分覆盖（`coverage_warning=true`）不输出指标（`rates=null`）。
 
 ## 2. Scope and Non-goals
 
@@ -262,7 +266,10 @@ excluded: BSE, ST, *ST, IPO no-limit period, delisting period, B shares, ETF, LO
 
 ### 6.5 前导零风险
 
-A 股代码无前导零（沪深代码均以 6/0/3/6 开头），但规范化仍应保留字符串以防意外。
+深市代码以 `00` 开头，若以整数类型存储会丢失前导零。规范化必须保留字符串类型，
+并校验 6 位数字。正常样本仅允许 `60xxxx`（沪市主板）、`00xxxx`（深市主板）、
+`30xxxx`（创业板）、`68xxxx`（科创板）前缀；`4xxxxx`、`8xxxxx`、`920xxx`、`9xxxxx`
+前缀（北交所/非 A 股）应排除。
 
 ## 7. Previous/Current Final Snapshot Contract
 
@@ -576,12 +583,17 @@ reason_codes 包含 CURRENT_SNAPSHOT_UNAVAILABLE
 | 昨日来源失败 | unavailable | null | SOURCE_UNAVAILABLE, PREVIOUS_SNAPSHOT_UNAVAILABLE |
 | 今日来源失败 | unavailable | null | SOURCE_UNAVAILABLE, CURRENT_SNAPSHOT_UNAVAILABLE |
 | 昨日合法零涨停 | normal | [] | （无） |
-| 今日合法零涨停 | normal | 正常计算（numerator全0） | （无） |
+| 今日合法零涨停 | normal | 正常计算（numerator全0, rate=0.0） | （无） |
 | 昨日空池未解释 | partial | null | UNEXPLAINED_EMPTY, PREVIOUS_SNAPSHOT_UNAVAILABLE |
 | 今日空池未解释 | partial | null | UNEXPLAINED_EMPTY, CURRENT_SNAPSHOT_UNAVAILABLE |
-| 昨日部分非法行 | partial | 正常计算（用合法记录） | INVALID_POOL_ROW, PARTIAL_COVERAGE |
-| 今日部分非法行 | partial | 正常计算（用合法记录） | INVALID_POOL_ROW, PARTIAL_COVERAGE |
-| row_count 不匹配 | partial | 正常计算 | PARTIAL_COVERAGE |
+| coverage_warning=true（任一侧） | partial | null | SOURCE_PARTIAL, PARTIAL_COVERAGE |
+| 昨日部分非法行 | partial | null | INVALID_POOL_ROW, PARTIAL_COVERAGE |
+| 今日部分非法行 | partial | null | INVALID_POOL_ROW, PARTIAL_COVERAGE |
+| row_count 不匹配 | partial | null | PARTIAL_COVERAGE |
+
+**关键决策**：partial 状态下 `layered_promotion_rates = null`。理由：部分覆盖意味着
+样本不完整，若强行计算会产出误导性比率（分母或分子可能缺失）。调用方应根据
+`reason_codes` 判断是否需要重试或降级展示。
 
 ### 12.3 双侧 row_count
 
@@ -630,16 +642,22 @@ IDENTITY_MATCH_INCOMPLETE
 normal:
   reason_codes = []
   warnings = []
+  metrics = 正常计算（含空列表 [] 表示昨日合法零涨停）
 
 partial:
-  reason_codes 至少包含 SOURCE_PARTIAL
-  warnings = ["snapshot partially available; see reason_codes"]
+  reason_codes 至少包含 SOURCE_PARTIAL 或对应部分覆盖码
+  warnings = ["snapshot partially available; rates suppressed due to coverage_warning"]
+  metrics = null
 
 unavailable:
   reason_codes 至少包含 SOURCE_UNAVAILABLE
   warnings = ["snapshot unavailable; no layered promotion rates emitted"]
   metrics = null
 ```
+
+**partial 与 unavailable 的 metrics 一致性**：两者均输出 `metrics = null`。
+区别在于 `reason_codes`：partial 表示来源部分可用但覆盖不完整，
+unavailable 表示来源全局失败。调用方应通过 `reason_codes` 区分降级原因。
 
 ## 14. Controlled Probe Results
 
@@ -683,10 +701,16 @@ unavailable:
 | normal | 昨日 4 首板/2 二板/1 三板，今日 2 首板晋级二板、1 二板晋级三板 | normal | 3 层 |
 | zero_denominator | 昨日某层不存在 | normal | 该层不输出 |
 | previous_legal_zero | 昨日无涨停 | normal | [] |
-| current_legal_zero | 昨日有分母，今日合法零涨停 | normal | 每层 rate=0 |
-| partial | 一侧 coverage_warning=true | partial | 正常计算 |
-| unavailable | 昨日或今日全局失败 | unavailable | null |
-| identity_edge | 前导零/重复/非法代码/缺失/跳级/未递增 | partial 或正常 | 按规则 |
+| current_legal_zero | 昨日有分母，今日合法零涨停 | normal | 每层 rate=0.0 |
+| partial | 今日 coverage_warning=true | partial | null |
+| unavailable | 今日 transport_success=false | unavailable | null |
+| identity_edge | 昨日有效今日缺失/跳级/未递增 | normal | 2→3 = 0/2/0.0 |
+
+### 15.3 代码前缀合同
+
+fixture 正常样本仅使用 `60/00/30/68` 前缀（沪市主板/深市主板/创业板/科创板）。
+不使用 `9/4/8/920` 前缀作为正常样本。`identity_edge` case 中的前导零、重复、
+非法代码场景由 `edge_case_notes` 说明，实际池行仍使用合法前缀以保持校验一致性。
 
 ## 16. Risks and Licensing Boundary
 
@@ -765,4 +789,6 @@ unavailable:
 - 周末输入返回前一交易日
 - 非交易日输入返回 `None`
 
-关闭该条件后，`layered_promotion_rates` 即可进入生产实现。
+关闭该条件后，可重新评估 `layered_promotion_rates` 进入生产实现的条件。仍需确认：
+跨日匹配至少机械验证 3 组相邻交易日（含节假日边界）、final 判定路径由调用方显式传入、
+合法零值与部分覆盖的降级语义已落地。

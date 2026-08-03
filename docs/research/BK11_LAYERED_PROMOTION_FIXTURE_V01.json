@@ -2,11 +2,19 @@
   "schema_version": "bk11-layered-promotion-fixture.v0.1",
   "fixture_kind": "synthetic-normalized",
   "generated_at": "2026-08-03T00:00:00.000000Z",
-  "description": "BK-11 Slice 2B offline fixture for layered promotion rate contract validation. All stock codes and numeric values are manually constructed synthetic values used only to test schema and calculation consistency. They do not represent actual historical market data. Stock codes use synthetic 6-digit strings that do not correspond to real A-share securities.",
+  "description": "BK-11 Slice 2B offline fixture for layered promotion rate contract validation. All stock codes and numeric values are manually constructed synthetic values used only to test schema and calculation consistency. They do not represent actual historical market data. Normal-sample stock codes use 60/00/30/68 prefixes aligned with the A-share universe (SH main / SZ main / ChiNext / STAR); they are synthetic and do not correspond to real securities.",
   "trade_dates": ["2026-07-29", "2026-07-30"],
   "market_scope": {
     "included": ["SH main", "SZ main", "ChiNext", "STAR"],
     "excluded": ["BSE", "ST", "*ST", "IPO no-limit period", "delisting period", "B shares", "ETF", "LOF", "convertible bonds", "funds", "indexes"]
+  },
+  "code_prefix_contract": {
+    "sh_main": "60xxxx",
+    "sz_main": "00xxxx",
+    "chinext": "30xxxx",
+    "star": "68xxxx",
+    "excluded_prefixes": ["4xxxxx", "8xxxxx", "920xxx", "9xxxxx"],
+    "normalization": "trim → keep string → validate 6 digits → accept only 60/00/30/68 prefixes"
   },
   "cases": [
     {
@@ -23,13 +31,13 @@
         "fetched_at": "2026-07-29T07:30:00.000000Z",
         "snapshot_at": "2026-07-29T07:35:00.000000Z",
         "limit_up_pool": [
-          {"stock_code": "900001", "consecutive_limit_up_days": 1},
-          {"stock_code": "900002", "consecutive_limit_up_days": 1},
-          {"stock_code": "900003", "consecutive_limit_up_days": 1},
-          {"stock_code": "900004", "consecutive_limit_up_days": 1},
-          {"stock_code": "900005", "consecutive_limit_up_days": 2},
-          {"stock_code": "900006", "consecutive_limit_up_days": 2},
-          {"stock_code": "900007", "consecutive_limit_up_days": 3}
+          {"stock_code": "600001", "consecutive_limit_up_days": 1},
+          {"stock_code": "600002", "consecutive_limit_up_days": 1},
+          {"stock_code": "600003", "consecutive_limit_up_days": 1},
+          {"stock_code": "600004", "consecutive_limit_up_days": 1},
+          {"stock_code": "000001", "consecutive_limit_up_days": 2},
+          {"stock_code": "000002", "consecutive_limit_up_days": 2},
+          {"stock_code": "300001", "consecutive_limit_up_days": 3}
         ],
         "data_health": {
           "transport_success": true,
@@ -52,11 +60,11 @@
         "fetched_at": "2026-07-30T07:30:00.000000Z",
         "snapshot_at": "2026-07-30T07:35:00.000000Z",
         "limit_up_pool": [
-          {"stock_code": "900001", "consecutive_limit_up_days": 2},
-          {"stock_code": "900002", "consecutive_limit_up_days": 2},
-          {"stock_code": "900005", "consecutive_limit_up_days": 3},
-          {"stock_code": "900008", "consecutive_limit_up_days": 1},
-          {"stock_code": "900009", "consecutive_limit_up_days": 1}
+          {"stock_code": "600001", "consecutive_limit_up_days": 2},
+          {"stock_code": "600002", "consecutive_limit_up_days": 2},
+          {"stock_code": "000001", "consecutive_limit_up_days": 3},
+          {"stock_code": "688001", "consecutive_limit_up_days": 1},
+          {"stock_code": "688002", "consecutive_limit_up_days": 1}
         ],
         "data_health": {
           "transport_success": true,
@@ -96,9 +104,9 @@
         "fetched_at": "2026-07-29T07:30:00.000000Z",
         "snapshot_at": "2026-07-29T07:35:00.000000Z",
         "limit_up_pool": [
-          {"stock_code": "900001", "consecutive_limit_up_days": 1},
-          {"stock_code": "900002", "consecutive_limit_up_days": 1},
-          {"stock_code": "900003", "consecutive_limit_up_days": 2}
+          {"stock_code": "600001", "consecutive_limit_up_days": 1},
+          {"stock_code": "600002", "consecutive_limit_up_days": 1},
+          {"stock_code": "000001", "consecutive_limit_up_days": 2}
         ],
         "data_health": {
           "transport_success": true,
@@ -121,8 +129,8 @@
         "fetched_at": "2026-07-30T07:30:00.000000Z",
         "snapshot_at": "2026-07-30T07:35:00.000000Z",
         "limit_up_pool": [
-          {"stock_code": "900001", "consecutive_limit_up_days": 2},
-          {"stock_code": "900004", "consecutive_limit_up_days": 1}
+          {"stock_code": "600001", "consecutive_limit_up_days": 2},
+          {"stock_code": "688001", "consecutive_limit_up_days": 1}
         ],
         "data_health": {
           "transport_success": true,
@@ -182,7 +190,7 @@
         "fetched_at": "2026-07-30T07:30:00.000000Z",
         "snapshot_at": "2026-07-30T07:35:00.000000Z",
         "limit_up_pool": [
-          {"stock_code": "900001", "consecutive_limit_up_days": 1}
+          {"stock_code": "600001", "consecutive_limit_up_days": 1}
         ],
         "data_health": {
           "transport_success": true,
@@ -218,9 +226,9 @@
         "fetched_at": "2026-07-29T07:30:00.000000Z",
         "snapshot_at": "2026-07-29T07:35:00.000000Z",
         "limit_up_pool": [
-          {"stock_code": "900001", "consecutive_limit_up_days": 1},
-          {"stock_code": "900002", "consecutive_limit_up_days": 1},
-          {"stock_code": "900003", "consecutive_limit_up_days": 2}
+          {"stock_code": "600001", "consecutive_limit_up_days": 1},
+          {"stock_code": "600002", "consecutive_limit_up_days": 1},
+          {"stock_code": "000001", "consecutive_limit_up_days": 2}
         ],
         "data_health": {
           "transport_success": true,
@@ -269,7 +277,7 @@
     {
       "case_id": "partial",
       "case_name": "部分覆盖",
-      "description": "今日 coverage_warning=true，status=partial，metrics 仍计算",
+      "description": "今日 coverage_warning=true，status=partial，rates=null（部分覆盖不输出指标）",
       "previous_trade_date": "2026-07-29",
       "current_trade_date": "2026-07-30",
       "previous_snapshot": {
@@ -280,9 +288,9 @@
         "fetched_at": "2026-07-29T07:30:00.000000Z",
         "snapshot_at": "2026-07-29T07:35:00.000000Z",
         "limit_up_pool": [
-          {"stock_code": "900001", "consecutive_limit_up_days": 1},
-          {"stock_code": "900002", "consecutive_limit_up_days": 1},
-          {"stock_code": "900003", "consecutive_limit_up_days": 2}
+          {"stock_code": "600001", "consecutive_limit_up_days": 1},
+          {"stock_code": "600002", "consecutive_limit_up_days": 1},
+          {"stock_code": "000001", "consecutive_limit_up_days": 2}
         ],
         "data_health": {
           "transport_success": true,
@@ -305,7 +313,7 @@
         "fetched_at": "2026-07-30T07:30:00.000000Z",
         "snapshot_at": "2026-07-30T07:35:00.000000Z",
         "limit_up_pool": [
-          {"stock_code": "900001", "consecutive_limit_up_days": 2}
+          {"stock_code": "600001", "consecutive_limit_up_days": 2}
         ],
         "data_health": {
           "transport_success": true,
@@ -323,17 +331,14 @@
       "expected": {
         "status": "partial",
         "reason_codes": ["SOURCE_PARTIAL", "PARTIAL_COVERAGE"],
-        "warnings": ["snapshot partially available; see reason_codes"],
-        "layered_promotion_rates": [
-          {"from_level": 1, "to_level": 2, "numerator": 1, "denominator": 2, "sample_count": 2, "rate": 0.5},
-          {"from_level": 2, "to_level": 3, "numerator": 0, "denominator": 1, "sample_count": 1, "rate": 0.0}
-        ]
+        "warnings": ["snapshot partially available; rates suppressed due to coverage_warning"],
+        "layered_promotion_rates": null
       }
     },
     {
       "case_id": "unavailable",
       "case_name": "全局失败",
-      "description": "今日 transport_success=false，status=unavailable，metrics=null",
+      "description": "今日 transport_success=false，status=unavailable，rates=null",
       "previous_trade_date": "2026-07-29",
       "current_trade_date": "2026-07-30",
       "previous_snapshot": {
@@ -344,8 +349,8 @@
         "fetched_at": "2026-07-29T07:30:00.000000Z",
         "snapshot_at": "2026-07-29T07:35:00.000000Z",
         "limit_up_pool": [
-          {"stock_code": "900001", "consecutive_limit_up_days": 1},
-          {"stock_code": "900002", "consecutive_limit_up_days": 2}
+          {"stock_code": "600001", "consecutive_limit_up_days": 1},
+          {"stock_code": "000001", "consecutive_limit_up_days": 2}
         ],
         "data_health": {
           "transport_success": true,
@@ -391,7 +396,7 @@
     {
       "case_id": "identity_edge",
       "case_name": "身份匹配边界",
-      "description": "覆盖前导零代码、重复代码、非法代码、昨日有效今日缺失、今日板数跳级、今日板数未递增",
+      "description": "覆盖昨日有效今日缺失、今日板数跳级、今日板数未递增；2→3 层 numerator=0",
       "previous_trade_date": "2026-07-29",
       "current_trade_date": "2026-07-30",
       "previous_snapshot": {
@@ -402,11 +407,11 @@
         "fetched_at": "2026-07-29T07:30:00.000000Z",
         "snapshot_at": "2026-07-29T07:35:00.000000Z",
         "limit_up_pool": [
-          {"stock_code": "900001", "consecutive_limit_up_days": 1},
-          {"stock_code": "900002", "consecutive_limit_up_days": 1},
-          {"stock_code": "900003", "consecutive_limit_up_days": 2},
-          {"stock_code": "900004", "consecutive_limit_up_days": 2},
-          {"stock_code": "900005", "consecutive_limit_up_days": 3}
+          {"stock_code": "600001", "consecutive_limit_up_days": 1},
+          {"stock_code": "600002", "consecutive_limit_up_days": 1},
+          {"stock_code": "000001", "consecutive_limit_up_days": 2},
+          {"stock_code": "000002", "consecutive_limit_up_days": 2},
+          {"stock_code": "300001", "consecutive_limit_up_days": 3}
         ],
         "data_health": {
           "transport_success": true,
@@ -429,9 +434,9 @@
         "fetched_at": "2026-07-30T07:30:00.000000Z",
         "snapshot_at": "2026-07-30T07:35:00.000000Z",
         "limit_up_pool": [
-          {"stock_code": "900001", "consecutive_limit_up_days": 2},
-          {"stock_code": "900003", "consecutive_limit_up_days": 4},
-          {"stock_code": "900004", "consecutive_limit_up_days": 2}
+          {"stock_code": "600001", "consecutive_limit_up_days": 2},
+          {"stock_code": "000001", "consecutive_limit_up_days": 4},
+          {"stock_code": "000002", "consecutive_limit_up_days": 2}
         ],
         "data_health": {
           "transport_success": true,
@@ -452,17 +457,17 @@
         "warnings": [],
         "layered_promotion_rates": [
           {"from_level": 1, "to_level": 2, "numerator": 1, "denominator": 2, "sample_count": 2, "rate": 0.5},
-          {"from_level": 2, "to_level": 3, "numerator": 1, "denominator": 2, "sample_count": 2, "rate": 0.5},
+          {"from_level": 2, "to_level": 3, "numerator": 0, "denominator": 2, "sample_count": 2, "rate": 0.0},
           {"from_level": 3, "to_level": 4, "numerator": 0, "denominator": 1, "sample_count": 1, "rate": 0.0}
         ]
       },
       "edge_case_notes": {
-        "leading_zero": "A 股代码无前导零，但规范化应保留字符串以防意外；fixture 使用 9xxxxx 合成代码避免与真实代码冲突",
-        "duplicate_code": "本 case 不含池内重复；重复场景由短线下梯计算模块覆盖",
-        "invalid_code": "本 case 不含非法代码；非法代码场景由短线下梯计算模块覆盖",
-        "yesterday_valid_today_missing": "900002 昨日 1 板，今日未出现 → 未晋级，不进入 numerator",
-        "today_board_skipped": "900003 昨日 2 板，今日 4 板（跳级）→ 不进入 2→3 的 numerator，因为要求 N+1=3 而非 N+2=4",
-        "today_board_not_incremented": "900004 昨日 2 板，今日仍 2 板 → 不进入 numerator，因为要求 N+1=3 而非 N=2"
+        "leading_zero": "A 股代码规范化必须保留字符串类型；深市代码以 00 开头，整数存储会丢失前导零。fixture 正常样本均使用 60/00/30/68 前缀",
+        "duplicate_code": "本 case 不含池内重复；重复场景由短线下梯计算模块覆盖（保留首次合法记录，DUPLICATE_STOCK_CODE）",
+        "invalid_code": "本 case 不含非法代码；非法代码（非 6 位数字或非 60/00/30/68 前缀）场景由短线下梯计算模块覆盖（INVALID_POOL_ROW）",
+        "yesterday_valid_today_missing": "600002 昨日 1 板，今日未出现 → 未晋级，不进入 numerator",
+        "today_board_skipped": "000001 昨日 2 板，今日 4 板（跳级 N+2）→ 不进入 2→3 的 numerator，因为要求 N+1=3 而非 N+2=4",
+        "today_board_not_incremented": "000002 昨日 2 板，今日仍 2 板（未递增）→ 不进入 2→3 的 numerator，因为要求 N+1=3 而非 N=2；因此 2→3 = 0/2/0.0"
       }
     }
   ]
