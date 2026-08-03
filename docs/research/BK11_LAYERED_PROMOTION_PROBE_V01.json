@@ -1,6 +1,6 @@
 {
   "schema_version": "bk11-layered-promotion-probe.v0.1",
-  "generated_at": "2026-08-03T17:17:59Z",
+  "generated_at": "2026-08-03T18:36:39Z",
   "timezone": "Asia/Shanghai",
   "review_date": "2026-08-04",
   "source_endpoint": "getTopicZTPool",
@@ -36,14 +36,14 @@
       },
       "previous_probe": {
         "round1": {
-          "requested_at": "2026-08-03T17:17:31Z",
-          "completed_at": "2026-08-03T17:17:32Z",
-          "elapsed_seconds": 0.64,
+          "requested_at": "2026-07-30",
+          "completed_at": "2026-07-30",
+          "elapsed_seconds": 0.0,
           "transport_success": true,
           "parse_success": true,
           "row_count": 52,
-          "raw_payload_sha256": "891162dbbc4d69145578ec6145ddc270bd89636063e4f9db33f83f34247776cb",
-          "normalized_payload_sha256": "a986e2a8eb5ca462f444a7c12c947d9e3f6d354e89c03f773eebc3ebcaf0971e",
+          "raw_pool_sha256": "891162dbbc4d69145578ec6145ddc270bd89636063e4f9db33f83f34247776cb",
+          "normalized_rows_sha256": "a986e2a8eb5ca462f444a7c12c947d9e3f6d354e89c03f773eebc3ebcaf0971e",
           "duplicate_code_count": 0,
           "invalid_code_count": 0,
           "invalid_lbc_count": 0,
@@ -51,14 +51,14 @@
           "error_class": "NONE"
         },
         "round2": {
-          "requested_at": "2026-08-03T17:17:34Z",
-          "completed_at": "2026-08-03T17:17:34Z",
-          "elapsed_seconds": 0.047,
+          "requested_at": "2026-07-30",
+          "completed_at": "2026-07-30",
+          "elapsed_seconds": 0.0,
           "transport_success": true,
           "parse_success": true,
           "row_count": 52,
-          "raw_payload_sha256": "891162dbbc4d69145578ec6145ddc270bd89636063e4f9db33f83f34247776cb",
-          "normalized_payload_sha256": "a986e2a8eb5ca462f444a7c12c947d9e3f6d354e89c03f773eebc3ebcaf0971e",
+          "raw_pool_sha256": "891162dbbc4d69145578ec6145ddc270bd89636063e4f9db33f83f34247776cb",
+          "normalized_rows_sha256": "a986e2a8eb5ca462f444a7c12c947d9e3f6d354e89c03f773eebc3ebcaf0971e",
           "duplicate_code_count": 0,
           "invalid_code_count": 0,
           "invalid_lbc_count": 0,
@@ -66,18 +66,228 @@
           "error_class": "NONE"
         },
         "normalized_hash_equal": true,
-        "raw_hash_equal": true
+        "raw_hash_equal": true,
+        "normalized_rows": [
+          {
+            "stock_code": "000009",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000025",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000526",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000566",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000721",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000820",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001225",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001309",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002258",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002534",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002585",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002686",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002702",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002703",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002827",
+            "lbc": 2
+          },
+          {
+            "stock_code": "002846",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002882",
+            "lbc": 2
+          },
+          {
+            "stock_code": "003032",
+            "lbc": 4
+          },
+          {
+            "stock_code": "300894",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300996",
+            "lbc": 1
+          },
+          {
+            "stock_code": "301449",
+            "lbc": 1
+          },
+          {
+            "stock_code": "301667",
+            "lbc": 1
+          },
+          {
+            "stock_code": "301668",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600162",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600228",
+            "lbc": 2
+          },
+          {
+            "stock_code": "600418",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600475",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600513",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600629",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600663",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600702",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600712",
+            "lbc": 1
+          },
+          {
+            "stock_code": "601003",
+            "lbc": 2
+          },
+          {
+            "stock_code": "601616",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603039",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603137",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603171",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603185",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603221",
+            "lbc": 8
+          },
+          {
+            "stock_code": "603348",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603352",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603376",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603382",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603556",
+            "lbc": 2
+          },
+          {
+            "stock_code": "603660",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603813",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603919",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605033",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605068",
+            "lbc": 4
+          },
+          {
+            "stock_code": "605179",
+            "lbc": 3
+          },
+          {
+            "stock_code": "605388",
+            "lbc": 2
+          },
+          {
+            "stock_code": "920685",
+            "lbc": 1
+          }
+        ]
       },
       "current_probe": {
         "round1": {
-          "requested_at": "2026-08-03T17:17:36Z",
-          "completed_at": "2026-08-03T17:17:37Z",
-          "elapsed_seconds": 0.463,
+          "requested_at": "2026-07-31",
+          "completed_at": "2026-07-31",
+          "elapsed_seconds": 0.0,
           "transport_success": true,
           "parse_success": true,
           "row_count": 99,
-          "raw_payload_sha256": "fee4a71d691077d277aa49e40a01a128c64ddab50aa1cdc5e0e1f10ff4a61e90",
-          "normalized_payload_sha256": "8e28f950b45ac957513c42fbf0aae4be830e1384bfbe29f983b6f557e8b085b9",
+          "raw_pool_sha256": "fee4a71d691077d277aa49e40a01a128c64ddab50aa1cdc5e0e1f10ff4a61e90",
+          "normalized_rows_sha256": "8e28f950b45ac957513c42fbf0aae4be830e1384bfbe29f983b6f557e8b085b9",
           "duplicate_code_count": 0,
           "invalid_code_count": 0,
           "invalid_lbc_count": 0,
@@ -85,14 +295,14 @@
           "error_class": "NONE"
         },
         "round2": {
-          "requested_at": "2026-08-03T17:17:39Z",
-          "completed_at": "2026-08-03T17:17:39Z",
-          "elapsed_seconds": 0.043,
+          "requested_at": "2026-07-31",
+          "completed_at": "2026-07-31",
+          "elapsed_seconds": 0.0,
           "transport_success": true,
           "parse_success": true,
           "row_count": 99,
-          "raw_payload_sha256": "fee4a71d691077d277aa49e40a01a128c64ddab50aa1cdc5e0e1f10ff4a61e90",
-          "normalized_payload_sha256": "8e28f950b45ac957513c42fbf0aae4be830e1384bfbe29f983b6f557e8b085b9",
+          "raw_pool_sha256": "fee4a71d691077d277aa49e40a01a128c64ddab50aa1cdc5e0e1f10ff4a61e90",
+          "normalized_rows_sha256": "8e28f950b45ac957513c42fbf0aae4be830e1384bfbe29f983b6f557e8b085b9",
           "duplicate_code_count": 0,
           "invalid_code_count": 0,
           "invalid_lbc_count": 0,
@@ -100,33 +310,452 @@
           "error_class": "NONE"
         },
         "normalized_hash_equal": true,
-        "raw_hash_equal": true
+        "raw_hash_equal": true,
+        "normalized_rows": [
+          {
+            "stock_code": "000009",
+            "lbc": 2
+          },
+          {
+            "stock_code": "000032",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000048",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000428",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000506",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000593",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000595",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000676",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000815",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000820",
+            "lbc": 2
+          },
+          {
+            "stock_code": "000892",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000967",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001223",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001267",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001359",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001400",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002015",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002115",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002131",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002197",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002235",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002346",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002354",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002432",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002552",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002659",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002774",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002775",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002827",
+            "lbc": 3
+          },
+          {
+            "stock_code": "002851",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002896",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002929",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002931",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002957",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002963",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002979",
+            "lbc": 1
+          },
+          {
+            "stock_code": "003001",
+            "lbc": 1
+          },
+          {
+            "stock_code": "003005",
+            "lbc": 1
+          },
+          {
+            "stock_code": "003018",
+            "lbc": 1
+          },
+          {
+            "stock_code": "003032",
+            "lbc": 5
+          },
+          {
+            "stock_code": "003036",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300058",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300364",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300418",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300508",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300720",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300789",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300996",
+            "lbc": 2
+          },
+          {
+            "stock_code": "301171",
+            "lbc": 1
+          },
+          {
+            "stock_code": "301231",
+            "lbc": 1
+          },
+          {
+            "stock_code": "301396",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600162",
+            "lbc": 2
+          },
+          {
+            "stock_code": "600449",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600580",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600588",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600602",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600667",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600673",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600791",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600986",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603009",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603031",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603039",
+            "lbc": 2
+          },
+          {
+            "stock_code": "603067",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603106",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603115",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603120",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603139",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603171",
+            "lbc": 2
+          },
+          {
+            "stock_code": "603221",
+            "lbc": 9
+          },
+          {
+            "stock_code": "603261",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603286",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603316",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603336",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603337",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603375",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603466",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603533",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603598",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603608",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603629",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603637",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603682",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603696",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603721",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603738",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603779",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603956",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605069",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605168",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605178",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605179",
+            "lbc": 4
+          },
+          {
+            "stock_code": "605198",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605208",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605287",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605289",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605318",
+            "lbc": 1
+          },
+          {
+            "stock_code": "688095",
+            "lbc": 1
+          },
+          {
+            "stock_code": "920130",
+            "lbc": 1
+          }
+        ]
       },
       "stability": {
         "previous_date": "STABLE",
         "current_date": "STABLE",
         "pair_usable_for_cross_day": true
       },
+      "identity": {
+        "previous_count": 52,
+        "current_count": 99,
+        "overlap_count": 10,
+        "missing_current_count": 42,
+        "promotion_count": 10,
+        "same_level_count": 0,
+        "skipped_level_count": 0,
+        "unexpected_decrease_count": 0
+      },
       "promotion_rates": {
-        "identity_match_basis": "round1 normalized rows, stock_code identity only",
+        "identity_match_basis": "stock_code identity over normalized rows (round1); lbc N -> N+1 required for numerator",
+        "denominator_contract": "denominator_N = count of unique legal stock_code in previous_normalized_rows where lbc == N (includes missing_current codes; does not depend on current pool presence)",
+        "numerator_contract": "numerator_N = among the above denominator codes, count where the same stock_code appears in current_normalized_rows with lbc == N + 1",
         "levels": [
           {
             "from_level": 1,
             "to_level": 2,
-            "denominator": 6,
+            "denominator": 42,
             "numerator": 6,
-            "sample_count": 6,
-            "rate": 1.0,
-            "matched_stock_codes": ["000009", "000820", "300996", "600162", "603039", "603171"]
+            "sample_count": 42,
+            "rate": 0.1429,
+            "matched_stock_codes": [
+              "000009",
+              "000820",
+              "300996",
+              "600162",
+              "603039",
+              "603171"
+            ]
           },
           {
             "from_level": 2,
             "to_level": 3,
-            "denominator": 1,
+            "denominator": 6,
             "numerator": 1,
-            "sample_count": 1,
-            "rate": 1.0,
-            "matched_stock_codes": ["002827"]
+            "sample_count": 6,
+            "rate": 0.1667,
+            "matched_stock_codes": [
+              "002827"
+            ]
           },
           {
             "from_level": 3,
@@ -135,16 +764,20 @@
             "numerator": 1,
             "sample_count": 1,
             "rate": 1.0,
-            "matched_stock_codes": ["605179"]
+            "matched_stock_codes": [
+              "605179"
+            ]
           },
           {
             "from_level": 4,
             "to_level": 5,
-            "denominator": 1,
+            "denominator": 2,
             "numerator": 1,
-            "sample_count": 1,
-            "rate": 1.0,
-            "matched_stock_codes": ["003032"]
+            "sample_count": 2,
+            "rate": 0.5,
+            "matched_stock_codes": [
+              "003032"
+            ]
           },
           {
             "from_level": 8,
@@ -153,7 +786,9 @@
             "numerator": 1,
             "sample_count": 1,
             "rate": 1.0,
-            "matched_stock_codes": ["603221"]
+            "matched_stock_codes": [
+              "603221"
+            ]
           }
         ],
         "anomalies": {
@@ -166,6 +801,614 @@
         },
         "real_promotion_observed": true
       },
+      "previous_normalized_rows": [
+        {
+          "stock_code": "000009",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000025",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000526",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000566",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000721",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000820",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001225",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001309",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002258",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002534",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002585",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002686",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002702",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002703",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002827",
+          "lbc": 2
+        },
+        {
+          "stock_code": "002846",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002882",
+          "lbc": 2
+        },
+        {
+          "stock_code": "003032",
+          "lbc": 4
+        },
+        {
+          "stock_code": "300894",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300996",
+          "lbc": 1
+        },
+        {
+          "stock_code": "301449",
+          "lbc": 1
+        },
+        {
+          "stock_code": "301667",
+          "lbc": 1
+        },
+        {
+          "stock_code": "301668",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600162",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600228",
+          "lbc": 2
+        },
+        {
+          "stock_code": "600418",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600475",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600513",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600629",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600663",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600702",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600712",
+          "lbc": 1
+        },
+        {
+          "stock_code": "601003",
+          "lbc": 2
+        },
+        {
+          "stock_code": "601616",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603039",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603137",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603171",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603185",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603221",
+          "lbc": 8
+        },
+        {
+          "stock_code": "603348",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603352",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603376",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603382",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603556",
+          "lbc": 2
+        },
+        {
+          "stock_code": "603660",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603813",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603919",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605033",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605068",
+          "lbc": 4
+        },
+        {
+          "stock_code": "605179",
+          "lbc": 3
+        },
+        {
+          "stock_code": "605388",
+          "lbc": 2
+        },
+        {
+          "stock_code": "920685",
+          "lbc": 1
+        }
+      ],
+      "current_normalized_rows": [
+        {
+          "stock_code": "000009",
+          "lbc": 2
+        },
+        {
+          "stock_code": "000032",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000048",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000428",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000506",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000593",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000595",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000676",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000815",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000820",
+          "lbc": 2
+        },
+        {
+          "stock_code": "000892",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000967",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001223",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001267",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001359",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001400",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002015",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002115",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002131",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002197",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002235",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002346",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002354",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002432",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002552",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002659",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002774",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002775",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002827",
+          "lbc": 3
+        },
+        {
+          "stock_code": "002851",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002896",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002929",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002931",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002957",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002963",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002979",
+          "lbc": 1
+        },
+        {
+          "stock_code": "003001",
+          "lbc": 1
+        },
+        {
+          "stock_code": "003005",
+          "lbc": 1
+        },
+        {
+          "stock_code": "003018",
+          "lbc": 1
+        },
+        {
+          "stock_code": "003032",
+          "lbc": 5
+        },
+        {
+          "stock_code": "003036",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300058",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300364",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300418",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300508",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300720",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300789",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300996",
+          "lbc": 2
+        },
+        {
+          "stock_code": "301171",
+          "lbc": 1
+        },
+        {
+          "stock_code": "301231",
+          "lbc": 1
+        },
+        {
+          "stock_code": "301396",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600162",
+          "lbc": 2
+        },
+        {
+          "stock_code": "600449",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600580",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600588",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600602",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600667",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600673",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600791",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600986",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603009",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603031",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603039",
+          "lbc": 2
+        },
+        {
+          "stock_code": "603067",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603106",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603115",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603120",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603139",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603171",
+          "lbc": 2
+        },
+        {
+          "stock_code": "603221",
+          "lbc": 9
+        },
+        {
+          "stock_code": "603261",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603286",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603316",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603336",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603337",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603375",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603466",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603533",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603598",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603608",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603629",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603637",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603682",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603696",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603721",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603738",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603779",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603956",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605069",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605168",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605178",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605179",
+          "lbc": 4
+        },
+        {
+          "stock_code": "605198",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605208",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605287",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605289",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605318",
+          "lbc": 1
+        },
+        {
+          "stock_code": "688095",
+          "lbc": 1
+        },
+        {
+          "stock_code": "920130",
+          "lbc": 1
+        }
+      ],
       "decision": {
         "cross_day_identity_verified": true,
         "promotion_formula_reproducible": true,
@@ -186,14 +1429,14 @@
       },
       "previous_probe": {
         "round1": {
-          "requested_at": "2026-08-03T17:17:41Z",
-          "completed_at": "2026-08-03T17:17:42Z",
-          "elapsed_seconds": 0.472,
+          "requested_at": "2026-07-24",
+          "completed_at": "2026-07-24",
+          "elapsed_seconds": 0.0,
           "transport_success": true,
           "parse_success": true,
           "row_count": 40,
-          "raw_payload_sha256": "358e63465411654c8c5af5897198d96afda2236d05f156032a774c1272a656d7",
-          "normalized_payload_sha256": "33c06378a1a69fc80b7a9ae98b177db1807a01d43f386d79c70a53a9d35a0981",
+          "raw_pool_sha256": "358e63465411654c8c5af5897198d96afda2236d05f156032a774c1272a656d7",
+          "normalized_rows_sha256": "33c06378a1a69fc80b7a9ae98b177db1807a01d43f386d79c70a53a9d35a0981",
           "duplicate_code_count": 0,
           "invalid_code_count": 0,
           "invalid_lbc_count": 0,
@@ -201,14 +1444,14 @@
           "error_class": "NONE"
         },
         "round2": {
-          "requested_at": "2026-08-03T17:17:44Z",
-          "completed_at": "2026-08-03T17:17:45Z",
-          "elapsed_seconds": 0.045,
+          "requested_at": "2026-07-24",
+          "completed_at": "2026-07-24",
+          "elapsed_seconds": 0.0,
           "transport_success": true,
           "parse_success": true,
           "row_count": 40,
-          "raw_payload_sha256": "358e63465411654c8c5af5897198d96afda2236d05f156032a774c1272a656d7",
-          "normalized_payload_sha256": "33c06378a1a69fc80b7a9ae98b177db1807a01d43f386d79c70a53a9d35a0981",
+          "raw_pool_sha256": "358e63465411654c8c5af5897198d96afda2236d05f156032a774c1272a656d7",
+          "normalized_rows_sha256": "33c06378a1a69fc80b7a9ae98b177db1807a01d43f386d79c70a53a9d35a0981",
           "duplicate_code_count": 0,
           "invalid_code_count": 0,
           "invalid_lbc_count": 0,
@@ -216,18 +1459,180 @@
           "error_class": "NONE"
         },
         "normalized_hash_equal": true,
-        "raw_hash_equal": true
+        "raw_hash_equal": true,
+        "normalized_rows": [
+          {
+            "stock_code": "000011",
+            "lbc": 2
+          },
+          {
+            "stock_code": "000417",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000533",
+            "lbc": 2
+          },
+          {
+            "stock_code": "000595",
+            "lbc": 3
+          },
+          {
+            "stock_code": "000668",
+            "lbc": 2
+          },
+          {
+            "stock_code": "000670",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001229",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002012",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002083",
+            "lbc": 2
+          },
+          {
+            "stock_code": "002189",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002199",
+            "lbc": 2
+          },
+          {
+            "stock_code": "002208",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002265",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002298",
+            "lbc": 2
+          },
+          {
+            "stock_code": "002300",
+            "lbc": 2
+          },
+          {
+            "stock_code": "002303",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002374",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002388",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002498",
+            "lbc": 2
+          },
+          {
+            "stock_code": "002879",
+            "lbc": 4
+          },
+          {
+            "stock_code": "003001",
+            "lbc": 2
+          },
+          {
+            "stock_code": "300414",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300480",
+            "lbc": 1
+          },
+          {
+            "stock_code": "301234",
+            "lbc": 3
+          },
+          {
+            "stock_code": "301583",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600178",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600539",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600617",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600698",
+            "lbc": 2
+          },
+          {
+            "stock_code": "600984",
+            "lbc": 2
+          },
+          {
+            "stock_code": "601606",
+            "lbc": 2
+          },
+          {
+            "stock_code": "603068",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603221",
+            "lbc": 4
+          },
+          {
+            "stock_code": "603580",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603690",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603726",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603956",
+            "lbc": 2
+          },
+          {
+            "stock_code": "603976",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605198",
+            "lbc": 1
+          },
+          {
+            "stock_code": "688237",
+            "lbc": 1
+          }
+        ]
       },
       "current_probe": {
         "round1": {
-          "requested_at": "2026-08-03T17:17:47Z",
-          "completed_at": "2026-08-03T17:17:47Z",
-          "elapsed_seconds": 0.479,
+          "requested_at": "2026-07-27",
+          "completed_at": "2026-07-27",
+          "elapsed_seconds": 0.0,
           "transport_success": true,
           "parse_success": true,
           "row_count": 111,
-          "raw_payload_sha256": "9cc61034f22b4a165b14b3d76fdff155ad9a4dc9a410a1ae99411a5d84c00854",
-          "normalized_payload_sha256": "00c9745ac571a0274ae592077c6b4a6f28750cf288d8b92cc5777a30ed240d98",
+          "raw_pool_sha256": "9cc61034f22b4a165b14b3d76fdff155ad9a4dc9a410a1ae99411a5d84c00854",
+          "normalized_rows_sha256": "00c9745ac571a0274ae592077c6b4a6f28750cf288d8b92cc5777a30ed240d98",
           "duplicate_code_count": 0,
           "invalid_code_count": 0,
           "invalid_lbc_count": 0,
@@ -235,14 +1640,14 @@
           "error_class": "NONE"
         },
         "round2": {
-          "requested_at": "2026-08-03T17:17:49Z",
-          "completed_at": "2026-08-03T17:17:50Z",
-          "elapsed_seconds": 0.045,
+          "requested_at": "2026-07-27",
+          "completed_at": "2026-07-27",
+          "elapsed_seconds": 0.0,
           "transport_success": true,
           "parse_success": true,
           "row_count": 111,
-          "raw_payload_sha256": "9cc61034f22b4a165b14b3d76fdff155ad9a4dc9a410a1ae99411a5d84c00854",
-          "normalized_payload_sha256": "00c9745ac571a0274ae592077c6b4a6f28750cf288d8b92cc5777a30ed240d98",
+          "raw_pool_sha256": "9cc61034f22b4a165b14b3d76fdff155ad9a4dc9a410a1ae99411a5d84c00854",
+          "normalized_rows_sha256": "00c9745ac571a0274ae592077c6b4a6f28750cf288d8b92cc5777a30ed240d98",
           "duplicate_code_count": 0,
           "invalid_code_count": 0,
           "invalid_lbc_count": 0,
@@ -250,42 +1655,509 @@
           "error_class": "NONE"
         },
         "normalized_hash_equal": true,
-        "raw_hash_equal": true
+        "raw_hash_equal": true,
+        "normalized_rows": [
+          {
+            "stock_code": "000428",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000533",
+            "lbc": 3
+          },
+          {
+            "stock_code": "000566",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000636",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000676",
+            "lbc": 1
+          },
+          {
+            "stock_code": "000862",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001223",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001248",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001258",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001267",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001317",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001328",
+            "lbc": 1
+          },
+          {
+            "stock_code": "001358",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002029",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002051",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002080",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002141",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002158",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002173",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002174",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002235",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002242",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002270",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002292",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002309",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002310",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002353",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002364",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002365",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002388",
+            "lbc": 2
+          },
+          {
+            "stock_code": "002407",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002409",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002448",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002484",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002522",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002577",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002580",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002612",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002636",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002640",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002647",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002775",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002879",
+            "lbc": 5
+          },
+          {
+            "stock_code": "002900",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002918",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002925",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002951",
+            "lbc": 1
+          },
+          {
+            "stock_code": "002969",
+            "lbc": 1
+          },
+          {
+            "stock_code": "003020",
+            "lbc": 1
+          },
+          {
+            "stock_code": "003030",
+            "lbc": 1
+          },
+          {
+            "stock_code": "003032",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300214",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300534",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300753",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300795",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300802",
+            "lbc": 1
+          },
+          {
+            "stock_code": "300897",
+            "lbc": 1
+          },
+          {
+            "stock_code": "301085",
+            "lbc": 1
+          },
+          {
+            "stock_code": "301121",
+            "lbc": 1
+          },
+          {
+            "stock_code": "301234",
+            "lbc": 4
+          },
+          {
+            "stock_code": "301526",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600176",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600376",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600488",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600594",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600617",
+            "lbc": 2
+          },
+          {
+            "stock_code": "600667",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600683",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600775",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600829",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600847",
+            "lbc": 1
+          },
+          {
+            "stock_code": "600962",
+            "lbc": 1
+          },
+          {
+            "stock_code": "601218",
+            "lbc": 1
+          },
+          {
+            "stock_code": "601606",
+            "lbc": 3
+          },
+          {
+            "stock_code": "601789",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603082",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603097",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603110",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603115",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603221",
+            "lbc": 5
+          },
+          {
+            "stock_code": "603228",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603256",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603315",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603330",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603358",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603389",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603402",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603435",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603459",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603507",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603567",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603607",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603608",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603610",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603630",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603657",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603660",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603690",
+            "lbc": 2
+          },
+          {
+            "stock_code": "603716",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603790",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603906",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603931",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603955",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603988",
+            "lbc": 1
+          },
+          {
+            "stock_code": "603989",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605006",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605068",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605108",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605128",
+            "lbc": 1
+          },
+          {
+            "stock_code": "605376",
+            "lbc": 1
+          },
+          {
+            "stock_code": "688171",
+            "lbc": 1
+          }
+        ]
       },
       "stability": {
         "previous_date": "STABLE",
         "current_date": "STABLE",
         "pair_usable_for_cross_day": true
       },
+      "identity": {
+        "previous_count": 40,
+        "current_count": 111,
+        "overlap_count": 8,
+        "missing_current_count": 32,
+        "promotion_count": 8,
+        "same_level_count": 0,
+        "skipped_level_count": 0,
+        "unexpected_decrease_count": 0
+      },
       "promotion_rates": {
-        "identity_match_basis": "round1 normalized rows, stock_code identity only",
+        "identity_match_basis": "stock_code identity over normalized rows (round1); lbc N -> N+1 required for numerator",
+        "denominator_contract": "denominator_N = count of unique legal stock_code in previous_normalized_rows where lbc == N (includes missing_current codes; does not depend on current pool presence)",
+        "numerator_contract": "numerator_N = among the above denominator codes, count where the same stock_code appears in current_normalized_rows with lbc == N + 1",
         "levels": [
           {
             "from_level": 1,
             "to_level": 2,
-            "denominator": 3,
+            "denominator": 23,
             "numerator": 3,
-            "sample_count": 3,
-            "rate": 1.0,
-            "matched_stock_codes": ["002388", "600617", "603690"]
+            "sample_count": 23,
+            "rate": 0.1304,
+            "matched_stock_codes": [
+              "002388",
+              "600617",
+              "603690"
+            ]
           },
           {
             "from_level": 2,
             "to_level": 3,
-            "denominator": 2,
+            "denominator": 13,
             "numerator": 2,
-            "sample_count": 2,
-            "rate": 1.0,
-            "matched_stock_codes": ["000533", "601606"]
+            "sample_count": 13,
+            "rate": 0.1538,
+            "matched_stock_codes": [
+              "000533",
+              "601606"
+            ]
           },
           {
             "from_level": 3,
             "to_level": 4,
-            "denominator": 1,
+            "denominator": 2,
             "numerator": 1,
-            "sample_count": 1,
-            "rate": 1.0,
-            "matched_stock_codes": ["301234"]
+            "sample_count": 2,
+            "rate": 0.5,
+            "matched_stock_codes": [
+              "301234"
+            ]
           },
           {
             "from_level": 4,
@@ -294,7 +2166,10 @@
             "numerator": 2,
             "sample_count": 2,
             "rate": 1.0,
-            "matched_stock_codes": ["002879", "603221"]
+            "matched_stock_codes": [
+              "002879",
+              "603221"
+            ]
           }
         ],
         "anomalies": {
@@ -307,6 +2182,614 @@
         },
         "real_promotion_observed": true
       },
+      "previous_normalized_rows": [
+        {
+          "stock_code": "000011",
+          "lbc": 2
+        },
+        {
+          "stock_code": "000417",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000533",
+          "lbc": 2
+        },
+        {
+          "stock_code": "000595",
+          "lbc": 3
+        },
+        {
+          "stock_code": "000668",
+          "lbc": 2
+        },
+        {
+          "stock_code": "000670",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001229",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002012",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002083",
+          "lbc": 2
+        },
+        {
+          "stock_code": "002189",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002199",
+          "lbc": 2
+        },
+        {
+          "stock_code": "002208",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002265",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002298",
+          "lbc": 2
+        },
+        {
+          "stock_code": "002300",
+          "lbc": 2
+        },
+        {
+          "stock_code": "002303",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002374",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002388",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002498",
+          "lbc": 2
+        },
+        {
+          "stock_code": "002879",
+          "lbc": 4
+        },
+        {
+          "stock_code": "003001",
+          "lbc": 2
+        },
+        {
+          "stock_code": "300414",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300480",
+          "lbc": 1
+        },
+        {
+          "stock_code": "301234",
+          "lbc": 3
+        },
+        {
+          "stock_code": "301583",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600178",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600539",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600617",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600698",
+          "lbc": 2
+        },
+        {
+          "stock_code": "600984",
+          "lbc": 2
+        },
+        {
+          "stock_code": "601606",
+          "lbc": 2
+        },
+        {
+          "stock_code": "603068",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603221",
+          "lbc": 4
+        },
+        {
+          "stock_code": "603580",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603690",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603726",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603956",
+          "lbc": 2
+        },
+        {
+          "stock_code": "603976",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605198",
+          "lbc": 1
+        },
+        {
+          "stock_code": "688237",
+          "lbc": 1
+        }
+      ],
+      "current_normalized_rows": [
+        {
+          "stock_code": "000428",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000533",
+          "lbc": 3
+        },
+        {
+          "stock_code": "000566",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000636",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000676",
+          "lbc": 1
+        },
+        {
+          "stock_code": "000862",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001223",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001248",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001258",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001267",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001317",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001328",
+          "lbc": 1
+        },
+        {
+          "stock_code": "001358",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002029",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002051",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002080",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002141",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002158",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002173",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002174",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002235",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002242",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002270",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002292",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002309",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002310",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002353",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002364",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002365",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002388",
+          "lbc": 2
+        },
+        {
+          "stock_code": "002407",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002409",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002448",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002484",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002522",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002577",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002580",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002612",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002636",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002640",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002647",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002775",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002879",
+          "lbc": 5
+        },
+        {
+          "stock_code": "002900",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002918",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002925",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002951",
+          "lbc": 1
+        },
+        {
+          "stock_code": "002969",
+          "lbc": 1
+        },
+        {
+          "stock_code": "003020",
+          "lbc": 1
+        },
+        {
+          "stock_code": "003030",
+          "lbc": 1
+        },
+        {
+          "stock_code": "003032",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300214",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300534",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300753",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300795",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300802",
+          "lbc": 1
+        },
+        {
+          "stock_code": "300897",
+          "lbc": 1
+        },
+        {
+          "stock_code": "301085",
+          "lbc": 1
+        },
+        {
+          "stock_code": "301121",
+          "lbc": 1
+        },
+        {
+          "stock_code": "301234",
+          "lbc": 4
+        },
+        {
+          "stock_code": "301526",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600176",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600376",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600488",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600594",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600617",
+          "lbc": 2
+        },
+        {
+          "stock_code": "600667",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600683",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600775",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600829",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600847",
+          "lbc": 1
+        },
+        {
+          "stock_code": "600962",
+          "lbc": 1
+        },
+        {
+          "stock_code": "601218",
+          "lbc": 1
+        },
+        {
+          "stock_code": "601606",
+          "lbc": 3
+        },
+        {
+          "stock_code": "601789",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603082",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603097",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603110",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603115",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603221",
+          "lbc": 5
+        },
+        {
+          "stock_code": "603228",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603256",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603315",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603330",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603358",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603389",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603402",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603435",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603459",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603507",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603567",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603607",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603608",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603610",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603630",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603657",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603660",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603690",
+          "lbc": 2
+        },
+        {
+          "stock_code": "603716",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603790",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603906",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603931",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603955",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603988",
+          "lbc": 1
+        },
+        {
+          "stock_code": "603989",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605006",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605068",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605108",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605128",
+          "lbc": 1
+        },
+        {
+          "stock_code": "605376",
+          "lbc": 1
+        },
+        {
+          "stock_code": "688171",
+          "lbc": 1
+        }
+      ],
       "decision": {
         "cross_day_identity_verified": true,
         "promotion_formula_reproducible": true,
@@ -334,8 +2817,8 @@
           "transport_success": true,
           "parse_success": true,
           "row_count": 0,
-          "raw_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-          "normalized_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "raw_pool_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "normalized_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
           "duplicate_code_count": 0,
           "invalid_code_count": 0,
           "invalid_lbc_count": 0,
@@ -349,8 +2832,8 @@
           "transport_success": true,
           "parse_success": true,
           "row_count": 0,
-          "raw_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-          "normalized_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "raw_pool_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "normalized_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
           "duplicate_code_count": 0,
           "invalid_code_count": 0,
           "invalid_lbc_count": 0,
@@ -358,18 +2841,19 @@
           "error_class": "EMPTY_UNEXPLAINED"
         },
         "normalized_hash_equal": true,
-        "raw_hash_equal": true
+        "raw_hash_equal": true,
+        "normalized_rows": []
       },
       "current_probe": {
         "round1": {
-          "requested_at": "2026-08-03T17:17:57Z",
-          "completed_at": "2026-08-03T17:17:57Z",
-          "elapsed_seconds": 0.046,
+          "requested_at": "2026-08-03T17:17:52Z",
+          "completed_at": "2026-08-03T17:17:52Z",
+          "elapsed_seconds": 0.05,
           "transport_success": true,
           "parse_success": true,
           "row_count": 0,
-          "raw_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-          "normalized_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "raw_pool_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "normalized_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
           "duplicate_code_count": 0,
           "invalid_code_count": 0,
           "invalid_lbc_count": 0,
@@ -377,14 +2861,14 @@
           "error_class": "EMPTY_UNEXPLAINED"
         },
         "round2": {
-          "requested_at": "2026-08-03T17:17:59Z",
-          "completed_at": "2026-08-03T17:18:00Z",
-          "elapsed_seconds": 0.044,
+          "requested_at": "2026-08-03T17:17:54Z",
+          "completed_at": "2026-08-03T17:17:55Z",
+          "elapsed_seconds": 0.043,
           "transport_success": true,
           "parse_success": true,
           "row_count": 0,
-          "raw_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-          "normalized_payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "raw_pool_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "normalized_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
           "duplicate_code_count": 0,
           "invalid_code_count": 0,
           "invalid_lbc_count": 0,
@@ -392,15 +2876,28 @@
           "error_class": "EMPTY_UNEXPLAINED"
         },
         "normalized_hash_equal": true,
-        "raw_hash_equal": true
+        "raw_hash_equal": true,
+        "normalized_rows": []
       },
       "stability": {
         "previous_date": "EMPTY_UNEXPLAINED",
         "current_date": "EMPTY_UNEXPLAINED",
         "pair_usable_for_cross_day": false
       },
+      "identity": {
+        "previous_count": 0,
+        "current_count": 0,
+        "overlap_count": 0,
+        "missing_current_count": 0,
+        "promotion_count": 0,
+        "same_level_count": 0,
+        "skipped_level_count": 0,
+        "unexpected_decrease_count": 0
+      },
       "promotion_rates": {
-        "identity_match_basis": "round1 normalized rows (both empty)",
+        "identity_match_basis": "not applicable (both pools empty)",
+        "denominator_contract": "same as other pairs; previous pool has no lbc layers, so no levels emitted",
+        "numerator_contract": "not applicable",
         "levels": [],
         "anomalies": {
           "same_level_count": 0,
@@ -412,29 +2909,59 @@
         },
         "real_promotion_observed": false
       },
+      "previous_normalized_rows": [],
+      "current_normalized_rows": [],
+      "empty_pair_diagnosis": {
+        "failure_observation": "both dates returned empty pool in two rounds with transport_success=true and parse_success=true",
+        "cause_status": "not_verified",
+        "possible_explanations": [
+          "historical_retention_window_hypothesis",
+          "upstream_empty_or_coverage_behavior"
+        ]
+      },
       "decision": {
         "cross_day_identity_verified": false,
         "promotion_formula_reproducible": false,
-        "contributes_to_blocker_2": false,
-        "failure_reason": "source does not return historical data for dates ~40+ days in the past; both dates return empty pool with transport success"
+        "contributes_to_blocker_2": false
       }
     }
   ],
   "historical_semantics": {
     "repository_usage": "verified — astock.em_zt_topic_pool('getTopicZTPool', date_yyyymmdd, 'fbt:asc') passes date parameter through to upstream API",
-    "different_dates_produce_different_results": "verified — pair A and B normalized hashes differ across dates",
-    "same_date_repeat_stable": "verified for 4 recent dates; pair C returns empty consistently",
-    "requested_date_binding": "partially_verified — response has no verifiable trade_date field, date binding inferred from parameter passthrough and stable per-date content",
+    "different_dates_produce_different_results": "verified — pair A and B normalized rows differ across dates",
+    "same_date_repeat_stable": "verified for 4 recent dates (normalized rows bit-equal); pair C returns empty consistently (cause not_verified)",
+    "requested_date_binding": "partially_verified — response has no verifiable trade_date field; date binding inferred from parameter passthrough and stable per-date content",
     "final_snapshot_evidence": "partially_verified — stable historical results consistent with post-close final pool, but no direct timestamp or final-state marker in payload"
   },
   "decision": {
     "blocker_2": "OPEN",
-    "blocker_2_reason": "post_holiday pair (C) returns EMPTY_UNEXPLAINED for both dates; criterion 'six dates each at least once successful and parseable with non-empty content' not met; boundary type cannot be substituted",
+    "blocker_2_reason": "post_holiday pair (C) returns EMPTY_UNEXPLAINED for both dates; criterion 'six dates each at least once successful and parseable with non-empty content' not met; boundary type cannot be substituted; cause of empty result not_verified",
     "blocker_3": "OPEN",
     "blocker_3_reason": "requested_date_binding and final_snapshot_evidence both partially_verified (no explicit trade_date/timestamp field in payload)",
     "blocker_4": "CLOSED_BY_NON_ADOPTION",
     "blocker_4_reason": "getYesterdayZTPool explicitly not adopted in v0.1; future re-adoption requires equivalence proof against getTopicZTPool(previous_trade_date(current_date))",
     "implementation_allowed": false,
-    "implementation_blockers_remaining": [2, 3, 5, 6, 7, 8, 9]
+    "implementation_blockers_remaining": [
+      2,
+      3,
+      5,
+      6,
+      7,
+      8,
+      9
+    ]
+  },
+  "evidence_calibration": {
+    "request_interval": "probe implementation configured sleep 2.2 seconds between requests; committed artifact second-precision UTC timestamps do not provide sufficient precision for independent verification of exact minimum monotonic interval; no observed second-precision timestamp violates the 2-second minimum",
+    "selection_rule_pre_observation": "documented deterministic selection rule; selected dates conform to the rule; pre-observation timestamp is not independently verifiable from committed artifacts",
+    "normalized_rows_note": "non-identity fields in the upstream pool may drift when the same date is re-read on different occasions; only normalized_rows (stock_code + lbc) are identity-and-lbc verification targets of this probe",
+    "empty_pair_hash_note": "pair C raw_pool_sha256 and normalized_rows_sha256 both equal sha256 of the extracted empty pool / empty normalized rows (i.e. sha256('[]')); this is not a hash of the full HTTP response payload"
+  },
+  "data_retention": {
+    "minimal_fields_committed": "only stock_code and lbc, the minimum required for mechanical re-computation of denominators, numerators, rates and anomaly classification",
+    "raw_payload_not_committed": true,
+    "names_not_committed": true,
+    "sensitive_values_not_committed": true,
+    "legal_claims": "this file makes no legal claim about copyright, originality or redistribution licensing of the underlying upstream market data"
   }
 }
