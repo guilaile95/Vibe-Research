@@ -125,6 +125,12 @@ def fixture_cases(fixture_doc):
     return {case["case_id"]: case for case in fixture_doc["cases"]}
 
 
+# 哨兵：用于参数化测试中明确区分"显式 is_final=None"与"字段缺失"。
+# 不得用 None 兼任两种语义。当前实现将两种场景拆成独立参数化测试，
+# 显式 null 通过 snap["is_final"] = None 写入，字段缺失通过 del snap["is_final"] 实现。
+_MISSING = object()
+
+
 def _base_snapshot() -> dict:
     """构造一个结构合法的最小 normal snapshot（合成值，非真实行情）。"""
     return {
@@ -475,7 +481,6 @@ class TestDerivedFieldsNotTrusted:
         assert facts["sealed_limit_up_count"] == 7
         assert facts["failed_board_rate"] == _r4(3 / 10)
         assert facts["seal_rate"] == _r4(7 / 10)
-        assert result["status"] in {"partial", "unavailable"}
         assert result["status"] == "partial"
         assert "DERIVED_VALUE_MISMATCH" in result["reason_codes"]
 
@@ -848,27 +853,54 @@ class TestSessionIsFinalInvariant:
     @pytest.mark.parametrize(
         "session_in,is_final_in,exp_session,exp_is_final",
         [
+            # 非法 session + is_final=true → unavailable / false
             (None, True, "unavailable", False),
             ("unknown", True, "unavailable", False),
+            ([], True, "unavailable", False),
             ("unavailable", True, "unavailable", False),
+            # 合法 final + 冲突 → final / true
             ("final", False, "final", True),
-            ("final", None, "final", True),
+            ("final", None, "final", True),       # 显式 null
+            ("final", _MISSING, "final", True),   # 字段缺失
+            # 合法非 final + 冲突 → 保留 session / false
             ("afternoon_session", True, "afternoon_session", False),
-            ("morning_session", None, "morning_session", False),
+            ("morning_session", None, "morning_session", False),     # 显式 null
+            ("morning_session", _MISSING, "morning_session", False), # 字段缺失
+            # 非法 session + 显式 null / 缺失 → unavailable / false
+            (None, None, "unavailable", False),
+            (None, _MISSING, "unavailable", False),
+            ("unknown", None, "unavailable", False),
+            ("unknown", _MISSING, "unavailable", False),
+            ("unavailable", None, "unavailable", False),
+            ("unavailable", _MISSING, "unavailable", False),
+            ("afternoon_session", None, "afternoon_session", False),
+            ("afternoon_session", _MISSING, "afternoon_session", False),
         ],
     )
     def test_conflict_pairs_normalize_to_session(self, session_in, is_final_in, exp_session, exp_is_final):
         snap = _base_snapshot()
         snap["session"] = session_in
-        if is_final_in is not None:
-            snap["is_final"] = is_final_in
-        else:
+        # 使用哨兵 _MISSING 区分"显式 is_final=None"与"字段缺失"。
+        if is_final_in is _MISSING:
             del snap["is_final"]
+        else:
+            snap["is_final"] = is_final_in
         result = compute_short_term_market_facts(snap)
         assert result["session"] == exp_session
         assert result["is_final"] is exp_is_final
         assert "METADATA_INVALID" in result["reason_codes"]
-        assert result["status"] in {"partial", "unavailable"}
+        # 无全局 Data Health 失败的冲突输入必须精确为 partial。
+        assert result["status"] == "partial"
+
+    def test_final_session_explicit_null_is_final(self):
+        snap = _base_snapshot()
+        snap["session"] = "final"
+        snap["is_final"] = None
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "final"
+        assert result["is_final"] is True
+        assert result["status"] == "partial"
+        assert "METADATA_INVALID" in result["reason_codes"]
 
     def test_final_session_missing_is_final(self):
         snap = _base_snapshot()
@@ -877,8 +909,28 @@ class TestSessionIsFinalInvariant:
         result = compute_short_term_market_facts(snap)
         assert result["session"] == "final"
         assert result["is_final"] is True
-        assert "METADATA_INVALID" in result["reason_codes"]
         assert result["status"] == "partial"
+        assert "METADATA_INVALID" in result["reason_codes"]
+
+    def test_morning_session_explicit_null_is_final(self):
+        snap = _base_snapshot()
+        snap["session"] = "morning_session"
+        snap["is_final"] = None
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "morning_session"
+        assert result["is_final"] is False
+        assert result["status"] == "partial"
+        assert "METADATA_INVALID" in result["reason_codes"]
+
+    def test_morning_session_missing_is_final(self):
+        snap = _base_snapshot()
+        snap["session"] = "morning_session"
+        del snap["is_final"]
+        result = compute_short_term_market_facts(snap)
+        assert result["session"] == "morning_session"
+        assert result["is_final"] is False
+        assert result["status"] == "partial"
+        assert "METADATA_INVALID" in result["reason_codes"]
 
     @pytest.mark.parametrize("bad_is_final", [0, 1, "true", [], {}])
     def test_final_session_non_bool_is_final(self, bad_is_final):
@@ -932,6 +984,7 @@ class TestSessionIsFinalInvariant:
         result = compute_short_term_market_facts(snap)
         assert result["session"] == "unavailable"
         assert result["is_final"] is False
+        # 仅在明确全局 Data Health 失败时精确断言 unavailable。
         assert result["status"] == "unavailable"
         assert "SOURCE_UNAVAILABLE" in result["reason_codes"]
         assert "METADATA_INVALID" in result["reason_codes"]
