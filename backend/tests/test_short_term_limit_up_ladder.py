@@ -652,6 +652,59 @@ class TestDuplicateHandling:
             {"boards": 3, "count": 1},
         ]
 
+    def test_trimmed_stock_code_duplicate_keeps_first_valid(self):
+        """去空格后重复：第二条按重复记录忽略，不覆盖首次合法记录。"""
+        snap = _base_snapshot()
+        snap["limit_up_pool"] = [
+            {"stock_code": "000001", "consecutive_limit_up_days": 2},
+            {"stock_code": " 000001 ", "consecutive_limit_up_days": 3},
+        ]
+        snap["data_health"]["row_count"] = 2
+        result = compute_limit_up_ladder(snap)
+        assert result["status"] == "partial"
+        assert "SOURCE_PARTIAL" in result["reason_codes"]
+        assert "DUPLICATE_STOCK_CODE" in result["reason_codes"]
+        # 保留首次合法记录 boards=2，不被更高板数覆盖
+        assert result["metrics"]["max_boards"] == 2
+        assert result["metrics"]["lianban_count"] == 1
+        assert result["metrics"]["ladder"] == [{"boards": 2, "count": 1}]
+
+    def test_invalid_first_row_does_not_claim_stock_identity(self):
+        """第一条非法（days=0）不得占用 stock_code 身份；第二条合法记录必须进入计算。"""
+        snap = _base_snapshot()
+        snap["limit_up_pool"] = [
+            {"stock_code": "000001", "consecutive_limit_up_days": 0},
+            {"stock_code": "000001", "consecutive_limit_up_days": 3},
+        ]
+        snap["data_health"]["row_count"] = 2
+        result = compute_limit_up_ladder(snap)
+        assert result["status"] == "partial"
+        assert "SOURCE_PARTIAL" in result["reason_codes"]
+        assert "INVALID_POOL_ROW" in result["reason_codes"]
+        assert "DUPLICATE_STOCK_CODE" not in result["reason_codes"]
+        # 第二条合法记录必须进入计算
+        assert result["metrics"]["max_boards"] == 3
+        assert result["metrics"]["lianban_count"] == 1
+        assert result["metrics"]["ladder"] == [{"boards": 3, "count": 1}]
+
+    def test_invalid_second_row_does_not_replace_first_valid(self):
+        """第一条合法、第二条非法：保留第一条，排除非法第二条，不得判为重复。"""
+        snap = _base_snapshot()
+        snap["limit_up_pool"] = [
+            {"stock_code": "000001", "consecutive_limit_up_days": 2},
+            {"stock_code": "000001", "consecutive_limit_up_days": 0},
+        ]
+        snap["data_health"]["row_count"] = 2
+        result = compute_limit_up_ladder(snap)
+        assert result["status"] == "partial"
+        assert "SOURCE_PARTIAL" in result["reason_codes"]
+        assert "INVALID_POOL_ROW" in result["reason_codes"]
+        assert "DUPLICATE_STOCK_CODE" not in result["reason_codes"]
+        # 保留第一条合法记录
+        assert result["metrics"]["max_boards"] == 2
+        assert result["metrics"]["lianban_count"] == 1
+        assert result["metrics"]["ladder"] == [{"boards": 2, "count": 1}]
+
 
 # ---------------------------------------------------------------------------
 # 7. Data Health
@@ -741,6 +794,73 @@ class TestDataHealth:
         result = compute_limit_up_ladder(snap)
         assert result["status"] == "unavailable"
         assert "SOURCE_UNAVAILABLE" in result["reason_codes"]
+
+    def test_row_count_uses_raw_length_with_invalid_row(self):
+        """raw pool 长度 3（含 1 行非法），row_count=3 → 不得产生虚假 PARTIAL_COVERAGE。"""
+        snap = _base_snapshot()
+        snap["limit_up_pool"] = [
+            {"stock_code": "000001", "consecutive_limit_up_days": 2},
+            {"stock_code": "000002", "consecutive_limit_up_days": 3},
+            {"stock_code": "000003", "consecutive_limit_up_days": 0},  # 非法
+        ]
+        snap["data_health"]["row_count"] = 3
+        result = compute_limit_up_ladder(snap)
+        assert result["status"] == "partial"
+        assert "SOURCE_PARTIAL" in result["reason_codes"]
+        assert "INVALID_POOL_ROW" in result["reason_codes"]
+        assert "PARTIAL_COVERAGE" not in result["reason_codes"]
+        # metrics 使用两条合法记录计算
+        assert result["metrics"]["max_boards"] == 3
+        assert result["metrics"]["lianban_count"] == 2
+        assert result["metrics"]["ladder"] == [
+            {"boards": 2, "count": 1},
+            {"boards": 3, "count": 1},
+        ]
+
+    def test_row_count_uses_raw_length_before_deduplication(self):
+        """raw pool 长度 3（含重复），row_count=3 → 不得产生虚假 PARTIAL_COVERAGE。"""
+        snap = _base_snapshot()
+        snap["limit_up_pool"] = [
+            {"stock_code": "000001", "consecutive_limit_up_days": 2},
+            {"stock_code": "000002", "consecutive_limit_up_days": 3},
+            {"stock_code": "000002", "consecutive_limit_up_days": 3},  # 重复
+        ]
+        snap["data_health"]["row_count"] = 3
+        result = compute_limit_up_ladder(snap)
+        assert result["status"] == "partial"
+        assert "SOURCE_PARTIAL" in result["reason_codes"]
+        assert "DUPLICATE_STOCK_CODE" in result["reason_codes"]
+        assert "PARTIAL_COVERAGE" not in result["reason_codes"]
+        # metrics 使用首次合法记录计算
+        assert result["metrics"]["max_boards"] == 3
+        assert result["metrics"]["lianban_count"] == 2
+        assert result["metrics"]["ladder"] == [
+            {"boards": 2, "count": 1},
+            {"boards": 3, "count": 1},
+        ]
+
+    def test_empty_pool_with_positive_row_count_is_unavailable(self):
+        """空数组但 row_count>0：unavailable，metrics 全 null。
+
+        实现在空池分支提前返回，不执行 row_count 检查，
+        因此不产生 PARTIAL_COVERAGE；状态仍为 unavailable、metrics 仍全 null。
+        """
+        snap = _base_snapshot()
+        snap["limit_up_pool"] = []
+        snap["data_health"]["row_count"] = 1
+        snap["data_health"]["legal_zero"] = False
+        snap["data_health"]["unexplained_empty"] = False
+        result = compute_limit_up_ladder(snap)
+        assert result["status"] == "unavailable"
+        assert result["metrics"] == {
+            "max_boards": None,
+            "lianban_count": None,
+            "ladder": None,
+        }
+        assert "SOURCE_UNAVAILABLE" in result["reason_codes"]
+        assert "LIMIT_UP_POOL_UNAVAILABLE" in result["reason_codes"]
+        # 实现在空池分支提前返回，不执行 row_count 检查
+        assert "PARTIAL_COVERAGE" not in result["reason_codes"]
 
 
 # ---------------------------------------------------------------------------
