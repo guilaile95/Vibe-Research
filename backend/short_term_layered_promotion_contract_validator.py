@@ -53,7 +53,7 @@ _ISSUE_CODE_ORDER: tuple[str, ...] = (
 )
 _ISSUE_CODE_SET = frozenset(_ISSUE_CODE_ORDER)
 
-# 固定 reason-code 集合与顺序（layered-promotion 映射层）
+# 固定 reason-code 集合与顺序（layered-promotion 映射层，v0.1 共 9 个）
 _REASON_CODE_ORDER: tuple[str, ...] = (
     "SOURCE_UNAVAILABLE",
     "PREVIOUS_SNAPSHOT_UNAVAILABLE",
@@ -63,12 +63,43 @@ _REASON_CODE_ORDER: tuple[str, ...] = (
     "NOT_FINAL",
     "SOURCE_PARTIAL",
     "PARTIAL_COVERAGE",
-    "IDENTITY_MATCH_INCOMPLETE",
-    "INVALID_POOL_ROW",
-    "DUPLICATE_STOCK_CODE",
     "UNEXPLAINED_EMPTY",
 )
 _REASON_CODE_SET = frozenset(_REASON_CODE_ORDER)
+
+# code_prefix_contract 精确字段集合与固定值（消除模糊语义）
+_CODE_PREFIX_CONTRACT_FIELDS = frozenset({
+    "sh_main",
+    "sz_main",
+    "chinext",
+    "star",
+    "excluded_prefixes",
+    "normalization",
+    "note",
+})
+_CODE_PREFIX_EXACT_VALUES: dict[str, str] = {
+    "sh_main": "60xxxx",
+    "sz_main": "00xxxx",
+    "chinext": "30xxxx",
+    "star": "68xxxx",
+    "normalization": (
+        "trim → keep string → validate 6 digits "
+        "→ accept only 60/00/30/68 prefixes"
+    ),
+    "note": (
+        "前缀合同用于市场板块形状校验，不用于排除 ST/*ST。"
+        "ST/*ST 使用相同的市场代码前缀。代码前缀仅为辅助校验；"
+        "长期市场身份应由明确的目标交易所/universe 规则决定，"
+        "不能只依赖前缀。"
+    ),
+}
+_EXCLUDED_PREFIXES: list[str] = ["4xxxxx", "8xxxxx", "920xxx", "9xxxxx"]
+# unavailable 组合时保留的具体原因（partial 码被 unavailable 覆盖）
+_UNAVAILABLE_SPECIFIC_CODES = frozenset({
+    "TRADING_CALENDAR_UNAVAILABLE",
+    "TRADE_DATE_MISMATCH",
+    "NOT_FINAL",
+})
 
 _CASE_IDS: tuple[str, ...] = (
     "normal",
@@ -191,6 +222,32 @@ def _strict_parse_date(s: Any) -> Optional[date]:
         return None
 
 
+def _is_strict_json_value(value: Any) -> bool:
+    """严格 JSON 树类型校验：只接受精确内建类型，递归验证全部成员。
+
+    拒绝：dict/list/str/int/float/bool 子类、tuple、set、bytes、complex、
+    object()、NaN、Infinity、-Infinity、非 str dict key。
+    """
+    if value is None:
+        return True
+    if type(value) is bool:
+        return True
+    if type(value) is int:
+        return True
+    if type(value) is float:
+        return math.isfinite(value)
+    if type(value) is str:
+        return True
+    if type(value) is list:
+        return all(_is_strict_json_value(item) for item in value)
+    if type(value) is dict:
+        return all(
+            type(key) is str and _is_strict_json_value(val)
+            for key, val in value.items()
+        )
+    return False
+
+
 def _parse_utc_iso(s: Any) -> Optional[datetime]:
     """可解析的带时区 UTC ISO 时间（offset 必须为零）。"""
     if type(s) is not str or not s:
@@ -228,14 +285,20 @@ def _output(
     }
 
 
-def _invalid_case(case_id: str, issue_codes: list[str]) -> dict:
+def _invalid_case(
+    case_id: str,
+    issue_codes: list[str],
+    derived_status: Optional[str] = None,
+    derived_reason_codes: Optional[list[str]] = None,
+    derived_rates: Any = None,
+) -> dict:
     return {
         "case_id": case_id,
         "status": "invalid",
         "issue_codes": _normalize_issue_codes(issue_codes),
-        "derived_status": None,
-        "derived_reason_codes": None,
-        "derived_layered_promotion_rates": None,
+        "derived_status": derived_status,
+        "derived_reason_codes": derived_reason_codes,
+        "derived_layered_promotion_rates": derived_rates,
     }
 
 
@@ -277,7 +340,13 @@ def _validate_market_scope(market_scope: Any, issues: list[str]) -> None:
 
 
 def _validate_code_prefix_contract(value: Any, issues: list[str]) -> None:
-    if not isinstance(value, dict) or not value:
+    if type(value) is not dict or set(value.keys()) != _CODE_PREFIX_CONTRACT_FIELDS:
+        issues.append("CODE_PREFIX_CONTRACT_INVALID")
+        return
+    for key, expected in _CODE_PREFIX_EXACT_VALUES.items():
+        if value.get(key) != expected:
+            issues.append("CODE_PREFIX_CONTRACT_INVALID")
+    if value.get("excluded_prefixes") != _EXCLUDED_PREFIXES:
         issues.append("CODE_PREFIX_CONTRACT_INVALID")
 
 
@@ -358,15 +427,22 @@ def _validate_snapshot(
     expected_trade_date: str,
     issues: list[str],
 ) -> bool:
-    """snapshot 合同。返回是否整体有效。"""
-    if not isinstance(snapshot, dict):
+    """snapshot 结构合同（不含业务状态判定）。返回是否整体有效。"""
+    if type(snapshot) is not dict:
         issues.append("SNAPSHOT_SCHEMA_INVALID")
         return False
     if set(snapshot.keys()) != _SNAPSHOT_FIELDS:
         issues.append("SNAPSHOT_SCHEMA_INVALID")
-    if snapshot.get("trade_date") != expected_trade_date:
+    # trade_date 只做格式校验；与 case 日期的匹配属业务状态（TRADE_DATE_MISMATCH）
+    if _strict_parse_date(snapshot.get("trade_date")) is None:
         issues.append("SNAPSHOT_SCHEMA_INVALID")
-    if snapshot.get("session") != "final" or snapshot.get("is_final") is not True:
+    session = snapshot.get("session")
+    is_final = snapshot.get("is_final")
+    if session not in ("final", "not_final"):
+        issues.append("SNAPSHOT_SCHEMA_INVALID")
+    if type(is_final) is not bool:
+        issues.append("SNAPSHOT_SCHEMA_INVALID")
+    if (session == "final") != (is_final is True):
         issues.append("SNAPSHOT_SCHEMA_INVALID")
     source_ids = snapshot.get("source_ids")
     if not isinstance(source_ids, list) or not source_ids \
@@ -409,6 +485,8 @@ def _validate_rate_item(item: Any) -> bool:
             or sample_count != denominator:
         return False
     if isinstance(rate, bool) or not isinstance(rate, (int, float)):
+        return False
+    if type(rate) is not float:
         return False
     rate_f = float(rate)
     if not math.isfinite(rate_f) or rate_f < 0.0 or rate_f > 1.0:
@@ -466,11 +544,17 @@ def _validate_expected(expected: Any, issues: list[str]) -> bool:
 # 离线 oracle
 # ---------------------------------------------------------------------------
 
-def _derive_side(snapshot: dict) -> tuple[str, list[str]]:
-    """单侧推导：normal / partial / unavailable + reason codes。"""
+def _derive_side(
+    snapshot: dict,
+    expected_trade_date: str,
+) -> tuple[str, list[str]]:
+    """单侧业务状态推导：normal / partial / unavailable + reason codes。
+
+    优先级：来源全局失败 > 日历不可验证 > 日期不匹配 > 非 final >
+    partial coverage > normal。
+    """
     data_health = snapshot["data_health"]
-    if data_health.get("trade_date_match") is not True:
-        return "unavailable", ["TRADE_DATE_MISMATCH"]
+    # 1) 来源全局失败
     if not (
         data_health.get("transport_success") is True
         and data_health.get("parse_success") is True
@@ -479,9 +563,27 @@ def _derive_side(snapshot: dict) -> tuple[str, list[str]]:
         and data_health.get("upstream_null") is False
     ):
         return "unavailable", []
+    # 2) 交易日历不可验证
+    if data_health.get("trade_date_match") is None:
+        return "unavailable", ["TRADING_CALENDAR_UNAVAILABLE"]
+    # 3) 交易日期不匹配
+    if snapshot.get("trade_date") != expected_trade_date \
+            or data_health.get("trade_date_match") is False:
+        return "unavailable", ["TRADE_DATE_MISMATCH"]
+    # 4) 非 final
+    if snapshot.get("session") == "not_final" \
+            and snapshot.get("is_final") is False:
+        return "unavailable", ["NOT_FINAL"]
+    # 5) partial coverage
     if data_health.get("coverage_warning") is True \
             or data_health.get("unexplained_empty") is True:
-        return "partial", ["SOURCE_PARTIAL", "PARTIAL_COVERAGE"]
+        codes = ["SOURCE_PARTIAL"]
+        if data_health.get("coverage_warning") is True:
+            codes.append("PARTIAL_COVERAGE")
+        if data_health.get("unexplained_empty") is True:
+            codes.append("UNEXPLAINED_EMPTY")
+        return "partial", codes
+    # 6) normal
     return "normal", []
 
 
@@ -512,21 +614,31 @@ def _calculate_rates(previous_pool: list[dict], current_pool: list[dict]) -> lis
             "numerator": numerator,
             "denominator": denom,
             "sample_count": denom,
-            "rate": round(numerator / denom, 4),
+            "rate": float(round(numerator / denom, 4)),
         })
     return rates
 
 
-def _derive(snapshot_prev: dict, snapshot_curr: dict) -> tuple[str, list[str], Any]:
+def _derive(
+    snapshot_prev: dict,
+    snapshot_curr: dict,
+    prev_expected_date: str,
+    curr_expected_date: str,
+) -> tuple[str, list[str], Any]:
     """双侧组合推导：(derived_status, derived_reason_codes, derived_rates)。"""
-    prev_status, prev_codes = _derive_side(snapshot_prev)
-    curr_status, curr_codes = _derive_side(snapshot_curr)
+    prev_status, prev_codes = _derive_side(snapshot_prev, prev_expected_date)
+    curr_status, curr_codes = _derive_side(snapshot_curr, curr_expected_date)
     if prev_status == "unavailable" or curr_status == "unavailable":
         codes: list[str] = ["SOURCE_UNAVAILABLE"]
         if prev_status == "unavailable":
             codes.append("PREVIOUS_SNAPSHOT_UNAVAILABLE")
         if curr_status == "unavailable":
             codes.append("CURRENT_SNAPSHOT_UNAVAILABLE")
+        # 保留各侧具体原因（日历不可验证 / 日期不匹配 / 非 final）；
+        # partial 具体码被 unavailable 覆盖
+        for code in prev_codes + curr_codes:
+            if code in _UNAVAILABLE_SPECIFIC_CODES:
+                codes.append(code)
         return "unavailable", _normalize_reason_codes(codes), None
     if prev_status == "partial" or curr_status == "partial":
         return "partial", _normalize_reason_codes(prev_codes + curr_codes), None
@@ -539,6 +651,149 @@ def _derive(snapshot_prev: dict, snapshot_curr: dict) -> tuple[str, list[str], A
         snapshot_curr["limit_up_pool"],
     )
     return "normal", [], rates
+
+
+def _validate_case_semantics(
+    case_id: str,
+    previous_snapshot: dict,
+    current_snapshot: dict,
+    prev_expected_date: str,
+    curr_expected_date: str,
+    derived_status: str,
+    derived_reason_codes: list[str],
+    derived_rates: Any,
+    issues: list[str],
+) -> None:
+    """七类 case 的命名语义独立验证（oracle 之后、expected 比较之前）。
+
+    语义不满足 → CASE_SCHEMA_INVALID；不得依赖 expected 证明 case 语义。
+    """
+    prev_health = previous_snapshot["data_health"]
+    curr_health = current_snapshot["data_health"]
+    prev_pool = previous_snapshot["limit_up_pool"]
+    curr_pool = current_snapshot["limit_up_pool"]
+    prev_levels = {
+        row["consecutive_limit_up_days"] for row in prev_pool
+    }
+    curr_codes = {row["stock_code"] for row in curr_pool}
+    prev_by_code = {
+        row["stock_code"]: row["consecutive_limit_up_days"] for row in prev_pool
+    }
+
+    def fail() -> None:
+        issues.append("CASE_SCHEMA_INVALID")
+
+    if case_id == "normal":
+        if not (
+            derived_status == "normal"
+            and prev_health.get("legal_zero") is False
+            and curr_health.get("legal_zero") is False
+            and prev_levels == {1, 2, 3}
+            and isinstance(derived_rates, list)
+            and [r["from_level"] for r in derived_rates] == [1, 2, 3]
+            and len(derived_rates) == 3
+            and derived_rates[0]["numerator"] > 0
+            and derived_rates[1]["numerator"] > 0
+            and derived_rates[2]["numerator"] == 0
+        ):
+            fail()
+    elif case_id == "zero_denominator":
+        if not (
+            derived_status == "normal"
+            and prev_health.get("legal_zero") is False
+            and prev_levels == {1, 2}
+            and isinstance(derived_rates, list)
+            and [r["from_level"] for r in derived_rates] == [1, 2]
+        ):
+            fail()
+    elif case_id == "previous_legal_zero":
+        if not (
+            prev_health.get("legal_zero") is True
+            and prev_pool == []
+            and prev_health.get("row_count") == 0
+            and curr_health.get("legal_zero") is False
+            and derived_status == "normal"
+            and derived_reason_codes == []
+            and derived_rates == []
+        ):
+            fail()
+    elif case_id == "current_legal_zero":
+        if not (
+            prev_health.get("legal_zero") is False
+            and prev_pool
+            and curr_health.get("legal_zero") is True
+            and curr_pool == []
+            and curr_health.get("row_count") == 0
+            and derived_status == "normal"
+            and isinstance(derived_rates, list)
+            and len(derived_rates) == len(prev_levels)
+            and all(item["numerator"] == 0 and item["rate"] == 0.0
+                    for item in derived_rates)
+        ):
+            fail()
+    elif case_id == "partial":
+        prev_side_status, _ = _derive_side(previous_snapshot, prev_expected_date)
+        if not (
+            prev_side_status == "normal"
+            and curr_health.get("coverage_warning") is True
+            and curr_health.get("unexplained_empty") is False
+            and derived_status == "partial"
+            and derived_rates is None
+            and derived_reason_codes == ["SOURCE_PARTIAL", "PARTIAL_COVERAGE"]
+        ):
+            fail()
+    elif case_id == "unavailable":
+        prev_side_status, _ = _derive_side(previous_snapshot, prev_expected_date)
+        if not (
+            prev_side_status == "normal"
+            and curr_health.get("transport_success") is False
+            and curr_health.get("trade_date_match") is True
+            and curr_health.get("coverage_warning") is False
+            and curr_health.get("unexplained_empty") is False
+            and current_snapshot.get("session") == "final"
+            and current_snapshot.get("is_final") is True
+            and derived_status == "unavailable"
+            and derived_rates is None
+            and derived_reason_codes == [
+                "SOURCE_UNAVAILABLE", "CURRENT_SNAPSHOT_UNAVAILABLE"]
+        ):
+            fail()
+    elif case_id == "identity_edge":
+        not_incremented = any(
+            code in curr_codes
+            and prev_by_code[code] == _code_days(curr_pool, code)
+            for code in prev_by_code
+        )
+        skipped = any(
+            code in curr_codes
+            and _code_days(curr_pool, code) >= prev_by_code[code] + 2
+            for code in prev_by_code
+        )
+        missing = any(code not in curr_codes for code in prev_by_code)
+        rate_2_3_zero = not (
+            isinstance(derived_rates, list)
+            and any(item["from_level"] == 2 for item in derived_rates)
+            and next(item for item in derived_rates
+                     if item["from_level"] == 2)["numerator"] == 0
+        )
+        if not (
+            derived_status == "normal"
+            and prev_health.get("legal_zero") is False
+            and curr_health.get("legal_zero") is False
+            and missing
+            and not_incremented
+            and skipped
+            and not rate_2_3_zero
+        ):
+            fail()
+    # 未知 case_id 已在 case 集合层拒绝；此处不额外处理
+
+
+def _code_days(pool: list[dict], code: str) -> int:
+    for row in pool:
+        if row["stock_code"] == code:
+            return row["consecutive_limit_up_days"]
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -558,8 +813,13 @@ def validate_layered_promotion_fixture(fixture: dict) -> dict:
 
 
 def _validate_fixture(fixture: Any) -> dict:
-    if not isinstance(fixture, dict):
+    # 顶层必须为精确 dict（dict 子类不接受）
+    if type(fixture) is not dict:
         return _output(fixture, ["FIXTURE_NOT_DICT"], [])
+    # 严格 JSON 树类型校验（精确内建类型，拒绝子类 / tuple / set / bytes /
+    # object / NaN / Infinity 等）
+    if not _is_strict_json_value(fixture):
+        return _output(fixture, ["TOP_LEVEL_FIELD_INVALID"], [])
     # 非 JSON 值（object/set/bytes/NaN/Infinity 等）整体拒绝
     try:
         json.dumps(fixture, ensure_ascii=False, allow_nan=False)
@@ -650,11 +910,20 @@ def _validate_fixture(fixture: Any) -> dict:
                 issues.extend(case_issues)
                 continue
 
-            # 离线 oracle
+            # 离线 oracle（含日历不可验证 / 日期不匹配 / 非 final 业务映射）
             derived_status, derived_codes, derived_rates = _derive(
-                prev_snap, curr_snap)
+                prev_snap, curr_snap,
+                case.get("previous_trade_date", ""),
+                case.get("current_trade_date", ""))
+            # 七类 case 命名语义独立验证（expected 比较之前）
+            _validate_case_semantics(
+                case_id, prev_snap, curr_snap,
+                case.get("previous_trade_date", ""),
+                case.get("current_trade_date", ""),
+                derived_status, derived_codes, derived_rates,
+                case_issues)
             expected = case.get("expected")
-            if expected_ok:
+            if expected_ok and not case_issues:
                 if expected.get("status") != derived_status:
                     case_issues.append("STATUS_MAPPING_MISMATCH")
                 if expected.get("reason_codes") != derived_codes:
@@ -663,7 +932,9 @@ def _validate_fixture(fixture: Any) -> dict:
                     case_issues.append("RATE_CALCULATION_MISMATCH")
 
             if case_issues:
-                case_results.append(_invalid_case(case_id, case_issues))
+                case_results.append(_invalid_case(
+                    case_id, case_issues,
+                    derived_status, derived_codes, derived_rates))
                 issues.extend(case_issues)
             else:
                 case_results.append(_valid_case(
