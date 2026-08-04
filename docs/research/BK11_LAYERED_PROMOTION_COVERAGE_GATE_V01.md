@@ -116,24 +116,71 @@ timing 关系：first/last 非空 → first <= last、actual 非空且
 `actual == last - first`；first/last 均空 → actual 必须为空；
 拒绝一侧空一侧非空。
 
+固定 Slice 2F producer 稳定参数（complete 侧精确绑定，不接受调用方声明值）：
+
+```text
+required_observations == 3
+completed_observations == 3
+stable_observation_count == 3
+observation_interval_seconds == 2.2
+required_stability_window_seconds == 4.4
+first/last/actual 全部非空
+actual == last - first
+actual + 1e-9 >= 4.4
+```
+
+不得只验证 interval > 0 / required_window >= 0 / actual >= 调用方自报值。
+以下伪造一律对应侧 INPUT_INVALID：
+
+```text
+零窗口伪造：interval=0.1、required=0.0、actual=0.0
+缩短窗口：interval=1.0、required=2.0、actual=2.0
+只篡改 interval：interval=2.1
+只篡改 required window：required=4.0
+```
+
 ## 7. Nested Adapter Contract
 
 complete 侧的 `snapshot` 必须为 pool-adapter v0.1 完整合同（25 字段精确）：
 
 ```text
 schema_version == "short-term-limit-up-pool-adapter-v0.1"
+source_id == "eastmoney_getTopicZTPool"
+endpoint == "getTopicZTPool"
 requested_trade_date == 外层 requested_trade_date
 status == normal；reason_codes == []
+reason_codes: type is list，所有成员 type is str，normal 时精确等于 []
 transport_success / parse_success / required_field_present /
 data_array_present / trade_date_match 均 is true
 coverage_warning / upstream_null / unexplained_empty / legal_zero 均 is false
 invalid_row_count / duplicate_code_count 为精确 int 0
+  （type(value) is int 且 value == 0；False/True/0.0/"0"/-1 拒绝）
 row_count == len(rows)
 source_pool_row_count == row_count + excluded_universe_count
 error_class == "NONE"
+target_universe_empty_after_filter: type is bool
 ```
 
 本 gate 不正向接受 `legal_zero=true`（Blocker 6 仍 PARTIALLY CLOSED）。
+
+nested observed_at：
+
+```text
+type is str、非空、datetime.fromisoformat 可解析、有时区、UTC offset == 0
+接受 Z / +00:00；拒绝空、非字符串、不可解析、无时区、非零 offset
+```
+
+nested http_status：
+
+```text
+None，或 type is int 且 100 <= value <= 599（bool 拒绝）
+拒绝 True / False / "200" / 99 / 600 / -1 / 1.5
+```
+
+100–599 只验证完整适配器字段类型边界，不证明 HTTP 成功语义。
+
+所有公共字段语义校验独立明确（type is bool / type is int 非 bool /
+type is str），不依赖 Python 相等性偶然通过。
 
 非空目标池：rows 非空、target flag false。
 目标 universe 过滤后为空：rows=[]、row_count=0、source>0、
@@ -168,13 +215,32 @@ warnings == []
 ```text
 status == partial；session == not_final；is_final is false
 finality_basis is null；snapshot is null
-reason_codes 非空 list[str] 且至少包含 SOURCE_PARTIAL
+required_observations == 3
+0 <= completed_observations <= 3
+0 <= stable_observation_count <= completed_observations
+reason_codes 非空 list[str]、所有成员为非空 str、无重复、至少包含 SOURCE_PARTIAL
 warnings 为 list[str]
 ```
 
 若 status=partial 但同时 session=final / is_final=true / snapshot 非空 /
 reason_codes=[] → input invalid，不得归类 partial。upstream producer 的
 原始 reason code 不得原样透传到 gate 输出。
+
+partial 不得携带完整成功证据：
+
+```text
+completed == 3 且 stable == 3 且 actual 非空且 actual + 1e-9 >= 4.4
+→ INPUT_INVALID
+```
+
+真实 producer fail-fast 语义（partial 可在第三次 adapter 调用后发生，
+但不能同时拥有 complete 所需的 stable=3）：
+
+```text
+partial 第一次返回：completed=1、stable=0、first=last、actual=0.0
+partial 第二次返回：completed=2、stable=1、actual=last-first
+partial 第三次返回：completed=3、stable=2、actual=last-first
+```
 
 ## 10. Unavailable Coverage
 
@@ -190,6 +256,11 @@ warnings 为 list[str]
 不要求特定 producer reason code；未知 producer reason 不得进入 gate 输出。
 unavailable 与 final/snapshot 非空组合 → input invalid。
 
+unavailable 同样不得携带完整成功证据（completed=3 且 stable=3 且完整
+4.4 秒窗口 → INPUT_INVALID）。不影响合法输出：adapter 异常第一次
+completed=0、第三次 completed=2；schema/status 失败正常返回第三次
+completed=3 且 stable<=2。
+
 ## 11. Invalid Input
 
 以下均属 input invalid（对应侧 `PREVIOUS/CURRENT_INPUT_INVALID`）：
@@ -202,6 +273,9 @@ reason_codes 类型错误 / 计数 bool、负数或越界
 时钟 NaN / inf / 倒退 / timing 一侧为空
 nested adapter 缺字段 / coverage_warning / legal_zero / unexplained_empty /
 trade_date_match false/null / row_count 不一致 / source count 不守恒
+source_id / endpoint 伪造或非字符串 / observed_at 非法
+http_status 越界或 bool 冒充 / invalid/duplicate 非精确 int 0
+partial/unavailable 携带完整成功证据 / partial reason 空、重复或含空字符串
 非法 row / 未排序 / 重复代码
 ```
 
@@ -287,6 +361,13 @@ status == complete
 concrete rates、complete + implementation_allowed=true、
 complete + rates_policy=must_be_null。
 
+所有普通返回路径：
+
+```text
+layered_promotion_rates is null
+implementation_allowed is false
+```
+
 ## 16. Legal-zero Boundary
 
 ```text
@@ -336,6 +417,10 @@ complete 状态也不计算或透传 rates
 进程控制异常自然传播
 正式测试与独立补测全部通过
 ```
+
+稳定参数精确绑定（interval==2.2、required window==4.4）、nested adapter
+来源身份（source_id/endpoint/observed_at/http_status/精确零）与
+partial/unavailable 完整成功证据拒绝均已机械验证。
 
 正式关闭由独立复审（审查者 C）确认后作出；Q 不得自行正式关闭。
 Blocker 8 关闭不代表生产晋级率获准。
