@@ -30,7 +30,15 @@ __all__ = [
 SCHEMA_VERSION = "short-term-layered-promotion-coverage-gate-v0.1"
 FINAL_SNAPSHOT_SCHEMA_VERSION = "short-term-limit-up-final-snapshot-v0.1"
 _ADAPTER_SCHEMA_VERSION = "short-term-limit-up-pool-adapter-v0.1"
+_ADAPTER_SOURCE_ID = "eastmoney_getTopicZTPool"
+_ADAPTER_ENDPOINT = "getTopicZTPool"
 _FINALITY_BASIS = "three_identical_normal_observations"
+
+# 固定 Slice 2F producer 稳定参数（complete 侧精确绑定，不接受调用方声明值）
+_REQUIRED_OBSERVATIONS = 3
+_OBSERVATION_INTERVAL_SECONDS = 2.2
+_REQUIRED_STABILITY_WINDOW_SECONDS = 4.4
+_STABILITY_EPSILON = 1e-9
 
 # 固定 gate reason-code 集合与顺序（upstream producer reason code 不得透传）
 _REASON_CODE_ORDER: tuple[str, ...] = (
@@ -249,10 +257,41 @@ def _validate_nested_adapter(snapshot: dict, outer_date: str) -> bool:
         return False
     if snapshot.get("schema_version") != _ADAPTER_SCHEMA_VERSION:
         return False
+    if snapshot.get("source_id") != _ADAPTER_SOURCE_ID:
+        return False
+    if snapshot.get("endpoint") != _ADAPTER_ENDPOINT:
+        return False
     if snapshot.get("requested_trade_date") != outer_date:
         return False
-    if snapshot.get("status") != "normal" or snapshot.get("reason_codes") != []:
+    if snapshot.get("status") != "normal":
         return False
+    reason_codes = snapshot.get("reason_codes")
+    if type(reason_codes) is not list \
+            or any(type(code) is not str for code in reason_codes) \
+            or reason_codes != []:
+        return False
+    observed_at = snapshot.get("observed_at")
+    if type(observed_at) is not str or not observed_at:
+        return False
+    try:
+        parsed_observed = datetime.fromisoformat(
+            observed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed_observed.tzinfo is None \
+            or parsed_observed.utcoffset() != timedelta(0):
+        return False
+    http_status = snapshot.get("http_status")
+    if http_status is not None and (
+            type(http_status) is not int or http_status < 100
+            or http_status > 599):
+        return False
+    for key in ("transport_success", "parse_success", "required_field_present",
+                "data_array_present", "trade_date_match",
+                "coverage_warning", "upstream_null", "unexplained_empty",
+                "legal_zero", "target_universe_empty_after_filter"):
+        if type(snapshot.get(key)) is not bool:
+            return False
     for key in ("transport_success", "parse_success", "required_field_present",
                 "data_array_present", "trade_date_match"):
         if snapshot.get(key) is not True:
@@ -261,11 +300,14 @@ def _validate_nested_adapter(snapshot: dict, outer_date: str) -> bool:
                 "legal_zero"):
         if snapshot.get(key) is not False:
             return False
-    if snapshot.get("invalid_row_count") != 0:
+    if type(snapshot.get("invalid_row_count")) is not int \
+            or snapshot.get("invalid_row_count") != 0:
         return False
-    if snapshot.get("duplicate_code_count") != 0:
+    if type(snapshot.get("duplicate_code_count")) is not int \
+            or snapshot.get("duplicate_code_count") != 0:
         return False
-    if snapshot.get("error_class") != "NONE":
+    if type(snapshot.get("error_class")) is not str \
+            or snapshot.get("error_class") != "NONE":
         return False
     rows = snapshot.get("rows")
     if not isinstance(rows, list):
@@ -311,19 +353,24 @@ def _is_complete_side(result: dict) -> bool:
         return False
     if result.get("finality_basis") != _FINALITY_BASIS:
         return False
-    if result.get("required_observations") != 3:
+    if result.get("required_observations") != _REQUIRED_OBSERVATIONS:
         return False
-    if result.get("completed_observations") != 3:
+    if result.get("completed_observations") != _REQUIRED_OBSERVATIONS:
         return False
-    if result.get("stable_observation_count") != 3:
+    if result.get("stable_observation_count") != _REQUIRED_OBSERVATIONS:
+        return False
+    # 稳定参数精确绑定：interval == 2.2、required window == 4.4
+    if result.get("observation_interval_seconds") != _OBSERVATION_INTERVAL_SECONDS:
+        return False
+    if result.get("required_stability_window_seconds") \
+            != _REQUIRED_STABILITY_WINDOW_SECONDS:
         return False
     first = result.get("first_observation_monotonic")
     last = result.get("last_observation_monotonic")
     actual = result.get("actual_stability_window_seconds")
-    required_window = result.get("required_stability_window_seconds")
     if first is None or last is None or actual is None:
         return False
-    if actual + _STABILITY_EPSILON < required_window:
+    if actual + _STABILITY_EPSILON < _REQUIRED_STABILITY_WINDOW_SECONDS:
         return False
     snapshot = result.get("snapshot")
     if type(snapshot) is not dict:
@@ -333,6 +380,20 @@ def _is_complete_side(result: dict) -> bool:
     if not _validate_nested_adapter(snapshot, result["requested_trade_date"]):
         return False
     return True
+
+
+def _has_complete_evidence(result: dict) -> bool:
+    """partial/unavailable 是否伪造完整成功证据（completed=3、stable=3、
+    完整 4.4 秒窗口同时成立）。"""
+    completed = result.get("completed_observations")
+    stable = result.get("stable_observation_count")
+    actual = result.get("actual_stability_window_seconds")
+    return (
+        completed == _REQUIRED_OBSERVATIONS
+        and stable == _REQUIRED_OBSERVATIONS
+        and actual is not None
+        and actual + _STABILITY_EPSILON >= _REQUIRED_STABILITY_WINDOW_SECONDS
+    )
 
 
 def _is_partial_shape(result: dict) -> bool:
@@ -346,14 +407,20 @@ def _is_partial_shape(result: dict) -> bool:
         return False
     if result.get("snapshot") is not None:
         return False
+    if result.get("required_observations") != _REQUIRED_OBSERVATIONS:
+        return False
     reason_codes = result.get("reason_codes")
     if not isinstance(reason_codes, list) or not reason_codes:
         return False
     if "SOURCE_PARTIAL" not in reason_codes:
         return False
-    if any(type(code) is not str for code in reason_codes):
+    if any(type(code) is not str or not code for code in reason_codes):
+        return False
+    if len(set(reason_codes)) != len(reason_codes):
         return False
     if not isinstance(result.get("warnings"), list):
+        return False
+    if _has_complete_evidence(result):
         return False
     return True
 
@@ -377,6 +444,8 @@ def _is_unavailable_shape(result: dict) -> bool:
     if len(set(reason_codes)) != len(reason_codes):
         return False
     if not isinstance(result.get("warnings"), list):
+        return False
+    if _has_complete_evidence(result):
         return False
     return True
 
