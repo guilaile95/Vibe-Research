@@ -808,6 +808,120 @@ class TestProcessControl:
 
 
 # ---------------------------------------------------------------------------
+# 12b. emergency fallback envelope（异常安全）
+# ---------------------------------------------------------------------------
+
+class TestEmergencyFallbackEnvelope:
+    """普通异常必须返回固定 emergency envelope，不依赖可失败业务 helper；
+    进程控制异常必须自然传播。"""
+
+    EXPECTED = {
+        "schema_version": gate.SCHEMA_VERSION,
+        "status": "invalid",
+        "reason_codes": [
+            "PREVIOUS_INPUT_INVALID",
+            "CURRENT_INPUT_INVALID",
+            "RATE_OUTPUT_SUPPRESSED",
+        ],
+        "coverage_eligible": False,
+        "rates_policy": "must_be_null",
+        "layered_promotion_rates": None,
+        "previous_trade_date": None,
+        "current_trade_date": None,
+        "previous_state": "invalid",
+        "current_state": "invalid",
+        "implementation_allowed": False,
+        "warnings": [],
+    }
+
+    def _assert_emergency(self, r, token):
+        assert r == self.EXPECTED
+        assert token not in repr(r)
+        assert token not in str(r)
+
+    @staticmethod
+    def _raiser(exc):
+        def raiser(*a, **k):
+            raise exc
+        return raiser
+
+    @pytest.mark.parametrize("exc", [
+        RuntimeError("boom-normalize"),
+        ValueError("boom-normalize"),
+        TypeError("boom-normalize"),
+    ])
+    def test_normalize_reason_codes_ordinary(self, monkeypatch, exc):
+        monkeypatch.setattr(gate, "_normalize_reason_codes", self._raiser(exc))
+        r = _gate(*_complete_pair())
+        self._assert_emergency(r, "boom-normalize")
+
+    @pytest.mark.parametrize("exc", [
+        RuntimeError("boom-output"),
+        ValueError("boom-output"),
+        TypeError("boom-output"),
+    ])
+    def test_output_ordinary(self, monkeypatch, exc):
+        # monkeypatch 后 _output 在主路径抛错；except 必须绕过该函数，
+        # 直接返回 emergency envelope。
+        monkeypatch.setattr(gate, "_output", self._raiser(exc))
+        r = _gate(*_complete_pair())
+        self._assert_emergency(r, "boom-output")
+
+    @pytest.mark.parametrize("exc", [
+        RuntimeError("boom-inject"),
+        ValueError("boom-inject"),
+        TypeError("boom-inject"),
+    ])
+    def test_adapter_row_ordinary(self, monkeypatch, exc):
+        monkeypatch.setattr(gate, "_validate_adapter_row", self._raiser(exc))
+        r = _gate(*_complete_pair())
+        self._assert_emergency(r, "boom-inject")
+
+    @pytest.mark.parametrize("exc", [
+        RuntimeError("boom-inject"),
+        ValueError("boom-inject"),
+        TypeError("boom-inject"),
+    ])
+    def test_parse_utc_iso_ordinary(self, monkeypatch, exc):
+        monkeypatch.setattr(gate, "_parse_utc_iso", self._raiser(exc))
+        r = _gate(*_complete_pair())
+        self._assert_emergency(r, "boom-inject")
+
+    @pytest.mark.parametrize("exc", [
+        RuntimeError("boom-inject"),
+        ValueError("boom-inject"),
+        TypeError("boom-inject"),
+    ])
+    def test_has_complete_evidence_ordinary(self, monkeypatch, exc):
+        # _has_complete_evidence 只在 partial/unavailable 侧被调用。
+        monkeypatch.setattr(gate, "_has_complete_evidence", self._raiser(exc))
+        r = _gate(_partial_result(PREV_DATE), _producer_result(CURR_DATE))
+        self._assert_emergency(r, "boom-inject")
+
+    @pytest.mark.parametrize("exc", [
+        KeyboardInterrupt(),
+        SystemExit(1),
+        GeneratorExit(),
+    ])
+    @pytest.mark.parametrize("target,use_partial", [
+        ("_normalize_reason_codes", False),
+        ("_output", False),
+        ("_validate_adapter_row", False),
+        ("_parse_utc_iso", False),
+        ("_has_complete_evidence", True),
+    ])
+    def test_process_control_propagates(self, monkeypatch, exc, target,
+                                        use_partial):
+        monkeypatch.setattr(gate, target, self._raiser(exc))
+        if use_partial:
+            inputs = (_partial_result(PREV_DATE), _producer_result(CURR_DATE))
+        else:
+            inputs = _complete_pair()
+        with pytest.raises(type(exc)):
+            _gate(*inputs)
+
+
+# ---------------------------------------------------------------------------
 # 13. 真实 producer 联合路径
 # ---------------------------------------------------------------------------
 
