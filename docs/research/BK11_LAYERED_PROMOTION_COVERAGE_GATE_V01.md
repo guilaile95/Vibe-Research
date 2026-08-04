@@ -85,8 +85,10 @@ dict），递归拒绝子类、tuple、set、bytes、complex、object()、NaN、
 Infinity、-Infinity、非字符串 dict key。
 
 顶层非精确 dict → `PREVIOUS_INPUT_INVALID` 或 `CURRENT_INPUT_INVALID`；
-嵌套非法值同样属于对应侧 input invalid。普通异常结构化失败；
-进程控制异常自然传播。
+嵌套非法值同样属于对应侧 input invalid。普通异常无论发生于输入校验、
+adapter 校验、reason-code normalization 或最终 output assembly，均返回
+固定 emergency invalid envelope（见 §15）；`KeyboardInterrupt` /
+`SystemExit` / `GeneratorExit` 自然传播。
 
 ## 6. Producer Result Contract
 
@@ -368,6 +370,43 @@ layered_promotion_rates is null
 implementation_allowed is false
 ```
 
+### Emergency envelope（普通异常回退）
+
+普通异常无论发生在：
+
+```text
+输入校验
+adapter 校验
+reason-code normalization
+最终 output assembly
+```
+
+均返回固定 emergency invalid envelope，且不依赖任何可失败业务 helper
+（不得在回退路径调用 `_output` / `_normalize_reason_codes` / `_extract_date`
+/ `_validate_producer_contract` / `_validate_nested_adapter` /
+`_validate_adapter_row` / `_parse_utc_iso` / `_has_complete_evidence` 或
+任何新增 module-level fallback helper）：
+
+```text
+schema_version: SCHEMA_VERSION
+status: invalid
+reason_codes: [PREVIOUS_INPUT_INVALID, CURRENT_INPUT_INVALID,
+               RATE_OUTPUT_SUPPRESSED]（固定顺序）
+coverage_eligible: false
+rates_policy: must_be_null
+layered_promotion_rates: null
+previous_trade_date: null
+current_trade_date: null
+previous_state: invalid
+current_state: invalid
+implementation_allowed: false
+warnings: []
+```
+
+emergency envelope 不尝试保留部分日期、侧别状态或异常文本；异常文本
+不得出现在任何输出字段或 repr 中。`KeyboardInterrupt` / `SystemExit` /
+`GeneratorExit` 自然传播，不得转为 emergency envelope。
+
 ## 16. Legal-zero Boundary
 
 ```text
@@ -413,7 +452,7 @@ partial/unavailable 状态不可伪造 final
 失败状态 rates_policy=must_be_null
 失败状态 layered_promotion_rates=null
 complete 状态也不计算或透传 rates
-普通异常失败关闭
+普通异常失败关闭（回退为固定 emergency envelope，不依赖可失败 helper）
 进程控制异常自然传播
 正式测试与独立补测全部通过
 ```
