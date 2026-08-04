@@ -452,7 +452,7 @@ universe 合同满足全部关闭条件：
 - universe 合同完整落地（Blocker 7 关闭），含三类空结果正确区分
 - 156 项聚焦测试全部通过，2297 项 backend 离线测试全部通过
 - 无新增运行时依赖，不修改既有模块
-- 进程控制异常（KeyboardInterrupt / SystemExit）自然传播
+- 进程控制异常（KeyboardInterrupt / SystemExit / GeneratorExit）自然传播
 - malformed HTTP response 安全结构化返回
 - 交易日历依赖失败关闭
 

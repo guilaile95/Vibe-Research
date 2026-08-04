@@ -386,7 +386,7 @@ def fetch_limit_up_pool_snapshot(requested_trade_date: str) -> dict:
     """对 ``requested_trade_date`` 的涨停池快照执行失败关闭读取。
 
     返回结构化适配器合同。本函数不会抛出未处理的 transport / timeout /
-    JSON / 结构 / 类型异常。KeyboardInterrupt / SystemExit 自然传播。
+    JSON / 结构 / 类型异常。KeyboardInterrupt / SystemExit / GeneratorExit 自然传播。
     """
     # 1) 输入预检
     if not isinstance(requested_trade_date, str) or not requested_trade_date:
