@@ -30,6 +30,8 @@ CURR_DATE = "2026-07-30"
 FIRST_MONO = 100.0
 LAST_MONO = 104.4
 ACTUAL_MONO = LAST_MONO - FIRST_MONO
+SECOND_MONO = 102.2
+ACTUAL_2 = SECOND_MONO - FIRST_MONO
 
 
 def _adapter_snapshot(date_str, **overrides):
@@ -102,23 +104,59 @@ def _producer_result(date_str, status="normal", **overrides):
     return result
 
 
-def _partial_result(date_str, **overrides):
+def _partial_result(date_str, at=2, **overrides):
+    if at == 1:
+        timing = {
+            "completed_observations": 1,
+            "stable_observation_count": 0,
+            "first_observation_monotonic": FIRST_MONO,
+            "last_observation_monotonic": FIRST_MONO,
+            "actual_stability_window_seconds": 0.0,
+        }
+    elif at == 2:
+        timing = {
+            "completed_observations": 2,
+            "stable_observation_count": 1,
+            "first_observation_monotonic": FIRST_MONO,
+            "last_observation_monotonic": SECOND_MONO,
+            "actual_stability_window_seconds": ACTUAL_2,
+        }
+    else:
+        timing = {
+            "completed_observations": 3,
+            "stable_observation_count": 2,
+            "first_observation_monotonic": FIRST_MONO,
+            "last_observation_monotonic": LAST_MONO,
+            "actual_stability_window_seconds": ACTUAL_MONO,
+        }
     result = _producer_result(
         date_str,
         status="partial",
         reason_codes=["SOURCE_PARTIAL", "PARTIAL_COVERAGE"],
         warnings=["snapshot partially available"],
+        **timing,
     )
     result.update(overrides)
     return result
 
 
-def _unavailable_result(date_str, **overrides):
+def _unavailable_result(date_str, completed=0, stable=0, **overrides):
+    if completed == 0:
+        first, last, actual = FIRST_MONO, FIRST_MONO, 0.0
+    elif completed == 2:
+        first, last, actual = FIRST_MONO, SECOND_MONO, ACTUAL_2
+    else:
+        first, last, actual = FIRST_MONO, LAST_MONO, ACTUAL_MONO
     result = _producer_result(
         date_str,
         status="unavailable",
         reason_codes=["SOURCE_UNAVAILABLE", "CURRENT_SNAPSHOT_UNAVAILABLE"],
         warnings=["snapshot unavailable"],
+        completed_observations=completed,
+        stable_observation_count=stable,
+        first_observation_monotonic=first,
+        last_observation_monotonic=last,
+        actual_stability_window_seconds=actual,
     )
     result.update(overrides)
     return result
@@ -878,7 +916,255 @@ class TestRealProducerJoint:
 
 
 # ---------------------------------------------------------------------------
-# 14. 文档一致性
+# 14. 稳定参数绑定
+# ---------------------------------------------------------------------------
+
+class TestStableParameterBinding:
+    def _assert_probe_invalid(self, overrides):
+        prev = _producer_result(PREV_DATE, **overrides)
+        r = _gate(prev, _producer_result(CURR_DATE))
+        _assert_shape(r)
+        assert r["status"] == "invalid"
+        assert r["coverage_eligible"] is False
+        assert r["rates_policy"] == "must_be_null"
+        assert r["layered_promotion_rates"] is None
+        assert r["implementation_allowed"] is False
+        assert "PREVIOUS_INPUT_INVALID" in r["reason_codes"]
+        assert "RATE_OUTPUT_SUPPRESSED" in r["reason_codes"]
+
+    def test_zero_window_forgery(self):
+        self._assert_probe_invalid({
+            "observation_interval_seconds": 0.1,
+            "required_stability_window_seconds": 0.0,
+            "first_observation_monotonic": 100.0,
+            "last_observation_monotonic": 100.0,
+            "actual_stability_window_seconds": 0.0,
+        })
+
+    def test_shortened_window(self):
+        self._assert_probe_invalid({
+            "observation_interval_seconds": 1.0,
+            "required_stability_window_seconds": 2.0,
+            "first_observation_monotonic": 100.0,
+            "last_observation_monotonic": 102.0,
+            "actual_stability_window_seconds": 2.0,
+        })
+
+    def test_interval_only_tamper(self):
+        self._assert_probe_invalid({
+            "observation_interval_seconds": 2.1,
+        })
+
+    def test_required_window_only_tamper(self):
+        self._assert_probe_invalid({
+            "required_stability_window_seconds": 4.0,
+        })
+
+    def test_exact_constants_accept(self):
+        r = _gate(*_complete_pair())
+        assert r["status"] == "complete"
+
+
+# ---------------------------------------------------------------------------
+# 15. nested adapter 身份与时间
+# ---------------------------------------------------------------------------
+
+class TestNestedIdentityAndTime:
+    def _assert_nested_invalid(self, snapshot):
+        prev = _producer_result(PREV_DATE, snapshot=snapshot)
+        r = _gate(prev, _producer_result(CURR_DATE))
+        _assert_shape(r)
+        assert r["status"] == "invalid"
+        assert "PREVIOUS_INPUT_INVALID" in r["reason_codes"]
+        assert "RATE_OUTPUT_SUPPRESSED" in r["reason_codes"]
+
+    def test_source_id_forged(self):
+        self._assert_nested_invalid(
+            _adapter_snapshot(PREV_DATE, source_id="forged"))
+
+    def test_source_id_non_str(self):
+        self._assert_nested_invalid(
+            _adapter_snapshot(PREV_DATE, source_id=123))
+
+    def test_endpoint_forged(self):
+        self._assert_nested_invalid(
+            _adapter_snapshot(PREV_DATE, endpoint="getYesterdayZTPool"))
+
+    def test_endpoint_non_str(self):
+        self._assert_nested_invalid(
+            _adapter_snapshot(PREV_DATE, endpoint=123))
+
+    def test_observed_at_empty(self):
+        self._assert_nested_invalid(
+            _adapter_snapshot(PREV_DATE, observed_at=""))
+
+    def test_observed_at_no_tz(self):
+        self._assert_nested_invalid(
+            _adapter_snapshot(PREV_DATE, observed_at="2026-07-29T15:05:00"))
+
+    def test_observed_at_non_zero_offset(self):
+        self._assert_nested_invalid(
+            _adapter_snapshot(
+                PREV_DATE, observed_at="2026-07-29T23:05:00+08:00"))
+
+    def test_observed_at_unparseable(self):
+        self._assert_nested_invalid(
+            _adapter_snapshot(PREV_DATE, observed_at="not-a-time"))
+
+    def test_observed_at_z_and_zero_offset_accepted(self):
+        for value in ["2026-07-29T15:05:00Z",
+                      "2026-07-29T15:05:00+00:00"]:
+            prev = _producer_result(
+                PREV_DATE, snapshot=_adapter_snapshot(PREV_DATE, observed_at=value))
+            r = _gate(prev, _producer_result(CURR_DATE))
+            assert r["status"] == "complete", value
+
+
+# ---------------------------------------------------------------------------
+# 16. nested http_status 与精确零
+# ---------------------------------------------------------------------------
+
+class TestNestedHttpStatus:
+    @pytest.mark.parametrize("bad", [True, False, "200", 99, 600, -1, 1.5])
+    def test_bad_http_status(self, bad):
+        prev = _producer_result(
+            PREV_DATE, snapshot=_adapter_snapshot(PREV_DATE, http_status=bad))
+        r = _gate(prev, _producer_result(CURR_DATE))
+        assert r["status"] == "invalid"
+        assert "PREVIOUS_INPUT_INVALID" in r["reason_codes"]
+
+    def test_http_status_none_accepted(self):
+        prev = _producer_result(
+            PREV_DATE, snapshot=_adapter_snapshot(PREV_DATE, http_status=None))
+        r = _gate(prev, _producer_result(CURR_DATE))
+        assert r["status"] == "complete"
+
+
+class TestExactZeroCounts:
+    @pytest.mark.parametrize("overrides", [
+        {"invalid_row_count": False},
+        {"invalid_row_count": 0.0},
+        {"invalid_row_count": "0"},
+        {"invalid_row_count": -1},
+        {"duplicate_code_count": False},
+        {"duplicate_code_count": 0.0},
+        {"duplicate_code_count": "0"},
+        {"duplicate_code_count": -1},
+    ])
+    def test_not_exact_int_zero(self, overrides):
+        prev = _producer_result(
+            PREV_DATE, snapshot=_adapter_snapshot(PREV_DATE, **overrides))
+        r = _gate(prev, _producer_result(CURR_DATE))
+        assert r["status"] == "invalid"
+        assert "PREVIOUS_INPUT_INVALID" in r["reason_codes"]
+
+    def test_exact_int_zero_accepted(self):
+        r = _gate(*_complete_pair())
+        assert r["status"] == "complete"
+
+
+# ---------------------------------------------------------------------------
+# 17. partial 边界
+# ---------------------------------------------------------------------------
+
+class TestPartialBoundaries:
+    def _assert_invalid_partial(self, **overrides):
+        prev = _partial_result(PREV_DATE, **overrides)
+        r = _gate(prev, _producer_result(CURR_DATE))
+        assert r["status"] == "invalid"
+        assert "PREVIOUS_INPUT_INVALID" in r["reason_codes"]
+        assert "RATE_OUTPUT_SUPPRESSED" in r["reason_codes"]
+
+    def test_empty_reason(self):
+        self._assert_invalid_partial(reason_codes=[])
+
+    def test_empty_string_reason(self):
+        self._assert_invalid_partial(
+            reason_codes=["SOURCE_PARTIAL", ""])
+
+    def test_duplicate_reason(self):
+        self._assert_invalid_partial(
+            reason_codes=["SOURCE_PARTIAL", "SOURCE_PARTIAL"])
+
+    def test_non_str_reason(self):
+        self._assert_invalid_partial(reason_codes=[1])
+
+    def test_missing_source_partial(self):
+        self._assert_invalid_partial(reason_codes=["PARTIAL_COVERAGE"])
+
+    def test_partial_at_first(self):
+        prev = _partial_result(PREV_DATE, at=1)
+        r = _gate(prev, _producer_result(CURR_DATE))
+        _assert_shape(r)
+        assert r["status"] == "partial"
+        assert r["reason_codes"] == [
+            "PREVIOUS_SOURCE_PARTIAL", "RATE_OUTPUT_SUPPRESSED"]
+
+    def test_partial_at_second(self):
+        prev = _partial_result(PREV_DATE, at=2)
+        r = _gate(prev, _producer_result(CURR_DATE))
+        assert r["status"] == "partial"
+        assert r["reason_codes"] == [
+            "PREVIOUS_SOURCE_PARTIAL", "RATE_OUTPUT_SUPPRESSED"]
+
+    def test_partial_at_third(self):
+        prev = _partial_result(PREV_DATE, at=3)
+        r = _gate(prev, _producer_result(CURR_DATE))
+        assert r["status"] == "partial"
+        assert r["reason_codes"] == [
+            "PREVIOUS_SOURCE_PARTIAL", "RATE_OUTPUT_SUPPRESSED"]
+
+    def test_complete_evidence_forgery_rejected(self):
+        self._assert_invalid_partial(
+            completed_observations=3,
+            stable_observation_count=3,
+            first_observation_monotonic=FIRST_MONO,
+            last_observation_monotonic=LAST_MONO,
+            actual_stability_window_seconds=ACTUAL_MONO,
+        )
+
+
+# ---------------------------------------------------------------------------
+# 18. unavailable 边界
+# ---------------------------------------------------------------------------
+
+class TestUnavailableBoundaries:
+    def test_complete_evidence_forgery_rejected(self):
+        prev = _unavailable_result(PREV_DATE, completed=3, stable=3)
+        r = _gate(prev, _producer_result(CURR_DATE))
+        assert r["status"] == "invalid"
+        assert "PREVIOUS_INPUT_INVALID" in r["reason_codes"]
+        assert "RATE_OUTPUT_SUPPRESSED" in r["reason_codes"]
+
+    def test_legal_completed_zero(self):
+        prev = _unavailable_result(PREV_DATE, completed=0, stable=0)
+        r = _gate(prev, _producer_result(CURR_DATE))
+        assert r["status"] == "unavailable"
+        assert r["reason_codes"] == [
+            "PREVIOUS_SOURCE_UNAVAILABLE", "RATE_OUTPUT_SUPPRESSED"]
+
+    def test_legal_completed_three_stable_two(self):
+        # schema/status 失败第三次：completed=3、stable<=2 合法
+        prev = _unavailable_result(PREV_DATE, completed=3, stable=2)
+        r = _gate(prev, _producer_result(CURR_DATE))
+        assert r["status"] == "unavailable"
+
+    def test_duplicate_reason_rejected(self):
+        prev = _unavailable_result(
+            PREV_DATE, reason_codes=["SOURCE_UNAVAILABLE", "SOURCE_UNAVAILABLE"])
+        r = _gate(prev, _producer_result(CURR_DATE))
+        assert r["status"] == "invalid"
+        assert "PREVIOUS_INPUT_INVALID" in r["reason_codes"]
+
+    def test_empty_string_reason_rejected(self):
+        prev = _unavailable_result(PREV_DATE, reason_codes=[""])
+        r = _gate(prev, _producer_result(CURR_DATE))
+        assert r["status"] == "invalid"
+        assert "PREVIOUS_INPUT_INVALID" in r["reason_codes"]
+
+
+# ---------------------------------------------------------------------------
+# 19. 文档一致性
 # ---------------------------------------------------------------------------
 
 class TestDocumentationAlignment:
