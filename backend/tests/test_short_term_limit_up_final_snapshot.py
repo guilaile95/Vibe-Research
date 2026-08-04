@@ -150,6 +150,21 @@ def _assert_output_shape(r):
         r["last_observation_monotonic"], float)
     assert r["snapshot"] is None or isinstance(r["snapshot"], dict)
     assert isinstance(r["warnings"], list)
+    # timing 关系：无时间 → 全 None；有时间 → first<=last 且 actual==last-first
+    first_t = r["first_observation_monotonic"]
+    last_t = r["last_observation_monotonic"]
+    actual_t = r["actual_stability_window_seconds"]
+    if first_t is None:
+        assert last_t is None and actual_t is None
+    else:
+        assert last_t is not None and actual_t is not None
+        assert type(first_t) is float and type(last_t) is float
+        assert type(actual_t) is float
+        assert first_t <= last_t
+        assert actual_t == pytest.approx(last_t - first_t)
+    # 计数不变量
+    assert 0 <= r["stable_observation_count"] <= r["completed_observations"]
+    assert r["completed_observations"] <= r["required_observations"]
     # reason 固定顺序
     fixed = list(producer._REASON_CODE_ORDER)
     seen = []
@@ -358,8 +373,7 @@ class TestUnstable:
         {"rows": [{"stock_code": "600000", "lbc": 1},
                   {"stock_code": "600001", "lbc": 1}], "row_count": 2,
          "source_pool_row_count": 2},
-        {"source_pool_row_count": 2},
-        {"excluded_universe_count": 1},
+        {"source_pool_row_count": 2, "excluded_universe_count": 1},
     ])
     def test_instability_variants(self, monkeypatch, third_overrides):
         obs1 = _adapter_obs()
@@ -403,6 +417,11 @@ class TestAdapterStatus:
         assert r["snapshot"] is None
         assert state["adapter_calls"] == 1
         assert state["sleep_calls"] == 0
+        assert r["completed_observations"] == 1
+        assert r["stable_observation_count"] == 0
+        assert r["first_observation_monotonic"] == 100.0
+        assert r["last_observation_monotonic"] == 100.0
+        assert r["actual_stability_window_seconds"] == 0.0
 
     def test_partial_second(self, monkeypatch):
         partial = _adapter_obs(status="partial",
@@ -414,6 +433,10 @@ class TestAdapterStatus:
         assert r["status"] == "partial"
         assert state["adapter_calls"] == 2
         assert state["sleep_calls"] == 1
+        assert r["completed_observations"] == 2
+        assert r["first_observation_monotonic"] == 100.0
+        assert r["last_observation_monotonic"] == 102.2
+        assert r["actual_stability_window_seconds"] == pytest.approx(2.2)
 
     def test_unavailable_first(self, monkeypatch):
         unavail = _adapter_obs(status="unavailable",
@@ -426,6 +449,10 @@ class TestAdapterStatus:
         assert r["reason_codes"] == ["SOURCE_UNAVAILABLE"]
         assert state["adapter_calls"] == 1
         assert state["sleep_calls"] == 0
+        assert r["completed_observations"] == 1
+        assert r["first_observation_monotonic"] == 100.0
+        assert r["last_observation_monotonic"] == 100.0
+        assert r["actual_stability_window_seconds"] == 0.0
 
     def test_unavailable_second(self, monkeypatch):
         unavail = _adapter_obs(status="unavailable",
@@ -437,6 +464,10 @@ class TestAdapterStatus:
         assert r["reason_codes"] == ["SOURCE_UNAVAILABLE"]
         assert state["adapter_calls"] == 2
         assert state["sleep_calls"] == 1
+        assert r["completed_observations"] == 2
+        assert r["first_observation_monotonic"] == 100.0
+        assert r["last_observation_monotonic"] == 102.2
+        assert r["actual_stability_window_seconds"] == pytest.approx(2.2)
 
     def test_adapter_exception_no_leak(self, monkeypatch):
         r, state = _run(
@@ -450,6 +481,10 @@ class TestAdapterStatus:
         assert "abc123xyz" not in text
         assert state["adapter_calls"] == 1
         assert state["sleep_calls"] == 0
+        assert r["completed_observations"] == 0
+        assert r["first_observation_monotonic"] == 100.0
+        assert r["last_observation_monotonic"] == 100.0
+        assert r["actual_stability_window_seconds"] == 0.0
 
     def test_adapter_exception_third(self, monkeypatch):
         r, state = _run(monkeypatch, [_adapter_obs(), _adapter_obs(),
@@ -458,6 +493,10 @@ class TestAdapterStatus:
         assert r["reason_codes"] == ["SOURCE_UNAVAILABLE"]
         assert state["adapter_calls"] == 3
         assert state["sleep_calls"] == 2
+        assert r["completed_observations"] == 2
+        assert r["first_observation_monotonic"] == 100.0
+        assert r["last_observation_monotonic"] == 104.4
+        assert r["actual_stability_window_seconds"] == pytest.approx(4.4)
 
 
 # ---------------------------------------------------------------------------
@@ -559,7 +598,7 @@ class TestClockAndSleep:
 
     def test_clock_regression(self, monkeypatch):
         r, state = _run(monkeypatch, [_adapter_obs(), _adapter_obs(), _adapter_obs()],
-                        clock_values=[100.0, 100.0, 102.2, 101.0])
+                        clock_values=[100.0, 102.2, 101.0])
         _assert_output_shape(r)
         assert r["reason_codes"] == ["STABILITY_WINDOW_ERROR"]
         assert state["adapter_calls"] == 2
@@ -567,9 +606,11 @@ class TestClockAndSleep:
 
     def test_window_shortfall(self, monkeypatch):
         r, state = _run(monkeypatch, [_adapter_obs(), _adapter_obs(), _adapter_obs()],
-                        clock_values=[100.0, 102.2, 104.0])
+                        clock_values=[100.0, 102.0, 104.0])
         _assert_output_shape(r)
         assert r["reason_codes"] == ["STABILITY_WINDOW_ERROR"]
+        assert r["first_observation_monotonic"] == 100.0
+        assert r["last_observation_monotonic"] == 104.0
         assert r["actual_stability_window_seconds"] == pytest.approx(4.0)
         assert state["adapter_calls"] == 3
         assert state["sleep_calls"] == 2
@@ -587,7 +628,7 @@ class TestClockAndSleep:
 
         def flaky():
             calls["n"] += 1
-            if calls["n"] <= 2:
+            if calls["n"] <= 1:
                 return 100.0
             raise RuntimeError("clock boom")
 
@@ -597,6 +638,10 @@ class TestClockAndSleep:
         assert r["reason_codes"] == ["STABILITY_WINDOW_ERROR"]
         assert state["adapter_calls"] == 1
         assert state["sleep_calls"] == 1
+        assert r["completed_observations"] == 1
+        assert r["first_observation_monotonic"] == 100.0
+        assert r["last_observation_monotonic"] == 100.0
+        assert r["actual_stability_window_seconds"] == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -658,7 +703,269 @@ class TestProcessControl:
 
 
 # ---------------------------------------------------------------------------
-# 9. 完整合同
+# 9. 计时锚点
+# ---------------------------------------------------------------------------
+
+class TestTimingAnchors:
+    def test_exact_success_anchors(self, monkeypatch):
+        r, state = _run(monkeypatch, [_adapter_obs(), _adapter_obs(), _adapter_obs()],
+                        clock_values=[100.0, 102.2, 104.4])
+        _assert_output_shape(r)
+        assert r["status"] == "normal"
+        assert r["is_final"] is True
+        assert r["first_observation_monotonic"] == 100.0
+        assert r["last_observation_monotonic"] == 104.4
+        assert r["actual_stability_window_seconds"] == pytest.approx(4.4)
+        assert state["adapter_calls"] == 3
+        assert state["sleep_calls"] == 2
+
+    def test_monotonic_calls_on_success(self, monkeypatch):
+        calls = {"n": 0}
+
+        def counting_clock():
+            calls["n"] += 1
+            return [100.0, 102.2, 104.4][min(calls["n"] - 1, 2)]
+
+        r, state = _run(monkeypatch, [_adapter_obs(), _adapter_obs(), _adapter_obs()],
+                        clock_fn=counting_clock)
+        _assert_output_shape(r)
+        assert r["is_final"] is True
+        # 成功路径恰 3 次 observation-start 读取，无 pre-loop 读取
+        assert calls["n"] == 3
+
+    def test_second_read_regression(self, monkeypatch):
+        r, state = _run(monkeypatch, [_adapter_obs(), _adapter_obs(), _adapter_obs()],
+                        clock_values=[100.0, 99.0])
+        _assert_output_shape(r)
+        assert r["reason_codes"] == ["STABILITY_WINDOW_ERROR"]
+        assert r["is_final"] is False
+        assert state["adapter_calls"] == 1
+        assert state["sleep_calls"] == 1
+
+    def test_third_read_regression(self, monkeypatch):
+        r, state = _run(monkeypatch, [_adapter_obs(), _adapter_obs(), _adapter_obs()],
+                        clock_values=[100.0, 102.2, 101.0])
+        _assert_output_shape(r)
+        assert r["reason_codes"] == ["STABILITY_WINDOW_ERROR"]
+        assert state["adapter_calls"] == 2
+        assert state["sleep_calls"] == 2
+
+    def test_no_timing_evidence_before_first_read(self, monkeypatch):
+        # monotonic 首次读取即失败 → 无 observation-start 时间
+        def bad_clock():
+            raise RuntimeError("clock")
+
+        r, _ = _run(monkeypatch, [_adapter_obs()], clock_fn=bad_clock)
+        _assert_output_shape(r)
+        assert r["first_observation_monotonic"] is None
+        assert r["last_observation_monotonic"] is None
+        assert r["actual_stability_window_seconds"] is None
+
+
+# ---------------------------------------------------------------------------
+# 10. hash 碰撞不能伪造 final
+# ---------------------------------------------------------------------------
+
+class TestHashCollision:
+    def test_forced_identical_digest_different_content(self, monkeypatch):
+        class ConstantSHA:
+            def __init__(self, *a, **k):
+                pass
+
+            def update(self, *a, **k):
+                pass
+
+            def hexdigest(self):
+                return "deadbeef" * 8
+
+        def fake_sha(*a, **k):
+            return ConstantSHA(*a, **k)
+
+        monkeypatch.setattr(producer.hashlib, "sha256", fake_sha)
+        obs1 = _adapter_obs(rows=[{"stock_code": "600000", "lbc": 1}])
+        obs2 = _adapter_obs(rows=[{"stock_code": "600000", "lbc": 2}])
+        obs3 = _adapter_obs(rows=[{"stock_code": "000001", "lbc": 1}])
+        r, state = _run(monkeypatch, [obs1, obs2, obs3])
+        _assert_output_shape(r)
+        assert r["status"] == "unavailable"
+        assert r["reason_codes"] == ["NOT_FINAL", "SNAPSHOT_UNSTABLE"]
+        assert r["is_final"] is False
+        assert r["session"] == "not_final"
+        assert r["snapshot"] is None
+        assert state["adapter_calls"] == 3
+        assert state["sleep_calls"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 11. 完整适配器字段集合
+# ---------------------------------------------------------------------------
+
+class TestMissingFields:
+    @pytest.mark.parametrize("drop", [
+        "source_id", "endpoint", "observed_at", "http_status",
+        "error_class", "excluded_universe_count",
+    ])
+    def test_missing_field_rejected(self, monkeypatch, drop):
+        bad = _adapter_obs()
+        del bad[drop]
+        r, state = _run(monkeypatch, [bad])
+        _assert_output_shape(r)
+        assert r["status"] == "unavailable"
+        assert r["reason_codes"] == ["SNAPSHOT_SCHEMA_INVALID"]
+        assert r["is_final"] is False
+        assert r["snapshot"] is None
+        assert state["adapter_calls"] == 1
+        assert state["sleep_calls"] == 0
+
+    def test_extra_top_level_field_rejected(self, monkeypatch):
+        bad = _adapter_obs()
+        bad["extra_field"] = 1
+        r, state = _run(monkeypatch, [bad])
+        _assert_output_shape(r)
+        assert r["reason_codes"] == ["SNAPSHOT_SCHEMA_INVALID"]
+        assert state["adapter_calls"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 12. 类型边界
+# ---------------------------------------------------------------------------
+
+class TestTypeBoundaries:
+    @pytest.mark.parametrize("bad_excluded", [
+        "0", True, False, -1, 1.5, float("nan"), float("inf"),
+        object(), set(), b"bytes",
+    ])
+    def test_excluded_count_rejected(self, monkeypatch, bad_excluded):
+        bad = _adapter_obs(excluded_universe_count=bad_excluded)
+        try:
+            r, state = _run(monkeypatch, [bad])
+            ok = (r["status"] == "unavailable"
+                  and r["reason_codes"] == ["SNAPSHOT_SCHEMA_INVALID"]
+                  and r["snapshot"] is None)
+            assert ok, f"got {r['status']} {r['reason_codes']}"
+            assert state["adapter_calls"] == 1
+        except Exception as e:
+            pytest.fail(f"raised {type(e).__name__}: {e}")
+
+    @pytest.mark.parametrize("overrides", [
+        {"invalid_row_count": False},
+        {"duplicate_code_count": False},
+        {"http_status": True},
+        {"row_count": True},
+        {"source_pool_row_count": True},
+    ])
+    def test_bool_cannot_impersonate(self, monkeypatch, overrides):
+        bad = _adapter_obs(**overrides)
+        r, _ = _run(monkeypatch, [bad])
+        _assert_output_shape(r)
+        assert r["reason_codes"] == ["SNAPSHOT_SCHEMA_INVALID"]
+        assert r["is_final"] is False
+
+    def test_observed_at_unparseable_rejected(self, monkeypatch):
+        for bad in ["not-a-time", "2026-07-30", "2026-07-30T15:10:00+08:00"]:
+            bad_obs = _adapter_obs(observed_at=bad)
+            r, _ = _run(monkeypatch, [bad_obs])
+            _assert_output_shape(r)
+            assert r["reason_codes"] == ["SNAPSHOT_SCHEMA_INVALID"], bad
+
+    def test_http_status_range_rejected(self, monkeypatch):
+        for code in [99, 600, -1]:
+            bad = _adapter_obs(http_status=code)
+            r, _ = _run(monkeypatch, [bad])
+            assert r["reason_codes"] == ["SNAPSHOT_SCHEMA_INVALID"], code
+
+
+# ---------------------------------------------------------------------------
+# 13. 计数守恒
+# ---------------------------------------------------------------------------
+
+class TestCountConservation:
+    def test_inconsistent_counts_rejected(self, monkeypatch):
+        bad = _adapter_obs(source_pool_row_count=3,
+                           excluded_universe_count=1)
+        r, state = _run(monkeypatch, [bad])
+        _assert_output_shape(r)
+        assert r["reason_codes"] == ["SNAPSHOT_SCHEMA_INVALID"]
+        assert state["adapter_calls"] == 1
+
+    def test_consistent_counts_accepted(self, monkeypatch):
+        good = _adapter_obs(source_pool_row_count=2,
+                            excluded_universe_count=1)
+        r, _ = _run(monkeypatch, [good, good, good])
+        assert r["status"] == "normal"
+        assert r["is_final"] is True
+
+
+# ---------------------------------------------------------------------------
+# 14. completed_observations 计数语义
+# ---------------------------------------------------------------------------
+
+class TestCounters:
+    def test_unavailable_third(self, monkeypatch):
+        unavail = _adapter_obs(status="unavailable",
+                               reason_codes=["HTTP_ERROR"], rows=[],
+                               parse_success=False, required_field_present=False,
+                               data_array_present=False, row_count=0)
+        r, state = _run(monkeypatch, [_adapter_obs(), _adapter_obs(), unavail])
+        _assert_output_shape(r)
+        assert r["reason_codes"] == ["SOURCE_UNAVAILABLE"]
+        assert r["completed_observations"] == 3
+        assert state["adapter_calls"] == 3
+        assert state["sleep_calls"] == 2
+
+    def test_schema_invalid_first(self, monkeypatch):
+        bad = _adapter_obs(schema_version="wrong")
+        r, state = _run(monkeypatch, [bad])
+        _assert_output_shape(r)
+        assert r["reason_codes"] == ["SNAPSHOT_SCHEMA_INVALID"]
+        assert r["completed_observations"] == 1
+        assert state["adapter_calls"] == 1
+        assert state["sleep_calls"] == 0
+
+    def test_schema_invalid_third(self, monkeypatch):
+        bad = _adapter_obs(schema_version="wrong")
+        r, state = _run(monkeypatch, [_adapter_obs(), _adapter_obs(), bad])
+        _assert_output_shape(r)
+        assert r["reason_codes"] == ["SNAPSHOT_SCHEMA_INVALID"]
+        assert r["completed_observations"] == 3
+        assert r["stable_observation_count"] == 2
+        assert state["adapter_calls"] == 3
+        assert state["sleep_calls"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 15. stable_observation_count 语义
+# ---------------------------------------------------------------------------
+
+class TestStableCount:
+    def _seq(self, monkeypatch, lbc_seq):
+        obs_list = [_adapter_obs(rows=[{"stock_code": "600000", "lbc": lbc}])
+                    for lbc in lbc_seq]
+        return _run(monkeypatch, obs_list)[0]
+
+    def test_aaa(self, monkeypatch):
+        r = self._seq(monkeypatch, [1, 1, 1])
+        assert r["is_final"] is True
+        assert r["stable_observation_count"] == 3
+
+    def test_aba(self, monkeypatch):
+        r = self._seq(monkeypatch, [1, 2, 1])
+        assert r["reason_codes"] == ["NOT_FINAL", "SNAPSHOT_UNSTABLE"]
+        assert r["stable_observation_count"] == 2
+
+    def test_abb(self, monkeypatch):
+        r = self._seq(monkeypatch, [1, 2, 2])
+        assert r["reason_codes"] == ["NOT_FINAL", "SNAPSHOT_UNSTABLE"]
+        assert r["stable_observation_count"] == 1
+
+    def test_aab(self, monkeypatch):
+        r = self._seq(monkeypatch, [1, 1, 2])
+        assert r["reason_codes"] == ["NOT_FINAL", "SNAPSHOT_UNSTABLE"]
+        assert r["stable_observation_count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 16. 完整合同
 # ---------------------------------------------------------------------------
 
 class TestContract:
