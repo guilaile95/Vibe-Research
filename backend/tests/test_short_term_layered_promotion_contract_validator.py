@@ -316,9 +316,16 @@ class TestSnapshotMutations:
     def test_wrong_trade_date(self):
         def mut(f):
             _normal_case(f)["previous_snapshot"]["trade_date"] = "2026-07-28"
-        _assert_invalid_with(
-            validator.validate_layered_promotion_fixture(_mutate(mut)),
-            "SNAPSHOT_SCHEMA_INVALID")
+        r = validator.validate_layered_promotion_fixture(_mutate(mut))
+        # 结构合法：日期不匹配属业务状态 TRADE_DATE_MISMATCH，不是 schema 无效
+        cr = next(c for c in r["case_results"] if c["case_id"] == "normal")
+        assert "SNAPSHOT_SCHEMA_INVALID" not in cr["issue_codes"]
+        assert cr["derived_status"] == "unavailable"
+        assert cr["derived_reason_codes"] == [
+            "SOURCE_UNAVAILABLE", "PREVIOUS_SNAPSHOT_UNAVAILABLE",
+            "TRADE_DATE_MISMATCH",
+        ]
+        assert cr["derived_layered_promotion_rates"] is None
 
     def test_session_not_final(self):
         def mut(f):
@@ -701,25 +708,579 @@ class TestOrdinaryExceptionBoundary:
 # ---------------------------------------------------------------------------
 
 class TestProcessControl:
-    class _RaisingKeysDict(dict):
-        def __init__(self, exc):
-            super().__init__()
-            self._exc = exc
-
-        def keys(self):
-            raise self._exc
-
     @pytest.mark.parametrize("exc", [
         KeyboardInterrupt(), SystemExit(1), GeneratorExit(),
     ])
-    def test_propagates(self, exc):
-        with pytest.raises(type(exc)):
-            validator.validate_layered_promotion_fixture(
-                self._RaisingKeysDict(exc))
+    def test_propagates_from_validation_paths(self, monkeypatch, exc):
+        """json.dumps / 严格 JSON 递归 / prefix / case 语义 / 推导 / rate 计算
+        任一路径抛出进程控制异常均自然传播，不得被结构化。"""
+        targets = [
+            (validator.json, "dumps"),
+            (validator, "_is_strict_json_value"),
+            (validator, "_validate_code_prefix_contract"),
+            (validator, "_validate_case_semantics"),
+            (validator, "_derive"),
+            (validator, "_calculate_rates"),
+        ]
+        for module, name in targets:
+            original = getattr(module, name)
+
+            def raiser(*a, **k):
+                raise exc
+
+            monkeypatch.setattr(module, name, raiser)
+            try:
+                with pytest.raises(type(exc)):
+                    validator.validate_layered_promotion_fixture(_load_fixture())
+            finally:
+                monkeypatch.setattr(module, name, original)
 
 
 # ---------------------------------------------------------------------------
-# 15. 文档一致性
+# 15. prefix 合同精确验证
+# ---------------------------------------------------------------------------
+
+class TestStrictPrefixContract:
+    def _run_prefix_mutation(self, mutator):
+        fixture = _load_fixture()
+        mutator(fixture)
+        r = validator.validate_layered_promotion_fixture(fixture)
+        _assert_invalid_with(r, "CODE_PREFIX_CONTRACT_INVALID")
+
+    def test_not_dict(self):
+        self._run_prefix_mutation(lambda f: f.update(code_prefix_contract={"x": 1}))
+
+    def test_missing_sh_main(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"].pop("sh_main"))
+
+    def test_extra_field(self):
+        def mut(f):
+            f["code_prefix_contract"]["extra"] = "x"
+        self._run_prefix_mutation(mut)
+
+    def test_sh_main_wrong(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"].update(sh_main="61xxxx"))
+
+    def test_sz_main_wrong(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"].update(sz_main="01xxxx"))
+
+    def test_chinext_wrong(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"].update(chinext="31xxxx"))
+
+    def test_star_wrong(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"].update(star="69xxxx"))
+
+    def test_excluded_missing_item(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"]["excluded_prefixes"].pop())
+
+    def test_excluded_extra_item(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"]["excluded_prefixes"].append("5xxxxx"))
+
+    def test_excluded_wrong_order(self):
+        def mut(f):
+            f["code_prefix_contract"]["excluded_prefixes"] = [
+                "8xxxxx", "4xxxxx", "920xxx", "9xxxxx"]
+        self._run_prefix_mutation(mut)
+
+    def test_excluded_duplicate(self):
+        def mut(f):
+            f["code_prefix_contract"]["excluded_prefixes"] = [
+                "4xxxxx", "4xxxxx", "8xxxxx", "920xxx"]
+        self._run_prefix_mutation(mut)
+
+    def test_normalization_empty(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"].update(normalization=""))
+
+    def test_normalization_int(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"].update(normalization=123))
+
+    def test_normalization_tampered(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"].update(
+                normalization="trim → keep string → validate 6 digits"))
+
+    def test_note_empty(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"].update(note=""))
+
+    def test_note_missing(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"].pop("note"))
+
+    def test_note_st_boundary_removed(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"].update(
+                note="前缀合同用于市场板块形状校验。"))
+
+    def test_note_tampered(self):
+        self._run_prefix_mutation(
+            lambda f: f["code_prefix_contract"].update(
+                note="前缀合同用于市场板块形状校验；不能只依赖前缀。"))
+
+
+# ---------------------------------------------------------------------------
+# 16. 严格 JSON 树类型
+# ---------------------------------------------------------------------------
+
+class TestStrictJsonTree:
+    class _DictSubclass(dict):
+        pass
+
+    class _ListSubclass(list):
+        pass
+
+    class _StrSubclass(str):
+        pass
+
+    class _IntSubclass(int):
+        pass
+
+    class _FloatSubclass(float):
+        pass
+
+    def test_top_level_dict_subclass_rejected(self):
+        r = validator.validate_layered_promotion_fixture(self._DictSubclass())
+        assert r["status"] == "invalid"
+        assert "FIXTURE_NOT_DICT" in r["issue_codes"]
+
+    @pytest.mark.parametrize("bad_value", [
+        _ListSubclass([1]),
+        _StrSubclass("x"),
+        _IntSubclass(1),
+        _FloatSubclass(1.0),
+        (1, 2),
+        {"a"},
+        b"bytes",
+        1j,
+        object(),
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+    ])
+    def test_nested_non_json_values_rejected(self, bad_value):
+        fixture = _load_fixture()
+        fixture["description"] = bad_value
+        r = validator.validate_layered_promotion_fixture(fixture)
+        assert r["status"] == "invalid"
+        assert "TOP_LEVEL_FIELD_INVALID" in r["issue_codes"]
+
+    def test_non_str_dict_key_rejected(self):
+        fixture = _load_fixture()
+        fixture[1] = "x"
+        r = validator.validate_layered_promotion_fixture(fixture)
+        assert r["status"] == "invalid"
+        assert "TOP_LEVEL_FIELD_INVALID" in r["issue_codes"]
+
+    def test_valid_fixture_still_valid(self):
+        r = validator.validate_layered_promotion_fixture(_load_fixture())
+        assert r["status"] == "valid"
+
+
+# ---------------------------------------------------------------------------
+# 17. 七类 case 命名语义
+# ---------------------------------------------------------------------------
+
+class TestCaseSemanticContracts:
+    def _paired_mutation(self, case_id, mutator):
+        fixture = _load_fixture()
+        mutator(fixture)
+        r = validator.validate_layered_promotion_fixture(fixture)
+        cr = next(c for c in r["case_results"] if c["case_id"] == case_id)
+        assert cr["status"] == "invalid"
+        assert "CASE_SCHEMA_INVALID" in cr["issue_codes"]
+
+    def _sync_normal_expected(self, case):
+        prev_pool = case["previous_snapshot"]["limit_up_pool"]
+        curr_pool = case["current_snapshot"]["limit_up_pool"]
+        case["expected"] = {
+            "status": "normal",
+            "reason_codes": [],
+            "warnings": [],
+            "layered_promotion_rates": validator._calculate_rates(
+                prev_pool, curr_pool),
+        }
+
+    def test_normal_single_level_rejected(self):
+        def mut(f):
+            case = next(c for c in f["cases"] if c["case_id"] == "normal")
+            case["previous_snapshot"]["limit_up_pool"] = [
+                {"stock_code": "600001", "consecutive_limit_up_days": 1},
+                {"stock_code": "600002", "consecutive_limit_up_days": 1},
+            ]
+            case["previous_snapshot"]["data_health"]["row_count"] = 2
+            self._sync_normal_expected(case)
+        self._paired_mutation("normal", mut)
+
+    def test_zero_denominator_adds_level_3_rejected(self):
+        def mut(f):
+            case = next(c for c in f["cases"]
+                        if c["case_id"] == "zero_denominator")
+            case["previous_snapshot"]["limit_up_pool"].insert(
+                1, {"stock_code": "300001", "consecutive_limit_up_days": 3})
+            case["previous_snapshot"]["data_health"]["row_count"] = 4
+            self._sync_normal_expected(case)
+        self._paired_mutation("zero_denominator", mut)
+
+    def test_previous_legal_zero_flag_removed_rejected(self):
+        def mut(f):
+            case = next(c for c in f["cases"]
+                        if c["case_id"] == "previous_legal_zero")
+            case["previous_snapshot"]["data_health"]["legal_zero"] = False
+            case["expected"] = {
+                "status": "normal", "reason_codes": [],
+                "warnings": [], "layered_promotion_rates": [],
+            }
+        self._paired_mutation("previous_legal_zero", mut)
+
+    def test_current_legal_zero_flag_removed_rejected(self):
+        def mut(f):
+            case = next(c for c in f["cases"]
+                        if c["case_id"] == "current_legal_zero")
+            case["current_snapshot"]["data_health"]["legal_zero"] = False
+            prev_pool = case["previous_snapshot"]["limit_up_pool"]
+            case["expected"] = {
+                "status": "normal", "reason_codes": [],
+                "warnings": [],
+                "layered_promotion_rates": validator._calculate_rates(
+                    prev_pool, []),
+            }
+        self._paired_mutation("current_legal_zero", mut)
+
+    def test_partial_repaired_to_normal_rejected(self):
+        def mut(f):
+            case = next(c for c in f["cases"] if c["case_id"] == "partial")
+            case["current_snapshot"]["data_health"]["coverage_warning"] = False
+            self._sync_normal_expected(case)
+        self._paired_mutation("partial", mut)
+
+    def test_unavailable_repaired_to_normal_rejected(self):
+        def mut(f):
+            case = next(c for c in f["cases"]
+                        if c["case_id"] == "unavailable")
+            case["current_snapshot"]["data_health"]["transport_success"] = True
+            self._sync_normal_expected(case)
+        self._paired_mutation("unavailable", mut)
+
+    def test_identity_edge_plain_consecutive_rejected(self):
+        def mut(f):
+            case = next(c for c in f["cases"]
+                        if c["case_id"] == "identity_edge")
+            case["current_snapshot"]["limit_up_pool"] = [
+                {"stock_code": "000001", "consecutive_limit_up_days": 3},
+                {"stock_code": "000002", "consecutive_limit_up_days": 3},
+                {"stock_code": "600001", "consecutive_limit_up_days": 2},
+            ]
+            case["current_snapshot"]["data_health"]["row_count"] = 3
+            self._sync_normal_expected(case)
+        self._paired_mutation("identity_edge", mut)
+
+
+# ---------------------------------------------------------------------------
+# 18. 9 个 reason code 全部可达
+# ---------------------------------------------------------------------------
+
+class TestReasonCodeReachability:
+    def _case_result(self, case_id, mutator):
+        fixture = _load_fixture()
+        mutator(fixture)
+        r = validator.validate_layered_promotion_fixture(fixture)
+        return next(c for c in r["case_results"] if c["case_id"] == case_id)
+
+    def _sync_unavailable_expected(self, case, reason_codes):
+        case["expected"] = {
+            "status": "unavailable",
+            "reason_codes": reason_codes,
+            "warnings": [],
+            "layered_promotion_rates": None,
+        }
+
+    def test_source_and_current_unavailable(self):
+        cr = self._case_result(
+            "unavailable", lambda f: None)
+        assert cr["derived_status"] == "unavailable"
+        assert cr["derived_reason_codes"] == [
+            "SOURCE_UNAVAILABLE", "CURRENT_SNAPSHOT_UNAVAILABLE"]
+        assert cr["derived_layered_promotion_rates"] is None
+
+    def test_previous_unavailable(self):
+        def mut(f):
+            case = next(c for c in f["cases"] if c["case_id"] == "normal")
+            case["previous_snapshot"]["data_health"]["transport_success"] = False
+            self._sync_unavailable_expected(
+                case, ["SOURCE_UNAVAILABLE", "PREVIOUS_SNAPSHOT_UNAVAILABLE"])
+        cr = self._case_result("normal", mut)
+        assert cr["derived_status"] == "unavailable"
+        assert cr["derived_reason_codes"] == [
+            "SOURCE_UNAVAILABLE", "PREVIOUS_SNAPSHOT_UNAVAILABLE"]
+
+    def test_calendar_unavailable(self):
+        def mut(f):
+            case = next(c for c in f["cases"] if c["case_id"] == "normal")
+            case["previous_snapshot"]["data_health"]["trade_date_match"] = None
+            self._sync_unavailable_expected(case, [
+                "SOURCE_UNAVAILABLE", "PREVIOUS_SNAPSHOT_UNAVAILABLE",
+                "TRADING_CALENDAR_UNAVAILABLE"])
+        cr = self._case_result("normal", mut)
+        assert cr["derived_reason_codes"] == [
+            "SOURCE_UNAVAILABLE", "PREVIOUS_SNAPSHOT_UNAVAILABLE",
+            "TRADING_CALENDAR_UNAVAILABLE"]
+
+    def test_trade_date_mismatch(self):
+        def mut(f):
+            case = next(c for c in f["cases"] if c["case_id"] == "normal")
+            case["current_snapshot"]["data_health"]["trade_date_match"] = False
+            self._sync_unavailable_expected(case, [
+                "SOURCE_UNAVAILABLE", "CURRENT_SNAPSHOT_UNAVAILABLE",
+                "TRADE_DATE_MISMATCH"])
+        cr = self._case_result("normal", mut)
+        assert cr["derived_reason_codes"] == [
+            "SOURCE_UNAVAILABLE", "CURRENT_SNAPSHOT_UNAVAILABLE",
+            "TRADE_DATE_MISMATCH"]
+
+    def test_not_final(self):
+        def mut(f):
+            case = next(c for c in f["cases"] if c["case_id"] == "normal")
+            case["current_snapshot"]["session"] = "not_final"
+            case["current_snapshot"]["is_final"] = False
+            self._sync_unavailable_expected(case, [
+                "SOURCE_UNAVAILABLE", "CURRENT_SNAPSHOT_UNAVAILABLE",
+                "NOT_FINAL"])
+        cr = self._case_result("normal", mut)
+        assert cr["derived_reason_codes"] == [
+            "SOURCE_UNAVAILABLE", "CURRENT_SNAPSHOT_UNAVAILABLE", "NOT_FINAL"]
+
+    def test_source_partial_and_partial_coverage(self):
+        cr = self._case_result("partial", lambda f: None)
+        assert cr["derived_status"] == "partial"
+        assert cr["derived_reason_codes"] == [
+            "SOURCE_PARTIAL", "PARTIAL_COVERAGE"]
+        assert cr["derived_layered_promotion_rates"] is None
+
+    def test_unexplained_empty(self):
+        def mut(f):
+            case = next(c for c in f["cases"]
+                        if c["case_id"] == "zero_denominator")
+            case["current_snapshot"]["limit_up_pool"] = []
+            case["current_snapshot"]["data_health"].update(
+                row_count=0, unexplained_empty=True)
+            case["expected"] = {
+                "status": "partial",
+                "reason_codes": ["SOURCE_PARTIAL", "UNEXPLAINED_EMPTY"],
+                "warnings": [],
+                "layered_promotion_rates": None,
+            }
+        cr = self._case_result("zero_denominator", mut)
+        assert cr["derived_status"] == "partial"
+        assert cr["derived_reason_codes"] == [
+            "SOURCE_PARTIAL", "UNEXPLAINED_EMPTY"]
+        assert cr["derived_layered_promotion_rates"] is None
+
+
+# ---------------------------------------------------------------------------
+# 19. unavailable / partial 组合优先级
+# ---------------------------------------------------------------------------
+
+class TestUnavailableReasonComposition:
+    def _derived(self, case_id, mutator):
+        fixture = _load_fixture()
+        mutator(fixture)
+        r = validator.validate_layered_promotion_fixture(fixture)
+        cr = next(c for c in r["case_results"] if c["case_id"] == case_id)
+        return cr["derived_status"], cr["derived_reason_codes"], \
+            cr["derived_layered_promotion_rates"]
+
+    def _sync(self, case, status, codes):
+        case["expected"] = {
+            "status": status, "reason_codes": codes,
+            "warnings": [], "layered_promotion_rates": None,
+        }
+
+    def test_transport_failure_beats_coverage(self):
+        def mut(f):
+            case = next(c for c in f["cases"] if c["case_id"] == "normal")
+            case["previous_snapshot"]["data_health"]["transport_success"] = False
+            case["current_snapshot"]["data_health"]["coverage_warning"] = True
+            self._sync(case, "unavailable",
+                       ["SOURCE_UNAVAILABLE", "PREVIOUS_SNAPSHOT_UNAVAILABLE"])
+        status, codes, rates = self._derived("normal", mut)
+        assert status == "unavailable"
+        assert codes == ["SOURCE_UNAVAILABLE", "PREVIOUS_SNAPSHOT_UNAVAILABLE"]
+        assert rates is None
+
+    def test_calendar_beats_legal_zero(self):
+        def mut(f):
+            case = next(c for c in f["cases"]
+                        if c["case_id"] == "current_legal_zero")
+            case["previous_snapshot"]["data_health"]["trade_date_match"] = None
+            self._sync(case, "unavailable", [
+                "SOURCE_UNAVAILABLE", "PREVIOUS_SNAPSHOT_UNAVAILABLE",
+                "TRADING_CALENDAR_UNAVAILABLE"])
+        status, codes, _ = self._derived("current_legal_zero", mut)
+        assert status == "unavailable"
+        assert codes == [
+            "SOURCE_UNAVAILABLE", "PREVIOUS_SNAPSHOT_UNAVAILABLE",
+            "TRADING_CALENDAR_UNAVAILABLE"]
+
+    def test_date_mismatch_beats_partial(self):
+        def mut(f):
+            case = next(c for c in f["cases"] if c["case_id"] == "partial")
+            case["current_snapshot"]["data_health"]["trade_date_match"] = False
+            self._sync(case, "unavailable", [
+                "SOURCE_UNAVAILABLE", "CURRENT_SNAPSHOT_UNAVAILABLE",
+                "TRADE_DATE_MISMATCH"])
+        status, codes, _ = self._derived("partial", mut)
+        assert status == "unavailable"
+        assert codes == [
+            "SOURCE_UNAVAILABLE", "CURRENT_SNAPSHOT_UNAVAILABLE",
+            "TRADE_DATE_MISMATCH"]
+
+    def test_not_final_beats_partial(self):
+        def mut(f):
+            case = next(c for c in f["cases"] if c["case_id"] == "partial")
+            case["current_snapshot"]["session"] = "not_final"
+            case["current_snapshot"]["is_final"] = False
+            self._sync(case, "unavailable", [
+                "SOURCE_UNAVAILABLE", "CURRENT_SNAPSHOT_UNAVAILABLE",
+                "NOT_FINAL"])
+        status, codes, _ = self._derived("partial", mut)
+        assert status == "unavailable"
+        assert codes == [
+            "SOURCE_UNAVAILABLE", "CURRENT_SNAPSHOT_UNAVAILABLE", "NOT_FINAL"]
+
+    def test_previous_and_current_unavailable(self):
+        def mut(f):
+            case = next(c for c in f["cases"] if c["case_id"] == "normal")
+            case["previous_snapshot"]["data_health"]["transport_success"] = False
+            case["current_snapshot"]["data_health"]["transport_success"] = False
+            self._sync(case, "unavailable", [
+                "SOURCE_UNAVAILABLE", "PREVIOUS_SNAPSHOT_UNAVAILABLE",
+                "CURRENT_SNAPSHOT_UNAVAILABLE"])
+        status, codes, _ = self._derived("normal", mut)
+        assert status == "unavailable"
+        assert codes == [
+            "SOURCE_UNAVAILABLE", "PREVIOUS_SNAPSHOT_UNAVAILABLE",
+            "CURRENT_SNAPSHOT_UNAVAILABLE"]
+
+    def test_previous_partial_current_unavailable(self):
+        def mut(f):
+            case = next(c for c in f["cases"] if c["case_id"] == "partial")
+            case["previous_snapshot"]["data_health"]["coverage_warning"] = True
+            case["current_snapshot"]["data_health"]["transport_success"] = False
+            self._sync(case, "unavailable",
+                       ["SOURCE_UNAVAILABLE", "CURRENT_SNAPSHOT_UNAVAILABLE"])
+        status, codes, _ = self._derived("partial", mut)
+        assert status == "unavailable"
+        assert codes == ["SOURCE_UNAVAILABLE", "CURRENT_SNAPSHOT_UNAVAILABLE"]
+
+    def test_previous_unavailable_current_partial(self):
+        def mut(f):
+            case = next(c for c in f["cases"] if c["case_id"] == "partial")
+            case["previous_snapshot"]["data_health"]["transport_success"] = False
+            self._sync(case, "unavailable",
+                       ["SOURCE_UNAVAILABLE", "PREVIOUS_SNAPSHOT_UNAVAILABLE"])
+        status, codes, _ = self._derived("partial", mut)
+        assert status == "unavailable"
+        assert codes == ["SOURCE_UNAVAILABLE", "PREVIOUS_SNAPSHOT_UNAVAILABLE"]
+
+    def test_coverage_plus_unexplained(self):
+        def mut(f):
+            case = next(c for c in f["cases"]
+                        if c["case_id"] == "zero_denominator")
+            case["current_snapshot"]["limit_up_pool"] = []
+            case["current_snapshot"]["data_health"].update(
+                row_count=0, coverage_warning=True, unexplained_empty=True)
+            case["expected"] = {
+                "status": "partial",
+                "reason_codes": [
+                    "SOURCE_PARTIAL", "PARTIAL_COVERAGE", "UNEXPLAINED_EMPTY"],
+                "warnings": [],
+                "layered_promotion_rates": None,
+            }
+        status, codes, _ = self._derived("zero_denominator", mut)
+        assert status == "partial"
+        assert codes == [
+            "SOURCE_PARTIAL", "PARTIAL_COVERAGE", "UNEXPLAINED_EMPTY"]
+
+
+# ---------------------------------------------------------------------------
+# 20. rate 必须为 float
+# ---------------------------------------------------------------------------
+
+class TestRateFloatBoundary:
+    def test_int_zero_rate_rejected(self):
+        def mut(f):
+            item = _normal_case(f)["expected"]["layered_promotion_rates"][0]
+            item["rate"] = 0
+        _assert_invalid_with(
+            validator.validate_layered_promotion_fixture(_mutate(mut)),
+            "RATE_SCHEMA_INVALID")
+
+    def test_int_one_rate_rejected(self):
+        def mut(f):
+            item = _normal_case(f)["expected"]["layered_promotion_rates"][2]
+            item["rate"] = 1
+        _assert_invalid_with(
+            validator.validate_layered_promotion_fixture(_mutate(mut)),
+            "RATE_SCHEMA_INVALID")
+
+    def test_oracle_rates_are_float(self):
+        r = validator.validate_layered_promotion_fixture(_load_fixture())
+        for cr in r["case_results"]:
+            rates = cr["derived_layered_promotion_rates"]
+            if rates is None:
+                continue
+            for item in rates:
+                assert type(item["rate"]) is float
+
+
+# ---------------------------------------------------------------------------
+# 21. case_count 语义
+# ---------------------------------------------------------------------------
+
+class TestCaseCountSemantics:
+    def test_valid_fixture_seven(self):
+        r = validator.validate_layered_promotion_fixture(_load_fixture())
+        assert r["case_count"] == 7
+        assert len(r["case_results"]) == 7
+
+    def test_non_dict_fixture_zero(self):
+        r = validator.validate_layered_promotion_fixture(None)
+        assert r["case_count"] == 0
+        assert r["case_results"] == []
+
+    def test_cases_not_list_zero(self):
+        def mut(f):
+            f["cases"] = "not-a-list"
+        r = validator.validate_layered_promotion_fixture(_mutate(mut))
+        assert r["case_count"] == 0
+        assert r["case_results"] == []
+
+    def test_empty_cases_zero(self):
+        def mut(f):
+            f["cases"] = []
+        r = validator.validate_layered_promotion_fixture(_mutate(mut))
+        assert r["case_count"] == 0
+
+    def test_mixed_cases_count_matches_results(self):
+        def mut(f):
+            f["cases"][0] = "not-a-dict"
+        r = validator.validate_layered_promotion_fixture(_mutate(mut))
+        assert r["case_count"] == 7
+        assert len(r["case_results"]) == 7
+        assert r["case_results"][0]["status"] == "invalid"
+
+
+# ---------------------------------------------------------------------------
+# 22. 文档一致性
 # ---------------------------------------------------------------------------
 
 class TestDocumentationAlignment:
