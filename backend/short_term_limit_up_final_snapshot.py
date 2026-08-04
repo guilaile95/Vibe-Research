@@ -44,6 +44,36 @@ REQUIRED_OBSERVATIONS = 3
 OBSERVATION_INTERVAL_SECONDS = 2.2
 
 _ADAPTER_SCHEMA_VERSION = pool_adapter.SCHEMA_VERSION
+_ADAPTER_SOURCE_ID = "eastmoney_getTopicZTPool"
+_ADAPTER_ENDPOINT = "getTopicZTPool"
+# status=normal 的 final 候选必须携带完整适配器 v0.1 合同（25 字段）
+_ADAPTER_REQUIRED_FIELDS = frozenset({
+    "schema_version",
+    "source_id",
+    "endpoint",
+    "requested_trade_date",
+    "observed_at",
+    "status",
+    "reason_codes",
+    "rows",
+    "transport_success",
+    "parse_success",
+    "required_field_present",
+    "data_array_present",
+    "trade_date_match",
+    "row_count",
+    "legal_zero",
+    "upstream_null",
+    "unexplained_empty",
+    "coverage_warning",
+    "target_universe_empty_after_filter",
+    "source_pool_row_count",
+    "http_status",
+    "error_class",
+    "excluded_universe_count",
+    "invalid_row_count",
+    "duplicate_code_count",
+})
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
 _STRICT_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 _SIX_DIGIT_RE = re.compile(r"^\d{6}$")
@@ -255,20 +285,6 @@ def _fetch_adapter(requested_trade_date: str) -> tuple[Optional[dict], Optional[
     return obs, None
 
 
-def _check_status(obs: Any) -> Optional[str]:
-    """先按 status 分类：unavailable / partial / normal / 结构异常。"""
-    if not isinstance(obs, dict):
-        return "SNAPSHOT_SCHEMA_INVALID"
-    status = obs.get("status")
-    if status == "unavailable":
-        return "SOURCE_UNAVAILABLE"
-    if status == "partial":
-        return "SOURCE_PARTIAL"
-    if status != "normal":
-        return "SNAPSHOT_SCHEMA_INVALID"
-    return None
-
-
 def _check_row(row: Any) -> Optional[str]:
     """行合同：dict、字段集严格等于 stock_code+lbc、代码六位数字、lbc int>0。"""
     if not isinstance(row, dict):
@@ -304,16 +320,76 @@ def _check_rows(rows: Any) -> Optional[str]:
     return None
 
 
-def _admission_check(obs: Any, requested_trade_date: str) -> Optional[str]:
-    """适配器观测准入。返回 None（通过）或失败 reason code。"""
-    status_err = _check_status(obs)
-    if status_err is not None:
-        return status_err
-    # status == normal 后的完整合同校验
+def _validate_common_contract(obs: Any, requested_trade_date: str) -> Optional[str]:
+    """完整字段集合 + 公共字段类型校验（在 status 分类之前）。
+
+    返回 None（通过）或 ``SNAPSHOT_SCHEMA_INVALID``。
+    """
+    if not isinstance(obs, dict):
+        return "SNAPSHOT_SCHEMA_INVALID"
+    if set(obs.keys()) != _ADAPTER_REQUIRED_FIELDS:
+        return "SNAPSHOT_SCHEMA_INVALID"
     if obs.get("schema_version") != _ADAPTER_SCHEMA_VERSION:
+        return "SNAPSHOT_SCHEMA_INVALID"
+    if obs.get("source_id") != _ADAPTER_SOURCE_ID:
+        return "SNAPSHOT_SCHEMA_INVALID"
+    if obs.get("endpoint") != _ADAPTER_ENDPOINT:
         return "SNAPSHOT_SCHEMA_INVALID"
     if obs.get("requested_trade_date") != requested_trade_date:
         return "SNAPSHOT_SCHEMA_INVALID"
+    observed_at = obs.get("observed_at")
+    if not isinstance(observed_at, str) or not observed_at:
+        return "SNAPSHOT_SCHEMA_INVALID"
+    try:
+        parsed_observed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return "SNAPSHOT_SCHEMA_INVALID"
+    if parsed_observed.tzinfo is None or parsed_observed.utcoffset() != timedelta(0):
+        return "SNAPSHOT_SCHEMA_INVALID"
+    if obs.get("status") not in ("normal", "partial", "unavailable"):
+        return "SNAPSHOT_SCHEMA_INVALID"
+    reason_codes = obs.get("reason_codes")
+    if not isinstance(reason_codes, list):
+        return "SNAPSHOT_SCHEMA_INVALID"
+    if any(type(code) is not str for code in reason_codes):
+        return "SNAPSHOT_SCHEMA_INVALID"
+    if not isinstance(obs.get("rows"), list):
+        return "SNAPSHOT_SCHEMA_INVALID"
+    for key in (
+        "transport_success", "parse_success", "required_field_present",
+        "data_array_present", "legal_zero", "upstream_null",
+        "unexplained_empty", "coverage_warning",
+        "target_universe_empty_after_filter",
+    ):
+        if type(obs.get(key)) is not bool:
+            return "SNAPSHOT_SCHEMA_INVALID"
+    trade_date_match = obs.get("trade_date_match")
+    if trade_date_match is not True and trade_date_match is not False \
+            and trade_date_match is not None:
+        return "SNAPSHOT_SCHEMA_INVALID"
+    row_count = obs.get("row_count")
+    if type(row_count) is not int or row_count < 0:
+        return "SNAPSHOT_SCHEMA_INVALID"
+    source_count = obs.get("source_pool_row_count")
+    if type(source_count) is not int or source_count < 0:
+        return "SNAPSHOT_SCHEMA_INVALID"
+    http_status = obs.get("http_status")
+    if http_status is not None and (
+            type(http_status) is not int or http_status < 100 or http_status > 599):
+        return "SNAPSHOT_SCHEMA_INVALID"
+    error_class = obs.get("error_class")
+    if not isinstance(error_class, str) or not error_class:
+        return "SNAPSHOT_SCHEMA_INVALID"
+    for key in ("excluded_universe_count", "invalid_row_count",
+                "duplicate_code_count"):
+        value = obs.get(key)
+        if type(value) is not int or value < 0:
+            return "SNAPSHOT_SCHEMA_INVALID"
+    return None
+
+
+def _normal_admission(obs: dict) -> Optional[str]:
+    """status=normal 的完整准入。返回 None（通过）或失败 reason code。"""
     if obs.get("reason_codes") != []:
         return "SNAPSHOT_SCHEMA_INVALID"
     if obs.get("transport_success") is not True:
@@ -334,50 +410,90 @@ def _admission_check(obs: Any, requested_trade_date: str) -> Optional[str]:
         return "SNAPSHOT_SCHEMA_INVALID"
     if obs.get("legal_zero") is not False:
         return "SNAPSHOT_SCHEMA_INVALID"
-    row_count = obs.get("row_count")
-    source_count = obs.get("source_pool_row_count")
-    if not isinstance(row_count, int) or isinstance(row_count, bool) or row_count < 0:
+    if obs.get("error_class") != "NONE":
         return "SNAPSHOT_SCHEMA_INVALID"
-    if not isinstance(source_count, int) or isinstance(source_count, bool) or source_count < 0:
+    # 精确零判定：bool 不得冒充 0
+    if obs.get("invalid_row_count") != 0:
         return "SNAPSHOT_SCHEMA_INVALID"
-    if obs.get("invalid_row_count") not in (0,):
-        return "SNAPSHOT_SCHEMA_INVALID"
-    if obs.get("duplicate_code_count") not in (0,):
+    if obs.get("duplicate_code_count") != 0:
         return "SNAPSHOT_SCHEMA_INVALID"
     rows = obs.get("rows")
     if _check_rows(rows) is not None:
         return "SNAPSHOT_SCHEMA_INVALID"
+    row_count = obs.get("row_count")
+    source_count = obs.get("source_pool_row_count")
+    excluded = obs.get("excluded_universe_count")
     if row_count != len(rows):
         return "SNAPSHOT_SCHEMA_INVALID"
-    if source_count < row_count:
+    if source_count != row_count + excluded:
         return "SNAPSHOT_SCHEMA_INVALID"
     target_empty = obs.get("target_universe_empty_after_filter")
-    if target_empty not in (True, False):
-        return "SNAPSHOT_SCHEMA_INVALID"
     if rows:
         if target_empty is not False:
             return "SNAPSHOT_SCHEMA_INVALID"
     else:
-        # 允许：来源池非空但目标 universe 为空（universe 过滤后无记录）
+        # 目标 universe 为空：来源池非空且全部被 universe 排除
         if source_count <= 0:
             return "SNAPSHOT_SCHEMA_INVALID"
-        if obs.get("excluded_universe_count") != source_count:
+        if excluded != source_count:
             return "SNAPSHOT_SCHEMA_INVALID"
         if target_empty is not True:
             return "SNAPSHOT_SCHEMA_INVALID"
     return None
 
 
-def _canonical_fingerprint(obs: dict) -> str:
-    """稳定指纹：确定性字段的 canonical JSON + SHA-256。"""
-    canonical = {key: obs[key] for key in _FINGERPRINT_KEYS}
-    payload = json.dumps(
-        canonical,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+def _classify_observation(obs: Any, requested_trade_date: str) -> Optional[str]:
+    """完整合同 + 公共类型校验 → status 分类 → normal 完整准入。
+
+    返回 None（normal 通过）或失败 reason code：
+    SOURCE_UNAVAILABLE / SOURCE_PARTIAL / SNAPSHOT_SCHEMA_INVALID。
+    """
+    common_err = _validate_common_contract(obs, requested_trade_date)
+    if common_err is not None:
+        return common_err
+    status = obs.get("status")
+    if status == "unavailable":
+        return "SOURCE_UNAVAILABLE"
+    if status == "partial":
+        return "SOURCE_PARTIAL"
+    return _normal_admission(obs)
+
+
+def _canonicalize_observation(obs: dict) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """返回 ``(canonical_string, digest, error_code)``。
+
+    canonical JSON 使用 ``allow_nan=False``；任何普通异常（含 digest 计算）
+    结构化失败为 ``SNAPSHOT_SCHEMA_INVALID``，不泄漏异常原文。
+    进程控制异常自然传播。
+    """
+    try:
+        canonical_payload = {key: obs[key] for key in _FINGERPRINT_KEYS}
+        canonical_string = json.dumps(
+            canonical_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except Exception:
+        return None, None, "SNAPSHOT_SCHEMA_INVALID"
+    try:
+        digest = hashlib.sha256(canonical_string.encode("utf-8")).hexdigest()
+    except Exception:
+        return None, None, "SNAPSHOT_SCHEMA_INVALID"
+    return canonical_string, digest, None
+
+
+def _timing(times: list[float]) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """由 observation-start 时间序列推导 ``(first, last, actual)``。
+
+    无时间：全部 None；一条：first=last、actual=0.0；两条及以上：last-first。
+    """
+    if not times:
+        return None, None, None
+    first = times[0]
+    last = times[-1]
+    return first, last, last - first
 
 
 # ---------------------------------------------------------------------------
@@ -442,110 +558,130 @@ def fetch_final_limit_up_pool_snapshot(requested_trade_date: str) -> dict:
             reason_codes=["NOT_FINAL"],
         )
 
-    # 3) 连续稳定观测
-    first_mono, clock_err = _safe_monotonic()
-    if clock_err is not None:
-        return _failure(
-            requested_trade_date=requested_trade_date,
-            status="unavailable",
-            reason_codes=[clock_err],
-        )
-
+    # 3) 连续稳定观测（无 pre-loop monotonic 锚点；成功路径恰 3 次读取）
     observation_times: list[float] = []
     observations: list[dict] = []
-    fingerprints: list[str] = []
+    canonical_strings: list[str] = []
+    digests: list[str] = []
     stable_count = 0
+    completed_observations = 0
 
     for i in range(REQUIRED_OBSERVATIONS):
         if i > 0:
             sleep_err = _safe_sleep(OBSERVATION_INTERVAL_SECONDS)
             if sleep_err is not None:
+                first, last, actual = _timing(observation_times)
                 return _failure(
                     requested_trade_date=requested_trade_date,
                     status="unavailable",
                     reason_codes=[sleep_err],
-                    completed_observations=len(observations),
+                    completed_observations=completed_observations,
                     stable_observation_count=stable_count,
-                    first_mono=first_mono,
-                    last_mono=observation_times[-1] if observation_times else None,
+                    actual_window=actual,
+                    first_mono=first,
+                    last_mono=last,
                 )
         t, clock_err = _safe_monotonic()
         if clock_err is not None:
+            first, last, actual = _timing(observation_times)
             return _failure(
                 requested_trade_date=requested_trade_date,
                 status="unavailable",
                 reason_codes=[clock_err],
-                completed_observations=len(observations),
+                completed_observations=completed_observations,
                 stable_observation_count=stable_count,
-                first_mono=first_mono,
-                last_mono=observation_times[-1] if observation_times else None,
+                actual_window=actual,
+                first_mono=first,
+                last_mono=last,
             )
         if observation_times and t < observation_times[-1]:
             # 时钟倒退：失败关闭
+            first, last, actual = _timing(observation_times)
             return _failure(
                 requested_trade_date=requested_trade_date,
                 status="unavailable",
                 reason_codes=["STABILITY_WINDOW_ERROR"],
-                completed_observations=len(observations),
+                completed_observations=completed_observations,
                 stable_observation_count=stable_count,
-                first_mono=first_mono,
-                last_mono=observation_times[-1],
+                actual_window=actual,
+                first_mono=first,
+                last_mono=last,
             )
         observation_times.append(t)
 
         obs, source_err = _fetch_adapter(requested_trade_date)
         if source_err is not None:
+            # 适配器抛普通异常：该次不计入 completed_observations
+            first, last, actual = _timing(observation_times)
             return _failure(
                 requested_trade_date=requested_trade_date,
                 status="unavailable",
                 reason_codes=[source_err],
-                completed_observations=len(observations),
+                completed_observations=completed_observations,
                 stable_observation_count=stable_count,
-                first_mono=first_mono,
-                last_mono=t,
+                actual_window=actual,
+                first_mono=first,
+                last_mono=last,
             )
-        admission_err = _admission_check(obs, requested_trade_date)
+        # 适配器调用正常返回一个值 → 计入 completed_observations
+        completed_observations += 1
+        admission_err = _classify_observation(obs, requested_trade_date)
         if admission_err is not None:
             status = (
                 "partial" if admission_err == "SOURCE_PARTIAL" else "unavailable"
             )
+            first, last, actual = _timing(observation_times)
             return _failure(
                 requested_trade_date=requested_trade_date,
                 status=status,
                 reason_codes=[admission_err],
-                completed_observations=len(observations),
+                completed_observations=completed_observations,
                 stable_observation_count=stable_count,
-                first_mono=first_mono,
-                last_mono=t,
+                actual_window=actual,
+                first_mono=first,
+                last_mono=last,
             )
-        fp = _canonical_fingerprint(obs)
-        if not fingerprints or fp == fingerprints[0]:
+        canonical, digest, canon_err = _canonicalize_observation(obs)
+        if canon_err is not None:
+            first, last, actual = _timing(observation_times)
+            return _failure(
+                requested_trade_date=requested_trade_date,
+                status="unavailable",
+                reason_codes=[canon_err],
+                completed_observations=completed_observations,
+                stable_observation_count=stable_count,
+                actual_window=actual,
+                first_mono=first,
+                last_mono=last,
+            )
+        if not canonical_strings or canonical == canonical_strings[0]:
             stable_count += 1
         observations.append(obs)
-        fingerprints.append(fp)
+        canonical_strings.append(canonical)
+        digests.append(digest)
 
-    last_mono = observation_times[-1]
-    actual_window = last_mono - first_mono
+    first_mono, last_mono, actual_window = _timing(observation_times)
     required_window = OBSERVATION_INTERVAL_SECONDS * (REQUIRED_OBSERVATIONS - 1)
 
-    if actual_window + _STABILITY_EPSILON < required_window:
+    if actual_window is None or actual_window + _STABILITY_EPSILON < required_window:
         return _failure(
             requested_trade_date=requested_trade_date,
             status="unavailable",
             reason_codes=["STABILITY_WINDOW_ERROR"],
-            completed_observations=len(observations),
+            completed_observations=completed_observations,
             stable_observation_count=stable_count,
             actual_window=actual_window,
             first_mono=first_mono,
             last_mono=last_mono,
         )
 
-    if len(set(fingerprints)) != 1:
+    # 稳定性最终依据：三份 canonical JSON string 完全一致（digest 仅辅助）
+    if len(set(canonical_strings)) != 1:
         return _failure(
             requested_trade_date=requested_trade_date,
             status="unavailable",
             reason_codes=["NOT_FINAL", "SNAPSHOT_UNSTABLE"],
-            completed_observations=len(observations),
+            completed_observations=completed_observations,
             stable_observation_count=stable_count,
             actual_window=actual_window,
             first_mono=first_mono,
