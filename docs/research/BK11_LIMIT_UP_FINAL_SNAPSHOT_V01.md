@@ -101,10 +101,13 @@ requested_trade_date >= today: NOT_FINAL / unavailable
 满足日期预检后，依次调用适配器三次：
 
 ```text
+读取 observation 1 开始时间（monotonic）
 observation 1
 sleep 2.2
+读取 observation 2 开始时间（monotonic）
 observation 2
 sleep 2.2
+读取 observation 3 开始时间（monotonic）
 observation 3
 ```
 
@@ -113,11 +116,28 @@ observation 3
 - configured interval: 2.2 秒
 - configured total stability window: 4.4 秒
 - 第三次后不再 sleep
-- 每次观测开始时间使用 monotonic 时钟记录
+- 成功路径恰好进行 3 次 observation-start monotonic 读取；无 pre-loop 锚点读取
+- 每次观测开始时间使用 monotonic 时钟记录，不依赖 wall clock 字符串
 
 来源失败 / partial / schema 无效时失败即停，不继续无意义请求与等待。
 
 ## 8. Stability-window Contract
+
+时间定义（统一 timing 关系，适用于所有含时钟证据的普通返回路径）：
+
+```text
+first_observation_monotonic  = 第一条已记录的 observation-start 时间
+last_observation_monotonic   = 最后一条已记录的 observation-start 时间
+actual_stability_window_seconds = last - first
+```
+
+规则：
+
+```text
+无 observation-start 时间：first = null，last = null，actual = null
+只有一条：first = last，actual = 0.0
+两条及以上：actual = last - first
+```
 
 最终确认要求：
 
@@ -127,7 +147,9 @@ observation 3
 
 允许极小浮点容差（`actual_window + 1e-9 >= required_window`）。
 
-不得依赖 wall clock 秒级字符串、`observed_at` 字符串差值或调用方声称已等待。
+所有数值必须有限，不得为 bool、NaN 或 inf。不得依赖 wall clock 秒级字符串、
+`observed_at` 字符串差值或调用方声称已等待。无 pre-loop monotonic 锚点：
+first 锚点就是第一次观测开始时间，不得用观测前读取的时间放大窗口。
 
 monotonic 时钟抛普通异常 / 返回 bool / 非数字 / NaN / inf / 倒退 /
 稳定窗口不足，以及 `_sleep` 抛普通异常 → 全部失败关闭为
@@ -135,12 +157,48 @@ monotonic 时钟抛普通异常 / 返回 bool / 非数字 / NaN / inf / 倒退 /
 
 ## 9. Adapter Admission Contract
 
-每次观测必须为完整 dict 且满足：
+每次观测（无论 status）必须为完整适配器 dict，字段集合严格等于：
 
 ```text
-schema_version == short-term-limit-up-pool-adapter-v0.1
-requested_trade_date == 请求日期
-status == normal
+schema_version, source_id, endpoint, requested_trade_date, observed_at,
+status, reason_codes, rows, transport_success, parse_success,
+required_field_present, data_array_present, trade_date_match, row_count,
+legal_zero, upstream_null, unexplained_empty, coverage_warning,
+target_universe_empty_after_filter, source_pool_row_count, http_status,
+error_class, excluded_universe_count, invalid_row_count, duplicate_code_count
+```
+
+缺少任一字段或存在未声明额外字段 → `SNAPSHOT_SCHEMA_INVALID`。
+
+公共字段类型先于 status 分类验证：
+
+```text
+schema_version: str（== short-term-limit-up-pool-adapter-v0.1）
+source_id: str（== eastmoney_getTopicZTPool）
+endpoint: str（== getTopicZTPool）
+requested_trade_date: str（== 请求日期）
+observed_at: 非空 str，可解析的带时区 UTC ISO 时间（Z / +00:00，offset 必须为零）
+status: normal | partial | unavailable
+reason_codes: list[str]
+rows: list
+transport_success / parse_success / required_field_present /
+data_array_present / legal_zero / upstream_null / unexplained_empty /
+coverage_warning / target_universe_empty_after_filter: bool（身份判断）
+trade_date_match: true | false | null（身份判断，不允许 1/0 冒充）
+row_count / source_pool_row_count: 非负 int，bool 拒绝
+http_status: null 或 100–599 的 int，bool 拒绝
+error_class: 非空 str
+excluded_universe_count / invalid_row_count / duplicate_code_count:
+非负 int，bool 拒绝
+```
+
+status 分类顺序：先验证完整字段集合与公共类型，再按 status 分类；
+缺字段或公共类型错误不得按 partial/unavailable 接受，一律
+`SNAPSHOT_SCHEMA_INVALID`。
+
+`status=normal` 的观测继续满足：
+
+```text
 reason_codes == []
 transport_success == true
 parse_success == true
@@ -155,7 +213,14 @@ row_count == len(rows)
 source_pool_row_count >= row_count
 invalid_row_count == 0
 duplicate_code_count == 0
+error_class == "NONE"
+source_pool_row_count == row_count + excluded_universe_count
 ```
+
+`invalid_row_count` / `duplicate_code_count` 使用精确零判定
+（`type(value) is int and value == 0`），`False` 不得冒充 0。
+
+原始 source 为空（`source_pool_row_count = 0` 且 `rows = []`）必须拒绝。
 
 允许两类正常快照：
 
@@ -180,6 +245,10 @@ duplicate_code_count == 0
 stock_code 为严格六位数字字符串；lbc 为 int > 0（bool 不允许）；rows 按
 stock_code 严格升序且唯一。
 
+计数守恒：normal 候选必须满足
+`source_pool_row_count == row_count + excluded_universe_count`
+（invalid=0、duplicate=0 条件下）；内部计数不一致的快照拒绝。
+
 任何行合同错误 → `SNAPSHOT_SCHEMA_INVALID` / unavailable /
 `is_final = false` / `snapshot = null`。
 
@@ -203,8 +272,16 @@ legal_zero
 排除：observed_at、http_status、网络请求耗时、对象内存地址、字段插入顺序。
 
 指纹使用 canonical JSON（`ensure_ascii=False, sort_keys=True,
-separators=(",", ":")`）+ SHA-256；最终输出不依赖 hash 碰撞做唯一判断，
-同一观测通过同一 canonical 序列化保证。
+separators=(",", ":")`, `allow_nan=False`）生成 canonical 字符串，并额外
+计算 SHA-256 digest。
+
+**最终稳定性判定依据是三份 canonical JSON string 完全一致；digest 只能作为
+辅助证据，不得作为唯一判断依据。** 即使 digest 相同，只要 canonical 内容
+不同，仍必须 `NOT_FINAL + SNAPSHOT_UNSTABLE`。
+
+canonical 序列化或 digest 计算的任何普通异常（TypeError / ValueError /
+RuntimeError 等）结构化失败为 `SNAPSHOT_SCHEMA_INVALID`，异常原文不泄漏；
+进程控制异常自然传播。`allow_nan=False` 拒绝 NaN / Infinity 进入指纹。
 
 三次指纹或结构不一致 →
 
@@ -243,6 +320,16 @@ snapshot = null
 适配器普通异常 → `SOURCE_UNAVAILABLE`；异常原文不得进入输出。适配器 reason
 code 保留时映射到生产者固定 reason-code 集合，未知字符串不进入输出。
 
+失败路径计数与计时：
+
+```text
+completed_observations = 适配器调用正常返回一个值的次数
+  （partial / unavailable / schema-invalid dict 均计入；抛普通异常不计入）
+stable_observation_count = 通过 normal admission 的观测中，
+  canonical JSON 与第一份通过 admission 的观测完全一致的数量
+first/last/actual 按 §8 timing 关系输出
+```
+
 ## 13. Output Schema
 
 所有普通返回路径包含：
@@ -267,6 +354,29 @@ code 保留时映射到生产者固定 reason-code 集合，未知字符串不�
 | last_observation_monotonic | float / null |
 | snapshot | dict / null |
 | warnings | list[str] |
+
+计数语义：
+
+```text
+completed_observations = 适配器调用正常返回一个值的次数
+  （partial / unavailable / schema-invalid dict 均计入；抛普通异常不计入）
+stable_observation_count = 通过 normal admission 的观测中，
+  canonical JSON 与第一份通过 admission 的观测完全一致的数量
+```
+
+示例：A/A/A → 3；A/B/A → 2；A/B/B → 1；A/A/B → 2。该字段不是连续相同前缀
+长度、最大相同分组数量或适配器调用次数。无论 stable count 为多少，三份
+canonical string 不完全一致 → `NOT_FINAL + SNAPSHOT_UNSTABLE`。
+
+计时输出遵循 §8 的 timing 关系：无 observation-start 时间 → first/last/actual
+全 null；一条 → first=last、actual=0.0；两条及以上 → actual=last-first。
+所有数值必须有限（非 bool / NaN / inf）。
+
+数值不变量：
+
+```text
+0 <= stable_observation_count <= completed_observations <= REQUIRED_OBSERVATIONS
+```
 
 成功时：
 
@@ -337,9 +447,14 @@ Blocker 6: 继续 PARTIALLY CLOSED
 - 已完成历史交易日（`requested_trade_date < Asia/Shanghai today`）
 - 适配器三次 normal 观测
 - 严格交易日期绑定
-- 字段完整性（admission + row/schema 校验）
-- 连续 4.4 秒稳定窗口（monotonic）
-- 内容完全一致（canonical 指纹）
+- 完整适配器字段集合 + 公共字段类型准入（缺字段/额外字段/类型错误拒绝）
+- 计数守恒（source == row_count + excluded）
+- 连续 4.4 秒稳定窗口：真实 observation 1→3 开始时间差 >= 4.4，
+  无 pre-loop 锚点，first/last/actual 关系正确
+- 内容完全一致：三份 canonical JSON string 一致为最终依据，
+  digest 仅辅助，hash 碰撞不能伪造 final
+- 序列化/时钟/sleep 普通异常全部失败关闭
+- 失败即停，completed/stable 计数语义明确且一致
 - 失败关闭（含时钟、sleep、来源、schema、不稳定）
 
 明确不包含：
@@ -383,9 +498,9 @@ Cookie、Token、Authorization、异常原文。最终快照只保留适配器�
 **CONDITIONAL GO**
 
 - T+1 final 生产者完整落地（Blocker 5 按 §16 范围关闭）
-- 三次观测 + 4.4 秒稳定窗口 + canonical 指纹一致 → final
+- 三次观测 + 真实 4.4 秒稳定窗口（无 pre-loop 锚点）+ canonical 内容一致 → final
 - 全部失败路径失败关闭，进程控制异常自然传播
-- 126 项聚焦测试、282 项适配器联合测试、2423 项 backend 离线测试全部通过
+- 164 项聚焦测试、320 项适配器联合测试、2461 项 backend 离线测试全部通过
 - 无新增运行时依赖，不修改既有模块
 
 剩余阻断：
