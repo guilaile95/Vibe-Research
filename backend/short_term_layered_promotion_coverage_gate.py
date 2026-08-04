@@ -510,21 +510,33 @@ def evaluate_layered_promotion_coverage(
 
     不计算、接收或透传任何晋级率。普通异常结构化失败；
     KeyboardInterrupt / SystemExit / GeneratorExit 自然传播。
+
+    普通异常回退返回固定 emergency invalid envelope（不调用任何可失败的
+    业务 helper，不包含异常文本）。
     """
     try:
         return _evaluate(previous_result, current_result)
     except Exception:
-        return _output(
-            previous_date=None,
-            current_date=None,
-            previous_state="invalid",
-            current_state="invalid",
-            status="invalid",
-            reason_codes=[
-                "PREVIOUS_INPUT_INVALID", "CURRENT_INPUT_INVALID",
+        # emergency fail-closed envelope：直接返回固定字面量，不得调用
+        # _output / _normalize_reason_codes / 任何可失败的业务 helper。
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "status": "invalid",
+            "reason_codes": [
+                "PREVIOUS_INPUT_INVALID",
+                "CURRENT_INPUT_INVALID",
                 "RATE_OUTPUT_SUPPRESSED",
             ],
-        )
+            "coverage_eligible": False,
+            "rates_policy": "must_be_null",
+            "layered_promotion_rates": None,
+            "previous_trade_date": None,
+            "current_trade_date": None,
+            "previous_state": "invalid",
+            "current_state": "invalid",
+            "implementation_allowed": False,
+            "warnings": [],
+        }
 
 
 def _evaluate(previous_result: Any, current_result: Any) -> dict:
