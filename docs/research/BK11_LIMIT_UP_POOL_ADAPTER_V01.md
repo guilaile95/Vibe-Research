@@ -132,9 +132,10 @@ def fetch_limit_up_pool_snapshot(requested_trade_date: str) -> dict:
 对 `trade_calendar._load_calendar()` 和 `_today_shanghai()` 的调用包裹在 `Exception` 边界内：
 
 - 普通异常 → `TRADING_CALENDAR_UNAVAILABLE`，不发起网络请求
-- `_load_calendar` 返回 None / 非容器类型（仅允许 tuple/list/set/frozenset）→ `TRADING_CALENDAR_UNAVAILABLE`
-- `_today_shanghai` 返回 None / 非 date 对象 → `TRADING_CALENDAR_UNAVAILABLE`
-- KeyboardInterrupt / SystemExit 自然传播
+- `_load_calendar` 返回 None / 非容器类型（仅允许 tuple/list/set/frozenset）/ 空容器 → `TRADING_CALENDAR_UNAVAILABLE`
+- sessions 每个成员必须为严格合法 `YYYY-MM-DD` 字符串（`type(member) is str` 且真实日历日期）；任一成员不可信 → 整体 `TRADING_CALENDAR_UNAVAILABLE`，不得忽略坏成员，也不得将不可信日历误报为 `NON_TRADING_DATE`
+- `_today_shanghai` 返回 None / 非精确 `datetime.date`（`type(today) is date`）→ `TRADING_CALENDAR_UNAVAILABLE`；`datetime` 是 `date` 的子类但含时间分量，naive/aware 均不接受，避免后续比较抛 TypeError
+- KeyboardInterrupt / SystemExit / GeneratorExit 自然传播
 
 内部只读调用，不修改交易日历模块。
 
@@ -147,7 +148,7 @@ def fetch_limit_up_pool_snapshot(requested_trade_date: str) -> dict:
 | `requests.Timeout`（含 Connect/Read） | REQUEST_TIMEOUT | false |
 | `requests.ConnectionError`（含 proxy/TLS） | TRANSPORT_ERROR | false |
 
-仅捕获 `Exception`，`KeyboardInterrupt` / `SystemExit` 自然传播。
+仅捕获 `Exception`，`KeyboardInterrupt` / `SystemExit` / `GeneratorExit` 自然传播。
 
 不得在结果中保存异常字符串。
 
@@ -218,12 +219,15 @@ data_array_present:      data.pool 实际为 list
 1. 收集所有存在且非 null 的候选值
 2. 对每个值严格解析为日历日期；非法日期（如 `2026-02-30` / `20260230`）标记为 invalid
 3. 若存在至少一个合法候选与 requested date 不同 → **mismatch** / unavailable / TRADE_DATE_MISMATCH
-4. 若所有合法候选均等于 requested date → **true**
-5. 若无合法候选（含仅有非法日期）→ **null** / partial + DATE_BINDING_UNVERIFIED
+4. 合法 mismatch 优先于非法候选：存在合法 mismatch 时，即使同时存在非法候选也按 mismatch 失败关闭
+5. 不存在合法 mismatch，但存在任意非法候选 → **null** / partial + DATE_BINDING_UNVERIFIED（匹配 + 非法不得返回 true）
+6. 全部存在的候选均合法且全部匹配 → **true**
+7. 无候选 → **null** / partial + DATE_BINDING_UNVERIFIED
 
 即使另一个字段匹配，只要存在合法 mismatch 也必须失败关闭。
 
 非法日期字段不得产生 mismatch（因无法证明日期不一致）。
+非法日期字段也不得被忽略：存在合法匹配 + 非法候选时，日期绑定无法验证，必须保持 null / partial。
 
 由于 Blocker 3 尚未关闭，`trade_date_match = null` 时不得伪造为 `true`。不得在本轮升级历史日期绑定证据。
 
@@ -393,7 +397,7 @@ DATE_BINDING_UNVERIFIED, INVALID_POOL_ROW, DUPLICATE_STOCK_CODE, UNEXPLAINED_EMP
 - 无效行（INVALID_POOL_ROW）
 - 重复代码（DUPLICATE_STOCK_CODE）
 - 未解释空（UNEXPLAINED_EMPTY）
-- 进程控制异常（KeyboardInterrupt / SystemExit 自然传播，不伪装）
+- 进程控制异常（KeyboardInterrupt / SystemExit / GeneratorExit 自然传播，不伪装）
 
 剩余：正向 legal-zero 证据依赖未来可信 final 快照生产者或明确来源证据。Blocker 6 完全关闭需要结合 Blocker 5 的后续实现重新评估。
 
@@ -412,7 +416,7 @@ universe 合同满足全部关闭条件：
 - 纯 universe 排除不制造 partial（日期已验证时为 normal）
 - 纯 universe 排除不产生 UNEXPLAINED_EMPTY
 - 测试真实断言 status / reason_codes / flags
-- 136 项聚焦测试全部通过
+- 156 项聚焦测试全部通过
 
 ## 18. Remaining Blockers
 
@@ -446,7 +450,7 @@ universe 合同满足全部关闭条件：
 
 - 适配器实现了完整的失败关闭状态区分（Blocker 6 部分关闭）
 - universe 合同完整落地（Blocker 7 关闭），含三类空结果正确区分
-- 136 项聚焦测试全部通过，2277 项 backend 离线测试全部通过
+- 156 项聚焦测试全部通过，2297 项 backend 离线测试全部通过
 - 无新增运行时依赖，不修改既有模块
 - 进程控制异常（KeyboardInterrupt / SystemExit）自然传播
 - malformed HTTP response 安全结构化返回

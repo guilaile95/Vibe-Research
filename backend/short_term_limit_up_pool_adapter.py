@@ -221,7 +221,9 @@ def _load_sessions_safe() -> tuple[Optional[Any], Optional[str]]:
     """安全加载 sessions。返回 ``(sessions, reason_code)``。
 
     reason_code 为 None 表示成功。
-    KeyboardInterrupt/SystemExit 自然传播。
+    KeyboardInterrupt/SystemExit/GeneratorExit 自然传播。
+    容器类型合法但任一成员不可信（非严格合法 YYYY-MM-DD 字符串）时，
+    整个交易日历视为不可用，不得忽略坏成员；空容器同样不可用。
     """
     try:
         sessions = trade_calendar._load_calendar()
@@ -231,6 +233,13 @@ def _load_sessions_safe() -> tuple[Optional[Any], Optional[str]]:
         return None, "TRADING_CALENDAR_UNAVAILABLE"
     if not isinstance(sessions, _VALID_SESSION_TYPES):
         return None, "TRADING_CALENDAR_UNAVAILABLE"
+    if not sessions:
+        return None, "TRADING_CALENDAR_UNAVAILABLE"
+    for item in sessions:
+        if type(item) is not str:
+            return None, "TRADING_CALENDAR_UNAVAILABLE"
+        if _strict_parse_date(item) is None:
+            return None, "TRADING_CALENDAR_UNAVAILABLE"
     return sessions, None
 
 
@@ -240,7 +249,9 @@ def _today_shanghai_safe() -> tuple[Optional[date], Optional[str]]:
         today = trade_calendar._today_shanghai()
     except Exception:
         return None, "TRADING_CALENDAR_UNAVAILABLE"
-    if not isinstance(today, date):
+    # datetime 是 date 的子类，但包含时间分量，与纯 date 比较可能抛 TypeError。
+    # 可信合同要求精确 datetime.date 类型，不接受任何子类。
+    if type(today) is not date:
         return None, "TRADING_CALENDAR_UNAVAILABLE"
     return today, None
 
@@ -300,16 +311,18 @@ def _evaluate_trade_date_match(
         else:
             parsed_dates.append(d)
 
-    if not parsed_dates:
+    req_date = _strict_parse_date(requested_trade_date)
+    if req_date is None:
         return None, False
 
-    req_date = _strict_parse_date(requested_trade_date)
-    has_match = any(d == req_date for d in parsed_dates)
     has_mismatch = any(d != req_date for d in parsed_dates)
-
     if has_mismatch:
+        # 合法 mismatch 优先于非法候选：即使同时存在非法候选也失败关闭
         return False, True
-    if has_match:
+    if has_invalid:
+        # 不存在合法 mismatch，但存在任意非法候选 → 绑定不可验证
+        return None, False
+    if parsed_dates and all(d == req_date for d in parsed_dates):
         return True, False
     return None, False
 

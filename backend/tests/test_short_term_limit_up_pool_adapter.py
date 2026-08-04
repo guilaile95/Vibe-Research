@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest import mock
 
@@ -538,6 +538,36 @@ class TestProcessControl:
         with pytest.raises(SystemExit):
             adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
 
+    def test_em_get_generator_exit(self, monkeypatch):
+        def raise_ge(*args, **kwargs):
+            raise GeneratorExit()
+        monkeypatch.setattr(astock, "em_get", raise_ge)
+        with pytest.raises(GeneratorExit):
+            adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+
+    def test_json_generator_exit(self, monkeypatch):
+        class R:
+            status_code = 200
+            def json(self):
+                raise GeneratorExit()
+        _patch_em_get(monkeypatch, lambda calls: R())
+        with pytest.raises(GeneratorExit):
+            adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+
+    def test_load_calendar_generator_exit(self, monkeypatch):
+        def raise_ge():
+            raise GeneratorExit()
+        monkeypatch.setattr(trade_calendar, "_load_calendar", raise_ge)
+        with pytest.raises(GeneratorExit):
+            adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+
+    def test_today_shanghai_generator_exit(self, monkeypatch):
+        def raise_ge():
+            raise GeneratorExit()
+        monkeypatch.setattr(trade_calendar, "_today_shanghai", raise_ge)
+        with pytest.raises(GeneratorExit):
+            adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+
 
 # ---------------------------------------------------------------------------
 # 6. Calendar dependency
@@ -591,6 +621,54 @@ class TestCalendarDependency:
         r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
         _assert_contract_shape(r)
         assert "TRADING_CALENDAR_UNAVAILABLE" in r["reason_codes"]
+        assert state["calls"] == 0
+
+    @pytest.mark.parametrize("bad_today", [
+        datetime(2026, 8, 4, 9, 30),
+        datetime(2026, 8, 4, 9, 30, tzinfo=timezone(timedelta(hours=8))),
+        object(),
+    ])
+    def test_today_datetime_subclass_rejected(self, monkeypatch, bad_today,
+                                              _reset_em_calls):
+        """datetime 是 date 子类，含时间分量，必须按不可信 today 拒绝。"""
+        state, fake = _reset_em_calls
+        monkeypatch.setattr(astock, "em_get", fake)
+        monkeypatch.setattr(trade_calendar, "_today_shanghai", lambda: bad_today)
+        r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        _assert_contract_shape(r)
+        assert r["status"] == "unavailable"
+        assert "TRADING_CALENDAR_UNAVAILABLE" in r["reason_codes"]
+        assert state["calls"] == 0
+
+    @pytest.mark.parametrize("bad_sessions", [
+        ["2026-07-30", 123],
+        ["2026-07-30", True],
+        ["2026-07-30", "bad-date"],
+        ["2026-07-30", "2026-02-30"],
+        [object()],
+        [datetime(2026, 7, 30)],
+    ])
+    def test_invalid_session_members(self, monkeypatch, bad_sessions,
+                                     _reset_em_calls):
+        """任一成员不可信 → 整体 TRADING_CALENDAR_UNAVAILABLE，不忽略坏成员。"""
+        state, fake = _reset_em_calls
+        monkeypatch.setattr(astock, "em_get", fake)
+        monkeypatch.setattr(trade_calendar, "_load_calendar", lambda: bad_sessions)
+        r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        _assert_contract_shape(r)
+        assert r["status"] == "unavailable"
+        assert r["reason_codes"] == ["TRADING_CALENDAR_UNAVAILABLE"]
+        assert "NON_TRADING_DATE" not in r["reason_codes"]
+        assert state["calls"] == 0
+
+    def test_empty_sessions(self, monkeypatch, _reset_em_calls):
+        state, fake = _reset_em_calls
+        monkeypatch.setattr(astock, "em_get", fake)
+        monkeypatch.setattr(trade_calendar, "_load_calendar", lambda: ())
+        r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        _assert_contract_shape(r)
+        assert r["status"] == "unavailable"
+        assert r["reason_codes"] == ["TRADING_CALENDAR_UNAVAILABLE"]
         assert state["calls"] == 0
 
 
@@ -729,7 +807,7 @@ class TestDateBinding:
         assert "TRADE_DATE_MISMATCH" in r["reason_codes"]
 
     def test_match_plus_invalid(self, monkeypatch):
-        """One matches, another is invalid → unverified (no mismatch)."""
+        """One matches, another is invalid → unverified (null), not true."""
         def resp(*args, **kwargs):
             return _fake_response(status_code=200, json_body={
                 "trade_date": GOOD_DATE_EM,
@@ -738,7 +816,51 @@ class TestDateBinding:
         _patch_em_get(monkeypatch, lambda calls: resp())
         r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
         _assert_contract_shape(r)
-        assert r["trade_date_match"] is True
+        assert r["trade_date_match"] is None
+        assert r["status"] == "partial"
+        assert r["reason_codes"] == ["DATE_BINDING_UNVERIFIED"]
+        assert r["coverage_warning"] is True
+        assert r["error_class"] == "DATE_BINDING_UNVERIFIED"
+
+    @pytest.mark.parametrize("payload_extra,data_extra", [
+        ({"trade_date": GOOD_DATE}, {"date": "2026-02-30"}),
+        ({"trade_date": GOOD_DATE_EM}, {"qdate": "20260230"}),
+        ({"trade_date": GOOD_DATE}, {"date": "not-a-date"}),
+        ({"trade_date": GOOD_DATE}, {"qdate": True}),
+        ({"trade_date": GOOD_DATE}, {"date": object()}),
+    ])
+    def test_match_plus_invalid_cases(self, monkeypatch, payload_extra,
+                                      data_extra):
+        """五类 match+invalid 全部必须绑定不可验证，不得接受匹配值。"""
+        def resp(*args, **kwargs):
+            data = {"pool": [{"c": "600000", "lbc": 1}]}
+            data.update(data_extra)
+            body = {"data": data}
+            body.update(payload_extra)
+            return _fake_response(status_code=200, json_body=body)
+        _patch_em_get(monkeypatch, lambda calls: resp())
+        r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        _assert_contract_shape(r)
+        assert r["trade_date_match"] is None
+        assert r["status"] == "partial"
+        assert r["reason_codes"] == ["DATE_BINDING_UNVERIFIED"]
+        assert r["coverage_warning"] is True
+        assert r["error_class"] == "DATE_BINDING_UNVERIFIED"
+
+    def test_legal_mismatch_plus_invalid(self, monkeypatch):
+        """合法 mismatch 优先于非法候选 → 仍按 mismatch 失败关闭。"""
+        def resp(*args, **kwargs):
+            return _fake_response(status_code=200, json_body={
+                "trade_date": GOOD_DATE_EM,
+                "data": {"date": "2026-07-29", "qdate": "2026-02-30",
+                         "pool": [{"c": "600000", "lbc": 1}]},
+            })
+        _patch_em_get(monkeypatch, lambda calls: resp())
+        r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        _assert_contract_shape(r)
+        assert r["trade_date_match"] is False
+        assert r["reason_codes"] == ["TRADE_DATE_MISMATCH"]
+        assert r["status"] == "unavailable"
 
     def test_only_invalid_dates(self, monkeypatch):
         def resp(*args, **kwargs):
