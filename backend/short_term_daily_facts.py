@@ -221,7 +221,8 @@ def _validate_nested_adapter(snapshot: Dict[str, Any], outer_date: str) -> bool:
     reason_codes = snapshot.get("reason_codes")
     if type(reason_codes) is not list or reason_codes != []:
         return False
-    if not _valid_utc_timestamp(snapshot.get("observed_at")):
+    observed_at = snapshot.get("observed_at")
+    if observed_at is None or not _valid_utc_timestamp(observed_at):
         return False
     http_status = snapshot.get("http_status")
     if http_status is not None and (
@@ -306,7 +307,8 @@ def _validate_producer(envelope: Any) -> Optional[Dict[str, Any]]:
     trade_date = envelope.get("requested_trade_date")
     if not _valid_trade_date(trade_date):
         return None
-    if not _valid_utc_timestamp(envelope.get("observed_at")):
+    observed_at = envelope.get("observed_at")
+    if observed_at is None or not _valid_utc_timestamp(observed_at):
         return None
     status = envelope.get("status")
     if status not in ("normal", "partial", "unavailable"):
