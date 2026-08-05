@@ -114,6 +114,16 @@ def _round4(value: float) -> float:
     return round(value, 4)
 
 
+def _as_int(value: Any) -> Optional[int]:
+    """严格 int -> 原值；否则（含 None 与垃圾非标量）-> None。"""
+    return value if _is_strict_int(value) else None
+
+
+def _as_bool(value: Any) -> Optional[bool]:
+    """严格 bool -> 原值；否则 -> None。"""
+    return value if type(value) is bool else None
+
+
 def _valid_trade_date(value: Any) -> bool:
     if type(value) is not str or _TRADE_DATE_RE.match(value) is None:
         return False
@@ -211,34 +221,49 @@ def _compute_ladder_delta(prev_section: Any, curr_section: Any) -> Dict[str, Any
             "curr_occupied_boards": None,
             "board_level_changes": None,
         }
-    prev_max = prev_metrics.get("max_boards")
-    curr_max = curr_metrics.get("max_boards")
-    prev_lianban = prev_metrics.get("lianban_count")
-    curr_lianban = curr_metrics.get("lianban_count")
+    prev_max = _as_int(prev_metrics.get("max_boards"))
+    curr_max = _as_int(curr_metrics.get("max_boards"))
+    prev_lianban = _as_int(prev_metrics.get("lianban_count"))
+    curr_lianban = _as_int(curr_metrics.get("lianban_count"))
     prev_ladder = prev_metrics.get("ladder")
     curr_ladder = curr_metrics.get("ladder")
-    prev_counts = {
-        item["boards"]: item["count"]
-        for item in prev_ladder
-        if type(item) is dict and _is_strict_int(item.get("boards"))
-        and _is_strict_int(item.get("count"))
-    } if type(prev_ladder) is list else {}
-    curr_counts = {
-        item["boards"]: item["count"]
-        for item in curr_ladder
-        if type(item) is dict and _is_strict_int(item.get("boards"))
-        and _is_strict_int(item.get("count"))
-    } if type(curr_ladder) is list else {}
-    board_levels = sorted(set(prev_counts) | set(curr_counts))
-    changes = [
-        {
-            "boards": level,
-            "prev_count": prev_counts.get(level, 0),
-            "curr_count": curr_counts.get(level, 0),
-            "delta": curr_counts.get(level, 0) - prev_counts.get(level, 0),
-        }
-        for level in board_levels
-    ]
+
+    def _parse_counts(raw: Any) -> Optional[Dict[int, int]]:
+        """ladder 列表 -> {boards: count}；非 list 或含非法项 -> None
+        （数据不可得，不得误报为空集合）。"""
+        if type(raw) is not list:
+            return None
+        counts: Dict[int, int] = {}
+        for item in raw:
+            if type(item) is not dict or set(item.keys()) != {"boards", "count"}:
+                return None
+            boards = item.get("boards")
+            count = item.get("count")
+            if not _is_strict_int(boards) or not _is_strict_int(count):
+                return None
+            counts[boards] = count
+        return counts
+
+    prev_counts = _parse_counts(prev_ladder)
+    curr_counts = _parse_counts(curr_ladder)
+    if prev_counts is not None and curr_counts is not None:
+        board_levels = sorted(set(prev_counts) | set(curr_counts))
+        changes = [
+            {
+                "boards": level,
+                "prev_count": prev_counts.get(level, 0),
+                "curr_count": curr_counts.get(level, 0),
+                "delta": curr_counts.get(level, 0) - prev_counts.get(level, 0),
+            }
+            for level in board_levels
+        ]
+        prev_occupied = sorted(prev_counts)
+        curr_occupied = sorted(curr_counts)
+    else:
+        # 任一侧数据不可得：不生成误导性“从无到有”变化
+        changes = None
+        prev_occupied = sorted(prev_counts) if prev_counts is not None else None
+        curr_occupied = sorted(curr_counts) if curr_counts is not None else None
     return {
         "prev_max_boards": prev_max,
         "curr_max_boards": curr_max,
@@ -246,8 +271,8 @@ def _compute_ladder_delta(prev_section: Any, curr_section: Any) -> Dict[str, Any
         "prev_lianban_count": prev_lianban,
         "curr_lianban_count": curr_lianban,
         "lianban_count_delta": _delta_or_null(prev_lianban, curr_lianban),
-        "prev_occupied_boards": sorted(prev_counts),
-        "curr_occupied_boards": sorted(curr_counts),
+        "prev_occupied_boards": prev_occupied,
+        "curr_occupied_boards": curr_occupied,
         "board_level_changes": changes,
     }
 
@@ -274,19 +299,22 @@ def _compute_gap_delta(prev_section: Any, curr_section: Any) -> Dict[str, Any]:
             "curr_is_continuous": None,
         }
 
-    def _as_int(value: Any) -> Optional[int]:
-        return value if _is_strict_int(value) else None
-
     prev_glc = _as_int(prev_metrics.get("gap_level_count"))
     curr_glc = _as_int(curr_metrics.get("gap_level_count"))
     prev_gsc = _as_int(prev_metrics.get("gap_segment_count"))
     curr_gsc = _as_int(curr_metrics.get("gap_segment_count"))
     prev_lgw = _as_int(prev_metrics.get("largest_gap_width"))
     curr_lgw = _as_int(curr_metrics.get("largest_gap_width"))
-    prev_fgb = prev_metrics.get("first_gap_board")
-    curr_fgb = curr_metrics.get("first_gap_board")
-    prev_cont = prev_metrics.get("is_continuous")
-    curr_cont = curr_metrics.get("is_continuous")
+    prev_fgb = (
+        prev_metrics.get("first_gap_board")
+        if prev_metrics.get("first_gap_board") is None
+        else _as_int(prev_metrics.get("first_gap_board")))
+    curr_fgb = (
+        curr_metrics.get("first_gap_board")
+        if curr_metrics.get("first_gap_board") is None
+        else _as_int(curr_metrics.get("first_gap_board")))
+    prev_cont = _as_bool(prev_metrics.get("is_continuous"))
+    curr_cont = _as_bool(curr_metrics.get("is_continuous"))
     return {
         "prev_gap_level_count": prev_glc,
         "curr_gap_level_count": curr_glc,
@@ -394,11 +422,10 @@ def _evaluate(previous: Any, current: Any) -> Dict[str, Any]:
     overall = _worst(all_statuses)
 
     codes: List[str] = []
-    if overall in ("unavailable", "invalid"):
-        if "unavailable" in statuses:
-            codes.append("SOURCE_UNAVAILABLE")
-        if "invalid" in statuses:
-            codes.append("ENVELOPE_CONTRACT_INVALID")
+    if "invalid" in statuses:
+        codes.append("ENVELOPE_CONTRACT_INVALID")
+    if "unavailable" in statuses:
+        codes.append("SOURCE_UNAVAILABLE")
     if "partial" in statuses:
         codes.append("SOURCE_PARTIAL")
     if any(s != "normal" for s in all_statuses):
