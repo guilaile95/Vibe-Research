@@ -892,3 +892,197 @@ class TestUpstreamJoint:
         _assert_suppressed(result, "unavailable", [
             "SOURCE_UNAVAILABLE", "UPSTREAM_LADDER_UNAVAILABLE",
             "GAP_OUTPUT_SUPPRESSED"])
+
+
+# ---------------------------------------------------------------------------
+# 12. 有界板级合同（P1）
+# ---------------------------------------------------------------------------
+
+class TestBoardBounds:
+    def test_max_boards_1001_invalid(self):
+        result = gap.compute_ladder_gap(
+            _envelope(metrics=_metrics(1001, 1, [{"boards": 1001, "count": 1}])))
+        _assert_invalid(result)
+
+    def test_max_boards_huge_integer_invalid(self):
+        result = gap.compute_ladder_gap(
+            _envelope(metrics=_metrics(
+                10 ** 30, 1, [{"boards": 10 ** 30, "count": 1}])))
+        _assert_invalid(result)
+
+    def test_huge_integer_does_not_enter_gap_helper(self, monkeypatch):
+        calls = {"n": 0}
+        original = gap._compute_gap_metrics
+
+        def wrapper(*args, **kwargs):
+            calls["n"] += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(gap, "_compute_gap_metrics", wrapper)
+        result = gap.compute_ladder_gap(
+            _envelope(metrics=_metrics(
+                10 ** 30, 1, [{"boards": 10 ** 30, "count": 1}])))
+        _assert_invalid(result)
+        assert calls["n"] == 0
+
+    def test_max_boards_1001_does_not_enter_gap_helper(self, monkeypatch):
+        calls = {"n": 0}
+        original = gap._compute_gap_metrics
+
+        def wrapper(*args, **kwargs):
+            calls["n"] += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(gap, "_compute_gap_metrics", wrapper)
+        result = gap.compute_ladder_gap(
+            _envelope(metrics=_metrics(1001, 1, [{"boards": 1001, "count": 1}])))
+        _assert_invalid(result)
+        assert calls["n"] == 0
+
+    @pytest.mark.parametrize("bad_boards", [1001, 10 ** 30])
+    def test_boards_over_limit_invalid(self, bad_boards):
+        result = gap.compute_ladder_gap(
+            _envelope(metrics=_metrics(2, 1, [{"boards": bad_boards, "count": 1}])))
+        _assert_invalid(result)
+
+    def test_max_boards_1000_boundary_valid(self):
+        metrics = _metrics(1000, 1, [{"boards": 1000, "count": 1}])
+        result = gap.compute_ladder_gap(_envelope(metrics=metrics))
+        assert result["status"] == "normal"
+        m = result["metrics"]
+        assert m["max_boards"] == 1000
+        assert m["occupied_boards"] == [1000]
+        assert m["missing_boards"] == list(range(2, 1000))
+        assert m["gap_segments"] == [
+            {"from_board": 2, "to_board": 999, "width": 998}]
+        assert m["gap_level_count"] == 998
+        assert m["gap_segment_count"] == 1
+        assert m["largest_gap_width"] == 998
+        assert m["first_gap_board"] == 2
+        assert m["is_continuous"] is False
+        _assert_invariant(result)
+
+    def test_ladder_length_over_999_invalid(self):
+        ladder = [{"boards": boards, "count": 1}
+                  for boards in range(2, 1002)]
+        assert len(ladder) == 1000
+        result = gap.compute_ladder_gap(
+            _envelope(metrics=_metrics(1001, 1000, ladder)))
+        _assert_invalid(result)
+
+
+# ---------------------------------------------------------------------------
+# 13. 时间戳前后空白（P2-1）
+# ---------------------------------------------------------------------------
+
+class TestTimestampWhitespace:
+    @pytest.mark.parametrize("bad", [
+        " 2026-07-31T15:10:00Z",
+        "2026-07-31T15:10:00Z ",
+        " 2026-07-31T15:10:00Z ",
+        "\t2026-07-31T15:10:00Z",
+        "2026-07-31T15:10:00Z\n",
+    ])
+    def test_fetched_at_whitespace_invalid(self, bad):
+        result = gap.compute_ladder_gap(_envelope(fetched_at=bad))
+        _assert_invalid(result)
+
+    @pytest.mark.parametrize("bad", [
+        " 2026-07-31T15:10:05Z",
+        "2026-07-31T15:10:05Z ",
+        " 2026-07-31T15:10:05Z ",
+        "\t2026-07-31T15:10:05Z",
+        "2026-07-31T15:10:05Z\n",
+    ])
+    def test_snapshot_at_whitespace_invalid(self, bad):
+        result = gap.compute_ladder_gap(_envelope(snapshot_at=bad))
+        _assert_invalid(result)
+
+    def test_whitespace_not_stripped_and_accepted(self):
+        # 空白值不得被 strip 后放行
+        result = gap.compute_ladder_gap(
+            _envelope(fetched_at=" 2026-07-31T15:10:00Z"))
+        assert result["status"] == "invalid"
+
+    def test_lowercase_z_uppercase_formats_accepted(self):
+        # 仅时区指示符小写 z 且格式合法时应可接受
+        result = gap.compute_ladder_gap(_envelope(
+            fetched_at="2026-07-31T15:10:00z",
+            snapshot_at="2026-07-31T15:10:05Z"))
+        assert result["status"] == "normal"
+
+
+# ---------------------------------------------------------------------------
+# 14. 模块全局污染与跨调用隔离（P2-2）
+# ---------------------------------------------------------------------------
+
+class TestGlobalPollution:
+    STANDARD_LIMITATIONS = [
+        "derived from an already-computed ladder envelope",
+        "gap domain starts at board level 2",
+        "does not validate upstream consecutive-limit-up semantics",
+        "does not compute layered promotion rates",
+    ]
+
+    @pytest.fixture
+    def polluted(self, monkeypatch):
+        monkeypatch.setattr(
+            gap, "_METRICS_NULL", {"max_boards": 999}, raising=False)
+        monkeypatch.setattr(
+            gap, "_LIMITATIONS", ("hacked",), raising=False)
+
+    def _assert_standard_limitations(self, result):
+        assert result["limitations"] == self.STANDARD_LIMITATIONS
+
+    def test_normal_immune(self, polluted):
+        result = gap.compute_ladder_gap(_envelope())
+        self._assert_standard_limitations(result)
+        assert result["status"] == "normal"
+
+    def test_partial_immune(self, polluted):
+        result = gap.compute_ladder_gap(
+            _envelope(status="partial", reason_codes=["SOURCE_PARTIAL"]))
+        self._assert_standard_limitations(result)
+        assert result["status"] == "partial"
+        assert all(value is None for value in result["metrics"].values())
+
+    def test_unavailable_immune(self, polluted):
+        result = gap.compute_ladder_gap(
+            _envelope(status="unavailable", reason_codes=["SOURCE_UNAVAILABLE"]))
+        self._assert_standard_limitations(result)
+        assert result["status"] == "unavailable"
+        assert all(value is None for value in result["metrics"].values())
+
+    def test_invalid_immune(self, polluted):
+        result = gap.compute_ladder_gap(_envelope(metrics=_metrics(1001, 1, [
+            {"boards": 1001, "count": 1}])))
+        self._assert_standard_limitations(result)
+        assert result["status"] == "invalid"
+        assert all(value is None for value in result["metrics"].values())
+
+    def test_emergency_immune(self, polluted, monkeypatch):
+        def raiser(*args, **kwargs):
+            raise RuntimeError("boom")
+        monkeypatch.setattr(gap, "_validate_metrics", raiser)
+        result = gap.compute_ladder_gap(_envelope())
+        self._assert_standard_limitations(result)
+        assert result["status"] == "invalid"
+        assert all(value is None for value in result["metrics"].values())
+
+    def test_cross_call_isolation(self):
+        first = gap.compute_ladder_gap(_envelope())
+        second = gap.compute_ladder_gap(_envelope())
+        first["limitations"].append("mutated")
+        first["metrics"]["occupied_boards"] = [999]
+        assert second["limitations"] == self.STANDARD_LIMITATIONS
+        assert second["metrics"]["occupied_boards"] == [2]
+
+    def test_failure_cross_call_isolation(self):
+        first = gap.compute_ladder_gap(
+            _envelope(status="partial", reason_codes=["SOURCE_PARTIAL"]))
+        second = gap.compute_ladder_gap(
+            _envelope(status="partial", reason_codes=["SOURCE_PARTIAL"]))
+        first["limitations"].append("mutated")
+        first["metrics"]["max_boards"] = 5
+        assert second["limitations"] == self.STANDARD_LIMITATIONS
+        assert second["metrics"]["max_boards"] is None
