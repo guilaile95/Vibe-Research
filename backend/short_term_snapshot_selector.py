@@ -4,10 +4,11 @@
 {trade_date, session, schema_version, stored_at}），为每个 trade_date
 确定性选择每日权威快照：
 
-1. session 优先：final（时间序最高）优先
-2. 同日期多会话：按会话时间序取最高
-3. 同日期同会话多版本：取 stored_at 最新
-4. 全部相等：取排序后的首条（确定性）
+1. final 硬优先（任何非 final 会话都不能胜过 final）
+2. 无 final 时按会话时间序取最高（unavailable 为最高非 final 状态）
+3. 同优先级同会话多版本：取 stored_at 最新
+4. 仍相同：取 schema_version 字典序较大者（全序决胜）
+5. 全部相等：取排序后的首条（确定性）
 
 服务 Daily Review 历史区块与页面接入前的基础模块。纯计算，不读取
 存储、不依赖 live 数据。
@@ -85,18 +86,39 @@ def _validate_row(row: Any) -> Optional[Dict[str, Any]]:
 
 
 def _sort_key(row: Dict[str, Any]) -> tuple:
-    # (trade_date, session_rank, stored_at) 确定性排序
-    return (row["trade_date"], row["session_rank"], row["stored_at"])
+    # 确定性全序：(trade_date, 选择优先级, session_rank, stored_at,
+    # schema_version)；输入顺序不影响结果
+    return (
+        row["trade_date"],
+        _selection_priority(row),
+        row["session_rank"],
+        row["stored_at"],
+        row["schema_version"],
+    )
+
+
+def _selection_priority(row: Dict[str, Any]) -> int:
+    # final 硬优先（任何非 final 会话都不能胜过 final）
+    return 1 if row["session"] == "final" else 0
 
 
 def _select_per_date(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     rows = sorted(rows, key=_sort_key)
     best = rows[0]
     for candidate in rows[1:]:
-        if candidate["session_rank"] > best["session_rank"]:
-            best = candidate
-        elif candidate["session_rank"] == best["session_rank"] \
-                and candidate["stored_at"] > best["stored_at"]:
+        candidate_key = (
+            _selection_priority(candidate),
+            candidate["session_rank"],
+            candidate["stored_at"],
+            candidate["schema_version"],
+        )
+        best_key = (
+            _selection_priority(best),
+            best["session_rank"],
+            best["stored_at"],
+            best["schema_version"],
+        )
+        if candidate_key > best_key:
             best = candidate
     return best
 
