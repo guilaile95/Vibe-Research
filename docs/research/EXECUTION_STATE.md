@@ -4,14 +4,14 @@
 
 | 字段 | 值 |
 |------|----|
-| stage | bk11-slice-3b-fact-compare（日事实历史比较） |
+| stage | bk11-slice-3c-fact-summary（多日事实摘要） |
 | status | REVIEW_PENDING |
-| branch | feat/bk11-fact-compare-v0.1 |
-| base | 1bfafeacae4cddfa76c97f8e448905b8e2b9f286（3a accepted head） |
+| branch | feat/bk11-fact-summary-v0.1 |
+| base | 0c4a2763b36210ea9d14d8dc0c7ae1fc6d2ab254（3b accepted head） |
 | candidate head | 当前分支 HEAD（含本状态文件提交；推送后以 `git rev-parse` 为准） |
 | accepted head | —（待独立审查 APPROVED） |
-| changed files | backend/short_term_fact_compare.py; backend/tests/test_short_term_fact_compare.py; docs/research/BK11_FACT_COMPARE_V01.md; docs/research/EXECUTION_STATE.md |
-| tests | focused 68 / joint 155 / backend offline 3183（11 deselected, 1 warning）/ independent 8249（seed 20260806） |
+| changed files | backend/short_term_fact_summary.py; backend/tests/test_short_term_fact_summary.py; docs/research/BK11_FACT_SUMMARY_V01.md; docs/research/EXECUTION_STATE.md |
+| tests | focused 56 / joint 211 / backend offline 3239（11 deselected, 1 warning）/ independent 445（seed 20260806） |
 | reviewer verdict | PENDING |
 | remaining findings | — |
 | Blocker 2 | OPEN |
@@ -22,6 +22,11 @@
 
 ## 历史阶段
 
+- bk11-slice-3b-fact-compare：branch feat/bk11-fact-compare-v0.1，base
+  1bfafeacae4cddfa76c97f8e448905b8e2b9f286（3a accepted head），
+  accepted head 0c4a2763b36210ea9d14d8dc0c7ae1fc6d2ab254（独立复审
+  APPROVED，P0=P1=P2=0；首轮 CHANGES REQUIRED P2=3：reason 顺序/
+  引用泄漏/partial 形状，已修正并复审通过）。
 - bk11-slice-3a-fact-store：branch feat/bk11-fact-store-v0.1，base
   0d45ca02f7d7e4cc0e81580d478065cf04caf529（2K accepted head），
   accepted head 1bfafeacae4cddfa76c97f8e448905b8e2b9f286（独立审查
