@@ -59,6 +59,18 @@ _ALLOWED_STATUSES = frozenset({
     "invalid",
 })
 
+# 会话时间序（与字典序不同；排序按此时间序比较）
+_SESSION_ORDER = {
+    "pre_open": 0,
+    "call_auction": 1,
+    "morning_session": 2,
+    "midday_break": 3,
+    "afternoon_session": 4,
+    "close_pending": 5,
+    "final": 6,
+    "unavailable": 7,
+}
+
 _ENVELOPE_FIELDS = frozenset({
     "schema_version",
     "trade_date",
@@ -192,7 +204,10 @@ def _collect_fact_stats(
     value = facts.get(field)
     if value is None:
         return
-    if _is_strict_int(value):
+    if bucket["is_int"]:
+        # int 字段只接受严格 int；float/bool 等类型非法，跳过而非截断
+        if not _is_strict_int(value):
+            return
         _stats_add(bucket, float(value))
     elif _is_finite_number(value):
         _stats_add(bucket, float(value))
@@ -356,7 +371,7 @@ def _evaluate(envelopes: Any) -> Dict[str, Any]:
         item = _validate_envelope(envelope)
         if item is None:
             return _invalid_envelope("ENVELOPE_CONTRACT_INVALID")
-        key = (item["trade_date"], item["session"])
+        key = (item["trade_date"], _SESSION_ORDER[item["session"]])
         if key in seen:
             return _invalid_envelope("DUPLICATE_SNAPSHOT_INVALID")
         seen.add(key)
