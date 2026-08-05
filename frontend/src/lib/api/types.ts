@@ -1642,3 +1642,72 @@ export interface AttributionSnapshotDetailResult {
   snapshot: AttributionSnapshotSummary & { payload: AttributionResult };
   positions: AttributionPosition[];
 }
+
+// ---------------------------------------------------------------------------
+// BK-11 短线市场历史（只读查询）
+// ---------------------------------------------------------------------------
+
+export type Bk11HistoryStatus =
+  | "empty"
+  | "normal"
+  | "partial"
+  | "unavailable"
+  | "error";
+
+export interface Bk11HistoryWindow {
+  requested: number;
+  snapshot_count: number;
+}
+
+export interface Bk11HistorySnapshotMeta {
+  trade_date: string;
+  session: string;
+  schema_version: string;
+  stored_at: string;
+}
+
+export interface Bk11FactSection {
+  schema_version?: string;
+  status?: string;
+  [key: string]: unknown;
+}
+
+export interface Bk11DailyFactsSections {
+  facts: Bk11FactSection | null;
+  ladder: Bk11FactSection | null;
+  gap: Bk11FactSection | null;
+}
+
+export interface Bk11DailyFactsEnvelope {
+  schema_version: string;
+  trade_date: string;
+  session: string;
+  is_final: boolean;
+  source_ids: string[];
+  fetched_at: string | null;
+  snapshot_at: string | null;
+  status: "normal" | "partial" | "unavailable" | "invalid";
+  reason_codes: string[];
+  warnings: string[];
+  limitations: string[];
+  source_schema_version: string | null;
+  source_status: string | null;
+  source_reason_codes: string[];
+  sections: Bk11DailyFactsSections;
+}
+
+export interface Bk11HistoryEnvelope {
+  schema_version: string;
+  status: Bk11HistoryStatus;
+  window: Bk11HistoryWindow;
+  trade_date: string | null;
+  data_time: string | null;
+  snapshots: Bk11HistorySnapshotMeta[];
+  latest: Bk11DailyFactsEnvelope | null;
+  delta: Record<string, unknown> | null;
+  summary: Record<string, unknown> | null;
+  digest: Record<string, unknown> | null;
+  reason_codes: string[];
+  warnings: string[];
+  limitations: string[];
+}

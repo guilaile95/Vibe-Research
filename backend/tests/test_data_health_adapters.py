@@ -626,3 +626,121 @@ def test_real_evidence_coverage_increments(data_env):
     )
     assert rec["status"] == "normal"
     assert rec["coverage_current"] >= 1, "coverage_current must reflect real evidence"
+
+
+# ---------------------------------------------------------------------------
+# bk11_history
+# ---------------------------------------------------------------------------
+
+
+def _bk11_envelope(trade_date="2026-07-30", status="normal"):
+    return {
+        "schema_version": "short-term-daily-facts-v0.1",
+        "trade_date": trade_date,
+        "session": "final",
+        "is_final": True,
+        "source_ids": ["eastmoney_getTopicZTPool"],
+        "fetched_at": f"{trade_date}T15:05:00.000000Z",
+        "snapshot_at": f"{trade_date}T15:10:00.000000Z",
+        "status": status,
+        "reason_codes": [],
+        "warnings": [],
+        "limitations": ["fixture"],
+        "source_schema_version": "short-term-limit-up-final-snapshot-v0.1",
+        "source_status": "normal",
+        "source_reason_codes": [],
+        "sections": {
+            "facts": {"schema_version": "short-term-market-facts-v0.1",
+                      "status": "normal"},
+            "ladder": {"schema_version": "short-term-limit-up-ladder-v0.1",
+                       "status": "normal"},
+            "gap": {"schema_version": "short-term-ladder-gap-v0.1",
+                    "status": "normal"},
+        },
+    }
+
+
+def test_bk11_history_not_initialized(data_env):
+    import short_term_fact_store as st_store
+    assert not st_store.resolve_db_path().exists()
+    rec = adapters.Bk11HistoryAdapter().read(
+        adapters.HealthReadContext(now_utc=datetime.now(timezone.utc))
+    )
+    assert rec["status"] == "unavailable"
+    assert rec["last_error_code"] == "SOURCE_NOT_INITIALIZED"
+    assert rec["detail_path"] == "/daily-review"
+    # 只读：不得创建数据库文件
+    assert not st_store.resolve_db_path().exists()
+
+
+def test_bk11_history_normal(data_env):
+    import short_term_fact_store as st_store
+    st_store.save_daily_facts(
+        _bk11_envelope(trade_date="2026-07-29"), db_path=st_store.resolve_db_path())
+    st_store.save_daily_facts(
+        _bk11_envelope(trade_date="2026-07-30"), db_path=st_store.resolve_db_path())
+    rec = adapters.Bk11HistoryAdapter().read(
+        adapters.HealthReadContext(now_utc=datetime.now(timezone.utc))
+    )
+    assert rec["status"] == "normal"
+    assert rec["data_trade_date"] == "2026-07-30"
+    assert rec["observed_at"] == "2026-07-30T15:10:00.000000Z"
+    assert rec["last_success_at"] == "2026-07-30T15:10:00.000000Z"
+    assert rec["last_error_code"] is None
+    assert rec["is_stale"] is False
+
+
+def test_bk11_history_partial(data_env):
+    import short_term_fact_store as st_store
+    st_store.save_daily_facts(
+        _bk11_envelope(trade_date="2026-07-30", status="partial"),
+        db_path=st_store.resolve_db_path())
+    rec = adapters.Bk11HistoryAdapter().read(
+        adapters.HealthReadContext(now_utc=datetime.now(timezone.utc))
+    )
+    assert rec["status"] == "partial"
+    assert rec["last_error_code"] == "SOURCE_PARTIAL"
+    assert rec["last_success_at"] == "2026-07-30T15:10:00.000000Z"
+
+
+def test_bk11_history_unavailable(data_env):
+    import short_term_fact_store as st_store
+    st_store.save_daily_facts(
+        _bk11_envelope(trade_date="2026-07-30", status="unavailable"),
+        db_path=st_store.resolve_db_path())
+    rec = adapters.Bk11HistoryAdapter().read(
+        adapters.HealthReadContext(now_utc=datetime.now(timezone.utc))
+    )
+    assert rec["status"] == "unavailable"
+    assert rec["last_error_code"] == "SOURCE_UNAVAILABLE"
+    assert rec["last_success_at"] is None
+
+
+def test_bk11_history_corrupted(data_env):
+    import short_term_fact_store as st_store
+    db = st_store.resolve_db_path()
+    st_store.save_daily_facts(_bk11_envelope(), db_path=db)
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "UPDATE fact_snapshots SET envelope_json = ?",
+            ("{broken",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    rec = adapters.Bk11HistoryAdapter().read(
+        adapters.HealthReadContext(now_utc=datetime.now(timezone.utc))
+    )
+    assert rec["status"] == "unavailable"
+    assert rec["last_error_code"] == "SOURCE_CORRUPTED"
+
+
+def test_bk11_history_empty_db_without_rows(data_env):
+    import short_term_fact_store as st_store
+    st_store.init_db(st_store.resolve_db_path())
+    rec = adapters.Bk11HistoryAdapter().read(
+        adapters.HealthReadContext(now_utc=datetime.now(timezone.utc))
+    )
+    assert rec["status"] == "unavailable"
+    assert rec["last_error_code"] == "SOURCE_NOT_INITIALIZED"

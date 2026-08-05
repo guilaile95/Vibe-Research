@@ -569,6 +569,85 @@ class TechnicalIndicatorsAdapter(EventSourceAdapter):
 
 
 # ---------------------------------------------------------------------------
+# bk11_history
+# ---------------------------------------------------------------------------
+
+
+class Bk11HistoryAdapter:
+    """BK-11 短线市场历史存储与读取能力（内部 derived source）。
+
+    直接只读检查 short_term_fact_store；不表示任何外部数据供应商。
+    不写文件、不初始化 schema、不触发业务刷新、不使用系统时间伪造新鲜度。
+    """
+
+    source_id = "bk11_history"
+    module = "BK-11 短线历史"
+    display_name = "BK-11 短线历史"
+
+    def read(self, context: HealthReadContext) -> svc.DataHealthRecord:
+        m = _meta(self.source_id)
+        import short_term_fact_store as store
+
+        path = store.resolve_db_path()
+        if not path.exists():
+            return svc.not_initialized_record(
+                m["source_id"], m["module"], m["display_name"],
+                detail_path="/daily-review",
+            )
+
+        import bk11_history_service as service
+
+        result = service.query_history(days=1)
+        status = result["status"]
+        if status == "error":
+            return svc.unavailable_record(
+                m["source_id"], m["module"], m["display_name"],
+                "SOURCE_CORRUPTED",
+                detail_path="/daily-review",
+            )
+        if status == "empty":
+            return svc.not_initialized_record(
+                m["source_id"], m["module"], m["display_name"],
+                detail_path="/daily-review",
+            )
+
+        latest = result["latest"] or {}
+        observed_dt = svc.parse_flexible_time(
+            result.get("data_time"), naive_as="utc",
+        )
+        observed_at = svc.format_utc(observed_dt) if observed_dt else None
+        error_code = None
+        if status == "partial":
+            error_code = "SOURCE_PARTIAL"
+        elif status == "unavailable":
+            error_code = "SOURCE_UNAVAILABLE"
+
+        return svc.make_record(
+            source_id=m["source_id"],
+            module=m["module"],
+            display_name=m["display_name"],
+            status=status,  # type: ignore[arg-type]
+            is_stale=False,
+            observed_at=observed_at,
+            last_success_at=(
+                observed_at if status in ("normal", "partial") else None
+            ),
+            data_trade_date=latest.get("trade_date") or result.get("trade_date"),
+            data_cutoff=None,
+            stale_after_seconds=None,
+            is_cached=None,
+            is_degraded=None,
+            coverage_current=None,
+            coverage_expected=None,
+            last_error_code=error_code,
+            last_error_at=None,
+            blocks_advice=False,
+            block_reason=None,
+            detail_path="/daily-review",
+        )
+
+
+# ---------------------------------------------------------------------------
 # portfolio_advice_gate
 # ---------------------------------------------------------------------------
 
@@ -1086,6 +1165,7 @@ def build_adapters() -> list[DataHealthAdapter]:
         NorthboundCapitalFlowAdapter(),
         TechnicalIndicatorsAdapter(),
         TopRiskAnalysisAdapter(),
+        Bk11HistoryAdapter(),
     ]
 
 

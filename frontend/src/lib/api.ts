@@ -97,6 +97,7 @@ import type {
   AttributionSnapshotSummary,
   AttributionSnapshotListResult,
   AttributionSnapshotDetailResult,
+  Bk11HistoryEnvelope,
 } from "./api/types.ts";
 
 
@@ -487,6 +488,12 @@ export const api = {
   },
   marketBreadth: () => get<TimedComponentEnvelope<MarketBreadthData>>("/market/breadth"),
   marketNorthbound: () => get<NorthboundCapitalFlow>("/market/northbound"),
+  /** BK-11 短线市场历史（只读；有界窗口，默认最近 5 个交易日） */
+  bk11History: (days = 5, signal?: AbortSignal) =>
+    get<Bk11HistoryEnvelope>(
+      `/market/bk11-history?days=${days}`,
+      signal ? { signal } : undefined,
+    ),
   /** 顶部风险分析（影子模式，第一版）：按股票代码分析，signal 恒 unknown、不参与最终结论。 */
   topRisk: (code: string, days = 120) =>
     get<TopRiskAnalysis>(
