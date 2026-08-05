@@ -4,14 +4,14 @@
 
 | 字段 | 值 |
 |------|----|
-| stage | bk11-slice-2j-correction（有界输入/时间戳/固定失败输出） |
+| stage | bk11-slice-2k-daily-facts（日事实组合层） |
 | status | REVIEW_PENDING |
-| branch | feat/bk11-ladder-gap-v0.1 |
-| base | 226a40005edf97e74f44acdc7cc5408b5162bdfa |
+| branch | feat/bk11-daily-facts-v0.1 |
+| base | 414de9d90711d0419b1e52216e943afbb9cad219（2J accepted head） |
 | candidate head | 当前分支 HEAD（含本状态文件提交；推送后以 `git rev-parse` 为准） |
 | accepted head | —（待独立审查 APPROVED） |
-| changed files | backend/short_term_ladder_gap.py; backend/tests/test_short_term_ladder_gap.py; docs/research/BK11_LADDER_GAP_V01.md; docs/research/EXECUTION_STATE.md |
-| tests | focused 182 / joint 272 / backend offline 2992（11 deselected, 1 warning）/ independent 8104（seed 20260805） |
+| changed files | backend/short_term_daily_facts.py; backend/tests/test_short_term_daily_facts.py; docs/research/BK11_DAILY_FACTS_V01.md; docs/research/EXECUTION_STATE.md |
+| tests | focused 83 / joint 516 / backend offline 3075（11 deselected, 1 warning）/ independent 1855（seed 20260805） |
 | reviewer verdict | PENDING |
 | remaining findings | — |
 | Blocker 2 | OPEN |
@@ -22,4 +22,7 @@
 
 ## 历史阶段
 
-- 无（本文件为此前缺失的执行状态记录的起点；上一阶段交付内容以 Git 提交为准）。
+- bk11-slice-2j-correction：branch feat/bk11-ladder-gap-v0.1，base
+  226a40005edf97e74f44acdc7cc5408b5162bdfa，accepted head
+  414de9d90711d0419b1e52216e943afbb9cad219（独立审查 APPROVED，
+  P0=P1=P2=0）。
