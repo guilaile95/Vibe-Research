@@ -57,15 +57,18 @@ stored_at: 非空字符串
 每个 trade_date 独立选择：
 
 ```text
-1. session 优先：final（时间序最高）优先
-2. 同日期多会话：按会话时间序取最高
+1. final 硬优先（任何非 final 会话都不能胜过 final）
+2. 无 final 时按会话时间序取最高
    pre_open < call_auction < morning_session < midday_break <
    afternoon_session < close_pending < final < unavailable
-3. 同日期同会话多版本：取 stored_at 最新（字符串比较）
-4. 全部相等：取排序后的首条（确定性）
+   （unavailable 为最高非 final 状态）
+3. 同优先级同会话多版本：取 stored_at 最新（字符串比较）
+4. 仍相同：取 schema_version 字典序较大者（全序决胜键）
+5. 全部相等：取排序后的首条（确定性）
 ```
 
-输入顺序不影响结果（模块内部先确定性排序）。
+输入顺序不影响结果（模块内部按确定性全序
+(trade_date, 优先级, session_rank, stored_at, schema_version) 排序）。
 
 ## 5. Output Schema
 

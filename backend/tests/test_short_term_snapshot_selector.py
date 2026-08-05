@@ -88,6 +88,23 @@ class TestSelection:
         result = selector.select_daily_snapshots(rows)
         assert result["selection"][0]["session"] == "final"
 
+    def test_final_beats_unavailable(self):
+        # final 硬优先：unavailable 是最高非 final 状态，但不能胜过 final
+        rows = [
+            _row(session="unavailable", stored_at="2026-08-05T11:00:00.000000Z"),
+            _row(session="final", stored_at="2026-08-05T09:00:00.000000Z"),
+        ]
+        result = selector.select_daily_snapshots(rows)
+        assert result["selection"][0]["session"] == "final"
+
+    def test_unavailable_wins_without_final(self):
+        rows = [
+            _row(session="close_pending"),
+            _row(session="unavailable"),
+        ]
+        result = selector.select_daily_snapshots(rows)
+        assert result["selection"][0]["session"] == "unavailable"
+
     def test_session_time_order_when_no_final(self):
         rows = [
             _row(session="midday_break"),
@@ -133,6 +150,19 @@ class TestSelection:
         result = selector.select_daily_snapshots(rows)
         assert len(result["selection"]) == 1
         assert result["selection"][0]["session"] == "final"
+
+    def test_schema_only_tie_permutation_consistent(self):
+        # 同 (date, session, stored_at) 仅 schema_version 不同：
+        # 输入顺序不得影响结果（全序决胜键）
+        rows = [
+            _row(schema_version="short-term-daily-facts-v0.1"),
+            _row(schema_version="short-term-daily-facts-v0.2"),
+        ]
+        first = selector.select_daily_snapshots(rows)
+        second = selector.select_daily_snapshots(list(reversed(rows)))
+        assert first["selection"] == second["selection"]
+        assert first["selection"][0]["schema_version"] == \
+            "short-term-daily-facts-v0.2"
 
 
 # ---------------------------------------------------------------------------
