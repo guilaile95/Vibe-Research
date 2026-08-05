@@ -204,6 +204,18 @@ class TestStats:
         assert up == {"min": 0.6, "max": 0.6, "avg": 0.6, "count": 1}
         assert result["stats"]["facts"]["limit_up_count"]["count"] == 2
 
+    def test_float_in_int_field_skipped(self):
+        # int 字段只接受严格 int；float 类型非法，跳过而非截断
+        window = [
+            _envelope("2026-07-28", facts=_facts(limit_up_count=3.5),
+                      ladder=_ladder(), gap=_gap()),
+            _envelope("2026-07-29", facts=_facts(limit_up_count=8),
+                      ladder=_ladder(), gap=_gap()),
+        ]
+        result = summary.compute_fact_summary(window)
+        lu = result["stats"]["facts"]["limit_up_count"]
+        assert lu == {"min": 8, "max": 8, "avg": 8.0, "count": 1}
+
     def test_missing_ladder_gap_sections(self):
         window = [
             _envelope("2026-07-28", ladder=None, gap=None),
@@ -292,6 +304,34 @@ class TestStatusAndWindow:
         result = summary.compute_fact_summary(window)
         assert result["status"] == "normal"
         assert result["window"]["count"] == 3
+
+    def test_session_time_order_accepted(self):
+        # 会话时间序：morning_session < midday_break（字典序相反）
+        window = [
+            _envelope("2026-07-28", session="morning_session"),
+            _envelope("2026-07-28", session="midday_break"),
+        ]
+        result = summary.compute_fact_summary(window)
+        assert result["status"] == "normal"
+
+    def test_session_reverse_time_order_invalid(self):
+        window = [
+            _envelope("2026-07-28", session="midday_break"),
+            _envelope("2026-07-28", session="morning_session"),
+        ]
+        result = summary.compute_fact_summary(window)
+        _assert_invalid(result, reason_code="DATE_ORDER_INVALID")
+
+    def test_mixed_partial_unavailable_codes(self):
+        window = [
+            _envelope("2026-07-28", status="partial"),
+            _envelope("2026-07-29", status="unavailable"),
+            _envelope("2026-07-30"),
+        ]
+        result = summary.compute_fact_summary(window)
+        assert result["status"] == "unavailable"
+        assert result["reason_codes"] == [
+            "SOURCE_UNAVAILABLE", "SOURCE_PARTIAL", "OUTPUT_SUPPRESSED"]
 
     def test_unsorted_invalid(self):
         result = summary.compute_fact_summary([

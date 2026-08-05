@@ -50,7 +50,10 @@ schema_version == "short-term-daily-facts-v0.1"
 type(envelopes) is list，非空
 每项 envelope 形状校验（15 字段 / schema / 真实日期 / 8 会话 /
   4 状态 / is_final / source_ids / sections）
-按 (trade_date, session) 严格升序（字典序，与时间序一致）
+按 (trade_date, 会话时间序) 严格升序；会话时间序为：
+  pre_open < call_auction < morning_session < midday_break <
+  afternoon_session < close_pending < final < unavailable
+  （该时间序与字典序不同；调用方须按此规则传入）
 (trade_date, session) 无重复
 ```
 
@@ -76,6 +79,7 @@ partial / unavailable / invalid 仅计入 status_distribution
 ```text
 int 字段: limit_up_count, advance_count
   -> min / max 为 int，avg = round4(sum/count)
+  -> 只接受严格 int；float/bool 等类型非法，跳过而非截断
 float 字段: failed_board_rate, seal_rate, up_ratio
   -> min / max / avg 均 round4
 每字段 count = 贡献天数；字段值为 None/非法 -> 跳过
@@ -147,6 +151,8 @@ OUTPUT_SUPPRESSED
 全部 normal           -> status=normal, reason_codes=[]
 含 partial（无 unavailable）-> partial, [SOURCE_PARTIAL, OUTPUT_SUPPRESSED]
 含 unavailable         -> unavailable, [SOURCE_UNAVAILABLE, OUTPUT_SUPPRESSED]
+混合 partial + unavailable -> unavailable,
+  [SOURCE_UNAVAILABLE, SOURCE_PARTIAL, OUTPUT_SUPPRESSED]
 含 invalid 状态 envelope -> invalid, [ENVELOPE_CONTRACT_INVALID,
   OUTPUT_SUPPRESSED]
 ```
