@@ -4,14 +4,14 @@
 
 | 字段 | 值 |
 |------|----|
-| stage | bk11-slice-3e-snapshot-selector（每日权威快照选择） |
+| stage | bk11-integration-pure-compute（七阶段纯计算链统一集成） |
 | status | REVIEW_PENDING |
-| branch | feat/bk11-snapshot-selector-v0.1 |
-| base | 56ea49b186ed9e3387e3c0c6fb38d6bffbdf0d82（3d accepted head） |
+| branch | integration/bk11-pure-compute-v0.1 |
+| base | ad844742e90d37e808c910c8af19246aaed0d331（stable feature/research-system-v01） |
 | candidate head | 当前分支 HEAD（含本状态文件提交；推送后以 `git rev-parse` 为准） |
 | accepted head | —（待独立审查 APPROVED） |
-| changed files | backend/short_term_snapshot_selector.py; backend/tests/test_short_term_snapshot_selector.py; docs/research/BK11_SNAPSHOT_SELECTOR_V01.md; docs/research/EXECUTION_STATE.md |
-| tests | focused 53 / joint 89 / backend offline 3336（11 deselected, 1 warning）/ independent 1991 + P2-fix 1623（seed 20260806） |
+| changed files | 集成 91 笔链内提交（54 文件，全部来自已批准 BK-11 阶段）；本分支仅追加 EXECUTION_STATE.md 状态行 |
+| tests | py_compile / BK-11 focused / 链联合 / backend offline / 全链路 e2e（运行后填） |
 | reviewer verdict | PENDING |
 | remaining findings | — |
 | Blocker 2 | OPEN |
@@ -22,6 +22,11 @@
 
 ## 历史阶段
 
+- bk11-slice-3e-snapshot-selector：branch feat/bk11-snapshot-selector-v0.1，
+  base 56ea49b186ed9e3387e3c0c6fb38d6bffbdf0d82（3d accepted head），
+  accepted head e9ac68fe1ebd4e0629e870498884d5a58b3132ce（独立复审
+  APPROVED，P0=P1=P2=0；首轮 CHANGES REQUIRED P2=2：全序决胜/
+  final 硬优先，已修正并复审通过）。
 - bk11-slice-3d-fact-digest：branch feat/bk11-fact-digest-v0.1，base
   33e08b1464a377bc204813d3592b3c67c0cef9ab（3c accepted head），
   accepted head 56ea49b186ed9e3387e3c0c6fb38d6bffbdf0d82（独立审查
