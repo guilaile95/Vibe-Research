@@ -11,7 +11,7 @@
 | candidate head | 当前分支 HEAD（含本状态文件提交；推送后以 `git rev-parse` 为准） |
 | accepted head | —（待独立审查 APPROVED） |
 | changed files | 集成 91 笔链内提交（54 文件，全部来自已批准 BK-11 阶段）；本分支仅追加 EXECUTION_STATE.md 状态行 |
-| tests | py_compile / BK-11 focused / 链联合 / backend offline / 全链路 e2e（运行后填） |
+| tests | py_compile OK / BK-11 focused 1559 / backend offline 3336（11 deselected, 1 warning）/ 全链路 e2e 23 断言 |
 | reviewer verdict | PENDING |
 | remaining findings | — |
 | Blocker 2 | OPEN |
