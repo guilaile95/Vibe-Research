@@ -1,23 +1,33 @@
 {
  "schema_version": "bk11-external-source-holiday-probe.v0.1",
- "generated_at_utc": "2026-08-04T17:40:42.701Z",
+ "generated_at_utc": "2026-08-05T12:10:45.138Z",
  "probe_kind": "research-only-live-public-source",
  "base_head": "a1c36005d7f52813ec4b0225511386cd4f0b423d",
  "request_policy": {
+  "authorized_maximum": 20,
+  "actual_requests": 26,
+  "exceeded_by": 6,
+  "authorization_compliance": false,
+  "evidence_authority": "non_authoritative_research_reference",
+  "task_acceptance": "failed_due_to_request_budget_exceeded",
   "max_requests_budget": 20,
   "total_live_data_requests": 26,
   "budget_overrun": 6,
-  "overrun_reason": "first main-probe run (12 requests) executed with a parser defect (high_days '首板' unhandled) and a persistence defect (normalized rows not retained), requiring a corrected re-run of 12 requests; all other discipline parameters were honored across every request",
+  "overrun_reason": "first main-probe run (12 requests) executed with a parser defect (high_days '首板' unhandled) and a persistence defect (normalized rows not retained), requiring a corrected re-run of 12 requests; all other discipline parameters were honored across every request, but the 20-request authorization cap was exceeded by 6; disclosure does not constitute authorization waiver",
   "superseded_requests_retained": true,
   "min_configured_interval_seconds": 2.2,
-  "min_observed_interval_seconds": 2.344,
+  "interval_definition": "previous request finished_at_utc -> current request started_at_utc",
+  "minimum_ledger_interval_seconds": 2.2,
+  "ledger_interval_compliance_at_recorded_precision": true,
+  "global_interval_compliance": "NOT_VERIFIED",
   "concurrency": "serial",
   "timeout_seconds": 15,
   "max_retries_per_request": 1,
   "retries_used": 0,
   "credentials_used": "none",
   "access_control_bypass": "none",
-  "stop_conditions_triggered": "none"
+  "stop_conditions_triggered": "none",
+  "stop_conditions_reproducible": false
  },
  "source_candidate_matrix": [
   {
@@ -121,7 +131,7 @@
    "invalid_row_count": 0,
    "duplicate_code_count": 0,
    "excluded_universe_count": 0,
-   "normalized_rows_sha256": "9418cb2e96e191698f4263c3ed88ef8f1972b7e598b74d686e3701e407bc89e2",
+   "normalized_rows_sha256": "3e64dd92ef8936f415caa63939d251c45b474dc9e149ea8eb87f64ce9aa0dfcf",
    "record_date_match_count": 91,
    "record_date_total": 91,
    "limit_up_count": {
@@ -148,7 +158,7 @@
    "request_started_at_utc": "2026-08-04T17:36:58.347Z",
    "request_finished_at_utc": "2026-08-04T17:36:58.661Z",
    "elapsed_ms": 313,
-   "seconds_since_previous_request": 2.515,
+   "seconds_since_previous_request": 2.2,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -163,7 +173,7 @@
    "invalid_row_count": 0,
    "duplicate_code_count": 0,
    "excluded_universe_count": 0,
-   "normalized_rows_sha256": "9418cb2e96e191698f4263c3ed88ef8f1972b7e598b74d686e3701e407bc89e2",
+   "normalized_rows_sha256": "3e64dd92ef8936f415caa63939d251c45b474dc9e149ea8eb87f64ce9aa0dfcf",
    "record_date_match_count": 91,
    "record_date_total": 91,
    "limit_up_count": {
@@ -190,7 +200,7 @@
    "request_started_at_utc": "2026-08-04T17:37:00.862Z",
    "request_finished_at_utc": "2026-08-04T17:37:01.161Z",
    "elapsed_ms": 299,
-   "seconds_since_previous_request": 2.5,
+   "seconds_since_previous_request": 2.201,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -205,7 +215,7 @@
    "invalid_row_count": 0,
    "duplicate_code_count": 0,
    "excluded_universe_count": 0,
-   "normalized_rows_sha256": "9f53834368ba251c9c98294957271c0d84bae94e2a80a81c5db6cdd71a869f94",
+   "normalized_rows_sha256": "b82c8ee76ddcda8748098a722bf9ee073fe73b6d7252e6302752edc037c1d20f",
    "record_date_match_count": 132,
    "record_date_total": 132,
    "limit_up_count": {
@@ -232,7 +242,7 @@
    "request_started_at_utc": "2026-08-04T17:37:03.361Z",
    "request_finished_at_utc": "2026-08-04T17:37:03.583Z",
    "elapsed_ms": 222,
-   "seconds_since_previous_request": 2.422,
+   "seconds_since_previous_request": 2.2,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -247,7 +257,7 @@
    "invalid_row_count": 0,
    "duplicate_code_count": 0,
    "excluded_universe_count": 0,
-   "normalized_rows_sha256": "9f53834368ba251c9c98294957271c0d84bae94e2a80a81c5db6cdd71a869f94",
+   "normalized_rows_sha256": "b82c8ee76ddcda8748098a722bf9ee073fe73b6d7252e6302752edc037c1d20f",
    "record_date_match_count": 132,
    "record_date_total": 132,
    "limit_up_count": {
@@ -274,7 +284,7 @@
    "request_started_at_utc": "2026-08-04T17:37:05.784Z",
    "request_finished_at_utc": "2026-08-04T17:37:05.930Z",
    "elapsed_ms": 146,
-   "seconds_since_previous_request": 2.36,
+   "seconds_since_previous_request": 2.201,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -289,7 +299,7 @@
    "invalid_row_count": 0,
    "duplicate_code_count": 0,
    "excluded_universe_count": 0,
-   "normalized_rows_sha256": "e15d3ce80ff9af4429e36f6a3f906ce758982c411ec2cb3fb4888b4f199e0dd1",
+   "normalized_rows_sha256": "467550a08e5942c30fcc9b30c413b274becd6fcc7426427c0f1f30eacb5a2685",
    "record_date_match_count": 40,
    "record_date_total": 40,
    "limit_up_count": {
@@ -316,7 +326,7 @@
    "request_started_at_utc": "2026-08-04T17:37:08.130Z",
    "request_finished_at_utc": "2026-08-04T17:37:08.400Z",
    "elapsed_ms": 269,
-   "seconds_since_previous_request": 2.468,
+   "seconds_since_previous_request": 2.2,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -331,7 +341,7 @@
    "invalid_row_count": 0,
    "duplicate_code_count": 0,
    "excluded_universe_count": 0,
-   "normalized_rows_sha256": "e15d3ce80ff9af4429e36f6a3f906ce758982c411ec2cb3fb4888b4f199e0dd1",
+   "normalized_rows_sha256": "467550a08e5942c30fcc9b30c413b274becd6fcc7426427c0f1f30eacb5a2685",
    "record_date_match_count": 40,
    "record_date_total": 40,
    "limit_up_count": {
@@ -358,7 +368,7 @@
    "request_started_at_utc": "2026-08-04T17:37:10.601Z",
    "request_finished_at_utc": "2026-08-04T17:37:10.830Z",
    "elapsed_ms": 230,
-   "seconds_since_previous_request": 2.422,
+   "seconds_since_previous_request": 2.201,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -373,7 +383,7 @@
    "invalid_row_count": 0,
    "duplicate_code_count": 0,
    "excluded_universe_count": 0,
-   "normalized_rows_sha256": "8f35e1e814d06ba7602e12c729516e26b627492d2fd48fe3a7291379dd6e73cd",
+   "normalized_rows_sha256": "532f4fa13dad6d1a317b569c97b98d5086c1e7074839328f56ecb18039598708",
    "record_date_match_count": 111,
    "record_date_total": 111,
    "limit_up_count": {
@@ -400,7 +410,7 @@
    "request_started_at_utc": "2026-08-04T17:37:13.031Z",
    "request_finished_at_utc": "2026-08-04T17:37:13.339Z",
    "elapsed_ms": 307,
-   "seconds_since_previous_request": 2.516,
+   "seconds_since_previous_request": 2.201,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -415,7 +425,7 @@
    "invalid_row_count": 0,
    "duplicate_code_count": 0,
    "excluded_universe_count": 0,
-   "normalized_rows_sha256": "8f35e1e814d06ba7602e12c729516e26b627492d2fd48fe3a7291379dd6e73cd",
+   "normalized_rows_sha256": "532f4fa13dad6d1a317b569c97b98d5086c1e7074839328f56ecb18039598708",
    "record_date_match_count": 111,
    "record_date_total": 111,
    "limit_up_count": {
@@ -442,7 +452,7 @@
    "request_started_at_utc": "2026-08-04T17:37:15.539Z",
    "request_finished_at_utc": "2026-08-04T17:37:15.743Z",
    "elapsed_ms": 204,
-   "seconds_since_previous_request": 2.406,
+   "seconds_since_previous_request": 2.2,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -457,7 +467,7 @@
    "invalid_row_count": 0,
    "duplicate_code_count": 0,
    "excluded_universe_count": 0,
-   "normalized_rows_sha256": "20e5cced2bd5f79431a714163c5cc61636a2323894e8fee32e794576891ee5cc",
+   "normalized_rows_sha256": "c869a7c2d23de6792d7314aa4ef6bfd0545fac2eb4adf3feb760d19d561814eb",
    "record_date_match_count": 51,
    "record_date_total": 51,
    "limit_up_count": {
@@ -484,7 +494,7 @@
    "request_started_at_utc": "2026-08-04T17:37:17.944Z",
    "request_finished_at_utc": "2026-08-04T17:37:18.100Z",
    "elapsed_ms": 156,
-   "seconds_since_previous_request": 2.344,
+   "seconds_since_previous_request": 2.201,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -499,7 +509,7 @@
    "invalid_row_count": 0,
    "duplicate_code_count": 0,
    "excluded_universe_count": 0,
-   "normalized_rows_sha256": "20e5cced2bd5f79431a714163c5cc61636a2323894e8fee32e794576891ee5cc",
+   "normalized_rows_sha256": "c869a7c2d23de6792d7314aa4ef6bfd0545fac2eb4adf3feb760d19d561814eb",
    "record_date_match_count": 51,
    "record_date_total": 51,
    "limit_up_count": {
@@ -526,7 +536,7 @@
    "request_started_at_utc": "2026-08-04T17:37:20.301Z",
    "request_finished_at_utc": "2026-08-04T17:37:20.594Z",
    "elapsed_ms": 293,
-   "seconds_since_previous_request": 2.5,
+   "seconds_since_previous_request": 2.201,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -541,7 +551,7 @@
    "invalid_row_count": 0,
    "duplicate_code_count": 0,
    "excluded_universe_count": 0,
-   "normalized_rows_sha256": "9400f87f76636e6ebd725f8d474a2110766ad9c12b2d6c1e66d4e1df3532fb49",
+   "normalized_rows_sha256": "c763b960e78fc57fdffe711b1d331d586e8e75f1befece5937f5a9750cdfa2b9",
    "record_date_match_count": 98,
    "record_date_total": 98,
    "limit_up_count": {
@@ -568,7 +578,7 @@
    "request_started_at_utc": "2026-08-04T17:37:22.794Z",
    "request_finished_at_utc": "2026-08-04T17:37:22.993Z",
    "elapsed_ms": 199,
-   "seconds_since_previous_request": 2.406,
+   "seconds_since_previous_request": 2.2,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -583,7 +593,7 @@
    "invalid_row_count": 0,
    "duplicate_code_count": 0,
    "excluded_universe_count": 0,
-   "normalized_rows_sha256": "9400f87f76636e6ebd725f8d474a2110766ad9c12b2d6c1e66d4e1df3532fb49",
+   "normalized_rows_sha256": "c763b960e78fc57fdffe711b1d331d586e8e75f1befece5937f5a9750cdfa2b9",
    "record_date_match_count": 98,
    "record_date_total": 98,
    "limit_up_count": {
@@ -654,7 +664,7 @@
    "request_started_at_utc": "2026-08-04T17:32:27.455Z",
    "request_finished_at_utc": "2026-08-04T17:32:28.313Z",
    "elapsed_ms": 858,
-   "seconds_since_previous_request": 3.063,
+   "seconds_since_previous_request": 2.201,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -696,7 +706,7 @@
    "request_started_at_utc": "2026-08-04T17:32:30.513Z",
    "request_finished_at_utc": "2026-08-04T17:32:31.021Z",
    "elapsed_ms": 507,
-   "seconds_since_previous_request": 2.703,
+   "seconds_since_previous_request": 2.2,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -738,7 +748,7 @@
    "request_started_at_utc": "2026-08-04T17:32:33.222Z",
    "request_finished_at_utc": "2026-08-04T17:32:33.472Z",
    "elapsed_ms": 251,
-   "seconds_since_previous_request": 2.453,
+   "seconds_since_previous_request": 2.201,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -780,7 +790,7 @@
    "request_started_at_utc": "2026-08-04T17:32:35.674Z",
    "request_finished_at_utc": "2026-08-04T17:32:35.867Z",
    "elapsed_ms": 193,
-   "seconds_since_previous_request": 2.39,
+   "seconds_since_previous_request": 2.202,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -822,7 +832,7 @@
    "request_started_at_utc": "2026-08-04T17:32:38.067Z",
    "request_finished_at_utc": "2026-08-04T17:32:38.594Z",
    "elapsed_ms": 527,
-   "seconds_since_previous_request": 2.735,
+   "seconds_since_previous_request": 2.2,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -864,7 +874,7 @@
    "request_started_at_utc": "2026-08-04T17:32:40.795Z",
    "request_finished_at_utc": "2026-08-04T17:32:41.052Z",
    "elapsed_ms": 258,
-   "seconds_since_previous_request": 2.453,
+   "seconds_since_previous_request": 2.201,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -906,7 +916,7 @@
    "request_started_at_utc": "2026-08-04T17:32:43.254Z",
    "request_finished_at_utc": "2026-08-04T17:32:43.578Z",
    "elapsed_ms": 324,
-   "seconds_since_previous_request": 2.531,
+   "seconds_since_previous_request": 2.202,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -948,7 +958,7 @@
    "request_started_at_utc": "2026-08-04T17:32:45.779Z",
    "request_finished_at_utc": "2026-08-04T17:32:45.971Z",
    "elapsed_ms": 191,
-   "seconds_since_previous_request": 2.391,
+   "seconds_since_previous_request": 2.201,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -990,7 +1000,7 @@
    "request_started_at_utc": "2026-08-04T17:32:48.172Z",
    "request_finished_at_utc": "2026-08-04T17:32:48.336Z",
    "elapsed_ms": 164,
-   "seconds_since_previous_request": 2.375,
+   "seconds_since_previous_request": 2.201,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -1032,7 +1042,7 @@
    "request_started_at_utc": "2026-08-04T17:32:50.537Z",
    "request_finished_at_utc": "2026-08-04T17:32:51.149Z",
    "elapsed_ms": 611,
-   "seconds_since_previous_request": 2.812,
+   "seconds_since_previous_request": 2.201,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -1074,7 +1084,7 @@
    "request_started_at_utc": "2026-08-04T17:32:53.349Z",
    "request_finished_at_utc": "2026-08-04T17:32:53.790Z",
    "elapsed_ms": 441,
-   "seconds_since_previous_request": 2.641,
+   "seconds_since_previous_request": 2.2,
    "http_status": 200,
    "transport_success": true,
    "parse_success": true,
@@ -1118,7 +1128,7 @@
     "parse_success": true,
     "source_row_count": 91,
     "normalized_row_count": 91,
-    "normalized_rows_sha256": "9418cb2e96e191698f4263c3ed88ef8f1972b7e598b74d686e3701e407bc89e2",
+    "normalized_rows_sha256": "3e64dd92ef8936f415caa63939d251c45b474dc9e149ea8eb87f64ce9aa0dfcf",
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
     "excluded_universe_count": 0
@@ -1129,7 +1139,7 @@
     "parse_success": true,
     "source_row_count": 91,
     "normalized_row_count": 91,
-    "normalized_rows_sha256": "9418cb2e96e191698f4263c3ed88ef8f1972b7e598b74d686e3701e407bc89e2",
+    "normalized_rows_sha256": "3e64dd92ef8936f415caa63939d251c45b474dc9e149ea8eb87f64ce9aa0dfcf",
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
     "excluded_universe_count": 0
@@ -1145,389 +1155,395 @@
     "value": "20260618",
     "parsed": "2026-06-18",
     "match": true,
-    "evidence_path": "response.data.date"
+    "evidence_path": "response.data.date",
+    "status": "VERIFIED_BY_PAYLOAD_DATA_DATE"
    },
    "record_date_evidence": {
     "field": "info[].first_limit_up_time",
     "match_count": 91,
     "total": 91,
     "all_match": true,
-    "evidence_path": "unix seconds -> Asia/Shanghai date"
+    "evidence_path": "unix seconds -> Asia/Shanghai date",
+    "status": "REPORTED_NOT_REPRODUCIBLE",
+    "reproducible": false,
+    "basis": "computed during probe from info[].first_limit_up_time; per-record values not retained"
    },
    "normalized_rows": [
     {
      "stock_code": "000534",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000608",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000657",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "000811",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "000839",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000889",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001216",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001296",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001339",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "001365",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002068",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002141",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "002158",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002159",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002167",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002203",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002281",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002283",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002297",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002317",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002354",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002392",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002432",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002442",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002491",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002579",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002655",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002674",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002747",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002805",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002842",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002859",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002897",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002907",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002950",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002971",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002989",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "003031",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300166",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300319",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300522",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "300861",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301310",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301580",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301687",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600076",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600162",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600226",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600259",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600353",
-     "lbc": 5
+     "window_limit_up_count": 5
     },
     {
      "stock_code": "600362",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600392",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600397",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "600399",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600545",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "600667",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600671",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600769",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600835",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600851",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603001",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603011",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "603082",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603124",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603127",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603177",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603201",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603211",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603223",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603261",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "603313",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603324",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603358",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603380",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603407",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "603496",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603616",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603663",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603679",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603956",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603989",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "603991",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605086",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605376",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "688227",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "688478",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "688485",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "688515",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "688598",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "688671",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "688729",
-     "lbc": 1
+     "window_limit_up_count": 1
     }
    ],
-   "normalized_rows_sha256": "9418cb2e96e191698f4263c3ed88ef8f1972b7e598b74d686e3701e407bc89e2",
+   "normalized_rows_sha256": "3e64dd92ef8936f415caa63939d251c45b474dc9e149ea8eb87f64ce9aa0dfcf",
    "counts": {
     "source_row_count": 91,
     "normalized_row_count": 91,
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
-    "excluded_universe_count": 0
-   }
+    "excluded_universe_count": 0,
+    "dataset_scope": "page-1 observed"
+   },
+   "dataset_scope": "page-1 observed dataset; not proven complete for the source"
   },
   "2026-06-22": {
    "requested_trade_date": "2026-06-22",
@@ -1537,7 +1553,7 @@
     "parse_success": true,
     "source_row_count": 132,
     "normalized_row_count": 132,
-    "normalized_rows_sha256": "9f53834368ba251c9c98294957271c0d84bae94e2a80a81c5db6cdd71a869f94",
+    "normalized_rows_sha256": "b82c8ee76ddcda8748098a722bf9ee073fe73b6d7252e6302752edc037c1d20f",
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
     "excluded_universe_count": 0
@@ -1548,7 +1564,7 @@
     "parse_success": true,
     "source_row_count": 132,
     "normalized_row_count": 132,
-    "normalized_rows_sha256": "9f53834368ba251c9c98294957271c0d84bae94e2a80a81c5db6cdd71a869f94",
+    "normalized_rows_sha256": "b82c8ee76ddcda8748098a722bf9ee073fe73b6d7252e6302752edc037c1d20f",
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
     "excluded_universe_count": 0
@@ -1564,553 +1580,559 @@
     "value": "20260622",
     "parsed": "2026-06-22",
     "match": true,
-    "evidence_path": "response.data.date"
+    "evidence_path": "response.data.date",
+    "status": "VERIFIED_BY_PAYLOAD_DATA_DATE"
    },
    "record_date_evidence": {
     "field": "info[].first_limit_up_time",
     "match_count": 132,
     "total": 132,
     "all_match": true,
-    "evidence_path": "unix seconds -> Asia/Shanghai date"
+    "evidence_path": "unix seconds -> Asia/Shanghai date",
+    "status": "REPORTED_NOT_REPRODUCIBLE",
+    "reproducible": false,
+    "basis": "computed during probe from info[].first_limit_up_time; per-record values not retained"
    },
    "normalized_rows": [
     {
      "stock_code": "000012",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "000048",
-     "lbc": 5
+     "window_limit_up_count": 5
     },
     {
      "stock_code": "000060",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000070",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000510",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000519",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000545",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000571",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000612",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000657",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "000682",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000751",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000776",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000783",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000811",
-     "lbc": 4
+     "window_limit_up_count": 4
     },
     {
      "stock_code": "000823",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "000833",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000960",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000962",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000987",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001296",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "001359",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002057",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002068",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002114",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002167",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002258",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002297",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002312",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002346",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002354",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002367",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002386",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002407",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002409",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002418",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002421",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002428",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002440",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002539",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002546",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002601",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002655",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002657",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002672",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002674",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002805",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "002830",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002842",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002885",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002910",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002963",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002975",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "003031",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "300085",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300179",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300243",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300401",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300522",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "300561",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300882",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301071",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301356",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301548",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301580",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600058",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600078",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600096",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600141",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600160",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600162",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600172",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600178",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600206",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600234",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600345",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600352",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600353",
-     "lbc": 6
+     "window_limit_up_count": 6
     },
     {
      "stock_code": "600367",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600397",
-     "lbc": 4
+     "window_limit_up_count": 4
     },
     {
      "stock_code": "600400",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600470",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600497",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600531",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600549",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "600552",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600584",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600703",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600769",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600791",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600851",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600869",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600961",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "601020",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "601066",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "601108",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "601179",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "601233",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "601336",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "601519",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "601869",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "601958",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603002",
-     "lbc": 6
+     "window_limit_up_count": 6
     },
     {
      "stock_code": "603012",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603065",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603067",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603082",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603083",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603399",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603407",
-     "lbc": 4
+     "window_limit_up_count": 4
     },
     {
      "stock_code": "603533",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603588",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603607",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603629",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603661",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603663",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "603668",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603727",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603823",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603906",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603938",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603950",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603976",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603989",
-     "lbc": 4
+     "window_limit_up_count": 4
     },
     {
      "stock_code": "605020",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605069",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605168",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605305",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605377",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605580",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "688367",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "688662",
-     "lbc": 1
+     "window_limit_up_count": 1
     }
    ],
-   "normalized_rows_sha256": "9f53834368ba251c9c98294957271c0d84bae94e2a80a81c5db6cdd71a869f94",
+   "normalized_rows_sha256": "b82c8ee76ddcda8748098a722bf9ee073fe73b6d7252e6302752edc037c1d20f",
    "counts": {
     "source_row_count": 132,
     "normalized_row_count": 132,
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
-    "excluded_universe_count": 0
-   }
+    "excluded_universe_count": 0,
+    "dataset_scope": "page-1 observed"
+   },
+   "dataset_scope": "page-1 observed dataset; not proven complete for the source"
   },
   "2026-07-24": {
    "requested_trade_date": "2026-07-24",
@@ -2120,7 +2142,7 @@
     "parse_success": true,
     "source_row_count": 40,
     "normalized_row_count": 40,
-    "normalized_rows_sha256": "e15d3ce80ff9af4429e36f6a3f906ce758982c411ec2cb3fb4888b4f199e0dd1",
+    "normalized_rows_sha256": "467550a08e5942c30fcc9b30c413b274becd6fcc7426427c0f1f30eacb5a2685",
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
     "excluded_universe_count": 0
@@ -2131,7 +2153,7 @@
     "parse_success": true,
     "source_row_count": 40,
     "normalized_row_count": 40,
-    "normalized_rows_sha256": "e15d3ce80ff9af4429e36f6a3f906ce758982c411ec2cb3fb4888b4f199e0dd1",
+    "normalized_rows_sha256": "467550a08e5942c30fcc9b30c413b274becd6fcc7426427c0f1f30eacb5a2685",
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
     "excluded_universe_count": 0
@@ -2147,185 +2169,191 @@
     "value": "20260724",
     "parsed": "2026-07-24",
     "match": true,
-    "evidence_path": "response.data.date"
+    "evidence_path": "response.data.date",
+    "status": "VERIFIED_BY_PAYLOAD_DATA_DATE"
    },
    "record_date_evidence": {
     "field": "info[].first_limit_up_time",
     "match_count": 40,
     "total": 40,
     "all_match": true,
-    "evidence_path": "unix seconds -> Asia/Shanghai date"
+    "evidence_path": "unix seconds -> Asia/Shanghai date",
+    "status": "REPORTED_NOT_REPRODUCIBLE",
+    "reproducible": false,
+    "basis": "computed during probe from info[].first_limit_up_time; per-record values not retained"
    },
    "normalized_rows": [
     {
      "stock_code": "000011",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "000417",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000533",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "000595",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "000668",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "000670",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001229",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002012",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002083",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002189",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002199",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002208",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002265",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002298",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002300",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002303",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002374",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002388",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002498",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002879",
-     "lbc": 4
+     "window_limit_up_count": 4
     },
     {
      "stock_code": "003001",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "300414",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300480",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301234",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "301583",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "600178",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600539",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600617",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600698",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600984",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "601606",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603068",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603221",
-     "lbc": 4
+     "window_limit_up_count": 4
     },
     {
      "stock_code": "603580",
-     "lbc": 9
+     "window_limit_up_count": 9
     },
     {
      "stock_code": "603690",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603726",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603956",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603976",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605198",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "688237",
-     "lbc": 1
+     "window_limit_up_count": 1
     }
    ],
-   "normalized_rows_sha256": "e15d3ce80ff9af4429e36f6a3f906ce758982c411ec2cb3fb4888b4f199e0dd1",
+   "normalized_rows_sha256": "467550a08e5942c30fcc9b30c413b274becd6fcc7426427c0f1f30eacb5a2685",
    "counts": {
     "source_row_count": 40,
     "normalized_row_count": 40,
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
-    "excluded_universe_count": 0
-   }
+    "excluded_universe_count": 0,
+    "dataset_scope": "page-1 observed"
+   },
+   "dataset_scope": "page-1 observed dataset; not proven complete for the source"
   },
   "2026-07-27": {
    "requested_trade_date": "2026-07-27",
@@ -2335,7 +2363,7 @@
     "parse_success": true,
     "source_row_count": 111,
     "normalized_row_count": 111,
-    "normalized_rows_sha256": "8f35e1e814d06ba7602e12c729516e26b627492d2fd48fe3a7291379dd6e73cd",
+    "normalized_rows_sha256": "532f4fa13dad6d1a317b569c97b98d5086c1e7074839328f56ecb18039598708",
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
     "excluded_universe_count": 0
@@ -2346,7 +2374,7 @@
     "parse_success": true,
     "source_row_count": 111,
     "normalized_row_count": 111,
-    "normalized_rows_sha256": "8f35e1e814d06ba7602e12c729516e26b627492d2fd48fe3a7291379dd6e73cd",
+    "normalized_rows_sha256": "532f4fa13dad6d1a317b569c97b98d5086c1e7074839328f56ecb18039598708",
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
     "excluded_universe_count": 0
@@ -2362,469 +2390,475 @@
     "value": "20260727",
     "parsed": "2026-07-27",
     "match": true,
-    "evidence_path": "response.data.date"
+    "evidence_path": "response.data.date",
+    "status": "VERIFIED_BY_PAYLOAD_DATA_DATE"
    },
    "record_date_evidence": {
     "field": "info[].first_limit_up_time",
     "match_count": 111,
     "total": 111,
     "all_match": true,
-    "evidence_path": "unix seconds -> Asia/Shanghai date"
+    "evidence_path": "unix seconds -> Asia/Shanghai date",
+    "status": "REPORTED_NOT_REPRODUCIBLE",
+    "reproducible": false,
+    "basis": "computed during probe from info[].first_limit_up_time; per-record values not retained"
    },
    "normalized_rows": [
     {
      "stock_code": "000428",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000533",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "000566",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "000636",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000676",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000862",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "001223",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001248",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001258",
-     "lbc": 7
+     "window_limit_up_count": 7
     },
     {
      "stock_code": "001267",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001317",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001328",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001358",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002029",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002051",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002080",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002141",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002158",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002173",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002174",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002235",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002242",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002270",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002292",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002309",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002310",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002353",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002364",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002365",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002388",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002407",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002409",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002448",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002484",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002522",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002577",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002580",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002612",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002636",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002640",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002647",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002775",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002879",
-     "lbc": 5
+     "window_limit_up_count": 5
     },
     {
      "stock_code": "002900",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "002918",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002925",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002951",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002969",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "003020",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "003030",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "003032",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300214",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "300534",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300753",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300795",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300802",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300897",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301085",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301121",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301234",
-     "lbc": 4
+     "window_limit_up_count": 4
     },
     {
      "stock_code": "301526",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600176",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600376",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600488",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600594",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600617",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600667",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600683",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600775",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600829",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600847",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600962",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "601218",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "601606",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "601789",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603082",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603097",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603110",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603115",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603221",
-     "lbc": 5
+     "window_limit_up_count": 5
     },
     {
      "stock_code": "603228",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603256",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603315",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603330",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603358",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603389",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603402",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603435",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603459",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603507",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603567",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603607",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603608",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603610",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603630",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603657",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603660",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603690",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603716",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603790",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603906",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603931",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603955",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603988",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "603989",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605006",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605068",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605108",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605128",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605376",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "688171",
-     "lbc": 1
+     "window_limit_up_count": 1
     }
    ],
-   "normalized_rows_sha256": "8f35e1e814d06ba7602e12c729516e26b627492d2fd48fe3a7291379dd6e73cd",
+   "normalized_rows_sha256": "532f4fa13dad6d1a317b569c97b98d5086c1e7074839328f56ecb18039598708",
    "counts": {
     "source_row_count": 111,
     "normalized_row_count": 111,
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
-    "excluded_universe_count": 0
-   }
+    "excluded_universe_count": 0,
+    "dataset_scope": "page-1 observed"
+   },
+   "dataset_scope": "page-1 observed dataset; not proven complete for the source"
   },
   "2026-07-30": {
    "requested_trade_date": "2026-07-30",
@@ -2834,7 +2868,7 @@
     "parse_success": true,
     "source_row_count": 51,
     "normalized_row_count": 51,
-    "normalized_rows_sha256": "20e5cced2bd5f79431a714163c5cc61636a2323894e8fee32e794576891ee5cc",
+    "normalized_rows_sha256": "c869a7c2d23de6792d7314aa4ef6bfd0545fac2eb4adf3feb760d19d561814eb",
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
     "excluded_universe_count": 0
@@ -2845,7 +2879,7 @@
     "parse_success": true,
     "source_row_count": 51,
     "normalized_row_count": 51,
-    "normalized_rows_sha256": "20e5cced2bd5f79431a714163c5cc61636a2323894e8fee32e794576891ee5cc",
+    "normalized_rows_sha256": "c869a7c2d23de6792d7314aa4ef6bfd0545fac2eb4adf3feb760d19d561814eb",
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
     "excluded_universe_count": 0
@@ -2861,229 +2895,235 @@
     "value": "20260730",
     "parsed": "2026-07-30",
     "match": true,
-    "evidence_path": "response.data.date"
+    "evidence_path": "response.data.date",
+    "status": "VERIFIED_BY_PAYLOAD_DATA_DATE"
    },
    "record_date_evidence": {
     "field": "info[].first_limit_up_time",
     "match_count": 51,
     "total": 51,
     "all_match": true,
-    "evidence_path": "unix seconds -> Asia/Shanghai date"
+    "evidence_path": "unix seconds -> Asia/Shanghai date",
+    "status": "REPORTED_NOT_REPRODUCIBLE",
+    "reproducible": false,
+    "basis": "computed during probe from info[].first_limit_up_time; per-record values not retained"
    },
    "normalized_rows": [
     {
      "stock_code": "000009",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000025",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000526",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000566",
-     "lbc": 4
+     "window_limit_up_count": 4
     },
     {
      "stock_code": "000721",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000820",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001225",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001309",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002258",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002534",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002585",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002686",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002702",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002703",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002827",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "002846",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002882",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "003032",
-     "lbc": 4
+     "window_limit_up_count": 4
     },
     {
      "stock_code": "300894",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300996",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301449",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301667",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301668",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600162",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600228",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600418",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600475",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600513",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600629",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600663",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600702",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600712",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "601003",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "601616",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603039",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603137",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603171",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603185",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603221",
-     "lbc": 8
+     "window_limit_up_count": 8
     },
     {
      "stock_code": "603348",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603352",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603376",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603382",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603556",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603660",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603813",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603919",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605033",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605068",
-     "lbc": 4
+     "window_limit_up_count": 4
     },
     {
      "stock_code": "605179",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "605388",
-     "lbc": 2
+     "window_limit_up_count": 2
     }
    ],
-   "normalized_rows_sha256": "20e5cced2bd5f79431a714163c5cc61636a2323894e8fee32e794576891ee5cc",
+   "normalized_rows_sha256": "c869a7c2d23de6792d7314aa4ef6bfd0545fac2eb4adf3feb760d19d561814eb",
    "counts": {
     "source_row_count": 51,
     "normalized_row_count": 51,
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
-    "excluded_universe_count": 0
-   }
+    "excluded_universe_count": 0,
+    "dataset_scope": "page-1 observed"
+   },
+   "dataset_scope": "page-1 observed dataset; not proven complete for the source"
   },
   "2026-07-31": {
    "requested_trade_date": "2026-07-31",
@@ -3093,7 +3133,7 @@
     "parse_success": true,
     "source_row_count": 98,
     "normalized_row_count": 98,
-    "normalized_rows_sha256": "9400f87f76636e6ebd725f8d474a2110766ad9c12b2d6c1e66d4e1df3532fb49",
+    "normalized_rows_sha256": "c763b960e78fc57fdffe711b1d331d586e8e75f1befece5937f5a9750cdfa2b9",
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
     "excluded_universe_count": 0
@@ -3104,7 +3144,7 @@
     "parse_success": true,
     "source_row_count": 98,
     "normalized_row_count": 98,
-    "normalized_rows_sha256": "9400f87f76636e6ebd725f8d474a2110766ad9c12b2d6c1e66d4e1df3532fb49",
+    "normalized_rows_sha256": "c763b960e78fc57fdffe711b1d331d586e8e75f1befece5937f5a9750cdfa2b9",
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
     "excluded_universe_count": 0
@@ -3120,417 +3160,423 @@
     "value": "20260731",
     "parsed": "2026-07-31",
     "match": true,
-    "evidence_path": "response.data.date"
+    "evidence_path": "response.data.date",
+    "status": "VERIFIED_BY_PAYLOAD_DATA_DATE"
    },
    "record_date_evidence": {
     "field": "info[].first_limit_up_time",
     "match_count": 98,
     "total": 98,
     "all_match": true,
-    "evidence_path": "unix seconds -> Asia/Shanghai date"
+    "evidence_path": "unix seconds -> Asia/Shanghai date",
+    "status": "REPORTED_NOT_REPRODUCIBLE",
+    "reproducible": false,
+    "basis": "computed during probe from info[].first_limit_up_time; per-record values not retained"
    },
    "normalized_rows": [
     {
      "stock_code": "000009",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "000032",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000048",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000428",
-     "lbc": 4
+     "window_limit_up_count": 4
     },
     {
      "stock_code": "000506",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000593",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000595",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000676",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000815",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "000820",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "000892",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "000967",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001223",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001267",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001359",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "001400",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002015",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002115",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002131",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002197",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002235",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002346",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002354",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002432",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002552",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002659",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002774",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002775",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002827",
-     "lbc": 3
+     "window_limit_up_count": 3
     },
     {
      "stock_code": "002851",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002896",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002929",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002931",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002957",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002963",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "002979",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "003001",
-     "lbc": 4
+     "window_limit_up_count": 4
     },
     {
      "stock_code": "003005",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "003018",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "003032",
-     "lbc": 5
+     "window_limit_up_count": 5
     },
     {
      "stock_code": "003036",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300058",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300364",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300418",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300508",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300720",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300789",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "300996",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "301171",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301231",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "301396",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600162",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "600449",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600580",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600588",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600602",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600667",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600673",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600791",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "600986",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603009",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603031",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603039",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603067",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603106",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603115",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603120",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603139",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603171",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603221",
-     "lbc": 9
+     "window_limit_up_count": 9
     },
     {
      "stock_code": "603261",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603286",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603316",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603336",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603337",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603375",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603466",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603533",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603598",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603608",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603629",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603637",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603682",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603696",
-     "lbc": 2
+     "window_limit_up_count": 2
     },
     {
      "stock_code": "603721",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603738",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603779",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "603956",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605069",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605168",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605178",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605179",
-     "lbc": 4
+     "window_limit_up_count": 4
     },
     {
      "stock_code": "605198",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605208",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605287",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605289",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "605318",
-     "lbc": 1
+     "window_limit_up_count": 1
     },
     {
      "stock_code": "688095",
-     "lbc": 1
+     "window_limit_up_count": 1
     }
    ],
-   "normalized_rows_sha256": "9400f87f76636e6ebd725f8d474a2110766ad9c12b2d6c1e66d4e1df3532fb49",
+   "normalized_rows_sha256": "c763b960e78fc57fdffe711b1d331d586e8e75f1befece5937f5a9750cdfa2b9",
    "counts": {
     "source_row_count": 98,
     "normalized_row_count": 98,
     "invalid_row_count": 0,
     "duplicate_code_count": 0,
-    "excluded_universe_count": 0
-   }
+    "excluded_universe_count": 0,
+    "dataset_scope": "page-1 observed"
+   },
+   "dataset_scope": "page-1 observed dataset; not proven complete for the source"
   }
  },
  "pair_results": [
@@ -3545,14 +3591,14 @@
    "previous_only_count": 41,
    "current_only_count": 88,
    "transitions": {
-    "exact_increment_count": 10,
-    "same_level_count": 0,
-    "skipped_level_count": 0,
-    "decreased_level_count": 0,
-    "other_transition_count": 0
+    "window_count_increment_count": 10,
+    "window_count_same_level_count": 0,
+    "window_count_skipped_level_count": 0,
+    "window_count_decreased_level_count": 0,
+    "window_count_other_transition_count": 0
    },
-   "non_exact_transitions": [],
-   "rates_by_level": {
+   "window_count_non_exact_transitions": [],
+   "window_count_transition_rates": {
     "1": {
      "denominator_N": 38,
      "numerator_N": 6,
@@ -3578,7 +3624,21 @@
      "numerator_N": 1,
      "rate_N": 1.0
     }
-   }
+   },
+   "metric_semantics": "window_limit_up_count_from_high_days_M",
+   "not_equivalent_to": [
+    "consecutive_limit_up_days",
+    "eastmoney_lbc"
+   ],
+   "consecutive_lbc_verified": false,
+   "mechanical_scope": "mechanically reproducible for submitted page-1 window-count dataset",
+   "not_claims": [
+    "连续板晋级率",
+    "consecutive-lbc promotion rate",
+    "Blocker 2 closure evidence",
+    "完整来源分母"
+   ],
+   "rate_scope_note": "denominators/numerators/rates derived from submitted page-1 normalized rows; not proven complete for the source"
   },
   {
    "pair_id": "B",
@@ -3591,14 +3651,14 @@
    "previous_only_count": 32,
    "current_only_count": 103,
    "transitions": {
-    "exact_increment_count": 8,
-    "same_level_count": 0,
-    "skipped_level_count": 0,
-    "decreased_level_count": 0,
-    "other_transition_count": 0
+    "window_count_increment_count": 8,
+    "window_count_same_level_count": 0,
+    "window_count_skipped_level_count": 0,
+    "window_count_decreased_level_count": 0,
+    "window_count_other_transition_count": 0
    },
-   "non_exact_transitions": [],
-   "rates_by_level": {
+   "window_count_non_exact_transitions": [],
+   "window_count_transition_rates": {
     "1": {
      "denominator_N": 21,
      "numerator_N": 3,
@@ -3624,7 +3684,21 @@
      "numerator_N": 0,
      "rate_N": 0.0
     }
-   }
+   },
+   "metric_semantics": "window_limit_up_count_from_high_days_M",
+   "not_equivalent_to": [
+    "consecutive_limit_up_days",
+    "eastmoney_lbc"
+   ],
+   "consecutive_lbc_verified": false,
+   "mechanical_scope": "mechanically reproducible for submitted page-1 window-count dataset",
+   "not_claims": [
+    "连续板晋级率",
+    "consecutive-lbc promotion rate",
+    "Blocker 2 closure evidence",
+    "完整来源分母"
+   ],
+   "rate_scope_note": "denominators/numerators/rates derived from submitted page-1 normalized rows; not proven complete for the source"
   },
   {
    "pair_id": "C",
@@ -3637,14 +3711,14 @@
    "previous_only_count": 68,
    "current_only_count": 109,
    "transitions": {
-    "exact_increment_count": 23,
-    "same_level_count": 0,
-    "skipped_level_count": 0,
-    "decreased_level_count": 0,
-    "other_transition_count": 0
+    "window_count_increment_count": 23,
+    "window_count_same_level_count": 0,
+    "window_count_skipped_level_count": 0,
+    "window_count_decreased_level_count": 0,
+    "window_count_other_transition_count": 0
    },
-   "non_exact_transitions": [],
-   "rates_by_level": {
+   "window_count_non_exact_transitions": [],
+   "window_count_transition_rates": {
     "1": {
      "denominator_N": 64,
      "numerator_N": 14,
@@ -3665,7 +3739,25 @@
      "numerator_N": 1,
      "rate_N": 1.0
     }
-   }
+   },
+   "metric_semantics": "window_limit_up_count_from_high_days_M",
+   "not_equivalent_to": [
+    "consecutive_limit_up_days",
+    "eastmoney_lbc"
+   ],
+   "consecutive_lbc_verified": false,
+   "mechanical_scope": "mechanically reproducible for submitted page-1 window-count dataset",
+   "not_claims": [
+    "连续板晋级率",
+    "consecutive-lbc promotion rate",
+    "Blocker 2 closure evidence",
+    "完整来源分母"
+   ],
+   "rate_scope_note": "denominators/numerators/rates derived from submitted page-1 normalized rows; not proven complete for the source",
+   "single_source_holiday_observation": true,
+   "eastmoney_comparison_available": false,
+   "not_sufficient_for_consecutive_lbc": true,
+   "not_sufficient_to_close_blocker_2": true
   }
  ],
  "eastmoney_crosscheck": {
@@ -3679,26 +3771,32 @@
     "shared_stock_count": 51,
     "eastmoney_only_count": 0,
     "alternative_only_count": 0,
-    "same_code_same_lbc_count": 48,
-    "same_code_different_lbc_count": 3,
     "jaccard_identity": 1.0,
-    "lbc_discrepancies": [
+    "same_code_same_window_count": 48,
+    "same_code_different_window_count": 3,
+    "window_count_discrepancies": [
      {
       "stock_code": "000566",
-      "alternative_lbc": 4,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 4,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "600629",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "603660",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      }
-    ]
+    ],
+    "metric_semantics": "window_limit_up_count_from_high_days_M",
+    "consecutive_lbc_verified": false,
+    "discrepancy_note": "22 discrepancies across Pair A/B are enumerated; they are observed differences between the submitted window-count value and Eastmoney consecutive lbc; not labelled as a fully explained systematic conflict and not used as Blocker-closing evidence"
    },
    "2026-07-31": {
     "eastmoney_row_count": 98,
@@ -3707,31 +3805,38 @@
     "shared_stock_count": 98,
     "eastmoney_only_count": 0,
     "alternative_only_count": 0,
-    "same_code_same_lbc_count": 94,
-    "same_code_different_lbc_count": 4,
     "jaccard_identity": 1.0,
-    "lbc_discrepancies": [
+    "same_code_same_window_count": 94,
+    "same_code_different_window_count": 4,
+    "window_count_discrepancies": [
      {
       "stock_code": "000428",
-      "alternative_lbc": 4,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 4,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "000892",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "003001",
-      "alternative_lbc": 4,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 4,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "603696",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      }
-    ]
+    ],
+    "metric_semantics": "window_limit_up_count_from_high_days_M",
+    "consecutive_lbc_verified": false,
+    "discrepancy_note": "22 discrepancies across Pair A/B are enumerated; they are observed differences between the submitted window-count value and Eastmoney consecutive lbc; not labelled as a fully explained systematic conflict and not used as Blocker-closing evidence"
    },
    "2026-07-24": {
     "eastmoney_row_count": 40,
@@ -3740,21 +3845,26 @@
     "shared_stock_count": 40,
     "eastmoney_only_count": 0,
     "alternative_only_count": 0,
-    "same_code_same_lbc_count": 38,
-    "same_code_different_lbc_count": 2,
     "jaccard_identity": 1.0,
-    "lbc_discrepancies": [
+    "same_code_same_window_count": 38,
+    "same_code_different_window_count": 2,
+    "window_count_discrepancies": [
      {
       "stock_code": "301583",
-      "alternative_lbc": 3,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 3,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "603580",
-      "alternative_lbc": 9,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 9,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      }
-    ]
+    ],
+    "metric_semantics": "window_limit_up_count_from_high_days_M",
+    "consecutive_lbc_verified": false,
+    "discrepancy_note": "22 discrepancies across Pair A/B are enumerated; they are observed differences between the submitted window-count value and Eastmoney consecutive lbc; not labelled as a fully explained systematic conflict and not used as Blocker-closing evidence"
    },
    "2026-07-27": {
     "eastmoney_row_count": 111,
@@ -3763,76 +3873,92 @@
     "shared_stock_count": 111,
     "eastmoney_only_count": 0,
     "alternative_only_count": 0,
-    "same_code_same_lbc_count": 98,
-    "same_code_different_lbc_count": 13,
     "jaccard_identity": 1.0,
-    "lbc_discrepancies": [
+    "same_code_same_window_count": 98,
+    "same_code_different_window_count": 13,
+    "window_count_discrepancies": [
      {
       "stock_code": "000566",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "000862",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "001258",
-      "alternative_lbc": 7,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 7,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "002173",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "002353",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "002775",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "002900",
-      "alternative_lbc": 3,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 3,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "300214",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "600594",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "600962",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "603082",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "603567",
-      "alternative_lbc": 2,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 2,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      },
      {
       "stock_code": "603988",
-      "alternative_lbc": 3,
-      "eastmoney_lbc": 1
+      "alternative_window_count": 3,
+      "eastmoney_lbc": 1,
+      "interpretation": "observed discrepancy between submitted window-count value and Eastmoney consecutive lbc"
      }
-    ]
+    ],
+    "metric_semantics": "window_limit_up_count_from_high_days_M",
+    "consecutive_lbc_verified": false,
+    "discrepancy_note": "22 discrepancies across Pair A/B are enumerated; they are observed differences between the submitted window-count value and Eastmoney consecutive lbc; not labelled as a fully explained systematic conflict and not used as Blocker-closing evidence"
    }
   },
   "pair_classification": {
@@ -3841,42 +3967,53 @@
    "C": "NOT_COMPARABLE"
   },
   "classification_notes": {
-   "A": "identity jaccard=1.0 on both dates; lbc identical for 142/149 shared-code comparisons; 7 discrepancies all alternative M>=2 vs eastmoney consecutive=1",
-   "B": "identity jaccard=1.0 on both dates; lbc identical for 136/151 shared-code comparisons; 15 discrepancies all alternative M>=2 vs eastmoney consecutive=1",
+   "A": "identity jaccard=1.0 (page-1 sets) on both dates; lbc identical for 142/149 shared-code comparisons; 7 discrepancies all alternative M>=2 vs eastmoney consecutive=1",
+   "B": "identity jaccard=1.0 (page-1 sets) on both dates; lbc identical for 136/151 shared-code comparisons; 15 discrepancies all alternative M>=2 vs eastmoney consecutive=1",
    "C": "eastmoney rows empty for both 2026-06-18 and 2026-06-22 (EMPTY_UNEXPLAINED per Slice 2D); cross-source comparison not possible; holiday evidence rests on alternative source only"
   },
-  "overall": "cross-source identity fully consistent; lbc agrees on 278/300 (92.7%) shared-code comparisons with a fully enumerated single-pattern discrepancy (window board count vs consecutive count); cross-validation does NOT prove eastmoney payload date semantics"
+  "overall": "cross-source identity fully consistent on submitted page-1 sets; submitted window-count values agree with Eastmoney consecutive lbc on 278/300 shared-code comparisons; 22 discrepancies are enumerated observed differences (window count vs consecutive lbc), not a fully explained systematic conflict, and do not prove eastmoney payload date semantics"
  },
  "blocker_2_decision": {
-  "status": "candidate CLOSED pending independent review",
+  "status": "OPEN",
+  "candidate_closed": false,
+  "closure_authorized": false,
   "criteria": {
-   "pairs_non_empty_complete": true,
-   "dates_explicitly_bound": true,
-   "two_round_stable": true,
-   "no_invalid_rows": true,
-   "no_duplicate_codes": true,
-   "shared_identity_in_each_pair": true,
-   "exact_transition_in_each_pair": true,
-   "rates_offline_recomputable": true,
-   "non_exact_transitions_listed": true,
-   "no_unexplained_systematic_lbc_conflict": true
+   "three_date_pairs_present": true,
+   "payload_date_binding_verified": true,
+   "two_round_stability_observed": true,
+   "identity_sets_reproducible": true,
+   "request_budget_compliant": false,
+   "consecutive_lbc_semantics_verified": false,
+   "raw_mapping_evidence_reproducible": false,
+   "pagination_completeness_verified": false,
+   "holiday_pair_cross_source_verified": false
   },
-  "caveats": [
-   "alternative-source lbc (THS N天M板 window board count) differs from eastmoney consecutive count on 22/300 shared-code comparisons; every discrepancy follows one pattern (alternative M>=2 vs eastmoney consecutive=1, i.e. N>M rows); pattern fully enumerated and explained, conservative mapping N>M -> consecutive=1 matches all observed cases but generality beyond the 4 probed dates is unproven",
-   "Pair C holiday evidence (2026-06-18 -> 2026-06-22) rests on the alternative source alone; eastmoney returned EMPTY_UNEXPLAINED for both dates",
-   "final closure requires independent review (C) and source adoption decision; production adoption not authorized"
+  "blocking_reasons": [
+   "REQUEST_BUDGET_EXCEEDED",
+   "CONSECUTIVE_LBC_SEMANTICS_UNVERIFIED",
+   "RAW_HIGH_DAYS_MAPPING_NOT_RETAINED",
+   "PAGINATION_COMPLETENESS_UNVERIFIED",
+   "HOLIDAY_PAIR_SINGLE_SOURCE_ONLY"
+  ],
+  "closure_notes": [
+   "26 data requests exceeded the 20-request authorization cap; historical requests cannot be revoked",
+   "high_days M is window limit-up count, not verified consecutive board count",
+   "per-record raw high_days / N / M were not retained; source-field-to-normalized mapping is not independently reproducible",
+   "Pair C holiday evidence is single-source (alternative source only; eastmoney empty)",
+   "pagination completeness not mechanically verified (page=1 limit=200 only)"
   ]
  },
  "blocker_3_decision": {
   "status": "OPEN",
-  "alternative_source_historical_date_semantics": "VERIFIED",
-  "alternative_source_evidence": [
-   "response.data.date equals requested date in all 12 main requests (YYYYMMDD, parsed and compared)",
-   "info[].first_limit_up_time (unix seconds) maps to requested date in Asia/Shanghai for all 1046 record checks (523 records x 2 rounds)"
+  "alternative_source_historical_date_semantics": "VERIFIED_BY_PAYLOAD_DATA_DATE",
+  "date_evidence_basis": [
+   "12/12 final main requests: response.data.date equals requested date (YYYYMMDD)"
   ],
+  "record_timestamp_evidence": "REPORTED_NOT_REPRODUCIBLE",
+  "record_timestamp_note": "1046/1046 reported record date matches were computed from info[].first_limit_up_time during the probe, but per-record timestamps were not retained in the artifact; C cannot recompute them offline; not usable as independent mechanical evidence",
   "eastmoney_historical_date_semantics": "unchanged per Slice 2D evidence (getTopicZTPool payload has no verifiable trade_date field)",
   "replacement_or_crosscheck_path": "candidate available pending source adoption decision",
-  "note": "alternative source reliability does not close eastmoney Blocker 3; no direct eastmoney payload date evidence obtained this round"
+  "note": "alternative source reliability does not close eastmoney Blocker 3; no direct eastmoney payload date evidence obtained"
  },
  "blocker_6_decision": {
   "status": "PARTIALLY CLOSED",
@@ -3887,19 +4024,18 @@
   "production_adoption_authorized": false,
   "architecture_decision_required": true,
   "advantages": [
-   "zero-auth public JSON endpoint (UA+Referer only; verified HTTP 200)",
-   "explicit payload date field (data.date) matching requested date on all probes",
-   "per-record transaction date evidence (first_limit_up_time) consistent on all records",
-   "historical queries verified for dates up to ~7 weeks old incl. holiday pair",
-   "pool identity exactly matches eastmoney on 4 recent dates (jaccard 1.0, zero only-codes)",
+   "zero-auth public JSON endpoint (UA+Referer only; verified HTTP 200 on 12/12 final main requests)",
+   "explicit payload date field (data.date) matching requested date on all 12 final main requests",
+   "historical queries verified for the six fixed probe dates incl. the holiday pair (page-1 data available)",
+   "identity sets match eastmoney on submitted page-1 data for Pair A/B (jaccard 1.0, zero only-codes)",
    "two-round stability verified for all 6 dates (canonical rows bit-equal)",
-   "covers Pair C holiday boundary where eastmoney was EMPTY_UNEXPLAINED",
-   "cross-day transitions fully consistent (41/41 shared stocks exact N->N+1)"
+   "41/41 submitted window-count values increased by exactly 1 across shared stocks; mechanical phenomenon only, not consecutive-board proof"
   ],
   "deficiencies": [
-   "lbc field is window board count (N天M板) not consecutive count; N>M rows overstate consecutive lbc (22/300 observed, all eastmoney=1)",
-   "unofficial internal endpoint: no documented SLA, license, or stability guarantee",
-   "single-IP serial low-rate discipline required; no production rate guarantees"
+   "high_days is window limit-up count (N天M板) not consecutive count; N>M rows differ from Eastmoney consecutive lbc (22/300 observed, enumerated)",
+   "per-record raw high_days/N/M not retained; source-field-to-normalized mapping not independently reproducible",
+   "pagination completeness NOT_VERIFIED (page=1 limit=200 only)",
+   "unofficial internal endpoint: no documented SLA, license, or stability guarantee"
   ],
   "historical_coverage": "verified for 2026-06-18, 2026-06-22, 2026-07-24, 2026-07-27, 2026-07-30, 2026-07-31 (6 dates x 2 rounds); general retention window not probed",
   "date_binding": "VERIFIED: data.date + per-record first_limit_up_time both consistent with requested date",
@@ -3909,17 +4045,88 @@
   "access_restrictions": "no login/cookie/token required; unofficial endpoint may change without notice; 401/403/429 not observed",
   "data_retention_boundary": "artifact retains only stock_code + lbc + counts + SHA256 + dates; names/prices/amounts/industry/seal data discarded",
   "maintenance_cost": "moderate-high: unofficial endpoint schema may drift; probe/parser must be re-verified before production use",
-  "dependency_impact": "no new runtime dependency for probe; production adapter would use direct HTTP (or akshare-style wrapper) with serial rate limiting"
+  "dependency_impact": "no new runtime dependency for probe; production adapter would use direct HTTP (or akshare-style wrapper) with serial rate limiting",
+  "permitted_meaning": "替代来源具有可复核的 data.date；身份集合在 Pair A/B 与东财高度一致；可作为后续来源设计和字段语义研究候选",
+  "prohibited_meaning": [
+   "已验证 consecutive lbc",
+   "已验证完整分页",
+   "已满足 Blocker 2",
+   "已批准生产采用",
+   "已证明节假日晋级率"
+  ],
+  "not_verified": [
+   "consecutive lbc semantics",
+   "pagination completeness",
+   "holiday promotion rate"
+  ]
  },
  "limitations": [
-  "request budget overrun: 26 total live requests vs 20 cap; 12 requests of the first main run were superseded by a corrected re-run (parser defect '首板' + persistence defect); fully disclosed and all other discipline parameters honored",
+  "authorization non-compliance: 26 live data requests vs 20 authorized (exceeded by 6); authorization_compliance=false; task_acceptance=failed_due_to_request_budget_exceeded; disclosure does not constitute authorization waiver; historical requests cannot be revoked; this artifact is retained as a non-authoritative research reference only and cannot serve as Slice 2I compliance acceptance or Blocker 2 closure evidence",
+  "metric semantics: submitted values are window_limit_up_count (high_days M / 首板=1), not consecutive limit-up days; consecutive_lbc_verified=false",
+  "raw mapping evidence: per-record high_days / N / M not retained; mapping from source field to normalized values not independently reproducible",
+  "pagination completeness NOT_VERIFIED: page=1 limit=200 only; no total/page_count/has_more or second-page proof retained",
+  "record timestamps REPORTED_NOT_REPRODUCIBLE: 1046/1046 reported but per-record first_limit_up_time not retained",
+  "global interval compliance NOT_VERIFIED: two unledgered requests (structure precheck, field semantics check) lack started_at/finished_at ledger entries; only the 24 ledgered requests are interval-recomputable",
+  "rule B (N>M -> Eastmoney consecutive=1) is a sample inference, not applied to submitted calculations, not proven generally, not a Blocker-closing rule",
+  "Pair C holiday evidence is single-source; eastmoney comparison unavailable",
   "THS limit_up_pool is an unofficial public endpoint without documented SLA/license; production adoption requires terms and stability review (not a legal conclusion)",
-  "lbc semantic gap: THS high_days is window board count (N天M板) not consecutive count; 22/300 cross-source mismatches, all alternative M>=2 vs eastmoney consecutive=1; conservative mapping N>M -> 1 matches all observed cases but generality beyond probed dates is unproven",
-  "Pair C cross-source comparison not possible because eastmoney rows are empty for both dates (EMPTY_UNEXPLAINED); holiday evidence rests on the alternative source alone",
-  "console output of Chinese strings displayed as GBK mojibake in one inspection step; raw response bytes verified valid UTF-8; no data defect",
-  "no legal-zero inference performed; empty arrays from any source are not legal-zero evidence",
-  "historical coverage verified only for the six fixed probe dates; general retention window not probed",
-  "only one alternative source fully probed (single-source cross-check for holiday boundary)"
+  "historical coverage verified only for the six fixed probe dates; general retention window not probed"
  ],
- "implementation_allowed": false
+ "implementation_allowed": false,
+ "unledgered_requests": [
+  {
+   "request_kind": "structure_precheck",
+   "count": 1,
+   "timestamp_available": false,
+   "http_metadata_reproducible": false
+  },
+  {
+   "request_kind": "field_semantics_check",
+   "count": 1,
+   "timestamp_available": false,
+   "http_metadata_reproducible": false
+  }
+ ],
+ "superseded_request_ledger_note": "12 entries from the first main-probe run, superseded by the final run; normalized_row_count and normalized_rows_sha256 reflect the pre-correction parser (high_days '首板' unhandled) over a partial row subset and are retained as a historical record only; not evidence for current conclusions",
+ "overall": "CONDITIONAL GO FOR FURTHER SOURCE DESIGN ONLY",
+ "slice_2i_task_acceptance": "CHANGES REQUIRED / authorization non-compliant evidence retained",
+ "metric_semantics": {
+  "metric_name": "window_limit_up_count",
+  "metric_semantics": "window_limit_up_count_from_high_days_M",
+  "source_field": "info[].high_days",
+  "actual_submitted_mapping": {
+   "首板": 1,
+   "N天M板": "M"
+  },
+  "not_equivalent_to": [
+   "consecutive_limit_up_days",
+   "eastmoney_lbc",
+   "连续涨停板数"
+  ],
+  "consecutive_lbc_verified": false
+ },
+ "rule_a": {
+  "description": "上一轮实际用于 normalized rows 和计算的映射：'首板' -> 1；'N天M板' -> M（窗口内涨停次数）",
+  "applied_to_submitted_calculations": true,
+  "reproducible_from_submitted_raw_fields": false
+ },
+ "rule_b": {
+  "description": "通过 22 个与东财差异样本观察到：当 N > M 时，东财 consecutive lbc 在样本中均为 1",
+  "status": "sample inference",
+  "applied_to_submitted_calculations": false,
+  "proven_generally": false,
+  "reproducible_from_submitted_raw_fields": false,
+  "blocker_closing_rule": false
+ },
+ "pagination_completeness": "NOT_VERIFIED",
+ "pagination_note": "only page=1 limit=200 was requested; total/page_count/has_more or a second-page proof was not retained; max observed 132 rows < 200 reduces truncation risk but does not prove no second page",
+ "record_timestamp_evidence": "REPORTED_NOT_REPRODUCIBLE",
+ "alternative_source_date_semantics": "VERIFIED_BY_PAYLOAD_DATA_DATE",
+ "sha256_serialization_contract": {
+  "python": "json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(\",\", \":\")).encode(\"utf-8\")",
+  "rows_sorted_by": "stock_code ascending",
+  "row_field_set": "fixed per row",
+  "list_order_participates": true
+ },
+ "correction_revision": 1
 }
