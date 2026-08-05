@@ -74,12 +74,13 @@ metrics 为精确 dict，键集合精确等于
 ### normal 状态上游 metrics 严格验证
 
 ```text
-max_boards: 严格 int（拒绝 bool/float/str），>= 0
+max_boards: 严格 int（拒绝 bool/float/str），0 <= max_boards <= 1000
 lianban_count: 严格 int，>= 0
 ladder: 精确 list；每项精确 dict，精确字段 boards/count
-boards: 严格 int，>= 2
+boards: 严格 int，2 <= boards <= 1000
 count: 严格 int，> 0
 ladder 按 boards 严格升序、boards 不重复
+len(ladder) <= 999（合法层级域 2..1000 最多 999 个唯一层级）
 sum(ladder[].count) == lianban_count
 
 lianban_count > 0:
@@ -100,6 +101,39 @@ ladder 最大层与 max_boards 不一致
 count 总和与 lianban_count 不一致
 字段子类伪装 / 额外字段 / 缺失字段
 未排序 / 重复层级 / boards < 2 / count <= 0
+max_boards > 1000 / boards > 1000 / ladder 长度 > 999
+```
+
+### 板级安全上限（P1 修正）
+
+```text
+_MAX_BOARD_LEVEL = 1000
+```
+
+该值是纯计算资源安全上限，不是对 A 股历史最高连板数的业务判断。
+
+超限输入必须在进入 gap 计算前固定返回 invalid：
+
+```text
+max_boards = 1001        -> invalid
+max_boards = 10**30      -> invalid（不得调用 range(2, 超限值)）
+boards = 1001            -> invalid
+boards = 10**30          -> invalid
+ladder 长度 > 999        -> invalid
+```
+
+不得截断 max_boards、不得把 1001 修正为 1000、不得部分计算、
+不得依赖 MemoryError / OverflowError fail-close。
+
+边界值必须允许：
+
+```text
+max_boards = 1000
+ladder 最后一层 boards = 1000
+
+max_boards=1000, ladder=[{"boards":1000,"count":1}]:
+  missing_boards = 2..999
+  单一 gap segment = 2..999，width = 998
 ```
 
 ### 元数据严格验证（normal 计算路径）
@@ -112,6 +146,25 @@ is_final: 严格 bool，必须与 session=="final" 一致
 source_ids: 精确 list[str]，成员为非空字符串（拒绝子类），去重保序
 fetched_at / snapshot_at: null 或可解析的 UTC ISO 8601
   若两者都有，fetched_at <= snapshot_at
+```
+
+时间戳前后空白一律拒绝（P2-1 修正）：
+
+```text
+先比较 value == value.strip()，不相等即非法
+不得 strip 后放行，不得 strip 后规范化输出
+以下全部固定 invalid：
+  " 2026-07-31T15:10:00Z" / "2026-07-31T15:10:00Z "
+  " 2026-07-31T15:10:00Z " / "\t2026-07-31T15:10:00Z"
+  "2026-07-31T15:10:00Z\n"
+```
+
+以下行为保持：
+
+```text
+小写 z 可接受 / +00:00 可接受
+非零 offset 拒绝 / naive timestamp 拒绝
+fetched_at > snapshot_at 拒绝
 ```
 
 元数据非法 -> `LADDER_CONTRACT_INVALID` + `GAP_OUTPUT_SUPPRESSED`，
@@ -309,7 +362,20 @@ max_boards=2, occupied=[2] -> missing=[], is_continuous=true
   metrics 全 null）
 emergency fallback 不调用任何业务 helper、不再次读取输入对象、
   不包含异常文本、不泄漏异常类型/路径/URL/traceback
+emergency fallback 直接构造完整固定字面量（limitations 与 null metrics
+  均为新建字面量），不依赖模块级可变模板
 KeyboardInterrupt / SystemExit / GeneratorExit 自然传播
+```
+
+失败输出不依赖模块级可变模板（P2-2 修正）：
+
+```text
+模块不定义 _METRICS_NULL / _LIMITATIONS 运行时对象
+所有 envelope 的 limitations 每次通过新建字面量产生
+suppressed / invalid / emergency 的 metrics 每次通过新建字面量产生
+即使模块属性被外部注入伪造 _METRICS_NULL / _LIMITATIONS，
+  normal / partial / unavailable / invalid / emergency 输出不受影响
+修改第一次调用输出的 limitations / metrics 不影响第二次调用
 ```
 
 ## 12. Input Immutability
@@ -326,6 +392,12 @@ KeyboardInterrupt / SystemExit / GeneratorExit 自然传播
 正式测试覆盖（`backend/tests/test_short_term_ladder_gap.py`）：
 
 ```text
+安全上限 1000（max_boards/boards 边界）
+超限 1001 / 超大整数 10**30（含 gap helper 未被调用的调用计数证明）
+超长 ladder（长度 > 999）
+时间戳前后空格 / tab / newline
+模块全局污染（伪造 _METRICS_NULL / _LIMITATIONS）
+emergency 全局污染 / 失败输出跨调用隔离
 合法零涨停 / 只有首板 / 只有二板 / 连续 2-3-4 板
 单缺口 / 起始缺口 / 末端前缺口 / 多个分离缺口 / 连续多层缺口
 最高层很高但样本很少 / count 不影响 occupied level / count 守恒
@@ -354,6 +426,17 @@ segments 互不重叠且不相邻
 gap_level_count 守恒 / largest_gap_width 正确
 partial/unavailable 不计算 / 非法合同全部 suppressed
 输入不可变 / 普通异常 fail closed / 进程控制异常传播
+```
+
+修正后独立验证（一次性，不提交）：
+
+```text
+随机 1000 组（seed 固定并报告）
+max_boards 2..10 全部包含 max_boards 的 occupied 子集穷举
+有界路径：max_boards=10**30 / 1001 立即 invalid 且不进入 gap helper
+时间戳空白全部 invalid
+伪造 _METRICS_NULL / _LIMITATIONS 后输出不受影响
+normal/partial/unavailable/invalid/emergency 输出隔离
 ```
 
 ## 14. Limitations
@@ -385,4 +468,5 @@ partial/unavailable 不计算 / 非法合同全部 suppressed
 - layered_promotion_rates 生产实现仍不允许
 - Blocker 2/3/6 未在本轮评估
 - 不得宣称 Slice 2 全部完成或页面/API 已完成
+- 板级安全上限 1000 属于资源安全合同，不是市场历史结论
 ```
