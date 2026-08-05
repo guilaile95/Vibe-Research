@@ -8,6 +8,9 @@
 
 本文件只描述稳定分支已经具备的能力与当前授权，不维护 Draft、worktree、锁定目录等瞬时状态。
 
+短线市场事实层与复盘闭环已登记为 BK-11；\
+具体边界见 PRODUCT_BACKLOG 和 VIBE_ASTOCK_ADOPTION_PLAN。
+
 ## 1. 系统形态
 
 | 层级 | 当前实现 |
