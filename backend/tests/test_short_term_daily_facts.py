@@ -413,6 +413,17 @@ class TestProducerContract:
         producer["observed_at"] = "not-a-time"
         self._assert_producer_invalid(producer)
 
+    @pytest.mark.parametrize("status", ["normal", "partial", "unavailable"])
+    def test_observed_at_none_invalid(self, status):
+        producer = _producer(status=status)
+        producer["observed_at"] = None
+        self._assert_producer_invalid(producer)
+
+    def test_nested_adapter_observed_at_none_invalid(self):
+        adapter = _adapter()
+        adapter["observed_at"] = None
+        self._assert_producer_invalid(_producer(snapshot=adapter))
+
     def test_is_final_mismatch(self):
         producer = _producer(session="final", is_final=False)
         self._assert_producer_invalid(producer)

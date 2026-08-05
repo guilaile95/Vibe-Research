@@ -11,7 +11,7 @@
 | candidate head | 当前分支 HEAD（含本状态文件提交；推送后以 `git rev-parse` 为准） |
 | accepted head | —（待独立审查 APPROVED） |
 | changed files | backend/short_term_daily_facts.py; backend/tests/test_short_term_daily_facts.py; docs/research/BK11_DAILY_FACTS_V01.md; docs/research/EXECUTION_STATE.md |
-| tests | focused 83 / joint 516 / backend offline 3075（11 deselected, 1 warning）/ independent 1855（seed 20260805） |
+| tests | focused 87 / joint 520 / backend offline 3079（11 deselected, 1 warning）/ independent 1855 + P2-fix 5（seed 20260805） |
 | reviewer verdict | PENDING |
 | remaining findings | — |
 | Blocker 2 | OPEN |

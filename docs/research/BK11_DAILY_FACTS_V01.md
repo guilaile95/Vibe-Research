@@ -73,7 +73,7 @@ type(input) is dict（拒绝子类）
 schema_version == "short-term-limit-up-final-snapshot-v0.1"
 精确 18 字段集合
 requested_trade_date: 严格 YYYY-MM-DD 真实日历日期
-observed_at: 合法 UTC ISO 8601（前后空白拒绝）
+observed_at: 必填，合法 UTC ISO 8601（非 null、前后空白拒绝）
 status: normal / partial / unavailable
 reason_codes: 精确 list[str]、非空字符串
 session: final / not_final（producer 词表）
@@ -95,7 +95,8 @@ interval==2.2, required_window==4.4
 first/last/actual 非空且 actual+1e-9 >= 4.4
 warnings==[]
 nested adapter 25 字段完整合同（rows 严格升序唯一，
-  {stock_code 六位, lbc 严格 int>0}，计数守恒）
+  {stock_code 六位, lbc 严格 int>0}，observed_at 必填非 null，
+  计数守恒）
 ```
 
 任一不满足 -> `PRODUCER_CONTRACT_INVALID`。
