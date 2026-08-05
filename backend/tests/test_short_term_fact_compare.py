@@ -454,3 +454,111 @@ class TestCrossCallIsolation:
             "does not evaluate legal zero",
         ]
         assert second["deltas"]["facts"]["advance_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 10. P2 修正回归（首轮审查 3 项）
+# ---------------------------------------------------------------------------
+
+class TestP2Fixes:
+    def test_invalid_plus_unavailable_reason_order(self):
+        # 固定顺序：ENVELOPE_CONTRACT_INVALID 必须在 SOURCE_UNAVAILABLE 之前
+        invalid_env = _envelope("2026-07-30", status="invalid",
+                                ladder=_ladder(), gap=_gap())
+        unavailable_env = _envelope("2026-07-31", status="unavailable")
+        result = compare.compute_fact_compare(invalid_env, unavailable_env)
+        assert result["status"] == "invalid"
+        assert result["reason_codes"] == [
+            "ENVELOPE_CONTRACT_INVALID", "SOURCE_UNAVAILABLE",
+            "OUTPUT_SUPPRESSED"]
+
+    def test_unavailable_plus_invalid_reason_order(self):
+        unavailable_env = _envelope("2026-07-30", status="unavailable")
+        invalid_env = _envelope("2026-07-31", status="invalid",
+                                ladder=_ladder(), gap=_gap())
+        result = compare.compute_fact_compare(unavailable_env, invalid_env)
+        assert result["status"] == "invalid"
+        assert result["reason_codes"] == [
+            "ENVELOPE_CONTRACT_INVALID", "SOURCE_UNAVAILABLE",
+            "OUTPUT_SUPPRESSED"]
+
+    def test_no_reference_leak_from_garbage_metrics(self):
+        # 非标量垃圾 metric 不得透传输入引用，输出必须为 None
+        garbage_max = [1, 2]
+        garbage_lianban = {"a": 1}
+        garbage_fgb = [7]
+        ladder_section = {
+            "schema_version": "short-term-limit-up-ladder-v0.1",
+            "status": "normal",
+            "metrics": {
+                "max_boards": garbage_max,
+                "lianban_count": garbage_lianban,
+                "ladder": [{"boards": 2, "count": 1}],
+            },
+        }
+        gap_section = {
+            "schema_version": "short-term-ladder-gap-v0.1",
+            "status": "normal",
+            "metrics": {
+                "gap_level_count": 1,
+                "gap_segment_count": 1,
+                "largest_gap_width": 1,
+                "first_gap_board": garbage_fgb,
+                "is_continuous": "not-bool",
+            },
+        }
+        prev = _envelope(
+            "2026-07-30",
+            sections={
+                "facts": {"schema_version": "short-term-market-facts-v0.1",
+                          "status": "normal", "facts": _facts()},
+                "ladder": ladder_section,
+                "gap": gap_section,
+            })
+        curr = _envelope("2026-07-31", ladder=_ladder(), gap=_gap())
+        result = compare.compute_fact_compare(prev, curr)
+        ld = result["deltas"]["ladder"]
+        assert ld["prev_max_boards"] is None
+        assert ld["curr_max_boards"] == 4
+        assert ld["prev_lianban_count"] is None
+        assert ld["max_boards_delta"] is None
+        gd = result["deltas"]["gap"]
+        assert gd["prev_first_gap_board"] is None
+        assert gd["curr_first_gap_board"] == 3
+        assert gd["prev_is_continuous"] is None
+        assert gd["curr_is_continuous"] is False
+
+    def test_partial_ladder_shape_not_misreported_as_empty(self):
+        # 2J partial 输出形状：metrics 存在但 ladder=None（数据不可得）
+        prev_sections = {
+            "facts": {"schema_version": "short-term-market-facts-v0.1",
+                      "status": "partial", "facts": _facts()},
+            "ladder": {
+                "schema_version": "short-term-limit-up-ladder-v0.1",
+                "status": "partial",
+                "metrics": {"max_boards": None, "lianban_count": None,
+                            "ladder": None},
+            },
+            "gap": {
+                "schema_version": "short-term-ladder-gap-v0.1",
+                "status": "partial",
+                "metrics": {"gap_level_count": None, "gap_segment_count": None,
+                            "largest_gap_width": None, "first_gap_board": None,
+                            "is_continuous": None},
+            },
+        }
+        prev = _envelope("2026-07-30", status="partial",
+                         sections=prev_sections)
+        curr = _envelope("2026-07-31",
+                         ladder=_ladder(2, 2, [{"boards": 2, "count": 2}]),
+                         gap=_gap(0, 0, 0, None, True))
+        result = compare.compute_fact_compare(prev, curr)
+        ld = result["deltas"]["ladder"]
+        assert ld["prev_occupied_boards"] is None
+        assert ld["curr_occupied_boards"] == [2]
+        assert ld["board_level_changes"] is None
+        assert ld["max_boards_delta"] is None
+        gd = result["deltas"]["gap"]
+        assert gd["gap_level_count_delta"] is None
+        assert gd["curr_first_gap_board"] is None
+        assert gd["curr_is_continuous"] is True
