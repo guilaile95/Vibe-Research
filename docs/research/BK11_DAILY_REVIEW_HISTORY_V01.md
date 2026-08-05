@@ -222,3 +222,72 @@ docs/research/EXECUTION_STATE.md（状态行）
 - 越权提交事件：一个卡住的子代理曾越权提交两张 E2E 截图（f59ceb6，
   超出允许文件范围），已用普通提交恢复为基线字节（1280b72），净变更恢复
   为任务允许的 20 个文件。
+
+## 十一、复审修复记录（PR #45 第一轮 CHANGES REQUIRED）
+
+第一轮独立审查结论：P1=1（前端 envelope 层级错误）、P2=1（无界全表查询）。
+
+### P1 修复：前端读取路径与真实后端合同对齐
+
+- `factValue` 改为读取 `latest.sections.facts.facts[field]`；
+- `ladderValue` 改为读取 `latest.sections.ladder.metrics[field]`；
+- `gapValue` 改为读取 `latest.sections.gap.metrics[field]`；
+- 页面 gap 字段名改用正式合同：`gap_level_count` / `gap_segment_count` /
+  `largest_gap_width`（删除不存在的 `gap_levels` / `gap_segments` /
+  `max_gap_width`）；
+- 页面真实展示 `ladder.metrics.ladder` 数组（板数 / 股票数量 / 按板数稳定
+  升序 / 空梯队显示占位 / 非法或缺失结构不崩溃）；
+- `frontend/src/lib/api/types.ts` 类型改为真实合同形状（facts 段含
+  `facts` 体、ladder/gap 段含 `metrics`）；
+- 单元测试 fixture 完全改为真实嵌套合同，并断言具体数值（上涨 100 /
+  下跌 50 / 涨停 10 / 最高板 6 / 连板 3 / 2 板 8 / 3 板 4 / 6 板 1 /
+  缺口 1 / 1 / 2）；
+- E2E 改为断言页面实际渲染数值（上涨 100 / 涨停 14 / 最高板 6 /
+  连板 3 / 梯队 2→8、3→4、6→1 / 缺口 1 / 1 / 2），不再只断言标题或 delta。
+
+### P2 修复：数据库查询在 SQL 层有界
+
+- `short_term_fact_store.list_recent_snapshots(limit_trade_dates, db_path)`
+  新增正式有界只读接口：
+  - `limit_trade_dates` 必须为严格 int（拒绝 bool），且
+    0 < limit ≤ 366；
+  - SQL 使用 `WITH recent_dates AS (SELECT DISTINCT trade_date ... ORDER BY
+    trade_date DESC LIMIT ?)`，只读取最近 N 个不同交易日；
+  - 返回这些交易日的全部 session 元数据，按 trade_date、session 升序；
+  - 数据库不存在时返回空列表且不创建文件；
+  - 损坏数据库仍失败关闭（FactStoreCorruptedError），不泄漏路径或
+    SQLite 异常文本。
+- `bk11_history_service` 改为请求 `days + 1` 个最近交易日（窗口 + 最近
+  前序比较所需），彻底停止调用无界 `list_snapshots`。
+
+### 本轮测试结果
+
+```text
+后端聚焦：131 passed（store 有界查询 9 + history service 5 + 既有）
+后端全量离线：3381 passed（上一轮 3367 + 14 新增），11 deselected，
+             1 既有 warning，failed=0
+前端单元：291 passed（+5）
+前端 build：通过
+BK-11 历史 E2E：6 场景全过（含真实数值与梯队断言）
+Data Health / Daily Review / smoke E2E：全部通过
+py_compile、git diff --check：通过
+```
+
+### 本轮允许修改文件
+
+```text
+backend/short_term_fact_store.py
+backend/bk11_history_service.py
+backend/tests/test_short_term_fact_store.py
+backend/tests/test_bk11_history_service.py
+frontend/src/lib/bk11HistoryView.ts
+frontend/src/components/dailyReview/ShortTermHistoryCard.tsx
+frontend/src/lib/api/types.ts
+frontend/tests/bk11HistoryView.test.ts
+frontend/tests/e2e/bk11-history-real.browser.mjs
+docs/research/BK11_DAILY_REVIEW_HISTORY_V01.md（本文件）
+docs/research/EXECUTION_STATE.md
+```
+
+未修改：Data Health 其他 source、已批准 BK-11 计算语义、CI 配置、依赖文件、
+PR #43、稳定分支历史；未提交任何截图或临时工件。

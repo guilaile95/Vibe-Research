@@ -1666,16 +1666,46 @@ export interface Bk11HistorySnapshotMeta {
   stored_at: string;
 }
 
+/** 真实后端 daily-facts 合同：facts 段为 {schema_version, status, facts:{...}} */
 export interface Bk11FactSection {
-  schema_version?: string;
-  status?: string;
-  [key: string]: unknown;
+  schema_version: string;
+  status: string;
+  facts: Record<string, unknown>;
+}
+
+export interface Bk11LadderRow {
+  boards: number;
+  count: number;
+}
+
+/** 真实后端 daily-facts 合同：ladder 段为 {schema_version, status, metrics:{...}} */
+export interface Bk11LadderSection {
+  schema_version: string;
+  status: string;
+  metrics: {
+    max_boards: number | null;
+    lianban_count: number | null;
+    ladder: Bk11LadderRow[] | null;
+  };
+}
+
+/** 真实后端 daily-facts 合同：gap 段为 {schema_version, status, metrics:{...}} */
+export interface Bk11GapSection {
+  schema_version: string;
+  status: string;
+  metrics: {
+    gap_level_count: number | null;
+    gap_segment_count: number | null;
+    largest_gap_width: number | null;
+    first_gap_board: number | null;
+    is_continuous: boolean | null;
+  };
 }
 
 export interface Bk11DailyFactsSections {
   facts: Bk11FactSection | null;
-  ladder: Bk11FactSection | null;
-  gap: Bk11FactSection | null;
+  ladder: Bk11LadderSection | null;
+  gap: Bk11GapSection | null;
 }
 
 export interface Bk11DailyFactsEnvelope {

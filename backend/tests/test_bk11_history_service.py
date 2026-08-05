@@ -8,6 +8,7 @@ import json
 import os
 import sqlite3
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -300,9 +301,55 @@ class TestQueryHistory:
         def boom(*_args, **_kwargs):
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(store, "list_snapshots", boom)
+        monkeypatch.setattr(store, "list_recent_snapshots", boom)
         with pytest.raises(KeyboardInterrupt):
             service.query_history(days=5, db_path=db)
+
+    def test_service_does_not_call_unbounded_list_snapshots(
+            self, tmp_path, monkeypatch):
+        db = tmp_path / "facts.sqlite3"
+        _seed(db, "2026-07-28", "2026-07-29", "2026-07-30")
+
+        def should_not_be_called(*_args, **_kwargs):
+            raise AssertionError("list_snapshots must not be called")
+
+        monkeypatch.setattr(store, "list_snapshots", should_not_be_called)
+        result = service.query_history(days=5, db_path=db)
+        assert result["status"] == "normal"
+        assert result["trade_date"] == "2026-07-30"
+
+    def test_days_one_still_gets_previous_for_delta(self, tmp_path):
+        db = tmp_path / "facts.sqlite3"
+        _seed(db, "2026-07-29", "2026-07-30")
+        result = service.query_history(days=1, db_path=db)
+        assert result["window"] == {"requested": 1, "snapshot_count": 1}
+        assert result["delta"] is not None
+        assert result["delta"]["previous_trade_date"] == "2026-07-29"
+        assert result["delta"]["current_trade_date"] == "2026-07-30"
+
+    def test_days_max_does_not_read_all_history(
+            self, tmp_path, monkeypatch):
+        db = tmp_path / "facts.sqlite3"
+        dates = [
+            (date(2026, 1, 1) + timedelta(days=i)).isoformat()
+            for i in range(120)
+        ]
+        _seed(db, *dates)
+        captured: dict = {}
+        orig = store.list_recent_snapshots
+
+        def spy(limit, db_path=None):
+            captured["limit"] = limit
+            return orig(limit, db_path)
+
+        monkeypatch.setattr(store, "list_recent_snapshots", spy)
+        result = service.query_history(days=60, db_path=db)
+        # 只请求 60 窗口 + 1 前序 = 61 个最近交易日，而不是读取全部 120 天
+        assert captured["limit"] == 61
+        assert len(result["snapshots"]) == 60
+        assert result["summary"]["window"]["count"] == 60
+        assert result["delta"]["previous_trade_date"] == dates[-2]
+        assert result["snapshots"][-1]["trade_date"] == dates[-1]
 
     def test_explicit_path_wins_over_env(self, tmp_path, monkeypatch):
         env_db = tmp_path / "env" / "short_term_facts.sqlite3"

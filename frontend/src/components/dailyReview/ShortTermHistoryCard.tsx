@@ -9,6 +9,7 @@ import {
   formatNullableNumber,
   gapValue,
   hasComparableDelta,
+  ladderRows,
   ladderValue,
   latestEnvelope,
   latestSectionStatus,
@@ -222,6 +223,38 @@ export function ShortTermHistoryCard({
                     连板家数: <b className="font-mono text-foreground">{formatNullableNumber(ladderValue(env, "lianban_count"))}</b>
                   </span>
                 </div>
+                {(() => {
+                  const rows = ladderRows(env);
+                  if (rows.length === 0) {
+                    return (
+                      <p className="mt-2 text-xs text-muted-foreground/60">
+                        暂无连板梯队明细
+                      </p>
+                    );
+                  }
+                  return (
+                    <table className="mt-2 w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border/40 text-left text-xs text-muted-foreground">
+                          <th className="py-1 pr-4 font-medium">板数</th>
+                          <th className="py-1 font-medium">股票数量</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((row) => (
+                          <tr key={row.boards} className="border-b border-border/20 last:border-0">
+                            <td className="py-1 pr-4 font-mono text-foreground">
+                              {formatNullableNumber(row.boards)}
+                            </td>
+                            <td className="py-1 font-mono text-foreground">
+                              {formatNullableNumber(row.count)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  );
+                })()}
               </div>
             </div>
 
@@ -237,13 +270,13 @@ export function ShortTermHistoryCard({
               <div className="overflow-x-auto rounded-lg bg-muted/25 p-3">
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
                   <span className="text-muted-foreground">
-                    缺口层级: <b className="font-mono text-foreground">{formatNullableNumber(gapValue(env, "gap_levels"))}</b>
+                    缺口层级: <b className="font-mono text-foreground">{formatNullableNumber(gapValue(env, "gap_level_count"))}</b>
                   </span>
                   <span className="text-muted-foreground">
-                    缺口段数: <b className="font-mono text-foreground">{formatNullableNumber(gapValue(env, "gap_segments"))}</b>
+                    缺口段数: <b className="font-mono text-foreground">{formatNullableNumber(gapValue(env, "gap_segment_count"))}</b>
                   </span>
                   <span className="text-muted-foreground">
-                    最大宽度: <b className="font-mono text-foreground">{formatNullableNumber(gapValue(env, "max_gap_width"))}</b>
+                    最大宽度: <b className="font-mono text-foreground">{formatNullableNumber(gapValue(env, "largest_gap_width"))}</b>
                   </span>
                 </div>
               </div>

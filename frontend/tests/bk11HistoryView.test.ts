@@ -9,7 +9,10 @@ import {
   factValue,
   formatDeltaNumber,
   formatNullableNumber,
+  gapValue,
   hasComparableDelta,
+  ladderRows,
+  ladderValue,
   limitationLines,
   previousTradeDate,
   statusLabel,
@@ -42,22 +45,47 @@ function envelope(overrides: Partial<Bk11HistoryEnvelope> = {}): Bk11HistoryEnve
         facts: {
           schema_version: "short-term-market-facts-v0.1",
           status: "normal",
-          advance_count: 100,
-          decline_count: 50,
-          limit_up_count: 10,
-          failed_limit_up_count: 2,
+          facts: {
+            advance_count: 100,
+            decline_count: 50,
+            flat_count: 20,
+            suspended_count: 3,
+            eligible_count: 173,
+            valid_count: 170,
+            up_ratio: 0.6,
+            limit_up_count: 10,
+            limit_down_count: 1,
+            failed_limit_up_count: 2,
+            touched_limit_up_count: 12,
+            sealed_limit_up_count: 10,
+            seal_rate: 0.8,
+            failed_board_rate: 0.2,
+          },
         },
         ladder: {
           schema_version: "short-term-limit-up-ladder-v0.1",
           status: "normal",
-          max_boards: 6,
-          lianban_count: 3,
+          metrics: {
+            max_boards: 6,
+            lianban_count: 3,
+            // 故意乱序输入，验证稳定排序
+            ladder: [
+              { boards: 6, count: 1 },
+              { boards: 2, count: 8 },
+              { boards: 3, count: 4 },
+            ],
+          },
         },
         gap: {
           schema_version: "short-term-ladder-gap-v0.1",
           status: "normal",
-          gap_levels: 1,
-          gap_segments: 1,
+          metrics: {
+            gap_level_count: 1,
+            gap_segment_count: 1,
+            largest_gap_width: 2,
+            first_gap_board: 4,
+            is_continuous: false,
+          },
         },
       },
     },
@@ -134,9 +162,110 @@ test("statusLabel covers all envelope statuses", () => {
 
 test("factValue reads latest facts and returns null when absent", () => {
   const env = envelope();
+  assert.equal(factValue(env, "advance_count"), 100);
+  assert.equal(factValue(env, "decline_count"), 50);
   assert.equal(factValue(env, "limit_up_count"), 10);
   assert.equal(factValue(env, "missing_field"), null);
   assert.equal(factValue(envelope({ status: "empty", latest: null }), "limit_up_count"), null);
+});
+
+test("factValue requires the real nested facts body", () => {
+  const env = envelope();
+  const latest = env.latest!;
+  // 扁平化伪合同（旧错误结构）：必须返回 null 而不是读错层级
+  const flat = {
+    ...env,
+    latest: {
+      ...latest,
+      sections: {
+        facts: {
+          schema_version: "short-term-market-facts-v0.1",
+          status: "normal",
+          advance_count: 999,
+        },
+        ladder: null,
+        gap: null,
+      },
+    },
+  } as Bk11HistoryEnvelope;
+  assert.equal(factValue(flat, "advance_count"), null);
+});
+
+test("ladderValue and ladderRows read the real metrics contract", () => {
+  const env = envelope();
+  assert.equal(ladderValue(env, "max_boards"), 6);
+  assert.equal(ladderValue(env, "lianban_count"), 3);
+  assert.deepEqual(ladderRows(env), [
+    { boards: 2, count: 8 },
+    { boards: 3, count: 4 },
+    { boards: 6, count: 1 },
+  ]);
+});
+
+test("ladderRows handles empty and malformed ladder without crashing", () => {
+  const base = envelope();
+  const empty = {
+    ...base,
+    latest: {
+      ...base.latest!,
+      sections: {
+        ...base.latest!.sections,
+        ladder: { schema_version: "x", status: "normal", metrics: { max_boards: 6, lianban_count: 3, ladder: [] } },
+      },
+    },
+  } as Bk11HistoryEnvelope;
+  assert.deepEqual(ladderRows(empty), []);
+
+  const malformed = {
+    ...base,
+    latest: {
+      ...base.latest!,
+      sections: {
+        ...base.latest!.sections,
+        ladder: { schema_version: "x", status: "normal", metrics: { ladder: [{ boards: "bad", count: null }, null, 42] } },
+      },
+    },
+  } as unknown as Bk11HistoryEnvelope;
+  assert.deepEqual(ladderRows(malformed), []);
+
+  const missing = {
+    ...base,
+    latest: {
+      ...base.latest!,
+      sections: { ...base.latest!.sections, ladder: null },
+    },
+  } as Bk11HistoryEnvelope;
+  assert.deepEqual(ladderRows(missing), []);
+});
+
+test("gapValue reads the real gap metrics field names", () => {
+  const env = envelope();
+  assert.equal(gapValue(env, "gap_level_count"), 1);
+  assert.equal(gapValue(env, "gap_segment_count"), 1);
+  assert.equal(gapValue(env, "largest_gap_width"), 2);
+  // 旧错误字段名不存在 → null（显示 "—"）
+  assert.equal(gapValue(env, "gap_levels"), null);
+  assert.equal(gapValue(env, "gap_segments"), null);
+  assert.equal(gapValue(env, "max_gap_width"), null);
+});
+
+test("malformed section nesting returns null not crash", () => {
+  const base = envelope();
+  const broken = {
+    ...base,
+    latest: {
+      ...base.latest!,
+      sections: {
+        facts: null,
+        ladder: { schema_version: "x", status: "normal" },
+        gap: { schema_version: "x", status: "normal", metrics: "oops" },
+      },
+    },
+  } as unknown as Bk11HistoryEnvelope;
+  assert.equal(factValue(broken, "advance_count"), null);
+  assert.equal(ladderValue(broken, "max_boards"), null);
+  assert.equal(gapValue(broken, "gap_level_count"), null);
+  assert.deepEqual(ladderRows(broken), []);
 });
 
 test("digestText extracts plain text only", () => {

@@ -2,6 +2,7 @@ import type {
   Bk11DailyFactsEnvelope,
   Bk11HistoryEnvelope,
   Bk11HistoryStatus,
+  Bk11LadderRow,
 } from "@/lib/api/types";
 
 export type Bk11HealthStatus = "normal" | "partial" | "unavailable";
@@ -84,7 +85,9 @@ export function factValue(
   const latest = latestEnvelope(env);
   const facts = latest?.sections?.facts;
   if (!facts || typeof facts !== "object") return null;
-  return (facts as Record<string, unknown>)[field] ?? null;
+  const body = (facts as unknown as Record<string, unknown>).facts;
+  if (!body || typeof body !== "object") return null;
+  return (body as Record<string, unknown>)[field] ?? null;
 }
 
 export function ladderValue(
@@ -94,7 +97,9 @@ export function ladderValue(
   const latest = latestEnvelope(env);
   const ladder = latest?.sections?.ladder;
   if (!ladder || typeof ladder !== "object") return null;
-  return (ladder as Record<string, unknown>)[field] ?? null;
+  const metrics = (ladder as unknown as Record<string, unknown>).metrics;
+  if (!metrics || typeof metrics !== "object") return null;
+  return (metrics as Record<string, unknown>)[field] ?? null;
 }
 
 export function gapValue(
@@ -104,7 +109,31 @@ export function gapValue(
   const latest = latestEnvelope(env);
   const gap = latest?.sections?.gap;
   if (!gap || typeof gap !== "object") return null;
-  return (gap as Record<string, unknown>)[field] ?? null;
+  const metrics = (gap as unknown as Record<string, unknown>).metrics;
+  if (!metrics || typeof metrics !== "object") return null;
+  return (metrics as Record<string, unknown>)[field] ?? null;
+}
+
+/** 连板梯队行：从 ladder.metrics.ladder 提取，按板数稳定升序。
+ * 非法 / 缺失 / 空梯队返回空数组（不崩溃、不显示伪造数据）。 */
+export function ladderRows(env: Bk11HistoryEnvelope | null): Bk11LadderRow[] {
+  const latest = latestEnvelope(env);
+  const ladder = latest?.sections?.ladder;
+  if (!ladder || typeof ladder !== "object") return [];
+  const metrics = (ladder as unknown as Record<string, unknown>).metrics;
+  if (!metrics || typeof metrics !== "object") return [];
+  const raw = (metrics as Record<string, unknown>).ladder;
+  if (!Array.isArray(raw)) return [];
+  const rows: Bk11LadderRow[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const boards = (item as Record<string, unknown>).boards;
+    const count = (item as Record<string, unknown>).count;
+    if (typeof boards !== "number" || !Number.isFinite(boards)) continue;
+    if (typeof count !== "number" || !Number.isFinite(count)) continue;
+    rows.push({ boards, count });
+  }
+  return rows.sort((a, b) => a.boards - b.boards);
 }
 
 export function hasComparableDelta(env: Bk11HistoryEnvelope | null): boolean {
@@ -156,7 +185,7 @@ export function latestSectionStatus(
   const latest = latestEnvelope(env);
   const sec = latest?.sections?.[section];
   if (!sec || typeof sec !== "object") return null;
-  const status = (sec as Record<string, unknown>).status;
+  const status = (sec as unknown as Record<string, unknown>).status;
   if (status === "normal" || status === "partial" || status === "unavailable") {
     return status;
   }

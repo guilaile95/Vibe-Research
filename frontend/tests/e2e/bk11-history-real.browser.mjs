@@ -434,6 +434,27 @@ async function main() {
         await block.getByText("+2").first().waitFor({ timeout: 10000 });
         await block.getByText(/短线市场事实摘要/).first().waitFor({ timeout: 10000 });
         await block.getByText("2026-07-30").first().waitFor({ timeout: 10000 });
+        // 真实渲染的业务数值（不得只断言区块标题）
+        await block.getByText("100", { exact: true }).first().waitFor({ timeout: 10000 }); // 上涨家数
+        await block.getByText("50", { exact: true }).first().waitFor({ timeout: 10000 }); // 下跌家数
+        await block.getByText("14", { exact: true }).first().waitFor({ timeout: 10000 }); // 涨停家数（07-30）
+        await block.getByText(/最高板:\s*6/).first().waitFor({ timeout: 10000 });
+        await block.getByText(/连板家数:\s*3/).first().waitFor({ timeout: 10000 });
+        // 连板梯队数组：板数升序 2/3/6，对应数量 8/4/1
+        const ladderCells = await block
+          .locator("table")
+          .first()
+          .locator("td")
+          .allTextContents();
+        const ladderTexts = ladderCells.map((t) => t.trim());
+        const expectedLadder = ["2", "8", "3", "4", "6", "1"];
+        if (JSON.stringify(ladderTexts) !== JSON.stringify(expectedLadder)) {
+          throw new Error(`ladder cells mismatch: ${JSON.stringify(ladderTexts)}`);
+        }
+        // 断层字段（正式合同字段名）
+        await block.getByText(/缺口层级:\s*1/).first().waitFor({ timeout: 10000 });
+        await block.getByText(/缺口段数:\s*1/).first().waitFor({ timeout: 10000 });
+        await block.getByText(/最大宽度:\s*2/).first().waitFor({ timeout: 10000 });
 
         // stale 缓存触发后台轮询刷新：刷新周期不得重复请求历史接口
         await sleep(7000);
@@ -507,6 +528,8 @@ async function main() {
         const block = page.locator("section.order-\\[11\\]");
         await block.getByText("核心市场事实").waitFor({ timeout: 10000 });
         await block.getByText("暂无前序快照，不生成比较").waitFor({ timeout: 10000 });
+        await block.getByText("100", { exact: true }).first().waitFor({ timeout: 10000 });
+        await block.getByText("14", { exact: true }).first().waitFor({ timeout: 10000 });
         await context.close();
         console.log("[E2E] scenario B single-day OK");
       } finally {

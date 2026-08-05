@@ -252,6 +252,99 @@ class TestEnvironment:
         assert (tmp_path / "vr" / "short_term_facts.sqlite3").exists()
         assert store.load_daily_facts("2026-07-31", "final", db) == _envelope()
 
+
+# ---------------------------------------------------------------------------
+# 6. 有界最近交易日查询
+# ---------------------------------------------------------------------------
+
+
+class TestListRecentSnapshots:
+    def test_rejects_bool(self, tmp_path):
+        with pytest.raises(ValueError):
+            store.list_recent_snapshots(True, tmp_path / "x.sqlite3")
+
+    def test_rejects_non_int(self, tmp_path):
+        for bad in (1.5, "5", None):
+            with pytest.raises(ValueError):
+                store.list_recent_snapshots(bad, tmp_path / "x.sqlite3")  # type: ignore[arg-type]
+
+    def test_rejects_zero_and_negative(self, tmp_path):
+        for bad in (0, -1):
+            with pytest.raises(ValueError):
+                store.list_recent_snapshots(bad, tmp_path / "x.sqlite3")
+
+    def test_rejects_over_hard_limit(self, tmp_path):
+        with pytest.raises(ValueError):
+            store.list_recent_snapshots(
+                store._MAX_RECENT_TRADE_DATES + 1, tmp_path / "x.sqlite3")
+
+    def test_db_missing_returns_empty_without_creating_file(self, tmp_path):
+        db = tmp_path / "facts.sqlite3"
+        result = store.list_recent_snapshots(5, db)
+        assert result == []
+        assert not db.exists()
+
+    def test_returns_recent_trade_dates_with_all_sessions(self, tmp_path):
+        db = tmp_path / "facts.sqlite3"
+        for d in ("2026-07-27", "2026-07-28", "2026-07-29", "2026-07-30"):
+            store.save_daily_facts(_envelope(trade_date=d, session="final"), db)
+        store.save_daily_facts(
+            _envelope(trade_date="2026-07-30", session="afternoon_session"),
+            db)
+        result = store.list_recent_snapshots(2, db)
+        assert [(r["trade_date"], r["session"]) for r in result] == [
+            ("2026-07-29", "final"),
+            ("2026-07-30", "afternoon_session"),
+            ("2026-07-30", "final"),
+        ]
+        assert all(r["schema_version"] == store.STORED_SCHEMA_VERSION
+                   for r in result)
+        assert all(set(r.keys()) == {
+            "trade_date", "session", "schema_version", "stored_at"}
+                   for r in result)
+
+    def test_many_records_only_returns_bounded_dates(self, tmp_path):
+        db = tmp_path / "facts.sqlite3"
+        dates = [f"2026-{m:02d}-{d:02d}" for m in (1, 2) for d in range(1, 20)]
+        for d in dates:
+            store.save_daily_facts(_envelope(trade_date=d), db)
+        result = store.list_recent_snapshots(5, db)
+        trade_dates = [r["trade_date"] for r in result]
+        assert len(set(trade_dates)) == 5
+        assert trade_dates == sorted(trade_dates)
+        assert trade_dates[-1] == dates[-1]
+
+    def test_deterministic_order(self, tmp_path):
+        db = tmp_path / "facts.sqlite3"
+        store.save_daily_facts(
+            _envelope(trade_date="2026-07-28", session="final"), db)
+        store.save_daily_facts(
+            _envelope(trade_date="2026-07-28", session="morning_session"), db)
+        first = store.list_recent_snapshots(5, db)
+        second = store.list_recent_snapshots(5, db)
+        assert first == second
+
+    def test_readonly_no_write(self, tmp_path):
+        db = tmp_path / "facts.sqlite3"
+        store.save_daily_facts(_envelope(), db)
+        before = db.stat()
+        store.list_recent_snapshots(5, db)
+        after = db.stat()
+        assert (before.st_size, before.st_mtime_ns) == (
+            after.st_size, after.st_mtime_ns)
+
+    def test_corrupted_db_fails_closed(self, tmp_path):
+        db = tmp_path / "facts.sqlite3"
+        db.write_bytes(b"this is not a sqlite database at all")
+        with pytest.raises(store.FactStoreCorruptedError):
+            store.list_recent_snapshots(5, db)
+
+    def test_sql_uses_limit(self):
+        import inspect
+        source = inspect.getsource(store.list_recent_snapshots)
+        assert "LIMIT ?" in source
+        assert "SELECT DISTINCT trade_date" in source
+
     def test_real_daily_facts_envelope_roundtrip(self, tmp_path):
         # 用 2K 组合层真实输出做端到端（纯内存计算，无网络）
         import short_term_daily_facts as daily

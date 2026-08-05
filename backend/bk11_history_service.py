@@ -137,7 +137,8 @@ def query_history(
         return empty_envelope(days)
 
     try:
-        snapshots = store.list_snapshots(path)
+        # 有界读取：窗口 days 个交易日 + 最近一个前序交易日（用于比较）
+        snapshots = store.list_recent_snapshots(days + 1, path)
         selection = snapshot_selector.select_daily_snapshots(snapshots)
         if selection["status"] != "normal" or not selection["selection"]:
             return empty_envelope(days)
