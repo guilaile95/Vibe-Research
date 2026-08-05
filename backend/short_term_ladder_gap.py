@@ -25,6 +25,10 @@ __all__ = [
 SCHEMA_VERSION = "short-term-ladder-gap-v0.1"
 SOURCE_SCHEMA_VERSION = "short-term-limit-up-ladder-v0.1"
 
+# 板级安全上限：纯计算资源安全上限，不是对 A 股历史最高连板数的业务判断。
+# 合法层级域为 2.._MAX_BOARD_LEVEL，最多 999 个唯一层级。
+_MAX_BOARD_LEVEL = 1000
+
 # 固定 reason-code 顺序（gate 层专属；未知上游码不得进入本模块 reason_codes）
 _REASON_ORDER: Tuple[str, ...] = (
     "SOURCE_UNAVAILABLE",
@@ -62,37 +66,38 @@ _ENVELOPE_FIELDS: Tuple[str, ...] = (
 
 _METRIC_FIELDS: Tuple[str, ...] = ("max_boards", "lianban_count", "ladder")
 
-_OUTPUT_METRIC_FIELDS: Tuple[str, ...] = (
-    "max_boards",
-    "sample_lianban_count",
-    "occupied_boards",
-    "missing_boards",
-    "gap_segments",
-    "gap_level_count",
-    "gap_segment_count",
-    "largest_gap_width",
-    "first_gap_board",
-    "is_continuous",
-)
-
 _TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-# 固定 limitations：不信任、不透传调用方 limitations
-_LIMITATIONS: Tuple[str, ...] = (
-    "derived from an already-computed ladder envelope",
-    "gap domain starts at board level 2",
-    "does not validate upstream consecutive-limit-up semantics",
-    "does not compute layered promotion rates",
-)
-
-_METRICS_NULL = {
-    name: None for name in _OUTPUT_METRIC_FIELDS
-}
 
 
 def _is_strict_int(value: Any) -> bool:
     """严格 int：拒绝 bool、float、字符串等。"""
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _fixed_limitations() -> List[str]:
+    """固定 limitations：每次调用新建字面量，不依赖模块级可变对象。"""
+    return [
+        "derived from an already-computed ladder envelope",
+        "gap domain starts at board level 2",
+        "does not validate upstream consecutive-limit-up semantics",
+        "does not compute layered promotion rates",
+    ]
+
+
+def _null_output_metrics() -> Dict[str, None]:
+    """失败状态 metrics：每次调用新建字面量，全部字段 null。"""
+    return {
+        "max_boards": None,
+        "sample_lianban_count": None,
+        "occupied_boards": None,
+        "missing_boards": None,
+        "gap_segments": None,
+        "gap_level_count": None,
+        "gap_segment_count": None,
+        "largest_gap_width": None,
+        "first_gap_board": None,
+        "is_continuous": None,
+    }
 
 
 def _parse_utc(value: str) -> Optional[datetime]:
@@ -105,15 +110,18 @@ def _parse_utc(value: str) -> Optional[datetime]:
 
 
 def _valid_utc_timestamp(value: Any) -> bool:
-    """fetched_at / snapshot_at：null 或可解析的 UTC ISO 8601 字符串。"""
+    """fetched_at / snapshot_at：null 或可解析的 UTC ISO 8601 字符串。
+
+    前后空白不允许：先做 value == value.strip() 比较，不相等即非法；
+    不得 strip 后放行或规范化输出。
+    """
     if value is None:
         return True
     if type(value) is not str:
         return False
-    text = value.strip()
-    if not text:
+    if value != value.strip():
         return False
-    parsed = _parse_utc(text)
+    parsed = _parse_utc(value)
     if parsed is None or parsed.tzinfo is None or parsed.utcoffset() is None:
         return False
     return parsed.utcoffset().total_seconds() == 0
@@ -219,15 +227,21 @@ def _validate_metadata(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _validate_metrics(metrics: Dict[str, Any]) -> bool:
-    """normal 状态上游 metrics 严格验证（§五）。"""
+    """normal 状态上游 metrics 严格验证（§五 + 有界板级合同）。"""
     max_boards = metrics.get("max_boards")
-    if not _is_strict_int(max_boards) or max_boards < 0:
+    if (
+        not _is_strict_int(max_boards)
+        or max_boards < 0
+        or max_boards > _MAX_BOARD_LEVEL
+    ):
         return False
     lianban_count = metrics.get("lianban_count")
     if not _is_strict_int(lianban_count) or lianban_count < 0:
         return False
     ladder = metrics.get("ladder")
     if type(ladder) is not list:
+        return False
+    if len(ladder) > _MAX_BOARD_LEVEL - 1:
         return False
 
     if lianban_count == 0:
@@ -244,7 +258,11 @@ def _validate_metrics(metrics: Dict[str, Any]) -> bool:
             return False
         boards = item.get("boards")
         count = item.get("count")
-        if not _is_strict_int(boards) or boards < 2:
+        if (
+            not _is_strict_int(boards)
+            or boards < 2
+            or boards > _MAX_BOARD_LEVEL
+        ):
             return False
         if not _is_strict_int(count) or count <= 0:
             return False
@@ -315,7 +333,7 @@ def _normal_envelope(
         "status": "normal",
         "reason_codes": [],
         "warnings": [],
-        "limitations": list(_LIMITATIONS),
+        "limitations": _fixed_limitations(),
         "source_schema_version": SOURCE_SCHEMA_VERSION,
         "source_status": "normal",
         "source_reason_codes": list(source_reason_codes),
@@ -354,11 +372,11 @@ def _suppressed_envelope(
         "status": status,
         "reason_codes": reason_codes,
         "warnings": [],
-        "limitations": list(_LIMITATIONS),
+        "limitations": _fixed_limitations(),
         "source_schema_version": SOURCE_SCHEMA_VERSION,
         "source_status": source_status,
         "source_reason_codes": list(source_reason_codes),
-        "metrics": dict(_METRICS_NULL),
+        "metrics": _null_output_metrics(),
     }
 
 
@@ -375,11 +393,11 @@ def _invalid_envelope() -> Dict[str, Any]:
         "status": "invalid",
         "reason_codes": ["LADDER_CONTRACT_INVALID", "GAP_OUTPUT_SUPPRESSED"],
         "warnings": [],
-        "limitations": list(_LIMITATIONS),
+        "limitations": _fixed_limitations(),
         "source_schema_version": None,
         "source_status": None,
         "source_reason_codes": [],
-        "metrics": dict(_METRICS_NULL),
+        "metrics": _null_output_metrics(),
     }
 
 
@@ -413,8 +431,10 @@ def compute_ladder_gap(ladder_envelope: dict) -> dict:
     try:
         return _evaluate(ladder_envelope)
     except Exception:
-        # emergency fail-closed envelope：直接返回固定字面量，
-        # 不得调用 _invalid_envelope 或任何业务 helper。
+        # emergency fail-closed envelope：直接构造完整固定字面量，
+        # 不得调用 _invalid_envelope / _null_output_metrics /
+        # _fixed_limitations 或任何业务 helper，不得读取输入对象与
+        # 异常对象，不得依赖模块级可变模板。
         return {
             "schema_version": SCHEMA_VERSION,
             "trade_date": None,
@@ -426,9 +446,25 @@ def compute_ladder_gap(ladder_envelope: dict) -> dict:
             "status": "invalid",
             "reason_codes": ["LADDER_CONTRACT_INVALID", "GAP_OUTPUT_SUPPRESSED"],
             "warnings": [],
-            "limitations": list(_LIMITATIONS),
+            "limitations": [
+                "derived from an already-computed ladder envelope",
+                "gap domain starts at board level 2",
+                "does not validate upstream consecutive-limit-up semantics",
+                "does not compute layered promotion rates",
+            ],
             "source_schema_version": None,
             "source_status": None,
             "source_reason_codes": [],
-            "metrics": dict(_METRICS_NULL),
+            "metrics": {
+                "max_boards": None,
+                "sample_lianban_count": None,
+                "occupied_boards": None,
+                "missing_boards": None,
+                "gap_segments": None,
+                "gap_level_count": None,
+                "gap_segment_count": None,
+                "largest_gap_width": None,
+                "first_gap_board": None,
+                "is_continuous": None,
+            },
         }
