@@ -147,8 +147,12 @@ section 缺失                -> 该 section unavailable（delta=null）
 
 ```text
 facts: daily-facts 恒存在；envelope partial 时仍逐字段 null 安全计算
-ladder: 任一侧缺失 -> delta=null
-gap: 任一侧缺失 -> delta=null
+ladder: 任一侧缺失 -> delta=null；
+  metrics 存在但 ladder=None（2J partial 输出形状）视为数据不可得：
+  prev/curr occupied_boards 与 board_level_changes 为 null，
+  不得误报为空集合
+gap: 任一侧缺失 -> delta=null；
+  metrics 字段为 null（2J partial 输出形状）-> 对应 delta 为 null
 ```
 
 ## 10. Examples
