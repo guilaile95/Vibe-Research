@@ -13,8 +13,8 @@
 
 ## 后续已登记候选
 
-BK-11 已纳入路线图，但当前未授权实施。  
-当前任务顺序不因该候选发生变化。  
+BK-11 已纳入路线图，但当前未授权实施。\
+当前任务顺序不因该候选发生变化。\
 边界与切片见 [`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md) 与 [`docs/VIBE_ASTOCK_ADOPTION_PLAN.md`](VIBE_ASTOCK_ADOPTION_PLAN.md)。
 
 ## 本地目录边界
