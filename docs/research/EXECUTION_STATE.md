@@ -4,14 +4,14 @@
 
 | 字段 | 值 |
 |------|----|
-| stage | bk11-slice-3d-fact-digest（日事实摘要文本） |
+| stage | bk11-slice-3e-snapshot-selector（每日权威快照选择） |
 | status | REVIEW_PENDING |
-| branch | feat/bk11-fact-digest-v0.1 |
-| base | 33e08b1464a377bc204813d3592b3c67c0cef9ab（3c accepted head） |
+| branch | feat/bk11-snapshot-selector-v0.1 |
+| base | 56ea49b186ed9e3387e3c0c6fb38d6bffbdf0d82（3d accepted head） |
 | candidate head | 当前分支 HEAD（含本状态文件提交；推送后以 `git rev-parse` 为准） |
 | accepted head | —（待独立审查 APPROVED） |
-| changed files | backend/short_term_fact_digest.py; backend/tests/test_short_term_fact_digest.py; docs/research/BK11_FACT_DIGEST_V01.md; docs/research/EXECUTION_STATE.md |
-| tests | focused 40 / joint 100 / backend offline 3283（11 deselected, 1 warning）/ independent 186（seed 20260806） |
+| changed files | backend/short_term_snapshot_selector.py; backend/tests/test_short_term_snapshot_selector.py; docs/research/BK11_SNAPSHOT_SELECTOR_V01.md; docs/research/EXECUTION_STATE.md |
+| tests | focused 50 / joint 86 / backend offline 3333（11 deselected, 1 warning）/ independent 1991（seed 20260806） |
 | reviewer verdict | PENDING |
 | remaining findings | — |
 | Blocker 2 | OPEN |
@@ -22,6 +22,10 @@
 
 ## 历史阶段
 
+- bk11-slice-3d-fact-digest：branch feat/bk11-fact-digest-v0.1，base
+  33e08b1464a377bc204813d3592b3c67c0cef9ab（3c accepted head），
+  accepted head 56ea49b186ed9e3387e3c0c6fb38d6bffbdf0d82（独立审查
+  APPROVED，P0=P1=P2=0）。
 - bk11-slice-3c-fact-summary：branch feat/bk11-fact-summary-v0.1，base
   0c4a2763b36210ea9d14d8dc0c7ae1fc6d2ab254（3b accepted head），
   accepted head 33e08b1464a377bc204813d3592b3c67c0cef9ab（独立复审
