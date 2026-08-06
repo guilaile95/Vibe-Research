@@ -18,23 +18,30 @@ DAY = "2026-08-05"
 
 
 class FakeClient:
-    """实现 harness 所需协议的最小 fake。"""
+    """实现 harness 所需协议的最小 fake。
+
+    query_all_stock 返回 ``(rows, pages)``；每次 query_history_k_day 调用
+    计入 ``calls``，用于断言 request_count == 真实网络调用次数。
+    """
 
     def __init__(
         self,
         *,
         login_ok: bool = True,
         all_stock_rows=None,
+        all_pages: int = 1,
         k_map=None,
         k_error=None,
         all_error=None,
     ):
         self.login_ok = login_ok
         self.all_stock_rows = all_stock_rows if all_stock_rows is not None else []
+        self.all_pages = all_pages
         self.k_map = k_map if k_map is not None else {}
         self.k_error = k_error
         self.all_error = all_error
         self.calls: list = []
+        self.query_k_calls: int = 0
 
     def login(self) -> dict:
         self.calls.append("login")
@@ -48,14 +55,15 @@ class FakeClient:
         self.calls.append("logout")
         return {"ok": True, "error_code": "0"}
 
-    def query_all_stock(self, day: str) -> list:
+    def query_all_stock(self, day: str):
         self.calls.append(("query_all_stock", day))
         if self.all_error is not None:
             raise self.all_error
-        return self.all_stock_rows
+        return self.all_stock_rows, self.all_pages
 
     def query_history_k_day(self, code: str, day: str, fields: str) -> list:
         self.calls.append(("query_k", code, day))
+        self.query_k_calls += 1
         if self.k_error is not None:
             raise self.k_error
         return self.k_map.get(code, [])
@@ -99,6 +107,21 @@ def _make_client(universe=None, k_map=None, **kwargs):
     )
 
 
+def _probe_kwargs(**overrides):
+    kwargs = dict(
+        max_requests=50,
+        consecutive_fail_stop=10,
+        early_window=50,
+        early_fail_rate=0.05,
+        fail_rate_stop=0.05,
+        fail_count_stop=None,
+        wall_clock_limit=60.0,
+        sleep=lambda _: None,
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
 # ---------------------------------------------------------------------------
 # 股票池解析与过滤
 # ---------------------------------------------------------------------------
@@ -134,9 +157,11 @@ def test_parse_all_stock_rows_filters_universe():
         ["bj.430001", "1", "北交所"],  # 北交所排除
         ["sh.113001", "1", "可转债"],  # 排除
     ]
-    targets, excluded = probe.parse_all_stock_rows(raw)
+    targets, excluded, dup, conflict = probe.parse_all_stock_rows(raw)
     assert [t["code"] for t in targets] == ["000001", "300750", "600000", "688001"]
     assert excluded == 6
+    assert dup == 0
+    assert conflict == 0
 
 
 def test_parse_all_stock_rows_trade_status_contract():
@@ -145,27 +170,41 @@ def test_parse_all_stock_rows_trade_status_contract():
         ["sz.000001", "0", "B"],
         ["sz.300750", "x", "C"],
     ]
-    targets, _ = probe.parse_all_stock_rows(raw)
+    targets, _, dup, conflict = probe.parse_all_stock_rows(raw)
     by_code = {t["code"]: t for t in targets}
     assert by_code["600000"]["trade_status"] == "1"
     assert by_code["000001"]["trade_status"] == "0"
     # 未知状态保留原值供审计（不猜测语义）
     assert by_code["300750"]["trade_status"] == "x"
+    assert dup == 0
+    assert conflict == 0
 
 
-def test_dedupe_codes_keeps_first():
-    entries = [
-        {"code": "600000", "trade_status": "1"},
-        {"code": "600000", "trade_status": "0"},
-        {"code": "000001", "trade_status": "0"},
+def test_parse_all_stock_rows_duplicate_codes():
+    raw = [
+        ["sh.600000", "1", "A"],
+        ["sh.600000", "1", "A"],
+        ["sh.600000", "1", "A"],
     ]
-    out = probe.dedupe_codes(entries)
-    assert len(out) == 2
-    assert out[0]["trade_status"] == "1"
+    targets, _, dup, conflict = probe.parse_all_stock_rows(raw)
+    assert len(targets) == 1
+    assert dup == 2
+    assert conflict == 0
+
+
+def test_parse_all_stock_rows_conflicting_status():
+    raw = [
+        ["sh.600000", "1", "A"],
+        ["sh.600000", "0", "A"],
+    ]
+    targets, _, dup, conflict = probe.parse_all_stock_rows(raw)
+    assert len(targets) == 1
+    assert dup == 1
+    assert conflict == 1
 
 
 def test_build_stratified_sample_deterministic():
-    targets, _ = probe.parse_all_stock_rows(_sample_universe(40))
+    targets, _, _, _ = probe.parse_all_stock_rows(_sample_universe(40))
     a = probe.build_stratified_sample(targets, 10, seed=3)
     b = probe.build_stratified_sample(targets, 10, seed=3)
     assert [e["code"] for e in a] == [e["code"] for e in b]
@@ -176,11 +215,22 @@ def test_build_stratified_sample_deterministic():
 # 单股单日合同
 # ---------------------------------------------------------------------------
 
-def test_active_stock_single_day_row():
-    client = _make_client(
-        k_map={"sh.600000": [_stock_row("sh.600000")]}
+def _probe(client, code, status="1", **kwargs):
+    budget = kwargs.pop("budget", [10])
+    calls = kwargs.pop("calls", [0])
+    return probe.probe_stock(
+        client,
+        {"code": code, "trade_status": status},
+        DAY,
+        budget=budget,
+        calls=calls,
+        **kwargs,
     )
-    result = probe.probe_stock(client, "600000", DAY)
+
+
+def test_active_stock_single_day_row():
+    client = _make_client(k_map={"sh.600000": [_stock_row("sh.600000")]})
+    result = _probe(client, "600000")
     assert result["ok"] is True
     assert result["violations"] == []
     assert len(result["rows"]) == 1
@@ -188,7 +238,7 @@ def test_active_stock_single_day_row():
 
 def test_suspended_stock_empty_response():
     client = _make_client(k_map={"sz.000001": []})
-    result = probe.probe_stock(client, "000001", DAY)
+    result = _probe(client, "000001", status="0")
     assert result["ok"] is True
     assert result["rows"] == []
     assert result["violations"] == []
@@ -198,23 +248,41 @@ def test_suspended_stock_tradestatus_zero_row():
     client = _make_client(
         k_map={"sz.000001": [_stock_row("sz.000001", status="0", pct="-")]}
     )
-    result = probe.probe_stock(client, "000001", DAY)
+    result = _probe(client, "000001", status="0")
     assert result["ok"] is True
     assert result["violations"] == []
     assert result["rows"][0]["tradestatus"] == "0"
 
 
+def test_universe_zero_kline_one_status_conflict():
+    # universe=0（停牌），K线=1（交易）→ trade_status_mismatch
+    client = _make_client(
+        k_map={"sz.000001": [_stock_row("sz.000001", status="1")]}
+    )
+    result = _probe(client, "000001", status="0")
+    assert "trade_status_mismatch" in result["violations"]
+
+
+def test_universe_one_kline_zero_status_conflict():
+    # universe=1（交易），K线=0（停牌）→ trade_status_mismatch
+    client = _make_client(
+        k_map={"sh.600000": [_stock_row("sh.600000", status="0")]}
+    )
+    result = _probe(client, "600000", status="1")
+    assert "trade_status_mismatch" in result["violations"]
+
+
 def test_date_mismatch_violation():
     row = _stock_row("sh.600000", day="2026-08-04")
     client = _make_client(k_map={"sh.600000": [row]})
-    result = probe.probe_stock(client, "600000", DAY)
+    result = _probe(client, "600000")
     assert "date_mismatch" in result["violations"]
 
 
 def test_code_mismatch_violation():
     row = _stock_row("sh.600001")
     client = _make_client(k_map={"sh.600000": [row]})
-    result = probe.probe_stock(client, "600000", DAY)
+    result = _probe(client, "600000")
     assert "code_mismatch" in result["violations"]
 
 
@@ -227,28 +295,28 @@ def test_duplicate_date_violation():
             ]
         }
     )
-    result = probe.probe_stock(client, "600000", DAY)
+    result = _probe(client, "600000")
     assert "duplicate_row" in result["violations"]
 
 
 def test_invalid_pct_chg_violation():
     row = _stock_row("sh.600000", pct="abc")
     client = _make_client(k_map={"sh.600000": [row]})
-    result = probe.probe_stock(client, "600000", DAY)
+    result = _probe(client, "600000")
     assert "invalid_pct_chg" in result["violations"]
 
 
 def test_invalid_ohlc_violation():
     row = _stock_row("sh.600000", ohlc="nan")
     client = _make_client(k_map={"sh.600000": [row]})
-    result = probe.probe_stock(client, "600000", DAY)
+    result = _probe(client, "600000")
     assert "invalid_ohlc" in result["violations"]
 
 
 def test_invalid_tradestatus_violation():
     row = _stock_row("sh.600000", status="9")
     client = _make_client(k_map={"sh.600000": [row]})
-    result = probe.probe_stock(client, "600000", DAY)
+    result = _probe(client, "600000")
     assert "invalid_tradestatus" in result["violations"]
 
 
@@ -262,7 +330,7 @@ class BoomError(RuntimeError):
 
 def test_request_error_fail_closed():
     client = _make_client(k_error=BoomError("boom"))
-    result = probe.probe_stock(client, "600000", DAY)
+    result = _probe(client, "600000")
     assert result["ok"] is False
     assert result["error"] == "request_error"
     assert "request_error" in result["violations"]
@@ -281,7 +349,7 @@ def test_bounded_retry_success_after_one_failure():
             return [_stock_row(code)]
 
     client = FlakyClient()
-    result = probe.probe_stock(client, "600000", DAY)
+    result = _probe(client, "600000")
     assert result["ok"] is True
     assert result["retries"] == 1
 
@@ -292,7 +360,7 @@ def test_bounded_retry_stops_after_limit():
             raise BoomError("boom")
 
     client = AlwaysFail(all_stock_rows=[], k_map={})
-    result = probe.probe_stock(client, "600000", DAY)
+    result = _probe(client, "600000")
     assert result["ok"] is False
     assert result["retries"] == 1  # 最多 1 次重试（共 2 次尝试）
 
@@ -304,19 +372,7 @@ def test_consecutive_failure_circuit():
 
     client = AlwaysFail(all_stock_rows=[], k_map={})
     targets = [{"code": f"{600000 + i:06d}", "trade_status": "1"} for i in range(20)]
-    stats = probe.run_probe(
-        client,
-        targets,
-        DAY,
-        max_requests=50,
-        consecutive_fail_stop=10,
-        early_window=50,
-        early_fail_rate=0.05,
-        fail_rate_stop=0.05,
-        fail_count_stop=None,
-        wall_clock_limit=60.0,
-        sleep=lambda _: None,
-    )
+    stats = probe.run_probe(client, targets, DAY, **_probe_kwargs())
     assert stats["circuit_open"] == "consecutive_failures"
     assert stats["counts"]["failure"] == 10
 
@@ -335,19 +391,7 @@ def test_early_failure_rate_circuit():
 
     client = HalfFail()
     targets = [{"code": f"{600000 + i:06d}", "trade_status": "1"} for i in range(60)]
-    stats = probe.run_probe(
-        client,
-        targets,
-        DAY,
-        max_requests=150,
-        consecutive_fail_stop=10,
-        early_window=50,
-        early_fail_rate=0.05,
-        fail_rate_stop=0.05,
-        fail_count_stop=None,
-        wall_clock_limit=60.0,
-        sleep=lambda _: None,
-    )
+    stats = probe.run_probe(client, targets, DAY, **_probe_kwargs())
     assert stats["circuit_open"] == "early_failure_rate"
 
 
@@ -358,18 +402,49 @@ def test_request_budget_hard_cap():
         client,
         targets,
         DAY,
-        max_requests=3,
-        consecutive_fail_stop=10,
-        early_window=50,
-        early_fail_rate=0.05,
-        fail_rate_stop=0.05,
-        fail_count_stop=None,
-        wall_clock_limit=60.0,
-        sleep=lambda _: None,
+        **_probe_kwargs(max_requests=3),
     )
     assert stats["budget_exhausted"] is True
     assert stats["request_count"] == 3
+    assert stats["primary_request_count"] == 3
     assert stats["counts"]["success"] == 3
+
+
+def test_request_count_equals_fake_actual_calls():
+    client = _make_client(
+        k_map={
+            "sh.600000": [_stock_row("sh.600000")],
+            "sh.600001": [_stock_row("sh.600001")],
+        }
+    )
+    targets = [
+        {"code": "600000", "trade_status": "1"},
+        {"code": "600001", "trade_status": "1"},
+    ]
+    stats = probe.run_probe(client, targets, DAY, **_probe_kwargs())
+    assert stats["request_count"] == client.query_k_calls == 2
+
+
+def test_retry_requests_counted():
+    class FlakyOnce(FakeClient):
+        def __init__(self):
+            super().__init__(all_stock_rows=[], k_map={})
+            self.failed = False
+
+        def query_history_k_day(self, code, day, fields):
+            self.calls.append(("query_k", code, day))
+            if not self.failed:
+                self.failed = True
+                raise BoomError("boom")
+            return [_stock_row(code)]
+
+    client = FlakyOnce()
+    targets = [{"code": "600000", "trade_status": "1"}]
+    stats = probe.run_probe(client, targets, DAY, **_probe_kwargs())
+    assert stats["primary_request_count"] == 1
+    assert stats["retry_request_count"] == 1
+    real_calls = sum(1 for c in client.calls if isinstance(c, tuple) and c[0] == "query_k")
+    assert stats["request_count"] == real_calls == 2
 
 
 def test_input_not_modified():
@@ -379,19 +454,7 @@ def test_input_not_modified():
         {"code": "000001", "trade_status": "1"},
     ]
     before = copy.deepcopy(targets)
-    probe.run_probe(
-        client,
-        targets,
-        DAY,
-        max_requests=10,
-        consecutive_fail_stop=10,
-        early_window=50,
-        early_fail_rate=0.05,
-        fail_rate_stop=0.05,
-        fail_count_stop=None,
-        wall_clock_limit=60.0,
-        sleep=lambda _: None,
-    )
+    probe.run_probe(client, targets, DAY, **_probe_kwargs())
     assert targets == before
 
 
@@ -404,19 +467,136 @@ def test_base_exception_propagates(exc):
     client = EvilClient(all_stock_rows=[], k_map={})
     targets = [{"code": "600000", "trade_status": "1"}]
     with pytest.raises(exc):
-        probe.run_probe(
-            client,
-            targets,
-            DAY,
-            max_requests=10,
-            consecutive_fail_stop=10,
-            early_window=50,
-            early_fail_rate=0.05,
-            fail_rate_stop=0.05,
-            fail_count_stop=None,
-            wall_clock_limit=60.0,
-            sleep=lambda _: None,
+        probe.run_probe(client, targets, DAY, **_probe_kwargs())
+
+
+# ---------------------------------------------------------------------------
+# determinism 统一预算
+# ---------------------------------------------------------------------------
+
+def _kmap_for(codes):
+    return {probe._code_to_baostock(c): [_stock_row(probe._code_to_baostock(c))] for c in codes}
+
+
+def test_determinism_adds_only_one_recheck_request():
+    codes = ["600000", "600001"]
+    client = _make_client(k_map=_kmap_for(codes))
+    targets = [{"code": c, "trade_status": "1"} for c in codes]
+    stats = probe.run_probe(
+        client,
+        targets,
+        DAY,
+        **_probe_kwargs(determinism_checks=2),
+    )
+    # 主探测 2 次 + 复查 2 次 = 4 次真实调用
+    assert stats["request_count"] == 4
+    assert stats["primary_request_count"] == 2
+    assert stats["determinism_request_count"] == 2
+    assert client.query_k_calls == 4
+    assert stats["determinism"]["all_identical"] is True
+    assert stats["determinism"]["incomplete"] is False
+
+
+def test_determinism_counts_toward_budget():
+    codes = [f"{600000 + i:06d}" for i in range(10)]
+    client = _make_client(k_map=_kmap_for(codes))
+    targets = [{"code": c, "trade_status": "1"} for c in codes]
+    stats = probe.run_probe(
+        client,
+        targets,
+        DAY,
+        **_probe_kwargs(max_requests=5, determinism_checks=5),
+    )
+    # 预算 5：主探测 5 次后预算耗尽 → determinism 未执行
+    assert stats["request_count"] == 5
+    assert stats["determinism_request_count"] == 0
+    assert stats["determinism"]["incomplete"] is True
+    assert client.query_k_calls == 5
+
+
+def test_determinism_partial_when_budget_short():
+    codes = [f"{600000 + i:06d}" for i in range(5)]
+    client = _make_client(k_map=_kmap_for(codes))
+    targets = [{"code": c, "trade_status": "1"} for c in codes]
+    stats = probe.run_probe(
+        client,
+        targets,
+        DAY,
+        **_probe_kwargs(max_requests=7, determinism_checks=5),
+    )
+    # 预算 7：主探测 5 次后剩 2 → 只做 2 次复查，第 3 次起 incomplete
+    assert stats["request_count"] == 7
+    assert stats["determinism_request_count"] == 2
+    assert stats["determinism"]["incomplete"] is True
+    assert client.query_k_calls == 7
+
+
+def test_determinism_never_bypasses_budget():
+    codes = [f"{600000 + i:06d}" for i in range(3)]
+    client = _make_client(k_map=_kmap_for(codes))
+    targets = [{"code": c, "trade_status": "1"} for c in codes]
+    stats = probe.run_probe(
+        client,
+        targets,
+        DAY,
+        **_probe_kwargs(max_requests=3, determinism_checks=3),
+    )
+    assert stats["request_count"] == 3
+    assert stats["budget_exhausted"] is True
+    assert client.query_k_calls == 3
+
+
+# ---------------------------------------------------------------------------
+# CLI 参数校验（login 前拒绝）
+# ---------------------------------------------------------------------------
+
+def test_cli_rejects_retries_above_one():
+    rc = probe.main(["--mode", "sample", "--trade-date", DAY, "--retries", "2"])
+    assert rc == 2
+
+
+def test_cli_rejects_sample_size_above_120():
+    rc = probe.main(["--mode", "sample", "--trade-date", DAY, "--sample-size", "121"])
+    assert rc == 2
+
+
+def test_cli_rejects_full_max_requests_above_6600():
+    rc = probe.main(
+        ["--mode", "full", "--trade-date", DAY, "--max-requests", "6601"]
+    )
+    assert rc == 2
+
+
+def test_cli_rejects_determinism_checks_above_five():
+    rc = probe.main(
+        ["--mode", "sample", "--trade-date", DAY, "--determinism-checks", "6"]
+    )
+    assert rc == 2
+
+
+def test_cli_rejects_sample_max_requests_above_150():
+    rc = probe.main(
+        ["--mode", "sample", "--trade-date", DAY, "--max-requests", "151"]
+    )
+    assert rc == 2
+
+
+def test_cli_rejects_unknown_fields_flag():
+    # --fields 已删除：任何字段参数必须在 login 前被 argparse 拒绝
+    with pytest.raises(SystemExit):
+        probe.main(
+            ["--mode", "sample", "--trade-date", DAY, "--fields", "date,code"]
         )
+
+
+def test_trade_date_must_be_strict():
+    rc = probe.main(["--mode", "sample", "--trade-date", "20260805"])
+    assert rc == 2
+
+
+def test_cli_rejects_negative_sample_size():
+    rc = probe.main(["--mode", "sample", "--trade-date", DAY, "--sample-size", "0"])
+    assert rc == 2
 
 
 # ---------------------------------------------------------------------------
@@ -424,10 +604,10 @@ def test_base_exception_propagates(exc):
 # ---------------------------------------------------------------------------
 
 def test_login_success_orchestration():
-    client = _make_client(
-        k_map={"sh.600000": [_stock_row("sh.600000")]}
+    client = _make_client(k_map={"sh.600000": [_stock_row("sh.600000")]})
+    summary = probe.run_sample_probe(
+        client, DAY, sample_size=1, sleep=lambda _: None
     )
-    summary = probe.run_sample_probe(client, DAY, sample_size=1, sleep=lambda _: None)
     assert summary["login"]["ok"] is True
     assert summary["probe"] is not None
     assert summary["universe_stats"]["target_count"] == 10
@@ -440,13 +620,59 @@ def test_login_failure_stops_probe():
     summary = probe.run_sample_probe(client, DAY, sample_size=5, sleep=lambda _: None)
     assert summary["login"]["ok"] is False
     assert summary["probe"] is None
-    assert not any(c == "query_all_stock" for c in client.calls if isinstance(c, tuple))
+    assert not any(isinstance(c, tuple) for c in client.calls)
 
 
 def test_query_all_stock_error_fails_closed():
     client = FakeClient(all_error=BoomError("boom"), all_stock_rows=[])
     with pytest.raises(probe.ProbeError):
         probe.run_sample_probe(client, DAY, sample_size=5, sleep=lambda _: None)
+
+
+def test_universe_conflict_fails_closed_sample():
+    universe = [
+        ["sh.600000", "1", "A"],
+        ["sh.600000", "0", "A"],
+    ]
+    client = FakeClient(all_stock_rows=universe, k_map={})
+    summary = probe.run_sample_probe(client, DAY, sample_size=5, sleep=lambda _: None)
+    assert summary["universe_stats"]["conflicting_status_count"] == 1
+    assert summary["universe_stats"]["contract_failure"] == "conflicting_status"
+    assert summary["probe"] is None
+
+
+def test_universe_conflict_fails_closed_full():
+    universe = [
+        ["sh.600000", "1", "A"],
+        ["sh.600000", "0", "A"],
+    ]
+    client = FakeClient(all_stock_rows=universe, k_map={})
+    summary = probe.run_full_probe(client, DAY, sleep=lambda _: None)
+    assert summary["universe_stats"]["contract_failure"] == "conflicting_status"
+    assert summary["probe"] is None
+    assert summary["breadth"] is None
+
+
+def test_universe_duplicate_marks_contract_warning():
+    universe = [
+        ["sh.600000", "1", "A"],
+        ["sh.600000", "1", "A"],
+    ]
+    client = FakeClient(
+        all_stock_rows=universe,
+        k_map={"sh.600000": [_stock_row("sh.600000")]},
+    )
+    summary = probe.run_sample_probe(client, DAY, sample_size=1, sleep=lambda _: None)
+    assert summary["universe_stats"]["duplicate_code_count"] == 1
+    assert summary["universe_stats"]["contract_warning"] == "duplicate_codes"
+
+
+def test_universe_too_large_fails_closed():
+    rows = [[f"sh.{600000 + i:06d}", "1", f"S{i}"] for i in range(6501)]
+    client = FakeClient(all_stock_rows=rows, k_map={})
+    summary = probe.run_full_probe(client, DAY, sleep=lambda _: None)
+    assert summary["universe_stats"]["universe_too_large"] is True
+    assert summary["probe"] is None
 
 
 def test_output_contains_no_full_stock_rows():
@@ -464,8 +690,12 @@ def test_output_contains_no_full_stock_rows():
     assert '"rows"' not in text
     assert "9.4900" not in text
     assert "10.1000" not in text
-    assert "1.25" not in text
     assert "600000" not in text
+
+
+def _breadth_summary(universe, k_map, **kwargs):
+    client = FakeClient(all_stock_rows=universe, k_map=k_map)
+    return probe.run_full_probe(client, DAY, sleep=lambda _: None, **kwargs)
 
 
 def test_full_probe_breadth_identity():
@@ -474,15 +704,14 @@ def test_full_probe_breadth_identity():
         ["sz.000001", "1", "B"],
         ["sz.300001", "0", "C"],
     ]
-    client = FakeClient(
-        all_stock_rows=universe,
-        k_map={
+    summary = _breadth_summary(
+        universe,
+        {
             "sh.600000": [_stock_row("sh.600000", pct="1.0")],
             "sz.000001": [_stock_row("sz.000001", pct="-2.0")],
-            "sz.300001": [],
+            "sz.300001": [_stock_row("sz.300001", status="0", pct="-")],
         },
     )
-    summary = probe.run_full_probe(client, DAY, sleep=lambda _: None)
     breadth = summary["breadth"]
     assert breadth["eligible_count"] == 3
     assert breadth["suspended_count"] == 1
@@ -495,11 +724,10 @@ def test_full_probe_breadth_identity():
 
 def test_full_probe_breadth_identity_fails_on_missing_pct():
     universe = [["sh.600000", "1", "A"]]
-    client = FakeClient(
-        all_stock_rows=universe,
-        k_map={"sh.600000": [_stock_row("sh.600000", pct="-")]},
+    summary = _breadth_summary(
+        universe,
+        {"sh.600000": [_stock_row("sh.600000", pct="-")]},
     )
-    summary = probe.run_full_probe(client, DAY, sleep=lambda _: None)
     assert summary["breadth"]["breadth_identity"] is False
     assert summary["breadth"]["missing_pct_chg"] == 1
 
@@ -509,19 +737,112 @@ def test_full_probe_breadth_identity_accepts_suspended_empty_pct():
         ["sh.600000", "1", "A"],
         ["sz.000001", "0", "B"],
     ]
-    client = FakeClient(
-        all_stock_rows=universe,
-        k_map={
+    summary = _breadth_summary(
+        universe,
+        {
             "sh.600000": [_stock_row("sh.600000", pct="1.0")],
             "sz.000001": [_stock_row("sz.000001", status="0", pct="-")],
         },
     )
-    summary = probe.run_full_probe(client, DAY, sleep=lambda _: None)
     breadth = summary["breadth"]
     assert breadth["suspended_count"] == 1
     assert breadth["valid_count"] == 1
     assert breadth["breadth_identity"] is True
     assert breadth["missing_pct_chg"] == 0
+
+
+def test_status_conflict_breaks_identity():
+    universe = [
+        ["sh.600000", "1", "A"],
+        ["sz.000001", "0", "B"],
+    ]
+    summary = _breadth_summary(
+        universe,
+        {
+            # B 在 universe 中为停牌（0），K线却返回交易（1）→ 状态冲突
+            "sh.600000": [_stock_row("sh.600000", pct="1.0")],
+            "sz.000001": [_stock_row("sz.000001", status="1", pct="1.0")],
+        },
+    )
+    assert summary["probe"]["counts"]["trade_status_mismatch"] == 1
+    assert summary["breadth"]["breadth_identity"] is False
+
+
+def test_request_failure_breaks_identity():
+    universe = [["sh.600000", "1", "A"]]
+    client = FakeClient(all_stock_rows=universe, k_map={}, k_error=BoomError("boom"))
+    summary = probe.run_full_probe(client, DAY, sleep=lambda _: None)
+    assert summary["probe"]["counts"]["failure"] >= 1
+    assert summary["breadth"]["breadth_identity"] is False
+
+
+def test_suspended_request_failure_breaks_identity():
+    universe = [
+        ["sh.600000", "1", "A"],
+        ["sz.000001", "0", "B"],
+    ]
+    client = FakeClient(
+        all_stock_rows=universe,
+        k_map={
+            "sh.600000": [_stock_row("sh.600000", pct="1.0")],
+            "sz.000001": [],  # 停牌股空响应：不得视为停牌证明
+        },
+    )
+    summary = probe.run_full_probe(client, DAY, sleep=lambda _: None)
+    assert summary["probe"]["counts"]["empty"] == 1
+    assert summary["breadth"]["breadth_identity"] is False
+
+
+def test_date_violation_breaks_identity():
+    universe = [["sh.600000", "1", "A"]]
+    summary = _breadth_summary(
+        universe,
+        {"sh.600000": [_stock_row("sh.600000", day="2026-08-04")]},
+    )
+    assert summary["probe"]["counts"]["date_mismatch"] == 1
+    assert summary["breadth"]["breadth_identity"] is False
+
+
+def test_circuit_open_breaks_identity():
+    class AlwaysFail(FakeClient):
+        def query_history_k_day(self, code, day, fields):
+            raise BoomError("boom")
+
+    universe = [[f"sh.{600000 + i:06d}", "1", f"S{i}"] for i in range(15)]
+    client = AlwaysFail(all_stock_rows=universe, k_map={})
+    summary = probe.run_full_probe(client, DAY, sleep=lambda _: None)
+    assert summary["probe"]["circuit_open"] == "consecutive_failures"
+    assert summary["breadth"]["breadth_identity"] is False
+
+
+def test_budget_exhaustion_breaks_identity():
+    universe = [[f"sh.{600000 + i:06d}", "1", f"S{i}"] for i in range(10)]
+    client = FakeClient(all_stock_rows=universe, k_map={})
+    summary = probe.run_full_probe(
+        client, DAY, max_requests=5, sleep=lambda _: None
+    )
+    assert summary["probe"]["budget_exhausted"] is True
+    assert summary["breadth"]["breadth_identity"] is False
+
+
+def test_incomplete_universe_coverage_breaks_identity():
+    # processed_target_count < universe target_count（提前熔断）→ identity=false
+    class FailAfter3(FakeClient):
+        def __init__(self):
+            super().__init__(all_stock_rows=[], k_map={})
+            self.n = 0
+
+        def query_history_k_day(self, code, day, fields):
+            self.n += 1
+            if self.n > 3:
+                raise BoomError("boom")
+            return [_stock_row(code)]
+
+    universe = [[f"sh.{600000 + i:06d}", "1", f"S{i}"] for i in range(6)]
+    client = FailAfter3()
+    client.all_stock_rows = universe
+    summary = probe.run_full_probe(client, DAY, sleep=lambda _: None)
+    assert summary["breadth"]["breadth_identity"] is False
 
 
 def test_cross_check_suspension_math():
@@ -554,6 +875,23 @@ def test_cross_probe_orchestration(tmp_path):
     assert cross["jaccard"] == 1.0
 
 
-def test_trade_date_must_be_strict():
-    with pytest.raises(probe.ProbeError):
-        probe.main(["--mode", "sample", "--trade-date", "20260805"])
+def test_request_accounting_totals():
+    client = _make_client(
+        all_pages=3,
+        k_map={
+            "sh.600000": [_stock_row("sh.600000")],
+            "sh.600001": [_stock_row("sh.600001")],
+        },
+    )
+    summary = probe.run_sample_probe(
+        client, DAY, sample_size=2, determinism_checks=0, sleep=lambda _: None
+    )
+    acc = summary["request_accounting"]
+    assert acc["session_request_count"] == 2
+    assert acc["universe_request_count"] == 3
+    assert acc["primary_request_count"] == 2
+    assert acc["retry_request_count"] == 0
+    assert acc["determinism_request_count"] == 0
+    assert acc["total_source_request_count"] == 7
+    # session 2 + universe 3 页 + 主探测 2 次真实调用
+    assert acc["total_source_request_count"] == 2 + 3 + client.query_k_calls
