@@ -24,6 +24,17 @@
 
 ## 历史阶段
 
+- bk11-free-source-feasibility-v0.1：branch research/bk11-free-source-feasibility-v0.1，
+  base cd17fec2cc28d8dd9ea9b8e37df0cc6c394a0b18（PR #46 合并后稳定分支）。
+  零成本数据源可行性探测结果：FEASIBLE_ZERO_COST_PARTIAL —— BaoStock
+  （免费匿名）历史股票池/单日行情/停牌/市场宽度全市场验证通过
+  （5204/5204 成功、breadth 恒等式成立、东财停牌交叉验证目标池 5/5）；
+  东财涨停/跌停/炸板池可达且随日期变化，但 data.qdate 为查询日而非池
+  交易日，已批准适配器对历史日期失败关闭（TRADE_DATE_MISMATCH），
+  涨跌停活动只能 partial；legal-zero NOT_PROVEN；无付费、无凭据、
+  无生产写入、无调度/回填/Slice 4/layered_promotion_rates；PR #47/#43
+  未触碰；Blocker 2 OPEN、3 OPEN、6 PARTIALLY CLOSED；文档见
+  docs/research/BK11_FREE_SOURCE_FEASIBILITY_V01.md。
 - bk11-production-ingestion-v0.1：branch feat/bk11-production-ingestion-v0.1，
   base 12593c340845a60b70c925bdceb7265b5710511d（PR #45 合并后稳定分支）。
   来源合同审计结果：路径 C BLOCKED —— suspended_count 无可信来源、
