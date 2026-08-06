@@ -266,6 +266,61 @@ class TestService:
         assert str(data_env) not in text
         assert "Traceback" not in text
 
+    def test_partial_existing_is_upgradable(self, sessions, data_env,
+                                            monkeypatch):
+        """已有 partial 记录：重跑必须走采集/升级路径，而非直接 deduped。"""
+        db = data_env / "short_term_facts.sqlite3"
+        calls = {"n": 0}
+        import short_term_daily_facts_v02 as v02
+        import bk11_tushare_facts_adapter as adapter
+        import short_term_limit_up_final_snapshot as fp
+        from tests.test_bk11_tushare_ingestion import FakeClient as _FC
+
+        # 先落一条 partial v0.2（直接用 composer+monotonic 构造）
+        fc = _FC()
+        facts = adapter.fetch_tushare_facts_snapshot(T, fc)
+        # 制造 partial：给 facts 一个 coverage warning
+        facts["facts_data_health"]["coverage_warning"] = True
+        facts["status"] = "partial"
+        facts["reason_codes"] = ["COVERAGE_WARNING"]
+        env = v02.compute_daily_facts_v02(
+            facts, {"kind": "producer", "envelope": _producer(
+                rows=[{"stock_code": "688981.SH", "lbc": 1}])})
+        # facts partial → 整体 partial
+        store.save_daily_facts_monotonic(env, db_path=db)
+        assert store.load_daily_facts(T, "final", db_path=db)["status"] == "partial"
+
+        def counting_ingest(trade_date, client=None, store_db=None):
+            calls["n"] += 1
+            return _ingest_stub(
+                trade_date, store_db,
+                _FC(limit_up_code="688981.SH"),
+                _producer(rows=[{"stock_code": "688981.SH", "lbc": 1}]))
+
+        monkeypatch.setattr(
+            "bk11_tushare_ingestion_service._ingest_locked", counting_ingest)
+        result = service.ingest_trade_date(T, store_db=str(db))
+        assert calls["n"] == 1
+        assert result["upgraded"] is True
+        loaded = store.load_daily_facts(T, "final", db_path=db)
+        assert loaded["status"] == "normal"
+
+    def test_existing_normal_deduped(self, sessions, data_env, monkeypatch):
+        db = data_env / "short_term_facts.sqlite3"
+        calls = {"n": 0}
+        _ingest_stub(T, str(db), FakeClient(limit_up_code="688981.SH"),
+                     _producer(rows=[{"stock_code": "688981.SH", "lbc": 1}]))
+
+        def counting_ingest(trade_date, client=None, store_db=None):
+            calls["n"] += 1
+            return _ingest_stub(trade_date, store_db)
+
+        monkeypatch.setattr(
+            "bk11_tushare_ingestion_service._ingest_locked", counting_ingest)
+        result = service.ingest_trade_date(T, store_db=str(db))
+        assert calls["n"] == 0
+        assert result["deduped"] is True
+
 
 def _ingest_stub(trade_date, store_db, fake_client, producer=None):
     """真实组合 + 保存路径（复用 service 内部逻辑的轻量替身）。"""
@@ -344,6 +399,28 @@ class TestCli:
                 "upgraded": False, "blocked": False, "reason_code": None,
                 "limitations": [], "snapshot": {}})
         assert cli.main(["ingest", "--trade-date", T]) == cli.EXIT_OK
+
+    def test_deduped_exit_zero(self, monkeypatch):
+        monkeypatch.setattr(
+            service, "ingest_trade_date",
+            lambda *a, **k: {
+                "schema_version": "x", "action": "ingest", "trade_date": T,
+                "status": "deduped", "saved": False, "deduped": True,
+                "upgraded": False, "blocked": False, "reason_code": "DEDUPED",
+                "limitations": [], "snapshot": {}})
+        assert cli.main(["ingest", "--trade-date", T]) == cli.EXIT_OK
+
+    def test_storage_conflict_exit_14(self, monkeypatch):
+        for reason in ("NORMAL_CONFLICT", "PARTIAL_CONFLICT",
+                       "SCHEMA_CONFLICT_V01"):
+            monkeypatch.setattr(
+                service, "ingest_trade_date",
+                lambda *a, _r=reason, **k: {
+                    "schema_version": "x", "action": "ingest",
+                    "trade_date": T, "status": "blocked", "saved": False,
+                    "deduped": False, "upgraded": False, "blocked": True,
+                    "reason_code": _r, "limitations": [], "snapshot": None})
+            assert cli.main(["ingest", "--trade-date", T]) == cli.EXIT_STORAGE_FAILED
 
     def test_token_flag_not_accepted(self):
         with pytest.raises(SystemExit) as exc:

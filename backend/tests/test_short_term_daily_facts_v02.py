@@ -222,6 +222,12 @@ class TestComposer:
         env = v02.compute_daily_facts_v02(_facts(), {"kind": "bogus"})
         assert env["status"] == "invalid"
 
+    def test_malformed_producer_rows_never_raise(self):
+        producer = _producer(rows=[{"stock_code": 12345, "lbc": "x"}])
+        env = v02.compute_daily_facts_v02(
+            _facts(), {"kind": "producer", "envelope": producer})
+        assert env["status"] in ("invalid", "partial", "unavailable")
+
     def test_top_level_shape_compatible(self):
         env = v02.compute_daily_facts_v02(
             _facts(), {"kind": "producer", "envelope": _producer()})

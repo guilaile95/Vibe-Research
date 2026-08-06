@@ -290,11 +290,12 @@ def fetch_tushare_facts_snapshot(
     # ---- 股票池过滤：上市/退市边界 ----
     pool_codes = set()
     delisted_excluded = 0
-    boundary_uncertain = 0
+    boundary_uncertain = False
     for code, entry in pool.items():
         if entry["list_date"] > trade_date:
             continue
         if entry["delist_date"] is not None:
+            boundary_uncertain = True
             if entry["delist_date"] <= trade_date:
                 delisted_excluded += 1
                 continue
@@ -314,7 +315,8 @@ def fetch_tushare_facts_snapshot(
     # ---- 未解释缺口 ----
     unexplained = pool_codes - daily_codes - suspended_codes
     out_of_pool = (daily_codes | suspended_codes) - pool_codes
-    coverage_warning = bool(unexplained) or bool(out_of_pool)
+    coverage_warning = (
+        bool(unexplained) or bool(out_of_pool) or boundary_uncertain)
     pool_total = max(1, len(pool_codes))
     missing_ratio = len(unexplained) / pool_total
     if (len(unexplained) > _MISSING_COUNT_LIMIT
@@ -447,6 +449,8 @@ def fetch_tushare_facts_snapshot(
             ["Tushare 第三方数据服务，非交易所直发"]
             + (["stk_limit 对 daily 存在未解释 join 缺口"]
                if join_gap else [])
+            + (["退市边界按 T < delist_date 在池；官方合同语义未确认"]
+               if boundary_uncertain else [])
         ),
         "breadth": {
             "advance_count": advance,
@@ -478,7 +482,7 @@ def fetch_tushare_facts_snapshot(
             "stk_limit_join_gap_count": len(join_gap),
             "invalid_price_rows": invalid_price_rows,
             "delisted_excluded_count": delisted_excluded,
-            "boundary_uncertain": boundary_uncertain > 0,
+            "boundary_uncertain": boundary_uncertain,
         },
         "sources": [
             {"source_id": "tushare_daily", "api_name": "daily",

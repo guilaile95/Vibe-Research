@@ -30,7 +30,7 @@ import short_term_fact_store as store
 import trade_calendar
 import tushare_pro_client as tpc
 
-SCHEMA_VERSION = "bk11-tushare-ingestion-v0.1"
+SCHEMA_VERSION = "bk11-tushare-ingestion-v0.2"
 
 _TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _BEIJING = ZoneInfo("Asia/Shanghai")
@@ -63,7 +63,7 @@ def _sessions_safe() -> tuple[set[str] | None, str | None]:
 
 def _today_shanghai() -> str | None:
     try:
-        return date.today().isoformat()
+        return datetime.now(_BEIJING).date().isoformat()
     except Exception:
         return None
 
@@ -152,7 +152,7 @@ def ingest_trade_date(
                 "upgraded": False,
                 "blocked": False,
                 "reason_code": "DEDUPED",
-                "limitations": ["该交易日已存在 v0.2 final 记录，未重复采集"],
+                "limitations": ["该交易日已存在 v0.2 normal 记录，未重复采集"],
                 "snapshot": existing,
             }
         return _ingest_locked(trade_date, client=client, store_db=store_db)
@@ -174,6 +174,9 @@ def _existing_v02(
         return None
     if envelope is None or envelope.get("schema_version") != (
             store.STORED_SCHEMA_VERSION_V02):
+        return None
+    if envelope.get("status") != "normal":
+        # partial 记录放行：允许生产入口重跑升级为 normal（store 单调规则）
         return None
     return {
         "trade_date": envelope.get("trade_date"),

@@ -184,8 +184,12 @@ class TestStockBasic:
         fc.basic = _pool() + [_basic("600000.SH", status="D",
                                      delist_date="2025-01-01")]
         result = _normal(fc)
-        assert result["status"] == "normal"
+        # 退市边界存在不确定性 → coverage_warning → 至少 partial
+        assert result["status"] == "partial"
+        assert result["facts_data_health"]["coverage_warning"] is True
+        assert result["universe"]["boundary_uncertain"] is True
         assert result["universe"]["delisted_excluded_count"] == 1
+        assert any("退市边界" in l for l in result["limitations"])
 
     def test_b_share_and_fund_excluded(self):
         fc = FakeClient()

@@ -168,6 +168,7 @@ def _empty_ladder_snapshot(facts: dict[str, Any]) -> dict[str, Any]:
 
 def _producer_ladder_snapshot(
     producer: dict[str, Any],
+    rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     adapter = producer.get("snapshot") or {}
     health = {
@@ -187,7 +188,7 @@ def _producer_ladder_snapshot(
         "fetched_at": adapter.get("observed_at"),
         "snapshot_at": producer.get("observed_at"),
         "data_health": health,
-        "limit_up_pool": _ladder_rows_from_producer(producer),
+        "limit_up_pool": rows,
     }
 
 
@@ -259,11 +260,12 @@ def compute_daily_facts_v02(
             )
         if producer["status"] == "normal":
             try:
+                em_rows = _ladder_rows_from_producer(producer)
                 ladder_envelope = short_term_limit_up_ladder.compute_limit_up_ladder(
-                    _producer_ladder_snapshot(producer))
+                    _producer_ladder_snapshot(producer, em_rows))
                 gap_envelope = short_term_ladder_gap.compute_ladder_gap(
                     ladder_envelope)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 ladder_envelope = None
                 gap_envelope = None
             if ladder_envelope is not None:
@@ -273,14 +275,16 @@ def compute_daily_facts_v02(
             ladder_source_ids = ["eastmoney_getTopicZTPool"]
 
             # ---- 跨源校验：Tushare limit_up_count vs 东财 row_count ----
-            em_count = len(_ladder_rows_from_producer(producer))
-            ts_count = int(facts.get("limit_activity", {}).get("limit_up_count") or 0)
-            if abs(ts_count - em_count) > max(
-                    _CROSS_SOURCE_TOLERANCE, em_count * _CROSS_SOURCE_RATIO):
-                cross_codes.append("CROSS_SOURCE_COUNT_MISMATCH")
-                cross_warnings.append(
-                    f"cross-source limit-up count mismatch: "
-                    f"tushare={ts_count} eastmoney={em_count}")
+            if ladder_envelope is not None:
+                em_count = len(em_rows)
+                ts_count = int(facts.get("limit_activity", {}).get(
+                    "limit_up_count") or 0)
+                if abs(ts_count - em_count) > max(
+                        _CROSS_SOURCE_TOLERANCE, em_count * _CROSS_SOURCE_RATIO):
+                    cross_codes.append("CROSS_SOURCE_COUNT_MISMATCH")
+                    cross_warnings.append(
+                        f"cross-source limit-up count mismatch: "
+                        f"tushare={ts_count} eastmoney={em_count}")
         else:
             # producer unavailable/partial：facts 保留，ladder 缺失
             ladder_status = "unavailable" if producer["status"] == "unavailable" \

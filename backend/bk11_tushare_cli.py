@@ -34,6 +34,8 @@ EXIT_ERROR = 15
 
 
 def _exit_code_for(reason_code: str | None) -> int:
+    if reason_code == "DEDUPED":
+        return EXIT_OK
     if reason_code == "CREDENTIAL_MISSING":
         return EXIT_CREDENTIAL_MISSING
     if reason_code == "PERMISSION_DENIED":
@@ -42,7 +44,8 @@ def _exit_code_for(reason_code: str | None) -> int:
         return EXIT_SOURCE_UNAVAILABLE
     if reason_code == "CONTRACT_FAILED" or reason_code == "ENVELOPE_VALIDATION_FAILED":
         return EXIT_CONTRACT_FAILED
-    if reason_code == "STORAGE_FAILED":
+    if reason_code in ("STORAGE_FAILED", "NORMAL_CONFLICT",
+                       "PARTIAL_CONFLICT", "SCHEMA_CONFLICT_V01"):
         return EXIT_STORAGE_FAILED
     return EXIT_ERROR
 
