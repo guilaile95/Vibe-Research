@@ -17,8 +17,10 @@ import {
   type DataStatus, type DailyReviewHistoryItem, type DailyReviewHistorySnapshot,
   type DailyReviewComparison, type NumericComparison, type RankingComparison,
   type HighlightComparison, type NorthboundCapitalFlow,
+  type Bk11HistoryEnvelope,
 } from "@/lib/api";
 import { NorthboundCapitalFlowCard } from "@/components/market/NorthboundCapitalFlowCard";
+import { ShortTermHistoryCard } from "@/components/dailyReview/ShortTermHistoryCard";
 import { northboundErrorMessage } from "@/lib/northboundView";
 import { loadLlm } from "@/lib/llm";
 import { useDailyReviewAiTaskStore } from "@/stores/dailyReviewAiTaskStore";
@@ -175,6 +177,12 @@ export function DailyReview() {
   const [northboundLoading, setNorthboundLoading] = useState(false);
   const [northboundError, setNorthboundError] = useState<string | null>(null);
 
+  // BK-11 短线市场历史（独立只读 endpoint；不随复盘轮询）
+  const [bk11Env, setBk11Env] = useState<Bk11HistoryEnvelope | null>(null);
+  const [bk11Loading, setBk11Loading] = useState(false);
+  const [bk11Error, setBk11Error] = useState<string | null>(null);
+  const bk11AbortRef = useRef<AbortController | null>(null);
+
   const loadNorthbound = useCallback(() => {
     setNorthboundLoading(true);
     setNorthboundError(null);
@@ -191,6 +199,29 @@ export function DailyReview() {
       .finally(() => {
         if (mountedRef.current) {
           setNorthboundLoading(false);
+        }
+      });
+  }, []);
+
+  const loadBk11History = useCallback(() => {
+    bk11AbortRef.current?.abort();
+    const controller = new AbortController();
+    bk11AbortRef.current = controller;
+    setBk11Loading(true);
+    setBk11Error(null);
+    api.bk11History(5, controller.signal)
+      .then((res) => {
+        if (!mountedRef.current || controller.signal.aborted) return;
+        setBk11Env(res);
+      })
+      .catch((e) => {
+        if (!mountedRef.current || controller.signal.aborted) return;
+        setBk11Env(null);
+        setBk11Error(e instanceof ApiError ? e.message : "短线市场历史加载失败");
+      })
+      .finally(() => {
+        if (mountedRef.current && !controller.signal.aborted) {
+          setBk11Loading(false);
         }
       });
   }, []);
@@ -347,6 +378,7 @@ export function DailyReview() {
     mountedRef.current = true;
     loadDailyReview();
     loadNorthbound();
+    loadBk11History();
     loadHistory({ trade_date: "", offset: 0 });
     loadWatchAuthoritative()
       .then((r) => {
@@ -362,6 +394,7 @@ export function DailyReview() {
     return () => {
       mountedRef.current = false;
       clearPoll();
+      bk11AbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1282,6 +1315,11 @@ export function DailyReview() {
           </div>
         )}
       </GlassCard>
+      </section>) },
+
+	      /* 11. BK-11 短线市场历史（独立只读请求；不随复盘轮询） */
+	      { order: 11, node: (<section key="bk11-history" className="order-[11]">
+      <ShortTermHistoryCard env={bk11Env} loading={bk11Loading} error={bk11Error} />
       </section>) },
 
       /* 3. 市场广度 */

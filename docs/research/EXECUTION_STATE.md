@@ -22,6 +22,14 @@
 
 ## 历史阶段
 
+- bk11-daily-review-history-v0.1：branch feat/bk11-daily-review-history-v0.1，
+  base 17c7f1dadd16a3ced2b73588fa9d5a987fa86520（PR #44 合并后稳定分支），
+  只读历史 API + Data Health source + Daily Review 页面区块；生产快照写入
+  按规则 C 记录为上游输入缺失阻塞；第一轮复审 CHANGES REQUIRED
+  （P1=1 前端 envelope 层级、P2=1 无界 SQL 查询）已修复：store 新增有界
+  list_recent_snapshots（SQL LIMIT）、service 改用 days+1 有界读取、前端
+  对齐 facts.facts/ladder.metrics/gap.metrics 正式合同并真实展示梯队数组；
+  独立审查结论以 PR 描述为准。
 - bk11-slice-3e-snapshot-selector：branch feat/bk11-snapshot-selector-v0.1，
   base 56ea49b186ed9e3387e3c0c6fb38d6bffbdf0d82（3d accepted head），
   accepted head e9ac68fe1ebd4e0629e870498884d5a58b3132ce（独立复审

@@ -29,6 +29,7 @@ SCHEMA_VERSION = "short-term-fact-store-v0.1"
 STORED_SCHEMA_VERSION = "short-term-daily-facts-v0.1"
 _TABLE = "fact_snapshots"
 _LOCK = threading.Lock()
+_MAX_RECENT_TRADE_DATES = 366
 
 _TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _ALLOWED_SESSIONS = frozenset({
@@ -358,6 +359,56 @@ def list_snapshots(db_path: str | Path | None = None) -> List[Dict[str, str]]:
                 FROM {_TABLE}
                 ORDER BY trade_date ASC, session ASC
                 """
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError as exc:
+        raise FactStoreCorruptedError() from exc
+
+
+def list_recent_snapshots(
+    limit_trade_dates: int,
+    db_path: str | Path | None = None,
+) -> List[Dict[str, str]]:
+    """有界列出最近 ``limit_trade_dates`` 个交易日的全部快照元数据。
+
+    - ``limit_trade_dates`` 必须是严格 int（拒绝 bool），且满足
+      0 < limit_trade_dates <= _MAX_RECENT_TRADE_DATES。
+    - SQL 层使用 LIMIT 只读取最近 N 个不同 trade_date；不先查询全量再切片。
+    - 返回这些交易日的全部 session 元数据，按 trade_date、session 升序。
+    - 数据库不存在时返回空列表，不创建数据库文件。
+    - 数据库损坏仍失败关闭（FactStoreCorruptedError），不泄漏路径或
+      SQLite 异常文本。
+    """
+    if isinstance(limit_trade_dates, bool) or type(limit_trade_dates) is not int:
+        raise ValueError("limit_trade_dates must be a strict int")
+    if not (0 < limit_trade_dates <= _MAX_RECENT_TRADE_DATES):
+        raise ValueError(
+            f"limit_trade_dates must be in 1..{_MAX_RECENT_TRADE_DATES}"
+        )
+
+    path = resolve_db_path(db_path)
+    if not path.exists():
+        return []
+
+    try:
+        conn = _get_read_connection(path)
+        try:
+            rows = conn.execute(
+                f"""
+                WITH recent_dates AS (
+                    SELECT DISTINCT trade_date
+                    FROM {_TABLE}
+                    ORDER BY trade_date DESC
+                    LIMIT ?
+                )
+                SELECT trade_date, session, schema_version, stored_at
+                FROM {_TABLE}
+                WHERE trade_date IN (SELECT trade_date FROM recent_dates)
+                ORDER BY trade_date ASC, session ASC
+                """,
+                (limit_trade_dates,),
             ).fetchall()
             return [dict(row) for row in rows]
         finally:
