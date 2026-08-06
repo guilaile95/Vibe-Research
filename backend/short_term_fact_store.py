@@ -27,6 +27,11 @@ from typing import Any, Dict, List, Optional
 
 SCHEMA_VERSION = "short-term-fact-store-v0.1"
 STORED_SCHEMA_VERSION = "short-term-daily-facts-v0.1"
+STORED_SCHEMA_VERSION_V02 = "short-term-daily-facts-v0.2"
+_STORED_SCHEMA_VERSIONS = frozenset({
+    STORED_SCHEMA_VERSION,
+    STORED_SCHEMA_VERSION_V02,
+})
 _TABLE = "fact_snapshots"
 _LOCK = threading.Lock()
 _MAX_RECENT_TRADE_DATES = 366
@@ -206,7 +211,7 @@ def _validate_envelope(envelope: Any) -> Dict[str, Any]:
     FactStoreInvalidEnvelopeError（不写入任何内容）。"""
     if type(envelope) is not dict:
         raise FactStoreInvalidEnvelopeError()
-    if envelope.get("schema_version") != STORED_SCHEMA_VERSION:
+    if envelope.get("schema_version") not in _STORED_SCHEMA_VERSIONS:
         raise FactStoreInvalidEnvelopeError()
     if set(envelope.keys()) != _ENVELOPE_FIELDS:
         raise FactStoreInvalidEnvelopeError()
@@ -240,6 +245,155 @@ def _validate_envelope(envelope: Any) -> Dict[str, Any]:
         "session": session,
         "schema_version": envelope["schema_version"],
     }
+
+
+def _validate_v02_envelope(envelope: Any) -> Dict[str, str]:
+    """校验可存储的 v0.2 daily-facts envelope（仅生产写入使用）。"""
+    key = _validate_envelope(envelope)
+    if key["schema_version"] != STORED_SCHEMA_VERSION_V02:
+        raise FactStoreInvalidEnvelopeError(
+            "monotonic save requires short-term-daily-facts-v0.2")
+    if envelope.get("session") != "final" or envelope.get("is_final") is not True:
+        raise FactStoreInvalidEnvelopeError("only final v0.2 envelopes are writable")
+    if envelope.get("status") not in ("normal", "partial"):
+        raise FactStoreInvalidEnvelopeError(
+            "only normal/partial v0.2 envelopes are writable")
+    return key
+
+
+def save_daily_facts_monotonic(
+    envelope: dict,
+    db_path: str | Path | None = None,
+) -> Dict[str, Any]:
+    """质量单调写入 v0.2 daily facts（原子事务，并发不倒退）。
+
+    规则：
+    - 无记录：插入（saved）；
+    - 相同内容：deduped；
+    - existing partial + new normal：upgraded；
+    - existing normal + new partial：blocked（不覆盖）；
+    - existing normal + new normal 不同内容：blocked（不静默覆盖）；
+    - existing partial + new partial 不同内容：blocked（不覆盖）；
+    - existing v0.1 同 key：blocked（schema conflict，不覆盖）；
+    - unavailable / invalid / 非 final：不写。
+
+    失败不删除旧记录；数据库损坏失败关闭（FactStoreCorruptedError）。
+    """
+    key = _validate_v02_envelope(envelope)
+    envelope_json = json.dumps(
+        envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    stored_at = _utc_now()
+    path = resolve_db_path(db_path)
+    init_db(path)
+    with _LOCK:
+        try:
+            conn = _get_write_connection(path)
+            try:
+                with conn:
+                    row = conn.execute(
+                        f"""
+                        SELECT schema_version, envelope_json, stored_at
+                        FROM {_TABLE}
+                        WHERE trade_date = ? AND session = ?
+                        """,
+                        (key["trade_date"], key["session"]),
+                    ).fetchone()
+                    if row is None:
+                        conn.execute(
+                            f"""
+                            INSERT INTO {_TABLE}
+                            (trade_date, session, schema_version, stored_at,
+                             envelope_json)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (key["trade_date"], key["session"],
+                             key["schema_version"], stored_at, envelope_json),
+                        )
+                        return {
+                            "saved": True,
+                            "deduped": False,
+                            "upgraded": False,
+                            "blocked": False,
+                            "reason_code": None,
+                            "snapshot": {
+                                "trade_date": key["trade_date"],
+                                "session": key["session"],
+                                "schema_version": key["schema_version"],
+                                "stored_at": stored_at,
+                            },
+                        }
+
+                    existing_version = row["schema_version"]
+                    existing_json = row["envelope_json"]
+                    new_status = envelope.get("status")
+
+                    def _blocked(reason: str) -> Dict[str, Any]:
+                        return {
+                            "saved": False,
+                            "deduped": False,
+                            "upgraded": False,
+                            "blocked": True,
+                            "reason_code": reason,
+                            "snapshot": {
+                                "trade_date": key["trade_date"],
+                                "session": key["session"],
+                                "schema_version": existing_version,
+                                "stored_at": row["stored_at"],
+                            },
+                        }
+
+                    if existing_version != STORED_SCHEMA_VERSION_V02:
+                        return _blocked("SCHEMA_CONFLICT_V01")
+                    if existing_json == envelope_json:
+                        return {
+                            "saved": False,
+                            "deduped": True,
+                            "upgraded": False,
+                            "blocked": False,
+                            "reason_code": "DEDUPED",
+                            "snapshot": {
+                                "trade_date": key["trade_date"],
+                                "session": key["session"],
+                                "schema_version": existing_version,
+                                "stored_at": row["stored_at"],
+                            },
+                        }
+                    try:
+                        existing_envelope = json.loads(existing_json)
+                    except json.JSONDecodeError as exc:
+                        raise FactStoreCorruptedError() from exc
+                    existing_status = existing_envelope.get("status")
+                    if existing_status == "normal":
+                        return _blocked("NORMAL_CONFLICT")
+                    if existing_status == "partial" and new_status == "normal":
+                        conn.execute(
+                            f"""
+                            UPDATE {_TABLE}
+                            SET schema_version = ?, stored_at = ?,
+                                envelope_json = ?
+                            WHERE trade_date = ? AND session = ?
+                            """,
+                            (key["schema_version"], stored_at, envelope_json,
+                             key["trade_date"], key["session"]),
+                        )
+                        return {
+                            "saved": True,
+                            "deduped": False,
+                            "upgraded": True,
+                            "blocked": False,
+                            "reason_code": "UPGRADED",
+                            "snapshot": {
+                                "trade_date": key["trade_date"],
+                                "session": key["session"],
+                                "schema_version": key["schema_version"],
+                                "stored_at": stored_at,
+                            },
+                        }
+                    return _blocked("PARTIAL_CONFLICT")
+            finally:
+                conn.close()
+        except sqlite3.DatabaseError as exc:
+            raise FactStoreCorruptedError() from exc
 
 
 def save_daily_facts(

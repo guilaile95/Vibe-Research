@@ -1,11 +1,47 @@
 # BK-11 生产快照写入接入决策 v0.1
 
+> 更新（v0.2）：Tushare production ingestion 已实现（离线），见下方
+> 「v0.2 状态」。原 v0.1 审计结论（BLOCKED）保持为历史记录。
+
 | 项 | 值 |
 |----|-----|
 | 阶段 | bk11-production-ingestion-v0.1 |
 | 分支 | feat/bk11-production-ingestion-v0.1 |
 | Base | 12593c340845a60b70c925bdceb7265b5710511d |
 | 结果 | **BLOCKED（路径 C）** —— 生产写入未实现 |
+
+## 0. v0.2 状态（Tushare production ingestion）
+
+```text
+结果：IMPLEMENTED_OFFLINE / LIVE_SMOKE_BLOCKED_CREDENTIAL
+原因：TUSHARE_TOKEN 环境变量缺失（进程与用户作用域均未配置）；
+      离线实现与测试全部完成，未宣称生产 live 合同通过。
+```
+
+已实现（v0.2）：
+
+```text
+backend/tushare_pro_client.py               最小 HTTPS JSON 客户端
+backend/bk11_tushare_facts_adapter.py       Tushare 市场事实适配器
+backend/short_term_daily_facts_v02.py       daily-facts v0.2 组合层
+backend/short_term_fact_store.py            v0.2 读取 + save_daily_facts_monotonic
+backend/short_term_fact_compare/summary.py  v0.2 schema 兼容
+backend/bk11_history_service.py             v0.2 读取兼容
+backend/bk11_tushare_ingestion_service.py   ingestion service（single-flight）
+backend/bk11_tushare_cli.py                 显式 CLI 生产入口
+```
+
+CLI：
+
+```text
+python -m bk11_tushare_cli ingest --trade-date YYYY-MM-DD
+```
+
+约束与结果等级：Token 仅从 `TUSHARE_TOKEN` 环境变量读取；不接受
+--token/--db-path/--source-url/--force；不自动调度；不批量回填；
+不启动 Slice 4；阻塞文案（`production integration not authorized` /
+`生产快照写入仍受上游输入缺失阻塞`）在凭据缺失时保持原状，页面不宣称
+生产入口可用。
 
 ## 一、决策
 
