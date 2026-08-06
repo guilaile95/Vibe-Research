@@ -26,7 +26,12 @@
   base cd17fec2cc28d8dd9ea9b8e37df0cc6c394a0b18（PR #46 合并后稳定分支）。
   零成本数据源可行性探测结果：FEASIBLE_ZERO_COST_PARTIAL —— BaoStock
   （免费匿名）历史股票池/单日行情/停牌/市场宽度全市场验证通过
-  （5204/5204 成功、breadth 恒等式成立、东财停牌交叉验证目标池 5/5）；
+  （5204/5204 成功、总来源请求 5215（primary 5204/retry 0/determinism 5/
+  universe 4/session 2）、breadth 恒等式成立、东财停牌交叉验证目标池 5/5、
+  trade_status_mismatch 0、股票池重复/冲突 0）；外部独立审查
+  CHANGES REQUIRED（P1=3/P2=1：请求预算统一与 determinism 单次复查、
+  停牌状态一致性、股票池失败关闭、文档计数口径）已全部修复并复测，
+  62 项离线测试、后端全量 3443 passed；
   东财涨停/跌停/炸板池可达且随日期变化，但 data.qdate 为查询日而非池
   交易日，已批准适配器对历史日期失败关闭（TRADE_DATE_MISMATCH），
   涨跌停活动只能 partial；legal-zero NOT_PROVEN；无付费、无凭据、
