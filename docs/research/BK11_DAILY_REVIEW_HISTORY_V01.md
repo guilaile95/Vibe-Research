@@ -135,7 +135,7 @@ tests/e2e/bk11-history-real.browser.mjs
 tests/e2e/data-health-real.browser.mjs（来源 ID/名称列表同步 +bk11_history）
 ```
 
-实测结果：
+第一轮实测结果（初版实现；当前 Head 数字以第十一节为准）：
 
 ```text
 后端聚焦：81 passed
@@ -263,7 +263,7 @@ docs/research/EXECUTION_STATE.md（状态行）
 ### 本轮测试结果
 
 ```text
-后端聚焦：131 passed（store 有界查询 9 + history service 5 + 既有）
+后端聚焦：131 passed（store 有界查询 11 + history service 3 + 既有）
 后端全量离线：3381 passed（上一轮 3367 + 14 新增），11 deselected，
              1 既有 warning，failed=0
 前端单元：291 passed（+5）
