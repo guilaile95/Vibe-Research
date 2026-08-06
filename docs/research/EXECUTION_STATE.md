@@ -22,6 +22,13 @@
 
 ## 历史阶段
 
+- bk11-production-ingestion-v0.1：branch feat/bk11-production-ingestion-v0.1，
+  base 12593c340845a60b70c925bdceb7265b5710511d（PR #45 合并后稳定分支）。
+  来源合同审计结果：路径 C BLOCKED —— suspended_count 无可信来源、
+  breadth 无日期绑定、legal-zero 未证明、全 A 快照运输层不稳定；
+  生产写入未实现，阻塞文案保持原状；审计见
+  docs/research/BK11_PRODUCTION_INPUT_AUDIT_V01.md 与
+  BK11_PRODUCTION_INGESTION_V01.md；独立审查结论以 PR 描述为准。
 - bk11-daily-review-history-v0.1：branch feat/bk11-daily-review-history-v0.1，
   base 17c7f1dadd16a3ced2b73588fa9d5a987fa86520（PR #44 合并后稳定分支），
   只读历史 API + Data Health source + Daily Review 页面区块；生产快照写入
