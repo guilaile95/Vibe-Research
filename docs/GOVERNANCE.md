@@ -46,7 +46,7 @@
 
 ## 3. CI 门禁分级
 
-稳定分支 `ci.yml` 现有 6 个 job：
+稳定分支 `ci.yml` 现有 7 个 job：
 
 | Job | 内容 | 分级 | 理由 |
 |---|---|---|---|
@@ -56,6 +56,7 @@
 | `e2e-smoke` | Playwright smoke + top-risk（起本地服务、访问实时数据源） | OPTIONAL | 稳定但依赖运行时/实时数据 |
 | `e2e-thesis-smoke` | evidence-thesis real E2E | OPTIONAL | 同上 |
 | `e2e-data-health-smoke` | data-health E2E | OPTIONAL | 同上 |
+| `e2e-intel-digest-smoke` | Intel digest E2E（PR #50 新增） | OPTIONAL | 同上 |
 
 REQUIRED 标准：离线、deterministic、可重复、不写生产数据、不依赖第三方实时服务。
 
@@ -112,6 +113,10 @@ FUTURE（BK-10 候选，未授权）：lint/format（ruff/eslint）、类型检�
 | `CONTRIBUTING.md` | 不添加 | **LOW ROI**（单人项目） |
 
 ## 6. PR #43 Recovery 评估（2026-08-07，只读评估，未执行）
+
+> **状态：COMPLETED / superseded by PR #50**（2026-08-07 合并）。
+> 本节为历史评估记录；实际执行已完成（recovery 分支合并、旧 PR #43 关闭），
+> 下文"执行路径"不再作为待执行任务。
 
 ### 根因
 

@@ -55,3 +55,10 @@ tests/test_fixes.py::test_run_cli_stream_timeout
 - SQLite 历史库
 - 前端 localStorage 中的 API Key / 模型配置
 - 本机 Clash/代理订阅与密码
+
+## 已接受的非阻断问题（P2）
+
+| 项 | 说明 |
+|----|------|
+| Intel Digest saving 请求无显式 timeout | 后端进程挂起时 UI 可能停留在"保存中"；不导致数据库数据损坏；reload 可恢复；当前 P2；后续候选修复，不是当前授权任务 |
+| thesis E2E 偶发失败（intermittent） | 2026-08-07 首次 stable merge run（run `31200057732`）失败于 "Updated evidence text not visible"（UI 更新可见性时序断言，`evidence-thesis-real.browser.mjs:255`）；**同一 exact Head 复跑成功**（CONFIRMED_INTERMITTENT_E2E_FAILURE）；不代表 thesis 产品功能故障；当前 P2；后续稳定性加固候选，本轮不修 |
