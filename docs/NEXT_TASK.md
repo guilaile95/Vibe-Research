@@ -7,13 +7,24 @@
 
 ## 当前已授权任务
 
-**已授权产品开发任务：无。**
+**Engineering Reliability Implementation v0.1 — Phase B1**（Python 依赖可复现性，
+工程实施，非产品任务）
 
-当前仅执行治理状态同步闭环（PR #50 合并后的权威文档收口，
-分支 `docs/intel-digest-post-merge-state-sync-v0.1`，属治理而非新业务任务）。
+- 分支：`chore/python-dependency-reproducibility-v0.1`（自稳定 Head `060b5d0` 创建）
+- 范围：仅处理 Phase A 唯一 P1——pip-tools 生成平台特定 exact lock、
+  CI 双 authority lock check、Contract D 双平台可复现闭环
+- 状态：`PLATFORM_LOCK_CLOSURE_IN_PROGRESS`（Phase A 测量见
+  `docs/research/ENGINEERING_RELIABILITY_BASELINE_V01.md`；P1 关闭条件
+  见授权契约 §二十）
+- 停止点：本阶段完成后停止；不处理 Actions/ruff/mypy/ESLint/npm/E2E flake
+  （Phase B2/B3 待授权）。
+
+**已授权产品开发任务：无。**
 
 ## 最近完成
 
+- Engineering Reliability Baseline Phase A（2026-08-08）：七项测量完成，
+  债务矩阵见 `docs/research/ENGINEERING_RELIABILITY_BASELINE_V01.md`。
 - Intel Daily Digest recovery 全流程收口（2026-08-07）：PR43 Recovery v0.1
   （4 提交 cherry-pick + 冲突解决 + 全量验证）→ PR43 Recovery Publication
   （push + Draft PR #50 + CI 7/7 + 远端独立审查 PASS + 旧 PR #43 关闭）→
@@ -33,6 +44,9 @@
 
 ## 后续已登记候选
 
+- Engineering Reliability Implementation v0.1（Phase B，待授权）：依赖锁 →
+  Actions 升级 → ruff 基线 → mypy 分文件 → 测试竞态修复；thesis E2E 稳定性
+  另立专项。
 - thesis E2E 稳定性加固（已实测 intermittent failure，P2 债务，非授权任务）。
 - Intel Digest saving 请求显式 timeout（P2 候选，非授权任务）。
 - BK-11：已暂停（Issue #48），恢复需新授权。

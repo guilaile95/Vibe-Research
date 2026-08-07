@@ -21,13 +21,18 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: |
-            backend/requirements.txt
-            backend/requirements-dev.txt
+            backend/requirements-dev-linux-py311.lock.txt
 
-      - name: Install backend dependencies
+      - name: Install backend dependencies (exact Linux lock)
+        run: python -m pip install -r backend/requirements-dev-linux-py311.lock.txt
+
+      - name: Canonical Python lock check (Linux authority)
+        working-directory: backend
         run: |
-          python -m pip install -r backend/requirements.txt
-          python -m pip install -r backend/requirements-dev.txt
+          python -m pip install -r requirements-tooling.txt
+          python -m piptools compile --no-emit-index-url --output-file=requirements-linux-py311.lock.txt requirements.txt
+          python -m piptools compile --no-emit-index-url --output-file=requirements-dev-linux-py311.lock.txt requirements.txt requirements-dev.txt
+          git diff --exit-code -- requirements-linux-py311.lock.txt requirements-dev-linux-py311.lock.txt
 
       - name: Run offline backend tests
         working-directory: backend
@@ -110,13 +115,10 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: |
-            backend/requirements.txt
-            backend/requirements-dev.txt
+            backend/requirements-dev-linux-py311.lock.txt
 
-      - name: Install backend dependencies
-        run: |
-          python -m pip install -r backend/requirements.txt
-          python -m pip install -r backend/requirements-dev.txt
+      - name: Install backend dependencies (exact Linux lock)
+        run: python -m pip install -r backend/requirements-dev-linux-py311.lock.txt
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -159,13 +161,10 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: |
-            backend/requirements.txt
-            backend/requirements-dev.txt
+            backend/requirements-dev-linux-py311.lock.txt
 
-      - name: Install backend dependencies
-        run: |
-          python -m pip install -r backend/requirements.txt
-          python -m pip install -r backend/requirements-dev.txt
+      - name: Install backend dependencies (exact Linux lock)
+        run: python -m pip install -r backend/requirements-dev-linux-py311.lock.txt
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -209,13 +208,10 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: |
-            backend/requirements.txt
-            backend/requirements-dev.txt
+            backend/requirements-dev-linux-py311.lock.txt
 
-      - name: Install backend dependencies
-        run: |
-          python -m pip install -r backend/requirements.txt
-          python -m pip install -r backend/requirements-dev.txt
+      - name: Install backend dependencies (exact Linux lock)
+        run: python -m pip install -r backend/requirements-dev-linux-py311.lock.txt
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -243,6 +239,42 @@ jobs:
           VR_DATA_DIR: ${{ runner.temp }}/vr-intel-data
           VR_REPORTS_DIR: ${{ runner.temp }}/vr-intel-reports
         run: npm run test:e2e:intel-digest
+
+  windows-lock-check:
+    name: Python Windows lock check
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements-dev-windows-py312.lock.txt
+
+      - name: Install lock compiler (pinned toolchain)
+        working-directory: backend
+        run: python -m pip install -r requirements-tooling.txt
+
+      - name: Canonical Windows lock check
+        working-directory: backend
+        run: |
+          python -m piptools compile --no-emit-index-url --output-file=requirements-dev-windows-py312.lock.txt requirements.txt requirements-dev.txt
+          git diff --exit-code -- requirements-dev-windows-py312.lock.txt
+
+      - name: Install backend dependencies (exact Windows lock)
+        run: python -m pip install -r backend/requirements-dev-windows-py312.lock.txt
+
+      - name: Run offline backend tests
+        working-directory: backend
+        env:
+          VR_DATA_DIR: ${{ runner.temp }}/vr-data
+          VR_REPORTS_DIR: ${{ runner.temp }}/vr-reports
+          VIBE_RESEARCH_REVIEW_DB: ${{ runner.temp }}/review.db
+        run: python -m pytest -m "not live"
 
   whitespace:
     name: Whitespace check
