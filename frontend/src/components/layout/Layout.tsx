@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Activity,
   Radar,
@@ -38,10 +38,10 @@ const APP_VERSION = "v0.1.3";
 const REPO_URL = "https://github.com/guilaile95/Vibe-Research";
 
 const PRIMARY_NAV = [
-  { to: "/daily-review", icon: Activity, label: "Today" },
-  { to: "/intel", icon: Radar, label: "Market" },
-  { to: "/stock-data", icon: Search, label: "Stocks" },
-  { to: "/portfolio", icon: Wallet, label: "Portfolio" },
+  { to: "/daily-review", icon: Activity, label: "今天" },
+  { to: "/intel", icon: Radar, label: "市场" },
+  { to: "/stock-data", icon: Search, label: "个股" },
+  { to: "/portfolio", icon: Wallet, label: "持仓" },
 ];
 
 const RESEARCH_NAV = [
@@ -108,11 +108,12 @@ function focusableIn(container: HTMLElement | null) {
 
 export function Layout() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const { dark, toggle } = useDarkMode();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("vr-sidebar") === "collapsed");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(readDesktop);
-  const [moreOpen, setMoreOpen] = useState(() => MORE_NAV.some(({ to }) => isActive(window.location.pathname, to)));
+  const [moreOpen, setMoreOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
@@ -127,6 +128,17 @@ export function Layout() {
       setMoreOpen(true);
     }
   }, [pathname]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        navigate("/stock-data");
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [navigate]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
@@ -333,7 +345,7 @@ export function Layout() {
           </div>
 
           <div className="mt-5">
-            {!compact && <p className="mb-1.5 px-2.5 text-[11px] font-medium text-sidebar-muted">Research</p>}
+            {!compact && <p className="mb-1.5 px-2.5 text-[11px] font-medium text-sidebar-muted">研究</p>}
             <div className="space-y-0.5">{RESEARCH_NAV.map(navItem)}</div>
           </div>
 
@@ -372,7 +384,7 @@ export function Layout() {
               <Settings className="h-[17px] w-[17px]" />
               {!compact && (
                 <>
-                  <span className="flex-1 text-left">More</span>
+                  <span className="flex-1 text-left">更多</span>
                   <ChevronDown className={cn("h-4 w-4 transition-transform", moreOpen && "rotate-180")} />
                 </>
               )}
