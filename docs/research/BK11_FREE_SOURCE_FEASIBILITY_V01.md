@@ -8,18 +8,20 @@
 | 探测时间 | 2026-08-06 17:06–17:22 与 18:04–18:25 Asia/Shanghai（修复后复测） |
 | 结果 | **FEASIBLE_ZERO_COST_PARTIAL** |
 
-> 2026-08-06 复测说明：本文件按外部独立审查（P1=3/P2=1）修复后的
-> harness 重跑全部 live 探测；请求计数改为真实网络调用口径
-> （primary / retry / determinism / universe / session 分列），
-> determinism 复用主探测结果只追加一次复查；股票池重复与状态冲突
-> 失败关闭；trade_status 一致性纳入 breadth 恒等式条件。
+> 2026-08-07 合同关闭说明：`--max-requests` 只定义为 harness 可直接控制的
+> K 线主探测/重试/determinism 请求硬上限；login/logout 与
+> query_all_stock SDK 内部分页只做独立观测计数，不再宣称受同一硬预算控制。
+> 显式 0/负数预算必须在 login 前拒绝。运行时 universe 与 K 线
+> tradeStatus 均严格要求 `0/1`，determinism 一致性纳入 breadth identity。
+> 本文件所有全市场性能口径统一使用最终成功实测：
+> **577.66s / 约 9.6 分钟 / 9.0 req/s**。
 
 ## 一、结论摘要
 
 ```text
 BaoStock（免费匿名）：历史股票池、历史单日行情、停牌状态、市场宽度全部可行；
   日期绑定明确（请求日回显 + 行内日期）；全市场单日 5204/5204 成功，
-  耗时 5.15 分钟；breadth 恒等式成立。
+  总耗时 577.66s（约 9.6 分钟），9.0 req/s；breadth 恒等式成立。
 
 东方财富指定日期停复牌接口：可用；与 BaoStock 停牌集合按“T 日处于停牌”
   口径完全一致（目标股票池 5/5），日期语义差异可解释。
@@ -67,6 +69,9 @@ fields 由服务器返回（实测 ['code','tradeStatus','code_name']）；
 每页 2000 条（BAOSTOCK_PER_PAGE_COUNT），超过需翻页（next()）。
 实测 2026-08-05：7329 行，含指数（sh.000xxx、sz.399xxx）、ETF、
 基金、债券、B 股、北交所等非目标证券，必须按“交易所前缀+代码段”过滤。
+SDK 内部分页由 BaoStock ResultData/next() 驱动，harness 无法逐页实施精确硬
+上限；`universe_request_count` 因此仅作为观测/核算值，不属于
+`--max-requests` hard cap。
 ```
 
 ### query_history_k_data_plus
@@ -127,6 +132,8 @@ T3 = 2026-08-05（最近 60 个交易日内，东财停复牌接口返回至少�
   北交所（bj.8xxxxx/4xxxxx/920xxx）、退市整理期等。
 过滤必须保留交易所前缀：sh.000001（上证指数）与 sz.000001（平安银行）
   数字相同，仅靠六位数字无法区分；过滤依据为代码+交易所字段，不按名称。
+实际进入 sample/full/cross 的目标 universe 还必须满足：tradeStatus 只允许
+字符串 '0' 或 '1'；出现未知/缺失/其他值时失败关闭，不进入 K 线探测。
 ```
 
 ## 六、探测结果
@@ -140,10 +147,11 @@ T3 = 2026-08-05（最近 60 个交易日内，东财停复牌接口返回至少�
   代码不匹配 0、重复 0、非法 pctChg 0、非法 OHLC 0、非法 tradeStatus 0、
   trade_status_mismatch 0；
 确定性：前 5 只复用主探测结果、各追加 1 次复查，5/5 一致（共 5 次复查）；
-请求计数：primary 120、retry 0、determinism 5、universe 4（7329 行
-  /2000 每页）、session 2（login+logout）、total_source 131；
+请求观测：primary 120、retry 0、determinism 5、universe 4、session 2；
+  controlled_probe=125（受 --max-requests 控制），uncontrolled_source=6，
+  total_source=131；
 延迟（含 determinism）：p50=32ms、p95=328ms、max=734ms；
-总耗时 11.31s（11.05 req/s）。
+总耗时 11.31s（11.05 controlled probe req/s）。
 ```
 
 ### 6.2 日期变化（T2，30 只样本）
@@ -151,8 +159,9 @@ T3 = 2026-08-05（最近 60 个交易日内，东财停复牌接口返回至少�
 ```text
 结果：30/30 成功；全部违规计数为 0（含 trade_status_mismatch 0）；
 确定性 5/5（复用主结果+1 次复查）；
-请求计数：primary 30、retry 0、determinism 5、universe 4、session 2、
-  total_source 41；总耗时 4.67s；
+请求观测：primary 30、retry 0、determinism 5、universe 4、session 2；
+  controlled_probe=35，uncontrolled_source=6，total_source=41；
+总耗时 4.67s；
 股票池随日期变化：T2 目标股票 5204 只、停牌 7 只（T1 为 5 只），
   证明 query_all_stock(day) 的 day 参数真实影响历史股票池。
 ```
@@ -161,20 +170,22 @@ T3 = 2026-08-05（最近 60 个交易日内，东财停复牌接口返回至少�
 
 ```text
 总目标：5204（query_all_stock 7329 行过滤 2125 行后）
-请求计数：primary 5204、retry 0、determinism 5（复用主结果+1 次复查）、
-  universe 4、session 2、total_source 5215
+请求观测：primary 5204、retry 0、determinism 5（复用主结果+1 次复查）、
+  universe 4、session 2；controlled_probe=5209，uncontrolled_source=6，
+  total_source=5215
 成功：5204；失败 0；重试 0；空响应 0；日期不匹配 0；
   重复 0；非法 pctChg 0；非法 OHLC 0；非法 tradeStatus 0；
   trade_status_mismatch 0
+确定性：5/5，一致性作为 breadth identity 必要条件
 延迟（含 determinism）：p50=32ms、p95=485ms、max=5.81s、mean=111ms
-总耗时：577.66s（约 9.6 分钟）；9.0 req/s
+总耗时：577.66s（约 9.6 分钟）；9.0 controlled probe req/s
 预计每日生产耗时（单日全市场，含 5 次确定性复查）：约 9–10 分钟
 ```
 
 ### 6.3a 失败关闭证据（瞬时故障运行）
 
 ```text
-复测期间一次运行在 495 次真实请求时触发 failure_rate 熔断：
+复测期间一次运行在 495 次可控 K 线请求时触发 failure_rate 熔断：
   3 只股票传输失败（各重试 1 次后仍失败，6/495 ≈ 1.21% > 1%）；
   电路立即停止（processed=492、circuit_open=failure_rate、
   breadth_identity=false），未继续无意义请求；
@@ -195,10 +206,11 @@ eligible_count = 5204（目标股票池）
 valid_count    = 5199 = 3427 + 1599 + 173
 恒等式：eligible == valid + suspended（5204 == 5199 + 5）成立
 缺失 pctChg：0（停牌股空 pctChg 为预期语义，不计缺失）
-状态一致性：trade_status_mismatch=0（全部目标 universe 状态 == K 线
-  tradestatus）；请求失败 0、空响应 0、日期/代码/重复/非法计数 0；
-  股票池重复 0、状态冲突 0；processed == target_count；circuit 空、
-  budget 未耗尽 → breadth_identity=true
+状态一致性：universe 与 K 线 tradeStatus 均严格为 0/1；
+  trade_status_mismatch=0、invalid_tradestatus=0；请求失败 0、空响应 0、
+  日期/代码/重复/非法计数 0；股票池重复 0、状态冲突 0；
+  processed == target_count；circuit 空；controlled probe budget 未耗尽；
+  determinism 5/5 且 complete → breadth_identity=true
 ```
 
 ### 6.4a 股票池失败关闭
@@ -208,6 +220,8 @@ query_all_stock 重复目标代码不再静默保留首次值：
 - duplicate_code_count：同状态重复行计数（本次 0）；
 - conflicting_status_count：同代码不同状态计数（本次 0）；
   任一冲突 > 0 → 来源合同失败，sample/full/cross 全部停止探测；
+- 目标 universe 任一 tradeStatus 非 '0'/'1' → invalid universe trade status，
+  在任何 K 线探测前失败关闭；
 - 重复 > 0 且无冲突 → 至少 contract_warning，不得生成 FULL 结论；
 - 目标数量 > FULL_MAX_TARGETS（6500）→ universe_too_large，失败关闭，
   不得静默截断（本次 5204 ≤ 6500 不触发）。
@@ -221,6 +235,8 @@ query_all_stock 重复目标代码不再静默保留首次值：
 活跃股返回 tradestatus='1' 与有限 pctChg；
 未观察到“停牌返回空响应”的行为（5204 只中空响应 0）；
 缺失 pctChg 不被归入停牌（停牌由 tradeStatus 字段决定，不反推）。
+K 线 tradestatus 缺失、空串、'-'、数字型或其他值均属于
+invalid_tradestatus，不接受宽松解释。
 ```
 
 ### 6.6 东财指定日期停复牌交叉验证（T3=2026-08-05）
@@ -242,8 +258,7 @@ query_all_stock 重复目标代码不再静默保留首次值：
   仅东财（目标池）            = 0
   Jaccard（目标池）           = 1.0
 
-全口径（含 B 股 200706 瓦轴B）：东财 6、交集 5、Jaccard=0.8333，
-  唯一差异为 B 股（非目标证券，BaoStock 侧按口径排除）。
+全口径（含 B 股 200706 瓦轴B）：东财 6、交集 5、Jaccard=0.8333，n  唯一差异为 B 股（非目标证券，BaoStock 侧按口径排除）。
 差异原因可解释：事件日期语义 + 证券范围（B 股）+ 日内停复牌
   （如 603221 停至 08-05 15:00，08-05 当日仍计停牌）。
 ```
@@ -271,42 +286,44 @@ query_all_stock 重复目标代码不再静默保留首次值：
   OPEN）。本阶段禁止实现涨跌停价规则，不修改适配器。
 ```
 
-## 六A、修复记录（外部独立审查 P1=3 / P2=1）
+## 六A、此前修复记录（2026-08-06）
 
 ```text
-P1-1 请求预算：
-  - 所有真实来源调用纳入统一预算：login(1)、query_all_stock 分页、
-    主探测尝试、重试、determinism 复查；预算不足失败关闭；
-  - determinism 复用主探测结果，每只只追加 1 次复查请求（不再双查）；
-  - request_count = 真实网络调用次数（primary+retry+determinism）；
-    total_source_request_count = + universe 分页 + session(login+logout)；
-  - total_elapsed / requests_per_second / p50/p95 / 预计生产耗时均
-    包含 determinism（latency_includes_determinism=true）；
-  - 预算不足时 determinism 返回 incomplete=true 并停止；
-  - CLI 严格校验（login 前拒绝）：sample_size 1..120、retries 0..1、
-    sample max_requests 1..150、full max_requests 1..6600、
-    determinism_checks 0..5、fields 固定 DEFAULT_FIELDS（--fields 已删除）、
-    full 模式单一交易日。
+- determinism 复用主探测结果，每只只追加 1 次复查请求；
+- request_count 明确为 primary+retry+determinism 的 K 线调用计数；
+- duplicate_code_count / conflicting_status_count 与状态匹配检查已加入；
+- FULL_MAX_TARGETS=6500，超过失败关闭；
+- 输出继续保留 session/universe/primary/retry/determinism 分列核算。
+```
 
-P1-2 停牌状态一致性：
-  - 每个 probe target 携带 query_all_stock 的 expected_trade_status；
-  - 单日 K 行验证 row.tradestatus == expected，不一致记录稳定违规码
-    trade_status_mismatch（universe=0/K=1 与 universe=1/K=0 两方向均覆盖）；
-  - breadth_identity 仅在所有目标状态一致时才允许 true；
-  - 停牌股 pctChg 为空仅在 universe=0 + K=0 + 日期/代码匹配 + 请求成功时
-    允许；请求失败、空响应、状态冲突不得视为停牌证明。
+## 六B、Issue #48 最新审查关闭口径（2026-08-07）
 
-P1-3 股票池失败关闭：
-  - 重复/冲突计数输出（duplicate_code_count / conflicting_status_count）；
-  - 冲突 > 0 停止 full probe（sample/cross 同样失败关闭）；
-  - 重复 > 0 标记 contract_warning；
-  - 目标数 > 6500 返回 universe_too_large，不静默截断；
-  - breadth_identity=true 要求 12 项条件全部满足（处理数==target_count、
-    失败/空/日期/代码/重复/非法 pctChg/状态冲突全 0、circuit 空、
-    budget 未耗尽、universe 重复/冲突 0、eligible==valid+suspended）。
+```text
+P1-1 请求预算重新定义：
+  - --max-requests 只控制 query_history_k_data_plus 的
+    primary/retry/determinism；
+  - login/logout 与 query_all_stock SDK 内部分页不属于该 hard cap；
+  - request_accounting 明确输出 budget_scope、controlled_probe_request_count、
+    uncontrolled_source_request_count 与 total_source_request_count；
+  - universe_request_count 是分页观测/核算值，不声称可逐页精确阻断。
 
-P2-1 文档：本节与 6.3 起按新口径区分 target_count / primary_request_count /
-  retry_request_count / determinism_request_count / total_source_request_count。
+P1-2 非正预算：
+  - CLI 默认值改为 None（“省略参数”与“显式 0”不再混为一谈）；
+  - sample/full 显式 0 或负数必须在 client.login() 前抛错/返回 rc=2；
+  - sample 上限 150，full 上限 6600 保持。
+
+P1-3 tradeStatus + determinism：
+  - 进入任何 sample/full/cross K 线工作前，目标 universe tradeStatus
+    必须严格为字符串 '0'/'1'；
+  - K 线 tradestatus 同样严格为字符串 '0'/'1'，缺失/空/'-'/其他类型
+    均计 invalid_tradestatus；
+  - breadth_identity 同时要求 invalid_tradestatus=0、trade_status_mismatch=0
+    以及 determinism_consistent=true；
+  - determinism requested 时 incomplete 或任一复查不一致均使 identity=false。
+
+P2-1 文档性能口径：
+  - 全市场成功实测统一为 577.66s / 约9.6分钟 / 9.0 req/s；
+  - 删除旧的 5.15 分钟、≈5 分钟、5–6 分钟和 16.8 req/s 口径。
 ```
 
 ## 七、legal-zero 结论
@@ -323,7 +340,7 @@ legal-zero = NOT_PROVEN
 
 ```text
 - BaoStock：免费匿名；BSD（PyPI 元数据）；自建服务器，非交易所直发；
-  服务条款与上游链路未公开；稳定性以本日单次探测为准（16.8 req/s 无失败）；
+  服务条款与上游链路未公开；最终成功全市场探测约 9.0 req/s，5204/5204；
 - 东财：Tier B 商业源，无公开 API 文档，许可 unclear；存在限流/空响应/
   访问控制风险（既有审计已记录）；qdate 语义冲突需适配器合同修正；
 - 数据保留边界：本仓库只提交聚合统计与脱敏摘要；不提交完整股票列表、
@@ -334,7 +351,7 @@ legal-zero = NOT_PROVEN
 
 | 候选 | 免费 | 注册 | Token | 历史指定日期 | 历史股票池 | 停牌状态 | 全市场截面 | 涨停/跌停/炸板 | 连板 | 日期绑定 | 请求规模 | 稳定性 | 许可证 | 适合字段 | 不能承担字段 | 进入下一阶段 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| BaoStock | 是 | 否 | 否 | 是（单日 K，日期回显） | 是（query_all_stock(day)，tradeStatus） | 是（tradeStatus/tradestatus） | 是（逐股单日，全市场 ~5200 请求 ≈5 分钟） | 否（无涨跌停池） | 否 | 强（请求日回显+行内日期） | 中等（串行 16.8 req/s，5200/日） | 本日 100% 成功 | BSD（PyPI 元数据） | breadth、suspended/eligible、pctChg 分布 | 涨跌停/炸板/连板 | 是（breadth/停牌主源） |
+| BaoStock | 是 | 否 | 否 | 是（单日 K，日期回显） | 是（query_all_stock(day)，tradeStatus） | 是（tradeStatus/tradestatus） | 是（逐股单日，全市场 ~5200 可控 K 线请求 ≈9.6 分钟） | 否（无涨跌停池） | 否 | 强（请求日回显+行内日期） | 中等（最终实测 9.0 req/s，5200/日） | 最终成功运行 5204/5204 | BSD（PyPI 元数据） | breadth、suspended/eligible、pctChg 分布 | 涨跌停/炸板/连板 | 是（breadth/停牌主源） |
 | 东财现有接口（push2ex 三池） | 是 | 否 | 否 | 是（date 参数影响内容） | 否 | 否 | 否（仅池） | 是（ZT/ZB/DT 池） | 是（lbc） | 未证明（qdate=查询日，载荷无池日期） | 单日 3–4 请求 | 间歇风控风险 | unclear | 涨跌停/炸板/连板池 | 日期绑定证明、legal-zero | 有条件（需适配器合同修正） |
 | 东财指定日期停复牌接口 | 是 | 否 | 否 | 是（DATETIME） | 否 | 是（事件记录，需过滤“T 日处于停牌”） | 否 | 否 | 否 | 中（事件日期语义需解释） | 单日 1–2 请求 | 本日稳定 | unclear | 停牌交叉验证 | 全市场截面、breadth | 是（交叉验证源） |
 | AKShare | 是（开源库） | 否 | 否 | 是（封装上游） | 是 | 是 | 是 | 是 | 是 | 依赖其上游封装 | — | 依赖上游 | MIT（库本身） | 仅作接口实现参考 | 不作为直接依赖（本任务未安装） | 否（参考） |
@@ -351,7 +368,7 @@ legal-zero = NOT_PROVEN
 - advance/decline/flat/suspended/eligible 可可靠生成（BaoStock，
   全市场验证，恒等式成立，停牌交叉验证一致）；
 - 全部数据成本为 0（无付费 API、无 Token、无 Cookie、无账号）；
-- 预计每日运行耗时可接受（约 5–6 分钟/交易日）。
+- 最终成功实测为 577.66s / 约9.6分钟 / 9.0 req/s，预计每日约9–10分钟。
 
 不足面（数据只能进入 partial，不允许标记 normal）：
 - 涨跌停活动日期绑定未证明（qdate=查询日，已批准适配器失败关闭）；
@@ -362,13 +379,12 @@ legal-zero = NOT_PROVEN
 ## 十一、下一阶段建议（不自动实施）
 
 ```text
-1. 用户决定是否接受“零事件日 unavailable/partial、正数日仅 partial”
-   的日事实口径；
-2. 若接受，评估修正东财池适配器日期绑定合同（qdate 语义）并重审
-   Blocker 3——该修正超出本阶段范围，需单独任务；
-3. 决定是否从 PR #47 抽取 v0.2 composer/store 设计并改接 BaoStock
-   breadth（PR #47 本轮未触碰）；
-4. 不自动开始生产实现；不开始调度、回填、Slice 4 或
+1. 先完成本研究分支最新审查项的离线验证与独立复审；
+2. 只有 P0=P1=P2=0 后创建 Draft PR；
+3. 后续若接受“零事件日 unavailable/partial、正数日仅 partial”口径，
+   再单独评估东财池适配器日期绑定合同与 Blocker 3；
+4. 可评估从 PR #47 抽取 v0.2 composer/store 设计并改接 BaoStock breadth；
+5. 不自动开始生产实现、调度、历史回填、Slice 4 或
    layered_promotion_rates。
 ```
 
@@ -387,12 +403,16 @@ legal-zero = NOT_PROVEN
 ## 十三、测试与验证
 
 ```text
-新增：tools/research/bk11_baostock_probe.py（研究 harness）
-      backend/tests/test_bk11_baostock_probe.py（62 项离线测试）
-      docs/research/BK11_FREE_SOURCE_FEASIBILITY_V01.md（本文件）
-修改：docs/research/EXECUTION_STATE.md（状态行）
-后端全量离线：3443 passed（基线 3381 + 62）、11 deselected、
-  1 既有 warning、failed=0
-前端：291 passed；npm run build 通过
-live 探测：仅本文件记录的聚合探测；live 探测未加入 GitHub CI
+研究代码：tools/research/bk11_baostock_probe.py
+原有测试：backend/tests/test_bk11_baostock_probe.py（62 项离线测试）
+关闭测试：backend/tests/test_bk11_baostock_probe_contract_closure.py
+文档：docs/research/BK11_FREE_SOURCE_FEASIBILITY_V01.md（本文件）
+状态：docs/research/EXECUTION_STATE.md
+
+2026-08-06 历史基线：3443 passed（基线3381 + 62）、11 deselected、
+  1既有warning、failed=0；前端291 passed；npm run build通过。
+2026-08-07 最新审查关闭后的测试结果以本分支新 Head 的 CI/独立复审为准，
+  在完成前不得把本阶段标记为 Ready/生产接入。
+live 探测：不因本次合同修复重跑全市场；仅允许后续小样本 smoke，
+  不把 live 探测加入 GitHub CI。
 ```
