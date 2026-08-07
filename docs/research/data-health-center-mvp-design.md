@@ -1,5 +1,7 @@
 # 数据健康中心 MVP 技术设计（草案 v2）
 
+> （2026-08-07 更新：数据健康中心已上线（PR #23），本文件保留为历史设计稿）
+
 > 基线分支：`feature/research-system-v01`
 > 基线提交：`cdd1a0fb589e4decb3b7196894fae9e1753ed0db`
 > 设计分支：`design/data-health-center-mvp`

@@ -116,9 +116,13 @@ portfolio_advice_service.generate_portfolio_advice(cfg, user_request)
     │     portfolio_advice_policy 是投资政策唯一代码来源；
     │     portfolio_advice_contracts 只保留 Schema、枚举和交易单位。
     │
-    └─ portfolio_advice_account_metrics.attach_account_funding_metrics
-          ★ 装配只读账户资金指标（account_funding 与 account_metrics）
-            高精度 Decimal(ROUND_HALF_UP) 计算；尚未参与动作与比例裁决；未配置/损坏安全降级
+    ├─ portfolio_advice_account_metrics.attach_account_funding_metrics
+    │     ★ 装配只读账户资金指标（account_funding 与 account_metrics）
+    │       高精度 Decimal(ROUND_HALF_UP) 计算；未配置/损坏安全降级
+    │
+    └─ portfolio_advice_cash_constraint.apply_available_cash_constraints
+          ★ 执行阶段可用现金约束（P2-3 安全垫约束，约束 add 金额）
+            未配置/损坏时 limitation 降级；账户资金仍不进入模型输入/Prompt
     │
     ▼
 { "data": <权威结果 portfolio-advice-v0.1> }
@@ -134,15 +138,17 @@ portfolio_advice_service.generate_portfolio_advice(cfg, user_request)
 - **事实字段**（shares、现价、盈亏、权重等）：来自持仓上下文重算，覆盖模型抄写。
 - **Validator Facade**：保留旧导入路径，不承载正则、政策或主流程实现。
 - **Legacy Compatibility**：missing holding → `watch`；invalid account action → `hold`，本轮未修复。
-- **账户资金**：只在 Pipeline 完成后追加只读指标，不进入模型判断、Policy 或执行计算。
+- **账户资金**：不进入模型判断与 Prompt；执行阶段受可用现金安全垫约束（P2-3，`portfolio_advice_cash_constraint.apply_available_cash_constraints`）。
 
 ### 当前未实现能力
 
 - `portfolio_advice_contracts` 是中立 Schema/枚举/交易单位契约，不是投资政策来源。
 - 投资政策唯一来源是 `portfolio_advice_policy.POLICY`。
 - `portfolio_advice_validator` 仅为兼容 Facade，实际校验由七阶段 Pipeline 执行。
-- 账户资金指标只在 Pipeline 完成后追加，不参与模型输入、动作、比例或数量裁决。
-- Explainability、Evidence Layer、Signal Ledger 尚未实现；现有 `market_evidence` 只是上下文字段，不等同于独立 Evidence 系统。
+- 账户资金指标只在 Pipeline 完成后追加，不进入模型输入与 Prompt；执行阶段
+  受可用现金安全垫约束（P2-3，`portfolio_advice_cash_constraint`），未配置/
+  损坏时以 limitation 降级。
+- Evidence Layer（`decision_evidence_*`，PR #28）与 Signal Ledger（`signal_ledger_*`，PR #29）已实现并上线；Explainability 仍无独立模块；现有 `market_evidence` 仍是上下文字段，不等同于独立 Evidence 系统。
 - 本轮未改变 API Schema、Prompt 最终文本或 Legacy fallback。
 
 ### 错误码摘要

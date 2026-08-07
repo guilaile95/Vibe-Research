@@ -18,6 +18,8 @@ f4030751b612acb2a017135345005b7befb919e9
 
 BK-11「短线市场事实层与复盘闭环」已纳入 `docs/PRODUCT_BACKLOG.md` 路线图，**当前未授权实施**。任何切片都必须单独授权；Slice 0 未给出 Go 结论前，不得进入产品实现。
 
+（2026-08-07 更新：BK-11 已暂停/归档，Issue #48 PAUSED/ARCHIVED；恢复实施需新的明确授权）
+
 ## 技术判断
 
 - Python / FastAPI / React / TypeScript / Vite / Tailwind 基本兼容；

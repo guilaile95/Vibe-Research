@@ -58,13 +58,7 @@
 
 ### 0.4 本地目录与实验（非产品开发授权）
 
-| 目录 | 实现状态 | 当前执行授权 | 说明 |
-|------|----------|--------------|------|
-| `Vibe-Research-visual-overhaul-20260729` | 本地实验 | 待用户决策 | 未提交 7 文件：`frontend/index.html`, `frontend/src/components/layout/Layout.tsx`, `frontend/src/components/ui/GlassCard.tsx`, `frontend/src/components/ui/PageHeader.tsx`, `frontend/src/index.css`, `frontend/src/router.tsx`, `frontend/tailwind.config.ts` |
-| `Vibe-Research-data-health-design` | 需要复核 | 未授权 | worktree 已注销；本地仍含完整源码副本（111 .py / 205 .ts / 37 .tsx / 15 .md）；未确认可安全删除，继续保留等待独立审计 |
-| `Vibe-Research-decision-feedback-hardening` | 需要复核 | 未授权 | 空目录残留；受 Windows 进程锁定；重启后重新确认为空再删除 |
-| `Vibe-Research-decision-trace-contract` | 已被稳定分支吸收 | 未授权 | PR #35 已合并；worktree 与残留目录均已回收 |
-| `Vibe-Research-trade-ledger-ui-git-backup-20260729-105111` | 需要复核 | 未授权 | Git 管理元数据/本地对象备份；价值未最终确认；**继续保留** |
+本地 worktree/残留目录状态以 `git worktree list` 与现场核验为准，本文件不维护瞬时状态。
 
 ### 0.5 候选池（未授权、仅规划）
 
@@ -123,9 +117,9 @@
 | **授权状态** | 切片 2 已授权并合并（PR #40，`feat/northbound-capital-flow-v1`）|
 | **当前实现** | **BK-03 切片 1（板块代表公司主力资金流，PR #38）+ 切片 2（北向资金权威数据合同，PR #40）** |
 | **已实现组件** | 行业/概念/区域排名（`board_ranking`）；个股 + 行业资金流（`stock_fund_flow_120d`、`_sectors`）；龙虎榜席位/机构净买；融资融券；大宗交易；股东户数变化；分红/解禁；行业动态数据面板 + 报告发现；**北向资金（沪股通/深股通）日级成交额、成交笔数、ETF 成交额、每日额度余额、按成交额活跃股（HKEX 官方日统计权威源，`GET /api/market/northbound`，Data Health 注册 `northbound_capital_flow`）** |
-| **核心差距** | **无北向（沪股通/深港通）资金追踪**；无机构 vs 零售资金分解；无行业时序/轮动图；`SectorDetail.tsx` 无数据图表；行业覆盖有限（仅 PCB 真实可用，其余为关键词骨架）|
+| **核心差距** | 无北向净买入（HKEX 权威源不发布买卖拆分，如实标注）；无北向时序图/资金分解；`SectorDetail.tsx` 无数据图表；行业覆盖有限（仅 PCB 真实可用，其余为关键词骨架）|
 | **依赖** | `a-stock-data` 技能（北向资金数据源）；`astock.py` 扩展端点 |
-| **价值假设** | 行业/资金维度已可用但缺失「北向资金」这一 A 股最关键资金视角，补充后形成完整资金面 |
+| **价值假设** | 行业/资金维度已可用，北向资金接入已闭环（PR #40）；剩余价值集中在净买入视角与资金可视化 |
 
 **MVP 范围（若授权）**：
 1. ~~北向资金数据接入~~ ✅ 已完成（PR #40，HKEX 官方日统计权威源，仅成交额/成交笔数/ETF 成交额/活跃股，净买入字段固定 None + limitation 说明）
@@ -135,7 +129,7 @@
 
 **真实性说明**：HKEX 官方北向日统计仅发布成交额，未发布买入/卖出拆分，净买入无法从权威源计算。东财北向净买额字段自 2024-08-19 起全部为 null，故本切片不接入净买入。界面与合同均如实标注「本数据源不提供北向净买入」。
 
-**优先级建议**：高。已有坚实基础，补充北向资金即可闭环。
+**优先级建议**：高。已有坚实基础；剩余为可视化与行业覆盖增量。
 
 ---
 
@@ -143,18 +137,18 @@
 
 | 项 | 值 |
 |----|-----|
-| **授权状态** | 候选（未授权）|
-| **当前实现** | **几乎为零**。仅 `decision_cockpit_signals.evaluate_trend` 内联 SMA20/60 + 量比 + 回撤 + 跳空检测 |
-| **已实现组件** | 内联 SMA(20/60)；量比(5/20)；20 日涨幅；跳空检测（用于失效趋势信号，不作为指标暴露）|
-| **核心差距** | 无指标模块；无 MACD/RSI/布林带/KDJ；无价格触发/突破检测；无 K 线形态识别；趋势信号内的 MA/量比逻辑不可复用 |
+| **授权状态** | 已实现（PR #41 已上线技术指标与价格触发）|
+| **当前实现** | **已上线**。`backend/technical_indicators.py` + `technical_indicators_router.py` + 前端 `TechnicalIndicatorsCard`/`KlineChart`（展示层已上线，PR #41）|
+| **已实现组件** | 独立技术指标模块（SMA/EMA、MACD、RSI、布林带、量比；纯计算、无未来函数、NaN 清洗）；价格触发检测（20 日高低点突破、SMA 金叉/死叉）；`GET /api/market/technical-indicators`（period=daily，TTL 缓存，Data Health 注册）；前端展示层（`TechnicalIndicatorsCard` + `KlineChart`）|
+| **核心差距** | 无 K 线形态识别；指标未进入持仓建议上下文（建议上下文显式 `technical_indicators_available=false`）；无价格触发规则引擎收口 |
 | **依赖** | `astock.py` kline 数据；BK-01（触发→告警通道）；BK-02（技术指标筛选）|
-| **价值假设** | 用户需要「价格突破 N 日新高」「MACD 金叉」等技术触发，与现有估值/资金面互补 |
+| **价值假设** | 用户需要「价格突破 N 日新高」「MACD 金叉」等技术触发进入建议上下文与告警通道，与现有估值/资金面互补 |
 
 **MVP 范围（若授权）**：
-1. 独立技术指标模块（MA/MACD/RSI/布林带/KDJ/量比），复用 `kline()` 数据
-2. 指标 API 端点（按 code/period 返回时序值）
-3. 价格触发规则（突破 N 日新高/新低、均线交叉）
-4. KlineChart.tsx 叠加指标图层
+1. ~~独立技术指标模块（MA/MACD/RSI/布林带/KDJ/量比），复用 `kline()` 数据~~ ✅ 已上线（PR #41；MA/MACD/RSI/布林带/量比，**KDJ 未实现**）
+2. ~~指标 API 端点（按 code/period 返回时序值）~~ ✅ 已上线（`GET /api/market/technical-indicators`，period=daily）
+3. ~~价格触发规则（突破 N 日新高/新低、均线交叉）~~ ✅ 触发检测已实现（20 日高低点突破、SMA 金叉/死叉）；规则引擎收口未完成
+4. ~~KlineChart.tsx 叠加指标图层~~ ✅ 展示层已上线（`TechnicalIndicatorsCard` + `KlineChart`）
 
 **优先级建议**：中。依赖指标库基础，但与其他候选正交性强。
 
@@ -269,7 +263,7 @@
 |----|-----|
 | **授权状态** | 候选（未授权，工程类非产品）|
 | **当前实现** | **部分实现**：强测试覆盖 + CI/CD；工具链/文档不均 |
-| **已实现组件** | CI 流水线（7 jobs：backend/frontend/e2e-smoke/e2e-thesis/e2e-data-health/whitespace）；79 后端测试 + 32 前端单测 + 11 Playwright E2E；严格 TS 配置；4 核心文档（ARCHITECTURE/DECISIONS/KNOWN_ISSUES/NEXT_TASK）；数据健康模式版本化 + 论文库 WAL 感知只读健康快照 |
+| **已实现组件** | CI 流水线（6 jobs：backend/frontend/e2e-smoke/e2e-thesis-smoke/e2e-data-health-smoke/whitespace）；测试数量以 CI 与本地 pytest 实测为准，不在文档维护具体数字（DRY）；严格 TS 配置；4 核心文档（ARCHITECTURE/DECISIONS/KNOWN_ISSUES/NEXT_TASK）；数据健康模式版本化 + 论文库 WAL 感知只读健康快照 |
 | **核心差距** | **无 lint/format/coverage 工具**（最大治理缺口：无 eslint/prettier/ruff/mypy/black）；无 pre-commit hooks；无数据库迁移框架（Alembic）；无依赖更新 bot；无 mypy/pyright CI 门控 |
 | **依赖** | 无外部依赖；全部为内部工程配置 |
 | **价值假设** | 测试覆盖已高，但代码风格/类型安全无自动化保障；随团队扩张，治理债务将累积 |
@@ -286,9 +280,11 @@
 
 ### BK-11 短线市场事实层与复盘闭环
 
+> **暂停说明**：BK-11 已暂停/归档（Issue #48 PAUSED/ARCHIVED，2026-08-06，正文明确「不授权继续开发」）；恢复开发需新授权，以下规划仅为候选记录。
+
 | 项 | 值 |
 |----|-----|
-| **授权状态** | 候选（已纳入路线图，当前未授权实施）|
+| **授权状态** | 已暂停/归档（Issue #48 PAUSED/ARCHIVED，2026-08-06；恢复需新授权）|
 | **当前实现** | **部分基础、尚未形成短线事实层**。当前项目已有市场宽度、每日复盘、板块研究、技术指标、Data Health、Decision Evidence、Decision Feedback 等基础能力，但没有系统化的涨跌停/炸板/连板梯队/晋级率/封板质量/亏钱效应/题材结构短线事实层。 |
 | **已实现组件** | 市场宽度与每日复盘骨架；Data Health 来源状态；Decision Evidence / Feedback / Analytics 闭环；板块研究与技术指标事实展示 |
 | **核心差距** | 缺少可复核的短线市场事实指标合同、交易日/场次语义、Preflight 充分性检查、T+1 验证映射，以及与现有复盘/证据链路的统一接入 |
@@ -368,8 +364,8 @@ LangGraph 作为项目核心运行时
 **执行顺序（相对当前路线）**：
 
 ```text
-1. 当前 KDJ 复审完成并关闭 BK-04
-2. 现有 PR #43 / BK-02 / BK-03 依赖链完成收口
+1. BK-04 技术指标已上线（PR #41）
+2. PR #43 recovery 评估已完成（推荐 recovery 分支方案），待下一阶段执行
 3. BK-01 前置依赖完成最小收口
 4. BK-11 Slice 0 可行性审计
 5. 只有 Slice 0 Go 后才授权 Slice 1
@@ -453,6 +449,8 @@ BK-08 (视觉) ──▶ 全部前端候选
 | `docs/ARCHITECTURE.md` | 调用链 + 数据流 | 架构变更时 |
 | `docs/DECISIONS.md` | 设计决定 | 新设计决定时 |
 | `docs/KNOWN_ISSUES.md` | 已知限制 + 测试例外 | 发现/修复限制时 |
+| `docs/GOVERNANCE.md` | 治理契约（权威链、CI 分级、分支保护、PR 恢复方案） | 治理变更时 |
+| `docs/research/EXECUTION_STATE.md` | 最近执行记录（历史），不作为项目状态权威 | 历史执行记录更新时 |
 
 ---
 
@@ -468,6 +466,8 @@ BK-08 (视觉) ──▶ 全部前端候选
 | 2026-07-30 | 修正 P2-1/P2-2 Merge SHA | P2-1=`fe954a78`(PR #28)；P2-2=`eecbf56`(PR #29) |
 | 2026-07-30 | 记录 PR #35 契约修复 | Merge `f5f4206`；历史归档不回填 |
 | 2026-08-01 | 登记 BK-11 短线市场事实层与复盘闭环 | 有条件吸收 vibe-astock 业务思想；禁止整体合仓；当前未授权实施 |
+| 2026-08-07 | 建立 Governance 权威链 | PROJECT_STATE 为项目状态唯一权威、NEXT_TASK 为唯一当前授权任务，消除多文档状态歧义 |
+| 2026-08-07 | BK-11 暂停/归档（Issue #48） | 输入源审计 BLOCKED；正文明确不授权继续开发，恢复需新授权 |
 
 ---
 
