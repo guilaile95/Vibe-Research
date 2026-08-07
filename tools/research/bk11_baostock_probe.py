@@ -10,8 +10,11 @@
   URL、traceback 或原始异常文本；
 - 只做串行、低频、有界探测（默认串行，不建线程池）。
 
-请求预算：所有真实来源调用纳入统一预算（login、query_all_stock 分页、
-主探测尝试、重试、determinism 复查），预算不足时失败关闭，绝不绕过。
+请求预算：``--max-requests`` 只约束 harness 可直接控制的
+``query_history_k_data_plus`` 主探测、重试与 determinism 复查调用。
+``login/logout`` 以及 ``query_all_stock`` 的 SDK 内部分页不宣称受该硬预算
+控制；它们仅在输出中单独做观测计数。显式 0/负数预算在任何 login/live
+请求前拒绝。
 
 ``KeyboardInterrupt`` / ``SystemExit`` / ``GeneratorExit`` 自然传播。
 
@@ -189,7 +192,7 @@ class BaoStockClient:
             pass
 
     def query_all_stock(self, day: str) -> Tuple[list, int]:
-        """返回 ``(rows, pages)``；pages 为实际分页网络请求次数。"""
+        """返回 ``(rows, pages)``；pages 为 SDK 分页请求次数的观测估计。"""
         bs = self._import()
         rs = bs.query_all_stock(day=day)
         if getattr(rs, "error_code", None) != "0":
@@ -201,7 +204,7 @@ class BaoStockClient:
             row_count += 1
         # 每页 2000 行（BAOSTOCK_PER_PAGE_COUNT）；页数 = 1 + (rows-1)//2000。
         # 注意：恰好整除时客户端会多发一次空页探测请求，本计数按保守下限
-        # 记录（不影响本次 7329 行 = 4 页的精确性）。
+        # 记录。因此该值是观测/核算数据，不属于 --max-requests 硬预算。
         pages = 1 + max(0, row_count - 1) // 2000 if row_count else 0
         return rows, pages
 
@@ -244,7 +247,9 @@ def parse_all_stock_rows(
 
     同一目标代码重复出现：同状态重复计入 ``duplicate_code_count``（保留
     首条）；不同状态计入 ``conflicting_status_count``（来源合同失败，
-    调用方必须失败关闭，不得静默保留首次值）。
+    调用方必须失败关闭，不得静默保留首次值）。这里保留未知状态供纯解析
+    审计；真正进入 sample/full/cross 运行前，``_fetch_universe`` 会严格要求
+    所有目标 ``trade_status`` 只能为 ``0`` 或 ``1``。
     """
     targets: List[Dict[str, str]] = []
     excluded = 0
@@ -340,11 +345,12 @@ def _row_violations(
     row_code = _normalize_baostock_code(str(row.get("code", "")).strip())
     if row_code != code:
         violations.append("code_mismatch")
-    tradestatus = row.get("tradestatus")
-    if tradestatus not in (None, "", "-", "0", "1"):
+    tradestatus = str(row.get("tradestatus", "")).strip()
+    if tradestatus not in ("0", "1"):
         violations.append("invalid_tradestatus")
-    if str(tradestatus).strip() != expected_trade_status:
-        # universe=0/K线=1 与 universe=1/K线=0 均落入此违规码
+    if tradestatus != expected_trade_status:
+        # universe=0/K线=1 与 universe=1/K线=0 均落入此违规码；缺失/非法值
+        # 同时触发 invalid_tradestatus，保证 K 线状态合同严格为 0/1。
         violations.append("trade_status_mismatch")
     for field in ("pctChg", "open", "high", "low", "close", "preclose"):
         value = row.get(field)
@@ -368,7 +374,7 @@ def probe_stock(
 ) -> Dict[str, Any]:
     """探测单只股票单日 K 线（失败关闭，不抛普通异常）。
 
-    每次真实来源调用（含重试）消耗统一预算并计入 calls。
+    每次可控的 K 线来源调用（含重试）消耗 probe budget 并计入 calls。
     """
     code = entry["code"]
     expected_status = entry["trade_status"]
@@ -487,7 +493,7 @@ def _run_determinism_checks(
 ) -> Dict[str, Any]:
     """对前 checks 个目标各追加一次复查请求（复用主探测结果，不重复首查）。
 
-    预算不足时停止并返回 ``determinism_incomplete=true``，不绕过预算。
+    可控 probe budget 不足时停止并返回 ``incomplete=true``，不绕过预算。
     """
     details: List[Dict[str, Any]] = []
     identical = 0
@@ -556,7 +562,9 @@ def run_probe(
     fail_count_stop: Optional[int] = None,
     result_sink: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """串行探测目标列表；统一预算 + 熔断；返回聚合统计。"""
+    """串行探测目标列表；可控 K 线预算 + 熔断；返回聚合统计。"""
+    if max_requests <= 0:
+        raise ProbeError("max_requests must be > 0")
     results: List[Dict[str, Any]] = []
     consecutive_fail = 0
     started = time.monotonic()
@@ -687,8 +695,7 @@ def compute_breadth(
         code = r.get("code")
         for row in r.get("rows") or []:
             if code in suspended_codes:
-                # 停牌股允许 pctChg 为空，但必须状态一致
-                # （trade_status_mismatch==0 由 identity 条件统一把关）
+                # 停牌股允许 pctChg 为空，但必须状态一致。
                 continue
             pct, invalid = _parse_float_field(row.get("pctChg"))
             if invalid:
@@ -714,11 +721,13 @@ def compute_breadth(
         and meta.get("code_mismatch", 0) == 0
         and meta.get("duplicate_row", 0) == 0
         and meta.get("invalid_pct_chg", 0) == 0
+        and meta.get("invalid_tradestatus", 0) == 0
         and meta.get("trade_status_mismatch", 0) == 0
         and meta.get("circuit_open", "") == ""
         and meta.get("budget_exhausted") is False
         and meta.get("duplicate_code_count", 0) == 0
         and meta.get("conflicting_status_count", 0) == 0
+        and meta.get("determinism_consistent") is True
     )
     return {
         "advance_count": advance,
@@ -796,15 +805,18 @@ def build_summary(
         primary = int(probe.get("primary_request_count", 0) or 0)
         retry = int(probe.get("retry_request_count", 0) or 0)
         determinism = int(probe.get("determinism_request_count", 0) or 0)
+    controlled = primary + retry + determinism
+    uncontrolled = session_request_count + universe_pages
     summary["request_accounting"] = {
+        "budget_scope": "query_history_k_data_plus_primary_retry_determinism_only",
         "session_request_count": session_request_count,
         "universe_request_count": universe_pages,
         "primary_request_count": primary,
         "retry_request_count": retry,
         "determinism_request_count": determinism,
-        "total_source_request_count": (
-            session_request_count + universe_pages + primary + retry + determinism
-        ),
+        "controlled_probe_request_count": controlled,
+        "uncontrolled_source_request_count": uncontrolled,
+        "total_source_request_count": controlled + uncontrolled,
     }
     return summary
 
@@ -812,31 +824,44 @@ def build_summary(
 def _fetch_universe(
     client: Any,
     day: str,
-    budget: List[int],
 ) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
-    """login 后拉取并过滤股票池；返回 ``(universe_stats, targets)`` 组合。"""
-    if budget[0] <= 0:
-        raise ProbeError("budget exhausted before universe query")
-    budget[0] -= 1
+    """login 后拉取并过滤股票池；SDK 分页只观测，不计入 probe hard cap。"""
     try:
         raw_rows, pages = client.query_all_stock(day=day)
     except Exception as exc:
         raise ProbeError("query_all_stock failed") from exc
-    if pages - 1 > budget[0]:
-        budget[0] = 0
-        raise ProbeError("budget exhausted during universe query")
-    budget[0] -= max(0, pages - 1)
     targets, excluded, dup, conflict = parse_all_stock_rows(raw_rows)
+    invalid_status_count = sum(
+        1 for entry in targets if entry.get("trade_status") not in ("0", "1")
+    )
+    if invalid_status_count:
+        raise ProbeError("invalid universe trade status")
     universe_stats = {
         "raw_rows": len(raw_rows),
         "excluded_count": excluded,
         "target_count": len(targets),
         "duplicate_code_count": dup,
         "conflicting_status_count": conflict,
+        "invalid_trade_status_count": invalid_status_count,
         "suspended_in_universe": sum(1 for e in targets if e["trade_status"] == "0"),
         "universe_request_count": pages,
     }
     return universe_stats, targets
+
+
+def _resolve_probe_budget(
+    max_requests: Optional[int],
+    *,
+    default: int,
+    upper: int,
+    mode: str,
+) -> int:
+    """解析 sample/full 的可控 K 线硬预算；显式非正值失败关闭。"""
+    if max_requests is None:
+        return default
+    if not (1 <= max_requests <= upper):
+        raise ProbeError(f"{mode} max_requests must be in 1..{upper}")
+    return max_requests
 
 
 def run_sample_probe(
@@ -845,15 +870,19 @@ def run_sample_probe(
     *,
     sample_size: int = DEFAULT_SAMPLE_SIZE,
     seed: int = 0,
-    max_requests: int = 0,
+    max_requests: Optional[int] = None,
     retries: int = MAX_RETRY,
     determinism_checks: int = DEFAULT_DETERMINISM_CHECKS,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Dict[str, Any]:
     """小样本探测编排：login → query_all_stock → 分层抽样 → 串行探测。"""
-    budget = [max_requests if max_requests > 0 else SAMPLE_DEFAULT_MAX_REQUESTS]
+    probe_budget = _resolve_probe_budget(
+        max_requests,
+        default=SAMPLE_DEFAULT_MAX_REQUESTS,
+        upper=SAMPLE_DEFAULT_MAX_REQUESTS,
+        mode="sample",
+    )
     login = client.login()
-    budget[0] -= 1
     logout: Optional[Dict[str, Any]] = None
     universe_stats: Optional[Dict[str, Any]] = None
     probe_result: Optional[Dict[str, Any]] = None
@@ -870,7 +899,7 @@ def run_sample_probe(
                 login=login,
                 logout=logout,
             )
-        universe_stats, targets = _fetch_universe(client, day, budget)
+        universe_stats, targets = _fetch_universe(client, day)
         if universe_stats["conflicting_status_count"] > 0:
             universe_stats["contract_failure"] = "conflicting_status"
             return build_summary(
@@ -892,7 +921,7 @@ def run_sample_probe(
             sampled,
             day,
             fields=DEFAULT_FIELDS,
-            max_requests=budget[0],
+            max_requests=probe_budget,
             consecutive_fail_stop=CONSECUTIVE_FAIL_STOP,
             early_window=SAMPLE_EARLY_WINDOW,
             early_fail_rate=SAMPLE_EARLY_FAIL_RATE,
@@ -923,15 +952,19 @@ def run_full_probe(
     client: Any,
     day: str,
     *,
-    max_requests: int = 0,
+    max_requests: Optional[int] = None,
     retries: int = MAX_RETRY,
     determinism_checks: int = DEFAULT_DETERMINISM_CHECKS,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Dict[str, Any]:
     """全市场单日探测编排（只执行一个交易日，失败关闭）。"""
-    budget = [max_requests if max_requests > 0 else FULL_MAX_REQUESTS]
+    probe_budget = _resolve_probe_budget(
+        max_requests,
+        default=FULL_MAX_REQUESTS,
+        upper=FULL_MAX_REQUESTS,
+        mode="full",
+    )
     login = client.login()
-    budget[0] -= 1
     logout: Optional[Dict[str, Any]] = None
     universe_stats: Optional[Dict[str, Any]] = None
     probe_result: Optional[Dict[str, Any]] = None
@@ -949,7 +982,7 @@ def run_full_probe(
                 login=login,
                 logout=logout,
             )
-        universe_stats, targets = _fetch_universe(client, day, budget)
+        universe_stats, targets = _fetch_universe(client, day)
         if universe_stats["conflicting_status_count"] > 0:
             universe_stats["contract_failure"] = "conflicting_status"
             return build_summary(
@@ -984,7 +1017,7 @@ def run_full_probe(
             targets,
             day,
             fields=DEFAULT_FIELDS,
-            max_requests=budget[0],
+            max_requests=probe_budget,
             consecutive_fail_stop=CONSECUTIVE_FAIL_STOP,
             early_window=SAMPLE_EARLY_WINDOW,
             early_fail_rate=SAMPLE_EARLY_FAIL_RATE,
@@ -997,6 +1030,11 @@ def run_full_probe(
             result_sink=all_results,
         )
         counts = probe_result["counts"]
+        determinism = probe_result.get("determinism")
+        determinism_consistent = determinism is None or (
+            determinism.get("incomplete") is False
+            and determinism.get("all_identical") is True
+        )
         meta = {
             "processed_target_count": probe_result["processed_target_count"],
             "failure_count": counts["failure"],
@@ -1005,11 +1043,13 @@ def run_full_probe(
             "code_mismatch": counts["code_mismatch"],
             "duplicate_row": counts["duplicate"],
             "invalid_pct_chg": counts["invalid_pct_chg"],
+            "invalid_tradestatus": counts["invalid_tradestatus"],
             "trade_status_mismatch": counts["trade_status_mismatch"],
             "circuit_open": probe_result["circuit_open"],
             "budget_exhausted": probe_result["budget_exhausted"],
             "duplicate_code_count": universe_stats["duplicate_code_count"],
             "conflicting_status_count": universe_stats["conflicting_status_count"],
+            "determinism_consistent": determinism_consistent,
         }
         breadth = compute_breadth(targets, all_results, meta)
     finally:
@@ -1033,9 +1073,7 @@ def run_cross_probe(
     suspension_file: str,
 ) -> Dict[str, Any]:
     """停牌交叉验证编排（BaoStock vs 东财指定日期停复牌文件）。"""
-    budget = [10]
     login = client.login()
-    budget[0] -= 1
     logout: Optional[Dict[str, Any]] = None
     universe_stats: Optional[Dict[str, Any]] = None
     suspension_cross: Optional[Dict[str, Any]] = None
@@ -1052,7 +1090,7 @@ def run_cross_probe(
                 login=login,
                 logout=logout,
             )
-        universe_stats, targets = _fetch_universe(client, day, budget)
+        universe_stats, targets = _fetch_universe(client, day)
         if universe_stats["conflicting_status_count"] > 0:
             universe_stats["contract_failure"] = "conflicting_status"
             return build_summary(
@@ -1098,21 +1136,21 @@ def _validate_cli_args(args: argparse.Namespace) -> None:
             f"determinism_checks must be in 0..{MAX_DETERMINISM_CHECKS}"
         )
     if args.mode == "sample":
-        budget = (
-            SAMPLE_DEFAULT_MAX_REQUESTS
-            if args.max_requests <= 0
-            else args.max_requests
+        _resolve_probe_budget(
+            args.max_requests,
+            default=SAMPLE_DEFAULT_MAX_REQUESTS,
+            upper=SAMPLE_DEFAULT_MAX_REQUESTS,
+            mode="sample",
         )
-        if not (1 <= budget <= SAMPLE_DEFAULT_MAX_REQUESTS):
-            raise ProbeError(
-                f"sample max_requests must be in 1..{SAMPLE_DEFAULT_MAX_REQUESTS}"
-            )
     elif args.mode == "full":
-        budget = FULL_MAX_REQUESTS if args.max_requests <= 0 else args.max_requests
-        if not (1 <= budget <= FULL_MAX_REQUESTS):
-            raise ProbeError(
-                f"full max_requests must be in 1..{FULL_MAX_REQUESTS}"
-            )
+        _resolve_probe_budget(
+            args.max_requests,
+            default=FULL_MAX_REQUESTS,
+            upper=FULL_MAX_REQUESTS,
+            mode="full",
+        )
+    elif args.max_requests is not None:
+        raise ProbeError("--max-requests is only valid for sample/full mode")
     if args.mode == "cross" and not args.suspension_file:
         raise ProbeError("--suspension-file is required for cross mode")
 
@@ -1126,7 +1164,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--sample-size", type=int, default=DEFAULT_SAMPLE_SIZE)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--retries", type=int, default=MAX_RETRY)
-    parser.add_argument("--max-requests", type=int, default=0)
+    parser.add_argument(
+        "--max-requests",
+        type=int,
+        default=None,
+        help="仅限制可控 K 线主探测/重试/determinism 调用；省略则使用模式默认值",
+    )
     parser.add_argument("--determinism-checks", type=int, default=DEFAULT_DETERMINISM_CHECKS)
     parser.add_argument("--suspension-file", default="")
     parser.add_argument("--output", default="")
