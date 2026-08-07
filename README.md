@@ -12,6 +12,8 @@
 >
 > 每日复盘、资讯雷达、个股数据、自选股、板块中心、我的持仓、我的研报、研究记录。把数据和功能配齐，由**你自己的 AI** 驱动投资研究。
 
+> 项目状态、当前授权与治理契约见 [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md) 与 [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md)。
+
 Vibe-Research 是一个开源的「个人 AI 投研看板」，**主推 A 股、兼看美股 / 港股**（A 股常要看隔夜外围脸色，数据配上更全）。把行情、研报、估值、财务、公告、资金面、资讯都配齐，放进一个干净的看板，再留一个能接入**你自己的 AI** 的接口。
 
 > *Vibe-Research: Your Personal Trading Research Agent. An open dashboard for China A-share (plus US / HK): it wires up the data and plugs into **your own AI / agent**.*

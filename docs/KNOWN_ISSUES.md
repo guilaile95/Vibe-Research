@@ -13,9 +13,9 @@
 
 | 项 | 说明 |
 |----|------|
-| 账户总资产 / 可用现金 | 可手工维护（`account_profile`），**尚未接入**持仓建议 / add 金额约束；add 数量仍仅按持股比例 |
+| 账户总资产 / 可用现金 | 可手工维护（`account_profile`）；已接入 P2-3 可用现金安全垫约束（`apply_available_cash_constraints`，未配置/损坏时 limitation 降级）；add 数量以持股比例为基础，再受现金与整手约束 |
 | 可靠可卖数量 | 未接入；reduce/sell 数量为理论值，执行前需人工确认 |
-| 完整历史 K 线 / 技术指标 | 持仓建议上下文默认不可用，禁止编造技术位 |
+| 完整历史 K 线 / 技术指标 | 技术指标模块已上线（PR #41，展示层）；持仓建议上下文仍显式 `technical_indicators_available=false`，禁止编造技术位 |
 | 可靠公告 / 新闻 / 机构催化链 | 持仓建议第一版不依赖，禁止编造催化 |
 | estimated_amount | 静态估算：数量 × 现价；**不含**手续费、滑点、成交偏差 |
 | 真实模型动作 | 模型可能返回 hold/reduce 等，**不一定**给 add；add 行为以确定性单测与受控 fixture 验收为主 |
@@ -37,7 +37,7 @@ tests/test_fixes.py::test_run_cli_stream_timeout
 - **原因**：Windows 环境常缺少 `python3` 可执行名，子进程退出码 **9009**（命令未找到）。
 - **处理**：视为环境已知问题；**不得**把其它失败归入此项。
 
-其余 `pytest -m "not live"` 应以当前分支绿测为准（连续两次全量 1606 passed, 0 failed, 11 deselected）。
+其余 `pytest -m "not live"` 应以当前分支绿测为准；测试数量以 CI 与本地实测为准（2026-08-06 稳定 head CI 全绿），不在本文档维护具体数字。
 
 ## 持仓维护 UX 注意
 
