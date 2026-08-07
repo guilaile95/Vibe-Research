@@ -1,75 +1,62 @@
-# Python 依赖可复现性（Phase B1）
+# Python 依赖可复现性（Phase B1，平台特定 authority lock）
 
 > 人类意图：`backend/requirements.txt` + `backend/requirements-dev.txt`（手写，
 > 只表达 direct dependency 意图，可放宽）。
-> 精确环境：`backend/requirements.lock.txt`（runtime 53 包）与
-> `backend/requirements-dev.lock.txt`（runtime + dev 58 包，自包含单文件）。
-> 编译器：`backend/requirements-tooling.txt`（`pip-tools==7.6.0`）。
+> 精确环境：以下 `*-lock.txt` 为**生成的 authority 产物**（不手改，顶部 header
+> 记录 compiler 与来源；lint 规则：每个包必须 `==` exact pin）。
 
-## 权威与合同（Contract B — Canonical Lock + Compatibility Runtime）
+## 平台合同（CONTRACT D：PLATFORM-SPECIFIC AUTHORITATIVE LOCKS）
 
-- **LOCK_AUTHORITY = Ubuntu / CPython 3.11**（GitHub CI 环境）：权威 lock 须在
-  CI 平台执行同一条 pip-compile 命令生成（自动纳入 Linux 专属包如 uvloop）。
-- **WINDOWS / CPython 3.12 = COMPATIBILITY_TESTED / NOT_LOCK_AUTHORITY**：
-  当前提交的 lock（Windows/3.11 编译）在 Windows 3.11/3.12 实测 exact 安装
-  与测试全绿；对 Linux 存在一个软漂移点（uvloop 未 pin，pip 现场解析）——
-  发布前应在 CI 平台重生成 lock 以升格 authority。
-- 编译必须使用 **CPython 3.11**：3.12 编译会把 numpy 锁到 2.5.1（无 cp311
-  wheel），导致 3.11 CI 无法安装。
+| 环境 | authority | 角色 | 安装命令 |
+|---|---|---|---|
+| Linux | Ubuntu / CPython 3.11（GitHub Actions） | CI + canonical runtime/test | `pip install -r backend/requirements-dev-linux-py311.lock.txt` |
+| Windows | Windows / CPython 3.12.10 | canonical local development/test | `pip install -r backend/requirements-dev-windows-py312.lock.txt` |
 
-## 再生成命令（backend/ 目录，Python 3.11 + pip-tools 7.6.0）
+- 两个平台都是 **EXACT REPRODUCIBLE**（各自 authority 生成与验证）。
+- 已实证：single cross-platform lock **不可行**（uvloop 无 Windows wheel、
+  tzdata/mini-racer/colorama 为 Windows-only、akracer 为 Linux-only；
+  pip-tools 编译时按当前平台求值 marker）。Windows 不是 production
+  deployment target，故**不设** Windows runtime-only 第四份 lock（DRY）。
+- Windows 不再描述为"compatibility-tested against Linux lock"（已被实证否定）。
 
-日常 regenerate（锁定当前版本，不升级）：
+## Lock 文件（backend/）
+
+| 文件 | 内容 | authority |
+|---|---|---|
+| `requirements-linux-py311.lock.txt` | Linux runtime closure（53 包） | Ubuntu/3.11 |
+| `requirements-dev-linux-py311.lock.txt` | Linux runtime+dev 完整 closure（58 包） | Ubuntu/3.11 |
+| `requirements-dev-windows-py312.lock.txt` | Windows runtime+dev 完整 closure（59 行/58 包+extras） | Windows/3.12.10 |
+
+## 编译器（LOCK_COMPILER，两平台相同）
+
+`backend/requirements-tooling.txt`：`pip==26.0.1` + `pip-tools==7.6.0`
+（已实测 Windows/3.12.10 与 Linux/3.11 均可正常 compile；pip 26.2.1 与
+pip-tools 7.6.0 API 不兼容，编译环境必须 26.0.1）。
+
+## 再生成命令（backend/ 目录，各平台 authority 环境）
+
+Linux（Ubuntu/3.11）：
 
 ```text
-pip-compile --no-emit-index-url -o requirements.lock.txt requirements.txt
-pip-compile --no-emit-index-url -o requirements-dev.lock.txt requirements.txt requirements-dev.txt
+pip install -r requirements-tooling.txt
+pip-compile --no-emit-index-url --output-file=requirements-linux-py311.lock.txt requirements.txt
+pip-compile --no-emit-index-url --output-file=requirements-dev-linux-py311.lock.txt requirements.txt requirements-dev.txt
 ```
 
-主动升级（单独维护任务，与日常 regeneration 分离）：
+Windows（Windows/3.12.10）：
 
 ```text
-pip-compile --no-emit-index-url --upgrade -o requirements.lock.txt requirements.txt
-pip-compile --no-emit-index-url --upgrade -o requirements-dev.lock.txt requirements.txt requirements-dev.txt
+pip install -r requirements-tooling.txt
+pip-compile --no-emit-index-url --output-file=requirements-dev-windows-py312.lock.txt requirements.txt requirements-dev.txt
 ```
+
+主动升级：上述命令加 `--upgrade`（单独维护任务，与日常 regeneration 分离）。
+CI 通过 "Canonical Python lock check"（Linux）与 "Python Windows lock check"
+（Windows）分别验证两平台再生成零 diff。
 
 ## 已知事实
 
-- lock 文件**不手改**；顶部 header 记录 compiler 版本与来源。
-- 当前提交形态**不带 hashes**：Windows 编译产物在 Linux 上 `--require-hashes`
-  会因 uvloop extra 硬失败；带 hashes 版本须待权威平台（Linux CI）生成后启用
-  （trade-off 已记录，不牺牲可用性）。
-- pip-tools 7.6.0 与 pip 26.2.1 存在 API 不兼容（编译时用 pip 26.0.1）；
-  安装端 pip 不受影响。
-
-## Canonical Linux 生成结果（2026-08-08，CI authority 实测）
-
-Ubuntu/CPython 3.11 authority 再生成与 Windows 候选 lock 的差异（已按
-authority 输出 canonicalize 提交）：
-
-| 包 | Windows lock | Ubuntu lock | 说明 |
-|---|---|---|---|
-| uvloop | 无 | `0.22.1`（无 marker） | Linux-only；Windows 无 wheel |
-| akracer | 无 | `0.0.14` | Linux 侧 akshare JS 引擎（替代 mini-racer） |
-| mini-racer | `0.14.1` | 无 | Windows 侧 akshare JS 引擎 |
-| tzdata | `2026.3` | 无 | Windows-only（zoneinfo 数据） |
-| colorama | `0.4.6` | 无 | Windows-only |
-
-含义：single pip-tools lock **不能同时服务两个平台**（条件包 marker 在编译时
-被求值剥离/丢弃）。Windows/3.12 对 canonical Ubuntu lock 的兼容性验证结果与
-平台 lock 设计评估见 Phase B1 Publication 报告。
-
-**2026-08-08 实测结论（决定性）**：
-
-- Ubuntu/3.11 authority 侧**闭环成功**：canonicalize 后 CI 再生成零 diff
-  （idempotency PASS）、7/7 jobs 全绿。
-- Windows/3.12 全新环境安装 canonical lock **失败**：uvloop==0.22.1 无
-  Windows wheel，pip 源码构建报 `RuntimeError: uvloop does not support
-  Windows`（exit 1）。
-- 按授权契约：**Contract B 不成立 → CHANGES REQUIRED**；P1 保持
-  `PROVISIONALLY MITIGATED`，不关闭。
-- 最小平台 lock 设计（待授权实施）：保留 `requirements-dev.lock.txt`
-  （Linux authority，CI 验证）+ 新增 `requirements-dev.windows.lock.txt`
-  （Windows 本机同编译器生成、提交、文档化再生成步骤；含 tzdata/
-  mini-racer/colorama，不含 uvloop/akracer）；runtime lock 同理按平台各一
-  （Windows runtime 由 windows dev lock 覆盖，共 3 个文件）。
+- hashes：NON-BLOCKING；未来若启用必须**各平台分别研究**，不得用一份
+  hashes lock 强行统一两平台。
+- pip-compile 无跨平台编译参数（7.6.0 实测）：Linux lock 只能 Linux 生成，
+  Windows lock 只能 Windows 生成（CI 双 authority 分别验证）。

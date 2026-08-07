@@ -11,12 +11,13 @@
 工程实施，非产品任务）
 
 - 分支：`chore/python-dependency-reproducibility-v0.1`（自稳定 Head `060b5d0` 创建）
-- 范围：仅处理 Phase A 唯一 P1——pip-tools 生成 exact lock（runtime + dev）、
-  CI 改为 lock 安装、cross-platform 合同判定（A/B/C）、Reproducibility Proof
-- 状态：`IMPLEMENTATION_IN_PROGRESS`（Phase A 测量见
-  `docs/research/ENGINEERING_RELIABILITY_BASELINE_V01.md`）
+- 范围：仅处理 Phase A 唯一 P1——pip-tools 生成平台特定 exact lock、
+  CI 双 authority lock check、Contract D 双平台可复现闭环
+- 状态：`PLATFORM_LOCK_CLOSURE_IN_PROGRESS`（Phase A 测量见
+  `docs/research/ENGINEERING_RELIABILITY_BASELINE_V01.md`；P1 关闭条件
+  见授权契约 §二十）
 - 停止点：本阶段完成后停止；不处理 Actions/ruff/mypy/ESLint/npm/E2E flake
-  （Phase B2/B3 待授权）；不 push、不建 PR。
+  （Phase B2/B3 待授权）。
 
 **已授权产品开发任务：无。**
 

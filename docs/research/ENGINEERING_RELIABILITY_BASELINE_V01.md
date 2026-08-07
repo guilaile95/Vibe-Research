@@ -190,3 +190,21 @@
   `cache-dependency-path` 指向 lock。
 - 待办（发布轮）：Linux CI 重生成权威 lock（纳入 uvloop）→ 可选启用 hashes；
   Node actions 弃用警告留 Phase B2。
+
+### 12.1 Contract B 修正（2026-08-08，Platform-Specific Lock Closure 轮）
+
+- **Contract B 已被实证否定**：single cross-platform lock 不可行（uvloop 无
+  Windows wheel，Windows 全新环境安装 canonical Linux lock 实测失败：
+  `RuntimeError: uvloop does not support Windows`；tzdata/mini-racer/
+  colorama 为 Windows-only、akracer 为 Linux-only）。
+- **最终合同 = CONTRACT D（PLATFORM-SPECIFIC AUTHORITATIVE LOCKS）**：
+  - Linux / CPython 3.11 = EXACT REPRODUCIBLE（CI authority）
+  - Windows / CPython 3.12.10 = EXACT REPRODUCIBLE LOCAL DEVELOPMENT
+    （本机 authority）
+- Lock 拓扑：`requirements-linux-py311.lock.txt`（53 包）+
+  `requirements-dev-linux-py311.lock.txt`（58 包）+
+  `requirements-dev-windows-py312.lock.txt`（Windows dev 完整 closure，
+  无第四份 Windows runtime lock——Windows 非生产目标，DRY）。
+- Windows lock 由 Windows/3.12.10 + pip 26.0.1 + pip-tools 7.6.0 生成并
+  实证编译幂等；CI 新增 `windows-lock-check` job（windows-latest/3.12.10）
+  验证再生成零 diff + 干净安装 + 离线测试。
