@@ -57,5 +57,19 @@ authority 输出 canonicalize 提交）：
 
 含义：single pip-tools lock **不能同时服务两个平台**（条件包 marker 在编译时
 被求值剥离/丢弃）。Windows/3.12 对 canonical Ubuntu lock 的兼容性验证结果与
-平台 lock 设计评估见 Phase B1 Publication 报告（若安装失败按 Contract B 失效
-处理，不擅自宣称闭合）。
+平台 lock 设计评估见 Phase B1 Publication 报告。
+
+**2026-08-08 实测结论（决定性）**：
+
+- Ubuntu/3.11 authority 侧**闭环成功**：canonicalize 后 CI 再生成零 diff
+  （idempotency PASS）、7/7 jobs 全绿。
+- Windows/3.12 全新环境安装 canonical lock **失败**：uvloop==0.22.1 无
+  Windows wheel，pip 源码构建报 `RuntimeError: uvloop does not support
+  Windows`（exit 1）。
+- 按授权契约：**Contract B 不成立 → CHANGES REQUIRED**；P1 保持
+  `PROVISIONALLY MITIGATED`，不关闭。
+- 最小平台 lock 设计（待授权实施）：保留 `requirements-dev.lock.txt`
+  （Linux authority，CI 验证）+ 新增 `requirements-dev.windows.lock.txt`
+  （Windows 本机同编译器生成、提交、文档化再生成步骤；含 tzdata/
+  mini-racer/colorama，不含 uvloop/akracer）；runtime lock 同理按平台各一
+  （Windows runtime 由 windows dev lock 覆盖，共 3 个文件）。
