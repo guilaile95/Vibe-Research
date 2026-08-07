@@ -256,11 +256,14 @@ def parse_all_stock_rows(
     status_by_code: Dict[str, List[str]] = {}
     order: Dict[str, Dict[str, str]] = {}
     for row in raw_rows:
-        if not isinstance(row, (list, tuple)) or len(row) < 2:
+        if not isinstance(row, (list, tuple)) or len(row) < 1:
             excluded += 1
             continue
         code_raw = row[0]
-        status_raw = row[1]
+        # A recognizable target code with a missing tradeStatus column must
+        # remain visible to _fetch_universe's fail-closed validation.  Treating
+        # it as a generic excluded row would silently drop an eligible stock.
+        status_raw = row[1] if len(row) >= 2 else None
         if not isinstance(code_raw, str):
             excluded += 1
             continue
@@ -272,7 +275,10 @@ def parse_all_stock_rows(
             excluded += 1
             continue
         code = _normalize_baostock_code(code_raw)
-        status = status_raw.strip() if isinstance(status_raw, str) else str(status_raw)
+        # BaoStock contracts tradeStatus as the exact strings "0" / "1".
+        # Preserve non-string values as invalid instead of coercing (for example,
+        # integer 1 must not silently become the valid string "1").
+        status = status_raw if isinstance(status_raw, str) else ""
         status_by_code.setdefault(code, []).append(status)
         if code not in order:
             order[code] = {"code": code, "bs_code": code_raw, "trade_status": status}
@@ -345,7 +351,8 @@ def _row_violations(
     row_code = _normalize_baostock_code(str(row.get("code", "")).strip())
     if row_code != code:
         violations.append("code_mismatch")
-    tradestatus = str(row.get("tradestatus", "")).strip()
+    raw_tradestatus = row.get("tradestatus")
+    tradestatus = raw_tradestatus if isinstance(raw_tradestatus, str) else ""
     if tradestatus not in ("0", "1"):
         violations.append("invalid_tradestatus")
     if tradestatus != expected_trade_status:

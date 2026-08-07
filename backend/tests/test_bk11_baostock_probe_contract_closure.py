@@ -104,8 +104,9 @@ def test_probe_budget_does_not_claim_to_cap_session_or_sdk_pagination():
     assert acc["total_source_request_count"] == 7
 
 
-def test_invalid_universe_trade_status_fails_before_kline_probe():
-    client = FakeClient(universe=[["sh.600000", "x", "A"]])
+@pytest.mark.parametrize("bad_status", [None, "", "-", "9", 1])
+def test_invalid_universe_trade_status_fails_before_kline_probe(bad_status: object):
+    client = FakeClient(universe=[["sh.600000", bad_status, "A"]])
     with pytest.raises(probe.ProbeError, match="invalid universe trade status"):
         probe.run_sample_probe(
             client,
@@ -116,6 +117,20 @@ def test_invalid_universe_trade_status_fails_before_kline_probe():
         )
     assert "login" in client.calls
     assert ("query_all_stock", DAY) in client.calls
+    assert not any(isinstance(call, tuple) and call[0] == "query_k" for call in client.calls)
+    assert client.calls[-1] == "logout"
+
+
+def test_missing_universe_trade_status_column_fails_before_kline_probe():
+    client = FakeClient(universe=[["sh.600000"]])
+    with pytest.raises(probe.ProbeError, match="invalid universe trade status"):
+        probe.run_sample_probe(
+            client,
+            DAY,
+            sample_size=1,
+            determinism_checks=0,
+            sleep=lambda _: None,
+        )
     assert not any(isinstance(call, tuple) and call[0] == "query_k" for call in client.calls)
     assert client.calls[-1] == "logout"
 
