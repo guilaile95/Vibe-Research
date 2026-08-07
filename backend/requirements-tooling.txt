@@ -1,0 +1,3 @@
+# 锁工程工具链（pip-compile / pip-sync）版本钉死
+# 安装：.venv/bin/pip install -r requirements-tooling.txt
+pip-tools==7.6.0

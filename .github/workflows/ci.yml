@@ -21,13 +21,10 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: |
-            backend/requirements.txt
-            backend/requirements-dev.txt
+            backend/requirements-dev.lock.txt
 
-      - name: Install backend dependencies
-        run: |
-          python -m pip install -r backend/requirements.txt
-          python -m pip install -r backend/requirements-dev.txt
+      - name: Install backend dependencies (exact lock)
+        run: python -m pip install -r backend/requirements-dev.lock.txt
 
       - name: Run offline backend tests
         working-directory: backend
@@ -110,13 +107,10 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: |
-            backend/requirements.txt
-            backend/requirements-dev.txt
+            backend/requirements-dev.lock.txt
 
-      - name: Install backend dependencies
-        run: |
-          python -m pip install -r backend/requirements.txt
-          python -m pip install -r backend/requirements-dev.txt
+      - name: Install backend dependencies (exact lock)
+        run: python -m pip install -r backend/requirements-dev.lock.txt
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -159,13 +153,10 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: |
-            backend/requirements.txt
-            backend/requirements-dev.txt
+            backend/requirements-dev.lock.txt
 
-      - name: Install backend dependencies
-        run: |
-          python -m pip install -r backend/requirements.txt
-          python -m pip install -r backend/requirements-dev.txt
+      - name: Install backend dependencies (exact lock)
+        run: python -m pip install -r backend/requirements-dev.lock.txt
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -209,13 +200,10 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: |
-            backend/requirements.txt
-            backend/requirements-dev.txt
+            backend/requirements-dev.lock.txt
 
-      - name: Install backend dependencies
-        run: |
-          python -m pip install -r backend/requirements.txt
-          python -m pip install -r backend/requirements-dev.txt
+      - name: Install backend dependencies (exact lock)
+        run: python -m pip install -r backend/requirements-dev.lock.txt
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

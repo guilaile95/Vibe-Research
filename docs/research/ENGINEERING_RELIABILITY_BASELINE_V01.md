@@ -163,3 +163,28 @@
 **Engineering Reliability Implementation v0.1**（Phase B，待授权）：
 按上表 1→2→3→4→5 顺序实施；mypy 与 ESLint 采用 baseline/changed-files-only
 策略而非全仓清零；thesis E2E 稳定性另立专项。本阶段不改业务功能。
+
+---
+
+## 12. Phase B1 实施结果（2026-08-08，已落地于
+`chore/python-dependency-reproducibility-v0.1`）
+
+- 工具：pip-tools **7.6.0**（钉于 `backend/requirements-tooling.txt`）；
+  编译 authority = CPython **3.11.15**（uv 获取）。
+- lock 拓扑：`requirements.lock.txt`（53 包）+ `requirements-dev.lock.txt`
+  （58 包，自包含单文件，无 `-r` 引用）。
+- **Contract B（Canonical Lock + Compatibility Runtime）**：LOCK_AUTHORITY =
+  Ubuntu/3.11（权威 lock 需在 CI 平台重生成以纳入 uvloop pin）；Windows/3.12 =
+  COMPATIBILITY_TESTED / NOT_LOCK_AUTHORITY。
+- **LOCKING_CURRENT_RESOLUTION**：与 Phase A 解析完全一致
+  （fastapi 0.141.1 / pandas 3.0.5 / pytest 9.1.1 / numpy 2.4.6 等），
+  未升级任何 direct dependency。
+- hashes：提交形态不带（Linux `--require-hashes` 因 uvloop extra 硬失败）；
+  权威平台生成后可启用。
+- Reproducibility Proof：两个全新独立 3.11 环境 freeze 零差异；3.12 版本层
+  一致；pytest `-m "not live"`：3.11 与 3.12 均 **1823 passed / 0 failed /
+  11 deselected**（108s / 104s）。
+- CI：4 个 Python job 改为 `pip install -r backend/requirements-dev.lock.txt`，
+  `cache-dependency-path` 指向 lock。
+- 待办（发布轮）：Linux CI 重生成权威 lock（纳入 uvloop）→ 可选启用 hashes；
+  Node actions 弃用警告留 Phase B2。
