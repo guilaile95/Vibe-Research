@@ -56,7 +56,7 @@ const NAV_GROUPS = [
   },
 ];
 
-// 常看的板块，作为「板块中心」下的快捷入口（缩进显示）。
+// 常看板块仍用于最长路由匹配；P0 视觉试验不再在主侧栏展开这些快捷入口。
 const SECTOR_LINKS = [
   { to: "/sectors/humanoid", icon: Cog, label: "人形机器人" },
   { to: "/sectors/ai-computing", icon: Cpu, label: "AI 算力" },
@@ -203,7 +203,7 @@ export function Layout() {
   const currentNavPath = getCurrentNavPath(pathname);
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen bg-background">
       {/* 窄屏汉堡按钮 */}
       <button
         ref={triggerRef}
@@ -213,7 +213,7 @@ export function Layout() {
         aria-label={mobileOpen ? "关闭导航菜单" : "打开导航菜单"}
         aria-expanded={mobileOpen}
         aria-controls="app-sidebar"
-        className="glass fixed left-3 top-3 z-50 rounded-lg p-2 text-foreground md:hidden"
+        className="fixed left-3 top-3 z-50 rounded-md border border-border bg-card p-2 text-foreground transition-colors duration-150 hover:bg-muted md:hidden"
       >
         {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
       </button>
@@ -224,11 +224,11 @@ export function Layout() {
           aria-hidden="true"
           data-testid="nav-drawer-overlay"
           onClick={() => setMobileOpen(false)}
-          className="fixed inset-0 z-30 bg-black/60 md:hidden"
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
         />
       )}
 
-      {/* Sidebar */}
+      {/* Sidebar：固定、扁平、无 glass/glow，保留原移动端可访问性契约。 */}
       <aside
         id="app-sidebar"
         ref={drawerRef}
@@ -239,11 +239,11 @@ export function Layout() {
         aria-modal={mobileOpen ? true : undefined}
         aria-label={mobileOpen ? "导航菜单" : undefined}
         className={cn(
-          "glass z-40 flex flex-col rounded-2xl transition-all duration-200",
-          "fixed inset-y-2 left-2 w-60",
-          "md:static md:m-2 md:inset-auto md:shrink-0",
+          "z-40 flex flex-col border-r border-border/80 bg-card transition-[width] duration-200",
+          "fixed inset-y-0 left-0 w-56",
+          "md:static md:inset-auto md:shrink-0",
           mobileOpen ? "flex" : "hidden md:flex",
-          collapsed ? "md:w-14" : "md:w-60",
+          collapsed ? "md:w-14" : "md:w-56",
         )}
       >
         {/* 抽屉内的键盘可达关闭控件（焦点约束的第一个目标） */}
@@ -259,26 +259,30 @@ export function Layout() {
         )}
 
         {/* Brand */}
-        <div className={cn("border-b border-border/40", compact ? "flex justify-center p-3" : "p-4")}>
+        <div className={cn("border-b border-border/60", compact ? "flex justify-center p-3" : "px-3.5 py-4")}>
           <Link to="/daily-review" className={cn("flex items-center", compact ? "justify-center" : "gap-2.5")}>
-            <LineChart className="h-6 w-6 shrink-0 text-primary text-glow" />
+            <LineChart className="h-5 w-5 shrink-0 text-primary" />
             {!compact && (
-              <span className="font-display text-lg font-bold tracking-tight">
-                Vibe-<span className="text-primary">Research</span>
+              <span className="font-display text-[15px] font-semibold tracking-tight text-foreground">
+                Vibe Research
               </span>
             )}
           </Link>
-          {!compact && <p className="mt-1 text-[11px] text-muted-foreground">个人 AI 投研系统 · A股/美股/港股</p>}
+          {!compact && (
+            <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground/75">
+              个人 AI 投研系统 · A股/美股/港股
+            </p>
+          )}
         </div>
 
-        {/* Nav — 三组：市场 / 研究 / 管理 */}
-        <nav aria-label="主导航" className={cn("flex-1 overflow-auto", compact ? "space-y-1 p-1.5" : "space-y-4 p-3")}>
+        {/* Nav — P0 保留原业务分组与路由，仅收敛视觉密度。 */}
+        <nav aria-label="主导航" className={cn("flex-1 overflow-auto", compact ? "space-y-1 p-1.5" : "space-y-3.5 p-2.5")}>
           {NAV_GROUPS.map((group) => (
             <div key={group.id} role="group" aria-labelledby={group.id}>
               <h2
                 id={group.id}
                 className={cn(
-                  "mb-1.5 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground",
+                  "mb-1 px-2.5 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70",
                   compact && "sr-only",
                 )}
               >
@@ -288,50 +292,27 @@ export function Layout() {
                 {group.items.map(({ to, icon: Icon, label }) => {
                   const active = isActive(pathname, to);
                   return (
-                    <div key={to}>
-                      <Link
-                        to={to}
-                        title={compact ? label : undefined}
-                        aria-current={currentNavPath === to ? "page" : undefined}
-                        className={cn(
-                          "flex items-center rounded-lg text-[13px] transition-colors duration-150",
-                          compact ? "justify-center p-2.5" : "gap-2.5 px-3 py-2",
-                          active
-                            ? "bg-primary/15 font-medium text-primary shadow-glow"
-                            : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
-                        )}
-                      >
-                        <Icon className="h-4 w-4 shrink-0" />
-                        {!compact && label}
-                      </Link>
-
-                      {/* 板块中心下方：常看板块的快捷入口（缩进） */}
-                      {to === "/sectors" && (
-                        <div className={cn("mt-0.5 space-y-0.5", !compact && "ml-4 border-l border-border/30 pl-1.5")}>
-                          {SECTOR_LINKS.map(({ to: st, icon: SIcon, label: slabel }) => {
-                            const sactive = isActive(pathname, st);
-                            return (
-                              <Link
-                                key={st}
-                                to={st}
-                                title={compact ? slabel : undefined}
-                                aria-current={currentNavPath === st ? "page" : undefined}
-                                className={cn(
-                                  "flex items-center rounded-md transition-colors",
-                                  compact ? "justify-center p-2" : "gap-2 px-2.5 py-1.5 text-xs",
-                                  sactive
-                                    ? "bg-primary/10 font-medium text-primary"
-                                    : "text-muted-foreground hover:bg-muted/30 hover:text-foreground",
-                                )}
-                              >
-                                <SIcon className="h-3.5 w-3.5 shrink-0" />
-                                {!compact && slabel}
-                              </Link>
-                            );
-                          })}
-                        </div>
+                    <Link
+                      key={to}
+                      to={to}
+                      title={compact ? label : undefined}
+                      aria-current={currentNavPath === to ? "page" : undefined}
+                      className={cn(
+                        "flex items-center rounded-md text-[13px] transition-colors duration-150",
+                        compact ? "justify-center p-2.5" : "gap-2.5 px-2.5 py-2",
+                        active
+                          ? "bg-muted font-medium text-foreground"
+                          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                       )}
-                    </div>
+                    >
+                      <Icon
+                        className={cn(
+                          "h-4 w-4 shrink-0 transition-colors duration-150",
+                          active ? "text-primary" : "text-muted-foreground/80",
+                        )}
+                      />
+                      {!compact && label}
+                    </Link>
                   );
                 })}
               </div>
@@ -340,41 +321,66 @@ export function Layout() {
         </nav>
 
         {/* Footer */}
-        <div className={cn("border-t border-border/40", compact ? "flex flex-col items-center gap-2 p-2" : "space-y-2 p-3")}>
+        <div className={cn("border-t border-border/60", compact ? "flex flex-col items-center gap-2 p-2" : "space-y-2 p-3")}>
           {compact ? (
             <>
-              <button onClick={toggle} className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground" title={dark ? "亮色" : "暗色"} aria-label={dark ? "切换到亮色主题" : "切换到暗色主题"}>
+              <button
+                onClick={toggle}
+                className="rounded-md p-1.5 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
+                title={dark ? "亮色" : "暗色"}
+                aria-label={dark ? "切换到亮色主题" : "切换到暗色主题"}
+              >
                 {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
               </button>
-              <button onClick={() => setCollapsed(false)} className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground" title="展开" aria-label="展开侧栏">
+              <button
+                onClick={() => setCollapsed(false)}
+                className="rounded-md p-1.5 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
+                title="展开"
+                aria-label="展开侧栏"
+              >
                 <ChevronsRight className="h-4 w-4" />
               </button>
             </>
           ) : (
             <>
               <div className="flex items-center justify-between">
-                <button onClick={toggle} className="flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+                <button
+                  onClick={toggle}
+                  className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
+                >
                   {dark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
                   {dark ? "亮色" : "暗色"}
                 </button>
-                <div className="flex items-center gap-2">
-                  <a href={REPO_URL} target="_blank" rel="noreferrer" className="text-muted-foreground transition-colors hover:text-foreground" title="GitHub" aria-label="GitHub 仓库">
+                <div className="flex items-center gap-1.5">
+                  <a
+                    href={REPO_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
+                    title="GitHub"
+                    aria-label="GitHub 仓库"
+                  >
                     <Github className="h-3.5 w-3.5" />
                   </a>
-                  <button onClick={() => setCollapsed(true)} className="hidden rounded p-1 text-muted-foreground transition-colors hover:text-foreground md:block" title="收起" aria-label="收起侧栏">
+                  <button
+                    onClick={() => setCollapsed(true)}
+                    className="hidden rounded-md p-1.5 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground md:block"
+                    title="收起"
+                    aria-label="收起侧栏"
+                  >
                     <ChevronsLeft className="h-3.5 w-3.5" />
                   </button>
                 </div>
               </div>
-              <p className="text-[11px] leading-relaxed text-muted-foreground">{APP_VERSION}</p>
+              <p className="px-1.5 text-[10px] leading-relaxed text-muted-foreground/70">{APP_VERSION}</p>
             </>
           )}
         </div>
       </aside>
 
       {/* Main */}
-      <main ref={mainRef} className="flex-1 overflow-auto">
-        <div className="mx-auto max-w-6xl px-4 pb-8 pt-16 sm:px-6 md:pt-8">
+      <main ref={mainRef} className="flex-1 overflow-auto bg-background">
+        <div className="mx-auto w-full max-w-[1440px] px-4 pb-10 pt-16 sm:px-6 md:px-8 md:pt-7">
           <DailyReviewAiTaskIndicator />
           <PortfolioAdviceTaskIndicator />
           <Outlet />

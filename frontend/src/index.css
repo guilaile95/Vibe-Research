@@ -3,185 +3,146 @@
 @tailwind utilities;
 
 @layer base {
-  /* ============================================================
-     Vibe-Research · 精密仪表暖橙主题 v2
-     设计语言：编辑排版 × 数据终端
-     字体：Space Grotesk（标题）+ Outfit（正文）+ JetBrains Mono（数据）
-     层级：轻量边框卡为主，玻璃效果仅用于侧边栏等固定区域
-     ============================================================ */
+  /*
+   * Vibe-Research · Stockxy-inspired workspace theme v0.1
+   * 目标：低视觉噪声、扁平层级、中性金融工作台。
+   * 业务语义保持 A 股红涨绿跌；accent 仅承担选择/主操作/少量强调。
+   */
   :root {
-    --background: 224 44% 5%;
-    --foreground: 210 25% 93%;
-    --card: 224 38% 8%;
-    --card-foreground: 210 25% 93%;
+    --background: 216 16% 6%;
+    --foreground: 210 17% 95%;
+    --card: 214 15% 9%;
+    --card-foreground: 210 17% 95%;
 
-    --primary: 16 90% 55%;
-    /* 深暖黑前景：在 --primary 橙底上实测 5.93:1，满足 WCAG AA 4.5:1（纯白仅 3.29:1） */
-    --primary-foreground: 20 60% 5%;
-    --accent: 28 92% 56%;
-    --accent-foreground: 224 44% 5%;
+    --primary: 39 62% 56%;
+    --primary-foreground: 216 16% 6%;
+    --accent: 218 14% 11%;
+    --accent-foreground: 210 17% 95%;
 
-    --muted: 222 26% 13%;
-    --muted-foreground: 215 16% 58%;
-    --destructive: 0 72% 58%;
+    --muted: 218 14% 11%;
+    --muted-foreground: 216 9% 67%;
+    --destructive: 0 68% 62%;
     --destructive-foreground: 0 0% 100%;
-    --border: 215 22% 18%;
-    --radius: 0.75rem;
+    --border: 215 14% 17%;
+    --radius: 0.5rem;
 
-    --success: 152 60% 45%;
-    --danger: 0 74% 60%;
-    --warning: 38 92% 55%;
-    --info: 16 90% 55%;
+    --success: 148 50% 46%;
+    --danger: 0 68% 62%;
+    --warning: 38 63% 56%;
+    --info: 216 9% 67%;
 
-    /* 玻璃（仅侧边栏） */
-    --glass-fill-top: rgba(255, 255, 255, 0.04);
-    --glass-fill-bot: rgba(255, 255, 255, 0.008);
-    --glass-stroke: rgba(255, 232, 214, 0.08);
-    --glass-hi: rgba(255, 255, 255, 0.04);
-
-    --chart-grid: 220 20% 14%;
-    --chart-text: 215 15% 55%;
-    --chart-axis: 220 20% 24%;
+    --chart-grid: 216 12% 13%;
+    --chart-text: 216 8% 57%;
+    --chart-axis: 215 12% 23%;
   }
 
   .light {
-    --background: 210 25% 97%;
-    --foreground: 224 35% 10%;
+    --background: 60 11% 96%;
+    --foreground: 216 10% 10%;
     --card: 0 0% 100%;
-    --card-foreground: 224 35% 10%;
+    --card-foreground: 216 10% 10%;
 
-    --primary: 16 82% 48%;
-    /* 同一深暖黑前景：浅色 --primary 橙底上实测 4.79:1（纯白仅 4.07:1） */
-    --primary-foreground: 20 60% 5%;
-    --accent: 28 88% 48%;
-    --accent-foreground: 0 0% 100%;
+    --primary: 39 59% 45%;
+    --primary-foreground: 0 0% 100%;
+    --accent: 220 8% 93%;
+    --accent-foreground: 216 10% 12%;
 
-    --muted: 210 18% 92%;
-    --muted-foreground: 215 14% 40%;
-    --destructive: 0 74% 52%;
+    --muted: 180 4% 94%;
+    --muted-foreground: 220 9% 46%;
+    --destructive: 0 66% 52%;
     --destructive-foreground: 0 0% 100%;
-    --border: 214 18% 85%;
+    --border: 216 9% 88%;
 
-    --success: 152 60% 38%;
-    --danger: 0 74% 50%;
-    --warning: 38 92% 42%;
-    --info: 16 82% 48%;
+    --success: 148 48% 38%;
+    --danger: 0 66% 52%;
+    --warning: 38 62% 45%;
+    --info: 220 9% 46%;
 
-    --glass-fill-top: rgba(255, 255, 255, 0.65);
-    --glass-fill-bot: rgba(255, 255, 255, 0.3);
-    --glass-stroke: rgba(15, 40, 70, 0.08);
-    --glass-hi: rgba(255, 255, 255, 0.7);
-
-    --chart-grid: 214 20% 88%;
-    --chart-text: 215 16% 42%;
-    --chart-axis: 214 20% 78%;
+    --chart-grid: 216 9% 89%;
+    --chart-text: 220 8% 46%;
+    --chart-axis: 216 9% 80%;
   }
 
   * { @apply border-border; }
 
+  html { background: hsl(var(--background)); }
+
   body {
     @apply bg-background text-foreground font-sans;
     background-color: hsl(var(--background));
-    background-image:
-      radial-gradient(1200px 700px at 8% -10%, hsl(16 90% 55% / 0.07), transparent 55%),
-      radial-gradient(900px 600px at 105% 110%, hsl(225 55% 40% / 0.05), transparent 50%);
-    background-attachment: fixed;
     font-feature-settings: "cv02", "cv03", "cv04";
-  }
-
-  .light body {
-    background-image:
-      radial-gradient(1200px 700px at 8% -10%, hsl(16 85% 55% / 0.05), transparent 55%),
-      radial-gradient(900px 600px at 105% 110%, hsl(225 60% 60% / 0.04), transparent 50%);
   }
 
   h1, h2, h3 { @apply font-display; }
 
+  :focus-visible {
+    outline: 2px solid hsl(var(--primary) / 0.58);
+    outline-offset: 2px;
+  }
+
   .prose table { border-collapse: collapse; width: 100%; }
   .prose th, .prose td { border: 1px solid hsl(var(--border)); }
-  .prose tbody tr:nth-child(even) { background: hsl(var(--muted) / 0.3); }
+  .prose tbody tr:nth-child(even) { background: hsl(var(--muted) / 0.32); }
 
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
+  ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.72); }
 }
 
 @layer components {
-  /* 轻量卡片：实色底 + 细边框 + 微投影（默认容器，替代全局玻璃） */
+  /* 默认信息容器：扁平 surface + 轻边框，不浮起、不发光。 */
   .card-surface {
     background: hsl(var(--card));
-    border: 1px solid hsl(var(--border) / 0.6);
+    border: 1px solid hsl(var(--border) / 0.72);
     border-radius: var(--radius);
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.12);
-    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+    box-shadow: none;
+    transition: border-color 150ms ease, background-color 150ms ease;
   }
   .card-surface:hover {
     border-color: hsl(var(--border));
   }
-  .light .card-surface {
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.03);
-  }
 
-  /* 玻璃卡：仅用于侧边栏等固定区域（保留 backdrop-filter） */
+  /* 兼容旧 class 名；视觉上已不再采用 glassmorphism。 */
   .glass {
-    background-image: linear-gradient(162deg, var(--glass-fill-top), var(--glass-fill-bot));
-    border: 1px solid var(--glass-stroke);
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border) / 0.78);
     border-radius: var(--radius);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 var(--glass-hi);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
-  .light .glass { box-shadow: 0 6px 20px rgba(30, 60, 100, 0.08), inset 0 1px 0 var(--glass-hi); }
 
-  /* 英雄区光晕（配 .glass 或 .card-surface，装饰热点） */
+  /* 保留 API 兼容，但主动取消装饰性 glow。 */
   .glass-glow { position: relative; overflow: hidden; }
-  .glass-glow::before {
-    content: "";
-    position: absolute; top: -40%; right: -20%;
-    width: 220px; height: 220px;
-    background: radial-gradient(circle, hsl(var(--primary) / 0.12), transparent 70%);
-    pointer-events: none;
-  }
+  .glass-glow::before { display: none; }
+  .text-glow { text-shadow: none; }
 
-  /* 暖橙光文字（仅用于品牌标题） */
-  .text-glow { text-shadow: 0 0 14px hsl(var(--primary) / 0.35); }
-
-  /* 骨架屏 shimmer */
+  /* 骨架屏只保留必要的加载反馈。 */
   .skeleton {
     background: linear-gradient(
       90deg,
-      hsl(var(--muted) / 0.5) 25%,
-      hsl(var(--muted) / 0.8) 50%,
-      hsl(var(--muted) / 0.5) 75%
+      hsl(var(--muted) / 0.55) 25%,
+      hsl(var(--muted) / 0.9) 50%,
+      hsl(var(--muted) / 0.55) 75%
     );
     background-size: 200% 100%;
     animation: shimmer 1.8s ease-in-out infinite;
-    border-radius: 6px;
+    border-radius: 5px;
   }
 
-  /* 区块标题：左侧橙色竖线 + 字体对比 */
+  /* 标题不再依赖橙色竖线，靠排版层级建立结构。 */
   .section-title {
-    @apply flex items-center gap-2 text-sm font-semibold text-foreground;
+    @apply flex items-center text-sm font-semibold text-foreground;
   }
-  .section-title::before {
-    content: "";
-    @apply block h-4 w-[3px] rounded-full bg-primary;
-  }
+  .section-title::before { display: none; }
 }
 
-/* ============================================================
-   动画 keyframes（原生声明，不依赖 Tailwind JIT）
-   shimmer 只被 .skeleton 以裸 CSS 引用，没有 animate-shimmer 类，
-   Tailwind 不会输出对应 @keyframes，必须在此手写，否则骨架屏静默不动。
-   ============================================================ */
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
 
-/* 无障碍：尊重系统「减少动态效果」偏好，只关掉装饰性循环/入场动画，
-   不做 * { transition: none !important } 这类全局粗暴覆盖。 */
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-up,
   .animate-fade-up-1,
