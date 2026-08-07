@@ -37,7 +37,9 @@ tests/test_fixes.py::test_run_cli_stream_timeout
 - **原因**：Windows 环境常缺少 `python3` 可执行名，子进程退出码 **9009**（命令未找到）。
 - **处理**：视为环境已知问题；**不得**把其它失败归入此项。
 
-其余 `pytest -m "not live"` 应以当前分支绿测为准；测试数量以 CI 与本地实测为准（2026-08-06 稳定 head CI 全绿），不在本文档维护具体数字。
+其余 `pytest -m "not live"` 应以当前分支绿测为准；测试数量以 CI 与本地实测为准，
+不在本文档维护具体数字。B1 dependency reproducibility 与 B2 Actions modernization
+均已合并关闭，不再作为开放工程债务。
 
 ## 持仓维护 UX 注意
 
@@ -61,4 +63,4 @@ tests/test_fixes.py::test_run_cli_stream_timeout
 | 项 | 说明 |
 |----|------|
 | Intel Digest saving 请求无显式 timeout | 后端进程挂起时 UI 可能停留在"保存中"；不导致数据库数据损坏；reload 可恢复；当前 P2；后续候选修复，不是当前授权任务 |
-| thesis E2E 偶发失败（intermittent） | 2026-08-07 首次 stable merge run（run `31200057732`）失败于 "Updated evidence text not visible"（UI 更新可见性时序断言，`evidence-thesis-real.browser.mjs:255`）；**同一 exact Head 复跑成功**（CONFIRMED_INTERMITTENT_E2E_FAILURE）；不代表 thesis 产品功能故障；当前 P2；后续稳定性加固候选，本轮不修 |
+| thesis E2E 偶发失败（intermittent） | 截至 2026-08-08，最近 100 次 CI 中累计 3 个独立 run 的 attempt 1（`31200057732`、`31211021454`、`31213770563`）均失败于 "Updated evidence text not visible"（UI 更新可见性时序断言，`evidence-thesis-real.browser.mjs:255`），随后 rerun 成功；`CONFIRMED_INTERMITTENT_E2E_FAILURE`，不代表 thesis 产品功能故障；当前 P2；后续稳定性加固候选，本轮不修 |

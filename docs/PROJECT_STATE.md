@@ -1,7 +1,8 @@
 # 项目当前状态
 
 > 稳定分支：`feature/research-system-v01`
-> 稳定 Head：`1339f7aa6ecb97bb2a0612ca7a61e0995cf3ccdb`（Merge PR #50，2026-08-07）
+> 稳定 Head（本次状态同步基线）：`2316ba64e59797291253c84367457a53039297eb`
+> （Merge PR #53，2026-08-08）
 > 当前任务与停止点：[`docs/NEXT_TASK.md`](NEXT_TASK.md)（唯一当前授权任务）
 > 治理契约与门禁：[`docs/GOVERNANCE.md`](GOVERNANCE.md)
 > 长期候选与依赖：[`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)
@@ -65,11 +66,11 @@ GitHub 现场为准）。其他文档链接引用本文件，不复制完整状�
 
 ### BK-11 状态
 
-BK-11（短线市场事实层与复盘闭环）已**暂停/归档**（Issue #48，2026-08-06，
-正文语义 PAUSED/ARCHIVED）。OPEN 状态不代表开发授权；恢复实施需新的明确授权。
-相关研究 worktree（`research/bk11-free-source-feasibility-v0.1`、
-`research/bk11-intraday-source-qualification-v0.1`）与执行记录
-（`docs/research/EXECUTION_STATE.md`）均保持冻结。
+BK-11（短线市场事实层与复盘闭环）的生产接入、调度、回填与 Slice 4 继续
+**暂停/归档**（Issue #48 原正文是 2026-08-06 的 PAUSED/ARCHIVED 历史快照；
+Issue OPEN 本身不构成授权）。当前仅新授权 zero-cost source research 的恢复、
+验证、独立复审与 Draft PR 发布；原研究分支保持 frozen evidence branch，研究成果
+只能从当前稳定基线新建 recovery 分支迁移。该授权不包含生产 BaoStock ingestion。
 
 ## 4. 界面与工程治理
 
@@ -85,12 +86,16 @@ PR #36 已上线：统一字体、色彩、卡片与页面标题系统；桌面�
 PR #37 已上线，`AGENTS.md` 为唯一规则正文；2026-08-07 起 `docs/GOVERNANCE.md`
 为 Git/GitHub 治理契约唯一正文（文档权威链、CI 分级、分支保护策略、PR 恢复方案）。
 
+Engineering Reliability B1/B2 已关闭：PR #52 将平台特定 exact dependency locks、
+双平台 canonical lock check 与离线测试纳入稳定分支；PR #53 将当前 workflow 的
+官方 Actions 更新为 `checkout@v7`、`setup-python@v6`、`setup-node@v6`。
+
 ## 5. 当前授权
 
 - **当前已授权产品开发任务：无。**
-- 当前仅执行治理状态同步闭环（PR #50 合并后的权威文档收口，
-  分支 `docs/intel-digest-post-merge-state-sync-v0.1`；不属新业务任务）。
-- BK-11 已暂停（Issue #48），不授权继续开发。
+- 当前授权任务为 BK-11 Zero-Cost Source Research Recovery & Publication v0.1，
+  仅限 research closure / validation / independent review / Draft PR。
+- BK-11 production ingestion / scheduler / backfill / Slice 4 仍未授权。
 - PR #47（BK-11 Tushare ingestion v0.2）保持 Draft / OPEN，未授权处理。
 - PR #43（Intel Daily Digest v0.1）已 CLOSED / 未合并，
   superseded by PR #50（recovery 已并入稳定分支）。
@@ -105,6 +110,8 @@ PR #37 已上线，`AGENTS.md` 为唯一规则正文；2026-08-07 起 `docs/GOVE
 
 | PR | Merge SHA | 内容 |
 |---|---|---|
+| #53 | `2316ba64e59797291253c84367457a53039297eb` | Actions modernization（B2 closed） |
+| #52 | `fd7cdaa299fc61f9a527f4db2861f72335a3c709` | Python dependency reproducibility（B1 closed） |
 | #50 | `1339f7aa6ecb97bb2a0612ca7a61e0995cf3ccdb` | Intel Daily Digest recovery（原 PR #43 有效功能迁入稳定） |
 | #49 | `77a7ace25c3668d0ccd88be23d8db318416740dc` | 治理契约纳入稳定（GOV） |
 | #46 | `cd17fec2cc28d8dd9ea9b8e37df0cc6c394a0b18` | BK-11 生产输入源审计（BLOCKED，冻结点） |

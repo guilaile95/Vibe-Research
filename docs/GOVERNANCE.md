@@ -16,7 +16,7 @@
 | `docs/KNOWN_ISSUES.md` | 已知限制与测试例外 | 发现/修复限制时 | 限制 |
 | `docs/DECISIONS.md` | 设计决定（历史记录） | 新决定时（追加，不改写） | 历史 |
 | `docs/CHAT_HANDOFF.md` | 交接摘要 + 安全边界 | 大变更时 | 否（执行记录） |
-| `docs/research/EXECUTION_STATE.md` | BK-11 执行历史 | 冻结，不再更新 | 否（历史） |
+| `docs/research/EXECUTION_STATE.md` | BK-11 执行历史 | 仅追加已验证研究事实 | 否（历史） |
 | `docs/research/*` | 研究/设计稿 | 各自标注状态 | 视标注 |
 | Issue / PR | 对应专项局部状态 | 专项变更时 | 局部 |
 
@@ -29,7 +29,10 @@
   授权声明、测试数量、"未实现"声明、账户资金状态等 15 处冲突。
 - 具体测试数量不在文档维护（以 CI 与本地实测为准），避免过期快照。
 
-## 2. GOV-00 核验快照（2026-08-07）
+## 2. GOV-00 历史核验快照（2026-08-07）
+
+下表保留 GOV-00 执行当日的审计事实，不是当前项目状态权威；PR、分支与模板的
+当前状态以 GitHub 现场和 `docs/PROJECT_STATE.md` 为准。
 
 | 项 | 实际状态 | 与交接偏差 |
 |---|---|---|
@@ -40,18 +43,20 @@
 | PR #47 | OPEN / Draft / MERGEABLE / CLEAN；head `4e479205`、base `cd17fec2`；CI success | 无 |
 | PR #43 | OPEN / Draft / **CONFLICTING / DIRTY**；head `0730f4bc`、base `ad844742`（非当前 stable） | 无 |
 | Issue #48 | OPEN，正文 PAUSED / ARCHIVED（2026-08-06 20:12 +08:00） | 无 |
-| CI | 1 个 workflow（`ci.yml`）、6 jobs；稳定 head 最近 run（2026-08-06）success | 无 |
+| CI | 历史快照当时为 1 个 workflow、6 jobs；当前 job 清单以 §3 为准 | 当前已增至 8 jobs |
 | 合并设置 | merge/squash/rebase 全开；auto-merge off；delete-branch-on-merge off | 无 |
 | CODEOWNERS / PR template / issue template / SECURITY / CONTRIBUTING | 均不存在 | 无 |
 
 ## 3. CI 门禁分级
 
-稳定分支 `ci.yml` 现有 7 个 job：
+稳定分支 `ci.yml` 现有 8 个 job；PR #53 合并后使用
+`actions/checkout@v7`、`actions/setup-python@v6`、`actions/setup-node@v6`：
 
 | Job | 内容 | 分级 | 理由 |
 |---|---|---|---|
 | `backend` | `pytest -m "not live"`（离线单测） | **REQUIRED** | 离线、确定性、可重复、不写生产 |
 | `frontend` | `npm run build` + `npm test` | **REQUIRED** | 同上 |
+| `windows-lock-check` | Windows authority lock 再生成 + exact lock 安装 + 离线单测 | **REQUIRED** | 双平台依赖可复现门禁；离线、确定性 |
 | `whitespace` | `git diff --check` | **REQUIRED** | 确定性、零依赖 |
 | `e2e-smoke` | Playwright smoke + top-risk（起本地服务、访问实时数据源） | OPTIONAL | 稳定但依赖运行时/实时数据 |
 | `e2e-thesis-smoke` | evidence-thesis real E2E | OPTIONAL | 同上 |
@@ -164,8 +169,9 @@ API 前缀 `/intel-digests*` 无碰撞。
 | 采纳 PR template；其余协作文件 LOW ROI | 单人项目最小必要 |
 | PR #43 推荐 recovery 分支方案（C） | 独立代码评估，非照抄交接偏好 |
 
-## 8. 待用户决策项
+## 8. 当前治理边界
 
-- 是否升级 GitHub Pro 或改公开仓库以启用分支保护（涉及付费/公开，本阶段不执行）；
-- 是否授权下一阶段 "PR43 Recovery v0.1"（建议：是）；
-- GitHub billing 恢复（影响 CI 全绿与 PR #43 新 PR 的合并前验证）。
+- 仓库继续保持 private，不为 branch protection 单独升级 GitHub Pro，也不改 public；
+- `PLATFORM_BRANCH_PROTECTION_UNAVAILABLE` 作为已知 P2，不阻断个人项目开发；
+- 继续以本文件、PR template、Draft PR、完整 CI 与人工 merge discipline 作为替代控制；
+- 当前授权只以 `docs/NEXT_TASK.md` 为准，历史 recovery 评估不构成新任务授权。
