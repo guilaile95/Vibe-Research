@@ -41,3 +41,21 @@ pip-compile --no-emit-index-url --upgrade -o requirements-dev.lock.txt requireme
   （trade-off 已记录，不牺牲可用性）。
 - pip-tools 7.6.0 与 pip 26.2.1 存在 API 不兼容（编译时用 pip 26.0.1）；
   安装端 pip 不受影响。
+
+## Canonical Linux 生成结果（2026-08-08，CI authority 实测）
+
+Ubuntu/CPython 3.11 authority 再生成与 Windows 候选 lock 的差异（已按
+authority 输出 canonicalize 提交）：
+
+| 包 | Windows lock | Ubuntu lock | 说明 |
+|---|---|---|---|
+| uvloop | 无 | `0.22.1`（无 marker） | Linux-only；Windows 无 wheel |
+| akracer | 无 | `0.0.14` | Linux 侧 akshare JS 引擎（替代 mini-racer） |
+| mini-racer | `0.14.1` | 无 | Windows 侧 akshare JS 引擎 |
+| tzdata | `2026.3` | 无 | Windows-only（zoneinfo 数据） |
+| colorama | `0.4.6` | 无 | Windows-only |
+
+含义：single pip-tools lock **不能同时服务两个平台**（条件包 marker 在编译时
+被求值剥离/丢弃）。Windows/3.12 对 canonical Ubuntu lock 的兼容性验证结果与
+平台 lock 设计评估见 Phase B1 Publication 报告（若安装失败按 Contract B 失效
+处理，不擅自宣称闭合）。
