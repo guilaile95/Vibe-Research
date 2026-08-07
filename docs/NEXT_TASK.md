@@ -7,22 +7,25 @@
 
 ## 当前已授权任务
 
-**Engineering Reliability Implementation v0.1 — Phase B1**（Python 依赖可复现性，
-工程实施，非产品任务）
+**BK-11 Zero-Cost Source Research Recovery & Publication v0.1**
 
-- 分支：`chore/python-dependency-reproducibility-v0.1`（自稳定 Head `060b5d0` 创建）
-- 范围：仅处理 Phase A 唯一 P1——pip-tools 生成平台特定 exact lock、
-  CI 双 authority lock check、Contract D 双平台可复现闭环
-- 状态：`PLATFORM_LOCK_CLOSURE_IN_PROGRESS`（Phase A 测量见
-  `docs/research/ENGINEERING_RELIABILITY_BASELINE_V01.md`；P1 关闭条件
-  见授权契约 §二十）
-- 停止点：本阶段完成后停止；不处理 Actions/ruff/mypy/ESLint/npm/E2E flake
-  （Phase B2/B3 待授权）。
+- 范围：`research closure / validation / independent review / Draft PR only`；
+- 状态：已授权；从 B1/B2 后的新稳定基线恢复冻结研究证据，完成离线验证、
+  小样本 live smoke、独立复审与 Draft PR 发布；
+- 停止点：Draft PR 与 CI 状态形成后停止，不转 Ready、不合并；
+- 不授权：`production ingestion / scheduler / backfill / Slice 4`，也不处理
+  PR #47、Tushare Token、生产 BaoStock 接入或其它 BK-11 实施。
 
 **已授权产品开发任务：无。**
 
 ## 最近完成
 
+- `B1_DEPENDENCY_REPRODUCIBILITY = CLOSED`：PR #52 已合并（Merge `fd7cdaa`），
+  Linux/Python 3.11 与 Windows/Python 3.12 authority lock、canonical lock check
+  和双平台离线测试进入稳定分支。
+- `B2_ACTIONS_MODERNIZATION = CLOSED`：PR #53 已合并（Merge `2316ba6`），
+  当前 CI 使用 `actions/checkout@v7`、`actions/setup-python@v6`、
+  `actions/setup-node@v6`。
 - Engineering Reliability Baseline Phase A（2026-08-08）：七项测量完成，
   债务矩阵见 `docs/research/ENGINEERING_RELIABILITY_BASELINE_V01.md`。
 - Intel Daily Digest recovery 全流程收口（2026-08-07）：PR43 Recovery v0.1
@@ -44,12 +47,12 @@
 
 ## 后续已登记候选
 
-- Engineering Reliability Implementation v0.1（Phase B，待授权）：依赖锁 →
-  Actions 升级 → ruff 基线 → mypy 分文件 → 测试竞态修复；thesis E2E 稳定性
-  另立专项。
+- Engineering Reliability Phase B3（未授权）：ruff 基线、mypy 分文件与 ESLint；
+  不因 B1/B2 关闭而自动开始。
 - thesis E2E 稳定性加固（已实测 intermittent failure，P2 债务，非授权任务）。
 - Intel Digest saving 请求显式 timeout（P2 候选，非授权任务）。
-- BK-11：已暂停（Issue #48），恢复需新授权。
+- BK-11 生产接入、调度、回填与 Slice 4 继续暂停；本轮仅恢复 zero-cost
+  research closure/publication。
 - BK-01 ~ BK-10 其余候选：见 `docs/PRODUCT_BACKLOG.md`，均未授权。
 
 ## 本地目录边界
