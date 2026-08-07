@@ -7,22 +7,19 @@
 
 ## 当前已授权任务
 
-**PR43 Recovery v0.1**（Intel Daily Digest 功能迁移，产品功能恢复）
-
-- 分支：`feat/intel-daily-digest-v0.1-recovery`（自稳定 Head `77a7ace` 创建）
-- 目标：将旧 PR #43 "Intel Daily Digest v0.1" 的有效功能迁移到当前最新稳定
-  基线；cherry-pick `64c5b59 → 4c8f97e → c2f7af4 → 0730f4b`，解
-  `backend/app.py` / `frontend/package.json` 冲突，完整验证后本地提交
-- 状态：`RECOVERY_IMPLEMENTED / LOCAL_VERIFIED / NOT_MERGED`
-  （尚未 push、未创建新 PR、旧 PR #43 未关闭）
-- 停止点：本阶段完成后停止，等待下一次明确授权（push + Draft PR）；
-  不处理 BK-11 / SQ-02B / PR #47 / Issue #48。
-
 **已授权产品开发任务：无。**
+
+当前仅执行治理状态同步闭环（PR #50 合并后的权威文档收口，
+分支 `docs/intel-digest-post-merge-state-sync-v0.1`，属治理而非新业务任务）。
 
 ## 最近完成
 
-- PR43 Recovery v0.1：4 提交迁移完成、冲突解决、验证进行中（2026-08-07）。
+- Intel Daily Digest recovery 全流程收口（2026-08-07）：PR43 Recovery v0.1
+  （4 提交 cherry-pick + 冲突解决 + 全量验证）→ PR43 Recovery Publication
+  （push + Draft PR #50 + CI 7/7 + 远端独立审查 PASS + 旧 PR #43 关闭）→
+  PR #50 已合并（Merge `1339f7a`，Intel Digest 正式进入稳定分支）。
+- 治理状态同步（本分支）：权威文档更新为 PR #50 合并后事实（PROJECT_STATE /
+  NEXT_TASK / GOVERNANCE / KNOWN_ISSUES / ARCHITECTURE）。
 - GOV-05：治理 PR #49 已合并（Merge `77a7ace`），治理契约进入稳定分支。
 - Project Governance Consolidation v0.1：建立唯一状态权威链、修正文档冲突、
   CI 分级与分支保护策略、PR #43 Recovery 评估（2026-08-07，本地提交）。
@@ -36,8 +33,8 @@
 
 ## 后续已登记候选
 
-- **PR43 Recovery 后续（push + 新 Draft PR）**：待本轮验证与独立审查通过后
-  另行授权；旧 PR #43 的关闭与否亦待授权。
+- thesis E2E 稳定性加固（已实测 intermittent failure，P2 债务，非授权任务）。
+- Intel Digest saving 请求显式 timeout（P2 候选，非授权任务）。
 - BK-11：已暂停（Issue #48），恢复需新授权。
 - BK-01 ~ BK-10 其余候选：见 `docs/PRODUCT_BACKLOG.md`，均未授权。
 

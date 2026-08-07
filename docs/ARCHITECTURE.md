@@ -197,3 +197,19 @@ Portfolio 前端  frontend/src/pages/Portfolio.tsx
 | `account_profile.json` | `account_profile.py` | total_assets / available_cash / updated_at |
 
 两者默认同目录 `~/.vibe-research/`（`VR_DATA_DIR` 可覆盖），**互不写入**。持仓增删改**不**调用 `POST /api/portfolio/advice`。
+
+---
+
+## Intel Daily Digest（PR #50，2026-08-07 上线）
+
+- API/router：`POST /api/intel-digests`（保存，422 严格校验 / unavailable 不入库 /
+  500 envelope）、`GET /api/intel-digests/latest`（latest 或 null）、
+  `GET /api/intel-digests?sector_key&digest_date`（按日期查询）。
+- service/store：`backend/intel_digest_service.py`（URL 规范化、指纹、上海时区
+  日期处理、material status 推导）、`backend/intel_digest_store.py`
+  （独立 SQLite `intel_digest.sqlite3`，`ON CONFLICT DO NOTHING` 去重）。
+- frontend：`intelDigestOrchestrator.ts`（generating→saving→saved 状态机 +
+  cancelled/error/save_failed/empty）、`intelDigestView.ts`（素材准备/时间戳解析）、
+  `Intel.tsx` digest 面板。
+- 数据真实性：不伪造 published_at（undated 保持 null）；`newsradar.py` 提供
+  旧缓存确定性迁移。

@@ -1,7 +1,7 @@
 # 项目当前状态
 
 > 稳定分支：`feature/research-system-v01`
-> 稳定 Head：`cd17fec2cc28d8dd9ea9b8e37df0cc6c394a0b18`（Merge PR #46，2026-08-06）
+> 稳定 Head：`1339f7aa6ecb97bb2a0612ca7a61e0995cf3ccdb`（Merge PR #50，2026-08-07）
 > 当前任务与停止点：[`docs/NEXT_TASK.md`](NEXT_TASK.md)（唯一当前授权任务）
 > 治理契约与门禁：[`docs/GOVERNANCE.md`](GOVERNANCE.md)
 > 长期候选与依赖：[`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)
@@ -56,6 +56,12 @@ GitHub 现场为准）。其他文档链接引用本文件，不复制完整状�
   持仓建议上下文仍显式 `technical_indicators_available=false`，不编造技术位；
 - 北向资金 HKEX 官方日统计权威源已上线（PR #40，`GET /api/market/northbound`）；
 - shadow-mode 顶风险分析已上线（PR #42，只读观测）。
+- Intel Daily Digest 已上线（PR #50，2026-08-07）：板块级日摘要持久化与 API
+  （`backend/intel_digest_{store,service,router}.py`，`/api/intel-digests`）、
+  前端生成/保存状态机（`intelDigestOrchestrator`/`intelDigestView` + Intel 页
+  digest 面板）、来源时间戳完整性（不伪造 published_at）、material status
+  （normal/partial/unavailable）、指纹去重、独立 SQLite（`intel_digest.sqlite3`）；
+  CI 新增 `e2e-intel-digest-smoke` job。
 
 ### BK-11 状态
 
@@ -81,13 +87,13 @@ PR #37 已上线，`AGENTS.md` 为唯一规则正文；2026-08-07 起 `docs/GOVE
 
 ## 5. 当前授权
 
-- **当前授权任务：Project Governance Consolidation v0.1**（治理收口，非产品任务，
-  分支 `chore/project-governance-v0.1`；目标见 `docs/GOVERNANCE.md`）。
-- **已授权产品开发任务：无。**
+- **当前已授权产品开发任务：无。**
+- 当前仅执行治理状态同步闭环（PR #50 合并后的权威文档收口，
+  分支 `docs/intel-digest-post-merge-state-sync-v0.1`；不属新业务任务）。
 - BK-11 已暂停（Issue #48），不授权继续开发。
 - PR #47（BK-11 Tushare ingestion v0.2）保持 Draft / OPEN，未授权处理。
-- PR #43（Intel Daily Digest v0.1）保持 Draft / OPEN，未授权修改；恢复方案
-  （推荐从稳定 Head 建 recovery 分支）见 `docs/GOVERNANCE.md` §6。
+- PR #43（Intel Daily Digest v0.1）已 CLOSED / 未合并，
+  superseded by PR #50（recovery 已并入稳定分支）。
 
 ## 6. 本地环境边界
 
@@ -99,6 +105,8 @@ PR #37 已上线，`AGENTS.md` 为唯一规则正文；2026-08-07 起 `docs/GOVE
 
 | PR | Merge SHA | 内容 |
 |---|---|---|
+| #50 | `1339f7aa6ecb97bb2a0612ca7a61e0995cf3ccdb` | Intel Daily Digest recovery（原 PR #43 有效功能迁入稳定） |
+| #49 | `77a7ace25c3668d0ccd88be23d8db318416740dc` | 治理契约纳入稳定（GOV） |
 | #46 | `cd17fec2cc28d8dd9ea9b8e37df0cc6c394a0b18` | BK-11 生产输入源审计（BLOCKED，冻结点） |
 | #45 | `12593c340845a60b70c925bdceb7265b5710511d` | BK-11 历史集成进 Daily Review |
 | #44 | `17c7f1dadd16a3ced2b73588fa9d5a987fa86520` | BK-11 纯计算链 |
