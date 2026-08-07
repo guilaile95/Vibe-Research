@@ -208,3 +208,8 @@
 - Windows lock 由 Windows/3.12.10 + pip 26.0.1 + pip-tools 7.6.0 生成并
   实证编译幂等；CI 新增 `windows-lock-check` job（windows-latest/3.12.10）
   验证再生成零 diff + 干净安装 + 离线测试。
+
+> **作废标注**：本节 §12 正文中出现的旧文件名 `requirements.lock.txt` 与
+> `requirements-dev.lock.txt`（Contract B 阶段命名）已于 Contract D 轮
+> **重命名为 `requirements-linux-py311.lock.txt` / `requirements-dev-linux-py311.lock.txt`**
+> 并删除旧名；上述旧名仅在历史叙述中出现，当前仓库不存在同名文件。

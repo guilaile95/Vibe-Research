@@ -25,7 +25,7 @@
 |---|---|---|
 | `requirements-linux-py311.lock.txt` | Linux runtime closure（53 包） | Ubuntu/3.11 |
 | `requirements-dev-linux-py311.lock.txt` | Linux runtime+dev 完整 closure（58 包） | Ubuntu/3.11 |
-| `requirements-dev-windows-py312.lock.txt` | Windows runtime+dev 完整 closure（59 行/58 包+extras） | Windows/3.12.10 |
+| `requirements-dev-windows-py312.lock.txt` | Windows runtime+dev 完整 closure（59 个 == pin，含 `uvicorn[standard]`） | Windows/3.12.10 |
 
 ## 编译器（LOCK_COMPILER，两平台相同）
 
