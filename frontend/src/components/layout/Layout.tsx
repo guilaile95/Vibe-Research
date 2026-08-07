@@ -56,7 +56,7 @@ const NAV_GROUPS = [
   },
 ];
 
-// 常看板块仍用于最长路由匹配；P0 视觉试验不再在主侧栏展开这些快捷入口。
+// 常看板块仍用于把隐藏的快捷子路由映射回可见的「板块中心」导航项。
 const SECTOR_LINKS = [
   { to: "/sectors/humanoid", icon: Cog, label: "人形机器人" },
   { to: "/sectors/ai-computing", icon: Cpu, label: "AI 算力" },
@@ -72,13 +72,11 @@ function isActive(pathname: string, to: string) {
   return pathname === to || pathname.startsWith(to + "/");
 }
 
-const NAV_PATHS = [
-  ...NAV_GROUPS.flatMap((group) => group.items.map((item) => item.to)),
-  ...SECTOR_LINKS.map((item) => item.to),
-];
+const NAV_PATHS = NAV_GROUPS.flatMap((group) => group.items.map((item) => item.to));
 
-/** aria-current 只标记最长匹配路径；父级仍可保持视觉高亮。 */
+/** aria-current 只标记当前可见的最长匹配路径；隐藏板块快捷路由归并到 /sectors。 */
 function getCurrentNavPath(pathname: string) {
+  if (SECTOR_LINKS.some(({ to }) => isActive(pathname, to))) return "/sectors";
   return NAV_PATHS.reduce<string | null>((best, to) => {
     if (!isActive(pathname, to)) return best;
     return !best || to.length > best.length ? to : best;
