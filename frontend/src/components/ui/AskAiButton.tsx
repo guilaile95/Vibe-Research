@@ -51,6 +51,15 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
   };
 
   useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open]);
+
+  useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [msgs, loading]);
 
@@ -87,6 +96,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
   return (
     <>
       <button
+        type="button"
         onClick={() => setOpen(true)}
         className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-muted/90 px-3.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
       >
@@ -96,8 +106,8 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
 
       {open && (
         <div className="fixed inset-0 z-50 flex justify-end">
-          <button className="absolute inset-0 cursor-default bg-black/35" onClick={close} aria-label="关闭 AI 面板" />
-          <aside className="relative flex h-full w-full max-w-[560px] flex-col border-l border-border/40 bg-background shadow-2xl">
+          <div className="absolute inset-0 bg-black/35" onClick={close} aria-hidden="true" />
+          <aside className="relative flex h-full w-full max-w-[560px] flex-col border-l border-border/40 bg-background shadow-2xl" aria-label="Vibe AI 对话">
             <div className="flex h-14 items-center justify-between px-4 sm:px-5">
               <span className="flex items-center gap-2 text-sm font-semibold">
                 <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-foreground text-background">
@@ -106,6 +116,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
                 Vibe AI
               </span>
               <button
+                type="button"
                 onClick={close}
                 className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 aria-label="关闭"
@@ -192,6 +203,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
                       <div className="flex flex-wrap justify-center gap-2 pt-1">
                         {suggestions.map((s) => (
                           <button
+                            type="button"
                             key={s}
                             onClick={() => send(s)}
                             className="rounded-full bg-card px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -216,6 +228,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
                         className="max-h-32 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
                       />
                       <button
+                        type="button"
                         onClick={() => send(input)}
                         disabled={loading || !input.trim()}
                         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-90 disabled:opacity-30"
