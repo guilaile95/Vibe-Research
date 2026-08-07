@@ -51,7 +51,7 @@ GitHub 现场为准）。其他文档链接引用本文件，不复制完整状�
   分红、龙虎榜、解禁、板块归属、个股资金流等；
 - 数据健康中心展示来源状态、覆盖、陈旧性、错误摘要和是否阻断建议；
 - 每日复盘包括市场宽度、情绪、板块排名、成交活跃度及历史比较；
-- 技术指标模块已上线（PR #41）：MA/MACD/RSI/布林带/KDJ/量比等展示层
+- 技术指标模块已上线（PR #41）：MA/MACD/RSI/布林带/量比等展示层（无 KDJ）
   （`backend/technical_indicators.py` + `TechnicalIndicatorsCard`/`KlineChart`）；
   持仓建议上下文仍显式 `technical_indicators_available=false`，不编造技术位；
 - 北向资金 HKEX 官方日统计权威源已上线（PR #40，`GET /api/market/northbound`）；

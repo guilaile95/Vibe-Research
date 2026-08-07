@@ -121,11 +121,11 @@ FUTURE（BK-10 候选，未授权）：lint/format（ruff/eslint）、类型检�
   `intel_digest_router` / `test:e2e:intel-digest`）；`api.ts`/`types.ts`
   自动合并干净。
 - PR base = `ad844742`（PR #41 合并点），落后 stable 3 个合并
-  （#44/#45/#46）+ 约 90 提交（BK-11 阶段）。
+  （#44/#45/#46）+ 104 个提交（BK-11 阶段，merge-base 实测）。
 
 ### 16 文件评估
 
-16/16 值得保留：10 个为 PR 新增（stable 无对应），6 个为修改
+16/16 值得保留：8 个为 PR 新增（stable 无对应），8 个为修改
 （仅上述 2 处位置冲突；`newsradar.py` 是兼容增强，其余零冲突）。
 stable 无 Intel Daily Digest 同类实现；schema 零冲突（独立 SQLite）；
 API 前缀 `/intel-digests*` 无碰撞。
