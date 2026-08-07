@@ -183,7 +183,9 @@
   权威平台生成后可启用。
 - Reproducibility Proof：两个全新独立 3.11 环境 freeze 零差异；3.12 版本层
   一致；pytest `-m "not live"`：3.11 与 3.12 均 **1823 passed / 0 failed /
-  11 deselected**（108s / 104s）。
+  11 deselected（108s / 104s）——该口径为子任务环境自报值；主 Agent 复测
+  collect-only 确认为 **3391 collected / 11 deselected**（backend 目录、
+  CI 等价口径），与 §8 全量口径一致，以 3391 为准。
 - CI：4 个 Python job 改为 `pip install -r backend/requirements-dev.lock.txt`，
   `cache-dependency-path` 指向 lock。
 - 待办（发布轮）：Linux CI 重生成权威 lock（纳入 uvloop）→ 可选启用 hashes；
