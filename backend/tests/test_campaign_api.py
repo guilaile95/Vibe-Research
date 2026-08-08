@@ -94,6 +94,9 @@ def test_no_patch_put_delete_routes(client):
     assert client.patch("/api/campaigns/x", json={}).status_code in (404, 405)
     assert client.put("/api/campaigns/x", json={}).status_code in (404, 405)
     assert client.delete("/api/campaigns/x").status_code in (404, 405)
+    assert client.patch("/api/campaigns/x/transitions", json={}).status_code in (404, 405)
+    assert client.put("/api/campaigns/x/transitions", json={}).status_code in (404, 405)
+    assert client.delete("/api/campaigns/x/transitions").status_code in (404, 405)
 
 
 # ---------------------------------------------------------------------------
@@ -201,3 +204,135 @@ def test_campaign_modules_do_not_import_forbidden_domains():
             "market_regime", "ai_result", "position_reality", "account_event",
         ):
             assert name not in mod.__dict__, f"{mod.__name__} imports {name}"
+
+
+# ---------------------------------------------------------------------------
+# S2B. Transition API（P0-S2B）
+# ---------------------------------------------------------------------------
+def _post_transition(client, cid, expected, to) -> dict:
+    return client.post(
+        f"/api/campaigns/{cid}/transitions",
+        json={"expected_status": expected, "to_status": to},
+    )
+
+
+def test_transition_api_success_200(client):
+    created = _post(client, security_code="600519", strategy="SWING").json()["data"]
+    r = _post_transition(client, created["campaign_id"], "DRAFT", "RESEARCHING")
+    assert r.status_code == 200  # 仓库动作型 POST 语义：200
+    body = r.json()["data"]
+    assert body["campaign"]["status"] == "RESEARCHING"
+    assert body["campaign"]["strategy"] == "SWING"
+    assert body["transition"]["from_status"] == "DRAFT"
+    assert body["transition"]["to_status"] == "RESEARCHING"
+    assert body["transition"]["campaign_id"] == created["campaign_id"]
+    assert body["transition"]["transition_id"].startswith("campaign_transition_")
+
+
+def test_transition_api_full_chain(client):
+    created = _post(client, security_code="600519", strategy="MEDIUM").json()["data"]
+    cid = created["campaign_id"]
+    for frm, to in (
+        ("DRAFT", "RESEARCHING"), ("RESEARCHING", "PRE-ENTRY"),
+        ("PRE-ENTRY", "ACTIVE"), ("ACTIVE", "REDUCING"), ("REDUCING", "CLOSED"),
+    ):
+        r = _post_transition(client, cid, frm, to)
+        assert r.status_code == 200
+        assert r.json()["data"]["campaign"]["status"] == to
+    # 终态后拒绝
+    assert _post_transition(client, cid, "CLOSED", "ACTIVE").status_code == 409
+
+
+def test_transition_api_unknown_campaign_404(client):
+    cid = "campaign_" + "0" * 32
+    r = _post_transition(client, cid, "DRAFT", "RESEARCHING")
+    assert r.status_code == 404
+    assert r.json()["detail"] == "Campaign 不存在"
+
+
+def test_transition_api_cas_mismatch_409(client):
+    created = _post(client, security_code="600519", strategy="SHORT").json()["data"]
+    cid = created["campaign_id"]
+    assert _post_transition(client, cid, "DRAFT", "RESEARCHING").status_code == 200
+    r = _post_transition(client, cid, "DRAFT", "REJECTED")  # stale expected
+    assert r.status_code == 409
+    assert r.json()["detail"] == "Campaign 状态冲突"
+    assert _post(client, security_code="600519", strategy="SHORT").json()["data"]
+
+
+def test_transition_api_illegal_edge_409(client):
+    created = _post(client, security_code="600519", strategy="SHORT").json()["data"]
+    cid = created["campaign_id"]
+    r = _post_transition(client, cid, "DRAFT", "ACTIVE")
+    assert r.status_code == 409
+    assert r.json()["detail"] == "Campaign 状态冲突"
+    assert _post_transition(client, cid, "DRAFT", "DRAFT").status_code == 409
+    assert client.get(f"/api/campaigns/{cid}").json()["data"]["status"] == "DRAFT"
+
+
+def test_transition_api_invalid_enum_422(client):
+    created = _post(client, security_code="600519", strategy="SHORT").json()["data"]
+    cid = created["campaign_id"]
+    r = client.post(
+        f"/api/campaigns/{cid}/transitions",
+        json={"expected_status": "DRAFT2", "to_status": "RESEARCHING"},
+    )
+    assert r.status_code == 422
+    body = str(r.json())
+    for leaked in ("sqlite", "Users", "Traceback", "SELECT", "secret"):
+        assert leaked not in body
+    r2 = client.post(
+        f"/api/campaigns/{cid}/transitions",
+        json={"expected_status": "DRAFT", "to_status": "short"},
+    )
+    assert r2.status_code == 422
+
+
+def test_transition_api_extra_field_422(client):
+    created = _post(client, security_code="600519", strategy="SHORT").json()["data"]
+    r = client.post(
+        f"/api/campaigns/{created['campaign_id']}/transitions",
+        json={"expected_status": "DRAFT", "to_status": "RESEARCHING", "strategy": "MEDIUM"},
+    )
+    assert r.status_code == 422  # 不得借 transition body 传新 strategy
+
+
+def test_transition_api_unexpected_error_500_sanitized(client, monkeypatch):
+    created = _post(client, security_code="600519", strategy="SHORT").json()["data"]
+
+    def boom(*a, **k):
+        raise RuntimeError(
+            "ProxyError https://secret-provider.example/token=abc "
+            "C:\\Users\\evil\\campaigns.sqlite3 SELECT * FROM campaign_transitions"
+        )
+
+    monkeypatch.setattr(campaign_router.campaign_service, "transition_campaign", boom)
+    r = _post_transition(client, created["campaign_id"], "DRAFT", "RESEARCHING")
+    assert r.status_code == 500
+    body = str(r.json())
+    assert r.json()["detail"] == "Campaign 服务暂不可用"
+    for leaked in ("secret-provider", "token=abc", "Users", "sqlite3", "SELECT", "ProxyError", "Traceback"):
+        assert leaked not in body
+
+
+def test_transition_history_api_deterministic(client):
+    created = _post(client, security_code="600519", strategy="SHORT").json()["data"]
+    cid = created["campaign_id"]
+    assert client.get(f"/api/campaigns/{cid}/transitions").json() == {"data": []}
+    _post_transition(client, cid, "DRAFT", "RESEARCHING")
+    _post_transition(client, cid, "RESEARCHING", "PRE-ENTRY")
+    r = client.get(f"/api/campaigns/{cid}/transitions")
+    assert r.status_code == 200
+    history = r.json()["data"]
+    assert [h["to_status"] for h in history] == ["RESEARCHING", "PRE-ENTRY"]
+    keys = [(h["transitioned_at"], h["transition_id"]) for h in history]
+    assert keys == sorted(keys)
+    assert set(history[0]) == {
+        "transition_id", "campaign_id", "from_status", "to_status", "transitioned_at",
+    }
+
+
+def test_transition_history_api_invalid_id_422(client):
+    r = client.get("/api/campaigns/abc/transitions")
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Campaign 参数无效"

@@ -1,12 +1,14 @@
-"""Campaign API v0.1（P0-S2A：Campaign Core Identity & Strategy Boundary）。
+"""Campaign API v0.1（P0-S2A + P0-S2B：Identity + Lifecycle Transition）。
 
-只读 + 创建：
+只读 + 创建 + 显式 transition：
 - ``POST /api/campaigns``：创建 Campaign（status 恒为服务端 DRAFT）
 - ``GET  /api/campaigns``：确定性列表 + 可选过滤（security_code / strategy / status）
 - ``GET  /api/campaigns/{campaign_id}``：精确读取
+- ``POST /api/campaigns/{campaign_id}/transitions``：原子状态迁移（CAS + 冻结 graph）
+- ``GET  /api/campaigns/{campaign_id}/transitions``：durable transition 历史
 
-不存在 PATCH / PUT / DELETE —— Strategy 结构性不可变、生命周期迁移
-（P0-S2B 或后续 Slice）不在本轮开放。
+不存在 PATCH / PUT / DELETE —— Strategy 结构性不可变、状态只能经 transition
+graph 变更。
 
 安全边界：
 - 所有错误响应只返回稳定脱敏 detail，绝不泄漏 str(e) / SQL / 文件路径 / traceback；
@@ -28,6 +30,7 @@ from campaign_service import (
     CampaignInputError,
     CampaignNotFoundError,
     CampaignServiceError,
+    CampaignTransitionConflictError,
 )
 
 router = APIRouter(prefix="/api", tags=["campaigns"])
@@ -36,6 +39,7 @@ router = APIRouter(prefix="/api", tags=["campaigns"])
 _INVALID_INPUT_DETAIL = "Campaign 参数无效"
 _NOT_FOUND_DETAIL = "Campaign 不存在"
 _CONFLICT_DETAIL = "Campaign 已存在"
+_TRANSITION_CONFLICT_DETAIL = "Campaign 状态冲突"
 _INTERNAL_ERROR_DETAIL = "Campaign 服务暂不可用"
 
 
@@ -46,6 +50,21 @@ class CampaignCreateIn(BaseModel):
 
     security_code: str
     strategy: Literal["SHORT", "SWING", "MEDIUM"]
+
+
+class CampaignTransitionIn(BaseModel):
+    """显式 transition 意图：expected_status（CAS）+ to_status（冻结 graph）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_status: Literal[
+        "DRAFT", "RESEARCHING", "PRE-ENTRY", "ACTIVE",
+        "REDUCING", "CLOSED", "REJECTED", "EXPIRED",
+    ]
+    to_status: Literal[
+        "DRAFT", "RESEARCHING", "PRE-ENTRY", "ACTIVE",
+        "REDUCING", "CLOSED", "REJECTED", "EXPIRED",
+    ]
 
 
 @router.post("/campaigns", status_code=201)
@@ -103,3 +122,45 @@ def get_campaign(campaign_id: str) -> dict:
     except Exception:  # noqa: BLE001 — 未预期逃逸，安全兜底
         raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
     return {"data": record}
+
+
+@router.post("/campaigns/{campaign_id}/transitions")
+def transition_campaign(campaign_id: str, body: CampaignTransitionIn) -> dict:
+    """原子状态迁移：CAS（expected_status）+ 冻结 transition graph。
+
+    成功返回 ``{"data": {"campaign": ..., "transition": ...}}``；
+    409 = expected_status 不符 / graph 不允许 / transition_id 冲突。
+    """
+    try:
+        campaign, transition = campaign_service.transition_campaign(
+            campaign_id=campaign_id,
+            expected_status=body.expected_status,
+            to_status=body.to_status,
+        )
+    except CampaignInputError:
+        raise HTTPException(422, _INVALID_INPUT_DETAIL) from None
+    except CampaignNotFoundError:
+        raise HTTPException(404, _NOT_FOUND_DETAIL) from None
+    except CampaignTransitionConflictError:
+        raise HTTPException(409, _TRANSITION_CONFLICT_DETAIL) from None
+    except CampaignConflictError:
+        raise HTTPException(409, _TRANSITION_CONFLICT_DETAIL) from None
+    except CampaignServiceError:
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    except Exception:  # noqa: BLE001 — 未预期逃逸，安全兜底
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    return {"data": {"campaign": campaign, "transition": transition}}
+
+
+@router.get("/campaigns/{campaign_id}/transitions")
+def list_campaign_transitions(campaign_id: str) -> dict:
+    """Campaign 的 transition 历史（transitioned_at ASC, transition_id ASC）。"""
+    try:
+        records = campaign_service.list_campaign_transitions(campaign_id)
+    except CampaignInputError:
+        raise HTTPException(422, _INVALID_INPUT_DETAIL) from None
+    except CampaignServiceError:
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    except Exception:  # noqa: BLE001 — 未预期逃逸，安全兜底
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    return {"data": records}

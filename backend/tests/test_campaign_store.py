@@ -11,17 +11,22 @@ import sqlite3
 import subprocess
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 import campaign_store
 from campaign_store import (
     CampaignAlreadyExistsError,
+    CampaignNotFoundError,
     CampaignStoreCorruptedError,
     CampaignStoreInputError,
+    CampaignTransitionConflictError,
     create_campaign,
     get_campaign,
     list_campaigns,
+    list_campaign_transitions,
+    transition_campaign,
 )
 
 _TS = "2026-08-01T03:04:05.123456Z"
@@ -321,3 +326,293 @@ def test_import_has_no_filesystem_side_effect(tmp_path, monkeypatch):
     )
     assert out.returncode == 0, out.stderr
     assert "EXISTS False" in out.stdout  # import 后文件仍未创建
+
+
+# ---------------------------------------------------------------------------
+# S2B. Transition Engine（P0-S2B 冻结 graph）
+# ---------------------------------------------------------------------------
+
+def _transition(db_path, cid, expected, to, tid=None, ts=_TS):
+    return transition_campaign(
+        campaign_id=cid,
+        expected_status=expected,
+        to_status=to,
+        transition_id=tid or f"campaign_transition_{uuid.uuid4().hex}",
+        transitioned_at=ts,
+    )
+
+
+def _new_campaign(db_path, **kw) -> dict:
+    return _create(**kw)
+
+
+# A. Forward Transitions（graph 全正例）
+@pytest.mark.parametrize(
+    ("chain",),
+    [
+        (("DRAFT", "RESEARCHING"),),
+        (("DRAFT", "REJECTED"),),
+        (("DRAFT", "EXPIRED"),),
+        (("RESEARCHING", "PRE-ENTRY"),),
+        (("RESEARCHING", "REJECTED"),),
+        (("RESEARCHING", "EXPIRED"),),
+        (("PRE-ENTRY", "ACTIVE"),),
+        (("PRE-ENTRY", "REJECTED"),),
+        (("PRE-ENTRY", "EXPIRED"),),
+        (("ACTIVE", "REDUCING"),),
+        (("ACTIVE", "CLOSED"),),
+        (("REDUCING", "CLOSED"),),
+    ],
+)
+def test_forward_transition_allowed(db_path, chain):
+    """冻结 graph 全部 12 条正边。"""
+    rec = _new_campaign(db_path, status="DRAFT")
+    # 走到 chain 的起点
+    if chain[0] != "DRAFT":
+        path = {
+            "RESEARCHING": ("DRAFT", "RESEARCHING"),
+            "PRE-ENTRY": ("DRAFT", "RESEARCHING", "PRE-ENTRY"),
+            "ACTIVE": ("DRAFT", "RESEARCHING", "PRE-ENTRY", "ACTIVE"),
+            "REDUCING": ("DRAFT", "RESEARCHING", "PRE-ENTRY", "ACTIVE", "REDUCING"),
+        }[chain[0]]
+        for s in range(len(path) - 1):
+            _transition(db_path, rec["campaign_id"], path[s], path[s + 1])
+    campaign, tr = _transition(db_path, rec["campaign_id"], chain[0], chain[1])
+    assert campaign["status"] == chain[1]
+    assert tr["from_status"] == chain[0]
+    assert tr["to_status"] == chain[1]
+    assert tr["campaign_id"] == rec["campaign_id"]
+    assert get_campaign(rec["campaign_id"])["status"] == chain[1]
+
+
+# B. Illegal / Backward
+@pytest.mark.parametrize(
+    ("chain",),
+    [
+        (("DRAFT", "ACTIVE"),),
+        (("RESEARCHING", "ACTIVE"),),
+        (("PRE-ENTRY", "DRAFT"),),
+        (("ACTIVE", "PRE-ENTRY"),),
+        (("REDUCING", "ACTIVE"),),
+        (("CLOSED", "ACTIVE"),),
+        (("REJECTED", "DRAFT"),),
+        (("EXPIRED", "RESEARCHING"),),
+    ],
+)
+def test_illegal_transition_rejected(db_path, chain):
+    """反向/跳级 transition → explicit conflict，status 不变，无 audit。"""
+    rec = _new_campaign(db_path, status=chain[0])
+    with pytest.raises(CampaignTransitionConflictError):
+        _transition(db_path, rec["campaign_id"], chain[0], chain[1])
+    assert get_campaign(rec["campaign_id"])["status"] == chain[0]
+    assert list_campaign_transitions(rec["campaign_id"]) == []
+
+
+def test_same_state_transition_rejected(db_path):
+    for status in ("DRAFT", "ACTIVE", "CLOSED"):
+        rec = _new_campaign(db_path, status=status)
+        with pytest.raises(CampaignTransitionConflictError):
+            _transition(db_path, rec["campaign_id"], status, status)
+        assert get_campaign(rec["campaign_id"])["status"] == status
+
+
+# C. Terminal
+@pytest.mark.parametrize("terminal", ["CLOSED", "REJECTED", "EXPIRED"])
+def test_terminal_state_no_outgoing(db_path, terminal):
+    rec = _new_campaign(db_path, status=terminal)
+    for target in ("DRAFT", "RESEARCHING", "PRE-ENTRY", "ACTIVE", "REDUCING"):
+        with pytest.raises(CampaignTransitionConflictError):
+            _transition(db_path, rec["campaign_id"], terminal, target)
+    assert list_campaign_transitions(rec["campaign_id"]) == []
+
+
+# D. CAS / Concurrency
+def test_expected_status_mismatch_explicit_conflict(db_path):
+    rec = _new_campaign(db_path, status="DRAFT")
+    _transition(db_path, rec["campaign_id"], "DRAFT", "RESEARCHING")
+    with pytest.raises(CampaignTransitionConflictError):
+        _transition(db_path, rec["campaign_id"], "DRAFT", "REJECTED")  # stale expected
+    assert get_campaign(rec["campaign_id"])["status"] == "RESEARCHING"
+
+
+def test_two_stale_writers_only_first_succeeds(db_path):
+    """两个客户端都看到 DRAFT；A 成功迁移后，B 的 CAS 必须失败。"""
+    rec = _new_campaign(db_path, status="DRAFT")
+    _transition(db_path, rec["campaign_id"], "DRAFT", "RESEARCHING")  # A wins
+    with pytest.raises(CampaignTransitionConflictError):
+        _transition(db_path, rec["campaign_id"], "DRAFT", "REJECTED")  # B stale
+    assert get_campaign(rec["campaign_id"])["status"] == "RESEARCHING"
+    history = list_campaign_transitions(rec["campaign_id"])
+    assert len(history) == 1 and history[0]["to_status"] == "RESEARCHING"
+
+
+def test_concurrent_writers_exactly_one_succeeds(db_path):
+    """真实并发：BEGIN IMMEDIATE 串行化 → 恰好一个成功一个 conflict。
+
+    胜者不确定（先获得锁者胜），但结果必须确定：一成功一冲突、
+    最终 status = 胜者目标、audit 恰一条。
+    """
+    rec = _new_campaign(db_path, status="DRAFT")
+    targets = ["RESEARCHING", "REJECTED"]
+
+    def worker(to_status):
+        try:
+            _transition(db_path, rec["campaign_id"], "DRAFT", to_status)
+            return "ok"
+        except CampaignTransitionConflictError:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(worker, targets))
+    assert sorted(results) == ["conflict", "ok"]  # 恰好一成功一冲突
+    winner = targets[results.index("ok")]
+    assert get_campaign(rec["campaign_id"])["status"] == winner
+    history = list_campaign_transitions(rec["campaign_id"])
+    assert len(history) == 1 and history[0]["to_status"] == winner
+
+
+def test_failed_transition_produces_no_audit(db_path):
+    rec = _new_campaign(db_path, status="DRAFT")
+    with pytest.raises(CampaignTransitionConflictError):
+        _transition(db_path, rec["campaign_id"], "DRAFT", "ACTIVE")  # 非法边
+    with pytest.raises(CampaignTransitionConflictError):
+        _transition(db_path, rec["campaign_id"], "ACTIVE", "RESEARCHING")  # CAS 失败
+    assert list_campaign_transitions(rec["campaign_id"]) == []
+
+
+def test_transition_unknown_campaign_not_found(db_path):
+    with pytest.raises(CampaignNotFoundError):
+        _transition(db_path, f"campaign_{uuid.uuid4().hex}", "DRAFT", "RESEARCHING")
+
+
+# E. Audit
+def test_audit_record_durable_and_fields(db_path):
+    rec = _new_campaign(db_path, status="DRAFT")
+    campaign, tr = _transition(db_path, rec["campaign_id"], "DRAFT", "RESEARCHING")
+    assert tr["transition_id"].startswith("campaign_transition_")
+    assert tr["from_status"] == "DRAFT" and tr["to_status"] == "RESEARCHING"
+    assert tr["transitioned_at"] == _TS
+    assert campaign["status"] == "RESEARCHING"
+
+
+def test_audit_survives_reopen_subprocess(db_path):
+    """restart / reopen 后 history 仍存在（独立进程验证）。"""
+    rec = _new_campaign(db_path, status="DRAFT")
+    _transition(db_path, rec["campaign_id"], "DRAFT", "RESEARCHING")
+    code = (
+        "import os, sys; sys.path.insert(0, r'"
+        + os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        + "');"
+        "import campaign_store;"
+        "h = campaign_store.list_campaign_transitions(%r);"
+        "print('HISTORY', len(h), h[0]['to_status'] if h else None)" % rec["campaign_id"]
+    )
+    env = dict(os.environ, VIBE_RESEARCH_CAMPAIGN_DB=str(db_path))
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, env=env
+    )
+    assert out.returncode == 0, out.stderr
+    assert "HISTORY 1 RESEARCHING" in out.stdout
+
+
+def test_audit_history_deterministic_order(db_path):
+    rec = _new_campaign(db_path, status="DRAFT")
+    _transition(db_path, rec["campaign_id"], "DRAFT", "RESEARCHING", ts="2026-08-01T00:00:00.000000Z")
+    _transition(db_path, rec["campaign_id"], "RESEARCHING", "PRE-ENTRY", ts="2026-08-01T00:00:01.000000Z")
+    _transition(db_path, rec["campaign_id"], "PRE-ENTRY", "ACTIVE", ts="2026-08-01T00:00:02.000000Z")
+    history = list_campaign_transitions(rec["campaign_id"])
+    keys = [(h["transitioned_at"], h["transition_id"]) for h in history]
+    assert keys == sorted(keys)  # transitioned_at ASC, transition_id ASC 全序
+    assert [h["to_status"] for h in history] == ["RESEARCHING", "PRE-ENTRY", "ACTIVE"]
+
+
+def test_audit_history_tiebreak_by_transition_id(db_path):
+    """transitioned_at 相同 → transition_id ASC 全序（确定性）。"""
+    rec = _new_campaign(db_path, status="DRAFT")
+    tid1 = f"campaign_transition_{uuid.uuid4().hex}"
+    tid2 = f"campaign_transition_{uuid.uuid4().hex}"
+    _transition(db_path, rec["campaign_id"], "DRAFT", "RESEARCHING", tid=tid1, ts="2026-08-01T00:00:00.000000Z")
+    _transition(db_path, rec["campaign_id"], "RESEARCHING", "PRE-ENTRY", tid=tid2, ts="2026-08-01T00:00:00.000000Z")
+    history = list_campaign_transitions(rec["campaign_id"])
+    assert [h["transition_id"] for h in history] == sorted([tid1, tid2])
+
+
+def test_second_transition_does_not_modify_first_history(db_path):
+    rec = _new_campaign(db_path, status="DRAFT")
+    c1, tr1 = _transition(db_path, rec["campaign_id"], "DRAFT", "RESEARCHING", ts="2026-08-01T00:00:00.000000Z")
+    _transition(db_path, rec["campaign_id"], "RESEARCHING", "PRE-ENTRY", ts="2026-08-01T00:00:01.000000Z")
+    history = list_campaign_transitions(rec["campaign_id"])
+    assert len(history) == 2
+    assert history[0] == tr1  # 第一条 audit 字节级不变
+
+
+# F. Atomicity
+def test_duplicate_transition_id_conflict_status_unchanged(db_path):
+    """audit INSERT 失败（duplicate transition_id）→ 显式 conflict，status 不变化。"""
+    rec = _new_campaign(db_path, status="DRAFT")
+    tid = f"campaign_transition_{uuid.uuid4().hex}"
+    _transition(db_path, rec["campaign_id"], "DRAFT", "RESEARCHING", tid=tid)
+    with pytest.raises(CampaignAlreadyExistsError):
+        _transition(db_path, rec["campaign_id"], "RESEARCHING", "PRE-ENTRY", tid=tid)
+    assert get_campaign(rec["campaign_id"])["status"] == "RESEARCHING"  # 未推进
+    assert len(list_campaign_transitions(rec["campaign_id"])) == 1  # 无 half record
+
+
+def test_invalid_transition_inputs_fail_closed(db_path):
+    rec = _new_campaign(db_path, status="DRAFT")
+    with pytest.raises(CampaignStoreInputError):
+        transition_campaign(
+            campaign_id=rec["campaign_id"], expected_status="DRAFT2",
+            to_status="RESEARCHING", transition_id=f"campaign_transition_{uuid.uuid4().hex}",
+            transitioned_at=_TS,
+        )
+    with pytest.raises(CampaignStoreInputError):
+        transition_campaign(
+            campaign_id=rec["campaign_id"], expected_status="DRAFT",
+            to_status="RESEARCHING", transition_id="bad_id", transitioned_at=_TS,
+        )
+    with pytest.raises(CampaignStoreInputError):
+        _transition(db_path, rec["campaign_id"], "DRAFT", "RESEARCHING", ts="garbage")
+    assert get_campaign(rec["campaign_id"])["status"] == "DRAFT"
+    assert list_campaign_transitions(rec["campaign_id"]) == []
+
+
+# G. Identity / Strategy Regression
+def test_transition_preserves_identity_and_strategy(db_path):
+    rec = _new_campaign(db_path, security_code="600519", strategy="SWING", status="DRAFT")
+    snapshot_before = dict(rec)
+    campaign, _ = _transition(db_path, rec["campaign_id"], "DRAFT", "RESEARCHING")
+    assert campaign["campaign_id"] == snapshot_before["campaign_id"]
+    assert campaign["security_code"] == snapshot_before["security_code"]
+    assert campaign["strategy"] == snapshot_before["strategy"] == "SWING"
+    assert campaign["created_at"] == snapshot_before["created_at"]
+    # 走完剩余合法路径后 strategy 仍不变
+    for frm, to in (
+        ("RESEARCHING", "PRE-ENTRY"), ("PRE-ENTRY", "ACTIVE"),
+        ("ACTIVE", "REDUCING"), ("REDUCING", "CLOSED"),
+    ):
+        campaign, _ = _transition(db_path, rec["campaign_id"], frm, to)
+        assert campaign["strategy"] == "SWING"
+        assert campaign["campaign_id"] == snapshot_before["campaign_id"]
+    assert campaign["status"] == "CLOSED"
+
+
+def test_multi_campaign_transitions_independent(db_path):
+    a = _new_campaign(db_path, security_code="600519", strategy="MEDIUM", status="DRAFT")
+    b = _new_campaign(db_path, security_code="600519", strategy="SWING", status="DRAFT")
+    _transition(db_path, a["campaign_id"], "DRAFT", "RESEARCHING")
+    _transition(db_path, b["campaign_id"], "DRAFT", "REJECTED")
+    assert get_campaign(a["campaign_id"])["status"] == "RESEARCHING"
+    assert get_campaign(b["campaign_id"])["status"] == "REJECTED"
+    assert len(list_campaign_transitions(a["campaign_id"])) == 1
+    assert len(list_campaign_transitions(b["campaign_id"])) == 1
+    assert list_campaign_transitions(a["campaign_id"])[0]["to_status"] == "RESEARCHING"
+
+
+def test_list_transitions_unknown_campaign_empty(db_path):
+    assert list_campaign_transitions(f"campaign_{uuid.uuid4().hex}") == []
+
+
+def test_list_transitions_invalid_id_fail_closed(db_path):
+    with pytest.raises(CampaignStoreInputError):
+        list_campaign_transitions("abc")

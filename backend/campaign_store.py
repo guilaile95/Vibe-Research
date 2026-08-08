@@ -55,6 +55,23 @@ _TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 # campaign_id 由服务端生成：campaign_ + 32 位小写 hex（uuid4）
 _CAMPAIGN_ID_RE = re.compile(r"^campaign_[0-9a-f]{32}$")
+# transition_id 由服务端生成：campaign_transition_ + 32 位小写 hex（uuid4）
+_TRANSITION_ID_RE = re.compile(r"^campaign_transition_[0-9a-f]{32}$")
+
+# ---- P0-S2B 冻结的 Lifecycle v0.1 Transition Graph（不得扩大）----
+# DRAFT→(RESEARCHING,REJECTED,EXPIRED)；RESEARCHING→(PRE-ENTRY,REJECTED,EXPIRED)；
+# PRE-ENTRY→(ACTIVE,REJECTED,EXPIRED)；ACTIVE→(REDUCING,CLOSED)；REDUCING→(CLOSED)；
+# CLOSED/REJECTED/EXPIRED 为终态，无出边；未列出/反向/same-state 一律 fail closed。
+_TRANSITION_GRAPH: dict[str, tuple[str, ...]] = {
+    "DRAFT": ("RESEARCHING", "REJECTED", "EXPIRED"),
+    "RESEARCHING": ("PRE-ENTRY", "REJECTED", "EXPIRED"),
+    "PRE-ENTRY": ("ACTIVE", "REJECTED", "EXPIRED"),
+    "ACTIVE": ("REDUCING", "CLOSED"),
+    "REDUCING": ("CLOSED",),
+    "CLOSED": (),
+    "REJECTED": (),
+    "EXPIRED": (),
+}
 
 _ROW_COLUMNS = (
     "campaign_id",
@@ -65,6 +82,15 @@ _ROW_COLUMNS = (
 )
 _SELECT_COLUMNS = ", ".join(_ROW_COLUMNS)
 
+_TRANSITION_ROW_COLUMNS = (
+    "transition_id",
+    "campaign_id",
+    "from_status",
+    "to_status",
+    "transitioned_at",
+)
+_SELECT_TRANSITION_COLUMNS = ", ".join(_TRANSITION_ROW_COLUMNS)
+
 _REQUIRED_COLUMNS: dict[str, tuple[str, int, int]] = {
     "campaign_id": ("TEXT", 0, 1),
     "security_code": ("TEXT", 1, 0),
@@ -72,9 +98,26 @@ _REQUIRED_COLUMNS: dict[str, tuple[str, int, int]] = {
     "status": ("TEXT", 1, 0),
     "created_at": ("TEXT", 1, 0),
 }
+_REQUIRED_TRANSITION_COLUMNS: dict[str, tuple[str, int, int]] = {
+    "transition_id": ("TEXT", 0, 1),
+    "campaign_id": ("TEXT", 1, 0),
+    "from_status": ("TEXT", 1, 0),
+    "to_status": ("TEXT", 1, 0),
+    "transitioned_at": ("TEXT", 1, 0),
+}
 _REQUIRED_INDEXES = {
     "idx_campaigns_security_code": "CREATE INDEX idx_campaigns_security_code ON campaigns (security_code)",
     "idx_campaigns_created_at": "CREATE INDEX idx_campaigns_created_at ON campaigns (created_at)",
+}
+_REQUIRED_TRANSITION_INDEXES = {
+    "idx_campaign_transitions_campaign": (
+        "CREATE INDEX idx_campaign_transitions_campaign "
+        "ON campaign_transitions (campaign_id)"
+    ),
+    "idx_campaign_transitions_time": (
+        "CREATE INDEX idx_campaign_transitions_time "
+        "ON campaign_transitions (transitioned_at)"
+    ),
 }
 
 _DDL = (
@@ -96,6 +139,21 @@ _DDL = (
     "ON campaigns (security_code)",
     "CREATE INDEX IF NOT EXISTS idx_campaigns_created_at "
     "ON campaigns (created_at)",
+    "CREATE TABLE IF NOT EXISTS campaign_transitions ("
+    "  transition_id TEXT PRIMARY KEY,"
+    "  campaign_id TEXT NOT NULL,"
+    "  from_status TEXT NOT NULL"
+    "    CHECK (from_status IN ('DRAFT', 'RESEARCHING', 'PRE-ENTRY', 'ACTIVE',"
+    "                           'REDUCING', 'CLOSED', 'REJECTED', 'EXPIRED')),"
+    "  to_status TEXT NOT NULL"
+    "    CHECK (to_status IN ('DRAFT', 'RESEARCHING', 'PRE-ENTRY', 'ACTIVE',"
+    "                         'REDUCING', 'CLOSED', 'REJECTED', 'EXPIRED')),"
+    "  transitioned_at TEXT NOT NULL"
+    ")",
+    "CREATE INDEX IF NOT EXISTS idx_campaign_transitions_campaign "
+    "ON campaign_transitions (campaign_id)",
+    "CREATE INDEX IF NOT EXISTS idx_campaign_transitions_time "
+    "ON campaign_transitions (transitioned_at)",
 )
 
 # 合法并发初始化等待参数：总量不超过 SQLite busy timeout 量级。
@@ -122,6 +180,14 @@ class CampaignStoreInputError(CampaignStoreError, ValueError):
 
 class CampaignAlreadyExistsError(CampaignStoreError):
     """同一 campaign_id 已存在；不得覆盖旧 Campaign。"""
+
+
+class CampaignTransitionConflictError(CampaignStoreError):
+    """expected_status 与实际不符，或 from→to 不属于冻结 transition graph。"""
+
+
+class CampaignNotFoundError(CampaignStoreError, LookupError):
+    """目标 Campaign 不存在。"""
 
 
 def campaign_db_path() -> str:
@@ -192,6 +258,19 @@ def _validated_status(value: Any) -> str:
     return value
 
 
+def _validated_transition_id(value: Any) -> str:
+    if not isinstance(value, str) or not _TRANSITION_ID_RE.fullmatch(value.strip()):
+        raise CampaignStoreInputError(
+            "transition_id must match campaign_transition_<32 hex>"
+        )
+    return value.strip()
+
+
+def _is_allowed_transition(from_status: str, to_status: str) -> bool:
+    """冻结 graph 成员判定：未列出 / 反向 / same-state 一律 False。"""
+    return to_status in _TRANSITION_GRAPH.get(from_status, ())
+
+
 # ---------------------------------------------------------------------------
 # schema 结构校验（fail-closed，不自动迁移）
 # ---------------------------------------------------------------------------
@@ -214,28 +293,35 @@ def _canonical_sql(sql: str | None) -> str:
     return " ".join((sql or "").split())
 
 
-def _validate_constraint_semantics(create_sql: str) -> None:
-    """在独立内存库中重放 campaigns DDL，证明 CHECK 约束真实生效。
-
-    有效记录可插入；非法 strategy / status 必须被 CHECK 拒绝；
-    否则判定 schema 约束语义被破坏 → fail-closed。
-    """
+def _validate_constraint_semantics(campaigns_sql: str, transitions_sql: str) -> None:
+    """在独立内存库中重放 campaigns + campaign_transitions DDL，
+    证明 CHECK 约束真实生效（枚举拒绝非法值），否则 fail-closed。"""
     try:
         probe = sqlite3.connect(":memory:")
     except sqlite3.Error as exc:
         raise CampaignStoreCorruptedError() from exc
     try:
-        probe.execute(create_sql)
+        probe.execute(campaigns_sql)
+        probe.execute(transitions_sql)
         probe.execute(
             "INSERT INTO campaigns (campaign_id, security_code, strategy, status, created_at) "
             "VALUES (?, '600519', 'SHORT', 'DRAFT', ?)",
             ("campaign_00000000000000000000000000000000",
              "2026-08-01T00:00:00.000000Z"),
         )
-        for bad in (
+        probe.execute(
+            "INSERT INTO campaign_transitions "
+            "(transition_id, campaign_id, from_status, to_status, transitioned_at) "
+            "VALUES (?, ?, 'DRAFT', 'RESEARCHING', ?)",
+            ("campaign_transition_00000000000000000000000000000000",
+             "campaign_00000000000000000000000000000000",
+             "2026-08-01T00:00:00.000000Z"),
+        )
+        bad_rows = (
             ("campaign_00000000000000000000000000000001", "BOGUS", "DRAFT"),
             ("campaign_00000000000000000000000000000002", "SHORT", "BOGUS"),
-        ):
+        )
+        for bad in bad_rows:
             try:
                 probe.execute(
                     "INSERT INTO campaigns "
@@ -246,6 +332,22 @@ def _validate_constraint_semantics(create_sql: str) -> None:
             except sqlite3.IntegrityError:
                 continue  # CHECK 正确拒绝
             raise CampaignStoreCorruptedError()
+        for bad in (
+            ("campaign_transition_00000000000000000000000000000001",
+             "campaign_00000000000000000000000000000000", "BOGUS", "RESEARCHING"),
+            ("campaign_transition_00000000000000000000000000000002",
+             "campaign_00000000000000000000000000000000", "DRAFT", "BOGUS"),
+        ):
+            try:
+                probe.execute(
+                    "INSERT INTO campaign_transitions "
+                    "(transition_id, campaign_id, from_status, to_status, transitioned_at) "
+                    "VALUES (?, ?, ?, ?, '2026-08-01T00:00:00.000000Z')",
+                    bad,
+                )
+            except sqlite3.IntegrityError:
+                continue
+            raise CampaignStoreCorruptedError()
     except sqlite3.Error as exc:
         raise CampaignStoreCorruptedError() from exc
     finally:
@@ -255,7 +357,7 @@ def _validate_constraint_semantics(create_sql: str) -> None:
 def _assert_schema(conn: sqlite3.Connection) -> None:
     """校验已有 schema 结构完整性，任何异常都 fail-closed，不自动迁移或重建。"""
     tables = _existing_tables(conn)
-    if tables != {"schema_meta", "campaigns"}:
+    if tables != {"schema_meta", "campaigns", "campaign_transitions"}:
         raise CampaignStoreCorruptedError()
     try:
         rows = conn.execute(
@@ -277,12 +379,33 @@ def _assert_schema(conn: sqlite3.Connection) -> None:
             if (actual_pk > 0) != (exp_pk > 0):
                 raise CampaignStoreCorruptedError()
 
-        sql_row = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'campaigns'"
-        ).fetchone()
-        if sql_row is None or sql_row[0] is None:
-            raise CampaignStoreCorruptedError()
-        _validate_constraint_semantics(sql_row[0])
+        trans_col_rows = conn.execute(
+            "PRAGMA table_info(campaign_transitions)"
+        ).fetchall()
+        trans_col_map: dict[str, tuple[str, int, int]] = {}
+        for crow in trans_col_rows:
+            trans_col_map[crow[1]] = (str(crow[2]).upper(), crow[3], crow[5])
+        for col_name, (exp_type, exp_notnull, exp_pk) in _REQUIRED_TRANSITION_COLUMNS.items():
+            if col_name not in trans_col_map:
+                raise CampaignStoreCorruptedError()
+            actual_type, actual_notnull, actual_pk = trans_col_map[col_name]
+            if actual_type != exp_type or actual_notnull != exp_notnull:
+                raise CampaignStoreCorruptedError()
+            if (actual_pk > 0) != (exp_pk > 0):
+                raise CampaignStoreCorruptedError()
+
+        def _table_create_sql(name: str) -> str:
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (name,),
+            ).fetchone()
+            if row is None or row[0] is None:
+                raise CampaignStoreCorruptedError()
+            return row[0]
+
+        _validate_constraint_semantics(
+            _table_create_sql("campaigns"), _table_create_sql("campaign_transitions")
+        )
 
         idx_rows = conn.execute(
             "SELECT name, sql FROM sqlite_master "
@@ -294,7 +417,20 @@ def _assert_schema(conn: sqlite3.Connection) -> None:
             if actual_sql is None or _canonical_sql(actual_sql) != expected_sql:
                 raise CampaignStoreCorruptedError()
 
+        trans_idx_rows = conn.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type = 'index' AND tbl_name = 'campaign_transitions'"
+        ).fetchall()
+        found_trans_idx_sql = {str(row[0]): row[1] for row in trans_idx_rows}
+        for idx_name, expected_sql in _REQUIRED_TRANSITION_INDEXES.items():
+            actual_sql = found_trans_idx_sql.get(idx_name)
+            if actual_sql is None or _canonical_sql(actual_sql) != expected_sql:
+                raise CampaignStoreCorruptedError()
+
         conn.execute(f"SELECT {_SELECT_COLUMNS} FROM campaigns LIMIT 0").fetchall()
+        conn.execute(
+            f"SELECT {_SELECT_TRANSITION_COLUMNS} FROM campaign_transitions LIMIT 0"
+        ).fetchall()
     except CampaignStoreCorruptedError:
         raise
     except sqlite3.Error as exc:
@@ -370,7 +506,7 @@ def _open_write_connection() -> sqlite3.Connection:
             raise CampaignStoreCorruptedError() from exc
         try:
             tables = _existing_tables(conn)
-            if tables == {"schema_meta", "campaigns"}:
+            if tables == {"schema_meta", "campaigns", "campaign_transitions"}:
                 _assert_schema(conn)
                 conn.execute("COMMIT")
                 return conn
@@ -440,6 +576,20 @@ def _record_from_row(row: sqlite3.Row) -> dict:
     except (CampaignStoreInputError, ValueError):
         raise CampaignStoreCorruptedError() from None
     return record
+
+
+def _transition_from_row(row: sqlite3.Row) -> dict:
+    """transition 行 → 记录；行数据不可信 → fail-closed。"""
+    try:
+        return {
+            "transition_id": _validated_transition_id(row["transition_id"]),
+            "campaign_id": _validated_campaign_id(row["campaign_id"]),
+            "from_status": _validated_status(row["from_status"]),
+            "to_status": _validated_status(row["to_status"]),
+            "transitioned_at": _validate_timestamp(row["transitioned_at"]),
+        }
+    except (CampaignStoreInputError, ValueError):
+        raise CampaignStoreCorruptedError() from None
 
 
 # ---------------------------------------------------------------------------
@@ -551,3 +701,110 @@ def list_campaigns(
     finally:
         conn.close()
     return [_record_from_row(row) for row in rows]
+
+
+def transition_campaign(
+    *,
+    campaign_id: str,
+    expected_status: str,
+    to_status: str,
+    transition_id: str,
+    transitioned_at: str,
+) -> tuple[dict, dict]:
+    """原子执行 Campaign 状态迁移（同一 SQLite 事务，BEGIN IMMEDIATE）。
+
+    顺序：
+    1. 读取当前 Campaign（不存在 → CampaignNotFoundError）；
+    2. 当前 status != expected_status → CampaignTransitionConflictError（CAS）；
+    3. from→to 不属于冻结 graph（含反向 / same-state / 终态出边）→ Conflict；
+    4. 写 transition audit 记录（transition_id 重复 → CampaignAlreadyExistsError）；
+    5. 原子更新 campaigns.status；
+    6. COMMIT。
+
+    任何一步失败 → ROLLBACK：绝不允许「status 变了但 audit 没写」或
+    「audit 写了但 status 没变」。返回 (迁移后 Campaign, transition 记录)。
+    """
+    cid = _validated_campaign_id(campaign_id)
+    exp = _validated_status(expected_status)
+    to = _validated_status(to_status)
+    tid = _validated_transition_id(transition_id)
+    try:
+        trans_at = _validate_timestamp(transitioned_at)
+    except ValueError as exc:
+        raise CampaignStoreInputError(str(exc)) from exc
+
+    conn = _open_write_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT status FROM campaigns WHERE campaign_id = ?", (cid,)
+        ).fetchone()
+        if row is None:
+            raise CampaignNotFoundError(f"campaign {cid} not found")
+        try:
+            current = _validated_status(str(row["status"]))
+        except CampaignStoreInputError:
+            raise CampaignStoreCorruptedError() from None
+        if current != exp:
+            raise CampaignTransitionConflictError(
+                f"expected_status {exp!r} but current is {current!r}"
+            )
+        if not _is_allowed_transition(current, to):
+            raise CampaignTransitionConflictError(
+                f"transition {current} -> {to} not allowed by frozen graph"
+            )
+        try:
+            conn.execute(
+                "INSERT INTO campaign_transitions "
+                f"({_SELECT_TRANSITION_COLUMNS}) VALUES (?, ?, ?, ?, ?)",
+                (tid, cid, current, to, trans_at),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise CampaignAlreadyExistsError(
+                f"transition {tid} already exists (no overwrite)"
+            ) from exc
+        conn.execute(
+            "UPDATE campaigns SET status = ? WHERE campaign_id = ?", (to, cid)
+        )
+        conn.execute("COMMIT")
+    except BaseException:
+        _safe_rollback(conn)
+        conn.close()
+        raise
+    conn.close()
+
+    transition = {
+        "transition_id": tid,
+        "campaign_id": cid,
+        "from_status": current,
+        "to_status": to,
+        "transitioned_at": trans_at,
+    }
+    campaign = get_campaign(cid)
+    if campaign is None:
+        raise CampaignStoreCorruptedError()  # 事务后必须存在
+    return campaign, transition
+
+
+def list_campaign_transitions(campaign_id: str) -> list[dict]:
+    """Campaign 的 transition 历史：transitioned_at ASC, transition_id ASC 全序。
+
+    Campaign 不存在 → 空列表（与 list_campaigns 语义一致，不抛 NotFound）。
+    """
+    cid = _validated_campaign_id(campaign_id)
+    conn = _open_read_connection()
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT "
+            f"{_SELECT_TRANSITION_COLUMNS} FROM campaign_transitions "
+            "WHERE campaign_id = ? "
+            "ORDER BY transitioned_at ASC, transition_id ASC",
+            (cid,),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise CampaignStoreCorruptedError() from exc
+    finally:
+        conn.close()
+    return [_transition_from_row(row) for row in rows]

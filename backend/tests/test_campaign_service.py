@@ -16,9 +16,12 @@ from campaign_service import (
     CampaignConflictError,
     CampaignInputError,
     CampaignNotFoundError,
+    CampaignTransitionConflictError,
     create_campaign,
     get_campaign,
     list_campaigns,
+    list_campaign_transitions,
+    transition_campaign,
 )
 
 _ID_RE = re.compile(r"^campaign_[0-9a-f]{32}$")
@@ -168,3 +171,87 @@ def test_conflict_is_explicit_not_overwrite(monkeypatch):
     monkeypatch.setattr(cs, "create_campaign", boom)
     with pytest.raises(CampaignConflictError):
         create_campaign("600519", "SHORT")
+
+
+# ---------------------------------------------------------------------------
+# S2B. Transition（service 层）
+# ---------------------------------------------------------------------------
+def test_transition_success_returns_campaign_and_transition():
+    rec = create_campaign("600519", "SWING")
+    campaign, tr = transition_campaign(rec["campaign_id"], "DRAFT", "RESEARCHING")
+    assert campaign["status"] == "RESEARCHING"
+    assert campaign["strategy"] == "SWING"
+    assert tr["transition_id"].startswith("campaign_transition_")
+    assert tr["from_status"] == "DRAFT" and tr["to_status"] == "RESEARCHING"
+    assert tr["campaign_id"] == rec["campaign_id"]
+
+
+def test_full_lifecycle_chain_strategy_immutable():
+    """SWING Campaign 走完 DRAFT→…→CLOSED 全链后 strategy 始终 SWING。"""
+    rec = create_campaign("600519", "SWING")
+    for frm, to in (
+        ("DRAFT", "RESEARCHING"), ("RESEARCHING", "PRE-ENTRY"),
+        ("PRE-ENTRY", "ACTIVE"), ("ACTIVE", "REDUCING"), ("REDUCING", "CLOSED"),
+    ):
+        campaign, tr = transition_campaign(rec["campaign_id"], frm, to)
+        assert tr["to_status"] == to
+        assert campaign["strategy"] == "SWING"
+    assert get_campaign(rec["campaign_id"])["strategy"] == "SWING"
+
+
+def test_transition_invalid_enum_input_error():
+    rec = create_campaign("600519", "SHORT")
+    for bad in ("DRAFT2", "ACTIVE2", "short"):
+        with pytest.raises(CampaignInputError):
+            transition_campaign(rec["campaign_id"], bad, "RESEARCHING")
+        with pytest.raises(CampaignInputError):
+            transition_campaign(rec["campaign_id"], "DRAFT", bad)
+
+
+def test_transition_unknown_campaign_not_found():
+    with pytest.raises(CampaignNotFoundError):
+        transition_campaign(f"campaign_{uuid.uuid4().hex}", "DRAFT", "RESEARCHING")
+
+
+def test_transition_cas_mismatch_conflict():
+    rec = create_campaign("600519", "SHORT")
+    transition_campaign(rec["campaign_id"], "DRAFT", "RESEARCHING")
+    with pytest.raises(CampaignTransitionConflictError):
+        transition_campaign(rec["campaign_id"], "DRAFT", "REJECTED")  # stale CAS
+    assert get_campaign(rec["campaign_id"])["status"] == "RESEARCHING"
+
+
+def test_transition_illegal_edge_conflict():
+    rec = create_campaign("600519", "SHORT")
+    with pytest.raises(CampaignTransitionConflictError):
+        transition_campaign(rec["campaign_id"], "DRAFT", "ACTIVE")
+    with pytest.raises(CampaignTransitionConflictError):
+        transition_campaign(rec["campaign_id"], "DRAFT", "DRAFT")
+    assert get_campaign(rec["campaign_id"])["status"] == "DRAFT"
+
+
+def test_transition_terminal_conflict():
+    rec = create_campaign("600519", "SHORT")
+    for frm, to in (("DRAFT", "REJECTED"),):
+        transition_campaign(rec["campaign_id"], frm, to)
+    for target in ("DRAFT", "RESEARCHING", "ACTIVE"):
+        with pytest.raises(CampaignTransitionConflictError):
+            transition_campaign(rec["campaign_id"], "REJECTED", target)
+
+
+def test_transition_history_service():
+    rec = create_campaign("600519", "MEDIUM")
+    _, tr1 = transition_campaign(rec["campaign_id"], "DRAFT", "RESEARCHING")
+    _, tr2 = transition_campaign(rec["campaign_id"], "RESEARCHING", "PRE-ENTRY")
+    history = list_campaign_transitions(rec["campaign_id"])
+    assert [h["transition_id"] for h in history] == [tr1["transition_id"], tr2["transition_id"]]
+    assert list_campaign_transitions(f"campaign_{uuid.uuid4().hex}") == []
+    with pytest.raises(CampaignInputError):
+        list_campaign_transitions("bad-id")
+
+
+def test_service_no_generic_status_mutation_path():
+    """service 层仍不存在 set_status / update / generic 写路径。"""
+    for name in ("set_status", "update_campaign", "patch_campaign",
+                 "delete_campaign", "generic_update"):
+        assert not hasattr(campaign_service, name), f"forbidden path: {name}"

@@ -21,8 +21,10 @@ from alert_rules import CODE_PATTERN
 
 import campaign_store
 from campaign_store import STATUSES, STRATEGIES, CampaignAlreadyExistsError
+from campaign_store import CampaignNotFoundError as StoreCampaignNotFoundError
 from campaign_store import CampaignStoreCorruptedError, CampaignStoreError
 from campaign_store import CampaignStoreInputError
+from campaign_store import CampaignTransitionConflictError as StoreCampaignTransitionConflictError
 
 DRAFT_STATUS = "DRAFT"
 
@@ -40,7 +42,11 @@ class CampaignNotFoundError(CampaignServiceError, LookupError):
 
 
 class CampaignConflictError(CampaignServiceError):
-    """campaign_id 冲突（不应发生于服务端生成的 ID，防御性保留）。"""
+    """campaign_id / transition_id 冲突或状态冲突（防御性或 CAS 失败）。"""
+
+
+class CampaignTransitionConflictError(CampaignServiceError):
+    """expected_status 不符或 transition graph 不允许（→ 409）。"""
 
 
 def _is_valid_security_code(value: Any) -> bool:
@@ -116,6 +122,59 @@ def list_campaigns(
             strategy=strategy,
             status=status,
         )
+    except CampaignStoreCorruptedError as exc:
+        raise CampaignServiceError("Campaign 存储不可用") from exc
+    except CampaignStoreInputError as exc:
+        raise CampaignInputError(str(exc)) from exc
+    except CampaignStoreError as exc:
+        raise CampaignServiceError("Campaign 存储不可用") from exc
+
+
+def transition_campaign(
+    campaign_id: str,
+    expected_status: str,
+    to_status: str,
+) -> tuple[dict, dict]:
+    """原子迁移 Campaign 状态（CAS：expected_status + 冻结 graph）。
+
+    返回 (迁移后 Campaign, transition 记录)；失败按契约抛：
+    - 入参非法 → CampaignInputError（422）
+    - Campaign 不存在 → CampaignNotFoundError（404）
+    - expected_status 不符 / graph 不允许 / transition_id 冲突 → CampaignTransitionConflictError（409）
+    """
+    if expected_status not in STATUSES or to_status not in STATUSES:
+        raise CampaignInputError("expected_status/to_status must be frozen enum values")
+    transition_id = f"campaign_transition_{uuid.uuid4().hex}"
+    transitioned_at = campaign_store._format_timestamp(datetime.now(timezone.utc))
+    try:
+        return campaign_store.transition_campaign(
+            campaign_id=campaign_id,
+            expected_status=expected_status,
+            to_status=to_status,
+            transition_id=transition_id,
+            transitioned_at=transitioned_at,
+        )
+    except StoreCampaignNotFoundError as exc:
+        raise CampaignNotFoundError(str(exc)) from exc
+    except StoreCampaignTransitionConflictError as exc:
+        raise CampaignTransitionConflictError(str(exc)) from exc
+    except CampaignAlreadyExistsError as exc:
+        raise CampaignTransitionConflictError(str(exc)) from exc
+    except CampaignStoreCorruptedError as exc:
+        raise CampaignServiceError("Campaign 存储不可用") from exc
+    except CampaignStoreInputError as exc:
+        raise CampaignInputError(str(exc)) from exc
+    except CampaignStoreError as exc:
+        raise CampaignServiceError("Campaign 存储不可用") from exc
+
+
+def list_campaign_transitions(campaign_id: str) -> list[dict]:
+    """Campaign 的 transition 历史（transitioned_at ASC, transition_id ASC）。
+
+    ID 格式非法 → CampaignInputError；Campaign 无历史 → 空列表。
+    """
+    try:
+        return campaign_store.list_campaign_transitions(campaign_id)
     except CampaignStoreCorruptedError as exc:
         raise CampaignServiceError("Campaign 存储不可用") from exc
     except CampaignStoreInputError as exc:
