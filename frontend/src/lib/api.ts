@@ -59,7 +59,6 @@ import type {
   GlobalIndex,
   GlobalStock,
   NorthboundCapitalFlow,
-  NorthboundHistoryEnvelope,
   TechnicalIndicators,
   TopRiskAnalysis,
   DailyReviewAnalyzeRequest,
@@ -101,9 +100,7 @@ import type {
   AttributionSnapshotSummary,
   AttributionSnapshotListResult,
   AttributionSnapshotDetailResult,
-  ScreenerEvaluateIn,
-  ScreenerEvaluateResult,
-  ScreenerSectorRepresentativesResult,
+  Bk11HistoryEnvelope,
 } from "./api/types.ts";
 
 
@@ -494,9 +491,12 @@ export const api = {
   },
   marketBreadth: () => get<TimedComponentEnvelope<MarketBreadthData>>("/market/breadth"),
   marketNorthbound: () => get<NorthboundCapitalFlow>("/market/northbound"),
-  /** 北向成交历史（成交额 / 成交笔数 / ETF 成交额），非净买入。仅允许 10|20|30。 */
-  marketNorthboundHistory: (days: 10 | 20 | 30 = 20) =>
-    get<NorthboundHistoryEnvelope>(`/market/northbound/history?days=${days}`),
+  /** BK-11 短线市场历史（只读；有界窗口，默认最近 5 个交易日） */
+  bk11History: (days = 5, signal?: AbortSignal) =>
+    get<Bk11HistoryEnvelope>(
+      `/market/bk11-history?days=${days}`,
+      signal ? { signal } : undefined,
+    ),
   /** 顶部风险分析（影子模式，第一版）：按股票代码分析，signal 恒 unknown、不参与最终结论。 */
   topRisk: (code: string, days = 120) =>
     get<TopRiskAnalysis>(
@@ -573,15 +573,6 @@ export const api = {
   /** 技术指标与价格触发（SMA/EMA/MACD/RSI/布林带/5-20 日均量比）；依赖缺失抛 501。 */
   technicalIndicators: (code: string, period = "daily", days = 120) =>
     get<TechnicalIndicators>(`/market/technical-indicators?code=${code}&period=${period}&days=${days}`),
-  /** 候选股票技术条件筛选（AND）；不读写持仓/自选。 */
-  evaluateScreener: (payload: ScreenerEvaluateIn, signal?: AbortSignal) =>
-    request<ScreenerEvaluateResult>("/screener/evaluate", "POST", payload, { signal, unwrapData: false }),
-  /** 板块代表公司代码（权威来自 backend sector_research_data）。 */
-  getScreenerSectorRepresentatives: (signal?: AbortSignal) =>
-    get<ScreenerSectorRepresentativesResult>("/screener/sources/sector-representatives", {
-      signal,
-      unwrapData: false,
-    }),
   /** 季报财务快照（需 mootdx，37 字段）；依赖缺失抛 501。 */
   finance: (code: string) => get<Record<string, string | number | null>>(`/finance?code=${code}`),
   /** 个股基本面：行业 / 总股本 / 上市时间等（需 akshare）；依赖缺失抛 501。 */

@@ -17,10 +17,10 @@ import {
   type DataStatus, type DailyReviewHistoryItem, type DailyReviewHistorySnapshot,
   type DailyReviewComparison, type NumericComparison, type RankingComparison,
   type HighlightComparison, type NorthboundCapitalFlow,
-  type NorthboundHistoryEnvelope,
+  type Bk11HistoryEnvelope,
 } from "@/lib/api";
 import { NorthboundCapitalFlowCard } from "@/components/market/NorthboundCapitalFlowCard";
-import { NorthboundTurnoverHistoryChart } from "@/components/market/NorthboundTurnoverHistoryChart";
+import { ShortTermHistoryCard } from "@/components/dailyReview/ShortTermHistoryCard";
 import { northboundErrorMessage } from "@/lib/northboundView";
 import { loadLlm } from "@/lib/llm";
 import { useDailyReviewAiTaskStore } from "@/stores/dailyReviewAiTaskStore";
@@ -177,10 +177,11 @@ export function DailyReview() {
   const [northboundLoading, setNorthboundLoading] = useState(false);
   const [northboundError, setNorthboundError] = useState<string | null>(null);
 
-  // 北向成交额历史（独立 endpoint，与日数据卡片互不影响）
-  const [northboundHistoryEnv, setNorthboundHistoryEnv] = useState<NorthboundHistoryEnvelope | null>(null);
-  const [northboundHistoryLoading, setNorthboundHistoryLoading] = useState(false);
-  const [northboundHistoryError, setNorthboundHistoryError] = useState<string | null>(null);
+  // BK-11 短线市场历史（独立只读 endpoint；不随复盘轮询）
+  const [bk11Env, setBk11Env] = useState<Bk11HistoryEnvelope | null>(null);
+  const [bk11Loading, setBk11Loading] = useState(false);
+  const [bk11Error, setBk11Error] = useState<string | null>(null);
+  const bk11AbortRef = useRef<AbortController | null>(null);
 
   const loadNorthbound = useCallback(() => {
     setNorthboundLoading(true);
@@ -202,22 +203,25 @@ export function DailyReview() {
       });
   }, []);
 
-  const loadNorthboundHistory = useCallback(() => {
-    setNorthboundHistoryLoading(true);
-    setNorthboundHistoryError(null);
-    api.marketNorthboundHistory(20)
+  const loadBk11History = useCallback(() => {
+    bk11AbortRef.current?.abort();
+    const controller = new AbortController();
+    bk11AbortRef.current = controller;
+    setBk11Loading(true);
+    setBk11Error(null);
+    api.bk11History(5, controller.signal)
       .then((res) => {
-        if (!mountedRef.current) return;
-        setNorthboundHistoryEnv(res);
+        if (!mountedRef.current || controller.signal.aborted) return;
+        setBk11Env(res);
       })
-      .catch(() => {
-        if (!mountedRef.current) return;
-        setNorthboundHistoryEnv(null);
-        setNorthboundHistoryError("北向成交历史暂不可用");
+      .catch((e) => {
+        if (!mountedRef.current || controller.signal.aborted) return;
+        setBk11Env(null);
+        setBk11Error(e instanceof ApiError ? e.message : "短线市场历史加载失败");
       })
       .finally(() => {
-        if (mountedRef.current) {
-          setNorthboundHistoryLoading(false);
+        if (mountedRef.current && !controller.signal.aborted) {
+          setBk11Loading(false);
         }
       });
   }, []);
@@ -374,7 +378,7 @@ export function DailyReview() {
     mountedRef.current = true;
     loadDailyReview();
     loadNorthbound();
-    loadNorthboundHistory();
+    loadBk11History();
     loadHistory({ trade_date: "", offset: 0 });
     loadWatchAuthoritative()
       .then((r) => {
@@ -390,6 +394,7 @@ export function DailyReview() {
     return () => {
       mountedRef.current = false;
       clearPoll();
+      bk11AbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1312,6 +1317,11 @@ export function DailyReview() {
       </GlassCard>
       </section>) },
 
+	      /* 11. BK-11 短线市场历史（独立只读请求；不随复盘轮询） */
+	      { order: 11, node: (<section key="bk11-history" className="order-[11]">
+      <ShortTermHistoryCard env={bk11Env} loading={bk11Loading} error={bk11Error} />
+      </section>) },
+
       /* 3. 市场广度 */
       { order: 3, node: (<section key="breadth" className="order-[3]">
       <div className="mb-3 flex items-center gap-2">
@@ -1489,14 +1499,9 @@ export function DailyReview() {
 	      </GlassCard>
 	      </section>) },
 
-      /* 6. 北向资金（独立请求） + 北向成交额历史图 */
+      /* 6. 北向资金（独立请求） */
       { order: 6, node: (<section key="northbound" className="order-[6]">
       <NorthboundCapitalFlowCard env={northboundEnv} loading={northboundLoading} error={northboundError} />
-      <NorthboundTurnoverHistoryChart
-        env={northboundHistoryEnv}
-        loading={northboundHistoryLoading}
-        error={northboundHistoryError}
-      />
       </section>) },
 
 	      /* 7. 板块强弱亮点 */

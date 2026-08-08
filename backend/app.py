@@ -59,8 +59,8 @@ import decision_analytics_router
 import performance_attribution_router
 import performance_attribution_store
 import technical_indicators_router
+import bk11_history_router
 import intel_digest_router
-import screener_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -168,9 +168,10 @@ app.include_router(decision_analytics_router.router)
 app.include_router(performance_attribution_router.router)
 # 技术指标与价格触发
 app.include_router(technical_indicators_router.router)
+# BK-11 短线市场历史只读查询
+app.include_router(bk11_history_router.router)
+# Intel Daily Digest
 app.include_router(intel_digest_router.router)
-# 候选池技术条件筛选器 v0.1
-app.include_router(screener_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)
@@ -802,73 +803,6 @@ def market_northbound():
             _dhes.safe_call(_dhes.record_partial, "northbound_capital_flow")
         else:
             _dhes.safe_call(_dhes.record_failure, "northbound_capital_flow", "SOURCE_UNAVAILABLE")
-    except Exception:
-        pass
-
-    return {"data": data}
-
-
-@app.get("/api/market/northbound/history")
-def market_northbound_history(
-    days: int = Query(20, description="历史交易日点数，仅支持 10、20、30"),
-):
-    """北向成交历史（成交额 / 成交笔数 / ETF 成交额）。
-
-    - 不提供净买入 / 净流入历史。
-    - 正常 / 部分 / 不可用 → 均返回 HTTP 200，状态以 body.data.status 为准。
-    - unavailable 不缓存；normal / partial 缓存 15 分钟。
-    - 非法 days 返回 HTTP 400。
-    """
-    try:
-        days_n = ncf.validate_history_days(days)
-    except ncf.NorthboundHistoryDaysError as exc:
-        raise HTTPException(400, str(exc)) from None
-
-    key = ("market_northbound_history", str(days_n))
-    hit = _DC_CACHE.get(key, 900)
-    if hit is not _CACHE_MISS:
-        return {"data": hit}
-
-    def _safe_unavailable_history():
-        return {
-            "schema_version": ncf.HISTORY_SCHEMA_VERSION,
-            "source": ncf.SOURCE_NAME,
-            "source_tier": ncf.SOURCE_TIER,
-            "status": "unavailable",
-            "fetched_at": ncf._now_iso(),
-            "requested_days": days_n,
-            "returned_points": 0,
-            "limitations": [
-                dict(ncf.LIMITATION_HISTORY_NET_BUY),
-                dict(ncf.LIMITATION_HISTORY_SOURCE_UNAVAILABLE),
-            ],
-            "series": [],
-        }
-
-    try:
-        data = ncf.get_northbound_history(days_n)
-    except Exception:  # noqa: BLE001
-        data = _safe_unavailable_history()
-
-    if not ncf._is_valid_history_envelope(data, days_n):
-        data = _safe_unavailable_history()
-
-    st = data.get("status") if isinstance(data, dict) else None
-    if st != "unavailable":
-        _DC_CACHE.set(key, data)
-
-    try:
-        import data_health_event_store as _dhes
-        if st == "normal":
-            _dhes.safe_call(_dhes.record_success, "northbound_capital_flow_history")
-        elif st == "partial":
-            _dhes.safe_call(_dhes.record_partial, "northbound_capital_flow_history")
-        else:
-            _dhes.safe_call(
-                _dhes.record_failure,
-                "northbound_capital_flow_history",
-                "SOURCE_UNAVAILABLE",
-            )
     except Exception:
         pass
 

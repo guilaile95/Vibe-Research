@@ -153,6 +153,86 @@ function klineBars(code) {
   }));
 }
 
+function technicalIndicatorsEnvelope(code, { status = "normal" } = {}) {
+  const bars = klineBars(code);
+  if (status === "unavailable") {
+    return {
+      schema_version: "technical-indicators-v0.2",
+      code,
+      period: "daily",
+      trade_date: null,
+      fetched_at: "2026-07-28T10:00:00Z",
+      status: "unavailable",
+      warnings: ["fixture unavailable"],
+      limitations: [],
+      latest: {
+        close: null,
+        sma5: null, sma10: null, sma20: null, sma60: null,
+        ema12: null, ema26: null,
+        macd_dif: null, macd_dea: null, macd_histogram: null,
+        rsi14: null,
+        bollinger_upper: null, bollinger_middle: null, bollinger_lower: null,
+        volume_ratio_5_20: null,
+        kdj_k: null, kdj_d: null, kdj_j: null,
+      },
+      triggers: [],
+      series: [],
+    };
+  }
+
+  const series = bars.map((b, i) => {
+    const close = Number(b.close);
+    const high = Number(b.high);
+    const low = Number(b.low);
+    // Ensure at least one day has BOLL outside candle range for coordinate coverage.
+    const upper = i === bars.length - 1 ? high + 0.8 : high + 0.15;
+    const lower = i === bars.length - 1 ? low - 0.8 : low - 0.15;
+    return {
+      date: b.date,
+      sma20: close - 0.05,
+      sma60: close - 0.12,
+      bollinger_upper: upper,
+      bollinger_middle: close,
+      bollinger_lower: lower,
+      macd_dif: 0.1,
+      macd_dea: 0.05,
+      macd_histogram: 0.05,
+      rsi14: 55,
+      volume_ratio_5_20: 1.1,
+      kdj_k: 60 + i,
+      kdj_d: 55 + i * 0.5,
+      kdj_j: 70 + i,
+    };
+  });
+
+  return {
+    schema_version: "technical-indicators-v0.2",
+    code,
+    period: "daily",
+    trade_date: bars[bars.length - 1]?.date ?? "2026-07-24",
+    fetched_at: "2026-07-28T10:00:00Z",
+    status,
+    warnings: [],
+    limitations: [],
+    latest: {
+      close: Number(bars[bars.length - 1].close),
+      sma5: 11.2, sma10: 11.1, sma20: 11.0, sma60: 10.8,
+      ema12: 11.15, ema26: 10.95,
+      macd_dif: 0.12, macd_dea: 0.08, macd_histogram: 0.08,
+      rsi14: 55.0,
+      bollinger_upper: 11.5, bollinger_middle: 11.0, bollinger_lower: 10.5,
+      volume_ratio_5_20: 1.2,
+      kdj_k: 65.25,
+      kdj_d: 58.50,
+      kdj_j: 78.75,
+    },
+    triggers: [
+      { type: "volume_spike", message: "5 日平均成交量超过 20 日平均成交量的 2 倍", value: 2.1 },
+    ],
+    series,
+  };
+}
+
 function jsonOk(body) {
   return {
     status: 200,
@@ -180,6 +260,8 @@ function createApiMockController() {
     klineHold: null, // { resolve, code } pending fulfill
     klineCalls: [],
     valuationCalls: [],
+    technicalIndicatorsStatus: "normal",
+    technicalIndicatorsCalls: [],
   };
 
   function pathnameOf(url) {
@@ -332,41 +414,15 @@ function createApiMockController() {
       return;
     }
 
-    // 技术指标与价格触发：返回完整 normal envelope（覆盖默认 {data:{}} 兜底）
+    // 技术指标与价格触发：返回与 klineBars 日期对齐的 envelope
     if (pathname.includes("/technical-indicators")) {
+      state.technicalIndicatorsCalls.push({ code, url, ts: Date.now() });
       await route.fulfill(
-        jsonOk({
-          schema_version: "technical-indicators-v0.1",
-          code,
-          period: "daily",
-          trade_date: "2026-07-28",
-          fetched_at: "2026-07-28T10:00:00Z",
-          status: "normal",
-          warnings: [],
-          limitations: [],
-          latest: {
-            sma5: 11.2, sma10: 11.1, sma20: 11.0, sma60: 10.8,
-            ema12: 11.15, ema26: 10.95,
-            macd_dif: 0.12, macd_dea: 0.08, macd_histogram: 0.08,
-            rsi14: 55.0,
-            bollinger_upper: 11.5, bollinger_middle: 11.0, bollinger_lower: 10.5,
-            volume_ratio_5_20: 1.2,
-          },
-          triggers: [
-            { type: "volume_spike", message: "5 日平均成交量超过 20 日平均成交量的 2 倍", value: 2.1 },
-          ],
-          series: [
-            { date: "2026-07-20", sma20: 10.9, sma60: 10.7 },
-            { date: "2026-07-21", sma20: 10.92, sma60: 10.71 },
-            { date: "2026-07-22", sma20: 10.94, sma60: 10.72 },
-            { date: "2026-07-23", sma20: 10.96, sma60: 10.73 },
-            { date: "2026-07-24", sma20: 10.98, sma60: 10.74 },
-            { date: "2026-07-25", sma20: 11.0, sma60: 10.75 },
-            { date: "2026-07-26", sma20: 11.0, sma60: 10.76 },
-            { date: "2026-07-27", sma20: 11.0, sma60: 10.77 },
-            { date: "2026-07-28", sma20: 11.0, sma60: 10.8 },
-          ],
-        }),
+        jsonOk(
+          technicalIndicatorsEnvelope(code || "000000", {
+            status: state.technicalIndicatorsStatus,
+          }),
+        ),
       );
       return;
     }
@@ -480,20 +536,34 @@ function createApiMockController() {
   return {
     state,
     handle,
-    releaseHeldKline,
-    armManualHold,
     setKlineDelay(ms) {
       state.klineDelayMs = ms;
-      state.klineHold = null;
     },
-    setKlineError(on) {
-      state.klineError = !!on;
+    setKlineError(flag) {
+      state.klineError = !!flag;
+    },
+    setTechnicalIndicatorsStatus(status) {
+      state.technicalIndicatorsStatus = status;
+    },
+    armManualHold() {
+      state.klineHold = "armed";
+    },
+    async releaseHeldKline() {
+      if (state.klineHold && state.klineHold !== "armed" && state.klineHold.resolve) {
+        const hold = state.klineHold;
+        state.klineHold = null;
+        hold.resolve();
+      }
     },
     resetKlineCalls() {
       state.klineCalls = [];
     },
+    resetTechnicalIndicatorsCalls() {
+      state.technicalIndicatorsCalls = [];
+    },
   };
 }
+
 
 async function fillCode(page, code) {
   const input = page.locator('input[placeholder*="A 股"]').first();
@@ -551,6 +621,24 @@ async function runSmoke(page, mock, errors) {
   if (!(await tiHeading.isVisible().catch(() => false))) {
     errors.push(`${label}: 技术指标 card heading not visible after query`);
   }
+  if (!(await page.getByText("KDJ (9,3,3)").first().isVisible().catch(() => false))) {
+    errors.push(`${label}: KDJ (9,3,3) label not visible`);
+  }
+  for (const kdjLabel of ["K", "D", "J"]) {
+    const count = await page.getByText(kdjLabel, { exact: true }).count();
+    if (count < 1) errors.push(`${label}: KDJ label ${kdjLabel} not visible`);
+  }
+  for (const val of ["65.25", "58.50", "78.75"]) {
+    if (!(await page.getByText(val, { exact: true }).first().isVisible().catch(() => false))) {
+      errors.push(`${label}: KDJ value ${val} not visible`);
+    }
+  }
+  const bodyTextForKdj = await page.locator("body").innerText();
+  for (const forbidden of ["KDJ 买入", "KDJ 卖出", "KDJ 金叉", "KDJ 死叉"]) {
+    if (bodyTextForKdj.includes(forbidden)) {
+      errors.push(`${label}: forbidden wording present: ${forbidden}`);
+    }
+  }
   // 主页面标题不受技术指标影响
   if (!(await page.getByRole("heading", { name: "平安银行" }).isVisible().catch(() => false))) {
     errors.push(`${label}: 平安银行 header hidden (TI fetch broke main page)`);
@@ -599,6 +687,54 @@ async function runSmoke(page, mock, errors) {
   } catch (e) {
     errors.push(`${label}: kline success content not visible: ${e.message}`);
   }
+
+  // 5b) indicator overlays visible with aligned fixture
+  const svg = page.locator('[data-testid="kline-chart-svg"]').first();
+  if (!(await svg.isVisible().catch(() => false))) {
+    errors.push(`${label}: kline svg not visible`);
+  } else {
+    const aria = await svg.getAttribute("aria-label");
+    if (aria !== "K 线及技术指标图") {
+      errors.push(`${label}: expected aria-label "K 线及技术指标图", got ${aria}`);
+    }
+  }
+  for (const id of [
+    "kline-overlay-sma20",
+    "kline-overlay-sma60",
+    "kline-overlay-bollinger-upper",
+    "kline-overlay-bollinger-lower",
+  ]) {
+    const n = await page.locator(`[data-testid="${id}"]`).count();
+    if (n < 1) errors.push(`${label}: missing overlay layer ${id}`);
+  }
+  if (!(await page.getByTestId("kline-overlay-legend").isVisible().catch(() => false))) {
+    errors.push(`${label}: overlay legend not visible`);
+  }
+  // path/polyline attributes must not contain NaN/Infinity
+  const overlayNodes = page.locator(
+    '[data-testid="kline-overlay-sma20"],[data-testid="kline-overlay-sma60"],[data-testid="kline-overlay-bollinger-upper"],[data-testid="kline-overlay-bollinger-lower"]',
+  );
+  const overlayCount = await overlayNodes.count();
+  for (let i = 0; i < overlayCount; i++) {
+    const pts = await overlayNodes.nth(i).getAttribute("points");
+    const cx = await overlayNodes.nth(i).getAttribute("cx");
+    const cy = await overlayNodes.nth(i).getAttribute("cy");
+    const blob = `${pts || ""} ${cx || ""} ${cy || ""}`;
+    if (/NaN|Infinity|-Infinity/i.test(blob)) {
+      errors.push(`${label}: overlay geometry contains non-finite value: ${blob}`);
+    }
+  }
+  // candle tooltip includes OHLC + metrics
+  const candle = page.locator('[data-testid="kline-candle"]').first();
+  if (await candle.count()) {
+    const tip = (await candle.locator("title").textContent().catch(() => "")) || "";
+    for (const key of ["开盘", "最高", "最低", "收盘", "SMA20", "SMA60", "BOLL 上轨", "BOLL 下轨"]) {
+      if (!tip.includes(key)) errors.push(`${label}: candle title missing ${key}: ${JSON.stringify(tip)}`);
+    }
+  } else {
+    errors.push(`${label}: no candle nodes for tooltip assertion`);
+  }
+
   const afterFirst = mock.state.klineCalls.length;
 
   // 6) collapse and re-expand without duplicate request
@@ -721,6 +857,47 @@ async function runSmoke(page, mock, errors) {
       errors.push(`${label}: race left page without 万科A header`);
     }
   }
+
+  // 10) Technical indicators unavailable must not break kline panel
+  await fillCode(page, "000001");
+  mock.setTechnicalIndicatorsStatus("unavailable");
+  await clickQuery(page);
+  try {
+    await waitForStockHeader(page, "000001", "平安银行");
+  } catch (e) {
+    errors.push(`${label}: re-query 000001 for TI unavailable failed: ${e.message}`);
+  }
+  mock.resetKlineCalls();
+  mock.setKlineError(false);
+  mock.setKlineDelay(0);
+  await expandKline(page);
+  try {
+    await page.getByText(/最近 \d+ 个交易日 OHLC/).waitFor({ state: "visible", timeout: 10000 });
+  } catch (e) {
+    errors.push(`${label}: kline missing when technical indicators unavailable: ${e.message}`);
+  }
+  const candlesWhenTiDown = await page.locator('[data-testid="kline-candle"]').count();
+  if (candlesWhenTiDown < 1) {
+    errors.push(`${label}: expected candles when technical indicators unavailable`);
+  }
+  for (const id of [
+    "kline-overlay-sma20",
+    "kline-overlay-sma60",
+    "kline-overlay-bollinger-upper",
+    "kline-overlay-bollinger-lower",
+  ]) {
+    if ((await page.locator(`[data-testid="${id}"]`).count()) > 0) {
+      errors.push(`${label}: overlay ${id} should not render when TI unavailable`);
+    }
+  }
+  if (await page.getByText("加载失败").first().isVisible().catch(() => false)) {
+    // only fail if kline panel specifically failed; check OHLC still present
+    if (!(await page.getByText(/最近 \d+ 个交易日 OHLC/).isVisible().catch(() => false))) {
+      errors.push(`${label}: kline panel degraded to failure because TI unavailable`);
+    }
+  }
+  // restore normal TI for cleanliness
+  mock.setTechnicalIndicatorsStatus("normal");
 }
 
 async function main() {

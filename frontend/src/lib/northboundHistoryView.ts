@@ -1,8 +1,7 @@
-/** 北向成交额历史序列纯函数（可单测，无 React，永不抛异常）。 */
 import type {
   NorthboundHistoryEnvelope,
   NorthboundHistoryPoint,
-} from "@/lib/api/types";
+} from "@/lib/recoveredMarketTypes";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -12,79 +11,41 @@ function isValidCalendarDate(value: string): boolean {
   const y = Number(ys);
   const m = Number(ms);
   const d = Number(ds);
-  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return false;
-  // Construct UTC date and require exact components (filters 2026-02-31 etc.).
   const dt = new Date(Date.UTC(y, m - 1, d));
-  return (
-    dt.getUTCFullYear() === y
-    && dt.getUTCMonth() === m - 1
-    && dt.getUTCDate() === d
-  );
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
 }
 
 function nonnegFinite(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
-  return value;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-/**
- * Normalize northbound turnover history series for charting.
- * Does not mutate the input envelope/series.
- */
 export function normalizeNorthboundHistorySeries(
   env: NorthboundHistoryEnvelope | null | undefined,
   maxPoints = 20,
 ): NorthboundHistoryPoint[] {
   if (!env || !Array.isArray(env.series) || maxPoints <= 0) return [];
-
   const out: NorthboundHistoryPoint[] = [];
   const seen = new Set<string>();
-
   for (const raw of env.series) {
-    if (!raw || typeof raw !== "object") continue;
-    const tradeDate = typeof raw.trade_date === "string" ? raw.trade_date.trim() : "";
-    if (!isValidCalendarDate(tradeDate)) continue;
-    if (seen.has(tradeDate)) continue; // first-wins
-
+    const tradeDate = typeof raw?.trade_date === "string" ? raw.trade_date.trim() : "";
+    if (!isValidCalendarDate(tradeDate) || seen.has(tradeDate)) continue;
     const total = nonnegFinite(raw.total_turnover_mn);
     if (total === null) continue;
-
-    const tradeCountRaw = nonnegFinite(raw.trade_count);
-    const etfRaw = nonnegFinite(raw.etf_turnover_mn);
-    // trade_count must be a finite non-negative integer-like value; otherwise null.
-    const tradeCount =
-      tradeCountRaw === null
-        ? null
-        : Number.isInteger(tradeCountRaw)
-          ? tradeCountRaw
-          : Math.round(tradeCountRaw) === tradeCountRaw
-            ? tradeCountRaw
-            : null;
-
+    const count = nonnegFinite(raw.trade_count);
+    const etf = nonnegFinite(raw.etf_turnover_mn);
     seen.add(tradeDate);
     out.push({
       trade_date: tradeDate,
       total_turnover_mn: total,
-      trade_count: tradeCount,
-      etf_turnover_mn: etfRaw,
+      trade_count: count !== null && Number.isInteger(count) ? count : null,
+      etf_turnover_mn: etf,
     });
   }
-
   out.sort((a, b) => a.trade_date.localeCompare(b.trade_date));
-  if (out.length > maxPoints) {
-    return out.slice(out.length - maxPoints);
-  }
-  return out;
+  return out.length > maxPoints ? out.slice(out.length - maxPoints) : out;
 }
 
-export type NorthboundTurnoverGeometryPoint = {
-  trade_date: string;
-  total_turnover_mn: number;
-  trade_count: number | null;
-  etf_turnover_mn: number | null;
-  x: number;
-  y: number;
-};
+export type NorthboundTurnoverGeometryPoint = NorthboundHistoryPoint & { x: number; y: number };
 
 export type NorthboundTurnoverGeometry = {
   width: number;
@@ -102,10 +63,6 @@ export type NorthboundTurnoverGeometry = {
   polyline: string;
 };
 
-/**
- * Pure geometry builder for the northbound turnover line chart.
- * Y-axis always starts at 0. All coordinates are finite.
- */
 export function buildNorthboundTurnoverGeometry(
   points: NorthboundHistoryPoint[],
   width = 640,
@@ -120,33 +77,16 @@ export function buildNorthboundTurnoverGeometry(
   const plotW = Math.max(1, w - padL - padR);
   const plotH = Math.max(1, h - padT - padB);
   const zeroY = padT + plotH;
-
   const safePoints = Array.isArray(points) ? points : [];
-  const values = safePoints.map((p) => p.total_turnover_mn).filter((v) => Number.isFinite(v) && v >= 0);
-  const rawMax = values.length ? Math.max(...values) : 0;
-  const maxValue = rawMax > 0 ? rawMax : 1; // prevent divide-by-zero; axis still starts at 0
-  const midValue = maxValue / 2;
-
-  const n = safePoints.length;
-  const geoPoints: NorthboundTurnoverGeometryPoint[] = safePoints.map((p, i) => {
-    const x =
-      n === 1
-        ? padL + plotW / 2
-        : padL + (plotW * i) / Math.max(1, n - 1);
-    const ratio = Math.min(1, Math.max(0, p.total_turnover_mn / maxValue));
-    const y = padT + plotH * (1 - ratio);
-    return {
-      trade_date: p.trade_date,
-      total_turnover_mn: p.total_turnover_mn,
-      trade_count: p.trade_count,
-      etf_turnover_mn: p.etf_turnover_mn,
-      x: Number.isFinite(x) ? x : padL,
-      y: Number.isFinite(y) ? y : zeroY,
-    };
+  const rawMax = safePoints.length ? Math.max(...safePoints.map((point) => point.total_turnover_mn)) : 0;
+  const scaleMax = rawMax > 0 ? rawMax : 1;
+  const geoPoints = safePoints.map((point, index) => {
+    const x = safePoints.length === 1
+      ? padL + plotW / 2
+      : padL + (plotW * index) / Math.max(1, safePoints.length - 1);
+    const ratio = Math.min(1, Math.max(0, point.total_turnover_mn / scaleMax));
+    return { ...point, x, y: padT + plotH * (1 - ratio) };
   });
-
-  const polyline = geoPoints.map((p) => `${p.x},${p.y}`).join(" ");
-
   return {
     width: w,
     height: h,
@@ -157,9 +97,9 @@ export function buildNorthboundTurnoverGeometry(
     plotW,
     plotH,
     zeroY,
-    maxValue: rawMax > 0 ? rawMax : 0,
-    midValue: rawMax > 0 ? midValue : 0,
+    maxValue: rawMax,
+    midValue: rawMax / 2,
     points: geoPoints,
-    polyline,
+    polyline: geoPoints.map((point) => `${point.x},${point.y}`).join(" "),
   };
 }

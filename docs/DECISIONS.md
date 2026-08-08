@@ -94,6 +94,7 @@
 - **决定**：在 `validator` 返回权威结果后，纯函数追加 `account_funding` 与 `account_metrics` 只读指标，**不改变**任何建议动作和比例。
 - **原因**：账户资金已支持手工维护，在引入可用现金约束之前，先建立不影响已有预测动作与执行计算的只读观测指标。
 - **落点**：`portfolio_advice_service._attach_account_funding_metrics`；`account_profile.get_account_profile_status`；`test_portfolio_advice_account_metrics.py`。
+- **更新（2026-08-07）**：P2-3 已引入执行阶段可用现金安全垫约束，见 `portfolio_advice_cash_constraint`；账户资金仍不进入模型输入/Prompt。
 
 ### 操作比例使用固定档位
 
@@ -112,6 +113,7 @@
 - **决定**：`execution_size_pct_of_holding` 语义为相对**该股当前持股数量**增减，不是账户总仓位/总资产/可用现金比例。
 - **原因**：当前未接入总资产与可用现金，无法做账户仓位算法。
 - **落点**：prompt 与 validator 账户比例话术拦截。
+- **更新（2026-08-07）**：P2-3 已引入执行阶段可用现金安全垫约束，见 `portfolio_advice_cash_constraint`；账户资金仍不进入模型输入/Prompt。
 
 ### 无历史 K 线不得编造技术位
 
@@ -130,6 +132,7 @@
 - **决定**：账户资金可手工维护；其数据不进入 advice Context、Prompt、Policy 或 Pipeline。Validator 完成后，Service 仅追加 `account_funding` 与 `account_metrics` 只读结果。
 - **原因**：阶段一只提供观测指标，不引入可用现金约束或账户仓位算法。
 - **落点**：`account_profile.py`、`portfolio_advice_account_metrics.py`、`portfolio_advice_service.py`。
+- **更新（2026-08-07）**：P2-3 已引入执行阶段可用现金安全垫约束，见 `portfolio_advice_cash_constraint`；账户资金仍不进入模型输入/Prompt。
 
 本轮 API Schema、Prompt 最终文本及 Legacy fallback 保持不变；Explainability、Evidence Layer、Signal Ledger 不在本轮实现范围内。
 
