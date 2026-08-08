@@ -39,6 +39,9 @@ function sectionTarget(root: HTMLElement, section: Section): HTMLElement | null 
     return identity?.closest<HTMLElement>(".card-surface, [class*='rounded']") || identity || active;
   }
 
+  const explicit = root.querySelector<HTMLElement>(`[data-workspace-section="${section.id}"]`);
+  if (explicit) return explicit;
+
   const heading = findHeading(root, section.headings);
   if (!heading) return null;
   return heading.closest<HTMLElement>(".card-surface, [data-workspace-section]") || heading;
@@ -92,7 +95,7 @@ export function StockWorkspaceShell({ children }: { children: ReactNode }) {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["data-active-code"],
+      attributeFilter: ["data-active-code", "data-workspace-section"],
     });
     return () => {
       cancelAnimationFrame(frame);
