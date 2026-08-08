@@ -18,7 +18,7 @@ import technical_indicators as ti
 
 logger = logging.getLogger(__name__)
 
-_technical_router = APIRouter(
+router = APIRouter(
     prefix="/api/market/technical-indicators",
     tags=["technical-indicators"],
 )
@@ -58,7 +58,7 @@ def _upstream_unavailable_envelope(code: str, period: str, fetched_at: str, warn
     }
 
 
-@_technical_router.get("")
+@router.get("")
 def get_technical_indicators(
     code: str = Query(...),
     period: str = Query("daily"),
@@ -135,8 +135,6 @@ def get_technical_indicators(
     return {"data": response_envelope}
 
 
-# app.py 继续只 include technical_indicators_router.router；这里聚合两个同级 router，
-# 从而保留当前 stable 的 app.py，同时恢复 Alert Rule API。
-router = APIRouter()
-router.include_router(_technical_router)
-router.include_router(alert_rule_router.router)
+# FastAPI 会在 app.include_router(router) 时复制这些 APIRoute。直接追加保留
+# Alert Rule 自己的 /api/alert-rules 路径与 tags，同时不触碰当前 stable app.py。
+router.routes.extend(alert_rule_router.router.routes)
