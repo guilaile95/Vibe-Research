@@ -1,8 +1,8 @@
 # Vibe-Research North Star Product Spec v0.1
 
-> 状态：**PRODUCT_DIRECTION_FROZEN_V0.1**  
-> 日期：2026-08-08  
-> 适用范围：产品方向、P0/P1/P2/P3 优先级与后续设计判断  
+> 状态：**PRODUCT_DIRECTION_FROZEN_V0.1**
+> 日期：2026-08-08
+> 适用范围：产品方向、P0/P1/P2/P3 优先级与后续设计判断
 > 说明：本文件记录用户在 2026-08-08 产品方向讨论中逐项确认的结论，作为后续会话恢复产品上下文的长期依据。它**不是代码实施授权**；当前授权仍以 `docs/NEXT_TASK.md` 为准。
 
 ---
