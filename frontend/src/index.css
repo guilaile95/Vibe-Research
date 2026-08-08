@@ -178,6 +178,17 @@
   100% { opacity: 1; transform: translateY(0); }
 }
 
+/* On sufficiently wide desktops the AI panel becomes a true second pane instead of covering source data. */
+@media (min-width: 1200px) {
+  main {
+    transition: padding-right 160ms ease;
+  }
+
+  html[data-ai-panel-open="true"] main {
+    padding-right: min(var(--vibe-ai-panel-width, 480px), 720px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-up,
   .animate-fade-up-1,
@@ -185,5 +196,9 @@
   .animate-fade-up-3,
   .skeleton {
     animation: none;
+  }
+
+  main {
+    transition: none;
   }
 }
