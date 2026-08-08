@@ -52,7 +52,7 @@ def _bootstrap(
     })
 
 
-def _trade(code: str, operation: str, price: float, qty: int, name: str = "测试股票", day: str = "2026-08-03", fee: float = 0.0) -> dict:
+def _trade(code: str, operation: str, price: float, qty: int, name: str = "测试股票", day: str = "2026-08-03", fee: float = 0.0, executed_at: str | None = None) -> dict:
     return trade_ledger_service.create_trade({
         "code": code,
         "name": name,
@@ -60,7 +60,7 @@ def _trade(code: str, operation: str, price: float, qty: int, name: str = "测�
         "execution_status": "full",
         "actual_price": price,
         "actual_quantity": qty,
-        "executed_at": f"{day}T09:30:00+08:00",
+        "executed_at": executed_at if executed_at is not None else f"{day}T09:30:00+08:00",
         "fee": fee,
     })
 
@@ -86,7 +86,9 @@ class TestBootstrap:
         assert result["positions"] == []
         derived = svc.derive_positions()
         assert derived["positions"] == []
-        assert derived["ledger_start"]["ledger_start_at"] == "2026-08-01"
+        assert derived["bootstrap_status"] == "BOOTSTRAPPED"
+        assert derived["canonical"] is True
+        assert derived["ledger_start"]["ledger_start_at"] == "2026-07-31T16:00:00.000000+00:00"
         assert derived["ledger_start"]["pre_vibe_history"] == "UNKNOWN"
 
     def test_single_legacy_holding(self):
@@ -225,6 +227,8 @@ class TestDerivationWithTrades:
         assert pos["origin"] == "POST_VIBE"
         derived = svc.derive_positions()
         assert derived["ledger_start"] is None
+        assert derived["bootstrap_status"] == "NOT_BOOTSTRAPPED"
+        assert derived["canonical"] is False
 
 
 class TestCorrection:
@@ -383,9 +387,11 @@ class TestLegacyDbCompatibility:
         trades = trade_ledger_service.list_trades()
         assert len(trades) == 1
         assert trades[0]["code"] == "600519"
-        # 推导正常
+        # 推导正常，且明确标注 canonical 边界未建立（旧库兼容读取 ≠ 正式 bootstrapped chain）
         derived = svc.derive_positions()
         assert derived["ledger_start"] is None
+        assert derived["bootstrap_status"] == "NOT_BOOTSTRAPPED"
+        assert derived["canonical"] is False
         assert {p["code"]: p["shares"] for p in derived["positions"]} == {"600519": 100}
         # 旧库已存在 post-Vibe 交易 → bootstrap 必须 fail closed 拒绝
         with pytest.raises(svc.LedgerNotEmptyError):
@@ -401,3 +407,268 @@ class TestLegacyDbCompatibility:
             "positions": [],
         })
         assert result["status"] == "BOOTSTRAPPED"
+        fresh_derived = svc.derive_positions()
+        assert fresh_derived["bootstrap_status"] == "BOOTSTRAPPED"
+        assert fresh_derived["canonical"] is True
+
+
+# ---------------------------------------------------------------------------
+# Review round 2: 空仓买入成本 UNKNOWN 修复
+# ---------------------------------------------------------------------------
+
+
+class TestFreshBuyCostKnown:
+    """BUY/ADD 前 shares==0 时必须建立已知成本（修复成本永久 UNKNOWN）。"""
+
+    def test_empty_bootstrap_then_buy_cost_known(self):
+        _bootstrap([])
+        _trade("600519", "buy", 10.0, 100)
+        pos = _derived("600519")
+        assert pos["cost_known"] is True
+        assert pos["cost_basis"] == 1000.0
+        assert pos["avg_cost"] == 10.0
+
+    def test_trade_only_compat_then_buy_cost_known(self):
+        # 无 bootstrap（trade-only 旧库兼容模式）首次 BUY 也要建立成本
+        _trade("600519", "buy", 10.0, 100)
+        pos = _derived("600519")
+        assert pos["cost_known"] is True
+        assert pos["cost_basis"] == 1000.0
+        assert pos["avg_cost"] == 10.0
+
+    def test_legacy_unknown_then_partial_add_stays_unknown(self):
+        _bootstrap([_legacy("600519", 100, None)])
+        _trade("600519", "add", 20.0, 50)
+        pos = _derived("600519")
+        assert pos["cost_known"] is False
+        assert pos["cost_basis"] is None
+        assert pos["avg_cost"] is None
+        assert pos["shares"] == 150
+
+    def test_legacy_unknown_full_sell_then_new_buy_cost_known(self):
+        _bootstrap([_legacy("600519", 100, None)])
+        _trade("600519", "sell", 15.0, 100, executed_at="2026-08-03T09:30:00+08:00")
+        _trade("600519", "buy", 20.0, 50, executed_at="2026-08-04T09:30:00+08:00")
+        pos = _derived("600519")
+        assert pos["shares"] == 50
+        assert pos["cost_known"] is True
+        assert pos["cost_basis"] == 1000.0
+        assert pos["avg_cost"] == 20.0
+
+
+# ---------------------------------------------------------------------------
+# Review round 2: Ledger Start 时间边界
+# ---------------------------------------------------------------------------
+
+
+class TestLedgerStartBoundary:
+    """ledger_start_at 是可解析的时间边界；边界前交易 fail closed。"""
+
+    def test_trade_after_ledger_start_allowed(self):
+        _bootstrap([_legacy("600519", 100, 10.0)])
+        _trade("600519", "buy", 10.0, 100, executed_at="2026-08-03T09:30:00+08:00")
+        pos = _derived("600519")
+        assert pos["shares"] == 200
+
+    def test_trade_at_exact_boundary_allowed(self):
+        # 边界定义：YYYY-MM-DD 按当日 00:00+08:00 = 前一日 16:00 UTC；00:00 整点交易允许
+        _bootstrap([_legacy("600519", 100, 10.0)], ledger_start_at="2026-08-03")
+        _trade("600519", "buy", 10.0, 100, executed_at="2026-08-03T00:00:00+08:00")
+        pos = _derived("600519")
+        assert pos["shares"] == 200
+
+    def test_trade_before_ledger_start_fail_closed(self):
+        _bootstrap([_legacy("600519", 100, 10.0)], ledger_start_at="2026-08-05")
+        _trade("600519", "buy", 10.0, 100, executed_at="2026-08-03T09:30:00+08:00")
+        with pytest.raises(svc.PositionDerivationError):
+            svc.derive_positions()
+
+    def test_invalid_ledger_start_rejected(self):
+        with pytest.raises(svc.PositionValidationError):
+            _bootstrap([], ledger_start_at="not-a-date")
+        with pytest.raises(svc.PositionValidationError):
+            _bootstrap([], ledger_start_at="2026-13-40")
+        with pytest.raises(svc.PositionValidationError):
+            _bootstrap([], ledger_start_at="2026-08-03T10:00:00")  # 无时区
+        with pytest.raises(svc.PositionValidationError):
+            _bootstrap([], ledger_start_at="")
+
+    def test_iso_ledger_start_accepted_and_normalized(self):
+        _bootstrap([], ledger_start_at="2026-08-03T10:00:00+08:00")
+        derived = svc.derive_positions()
+        assert derived["ledger_start"]["ledger_start_at"] == "2026-08-03T02:00:00.000000+00:00"
+
+    def test_not_bootstrapped_status_explicit(self):
+        # 旧库有 trade 无 ACCOUNT_OPENING → 明确 NOT_BOOTSTRAPPED / canonical=false
+        _trade("600519", "buy", 10.0, 100)
+        derived = svc.derive_positions()
+        assert derived["bootstrap_status"] == "NOT_BOOTSTRAPPED"
+        assert derived["canonical"] is False
+        assert derived["ledger_start"] is None
+
+
+# ---------------------------------------------------------------------------
+# Review round 2: Correction target 契约收紧
+# ---------------------------------------------------------------------------
+
+
+class TestCorrectionTargetContract:
+    """Correction 只能指向 derivation 真正支持的 target 状态。"""
+
+    def test_correction_account_opening_unsupported_field_rejected(self):
+        result = _bootstrap([])
+        opening_id = result["opening"]["event_id"]
+        with pytest.raises(svc.PositionValidationError):
+            svc.create_correction({
+                "target_event_id": opening_id,
+                "target_event_type": "account_event",
+                "after_payload": {"ledger_start_at": "2026-08-02"},  # 事实边界不可变
+            })
+        with pytest.raises(svc.PositionValidationError):
+            svc.create_correction({
+                "target_event_id": opening_id,
+                "target_event_type": "account_event",
+                "after_payload": {"shares": 100},  # ACCOUNT_OPENING 无 shares
+            })
+
+    def test_correction_account_opening_opening_cash_allowed(self):
+        result = _bootstrap([])
+        opening_id = result["opening"]["event_id"]
+        svc.create_correction({
+            "target_event_id": opening_id,
+            "target_event_type": "account_event",
+            "after_payload": {"opening_cash": 50000.0},
+            "reason": "期初现金修正",
+        })
+        derived = svc.derive_positions()
+        assert derived["ledger_start"]["opening_cash"] == 50000.0
+
+    def test_correction_correction_event_rejected(self):
+        result = _bootstrap([_legacy("600519", 100, 10.0)])
+        opening_id = result["positions"][0]["event_id"]
+        corr = svc.create_correction({
+            "target_event_id": opening_id,
+            "target_event_type": "account_event",
+            "after_payload": {"shares": 120},
+            "reason": "第一次修正",
+        })
+        with pytest.raises(svc.PositionValidationError):
+            svc.create_correction({
+                "target_event_id": corr["event"]["event_id"],
+                "target_event_type": "account_event",
+                "after_payload": {"shares": 130},
+            })
+
+    def test_unsupported_trade_target_rejected(self):
+        # not_executed 交易不参与推导，不接受修正
+        _bootstrap([])
+        not_executed = trade_ledger_service.create_trade({
+            "code": "600519",
+            "name": "测试股票",
+            "operation": "buy",
+            "execution_status": "not_executed",
+            "planned_price": 10.0,
+            "planned_quantity": 100,
+            "unexecuted_reason": "未成交",
+        })
+        with pytest.raises(svc.PositionValidationError):
+            svc.create_correction({
+                "target_event_id": not_executed["trade_id"],
+                "target_event_type": "trade",
+                "after_payload": {"actual_quantity": 10},
+            })
+
+    def test_legacy_opening_correction_pass(self):
+        result = _bootstrap([_legacy("600519", 100, 10.0)])
+        event_id = result["positions"][0]["event_id"]
+        svc.create_correction({
+            "target_event_id": event_id,
+            "target_event_type": "account_event",
+            "after_payload": {"shares": 120, "cost_basis": 12.0},
+            "reason": "期初修正",
+        })
+        pos = _derived("600519")
+        assert pos["shares"] == 120
+        assert pos["cost_basis"] == 1440.0
+
+    def test_all_accepted_corrections_derive_ok(self):
+        # 任意成功创建的 correction 后，derivation 不得因 target missing 失败
+        result = _bootstrap([_legacy("600519", 100, 10.0)])
+        opening_id = result["opening"]["event_id"]
+        position_id = result["positions"][0]["event_id"]
+        trade = _trade("600519", "buy", 10.0, 100)
+        svc.create_correction({
+            "target_event_id": position_id,
+            "target_event_type": "account_event",
+            "after_payload": {"shares": 120},
+        })
+        svc.create_correction({
+            "target_event_id": opening_id,
+            "target_event_type": "account_event",
+            "after_payload": {"opening_cash": 90000.0},
+        })
+        svc.create_correction({
+            "target_event_id": trade["trade_id"],
+            "target_event_type": "trade",
+            "after_payload": {"actual_quantity": 50},
+        })
+        derived = svc.derive_positions()
+        assert derived["derivation_status"] == "OK"
+        pos = next(p for p in derived["positions"] if p["code"] == "600519")
+        assert pos["shares"] == 170
+
+
+# ---------------------------------------------------------------------------
+# Review round 2: 连续 Correction 链式 before_payload
+# ---------------------------------------------------------------------------
+
+
+class TestChainedCorrections:
+    """第二次及后续 correction 的 before 必须反映应用先前 correction 后的有效值。"""
+
+    def test_chained_before_payload(self):
+        result = _bootstrap([_legacy("600519", 100, 10.0)])
+        event_id = result["positions"][0]["event_id"]
+
+        corr1 = svc.create_correction({
+            "target_event_id": event_id,
+            "target_event_type": "account_event",
+            "after_payload": {"shares": 120},
+            "reason": "修正为 120",
+        })
+        assert json.loads(corr1["event"]["before_payload"])["shares"] == 100
+        assert json.loads(corr1["event"]["after_payload"])["shares"] == 120
+
+        corr2 = svc.create_correction({
+            "target_event_id": event_id,
+            "target_event_type": "account_event",
+            "after_payload": {"shares": 130},
+            "reason": "修正为 130",
+        })
+        # before 必须是应用第一条修正后的有效值 120，不是原始 100
+        assert json.loads(corr2["event"]["before_payload"])["shares"] == 120
+        assert json.loads(corr2["event"]["after_payload"])["shares"] == 130
+
+        pos = _derived("600519")
+        assert pos["shares"] == 130
+        assert pos["cost_basis"] == 1300.0
+
+    def test_chained_cost_basis(self):
+        result = _bootstrap([_legacy("600519", 100, 10.0)])
+        event_id = result["positions"][0]["event_id"]
+        svc.create_correction({
+            "target_event_id": event_id,
+            "target_event_type": "account_event",
+            "after_payload": {"cost_basis": 12.0},
+            "reason": "成本修正",
+        })
+        corr2 = svc.create_correction({
+            "target_event_id": event_id,
+            "target_event_type": "account_event",
+            "after_payload": {"cost_basis": 15.0},
+            "reason": "成本再修正",
+        })
+        # 第二条 before 应反映第一条修正后的 cost_basis=12
+        assert json.loads(corr2["event"]["before_payload"])["cost_basis"] == 12.0
+        pos = _derived("600519")
+        assert pos["cost_basis"] == 1500.0

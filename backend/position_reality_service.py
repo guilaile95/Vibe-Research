@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 import account_event_store
@@ -38,7 +38,6 @@ _CORRECTION_EVENT_KEYS = frozenset({"shares", "cost_basis"})
 
 _MAX_REASON_LEN = 500
 _MAX_NOTE_LEN = 2000
-_MAX_START_LEN = 64
 _MAX_NAME_LEN = 64
 
 
@@ -85,6 +84,31 @@ def resolve_db_path():
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def _normalize_ledger_start(value: Any) -> str:
+    """Validate ledger_start_at and normalize to UTC ISO 8601.
+
+    接受 "YYYY-MM-DD"（按当日 00:00 北京时间作为市场日边界）或带时区的 ISO 8601 时间；
+    非法格式 / 非法日历日期 / 缺失时区 → 拒绝（PositionValidationError）。
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise PositionValidationError("ledger_start_at 必须是非空字符串")
+    text = value.strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        try:
+            y, m, d = map(int, text.split("-"))
+            dt = datetime(y, m, d, tzinfo=timezone(timedelta(hours=8)))
+        except ValueError as exc:
+            raise PositionValidationError("ledger_start_at 不是有效日历日期") from exc
+    else:
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise PositionValidationError("ledger_start_at 不是合法 ISO 8601 时间") from exc
+        if dt.tzinfo is None:
+            raise PositionValidationError("ledger_start_at 必须包含时区信息")
+    return dt.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _require_str(data: dict[str, Any], field: str, *, max_len: int | None = None) -> str:
@@ -171,7 +195,7 @@ def _validate_bootstrap_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if unknown:
         raise PositionValidationError(f"未知字段: {', '.join(sorted(unknown))}")
 
-    ledger_start_at = _require_str(payload, "ledger_start_at", max_len=_MAX_START_LEN)
+    ledger_start_at = _normalize_ledger_start(payload.get("ledger_start_at"))
     opening_cash = _optional_number(payload.get("opening_cash"), "opening_cash")
     note = _optional_str(payload.get("note"), "note", max_len=_MAX_NOTE_LEN)
 
@@ -311,6 +335,37 @@ _CORRECTION_ALLOWED = frozenset(
 )
 
 
+def _prior_effective_values(
+    db_path,
+    target_event_type: str,
+    target_event_id: str,
+    base: dict[str, Any],
+    keys: list[str],
+) -> dict[str, Any]:
+    """应用目标的所有先前 correction（按 created_at 升序）后，返回这些字段的有效当前值。
+
+    连续 correction 的 before_payload 必须反映"应用之前所有 correction 之后"的值，
+    而不是每次都从原始目标读取（保持 append-only，不修改旧 correction）。
+    """
+    events = account_event_store.list_events(db_path, event_type=_EVENT_CORRECTION)
+    prior = [
+        e for e in events
+        if e.get("target_event_id") == target_event_id
+        and e.get("target_event_type") == target_event_type
+    ]
+    prior.sort(key=lambda e: str(e.get("created_at") or ""))
+    current = dict(base)
+    for corr in prior:
+        try:
+            after = json.loads(corr["after_payload"])
+        except (TypeError, ValueError) as exc:
+            raise PositionValidationError("已有 correction 数据损坏") from exc
+        if isinstance(after, dict):
+            for k, v in after.items():
+                current[k] = v
+    return {k: current.get(k) for k in keys}
+
+
 def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
     """Append-only correction event; never silent-overwrites history."""
     if not isinstance(payload, dict):
@@ -329,52 +384,67 @@ def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(after_payload, dict) or not after_payload:
         raise PositionValidationError("after_payload 必须是非空对象")
 
-    if target_event_type == "trade":
-        allowed = _CORRECTION_TRADE_KEYS
-    else:
-        allowed = _CORRECTION_EVENT_KEYS
-    unknown_after = set(after_payload.keys()) - allowed
-    if unknown_after:
-        raise PositionValidationError(
-            f"after_payload 含非法字段: {', '.join(sorted(unknown_after))}"
-        )
-
     reason = _optional_str(payload.get("reason"), "reason", max_len=_MAX_REASON_LEN)
     note = _optional_str(payload.get("note"), "note", max_len=_MAX_NOTE_LEN)
 
-    # Validate corrected values and snapshot current values
     db_path = resolve_db_path()
+
+    # 确认目标状态是 correction engine 真正能够应用的状态，并据此决定允许字段
     if target_event_type == "trade":
         record = trade_ledger_store.get_record(db_path, target_event_id)
         if record is None:
             raise CorrectionTargetNotFoundError()
         if record.get("voided_at") is not None:
             raise PositionValidationError("目标交易已作废，禁止修正已作废记录")
-        before: dict[str, Any] = {}
-        for key in after_payload:
-            if key == "actual_quantity":
-                _require_int(after_payload[key], "actual_quantity", min_value=0)
-                before[key] = record.get("actual_quantity")
-            elif key == "actual_price":
-                _require_number(after_payload[key], "actual_price")
-                before[key] = record.get("actual_price")
-            elif key in ("fee", "other_cost"):
-                _require_number(after_payload[key], key)
-                before[key] = record.get(key)
+        if (
+            record.get("execution_status") == "not_executed"
+            or (record.get("actual_quantity") or 0) <= 0
+        ):
+            raise PositionValidationError(
+                "目标交易不在可修正状态（未成交/数量为 0 的交易不参与推导）"
+            )
+        allowed = _CORRECTION_TRADE_KEYS
+        base: dict[str, Any] = record
     else:
         event = account_event_store.get_event(db_path, target_event_id)
         if event is None:
             raise CorrectionTargetNotFoundError()
         if event.get("voided_at") is not None:
             raise PositionValidationError("目标事件已作废，禁止修正已作废记录")
-        before = {}
-        for key in after_payload:
-            if key == "shares":
-                _require_int(after_payload[key], "shares", min_value=0)
-                before[key] = event.get("shares")
-            elif key == "cost_basis":
-                _optional_number(after_payload[key], "cost_basis")
-                before[key] = event.get("cost_basis")
+        target_type = event.get("event_type")
+        if target_type == _EVENT_CORRECTION:
+            raise PositionValidationError("不允许修正 CORRECTION 事件")
+        if target_type == _EVENT_LEGACY_OPENING:
+            allowed = _CORRECTION_EVENT_KEYS  # shares / cost_basis
+        elif target_type == _EVENT_ACCOUNT_OPENING:
+            allowed = frozenset({"opening_cash"})  # ledger_start_at 不可变（事实边界）
+        else:
+            raise PositionValidationError(f"不支持的修正目标事件类型: {target_type}")
+        base = event
+
+    unknown_after = set(after_payload.keys()) - allowed
+    if unknown_after:
+        raise PositionValidationError(
+            f"after_payload 含非法字段: {', '.join(sorted(unknown_after))}"
+        )
+
+    # 校验修正后的值（白名单内字段的类型与范围）
+    for key, value in after_payload.items():
+        if key == "shares":
+            _require_int(value, "shares", min_value=0)
+        elif key == "cost_basis":
+            _optional_number(value, "cost_basis")
+        elif key == "opening_cash":
+            _optional_number(value, "opening_cash")
+        elif key == "actual_quantity":
+            _require_int(value, "actual_quantity", min_value=0)
+        elif key in ("actual_price", "fee", "other_cost"):
+            _require_number(value, key)
+
+    # before = 应用所有先前 correction 后的有效当前值（append-only 链式，不读原始目标）
+    before = _prior_effective_values(
+        db_path, target_event_type, target_event_id, base, list(after_payload.keys())
+    )
 
     event_record = {
         "event_id": _new_id("aev"),
@@ -451,17 +521,46 @@ def derive_positions() -> dict[str, Any]:
     if len(openings) > 1:
         raise PositionDerivationError("存在多个 ACCOUNT_OPENING 事件，账本不一致")
 
+    # Ledger boundary：ACCOUNT_OPENING 定义 Vibe 接管起点；
+    # 任何有效交易若 executed_at 早于边界 → fail closed，不得偷偷按 POST_VIBE 应用。
+    ledger_start_ts: datetime | None = None
+    if openings:
+        raw_start = openings[0].get("ledger_start_at")
+        if not isinstance(raw_start, str) or not raw_start:
+            raise PositionDerivationError("ACCOUNT_OPENING 缺少 ledger_start_at")
+        try:
+            parsed_start = datetime.fromisoformat(raw_start.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise PositionDerivationError("ACCOUNT_OPENING ledger_start_at 无法解析") from exc
+        if parsed_start.tzinfo is None:
+            raise PositionDerivationError("ACCOUNT_OPENING ledger_start_at 缺少时区信息")
+        ledger_start_ts = parsed_start
+
     corrections = _load_corrections(events)
 
     events_by_key: dict[str, dict[str, Any]] = {}
     for ev in events:
-        if ev["event_type"] == _EVENT_LEGACY_OPENING:
+        if ev["event_type"] in (_EVENT_LEGACY_OPENING, _EVENT_ACCOUNT_OPENING):
             events_by_key[f"account_event:{ev['event_id']}"] = dict(ev)
     for t in trades:
         if t["execution_status"] == "not_executed":
             continue
         if (t.get("actual_quantity") or 0) <= 0:
             continue
+        if ledger_start_ts is not None:
+            executed_raw = str(t.get("executed_at") or "")
+            try:
+                executed_ts = datetime.fromisoformat(executed_raw.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise PositionDerivationError(
+                    f"交易时间无法解析: {t.get('code')}"
+                ) from exc
+            if executed_ts.tzinfo is None:
+                raise PositionDerivationError(f"交易时间缺少时区: {t.get('code')}")
+            if executed_ts < ledger_start_ts:
+                raise PositionDerivationError(
+                    f"交易时间早于 ledger 起点，账本推导失败: {t.get('code')}"
+                )
         events_by_key[f"trade:{t['trade_id']}"] = dict(t)
 
     _apply_corrections(events_by_key, corrections)
@@ -483,6 +582,8 @@ def derive_positions() -> dict[str, Any]:
     states: dict[str, dict[str, Any]] = {}
     for rank, _ts, _key, event in sequence:
         if _key.startswith("account_event:"):
+            if event["event_type"] != _EVENT_LEGACY_OPENING:
+                continue  # ACCOUNT_OPENING 只提供 ledger 边界头，不参与持仓状态
             code = event["code"]
             if not code:
                 raise PositionDerivationError("legacy opening 事件缺少 code")
@@ -542,10 +643,14 @@ def derive_positions() -> dict[str, Any]:
 
         st["origin"].add("POST_VIBE")
         if operation in ("buy", "add"):
-            st["shares"] += qty
-            if st["cost_known"]:
+            if st["shares"] == 0:
+                # 空仓首次 BUY/ADD：建立已知成本（修复 UNKNOWN 永久化问题）
+                st["cost_known"] = True
+                st["cost"] = price * qty + fee + other
+            elif st["cost_known"]:
                 st["cost"] = st["cost"] + price * qty + fee + other
-            # cost_known False → cost 保持 None（UNKNOWN stays UNKNOWN）
+            # shares > 0 且原成本 UNKNOWN → ADD 后仍保持 UNKNOWN
+            st["shares"] += qty
         elif operation in ("reduce", "sell"):
             if qty > st["shares"]:
                 raise PositionDerivationError(
@@ -603,6 +708,9 @@ def derive_positions() -> dict[str, Any]:
     ledger_start: dict[str, Any] | None = None
     if openings:
         opening = openings[0]
+        corrected_opening = events_by_key.get(f"account_event:{opening['event_id']}")
+        if corrected_opening is not None:
+            opening = corrected_opening
         ledger_start = {
             "ledger_start_at": opening.get("ledger_start_at"),
             "opening_cash": opening.get("opening_cash"),
@@ -612,6 +720,8 @@ def derive_positions() -> dict[str, Any]:
 
     return {
         "derivation_status": "OK",
+        "bootstrap_status": "BOOTSTRAPPED" if openings else "NOT_BOOTSTRAPPED",
+        "canonical": bool(openings),
         "ledger_start": ledger_start,
         "positions": positions,
         "data_limitations": limitations,
@@ -697,6 +807,8 @@ def reconcile_positions() -> dict[str, Any]:
     }
     return {
         "derivation_status": "OK",
+        "bootstrap_status": derived["bootstrap_status"],
+        "canonical": derived["canonical"],
         "as_of": _utc_now(),
         "items": items,
         "summary": summary,

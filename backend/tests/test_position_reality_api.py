@@ -176,6 +176,8 @@ class TestDerivedApi:
         assert resp.status_code == 200
         data = resp.json()["data"]
         assert data["derivation_status"] == "OK"
+        assert data["bootstrap_status"] == "BOOTSTRAPPED"
+        assert data["canonical"] is True
         assert data["ledger_start"]["pre_vibe_history"] == "UNKNOWN"
         codes = {p["code"] for p in data["positions"]}
         assert codes == {"600519", "000001"}
@@ -185,7 +187,16 @@ class TestDerivedApi:
         assert resp.status_code == 200
         data = resp.json()["data"]
         assert data["ledger_start"] is None
+        assert data["bootstrap_status"] == "NOT_BOOTSTRAPPED"
+        assert data["canonical"] is False
         assert data["positions"] == []
+
+    def test_bootstrap_invalid_ledger_start_422(self, client):
+        resp = client.post("/api/position/bootstrap-commit", json={
+            "ledger_start_at": "not-a-date",
+            "positions": [],
+        })
+        assert resp.status_code == 422
 
 
 class TestReconciliationApi:
