@@ -1,8 +1,9 @@
 """Market Regime v0.1 专项测试（全部 Mock，不联网）。
 
 覆盖：RISK_ON / RISK_OFF / STRESSED / NEUTRAL / UNKNOWN /
-部分缺失降级 / stale 降级 / 强冲突不激进 / 确定性重复执行 /
-reason codes 与规则一致 / API contract / 数据截止时间。
+部分缺失降级 / stale 降级 / freshness UNKNOWN fail-closed /
+强冲突不激进（含 EMOTION_STRESSED 冲突）/ 确定性重复执行 /
+reason codes 与规则一致 / API contract / 时间语义（P1 修正）。
 """
 from __future__ import annotations
 
@@ -19,12 +20,8 @@ from market_regime import BEIJING, derive_market_regime
 client = TestClient(app_module.app)
 
 _NOW = datetime(2026, 8, 7, 16, 0, 0, tzinfo=BEIJING)  # 15:30 收盘后 30 分钟
-_FRESH_FETCHED_AT = "2026-08-07 15:30:00"
-
-
-def _recent_fetched_at() -> str:
-    """相对真实当前时间的新鲜获取时间（API 路径用真实 now，避免误判 stale）。"""
-    return (datetime.now(BEIJING) - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
+_FRESH_DATA_TIME = "2026-08-07 15:30:00"
+_TRADE_DATE = "2026-08-07"
 
 
 def _breadth_env(
@@ -33,7 +30,9 @@ def _breadth_env(
     up_ratio=0.50,
     total_amount=1.0e12,
     amount_valid_count=4900,
-    fetched_at: str | None = _FRESH_FETCHED_AT,
+    fetched_at: str | None = "2026-08-07 15:35:00",
+    data_time: str | None = _FRESH_DATA_TIME,
+    trade_date: str | None = None,
     data: dict | None = None,
 ) -> dict:
     if data is None and status != "unavailable":
@@ -54,8 +53,8 @@ def _breadth_env(
     return {
         "status": status,
         "source": "eastmoney_push2",
-        "trade_date": None,
-        "data_time": None,
+        "trade_date": trade_date,
+        "data_time": data_time,
         "fetched_at": fetched_at,
         "is_stale": False,
         "warnings": [],
@@ -71,7 +70,7 @@ def _emotion(
     seal_rate: float | None = 0.7,
     promotion_rate: float | None = 0.2,
     max_boards: int = 5,
-    date: str | None = "2026-08-07",
+    date: str | None = _TRADE_DATE,
 ) -> dict:
     return {
         "date": date,
@@ -89,6 +88,11 @@ def _emotion(
     }
 
 
+def _recent_fetched_at() -> str:
+    """相对真实当前时间的新鲜获取时间（API 路径用真实 now，避免误判 stale）。"""
+    return (datetime.now(BEIJING) - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _codes(payload: dict) -> list[str]:
     return [r["code"] for r in payload["reasons"]]
 
@@ -98,7 +102,7 @@ def _codes(payload: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 def test_risk_on_clear():
     payload = derive_market_regime(
-        _breadth_env(up_ratio=0.72, total_amount=1.5e12),
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, trade_date=_TRADE_DATE),
         _emotion(zt=150),
         now=_NOW,
     )
@@ -106,8 +110,8 @@ def test_risk_on_clear():
     assert payload["risk_appetite"] == "HIGH"
     assert payload["confidence"] == "HIGH"
     assert payload["is_stale"] is False
-    assert payload["trade_date"] == "2026-08-07"
-    assert payload["data_cutoff"] == _FRESH_FETCHED_AT
+    assert payload["trade_date"] == _TRADE_DATE
+    assert payload["data_cutoff"] == _FRESH_DATA_TIME
     codes = _codes(payload)
     assert "BREADTH_STRONG" in codes
     assert "RISK_APPETITE_HIGH" in codes
@@ -168,6 +172,17 @@ def test_stressed_high_break_rate():
         now=_NOW,
     )
     assert payload["market_regime"] == "STRESSED"
+
+
+def test_stressed_with_weak_breadth_stays_stressed():
+    """宽度弱 + 情绪承压 → 仍为 STRESSED（不被冲突规则降级为 NEUTRAL）。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.30, total_amount=1.5e12),
+        _emotion(zt=150, dt=45, break_rate=0.6),
+        now=_NOW,
+    )
+    assert payload["market_regime"] == "STRESSED"
+    assert "EMOTION_STRESSED" in _codes(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -253,11 +268,22 @@ def test_breadth_partial_envelope_lower_confidence():
 
 
 # ---------------------------------------------------------------------------
-# 7. stale → is_stale + Confidence 降级；freshness 缺失 → fail-closed stale
+# 7. 时间语义（P1）：freshness 只以可靠 data_time 为准
 # ---------------------------------------------------------------------------
-def test_stale_downgrades_confidence():
+def test_fresh_data_not_stale():
     payload = derive_market_regime(
-        _breadth_env(up_ratio=0.72, total_amount=1.5e12, fetched_at="2026-08-06 09:00:00"),
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12),
+        _emotion(zt=150),
+        now=_NOW,
+    )
+    assert payload["is_stale"] is False
+    assert payload["confidence"] == "HIGH"
+
+
+def test_stale_data_time_downgrades_confidence():
+    """data_time 超过阈值 → stale；data_cutoff 为 data_time（≠ fetched_at）。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, data_time="2026-08-06 09:00:00"),
         _emotion(zt=150),
         now=_NOW,
     )
@@ -265,11 +291,12 @@ def test_stale_downgrades_confidence():
     assert payload["confidence"] == "MEDIUM"  # HIGH → MEDIUM
     assert "DATA_STALE" in _codes(payload)
     assert payload["data_cutoff"] == "2026-08-06 09:00:00"  # 不伪装实时
+    assert payload["data_cutoff"] != payload["fetched_at"]
 
 
-def test_stale_with_other_downgrades_stays_low():
+def test_stale_with_other_downgrades_stays_medium():
     payload = derive_market_regime(
-        _breadth_env(up_ratio=0.30, total_amount=7.0e11, fetched_at="2026-08-06 09:00:00"),
+        _breadth_env(up_ratio=0.30, total_amount=7.0e11, data_time="2026-08-06 09:00:00"),
         _emotion(zt=12),
         now=_NOW,
     )
@@ -278,23 +305,68 @@ def test_stale_with_other_downgrades_stays_low():
     assert payload["confidence"] == "MEDIUM"
 
 
-def test_missing_fetched_at_fail_closed_stale():
+def test_missing_data_time_fail_closed_freshness_unknown():
+    """（生产语义 A/C）fetched_at 很新但 data_time 缺失 → 不得声明 fresh：
+    is_stale=True + DATA_FRESHNESS_UNKNOWN + Confidence 降级 + data_cutoff=None。"""
     payload = derive_market_regime(
-        _breadth_env(up_ratio=0.72, total_amount=1.5e12, fetched_at=None),
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, data_time=None),
         _emotion(zt=150),
         now=_NOW,
     )
     assert payload["is_stale"] is True
-    assert "DATA_STALE" in _codes(payload)
+    assert payload["data_cutoff"] is None
+    assert payload["confidence"] == "MEDIUM"
+    assert "DATA_FRESHNESS_UNKNOWN" in _codes(payload)
+    assert "DATA_STALE" not in _codes(payload)  # 语义是 freshness UNKNOWN，不是时间过期
+    assert payload["components"]["breadth"]["fresh"] is False
 
 
-def test_fresh_data_not_stale():
+def test_invalid_data_time_not_echoed_as_cutoff():
+    """（生产语义 D）不可解析时间戳 → data_cutoff=None，不原样输出。"""
     payload = derive_market_regime(
-        _breadth_env(up_ratio=0.72, total_amount=1.5e12),
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, data_time="not-a-timestamp"),
         _emotion(zt=150),
         now=_NOW,
     )
-    assert payload["is_stale"] is False
+    assert payload["data_cutoff"] is None
+    assert payload["is_stale"] is True
+    assert "DATA_FRESHNESS_UNKNOWN" in _codes(payload)
+
+
+def test_future_data_time_not_reliable():
+    """data_time 在未来 → 视为不可靠（fail closed），不声明 fresh。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, data_time="2026-08-08 09:00:00"),
+        _emotion(zt=150),
+        now=_NOW,
+    )
+    assert payload["data_cutoff"] is None
+    assert payload["is_stale"] is True
+    assert "DATA_FRESHNESS_UNKNOWN" in _codes(payload)
+
+
+def test_fetched_at_is_independent_field_not_cutoff():
+    """（生产语义 B）fetched_at 与 data_cutoff 可不同；fetched_at 独立保留为 retrieval 时间。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, fetched_at="2026-08-07 15:35:00"),
+        _emotion(zt=150),
+        now=_NOW,
+    )
+    assert payload["fetched_at"] == "2026-08-07 15:35:00"
+    assert payload["data_cutoff"] == _FRESH_DATA_TIME  # "2026-08-07 15:30:00"
+    assert payload["data_cutoff"] != payload["fetched_at"]
+
+
+def test_fresh_fetched_at_without_data_time_not_fresh():
+    """（生产语义 A）fetched_at 很新但无 data_time → 不得声明可靠 fresh cutoff。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, data_time=None),
+        _emotion(zt=150),
+        now=_NOW,
+    )
+    assert payload["is_stale"] is True
+    assert payload["confidence"] == "MEDIUM"
+    assert "DATA_FRESHNESS_UNKNOWN" in _codes(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +388,49 @@ def test_strong_conflict_neutral_low_confidence(up_ratio, zt):
     assert payload["market_regime"] == "NEUTRAL"
     assert payload["confidence"] == "LOW"
     assert "SIGNAL_CONFLICT" in _codes(payload)
+
+
+# ---------------------------------------------------------------------------
+# 8b. EMOTION_STRESSED 参与冲突裁决（P1 修正）：不得输出 RISK_ON
+# ---------------------------------------------------------------------------
+def test_stressed_conflicts_with_risk_on_high_dt():
+    """（P1-A）宽度强 + 偏好高 + 流动性强 + 跌停 >= 30 → NEUTRAL / LOW，NOT RISK_ON。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12),
+        _emotion(zt=150, dt=45, break_rate=0.3),
+        now=_NOW,
+    )
+    assert payload["market_regime"] == "NEUTRAL"
+    assert payload["market_regime"] != "RISK_ON"
+    assert payload["confidence"] == "LOW"
+    codes = _codes(payload)
+    assert "EMOTION_STRESSED" in codes
+    assert "SIGNAL_CONFLICT" in codes
+
+
+def test_stressed_conflicts_with_risk_on_high_break_rate():
+    """（P1-B）宽度强 + 偏好高 + 流动性强 + 炸板率 >= 50% → NEUTRAL / LOW，NOT RISK_ON。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12),
+        _emotion(zt=150, dt=8, break_rate=0.6),
+        now=_NOW,
+    )
+    assert payload["market_regime"] == "NEUTRAL"
+    assert payload["market_regime"] != "RISK_ON"
+    assert payload["confidence"] == "LOW"
+    assert "EMOTION_STRESSED" in _codes(payload)
+    assert "SIGNAL_CONFLICT" in _codes(payload)
+
+
+def test_stressed_not_conflict_without_positive_breadth():
+    """（P1-C 反向）情绪承压但宽度不强的积极组合 → 规则仍按既有优先级处理，不误报冲突。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.50, total_amount=1.5e12),
+        _emotion(zt=150, dt=45, break_rate=0.6),
+        now=_NOW,
+    )
+    assert payload["market_regime"] == "NEUTRAL"
+    assert "SIGNAL_CONFLICT" not in _codes(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +467,7 @@ def test_reason_codes_exact_for_unknown_core():
 
 def test_reason_codes_exact_for_risk_on():
     payload = derive_market_regime(
-        _breadth_env(up_ratio=0.72, total_amount=1.5e12),
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, trade_date=_TRADE_DATE),
         _emotion(zt=150),
         now=_NOW,
     )
@@ -364,25 +479,45 @@ def test_reason_codes_exact_for_risk_on():
     ]
 
 
+def test_reason_codes_exact_when_freshness_unknown():
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, data_time=None),
+        _emotion(zt=150),
+        now=_NOW,
+    )
+    assert _codes(payload) == [
+        "BREADTH_STRONG",
+        "RISK_APPETITE_HIGH",
+        "LIQUIDITY_STRONG",
+        "EMOTION_NORMAL",
+        "DATA_FRESHNESS_UNKNOWN",
+        "TRADE_DATE_UNKNOWN",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 11. API contract
 # ---------------------------------------------------------------------------
 def test_api_contract_normal(monkeypatch):
-    monkeypatch.setattr(
-        market, "get_market_breadth",
-        lambda: _breadth_env(up_ratio=0.72, total_amount=1.5e12, fetched_at=_recent_fetched_at()),
+    env = _breadth_env(
+        up_ratio=0.72, total_amount=1.5e12, trade_date=_TRADE_DATE,
+        data_time=_recent_fetched_at(),
     )
+    monkeypatch.setattr(market, "get_market_breadth", lambda: env)
     monkeypatch.setattr(market, "get_short_term_emotion", lambda: _emotion(zt=150))
     r = client.get("/api/market/regime")
     assert r.status_code == 200
     data = r.json()["data"]
     assert set(data) >= {
         "market_regime", "risk_appetite", "confidence", "is_stale",
-        "trade_date", "data_cutoff", "components", "reasons",
+        "trade_date", "data_cutoff", "fetched_at", "components", "reasons",
     }
     assert data["market_regime"] == "RISK_ON"
     assert data["risk_appetite"] == "HIGH"
     assert data["confidence"] == "HIGH"
+    assert data["trade_date"] == _TRADE_DATE
+    assert data["data_cutoff"] == env["data_time"]
+    assert data["fetched_at"] == env["fetched_at"]
     assert set(data["components"]) == {"breadth", "speculation", "liquidity", "emotion"}
     for comp in data["components"].values():
         assert set(comp) >= {"state", "available", "fresh", "raw"}
@@ -413,7 +548,7 @@ def test_api_unexpected_error_502(monkeypatch):
 def test_api_emotion_exception_falls_back(monkeypatch):
     monkeypatch.setattr(
         market, "get_market_breadth",
-        lambda: _breadth_env(up_ratio=0.50, total_amount=1.0e12, fetched_at=_recent_fetched_at()),
+        lambda: _breadth_env(up_ratio=0.50, total_amount=1.0e12, data_time=_recent_fetched_at()),
     )
 
     def boom():
@@ -430,15 +565,39 @@ def test_api_emotion_exception_falls_back(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 12. trade_date / data_cutoff 诚实性
+# 12. trade_date / data_cutoff 诚实性（P1：多来源一致才确认）
 # ---------------------------------------------------------------------------
-def test_trade_date_from_emotion():
+def test_trade_date_confirmed_when_sources_agree():
+    """两来源日期一致 → 才输出统一 trade_date。"""
     payload = derive_market_regime(
-        _breadth_env(up_ratio=0.72, total_amount=1.5e12),
-        _emotion(zt=150, date="2026-08-07"),
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, trade_date=_TRADE_DATE),
+        _emotion(zt=150, date=_TRADE_DATE),
         now=_NOW,
     )
-    assert payload["trade_date"] == "2026-08-07"
+    assert payload["trade_date"] == _TRADE_DATE
+    assert "TRADE_DATE_UNKNOWN" not in _codes(payload)
+
+
+def test_trade_date_not_promoted_from_emotion_only():
+    """（生产语义 E）emotion 有 date、breadth 无可靠 trade_date → 不无条件提升。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, trade_date=None),
+        _emotion(zt=150, date=_TRADE_DATE),
+        now=_NOW,
+    )
+    assert payload["trade_date"] is None
+    assert "TRADE_DATE_UNKNOWN" in _codes(payload)
+
+
+def test_trade_date_conflict_between_sources():
+    """两来源日期冲突 → 统一 trade_date 保持 None，不伪造。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, trade_date="2026-08-06"),
+        _emotion(zt=150, date=_TRADE_DATE),
+        now=_NOW,
+    )
+    assert payload["trade_date"] is None
+    assert "TRADE_DATE_UNKNOWN" in _codes(payload)
 
 
 def test_trade_date_unknown_when_no_date():
@@ -453,7 +612,7 @@ def test_trade_date_unknown_when_no_date():
 
 def test_data_cutoff_missing_not_fabricated():
     payload = derive_market_regime(
-        _breadth_env(up_ratio=0.72, total_amount=1.5e12, fetched_at=None),
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, data_time=None),
         _emotion(zt=150),
         now=_NOW,
     )

@@ -6,11 +6,20 @@
 
 本模块只做「派生状态」，不抓取任何新数据；同一输入永远产生同一输出。
 
+时间语义（P1 修正后）：
+- ``fetched_at`` 只是 retrieval/fetch 时间，**不**用于判断行情新鲜度，也不作为 data_cutoff；
+- 行情新鲜度只以可靠的 source ``data_time`` 为准：缺失 / 不可解析 / 在未来 → freshness
+  UNKNOWN（fail closed：``is_stale=True`` + ``DATA_FRESHNESS_UNKNOWN`` + Confidence 降级），
+  绝不声明 fresh；
+- ``data_cutoff`` 只能来自可靠 ``data_time``，否则为 ``None``；
+- top-level ``trade_date`` 需要多来源日期一致才确认（当前 breadth.trade_date 恒为 None，
+  因此生产环境下 trade_date 保持 None，不伪造统一日期）。
+
 输出统一信封（v0.1）：
 - market_regime ∈ RISK_ON / NEUTRAL / RISK_OFF / STRESSED / UNKNOWN
 - risk_appetite ∈ HIGH / MEDIUM / LOW / UNKNOWN
 - confidence ∈ HIGH / MEDIUM / LOW
-- is_stale / trade_date / data_cutoff / components / reasons
+- is_stale / trade_date / data_cutoff / fetched_at / components / reasons
 
 Market Regime 不是 BUY/SELL 信号；不因为环境好产生买入建议，
 也不因为环境差产生卖出建议。Sector Regime 不在本层范围。
@@ -34,15 +43,18 @@ _STATE_STRONG = "STRONG"
 _STATE_NEUTRAL = "NEUTRAL"
 _STATE_WEAK = "WEAK"
 _STATE_UNKNOWN = "UNKNOWN"
+_STATE_STRESSED = "STRESSED"
+_STATE_NORMAL = "NORMAL"
 
-# ---- 确定性阈值（v0.1 常量，未来校准属后续任务）----
-_STALE_AFTER_SECONDS = 4 * 3600      # 数据获取超过 4 小时视为 stale
-_LIQUIDITY_STRONG_MIN = 1.2e12       # 总成交额 >= 1.2 万亿 → 流动性强
-_LIQUIDITY_WEAK_MAX = 0.8e12         # 总成交额 < 8000 亿 → 流动性弱
-_STRESS_DT_MIN = 30                  # 跌停家数 >= 30 → 情绪承压
-_STRESS_BREAK_RATE = 0.50            # 炸板率 >= 50% → 情绪承压
+# ---- 确定性阈值（PROVISIONAL_HEURISTIC_V0_1：v0.1 固定常量，校准属后续任务）----
+_STALE_AFTER_SECONDS = 4 * 3600      # data_time 距今超过 4 小时 → stale（PROVISIONAL_HEURISTIC_V0_1）
+_LIQUIDITY_STRONG_MIN = 1.2e12       # 总成交额 >= 1.2 万亿 → 流动性强（PROVISIONAL_HEURISTIC_V0_1）
+_LIQUIDITY_WEAK_MAX = 0.8e12         # 总成交额 < 8000 亿 → 流动性弱（PROVISIONAL_HEURISTIC_V0_1）
+_STRESS_DT_MIN = 30                  # 跌停家数 >= 30 → 情绪承压（PROVISIONAL_HEURISTIC_V0_1）
+_STRESS_BREAK_RATE = 0.50            # 炸板率 >= 50% → 情绪承压（PROVISIONAL_HEURISTIC_V0_1）
 
-_FETCHED_AT_FORMAT = "%Y-%m-%d %H:%M:%S"
+_TIME_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S")
+_DATE_FORMAT = "%Y-%m-%d"
 
 # ---- reason code → 中文展示文本（全部确定性，可审计）----
 _REASON_MESSAGES = {
@@ -64,8 +76,9 @@ _REASON_MESSAGES = {
     "EMOTION_UNAVAILABLE": "短线情绪数据不可用",
     "SIGNAL_CONFLICT": "市场信号相互冲突，不强行判断方向",
     "DATA_PARTIAL": "部分数据缺失，判断置信度下降",
-    "DATA_STALE": "数据已过期（获取时间超过 4 小时）",
-    "TRADE_DATE_UNKNOWN": "无法确认交易日期",
+    "DATA_FRESHNESS_UNKNOWN": "无可靠行情数据时间，无法确认新鲜度",
+    "DATA_STALE": "行情数据已过期（数据时间超过 4 小时）",
+    "TRADE_DATE_UNKNOWN": "无法确认统一交易日期",
 }
 
 
@@ -117,7 +130,7 @@ def _liquidity_state(total_amount) -> str:
 
 
 def _emotion_state(emotion: dict) -> str:
-    """情绪压力状态：跌停家数或炸板率达到阈值 → 承压。"""
+    """情绪压力状态：跌停家数或炸板率达到阈值 → STRESSED。"""
     dt = emotion.get("dt_count")
     break_rate = emotion.get("break_rate")
     if not _is_number(dt) and not _is_number(break_rate):
@@ -125,22 +138,40 @@ def _emotion_state(emotion: dict) -> str:
     if (_is_number(dt) and float(dt) >= _STRESS_DT_MIN) or (
         _is_number(break_rate) and float(break_rate) >= _STRESS_BREAK_RATE
     ):
-        return _STATE_STRONG  # STRESSED
-    return _STATE_NEUTRAL  # NORMAL
+        return _STATE_STRESSED
+    return _STATE_NORMAL
 
 
-def _parse_fetched_at(raw) -> datetime | None:
+def _parse_timestamp(raw) -> datetime | None:
+    """解析行情时间戳；不可解析 → None。"""
     if not isinstance(raw, str) or not raw.strip():
         return None
-    try:
-        return datetime.strptime(raw.strip(), _FETCHED_AT_FORMAT).replace(tzinfo=BEIJING)
-    except ValueError:
-        return None
+    text = raw.strip()
+    for fmt in _TIME_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=BEIJING)
+        except ValueError:
+            continue
+    return None
 
 
-def _component_fresh(fresh: bool) -> bool:
-    """v0.1 单快照模型：所有组件共用同一次获取的新鲜度。"""
-    return fresh
+def _confirmed_trade_date(breadth_trade_date, emotion_date) -> str | None:
+    """统一 trade_date 只在多来源日期一致时确认；任一缺失/冲突 → None（不伪造）。"""
+
+    def _valid_date(v) -> str | None:
+        if not isinstance(v, str) or not v.strip():
+            return None
+        try:
+            datetime.strptime(v.strip(), _DATE_FORMAT)
+        except ValueError:
+            return None
+        return v.strip()
+
+    b = _valid_date(breadth_trade_date)
+    e = _valid_date(emotion_date)
+    if b is not None and e is not None and b == e:
+        return b
+    return None
 
 
 def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None = None) -> dict:
@@ -148,7 +179,7 @@ def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None =
 
     ``breadth`` 为 ``market.get_market_breadth()`` 的信封；``emotion`` 为
     ``market.get_short_term_emotion()`` 的结果（允许 ``{}``）。
-    同一输入 → 同一输出；核心数据不可用 → UNKNOWN，不伪造事实。
+    同一输入 → 同一输出；核心数据不可用 → UNKNOWN；无可靠行情时间 → 不声明 fresh。
     """
     if now is None:
         now = datetime.now(BEIJING)
@@ -183,16 +214,23 @@ def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None =
     liquidity_state = _liquidity_state(total_amount)
     emo_state = _emotion_state(emotion)
 
-    # ---- 新鲜度：单快照模型（以广度信封 fetched_at 为准）----
-    fetched_dt = _parse_fetched_at(breadth.get("fetched_at"))
-    is_stale = True
-    if fetched_dt is not None:
-        is_stale = (now - fetched_dt).total_seconds() > _STALE_AFTER_SECONDS
+    # ---- 新鲜度：只以可靠 source data_time 为准（fetched_at 仅作 retrieval 时间）----
+    fetched_at_raw = breadth.get("fetched_at")
+    fetched_at = fetched_at_raw.strip() if isinstance(fetched_at_raw, str) and fetched_at_raw.strip() else None
+
+    data_time_raw = breadth.get("data_time")
+    data_time_dt = _parse_timestamp(data_time_raw)
+    # 可靠：可解析、不晚于 now（未来时间戳视为不可靠，fail closed）
+    freshness_known = data_time_dt is not None and data_time_dt <= now
+    data_cutoff = data_time_raw.strip() if freshness_known else None
+
+    is_stale = True  # 无可靠行情时间 → fail closed：不得声明 fresh
+    if freshness_known:
+        is_stale = (now - data_time_dt).total_seconds() > _STALE_AFTER_SECONDS
     fresh = not is_stale
 
-    # ---- 交易日期 / 数据截止 ----
-    trade_date = emotion_date if isinstance(emotion_date, str) and emotion_date.strip() else None
-    data_cutoff = breadth.get("fetched_at") if isinstance(breadth.get("fetched_at"), str) else None
+    # ---- 统一 trade_date：多来源一致才确认 ----
+    trade_date = _confirmed_trade_date(breadth.get("trade_date"), emotion_date)
 
     # ---- 缺失统计（影响 Confidence；不因缺失自动转 RISK_OFF）----
     missing_count = sum(
@@ -201,15 +239,23 @@ def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None =
     )
 
     # ---- 强冲突：不强行给激进状态 ----
+    # - 宽度/偏好直接对立；
+    # - EMOTION_STRESSED 与「明显积极市场状态」（宽度强 + 偏好高 + 流动性不弱）对立。
     conflict = (
         (breadth_state == _STATE_STRONG and appetite_state == _STATE_WEAK)
         or (breadth_state == _STATE_WEAK and appetite_state == _STATE_STRONG)
+        or (
+            emo_state == _STATE_STRESSED
+            and breadth_state == _STATE_STRONG
+            and appetite_state == _STATE_STRONG
+            and liquidity_state != _STATE_WEAK
+        )
     )
 
     # ---- 规则（优先级从上到下，首个命中生效）----
     if not core_available:
         regime = "UNKNOWN"
-    elif breadth_state == _STATE_WEAK and emo_state == _STATE_STRONG:
+    elif breadth_state == _STATE_WEAK and emo_state == _STATE_STRESSED:
         regime = "STRESSED"
     elif conflict:
         regime = "NEUTRAL"
@@ -227,7 +273,7 @@ def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None =
     if regime == "UNKNOWN":
         confidence = "LOW"
     else:
-        if b_partial or missing_count >= 1:
+        if b_partial or missing_count >= 1 or not freshness_known:
             confidence = "MEDIUM"
         if missing_count >= 2:
             confidence = "LOW"
@@ -248,7 +294,9 @@ def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None =
         reasons.append(_reason("SIGNAL_CONFLICT"))
     if core_available and (b_partial or missing_count >= 1):
         reasons.append(_reason("DATA_PARTIAL"))
-    if is_stale:
+    if not freshness_known:
+        reasons.append(_reason("DATA_FRESHNESS_UNKNOWN"))
+    elif is_stale:
         reasons.append(_reason("DATA_STALE"))
     if trade_date is None:
         reasons.append(_reason("TRADE_DATE_UNKNOWN"))
@@ -262,6 +310,8 @@ def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None =
             "up_count": b_data.get("up_count"),
             "down_count": b_data.get("down_count"),
             "valid_count": b_data.get("valid_count"),
+            "trade_date": breadth.get("trade_date"),
+            "data_time": data_time_raw,
         }
     raw_speculation = {
         "zt_count": zt_count,
@@ -285,25 +335,25 @@ def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None =
         "breadth": {
             "state": breadth_state,
             "available": core_available,
-            "fresh": _component_fresh(fresh),
+            "fresh": fresh,
             "raw": raw_breadth,
         },
         "speculation": {
             "state": appetite_state,
             "available": appetite_state != _STATE_UNKNOWN,
-            "fresh": _component_fresh(fresh),
+            "fresh": fresh,
             "raw": raw_speculation,
         },
         "liquidity": {
             "state": liquidity_state,
             "available": liquidity_state != _STATE_UNKNOWN,
-            "fresh": _component_fresh(fresh),
+            "fresh": fresh,
             "raw": raw_liquidity,
         },
         "emotion": {
             "state": emo_state,
             "available": emo_state != _STATE_UNKNOWN,
-            "fresh": _component_fresh(fresh),
+            "fresh": fresh,
             "raw": raw_emotion,
         },
     }
@@ -315,6 +365,7 @@ def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None =
         "is_stale": is_stale,
         "trade_date": trade_date,
         "data_cutoff": data_cutoff,
+        "fetched_at": fetched_at,
         "components": components,
         "reasons": reasons,
     }
@@ -351,9 +402,9 @@ def _liquidity_reason_code(state: str) -> str:
 
 
 def _emotion_reason_code(state: str) -> str:
-    if state == _STATE_STRONG:
+    if state == _STATE_STRESSED:
         return "EMOTION_STRESSED"
-    if state == _STATE_NEUTRAL:
+    if state == _STATE_NORMAL:
         return "EMOTION_NORMAL"
     return "EMOTION_UNAVAILABLE"
 
