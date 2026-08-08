@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 
@@ -16,6 +17,9 @@ import gstock
 BEIJING = timezone(timedelta(hours=8))
 _CACHE: dict = {}
 _TTL = 300  # 5 分钟；全站共享，省数据源压力
+_GLOBAL_TRENDS_LOCK = threading.Lock()
+_GLOBAL_TRENDS_FLIGHT_TTL = 10
+_GLOBAL_TRENDS_LAST_RESULT: tuple[float, dict] | None = None
 
 
 def _cached(key: str, fn, valid=bool):
@@ -328,8 +332,30 @@ def get_turnover_top() -> dict:
 
 
 def get_global_indices() -> list[dict]:
-    """全球指数快照（美股 / 港股，含缓存 5 分钟）。空结果不缓存。"""
+    """全球与亚洲核心指数快照（含缓存 5 分钟）。空结果不缓存。"""
     return _cached("global_indices", gstock.global_indices, valid=bool)
+
+
+def get_global_index_trends() -> dict:
+    """全球与亚洲核心指数分时对比；并发请求共享同一次完整或部分结果。"""
+    global _GLOBAL_TRENDS_LAST_RESULT
+    now = time.time()
+    cached = _CACHE.get("global_index_trends")
+    if cached and now - cached[0] < _TTL:
+        return cached[1]
+    with _GLOBAL_TRENDS_LOCK:
+        now = time.time()
+        cached = _CACHE.get("global_index_trends")
+        if cached and now - cached[0] < _TTL:
+            return cached[1]
+        if _GLOBAL_TRENDS_LAST_RESULT and now - _GLOBAL_TRENDS_LAST_RESULT[0] < _GLOBAL_TRENDS_FLIGHT_TTL:
+            return _GLOBAL_TRENDS_LAST_RESULT[1]
+        value = gstock.global_index_trends()
+        completed_at = time.time()
+        _GLOBAL_TRENDS_LAST_RESULT = (completed_at, value)
+        if len(value.get("series") or []) == len(gstock._INDICES) and not value.get("missing_keys"):
+            _CACHE["global_index_trends"] = (completed_at, value)
+        return value
 
 
 # ---------------------------------------------------------------------------

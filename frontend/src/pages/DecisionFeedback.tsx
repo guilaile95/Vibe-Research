@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { AccessibleDialog } from "@/components/ui/AccessibleDialog";
 import { api, ApiError, type DecisionFeedbackRecord } from "@/lib/api";
 import {
   adoptionStatusLabel,
@@ -583,13 +584,19 @@ export function DecisionFeedback() {
 
       {/* 新建 Modal */}
       {isCreateOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm overflow-y-auto">
-          <div className="w-full max-w-lg rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4 my-8">
+        <AccessibleDialog
+          open
+          onClose={() => setIsCreateOpen(false)}
+          labelledBy="feedback-create-dialog-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm overflow-y-auto"
+          className="w-full max-w-lg rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4 my-8"
+        >
             <div className="flex items-center justify-between border-b border-border/40 pb-3">
-              <h3 className="text-base font-semibold text-foreground">新建决策反馈</h3>
+              <h3 id="feedback-create-dialog-title" className="text-base font-semibold text-foreground">新建决策反馈</h3>
               <button
                 type="button"
                 onClick={() => setIsCreateOpen(false)}
+                aria-label="关闭新建决策反馈窗口"
                 className="rounded-lg p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 <X className="h-5 w-5" />
@@ -740,19 +747,24 @@ export function DecisionFeedback() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </AccessibleDialog>
       )}
 
       {/* 详情 Modal */}
       {selectedFeedbackId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm overflow-y-auto">
-          <div className="w-full max-w-xl rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+        <AccessibleDialog
+          open
+          onClose={() => setSelectedFeedbackId(null)}
+          labelledBy="feedback-detail-dialog-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm overflow-y-auto"
+          className="w-full max-w-xl rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto"
+        >
             <div className="flex items-center justify-between border-b border-border/40 pb-3">
-              <h3 className="text-base font-semibold text-foreground">决策反馈详情</h3>
+              <h3 id="feedback-detail-dialog-title" className="text-base font-semibold text-foreground">决策反馈详情</h3>
               <button
                 type="button"
                 onClick={() => setSelectedFeedbackId(null)}
+                aria-label="关闭决策反馈详情窗口"
                 className="rounded-lg p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 <X className="h-5 w-5" />
@@ -852,22 +864,27 @@ export function DecisionFeedback() {
                 </div>
               </div>
             ) : null}
-          </div>
-        </div>
+        </AccessibleDialog>
       )}
 
       {/* 作废 Modal */}
       {voidTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4">
+        <AccessibleDialog
+          open
+          onClose={() => setVoidTarget(null)}
+          labelledBy="feedback-void-dialog-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          className="w-full max-w-md rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4"
+        >
             <div className="flex items-center justify-between border-b border-border/40 pb-3">
-              <h3 className="text-base font-semibold text-foreground flex items-center gap-1.5 text-rose-400">
+              <h3 id="feedback-void-dialog-title" className="text-base font-semibold text-foreground flex items-center gap-1.5 text-rose-400">
                 <Ban className="h-5 w-5" />
                 作废决策反馈
               </h3>
               <button
                 type="button"
                 onClick={() => setVoidTarget(null)}
+                aria-label="关闭作废决策反馈窗口"
                 className="rounded-lg p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 <X className="h-5 w-5" />
@@ -917,8 +934,7 @@ export function DecisionFeedback() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </AccessibleDialog>
       )}
     </div>
   );

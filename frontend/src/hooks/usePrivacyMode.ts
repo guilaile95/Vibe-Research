@@ -7,7 +7,11 @@ let listeningToStorage = false;
 
 function readStoredPrivacyMode() {
   if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(STORAGE_KEY) === "1";
+  try {
+    return window.localStorage.getItem(STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 function getSnapshot() {
@@ -32,7 +36,11 @@ function setPrivacyMode(enabled: boolean, persist = true) {
   cachedValue = enabled;
   applyPrivacyMode(enabled);
   if (persist && typeof window !== "undefined") {
-    window.localStorage.setItem(STORAGE_KEY, enabled ? "1" : "0");
+    try {
+      window.localStorage.setItem(STORAGE_KEY, enabled ? "1" : "0");
+    } catch {
+      // 受限存储环境仍允许本次会话切换，不阻断页面渲染。
+    }
   }
   emit();
 }

@@ -76,27 +76,48 @@ export function Settings() {
       </div>
 
       {/* 两种接入方式 */}
-      <div className="mb-4 grid gap-3 sm:grid-cols-2">
-        <GlassCard glow={mode === "subscription"} onClick={() => setMode("subscription")}
-          className={mode === "subscription" ? "ring-1 ring-primary/40" : "opacity-80"}>
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-primary" />
-            <h3 className="font-semibold">订阅接入</h3>
-            {mode === "subscription" && <Check className="ml-auto h-4 w-4 text-primary" />}
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">调本机已登录的 AI CLI（Claude Code / Qwen / DeepSeek / Codex…），用订阅额度，<b className="text-foreground">免 API key</b>。需后端在本机跑。</p>
-        </GlassCard>
+      <fieldset className="mb-4 grid gap-3 sm:grid-cols-2">
+        <legend className="sr-only">选择 AI 接入方式</legend>
+        <label className="block cursor-pointer focus-within:[&>div]:ring-2 focus-within:[&>div]:ring-primary/60">
+          <input
+            type="radio"
+            name="ai-access-mode"
+            value="subscription"
+            checked={mode === "subscription"}
+            onChange={() => setMode("subscription")}
+            className="sr-only"
+          />
+          <GlassCard glow={mode === "subscription"}
+            className={mode === "subscription" ? "ring-1 ring-primary/40" : "opacity-80"}>
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" />
+              <h3 className="font-semibold">订阅接入</h3>
+              {mode === "subscription" && <Check className="ml-auto h-4 w-4 text-primary" />}
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">调本机已登录的 AI CLI（Claude Code / Qwen / DeepSeek / Codex…），用订阅额度，<b className="text-foreground">免 API key</b>。需后端在本机跑。</p>
+          </GlassCard>
+        </label>
 
-        <GlassCard glow={mode === "api"} onClick={() => setMode("api")}
-          className={mode === "api" ? "ring-1 ring-primary/40" : "opacity-80"}>
-          <div className="flex items-center gap-2">
-            <KeyRound className="h-5 w-5 text-primary" />
-            <h3 className="font-semibold">API 接入</h3>
-            {mode === "api" && <Check className="ml-auto h-4 w-4 text-primary" />}
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">粘贴 API key，支持 DeepSeek / 豆包 / MiniMax / OpenAI / OpenRouter / 任意兼容端点。<b className="text-foreground">现已可用。</b></p>
-        </GlassCard>
-      </div>
+        <label className="block cursor-pointer focus-within:[&>div]:ring-2 focus-within:[&>div]:ring-primary/60">
+          <input
+            type="radio"
+            name="ai-access-mode"
+            value="api"
+            checked={mode === "api"}
+            onChange={() => setMode("api")}
+            className="sr-only"
+          />
+          <GlassCard glow={mode === "api"}
+            className={mode === "api" ? "ring-1 ring-primary/40" : "opacity-80"}>
+            <div className="flex items-center gap-2">
+              <KeyRound className="h-5 w-5 text-primary" />
+              <h3 className="font-semibold">API 接入</h3>
+              {mode === "api" && <Check className="ml-auto h-4 w-4 text-primary" />}
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">粘贴 API key，支持 DeepSeek / 豆包 / MiniMax / OpenAI / OpenRouter / 任意兼容端点。<b className="text-foreground">现已可用。</b></p>
+          </GlassCard>
+        </label>
+      </fieldset>
 
       <GlassCard>
         {mode === "subscription" ? (

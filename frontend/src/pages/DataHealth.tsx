@@ -286,17 +286,22 @@ export function DataHealth() {
               <GlassCard
                 key={it.source_id}
                 className={cn(
-                  "cursor-pointer p-3 transition hover:border-primary/40",
+                  "relative p-3 transition hover:border-primary/40",
                   selectedId === it.source_id && "border-primary/50",
                 )}
-                onClick={() => setSelectedId(it.source_id)}
               >
-                <div className="mb-1 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  aria-label={`查看 ${it.display_name} 的详情`}
+                  onClick={() => setSelectedId(it.source_id)}
+                  className="absolute inset-0 rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                />
+                <div className="pointer-events-none relative z-10 mb-1 flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium">{it.display_name}</span>
                   <StatusBadge status={it.status} />
                 </div>
-                <p className="mb-1 text-[11px] text-muted-foreground">{it.module}</p>
-                <div className="mb-2 flex flex-wrap gap-1">
+                <p className="pointer-events-none relative z-10 mb-1 text-[11px] text-muted-foreground">{it.module}</p>
+                <div className="pointer-events-none relative z-10 mb-2 flex flex-wrap gap-1">
                   {staleTag(it.is_stale) && <Tag>{staleTag(it.is_stale)!}</Tag>}
                   {cacheTag(it.is_cached) && <Tag>{cacheTag(it.is_cached)!}</Tag>}
                   {degradedTag(it.is_degraded) && <Tag>{degradedTag(it.is_degraded)!}</Tag>}
@@ -305,33 +310,25 @@ export function DataHealth() {
                   )}
                   {it.last_error_code === "SOURCE_NOT_INITIALIZED" && <Tag>尚未初始化</Tag>}
                 </div>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="pointer-events-none relative z-10 text-[11px] text-muted-foreground">
                   交易日：{it.data_trade_date ?? "—"} · 最近成功：{it.last_success_at ?? "—"}
                 </p>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="pointer-events-none relative z-10 text-[11px] text-muted-foreground">
                   覆盖：{coverageText(it.coverage_current, it.coverage_expected)}
                 </p>
                 {it.last_error_summary && (
-                  <p className="mt-1 text-[11px] text-amber-200/80">{it.last_error_summary}</p>
+                  <p className="pointer-events-none relative z-10 mt-1 text-[11px] text-amber-200/80">{it.last_error_summary}</p>
                 )}
                 {it.blocks_advice && (
-                  <p className="mt-1 text-[11px] text-rose-300">阻止持仓建议</p>
+                  <p className="pointer-events-none relative z-10 mt-1 text-[11px] text-rose-300">阻止持仓建议</p>
                 )}
-                <button
-                  type="button"
-                  className="mt-2 text-[11px] text-primary hover:underline"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedId(it.source_id);
-                  }}
-                >
+                <span className="pointer-events-none relative z-10 mt-2 inline-block text-[11px] text-primary">
                   查看详情
-                </button>
+                </span>
                 {it.detail_path && (
                   <Link
                     to={it.detail_path}
-                    className="ml-3 text-[11px] text-muted-foreground hover:text-foreground"
-                    onClick={(e) => e.stopPropagation()}
+                    className="relative z-10 ml-3 text-[11px] text-muted-foreground hover:text-foreground"
                   >
                     业务页面
                   </Link>

@@ -29,8 +29,12 @@ function clampPanelWidth(value: number) {
 
 function initialPanelWidth() {
   if (typeof window === "undefined") return 480;
-  const saved = Number(window.localStorage.getItem(AI_PANEL_WIDTH_KEY));
-  return Number.isFinite(saved) && saved > 0 ? clampPanelWidth(saved) : 480;
+  try {
+    const saved = Number(window.localStorage.getItem(AI_PANEL_WIDTH_KEY));
+    return Number.isFinite(saved) && saved > 0 ? clampPanelWidth(saved) : 480;
+  } catch {
+    return 480;
+  }
 }
 
 const argStr = (a: Record<string, unknown>): string => {
@@ -60,7 +64,11 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
   useEffect(() => () => abortRef.current?.abort(), []);
 
   useEffect(() => {
-    window.localStorage.setItem(AI_PANEL_WIDTH_KEY, String(panelWidth));
+    try {
+      window.localStorage.setItem(AI_PANEL_WIDTH_KEY, String(panelWidth));
+    } catch {
+      // 受限存储环境仅失去宽度持久化，不影响 AI 面板使用。
+    }
   }, [panelWidth]);
 
   useEffect(() => {

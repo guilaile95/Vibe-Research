@@ -4,6 +4,8 @@
 
 export type * from "./api/types.ts";
 
+import { createDailyReviewClient } from "./api/dailyReview.ts";
+
 import type {
   MyReport,
   IntelDigestLatestResult,
@@ -28,12 +30,6 @@ import type {
   TurnoverTop,
   MarketBreadthData,
   BoardRankingData,
-  DailyReviewCacheMeta,
-  DailyReviewData,
-  DailyReviewHistorySnapshot,
-  SaveDailyReviewHistoryResult,
-  DailyReviewHistoryList,
-  DailyReviewComparison,
   RadarData,
   PortfolioData,
   AccountProfileResponse,
@@ -57,11 +53,11 @@ import type {
   KlineBar,
   DisclosureItem,
   GlobalIndex,
+  GlobalIndexTrends,
   GlobalStock,
   NorthboundCapitalFlow,
   TechnicalIndicators,
   TopRiskAnalysis,
-  DailyReviewAnalyzeRequest,
   NdjsonStreamHandlers,
   NdjsonStreamResult,
   NdjsonProtocolState,
@@ -358,25 +354,16 @@ export async function streamNdjson(
 }
 
 
-/**
- * 每日复盘 AI 流式分析。只发送 user_request + llm；
- * 市场上下文与 system prompt 由服务器生成，客户端不可注入。
- */
-export async function dailyReviewAnalyzeStream(
-  request: DailyReviewAnalyzeRequest,
-  handlers: NdjsonStreamHandlers = {},
-  signal?: AbortSignal,
-): Promise<NdjsonStreamResult> {
-  return streamNdjson(
-    "/daily-review/analyze",
-    {
-      user_request: request.user_request ?? null,
-      llm: request.llm,
-    },
-    handlers,
-    signal,
-  );
-}
+const dailyReviewClient = createDailyReviewClient({
+  get,
+  request,
+  authHeaders,
+  createApiError: (message, status) => new ApiError(message, status),
+  streamNdjson,
+});
+
+/** 兼容旧导入；实现位于 ./api/dailyReview.ts。 */
+export const dailyReviewAnalyzeStream = dailyReviewClient.analyzeStream;
 
 
 export const api = {
@@ -385,110 +372,13 @@ export const api = {
   marketOverview: () => get<MarketOverview>("/market/overview"),
   emotion: () => get<ShortTermEmotion>("/market/emotion"),
   turnoverTop: () => get<TurnoverTop>("/market/turnover-top"),
-  /**
-   * 结构化每日复盘聚合包（一次请求覆盖指数/广度/情绪/成交/板块）。
-   * 保留 data；附带可选 cache_meta（stale 时前端可轮询）。
-   */
-  dailyReview: async (): Promise<{
-    data: DailyReviewData;
-    cache_meta?: DailyReviewCacheMeta | null;
-  }> => {
-    let resp: Response;
-    const headers: Record<string, string> = { ...authHeaders() };
-    const opts: RequestInit = { method: "GET" };
-    if (Object.keys(headers).length > 0) opts.headers = headers;
-    try {
-      resp = await fetch("/api/daily-review", opts);
-    } catch {
-      throw new ApiError("连接不到后端，请先启动 backend（uvicorn app:app --port 8900）", 0);
-    }
-    let payload: any = null;
-    try {
-      payload = await resp.json();
-    } catch {
-      /* 非 JSON */
-    }
-    if (!resp.ok) {
-      if (resp.status === 401) {
-        throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
-      }
-      throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
-    }
-    const data = (payload?.data ?? payload) as DailyReviewData;
-    const cache_meta = (payload?.cache_meta ?? null) as DailyReviewCacheMeta | null;
-    return { data, cache_meta };
-  },
-  /**
-   * 用户显式刷新每日复盘完整包（绕过 300s 内存缓存）。
-   * 与 GET 返回形状一致：{ data, cache_meta }；不写历史、不调用 AI。
-   */
-  dailyReviewRefresh: async (): Promise<{
-    data: DailyReviewData;
-    cache_meta?: DailyReviewCacheMeta | null;
-  }> => {
-    let resp: Response;
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...authHeaders(),
-    };
-    try {
-      resp = await fetch("/api/daily-review/refresh", {
-        method: "POST",
-        headers,
-        body: "{}",
-      });
-    } catch {
-      throw new ApiError("连接不到后端，请先启动 backend（uvicorn app:app --port 8900）", 0);
-    }
-    let payload: any = null;
-    try {
-      payload = await resp.json();
-    } catch {
-      /* 非 JSON */
-    }
-    if (!resp.ok) {
-      if (resp.status === 401) {
-        throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
-      }
-      throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
-    }
-    const data = (payload?.data ?? payload) as DailyReviewData;
-    const cache_meta = (payload?.cache_meta ?? null) as DailyReviewCacheMeta | null;
-    return { data, cache_meta };
-  },
-  /** 显式保存当前复盘快照（无请求体；服务器自行聚合校验） */
-  saveDailyReviewHistory: () =>
-    request<SaveDailyReviewHistoryResult>("/daily-review/history/save", "POST"),
-  /** 历史元数据列表 */
-  listDailyReviewHistory: (params?: {
-    trade_date?: string;
-    limit?: number;
-    offset?: number;
-  }) => {
-    const q = new URLSearchParams();
-    if (params?.trade_date) q.set("trade_date", params.trade_date);
-    if (params?.limit != null) q.set("limit", String(params.limit));
-    if (params?.offset != null) q.set("offset", String(params.offset));
-    const qs = q.toString();
-    return get<DailyReviewHistoryList>(`/daily-review/history${qs ? `?${qs}` : ""}`);
-  },
-  /** 历史快照详情 */
-  getDailyReviewHistorySnapshot: (snapshotId: number) =>
-    get<DailyReviewHistorySnapshot>(`/daily-review/history/${snapshotId}`),
-  /** 历史快照结构化比较（服务端计算 delta/排名变化） */
-  compareDailyReviewHistory: (params: {
-    base_id: number;
-    target_id: number;
-    board_limit?: number;
-    stock_limit?: number;
-  }) => {
-    const q = new URLSearchParams();
-    q.set("base_id", String(params.base_id));
-    q.set("target_id", String(params.target_id));
-    if (params.board_limit != null) q.set("board_limit", String(params.board_limit));
-    if (params.stock_limit != null) q.set("stock_limit", String(params.stock_limit));
-    return get<DailyReviewComparison>(`/daily-review/history/compare?${q.toString()}`);
-  },
+  /** 每日复盘领域客户端的兼容 facade。 */
+  dailyReview: dailyReviewClient.getDailyReview,
+  dailyReviewRefresh: dailyReviewClient.refreshDailyReview,
+  saveDailyReviewHistory: dailyReviewClient.saveHistory,
+  listDailyReviewHistory: dailyReviewClient.listHistory,
+  getDailyReviewHistorySnapshot: dailyReviewClient.getHistorySnapshot,
+  compareDailyReviewHistory: dailyReviewClient.compareHistory,
   marketBreadth: () => get<TimedComponentEnvelope<MarketBreadthData>>("/market/breadth"),
   marketNorthbound: () => get<NorthboundCapitalFlow>("/market/northbound"),
   /** BK-11 短线市场历史（只读；有界窗口，默认最近 5 个交易日） */
@@ -505,6 +395,8 @@ export const api = {
   marketBoards: (type: "industry" | "concept" | "region" = "industry", topN = 20) =>
     get<TimedComponentEnvelope<BoardRankingData>>(`/market/boards?type=${type}&top_n=${topN}`),
   globalIndices: () => get<GlobalIndex[]>("/global/indices"),
+  globalIndexTrends: (signal?: AbortSignal) =>
+    get<GlobalIndexTrends>("/global/index-trends", signal ? { signal } : undefined),
   globalStock: (symbol: string) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`),
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),

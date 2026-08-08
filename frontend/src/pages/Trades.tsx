@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { AccessibleDialog } from "@/components/ui/AccessibleDialog";
 import { api, ApiError, type TradeRecord } from "@/lib/api";
 import {
   buildTradeCreateInput,
@@ -617,13 +618,19 @@ export function Trades() {
 
       {/* 新建交易 Modal */}
       {isCreateOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm overflow-y-auto">
-          <div className="w-full max-w-2xl rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+        <AccessibleDialog
+          open
+          onClose={() => setIsCreateOpen(false)}
+          labelledBy="trade-create-dialog-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm overflow-y-auto"
+          className="w-full max-w-2xl rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto"
+        >
             <div className="flex items-center justify-between border-b border-border/40 pb-3">
-              <h3 className="text-base font-semibold text-foreground">新建交易流水</h3>
+              <h3 id="trade-create-dialog-title" className="text-base font-semibold text-foreground">新建交易流水</h3>
               <button
                 type="button"
                 onClick={() => setIsCreateOpen(false)}
+                aria-label="关闭新建交易流水窗口"
                 className="rounded-lg p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 <X className="h-5 w-5" />
@@ -1000,19 +1007,24 @@ export function Trades() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </AccessibleDialog>
       )}
 
       {/* 交易详情 Modal */}
       {selectedTradeId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm overflow-y-auto">
-          <div className="w-full max-w-2xl rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+        <AccessibleDialog
+          open
+          onClose={() => setSelectedTradeId(null)}
+          labelledBy="trade-detail-dialog-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm overflow-y-auto"
+          className="w-full max-w-2xl rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto"
+        >
             <div className="flex items-center justify-between border-b border-border/40 pb-3">
-              <h3 className="text-base font-semibold text-foreground">交易流水详情</h3>
+              <h3 id="trade-detail-dialog-title" className="text-base font-semibold text-foreground">交易流水详情</h3>
               <button
                 type="button"
                 onClick={() => setSelectedTradeId(null)}
+                aria-label="关闭交易流水详情窗口"
                 className="rounded-lg p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 <X className="h-5 w-5" />
@@ -1280,22 +1292,27 @@ export function Trades() {
                 关闭
               </button>
             </div>
-          </div>
-        </div>
+        </AccessibleDialog>
       )}
 
       {/* 作废确认 Modal */}
       {voidTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4">
+        <AccessibleDialog
+          open
+          onClose={() => setVoidTarget(null)}
+          labelledBy="trade-void-dialog-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          className="w-full max-w-md rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4"
+        >
             <div className="flex items-center justify-between border-b border-border/40 pb-3">
-              <h3 className="text-base font-semibold text-rose-400 flex items-center gap-1.5">
+              <h3 id="trade-void-dialog-title" className="text-base font-semibold text-rose-400 flex items-center gap-1.5">
                 <Ban className="h-5 w-5" />
                 作废交易确认
               </h3>
               <button
                 type="button"
                 onClick={() => setVoidTarget(null)}
+                aria-label="关闭作废交易确认窗口"
                 className="rounded-lg p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 <X className="h-5 w-5" />
@@ -1350,8 +1367,7 @@ export function Trades() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </AccessibleDialog>
       )}
     </div>
   );

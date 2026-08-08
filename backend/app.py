@@ -1373,11 +1373,22 @@ def daily_review_history_detail(snapshot_id: int):
 
 @app.get("/api/global/indices")
 def global_indices():
-    """全球指数快照（道指 / 标普500 / 纳斯达克 / 恒生 / 恒生科技）—— A 股看隔夜外围脸色。缓存 5 分钟。"""
+    """全球与亚洲核心指数快照。缓存 5 分钟。"""
     try:
         return {"data": market.get_global_indices()}
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"全球指数异常：{e}") from e
+    except Exception:  # noqa: BLE001
+        logging.exception("global indices request failed")
+        raise HTTPException(502, "全球指数暂不可用") from None
+
+
+@app.get("/api/global/index-trends")
+def global_index_trends():
+    """八个核心指数最近交易日的真实分时涨跌幅对比。缓存 5 分钟。"""
+    try:
+        return {"data": market.get_global_index_trends()}
+    except Exception:  # noqa: BLE001
+        logging.exception("global index trends request failed")
+        raise HTTPException(502, "全球指数走势暂不可用") from None
 
 
 @app.get("/api/global/stock")
