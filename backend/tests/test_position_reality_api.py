@@ -257,6 +257,7 @@ class TestVoidCascadeApi:
         void_resp = client.post(f"/api/position/trades/{trade_id}/void", json={"reason": "录入错误"})
         assert void_resp.status_code == 200
         data = void_resp.json()["data"]
+        assert data["status"] == "VOIDED"
         assert data["cascade_voided"] == 1
         # derivation 不再失败
         derived = client.get("/api/position/derived").json()["data"]
@@ -268,4 +269,72 @@ class TestVoidCascadeApi:
 
     def test_void_trade_missing_reason_422(self, client):
         resp = client.post("/api/position/trades/abc/void", json={})
+        assert resp.status_code == 422
+
+    def test_void_already_voided_recovery_200(self, client):
+        """already-voided + 孤儿 correction：恢复成功返回 200（非 409），derivation 恢复。"""
+        client.post("/api/position/bootstrap-commit", json=_BOOTSTRAP_PAYLOAD)
+        trade_resp = client.post("/api/trades", json={
+            "code": "600519",
+            "name": "贵州茅台",
+            "operation": "buy",
+            "execution_status": "full",
+            "actual_price": 10.0,
+            "actual_quantity": 100,
+            "executed_at": "2026-08-03T09:30:00+08:00",
+        })
+        trade_id = trade_resp.json()["data"]["trade_id"]
+        client.post("/api/position/correction", json={
+            "target_event_id": trade_id,
+            "target_event_type": "trade",
+            "after_payload": {"actual_quantity": 50},
+        })
+        # 既有端点作废（不级联）→ 制造孤儿
+        client.post(f"/api/trades/{trade_id}/void", json={"reason": "既有 void"})
+        derived_before = client.get("/api/position/derived")
+        assert derived_before.status_code == 500
+        # 新端点恢复 → 200 ALREADY_VOIDED_RECOVERED
+        resp = client.post(f"/api/position/trades/{trade_id}/void", json={"reason": "恢复路径"})
+        assert resp.status_code == 200
+        assert resp.json()["data"]["status"] == "ALREADY_VOIDED_RECOVERED"
+        assert resp.json()["data"]["cascade_voided"] == 1
+        derived_after = client.get("/api/position/derived")
+        assert derived_after.status_code == 200
+        assert derived_after.json()["data"]["derivation_status"] == "OK"
+
+    def test_void_already_voided_no_orphan_409(self, client):
+        """already-voided + 无孤儿：保持 409 Already Voided，零副作用。"""
+        client.post("/api/position/bootstrap-commit", json=_BOOTSTRAP_PAYLOAD)
+        trade_resp = client.post("/api/trades", json={
+            "code": "600519",
+            "name": "贵州茅台",
+            "operation": "buy",
+            "execution_status": "full",
+            "actual_price": 10.0,
+            "actual_quantity": 100,
+            "executed_at": "2026-08-03T09:30:00+08:00",
+        })
+        trade_id = trade_resp.json()["data"]["trade_id"]
+        assert client.post(f"/api/position/trades/{trade_id}/void", json={"reason": "首次"}).status_code == 200
+        resp = client.post(f"/api/position/trades/{trade_id}/void", json={"reason": "再次"})
+        assert resp.status_code == 409
+
+
+class TestJsonContractApi:
+    """P2-1：JSON 解析错误必须原样返回 400/422，不得变成 500。"""
+
+    def test_bootstrap_commit_malformed_json_400(self, client):
+        resp = client.post("/api/position/bootstrap-commit", content="{not json")
+        assert resp.status_code == 400
+
+    def test_bootstrap_commit_non_object_422(self, client):
+        resp = client.post("/api/position/bootstrap-commit", content="[]")
+        assert resp.status_code == 422
+
+    def test_correction_malformed_json_400(self, client):
+        resp = client.post("/api/position/correction", content="{not json")
+        assert resp.status_code == 400
+
+    def test_correction_non_object_422(self, client):
+        resp = client.post("/api/position/correction", content="[]")
         assert resp.status_code == 422

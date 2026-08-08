@@ -58,6 +58,9 @@ async def bootstrap_commit(request: Request):
     try:
         payload = await _parse_json_body(request)
         result = svc.bootstrap_commit(payload)
+    except HTTPException:
+        # JSON 解析错误（400/422）原样返回，不得经 _map_errors 变成 500（P2-1）
+        raise
     except Exception as exc:
         raise _map_errors(exc)
     return {"data": result}
@@ -68,6 +71,8 @@ async def create_correction(request: Request):
     try:
         payload = await _parse_json_body(request)
         result = svc.create_correction(payload)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise _map_errors(exc)
     return {"data": result}

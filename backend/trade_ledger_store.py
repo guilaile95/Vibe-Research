@@ -105,6 +105,45 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return dict(row)
 
 
+def open_write_connection(db_path: str | Path) -> sqlite3.Connection:
+    """Open a write connection with standard PRAGMAs; transaction owned by caller.
+
+    用于与 account_events 在同一 SQLite 库内实现跨表原子操作（P0-S1A void cascade）。
+    """
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return _connect(path)
+
+
+def get_record_on_connection(
+    conn: sqlite3.Connection,
+    trade_id: str,
+) -> dict[str, Any] | None:
+    """Read a trade record on a caller-owned connection (no lock/commit)."""
+    row = conn.execute(_SELECT_BY_ID, (trade_id,)).fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def void_trade_on_connection(
+    conn: sqlite3.Connection,
+    trade_id: str,
+    now_iso: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Void a trade on a caller-owned connection (no commit/lock; caller owns transaction).
+
+    Raises TradeNotFoundError / TradeAlreadyVoidedError. 用于与 correction 级联同事务提交。
+    """
+    rec = get_record_on_connection(conn, trade_id)
+    if rec is None:
+        raise TradeNotFoundError()
+    if rec.get("voided_at") is not None:
+        raise TradeAlreadyVoidedError()
+    conn.execute(_VOID_UPDATE_SQL, (now_iso, reason, trade_id))
+    updated = conn.execute(_SELECT_BY_ID, (trade_id,)).fetchone()
+    return _row_to_dict(updated)
+
+
 def insert_record(db_path: str | Path, record: dict[str, Any]) -> None:
     with _LOCK:
         path = Path(db_path)

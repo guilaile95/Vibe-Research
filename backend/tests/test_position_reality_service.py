@@ -684,6 +684,7 @@ class TestVoidCascade:
     """作废交易必须级联作废其 CORRECTION，防止孤儿修正永久锁死账本（P1-1）。"""
 
     def test_void_trade_cascades_corrections(self):
+        """active trade：同一事务内级联 void corrections + void trade（R5-P1-1）。"""
         _bootstrap([_legacy("600519", 100, 10.0)])
         trade = _trade("600519", "buy", 10.0, 100)
         svc.create_correction({
@@ -693,13 +694,24 @@ class TestVoidCascade:
             "reason": "成交数量修正",
         })
         result = svc.void_trade_with_cascade(trade["trade_id"], "录入错误")
+        assert result["status"] == "VOIDED"
         assert result["cascade_voided"] == 1
+        assert result["voided_trade"]["voided_at"] is not None
+        # 交易与 correction 均已作废
+        assert trade_ledger_service.get_trade(trade["trade_id"])["voided_at"] is not None
+        events = account_event_store.list_events(
+            svc.resolve_db_path(), include_voided=True
+        )
+        corr = [e for e in events if e["event_type"] == "CORRECTION"]
+        assert len(corr) == 1
+        assert corr[0]["voided_at"] is not None
         # derivation 不再因孤儿修正失败
         derived = svc.derive_positions()
         assert derived["derivation_status"] == "OK"
         assert {p["code"]: p["shares"] for p in derived["positions"]} == {"600519": 100}
 
     def test_void_cascade_idempotent(self):
+        """already-voided + 无孤儿 correction → 保持 Already Voided（409），零副作用。"""
         _bootstrap([_legacy("600519", 100, 10.0)])
         trade = _trade("600519", "buy", 10.0, 100)
         svc.create_correction({
@@ -708,24 +720,24 @@ class TestVoidCascade:
             "after_payload": {"actual_quantity": 50},
         })
         svc.void_trade_with_cascade(trade["trade_id"], "录入错误")
-        # 第二次 void 同一交易 → 已作废（store 层异常，service 子类可一并捕获）
+        # 第二次 void：已作废且无孤儿 → 保持 TradeAlreadyVoidedError（409），零副作用
         with pytest.raises(trade_ledger_store.TradeAlreadyVoidedError):
             svc.void_trade_with_cascade(trade["trade_id"], "再次作废")
-        # 级联函数自身幂等：直接调用不报错
-        assert svc._cascade_void_corrections(
-            svc.resolve_db_path(), "trade", trade["trade_id"], "再次"
-        ) == 0
+        # 账本未被破坏
+        derived = svc.derive_positions()
+        assert derived["derivation_status"] == "OK"
 
     def test_void_trade_no_corrections_noop(self):
         _bootstrap([_legacy("600519", 100, 10.0)])
         trade = _trade("600519", "buy", 10.0, 100)
         result = svc.void_trade_with_cascade(trade["trade_id"], "录入错误")
+        assert result["status"] == "VOIDED"
         assert result["cascade_voided"] == 0
         derived = svc.derive_positions()
         assert derived["derivation_status"] == "OK"
 
-    def test_void_after_already_voided_cleans_orphan(self):
-        """恢复路径：既有 void 已制造孤儿 correction 时，再调级联 void 先清理再抛已作废。"""
+    def test_void_after_already_voided_recovers_orphan(self):
+        """already-voided + 孤儿 correction：同一事务清理孤儿，返回 ALREADY_VOIDED_RECOVERED（200）。"""
         _bootstrap([_legacy("600519", 100, 10.0)])
         trade = _trade("600519", "buy", 10.0, 100)
         svc.create_correction({
@@ -734,13 +746,14 @@ class TestVoidCascade:
             "after_payload": {"actual_quantity": 50},
             "reason": "成交数量修正",
         })
-        # 模拟既有 /api/trades/{id}/void（不级联）：交易作废，correction 残留
+        # 模拟既有 /api/trades/{id}/void（不级联）：交易作废，correction 残留为孤儿
         trade_ledger_service.void_trade(trade["trade_id"], "既有 void 端点")
         with pytest.raises(svc.PositionDerivationError):
             svc.derive_positions()
-        # 新端点再调：先清理孤儿 correction，再抛已作废（409）
-        with pytest.raises(trade_ledger_store.TradeAlreadyVoidedError):
-            svc.void_trade_with_cascade(trade["trade_id"], "恢复路径")
+        # 新端点再调：同一事务清理孤儿 correction，返回成功恢复状态（不返回 409）
+        result = svc.void_trade_with_cascade(trade["trade_id"], "恢复路径")
+        assert result["status"] == "ALREADY_VOIDED_RECOVERED"
+        assert result["cascade_voided"] == 1
         # 孤儿已清理，账本恢复可推导
         derived = svc.derive_positions()
         assert derived["derivation_status"] == "OK"
@@ -763,6 +776,96 @@ class TestVoidCascade:
         assert {p["code"]: p["shares"] for p in derived["positions"]} == {"600519": 150}
 
 
+class TestVoidAtomicFailureInjection:
+    """R5-P1-1：真原子性故障注入 —— 任何步骤失败必须整体回滚，无半完成状态。"""
+
+    def test_failure_between_correction_and_trade_void_rolls_back(self, monkeypatch):
+        """correction 更新后、trade 更新前失败 → ROLLBACK：trade 仍 active、correction 仍 active、
+        derivation 保持 correction 后的有效值（BUY 100 → correction 50，失败后仍 = 50，绝不回 100）。"""
+        _bootstrap([])
+        trade = _trade("600519", "buy", 10.0, 100)
+        svc.create_correction({
+            "target_event_id": trade["trade_id"],
+            "target_event_type": "trade",
+            "after_payload": {"actual_quantity": 50},
+            "reason": "成交数量修正",
+        })
+
+        def _boom(conn, trade_id, now_iso, reason):
+            raise RuntimeError("injected failure after correction void, before trade void")
+
+        monkeypatch.setattr(trade_ledger_store, "void_trade_on_connection", _boom)
+        with pytest.raises(RuntimeError):
+            svc.void_trade_with_cascade(trade["trade_id"], "录入错误")
+
+        # 回滚后：trade 仍 ACTIVE、correction 仍 ACTIVE
+        rec = trade_ledger_service.get_trade(trade["trade_id"])
+        assert rec["voided_at"] is None
+        events = account_event_store.list_events(
+            svc.resolve_db_path(), include_voided=True
+        )
+        corr = [e for e in events if e["event_type"] == "CORRECTION"]
+        assert len(corr) == 1
+        assert corr[0]["voided_at"] is None
+        # derivation 保持 correction 后的有效值（100 → 50），绝不回 100
+        derived = svc.derive_positions()
+        pos = next(p for p in derived["positions"] if p["code"] == "600519")
+        assert pos["shares"] == 50
+
+    def test_missing_trade_no_side_effect(self):
+        """missing trade：存在孤立 correction 数据也不得修改它；404 且零副作用。"""
+        _bootstrap([])
+        # 直接注入指向不存在交易的孤儿 correction（异常数据场景）
+        db_path = svc.resolve_db_path()
+        account_event_store.insert_event(db_path, {
+            "event_id": "aev_orphan_missing",
+            "event_type": "CORRECTION",
+            "code": None,
+            "name": None,
+            "shares": None,
+            "cost_basis": None,
+            "opening_cash": None,
+            "ledger_start_at": None,
+            "origin": None,
+            "acquired_before_vibe": None,
+            "historical_trades": None,
+            "provenance": "MANUAL",
+            "target_event_id": "missing_trade_id",
+            "target_event_type": "trade",
+            "before_payload": '{"actual_quantity": 100}',
+            "after_payload": '{"actual_quantity": 50}',
+            "reason": "异常数据",
+            "note": None,
+            "created_at": "2026-08-09T00:00:00+00:00",
+        })
+        with pytest.raises(trade_ledger_store.TradeNotFoundError):
+            svc.void_trade_with_cascade("missing_trade_id", "恢复")
+        # 孤儿 correction 未被修改（仍 active）
+        events = account_event_store.list_events(
+            svc.resolve_db_path(), include_voided=True
+        )
+        orphan = [e for e in events if e["event_id"] == "aev_orphan_missing"]
+        assert len(orphan) == 1
+        assert orphan[0]["voided_at"] is None
+
+    def test_recovery_path_atomic(self):
+        """already-voided + 孤儿恢复必须真正提交（correction 被清理，derivation 恢复）。"""
+        _bootstrap([_legacy("600519", 100, 10.0)])
+        trade = _trade("600519", "buy", 10.0, 100)
+        svc.create_correction({
+            "target_event_id": trade["trade_id"],
+            "target_event_type": "trade",
+            "after_payload": {"actual_quantity": 50},
+        })
+        trade_ledger_service.void_trade(trade["trade_id"], "既有 void")
+        result = svc.void_trade_with_cascade(trade["trade_id"], "恢复")
+        assert result["status"] == "ALREADY_VOIDED_RECOVERED"
+        assert result["cascade_voided"] == 1
+        derived = svc.derive_positions()
+        assert derived["derivation_status"] == "OK"
+        assert {p["code"]: p["shares"] for p in derived["positions"]} == {"600519": 100}
+
+
 class TestReviewP2:
     def test_mixed_timezone_trade_order_stable(self):
         """混时区 executed_at 按 UTC 纪元排序，顺序不因字符串格式错乱（P2-1）。"""
@@ -783,3 +886,42 @@ class TestReviewP2:
                 "target_event_type": "trade",
                 "after_payload": {"actual_quantity": 0},
             })
+
+
+# ---------------------------------------------------------------------------
+# Review round 5: P1-2 4dp reconciliation 精度
+# ---------------------------------------------------------------------------
+
+
+class TestReconciliation4dp:
+    """ledger avg cost 保留 4 位小数，reconciliation 使用同一 canonical 4dp 值（P1-2）。"""
+
+    def test_legacy_4dp_cost_match(self, pf_file):
+        """legacy per-share cost 10.1234（4dp）→ avg=10.1234；portfolio cost 10.1234 → MATCH。"""
+        _bootstrap([_legacy("600519", 100, 10.1234)])
+        _write_portfolio(pf_file, [{"code": "600519", "shares": 100, "cost": 10.1234}])
+        result = svc.reconcile_positions()
+        item = result["items"][0]
+        assert item["status"] == "MATCH"
+        assert item["ledger_cost"] == 10.1234
+
+    def test_weighted_avg_4dp_match(self, pf_file):
+        """加权平均后产生 4dp avg：legacy 100@10.1234 + ADD 100@20.5 → avg 15.3117；
+        portfolio 4dp cost 15.3117 → MATCH。"""
+        _bootstrap([_legacy("600519", 100, 10.1234)])
+        _trade("600519", "add", 20.5, 100)
+        pos = _derived("600519")
+        assert pos["avg_cost"] == 15.3117
+        _write_portfolio(pf_file, [{"code": "600519", "shares": 200, "cost": 15.3117}])
+        result = svc.reconcile_positions()
+        assert result["items"][0]["status"] == "MATCH"
+
+    def test_weighted_avg_4dp_mismatch_on_4th_digit(self, pf_file):
+        """真正的第 4 位不同 → MISMATCH（ledger 15.3117 vs portfolio 15.3118）。"""
+        _bootstrap([_legacy("600519", 100, 10.1234)])
+        _trade("600519", "add", 20.5, 100)
+        _write_portfolio(pf_file, [{"code": "600519", "shares": 200, "cost": 15.3118}])
+        result = svc.reconcile_positions()
+        item = result["items"][0]
+        assert item["status"] == "MISMATCH"
+        assert item["reason"] == "cost mismatch"

@@ -337,30 +337,6 @@ _CORRECTION_ALLOWED = frozenset(
 _CORRECTION_VOID_PREFIX = "cascade-void: "
 
 
-def _cascade_void_corrections(
-    db_path, target_event_type: str, target_event_id: str, reason: str
-) -> int:
-    """Void 目标事件时，级联 void 指向它的所有 CORRECTION 事件。
-
-    保持 append-only（不删除记录，仅标记 voided_at），避免"孤儿修正"使整条账本
-    derivation 永久 fail closed 且无恢复路径（P1-1）。
-    """
-    events = account_event_store.list_events(
-        db_path, event_type=_EVENT_CORRECTION, include_voided=False
-    )
-    count = 0
-    for ev in events:
-        if (
-            ev.get("target_event_id") == target_event_id
-            and ev.get("target_event_type") == target_event_type
-        ):
-            account_event_store.void_event_atomic(
-                db_path, ev["event_id"], _CORRECTION_VOID_PREFIX + reason
-            )
-            count += 1
-    return count
-
-
 def _prior_effective_values(
     db_path,
     target_event_type: str,
@@ -393,25 +369,78 @@ def _prior_effective_values(
 
 
 def void_trade_with_cascade(trade_id: str, reason: str) -> dict[str, Any]:
-    """作废一笔交易并级联作废指向它的全部 CORRECTION 事件。
+    """原子作废交易 + 级联作废指向它的全部 CORRECTION 事件（同一 SQLite 事务）。
 
-    与既有 trade_ledger_service.void_trade 行为兼容（返回同形状 voided record），
-    并防止孤儿修正让整条账本 derivation 永久 fail closed（P1-1）。
+    account_events 与 trade_records 同库（trade_ledger.sqlite3），因此 trade void 与
+    correction cascade void 必须在同一个 COMMIT 中完成，任何一步失败整体 ROLLBACK，
+    不允许存在只完成一半的状态（P1-1 真原子）。
 
-    顺序：先级联（幂等，崩溃落在安全侧——correction 已清理而交易未作废时可重试），
-    再作废交易。对"交易已作废但孤儿 correction 残留"的场景，调用本函数会先清理
-    correction 再抛 TradeAlreadyVoidedError —— 作为账本恢复路径。
-    reason 在校验失败（缺省/超长）时先拒绝，不产生任何级联副作用。
+    状态语义：
+    - active trade：BEGIN IMMEDIATE → 校验 trade → 级联 void corrections → void trade → COMMIT；
+      任一步失败 ROLLBACK（无半完成状态）。
+    - missing trade：不修改任何 correction；404 且数据库零副作用。
+    - already-voided trade + active orphan corrections：同一事务清理孤儿 correction，
+      返回 ALREADY_VOIDED_RECOVERED（HTTP 200）；不出现"改了库还返回 409"。
+    - already-voided trade + 无 orphan correction：TradeAlreadyVoidedError（409），零副作用。
+    - reason 校验在任何事务/副作用之前。
     """
     if not isinstance(reason, str) or not reason.strip():
         raise PositionValidationError("reason 必填且必须是非空字符串")
     reason_clean = reason.strip()
     if len(reason_clean) > _MAX_REASON_LEN:
         raise PositionValidationError(f"reason 超过最大长度 {_MAX_REASON_LEN}")
+
     db_path = resolve_db_path()
-    cascade = _cascade_void_corrections(db_path, "trade", trade_id, reason_clean)
-    voided = trade_ledger_service.void_trade(trade_id, reason_clean)
-    return {"voided_trade": voided, "cascade_voided": cascade}
+    conn = trade_ledger_store.open_write_connection(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        # trade 表不存在 → 视为交易缺失（404，零副作用，不建表）
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("trade_records",),
+        ).fetchone()
+        if table is None:
+            raise trade_ledger_store.TradeNotFoundError()
+        rec = trade_ledger_store.get_record_on_connection(conn, trade_id)
+        if rec is None:
+            raise trade_ledger_store.TradeNotFoundError()
+
+        now = _utc_now()
+        if rec.get("voided_at") is not None:
+            # 已作废：同一事务内清理孤儿 correction 并返回恢复状态
+            orphan = 0
+            if account_event_store.table_exists_on_connection(conn, "account_events"):
+                orphan = account_event_store.count_active_corrections_on_connection(
+                    conn, "trade", trade_id
+                )
+            if orphan > 0:
+                account_event_store.void_corrections_on_connection(
+                    conn, "trade", trade_id, now, _CORRECTION_VOID_PREFIX + reason_clean
+                )
+                conn.commit()
+                return {
+                    "status": "ALREADY_VOIDED_RECOVERED",
+                    "voided_trade": None,
+                    "cascade_voided": orphan,
+                }
+            raise trade_ledger_store.TradeAlreadyVoidedError()
+
+        # active trade：级联 corrections + void trade 同一事务提交
+        cascade = 0
+        if account_event_store.table_exists_on_connection(conn, "account_events"):
+            cascade = account_event_store.void_corrections_on_connection(
+                conn, "trade", trade_id, now, _CORRECTION_VOID_PREFIX + reason_clean
+            )
+        voided = trade_ledger_store.void_trade_on_connection(
+            conn, trade_id, now, reason_clean
+        )
+        conn.commit()
+        return {"status": "VOIDED", "voided_trade": voided, "cascade_voided": cascade}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
@@ -741,7 +770,9 @@ def derive_positions() -> dict[str, Any]:
             status = "OPEN"
             if st["cost_known"]:
                 cost_basis = round(float(st["cost"]), 2)
-                avg_cost = round(float(st["cost"]) / shares, 2)
+                # per-share avg cost 保留 4 位小数（portfolio.json 成本正式支持 4 位小数）；
+                # reconciliation 使用同一 canonical 4dp avg cost，不在此前损失精度（P1-2）。
+                avg_cost = round(float(st["cost"]) / shares, 4)
             else:
                 cost_basis = None
                 avg_cost = None
@@ -836,7 +867,8 @@ def reconcile_positions() -> dict[str, Any]:
             portfolio_shares = ph.get("shares")
             ledger_avg = lp["avg_cost"]
             portfolio_cost = ph.get("cost")
-            # portfolio.json 成本按 4 位小数维护（portfolio.py）；对账比较统一用 4 位精度（P2-4）
+            # portfolio.json 成本按 4 位小数维护；ledger avg_cost 已是 canonical 4dp（P1-2），
+            # 直接同精度比较，避免在此前/此处额外损失精度。
             if round(float(ledger_shares), 2) != round(float(portfolio_shares or 0), 2):
                 status = "MISMATCH"
                 reason = "shares mismatch"

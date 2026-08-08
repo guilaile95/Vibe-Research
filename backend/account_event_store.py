@@ -114,6 +114,50 @@ def _table_exists(conn: sqlite3.Connection) -> bool:
     return row is not None
 
 
+def table_exists_on_connection(conn: sqlite3.Connection, table_name: str) -> bool:
+    """Check table existence on a caller-owned connection (no lock/commit)."""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def count_active_corrections_on_connection(
+    conn: sqlite3.Connection,
+    target_event_type: str,
+    target_event_id: str,
+) -> int:
+    """Count non-voided CORRECTION events targeting a given object (caller-owned conn)."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM account_events"
+        " WHERE event_type = 'CORRECTION' AND target_event_type = ?"
+        " AND target_event_id = ? AND voided_at IS NULL",
+        (target_event_type, target_event_id),
+    ).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def void_corrections_on_connection(
+    conn: sqlite3.Connection,
+    target_event_type: str,
+    target_event_id: str,
+    now_iso: str,
+    reason: str,
+) -> int:
+    """Void all non-voided CORRECTION events targeting an object (caller-owned conn).
+
+    返回实际作废条数；由调用方在同一事务中提交（用于跨表原子 void cascade）。
+    """
+    cur = conn.execute(
+        "UPDATE account_events SET voided_at = ?, void_reason = ?"
+        " WHERE event_type = 'CORRECTION' AND target_event_type = ?"
+        " AND target_event_id = ? AND voided_at IS NULL",
+        (now_iso, reason, target_event_type, target_event_id),
+    )
+    return cur.rowcount
+
+
 def insert_event(db_path: str | Path, event: dict[str, Any]) -> None:
     with _LOCK:
         path = Path(db_path)
