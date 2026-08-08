@@ -105,10 +105,13 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex justify-end">
-          <div className="absolute inset-0 bg-black/35" onClick={close} aria-hidden="true" />
-          <aside className="relative flex h-full w-full max-w-[560px] flex-col border-l border-border/40 bg-background shadow-2xl" aria-label="Vibe AI 对话">
-            <div className="flex h-14 items-center justify-between px-4 sm:px-5">
+        <div className="fixed inset-0 z-50 flex justify-end md:pointer-events-none md:left-auto md:w-[440px] xl:w-[480px]">
+          <div className="absolute inset-0 bg-black/35 md:hidden" onClick={close} aria-hidden="true" />
+          <aside
+            className="pointer-events-auto relative ml-auto flex h-full w-full max-w-[560px] flex-col border-l border-border/50 bg-background shadow-2xl md:max-w-none md:shadow-xl"
+            aria-label="Vibe AI 对话"
+          >
+            <div className="flex h-14 items-center justify-between border-b border-border/40 px-4 sm:px-5">
               <span className="flex items-center gap-2 text-sm font-semibold">
                 <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-foreground text-background">
                   <Sparkles className="h-3.5 w-3.5" />
@@ -216,7 +219,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
                   </div>
                 </div>
 
-                <div className="px-4 pb-4 pt-2 sm:px-6 sm:pb-5">
+                <div className="border-t border-border/40 px-4 pb-4 pt-3 sm:px-6 sm:pb-5">
                   <div className="mx-auto w-full max-w-xl rounded-[26px] bg-card p-2 shadow-sm">
                     <div className="flex items-end gap-2">
                       <textarea
