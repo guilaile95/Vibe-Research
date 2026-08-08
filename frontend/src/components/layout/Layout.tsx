@@ -3,6 +3,7 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity,
   BarChart3,
+  BookOpen,
   ChevronsLeft,
   ChevronsRight,
   ChevronDown,
@@ -27,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { DailyReviewAiTaskIndicator } from "./DailyReviewAiTaskIndicator";
 import { PortfolioAdviceTaskIndicator } from "./PortfolioAdviceTaskIndicator";
+import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
 
 /**
  * Sidebar follows user contexts instead of mirroring implementation modules.
@@ -45,7 +47,7 @@ const PRIMARY_NAV = [
   { to: "/cockpit", icon: Target, label: "决策" },
 ];
 
-/** Research artifacts and market context live in a library, not as primary app modes. */
+/** Research artifacts and market context live in a lower-frequency library. */
 const LIBRARY_NAV = [
   { to: "/intel", label: "市场情报" },
   { to: "/sectors", label: "板块" },
@@ -68,6 +70,14 @@ const ANALYSIS_NAV = [
 const SYSTEM_NAV = [
   { to: "/data-health", icon: HeartPulse, label: "数据健康" },
   { to: "/settings", icon: Settings, label: "设置" },
+];
+
+const RESEARCH_WORKFLOW_PATHS = [
+  "/stock-data",
+  "/thesis",
+  "/decision-evidence",
+  "/portfolio",
+  "/decision-feedback",
 ];
 
 const SECTOR_PATHS = [
@@ -123,6 +133,7 @@ export function Layout() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("vr-sidebar") === "collapsed");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(readDesktop);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [analysisOpen, setAnalysisOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
@@ -134,6 +145,9 @@ export function Layout() {
 
   useEffect(() => {
     setMobileOpen(false);
+    if (LIBRARY_NAV.some(({ to }) => isActive(pathname, to))) {
+      setLibraryOpen(true);
+    }
     if (ANALYSIS_NAV.some(({ to }) => isActive(pathname, to)) || pathname.startsWith("/evidence")) {
       setAnalysisOpen(true);
     }
@@ -213,7 +227,9 @@ export function Layout() {
 
   const compact = isDesktop && collapsed;
   const currentNavPath = getCurrentNavPath(pathname);
+  const libraryActive = LIBRARY_NAV.some(({ to }) => currentNavPath === to);
   const analysisActive = ANALYSIS_NAV.some(({ to }) => currentNavPath === to);
+  const showResearchWorkflow = RESEARCH_WORKFLOW_PATHS.some((to) => isActive(pathname, to));
 
   const iconNavItem = ({ to, icon: Icon, label }: IconNavItem) => {
     const active = currentNavPath === to;
@@ -312,10 +328,30 @@ export function Layout() {
         <nav aria-label="主导航" className={cn("flex-1 overflow-y-auto px-2 pb-3 pt-1", compact && "px-1.5")}>
           <div className="space-y-0.5">{PRIMARY_NAV.map(iconNavItem)}</div>
 
-          {!compact && (
-            <div className="mt-6">
-              <p className="mb-1.5 px-2.5 text-[11px] font-medium text-sidebar-muted">资料库</p>
-              <div className="space-y-0.5">
+          <div className="mt-5">
+            <button
+              type="button"
+              onClick={() => setLibraryOpen((v) => !v)}
+              aria-expanded={libraryOpen}
+              className={cn(
+                "flex min-h-9 w-full items-center rounded-lg text-[13px] transition-colors",
+                compact ? "justify-center px-2" : "gap-2.5 px-2.5",
+                libraryActive
+                  ? "bg-sidebar-active text-foreground"
+                  : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-foreground",
+              )}
+              title={compact ? "资料" : undefined}
+            >
+              <BookOpen className="h-[17px] w-[17px] shrink-0" />
+              {!compact && (
+                <>
+                  <span className="flex-1 text-left">资料</span>
+                  <ChevronDown className={cn("h-4 w-4 transition-transform", libraryOpen && "rotate-180")} />
+                </>
+              )}
+            </button>
+            {libraryOpen && !compact && (
+              <div className="mt-0.5 space-y-0.5 pl-4">
                 {LIBRARY_NAV.map(({ to, label }) => {
                   const active = currentNavPath === to;
                   return (
@@ -324,10 +360,10 @@ export function Layout() {
                       to={to}
                       aria-current={active ? "page" : undefined}
                       className={cn(
-                        "block min-h-8 truncate rounded-lg px-2.5 py-1.5 text-[13px] transition-colors",
+                        "block min-h-8 truncate rounded-lg px-2.5 py-1.5 text-[12px] transition-colors",
                         active
                           ? "bg-sidebar-active font-medium text-foreground"
-                          : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-foreground",
+                          : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-foreground",
                       )}
                     >
                       {label}
@@ -335,10 +371,10 @@ export function Layout() {
                   );
                 })}
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
-          <div className="mt-5">
+          <div className="mt-1">
             <button
               type="button"
               onClick={() => setAnalysisOpen((v) => !v)}
@@ -425,6 +461,7 @@ export function Layout() {
         <div className="mx-auto w-full max-w-[1320px] px-4 pb-12 pt-16 sm:px-6 md:px-8 md:pt-7 lg:px-10">
           <DailyReviewAiTaskIndicator />
           <PortfolioAdviceTaskIndicator />
+          {showResearchWorkflow ? <ResearchWorkflowNav /> : null}
           <Outlet />
         </div>
       </main>
