@@ -33,14 +33,14 @@ import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
 /**
  * Sidebar follows user contexts instead of mirroring implementation modules.
  * Primary destinations answer five recurring questions:
- * - 今天：现在发生了什么？
+ * - 复盘：今天发生了什么，哪些判断需要复盘？
  * - 自选：我正在关注什么？
  * - 研究：这个标的值不值得继续研究？
  * - 持仓：我现在暴露了什么风险？
  * - 决策：下一步应该做什么？
  */
 const PRIMARY_NAV = [
-  { to: "/daily-review", icon: Activity, label: "今天" },
+  { to: "/daily-review", icon: Activity, label: "复盘" },
   { to: "/watchlist", icon: Star, label: "自选" },
   { to: "/stock-data", icon: Search, label: "研究" },
   { to: "/portfolio", icon: Wallet, label: "持仓" },
@@ -254,7 +254,7 @@ export function Layout() {
   };
 
   return (
-    <div className="flex h-screen bg-background text-foreground">
+    <div className="flex h-screen min-h-0 overflow-hidden bg-background text-foreground">
       <button
         ref={triggerRef}
         type="button"
@@ -287,7 +287,7 @@ export function Layout() {
         aria-modal={mobileOpen ? true : undefined}
         aria-label={mobileOpen ? "导航菜单" : undefined}
         className={cn(
-          "z-40 flex flex-col bg-sidebar transition-[width] duration-200",
+          "z-40 flex min-h-0 flex-col bg-sidebar transition-[width] duration-200",
           "fixed inset-y-0 left-0 w-[260px]",
           "md:static md:shrink-0",
           mobileOpen ? "flex" : "hidden md:flex",
@@ -325,7 +325,10 @@ export function Layout() {
           )}
         </div>
 
-        <nav aria-label="主导航" className={cn("flex-1 overflow-y-auto px-2 pb-3 pt-1", compact && "px-1.5")}>
+        <nav
+          aria-label="主导航"
+          className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3 pt-1", compact && "px-1.5")}
+        >
           <div className="space-y-0.5">{PRIMARY_NAV.map(iconNavItem)}</div>
 
           <div className="mt-5">
@@ -471,7 +474,7 @@ export function Layout() {
         </div>
       </aside>
 
-      <main ref={mainRef} className="flex-1 overflow-auto bg-background">
+      <main ref={mainRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain bg-background">
         <div className="mx-auto w-full max-w-[1320px] px-4 pb-12 pt-16 sm:px-6 md:px-8 md:pt-7 lg:px-10">
           <DailyReviewAiTaskIndicator />
           <PortfolioAdviceTaskIndicator />
