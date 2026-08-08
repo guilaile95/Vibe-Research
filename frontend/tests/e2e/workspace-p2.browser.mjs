@@ -25,7 +25,7 @@ function startStaticServer(dir, port) {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
-    ".json": "application/json; charset=utf-8",
+    ".json": "application/json",
     ".png": "image/png",
     ".svg": "image/svg+xml",
     ".ico": "image/x-icon",
@@ -250,6 +250,49 @@ async function assertNoHorizontalOverflow(page, label) {
   }
 }
 
+async function assertViewportScrollLocked(page, label) {
+  const metrics = await page.evaluate(() => {
+    const scrolling = document.scrollingElement || document.documentElement;
+    return {
+      scrollHeight: scrolling.scrollHeight,
+      clientHeight: scrolling.clientHeight,
+      scrollY: window.scrollY,
+    };
+  });
+  if (metrics.scrollHeight > metrics.clientHeight + 2 || metrics.scrollY !== 0) {
+    throw new Error(
+      `${label}: document escaped viewport (${metrics.scrollHeight}/${metrics.clientHeight}, scrollY=${metrics.scrollY})`,
+    );
+  }
+}
+
+async function assertSidebarBehavior(page) {
+  const sidebarNav = page.locator('nav[aria-label="主导航"]');
+  await sidebarNav.waitFor();
+
+  if ((await sidebarNav.getByText("复盘", { exact: true }).count()) !== 1) {
+    throw new Error("primary navigation did not rename 今天 to 复盘");
+  }
+  if ((await sidebarNav.getByText("今天", { exact: true }).count()) !== 0) {
+    throw new Error("legacy 今天 label is still present in primary navigation");
+  }
+
+  for (const label of ["资料", "分析"]) {
+    const toggle = sidebarNav.getByRole("button", { name: label, exact: true });
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  }
+
+  await sidebarNav.evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+  });
+  const box = await sidebarNav.boundingBox();
+  if (!box) throw new Error("sidebar navigation has no layout box");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 5000);
+  await page.waitForTimeout(50);
+  await assertViewportScrollLocked(page, "sidebar scroll containment");
+}
+
 async function runStockWorkspace(page, baseUrl) {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`${baseUrl}/stock-data`, { waitUntil: "networkidle" });
@@ -261,6 +304,8 @@ async function runStockWorkspace(page, baseUrl) {
       throw new Error(`research workflow missing ${label}`);
     }
   }
+
+  await assertSidebarBehavior(page);
 
   const privacy = page.getByRole("button", { name: "开启隐私模式" });
   await privacy.click();
@@ -288,6 +333,7 @@ async function runStockWorkspace(page, baseUrl) {
     throw new Error("stock workspace did not persist section hash");
   }
   await assertNoHorizontalOverflow(page, "stock desktop");
+  await assertViewportScrollLocked(page, "stock desktop shell");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload({ waitUntil: "networkidle" });
@@ -295,6 +341,7 @@ async function runStockWorkspace(page, baseUrl) {
   await page.getByRole("button", { name: "查询" }).click();
   await page.locator('aside[aria-label="股票工作区导航"]').waitFor();
   await assertNoHorizontalOverflow(page, "stock mobile");
+  await assertViewportScrollLocked(page, "stock mobile shell");
 }
 
 async function runScreener(page, baseUrl) {
@@ -305,6 +352,7 @@ async function runScreener(page, baseUrl) {
   const current = workflow.locator('[aria-current="page"]');
   if ((await current.textContent())?.trim() !== "筛选") throw new Error("screener workflow context lost");
   await assertNoHorizontalOverflow(page, "screener desktop");
+  await assertViewportScrollLocked(page, "screener desktop shell");
 }
 
 async function runDecisionWorkspace(page, baseUrl) {
@@ -320,11 +368,13 @@ async function runDecisionWorkspace(page, baseUrl) {
     throw new Error("priority rail disclaimer missing");
   }
   await assertNoHorizontalOverflow(page, "cockpit desktop");
+  await assertViewportScrollLocked(page, "cockpit desktop shell");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload({ waitUntil: "networkidle" });
   await page.locator('aside[aria-label="今日优先事项"]').waitFor();
   await assertNoHorizontalOverflow(page, "cockpit mobile");
+  await assertViewportScrollLocked(page, "cockpit mobile shell");
 }
 
 async function main() {
@@ -348,7 +398,7 @@ async function main() {
     if (pageErrors.length) {
       throw new Error(`page errors:\n${pageErrors.join("\n")}`);
     }
-    console.log("PASS P2 workspace browser acceptance: stock/screener/cockpit desktop+mobile");
+    console.log("PASS P2 workspace browser acceptance: sidebar/stock/screener/cockpit desktop+mobile");
   } finally {
     await browser.close();
     await new Promise((resolve) => server.close(resolve));
