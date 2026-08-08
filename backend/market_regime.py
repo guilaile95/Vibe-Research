@@ -13,13 +13,18 @@
   绝不声明 fresh；
 - ``data_cutoff`` 只能来自可靠 ``data_time``，否则为 ``None``；
 - top-level ``trade_date`` 需要多来源日期一致才确认（当前 breadth.trade_date 恒为 None，
-  因此生产环境下 trade_date 保持 None，不伪造统一日期）。
+  因此生产环境下 trade_date 保持 None，不伪造统一日期）；
+- 时间对齐（P1-2）：breadth 有效交易日（优先 ``breadth.trade_date``，缺失时用可靠
+  ``data_time`` 的日期部分，**禁止**用 ``fetched_at`` 推导）与 ``emotion.date`` 必须一致，
+  ``temporal_alignment`` ∈ ALIGNED / CONFLICT / UNKNOWN；非 ALIGNED 时 speculation /
+  emotion 状态 fail-closed 置 UNKNOWN，不得作为当前交易日事实参与方向判断，
+  raw 值保留供审计展示。
 
 输出统一信封（v0.1）：
 - market_regime ∈ RISK_ON / NEUTRAL / RISK_OFF / STRESSED / UNKNOWN
 - risk_appetite ∈ HIGH / MEDIUM / LOW / UNKNOWN
 - confidence ∈ HIGH / MEDIUM / LOW
-- is_stale / trade_date / data_cutoff / fetched_at / components / reasons
+- is_stale / trade_date / temporal_alignment / data_cutoff / fetched_at / components / reasons
 
 Market Regime 不是 BUY/SELL 信号；不因为环境好产生买入建议，
 也不因为环境差产生卖出建议。Sector Regime 不在本层范围。
@@ -75,6 +80,8 @@ _REASON_MESSAGES = {
     "EMOTION_STRESSED": "短线情绪承压（跌停家数不低于 30 或炸板率不低于 50%）",
     "EMOTION_UNAVAILABLE": "短线情绪数据不可用",
     "SIGNAL_CONFLICT": "市场信号相互冲突，不强行判断方向",
+    "SOURCE_DATE_CONFLICT": "情绪数据与广度数据交易日期不一致，情绪信号不作为当前交易日事实",
+    "TEMPORAL_ALIGNMENT_UNKNOWN": "无法确认情绪与广度数据属于同一交易日，情绪信号不作为当前事实",
     "DATA_PARTIAL": "部分数据缺失，判断置信度下降",
     "DATA_FRESHNESS_UNKNOWN": "无可靠行情数据时间，无法确认新鲜度",
     "DATA_STALE": "行情数据已过期（数据时间超过 4 小时）",
@@ -130,16 +137,24 @@ def _liquidity_state(total_amount) -> str:
 
 
 def _emotion_state(emotion: dict) -> str:
-    """情绪压力状态：跌停家数或炸板率达到阈值 → STRESSED。"""
+    """情绪压力状态（P1-1 契约）：
+
+    - 任一已知指标达到 stress 阈值（dt_count >= 30 或 break_rate >= 0.50）
+      → STRESSED（另一字段缺失不影响，已有足够确定性证据）；
+    - 仅当 dt_count 与 break_rate 均有效且均未达阈值 → NORMAL；
+    - 其余（无越阈信号但任一缺失）→ UNKNOWN：部分数据缺失不得伪装成 NORMAL。
+    """
     dt = emotion.get("dt_count")
     break_rate = emotion.get("break_rate")
-    if not _is_number(dt) and not _is_number(break_rate):
-        return _STATE_UNKNOWN
-    if (_is_number(dt) and float(dt) >= _STRESS_DT_MIN) or (
-        _is_number(break_rate) and float(break_rate) >= _STRESS_BREAK_RATE
+    dt_valid = _is_number(dt)
+    break_valid = _is_number(break_rate)
+    if (dt_valid and float(dt) >= _STRESS_DT_MIN) or (
+        break_valid and float(break_rate) >= _STRESS_BREAK_RATE
     ):
         return _STATE_STRESSED
-    return _STATE_NORMAL
+    if dt_valid and break_valid:
+        return _STATE_NORMAL
+    return _STATE_UNKNOWN
 
 
 def _parse_timestamp(raw) -> datetime | None:
@@ -155,20 +170,43 @@ def _parse_timestamp(raw) -> datetime | None:
     return None
 
 
+def _valid_date_str(raw) -> str | None:
+    """仅接受合法 YYYY-MM-DD；缺失 / 非字符串 / 不可解析 → None。"""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    text = raw.strip()
+    try:
+        datetime.strptime(text, _DATE_FORMAT)
+    except ValueError:
+        return None
+    return text
+
+
+def _breadth_effective_date(breadth: dict, reliable_data_time: datetime | None) -> str | None:
+    """广度有效交易日：优先 ``breadth.trade_date``；缺失时用可靠 ``data_time`` 的日期部分。
+
+    禁止用 ``fetched_at`` 推导交易日期。``reliable_data_time`` 为已解析且不晚于 now 的
+    行情事实时间（不可靠 / 缺失 → None）。
+    """
+    trade_date = _valid_date_str(breadth.get("trade_date"))
+    if trade_date is not None:
+        return trade_date
+    if reliable_data_time is not None:
+        return reliable_data_time.strftime(_DATE_FORMAT)
+    return None
+
+
+def _temporal_alignment(breadth_effective_date: str | None, emotion_date: str | None) -> str:
+    """最小时间对齐契约：两者都存在且相等 → ALIGNED；都存在但不同 → CONFLICT；任一无法确认 → UNKNOWN。"""
+    if breadth_effective_date is not None and emotion_date is not None:
+        return "ALIGNED" if breadth_effective_date == emotion_date else "CONFLICT"
+    return "UNKNOWN"
+
+
 def _confirmed_trade_date(breadth_trade_date, emotion_date) -> str | None:
     """统一 trade_date 只在多来源日期一致时确认；任一缺失/冲突 → None（不伪造）。"""
-
-    def _valid_date(v) -> str | None:
-        if not isinstance(v, str) or not v.strip():
-            return None
-        try:
-            datetime.strptime(v.strip(), _DATE_FORMAT)
-        except ValueError:
-            return None
-        return v.strip()
-
-    b = _valid_date(breadth_trade_date)
-    e = _valid_date(emotion_date)
+    b = _valid_date_str(breadth_trade_date)
+    e = _valid_date_str(emotion_date)
     if b is not None and e is not None and b == e:
         return b
     return None
@@ -228,6 +266,21 @@ def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None =
     if freshness_known:
         is_stale = (now - data_time_dt).total_seconds() > _STALE_AFTER_SECONDS
     fresh = not is_stale
+
+    # ---- 时间对齐（P1-2）：breadth 有效交易日 vs emotion.date ----
+    # breadth 有效交易日优先 trade_date，缺失时用可靠 data_time 的日期部分（禁止 fetched_at）；
+    # emotion.date 仅接受合法 YYYY-MM-DD。
+    reliable_data_time = data_time_dt if freshness_known else None
+    breadth_effective_date = _breadth_effective_date(breadth, reliable_data_time)
+    emotion_date_valid = _valid_date_str(emotion_date)
+    alignment = _temporal_alignment(breadth_effective_date, emotion_date_valid)
+
+    # ---- fail-closed：时间对齐未确认时，emotion-derived 状态不得作为当前交易日事实 ----
+    # 跨日拼接（CONFLICT）或无法确认同一交易日（UNKNOWN）→ speculation / emotion 置
+    # UNKNOWN（raw 值保留供审计），不参与当前 regime 方向与冲突裁决。
+    if alignment != "ALIGNED":
+        appetite_state = _STATE_UNKNOWN
+        emo_state = _STATE_UNKNOWN
 
     # ---- 统一 trade_date：多来源一致才确认 ----
     trade_date = _confirmed_trade_date(breadth.get("trade_date"), emotion_date)
@@ -290,6 +343,10 @@ def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None =
     reasons.append(_reason(_appetite_reason_code(appetite_state)))
     reasons.append(_reason(_liquidity_reason_code(liquidity_state)))
     reasons.append(_reason(_emotion_reason_code(emo_state)))
+    if alignment == "CONFLICT":
+        reasons.append(_reason("SOURCE_DATE_CONFLICT"))
+    elif alignment == "UNKNOWN":
+        reasons.append(_reason("TEMPORAL_ALIGNMENT_UNKNOWN"))
     if conflict:
         reasons.append(_reason("SIGNAL_CONFLICT"))
     if core_available and (b_partial or missing_count >= 1):
@@ -341,7 +398,7 @@ def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None =
         "speculation": {
             "state": appetite_state,
             "available": appetite_state != _STATE_UNKNOWN,
-            "fresh": fresh,
+            "fresh": fresh and alignment == "ALIGNED",
             "raw": raw_speculation,
         },
         "liquidity": {
@@ -353,7 +410,7 @@ def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None =
         "emotion": {
             "state": emo_state,
             "available": emo_state != _STATE_UNKNOWN,
-            "fresh": fresh,
+            "fresh": fresh and alignment == "ALIGNED",
             "raw": raw_emotion,
         },
     }
@@ -364,6 +421,7 @@ def derive_market_regime(breadth: dict, emotion: dict, *, now: datetime | None =
         "confidence": confidence,
         "is_stale": is_stale,
         "trade_date": trade_date,
+        "temporal_alignment": alignment,
         "data_cutoff": data_cutoff,
         "fetched_at": fetched_at,
         "components": components,

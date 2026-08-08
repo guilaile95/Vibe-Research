@@ -3,7 +3,9 @@
 覆盖：RISK_ON / RISK_OFF / STRESSED / NEUTRAL / UNKNOWN /
 部分缺失降级 / stale 降级 / freshness UNKNOWN fail-closed /
 强冲突不激进（含 EMOTION_STRESSED 冲突）/ 确定性重复执行 /
-reason codes 与规则一致 / API contract / 时间语义（P1 修正）。
+reason codes 与规则一致 / API contract / 时间语义（P1 修正）/
+emotion 部分数据缺失契约（P1-1）/ temporal alignment（P1-2）/
+API 错误响应脱敏（P2-1）。
 """
 from __future__ import annotations
 
@@ -281,33 +283,44 @@ def test_fresh_data_not_stale():
 
 
 def test_stale_data_time_downgrades_confidence():
-    """data_time 超过阈值 → stale；data_cutoff 为 data_time（≠ fetched_at）。"""
+    """data_time 超过阈值 → stale；data_cutoff 为 data_time（≠ fetched_at）。
+
+    P1-2：stale 的 data_time 日期（2026-08-06）与 emotion.date（2026-08-07）冲突
+    → emotion-derived 状态不参与当前交易日 → Confidence 进一步降级。"""
     payload = derive_market_regime(
         _breadth_env(up_ratio=0.72, total_amount=1.5e12, data_time="2026-08-06 09:00:00"),
         _emotion(zt=150),
         now=_NOW,
     )
     assert payload["is_stale"] is True
-    assert payload["confidence"] == "MEDIUM"  # HIGH → MEDIUM
+    assert payload["confidence"] == "LOW"  # stale MEDIUM + date conflict（2 组件缺失）→ LOW
+    assert payload["temporal_alignment"] == "CONFLICT"
     assert "DATA_STALE" in _codes(payload)
+    assert "SOURCE_DATE_CONFLICT" in _codes(payload)
+    assert payload["risk_appetite"] == "UNKNOWN"  # 昨日情绪不得作为当前交易日事实
     assert payload["data_cutoff"] == "2026-08-06 09:00:00"  # 不伪装实时
     assert payload["data_cutoff"] != payload["fetched_at"]
 
 
-def test_stale_with_other_downgrades_stays_medium():
+def test_stale_with_date_conflict_downgrades_low():
+    """stale + emotion 日期冲突 → 组件缺失 + stale 双重降级 → LOW（不再 MEDIUM）。"""
     payload = derive_market_regime(
         _breadth_env(up_ratio=0.30, total_amount=7.0e11, data_time="2026-08-06 09:00:00"),
         _emotion(zt=12),
         now=_NOW,
     )
-    assert payload["market_regime"] == "RISK_OFF"
+    assert payload["market_regime"] == "RISK_OFF"  # 广度+流动性弱，仍可 RISK_OFF
     assert payload["is_stale"] is True
-    assert payload["confidence"] == "MEDIUM"
+    assert payload["confidence"] == "LOW"
+    assert "SOURCE_DATE_CONFLICT" in _codes(payload)
 
 
 def test_missing_data_time_fail_closed_freshness_unknown():
     """（生产语义 A/C）fetched_at 很新但 data_time 缺失 → 不得声明 fresh：
-    is_stale=True + DATA_FRESHNESS_UNKNOWN + Confidence 降级 + data_cutoff=None。"""
+    is_stale=True + DATA_FRESHNESS_UNKNOWN + Confidence 降级 + data_cutoff=None。
+
+    P1-2：data_time 缺失 → 无 breadth 有效日期 → alignment UNKNOWN → emotion-derived
+    状态同样 fail-closed（UNKNOWN）。"""
     payload = derive_market_regime(
         _breadth_env(up_ratio=0.72, total_amount=1.5e12, data_time=None),
         _emotion(zt=150),
@@ -315,10 +328,15 @@ def test_missing_data_time_fail_closed_freshness_unknown():
     )
     assert payload["is_stale"] is True
     assert payload["data_cutoff"] is None
-    assert payload["confidence"] == "MEDIUM"
+    assert payload["confidence"] == "LOW"  # freshness UNKNOWN + alignment UNKNOWN（2 组件缺失）
+    assert payload["temporal_alignment"] == "UNKNOWN"
     assert "DATA_FRESHNESS_UNKNOWN" in _codes(payload)
     assert "DATA_STALE" not in _codes(payload)  # 语义是 freshness UNKNOWN，不是时间过期
+    assert "TEMPORAL_ALIGNMENT_UNKNOWN" in _codes(payload)
     assert payload["components"]["breadth"]["fresh"] is False
+    assert payload["components"]["speculation"]["fresh"] is False
+    assert payload["components"]["emotion"]["fresh"] is False
+    assert payload["risk_appetite"] == "UNKNOWN"
 
 
 def test_invalid_data_time_not_echoed_as_cutoff():
@@ -358,15 +376,18 @@ def test_fetched_at_is_independent_field_not_cutoff():
 
 
 def test_fresh_fetched_at_without_data_time_not_fresh():
-    """（生产语义 A）fetched_at 很新但无 data_time → 不得声明可靠 fresh cutoff。"""
+    """（生产语义 A）fetched_at 很新但无 data_time → 不得声明可靠 fresh cutoff。
+
+    P1-2：无 data_time → alignment UNKNOWN → emotion-derived 状态 fail-closed。"""
     payload = derive_market_regime(
         _breadth_env(up_ratio=0.72, total_amount=1.5e12, data_time=None),
         _emotion(zt=150),
         now=_NOW,
     )
     assert payload["is_stale"] is True
-    assert payload["confidence"] == "MEDIUM"
+    assert payload["confidence"] == "LOW"
     assert "DATA_FRESHNESS_UNKNOWN" in _codes(payload)
+    assert "TEMPORAL_ALIGNMENT_UNKNOWN" in _codes(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +482,7 @@ def test_reason_codes_exact_for_unknown_core():
         "RISK_APPETITE_UNAVAILABLE",
         "LIQUIDITY_UNAVAILABLE",
         "EMOTION_UNAVAILABLE",
+        "TEMPORAL_ALIGNMENT_UNKNOWN",
         "TRADE_DATE_UNKNOWN",
     ]
 
@@ -480,6 +502,8 @@ def test_reason_codes_exact_for_risk_on():
 
 
 def test_reason_codes_exact_when_freshness_unknown():
+    """data_time 缺失 → freshness UNKNOWN + alignment UNKNOWN：
+    emotion-derived 状态（appetite/emotion）fail-closed 为 UNKNOWN。"""
     payload = derive_market_regime(
         _breadth_env(up_ratio=0.72, total_amount=1.5e12, data_time=None),
         _emotion(zt=150),
@@ -487,9 +511,11 @@ def test_reason_codes_exact_when_freshness_unknown():
     )
     assert _codes(payload) == [
         "BREADTH_STRONG",
-        "RISK_APPETITE_HIGH",
+        "RISK_APPETITE_UNAVAILABLE",
         "LIQUIDITY_STRONG",
-        "EMOTION_NORMAL",
+        "EMOTION_UNAVAILABLE",
+        "TEMPORAL_ALIGNMENT_UNKNOWN",
+        "DATA_PARTIAL",
         "DATA_FRESHNESS_UNKNOWN",
         "TRADE_DATE_UNKNOWN",
     ]
@@ -510,12 +536,14 @@ def test_api_contract_normal(monkeypatch):
     data = r.json()["data"]
     assert set(data) >= {
         "market_regime", "risk_appetite", "confidence", "is_stale",
-        "trade_date", "data_cutoff", "fetched_at", "components", "reasons",
+        "trade_date", "temporal_alignment", "data_cutoff", "fetched_at",
+        "components", "reasons",
     }
     assert data["market_regime"] == "RISK_ON"
     assert data["risk_appetite"] == "HIGH"
     assert data["confidence"] == "HIGH"
     assert data["trade_date"] == _TRADE_DATE
+    assert data["temporal_alignment"] == "ALIGNED"
     assert data["data_cutoff"] == env["data_time"]
     assert data["fetched_at"] == env["fetched_at"]
     assert set(data["components"]) == {"breadth", "speculation", "liquidity", "emotion"}
@@ -535,14 +563,21 @@ def test_api_contract_unavailable(monkeypatch):
 
 
 def test_api_unexpected_error_502(monkeypatch):
+    """Security Boundary（P2-1）：未预期异常 → 502，响应体只含稳定脱敏文本。
+
+    不得泄漏 str(e) / provider error / URL / token / traceback。"""
     def boom():
-        raise RuntimeError("unexpected")
+        raise RuntimeError("ProxyError https://secret-provider.example/token=abc")
 
     monkeypatch.setattr(market_regime, "get_market_regime", boom)
     r = client.get("/api/market/regime")
     assert r.status_code == 502
-    assert "市场状态异常" in r.json()["detail"]
-    assert "unexpected" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert "市场状态暂不可用" in detail
+    assert "secret-provider" not in detail
+    assert "token=abc" not in detail
+    assert "ProxyError" not in detail
+    assert "RuntimeError" not in detail
 
 
 def test_api_emotion_exception_falls_back(monkeypatch):
@@ -617,3 +652,187 @@ def test_data_cutoff_missing_not_fabricated():
         now=_NOW,
     )
     assert payload["data_cutoff"] is None
+
+
+# ---------------------------------------------------------------------------
+# 13. P1-1：Emotion 部分数据缺失不得伪装成 NORMAL
+# ---------------------------------------------------------------------------
+def test_emotion_partial_dt_missing_not_normal():
+    """（A）dt_count=None + break_rate=0.20（无越阈信号、部分缺失）→ emotion UNKNOWN，
+    不得 NORMAL；Confidence 降级；不得 HIGH-confidence RISK_ON。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, trade_date=_TRADE_DATE),
+        _emotion(zt=150, dt=None, break_rate=0.20),
+        now=_NOW,
+    )
+    assert payload["temporal_alignment"] == "ALIGNED"  # 排除对齐因素，纯 partial 语义
+    assert payload["components"]["emotion"]["state"] == "UNKNOWN"
+    assert payload["components"]["emotion"]["available"] is False
+    assert "EMOTION_NORMAL" not in _codes(payload)
+    assert "EMOTION_UNAVAILABLE" in _codes(payload)
+    assert "DATA_PARTIAL" in _codes(payload)
+    assert payload["confidence"] == "MEDIUM"  # 降级，不是 HIGH
+    assert not (payload["market_regime"] == "RISK_ON" and payload["confidence"] == "HIGH")
+
+
+def test_emotion_partial_break_rate_missing_not_normal():
+    """（B）dt_count=5 + break_rate=None → emotion UNKNOWN，Confidence 降级。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, trade_date=_TRADE_DATE),
+        _emotion(zt=150, dt=5, break_rate=None),
+        now=_NOW,
+    )
+    assert payload["components"]["emotion"]["state"] == "UNKNOWN"
+    assert payload["components"]["emotion"]["available"] is False
+    assert "EMOTION_UNAVAILABLE" in _codes(payload)
+    assert payload["confidence"] == "MEDIUM"
+
+
+def test_emotion_partial_break_rate_high_stressed():
+    """（C）dt_count=None + break_rate=0.60 → STRESSED（已有足够确定性证据，另一字段缺失不影响）。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.30),
+        _emotion(zt=12, dt=None, break_rate=0.60),
+        now=_NOW,
+    )
+    assert payload["market_regime"] == "STRESSED"
+    assert payload["components"]["emotion"]["state"] == "STRESSED"
+    assert payload["components"]["emotion"]["available"] is True
+    assert "EMOTION_STRESSED" in _codes(payload)
+
+
+def test_emotion_partial_dt_high_stressed():
+    """（D）dt_count=45 + break_rate=None → STRESSED。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.30),
+        _emotion(zt=12, dt=45, break_rate=None),
+        now=_NOW,
+    )
+    assert payload["market_regime"] == "STRESSED"
+    assert payload["components"]["emotion"]["state"] == "STRESSED"
+    assert "EMOTION_STRESSED" in _codes(payload)
+
+
+def test_emotion_full_valid_below_threshold_normal():
+    """（E）dt_count=5 + break_rate=0.20（均有效、均未越阈）→ NORMAL。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.50, total_amount=1.0e12),
+        _emotion(zt=45, dt=5, break_rate=0.20),
+        now=_NOW,
+    )
+    assert payload["components"]["emotion"]["state"] == "NORMAL"
+    assert payload["components"]["emotion"]["available"] is True
+    assert "EMOTION_NORMAL" in _codes(payload)
+
+
+# ---------------------------------------------------------------------------
+# 14. P1-2：Temporal Alignment（breadth 有效交易日 vs emotion.date）
+# ---------------------------------------------------------------------------
+def test_alignment_aligned_when_dates_match():
+    """（A）breadth trade_date = emotion date → ALIGNED，emotion 可参与 regime。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, trade_date=_TRADE_DATE),
+        _emotion(zt=150, date=_TRADE_DATE),
+        now=_NOW,
+    )
+    assert payload["temporal_alignment"] == "ALIGNED"
+    assert payload["risk_appetite"] == "HIGH"
+    assert payload["components"]["emotion"]["state"] == "NORMAL"
+    codes = _codes(payload)
+    assert "SOURCE_DATE_CONFLICT" not in codes
+    assert "TEMPORAL_ALIGNMENT_UNKNOWN" not in codes
+
+
+def test_alignment_aligned_via_reliable_data_time_date():
+    """（C）breadth trade_date=None + 可靠 data_time=2026-08-07 14:30 → 取 data_time 日期部分，
+    emotion date 同日 → ALIGNED。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, trade_date=None, data_time="2026-08-07 14:30:00"),
+        _emotion(zt=150, date=_TRADE_DATE),
+        now=_NOW,
+    )
+    assert payload["temporal_alignment"] == "ALIGNED"
+    assert payload["risk_appetite"] == "HIGH"  # 情绪可参与
+    assert "TEMPORAL_ALIGNMENT_UNKNOWN" not in _codes(payload)
+
+
+def test_alignment_conflict_blocks_emotion_facts():
+    """（B）breadth 2026-08-07 vs emotion 2026-08-06 → CONFLICT：
+    risk_appetite / emotion → UNKNOWN；fresh=False；Confidence 降级；SOURCE_DATE_CONFLICT；
+    raw 值保留供审计。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, trade_date=_TRADE_DATE),
+        _emotion(zt=150, date="2026-08-06"),
+        now=_NOW,
+    )
+    assert payload["temporal_alignment"] == "CONFLICT"
+    assert payload["risk_appetite"] == "UNKNOWN"
+    assert payload["components"]["speculation"]["state"] == "UNKNOWN"
+    assert payload["components"]["speculation"]["available"] is False
+    assert payload["components"]["emotion"]["state"] == "UNKNOWN"
+    assert payload["components"]["emotion"]["available"] is False
+    assert payload["components"]["speculation"]["fresh"] is False
+    assert payload["components"]["emotion"]["fresh"] is False
+    assert payload["confidence"] == "LOW"
+    assert "SOURCE_DATE_CONFLICT" in _codes(payload)
+    # raw 事实仍保留（审计展示），只是不得作为当前已确认事实
+    assert payload["components"]["speculation"]["raw"]["zt_count"] == 150
+    assert payload["components"]["emotion"]["raw"]["dt_count"] == 8
+
+
+def test_alignment_conflict_via_data_time_date():
+    """（D）trade_date=None + data_time=2026-08-07 14:30 + emotion date=2026-08-06 → CONFLICT。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, trade_date=None, data_time="2026-08-07 14:30:00"),
+        _emotion(zt=150, date="2026-08-06"),
+        now=_NOW,
+    )
+    assert payload["temporal_alignment"] == "CONFLICT"
+    assert payload["risk_appetite"] == "UNKNOWN"
+    assert "SOURCE_DATE_CONFLICT" in _codes(payload)
+
+
+def test_alignment_unknown_blocks_freshness():
+    """（E）trade_date=None + data_time=None + emotion date 存在 → alignment UNKNOWN：
+    speculation/emotion 不得 fresh=True；Confidence 降级；TEMPORAL_ALIGNMENT_UNKNOWN。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, trade_date=None, data_time=None),
+        _emotion(zt=150, date=_TRADE_DATE),
+        now=_NOW,
+    )
+    assert payload["temporal_alignment"] == "UNKNOWN"
+    assert payload["components"]["speculation"]["fresh"] is False
+    assert payload["components"]["emotion"]["fresh"] is False
+    assert payload["risk_appetite"] == "UNKNOWN"
+    assert payload["components"]["emotion"]["state"] == "UNKNOWN"
+    assert payload["confidence"] == "LOW"
+    assert "TEMPORAL_ALIGNMENT_UNKNOWN" in _codes(payload)
+
+
+def test_alignment_conflict_prevents_risk_on_from_yesterday_zt():
+    """（F）显式日期冲突 + zt_count=150 → 不得因昨日涨停家数输出当前 RISK_ON。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.72, total_amount=1.5e12, trade_date=_TRADE_DATE),
+        _emotion(zt=150, date="2026-08-06"),
+        now=_NOW,
+    )
+    assert payload["temporal_alignment"] == "CONFLICT"
+    assert payload["market_regime"] != "RISK_ON"
+    assert payload["risk_appetite"] == "UNKNOWN"
+    assert "SOURCE_DATE_CONFLICT" in _codes(payload)
+    assert payload["components"]["speculation"]["raw"]["zt_count"] == 150  # raw 保留
+
+
+def test_alignment_conflict_prevents_stressed_from_yesterday_dt():
+    """（G）显式日期冲突 + dt_count=50 → 不得因昨日跌停家数输出当前 STRESSED。"""
+    payload = derive_market_regime(
+        _breadth_env(up_ratio=0.30, total_amount=1.5e12, trade_date=_TRADE_DATE),
+        _emotion(zt=12, dt=50, break_rate=0.3, date="2026-08-06"),
+        now=_NOW,
+    )
+    assert payload["temporal_alignment"] == "CONFLICT"
+    assert payload["market_regime"] != "STRESSED"
+    assert payload["components"]["emotion"]["state"] == "UNKNOWN"
+    assert "EMOTION_STRESSED" not in _codes(payload)
+    assert "SOURCE_DATE_CONFLICT" in _codes(payload)
+    assert payload["components"]["emotion"]["raw"]["dt_count"] == 50  # raw 保留
