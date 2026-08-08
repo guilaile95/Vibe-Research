@@ -52,12 +52,17 @@ def test_normal_response(monkeypatch):
     assert env["code"] == "000001"
     assert env["period"] == "daily"
     assert env["status"] == "normal"
+    assert env["schema_version"] == "technical-indicators-v0.2"
     assert env["latest"]["close"] is not None
     assert env["latest"]["sma20"] is not None
     assert env["latest"]["sma60"] is not None
     assert env["latest"]["rsi14"] is not None
+    assert isinstance(env["latest"]["kdj_k"], (int, float))
+    assert isinstance(env["latest"]["kdj_d"], (int, float))
+    assert isinstance(env["latest"]["kdj_j"], (int, float))
     assert isinstance(env["series"], list)
     assert len(env["series"]) <= 60
+    assert all("kdj_k" in p and "kdj_d" in p and "kdj_j" in p for p in env["series"])
 
 
 # ── 2 非法股票代码 ────────────────────────────────────────────────────
@@ -217,3 +222,29 @@ def test_clamp_warning_is_request_scoped_on_cache_hits(monkeypatch):
     assert any("clamp" in warning for warning in clamped["warnings"])
     assert not any("clamp" in warning for warning in exact["warnings"])
     assert any("clamp" in warning for warning in clamped_again["warnings"])
+
+
+def test_unavailable_kdj_fields_none(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise RuntimeError("upstream down")
+
+    monkeypatch.setattr(astock, "kline", _raise)
+    resp = client.get("/api/market/technical-indicators?code=000001&period=daily&days=120")
+    assert resp.status_code == 200
+    latest = resp.json()["data"]["latest"]
+    assert latest["kdj_k"] is None
+    assert latest["kdj_d"] is None
+    assert latest["kdj_j"] is None
+
+
+def test_partial_missing_high_low_kdj_limitation(monkeypatch):
+    klines = _make_klines(70)
+    klines[-1]["high"] = None
+    klines[-1]["low"] = None
+    monkeypatch.setattr(astock, "kline", lambda code, category=4, offset=60: list(klines))
+    resp = client.get("/api/market/technical-indicators?code=000001&period=daily&days=120")
+    assert resp.status_code == 200
+    env = resp.json()["data"]
+    assert env["status"] == "partial"
+    assert any("KDJ(9,3,3)" in str(x) for x in env["limitations"])
+    assert env["latest"]["sma20"] is not None

@@ -13,8 +13,9 @@ from datetime import date, datetime, time, timezone
 # 常量
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "technical-indicators-v0.1"
+SCHEMA_VERSION = "technical-indicators-v0.2"
 MAX_SERIES_POINTS = 60
+KDJ_LIMITATION = "KDJ(9,3,3) 因高低价历史不足或无效而不可用"
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +119,79 @@ def _sma(values: list[float | None], n: int) -> list[float | None]:
         else:
             result.append(sum(valid) / n)
     return result
+
+
+def _kdj(
+    closes: list[float | None],
+    highs: list[float | None],
+    lows: list[float | None],
+    n: int = 9,
+) -> tuple[list[float | None], list[float | None], list[float | None]]:
+    """KDJ(9,3,3)。
+
+    RSV(i) = (close - LLV(low,n)) / (HHV(high,n) - LLV(low,n)) * 100
+    K(i) = 2/3 * K(i-1) + 1/3 * RSV(i)
+    D(i) = 2/3 * D(i-1) + 1/3 * K(i)
+    J(i) = 3K - 2D
+
+    - 首个可计算点之前 prev K/D = 50
+    - 无效窗口输出 None，且不更新 prev K/D
+    - HHV == LLV 时 RSV = 50
+    - 无未来函数：第 i 日仅使用 0..i
+    """
+    length = len(closes)
+    k_out: list[float | None] = [None] * length
+    d_out: list[float | None] = [None] * length
+    j_out: list[float | None] = [None] * length
+    if length == 0:
+        return k_out, d_out, j_out
+
+    prev_k = 50.0
+    prev_d = 50.0
+
+    for i in range(length):
+        if i < n - 1:
+            continue
+
+        window_highs = highs[i - n + 1 : i + 1]
+        window_lows = lows[i - n + 1 : i + 1]
+        close = closes[i]
+
+        # Window validity: all high/low finite, each high >= low, close finite, LLV <= close <= HHV
+        if not _is_finite(close):
+            continue
+        if any(not _is_finite(h) or not _is_finite(l) for h, l in zip(window_highs, window_lows)):
+            continue
+        if any(h < l for h, l in zip(window_highs, window_lows)):  # type: ignore[operator]
+            continue
+
+        hhv = max(window_highs)  # type: ignore[type-var]
+        llv = min(window_lows)  # type: ignore[type-var]
+        if not _is_finite(hhv) or not _is_finite(llv):
+            continue
+        if close < llv or close > hhv:
+            continue
+
+        if hhv == llv:
+            rsv = 50.0
+        else:
+            rsv = (close - llv) / (hhv - llv) * 100.0
+
+        k_val = (2.0 / 3.0) * prev_k + (1.0 / 3.0) * rsv
+        d_val = (2.0 / 3.0) * prev_d + (1.0 / 3.0) * k_val
+        j_val = 3.0 * k_val - 2.0 * d_val
+
+        # Finite wash before emit / state update
+        if not (math.isfinite(k_val) and math.isfinite(d_val) and math.isfinite(j_val)):
+            continue
+
+        k_out[i] = k_val
+        d_out[i] = d_val
+        j_out[i] = j_val
+        prev_k = k_val
+        prev_d = d_val
+
+    return k_out, d_out, j_out
 
 
 def _ema(values: list[float | None], n: int) -> list[float | None]:
@@ -406,6 +480,9 @@ def _empty_latest() -> dict:
         "bollinger_middle": None,
         "bollinger_lower": None,
         "volume_ratio_5_20": None,
+        "kdj_k": None,
+        "kdj_d": None,
+        "kdj_j": None,
     }
 
 
@@ -437,6 +514,8 @@ def _compute_indicators_inner(
         }
 
     closes = [k["close"] for k in klines]
+    highs = [k.get("high") for k in klines]
+    lows = [k.get("low") for k in klines]
     volumes = [k.get("volume") for k in klines]
 
     # 指标计算
@@ -450,6 +529,7 @@ def _compute_indicators_inner(
     rsi14 = _rsi(closes, 14)
     bollinger_upper, bollinger_middle, bollinger_lower = _bollinger(closes, 20, 2.0)
     vr_5_20 = _volume_ratio(volumes, 5, 20)
+    kdj_k, kdj_d, kdj_j = _kdj(closes, highs, lows, 9)
 
     # 最新日
     idx = len(klines) - 1
@@ -460,6 +540,11 @@ def _compute_indicators_inner(
     has_macd = macd_dif[idx] is not None
     has_rsi = rsi14[idx] is not None
     has_bollinger = bollinger_middle[idx] is not None
+    has_kdj = (
+        kdj_k[idx] is not None
+        and kdj_d[idx] is not None
+        and kdj_j[idx] is not None
+    )
 
     has_volume_ratio = vr_5_20[idx] is not None
     has_sma_cross_history = idx >= 60 and sma20[idx - 1] is not None and sma60[idx - 1] is not None
@@ -467,7 +552,16 @@ def _compute_indicators_inner(
     historical_lows = [klines[j].get("low") for j in range(max(0, idx - 20), idx) if klines[j].get("low") is not None]
     trigger_window_complete = idx >= 20 and len(historical_highs) == 20 and len(historical_lows) == 20
 
-    if len(klines) >= 60 and all([has_sma60, has_macd, has_rsi, has_bollinger, has_volume_ratio, trigger_window_complete, has_sma_cross_history]):
+    if len(klines) >= 60 and all([
+        has_sma60,
+        has_macd,
+        has_rsi,
+        has_bollinger,
+        has_volume_ratio,
+        trigger_window_complete,
+        has_sma_cross_history,
+        has_kdj,
+    ]):
         status = "normal"
     elif len(klines) >= 20:
         status = "partial"
@@ -481,9 +575,14 @@ def _compute_indicators_inner(
             limitations.append("价格区间触发不可评估：过去 20 个交易日的 high/low 数据不完整")
         if not has_sma_cross_history:
             limitations.append("均线交叉不可评估：缺少前一交易日 SMA60")
+        if not has_kdj:
+            limitations.append(KDJ_LIMITATION)
     else:
         status = "unavailable"
         limitations.append(f"历史长度 {len(klines)} 不足 20 个交易日，无法计算主要指标")
+        if not has_kdj:
+            # Keep envelope complete; KDJ absence is informational when overall unavailable.
+            pass
 
     # 触发检测
     triggers = _detect_triggers(klines, sma20, sma60, vr_5_20, idx)
@@ -505,6 +604,9 @@ def _compute_indicators_inner(
         "bollinger_middle": _clean_v(bollinger_middle[idx]),
         "bollinger_lower": _clean_v(bollinger_lower[idx]),
         "volume_ratio_5_20": _clean_v(vr_5_20[idx]),
+        "kdj_k": _clean_v(kdj_k[idx]),
+        "kdj_d": _clean_v(kdj_d[idx]),
+        "kdj_j": _clean_v(kdj_j[idx]),
     }
 
     # series：最多 60 个数据点
@@ -524,6 +626,9 @@ def _compute_indicators_inner(
                 "macd_histogram": _clean_v(macd_histogram[i]),
                 "rsi14": _clean_v(rsi14[i]),
                 "volume_ratio_5_20": _clean_v(vr_5_20[i]),
+                "kdj_k": _clean_v(kdj_k[i]),
+                "kdj_d": _clean_v(kdj_d[i]),
+                "kdj_j": _clean_v(kdj_j[i]),
             }
         )
 
