@@ -10,7 +10,7 @@ const Sectors = lazy(() => import("@/pages/Sectors").then((m) => ({ default: m.S
 const SectorDetail = lazy(() => import("@/pages/SectorDetail").then((m) => ({ default: m.SectorDetail })));
 const SectorResearchPage = lazy(() => import("@/pages/SectorResearchPage").then((m) => ({ default: m.SectorResearchPage })));
 const Portfolio = lazy(() => import("@/pages/Portfolio").then((m) => ({ default: m.Portfolio })));
-const DecisionCockpit = lazy(() => import("@/pages/DecisionCockpit").then((m) => ({ default: m.DecisionCockpit })));
+const DecisionCockpitWorkspace = lazy(() => import("@/pages/DecisionCockpitWorkspace").then((m) => ({ default: m.DecisionCockpitWorkspace })));
 const StockWorkspace = lazy(() => import("@/pages/StockWorkspace").then((m) => ({ default: m.StockWorkspace })));
 const ScreenerWorkspace = lazy(() => import("@/pages/ScreenerWorkspace").then((m) => ({ default: m.ScreenerWorkspace })));
 const MarketHistory = lazy(() => import("@/pages/MarketHistory").then((m) => ({ default: m.MarketHistory })));
@@ -85,7 +85,7 @@ export const router = createBrowserRouter([
       { path: "/account-policy", element: withSuspense(<AccountPolicy />) },
       { path: "/decision-performance", element: withSuspense(<DecisionPerformance />) },
       { path: "/performance-attribution", element: withSuspense(<PerformanceAttribution />) },
-      { path: "/cockpit", element: withSuspense(<DecisionCockpit />) },
+      { path: "/cockpit", element: withSuspense(<DecisionCockpitWorkspace />) },
       { path: "/stock-data", element: withSuspense(<StockWorkspace />) },
       { path: "/screener", element: withSuspense(<ScreenerWorkspace />) },
       { path: "/watchlist", element: withSuspense(<Watchlist />) },
