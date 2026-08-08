@@ -64,6 +64,21 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
   }, [panelWidth]);
 
   useEffect(() => {
+    const root = document.documentElement;
+    if (!open) {
+      delete root.dataset.aiPanelOpen;
+      root.style.removeProperty("--vibe-ai-panel-width");
+      return;
+    }
+    root.dataset.aiPanelOpen = "true";
+    root.style.setProperty("--vibe-ai-panel-width", `${panelWidth}px`);
+    return () => {
+      delete root.dataset.aiPanelOpen;
+      root.style.removeProperty("--vibe-ai-panel-width");
+    };
+  }, [open, panelWidth]);
+
+  useEffect(() => {
     const onPointerMove = (event: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag) return;
