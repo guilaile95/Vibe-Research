@@ -19,9 +19,9 @@ export function ResearchWorkflowNav() {
   return (
     <div className="mb-6 flex min-w-0 items-center gap-4 border-b border-border/50">
       <span className="hidden shrink-0 pb-2.5 text-[11px] font-medium text-muted-foreground lg:inline">
-        研究工作流
+        研究链路
       </span>
-      <nav aria-label="研究工作流" className="min-w-0 flex-1 overflow-x-auto">
+      <nav aria-label="研究链路" className="min-w-0 flex-1 overflow-x-auto">
         <div className="flex min-w-max items-center gap-1">
           {WORKFLOW_NAV.map(({ to, label }) => {
             const active = isActive(pathname, to);
