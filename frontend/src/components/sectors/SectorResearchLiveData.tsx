@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import {
@@ -9,10 +9,13 @@ import {
   type SectorPanelSummary,
 } from "@/lib/api";
 import {
+  buildSectorCapitalFlowSeries,
   formatCapitalFlowAmount,
   summarizeSectorCapitalFlow,
+  type CapitalFlowRowLike,
   type SectorCapitalFlowSummary,
 } from "@/lib/sectorCapitalFlow";
+import { SectorCapitalFlowChart } from "@/components/sectors/SectorCapitalFlowChart";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -22,6 +25,8 @@ type Props = {
 type CapitalFlowResult = {
   summary: SectorCapitalFlowSummary | null;
   error: string | null;
+  /** Raw fund-flow rows from the same api.fundFlow call used for summary. */
+  rows: CapitalFlowRowLike[];
 };
 
 const PANEL_LABELS: Record<string, string> = {
@@ -126,6 +131,7 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
             return [
               company.code,
               {
+                rows: Array.isArray(rows) ? rows : [],
                 summary,
                 error: summary ? null : "暂无可用资金流数据",
               },
@@ -134,6 +140,7 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
             return [
               company.code,
               {
+                rows: [],
                 summary: null,
                 error: capitalErrorMessage(flowError),
               },
@@ -191,6 +198,27 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
   const capitalTotal = data?.companies?.length ?? 0;
   const capitalResolved = Object.values(capitalFlowByCode);
   const capitalOk = capitalResolved.filter((item) => item.summary != null).length;
+
+  const capitalSeries = useMemo(() => {
+    if (!data?.companies) return null;
+    // Wait until all company fund-flow requests settled (or empty companies)
+    if (capitalLoading && capitalResolved.length === 0) return null;
+    if (data.companies.length > 0 && capitalResolved.length === 0 && capitalLoading) {
+      return null;
+    }
+    const expectedCodes = data.companies.map((c) => c.code);
+    const rowsByCode: Record<string, CapitalFlowRowLike[]> = {};
+    for (const [code, result] of Object.entries(capitalFlowByCode)) {
+      rowsByCode[code] = result.rows ?? [];
+    }
+    // Include expected codes with no entry yet only after loading finished
+    if (!capitalLoading) {
+      for (const code of expectedCodes) {
+        if (!(code in rowsByCode)) rowsByCode[code] = [];
+      }
+    }
+    return buildSectorCapitalFlowSeries(expectedCodes, rowsByCode, 60);
+  }, [data, capitalFlowByCode, capitalLoading, capitalResolved.length]);
 
   return (
     <GlassCard className="p-4 sm:p-5">
@@ -265,6 +293,11 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
           {data.error && (
             <p className="text-xs text-amber-600 dark:text-amber-400">{data.error}</p>
           )}
+
+          <SectorCapitalFlowChart
+            series={capitalSeries}
+            loading={capitalLoading && (!capitalSeries || capitalSeries.points.length === 0)}
+          />
 
           {data.companies?.length > 0 ? (
             <div className="grid grid-cols-1 gap-2 min-[390px]:grid-cols-1 sm:grid-cols-2">
