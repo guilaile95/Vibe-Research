@@ -132,7 +132,7 @@ class TestLedgerCashCandidate:
         _bootstrap([], opening_cash=100000.0)
         cand = svc._ledger_cash_candidate(position_reality_service.derive_positions())
         assert cand["value"] == 100000.0
-        assert cand["coverage"] == "TRADES_ONLY"
+        assert cand["coverage"] == "TRADES_PLUS_MANUAL_CASH_EVENTS"
         assert cand["fact_type"] == "DERIVED_FACT"
 
     def test_buy_deduction(self):
@@ -236,11 +236,17 @@ class TestCashReconciliation:
         )
         assert recon["status"] == "UNKNOWN"
 
-    def test_always_declares_trades_only_coverage(self):
-        """account reality 顶层必须始终声明 cash coverage=TRADES_ONLY + CASH_EVENTS_UNSUPPORTED。"""
+    def test_always_declares_cash_coverage(self):
+        """account reality 顶层必须声明 coverage=TRADES_PLUS_MANUAL_CASH_EVENTS +
+        supported/unsupported cash events；不得声称 FULL_ACCOUNT_LEDGER / canonical。"""
         _bootstrap([], opening_cash=100000.0)
         reality = svc.get_account_reality()
-        assert reality["cash"]["coverage"] == "TRADES_ONLY"
+        assert reality["cash"]["coverage"] == "TRADES_PLUS_MANUAL_CASH_EVENTS"
+        assert reality["canonical"] is False
+        assert reality["cash_event_support"]["supported"] == sorted([
+            "CASH_DEPOSIT", "CASH_WITHDRAWAL", "CASH_DIVIDEND", "CASH_FEE", "CASH_TAX",
+        ])
+        assert reality["cash_event_support"]["unsupported"] == ["CORPORATE_ACTION"]
         assert "CASH_EVENTS_UNSUPPORTED" in reality["reason_codes"]
 
 

@@ -1,7 +1,10 @@
-"""Account event SQLite storage layer (ACCOUNT_OPENING / LEGACY_POSITION_OPENING / CORRECTION).
+"""Account event SQLite storage layer (ACCOUNT_OPENING / LEGACY_POSITION_OPENING / CORRECTION / CASH_*).
 
 与 trade_ledger_store 同一 SQLite 库（trade_ledger.sqlite3）内独立建表 account_events，
-记录账户事实链（账户开立、Vibe 前持仓导入、修正事件）。
+记录账户事实链（账户开立、Vibe 前持仓导入、修正事件、手工现金事件）。
+
+event_type 不再由 DB CHECK 约束（演进集合，校验由 service 层白名单负责）；
+旧表（3 值 CHECK、无 amount 列）首次写入时惰性迁移到新 schema（数据完整保留）。
 """
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ _LOCK = threading.Lock()
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS account_events (
     event_id TEXT PRIMARY KEY,
-    event_type TEXT NOT NULL CHECK (event_type IN ('ACCOUNT_OPENING','LEGACY_POSITION_OPENING','CORRECTION')),
+    event_type TEXT NOT NULL,
     code TEXT,
     name TEXT,
     shares INTEGER,
@@ -33,6 +36,7 @@ CREATE TABLE IF NOT EXISTS account_events (
     after_payload TEXT,
     reason TEXT,
     note TEXT,
+    amount REAL,
     created_at TEXT NOT NULL,
     voided_at TEXT,
     void_reason TEXT
@@ -44,13 +48,15 @@ INSERT INTO account_events (
     event_id, event_type, code, name, shares, cost_basis, opening_cash,
     ledger_start_at, origin, acquired_before_vibe, historical_trades,
     provenance, target_event_id, target_event_type, before_payload, after_payload,
-    reason, note, created_at, voided_at, void_reason
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    reason, note, amount, created_at, voided_at, void_reason
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _SELECT_BY_ID = "SELECT * FROM account_events WHERE event_id = ?"
 _SELECT_LIST_BASE = "SELECT * FROM account_events"
 _COUNT_BASE = "SELECT COUNT(*) AS n FROM account_events"
+
+_LEGACY_CHECK_MARKER = "CHECK (event_type IN"
 
 
 class AccountEventStoreError(RuntimeError):
@@ -90,6 +96,52 @@ def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:
 
 def _ensure_table(conn: sqlite3.Connection) -> None:
     conn.execute(_CREATE_TABLE_SQL)
+    _migrate_legacy_schema(conn)
+
+
+def _table_sql(conn: sqlite3.Connection, table_name: str) -> str | None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return str(row[0]) if row else None
+
+
+def _migrate_legacy_schema(conn: sqlite3.Connection) -> None:
+    """旧 account_events 表（3 值 CHECK、无 amount 列）单次惰性迁移到新 schema。
+
+    数据完整保留（显式列拷贝，amount 默认 NULL），非破坏性；事务内执行，失败回滚。
+    新表 event_type 无 CHECK（service 层白名单校验负责），可容纳 CASH_* 事件。
+    """
+    sql = _table_sql(conn, "account_events")
+    if sql is None:
+        return
+    has_amount = "amount" in sql
+    has_legacy_check = _LEGACY_CHECK_MARKER in sql
+    if has_amount and not has_legacy_check:
+        return  # 已是新 schema
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("ALTER TABLE account_events RENAME TO account_events_legacy")
+        conn.execute(_CREATE_TABLE_SQL)
+        conn.execute(
+            "INSERT INTO account_events ("
+            " event_id, event_type, code, name, shares, cost_basis, opening_cash,"
+            " ledger_start_at, origin, acquired_before_vibe, historical_trades,"
+            " provenance, target_event_id, target_event_type, before_payload, after_payload,"
+            " reason, note, created_at, voided_at, void_reason"
+            ") SELECT "
+            " event_id, event_type, code, name, shares, cost_basis, opening_cash,"
+            " ledger_start_at, origin, acquired_before_vibe, historical_trades,"
+            " provenance, target_event_id, target_event_type, before_payload, after_payload,"
+            " reason, note, created_at, voided_at, void_reason"
+            " FROM account_events_legacy"
+        )
+        conn.execute("DROP TABLE account_events_legacy")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -218,6 +270,7 @@ def insert_event(db_path: str | Path, event: dict[str, Any]) -> None:
                     event.get("after_payload"),
                     event.get("reason"),
                     event.get("note"),
+                    event.get("amount"),
                     event["created_at"],
                     None,
                     None,
@@ -351,6 +404,7 @@ def _event_params(event: dict[str, Any]) -> tuple:
         event.get("after_payload"),
         event.get("reason"),
         event.get("note"),
+        event.get("amount"),
         event["created_at"],
         None,
         None,
