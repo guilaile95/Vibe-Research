@@ -46,7 +46,7 @@ export function EarningsSnapshot({ val, fin, pctl }: Props) {
   if (val.analyst_count > 0) forward.push(`${val.analyst_count} 家机构覆盖`);
 
   return (
-    <GlassCard className="mb-4">
+    <GlassCard className="mb-4" data-workspace-section="fundamentals">
       <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border/35 pb-2.5">
         <h3 className="text-sm font-semibold">财报速览</h3>
         {fin.period ? <span className="text-xs text-muted-foreground/65">{fin.period}</span> : null}
