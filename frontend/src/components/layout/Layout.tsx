@@ -331,7 +331,14 @@ export function Layout() {
           <div className="mt-5">
             <button
               type="button"
-              onClick={() => setLibraryOpen((v) => !v)}
+              onClick={() => {
+                if (compact) {
+                  setCollapsed(false);
+                  setLibraryOpen(true);
+                  return;
+                }
+                setLibraryOpen((v) => !v);
+              }}
               aria-expanded={libraryOpen}
               className={cn(
                 "flex min-h-9 w-full items-center rounded-lg text-[13px] transition-colors",
@@ -377,7 +384,14 @@ export function Layout() {
           <div className="mt-1">
             <button
               type="button"
-              onClick={() => setAnalysisOpen((v) => !v)}
+              onClick={() => {
+                if (compact) {
+                  setCollapsed(false);
+                  setAnalysisOpen(true);
+                  return;
+                }
+                setAnalysisOpen((v) => !v);
+              }}
               aria-expanded={analysisOpen}
               className={cn(
                 "flex min-h-9 w-full items-center rounded-lg text-[13px] transition-colors",
