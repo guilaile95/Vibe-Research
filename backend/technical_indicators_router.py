@@ -1,7 +1,8 @@
-"""技术指标 HTTP 路由：/api/market/technical-indicators。
+"""技术指标与告警规则 HTTP 聚合路由。
 
-只负责 HTTP 适配（参数校验、拉 K 线、缓存、错误隔离）；
-纯计算委托给 technical_indicators.compute_indicators。
+技术指标端点保持 /api/market/technical-indicators；Alert Rule CRUD 作为同级
+/api/alert-rules 路由挂载。这里仅负责把两个已经独立验收的 router 聚合给 app，
+避免恢复旧分支时覆盖后来稳定分支的 app.py。
 """
 from __future__ import annotations
 
@@ -10,13 +11,17 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 
+import alert_rule_router
 import app as app_module
 import astock
 import technical_indicators as ti
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/market/technical-indicators", tags=["technical-indicators"])
+router = APIRouter(
+    prefix="/api/market/technical-indicators",
+    tags=["technical-indicators"],
+)
 
 _ALLOWED_PERIODS = frozenset({"daily"})
 _DAYS_MIN = 20
@@ -128,3 +133,8 @@ def get_technical_indicators(
         pass
 
     return {"data": response_envelope}
+
+
+# FastAPI 会在 app.include_router(router) 时复制这些 APIRoute。直接追加保留
+# Alert Rule 自己的 /api/alert-rules 路径与 tags，同时不触碰当前 stable app.py。
+router.routes.extend(alert_rule_router.router.routes)

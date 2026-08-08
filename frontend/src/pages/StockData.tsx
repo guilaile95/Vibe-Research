@@ -778,6 +778,7 @@ export function StockData() {
             infoErr={infoErr}
             disc={disc}
             discErr={discErr}
+            technicalIndicators={tiEnv}
           />
 
           {/* 技术指标与价格触发（独立 fetch，与 K 线面板解耦） */}

@@ -388,3 +388,180 @@ class TestInputSanitization:
         assert parsed.tzinfo is not None
         assert value.endswith("Z")
         assert len(value.split(".")[-1].removesuffix("Z")) == 6
+
+
+# ── KDJ ────────────────────────────────────────────────────────────────
+
+
+class TestKDJ:
+    def test_prefix_none_and_first_output_with_prev50(self):
+        closes = [10.0] * 12
+        highs = [11.0] * 12
+        lows = [9.0] * 12
+        k, d, j = ti._kdj(closes, highs, lows, 9)
+        assert all(v is None for v in k[:8])
+        assert all(v is None for v in d[:8])
+        assert all(v is None for v in j[:8])
+        # RSV = (10-9)/(11-9)*100 = 50 with prev K/D=50
+        assert k[8] == pytest.approx(50.0)
+        assert d[8] == pytest.approx(50.0)
+        assert j[8] == pytest.approx(50.0)
+
+    def test_flat_window_rsv50(self):
+        closes = [10.0] * 12
+        highs = [10.0] * 12
+        lows = [10.0] * 12
+        k, d, j = ti._kdj(closes, highs, lows, 9)
+        assert k[8] == pytest.approx(50.0)
+        assert d[8] == pytest.approx(50.0)
+        assert j[8] == pytest.approx(50.0)
+
+    def test_up_and_down_bias(self):
+        up = [10 + i for i in range(20)]
+        up_h = [c + 0.5 for c in up]
+        up_l = [c - 0.5 for c in up]
+        k_up, _, _ = ti._kdj(up, up_h, up_l, 9)
+        assert k_up[-1] is not None and k_up[-1] > 50
+
+        down = [30 - i for i in range(20)]
+        down_h = [c + 0.5 for c in down]
+        down_l = [c - 0.5 for c in down]
+        k_down, _, _ = ti._kdj(down, down_h, down_l, 9)
+        assert k_down[-1] is not None and k_down[-1] < 50
+
+    def test_j_not_clamped(self):
+        closes = [10 + i * 2 for i in range(20)]
+        highs = [c + 1 for c in closes]
+        lows = [c - 1 for c in closes]
+        _, _, j = ti._kdj(closes, highs, lows, 9)
+        vals = [v for v in j if v is not None]
+        assert vals
+        assert any(v > 100 or v < 0 for v in vals)
+
+    def test_invalid_windows_emit_none(self):
+        n = 12
+        closes = [10.0] * n
+        highs = [11.0] * n
+        lows = [9.0] * n
+
+        highs2 = list(highs)
+        highs2[10] = None
+        k, d, j = ti._kdj(closes, highs2, lows, 9)
+        assert k[10] is None and d[10] is None and j[10] is None
+
+        highs3 = list(highs)
+        lows3 = list(lows)
+        highs3[10] = 8.0
+        lows3[10] = 9.0
+        k, d, j = ti._kdj(closes, highs3, lows3, 9)
+        assert k[10] is None
+
+        highs4 = list(highs)
+        highs4[10] = float("nan")
+        k, d, j = ti._kdj(closes, highs4, lows, 9)
+        assert k[10] is None
+
+        lows4 = list(lows)
+        lows4[10] = float("inf")
+        k, d, j = ti._kdj(closes, highs, lows4, 9)
+        assert k[10] is None
+
+        closes2 = list(closes)
+        closes2[10] = 20.0
+        k, d, j = ti._kdj(closes2, highs, lows, 9)
+        assert k[10] is None
+
+        closes3 = list(closes)
+        closes3[10] = 1.0
+        k, d, j = ti._kdj(closes3, highs, lows, 9)
+        assert k[10] is None
+
+    def test_recovery_preserves_state(self):
+        # 9 valid bars, then one invalid day, then enough valid bars for a new window.
+        closes = [10 + i * 0.1 for i in range(20)]
+        highs = [c + 0.5 for c in closes]
+        lows = [c - 0.5 for c in closes]
+        highs[9] = None  # invalid day after first complete window (index 8)
+        k, d, j = ti._kdj(closes, highs, lows, 9)
+        assert k[8] is not None
+        assert k[9] is None and d[9] is None and j[9] is None
+        # Windows that still include index 9 remain None; once it rolls out, recover.
+        assert k[17] is None
+        assert k[18] is not None and d[18] is not None and j[18] is not None
+        assert math.isfinite(k[18]) and math.isfinite(d[18]) and math.isfinite(j[18])
+
+    def test_no_future_function(self):
+        base_closes = [10 + i * 0.2 for i in range(20)]
+        base_highs = [c + 0.4 for c in base_closes]
+        base_lows = [c - 0.4 for c in base_closes]
+        k1, d1, j1 = ti._kdj(base_closes, base_highs, base_lows, 9)
+
+        ext_closes = base_closes + [1000 + i for i in range(10)]
+        ext_highs = base_highs + [c + 1 for c in ext_closes[20:]]
+        ext_lows = base_lows + [c - 1 for c in ext_closes[20:]]
+        k2, d2, j2 = ti._kdj(ext_closes, ext_highs, ext_lows, 9)
+        assert k1[19] == pytest.approx(k2[19])
+        assert d1[19] == pytest.approx(d2[19])
+        assert j1[19] == pytest.approx(j2[19])
+
+    def test_envelope_fields_and_status(self):
+        closes = [10 + i * 0.1 for i in range(70)]
+        highs = [c + 0.2 for c in closes]
+        lows = [c - 0.2 for c in closes]
+        klines = _klines_from_closes(
+            closes, highs=highs, lows=lows, vols=[1000 + i * 10 for i in range(70)]
+        )
+        result = ti.compute_indicators(
+            klines,
+            code="000001",
+            period="daily",
+            days=120,
+            trade_date="ignored",
+            fetched_at="2026-03-11T00:00:00Z",
+        )
+        assert result["schema_version"] == "technical-indicators-v0.2"
+        assert result["status"] == "normal"
+        for key in ("kdj_k", "kdj_d", "kdj_j"):
+            assert result["latest"][key] is not None
+            assert math.isfinite(result["latest"][key])
+        assert all("kdj_k" in p and "kdj_d" in p and "kdj_j" in p for p in result["series"])
+
+        empty = ti.compute_indicators(
+            [],
+            code="000001",
+            period="daily",
+            days=120,
+            trade_date=None,
+            fetched_at="2026-01-01T00:00:00Z",
+        )
+        assert empty["status"] == "unavailable"
+        assert empty["latest"]["kdj_k"] is None
+        assert empty["latest"]["kdj_d"] is None
+        assert empty["latest"]["kdj_j"] is None
+
+        short = ti.compute_indicators(
+            _klines_from_closes([10, 11, 12, 13, 14, 15, 16, 17]),
+            code="000001",
+            period="daily",
+            days=8,
+            trade_date="ignored",
+            fetched_at="2026-01-08T00:00:00Z",
+        )
+        assert short["latest"]["kdj_k"] is None
+
+        highs2 = [None if i == 69 else c + 0.2 for i, c in enumerate(closes)]
+        lows2 = [None if i == 69 else c - 0.2 for i, c in enumerate(closes)]
+        klines2 = _klines_from_closes(
+            closes, highs=highs2, lows=lows2, vols=[1000 + i * 10 for i in range(70)]
+        )
+        partial = ti.compute_indicators(
+            klines2,
+            code="000001",
+            period="daily",
+            days=120,
+            trade_date="ignored",
+            fetched_at="2026-03-11T00:00:00Z",
+        )
+        assert partial["status"] == "partial"
+        assert any("KDJ(9,3,3)" in x for x in partial["limitations"])
+        assert partial["limitations"].count(ti.KDJ_LIMITATION) == 1
