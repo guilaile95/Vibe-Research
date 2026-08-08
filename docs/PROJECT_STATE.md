@@ -1,11 +1,11 @@
 # 项目当前状态
 
-> 稳定分支：`feature/research-system-v01`  
-> 稳定 Head：`d06eabac093e0bc0acace4abe1e446b3655629f5`（Merge PR #61，2026-08-08）  
-> 当前授权任务：[`docs/NEXT_TASK.md`](NEXT_TASK.md)  
-> 产品方向：[`docs/PRODUCT_NORTH_STAR_V01.md`](PRODUCT_NORTH_STAR_V01.md)  
-> 治理契约：[`docs/GOVERNANCE.md`](GOVERNANCE.md)  
-> 产品候选池：[`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)  
+> 稳定分支：`feature/research-system-v01`
+> 稳定 Head：`d06eabac093e0bc0acace4abe1e446b3655629f5`（Merge PR #61，2026-08-08）
+> 当前授权任务：[`docs/NEXT_TASK.md`](NEXT_TASK.md)
+> 产品方向：[`docs/PRODUCT_NORTH_STAR_V01.md`](PRODUCT_NORTH_STAR_V01.md)
+> 治理契约：[`docs/GOVERNANCE.md`](GOVERNANCE.md)
+> 产品候选池：[`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)
 > 工程执行规则：根目录 [`AGENTS.md`](../AGENTS.md)
 
 本文件是**项目状态唯一权威**：只描述稳定分支事实、当前授权与总体状态；
