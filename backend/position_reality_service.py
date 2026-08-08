@@ -612,34 +612,25 @@ def _apply_corrections(
                 target[field] = value
 
 
-def derive_positions() -> dict[str, Any]:
-    """Deterministic position derivation from account events + trades + corrections."""
-    db_path = resolve_db_path()
+def build_effective_events(
+    events: list[dict[str, Any]],
+    trades: list[dict[str, Any]],
+    *,
+    ledger_start_ts: datetime | None = None,
+) -> dict[str, dict[str, Any]]:
+    """read-only helper：应用 active corrections 后的 effective events map。
 
-    events = account_event_store.list_events(db_path)
-    trades = trade_ledger_store.list_records(db_path, include_voided=False, limit=None)
+    key 约定：account events → "account_event:{id}"，trades → "trade:{id}"。
 
-    openings = [e for e in events if e["event_type"] == _EVENT_ACCOUNT_OPENING]
-    if len(openings) > 1:
-        raise PositionDerivationError("存在多个 ACCOUNT_OPENING 事件，账本不一致")
+    - 排除 voided（由调用方以 include_voided=False 传入）与 not_executed / 零数量交易；
+    - 应用全部 active CORRECTION（voided correction 由调用方读取时排除）；
+    - chained corrections 按 S1A 同一确定性顺序（created_at ASC）应用；
+    - ledger_start_ts 非 None 时对交易做边界校验（早于起点 → fail closed）。
 
-    # Ledger boundary：ACCOUNT_OPENING 定义 Vibe 接管起点；
-    # 任何有效交易若 executed_at 早于边界 → fail closed，不得偷偷按 POST_VIBE 应用。
-    ledger_start_ts: datetime | None = None
-    if openings:
-        raw_start = openings[0].get("ledger_start_at")
-        if not isinstance(raw_start, str) or not raw_start:
-            raise PositionDerivationError("ACCOUNT_OPENING 缺少 ledger_start_at")
-        try:
-            parsed_start = datetime.fromisoformat(raw_start.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise PositionDerivationError("ACCOUNT_OPENING ledger_start_at 无法解析") from exc
-        if parsed_start.tzinfo is None:
-            raise PositionDerivationError("ACCOUNT_OPENING ledger_start_at 缺少时区信息")
-        ledger_start_ts = parsed_start
-
+    供 derive_positions() 与 ledger_cash_candidate 共用同一 correction semantics（DRY），
+    确保 Position effective facts 与 Cash effective facts 完全一致。
+    """
     corrections = _load_corrections(events)
-
     events_by_key: dict[str, dict[str, Any]] = {}
     for ev in events:
         if ev["event_type"] in (_EVENT_LEGACY_OPENING, _EVENT_ACCOUNT_OPENING):
@@ -666,6 +657,40 @@ def derive_positions() -> dict[str, Any]:
         events_by_key[f"trade:{t['trade_id']}"] = dict(t)
 
     _apply_corrections(events_by_key, corrections)
+    return events_by_key
+
+
+def derive_positions() -> dict[str, Any]:
+    """Deterministic position derivation from account events + trades + corrections."""
+    db_path = resolve_db_path()
+
+    events = account_event_store.list_events(db_path)
+    trades = trade_ledger_store.list_records(db_path, include_voided=False, limit=None)
+
+    openings = [e for e in events if e["event_type"] == _EVENT_ACCOUNT_OPENING]
+    if len(openings) > 1:
+        raise PositionDerivationError("存在多个 ACCOUNT_OPENING 事件，账本不一致")
+
+    # Ledger boundary：ACCOUNT_OPENING 定义 Vibe 接管起点；
+    # 任何有效交易若 executed_at 早于边界 → fail closed，不得偷偷按 POST_VIBE 应用。
+    ledger_start_ts: datetime | None = None
+    if openings:
+        raw_start = openings[0].get("ledger_start_at")
+        if not isinstance(raw_start, str) or not raw_start:
+            raise PositionDerivationError("ACCOUNT_OPENING 缺少 ledger_start_at")
+        try:
+            parsed_start = datetime.fromisoformat(raw_start.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise PositionDerivationError("ACCOUNT_OPENING ledger_start_at 无法解析") from exc
+        if parsed_start.tzinfo is None:
+            raise PositionDerivationError("ACCOUNT_OPENING ledger_start_at 缺少时区信息")
+        ledger_start_ts = parsed_start
+
+    # events_by_key 构建 + active corrections 应用：与 ledger_cash_candidate 共用
+    # build_effective_events helper（DRY），保证 Position / Cash 基于同一 effective facts。
+    events_by_key = build_effective_events(
+        events, trades, ledger_start_ts=ledger_start_ts
+    )
 
     # Build chronological sequence: legacy openings (ledger boundary) FIRST, then trades.
     # Opening 事件语义是"Vibe 接管日边界"，必须先于所有 post-Vibe 交易应用；

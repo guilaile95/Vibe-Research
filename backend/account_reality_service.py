@@ -17,6 +17,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+import account_event_store
 import account_profile
 import astock
 import position_reality_service
@@ -99,10 +100,15 @@ def _current_cash_fact() -> dict[str, Any]:
 
 
 def _ledger_cash_candidate(derived: dict[str, Any]) -> dict[str, Any]:
-    """opening_cash + Σ active executed trade net_cash_flow（TRADES_ONLY candidate）。
+    """opening_cash + Σ effective active executed trade net_cash_flow（TRADES_ONLY candidate）。
 
     仅当 bootstrap 完成且 opening_cash 已知才能计算；否则 UNKNOWN。
-    交易现金流 REUSE trade_ledger_service.compute_fields()，不实现第二套算法。
+
+    correction-aware：交易必须先应用 S1A 的 active CORRECTION（复用
+    position_reality_service.build_effective_events，与 derive_positions 同一
+    correction semantics —— DRY，不复制第二套 engine），再对 effective corrected
+    trade 调用 compute_fields() 计算 net_cash_flow。保证 Position effective facts
+    与 Cash effective facts 完全一致。
     """
     ledger_start = derived.get("ledger_start")
     if ledger_start is None:
@@ -125,12 +131,25 @@ def _ledger_cash_candidate(derived: dict[str, Any]) -> dict[str, Any]:
             "reason_code": _REASON_OPENING_CASH_UNKNOWN,
         }
     db_path = trade_ledger_service.resolve_db_path()
+    events = account_event_store.list_events(db_path)
     trades = trade_ledger_store.list_records(db_path, include_voided=False, limit=None)
+
+    # 与 S1A derive_positions 相同的 ledger 边界（derived 的 ledger_start_at 已是
+    # bootstrap 规范化后的 UTC ISO；derive 已校验其可解析）
+    ledger_start_ts = None
+    raw_start = ledger_start.get("ledger_start_at")
+    if isinstance(raw_start, str) and raw_start:
+        try:
+            ledger_start_ts = datetime.fromisoformat(raw_start.replace("Z", "+00:00"))
+        except ValueError:
+            ledger_start_ts = None
+
+    effective = position_reality_service.build_effective_events(
+        events, trades, ledger_start_ts=ledger_start_ts
+    )
     cash = round(float(opening_cash), 2)
-    for t in trades:
-        if t.get("execution_status") == "not_executed":
-            continue
-        if (t.get("actual_quantity") or 0) <= 0:
+    for key, t in effective.items():
+        if not key.startswith("trade:"):
             continue
         computed = trade_ledger_service.compute_fields(t)
         cash = round(cash + float(computed["net_cash_flow"]), 2)

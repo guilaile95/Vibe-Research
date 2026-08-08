@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -450,3 +451,149 @@ class TestAccountRealitySafety:
         reality = svc.get_account_reality()
         codes = {p["code"] for p in reality["positions"]}
         assert codes == {"600519"}  # 000001 不并入
+
+
+# ---------------------------------------------------------------------------
+# Review round 2: Correction-Aware Ledger Cash Candidate
+# ---------------------------------------------------------------------------
+
+
+def _correct_trade(trade_id: str, after_payload: dict) -> dict:
+    return position_reality_service.create_correction({
+        "target_event_id": trade_id,
+        "target_event_type": "trade",
+        "after_payload": after_payload,
+        "reason": "修正",
+    })
+
+
+def _ledger_cash():
+    return svc._ledger_cash_candidate(position_reality_service.derive_positions())
+
+
+class TestCorrectionAwareCash:
+    """ledger cash 必须应用 active trade CORRECTION（与 S1A Position effective facts 一致）。"""
+
+    def test_correction_actual_price_applied(self):
+        """BUY 100@10 + correction actual_price=20 → cash 按 20 计算（-2000 而非 -1000）。"""
+        _bootstrap([], opening_cash=100000.0)
+        trade = _trade("600519", "buy", 10.0, 100)
+        _correct_trade(trade["trade_id"], {"actual_price": 20.0})
+        cand = _ledger_cash()
+        assert cand["value"] == 100000.0 - 2000.0
+
+    def test_correction_actual_quantity_applied(self):
+        _bootstrap([], opening_cash=100000.0)
+        trade = _trade("600519", "buy", 10.0, 100)
+        _correct_trade(trade["trade_id"], {"actual_quantity": 50})
+        cand = _ledger_cash()
+        assert cand["value"] == 100000.0 - 500.0
+
+    def test_correction_fee_applied(self):
+        _bootstrap([], opening_cash=100000.0)
+        trade = _trade("600519", "buy", 10.0, 100, fee=0.0)
+        _correct_trade(trade["trade_id"], {"fee": 30.0})
+        cand = _ledger_cash()
+        assert cand["value"] == 100000.0 - (1000.0 + 30.0)
+
+    def test_correction_other_cost_applied(self):
+        _bootstrap([], opening_cash=100000.0)
+        trade = _trade("600519", "buy", 10.0, 100)
+        _correct_trade(trade["trade_id"], {"other_cost": 12.0})
+        cand = _ledger_cash()
+        assert cand["value"] == 100000.0 - (1000.0 + 12.0)
+
+    def test_chained_corrections_match_s1a_effective(self):
+        """chained corrections：cash 使用与 S1A derivation 相同的 effective values。"""
+        _bootstrap([], opening_cash=100000.0)
+        trade = _trade("600519", "buy", 10.0, 100)
+        _correct_trade(trade["trade_id"], {"actual_price": 20.0})
+        _correct_trade(trade["trade_id"], {"fee": 5.0})
+        cand = _ledger_cash()
+        # effective: price=20, qty=100, fee=5 → 扣 2005
+        assert cand["value"] == 100000.0 - 2005.0
+        # S1A derivation 同 effective facts：shares=100, cost=2005
+        derived = position_reality_service.derive_positions()
+        pos = next(p for p in derived["positions"] if p["code"] == "600519")
+        assert pos["shares"] == 100
+        assert pos["cost_basis"] == 2005.0
+
+    def test_voided_correction_not_applied(self):
+        """voided correction 不进入 cash candidate（list_events 默认排除 voided）。"""
+        _bootstrap([], opening_cash=100000.0)
+        trade = _trade("600519", "buy", 10.0, 100)
+        corr = _correct_trade(trade["trade_id"], {"actual_price": 20.0})
+        # 直接置 voided_at 模拟已作废 correction（void_event_atomic 已随 S1A 清理移除）
+        db = position_reality_service.resolve_db_path()
+        conn = sqlite3.connect(str(db))
+        try:
+            conn.execute(
+                "UPDATE account_events SET voided_at = ?, void_reason = ? WHERE event_id = ?",
+                ("2026-08-09T00:00:00+00:00", "录入错误", corr["event"]["event_id"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        cand = _ledger_cash()
+        assert cand["value"] == 100000.0 - 1000.0  # 按原始 10 元
+
+    def test_cash_reconciliation_uses_corrected_candidate(self, profile_file):
+        """corrected trade 后 cash_reconciliation 使用 corrected ledger candidate。"""
+        _write_account_profile(profile_file, 200000.0, 98000.0)  # 手工现金 98000
+        _bootstrap([], opening_cash=100000.0)
+        trade = _trade("600519", "buy", 10.0, 100)
+        _correct_trade(trade["trade_id"], {"actual_price": 20.0})  # ledger candidate = 98000
+        derived = position_reality_service.derive_positions()
+        recon = svc._cash_reconciliation(svc._current_cash_fact(), svc._ledger_cash_candidate(derived))
+        assert recon["status"] == "MATCH"  # 98000 == 98000（若按 raw 1000 扣 → 99000 ≠ 98000）
+
+    def test_position_and_cash_same_effective_trade(self, monkeypatch):
+        """同一 corrected trade：传入 compute_fields 的是 effective corrected trade。"""
+        _bootstrap([], opening_cash=100000.0)
+        trade = _trade("600519", "buy", 10.0, 100)
+        _correct_trade(trade["trade_id"], {"actual_price": 20.0})
+        captured: dict[str, dict] = {}
+        original = trade_ledger_service.compute_fields
+
+        def _spy(record):
+            captured[record["trade_id"]] = dict(record)
+            return original(record)
+
+        monkeypatch.setattr(trade_ledger_service, "compute_fields", _spy)
+        svc._ledger_cash_candidate(position_reality_service.derive_positions())
+        assert trade["trade_id"] in captured
+        assert captured[trade["trade_id"]]["actual_price"] == 20.0  # effective，非 raw 10.0
+
+    def test_voided_trade_still_excluded(self):
+        """R2 不回退：voided trade 仍不进入 cash candidate。"""
+        _bootstrap([], opening_cash=100000.0)
+        trade = _trade("600519", "buy", 10.0, 100)
+        trade_ledger_service.void_trade(trade["trade_id"], "作废")
+        cand = _ledger_cash()
+        assert cand["value"] == 100000.0
+
+    def test_not_executed_still_excluded(self):
+        """R2 不回退：not_executed trade 不改变 cash。"""
+        _bootstrap([], opening_cash=100000.0)
+        trade_ledger_service.create_trade({
+            "code": "600519",
+            "name": "测试股票",
+            "operation": "buy",
+            "execution_status": "not_executed",
+            "planned_price": 10.0,
+            "planned_quantity": 100,
+            "unexecuted_reason": "未成交",
+        })
+        cand = _ledger_cash()
+        assert cand["value"] == 100000.0
+
+    def test_settled_nav_still_uses_account_profile_cash(self, profile_file, monkeypatch):
+        """R2 不回退：settled NAV 继续用 ACCOUNT_PROFILE available_cash，不用 ledger cash。"""
+        _fake_kline(monkeypatch, {"600519": [_BAR_20260804]})
+        _write_account_profile(profile_file, 200000.0, 50000.0)
+        _bootstrap([_legacy("600519", 100, 10.0)], opening_cash=100000.0)
+        # ledger candidate = 100000（无交易）≠ profile cash 50000
+        reality = svc.get_account_reality()
+        assert reality["settled_nav"] == 50000.0 + 2000.0  # profile cash + MV
+        assert reality["nav_cash_source"] == "ACCOUNT_PROFILE"
+        assert reality["cash"]["reconciliation"] == "MISMATCH"  # 双源差异如实展示
