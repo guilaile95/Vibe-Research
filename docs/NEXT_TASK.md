@@ -1,59 +1,72 @@
 # 当前下一任务
 
-本文件是**唯一当前授权任务**的载体；产品候选池见
-[`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)，项目总体状态见
-[`docs/PROJECT_STATE.md`](PROJECT_STATE.md)，治理契约见
+本文件是**唯一当前授权任务**的载体；项目总体状态见
+[`docs/PROJECT_STATE.md`](PROJECT_STATE.md)，产品方向见
+[`docs/PRODUCT_NORTH_STAR_V01.md`](PRODUCT_NORTH_STAR_V01.md)，产品候选池见
+[`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)，治理契约见
 [`docs/GOVERNANCE.md`](GOVERNANCE.md)。
 
 ## 当前已授权任务
 
-**BK-11 Zero-Cost Source Research Recovery & Publication v0.1**
+**无。**
 
-- 范围：`research closure / validation / independent review / Draft PR only`；
-- 状态：已授权；从 B1/B2 后的新稳定基线恢复冻结研究证据，完成离线验证、
-  小样本 live smoke、独立复审与 Draft PR 发布；
-- 停止点：Draft PR 与 CI 状态形成后停止，不转 Ready、不合并；
-- 不授权：`production ingestion / scheduler / backfill / Slice 4`，也不处理
-  PR #47、Tushare Token、生产 BaoStock 接入或其它 BK-11 实施。
+**当前已授权产品开发任务：无。**
 
-**已授权产品开发任务：无。**
+产品方向已经在 `docs/PRODUCT_NORTH_STAR_V01.md` 冻结为 v0.1，但该文档本身
+**不构成代码实施授权**。下一步如果要开始 P0 开发，必须由用户明确授权后再更新本文件。
 
-## 最近完成
+## 当前产品优先级（方向，不是授权）
 
-- `B1_DEPENDENCY_REPRODUCIBILITY = CLOSED`：PR #52 已合并（Merge `fd7cdaa`），
-  Linux/Python 3.11 与 Windows/Python 3.12 authority lock、canonical lock check
-  和双平台离线测试进入稳定分支。
-- `B2_ACTIONS_MODERNIZATION = CLOSED`：PR #53 已合并（Merge `2316ba6`），
-  当前 CI 使用 `actions/checkout@v7`、`actions/setup-python@v6`、
-  `actions/setup-node@v6`。
-- Engineering Reliability Baseline Phase A（2026-08-08）：七项测量完成，
-  债务矩阵见 `docs/research/ENGINEERING_RELIABILITY_BASELINE_V01.md`。
-- Intel Daily Digest recovery 全流程收口（2026-08-07）：PR43 Recovery v0.1
-  （4 提交 cherry-pick + 冲突解决 + 全量验证）→ PR43 Recovery Publication
-  （push + Draft PR #50 + CI 7/7 + 远端独立审查 PASS + 旧 PR #43 关闭）→
-  PR #50 已合并（Merge `1339f7a`，Intel Digest 正式进入稳定分支）。
-- 治理状态同步（本分支）：权威文档更新为 PR #50 合并后事实（PROJECT_STATE /
-  NEXT_TASK / GOVERNANCE / KNOWN_ISSUES / ARCHITECTURE）。
-- GOV-05：治理 PR #49 已合并（Merge `77a7ace`），治理契约进入稳定分支。
-- Project Governance Consolidation v0.1：建立唯一状态权威链、修正文档冲突、
-  CI 分级与分支保护策略、PR #43 Recovery 评估（2026-08-07，本地提交）。
-- BK-11 暂停/归档（Issue #48，2026-08-06）：冻结一切 BK-11 开发授权。
-- BK-11 production input source audit（PR #46，Merge `cd17fec2`，BLOCKED）。
-- BK-11 history integration for Daily Review（PR #45，Merge `12593c3`）。
-- BK-11 pure compute chain（PR #44，Merge `17c7f1d`）。
-- shadow-mode top risk analysis（PR #42，Merge `6da75b9`）。
-- 技术指标与价格触发（PR #41，Merge `ad84474`）。
-- BK-03 切片 2 北向资金权威数据契约（PR #40，Merge `40d0dba`）。
+North Star v0.1 采用 **Capital-First**：
 
-## 后续已登记候选
+1. **P0：持仓全周期决策闭环**；
+2. P1：候选股买入决策；
+3. P2：全市场机会发现；
+4. P3：Outcome / Behavioral / Calibration / Model Governance。
 
-- Engineering Reliability Phase B3（未授权）：ruff 基线、mypy 分文件与 ESLint；
-  不因 B1/B2 关闭而自动开始。
-- thesis E2E 稳定性加固（已实测 intermittent failure，P2 债务，非授权任务）。
-- Intel Digest saving 请求显式 timeout（P2 候选，非授权任务）。
-- BK-11 生产接入、调度、回填与 Slice 4 继续暂停；本轮仅恢复 zero-cost
-  research closure/publication。
-- BK-01 ~ BK-10 其余候选：见 `docs/PRODUCT_BACKLOG.md`，均未授权。
+P0 的目标不是“盘中必须做交易”，而是：
+
+> 从当前信息看，我现在持有的股票中，哪些需要在下一个可交易时点前重新判断？为什么？
+
+首页主流程方向：
+
+`市场总览 → 持仓 Decision Inbox → 单股深度分析 / Formal Decision`
+
+完整产品决策见 `docs/PRODUCT_NORTH_STAR_V01.md`，本文件不复制细节。
+
+## 当前显式停止边界
+
+- **PR #59 保持 Draft；未经单独明确授权，不得转 Ready，不得 Merge。**
+- North Star v0.1 不授权 P0 代码实施、生产数据接入、Scheduler、Background Agent、
+  券商连接、付费数据源或自动交易。
+- 暂不购买 Tushare 等商业数据；付费数据不是基础产品依赖。
+- BK-11 zero-cost research 已作为研究成果进入稳定历史；不因此自动授权生产 BaoStock
+  ingestion / scheduler / backfill / Slice 4。
+- PR #47 已合并进入稳定分支，但其历史 live-smoke 仍为
+  `LIVE_SMOKE_BLOCKED_CREDENTIAL`；不得据此宣称 Tushare 生产可用。
+
+## 最近稳定事实（用于避免旧交接误导）
+
+- 稳定分支：`feature/research-system-v01`。
+- 2026-08-08 现场核验稳定 Head：`d06eabac093e0bc0acace4abe1e446b3655629f5`
+  （Merge PR #61）。
+- PR #47 已合并：Merge `5d21122c7253186cd80e90722693234eba9fdfab`；
+  代码存在不等于 Tushare Token/权限/live 可用性已证明。
+- PR #56 已合并：Frontend P1 research workspace / AI copilot。
+- PR #57 已合并：BK-11 zero-cost source research，结论保持
+  `FEASIBLE_ZERO_COST_PARTIAL` / `legal-zero = NOT_PROVEN`。
+- PR #60 已合并：K-line technical overlays / KDJ / Alert Rules chain。
+- PR #61 已合并：Screener / sector flow / northbound history chain。
+- PR #59 当前仍是 UI-P2 Draft，等待独立人类视觉签字边界。
+
+## 后续候选（均未授权）
+
+- **P0 North Star Gap Analysis**：对照当前稳定能力，列出持仓全周期决策闭环的
+  已有/复用/缺失模块，形成最小实施工作单。
+- 对抗性审查发现的安全/可靠性/Foundation 项：CLI 权限边界、local API trust、
+  alert-rule concurrency test harness、文档漂移、SSRF hardening 等；这些属于
+  Foundation/Hardening lane，不自动覆盖产品优先级，也未授权实施。
+- Engineering Reliability 后续 lint/type/coverage 等候选继续未授权。
 
 ## 本地目录边界
 
