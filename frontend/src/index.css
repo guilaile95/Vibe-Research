@@ -113,17 +113,21 @@
 @layer components {
   /* Existing cards become quiet content groups instead of elevated dashboard tiles. */
   .card-surface {
-    background: hsl(var(--card) / 0.74);
+    background: hsl(var(--card) / 0.68);
     border: 0;
     border-radius: var(--radius);
     box-shadow: none;
-    transition: background-color 150ms ease;
   }
-  .card-surface:hover { background: hsl(var(--card) / 0.9); }
+
+  /* Stock workspace anchors should remain visible below sticky local navigation. */
+  [data-active-code] .card-surface,
+  [data-workspace-section] {
+    scroll-margin-top: 5.5rem;
+  }
 
   /* Backward-compatible glass class; visually it is now a flat workspace surface. */
   .glass {
-    background: hsl(var(--card));
+    background: hsl(var(--card) / 0.76);
     border: 0;
     border-radius: var(--radius);
     box-shadow: none;
