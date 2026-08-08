@@ -317,3 +317,70 @@ def test_get_market_breadth_uses_shared_snapshot(monkeypatch):
     assert b1["data"]["down_count"] == 1
     assert b1["data"]["flat_count"] == 1
     market._CACHE.clear()
+
+
+# ── Source metadata contract（R4：CASE B fail-closed 证明，全部确定性 Mock）──
+#
+# 调查结论（R4，LIVE_MARKET_METADATA = UNAVAILABLE）：
+# 现有全 A 快照链（Eastmoney push2 clist）不提供可靠的全市场行情事实时间：
+# - 响应顶层无行情时间戳（rt/lt/full/dlmkts/svr 为内部标志）；
+# - 个股级 f124 为数据更新时间且同页/跨页不一致（15:34~16:12 离散），多页即 CONFLICT；
+# - 个股级 f86 语义不明（延迟源返回 '-'/小数），按契约 UNKNOWN；
+# - 生产请求 _A_SHARE_FIELDS 根本不包含 f86/f124/f292。
+# 因此 breadth envelope 保持 fail-closed：trade_date/data_time 恒为 None，
+# 不得用 fetched_at / datetime.now / 快照行内猜测字段伪造行情事实时间。
+
+def _normal_snapshot() -> list[dict]:
+    return [
+        _s(f"{i:06d}", change_pct=1.0 if i % 2 == 0 else -0.5, amount=1e7)
+        for i in range(3500)
+    ]
+
+
+def test_envelope_data_time_never_aliases_fetched_at(monkeypatch):
+    """fetched_at（retrieval time）与 data_time（行情事实时间）必须保持不同语义：
+    源无可靠 metadata 时 data_time 保持 None，绝不回退/复制为 fetched_at。"""
+    market._CACHE.clear()
+    monkeypatch.setattr(market, "get_a_share_snapshot", lambda: _normal_snapshot())
+    env = market.get_market_breadth()
+    assert isinstance(env["fetched_at"], str) and env["fetched_at"]  # retrieval 时间存在
+    assert env["trade_date"] is None
+    assert env["data_time"] is None
+    assert env["data_time"] != env["fetched_at"]  # 禁止把 retrieval 时间当行情时间
+    assert env["trade_date"] != env["fetched_at"]
+    market._CACHE.clear()
+
+
+def test_envelope_never_promotes_snapshot_row_timestamp_like_fields(monkeypatch):
+    """即使快照行携带看似合法的 timestamp 字段（如未来 raw 泄漏/猜测字段），
+    breadth envelope 也不得将其提升为 trade_date/data_time（无显式可信管道 → fail-closed）。"""
+    market._CACHE.clear()
+    snap = [
+        {
+            **_s("000001", change_pct=1.0, amount=1e7),
+            "trade_date": "2026-08-07",
+            "data_time": "2026-08-07 15:00:00",
+            "f86": 1786088094,   # 假设的原始行情时间字段
+            "f124": 1786088094,  # 假设的更新时间字段
+        }
+        for _ in range(3500)
+    ]
+    monkeypatch.setattr(market, "get_a_share_snapshot", lambda: snap)
+    env = market.get_market_breadth()
+    _assert_envelope(env)
+    assert env["trade_date"] is None   # 不因行内字段存在而伪造
+    assert env["data_time"] is None
+    assert env["data"] is not None     # 统计本身仍正常
+    market._CACHE.clear()
+
+
+def test_envelope_missing_source_metadata_stays_none_with_warning(monkeypatch):
+    """源 metadata 缺失（当前生产事实）→ trade_date/data_time=None +
+    确定性 warning（源数据未提供明确交易日期和行情时间）。"""
+    market._CACHE.clear()
+    monkeypatch.setattr(market, "get_a_share_snapshot", lambda: _normal_snapshot())
+    env = market.get_market_breadth()
+    assert env["trade_date"] is None
+    assert env["data_time"] is None
+    assert any("源数据未提供明确交易日期和行情时间" == w for w in env["warnings"])
+    market._CACHE.clear()
