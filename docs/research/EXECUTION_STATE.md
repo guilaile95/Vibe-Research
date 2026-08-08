@@ -24,6 +24,13 @@
 
 ## 历史阶段
 
+- bk11-tushare-ingestion-v0.2：branch feat/bk11-tushare-ingestion-v0.2，
+  base cd17fec2cc28d8dd9ea9b8e37df0cc6c394a0b18（PR #46 合并后稳定分支）。
+  实现 Tushare production ingestion（client / facts adapter / daily-facts
+  v0.2 / store 质量单调写入 / ingestion service / CLI）；结果
+  IMPLEMENTED_OFFLINE / LIVE_SMOKE_BLOCKED_CREDENTIAL（TUSHARE_TOKEN
+  未配置，未执行 live 探测与 live smoke）；离线测试 3473 passed；
+  阻塞文案保持；独立审查结论以 PR 描述为准。
 - bk11-free-source-feasibility-v0.1：branch research/bk11-free-source-feasibility-v0.1，
   base cd17fec2cc28d8dd9ea9b8e37df0cc6c394a0b18（PR #46 合并后稳定分支）。
   零成本数据源可行性探测结果：FEASIBLE_ZERO_COST_PARTIAL —— BaoStock
