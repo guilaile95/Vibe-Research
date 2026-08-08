@@ -30,6 +30,10 @@ __all__ = [
 
 SCHEMA_VERSION = "short-term-fact-compare-v0.1"
 SOURCE_SCHEMA_VERSION = "short-term-daily-facts-v0.1"
+SOURCE_SCHEMA_VERSIONS = frozenset({
+    "short-term-daily-facts-v0.1",
+    "short-term-daily-facts-v0.2",
+})
 
 _REASON_ORDER: tuple[str, ...] = (
     "INPUT_CONTRACT_INVALID",
@@ -142,7 +146,7 @@ def _validate_envelope(envelope: Any) -> Optional[Dict[str, Any]]:
     """daily-facts envelope 形状校验；非法返回 None。"""
     if type(envelope) is not dict:
         return None
-    if envelope.get("schema_version") != SOURCE_SCHEMA_VERSION:
+    if envelope.get("schema_version") not in SOURCE_SCHEMA_VERSIONS:
         return None
     if set(envelope.keys()) != _ENVELOPE_FIELDS:
         return None

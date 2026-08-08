@@ -1,8 +1,8 @@
 # 项目当前状态
 
 > 稳定分支：`feature/research-system-v01`
-> 稳定 Head（本次状态同步基线）：`2316ba64e59797291253c84367457a53039297eb`
-> （Merge PR #53，2026-08-08）
+> 稳定 Head：`3e1ecfaf107b4b1741a9b7e7da90da3173752444`
+> （Merge PR #54，2026-08-08）
 > 当前任务与停止点：[`docs/NEXT_TASK.md`](NEXT_TASK.md)（唯一当前授权任务）
 > 治理契约与门禁：[`docs/GOVERNANCE.md`](GOVERNANCE.md)
 > 长期候选与依赖：[`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)
@@ -16,6 +16,7 @@ GitHub 现场为准）。其他文档链接引用本文件，不复制完整状�
 
 | 层级 | 当前实现 |
 |---|---|
+| 仓库 | Public；MIT License；default branch 为 `feature/research-system-v01` |
 | 前端 | React 19 + TypeScript + Vite 6 + Tailwind；默认开发端口 `:5899` |
 | 后端 | FastAPI + Uvicorn；默认端口 `:8900` |
 | A 股数据 | `backend/astock.py` + 仓库内 `a-stock-data/`；公开数据源、受控缓存与降级 |
@@ -90,6 +91,10 @@ Engineering Reliability B1/B2 已关闭：PR #52 将平台特定 exact dependenc
 双平台 canonical lock check 与离线测试纳入稳定分支；PR #53 将当前 workflow 的
 官方 Actions 更新为 `checkout@v7`、`setup-python@v6`、`setup-node@v6`。
 
+2026-08-08 仓库转为 Public 后，稳定分支已启用最小 legacy Branch Protection：
+禁止 force push 与删除，合并要求四项离线确定性 CI；管理员保留 emergency bypass。
+精确配置与历史 Private/403 快照见 `docs/GOVERNANCE.md`。
+
 ## 5. 当前授权
 
 - **当前已授权产品开发任务：无。**
@@ -110,6 +115,7 @@ Engineering Reliability B1/B2 已关闭：PR #52 将平台特定 exact dependenc
 
 | PR | Merge SHA | 内容 |
 |---|---|---|
+| #54 | `3e1ecfaf107b4b1741a9b7e7da90da3173752444` | Post-B1/B2 authority state sync |
 | #53 | `2316ba64e59797291253c84367457a53039297eb` | Actions modernization（B2 closed） |
 | #52 | `fd7cdaa299fc61f9a527f4db2861f72335a3c709` | Python dependency reproducibility（B1 closed） |
 | #50 | `1339f7aa6ecb97bb2a0612ca7a61e0995cf3ccdb` | Intel Daily Digest recovery（原 PR #43 有效功能迁入稳定） |

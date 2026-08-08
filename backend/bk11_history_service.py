@@ -99,7 +99,10 @@ def _valid_stored_envelope(envelope: Any) -> bool:
     """
     if type(envelope) is not dict:
         return False
-    if envelope.get("schema_version") != store.STORED_SCHEMA_VERSION:
+    if envelope.get("schema_version") not in (
+        store.STORED_SCHEMA_VERSION,
+        store.STORED_SCHEMA_VERSION_V02,
+    ):
         return False
     trade_date = envelope.get("trade_date")
     if type(trade_date) is not str or _TRADE_DATE_RE.match(trade_date) is None:
