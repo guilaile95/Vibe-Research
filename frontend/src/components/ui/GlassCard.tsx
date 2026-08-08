@@ -13,9 +13,9 @@ export function GlassCard({ children, className, glow, onClick }: Props) {
     <div
       onClick={onClick}
       className={cn(
-        "card-surface p-5",
-        glow && "glass-glow",
-        onClick && "cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover",
+        "card-surface p-4 sm:p-5",
+        glow && "bg-card/90",
+        onClick && "cursor-pointer transition-colors duration-150 hover:bg-muted/90",
         className,
       )}
     >
