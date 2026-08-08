@@ -51,6 +51,11 @@ INSERT INTO account_events (
 _SELECT_BY_ID = "SELECT * FROM account_events WHERE event_id = ?"
 _SELECT_LIST_BASE = "SELECT * FROM account_events"
 _COUNT_BASE = "SELECT COUNT(*) AS n FROM account_events"
+_VOID_UPDATE_SQL = """
+UPDATE account_events
+   SET voided_at = ?, void_reason = ?
+ WHERE event_id = ? AND voided_at IS NULL
+"""
 
 
 class AccountEventStoreError(RuntimeError):
@@ -64,6 +69,11 @@ class AccountEventCorruptedError(AccountEventStoreError):
 
 class AccountEventNotFoundError(AccountEventStoreError, LookupError):
     pass
+
+
+class AccountEventAlreadyVoidedError(AccountEventStoreError):
+    def __init__(self):
+        super().__init__("账户事件已作废")
 
 
 def _utc_now() -> str:
@@ -267,3 +277,33 @@ def _event_params(event: dict[str, Any]) -> tuple:
         None,
         None,
     )
+
+
+def void_event_atomic(
+    db_path: str | Path,
+    event_id: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Atomic void of an account event (append-only: 标记 voided_at，不删除记录)."""
+    with _LOCK:
+        path = Path(db_path)
+        if not path.is_file():
+            raise AccountEventNotFoundError()
+        try:
+            with _connect(path) as conn:
+                if not _table_exists(conn):
+                    raise AccountEventNotFoundError()
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(_SELECT_BY_ID, (event_id,)).fetchone()
+                if row is None:
+                    raise AccountEventNotFoundError()
+                rec = _row_to_dict(row)
+                if rec.get("voided_at") is not None:
+                    raise AccountEventAlreadyVoidedError()
+                now = _utc_now()
+                conn.execute(_VOID_UPDATE_SQL, (now, reason, event_id))
+                updated_row = conn.execute(_SELECT_BY_ID, (event_id,)).fetchone()
+                conn.commit()
+                return _row_to_dict(updated_row)
+        except sqlite3.DatabaseError as exc:
+            raise AccountEventCorruptedError() from exc

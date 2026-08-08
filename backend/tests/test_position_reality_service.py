@@ -11,6 +11,7 @@ import account_event_store
 import portfolio
 import position_reality_service as svc
 import trade_ledger_service
+import trade_ledger_store
 
 
 @pytest.fixture(autouse=True)
@@ -672,3 +673,75 @@ class TestChainedCorrections:
         assert json.loads(corr2["event"]["before_payload"])["cost_basis"] == 12.0
         pos = _derived("600519")
         assert pos["cost_basis"] == 1500.0
+
+
+# ---------------------------------------------------------------------------
+# Review round 3: P1-1 void 后 correction 孤儿 + P2 加固回归
+# ---------------------------------------------------------------------------
+
+
+class TestVoidCascade:
+    """作废交易必须级联作废其 CORRECTION，防止孤儿修正永久锁死账本（P1-1）。"""
+
+    def test_void_trade_cascades_corrections(self):
+        _bootstrap([_legacy("600519", 100, 10.0)])
+        trade = _trade("600519", "buy", 10.0, 100)
+        svc.create_correction({
+            "target_event_id": trade["trade_id"],
+            "target_event_type": "trade",
+            "after_payload": {"actual_quantity": 50},
+            "reason": "成交数量修正",
+        })
+        result = svc.void_trade_with_cascade(trade["trade_id"], "录入错误")
+        assert result["cascade_voided"] == 1
+        # derivation 不再因孤儿修正失败
+        derived = svc.derive_positions()
+        assert derived["derivation_status"] == "OK"
+        assert {p["code"]: p["shares"] for p in derived["positions"]} == {"600519": 100}
+
+    def test_void_cascade_idempotent(self):
+        _bootstrap([_legacy("600519", 100, 10.0)])
+        trade = _trade("600519", "buy", 10.0, 100)
+        svc.create_correction({
+            "target_event_id": trade["trade_id"],
+            "target_event_type": "trade",
+            "after_payload": {"actual_quantity": 50},
+        })
+        svc.void_trade_with_cascade(trade["trade_id"], "录入错误")
+        # 第二次 void 同一交易 → 已作废（store 层异常，service 子类可一并捕获）
+        with pytest.raises(trade_ledger_store.TradeAlreadyVoidedError):
+            svc.void_trade_with_cascade(trade["trade_id"], "再次作废")
+        # 级联函数自身幂等：直接调用不报错
+        assert svc._cascade_void_corrections(
+            svc.resolve_db_path(), "trade", trade["trade_id"], "再次"
+        ) == 0
+
+    def test_void_trade_no_corrections_noop(self):
+        _bootstrap([_legacy("600519", 100, 10.0)])
+        trade = _trade("600519", "buy", 10.0, 100)
+        result = svc.void_trade_with_cascade(trade["trade_id"], "录入错误")
+        assert result["cascade_voided"] == 0
+        derived = svc.derive_positions()
+        assert derived["derivation_status"] == "OK"
+
+
+class TestReviewP2:
+    def test_mixed_timezone_trade_order_stable(self):
+        """混时区 executed_at 按 UTC 纪元排序，顺序不因字符串格式错乱（P2-1）。"""
+        _bootstrap([_legacy("600519", 100, 10.0)])
+        # 12:00+00:00 真实时间早于 20:00+08:00（12:00 UTC），但字符串序相反
+        _trade("600519", "buy", 10.0, 50, executed_at="2026-08-03T12:00:00+00:00")
+        _trade("600519", "sell", 15.0, 50, executed_at="2026-08-03T20:00:00+08:00")
+        pos = _derived("600519")
+        assert pos["shares"] == 100
+
+    def test_correction_quantity_zero_rejected(self):
+        """修正不允许把交易数量改为 0（零数量交易不参与推导，P2-3）。"""
+        _bootstrap([_legacy("600519", 100, 10.0)])
+        trade = _trade("600519", "buy", 10.0, 100)
+        with pytest.raises(svc.PositionValidationError):
+            svc.create_correction({
+                "target_event_id": trade["trade_id"],
+                "target_event_type": "trade",
+                "after_payload": {"actual_quantity": 0},
+            })

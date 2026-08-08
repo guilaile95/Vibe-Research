@@ -45,6 +45,7 @@ class TestRouteRegistration:
             ("POST", "/api/position/correction"),
             ("GET", "/api/position/derived"),
             ("GET", "/api/position/reconciliation"),
+            ("POST", "/api/position/trades/{trade_id}/void"),
         }
         found_counts = {t: 0 for t in target_paths}
 
@@ -232,3 +233,39 @@ class TestReconciliationApi:
         assert by_code["600519"]["status"] == "MISMATCH"
         assert by_code["600519"]["reason"] == "shares mismatch"
         assert by_code["000001"]["status"] == "MISSING_IN_PORTFOLIO"
+
+
+class TestVoidCascadeApi:
+    def test_void_trade_cascades_correction(self, client):
+        client.post("/api/position/bootstrap-commit", json=_BOOTSTRAP_PAYLOAD)
+        trade_resp = client.post("/api/trades", json={
+            "code": "600519",
+            "name": "贵州茅台",
+            "operation": "buy",
+            "execution_status": "full",
+            "actual_price": 10.0,
+            "actual_quantity": 100,
+            "executed_at": "2026-08-03T09:30:00+08:00",
+        })
+        trade_id = trade_resp.json()["data"]["trade_id"]
+        corr_resp = client.post("/api/position/correction", json={
+            "target_event_id": trade_id,
+            "target_event_type": "trade",
+            "after_payload": {"actual_quantity": 50},
+        })
+        assert corr_resp.status_code == 200
+        void_resp = client.post(f"/api/position/trades/{trade_id}/void", json={"reason": "录入错误"})
+        assert void_resp.status_code == 200
+        data = void_resp.json()["data"]
+        assert data["cascade_voided"] == 1
+        # derivation 不再失败
+        derived = client.get("/api/position/derived").json()["data"]
+        assert derived["derivation_status"] == "OK"
+
+    def test_void_trade_missing_404(self, client):
+        resp = client.post("/api/position/trades/missing/void", json={"reason": "x"})
+        assert resp.status_code == 404
+
+    def test_void_trade_missing_reason_422(self, client):
+        resp = client.post("/api/position/trades/abc/void", json={})
+        assert resp.status_code == 422

@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 import account_event_store
 import position_reality_service as svc
+import trade_ledger_service
 import trade_ledger_store
 
 router = APIRouter(prefix="/api", tags=["position-reality"])
@@ -72,6 +73,29 @@ async def create_correction(request: Request):
 async def derived_positions():
     try:
         result = svc.derive_positions()
+    except Exception as exc:
+        raise _map_errors(exc)
+    return {"data": result}
+
+
+@router.post("/position/trades/{trade_id}/void")
+async def void_trade_cascade(trade_id: str, request: Request):
+    """作废一笔交易并级联作废指向它的 CORRECTION 事件（防止孤儿修正锁死账本）。"""
+    try:
+        payload = await _parse_json_body(request)
+    except HTTPException:
+        raise
+    reason = payload.get("reason")
+    if not reason or not isinstance(reason, str) or not reason.strip():
+        raise HTTPException(status_code=422, detail="reason 必填且必须是非空字符串")
+    try:
+        result = svc.void_trade_with_cascade(trade_id, reason.strip())
+    except svc.PositionValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except (trade_ledger_service.TradeNotFoundError, trade_ledger_store.TradeNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="交易记录不存在")
+    except (trade_ledger_service.TradeAlreadyVoidedError, trade_ledger_store.TradeAlreadyVoidedError) as exc:
+        raise HTTPException(status_code=409, detail="交易记录已作废")
     except Exception as exc:
         raise _map_errors(exc)
     return {"data": result}

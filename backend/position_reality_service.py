@@ -334,6 +334,32 @@ _CORRECTION_ALLOWED = frozenset(
     {"target_event_id", "target_event_type", "after_payload", "reason", "note"}
 )
 
+_CORRECTION_VOID_PREFIX = "cascade-void: "
+
+
+def _cascade_void_corrections(
+    db_path, target_event_type: str, target_event_id: str, reason: str
+) -> int:
+    """Void 目标事件时，级联 void 指向它的所有 CORRECTION 事件。
+
+    保持 append-only（不删除记录，仅标记 voided_at），避免"孤儿修正"使整条账本
+    derivation 永久 fail closed 且无恢复路径（P1-1）。
+    """
+    events = account_event_store.list_events(
+        db_path, event_type=_EVENT_CORRECTION, include_voided=False
+    )
+    count = 0
+    for ev in events:
+        if (
+            ev.get("target_event_id") == target_event_id
+            and ev.get("target_event_type") == target_event_type
+        ):
+            account_event_store.void_event_atomic(
+                db_path, ev["event_id"], _CORRECTION_VOID_PREFIX + reason
+            )
+            count += 1
+    return count
+
 
 def _prior_effective_values(
     db_path,
@@ -364,6 +390,19 @@ def _prior_effective_values(
             for k, v in after.items():
                 current[k] = v
     return {k: current.get(k) for k in keys}
+
+
+def void_trade_with_cascade(trade_id: str, reason: str) -> dict[str, Any]:
+    """作废一笔交易并级联作废指向它的全部 CORRECTION 事件。
+
+    与既有 trade_ledger_service.void_trade 行为兼容，但防止孤儿修正让账本
+    derivation 永久 fail closed（P1-1）。返回 {'voided_trade': ..., 'cascade_voided': n}。
+    """
+    db_path = resolve_db_path()
+    # 先级联（其自身幂等），再作废交易；交易不存在时抛既有异常
+    voided = trade_ledger_service.void_trade(trade_id, reason)
+    cascade = _cascade_void_corrections(db_path, "trade", trade_id, reason)
+    return {"voided_trade": voided, "cascade_voided": cascade}
 
 
 def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
@@ -437,7 +476,8 @@ def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
         elif key == "opening_cash":
             _optional_number(value, "opening_cash")
         elif key == "actual_quantity":
-            _require_int(value, "actual_quantity", min_value=0)
+            # 与契约一致：零数量交易不参与推导，修正不允许把数量改成 0（P2-3）
+            _require_int(value, "actual_quantity", min_value=1)
         elif key in ("actual_price", "fee", "other_cost"):
             _require_number(value, key)
 
@@ -568,15 +608,23 @@ def derive_positions() -> dict[str, Any]:
     # Build chronological sequence: legacy openings (ledger boundary) FIRST, then trades.
     # Opening 事件语义是"Vibe 接管日边界"，必须先于所有 post-Vibe 交易应用；
     # 不能只按 created_at/executed_at 排序（开仓事件时间可能晚于测试/历史交易时间）。
-    sequence: list[tuple[int, str, str, dict[str, Any]]] = []
+    # 交易时间统一归一化为 UTC 纪元秒后再排序，避免混时区（+08:00/+00:00）格式导致的顺序错乱（P2-1）。
+    sequence: list[tuple[int, float, str, dict[str, Any]]] = []
     for key, event in events_by_key.items():
         if key.startswith("account_event:"):
-            ts = str(event.get("created_at") or "")
+            raw_ts = str(event.get("created_at") or "")
             rank = 0
         else:
-            ts = str(event.get("executed_at") or event.get("created_at") or "")
+            raw_ts = str(event.get("executed_at") or event.get("created_at") or "")
             rank = 1
-        sequence.append((rank, ts, key, event))
+        if raw_ts:
+            try:
+                ts_value = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).timestamp()
+            except ValueError as exc:
+                raise PositionDerivationError("事件时间无法解析") from exc
+        else:
+            ts_value = 0.0
+        sequence.append((rank, ts_value, key, event))
     sequence.sort(key=lambda item: (item[0], item[1], item[2]))
 
     states: dict[str, dict[str, Any]] = {}
@@ -658,7 +706,9 @@ def derive_positions() -> dict[str, Any]:
                 )
             if st["cost_known"] and st["shares"] > 0:
                 avg = st["cost"] / st["shares"]
-                st["cost"] = round(st["cost"] - avg * qty, 2)
+                # 与 performance_attribution 的扣减公式完全对齐（不中间 round），
+                # 避免多次卖出后的浮点漂移导致 cost_basis 与归因不一致（P2-2）。
+                st["cost"] = st["cost"] - avg * qty
             st["shares"] -= qty
         else:
             raise PositionDerivationError(f"非法 operation: {operation}")
@@ -777,13 +827,14 @@ def reconcile_positions() -> dict[str, Any]:
             portfolio_shares = ph.get("shares")
             ledger_avg = lp["avg_cost"]
             portfolio_cost = ph.get("cost")
+            # portfolio.json 成本按 4 位小数维护（portfolio.py）；对账比较统一用 4 位精度（P2-4）
             if round(float(ledger_shares), 2) != round(float(portfolio_shares or 0), 2):
                 status = "MISMATCH"
                 reason = "shares mismatch"
             elif not lp["cost_known"] or ledger_avg is None:
                 status = "MISMATCH"
                 reason = "ledger cost UNKNOWN"
-            elif portfolio_cost is None or round(float(ledger_avg), 2) != round(float(portfolio_cost), 2):
+            elif portfolio_cost is None or round(float(ledger_avg), 4) != round(float(portfolio_cost), 4):
                 status = "MISMATCH"
                 reason = "cost mismatch"
             else:
