@@ -141,12 +141,12 @@ export function StockWorkspaceShell({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div ref={rootRef} className="relative xl:grid xl:grid-cols-[minmax(0,1fr)_9.5rem] xl:gap-7">
+    <div ref={rootRef} className="relative flex flex-col xl:grid xl:grid-cols-[minmax(0,1fr)_9.5rem] xl:gap-7">
       <div className="min-w-0">{children}</div>
 
       {activeCode && visibleSections.length > 1 ? (
         <aside className="order-first mb-4 xl:order-none xl:mb-0" aria-label="股票工作区导航">
-          <div className="sticky top-4 z-20 overflow-x-auto rounded-xl border border-border/55 bg-background/88 p-1.5 shadow-sm backdrop-blur-xl xl:p-2.5">
+          <div className="sticky top-4 z-20 overflow-x-auto rounded-xl border border-border/55 bg-background/90 p-1.5 shadow-sm backdrop-blur-xl xl:p-2.5">
             <div className="flex min-w-max gap-1 xl:min-w-0 xl:flex-col">
               <div className="hidden px-2 pb-2 pt-1 xl:block">
                 <p className="font-mono text-[11px] font-semibold tracking-wide text-foreground">{activeCode}</p>
