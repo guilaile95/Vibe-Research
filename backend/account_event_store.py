@@ -148,6 +148,50 @@ def void_corrections_on_connection(
     return cur.rowcount
 
 
+def get_event_on_connection(
+    conn: sqlite3.Connection,
+    event_id: str,
+) -> dict[str, Any] | None:
+    """Read an account event on a caller-owned connection (no lock/commit)."""
+    row = conn.execute(_SELECT_BY_ID, (event_id,)).fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def list_corrections_on_connection(
+    conn: sqlite3.Connection,
+    target_event_type: str,
+    target_event_id: str,
+) -> list[dict[str, Any]]:
+    """Read all active CORRECTION events targeting an object on a caller-owned connection.
+
+    确定性顺序：created_at ASC, rowid ASC —— 同事务内可稳定复现的审计链顺序
+    （created_at 相同时以 SQLite rowid 打破平局，不新增 schema/framework）。
+    """
+    if not table_exists_on_connection(conn, "account_events"):
+        return []
+    rows = conn.execute(
+        "SELECT * FROM account_events"
+        " WHERE event_type = 'CORRECTION' AND target_event_type = ?"
+        " AND target_event_id = ? AND voided_at IS NULL"
+        " ORDER BY created_at ASC, rowid ASC",
+        (target_event_type, target_event_id),
+    ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def insert_event_on_connection(
+    conn: sqlite3.Connection,
+    event: dict[str, Any],
+) -> None:
+    """Insert an account event on a caller-owned connection (no commit; caller owns transaction).
+
+    表不存在时惰性创建（CREATE TABLE IF NOT EXISTS）；用于 correction 与 target 校验
+    同事务提交（R6 原子化）。
+    """
+    _ensure_table(conn)
+    conn.execute(_INSERT_SQL, _event_params(event))
+
+
 def insert_event(db_path: str | Path, event: dict[str, Any]) -> None:
     with _LOCK:
         path = Path(db_path)

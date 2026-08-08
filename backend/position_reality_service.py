@@ -337,25 +337,22 @@ _CORRECTION_ALLOWED = frozenset(
 _CORRECTION_VOID_PREFIX = "cascade-void: "
 
 
-def _prior_effective_values(
-    db_path,
+def _prior_effective_values_on_connection(
+    conn,
     target_event_type: str,
     target_event_id: str,
     base: dict[str, Any],
     keys: list[str],
 ) -> dict[str, Any]:
-    """应用目标的所有先前 correction（按 created_at 升序）后，返回这些字段的有效当前值。
+    """在同一事务连接上，应用 target 的全部 active prior corrections 后返回字段有效值。
 
-    连续 correction 的 before_payload 必须反映"应用之前所有 correction 之后"的值，
-    而不是每次都从原始目标读取（保持 append-only，不修改旧 correction）。
+    与 _prior_effective_values 语义一致，但读取走调用方持有的 connection（不另开连接、
+    不另开事务），保证 target 重读、prior 读取、before 计算、insert 同事务（R6 原子化）。
+    顺序 = list_corrections_on_connection（created_at ASC, rowid ASC）。
     """
-    events = account_event_store.list_events(db_path, event_type=_EVENT_CORRECTION)
-    prior = [
-        e for e in events
-        if e.get("target_event_id") == target_event_id
-        and e.get("target_event_type") == target_event_type
-    ]
-    prior.sort(key=lambda e: str(e.get("created_at") or ""))
+    prior = account_event_store.list_corrections_on_connection(
+        conn, target_event_type, target_event_id
+    )
     current = dict(base)
     for corr in prior:
         try:
@@ -366,6 +363,137 @@ def _prior_effective_values(
             for k, v in after.items():
                 current[k] = v
     return {k: current.get(k) for k in keys}
+
+
+def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
+    """Append-only correction event; never silent-overwrites history.
+
+    R6 原子化：静态请求校验（payload shape / reason-note 长度 / after_payload 值类型范围）
+    在事务外；涉及数据库状态的步骤（target 重新读取 + 状态校验 + 白名单判定 + prior
+    corrections 读取 + before_payload 计算 + insert）全部位于同一个
+    BEGIN IMMEDIATE ... COMMIT 事务内，任何异常整体 ROLLBACK。
+    消除与 void_trade_with_cascade / 并发 create_correction 之间的 TOCTOU 窗口。
+    """
+    if not isinstance(payload, dict):
+        raise PositionValidationError("请求体必须是对象")
+
+    unknown = set(payload.keys()) - _CORRECTION_ALLOWED
+    if unknown:
+        raise PositionValidationError(f"未知字段: {', '.join(sorted(unknown))}")
+
+    target_event_id = _require_str(payload, "target_event_id")
+    target_event_type = _require_str(payload, "target_event_type")
+    if target_event_type not in ("trade", "account_event"):
+        raise PositionValidationError("target_event_type 必须是 trade 或 account_event")
+
+    after_payload = payload.get("after_payload")
+    if not isinstance(after_payload, dict) or not after_payload:
+        raise PositionValidationError("after_payload 必须是非空对象")
+
+    reason = _optional_str(payload.get("reason"), "reason", max_len=_MAX_REASON_LEN)
+    note = _optional_str(payload.get("note"), "note", max_len=_MAX_NOTE_LEN)
+
+    # 值类型/范围盲校验（不依赖 DB；白名单键校验依赖 target 状态，在事务内执行）
+    for key, value in after_payload.items():
+        if key == "shares":
+            _require_int(value, "shares", min_value=0)
+        elif key == "cost_basis":
+            _optional_number(value, "cost_basis")
+        elif key == "opening_cash":
+            _optional_number(value, "opening_cash")
+        elif key == "actual_quantity":
+            # 与契约一致：零数量交易不参与推导，修正不允许把数量改成 0（P2-3）
+            _require_int(value, "actual_quantity", min_value=1)
+        elif key in ("actual_price", "fee", "other_cost"):
+            _require_number(value, key)
+        # 其他键：是否合法取决于 target 类型，由事务内白名单校验决定
+
+    db_path = resolve_db_path()
+    conn = trade_ledger_store.open_write_connection(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        # ---- 事务内：target 重新读取与状态校验（与 insert 同事务，杜绝 TOCTOU）----
+        if target_event_type == "trade":
+            trade_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                ("trade_records",),
+            ).fetchone()
+            if trade_table is None:
+                raise CorrectionTargetNotFoundError()
+            record = trade_ledger_store.get_record_on_connection(conn, target_event_id)
+            if record is None:
+                raise CorrectionTargetNotFoundError()
+            if record.get("voided_at") is not None:
+                raise PositionValidationError("目标交易已作废，禁止修正已作废记录")
+            if (
+                record.get("execution_status") == "not_executed"
+                or (record.get("actual_quantity") or 0) <= 0
+            ):
+                raise PositionValidationError(
+                    "目标交易不在可修正状态（未成交/数量为 0 的交易不参与推导）"
+                )
+            allowed = _CORRECTION_TRADE_KEYS
+            base: dict[str, Any] = dict(record)
+        else:
+            event = account_event_store.get_event_on_connection(conn, target_event_id)
+            if event is None:
+                raise CorrectionTargetNotFoundError()
+            if event.get("voided_at") is not None:
+                raise PositionValidationError("目标事件已作废，禁止修正已作废记录")
+            target_type = event.get("event_type")
+            if target_type == _EVENT_CORRECTION:
+                raise PositionValidationError("不允许修正 CORRECTION 事件")
+            if target_type == _EVENT_LEGACY_OPENING:
+                allowed = _CORRECTION_EVENT_KEYS  # shares / cost_basis
+            elif target_type == _EVENT_ACCOUNT_OPENING:
+                allowed = frozenset({"opening_cash"})  # ledger_start_at 不可变（事实边界）
+            else:
+                raise PositionValidationError(f"不支持的修正目标事件类型: {target_type}")
+            base = dict(event)
+
+        # ---- 事务内：白名单键校验（allowed 依赖 target 状态，必须在同事务内判定）----
+        unknown_after = set(after_payload.keys()) - allowed
+        if unknown_after:
+            raise PositionValidationError(
+                f"after_payload 含非法字段: {', '.join(sorted(unknown_after))}"
+            )
+
+        # ---- 事务内：prior corrections 读取 + before_payload 计算（同一 connection）----
+        before = _prior_effective_values_on_connection(
+            conn, target_event_type, target_event_id, base, list(after_payload.keys())
+        )
+
+        event_record = {
+            "event_id": _new_id("aev"),
+            "event_type": _EVENT_CORRECTION,
+            "code": None,
+            "name": None,
+            "shares": None,
+            "cost_basis": None,
+            "opening_cash": None,
+            "ledger_start_at": None,
+            "origin": None,
+            "acquired_before_vibe": None,
+            "historical_trades": None,
+            "provenance": _PROVENANCE_MANUAL,
+            "target_event_id": target_event_id,
+            "target_event_type": target_event_type,
+            "before_payload": json.dumps(before, ensure_ascii=False, sort_keys=True),
+            "after_payload": json.dumps(after_payload, ensure_ascii=False, sort_keys=True),
+            "reason": reason,
+            "note": note,
+            "created_at": _utc_now(),
+        }
+        # ---- 事务内：insert（不 commit；与 target 校验同事务）----
+        account_event_store.insert_event_on_connection(conn, event_record)
+        conn.commit()
+        return {"status": "CORRECTION_RECORDED", "event": event_record}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def void_trade_with_cascade(trade_id: str, reason: str) -> dict[str, Any]:
@@ -441,112 +569,6 @@ def void_trade_with_cascade(trade_id: str, reason: str) -> dict[str, Any]:
         raise
     finally:
         conn.close()
-
-
-def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
-    """Append-only correction event; never silent-overwrites history."""
-    if not isinstance(payload, dict):
-        raise PositionValidationError("请求体必须是对象")
-
-    unknown = set(payload.keys()) - _CORRECTION_ALLOWED
-    if unknown:
-        raise PositionValidationError(f"未知字段: {', '.join(sorted(unknown))}")
-
-    target_event_id = _require_str(payload, "target_event_id")
-    target_event_type = _require_str(payload, "target_event_type")
-    if target_event_type not in ("trade", "account_event"):
-        raise PositionValidationError("target_event_type 必须是 trade 或 account_event")
-
-    after_payload = payload.get("after_payload")
-    if not isinstance(after_payload, dict) or not after_payload:
-        raise PositionValidationError("after_payload 必须是非空对象")
-
-    reason = _optional_str(payload.get("reason"), "reason", max_len=_MAX_REASON_LEN)
-    note = _optional_str(payload.get("note"), "note", max_len=_MAX_NOTE_LEN)
-
-    db_path = resolve_db_path()
-
-    # 确认目标状态是 correction engine 真正能够应用的状态，并据此决定允许字段
-    if target_event_type == "trade":
-        record = trade_ledger_store.get_record(db_path, target_event_id)
-        if record is None:
-            raise CorrectionTargetNotFoundError()
-        if record.get("voided_at") is not None:
-            raise PositionValidationError("目标交易已作废，禁止修正已作废记录")
-        if (
-            record.get("execution_status") == "not_executed"
-            or (record.get("actual_quantity") or 0) <= 0
-        ):
-            raise PositionValidationError(
-                "目标交易不在可修正状态（未成交/数量为 0 的交易不参与推导）"
-            )
-        allowed = _CORRECTION_TRADE_KEYS
-        base: dict[str, Any] = record
-    else:
-        event = account_event_store.get_event(db_path, target_event_id)
-        if event is None:
-            raise CorrectionTargetNotFoundError()
-        if event.get("voided_at") is not None:
-            raise PositionValidationError("目标事件已作废，禁止修正已作废记录")
-        target_type = event.get("event_type")
-        if target_type == _EVENT_CORRECTION:
-            raise PositionValidationError("不允许修正 CORRECTION 事件")
-        if target_type == _EVENT_LEGACY_OPENING:
-            allowed = _CORRECTION_EVENT_KEYS  # shares / cost_basis
-        elif target_type == _EVENT_ACCOUNT_OPENING:
-            allowed = frozenset({"opening_cash"})  # ledger_start_at 不可变（事实边界）
-        else:
-            raise PositionValidationError(f"不支持的修正目标事件类型: {target_type}")
-        base = event
-
-    unknown_after = set(after_payload.keys()) - allowed
-    if unknown_after:
-        raise PositionValidationError(
-            f"after_payload 含非法字段: {', '.join(sorted(unknown_after))}"
-        )
-
-    # 校验修正后的值（白名单内字段的类型与范围）
-    for key, value in after_payload.items():
-        if key == "shares":
-            _require_int(value, "shares", min_value=0)
-        elif key == "cost_basis":
-            _optional_number(value, "cost_basis")
-        elif key == "opening_cash":
-            _optional_number(value, "opening_cash")
-        elif key == "actual_quantity":
-            # 与契约一致：零数量交易不参与推导，修正不允许把数量改成 0（P2-3）
-            _require_int(value, "actual_quantity", min_value=1)
-        elif key in ("actual_price", "fee", "other_cost"):
-            _require_number(value, key)
-
-    # before = 应用所有先前 correction 后的有效当前值（append-only 链式，不读原始目标）
-    before = _prior_effective_values(
-        db_path, target_event_type, target_event_id, base, list(after_payload.keys())
-    )
-
-    event_record = {
-        "event_id": _new_id("aev"),
-        "event_type": _EVENT_CORRECTION,
-        "code": None,
-        "name": None,
-        "shares": None,
-        "cost_basis": None,
-        "opening_cash": None,
-        "ledger_start_at": None,
-        "origin": None,
-        "acquired_before_vibe": None,
-        "historical_trades": None,
-        "provenance": _PROVENANCE_MANUAL,
-        "target_event_id": target_event_id,
-        "target_event_type": target_event_type,
-        "before_payload": json.dumps(before, ensure_ascii=False, sort_keys=True),
-        "after_payload": json.dumps(after_payload, ensure_ascii=False, sort_keys=True),
-        "reason": reason,
-        "note": note,
-        "created_at": _utc_now(),
-    }
-    account_event_store.insert_event(db_path, event_record)
-    return {"status": "CORRECTION_RECORDED", "event": event_record}
 
 
 # ---------------------------------------------------------------------------

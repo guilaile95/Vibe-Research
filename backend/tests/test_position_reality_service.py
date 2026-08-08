@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
@@ -925,3 +926,158 @@ class TestReconciliation4dp:
         item = result["items"][0]
         assert item["status"] == "MISMATCH"
         assert item["reason"] == "cost mismatch"
+
+
+# ---------------------------------------------------------------------------
+# Review round 6: create_correction 原子化（TOCTOU 关闭）
+# ---------------------------------------------------------------------------
+
+
+def _corr_thread(target_event_id, target_event_type, after_payload, results, key):
+    """并发 create_correction helper：结果写入 dict，异常也记录。"""
+    try:
+        results[key] = svc.create_correction({
+            "target_event_id": target_event_id,
+            "target_event_type": target_event_type,
+            "after_payload": after_payload,
+        })
+    except Exception as exc:  # pragma: no cover - 断言会失败暴露
+        results[key] = exc
+
+
+class TestCorrectionAtomicTransaction:
+    """R6-P1：create_correction 的 target 校验 / prior 读取 / insert 必须同事务。"""
+
+    def test_correction_after_void_rejected_no_orphan(self):
+        """Case 2：void 先 commit → correction 获锁后重读 target → VOIDED → reject。"""
+        _bootstrap([_legacy("600519", 100, 10.0)])
+        trade = _trade("600519", "buy", 10.0, 100)
+        trade_ledger_service.void_trade(trade["trade_id"], "void")
+        with pytest.raises(svc.PositionValidationError):
+            svc.create_correction({
+                "target_event_id": trade["trade_id"],
+                "target_event_type": "trade",
+                "after_payload": {"actual_quantity": 50},
+            })
+        # 不变量：trade VOIDED + active correction == 0
+        active = account_event_store.list_events(svc.resolve_db_path())
+        assert [e for e in active if e["event_type"] == "CORRECTION"] == []
+
+    def test_void_cascades_prior_correction(self):
+        """Case 1：correction 先 commit → void 后提交并级联它 → 无孤儿。"""
+        _bootstrap([_legacy("600519", 100, 10.0)])
+        trade = _trade("600519", "buy", 10.0, 100)
+        svc.create_correction({
+            "target_event_id": trade["trade_id"],
+            "target_event_type": "trade",
+            "after_payload": {"actual_quantity": 50},
+        })
+        result = svc.void_trade_with_cascade(trade["trade_id"], "void")
+        assert result["status"] == "VOIDED"
+        assert result["cascade_voided"] == 1
+        active = account_event_store.list_events(svc.resolve_db_path())
+        assert [e for e in active if e["event_type"] == "CORRECTION"] == []
+        derived = svc.derive_positions()
+        assert derived["derivation_status"] == "OK"
+
+    def test_insert_failure_rolls_back(self, monkeypatch):
+        """在 insert 前注入异常 → ROLLBACK：无半条 correction，target 状态不变。"""
+        _bootstrap([_legacy("600519", 100, 10.0)])
+        trade = _trade("600519", "buy", 10.0, 100)
+
+        def _boom(conn, event):
+            raise RuntimeError("injected insert failure")
+
+        monkeypatch.setattr(account_event_store, "insert_event_on_connection", _boom)
+        with pytest.raises(RuntimeError):
+            svc.create_correction({
+                "target_event_id": trade["trade_id"],
+                "target_event_type": "trade",
+                "after_payload": {"actual_quantity": 50},
+            })
+        # 回滚：无 CORRECTION 插入
+        events = account_event_store.list_events(
+            svc.resolve_db_path(), include_voided=True
+        )
+        assert [e for e in events if e["event_type"] == "CORRECTION"] == []
+        # target 状态不变（derivation 仍按原值 100）
+        pos = _derived("600519")
+        assert pos["shares"] == 200
+        assert trade_ledger_service.get_trade(trade["trade_id"])["voided_at"] is None
+
+
+class TestCorrectionConcurrency:
+    """R6-P1：并发 create_correction 不产生 stale before_payload / 孤儿。"""
+
+    def test_concurrent_chained_corrections_trade(self):
+        _bootstrap([_legacy("600519", 100, 10.0)])
+        trade = _trade("600519", "buy", 10.0, 100)
+        results: dict = {}
+        threads = [
+            threading.Thread(
+                target=_corr_thread,
+                args=(trade["trade_id"], "trade", {"actual_quantity": 120}, results, "a"),
+            ),
+            threading.Thread(
+                target=_corr_thread,
+                args=(trade["trade_id"], "trade", {"actual_quantity": 130}, results, "b"),
+            ),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert isinstance(results["a"], dict) and isinstance(results["b"], dict)
+        corrs = [
+            e for e in account_event_store.list_events(svc.resolve_db_path())
+            if e["event_type"] == "CORRECTION"
+        ]
+        assert len(corrs) == 2
+        corrs.sort(key=lambda e: e["created_at"])
+        b0 = json.loads(corrs[0]["before_payload"])["actual_quantity"]
+        a0 = json.loads(corrs[0]["after_payload"])["actual_quantity"]
+        b1 = json.loads(corrs[1]["before_payload"])["actual_quantity"]
+        a1 = json.loads(corrs[1]["after_payload"])["actual_quantity"]
+        assert b0 == 100
+        assert a0 in (120, 130)
+        # 第二条 before 必须反映第一条生效后的值（串行化链，无 stale before）
+        assert b1 == a0
+        assert a1 != a0
+        pos = _derived("600519")
+        assert pos["shares"] == 100 + a1
+
+    def test_concurrent_chained_corrections_account_event(self):
+        result = _bootstrap([_legacy("600519", 100, 10.0)])
+        event_id = result["positions"][0]["event_id"]
+        results: dict = {}
+        threads = [
+            threading.Thread(
+                target=_corr_thread,
+                args=(event_id, "account_event", {"shares": 120}, results, "a"),
+            ),
+            threading.Thread(
+                target=_corr_thread,
+                args=(event_id, "account_event", {"shares": 130}, results, "b"),
+            ),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert isinstance(results["a"], dict) and isinstance(results["b"], dict)
+        corrs = [
+            e for e in account_event_store.list_events(svc.resolve_db_path())
+            if e["event_type"] == "CORRECTION"
+        ]
+        assert len(corrs) == 2
+        corrs.sort(key=lambda e: e["created_at"])
+        b0 = json.loads(corrs[0]["before_payload"])["shares"]
+        a0 = json.loads(corrs[0]["after_payload"])["shares"]
+        b1 = json.loads(corrs[1]["before_payload"])["shares"]
+        a1 = json.loads(corrs[1]["after_payload"])["shares"]
+        assert b0 == 100
+        assert a0 in (120, 130)
+        assert b1 == a0
+        assert a1 != a0
+        pos = _derived("600519")
+        assert pos["shares"] == a1
