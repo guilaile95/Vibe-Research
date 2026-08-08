@@ -1,168 +1,152 @@
-# Vibe-Research · 个人 AI 投研系统（A股/美股/港股）
+# Vibe-Research
 
+个人投资研究与决策辅助项目。
+
+[![CI](https://github.com/guilaile95/Vibe-Research/actions/workflows/ci.yml/badge.svg?branch=feature%2Fresearch-system-v01)](https://github.com/guilaile95/Vibe-Research/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![GitHub stars](https://img.shields.io/github/stars/guilaile95/Vibe-Research?style=social)](https://github.com/guilaile95/Vibe-Research/stargazers)
 
-**[产品预览](#️-产品预览) · [功能](#-功能) · [数据源](#-数据源data-sources) · [快速开始](#-快速开始) · [接入 AI](#-接入-ai)**
-
-> **Vibe-Research: Your Personal Trading Research Agent** · A股 / 美股 / 港股 的个人投研 Agent。
+> [!NOTE]
+> 本仓库基于 [simonlin1212/Vibe-Research](https://github.com/simonlin1212/Vibe-Research)
+> fork / 派生后继续开发。
 >
-> 每日复盘、资讯雷达、个股数据、自选股、板块中心、我的持仓、我的研报、研究记录。把数据和功能配齐，由**你自己的 AI** 驱动投资研究。
+> 原始项目、原始设计与初始实现请优先参阅上游仓库。当前 GitHub 仓库元数据
+> 未保留 fork network 关联；本仓库主要用于个人持续开发、研究和实验。
 
-> 项目状态、当前授权与治理契约见 [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md) 与 [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md)。
+Vibe-Research 整合公开市场数据、研究记录、持仓与账户信息、决策记录及可选的
+AI 辅助能力。它不是自动交易、荐股或收益预测系统；最终判断与执行由使用者负责。
 
-Vibe-Research 是一个开源的「个人 AI 投研看板」，**主推 A 股、兼看美股 / 港股**（A 股常要看隔夜外围脸色，数据配上更全）。把行情、研报、估值、财务、公告、资金面、资讯都配齐，放进一个干净的看板，再留一个能接入**你自己的 AI** 的接口。
+![每日复盘界面](docs/screenshots/daily-review.png)
 
-> *Vibe-Research: Your Personal Trading Research Agent. An open dashboard for China A-share (plus US / HK): it wires up the data and plugs into **your own AI / agent**.*
+## 关于本仓库
 
-## 🖥️ 产品预览
+当前稳定实现围绕以下流程组织信息：
 
-**每日复盘** — 大盘 / 短线情绪(连板股 · 成交额 TOP20) / 板块资金一屏看全，一键交给你的 AI 复盘
-
-![Vibe-Research 每日复盘](docs/screenshots/daily-review.png)
-
-<table>
-<tr>
-<td width="50%">
-
-**个股数据** — 财报速览 + 估值分位 + 资金面一屏看穿
-
-![个股数据](docs/screenshots/stock-detail.png)
-
-</td>
-<td width="50%">
-
-**资讯雷达** — 12 赛道 108 个公开源，一键提炼今日要点
-
-![资讯雷达](docs/screenshots/intel.png)
-
-</td>
-</tr>
-</table>
-
----
-
-## ✨ 功能
-
-每个页面的具体模块：
-
-| 页面 | 包含的模块 / 能力 |
-|---|---|
-| 📊&nbsp;**每&#8288;日&#8288;复&#8288;盘** | 大盘指数 · **全球市场**（隔夜美股道指 / 标普 / 纳指 + 港股恒指 / 恒生科技）· 关注股票（自选实时行情）· **短线情绪**（连板股 / 最高连板 / 连板梯队 / 封板率 / 炸板率 / 晋级率）· **全市场成交额 TOP20** · 市场情绪（大盘宽度 / 题材投机 / 涨跌停）· 板块资金趋势榜 · 资金轮动 · AI 当日复盘 |
-| 📡&nbsp;**资&#8288;讯&#8288;雷&#8288;达** | 12 赛道 108 个公开 RSS 源 · AI 一键提炼「今日要点」· A 股公告 / 公开新闻（挂钩你的关注列表）|
-| 🔍&nbsp;**个&#8288;股&#8288;数&#8288;据** | **A 股**：行情 · 估值矩阵（前向 PE / PEG）· **财报速览** · 估值历史分位 · 财务关键指标 · 研报 · 公告 · 新闻 · **资金面**（融资融券 / 股东户数 / 主力资金流 / 分红 / 大宗交易）· 龙虎榜 · 限售解禁 · 板块归属 · 热门概念 · 互动易问答。**美股 / 港股 / 韩股**（输 `AAPL` / `00700` / `005930.KS`）：行情 · 总市值 · 关键财务指标（营收 / 净利 / EPS / ROE / 毛利率 / 负债率；韩股仅行情）|
-| ⭐&nbsp;**自&#8288;选&#8288;股** | **批量粘贴一串代码即加**（逗号 / 空格 / 换行都行）· 一屏表格总览（现价 / 涨跌 / PE / PB / 换手）· 一键交给 AI 读。只存本地 |
-| 🧩&nbsp;**板&#8288;块&#8288;中&#8288;心** | 板块 + 产业链环节骨架 |
-| 💼&nbsp;**我&#8288;的&#8288;持&#8288;仓** | 录入即实时盈亏 · 已清仓记录（只存本地、不上传）|
-| 📄&nbsp;**我&#8288;的&#8288;研&#8288;报** | **拖拽 / 多选上传**自己的研报（PDF / Word / txt / 表格 / 图片）· 按文件名**自动分行业**归档 · 下载 / 删除。**只存本地部署目录、不上传、不进仓库** |
-| 📝&nbsp;**研&#8288;究&#8288;记&#8288;录** | 复盘 / 今日要点 / 问 AI 结果本地沉淀，随时回看 |
-| 🔌&nbsp;**接&#8288;入&nbsp;AI** | 订阅接入（本机 CLI，免 key）· API 多模型（自动填 baseURL）· MCP（挂进 Claude Code 等 agent）|
-
-> **投研分析框架**：让 AI 分析个股时，自动按 估值 / 资金面 / 财报质量 / 行业景气 / 事件催化与风险 五维组织结论，并给出综合判断与操作建议。
-
-## 📡 数据源（Data Sources）
-
-Vibe-Research 把三套公开数据源**直接集成进仓库**——`git clone` 下来**开箱即用，无需另外下载、接线**。
-
-### A 股全栈数据 · AStockData
-
-- **就在本仓库的 [`a-stock-data/`](a-stock-data/) 文件夹里**（v3.3.0）。十层数据架构、40 个端点，`a-stock-data/SKILL.md` **内嵌全部调用代码**，自包含、零第三方数据封装依赖，东财接口已内置限流防封。
-- **覆盖**：行情 / K线 / 研报 / 一致预期 / 估值 / 历史分位 / 财务三表 / 公告 / 龙虎榜 / 融资融券 / 大宗交易 / 股东户数 / 分红 / 资金流 / 解禁 / 概念板块 / 打板情绪 / ETF 期权 / 互动易 / 全市场行业排名 …
-- **给 agent 用**：用 Claude Code 等 agent 跑本仓库时，要调 A 股数据就看 [`a-stock-data/SKILL.md`](a-stock-data/SKILL.md)——每个接口都有 copy-paste 即用的代码。Vibe-Research 后端的数据层（`backend/astock.py`）也是从它移植的。
-- **运行依赖**：`pip install mootdx requests pandas stockstats`（自包含，v3.0 起已移除 akshare 依赖）。
-- **版本说明**：仓库内置固定版本快照，可独立使用，无需额外下载。
-
-### 美股 / 港股数据 · global-stock-data
-
-- **就在本仓库的 [`global-stock-data/`](global-stock-data/) 文件夹里**（v1.0.1）。8 层数据架构、18 个端点、零鉴权，覆盖美港股行情 / K线 / 技术指标 / 三表财报 / 资金流 / 期权 / SEC。
-- 后端 `backend/gstock.py` 移植了**东财域内子集**：全球指数（每日复盘「全球市场」栏）+ 美港股个股行情 & 关键财务指标（个股页输 `AAPL` / `00700` 即用）。东财调用复用 `astock.em_get`（直连优先，避开科学上网代理挂国内站）。
-- **韩股**：东财已覆盖，个股页输 6 位代码**加 `.KS` 后缀**即可（如三星 `005930.KS`、SK 海力士 `000660.KS`）。⚠️ 韩股代码与 A 股同为 6 位数字，**必须带 `.KS` 后缀**才能被识别为韩股（否则按 A 股处理）；东财对韩股仅给行情、无财务。台股走美股 ADR（如台积电 `TSM`）。
-- **完整能力**：仓库内置的 [`global-stock-data/SKILL.md`](global-stock-data/SKILL.md) 提供 K线、技术指标、期权和 SEC 等端点说明。
-
-### 全球资讯 · investment-news
-
-- 12 赛道 108 个公开 RSS 源，已并入 `backend/newsradar.py` + `backend/news_sources.json`：纯标准库、零 key、已按词表过滤（剔除赌 / 预测市场 / 加密等）。
-- 资讯源配置与实现均已内置在本仓库。
-
-## 🏗 架构
-
-一套数据层 + 两条 AI 出口：
-
-```
-Vibe-Research/
-├── a-stock-data/      A 股全栈数据工具箱（数据源，v3.3，自带即用）
-├── global-stock-data/ 美股 / 港股数据工具箱（数据源，v1.0.1，自带即用）
-├── backend/           FastAPI :8900
-│   ├── astock.py        A 股数据（移植自 a-stock-data）
-│   ├── gstock.py        美股 / 港股数据（移植自 global-stock-data）
-│   ├── newsradar.py     资讯雷达（移植自 investment-news）
-│   ├── market.py        市场情绪 + 板块资金流 + 全球指数
-│   ├── portfolio.py     持仓 + 已清仓（存本地用户目录）
-│   ├── chat.py          系统 AI（OpenAI 兼容 function-calling）
-│   └── mcp_server.py    MCP server（给 Claude Code 等 agent）
-└── frontend/          Vite + React 19 + TS + Tailwind（玻璃暖橙主题）:5899
+```text
+市场与数据
+    ↓
+研究、Thesis 与 Evidence
+    ↓
+信号和决策记录
+    ↓
+持仓、交易与执行约束
+    ↓
+结果、反馈与收益归因
 ```
 
-**分级依赖**：行情（腾讯）+ 研报 / 公告（东财）**秒装可用**；akshare / mootdx 惰性导入，缺失时对应端点返回 501 + 安装提示，不拖垮服务。
+AI 位于研究与决策工作流中，用于整理上下文和辅助推理，不替代事实核验，也不替代
+个人决策。Data provides facts; evidence supports or weakens a thesis; AI organizes
+reasoning; the user owns the final decision.
 
-## 🚀 快速开始
+## 当前主要功能
+
+- 市场环境、每日复盘、历史快照与比较；
+- A 股个股数据、全球指数及美股 / 港股子集；
+- 板块研究、公开资讯、公告、研报与个人研报归档；
+- 自选股、持仓、账户资金与执行约束；
+- Thesis、Evidence、Decision Evidence 与 Signal Ledger；
+- Trade Ledger、Decision Feedback、Decision Performance 与 Performance Attribution；
+- Data Health、OpenAI-compatible API、本机 CLI 与 MCP 辅助入口。
+
+详细实现状态见 [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md)，架构与边界见
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。Draft PR 或研究分支不代表稳定版本。
+
+## 数据与隐私
+
+本项目采用本地优先的数据边界：
+
+- 持仓、账户资金、交易与研究记录等保存在用户目录或 `VR_DATA_DIR`；
+- 个人研报默认位于用户目录，可用 `VR_REPORTS_DIR` 单独指定；
+- 部分前端配置、自选数据和模型配置保存在浏览器 `localStorage`；
+- 模型密钥、真实持仓和本地数据库不应提交到 Git。
+
+“本地优先”描述的是存储与运行边界，不表示所有功能都离线。市场数据接口与所配置的
+AI 服务可能产生外部网络请求；使用前应自行确认相应服务的条款和数据处理方式。
+
+## 运行方式
+
+稳定分支当前验证的环境为：
+
+- Linux / Ubuntu：CPython 3.11；
+- Windows：CPython 3.12.10；
+- 前端 CI：Node.js 22。
+
+### Linux
 
 ```bash
-# 后端（:8900）
-cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+git clone https://github.com/guilaile95/Vibe-Research.git
+cd Vibe-Research/backend
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements-linux-py311.lock.txt
 .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8900
-
-# 前端（:5899）
-cd frontend && npm install && npm run dev
-# 浏览器打开 http://localhost:5899
 ```
 
-## 🔌 接入 AI
+### Windows PowerShell
 
-在「接入 AI」页配置一次，全站的「问 AI / 复盘 / 今日要点」就都用你自己的模型。三种方式：
+```powershell
+git clone https://github.com/guilaile95/Vibe-Research.git
+Set-Location Vibe-Research\backend
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev-windows-py312.lock.txt
+.\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8900
+```
 
-### 1. 订阅接入（调本机已登录的 CLI，免 API key）
+Windows authority lock 同时包含运行与开发测试依赖；项目没有单独维护 Windows
+runtime-only lock。平台依赖合同见
+[`docs/DEPENDENCY_REPRODUCIBILITY.md`](docs/DEPENDENCY_REPRODUCIBILITY.md)。
 
-用你自己的**订阅额度**，不用付 API 费。已支持：**Claude Code · Codex · Qwen Code · DeepSeek CLI**。
-
-- **前提**：① 后端跑在你本机（云端读不到你本机 CLI）；② 对应 CLI 已安装并登录，命令在 `PATH` 上。例如：
-  - Claude Code：`npm i -g @anthropic-ai/claude-code` → `claude`（用 Claude 订阅登录）
-  - Codex：装 OpenAI Codex CLI → `codex login`（用 ChatGPT 订阅）
-  - Qwen / DeepSeek：装各自 CLI 并登录
-- 在「接入 AI 页 → 订阅接入」选一个即可，**无需填 key**。
-- 原理：后端 `cli_runtime.py` 检测本机命令并 `spawn` 它一次性作答（数据已在提示词里）。⚠️ CLI 不做多轮工具调用，适合「复盘 / 今日要点 / 个股页问 AI」这类**数据已备好**的场景；要 AI 自己现场调数据工具的自由问答，用下面的「API 接入」。
-
-### 2. API 接入（填自己的 key）
-
-「接入 AI 页 → API 接入」选一个模型，**baseURL 自动填好**，只需粘 key。内置 **DeepSeek / 豆包 / MiniMax / OpenAI / OpenRouter / Groq / Together / MiMo / 任意 OpenAI 兼容端点**。这条支持 function-calling——AI 会自己调数据工具（行情/估值/研报/新闻）再作答。key 只存你本地浏览器、随请求发给你自己的后端、不上传、不进仓库。
-
-### 3. MCP（给 Claude Code / 高手 agent）
-
-把后端挂成 MCP server，agent 用自己的订阅额度调 Vibe-Research 的数据工具、多步分析。命令见 [`backend/README.md`](backend/README.md)。要更全量的 A 股数据端点，用根目录 [`a-stock-data/`](a-stock-data/SKILL.md) 工具箱。
-
-## 🧪 测试
+另开终端启动前端：
 
 ```bash
-cd backend && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/pytest -m "not live"   # 离线单测 + API 校验（快、稳，无需联网）
-.venv/bin/pytest -m live          # 联网核对数据源 shape（升级 / 发布前跑一遍）
+cd frontend
+npm ci
+npm run dev
 ```
 
-## 🔒 本地数据
+默认访问地址为 `http://localhost:5899`，后端为 `http://127.0.0.1:8900`。
+多数数据能力依赖公开网络接口，实际可用性会受来源状态、限流与网络环境影响。
 
-- **持仓 / 关注股 / 上传的研报 / API key 只存本地，不上传、不进仓库。**
-- 持仓与上传的研报默认存在**用户目录 `~/.vibe-research/`**（可用环境变量 `VR_DATA_DIR` 换根目录、`VR_REPORTS_DIR` 单独指定研报目录）——在项目文件夹之外，**重新下载 / 覆盖更新项目文件夹不会丢数据**；旧版本存在 `backend/.cache/` 的数据，新版首次启动自动迁移（复制，原文件保留）。
+## 项目结构
 
-## 🙏 致谢
+```text
+Vibe-Research/
+├── frontend/            React 19 + TypeScript + Vite
+├── backend/             FastAPI、数据适配、研究与决策相关 API
+├── a-stock-data/        A 股数据工具与说明
+├── global-stock-data/   全球市场数据工具与说明
+└── docs/                架构、状态、治理和研究记录
+```
 
-- A 股数据引擎：仓库内置 [`a-stock-data/`](a-stock-data/)
-- 美股 / 港股数据引擎：仓库内置 [`global-stock-data/`](global-stock-data/)
-- 资讯：仓库内置 `backend/newsradar.py` 与 `backend/news_sources.json`
-- 界面设计语言参考并致谢：[HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading)（作者：HKUDS · 仅借鉴 UI，底层为全新实现）
+系统逻辑上，公开市场数据先经过适配与健康检查，再进入研究、证据、决策和反馈记录。
+完整调用链以 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 为准。
 
-## 📄 License
+## AI 配置
 
-MIT
+AI 功能是可选的。稳定版本包含：
+
+- OpenAI-compatible API 配置；
+- 调用本机已安装 CLI 的运行路径；
+- `backend/mcp_server.py` 提供的 MCP 数据工具入口。
+
+具体模型、CLI 和外部端点由使用者自行配置。模型密钥不应写入仓库；相关运行说明见
+[`backend/README.md`](backend/README.md)。
+
+## 项目状态
+
+本仓库持续开发中，部分研究和实验分支不会进入稳定版本。当前稳定实现、已知限制与
+仓库治理分别见：
+
+- [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md)
+- [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md)
+- [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md)
+
+## 免责声明
+
+本项目用于投资研究、数据整理和决策辅助，不构成投资建议、证券推荐或收益承诺。
+
+## License & Attribution
+
+本仓库基于
+[simonlin1212/Vibe-Research](https://github.com/simonlin1212/Vibe-Research)
+继续开发。原项目及相关代码版权声明按照仓库中的 MIT License 保留；本仓库同样按照
+[MIT License](LICENSE) 发布。`LICENSE` 中的
+`Copyright (c) 2026 simonlin1212` 保持不变。

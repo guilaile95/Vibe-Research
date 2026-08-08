@@ -71,39 +71,38 @@ BK-11 shadow、真实盘中测试。
 FUTURE（BK-10 候选，未授权）：lint/format（ruff/eslint）、类型检查
 （mypy/pyright）、覆盖率门控、pre-commit hooks、依赖更新 bot。
 
-> 注：当前免费私有仓库无法配置 required status checks（分支保护 403）；
-> 本分级作为保护可用后的默认配置，同时作为当前日常纪律（合并前自查三件套）。
+GitHub Branch Protection 使用的真实 check contexts 为：`Backend tests`、
+`Frontend build & test`、`Python Windows lock check`、`Whitespace check`。
+四个 Playwright E2E job 继续保持 OPTIONAL，不进入 required checks。
 
-## 4. GitHub 分支保护推荐（GOV-02）
+## 4. GitHub 稳定分支保护（GOV-02）
 
-### 现状约束
+### 当前配置（2026-08-08）
 
-- 私有仓库 + 免费计划：branch protection 与 rulesets 均不可用（403）。
-- Draft PR 不可合并是 GitHub 原生能力，不依赖保护——当前唯一可用的"硬"门禁。
+- 仓库已由 Private 转为 Public；历史 Private + Free 的 API 403 见 §2，不改写历史；
+- 保护机制：**legacy Branch Protection**；Repository Rulesets 保持 0，避免重复控制；
+- 目标分支：`feature/research-system-v01`；
+- Required checks：`Backend tests`、`Frontend build & test`、
+  `Python Windows lock check`、`Whitespace check`；
+- `strict: false`：checks 必须成功，但不强制 base 每次移动后重新运行整套 CI；
+- `allow_force_pushes: false`、`allow_deletions: false`；
+- Required approvals：0；CODEOWNERS approval：关闭；conversation resolution：关闭；
+- `enforce_admins: false`：仓库管理员保留 emergency bypass，避免单人项目锁死；
+- linear history、signed commits、push restrictions、branch lock、deployments 均不强制。
 
-### 若启用保护（升级 Pro 或改公开，待用户决策）后的最小配置
+### 机制选择
 
-目标：能防误操作但不会把自己锁死。
+只保护一个稳定分支时，legacy protection 能直接表达 required checks、force/delete
+限制与管理员 bypass，维护成本低于 ruleset 的 actor/bypass 配置，也与现有治理契约一致。
+因此不同时创建 ruleset。
 
-保护 `feature/research-system-v01`：
-
-- Require status checks：`backend`、`frontend`、`whitespace`（REQUIRED 三级；
-  e2e 三件套不加）；
-- Require approvals：**0**（单人项目：作者不能自审自己的 PR，开启反而必须
-  admin 绕过，无价值）；
-- Require conversation resolution：**false**（单人项目无多人对话；可选）；
-- `enforce_admins: false`（管理员可应急绕过，避免锁死）；
-- `allow_force_pushes: false`、`allow_deletions: false`（核心防误操作）；
-- 不强制 linear history、不限制 merge 方式（保留 merge + squash）。
-
-### 免费计划下立即生效的等效纪律
+### 仓库内纪律
 
 1. AGENTS.md 规则正文：禁 force push、`git branch -D`、`git clean`、
    `git reset`、`git restore`、对已推送提交 amend/rebase/squash；
 2. 所有功能走独立分支 + Draft PR（Draft 原生不可合并）；
 3. 稳定分支只通过"Merge PR"进入（历史全部为 merge commit，可回看）；
-4. FUTURE（可选）：本地 pre-push 钩子脚本（检查分支名/禁止 force push）；
-   对个人项目 ROI 中低，暂不实现。
+4. Branch Protection 是远端硬门禁，仓库内规则继续约束本地操作与代理行为。
 
 不做的事：企业级规则（多人 review、CODEOWNERS 全员、线性历史强制、锁定文件）。
 
@@ -114,7 +113,7 @@ FUTURE（BK-10 候选，未授权）：lint/format（ruff/eslint）、类型检�
 | `.github/CODEOWNERS` | 不添加 | **LOW ROI**（无 teams/多所有者，单人项目无意义） |
 | `.github/PULL_REQUEST_TEMPLATE.md` | **已添加**（最小验证清单，与现有 PR 报告习惯一致） | MEDIUM（低成本防遗漏） |
 | issue template | 不添加 | **LOW ROI** |
-| `SECURITY.md` | 不添加 | **LOW ROI**（私有仓库，无外部安全研究者入口） |
+| `SECURITY.md` | 不添加 | **LOW ROI**（个人研究仓库，无独立安全响应流程或线上服务） |
 | `CONTRIBUTING.md` | 不添加 | **LOW ROI**（单人项目） |
 
 ## 6. PR #43 Recovery 评估（2026-08-07，只读评估，未执行）
@@ -171,7 +170,8 @@ API 前缀 `/intel-digests*` 无碰撞。
 
 ## 8. 当前治理边界
 
-- 仓库继续保持 private，不为 branch protection 单独升级 GitHub Pro，也不改 public；
-- `PLATFORM_BRANCH_PROTECTION_UNAVAILABLE` 作为已知 P2，不阻断个人项目开发；
-- 继续以本文件、PR template、Draft PR、完整 CI 与人工 merge discipline 作为替代控制；
+- 仓库当前为 Public，License 为 MIT；GitHub 元数据 `fork=false` 不改变上游代码来源；
+- `PLATFORM_BRANCH_PROTECTION_UNAVAILABLE` 已于 2026-08-08 **RESOLVED / CLOSED**；
+- 稳定分支使用 §4 的单一 legacy Branch Protection，不创建重复 ruleset；
+- PR template、Draft PR、完整 CI 与人工 merge discipline 继续作为配套控制；
 - 当前授权只以 `docs/NEXT_TASK.md` 为准，历史 recovery 评估不构成新任务授权。
