@@ -8,12 +8,49 @@
 
 ## 当前已授权任务
 
-**无。**
+**P0-S1A — Legacy Bootstrap & Position Reconciliation v0.1**
 
-**当前已授权产品开发任务：无。**
+P0 North Star（持仓全周期决策闭环）的第一个实施 Slice，只解决一个基础问题：
 
-产品方向已经在 `docs/PRODUCT_NORTH_STAR_V01.md` 冻结为 v0.1，但该文档本身
-**不构成代码实施授权**。下一步如果要开始 P0 开发，必须由用户明确授权后再更新本文件。
+> Vibe 从正式接管账户的那一天开始，如何准确、可审计地知道我实际持有哪些股票，
+> 而不伪造 Vibe 之前的交易历史？
+
+建立事实链：
+
+`Ledger Start → ACCOUNT_OPENING → LEGACY_POSITION_OPENING → post-Vibe trade events
+→ derived positions → reconciliation`
+
+**Scope（本轮必须交付）**：
+
+- `ACCOUNT_OPENING`：ledger 接管边界（`ledger_start_at`、opening cash、`provenance=MANUAL`、
+  `PRE_VIBE_HISTORY=UNKNOWN`）；不制造接管日期之前的事件。
+- `LEGACY_POSITION_OPENING`：期初持仓事件（code / shares / known cost basis /
+  `origin=PRE_VIBE` / `acquired_before_vibe=true` / `historical_trades=UNKNOWN`）；
+  明确 **≠ BUY**，不根据当前成本价反推历史买入。
+- `CORRECTION`：append-only 显式修正事件（被修正对象、修正前后差异、reason、timestamp），
+  禁止静默改写历史事件。
+- Position Derivation：从 Opening + post-Vibe BUY/ADD/REDUCE/SELL + CORRECTION 确定性推导
+  shares / cost basis / position state；复用 performance attribution 已验证的加权平均成本逻辑；
+  shares 不得为负；超额卖出 fail closed；full exit → 0 shares。
+- Reconciliation：只读对比 ledger-derived positions vs portfolio.json holdings，输出
+  MATCH / MISMATCH / MISSING_IN_LEDGER / MISSING_IN_PORTFOLIO，不自动覆盖任何一方。
+- Bootstrap 显式且幂等：preview/dry-run 校验 + commit 校验；同一 Ledger Start 不得重复创建；
+  已存在 post-Vibe ledger 数据时拒绝 bootstrap。
+
+**Stop boundary**：
+
+- Draft PR + CI / 独立审查证据形成后 STOP。
+
+**Non-goals（本轮明确不做）**：
+
+- campaign_id / Campaign（属于 P0-S2）
+- NAV / drawdown（属于 P0-S1B）
+- 将 portfolio.json 替换为 ledger canonical source（switchover 需另行授权；本轮
+  ledger-derived position 只是 candidate canonical fact chain）
+- Thesis 改造 / Evidence Delta / Market & Sector Regime / Risk & Sell Engine /
+  Decision Inbox / Next Best Action / Formal Decision / Outcome 系统
+- Scheduler / Background Agent / Broker / BaoStock production ingestion / Tushare
+- 前端改动 / UI redesign / 无关重构 / PR #59 修复
 
 ## 当前产品优先级（方向，不是授权）
 
@@ -37,8 +74,10 @@ P0 的目标不是“盘中必须做交易”，而是：
 ## 当前显式停止边界
 
 - **PR #59 保持 Draft；未经单独明确授权，不得转 Ready，不得 Merge。**
-- North Star v0.1 不授权 P0 代码实施、生产数据接入、Scheduler、Background Agent、
-  券商连接、付费数据源或自动交易。
+- **P0-S1A Draft PR 不得转 Ready / Merge，直到独立审查证据形成。**
+- **P0-S1B / P0-S2（Campaign）/ Decision Inbox 等后续切片未授权。**
+- North Star v0.1 不授权生产数据接入、Scheduler、Background Agent、券商连接、
+  付费数据源或自动交易。
 - 暂不购买 Tushare 等商业数据；付费数据不是基础产品依赖。
 - BK-11 zero-cost research 已作为研究成果进入稳定历史；不因此自动授权生产 BaoStock
   ingestion / scheduler / backfill / Slice 4。
@@ -48,8 +87,9 @@ P0 的目标不是“盘中必须做交易”，而是：
 ## 最近稳定事实（用于避免旧交接误导）
 
 - 稳定分支：`feature/research-system-v01`。
-- 2026-08-08 现场核验稳定 Head：`d06eabac093e0bc0acace4abe1e446b3655629f5`
-  （Merge PR #61）。
+- 2026-08-09 现场核验稳定 Head：`9b9f0bfa1c4d6725bc4071221f3e9ef22d7a1b23`
+  （Merge PR #61 后 6 个 North Star 文档提交）。
+- 当前任务分支：`feat/p0-position-reality-bootstrap-v0.1`（基于上述稳定 Head）。
 - PR #47 已合并：Merge `5d21122c7253186cd80e90722693234eba9fdfab`；
   代码存在不等于 Tushare Token/权限/live 可用性已证明。
 - PR #56 已合并：Frontend P1 research workspace / AI copilot。
@@ -61,8 +101,8 @@ P0 的目标不是“盘中必须做交易”，而是：
 
 ## 后续候选（均未授权）
 
-- **P0 North Star Gap Analysis**：对照当前稳定能力，列出持仓全周期决策闭环的
-  已有/复用/缺失模块，形成最小实施工作单。
+- **P0-S1B**：NAV / Drawdown（依赖 P0-S1A 的 opening state）。
+- **P0-S2**：Campaign（Security + Strategy + Campaign 正式决策单元）。
 - 对抗性审查发现的安全/可靠性/Foundation 项：CLI 权限边界、local API trust、
   alert-rule concurrency test harness、文档漂移、SSRF hardening 等；这些属于
   Foundation/Hardening lane，不自动覆盖产品优先级，也未授权实施。

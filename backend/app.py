@@ -61,6 +61,7 @@ import performance_attribution_store
 import technical_indicators_router
 import bk11_history_router
 import intel_digest_router
+import position_reality_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -172,6 +173,8 @@ app.include_router(technical_indicators_router.router)
 app.include_router(bk11_history_router.router)
 # Intel Daily Digest
 app.include_router(intel_digest_router.router)
+# P0-S1A 持仓事实链：bootstrap / correction / derived / reconciliation
+app.include_router(position_reality_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)
