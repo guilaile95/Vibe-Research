@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import { TrendingUp, FileText, Newspaper, Rss, RefreshCw, Loader2, ExternalLink, AlertCircle, Sparkles, Lightbulb, Star } from "lucide-react";
+import { TrendingUp, FileText, Newspaper, Rss, RefreshCw, Loader2, ExternalLink, AlertCircle, Sparkles, Lightbulb, Star, XCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -8,8 +8,9 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { api, ApiError, type RadarData, type Industry, type Announcement, type NewsItem } from "@/lib/api";
 import { loadWatchAuthoritative } from "@/lib/watchlist";
-import { hasLlm, chatStream } from "@/lib/llm";
+import { hasLlm } from "@/lib/llm";
 import { cn } from "@/lib/utils";
+import { runIntelDigestGeneration } from "@/lib/intelDigestOrchestrator";
 
 const TABS = [
   { key: "events", label: "事件概率", icon: TrendingUp, integrated: false, desc: "全球宏观预期概率（公开数据、免登录只读），后续接入" },
@@ -18,7 +19,19 @@ const TABS = [
   { key: "investment-news", label: "Investment News", icon: Rss, integrated: true, desc: "12 赛道全球公开 RSS 资讯（集成自 investment-news 仓库）" },
 ];
 
-interface Digest { loading?: boolean; text?: string; err?: string; needKey?: boolean }
+export type DigestPhase = "idle" | "generating" | "saving" | "saved" | "cancelled" | "error" | "save_failed" | "empty";
+
+interface Digest {
+  phase?: DigestPhase;
+  loading?: boolean;
+  saving?: boolean;
+  text?: string;
+  err?: string;
+  needKey?: boolean;
+  saved?: boolean;
+  deduped?: boolean;
+  digest_date?: string;
+}
 
 function InvestmentNewsPanel() {
   const [data, setData] = useState<RadarData | null>(null);
@@ -28,8 +41,57 @@ function InvestmentNewsPanel() {
   const [digests, setDigests] = useState<Record<string, Digest>>({});
   const [bulk, setBulk] = useState<{ running: boolean; done: number; total: number }>({ running: false, done: 0, total: 0 });
 
+  const isMountedRef = useRef(true);
+  const generationIdsRef = useRef<Record<string, number>>({});
+  const abortControllersRef = useRef<Record<string, AbortController>>({});
+  const latestLoadIdsRef = useRef<Record<string, number>>({});
+  const sectorStateVersionRef = useRef<Record<string, number>>({});
+  const generatingSectorsRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
-    api.radar().then(setData).catch((e) => setErr(e instanceof ApiError ? e.message : "加载失败"));
+    isMountedRef.current = true;
+    api.radar()
+      .then((res) => { if (isMountedRef.current) setData(res); })
+      .catch((e) => { if (isMountedRef.current) setErr(e instanceof ApiError ? e.message : "加载失败"); });
+
+    return () => {
+      isMountedRef.current = false;
+      Object.values(abortControllersRef.current).forEach((ctrl) => ctrl.abort());
+    };
+  }, []);
+
+  const fetchLatestDigest = useCallback(async (sectorKey: string) => {
+    const loadId = (latestLoadIdsRef.current[sectorKey] || 0) + 1;
+    latestLoadIdsRef.current[sectorKey] = loadId;
+    const capturedVersion = sectorStateVersionRef.current[sectorKey] || 0;
+
+    try {
+      const res = await api.getIntelDigestLatest(sectorKey);
+      if (!isMountedRef.current) return;
+      if (latestLoadIdsRef.current[sectorKey] !== loadId) return;
+      const currentVersion = sectorStateVersionRef.current[sectorKey] || 0;
+      if (currentVersion !== capturedVersion) return;
+
+      if (res?.digest) {
+        setDigests((d) => {
+          const currentPhase = d[sectorKey]?.phase;
+          // Never overwrite active/error states (including save_failed, cancelled, generating, saving)
+          if (currentPhase && currentPhase !== "idle") return d;
+
+          return {
+            ...d,
+            [sectorKey]: {
+              phase: "saved",
+              text: res.digest!.summary_text,
+              digest_date: res.digest!.digest_date,
+              saved: true,
+            },
+          };
+        });
+      }
+    } catch {
+      // Graceful fallback - API failure does not break radar
+    }
   }, []);
 
   const refresh = async () => {
@@ -43,33 +105,164 @@ function InvestmentNewsPanel() {
   const cur = industries.find((i) => i.key === active) || industries[0];
   const hasData = !!data?.generated_at;
 
+  useEffect(() => {
+    if (cur?.key) {
+      fetchLatestDigest(cur.key);
+    }
+  }, [cur?.key, fetchLatestDigest]);
+
+  const cancelGen = (sectorKey: string) => {
+    if (digests[sectorKey]?.phase === "saving") return;
+
+    sectorStateVersionRef.current[sectorKey] = (sectorStateVersionRef.current[sectorKey] || 0) + 1;
+
+    const ctrl = abortControllersRef.current[sectorKey];
+    if (ctrl) {
+      ctrl.abort();
+      delete abortControllersRef.current[sectorKey];
+    }
+    generatingSectorsRef.current.delete(sectorKey);
+    setDigests((d) => ({
+      ...d,
+      [sectorKey]: {
+        ...d[sectorKey],
+        phase: "cancelled",
+        loading: false,
+        saving: false,
+        err: "生成已取消",
+      },
+    }));
+  };
+
   const genDigest = async (ind: Industry) => {
     if (!hasLlm()) { setDigests((d) => ({ ...d, [ind.key]: { needKey: true } })); return; }
-    setDigests((d) => ({ ...d, [ind.key]: { loading: true } }));
-    const ctx = ind.items.slice(0, 25).map((it) => `[${it.time}] ${it.source}｜${it.zh || it.title}`).join("\n");
-    const prompt =
-      `以下是「${ind.name}」赛道近期资讯。请提炼「今日要点」3-5 条：每条一句话（≤40 字），` +
-      `抓住重要事件、趋势与可能影响。直接用「- 」列点，不要多余前后缀。\n\n${ctx}`;
-    try {
-      let acc = "";
-      await chatStream([{ role: "user", content: prompt }], `${ind.name}赛道资讯`, {
-        onDelta: (t) => { acc += t; setDigests((d) => ({ ...d, [ind.key]: { text: acc } })); },
-      });
-    } catch (e) {
-      setDigests((d) => ({ ...d, [ind.key]: { err: e instanceof ApiError ? e.message : "生成失败" } }));
+    if (bulk.running || generatingSectorsRef.current.has(ind.key)) return;
+
+    if (abortControllersRef.current[ind.key]) {
+      abortControllersRef.current[ind.key].abort();
+    }
+
+    sectorStateVersionRef.current[ind.key] = (sectorStateVersionRef.current[ind.key] || 0) + 1;
+
+    const controller = new AbortController();
+    abortControllersRef.current[ind.key] = controller;
+    generatingSectorsRef.current.add(ind.key);
+
+    const genId = (generationIdsRef.current[ind.key] || 0) + 1;
+    generationIdsRef.current[ind.key] = genId;
+
+    setDigests((d) => ({
+      ...d,
+      [ind.key]: { phase: "generating", loading: true, saving: false, err: undefined, needKey: false },
+    }));
+
+    const result = await runIntelDigestGeneration({
+      industry: ind,
+      signal: controller.signal,
+      generationId: genId,
+      getCurrentGenerationId: () => generationIdsRef.current[ind.key] || 0,
+      isMounted: () => isMountedRef.current,
+      onPhaseChange: (phase) => {
+        if (isMountedRef.current && generationIdsRef.current[ind.key] === genId) {
+          setDigests((d) => ({
+            ...d,
+            [ind.key]: {
+              ...d[ind.key],
+              phase,
+              loading: true,
+              saving: phase === "saving",
+            },
+          }));
+        }
+      },
+      onDelta: (text) => {
+        if (isMountedRef.current && generationIdsRef.current[ind.key] === genId) {
+          setDigests((d) => ({ ...d, [ind.key]: { ...d[ind.key], text } }));
+        }
+      },
+    });
+
+    generatingSectorsRef.current.delete(ind.key);
+
+    if (!isMountedRef.current || generationIdsRef.current[ind.key] !== genId) {
+      return;
+    }
+
+    if (result.status === "cancelled") {
+      setDigests((d) => ({
+        ...d,
+        [ind.key]: {
+          ...d[ind.key],
+          phase: "cancelled",
+          loading: false,
+          saving: false,
+          err: "生成已取消",
+        },
+      }));
+    } else if (result.status === "saved" || result.status === "deduped") {
+      setDigests((d) => ({
+        ...d,
+        [ind.key]: {
+          phase: "saved",
+          loading: false,
+          saving: false,
+          text: result.summaryText,
+          saved: true,
+          deduped: result.status === "deduped",
+          digest_date: result.digest?.digest_date,
+        },
+      }));
+    } else if (result.status === "save_failed") {
+      setDigests((d) => ({
+        ...d,
+        [ind.key]: {
+          phase: "save_failed",
+          loading: false,
+          saving: false,
+          text: result.summaryText,
+          err: result.error || "保存失败",
+        },
+      }));
+    } else if (result.status === "unavailable") {
+      setDigests((d) => ({
+        ...d,
+        [ind.key]: {
+          phase: "empty",
+          loading: false,
+          saving: false,
+          err: result.error || "没有可用于摘要的有效带日期资讯",
+        },
+      }));
+    } else if (result.status === "error") {
+      setDigests((d) => ({
+        ...d,
+        [ind.key]: { phase: "error", loading: false, saving: false, err: result.error || "生成失败" },
+      }));
+    } else if (result.status === "empty") {
+      setDigests((d) => ({
+        ...d,
+        [ind.key]: { phase: "empty", loading: false, saving: false, err: "生成结果为空" },
+      }));
     }
   };
 
-  // 一键提炼全部赛道要点（串行，带进度；单赛道按需的按钮仍保留）
+  // 一键提炼全部赛道要点（串行，带进度；跳过正在生成的赛道）
   const genAll = async () => {
     if (!hasLlm()) { if (cur) setDigests((d) => ({ ...d, [cur.key]: { needKey: true } })); return; }
-    const targets = industries.filter((i) => i.items.length > 0);
+    if (bulk.running) return;
+
+    const targets = industries.filter((i) => i.items.length > 0 && !generatingSectorsRef.current.has(i.key));
     setBulk({ running: true, done: 0, total: targets.length });
+
     for (const ind of targets) {
+      if (!isMountedRef.current) break;
       await genDigest(ind);
       setBulk((b) => ({ ...b, done: b.done + 1 }));
     }
-    setBulk((b) => ({ ...b, running: false }));
+
+    if (isMountedRef.current) {
+      setBulk((b) => ({ ...b, running: false }));
+    }
   };
 
   const dg = cur ? digests[cur.key] : undefined;
@@ -129,17 +322,68 @@ function InvestmentNewsPanel() {
               {/* 今日要点总结框（暖橙框） */}
               <div className="mb-4 rounded-xl border border-primary/30 bg-primary/5 p-4">
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5 text-sm font-semibold text-primary">
-                    <Lightbulb className="h-4 w-4" /> 今日要点 · {cur.name}
-                  </span>
-                  {(dg?.text || dg?.err || dg?.needKey) && (
-                    <button onClick={() => genDigest(cur)} className="text-xs text-muted-foreground hover:text-primary">重新提炼</button>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center gap-1.5 text-sm font-semibold text-primary">
+                      <Lightbulb className="h-4 w-4" /> 今日要点 · {cur.name}
+                    </span>
+                    {dg?.digest_date && (
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {dg.digest_date}
+                      </span>
+                    )}
+                    {dg?.saved && (
+                      <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-xs font-medium text-emerald-500">
+                        已保存
+                      </span>
+                    )}
+                    {dg?.deduped && (
+                      <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-xs font-medium text-blue-400">
+                        已去重
+                      </span>
+                    )}
+                    {dg?.phase === "cancelled" && (
+                      <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-xs font-medium text-destructive">
+                        生成已取消
+                      </span>
+                    )}
+                  </div>
+                  {dg?.phase === "saving" ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-primary font-medium">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> 保存中…
+                    </span>
+                  ) : dg?.phase === "generating" ? (
+                    <button
+                      onClick={() => cancelGen(cur.key)}
+                      className="inline-flex items-center gap-1 text-xs text-destructive hover:underline font-medium"
+                    >
+                      <XCircle className="h-3.5 w-3.5" /> 取消生成
+                    </button>
+                  ) : (dg?.text || dg?.err || dg?.needKey) ? (
+                    <button
+                      onClick={() => genDigest(cur)}
+                      disabled={bulk.running || generatingSectorsRef.current.has(cur.key)}
+                      className="text-xs text-muted-foreground hover:text-primary disabled:opacity-50"
+                    >
+                      重新提炼
+                    </button>
+                  ) : null}
                 </div>
-                {dg?.loading ? (
+                {dg?.phase === "generating" ? (
                   <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> AI 正在读这个赛道的资讯…</p>
+                ) : dg?.phase === "saving" ? (
+                  <div className="space-y-2">
+                    <p className="flex items-center gap-2 text-sm text-primary"><Loader2 className="h-3.5 w-3.5 animate-spin" /> 摘要已生成，正在保存到数据库…</p>
+                    {dg?.text && (
+                      <div className="prose prose-sm prose-invert max-w-none text-foreground opacity-80"><ReactMarkdown remarkPlugins={[remarkGfm]}>{dg.text}</ReactMarkdown></div>
+                    )}
+                  </div>
                 ) : dg?.text ? (
                   <>
+                    {dg?.err && (
+                      <div className="mb-2 flex items-center gap-1.5 rounded bg-destructive/10 p-2 text-xs text-destructive">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {dg.err}
+                      </div>
+                    )}
                     <div className="prose prose-sm prose-invert max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{dg.text}</ReactMarkdown></div>
                     <div className="mt-2"><SaveNoteButton kind="今日要点" title={`${cur.name} 今日要点`} content={dg.text} /></div>
                   </>

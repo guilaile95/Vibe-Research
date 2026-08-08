@@ -118,6 +118,48 @@ export type SectorDynamicData = {
   error?: string;
 };
 
+export interface IntelDigestInputItem {
+  title?: string;
+  source?: string;
+  published_at?: string;
+  url?: string;
+  summary?: string;
+  time?: string;
+  zh?: string;
+  [key: string]: unknown;
+}
+
+export interface IntelDigest {
+  digest_id: string;
+  digest_date: string;
+  sector_key: string;
+  sector_name: string;
+  status: "normal" | "partial" | "unavailable";
+  summary_text: string;
+  source_refs: unknown;
+  input_fingerprint: string;
+  generated_at: string;
+  created_at: string;
+}
+
+export interface IntelDigestSaveIn {
+  sector_key: string;
+  status: "normal" | "partial" | "unavailable";
+  summary_text: string;
+  source_refs?: unknown;
+  input_items?: IntelDigestInputItem[];
+}
+
+export interface IntelDigestSaveResult {
+  digest: IntelDigest | null;
+  deduped: boolean;
+  error?: string;
+}
+
+export interface IntelDigestLatestResult {
+  digest: IntelDigest | null;
+}
+
 
 export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;
@@ -549,7 +591,16 @@ export interface DailyReviewComparison {
 
 
 export interface RadarItem {
-  title: string; url: string; time: string; source: string; summary?: string; zh?: string;
+  title: string;
+  url: string;
+  time: string;
+  source: string;
+  summary?: string;
+  zh?: string;
+  /** Authoritative ISO-8601 publish time with timezone; null when unknown. */
+  published_at?: string | null;
+  /** Unix epoch seconds; used only when published_at is missing (old cache migration). */
+  ts?: number;
 }
 
 export interface Industry {
@@ -977,9 +1028,6 @@ export interface TechnicalIndicatorLatest {
   bollinger_middle: number | null;
   bollinger_lower: number | null;
   volume_ratio_5_20: number | null;
-  kdj_k: number | null;
-  kdj_d: number | null;
-  kdj_j: number | null;
 }
 
 export interface TechnicalIndicatorSeriesPoint {
@@ -994,9 +1042,6 @@ export interface TechnicalIndicatorSeriesPoint {
   macd_histogram: number | null;
   rsi14: number | null;
   volume_ratio_5_20: number | null;
-  kdj_k: number | null;
-  kdj_d: number | null;
-  kdj_j: number | null;
 }
 
 export interface TechnicalIndicators {
@@ -1647,4 +1692,103 @@ export interface AttributionSnapshotListResult {
 export interface AttributionSnapshotDetailResult {
   snapshot: AttributionSnapshotSummary & { payload: AttributionResult };
   positions: AttributionPosition[];
+}
+
+// ---------------------------------------------------------------------------
+// BK-11 短线市场历史（只读查询）
+// ---------------------------------------------------------------------------
+
+export type Bk11HistoryStatus =
+  | "empty"
+  | "normal"
+  | "partial"
+  | "unavailable"
+  | "error";
+
+export interface Bk11HistoryWindow {
+  requested: number;
+  snapshot_count: number;
+}
+
+export interface Bk11HistorySnapshotMeta {
+  trade_date: string;
+  session: string;
+  schema_version: string;
+  stored_at: string;
+}
+
+/** 真实后端 daily-facts 合同：facts 段为 {schema_version, status, facts:{...}} */
+export interface Bk11FactSection {
+  schema_version: string;
+  status: string;
+  facts: Record<string, unknown>;
+}
+
+export interface Bk11LadderRow {
+  boards: number;
+  count: number;
+}
+
+/** 真实后端 daily-facts 合同：ladder 段为 {schema_version, status, metrics:{...}} */
+export interface Bk11LadderSection {
+  schema_version: string;
+  status: string;
+  metrics: {
+    max_boards: number | null;
+    lianban_count: number | null;
+    ladder: Bk11LadderRow[] | null;
+  };
+}
+
+/** 真实后端 daily-facts 合同：gap 段为 {schema_version, status, metrics:{...}} */
+export interface Bk11GapSection {
+  schema_version: string;
+  status: string;
+  metrics: {
+    gap_level_count: number | null;
+    gap_segment_count: number | null;
+    largest_gap_width: number | null;
+    first_gap_board: number | null;
+    is_continuous: boolean | null;
+  };
+}
+
+export interface Bk11DailyFactsSections {
+  facts: Bk11FactSection | null;
+  ladder: Bk11LadderSection | null;
+  gap: Bk11GapSection | null;
+}
+
+export interface Bk11DailyFactsEnvelope {
+  schema_version: string;
+  trade_date: string;
+  session: string;
+  is_final: boolean;
+  source_ids: string[];
+  fetched_at: string | null;
+  snapshot_at: string | null;
+  status: "normal" | "partial" | "unavailable" | "invalid";
+  reason_codes: string[];
+  warnings: string[];
+  limitations: string[];
+  source_schema_version: string | null;
+  source_status: string | null;
+  source_reason_codes: string[];
+  sections: Bk11DailyFactsSections;
+}
+
+export interface Bk11HistoryEnvelope {
+  schema_version: string;
+  status: Bk11HistoryStatus;
+  window: Bk11HistoryWindow;
+  trade_date: string | null;
+  data_time: string | null;
+  snapshots: Bk11HistorySnapshotMeta[];
+  latest: Bk11DailyFactsEnvelope | null;
+  delta: Record<string, unknown> | null;
+  summary: Record<string, unknown> | null;
+  digest: Record<string, unknown> | null;
+  reason_codes: string[];
+  warnings: string[];
+  limitations: string[];
 }

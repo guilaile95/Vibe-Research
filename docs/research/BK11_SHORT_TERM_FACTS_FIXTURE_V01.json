@@ -1,0 +1,263 @@
+{
+  "schema_version": "bk11-short-term-facts-fixture.v0.1",
+  "fixture_kind": "synthetic-normalized",
+  "generated_at": "2026-08-02T00:00:00.000000Z",
+  "description": "BK-11 Slice 0 offline fixture for unit testing short-term market fact indicators. All numeric values are manually constructed synthetic values used only to test schema and calculation consistency. They do not represent actual historical market data.",
+  "trade_dates": ["2026-07-28", "2026-07-29", "2026-07-30"],
+  "market_scope": {
+    "included": ["SH main", "SZ main", "ChiNext", "STAR"],
+    "excluded": ["BSE", "ST", "*ST", "IPO no-limit period", "delisting period", "B shares", "ETF", "LOF", "convertible bonds", "funds", "indexes"]
+  },
+  "cases": [
+    {
+      "case_id": "normal",
+      "case_name": "正常交易日收盘后快照",
+      "status": "normal",
+      "trade_date": "2026-07-30",
+      "session": "final",
+      "is_final": true,
+      "source_ids": ["eastmoney_limit_pool", "eastmoney_market_breadth"],
+      "fetched_at": "2026-07-30T07:30:00.000000Z",
+      "snapshot_at": "2026-07-30T07:35:00.000000Z",
+      "universe": {
+        "breadth_universe": ["SH main", "SZ main", "ChiNext", "STAR"],
+        "limit_pool_universe": ["SH main", "SZ main", "ChiNext", "STAR"],
+        "eligible_count": 5312,
+        "valid_count": 5298,
+        "suspended_count": 14
+      },
+      "breadth": {
+        "eligible_count": 5312,
+        "valid_count": 5298,
+        "suspended_count": 14,
+        "advance_count": 2841,
+        "decline_count": 2103,
+        "flat_count": 354,
+        "up_ratio": 0.5362,
+        "total_amount": 98765432100.0
+      },
+      "limit_activity": {
+        "limit_up_count": 67,
+        "limit_down_count": 8,
+        "failed_limit_up_count": 23,
+        "touched_limit_up_count": 90,
+        "sealed_limit_up_count": 67,
+        "failed_board_rate": 0.2556,
+        "seal_rate": 0.7444,
+        "yzt_count": 54,
+        "max_boards": 5,
+        "lianban_count": 18,
+        "ladder": [
+          {"boards": 2, "count": 9, "plus": false},
+          {"boards": 3, "count": 4, "plus": false},
+          {"boards": 4, "count": 3, "plus": false},
+          {"boards": 5, "count": 2, "plus": true}
+        ],
+        "layered_promotion_rates": [
+          {"from_level": 1, "to_level": 2, "numerator": 9, "denominator": 30, "sample_count": 30, "rate": 0.3},
+          {"from_level": 2, "to_level": 3, "numerator": 4, "denominator": 9, "sample_count": 9, "rate": 0.4444},
+          {"from_level": 3, "to_level": 4, "numerator": 3, "denominator": 4, "sample_count": 4, "rate": 0.75},
+          {"from_level": 4, "to_level": 5, "numerator": 2, "denominator": 3, "sample_count": 3, "rate": 0.6667}
+        ],
+        "next_close_return": null,
+        "loss_effect": null
+      },
+      "data_health": {
+        "transport_success": true,
+        "parse_success": true,
+        "required_field_present": true,
+        "data_array_present": true,
+        "trade_date_match": true,
+        "row_count": 67,
+        "legal_zero": false,
+        "upstream_null": false,
+        "unexplained_empty": false
+      },
+      "limitations": [
+        "single-source (eastmoney push2ex), not cross-validated",
+        "licensing_status: unclear",
+        "zdp semantics not confirmed"
+      ],
+      "reason_codes": [],
+      "missing_fields": ["next_close_return", "loss_effect"],
+      "unavailable_metrics": ["next_open_return", "next_high_return", "seal_quality_full", "theme_structure"]
+    },
+    {
+      "case_id": "partial",
+      "case_name": "盘中集合竞价覆盖率不足",
+      "status": "partial",
+      "trade_date": "2026-07-29",
+      "session": "call_auction",
+      "is_final": false,
+      "source_ids": ["eastmoney_limit_pool", "eastmoney_market_breadth"],
+      "fetched_at": "2026-07-29T01:27:00.000000Z",
+      "snapshot_at": "2026-07-29T01:28:00.000000Z",
+      "universe": {
+        "breadth_universe": ["SH main", "SZ main", "ChiNext", "STAR"],
+        "limit_pool_universe": ["SH main", "SZ main", "ChiNext", "STAR"],
+        "eligible_count": 3215,
+        "valid_count": 3201,
+        "suspended_count": 14
+      },
+      "breadth": {
+        "eligible_count": 3215,
+        "valid_count": 3201,
+        "suspended_count": 14,
+        "advance_count": 1802,
+        "decline_count": 1105,
+        "flat_count": 294,
+        "up_ratio": 0.5629,
+        "total_amount": 21456789000.0
+      },
+      "limit_activity": {
+        "limit_up_count": 12,
+        "limit_down_count": 2,
+        "failed_limit_up_count": 5,
+        "touched_limit_up_count": 17,
+        "sealed_limit_up_count": 12,
+        "failed_board_rate": 0.2941,
+        "seal_rate": 0.7059,
+        "yzt_count": 0,
+        "max_boards": 3,
+        "lianban_count": 4,
+        "ladder": [
+          {"boards": 2, "count": 3, "plus": false},
+          {"boards": 3, "count": 1, "plus": false}
+        ],
+        "layered_promotion_rates": null,
+        "next_close_return": null,
+        "loss_effect": null
+      },
+      "data_health": {
+        "transport_success": true,
+        "parse_success": true,
+        "required_field_present": true,
+        "data_array_present": true,
+        "trade_date_match": true,
+        "row_count": 12,
+        "legal_zero": false,
+        "upstream_null": false,
+        "unexplained_empty": false,
+        "coverage_warning": true
+      },
+      "limitations": [
+        "single-source (eastmoney push2ex), not cross-validated",
+        "partial coverage: valid_count < eligible_count - suspended_count",
+        "licensing_status: unclear"
+      ],
+      "reason_codes": ["PARTIAL_COVERAGE"],
+      "missing_fields": ["layered_promotion_rates", "next_close_return", "loss_effect"],
+      "unavailable_metrics": ["next_open_return", "next_high_return", "seal_quality_full", "theme_structure"],
+      "available_metrics": ["advance_count", "decline_count", "flat_count", "limit_up_count", "limit_down_count", "failed_limit_up_count", "failed_board_rate", "seal_rate", "ladder"]
+    },
+    {
+      "case_id": "unavailable",
+      "case_name": "数据源不可达",
+      "status": "unavailable",
+      "trade_date": "2026-07-28",
+      "session": "unavailable",
+      "is_final": false,
+      "source_ids": ["eastmoney_limit_pool", "eastmoney_market_breadth"],
+      "fetched_at": "2026-07-28T01:00:00.000000Z",
+      "snapshot_at": "2026-07-28T01:00:00.000000Z",
+      "universe": null,
+      "breadth": null,
+      "limit_activity": null,
+      "data_health": {
+        "transport_success": false,
+        "parse_success": false,
+        "required_field_present": false,
+        "data_array_present": false,
+        "trade_date_match": false,
+        "row_count": 0,
+        "legal_zero": false,
+        "upstream_null": false,
+        "unexplained_empty": false
+      },
+      "limitations": [
+        "single-source (eastmoney push2ex), not cross-validated",
+        "licensing_status: unclear",
+        "no factual metrics available"
+      ],
+      "reason_codes": ["SOURCE_UNAVAILABLE"],
+      "missing_fields": ["breadth", "limit_activity"],
+      "unavailable_metrics": ["advance_count", "decline_count", "flat_count", "suspended_count", "eligible_count", "limit_up_count", "limit_down_count", "failed_limit_up_count", "failed_board_rate", "seal_rate", "ladder", "layered_promotion_rates", "next_close_return", "loss_effect", "theme_structure"]
+    }
+  ],
+  "cross_source_audit": {
+    "dates_audited": ["2026-07-28", "2026-07-29", "2026-07-30"],
+    "primary_source": "eastmoney_limit_pool",
+    "primary_source_endpoint_family": "push2ex",
+    "breadth_source": "eastmoney_market_breadth",
+    "breadth_source_endpoint_family": "push2",
+    "secondary_source": "ths_limit_up_reveal",
+    "secondary_source_endpoint_family": "10jqka_dataapi",
+    "findings": {
+      "zt_count_deviation": "not verified (Q did not independently reverify THS)",
+      "zb_count_cross_validation": "none (single source)",
+      "breadth_cross_validation": "none (single source, Tencent provides per-stock only)",
+      "risk": "eastmoney push2ex intermittent rate-limiting",
+      "mitigation": "em_get() throttling + Data Health unavailable + no fabrication"
+    }
+  },
+  "indicator_decisions": {
+    "advance_count": "GO",
+    "decline_count": "GO",
+    "flat_count": "GO",
+    "suspended_count": "GO",
+    "eligible_count": "GO",
+    "limit_up_count": "GO",
+    "limit_down_count": "GO",
+    "failed_limit_up_count": "GO",
+    "touched_limit_up_count": "CONDITIONAL_GO",
+    "touched_limit_down_count": "NO-GO",
+    "failed_board_rate": "GO",
+    "seal_rate": "GO",
+    "seal_quality_full": "NO-GO",
+    "first_limit_up_time": "CONDITIONAL_GO",
+    "last_limit_up_time": "NO-GO",
+    "open_count": "CONDITIONAL_GO",
+    "seal_amount": "CONDITIONAL_GO",
+    "seal_volume": "NO-GO",
+    "seal_ratio": "NO-GO",
+    "turnover_amount": "CONDITIONAL_GO",
+    "turnover_rate": "CONDITIONAL_GO",
+    "float_market_cap": "CONDITIONAL_GO",
+    "max_boards": "GO",
+    "lianban_count": "GO",
+    "ladder": "GO",
+    "layered_promotion_rates": "CONDITIONAL_GO",
+    "next_open_return": "NO-GO",
+    "next_close_return": "CONDITIONAL_GO",
+    "next_high_return": "NO-GO",
+    "loss_effect": "CONDITIONAL_GO",
+    "theme_structure": "CONDITIONAL_GO",
+    "history": "NO-GO",
+    "T+1": "NO-GO"
+  },
+  "overall_decision": "CONDITIONAL_GO",
+  "slice1_blocked_scope": [
+    "touched_limit_down_count remains blocked (NO-GO; sources cannot distinguish close limit-down from intraday touch-then-reopen)",
+    "seal_quality_full remains blocked (NO-GO; sub-field contracts exist but semantics not independently verified)",
+    "seal_volume remains blocked (NO-GO; source field unconfirmed)",
+    "seal_ratio remains blocked (NO-GO as a standardized metric; no authoritative denominator)",
+    "last_limit_up_time remains blocked (NO-GO; source field unconfirmed)",
+    "wrong aggregate promotion rate remains blocked (layered_promotion_rates only)",
+    "unconfirmed premium (next_open_return / next_high_return) remains blocked",
+    "full loss_effect remains blocked (minimal definition only, CONDITIONAL_GO)",
+    "theme_structure and theme submetrics remain blocked (CONDITIONAL_GO)",
+    "history backfill remains blocked (Slice 4)",
+    "T+1 closed loop remains blocked (Slice 4)"
+  ],
+  "slice1_entry_conditions": [
+    "Slice 0 audit committed and pushed",
+    "User explicitly authorizes Slice 1",
+    "Licensing remains unclear, controlled research environment only",
+    "Preserve provenance (source_id / trade_date / fetched_at / snapshot_at)",
+    "Data Health can degrade, legal zero not treated as failure",
+    "Do not implement unverified metrics",
+    "Scope: market breadth + limit up/down + failed boards + basic break/seal",
+    "Pure computation, no LLM, unified envelope, Data Health integration, fixture tests",
+    "No new frontend pages, no router/app changes, no new dependencies"
+  ]
+}

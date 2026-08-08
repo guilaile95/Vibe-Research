@@ -39,10 +39,10 @@ def test_all_not_initialized(client):
     assert r.status_code == 200
     body = r.json()["data"]
     assert body["overall_status"] == "unavailable"
-    assert body["summary"]["normal"] + body["summary"]["partial"] + body["summary"]["unavailable"] == 14
-    assert body["summary"]["not_initialized"] == 14
+    assert body["summary"]["normal"] + body["summary"]["partial"] + body["summary"]["unavailable"] == 15
+    assert body["summary"]["not_initialized"] == 15
     assert body["blocks_advice"] is False
-    assert len(body["items"]) == 14
+    assert len(body["items"]) == 15
     after = list(root.rglob("*"))
     assert before == after
     assert not (root / "data_health_events.json").exists()
@@ -211,7 +211,7 @@ def test_adapter_read_error_isolated(client, monkeypatch):
     r = c.get("/api/data-health")
     assert r.status_code == 200
     items = r.json()["data"]["items"]
-    assert len(items) == 14
+    assert len(items) == 15
     by = {it["source_id"]: it for it in items}
     assert by["quotes"]["status"] == "unavailable"
     assert by["quotes"]["last_error_code"] == "SOURCE_UNAVAILABLE"

@@ -1,7 +1,8 @@
-"""技术指标 HTTP 路由：/api/market/technical-indicators。
+"""技术指标与告警规则 HTTP 聚合路由。
 
-只负责 HTTP 适配（参数校验、拉 K 线、缓存、错误隔离）；
-纯计算委托给 technical_indicators.compute_indicators。
+技术指标端点保持 /api/market/technical-indicators；Alert Rule CRUD 作为同级
+/api/alert-rules 路由挂载。这里仅负责把两个已经独立验收的 router 聚合给 app，
+避免恢复旧分支时覆盖后来稳定分支的 app.py。
 """
 from __future__ import annotations
 
@@ -10,13 +11,17 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 
+import alert_rule_router
 import app as app_module
 import astock
 import technical_indicators as ti
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/market/technical-indicators", tags=["technical-indicators"])
+_technical_router = APIRouter(
+    prefix="/api/market/technical-indicators",
+    tags=["technical-indicators"],
+)
 
 _ALLOWED_PERIODS = frozenset({"daily"})
 _DAYS_MIN = 20
@@ -53,7 +58,7 @@ def _upstream_unavailable_envelope(code: str, period: str, fetched_at: str, warn
     }
 
 
-@router.get("")
+@_technical_router.get("")
 def get_technical_indicators(
     code: str = Query(...),
     period: str = Query("daily"),
@@ -128,3 +133,10 @@ def get_technical_indicators(
         pass
 
     return {"data": response_envelope}
+
+
+# app.py 继续只 include technical_indicators_router.router；这里聚合两个同级 router，
+# 从而保留当前 stable 的 app.py，同时恢复 Alert Rule API。
+router = APIRouter()
+router.include_router(_technical_router)
+router.include_router(alert_rule_router.router)

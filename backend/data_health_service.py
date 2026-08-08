@@ -51,6 +51,7 @@ SOURCE_REGISTRY: list[dict[str, str]] = [
     {"source_id": "northbound_capital_flow", "module": "北向资金", "display_name": "北向资金"},
     {"source_id": "technical_indicators", "module": "技术指标", "display_name": "技术指标"},
     {"source_id": "top_risk_analysis", "module": "顶部风险分析", "display_name": "顶部风险分析"},
+    {"source_id": "bk11_history", "module": "BK-11 短线历史", "display_name": "BK-11 短线历史"},
 ]
 
 REGISTERED_SOURCE_IDS = frozenset(s["source_id"] for s in SOURCE_REGISTRY)

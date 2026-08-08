@@ -542,6 +542,7 @@ async function main() {
     }
     const expectedSourceIds = [
       "announcements",
+      "bk11_history",
       "daily_review",
       "evidence_ledger",
       "financials",
@@ -676,6 +677,7 @@ async function main() {
       "北向资金",
       "技术指标",
       "顶部风险分析",
+      "BK-11 短线历史",
     ];
     for (const name of sourceNames) {
       await page.getByText(name, { exact: false }).first().waitFor({ timeout: 10000 });

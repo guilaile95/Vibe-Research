@@ -3,185 +3,172 @@
 @tailwind utilities;
 
 @layer base {
-  /* ============================================================
-     Vibe-Research · 精密仪表暖橙主题 v2
-     设计语言：编辑排版 × 数据终端
-     字体：Space Grotesk（标题）+ Outfit（正文）+ JetBrains Mono（数据）
-     层级：轻量边框卡为主，玻璃效果仅用于侧边栏等固定区域
-     ============================================================ */
+  /* ChatGPT-inspired workspace variant: neutral canvas, soft chrome, low container noise. */
   :root {
-    --background: 224 44% 5%;
-    --foreground: 210 25% 93%;
-    --card: 224 38% 8%;
-    --card-foreground: 210 25% 93%;
+    --background: 0 0% 13%;
+    --foreground: 0 0% 93%;
+    --card: 0 0% 18%;
+    --card-foreground: 0 0% 93%;
 
-    --primary: 16 90% 55%;
-    /* 深暖黑前景：在 --primary 橙底上实测 5.93:1，满足 WCAG AA 4.5:1（纯白仅 3.29:1） */
-    --primary-foreground: 20 60% 5%;
-    --accent: 28 92% 56%;
-    --accent-foreground: 224 44% 5%;
+    --sidebar: 0 0% 9%;
+    --sidebar-foreground: 0 0% 78%;
+    --sidebar-muted: 0 0% 52%;
+    --sidebar-hover: 0 0% 15%;
+    --sidebar-active: 0 0% 18%;
 
-    --muted: 222 26% 13%;
-    --muted-foreground: 215 16% 58%;
-    --destructive: 0 72% 58%;
+    --primary: 0 0% 93%;
+    --primary-foreground: 0 0% 13%;
+    --accent: 0 0% 18%;
+    --accent-foreground: 0 0% 93%;
+
+    --muted: 0 0% 18%;
+    --muted-foreground: 0 0% 69%;
+    --destructive: 0 70% 62%;
     --destructive-foreground: 0 0% 100%;
-    --border: 215 22% 18%;
+    --border: 0 0% 26%;
     --radius: 0.75rem;
 
-    --success: 152 60% 45%;
-    --danger: 0 74% 60%;
-    --warning: 38 92% 55%;
-    --info: 16 90% 55%;
+    /* A 股语义保持红涨绿跌。 */
+    --success: 148 45% 47%;
+    --danger: 0 68% 62%;
+    --warning: 38 64% 57%;
+    --info: 0 0% 69%;
 
-    /* 玻璃（仅侧边栏） */
-    --glass-fill-top: rgba(255, 255, 255, 0.04);
-    --glass-fill-bot: rgba(255, 255, 255, 0.008);
-    --glass-stroke: rgba(255, 232, 214, 0.08);
-    --glass-hi: rgba(255, 255, 255, 0.04);
-
-    --chart-grid: 220 20% 14%;
-    --chart-text: 215 15% 55%;
-    --chart-axis: 220 20% 24%;
+    --chart-grid: 0 0% 20%;
+    --chart-text: 0 0% 62%;
+    --chart-axis: 0 0% 30%;
   }
 
   .light {
-    --background: 210 25% 97%;
-    --foreground: 224 35% 10%;
-    --card: 0 0% 100%;
-    --card-foreground: 224 35% 10%;
+    --background: 0 0% 100%;
+    --foreground: 0 0% 8%;
+    --card: 0 0% 96%;
+    --card-foreground: 0 0% 8%;
 
-    --primary: 16 82% 48%;
-    /* 同一深暖黑前景：浅色 --primary 橙底上实测 4.79:1（纯白仅 4.07:1） */
-    --primary-foreground: 20 60% 5%;
-    --accent: 28 88% 48%;
-    --accent-foreground: 0 0% 100%;
+    --sidebar: 240 6% 97%;
+    --sidebar-foreground: 0 0% 28%;
+    --sidebar-muted: 0 0% 50%;
+    --sidebar-hover: 0 0% 92%;
+    --sidebar-active: 0 0% 90%;
 
-    --muted: 210 18% 92%;
-    --muted-foreground: 215 14% 40%;
-    --destructive: 0 74% 52%;
+    --primary: 0 0% 8%;
+    --primary-foreground: 0 0% 100%;
+    --accent: 0 0% 95%;
+    --accent-foreground: 0 0% 8%;
+
+    --muted: 0 0% 95%;
+    --muted-foreground: 0 0% 43%;
+    --destructive: 0 65% 52%;
     --destructive-foreground: 0 0% 100%;
-    --border: 214 18% 85%;
+    --border: 0 0% 88%;
 
-    --success: 152 60% 38%;
-    --danger: 0 74% 50%;
-    --warning: 38 92% 42%;
-    --info: 16 82% 48%;
+    --success: 148 44% 38%;
+    --danger: 0 65% 52%;
+    --warning: 38 62% 45%;
+    --info: 0 0% 43%;
 
-    --glass-fill-top: rgba(255, 255, 255, 0.65);
-    --glass-fill-bot: rgba(255, 255, 255, 0.3);
-    --glass-stroke: rgba(15, 40, 70, 0.08);
-    --glass-hi: rgba(255, 255, 255, 0.7);
-
-    --chart-grid: 214 20% 88%;
-    --chart-text: 215 16% 42%;
-    --chart-axis: 214 20% 78%;
+    --chart-grid: 0 0% 91%;
+    --chart-text: 0 0% 46%;
+    --chart-axis: 0 0% 80%;
   }
 
   * { @apply border-border; }
 
+  html { background: hsl(var(--background)); }
+
   body {
     @apply bg-background text-foreground font-sans;
     background-color: hsl(var(--background));
-    background-image:
-      radial-gradient(1200px 700px at 8% -10%, hsl(16 90% 55% / 0.07), transparent 55%),
-      radial-gradient(900px 600px at 105% 110%, hsl(225 55% 40% / 0.05), transparent 50%);
-    background-attachment: fixed;
     font-feature-settings: "cv02", "cv03", "cv04";
-  }
-
-  .light body {
-    background-image:
-      radial-gradient(1200px 700px at 8% -10%, hsl(16 85% 55% / 0.05), transparent 55%),
-      radial-gradient(900px 600px at 105% 110%, hsl(225 60% 60% / 0.04), transparent 50%);
   }
 
   h1, h2, h3 { @apply font-display; }
 
+  :focus-visible {
+    outline: 2px solid hsl(var(--foreground) / 0.58);
+    outline-offset: 2px;
+  }
+
+  button, input, textarea, select { font: inherit; }
+
   .prose table { border-collapse: collapse; width: 100%; }
-  .prose th, .prose td { border: 1px solid hsl(var(--border)); }
-  .prose tbody tr:nth-child(even) { background: hsl(var(--muted) / 0.3); }
+  .prose th, .prose td { border-color: hsl(var(--border) / 0.65); }
+  .prose tbody tr:nth-child(even) { background: hsl(var(--muted) / 0.36); }
 
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
+  ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.7); }
 }
 
 @layer components {
-  /* 轻量卡片：实色底 + 细边框 + 微投影（默认容器，替代全局玻璃） */
+  /* Existing cards become quiet content groups instead of elevated dashboard tiles. */
   .card-surface {
-    background: hsl(var(--card));
-    border: 1px solid hsl(var(--border) / 0.6);
+    background: hsl(var(--card) / 0.74);
+    border: 0;
     border-radius: var(--radius);
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.12);
-    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+    box-shadow: none;
+    transition: background-color 150ms ease;
   }
-  .card-surface:hover {
-    border-color: hsl(var(--border));
-  }
-  .light .card-surface {
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.03);
-  }
+  .card-surface:hover { background: hsl(var(--card) / 0.9); }
 
-  /* 玻璃卡：仅用于侧边栏等固定区域（保留 backdrop-filter） */
+  /* Backward-compatible glass class; visually it is now a flat workspace surface. */
   .glass {
-    background-image: linear-gradient(162deg, var(--glass-fill-top), var(--glass-fill-bot));
-    border: 1px solid var(--glass-stroke);
+    background: hsl(var(--card));
+    border: 0;
     border-radius: var(--radius);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 var(--glass-hi);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
-  .light .glass { box-shadow: 0 6px 20px rgba(30, 60, 100, 0.08), inset 0 1px 0 var(--glass-hi); }
 
-  /* 英雄区光晕（配 .glass 或 .card-surface，装饰热点） */
   .glass-glow { position: relative; overflow: hidden; }
-  .glass-glow::before {
-    content: "";
-    position: absolute; top: -40%; right: -20%;
-    width: 220px; height: 220px;
-    background: radial-gradient(circle, hsl(var(--primary) / 0.12), transparent 70%);
-    pointer-events: none;
+  .glass-glow::before { display: none; }
+  .text-glow { text-shadow: none; }
+
+  .section-title {
+    @apply flex items-center text-sm font-semibold text-foreground;
+  }
+  .section-title::before { display: none; }
+
+  /* Tables read as continuous lists, not nested cards. */
+  .workspace-table {
+    @apply w-full text-sm;
+  }
+  .workspace-table thead tr {
+    border-bottom: 1px solid hsl(var(--border) / 0.58);
+  }
+  .workspace-table tbody tr {
+    border-bottom: 1px solid hsl(var(--border) / 0.28);
+    transition: background-color 120ms ease;
+  }
+  .workspace-table tbody tr:hover {
+    background: hsl(var(--muted) / 0.46);
   }
 
-  /* 暖橙光文字（仅用于品牌标题） */
-  .text-glow { text-shadow: 0 0 14px hsl(var(--primary) / 0.35); }
-
-  /* 骨架屏 shimmer */
   .skeleton {
     background: linear-gradient(
       90deg,
-      hsl(var(--muted) / 0.5) 25%,
-      hsl(var(--muted) / 0.8) 50%,
-      hsl(var(--muted) / 0.5) 75%
+      hsl(var(--muted) / 0.45) 25%,
+      hsl(var(--muted) / 0.85) 50%,
+      hsl(var(--muted) / 0.45) 75%
     );
     background-size: 200% 100%;
     animation: shimmer 1.8s ease-in-out infinite;
-    border-radius: 6px;
-  }
-
-  /* 区块标题：左侧橙色竖线 + 字体对比 */
-  .section-title {
-    @apply flex items-center gap-2 text-sm font-semibold text-foreground;
-  }
-  .section-title::before {
-    content: "";
-    @apply block h-4 w-[3px] rounded-full bg-primary;
+    border-radius: 7px;
   }
 }
 
-/* ============================================================
-   动画 keyframes（原生声明，不依赖 Tailwind JIT）
-   shimmer 只被 .skeleton 以裸 CSS 引用，没有 animate-shimmer 类，
-   Tailwind 不会输出对应 @keyframes，必须在此手写，否则骨架屏静默不动。
-   ============================================================ */
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
 
-/* 无障碍：尊重系统「减少动态效果」偏好，只关掉装饰性循环/入场动画，
-   不做 * { transition: none !important } 这类全局粗暴覆盖。 */
+@keyframes fade-up {
+  0% { opacity: 0.96; transform: translateY(4px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-up,
   .animate-fade-up-1,

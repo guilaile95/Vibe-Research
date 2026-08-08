@@ -1,7 +1,7 @@
 // 用户 LLM 配置（只存本地 localStorage，不上传、不进仓库）+ 系统 AI 对话调用。
 
-import { ApiError, streamNdjson, type NdjsonStreamResult } from "./api";
-import { isCliProvider, type ProviderId } from "./ai-models";
+import { ApiError, streamNdjson, type NdjsonStreamResult } from "./api.ts";
+import { isCliProvider, type ProviderId } from "./ai-models.ts";
 
 export interface LlmConfig {
   provider: ProviderId;

@@ -105,10 +105,14 @@ def _fetch_source(src: dict, per: int, cutoff, redline: list[str]):
             if dt is not None:
                 if cutoff and dt < cutoff:
                     continue
+                d["published_at"] = dt.astimezone(BEIJING).isoformat()
                 d["time"] = dt.astimezone(BEIJING).strftime("%m-%d %H:%M")
                 d["ts"] = int(dt.timestamp())
             else:
+                # Never fabricate a publish time from "now" / scrape time
+                d["published_at"] = None
                 d["time"] = "—"
+                d["ts"] = 0
             out.append(d)
         return out
     except Exception:
@@ -162,10 +166,56 @@ def fetch_radar() -> dict:
     return data
 
 
+def migrate_radar_item(item: dict) -> dict:
+    """Deterministic compatibility for old radar cache items missing published_at.
+
+    Rules:
+    - If published_at already present, leave as-is.
+    - If ts > 0: derive Asia/Shanghai ISO-8601 published_at from ts only.
+    - If ts missing or <= 0: published_at stays None.
+    - Never reverse-engineer from display fields like "07-31 10:00", "—", "2 小时前".
+    """
+    if not isinstance(item, dict):
+        return item
+    existing = item.get("published_at")
+    if existing is not None and str(existing).strip() and str(existing).strip() != "—":
+        return item
+
+    raw_ts = item.get("ts", 0)
+    try:
+        ts = int(raw_ts) if raw_ts is not None else 0
+    except (TypeError, ValueError):
+        ts = 0
+
+    if ts > 0:
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(BEIJING)
+        item["published_at"] = dt.isoformat()
+        # Fill display time only when missing/placeholder — still sourced from ts
+        if not item.get("time") or item.get("time") == "—":
+            item["time"] = dt.strftime("%m-%d %H:%M")
+    else:
+        item["published_at"] = None
+    return item
+
+
+def migrate_radar_cache(data: dict | None) -> dict | None:
+    """Apply migrate_radar_item to every item in a loaded radar cache payload."""
+    if not data or not isinstance(data, dict):
+        return data
+    for ind in data.get("industries") or []:
+        if not isinstance(ind, dict):
+            continue
+        items = ind.get("items") or []
+        for item in items:
+            migrate_radar_item(item)
+    return data
+
+
 def load_cache():
     try:
         with open(get_cache_file(), encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        return migrate_radar_cache(data)
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 

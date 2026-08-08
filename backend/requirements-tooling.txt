@@ -1,0 +1,7 @@
+# 锁工程工具链（pip-compile / pip-sync）版本钉死
+# 安装：<venv>/pip install -r requirements-tooling.txt（跨平台）
+# LOCK_COMPILER = Python authority (3.11) + pip 精确版本 + pip-tools 精确版本
+# 注意：pip 26.2.1 与 pip-tools 7.6.0 存在 API 不兼容（实测 TypeError），
+#       编译环境必须使用 pip 26.0.1；安装端 pip 不受此限制。
+pip==26.0.1
+pip-tools==7.6.0

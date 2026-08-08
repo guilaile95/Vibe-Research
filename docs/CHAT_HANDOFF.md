@@ -10,7 +10,7 @@
 |----|-----|
 | 仓库（origin） | https://github.com/guilaile95/Vibe-Research |
 | 主分支 | `feature/research-system-v01` |
-| 稳定功能基线 | PR #35 Merge SHA `f5f420662e3246f56d371e6020efa4de725679e9` |
+| 稳定功能基线 | 以 `git rev-parse origin/feature/research-system-v01` 为准；当前稳定 Head 见 docs/PROJECT_STATE.md（唯一权威） |
 | 实时稳定 HEAD | 运行 `git rev-parse origin/feature/research-system-v01` |
 | 产品候选池 | `docs/PRODUCT_BACKLOG.md`，由 PR #34 引入 |
 | 工作区 | 接手后请先 `git status` / `git rev-parse HEAD` 复核 |
@@ -32,7 +32,9 @@
 3. `docs/DECISIONS.md` — 设计决定
 4. `docs/KNOWN_ISSUES.md` — 限制与已知测试例外
 5. `docs/NEXT_TASK.md` — **当前下一任务**
-6. `docs/PRODUCT_BACKLOG.md` — 长期产品候选池（BK-01 ~ BK-10，未授权）
+6. `docs/PRODUCT_BACKLOG.md` — 长期产品候选池（BK-01 ~ BK-11）
+7. `docs/GOVERNANCE.md` — 治理契约（权威链、CI 分级、分支保护、PR 恢复方案）
+8. `docs/research/EXECUTION_STATE.md` — BK-11 历史执行记录，**非当前状态权威**（当前状态以 PROJECT_STATE.md 为准）
 
 ## 已完成能力（摘要）
 
@@ -48,6 +50,8 @@
 - **P2-4B 收益归因**（PR #32 / `06594c2`）
 - **P1-1 & P1-2 交易流水**（PR #25 / `bd0214a`）
 - **P1-3 决策反馈**（PR #26 & #27 / `dedf99b`）
+- **北向资金（HKEX 官方日统计）**（已上线，PR #40）：`GET /api/market/northbound`；日级成交额/成交笔数/ETF 成交额/额度余额/活跃股；HKEX 不发布买卖拆分，净买入字段固定 None + limitation 说明
+- **BK-11 阶段合并摘要**：技术指标与价格触发（PR #41）、shadow top-risk（PR #42）、BK-11 纯计算链（PR #44）、BK-11 历史（PR #45）、BK-11 输入审计 **BLOCKED**（PR #46 → Issue #48 已暂停/归档）
 
 ## 关键安全边界
 
@@ -70,14 +74,8 @@ Windows 环境缺少 `python3` 命令，实际错误为 `fake 退出码 9009`。
 
 ## 当前下一任务
 
-**当前已授权产品任务：无。**
+当前阶段：Project Governance Consolidation v0.1（治理收口，非产品任务）；已授权产品任务：无。BK-11 已暂停（Issue #48）。
 
-## 本地目录（长期保留）
+## 本地目录
 
-| 目录 | 状态 |
-|---|---|
-| `visual-overhaul-20260729` | 活跃 worktree；本地实验；未提交 7 文件；**待用户决策** |
-| `data-health-design` | worktree 已注销；本地仍含完整源码副本；继续保留 |
-| `decision-trace-contract` | PR #35 已合并；已回收，不再存在本地残留 |
-| `decision-feedback-hardening` | 空目录残留；受 Windows 锁定；重启后处理 |
-| `trade-ledger-ui-git-backup-20260729-105111` | 备份保留，价值未最终确认 |
+本地 worktree/目录状态以 `git worktree list` 现场核验为准。

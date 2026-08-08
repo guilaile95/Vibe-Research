@@ -6,6 +6,9 @@ export type * from "./api/types.ts";
 
 import type {
   MyReport,
+  IntelDigestLatestResult,
+  IntelDigestSaveIn,
+  IntelDigestSaveResult,
   MyReportsBrowseGroup,
   MyReportsBrowseResult,
   SectorReportScope,
@@ -97,6 +100,7 @@ import type {
   AttributionSnapshotSummary,
   AttributionSnapshotListResult,
   AttributionSnapshotDetailResult,
+  Bk11HistoryEnvelope,
 } from "./api/types.ts";
 
 
@@ -201,7 +205,7 @@ export async function request<T>(
     if (resp.status === 401) {
       throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
     }
-    throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
+    throw new ApiError(payload?.error || payload?.detail || payload?.message || `HTTP ${resp.status}`, resp.status);
   }
   const result = unwrapData ? unwrapApiPayload(payload) : payload;
   return result as T;
@@ -487,6 +491,12 @@ export const api = {
   },
   marketBreadth: () => get<TimedComponentEnvelope<MarketBreadthData>>("/market/breadth"),
   marketNorthbound: () => get<NorthboundCapitalFlow>("/market/northbound"),
+  /** BK-11 短线市场历史（只读；有界窗口，默认最近 5 个交易日） */
+  bk11History: (days = 5, signal?: AbortSignal) =>
+    get<Bk11HistoryEnvelope>(
+      `/market/bk11-history?days=${days}`,
+      signal ? { signal } : undefined,
+    ),
   /** 顶部风险分析（影子模式，第一版）：按股票代码分析，signal 恒 unknown、不参与最终结论。 */
   topRisk: (code: string, days = 120) =>
     get<TopRiskAnalysis>(
@@ -498,6 +508,10 @@ export const api = {
   globalStock: (symbol: string) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`),
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
+  getIntelDigestLatest: (sectorKey: string) =>
+    get<IntelDigestLatestResult>(`/intel-digests/latest?sector_key=${encodeURIComponent(sectorKey)}`, { unwrapData: false }),
+  saveIntelDigest: (payload: IntelDigestSaveIn, signal?: AbortSignal) =>
+    request<IntelDigestSaveResult>("/intel-digests", "POST", payload, { signal }),
   portfolio: () => get<PortfolioData>("/portfolio"),
   addHolding: (code: string, shares: number, cost: number) => request<PortfolioData>("/portfolio/holding", "POST", { code, shares, cost }),
   updateHolding: (code: string, shares: number, cost: number) =>
