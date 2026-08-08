@@ -441,3 +441,84 @@ class TestLegacySchemaMigration:
         conn2.close()
         assert "amount" in schema
         assert "CHECK (event_type IN" not in schema
+
+
+# ---------------------------------------------------------------------------
+# P0-S1B-B P1 regression：旧 schema 首写为 create_correction（caller-owned 事务）
+# ---------------------------------------------------------------------------
+
+
+class TestMigrationWithCorrectionFirstWrite:
+    def test_legacy_db_first_write_correction_succeeds(self, tmp_path, monkeypatch):
+        """旧 3 值 CHECK 无 amount 表 + 已有 ACCOUNT_OPENING/trade，升级后首写为
+        create_correction（caller-owned BEGIN IMMEDIATE 事务）→ 成功（不 500），
+        旧数据保留、新 schema 生效。"""
+        db = tmp_path / "trade_ledger.sqlite3"
+        monkeypatch.setenv("VIBE_RESEARCH_TRADE_LEDGER_DB", str(db))
+        # 旧 schema + ACCOUNT_OPENING + trade_records + 一笔 buy trade
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            """
+            CREATE TABLE account_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL CHECK (event_type IN ('ACCOUNT_OPENING','LEGACY_POSITION_OPENING','CORRECTION')),
+                code TEXT, name TEXT, shares INTEGER, cost_basis REAL,
+                opening_cash REAL, ledger_start_at TEXT, origin TEXT,
+                acquired_before_vibe INTEGER, historical_trades TEXT,
+                provenance TEXT NOT NULL, target_event_id TEXT, target_event_type TEXT,
+                before_payload TEXT, after_payload TEXT, reason TEXT, note TEXT,
+                created_at TEXT NOT NULL, voided_at TEXT, void_reason TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO account_events (event_id, event_type, opening_cash, ledger_start_at, provenance, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            ("aev_open1", "ACCOUNT_OPENING", 100000.0, "2026-08-01T00:00:00+00:00", "MANUAL", "2026-08-01T00:00:00+00:00"),
+        )
+        conn.execute(
+            """
+            CREATE TABLE trade_records (
+                trade_id TEXT PRIMARY KEY, code TEXT NOT NULL, name TEXT NOT NULL,
+                operation TEXT NOT NULL, execution_status TEXT NOT NULL,
+                planned_price REAL, planned_quantity INTEGER, actual_price REAL,
+                actual_quantity INTEGER NOT NULL DEFAULT 0, executed_at TEXT,
+                fee REAL NOT NULL DEFAULT 0, other_cost REAL NOT NULL DEFAULT 0,
+                unexecuted_reason TEXT, note TEXT, advice_trade_date TEXT,
+                advice_generated_at TEXT, advice_snapshot TEXT, thesis_id TEXT,
+                thesis_revision INTEGER, created_at TEXT NOT NULL, voided_at TEXT, void_reason TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO trade_records (trade_id, code, name, operation, execution_status,"
+            " actual_price, actual_quantity, executed_at, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("tr_old1", "600519", "测试股票", "buy", "full", 10.0, 100,
+             "2026-08-03T01:30:00+00:00", "2026-08-03T01:30:00+00:00"),
+        )
+        conn.commit()
+        conn.close()
+
+        # 升级后首写 = create_correction（此前会触发事务内嵌套 BEGIN → 500）
+        corr = position_reality_service.create_correction({
+            "target_event_id": "tr_old1",
+            "target_event_type": "trade",
+            "after_payload": {"actual_price": 20.0},
+            "reason": "修正",
+        })
+        assert corr["status"] == "CORRECTION_RECORDED"
+        # 旧数据保留
+        old = account_event_store.get_event(db, "aev_open1")
+        assert old is not None
+        assert old["event_type"] == "ACCOUNT_OPENING"
+        # 新 schema 生效（amount 列存在）
+        conn2 = sqlite3.connect(str(db))
+        schema = conn2.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='account_events'"
+        ).fetchone()[0]
+        conn2.close()
+        assert "amount" in schema
+        # 迁移后 cash event 可写
+        ev = svc.create_cash_event({"event_type": "CASH_DEPOSIT", "amount": 1000.0})
+        assert ev["amount"] == 1000.0

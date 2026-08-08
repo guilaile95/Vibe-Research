@@ -244,6 +244,23 @@ def insert_event_on_connection(
     conn.execute(_INSERT_SQL, _event_params(event))
 
 
+def ensure_migrated(db_path: str | Path) -> None:
+    """在调用方开事务之前确保 account_events 表已是最新 schema（含旧表惰性迁移）。
+
+    caller-owned 事务路径（create_correction / void_trade_with_cascade 先 BEGIN IMMEDIATE）
+    不能在事务内触发迁移（嵌套 BEGIN 会失败），因此必须先在此独立连接上完成迁移。
+    """
+    with _LOCK:
+        path = Path(db_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with _connect(path) as conn:
+                _ensure_table(conn)
+                conn.commit()
+        except sqlite3.DatabaseError as exc:
+            raise AccountEventCorruptedError() from exc
+
+
 def insert_event(db_path: str | Path, event: dict[str, Any]) -> None:
     with _LOCK:
         path = Path(db_path)

@@ -409,6 +409,8 @@ def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
         # 其他键：是否合法取决于 target 类型，由事务内白名单校验决定
 
     db_path = resolve_db_path()
+    # 旧 account_events 表惰性迁移必须在开事务前完成（事务内嵌套 BEGIN 会失败，P0-S1B-B P1）
+    account_event_store.ensure_migrated(db_path)
     conn = trade_ledger_store.open_write_connection(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -521,6 +523,8 @@ def void_trade_with_cascade(trade_id: str, reason: str) -> dict[str, Any]:
         raise PositionValidationError(f"reason 超过最大长度 {_MAX_REASON_LEN}")
 
     db_path = resolve_db_path()
+    # 旧 account_events 表惰性迁移必须在开事务前完成（事务内嵌套 BEGIN 会失败，P0-S1B-B P1）
+    account_event_store.ensure_migrated(db_path)
     conn = trade_ledger_store.open_write_connection(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
