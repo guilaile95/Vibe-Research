@@ -436,6 +436,8 @@ def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
             allowed = _CORRECTION_TRADE_KEYS
             base: dict[str, Any] = dict(record)
         else:
+            if not account_event_store.table_exists_on_connection(conn, "account_events"):
+                raise CorrectionTargetNotFoundError()
             event = account_event_store.get_event_on_connection(conn, target_event_id)
             if event is None:
                 raise CorrectionTargetNotFoundError()
