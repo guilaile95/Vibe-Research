@@ -10,6 +10,8 @@ import position_reality_service as svc
 import trade_ledger_service
 import trade_ledger_store
 
+_MAX_REASON_LEN = 500
+
 router = APIRouter(prefix="/api", tags=["position-reality"])
 
 
@@ -25,6 +27,8 @@ async def _parse_json_body(request: Request) -> dict[str, Any]:
 
 def _map_errors(exc: Exception) -> HTTPException:
     if isinstance(exc, svc.PositionValidationError):
+        return HTTPException(status_code=422, detail=str(exc))
+    if isinstance(exc, trade_ledger_service.TradeValidationError):
         return HTTPException(status_code=422, detail=str(exc))
     if isinstance(exc, (svc.BootstrapAlreadyExistsError, svc.LedgerNotEmptyError)):
         return HTTPException(status_code=409, detail=str(exc))
@@ -88,6 +92,8 @@ async def void_trade_cascade(trade_id: str, request: Request):
     reason = payload.get("reason")
     if not reason or not isinstance(reason, str) or not reason.strip():
         raise HTTPException(status_code=422, detail="reason 必填且必须是非空字符串")
+    if len(reason.strip()) > _MAX_REASON_LEN:
+        raise HTTPException(status_code=422, detail=f"reason 超过最大长度 {_MAX_REASON_LEN}")
     try:
         result = svc.void_trade_with_cascade(trade_id, reason.strip())
     except svc.PositionValidationError as exc:

@@ -395,13 +395,22 @@ def _prior_effective_values(
 def void_trade_with_cascade(trade_id: str, reason: str) -> dict[str, Any]:
     """作废一笔交易并级联作废指向它的全部 CORRECTION 事件。
 
-    与既有 trade_ledger_service.void_trade 行为兼容，但防止孤儿修正让账本
-    derivation 永久 fail closed（P1-1）。返回 {'voided_trade': ..., 'cascade_voided': n}。
+    与既有 trade_ledger_service.void_trade 行为兼容（返回同形状 voided record），
+    并防止孤儿修正让整条账本 derivation 永久 fail closed（P1-1）。
+
+    顺序：先级联（幂等，崩溃落在安全侧——correction 已清理而交易未作废时可重试），
+    再作废交易。对"交易已作废但孤儿 correction 残留"的场景，调用本函数会先清理
+    correction 再抛 TradeAlreadyVoidedError —— 作为账本恢复路径。
+    reason 在校验失败（缺省/超长）时先拒绝，不产生任何级联副作用。
     """
+    if not isinstance(reason, str) or not reason.strip():
+        raise PositionValidationError("reason 必填且必须是非空字符串")
+    reason_clean = reason.strip()
+    if len(reason_clean) > _MAX_REASON_LEN:
+        raise PositionValidationError(f"reason 超过最大长度 {_MAX_REASON_LEN}")
     db_path = resolve_db_path()
-    # 先级联（其自身幂等），再作废交易；交易不存在时抛既有异常
-    voided = trade_ledger_service.void_trade(trade_id, reason)
-    cascade = _cascade_void_corrections(db_path, "trade", trade_id, reason)
+    cascade = _cascade_void_corrections(db_path, "trade", trade_id, reason_clean)
+    voided = trade_ledger_service.void_trade(trade_id, reason_clean)
     return {"voided_trade": voided, "cascade_voided": cascade}
 
 

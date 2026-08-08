@@ -284,7 +284,12 @@ def void_event_atomic(
     event_id: str,
     reason: str,
 ) -> dict[str, Any]:
-    """Atomic void of an account event (append-only: 标记 voided_at，不删除记录)."""
+    """Atomic void of an account event (append-only: 标记 voided_at，不删除记录).
+
+    契约不变量：任何暴露给用户的"void account_event"API 都必须先级联作废指向该事件的
+    全部 CORRECTION 事件（见 position_reality_service._cascade_void_corrections），
+    否则会产生孤儿修正导致 derivation fail closed。本函数只做底层原子标记。
+    """
     with _LOCK:
         path = Path(db_path)
         if not path.is_file():

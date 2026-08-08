@@ -724,6 +724,44 @@ class TestVoidCascade:
         derived = svc.derive_positions()
         assert derived["derivation_status"] == "OK"
 
+    def test_void_after_already_voided_cleans_orphan(self):
+        """恢复路径：既有 void 已制造孤儿 correction 时，再调级联 void 先清理再抛已作废。"""
+        _bootstrap([_legacy("600519", 100, 10.0)])
+        trade = _trade("600519", "buy", 10.0, 100)
+        svc.create_correction({
+            "target_event_id": trade["trade_id"],
+            "target_event_type": "trade",
+            "after_payload": {"actual_quantity": 50},
+            "reason": "成交数量修正",
+        })
+        # 模拟既有 /api/trades/{id}/void（不级联）：交易作废，correction 残留
+        trade_ledger_service.void_trade(trade["trade_id"], "既有 void 端点")
+        with pytest.raises(svc.PositionDerivationError):
+            svc.derive_positions()
+        # 新端点再调：先清理孤儿 correction，再抛已作废（409）
+        with pytest.raises(trade_ledger_store.TradeAlreadyVoidedError):
+            svc.void_trade_with_cascade(trade["trade_id"], "恢复路径")
+        # 孤儿已清理，账本恢复可推导
+        derived = svc.derive_positions()
+        assert derived["derivation_status"] == "OK"
+        assert {p["code"]: p["shares"] for p in derived["positions"]} == {"600519": 100}
+
+    def test_void_cascade_overlong_reason_rejected(self):
+        """reason 超过 500 字符 → 校验拒绝（422），且不产生任何级联副作用。"""
+        _bootstrap([_legacy("600519", 100, 10.0)])
+        trade = _trade("600519", "buy", 10.0, 100)
+        svc.create_correction({
+            "target_event_id": trade["trade_id"],
+            "target_event_type": "trade",
+            "after_payload": {"actual_quantity": 50},
+        })
+        with pytest.raises(svc.PositionValidationError):
+            svc.void_trade_with_cascade(trade["trade_id"], "超长原因" * 200)
+        # 校验失败发生在任何副作用之前：交易未作废、correction 未级联，账本完整
+        derived = svc.derive_positions()
+        assert derived["derivation_status"] == "OK"
+        assert {p["code"]: p["shares"] for p in derived["positions"]} == {"600519": 150}
+
 
 class TestReviewP2:
     def test_mixed_timezone_trade_order_stable(self):
