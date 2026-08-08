@@ -311,4 +311,3 @@ def _event_params(event: dict[str, Any]) -> tuple:
         None,
         None,
     )
-
