@@ -182,12 +182,24 @@
   100% { opacity: 1; transform: translateY(0); }
 }
 
-/* On sufficiently wide desktops the AI panel becomes a true second pane instead of covering source data. */
+/* Keep the research canvas readable while AI is open on ordinary laptops. */
 @media (min-width: 1200px) {
   main {
     transition: padding-right 160ms ease;
   }
+}
 
+@media (min-width: 1200px) and (max-width: 1359px) {
+  html[data-ai-panel-open="true"] main {
+    padding-right: 380px;
+  }
+
+  html[data-ai-panel-open="true"] aside[aria-label="Vibe AI 对话"] {
+    max-width: 380px;
+  }
+}
+
+@media (min-width: 1360px) {
   html[data-ai-panel-open="true"] main {
     padding-right: min(var(--vibe-ai-panel-width, 480px), 720px);
   }
