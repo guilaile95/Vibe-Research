@@ -629,7 +629,10 @@ def build_effective_events(
     - 排除 voided（由调用方以 include_voided=False 传入）与 not_executed / 零数量交易；
     - 应用全部 active CORRECTION（voided correction 由调用方读取时排除）；
     - chained corrections 按 S1A 同一确定性顺序（created_at ASC）应用；
-    - ledger_start_ts 非 None 时对交易做边界校验（早于起点 → fail closed）。
+    - ledger_start_ts 非 None 时对交易做边界校验（早于起点 → fail closed）；
+    - 持久化 event_type 必须属于已知集合（ACCOUNT_OPENING / LEGACY_POSITION_OPENING /
+      CORRECTION / CASH_*）；未知类型（BOGUS 等）→ fail closed，不得静默忽略
+      （account_events 已移除 DB CHECK，读路径必须补回事实完整性边界）。
 
     供 derive_positions() 与 ledger_cash_candidate 共用同一 correction semantics（DRY），
     确保 Position effective facts 与 Cash effective facts 完全一致。
@@ -637,8 +640,11 @@ def build_effective_events(
     corrections = _load_corrections(events)
     events_by_key: dict[str, dict[str, Any]] = {}
     for ev in events:
-        if ev["event_type"] in (_EVENT_LEGACY_OPENING, _EVENT_ACCOUNT_OPENING):
+        etype = ev.get("event_type")
+        account_event_store.validate_event_type(etype)
+        if etype in (_EVENT_LEGACY_OPENING, _EVENT_ACCOUNT_OPENING):
             events_by_key[f"account_event:{ev['event_id']}"] = dict(ev)
+        # CORRECTION 由 _load_corrections 处理；CASH_* 不参与持仓（但类型已校验）
     for t in trades:
         if t["execution_status"] == "not_executed":
             continue

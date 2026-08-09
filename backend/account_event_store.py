@@ -58,6 +58,48 @@ _COUNT_BASE = "SELECT COUNT(*) AS n FROM account_events"
 
 _LEGACY_CHECK_MARKER = "CHECK (event_type IN"
 
+# 已移除 DB CHECK（演进集合），读路径必须 fail closed 校验持久化 event_type。
+# 本模块是 account event 类型常量唯一来源（DRY：cash_event_service 复用）。
+NON_CASH_EVENT_TYPES = frozenset({
+    "ACCOUNT_OPENING",
+    "LEGACY_POSITION_OPENING",
+    "CORRECTION",
+})
+CASH_EVENT_TYPES = frozenset({
+    "CASH_DEPOSIT",
+    "CASH_WITHDRAWAL",
+    "CASH_DIVIDEND",
+    "CASH_FEE",
+    "CASH_TAX",
+})
+KNOWN_EVENT_TYPES = NON_CASH_EVENT_TYPES | CASH_EVENT_TYPES
+
+_CASH_PROVENANCE_EXPECTED = "MANUAL"
+
+
+def validate_event_type(event_type: Any) -> None:
+    """持久化 event_type 必须属于已知集合；未知类型（BOGUS 等）→ 数据损坏，fail closed。"""
+    if event_type not in KNOWN_EVENT_TYPES:
+        raise AccountEventCorruptedError()
+
+
+def validate_persisted_cash_event(row: dict[str, Any]) -> None:
+    """已落盘 CASH_* 事件必须满足持久化事实契约：
+    event_type ∈ CASH_EVENT_TYPES；amount numeric/finite/>0（非 NULL/0/负）；provenance=MANUAL。
+    不满足 → AccountEventCorruptedError（fail closed），不得静默忽略/解释成 0/反转方向。
+    """
+    etype = row.get("event_type")
+    if etype not in CASH_EVENT_TYPES:
+        raise AccountEventCorruptedError()
+    amount = row.get("amount")
+    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+        raise AccountEventCorruptedError()
+    number = float(amount)
+    if number != number or number in (float("inf"), float("-inf")) or number <= 0:
+        raise AccountEventCorruptedError()
+    if row.get("provenance") != _CASH_PROVENANCE_EXPECTED:
+        raise AccountEventCorruptedError()
+
 
 class AccountEventStoreError(RuntimeError):
     pass
@@ -334,7 +376,8 @@ def list_events(
                 params.append(event_type)
             if clauses:
                 sql += " WHERE " + " AND ".join(clauses)
-            sql += " ORDER BY created_at ASC"
+            # 显式全序：created_at 相同时以 rowid 打破平局（严格 total order，不是仅 created_at）
+            sql += " ORDER BY created_at ASC, rowid ASC"
             rows = conn.execute(sql, params).fetchall()
             return [_row_to_dict(r) for r in rows]
     except sqlite3.DatabaseError as exc:

@@ -522,3 +522,131 @@ class TestMigrationWithCorrectionFirstWrite:
         # 迁移后 cash event 可写
         ev = svc.create_cash_event({"event_type": "CASH_DEPOSIT", "amount": 1000.0})
         assert ev["amount"] == 1000.0
+
+
+# ---------------------------------------------------------------------------
+# P0-S1B-B R2：Persisted Cash Event Fact Integrity（fail-closed 事实链）
+# ---------------------------------------------------------------------------
+
+
+def _raw_insert(event_type: str, amount, provenance: str = "MANUAL", event_id: str | None = None):
+    """直接向 account_events 表插入原始行（绕过 service 校验，模拟持久化损坏）。"""
+    account_event_store.insert_event(svc.resolve_db_path(), {
+        "event_id": event_id or f"raw_{abs(hash((event_type, str(amount))))}",
+        "event_type": event_type,
+        "code": None, "name": None, "shares": None, "cost_basis": None,
+        "opening_cash": None, "ledger_start_at": None, "origin": None,
+        "acquired_before_vibe": None, "historical_trades": None,
+        "provenance": provenance, "target_event_id": None, "target_event_type": None,
+        "before_payload": None, "after_payload": None, "reason": None, "note": None,
+        "amount": amount, "created_at": "2026-08-09T00:00:00+00:00",
+    })
+
+
+class TestPersistedFactIntegrity:
+    """持久化事实链 fail closed：RAW → NORMALIZE → PERSIST → REOPEN → VALIDATE → DELTA。"""
+
+    def test_amount_0001_create_fails_no_00_persisted(self):
+        """0.001 归一化后为 0.00 → 拒绝，不得落盘 0.00 事件。"""
+        _bootstrap([], opening_cash=100000.0)
+        with pytest.raises(svc.CashEventValidationError):
+            _create("CASH_DEPOSIT", 0.001)
+        assert svc.list_cash_events() == []  # 无 0.00 事件
+
+    def test_persisted_null_amount_fail_closed(self):
+        """raw CASH_DEPOSIT amount=NULL → list/get 必须 fail closed（不得当 0）。"""
+        _bootstrap([], opening_cash=100000.0)
+        _raw_insert("CASH_DEPOSIT", None)
+        with pytest.raises(account_event_store.AccountEventCorruptedError):
+            svc.list_cash_events()
+        with pytest.raises(account_event_store.AccountEventCorruptedError):
+            ar_svc.get_account_reality()
+
+    def test_persisted_negative_amount_fail_closed(self):
+        """raw CASH_WITHDRAWAL amount=-100 → fail closed，不得被算成 +100。"""
+        _bootstrap([], opening_cash=100000.0)
+        _raw_insert("CASH_WITHDRAWAL", -100.0)
+        with pytest.raises(account_event_store.AccountEventCorruptedError):
+            svc.list_cash_events()
+        with pytest.raises(account_event_store.AccountEventCorruptedError):
+            ar_svc.get_account_reality()
+
+    def test_persisted_zero_amount_fail_closed(self):
+        """raw CASH_DEPOSIT amount=0 → fail closed。"""
+        _bootstrap([], opening_cash=100000.0)
+        _raw_insert("CASH_DEPOSIT", 0)
+        with pytest.raises(account_event_store.AccountEventCorruptedError):
+            svc.list_cash_events()
+
+    def test_persisted_bogus_event_type_fail_closed(self):
+        """raw event_type=BOGUS → 账户事件读取 / 账户现实 / derive 全部 fail closed，不得静默忽略。"""
+        _bootstrap([], opening_cash=100000.0)
+        _raw_insert("BOGUS", 100.0)
+        with pytest.raises(account_event_store.AccountEventCorruptedError):
+            svc.list_cash_events()
+        with pytest.raises(account_event_store.AccountEventCorruptedError):
+            ar_svc.get_account_reality()
+        with pytest.raises(account_event_store.AccountEventCorruptedError):
+            position_reality_service.derive_positions()
+
+    def test_persisted_valid_cash_event_reopen_ok(self):
+        """persisted valid CASH_* → reopen 后仍正常（list/get 通过）。"""
+        _bootstrap([], opening_cash=100000.0)
+        event = _create("CASH_DEPOSIT", 1000.0)
+        # reopen（重新读库）
+        assert svc.get_cash_event(event["event_id"])["amount"] == 1000.0
+        assert svc.list_cash_events()[0]["event_type"] == "CASH_DEPOSIT"
+        assert ar_svc.get_account_reality()["cash"]["ledger_candidate"]["value"] == 101000.0
+
+    def test_legacy_non_cash_events_still_readable(self):
+        """旧 ACCOUNT_OPENING / LEGACY / CORRECTION 迁移与读取全部正常。"""
+        _bootstrap([{"code": "600519", "shares": 100, "cost_basis": 10.0, "name": "测试股票"}], opening_cash=100000.0)
+        trade = _trade("600519", "buy", 10.0, 100)
+        position_reality_service.create_correction({
+            "target_event_id": trade["trade_id"],
+            "target_event_type": "trade",
+            "after_payload": {"actual_price": 20.0},
+        })
+        derived = position_reality_service.derive_positions()
+        assert derived["derivation_status"] == "OK"
+        # 旧事件读取正常
+        events = account_event_store.list_events(svc.resolve_db_path())
+        types = {e["event_type"] for e in events}
+        assert {"ACCOUNT_OPENING", "LEGACY_POSITION_OPENING", "CORRECTION"} <= types
+        # 账户现实正常（含旧事件 + cash event）
+        reality = ar_svc.get_account_reality()
+        assert reality["bootstrap_status"] == "BOOTSTRAPPED"
+
+    def test_cash_reconciliation_correct(self, tmp_path, monkeypatch):
+        """cash reconciliation 继续 MATCH/MISMATCH/UNKNOWN 正确。"""
+        import account_profile
+        profile_file = tmp_path / "account_profile.json"
+        monkeypatch.setattr(account_profile, "CACHE_DIR", str(tmp_path))
+        account_profile.save_account_profile(200000.0, 101000.0)
+        _bootstrap([], opening_cash=100000.0)
+        _create("CASH_DEPOSIT", 1000.0)
+        derived = position_reality_service.derive_positions()
+        recon = ar_svc._cash_reconciliation(ar_svc._current_cash_fact(), ar_svc._ledger_cash_candidate(derived))
+        assert recon["status"] == "MATCH"
+
+    def test_nav_still_account_profile(self, tmp_path, monkeypatch):
+        """NAV 仍使用 ACCOUNT_PROFILE（ledger 有 cash event 也不改）。"""
+        import account_profile
+        profile_file = tmp_path / "account_profile.json"
+        monkeypatch.setattr(account_profile, "CACHE_DIR", str(tmp_path))
+        account_profile.save_account_profile(200000.0, 50000.0)
+        _bootstrap([], opening_cash=100000.0)
+        _create("CASH_DEPOSIT", 90000.0)  # ledger = 190000
+        reality = ar_svc.get_account_reality()
+        assert reality["settled_nav"] == 50000.0
+        assert reality["nav_cash_source"] == "ACCOUNT_PROFILE"
+
+    def test_position_reality_hard_gate_unchanged(self):
+        """Position Reality Hard Gate：cash events 不改变 derive_positions。"""
+        _bootstrap([{"code": "600519", "shares": 100, "cost_basis": 10.0, "name": "测试股票"}], opening_cash=100000.0)
+        _trade("600519", "buy", 10.0, 100)
+        before = position_reality_service.derive_positions()
+        _create("CASH_DEPOSIT", 1000.0)
+        _create("CASH_WITHDRAWAL", 200.0)
+        after = position_reality_service.derive_positions()
+        assert before == after

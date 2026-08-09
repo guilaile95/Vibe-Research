@@ -18,7 +18,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import account_event_store
-import account_event_store
 import account_profile
 import astock
 import cash_event_service
@@ -157,14 +156,18 @@ def _ledger_cash_candidate(derived: dict[str, Any]) -> dict[str, Any]:
             continue
         computed = trade_ledger_service.compute_fields(t)
         cash = round(cash + float(computed["net_cash_flow"]), 2)
-    # manual cash events（active 仅）：delta 由 event_type 决定，方向不在调用方手中
+    # manual cash events（active 仅）：仅消费已通过持久化事实校验的 CASH_* 行。
+    # 未知 event_type / 损坏 amount 必须 fail closed（由 validate 抛 AccountEventCorruptedError），
+    # 不得静默忽略、不得 or 0.0 补零、不得反转方向。
     for ev in events:
-        if ev.get("event_type") not in cash_event_service.CASH_EVENT_TYPES:
-            continue
-        cash = round(
-            cash + cash_event_service.cash_delta_for(ev["event_type"], ev.get("amount") or 0.0),
-            2,
-        )
+        if ev.get("event_type") in cash_event_service.CASH_EVENT_TYPES:
+            account_event_store.validate_persisted_cash_event(ev)
+            cash = round(
+                cash + cash_event_service.cash_delta_for(ev["event_type"], ev["amount"]),
+                2,
+            )
+        else:
+            account_event_store.validate_event_type(ev.get("event_type"))
     return {
         "value": cash,
         "source": _CASH_SOURCE_LEDGER,

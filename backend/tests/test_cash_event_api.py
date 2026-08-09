@@ -128,3 +128,25 @@ class TestCashEventApi:
         assert "secret path" not in resp.text
         assert "sqlite error" not in resp.text
         assert resp.json()["detail"] == "内部错误"
+
+
+class TestPersistedCorruptionApi:
+    def test_persisted_corruption_sanitized_500(self, client):
+        """持久化损坏（NULL amount）→ API 500 脱敏，不泄漏 SQLite/路径/异常 str。"""
+        import account_event_store
+        account_event_store.insert_event(svc.resolve_db_path(), {
+            "event_id": "raw_null_amount",
+            "event_type": "CASH_DEPOSIT",
+            "code": None, "name": None, "shares": None, "cost_basis": None,
+            "opening_cash": None, "ledger_start_at": None, "origin": None,
+            "acquired_before_vibe": None, "historical_trades": None,
+            "provenance": "MANUAL", "target_event_id": None, "target_event_type": None,
+            "before_payload": None, "after_payload": None, "reason": None, "note": None,
+            "amount": None, "created_at": "2026-08-09T00:00:00+00:00",
+        })
+        resp = client.get("/api/account/cash-events")
+        assert resp.status_code == 500
+        assert "sqlite" not in resp.text.lower()
+        assert ".vibe-research" not in resp.text
+        assert "traceback" not in resp.text.lower()
+        assert resp.json()["detail"] == "内部错误"
