@@ -1430,6 +1430,80 @@ def validate_persisted_thesis_chain(
                     raise EvidenceLedgerCorruptedError()
 
 
+def validate_persisted_revision_history(
+    conn: sqlite3.Connection, thesis_id: str, row: sqlite3.Row
+) -> None:
+    """Validate the complete append-only revision history for one thesis.
+
+    A Formal read cannot validate only the current/freeze revision: historical
+    revisions are exposed by list/get/diff APIs and therefore must fail closed
+    under the same persisted contract.
+    """
+    try:
+        current_revision = int(row["current_revision"])
+        formal_state = row["formal_state"]
+        status = row["status"]
+        frozen_revision = (
+            int(row["frozen_revision"]) if row["frozen_revision"] is not None else None
+        )
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise EvidenceLedgerCorruptedError() from exc
+
+    revisions = _list_revision_rows(conn, thesis_id)
+    numbers: list[int] = []
+    for revision in revisions:
+        try:
+            revision_id = revision["id"]
+            row_thesis_id = revision["thesis_id"]
+            number = int(revision["revision_number"])
+            kind = revision["revision_kind"]
+            snapshot = json.loads(revision["snapshot"])
+        except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise EvidenceLedgerCorruptedError() from exc
+        if (
+            not isinstance(revision_id, str)
+            or not revision_id
+            or row_thesis_id != thesis_id
+            or number < 1
+            or not isinstance(snapshot, dict)
+        ):
+            raise EvidenceLedgerCorruptedError()
+
+        expected_kind: str | None = None
+        if formal_state == "frozen" and number == frozen_revision:
+            expected_kind = "FORMAL_FREEZE"
+        elif (
+            formal_state == "frozen"
+            and status == "archived"
+            and frozen_revision is not None
+            and number == frozen_revision + 1
+        ):
+            expected_kind = "FORMAL_ARCHIVE"
+        elif kind not in (None, "CONTENT"):
+            raise EvidenceLedgerCorruptedError()
+        if expected_kind is not None and kind != expected_kind:
+            raise EvidenceLedgerCorruptedError()
+
+        content = snapshot.get("thesis")
+        if not isinstance(content, dict):
+            content = snapshot
+        snapshot_id = content.get("id")
+        if snapshot_id is not None and snapshot_id != thesis_id:
+            raise EvidenceLedgerCorruptedError()
+        snapshot_revision = content.get("current_revision")
+        if snapshot_revision is not None:
+            if (
+                isinstance(snapshot_revision, bool)
+                or not isinstance(snapshot_revision, int)
+                or snapshot_revision != number
+            ):
+                raise EvidenceLedgerCorruptedError()
+        numbers.append(number)
+
+    if numbers != list(range(1, current_revision + 1)):
+        raise EvidenceLedgerCorruptedError()
+
+
 def validate_persisted_delta_chain(conn: sqlite3.Connection, thesis_id: str) -> None:
     """校验 delta 链及其 immutable evidence snapshots，任何缺失/漂移均拒绝读取。"""
     rows = conn.execute(

@@ -264,6 +264,66 @@ def test_all_thesis_read_paths_fail_closed_on_formal_chain_corruption(tmp_path, 
             read()
 
 
+def test_all_thesis_read_paths_fail_closed_on_historical_revision_corruption(
+    tmp_path, monkeypatch
+):
+    db_path = _db(tmp_path, monkeypatch)
+    thesis_id = "h" * 32
+    _chain_ok(db_path, thesis_id)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "UPDATE thesis_revisions SET snapshot='[]', revision_kind='FORMAL_ARCHIVE' "
+        "WHERE thesis_id=? AND revision_number=1",
+        (thesis_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    reads = (
+        lambda: svc.get_thesis(db_path, thesis_id),
+        lambda: svc.list_thesis(db_path),
+        lambda: svc.list_revisions(db_path, thesis_id),
+        lambda: svc.get_revision(db_path, thesis_id, 1),
+        lambda: svc.diff_revisions(db_path, thesis_id, 1, 2),
+    )
+    for read in reads:
+        with pytest.raises(EvidenceLedgerCorruptedError):
+            read()
+
+
+@pytest.mark.parametrize("mutation", ["gap", "orphan"])
+def test_revision_history_rejects_gap_and_future_orphan(tmp_path, monkeypatch, mutation):
+    db_path = _db(tmp_path, monkeypatch)
+    thesis_id = ("g" if mutation == "gap" else "o") * 32
+    _chain_ok(db_path, thesis_id)
+    conn = sqlite3.connect(db_path)
+    if mutation == "gap":
+        conn.execute(
+            "DELETE FROM thesis_revisions WHERE thesis_id=? AND revision_number=1",
+            (thesis_id,),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO thesis_revisions "
+            "(id, thesis_id, revision_number, snapshot, change_summary, created_at, revision_kind) "
+            "VALUES (?, ?, 3, ?, 'orphan', ?, 'CONTENT')",
+            (
+                "orphan_revision",
+                thesis_id,
+                json.dumps(_snapshot_content(current_revision=3)),
+                "2026-08-01T00:00:00.000000+00:00",
+            ),
+        )
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM investment_theses WHERE id=?", (thesis_id,)
+    ).fetchone()
+    with pytest.raises(EvidenceLedgerCorruptedError):
+        store.validate_persisted_revision_history(conn, thesis_id, row)
+    conn.close()
+
+
 def test_frozen_archived_chain_roundtrip(tmp_path, monkeypatch):
     db_path = _db(tmp_path, monkeypatch)
     thesis_id = "a" * 32

@@ -957,6 +957,7 @@ def _validate_thesis_read(conn, thesis_row) -> None:
     """Apply the complete persisted Formal contract before any thesis read."""
     thesis_id = thesis_row["id"]
     store.validate_persisted_thesis_main(thesis_row)
+    store.validate_persisted_revision_history(conn, thesis_id, thesis_row)
     store.validate_persisted_thesis_chain(conn, thesis_id, thesis_row)
     store.validate_persisted_delta_chain(conn, thesis_id)
 
