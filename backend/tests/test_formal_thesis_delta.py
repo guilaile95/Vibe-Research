@@ -7,6 +7,7 @@ import threading
 
 import pytest
 
+import evidence_thesis_router as router
 import evidence_thesis_service as svc
 import evidence_thesis_store as store
 
@@ -155,3 +156,8 @@ def test_corrupt_chain_fails_closed(db):
     with pytest.raises(store.EvidenceLedgerCorruptedError):
         svc.list_thesis_deltas(db, tid)
 
+
+def test_delta_routes_are_append_only():
+    delta_routes = [r for r in router.router.routes if r.path.endswith("/deltas")]
+    methods = {method for route in delta_routes for method in (route.methods or set())}
+    assert methods == {"GET", "POST"}
