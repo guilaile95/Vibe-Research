@@ -619,6 +619,7 @@ def create_thesis(db_path, data: dict) -> dict:
             "snapshot": snapshot,
             "change_summary": change_summary,
             "created_at": now,
+            "revision_kind": "CONTENT",
         })
         # 返回完整聚合状态
         return _get_thesis_aggregate(conn, thesis_id)

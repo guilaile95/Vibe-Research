@@ -69,6 +69,11 @@ def _exec(db_path, sql, params=()):
 
 _TS = "2026-08-01T00:00:00.000000+00:00"
 _HORIZON = {"unit": "TRADING_DAY", "min": 5, "max": 20, "anchor": "FREEZE_AT"}
+_HORIZONS = {
+    "SHORT": {"unit": "TRADING_DAY", "min": 5, "max": 10, "anchor": "FREEZE_AT"},
+    "SWING": _HORIZON,
+    "MEDIUM": {"unit": "TRADING_DAY", "min": 40, "max": 60, "anchor": "FREEZE_AT"},
+}
 
 
 def _thesis_row(
@@ -76,6 +81,7 @@ def _thesis_row(
     *,
     formal_state="frozen",
     strategy="SWING",
+    horizon=None,
     revision=2,
     status="active",
     archived_at=None,
@@ -100,7 +106,7 @@ def _thesis_row(
         "formalization_started_at": _TS if (frozen or formal_state in ("draft", "confirmed")) else None,
         "strategy": strategy if (frozen or formal_state == "confirmed") else None,
         "expected_horizon": (
-            json.dumps(_HORIZON, ensure_ascii=False)
+            json.dumps(horizon or _HORIZONS[strategy], ensure_ascii=False)
             if (frozen or formal_state == "confirmed")
             else None
         ),
@@ -112,7 +118,9 @@ def _thesis_row(
     }
 
 
-def _snapshot(*, strategy="SWING", revision=2, status="active", archived_at=None) -> dict:
+def _snapshot(
+    *, strategy="SWING", horizon=None, revision=2, status="active", archived_at=None
+) -> dict:
     snap = {
         "title": "t",
         "summary": "s",
@@ -122,7 +130,7 @@ def _snapshot(*, strategy="SWING", revision=2, status="active", archived_at=None
         "invalidation_conditions": ["i1"],
         "free_notes": None,
         "strategy": strategy,
-        "expected_horizon": _HORIZON,
+        "expected_horizon": horizon or _HORIZONS[strategy],
         "status": status,
         "current_revision": revision,
         "created_at": _TS,
@@ -257,6 +265,19 @@ def _install_frozen(
             archived_at=archived_at,
         ),
     )
+    # Revision history is append-only and must be complete 1..current_revision:
+    # the freeze snapshot at revision 2 is preceded by the normal content
+    # revision at revision 1.
+    for revision_number in range(1, revision):
+        _insert_revision(
+            db_path,
+            thesis_id,
+            revision_number,
+            _snapshot(
+                strategy=strategy, revision=revision_number, status="active"
+            ),
+            "CONTENT",
+        )
     _insert_revision(
         db_path,
         thesis_id,
@@ -289,14 +310,13 @@ def _install_non_frozen(db_path, thesis_id, kind: str) -> None:
     else:  # legacy
         row = _thesis_row(thesis_id, formal_state=None, strategy=None, revision=1)
     _insert_thesis(db_path, row)
-    if kind == "confirmed":
-        _insert_revision(
-            db_path,
-            thesis_id,
-            1,
-            _snapshot(strategy="SWING", revision=1),
-            "CONTENT",
-        )
+    _insert_revision(
+        db_path,
+        thesis_id,
+        1,
+        _snapshot(strategy="SWING", revision=1),
+        "CONTENT",
+    )
 
 
 def _setup_campaign(db_path, strategy="SWING") -> dict:
@@ -372,6 +392,39 @@ def test_projection_ready_frozen_no_deltas(campaign_db, evidence_db):
         "campaign_strategy_at_bind": "SWING",
         "bound_at": binding["bound_at"],
     }
+
+
+def test_projection_ready_validates_persisted_layers_in_order(
+    campaign_db, evidence_db, monkeypatch
+):
+    rec = _setup_campaign(campaign_db)
+    tid = _tid(19)
+    _install_frozen(evidence_db, tid, revision=2)
+    _bind(rec["campaign_id"], tid, 2, "SWING")
+
+    calls = []
+    for name in (
+        "validate_persisted_thesis_main",
+        "validate_persisted_revision_history",
+        "validate_persisted_thesis_chain",
+        "validate_persisted_delta_chain",
+    ):
+        original = getattr(store, name)
+
+        def wrapped(*args, _name=name, _original=original, **kwargs):
+            calls.append(_name)
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(store, name, wrapped)
+
+    projection = formal_thesis_projection.project_current_thesis(rec["campaign_id"])
+    assert projection["ready"] is True
+    assert calls == [
+        "validate_persisted_thesis_main",
+        "validate_persisted_revision_history",
+        "validate_persisted_thesis_chain",
+        "validate_persisted_delta_chain",
+    ]
 
 
 def test_projection_non_terminal_deltas_latest_wins(campaign_db, evidence_db):
@@ -476,6 +529,46 @@ def test_projection_frozen_archived_still_projects(campaign_db, evidence_db):
     assert p["frozen_revision"] == 2
     assert p["original_snapshot"]["status"] == "active"
     assert p["original_snapshot"]["current_revision"] == 2
+
+
+@pytest.mark.parametrize("corruption", ["missing_rev1", "future_orphan", "non_object", "archive_kind"])
+def test_projection_historical_revision_corruption_fails_closed(
+    campaign_db, evidence_db, corruption
+):
+    rec = _setup_campaign(campaign_db)
+    tid = _tid({"missing_rev1": 20, "future_orphan": 21, "non_object": 22, "archive_kind": 23}[corruption])
+    _install_frozen(evidence_db, tid, revision=2)
+
+    if corruption == "missing_rev1":
+        _exec(
+            evidence_db,
+            "DELETE FROM thesis_revisions WHERE thesis_id = ? AND revision_number = 1",
+            (tid,),
+        )
+    elif corruption == "future_orphan":
+        _insert_revision(
+            evidence_db,
+            tid,
+            3,
+            _snapshot(strategy="SWING", revision=3),
+            "CONTENT",
+        )
+    elif corruption == "non_object":
+        _exec(
+            evidence_db,
+            "UPDATE thesis_revisions SET snapshot = ? WHERE thesis_id = ? AND revision_number = 1",
+            (json.dumps(["not", "an", "object"]), tid),
+        )
+    else:
+        _exec(
+            evidence_db,
+            "UPDATE thesis_revisions SET revision_kind = ? WHERE thesis_id = ? AND revision_number = 1",
+            ("FORMAL_ARCHIVE", tid),
+        )
+
+    _bind(rec["campaign_id"], tid, 2, "SWING")
+    with pytest.raises(EvidenceLedgerCorruptedError):
+        formal_thesis_projection.project_current_thesis(rec["campaign_id"])
 
 
 # ---------------------------------------------------------------------------

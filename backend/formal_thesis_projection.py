@@ -84,6 +84,7 @@ def project_current_thesis(campaign_id: str) -> dict:
             raise CurrentThesisProjectionError("bound thesis missing from ledger")
         # 读路径 fail-closed 校验（与 canonical get_thesis 同一套 validator）
         evidence_store.validate_persisted_thesis_main(row)
+        evidence_store.validate_persisted_revision_history(conn, thesis_id, row)
         evidence_store.validate_persisted_thesis_chain(conn, thesis_id, row)
         evidence_store.validate_persisted_delta_chain(conn, thesis_id)
         thesis = evidence_store._thesis_row_to_dict(row)

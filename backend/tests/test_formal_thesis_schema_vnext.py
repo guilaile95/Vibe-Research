@@ -603,6 +603,37 @@ def test_formal_lifecycle_timestamp_must_be_canonical(tmp_path, monkeypatch):
         store.validate_persisted_thesis_main(_fetch_thesis(db_path, row["id"]))
 
 
+@pytest.mark.parametrize("row_builder,strategy,horizon", [
+    (_confirmed_row, "SHORT", {"unit": "TRADING_DAY", "min": 1, "max": 180, "anchor": "FREEZE_AT"}),
+    (_frozen_row, "SHORT", {"unit": "TRADING_DAY", "min": 1, "max": 180, "anchor": "FREEZE_AT"}),
+    (_confirmed_row, "SWING", {"unit": "TRADING_DAY", "min": 1, "max": 200, "anchor": "FREEZE_AT"}),
+    (_frozen_row, "MEDIUM", {"unit": "TRADING_DAY", "min": 1, "max": 20, "anchor": "FREEZE_AT"}),
+])
+def test_strategy_horizon_out_of_range_fails_closed(tmp_path, monkeypatch, row_builder, strategy, horizon):
+    db_path = _db(tmp_path, monkeypatch)
+    row = row_builder("rangebad" + "0" * 24)
+    row["strategy"] = strategy
+    row["expected_horizon"] = json.dumps(horizon)
+    _insert(db_path, row)
+    with pytest.raises(EvidenceLedgerCorruptedError):
+        store.validate_persisted_thesis_main(_fetch_thesis(db_path, row["id"]))
+
+
+@pytest.mark.parametrize("strategy,horizon", [
+    ("SHORT", {"unit": "TRADING_DAY", "min": 5, "max": 10, "anchor": "FREEZE_AT"}),
+    ("SWING", {"unit": "TRADING_DAY", "min": 5, "max": 10, "anchor": "FREEZE_AT"}),
+    ("SWING", {"unit": "TRADING_DAY", "min": 40, "max": 45, "anchor": "FREEZE_AT"}),
+    ("MEDIUM", {"unit": "TRADING_DAY", "min": 40, "max": 45, "anchor": "FREEZE_AT"}),
+])
+def test_strategy_horizon_overlap_ranges_valid(tmp_path, monkeypatch, strategy, horizon):
+    db_path = _db(tmp_path, monkeypatch)
+    row = _confirmed_row("rangeok" + "0" * 25)
+    row["strategy"] = strategy
+    row["expected_horizon"] = json.dumps(horizon)
+    _insert(db_path, row)
+    store.validate_persisted_thesis_main(_fetch_thesis(db_path, row["id"]))
+
+
 def test_corrupt_24_delta_evidence_snapshot_fails_closed(tmp_path, monkeypatch):
     db_path = _db(tmp_path, monkeypatch)
     thesis_id = "24" + "0" * 30

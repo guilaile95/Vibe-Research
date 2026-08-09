@@ -1062,8 +1062,9 @@ def _count_thesis(
 def _insert_revision(conn: sqlite3.Connection, data: dict) -> None:
     conn.execute(
         """
-        INSERT INTO thesis_revisions (id, thesis_id, revision_number, snapshot, change_summary, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO thesis_revisions
+          (id, thesis_id, revision_number, snapshot, change_summary, created_at, revision_kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             data["id"],
@@ -1072,6 +1073,7 @@ def _insert_revision(conn: sqlite3.Connection, data: dict) -> None:
             json.dumps(data["snapshot"], ensure_ascii=False),
             data["change_summary"],
             data["created_at"],
+            data.get("revision_kind"),
         ),
     )
 
@@ -1209,6 +1211,19 @@ def _expect_horizon_dict(thesis_id: str, raw: str) -> dict:
     return value
 
 
+def _expect_strategy_horizon(strategy: str | None, horizon: dict) -> None:
+    """Persisted Formal rows must stay within the strategy's hard range."""
+    if strategy is None:
+        raise EvidenceLedgerCorruptedError()
+    bounds = STRATEGY_HORIZON_RANGES.get(strategy)
+    if bounds is None:
+        raise EvidenceLedgerCorruptedError()
+    low, high = horizon["min"], horizon["max"]
+    min_allowed, max_allowed = bounds
+    if low < min_allowed or high > max_allowed:
+        raise EvidenceLedgerCorruptedError()
+
+
 def validate_persisted_thesis_main(row: sqlite3.Row) -> None:
     """校验 investment_theses 主行满足五态 matrix；任何异常 → Corrupted。
 
@@ -1269,7 +1284,8 @@ def validate_persisted_thesis_main(row: sqlite3.Row) -> None:
             raise EvidenceLedgerCorruptedError()
         if status != "active" or strategy is None or horizon_raw is None:
             raise EvidenceLedgerCorruptedError()
-        _expect_horizon_dict(thesis_id, horizon_raw)
+        horizon = _expect_horizon_dict(thesis_id, horizon_raw)
+        _expect_strategy_horizon(strategy, horizon)
         return
 
     # formal_state == "frozen"
@@ -1280,7 +1296,8 @@ def validate_persisted_thesis_main(row: sqlite3.Row) -> None:
         raise EvidenceLedgerCorruptedError()
     if strategy is None or horizon_raw is None:
         raise EvidenceLedgerCorruptedError()
-    _expect_horizon_dict(thesis_id, horizon_raw)
+    horizon = _expect_horizon_dict(thesis_id, horizon_raw)
+    _expect_strategy_horizon(strategy, horizon)
     if status == "active":
         if archived_at is not None:
             raise EvidenceLedgerCorruptedError()

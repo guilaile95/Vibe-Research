@@ -10,9 +10,10 @@
 
 **P0 Phase 2 — Formal Thesis v0.1 Non-Migration Implementation**
 
-状态：**NON-MIGRATION IMPLEMENTATION COMPLETE / AWAITING SEPARATE INTEGRATION DECISION**
-（用户 2026-08-10 明确授权；分支 `feat/p0-formal-thesis-v0.1`，Draft PR，
-PR_READY=NO，MERGE=NO）
+状态：**NON-MIGRATION IMPLEMENTATION COMPLETE / AWAITING INDEPENDENT REVIEW**
+（P0-PH2-R1 于 2026-08-10 完成授权范围内修复；分支
+`feat/p0-formal-thesis-v0.1`，Draft PR，PR_READY=NO，MERGE=NO；不预先声明
+independent review approved）
 
 授权切片：
 

@@ -124,6 +124,61 @@ def test_draft_rejects_legacy_archive_without_persisted_mutation(db):
         conn.close()
 
 
+def test_vnext_revisions_have_explicit_content_kind(db):
+    tid = _thesis(db)["thesis"]["id"]
+    svc.begin_formalization(db, tid)
+    svc.update_thesis(db, tid, {
+        "title": "标题", "summary": "摘要", "status": "active",
+        "core_claims": ["a", "b", "c"], "catalysts": [], "risks": [],
+        "invalidation_conditions": [], "strategy": "SWING",
+        "expected_horizon": {"unit": "TRADING_DAY", "min": 5, "max": 20, "anchor": "FREEZE_AT"},
+        "free_notes": "note",
+    }, 1)
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute(
+            "SELECT revision_number, revision_kind FROM thesis_revisions "
+            "WHERE thesis_id=? ORDER BY revision_number", (tid,)
+        ).fetchall() == [(1, "CONTENT"), (2, "CONTENT")]
+    finally:
+        conn.close()
+
+
+def test_preconfirm_evidence_cascade_revisions_have_content_kind(db):
+    tid = _thesis(db)["thesis"]["id"]
+    svc.begin_formalization(db, tid)
+    ev = svc.create_evidence(db, {
+        "subject_type": "stock", "subject_id": "600519", "evidence_type": "news",
+        "claim": "claim", "source_title": "source", "source_url": None,
+        "source_date": None, "accessed_at": "2026-01-01T00:00:00+00:00",
+        "classification": "fact", "confidence": "high",
+    })
+    svc.link_evidence(db, tid, ev["id"], "support", 1)
+    svc.update_stance(db, tid, ev["id"], "oppose", 2)
+    svc.update_evidence(db, ev["id"], {
+        "evidence_type": "news", "claim": "changed", "source_title": "source",
+        "source_url": None, "source_date": None, "accessed_at": "2026-01-02T00:00:00+00:00",
+        "classification": "inference", "confidence": "medium",
+    })
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute(
+            "SELECT revision_number, revision_kind FROM thesis_revisions "
+            "WHERE thesis_id=? ORDER BY revision_number", (tid,)
+        ).fetchall() == [(1, "CONTENT"), (2, "CONTENT"), (3, "CONTENT"), (4, "CONTENT")]
+    finally:
+        conn.close()
+
+
+def test_legacy_null_revision_kind_remains_readable(db):
+    tid = _thesis(db)["thesis"]["id"]
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE thesis_revisions SET revision_kind=NULL WHERE thesis_id=? AND revision_number=1", (tid,))
+    conn.commit(); conn.close()
+    assert svc.get_revision(db, tid, 1)["revision_kind"] is None
+    assert svc.list_revisions(db, tid)["items"][0]["revision_number"] == 1
+
+
 def test_freeze_preserves_confirmed_evidence_and_rejects_live_drift(db):
     tid = _draft(db)
     evidence = svc.create_evidence(db, {
