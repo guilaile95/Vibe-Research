@@ -396,13 +396,17 @@ def _open_write_connection() -> sqlite3.Connection:
     """只有写操作才允许触发目录创建与 schema 初始化。
 
     初始化资格只能通过 O_EXCL 原子文件创建获得，path.exists() 不构成权限。
-    - 调用开始时已存在：立即按已有数据库验证，空库/不完整库 fail-closed。
-    - 调用开始时不存在但 O_EXCL 失败：可能是合法并发初始化者，有界等待其完成；
-      等待者任何情况下都不得调用 _initialize。
     - O_EXCL 成功：当前调用方持有初始化资格。
+    - O_EXCL 失败（他人已创建文件）：该调用方是 waiter，任何情况下都不得调用
+      ``_initialize``；对「空库 + 非 owner」一律有界等待——owner 的合法初始化
+      窗口（O_EXCL → BEGIN IMMEDIATE → _initialize → COMMIT）可能在 waiter
+      进入之后才完成，不得把「文件已存在但尚未初始化」误判为 corruption；
+      pre-existing 空文件 / owner 初始化失败 / 等待超时 → 有界等待到期后
+      fail-closed（CorruptedError），且 waiter 从不改写文件。
+    - BEGIN IMMEDIATE 遇到 busy/locked（合法并发持有写锁）→ 有界等待重试，
+      不立即归类为 corruption；真实损坏（schema 不匹配等）仍立即 fail-closed。
     """
     path = Path(alert_rule_db_path())
-    existed_at_start = path.exists()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -417,6 +421,14 @@ def _open_write_connection() -> sqlite3.Connection:
         conn.row_factory = sqlite3.Row
         try:
             conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as exc:
+            # 合法并发写锁尚未释放（busy/locked）→ 有界等待重试；
+            # 等待期内不初始化、不降低 fail-closed，超时仍 CorruptedError。
+            conn.close()
+            if time.monotonic() >= deadline:
+                raise AlertRuleStoreCorruptedError() from exc
+            time.sleep(_OPEN_WAIT_INTERVAL_SECONDS)
+            continue
         except sqlite3.Error as exc:
             conn.close()
             raise AlertRuleStoreCorruptedError() from exc
@@ -435,9 +447,8 @@ def _open_write_connection() -> sqlite3.Connection:
                 _initialize(conn)
                 conn.execute("COMMIT")
                 return conn
-            if existed_at_start:
-                raise AlertRuleStoreCorruptedError()
-            # 其他合法初始化者可能正在进行：有界等待，绝不初始化。
+            # 空库且非 owner：可能是 owner 的初始化窗口正在进行，或有界等待
+            # 到期（pre-existing 空文件 / owner 失败）。绝不初始化，超时 fail-closed。
             if time.monotonic() >= deadline:
                 raise AlertRuleStoreCorruptedError()
             _safe_rollback(conn)
