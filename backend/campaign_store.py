@@ -405,11 +405,13 @@ def _validate_constraint_semantics(
             except sqlite3.IntegrityError:
                 continue
             raise CampaignStoreCorruptedError()
-        # bindings：revision <= 0 拒绝、strategy 非法拒绝、campaign_id 重复（PK）拒绝
+        # bindings：revision <= 0 拒绝、strategy 非法拒绝、campaign_id 重复（PK）
+        # 拒绝，并且不同 campaign_id 复用同一 thesis_id 时必须由 DB UNIQUE 拒绝。
         for bad in (
             ("campaign_00000000000000000000000000000001", "1" * 32, 0, "SWING"),
             ("campaign_00000000000000000000000000000002", "2" * 32, 1, "BOGUS"),
             ("campaign_00000000000000000000000000000000", "3" * 32, 1, "SWING"),
+            ("campaign_00000000000000000000000000000001", "0" * 32, 1, "SWING"),
         ):
             try:
                 probe.execute(

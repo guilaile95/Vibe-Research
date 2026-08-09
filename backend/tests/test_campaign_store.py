@@ -124,6 +124,27 @@ def test_db_check_rejects_invalid_strategy(db_path):
             )
 
 
+def test_db_unique_thesis_id_rejects_different_campaign_ids(db_path):
+    """ONE THESIS → ONE CAMPAIGN 必须由真实 SQLite UNIQUE 约束执行。"""
+    first = _create()
+    second = _create()
+    thesis_id = _thesis_id(1)
+    with sqlite3.connect(str(db_path)) as raw:
+        raw.execute(
+            "INSERT INTO campaign_thesis_bindings "
+            "(campaign_id, thesis_id, thesis_revision_at_bind, "
+            "campaign_strategy_at_bind, bound_at) VALUES (?, ?, 1, 'SHORT', ?)",
+            (first["campaign_id"], thesis_id, _TS),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            raw.execute(
+                "INSERT INTO campaign_thesis_bindings "
+                "(campaign_id, thesis_id, thesis_revision_at_bind, "
+                "campaign_strategy_at_bind, bound_at) VALUES (?, ?, 1, 'SHORT', ?)",
+                (second["campaign_id"], thesis_id, _TS),
+            )
+
+
 # ---------------------------------------------------------------------------
 # C. Multi-Campaign
 # ---------------------------------------------------------------------------
@@ -273,6 +294,39 @@ def test_corrupted_schema_fail_closed(db_path):
         _create()
     with pytest.raises(CampaignStoreCorruptedError):
         list_campaigns()
+
+
+def test_missing_thesis_unique_constraint_fail_closed(db_path):
+    """旧库缺失 thesis_id UNIQUE 时，store 在读写校验阶段必须拒绝。"""
+    _create()
+    with sqlite3.connect(str(db_path)) as raw:
+        raw.execute(
+            "ALTER TABLE campaign_thesis_bindings "
+            "RENAME TO campaign_thesis_bindings_without_unique"
+        )
+        raw.execute(
+            "CREATE TABLE campaign_thesis_bindings ("
+            "campaign_id TEXT PRIMARY KEY, "
+            "thesis_id TEXT NOT NULL, "
+            "thesis_revision_at_bind INTEGER NOT NULL "
+            "CHECK (thesis_revision_at_bind > 0), "
+            "campaign_strategy_at_bind TEXT NOT NULL "
+            "CHECK (campaign_strategy_at_bind IN ('SHORT', 'SWING', 'MEDIUM')), "
+            "bound_at TEXT NOT NULL"
+            ")"
+        )
+        raw.execute(
+            "INSERT INTO campaign_thesis_bindings "
+            "SELECT campaign_id, thesis_id, thesis_revision_at_bind, "
+            "campaign_strategy_at_bind, bound_at "
+            "FROM campaign_thesis_bindings_without_unique"
+        )
+        raw.execute("DROP TABLE campaign_thesis_bindings_without_unique")
+
+    with pytest.raises(CampaignStoreCorruptedError):
+        list_campaigns()
+    with pytest.raises(CampaignStoreCorruptedError):
+        _create()
 
 
 def test_wrong_schema_version_fail_closed(db_path):
