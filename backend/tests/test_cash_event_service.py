@@ -650,3 +650,264 @@ class TestPersistedFactIntegrity:
         _create("CASH_WITHDRAWAL", 200.0)
         after = position_reality_service.derive_positions()
         assert before == after
+
+
+# ---------------------------------------------------------------------------
+# P0-S1B-C：Manual Cash Event Correction & Effective Cash Facts
+# ---------------------------------------------------------------------------
+
+
+def _correct_cash(event_id: str, amount: float, reason: str = "修正") -> dict:
+    return svc.correct_cash_event(event_id, {"amount": amount, "reason": reason})
+
+
+class TestCashCorrectionContract:
+    """Cash Event Correction（复用现有 correction engine，不改 raw，方向由 event_type 决定）。"""
+
+    def test_deposit_correction_success(self):
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DEPOSIT", 100.0)
+        result = _correct_cash(ev["event_id"], 150.0)
+        assert result["status"] == "CORRECTION_RECORDED"
+        # effective: 100 → 150
+        effective = svc.effective_cash_events()
+        assert effective[0]["amount"] == 150.0
+        assert _ledger_cash()["value"] == 100000.0 + 150.0
+
+    def test_withdrawal_correction_success(self):
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_WITHDRAWAL", 100.0)
+        _correct_cash(ev["event_id"], 150.0)
+        assert _ledger_cash()["value"] == 100000.0 - 150.0
+
+    def test_dividend_correction_success(self):
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DIVIDEND", 100.0)
+        _correct_cash(ev["event_id"], 200.0)
+        assert _ledger_cash()["value"] == 100000.0 + 200.0
+
+    def test_fee_correction_success(self):
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_FEE", 100.0)
+        _correct_cash(ev["event_id"], 20.0)
+        assert _ledger_cash()["value"] == 100000.0 - 20.0
+
+    def test_tax_correction_success(self):
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_TAX", 100.0)
+        _correct_cash(ev["event_id"], 30.0)
+        assert _ledger_cash()["value"] == 100000.0 - 30.0
+
+    def test_original_fact_immutable(self):
+        """raw cash event amount 永不被修改；effective 由 CORRECTION 表达。"""
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DEPOSIT", 100.0)
+        _correct_cash(ev["event_id"], 120.0)
+        _correct_cash(ev["event_id"], 80.0)
+        raw = svc.get_cash_event(ev["event_id"])
+        assert raw["amount"] == 100.0  # raw 不变
+        effective = svc.effective_cash_events()
+        assert effective[0]["amount"] == 80.0  # effective = 80
+        assert _ledger_cash()["value"] == 100000.0 + 80.0
+
+    def test_chained_before_payload(self):
+        """100 → 120 → 80：第二条 correction before_payload.amount 必须 = 120（非 raw 100）。"""
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DEPOSIT", 100.0)
+        _correct_cash(ev["event_id"], 120.0)
+        r2 = _correct_cash(ev["event_id"], 80.0)
+        import json as _json
+        before2 = _json.loads(r2["event"]["before_payload"])
+        assert before2["amount"] == 120.0
+
+    def test_correction_durable_reopen(self):
+        """CORRECTION durable：restart/reopen 后仍生效。"""
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DEPOSIT", 100.0)
+        _correct_cash(ev["event_id"], 120.0)
+        # reopen：重新读库
+        assert _ledger_cash()["value"] == 100000.0 + 120.0
+        effective = svc.effective_cash_events()
+        assert effective[0]["amount"] == 120.0
+
+    def test_event_type_not_modifiable(self):
+        """correction 不允许改 event_type / 其他字段。"""
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DEPOSIT", 100.0)
+        with pytest.raises(svc.CashEventValidationError):
+            svc.correct_cash_event(ev["event_id"], {"amount": 120.0, "event_type": "CASH_WITHDRAWAL"})
+
+    def test_target_non_cash_rejected(self):
+        """target 非 CASH_* account event → 拒绝（404）。"""
+        result = _bootstrap([{"code": "600519", "shares": 100, "cost_basis": 10.0, "name": "测试股票"}], opening_cash=100000.0)
+        legacy_id = result["positions"][0]["event_id"]
+        with pytest.raises(svc.CashEventNotFoundError):
+            svc.correct_cash_event(legacy_id, {"amount": 120.0})
+
+    def test_target_correction_event_rejected(self):
+        """target CORRECTION event → 拒绝（404）。"""
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DEPOSIT", 100.0)
+        corr = _correct_cash(ev["event_id"], 120.0)
+        corr_id = corr["event"]["event_id"]
+        with pytest.raises(svc.CashEventNotFoundError):
+            svc.correct_cash_event(corr_id, {"amount": 130.0})
+
+    def test_unknown_event_404(self):
+        _bootstrap([])
+        with pytest.raises(svc.CashEventNotFoundError):
+            svc.correct_cash_event("nonexistent", {"amount": 100.0})
+
+    def test_amount_zero_rejected(self):
+        _bootstrap([])
+        ev = _create("CASH_DEPOSIT", 100.0)
+        with pytest.raises(svc.CashEventValidationError):
+            _correct_cash(ev["event_id"], 0.0)
+
+    def test_amount_negative_rejected(self):
+        _bootstrap([])
+        ev = _create("CASH_DEPOSIT", 100.0)
+        with pytest.raises(svc.CashEventValidationError):
+            _correct_cash(ev["event_id"], -10.0)
+
+    def test_amount_nan_inf_rejected(self):
+        _bootstrap([])
+        ev = _create("CASH_DEPOSIT", 100.0)
+        with pytest.raises(svc.CashEventValidationError):
+            _correct_cash(ev["event_id"], float("nan"))
+        with pytest.raises(svc.CashEventValidationError):
+            _correct_cash(ev["event_id"], float("inf"))
+
+    def test_amount_0001_rejected(self):
+        """0.001 → 归一化 0.00 → 拒绝（与 create 同一 contract）。"""
+        _bootstrap([])
+        ev = _create("CASH_DEPOSIT", 100.0)
+        with pytest.raises(svc.CashEventValidationError):
+            _correct_cash(ev["event_id"], 0.001)
+        # 不得落盘 0.00 correction
+        effective = svc.effective_cash_events()
+        assert effective[0]["amount"] == 100.0
+
+    def test_2dp_normalization_same_as_create(self):
+        """12.345 → 12.35（与 create 同一 rounding）。"""
+        _bootstrap([])
+        ev = _create("CASH_DEPOSIT", 100.0)
+        _correct_cash(ev["event_id"], 12.345)
+        effective = svc.effective_cash_events()
+        assert effective[0]["amount"] == 12.35
+
+    def test_extra_field_rejected(self):
+        _bootstrap([])
+        ev = _create("CASH_DEPOSIT", 100.0)
+        with pytest.raises(svc.CashEventValidationError):
+            svc.correct_cash_event(ev["event_id"], {"amount": 120.0, "name": "x"})
+
+    def test_deposit_corrected_delta_positive(self):
+        """DEPOSIT correction → +方向。"""
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DEPOSIT", 100.0)
+        _correct_cash(ev["event_id"], 150.0)
+        assert _ledger_cash()["value"] == 100000.0 + 150.0
+
+    def test_withdrawal_corrected_delta_negative(self):
+        """WITHDRAWAL correction → -方向。"""
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_WITHDRAWAL", 100.0)
+        _correct_cash(ev["event_id"], 150.0)
+        assert _ledger_cash()["value"] == 100000.0 - 150.0
+
+    def test_ledger_candidate_uses_corrected_not_raw(self):
+        """ledger_cash_candidate 用 corrected amount，不用 raw。"""
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DEPOSIT", 100.0)
+        _correct_cash(ev["event_id"], 500.0)
+        assert _ledger_cash()["value"] == 100000.0 + 500.0  # 非 +100
+
+    def test_reconciliation_corrected_match(self, tmp_path, monkeypatch):
+        """profile cash == corrected ledger candidate → MATCH。"""
+        import account_profile
+        profile_file = tmp_path / "account_profile.json"
+        monkeypatch.setattr(account_profile, "CACHE_DIR", str(tmp_path))
+        account_profile.save_account_profile(200000.0, 101500.0)
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DEPOSIT", 100.0)
+        _correct_cash(ev["event_id"], 1500.0)  # ledger = 101500
+        derived = position_reality_service.derive_positions()
+        recon = ar_svc._cash_reconciliation(ar_svc._current_cash_fact(), ar_svc._ledger_cash_candidate(derived))
+        assert recon["status"] == "MATCH"
+
+    def test_reconciliation_corrected_mismatch(self, tmp_path, monkeypatch):
+        """profile cash != corrected ledger candidate → MISMATCH。"""
+        import account_profile
+        profile_file = tmp_path / "account_profile.json"
+        monkeypatch.setattr(account_profile, "CACHE_DIR", str(tmp_path))
+        account_profile.save_account_profile(200000.0, 99999.0)
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DEPOSIT", 100.0)
+        _correct_cash(ev["event_id"], 1500.0)  # ledger = 101500
+        derived = position_reality_service.derive_positions()
+        recon = ar_svc._cash_reconciliation(ar_svc._current_cash_fact(), ar_svc._ledger_cash_candidate(derived))
+        assert recon["status"] == "MISMATCH"
+
+    def test_nav_still_account_profile(self, tmp_path, monkeypatch):
+        """NAV 仍 ACCOUNT_PROFILE（cash correction 不改 NAV source）。"""
+        import account_profile
+        profile_file = tmp_path / "account_profile.json"
+        monkeypatch.setattr(account_profile, "CACHE_DIR", str(tmp_path))
+        account_profile.save_account_profile(200000.0, 50000.0)
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DEPOSIT", 100.0)
+        _correct_cash(ev["event_id"], 90000.0)  # ledger = 190000
+        reality = ar_svc.get_account_reality()
+        assert reality["settled_nav"] == 50000.0
+        assert reality["nav_cash_source"] == "ACCOUNT_PROFILE"
+
+    def test_position_reality_hard_gate(self):
+        """derive_positions 在 cash correction 前后完全一致。"""
+        _bootstrap([{"code": "600519", "shares": 100, "cost_basis": 10.0, "name": "测试股票"}], opening_cash=100000.0)
+        _trade("600519", "buy", 10.0, 100)
+        before = position_reality_service.derive_positions()
+        ev = _create("CASH_DEPOSIT", 100.0)
+        _correct_cash(ev["event_id"], 200.0)
+        after = position_reality_service.derive_positions()
+        assert before == after
+
+    def test_persisted_correction_bad_json_fail_closed(self):
+        """持久化针对 CASH_* 的 correction after_payload 损坏 → fail closed。"""
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DEPOSIT", 100.0)
+        account_event_store.insert_event(svc.resolve_db_path(), {
+            "event_id": "aev_corrupt_corr",
+            "event_type": "CORRECTION",
+            "code": None, "name": None, "shares": None, "cost_basis": None,
+            "opening_cash": None, "ledger_start_at": None, "origin": None,
+            "acquired_before_vibe": None, "historical_trades": None,
+            "provenance": "MANUAL", "target_event_id": ev["event_id"],
+            "target_event_type": "account_event",
+            "before_payload": '{"amount": 100}', "after_payload": '{"amount": "bad"}',
+            "reason": "损坏", "note": None, "amount": None,
+            "created_at": "2026-08-09T01:00:00+00:00",
+        })
+        with pytest.raises(account_event_store.AccountEventCorruptedError):
+            ar_svc.get_account_reality()
+
+    def test_corrupt_correction_no_raw_fallback(self):
+        """损坏 correction 不得回退 raw amount（fail closed 而非静默用 raw）。"""
+        _bootstrap([], opening_cash=100000.0)
+        ev = _create("CASH_DEPOSIT", 100.0)
+        account_event_store.insert_event(svc.resolve_db_path(), {
+            "event_id": "aev_corrupt_corr2",
+            "event_type": "CORRECTION",
+            "code": None, "name": None, "shares": None, "cost_basis": None,
+            "opening_cash": None, "ledger_start_at": None, "origin": None,
+            "acquired_before_vibe": None, "historical_trades": None,
+            "provenance": "MANUAL", "target_event_id": ev["event_id"],
+            "target_event_type": "account_event",
+            "before_payload": '{"amount": 100}', "after_payload": 'not-json',
+            "reason": "损坏", "note": None, "amount": None,
+            "created_at": "2026-08-09T01:00:00+00:00",
+        })
+        # 损坏 correction payload → fail closed（AccountEventCorruptedError 或 PositionDerivationError），
+        # 不得静默回退 raw amount=100 继续计算。
+        with pytest.raises((account_event_store.AccountEventCorruptedError, position_reality_service.PositionDerivationError)):
+            _ledger_cash()

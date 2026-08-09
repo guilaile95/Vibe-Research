@@ -150,3 +150,76 @@ class TestPersistedCorruptionApi:
         assert ".vibe-research" not in resp.text
         assert "traceback" not in resp.text.lower()
         assert resp.json()["detail"] == "内部错误"
+
+
+class TestCashCorrectionApi:
+    """POST /api/account/cash-events/{id}/corrections（成功 201，404/422/脱敏 500）。"""
+
+    def _create_ev(self, client, event_type="CASH_DEPOSIT", amount=100.0):
+        resp = client.post("/api/account/cash-events", json={"event_type": event_type, "amount": amount})
+        assert resp.status_code == 200
+        return resp.json()["data"]
+
+    def test_correction_success_201(self, client):
+        ev = self._create_ev(client, "CASH_DEPOSIT", 100.0)
+        resp = client.post(f"/api/account/cash-events/{ev['event_id']}/corrections",
+                           json={"amount": 150.0, "reason": "manual correction"})
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["status"] == "CORRECTION_RECORDED"
+        # append-only：raw cash event 不变；effective 由 correction 表达
+        list_resp = client.get("/api/account/cash-events")
+        events = list_resp.json()["data"]
+        assert events[0]["amount"] == 100.0  # raw 不变
+        # correction 已持久化（before=100, after=150）
+        import account_event_store as _aes
+        from position_reality_service import resolve_db_path as _rdp
+        all_events = _aes.list_events(_rdp(), include_voided=True)
+        corr = [e for e in all_events if e["event_type"] == "CORRECTION"]
+        assert len(corr) == 1
+        assert corr[0]["after_payload"] == '{"amount": 150.0}'
+
+    def test_correction_unknown_event_404(self, client):
+        resp = client.post("/api/account/cash-events/nonexistent/corrections", json={"amount": 100.0})
+        assert resp.status_code == 404
+
+    def test_correction_invalid_amount_422(self, client):
+        ev = self._create_ev(client, "CASH_DEPOSIT", 100.0)
+        resp = client.post(f"/api/account/cash-events/{ev['event_id']}/corrections", json={"amount": -10.0})
+        assert resp.status_code == 422
+        resp = client.post(f"/api/account/cash-events/{ev['event_id']}/corrections", json={"amount": 0})
+        assert resp.status_code == 422
+        resp = client.post(f"/api/account/cash-events/{ev['event_id']}/corrections", json={"amount": 0.001})
+        assert resp.status_code == 422
+
+    def test_correction_extra_field_422(self, client):
+        ev = self._create_ev(client, "CASH_DEPOSIT", 100.0)
+        resp = client.post(f"/api/account/cash-events/{ev['event_id']}/corrections",
+                           json={"amount": 120.0, "event_type": "CASH_WITHDRAWAL"})
+        assert resp.status_code == 422
+
+    def test_correction_malformed_json_400(self, client):
+        resp = client.post("/api/account/cash-events/x/corrections", content="{not json")
+        assert resp.status_code == 400
+
+    def test_correction_internal_error_sanitized(self, client, monkeypatch):
+        def _boom(*_a, **_k):
+            raise RuntimeError("secret /home/user/.vibe-research/x.sqlite3")
+        monkeypatch.setattr(svc, "correct_cash_event", _boom)
+        resp = client.post("/api/account/cash-events/any/corrections", json={"amount": 100.0})
+        assert resp.status_code == 500
+        assert "secret" not in resp.text
+        assert ".vibe-research" not in resp.text
+        assert resp.json()["detail"] == "内部错误"
+
+    def test_no_patch_put_delete_mutation_paths(self):
+        """不得提供 PATCH/PUT/DELETE cash event mutation path。"""
+        paths = set()
+        for route in cash_event_router.router.routes:
+            methods = getattr(route, "methods", set()) or set()
+            path = getattr(route, "path", "")
+            for m in methods:
+                paths.add((m, path))
+        assert ("PATCH", "/api/account/cash-events/{event_id}") not in paths
+        assert ("PUT", "/api/account/cash-events/{event_id}") not in paths
+        assert ("DELETE", "/api/account/cash-events/{event_id}") not in paths

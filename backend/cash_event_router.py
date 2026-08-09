@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 import account_event_store
 import cash_event_service as svc
+import position_reality_service
 
 router = APIRouter(prefix="/api", tags=["cash-events"])
 
@@ -64,3 +65,29 @@ async def get_cash_event(event_id: str):
     if event is None:
         raise HTTPException(status_code=404, detail="现金事件不存在")
     return {"data": event}
+
+
+@router.post("/account/cash-events/{event_id}/corrections")
+async def correct_cash_event(event_id: str, request: Request):
+    """对 active CASH_* 事件追加 amount correction（复用现有 correction engine）。
+
+    成功 → 201 CORRECTION_RECORDED；只允许修改 amount（方向由 event_type 决定）；
+    404 目标不存在 / 非 CASH_*；422 非法 amount/字段/非现金目标；500 内部（脱敏）。
+    """
+    try:
+        payload = await _parse_json_body(request)
+    except HTTPException:
+        raise
+    try:
+        result = svc.correct_cash_event(event_id, payload)
+    except svc.CashEventNotFoundError:
+        raise HTTPException(status_code=404, detail="现金事件不存在")
+    except svc.CashEventValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except position_reality_service.PositionValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except account_event_store.AccountEventCorruptedError:
+        raise HTTPException(status_code=500, detail="内部错误")
+    except Exception:
+        raise HTTPException(status_code=500, detail="内部错误")
+    return {"data": result, "status_code": 201}

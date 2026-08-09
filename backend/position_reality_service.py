@@ -406,6 +406,12 @@ def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
             _require_int(value, "actual_quantity", min_value=1)
         elif key in ("actual_price", "fee", "other_cost"):
             _require_number(value, key)
+        elif key == "amount":
+            # cash 事件修正：复用与 create_cash_event 完全相同的归一化规则（DRY）
+            try:
+                account_event_store.normalize_cash_amount(value)
+            except ValueError as exc:
+                raise PositionValidationError(str(exc))
         # 其他键：是否合法取决于 target 类型，由事务内白名单校验决定
 
     db_path = resolve_db_path()
@@ -452,6 +458,8 @@ def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
                 allowed = _CORRECTION_EVENT_KEYS  # shares / cost_basis
             elif target_type == _EVENT_ACCOUNT_OPENING:
                 allowed = frozenset({"opening_cash"})  # ledger_start_at 不可变（事实边界）
+            elif target_type in account_event_store.CASH_EVENT_TYPES:
+                allowed = frozenset({"amount"})  # cash 事件只允许修正 amount（方向由 event_type 决定）
             else:
                 raise PositionValidationError(f"不支持的修正目标事件类型: {target_type}")
             base = dict(event)
@@ -644,7 +652,11 @@ def build_effective_events(
         account_event_store.validate_event_type(etype)
         if etype in (_EVENT_LEGACY_OPENING, _EVENT_ACCOUNT_OPENING):
             events_by_key[f"account_event:{ev['event_id']}"] = dict(ev)
-        # CORRECTION 由 _load_corrections 处理；CASH_* 不参与持仓（但类型已校验）
+        elif etype in account_event_store.CASH_EVENT_TYPES:
+            # cash 事件纳入 effective map，使针对它的 active CORRECTION 能应用（P0-S1B-C）
+            account_event_store.validate_persisted_cash_event(ev)
+            events_by_key[f"account_event:{ev['event_id']}"] = dict(ev)
+        # CORRECTION 由 _load_corrections 处理
     for t in trades:
         if t["execution_status"] == "not_executed":
             continue
@@ -667,6 +679,8 @@ def build_effective_events(
         events_by_key[f"trade:{t['trade_id']}"] = dict(t)
 
     _apply_corrections(events_by_key, corrections)
+    # CASH_* effective facts + 针对 CASH_* 的 correction payload 完整性（P0-S1B-C 读路径 fail closed）
+    account_event_store.validate_effective_cash_events(events_by_key, corrections)
     return events_by_key
 
 

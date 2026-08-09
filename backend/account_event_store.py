@@ -8,6 +8,7 @@ event_type 不再由 DB CHECK 约束（演进集合，校验由 service 层白�
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -99,6 +100,70 @@ def validate_persisted_cash_event(row: dict[str, Any]) -> None:
         raise AccountEventCorruptedError()
     if row.get("provenance") != _CASH_PROVENANCE_EXPECTED:
         raise AccountEventCorruptedError()
+
+
+def normalize_cash_amount(value: Any) -> float:
+    """纯 cash amount 归一化（DRY：create / correction / persisted 共用同一规则）。
+
+    RAW → numeric → finite → >0 → round 2dp → 归一化后仍必须 >0。
+    非法抛 ValueError（由调用方包装为对应层错误：422 用户错误或 500 数据损坏）。
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("amount 必须是数字")
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        raise ValueError("amount 必须是有限数字")
+    if number <= 0:
+        raise ValueError("amount 必须大于 0（方向由 event_type 决定）")
+    normalized = round(number, 2)
+    if normalized <= 0:
+        raise ValueError("amount 归一化到 2 位小数后必须大于 0")
+    return normalized
+
+
+def validate_effective_cash_events(
+    events_by_key: dict[str, dict[str, Any]],
+    corrections: dict[str, list[dict[str, Any]]],
+) -> None:
+    """读路径：应用 active corrections 后，CASH_* effective facts 必须保持有效，
+    且针对 CASH_* 的 CORRECTION 的 before/after payload 必须合法。
+
+    - effective CASH_* 事件：event_type ∈ CASH、amount numeric/finite/>0、provenance=MANUAL
+      （after_payload 若含未知字段如 event_type 会污染 effective dict → 校验失败）
+    - 针对 CASH_* 的 correction：after_payload 必须 JSON object 且仅含 amount（归一化 >0）；
+      before_payload 必须 JSON object 且含合法 amount。
+    任何损坏 → AccountEventCorruptedError（fail closed），不得忽略 correction / 回退 raw
+    amount / or 0.0 / 静默跳过。
+    """
+    cash_target_ids: set[str] = set()
+    for key, ev in events_by_key.items():
+        if key.startswith("account_event:") and ev.get("event_type") in CASH_EVENT_TYPES:
+            validate_persisted_cash_event(ev)
+            cash_target_ids.add(ev["event_id"])
+    for key, corrs in corrections.items():
+        prefix, _, target_id = key.partition(":")
+        if prefix != "account_event" or target_id not in cash_target_ids:
+            continue
+        for corr in corrs:
+            _validate_cash_correction_payload(corr)
+
+
+def _validate_cash_correction_payload(corr: dict[str, Any]) -> None:
+    """针对 CASH_* 的 correction：after_payload 仅 amount 且归一化 >0；before_payload 含合法 amount。"""
+    try:
+        after = json.loads(corr["after_payload"])
+        before = json.loads(corr["before_payload"])
+    except (TypeError, ValueError) as exc:
+        raise AccountEventCorruptedError() from exc
+    if not isinstance(after, dict) or set(after.keys()) != {"amount"}:
+        raise AccountEventCorruptedError()
+    if not isinstance(before, dict) or set(before.keys()) != {"amount"}:
+        raise AccountEventCorruptedError()
+    for payload in (after, before):
+        try:
+            normalize_cash_amount(payload["amount"])
+        except (ValueError, KeyError) as exc:
+            raise AccountEventCorruptedError() from exc
 
 
 class AccountEventStoreError(RuntimeError):

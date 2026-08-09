@@ -21,6 +21,8 @@ from typing import Any
 
 import account_event_store
 import position_reality_service
+import trade_ledger_service
+import trade_ledger_store
 
 # cash event 类型白名单唯一来源 = account_event_store.CASH_EVENT_TYPES（DRY，不维护第二套）
 CASH_EVENT_TYPES = account_event_store.CASH_EVENT_TYPES
@@ -55,22 +57,15 @@ def resolve_db_path():
 
 
 def _validate_amount(value: Any) -> float:
-    """amount 必须 numeric / finite / > 0；归一化到 2dp 后仍必须 > 0（如 0.001 → 拒绝）。
+    """amount 归一化（DRY）：复用 account_event_store.normalize_cash_amount。
 
-    方向由 event_type 决定（禁止负号表达方向）；返回归一化后的金额用于落盘。
+    RAW → numeric → finite → >0 → round 2dp → 归一化后仍必须 >0（0.001 → 拒绝）。
+    方向由 event_type 决定（禁止负号表达方向）；返回归一化金额用于落盘。
     """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise CashEventValidationError("amount 必须是数字")
-    number = float(value)
-    if number != number or number in (float("inf"), float("-inf")):
-        raise CashEventValidationError("amount 必须是有限数字")
-    if number <= 0:
-        raise CashEventValidationError("amount 必须大于 0（方向由 event_type 决定）")
-    normalized = round(number, 2)
-    # 归一化后再验证：0.001 → 0.00 → 拒绝，不得落盘 0.00 的"成功"事实
-    if normalized <= 0:
-        raise CashEventValidationError("amount 归一化到 2 位小数后必须大于 0")
-    return normalized
+    try:
+        return account_event_store.normalize_cash_amount(value)
+    except ValueError as exc:
+        raise CashEventValidationError(str(exc))
 
 
 def create_cash_event(payload: dict[str, Any]) -> dict[str, Any]:
@@ -146,3 +141,52 @@ def get_cash_event(event_id: str) -> dict[str, Any] | None:
 def cash_delta_for(event_type: str, amount: float) -> float:
     """按 event_type 计算现金增量（DEPOSIT/DIVIDEND 正，WITHDRAWAL/FEE/TAX 负）。"""
     return round(_CASH_DELTA[event_type] * float(amount), 2)
+
+
+def effective_cash_events() -> list[dict[str, Any]]:
+    """应用 active CORRECTION 后的 effective cash events（用于 ledger cash candidate）。
+
+    复用 position_reality_service.build_effective_events（同一 correction machinery，
+    DRY Hard Gate：TRADE + ACCOUNT EVENT + CASH EVENT 共享同一 engine）。
+    每行已通过持久化完整性校验（validate_effective_cash_events 内调用）。
+    """
+    db_path = resolve_db_path()
+    events = account_event_store.list_events(db_path)
+    trades = trade_ledger_store.list_records(db_path, include_voided=False, limit=None)
+    effective = position_reality_service.build_effective_events(events, trades)
+    out = []
+    for key, ev in effective.items():
+        if key.startswith("account_event:") and ev.get("event_type") in CASH_EVENT_TYPES:
+            out.append(ev)
+    return out
+
+
+def correct_cash_event(event_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """对 active CASH_* 事件追加 amount correction（复用现有 correction engine）。
+
+    只允许修改 amount（方向永久由 event_type 决定）；target_event_type=account_event。
+    before_payload / after_payload / chained / atomic 均由 position_reality_service.
+    create_correction 处理（不建第二套 correction engine）。
+    """
+    if not isinstance(payload, dict):
+        raise CashEventValidationError("请求体必须是对象")
+    allowed = {"amount", "reason", "note"}
+    unknown = set(payload.keys()) - allowed
+    if unknown:
+        raise CashEventValidationError(f"未知字段: {', '.join(sorted(unknown))}")
+    # 归一化（与 create 同一规则）
+    amount = _validate_amount(payload.get("amount"))
+    # 校验目标是 active CASH_* 事件
+    event = get_cash_event(event_id)
+    if event is None:
+        raise CashEventNotFoundError()
+    reason = payload.get("reason")
+    note = payload.get("note")
+    result = position_reality_service.create_correction({
+        "target_event_id": event_id,
+        "target_event_type": "account_event",
+        "after_payload": {"amount": amount},
+        "reason": reason if isinstance(reason, str) and reason.strip() else None,
+        "note": note if isinstance(note, str) and note.strip() else None,
+    })
+    return result

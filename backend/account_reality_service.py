@@ -156,10 +156,14 @@ def _ledger_cash_candidate(derived: dict[str, Any]) -> dict[str, Any]:
             continue
         computed = trade_ledger_service.compute_fields(t)
         cash = round(cash + float(computed["net_cash_flow"]), 2)
-    # manual cash events（active 仅）：仅消费已通过持久化事实校验的 CASH_* 行。
-    # 未知 event_type / 损坏 amount 必须 fail closed（由 validate 抛 AccountEventCorruptedError），
-    # 不得静默忽略、不得 or 0.0 补零、不得反转方向。
-    for ev in events:
+    # manual cash events（active 仅）：消费"已应用 active CORRECTION 后的 effective
+    # cash facts"（P0-S1B-C）——复用 build_effective_events 同一 correction machinery
+    # （DRY），再经 validate_effective_cash_events 保证 persisted 完整性。
+    # 未知 event_type / 损坏 amount / 损坏 correction payload → AccountEventCorruptedError
+    # fail closed，不得静默忽略、不得 or 0.0 补零、不得回退 raw amount。
+    for key, ev in effective.items():
+        if not key.startswith("account_event:"):
+            continue  # trade 条目走上面 trade 循环；这里只处理 account events
         if ev.get("event_type") in cash_event_service.CASH_EVENT_TYPES:
             account_event_store.validate_persisted_cash_event(ev)
             cash = round(
