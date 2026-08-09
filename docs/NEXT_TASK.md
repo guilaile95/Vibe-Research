@@ -8,28 +8,25 @@
 
 ## 当前已授权任务
 
-**无。**
+**P0 Phase 2 — Formal Thesis v0.1 Non-Migration Implementation**
 
-**当前已授权产品开发任务：无。**
+状态：**AUTHORIZED**（用户 2026-08-10 明确授权；分支
+`feat/p0-formal-thesis-v0.1`，Draft PR，PR_READY=NO，MERGE=NO）
 
-P0 Foundation Integration（PR #68 / #66 / #65 / #67 / #70）已于 2026-08-09 完成
-并进入稳定分支。下一步如果开始 P0 开发，必须由用户明确授权后再更新本文件。
+授权切片：
 
-## 下一候选（需用户授权）
+- P0-S2D-A：Formal Thesis Schema Model（vNext 五态 CHECK + persisted validators）
+- P0-S2D-B：Begin Formalization / Confirm / Freeze / Formal Archive
+- P0-S2D-C：Canonical Thesis Delta（append-only confirmed delta）
+- P0-S2D-D：Current Thesis Projection（deterministic，无 mutable pointer）
+- P0-S2D-E：Campaign Formal Alignment（binding gates）
 
-**P0 Phase 2 — Formal Thesis Contract**
+明确 NOT_AUTHORIZED：
 
-状态：`REQUIRES_USER_AUTHORIZATION`
-
-North Star Formal Thesis 至少要求 Strategy / Core Thesis / Key Drivers /
-Catalyst & Realization Path / Expected Horizon / Invalidation Conditions /
-Key Risks。必须先做 DESIGN REVIEW，优先研究 REUSE 现有 `investment_theses`
-+ Campaign Thesis Binding，不创建第二套重复 Thesis Domain；补齐 expected_horizon、
-formal freeze semantics、original thesis anchor、thesis delta。
-
-Formal Thesis 冻结后 Original Thesis immutable，新事实只产生 Thesis Delta
-（STRENGTHENED / STABLE / WEAKENED / DISPROVEN / UNKNOWN）；AI 只能 draft，
-不得 auto-freeze / auto-rewrite。实现明确 NOT_AUTHORIZED 直至单独授权。
+- **P0-S2D-M Explicit Migration**（含 migration implementation / CLI / 真实用户
+  evidence thesis DB migration / backup-restore 执行）
+- Ready / Merge / force push / stable direct push
+- STABLE_SCHEMA_ACTIVATION（vNext schema 激活仅限 Phase 2 分支测试库）
 
 ## 当前产品优先级（方向，不是授权）
 
@@ -53,7 +50,9 @@ P0 的目标不是“盘中必须做交易”，而是：
 ## 当前显式停止边界
 
 - **PR #59 保持 Draft；未经单独明确授权，不得转 Ready，不得 Merge。**
-- **P0 Phase 2 Formal Thesis implementation：NOT_AUTHORIZED。**
+- **PR（P0-PH2）保持 Draft；PR_READY=NO、MERGE=NO，直至 S2D-M 另行授权且
+  readiness gate（VNEXT_SCHEMA_MODEL / EXPLICIT_MIGRATOR / BACKUP /
+  POST_MIGRATION_VALIDATOR / ROLLBACK 全部 READY）满足。**
 - **P0-S1B-D、Decision Inbox、Sell Engine、Formal Decision、Outcome、Sector Regime：未授权。**
 - North Star v0.1 不授权生产数据接入、Scheduler、Background Agent、券商连接、
   付费数据源或自动交易。
