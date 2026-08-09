@@ -358,10 +358,13 @@ def _prior_effective_values_on_connection(
         try:
             after = json.loads(corr["after_payload"])
         except (TypeError, ValueError) as exc:
-            raise PositionValidationError("已有 correction 数据损坏") from exc
-        if isinstance(after, dict):
-            for k, v in after.items():
-                current[k] = v
+            # prior correction 是持久化历史事实；损坏不能归因于当前客户端请求。
+            # 直接提升为数据完整性错误，由 HTTP 层脱敏为 500。
+            raise account_event_store.AccountEventCorruptedError() from exc
+        if not isinstance(after, dict):
+            raise account_event_store.AccountEventCorruptedError()
+        for k, v in after.items():
+            current[k] = v
     return {k: current.get(k) for k in keys}
 
 
@@ -406,9 +409,17 @@ def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
             _require_int(value, "actual_quantity", min_value=1)
         elif key in ("actual_price", "fee", "other_cost"):
             _require_number(value, key)
+        elif key == "amount":
+            # cash 事件修正：复用与 create_cash_event 完全相同的归一化规则（DRY）
+            try:
+                account_event_store.normalize_cash_amount(value)
+            except ValueError as exc:
+                raise PositionValidationError(str(exc))
         # 其他键：是否合法取决于 target 类型，由事务内白名单校验决定
 
     db_path = resolve_db_path()
+    # 旧 account_events 表惰性迁移必须在开事务前完成（事务内嵌套 BEGIN 会失败，P0-S1B-B P1）
+    account_event_store.ensure_migrated(db_path)
     conn = trade_ledger_store.open_write_connection(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -450,6 +461,8 @@ def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
                 allowed = _CORRECTION_EVENT_KEYS  # shares / cost_basis
             elif target_type == _EVENT_ACCOUNT_OPENING:
                 allowed = frozenset({"opening_cash"})  # ledger_start_at 不可变（事实边界）
+            elif target_type in account_event_store.CASH_EVENT_TYPES:
+                allowed = frozenset({"amount"})  # cash 事件只允许修正 amount（方向由 event_type 决定）
             else:
                 raise PositionValidationError(f"不支持的修正目标事件类型: {target_type}")
             base = dict(event)
@@ -521,6 +534,8 @@ def void_trade_with_cascade(trade_id: str, reason: str) -> dict[str, Any]:
         raise PositionValidationError(f"reason 超过最大长度 {_MAX_REASON_LEN}")
 
     db_path = resolve_db_path()
+    # 旧 account_events 表惰性迁移必须在开事务前完成（事务内嵌套 BEGIN 会失败，P0-S1B-B P1）
+    account_event_store.ensure_migrated(db_path)
     conn = trade_ledger_store.open_write_connection(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -625,7 +640,10 @@ def build_effective_events(
     - 排除 voided（由调用方以 include_voided=False 传入）与 not_executed / 零数量交易；
     - 应用全部 active CORRECTION（voided correction 由调用方读取时排除）；
     - chained corrections 按 S1A 同一确定性顺序（created_at ASC）应用；
-    - ledger_start_ts 非 None 时对交易做边界校验（早于起点 → fail closed）。
+    - ledger_start_ts 非 None 时对交易做边界校验（早于起点 → fail closed）；
+    - 持久化 event_type 必须属于已知集合（ACCOUNT_OPENING / LEGACY_POSITION_OPENING /
+      CORRECTION / CASH_*）；未知类型（BOGUS 等）→ fail closed，不得静默忽略
+      （account_events 已移除 DB CHECK，读路径必须补回事实完整性边界）。
 
     供 derive_positions() 与 ledger_cash_candidate 共用同一 correction semantics（DRY），
     确保 Position effective facts 与 Cash effective facts 完全一致。
@@ -633,8 +651,15 @@ def build_effective_events(
     corrections = _load_corrections(events)
     events_by_key: dict[str, dict[str, Any]] = {}
     for ev in events:
-        if ev["event_type"] in (_EVENT_LEGACY_OPENING, _EVENT_ACCOUNT_OPENING):
+        etype = ev.get("event_type")
+        account_event_store.validate_event_type(etype)
+        if etype in (_EVENT_LEGACY_OPENING, _EVENT_ACCOUNT_OPENING):
             events_by_key[f"account_event:{ev['event_id']}"] = dict(ev)
+        elif etype in account_event_store.CASH_EVENT_TYPES:
+            # cash 事件纳入 effective map，使针对它的 active CORRECTION 能应用（P0-S1B-C）
+            account_event_store.validate_persisted_cash_event(ev)
+            events_by_key[f"account_event:{ev['event_id']}"] = dict(ev)
+        # CORRECTION 由 _load_corrections 处理
     for t in trades:
         if t["execution_status"] == "not_executed":
             continue
@@ -657,6 +682,8 @@ def build_effective_events(
         events_by_key[f"trade:{t['trade_id']}"] = dict(t)
 
     _apply_corrections(events_by_key, corrections)
+    # CASH_* effective facts + 针对 CASH_* 的 correction payload 完整性（P0-S1B-C 读路径 fail closed）
+    account_event_store.validate_effective_cash_events(events_by_key, corrections)
     return events_by_key
 
 

@@ -92,7 +92,7 @@ class TestAccountRealityApi:
         assert data["canonical"] is False
         assert data["bootstrap_status"] == "BOOTSTRAPPED"
         assert data["cash"]["reconciliation"] in ("MATCH", "MISMATCH", "UNKNOWN")
-        assert data["cash"]["coverage"] == "TRADES_ONLY"
+        assert data["cash"]["coverage"] == "TRADES_PLUS_MANUAL_CASH_EVENTS"
         assert data["pricing"]["status"] == "COMPLETE"
         assert data["settled_nav"] == 50000.0 + 2000.0
         assert data["nav_cash_source"] == "ACCOUNT_PROFILE"

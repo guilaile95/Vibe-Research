@@ -20,6 +20,7 @@ from typing import Any
 import account_event_store
 import account_profile
 import astock
+import cash_event_service
 import position_reality_service
 import trade_ledger_service
 import trade_ledger_store
@@ -31,6 +32,7 @@ _FACT_DERIVED = "DERIVED_FACT"
 _CASH_SOURCE_ACCOUNT_PROFILE = "ACCOUNT_PROFILE"
 _CASH_SOURCE_LEDGER = "LEDGER_DERIVED"
 _CASH_COVERAGE_TRADES_ONLY = "TRADES_ONLY"
+_CASH_COVERAGE_TRADES_PLUS_CASH_EVENTS = "TRADES_PLUS_MANUAL_CASH_EVENTS"
 
 _REASON_CASH_EVENTS_UNSUPPORTED = "CASH_EVENTS_UNSUPPORTED"
 _REASON_CASH_UNKNOWN = "CASH_UNKNOWN"
@@ -100,22 +102,23 @@ def _current_cash_fact() -> dict[str, Any]:
 
 
 def _ledger_cash_candidate(derived: dict[str, Any]) -> dict[str, Any]:
-    """opening_cash + Σ effective active executed trade net_cash_flow（TRADES_ONLY candidate）。
+    """opening_cash + Σ effective active executed trade net_cash_flow
+    + Σ active supported cash event delta（TRADES_PLUS_MANUAL_CASH_EVENTS candidate）。
 
-    仅当 bootstrap 完成且 opening_cash 已知才能计算；否则 UNKNOWN。
+    仅当 bootstrap 完成且 opening_cash 已知才能计算；否则 UNKNOWN（不反推）。
 
-    correction-aware：交易必须先应用 S1A 的 active CORRECTION（复用
-    position_reality_service.build_effective_events，与 derive_positions 同一
-    correction semantics —— DRY，不复制第二套 engine），再对 effective corrected
-    trade 调用 compute_fields() 计算 net_cash_flow。保证 Position effective facts
-    与 Cash effective facts 完全一致。
+    - trade 部分：复用 position_reality_service.build_effective_events（S1A 同一
+      correction semantics，DRY）→ effective corrected trade → compute_fields()。
+    - cash event 部分：复用 cash_event_service（CASH_DEPOSIT/WITHDRAWAL/DIVIDEND/FEE/TAX，
+      delta 由 event_type 决定）。
+    保证 Position effective facts 与 Cash effective facts 完全一致。
     """
     ledger_start = derived.get("ledger_start")
     if ledger_start is None:
         return {
             "value": None,
             "source": _CASH_SOURCE_LEDGER,
-            "coverage": _CASH_COVERAGE_TRADES_ONLY,
+            "coverage": _CASH_COVERAGE_TRADES_PLUS_CASH_EVENTS,
             "fact_type": _FACT_DERIVED,
             "status": "UNKNOWN",
             "reason_code": _REASON_NOT_BOOTSTRAPPED,
@@ -125,7 +128,7 @@ def _ledger_cash_candidate(derived: dict[str, Any]) -> dict[str, Any]:
         return {
             "value": None,
             "source": _CASH_SOURCE_LEDGER,
-            "coverage": _CASH_COVERAGE_TRADES_ONLY,
+            "coverage": _CASH_COVERAGE_TRADES_PLUS_CASH_EVENTS,
             "fact_type": _FACT_DERIVED,
             "status": "UNKNOWN",
             "reason_code": _REASON_OPENING_CASH_UNKNOWN,
@@ -153,10 +156,26 @@ def _ledger_cash_candidate(derived: dict[str, Any]) -> dict[str, Any]:
             continue
         computed = trade_ledger_service.compute_fields(t)
         cash = round(cash + float(computed["net_cash_flow"]), 2)
+    # manual cash events（active 仅）：消费"已应用 active CORRECTION 后的 effective
+    # cash facts"（P0-S1B-C）——复用 build_effective_events 同一 correction machinery
+    # （DRY），再经 validate_effective_cash_events 保证 persisted 完整性。
+    # 未知 event_type / 损坏 amount / 损坏 correction payload → AccountEventCorruptedError
+    # fail closed，不得静默忽略、不得 or 0.0 补零、不得回退 raw amount。
+    for key, ev in effective.items():
+        if not key.startswith("account_event:"):
+            continue  # trade 条目走上面 trade 循环；这里只处理 account events
+        if ev.get("event_type") in cash_event_service.CASH_EVENT_TYPES:
+            account_event_store.validate_persisted_cash_event(ev)
+            cash = round(
+                cash + cash_event_service.cash_delta_for(ev["event_type"], ev["amount"]),
+                2,
+            )
+        else:
+            account_event_store.validate_event_type(ev.get("event_type"))
     return {
         "value": cash,
         "source": _CASH_SOURCE_LEDGER,
-        "coverage": _CASH_COVERAGE_TRADES_ONLY,
+        "coverage": _CASH_COVERAGE_TRADES_PLUS_CASH_EVENTS,
         "fact_type": _FACT_DERIVED,
         "status": "AVAILABLE",
     }
@@ -312,7 +331,7 @@ def get_account_reality() -> dict[str, Any]:
 
     settled_nav, nav_skip = _settled_nav(derived, current_fact, pricing)
 
-    reason_codes: list[str] = [_REASON_CASH_EVENTS_UNSUPPORTED]  # 当前事实边界，不是错误
+    reason_codes: list[str] = [_REASON_CASH_EVENTS_UNSUPPORTED]  # 事实边界：非交易现金事件（corporate action 等）仍不支持
     if nav_skip:
         reason_codes.append(nav_skip)
     if pricing["status"] == "PARTIAL":
@@ -355,7 +374,11 @@ def get_account_reality() -> dict[str, Any]:
             "current_fact": current_fact,
             "ledger_candidate": ledger_candidate,
             "reconciliation": cash_recon["status"],
-            "coverage": _CASH_COVERAGE_TRADES_ONLY,
+            "coverage": _CASH_COVERAGE_TRADES_PLUS_CASH_EVENTS,
+        },
+        "cash_event_support": {
+            "supported": sorted(cash_event_service.CASH_EVENT_TYPES),
+            "unsupported": ["CORPORATE_ACTION"],
         },
         "positions": pricing["positions"],
         "pricing": {
