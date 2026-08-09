@@ -654,7 +654,9 @@ def test_reads_do_not_touch_existing_database(db_path):
 # ---------------------------------------------------------------------------
 
 
-def test_preexisting_zero_byte_file_fails_closed(db_path):
+def test_preexisting_zero_byte_file_fails_closed(db_path, monkeypatch):
+    # 有界等待缩短（仅测试）：契约不变——仍 CorruptedError、文件不被初始化。
+    monkeypatch.setattr(store, "_OPEN_WAIT_TOTAL_SECONDS", 0.3)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     db_path.write_bytes(b"")
     before = db_fingerprint(db_path)
@@ -667,7 +669,9 @@ def test_preexisting_zero_byte_file_fails_closed(db_path):
     assert db_fingerprint(db_path) == before
 
 
-def test_preexisting_empty_sqlite_fails_closed(db_path):
+def test_preexisting_empty_sqlite_fails_closed(db_path, monkeypatch):
+    # 有界等待缩短（仅测试）：契约不变——仍 CorruptedError、文件不被初始化。
+    monkeypatch.setattr(store, "_OPEN_WAIT_TOTAL_SECONDS", 0.3)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.close()
@@ -1143,47 +1147,27 @@ def test_initialization_commit_failure_rolls_back(db_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # 并发测试 (P2)
 # ---------------------------------------------------------------------------
-
-
-def _concurrent_create_worker(db_path_str: str, rule_id: str, result_queue):
-    """Worker for concurrent tests - runs in a separate thread."""
-    import os
-    os.environ["VIBE_RESEARCH_ALERT_RULE_DB"] = db_path_str
-    try:
-        importlib.reload(store)
-        r = ar.AlertRule(
-            rule_id=rule_id,
-            code="000001",
-            enabled=True,
-            condition=ar.TechnicalTriggerCondition(
-                kind="technical_trigger", trigger="sma_golden_cross"
-            ),
-        )
-        store.create_alert_rule(r, now=T0)
-        result_queue.append("ok")
-    except store.AlertRuleAlreadyExistsError:
-        result_queue.append("duplicate")
-    except store.AlertRuleStoreError as exc:
-        result_queue.append(f"error:{type(exc).__name__}")
-    except Exception as exc:
-        result_queue.append(f"unexpected:{type(exc).__name__}:{exc}")
+# Harness 契约（P0-F1）：DB path 由主线程一次性固定；worker 线程只调用
+# production API（create_alert_rule），不在线程内修改 process-global
+# os.environ、不 importlib.reload(store) —— 消除模块/环境全局态竞态。
 
 
 def test_concurrent_first_initialization(db_path):
-    """Two threads race to initialize the same new database."""
+    """Two threads race to initialize the same new database.
+
+    env 由主线程每轮固定；workers 只调 production API（真实 O_EXCL/初始化竞态）。
+    """
     rounds = 5
     for round_idx in range(rounds):
         round_path = db_path.parent / f"round_{round_idx}" / "alert_rules.sqlite3"
         round_path.parent.mkdir(parents=True, exist_ok=True)
         db_str = str(round_path)
+        os.environ["VIBE_RESEARCH_ALERT_RULE_DB"] = db_str  # 主线程固定
 
         results: list[str] = []
         barrier = threading.Barrier(2, timeout=10)
 
-        def worker(path_str=db_str, results_list=results):
-            import os
-            os.environ["VIBE_RESEARCH_ALERT_RULE_DB"] = path_str
-            importlib.reload(store)
+        def worker(results_list=results):
             barrier.wait()
             try:
                 r = ar.AlertRule(
@@ -1212,8 +1196,7 @@ def test_concurrent_first_initialization(db_path):
 
         assert sorted(results) == ["duplicate", "ok"], f"Round {round_idx}: {results}"
 
-        # Verify database state
-        import os
+        # Verify database state（主线程，join 之后）
         os.environ["VIBE_RESEARCH_ALERT_RULE_DB"] = db_str
         importlib.reload(store)
         records = store.list_alert_rules()
@@ -1392,20 +1375,20 @@ def test_year_9999_no_lock_residue_after_failure(db_path):
 
 
 def test_concurrent_create_different_rule_ids(db_path):
-    """Two threads concurrently create different rule_ids on a fresh database."""
+    """Two threads concurrently create different rule_ids on a fresh database.
+
+    env 由主线程每轮固定；workers 只调 production API（真实 O_EXCL/初始化竞态）。
+    """
     rounds = 10
     for round_idx in range(rounds):
         round_path = db_path.parent / f"diff_{round_idx}" / "alert_rules.sqlite3"
         round_path.parent.mkdir(parents=True, exist_ok=True)
         db_str = str(round_path)
+        os.environ["VIBE_RESEARCH_ALERT_RULE_DB"] = db_str  # 主线程固定
         results: list[str] = []
         barrier = threading.Barrier(2, timeout=10)
 
-        def worker(rule_id, path_str=db_str, results_list=results):
-            import os
-
-            os.environ["VIBE_RESEARCH_ALERT_RULE_DB"] = path_str
-            importlib.reload(store)
+        def worker(rule_id, results_list=results):
             barrier.wait()
             try:
                 r = ar.AlertRule(
@@ -1418,8 +1401,12 @@ def test_concurrent_create_different_rule_ids(db_path):
                 )
                 store.create_alert_rule(r, now=T0)
                 results_list.append("ok")
+            except store.AlertRuleAlreadyExistsError:
+                results_list.append("duplicate")
+            except store.AlertRuleStoreError as exc:
+                results_list.append(f"error:{type(exc).__name__}")
             except Exception as exc:
-                results_list.append(f"error:{type(exc).__name__}:{exc}")
+                results_list.append(f"unexpected:{type(exc).__name__}:{exc}")
 
         t1 = threading.Thread(target=worker, args=("diff.a",))
         t2 = threading.Thread(target=worker, args=("diff.b",))
@@ -1429,8 +1416,7 @@ def test_concurrent_create_different_rule_ids(db_path):
         t2.join(timeout=15)
 
         assert results == ["ok", "ok"], f"Round {round_idx}: {results}"
-        import os
-
+        # Verify database state（主线程，join 之后）
         os.environ["VIBE_RESEARCH_ALERT_RULE_DB"] = db_str
         importlib.reload(store)
         records = store.list_alert_rules()
