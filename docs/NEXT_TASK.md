@@ -10,8 +10,9 @@
 
 **P0 Phase 2 — Formal Thesis v0.1 Non-Migration Implementation**
 
-状态：**AUTHORIZED**（用户 2026-08-10 明确授权；分支
-`feat/p0-formal-thesis-v0.1`，Draft PR，PR_READY=NO，MERGE=NO）
+状态：**NON-MIGRATION IMPLEMENTATION COMPLETE / AWAITING SEPARATE INTEGRATION DECISION**
+（用户 2026-08-10 明确授权；分支 `feat/p0-formal-thesis-v0.1`，Draft PR，
+PR_READY=NO，MERGE=NO）
 
 授权切片：
 
@@ -69,7 +70,8 @@ P0 的目标不是“盘中必须做交易”，而是：
   PR #66（Campaign Core + Lifecycle + Thesis Binding）、PR #65（Account Reality &
   Settled NAV candidate）、PR #67（Manual Cash Events + Correction + Effective
   Cash Facts）、PR #70（Foundation Router Wiring）已全部合并；现场核验稳定 Head：
-  `306b7eea779b54fb3ef6880f424025f52735c07d`（Merge PR #70）。
+  `1be2ecba505a8108740c311c103a2c72d3bcd444`（P0 Foundation Integration
+  最终稳定 Head）。
 - PR #47 已合并：Merge `5d21122c7253186cd80e90722693234eba9fdfab`；
   代码存在不等于 Tushare Token/权限/live 可用性已证明。
 - PR #56 已合并：Frontend P1 research workspace / AI copilot。
@@ -81,8 +83,9 @@ P0 的目标不是“盘中必须做交易”，而是：
 
 ## 后续候选（均未授权）
 
-- **P0 Phase 2 — Formal Thesis Contract**：`REQUIRES_USER_AUTHORIZATION`
-  （见上文；Formal Thesis implementation 明确 NOT_AUTHORIZED）。
+- **P0-S2D-M Explicit Migration / Phase 2 integration decision**：
+  `REQUIRES_USER_AUTHORIZATION`（A/B/C/D/E 非迁移实现已完成；migration、真实用户
+  DB 操作、Ready 与 Merge 仍明确 NOT_AUTHORIZED）。
 - 对抗性审查发现的安全/可靠性/Foundation 项：CLI 权限边界、local API trust、
   alert-rule concurrency test harness、文档漂移、SSRF hardening 等；这些属于
   Foundation/Hardening lane，不自动覆盖产品优先级，也未授权实施。
