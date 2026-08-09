@@ -1,8 +1,9 @@
 """Formal Current Thesis Pure Projection Core v0.1 专项测试。
 
 覆盖工作单 A~T 全部用例 + 输入不可变性 + 纯模块约束（零 filesystem side
-effect、不 import store / FastAPI / AI 模块）。全部为纯函数调用，不联网、
-不落库、不写用户数据。
+effect、不 import store / FastAPI / AI 模块）+ R1 deep-output-isolation
+（输出中所有 mutable nested objects 与输入解除引用共享）。全部为纯函数调用，
+不联网、不落库、不写用户数据。
 """
 from __future__ import annotations
 
@@ -14,8 +15,8 @@ import sys
 
 import pytest
 
-import formal_thesis_projection as ftp
-from formal_thesis_projection import (
+import formal_thesis_projection_core as ftp
+from formal_thesis_projection_core import (
     ProjectionIntegrityError,
     ProjectionStrategyConflictError,
     project_current_thesis,
@@ -400,6 +401,61 @@ def test_output_does_not_alias_input():
 
 
 # ---------------------------------------------------------------------------
+# R1 Deep Output Isolation：输出中所有 mutable nested objects 与输入解除引用共享
+# ---------------------------------------------------------------------------
+def test_r1_mutate_original_snapshot_does_not_touch_input():
+    snapshot = {"title": "frozen original snapshot", "claims": ["claim-1"]}
+    inputs = _inputs(frozen_original=_frozen_original(snapshot=snapshot))
+    result = project_current_thesis(**inputs)
+    result["original"]["snapshot"]["title"] = "mutated"
+    result["original"]["snapshot"]["claims"].append("hacked")
+    assert inputs["frozen_original"]["snapshot"]["title"] == "frozen original snapshot"
+    assert inputs["frozen_original"]["snapshot"]["claims"] == ["claim-1"]
+
+
+def test_r1_mutate_expected_horizon_does_not_touch_input():
+    inputs = _inputs()
+    result = project_current_thesis(**inputs)
+    result["expected_horizon"]["min"] = 999
+    result["expected_horizon"]["anchor"] = "HACKED"
+    assert inputs["thesis"]["expected_horizon"]["min"] == 5
+    assert inputs["thesis"]["expected_horizon"]["anchor"] == "FREEZE_AT"
+
+
+def test_r1_mutate_deltas_evidence_snapshots_does_not_touch_input():
+    inputs = _inputs(deltas=[_delta(1, "STRENGTHENED")])
+    result = project_current_thesis(**inputs)
+    result["deltas"][0]["evidence_snapshots"][0]["evidence_id"] = "changed"
+    assert inputs["deltas"][0]["evidence_snapshots"][0]["evidence_id"] == "ev-001"
+
+
+def test_r1_latest_delta_is_independent_of_input_and_deltas_record():
+    """latest_delta 是独立拷贝：修改它既不影响输入，也不影响 result['deltas'] 中另一份记录。"""
+    inputs = _inputs(
+        deltas=[_delta(1, "STRENGTHENED"), _delta(2, "WEAKENED")],
+    )
+    result = project_current_thesis(**inputs)
+    latest = result["latest_delta"]
+    record = result["deltas"][1]
+    latest["evidence_snapshots"][0]["evidence_id"] = "changed-latest"
+    assert inputs["deltas"][1]["evidence_snapshots"][0]["evidence_id"] == "ev-002"
+    assert record["evidence_snapshots"][0]["evidence_id"] == "ev-002"
+
+
+def test_r1_whole_output_mutation_leaves_inputs_unchanged():
+    inputs = _inputs(
+        deltas=[_delta(1, "STRENGTHENED"), _delta(2, "UNKNOWN")],
+    )
+    before = copy.deepcopy(inputs)
+    result = project_current_thesis(**inputs)
+    result["original"]["snapshot"]["title"] = "mutated"
+    result["expected_horizon"]["min"] = 999
+    result["latest_delta"]["evidence_snapshots"][0]["evidence_id"] = "changed"
+    result["deltas"][0]["evidence_snapshots"][0]["evidence_id"] = "changed"
+    assert inputs == before
+
+
+# ---------------------------------------------------------------------------
 # 纯模块约束：零 filesystem side effect + 不依赖 store/FastAPI/AI
 # ---------------------------------------------------------------------------
 def test_module_imports_no_store_or_ai_modules():
@@ -428,7 +484,7 @@ def test_module_import_zero_filesystem_side_effects():
         "sys.path.insert(0, r'%s')\n"
         "watch = r'%s'\n"
         "before = set(os.listdir(watch))\n"
-        "import formal_thesis_projection\n"
+        "import formal_thesis_projection_core\n"
         "after = set(os.listdir(watch))\n"
         "created = after - before\n"
         "assert not created, 'import created files: %%s' %% created\n"

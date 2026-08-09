@@ -40,6 +40,8 @@ Projection 规则（v0.1，全部 fail closed）：
 
 from __future__ import annotations
 
+import copy
+
 SCHEMA_VERSION = "formal_current_thesis.projection.v0.1"
 
 # ---- R5 冻结枚举 ----
@@ -86,14 +88,18 @@ def _is_frozen(formal_state) -> bool:
 
 
 def _delta_record(delta: dict) -> dict:
-    """delta → 输出记录（新 dict，不 alias 输入对象；audit 字段按原样透传）。"""
+    """delta → 输出记录（新 dict；所有 mutable payload 与输入解除引用共享）。
+
+    ``evidence_snapshots`` 是 list[dict]，必须 deep-copy：既不能 alias 输入 delta，
+    也不能让 latest_delta 与 ``deltas[]`` 中的另一份记录共享同一嵌套对象。
+    """
     return {
         "delta_id": delta.get("delta_id"),
         "delta_sequence": delta["delta_sequence"],
         "delta_state": delta["delta_state"],
         "reason": delta.get("reason"),
         "confirmed_at": delta.get("confirmed_at"),
-        "evidence_snapshots": delta.get("evidence_snapshots"),
+        "evidence_snapshots": copy.deepcopy(delta.get("evidence_snapshots")),
     }
 
 
@@ -231,7 +237,7 @@ def project_current_thesis(
         "formal_status": "READY",
         "original": {
             "revision": frozen_revision,
-            "snapshot": frozen_original.get("snapshot"),
+            "snapshot": copy.deepcopy(frozen_original.get("snapshot")),
         },
         "binding_audit": {
             "thesis_revision_at_bind": binding.get("thesis_revision_at_bind"),
@@ -239,7 +245,7 @@ def project_current_thesis(
             "bound_at": binding.get("bound_at"),
         },
         "strategy": thesis_strategy,
-        "expected_horizon": thesis.get("expected_horizon"),
+        "expected_horizon": copy.deepcopy(thesis.get("expected_horizon")),
         "effective_state": effective_state,
         "latest_delta": latest_delta,
         "terminal": effective_state in TERMINAL_DELTA_STATES,
