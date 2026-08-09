@@ -687,6 +687,11 @@ def _get_thesis_aggregate(conn, thesis_id: str) -> dict:
     if thesis_row is None:
         raise ThesisNotFoundError(f"投资逻辑 {thesis_id} 不存在")
 
+    # P0-PH2 S2D-A：read path fail-closed —— 主行五态 + Formal 链 + delta 链校验
+    store.validate_persisted_thesis_main(thesis_row)
+    store.validate_persisted_thesis_chain(conn, thesis_id, thesis_row)
+    store.validate_persisted_delta_chain(conn, thesis_id)
+
     thesis_dict = store._thesis_row_to_dict(thesis_row)
 
     if thesis_dict["status"] == "archived":
