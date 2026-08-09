@@ -78,6 +78,14 @@ class ThesisUpdateIn(BaseModel):
     invalidation_conditions: list[str]
     expected_revision: StrictPositiveInt
     change_summary: str | None = None
+    free_notes: str | None = None
+    strategy: str | None = None
+    expected_horizon: dict | None = None
+
+
+class FormalRevisionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: StrictPositiveInt
 
 
 class LinkEvidenceIn(BaseModel):
@@ -109,6 +117,10 @@ def _raise_service_error(e: Exception):
         raise HTTPException(status_code=404, detail=str(e))
     if isinstance(e, svc.ArchivedThesisError):
         raise HTTPException(status_code=409, detail="已归档的投资逻辑不可修改")
+    if isinstance(e, svc.ContentLockedError):
+        raise HTTPException(status_code=409, detail="已确认的 Formal Thesis 内容不可修改")
+    if isinstance(e, svc.FormalLifecycleConflictError):
+        raise HTTPException(status_code=409, detail=str(e))
     if isinstance(e, svc.RevisionConflictError):
         # 409 响应：detail + current_revision 顶层字段（非标准 HTTPException.detail）
         raise RevisionConflictHTTPException(
@@ -252,8 +264,46 @@ def get_thesis(thesis_id: str):
 def update_thesis(thesis_id: str, body: ThesisUpdateIn):
     db = _resolve_db()
     try:
-        result = svc.update_thesis(db, thesis_id, body.model_dump(), body.expected_revision)
+        result = svc.update_thesis(
+            db, thesis_id, body.model_dump(exclude_unset=True), body.expected_revision
+        )
         return {"data": result}
+    except Exception as e:
+        _raise_service_error(e)
+
+
+@router.post("/thesis/{thesis_id}/begin-formalization")
+def begin_formalization(thesis_id: str):
+    db = _resolve_db()
+    try:
+        return {"data": svc.begin_formalization(db, thesis_id)}
+    except Exception as e:
+        _raise_service_error(e)
+
+
+@router.post("/thesis/{thesis_id}/confirm")
+def confirm_formalization(thesis_id: str):
+    db = _resolve_db()
+    try:
+        return {"data": svc.confirm_formalization(db, thesis_id)}
+    except Exception as e:
+        _raise_service_error(e)
+
+
+@router.post("/thesis/{thesis_id}/freeze")
+def freeze_formalization(thesis_id: str, body: FormalRevisionIn):
+    db = _resolve_db()
+    try:
+        return {"data": svc.freeze_formalization(db, thesis_id, body.expected_revision)}
+    except Exception as e:
+        _raise_service_error(e)
+
+
+@router.post("/thesis/{thesis_id}/archive")
+def archive_formalization(thesis_id: str, body: FormalRevisionIn):
+    db = _resolve_db()
+    try:
+        return {"data": svc.archive_formalization(db, thesis_id, body.expected_revision)}
     except Exception as e:
         _raise_service_error(e)
 

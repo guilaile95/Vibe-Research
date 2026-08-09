@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 import re
 from datetime import datetime, timezone
@@ -52,6 +53,18 @@ class ArchivedThesisError(RuntimeError):
 
     def __init__(self):
         super().__init__("已归档的投资逻辑不可修改")
+
+
+class FormalLifecycleConflictError(RuntimeError):
+    """Formal thesis state does not permit the requested transition/mutation."""
+
+
+class ContentLockedError(FormalLifecycleConflictError):
+    """Confirmed/frozen formal content is immutable."""
+
+
+class EvidenceLedgerCorruptedError(store.EvidenceLedgerCorruptedError):
+    """Compatibility alias for callers/tests that import the service error."""
 
 
 class SubjectMismatchError(ValueError):
@@ -323,14 +336,15 @@ def _generate_revision(conn, thesis_id: str, change_summary: str) -> int:
     # 重新读取已更新的 thesis_row 组装 snapshot
     thesis_row = store._get_thesis_row(conn, thesis_id)
     snapshot = _assemble_snapshot(conn, thesis_row)
-    store._insert_revision(conn, {
-        "id": store.new_id(),
-        "thesis_id": thesis_id,
-        "revision_number": new_rev,
-        "snapshot": snapshot,
-        "change_summary": change_summary,
-        "created_at": _utc_now_iso(),
-    })
+    conn.execute(
+        """
+        INSERT INTO thesis_revisions
+          (id, thesis_id, revision_number, snapshot, change_summary, created_at, revision_kind)
+        VALUES (?, ?, ?, ?, ?, ?, 'CONTENT')
+        """,
+        (store.new_id(), thesis_id, new_rev, json.dumps(snapshot, ensure_ascii=False),
+         change_summary, _utc_now_iso()),
+    )
     return new_rev
 
 
@@ -429,6 +443,9 @@ def update_evidence(db_path, evidence_id: str, data: dict) -> dict:
         thesis_ids = store._list_non_archived_thesis_ids_for_evidence(conn, evidence_id)
         change_summary = f"更新关联证据：{evidence_id}"
         for tid in thesis_ids:
+            trow = store._get_thesis_row(conn, tid)
+            if trow is not None and trow["formal_state"] in ("confirmed", "frozen"):
+                continue
             _generate_revision(conn, tid, change_summary)
 
         # 返回更新后的证据
@@ -455,6 +472,9 @@ def soft_delete_evidence(db_path, evidence_id: str) -> dict:
         thesis_ids = store._list_non_archived_thesis_ids_for_evidence(conn, evidence_id)
         change_summary = f"删除关联证据：{evidence_id}"
         for tid in thesis_ids:
+            trow = store._get_thesis_row(conn, tid)
+            if trow is not None and trow["formal_state"] in ("confirmed", "frozen"):
+                continue
             _generate_revision(conn, tid, change_summary)
 
         row = store._get_evidence_row(conn, evidence_id)
@@ -534,6 +554,27 @@ def _validate_thesis_fields(data: dict, is_create: bool = True) -> None:
             raise ValidationError(f"status 必须是 {sorted(_VALID_STATUSES)} 之一")
 
 
+def _validate_formal_fields(strategy: str | None, horizon: object) -> dict | None:
+    if strategy is not None and strategy not in store.THESIS_STRATEGIES:
+        raise ValidationError(f"strategy 必须是 {list(store.THESIS_STRATEGIES)} 之一")
+    if horizon is None:
+        return None
+    if not isinstance(horizon, dict):
+        raise ValidationError("expected_horizon 必须是对象")
+    if horizon.get("unit") != "TRADING_DAY" or horizon.get("anchor") != "FREEZE_AT":
+        raise ValidationError("expected_horizon unit/anchor 无效")
+    low, high = horizon.get("min"), horizon.get("max")
+    if (isinstance(low, bool) or isinstance(high, bool)
+            or not isinstance(low, int) or not isinstance(high, int)
+            or low < 1 or high < low):
+        raise ValidationError("expected_horizon min/max 无效")
+    if strategy is not None:
+        lo, hi = store.STRATEGY_HORIZON_RANGES[strategy]
+        if low < lo or high > hi:
+            raise ValidationError(f"{strategy} 的 expected_horizon 必须在 {lo}-{hi} trading days 内")
+    return {"unit": "TRADING_DAY", "min": low, "max": high, "anchor": "FREEZE_AT"}
+
+
 def create_thesis(db_path, data: dict) -> dict:
     """创建投资逻辑，同事务生成 revision 1。"""
     stype, sid, market = normalize_subject(data.get("subject_type"), data.get("subject_id"))
@@ -592,17 +633,6 @@ def update_thesis(db_path, thesis_id: str, data: dict, expected_revision: int) -
     if status == "archived":
         raise ValidationError("归档请使用 DELETE /api/thesis/{id}?confirm=true")
 
-    update_data = {
-        "title": data["title"].strip(),
-        "summary": data["summary"].strip(),
-        "status": status,
-        "core_claims": data["core_claims"],
-        "catalysts": data["catalysts"],
-        "risks": data["risks"],
-        "invalidation_conditions": data["invalidation_conditions"],
-        "updated_at": now,
-    }
-
     def _do(conn):
         thesis_row = store._get_thesis_row(conn, thesis_id)
         if thesis_row is None:
@@ -610,6 +640,8 @@ def update_thesis(db_path, thesis_id: str, data: dict, expected_revision: int) -
 
         if thesis_row["status"] == "archived":
             raise ArchivedThesisError()
+        if thesis_row["formal_state"] in ("confirmed", "frozen"):
+            raise ContentLockedError()
 
         current_rev = int(thesis_row["current_revision"])
         if expected_revision != current_rev:
@@ -618,9 +650,241 @@ def update_thesis(db_path, thesis_id: str, data: dict, expected_revision: int) -
                 current_revision=current_rev,
             )
 
+        # Legacy and draft content share the stable main-row primitive.  Formal
+        # fields are updated in the same transaction and never via a legacy
+        # caller's implicit defaults.
+        current = store._thesis_row_to_dict(thesis_row)
+        update_data = {
+            "title": data.get("title", current["title"]).strip(),
+            "summary": data.get("summary", current["summary"]).strip(),
+            "status": status,
+            "core_claims": data.get("core_claims", current["core_claims"]),
+            "catalysts": data.get("catalysts", current["catalysts"]),
+            "risks": data.get("risks", current["risks"]),
+            "invalidation_conditions": data.get("invalidation_conditions", current["invalidation_conditions"]),
+            "updated_at": now,
+        }
         store._update_thesis_main(conn, thesis_id, update_data)
+        if thesis_row["formal_state"] == "draft":
+            strategy = data.get("strategy", current["strategy"])
+            horizon = data.get("expected_horizon", current["expected_horizon"])
+            horizon = _validate_formal_fields(strategy, horizon)
+            free_notes = data.get("free_notes", current["free_notes"])
+            conn.execute(
+                """UPDATE investment_theses SET strategy=?, expected_horizon=?, free_notes=? WHERE id=?""",
+                (strategy, json.dumps(horizon, ensure_ascii=False) if horizon is not None else None,
+                 free_notes, thesis_id),
+            )
         _generate_revision(conn, thesis_id, change_summary)
         return _get_thesis_aggregate(conn, thesis_id)
+
+    return store.write_transaction(db_path, _do)
+
+
+def begin_formalization(db_path, thesis_id: str) -> dict:
+    """LEGACY -> DRAFT marker, deliberately without a revision bump."""
+    now = _utc_now_iso()
+
+    def _do(conn):
+        row = store._get_thesis_row(conn, thesis_id)
+        if row is None:
+            raise ThesisNotFoundError(f"投资逻辑 {thesis_id} 不存在")
+        if row["status"] == "archived":
+            raise ArchivedThesisError()
+        if row["formal_state"] is not None:
+            raise FormalLifecycleConflictError("只能从 legacy 投资逻辑开始 formalization")
+        conn.execute(
+            "UPDATE investment_theses SET formal_state='draft', formalization_started_at=?, updated_at=? WHERE id=?",
+            (now, now, thesis_id),
+        )
+        return _get_thesis_aggregate(conn, thesis_id)
+
+    return store.write_transaction(db_path, _do)
+
+
+def confirm_formalization(db_path, thesis_id: str) -> dict:
+    """DRAFT -> CONFIRMED hard-gated transition, without a revision bump."""
+    now = _utc_now_iso()
+
+    def _do(conn):
+        row = store._get_thesis_row(conn, thesis_id)
+        if row is None:
+            raise ThesisNotFoundError(f"投资逻辑 {thesis_id} 不存在")
+        if row["formal_state"] != "draft":
+            raise FormalLifecycleConflictError("只有 draft thesis 才能 confirm")
+        if row["status"] != "active":
+            raise ValidationError("confirm 要求 status=active")
+        claims = json.loads(row["core_claims"])
+        if not 3 <= len(claims) <= 5:
+            raise ValidationError("core_claims 数量必须在 3-5 之间")
+        horizon = json.loads(row["expected_horizon"]) if row["expected_horizon"] else None
+        _validate_formal_fields(row["strategy"], horizon)
+        if row["strategy"] is None or horizon is None:
+            raise ValidationError("confirm 要求 strategy 和 expected_horizon")
+        conn.execute(
+            "UPDATE investment_theses SET formal_state='confirmed', confirmed_at=?, updated_at=? WHERE id=?",
+            (now, now, thesis_id),
+        )
+        return _get_thesis_aggregate(conn, thesis_id)
+
+    return store.write_transaction(db_path, _do)
+
+
+_FORMAL_CONTENT_KEYS = (
+    "title", "summary", "core_claims", "catalysts", "risks",
+    "invalidation_conditions", "free_notes", "strategy", "expected_horizon",
+)
+_FORMAL_LIFECYCLE_KEYS = {
+    "status", "current_revision", "updated_at", "archived_at",
+    "formal_state", "frozen_at", "frozen_revision", "confirmed_at",
+}
+
+
+def _extract_snapshot_content(snapshot: dict) -> dict:
+    """Accept historical aggregate (nested thesis) and vNext flat snapshots."""
+    nested = snapshot.get("thesis")
+    return nested if isinstance(nested, dict) else snapshot
+
+
+def _content_matches_row(content: dict, row) -> bool:
+    live = store._thesis_row_to_dict(row)
+    for key in _FORMAL_CONTENT_KEYS:
+        if json.dumps(content.get(key), sort_keys=True, ensure_ascii=False) != json.dumps(
+            live.get(key), sort_keys=True, ensure_ascii=False
+        ):
+            return False
+    return True
+
+
+def _build_formal_snapshot(raw: dict, *, row, state: str, now: str,
+                           revision: int, archived_at: str | None = None) -> dict:
+    """Deep-copy the confirmed revision and add flat vNext metadata.
+
+    Keeping the original aggregate under ``thesis`` preserves the existing API
+    shape; flat fields are canonical for the persisted Formal validators.
+    """
+    snap = copy.deepcopy(raw)
+    content = copy.deepcopy(_extract_snapshot_content(raw))
+    # The flat representation is intentionally authoritative for vNext reads.
+    for key in _FORMAL_CONTENT_KEYS:
+        snap[key] = copy.deepcopy(content.get(key))
+    if isinstance(snap.get("thesis"), dict):
+        snap["thesis"].update({
+            "formal_state": state,
+            "formalization_started_at": row["formalization_started_at"],
+            "confirmed_at": row["confirmed_at"],
+            "frozen_at": now if state == "frozen" else row["frozen_at"],
+            "frozen_revision": revision if state == "frozen" else row["frozen_revision"],
+            "status": "archived" if archived_at else row["status"],
+            "current_revision": revision,
+            "updated_at": now,
+            "archived_at": archived_at,
+        })
+    snap.update({
+        "formal_state": state,
+        "formalization_started_at": row["formalization_started_at"],
+        "confirmed_at": row["confirmed_at"],
+        "frozen_at": now if state == "frozen" else row["frozen_at"],
+        "frozen_revision": revision if state == "frozen" else row["frozen_revision"],
+        "status": "archived" if archived_at else row["status"],
+        "current_revision": revision,
+        "updated_at": now,
+        "archived_at": archived_at,
+    })
+    return snap
+
+
+def freeze_formalization(db_path, thesis_id: str, expected_revision: int) -> dict:
+    """CONFIRMED -> FROZEN with strict CAS and fail-closed content drift check."""
+    expected_revision = _validate_expected_revision(expected_revision)
+    now = _utc_now_iso()
+
+    def _do(conn):
+        row = store._get_thesis_row(conn, thesis_id)
+        if row is None:
+            raise ThesisNotFoundError(f"投资逻辑 {thesis_id} 不存在")
+        if row["formal_state"] != "confirmed" or row["status"] != "active":
+            raise FormalLifecycleConflictError("只有 active confirmed thesis 才能 freeze")
+        current = int(row["current_revision"])
+        if current != expected_revision:
+            raise RevisionConflictError("投资逻辑已发生变化，请重新加载后重试", current_revision=current)
+        rev = store._get_revision_row(conn, thesis_id, expected_revision)
+        if rev is None:
+            raise store.EvidenceLedgerCorruptedError()
+        try:
+            raw = json.loads(rev["snapshot"])
+        except (TypeError, ValueError) as exc:
+            raise store.EvidenceLedgerCorruptedError() from exc
+        if not isinstance(raw, dict):
+            raise store.EvidenceLedgerCorruptedError()
+        content = _extract_snapshot_content(raw)
+        if not _content_matches_row(content, row):
+            raise store.EvidenceLedgerCorruptedError()
+        new_revision = expected_revision + 1
+        frozen_snapshot = _build_formal_snapshot(raw, row=row, state="frozen",
+                                                  now=now, revision=new_revision)
+        conn.execute(
+            """UPDATE investment_theses SET formal_state='frozen', frozen_at=?, frozen_revision=?,
+               current_revision=?, updated_at=? WHERE id=?""",
+            (now, new_revision, new_revision, now, thesis_id),
+        )
+        conn.execute(
+            """INSERT INTO thesis_revisions
+               (id, thesis_id, revision_number, snapshot, change_summary, created_at, revision_kind)
+               VALUES (?, ?, ?, ?, ?, ?, 'FORMAL_FREEZE')""",
+            (store.new_id(), thesis_id, new_revision, json.dumps(frozen_snapshot, ensure_ascii=False),
+             "冻结 Formal Thesis", now),
+        )
+        return frozen_snapshot
+
+    return store.write_transaction(db_path, _do)
+
+
+def archive_formalization(db_path, thesis_id: str, expected_revision: int) -> dict:
+    """FROZEN ACTIVE -> FROZEN ARCHIVED, preserving frozen content/evidence."""
+    expected_revision = _validate_expected_revision(expected_revision)
+    now = _utc_now_iso()
+
+    def _do(conn):
+        row = store._get_thesis_row(conn, thesis_id)
+        if row is None:
+            raise ThesisNotFoundError(f"投资逻辑 {thesis_id} 不存在")
+        if row["formal_state"] != "frozen" or row["status"] != "active":
+            raise FormalLifecycleConflictError("只有 active frozen thesis 才能 archive")
+        frozen_revision = int(row["frozen_revision"])
+        if expected_revision != frozen_revision or int(row["current_revision"]) != expected_revision:
+            raise RevisionConflictError("投资逻辑已发生变化，请重新加载后重试",
+                                        current_revision=int(row["current_revision"]))
+        rev = store._get_revision_row(conn, thesis_id, frozen_revision)
+        if rev is None or rev["revision_kind"] != "FORMAL_FREEZE":
+            raise store.EvidenceLedgerCorruptedError()
+        try:
+            raw = json.loads(rev["snapshot"])
+        except (TypeError, ValueError) as exc:
+            raise store.EvidenceLedgerCorruptedError() from exc
+        if not isinstance(raw, dict):
+            raise store.EvidenceLedgerCorruptedError()
+        new_revision = frozen_revision + 1
+        # Archive is a lifecycle-only revision: preserve every frozen field
+        # (especially frozen_at/frozen_revision and evidence snapshot) and
+        # change only the explicitly permitted lifecycle markers.
+        archived_snapshot = copy.deepcopy(raw)
+        archived_snapshot["status"] = "archived"
+        archived_snapshot["current_revision"] = new_revision
+        archived_snapshot["updated_at"] = now
+        archived_snapshot["archived_at"] = now
+        conn.execute(
+            "UPDATE investment_theses SET status='archived', current_revision=?, updated_at=?, archived_at=? WHERE id=?",
+            (new_revision, now, now, thesis_id),
+        )
+        conn.execute(
+            """INSERT INTO thesis_revisions
+               (id, thesis_id, revision_number, snapshot, change_summary, created_at, revision_kind)
+               VALUES (?, ?, ?, ?, ?, ?, 'FORMAL_ARCHIVE')""",
+            (store.new_id(), thesis_id, new_revision, json.dumps(archived_snapshot, ensure_ascii=False),
+             "归档 Formal Thesis", now),
+        )
+        return archived_snapshot
 
     return store.write_transaction(db_path, _do)
 
@@ -640,6 +904,10 @@ def archive_thesis(db_path, thesis_id: str, expected_revision: int, change_summa
         # 检查是否已归档
         if thesis_row["status"] == "archived":
             raise ArchivedThesisError()
+        if thesis_row["formal_state"] in ("confirmed", "frozen"):
+            raise ContentLockedError()
+        if thesis_row["formal_state"] in ("confirmed", "frozen"):
+            raise ContentLockedError()
 
         current_rev = int(thesis_row["current_revision"])
         if expected_revision != current_rev:
@@ -694,9 +962,13 @@ def _get_thesis_aggregate(conn, thesis_id: str) -> dict:
 
     thesis_dict = store._thesis_row_to_dict(thesis_row)
 
-    if thesis_dict["status"] == "archived":
-        # archived: 从 snapshot 读取
-        rev_row = store._get_revision_row(conn, thesis_id, thesis_dict["current_revision"])
+    if thesis_dict["status"] == "archived" or thesis_dict["formal_state"] == "frozen":
+        # Frozen (including archived) reads are authoritative snapshots; live
+        # evidence edits must never rewrite the confirmed/frozen original.
+        revision_number = thesis_dict["current_revision"]
+        if thesis_dict["formal_state"] == "frozen" and thesis_dict["status"] != "archived":
+            revision_number = thesis_dict["frozen_revision"]
+        rev_row = store._get_revision_row(conn, thesis_id, revision_number)
         if rev_row is None:
             raise store.EvidenceLedgerCorruptedError()
         snapshot = json.loads(rev_row["snapshot"])
@@ -764,6 +1036,10 @@ def link_evidence(db_path, thesis_id: str, evidence_id: str, stance: str,
             raise ThesisNotFoundError(f"投资逻辑 {thesis_id} 不存在")
         if thesis_row["status"] == "archived":
             raise ArchivedThesisError()
+        if thesis_row["formal_state"] in ("confirmed", "frozen"):
+            raise ContentLockedError()
+        if thesis_row["formal_state"] in ("confirmed", "frozen"):
+            raise ContentLockedError()
 
         current_rev = int(thesis_row["current_revision"])
         if expected_revision != current_rev:
