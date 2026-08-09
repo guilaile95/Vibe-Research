@@ -67,7 +67,7 @@ async def get_cash_event(event_id: str):
     return {"data": event}
 
 
-@router.post("/account/cash-events/{event_id}/corrections")
+@router.post("/account/cash-events/{event_id}/corrections", status_code=201)
 async def correct_cash_event(event_id: str, request: Request):
     """对 active CASH_* 事件追加 amount correction（复用现有 correction engine）。
 
@@ -90,4 +90,4 @@ async def correct_cash_event(event_id: str, request: Request):
         raise HTTPException(status_code=500, detail="内部错误")
     except Exception:
         raise HTTPException(status_code=500, detail="内部错误")
-    return {"data": result, "status_code": 201}
+    return {"data": result}

@@ -164,7 +164,7 @@ class TestCashCorrectionApi:
         ev = self._create_ev(client, "CASH_DEPOSIT", 100.0)
         resp = client.post(f"/api/account/cash-events/{ev['event_id']}/corrections",
                            json={"amount": 150.0, "reason": "manual correction"})
-        assert resp.status_code == 200
+        assert resp.status_code == 201
         data = resp.json()["data"]
         assert data["status"] == "CORRECTION_RECORDED"
         # append-only：raw cash event 不变；effective 由 correction 表达
