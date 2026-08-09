@@ -734,12 +734,6 @@ _FORMAL_CONTENT_KEYS = (
     "title", "summary", "core_claims", "catalysts", "risks",
     "invalidation_conditions", "free_notes", "strategy", "expected_horizon",
 )
-_FORMAL_LIFECYCLE_KEYS = {
-    "status", "current_revision", "updated_at", "archived_at",
-    "formal_state", "frozen_at", "frozen_revision", "confirmed_at",
-}
-
-
 def _extract_snapshot_content(snapshot: dict) -> dict:
     """Accept historical aggregate (nested thesis) and vNext flat snapshots."""
     nested = snapshot.get("thesis")
