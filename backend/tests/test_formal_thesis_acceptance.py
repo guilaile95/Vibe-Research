@@ -904,31 +904,14 @@ def _snapshot_sqlite_state(path: str) -> dict:
         conn.close()
 
 
-def _sqlite_master(path: str) -> list:
-    conn = sqlite3.connect(path)
-    try:
-        return conn.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall()
-    finally:
-        conn.close()
-
-
-def _schema_meta_rows(path: str) -> list:
-    conn = sqlite3.connect(path)
-    try:
-        return conn.execute("SELECT key, value FROM schema_meta ORDER BY key").fetchall()
-    finally:
-        conn.close()
-
-
 def test_i_legacy_v1_schema_open_does_not_migrate(tmp_path, monkeypatch):
-    """S2D-M 未授权：normal store open 遇到 legacy v1 schema 必须 fail closed 且零结构改动。
+    """S2D-M 未授权：normal store open 遇到 legacy v1 schema 必须 fail closed，
+    且 file hash / size / sqlite_master / schema_meta 四项完全不变。
 
-    两个层级的验证：
-    - 只读打开（svc.list_thesis → readonly 连接）：file hash / size / schema 完全不变；
-    - 写路径初始化（store.initialize_store）：会先执行 ``PRAGMA journal_mode=WAL``
-      （连接建立的文件系统副作用，改写 SQLite header，与 schema/数据无关），因此
-      结构断言以 sqlite_master + schema_meta 为准 —— 任何 DDL / 版本升级都会改变
-      这两者，必须完全不变。
+    不允许任何「WAL header mutation 可以接受」的豁免：open 在版本拒绝之前
+    不得对 legacy DB 产生任何持久化改动。若 production 当前仍导致 hash/size
+    改变，保持 failing regression（不 xfail / 不弱化 / 不修改 production），
+    报告 BLOCKING_PRODUCT_DEFECT = NORMAL_OPEN_MUTATES_LEGACY_DB_BEFORE_VERSION_REJECTION。
     """
     legacy_db = tmp_path / "legacy_v1.db"
     conn = sqlite3.connect(legacy_db)
@@ -952,28 +935,17 @@ def test_i_legacy_v1_schema_open_does_not_migrate(tmp_path, monkeypatch):
     conn.commit()
     conn.close()
 
-    structure_before = {
-        "sqlite_master": _sqlite_master(str(legacy_db)),
-        "schema_meta": _schema_meta_rows(str(legacy_db)),
-    }
-    read_before = _snapshot_sqlite_state(str(legacy_db))  # 含 hash/size
+    before = _snapshot_sqlite_state(str(legacy_db))  # hash / size / sqlite_master / schema_meta
 
     monkeypatch.setenv("VIBE_RESEARCH_EVIDENCE_THESIS_DB", str(legacy_db))
-    # 1) service 只读路径（readonly 连接，无任何写入副作用）：必须抛
-    #    SchemaVersionError，且 file hash / size / schema 完全不变。
+    # 1) svc readonly open → EvidenceLedgerSchemaVersionError，四项完全不变
     with pytest.raises(store.EvidenceLedgerSchemaVersionError):
         svc.list_thesis(legacy_db)
-    assert _snapshot_sqlite_state(str(legacy_db)) == read_before
-    # 2) store 写路径初始化：必须抛 SchemaVersionError，且零结构改动。
-    #    注意：连接建立时 ``PRAGMA journal_mode=WAL`` 会改写 SQLite header
-    #    （文件系统层副作用，与 schema/数据无关），因此此处以 sqlite_master +
-    #    schema_meta 结构为准 —— 任何 DDL / 版本升级都会改变这两者。
+    assert _snapshot_sqlite_state(str(legacy_db)) == before
+    # 2) store.initialize_store → EvidenceLedgerSchemaVersionError，四项也完全不变
     with pytest.raises(store.EvidenceLedgerSchemaVersionError):
         store.initialize_store(legacy_db)
-    assert structure_before == {
-        "sqlite_master": _sqlite_master(str(legacy_db)),
-        "schema_meta": _schema_meta_rows(str(legacy_db)),
-    }
+    assert _snapshot_sqlite_state(str(legacy_db)) == before
     # 3) API 层：500 sanitized（不泄漏路径/版本）
     resp = client.get("/api/thesis")
     assert resp.status_code == 500  # NORMAL_STORE_OPEN DOES_NOT_MIGRATE
