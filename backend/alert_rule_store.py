@@ -395,14 +395,14 @@ def _acquire_initialization_ownership(path: Path) -> bool:
 def _open_write_connection() -> sqlite3.Connection:
     """只有写操作才允许触发目录创建与 schema 初始化。
 
-    初始化资格只能通过 O_EXCL 原子文件创建获得，path.exists() 不构成权限。
-    - 调用开始时已存在：立即按已有数据库验证，空库/不完整库 fail-closed。
-    - 调用开始时不存在但 O_EXCL 失败：可能是合法并发初始化者，有界等待其完成；
-      等待者任何情况下都不得调用 _initialize。
-    - O_EXCL 成功：当前调用方持有初始化资格。
+    初始化资格只能通过 O_EXCL 原子文件创建获得。
+    - O_EXCL 成功：当前调用方持有初始化资格，空库由它负责初始化。
+    - O_EXCL 失败：文件已由其他调用方创建（可能是合法并发初始化者正在进行）；
+      空库一律有界等待其完成，任何情况下等待者都不得调用 _initialize，
+      等待到期仍为空才 fail-closed。
+    - 已存在完整 schema：立即校验并复用；空库/不完整库 fail-closed。
     """
     path = Path(alert_rule_db_path())
-    existed_at_start = path.exists()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -435,9 +435,8 @@ def _open_write_connection() -> sqlite3.Connection:
                 _initialize(conn)
                 conn.execute("COMMIT")
                 return conn
-            if existed_at_start:
-                raise AlertRuleStoreCorruptedError()
-            # 其他合法初始化者可能正在进行：有界等待，绝不初始化。
+            # 其他合法初始化者可能正在进行（文件刚由对方的 O_EXCL 创建、
+            # schema 尚未提交）：有界等待，绝不初始化，到期仍空则 fail-closed。
             if time.monotonic() >= deadline:
                 raise AlertRuleStoreCorruptedError()
             _safe_rollback(conn)
