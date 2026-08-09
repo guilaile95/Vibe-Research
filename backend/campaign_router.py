@@ -30,7 +30,10 @@ from campaign_service import (
     CampaignInputError,
     CampaignNotFoundError,
     CampaignServiceError,
+    CampaignThesisBindingConflictError,
     CampaignTransitionConflictError,
+    ThesisBindingNotFoundError,
+    ThesisNotFoundError,
 )
 
 router = APIRouter(prefix="/api", tags=["campaigns"])
@@ -38,8 +41,11 @@ router = APIRouter(prefix="/api", tags=["campaigns"])
 # 稳定脱敏错误文案（客户端唯一可见内容）
 _INVALID_INPUT_DETAIL = "Campaign 参数无效"
 _NOT_FOUND_DETAIL = "Campaign 不存在"
+_THESIS_NOT_FOUND_DETAIL = "Thesis 不存在"
+_BINDING_NOT_FOUND_DETAIL = "Thesis Binding 不存在"
 _CONFLICT_DETAIL = "Campaign 已存在"
 _TRANSITION_CONFLICT_DETAIL = "Campaign 状态冲突"
+_BINDING_CONFLICT_DETAIL = "Thesis Binding 冲突"
 _INTERNAL_ERROR_DETAIL = "Campaign 服务暂不可用"
 
 
@@ -65,6 +71,14 @@ class CampaignTransitionIn(BaseModel):
         "DRAFT", "RESEARCHING", "PRE-ENTRY", "ACTIVE",
         "REDUCING", "CLOSED", "REJECTED", "EXPIRED",
     ]
+
+
+class CampaignThesisBindingIn(BaseModel):
+    """绑定请求体：只允许 thesis_id；不允许携带 strategy（422）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    thesis_id: str
 
 
 @router.post("/campaigns", status_code=201)
@@ -164,3 +178,47 @@ def list_campaign_transitions(campaign_id: str) -> dict:
     except Exception:  # noqa: BLE001 — 未预期逃逸，安全兜底
         raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
     return {"data": records}
+
+
+@router.post("/campaigns/{campaign_id}/thesis-binding", status_code=201)
+def bind_campaign_thesis(campaign_id: str, body: CampaignThesisBindingIn) -> dict:
+    """建立 Campaign ↔ Existing Thesis 的不可变绑定（201）。
+
+    校验：Campaign 存在 / Thesis 存在 / subject_type=stock /
+    subject_id 与 security_code 完全一致 / revision 锚定 / 快照 strategy。
+    422 = 非法 body/ID；404 = Campaign/Thesis 不存在；409 = 绑定冲突。
+    """
+    try:
+        binding = campaign_service.bind_campaign_thesis(
+            campaign_id=campaign_id,
+            thesis_id=body.thesis_id,
+        )
+    except CampaignInputError:
+        raise HTTPException(422, _INVALID_INPUT_DETAIL) from None
+    except CampaignNotFoundError:
+        raise HTTPException(404, _NOT_FOUND_DETAIL) from None
+    except ThesisNotFoundError:
+        raise HTTPException(404, _THESIS_NOT_FOUND_DETAIL) from None
+    except CampaignThesisBindingConflictError:
+        raise HTTPException(409, _BINDING_CONFLICT_DETAIL) from None
+    except CampaignServiceError:
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    except Exception:  # noqa: BLE001 — 未预期逃逸，安全兜底
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    return {"data": binding}
+
+
+@router.get("/campaigns/{campaign_id}/thesis-binding")
+def get_campaign_thesis_binding(campaign_id: str) -> dict:
+    """读取 Campaign 的 thesis binding；未绑定 → 404。"""
+    try:
+        binding = campaign_service.get_campaign_thesis_binding(campaign_id)
+    except CampaignInputError:
+        raise HTTPException(422, _INVALID_INPUT_DETAIL) from None
+    except ThesisBindingNotFoundError:
+        raise HTTPException(404, _BINDING_NOT_FOUND_DETAIL) from None
+    except CampaignServiceError:
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    except Exception:  # noqa: BLE001 — 未预期逃逸，安全兜底
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    return {"data": binding}

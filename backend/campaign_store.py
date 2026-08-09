@@ -57,6 +57,8 @@ _TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 _CAMPAIGN_ID_RE = re.compile(r"^campaign_[0-9a-f]{32}$")
 # transition_id 由服务端生成：campaign_transition_ + 32 位小写 hex（uuid4）
 _TRANSITION_ID_RE = re.compile(r"^campaign_transition_[0-9a-f]{32}$")
+# thesis_id = evidence_thesis_store.new_id() = uuid4().hex（32 位小写 hex）
+_THESIS_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 # ---- P0-S2B 冻结的 Lifecycle v0.1 Transition Graph（不得扩大）----
 # DRAFT→(RESEARCHING,REJECTED,EXPIRED)；RESEARCHING→(PRE-ENTRY,REJECTED,EXPIRED)；
@@ -91,6 +93,15 @@ _TRANSITION_ROW_COLUMNS = (
 )
 _SELECT_TRANSITION_COLUMNS = ", ".join(_TRANSITION_ROW_COLUMNS)
 
+_BINDING_ROW_COLUMNS = (
+    "campaign_id",
+    "thesis_id",
+    "thesis_revision_at_bind",
+    "campaign_strategy_at_bind",
+    "bound_at",
+)
+_SELECT_BINDING_COLUMNS = ", ".join(_BINDING_ROW_COLUMNS)
+
 _REQUIRED_COLUMNS: dict[str, tuple[str, int, int]] = {
     "campaign_id": ("TEXT", 0, 1),
     "security_code": ("TEXT", 1, 0),
@@ -104,6 +115,13 @@ _REQUIRED_TRANSITION_COLUMNS: dict[str, tuple[str, int, int]] = {
     "from_status": ("TEXT", 1, 0),
     "to_status": ("TEXT", 1, 0),
     "transitioned_at": ("TEXT", 1, 0),
+}
+_REQUIRED_BINDING_COLUMNS: dict[str, tuple[str, int, int]] = {
+    "campaign_id": ("TEXT", 0, 1),
+    "thesis_id": ("TEXT", 1, 0),
+    "thesis_revision_at_bind": ("INTEGER", 1, 0),
+    "campaign_strategy_at_bind": ("TEXT", 1, 0),
+    "bound_at": ("TEXT", 1, 0),
 }
 _REQUIRED_INDEXES = {
     "idx_campaigns_security_code": "CREATE INDEX idx_campaigns_security_code ON campaigns (security_code)",
@@ -154,6 +172,15 @@ _DDL = (
     "ON campaign_transitions (campaign_id)",
     "CREATE INDEX IF NOT EXISTS idx_campaign_transitions_time "
     "ON campaign_transitions (transitioned_at)",
+    "CREATE TABLE IF NOT EXISTS campaign_thesis_bindings ("
+    "  campaign_id TEXT PRIMARY KEY,"
+    "  thesis_id TEXT NOT NULL UNIQUE,"
+    "  thesis_revision_at_bind INTEGER NOT NULL"
+    "    CHECK (thesis_revision_at_bind > 0),"
+    "  campaign_strategy_at_bind TEXT NOT NULL"
+    "    CHECK (campaign_strategy_at_bind IN ('SHORT', 'SWING', 'MEDIUM')),"
+    "  bound_at TEXT NOT NULL"
+    ")",
 )
 
 # 合法并发初始化等待参数：总量不超过 SQLite busy timeout 量级。
@@ -184,6 +211,10 @@ class CampaignAlreadyExistsError(CampaignStoreError):
 
 class CampaignTransitionConflictError(CampaignStoreError):
     """expected_status 与实际不符，或 from→to 不属于冻结 transition graph。"""
+
+
+class CampaignThesisBindingConflictError(CampaignStoreError):
+    """Campaign 已有 binding，或 thesis_id 已绑定其他 Campaign。"""
 
 
 class CampaignNotFoundError(CampaignStoreError, LookupError):
@@ -266,6 +297,21 @@ def _validated_transition_id(value: Any) -> str:
     return value.strip()
 
 
+def _validated_thesis_id(value: Any) -> str:
+    if not isinstance(value, str) or not _THESIS_ID_RE.fullmatch(value.strip()):
+        raise CampaignStoreInputError("thesis_id must be a 32-hex evidence thesis id")
+    return value.strip()
+
+
+def _validated_revision(value: Any) -> int:
+    """thesis revision anchor：strict positive integer（校验前不转换）。"""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise CampaignStoreInputError("thesis_revision_at_bind must be a positive integer")
+    if value <= 0:
+        raise CampaignStoreInputError("thesis_revision_at_bind must be > 0")
+    return value
+
+
 def _is_allowed_transition(from_status: str, to_status: str) -> bool:
     """冻结 graph 成员判定：未列出 / 反向 / same-state 一律 False。"""
     return to_status in _TRANSITION_GRAPH.get(from_status, ())
@@ -293,9 +339,11 @@ def _canonical_sql(sql: str | None) -> str:
     return " ".join((sql or "").split())
 
 
-def _validate_constraint_semantics(campaigns_sql: str, transitions_sql: str) -> None:
-    """在独立内存库中重放 campaigns + campaign_transitions DDL，
-    证明 CHECK 约束真实生效（枚举拒绝非法值），否则 fail-closed。"""
+def _validate_constraint_semantics(
+    campaigns_sql: str, transitions_sql: str, bindings_sql: str
+) -> None:
+    """在独立内存库中重放三个表 DDL，证明 CHECK/UNIQUE 约束真实生效，
+    否则 fail-closed。"""
     try:
         probe = sqlite3.connect(":memory:")
     except sqlite3.Error as exc:
@@ -303,6 +351,7 @@ def _validate_constraint_semantics(campaigns_sql: str, transitions_sql: str) -> 
     try:
         probe.execute(campaigns_sql)
         probe.execute(transitions_sql)
+        probe.execute(bindings_sql)
         probe.execute(
             "INSERT INTO campaigns (campaign_id, security_code, strategy, status, created_at) "
             "VALUES (?, '600519', 'SHORT', 'DRAFT', ?)",
@@ -316,6 +365,14 @@ def _validate_constraint_semantics(campaigns_sql: str, transitions_sql: str) -> 
             ("campaign_transition_00000000000000000000000000000000",
              "campaign_00000000000000000000000000000000",
              "2026-08-01T00:00:00.000000Z"),
+        )
+        probe.execute(
+            "INSERT INTO campaign_thesis_bindings "
+            "(campaign_id, thesis_id, thesis_revision_at_bind,"
+            " campaign_strategy_at_bind, bound_at) "
+            "VALUES (?, ?, 1, 'SWING', ?)",
+            ("campaign_00000000000000000000000000000000",
+             "0" * 32, "2026-08-01T00:00:00.000000Z"),
         )
         bad_rows = (
             ("campaign_00000000000000000000000000000001", "BOGUS", "DRAFT"),
@@ -348,6 +405,23 @@ def _validate_constraint_semantics(campaigns_sql: str, transitions_sql: str) -> 
             except sqlite3.IntegrityError:
                 continue
             raise CampaignStoreCorruptedError()
+        # bindings：revision <= 0 拒绝、strategy 非法拒绝、campaign_id 重复（PK）拒绝
+        for bad in (
+            ("campaign_00000000000000000000000000000001", "1" * 32, 0, "SWING"),
+            ("campaign_00000000000000000000000000000002", "2" * 32, 1, "BOGUS"),
+            ("campaign_00000000000000000000000000000000", "3" * 32, 1, "SWING"),
+        ):
+            try:
+                probe.execute(
+                    "INSERT INTO campaign_thesis_bindings "
+                    "(campaign_id, thesis_id, thesis_revision_at_bind,"
+                    " campaign_strategy_at_bind, bound_at) "
+                    "VALUES (?, ?, ?, ?, '2026-08-01T00:00:00.000000Z')",
+                    bad,
+                )
+            except sqlite3.IntegrityError:
+                continue
+            raise CampaignStoreCorruptedError()
     except sqlite3.Error as exc:
         raise CampaignStoreCorruptedError() from exc
     finally:
@@ -357,7 +431,12 @@ def _validate_constraint_semantics(campaigns_sql: str, transitions_sql: str) -> 
 def _assert_schema(conn: sqlite3.Connection) -> None:
     """校验已有 schema 结构完整性，任何异常都 fail-closed，不自动迁移或重建。"""
     tables = _existing_tables(conn)
-    if tables != {"schema_meta", "campaigns", "campaign_transitions"}:
+    if tables != {
+        "schema_meta",
+        "campaigns",
+        "campaign_transitions",
+        "campaign_thesis_bindings",
+    }:
         raise CampaignStoreCorruptedError()
     try:
         rows = conn.execute(
@@ -394,6 +473,21 @@ def _assert_schema(conn: sqlite3.Connection) -> None:
             if (actual_pk > 0) != (exp_pk > 0):
                 raise CampaignStoreCorruptedError()
 
+        bind_col_rows = conn.execute(
+            "PRAGMA table_info(campaign_thesis_bindings)"
+        ).fetchall()
+        bind_col_map: dict[str, tuple[str, int, int]] = {}
+        for crow in bind_col_rows:
+            bind_col_map[crow[1]] = (str(crow[2]).upper(), crow[3], crow[5])
+        for col_name, (exp_type, exp_notnull, exp_pk) in _REQUIRED_BINDING_COLUMNS.items():
+            if col_name not in bind_col_map:
+                raise CampaignStoreCorruptedError()
+            actual_type, actual_notnull, actual_pk = bind_col_map[col_name]
+            if actual_type != exp_type or actual_notnull != exp_notnull:
+                raise CampaignStoreCorruptedError()
+            if (actual_pk > 0) != (exp_pk > 0):
+                raise CampaignStoreCorruptedError()
+
         def _table_create_sql(name: str) -> str:
             row = conn.execute(
                 "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -404,7 +498,9 @@ def _assert_schema(conn: sqlite3.Connection) -> None:
             return row[0]
 
         _validate_constraint_semantics(
-            _table_create_sql("campaigns"), _table_create_sql("campaign_transitions")
+            _table_create_sql("campaigns"),
+            _table_create_sql("campaign_transitions"),
+            _table_create_sql("campaign_thesis_bindings"),
         )
 
         idx_rows = conn.execute(
@@ -430,6 +526,9 @@ def _assert_schema(conn: sqlite3.Connection) -> None:
         conn.execute(f"SELECT {_SELECT_COLUMNS} FROM campaigns LIMIT 0").fetchall()
         conn.execute(
             f"SELECT {_SELECT_TRANSITION_COLUMNS} FROM campaign_transitions LIMIT 0"
+        ).fetchall()
+        conn.execute(
+            f"SELECT {_SELECT_BINDING_COLUMNS} FROM campaign_thesis_bindings LIMIT 0"
         ).fetchall()
     except CampaignStoreCorruptedError:
         raise
@@ -506,7 +605,12 @@ def _open_write_connection() -> sqlite3.Connection:
             raise CampaignStoreCorruptedError() from exc
         try:
             tables = _existing_tables(conn)
-            if tables == {"schema_meta", "campaigns", "campaign_transitions"}:
+            if tables == {
+                "schema_meta",
+                "campaigns",
+                "campaign_transitions",
+                "campaign_thesis_bindings",
+            }:
                 _assert_schema(conn)
                 conn.execute("COMMIT")
                 return conn
@@ -587,6 +691,24 @@ def _transition_from_row(row: sqlite3.Row) -> dict:
             "from_status": _validated_status(row["from_status"]),
             "to_status": _validated_status(row["to_status"]),
             "transitioned_at": _validate_timestamp(row["transitioned_at"]),
+        }
+    except (CampaignStoreInputError, ValueError):
+        raise CampaignStoreCorruptedError() from None
+
+
+def _binding_from_row(row: sqlite3.Row) -> dict:
+    """binding 行 → 记录；行数据不可信 → fail-closed。"""
+    try:
+        return {
+            "campaign_id": _validated_campaign_id(row["campaign_id"]),
+            "thesis_id": _validated_thesis_id(row["thesis_id"]),
+            "thesis_revision_at_bind": _validated_revision(
+                row["thesis_revision_at_bind"]
+            ),
+            "campaign_strategy_at_bind": _validated_strategy(
+                row["campaign_strategy_at_bind"]
+            ),
+            "bound_at": _validate_timestamp(row["bound_at"]),
         }
     except (CampaignStoreInputError, ValueError):
         raise CampaignStoreCorruptedError() from None
@@ -808,3 +930,103 @@ def list_campaign_transitions(campaign_id: str) -> list[dict]:
     finally:
         conn.close()
     return [_transition_from_row(row) for row in rows]
+
+
+def bind_campaign_thesis(
+    *,
+    campaign_id: str,
+    thesis_id: str,
+    thesis_revision_at_bind: int,
+    campaign_strategy_at_bind: str,
+    bound_at: str,
+) -> dict:
+    """原子创建 Campaign ↔ Thesis 绑定（同一 SQLite 事务，BEGIN IMMEDIATE）。
+
+    顺序：
+    1. 读取 Campaign（不存在 → CampaignNotFoundError）；
+    2. Campaign 已有 binding → CampaignThesisBindingConflictError；
+    3. thesis_id 已绑定其他 Campaign → Conflict（ONE THESIS → ONE CAMPAIGN）；
+    4. INSERT campaign_thesis_bindings（campaign_id PK / thesis_id UNIQUE）；
+    5. COMMIT。
+
+    失败 → ROLLBACK：绝不留下半条 binding / 覆盖旧 binding / silent replace。
+
+    Evidence Thesis 的 existence / subject / revision 校验在 service 层
+    通过 canonical read API 完成（本库不建跨数据库 FK）。
+    """
+    cid = _validated_campaign_id(campaign_id)
+    tid = _validated_thesis_id(thesis_id)
+    revision = _validated_revision(thesis_revision_at_bind)
+    strategy = _validated_strategy(campaign_strategy_at_bind)
+    try:
+        bound = _validate_timestamp(bound_at)
+    except ValueError as exc:
+        raise CampaignStoreInputError(str(exc)) from exc
+
+    conn = _open_write_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT campaign_id FROM campaigns WHERE campaign_id = ?", (cid,)
+        ).fetchone()
+        if row is None:
+            raise CampaignNotFoundError(f"campaign {cid} not found")
+        already = conn.execute(
+            "SELECT campaign_id FROM campaign_thesis_bindings WHERE campaign_id = ?",
+            (cid,),
+        ).fetchone()
+        if already is not None:
+            raise CampaignThesisBindingConflictError(
+                f"campaign {cid} already has a thesis binding"
+            )
+        thesis_owner = conn.execute(
+            "SELECT campaign_id FROM campaign_thesis_bindings WHERE thesis_id = ?",
+            (tid,),
+        ).fetchone()
+        if thesis_owner is not None:
+            raise CampaignThesisBindingConflictError(
+                f"thesis {tid} already bound to campaign {thesis_owner['campaign_id']}"
+            )
+        try:
+            conn.execute(
+                "INSERT INTO campaign_thesis_bindings "
+                f"({_SELECT_BINDING_COLUMNS}) VALUES (?, ?, ?, ?, ?)",
+                (cid, tid, revision, strategy, bound),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise CampaignThesisBindingConflictError(
+                f"binding insert conflicted for campaign {cid}"
+            ) from exc
+        conn.execute("COMMIT")
+    except BaseException:
+        _safe_rollback(conn)
+        conn.close()
+        raise
+    conn.close()
+    return {
+        "campaign_id": cid,
+        "thesis_id": tid,
+        "thesis_revision_at_bind": revision,
+        "campaign_strategy_at_bind": strategy,
+        "bound_at": bound,
+    }
+
+
+def get_campaign_thesis_binding(campaign_id: str) -> dict | None:
+    """读取 Campaign 的 thesis binding；不存在 → None。"""
+    cid = _validated_campaign_id(campaign_id)
+    conn = _open_read_connection()
+    if conn is None:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT "
+            f"{_SELECT_BINDING_COLUMNS} FROM campaign_thesis_bindings "
+            "WHERE campaign_id = ?",
+            (cid,),
+        ).fetchone()
+    except sqlite3.Error as exc:
+        raise CampaignStoreCorruptedError() from exc
+    finally:
+        conn.close()
+    return _binding_from_row(row) if row is not None else None

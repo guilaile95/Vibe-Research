@@ -21,10 +21,14 @@ from alert_rules import CODE_PATTERN
 
 import campaign_store
 from campaign_store import STATUSES, STRATEGIES, CampaignAlreadyExistsError
+from campaign_store import _THESIS_ID_RE
 from campaign_store import CampaignNotFoundError as StoreCampaignNotFoundError
 from campaign_store import CampaignStoreCorruptedError, CampaignStoreError
 from campaign_store import CampaignStoreInputError
+from campaign_store import CampaignThesisBindingConflictError as StoreCampaignThesisBindingConflictError
 from campaign_store import CampaignTransitionConflictError as StoreCampaignTransitionConflictError
+
+import evidence_thesis_service  # READ ONLY：只调用 canonical read API，绝不写 thesis
 
 DRAFT_STATUS = "DRAFT"
 
@@ -41,12 +45,24 @@ class CampaignNotFoundError(CampaignServiceError, LookupError):
     """目标 Campaign 不存在。"""
 
 
+class ThesisNotFoundError(CampaignServiceError, LookupError):
+    """目标 Existing Thesis 不存在。"""
+
+
+class ThesisBindingNotFoundError(CampaignServiceError, LookupError):
+    """Campaign 尚无 thesis binding。"""
+
+
 class CampaignConflictError(CampaignServiceError):
     """campaign_id / transition_id 冲突或状态冲突（防御性或 CAS 失败）。"""
 
 
 class CampaignTransitionConflictError(CampaignServiceError):
     """expected_status 不符或 transition graph 不允许（→ 409）。"""
+
+
+class CampaignThesisBindingConflictError(CampaignServiceError):
+    """绑定冲突：已绑定 / thesis 已被其他 Campaign 绑定 / subject 不匹配（→ 409）。"""
 
 
 def _is_valid_security_code(value: Any) -> bool:
@@ -181,3 +197,103 @@ def list_campaign_transitions(campaign_id: str) -> list[dict]:
         raise CampaignInputError(str(exc)) from exc
     except CampaignStoreError as exc:
         raise CampaignServiceError("Campaign 存储不可用") from exc
+
+
+def _read_existing_thesis(thesis_id: str) -> dict:
+    """通过 Evidence Thesis canonical read API 只读获取 thesis aggregate。
+
+    - 不存在 → ThesisNotFoundError
+    - thesis 读取异常 → CampaignServiceError（500，脱敏）
+    绝不调用任何 thesis 写 API。
+    """
+    try:
+        db_path = evidence_thesis_service.resolve_db_path()
+        thesis = evidence_thesis_service.get_thesis(db_path, thesis_id)
+    except Exception as exc:  # noqa: BLE001 — 外部域读取失败，统一 500
+        raise CampaignServiceError("Campaign 存储不可用") from exc
+    if thesis is None:
+        raise ThesisNotFoundError(f"thesis {thesis_id} not found")
+    return thesis
+
+
+def bind_campaign_thesis(campaign_id: str, thesis_id: str) -> dict:
+    """建立 Campaign ↔ Existing Thesis 的不可变绑定。
+
+    校验链（全部显式，无模糊匹配/AI 推断）：
+    1. Campaign 存在（store）；
+    2. Thesis 存在（evidence canonical read API）；
+    3. thesis.subject_type == "stock"；
+    4. thesis.subject_id == campaign.security_code（完全一致）；
+    5. thesis.current_revision 为 strict positive integer → 永久锚定；
+    6. 快照 campaign.strategy → campaign_strategy_at_bind；
+    7. store 原子 INSERT（Campaign 已绑定 / thesis 已被绑定 → Conflict）。
+
+    Binding 一旦成功不可修改/替换/删除（本域不提供任何 update/delete 路径）。
+    """
+    if not isinstance(thesis_id, str) or not _THESIS_ID_RE.fullmatch(thesis_id.strip()):
+        raise CampaignInputError("thesis_id must be a 32-hex evidence thesis id")
+    tid = thesis_id.strip()
+
+    try:
+        campaign = campaign_store.get_campaign(campaign_id)
+    except CampaignStoreCorruptedError as exc:
+        raise CampaignServiceError("Campaign 存储不可用") from exc
+    except CampaignStoreInputError as exc:
+        raise CampaignInputError(str(exc)) from exc
+    except CampaignStoreError as exc:
+        raise CampaignServiceError("Campaign 存储不可用") from exc
+    if campaign is None:
+        raise CampaignNotFoundError(f"campaign {campaign_id} not found")
+
+    thesis = _read_existing_thesis(tid)
+
+    subject_type = thesis.get("subject_type")
+    subject_id = thesis.get("subject_id")
+    if subject_type != "stock":
+        raise CampaignThesisBindingConflictError(
+            "thesis subject_type must be 'stock'"
+        )
+    if not isinstance(subject_id, str) or subject_id.strip() != campaign["security_code"]:
+        raise CampaignThesisBindingConflictError(
+            "thesis subject_id must exactly match campaign.security_code"
+        )
+
+    revision = thesis.get("current_revision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision <= 0:
+        raise CampaignThesisBindingConflictError(
+            "thesis current_revision must be a positive integer"
+        )
+
+    try:
+        return campaign_store.bind_campaign_thesis(
+            campaign_id=campaign["campaign_id"],
+            thesis_id=tid,
+            thesis_revision_at_bind=revision,
+            campaign_strategy_at_bind=campaign["strategy"],
+            bound_at=campaign_store._format_timestamp(datetime.now(timezone.utc)),
+        )
+    except StoreCampaignNotFoundError as exc:
+        raise CampaignNotFoundError(str(exc)) from exc
+    except StoreCampaignThesisBindingConflictError as exc:
+        raise CampaignThesisBindingConflictError(str(exc)) from exc
+    except CampaignStoreCorruptedError as exc:
+        raise CampaignServiceError("Campaign 存储不可用") from exc
+    except CampaignStoreInputError as exc:
+        raise CampaignInputError(str(exc)) from exc
+    except CampaignStoreError as exc:
+        raise CampaignServiceError("Campaign 存储不可用") from exc
+
+
+def get_campaign_thesis_binding(campaign_id: str) -> dict:
+    """读取 Campaign 的 thesis binding；未绑定 → ThesisBindingNotFoundError。"""
+    try:
+        binding = campaign_store.get_campaign_thesis_binding(campaign_id)
+    except CampaignStoreCorruptedError as exc:
+        raise CampaignServiceError("Campaign 存储不可用") from exc
+    except CampaignStoreInputError as exc:
+        raise CampaignInputError(str(exc)) from exc
+    except CampaignStoreError as exc:
+        raise CampaignServiceError("Campaign 存储不可用") from exc
+    if binding is None:
+        raise ThesisBindingNotFoundError(f"campaign {campaign_id} has no thesis binding")
+    return binding

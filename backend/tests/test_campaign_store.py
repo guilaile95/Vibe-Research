@@ -21,9 +21,12 @@ from campaign_store import (
     CampaignNotFoundError,
     CampaignStoreCorruptedError,
     CampaignStoreInputError,
+    CampaignThesisBindingConflictError,
     CampaignTransitionConflictError,
+    bind_campaign_thesis,
     create_campaign,
     get_campaign,
+    get_campaign_thesis_binding,
     list_campaigns,
     list_campaign_transitions,
     transition_campaign,
@@ -655,3 +658,174 @@ def test_list_transitions_unknown_campaign_empty(db_path):
 def test_list_transitions_invalid_id_fail_closed(db_path):
     with pytest.raises(CampaignStoreInputError):
         list_campaign_transitions("abc")
+
+
+# ---------------------------------------------------------------------------
+# S2C. Thesis Binding（store 层）
+# ---------------------------------------------------------------------------
+
+def _thesis_id(seed: int = 0) -> str:
+    return f"{seed:032x}"
+
+
+def _bind(db_path, cid, tid, revision=3, strategy="SWING", ts=_TS):
+    return bind_campaign_thesis(
+        campaign_id=cid,
+        thesis_id=tid,
+        thesis_revision_at_bind=revision,
+        campaign_strategy_at_bind=strategy,
+        bound_at=ts,
+    )
+
+
+def test_binding_roundtrip(db_path):
+    rec = _create(security_code="600519", strategy="SWING", status="DRAFT")
+    binding = _bind(db_path, rec["campaign_id"], _thesis_id(1))
+    assert binding == {
+        "campaign_id": rec["campaign_id"],
+        "thesis_id": _thesis_id(1),
+        "thesis_revision_at_bind": 3,
+        "campaign_strategy_at_bind": "SWING",
+        "bound_at": _TS,
+    }
+    assert get_campaign_thesis_binding(rec["campaign_id"]) == binding
+
+
+def test_binding_durable_reopen_subprocess(db_path):
+    """restart/reopen → binding 仍存在（独立进程验证）。"""
+    rec = _create(security_code="600519", strategy="SWING", status="DRAFT")
+    _bind(db_path, rec["campaign_id"], _thesis_id(1))
+    code = (
+        "import os, sys; sys.path.insert(0, r'"
+        + os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        + "');"
+        "import campaign_store;"
+        "b = campaign_store.get_campaign_thesis_binding(%r);"
+        "print('BINDING', b is not None, b['thesis_id'] if b else None)" % rec["campaign_id"]
+    )
+    env = dict(os.environ, VIBE_RESEARCH_CAMPAIGN_DB=str(db_path))
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, env=env
+    )
+    assert out.returncode == 0, out.stderr
+    assert f"BINDING True {_thesis_id(1)}" in out.stdout
+
+
+def test_binding_get_unbound_returns_none(db_path):
+    assert get_campaign_thesis_binding(f"campaign_{uuid.uuid4().hex}") is None
+
+
+def test_binding_unknown_campaign_not_found(db_path):
+    with pytest.raises(CampaignNotFoundError):
+        _bind(db_path, f"campaign_{uuid.uuid4().hex}", _thesis_id(1))
+
+
+def test_binding_same_campaign_second_conflict(db_path):
+    rec = _create(security_code="600519", strategy="SWING", status="DRAFT")
+    first = _bind(db_path, rec["campaign_id"], _thesis_id(1))
+    with pytest.raises(CampaignThesisBindingConflictError):
+        _bind(db_path, rec["campaign_id"], _thesis_id(2))
+    assert get_campaign_thesis_binding(rec["campaign_id"]) == first  # 未覆盖
+
+
+def test_binding_thesis_already_bound_elsewhere_conflict(db_path):
+    a = _create(security_code="600519", strategy="SWING", status="DRAFT")
+    b = _create(security_code="600519", strategy="MEDIUM", status="DRAFT")
+    _bind(db_path, a["campaign_id"], _thesis_id(1))
+    with pytest.raises(CampaignThesisBindingConflictError):
+        _bind(db_path, b["campaign_id"], _thesis_id(1))
+    assert get_campaign_thesis_binding(b["campaign_id"]) is None
+
+
+def test_binding_invalid_inputs_fail_closed(db_path):
+    rec = _create(security_code="600519", strategy="SWING", status="DRAFT")
+    with pytest.raises(CampaignStoreInputError):
+        _bind(db_path, rec["campaign_id"], "not-a-thesis-id")
+    with pytest.raises(CampaignStoreInputError):
+        bind_campaign_thesis(
+            campaign_id=rec["campaign_id"], thesis_id=_thesis_id(1),
+            thesis_revision_at_bind=0, campaign_strategy_at_bind="SWING", bound_at=_TS,
+        )
+    with pytest.raises(CampaignStoreInputError):
+        bind_campaign_thesis(
+            campaign_id=rec["campaign_id"], thesis_id=_thesis_id(1),
+            thesis_revision_at_bind=-1, campaign_strategy_at_bind="SWING", bound_at=_TS,
+        )
+    with pytest.raises(CampaignStoreInputError):
+        bind_campaign_thesis(
+            campaign_id=rec["campaign_id"], thesis_id=_thesis_id(1),
+            thesis_revision_at_bind=True, campaign_strategy_at_bind="SWING", bound_at=_TS,
+        )
+    with pytest.raises(CampaignStoreInputError):
+        _bind(db_path, rec["campaign_id"], _thesis_id(1), strategy="MEDIUM2")
+    with pytest.raises(CampaignStoreInputError):
+        _bind(db_path, rec["campaign_id"], _thesis_id(1), ts="garbage")
+    assert get_campaign_thesis_binding(rec["campaign_id"]) is None
+
+
+def test_binding_concurrent_writers_exactly_one_succeeds(db_path):
+    """C1 未绑定；两个 writer 同时 bind T1/T2 → 恰好一个成功，另一个 conflict。"""
+    rec = _create(security_code="600519", strategy="SWING", status="DRAFT")
+    tid1, tid2 = _thesis_id(1), _thesis_id(2)
+
+    def worker(tid):
+        try:
+            _bind(db_path, rec["campaign_id"], tid)
+            return "ok"
+        except CampaignThesisBindingConflictError:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(worker, [tid1, tid2]))
+    assert sorted(results) == ["conflict", "ok"]
+    binding = get_campaign_thesis_binding(rec["campaign_id"])
+    assert binding is not None and binding["thesis_id"] in (tid1, tid2)
+
+
+def test_binding_insert_failure_rolls_back(db_path):
+    """binding INSERT 失败（test-only trigger RAISE ABORT）→ 无半条 binding。
+
+    INSERT 失败被 store 映射为显式 Conflict；核心断言是回滚语义：
+    不留下 binding、Campaign 无连带副作用。
+    """
+    rec = _create(security_code="600519", strategy="SWING", status="DRAFT")
+    with sqlite3.connect(str(db_path)) as raw:
+        raw.execute(
+            "CREATE TRIGGER test_force_binding_insert_failure "
+            "BEFORE INSERT ON campaign_thesis_bindings "
+            "BEGIN SELECT RAISE(ABORT, 'forced binding insert failure'); END"
+        )
+    with pytest.raises(CampaignThesisBindingConflictError):
+        _bind(db_path, rec["campaign_id"], _thesis_id(1))
+    assert get_campaign_thesis_binding(rec["campaign_id"]) is None
+    assert get_campaign(rec["campaign_id"])["status"] == "DRAFT"  # 无连带副作用
+
+
+def test_binding_row_corruption_fail_closed(db_path):
+    rec = _create(security_code="600519", strategy="SWING", status="DRAFT")
+    _bind(db_path, rec["campaign_id"], _thesis_id(1))
+    with sqlite3.connect(str(db_path)) as raw:
+        raw.execute(
+            "UPDATE campaign_thesis_bindings SET bound_at = 'garbage' "
+            "WHERE campaign_id = ?",
+            (rec["campaign_id"],),
+        )
+    with pytest.raises(CampaignStoreCorruptedError):
+        get_campaign_thesis_binding(rec["campaign_id"])
+
+
+def test_binding_table_dropped_schema_corrupted(db_path):
+    _create(security_code="600519", strategy="SWING", status="DRAFT")
+    with sqlite3.connect(str(db_path)) as raw:
+        raw.execute("DROP TABLE campaign_thesis_bindings")
+    with pytest.raises(CampaignStoreCorruptedError):
+        _create()
+    with pytest.raises(CampaignStoreCorruptedError):
+        _bind(db_path, f"campaign_{uuid.uuid4().hex}", _thesis_id(1))
+
+
+def test_store_has_no_binding_mutation_path():
+    """binding 不可修改/替换/删除（store 层无任何 update/delete 路径）。"""
+    for name in ("update_campaign_thesis_binding", "replace_campaign_thesis",
+                 "set_current_thesis", "delete_campaign_thesis_binding"):
+        assert not hasattr(campaign_store, name), f"forbidden path: {name}"
