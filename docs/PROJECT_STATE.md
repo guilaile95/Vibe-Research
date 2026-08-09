@@ -1,7 +1,8 @@
 # 项目当前状态
 
 > 稳定分支：`feature/research-system-v01`
-> 稳定 Head：`d06eabac093e0bc0acace4abe1e446b3655629f5`（Merge PR #61，2026-08-08）
+> 稳定 Head：`306b7eea779b54fb3ef6880f424025f52735c07d`
+> （Merge PR #70 Foundation Router Wiring，2026-08-09；P0 Foundation Integration 完成）
 > 当前授权任务：[`docs/NEXT_TASK.md`](NEXT_TASK.md)
 > 产品方向：[`docs/PRODUCT_NORTH_STAR_V01.md`](PRODUCT_NORTH_STAR_V01.md)
 > 治理契约：[`docs/GOVERNANCE.md`](GOVERNANCE.md)
@@ -48,7 +49,7 @@ North Star v0.1 是产品方向，不构成代码实施授权；授权仍唯一�
 | A 股数据 | `backend/astock.py`、`backend/market.py`、本地/公开数据链；受控缓存与降级 |
 | 全球上下文 | `backend/gstock.py` + `global-stock-data/`；用于市场/产业上下文，不是当前正式交易 Universe |
 | 用户数据 | 本地用户目录 / `VR_DATA_DIR` / localStorage；持仓、账户、模型密钥不进 Git |
-| 结构化存储 | 交易流水、决策反馈、决策依据、信号账本、收益归因、告警规则等使用本地持久化 |
+| 结构化存储 | 交易流水、决策反馈、决策依据、信号账本、收益归因、告警规则、Campaign（`campaigns.sqlite3`）等使用本地持久化 |
 
 ---
 
@@ -65,6 +66,15 @@ North Star v0.1 是产品方向，不构成代码实施授权；授权仍唯一�
 - Alert Rule evaluator/store/API（PR #60）；
 - Screener、行业资金历史、北向资金历史链（PR #61）；
 - Frontend P1 research workspace / AI copilot（PR #56）。
+- **P0 Foundation（2026-08-09 集成完成）**：
+  - Account Reality（`GET /api/account/reality`）：cash 双源 + settled 定价 +
+    settled NAV candidate（PR #65）；
+  - Manual Cash Events + Cash Correction + Effective Cash Facts
+    （`/api/account/cash-events*`，PR #67）；
+  - Campaign Core（Identity / Strategy / Lifecycle Transition / Thesis Binding，
+    `/api/campaigns*`，PR #66）；
+  - Alert Rule 并发初始化可靠性修复（PR #68）；
+  - Foundation Router Wiring：cash/campaign 路由正式挂载 main app（PR #70）。
 
 这些“已实现能力”不等于 North Star P0 已完成；P0 仍需要后续 Gap Analysis 判断哪些
 现有模块可直接复用、哪些需要重构或新增。
@@ -160,6 +170,8 @@ P0 验收必须同时通过：
 - North Star v0.1 的记录/合并不自动授权 P0 代码实施。
 - PR #59 不授权 Ready/Merge。
 - 不授权付费数据、券商连接、自动交易、后台常驻监控或生产 BK-11 ingestion。
+- **P0 Phase 2 — Formal Thesis Contract：未授权**（下一候选，见 `docs/NEXT_TASK.md`）。
+- P0-S1B-D、Decision Inbox、Sell Engine、Sector Regime：未授权。
 
 下一次需要开发时，应先做只读 Gap Analysis / 工作单设计，用户明确授权后再更新
 `docs/NEXT_TASK.md`。
@@ -170,6 +182,11 @@ P0 验收必须同时通过：
 
 | PR | Merge SHA | 当前意义 |
 |---|---|---|
+| #70 | `306b7eea779b54fb3ef6880f424025f52735c07d` | P0 Foundation Router Wiring（main app 挂载 cash/campaign 路由） |
+| #67 | `56a4b2a9cc8d962f673470d60e22a7ac2ddfdca9` | P0-S1B-B/C Manual Cash Events + Correction + Effective Cash Facts |
+| #65 | `95f84c9ed284a501a57fb22c74a17c85221468d3` | P0-S1B-A Canonical Account Reality & Settled NAV candidate |
+| #66 | `b45be474705c0dba6797eeb97ce946b463d566ba` | P0-S2A/B/C Campaign Core + Lifecycle + Thesis Binding |
+| #68 | `1efa3b4e5efb95ad984cec42feb6a3dd4c7b2f4a` | Alert Rule 并发初始化可靠性修复 |
 | #61 | `d06eabac093e0bc0acace4abe1e446b3655629f5` | Screener + sector/market-history recovery chain |
 | #60 | `b3b02f3f75152d687b93d5d679105e12d37ee671` | Technical overlays + KDJ + Alert Rules chain |
 | #56 | `d848b222cc0ef86414b4e5139b17c6608a1657f6` | Frontend P1 research workspace / AI copilot |
@@ -194,6 +211,8 @@ P0 验收必须同时通过：
 
 这些问题需要在进入更高权限自动化之前处理，但**不能反过来替代产品 North Star**。
 任何修复仍需单独授权。
+
+本轮已闭合项：alert-rule concurrency flake（P0-0C，PR #68，Linux/Windows 双平台 CI 稳定）。
 
 ---
 
