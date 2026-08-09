@@ -8,49 +8,28 @@
 
 ## 当前已授权任务
 
-**P0-S1A — Legacy Bootstrap & Position Reconciliation v0.1**
+**无。**
 
-P0 North Star（持仓全周期决策闭环）的第一个实施 Slice，只解决一个基础问题：
+**当前已授权产品开发任务：无。**
 
-> Vibe 从正式接管账户的那一天开始，如何准确、可审计地知道我实际持有哪些股票，
-> 而不伪造 Vibe 之前的交易历史？
+P0 Foundation Integration（PR #68 / #66 / #65 / #67 / #70）已于 2026-08-09 完成
+并进入稳定分支。下一步如果开始 P0 开发，必须由用户明确授权后再更新本文件。
 
-建立事实链：
+## 下一候选（需用户授权）
 
-`Ledger Start → ACCOUNT_OPENING → LEGACY_POSITION_OPENING → post-Vibe trade events
-→ derived positions → reconciliation`
+**P0 Phase 2 — Formal Thesis Contract**
 
-**Scope（本轮必须交付）**：
+状态：`REQUIRES_USER_AUTHORIZATION`
 
-- `ACCOUNT_OPENING`：ledger 接管边界（`ledger_start_at`、opening cash、`provenance=MANUAL`、
-  `PRE_VIBE_HISTORY=UNKNOWN`）；不制造接管日期之前的事件。
-- `LEGACY_POSITION_OPENING`：期初持仓事件（code / shares / known cost basis /
-  `origin=PRE_VIBE` / `acquired_before_vibe=true` / `historical_trades=UNKNOWN`）；
-  明确 **≠ BUY**，不根据当前成本价反推历史买入。
-- `CORRECTION`：append-only 显式修正事件（被修正对象、修正前后差异、reason、timestamp），
-  禁止静默改写历史事件。
-- Position Derivation：从 Opening + post-Vibe BUY/ADD/REDUCE/SELL + CORRECTION 确定性推导
-  shares / cost basis / position state；复用 performance attribution 已验证的加权平均成本逻辑；
-  shares 不得为负；超额卖出 fail closed；full exit → 0 shares。
-- Reconciliation：只读对比 ledger-derived positions vs portfolio.json holdings，输出
-  MATCH / MISMATCH / MISSING_IN_LEDGER / MISSING_IN_PORTFOLIO，不自动覆盖任何一方。
-- Bootstrap 显式且幂等：preview/dry-run 校验 + commit 校验；同一 Ledger Start 不得重复创建；
-  已存在 post-Vibe ledger 数据时拒绝 bootstrap。
+North Star Formal Thesis 至少要求 Strategy / Core Thesis / Key Drivers /
+Catalyst & Realization Path / Expected Horizon / Invalidation Conditions /
+Key Risks。必须先做 DESIGN REVIEW，优先研究 REUSE 现有 `investment_theses`
++ Campaign Thesis Binding，不创建第二套重复 Thesis Domain；补齐 expected_horizon、
+formal freeze semantics、original thesis anchor、thesis delta。
 
-**Stop boundary**：
-
-- Draft PR + CI / 独立审查证据形成后 STOP。
-
-**Non-goals（本轮明确不做）**：
-
-- campaign_id / Campaign（属于 P0-S2）
-- NAV / drawdown（属于 P0-S1B）
-- 将 portfolio.json 替换为 ledger canonical source（switchover 需另行授权；本轮
-  ledger-derived position 只是 candidate canonical fact chain）
-- Thesis 改造 / Evidence Delta / Market & Sector Regime / Risk & Sell Engine /
-  Decision Inbox / Next Best Action / Formal Decision / Outcome 系统
-- Scheduler / Background Agent / Broker / BaoStock production ingestion / Tushare
-- 前端改动 / UI redesign / 无关重构 / PR #59 修复
+Formal Thesis 冻结后 Original Thesis immutable，新事实只产生 Thesis Delta
+（STRENGTHENED / STABLE / WEAKENED / DISPROVEN / UNKNOWN）；AI 只能 draft，
+不得 auto-freeze / auto-rewrite。实现明确 NOT_AUTHORIZED 直至单独授权。
 
 ## 当前产品优先级（方向，不是授权）
 
@@ -74,8 +53,8 @@ P0 的目标不是“盘中必须做交易”，而是：
 ## 当前显式停止边界
 
 - **PR #59 保持 Draft；未经单独明确授权，不得转 Ready，不得 Merge。**
-- **P0-S1A Draft PR 不得转 Ready / Merge，直到独立审查证据形成。**
-- **P0-S1B / P0-S2（Campaign）/ Decision Inbox 等后续切片未授权。**
+- **P0 Phase 2 Formal Thesis implementation：NOT_AUTHORIZED。**
+- **P0-S1B-D、Decision Inbox、Sell Engine、Formal Decision、Outcome、Sector Regime：未授权。**
 - North Star v0.1 不授权生产数据接入、Scheduler、Background Agent、券商连接、
   付费数据源或自动交易。
 - 暂不购买 Tushare 等商业数据；付费数据不是基础产品依赖。
@@ -87,9 +66,11 @@ P0 的目标不是“盘中必须做交易”，而是：
 ## 最近稳定事实（用于避免旧交接误导）
 
 - 稳定分支：`feature/research-system-v01`。
-- 2026-08-09 现场核验稳定 Head：`9b9f0bfa1c4d6725bc4071221f3e9ef22d7a1b23`
-  （Merge PR #61 后 6 个 North Star 文档提交）。
-- 当前任务分支：`feat/p0-position-reality-bootstrap-v0.1`（基于上述稳定 Head）。
+- 2026-08-09 P0 Foundation Integration 完成：PR #68（Alert Rule 并发可靠性）、
+  PR #66（Campaign Core + Lifecycle + Thesis Binding）、PR #65（Account Reality &
+  Settled NAV candidate）、PR #67（Manual Cash Events + Correction + Effective
+  Cash Facts）、PR #70（Foundation Router Wiring）已全部合并；现场核验稳定 Head：
+  `306b7eea779b54fb3ef6880f424025f52735c07d`（Merge PR #70）。
 - PR #47 已合并：Merge `5d21122c7253186cd80e90722693234eba9fdfab`；
   代码存在不等于 Tushare Token/权限/live 可用性已证明。
 - PR #56 已合并：Frontend P1 research workspace / AI copilot。
@@ -101,8 +82,8 @@ P0 的目标不是“盘中必须做交易”，而是：
 
 ## 后续候选（均未授权）
 
-- **P0-S1B**：NAV / Drawdown（依赖 P0-S1A 的 opening state）。
-- **P0-S2**：Campaign（Security + Strategy + Campaign 正式决策单元）。
+- **P0 Phase 2 — Formal Thesis Contract**：`REQUIRES_USER_AUTHORIZATION`
+  （见上文；Formal Thesis implementation 明确 NOT_AUTHORIZED）。
 - 对抗性审查发现的安全/可靠性/Foundation 项：CLI 权限边界、local API trust、
   alert-rule concurrency test harness、文档漂移、SSRF hardening 等；这些属于
   Foundation/Hardening lane，不自动覆盖产品优先级，也未授权实施。
