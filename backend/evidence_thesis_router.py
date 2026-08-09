@@ -88,6 +88,16 @@ class FormalRevisionIn(BaseModel):
     expected_revision: StrictPositiveInt
 
 
+class ThesisDeltaCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    delta_state: str
+    reason: str
+    evidence_ids: list[str] = Field(default_factory=list)
+    # Optional for backwards-compatible clients; service always persists the
+    # thesis's frozen_revision and rejects a supplied mismatch.
+    base_revision: StrictPositiveInt | None = None
+
+
 class LinkEvidenceIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     evidence_id: str
@@ -117,6 +127,8 @@ def _raise_service_error(e: Exception):
         raise HTTPException(status_code=404, detail=str(e))
     if isinstance(e, svc.ArchivedThesisError):
         raise HTTPException(status_code=409, detail="已归档的投资逻辑不可修改")
+    if isinstance(e, svc.ThesisDeltaConflictError):
+        raise HTTPException(status_code=409, detail=str(e))
     if isinstance(e, svc.ContentLockedError):
         raise HTTPException(status_code=409, detail="已确认的 Formal Thesis 内容不可修改")
     if isinstance(e, svc.FormalLifecycleConflictError):
@@ -304,6 +316,37 @@ def archive_formalization(thesis_id: str, body: FormalRevisionIn):
     db = _resolve_db()
     try:
         return {"data": svc.archive_formalization(db, thesis_id, body.expected_revision)}
+    except Exception as e:
+        _raise_service_error(e)
+
+
+@router.post("/thesis/{thesis_id}/deltas")
+def create_thesis_delta(thesis_id: str, body: ThesisDeltaCreateIn):
+    db = _resolve_db()
+    try:
+        result = svc.create_thesis_delta(
+            db,
+            thesis_id,
+            body.delta_state,
+            body.reason,
+            body.evidence_ids,
+            body.base_revision,
+        )
+        return {"data": result}
+    except Exception as e:
+        _raise_service_error(e)
+
+
+@router.get("/thesis/{thesis_id}/deltas")
+def list_thesis_deltas(thesis_id: str):
+    db = _resolve_db()
+    try:
+        result = svc.list_thesis_deltas(db, thesis_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"投资逻辑 {thesis_id} 不存在")
+        return {"data": result}
+    except HTTPException:
+        raise
     except Exception as e:
         _raise_service_error(e)
 

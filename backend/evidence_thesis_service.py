@@ -78,6 +78,12 @@ class ValidationError(ValueError):
     pass
 
 
+class ThesisDeltaConflictError(RuntimeError):
+    """Canonical thesis delta precondition or terminal-chain conflict."""
+
+    pass
+
+
 # ---------------------------------------------------------------------------
 # 数据库路径解析
 # ---------------------------------------------------------------------------
@@ -1009,6 +1015,167 @@ def list_thesis(db_path, subject_type: str | None = None, subject_id: str | None
         return store.read_transaction(db_path, _do)
     except FileNotFoundError:
         return {"items": [], "total": 0, "limit": limit, "offset": offset}
+
+
+# ---------------------------------------------------------------------------
+# Canonical Thesis Delta（S2D-C，append-only）
+# ---------------------------------------------------------------------------
+
+_DELTA_STATES = frozenset({
+    "STRENGTHENED", "STABLE", "WEAKENED", "UNKNOWN",
+    "DISPROVEN", "INVALIDATED",
+})
+_TERMINAL_DELTA_STATES = frozenset({"DISPROVEN", "INVALIDATED"})
+
+
+def create_thesis_delta(
+    db_path,
+    thesis_id: str,
+    delta_state: str | dict,
+    reason: str | None = None,
+    evidence_ids: list[str] | None = None,
+    base_revision: int | None = None,
+) -> dict:
+    """Append one immutable canonical delta to a frozen, active thesis.
+
+    Sequence allocation and evidence snapshotting happen in one BEGIN IMMEDIATE
+    transaction supplied by :func:`store.write_transaction`.
+    """
+    # Accept the service-layer convention used by create_evidence/create_thesis
+    # (a body dict) as well as the explicit argument form used by the router.
+    if isinstance(delta_state, dict):
+        body = delta_state
+        delta_state = body.get("delta_state")
+        reason = body.get("reason")
+        evidence_ids = body.get("evidence_ids", [])
+        base_revision = body.get("base_revision")
+    if not isinstance(delta_state, str) or delta_state not in _DELTA_STATES:
+        raise ValidationError(f"delta_state 必须是 {sorted(_DELTA_STATES)} 之一")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValidationError("reason 必须是非空字符串")
+    if evidence_ids is None:
+        evidence_ids = []
+    if not isinstance(evidence_ids, list) or any(
+        not isinstance(evidence_id, str) or not evidence_id.strip()
+        for evidence_id in evidence_ids
+    ):
+        raise ValidationError("evidence_ids 必须是字符串数组")
+    # Duplicate links cannot produce two snapshots for one evidence record.
+    if len(set(evidence_ids)) != len(evidence_ids):
+        raise ValidationError("evidence_ids 不得重复")
+
+    now = _utc_now_iso()
+
+    def _do(conn):
+        thesis_row = store._get_thesis_row(conn, thesis_id)
+        if thesis_row is None:
+            raise ThesisNotFoundError(f"投资逻辑 {thesis_id} 不存在")
+        if thesis_row["status"] == "archived":
+            raise ThesisDeltaConflictError("已归档的投资逻辑不可追加 delta")
+        if thesis_row["formal_state"] != "frozen":
+            raise ThesisDeltaConflictError("NEEDS_FROZEN: thesis formal_state 必须为 frozen")
+        if thesis_row["frozen_revision"] is None:
+            raise store.EvidenceLedgerCorruptedError()
+        frozen_revision = int(thesis_row["frozen_revision"])
+        if base_revision is not None:
+            if (
+                not isinstance(base_revision, int)
+                or isinstance(base_revision, bool)
+                or base_revision != frozen_revision
+            ):
+                raise ThesisDeltaConflictError(
+                    f"base_revision 必须严格等于 frozen_revision ({frozen_revision})"
+                )
+
+        # Never append to a corrupt chain, and never append after a terminal delta.
+        store.validate_persisted_delta_chain(conn, thesis_id)
+        latest = conn.execute(
+            "SELECT delta_state FROM thesis_deltas "
+            "WHERE thesis_id = ? ORDER BY delta_sequence DESC LIMIT 1",
+            (thesis_id,),
+        ).fetchone()
+        if latest is not None and latest["delta_state"] in _TERMINAL_DELTA_STATES:
+            raise ThesisDeltaConflictError("terminal delta 已确认，禁止继续追加")
+
+        next_sequence = int(conn.execute(
+            "SELECT COALESCE(MAX(delta_sequence), 0) + 1 AS next_sequence "
+            "FROM thesis_deltas WHERE thesis_id = ?",
+            (thesis_id,),
+        ).fetchone()["next_sequence"])
+        delta_id = store.new_id()
+        conn.execute(
+            """INSERT INTO thesis_deltas
+               (delta_id, thesis_id, delta_sequence, base_revision, delta_state, reason, confirmed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (delta_id, thesis_id, next_sequence, frozen_revision,
+             delta_state, reason.strip(), now),
+        )
+
+        for evidence_id in evidence_ids:
+            ev_row = store._get_evidence_row(conn, evidence_id)
+            if ev_row is None or int(ev_row["deleted"]) == 1:
+                raise EvidenceNotFoundError(f"证据 {evidence_id} 不存在")
+            link_row = store._get_link_row(conn, thesis_id, evidence_id)
+            if link_row is None:
+                raise EvidenceNotFoundError(f"证据 {evidence_id} 未关联到此投资逻辑")
+            conn.execute(
+                """INSERT INTO thesis_delta_evidence_links
+                   (delta_id, evidence_id, evidence_type, claim, classification, confidence,
+                    source_title, source_url, source_date, accessed_at, stance, captured_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    delta_id, evidence_id, ev_row["evidence_type"], ev_row["claim"],
+                    ev_row["classification"], ev_row["confidence"], ev_row["source_title"],
+                    ev_row["source_url"], ev_row["source_date"], ev_row["accessed_at"],
+                    link_row["stance"], now,
+                ),
+            )
+
+        delta = {
+            "delta_id": delta_id,
+            "thesis_id": thesis_id,
+            "delta_sequence": next_sequence,
+            "base_revision": frozen_revision,
+            "delta_state": delta_state,
+            "reason": reason.strip(),
+            "confirmed_at": now,
+            "evidence_links": [],
+        }
+        rows = conn.execute(
+            "SELECT * FROM thesis_delta_evidence_links WHERE delta_id = ? ORDER BY evidence_id",
+            (delta_id,),
+        ).fetchall()
+        delta["evidence_links"] = [store._delta_evidence_row_to_dict(row) for row in rows]
+        return delta
+
+    return store.write_transaction(db_path, _do)
+
+
+def list_thesis_deltas(db_path, thesis_id: str) -> dict | None:
+    """Return ordered immutable deltas and their evidence snapshots."""
+    def _do(conn):
+        if store._get_thesis_row(conn, thesis_id) is None:
+            return None
+        store.validate_persisted_delta_chain(conn, thesis_id)
+        rows = conn.execute(
+            "SELECT * FROM thesis_deltas WHERE thesis_id = ? ORDER BY delta_sequence ASC",
+            (thesis_id,),
+        ).fetchall()
+        items = []
+        for row in rows:
+            item = store._delta_row_to_dict(row)
+            links = conn.execute(
+                "SELECT * FROM thesis_delta_evidence_links WHERE delta_id = ? ORDER BY evidence_id",
+                (row["delta_id"],),
+            ).fetchall()
+            item["evidence_links"] = [store._delta_evidence_row_to_dict(link) for link in links]
+            items.append(item)
+        return {"items": items, "total": len(items)}
+
+    try:
+        return store.read_transaction(db_path, _do)
+    except FileNotFoundError:
+        return None
 
 
 # ---------------------------------------------------------------------------
