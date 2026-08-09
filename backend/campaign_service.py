@@ -65,6 +65,26 @@ class CampaignThesisBindingConflictError(CampaignServiceError):
     """绑定冲突：已绑定 / thesis 已被其他 Campaign 绑定 / subject 不匹配（→ 409）。"""
 
 
+class CampaignThesisArchivedError(CampaignThesisBindingConflictError):
+    """Thesis 已归档，不可绑定（→ 409，detail 说明 archived thesis 不可绑定）。"""
+
+
+class CampaignThesisFormalIncompleteError(CampaignThesisBindingConflictError):
+    """Thesis 未完成 Formal 化（formal_state NULL/draft/confirmed 或缺失），
+    不可正式绑定（→ 409 NEEDS_USER_COMPLETION）。"""
+
+
+class CampaignThesisStrategyConflictError(CampaignThesisBindingConflictError):
+    """Thesis strategy 与 Campaign strategy 不一致（→ 409 semantic conflict）。"""
+
+    def __init__(self, thesis_strategy: Any, campaign_strategy: Any) -> None:
+        self.thesis_strategy = thesis_strategy
+        self.campaign_strategy = campaign_strategy
+        super().__init__(
+            f"thesis strategy {thesis_strategy} != campaign strategy {campaign_strategy}"
+        )
+
+
 def _is_valid_security_code(value: Any) -> bool:
     return isinstance(value, str) and CODE_PATTERN.fullmatch(value.strip()) is not None
 
@@ -205,6 +225,11 @@ def _read_existing_thesis(thesis_id: str) -> dict:
     - 不存在 → ThesisNotFoundError
     - thesis 读取异常 → CampaignServiceError（500，脱敏）
     绝不调用任何 thesis 写 API。
+
+    canonical aggregate 形状为 ``{"thesis": {...}, "evidence_links": [...]}``
+    （非 archived 实时组装 / archived snapshot），这里归一化为扁平 thesis dict
+    （含 formal_state / strategy / frozen_revision 等 formal 字段）；
+    若读取结果本身已是扁平 dict（既有 fake provider / 兼容形状）则原样使用。
     """
     try:
         db_path = evidence_thesis_service.resolve_db_path()
@@ -213,6 +238,8 @@ def _read_existing_thesis(thesis_id: str) -> dict:
         raise CampaignServiceError("Campaign 存储不可用") from exc
     if thesis is None:
         raise ThesisNotFoundError(f"thesis {thesis_id} not found")
+    if isinstance(thesis, dict) and isinstance(thesis.get("thesis"), dict):
+        thesis = thesis["thesis"]
     return thesis
 
 
@@ -225,10 +252,20 @@ def bind_campaign_thesis(campaign_id: str, thesis_id: str) -> dict:
     3. thesis.subject_type == "stock"；
     4. thesis.subject_id == campaign.security_code（完全一致）；
     5. thesis.current_revision 为 strict positive integer → 永久锚定；
-    6. 快照 campaign.strategy → campaign_strategy_at_bind；
-    7. store 原子 INSERT（Campaign 已绑定 / thesis 已被绑定 → Conflict）。
+    6. Thesis 未 archived（已归档不可绑定 → 409 CampaignThesisArchivedError）；
+    7. Thesis formal_state == "frozen"（NULL/draft/confirmed/缺失 → 409
+       CampaignThesisFormalIncompleteError，NEEDS_USER_COMPLETION；
+       LEGACY thesis 的 strategy 缺失同样归入该 gate）；
+    8. thesis.strategy == campaign.strategy（不一致 → 409
+       CampaignThesisStrategyConflictError，semantic conflict）；
+    9. 快照 campaign.strategy → campaign_strategy_at_bind；
+    10. store 原子 INSERT（Campaign 已绑定 / thesis 已被绑定 → Conflict）。
 
     Binding 一旦成功不可修改/替换/删除（本域不提供任何 update/delete 路径）。
+
+    推荐流程 Freeze → Bind：未冻结（含 pre-freeze grandfather 场景）一律拒绝
+    正式绑定；已有 grandfather binding 不受影响（由 Current Thesis Projection
+    输出 NOT_READY/NOT_FROZEN）。
     """
     if not isinstance(thesis_id, str) or not _THESIS_ID_RE.fullmatch(thesis_id.strip()):
         raise CampaignInputError("thesis_id must be a 32-hex evidence thesis id")
@@ -262,6 +299,27 @@ def bind_campaign_thesis(campaign_id: str, thesis_id: str) -> dict:
     if isinstance(revision, bool) or not isinstance(revision, int) or revision <= 0:
         raise CampaignThesisBindingConflictError(
             "thesis current_revision must be a positive integer"
+        )
+
+    # P0-PH2 S2D-E：Formal Alignment gates（409 语义冲突，绝不降级为 422）
+    if thesis.get("status") == "archived":
+        raise CampaignThesisArchivedError(
+            "archived thesis cannot be bound to a campaign"
+        )
+    if thesis.get("formal_state") != "frozen":
+        raise CampaignThesisFormalIncompleteError(
+            "thesis formal_state must be 'frozen' before binding "
+            "(NEEDS_USER_COMPLETION)"
+        )
+    thesis_strategy = thesis.get("strategy")
+    if thesis_strategy is None:
+        # LEGACY 或 formal 字段不完整的 thesis：strategy 缺失归入 NEEDS_USER_COMPLETION
+        raise CampaignThesisFormalIncompleteError(
+            "thesis strategy missing (NEEDS_USER_COMPLETION)"
+        )
+    if thesis_strategy != campaign["strategy"]:
+        raise CampaignThesisStrategyConflictError(
+            thesis_strategy, campaign["strategy"]
         )
 
     try:
