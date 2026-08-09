@@ -7,6 +7,7 @@ portfolio_advice_policy、daily_review、chat 等现有模块。
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sqlite3
@@ -289,6 +290,53 @@ _ALL_DDL = [
 def _utc_now_iso() -> str:
     """UTC ISO 8601 微秒精度。"""
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+def _is_canonical_utc_timestamp(value: Any) -> bool:
+    """Return whether *value* is the exact timestamp emitted by ``_utc_now_iso``.
+
+    Persisted Formal timestamps deliberately use one representation (microseconds
+    plus an explicit ``+00:00`` offset).  ``datetime.fromisoformat`` alone is too
+    permissive: it accepts offsets, missing fractional seconds and ``Z``.  Round
+    tripping through ``isoformat`` keeps the read validator fail-closed while
+    preserving the existing store contract.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return False
+    if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+        return False
+    return parsed.isoformat(timespec="microseconds") == value
+
+
+def _is_parseable_utc_iso(value: Any) -> bool:
+    """Legacy compatibility check: timezone-aware ISO instant, any precision."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() == timezone.utc.utcoffset(parsed)
+
+
+def _require_canonical_timestamp(value: Any, *, allow_none: bool = False) -> None:
+    if value is None and allow_none:
+        return
+    if not _is_canonical_utc_timestamp(value):
+        raise EvidenceLedgerCorruptedError()
+
+
+def _is_canonical_date(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) != 10:
+        return False
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d") == value
+    except ValueError:
+        return False
 
 
 def new_id() -> str:
@@ -1168,19 +1216,25 @@ def validate_persisted_thesis_main(row: sqlite3.Row) -> None:
     携带 formalization marker、frozen archived 的 current_revision 关系），
     保证 read path fail-closed，不依赖 SQLite 是否启用 CHECK。
     """
-    thesis_id = row["id"]
-    formal_state = row["formal_state"]
-    status = row["status"]
-    current_revision = int(row["current_revision"])
-    frozen_revision = row["frozen_revision"]
-    if frozen_revision is not None:
-        frozen_revision = int(frozen_revision)
-    started = row["formalization_started_at"]
-    confirmed_at = row["confirmed_at"]
-    frozen_at = row["frozen_at"]
-    archived_at = row["archived_at"]
-    strategy = row["strategy"]
-    horizon_raw = row["expected_horizon"]
+    try:
+        thesis_id = row["id"]
+        formal_state = row["formal_state"]
+        status = row["status"]
+        current_revision = int(row["current_revision"])
+        frozen_revision = row["frozen_revision"]
+        if frozen_revision is not None:
+            frozen_revision = int(frozen_revision)
+        started = row["formalization_started_at"]
+        confirmed_at = row["confirmed_at"]
+        frozen_at = row["frozen_at"]
+        archived_at = row["archived_at"]
+        strategy = row["strategy"]
+        horizon_raw = row["expected_horizon"]
+    except (KeyError, IndexError, TypeError, ValueError):
+        raise EvidenceLedgerCorruptedError()
+
+    if not isinstance(thesis_id, str) or not thesis_id:
+        raise EvidenceLedgerCorruptedError()
 
     if current_revision < 1:
         raise EvidenceLedgerCorruptedError()
@@ -1190,13 +1244,17 @@ def validate_persisted_thesis_main(row: sqlite3.Row) -> None:
         raise EvidenceLedgerCorruptedError()
 
     if formal_state is None:
-        # LEGACY：全部 formal 字段必须 NULL（formalization 不得半途存在）
-        if any(v is not None for v in (started, confirmed_at, frozen_at, frozen_revision, archived_at)):
+        # LEGACY：不能携带 formal lifecycle markers。历史 archived legacy
+        # 行允许保留 archived_at，但若存在必须仍是 canonical UTC。
+        if any(v is not None for v in (started, confirmed_at, frozen_at, frozen_revision)):
+            raise EvidenceLedgerCorruptedError()
+        if archived_at is not None and not _is_parseable_utc_iso(archived_at):
             raise EvidenceLedgerCorruptedError()
         return
 
     if formal_state == "draft":
-        if started is None or confirmed_at is not None or frozen_at is not None:
+        _require_canonical_timestamp(started)
+        if confirmed_at is not None or frozen_at is not None:
             raise EvidenceLedgerCorruptedError()
         if frozen_revision is not None or archived_at is not None:
             raise EvidenceLedgerCorruptedError()
@@ -1205,8 +1263,8 @@ def validate_persisted_thesis_main(row: sqlite3.Row) -> None:
         return
 
     if formal_state == "confirmed":
-        if started is None or confirmed_at is None:
-            raise EvidenceLedgerCorruptedError()
+        _require_canonical_timestamp(started)
+        _require_canonical_timestamp(confirmed_at)
         if frozen_at is not None or frozen_revision is not None or archived_at is not None:
             raise EvidenceLedgerCorruptedError()
         if status != "active" or strategy is None or horizon_raw is None:
@@ -1215,8 +1273,9 @@ def validate_persisted_thesis_main(row: sqlite3.Row) -> None:
         return
 
     # formal_state == "frozen"
-    if started is None or confirmed_at is None or frozen_at is None:
-        raise EvidenceLedgerCorruptedError()
+    _require_canonical_timestamp(started)
+    _require_canonical_timestamp(confirmed_at)
+    _require_canonical_timestamp(frozen_at)
     if frozen_revision is None or frozen_revision <= 0:
         raise EvidenceLedgerCorruptedError()
     if strategy is None or horizon_raw is None:
@@ -1229,8 +1288,7 @@ def validate_persisted_thesis_main(row: sqlite3.Row) -> None:
             raise EvidenceLedgerCorruptedError()
         return
     if status == "archived":
-        if archived_at is None:
-            raise EvidenceLedgerCorruptedError()
+        _require_canonical_timestamp(archived_at)
         if current_revision != frozen_revision + 1:
             raise EvidenceLedgerCorruptedError()
         return
@@ -1240,66 +1298,89 @@ def validate_persisted_thesis_main(row: sqlite3.Row) -> None:
 def validate_persisted_thesis_chain(
     conn: sqlite3.Connection, thesis_id: str, row: sqlite3.Row
 ) -> None:
-    """跨 revision 校验 Formal 链：freeze/archive revision kind、snapshot 一致性。"""
+    """跨 revision 校验 Formal 链：revision 存在、snapshot 一致且时间戳规范。"""
     formal_state = row["formal_state"]
+    current_revision = row["current_revision"]
+    try:
+        current_revision = int(current_revision)
+    except (TypeError, ValueError) as exc:
+        raise EvidenceLedgerCorruptedError() from exc
+
+    def _snapshot_content(snapshot: dict) -> dict:
+        nested = snapshot.get("thesis")
+        return nested if isinstance(nested, dict) else snapshot
+
+    def _validate_snapshot_timestamps(snapshot: dict) -> None:
+        # Both the flat vNext representation and historical nested aggregate can
+        # carry Formal lifecycle fields.  Validate every present field rather
+        # than silently accepting a malformed value.
+        for candidate in (snapshot, _snapshot_content(snapshot)):
+            for key in (
+                "formalization_started_at", "confirmed_at", "frozen_at", "archived_at",
+            ):
+                if key in candidate:
+                    _require_canonical_timestamp(candidate[key], allow_none=True)
+
+    def _content_matches(snapshot: dict) -> bool:
+        content = _snapshot_content(snapshot)
+        try:
+            live = {
+                "title": row["title"],
+                "summary": row["summary"],
+                "core_claims": json.loads(row["core_claims"]),
+                "catalysts": json.loads(row["catalysts"]),
+                "risks": json.loads(row["risks"]),
+                "invalidation_conditions": json.loads(row["invalidation_conditions"]),
+                "free_notes": row["free_notes"],
+                "strategy": row["strategy"],
+                "expected_horizon": json.loads(row["expected_horizon"]),
+            }
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise EvidenceLedgerCorruptedError()
+        for key, value in live.items():
+            if key not in content or json.dumps(content[key], sort_keys=True) != json.dumps(value, sort_keys=True):
+                return False
+        return True
+
+    # CONFIRMED has no dedicated formal revision kind: its current revision is
+    # the latest CONTENT snapshot.  It is nevertheless authoritative for reads
+    # and must exist and match the live formal content.
+    if formal_state == "confirmed":
+        current_rev = _get_revision_row(conn, thesis_id, current_revision)
+        if current_rev is None:
+            raise EvidenceLedgerCorruptedError()
+        try:
+            confirmed_snapshot = json.loads(current_rev["snapshot"])
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise EvidenceLedgerCorruptedError() from exc
+        if not isinstance(confirmed_snapshot, dict):
+            raise EvidenceLedgerCorruptedError()
+        _validate_snapshot_timestamps(confirmed_snapshot)
+        if not _content_matches(confirmed_snapshot):
+            raise EvidenceLedgerCorruptedError()
+        return
+
     frozen_revision = row["frozen_revision"]
     if formal_state != "frozen" or frozen_revision is None:
-        return  # 非 frozen 无需跨 revision 检查
-    frozen_revision = int(frozen_revision)
+        return
+    try:
+        frozen_revision = int(frozen_revision)
+    except (TypeError, ValueError) as exc:
+        raise EvidenceLedgerCorruptedError() from exc
 
     freeze_rev = _get_revision_row(conn, thesis_id, frozen_revision)
     if freeze_rev is None:
-        # confirmed snapshot 缺失 / frozen revision 缺失 → 损坏
         raise EvidenceLedgerCorruptedError()
     if freeze_rev["revision_kind"] != "FORMAL_FREEZE":
         raise EvidenceLedgerCorruptedError()
-
-    main_title = row["title"]
-    main_summary = row["summary"]
-    main_claims = row["core_claims"]
-    main_catalysts = row["catalysts"]
-    main_risks = row["risks"]
-    main_invalidation = row["invalidation_conditions"]
-    main_notes = row["free_notes"]
-    main_strategy = row["strategy"]
-    main_horizon = row["expected_horizon"]
-
-    def _content_matches(snapshot: dict) -> bool:
-        if snapshot.get("title") != main_title:
-            return False
-        if snapshot.get("summary") != main_summary:
-            return False
-        if json.dumps(snapshot.get("core_claims"), sort_keys=True) != json.dumps(
-            json.loads(main_claims), sort_keys=True
-        ):
-            return False
-        if json.dumps(snapshot.get("catalysts"), sort_keys=True) != json.dumps(
-            json.loads(main_catalysts), sort_keys=True
-        ):
-            return False
-        if json.dumps(snapshot.get("risks"), sort_keys=True) != json.dumps(
-            json.loads(main_risks), sort_keys=True
-        ):
-            return False
-        if json.dumps(snapshot.get("invalidation_conditions"), sort_keys=True) != json.dumps(
-            json.loads(main_invalidation), sort_keys=True
-        ):
-            return False
-        if snapshot.get("free_notes") != main_notes:
-            return False
-        if snapshot.get("strategy") != main_strategy:
-            return False
-        if json.dumps(snapshot.get("expected_horizon"), sort_keys=True) != json.dumps(
-            json.loads(main_horizon), sort_keys=True
-        ):
-            return False
-        return True
-
     try:
         frozen_snapshot = json.loads(freeze_rev["snapshot"])
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise EvidenceLedgerCorruptedError() from exc
+    if not isinstance(frozen_snapshot, dict):
         raise EvidenceLedgerCorruptedError()
-    if not isinstance(frozen_snapshot, dict) or not _content_matches(frozen_snapshot):
+    _validate_snapshot_timestamps(frozen_snapshot)
+    if not _content_matches(frozen_snapshot):
         raise EvidenceLedgerCorruptedError()
 
     if row["status"] == "archived":
@@ -1312,19 +1393,45 @@ def validate_persisted_thesis_chain(
             raise EvidenceLedgerCorruptedError()
         if not isinstance(archive_snapshot, dict):
             raise EvidenceLedgerCorruptedError()
-        # archive snapshot 必须与 frozen original 内容一致；只允许 lifecycle 字段变化
+        _validate_snapshot_timestamps(archive_snapshot)
+        # Archive is a lifecycle-only revision.  Snapshots may contain both the
+        # legacy nested aggregate and the vNext flat Formal fields, so normalize
+        # the four allowed lifecycle markers at both levels before comparison.
         lifecycle = {"status", "current_revision", "updated_at", "archived_at"}
-        for key, value in frozen_snapshot.items():
-            if key in lifecycle:
-                continue
-            if json.dumps(archive_snapshot.get(key), sort_keys=True) != json.dumps(
-                value, sort_keys=True
-            ):
+
+        def _without_archive_lifecycle(snapshot: dict) -> dict:
+            normalized = copy.deepcopy(snapshot)
+            for key in lifecycle:
+                normalized.pop(key, None)
+            nested = normalized.get("thesis")
+            if isinstance(nested, dict):
+                for key in lifecycle:
+                    nested.pop(key, None)
+            return normalized
+
+        if _without_archive_lifecycle(archive_snapshot) != _without_archive_lifecycle(
+            frozen_snapshot
+        ):
+            raise EvidenceLedgerCorruptedError()
+
+        expected_lifecycle = {
+            "status": "archived",
+            "current_revision": frozen_revision + 1,
+            "updated_at": row["updated_at"],
+            "archived_at": row["archived_at"],
+        }
+        for key, value in expected_lifecycle.items():
+            if archive_snapshot.get(key) != value:
                 raise EvidenceLedgerCorruptedError()
+        nested_archive = archive_snapshot.get("thesis")
+        if isinstance(nested_archive, dict):
+            for key, value in expected_lifecycle.items():
+                if nested_archive.get(key) != value:
+                    raise EvidenceLedgerCorruptedError()
 
 
 def validate_persisted_delta_chain(conn: sqlite3.Connection, thesis_id: str) -> None:
-    """校验 thesis_deltas 链：base_revision==frozen_revision、sequence 连续、terminal 后无 delta。"""
+    """校验 delta 链及其 immutable evidence snapshots，任何缺失/漂移均拒绝读取。"""
     rows = conn.execute(
         "SELECT * FROM thesis_deltas WHERE thesis_id = ? ORDER BY delta_sequence ASC",
         (thesis_id,),
@@ -1340,13 +1447,71 @@ def validate_persisted_delta_chain(conn: sqlite3.Connection, thesis_id: str) -> 
     frozen_revision = int(frozen_revision)
     expected_seq = 1
     for index, row in enumerate(rows):
-        seq = int(row["delta_sequence"])
+        try:
+            delta_id = row["delta_id"]
+            row_thesis_id = row["thesis_id"]
+            seq = int(row["delta_sequence"])
+            base_revision = int(row["base_revision"])
+            delta_state = row["delta_state"]
+            reason = row["reason"]
+            confirmed_at = row["confirmed_at"]
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise EvidenceLedgerCorruptedError() from exc
+        if (
+            not isinstance(delta_id, str)
+            or not delta_id
+            or row_thesis_id != thesis_id
+            or seq < 1
+            or base_revision < 1
+            or not isinstance(reason, str)
+            or not reason.strip()
+            or delta_state not in DELTA_STATES
+        ):
+            raise EvidenceLedgerCorruptedError()
+        _require_canonical_timestamp(confirmed_at)
         if seq != expected_seq:
             raise EvidenceLedgerCorruptedError()
-        if int(row["base_revision"]) != frozen_revision:
+        if base_revision != frozen_revision:
             raise EvidenceLedgerCorruptedError()
-        if row["delta_state"] not in DELTA_STATES:
+        if delta_state in TERMINAL_DELTA_STATES and index != len(rows) - 1:
             raise EvidenceLedgerCorruptedError()
-        if row["delta_state"] in TERMINAL_DELTA_STATES and index != len(rows) - 1:
-            raise EvidenceLedgerCorruptedError()
+
+        links = conn.execute(
+            "SELECT * FROM thesis_delta_evidence_links WHERE delta_id = ? ORDER BY evidence_id",
+            (delta_id,),
+        ).fetchall()
+        for link in links:
+            try:
+                if link["delta_id"] != delta_id:
+                    raise EvidenceLedgerCorruptedError()
+                evidence_id = link["evidence_id"]
+                evidence_type = link["evidence_type"]
+                claim = link["claim"]
+                classification = link["classification"]
+                confidence = link["confidence"]
+                source_title = link["source_title"]
+                source_url = link["source_url"]
+                source_date = link["source_date"]
+                accessed_at = link["accessed_at"]
+                stance = link["stance"]
+                captured_at = link["captured_at"]
+            except (KeyError, IndexError, TypeError) as exc:
+                raise EvidenceLedgerCorruptedError() from exc
+            if (
+                not isinstance(evidence_id, str)
+                or not evidence_id
+                or evidence_type not in ("news", "announcement", "report", "research_note", "financial_filing", "other")
+                or not isinstance(claim, str)
+                or not claim.strip()
+                or classification not in ("fact", "inference", "unknown")
+                or confidence not in ("high", "medium", "low")
+                or not isinstance(source_title, str)
+                or not source_title.strip()
+                or (source_url is not None and not isinstance(source_url, str))
+                or (source_date is not None and not _is_canonical_date(source_date))
+                or stance not in ("support", "oppose", "neutral")
+            ):
+                raise EvidenceLedgerCorruptedError()
+            _require_canonical_timestamp(accessed_at)
+            _require_canonical_timestamp(captured_at)
         expected_seq += 1

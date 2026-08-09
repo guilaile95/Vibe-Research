@@ -31,6 +31,38 @@ def _draft(db):
     return tid
 
 
+def _formalized_with_link(db, *, frozen: bool):
+    """Create a Formal thesis with one linked evidence record.
+
+    The evidence link is created before confirmation so the mutation-closure
+    tests can assert that confirmed/frozen states reject stance changes and
+    unlink operations without touching the real database.
+    """
+    result = _thesis(db)
+    tid = result["thesis"]["id"]
+    svc.begin_formalization(db, tid)
+    evidence = svc.create_evidence(db, {
+        "subject_type": "stock", "subject_id": "600519", "evidence_type": "news",
+        "claim": "claim", "source_title": "source", "source_url": None,
+        "source_date": None, "accessed_at": "2026-01-01T00:00:00+00:00",
+        "classification": "fact", "confidence": "high",
+    })
+    svc.link_evidence(db, tid, evidence["id"], "support", 1)
+    svc.update_thesis(db, tid, {
+        "title": "标题", "summary": "摘要", "status": "active",
+        "core_claims": ["a", "b", "c"], "catalysts": [], "risks": [],
+        "invalidation_conditions": [], "strategy": "SWING",
+        "expected_horizon": {"unit": "TRADING_DAY", "min": 5, "max": 20, "anchor": "FREEZE_AT"},
+        "free_notes": "note",
+    }, 2)
+    svc.confirm_formalization(db, tid)
+    expected_revision = 3
+    if frozen:
+        svc.freeze_formalization(db, tid, expected_revision)
+        expected_revision = 4
+    return tid, evidence["id"], expected_revision
+
+
 @pytest.fixture
 def db(tmp_path):
     path = tmp_path / "evidence.db"
@@ -48,6 +80,12 @@ def test_begin_confirm_freeze_archive_without_revision_bump_on_markers(db):
     assert archived["status"] == "archived"
     assert archived["current_revision"] == 4
     assert archived["frozen_revision"] == 3
+    assert archived["thesis"]["status"] == "archived"
+    assert archived["thesis"]["current_revision"] == 4
+    assert archived["thesis"]["archived_at"] == archived["archived_at"]
+    fetched = svc.get_thesis(db, tid)
+    assert fetched["thesis"]["status"] == "archived"
+    assert fetched["thesis"]["current_revision"] == 4
 
 
 def test_confirm_hard_gate_and_content_lock(db):
@@ -64,6 +102,26 @@ def test_confirm_hard_gate_and_content_lock(db):
             "core_claims": ["a", "b", "c"], "catalysts": [], "risks": [],
             "invalidation_conditions": [],
         }, 2)
+
+
+def test_draft_rejects_legacy_archive_without_persisted_mutation(db):
+    tid = _draft(db)
+
+    with pytest.raises(svc.FormalLifecycleConflictError):
+        svc.archive_thesis(db, tid, 2)
+
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute(
+            "SELECT formal_state, status, current_revision FROM investment_theses WHERE id=?",
+            (tid,),
+        ).fetchone()
+        assert row == ("draft", "active", 2)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM thesis_revisions WHERE thesis_id=?", (tid,)
+        ).fetchone()[0] == 2
+    finally:
+        conn.close()
 
 
 def test_freeze_preserves_confirmed_evidence_and_rejects_live_drift(db):
@@ -92,3 +150,35 @@ def test_freeze_preserves_confirmed_evidence_and_rejects_live_drift(db):
     conn.commit(); conn.close()
     with pytest.raises(store.EvidenceLedgerCorruptedError):
         svc.freeze_formalization(db, drift_id, 2)
+
+
+@pytest.mark.parametrize("frozen", [False, True], ids=["confirmed", "frozen"])
+@pytest.mark.parametrize("operation", ["update_stance", "unlink_evidence"])
+def test_formal_content_lock_closes_stance_and_unlink_mutations(db, frozen, operation):
+    """Confirmed/Frozen states reject link-content mutations atomically."""
+    tid, evidence_id, expected_revision = _formalized_with_link(db, frozen=frozen)
+
+    with pytest.raises(svc.ContentLockedError):
+        if operation == "update_stance":
+            svc.update_stance(db, tid, evidence_id, "oppose", expected_revision)
+        else:
+            svc.unlink_evidence(db, tid, evidence_id, expected_revision)
+
+    conn = sqlite3.connect(db)
+    try:
+        thesis = conn.execute(
+            "SELECT formal_state, current_revision FROM investment_theses WHERE id=?",
+            (tid,),
+        ).fetchone()
+        assert thesis == ("frozen" if frozen else "confirmed", expected_revision)
+        expected_revision_count = 4 if frozen else 3
+        assert conn.execute(
+            "SELECT COUNT(*) FROM thesis_revisions WHERE thesis_id=?", (tid,)
+        ).fetchone()[0] == expected_revision_count
+        link = conn.execute(
+            "SELECT stance FROM thesis_evidence_links WHERE thesis_id=? AND evidence_id=?",
+            (tid, evidence_id),
+        ).fetchone()
+        assert link == ("support",)
+    finally:
+        conn.close()

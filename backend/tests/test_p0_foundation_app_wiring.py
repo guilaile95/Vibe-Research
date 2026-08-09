@@ -236,6 +236,12 @@ class TestMainAppRouteUniqueness:
         "/api/campaigns/{campaign_id}",
         "/api/campaigns/{campaign_id}/transitions",
         "/api/campaigns/{campaign_id}/thesis-binding",
+        "/api/campaigns/{campaign_id}/current-thesis",
+        "/api/thesis/{thesis_id}/begin-formalization",
+        "/api/thesis/{thesis_id}/confirm",
+        "/api/thesis/{thesis_id}/freeze",
+        "/api/thesis/{thesis_id}/archive",
+        "/api/thesis/{thesis_id}/deltas",
     }
 
     def test_related_routes_present_and_unique_in_openapi(self, client):

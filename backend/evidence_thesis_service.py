@@ -873,6 +873,12 @@ def archive_formalization(db_path, thesis_id: str, expected_revision: int) -> di
         archived_snapshot["current_revision"] = new_revision
         archived_snapshot["updated_at"] = now
         archived_snapshot["archived_at"] = now
+        nested_thesis = archived_snapshot.get("thesis")
+        if isinstance(nested_thesis, dict):
+            nested_thesis["status"] = "archived"
+            nested_thesis["current_revision"] = new_revision
+            nested_thesis["updated_at"] = now
+            nested_thesis["archived_at"] = now
         conn.execute(
             "UPDATE investment_theses SET status='archived', current_revision=?, updated_at=?, archived_at=? WHERE id=?",
             (new_revision, now, now, thesis_id),
@@ -904,8 +910,10 @@ def archive_thesis(db_path, thesis_id: str, expected_revision: int, change_summa
         # 检查是否已归档
         if thesis_row["status"] == "archived":
             raise ArchivedThesisError()
-        if thesis_row["formal_state"] in ("confirmed", "frozen"):
-            raise ContentLockedError()
+        if thesis_row["formal_state"] == "draft":
+            raise FormalLifecycleConflictError(
+                "draft thesis 不能通过 legacy archive；请完成 formal lifecycle"
+            )
         if thesis_row["formal_state"] in ("confirmed", "frozen"):
             raise ContentLockedError()
 
@@ -945,6 +953,14 @@ def get_thesis(db_path, thesis_id: str) -> dict | None:
         return None
 
 
+def _validate_thesis_read(conn, thesis_row) -> None:
+    """Apply the complete persisted Formal contract before any thesis read."""
+    thesis_id = thesis_row["id"]
+    store.validate_persisted_thesis_main(thesis_row)
+    store.validate_persisted_thesis_chain(conn, thesis_id, thesis_row)
+    store.validate_persisted_delta_chain(conn, thesis_id)
+
+
 def _get_thesis_aggregate(conn, thesis_id: str) -> dict:
     """获取 thesis 当前聚合状态。
 
@@ -956,9 +972,7 @@ def _get_thesis_aggregate(conn, thesis_id: str) -> dict:
         raise ThesisNotFoundError(f"投资逻辑 {thesis_id} 不存在")
 
     # P0-PH2 S2D-A：read path fail-closed —— 主行五态 + Formal 链 + delta 链校验
-    store.validate_persisted_thesis_main(thesis_row)
-    store.validate_persisted_thesis_chain(conn, thesis_id, thesis_row)
-    store.validate_persisted_delta_chain(conn, thesis_id)
+    _validate_thesis_read(conn, thesis_row)
 
     thesis_dict = store._thesis_row_to_dict(thesis_row)
 
@@ -1003,6 +1017,8 @@ def list_thesis(db_path, subject_type: str | None = None, subject_id: str | None
     def _do(conn):
         rows = store._list_thesis_rows(conn, norm_type, norm_id, status, limit, offset)
         total = store._count_thesis(conn, norm_type, norm_id, status)
+        for row in rows:
+            _validate_thesis_read(conn, row)
         # 返回 thesis 列表（不含 evidence_links，只含主表字段）
         return {
             "items": [store._thesis_row_to_dict(r) for r in rows],
@@ -1199,8 +1215,6 @@ def link_evidence(db_path, thesis_id: str, evidence_id: str, stance: str,
             raise ArchivedThesisError()
         if thesis_row["formal_state"] in ("confirmed", "frozen"):
             raise ContentLockedError()
-        if thesis_row["formal_state"] in ("confirmed", "frozen"):
-            raise ContentLockedError()
 
         current_rev = int(thesis_row["current_revision"])
         if expected_revision != current_rev:
@@ -1253,6 +1267,11 @@ def update_stance(db_path, thesis_id: str, evidence_id: str, stance: str,
             raise ThesisNotFoundError(f"投资逻辑 {thesis_id} 不存在")
         if thesis_row["status"] == "archived":
             raise ArchivedThesisError()
+        # Confirmed and frozen Formal Thesis content is immutable.  Stance is
+        # part of the thesis/evidence content snapshot, so it must not bypass
+        # the same lock enforced by update_thesis/link_evidence.
+        if thesis_row["formal_state"] in ("confirmed", "frozen"):
+            raise ContentLockedError()
 
         current_rev = int(thesis_row["current_revision"])
         if expected_revision != current_rev:
@@ -1284,6 +1303,10 @@ def unlink_evidence(db_path, thesis_id: str, evidence_id: str,
             raise ThesisNotFoundError(f"投资逻辑 {thesis_id} 不存在")
         if thesis_row["status"] == "archived":
             raise ArchivedThesisError()
+        # Removing a link changes the persisted thesis content and therefore
+        # is also closed after Formal confirmation/freeze.
+        if thesis_row["formal_state"] in ("confirmed", "frozen"):
+            raise ContentLockedError()
 
         current_rev = int(thesis_row["current_revision"])
         if expected_revision != current_rev:
@@ -1313,6 +1336,7 @@ def list_revisions(db_path, thesis_id: str) -> dict | None:
         thesis_row = store._get_thesis_row(conn, thesis_id)
         if thesis_row is None:
             return None
+        _validate_thesis_read(conn, thesis_row)
         rows = store._list_revision_rows(conn, thesis_id)
         return {
             "items": [
@@ -1343,6 +1367,7 @@ def get_revision(db_path, thesis_id: str, revision_number: int) -> dict | None:
         thesis_row = store._get_thesis_row(conn, thesis_id)
         if thesis_row is None:
             return None
+        _validate_thesis_read(conn, thesis_row)
         row = store._get_revision_row(conn, thesis_id, revision_number)
         if row is None:
             return None
@@ -1365,6 +1390,7 @@ def diff_revisions(db_path, thesis_id: str, from_rev: int, to_rev: int) -> dict 
         thesis_row = store._get_thesis_row(conn, thesis_id)
         if thesis_row is None:
             return None
+        _validate_thesis_read(conn, thesis_row)
         from_row = store._get_revision_row(conn, thesis_id, from_rev)
         to_row = store._get_revision_row(conn, thesis_id, to_rev)
         if from_row is None or to_row is None:

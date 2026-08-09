@@ -358,6 +358,64 @@ class TestConflict:
         })
         assert r.status_code == 409
 
+    @pytest.mark.parametrize("frozen", [False, True], ids=["confirmed", "frozen"])
+    def test_formal_content_mutation_endpoints_return_409(self, client, frozen):
+        thesis = _create_thesis(client, core_claims=["c1", "c2", "c3"])
+        tid = thesis["thesis"]["id"]
+        linked = _create_evidence(client, claim="linked")
+        other = _create_evidence(client, claim="other")
+
+        assert client.post(f"/api/thesis/{tid}/begin-formalization").status_code == 200
+        assert client.post(f"/api/thesis/{tid}/evidence", json={
+            "evidence_id": linked["id"], "stance": "support",
+            "expected_revision": 1, "change_summary": "link",
+        }).status_code == 200
+        update_body = {
+            "title": "thesis", "summary": "summary", "status": "active",
+            "core_claims": ["c1", "c2", "c3"], "catalysts": ["cat1"],
+            "risks": ["r1"], "invalidation_conditions": ["ic1"],
+            "strategy": "SWING",
+            "expected_horizon": {
+                "unit": "TRADING_DAY", "min": 5, "max": 20, "anchor": "FREEZE_AT",
+            },
+            "free_notes": "note", "expected_revision": 2, "change_summary": "formal content",
+        }
+        assert client.put(f"/api/thesis/{tid}", json=update_body).status_code == 200
+        assert client.post(f"/api/thesis/{tid}/confirm").status_code == 200
+        expected_revision = 3
+        expected_state = "confirmed"
+        if frozen:
+            assert client.post(
+                f"/api/thesis/{tid}/freeze", json={"expected_revision": 3}
+            ).status_code == 200
+            expected_revision = 4
+            expected_state = "frozen"
+
+        attempts = (
+            client.put(f"/api/thesis/{tid}", json={
+                **update_body,
+                "title": "blocked",
+                "expected_revision": expected_revision,
+            }),
+            client.post(f"/api/thesis/{tid}/evidence", json={
+                "evidence_id": other["id"], "stance": "support",
+                "expected_revision": expected_revision, "change_summary": "blocked",
+            }),
+            client.put(f"/api/thesis/{tid}/evidence/{linked['id']}", json={
+                "stance": "oppose", "expected_revision": expected_revision,
+                "change_summary": "blocked",
+            }),
+            client.delete(
+                f"/api/thesis/{tid}/evidence/{linked['id']}?expected_revision={expected_revision}"
+            ),
+        )
+        assert [response.status_code for response in attempts] == [409, 409, 409, 409]
+
+        current = client.get(f"/api/thesis/{tid}").json()["data"]
+        assert current["thesis"]["formal_state"] == expected_state
+        assert current["thesis"]["current_revision"] == expected_revision
+        assert current["evidence_links"][0]["stance"] == "support"
+
 
 # ---------------------------------------------------------------------------
 # 422 校验失败

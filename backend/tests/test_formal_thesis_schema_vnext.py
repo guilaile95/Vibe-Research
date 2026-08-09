@@ -11,6 +11,7 @@ import sqlite3
 
 import pytest
 
+import evidence_thesis_service as svc
 import evidence_thesis_store as store
 from evidence_thesis_store import EvidenceLedgerCorruptedError
 
@@ -159,6 +160,7 @@ def _frozen_archived_row(thesis_id="t" * 32, **overrides):
     row = _frozen_row(thesis_id)
     row.update({
         "status": "archived",
+        "updated_at": "2026-08-05T00:00:00.000000+00:00",
         "archived_at": "2026-08-05T00:00:00.000000+00:00",
         "current_revision": 3,
     })
@@ -238,6 +240,30 @@ def test_frozen_chain_roundtrip_with_revisions(tmp_path, monkeypatch):
     conn.close()
 
 
+def test_all_thesis_read_paths_fail_closed_on_formal_chain_corruption(tmp_path, monkeypatch):
+    db_path = _db(tmp_path, monkeypatch)
+    thesis_id = "r" * 32
+    _chain_ok(db_path, thesis_id)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "UPDATE thesis_revisions SET revision_kind='CONTENT' "
+        "WHERE thesis_id=? AND revision_number=2",
+        (thesis_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    reads = (
+        lambda: svc.list_thesis(db_path),
+        lambda: svc.list_revisions(db_path, thesis_id),
+        lambda: svc.get_revision(db_path, thesis_id, 2),
+        lambda: svc.diff_revisions(db_path, thesis_id, 1, 2),
+    )
+    for read in reads:
+        with pytest.raises(EvidenceLedgerCorruptedError):
+            read()
+
+
 def test_frozen_archived_chain_roundtrip(tmp_path, monkeypatch):
     db_path = _db(tmp_path, monkeypatch)
     thesis_id = "a" * 32
@@ -248,7 +274,12 @@ def test_frozen_archived_chain_roundtrip(tmp_path, monkeypatch):
         db_path, thesis_id, 2,
         _snapshot_content(current_revision=2), "FORMAL_FREEZE",
     )
-    archive_snap = _snapshot_content(current_revision=3, status="archived")
+    archive_snap = _snapshot_content(
+        current_revision=3,
+        status="archived",
+        updated_at=row["updated_at"],
+        archived_at=row["archived_at"],
+    )
     _insert_revision(db_path, thesis_id, 3, archive_snap, "FORMAL_ARCHIVE")
     conn = _ro_conn(db_path)
     fetched = conn.execute("SELECT * FROM investment_theses WHERE id = ?", (thesis_id,)).fetchone()
@@ -464,6 +495,71 @@ def test_corrupt_20_invalid_horizon_json(tmp_path, monkeypatch):
             store.validate_persisted_thesis_main(fetched)
     finally:
         conn.close()
+
+
+def test_legacy_archived_at_parseable_iso_is_valid(tmp_path, monkeypatch):
+    db_path = _db(tmp_path, monkeypatch)
+    row = _base_row("legacyarch" + "0" * 22)
+    row.update({"status": "archived", "archived_at": "2026-08-05T00:00:00Z"})
+    _insert(db_path, row)
+    conn = _ro_conn(db_path)
+    try:
+        store.validate_persisted_thesis_main(
+            conn.execute("SELECT * FROM investment_theses WHERE id = ?", (row["id"],)).fetchone()
+        )
+    finally:
+        conn.close()
+
+
+def test_confirmed_current_snapshot_required_and_content_match(tmp_path, monkeypatch):
+    db_path = _db(tmp_path, monkeypatch)
+    thesis_id = "confirmedmissing" + "0" * 17
+    row = _confirmed_row(thesis_id)
+    _insert(db_path, row)
+    conn = _ro_conn(db_path)
+    fetched = conn.execute("SELECT * FROM investment_theses WHERE id = ?", (thesis_id,)).fetchone()
+    with pytest.raises(EvidenceLedgerCorruptedError):
+        store.validate_persisted_thesis_chain(conn, thesis_id, fetched)
+    conn.close()
+
+    db_path = _db(tmp_path / "drift", monkeypatch)
+    thesis_id = "confirmeddrift" + "0" * 19
+    _insert(db_path, _confirmed_row(thesis_id))
+    drift = _snapshot_content(title="drift")
+    _insert_revision(db_path, thesis_id, 1, drift, "CONTENT")
+    conn = _ro_conn(db_path)
+    fetched = conn.execute("SELECT * FROM investment_theses WHERE id = ?", (thesis_id,)).fetchone()
+    with pytest.raises(EvidenceLedgerCorruptedError):
+        store.validate_persisted_thesis_chain(conn, thesis_id, fetched)
+    conn.close()
+
+
+def test_formal_lifecycle_timestamp_must_be_canonical(tmp_path, monkeypatch):
+    db_path = _db(tmp_path, monkeypatch)
+    row = _confirmed_row("timestampbad" + "0" * 21)
+    row["confirmed_at"] = "2026-08-03T00:00:00Z"
+    _insert(db_path, row)
+    with pytest.raises(EvidenceLedgerCorruptedError):
+        store.validate_persisted_thesis_main(_fetch_thesis(db_path, row["id"]))
+
+
+def test_corrupt_24_delta_evidence_snapshot_fails_closed(tmp_path, monkeypatch):
+    db_path = _db(tmp_path, monkeypatch)
+    thesis_id = "24" + "0" * 30
+    _chain_ok(db_path, thesis_id)
+    _insert_delta(db_path, thesis_id, 1, "STABLE")
+    conn = _ro_conn(db_path)
+    conn.execute(
+        "INSERT INTO thesis_delta_evidence_links "
+        "(delta_id,evidence_id,evidence_type,claim,classification,confidence,source_title,source_url,source_date,accessed_at,stance,captured_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (f"delta_{thesis_id[:8]}_1", "ev24", "news", "claim", "bad", "high", "source", None, None,
+         "2026-08-06T00:00:00.000000+00:00", "support", "2026-08-06T00:00:00.000000+00:00"),
+    )
+    conn.commit()
+    with pytest.raises(EvidenceLedgerCorruptedError):
+        store.validate_persisted_delta_chain(conn, thesis_id)
+    conn.close()
 
 
 # ---------------------------------------------------------------------------

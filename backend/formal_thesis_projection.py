@@ -98,7 +98,23 @@ def project_current_thesis(campaign_id: str) -> dict:
             "ORDER BY delta_sequence ASC",
             (thesis_id,),
         ).fetchall()
-        deltas = [evidence_store._delta_row_to_dict(r) for r in delta_rows]
+        deltas = []
+        for delta_row in delta_rows:
+            delta = evidence_store._delta_row_to_dict(delta_row)
+            # Delta evidence must come from the canonical immutable snapshots.
+            # Do not join/read mutable evidence_records here: after the delta is
+            # persisted, edits or soft-deletes to live evidence must not rewrite
+            # this historical projection.
+            link_rows = conn.execute(
+                "SELECT * FROM thesis_delta_evidence_links "
+                "WHERE delta_id = ? ORDER BY evidence_id",
+                (delta["delta_id"],),
+            ).fetchall()
+            delta["evidence_links"] = [
+                evidence_store._delta_evidence_row_to_dict(link_row)
+                for link_row in link_rows
+            ]
+            deltas.append(delta)
         effective_state = _effective_state(deltas)
 
         # 4. Strategy consistency（不一致 → 409 semantic conflict）

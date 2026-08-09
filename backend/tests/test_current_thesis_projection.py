@@ -175,6 +175,66 @@ def _insert_delta(
     )
 
 
+def _insert_evidence_record(db_path, evidence_id: str) -> None:
+    """Insert the mutable live record paired with a delta snapshot fixture."""
+    _exec(
+        db_path,
+        "INSERT INTO evidence_records "
+        "(id, subject_type, subject_id, evidence_type, claim, source_title, "
+        "source_url, source_date, accessed_at, classification, confidence, "
+        "created_at, updated_at, deleted, deleted_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            evidence_id,
+            "stock",
+            "600519",
+            "news",
+            "mutable claim before",
+            "mutable source before",
+            "https://mutable.example/before",
+            "2026-08-01",
+            _TS,
+            "fact",
+            "high",
+            _TS,
+            _TS,
+            0,
+            None,
+        ),
+    )
+
+
+def _insert_delta_evidence_snapshot(
+    db_path,
+    thesis_id: str,
+    seq: int,
+    *,
+    evidence_id: str = "ev_snapshot",
+    classification: str = "fact",
+) -> None:
+    _exec(
+        db_path,
+        "INSERT INTO thesis_delta_evidence_links "
+        "(delta_id, evidence_id, evidence_type, claim, classification, confidence, "
+        "source_title, source_url, source_date, accessed_at, stance, captured_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            f"delta_{thesis_id[:8]}_{seq}",
+            evidence_id,
+            "news",
+            "immutable claim at delta time",
+            classification,
+            "high",
+            "immutable source at delta time",
+            "https://snapshot.example/source",
+            "2026-08-01",
+            _TS,
+            "support",
+            _TS,
+        ),
+    )
+
+
 def _install_frozen(
     db_path,
     thesis_id,
@@ -229,6 +289,14 @@ def _install_non_frozen(db_path, thesis_id, kind: str) -> None:
     else:  # legacy
         row = _thesis_row(thesis_id, formal_state=None, strategy=None, revision=1)
     _insert_thesis(db_path, row)
+    if kind == "confirmed":
+        _insert_revision(
+            db_path,
+            thesis_id,
+            1,
+            _snapshot(strategy="SWING", revision=1),
+            "CONTENT",
+        )
 
 
 def _setup_campaign(db_path, strategy="SWING") -> dict:
@@ -320,6 +388,67 @@ def test_projection_non_terminal_deltas_latest_wins(campaign_db, evidence_db):
     assert [d["delta_state"] for d in p["deltas"]] == ["STRENGTHENED", "WEAKENED"]
     assert [d["delta_sequence"] for d in p["deltas"]] == [1, 2]
     assert p["deltas"][0]["base_revision"] == 2
+
+
+def test_projection_delta_evidence_uses_immutable_snapshot(
+    campaign_db, evidence_db
+):
+    """Live evidence edits/deletes must not alter a persisted delta snapshot."""
+    rec = _setup_campaign(campaign_db)
+    tid = _tid(17)
+    _install_frozen(evidence_db, tid, revision=2, deltas=((1, "STRENGTHENED"),))
+    _insert_evidence_record(evidence_db, "ev_snapshot")
+    _insert_delta_evidence_snapshot(evidence_db, tid, 1)
+    _bind(rec["campaign_id"], tid, 2, "SWING")
+
+    before = formal_thesis_projection.project_current_thesis(rec["campaign_id"])
+    snapshot = before["deltas"][0]["evidence_links"]
+    assert snapshot == [
+        {
+            "delta_id": f"delta_{tid[:8]}_1",
+            "evidence_id": "ev_snapshot",
+            "evidence_type": "news",
+            "claim": "immutable claim at delta time",
+            "classification": "fact",
+            "confidence": "high",
+            "source_title": "immutable source at delta time",
+            "source_url": "https://snapshot.example/source",
+            "source_date": "2026-08-01",
+            "accessed_at": _TS,
+            "stance": "support",
+            "captured_at": _TS,
+        }
+    ]
+
+    _exec(
+        evidence_db,
+        "UPDATE evidence_records SET claim = ?, source_title = ?, "
+        "classification = ?, confidence = ?, updated_at = ? WHERE id = ?",
+        ("mutable claim after", "mutable source after", "inference", "low", _TS, "ev_snapshot"),
+    )
+    _exec(
+        evidence_db,
+        "UPDATE evidence_records SET deleted = 1, deleted_at = ?, updated_at = ? WHERE id = ?",
+        (_TS, _TS, "ev_snapshot"),
+    )
+
+    after = formal_thesis_projection.project_current_thesis(rec["campaign_id"])
+    assert after["deltas"][0]["evidence_links"] == snapshot
+
+
+def test_projection_corrupt_delta_evidence_snapshot_fails_closed(
+    campaign_db, evidence_db
+):
+    rec = _setup_campaign(campaign_db)
+    tid = _tid(18)
+    _install_frozen(evidence_db, tid, revision=2, deltas=((1, "STRENGTHENED"),))
+    _insert_delta_evidence_snapshot(
+        evidence_db, tid, 1, classification="not-a-valid-classification"
+    )
+    _bind(rec["campaign_id"], tid, 2, "SWING")
+
+    with pytest.raises(EvidenceLedgerCorruptedError):
+        formal_thesis_projection.project_current_thesis(rec["campaign_id"])
 
 
 def test_projection_terminal_delta_last_wins(campaign_db, evidence_db):
