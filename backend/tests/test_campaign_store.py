@@ -558,6 +558,45 @@ def test_duplicate_transition_id_conflict_status_unchanged(db_path):
     assert len(list_campaign_transitions(rec["campaign_id"])) == 1  # 无 half record
 
 
+def test_campaign_update_failure_rolls_back_audit(db_path):
+    """（R3 #32）audit INSERT 成功后的 status UPDATE 失败 → 整个事务回滚：
+    1. Campaign.status 保持原值；2. campaign_transitions 不留下刚 INSERT 的 audit；
+    3. 绝不出现「audit exists + status old」的 half-transition。
+
+    方法：在 test DB 建 test-only SQLite trigger（BEFORE UPDATE OF status 强制
+    RAISE(ABORT)）。trigger 只存在于测试库，不修改 production schema。
+    """
+    rec = _new_campaign(db_path, status="DRAFT")
+    cid = rec["campaign_id"]
+    assert list_campaign_transitions(cid) == []
+
+    # test-only trigger：任何 campaigns.status UPDATE 直接失败
+    with sqlite3.connect(str(db_path)) as raw:
+        raw.execute(
+            "CREATE TRIGGER test_force_update_failure "
+            "BEFORE UPDATE OF status ON campaigns "
+            "BEGIN SELECT RAISE(ABORT, 'forced update failure for atomicity test'); END"
+        )
+
+    with pytest.raises(sqlite3.Error):  # UPDATE 被 trigger 强制失败
+        _transition(db_path, cid, "DRAFT", "RESEARCHING")
+
+    # 1. status 回滚到原值（DRAFT）
+    assert get_campaign(cid)["status"] == "DRAFT"
+    # 2. audit 不留下（INSERT 与 UPDATE 同事务，整体回滚）
+    assert list_campaign_transitions(cid) == []
+    # 3. 无 half-transition：status 与 audit 必须一致
+    assert get_campaign(cid)["status"] == "DRAFT"
+    assert list_campaign_transitions(cid) == []
+
+    # trigger 移除后 store 仍可正常工作（trigger 是测试副作用，不影响后续契约）
+    with sqlite3.connect(str(db_path)) as raw:
+        raw.execute("DROP TRIGGER test_force_update_failure")
+    campaign, tr = _transition(db_path, cid, "DRAFT", "RESEARCHING")
+    assert campaign["status"] == "RESEARCHING"
+    assert len(list_campaign_transitions(cid)) == 1
+
+
 def test_invalid_transition_inputs_fail_closed(db_path):
     rec = _new_campaign(db_path, status="DRAFT")
     with pytest.raises(CampaignStoreInputError):
