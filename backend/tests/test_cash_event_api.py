@@ -192,6 +192,26 @@ class TestCashCorrectionApi:
         resp = client.post(f"/api/account/cash-events/{ev['event_id']}/corrections", json={"amount": 0.001})
         assert resp.status_code == 422
 
+    def test_correction_invalid_reason_note_422_not_silent_none(self, client):
+        """reason/note 非法值必须在校验层拒绝，不得静默写成 NULL。"""
+        ev = self._create_ev(client, "CASH_DEPOSIT", 100.0)
+        invalid_payloads = [
+            {"amount": 120.0, "reason": 123},
+            {"amount": 120.0, "reason": ""},
+            {"amount": 120.0, "note": "   "},
+            {"amount": 120.0, "note": []},
+        ]
+        for payload in invalid_payloads:
+            resp = client.post(
+                f"/api/account/cash-events/{ev['event_id']}/corrections",
+                json=payload,
+            )
+            assert resp.status_code == 422
+        all_events = account_event_store.list_events(
+            position_reality_service.resolve_db_path(), include_voided=True
+        )
+        assert [e for e in all_events if e["event_type"] == "CORRECTION"] == []
+
     def test_correction_extra_field_422(self, client):
         ev = self._create_ev(client, "CASH_DEPOSIT", 100.0)
         resp = client.post(f"/api/account/cash-events/{ev['event_id']}/corrections",
@@ -211,6 +231,48 @@ class TestCashCorrectionApi:
         assert "secret" not in resp.text
         assert ".vibe-research" not in resp.text
         assert resp.json()["detail"] == "内部错误"
+
+    def test_persisted_prior_correction_corruption_is_sanitized_500(self, client):
+        """历史 correction 损坏属于持久化完整性错误，不能伪装成客户端 422。"""
+        ev = self._create_ev(client, "CASH_DEPOSIT", 100.0)
+        account_event_store.insert_event(svc.resolve_db_path(), {
+            "event_id": "aev_corrupt_prior_api",
+            "event_type": "CORRECTION",
+            "code": None, "name": None, "shares": None, "cost_basis": None,
+            "opening_cash": None, "ledger_start_at": None, "origin": None,
+            "acquired_before_vibe": None, "historical_trades": None,
+            "provenance": "MANUAL", "target_event_id": ev["event_id"],
+            "target_event_type": "account_event",
+            "before_payload": '{"amount": 100}', "after_payload": "not-json",
+            "reason": "历史", "note": None, "amount": None,
+            "created_at": "2026-08-09T01:00:00+00:00",
+        })
+        resp = client.post(
+            f"/api/account/cash-events/{ev['event_id']}/corrections",
+            json={"amount": 120.0},
+        )
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "内部错误"
+        assert "not-json" not in resp.text
+        assert "traceback" not in resp.text.lower()
+
+    def test_unknown_persisted_event_type_direct_get_is_sanitized_500(self, client):
+        """direct GET 读取未知持久化 event_type 必须 fail closed，而非返回 404。"""
+        account_event_store.insert_event(svc.resolve_db_path(), {
+            "event_id": "raw_bogus_direct_get",
+            "event_type": "BOGUS",
+            "code": None, "name": None, "shares": None, "cost_basis": None,
+            "opening_cash": None, "ledger_start_at": None, "origin": None,
+            "acquired_before_vibe": None, "historical_trades": None,
+            "provenance": "MANUAL", "target_event_id": None,
+            "target_event_type": None, "before_payload": None,
+            "after_payload": None, "reason": None, "note": None,
+            "amount": 100.0, "created_at": "2026-08-09T02:00:00+00:00",
+        })
+        resp = client.get("/api/account/cash-events/raw_bogus_direct_get")
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "内部错误"
+        assert "BOGUS" not in resp.text
 
     def test_no_patch_put_delete_mutation_paths(self):
         """不得提供 PATCH/PUT/DELETE cash event mutation path。"""

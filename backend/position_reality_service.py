@@ -358,10 +358,13 @@ def _prior_effective_values_on_connection(
         try:
             after = json.loads(corr["after_payload"])
         except (TypeError, ValueError) as exc:
-            raise PositionValidationError("已有 correction 数据损坏") from exc
-        if isinstance(after, dict):
-            for k, v in after.items():
-                current[k] = v
+            # prior correction 是持久化历史事实；损坏不能归因于当前客户端请求。
+            # 直接提升为数据完整性错误，由 HTTP 层脱敏为 500。
+            raise account_event_store.AccountEventCorruptedError() from exc
+        if not isinstance(after, dict):
+            raise account_event_store.AccountEventCorruptedError()
+        for k, v in after.items():
+            current[k] = v
     return {k: current.get(k) for k in keys}
 
 

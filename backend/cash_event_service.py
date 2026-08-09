@@ -131,6 +131,9 @@ def get_cash_event(event_id: str) -> dict[str, Any] | None:
     event = account_event_store.get_event(resolve_db_path(), event_id)
     if event is None:
         return None
+    # 未知持久化 event_type 是数据损坏，不能被当作“非现金事件”静默映射成 404。
+    # 已知的非现金类型仍保持 404 语义。
+    account_event_store.validate_event_type(event.get("event_type"))
     if event.get("event_type") not in CASH_EVENT_TYPES:
         return None
     # 持久化事实校验：损坏 → AccountEventCorruptedError（fail closed）
@@ -180,13 +183,18 @@ def correct_cash_event(event_id: str, payload: dict[str, Any]) -> dict[str, Any]
     event = get_cash_event(event_id)
     if event is None:
         raise CashEventNotFoundError()
-    reason = payload.get("reason")
-    note = payload.get("note")
+    # reason/note 为可选字段，但一旦出现必须是非空字符串；不能把非法输入
+    # （例如数字、空字符串、全空白）静默清洗成 None。这样客户端错误保持在
+    # 校验层并由 HTTP 路由明确返回 422，而不会伪装成合法的空元数据。
+    for field in ("reason", "note"):
+        value = payload.get(field)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise CashEventValidationError(f"{field} 必须是非空字符串或 null")
     result = position_reality_service.create_correction({
         "target_event_id": event_id,
         "target_event_type": "account_event",
         "after_payload": {"amount": amount},
-        "reason": reason if isinstance(reason, str) and reason.strip() else None,
-        "note": note if isinstance(note, str) and note.strip() else None,
+        "reason": payload.get("reason"),
+        "note": payload.get("note"),
     })
     return result
