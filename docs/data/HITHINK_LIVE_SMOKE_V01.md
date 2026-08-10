@@ -95,12 +95,12 @@ pytest tests/live/test_hithink_live_smoke.py -m live -q   # 10 passed
 
 | 概念 | 端点 | 状态 | 证据 |
 |---|---|---|---|
-| trade_date | historical_daily | LIVE_VERIFIED | `date_ms` 毫秒；R2 已断言返回 date_ms ∈ 请求窗口 + 顺序确定（ASCENDING/DESCENDING） |
+| trade_date | historical_daily | LIVE_VERIFIED | `date_ms` 毫秒；FINAL rerun（2026-08-10T08:23:56Z）断言每条返回 date_ms ∈ 请求窗口 + 顺序确定（ASCENDING/DESCENDING）+ date_ms_count==item_count |
 | report_period | income_statement | LIVE_VERIFIED | `period_end_ms` + `fiscal_year/fiscal_period` |
 | published/公告时间 | income_statement | UNKNOWN | `report_date_ms` 存在但官方未明确声明为公告时间 → 不伪造为 published_at |
 | fetched_at | probe 本地生成 | DOC_VERIFIED | 允许（其余时间戳一律不发明） |
 | revision_id / data_version | 全部 | UNKNOWN | financials 无 is_old/revision/corrected 标识（LIVE 响应亦未暴露） |
-| adjustment_semantics | historical_daily | LIVE_VERIFIED | `adjust=none/forward/backward` 三模式均返回 K 线（R1/R2 实测）；`adjust` 参数语义由端点页声明 |
+| adjustment_semantics | historical_daily | LIVE_VERIFIED | `adjust=none/forward/backward` 三模式均返回 K 线（FINAL rerun 验证）；`adjust` 参数语义由端点页声明 |
 
 ---
 
@@ -119,24 +119,24 @@ pytest tests/live/test_hithink_live_smoke.py -m live -q   # 10 passed
 | valuation_snapshot | 单标的 PE/PB/PS/PCF |
 | **non_trading_day 2026-08-08(周六)** | **code=0 + count=0 空 items + timestamp=null**（非业务错误，静默空窗） |
 
-## 6.1 R2/R3 Live Evidence 断言（R1 之后新增 → 当前 PENDING_LIVE_RERUN）
+## 6.1 R2/R3 Live Evidence 断言（旋转后凭据 rerun 成功 → LIVE_VERIFIED）
 
-> 证据状态说明：R1 实测（§4 矩阵 / §6 观察）为 **LIVE_VERIFIED**。以下 R2/R3
-> 新增断言在旋转后凭据成功 rerun **之前**一律标注 **PENDING_LIVE_RERUN**（未
-> 标 LIVE_VERIFIED）；rerun 成功后将更新为 LIVE_VERIFIED 并记录执行时间戳。
+> 执行时间戳：**2026-08-10T08:23:56+00:00**（FINAL live rerun，`pytest -m live` 11/11 passed）。
+> R1 实测（§4 矩阵 / §6 观察）为 **LIVE_VERIFIED**；以下 R2/R3 新增断言已由本次
+> rerun 验证，全部为 **LIVE_VERIFIED**。
 
-- **PENDING_LIVE_RERUN — SYMBOL_SEARCH_IDENTITY_VERIFIED**：`q=600519` → 受限身份集
-  `_identities` 必须包含 `600519.SH`（不从非空响应推断）。
-- **PENDING_LIVE_RERUN — SNAPSHOT_EXPECTED_IDENTITIES_PRESENT**：`600519.SH,000001.SZ`
+- **LIVE_VERIFIED — SYMBOL_SEARCH_IDENTITY_VERIFIED**：`q=600519` → 受限身份集
+  `_identities` 包含 `600519.SH`（不从非空响应推断）。
+- **LIVE_VERIFIED — SNAPSHOT_EXPECTED_IDENTITIES_PRESENT**：`600519.SH,000001.SZ`
   请求 → `_identities` 同时包含两标的（不断言价格）。
-- **PENDING_LIVE_RERUN — HISTORICAL_ALL_DATES_IN_REQUEST_RANGE**：2 标的 × 2 时间窗全部
+- **LIVE_VERIFIED — HISTORICAL_ALL_DATES_IN_REQUEST_RANGE**：2 标的 × 2 时间窗全部
   date_ms ∈ 请求 [start, end]（毫秒逐值断言）。
-- **PENDING_LIVE_RERUN — HISTORICAL_ORDERING_VERIFIED**：每窗 date_ms 顺序 ASC/DESC。
-- **PENDING_LIVE_RERUN — HISTORICAL_OHLC_TYPES_VERIFIED**：open/high/low/close 类型
+- **LIVE_VERIFIED — HISTORICAL_ORDERING_VERIFIED**：每窗 date_ms 顺序 ASC/DESC。
+- **LIVE_VERIFIED — HISTORICAL_OHLC_TYPES_VERIFIED**：open/high/low/close 类型
   ⊆ {float,int,null}。
-- **PENDING_LIVE_RERUN — HISTORICAL_DATE_COUNT_COMPLETE**（R3）：`date_ms_count == item_count`
+- **LIVE_VERIFIED — HISTORICAL_DATE_COUNT_COMPLETE**（R3）：`date_ms_count == item_count`
   （每条 bar 都有有效 date_ms 坐标；全量计数不截断）。
-- **PENDING_LIVE_RERUN — SYMBOL_SEARCH_INVALID_BEHAVIOR**（R3）：`q=ZZZ999` 无匹配查询
+- **LIVE_VERIFIED — SYMBOL_SEARCH_INVALID_BEHAVIOR**（R3）：`q=ZZZ999` 无匹配查询
   → 实际分类 ∈ {EMPTY_SUCCESS, BUSINESS_ERROR, OTHER_OBSERVED_BEHAVIOR}（可解析，不假设）。
 
 观测表示保持有界：`_identities` ≤ 10、`date_ms_values` ≤ 200、OHLC 采样 ≤ 10 条 ——
