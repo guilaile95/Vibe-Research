@@ -48,10 +48,10 @@ CURRENT_VS_IN_PROGRESS_SEPARATED = **PASS**（未将未合并分支混入当前�
 ### 2.1 Provider Provenance 总表（14）
 
 术语（MD/JSON/PR 一致）：
-- **source_owner（10）**：上游数据真实所有者——tencent / eastmoney / hkex / tushare / tonghuashun / cninfo / baidu / mootdx_tdx / rss / local。**transport_client 不得抹掉 source_owner 身份**。
-- **provider_domain（14）**：source_owner 下的可寻址入口端点，即下表 `provider_id` 列的权威标识。
-- **transport_client（4）**：执行网络传输的客户端——urllib/requests（标准库直连）、akshare（惰性聚合）、mootdx（TDX 协议）、TushareClient（HTTPS）。akshare/mootdx 只是 transport，不改变真实上游。
-- **provenance 规则（至少保留）**：`THS_VIA_AKSHARE`（上游=tonghuashun，传输=akshare，入口=astock.financials）、`EASTMONEY_VIA_AKSHARE`（上游=eastmoney，传输=akshare，入口=astock.stock_news/stock_fund_flow_industry）、`CNINFO_VIA_AKSHARE`（上游=cninfo，传输=akshare，入口=astock.disclosure）、`TDX_VIA_MOOTDX`（上游=mootdx_tdx，传输=mootdx，入口=astock.kline）。
+- **source_owner（10）**：上游数据真实所有者——tencent / eastmoney / hkex / tushare / tonghuashun / cninfo / baidu / unknown / rss / local。**transport_client 不得抹掉 source_owner 身份**；未获确证的所有者保持 `UNKNOWN`（不发明上游）。
+- **provider_domain（14）**：source_owner（或 `source_domain`，如 `TDX_PROTOCOL`）下的可寻址入口端点，即下表 `provider_id` 列的权威标识。
+- **transport_client（4）**：执行网络传输的客户端——urllib/requests（标准库直连）、akshare（惰性聚合）、mootdx（TDX 协议）、TushareClient（HTTPS）。akshare/mootdx 只是 transport，不改变真实上游；`akshare_lazy` 是 transport 聚合（`AKSHARE_AGGREGATE`，`source_owner=UNKNOWN`），其真实上游经 `THS_VIA_AKSHARE` / `EASTMONEY_VIA_AKSHARE` / `CNINFO_VIA_AKSHARE` / `BAIDU_VIA_AKSHARE` 显式标识，不兼作 provider_domain 实体。
+- **provenance 规则（至少保留）**：`THS_VIA_AKSHARE`（上游=tonghuashun，传输=akshare，入口=astock.financials）、`EASTMONEY_VIA_AKSHARE`（上游=eastmoney，传输=akshare，入口=astock.stock_news/stock_fund_flow_industry）、`CNINFO_VIA_AKSHARE`（上游=cninfo，传输=akshare，入口=astock.disclosure）、`TDX_VIA_MOOTDX`（上游=UNKNOWN / TDX_PROTOCOL，传输=mootdx，入口=astock.kline）。
 - `gstock` 为 transport_wrapper（复用东财 push2/datacenter 做港美股）；`local_static` 为本地静态工件。
 
 | provider_id | source_owner | transport_client | 入口 module/symbol | network/local | credential | 集成状态 |
@@ -64,7 +64,7 @@ CURRENT_VS_IN_PROGRESS_SEPARATED = **PASS**（未将未合并分支混入当前�
 | akshare_lazy | multi（见 aggregates） | akshare（惰性） | `astock._akshare()` 第 3/4/5 层（financials/新闻/公告/板块资金流/估值） | network | 无 | INTEGRATED_STABLE（惰性依赖，缺失抛 `DependencyMissing`） |
 | ths_via_akshare | tonghuashun | akshare（惰性） | `astock._akshare()` 的 THS 财务摘要（`stock_financial_abstract_ths`） | network | 无 | INTEGRATED_STABLE（经 akshare；provenance `THS_VIA_AKSHARE`） |
 | cninfo_via_akshare | cninfo | akshare（惰性） | `astock.disclosure` | network | 无 | INTEGRATED_STABLE（标记不稳定备用） |
-| mootdx | mootdx_tdx | mootdx（TDX 协议） | `astock.kline`（`Quotes.factory(market="std")`）、`astock.finance` | network | 无 | INTEGRATED_STABLE（惰性） |
+| mootdx | UNKNOWN（`source_domain=TDX_PROTOCOL`） | mootdx（TDX 协议） | `astock.kline`（`Quotes.factory(market="std")`）、`astock.finance` | network | 无 | INTEGRATED_STABLE（惰性；provenance `TDX_VIA_MOOTDX`） |
 | gstock | eastmoney | urllib/requests（astock.em_get，复用） | `gstock.us_hk_stock` / `global_indices` / `_key_metrics` | network | 无 | INTEGRATED_STABLE（transport_wrapper；Yahoo/SEC 不并入） |
 | hkex_official | hkex | requests | `northbound_capital_flow.get_northbound_capital_flow`（HKEX Stock Connect Daily Statistics JS） | network | 无 | INTEGRATED_STABLE |
 | rss_newsradar | rss | requests（RSS） | `newsradar.py`（`news_sources.json` 多 RSS） | network | 无 | INTEGRATED_STABLE |
@@ -285,7 +285,7 @@ DS_L1_REUSE_BOUNDARY = **PASS**（未在证据不足处强推结论）
 |---|---|---|---|---|
 | 1 | **ds_limit_up_pool_ladder**（BK-11 daily facts） | 已有严格 envelope store + envelope provenance + legal-zero 检测 + 跨源对账点 | 观测级 provenance 下沉；revision/vintage 逐观测化（`point_in_time_safe` 现为 UNKNOWN） | EXTEND |
 | 2 | **ds_daily_history_price**（K线） | Thesis/Decision 复现价值最高 | 无持久化、无复权、point_in_time_safe=false、无 revision——是最大真缺口，PoC 能证明「adjustment/revision」痛点 | NEW_FOR_FACT_LAKE |
-| 3 | **ds_northbound_capital_flow** | 权威源、by_date、provenance 纪律强 | 无持久化（内存 only）；point_in_time_safe 现为 UNKNOWN（无 vintage/revision） | EXTEND |
+| 3 | **ds_northbound_capital_flow** | 权威源、by_date historical-coordinate retrieval、provenance 纪律强 | 无持久化（内存 only）；`point_in_time_safe=UNKNOWN`（无 persisted vintage/revision） | EXTEND |
 | 4 | **ds_instrument_universe**（Tushare pool） | list/delist historical-coordinate logic；point_in_time_safe=UNKNOWN；boundary_uncertain | 无持久化；survivorship 需历史快照 | EXTEND |
 | 5 | **ds_trading_calendar** | 时间完整性最高、provenance 最强、隔离度最高 | 静态小数据集，收益有限；适合验证第一个 by_date + PIT 契约 | EXTEND（ALREADY_HAVE 基础上） |
 

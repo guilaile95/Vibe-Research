@@ -75,7 +75,7 @@
             "tonghuashun",
             "cninfo",
             "baidu",
-            "mootdx_tdx",
+            "unknown",
             "rss",
             "local"
         ],
@@ -83,7 +83,7 @@
             "THS_VIA_AKSHARE: upstream=tonghuashun, transport=akshare, entrypoint=astock.financials",
             "EASTMONEY_VIA_AKSHARE: upstream=eastmoney, transport=akshare, entrypoint=astock.stock_news / stock_fund_flow_industry",
             "CNINFO_VIA_AKSHARE: upstream=cninfo, transport=akshare, entrypoint=astock.disclosure",
-            "TDX_VIA_MOOTDX: upstream=mootdx_tdx (TDX protocol), transport=mootdx, entrypoint=astock.kline"
+            "TDX_VIA_MOOTDX: upstream=UNKNOWN (TDX_PROTOCOL), transport=mootdx, entrypoint=astock.kline"
         ],
         "definitions": {
             "eastmoney_push2": "provider_domain of source_owner eastmoney",
@@ -91,9 +91,9 @@
             "eastmoney_datacenter": "provider_domain of source_owner eastmoney",
             "eastmoney_push2ex": "provider_domain of source_owner eastmoney",
             "gstock": "transport_wrapper reusing eastmoney push2/datacenter for US/HK quotes",
-            "akshare_lazy": "transport_client aggregating multiple upstreams lazily (tonghuashun, eastmoney, cninfo, baidu)",
-            "mootdx": "transport_client for TDX protocol upstream (mootdx_tdx)",
-            "cninfo_via_akshare": "provider_domain of source_owner cninfo transported via akshare",
+            "akshare_lazy": "transport aggregate (AKSHARE_AGGREGATE); source_owner=UNKNOWN; real upstreams via THS/EASTMONEY/CNINFO/BAIDU VIA rules",
+            "mootdx": "transport_client for TDX_PROTOCOL upstream (source_owner=UNKNOWN)",
+            "cninfo_via_akshare": "transport aggregate (AKSHARE_AGGREGATE); source_owner=UNKNOWN; real upstreams via THS/EASTMONEY/CNINFO/BAIDU VIA rules",
             "local_static": "provider_domain/source_owner for committed local artifacts (offline trade calendar)"
         }
     },
@@ -199,7 +199,7 @@
         },
         {
             "provider_id": "akshare_lazy",
-            "source_owner": "multi (see aggregates)",
+            "source_owner": "UNKNOWN (transport aggregate; real upstreams listed in aggregates)",
             "transport_client": "akshare (lazy import)",
             "entrypoint": "astock._akshare() layer 3/4/5",
             "module": "backend/astock.py;backend/market.py",
@@ -219,7 +219,8 @@
                 "financials",
                 "sector_capital_flow",
                 "valuation"
-            ]
+            ],
+            "source_domain": "AKSHARE_AGGREGATE"
         },
         {
             "provider_id": "ths_via_akshare",
@@ -258,7 +259,7 @@
         },
         {
             "provider_id": "mootdx",
-            "source_owner": "mootdx_tdx",
+            "source_owner": "UNKNOWN",
             "transport_client": "mootdx (Quotes.factory, TDX protocol)",
             "entrypoint": "astock.kline / astock.finance",
             "module": "backend/astock.py",
@@ -274,7 +275,8 @@
                 "screener",
                 "top_risk",
                 "technical_indicators"
-            ]
+            ],
+            "source_domain": "TDX_PROTOCOL"
         },
         {
             "provider_id": "gstock",
@@ -392,8 +394,8 @@
             "symbols": [
                 "kline"
             ],
-            "provider": "TDX_VIA_MOOTDX (source_owner=mootdx_tdx, transport=mootdx)",
-            "primary_source": "mootdx_tdx (TDX protocol)",
+            "provider": "TDX_VIA_MOOTDX (source_owner=UNKNOWN, transport=mootdx)",
+            "primary_source": "UNKNOWN (TDX_PROTOCOL)",
             "fallback": null,
             "fetch_semantics": "snapshot",
             "retrieval_pattern": "rolling_window_last_N_bars (mootdx; re-fetched per call; no by-date historical persistence)",
@@ -749,7 +751,7 @@
                 "_key_metrics"
             ],
             "provider": "THS_VIA_AKSHARE + TDX_VIA_MOOTDX + eastmoney_datacenter",
-            "primary_source": "tonghuashun (financials via akshare); mootdx_tdx (finance, unreliable for revenue); eastmoney datacenter (gstock US/HK)",
+            "primary_source": "tonghuashun (financials via akshare); TDX_PROTOCOL via mootdx (source_owner=UNKNOWN, finance unreliable for revenue); eastmoney datacenter (gstock US/HK)",
             "fetch_semantics": "snapshot",
             "retrieval_pattern": "latest report period only (df.iloc[-1])",
             "history_mode": "snapshot_only",
@@ -1553,7 +1555,7 @@
             "rank": 3,
             "candidate": "ds_northbound_capital_flow",
             "benefit": "medium-high decision value",
-            "temporal_pit_revision": "by_date; PIT per-date; authoritative",
+            "temporal_pit_revision": "by_date historical-coordinate retrieval; point_in_time_safe=UNKNOWN; authoritative source; no persisted vintage/revision",
             "existing_reusable": "medium (memory only, strong discipline)",
             "isolation": "high",
             "provenance_importance": "high",
