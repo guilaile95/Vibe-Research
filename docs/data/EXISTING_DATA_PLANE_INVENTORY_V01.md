@@ -22,9 +22,9 @@
 显式能力状态定义：
 
 - `INTEGRATED_STABLE`：可从证据基线 app.py 路由 / 生产路径可达
-- `CODE_PRESENT_STABLE_NOT_RUNTIME_WIRED`：代码存在于 stable head，但未接入 app/runtime 自动集成（仅 manual CLI / 显式调用）；凭据/实时可用性属独立维度
-- `ACCEPTED_NOT_MERGED`：已接受但未合并入证据基线的分支
-- `IN_PROGRESS`：进行中、未集成
+- `integration_state`：代码是否存在于 stable head（`INTEGRATED_STABLE` / `NOT_IN_STABLE`）
+- `runtime_exposure`：运行时暴露方式（`HTTP_APP_ROUTE` / `EXPLICIT_CLI_ONLY` / `NONE`）
+- `ACCEPTED_NOT_MERGED`：已独立审查通过但未合并入证据基线的分支（不是 IN_PROGRESS）
 - `RESEARCH_ONLY`：仅文档/技能包，运行时零引用
 - `NOT_IMPLEMENTED`：不存在实现
 - `UNKNOWN`：证据不足
@@ -32,9 +32,9 @@
 | 能力 | 状态 | 说明 |
 |---|---|---|
 | 7 条生产数据链（腾讯行情 / 东财五域 / akshare / mootdx / 港美股 gstock / HKEX 北向 / RSS 资讯雷达） | **INTEGRATED_STABLE** | 经 `app.py` 路由接入 |
-| Tushare Pro 客户端 + facts_adapter + ingestion_service + CLI | **CODE_PRESENT_STABLE_NOT_RUNTIME_WIRED** | 代码存在于 stable head（`1be2ecba`），但**未接入 app/runtime 自动集成**；仅 manual CLI 执行；凭据/实时可用性属独立问题。其下游 `short_term_fact_store` + `bk11_history_service` 已经 `bk11_history_router`（app.py:176）生产接入 HTTP |
+| Tushare Pro 客户端 + facts_adapter + ingestion_service + CLI | **integration_state=INTEGRATED_STABLE** / **runtime_exposure=EXPLICIT_CLI_ONLY** | `HTTP_APP_ROUTE=NO`、`AUTO_SCHEDULER=NO`、`STARTUP_INGESTION=NO`。`bk11_tushare_cli` 是显式生产 ingestion CLI，调用 stable 中的 `ingest_trade_date()`；代码存在于 stable head（`1be2ecba`）。其下游 `short_term_fact_store` + `bk11_history_service` 已经 `bk11_history_router`（app.py:176）生产接入 HTTP |
 | Phase 2 Formal Thesis 相关测试/功能分支（如 `test/p0-formal-thesis-concurrency-v0.1` 等） | **ACCEPTED_NOT_MERGED** | 与数据平面无直接交集，单独识别 |
-| PR #79 HiThink probe / DS-A1 | **IN_PROGRESS / NOT_INTEGRATED** | 未进入证据基线 |
+| PR #79 HiThink probe / DS-A1 | **integration_state=NOT_IN_STABLE** / **review_state=ACCEPTED_NOT_MERGED** | 已独立审查通过但未合并；不视为 IN_PROGRESS |
 | `a-stock-data/`、`global-stock-data/` 技能包 | **RESEARCH_ONLY** | 仅文档/SKILL；backend 运行时零引用 |
 | `IWENCAI_API_KEY` / `VR_DATA_PROXY`（.env.example） | **RESEARCH_ONLY** | backend 源码零引用，占位未实现 |
 | fund / institutional holdings 数据集 | **NOT_IMPLEMENTED** | 无外部机构持仓数据路径（代码中的 holdings 仅为用户自身 `portfolio.json`） |
@@ -45,29 +45,31 @@ CURRENT_VS_IN_PROGRESS_SEPARATED = **PASS**（未将未合并分支混入当前�
 
 ## 2. Provider Ingress 盘点
 
-### 2.1 Provider Domain 总表（13）
+### 2.1 Provider Provenance 总表（14）
 
-术语（MD/JSON/PR 计数一致）：
-- **source_family（9）**：独立数据供应商——tencent / eastmoney / hkex / tushare / akshare / mootdx / rss / cninfo / local
-- **provider_domain（13）**：同一供应商下的可寻址入口端点，即下表 `provider_id` 列的权威标识
-- **transport_wrapper（2）**：复用其它 provider 传输的封装——`gstock`（港美股复用东财 push2/datacenter）、`akshare_lazy`（惰性聚合多上游）
-- `cninfo_via_akshare` 为 source_family=cninfo 的 provider_domain（经 akshare 路由）；`local_static` 为本地静态工件
+术语（MD/JSON/PR 一致）：
+- **source_owner（10）**：上游数据真实所有者——tencent / eastmoney / hkex / tushare / tonghuashun / cninfo / baidu / mootdx_tdx / rss / local。**transport_client 不得抹掉 source_owner 身份**。
+- **provider_domain（14）**：source_owner 下的可寻址入口端点，即下表 `provider_id` 列的权威标识。
+- **transport_client（4）**：执行网络传输的客户端——urllib/requests（标准库直连）、akshare（惰性聚合）、mootdx（TDX 协议）、TushareClient（HTTPS）。akshare/mootdx 只是 transport，不改变真实上游。
+- **provenance 规则（至少保留）**：`THS_VIA_AKSHARE`（上游=tonghuashun，传输=akshare，入口=astock.financials）、`EASTMONEY_VIA_AKSHARE`（上游=eastmoney，传输=akshare，入口=astock.stock_news/stock_fund_flow_industry）、`CNINFO_VIA_AKSHARE`（上游=cninfo，传输=akshare，入口=astock.disclosure）、`TDX_VIA_MOOTDX`（上游=mootdx_tdx，传输=mootdx，入口=astock.kline）。
+- `gstock` 为 transport_wrapper（复用东财 push2/datacenter 做港美股）；`local_static` 为本地静态工件。
 
-| provider_id | source_family | 入口 module/symbol | network/local | credential | 集成状态 |
-|---|---|---|---|---|---|
-| tencent_gtimg | tencent | `astock.tencent_quote` / `_fetch_gtimg`（astock.py:43-94）、`astock.index_quote` | network（`qt.gtimg.cn`，仅标准库） | 无 | INTEGRATED_STABLE |
-| eastmoney_push2 | eastmoney | `astock.a_share_snapshot` / `market_turnover_rank` / `board_ranking`（astock.py:682-850,599-624,900+）；`gstock._push2_stock_get` | network | 无 | INTEGRATED_STABLE |
-| eastmoney_reportapi | eastmoney | `astock._report_session`（astock.py:116+，`reportapi.eastmoney.com/report/list`） | network | 无 | INTEGRATED_STABLE |
-| eastmoney_datacenter | eastmoney | `astock.dividend_history`/`lockup_expiry`/`block_trade`/`holder_num_change`/`dragon_tiger_board`/`margin_trading`（`RPT_*`）；`gstock._key_metrics` | network | 无 | INTEGRATED_STABLE |
-| eastmoney_push2ex | eastmoney | `astock.em_zt_topic_pool`（getTopicZTPool/ZBPool/DTPool/YesterdayZTPool）；`short_term_limit_up_pool_adapter.fetch_limit_up_pool_snapshot` | network | 无 | INTEGRATED_STABLE（池）；生产 final 生产者经 CLI 路径 |
-| akshare（惰性） | akshare | `astock._akshare()` 第 3/4/5 层（一致预期/新闻/公告、`stock_financial_abstract_ths`、`stock_fund_flow_industry`、`valuation_percentile` 经百度） | network | 无 | INTEGRATED_STABLE（惰性依赖，缺失抛 `DependencyMissing`） |
-| cninfo（经 akshare） | cninfo | `astock.disclosure` | network | 无 | INTEGRATED_STABLE（`cninfo_via_akshare`，标记不稳定备用） |
-| mootdx（惰性） | mootdx | `astock.kline`（`Quotes.factory(market="std")`，TDX 协议）、`astock.finance` | network | 无 | INTEGRATED_STABLE（惰性） |
-| gstock（东财域内港美股） | eastmoney（transport_wrapper） | `gstock.us_hk_stock` / `global_indices` / `_key_metrics` | network | 无 | INTEGRATED_STABLE（复用东财 push2/datacenter 传输；Yahoo/SEC 不并入） |
-| hkex_official | hkex | `northbound_capital_flow.get_northbound_capital_flow`（HKEX Stock Connect Daily Statistics JS） | network | 无 | INTEGRATED_STABLE |
-| rss_newsradar | rss | `newsradar.py`（`news_sources.json` 多 RSS） | network | 无 | INTEGRATED_STABLE |
-| tushare_pro | tushare | `tushare_pro_client.TushareClient.query`（allowlist: daily/suspend_d/stk_limit/stock_basic）；`bk11_tushare_facts_adapter`；`bk11_tushare_ingestion_service` | network（`api.tushare.pro`） | **`TUSHARE_TOKEN`**（env，tushare_pro_client.py:30,63） | **CODE_PRESENT_STABLE_NOT_RUNTIME_WIRED**（代码在 stable，未运行时接线；仅 manual CLI） |
-| local_static | local | `backend/data/cn_a_share_trade_calendar_v01.json`（trade_calendar.py） | local | 无 | INTEGRATED_STABLE |
+| provider_id | source_owner | transport_client | 入口 module/symbol | network/local | credential | 集成状态 |
+|---|---|---|---|---|---|---|
+| tencent_gtimg | tencent | urllib（标准库） | `astock.tencent_quote` / `_fetch_gtimg`（astock.py:43-94）、`astock.index_quote` | network（`qt.gtimg.cn`，仅标准库） | 无 | INTEGRATED_STABLE |
+| eastmoney_push2 | eastmoney | urllib/requests（astock.em_get） | `astock.a_share_snapshot` / `market_turnover_rank` / `board_ranking`（astock.py:682-850,599-624,900+）；`gstock._push2_stock_get` | network | 无 | INTEGRATED_STABLE |
+| eastmoney_reportapi | eastmoney | requests | `astock._report_session`（astock.py:116+，`reportapi.eastmoney.com/report/list`） | network | 无 | INTEGRATED_STABLE |
+| eastmoney_datacenter | eastmoney | requests | `astock.dividend_history`/`lockup_expiry`/`block_trade`/`holder_num_change`/`dragon_tiger_board`/`margin_trading`（`RPT_*`）；`gstock._key_metrics` | network | 无 | INTEGRATED_STABLE |
+| eastmoney_push2ex | eastmoney | urllib/requests（astock.em_get） | `astock.em_zt_topic_pool`（getTopicZTPool/ZBPool/DTPool/YesterdayZTPool）；`short_term_limit_up_pool_adapter.fetch_limit_up_pool_snapshot` | network | 无 | INTEGRATED_STABLE（池）；生产 final 生产者经 CLI 路径 |
+| akshare_lazy | multi（见 aggregates） | akshare（惰性） | `astock._akshare()` 第 3/4/5 层（financials/新闻/公告/板块资金流/估值） | network | 无 | INTEGRATED_STABLE（惰性依赖，缺失抛 `DependencyMissing`） |
+| ths_via_akshare | tonghuashun | akshare（惰性） | `astock._akshare()` 的 THS 财务摘要（`stock_financial_abstract_ths`） | network | 无 | INTEGRATED_STABLE（经 akshare；provenance `THS_VIA_AKSHARE`） |
+| cninfo_via_akshare | cninfo | akshare（惰性） | `astock.disclosure` | network | 无 | INTEGRATED_STABLE（标记不稳定备用） |
+| mootdx | mootdx_tdx | mootdx（TDX 协议） | `astock.kline`（`Quotes.factory(market="std")`）、`astock.finance` | network | 无 | INTEGRATED_STABLE（惰性） |
+| gstock | eastmoney | urllib/requests（astock.em_get，复用） | `gstock.us_hk_stock` / `global_indices` / `_key_metrics` | network | 无 | INTEGRATED_STABLE（transport_wrapper；Yahoo/SEC 不并入） |
+| hkex_official | hkex | requests | `northbound_capital_flow.get_northbound_capital_flow`（HKEX Stock Connect Daily Statistics JS） | network | 无 | INTEGRATED_STABLE |
+| rss_newsradar | rss | requests（RSS） | `newsradar.py`（`news_sources.json` 多 RSS） | network | 无 | INTEGRATED_STABLE |
+| tushare_pro | tushare | TushareClient（HTTPS） | `tushare_pro_client.TushareClient.query`（allowlist: daily/suspend_d/stk_limit/stock_basic）；`bk11_tushare_ingestion_service.ingest_trade_date` | network（`api.tushare.pro`） | **`TUSHARE_TOKEN`**（env，tushare_pro_client.py:30,63） | **integration_state=INTEGRATED_STABLE** / **runtime_exposure=EXPLICIT_CLI_ONLY**（HTTP_APP_ROUTE/AUTO_SCHEDULER/STARTUP_INGESTION=NO） |
+| local_static | local | 标准库（文件读取） | `backend/data/cn_a_share_trade_calendar_v01.json`（trade_calendar.py） | local | 无 | INTEGRATED_STABLE |
 
 ### 2.2 Credential 汇总（源码实际存在）
 
@@ -108,7 +110,7 @@ PROVIDER_INGRESS_INVENTORIED = **PASS**。
 | ds_valuation | `astock.valuation_percentile`（百度）；`full_valuation`/`profit_forecast`（腾讯+同花顺） | 百度/腾讯/同花顺 | by_date | snapshot_with_backfill | 序列日期轴；`eps_26e/eps_27e` | n/a | T / F | app `_PCT_CACHE`（1800s） | 无 | 无 |
 | ds_financial_statements | `astock.financials`（同花顺最新期）；`astock.finance`（mootdx，营收不可靠）；`gstock._key_metrics`（东财） | 同花顺/mootdx/东财 | snapshot | snapshot_only | `period`/`报告期`/`REPORT_DATE` | n/a | F / F | 内存 | financials（REPORTING_PERIOD） | mootdx vs 同花顺差异有文档 |
 | ds_corporate_actions | `astock.dividend_history`/`lockup_expiry`/`block_trade`/`holder_num_change`/`dragon_tiger_board` | 东财 datacenter | by_date | snapshot_with_backfill | `EX_DIVIDEND_DATE`/`FREE_DATE`/`TRADE_DATE`/`END_DATE`（[:10]） | 仅原始事实，**不应用到价格序列** | T / UNKNOWN | 内存 | 无 | 无 |
-| ds_instrument_universe | 东财当前全 A（`a_share_snapshot`）；Tushare `stock_basic` 历史池（list_status L/D/P/G） | 东财 push2 / Tushare | by_date | snapshot_with_backfill | `list_date`、`delist_date` | n/a | T / UNKNOWN | 内存 | bk11_history | Tushare 内 universe 对账（unexplained/out_of_pool） |
+| ds_instrument_universe | 东财当前全 A（`a_share_snapshot`）；Tushare `stock_basic` 历史池（list_status L/D/P/G） | eastmoney_push2 / tushare_pro | by_date | snapshot_with_backfill | `list_date`、`delist_date` | n/a | T / UNKNOWN（list/delist historical-coordinate；boundary_uncertain） | 内存 | bk11_history | Tushare 内 universe 对账（unexplained/out_of_pool） |
 | ds_index_concept_membership | `astock.concept_blocks`/`board_ranking`/`hot_concepts` | 东财 | snapshot | snapshot_only | 无 | n/a | F / F | 内存 | 无 | 无 |
 | ds_sentiment_emotion | `market._emotion`/`_sentiment`/`get_short_term_emotion` | 东财 push2ex（派生） | snapshot | snapshot_only | `date`、`zt_count/dt_count/zb_count`、ladder 等 | n/a | F / F | 内存 TTL 300s | daily_review emotion | 无 |
 | ds_top_risk_signals | `top_risk_service.analyze_top_risk`；`top_risk_config.yaml` | 派生（astock 多源） | snapshot | snapshot_only | `trade_date`（末 K 线）、`fetched_at`、`input_fingerprint` | n/a | F / F | TTL 900s + decision_trace.sqlite3 | top_risk_analysis | 多源无对账 |
@@ -252,7 +254,7 @@ DUPLICATION_HOTSPOTS_IDENTIFIED = **PASS**（本轮不修复任何热点）
 | **envelope 级 provenance（source_ids/reason_codes/limitations）** | ALREADY_HAVE | short_term_daily_facts_v02 / pool_adapter 合同 |
 | **日历工件 + 严格校验 + 官方来源 consensus** | ALREADY_HAVE | trade_calendar.py + data/ JSON |
 | **北向权威边界（fail-closed、limitations、SOURCE_TIER）** | ALREADY_HAVE | northbound_capital_flow.py |
-| **Tushare universe 池 list/delist + boundary_uncertain** | ALREADY_HAVE | bk11_tushare_facts_adapter |
+| **Tushare universe 池 list/delist historical-coordinate logic（point_in_time_safe=UNKNOWN）** | ALREADY_HAVE | bk11_tushare_facts_adapter |
 | **decision_trace 持久化（fingerprint/decision_run_id）** | ALREADY_HAVE | decision_trace_store.py |
 | **BK-11 daily-facts store → raw immutable observation 层** | **EXTEND** | 现状为「按 (trade_date, session) 键、**允许 partial→normal UPDATE** 的严格 envelope store」，**非 immutable raw observation**；需补 raw immutable + 观测身份 + revision/vintage 语义 |
 | **per-observation provenance 结构化（provider_id/temporal/as_of）** | **EXTEND** | 已有 envelope 级；需下沉到观测级 |
@@ -284,7 +286,7 @@ DS_L1_REUSE_BOUNDARY = **PASS**（未在证据不足处强推结论）
 | 1 | **ds_limit_up_pool_ladder**（BK-11 daily facts） | 已有严格 envelope store + envelope provenance + legal-zero 检测 + 跨源对账点 | 观测级 provenance 下沉；revision/vintage 逐观测化（`point_in_time_safe` 现为 UNKNOWN） | EXTEND |
 | 2 | **ds_daily_history_price**（K线） | Thesis/Decision 复现价值最高 | 无持久化、无复权、point_in_time_safe=false、无 revision——是最大真缺口，PoC 能证明「adjustment/revision」痛点 | NEW_FOR_FACT_LAKE |
 | 3 | **ds_northbound_capital_flow** | 权威源、by_date、provenance 纪律强 | 无持久化（内存 only）；point_in_time_safe 现为 UNKNOWN（无 vintage/revision） | EXTEND |
-| 4 | **ds_instrument_universe**（Tushare pool） | 已处理 list/delist + boundary；by_date universe | 无持久化；point_in_time_safe 现为 UNKNOWN（boundary_uncertain） | EXTEND |
+| 4 | **ds_instrument_universe**（Tushare pool） | list/delist historical-coordinate logic；point_in_time_safe=UNKNOWN；boundary_uncertain | 无持久化；survivorship 需历史快照 | EXTEND |
 | 5 | **ds_trading_calendar** | 时间完整性最高、provenance 最强、隔离度最高 | 静态小数据集，收益有限；适合验证第一个 by_date + PIT 契约 | EXTEND（ALREADY_HAVE 基础上） |
 
 **最终选择不在本任务范围内。** 等待 DS-A1 approval + DS-A2 closure + ChatGPT review。
@@ -328,9 +330,10 @@ DS_L1_CANDIDATE_SHORTLIST = **PASS**
 ## 最终状态
 
 ```
-DS_R1_R1 = READY_FOR_INDEPENDENT_REVIEW
+DS_R1_R2 = READY_FOR_INDEPENDENT_REVIEW
 BRANCH = docs/data-governance-existing-data-plane-inventory-v0.1
-HEAD = 2551dd2（DS-R1-R1 语义修正提交）
+R1_CORRECTION_COMMIT = 2551dd2
+PR_HEAD = SEE_GITHUB_PR_METADATA
 PR = #81
 EVIDENCE_STABLE_HEAD = 1be2ecba505a8108740c311c103a2c72d3bcd444
 CHANGED_FILES = docs/data/EXISTING_DATA_PLANE_INVENTORY_V01.md, docs/data/EXISTING_DATA_PLANE_INVENTORY_V01.json
