@@ -122,6 +122,57 @@ def test_extract_nested_item_array():
     assert sample["item[0]"]["thscode"]["value"] == "600519.SH"
 
 
+def test_identities_bounded_and_deduplicated():
+    """R2：受限身份集 —— thscode/ticker 去重、有界、含请求标的。"""
+    items = [{"thscode": f"60{i:04d}.SH"} for i in range(20)]
+    ids = probe._bounded_identities(items)
+    assert len(ids) <= probe._MAX_IDENTITIES  # 有界
+    assert len(ids) == len(set(ids))  # 去重
+    assert ids[0] == "600000.SH"
+    # 同一条 item 同时含 thscode+ticker → 只取 thscode（不重复计数）
+    same_item = [{"thscode": "600519.SH", "ticker": "600519"}]
+    assert probe._bounded_identities(same_item) == ["600519.SH"]
+    # 不同标的各取一次
+    two = [{"thscode": "600519.SH"}, {"thscode": "000001.SZ"}]
+    assert probe._bounded_identities(two) == ["600519.SH", "000001.SZ"]
+
+
+def test_temporal_summary_window_and_ordering():
+    """R2：temporal 摘要 —— date_ms 值/首末/顺序证据。"""
+    items = [{"date_ms": 100, "open_price": 1.0}, {"date_ms": 200, "open_price": 2.0},
+             {"date_ms": 300, "open_price": 3.0}]
+    ts = probe._temporal_summary(items)
+    assert ts["item_count"] == 3
+    assert ts["date_ms_values"] == [100, 200, 300]
+    assert ts["first_date_ms"] == 100 and ts["last_date_ms"] == 300
+    assert ts["ordering"] == "ASCENDING"
+    # 逆序 → DESCENDING；乱序 → NON_MONOTONIC；空 → EMPTY
+    rev = [{"date_ms": 300}, {"date_ms": 200}, {"date_ms": 100}]
+    assert probe._temporal_summary(rev)["ordering"] == "DESCENDING"
+    jumbled = [{"date_ms": 200}, {"date_ms": 100}, {"date_ms": 300}]
+    assert probe._temporal_summary(jumbled)["ordering"] == "NON_MONOTONIC"
+    assert probe._temporal_summary([])["ordering"] == "EMPTY"
+
+
+def test_temporal_summary_ohlc_types():
+    """R2：OHLC 类型摘要 —— 数值/null 类型集合。"""
+    items = [{"date_ms": 1, "open_price": 10.5, "high_price": 11.0, "low_price": 10.0,
+              "close_price": None, "volume": 100, "turnover": 10000.0}]
+    ts = probe._temporal_summary(items)
+    assert ts["ohlc_types"]["open_price"] == ["float"]
+    assert ts["ohlc_types"]["close_price"] == ["null"]
+    assert ts["ohlc_types"]["volume"] == ["int"]
+    assert ts["ohlc_types"]["turnover"] == ["float"]
+
+
+def test_temporal_summary_bounded():
+    """R2：摘要受限 —— date_ms 值列表有上界，不持久化完整 payload。"""
+    items = [{"date_ms": i} for i in range(500)]
+    ts = probe._temporal_summary(items)
+    assert len(ts["date_ms_values"]) == probe._MAX_DATE_MS_VALUES
+    assert ts["item_count"] == 500  # 计数完整但值列表有界
+
+
 def test_sanitize_sample_truncates_long_values_recursive():
     payload = {"code": 0, "message": "ok", "request_id": "r1",
                "data": {"reason": "x" * 1000, "nested": {"long": "y" * 1000}}}

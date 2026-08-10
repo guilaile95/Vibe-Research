@@ -48,19 +48,24 @@ pytest tests/live/test_hithink_live_smoke.py -m live -q   # 10 passed
 
 ---
 
-## 3. Probe 端点矩阵（文档核验的契约；live 结果 = NOT_RUN）
+## 3. Probe 端点矩阵（契约来源 = DOC_VERIFIED；live 状态见 §4 报告矩阵）
 
-| dataset_id | endpoint | 官方契约摘要 | 历史语义（文档证据） |
+> 证据分类说明：本文档每项声明均标注来源 —— `DOC_VERIFIED`（官方文档核验）、
+> `LIVE_VERIFIED`（2026-08-10 真实请求验证）、`UNKNOWN`（无法证实）。
+> 端点/参数语义以官方 `docs/api/endpoints-*.md` 为准；live 实测不一致处
+> 已按实测修正（见 §6）。
+
+| dataset_id | endpoint | 官方契约摘要（DOC_VERIFIED） | 历史语义（文档证据） |
 |---|---|---|---|
 | A. symbol_search | `/api/meta/tickers/search` | `q` 搜索/消歧；`limit` | lookup，无时间序列 |
 | B. snapshot_quote | `/api/a-share/prices/snapshot` | `thscodes` 批量（R1：双标的 `600519.SH,000001.SZ`）；显式取数 `timestamp=null`，分页模式为最新有效时间 | **snapshot_only** |
-| C. historical_daily | `/api/a-share/prices/historical` | `thscode` 单只、`interval=1d`、`start/end` 毫秒（窗口≤10年）、`adjust=none/forward/backward`（默认 forward）；bar 含 `date_ms`/OHLC | **by_date**（R1：2 标的 × 2 时间窗 + adjust 三模式矩阵） |
+| C. historical_daily | `/api/a-share/prices/historical` | `thscode` 单只、`interval=1d`、`start/end` 毫秒（窗口≤10年）、`adjust=none/forward/backward`（默认 forward）；bar 含 `date_ms`/OHLC | **by_date**（R2：2 标的 × 2 时间窗 + adjust 三模式矩阵 + 窗口绑定闭合） |
 | D. income_statement | `/api/a-share/financials/income-statements` | `thscode`、`period=annual/quarterly`、`limit`/`start+end`；`period_end_ms` + `report_date_ms` + `fiscal_year/fiscal_period` | **by_date**（按报告期多期序列） |
-| E. index_constituents | `/api/a-share-index/constituents/ths-stock-list` | 板块/指数当前成分 | **snapshot_only**（无 as-of 参数，不得伪造历史成员） |
-| F. limit_up_pool | `/api/a-share/special-data/limit-up-pool` | `date_ms`（Asia/Shanghai 00:00，默认今天）、分页 | **by_date**（R1：显式历史 `date_ms=2026-08-07` 交易日） |
+| E. index_constituents | `/api/a-share-index/constituents/ths-stock-list` | 板块/指数当前成分（live 实测：参数 `thscode` 需 `.TI/.SH` 后缀） | **snapshot_only**（无 as-of 参数，不得伪造历史成员） |
+| F. limit_up_pool | `/api/a-share/special-data/limit-up-pool` | `date_ms`（Asia/Shanghai 00:00，默认今天）、分页 | **by_date**（R2：显式历史 `date_ms=2026-08-07` 交易日） |
 | 辅助 | `/api/a-share/calendar/trading-days` | 近一年交易日序列 | by_date（滚动窗口） |
 | 辅助 | `/api/a-share/valuations/snapshot` | PE/PB/PS/PCF 批量快照，保留 null/负值 | snapshot_only |
-| R1 非交易日 | `/api/a-share/prices/historical` | `2026-08-08`（周六）单日窗口 | 行为待 live 记录（空 items / 业务错误 / 其他） |
+| R2 非交易日 | `/api/a-share/prices/historical` | `2026-08-08`（周六）单日窗口 | LIVE_VERIFIED：code=0 + 空 items + timestamp=null |
 
 > F 选择理由：limit-up pool 提供最强的 temporal/provenance 证据 —— `date_ms`
 > 参数显式支持按历史交易日取成员（membership temporal），且与项目既有涨停链
@@ -86,16 +91,16 @@ pytest tests/live/test_hithink_live_smoke.py -m live -q   # 10 passed
 
 ---
 
-## 5. Temporal Evidence（文档层面，未 live 验证）
+## 5. Temporal Evidence（DOC_VERIFIED / LIVE_VERIFIED / UNKNOWN 分类）
 
-| 概念 | 端点 | 文档证据 |
-|---|---|---|
-| trade_date | historical_daily | `date_ms`（毫秒）；交易日历端点提供序列 |
-| report_period | income_statement | `period_end_ms` + `fiscal_year/fiscal_period` EXPLICIT |
-| published/公告时间 | income_statement | `report_date_ms`（「报告日期毫秒」，未明确声明为公告时间 → 不伪造为 published_at） |
-| fetched_at | probe 本地生成 | 允许（其余时间戳一律不发明） |
-| revision_id / data_version | 全部 | **NOT_EXPOSED / UNKNOWN**（financials 无 is_old/revision/corrected 标识） |
-| adjustment_semantics | historical_daily | EXPLICIT：`adjust=none/forward/backward`（默认 forward；未验证服务端实现） |
+| 概念 | 端点 | 状态 | 证据 |
+|---|---|---|---|
+| trade_date | historical_daily | LIVE_VERIFIED | `date_ms` 毫秒；R2 已断言返回 date_ms ∈ 请求窗口 + 顺序确定（ASCENDING/DESCENDING） |
+| report_period | income_statement | LIVE_VERIFIED | `period_end_ms` + `fiscal_year/fiscal_period` |
+| published/公告时间 | income_statement | UNKNOWN | `report_date_ms` 存在但官方未明确声明为公告时间 → 不伪造为 published_at |
+| fetched_at | probe 本地生成 | DOC_VERIFIED | 允许（其余时间戳一律不发明） |
+| revision_id / data_version | 全部 | UNKNOWN | financials 无 is_old/revision/corrected 标识（LIVE 响应亦未暴露） |
+| adjustment_semantics | historical_daily | LIVE_VERIFIED | `adjust=none/forward/backward` 三模式均返回 K 线（R1/R2 实测）；`adjust` 参数语义由端点页声明 |
 
 ---
 
@@ -113,6 +118,18 @@ pytest tests/live/test_hithink_live_smoke.py -m live -q   # 10 passed
 | trading_calendar | 近一年 **242** 交易日 |
 | valuation_snapshot | 单标的 PE/PB/PS/PCF |
 | **non_trading_day 2026-08-08(周六)** | **code=0 + count=0 空 items + timestamp=null**（非业务错误，静默空窗） |
+
+## 6.1 R2 Live Evidence 闭合（2026-08-10，全部 LIVE_VERIFIED）
+
+- **SNAPSHOT_EXPECTED_IDENTITIES_PRESENT**：`600519.SH,000001.SZ` 请求 → 受限身份集
+  `_identities` 同时包含两标的（不断言价格、不从 count 推断）。
+- **HISTORICAL_ALL_DATES_IN_REQUEST_RANGE**：2 标的 × 2 时间窗全部返回 date_ms ∈
+  请求 [start, end]（毫秒窗口逐值断言）。
+- **HISTORICAL_ORDERING_VERIFIED**：每窗 date_ms 顺序为 ASCENDING 或 DESCENDING
+  （确定性，已记录于 `_temporal_summary.ordering`）。
+- **HISTORICAL_OHLC_TYPES_VERIFIED**：open/high/low/close 字段类型 ⊆ {float,int,null}。
+- 观测表示有界：`_identities` ≤ 10、`date_ms_values` ≤ 200、OHLC 采样 ≤ 10 条 ——
+  不持久化完整 raw payload。
 
 ## 7. 结论与边界
 

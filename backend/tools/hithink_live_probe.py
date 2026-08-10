@@ -227,11 +227,83 @@ def _sanitize_value(value: Any, depth: int = 0) -> Any:
     return {"type": type(value).__name__, "value": str(value)[:_MAX_STR]}
 
 
-def _extract_data_sample(payload: Any) -> dict:
-    """从 data 提取字段名/类型/样本：处理嵌套 item[]（meta + 首条 item）。
+# 观测摘要的受限上界（R2：不持久化完整 raw payload，只保留有界摘要）
+_MAX_IDENTITIES = 10        # 身份集最多保留前 N 个 thscode
+_MAX_DATE_MS_VALUES = 200   # temporal 摘要中 date_ms 值列表上界
+_MAX_OHLC_SAMPLE_ITEMS = 10  # OHLC 类型采样 item 数上界
+_OHLC_FIELDS = ("open_price", "high_price", "low_price", "close_price", "volume", "turnover")
 
-    返回结构（全部经递归清洗，secret 键已剥离）：
-    - data 为 dict 且含 item/items 列表 → {"_meta": <非 item 字段>, "item[0]": <首条>}
+
+def _bounded_identities(items: list) -> list[str]:
+    """从 item[] 提取受限身份集（thscode/ticker，前 _MAX_IDENTITIES 个）。"""
+    identities: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("thscode", item.get("ticker"))
+        if isinstance(raw, str) and raw and raw not in identities:
+            identities.append(raw)
+        if len(identities) >= _MAX_IDENTITIES:
+            break
+    return identities
+
+
+def _temporal_summary(items: list) -> dict:
+    """从 item[] 提取受限 temporal 摘要（date_ms 窗口绑定 / 顺序 / OHLC 类型）。
+
+    返回（全部有界，不保留完整 raw payload）：
+    - item_count：item 总数
+    - date_ms_values：有界 date_ms 值列表（前 _MAX_DATE_MS_VALUES 个，保持返回顺序）
+    - first_date_ms / last_date_ms：窗口内首/末值（若存在）
+    - ordering：ASCENDING / DESCENDING / NON_MONOTONIC / EMPTY（确定性顺序证据）
+    - ohlc_types：{字段: {类型集合}}，采样前 _MAX_OHLC_SAMPLE_ITEMS 条
+    """
+    date_values: list[int] = []
+    ohlc_types: dict[str, set] = {f: set() for f in _OHLC_FIELDS}
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        dm = item.get("date_ms")
+        if isinstance(dm, int) and not isinstance(dm, bool):
+            if len(date_values) < _MAX_DATE_MS_VALUES:
+                date_values.append(dm)
+        if index < _MAX_OHLC_SAMPLE_ITEMS:
+            for field in _OHLC_FIELDS:
+                value = item.get(field)
+                if value is None:
+                    ohlc_types[field].add("null")
+                elif isinstance(value, bool):
+                    ohlc_types[field].add("bool")
+                elif isinstance(value, int):
+                    ohlc_types[field].add("int")
+                elif isinstance(value, float):
+                    ohlc_types[field].add("float")
+                else:
+                    ohlc_types[field].add(f"other:{type(value).__name__}")
+    if not date_values:
+        ordering = "EMPTY"
+    elif date_values == sorted(date_values):
+        ordering = "ASCENDING"
+    elif date_values == sorted(date_values, reverse=True):
+        ordering = "DESCENDING"
+    else:
+        ordering = "NON_MONOTONIC"
+    return {
+        "item_count": len(items),
+        "date_ms_values": date_values,
+        "first_date_ms": date_values[0] if date_values else None,
+        "last_date_ms": date_values[-1] if date_values else None,
+        "ordering": ordering,
+        "ohlc_types": {f: sorted(t) for f, t in ohlc_types.items()},
+    }
+
+
+def _extract_data_sample(payload: Any) -> dict:
+    """从 data 提取字段名/类型/样本：处理嵌套 item[]。
+
+    返回结构（全部经递归清洗，secret 键已剥离，payload 受限）：
+    - data 为 dict 且含 item/items 列表 → {"_meta": <非 item 字段>, "item[0]": <首条>,
+      "_count": N, "_identities": [受限身份集], "_temporal_summary": <摘要>}
     - data 为 list → {"_list": ..., "_count": ...}
     - data 为 dict → 清洗后的字段样本
     - 其他 → 类型 + 截断值
@@ -246,6 +318,9 @@ def _extract_data_sample(payload: Any) -> dict:
         if isinstance(items, list) and items:
             sample["item[0]"] = _sanitize_value(items[0])
         sample["_count"] = len(items) if isinstance(items, list) else None
+        if isinstance(items, list):
+            sample["_identities"] = _bounded_identities(items)
+            sample["_temporal_summary"] = _temporal_summary(items)
         return sample
     return _sanitize_value(data)
 

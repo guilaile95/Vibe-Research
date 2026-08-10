@@ -61,15 +61,22 @@ def test_a_symbol_search_identity():
 # ---------------------------------------------------------------------------
 
 def test_b_snapshot_quote_two_symbols_structural():
+    """R2：快照身份闭合 —— 返回身份集必须同时包含请求的两个标的。
+
+    不断言具体价格；identity 来自受限观测 `_identities`（不是 count 推断）。
+    """
     obs = _probe_ok("snapshot_quote", probe.ENDPOINTS["snapshot_quote"])
     sample = _sample(obs)
-    # 双标的：item 列表应含 ≥2 条（分页/批量模式）
-    if "_count" in sample:
-        assert sample["_count"] >= 2, f"snapshot 双标的矩阵 item 数异常: {sample['_count']}"
+    assert "_count" in sample and sample["_count"] >= 2, \
+        f"snapshot 双标的矩阵 item 数异常: {sample.get('_count')}"
+    identities = sample.get("_identities", [])
+    assert identities, "观测缺少受限身份集 _identities"
+    requested = set(probe.ENDPOINTS["snapshot_quote"]["query"]["thscodes"].split(","))
+    assert requested <= set(identities), \
+        f"SNAPSHOT_EXPECTED_IDENTITIES_PRESENT 失败: 期望 {sorted(requested)} ⊆ 实际 {sorted(identities)}"
+    for thscode in identities:
+        assert str(thscode).endswith((".SH", ".SZ", ".BJ")), f"thscode 后缀异常: {thscode}"
     first = sample.get("item[0]", sample)
-    thscode = first.get("thscode")
-    if thscode is not None:
-        assert str(thscode["value"]).endswith((".SH", ".SZ", ".BJ")), f"thscode 后缀异常: {thscode}"
     for price_field in ("last_price", "open_price", "high_price", "low_price", "prev_price"):
         if price_field in first:
             assert first[price_field]["type"] in ("float", "int", "NoneType"), \
@@ -77,17 +84,44 @@ def test_b_snapshot_quote_two_symbols_structural():
 
 
 # ---------------------------------------------------------------------------
-# C. Historical daily quote（2 标的 × 2 时间窗矩阵）
+# C. Historical daily quote（2 标的 × 2 时间窗矩阵 + by-date 绑定闭合）
 # ---------------------------------------------------------------------------
 
 def test_c_historical_matrix_2x2():
-    """2 标的 × 2 时间窗：每窗都必须返回合法 K 线结构（date_ms / OHLC 字段存在）。"""
+    """R2：2 标的 × 2 时间窗，每窗都通过 by-date 绑定闭合：
+    1) code == 0（_probe_ok 保证）
+    2) 返回 items 非空
+    3) 每条返回 date_ms 都落在请求 start/end 窗口内
+    4) date_ms 顺序确定性（ASCENDING/DESCENDING，已记录）
+    5) OHLC 字段结构为数值或 null（按 provider 契约）
+    6) 不因「返回了若干历史行」就通过 —— 必须逐窗绑定。
+    """
     for index, (thscode, start, end) in enumerate(probe.HISTORICAL_MATRIX, start=1):
-        obs = _probe_ok(f"historical_{index}", _historical_spec(thscode, start, end))
+        spec = _historical_spec(thscode, start, end)
+        obs = _probe_ok(f"historical_{index}", spec)
         sample = _sample(obs)
-        first = sample.get("item[0]", sample)
-        assert any(k in first for k in ("date_ms", "open_price", "close_price")), \
-            f"historical_{index}({thscode}) 缺 K 线字段: {sorted(first)}"
+        ts = sample.get("_temporal_summary", {})
+        assert ts.get("item_count", 0) > 0, \
+            f"historical_{index}({thscode}) 返回空 items"
+        # 窗口绑定：每条 date_ms ∈ [start, end]
+        start_ms, end_ms = probe._ms(start), probe._ms(end)
+        dates = ts.get("date_ms_values", [])
+        assert dates, f"historical_{index}({thscode}) 无 date_ms"
+        assert all(start_ms <= d <= end_ms for d in dates), (
+            f"historical_{index}({thscode}) 存在越界 date_ms: "
+            f"窗口 [{start_ms},{end_ms}], 值 {dates}"
+        )
+        # 顺序确定性：ASCENDING 或 DESCENDING（provider 契约记录于观测）
+        assert ts.get("ordering") in ("ASCENDING", "DESCENDING"), (
+            f"historical_{index}({thscode}) date_ms 非单调: {ts.get('ordering')}"
+        )
+        # OHLC 结构：数值或 null
+        ohlc = ts.get("ohlc_types", {})
+        for field in ("open_price", "high_price", "low_price", "close_price"):
+            types = ohlc.get(field, [])
+            assert types and set(types) <= {"float", "int", "null"}, (
+                f"historical_{index}({thscode}) {field} 类型异常: {types}"
+            )
 
 
 def test_c_historical_distinct_ranges_return_items():
@@ -95,6 +129,8 @@ def test_c_historical_distinct_ranges_return_items():
     obs1 = _probe_ok("historical_600519_r1", _historical_spec("600519.SH", "2026-07-01", "2026-07-10"))
     obs2 = _probe_ok("historical_600519_r2", _historical_spec("600519.SH", "2026-06-01", "2026-06-12"))
     assert obs1.sample_fields and obs2.sample_fields
+    assert obs1.sample_fields["_temporal_summary"]["item_count"] > 0
+    assert obs2.sample_fields["_temporal_summary"]["item_count"] > 0
 
 
 def test_c_adjustment_matrix_three_modes():
