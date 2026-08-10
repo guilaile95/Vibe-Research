@@ -137,7 +137,8 @@ pytest tests/live/test_hithink_live_smoke.py -m live -q   # 10 passed
 - **LIVE_VERIFIED — HISTORICAL_DATE_COUNT_COMPLETE**（R3）：`date_ms_count == item_count`
   （每条 bar 都有有效 date_ms 坐标；全量计数不截断）。
 - **LIVE_VERIFIED — SYMBOL_SEARCH_INVALID_BEHAVIOR**（R3）：`q=ZZZ999` 无匹配查询
-  → 实际分类 ∈ {EMPTY_SUCCESS, BUSINESS_ERROR, OTHER_OBSERVED_BEHAVIOR}（可解析，不假设）。
+  → 实际分类 **`EMPTY_SUCCESS`**（FINAL-R1 实测：envelope code=0、count=0、空 items，
+  成功但无匹配；可解析、不假设）。
 
 观测表示保持有界：`_identities` ≤ 10、`date_ms_values` ≤ 200、OHLC 采样 ≤ 10 条 ——
 不持久化完整 raw payload。
@@ -154,11 +155,16 @@ pytest tests/live/test_hithink_live_smoke.py -m live -q   # 10 passed
   scheduler；HiThink 不自动成为 canonical。
 - **候选角色仅为建议矩阵**，由 DS-A1（C lane）最终定义项目 canonical 契约。
 
-## 8. R1 Security Posture（凭据安全）
+## 8. Security Posture（凭据安全）
 
-- key 只经环境变量注入（本会话经仓库外 TEMP 文件读入进程 env，**未打印/未落库/未进 git**）；
+```
+OLD_EXPOSED_KEY    = 曾出现在 chat → 已暴露，已被旋转取代，不再使用
+CURRENT_ROTATED_KEY = 未出现在 chat；仅本地环境（User 级环境变量 HITHINK_FINANCE_API_KEY）
+```
+
+- key 只经环境变量注入（**未打印/未落库/未进 git**）；
 - key 只进 HTTP header `X-api-key`；源码 / fixture / docs / PR / commit /
   observation JSON / fingerprint / stdout / stderr / exception / logs 均不含 key；
 - offline 测试证明：fingerprint 白名单 fail-closed、递归 secret 键清洗
   （任意深度）、观测结构无 key 字段；
-- 该 key 曾在对话中出现 → 视为已暴露，建议尽快到 fuyao.aicubes.cn/admin 轮换。
+- 除非新证据显示当前 key 暴露，否则**不再轮换**。
