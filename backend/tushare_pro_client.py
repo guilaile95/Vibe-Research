@@ -199,6 +199,20 @@ def _safe_capture_params(params: dict[str, Any]) -> dict[str, Any]:
     return copied
 
 
+def _reject_secret_echo_for_capture(
+    raw: bytes,
+    *,
+    token: str,
+    request_body: bytes,
+) -> None:
+    """Fail closed before a secret-bearing response can reach a raw sink."""
+    token_bytes = token.encode("utf-8")
+    if token_bytes in raw or request_body in raw:
+        raise TushareProtocolError(
+            "Tushare 响应包含禁止持久化的敏感材料"
+        )
+
+
 def _emit_raw_response(
     sink: RawResponseSink | None,
     raw: bytes,
@@ -319,6 +333,12 @@ class TushareClient:
                         _utc_now_iso()
                         if raw_response_sink is not None
                         else ""
+                    )
+                if raw_response_sink is not None:
+                    _reject_secret_echo_for_capture(
+                        raw,
+                        token=token,
+                        request_body=payload_bytes,
                     )
                 if status not in (200,):
                     if _is_retryable_http_status(status) and attempt < self._max_retries:

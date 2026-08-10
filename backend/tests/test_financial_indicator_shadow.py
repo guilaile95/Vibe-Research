@@ -611,6 +611,57 @@ def test_shadow_client_path_captures_exact_bytes_without_persisting_request_body
     assert result.fact.published_at is None
 
 
+def test_shadow_rejects_secret_echo_without_any_fact_lake_persistence(
+    tmp_path,
+    monkeypatch,
+):
+    root = tmp_path / "lake"
+    lake = initialize_fact_lake(root)
+    sentinel = "TEST_ONLY_SECRET_SENTINEL_FACT_LAKE_ECHO_60a729b3"
+    monkeypatch.setenv("TUSHARE_TOKEN", sentinel)
+    raw = json.dumps({
+        "code": 0,
+        "msg": f"provider echoed {sentinel}",
+        "data": {
+            "fields": list(FINANCIAL_FIELD_MANIFEST),
+            "items": [_row()],
+        },
+    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    with mock.patch(
+        "urllib.request.urlopen",
+        return_value=_Response(raw),
+    ) as request:
+        with pytest.raises(tpc.TushareProtocolError) as exc:
+            run_financial_indicator_shadow(
+                TS_CODE,
+                REPORT_PERIOD,
+                lake,
+            )
+
+    assert request.call_count == 1
+    assert str(exc.value) == "Tushare 响应包含禁止持久化的敏感材料"
+    assert sentinel not in str(exc.value)
+    conn = sqlite3.connect(root / CONTROL_DB_FILENAME)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM normalized_observations"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM canonical_publications"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+    assert list((root / "raw").rglob("*.blob")) == []
+    sentinel_bytes = sentinel.encode("utf-8")
+    assert all(
+        sentinel_bytes not in path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    )
+
+
 def test_invalid_provider_response_persists_raw_only_and_never_canonicalizes(
     tmp_path,
     monkeypatch,

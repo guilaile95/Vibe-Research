@@ -292,6 +292,88 @@ def test_fina_indicator_is_allowed_and_raw_sink_receives_exact_response_only(
     assert "raw POST body" not in serialized
 
 
+@pytest.mark.parametrize(("code", "status"), [(0, 200), (1001, 200), (1001, 503)])
+def test_raw_sink_rejects_token_echo_before_capture_without_retry(
+    monkeypatch,
+    code,
+    status,
+):
+    token = "TEST_ONLY_SECRET_SENTINEL_RESPONSE_ECHO_7f6f57f1"
+    monkeypatch.setenv("TUSHARE_TOKEN", token)
+    raw = _payload(
+        code=code,
+        msg=f"provider echoed {token}",
+        fields=("ts_code", "ann_date", "end_date", "update_flag", "eps"),
+        items=[["600519.SH", "20260430", "20260331", "1", 2.5]],
+    )
+    captured = []
+
+    with _patch_urlopen(raw, status) as request:
+        with pytest.raises(tpc.TushareProtocolError) as exc:
+            _client().query(
+                "fina_indicator",
+                {"ts_code": "600519.SH", "period": "20260331"},
+                "ts_code,ann_date,end_date,update_flag,eps",
+                raw_response_sink=lambda body, metadata: captured.append(
+                    (body, dict(metadata))
+                ),
+            )
+
+    assert request.call_count == 1
+    assert captured == []
+    assert str(exc.value) == "Tushare 响应包含禁止持久化的敏感材料"
+    assert token not in str(exc.value)
+
+
+def test_raw_sink_rejects_exact_serialized_secret_request_body_echo(
+    monkeypatch,
+):
+    token = 'TEST_ONLY_SECRET_SENTINEL_"\\_REQUEST_BODY'
+    monkeypatch.setenv("TUSHARE_TOKEN", token)
+    captured = []
+    sent = {}
+
+    def echo_request_body(request, timeout=None):
+        sent["body"] = request.data
+        return FakeResponse(request.data)
+
+    with mock.patch(
+        "urllib.request.urlopen",
+        side_effect=echo_request_body,
+    ) as request:
+        with pytest.raises(tpc.TushareProtocolError) as exc:
+            _client().query(
+                "fina_indicator",
+                {"ts_code": "600519.SH", "period": "20260331"},
+                "ts_code,ann_date,end_date,update_flag,eps",
+                raw_response_sink=lambda body, metadata: captured.append(
+                    (body, dict(metadata))
+                ),
+            )
+
+    assert request.call_count == 1
+    assert token.encode("utf-8") not in sent["body"]
+    assert captured == []
+    assert str(exc.value) == "Tushare 响应包含禁止持久化的敏感材料"
+    assert token not in str(exc.value)
+
+
+def test_token_echo_guard_does_not_change_sink_absent_behavior(monkeypatch):
+    token = "TEST_ONLY_SECRET_SENTINEL_NO_CAPTURE_16baac45"
+    monkeypatch.setenv("TUSHARE_TOKEN", token)
+    raw = _payload(msg=f"provider echoed {token}")
+
+    with _patch_urlopen(raw) as request:
+        rows = _client().query(
+            "daily",
+            {"trade_date": "20260730"},
+            "ts_code,trade_date",
+        )
+
+    assert request.call_count == 1
+    assert rows == [{"ts_code": "600519.SH", "trade_date": "2026-07-30"}]
+
+
 def test_raw_sink_observes_malformed_terminal_bytes_before_parser_rejects(
     monkeypatch,
 ):
