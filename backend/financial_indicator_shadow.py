@@ -583,12 +583,15 @@ def replay_financial_normalization(
         r"capture-[0-9a-f]{32}", event_id
     ) is None:
         raise FinancialReplayError("financial capture event identity is corrupted")
-    expected_observation_id = f"obs-{_sha256_text(_canonical_json({
-        'dataset_id': DATASET_ID,
-        'provider_id': CANONICAL_PROVIDER_ID,
-        'provider_endpoint': CANONICAL_ENDPOINT,
-        'capture_event_id': event_id,
-    }))}"
+    event_identity = {
+        "dataset_id": DATASET_ID,
+        "provider_id": CANONICAL_PROVIDER_ID,
+        "provider_endpoint": CANONICAL_ENDPOINT,
+        "capture_event_id": event_id,
+    }
+    expected_observation_id = (
+        f"obs-{_sha256_text(_canonical_json(event_identity))}"
+    )
     if expected_observation_id != observation.observation_id:
         raise FinancialReplayError("financial observation event binding drifted")
     if observation.payload["dataset_contract_revision"] \
