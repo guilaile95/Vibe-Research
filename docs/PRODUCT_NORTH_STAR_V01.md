@@ -888,3 +888,125 @@ SHORT / SWING / MEDIUM Opportunity Queue 分开；跨策略不做虚假的统一
 - 任何未在 `docs/NEXT_TASK.md` 明确授权的开发工作
 
 后续实施仍必须由用户明确授权，再更新 `docs/NEXT_TASK.md`。
+
+---
+
+## 30. Data Governance Foundation — 2026-08-10 Priority Addendum
+
+> 状态：**USER_CONFIRMED_NEXT_PRIORITY**
+>
+> 触发条件：当前正在收尾的 **Phase 2 Formal Thesis + S2D-M Migration / QA closure** 完成后优先进入本阶段；在此之前不抢占现有 Codex / Zcode / DeepSeek 工作。
+>
+> 本节记录产品与架构优先级，不改变第 29 节的治理原则：不得据此自行 Ready / Merge、迁移真实用户数据库、激活 stable schema 或越过 `docs/NEXT_TASK.md` 的明确实施边界。
+
+### 30.1 从 Source-oriented 升级为 Dataset / Fact-oriented Data Governance
+
+现有 `Field-Level Data Capability Registry` 继续保留，但数据层应进一步形成统一的 **Dataset / Fact Source Contract**。
+
+标准链路：
+
+`Provider → Raw Observation → Normalization → Canonical Fact → Temporal Semantics → Provenance → Data Health → Cross-source Reconciliation → Evidence / Thesis / Decision`
+
+核心原则：
+
+- Provider 返回值只是 **Observation**，不是自动成立的 Canonical Fact。
+- Source Routing 必须按 **Dataset** 定义，而不是简单“Provider A 挂了就切 Provider B”。
+- 每个 Dataset 明确 `canonical / verifier / fallback / historical_backfill` 角色；只有语义等价的源才允许自动 fallback。
+- 语义不等价、历史范围不同、复权口径不同或时间含义不明时必须 fail closed，而不是拼凑成一个看似完整的结果。
+- 现有 `DataHealthRecord` 继续负责“来源/模块当前是否健康”；本阶段新增的是“这条事实能否在某个时间点被合法使用”的 temporal/provenance contract，不重复建设 Data Health。
+
+### 30.2 Temporal Semantics / PIT / Revision Contract
+
+Dataset 至少要显式描述：
+
+- `fetch_semantics`: `by_date | snapshot`
+- `history_mode`: `by_date | snapshot_with_backfill | snapshot_only`
+- `primary_source`
+- `verifier_source`
+- `fallback_source`
+- `backfill_source`
+- `history_floor_date`
+- `history_horizon`
+- `source_retired_date`
+- `max_staleness`
+- `point_in_time / as_of`
+- revision / restatement semantics
+- adjustment semantics
+- historical-universe / survivorship-bias handling
+
+Observation / Fact 在适用时应区分：
+
+- `effective_at`
+- `published_at`
+- `observed_at`
+- `fetched_at`
+- `trade_date`
+- `report_period`
+- provider / endpoint / provider symbol
+- source payload hash / data version
+- normalizer version
+- quality status / reason codes
+
+不知道的时间或语义必须保持 `NULL / UNKNOWN`，不得由抓取时间、当前日期或其它近似字段伪造。
+
+### 30.3 Local Research Fact Lake
+
+建立 Vibe-Research 自己的 **Local Research Fact Lake**，目标不是复制一个通用行情平台，而是让正式投资判断具备可复查、可重放、可冻结的本地事实基础。
+
+第一阶段优先保存长期价值高、需要 PIT / revision / provenance 的数据：
+
+- Financial Statements / Financial Indicators
+- Valuation Snapshot History（从接入日起自行积累）
+- Corporate Actions / Adjustment Events
+- Historical Instrument Universe / Listing / Delisting
+- Index / Industry Membership
+- Concept Membership Snapshot History
+- Fund Holdings / Institutional Evidence
+- Share Structure / Shareholder Data
+- Raw Observation Metadata / Provenance
+
+存储倾向：
+
+- Raw immutable payload：JSON / Parquet
+- Normalized facts：Parquet
+- Analytical query：DuckDB
+- Operational metadata / watermark / registry：SQLite
+
+第一阶段**不要求**把所有实时行情、分钟线、tick、全部新闻都搬入 Lake；只为能明显提升 Thesis / Decision 可复现性的 Dataset 建湖。
+
+### 30.4 External Project / Provider Positioning
+
+当前候选的架构定位：
+
+- **rootSunc/ashare-lake**：作为 DatasetSpec、PIT、history_mode、provenance、historical universe、source routing 的架构 benchmark；默认不直接成为 Vibe-Research production dependency。
+- **HiThink-Tech/Financial-API**：作为补盲区、cross-source verifier 与 bulk ingestion 候选；在 LIVE_SMOKE 与数据契约验证通过前，不替换现有 Tushare / Eastmoney 已批准主事实链。
+- **FTShare**：当前仅进入 LIVE_SMOKE / capability discovery；SLA、来源 provenance、历史/修订语义和条款明确前，不升级为 canonical production source。
+- **QuoteMux**：不作为当前 production dependency；其 aggregation / fallback / health 思路可作为参考，但 Vibe-Research 应维护更严格的 Dataset-level contract。
+- **free-stockdb**：可参考本地镜像、manifest、checksum 与查询引擎工程，但 mirror 完整性不能替代事实 provenance，因此不作为 canonical fact source。
+- **TickDB**：当前产品阶段不接；只有未来明确进入实时/日内执行与高频数据需求时重新评估。
+
+### 30.5 当前阶段完成后的执行顺序
+
+在 **Phase 2 Formal Thesis + S2D-M Migration / QA closure** 完成后，优先顺序冻结为：
+
+1. **DS-A1 — Canonical Data Source Contract v0.1**  
+   先定义 DatasetSpec / ObservationEnvelope / TemporalSemantics / ProvenanceEnvelope / SourceRoutePolicy / ReconciliationPolicy；不先接新生产源。
+
+2. **DS-H1 — HiThink LIVE_SMOKE v0.1**  
+   独立验证认证/权限、rate limit、历史深度、分页、空值、财报 revision、report-date、复权、THS 板块/成分、基金、涨停与 market dumps；输出 machine-readable capability matrix。
+
+3. **DS-L1 — Local Fact Lake PoC v0.1**  
+   首批只选择少量高价值 Dataset，证明 `immutable raw observation → normalize → provenance → repeat ingest → revision detection → as_of query → DuckDB read`；仅使用隔离本地测试数据，不迁移真实用户数据库。
+
+4. **DS-A2 — ashare-lake Semantic Gap Review**  
+   将其 DatasetSpec / temporal / provenance 设计逐项与 Vibe contract 比较，明确 `COPY CONCEPT / ADAPT / REJECT / NOT APPLICABLE`，避免无边界复制整个项目。
+
+### 30.6 Roadmap Gate
+
+用户确认的路线顺序为：
+
+`当前 Phase 2 / Migration closure → Data Governance Foundation (DS-A1/H1/L1/A2) → 再评估后续 Phase 3+`
+
+因此，在当前阶段正式关闭后，**Data Governance Foundation 是下一优先工作，不应默认直接跳到 Phase 3 Campaign Trade Attribution**。
+
+该优先级是 North Star 级产品决定；具体 executor 分工、分支、文件范围和验收合同仍应在届时同步到 `docs/NEXT_TASK.md` 后执行。
