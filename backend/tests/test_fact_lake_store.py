@@ -23,6 +23,7 @@ from data_contracts import (
 from fact_lake_store import (
     CONTROL_DB_FILENAME,
     SCHEMA_VERSION,
+    FactLakeBusyError,
     FactLakeCorruptedError,
     FactLakeHashMismatchError,
     FactLakeNotInitializedError,
@@ -719,6 +720,76 @@ def test_committed_blob_corruption_fails_closed_without_repair(
         open_existing_fact_lake(root).get_observation(observation.observation_id)
 
     assert blob_path.read_bytes() == before
+
+
+def test_external_sqlite_write_lock_fails_busy_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "lake"
+    lake = initialize_fact_lake(root)
+    payload = b"contended-write"
+    observation = _observation(payload)
+    external = sqlite3.connect(root / CONTROL_DB_FILENAME)
+    external.execute("BEGIN IMMEDIATE")
+    monkeypatch.setattr(store_module, "SQLITE_CONNECTION_TIMEOUT_SECONDS", 0.01)
+
+    try:
+        with pytest.raises(FactLakeBusyError) as raised:
+            lake.store_observation(observation, payload, "application/json")
+    finally:
+        external.rollback()
+        external.close()
+
+    assert not isinstance(raised.value, FactLakeCorruptedError)
+    assert lake.get_observation(observation.observation_id) is None
+    assert list((root / "raw").rglob("*.blob")) == []
+    conn = sqlite3.connect(root / CONTROL_DB_FILENAME)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_external_sqlite_exclusive_lock_is_busy_not_corruption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "lake"
+    lake = initialize_fact_lake(root)
+    external = sqlite3.connect(root / CONTROL_DB_FILENAME)
+    external.execute("BEGIN EXCLUSIVE")
+    monkeypatch.setattr(store_module, "SQLITE_CONNECTION_TIMEOUT_SECONDS", 0.01)
+
+    try:
+        with pytest.raises(FactLakeBusyError) as raised:
+            lake.get_observation("obs-not-present")
+    finally:
+        external.rollback()
+        external.close()
+
+    assert not isinstance(raised.value, FactLakeCorruptedError)
+    assert lake.get_observation("obs-not-present") is None
+
+
+def test_valid_handle_uses_lock_aware_gate_for_immutable_writer_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "lake"
+    lake = initialize_fact_lake(root)
+
+    def malformed_immutable_read(_path: Path) -> sqlite3.Connection:
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(store_module, "_connect_immutable", malformed_immutable_read)
+
+    # A fresh open keeps the zero-mutation immutable gate and fails closed.
+    with pytest.raises(FactLakeCorruptedError):
+        open_existing_fact_lake(root)
+    # An already validated v2 handle may use a normal lock-aware reader to
+    # distinguish an in-flight rollback page from real corruption.
+    assert lake.get_observation("obs-not-present") is None
 
 
 def test_only_explicit_tmp_root_is_touched(tmp_path: Path, monkeypatch) -> None:

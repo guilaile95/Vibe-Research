@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Optional
@@ -28,6 +29,7 @@ import trade_calendar
 __all__ = [
     "SCHEMA_VERSION",
     "fetch_limit_up_pool_snapshot",
+    "interpret_limit_up_pool_response_bytes",
 ]
 
 SCHEMA_VERSION = "short-term-limit-up-pool-adapter-v0.1"
@@ -37,6 +39,11 @@ _ENDPOINT = "getTopicZTPool"
 _URL = f"https://push2ex.eastmoney.com/{_ENDPOINT}"
 _TIMEOUT_SECONDS = 10
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
+# Kept independent from ``limit_up_shadow`` to avoid an adapter ↔ shadow
+# import cycle.  The value is intentionally identical to the raw-observation
+# persistence boundary: a replay must never accept bytes the live path would
+# reject, or vice versa.
+_MAX_RAW_RESPONSE_BYTES = 16 * 1024 * 1024
 
 _STRICT_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 _EIGHT_DIGIT_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})$")
@@ -109,11 +116,13 @@ def _safe_http_status(response: object) -> Optional[int]:
 
 
 def _capture_raw_response(
+    raw_bytes: bytes,
     response: object,
     sink: RawResponseSink | None,
     *,
     requested_trade_date: str,
     params: dict[str, Any],
+    http_status: int | None,
 ) -> None:
     """Capture exact response bytes before HTTP/JSON classification.
 
@@ -123,13 +132,6 @@ def _capture_raw_response(
     """
     if sink is None:
         return
-    try:
-        content = getattr(response, "content")
-    except Exception as exc:
-        raise ValueError("shadow raw response content is unavailable") from exc
-    if type(content) is not bytes:
-        raise TypeError("shadow raw response content must be exact bytes")
-
     content_type: str | None = None
     try:
         headers = getattr(response, "headers", None)
@@ -141,7 +143,7 @@ def _capture_raw_response(
     except Exception:
         content_type = None
 
-    sink(content, {
+    sink(raw_bytes, {
         "operation": _ENDPOINT,
         "endpoint": _URL,
         "requested_trade_date": requested_trade_date,
@@ -149,30 +151,10 @@ def _capture_raw_response(
         "page_index": params["Pageindex"],
         "page_size": params["pagesize"],
         "sort": params["sort"],
-        "http_status": _safe_http_status(response),
+        "http_status": http_status,
         "content_type": content_type,
         "fetched_at": _now_utc_iso(),
     })
-
-
-def _safe_call_json(response: object) -> tuple[Any, Optional[str]]:
-    """安全调用 response.json()。返回 ``(payload, error_code)``。
-
-    error_code 为 None 表示成功；否则为 "PARSE_ERROR"。
-    """
-    if response is None:
-        return None, "PARSE_ERROR"
-    try:
-        json_fn = getattr(response, "json", None)
-    except Exception:
-        return None, "PARSE_ERROR"
-    if json_fn is None or not callable(json_fn):
-        return None, "PARSE_ERROR"
-    try:
-        payload = json_fn()
-    except Exception:
-        return None, "PARSE_ERROR"
-    return payload, None
 
 
 def _normalize_reason_codes(codes: list[str]) -> list[str]:
@@ -229,6 +211,7 @@ def _empty_contract(
     invalid_row_count: int = 0,
     duplicate_code_count: int = 0,
     source_pool_row_count: int = 0,
+    observed_at: str | None = None,
 ) -> dict:
     normalized = _normalize_reason_codes(reason_codes)
     ec = _error_class_for(status, normalized)
@@ -237,7 +220,7 @@ def _empty_contract(
         "source_id": _SOURCE_ID,
         "endpoint": _ENDPOINT,
         "requested_trade_date": requested_trade_date,
-        "observed_at": _now_utc_iso(),
+        "observed_at": _now_utc_iso() if observed_at is None else observed_at,
         "status": status,
         "reason_codes": normalized,
         "rows": [],
@@ -427,7 +410,240 @@ def _normalize_rows(pool: list) -> tuple[list[dict], int, int, int]:
 
 
 # ---------------------------------------------------------------------------
-# 公开 API
+# Exact raw-byte interpretation
+# ---------------------------------------------------------------------------
+
+def interpret_limit_up_pool_response_bytes(
+    raw_bytes: bytes,
+    *,
+    requested_trade_date: str,
+    http_status: int | None,
+    observed_at: str,
+) -> dict:
+    """Interpret one stored provider response without external dependencies.
+
+    This is deliberately the sole provider-payload interpreter used by both
+    live capture and replay.  It consumes only its explicit arguments: no
+    network, calendar, clock, or response-object access is permitted here.
+    ``observed_at`` is an input rather than a clock read so that a replay of
+    exact bytes is deterministic.
+    """
+    def empty(**kwargs: Any) -> dict:
+        return _empty_contract(
+            requested_trade_date=requested_trade_date,
+            observed_at=observed_at,
+            **kwargs,
+        )
+
+    # HTTP classification is intentionally before all byte validation/parsing.
+    # A 4xx/5xx body is not provider data and therefore must never be parsed.
+    if isinstance(http_status, bool) or not isinstance(http_status, int) \
+            or http_status < 100 or http_status > 599:
+        return empty(
+            status="unavailable", reason_codes=["HTTP_ERROR"],
+            transport_success=True, parse_success=False,
+            required_field_present=False, data_array_present=False,
+            trade_date_match=None, http_status=None,
+        )
+    if http_status < 200 or http_status >= 300:
+        if http_status == 429:
+            code = "RATE_LIMITED"
+        elif http_status in (401, 403):
+            code = "ACCESS_RESTRICTED"
+        else:
+            code = "HTTP_ERROR"
+        return empty(
+            status="unavailable", reason_codes=[code],
+            transport_success=True, parse_success=False,
+            required_field_present=False, data_array_present=False,
+            trade_date_match=None, http_status=http_status,
+        )
+
+    if type(raw_bytes) is not bytes or len(raw_bytes) > _MAX_RAW_RESPONSE_BYTES:
+        return empty(
+            status="unavailable", reason_codes=["PARSE_ERROR"],
+            transport_success=True, parse_success=False,
+            required_field_present=False, data_array_present=False,
+            trade_date_match=None, http_status=http_status,
+        )
+
+    def reject_nonstandard_json_constant(_: str) -> None:
+        raise ValueError("non-standard JSON constant")
+
+    try:
+        payload = json.loads(
+            raw_bytes.decode("utf-8"),
+            parse_constant=reject_nonstandard_json_constant,
+        )
+    except Exception:
+        return empty(
+            status="unavailable", reason_codes=["PARSE_ERROR"],
+            transport_success=True, parse_success=False,
+            required_field_present=False, data_array_present=False,
+            trade_date_match=None, http_status=http_status,
+        )
+
+    # ``parse_success`` means that valid JSON decoded to the required object
+    # envelope.  This preserves the adapter's existing production contract.
+    if not isinstance(payload, dict):
+        return empty(
+            status="unavailable", reason_codes=["DATA_ARRAY_INVALID"],
+            transport_success=True, parse_success=False,
+            required_field_present=False, data_array_present=False,
+            trade_date_match=None, http_status=http_status,
+        )
+
+    if "data" not in payload:
+        return empty(
+            status="unavailable", reason_codes=["REQUIRED_FIELD_MISSING"],
+            transport_success=True, parse_success=True,
+            required_field_present=False, data_array_present=False,
+            trade_date_match=None, http_status=http_status,
+        )
+    data_obj: Any = payload.get("data")
+    if data_obj is None:
+        return empty(
+            status="unavailable", reason_codes=["UPSTREAM_NULL"],
+            transport_success=True, parse_success=True,
+            required_field_present=False, data_array_present=False,
+            trade_date_match=None, http_status=http_status, upstream_null=True,
+        )
+    if not isinstance(data_obj, dict):
+        return empty(
+            status="unavailable", reason_codes=["DATA_ARRAY_INVALID"],
+            transport_success=True, parse_success=True,
+            required_field_present=False, data_array_present=False,
+            trade_date_match=None, http_status=http_status,
+        )
+    if "pool" not in data_obj:
+        return empty(
+            status="unavailable", reason_codes=["REQUIRED_FIELD_MISSING"],
+            transport_success=True, parse_success=True,
+            required_field_present=False, data_array_present=False,
+            trade_date_match=None, http_status=http_status,
+        )
+    pool: Any = data_obj.get("pool")
+    if pool is None:
+        return empty(
+            status="unavailable", reason_codes=["UPSTREAM_NULL"],
+            transport_success=True, parse_success=True,
+            required_field_present=False, data_array_present=False,
+            trade_date_match=None, http_status=http_status, upstream_null=True,
+        )
+    if not isinstance(pool, list):
+        return empty(
+            status="unavailable", reason_codes=["DATA_ARRAY_INVALID"],
+            transport_success=True, parse_success=True,
+            required_field_present=True, data_array_present=False,
+            trade_date_match=None, http_status=http_status,
+        )
+
+    source_count = len(pool)
+    trade_date_match, mismatch = _evaluate_trade_date_match(
+        payload, data_obj, requested_trade_date)
+    if mismatch:
+        return empty(
+            status="unavailable", reason_codes=["TRADE_DATE_MISMATCH"],
+            transport_success=True, parse_success=True,
+            required_field_present=True, data_array_present=True,
+            trade_date_match=False, http_status=http_status,
+            source_pool_row_count=source_count,
+        )
+
+    rows, excluded_universe, invalid_rows, duplicates = _normalize_rows(pool)
+    if not rows:
+        if source_count == 0:
+            return empty(
+                status="partial", reason_codes=["UNEXPLAINED_EMPTY"],
+                transport_success=True, parse_success=True,
+                required_field_present=True, data_array_present=True,
+                trade_date_match=trade_date_match, http_status=http_status,
+                unexplained_empty=True, coverage_warning=True,
+                source_pool_row_count=0,
+            )
+
+        target_universe = (
+            excluded_universe > 0 and invalid_rows == 0 and duplicates == 0
+            and excluded_universe == source_count
+        )
+        if target_universe:
+            reason_codes: list[str] = []
+            if trade_date_match is None:
+                reason_codes.append("DATE_BINDING_UNVERIFIED")
+            is_normal = trade_date_match is True
+            return empty(
+                status="normal" if is_normal else "partial",
+                reason_codes=reason_codes, transport_success=True,
+                parse_success=True, required_field_present=True,
+                data_array_present=True, trade_date_match=trade_date_match,
+                http_status=http_status, coverage_warning=not is_normal,
+                target_universe_empty_after_filter=True,
+                source_pool_row_count=source_count,
+                excluded_universe_count=excluded_universe,
+            )
+
+        reason_codes = []
+        if trade_date_match is None:
+            reason_codes.append("DATE_BINDING_UNVERIFIED")
+        if invalid_rows:
+            reason_codes.append("INVALID_POOL_ROW")
+        if duplicates:
+            reason_codes.append("DUPLICATE_STOCK_CODE")
+        return empty(
+            status="partial", reason_codes=reason_codes,
+            transport_success=True, parse_success=True,
+            required_field_present=True, data_array_present=True,
+            trade_date_match=trade_date_match, http_status=http_status,
+            coverage_warning=True, source_pool_row_count=source_count,
+            excluded_universe_count=excluded_universe,
+            invalid_row_count=invalid_rows, duplicate_code_count=duplicates,
+        )
+
+    reason_codes = []
+    coverage_warning = False
+    if trade_date_match is None:
+        reason_codes.append("DATE_BINDING_UNVERIFIED")
+        coverage_warning = True
+    if invalid_rows:
+        reason_codes.append("INVALID_POOL_ROW")
+        coverage_warning = True
+    if duplicates:
+        reason_codes.append("DUPLICATE_STOCK_CODE")
+        coverage_warning = True
+    status = "normal" if (trade_date_match is True
+                           and not invalid_rows and not duplicates) else "partial"
+    normalized = _normalize_reason_codes(reason_codes)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "source_id": _SOURCE_ID,
+        "endpoint": _ENDPOINT,
+        "requested_trade_date": requested_trade_date,
+        "observed_at": observed_at,
+        "status": status,
+        "reason_codes": normalized,
+        "rows": rows,
+        "transport_success": True,
+        "parse_success": True,
+        "required_field_present": True,
+        "data_array_present": True,
+        "trade_date_match": trade_date_match,
+        "row_count": len(rows),
+        "legal_zero": False,
+        "upstream_null": False,
+        "unexplained_empty": False,
+        "coverage_warning": coverage_warning,
+        "target_universe_empty_after_filter": False,
+        "source_pool_row_count": source_count,
+        "http_status": http_status,
+        "error_class": _error_class_for(status, normalized),
+        "excluded_universe_count": excluded_universe,
+        "invalid_row_count": invalid_rows,
+        "duplicate_code_count": duplicates,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Live API
 # ---------------------------------------------------------------------------
 
 def fetch_limit_up_pool_snapshot(
@@ -546,296 +762,27 @@ def fetch_limit_up_pool_snapshot(
             trade_date_match=None,
         )
 
-    # Optional shadow capture: exact bytes are copied immediately after the
-    # transport returns and before any HTTP classification or JSON parsing.
-    # With the default ``None`` this adds no reads, calls or behavior changes.
-    _capture_raw_response(
-        response,
-        raw_response_sink,
-        requested_trade_date=requested_trade_date,
-        params=params,
-    )
-
-    # 4) HTTP 分类（安全提取状态码）
+    # Read wire bytes exactly once.  Both optional capture and the normal live
+    # result consume this same value; response.json() is intentionally never
+    # consulted, so replay and live interpretation cannot drift.
+    try:
+        raw_bytes: object = getattr(response, "content")
+    except Exception:
+        raw_bytes = None
     status_code = _safe_http_status(response)
-    if status_code is None:
-        return _empty_contract(
+    observed_at = _now_utc_iso()
+    if raw_response_sink is not None and type(raw_bytes) is bytes:
+        _capture_raw_response(
+            raw_bytes,
+            response,
+            raw_response_sink,
             requested_trade_date=requested_trade_date,
-            status="unavailable",
-            reason_codes=["HTTP_ERROR"],
-            transport_success=True,
-            parse_success=False,
-            required_field_present=False,
-            data_array_present=False,
-            trade_date_match=None,
-            http_status=None,
-        )
-    if status_code < 200 or status_code >= 300:
-        if status_code == 429:
-            code = "RATE_LIMITED"
-        elif status_code in (401, 403):
-            code = "ACCESS_RESTRICTED"
-        else:
-            code = "HTTP_ERROR"
-        return _empty_contract(
-            requested_trade_date=requested_trade_date,
-            status="unavailable",
-            reason_codes=[code],
-            transport_success=True,
-            parse_success=False,
-            required_field_present=False,
-            data_array_present=False,
-            trade_date_match=None,
+            params=params,
             http_status=status_code,
         )
-
-    # 5) JSON 解析（安全 callable 检查）
-    payload, json_err = _safe_call_json(response)
-    if json_err is not None:
-        return _empty_contract(
-            requested_trade_date=requested_trade_date,
-            status="unavailable",
-            reason_codes=["PARSE_ERROR"],
-            transport_success=True,
-            parse_success=False,
-            required_field_present=False,
-            data_array_present=False,
-            trade_date_match=None,
-            http_status=status_code,
-        )
-    if not isinstance(payload, dict):
-        return _empty_contract(
-            requested_trade_date=requested_trade_date,
-            status="unavailable",
-            reason_codes=["DATA_ARRAY_INVALID"],
-            transport_success=True,
-            parse_success=False,
-            required_field_present=False,
-            data_array_present=False,
-            trade_date_match=None,
-            http_status=status_code,
-        )
-
-    # 6) schema：data / data.pool
-    #    parse_success = true（JSON 解码成功且顶层为 dict）
-    #    required_field_present = data 和 pool 均存在
-    #    data_array_present = pool 为 list
-    if "data" not in payload:
-        return _empty_contract(
-            requested_trade_date=requested_trade_date,
-            status="unavailable",
-            reason_codes=["REQUIRED_FIELD_MISSING"],
-            transport_success=True,
-            parse_success=True,
-            required_field_present=False,
-            data_array_present=False,
-            trade_date_match=None,
-            http_status=status_code,
-        )
-    data_obj: Any = payload.get("data")
-    if data_obj is None:
-        return _empty_contract(
-            requested_trade_date=requested_trade_date,
-            status="unavailable",
-            reason_codes=["UPSTREAM_NULL"],
-            transport_success=True,
-            parse_success=True,
-            required_field_present=False,
-            data_array_present=False,
-            trade_date_match=None,
-            http_status=status_code,
-            upstream_null=True,
-        )
-    if not isinstance(data_obj, dict):
-        return _empty_contract(
-            requested_trade_date=requested_trade_date,
-            status="unavailable",
-            reason_codes=["DATA_ARRAY_INVALID"],
-            transport_success=True,
-            parse_success=True,
-            required_field_present=False,
-            data_array_present=False,
-            trade_date_match=None,
-            http_status=status_code,
-        )
-
-    if "pool" not in data_obj:
-        return _empty_contract(
-            requested_trade_date=requested_trade_date,
-            status="unavailable",
-            reason_codes=["REQUIRED_FIELD_MISSING"],
-            transport_success=True,
-            parse_success=True,
-            required_field_present=False,
-            data_array_present=False,
-            trade_date_match=None,
-            http_status=status_code,
-        )
-    pool: Any = data_obj.get("pool")
-    if pool is None:
-        return _empty_contract(
-            requested_trade_date=requested_trade_date,
-            status="unavailable",
-            reason_codes=["UPSTREAM_NULL"],
-            transport_success=True,
-            parse_success=True,
-            required_field_present=False,
-            data_array_present=False,
-            trade_date_match=None,
-            http_status=status_code,
-            upstream_null=True,
-        )
-    if not isinstance(pool, list):
-        return _empty_contract(
-            requested_trade_date=requested_trade_date,
-            status="unavailable",
-            reason_codes=["DATA_ARRAY_INVALID"],
-            transport_success=True,
-            parse_success=True,
-            required_field_present=True,
-            data_array_present=False,
-            trade_date_match=None,
-            http_status=status_code,
-        )
-
-    # pool 为 list → source_pool_row_count 可确定
-    source_count = len(pool)
-
-    # 7) trade_date_match（严格收集全部候选）
-    trade_date_match, mismatch = _evaluate_trade_date_match(
-        payload, data_obj, requested_trade_date)
-    if mismatch:
-        return _empty_contract(
-            requested_trade_date=requested_trade_date,
-            status="unavailable",
-            reason_codes=["TRADE_DATE_MISMATCH"],
-            transport_success=True,
-            parse_success=True,
-            required_field_present=True,
-            data_array_present=True,
-            trade_date_match=False,
-            http_status=status_code,
-            source_pool_row_count=source_count,
-        )
-
-    # 8) 行标准化 + universe 过滤
-    rows, excluded_universe, invalid_rows, duplicates = _normalize_rows(pool)
-
-    # 9) 空结果分类（三种类型）
-    if not rows:
-        # 类型 1: source pool 原始为空
-        if source_count == 0:
-            return _empty_contract(
-                requested_trade_date=requested_trade_date,
-                status="partial",
-                reason_codes=["UNEXPLAINED_EMPTY"],
-                transport_success=True,
-                parse_success=True,
-                required_field_present=True,
-                data_array_present=True,
-                trade_date_match=trade_date_match,
-                http_status=status_code,
-                unexplained_empty=True,
-                coverage_warning=True,
-                source_pool_row_count=0,
-            )
-
-        # 类型 2: 全部因 universe 排除（无 invalid，无 duplicate）
-        target_universe = (
-            excluded_universe > 0
-            and invalid_rows == 0
-            and duplicates == 0
-            and excluded_universe == source_count
-        )
-
-        if target_universe:
-            reason_codes: list[str] = []
-            if trade_date_match is None:
-                reason_codes.append("DATE_BINDING_UNVERIFIED")
-            is_normal = (trade_date_match is True)
-            return _empty_contract(
-                requested_trade_date=requested_trade_date,
-                status="normal" if is_normal else "partial",
-                reason_codes=reason_codes,
-                transport_success=True,
-                parse_success=True,
-                required_field_present=True,
-                data_array_present=True,
-                trade_date_match=trade_date_match,
-                http_status=status_code,
-                unexplained_empty=False,
-                coverage_warning=not is_normal,
-                target_universe_empty_after_filter=True,
-                source_pool_row_count=source_count,
-                excluded_universe_count=excluded_universe,
-            )
-
-        # 类型 3: 全部无效 或 invalid+excluded 混合
-        reason_codes = []
-        if trade_date_match is None:
-            reason_codes.append("DATE_BINDING_UNVERIFIED")
-        if invalid_rows:
-            reason_codes.append("INVALID_POOL_ROW")
-        if duplicates:
-            reason_codes.append("DUPLICATE_STOCK_CODE")
-        return _empty_contract(
-            requested_trade_date=requested_trade_date,
-            status="partial",
-            reason_codes=reason_codes,
-            transport_success=True,
-            parse_success=True,
-            required_field_present=True,
-            data_array_present=True,
-            trade_date_match=trade_date_match,
-            http_status=status_code,
-            unexplained_empty=False,
-            coverage_warning=True,
-            source_pool_row_count=source_count,
-            excluded_universe_count=excluded_universe,
-            invalid_row_count=invalid_rows,
-            duplicate_code_count=duplicates,
-        )
-
-    # 10) 非空结果
-    reason_codes = []
-    coverage_warning = False
-    if trade_date_match is None:
-        reason_codes.append("DATE_BINDING_UNVERIFIED")
-        coverage_warning = True
-    if invalid_rows:
-        reason_codes.append("INVALID_POOL_ROW")
-        coverage_warning = True
-    if duplicates:
-        reason_codes.append("DUPLICATE_STOCK_CODE")
-        coverage_warning = True
-    status = "normal" if (trade_date_match is True
-                           and not invalid_rows and not duplicates) else "partial"
-    normalized = _normalize_reason_codes(reason_codes)
-    ec = _error_class_for(status, normalized)
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "source_id": _SOURCE_ID,
-        "endpoint": _ENDPOINT,
-        "requested_trade_date": requested_trade_date,
-        "observed_at": _now_utc_iso(),
-        "status": status,
-        "reason_codes": normalized,
-        "rows": rows,
-        "transport_success": True,
-        "parse_success": True,
-        "required_field_present": True,
-        "data_array_present": True,
-        "trade_date_match": trade_date_match,
-        "row_count": len(rows),
-        "legal_zero": False,
-        "upstream_null": False,
-        "unexplained_empty": False,
-        "coverage_warning": coverage_warning,
-        "target_universe_empty_after_filter": False,
-        "source_pool_row_count": source_count,
-        "http_status": status_code,
-        "error_class": ec,
-        "excluded_universe_count": excluded_universe,
-        "invalid_row_count": invalid_rows,
-        "duplicate_code_count": duplicates,
-    }
+    return interpret_limit_up_pool_response_bytes(
+        raw_bytes,
+        requested_trade_date=requested_trade_date,
+        http_status=status_code,
+        observed_at=observed_at,
+    )

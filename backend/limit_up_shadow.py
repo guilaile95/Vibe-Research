@@ -53,7 +53,7 @@ CANONICAL_ENDPOINT = "https://push2ex.eastmoney.com/getTopicZTPool"
 VERIFIER_PROVIDER_ID = "tushare_pro"
 VERIFIER_ENDPOINT = "stk_limit"
 DATASET_CONTRACT_REVISION = "ds-limit-up-pool-contract-v0.1"
-NORMALIZER_VERSION = "ds-limit-up-pool-normalizer-v0.1"
+NORMALIZER_VERSION = "ds-limit-up-pool-normalizer-v0.2"
 ARTIFACT_SCHEMA_VERSION = "ds-limit-up-pool-parquet-v0.1"
 RECONCILIATION_POLICY_ID = "bk11-limit-up-count-tolerance"
 RECONCILIATION_POLICY_VERSION = "v0.1"
@@ -116,6 +116,26 @@ class LimitUpCanonicalAdmissionError(LimitUpShadowError):
 
 class LimitUpQueryError(LimitUpShadowError):
     """A committed artifact failed the strict DuckDB query contract."""
+
+
+class LimitUpReplayError(LimitUpShadowError):
+    """Base class for deterministic committed-raw replay failures."""
+
+
+class LimitUpReplayNotFoundError(LimitUpReplayError):
+    """The requested committed observation or raw payload does not exist."""
+
+
+class LimitUpReplayUnsupportedError(LimitUpReplayError):
+    """The observation route or normalizer version is not replayable here."""
+
+
+class LimitUpReplayMetadataError(LimitUpReplayError):
+    """Immutable observation receipt metadata is inconsistent or corrupted."""
+
+
+class LimitUpReplayMismatchError(LimitUpReplayError):
+    """Committed raw evidence disagrees with persisted derived evidence."""
 
 
 LIMIT_UP_DATASET_SPEC = DatasetSpec(
@@ -390,6 +410,26 @@ def normalize_adapter_snapshot(
     return normalized
 
 
+@dataclass(frozen=True)
+class ReplayedLimitUpNormalization:
+    """Normalization re-derived only from committed raw evidence and receipt."""
+
+    observation: StoredObservation
+    adapter_snapshot: dict[str, Any]
+    normalized_payload: dict[str, Any]
+    normalized_sha256: str
+    canonical_admissible: bool
+
+
+@dataclass(frozen=True)
+class LimitUpReplayVerification:
+    """Comparison result; verification itself never persists or repairs data."""
+
+    status: Literal["ABSENT", "MATCH"]
+    replay: ReplayedLimitUpNormalization
+    stored_normalization: StoredNormalization | None
+
+
 def _observation_id(capture: RawResponseCapture) -> str:
     if type(capture.capture_event_id) is not str or re.fullmatch(
         r"capture-[0-9a-f]{32}", capture.capture_event_id
@@ -542,6 +582,208 @@ def build_provider_observation(
         adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,
         quality_status=(QualityStatus.VALID if admitted else QualityStatus.INVALID),
         reason_codes=reasons,
+    )
+
+
+_RECEIPT_FIELDS = frozenset({
+    "capture_event_id",
+    "request",
+    "response",
+    "adapter_outcome",
+    "dataset_contract_revision",
+})
+_RESPONSE_RECEIPT_FIELDS = frozenset({
+    "http_status",
+    "content_type",
+    "byte_length",
+})
+_ADAPTER_OUTCOME_FIELDS = frozenset({
+    "status",
+    "reason_codes",
+    "transport_success",
+    "parse_success",
+    "required_field_present",
+    "data_array_present",
+    "trade_date_match",
+    "requested_trade_date",
+})
+
+
+def _exact_receipt_mapping(
+    value: Any,
+    fields: frozenset[str],
+    name: str,
+) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise LimitUpReplayMetadataError(f"{name} receipt shape is invalid")
+    return value
+
+
+def replay_normalization(
+    lake: FactLake,
+    observation_id: str,
+) -> ReplayedLimitUpNormalization:
+    """Re-derive normalization without reading persisted normalization JSON.
+
+    The only semantic inputs are a committed ProviderObservation receipt and
+    its exact content-addressed provider bytes.  The stored normalization is
+    deliberately not read here; it is the value verified by
+    :func:`verify_normalization_replay`.
+    """
+    if type(observation_id) is not str or not observation_id:
+        raise ValueError("observation_id must be non-empty")
+    stored = lake.get_observation(observation_id)
+    if stored is None:
+        raise LimitUpReplayNotFoundError(
+            "committed limit-up observation does not exist"
+        )
+    observation = stored.observation
+    if (
+        observation.dataset_id != DATASET_ID
+        or observation.provider_id != CANONICAL_PROVIDER_ID
+        or observation.provider_endpoint != CANONICAL_ENDPOINT
+    ):
+        raise LimitUpReplayUnsupportedError(
+            "only the canonical EastMoney limit-up route is replayable"
+        )
+    if observation.normalizer_version != NORMALIZER_VERSION:
+        raise LimitUpReplayUnsupportedError(
+            "observation normalizer version is not replayable"
+        )
+    if (
+        observation.fetch_semantics is not FetchSemantics.BY_DATE
+        or observation.history_mode is not HistoryMode.BY_DATE
+    ):
+        raise LimitUpReplayMetadataError(
+            "observation temporal contract drifted"
+        )
+
+    receipt = _exact_receipt_mapping(
+        observation.payload,
+        _RECEIPT_FIELDS,
+        "observation",
+    )
+    if receipt["dataset_contract_revision"] != DATASET_CONTRACT_REVISION:
+        raise LimitUpReplayMetadataError(
+            "observation dataset contract revision drifted"
+        )
+    capture_event_id = receipt["capture_event_id"]
+    if type(capture_event_id) is not str or re.fullmatch(
+        r"capture-[0-9a-f]{32}", capture_event_id
+    ) is None:
+        raise LimitUpReplayMetadataError("capture event identity is invalid")
+    request = _exact_receipt_mapping(
+        receipt["request"],
+        frozenset(_FINGERPRINT_FIELDS),
+        "request",
+    )
+    response = _exact_receipt_mapping(
+        receipt["response"],
+        _RESPONSE_RECEIPT_FIELDS,
+        "response",
+    )
+    _exact_receipt_mapping(
+        receipt["adapter_outcome"],
+        _ADAPTER_OUTCOME_FIELDS,
+        "adapter outcome",
+    )
+    try:
+        request_fingerprint = build_request_fingerprint(dict(request))
+    except LimitUpCaptureError as exc:
+        raise LimitUpReplayMetadataError(
+            "request receipt does not satisfy the dataset contract"
+        ) from exc
+    if request_fingerprint != observation.request_fingerprint:
+        raise LimitUpReplayMetadataError("request fingerprint drifted")
+    content_type = response["content_type"]
+    if type(content_type) is not str or content_type != stored.content_type:
+        raise LimitUpReplayMetadataError("response content type drifted")
+    byte_length = response["byte_length"]
+    if type(byte_length) is not int or byte_length < 0:
+        raise LimitUpReplayMetadataError("response byte length is invalid")
+
+    raw_bytes = lake.read_payload(observation_id)
+    if raw_bytes is None:
+        raise LimitUpReplayNotFoundError("committed provider bytes are missing")
+    if len(raw_bytes) != byte_length:
+        raise LimitUpReplayMetadataError("response byte length drifted")
+    if payload_sha256(raw_bytes).lower() != observation.source_payload_hash.lower():
+        raise LimitUpReplayMismatchError("committed raw payload hash drifted")
+
+    requested_trade_date = request["requested_trade_date"]
+    snapshot = pool_adapter.interpret_limit_up_pool_response_bytes(
+        raw_bytes,
+        requested_trade_date=requested_trade_date,
+        http_status=response["http_status"],
+        observed_at=observation.fetched_at,
+    )
+    replay_capture = RawResponseCapture(
+        capture_event_id=capture_event_id,
+        raw_bytes=raw_bytes,
+        metadata={
+            **dict(request),
+            "http_status": response["http_status"],
+            "content_type": content_type,
+            "fetched_at": observation.fetched_at,
+        },
+        request_fingerprint=request_fingerprint,
+        source_payload_hash=payload_sha256(raw_bytes),
+        content_type=content_type,
+        fetched_at=observation.fetched_at,
+    )
+    expected_observation = build_provider_observation(replay_capture, snapshot)
+    if expected_observation.to_dict() != observation.to_dict():
+        raise LimitUpReplayMetadataError(
+            "persisted observation classification disagrees with raw replay"
+        )
+    normalized = normalize_adapter_snapshot(
+        snapshot,
+        source_observation_id=observation_id,
+    )
+    normalized_sha256 = payload_sha256(
+        _canonical_json(normalized).encode("utf-8")
+    )
+    return ReplayedLimitUpNormalization(
+        observation=stored,
+        adapter_snapshot=snapshot,
+        normalized_payload=normalized,
+        normalized_sha256=normalized_sha256,
+        canonical_admissible=_is_canonical_admissible(normalized),
+    )
+
+
+def verify_normalization_replay(
+    lake: FactLake,
+    observation_id: str,
+) -> LimitUpReplayVerification:
+    """Compare replay with stored normalization without mutating history."""
+    replay = replay_normalization(lake, observation_id)
+    stored = lake.get_normalization(observation_id)
+    if stored is None:
+        return LimitUpReplayVerification("ABSENT", replay, None)
+    if (
+        stored.normalizer_version != NORMALIZER_VERSION
+        or stored.normalized_sha256.lower()
+            != replay.normalized_sha256.lower()
+        or _canonical_json(stored.normalized_payload)
+            != _canonical_json(replay.normalized_payload)
+    ):
+        raise LimitUpReplayMismatchError(
+            "persisted normalization disagrees with committed raw replay"
+        )
+    return LimitUpReplayVerification("MATCH", replay, stored)
+
+
+def persist_replayed_normalization(
+    lake: FactLake,
+    observation_id: str,
+) -> StoredNormalization:
+    """Explicitly persist a freshly replayed result; verification stays pure."""
+    replay = replay_normalization(lake, observation_id)
+    return lake.store_normalization(
+        observation_id,
+        replay.normalized_payload,
+        normalizer_version=NORMALIZER_VERSION,
     )
 
 
@@ -739,6 +981,28 @@ def publish_canonical_fact(
     failure_hook: Callable[[str], None] | None = None,
 ) -> StoredCanonicalPublication:
     """Publish one fact artifact, then atomically make its manifest visible."""
+    if len(fact.source_observation_ids) != 1:
+        raise LimitUpCanonicalAdmissionError(
+            "limit-up publication requires exactly one raw observation"
+        )
+    try:
+        replay_verification = verify_normalization_replay(
+            lake,
+            fact.source_observation_ids[0],
+        )
+    except LimitUpReplayError as exc:
+        raise LimitUpCanonicalAdmissionError(
+            "canonical publication requires successful committed-raw replay"
+        ) from exc
+    if (
+        replay_verification.status != "MATCH"
+        or not replay_verification.replay.canonical_admissible
+        or _canonical_json(fact.canonical_payload)
+            != _canonical_json(replay_verification.replay.normalized_payload)
+    ):
+        raise LimitUpCanonicalAdmissionError(
+            "canonical fact is not verified by committed raw evidence"
+        )
     LIMIT_UP_DATASET_SPEC.validate_fact(fact)
     if fact.canonical_source != CANONICAL_PROVIDER_ID:
         raise LimitUpCanonicalAdmissionError("verifier/fallback cannot publish canonical")
@@ -880,11 +1144,15 @@ def reconcile_limit_up_counts(
     )
     if verifier_route.role is not ProviderRole.VERIFIER:
         raise DataContractError("right observation is not the configured verifier")
-    normalization = lake.get_normalization(eastmoney.observation_id)
+    replay_verification = verify_normalization_replay(
+        lake,
+        eastmoney.observation_id,
+    )
+    normalization = replay_verification.stored_normalization
     left = (
-        normalization.normalized_payload.get("row_count")
-        if normalization is not None
-        and isinstance(normalization.normalized_payload, Mapping)
+        replay_verification.replay.normalized_payload.get("row_count")
+        if replay_verification.status == "MATCH"
+        and normalization is not None
         else None
     )
     right: int | None = None
@@ -912,7 +1180,7 @@ def reconcile_limit_up_counts(
                 reasons = ("COUNT_MISMATCH",)
     comparison_evidence: dict[str, Any] = {
         "basis": "count_only",
-        "left_evidence": "stored_normalization.row_count",
+        "left_evidence": "committed_raw_replay.verified_row_count",
         "right_evidence": "committed_verifier_raw_json.limit_up_count",
     }
     if tolerance is not None and absolute_delta is not None:
@@ -974,7 +1242,10 @@ def run_limit_up_shadow(
     if failure_hook is not None:
         failure_hook("after_raw_observation_committed")
         failure_hook("before_normalization")
-    normalization = persist_normalization(lake, observation, snapshot)
+    normalization = persist_replayed_normalization(
+        lake,
+        observation.observation.observation_id,
+    )
     if observation.observation.quality_status is not QualityStatus.VALID:
         return ShadowRunResult(snapshot, observation, None, None, None)
     fact = build_canonical_fact(observation.observation, normalization)
@@ -1127,9 +1398,16 @@ __all__ = [
     "LimitUpCaptureError",
     "LimitUpNormalizationError",
     "LimitUpQueryError",
+    "LimitUpReplayError",
+    "LimitUpReplayMetadataError",
+    "LimitUpReplayMismatchError",
+    "LimitUpReplayNotFoundError",
+    "LimitUpReplayUnsupportedError",
+    "LimitUpReplayVerification",
     "NORMALIZER_VERSION",
     "RawCaptureBuffer",
     "RawResponseCapture",
+    "ReplayedLimitUpNormalization",
     "ShadowRunResult",
     "build_canonical_fact",
     "build_provider_observation",
@@ -1137,9 +1415,12 @@ __all__ = [
     "normalize_adapter_snapshot",
     "persist_raw_observation",
     "persist_normalization",
+    "persist_replayed_normalization",
     "publish_canonical_fact",
     "query_limit_up_pool",
     "reconcile_limit_up_counts",
+    "replay_normalization",
     "run_limit_up_shadow",
     "unknown_verifier_reconciliation",
+    "verify_normalization_replay",
 ]
