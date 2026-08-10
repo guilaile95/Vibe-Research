@@ -175,6 +175,8 @@ canonical_payload
 effective_at
 published_at
 observed_at
+trade_date
+report_period
 
 canonical_source
 source_observation_ids
@@ -207,9 +209,26 @@ source failure also does not authorize a verifier to become canonical. A permitt
 equivalent fallback may supply a fact only when the `DatasetSpec` explicitly grants
 that route and provenance still names the fallback source.
 
+`trade_date` and `report_period` are preserved from the selected observation just
+like the other applicable temporal coordinates. Optional coordinates remain
+`null`; canonicalization does not synthesize a missing date or period.
+
 ## 5. DatasetSpec and routing
 
 Routing is defined per dataset, not as a global provider list.
+
+Each `DatasetSpec` also declares `required_temporal_fields` as an ordered tuple of
+`TemporalSemantics`. Canonicalization refuses to create a fact when any declared
+coordinate is absent. This makes the temporal qualification dataset-specific:
+`limit_up_count` can require `trade_date`, while a financial-statement dataset can
+require `report_period`. There is no universal rule that every dataset must have a
+trade date.
+
+A `by_date` dataset must declare at least one business coordinate from
+`effective_at`, `trade_date` or `report_period`; the always-present local
+`fetched_at` alone is not sufficient. The same requirements are checked when a
+fact is validated against its `DatasetSpec`, so a manually decoded fact cannot
+bypass the contract.
 
 ### 5.1 Provider roles
 
@@ -272,14 +291,20 @@ availability remain separate requirements.
 
 #### `by_date`
 
-The provider accepts an explicit business date/period. Requested and returned
-coordinates must match. Historical retrieval alone does not prove PIT correctness.
+The provider accepts an explicit business date/period. Its `DatasetSpec` must name
+at least one required business coordinate, and the observation must provide each
+declared coordinate before canonicalization. A provider-specific projection must
+also validate its requested coordinate against the returned coordinate; DS-A1 does
+not add a generic requested-date field or claim that existing providers have been
+integrated. Historical retrieval alone does not prove PIT correctness.
 
 #### `snapshot_with_backfill`
 
 The live/snapshot route and historical backfill route are distinct. Their rows
 retain their original provider, endpoint, fetch time, revision and normalizer
 provenance. Overlap is reconciled; backfill is not relabeled as live canonical data.
+This history mode requires `fetch_semantics=snapshot`; a by-date primary dataset
+must use `history_mode=by_date` rather than borrowing the backfill mode.
 
 #### `snapshot_only`
 
@@ -340,6 +365,7 @@ are not a mismatch.
 The result preserves:
 
 ```text
+dataset ID
 canonical observation ID and value
 verifier observation ID and value
 comparison policy/version
@@ -349,6 +375,13 @@ comparison evidence
 
 It never averages, selects the newest value, selects the non-null value, deletes a
 disagreement, or changes the canonical provider.
+
+Attaching a result to a fact is a separate fail-closed transition. The result's
+`dataset_id` must equal the fact's dataset, and at least one of its left/right
+observation IDs must appear in the fact's `source_observation_ids`. A valuation
+comparison cannot degrade a `limit_up_count` fact, and an unrelated same-dataset
+pair cannot modify an unlinked fact. Attachment still never changes the fact's
+canonical source or payload.
 
 The executable v0.1 reconciler is intentionally narrow: `exact-pairwise/v1` uses
 JSON equality after temporal, revision, adjustment and quality guards. The policy
@@ -371,6 +404,7 @@ These are contract examples, not runtime configuration changes.
 dataset_id: limit_up_count
 fetch_semantics: by_date
 history_mode: by_date
+required_temporal_fields: [trade_date]
 canonical: tushare
 verifier: eastmoney
 fallback: null
@@ -386,6 +420,7 @@ reported; one mismatch does not switch the canonical provider.
 dataset_id: valuation_daily
 fetch_semantics: snapshot
 history_mode: snapshot_with_backfill
+required_temporal_fields: [effective_at]
 canonical: configured_live_snapshot_provider
 historical_backfill: configured_historical_provider
 verifier: optional_explicit_provider
@@ -400,6 +435,7 @@ source. Live and backfilled data retain their original provenance across the sea
 dataset_id: ths_concept_membership
 fetch_semantics: snapshot
 history_mode: snapshot_only
+required_temporal_fields: [observed_at]
 historical_backfill: null
 ```
 
@@ -469,9 +505,11 @@ Implemented in this slice:
 - pure enums and frozen top-level domain records;
 - strict validation and serialization-safe round trips;
 - dataset-level route validation;
+- dataset-level required temporal-coordinate validation;
 - snapshot-only history guards;
 - provenance-qualified canonicalization;
-- deterministic exact-pairwise reference reconciliation.
+- deterministic exact-pairwise reference reconciliation with dataset/observation
+  attachment binding.
 
 The records are frozen at the dataclass level. Nested JSON payloads are validated
 as JSON-safe values but are not deep-frozen; durable immutability belongs to the
@@ -494,7 +532,7 @@ The next phases (`DS-H1`, `DS-L1`, `DS-A2`) require separate authorization.
 |---|---|
 | `OBSERVATION_IS_NOT_FACT` | Separate immutable runtime types and explicit canonicalization. |
 | `UNKNOWN_NOT_COERCED` | Strict JSON-safe payload preservation and no truthy/default coercion. |
-| `TEMPORAL_FIELDS_DISTINCT` | Named temporal contract; all fields serialize independently. |
+| `TEMPORAL_FIELDS_DISTINCT` | Named temporal contract; requirements are dataset-specific and applicable coordinates survive Observation → Fact. |
 | `SNAPSHOT_NO_FAKE_HISTORY` | `snapshot_only` forbids backfill and backward use before actual fetch. |
 | `DATASET_LEVEL_ROUTING` | Routes are owned by one versioned `DatasetSpec`. |
 | `NO_GENERIC_PROVIDER_FALLBACK` | Fallback requires an explicit equivalent route. |

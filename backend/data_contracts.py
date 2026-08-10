@@ -367,6 +367,7 @@ class DatasetSpec:
     history_mode: HistoryMode
     routes: tuple[ProviderRoute, ...]
     governance_revision_id: str
+    required_temporal_fields: tuple[TemporalSemantics, ...]
     history_floor: str | None = None
     history_horizon: str | None = None
     point_in_time_supported: bool = False
@@ -389,6 +390,24 @@ class DatasetSpec:
             raise DataContractError("routes must contain ProviderRoute values")
         if type(self.point_in_time_supported) is not bool:
             raise DataContractError("point_in_time_supported must be bool")
+        if type(self.required_temporal_fields) is not tuple:
+            raise DataContractError("required_temporal_fields must be a tuple")
+        if any(not isinstance(field, TemporalSemantics)
+               for field in self.required_temporal_fields):
+            raise DataContractError(
+                "required_temporal_fields must contain TemporalSemantics values")
+        if len(set(self.required_temporal_fields)) != len(
+                self.required_temporal_fields):
+            raise DataContractError(
+                "required_temporal_fields must not contain duplicates")
+        if self.fetch_semantics is FetchSemantics.BY_DATE and not set(
+                self.required_temporal_fields).intersection({
+                    TemporalSemantics.EFFECTIVE_AT,
+                    TemporalSemantics.TRADE_DATE,
+                    TemporalSemantics.REPORT_PERIOD,
+                }):
+            raise DataContractError(
+                "by_date datasets require a business temporal coordinate")
         _date_only(self.history_floor, "history_floor")
         _date_only(self.history_horizon, "history_horizon")
         _optional_text(self.survivorship_semantics, "survivorship_semantics")
@@ -458,6 +477,10 @@ class DatasetSpec:
         if self.history_mode is HistoryMode.SNAPSHOT_WITH_BACKFILL and not backfills:
             raise DataContractError(
                 "snapshot_with_backfill requires a historical_backfill route")
+        if self.history_mode is HistoryMode.SNAPSHOT_WITH_BACKFILL \
+                and self.fetch_semantics is not FetchSemantics.SNAPSHOT:
+            raise DataContractError(
+                "snapshot_with_backfill requires snapshot fetch semantics")
         if self.history_mode is HistoryMode.BY_DATE \
                 and self.fetch_semantics is not FetchSemantics.BY_DATE:
             raise DataContractError("by_date history requires by_date fetch semantics")
@@ -536,6 +559,11 @@ class DatasetSpec:
         if fact.adjustment_semantics is not self.adjustment_semantics:
             raise DataContractError(
                 "fact adjustment semantics do not match DatasetSpec")
+        for temporal_field in self.required_temporal_fields:
+            if getattr(fact, temporal_field.value, None) is None:
+                raise DataContractError(
+                    "fact required temporal field is missing: "
+                    f"{temporal_field.value}")
         canonical_routes: list[ProviderRoute] = []
         for link in fact.provenance_chain:
             if link.dataset_id != self.dataset_id:
@@ -558,6 +586,9 @@ class DatasetSpec:
             "history_mode": self.history_mode.value,
             "routes": [route.to_dict() for route in self.routes],
             "governance_revision_id": self.governance_revision_id,
+            "required_temporal_fields": [
+                field.value for field in self.required_temporal_fields
+            ],
             "history_floor": self.history_floor,
             "history_horizon": self.history_horizon,
             "point_in_time_supported": self.point_in_time_supported,
@@ -575,6 +606,10 @@ class DatasetSpec:
             **data,
             "fetch_semantics": FetchSemantics(data["fetch_semantics"]),
             "history_mode": HistoryMode(data["history_mode"]),
+            "required_temporal_fields": tuple(
+                TemporalSemantics(field)
+                for field in _json_array(data, "required_temporal_fields")
+            ),
             "revision_semantics": RevisionSemantics(
                 data["revision_semantics"]),
             "adjustment_semantics": AdjustmentSemantics(
@@ -633,6 +668,8 @@ class CanonicalFact:
     effective_at: str | None = None
     published_at: str | None = None
     observed_at: str | None = None
+    trade_date: str | None = None
+    report_period: str | None = None
     revision_id: str | None = None
     data_version: str | None = None
     quality_status: QualityStatus = QualityStatus.UNKNOWN
@@ -649,7 +686,8 @@ class CanonicalFact:
             "effective_at", "published_at", "observed_at",
         ):
             _utc_timestamp(getattr(self, field), field)
-        for field in ("revision_id", "data_version"):
+        _date_only(self.trade_date, "trade_date")
+        for field in ("report_period", "revision_id", "data_version"):
             _optional_text(getattr(self, field), field)
         if type(self.source_observation_ids) is not tuple \
                 or not self.source_observation_ids:
@@ -709,6 +747,8 @@ class CanonicalFact:
             "effective_at": self.effective_at,
             "published_at": self.published_at,
             "observed_at": self.observed_at,
+            "trade_date": self.trade_date,
+            "report_period": self.report_period,
             "revision_id": self.revision_id,
             "data_version": self.data_version,
             "quality_status": self.quality_status.value,
@@ -742,6 +782,7 @@ class CanonicalFact:
 
 @dataclass(frozen=True)
 class ReconciliationResult:
+    dataset_id: str
     status: ReconciliationStatus
     comparison_policy_id: str
     comparison_policy_version: str
@@ -753,6 +794,7 @@ class ReconciliationResult:
     reason_codes: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        _non_empty(self.dataset_id, "dataset_id")
         if not isinstance(self.status, ReconciliationStatus):
             raise DataContractError("status must be ReconciliationStatus")
         _non_empty(self.comparison_policy_id, "comparison_policy_id")
@@ -760,12 +802,20 @@ class ReconciliationResult:
         _json_safe(self.comparison_evidence, "comparison_evidence")
         _optional_text(self.left_observation_id, "left_observation_id")
         _optional_text(self.right_observation_id, "right_observation_id")
+        if self.left_observation_id is None and self.right_observation_id is None:
+            raise DataContractError(
+                "reconciliation requires at least one observation id")
+        if self.left_observation_id is not None \
+                and self.left_observation_id == self.right_observation_id:
+            raise DataContractError(
+                "left and right observation ids must be distinct")
         _json_safe(self.left_value, "left_value")
         _json_safe(self.right_value, "right_value")
         object.__setattr__(self, "reason_codes", _reason_codes(self.reason_codes))
 
     def to_dict(self) -> dict[str, JSONValue]:
         return {
+            "dataset_id": self.dataset_id,
             "status": self.status.value,
             "comparison_policy_id": self.comparison_policy_id,
             "comparison_policy_version": self.comparison_policy_version,
@@ -811,6 +861,10 @@ def canonicalize_observation(
     if observation.adjustment_semantics is not spec.adjustment_semantics:
         raise DataContractError(
             "observation adjustment semantics do not match DatasetSpec")
+    for temporal_field in spec.required_temporal_fields:
+        if getattr(observation, temporal_field.value) is None:
+            raise DataContractError(
+                f"required temporal field is missing: {temporal_field.value}")
     route = spec.canonical_route_for(
         observation.provider_id, observation.provider_endpoint)
     if spec.source_retired_at is not None and _parse_utc(
@@ -858,6 +912,8 @@ def canonicalize_observation(
         effective_at=effective_at,
         published_at=observation.published_at,
         observed_at=observation.observed_at,
+        trade_date=observation.trade_date,
+        report_period=observation.report_period,
         revision_id=observation.revision_id,
         data_version=observation.data_version,
         quality_status=observation.quality_status,
@@ -913,10 +969,23 @@ def reconcile_pair(
     comparison_policy_version: str = "v1",
 ) -> ReconciliationResult:
     """Deterministically compare two observations without selecting a winner."""
+    if left is None and right is None:
+        raise DataContractError(
+            "reconciliation requires at least one ProviderObservation")
+    dataset_ids = {
+        observation.dataset_id
+        for observation in (left, right)
+        if observation is not None
+    }
+    if len(dataset_ids) != 1:
+        raise DataContractError(
+            "reconciliation observations must belong to one dataset")
+    dataset_id = next(iter(dataset_ids))
     if left is None or right is None:
         available = left if left is not None else right
         inherited = available.reason_codes if available is not None else ()
         return ReconciliationResult(
+            dataset_id=dataset_id,
             status=ReconciliationStatus.SOURCE_UNAVAILABLE,
             comparison_policy_id=comparison_policy_id,
             comparison_policy_version=comparison_policy_version,
@@ -932,6 +1001,7 @@ def reconcile_pair(
     temporal_status, temporal_reasons = _temporal_status(left, right)
     if temporal_status is not None:
         return ReconciliationResult(
+            dataset_id=dataset_id,
             status=temporal_status,
             comparison_policy_id=comparison_policy_id,
             comparison_policy_version=comparison_policy_version,
@@ -1010,6 +1080,7 @@ def reconcile_pair(
         reasons = ("VALUES_MISMATCH",)
 
     return ReconciliationResult(
+        dataset_id=dataset_id,
         status=status,
         comparison_policy_id=comparison_policy_id,
         comparison_policy_version=comparison_policy_version,
@@ -1039,6 +1110,18 @@ def attach_reconciliation(
     result: ReconciliationResult,
 ) -> CanonicalFact:
     """Attach evidence without changing the canonical source or payload."""
+    if result.dataset_id != fact.dataset_id:
+        raise DataContractError(
+            "reconciliation dataset does not match CanonicalFact")
+    result_ids = {
+        observation_id for observation_id in (
+            result.left_observation_id,
+            result.right_observation_id,
+        ) if observation_id is not None
+    }
+    if not set(fact.source_observation_ids).intersection(result_ids):
+        raise DataContractError(
+            "reconciliation is not bound to CanonicalFact observations")
     if fact.quality_status is QualityStatus.INVALID:
         quality = QualityStatus.INVALID
     elif result.status is ReconciliationStatus.UNKNOWN:
