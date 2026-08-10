@@ -31,7 +31,6 @@ from fact_lake_store import (
     FactLakeCorruptedError,
     FactLakeNormalizationConflictError,
     FactLakeObservationConflictError,
-    FactLakePublicationConflictError,
     initialize_fact_lake,
     open_existing_fact_lake,
 )
@@ -121,8 +120,27 @@ def _capture(raw: bytes = b'{"data":{"pool":[]}}', **metadata_overrides):
     return sink.capture
 
 
+def _provider_raw(snapshot=None, *, marker: bytes = b""):
+    snapshot = snapshot or _snapshot()
+    return json.dumps(
+        {
+            "date": TRADE_DATE.replace("-", ""),
+            "marker_sha256": hashlib.sha256(marker).hexdigest(),
+            "data": {
+                "pool": [
+                    {"c": row["stock_code"], "lbc": row["lbc"]}
+                    for row in snapshot["rows"]
+                ]
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def _fact_for(lake, raw: bytes, snapshot=None):
     snapshot = snapshot or _snapshot()
+    raw = _provider_raw(snapshot, marker=raw)
     stored = persist_raw_observation(lake, _capture(raw), snapshot)
     normalization = persist_normalization(lake, stored, snapshot)
     return stored, build_canonical_fact(stored.observation, normalization)
@@ -136,12 +154,8 @@ def _rows(count: int) -> list[dict[str, object]]:
 
 
 def _persist_eastmoney_count(lake, count: int, *, raw: bytes | None = None):
-    raw = raw or json.dumps(
-        {"provider": "eastmoney", "count_fixture": count},
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
     snapshot = _snapshot(rows=_rows(count))
+    raw = _provider_raw(snapshot, marker=raw or f"count:{count}".encode())
     stored = persist_raw_observation(lake, _capture(raw), snapshot)
     normalization = persist_normalization(lake, stored, snapshot)
     assert "row_count" not in stored.observation.payload
@@ -248,7 +262,7 @@ def test_fingerprint_is_deterministic_and_rejects_secret_metadata():
 def test_adapter_shadow_capture_is_exact_and_disabled_path_has_no_extra_content_read(
     monkeypatch, adapter_environment
 ):
-    raw = b'{ "wire-order" : [2, 1] }\n'
+    raw = _provider_raw(marker=b"byte-authority")
     access_log = []
     response = _Response(
         raw,
@@ -260,8 +274,8 @@ def test_adapter_shadow_capture_is_exact_and_disabled_path_has_no_extra_content_
 
     baseline = adapter.fetch_limit_up_pool_snapshot(TRADE_DATE)
     assert baseline["status"] == "normal"
-    assert len(calls) == 1 and response.content_reads == 0
-    assert access_log == ["status", "json"]
+    assert len(calls) == 1 and response.content_reads == 1
+    assert access_log == ["content", "status"]
 
     access_log.clear()
     buffer = RawCaptureBuffer()
@@ -272,10 +286,10 @@ def test_adapter_shadow_capture_is_exact_and_disabled_path_has_no_extra_content_
 
     captured = adapter.fetch_limit_up_pool_snapshot(TRADE_DATE, raw_response_sink=sink)
     assert captured == baseline
-    assert len(calls) == 2 and response.content_reads == 1
+    assert len(calls) == 2 and response.content_reads == 2
     # response.content is first.  Its exact bytes are handed to the callback
     # before the normal HTTP status classifier and JSON parser run.
-    assert access_log == ["content", "status", "sink", "status", "json"]
+    assert access_log == ["content", "status", "sink"]
     assert buffer.capture is not None
     assert buffer.capture.raw_bytes == raw
     assert buffer.capture.source_payload_hash == f"sha256:{hashlib.sha256(raw).hexdigest()}"
@@ -336,7 +350,12 @@ def test_response_level_failures_are_raw_only_not_canonical(
     json_raises,
     expected_reason,
 ):
-    raw = f'{{"case":"{expected_reason}"}}'.encode()
+    if expected_reason == "PARSE_ERROR":
+        raw = b"not-json"
+    elif expected_reason == "UPSTREAM_NULL":
+        raw = b'{"data":null}'
+    else:
+        raw = f'{{"case":"{expected_reason}"}}'.encode()
     response = _Response(raw, payload, status_code=status_code, json_raises=json_raises)
     monkeypatch.setattr(astock, "em_get", lambda *args, **kwargs: response)
     lake = initialize_fact_lake(tmp_path / expected_reason)
@@ -364,7 +383,7 @@ def test_transport_exception_creates_no_observation(monkeypatch, adapter_environ
 def test_raw_observation_is_committed_before_hook_or_deterministic_normalization_failure(
     monkeypatch, adapter_environment, tmp_path, failure_mode
 ):
-    raw = b'{"normalization":"must-not-lose-raw-evidence"}'
+    raw = _provider_raw(marker=b"must-not-lose-raw-evidence")
     payload = {"data": {"date": TRADE_DATE, "pool": [{"c": "000001", "lbc": 2}]}}
     monkeypatch.setattr(astock, "em_get", lambda *args, **kwargs: _Response(raw, payload))
     lake = initialize_fact_lake(tmp_path / failure_mode)
@@ -425,7 +444,7 @@ def test_replay_is_idempotent_but_new_evidence_makes_a_new_vintage_and_survives_
     root = tmp_path / "lake"
     lake = initialize_fact_lake(root)
     snapshot = _snapshot()
-    first_capture = _capture(b'{"version":1}')
+    first_capture = _capture(_provider_raw(snapshot, marker=b"version:1"))
     stored = persist_raw_observation(lake, first_capture, snapshot)
     normalization = persist_normalization(lake, stored, snapshot)
     fact = build_canonical_fact(stored.observation, normalization)
@@ -499,8 +518,8 @@ def test_same_capture_event_replay_is_idempotent_and_receipt_is_immutable(tmp_pa
 def test_separate_capture_events_same_bytes_share_blob_and_reuse_canonical_state(tmp_path):
     root = tmp_path / "lake"
     lake = initialize_fact_lake(root)
-    raw = b'{"same-state-observed-twice":true}'
     snapshot = _snapshot()
+    raw = _provider_raw(snapshot, marker=b"same-state-observed-twice")
     capture_t1 = _capture(raw, fetched_at="2026-07-30T08:00:00Z")
     capture_t2 = _capture(
         raw,
@@ -510,7 +529,9 @@ def test_separate_capture_events_same_bytes_share_blob_and_reuse_canonical_state
     )
 
     first = persist_raw_observation(lake, capture_t1, snapshot)
-    second = persist_raw_observation(lake, capture_t2, snapshot)
+    second_snapshot = dict(snapshot)
+    second_snapshot["http_status"] = 201
+    second = persist_raw_observation(lake, capture_t2, second_snapshot)
     assert first.observation.observation_id != second.observation.observation_id
     assert capture_t1.capture_event_id != capture_t2.capture_event_id
     assert first.observation.request_fingerprint == second.observation.request_fingerprint
@@ -525,7 +546,7 @@ def test_separate_capture_events_same_bytes_share_blob_and_reuse_canonical_state
     assert len(list((root / "raw").rglob("*.blob"))) == 1
 
     first_normalization = persist_normalization(lake, first, snapshot)
-    second_normalization = persist_normalization(lake, second, snapshot)
+    second_normalization = persist_normalization(lake, second, second_snapshot)
     assert first_normalization.source_observation_id != second_normalization.source_observation_id
     first_publication = publish_canonical_fact(
         lake,
@@ -588,7 +609,7 @@ def test_fresh_process_hard_exit_after_durable_parquet_recovers_exactly_one_vint
             publish_canonical_fact,
         )
 
-        raw = b'{"hard-exit":true}'
+        raw = b'{"date":"20260730","marker":"hard-exit","data":{"pool":[{"c":"000001","lbc":2}]}}'
         snapshot = {
             "schema_version": "short-term-limit-up-pool-adapter-v0.1",
             "source_id": "eastmoney_getTopicZTPool",
@@ -649,7 +670,17 @@ def test_fresh_process_hard_exit_after_durable_parquet_recovers_exactly_one_vint
     assert states == [("STAGING",)]
     assert list((root / "canonical").rglob("*.parquet"))
 
-    _, fact = _fact_for(fresh, raw)
+    conn = sqlite3.connect(root / CONTROL_DB_FILENAME)
+    try:
+        observation_id = conn.execute(
+            "SELECT source_observation_id FROM canonical_publications"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    stored = fresh.get_observation(observation_id)
+    normalization = fresh.get_normalization(observation_id)
+    assert stored is not None and normalization is not None
+    fact = build_canonical_fact(stored.observation, normalization)
     publication = publish_canonical_fact(fresh, fact)
     assert publication.vintage_sequence == 1
     restarted = open_existing_fact_lake(root)
@@ -663,7 +694,7 @@ def test_publication_rejects_forged_canonical_payload_not_equal_to_persisted_nor
     forged_payload["row_count"] = 999
     forged = replace(fact, fact_id="fact-forged-payload", canonical_payload=forged_payload)
 
-    with pytest.raises(FactLakePublicationConflictError, match="persisted normalized evidence"):
+    with pytest.raises(LimitUpCanonicalAdmissionError, match="committed raw evidence"):
         publish_canonical_fact(lake, forged)
     assert query_limit_up_pool(lake, TRADE_DATE) == ()
 
@@ -782,7 +813,7 @@ def test_reconciliation_uses_real_normalization_and_bk11_count_tolerance(
     assert result.left_value == {"row_count": eastmoney_count}
     assert result.right_value == {"limit_up_count": tushare_count}
     assert result.comparison_evidence["left_evidence"] \
-        == "stored_normalization.row_count"
+        == "committed_raw_replay.verified_row_count"
     assert result.comparison_evidence["absolute_delta"] \
         == abs(tushare_count - eastmoney_count)
     assert result.comparison_evidence["tolerance"] \
@@ -802,7 +833,7 @@ def test_reconciliation_missing_normalization_and_verifier_fail_closed(tmp_path)
     snapshot = _snapshot(rows=_rows(2))
     eastmoney = persist_raw_observation(
         lake,
-        _capture(b'{"eastmoney-without-normalization":true}'),
+        _capture(_provider_raw(snapshot, marker=b"without-normalization")),
         snapshot,
     )
     tushare = _persist_tushare_count(lake, 2)
@@ -881,13 +912,16 @@ def test_explicit_shadow_run_uses_one_provider_call_and_default_adapter_stays_sh
     monkeypatch, adapter_environment, tmp_path
 ):
     payload = {"data": {"date": TRADE_DATE, "pool": [{"c": "000001", "lbc": 2}]}}
-    response = _Response(b'{"wire":"exact"}', payload)
+    response = _Response(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(),
+        payload,
+    )
     calls = []
     monkeypatch.setattr(astock, "em_get", lambda *args, **kwargs: calls.append(1) or response)
     baseline = adapter.fetch_limit_up_pool_snapshot(TRADE_DATE)
-    assert baseline["status"] == "normal" and calls == [1] and response.content_reads == 0
+    assert baseline["status"] == "normal" and calls == [1] and response.content_reads == 1
 
     result = run_limit_up_shadow(TRADE_DATE, initialize_fact_lake(tmp_path / "lake"))
     assert calls == [1, 1]
     assert result.observation is not None and result.publication is not None
-    assert response.content_reads == 1
+    assert response.content_reads == 2

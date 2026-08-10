@@ -32,6 +32,8 @@ SCHEMA_VERSION = "fact_lake_control_v2"
 CONTROL_DB_FILENAME = "fact_lake_control.sqlite3"
 RAW_DIRECTORY_NAME = "raw"
 CANONICAL_DIRECTORY_NAME = "canonical"
+# SQLite waits at most this long for a contended connection before failing.
+SQLITE_CONNECTION_TIMEOUT_SECONDS = 5.0
 
 _SCHEMA_VERSION_RE = re.compile(r"^fact_lake_control_v(?P<version>[0-9]+)$")
 _SHA256_RE = re.compile(r"^sha256:(?P<digest>[0-9a-fA-F]{64})$")
@@ -53,6 +55,10 @@ class FactLakeSchemaVersionError(FactLakeError):
 
 class FactLakeCorruptedError(FactLakeError):
     """Persisted Fact Lake metadata or blob bytes are inconsistent."""
+
+
+class FactLakeBusyError(FactLakeError):
+    """A bounded SQLite write wait expired because another writer holds a lock."""
 
 
 class FactLakeHashMismatchError(FactLakeError):
@@ -484,7 +490,7 @@ def _connect_immutable(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(
         _sqlite_uri(path, "ro", immutable=True),
         uri=True,
-        timeout=5.0,
+        timeout=SQLITE_CONNECTION_TIMEOUT_SECONDS,
     )
 
 
@@ -492,10 +498,44 @@ def _connect_existing(path: Path, *, readonly: bool) -> sqlite3.Connection:
     conn = sqlite3.connect(
         _sqlite_uri(path, "ro" if readonly else "rw"),
         uri=True,
-        timeout=5.0,
+        timeout=SQLITE_CONNECTION_TIMEOUT_SECONDS,
     )
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _is_sqlite_busy_or_locked(error: sqlite3.DatabaseError) -> bool:
+    """Return whether SQLite identified a transient writer-contention failure."""
+    error_code = getattr(error, "sqlite_errorcode", None)
+    if isinstance(error_code, int):
+        return (error_code & 0xFF) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+    if error_code is not None:
+        return False
+
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "database is locked",
+            "database table is locked",
+            "database schema is locked",
+            "database is busy",
+        )
+    )
+
+
+def _is_immutable_read_during_write(error: sqlite3.DatabaseError) -> bool:
+    """Detect rollback-journal pages observed by an immutable concurrent read.
+
+    ``immutable=1`` deliberately ignores SQLite locks.  An already-validated
+    v2 handle may therefore briefly see a writer's in-flight page and receive
+    SQLITE_CORRUPT even though a normal lock-aware reader sees the committed
+    database.  Initial/open version gates never use this fallback.
+    """
+    error_code = getattr(error, "sqlite_errorcode", None)
+    if isinstance(error_code, int):
+        return (error_code & 0xFF) == sqlite3.SQLITE_CORRUPT
+    return str(error).lower() == "database disk image is malformed"
 
 
 def _assert_current_version_on_connection(conn: sqlite3.Connection) -> None:
@@ -504,6 +544,10 @@ def _assert_current_version_on_connection(conn: sqlite3.Connection) -> None:
             "SELECT key, value FROM schema_meta ORDER BY key"
         ).fetchall()
     except sqlite3.DatabaseError as exc:
+        if _is_sqlite_busy_or_locked(exc):
+            raise FactLakeBusyError(
+                "schema version check timed out waiting for the SQLite lock"
+            ) from exc
         raise FactLakeCorruptedError("Fact Lake schema metadata is unreadable") from exc
     normalized = [tuple(row) for row in rows]
     if normalized != [("schema_version", SCHEMA_VERSION)]:
@@ -516,7 +560,11 @@ def _assert_current_version_on_connection(conn: sqlite3.Connection) -> None:
         raise FactLakeCorruptedError("Fact Lake schema metadata is corrupted")
 
 
-def _read_exact_schema_version_immutable(path: Path) -> str:
+def _read_exact_schema_version_immutable(
+    path: Path,
+    *,
+    allow_lock_aware_fallback: bool = False,
+) -> str:
     try:
         conn = _connect_immutable(path)
         try:
@@ -526,6 +574,18 @@ def _read_exact_schema_version_immutable(path: Path) -> str:
         finally:
             conn.close()
     except sqlite3.DatabaseError as exc:
+        if _is_sqlite_busy_or_locked(exc):
+            raise FactLakeBusyError(
+                "immutable schema check timed out waiting for the SQLite lock"
+            ) from exc
+        if allow_lock_aware_fallback and _is_immutable_read_during_write(exc):
+            conn = _connect_existing(path, readonly=True)
+            try:
+                _assert_current_version_on_connection(conn)
+                _validate_schema_fingerprint(conn)
+            finally:
+                conn.close()
+            return SCHEMA_VERSION
         raise FactLakeCorruptedError("Fact Lake schema metadata is unreadable") from exc
 
     if rows != [("schema_version", SCHEMA_VERSION)]:
@@ -603,6 +663,10 @@ def _validate_schema_fingerprint(conn: sqlite3.Connection) -> None:
                 != _expected_schema_layout_fingerprint():
             raise FactLakeCorruptedError("Fact Lake schema fingerprint drifted")
     except sqlite3.DatabaseError as exc:
+        if _is_sqlite_busy_or_locked(exc):
+            raise FactLakeBusyError(
+                "schema fingerprint check timed out waiting for the SQLite lock"
+            ) from exc
         raise FactLakeCorruptedError("Fact Lake schema layout is unreadable") from exc
 
 
@@ -613,6 +677,10 @@ def _validate_schema_layout(conn: sqlite3.Connection) -> None:
         if row is None or row[0] != "ok":
             raise FactLakeCorruptedError("Fact Lake integrity check failed")
     except sqlite3.DatabaseError as exc:
+        if _is_sqlite_busy_or_locked(exc):
+            raise FactLakeBusyError(
+                "integrity check timed out waiting for the SQLite lock"
+            ) from exc
         raise FactLakeCorruptedError("Fact Lake schema layout is unreadable") from exc
 
 
@@ -769,7 +837,10 @@ class FactLake:
         # immutable zero-write gate before every actual connection, then bind
         # the same connection to the exact current version before any writable
         # PRAGMA or transaction is allowed.
-        _read_exact_schema_version_immutable(self._db_path)
+        _read_exact_schema_version_immutable(
+            self._db_path,
+            allow_lock_aware_fallback=True,
+        )
         conn = _connect_existing(self._db_path, readonly=use_readonly)
         try:
             _assert_current_version_on_connection(conn)
@@ -1113,6 +1184,10 @@ class FactLake:
             return None, True
         except sqlite3.DatabaseError as exc:
             conn.rollback()
+            if _is_sqlite_busy_or_locked(exc):
+                raise FactLakeBusyError(
+                    "observation staging timed out waiting for the SQLite write lock"
+                ) from exc
             if isinstance(exc, sqlite3.IntegrityError):
                 raise FactLakeObservationConflictError(
                     "observation staging conflicted with persisted data"
@@ -1180,6 +1255,10 @@ class FactLake:
             return self._row_to_stored(committed, verify_blob=True)
         except sqlite3.DatabaseError as exc:
             conn.rollback()
+            if _is_sqlite_busy_or_locked(exc):
+                raise FactLakeBusyError(
+                    "observation commit timed out waiting for the SQLite write lock"
+                ) from exc
             raise FactLakeCorruptedError("observation commit failed") from exc
         except Exception:
             conn.rollback()
@@ -1364,6 +1443,10 @@ class FactLake:
                 return self._row_to_normalization(row)
             except sqlite3.DatabaseError as exc:
                 conn.rollback()
+                if _is_sqlite_busy_or_locked(exc):
+                    raise FactLakeBusyError(
+                        "normalization append timed out waiting for the SQLite write lock"
+                    ) from exc
                 raise FactLakeCorruptedError("normalization append failed") from exc
             except Exception:
                 conn.rollback()
@@ -1677,6 +1760,10 @@ class FactLake:
                 )
             except sqlite3.DatabaseError as exc:
                 conn.rollback()
+                if _is_sqlite_busy_or_locked(exc):
+                    raise FactLakeBusyError(
+                        "canonical publication staging timed out waiting for the SQLite write lock"
+                    ) from exc
                 raise FactLakeCorruptedError(
                     "canonical publication staging failed"
                 ) from exc
@@ -1745,6 +1832,10 @@ class FactLake:
                 )
             except sqlite3.DatabaseError as exc:
                 conn.rollback()
+                if _is_sqlite_busy_or_locked(exc):
+                    raise FactLakeBusyError(
+                        "canonical publication commit timed out waiting for the SQLite write lock"
+                    ) from exc
                 raise FactLakeCorruptedError(
                     "canonical publication commit failed"
                 ) from exc
@@ -1829,6 +1920,10 @@ class FactLake:
                 conn.commit()
             except sqlite3.DatabaseError as exc:
                 conn.rollback()
+                if _is_sqlite_busy_or_locked(exc):
+                    raise FactLakeBusyError(
+                        "reconciliation append timed out waiting for the SQLite write lock"
+                    ) from exc
                 raise FactLakeCorruptedError(
                     "reconciliation append failed"
                 ) from exc
@@ -1894,6 +1989,7 @@ __all__ = [
     "RAW_DIRECTORY_NAME",
     "SCHEMA_VERSION",
     "FactLake",
+    "FactLakeBusyError",
     "FactLakeCorruptedError",
     "FactLakeError",
     "FactLakeHashMismatchError",
