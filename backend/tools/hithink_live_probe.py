@@ -99,6 +99,30 @@ NON_TRADING_DAY_SPEC = {
               "start": _ms(NON_TRADING_DAY_DATE), "end": _ms(NON_TRADING_DAY_DATE)},
 }
 
+# R3：symbol search 明显无效/无匹配查询（非真实代码/名称）
+SYMBOL_SEARCH_INVALID_QUERY = "ZZZ999"
+
+# R3：symbol search 结果分类（观测层，非 DS-A1 规则）
+SEARCH_RESULT_EMPTY_SUCCESS = "EMPTY_SUCCESS"
+SEARCH_RESULT_BUSINESS_ERROR = "BUSINESS_ERROR"
+SEARCH_RESULT_OTHER = "OTHER_OBSERVED_BEHAVIOR"
+
+
+def classify_search_result(obs: "ProbeObservation") -> str:
+    """对 /api/meta/tickers/search 观测做确定性分类。
+
+    - envelope code != 0 → BUSINESS_ERROR（官方业务错误）；
+    - code == 0 且 data 为空/无 item → EMPTY_SUCCESS（成功但无匹配）；
+    - 其他（有匹配 / 结构异常）→ OTHER_OBSERVED_BEHAVIOR。
+    绝不假设 provider 行为；只记录实际观察到的类别。
+    """
+    if obs.envelope_code != 0:
+        return SEARCH_RESULT_BUSINESS_ERROR
+    sample = obs.sample_fields or {}
+    if sample.get("_count", 0) == 0 and not sample.get("_identities"):
+        return SEARCH_RESULT_EMPTY_SUCCESS
+    return SEARCH_RESULT_OTHER
+
 # 官方错误码 → 确定性分类（docs/api/README.md 核验）
 ERROR_CODE_CLASS = {
     1001: "missing_parameter",
@@ -253,18 +277,21 @@ def _temporal_summary(items: list) -> dict:
 
     返回（全部有界，不保留完整 raw payload）：
     - item_count：item 总数
+    - date_ms_count：**全量**有效 date_ms 的条数（不截断；用于 date_ms_count == item_count 完整性证明）
     - date_ms_values：有界 date_ms 值列表（前 _MAX_DATE_MS_VALUES 个，保持返回顺序）
     - first_date_ms / last_date_ms：窗口内首/末值（若存在）
     - ordering：ASCENDING / DESCENDING / NON_MONOTONIC / EMPTY（确定性顺序证据）
     - ohlc_types：{字段: {类型集合}}，采样前 _MAX_OHLC_SAMPLE_ITEMS 条
     """
     date_values: list[int] = []
+    date_ms_count = 0
     ohlc_types: dict[str, set] = {f: set() for f in _OHLC_FIELDS}
     for index, item in enumerate(items):
         if not isinstance(item, dict):
             continue
         dm = item.get("date_ms")
         if isinstance(dm, int) and not isinstance(dm, bool):
+            date_ms_count += 1  # 全量计数（完整性证明用）
             if len(date_values) < _MAX_DATE_MS_VALUES:
                 date_values.append(dm)
         if index < _MAX_OHLC_SAMPLE_ITEMS:
@@ -290,6 +317,7 @@ def _temporal_summary(items: list) -> dict:
         ordering = "NON_MONOTONIC"
     return {
         "item_count": len(items),
+        "date_ms_count": date_ms_count,
         "date_ms_values": date_values,
         "first_date_ms": date_values[0] if date_values else None,
         "last_date_ms": date_values[-1] if date_values else None,

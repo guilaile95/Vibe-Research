@@ -52,8 +52,36 @@ def _historical_spec(thscode: str, start: str, end: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def test_a_symbol_search_identity():
+    """R3：symbol search 身份闭合 —— `q=600519` 返回的身份证据必须包含 `600519.SH`。
+
+    复用现有有界 `_identities` 机制（不新造抽象）；不从非空响应推断。
+    """
     obs = _probe_ok("symbol_search", probe.ENDPOINTS["symbol_search"])
-    assert _sample(obs)  # 结构性：返回条目存在（不做具体值断言）
+    sample = _sample(obs)
+    identities = sample.get("_identities", [])
+    assert identities, "symbol search 观测缺少受限身份集 _identities"
+    assert "600519.SH" in identities, \
+        f"SYMBOL_SEARCH_EXPECTED_IDENTITY 失败: 期望 600519.SH ∈ {sorted(identities)}"
+
+
+def test_a_symbol_search_invalid_no_match():
+    """R3：symbol search 明显无效/无匹配查询 → 记录实际结果分类。
+
+    分类 ∈ {EMPTY_SUCCESS, BUSINESS_ERROR, OTHER_OBSERVED_BEHAVIOR}；
+    只证明行为被观察到且可解析（envelope code 存在 + 分类值确定），
+    不假设 provider 行为。与 historical 非法 symbol 测试（test_error_invalid_symbol_semantics）区分。
+    """
+    spec = {"path": "/api/meta/tickers/search",
+            "query": {"q": probe.SYMBOL_SEARCH_INVALID_QUERY, "limit": 5}}
+    obs = probe.probe_endpoint("symbol_search_invalid", spec, _API_KEY)
+    assert obs.http_status is not None, "invalid search 无 HTTP 响应"
+    assert obs.envelope_code is not None, "invalid search 响应无 envelope code"
+    classification = probe.classify_search_result(obs)
+    assert classification in (probe.SEARCH_RESULT_EMPTY_SUCCESS,
+                             probe.SEARCH_RESULT_BUSINESS_ERROR,
+                             probe.SEARCH_RESULT_OTHER), f"未知分类: {classification}"
+    print(f"[OBS] symbol_search_invalid(q={probe.SYMBOL_SEARCH_INVALID_QUERY}) "
+          f"code={obs.envelope_code} class={classification} count={obs.sample_fields.get('_count')}")
 
 
 # ---------------------------------------------------------------------------
@@ -88,13 +116,14 @@ def test_b_snapshot_quote_two_symbols_structural():
 # ---------------------------------------------------------------------------
 
 def test_c_historical_matrix_2x2():
-    """R2：2 标的 × 2 时间窗，每窗都通过 by-date 绑定闭合：
+    """R3：2 标的 × 2 时间窗，每窗都通过 by-date 绑定闭合：
     1) code == 0（_probe_ok 保证）
     2) 返回 items 非空
-    3) 每条返回 date_ms 都落在请求 start/end 窗口内
-    4) date_ms 顺序确定性（ASCENDING/DESCENDING，已记录）
-    5) OHLC 字段结构为数值或 null（按 provider 契约）
-    6) 不因「返回了若干历史行」就通过 —— 必须逐窗绑定。
+    3) **date_ms_count == item_count**（每条 bar 都有有效 date_ms 坐标）
+    4) 每条返回 date_ms 都落在请求 start/end 窗口内
+    5) date_ms 顺序确定性（ASCENDING/DESCENDING，已记录）
+    6) OHLC 字段结构为数值或 null（按 provider 契约）
+    7) 不因「返回了若干历史行」就通过 —— 必须逐窗绑定。
     """
     for index, (thscode, start, end) in enumerate(probe.HISTORICAL_MATRIX, start=1):
         spec = _historical_spec(thscode, start, end)
@@ -103,6 +132,11 @@ def test_c_historical_matrix_2x2():
         ts = sample.get("_temporal_summary", {})
         assert ts.get("item_count", 0) > 0, \
             f"historical_{index}({thscode}) 返回空 items"
+        # 完整性：每条 bar 都有有效 date_ms 坐标
+        assert ts.get("date_ms_count") == ts.get("item_count"), (
+            f"historical_{index}({thscode}) date_ms 坐标不完整: "
+            f"date_ms_count={ts.get('date_ms_count')} != item_count={ts.get('item_count')}"
+        )
         # 窗口绑定：每条 date_ms ∈ [start, end]
         start_ms, end_ms = probe._ms(start), probe._ms(end)
         dates = ts.get("date_ms_values", [])

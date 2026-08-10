@@ -173,6 +173,37 @@ def test_temporal_summary_bounded():
     assert ts["item_count"] == 500  # 计数完整但值列表有界
 
 
+def test_temporal_summary_date_ms_count_complete():
+    """R3：date_ms_count 是全量有效计数（不截断），用于 date_ms_count == item_count 完整性证明。"""
+    # 500 条全部有 date_ms → 全量计数 500（不受 _MAX_DATE_MS_VALUES 截断）
+    items = [{"date_ms": i} for i in range(500)]
+    ts = probe._temporal_summary(items)
+    assert ts["date_ms_count"] == 500 == ts["item_count"]
+    # 部分 bar 缺 date_ms → date_ms_count < item_count（完整性缺口可被检测）
+    partial = [{"date_ms": 1}, {"date_ms": 2}, {"open_price": 3.0}]
+    ts2 = probe._temporal_summary(partial)
+    assert ts2["date_ms_count"] == 2 and ts2["item_count"] == 3
+    # bool 不算有效 date_ms
+    bool_item = [{"date_ms": True}]
+    assert probe._temporal_summary(bool_item)["date_ms_count"] == 0
+
+
+def test_classify_search_result_three_branches():
+    """R3：symbol search 结果分类 —— EMPTY_SUCCESS / BUSINESS_ERROR / OTHER_OBSERVED_BEHAVIOR。"""
+    def _obs(code, sample):
+        return probe.ProbeObservation(dataset_id="x", endpoint="/e", http_status=200,
+                                      envelope_code=code, envelope_message=None,
+                                      request_id=None, fingerprint="fp", sample_fields=sample)
+    # 业务错误 → BUSINESS_ERROR
+    assert probe.classify_search_result(_obs(3001, {})) == probe.SEARCH_RESULT_BUSINESS_ERROR
+    # code=0 + 空 data → EMPTY_SUCCESS
+    assert probe.classify_search_result(_obs(0, {})) == probe.SEARCH_RESULT_EMPTY_SUCCESS
+    assert probe.classify_search_result(_obs(0, {"_count": 0})) == probe.SEARCH_RESULT_EMPTY_SUCCESS
+    # code=0 + 有匹配 → OTHER_OBSERVED_BEHAVIOR
+    assert probe.classify_search_result(
+        _obs(0, {"_count": 1, "_identities": ["600519.SH"]})) == probe.SEARCH_RESULT_OTHER
+
+
 def test_sanitize_sample_truncates_long_values_recursive():
     payload = {"code": 0, "message": "ok", "request_id": "r1",
                "data": {"reason": "x" * 1000, "nested": {"long": "y" * 1000}}}
