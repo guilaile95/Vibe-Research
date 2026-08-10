@@ -382,13 +382,6 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
-def _connect_wal_init(db_path: str | Path) -> sqlite3.Connection:
-    """可写初始化连接：额外设置 journal_mode=WAL（持久化到数据库文件）。"""
-    conn = _connect(db_path)
-    conn.execute("PRAGMA journal_mode = WAL")
-    return conn
-
-
 def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:
     """只读连接：mode=ro；不修改 journal mode。文件不存在抛 FileNotFoundError。"""
     path = _as_path(db_path)
@@ -399,6 +392,17 @@ def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
+    return conn
+
+
+def _connect_immutable(db_path: str | Path) -> sqlite3.Connection:
+    """打开不读取或创建 WAL/SHM 的不可变主文件视图。"""
+    path = _as_path(db_path)
+    if not Path(path).is_file():
+        raise FileNotFoundError(f"evidence_thesis db 不存在：{path}")
+    uri = f"{Path(path).resolve().as_uri()}?mode=ro&immutable=1"
+    conn = sqlite3.connect(uri, timeout=5, uri=True)
+    conn.row_factory = sqlite3.Row
     return conn
 
 
@@ -422,13 +426,32 @@ def _read_schema_version(conn: sqlite3.Connection) -> str | None:
     return row["value"] if row else None
 
 
+def _validate_existing_schema_version_immutable(db_path: str | Path) -> None:
+    """在 SQLite 处理任何 WAL/SHM 前，从主文件精确验证现有版本。"""
+    conn = _connect_immutable(db_path)
+    try:
+        if not _table_exists(conn, "schema_meta"):
+            raise EvidenceLedgerCorruptedError()
+        version = _read_schema_version(conn)
+        if version is None:
+            raise EvidenceLedgerCorruptedError()
+        if version != SCHEMA_VERSION:
+            raise EvidenceLedgerSchemaVersionError()
+    except (EvidenceLedgerSchemaVersionError, EvidenceLedgerCorruptedError):
+        raise
+    except sqlite3.DatabaseError:
+        raise EvidenceLedgerCorruptedError()
+    finally:
+        conn.close()
+
+
 def _validate_and_prepare_schema(conn: sqlite3.Connection, is_write: bool) -> None:
     """统一 Schema 验证和准备入口。
 
-    - 已存在 schema_meta 时先读版本，高于代码版本拒绝
+    - 已存在 schema_meta 时只接受当前精确版本
     - 拒绝前不执行任何 DDL
     - 当前版本正常读写
-    - 新建空数据库初始化为 v1
+    - 新建空数据库初始化为当前版本
     - 非空数据库缺 schema_meta 时拒绝
     """
     # 检查是否已有 schema_meta 表
@@ -441,23 +464,9 @@ def _validate_and_prepare_schema(conn: sqlite3.Connection, is_write: bool) -> No
             # schema_meta 表存在但无 schema_version 记录，视为损坏
             raise EvidenceLedgerCorruptedError()
 
-        # 版本号比较：提取 v 后的数字
-        def _extract_version_number(v: str) -> int:
-            import re
-            m = re.search(r'_v(\d+)$', v)
-            return int(m.group(1)) if m else 0
-
-        current_ver = _extract_version_number(SCHEMA_VERSION)
-        db_ver = _extract_version_number(version)
-
-        if db_ver > current_ver:
-            # 数据库版本高于代码版本，拒绝打开
+        if version != SCHEMA_VERSION:
+            # 普通打开不推断版本兼容性，也不执行隐式迁移。
             raise EvidenceLedgerSchemaVersionError()
-        elif db_ver < current_ver:
-            # 数据库版本低于代码版本，需要迁移
-            # 当前无旧版本迁移逻辑，明确拒绝
-            raise EvidenceLedgerSchemaVersionError()
-        # db_ver == current_ver: 正常继续
     else:
         # 没有 schema_meta 表
         # 检查是否是全新数据库（没有任何表）
@@ -479,15 +488,25 @@ def _validate_and_prepare_schema(conn: sqlite3.Connection, is_write: bool) -> No
             )
 
 
-def initialize_store(db_path: str | Path) -> None:
-    """幂等初始化表、索引和 schema 版本。"""
+def _initialize_store_after_version_gate(db_path: str | Path) -> None:
+    """初始化新库或已通过不可变版本门禁的当前库。"""
     _ensure_parent_dir(db_path)
-    conn = _connect_wal_init(db_path)
+    conn = _connect(db_path)
     try:
         with conn:
             _validate_and_prepare_schema(conn, is_write=True)
+        # journal_mode 会持久化；只能在精确版本门禁或新库 DDL 成功后设置。
+        conn.execute("PRAGMA journal_mode = WAL")
     finally:
         conn.close()
+
+
+def initialize_store(db_path: str | Path) -> None:
+    """幂等初始化；现有库在任何 WAL/SHM 处理前先验证精确版本。"""
+    path = _as_path(db_path)
+    if path != ":memory:" and Path(path).is_file():
+        _validate_existing_schema_version_immutable(db_path)
+    _initialize_store_after_version_gate(db_path)
 
 
 def integrity_check(db_path: str | Path) -> None:
@@ -570,6 +589,8 @@ class _Tx:
 
 def _open_for_write(db_path: str | Path) -> sqlite3.Connection:
     """打开可写连接：确保 schema 已初始化 + 损坏检测。"""
+    if _db_file_exists(db_path):
+        _validate_existing_schema_version_immutable(db_path)
     _ensure_parent_dir(db_path)
     conn = _connect(db_path)
     try:
@@ -627,6 +648,7 @@ def read_transaction(db_path: str | Path, fn) -> Any:
     """只读执行 fn(conn)；文件/表缺失时由调用方处理。"""
     if not _db_file_exists(db_path):
         raise FileNotFoundError(f"evidence_thesis db 不存在：{db_path}")
+    _validate_existing_schema_version_immutable(db_path)
     conn = _connect_readonly(db_path)
     try:
         _validate_and_prepare_schema(conn, is_write=False)
