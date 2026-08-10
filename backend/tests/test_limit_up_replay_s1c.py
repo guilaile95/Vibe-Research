@@ -345,7 +345,7 @@ def test_normalizer_version_and_temporal_authorities_remain_unchanged() -> None:
         "ds-limit-up-pool-contract-v0.1"
     )
     assert shadow.ARTIFACT_SCHEMA_VERSION == "ds-limit-up-pool-parquet-v0.1"
-    assert FACT_LAKE_SCHEMA_VERSION == "fact_lake_control_v2"
+    assert FACT_LAKE_SCHEMA_VERSION == "fact_lake_control_v3"
     assert shadow.LIMIT_UP_DATASET_SPEC.point_in_time_supported is False
     assert shadow.LIMIT_UP_DATASET_SPEC.fetch_semantics.value == "by_date"
     assert shadow.LIMIT_UP_DATASET_SPEC.history_mode.value == "by_date"

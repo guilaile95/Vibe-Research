@@ -217,7 +217,14 @@ def test_unsupported_newer_schema_zero_mutation(tmp_path: Path, operation) -> No
     assert not Path(f"{db_path}-shm").exists()
 
 
-@pytest.mark.parametrize("version", ["fact_lake_control_v0", "fact_lake_control_v1"])
+@pytest.mark.parametrize(
+    "version",
+    [
+        "fact_lake_control_v0",
+        "fact_lake_control_v1",
+        "fact_lake_control_v2",
+    ],
+)
 def test_older_schema_requires_explicit_migration_without_mutation(
     tmp_path: Path,
     version: str,
@@ -787,7 +794,7 @@ def test_valid_handle_uses_lock_aware_gate_for_immutable_writer_race(
     # A fresh open keeps the zero-mutation immutable gate and fails closed.
     with pytest.raises(FactLakeCorruptedError):
         open_existing_fact_lake(root)
-    # An already validated v2 handle may use a normal lock-aware reader to
+    # An already validated current-version handle may use a normal lock-aware reader to
     # distinguish an in-flight rollback page from real corruption.
     assert lake.get_observation("obs-not-present") is None
 
@@ -811,4 +818,4 @@ def test_only_explicit_tmp_root_is_touched(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_schema_version_constant_is_current_v2() -> None:
-    assert SCHEMA_VERSION == "fact_lake_control_v2"
+    assert SCHEMA_VERSION == "fact_lake_control_v3"
