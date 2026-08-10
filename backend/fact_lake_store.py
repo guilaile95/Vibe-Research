@@ -21,15 +21,17 @@ import stat
 import threading
 import uuid
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
-from data_contracts import ProviderObservation, ReconciliationResult
+from data_contracts import CanonicalFact, ProviderObservation, ReconciliationResult
 
 
-SCHEMA_VERSION = "fact_lake_control_v1"
+SCHEMA_VERSION = "fact_lake_control_v2"
 CONTROL_DB_FILENAME = "fact_lake_control.sqlite3"
 RAW_DIRECTORY_NAME = "raw"
+CANONICAL_DIRECTORY_NAME = "canonical"
 
 _SCHEMA_VERSION_RE = re.compile(r"^fact_lake_control_v(?P<version>[0-9]+)$")
 _SHA256_RE = re.compile(r"^sha256:(?P<digest>[0-9a-fA-F]{64})$")
@@ -61,6 +63,14 @@ class FactLakeObservationConflictError(FactLakeError):
     """An observation identity was reused with protected data changed."""
 
 
+class FactLakePublicationConflictError(FactLakeError):
+    """A canonical publication identity conflicted with persisted metadata."""
+
+
+class FactLakeNormalizationConflictError(FactLakeError):
+    """One raw observation/normalizer pair produced conflicting output."""
+
+
 class FactLakeReadOnlyError(FactLakeError):
     """A write was attempted through a read-only handle."""
 
@@ -88,6 +98,39 @@ class StoredReconciliation:
 class ObservationStoreResult:
     stored: StoredObservation
     created: bool
+
+
+@dataclass(frozen=True)
+class StoredCanonicalPublication:
+    publication_id: str
+    dataset_id: str
+    canonical_key: str
+    trade_date: str
+    vintage_sequence: int
+    fact: CanonicalFact
+    source_observation_id: str
+    dataset_contract_revision: str
+    normalizer_version: str
+    raw_payload_hash: str
+    artifact_schema_version: str
+    artifact_relpath: str
+    artifact_sha256: str | None
+    commit_state: str
+
+
+@dataclass(frozen=True)
+class PublicationStageResult:
+    stored: StoredCanonicalPublication
+    created: bool
+
+
+@dataclass(frozen=True)
+class StoredNormalization:
+    source_observation_id: str
+    dataset_id: str
+    normalizer_version: str
+    normalized_sha256: str
+    normalized_payload: Any
 
 
 _SCHEMA_DDL = (
@@ -137,6 +180,49 @@ _SCHEMA_DDL = (
         ON reconciliation_results(dataset_id, sequence)
     """,
     """
+    CREATE TABLE normalized_observations (
+        source_observation_id TEXT PRIMARY KEY,
+        dataset_id TEXT NOT NULL,
+        normalizer_version TEXT NOT NULL,
+        normalized_sha256 TEXT NOT NULL,
+        normalized_json TEXT NOT NULL,
+        FOREIGN KEY(source_observation_id)
+            REFERENCES observations(observation_id)
+    )
+    """,
+    """
+    CREATE INDEX normalized_observations_dataset_idx
+        ON normalized_observations(dataset_id, source_observation_id)
+    """,
+    """
+    CREATE TABLE canonical_publications (
+        publication_id TEXT PRIMARY KEY,
+        dataset_id TEXT NOT NULL,
+        canonical_key TEXT NOT NULL,
+        trade_date TEXT NOT NULL,
+        vintage_sequence INTEGER NOT NULL CHECK (vintage_sequence > 0),
+        fact_id TEXT NOT NULL,
+        canonical_fact_json TEXT NOT NULL,
+        source_observation_id TEXT NOT NULL,
+        dataset_contract_revision TEXT NOT NULL,
+        normalizer_version TEXT NOT NULL,
+        raw_payload_hash TEXT NOT NULL,
+        artifact_schema_version TEXT NOT NULL,
+        artifact_relpath TEXT NOT NULL,
+        artifact_sha256 TEXT,
+        commit_state TEXT NOT NULL
+            CHECK (commit_state IN ('STAGING', 'COMMITTED', 'FAILED', 'ABORTED')),
+        UNIQUE(dataset_id, canonical_key, vintage_sequence),
+        FOREIGN KEY(source_observation_id)
+            REFERENCES observations(observation_id)
+    )
+    """,
+    """
+    CREATE INDEX canonical_publications_lookup_idx
+        ON canonical_publications(dataset_id, trade_date, vintage_sequence,
+                                  publication_id)
+    """,
+    """
     CREATE TRIGGER observations_guard_update
     BEFORE UPDATE ON observations
     WHEN NOT (
@@ -180,6 +266,59 @@ _SCHEMA_DDL = (
         SELECT RAISE(ABORT, 'reconciliation results cannot be deleted');
     END
     """,
+    """
+    CREATE TRIGGER normalized_observations_guard_update
+    BEFORE UPDATE ON normalized_observations
+    BEGIN
+        SELECT RAISE(ABORT, 'normalized observations are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER normalized_observations_guard_delete
+    BEFORE DELETE ON normalized_observations
+    BEGIN
+        SELECT RAISE(ABORT, 'normalized observations cannot be deleted');
+    END
+    """,
+    """
+    CREATE TRIGGER canonical_publications_guard_update
+    BEFORE UPDATE ON canonical_publications
+    WHEN NOT (
+        OLD.commit_state = 'STAGING'
+        AND NEW.commit_state IN ('COMMITTED', 'FAILED', 'ABORTED')
+        AND NEW.publication_id IS OLD.publication_id
+        AND NEW.dataset_id IS OLD.dataset_id
+        AND NEW.canonical_key IS OLD.canonical_key
+        AND NEW.trade_date IS OLD.trade_date
+        AND NEW.vintage_sequence IS OLD.vintage_sequence
+        AND NEW.fact_id IS OLD.fact_id
+        AND NEW.canonical_fact_json IS OLD.canonical_fact_json
+        AND NEW.source_observation_id IS OLD.source_observation_id
+        AND NEW.dataset_contract_revision IS OLD.dataset_contract_revision
+        AND NEW.normalizer_version IS OLD.normalizer_version
+        AND NEW.raw_payload_hash IS OLD.raw_payload_hash
+        AND NEW.artifact_schema_version IS OLD.artifact_schema_version
+        AND NEW.artifact_relpath IS OLD.artifact_relpath
+        AND (
+            (NEW.commit_state = 'COMMITTED'
+             AND OLD.artifact_sha256 IS NULL
+             AND NEW.artifact_sha256 IS NOT NULL)
+            OR
+            (NEW.commit_state IN ('FAILED', 'ABORTED')
+             AND NEW.artifact_sha256 IS OLD.artifact_sha256)
+        )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'canonical publications are immutable after staging');
+    END
+    """,
+    """
+    CREATE TRIGGER canonical_publications_guard_delete
+    BEFORE DELETE ON canonical_publications
+    BEGIN
+        SELECT RAISE(ABORT, 'canonical publications cannot be deleted');
+    END
+    """,
 )
 
 _EXPECTED_COLUMNS = {
@@ -206,6 +345,30 @@ _EXPECTED_COLUMNS = {
         "right_observation_id",
         "result_json",
     ),
+    "normalized_observations": (
+        "source_observation_id",
+        "dataset_id",
+        "normalizer_version",
+        "normalized_sha256",
+        "normalized_json",
+    ),
+    "canonical_publications": (
+        "publication_id",
+        "dataset_id",
+        "canonical_key",
+        "trade_date",
+        "vintage_sequence",
+        "fact_id",
+        "canonical_fact_json",
+        "source_observation_id",
+        "dataset_contract_revision",
+        "normalizer_version",
+        "raw_payload_hash",
+        "artifact_schema_version",
+        "artifact_relpath",
+        "artifact_sha256",
+        "commit_state",
+    ),
 }
 
 _EXPECTED_INDEXES = frozenset(
@@ -213,6 +376,8 @@ _EXPECTED_INDEXES = frozenset(
         "observations_dataset_fetched_idx",
         "observations_blob_idx",
         "reconciliation_dataset_sequence_idx",
+        "normalized_observations_dataset_idx",
+        "canonical_publications_lookup_idx",
     }
 )
 
@@ -222,6 +387,10 @@ _EXPECTED_TRIGGERS = frozenset(
         "observations_guard_delete",
         "reconciliation_guard_update",
         "reconciliation_guard_delete",
+        "normalized_observations_guard_update",
+        "normalized_observations_guard_delete",
+        "canonical_publications_guard_update",
+        "canonical_publications_guard_delete",
     }
 )
 
@@ -264,6 +433,17 @@ def _identity_component(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _is_link_or_reparse(path: Path, path_stat: os.stat_result | None = None) -> bool:
+    try:
+        current = path.lstat() if path_stat is None else path_stat
+    except OSError:
+        return False
+    if stat.S_ISLNK(current.st_mode):
+        return True
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return bool(getattr(current, "st_file_attributes", 0) & reparse_flag)
+
+
 def _blob_relpath(observation: ProviderObservation, digest: str) -> str:
     return PurePosixPath(
         RAW_DIRECTORY_NAME,
@@ -286,6 +466,10 @@ def _control_db_path(root: Path) -> Path:
 
 def _raw_root(root: Path) -> Path:
     return root / RAW_DIRECTORY_NAME
+
+
+def _canonical_root(root: Path) -> Path:
+    return root / CANONICAL_DIRECTORY_NAME
 
 
 def _sqlite_uri(path: Path, mode: str, *, immutable: bool = False) -> str:
@@ -358,46 +542,73 @@ def _read_exact_schema_version_immutable(path: Path) -> str:
     return SCHEMA_VERSION
 
 
-def _validate_schema_layout(conn: sqlite3.Connection) -> None:
+def _normalized_schema_sql(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return re.sub(r"\s+", " ", value.strip()).lower()
+
+
+def _schema_layout_fingerprint(conn: sqlite3.Connection) -> tuple[Any, ...]:
+    objects = tuple(
+        (
+            row[0],
+            row[1],
+            row[2],
+            _normalized_schema_sql(row[3]),
+        )
+        for row in conn.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master"
+            " WHERE name NOT LIKE 'sqlite_%'"
+            " ORDER BY type, name"
+        )
+    )
+    table_details = tuple(
+        (
+            table,
+            tuple(tuple(row) for row in conn.execute(
+                f'PRAGMA table_xinfo("{table}")'
+            )),
+            tuple(tuple(row) for row in conn.execute(
+                f'PRAGMA foreign_key_list("{table}")'
+            )),
+        )
+        for table in sorted(_EXPECTED_COLUMNS)
+    )
+    index_details = tuple(
+        (
+            index,
+            tuple(tuple(row) for row in conn.execute(
+                f'PRAGMA index_xinfo("{index}")'
+            )),
+        )
+        for index in sorted(_EXPECTED_INDEXES)
+    )
+    return objects, table_details, index_details
+
+
+@lru_cache(maxsize=1)
+def _expected_schema_layout_fingerprint() -> tuple[Any, ...]:
+    conn = sqlite3.connect(":memory:")
     try:
-        tables = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-                " AND name NOT LIKE 'sqlite_%'"
-            )
-        }
-        if tables != set(_EXPECTED_COLUMNS):
-            raise FactLakeCorruptedError("Fact Lake table layout is corrupted")
+        for ddl in _SCHEMA_DDL:
+            conn.execute(ddl)
+        return _schema_layout_fingerprint(conn)
+    finally:
+        conn.close()
 
-        for table, expected in _EXPECTED_COLUMNS.items():
-            actual = tuple(
-                row[1] for row in conn.execute(f"PRAGMA table_info({table})")
-            )
-            if actual != expected:
-                raise FactLakeCorruptedError(
-                    f"Fact Lake columns are corrupted for {table}"
-                )
 
-        indexes = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='index'"
-                " AND name NOT LIKE 'sqlite_%'"
-            )
-        }
-        if indexes != _EXPECTED_INDEXES:
-            raise FactLakeCorruptedError("Fact Lake index layout is corrupted")
+def _validate_schema_fingerprint(conn: sqlite3.Connection) -> None:
+    try:
+        if _schema_layout_fingerprint(conn) \
+                != _expected_schema_layout_fingerprint():
+            raise FactLakeCorruptedError("Fact Lake schema fingerprint drifted")
+    except sqlite3.DatabaseError as exc:
+        raise FactLakeCorruptedError("Fact Lake schema layout is unreadable") from exc
 
-        triggers = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='trigger'"
-            )
-        }
-        if triggers != _EXPECTED_TRIGGERS:
-            raise FactLakeCorruptedError("Fact Lake trigger layout is corrupted")
 
+def _validate_schema_layout(conn: sqlite3.Connection) -> None:
+    _validate_schema_fingerprint(conn)
+    try:
         row = conn.execute("PRAGMA integrity_check").fetchone()
         if row is None or row[0] != "ok":
             raise FactLakeCorruptedError("Fact Lake integrity check failed")
@@ -407,17 +618,21 @@ def _validate_schema_layout(conn: sqlite3.Connection) -> None:
 
 def _validate_existing_lake(root: Path) -> Path:
     db_path = _control_db_path(root)
-    if root.is_symlink() or db_path.is_symlink():
+    if _is_link_or_reparse(root) or _is_link_or_reparse(db_path):
         raise FactLakePathError("Fact Lake root and control DB must not be symlinks")
     if not root.is_dir() or not db_path.is_file():
         raise FactLakeNotInitializedError("Fact Lake is not initialized")
-    raw_root = _raw_root(root)
-    if not raw_root.is_dir() or raw_root.is_symlink():
-        raise FactLakeCorruptedError("Fact Lake raw directory is missing or unsafe")
-
     # This is the mandatory zero-mutation gate.  No normal SQLite connection
     # or writable PRAGMA is allowed before the exact version is established.
     _read_exact_schema_version_immutable(db_path)
+    raw_root = _raw_root(root)
+    canonical_root = _canonical_root(root)
+    if not raw_root.is_dir() or _is_link_or_reparse(raw_root):
+        raise FactLakeCorruptedError("Fact Lake raw directory is missing or unsafe")
+    if not canonical_root.is_dir() or _is_link_or_reparse(canonical_root):
+        raise FactLakeCorruptedError(
+            "Fact Lake canonical directory is missing or unsafe"
+        )
     conn = _connect_existing(db_path, readonly=True)
     try:
         _validate_schema_layout(conn)
@@ -481,7 +696,7 @@ def _fsync_directory(path: Path) -> None:
 def initialize_fact_lake(root: str | Path) -> "FactLake":
     """Explicitly create a new lake, or validate an already-current lake."""
     root_path = _root_path(root)
-    if root_path.is_symlink():
+    if _is_link_or_reparse(root_path):
         raise FactLakePathError("Fact Lake root cannot be a symbolic link")
     db_path = _control_db_path(root_path)
     if db_path.exists():
@@ -491,8 +706,14 @@ def initialize_fact_lake(root: str | Path) -> "FactLake":
     root_path.mkdir(parents=True, exist_ok=True)
     raw_root = _raw_root(root_path)
     raw_root.mkdir(exist_ok=True)
-    if raw_root.is_symlink():
+    if _is_link_or_reparse(raw_root):
         raise FactLakePathError("Fact Lake raw directory cannot be a symbolic link")
+    canonical_root = _canonical_root(root_path)
+    canonical_root.mkdir(exist_ok=True)
+    if _is_link_or_reparse(canonical_root):
+        raise FactLakePathError(
+            "Fact Lake canonical directory cannot be a symbolic link"
+        )
 
     candidate = root_path / f".{CONTROL_DB_FILENAME}.{uuid.uuid4().hex}.tmp"
     try:
@@ -552,6 +773,7 @@ class FactLake:
         conn = _connect_existing(self._db_path, readonly=use_readonly)
         try:
             _assert_current_version_on_connection(conn)
+            _validate_schema_fingerprint(conn)
             if not use_readonly:
                 conn.execute("PRAGMA foreign_keys = ON")
         except Exception:
@@ -582,14 +804,15 @@ class FactLake:
             blob_stat = None
         except OSError as exc:
             raise FactLakePathError("blob path cannot be inspected safely") from exc
-        if blob_stat is not None and stat.S_ISLNK(blob_stat.st_mode):
+        if blob_stat is not None and _is_link_or_reparse(path, blob_stat):
             raise FactLakePathError("blob path cannot be a symbolic link")
         return path
 
     @staticmethod
     def _assert_plain_directory(path: Path, *, missing_is_corrupt: bool) -> None:
         try:
-            mode = path.lstat().st_mode
+            path_stat = path.lstat()
+            mode = path_stat.st_mode
         except FileNotFoundError as exc:
             if missing_is_corrupt:
                 raise FactLakeCorruptedError(
@@ -598,7 +821,7 @@ class FactLake:
             raise
         except OSError as exc:
             raise FactLakePathError("blob directory cannot be inspected safely") from exc
-        if stat.S_ISLNK(mode):
+        if _is_link_or_reparse(path, path_stat):
             raise FactLakePathError("blob directory ancestor cannot be a symbolic link")
         if not stat.S_ISDIR(mode):
             raise FactLakePathError("blob directory ancestor is not a directory")
@@ -607,6 +830,16 @@ class FactLake:
         """Walk the fixed hashed layout without following unverified ancestors."""
         if len(pure.parts) != 4 or pure.parts[0] != RAW_DIRECTORY_NAME:
             raise FactLakePathError("persisted blob path has an unsafe layout")
+
+        return self._safe_owned_parent(pure, create=create)
+
+    def _safe_owned_parent(self, pure: PurePosixPath, *, create: bool) -> Path:
+        """Walk one fixed four-component owned layout without symlink descent."""
+        if len(pure.parts) != 4 or pure.parts[0] not in {
+            RAW_DIRECTORY_NAME,
+            CANONICAL_DIRECTORY_NAME,
+        }:
+            raise FactLakePathError("persisted artifact path has an unsafe layout")
 
         current = self._root
         self._assert_plain_directory(current, missing_is_corrupt=True)
@@ -643,6 +876,123 @@ class FactLake:
             current = current / component
             self._assert_plain_directory(current, missing_is_corrupt=True)
         return current
+
+    def canonical_artifact_path(
+        self,
+        relpath: str,
+        *,
+        create_parent: bool = False,
+    ) -> Path:
+        """Resolve one canonical artifact path under the owned canonical root."""
+        pure = self._canonical_relpath(relpath)
+        path = self._root.joinpath(*pure.parts)
+        parent = self._safe_owned_parent(pure, create=create_parent)
+        if path.parent != parent:
+            raise FactLakePathError("canonical artifact escaped the owned directory")
+        try:
+            artifact_stat = path.lstat()
+        except FileNotFoundError:
+            artifact_stat = None
+        except OSError as exc:
+            raise FactLakePathError(
+                "canonical artifact path cannot be inspected safely"
+            ) from exc
+        if artifact_stat is not None and _is_link_or_reparse(path, artifact_stat):
+            raise FactLakePathError("canonical artifact cannot be a symbolic link")
+        return path
+
+    @staticmethod
+    def _canonical_relpath(relpath: str) -> PurePosixPath:
+        pure = PurePosixPath(relpath)
+        if (
+            pure.is_absolute()
+            or ".." in pure.parts
+            or len(pure.parts) != 4
+            or pure.parts[0] != CANONICAL_DIRECTORY_NAME
+            or re.fullmatch(r"[0-9a-f]{64}", pure.parts[1]) is None
+            or re.fullmatch(r"\d{4}-\d{2}-\d{2}", pure.parts[2]) is None
+            or re.fullmatch(r"[0-9a-f]{64}\.parquet", pure.parts[3]) is None
+        ):
+            raise FactLakePathError("canonical artifact path is not canonical")
+        return pure
+
+    @staticmethod
+    def _file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        try:
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except OSError as exc:
+            raise FactLakeCorruptedError(
+                "canonical artifact is unreadable"
+            ) from exc
+        return f"sha256:{digest.hexdigest()}"
+
+    def publish_canonical_artifact(
+        self,
+        relpath: str,
+        writer: Callable[[Path], None],
+    ) -> str:
+        """Durably publish one immutable artifact and return its SHA-256."""
+        self._require_write()
+        if not callable(writer):
+            raise TypeError("writer must be callable")
+        destination = self.canonical_artifact_path(
+            relpath,
+            create_parent=True,
+        )
+        if destination.exists():
+            if _is_link_or_reparse(destination) or not destination.is_file():
+                raise FactLakePathError("existing canonical artifact is unsafe")
+            digest = self._file_sha256(destination)
+            _fsync_directory(destination.parent)
+            return digest
+
+        candidate = destination.parent / f".{destination.name}.{uuid.uuid4().hex}.tmp"
+        try:
+            writer(candidate)
+            try:
+                mode = candidate.lstat().st_mode
+            except OSError as exc:
+                raise FactLakeCorruptedError(
+                    "canonical artifact writer did not create a readable file"
+                ) from exc
+            if _is_link_or_reparse(candidate) or not stat.S_ISREG(mode):
+                raise FactLakePathError(
+                    "canonical artifact writer produced an unsafe file"
+                )
+            with candidate.open("r+b") as handle:
+                os.fsync(handle.fileno())
+            digest = self._file_sha256(candidate)
+            if not _publish_new_file_no_replace(candidate, destination):
+                if _is_link_or_reparse(destination) or not destination.is_file():
+                    raise FactLakePathError(
+                        "concurrent canonical artifact destination is unsafe"
+                    )
+                if self._file_sha256(destination) != digest:
+                    raise FactLakePublicationConflictError(
+                        "canonical artifact identity collided with different bytes"
+                    )
+            _fsync_directory(destination.parent)
+            return digest
+        finally:
+            if candidate.exists():
+                candidate.unlink()
+
+    def verify_canonical_artifact(
+        self,
+        relpath: str,
+        expected_sha256: str,
+    ) -> Path:
+        """Resolve and hash-check one committed canonical artifact."""
+        _hash_digest(expected_sha256)
+        path = self.canonical_artifact_path(relpath)
+        if not path.is_file():
+            raise FactLakeCorruptedError("committed canonical artifact is missing")
+        if self._file_sha256(path).lower() != expected_sha256.lower():
+            raise FactLakeCorruptedError("committed canonical artifact hash mismatch")
+        return path
 
     def _row_to_stored(self, row: sqlite3.Row, *, verify_blob: bool) -> StoredObservation:
         try:
@@ -776,7 +1126,7 @@ class FactLake:
 
     def _publish_blob(self, destination: Path, payload_bytes: bytes) -> None:
         if destination.exists():
-            if destination.is_symlink() or not destination.is_file():
+            if _is_link_or_reparse(destination) or not destination.is_file():
                 raise FactLakePathError("existing blob destination is unsafe")
             if payload_sha256(destination.read_bytes()) != payload_sha256(payload_bytes):
                 raise FactLakeCorruptedError("content-addressed blob collision")
@@ -793,7 +1143,7 @@ class FactLake:
                 handle.flush()
                 os.fsync(handle.fileno())
             if not _publish_new_file_no_replace(candidate, destination):
-                if destination.is_symlink() or not destination.is_file():
+                if _is_link_or_reparse(destination) or not destination.is_file():
                     raise FactLakePathError("concurrent blob destination is unsafe")
                 if payload_sha256(destination.read_bytes()) != payload_sha256(payload_bytes):
                     raise FactLakeCorruptedError("content-addressed blob collision")
@@ -906,6 +1256,518 @@ class FactLake:
             raise FactLakeCorruptedError("committed observation blob is corrupted")
         return payload
 
+    def _row_to_normalization(self, row: sqlite3.Row) -> StoredNormalization:
+        try:
+            payload = json.loads(row["normalized_json"])
+        except Exception as exc:
+            raise FactLakeCorruptedError(
+                "stored normalized observation JSON is corrupted"
+            ) from exc
+        canonical = _canonical_json(payload)
+        digest = payload_sha256(canonical.encode("utf-8"))
+        if digest.lower() != row["normalized_sha256"].lower():
+            raise FactLakeCorruptedError(
+                "stored normalized observation hash drifted"
+            )
+        source = self.get_observation(row["source_observation_id"])
+        if source is None:
+            raise FactLakeCorruptedError(
+                "normalized observation source is not committed"
+            )
+        if (
+            source.observation.dataset_id != row["dataset_id"]
+            or source.observation.normalizer_version != row["normalizer_version"]
+        ):
+            raise FactLakeCorruptedError(
+                "normalized observation index drifted"
+            )
+        return StoredNormalization(
+            source_observation_id=row["source_observation_id"],
+            dataset_id=row["dataset_id"],
+            normalizer_version=row["normalizer_version"],
+            normalized_sha256=row["normalized_sha256"],
+            normalized_payload=payload,
+        )
+
+    def store_normalization(
+        self,
+        source_observation_id: str,
+        normalized_payload: Any,
+        *,
+        normalizer_version: str,
+    ) -> StoredNormalization:
+        """Append one deterministic normalization result or replay it exactly."""
+        self._require_write()
+        self._require_publication_text(
+            source_observation_id,
+            "source_observation_id",
+        )
+        self._require_publication_text(normalizer_version, "normalizer_version")
+        source = self.get_observation(source_observation_id)
+        if source is None:
+            raise FactLakeNormalizationConflictError(
+                "normalization requires a committed source observation"
+            )
+        if source.observation.normalizer_version != normalizer_version:
+            raise FactLakeNormalizationConflictError(
+                "normalizer version does not match source observation"
+            )
+        normalized_json = _canonical_json(normalized_payload)
+        normalized_sha256 = payload_sha256(normalized_json.encode("utf-8"))
+        with _WRITE_LOCK:
+            conn = self._connect(readonly=False)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT * FROM normalized_observations"
+                    " WHERE source_observation_id = ?",
+                    (source_observation_id,),
+                ).fetchone()
+                if row is not None:
+                    if (
+                        row["dataset_id"] != source.observation.dataset_id
+                        or row["normalizer_version"] != normalizer_version
+                        or row["normalized_sha256"].lower()
+                            != normalized_sha256.lower()
+                        or row["normalized_json"] != normalized_json
+                    ):
+                        raise FactLakeNormalizationConflictError(
+                            "raw observation/normalizer produced conflicting output"
+                        )
+                    conn.commit()
+                    return self._row_to_normalization(row)
+                conn.execute(
+                    """
+                    INSERT INTO normalized_observations(
+                        source_observation_id, dataset_id, normalizer_version,
+                        normalized_sha256, normalized_json
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        source_observation_id,
+                        source.observation.dataset_id,
+                        normalizer_version,
+                        normalized_sha256,
+                        normalized_json,
+                    ),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM normalized_observations"
+                    " WHERE source_observation_id = ?",
+                    (source_observation_id,),
+                ).fetchone()
+                if row is None:
+                    raise FactLakeCorruptedError(
+                        "normalization append was not visible"
+                    )
+                return self._row_to_normalization(row)
+            except sqlite3.DatabaseError as exc:
+                conn.rollback()
+                raise FactLakeCorruptedError("normalization append failed") from exc
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+    def get_normalization(
+        self,
+        source_observation_id: str,
+    ) -> StoredNormalization | None:
+        self._require_publication_text(
+            source_observation_id,
+            "source_observation_id",
+        )
+        conn = self._connect(readonly=True)
+        try:
+            row = conn.execute(
+                "SELECT * FROM normalized_observations"
+                " WHERE source_observation_id = ?",
+                (source_observation_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        return None if row is None else self._row_to_normalization(row)
+
+    @staticmethod
+    def _require_publication_text(value: str, field: str) -> str:
+        if type(value) is not str or not value.strip() or value != value.strip():
+            raise ValueError(f"{field} must be canonical non-empty text")
+        return value
+
+    def _row_to_publication(
+        self,
+        row: sqlite3.Row,
+        *,
+        verify_artifact: bool,
+    ) -> StoredCanonicalPublication:
+        try:
+            fact = CanonicalFact.from_dict(json.loads(row["canonical_fact_json"]))
+        except Exception as exc:
+            raise FactLakeCorruptedError(
+                "stored canonical fact JSON is corrupted"
+            ) from exc
+        if (
+            fact.fact_id != row["fact_id"]
+            or fact.dataset_id != row["dataset_id"]
+            or fact.canonical_key != row["canonical_key"]
+            or fact.trade_date != row["trade_date"]
+            or fact.dataset_contract_revision != row["dataset_contract_revision"]
+            or fact.source_observation_ids != (row["source_observation_id"],)
+            or len(fact.provenance_chain) != 1
+            or fact.provenance_chain[0].observation_id
+                != row["source_observation_id"]
+            or fact.provenance_chain[0].normalizer_version
+                != row["normalizer_version"]
+            or fact.provenance_chain[0].source_payload_hash
+                != row["raw_payload_hash"]
+        ):
+            raise FactLakeCorruptedError(
+                "stored canonical publication index drifted"
+            )
+        state = row["commit_state"]
+        artifact_hash = row["artifact_sha256"]
+        if state not in _COMMIT_STATES:
+            raise FactLakeCorruptedError(
+                "stored canonical publication state is invalid"
+            )
+        if state == "COMMITTED" and artifact_hash is None:
+            raise FactLakeCorruptedError(
+                "committed canonical publication lacks an artifact hash"
+            )
+        if state == "STAGING" and artifact_hash is not None:
+            raise FactLakeCorruptedError(
+                "staging canonical publication has a committed artifact hash"
+            )
+        normalization = self.get_normalization(row["source_observation_id"])
+        if normalization is None or _canonical_json(
+            normalization.normalized_payload
+        ) != _canonical_json(fact.canonical_payload):
+            raise FactLakeCorruptedError(
+                "canonical publication is not bound to normalized evidence"
+            )
+        stored = StoredCanonicalPublication(
+            publication_id=row["publication_id"],
+            dataset_id=row["dataset_id"],
+            canonical_key=row["canonical_key"],
+            trade_date=row["trade_date"],
+            vintage_sequence=int(row["vintage_sequence"]),
+            fact=fact,
+            source_observation_id=row["source_observation_id"],
+            dataset_contract_revision=row["dataset_contract_revision"],
+            normalizer_version=row["normalizer_version"],
+            raw_payload_hash=row["raw_payload_hash"],
+            artifact_schema_version=row["artifact_schema_version"],
+            artifact_relpath=row["artifact_relpath"],
+            artifact_sha256=artifact_hash,
+            commit_state=state,
+        )
+        if verify_artifact and state == "COMMITTED":
+            self.verify_canonical_artifact(
+                stored.artifact_relpath,
+                stored.artifact_sha256 or "",
+            )
+        return stored
+
+    @staticmethod
+    def _select_publication_row(
+        conn: sqlite3.Connection,
+        publication_id: str,
+        *,
+        committed_only: bool,
+    ) -> sqlite3.Row | None:
+        sql = "SELECT * FROM canonical_publications WHERE publication_id = ?"
+        if committed_only:
+            sql += " AND commit_state = 'COMMITTED'"
+        return conn.execute(sql, (publication_id,)).fetchone()
+
+    def stage_canonical_publication(
+        self,
+        fact: CanonicalFact,
+        *,
+        publication_id: str,
+        source_observation_id: str,
+        normalizer_version: str,
+        raw_payload_hash: str,
+        artifact_schema_version: str,
+        artifact_relpath: str,
+    ) -> PublicationStageResult:
+        """Create or replay one invisible canonical publication staging row."""
+        self._require_write()
+        if not isinstance(fact, CanonicalFact):
+            raise TypeError("fact must be CanonicalFact")
+        for field, value in (
+            ("publication_id", publication_id),
+            ("source_observation_id", source_observation_id),
+            ("normalizer_version", normalizer_version),
+            ("artifact_schema_version", artifact_schema_version),
+        ):
+            self._require_publication_text(value, field)
+        _hash_digest(raw_payload_hash)
+        self._canonical_relpath(artifact_relpath)
+        if fact.trade_date is None:
+            raise FactLakePublicationConflictError(
+                "canonical publication requires an explicit trade_date"
+            )
+        if fact.source_observation_ids != (source_observation_id,):
+            raise FactLakePublicationConflictError(
+                "canonical publication must bind exactly one source observation"
+            )
+        source = self.get_observation(source_observation_id)
+        if source is None:
+            raise FactLakePublicationConflictError(
+                "canonical source observation is not committed"
+            )
+        if (
+            source.observation.dataset_id != fact.dataset_id
+            or source.observation.provider_id != fact.canonical_source
+            or source.observation.provider_id
+                != fact.provenance_chain[0].provider_id
+            or source.observation.provider_endpoint
+                != fact.provenance_chain[0].provider_endpoint
+            or source.observation.trade_date != fact.trade_date
+            or source.observation.quality_status != fact.quality_status
+            or source.observation.source_payload_hash.lower()
+                != raw_payload_hash.lower()
+            or source.observation.normalizer_version != normalizer_version
+        ):
+            raise FactLakePublicationConflictError(
+                "canonical publication provenance does not match its observation"
+            )
+        normalization = self.get_normalization(source_observation_id)
+        if normalization is None:
+            raise FactLakePublicationConflictError(
+                "canonical publication requires persisted normalized evidence"
+            )
+        if (
+            normalization.normalizer_version != normalizer_version
+            or _canonical_json(normalization.normalized_payload)
+                != _canonical_json(fact.canonical_payload)
+        ):
+            raise FactLakePublicationConflictError(
+                "canonical payload does not match persisted normalized evidence"
+            )
+
+        fact_json = _canonical_json(fact.to_dict())
+        exact_values = (
+            fact.dataset_id,
+            fact.canonical_key,
+            fact.trade_date,
+            fact.fact_id,
+            fact_json,
+            source_observation_id,
+            fact.dataset_contract_revision,
+            normalizer_version,
+            raw_payload_hash,
+            artifact_schema_version,
+            artifact_relpath,
+        )
+        with _WRITE_LOCK:
+            conn = self._connect(readonly=False)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = self._select_publication_row(
+                    conn,
+                    publication_id,
+                    committed_only=False,
+                )
+                if row is not None:
+                    persisted_values = (
+                        row["dataset_id"],
+                        row["canonical_key"],
+                        row["trade_date"],
+                        row["fact_id"],
+                        row["canonical_fact_json"],
+                        row["source_observation_id"],
+                        row["dataset_contract_revision"],
+                        row["normalizer_version"],
+                        row["raw_payload_hash"],
+                        row["artifact_schema_version"],
+                        row["artifact_relpath"],
+                    )
+                    if persisted_values != exact_values:
+                        raise FactLakePublicationConflictError(
+                            "publication_id was reused with different semantics"
+                        )
+                    conn.commit()
+                    return PublicationStageResult(
+                        stored=self._row_to_publication(
+                            row,
+                            verify_artifact=row["commit_state"] == "COMMITTED",
+                        ),
+                        created=False,
+                    )
+
+                sequence = int(conn.execute(
+                    "SELECT COALESCE(MAX(vintage_sequence), 0) + 1"
+                    " FROM canonical_publications"
+                    " WHERE dataset_id = ? AND canonical_key = ?",
+                    (fact.dataset_id, fact.canonical_key),
+                ).fetchone()[0])
+                conn.execute(
+                    """
+                    INSERT INTO canonical_publications(
+                        publication_id, dataset_id, canonical_key, trade_date,
+                        vintage_sequence, fact_id, canonical_fact_json,
+                        source_observation_id, dataset_contract_revision,
+                        normalizer_version, raw_payload_hash,
+                        artifact_schema_version, artifact_relpath,
+                        artifact_sha256, commit_state
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'STAGING')
+                    """,
+                    (
+                        publication_id,
+                        fact.dataset_id,
+                        fact.canonical_key,
+                        fact.trade_date,
+                        sequence,
+                        fact.fact_id,
+                        fact_json,
+                        source_observation_id,
+                        fact.dataset_contract_revision,
+                        normalizer_version,
+                        raw_payload_hash,
+                        artifact_schema_version,
+                        artifact_relpath,
+                    ),
+                )
+                conn.commit()
+                row = self._select_publication_row(
+                    conn,
+                    publication_id,
+                    committed_only=False,
+                )
+                if row is None:
+                    raise FactLakeCorruptedError(
+                        "canonical publication staging was not visible"
+                    )
+                return PublicationStageResult(
+                    stored=self._row_to_publication(row, verify_artifact=False),
+                    created=True,
+                )
+            except sqlite3.DatabaseError as exc:
+                conn.rollback()
+                raise FactLakeCorruptedError(
+                    "canonical publication staging failed"
+                ) from exc
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+    def commit_canonical_publication(
+        self,
+        publication_id: str,
+        artifact_sha256: str,
+    ) -> StoredCanonicalPublication:
+        """Make one durable artifact authoritative and query-visible."""
+        self._require_write()
+        self._require_publication_text(publication_id, "publication_id")
+        _hash_digest(artifact_sha256)
+        with _WRITE_LOCK:
+            conn = self._connect(readonly=False)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = self._select_publication_row(
+                    conn,
+                    publication_id,
+                    committed_only=False,
+                )
+                if row is None:
+                    raise FactLakePublicationConflictError(
+                        "canonical publication was not staged"
+                    )
+                if row["commit_state"] == "COMMITTED":
+                    if row["artifact_sha256"].lower() != artifact_sha256.lower():
+                        raise FactLakePublicationConflictError(
+                            "committed publication artifact hash changed"
+                        )
+                    conn.commit()
+                    return self._row_to_publication(row, verify_artifact=True)
+                if row["commit_state"] != "STAGING":
+                    raise FactLakePublicationConflictError(
+                        "canonical publication is in a terminal state"
+                    )
+                self.verify_canonical_artifact(
+                    row["artifact_relpath"],
+                    artifact_sha256,
+                )
+                conn.execute(
+                    "UPDATE canonical_publications"
+                    " SET artifact_sha256 = ?, commit_state = 'COMMITTED'"
+                    " WHERE publication_id = ? AND commit_state = 'STAGING'",
+                    (artifact_sha256, publication_id),
+                )
+                conn.commit()
+                committed = self._select_publication_row(
+                    conn,
+                    publication_id,
+                    committed_only=True,
+                )
+                if committed is None:
+                    raise FactLakeCorruptedError(
+                        "canonical publication commit was not visible"
+                    )
+                return self._row_to_publication(
+                    committed,
+                    verify_artifact=True,
+                )
+            except sqlite3.DatabaseError as exc:
+                conn.rollback()
+                raise FactLakeCorruptedError(
+                    "canonical publication commit failed"
+                ) from exc
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+    def get_canonical_publication(
+        self,
+        publication_id: str,
+    ) -> StoredCanonicalPublication | None:
+        self._require_publication_text(publication_id, "publication_id")
+        conn = self._connect(readonly=True)
+        try:
+            row = self._select_publication_row(
+                conn,
+                publication_id,
+                committed_only=True,
+            )
+        finally:
+            conn.close()
+        return None if row is None else self._row_to_publication(
+            row,
+            verify_artifact=True,
+        )
+
+    def list_canonical_publications(
+        self,
+        *,
+        dataset_id: str,
+        trade_date: str,
+    ) -> tuple[StoredCanonicalPublication, ...]:
+        self._require_publication_text(dataset_id, "dataset_id")
+        self._require_publication_text(trade_date, "trade_date")
+        conn = self._connect(readonly=True)
+        try:
+            rows = conn.execute(
+                "SELECT * FROM canonical_publications"
+                " WHERE dataset_id = ? AND trade_date = ?"
+                " AND commit_state = 'COMMITTED'"
+                " ORDER BY vintage_sequence, publication_id",
+                (dataset_id, trade_date),
+            ).fetchall()
+        finally:
+            conn.close()
+        return tuple(
+            self._row_to_publication(row, verify_artifact=True)
+            for row in rows
+        )
+
     def append_reconciliation(
         self,
         result: ReconciliationResult,
@@ -998,6 +1860,7 @@ class FactLake:
 
 
 __all__ = [
+    "CANONICAL_DIRECTORY_NAME",
     "CONTROL_DB_FILENAME",
     "RAW_DIRECTORY_NAME",
     "SCHEMA_VERSION",
@@ -1006,11 +1869,16 @@ __all__ = [
     "FactLakeError",
     "FactLakeHashMismatchError",
     "FactLakeNotInitializedError",
+    "FactLakeNormalizationConflictError",
     "FactLakeObservationConflictError",
     "FactLakePathError",
+    "FactLakePublicationConflictError",
     "FactLakeReadOnlyError",
     "FactLakeSchemaVersionError",
     "ObservationStoreResult",
+    "PublicationStageResult",
+    "StoredCanonicalPublication",
+    "StoredNormalization",
     "StoredObservation",
     "StoredReconciliation",
     "initialize_fact_lake",
