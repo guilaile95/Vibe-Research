@@ -272,6 +272,38 @@ def _journal_mode(path: str) -> str:
         conn.close()
 
 
+# ---- Migration-owned reserved scratch paths（backup / 任何公开操作均不得 alias）----
+RESERVED_SCRATCH_SUFFIXES = (
+    ".v2.candidate",
+    ".v2.candidate-wal",
+    ".v2.candidate-shm",
+    ".restore.candidate",
+    ".restore.candidate-wal",
+    ".restore.candidate-shm",
+    ".v2.recovery.candidate",
+    ".v2.recovery.candidate-wal",
+    ".v2.recovery.candidate-shm",
+)
+
+
+def _read_bytes(path: str) -> bytes | None:
+    """文件存在 → bytes；否则 None。"""
+    if not os.path.isfile(path):
+        return None
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def _sidecar_state(path: str) -> dict:
+    """source/backup 的 WAL/SHM 状态（存在性 + bytes）。"""
+    return {ext: _read_bytes(path + ext) for ext in ("-wal", "-shm")}
+
+
+def _scratch_inventory(db: str) -> dict:
+    """db 的全部 reserved scratch paths 状态（bytes 或 None）。"""
+    return {suffix: _read_bytes(db + suffix) for suffix in RESERVED_SCRATCH_SUFFIXES}
+
+
 def _db_state(path: str) -> dict:
     return {
         "hash": _file_hash(path),
@@ -389,26 +421,40 @@ def test_2_explicit_migration_cli(v1_db, env):
 # ---------------------------------------------------------------------------
 
 def test_3_backup_immutable_through_v2_lifecycle(v1_db, env):
-    """迁移后 backup hash 恒不变：v2 正常读写 + 完整 Formal lifecycle 之后仍不变。"""
+    """迁移后 backup hash 恒不变：v2 正常读写 + 完整 Formal lifecycle 之后仍不变。
+
+    P2-1：使用 checked API helpers（带状态断言）走 begin/confirm/freeze，且必须
+    断言 thesis 真 FROZEN（formal_state == frozen）后才声明 backup immutable。
+    """
     db, backup = v1_db.db, os.path.join(env.tmp, "backup_v1.db")
     cli_ok(run_cli(env, "migrate", "--db", db, "--backup", backup, "--apply"))
     backup_hash0 = _file_hash(backup)
 
     # v2 正常读写（读取 migrated data）
     assert _get(f"/api/thesis/{T1_ID}")["thesis"]["id"] == T1_ID
-    # Formal lifecycle（begin/update/confirm/freeze on migrated legacy thesis）
-    client.post(f"/api/thesis/{T1_ID}/begin-formalization")
-    _put(f"/api/thesis/{T1_ID}", {
+
+    # Formal lifecycle（checked helpers：每步断言状态机推进）
+    began = _post(f"/api/thesis/{T1_ID}/begin-formalization", {})
+    assert began["thesis"]["formal_state"] == "draft"
+    assert began["thesis"]["current_revision"] == 1  # begin NO bump
+    edited = _put(f"/api/thesis/{T1_ID}", {
         "title": "legacy-active", "summary": "s", "status": "active",
         "core_claims": ["c1", "c2", "c3"], "catalysts": ["cat-1"], "risks": ["risk-1"],
         "invalidation_conditions": ["inv-1"], "expected_revision": 1,
         "strategy": "SWING",
         "expected_horizon": {"unit": "TRADING_DAY", "min": 5, "max": 20, "anchor": "FREEZE_AT"},
     })
-    client.post(f"/api/thesis/{T1_ID}/confirm")
-    client.post(f"/api/thesis/{T1_ID}/freeze", json={"expected_revision": 2})
+    assert edited["thesis"]["current_revision"] == 2  # CONTENT bump
+    confirmed = _post(f"/api/thesis/{T1_ID}/confirm", {})
+    assert confirmed["thesis"]["formal_state"] == "confirmed"
+    assert confirmed["thesis"]["current_revision"] == 2  # confirm NO bump
+    frozen = _post(f"/api/thesis/{T1_ID}/freeze", {"expected_revision": 2})
+    # 真 FROZEN 确认后才可声明 backup immutable
+    assert frozen["thesis"]["formal_state"] == "frozen"
+    assert frozen["thesis"]["frozen_revision"] == 3
+    assert frozen["thesis"]["current_revision"] == 3
 
-    assert _file_hash(backup) == backup_hash0  # BACKUP IMMUTABILITY
+    assert _file_hash(backup) == backup_hash0  # BACKUP IMMUTABILITY（FROZEN 后）
 
 
 # ---------------------------------------------------------------------------
@@ -553,7 +599,7 @@ def test_7_explicit_rollback_round_trip(v1_db, env):
 
 
 # ---------------------------------------------------------------------------
-# 8. SCRATCH / BACKUP COLLISION（黑盒，reserved artifacts 预存在 → fail closed）
+# 8. SCRATCH / BACKUP COLLISION MATRIX（P1-1 黑盒，全部经 CLI public surface）
 # ---------------------------------------------------------------------------
 
 def _migrated_source(env) -> tuple[str, str]:
@@ -573,8 +619,65 @@ def test_8_backup_equals_source_fails_closed(v1_db, env):
     assert _db_state(db) == v1_db.before
 
 
+@pytest.mark.parametrize("reserved_suffix", RESERVED_SCRATCH_SUFFIXES)
+def test_8_backup_never_aliases_reserved_scratch_path(env, reserved_suffix):
+    """P1-1：--backup 不得 alias 任何 migration-owned reserved scratch path。
+
+    预放置 sentinel bytes 于目标 reserved path，然后以它为 backup 执行 migrate：
+    - 命令必须 fail closed（绝不 false backup success）；
+    - source 状态逐字节/结构不变；
+    - 预存在 sentinel artifact 完整保留；
+    - 无其他 scratch 被覆盖/删除。
+    """
+    db = os.path.join(env.tmp, f"alias_{reserved_suffix.replace('.', '_')}.db")
+    build_v1_db(Path(db))
+    backup = db + reserved_suffix
+    sentinel = b"SENTINEL-" + reserved_suffix.encode()
+    with open(backup, "wb") as fh:
+        fh.write(sentinel)
+
+    source_before = _db_state(db)
+    scratch_before = _scratch_inventory(db)
+    inventory_keys = [k for k in scratch_before if k != reserved_suffix]
+
+    proc = run_cli(env, "migrate", "--db", db, "--backup", backup, "--apply")
+    cli_fail(proc)
+
+    # source 状态不变（hash/size/master/meta/journal）
+    assert _db_state(db) == source_before
+    # 预存在 sentinel 完整保留
+    assert _read_bytes(backup) == sentinel, f"reserved artifact 被覆盖/删除: {reserved_suffix}"
+    # 无其他 scratch 被覆盖/删除
+    assert _scratch_inventory(db) == scratch_before
+    for key in inventory_keys:
+        assert _read_bytes(db + key) == scratch_before[key]
+
+
+@pytest.mark.parametrize("reserved_suffix", RESERVED_SCRATCH_SUFFIXES)
+def test_8_backup_never_aliases_reserved_scratch_path_clean(env, reserved_suffix):
+    """P1-1：reserved path 不存在时 --backup 指向它也必须 fail closed 且零残留。
+
+    防「检查路径是否预存在」被绕过：干净状态下 backup 指向 reserved path →
+    不得创建任何文件（绝不 false backup success）。
+    """
+    db = os.path.join(env.tmp, f"alias_clean_{reserved_suffix.replace('.', '_')}.db")
+    build_v1_db(Path(db))
+    backup = db + reserved_suffix
+    assert not os.path.exists(backup)
+
+    source_before = _db_state(db)
+    scratch_before = _scratch_inventory(db)
+
+    proc = run_cli(env, "migrate", "--db", db, "--backup", backup, "--apply")
+    cli_fail(proc)
+
+    assert _db_state(db) == source_before
+    assert not os.path.exists(backup), f"backup 在 reserved path 上被创建: {reserved_suffix}"
+    assert _scratch_inventory(db) == scratch_before
+
+
 def test_8_precreated_candidate_fails_closed_and_preserved(env):
-    """预创建 source.v2.candidate（含 bytes）→ migrate fail closed + bytes 保留。"""
+    """P1-1：预创建 source.v2.candidate（含 bytes）→ migrate fail closed + bytes 保留。"""
     db = os.path.join(env.tmp, "collision2.db")
     build_v1_db(Path(db))
     backup = os.path.join(env.tmp, "collision2_backup.db")
@@ -592,10 +695,10 @@ def test_8_precreated_candidate_fails_closed_and_preserved(env):
 
 
 def test_8_precreated_candidate_wal_shm_fails_closed(env):
-    """预创建 candidate-wal / candidate-shm → migrate 必须 fail closed 且 bytes 保留。
+    """P1-1：预创建 candidate-wal / candidate-shm → migrate 必须 fail closed 且 bytes 保留。
 
-    当前 base（ce66881）仅检查 candidate 本体，sidecar 预创建可能在构建流程中被
-    吸收或清理 → 预期为 RED，报告 KNOWN_DEPENDENCY_BLOCKER（RESERVED_SCRATCH_PATH_SAFETY）。
+    当前 base（ce66881）仅检查 candidate 本体，sidecar 预创建会被构建流程吸收 →
+    预期 RED（KNOWN_DEPENDENCY_BLOCKER: RESERVED_SCRATCH_PATH_SAFETY）。
     """
     db = os.path.join(env.tmp, "collision3.db")
     build_v1_db(Path(db))
@@ -607,15 +710,50 @@ def test_8_precreated_candidate_wal_shm_fails_closed(env):
         fh.write(wal_bytes)
     with open(shm, "wb") as fh:
         fh.write(shm_bytes)
+    source_before = _db_state(db)
 
     proc = run_cli(env, "migrate", "--db", db, "--backup", backup, "--apply")
     cli_fail(proc)
     assert os.path.isfile(wal) and open(wal, "rb").read() == wal_bytes, "预创建 candidate-wal 被删除/覆盖"
     assert os.path.isfile(shm) and open(shm, "rb").read() == shm_bytes, "预创建 candidate-shm 被删除/覆盖"
+    assert _db_state(db) == source_before
+    assert not os.path.exists(backup), "backup 不得被创建"
+
+
+@pytest.mark.parametrize("sidecar_suffix", [
+    ".restore.candidate-wal",
+    ".restore.candidate-shm",
+    ".v2.recovery.candidate-wal",
+    ".v2.recovery.candidate-shm",
+])
+def test_8_precreated_rollback_sidecar_fails_closed(env, sidecar_suffix):
+    """P1-1：rollback 时预存在 restore/recovery candidate 的 WAL/SHM sidecar
+    → fail closed + bytes 保留 + source 保持 v2 未回滚 + backup 保留。
+
+    当前 base（ce66881）对 restore.candidate-wal / recovery candidate-wal/-shm
+    预存在不检查（会被吸收/删除）→ 预期 RED（KNOWN_DEPENDENCY_BLOCKER）。
+    """
+    db, backup = _migrated_source(env)
+    sidecar = db + sidecar_suffix
+    sentinel = b"SENTINEL-" + sidecar_suffix.encode()
+    with open(sidecar, "wb") as fh:
+        fh.write(sentinel)
+    source_before = _db_state(db)
+    backup_hash0 = _file_hash(backup)
+
+    proc = run_cli(env, "rollback", "--db", db, "--backup", backup, "--apply")
+    cli_fail(proc)
+
+    assert _read_bytes(sidecar) == sentinel, f"预创建 sidecar 被删除/覆盖: {sidecar_suffix}"
+    assert _db_state(db) == source_before  # 未回滚（保持 v2）
+    assert _file_hash(backup) == backup_hash0  # backup 保留不变
+    # source 仍为合法 v2
+    inspect = cli_ok(run_cli(env, "inspect", "--db", db))
+    assert inspect["schema_version"] == store.SCHEMA_VERSION
 
 
 def test_8_precreated_recovery_candidate_fails_closed(env):
-    """预创建 source.v2.recovery.candidate → rollback fail closed + bytes 保留。"""
+    """P1-1：预创建 source.v2.recovery.candidate → rollback fail closed + bytes 保留。"""
     db, backup = _migrated_source(env)
     recovery = db + ".v2.recovery.candidate"
     sentinel = b"PRE-EXISTING-RECOVERY-BYTES"
@@ -631,7 +769,7 @@ def test_8_precreated_recovery_candidate_fails_closed(env):
 
 
 def test_8_precreated_restore_candidate_fails_closed(env):
-    """预创建 source.restore.candidate → rollback fail closed + bytes 保留。"""
+    """P1-1：预创建 source.restore.candidate → rollback fail closed + bytes 保留。"""
     db, backup = _migrated_source(env)
     restore = db + ".restore.candidate"
     sentinel = b"PRE-EXISTING-RESTORE-BYTES"
@@ -661,15 +799,35 @@ def test_9_migrate_no_apply_does_nothing(v1_db, env):
 
 
 def test_9_rollback_no_apply_does_nothing(v1_db, env):
-    """rollback 无 --apply → 非零 + source 不变。"""
+    """P1-2：rollback 无 --apply → 非零，且前后完整状态零差异。
+
+    捕获并对比：
+    - source hash/size/schema_meta/sqlite_master/journal_mode
+    - backup hash/size
+    - source/backup 的 WAL/SHM 存在性 + bytes
+    - reserved scratch inventory
+    """
     db, backup = v1_db.db, os.path.join(env.tmp, "backup_v1.db")
     cli_ok(run_cli(env, "migrate", "--db", db, "--backup", backup, "--apply"))
-    source_hash0 = _file_hash(db)
+
+    source_before = _db_state(db)
+    backup_before = _db_state(backup)
+    source_sidecars_before = _sidecar_state(db)
+    backup_sidecars_before = _sidecar_state(backup)
+    scratch_before = _scratch_inventory(db)
 
     proc = run_cli(env, "rollback", "--db", db, "--backup", backup)
     cli_fail(proc)
-    assert _file_hash(db) == source_hash0  # source 仍为 v2（未回滚）
-    assert _file_hash(backup) == _file_hash(backup)  # backup 保留
+
+    # source：hash/size/master/meta/journal 完全不变（仍为 v2，未回滚）
+    assert _db_state(db) == source_before
+    # backup：hash/size 完全不变
+    assert _db_state(backup) == backup_before
+    # source/backup WAL/SHM 存在性 + bytes 不变
+    assert _sidecar_state(db) == source_sidecars_before
+    assert _sidecar_state(backup) == backup_sidecars_before
+    # reserved scratch inventory 不变
+    assert _scratch_inventory(db) == scratch_before
 
 
 # ---------------------------------------------------------------------------
