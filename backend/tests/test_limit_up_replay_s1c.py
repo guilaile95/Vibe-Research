@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -16,13 +17,17 @@ import short_term_limit_up_pool_adapter as adapter
 from fact_lake_store import (
     CONTROL_DB_FILENAME,
     FactLakeCorruptedError,
+    SCHEMA_VERSION as FACT_LAKE_SCHEMA_VERSION,
     initialize_fact_lake,
+    open_existing_fact_lake,
 )
 
 
 TRADE_DATE = "2026-07-30"
 FETCHED_AT = "2026-07-30T08:00:00Z"
 CONTENT_TYPE = "application/json; charset=utf-8"
+NORMALIZER_V01 = "ds-limit-up-pool-normalizer-v0.1"
+NORMALIZER_V02 = "ds-limit-up-pool-normalizer-v0.2"
 
 
 def _raw(*, lbc: int = 2, marker: str = "base") -> bytes:
@@ -80,6 +85,19 @@ def _publication_rows(root: Path) -> int:
         return int(conn.execute("SELECT COUNT(*) FROM canonical_publications").fetchone()[0])
 
 
+def _tree_snapshot(root: Path) -> dict[str, tuple[str, int, int, str | None]]:
+    snapshot: dict[str, tuple[str, int, int, str | None]] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        stat = path.stat()
+        if path.is_file():
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            snapshot[relative] = ("file", stat.st_size, stat.st_mtime_ns, digest)
+        else:
+            snapshot[relative] = ("dir", 0, stat.st_mtime_ns, None)
+    return snapshot
+
+
 def test_absent_replay_is_pure_and_deterministic_for_one_hundred_runs(tmp_path: Path) -> None:
     lake = initialize_fact_lake(tmp_path / "lake")
     stored, _ = _committed(lake)
@@ -109,12 +127,116 @@ def test_explicit_persist_then_verify_match_and_publish(tmp_path: Path) -> None:
     verification = shadow.verify_normalization_replay(lake, observation_id)
     fact = shadow.build_canonical_fact(stored.observation, normalization)
     publication = shadow.publish_canonical_fact(lake, fact)
+    visible = shadow.query_limit_up_pool(lake, TRADE_DATE)
 
+    assert stored.observation.normalizer_version == NORMALIZER_V02
     assert verification.status == "MATCH"
     assert verification.replay.canonical_admissible is True
+    assert (
+        verification.replay.normalized_payload["normalizer_version"]
+        == NORMALIZER_V02
+    )
     assert verification.stored_normalization == normalization
+    assert normalization.normalizer_version == NORMALIZER_V02
+    assert (
+        normalization.normalized_payload["normalizer_version"]
+        == NORMALIZER_V02
+    )
+    assert fact.canonical_payload["normalizer_version"] == NORMALIZER_V02
+    assert fact.provenance_chain[0].normalizer_version == NORMALIZER_V02
     assert publication.commit_state == "COMMITTED"
     assert publication.vintage_sequence == 1
+    assert publication.normalizer_version == NORMALIZER_V02
+    assert visible[0]["normalizer_version"] == NORMALIZER_V02
+    assert visible[0]["canonical_payload"]["normalizer_version"] == NORMALIZER_V02
+    assert (
+        visible[0]["canonical_fact"]["provenance_chain"][0]["normalizer_version"]
+        == NORMALIZER_V02
+    )
+
+
+def test_committed_v01_observation_is_readable_but_replay_is_unsupported_and_pure(
+    tmp_path: Path,
+) -> None:
+    lake = initialize_fact_lake(tmp_path / "lake")
+    raw = _raw(marker="legacy-v0.1")
+    capture = _capture(raw)
+    snapshot = adapter.interpret_limit_up_pool_response_bytes(
+        raw,
+        requested_trade_date=TRADE_DATE,
+        http_status=200,
+        observed_at=FETCHED_AT,
+    )
+    current = shadow.build_provider_observation(capture, snapshot)
+    legacy = replace(current, normalizer_version=NORMALIZER_V01)
+    stored = lake.store_observation(legacy, raw, CONTENT_TYPE).stored
+    observation_id = stored.observation.observation_id
+
+    before = lake.get_observation(observation_id)
+    assert before == stored
+    assert before.observation.normalizer_version == NORMALIZER_V01
+    assert lake.read_payload(observation_id) == raw
+    tree_before = _tree_snapshot(lake.root)
+
+    with pytest.raises(shadow.LimitUpReplayUnsupportedError):
+        shadow.replay_normalization(lake, observation_id)
+    with pytest.raises(shadow.LimitUpReplayUnsupportedError):
+        shadow.verify_normalization_replay(lake, observation_id)
+    with pytest.raises(shadow.LimitUpReplayUnsupportedError):
+        shadow.persist_replayed_normalization(lake, observation_id)
+
+    assert _tree_snapshot(lake.root) == tree_before
+    db_path = lake.root / CONTROL_DB_FILENAME
+    assert not Path(f"{db_path}-wal").exists()
+    assert not Path(f"{db_path}-shm").exists()
+    assert lake.get_observation(observation_id) == before
+    assert lake.read_payload(observation_id) == raw
+    assert lake.get_normalization(observation_id) is None
+    assert _publication_rows(lake.root) == 0
+
+
+def test_committed_v01_publication_remains_queryable_without_replay_or_rewrite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "lake"
+    lake = initialize_fact_lake(root)
+    raw = _raw(marker="legacy-v0.1-publication")
+    capture = _capture(raw)
+    snapshot = adapter.interpret_limit_up_pool_response_bytes(
+        raw,
+        requested_trade_date=TRADE_DATE,
+        http_status=200,
+        observed_at=FETCHED_AT,
+    )
+
+    # Build one frozen pre-R1 publication through the accepted v0.1 contract.
+    with monkeypatch.context() as legacy_runtime:
+        legacy_runtime.setattr(shadow, "NORMALIZER_VERSION", NORMALIZER_V01)
+        stored = shadow.persist_raw_observation(lake, capture, snapshot)
+        normalization = shadow.persist_normalization(lake, stored, snapshot)
+        fact = shadow.build_canonical_fact(stored.observation, normalization)
+        publication = shadow.publish_canonical_fact(lake, fact)
+    artifact = lake.canonical_artifact_path(publication.artifact_relpath)
+    artifact_before = artifact.read_bytes()
+
+    # Current S1C-R1 can reopen and query committed history without replay.
+    assert shadow.NORMALIZER_VERSION == NORMALIZER_V02
+    reopened = open_existing_fact_lake(root)
+    visible = shadow.query_limit_up_pool(
+        reopened,
+        TRADE_DATE,
+        selection="publication",
+        publication_id=publication.publication_id,
+    )
+
+    assert len(visible) == 1
+    assert visible[0]["publication_id"] == publication.publication_id
+    assert visible[0]["normalizer_version"] == NORMALIZER_V01
+    assert lake.get_observation(stored.observation.observation_id) == stored
+    assert lake.get_normalization(stored.observation.observation_id) == normalization
+    assert artifact.read_bytes() == artifact_before
+    assert _publication_rows(lake.root) == 1
 
 
 def test_mismatched_stored_normalization_fails_without_mutating_history(tmp_path: Path) -> None:
@@ -217,7 +339,13 @@ def test_replay_is_identical_in_fresh_interpreter(tmp_path: Path) -> None:
 
 
 def test_normalizer_version_and_temporal_authorities_remain_unchanged() -> None:
-    assert shadow.NORMALIZER_VERSION == "ds-limit-up-pool-normalizer-v0.1"
+    assert shadow.NORMALIZER_VERSION == NORMALIZER_V02
+    assert shadow.DATASET_CONTRACT_REVISION == "ds-limit-up-pool-contract-v0.1"
+    assert shadow.LIMIT_UP_DATASET_SPEC.governance_revision_id == (
+        "ds-limit-up-pool-contract-v0.1"
+    )
+    assert shadow.ARTIFACT_SCHEMA_VERSION == "ds-limit-up-pool-parquet-v0.1"
+    assert FACT_LAKE_SCHEMA_VERSION == "fact_lake_control_v2"
     assert shadow.LIMIT_UP_DATASET_SPEC.point_in_time_supported is False
     assert shadow.LIMIT_UP_DATASET_SPEC.fetch_semantics.value == "by_date"
     assert shadow.LIMIT_UP_DATASET_SPEC.history_mode.value == "by_date"
