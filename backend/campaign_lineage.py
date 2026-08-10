@@ -52,7 +52,21 @@ CHILD_ALLOWED_STATUSES = ("DRAFT", "RESEARCHING", "PRE-ENTRY")
 _CAMPAIGN_ID_RE = re.compile(r"^campaign_[0-9a-f]{32}$")
 _SECURITY_CODE_RE = re.compile(r"^\d{6}$")
 _LINEAGE_ID_RE = re.compile(r"^lineage_[0-9a-f]{32}$")
+_TRANSITION_ID_RE = re.compile(r"^campaign_transition_[0-9a-f]{32}$")
 _REASON_MAX_LEN = 200
+
+# Campaign 生命周期 transition graph（契约复制自 campaign_store 冻结 graph；
+# 纯模块不依赖 store；parity 测试对照权威源检测漂移）
+TRANSITION_GRAPH: dict[str, tuple[str, ...]] = {
+    "DRAFT": ("RESEARCHING", "REJECTED", "EXPIRED"),
+    "RESEARCHING": ("PRE-ENTRY", "REJECTED", "EXPIRED"),
+    "PRE-ENTRY": ("ACTIVE", "REJECTED", "EXPIRED"),
+    "ACTIVE": ("REDUCING", "CLOSED"),
+    "REDUCING": ("CLOSED",),
+    "CLOSED": (),
+    "REJECTED": (),
+    "EXPIRED": (),
+}
 
 # 受保护语义字段：任一改变 → lineage_hash 必须改变。
 # lineage_id / created_at 有意排除在 hash 之外（审计/记录元数据，非语义）。
@@ -107,8 +121,22 @@ def _parse_utc(value: str) -> datetime:
 
 
 def _canonical_utc(value: str) -> str:
-    """归一化为 UTC 的确定性格式（用于存储与 hash）。"""
-    return _parse_utc(value).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    """归一化为 canonical UTC 微秒形式（`YYYY-MM-DDTHH:MM:SS.ffffffZ`）。
+
+    对齐 Campaign Core 的 ``_TIMESTAMP_RE``（``\\.[0-9]{6}Z``）：保留源 instant
+    的微秒精度，不截断到毫秒。
+    """
+    return _parse_utc(value).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
+def _is_canonical_utc(value: str) -> bool:
+    """value 是否已是 canonical UTC 微秒表示（拒绝非 canonical 文本后静默归一化）。"""
+    if not isinstance(value, str):
+        return False
+    try:
+        return _canonical_utc(value) == value
+    except LineageValidationError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +234,8 @@ class CampaignLineageRecord:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "CampaignLineageRecord":
-        """反序列化；未知额外字段 / 缺受保护字段 / hash 漂移 / schema 漂移 → fail closed。"""
+        """反序列化（严格）：未知/缺字段、schema 漂移、类型不符、非 canonical
+        时间、hash 漂移 → fail closed。不做任何 silent 类型归一化。"""
         if not isinstance(data, Mapping):
             raise LineageValidationError("lineage 记录必须是 Mapping")
         allowed = _RECORD_FIELDS
@@ -220,20 +249,32 @@ class CampaignLineageRecord:
             raise LineageValidationError(
                 f"schema_version 漂移: got {data.get('schema_version')!r}, expect {SCHEMA_VERSION}"
             )
+        # P1-D：先要求精确类型（全部文本字段必须已是 str），再要求 canonical UTC 时间
+        for field_name in _TEXT_FIELDS:
+            value = data[field_name]
+            if not isinstance(value, str):
+                raise LineageValidationError(
+                    f"lineage 记录 {field_name} 必须是 str，got {type(value).__name__}（拒绝类型归一化）"
+                )
+        for field_name in _CANONICAL_UTC_FIELDS:
+            if not _is_canonical_utc(data[field_name]):
+                raise LineageValidationError(
+                    f"lineage 记录 {field_name} 必须是 canonical UTC 微秒形式（拒绝非 canonical 文本）"
+                )
         record = cls(
-            lineage_id=str(data["lineage_id"]),
-            relation_type=str(data["relation_type"]),
-            parent_campaign_id=str(data["parent_campaign_id"]),
-            child_campaign_id=str(data["child_campaign_id"]),
-            security_code=str(data["security_code"]),
-            parent_strategy=str(data["parent_strategy"]),
-            child_strategy=str(data["child_strategy"]),
-            parent_closed_at=str(data["parent_closed_at"]),
-            child_created_at=str(data["child_created_at"]),
-            reason=str(data["reason"]),
-            created_at=str(data["created_at"]),
-            schema_version=str(data["schema_version"]),
-            lineage_hash=str(data["lineage_hash"]),
+            lineage_id=data["lineage_id"],
+            relation_type=data["relation_type"],
+            parent_campaign_id=data["parent_campaign_id"],
+            child_campaign_id=data["child_campaign_id"],
+            security_code=data["security_code"],
+            parent_strategy=data["parent_strategy"],
+            child_strategy=data["child_strategy"],
+            parent_closed_at=data["parent_closed_at"],
+            child_created_at=data["child_created_at"],
+            reason=data["reason"],
+            created_at=data["created_at"],
+            schema_version=data["schema_version"],
+            lineage_hash=data["lineage_hash"],
         )
         # 先验证语义合法性，再验证 hash（防漂移）
         _validate_record_semantics(record)
@@ -255,6 +296,14 @@ class CampaignLineageRecord:
 
 
 _RECORD_FIELDS = frozenset(CampaignLineageRecord.__dataclass_fields__)
+
+# P1-D：from_dict 严格解码所需的文本字段 / canonical UTC 时间字段
+_TEXT_FIELDS = (
+    "lineage_id", "relation_type", "parent_campaign_id", "child_campaign_id",
+    "security_code", "parent_strategy", "child_strategy", "parent_closed_at",
+    "child_created_at", "reason", "created_at", "schema_version", "lineage_hash",
+)
+_CANONICAL_UTC_FIELDS = ("parent_closed_at", "child_created_at", "created_at")
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +394,7 @@ def build_lineage_record(
     created_at: str,
     relation_type: str = RELATION_RE_ENTRY,
     lineage_id: str | None = None,
+    parent_transitions: list[Mapping[str, Any]] | None = None,
 ) -> CampaignLineageRecord:
     """构建一个 immutable lineage 记录（纯函数；id/时间显式传入或注入）。
 
@@ -353,6 +403,13 @@ def build_lineage_record(
     - security_code 三方（parent/child/record）精确 6 位一致；
     - 时间序 parent_closed_at < child_created_at（严格）；
     - Strategy 各自独立存储，互不修改（父策略永不因 re-entry 改变）。
+
+    ``parent_closed_at`` 两种来源（二选一，均显式）：
+    1. 提供 ``parent_transitions``（父 Campaign 的完整 transition 历史）→ close
+       锚点必须由 ``derive_parent_closed_at`` 推导并与之相等，绝不信任任意调用方
+       提供的 close 时间戳；
+    2. 不提供 ``parent_transitions`` → 使用显式 ``parent_closed_at``（调用方无
+       历史可用时的最小路径；文档已标注该区分）。
     """
     validate_campaign_snapshot(parent_campaign)
     validate_campaign_snapshot(child_campaign)
@@ -378,8 +435,21 @@ def build_lineage_record(
     parent_strategy = _validate_strategy(parent_campaign["strategy"], "parent_strategy")
     child_strategy = _validate_strategy(child_campaign["strategy"], "child_strategy")
     reason_ok = _validate_reason(reason)
-    # 显式时间校验（严格序），并规范化 UTC
-    parent_close = _canonical_utc(parent_closed_at)
+    # close 时间：提供完整 transition 历史时必须由历史推导（绑定 parent 身份），
+    # 且与调用方提供的 close 时间戳必须一致（不信任未经验证的时间）。
+    if parent_transitions is not None:
+        derived_close = derive_parent_closed_at(parent_id, parent_transitions)
+        if derived_close is None:
+            raise LineageValidationError(
+                "parent transition 历史无法推导合法 CLOSED 锚点（fail closed）"
+            )
+        if _canonical_utc(parent_closed_at) != derived_close:
+            raise LineageValidationError(
+                "parent_closed_at 与 transition 历史推导的 CLOSED 锚点不一致（拒绝未验证时间）"
+            )
+        parent_close = derived_close
+    else:
+        parent_close = _canonical_utc(parent_closed_at)
     child_create = _canonical_utc(child_campaign["created_at"])
     if _parse_utc(parent_close) >= _parse_utc(child_create):
         raise LineageValidationError("parent_closed_at 必须早于 child_created_at（时间倒转）")
@@ -420,57 +490,66 @@ def build_lineage_record(
 # 父 CLOSED 时间推导（来自 transition 历史，纯函数）
 # ---------------------------------------------------------------------------
 
-def derive_parent_closed_at(transitions: list[Mapping[str, Any]]) -> str | None:
-    """从现有 Campaign transition 历史推导父 CLOSED 时间锚点。
+def derive_parent_closed_at(
+    parent_campaign_id: str,
+    transitions: list[Mapping[str, Any]],
+) -> str | None:
+    """从给定 Campaign 自身的 transition 历史推导 CLOSED 时间锚点（显式绑定身份）。
 
-    - 返回使状态最终到达 CLOSED 的**最后一条** transition 的 transitioned_at
-      （canonical UTC）；
+    - 每条 transition 必须：``campaign_id == parent_campaign_id``（不接受其它
+      Campaign 的历史）、``transition_id`` 为 canonical 形状且集合内唯一；
+    - 排序确定性：``(transitioned_at, transition_id)`` 升序，**不依赖输入列表顺序**；
+    - 返回使状态最终到达 CLOSED 的最后一条 transition 的 transitioned_at
+      （canonical UTC 微秒）；
     - 任何 transition 非法 / 不是合法推进 / 最终态不是 CLOSED → None（fail
       closed：不信任任意调用方提供的 closed 时间戳）；
     - 不修改输入 transition 列表。
     """
+    _validate_campaign_id(parent_campaign_id, "parent_campaign_id")
     if not isinstance(transitions, list):
         return None
-    # 按 transitioned_at 升序（deterministic；显式 timestamp，非当前时间）
-    ordered: list[tuple[datetime, dict]] = []
-    for index, t in enumerate(transitions):
+    entries: list[tuple[datetime, str, str, str, str]] = []  # (time, tid, from, to, at)
+    seen_ids: set[str] = set()
+    for t in transitions:
         if not isinstance(t, Mapping):
             return None
         try:
+            tid = t["transition_id"]
+            cid = t["campaign_id"]
             from_status = t["from_status"]
             to_status = t["to_status"]
-            transitioned = _canonical_utc(t["transitioned_at"])
-        except (KeyError, TypeError, LineageValidationError):
+            transitioned = t["transitioned_at"]
+        except (KeyError, TypeError):
             return None
+        if not isinstance(tid, str) or not _TRANSITION_ID_RE.fullmatch(tid):
+            return None
+        if tid in seen_ids:
+            return None  # transition_id 重复 → 历史不合法
+        seen_ids.add(tid)
+        if cid != parent_campaign_id:
+            return None  # 不是本 Campaign 的 transition
         if from_status not in STATUSES or to_status not in STATUSES:
             return None
-        ordered.append((_parse_utc(transitioned), {"from": from_status, "to": to_status,
-                                                   "at": transitioned}))
-    ordered.sort(key=lambda pair: pair[0])
-    if not ordered:
+        try:
+            at = _canonical_utc(transitioned)
+        except (TypeError, LineageValidationError):
+            return None
+        entries.append((_parse_utc(at), tid, from_status, to_status, at))
+    if not entries:
         return None
-    # 模拟合法推进：仅接受 graph 允许的边（与 campaign_store 冻结 graph 一致）
-    allowed: dict[str, tuple[str, ...]] = {
-        "DRAFT": ("RESEARCHING", "REJECTED", "EXPIRED"),
-        "RESEARCHING": ("PRE-ENTRY", "REJECTED", "EXPIRED"),
-        "PRE-ENTRY": ("ACTIVE", "REJECTED", "EXPIRED"),
-        "ACTIVE": ("REDUCING", "CLOSED"),
-        "REDUCING": ("CLOSED",),
-        "CLOSED": (),
-        "REJECTED": (),
-        "EXPIRED": (),
-    }
+    entries.sort(key=lambda pair: (pair[0], pair[1]))  # (transitioned_at, transition_id)
     current: str | None = None
     final_at: str | None = None
-    for _, step in ordered:
+    for _, _tid, from_status, to_status, at in entries:
         if current is None:
-            current = step["from"]
-        if step["from"] != current:
+            current = from_status
+        if from_status != current:
             return None  # 非连续推进 → 历史不合法
-        if step["to"] not in allowed.get(current, ()):
+        if to_status not in TRANSITION_GRAPH.get(current, ()):
             return None  # graph 不允许的边
-        current = step["to"]
-        final_at = step["at"] if current == "CLOSED" else final_at
+        current = to_status
+        if current == "CLOSED":
+            final_at = at
     if current != "CLOSED" or final_at is None:
         return None
     return final_at
@@ -483,8 +562,8 @@ def derive_parent_closed_at(transitions: list[Mapping[str, Any]]) -> str | None:
 def validate_lineage_set(records: list[CampaignLineageRecord]) -> list[CampaignLineageRecord]:
     """校验一个 lineage 记录集合（纯函数，不修改输入）。
 
-    拒绝：自环、重复冲突边、环、child 多父、security 跨链不一致、时间倒转、
-    非法 ID、非法 Strategy、未知 relation、hash 漂移。
+    拒绝：自环、重复冲突边、环、child 多父、security 跨链不一致、strategy 跨链
+    不一致、时间倒转、非法 ID、非法 Strategy、未知 relation、hash 漂移。
     返回原顺序列表（验证通过时）；异常一律 LineageIntegrityError / LineageValidationError。
     """
     if not isinstance(records, list):
@@ -492,6 +571,7 @@ def validate_lineage_set(records: list[CampaignLineageRecord]) -> list[CampaignL
     # 1. 每条记录语义 + hash（from_dict 已覆盖，此处双保险）
     by_parent_child: dict[tuple[str, str], CampaignLineageRecord] = {}
     security_by_campaign: dict[str, str] = {}
+    strategy_by_campaign: dict[str, str] = {}  # P1-A：一个 campaign_id 只能映射一个 Strategy
     for record in records:
         if not isinstance(record, CampaignLineageRecord):
             raise LineageValidationError("records 元素必须是 CampaignLineageRecord")
@@ -522,6 +602,15 @@ def validate_lineage_set(records: list[CampaignLineageRecord]) -> list[CampaignL
             if cid in security_by_campaign and security_by_campaign[cid] != code:
                 raise LineageIntegrityError(f"跨链 security 不一致: {cid}")
             security_by_campaign[cid] = code
+        # P1-A：strategy 跨链一致（同一 campaign_id 在整条链中只能有一个 Strategy）
+        for cid, strat in ((record.parent_campaign_id, record.parent_strategy),
+                           (record.child_campaign_id, record.child_strategy)):
+            if cid in strategy_by_campaign and strategy_by_campaign[cid] != strat:
+                raise LineageIntegrityError(
+                    f"跨链 strategy 不一致（campaign 只能有一个 Strategy）: {cid} "
+                    f"{strategy_by_campaign[cid]} vs {strat}"
+                )
+            strategy_by_campaign[cid] = strat
     # 2. child 单父（至多一个直接 RE_ENTRY parent）
     child_parents: dict[str, str] = {}
     for record in records:
@@ -558,8 +647,12 @@ def _assert_acyclic(records: list[CampaignLineageRecord]) -> None:
 
 
 def ancestors(campaign_id: str, records: list[CampaignLineageRecord]) -> list[CampaignLineageRecord]:
-    """确定性祖先投影：从给定 campaign 沿 RE_ENTRY 父链回溯，按时间序（旧→新）返回。"""
+    """确定性祖先投影：从给定 campaign 沿 RE_ENTRY 父链回溯，按时间序（旧→新）返回。
+
+    P1-B：投影入口先 ``validate_lineage_set(records)`` —— 不投影未校验的 lineage
+    （不依赖调用方记得先校验）。"""
     _validate_campaign_id(campaign_id, "campaign_id")
+    validate_lineage_set(records)  # 入口预校验：multi-parent / hash 漂移 / 环 / 跨链不一致 → fail closed
     parent_of: dict[str, str] = {}
     for record in records:
         parent_of[record.child_campaign_id] = record.parent_campaign_id
@@ -583,8 +676,11 @@ def ancestors(campaign_id: str, records: list[CampaignLineageRecord]) -> list[Ca
 
 
 def descendants(campaign_id: str, records: list[CampaignLineageRecord]) -> list[CampaignLineageRecord]:
-    """确定性后代投影：从给定 campaign 沿 RE_ENTRY 子链下行（无自动创建/无 transition）。"""
+    """确定性后代投影：从给定 campaign 沿 RE_ENTRY 子链下行（无自动创建/无 transition）。
+
+    P1-B：投影入口先 ``validate_lineage_set(records)`` —— 不投影未校验的 lineage。"""
     _validate_campaign_id(campaign_id, "campaign_id")
+    validate_lineage_set(records)  # 入口预校验
     children_of: dict[str, list[CampaignLineageRecord]] = {}
     for record in records:
         children_of.setdefault(record.parent_campaign_id, []).append(record)

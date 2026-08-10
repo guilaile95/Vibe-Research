@@ -1,7 +1,9 @@
 """Campaign Re-entry Lineage Domain Core v0.1 专项测试。
 
 覆盖工作单 §30 测试矩阵 + §19 hash 契约 + §28 序列化 + §27 fail-closed +
-§29 纯性（零 filesystem 副作用、不 import store/service/router）。
+§29 纯性 + R1 独立审查 P1-A/B/C/D（strategy 链级一致 / 投影预校验 /
+transition 身份绑定 / 严格 from_dict）+ 时间微秒精度 + builder history 路径 +
+Campaign 契约 parity。
 全部纯函数调用：不联网、不落库、不读时钟、不写用户数据。
 """
 from __future__ import annotations
@@ -31,12 +33,14 @@ from campaign_lineage import (
 PID_A = "campaign_" + "a" * 32
 PID_B = "campaign_" + "b" * 32
 PID_C = "campaign_" + "c" * 32
+PID_D = "campaign_" + "d" * 32
 CODE = "600519"
-T0 = "2026-07-01T00:00:00.000Z"
-T1 = "2026-07-02T00:00:00.000Z"
-T2 = "2026-07-03T00:00:00.000Z"
-T3 = "2026-07-04T00:00:00.000Z"
-CREATED = "2026-07-05T00:00:00.000Z"
+# canonical UTC 微秒（对齐 Campaign Core `_TIMESTAMP_RE` 的 6 位精度）
+T0 = "2026-07-01T00:00:00.000000Z"
+T1 = "2026-07-02T00:00:00.000000Z"
+T2 = "2026-07-03T00:00:00.000000Z"
+T3 = "2026-07-04T00:00:00.000000Z"
+CREATED = "2026-07-05T00:00:00.000000Z"
 
 
 def _campaign(cid: str, status: str, strategy: str = "SHORT", code: str = CODE,
@@ -50,8 +54,9 @@ def _campaign(cid: str, status: str, strategy: str = "SHORT", code: str = CODE,
     }
 
 
-def _closed_short_parent(cid: str = PID_A, created: str = T0, code: str = CODE) -> dict:
-    return _campaign(cid, "CLOSED", "SHORT", code, created)
+def _closed_short_parent(cid: str = PID_A, created: str = T0, code: str = CODE,
+                         strategy: str = "SHORT") -> dict:
+    return _campaign(cid, "CLOSED", strategy, code, created)
 
 
 def _draft_child(cid: str = PID_B, strategy: str = "SHORT", created: str = T2,
@@ -286,8 +291,8 @@ def test_from_dict_rejects_unknown_and_missing_fields():
 # §15 父 CLOSED 时间推导（transition 历史）
 # ---------------------------------------------------------------------------
 
-def _transitions(*steps: tuple[str, str, str]) -> list[dict]:
-    return [{"transition_id": f"campaign_transition_{i:032x}", "campaign_id": PID_A,
+def _transitions(*steps: tuple[str, str, str], campaign_id: str = PID_A) -> list[dict]:
+    return [{"transition_id": f"campaign_transition_{i:032x}", "campaign_id": campaign_id,
              "from_status": frm, "to_status": to, "transitioned_at": at}
             for i, (frm, to, at) in enumerate(steps)]
 
@@ -296,26 +301,26 @@ def test_derive_parent_closed_at_from_history():
     history = _transitions(("DRAFT", "RESEARCHING", T0), ("RESEARCHING", "PRE-ENTRY", T0),
                            ("PRE-ENTRY", "ACTIVE", T1), ("ACTIVE", "REDUCING", T1),
                            ("REDUCING", "CLOSED", T1))
-    assert derive_parent_closed_at(history) == T1
+    assert derive_parent_closed_at(PID_A, history) == T1
 
 
 def test_derive_parent_closed_at_not_closed_returns_none():
     history = _transitions(("DRAFT", "RESEARCHING", T0), ("RESEARCHING", "PRE-ENTRY", T0))
-    assert derive_parent_closed_at(history) is None  # 未到 CLOSED → fail closed
+    assert derive_parent_closed_at(PID_A, history) is None  # 未到 CLOSED → fail closed
 
 
 def test_derive_parent_closed_at_rejected_expired_returns_none():
     history = _transitions(("DRAFT", "REJECTED", T0))
-    assert derive_parent_closed_at(history) is None
+    assert derive_parent_closed_at(PID_A, history) is None
 
 
 def test_derive_parent_closed_at_invalid_history_returns_none():
     # 非法推进（DRAFT→CLOSED 不在 graph）
     history = _transitions(("DRAFT", "CLOSED", T0))
-    assert derive_parent_closed_at(history) is None
+    assert derive_parent_closed_at(PID_A, history) is None
     # 非连续推进
     history2 = _transitions(("DRAFT", "RESEARCHING", T0), ("ACTIVE", "CLOSED", T1))
-    assert derive_parent_closed_at(history2) is None
+    assert derive_parent_closed_at(PID_A, history2) is None
 
 
 def test_derive_parent_closed_at_input_not_mutated():
@@ -323,8 +328,64 @@ def test_derive_parent_closed_at_input_not_mutated():
                            ("PRE-ENTRY", "ACTIVE", T1), ("ACTIVE", "REDUCING", T1),
                            ("REDUCING", "CLOSED", T1))
     before = [dict(t) for t in history]
-    derive_parent_closed_at(history)
+    derive_parent_closed_at(PID_A, history)
     assert history == before  # 输入不可变
+
+
+# ---------------------------------------------------------------------------
+# P1-C：derive 绑定 parent 身份 + transition_id 校验 + (time, id) 确定性排序
+# ---------------------------------------------------------------------------
+
+def test_derive_wrong_campaign_id_rejected():
+    history = _transitions(("DRAFT", "RESEARCHING", T0), ("RESEARCHING", "PRE-ENTRY", T0),
+                           ("PRE-ENTRY", "ACTIVE", T1), ("ACTIVE", "REDUCING", T1),
+                           ("REDUCING", "CLOSED", T1), campaign_id=PID_B)  # 别的 Campaign
+    assert derive_parent_closed_at(PID_A, history) is None
+
+
+def test_derive_mixed_campaign_ids_rejected():
+    history = _transitions(("DRAFT", "RESEARCHING", T0), ("RESEARCHING", "PRE-ENTRY", T0),
+                           ("PRE-ENTRY", "ACTIVE", T1), ("ACTIVE", "REDUCING", T1),
+                           ("REDUCING", "CLOSED", T1))
+    history[2]["campaign_id"] = PID_B  # 混入其它 Campaign 的 transition
+    assert derive_parent_closed_at(PID_A, history) is None
+
+
+def test_derive_duplicate_transition_id_rejected():
+    history = _transitions(("DRAFT", "RESEARCHING", T0), ("RESEARCHING", "PRE-ENTRY", T0),
+                           ("PRE-ENTRY", "ACTIVE", T1), ("ACTIVE", "REDUCING", T1),
+                           ("REDUCING", "CLOSED", T1))
+    history[1]["transition_id"] = history[0]["transition_id"]  # 重复 id
+    assert derive_parent_closed_at(PID_A, history) is None
+
+
+def test_derive_invalid_transition_id_shape_rejected():
+    history = _transitions(("DRAFT", "RESEARCHING", T0), ("RESEARCHING", "PRE-ENTRY", T0),
+                           ("PRE-ENTRY", "ACTIVE", T1), ("ACTIVE", "REDUCING", T1),
+                           ("REDUCING", "CLOSED", T1))
+    history[0]["transition_id"] = "not-canonical"
+    assert derive_parent_closed_at(PID_A, history) is None
+
+
+def test_derive_equal_timestamps_shuffled_input_identical():
+    """同 transitioned_at、不同 transition_id：按 (time, id) 确定性排序，输入顺序无关。
+
+    transition_id 字典序 = 合法推进顺序（id0..id4）；输入乱序后结果必须一致。
+    """
+    close_t = "2026-07-02T10:00:00.000000Z"
+    steps = [
+        ("DRAFT", "RESEARCHING", "2026-07-01T09:00:00.000000Z", "campaign_transition_" + "0" * 31 + "0"),
+        ("RESEARCHING", "PRE-ENTRY", close_t, "campaign_transition_" + "0" * 31 + "1"),
+        ("PRE-ENTRY", "ACTIVE", close_t, "campaign_transition_" + "0" * 31 + "2"),
+        ("ACTIVE", "REDUCING", close_t, "campaign_transition_" + "0" * 31 + "3"),
+        ("REDUCING", "CLOSED", close_t, "campaign_transition_" + "0" * 31 + "4"),
+    ]
+    ordered = [{"transition_id": tid, "campaign_id": PID_A, "from_status": frm,
+                "to_status": to, "transitioned_at": at} for frm, to, at, tid in steps]
+    shuffled = list(reversed([dict(t) for t in ordered]))
+    assert derive_parent_closed_at(PID_A, ordered) == close_t
+    assert derive_parent_closed_at(PID_A, shuffled) == close_t  # 顺序无关
+    assert derive_parent_closed_at(PID_A, ordered) == derive_parent_closed_at(PID_A, shuffled)
 
 
 # ---------------------------------------------------------------------------
@@ -518,3 +579,219 @@ def test_no_mutation_of_inputs():
     before_c = dict(child)
     _make(parent=parent, child=child)
     assert parent == before_p and child == before_c
+
+
+# ---------------------------------------------------------------------------
+# P1-A：strategy 链级一致性（一个 campaign_id 只能映射一个 Strategy）
+# ---------------------------------------------------------------------------
+
+def test_strategy_chain_child_flip_rejected():
+    """A SHORT→B MEDIUM 且 B SHORT→C SHORT：B 从 MEDIUM 变 SHORT → 拒绝。"""
+    r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
+                 child=_draft_child(PID_B, strategy="SHORT", created=T2), closed_at=T1)
+    r_bc = _make(parent=_closed_short_parent(PID_B, strategy="MEDIUM", created=T1),
+                 child=_draft_child(PID_C, created=T3), closed_at=T2)
+    # B 在 r_ab 中=SHORT，在 r_bc 中=MEDIUM → 链级 strategy 冲突
+    with pytest.raises(LineageIntegrityError):
+        validate_lineage_set([r_ab, r_bc])
+
+
+def test_strategy_chain_parent_flip_rejected():
+    """A SHORT→B 且 A MEDIUM→C：A 不能有两个 Strategy → 拒绝。"""
+    r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
+                 child=_draft_child(PID_B, created=T2), closed_at=T1)
+    r_ac = _make(parent=_closed_short_parent(PID_A, strategy="MEDIUM", created=T0),
+                 child=_draft_child(PID_C, created=T3), closed_at=T1, reason="另一轮")
+    with pytest.raises(LineageIntegrityError):
+        validate_lineage_set([r_ab, r_ac])
+
+
+def test_strategy_chain_consistent_across_edges_valid():
+    """A SHORT→B MEDIUM、B MEDIUM→C SHORT：各 campaign 单一 Strategy → 合法。"""
+    r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
+                 child=_draft_child(PID_B, strategy="MEDIUM", created=T2), closed_at=T1)
+    r_bc = _make(parent=_closed_short_parent(PID_B, strategy="MEDIUM", created=T1),
+                 child=_draft_child(PID_C, strategy="SHORT", created=T3), closed_at=T2)
+    validate_lineage_set([r_ab, r_bc])  # 合法：A 恒 SHORT，B 恒 MEDIUM，C 恒 SHORT
+
+
+# ---------------------------------------------------------------------------
+# P1-B：投影入口预校验（不投影未验证 lineage）
+# ---------------------------------------------------------------------------
+
+def test_projection_rejects_multi_parent():
+    r_ac = _make(parent=_closed_short_parent(PID_A, created=T0),
+                 child=_draft_child(PID_C, created=T2), closed_at=T1)
+    r_bc = _make(parent=_closed_short_parent(PID_B, created=T0),
+                 child=_draft_child(PID_C, created=T2), closed_at=T1, reason="另一父")
+    with pytest.raises(LineageIntegrityError):
+        ancestors(PID_C, [r_ac, r_bc])
+
+
+def test_projection_rejects_multi_parent_reversed_order():
+    r_ac = _make(parent=_closed_short_parent(PID_A, created=T0),
+                 child=_draft_child(PID_C, created=T2), closed_at=T1)
+    r_bc = _make(parent=_closed_short_parent(PID_B, created=T0),
+                 child=_draft_child(PID_C, created=T2), closed_at=T1, reason="另一父")
+    with pytest.raises(LineageIntegrityError):
+        ancestors(PID_C, [r_bc, r_ac])  # 反序同样拒绝
+
+
+def test_projection_rejects_hash_tamper():
+    from dataclasses import replace
+    record = _make()
+    tampered = replace(record, lineage_hash="0" * 64)  # 构造 hash 漂移记录（跳过 from_dict）
+    with pytest.raises(LineageIntegrityError):
+        ancestors(PID_B, [tampered])  # projection 入口预校验检测 hash 漂移
+
+
+def test_projection_rejects_cross_security_inconsistent():
+    r_ab = _make(parent=_closed_short_parent(PID_A, created=T0, code="600519"),
+                 child=_draft_child(PID_B, created=T2, code="600519"), closed_at=T1)
+    r_bc = _make(parent=_closed_short_parent(PID_B, created=T1, code="000001"),
+                 child=_draft_child(PID_C, created=T3, code="000001"), closed_at=T2,
+                 reason="错 security")
+    with pytest.raises(LineageIntegrityError):
+        ancestors(PID_C, [r_ab, r_bc])
+
+
+def test_projection_rejects_cycle():
+    r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
+                 child=_draft_child(PID_B, created=T2), closed_at=T1)
+    r_ba = _make(parent=_closed_short_parent(PID_B, created=T2),
+                 child=_draft_child(PID_A, created=T3), closed_at=T2, reason="反向")
+    with pytest.raises(LineageIntegrityError):
+        ancestors(PID_B, [r_ab, r_ba])
+
+
+def test_projection_valid_shuffled_identical():
+    r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
+                 child=_draft_child(PID_B, created=T2), closed_at=T1)
+    r_bc = _make(parent=_closed_short_parent(PID_B, created=T1),
+                 child=_draft_child(PID_C, created=T3), closed_at=T2)
+    assert [r.lineage_id for r in ancestors(PID_C, [r_ab, r_bc])] == \
+           [r.lineage_id for r in ancestors(PID_C, [r_bc, r_ab])]
+    assert [r.lineage_id for r in descendants(PID_A, [r_ab, r_bc])] == \
+           [r.lineage_id for r in descendants(PID_A, [r_bc, r_ab])]
+
+
+# ---------------------------------------------------------------------------
+# Temporal precision：canonical UTC 保留微秒，同毫秒内可区分
+# ---------------------------------------------------------------------------
+
+def test_canonical_utc_preserves_microseconds():
+    close = "2026-07-02T10:00:00.123456Z"
+    child = _draft_child(PID_B, created="2026-07-02T10:00:00.200000Z")
+    record = _make(child=child, closed_at=close)
+    assert record.parent_closed_at == "2026-07-02T10:00:00.123456Z"  # 不截断毫秒
+
+
+def test_same_millisecond_different_microseconds_ordering_valid():
+    """parent close 与 child create 同毫秒但微秒不同 → 仍可区分严格序。"""
+    close = "2026-07-02T10:00:00.123456Z"
+    child = _draft_child(PID_B, created="2026-07-02T10:00:00.123999Z")  # 同毫秒，晚 543μs
+    record = _make(child=child, closed_at=close)
+    assert record.parent_closed_at == close
+    assert record.child_created_at == "2026-07-02T10:00:00.123999Z"
+    assert cl._parse_utc(record.parent_closed_at) < cl._parse_utc(record.child_created_at)
+
+
+def test_from_dict_rejects_millisecond_only_timestamps():
+    record = _make().to_dict()
+    record["parent_closed_at"] = "2026-07-02T00:00:00.000Z"  # 3 位毫秒（非 canonical 6 位）
+    with pytest.raises(LineageValidationError):
+        CampaignLineageRecord.from_dict(record)
+
+
+# ---------------------------------------------------------------------------
+# P1-D：from_dict 严格类型（拒绝 silent 归一化）
+# ---------------------------------------------------------------------------
+
+def test_from_dict_rejects_non_str_fields():
+    record = _make().to_dict()
+    for key, bad in (("security_code", 600519), ("reason", 123), ("parent_strategy", True),
+                     ("lineage_id", b"lineage_bytes"), ("child_created_at", 1750000000000)):
+        mutated = dict(record)
+        mutated[key] = bad
+        with pytest.raises(LineageValidationError):
+            CampaignLineageRecord.from_dict(mutated)
+
+
+def test_from_dict_rejects_noncanonical_timestamp_text():
+    record = _make().to_dict()
+    record["child_created_at"] = "2026-07-03T00:00:00+00:00"  # 合法 ISO 但非 canonical 形式
+    with pytest.raises(LineageValidationError):
+        CampaignLineageRecord.from_dict(record)
+
+
+# ---------------------------------------------------------------------------
+# Builder + transition history 绑定
+# ---------------------------------------------------------------------------
+
+def test_builder_with_matching_transition_history_ok():
+    history = _transitions(("DRAFT", "RESEARCHING", T0), ("RESEARCHING", "PRE-ENTRY", T0),
+                           ("PRE-ENTRY", "ACTIVE", T1), ("ACTIVE", "REDUCING", T1),
+                           ("REDUCING", "CLOSED", T1))
+    record = build_lineage_record(
+        parent_campaign=_closed_short_parent(PID_A, created=T0),
+        child_campaign=_draft_child(PID_B, created=T2),
+        parent_closed_at=T1,
+        reason="重新入场",
+        created_at=CREATED,
+        parent_transitions=history,
+    )
+    assert record.parent_closed_at == T1
+
+
+def test_builder_rejects_unrelated_close_timestamp_with_history():
+    history = _transitions(("DRAFT", "RESEARCHING", T0), ("RESEARCHING", "PRE-ENTRY", T0),
+                           ("PRE-ENTRY", "ACTIVE", T1), ("ACTIVE", "REDUCING", T1),
+                           ("REDUCING", "CLOSED", T1))
+    with pytest.raises(LineageValidationError):
+        build_lineage_record(
+            parent_campaign=_closed_short_parent(PID_A, created=T0),
+            child_campaign=_draft_child(PID_B, created=T2),
+            parent_closed_at=T2,  # 与历史推导的 T1 不一致 → 拒绝
+            reason="重新入场",
+            created_at=CREATED,
+            parent_transitions=history,
+        )
+
+
+def test_builder_with_wrong_campaign_history_rejected():
+    history = _transitions(("DRAFT", "RESEARCHING", T0), ("RESEARCHING", "PRE-ENTRY", T0),
+                           ("PRE-ENTRY", "ACTIVE", T1), ("ACTIVE", "REDUCING", T1),
+                           ("REDUCING", "CLOSED", T1), campaign_id=PID_B)
+    with pytest.raises(LineageValidationError):
+        build_lineage_record(
+            parent_campaign=_closed_short_parent(PID_A, created=T0),
+            child_campaign=_draft_child(PID_B, created=T2),
+            parent_closed_at=T1,
+            reason="重新入场",
+            created_at=CREATED,
+            parent_transitions=history,
+        )
+
+
+def test_builder_explicit_close_without_history_documented_path():
+    # 无 transition 历史的最小路径：显式 parent_closed_at（文档已标注区分）
+    record = _make(parent=_closed_short_parent(PID_A, created=T0),
+                   child=_draft_child(PID_B, created=T2), closed_at=T1)
+    assert record.parent_closed_at == T1
+
+
+# ---------------------------------------------------------------------------
+# P2 parity：Campaign 契约（STRATEGIES / STATUSES / TRANSITION_GRAPH）对照权威源
+# ---------------------------------------------------------------------------
+
+def test_campaign_contract_parity():
+    import campaign_store as store
+    assert tuple(cl.STRATEGIES) == tuple(store.STRATEGIES)
+    assert tuple(cl.STATUSES) == tuple(store.STATUSES)
+    assert cl.TRANSITION_GRAPH == store._TRANSITION_GRAPH  # 冻结 graph 漂移检测
+
+
+def test_transition_id_shape_matches_campaign_store_contract():
+    import re as _re
+    assert _re.fullmatch(r"^campaign_transition_[0-9a-f]{32}$",
+                         _transitions(("DRAFT", "RESEARCHING", T0))[0]["transition_id"])
