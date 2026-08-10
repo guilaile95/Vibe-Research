@@ -99,6 +99,14 @@ class FrozenDecisionValidationError(ValueError):
     """输入校验失败：该 payload 不被接受为正式冻结内容。"""
 
 
+class FrozenDecisionReplayNotFoundError(FrozenDecisionValidationError):
+    """重放目标 decision_id 不存在。
+
+    重放仅允许已提交的正式决策；调用方不能通过重放路径凭空创建记录
+    （decision_id / committed_at / created_at 由服务在真实提交时生成）。
+    """
+
+
 def _validation_error(field: str, reason: str) -> FrozenDecisionValidationError:
     return FrozenDecisionValidationError(f"{field}：{reason}")
 
@@ -263,7 +271,9 @@ def _validate_input(payload: Mapping[str, Any]) -> dict[str, Any]:
     try:
         store.canonical_json(horizon)
     except (ValueError, TypeError) as exc:
-        raise _validation_error(f"strategy_horizon：{exc}") from exc
+        raise _validation_error(
+            "strategy_horizon", f"不是合法 canonical JSON：{exc}"
+        ) from exc
     cleaned["strategy_horizon"] = horizon
 
     cleaned["review_by"] = _normalize_utc_timestamp(payload["review_by"], "review_by")
@@ -350,7 +360,14 @@ def freeze_decision(
 def _replay_frozen(
     payload: Mapping[str, Any], db_path: str | Path | None
 ) -> dict[str, Any]:
-    """精确重放：完整冻结对象原样回交；内容一致则幂等返回，不一致则冲突。"""
+    """精确重放：仅允许已提交的 decision_id。
+
+    流程：
+    1. 字段 / canonical 文本 / 哈希校验（防篡改）
+    2. 用正常 fail-closed 读路径确认目标已提交；不存在 → ReplayNotFound，
+       绝不调用 append INSERT
+    3. 已提交且内容逐字一致 → 幂等返回；不一致 → 冲突 fail closed
+    """
     keys = set(payload)
     unexpected = keys - _REPLAY_KEYS
     if unexpected:
@@ -387,8 +404,17 @@ def _replay_frozen(
         raise _validation_error("snapshot_hash", "与 snapshot 内容不一致（重放被篡改）")
     if payload["snapshot_json"] != expected_text:
         raise _validation_error("snapshot_json", "不是 canonical 表示（重放被篡改）")
-    if not isinstance(payload["created_at"], str) or not payload["created_at"]:
-        raise _validation_error("created_at", "不合法")
+    if not store.is_canonical_utc_timestamp(payload["created_at"]):
+        raise _validation_error("created_at", "必须是 canonical UTC 时间戳")
+
+    # 重放目标必须已提交：正常 fail-closed 读路径确认存在性，
+    # 不存在则拒绝（禁止回填身份/时间，禁止重放创建新记录）。
+    path = _resolve_db_path(db_path)
+    existing = store.get_frozen_decision(path, payload["decision_id"])
+    if existing is None:
+        raise FrozenDecisionReplayNotFoundError(
+            f"decision_id {payload['decision_id']} 不存在：重放仅允许已提交的正式决策"
+        )
 
     frozen = {
         **snapshot,
@@ -397,7 +423,7 @@ def _replay_frozen(
         "user_confirmed": True,
         "created_at": payload["created_at"],
     }
-    return store.write_frozen_decision(_resolve_db_path(db_path), frozen)
+    return store.write_frozen_decision(path, frozen)
 
 
 def _resolve_db_path(db_path: str | Path | None) -> Path:

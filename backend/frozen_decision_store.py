@@ -146,14 +146,18 @@ class FrozenDecisionConflictError(FrozenDecisionError):
 # ---------------------------------------------------------------------------
 
 def canonical_json(value: Any) -> str:
-    """JCS 风格确定性序列化（stdlib）。
+    """项目确定性 canonical JSON 序列化契约（stdlib 实现）。
 
     - 递归属性排序（``sort_keys``）
     - 无空白分隔符
     - UTF-8 文本（``ensure_ascii=False``）
     - 拒绝 NaN / Infinity / 非 JSON 结构（``allow_nan=False``）
 
-    相同对象必然产生相同字节；对象顺序、空白、数字形态差异不影响一致性。
+    语义基于 RFC 8785 (JCS) 的通用要求（属性排序 / 紧凑 / UTF-8 / 拒绝
+    非有限数），但不声明完整 RFC 8785 合规：数字序列化采用 Python
+    ``json.dumps`` 的确定性表示，覆盖本项目所需的一致性保证（同一对象
+    必然产生相同字节；键顺序、空白、数字形态差异不影响一致性）。本契约
+    为仓库内恒定契约，用于 snapshot 哈希与篡改检测。
     """
     return json.dumps(
         value,
@@ -361,20 +365,50 @@ def _validate_and_prepare_schema(conn: sqlite3.Connection, is_write: bool) -> No
 def initialize_store(db_path: str | Path) -> None:
     """显式初始化存储（幂等）：创建目录、表、索引并写入 schema 版本。
 
-    这是唯一被允许创建存储的入口之一（另一入口是显式冻结写入）。
+    - 全新数据库：允许创建 schema 并设置 WAL
+    - 已有数据库：先以只读方式确认 schema/版本（零突变）；版本不匹配或
+      内容损坏直接 fail closed，绝不触碰 journal / WAL / SHM / 文件内容
+    - 仅版本确认匹配后才允许进入 WAL / 可写设置
     """
     path = _as_path(db_path)
     if path == ":memory:":
         conn = sqlite3.connect(path, timeout=5)
-    else:
-        _ensure_parent_dir(path)
-        conn = sqlite3.connect(path, timeout=5)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 5000")
+        try:
+            with conn:
+                conn.execute("PRAGMA journal_mode = WAL")
+                _validate_and_prepare_schema(conn, is_write=True)
+        except (FrozenDecisionCorruptedError, FrozenDecisionSchemaVersionError):
+            raise
+        except sqlite3.DatabaseError:
+            raise FrozenDecisionCorruptedError()
+        finally:
+            conn.close()
+        return
+
+    if _db_file_exists(path):
+        # 已有数据库：只读确认 schema/版本，零突变
+        conn = _connect_readonly(path)
+        try:
+            _validate_and_prepare_schema(conn, is_write=False)
+        except FrozenDecisionError:
+            raise
+        except sqlite3.DatabaseError:
+            raise FrozenDecisionCorruptedError()
+        finally:
+            conn.close()
+
+    # 全新数据库（文件不存在）允许创建；已有数据库版本已确认匹配。
+    # 先验证（已有库幂等、无 DDL），通过后才允许 WAL 设置。
+    _ensure_parent_dir(path)
+    conn = sqlite3.connect(path, timeout=5)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     try:
         with conn:
-            conn.execute("PRAGMA journal_mode = WAL")
             _validate_and_prepare_schema(conn, is_write=True)
+        conn.execute("PRAGMA journal_mode = WAL")
     except (FrozenDecisionCorruptedError, FrozenDecisionSchemaVersionError):
         raise
     except sqlite3.DatabaseError:
@@ -387,17 +421,25 @@ def initialize_store(db_path: str | Path) -> None:
 # Snapshot 值级校验（写前防御 + 读后验证共用）
 # ---------------------------------------------------------------------------
 
-def _is_valid_utc_timestamp(value: str) -> bool:
-    """校验 canonical UTC 时间戳（ISO 8601、带 UTC 时区、可往返规范化）。"""
+_CANONICAL_UTC_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
+
+
+def is_canonical_utc_timestamp(value: Any) -> bool:
+    """严格 canonical UTC 时间戳：``YYYY-MM-DDTHH:MM:SS.ffffffZ``。
+
+    仅接受微秒 6 位 + ``Z`` 后缀的规范表示；任何其他合法但非 canonical 的
+    零偏移 ISO 形式（无微秒、偏移 +00:00 等）一律拒绝。读取路径对持久化
+    时间戳不做任何静默规范化。
+    """
     if not isinstance(value, str):
         return False
+    if not _CANONICAL_UTC_TS_RE.fullmatch(value):
+        return False
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        datetime.fromisoformat(value)
     except ValueError:
         return False
-    if parsed.tzinfo is None:
-        return False
-    return parsed.utcoffset().total_seconds() == 0
+    return True
 
 
 def _validate_snapshot_values(snapshot: Mapping[str, Any]) -> None:
@@ -420,7 +462,7 @@ def _validate_snapshot_values(snapshot: Mapping[str, Any]) -> None:
             raise FrozenDecisionCorruptedError("strategy 不合法")
         if not _CAMPAIGN_ID_RE.fullmatch(snapshot["campaign_id"]):
             raise FrozenDecisionCorruptedError("campaign_id 不合法")
-        if not isinstance(snapshot["committed_at"], str) or not _is_valid_utc_timestamp(
+        if not isinstance(snapshot["committed_at"], str) or not is_canonical_utc_timestamp(
             snapshot["committed_at"]
         ):
             raise FrozenDecisionCorruptedError("committed_at 不合法")
@@ -454,7 +496,7 @@ def _validate_snapshot_values(snapshot: Mapping[str, Any]) -> None:
             and not snapshot["strategy_horizon"].strip()
         ):
             raise FrozenDecisionCorruptedError("strategy_horizon 不合法")
-        if not isinstance(snapshot["review_by"], str) or not _is_valid_utc_timestamp(
+        if not isinstance(snapshot["review_by"], str) or not is_canonical_utc_timestamp(
             snapshot["review_by"]
         ):
             raise FrozenDecisionCorruptedError("review_by 不合法")
@@ -529,6 +571,8 @@ def _row_to_snapshot(row: sqlite3.Row) -> dict[str, Any]:
         raise FrozenDecisionCorruptedError("snapshot_hash 格式不合法")
     if row["user_confirmed"] != 1:
         raise FrozenDecisionCorruptedError("user_confirmed 必须为 True")
+    if not is_canonical_utc_timestamp(row["created_at"]):
+        raise FrozenDecisionCorruptedError("created_at 不是 canonical UTC 时间戳")
     _validate_snapshot_values(snapshot)
     return snapshot
 
@@ -560,8 +604,8 @@ def _verify_frozen(frozen: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("snapshot_hash 与 snapshot 字段不一致")
         if frozen["user_confirmed"] is not True:
             raise ValueError("user_confirmed 必须是严格 True")
-        if not isinstance(frozen["created_at"], str) or not frozen["created_at"]:
-            raise ValueError("created_at 不合法")
+        if not is_canonical_utc_timestamp(frozen["created_at"]):
+            raise ValueError("created_at 必须是 canonical UTC 时间戳")
     except FrozenDecisionError:
         raise
     except Exception as exc:

@@ -56,6 +56,17 @@ def _rebuild_snapshot(frozen: dict) -> dict:
     return {key: frozen[key] for key in store.SNAPSHOT_KEYS}
 
 
+def _recompute(frozen: dict, **changes) -> dict:
+    """基于既有冻结对象生成内部自洽的变体：snapshot_json/hash 同步重建。"""
+    snapshot = _rebuild_snapshot(frozen)
+    snapshot.update(changes)
+    out = dict(frozen)
+    out.update(snapshot)
+    out["snapshot_json"] = store.canonical_json(snapshot)
+    out["snapshot_hash"] = store.snapshot_hash(snapshot)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 正常冻结
 # ---------------------------------------------------------------------------
@@ -308,6 +319,17 @@ class TestValidation:
         )
         assert frozen["strategy_horizon"] == {"window": "2-4w", "note": "不设 TTL 推断"}
 
+    def test_strategy_horizon_nan_validation_error(self, db_path):
+        # P2-1：NaN 必须报 FrozenDecisionValidationError，而不是裸 TypeError
+        with pytest.raises(svc.FrozenDecisionValidationError):
+            svc.freeze_decision(
+                valid_payload(strategy_horizon={"x": float("nan")}), db_path
+            )
+        with pytest.raises(svc.FrozenDecisionValidationError):
+            svc.freeze_decision(
+                valid_payload(strategy_horizon={"x": float("inf")}), db_path
+            )
+
     @pytest.mark.parametrize(
         "field",
         [
@@ -489,6 +511,72 @@ class TestReplay:
         tampered["snapshot_schema_version"] = "frozen-decision-ledger.v0.2"
         with pytest.raises(svc.FrozenDecisionValidationError):
             svc.freeze_decision(tampered, db_path)
+
+
+class TestReplayP1AbsentTarget:
+    """P1-A：重放仅允许已提交 decision_id；禁止重放创建新记录。"""
+
+    def test_a_absent_target_empty_db_rejected_db_remains_empty(self, db_path, tmp_path):
+        # 在另一个库生成完整、内部自洽的冻结对象（含调用方持有的
+        # decision_id / committed_at / created_at / snapshot_json / snapshot_hash）
+        other_db = tmp_path / "other.sqlite3"
+        frozen = svc.freeze_decision(valid_payload(), other_db)
+        # 目标库为空：重放必须被拒绝，库保持为空
+        with pytest.raises(svc.FrozenDecisionReplayNotFoundError):
+            svc.freeze_decision(frozen, db_path)
+        assert svc.list_decisions(db_path) == []
+
+    def test_b_missing_db_replay_rejected_nothing_created(self, tmp_path):
+        missing = tmp_path / "no" / "such" / "frozen_decisions.sqlite3"
+        other_db = tmp_path / "other.sqlite3"
+        frozen = svc.freeze_decision(valid_payload(), other_db)
+        with pytest.raises(svc.FrozenDecisionReplayNotFoundError):
+            svc.freeze_decision(frozen, missing)
+        assert not (tmp_path / "no").exists()
+
+    def test_c_existing_exact_replay_idempotent(self, db_path):
+        frozen = svc.freeze_decision(valid_payload(), db_path)
+        replay = svc.freeze_decision(frozen, db_path)
+        assert replay == frozen
+        assert len(svc.list_decisions(db_path)) == 1
+
+    def test_d_existing_conflicting_replay_conflict_original_unchanged(self, db_path):
+        frozen = svc.freeze_decision(valid_payload(), db_path)
+        conflicting = _recompute(frozen, next_best_action="HOLD")
+        with pytest.raises(store.FrozenDecisionConflictError):
+            svc.freeze_decision(conflicting, db_path)
+        assert svc.get_decision(frozen["decision_id"], db_path) == frozen
+
+    def test_e_replay_cannot_backdate_committed_at(self, db_path):
+        frozen = svc.freeze_decision(valid_payload(), db_path)
+        backdated = _recompute(frozen, committed_at="2020-01-01T00:00:00.000000Z")
+        with pytest.raises(store.FrozenDecisionConflictError):
+            svc.freeze_decision(backdated, db_path)
+        # 原始提交时刻保持不变，未被回填/回改
+        got = svc.get_decision(frozen["decision_id"], db_path)
+        assert got["committed_at"] == frozen["committed_at"]
+        assert got["committed_at"] != "2020-01-01T00:00:00.000000Z"
+
+    def test_replay_with_non_canonical_created_at_rejected(self, db_path):
+        frozen = svc.freeze_decision(valid_payload(), db_path)
+        for bad in ("garbage", "2026-08-10T06:00:01+00:00", ""):
+            tampered = dict(frozen)
+            tampered["created_at"] = bad
+            with pytest.raises(svc.FrozenDecisionValidationError):
+                svc.freeze_decision(tampered, db_path)
+
+    def test_replay_absent_target_with_synthetic_payload_rejected(self, db_path):
+        # 纯手工构造的自洽 payload（未经服务提交）同样被拒绝
+        real = svc.freeze_decision(valid_payload(), db_path)
+        synthetic = _recompute(
+            real,
+            decision_id="decision_" + "9" * 32,
+            committed_at="2021-05-05T00:00:00.000000Z",
+        )
+        synthetic["created_at"] = "2021-05-05T00:00:01.000000Z"
+        with pytest.raises(svc.FrozenDecisionReplayNotFoundError):
+            svc.freeze_decision(synthetic, db_path)
+        assert svc.get_decision(synthetic["decision_id"], db_path) is None
 
 
 # ---------------------------------------------------------------------------

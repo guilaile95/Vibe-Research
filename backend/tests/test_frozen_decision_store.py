@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import json
 import os
 import sqlite3
@@ -180,6 +181,91 @@ class TestInitialize:
             conn.close()
         with pytest.raises(store.FrozenDecisionCorruptedError):
             store.initialize_store(db_path)
+
+
+class TestInitializeZeroMutation:
+    """P1-B：版本门先于任何 journal 突变；不支持的库零突变拒绝。"""
+
+    def _db_sha256(self, path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def _dir_names(self, path: Path) -> set[str]:
+        return {p.name for p in path.iterdir()}
+
+    def test_unsupported_schema_initialize_zero_mutation(self, db_path):
+        # 构造不支持的 schema 版本库（无 frozen_decisions 表）
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            conn.execute("INSERT INTO schema_meta VALUES ('schema_version', 'frozen-decision-ledger.v9.9')")
+            conn.commit()
+        finally:
+            conn.close()
+        before = {
+            "sha": self._db_sha256(db_path),
+            "size": db_path.stat().st_size,
+            "dir": self._dir_names(db_path.parent),
+        }
+        with pytest.raises(store.FrozenDecisionSchemaVersionError):
+            store.initialize_store(db_path)
+        after = {
+            "sha": self._db_sha256(db_path),
+            "size": db_path.stat().st_size,
+            "dir": self._dir_names(db_path.parent),
+        }
+        assert after == before
+        # 无 WAL / SHM / journal / 任何额外文件
+        assert not Path(str(db_path) + "-wal").exists()
+        assert not Path(str(db_path) + "-shm").exists()
+        assert not Path(str(db_path) + "-journal").exists()
+        assert after["dir"] == {db_path.name}
+        # schema/版本保持原样（未自动修复）
+        conn = sqlite3.connect(str(db_path))
+        try:
+            version = conn.execute(
+                "SELECT value FROM schema_meta WHERE key='schema_version'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert version == "frozen-decision-ledger.v9.9"
+
+    def test_nonempty_db_without_schema_meta_initialize_zero_mutation(self, db_path):
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("CREATE TABLE random_table (id INTEGER)")
+            conn.commit()
+        finally:
+            conn.close()
+        before = {
+            "sha": self._db_sha256(db_path),
+            "size": db_path.stat().st_size,
+            "dir": self._dir_names(db_path.parent),
+        }
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.initialize_store(db_path)
+        after = {
+            "sha": self._db_sha256(db_path),
+            "size": db_path.stat().st_size,
+            "dir": self._dir_names(db_path.parent),
+        }
+        assert after == before
+        assert not Path(str(db_path) + "-wal").exists()
+        assert not Path(str(db_path) + "-shm").exists()
+        assert not Path(str(db_path) + "-journal").exists()
+
+    def test_valid_db_reinitialize_keeps_schema_and_no_side_files(self, db_path):
+        store.initialize_store(db_path)
+        before_dir = self._dir_names(db_path.parent)
+        store.initialize_store(db_path)
+        assert self._dir_names(db_path.parent) == before_dir
+        conn = sqlite3.connect(str(db_path))
+        try:
+            version = conn.execute(
+                "SELECT value FROM schema_meta WHERE key='schema_version'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert version == store.SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +459,8 @@ class TestTamperFailClosed:
             ("thesis_id", "f" * 32),
             ("security_code", "000858"),
             ("committed_at", "2026-09-01T00:00:00.000000Z"),
+            ("created_at", "garbage"),
+            ("created_at", "2026-08-10T06:00:01+00:00"),
             ("user_confirmed", 0),
             ("validity_status_at_commit", "EXPIRED"),
             ("snapshot_schema_version", "frozen-decision-ledger.v0.2"),
@@ -547,4 +635,21 @@ class TestWritePathDefense:
         frozen = _valid_frozen()
         frozen["mystery"] = 1
         with pytest.raises(ValueError):
+            store.write_frozen_decision(db_path, frozen)
+
+    def test_write_rejects_non_canonical_created_at(self, db_path):
+        frozen = _valid_frozen()
+        frozen["created_at"] = "garbage"
+        with pytest.raises(ValueError):
+            store.write_frozen_decision(db_path, frozen)
+
+    def test_write_rejects_non_canonical_timestamp_form(self, db_path):
+        # 合法 ISO 但非 canonical（+00:00 偏移、无微秒）一律拒绝
+        frozen = _valid_frozen()
+        frozen["created_at"] = "2026-08-10T06:00:01+00:00"
+        with pytest.raises(ValueError):
+            store.write_frozen_decision(db_path, frozen)
+        frozen = _valid_frozen()
+        frozen["committed_at"] = "2026-08-10T06:00:01Z"
+        with pytest.raises(store.FrozenDecisionCorruptedError):
             store.write_frozen_decision(db_path, frozen)
