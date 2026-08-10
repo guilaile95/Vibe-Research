@@ -1,4 +1,4 @@
-"""HiThink LIVE_SMOKE probe harness v0.1 —— probe-only，绝不进入生产路由。
+"""HiThink LIVE_SMOKE probe harness v0.1-R1 —— probe-only，绝不进入生产路由。
 
 用途（DS-H1）：
 - 对官方 HiThink（同花顺）金融数据服务做孤立 LIVE_SMOKE；
@@ -6,13 +6,22 @@
 - 本模块不修改任何生产 provider / routing / data-health / scheduler；
 - 凭据只从环境变量 ``HITHINK_FINANCE_API_KEY`` 读取，任何输出路径都不含 key。
 
+R1 增强：
+- 嵌套 ``data.item[]`` 观测（meta + 首条 item 字段/类型/样本）；
+- 递归 secret 键清洗（任意深度剥离 api_key/token/secret/authorization 等）；
+- snapshot 双标的矩阵；
+- historical 2 标的 × 2 时间窗矩阵；
+- adjust none/forward/backward 矩阵；
+- limit-up 显式历史 ``date_ms`` 请求；
+- 非交易日（周六）行为探测。
+
 端点与参数来自 2026-08-10 对官方仓库
 ``HiThink-Tech/Financial-API``（HEAD f8cdea908469b1b3b8bfb88dbb4d4a3959b1905c）
 ``docs/api/*.md`` 的独立核验（见 docs/data/HITHINK_LIVE_SMOKE_V01.md）。
 
 安全约束：
 - API key 只进 header ``X-api-key``，绝不进入 observation / fingerprint / 日志；
-- fingerprint 只含 provider / endpoint / normalized symbol / non-secret query / time；
+- fingerprint 只含 provider / endpoint / non-secret query / time；
 - 响应只记录字段名 / 类型 / 样本 / 状态 / request_id / 错误码，不落盘原始大文件。
 
 CLI:
@@ -34,7 +43,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-# 官方端点（2026-08-10 核验，docs/api/endpoints-*.md）----
+# ---- 官方端点（2026-08-10 核验，docs/api/endpoints-*.md）----
 BASE_URL = "https://fuyao.aicubes.cn"
 API_KEY_ENV = "HITHINK_FINANCE_API_KEY"
 
@@ -45,21 +54,49 @@ def _ms(date_str: str) -> int:
     return int(dt.timestamp() * 1000)
 
 
-# 矩阵端点：dataset_id -> (method, path, query 构建器说明)
-ENDPOINTS = {
+# ---- 单探测端点矩阵（A–F 六类各至少一个）----
+ENDPOINTS: dict[str, dict] = {
     "symbol_search": {"path": "/api/meta/tickers/search", "query": {"q": "600519", "limit": 1}},
-    "snapshot_quote": {"path": "/api/a-share/prices/snapshot", "query": {"thscodes": "600519.SH,000001.SZ"}},
-    "historical_daily": {"path": "/api/a-share/prices/historical",
-                         "query": {"thscode": "600519.SH", "interval": "1d", "adjust": "none",
-                                   "start": _ms("2026-07-01"), "end": _ms("2026-07-10")}},
+    "snapshot_quote": {"path": "/api/a-share/prices/snapshot",
+                       "query": {"thscodes": "600519.SH,000001.SZ"}},
     "income_statement": {"path": "/api/a-share/financials/income-statements",
                          "query": {"thscode": "600519.SH", "period": "annual", "limit": 2}},
     "index_constituents": {"path": "/api/a-share-index/constituents/ths-stock-list",
                            "query": {"ths_code": "885001"}},  # 概念/板块成员（当前快照）
-    "limit_up_pool": {"path": "/api/a-share/special-data/limit-up-pool",
-                      "query": {"page": 1, "size": 5}},  # 按 date_ms 支持历史交易日
     "trading_calendar": {"path": "/api/a-share/calendar/trading-days", "query": {}},
-    "valuation_snapshot": {"path": "/api/a-share/valuations/snapshot", "query": {"thscodes": "600519.SH"}},
+    "valuation_snapshot": {"path": "/api/a-share/valuations/snapshot",
+                           "query": {"thscodes": "600519.SH"}},
+}
+
+# ---- R1 矩阵探测 ----
+# C. historical：2 标的 × 2 时间窗
+HISTORICAL_MATRIX: list[tuple[str, str]] = [
+    ("600519.SH", "2026-07-01", "2026-07-10"),
+    ("600519.SH", "2026-06-01", "2026-06-12"),
+    ("000001.SZ", "2026-07-01", "2026-07-10"),
+    ("000001.SZ", "2026-06-01", "2026-06-12"),
+]
+
+# C. adjust 矩阵：none / forward(前复权) / backward(后复权)
+ADJUSTMENT_MATRIX: list[tuple[str, str]] = [  # (adjust, label)
+    ("none", "adjust_none"),
+    ("forward", "adjust_forward"),
+    ("backward", "adjust_backward"),
+]
+
+# 2026-08-07 = Friday（交易日）；2026-08-08 = Saturday（非交易日，已核验星期）
+TRADING_DAY_DATE = "2026-08-07"
+NON_TRADING_DAY_DATE = "2026-08-08"
+
+LIMIT_UP_HISTORICAL_SPEC = {
+    "path": "/api/a-share/special-data/limit-up-pool",
+    "query": {"date_ms": _ms(TRADING_DAY_DATE), "page": 1, "size": 5},
+}
+
+NON_TRADING_DAY_SPEC = {
+    "path": "/api/a-share/prices/historical",
+    "query": {"thscode": "600519.SH", "interval": "1d", "adjust": "none",
+              "start": _ms(NON_TRADING_DAY_DATE), "end": _ms(NON_TRADING_DAY_DATE)},
 }
 
 # 官方错误码 → 确定性分类（docs/api/README.md 核验）
@@ -83,6 +120,20 @@ _NON_SECRET_QUERY_KEYS = (
     "q", "limit", "offset", "thscodes", "thscode", "interval", "start", "end",
     "adjust", "period", "report", "page", "size", "date", "date_ms", "from",
     "to", "ths_code", "board_type", "sort_field", "sort_dir",
+)
+
+
+def _normalize_key(key: str) -> str:
+    return str(key).strip().lower().replace(" ", "").replace("_", "").replace("-", "")
+
+
+# 任意深度都要剥离的 secret 键名（归一化后比较；集合本身也存归一化形式）。
+# 必须在 _normalize_key 定义之后求值。
+_SECRET_KEY_NAMES = frozenset(
+    _normalize_key(name) for name in (
+        "api_key", "apikey", "token", "access_token", "refresh_token", "secret",
+        "secret_key", "authorization", "x-api-key", "key", "password", "credential",
+    )
 )
 
 
@@ -147,22 +198,56 @@ def classify_envelope(code: int | None) -> str | None:
     return ERROR_CODE_CLASS.get(code, "unknown_code")
 
 
-def sanitize_sample(payload: Any) -> dict:
-    """从 data 提取字段名/类型/非敏感样本（截断），剥离一切可能含密钥的键。"""
+def _is_secret_key(key: str) -> bool:
+    return _normalize_key(key) in _SECRET_KEY_NAMES
+
+
+_MAX_STR = 120
+_MAX_LIST = 3
+_MAX_DEPTH = 5
+
+
+def _sanitize_value(value: Any, depth: int = 0) -> Any:
+    """递归清洗任意值：secret 键剥离、长值截断、深度限制；保留 null/0/""/[] 区分。"""
+    if depth > _MAX_DEPTH:
+        return {"type": type(value).__name__, "value": "<depth-limit>"}
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            if _is_secret_key(key):
+                continue  # 递归：任意深度 secret 键都不进入观测
+            out[key] = _sanitize_value(item, depth + 1)
+        return out
+    if isinstance(value, (list, tuple)):
+        items = [_sanitize_value(item, depth + 1) for item in list(value)[:_MAX_LIST]]
+        total = len(value)
+        return {"_list": items, "_count": total}
+    if value is None:
+        return {"type": "NoneType", "value": None}
+    return {"type": type(value).__name__, "value": str(value)[:_MAX_STR]}
+
+
+def _extract_data_sample(payload: Any) -> dict:
+    """从 data 提取字段名/类型/样本：处理嵌套 item[]（meta + 首条 item）。
+
+    返回结构（全部经递归清洗，secret 键已剥离）：
+    - data 为 dict 且含 item/items 列表 → {"_meta": <非 item 字段>, "item[0]": <首条>}
+    - data 为 list → {"_list": ..., "_count": ...}
+    - data 为 dict → 清洗后的字段样本
+    - 其他 → 类型 + 截断值
+    """
     data = payload.get("data") if isinstance(payload, dict) else None
     if data is None:
         return {}
-    if isinstance(data, list):
-        data = data[0] if data else {}
-    if not isinstance(data, dict):
-        return {"_type": type(data).__name__, "value": str(data)[:200]}
-    sample: dict[str, Any] = {}
-    for key, value in data.items():
-        if key in ("api_key", "token", "secret", "X-api-key", "x-api-key"):
-            continue
-        sample[key] = {"type": type(value).__name__,
-                       "value": str(value)[:120] if value is not None else None}
-    return sample
+    if isinstance(data, dict) and any(k in data for k in ("item", "items")):
+        meta = {k: v for k, v in data.items() if k not in ("item", "items")}
+        items = data.get("item", data.get("items")) or []
+        sample: dict[str, Any] = {"_meta": _sanitize_value(meta)}
+        if isinstance(items, list) and items:
+            sample["item[0]"] = _sanitize_value(items[0])
+        sample["_count"] = len(items) if isinstance(items, list) else None
+        return sample
+    return _sanitize_value(data)
 
 
 def probe_endpoint(dataset_id: str, spec: dict, key: str, *, timeout: int = 15) -> ProbeObservation:
@@ -189,15 +274,42 @@ def probe_endpoint(dataset_id: str, spec: dict, key: str, *, timeout: int = 15) 
         envelope_message=payload.get("message") if isinstance(payload, dict) else None,
         request_id=payload.get("request_id") if isinstance(payload, dict) else None,
         fingerprint=fp,
-        sample_fields=sanitize_sample(payload),
+        sample_fields=_extract_data_sample(payload),
         error_class=classify_envelope(envelope_code),
     )
     return obs
 
 
 def run_probe(key: str) -> dict:
-    observations = {dataset_id: probe_endpoint(dataset_id, spec, key).to_dict()
-                    for dataset_id, spec in ENDPOINTS.items()}
+    observations: dict[str, dict] = {}
+
+    def _probe(dataset_id: str, spec: dict) -> None:
+        observations[dataset_id] = probe_endpoint(dataset_id, spec, key).to_dict()
+
+    for dataset_id, spec in ENDPOINTS.items():
+        _probe(dataset_id, spec)
+
+    # historical 2×2 矩阵
+    for index, (thscode, start, end) in enumerate(HISTORICAL_MATRIX, start=1):
+        _probe(f"historical_{index}", {
+            "path": "/api/a-share/prices/historical",
+            "query": {"thscode": thscode, "interval": "1d", "adjust": "none",
+                      "start": _ms(start), "end": _ms(end)},
+        })
+
+    # adjust 矩阵（单标的 3 模式）
+    for adjust, label in ADJUSTMENT_MATRIX:
+        _probe(label, {
+            "path": "/api/a-share/prices/historical",
+            "query": {"thscode": "600519.SH", "interval": "1d", "adjust": adjust,
+                      "start": _ms("2026-07-01"), "end": _ms("2026-07-10")},
+        })
+
+    # limit-up 显式历史 date_ms
+    _probe("limit_up_explicit_date", LIMIT_UP_HISTORICAL_SPEC)
+    # 非交易日行为探测（周六）
+    _probe("non_trading_day", NON_TRADING_DAY_SPEC)
+
     return {"observations": observations, "fetched_at": datetime.now(timezone.utc).isoformat()}
 
 

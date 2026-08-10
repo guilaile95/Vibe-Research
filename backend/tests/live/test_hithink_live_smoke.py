@@ -1,8 +1,8 @@
-"""HiThink LIVE_SMOKE live tests（DS-H1，@pytest.mark.live）。
+"""HiThink LIVE_SMOKE live tests（DS-H1-R1，@pytest.mark.live）。
 
 - 需要环境变量 HITHINK_FINANCE_API_KEY；缺失时整个模块 skip（缺凭据绝不伪报 PASS）；
-- 断言只针对结构性/时序性契约（symbol identity、envelope、schema、错误码分类），
-  不断言具体价格；
+- 断言只针对结构性/时序性契约（symbol identity、envelope、schema、错误码分类、
+  历史矩阵、复权矩阵、显式历史日期、非交易日行为），不断言具体价格；
 - Provider response = Observation，本文件不定义生产 Canonical 类型、不写入任何存储。
 """
 from __future__ import annotations
@@ -17,15 +17,16 @@ pytestmark = pytest.mark.live
 
 _API_KEY = os.environ.get(probe.API_KEY_ENV, "").strip()
 
-pytest.skip(
-    f"{probe.API_KEY_ENV} 未设置：LIVE_SMOKE 无法运行（BLOCKED_LIVE_AUTH）。"
-    "设置该环境变量后重新运行本模块。",
-    allow_module_level=True,
-)
+if not _API_KEY:
+    pytest.skip(
+        f"{probe.API_KEY_ENV} 未设置：LIVE_SMOKE 无法运行（BLOCKED_LIVE_AUTH）。"
+        "设置该环境变量后重新运行本模块。",
+        allow_module_level=True,
+    )
 
 
 def _probe_ok(dataset_id: str, spec: dict) -> probe.ProbeObservation:
-    """执行端点探测；HTTP 200 + code==0 才算业务成功。"""
+    """执行端点探测；HTTP 200 + code==0 才算业务成功（官方成功规则）。"""
     obs = probe.probe_endpoint(dataset_id, spec, _API_KEY)
     assert obs.http_status == 200, f"{dataset_id} HTTP {obs.http_status}: {obs.envelope_message}"
     assert obs.envelope_code == 0, (
@@ -40,47 +41,83 @@ def _sample(obs: probe.ProbeObservation) -> dict:
     return obs.sample_fields
 
 
+def _historical_spec(thscode: str, start: str, end: str) -> dict:
+    return {"path": "/api/a-share/prices/historical",
+            "query": {"thscode": thscode, "interval": "1d", "adjust": "none",
+                      "start": probe._ms(start), "end": probe._ms(end)}}
+
+
 # ---------------------------------------------------------------------------
 # A. Symbol / instrument identity
 # ---------------------------------------------------------------------------
 
 def test_a_symbol_search_identity():
     obs = _probe_ok("symbol_search", probe.ENDPOINTS["symbol_search"])
-    sample = _sample(obs)
-    # 结构性断言：返回条目应包含标识字段（具体值不做价格断言）
-    keys = set(sample)
-    assert keys, "symbol search 无字段"
+    assert _sample(obs)  # 结构性：返回条目存在（不做具体值断言）
 
 
 # ---------------------------------------------------------------------------
-# B. Latest / snapshot quote
+# B. Latest / snapshot quote（双标的矩阵）
 # ---------------------------------------------------------------------------
 
-def test_b_snapshot_quote_structural():
+def test_b_snapshot_quote_two_symbols_structural():
     obs = _probe_ok("snapshot_quote", probe.ENDPOINTS["snapshot_quote"])
     sample = _sample(obs)
-    assert sample, "snapshot 无字段"
-    # 若返回条目：thscode 应带交易所后缀（.SH/.SZ/.BJ）；价格字段应数值类型或 null
-    thscode = sample.get("thscode")
+    # 双标的：item 列表应含 ≥2 条（分页/批量模式）
+    if "_count" in sample:
+        assert sample["_count"] >= 2, f"snapshot 双标的矩阵 item 数异常: {sample['_count']}"
+    first = sample.get("item[0]", sample)
+    thscode = first.get("thscode")
     if thscode is not None:
         assert str(thscode["value"]).endswith((".SH", ".SZ", ".BJ")), f"thscode 后缀异常: {thscode}"
     for price_field in ("last_price", "open_price", "high_price", "low_price", "prev_price"):
-        if price_field in sample:
-            assert sample[price_field]["type"] in ("float", "int", "NoneType"), \
-                f"{price_field} 类型异常: {sample[price_field]}"
+        if price_field in first:
+            assert first[price_field]["type"] in ("float", "int", "NoneType"), \
+                f"{price_field} 类型异常: {first[price_field]}"
 
 
 # ---------------------------------------------------------------------------
-# C. Historical daily quote
+# C. Historical daily quote（2 标的 × 2 时间窗矩阵）
 # ---------------------------------------------------------------------------
 
-def test_c_historical_daily_by_date():
-    obs = _probe_ok("historical_daily", probe.ENDPOINTS["historical_daily"])
-    sample = _sample(obs)
-    assert sample, "historical 无字段"
-    # 结构性：条形数据应含 date_ms 或交易日期字段；不假定复权含义（adjust 参数已显式 none）
-    assert any(k in sample for k in ("date_ms", "open_price", "close_price", "date")), \
-        f"historical 缺 K 线字段: {sorted(sample)}"
+def test_c_historical_matrix_2x2():
+    """2 标的 × 2 时间窗：每窗都必须返回合法 K 线结构（date_ms / OHLC 字段存在）。"""
+    for index, (thscode, start, end) in enumerate(probe.HISTORICAL_MATRIX, start=1):
+        obs = _probe_ok(f"historical_{index}", _historical_spec(thscode, start, end))
+        sample = _sample(obs)
+        first = sample.get("item[0]", sample)
+        assert any(k in first for k in ("date_ms", "open_price", "close_price")), \
+            f"historical_{index}({thscode}) 缺 K 线字段: {sorted(first)}"
+
+
+def test_c_historical_distinct_ranges_return_items():
+    """2×2 矩阵：至少验证两个不同时间窗均返回数据（避免空窗全绿假象）。"""
+    obs1 = _probe_ok("historical_600519_r1", _historical_spec("600519.SH", "2026-07-01", "2026-07-10"))
+    obs2 = _probe_ok("historical_600519_r2", _historical_spec("600519.SH", "2026-06-01", "2026-06-12"))
+    assert obs1.sample_fields and obs2.sample_fields
+
+
+def test_c_adjustment_matrix_three_modes():
+    """adjust none/forward/backward 三模式各自成功且返回同结构 K 线。"""
+    for adjust, label in probe.ADJUSTMENT_MATRIX:
+        spec = _historical_spec("600519.SH", "2026-07-01", "2026-07-10")
+        spec["query"]["adjust"] = adjust
+        obs = _probe_ok(label, spec)
+        assert _sample(obs)
+
+
+def test_c_non_trading_day_behavior():
+    """非交易日（2026-08-08 Sat）：记录实际行为（空 items / 业务错误码 / 空数据），
+    不假设 —— 只断言响应可解析且 HTTP 正常返回。"""
+    obs = probe.probe_endpoint("non_trading_day", probe.NON_TRADING_DAY_SPEC, _API_KEY)
+    assert obs.http_status is not None, "非交易日请求无 HTTP 响应"
+    # 业务失败（code!=0）也记录 observation；envelope 必须存在
+    assert obs.envelope_code is not None, "非交易日响应无 envelope code"
+    if obs.envelope_code == 0:
+        # 成功路径：记录 item 数（可为 0）
+        count = obs.sample_fields.get("_count")
+        # 不假设非交易日行为：仅记录
+        print(f"[OBS] non_trading_day count={count}")
 
 
 # ---------------------------------------------------------------------------
@@ -90,11 +127,10 @@ def test_c_historical_daily_by_date():
 def test_d_income_statement_period():
     obs = _probe_ok("income_statement", probe.ENDPOINTS["income_statement"])
     sample = _sample(obs)
-    assert sample, "income statement 无字段"
-    # 结构性：报告期字段存在；发布/公告时间若缺失则记录 NOT_EXPOSED，不伪造
-    assert any(k in sample for k in ("period_end_ms", "report_date_ms", "fiscal_year",
-                                     "fiscal_period", "report")), \
-        f"income statement 缺报告期字段: {sorted(sample)}"
+    first = sample.get("item[0]", sample)
+    assert any(k in first for k in ("period_end_ms", "report_date_ms", "fiscal_year",
+                                    "fiscal_period", "report")), \
+        f"income statement 缺报告期字段: {sorted(first)}"
 
 
 # ---------------------------------------------------------------------------
@@ -104,23 +140,22 @@ def test_d_income_statement_period():
 def test_e_index_constituents_current_only():
     obs = _probe_ok("index_constituents", probe.ENDPOINTS["index_constituents"])
     sample = _sample(obs)
-    assert sample, "constituents 无字段"
     # 文档声明 current membership（无 as-of 日期参数）→ 不得伪造历史成员
     assert not any(k in sample for k in ("as_of", "as_of_date", "effective_date")), \
         "constituents 响应出现 as-of 日期字段需复核（文档声明 current only）"
 
 
 # ---------------------------------------------------------------------------
-# F. Additional high-value dataset（limit-up pool，支持按历史交易日 date_ms）
+# F. Additional high-value dataset（limit-up，显式历史交易日 date_ms）
 # ---------------------------------------------------------------------------
 
-def test_f_limit_up_pool_by_date():
-    obs = _probe_ok("limit_up_pool", probe.ENDPOINTS["limit_up_pool"])
+def test_f_limit_up_explicit_historical_date():
+    """R1：limit-up 显式历史 date_ms（2026-08-07 交易日）→ 业务成功 + 成员结构。"""
+    obs = _probe_ok("limit_up_explicit_date", probe.LIMIT_UP_HISTORICAL_SPEC)
     sample = _sample(obs)
-    assert sample, "limit-up pool 无字段"
-    # 结构性：成员条目含 thscode/ticker；分页信息存在
-    assert any(k in sample for k in ("thscode", "ticker", "pagination", "timestamp")), \
-        f"limit-up pool 缺成员/分页字段: {sorted(sample)}"
+    first = sample.get("item[0]", sample)
+    assert any(k in first for k in ("thscode", "ticker")), \
+        f"limit-up 历史成员缺标识: {sorted(first)}"
 
 
 # ---------------------------------------------------------------------------
@@ -130,12 +165,26 @@ def test_f_limit_up_pool_by_date():
 def test_error_invalid_symbol_semantics():
     """非法 symbol → 业务错误码（官方 3001 instrument_not_found 或类似），
     且错误 payload 不含 API key。"""
-    spec = {"path": "/api/a-share/prices/historical",
-            "query": {"thscode": "999999.ZZ", "interval": "1d", "adjust": "none",
-                      "start": probe._ms("2026-07-01"), "end": probe._ms("2026-07-10")}}
+    spec = _historical_spec("999999.ZZ", "2026-07-01", "2026-07-10")
     obs = probe.probe_endpoint("error_invalid_symbol", spec, _API_KEY)
     assert obs.http_status is not None
-    # 结构上：business error 也应返回 envelope（不要求特定 code，只需可解析）
     assert obs.envelope_code is not None, "非法 symbol 未返回业务错误码"
     dumped = obs.to_dict()
     assert "api_key" not in dumped and "X-api-key" not in dumped
+    # 递归：sample_fields 任意深度不得含 secret 键
+    assert _no_secret_keys(obs.sample_fields), "sample 中出现 secret 键"
+
+
+def _no_secret_keys(node) -> bool:
+    """递归断言任意深度无 secret 键。"""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if probe._is_secret_key(key):
+                return False
+            if not _no_secret_keys(value):
+                return False
+    elif isinstance(node, list):
+        for item in node:
+            if not _no_secret_keys(item):
+                return False
+    return True

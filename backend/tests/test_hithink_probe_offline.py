@@ -82,22 +82,52 @@ def test_success_rule_http200_not_enough():
     assert probe.classify_envelope(payload["code"]) == "instrument_not_found"
 
 
-def test_sanitize_sample_strips_secret_like_keys():
+def test_sanitize_sample_strips_secret_like_keys_recursive():
+    """R1：secret 键清洗必须递归到任意深度，包括嵌套 dict/list。
+
+    注意：顶层 ``items`` 键会触发 item[] 分支 → 其余字段进入 ``_meta``。
+    """
     payload = {"code": 0, "message": "ok", "request_id": "r1",
                "data": {"thscode": "600519.SH", "api_key": "LEAK", "token": "LEAK",
-                        "name": None, "price": 1.74}}
-    sample = probe.sanitize_sample(payload)
+                        "name": None, "price": 1.74,
+                        "nested": {"api_key": "LEAK", "inner": {"X-API-Key": "LEAK", "ok": 1}},
+                        "items": [{"token": "LEAK", "a": 2}, {"b": 3}]}}
+    sample = probe._extract_data_sample(payload)
     assert "api_key" not in sample and "token" not in sample
-    assert sample["thscode"]["value"] == "600519.SH"
-    assert sample["name"]["value"] is None
-    assert sample["name"]["type"] == "NoneType"
+    meta = sample["_meta"]
+    assert "api_key" not in meta and "token" not in meta
+    assert meta["thscode"]["value"] == "600519.SH"
+    assert meta["name"]["value"] is None
+    assert meta["name"]["type"] == "NoneType"
+    # 嵌套深度剥离（大小写/分隔符归一化）
+    nested = meta["nested"]
+    assert "api_key" not in nested and "xapikey" not in {probe._normalize_key(k) for k in nested}
+    assert nested["inner"]["ok"]["value"] == "1"
+    assert "xapikey" not in {probe._normalize_key(k) for k in nested["inner"]}
+    items = sample["item[0]"]
+    assert "token" not in items
+    assert sample["_count"] == 2
 
 
-def test_sanitize_sample_truncates_long_values():
+def test_extract_nested_item_array():
+    """R1：data.item[] 嵌套 → meta + item[0] + count。"""
     payload = {"code": 0, "message": "ok", "request_id": "r1",
-               "data": {"reason": "x" * 1000}}
-    sample = probe.sanitize_sample(payload)
+               "data": {"timestamp": 1750000000000, "total": 5000,
+                        "item": [{"thscode": "600519.SH", "ticker": "600519",
+                                  "last_price": 1700.5}, {"thscode": "000001.SZ"}]}}
+    sample = probe._extract_data_sample(payload)
+    assert sample["_meta"]["total"]["value"] == "5000"
+    assert sample["_meta"]["timestamp"]["value"] == "1750000000000"
+    assert sample["_count"] == 2
+    assert sample["item[0]"]["thscode"]["value"] == "600519.SH"
+
+
+def test_sanitize_sample_truncates_long_values_recursive():
+    payload = {"code": 0, "message": "ok", "request_id": "r1",
+               "data": {"reason": "x" * 1000, "nested": {"long": "y" * 1000}}}
+    sample = probe._extract_data_sample(payload)
     assert len(sample["reason"]["value"]) <= 120
+    assert len(sample["nested"]["long"]["value"]) <= 120
 
 
 # ---------------------------------------------------------------------------
@@ -111,15 +141,55 @@ def test_null_discipline_distinct_values():
     """
     payload = {"code": 0, "message": "ok", "request_id": "r1",
                "data": {"a": None, "b": 0, "c": "", "d": [], "e": False}}
-    sample = probe.sanitize_sample(payload)
-    # None → NoneType / value None；0 → int；"" → str；[] → list；False → bool
+    sample = probe._extract_data_sample(payload)
+    # None → NoneType / value None；0 → int；"" → str；[] → list(_list/_count)；False → bool
     assert sample["a"]["type"] == "NoneType" and sample["a"]["value"] is None
     assert sample["b"]["type"] == "int" and sample["b"]["value"] == "0"
     assert sample["c"]["type"] == "str" and sample["c"]["value"] == ""
-    assert sample["d"]["type"] == "list" and sample["d"]["value"] == "[]"
+    assert sample["d"]["_list"] == [] and sample["d"]["_count"] == 0  # 空 list，非 null/0/""
     assert sample["e"]["type"] == "bool" and sample["e"]["value"] == "False"
     # missing key 表现为不存在于 sample
     assert "missing_key" not in sample
+
+
+# ---------------------------------------------------------------------------
+# 3b. R1 矩阵结构
+# ---------------------------------------------------------------------------
+
+def test_historical_matrix_2x2():
+    """R1：historical 2 标的 × 2 时间窗，共 4 个独立探测。"""
+    assert len(probe.HISTORICAL_MATRIX) == 4
+    symbols = {m[0] for m in probe.HISTORICAL_MATRIX}
+    assert symbols == {"600519.SH", "000001.SZ"}
+    assert len({(m[1], m[2]) for m in probe.HISTORICAL_MATRIX}) == 2
+
+
+def test_adjustment_matrix_three_modes():
+    """R1：adjust none/forward/backward 三模式。"""
+    labels = {label for _, label in probe.ADJUSTMENT_MATRIX}
+    assert labels == {"adjust_none", "adjust_forward", "adjust_backward"}
+
+
+def test_limit_up_explicit_historical_date_spec():
+    """R1：limit-up 显式历史 date_ms（2026-08-07 交易日）。"""
+    spec = probe.LIMIT_UP_HISTORICAL_SPEC
+    assert spec["query"]["date_ms"] == probe._ms("2026-08-07")
+
+
+def test_non_trading_day_spec_is_weekend():
+    """R1：非交易日探测日期必须是周末（2026-08-08 = Saturday）。"""
+    from datetime import datetime
+    d = datetime.strptime(probe.NON_TRADING_DAY_DATE, "%Y-%m-%d")
+    assert d.strftime("%A") in ("Saturday", "Sunday")
+    assert probe.NON_TRADING_DAY_SPEC["query"]["thscode"] == "600519.SH"
+
+
+def test_non_trading_day_derived_from_trading_day():
+    """R1：非交易日 = 交易日 + 1 天（2026-08-07 Fri → 2026-08-08 Sat）。"""
+    from datetime import datetime, timedelta
+    trading = datetime.strptime(probe.TRADING_DAY_DATE, "%Y-%m-%d")
+    non_trading = datetime.strptime(probe.NON_TRADING_DAY_DATE, "%Y-%m-%d")
+    assert non_trading == trading + timedelta(days=1)
 
 
 # ---------------------------------------------------------------------------
@@ -144,11 +214,16 @@ def test_report_matrix_structure():
 
 
 def test_dataset_matrix_covers_all_categories():
-    """六类（A-F）至少各一个端点。"""
+    """六类（A-F）至少各一个端点 + R1 矩阵数据集。"""
     rows = _report_rows()
     ids = {r["dataset_id"] for r in rows}
     assert {"symbol_search", "snapshot_quote", "historical_daily", "income_statement",
             "index_constituents", "limit_up_pool"} <= ids
+    # R1：2×2 / adjust / 显式历史日期 / 非交易日
+    assert {"historical_600519_r1", "historical_600519_r2",
+            "historical_000001_r1", "historical_000001_r2",
+            "adjust_none", "adjust_forward", "adjust_backward",
+            "limit_up_explicit_date", "non_trading_day"} <= ids
 
 
 def test_verified_source_facts_2026_08_10():
@@ -183,6 +258,13 @@ def _report_rows() -> list[dict]:
         "provenance_strength": "DOC_VERIFIED",  # 端点/参数经官方文档核验
         "confidence": "LOW",
     }
+    historical_row = {**base, "endpoint": "/api/a-share/prices/historical",
+                      "identifiers": "request thscode only (bars carry date_ms not thscode)",
+                      "temporal_evidence": "start/end ms; date_ms per bar; adjust=none|forward|backward",
+                      "history_mode": "by_date",
+                      "revision_support": "NOT_EXPOSED",
+                      "null_semantics": "per endpoint page",
+                      "candidate_role": "CANDIDATE_HISTORICAL_BACKFILL"}
     return [
         {**base, "dataset_id": "symbol_search",
          "endpoint": "/api/meta/tickers/search",
@@ -200,14 +282,18 @@ def _report_rows() -> list[dict]:
          "revision_support": "NOT_EXPOSED",
          "null_semantics": "timestamp can be null",
          "candidate_role": "CANDIDATE_VERIFIER"},
-        {**base, "dataset_id": "historical_daily",
-         "endpoint": "/api/a-share/prices/historical",
-         "identifiers": "request thscode only (bars carry date_ms not thscode)",
-         "temporal_evidence": "start/end ms; date_ms per bar; adjust=none|forward|backward",
-         "history_mode": "by_date",
-         "revision_support": "NOT_EXPOSED",
-         "null_semantics": "per endpoint page",
-         "candidate_role": "CANDIDATE_HISTORICAL_BACKFILL"},
+        {**historical_row, "dataset_id": "historical_daily",
+         "temporal_evidence": "R1 矩阵：2 标的 × 2 时间窗 + adjust none/forward/backward"},
+        {**historical_row, "dataset_id": "historical_600519_r1"},
+        {**historical_row, "dataset_id": "historical_600519_r2"},
+        {**historical_row, "dataset_id": "historical_000001_r1"},
+        {**historical_row, "dataset_id": "historical_000001_r2"},
+        {**historical_row, "dataset_id": "adjust_none",
+         "temporal_evidence": "adjust=none 原始价"},
+        {**historical_row, "dataset_id": "adjust_forward",
+         "temporal_evidence": "adjust=forward 前复权"},
+        {**historical_row, "dataset_id": "adjust_backward",
+         "temporal_evidence": "adjust=backward 后复权"},
         {**base, "dataset_id": "income_statement",
          "endpoint": "/api/a-share/financials/income-statements",
          "identifiers": "thscode / ticker",
@@ -232,4 +318,20 @@ def _report_rows() -> list[dict]:
          "revision_support": "NOT_EXPOSED",
          "null_semantics": "per endpoint page",
          "candidate_role": "CANDIDATE_VERIFIER"},
+        {**base, "dataset_id": "limit_up_explicit_date",
+         "endpoint": "/api/a-share/special-data/limit-up-pool",
+         "identifiers": "thscode / ticker / name",
+         "temporal_evidence": "R1：显式 date_ms=2026-08-07(交易日) 历史成员",
+         "history_mode": "by_date",
+         "revision_support": "NOT_EXPOSED",
+         "null_semantics": "per endpoint page",
+         "candidate_role": "CANDIDATE_VERIFIER"},
+        {**base, "dataset_id": "non_trading_day",
+         "endpoint": "/api/a-share/prices/historical",
+         "identifiers": "request thscode",
+         "temporal_evidence": "R1：2026-08-08(Sat) 非交易日行为探测",
+         "history_mode": "by_date",
+         "revision_support": "NOT_EXPOSED",
+         "null_semantics": "记录空/错误行为（不假设）",
+         "candidate_role": "OBSERVATION_ONLY"},
     ]

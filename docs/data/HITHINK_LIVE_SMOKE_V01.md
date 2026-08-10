@@ -1,10 +1,15 @@
-# HiThink LIVE_SMOKE v0.1 —— 证据报告（DS-H1）
+# HiThink LIVE_SMOKE v0.1-R1 —— 证据报告（DS-H1）
 
-> 状态：**BLOCKED_LIVE_AUTH**（2026-08-10，无可用 API 凭据）。
+> 状态：**BLOCKED_LIVE_AUTH**（2026-08-10：旋转后凭据未注入执行环境；
+> chat 中复制的 key 按安全指令视为已暴露，不使用）。
 > 本报告只记录已**独立核实**的官方来源事实与探测契约；任何 live 结果在未
 > 实际成功请求前一律标注 `UNKNOWN` / `NOT_RUN`，不伪造 PASS。
 > Provider response = Observation，不是 Canonical Fact；本报告不改变任何
 > 生产路由，HiThink 不会自动成为 canonical source。
+>
+> R1：harness 已增强（嵌套 `item[]` 观测、递归 secret 清洗、双标的快照、
+> 历史 2×2 矩阵、adjust 三模式矩阵、limit-up 显式历史 `date_ms`、非交易日
+> 行为探测）——live 运行待凭据注入后执行。
 
 ---
 
@@ -36,16 +41,16 @@
 ## 2. LIVE_AUTH 状态
 
 ```
-HITHINK_FINANCE_API_KEY = ABSENT（2026-08-10 现场核验）
-.env / backend/.env = absent
+HITHINK_FINANCE_API_KEY = ABSENT（2026-08-10 R1 现场核验：进程 env / User scope 均无）
 ```
 
-→ 按工作单 §3：**DS_H1 = BLOCKED_LIVE_AUTH**。probe harness 与 offline 测试已完成，
-但**不得宣称 LIVE_SMOKE = PASS**。设置 `HITHINK_FINANCE_API_KEY` 后执行：
+→ 按工作单 §3：**DS_H1 = BLOCKED_LIVE_AUTH**。probe harness（R1 增强）与
+offline 测试已完成，但**不得宣称 LIVE_SMOKE = PASS**。旋转后凭据注入环境后执行：
 
 ```bash
-python -m tools.hithink_live_probe run --output obs.json
-pytest backend/tests/live/test_hithink_live_smoke.py -m live -q
+python -c "import os; print(bool(os.environ.get('HITHINK_FINANCE_API_KEY')))"  # 期望 True
+cd backend && python -m tools.hithink_live_probe run --output <TEMP_PATH_OUTSIDE_REPO>
+pytest tests/live/test_hithink_live_smoke.py -m live -q
 ```
 
 ---
@@ -55,13 +60,14 @@ pytest backend/tests/live/test_hithink_live_smoke.py -m live -q
 | dataset_id | endpoint | 官方契约摘要 | 历史语义（文档证据） |
 |---|---|---|---|
 | A. symbol_search | `/api/meta/tickers/search` | `q` 搜索/消歧；`limit` | lookup，无时间序列 |
-| B. snapshot_quote | `/api/a-share/prices/snapshot` | `thscodes` 批量；显式取数 `timestamp=null`，分页模式为最新有效时间 | **snapshot_only** |
-| C. historical_daily | `/api/a-share/prices/historical` | `thscode` 单只、`interval=1d`、`start/end` 毫秒（窗口≤10年）、`adjust=none/forward/backward`（默认 forward）；bar 含 `date_ms`/OHLC | **by_date**（`adjust` 显式参数化） |
+| B. snapshot_quote | `/api/a-share/prices/snapshot` | `thscodes` 批量（R1：双标的 `600519.SH,000001.SZ`）；显式取数 `timestamp=null`，分页模式为最新有效时间 | **snapshot_only** |
+| C. historical_daily | `/api/a-share/prices/historical` | `thscode` 单只、`interval=1d`、`start/end` 毫秒（窗口≤10年）、`adjust=none/forward/backward`（默认 forward）；bar 含 `date_ms`/OHLC | **by_date**（R1：2 标的 × 2 时间窗 + adjust 三模式矩阵） |
 | D. income_statement | `/api/a-share/financials/income-statements` | `thscode`、`period=annual/quarterly`、`limit`/`start+end`；`period_end_ms` + `report_date_ms` + `fiscal_year/fiscal_period` | **by_date**（按报告期多期序列） |
 | E. index_constituents | `/api/a-share-index/constituents/ths-stock-list` | 板块/指数当前成分 | **snapshot_only**（无 as-of 参数，不得伪造历史成员） |
-| F. limit_up_pool | `/api/a-share/special-data/limit-up-pool` | `date_ms`（Asia/Shanghai 00:00，默认今天）、分页 | **by_date**（支持历史交易日查询） |
+| F. limit_up_pool | `/api/a-share/special-data/limit-up-pool` | `date_ms`（Asia/Shanghai 00:00，默认今天）、分页 | **by_date**（R1：显式历史 `date_ms=2026-08-07` 交易日） |
 | 辅助 | `/api/a-share/calendar/trading-days` | 近一年交易日序列 | by_date（滚动窗口） |
 | 辅助 | `/api/a-share/valuations/snapshot` | PE/PB/PS/PCF 批量快照，保留 null/负值 | snapshot_only |
+| R1 非交易日 | `/api/a-share/prices/historical` | `2026-08-08`（周六）单日窗口 | 行为待 live 记录（空 items / 业务错误 / 其他） |
 
 > F 选择理由：limit-up pool 提供最强的 temporal/provenance 证据 —— `date_ms`
 > 参数显式支持按历史交易日取成员（membership temporal），且与项目既有涨停链
@@ -104,3 +110,12 @@ pytest backend/tests/live/test_hithink_live_smoke.py -m live -q
 - **NO_CANONICAL_SWITCH**：本 slice 不修改任何生产 provider / routing / data-health /
   scheduler；HiThink 不自动成为 canonical。
 - **候选角色仅为建议矩阵**，由 DS-A1（C lane）最终定义项目 canonical 契约。
+
+## 7. R1 Security Posture（凭据安全）
+
+- chat 中复制的凭据按用户安全指令视为**已暴露**，本任务不使用、不持久化；
+- 只接受环境变量 `HITHINK_FINANCE_API_KEY` 的旋转后凭据（当前执行环境未注入）；
+- key 只进 HTTP header `X-api-key`；源码 / fixture / docs / PR / commit /
+  observation JSON / fingerprint / stdout / stderr / exception / logs 均不含 key；
+- offline 测试证明：fingerprint 白名单 fail-closed、递归 secret 键清洗
+  （任意深度）、观测结构无 key 字段。
