@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Literal, Mapping
@@ -38,7 +39,6 @@ from fact_lake_store import (
     CANONICAL_DIRECTORY_NAME,
     FactLake,
     FactLakeCorruptedError,
-    FactLakePublicationConflictError,
     StoredCanonicalPublication,
     StoredNormalization,
     StoredObservation,
@@ -55,6 +55,9 @@ VERIFIER_ENDPOINT = "stk_limit"
 DATASET_CONTRACT_REVISION = "ds-limit-up-pool-contract-v0.1"
 NORMALIZER_VERSION = "ds-limit-up-pool-normalizer-v0.1"
 ARTIFACT_SCHEMA_VERSION = "ds-limit-up-pool-parquet-v0.1"
+RECONCILIATION_POLICY_ID = "bk11-limit-up-count-tolerance"
+RECONCILIATION_POLICY_VERSION = "v0.1"
+VERIFIER_EVIDENCE_VERSION = "tushare-limit-up-count-verifier-v0.1"
 MAX_RAW_PAYLOAD_BYTES = 16 * 1024 * 1024
 MAX_SOURCE_POOL_ROWS = 10_000
 MAX_NORMALIZED_JSON_BYTES = 4 * 1024 * 1024
@@ -201,6 +204,7 @@ def build_request_fingerprint(metadata: Mapping[str, Any]) -> str:
 
 @dataclass(frozen=True)
 class RawResponseCapture:
+    capture_event_id: str
     raw_bytes: bytes
     metadata: dict[str, Any]
     request_fingerprint: str
@@ -239,6 +243,7 @@ class RawCaptureBuffer:
             )
         }
         self.capture = RawResponseCapture(
+            capture_event_id=f"capture-{uuid.uuid4().hex}",
             raw_bytes=raw_bytes,
             metadata=safe_metadata,
             request_fingerprint=fingerprint,
@@ -386,14 +391,15 @@ def normalize_adapter_snapshot(
 
 
 def _observation_id(capture: RawResponseCapture) -> str:
+    if type(capture.capture_event_id) is not str or re.fullmatch(
+        r"capture-[0-9a-f]{32}", capture.capture_event_id
+    ) is None:
+        raise LimitUpCaptureError("capture event identity is invalid")
     identity = _canonical_json({
         "dataset_id": DATASET_ID,
         "provider_id": CANONICAL_PROVIDER_ID,
         "provider_endpoint": CANONICAL_ENDPOINT,
-        "request_fingerprint": capture.request_fingerprint,
-        "source_payload_hash": capture.source_payload_hash,
-        "normalizer_version": NORMALIZER_VERSION,
-        "dataset_contract_revision": DATASET_CONTRACT_REVISION,
+        "capture_event_id": capture.capture_event_id,
     })
     return f"obs-{_sha256_text(identity)}"
 
@@ -475,6 +481,7 @@ def build_provider_observation(
     if not admitted and not reasons:
         reasons = ("CANONICAL_ADMISSION_REJECTED",)
     raw_observation_metadata = {
+        "capture_event_id": capture.capture_event_id,
         "request": {
             field: capture.metadata[field]
             for field in _FINGERPRINT_FIELDS
@@ -544,25 +551,10 @@ def persist_raw_observation(
     snapshot: Mapping[str, Any],
 ) -> StoredObservation:
     candidate = build_provider_observation(capture, snapshot)
-    existing = lake.get_observation(candidate.observation_id)
-    if existing is not None:
-        # Receipt metadata (fetched_at, status, content type) does not create a
-        # second identity for the same logical request and exact raw bytes.
-        # Any different deterministic normalization is caught by the separate
-        # immutable normalized_observations authority.
-        persisted = existing.observation
-        if (
-            existing.blob_hash.lower() != capture.source_payload_hash.lower()
-            or persisted.dataset_id != DATASET_ID
-            or persisted.provider_id != CANONICAL_PROVIDER_ID
-            or persisted.provider_endpoint != CANONICAL_ENDPOINT
-            or persisted.request_fingerprint != capture.request_fingerprint
-            or persisted.normalizer_version != NORMALIZER_VERSION
-        ):
-            raise FactLakePublicationConflictError(
-                "raw observation identity conflicted with persisted evidence"
-            )
-        return existing
+    # The Fact Lake owns full immutable replay validation.  A single capture
+    # event reuses its event token and is idempotent only when the entire
+    # observation receipt and exact bytes agree.  A new provider fetch receives
+    # a new event token even if its request fingerprint and content hash match.
     return lake.store_observation(
         candidate,
         capture.raw_bytes,
@@ -634,9 +626,46 @@ def build_canonical_fact(
     )
 
 
+_PUBLICATION_EVENT_ONLY_PAYLOAD_FIELDS = frozenset({
+    "http_status",
+    "source_observation_id",
+})
+
+
+def _canonical_state_document(fact: CanonicalFact) -> dict[str, Any]:
+    """Remove receipt/event identity while retaining canonical evidence state."""
+    document = fact.to_dict()
+    document.pop("fact_id", None)
+    document.pop("source_observation_ids", None)
+    provenance = document.get("provenance_chain")
+    if type(provenance) is list:
+        document["provenance_chain"] = [
+            {
+                key: value
+                for key, value in link.items()
+                if key != "observation_id"
+            }
+            for link in provenance
+        ]
+    payload = document.get("canonical_payload")
+    if type(payload) is dict:
+        document["canonical_payload"] = {
+            key: value
+            for key, value in payload.items()
+            if key not in _PUBLICATION_EVENT_ONLY_PAYLOAD_FIELDS
+        }
+    return document
+
+
+def _same_canonical_state(left: CanonicalFact, right: CanonicalFact) -> bool:
+    return _canonical_json(_canonical_state_document(left)) == _canonical_json(
+        _canonical_state_document(right)
+    )
+
+
 def _publication_identity(fact: CanonicalFact) -> tuple[str, str]:
     identity = _canonical_json({
-        "fact": fact.to_dict(),
+        "canonical_state": _canonical_state_document(fact),
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
     })
     digest = _sha256_text(identity)
@@ -732,6 +761,7 @@ def publish_canonical_fact(
         raw_payload_hash=provenance.source_payload_hash,
         artifact_schema_version=ARTIFACT_SCHEMA_VERSION,
         artifact_relpath=artifact_relpath,
+        equivalent_replay=_same_canonical_state,
     )
     if staged.stored.commit_state == "COMMITTED":
         return staged.stored
@@ -745,7 +775,10 @@ def publish_canonical_fact(
             candidate,
             publication_id=publication_id,
             vintage_sequence=staged.stored.vintage_sequence,
-            fact=fact,
+            # A prior capture event may already own the same canonical state.
+            # Always materialize the authoritative staged fact so concurrent
+            # equivalent events cannot disagree about artifact contents.
+            fact=staged.stored.fact,
         )
 
     artifact_hash = lake.publish_canonical_artifact(artifact_relpath, writer)
@@ -777,8 +810,8 @@ def unknown_verifier_reconciliation(
     return ReconciliationResult(
         dataset_id=DATASET_ID,
         status=ReconciliationStatus.UNKNOWN,
-        comparison_policy_id="eastmoney-vs-tushare-count",
-        comparison_policy_version="v0.1",
+        comparison_policy_id=RECONCILIATION_POLICY_ID,
+        comparison_policy_version=RECONCILIATION_POLICY_VERSION,
         comparison_evidence={
             "basis": "verifier_observation_absent",
             "scope": "count_only",
@@ -789,6 +822,38 @@ def unknown_verifier_reconciliation(
         right_value=None,
         reason_codes=("VERIFIER_OBSERVATION_ABSENT",),
     )
+
+
+def _committed_verifier_count(
+    lake: FactLake,
+    observation: ProviderObservation,
+) -> int | None:
+    """Read the count from the exact committed verifier evidence bytes."""
+    if observation.normalizer_version != VERIFIER_EVIDENCE_VERSION:
+        return None
+    raw = lake.read_payload(observation.observation_id)
+    if raw is None:
+        return None
+    try:
+        evidence = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if type(evidence) is not dict or set(evidence) != {
+        "limit_up_count",
+        "trade_date",
+    }:
+        return None
+    count = evidence["limit_up_count"]
+    trade_date = evidence["trade_date"]
+    if type(count) is not int or count < 0:
+        return None
+    if type(trade_date) is not str or trade_date != observation.trade_date:
+        return None
+    if not isinstance(observation.payload, Mapping) or _canonical_json(
+        observation.payload
+    ) != _canonical_json(evidence):
+        return None
+    return count
 
 
 def reconcile_limit_up_counts(
@@ -815,6 +880,16 @@ def reconcile_limit_up_counts(
     )
     if verifier_route.role is not ProviderRole.VERIFIER:
         raise DataContractError("right observation is not the configured verifier")
+    normalization = lake.get_normalization(eastmoney.observation_id)
+    left = (
+        normalization.normalized_payload.get("row_count")
+        if normalization is not None
+        and isinstance(normalization.normalized_payload, Mapping)
+        else None
+    )
+    right: int | None = None
+    tolerance: float | None = None
+    absolute_delta: int | None = None
     if tushare.quality_status is not QualityStatus.VALID:
         status = ReconciliationStatus.UNKNOWN
         reasons = ("VERIFIER_QUALITY_UNTRUSTED",)
@@ -822,35 +897,39 @@ def reconcile_limit_up_counts(
         status = ReconciliationStatus.TEMPORAL_INCOMPARABLE
         reasons = ("TRADE_DATE_MISMATCH",)
     else:
-        left = eastmoney.payload.get("row_count") if isinstance(
-            eastmoney.payload, dict) else None
-        right = tushare.payload.get("limit_up_count") if isinstance(
-            tushare.payload, dict) else None
-        if type(left) is not int or type(right) is not int:
+        right = _committed_verifier_count(lake, tushare)
+        if type(left) is not int or left < 0 or right is None:
             status = ReconciliationStatus.UNKNOWN
             reasons = ("COUNT_EVIDENCE_UNAVAILABLE",)
-        elif left == right:
-            status = ReconciliationStatus.MATCH
-            reasons = ("COUNT_MATCH",)
         else:
-            status = ReconciliationStatus.MISMATCH
-            reasons = ("COUNT_MISMATCH",)
+            absolute_delta = abs(right - left)
+            tolerance = max(3, left * 0.05)
+            if absolute_delta <= tolerance:
+                status = ReconciliationStatus.MATCH
+                reasons = ("COUNT_MATCH",)
+            else:
+                status = ReconciliationStatus.MISMATCH
+                reasons = ("COUNT_MISMATCH",)
+    comparison_evidence: dict[str, Any] = {
+        "basis": "count_only",
+        "left_evidence": "stored_normalization.row_count",
+        "right_evidence": "committed_verifier_raw_json.limit_up_count",
+    }
+    if tolerance is not None and absolute_delta is not None:
+        comparison_evidence.update({
+            "absolute_delta": absolute_delta,
+            "tolerance": tolerance,
+        })
     return ReconciliationResult(
         dataset_id=DATASET_ID,
         status=status,
-        comparison_policy_id="eastmoney-vs-tushare-count",
-        comparison_policy_version="v0.1",
-        comparison_evidence={"basis": "count_only"},
+        comparison_policy_id=RECONCILIATION_POLICY_ID,
+        comparison_policy_version=RECONCILIATION_POLICY_VERSION,
+        comparison_evidence=comparison_evidence,
         left_observation_id=eastmoney.observation_id,
         right_observation_id=tushare.observation_id,
-        left_value=(
-            {"row_count": eastmoney.payload.get("row_count")}
-            if isinstance(eastmoney.payload, dict) else None
-        ),
-        right_value=(
-            {"limit_up_count": tushare.payload.get("limit_up_count")}
-            if isinstance(tushare.payload, dict) else None
-        ),
+        left_value=({"row_count": left} if type(left) is int else None),
+        right_value=({"limit_up_count": right} if type(right) is int else None),
         reason_codes=reasons,
     )
 
@@ -904,6 +983,9 @@ def run_limit_up_shadow(
         fact,
         failure_hook=failure_hook,
     )
+    # The publication may intentionally reuse an earlier capture event for an
+    # unchanged canonical state.  Return the authoritative published fact.
+    fact = publication.fact
     reconciliation = unknown_verifier_reconciliation(
         observation.observation,
         normalization.normalized_payload,

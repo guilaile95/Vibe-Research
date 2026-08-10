@@ -1492,11 +1492,15 @@ class FactLake:
         raw_payload_hash: str,
         artifact_schema_version: str,
         artifact_relpath: str,
+        equivalent_replay: Callable[[CanonicalFact, CanonicalFact], bool]
+            | None = None,
     ) -> PublicationStageResult:
         """Create or replay one invisible canonical publication staging row."""
         self._require_write()
         if not isinstance(fact, CanonicalFact):
             raise TypeError("fact must be CanonicalFact")
+        if equivalent_replay is not None and not callable(equivalent_replay):
+            raise TypeError("equivalent_replay must be callable when provided")
         for field, value in (
             ("publication_id", publication_id),
             ("source_observation_id", source_observation_id),
@@ -1587,9 +1591,34 @@ class FactLake:
                         row["artifact_relpath"],
                     )
                     if persisted_values != exact_values:
-                        raise FactLakePublicationConflictError(
-                            "publication_id was reused with different semantics"
-                        )
+                        try:
+                            persisted_fact = CanonicalFact.from_dict(
+                                json.loads(row["canonical_fact_json"])
+                            )
+                            equivalent = (
+                                equivalent_replay is not None
+                                and row["dataset_id"] == fact.dataset_id
+                                and row["canonical_key"] == fact.canonical_key
+                                and row["trade_date"] == fact.trade_date
+                                and row["dataset_contract_revision"]
+                                    == fact.dataset_contract_revision
+                                and row["normalizer_version"]
+                                    == normalizer_version
+                                and row["raw_payload_hash"].lower()
+                                    == raw_payload_hash.lower()
+                                and row["artifact_schema_version"]
+                                    == artifact_schema_version
+                                and row["artifact_relpath"] == artifact_relpath
+                                and equivalent_replay(persisted_fact, fact)
+                            )
+                        except Exception as exc:
+                            raise FactLakePublicationConflictError(
+                                "publication replay equivalence validation failed"
+                            ) from exc
+                        if not equivalent:
+                            raise FactLakePublicationConflictError(
+                                "publication_id was reused with different semantics"
+                            )
                     conn.commit()
                     return PublicationStageResult(
                         stored=self._row_to_publication(

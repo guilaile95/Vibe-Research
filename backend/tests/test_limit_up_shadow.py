@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date
 import hashlib
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -29,6 +30,7 @@ from fact_lake_store import (
     CONTROL_DB_FILENAME,
     FactLakeCorruptedError,
     FactLakeNormalizationConflictError,
+    FactLakeObservationConflictError,
     FactLakePublicationConflictError,
     initialize_fact_lake,
     open_existing_fact_lake,
@@ -56,6 +58,7 @@ from limit_up_shadow import (
     query_limit_up_pool,
     reconcile_limit_up_counts,
     run_limit_up_shadow,
+    unknown_verifier_reconciliation,
 )
 
 
@@ -123,6 +126,67 @@ def _fact_for(lake, raw: bytes, snapshot=None):
     stored = persist_raw_observation(lake, _capture(raw), snapshot)
     normalization = persist_normalization(lake, stored, snapshot)
     return stored, build_canonical_fact(stored.observation, normalization)
+
+
+def _rows(count: int) -> list[dict[str, object]]:
+    return [
+        {"stock_code": f"{index:06d}", "lbc": 1}
+        for index in range(1, count + 1)
+    ]
+
+
+def _persist_eastmoney_count(lake, count: int, *, raw: bytes | None = None):
+    raw = raw or json.dumps(
+        {"provider": "eastmoney", "count_fixture": count},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    snapshot = _snapshot(rows=_rows(count))
+    stored = persist_raw_observation(lake, _capture(raw), snapshot)
+    normalization = persist_normalization(lake, stored, snapshot)
+    assert "row_count" not in stored.observation.payload
+    assert normalization.normalized_payload["row_count"] == count
+    return stored, normalization
+
+
+def _persist_tushare_count(
+    lake,
+    count: int,
+    *,
+    trade_date: str = TRADE_DATE,
+    quality_status: QualityStatus = QualityStatus.VALID,
+    payload_count: int | None = None,
+):
+    evidence = {"limit_up_count": count, "trade_date": trade_date}
+    raw = json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    digest = hashlib.sha256(raw).hexdigest()
+    base = build_provider_observation(_capture(b'{"verifier-base":true}'), _snapshot())
+    verifier = replace(
+        base,
+        observation_id=f"obs-tushare-{digest}",
+        provider_id=VERIFIER_PROVIDER_ID,
+        provider_endpoint=VERIFIER_ENDPOINT,
+        provider_symbol=f"stk_limit:{trade_date}",
+        request_fingerprint=f"sha256:{hashlib.sha256(f'tushare:{trade_date}'.encode()).hexdigest()}",
+        source_payload_hash=f"sha256:{digest}",
+        normalizer_version=shadow.VERIFIER_EVIDENCE_VERSION,
+        payload={
+            "limit_up_count": count if payload_count is None else payload_count,
+            "trade_date": trade_date,
+        },
+        fetched_at="2026-07-30T08:05:00Z",
+        trade_date=trade_date,
+        quality_status=quality_status,
+        reason_codes=(
+            () if quality_status is QualityStatus.VALID
+            else ("VERIFIER_QUALITY_UNTRUSTED",)
+        ),
+    )
+    stored = lake.store_observation(verifier, raw, "application/json").stored
+    assert json.loads(lake.read_payload(verifier.observation_id)) == evidence
+    return stored
 
 
 class _Response:
@@ -304,7 +368,6 @@ def test_raw_observation_is_committed_before_hook_or_deterministic_normalization
     payload = {"data": {"date": TRADE_DATE, "pool": [{"c": "000001", "lbc": 2}]}}
     monkeypatch.setattr(astock, "em_get", lambda *args, **kwargs: _Response(raw, payload))
     lake = initialize_fact_lake(tmp_path / failure_mode)
-    expected = build_provider_observation(_capture(raw), _snapshot())
 
     if failure_mode == "before_normalization":
         def failure_hook(point):
@@ -324,9 +387,21 @@ def test_raw_observation_is_committed_before_hook_or_deterministic_normalization
         with pytest.raises(LimitUpNormalizationError, match="normalizer rejected"):
             run_limit_up_shadow(TRADE_DATE, lake)
 
-    committed = lake.get_observation(expected.observation_id)
+    conn = sqlite3.connect(tmp_path / failure_mode / CONTROL_DB_FILENAME)
+    try:
+        observation_ids = [
+            row[0]
+            for row in conn.execute(
+                "SELECT observation_id FROM observations"
+                " WHERE commit_state = 'COMMITTED'"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+    assert len(observation_ids) == 1
+    committed = lake.get_observation(observation_ids[0])
     assert committed is not None and committed.commit_state == "COMMITTED"
-    assert lake.read_payload(expected.observation_id) == raw
+    assert lake.read_payload(observation_ids[0]) == raw
     assert query_limit_up_pool(lake, TRADE_DATE) == ()
 
 
@@ -349,10 +424,14 @@ def test_verifier_observation_cannot_become_canonical_even_if_its_payload_looks_
 def test_replay_is_idempotent_but_new_evidence_makes_a_new_vintage_and_survives_restart(tmp_path):
     root = tmp_path / "lake"
     lake = initialize_fact_lake(root)
-    stored, fact = _fact_for(lake, b'{"version":1}')
+    snapshot = _snapshot()
+    first_capture = _capture(b'{"version":1}')
+    stored = persist_raw_observation(lake, first_capture, snapshot)
+    normalization = persist_normalization(lake, stored, snapshot)
+    fact = build_canonical_fact(stored.observation, normalization)
     first = publish_canonical_fact(lake, fact)
     assert publish_canonical_fact(lake, fact) == first
-    assert persist_raw_observation(lake, _capture(b'{"version":1}'), _snapshot()) == stored
+    assert persist_raw_observation(lake, first_capture, snapshot) == stored
 
     _, changed_fact = _fact_for(lake, b'{"version":2}')
     second = publish_canonical_fact(lake, changed_fact)
@@ -384,35 +463,93 @@ def test_normalization_is_bound_once_per_raw_observation_and_normalizer(tmp_path
     assert lake.get_normalization(stored.observation.observation_id) == first
 
 
-def test_exact_raw_replay_ignores_receipt_metadata_but_normalization_stays_immutable(tmp_path):
+def test_same_capture_event_replay_is_idempotent_and_receipt_is_immutable(tmp_path):
     lake = initialize_fact_lake(tmp_path / "lake")
     raw = b'{"same-request-and-bytes":true}'
     snapshot = _snapshot()
-    first = persist_raw_observation(lake, _capture(raw), snapshot)
+    capture = _capture(raw)
+    first = persist_raw_observation(lake, capture, snapshot)
     normalization = persist_normalization(lake, first, snapshot)
-    fact = build_canonical_fact(first.observation, normalization)
-    publication = publish_canonical_fact(lake, fact)
-
-    replay = persist_raw_observation(
-        lake,
-        _capture(
-            raw,
-            content_type="application/problem+json",
-            http_status=503,
-            fetched_at="2026-07-30T11:00:00Z",
-        ),
-        snapshot,
-    )
+    replay = persist_raw_observation(lake, capture, snapshot)
     assert replay == first
+    assert lake.get_observation(first.observation.observation_id) == first
+
+    tampered_metadata = dict(capture.metadata)
+    tampered_metadata.update({
+        "content_type": "application/problem+json",
+        "fetched_at": "2026-07-30T11:00:00Z",
+        "http_status": 503,
+    })
+    tampered = replace(
+        capture,
+        metadata=tampered_metadata,
+        content_type="application/problem+json",
+        fetched_at="2026-07-30T11:00:00Z",
+    )
+    with pytest.raises(FactLakeObservationConflictError):
+        persist_raw_observation(lake, tampered, snapshot)
     assert lake.get_observation(first.observation.observation_id) == first
 
     conflicting_snapshot = _snapshot(rows=[{"stock_code": "000001", "lbc": 3}])
     with pytest.raises(FactLakeNormalizationConflictError, match="conflicting output"):
         persist_normalization(lake, replay, conflicting_snapshot)
     assert lake.get_normalization(first.observation.observation_id) == normalization
-    assert query_limit_up_pool(lake, TRADE_DATE, selection="all") == (
-        query_limit_up_pool(lake, TRADE_DATE, selection="publication", publication_id=publication.publication_id)[0],
+
+
+def test_separate_capture_events_same_bytes_share_blob_and_reuse_canonical_state(tmp_path):
+    root = tmp_path / "lake"
+    lake = initialize_fact_lake(root)
+    raw = b'{"same-state-observed-twice":true}'
+    snapshot = _snapshot()
+    capture_t1 = _capture(raw, fetched_at="2026-07-30T08:00:00Z")
+    capture_t2 = _capture(
+        raw,
+        content_type="application/problem+json",
+        http_status=201,
+        fetched_at="2026-07-30T08:05:00Z",
     )
+
+    first = persist_raw_observation(lake, capture_t1, snapshot)
+    second = persist_raw_observation(lake, capture_t2, snapshot)
+    assert first.observation.observation_id != second.observation.observation_id
+    assert capture_t1.capture_event_id != capture_t2.capture_event_id
+    assert first.observation.request_fingerprint == second.observation.request_fingerprint
+    assert first.blob_hash == second.blob_hash
+    assert first.blob_relpath == second.blob_relpath
+    assert first.observation.fetched_at == "2026-07-30T08:00:00Z"
+    assert second.observation.fetched_at == "2026-07-30T08:05:00Z"
+    assert first.content_type == "application/json; charset=utf-8"
+    assert second.content_type == "application/problem+json"
+    assert first.observation.payload["response"]["http_status"] == 200
+    assert second.observation.payload["response"]["http_status"] == 201
+    assert len(list((root / "raw").rglob("*.blob"))) == 1
+
+    first_normalization = persist_normalization(lake, first, snapshot)
+    second_normalization = persist_normalization(lake, second, snapshot)
+    assert first_normalization.source_observation_id != second_normalization.source_observation_id
+    first_publication = publish_canonical_fact(
+        lake,
+        build_canonical_fact(first.observation, first_normalization),
+    )
+    second_publication = publish_canonical_fact(
+        lake,
+        build_canonical_fact(second.observation, second_normalization),
+    )
+    assert second_publication == first_publication
+    assert second_publication.vintage_sequence == 1
+    assert len(query_limit_up_pool(lake, TRADE_DATE, selection="all")) == 1
+
+    conn = sqlite3.connect(root / CONTROL_DB_FILENAME)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0] == 2
+        assert conn.execute(
+            "SELECT COUNT(*) FROM normalized_observations"
+        ).fetchone()[0] == 2
+        assert conn.execute(
+            "SELECT COUNT(*) FROM canonical_publications"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
 
 
 def test_same_name_noop_append_only_trigger_spoof_fails_normal_open_and_write(tmp_path):
@@ -615,29 +752,129 @@ def test_query_rejects_schema_that_matches_manifest_hash_but_not_contract(tmp_pa
         query_limit_up_pool(lake, TRADE_DATE)
 
 
-def test_reconciliation_is_count_only_and_never_switches_the_canonical_source(tmp_path):
+@pytest.mark.parametrize(
+    ("eastmoney_count", "tushare_count", "expected_status"),
+    [
+        (100, 100, ReconciliationStatus.MATCH),
+        (100, 104, ReconciliationStatus.MATCH),
+        (60, 63, ReconciliationStatus.MATCH),
+        (60, 64, ReconciliationStatus.MISMATCH),
+    ],
+)
+def test_reconciliation_uses_real_normalization_and_bk11_count_tolerance(
+    tmp_path,
+    eastmoney_count,
+    tushare_count,
+    expected_status,
+):
     lake = initialize_fact_lake(tmp_path / "lake")
-    raw = b'{"reconciliation":true}'
-    eastmoney = replace(
-        build_provider_observation(_capture(raw), _snapshot(rows=[{"stock_code": "000001", "lbc": 2}])),
-        payload={"row_count": 1},
+    eastmoney, normalization = _persist_eastmoney_count(lake, eastmoney_count)
+    tushare = _persist_tushare_count(lake, tushare_count)
+
+    result = reconcile_limit_up_counts(
+        lake,
+        eastmoney.observation,
+        tushare.observation,
     )
-    tushare = replace(
-        eastmoney,
-        observation_id="obs-tushare",
-        provider_id=VERIFIER_PROVIDER_ID,
-        provider_endpoint=VERIFIER_ENDPOINT,
-        provider_symbol="stk_limit:20260730",
-        payload={"limit_up_count": 999},
+    assert result.status is expected_status
+    assert result.left_observation_id == eastmoney.observation.observation_id
+    assert result.right_observation_id == tushare.observation.observation_id
+    assert result.left_value == {"row_count": eastmoney_count}
+    assert result.right_value == {"limit_up_count": tushare_count}
+    assert result.comparison_evidence["left_evidence"] \
+        == "stored_normalization.row_count"
+    assert result.comparison_evidence["absolute_delta"] \
+        == abs(tushare_count - eastmoney_count)
+    assert result.comparison_evidence["tolerance"] \
+        == max(3, eastmoney_count * 0.05)
+    assert normalization.normalized_payload["row_count"] == eastmoney_count
+    assert LIMIT_UP_DATASET_SPEC.canonical_route.provider_id \
+        == CANONICAL_PROVIDER_ID
+    with pytest.raises(DataContractError):
+        LIMIT_UP_DATASET_SPEC.canonical_route_for(
+            tushare.observation.provider_id,
+            tushare.observation.provider_endpoint,
+        )
+
+
+def test_reconciliation_missing_normalization_and_verifier_fail_closed(tmp_path):
+    lake = initialize_fact_lake(tmp_path / "lake")
+    snapshot = _snapshot(rows=_rows(2))
+    eastmoney = persist_raw_observation(
+        lake,
+        _capture(b'{"eastmoney-without-normalization":true}'),
+        snapshot,
     )
-    lake.store_observation(eastmoney, raw, "application/json")
-    stored_tushare = lake.store_observation(tushare, raw, "application/json").stored
-    result = reconcile_limit_up_counts(lake, eastmoney, tushare)
-    assert result.status is ReconciliationStatus.MISMATCH
-    assert result.left_observation_id == eastmoney.observation_id
-    assert result.right_observation_id == tushare.observation_id
-    with pytest.raises((LimitUpCanonicalAdmissionError, DataContractError)):
-        build_canonical_fact(tushare, persist_normalization(lake, stored_tushare, _snapshot()))
+    tushare = _persist_tushare_count(lake, 2)
+
+    missing_normalization = reconcile_limit_up_counts(
+        lake,
+        eastmoney.observation,
+        tushare.observation,
+    )
+    assert missing_normalization.status is ReconciliationStatus.UNKNOWN
+    assert missing_normalization.reason_codes == ("COUNT_EVIDENCE_UNAVAILABLE",)
+    assert missing_normalization.left_value is None
+
+    normalization = persist_normalization(lake, eastmoney, snapshot)
+    missing_verifier = unknown_verifier_reconciliation(
+        eastmoney.observation,
+        normalization.normalized_payload,
+    )
+    assert missing_verifier.status is ReconciliationStatus.UNKNOWN
+    assert missing_verifier.reason_codes == ("VERIFIER_OBSERVATION_ABSENT",)
+    assert missing_verifier.left_value == {"row_count": 2}
+
+
+def test_reconciliation_rejects_untrusted_or_temporally_incomparable_verifier(tmp_path):
+    lake = initialize_fact_lake(tmp_path / "lake")
+    eastmoney, _ = _persist_eastmoney_count(lake, 4)
+    untrusted = _persist_tushare_count(
+        lake,
+        4,
+        quality_status=QualityStatus.INVALID,
+    )
+    untrusted_result = reconcile_limit_up_counts(
+        lake,
+        eastmoney.observation,
+        untrusted.observation,
+    )
+    assert untrusted_result.status is ReconciliationStatus.UNKNOWN
+    assert untrusted_result.reason_codes == ("VERIFIER_QUALITY_UNTRUSTED",)
+
+    other_lake = initialize_fact_lake(tmp_path / "other-lake")
+    eastmoney, _ = _persist_eastmoney_count(other_lake, 4)
+    other_date = _persist_tushare_count(
+        other_lake,
+        4,
+        trade_date="2026-07-29",
+    )
+    temporal_result = reconcile_limit_up_counts(
+        other_lake,
+        eastmoney.observation,
+        other_date.observation,
+    )
+    assert temporal_result.status is ReconciliationStatus.TEMPORAL_INCOMPARABLE
+    assert temporal_result.reason_codes == ("TRADE_DATE_MISMATCH",)
+    assert LIMIT_UP_DATASET_SPEC.canonical_route.provider_id \
+        == CANONICAL_PROVIDER_ID
+
+
+def test_reconciliation_rejects_verifier_payload_not_derived_from_raw(tmp_path):
+    lake = initialize_fact_lake(tmp_path / "lake")
+    eastmoney, _ = _persist_eastmoney_count(lake, 2)
+    verifier = _persist_tushare_count(lake, 2, payload_count=3)
+
+    result = reconcile_limit_up_counts(
+        lake,
+        eastmoney.observation,
+        verifier.observation,
+    )
+    assert result.status is ReconciliationStatus.UNKNOWN
+    assert result.reason_codes == ("COUNT_EVIDENCE_UNAVAILABLE",)
+    assert result.right_value is None
+    assert LIMIT_UP_DATASET_SPEC.canonical_route.provider_id \
+        == CANONICAL_PROVIDER_ID
 
 
 def test_explicit_shadow_run_uses_one_provider_call_and_default_adapter_stays_shadow_disabled(
