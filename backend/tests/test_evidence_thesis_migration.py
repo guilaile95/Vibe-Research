@@ -12,6 +12,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -302,6 +303,82 @@ def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _artifact_state(paths: list[Path]) -> dict[Path, tuple[bool, bytes | None, int | None]]:
+    return {
+        path: (
+            path.exists(),
+            path.read_bytes() if path.is_file() else None,
+            path.stat().st_mtime_ns if path.exists() else None,
+        )
+        for path in paths
+    }
+
+
+def _artifact_fingerprints(
+    paths: list[Path],
+) -> dict[Path, tuple[bool, str | None, int | None]]:
+    return {
+        path: (
+            path.exists(),
+            _file_sha256(path) if path.is_file() else None,
+            path.stat().st_size if path.is_file() else None,
+        )
+        for path in paths
+    }
+
+
+def _normal_open_snapshot(path: Path) -> dict[str, object]:
+    uri = f"{path.resolve().as_uri()}?mode=ro&immutable=1"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        sqlite_master = conn.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master "
+            "ORDER BY type, name"
+        ).fetchall()
+        schema_meta = conn.execute(
+            "SELECT key, value FROM schema_meta ORDER BY key"
+        ).fetchall()
+        journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0])
+    finally:
+        conn.close()
+    stat = path.stat()
+    return {
+        "file_sha256": _file_sha256(path),
+        "file_size": stat.st_size,
+        "sqlite_master": sqlite_master,
+        "schema_meta": schema_meta,
+        "journal_mode": journal_mode,
+    }
+
+
+def _assert_artifact_state(
+    expected: dict[Path, tuple[bool, bytes | None, int | None]]
+) -> None:
+    for path, (existed, content, mtime_ns) in expected.items():
+        assert path.exists() is existed, f"artifact existence changed: {path}"
+        if existed:
+            assert path.is_file(), f"artifact type changed: {path}"
+            assert path.read_bytes() == content, f"artifact bytes changed: {path}"
+            assert path.stat().st_mtime_ns == mtime_ns, f"artifact mtime changed: {path}"
+
+
+def _scratch_paths(source: Path) -> dict[str, Path]:
+    candidate = Path(f"{source}.v2.candidate")
+    restore = Path(f"{source}.restore.candidate")
+    recovery = Path(f"{source}.v2.recovery.candidate")
+    return {
+        "candidate": candidate,
+        "candidate-wal": Path(f"{candidate}-wal"),
+        "candidate-shm": Path(f"{candidate}-shm"),
+        "restore": restore,
+        "restore-wal": Path(f"{restore}-wal"),
+        "restore-shm": Path(f"{restore}-shm"),
+        "recovery": recovery,
+        "recovery-wal": Path(f"{recovery}-wal"),
+        "recovery-shm": Path(f"{recovery}-shm"),
+    }
+
+
 def _schema_version(path: Path) -> str:
     conn = sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True)
     try:
@@ -464,6 +541,152 @@ def test_inspect_current_v2_is_read_only(tmp_path: Path) -> None:
     _assert_unchanged(path, sha, V2, mtime)
 
 
+def test_migrate_active_current_v2_family_rejects_before_report_with_zero_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "active-current-v2.sqlite3"
+    backup = _backup_path(path)
+    lock = migration._operation_lock_path(path)
+    store.initialize_store(path)
+
+    active = sqlite3.connect(path)
+    try:
+        active.execute("PRAGMA wal_autocheckpoint = 0")
+        active.execute(
+            "INSERT INTO evidence_records ("
+            "id, subject_type, subject_id, evidence_type, claim, source_title, "
+            "source_url, source_date, accessed_at, classification, confidence, "
+            "created_at, updated_at, deleted, deleted_at"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                _id("e", 99), "stock", "600519", "news", "active wal fact",
+                "active backend", None, None, TS, "fact", "high", TS, TS, 0, None,
+            ),
+        )
+        active.commit()
+
+        wal = Path(f"{path}-wal")
+        shm = Path(f"{path}-shm")
+        artifacts = [path, wal, shm, backup, lock]
+        _assert_only_tmp_paths(artifacts, tmp_path)
+        assert wal.is_file() and wal.stat().st_size > 0
+        assert shm.is_file() and shm.stat().st_size > 0
+        before_artifacts = _artifact_state(artifacts)
+        before_fingerprints = _artifact_fingerprints(artifacts)
+
+        def report_must_not_run(*_args, **_kwargs):
+            pytest.fail("active SQLite family must be rejected before database report")
+
+        monkeypatch.setattr(migration, "_database_report", report_must_not_run)
+
+        with pytest.raises(migration.MigrationError):
+            migration.migrate_database(path, backup_path=backup, apply=True)
+
+        _assert_artifact_state(before_artifacts)
+        assert _artifact_fingerprints(artifacts) == before_fingerprints
+    finally:
+        active.close()
+
+
+@pytest.mark.parametrize(
+    ("version", "expected_error"),
+    [
+        (V1, store.EvidenceLedgerSchemaVersionError),
+        ("evidence_thesis_ledger_unknown", store.EvidenceLedgerSchemaVersionError),
+        ("evidence_thesis_ledger_v999", store.EvidenceLedgerSchemaVersionError),
+    ],
+    ids=["legacy-v1", "unknown", "future"],
+)
+@pytest.mark.parametrize("open_kind", ["initialize", "read", "write"])
+def test_normal_store_open_rejects_noncurrent_version_with_zero_mutation(
+    tmp_path: Path,
+    version: str,
+    expected_error: type[Exception],
+    open_kind: str,
+) -> None:
+    path = _create_complex_v1(tmp_path / f"{open_kind}-{version}.sqlite3")
+    if version != V1:
+        conn = sqlite3.connect(path)
+        try:
+            conn.execute(
+                "UPDATE schema_meta SET value=? WHERE key='schema_version'", (version,)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    artifacts = [path, Path(f"{path}-wal"), Path(f"{path}-shm")]
+    before = _artifact_state(artifacts)
+    before_logical = _normal_open_snapshot(path)
+
+    with pytest.raises(expected_error):
+        if open_kind == "initialize":
+            store.initialize_store(path)
+        elif open_kind == "read":
+            store.read_transaction(path, lambda _conn: None)
+        else:
+            store.write_transaction(path, lambda _conn: None)
+
+    _assert_artifact_state(before)
+    after_logical = _normal_open_snapshot(path)
+    assert after_logical["file_sha256"] == before_logical["file_sha256"]
+    assert after_logical["file_size"] == before_logical["file_size"]
+    assert after_logical["sqlite_master"] == before_logical["sqlite_master"]
+    assert after_logical["schema_meta"] == before_logical["schema_meta"]
+    assert after_logical["journal_mode"] == before_logical["journal_mode"]
+
+
+@pytest.mark.parametrize(
+    "version",
+    [V1, "evidence_thesis_ledger_unknown", "evidence_thesis_ledger_v999"],
+    ids=["legacy-v1", "unknown", "future"],
+)
+@pytest.mark.parametrize("open_kind", ["initialize", "read", "write"])
+def test_normal_store_open_wal_without_shm_rejects_version_with_zero_mutation(
+    tmp_path: Path,
+    version: str,
+    open_kind: str,
+) -> None:
+    """A crash-tail WAL must not bypass or mutate the immutable main-file gate."""
+    path = _create_complex_v1(tmp_path / f"wal-crash-{open_kind}-{version}.sqlite3")
+    if version != V1:
+        conn = sqlite3.connect(path)
+        try:
+            conn.execute(
+                "UPDATE schema_meta SET value=? WHERE key='schema_version'", (version,)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    wal = Path(f"{path}-wal")
+    shm = Path(f"{path}-shm")
+    wal.write_bytes(b"non-empty simulated crash WAL\x00" + version.encode("utf-8"))
+    shm.unlink(missing_ok=True)
+    artifacts = [path, wal, shm]
+    assert wal.stat().st_size > 0
+    assert not shm.exists()
+    before_artifacts = _artifact_state(artifacts)
+    before_fingerprints = _artifact_fingerprints(artifacts)
+    before_logical = _normal_open_snapshot(path)
+
+    with pytest.raises(store.EvidenceLedgerSchemaVersionError):
+        if open_kind == "initialize":
+            store.initialize_store(path)
+        elif open_kind == "read":
+            store.read_transaction(path, lambda _conn: None)
+        else:
+            store.write_transaction(path, lambda _conn: None)
+
+    _assert_artifact_state(before_artifacts)
+    assert _artifact_fingerprints(artifacts) == before_fingerprints
+    after_logical = _normal_open_snapshot(path)
+    assert after_logical["file_sha256"] == before_logical["file_sha256"]
+    assert after_logical["file_size"] == before_logical["file_size"]
+    assert after_logical["sqlite_master"] == before_logical["sqlite_master"]
+    assert after_logical["schema_meta"] == before_logical["schema_meta"]
+    assert after_logical["journal_mode"] == before_logical["journal_mode"]
+
+
 def test_corrupt_database_rejected_without_write(tmp_path: Path) -> None:
     path = tmp_path / "corrupt.sqlite3"
     path.write_bytes(b"not a sqlite database\x00\xff")
@@ -524,6 +747,146 @@ def test_existing_backup_is_never_overwritten(v1_db: Path, tmp_path: Path) -> No
     _assert_unchanged(v1_db, source_sha, V1, source_mtime)
     assert _file_sha256(backup) == backup_sha
     assert backup.stat().st_mtime_ns == backup_mtime
+
+
+def test_preexisting_operation_lock_fails_closed_without_touching_any_artifact(
+    v1_db: Path, tmp_path: Path
+) -> None:
+    backup = _backup_path(v1_db)
+    lock = migration._operation_lock_path(v1_db)
+    lock.write_bytes(b"preexisting-operation-lock")
+    guarded = [v1_db, backup, lock, *_scratch_paths(v1_db).values()]
+    _assert_only_tmp_paths(guarded, tmp_path)
+    before = _artifact_state(guarded)
+
+    with pytest.raises(migration.MigrationError):
+        migration.migrate_database(v1_db, backup_path=backup, apply=True)
+
+    _assert_artifact_state(before)
+
+
+def test_concurrent_same_source_migrate_loser_never_enters_write_or_deletes_winner(
+    v1_db: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    winner_backup = _backup_path(v1_db)
+    loser_backup = tmp_path / "loser.v1.bak"
+    lock_path = migration._operation_lock_path(v1_db)
+    scratch = _scratch_paths(v1_db)
+    _assert_only_tmp_paths(
+        [v1_db, winner_backup, loser_backup, lock_path, *scratch.values()], tmp_path
+    )
+
+    entered_copy = threading.Event()
+    release_winner = threading.Event()
+    counter_guard = threading.Lock()
+    locked_entries = 0
+    original_locked = migration._migrate_database_locked
+    original_copy = migration._copy_legacy_tables
+
+    def count_locked_entry(source: Path, backup: Path, paths: dict[str, Path]):
+        nonlocal locked_entries
+        with counter_guard:
+            locked_entries += 1
+        return original_locked(source, backup, paths)
+
+    def block_winner_copy(source: Path, candidate: Path) -> None:
+        entered_copy.set()
+        if not release_winner.wait(timeout=10):
+            raise TimeoutError("test did not release winner migration")
+        original_copy(source, candidate)
+
+    monkeypatch.setattr(migration, "_migrate_database_locked", count_locked_entry)
+    monkeypatch.setattr(migration, "_copy_legacy_tables", block_winner_copy)
+
+    winner_result: dict[str, object] = {}
+    winner_errors: list[BaseException] = []
+
+    def run_winner() -> None:
+        try:
+            winner_result.update(
+                migration.migrate_database(
+                    v1_db, backup_path=winner_backup, apply=True
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001 - captured from worker thread
+            winner_errors.append(exc)
+
+    winner = threading.Thread(target=run_winner, name="migration-winner")
+    winner.start()
+    assert entered_copy.wait(timeout=10), "winner did not reach its write stage"
+
+    guarded_during_winner = [
+        v1_db,
+        winner_backup,
+        loser_backup,
+        lock_path,
+        *scratch.values(),
+    ]
+    during_winner = _artifact_state(guarded_during_winner)
+    assert during_winner[lock_path][0] is True
+    assert during_winner[scratch["candidate"]][0] is True
+    assert during_winner[winner_backup][0] is True
+
+    try:
+        with pytest.raises(migration.MigrationError):
+            migration.migrate_database(
+                v1_db, backup_path=loser_backup, apply=True
+            )
+        _assert_artifact_state(during_winner)
+        assert locked_entries == 1
+    finally:
+        release_winner.set()
+        winner.join(timeout=15)
+
+    assert not winner.is_alive(), "winner migration thread did not finish"
+    assert winner_errors == []
+    assert winner_result["status"] == "migrated"
+    assert locked_entries == 1
+    assert _schema_version(v1_db) == V2
+    assert _schema_version(winner_backup) == V1
+    assert not loser_backup.exists()
+    assert not lock_path.exists()
+    for artifact in scratch.values():
+        assert not artifact.exists()
+
+
+@pytest.mark.parametrize(
+    "backup_alias", ["main", "candidate", "candidate-wal", "candidate-shm"]
+)
+def test_migrate_rejects_backup_aliasing_main_or_reserved_candidate_namespace(
+    v1_db: Path, tmp_path: Path, backup_alias: str
+) -> None:
+    scratch = _scratch_paths(v1_db)
+    backup = v1_db if backup_alias == "main" else scratch[backup_alias]
+    guarded = [v1_db, *scratch.values()]
+    _assert_only_tmp_paths([backup, *guarded], tmp_path)
+    before = _artifact_state(guarded)
+
+    with pytest.raises(migration.MigrationError):
+        migration.migrate_database(v1_db, backup_path=backup, apply=True)
+
+    _assert_artifact_state(before)
+
+
+@pytest.mark.parametrize("artifact_name", ["candidate-wal", "candidate-shm"])
+def test_migrate_preserves_preexisting_candidate_sidecar_bytes_on_refusal(
+    v1_db: Path, tmp_path: Path, artifact_name: str
+) -> None:
+    backup = _backup_path(v1_db)
+    scratch = _scratch_paths(v1_db)
+    artifact = scratch[artifact_name]
+    sentinel = f"preexisting-{artifact_name}".encode()
+    artifact.write_bytes(sentinel)
+    guarded = [v1_db, backup, *scratch.values()]
+    _assert_only_tmp_paths(guarded, tmp_path)
+    before = _artifact_state(guarded)
+
+    with pytest.raises(migration.MigrationError):
+        migration.migrate_database(v1_db, backup_path=backup, apply=True)
+
+    _assert_artifact_state(before)
 
 
 @pytest.mark.parametrize(
@@ -702,6 +1065,33 @@ def test_rerun_migration_on_v2_is_already_current_without_overwriting_backup(
     _assert_unchanged(v1_db, source_sha, V2, source_mtime)
     assert _file_sha256(backup) == backup_sha
     assert backup.stat().st_mtime_ns == backup_mtime
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    [
+        "restore", "restore-wal", "restore-shm",
+        "recovery", "recovery-wal", "recovery-shm",
+    ],
+)
+def test_rollback_rejects_reserved_restore_or_recovery_artifact_conflict_without_write(
+    v1_db: Path,
+    tmp_path: Path,
+    artifact_name: str,
+) -> None:
+    backup = _backup_path(v1_db)
+    migration.migrate_database(v1_db, backup_path=backup, apply=True)
+    scratch = _scratch_paths(v1_db)
+    artifact = scratch[artifact_name]
+    artifact.write_bytes(f"preexisting-{artifact_name}".encode())
+    guarded = [v1_db, backup, *scratch.values()]
+    _assert_only_tmp_paths(guarded, tmp_path)
+    before = _artifact_state(guarded)
+
+    with pytest.raises(migration.MigrationError):
+        migration.rollback_database(v1_db, backup_path=backup, apply=True)
+
+    _assert_artifact_state(before)
 
 
 def test_python_api_requires_explicit_apply_for_migrate_and_rollback(

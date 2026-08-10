@@ -358,14 +358,20 @@ def inspect_database(db_path: str | Path) -> dict[str, Any]:
 
 def _create_backup(source: Path, backup: Path) -> None:
     """Create a consistent SQLite backup, failing if *backup* already exists."""
-    if backup.exists():
-        raise MigrationError(f"backup already exists and will not be overwritten: {backup}")
+    existing_family = [path for path in _sqlite_family(backup) if path.exists()]
+    if existing_family:
+        raise MigrationError(
+            "backup artifact already exists and will not be overwritten: "
+            + ", ".join(str(path) for path in existing_family)
+        )
     backup.parent.mkdir(parents=True, exist_ok=True)
     fd: int | None = None
+    created = False
     src: sqlite3.Connection | None = None
     dst: sqlite3.Connection | None = None
     try:
         fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        created = True
         os.close(fd)
         fd = None
         src = _readonly_connection(source)
@@ -381,10 +387,12 @@ def _create_backup(source: Path, backup: Path) -> None:
         if src is not None:
             src.close()
             src = None
-        try:
-            backup.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if created:
+            for path in _sqlite_family(backup):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
         raise
     finally:
         if dst is not None:
@@ -514,13 +522,120 @@ def _assert_no_active_sidecars(source: Path) -> None:
         )
 
 
-def _cleanup_candidate_artifacts(candidate: Path) -> None:
-    """Remove only disposable files owned by this migration invocation."""
-    for path in (
-        candidate,
-        Path(str(candidate) + "-wal"),
-        Path(str(candidate) + "-shm"),
-    ):
+def _sqlite_family(path: Path) -> tuple[Path, Path, Path]:
+    return path, Path(str(path) + "-wal"), Path(str(path) + "-shm")
+
+
+def _scratch_paths(source: Path) -> dict[str, Path]:
+    return {
+        "v2": Path(str(source) + ".v2.candidate"),
+        "restore": Path(str(source) + ".restore.candidate"),
+        "recovery": Path(str(source) + ".v2.recovery.candidate"),
+    }
+
+
+def _operation_lock_path(source: Path) -> Path:
+    return Path(str(source) + ".migration.lock")
+
+
+def _reserved_paths(source: Path) -> frozenset[Path]:
+    """Complete source/scratch namespace reserved by one operation."""
+    bases = (source, *_scratch_paths(source).values())
+    sqlite_paths = {member for base in bases for member in _sqlite_family(base)}
+    return frozenset((*sqlite_paths, _operation_lock_path(source)))
+
+
+def _preflight_reserved_paths(
+    source: Path,
+    backup: Path,
+    *,
+    owned_lock: Path | None = None,
+) -> dict[str, Path]:
+    """Reject every collision before the operation performs its first write."""
+    scratch = _scratch_paths(source)
+    reserved = _reserved_paths(source)
+    if backup in reserved:
+        raise UnsafeDatabasePathError(
+            "backup_path conflicts with the source or reserved scratch namespace"
+        )
+    collisions = [
+        member
+        for base in scratch.values()
+        for member in _sqlite_family(base)
+        if member.exists()
+    ]
+    lock = _operation_lock_path(source)
+    if lock.exists() and lock != owned_lock:
+        collisions.append(lock)
+    if collisions:
+        names = ", ".join(str(path) for path in sorted(collisions, key=str))
+        raise MigrationError(
+            f"reserved scratch artifact already exists and will not be touched: {names}"
+        )
+    return scratch
+
+
+def _acquire_operation_lock(source: Path, owned: set[Path]) -> Path:
+    """Exclusively serialize all migrate/rollback operations for one source."""
+    lock = _operation_lock_path(source)
+    fd: int | None = None
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        owned.add(lock)
+        os.close(fd)
+        fd = None
+        return lock
+    except FileExistsError as exc:
+        raise MigrationError(
+            f"migration operation lock already exists and will not be touched: {lock}"
+        ) from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _claim_empty_candidate(candidate: Path, owned: set[Path]) -> None:
+    """Exclusively create one empty scratch main file and record ownership."""
+    fd: int | None = None
+    try:
+        fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        owned.add(candidate)
+        os.close(fd)
+        fd = None
+    except FileExistsError as exc:
+        raise MigrationError(
+            f"reserved scratch artifact appeared during operation: {candidate}"
+        ) from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _record_owned_sqlite_family(candidate: Path, owned: set[Path]) -> None:
+    """Record sidecars generated for an already-owned scratch database."""
+    if candidate not in owned:
+        return
+    for path in _sqlite_family(candidate):
+        if path.exists():
+            owned.add(path)
+
+
+def _refresh_owned_scratch_families(
+    scratch: dict[str, Path], owned: set[Path]
+) -> None:
+    for candidate in scratch.values():
+        _record_owned_sqlite_family(candidate, owned)
+
+
+def _discard_moved_scratch(candidate: Path, owned: set[Path]) -> None:
+    """A scratch DB moved to source no longer owns its former namespace."""
+    for path in _sqlite_family(candidate):
+        owned.discard(path)
+
+
+def _cleanup_owned_artifacts(owned: set[Path]) -> None:
+    """Delete only scratch artifacts explicitly owned by this invocation."""
+    for path in sorted(owned, key=lambda item: (len(str(item)), str(item)), reverse=True):
         try:
             path.unlink(missing_ok=True)
         except OSError:
@@ -549,23 +664,33 @@ def _post_rollback_validate(source: Path, expected: dict[str, Any]) -> dict[str,
     return report
 
 
-def _restore_backup(source: Path, backup: Path) -> dict[str, Any]:
+def _restore_backup(
+    source: Path,
+    backup: Path,
+    *,
+    restore_candidate: Path | None = None,
+    owned_artifacts: set[Path] | None = None,
+) -> dict[str, Any]:
     """Validate v1 backup, copy it, and atomically restore without consuming it."""
     backup_report = _database_report(
         backup, expected_version=store.LEGACY_SCHEMA_VERSION
     )
-    restore_candidate = Path(str(source) + ".restore.candidate")
-    if restore_candidate.exists():
-        raise MigrationError(f"restore candidate already exists: {restore_candidate}")
+    candidate = restore_candidate or Path(str(source) + ".restore.candidate")
+    owned = owned_artifacts if owned_artifacts is not None else set()
+    if candidate.exists():
+        raise MigrationError(f"restore candidate already exists: {candidate}")
+    _create_backup(backup, candidate)
+    owned.add(candidate)
+    _record_owned_sqlite_family(candidate, owned)
     try:
-        _create_backup(backup, restore_candidate)
         restored_report = _database_report(
-            restore_candidate, expected_version=store.LEGACY_SCHEMA_VERSION
+            candidate, expected_version=store.LEGACY_SCHEMA_VERSION
         )
         if restored_report["digest"] != backup_report["digest"]:
             raise ValidationError("restore candidate differs from v1 backup")
         _assert_no_active_sidecars(source)
-        os.replace(restore_candidate, source)
+        os.replace(candidate, source)
+        _discard_moved_scratch(candidate, owned)
         final_report = _database_report(
             source, expected_version=store.LEGACY_SCHEMA_VERSION
         )
@@ -573,12 +698,81 @@ def _restore_backup(source: Path, backup: Path) -> dict[str, Any]:
             raise ValidationError("restored database differs from v1 backup")
         return final_report
     finally:
-        # Only our disposable restore candidate may be removed.  The backup is
-        # immutable recovery evidence and is never consumed or overwritten.
+        if owned_artifacts is None:
+            _record_owned_sqlite_family(candidate, owned)
+            _cleanup_owned_artifacts(owned)
+
+
+def _migrate_database_locked(
+    source: Path, backup: Path, scratch: dict[str, Path]
+) -> dict[str, Any]:
+    initial_report = _database_report(source)
+    if initial_report["schema_version"] == store.SCHEMA_VERSION:
+        initial_report.update(operation="migrate", status="already_current")
+        return initial_report
+    if initial_report["schema_version"] != store.LEGACY_SCHEMA_VERSION:
+        raise ValidationError(
+            f"unsupported source schema version: {initial_report['schema_version']}"
+        )
+    source_report = initial_report
+    candidate = scratch["v2"]
+    if backup.exists():
+        raise MigrationError(f"backup already exists and will not be overwritten: {backup}")
+
+    swapped = False
+    owned_artifacts: set[Path] = set()
+    try:
+        _create_backup(source, backup)
+        backup_report = _database_report(
+            backup, expected_version=store.LEGACY_SCHEMA_VERSION
+        )
+        if backup_report["digest"] != source_report["digest"]:
+            raise ValidationError("v1 backup differs from inspected source")
+
+        _claim_empty_candidate(candidate, owned_artifacts)
         try:
-            restore_candidate.unlink(missing_ok=True)
-        except OSError:
-            pass
+            store._initialize_store_after_version_gate(candidate)
+        finally:
+            _record_owned_sqlite_family(candidate, owned_artifacts)
+        try:
+            _copy_legacy_tables(backup, candidate)
+        finally:
+            _record_owned_sqlite_family(candidate, owned_artifacts)
+        _validate_candidate(candidate, source_report)
+        _pre_swap_recheck(source, source_report)
+        _atomic_swap(source, candidate)
+        _discard_moved_scratch(candidate, owned_artifacts)
+        swapped = True
+        final_report = _post_swap_validate(source, source_report)
+    except Exception as exc:
+        if swapped:
+            try:
+                _restore_backup(
+                    source,
+                    backup,
+                    restore_candidate=scratch["restore"],
+                    owned_artifacts=owned_artifacts,
+                )
+            except Exception as rollback_exc:
+                _refresh_owned_scratch_families(scratch, owned_artifacts)
+                _cleanup_owned_artifacts(owned_artifacts)
+                raise MigrationError(
+                    "post-swap validation failed and automatic rollback also failed"
+                ) from rollback_exc
+        _refresh_owned_scratch_families(scratch, owned_artifacts)
+        _cleanup_owned_artifacts(owned_artifacts)
+        if isinstance(exc, MigrationError):
+            raise
+        raise MigrationError(f"migration failed: {type(exc).__name__}") from exc
+
+    final_report.update(
+        operation="migrate",
+        status="migrated",
+        backup_path=str(backup),
+    )
+    _refresh_owned_scratch_families(scratch, owned_artifacts)
+    _cleanup_owned_artifacts(owned_artifacts)
+    return final_report
 
 
 def migrate_database(
@@ -590,88 +784,41 @@ def migrate_database(
     """Explicitly migrate one on-disk v1 database to vNext."""
     _require_apply(apply)
     source = _normalized_db_path(db_path)
+    if not source.is_file():
+        raise ValidationError(f"database does not exist: {source}")
+    # 迁移只能在离线单文件状态执行；在 SQLite 打开 WAL 前先拒绝活动 sidecar。
+    _assert_no_active_sidecars(source)
     initial_report = _database_report(source)
     if initial_report["schema_version"] == store.SCHEMA_VERSION:
         initial_report.update(operation="migrate", status="already_current")
         return initial_report
-    if initial_report["schema_version"] != store.LEGACY_SCHEMA_VERSION:
-        raise ValidationError(
-            f"unsupported source schema version: {initial_report['schema_version']}"
-        )
-    source_report = initial_report
     backup = _normalized_db_path(backup_path)
-    if backup == source:
-        raise UnsafeDatabasePathError("backup_path must differ from db_path")
-    candidate = Path(str(source) + ".v2.candidate")
-    if backup.exists():
-        raise MigrationError(f"backup already exists and will not be overwritten: {backup}")
-    if candidate.exists():
-        raise MigrationError(f"candidate already exists and will not be overwritten: {candidate}")
-
-    swapped = False
+    _preflight_reserved_paths(source, backup)
+    owned_lock: set[Path] = set()
     try:
-        _create_backup(source, backup)
-        backup_report = _database_report(
-            backup, expected_version=store.LEGACY_SCHEMA_VERSION
-        )
-        if backup_report["digest"] != source_report["digest"]:
-            raise ValidationError("v1 backup differs from inspected source")
-
-        store.initialize_store(candidate)
-        _copy_legacy_tables(backup, candidate)
-        _validate_candidate(candidate, source_report)
-        _pre_swap_recheck(source, source_report)
-        _atomic_swap(source, candidate)
-        swapped = True
-        final_report = _post_swap_validate(source, source_report)
-    except Exception as exc:
-        if swapped:
-            try:
-                _restore_backup(source, backup)
-            except Exception as rollback_exc:
-                raise MigrationError(
-                    "post-swap validation failed and automatic rollback also failed"
-                ) from rollback_exc
-        _cleanup_candidate_artifacts(candidate)
-        if isinstance(exc, MigrationError):
-            raise
-        raise MigrationError(f"migration failed: {type(exc).__name__}") from exc
-
-    final_report.update(
-        operation="migrate",
-        status="migrated",
-        backup_path=str(backup),
-    )
-    _cleanup_candidate_artifacts(candidate)
-    return final_report
+        lock = _acquire_operation_lock(source, owned_lock)
+        scratch = _preflight_reserved_paths(source, backup, owned_lock=lock)
+        return _migrate_database_locked(source, backup, scratch)
+    finally:
+        _cleanup_owned_artifacts(owned_lock)
 
 
-def rollback_database(
-    db_path: str | Path,
-    *,
-    backup_path: str | Path,
-    apply: bool = False,
+def _rollback_database_locked(
+    source: Path, backup: Path, scratch: dict[str, Path]
 ) -> dict[str, Any]:
-    """Atomically restore the validated v1 backup, preserving the backup file."""
-    _require_apply(apply)
-    source = _normalized_db_path(db_path)
     source_report = _database_report(source, expected_version=store.SCHEMA_VERSION)
-    backup = _normalized_db_path(backup_path)
-    if backup == source:
-        raise UnsafeDatabasePathError("backup_path must differ from db_path")
     if not backup.is_file():
         raise ValidationError(f"v1 backup does not exist: {backup}")
-    if backup == source:
-        raise UnsafeDatabasePathError("backup_path must differ from db_path")
     backup_report = _database_report(
         backup, expected_version=store.LEGACY_SCHEMA_VERSION
     )
-    recovery = Path(str(source) + ".v2.recovery.candidate")
-    if recovery.exists():
-        raise MigrationError(f"recovery candidate already exists: {recovery}")
+    recovery = scratch["recovery"]
+    owned_artifacts: set[Path] = set()
 
     try:
         _create_backup(source, recovery)
+        owned_artifacts.add(recovery)
+        _record_owned_sqlite_family(recovery, owned_artifacts)
         recovery_report = _database_report(
             recovery, expected_version=store.SCHEMA_VERSION
         )
@@ -680,13 +827,19 @@ def rollback_database(
             or recovery_report["counts"] != source_report["counts"]
         ):
             raise ValidationError("v2 recovery copy differs from source")
-        _restore_backup(source, backup)
+        _restore_backup(
+            source,
+            backup,
+            restore_candidate=scratch["restore"],
+            owned_artifacts=owned_artifacts,
+        )
         report = _post_rollback_validate(source, backup_report)
     except Exception as exc:
         if recovery.is_file():
             try:
                 _assert_no_active_sidecars(source)
                 os.replace(recovery, source)
+                _discard_moved_scratch(recovery, owned_artifacts)
                 restored_v2 = _database_report(
                     source, expected_version=store.SCHEMA_VERSION
                 )
@@ -703,13 +856,38 @@ def rollback_database(
             raise
         raise MigrationError(f"rollback failed: {type(exc).__name__}") from exc
     finally:
-        _cleanup_candidate_artifacts(recovery)
+        _refresh_owned_scratch_families(scratch, owned_artifacts)
+        _cleanup_owned_artifacts(owned_artifacts)
     report.update(
         operation="rollback",
         status="rolled_back",
         backup_path=str(backup),
     )
     return report
+
+
+def rollback_database(
+    db_path: str | Path,
+    *,
+    backup_path: str | Path,
+    apply: bool = False,
+) -> dict[str, Any]:
+    """Atomically restore the validated v1 backup, preserving the backup file."""
+    _require_apply(apply)
+    source = _normalized_db_path(db_path)
+    backup = _normalized_db_path(backup_path)
+    if not source.is_file():
+        raise ValidationError(f"database does not exist: {source}")
+    # 回滚同样要求后端已停，避免只读检查改写现有 SHM read marks。
+    _assert_no_active_sidecars(source)
+    _preflight_reserved_paths(source, backup)
+    owned_lock: set[Path] = set()
+    try:
+        lock = _acquire_operation_lock(source, owned_lock)
+        scratch = _preflight_reserved_paths(source, backup, owned_lock=lock)
+        return _rollback_database_locked(source, backup, scratch)
+    finally:
+        _cleanup_owned_artifacts(owned_lock)
 
 
 def _parser() -> argparse.ArgumentParser:
