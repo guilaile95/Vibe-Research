@@ -694,30 +694,37 @@ def test_8_precreated_candidate_fails_closed_and_preserved(env):
     assert _file_hash(db) == before_hash  # source 不变
 
 
-def test_8_precreated_candidate_wal_shm_fails_closed(env):
-    """P1-1：预创建 candidate-wal / candidate-shm → migrate 必须 fail closed 且 bytes 保留。
+@pytest.mark.parametrize("sidecar_suffix", [".v2.candidate-wal", ".v2.candidate-shm"])
+def test_8_precreated_candidate_sidecar_fails_closed(env, sidecar_suffix):
+    """P2：预创建 candidate WAL/SHM sidecar → migrate 必须 fail closed 且零副作用。
 
-    当前 base（ce66881）仅检查 candidate 本体，sidecar 预创建会被构建流程吸收 →
-    预期 RED（KNOWN_DEPENDENCY_BLOCKER: RESERVED_SCRATCH_PATH_SAFETY）。
+    每个 sidecar 独立验证：
+    - migrate fail closed（CLI 非零）
+    - sentinel bytes 完整保留
+    - source 状态不变（hash/size/master/meta/journal）
+    - backup 不得被创建
+    - 无关 scratch（其他 reserved paths）不变
     """
-    db = os.path.join(env.tmp, "collision3.db")
+    db = os.path.join(env.tmp, f"collision3_{sidecar_suffix.replace('.', '_')}.db")
     build_v1_db(Path(db))
-    backup = os.path.join(env.tmp, "collision3_backup.db")
-    wal = db + ".v2.candidate-wal"
-    shm = db + ".v2.candidate-shm"
-    wal_bytes, shm_bytes = b"PRE-WAL", b"PRE-SHM"
-    with open(wal, "wb") as fh:
-        fh.write(wal_bytes)
-    with open(shm, "wb") as fh:
-        fh.write(shm_bytes)
+    backup = os.path.join(env.tmp, f"collision3_{sidecar_suffix.replace('.', '_')}_backup.db")
+    sidecar = db + sidecar_suffix
+    sentinel = b"SENTINEL-" + sidecar_suffix.encode()
+    with open(sidecar, "wb") as fh:
+        fh.write(sentinel)
     source_before = _db_state(db)
+    scratch_before = _scratch_inventory(db)
 
     proc = run_cli(env, "migrate", "--db", db, "--backup", backup, "--apply")
     cli_fail(proc)
-    assert os.path.isfile(wal) and open(wal, "rb").read() == wal_bytes, "预创建 candidate-wal 被删除/覆盖"
-    assert os.path.isfile(shm) and open(shm, "rb").read() == shm_bytes, "预创建 candidate-shm 被删除/覆盖"
+    # sentinel bytes 保留
+    assert _read_bytes(sidecar) == sentinel, f"预创建 {sidecar_suffix} 被删除/覆盖"
+    # source 状态不变
     assert _db_state(db) == source_before
+    # backup 不得创建
     assert not os.path.exists(backup), "backup 不得被创建"
+    # 无关 scratch 不变
+    assert _scratch_inventory(db) == scratch_before
 
 
 @pytest.mark.parametrize("sidecar_suffix", [
