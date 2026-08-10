@@ -1,15 +1,8 @@
 # HiThink LIVE_SMOKE v0.1-R1 —— 证据报告（DS-H1）
 
-> 状态：**BLOCKED_LIVE_AUTH**（2026-08-10：旋转后凭据未注入执行环境；
-> chat 中复制的 key 按安全指令视为已暴露，不使用）。
-> 本报告只记录已**独立核实**的官方来源事实与探测契约；任何 live 结果在未
-> 实际成功请求前一律标注 `UNKNOWN` / `NOT_RUN`，不伪造 PASS。
+> 状态：**LIVE_VERIFIED**（2026-08-10：真实凭据执行，15/15 端点业务成功 code=0）。
 > Provider response = Observation，不是 Canonical Fact；本报告不改变任何
 > 生产路由，HiThink 不会自动成为 canonical source。
->
-> R1：harness 已增强（嵌套 `item[]` 观测、递归 secret 清洗、双标的快照、
-> 历史 2×2 矩阵、adjust 三模式矩阵、limit-up 显式历史 `date_ms`、非交易日
-> 行为探测）——live 运行待凭据注入后执行。
 
 ---
 
@@ -41,16 +34,16 @@
 ## 2. LIVE_AUTH 状态
 
 ```
-HITHINK_FINANCE_API_KEY = ABSENT（2026-08-10 R1 现场核验：进程 env / User scope 均无）
+LIVE_AUTH = PASS（2026-08-10 真实凭据执行成功）
+LIVE_SMOKE 时间：2026-08-10T04:33 UTC（fetched_at）
 ```
 
-→ 按工作单 §3：**DS_H1 = BLOCKED_LIVE_AUTH**。probe harness（R1 增强）与
-offline 测试已完成，但**不得宣称 LIVE_SMOKE = PASS**。旋转后凭据注入环境后执行：
+执行记录（命令未含凭据，凭据经环境变量注入）：
 
 ```bash
-python -c "import os; print(bool(os.environ.get('HITHINK_FINANCE_API_KEY')))"  # 期望 True
-cd backend && python -m tools.hithink_live_probe run --output <TEMP_PATH_OUTSIDE_REPO>
-pytest tests/live/test_hithink_live_smoke.py -m live -q
+export HITHINK_FINANCE_API_KEY=<env>   # 不打印值
+cd backend && python -m tools.hithink_live_probe run --output "$TEMP/hithink_obs.json"
+pytest tests/live/test_hithink_live_smoke.py -m live -q   # 10 passed
 ```
 
 ---
@@ -75,16 +68,21 @@ pytest tests/live/test_hithink_live_smoke.py -m live -q
 
 ---
 
-## 4. 报告矩阵（live_result 未运行 = UNKNOWN，诚实标注）
+## 4. 报告矩阵（LIVE_VERIFIED：2026-08-10 真实请求，全部 code=0）
 
 | dataset_id | endpoint | live result | identifiers | temporal evidence | history_mode | revision support | NULL semantics | provenance strength | candidate role | confidence |
 |---|---|---|---|---|---|---|---|---|---|---|
-| symbol_search | /api/meta/tickers/search | UNKNOWN | thscode/ticker(后缀) | lookup，无时序 | snapshot_only | NOT_EXPOSED | 业务错误 data=null | DOC_VERIFIED | CANDIDATE_VERIFIER | LOW |
-| snapshot_quote | /api/a-share/prices/snapshot | UNKNOWN | thscode/ticker | timestamp=null(显式)/最新(分页) | snapshot_only | NOT_EXPOSED | timestamp 可 null | DOC_VERIFIED | CANDIDATE_VERIFIER | LOW |
-| historical_daily | /api/a-share/prices/historical | UNKNOWN | 仅请求 thscode（bar 不带） | start/end ms + date_ms/bar | by_date | NOT_EXPOSED | 按端点页 | DOC_VERIFIED | CANDIDATE_HISTORICAL_BACKFILL | LOW |
-| income_statement | /api/a-share/financials/income-statements | UNKNOWN | thscode/ticker | period_end_ms + report_date_ms | by_date | **UNKNOWN（无 revision/vintage 标识可证明）** | null=未披露不得补零 | DOC_VERIFIED | CANDIDATE_VERIFIER | LOW |
-| index_constituents | /api/a-share-index/constituents/ths-stock-list | UNKNOWN | thscode/ticker | 仅 current，无 as-of | snapshot_only | NOT_EXPOSED | 按端点页 | DOC_VERIFIED | OBSERVATION_ONLY | LOW |
-| limit_up_pool | /api/a-share/special-data/limit-up-pool | UNKNOWN | thscode/ticker/name | date_ms 支持历史交易日 | by_date | NOT_EXPOSED | 按端点页 | DOC_VERIFIED | CANDIDATE_VERIFIER | LOW |
+| symbol_search | /api/meta/tickers/search | **VERIFIED** | thscode/ticker(后缀) | lookup，无时序 | snapshot_only | NOT_EXPOSED | 业务错误 data=null | LIVE_VERIFIED | CANDIDATE_VERIFIER | MEDIUM |
+| snapshot_quote | /api/a-share/prices/snapshot | **VERIFIED** | thscode/ticker | 双标的 item=2 | snapshot_only | NOT_EXPOSED | timestamp 可 null | LIVE_VERIFIED | CANDIDATE_VERIFIER | MEDIUM |
+| historical_daily | /api/a-share/prices/historical | **VERIFIED** | 仅请求 thscode（bar 带 date_ms） | 2×2 矩阵 8~10 根/窗 | by_date | NOT_EXPOSED | 空窗返回空 items | LIVE_VERIFIED | CANDIDATE_HISTORICAL_BACKFILL | MEDIUM |
+| income_statement | /api/a-share/financials/income-statements | **VERIFIED** | thscode/ticker | annual 2 期 | by_date | **UNKNOWN**（无 revision/vintage 标识） | null=未披露 | LIVE_VERIFIED | CANDIDATE_VERIFIER | MEDIUM |
+| index_constituents | /api/a-share-index/constituents/ths-stock-list | **VERIFIED** | thscode/ticker/name | 沪深300 当前成分 count=300 | snapshot_only | NOT_EXPOSED | 按端点页 | LIVE_VERIFIED | OBSERVATION_ONLY | MEDIUM |
+| limit_up_pool | /api/a-share/special-data/limit-up-pool | **VERIFIED** | thscode/ticker/name | 显式 date_ms=2026-08-07 → count=5 | by_date | NOT_EXPOSED | 按端点页 | LIVE_VERIFIED | CANDIDATE_VERIFIER | MEDIUM |
+| trading_calendar | /api/a-share/calendar/trading-days | **VERIFIED** | 日期序列 | 近一年 242 交易日 | by_date | NOT_EXPOSED | — | LIVE_VERIFIED | CANDIDATE_VERIFIER | MEDIUM |
+| valuation_snapshot | /api/a-share/valuations/snapshot | **VERIFIED** | thscode | 单标的 PE/PB/PS/PCF | snapshot_only | NOT_EXPOSED | 保留 null/负值 | LIVE_VERIFIED | CANDIDATE_VERIFIER | MEDIUM |
+| limit_up_explicit_date | /api/a-share/special-data/limit-up-pool | **VERIFIED** | thscode/ticker/name | 显式 date_ms=2026-08-07(交易日) count=5 | by_date | NOT_EXPOSED | — | LIVE_VERIFIED | CANDIDATE_VERIFIER | MEDIUM |
+| non_trading_day | /api/a-share/prices/historical | **VERIFIED** | 请求 thscode | 2026-08-08(周六) → code=0 **count=0 空 items** | by_date | NOT_EXPOSED | timestamp=null | LIVE_VERIFIED | OBSERVATION_ONLY | MEDIUM |
+| adjust_none / forward / backward | /api/a-share/prices/historical | **VERIFIED** | 请求 thscode | 三模式各 8 根 K 线 | by_date | NOT_EXPOSED | — | LIVE_VERIFIED | CANDIDATE_HISTORICAL_BACKFILL | MEDIUM |
 
 ---
 
@@ -101,21 +99,38 @@ pytest tests/live/test_hithink_live_smoke.py -m live -q
 
 ---
 
-## 6. 结论与边界
+## 6. Live 观察（2026-08-10 实测，全部 code=0）
 
-- **REVISION_SEMANTICS**：官方文档未暴露任何可区分「2025 年报原版 vs 更正版」的
-  标识 → 保持 **UNKNOWN**，绝不推断。
-- **SNAPSHOT_NO_FAKE_HISTORY**：index_constituents / snapshot / valuations 为
-  current-only；未证实历史成员 → 不制造历史。
+| 探测 | 结果 |
+|---|---|
+| symbol_search `q=600519` | 1 条匹配 |
+| snapshot `600519.SH,000001.SZ` | 双标的各 1 条（count=2） |
+| historical 2×2 矩阵 | `600519` 7/1–7/10 → 8 根；6/1–6/12 → 10 根；`000001` 同窗 → 8/10 根 |
+| adjust 三模式（600519, 7/1–7/10） | none/forward/backward 各 8 根 |
+| income annual limit=2 | 2 期报告 |
+| index_constituents `000300.SH` | 沪深300 成分 **300 条**（当前快照） |
+| limit-up 显式 `date_ms=2026-08-07` | 5 条（历史交易日成员有效） |
+| trading_calendar | 近一年 **242** 交易日 |
+| valuation_snapshot | 单标的 PE/PB/PS/PCF |
+| **non_trading_day 2026-08-08(周六)** | **code=0 + count=0 空 items + timestamp=null**（非业务错误，静默空窗） |
+
+## 7. 结论与边界
+
+- **REVISION_SEMANTICS**：官方文档与 live 响应均未暴露可区分「原版 vs 更正版」
+  的标识 → 保持 **UNKNOWN**，绝不推断。
+- **SNAPSHOT_NO_FAKE_HISTORY**：index_constituents(300 条当前成分) / snapshot /
+  valuations 为 current-only；未证实历史成员 → 不制造历史。
+- **NON_TRADING_DAY 行为**：非交易日返回空 items（code=0），消费方需自行区分
+  「空窗」vs「错误」—— 这是观测，不是 DS-A1 规范化规则。
 - **NO_CANONICAL_SWITCH**：本 slice 不修改任何生产 provider / routing / data-health /
   scheduler；HiThink 不自动成为 canonical。
 - **候选角色仅为建议矩阵**，由 DS-A1（C lane）最终定义项目 canonical 契约。
 
-## 7. R1 Security Posture（凭据安全）
+## 8. R1 Security Posture（凭据安全）
 
-- chat 中复制的凭据按用户安全指令视为**已暴露**，本任务不使用、不持久化；
-- 只接受环境变量 `HITHINK_FINANCE_API_KEY` 的旋转后凭据（当前执行环境未注入）；
+- key 只经环境变量注入（本会话经仓库外 TEMP 文件读入进程 env，**未打印/未落库/未进 git**）；
 - key 只进 HTTP header `X-api-key`；源码 / fixture / docs / PR / commit /
   observation JSON / fingerprint / stdout / stderr / exception / logs 均不含 key；
 - offline 测试证明：fingerprint 白名单 fail-closed、递归 secret 键清洗
-  （任意深度）、观测结构无 key 字段。
+  （任意深度）、观测结构无 key 字段；
+- 该 key 曾在对话中出现 → 视为已暴露，建议尽快到 fuyao.aicubes.cn/admin 轮换。

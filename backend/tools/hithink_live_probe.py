@@ -62,7 +62,7 @@ ENDPOINTS: dict[str, dict] = {
     "income_statement": {"path": "/api/a-share/financials/income-statements",
                          "query": {"thscode": "600519.SH", "period": "annual", "limit": 2}},
     "index_constituents": {"path": "/api/a-share-index/constituents/ths-stock-list",
-                           "query": {"ths_code": "885001"}},  # 概念/板块成员（当前快照）
+                           "query": {"thscode": "000300.SH"}},  # 沪深300标准指数成分（文档：thscode 需 .TI/.SH 后缀）
     "trading_calendar": {"path": "/api/a-share/calendar/trading-days", "query": {}},
     "valuation_snapshot": {"path": "/api/a-share/valuations/snapshot",
                            "query": {"thscodes": "600519.SH"}},
@@ -117,9 +117,9 @@ ERROR_CODE_CLASS = {
 }
 
 _NON_SECRET_QUERY_KEYS = (
-    "q", "limit", "offset", "thscodes", "thscode", "interval", "start", "end",
+    "q", "limit", "offset", "thscodes", "thscode", "ths_code", "interval", "start", "end",
     "adjust", "period", "report", "page", "size", "date", "date_ms", "from",
-    "to", "ths_code", "board_type", "sort_field", "sort_dir",
+    "to", "board_type", "sort_field", "sort_dir",
 )
 
 
