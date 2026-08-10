@@ -184,6 +184,7 @@ def test_explicit_initialize_and_current_version_open_are_idempotent(
     assert lake.readonly is False
     assert (root / CONTROL_DB_FILENAME).is_file()
     assert (root / "raw").is_dir()
+    assert (root / "canonical").is_dir()
     before = _tree_snapshot(root)
 
     assert initialize_fact_lake(root).readonly is False
@@ -215,11 +216,13 @@ def test_unsupported_newer_schema_zero_mutation(tmp_path: Path, operation) -> No
     assert not Path(f"{db_path}-shm").exists()
 
 
+@pytest.mark.parametrize("version", ["fact_lake_control_v0", "fact_lake_control_v1"])
 def test_older_schema_requires_explicit_migration_without_mutation(
     tmp_path: Path,
+    version: str,
 ) -> None:
     root = tmp_path / "older"
-    db_path = _make_version_only_database(root, "fact_lake_control_v0")
+    db_path = _make_version_only_database(root, version)
     before = _tree_snapshot(root)
 
     with pytest.raises(FactLakeSchemaVersionError):
@@ -227,7 +230,7 @@ def test_older_schema_requires_explicit_migration_without_mutation(
 
     assert _tree_snapshot(root) == before
     assert _sqlite_state(db_path)[3] == (
-        ("schema_version", "fact_lake_control_v0"),
+        ("schema_version", version),
     )
 
 
@@ -736,5 +739,5 @@ def test_only_explicit_tmp_root_is_touched(tmp_path: Path, monkeypatch) -> None:
     assert all(root in path.parents for path in root.rglob("*") if path != root)
 
 
-def test_schema_version_constant_is_current_v1() -> None:
-    assert SCHEMA_VERSION == "fact_lake_control_v1"
+def test_schema_version_constant_is_current_v2() -> None:
+    assert SCHEMA_VERSION == "fact_lake_control_v2"

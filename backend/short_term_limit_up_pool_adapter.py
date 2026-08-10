@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import astock
 import trade_calendar
@@ -43,6 +43,7 @@ _EIGHT_DIGIT_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})$")
 _SIX_DIGIT_RE = re.compile(r"^\d{6}$")
 _INCLUDED_PREFIXES = ("60", "00", "30", "68")
 _VALID_SESSION_TYPES = (tuple, list, set, frozenset)
+RawResponseSink = Callable[[bytes, dict[str, Any]], None]
 
 # Reason code 固定集合与顺序（未知 code 不得进入输出）
 _REASON_CODE_ORDER: tuple[str, ...] = (
@@ -105,6 +106,53 @@ def _safe_http_status(response: object) -> Optional[int]:
     if code < 100 or code > 599:
         return None
     return code
+
+
+def _capture_raw_response(
+    response: object,
+    sink: RawResponseSink | None,
+    *,
+    requested_trade_date: str,
+    params: dict[str, Any],
+) -> None:
+    """Capture exact response bytes before HTTP/JSON classification.
+
+    The callback metadata is deliberately allow-listed.  ``ut``, headers,
+    cookies, proxy/session state, retry timing and other transport-only or
+    secret-bearing values never cross this boundary.
+    """
+    if sink is None:
+        return
+    try:
+        content = getattr(response, "content")
+    except Exception as exc:
+        raise ValueError("shadow raw response content is unavailable") from exc
+    if type(content) is not bytes:
+        raise TypeError("shadow raw response content must be exact bytes")
+
+    content_type: str | None = None
+    try:
+        headers = getattr(response, "headers", None)
+        if hasattr(headers, "get"):
+            candidate = headers.get("Content-Type")
+            if type(candidate) is str and candidate.strip() \
+                    and "\r" not in candidate and "\n" not in candidate:
+                content_type = candidate.strip()
+    except Exception:
+        content_type = None
+
+    sink(content, {
+        "operation": _ENDPOINT,
+        "endpoint": _URL,
+        "requested_trade_date": requested_trade_date,
+        "dpt": params["dpt"],
+        "page_index": params["Pageindex"],
+        "page_size": params["pagesize"],
+        "sort": params["sort"],
+        "http_status": _safe_http_status(response),
+        "content_type": content_type,
+        "fetched_at": _now_utc_iso(),
+    })
 
 
 def _safe_call_json(response: object) -> tuple[Any, Optional[str]]:
@@ -382,7 +430,11 @@ def _normalize_rows(pool: list) -> tuple[list[dict], int, int, int]:
 # 公开 API
 # ---------------------------------------------------------------------------
 
-def fetch_limit_up_pool_snapshot(requested_trade_date: str) -> dict:
+def fetch_limit_up_pool_snapshot(
+    requested_trade_date: str,
+    *,
+    raw_response_sink: RawResponseSink | None = None,
+) -> dict:
     """对 ``requested_trade_date`` 的涨停池快照执行失败关闭读取。
 
     返回结构化适配器合同。本函数不会抛出未处理的 transport / timeout /
@@ -493,6 +545,16 @@ def fetch_limit_up_pool_snapshot(requested_trade_date: str) -> dict:
             data_array_present=False,
             trade_date_match=None,
         )
+
+    # Optional shadow capture: exact bytes are copied immediately after the
+    # transport returns and before any HTTP classification or JSON parsing.
+    # With the default ``None`` this adds no reads, calls or behavior changes.
+    _capture_raw_response(
+        response,
+        raw_response_sink,
+        requested_trade_date=requested_trade_date,
+        params=params,
+    )
 
     # 4) HTTP 分类（安全提取状态码）
     status_code = _safe_http_status(response)
