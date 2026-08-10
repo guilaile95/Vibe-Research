@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import errno
 import hashlib
+import os
 import sqlite3
 from pathlib import Path
 
 import pytest
+
+import fact_lake_store as store_module
 
 from data_contracts import (
     AdjustmentSemantics,
@@ -137,6 +141,13 @@ def _make_version_only_database(root: Path, version: str) -> Path:
     finally:
         conn.close()
     return db_path
+
+
+def _symlink_directory_or_skip(target: Path, link: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks are unavailable: {exc}")
 
 
 @pytest.mark.parametrize("readonly", [True, False])
@@ -353,17 +364,100 @@ def test_two_observation_ids_may_reference_same_blob(tmp_path: Path) -> None:
     assert lake.read_payload("obs-right") == payload
 
 
-def test_path_control_tokens_are_rejected_without_escape(tmp_path: Path) -> None:
+def test_path_looking_ds_a1_ids_are_stored_under_hashed_layout(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "lake"
     lake = initialize_fact_lake(root)
     payload = b"payload"
-    observation = _observation(payload, dataset_id="../../outside")
+    observation = _observation(
+        payload,
+        dataset_id="dataset/limit-up:v1",
+        provider_id="eastmoney/push2ex",
+    )
 
-    with pytest.raises(FactLakePathError):
+    stored = lake.store_observation(observation, payload, "application/json").stored
+
+    parts = stored.blob_relpath.split("/")
+    assert parts[0] == "raw"
+    assert parts[1] == hashlib.sha256(observation.dataset_id.encode()).hexdigest()
+    assert parts[2] == hashlib.sha256(observation.provider_id.encode()).hexdigest()
+    assert lake.read_payload(observation.observation_id) == payload
+    assert not (tmp_path / "dataset").exists()
+    assert not (tmp_path / "eastmoney").exists()
+
+
+def test_long_lived_handle_rejects_raw_root_symlink_without_external_mutation(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lake"
+    lake = initialize_fact_lake(root)
+    external = tmp_path / "external"
+    external.mkdir()
+    raw_root = root / "raw"
+    raw_root.rmdir()
+    _symlink_directory_or_skip(external, raw_root)
+    before_external = _tree_snapshot(external)
+    payload = b"raw-root-symlink"
+    observation = _observation(payload)
+
+    with pytest.raises(FactLakePathError, match="symbolic link"):
         lake.store_observation(observation, payload, "application/json")
 
-    assert not (tmp_path / "outside").exists()
-    assert list((root / "raw").rglob("*.blob")) == []
+    assert _tree_snapshot(external) == before_external
+    assert lake.get_observation(observation.observation_id) is None
+    conn = sqlite3.connect(root / CONTROL_DB_FILENAME)
+    try:
+        assert conn.execute(
+            "SELECT commit_state FROM observations WHERE observation_id = ?",
+            (observation.observation_id,),
+        ).fetchone() == ("STAGING",)
+    finally:
+        conn.close()
+
+
+def test_dataset_hash_symlink_rejected_before_provider_directory_creation(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lake"
+    lake = initialize_fact_lake(root)
+    external = tmp_path / "external"
+    external.mkdir()
+    payload = b"hashed-ancestor-symlink"
+    observation = _observation(payload)
+    dataset_hash = hashlib.sha256(observation.dataset_id.encode()).hexdigest()
+    dataset_path = root / "raw" / dataset_hash
+    _symlink_directory_or_skip(external, dataset_path)
+    before_external = _tree_snapshot(external)
+
+    with pytest.raises(FactLakePathError, match="symbolic link"):
+        lake.store_observation(observation, payload, "application/json")
+
+    assert _tree_snapshot(external) == before_external
+    assert lake.get_observation(observation.observation_id) is None
+
+
+def test_read_rejects_blob_path_through_hashed_ancestor_symlink(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lake"
+    lake = initialize_fact_lake(root)
+    payload = b"committed-before-symlink"
+    observation = _observation(payload)
+    stored = lake.store_observation(
+        observation, payload, "application/json"
+    ).stored
+    dataset_path = root / "raw" / stored.blob_relpath.split("/")[1]
+    external = tmp_path / "external"
+    external.mkdir()
+    moved = external / "dataset"
+    dataset_path.rename(moved)
+    _symlink_directory_or_skip(moved, dataset_path)
+
+    with pytest.raises(FactLakePathError, match="symbolic link"):
+        lake.get_observation(observation.observation_id)
+    with pytest.raises(FactLakePathError, match="symbolic link"):
+        lake.read_payload(observation.observation_id)
 
 
 def test_staging_manifest_is_not_visible_when_blob_publication_fails(
@@ -417,6 +511,54 @@ def test_orphan_blob_not_visible_and_exact_retry_recovers(
     result = recovered.store_observation(observation, payload, "application/json")
     assert result.created is False
     assert recovered.read_payload(observation.observation_id) == payload
+
+
+def test_directory_durability_failure_leaves_staging_and_retry_recovers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "lake"
+    lake = initialize_fact_lake(root)
+    payload = b"directory-barrier"
+    observation = _observation(payload)
+    original_fsync_directory = store_module._fsync_directory
+
+    def fail_directory_barrier(path: Path) -> None:
+        raise OSError(errno.EIO, "simulated directory durability failure", path)
+
+    monkeypatch.setattr(store_module, "_fsync_directory", fail_directory_barrier)
+    with pytest.raises(OSError, match="directory durability failure"):
+        lake.store_observation(observation, payload, "application/json")
+
+    assert lake.get_observation(observation.observation_id) is None
+    assert len(list((root / "raw").rglob("*.blob"))) == 1
+    conn = sqlite3.connect(root / CONTROL_DB_FILENAME)
+    try:
+        assert conn.execute(
+            "SELECT commit_state FROM observations WHERE observation_id = ?",
+            (observation.observation_id,),
+        ).fetchone() == ("STAGING",)
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(store_module, "_fsync_directory", original_fsync_directory)
+    retried = lake.store_observation(observation, payload, "application/json")
+    assert retried.created is False
+    assert lake.read_payload(observation.observation_id) == payload
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows has no portable directory fsync")
+def test_supported_directory_fsync_failure_is_not_swallowed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_fsync(fd: int) -> None:
+        raise OSError(errno.EIO, "supported durability barrier failed")
+
+    monkeypatch.setattr(os, "fsync", fail_fsync)
+    with pytest.raises(OSError) as raised:
+        store_module._fsync_directory(tmp_path)
+    assert raised.value.errno == errno.EIO
 
 
 def test_committed_observation_is_immutable_at_api_and_sqlite_layers(
@@ -530,6 +672,30 @@ def test_reconciliation_append_and_read_roundtrip_preserves_disagreement(
             conn.execute("DELETE FROM reconciliation_results")
     finally:
         conn.close()
+
+
+def test_reconciliation_does_not_mutate_committed_observations(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lake"
+    lake = initialize_fact_lake(root)
+    left_payload = b'{"close":10.0}'
+    right_payload = b'{"close":10.1}'
+    left = _observation(left_payload, observation_id="obs-001")
+    right = _observation(right_payload, observation_id="obs-002")
+    lake.store_observation(left, left_payload, "application/json")
+    lake.store_observation(right, right_payload, "application/json")
+    before_left = lake.get_observation("obs-001")
+    before_right = lake.get_observation("obs-002")
+
+    lake.append_reconciliation(_reconciliation())
+
+    after_left = lake.get_observation("obs-001")
+    after_right = lake.get_observation("obs-002")
+    assert after_left == before_left
+    assert after_right == before_right
+    assert lake.read_payload("obs-001") == left_payload
+    assert lake.read_payload("obs-002") == right_payload
 
 
 def test_committed_blob_corruption_fails_closed_without_repair(

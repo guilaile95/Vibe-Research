@@ -12,10 +12,12 @@ immutable read-only connection before any writable connection is allowed.
 from __future__ import annotations
 
 import hashlib
+import errno
 import json
 import os
 import re
 import sqlite3
+import stat
 import threading
 import uuid
 from dataclasses import dataclass
@@ -262,11 +264,6 @@ def _identity_component(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _validate_path_identity(value: str, field: str) -> None:
-    if value in {".", ".."} or any(token in value for token in ("/", "\\", "\x00")):
-        raise FactLakePathError(f"{field} contains a path-control token")
-
-
 def _blob_relpath(observation: ProviderObservation, digest: str) -> str:
     return PurePosixPath(
         RAW_DIRECTORY_NAME,
@@ -458,15 +455,25 @@ def _publish_new_file_no_replace(candidate: Path, destination: Path) -> bool:
 
 
 def _fsync_directory(path: Path) -> None:
+    # Python does not expose a portable Windows directory fsync primitive.
+    # File bytes are still flushed before no-replace publication; the missing
+    # directory primitive is an explicit platform limitation, not a swallowed
+    # runtime failure.  POSIX filesystems must accept the barrier or report one
+    # of the narrowly-recognized unsupported-operation errors below.
+    if os.name == "nt":
+        return
     flags = getattr(os, "O_DIRECTORY", 0) | os.O_RDONLY
     try:
         fd = os.open(path, flags)
-    except OSError:
-        return
+    except OSError as exc:
+        if exc.errno in {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}:
+            return
+        raise
     try:
         os.fsync(fd)
-    except OSError:
-        pass
+    except OSError as exc:
+        if exc.errno not in {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}:
+            raise
     finally:
         os.close(fd)
 
@@ -566,17 +573,76 @@ class FactLake:
             raise FactLakePathError("persisted blob path is not canonical")
 
         path = self._root.joinpath(*pure.parts)
-        raw_root = _raw_root(self._root).resolve(strict=True)
-        parent = path.parent
-        if create_parent:
-            parent.mkdir(parents=True, exist_ok=True)
-        elif not parent.is_dir():
-            raise FactLakeCorruptedError("committed blob directory is missing")
-        if parent.is_symlink() or raw_root not in parent.resolve(strict=True).parents:
+        parent = self._safe_blob_parent(pure, create=create_parent)
+        if path.parent != parent:
             raise FactLakePathError("blob path escaped the raw directory")
-        if path.is_symlink():
+        try:
+            blob_stat = path.lstat()
+        except FileNotFoundError:
+            blob_stat = None
+        except OSError as exc:
+            raise FactLakePathError("blob path cannot be inspected safely") from exc
+        if blob_stat is not None and stat.S_ISLNK(blob_stat.st_mode):
             raise FactLakePathError("blob path cannot be a symbolic link")
         return path
+
+    @staticmethod
+    def _assert_plain_directory(path: Path, *, missing_is_corrupt: bool) -> None:
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError as exc:
+            if missing_is_corrupt:
+                raise FactLakeCorruptedError(
+                    "committed blob directory is missing"
+                ) from exc
+            raise
+        except OSError as exc:
+            raise FactLakePathError("blob directory cannot be inspected safely") from exc
+        if stat.S_ISLNK(mode):
+            raise FactLakePathError("blob directory ancestor cannot be a symbolic link")
+        if not stat.S_ISDIR(mode):
+            raise FactLakePathError("blob directory ancestor is not a directory")
+
+    def _safe_blob_parent(self, pure: PurePosixPath, *, create: bool) -> Path:
+        """Walk the fixed hashed layout without following unverified ancestors."""
+        if len(pure.parts) != 4 or pure.parts[0] != RAW_DIRECTORY_NAME:
+            raise FactLakePathError("persisted blob path has an unsafe layout")
+
+        current = self._root
+        self._assert_plain_directory(current, missing_is_corrupt=True)
+        for index, component in enumerate(pure.parts[0:-1]):
+            current = current / component
+            if index == 0:
+                # The raw root is initialization-owned and must always exist.
+                self._assert_plain_directory(current, missing_is_corrupt=True)
+                continue
+            try:
+                self._assert_plain_directory(
+                    current,
+                    missing_is_corrupt=not create,
+                )
+            except FileNotFoundError:
+                # Never use parents=True here: every already-existing ancestor
+                # has been inspected with lstat before descending into it.
+                try:
+                    current.mkdir()
+                except FileExistsError:
+                    pass
+                except OSError as exc:
+                    raise FactLakePathError(
+                        "blob directory could not be created safely"
+                    ) from exc
+                self._assert_plain_directory(current, missing_is_corrupt=False)
+
+        # Re-check the complete chain immediately before the caller performs
+        # any file mutation/read.  This also catches a long-lived handle whose
+        # raw or hashed directory was replaced after construction.
+        current = self._root
+        self._assert_plain_directory(current, missing_is_corrupt=True)
+        for component in pure.parts[0:-1]:
+            current = current / component
+            self._assert_plain_directory(current, missing_is_corrupt=True)
+        return current
 
     def _row_to_stored(self, row: sqlite3.Row, *, verify_blob: bool) -> StoredObservation:
         try:
@@ -714,6 +780,10 @@ class FactLake:
                 raise FactLakePathError("existing blob destination is unsafe")
             if payload_sha256(destination.read_bytes()) != payload_sha256(payload_bytes):
                 raise FactLakeCorruptedError("content-addressed blob collision")
+            # A previous attempt may have published the blob and then failed
+            # its directory durability barrier.  Repeat the barrier before the
+            # manifest is allowed to become COMMITTED.
+            _fsync_directory(destination.parent)
             return
 
         candidate = destination.parent / f".{destination.name}.{uuid.uuid4().hex}.tmp"
@@ -782,8 +852,6 @@ class FactLake:
         content_type = _validate_content_type(content_type)
 
         expected_hash = payload_sha256(payload_bytes)
-        _validate_path_identity(observation.dataset_id, "dataset_id")
-        _validate_path_identity(observation.provider_id, "provider_id")
         digest = _hash_digest(observation.source_payload_hash)
         if observation.source_payload_hash.lower() != expected_hash:
             raise FactLakeHashMismatchError(
