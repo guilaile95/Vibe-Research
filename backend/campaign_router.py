@@ -30,11 +30,17 @@ from campaign_service import (
     CampaignInputError,
     CampaignNotFoundError,
     CampaignServiceError,
+    CampaignThesisArchivedError,
     CampaignThesisBindingConflictError,
+    CampaignThesisFormalIncompleteError,
+    CampaignThesisStrategyConflictError,
     CampaignTransitionConflictError,
     ThesisBindingNotFoundError,
     ThesisNotFoundError,
 )
+
+import formal_thesis_projection
+from formal_thesis_projection import CurrentThesisProjectionError
 
 router = APIRouter(prefix="/api", tags=["campaigns"])
 
@@ -46,7 +52,17 @@ _BINDING_NOT_FOUND_DETAIL = "Thesis Binding 不存在"
 _CONFLICT_DETAIL = "Campaign 已存在"
 _TRANSITION_CONFLICT_DETAIL = "Campaign 状态冲突"
 _BINDING_CONFLICT_DETAIL = "Thesis Binding 冲突"
+_THESIS_ARCHIVED_DETAIL = "Thesis 已归档，不可绑定"
+_THESIS_FORMAL_INCOMPLETE_DETAIL = "Thesis 未完成 Formal 化（NEEDS_USER_COMPLETION）"
 _INTERNAL_ERROR_DETAIL = "Campaign 服务暂不可用"
+
+
+def _strategy_conflict_detail(exc: CampaignThesisStrategyConflictError) -> str:
+    """409 semantic conflict detail：说明两 strategy（枚举值已冻结，无敏感信息）。"""
+    return (
+        f"Thesis strategy {exc.thesis_strategy} "
+        f"与 Campaign strategy {exc.campaign_strategy} 不一致"
+    )
 
 
 class CampaignCreateIn(BaseModel):
@@ -185,8 +201,10 @@ def bind_campaign_thesis(campaign_id: str, body: CampaignThesisBindingIn) -> dic
     """建立 Campaign ↔ Existing Thesis 的不可变绑定（201）。
 
     校验：Campaign 存在 / Thesis 存在 / subject_type=stock /
-    subject_id 与 security_code 完全一致 / revision 锚定 / 快照 strategy。
-    422 = 非法 body/ID；404 = Campaign/Thesis 不存在；409 = 绑定冲突。
+    subject_id 与 security_code 完全一致 / revision 锚定 /
+    Thesis 未 archived / formal_state=frozen / strategy 一致 / 快照 strategy。
+    422 = 非法 body/ID；404 = Campaign/Thesis 不存在；
+    409 = 绑定冲突 / archived / NEEDS_USER_COMPLETION / strategy semantic conflict。
     """
     try:
         binding = campaign_service.bind_campaign_thesis(
@@ -199,6 +217,12 @@ def bind_campaign_thesis(campaign_id: str, body: CampaignThesisBindingIn) -> dic
         raise HTTPException(404, _NOT_FOUND_DETAIL) from None
     except ThesisNotFoundError:
         raise HTTPException(404, _THESIS_NOT_FOUND_DETAIL) from None
+    except CampaignThesisArchivedError:
+        raise HTTPException(409, _THESIS_ARCHIVED_DETAIL) from None
+    except CampaignThesisFormalIncompleteError:
+        raise HTTPException(409, _THESIS_FORMAL_INCOMPLETE_DETAIL) from None
+    except CampaignThesisStrategyConflictError as exc:
+        raise HTTPException(409, _strategy_conflict_detail(exc)) from None
     except CampaignThesisBindingConflictError:
         raise HTTPException(409, _BINDING_CONFLICT_DETAIL) from None
     except CampaignServiceError:
@@ -222,3 +246,36 @@ def get_campaign_thesis_binding(campaign_id: str) -> dict:
     except Exception:  # noqa: BLE001 — 未预期逃逸，安全兜底
         raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
     return {"data": binding}
+
+
+@router.get("/campaigns/{campaign_id}/current-thesis")
+def get_current_thesis(campaign_id: str) -> dict:
+    """Current Formal Thesis Projection（P0-S2D-D，只读）。
+
+    Campaign → immutable binding → Formal Thesis：
+    - 未绑定 → 404；未冻结 → 200 + ready=false / NOT_READY / NOT_FROZEN；
+    - 冻结 → 200 + Formal Original（frozen_revision snapshot）+ deltas +
+      effective_state；
+    - thesis.strategy 与 binding.campaign_strategy_at_bind 不一致 → 409
+      semantic conflict；
+    - ledger 缺失/损坏/不一致 → 500（fail-closed，绝不 silent truncate）。
+    """
+    try:
+        projection = formal_thesis_projection.project_current_thesis(campaign_id)
+    except CampaignInputError:
+        raise HTTPException(422, _INVALID_INPUT_DETAIL) from None
+    except CampaignNotFoundError:
+        raise HTTPException(404, _NOT_FOUND_DETAIL) from None
+    except ThesisBindingNotFoundError:
+        raise HTTPException(404, _BINDING_NOT_FOUND_DETAIL) from None
+    except ThesisNotFoundError:
+        raise HTTPException(404, _THESIS_NOT_FOUND_DETAIL) from None
+    except CampaignThesisStrategyConflictError as exc:
+        raise HTTPException(409, _strategy_conflict_detail(exc)) from None
+    except CurrentThesisProjectionError:
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    except CampaignServiceError:
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    except Exception:  # noqa: BLE001 — 未预期逃逸，安全兜底
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    return {"data": projection}

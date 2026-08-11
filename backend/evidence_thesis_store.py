@@ -7,6 +7,7 @@ portfolio_advice_policy、daily_review、chat 等现有模块。
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sqlite3
@@ -17,7 +18,8 @@ from pathlib import Path
 from contextlib import contextmanager
 from typing import Any, Iterator
 
-SCHEMA_VERSION = "evidence_thesis_ledger_v1"
+SCHEMA_VERSION = "evidence_thesis_ledger_v2_vnext"
+LEGACY_SCHEMA_VERSION = "evidence_thesis_ledger_v1"
 
 _LOCK = threading.Lock()
 
@@ -86,7 +88,89 @@ CREATE TABLE IF NOT EXISTS investment_theses (
     invalidation_conditions TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    current_revision INTEGER NOT NULL DEFAULT 1
+    current_revision INTEGER NOT NULL DEFAULT 1 CHECK (current_revision >= 1),
+    formal_state TEXT CHECK (formal_state IS NULL OR formal_state IN ('draft','confirmed','frozen')),
+    formalization_started_at TEXT,
+    strategy TEXT CHECK (strategy IS NULL OR strategy IN ('SHORT','SWING','MEDIUM')),
+    expected_horizon TEXT,
+    free_notes TEXT,
+    confirmed_at TEXT,
+    frozen_at TEXT,
+    frozen_revision INTEGER CHECK (frozen_revision IS NULL OR frozen_revision > 0),
+    archived_at TEXT,
+    CHECK (
+      (
+        formal_state IS NULL
+        AND formalization_started_at IS NULL
+        AND confirmed_at IS NULL
+        AND frozen_at IS NULL
+        AND frozen_revision IS NULL
+      )
+      OR
+      (
+        formal_state = 'draft'
+        AND formalization_started_at IS NOT NULL
+        AND confirmed_at IS NULL
+        AND frozen_at IS NULL
+        AND frozen_revision IS NULL
+        AND archived_at IS NULL
+        AND status != 'archived'
+      )
+      OR
+      (
+        formal_state = 'confirmed'
+        AND formalization_started_at IS NOT NULL
+        AND confirmed_at IS NOT NULL
+        AND frozen_at IS NULL
+        AND frozen_revision IS NULL
+        AND archived_at IS NULL
+        AND status = 'active'
+        AND strategy IS NOT NULL
+        AND expected_horizon IS NOT NULL
+      )
+      OR
+      (
+        formal_state = 'frozen'
+        AND status = 'active'
+        AND formalization_started_at IS NOT NULL
+        AND confirmed_at IS NOT NULL
+        AND frozen_at IS NOT NULL
+        AND frozen_revision IS NOT NULL
+        AND frozen_revision > 0
+        AND archived_at IS NULL
+        AND strategy IS NOT NULL
+        AND expected_horizon IS NOT NULL
+        AND current_revision = frozen_revision
+      )
+      OR
+      (
+        formal_state = 'frozen'
+        AND status = 'archived'
+        AND formalization_started_at IS NOT NULL
+        AND confirmed_at IS NOT NULL
+        AND frozen_at IS NOT NULL
+        AND frozen_revision IS NOT NULL
+        AND frozen_revision > 0
+        AND archived_at IS NOT NULL
+        AND strategy IS NOT NULL
+        AND expected_horizon IS NOT NULL
+        AND current_revision = frozen_revision + 1
+      )
+    ),
+    CHECK (
+      expected_horizon IS NULL
+      OR (
+        json_valid(expected_horizon)
+        AND json_extract(expected_horizon, '$.unit') = 'TRADING_DAY'
+        AND json_extract(expected_horizon, '$.anchor') = 'FREEZE_AT'
+        AND json_type(expected_horizon, '$.min') = 'integer'
+        AND json_type(expected_horizon, '$.max') = 'integer'
+        AND CAST(json_extract(expected_horizon, '$.min') AS INTEGER) >= 1
+        AND CAST(json_extract(expected_horizon, '$.max') AS INTEGER) >= 1
+        AND CAST(json_extract(expected_horizon, '$.max') AS INTEGER)
+            >= CAST(json_extract(expected_horizon, '$.min') AS INTEGER)
+      )
+    )
 )
 """
 
@@ -98,8 +182,47 @@ CREATE TABLE IF NOT EXISTS thesis_revisions (
     snapshot TEXT NOT NULL,
     change_summary TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    revision_kind TEXT CHECK (
+      revision_kind IS NULL
+      OR revision_kind IN ('CONTENT','FORMAL_FREEZE','FORMAL_ARCHIVE')
+    ),
     FOREIGN KEY (thesis_id) REFERENCES investment_theses(id),
     UNIQUE (thesis_id, revision_number)
+)
+"""
+
+_CREATE_THESIS_DELTAS = """
+CREATE TABLE IF NOT EXISTS thesis_deltas (
+    delta_id TEXT PRIMARY KEY,
+    thesis_id TEXT NOT NULL,
+    delta_sequence INTEGER NOT NULL,
+    base_revision INTEGER NOT NULL,
+    delta_state TEXT NOT NULL CHECK (
+      delta_state IN ('STRENGTHENED','STABLE','WEAKENED','DISPROVEN','INVALIDATED','UNKNOWN')
+    ),
+    reason TEXT NOT NULL,
+    confirmed_at TEXT NOT NULL,
+    FOREIGN KEY (thesis_id) REFERENCES investment_theses(id),
+    UNIQUE (thesis_id, delta_sequence)
+)
+"""
+
+_CREATE_THESIS_DELTA_EVIDENCE_LINKS = """
+CREATE TABLE IF NOT EXISTS thesis_delta_evidence_links (
+    delta_id TEXT NOT NULL,
+    evidence_id TEXT NOT NULL,
+    evidence_type TEXT NOT NULL,
+    claim TEXT NOT NULL,
+    classification TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    source_title TEXT NOT NULL,
+    source_url TEXT,
+    source_date TEXT,
+    accessed_at TEXT NOT NULL,
+    stance TEXT NOT NULL,
+    captured_at TEXT NOT NULL,
+    PRIMARY KEY (delta_id, evidence_id),
+    FOREIGN KEY (delta_id) REFERENCES thesis_deltas(delta_id)
 )
 """
 
@@ -148,12 +271,15 @@ _ALL_DDL = [
     _CREATE_INVESTMENT_THESES,
     _CREATE_THESIS_REVISIONS,
     _CREATE_THESIS_EVIDENCE_LINKS,
+    _CREATE_THESIS_DELTAS,
+    _CREATE_THESIS_DELTA_EVIDENCE_LINKS,
     _IDX_EVIDENCE_SUBJECT,
     _IDX_EVIDENCE_CLASSIFICATION,
     _IDX_THESIS_SUBJECT,
     _IDX_THESIS_STATUS,
     _IDX_REVISIONS_THESIS,
     _IDX_LINKS_EVIDENCE,
+    "CREATE INDEX IF NOT EXISTS idx_deltas_thesis ON thesis_deltas(thesis_id, delta_sequence)",
 ]
 
 
@@ -164,6 +290,53 @@ _ALL_DDL = [
 def _utc_now_iso() -> str:
     """UTC ISO 8601 微秒精度。"""
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+def _is_canonical_utc_timestamp(value: Any) -> bool:
+    """Return whether *value* is the exact timestamp emitted by ``_utc_now_iso``.
+
+    Persisted Formal timestamps deliberately use one representation (microseconds
+    plus an explicit ``+00:00`` offset).  ``datetime.fromisoformat`` alone is too
+    permissive: it accepts offsets, missing fractional seconds and ``Z``.  Round
+    tripping through ``isoformat`` keeps the read validator fail-closed while
+    preserving the existing store contract.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return False
+    if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+        return False
+    return parsed.isoformat(timespec="microseconds") == value
+
+
+def _is_parseable_utc_iso(value: Any) -> bool:
+    """Legacy compatibility check: timezone-aware ISO instant, any precision."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() == timezone.utc.utcoffset(parsed)
+
+
+def _require_canonical_timestamp(value: Any, *, allow_none: bool = False) -> None:
+    if value is None and allow_none:
+        return
+    if not _is_canonical_utc_timestamp(value):
+        raise EvidenceLedgerCorruptedError()
+
+
+def _is_canonical_date(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) != 10:
+        return False
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d") == value
+    except ValueError:
+        return False
 
 
 def new_id() -> str:
@@ -209,13 +382,6 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
-def _connect_wal_init(db_path: str | Path) -> sqlite3.Connection:
-    """可写初始化连接：额外设置 journal_mode=WAL（持久化到数据库文件）。"""
-    conn = _connect(db_path)
-    conn.execute("PRAGMA journal_mode = WAL")
-    return conn
-
-
 def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:
     """只读连接：mode=ro；不修改 journal mode。文件不存在抛 FileNotFoundError。"""
     path = _as_path(db_path)
@@ -226,6 +392,17 @@ def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
+    return conn
+
+
+def _connect_immutable(db_path: str | Path) -> sqlite3.Connection:
+    """打开不读取或创建 WAL/SHM 的不可变主文件视图。"""
+    path = _as_path(db_path)
+    if not Path(path).is_file():
+        raise FileNotFoundError(f"evidence_thesis db 不存在：{path}")
+    uri = f"{Path(path).resolve().as_uri()}?mode=ro&immutable=1"
+    conn = sqlite3.connect(uri, timeout=5, uri=True)
+    conn.row_factory = sqlite3.Row
     return conn
 
 
@@ -249,13 +426,32 @@ def _read_schema_version(conn: sqlite3.Connection) -> str | None:
     return row["value"] if row else None
 
 
+def _validate_existing_schema_version_immutable(db_path: str | Path) -> None:
+    """在 SQLite 处理任何 WAL/SHM 前，从主文件精确验证现有版本。"""
+    conn = _connect_immutable(db_path)
+    try:
+        if not _table_exists(conn, "schema_meta"):
+            raise EvidenceLedgerCorruptedError()
+        version = _read_schema_version(conn)
+        if version is None:
+            raise EvidenceLedgerCorruptedError()
+        if version != SCHEMA_VERSION:
+            raise EvidenceLedgerSchemaVersionError()
+    except (EvidenceLedgerSchemaVersionError, EvidenceLedgerCorruptedError):
+        raise
+    except sqlite3.DatabaseError:
+        raise EvidenceLedgerCorruptedError()
+    finally:
+        conn.close()
+
+
 def _validate_and_prepare_schema(conn: sqlite3.Connection, is_write: bool) -> None:
     """统一 Schema 验证和准备入口。
 
-    - 已存在 schema_meta 时先读版本，高于代码版本拒绝
+    - 已存在 schema_meta 时只接受当前精确版本
     - 拒绝前不执行任何 DDL
     - 当前版本正常读写
-    - 新建空数据库初始化为 v1
+    - 新建空数据库初始化为当前版本
     - 非空数据库缺 schema_meta 时拒绝
     """
     # 检查是否已有 schema_meta 表
@@ -268,23 +464,9 @@ def _validate_and_prepare_schema(conn: sqlite3.Connection, is_write: bool) -> No
             # schema_meta 表存在但无 schema_version 记录，视为损坏
             raise EvidenceLedgerCorruptedError()
 
-        # 版本号比较：提取 v 后的数字
-        def _extract_version_number(v: str) -> int:
-            import re
-            m = re.search(r'_v(\d+)$', v)
-            return int(m.group(1)) if m else 0
-
-        current_ver = _extract_version_number(SCHEMA_VERSION)
-        db_ver = _extract_version_number(version)
-
-        if db_ver > current_ver:
-            # 数据库版本高于代码版本，拒绝打开
+        if version != SCHEMA_VERSION:
+            # 普通打开不推断版本兼容性，也不执行隐式迁移。
             raise EvidenceLedgerSchemaVersionError()
-        elif db_ver < current_ver:
-            # 数据库版本低于代码版本，需要迁移
-            # 当前无旧版本迁移逻辑，明确拒绝
-            raise EvidenceLedgerSchemaVersionError()
-        # db_ver == current_ver: 正常继续
     else:
         # 没有 schema_meta 表
         # 检查是否是全新数据库（没有任何表）
@@ -306,15 +488,25 @@ def _validate_and_prepare_schema(conn: sqlite3.Connection, is_write: bool) -> No
             )
 
 
-def initialize_store(db_path: str | Path) -> None:
-    """幂等初始化表、索引和 schema 版本。"""
+def _initialize_store_after_version_gate(db_path: str | Path) -> None:
+    """初始化新库或已通过不可变版本门禁的当前库。"""
     _ensure_parent_dir(db_path)
-    conn = _connect_wal_init(db_path)
+    conn = _connect(db_path)
     try:
         with conn:
             _validate_and_prepare_schema(conn, is_write=True)
+        # journal_mode 会持久化；只能在精确版本门禁或新库 DDL 成功后设置。
+        conn.execute("PRAGMA journal_mode = WAL")
     finally:
         conn.close()
+
+
+def initialize_store(db_path: str | Path) -> None:
+    """幂等初始化；现有库在任何 WAL/SHM 处理前先验证精确版本。"""
+    path = _as_path(db_path)
+    if path != ":memory:" and Path(path).is_file():
+        _validate_existing_schema_version_immutable(db_path)
+    _initialize_store_after_version_gate(db_path)
 
 
 def integrity_check(db_path: str | Path) -> None:
@@ -397,6 +589,8 @@ class _Tx:
 
 def _open_for_write(db_path: str | Path) -> sqlite3.Connection:
     """打开可写连接：确保 schema 已初始化 + 损坏检测。"""
+    if _db_file_exists(db_path):
+        _validate_existing_schema_version_immutable(db_path)
     _ensure_parent_dir(db_path)
     conn = _connect(db_path)
     try:
@@ -454,6 +648,7 @@ def read_transaction(db_path: str | Path, fn) -> Any:
     """只读执行 fn(conn)；文件/表缺失时由调用方处理。"""
     if not _db_file_exists(db_path):
         raise FileNotFoundError(f"evidence_thesis db 不存在：{db_path}")
+    _validate_existing_schema_version_immutable(db_path)
     conn = _connect_readonly(db_path)
     try:
         _validate_and_prepare_schema(conn, is_write=False)
@@ -578,6 +773,21 @@ def _thesis_row_to_dict(row: sqlite3.Row) -> dict:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "current_revision": int(row["current_revision"]),
+        "formal_state": row["formal_state"],
+        "formalization_started_at": row["formalization_started_at"],
+        "strategy": row["strategy"],
+        "expected_horizon": (
+            json.loads(row["expected_horizon"])
+            if row["expected_horizon"] is not None
+            else None
+        ),
+        "free_notes": row["free_notes"],
+        "confirmed_at": row["confirmed_at"],
+        "frozen_at": row["frozen_at"],
+        "frozen_revision": (
+            int(row["frozen_revision"]) if row["frozen_revision"] is not None else None
+        ),
+        "archived_at": row["archived_at"],
     }
 
 
@@ -589,6 +799,36 @@ def _revision_row_to_dict(row: sqlite3.Row) -> dict:
         "snapshot": json.loads(row["snapshot"]),
         "change_summary": row["change_summary"],
         "created_at": row["created_at"],
+        "revision_kind": row["revision_kind"],
+    }
+
+
+def _delta_row_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "delta_id": row["delta_id"],
+        "thesis_id": row["thesis_id"],
+        "delta_sequence": int(row["delta_sequence"]),
+        "base_revision": int(row["base_revision"]),
+        "delta_state": row["delta_state"],
+        "reason": row["reason"],
+        "confirmed_at": row["confirmed_at"],
+    }
+
+
+def _delta_evidence_row_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "delta_id": row["delta_id"],
+        "evidence_id": row["evidence_id"],
+        "evidence_type": row["evidence_type"],
+        "claim": row["claim"],
+        "classification": row["classification"],
+        "confidence": row["confidence"],
+        "source_title": row["source_title"],
+        "source_url": row["source_url"],
+        "source_date": row["source_date"],
+        "accessed_at": row["accessed_at"],
+        "stance": row["stance"],
+        "captured_at": row["captured_at"],
     }
 
 
@@ -844,8 +1084,9 @@ def _count_thesis(
 def _insert_revision(conn: sqlite3.Connection, data: dict) -> None:
     conn.execute(
         """
-        INSERT INTO thesis_revisions (id, thesis_id, revision_number, snapshot, change_summary, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO thesis_revisions
+          (id, thesis_id, revision_number, snapshot, change_summary, created_at, revision_kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             data["id"],
@@ -854,6 +1095,7 @@ def _insert_revision(conn: sqlite3.Connection, data: dict) -> None:
             json.dumps(data["snapshot"], ensure_ascii=False),
             data["change_summary"],
             data["created_at"],
+            data.get("revision_kind"),
         ),
     )
 
@@ -945,3 +1187,444 @@ def _list_non_archived_thesis_ids_for_evidence(conn: sqlite3.Connection, evidenc
         (evidence_id,),
     ).fetchall()
     return [r["id"] for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# P0-PH2 S2D-A：Formal Thesis persisted-row validators（fail-closed）
+# ---------------------------------------------------------------------------
+
+FORMAL_STATES = ("draft", "confirmed", "frozen")
+THESIS_STRATEGIES = ("SHORT", "SWING", "MEDIUM")
+DELTA_STATES = ("STRENGTHENED", "STABLE", "WEAKENED", "DISPROVEN", "INVALIDATED", "UNKNOWN")
+TERMINAL_DELTA_STATES = ("DISPROVEN", "INVALIDATED")
+REVISION_KINDS = ("CONTENT", "FORMAL_FREEZE", "FORMAL_ARCHIVE")
+
+# Strategy ↔ Horizon hard compatibility（service 层 hard gate 的同一权威表；
+# store 只校验合法持久化结构，不重复实现业务规则）。
+STRATEGY_HORIZON_RANGES: dict[str, tuple[int, int]] = {
+    "SHORT": (1, 10),
+    "SWING": (5, 45),
+    "MEDIUM": (40, 252),
+}
+
+
+def _expect_horizon_dict(thesis_id: str, raw: str) -> dict:
+    """解析并校验 persisted expected_horizon JSON（结构 + 数值），损坏 → Corrupted。"""
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise EvidenceLedgerCorruptedError() from exc
+    if not isinstance(value, dict):
+        raise EvidenceLedgerCorruptedError()
+    if value.get("unit") != "TRADING_DAY" or value.get("anchor") != "FREEZE_AT":
+        raise EvidenceLedgerCorruptedError()
+    low = value.get("min")
+    high = value.get("max")
+    if (
+        isinstance(low, bool)
+        or isinstance(high, bool)
+        or not isinstance(low, int)
+        or not isinstance(high, int)
+        or low < 1
+        or high < 1
+        or high < low
+    ):
+        raise EvidenceLedgerCorruptedError()
+    return value
+
+
+def _expect_strategy_horizon(strategy: str | None, horizon: dict) -> None:
+    """Persisted Formal rows must stay within the strategy's hard range."""
+    if strategy is None:
+        raise EvidenceLedgerCorruptedError()
+    bounds = STRATEGY_HORIZON_RANGES.get(strategy)
+    if bounds is None:
+        raise EvidenceLedgerCorruptedError()
+    low, high = horizon["min"], horizon["max"]
+    min_allowed, max_allowed = bounds
+    if low < min_allowed or high > max_allowed:
+        raise EvidenceLedgerCorruptedError()
+
+
+def validate_persisted_thesis_main(row: sqlite3.Row) -> None:
+    """校验 investment_theses 主行满足五态 matrix；任何异常 → Corrupted。
+
+    DB CHECK 已挡住结构性非法值；这里补充 row 级语义校验（例如 legacy 行不得
+    携带 formalization marker、frozen archived 的 current_revision 关系），
+    保证 read path fail-closed，不依赖 SQLite 是否启用 CHECK。
+    """
+    try:
+        thesis_id = row["id"]
+        formal_state = row["formal_state"]
+        status = row["status"]
+        current_revision = int(row["current_revision"])
+        frozen_revision = row["frozen_revision"]
+        if frozen_revision is not None:
+            frozen_revision = int(frozen_revision)
+        started = row["formalization_started_at"]
+        confirmed_at = row["confirmed_at"]
+        frozen_at = row["frozen_at"]
+        archived_at = row["archived_at"]
+        strategy = row["strategy"]
+        horizon_raw = row["expected_horizon"]
+    except (KeyError, IndexError, TypeError, ValueError):
+        raise EvidenceLedgerCorruptedError()
+
+    if not isinstance(thesis_id, str) or not thesis_id:
+        raise EvidenceLedgerCorruptedError()
+
+    if current_revision < 1:
+        raise EvidenceLedgerCorruptedError()
+    if formal_state is not None and formal_state not in FORMAL_STATES:
+        raise EvidenceLedgerCorruptedError()
+    if strategy is not None and strategy not in THESIS_STRATEGIES:
+        raise EvidenceLedgerCorruptedError()
+
+    if formal_state is None:
+        # LEGACY：不能携带 formal lifecycle markers。历史 archived legacy
+        # 行允许保留 archived_at，但若存在必须仍是 canonical UTC。
+        if any(v is not None for v in (started, confirmed_at, frozen_at, frozen_revision)):
+            raise EvidenceLedgerCorruptedError()
+        if archived_at is not None and not _is_parseable_utc_iso(archived_at):
+            raise EvidenceLedgerCorruptedError()
+        return
+
+    if formal_state == "draft":
+        _require_canonical_timestamp(started)
+        if confirmed_at is not None or frozen_at is not None:
+            raise EvidenceLedgerCorruptedError()
+        if frozen_revision is not None or archived_at is not None:
+            raise EvidenceLedgerCorruptedError()
+        if status == "archived":
+            raise EvidenceLedgerCorruptedError()
+        return
+
+    if formal_state == "confirmed":
+        _require_canonical_timestamp(started)
+        _require_canonical_timestamp(confirmed_at)
+        if frozen_at is not None or frozen_revision is not None or archived_at is not None:
+            raise EvidenceLedgerCorruptedError()
+        if status != "active" or strategy is None or horizon_raw is None:
+            raise EvidenceLedgerCorruptedError()
+        horizon = _expect_horizon_dict(thesis_id, horizon_raw)
+        _expect_strategy_horizon(strategy, horizon)
+        return
+
+    # formal_state == "frozen"
+    _require_canonical_timestamp(started)
+    _require_canonical_timestamp(confirmed_at)
+    _require_canonical_timestamp(frozen_at)
+    if frozen_revision is None or frozen_revision <= 0:
+        raise EvidenceLedgerCorruptedError()
+    if strategy is None or horizon_raw is None:
+        raise EvidenceLedgerCorruptedError()
+    horizon = _expect_horizon_dict(thesis_id, horizon_raw)
+    _expect_strategy_horizon(strategy, horizon)
+    if status == "active":
+        if archived_at is not None:
+            raise EvidenceLedgerCorruptedError()
+        if current_revision != frozen_revision:
+            raise EvidenceLedgerCorruptedError()
+        return
+    if status == "archived":
+        _require_canonical_timestamp(archived_at)
+        if current_revision != frozen_revision + 1:
+            raise EvidenceLedgerCorruptedError()
+        return
+    raise EvidenceLedgerCorruptedError()
+
+
+def validate_persisted_thesis_chain(
+    conn: sqlite3.Connection, thesis_id: str, row: sqlite3.Row
+) -> None:
+    """跨 revision 校验 Formal 链：revision 存在、snapshot 一致且时间戳规范。"""
+    formal_state = row["formal_state"]
+    current_revision = row["current_revision"]
+    try:
+        current_revision = int(current_revision)
+    except (TypeError, ValueError) as exc:
+        raise EvidenceLedgerCorruptedError() from exc
+
+    def _snapshot_content(snapshot: dict) -> dict:
+        nested = snapshot.get("thesis")
+        return nested if isinstance(nested, dict) else snapshot
+
+    def _validate_snapshot_timestamps(snapshot: dict) -> None:
+        # Both the flat vNext representation and historical nested aggregate can
+        # carry Formal lifecycle fields.  Validate every present field rather
+        # than silently accepting a malformed value.
+        for candidate in (snapshot, _snapshot_content(snapshot)):
+            for key in (
+                "formalization_started_at", "confirmed_at", "frozen_at", "archived_at",
+            ):
+                if key in candidate:
+                    _require_canonical_timestamp(candidate[key], allow_none=True)
+
+    def _content_matches(snapshot: dict) -> bool:
+        content = _snapshot_content(snapshot)
+        try:
+            live = {
+                "title": row["title"],
+                "summary": row["summary"],
+                "core_claims": json.loads(row["core_claims"]),
+                "catalysts": json.loads(row["catalysts"]),
+                "risks": json.loads(row["risks"]),
+                "invalidation_conditions": json.loads(row["invalidation_conditions"]),
+                "free_notes": row["free_notes"],
+                "strategy": row["strategy"],
+                "expected_horizon": json.loads(row["expected_horizon"]),
+            }
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise EvidenceLedgerCorruptedError()
+        for key, value in live.items():
+            if key not in content or json.dumps(content[key], sort_keys=True) != json.dumps(value, sort_keys=True):
+                return False
+        return True
+
+    # CONFIRMED has no dedicated formal revision kind: its current revision is
+    # the latest CONTENT snapshot.  It is nevertheless authoritative for reads
+    # and must exist and match the live formal content.
+    if formal_state == "confirmed":
+        current_rev = _get_revision_row(conn, thesis_id, current_revision)
+        if current_rev is None:
+            raise EvidenceLedgerCorruptedError()
+        try:
+            confirmed_snapshot = json.loads(current_rev["snapshot"])
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise EvidenceLedgerCorruptedError() from exc
+        if not isinstance(confirmed_snapshot, dict):
+            raise EvidenceLedgerCorruptedError()
+        _validate_snapshot_timestamps(confirmed_snapshot)
+        if not _content_matches(confirmed_snapshot):
+            raise EvidenceLedgerCorruptedError()
+        return
+
+    frozen_revision = row["frozen_revision"]
+    if formal_state != "frozen" or frozen_revision is None:
+        return
+    try:
+        frozen_revision = int(frozen_revision)
+    except (TypeError, ValueError) as exc:
+        raise EvidenceLedgerCorruptedError() from exc
+
+    freeze_rev = _get_revision_row(conn, thesis_id, frozen_revision)
+    if freeze_rev is None:
+        raise EvidenceLedgerCorruptedError()
+    if freeze_rev["revision_kind"] != "FORMAL_FREEZE":
+        raise EvidenceLedgerCorruptedError()
+    try:
+        frozen_snapshot = json.loads(freeze_rev["snapshot"])
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise EvidenceLedgerCorruptedError() from exc
+    if not isinstance(frozen_snapshot, dict):
+        raise EvidenceLedgerCorruptedError()
+    _validate_snapshot_timestamps(frozen_snapshot)
+    if not _content_matches(frozen_snapshot):
+        raise EvidenceLedgerCorruptedError()
+
+    if row["status"] == "archived":
+        archive_rev = _get_revision_row(conn, thesis_id, frozen_revision + 1)
+        if archive_rev is None or archive_rev["revision_kind"] != "FORMAL_ARCHIVE":
+            raise EvidenceLedgerCorruptedError()
+        try:
+            archive_snapshot = json.loads(archive_rev["snapshot"])
+        except (TypeError, ValueError):
+            raise EvidenceLedgerCorruptedError()
+        if not isinstance(archive_snapshot, dict):
+            raise EvidenceLedgerCorruptedError()
+        _validate_snapshot_timestamps(archive_snapshot)
+        # Archive is a lifecycle-only revision.  Snapshots may contain both the
+        # legacy nested aggregate and the vNext flat Formal fields, so normalize
+        # the four allowed lifecycle markers at both levels before comparison.
+        lifecycle = {"status", "current_revision", "updated_at", "archived_at"}
+
+        def _without_archive_lifecycle(snapshot: dict) -> dict:
+            normalized = copy.deepcopy(snapshot)
+            for key in lifecycle:
+                normalized.pop(key, None)
+            nested = normalized.get("thesis")
+            if isinstance(nested, dict):
+                for key in lifecycle:
+                    nested.pop(key, None)
+            return normalized
+
+        if _without_archive_lifecycle(archive_snapshot) != _without_archive_lifecycle(
+            frozen_snapshot
+        ):
+            raise EvidenceLedgerCorruptedError()
+
+        expected_lifecycle = {
+            "status": "archived",
+            "current_revision": frozen_revision + 1,
+            "updated_at": row["updated_at"],
+            "archived_at": row["archived_at"],
+        }
+        for key, value in expected_lifecycle.items():
+            if archive_snapshot.get(key) != value:
+                raise EvidenceLedgerCorruptedError()
+        nested_archive = archive_snapshot.get("thesis")
+        if isinstance(nested_archive, dict):
+            for key, value in expected_lifecycle.items():
+                if nested_archive.get(key) != value:
+                    raise EvidenceLedgerCorruptedError()
+
+
+def validate_persisted_revision_history(
+    conn: sqlite3.Connection, thesis_id: str, row: sqlite3.Row
+) -> None:
+    """Validate the complete append-only revision history for one thesis.
+
+    A Formal read cannot validate only the current/freeze revision: historical
+    revisions are exposed by list/get/diff APIs and therefore must fail closed
+    under the same persisted contract.
+    """
+    try:
+        current_revision = int(row["current_revision"])
+        formal_state = row["formal_state"]
+        status = row["status"]
+        frozen_revision = (
+            int(row["frozen_revision"]) if row["frozen_revision"] is not None else None
+        )
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise EvidenceLedgerCorruptedError() from exc
+
+    revisions = _list_revision_rows(conn, thesis_id)
+    numbers: list[int] = []
+    for revision in revisions:
+        try:
+            revision_id = revision["id"]
+            row_thesis_id = revision["thesis_id"]
+            number = int(revision["revision_number"])
+            kind = revision["revision_kind"]
+            snapshot = json.loads(revision["snapshot"])
+        except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise EvidenceLedgerCorruptedError() from exc
+        if (
+            not isinstance(revision_id, str)
+            or not revision_id
+            or row_thesis_id != thesis_id
+            or number < 1
+            or not isinstance(snapshot, dict)
+        ):
+            raise EvidenceLedgerCorruptedError()
+
+        expected_kind: str | None = None
+        if formal_state == "frozen" and number == frozen_revision:
+            expected_kind = "FORMAL_FREEZE"
+        elif (
+            formal_state == "frozen"
+            and status == "archived"
+            and frozen_revision is not None
+            and number == frozen_revision + 1
+        ):
+            expected_kind = "FORMAL_ARCHIVE"
+        elif kind not in (None, "CONTENT"):
+            raise EvidenceLedgerCorruptedError()
+        if expected_kind is not None and kind != expected_kind:
+            raise EvidenceLedgerCorruptedError()
+
+        content = snapshot.get("thesis")
+        if not isinstance(content, dict):
+            content = snapshot
+        snapshot_id = content.get("id")
+        if snapshot_id is not None and snapshot_id != thesis_id:
+            raise EvidenceLedgerCorruptedError()
+        snapshot_revision = content.get("current_revision")
+        if snapshot_revision is not None:
+            if (
+                isinstance(snapshot_revision, bool)
+                or not isinstance(snapshot_revision, int)
+                or snapshot_revision != number
+            ):
+                raise EvidenceLedgerCorruptedError()
+        numbers.append(number)
+
+    if numbers != list(range(1, current_revision + 1)):
+        raise EvidenceLedgerCorruptedError()
+
+
+def validate_persisted_delta_chain(conn: sqlite3.Connection, thesis_id: str) -> None:
+    """校验 delta 链及其 immutable evidence snapshots，任何缺失/漂移均拒绝读取。"""
+    rows = conn.execute(
+        "SELECT * FROM thesis_deltas WHERE thesis_id = ? ORDER BY delta_sequence ASC",
+        (thesis_id,),
+    ).fetchall()
+    if not rows:
+        return
+    thesis_row = _get_thesis_row(conn, thesis_id)
+    if thesis_row is None:
+        raise EvidenceLedgerCorruptedError()
+    frozen_revision = thesis_row["frozen_revision"]
+    if frozen_revision is None:
+        raise EvidenceLedgerCorruptedError()
+    frozen_revision = int(frozen_revision)
+    expected_seq = 1
+    for index, row in enumerate(rows):
+        try:
+            delta_id = row["delta_id"]
+            row_thesis_id = row["thesis_id"]
+            seq = int(row["delta_sequence"])
+            base_revision = int(row["base_revision"])
+            delta_state = row["delta_state"]
+            reason = row["reason"]
+            confirmed_at = row["confirmed_at"]
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise EvidenceLedgerCorruptedError() from exc
+        if (
+            not isinstance(delta_id, str)
+            or not delta_id
+            or row_thesis_id != thesis_id
+            or seq < 1
+            or base_revision < 1
+            or not isinstance(reason, str)
+            or not reason.strip()
+            or delta_state not in DELTA_STATES
+        ):
+            raise EvidenceLedgerCorruptedError()
+        _require_canonical_timestamp(confirmed_at)
+        if seq != expected_seq:
+            raise EvidenceLedgerCorruptedError()
+        if base_revision != frozen_revision:
+            raise EvidenceLedgerCorruptedError()
+        if delta_state in TERMINAL_DELTA_STATES and index != len(rows) - 1:
+            raise EvidenceLedgerCorruptedError()
+
+        links = conn.execute(
+            "SELECT * FROM thesis_delta_evidence_links WHERE delta_id = ? ORDER BY evidence_id",
+            (delta_id,),
+        ).fetchall()
+        for link in links:
+            try:
+                if link["delta_id"] != delta_id:
+                    raise EvidenceLedgerCorruptedError()
+                evidence_id = link["evidence_id"]
+                evidence_type = link["evidence_type"]
+                claim = link["claim"]
+                classification = link["classification"]
+                confidence = link["confidence"]
+                source_title = link["source_title"]
+                source_url = link["source_url"]
+                source_date = link["source_date"]
+                accessed_at = link["accessed_at"]
+                stance = link["stance"]
+                captured_at = link["captured_at"]
+            except (KeyError, IndexError, TypeError) as exc:
+                raise EvidenceLedgerCorruptedError() from exc
+            if (
+                not isinstance(evidence_id, str)
+                or not evidence_id
+                or evidence_type not in ("news", "announcement", "report", "research_note", "financial_filing", "other")
+                or not isinstance(claim, str)
+                or not claim.strip()
+                or classification not in ("fact", "inference", "unknown")
+                or confidence not in ("high", "medium", "low")
+                or not isinstance(source_title, str)
+                or not source_title.strip()
+                or (source_url is not None and not isinstance(source_url, str))
+                or (source_date is not None and not _is_canonical_date(source_date))
+                or stance not in ("support", "oppose", "neutral")
+            ):
+                raise EvidenceLedgerCorruptedError()
+            _require_canonical_timestamp(accessed_at)
+            _require_canonical_timestamp(captured_at)
+        expected_seq += 1

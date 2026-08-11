@@ -67,6 +67,20 @@ def fake_evidence_thesis(monkeypatch, tmp_path):
             "created_at": "2026-01-01T00:00:00",
             "updated_at": "2026-01-01T00:00:00",
             "current_revision": 3,
+            "formal_state": "frozen",
+            "formalization_started_at": "2026-01-02T00:00:00",
+            "strategy": "SWING",
+            "expected_horizon": {
+                "unit": "TRADING_DAY",
+                "min": 5,
+                "max": 20,
+                "anchor": "FREEZE_AT",
+            },
+            "free_notes": None,
+            "confirmed_at": "2026-01-03T00:00:00",
+            "frozen_at": "2026-01-04T00:00:00",
+            "frozen_revision": 3,
+            "archived_at": None,
         }
         return tid
 
@@ -222,6 +236,12 @@ class TestMainAppRouteUniqueness:
         "/api/campaigns/{campaign_id}",
         "/api/campaigns/{campaign_id}/transitions",
         "/api/campaigns/{campaign_id}/thesis-binding",
+        "/api/campaigns/{campaign_id}/current-thesis",
+        "/api/thesis/{thesis_id}/begin-formalization",
+        "/api/thesis/{thesis_id}/confirm",
+        "/api/thesis/{thesis_id}/freeze",
+        "/api/thesis/{thesis_id}/archive",
+        "/api/thesis/{thesis_id}/deltas",
     }
 
     def test_related_routes_present_and_unique_in_openapi(self, client):

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+import json
 import sys
 from datetime import date, datetime, timedelta, timezone
 
@@ -1027,6 +1028,12 @@ class TestRuntimeReuse:
 
             class R:
                 status_code = 200
+                content = json.dumps(
+                    body,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                headers = {"Content-Type": "application/json; charset=utf-8"}
 
                 def json(self):
                     return body

@@ -39,7 +39,17 @@ def _tid(seed: int = 0) -> str:
     return f"{seed:032x}"
 
 
-def _thesis(thesis_id: str, *, subject_type="stock", subject_id="600519", revision=3) -> dict:
+def _thesis(
+    thesis_id: str,
+    *,
+    subject_type="stock",
+    subject_id="600519",
+    revision=3,
+    status="active",
+    formal_state="frozen",
+    strategy="SWING",
+) -> dict:
+    """fake thesis dict：S2D-E 起正式绑定要求 frozen + strategy 一致（SWING 默认）。"""
     return {
         "id": thesis_id,
         "subject_type": subject_type,
@@ -47,7 +57,7 @@ def _thesis(thesis_id: str, *, subject_type="stock", subject_id="600519", revisi
         "market": None,
         "title": "test thesis",
         "summary": "summary",
-        "status": "active",
+        "status": status,
         "core_claims": [],
         "catalysts": [],
         "risks": [],
@@ -55,6 +65,9 @@ def _thesis(thesis_id: str, *, subject_type="stock", subject_id="600519", revisi
         "created_at": "2026-01-01T00:00:00",
         "updated_at": "2026-01-01T00:00:00",
         "current_revision": revision,
+        "formal_state": formal_state,
+        "strategy": strategy,
+        "frozen_revision": revision,
     }
 
 
@@ -179,7 +192,9 @@ def test_no_replace_delete_generic_apis(db_path):
 # ---------------------------------------------------------------------------
 def test_thesis_bound_elsewhere_conflict(db_path, fake_evidence):
     a = _campaign()
-    b = _campaign(strategy="MEDIUM")
+    # 同一 thesis 先绑 a 再绑 b：strategy gate 需与两个 Campaign 都一致，
+    # 才能命中 ONE-THESIS-ONE-CAMPAIGN 的 store 冲突（保持原断言语义）。
+    b = _campaign(strategy="SWING")
     tid = fake_evidence.install(thesis_id=_tid(1))
     first = bind_campaign_thesis(a["campaign_id"], tid)
     with pytest.raises(CampaignThesisBindingConflictError):
@@ -259,7 +274,9 @@ def test_strategy_snapshot_survives_lifecycle(db_path, fake_evidence):
 def test_multi_campaign_same_security_different_theses(db_path, fake_evidence):
     a = _campaign(strategy="MEDIUM")
     b = _campaign(strategy="SWING")
-    ta = fake_evidence.install(thesis_id=_tid(1), subject_id="600519")
+    ta = fake_evidence.install(
+        thesis_id=_tid(1), subject_id="600519", strategy="MEDIUM"
+    )
     tb = fake_evidence.install(thesis_id=_tid(2), subject_id="600519")
     ba = bind_campaign_thesis(a["campaign_id"], ta)
     bb = bind_campaign_thesis(b["campaign_id"], tb)

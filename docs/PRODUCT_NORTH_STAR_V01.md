@@ -888,3 +888,173 @@ SHORT / SWING / MEDIUM Opportunity Queue 分开；跨策略不做虚假的统一
 - 任何未在 `docs/NEXT_TASK.md` 明确授权的开发工作
 
 后续实施仍必须由用户明确授权，再更新 `docs/NEXT_TASK.md`。
+
+---
+
+## 30. Data Governance Foundation — 2026-08-10 Priority Addendum
+
+> 状态：**USER_CONFIRMED_NEXT_PRIORITY**
+>
+> 触发条件：当前正在收尾的 **Phase 2 Formal Thesis + S2D-M Migration / QA closure** 完成后优先进入本阶段；在此之前不抢占现有 Codex / Zcode / DeepSeek 工作。
+>
+> 本节记录产品与架构优先级，不改变第 29 节的治理原则：不得据此自行 Ready / Merge、迁移真实用户数据库、激活 stable schema 或越过 `docs/NEXT_TASK.md` 的明确实施边界。
+
+### 30.1 从 Source-oriented 升级为 Dataset / Fact-oriented Data Governance
+
+现有 `Field-Level Data Capability Registry` 继续保留，但数据层应进一步形成统一的 **Dataset / Fact Source Contract**。
+
+标准链路：
+
+`Provider → Raw Observation → Normalization → Canonical Fact → Temporal Semantics → Provenance → Data Health → Cross-source Reconciliation → Evidence / Thesis / Decision`
+
+核心原则：
+
+- Provider 返回值只是 **Observation**，不是自动成立的 Canonical Fact。
+- Source Routing 必须按 **Dataset** 定义，而不是简单“Provider A 挂了就切 Provider B”。
+- 每个 Dataset 明确 `canonical / verifier / fallback / historical_backfill` 角色；只有语义等价的源才允许自动 fallback。
+- 语义不等价、历史范围不同、复权口径不同或时间含义不明时必须 fail closed，而不是拼凑成一个看似完整的结果。
+- 现有 `DataHealthRecord` 继续负责“来源/模块当前是否健康”；本阶段新增的是“这条事实能否在某个时间点被合法使用”的 temporal/provenance contract，不重复建设 Data Health。
+
+### 30.2 Temporal Semantics / PIT / Revision Contract
+
+Dataset 至少要显式描述：
+
+- `fetch_semantics`: `by_date | snapshot`
+- `history_mode`: `by_date | snapshot_with_backfill | snapshot_only`
+- `primary_source`
+- `verifier_source`
+- `fallback_source`
+- `backfill_source`
+- `history_floor_date`
+- `history_horizon`
+- `source_retired_date`
+- `max_staleness`
+- `point_in_time / as_of`
+- revision / restatement semantics
+- adjustment semantics
+- historical-universe / survivorship-bias handling
+
+Observation / Fact 在适用时应区分：
+
+- `effective_at`
+- `published_at`
+- `observed_at`
+- `fetched_at`
+- `trade_date`
+- `report_period`
+- provider / endpoint / provider symbol
+- source payload hash / data version
+- normalizer version
+- quality status / reason codes
+
+不知道的时间或语义必须保持 `NULL / UNKNOWN`，不得由抓取时间、当前日期或其它近似字段伪造。
+
+### 30.3 Local Research Fact Lake
+
+建立 Vibe-Research 自己的 **Local Research Fact Lake**，目标不是复制一个通用行情平台，而是让正式投资判断具备可复查、可重放、可冻结的本地事实基础。
+
+第一阶段优先保存长期价值高、需要 PIT / revision / provenance 的数据：
+
+- Financial Statements / Financial Indicators
+- Valuation Snapshot History（从接入日起自行积累）
+- Corporate Actions / Adjustment Events
+- Historical Instrument Universe / Listing / Delisting
+- Index / Industry Membership
+- Concept Membership Snapshot History
+- Fund Holdings / Institutional Evidence
+- Share Structure / Shareholder Data
+- Raw Observation Metadata / Provenance
+
+存储倾向：
+
+- Raw immutable payload：JSON / Parquet
+- Normalized facts：Parquet
+- Analytical query：DuckDB
+- Operational metadata / watermark / registry：SQLite
+
+第一阶段**不要求**把所有实时行情、分钟线、tick、全部新闻都搬入 Lake；只为能明显提升 Thesis / Decision 可复现性的 Dataset 建湖。
+
+### 30.4 External Project / Provider Positioning
+
+当前候选的架构定位：
+
+- **rootSunc/ashare-lake**：作为 DatasetSpec、PIT、history_mode、provenance、historical universe、source routing 的架构 benchmark；默认不直接成为 Vibe-Research production dependency。
+- **HiThink-Tech/Financial-API**：作为补盲区、cross-source verifier 与 bulk ingestion 候选；在 LIVE_SMOKE 与数据契约验证通过前，不替换现有 Tushare / Eastmoney 已批准主事实链。
+- **FTShare**：当前仅进入 LIVE_SMOKE / capability discovery；SLA、来源 provenance、历史/修订语义和条款明确前，不升级为 canonical production source。
+- **QuoteMux**：不作为当前 production dependency；其 aggregation / fallback / health 思路可作为参考，但 Vibe-Research 应维护更严格的 Dataset-level contract。
+- **free-stockdb**：可参考本地镜像、manifest、checksum 与查询引擎工程，但 mirror 完整性不能替代事实 provenance，因此不作为 canonical fact source。
+- **TickDB**：当前产品阶段不接；只有未来明确进入实时/日内执行与高频数据需求时重新评估。
+
+### 30.5 当前阶段完成后的执行顺序
+
+在 **Phase 2 Formal Thesis + S2D-M Migration / QA closure** 完成后，优先顺序冻结为：
+
+1. **DS-A1 — Canonical Data Source Contract v0.1**
+   先定义 DatasetSpec / ObservationEnvelope / TemporalSemantics / ProvenanceEnvelope / SourceRoutePolicy / ReconciliationPolicy；不先接新生产源。
+
+2. **DS-H1 — HiThink LIVE_SMOKE v0.1**
+   独立验证认证/权限、rate limit、历史深度、分页、空值、财报 revision、report-date、复权、THS 板块/成分、基金、涨停与 market dumps；输出 machine-readable capability matrix。
+
+3. **DS-L1 — Local Fact Lake PoC v0.1**
+   首批只选择少量高价值 Dataset，证明 `immutable raw observation → normalize → provenance → repeat ingest → revision detection → as_of query → DuckDB read`；仅使用隔离本地测试数据，不迁移真实用户数据库。
+
+4. **DS-A2 — ashare-lake Semantic Gap Review**
+   将其 DatasetSpec / temporal / provenance 设计逐项与 Vibe contract 比较，明确 `COPY CONCEPT / ADAPT / REJECT / NOT APPLICABLE`，避免无边界复制整个项目。
+
+### 30.6 Roadmap Gate
+
+用户确认的路线顺序为：
+
+`当前 Phase 2 / Migration closure → Data Governance Foundation (DS-A1/H1/L1/A2) → 再评估后续 Phase 3+`
+
+因此，在当前阶段正式关闭后，**Data Governance Foundation 是下一优先工作，不应默认直接跳到 Phase 3 Campaign Trade Attribution**。
+
+该优先级是 North Star 级产品决定；具体 executor 分工、分支、文件范围和验收合同仍应在届时同步到 `docs/NEXT_TASK.md` 后执行。
+
+### 30.7 Verified Anti-Rewheel Reuse Registry — ARW-A1 (2026-08-10)
+
+> 状态：**ARW_A1_INDEPENDENT_REVIEW = APPROVE_WITH_CURRENT_STATE_CORRECTION**
+>
+> 本节记录对高影响开源复用主张的已验证结论。上游结论必须绑定精确 repository / commit / LICENSE；“当前 Vibe 能力”判断也必须绑定明确 branch / SHA。研究结果是架构输入，不是代码替换或实施授权。
+
+经独立复核后的复用定位：
+
+- **pyeventsourcing/eventsourcing @ `099c92d` / BSD-3-Clause**：`SQLiteConnectionPool._create_connection()` 会先读取 `PRAGMA journal_mode`，但在非 WAL 库上仍执行 `PRAGMA journal_mode=WAL`。该模式不能满足 Vibe 的“schema/version 拒绝前零写入”契约，且上游不提供 Vibe 所需的 exact schema-version fail-closed gate。当前复用结论：`REJECT`，不得用于替换 S2D-M normal-open/version gate。
+- **simonw/sqlite-utils @ `6a45683` / Apache-2.0**：`_sqlite_migrations`、`migration_set + name` 唯一记账、read-only `pending()/applied()`、单迁移事务与 `stop_before` 均具有未来参考价值；但它不等价于 Vibe 的 schema-version / downgrade protection / zero-write open contract。当前复用结论：`DEFER / ADAPT_CONCEPT`，适合作为未来 v2→v3→v4 多版本治理参考，不改写当前已验收显式迁移链。
+- **youngseongshin/thesis-investment-os @ `9d50ecf` / MIT**：Evidence / Thesis 的 Python dataclass 虽为 `frozen=True`，但持久层包含 `INSERT OR REPLACE` 等可变写入模型，不能替代 Vibe 的 Formal Thesis immutable original / revision / canonical delta / frozen evidence 不变量。当前复用结论：Thesis/Evidence 持久模型 `REJECT`；其中 `process_score / result_score / outcome_confidence`、failure-mode 与 Prediction/Outcome calibration 思路可作为未来 `ADAPT_CONCEPT` 候选。
+- **muye1202/VerumTrade @ `ffd5866` / Apache-2.0**：`EvidenceLedgerItem`、accepted/downgraded/rejected admissibility、`reasoning_trace`、`decision_diff` 已验证存在；其价值主要在 Evidence Arbitration 与 plan→final decision-diff 语义。上游没有 Vibe 要求的 Frozen/immutable Decision 持久账本。当前复用结论：`ADAPT_CONCEPT`，未来可用于 Decision Challenge / Frozen Decision Audit / Evidence Arbitration 设计，不直接复制其决策存储模型。
+- **TauricResearch/TradingAgents @ `a33fd4c` / Apache-2.0**：decision log 不是纯 append-only；pending decision 的 outcome/reflection 会原位替换并通过临时文件重写，且允许 rotation 清理。当前复用结论：持久化模型 `REJECT`，不得替代 Vibe 的“Frozen Decision 不变 + Outcome 独立追加”方向。
+- **virattt/ai-hedge-fund @ `eff8a73` / MIT**：`ClampEvent` 风控审计、`abstain != neutral`、PromptCache 每决策保存 exact prompt/response 三项已验证。Vibe 已有更保守的确定性执行限制，因此不照搬 clamp 行为；`ClampEvent` audit-event 形态、abstain 聚合语义、prompt replay/audit 可作为未来 `ADAPT_CONCEPT` 候选。
+
+#### 30.7.1 Anti-Rewheel Hard Rules
+
+后续任何“避免重复造轮子”提案都必须遵守：
+
+1. **Exact-head evidence first**：必须记录上游 repository、verified commit、LICENSE、exact file / symbol；README 或二手调研不能单独作为实施依据。
+2. **Do not regress Vibe invariants**：外部实现如果弱于 Vibe 已冻结不变量，只能 `REJECT` 或抽取局部概念，不得以“减少代码量”为由降级审计性。
+3. **No mid-flight subsystem replacement**：已经有独立 QA contract 和全绿验收的 subsystem，不因发现新库就中途换实现；除非新证据证明替换方案完整满足现有 contract 且用户单独授权重开。
+4. **Concept reuse before dependency reuse**：优先采用 `ADAPT_CONCEPT`，只有在许可证、语义、维护风险、测试合同与产品边界都匹配时才讨论 `COPY_CODE` 或 runtime dependency。
+5. **Mutable upstream is not an immutable ledger**：living-object Thesis、原位 outcome 回填、`INSERT OR REPLACE` 等模式不得用于替换 Formal Thesis / Frozen Decision / append-only Outcome 的审计不变量。
+6. **Research must pin Vibe state too**：对“Vibe 当前是否已有该能力/缺陷”的判断必须写明 Vibe branch + exact SHA，禁止用未标明版本的本地工作区状态覆盖已验收 branch 结论。
+
+#### 30.7.2 S2D-M Current-State Correction
+
+ARW-A1 研究读取到的 protected stable `feature/research-system-v01@1be2ecba...` 仍包含旧 `initialize_store → WAL → schema validation` 路径，这是因为已验收实现尚未合并到 stable；该 stable 落后状态**不能被解释为 S2D-M blocker 重新出现**。
+
+当前正式治理结论冻结为：
+
+- `PR #76 / S2D-M-R1 @ 306f973` 已将 existing DB normal-open 改为 immutable read-only exact schema-version gate，只有通过门禁后才进入 writable/WAL 路径。
+- `PR #77 / QA3-R2 @ 4b9aabf` 已对 `NORMAL_OPEN_ZERO_MUTATION`、reserved scratch、migration→Formal bridge、backup immutability、rollback 等合同完成最终全绿验证。
+- 因此：`NORMAL_OPEN_ZERO_MUTATION = CLOSED`，`S2D_M_PRODUCTION_SAFETY = CLOSED`，`S2D_M_MIGRATION_QA = CLOSED`。
+- 不得仅因 stable 尚未合并这些 Draft PR，就创建第二套重复修复或重新打开同一 blocker；只有未来 exact-head regression 证据才能重开。
+
+#### 30.7.3 Post-Phase2 Reuse Candidate Pool
+
+当前进入未来候选池、但**未授权实施**的概念：
+
+- sqlite-utils：migration ledger / migration-set governance / read-only pending / stop-before。
+- thesis-investment-os：process quality 与 result quality 分离、failure-mode、Prediction/Outcome calibration。
+- VerumTrade：Evidence admissibility arbitration、accepted/downgraded/rejected + reason、decision-diff。
+- ai-hedge-fund：ClampEvent-style audit event、abstain semantics、prompt/response replay cache。
+
+以上候选不得改变当前 Data Governance 执行顺序：`DS-A1 → DS-H1 → DS-L1 → DS-A2`。是否进入产品实现，必须在对应未来 slice 中重新对照 Vibe contract、写入 `docs/NEXT_TASK.md` 并获得明确授权。
