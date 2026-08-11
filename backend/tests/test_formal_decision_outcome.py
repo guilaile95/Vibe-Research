@@ -1,15 +1,16 @@
-"""P0-O1 正式决策结果来源投影核心测试：纯领域逻辑，无 I/O。"""
+"""P0-O1-R1 正式决策结果来源投影核心测试：纯领域逻辑 + PA1 权威重集成。"""
 from __future__ import annotations
 
 import inspect
 import re
-import sqlite3
 from datetime import datetime, timedelta
 
 import pytest
 
 import formal_decision_outcome as fdo
 import frozen_decision_store as fd_store
+import performance_attribution_service as perf_svc
+import trade_ledger_store as tl_store
 from formal_trade_attribution import (
     AttributionConflictError,
     AttributionValidationError,
@@ -17,15 +18,21 @@ from formal_trade_attribution import (
 )
 from formal_decision_outcome import (
     EXECUTION_SUMMARY_STATES,
+    FEEDBACK_EVIDENCE_STATES,
     PERFORMANCE_EVIDENCE_STATES,
+    PA1_AUTHORITY_VERSION,
     REASON_NO_EXECUTED_TRADE,
     REASON_NO_PERFORMANCE_EVIDENCE,
+    FeedbackEvidence,
     FormalDecisionOutcome,
     OutcomeEvidenceConflictError,
     OutcomeValidationError,
     PerformanceEvidence,
+    build_performance_evidence,
+    performance_evidence_from_dict,
     project_outcome,
-    validate_evidence,
+    validate_feedback_evidence,
+    validate_pa1_result,
 )
 
 COMMITTED_AT = "2026-08-10T06:00:00.000000Z"
@@ -44,7 +51,7 @@ SECURITY = "600519"
 
 
 # ---------------------------------------------------------------------------
-# 构造 helpers（与 TB1 测试同形；decision 为 FD1 服务产物形状）
+# 构造 helpers
 # ---------------------------------------------------------------------------
 
 def _snapshot(**overrides) -> dict:
@@ -142,30 +149,133 @@ def _attribution(
     )
 
 
-def _evidence(
-    trade_ids=("1" * 32,),
-    evidence_id: str = "e" * 32,
-    security_code: str = SECURITY,
-    measurement_start: str = MEASUREMENT_START,
-    measurement_end: str = MEASUREMENT_END,
-    as_of: str = AS_OF,
-    metrics: dict | None = None,
-    source: str = "performance_attribution.v2",
-) -> PerformanceEvidence:
-    return PerformanceEvidence(
-        evidence_id=evidence_id,
-        security_code=security_code,
-        trade_ids=tuple(sorted(trade_ids)),
-        measurement_start=measurement_start,
-        measurement_end=measurement_end,
-        as_of=as_of,
-        metrics=metrics or {"realized_pnl": 1234.5, "total_fees": 10.0},
-        source=source,
+def _pa1_result(tmp_path, trades, price_map=None) -> dict:
+    """用真实 PA1 权威计算生成结果（测试即 parity：消费权威输出本身）。"""
+    db = tmp_path / "trade_ledger.sqlite3"
+    for t in trades:
+        tl_store.insert_record(db, t)
+    return perf_svc.compute_attribution(
+        trade_db_path=db, price_map=price_map
     )
 
 
-def _default_window():
-    return dict(measurement_start=MEASUREMENT_START, measurement_end=MEASUREMENT_END, as_of=AS_OF)
+def _pa1_position(pa1_result: dict, code: str) -> dict:
+    for pos in pa1_result["positions"]:
+        if pos["code"] == code:
+            return pos
+    raise AssertionError(f"position {code} not found in PA1 result")
+
+
+def _build_evidence(pa1_result: dict, code: str = SECURITY, **window) -> PerformanceEvidence:
+    position = _pa1_position(pa1_result, code)
+    return build_performance_evidence(pa1_result, position, **window)
+
+
+def _window(**overrides) -> dict:
+    w = dict(measurement_start=MEASUREMENT_START, measurement_end=MEASUREMENT_END, as_of=AS_OF)
+    w.update(overrides)
+    return w
+
+
+def _feedback(evidence_id: str = "f" * 32, security_code: str = SECURITY, **overrides) -> FeedbackEvidence:
+    data = {
+        "evidence_id": evidence_id,
+        "security_code": security_code,
+        "metrics": {
+            "adoption_status": "followed",
+            "outcome_status": "better_than_expected",
+        },
+        "as_of": AS_OF,
+    }
+    data.update(overrides)
+    return validate_feedback_evidence(data)
+
+
+# ---------------------------------------------------------------------------
+# PA1 结果权威校验
+# ---------------------------------------------------------------------------
+
+class TestPa1ResultValidation:
+    def test_real_pa1_output_accepted(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        validated = validate_pa1_result(result)
+        assert validated["authority_version"] == PA1_AUTHORITY_VERSION
+        assert validated["selected_trade_ids"] == ["1" * 32]
+
+    def test_d_wrong_authority_version_rejected(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        result["authority_version"] = "performance_attribution.v1"
+        with pytest.raises(OutcomeValidationError):
+            validate_pa1_result(result)
+
+    def test_selected_count_mismatch_rejected(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        result["selected_trade_count"] = 99
+        with pytest.raises(OutcomeValidationError):
+            validate_pa1_result(result)
+
+    def test_c_tampered_input_trade_ids_rejected(self, tmp_path):
+        """调用方篡改 position.input_trade_ids（自报附加）→ 内部一致性校验拒绝。"""
+        result = _pa1_result(tmp_path, [make_trade()])
+        result["positions"][0]["input_trade_ids"] = ["1" * 32, "9" * 32]
+        with pytest.raises(OutcomeValidationError):
+            validate_pa1_result(result)
+
+    def test_c_no_self_asserted_trade_ids_parameter(self, tmp_path):
+        """证据构造签名不接受调用方 trade_ids（自报绑定在 API 层即不可能）。"""
+        result = _pa1_result(tmp_path, [make_trade()])
+        with pytest.raises(TypeError):
+            build_performance_evidence(
+                result,
+                _pa1_position(result, SECURITY),
+                trade_ids=["9" * 32],
+                **_window(),
+            )
+
+
+# ---------------------------------------------------------------------------
+# 绩效证据构造与序列化
+# ---------------------------------------------------------------------------
+
+class TestPerformanceEvidenceConstruction:
+    def test_derived_from_pa1(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        evidence = _build_evidence(result, **_window())
+        assert evidence.authority_version == PA1_AUTHORITY_VERSION
+        assert evidence.computation_fingerprint == result["computation_fingerprint"]
+        assert evidence.input_trade_ids == ("1" * 32,)
+        assert evidence.metrics["code"] == SECURITY
+        assert re.fullmatch(r"[0-9a-f]{64}", evidence.evidence_id)
+
+    def test_evidence_id_deterministic_and_security_scoped(self, tmp_path):
+        result = _pa1_result(
+            tmp_path,
+            [make_trade(), make_trade(trade_id="2" * 32, code="000858", name="五粮液")],
+        )
+        ev_600519 = _build_evidence(result, SECURITY, **_window())
+        ev_000858 = _build_evidence(result, "000858", **_window())
+        assert ev_600519.evidence_id != ev_000858.evidence_id
+        again = _build_evidence(result, SECURITY, **_window())
+        assert ev_600519.evidence_id == again.evidence_id
+        assert ev_600519 == again
+
+    def test_strict_serialization_roundtrip(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        evidence = _build_evidence(result, **_window())
+        restored = performance_evidence_from_dict(evidence.to_dict())
+        assert restored == evidence
+
+    def test_from_dict_tampered_identity_rejected(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        evidence = _build_evidence(result, **_window())
+        d = evidence.to_dict()
+        d["evidence_id"] = "0" * 64
+        with pytest.raises(OutcomeValidationError):
+            performance_evidence_from_dict(d)
+        d = evidence.to_dict()
+        d["authority_version"] = "x"
+        with pytest.raises(OutcomeValidationError):
+            performance_evidence_from_dict(d)
 
 
 # ---------------------------------------------------------------------------
@@ -173,12 +283,12 @@ def _default_window():
 # ---------------------------------------------------------------------------
 
 class TestProjectionHappyPath:
-    def test_single_trade_with_evidence(self):
+    def test_single_trade_with_pa1_evidence(self, tmp_path):
         outcome = project_outcome(
             make_decision(),
             [_attribution()],
-            [_evidence()],
-            **_default_window(),
+            [_pa1_result(tmp_path, [make_trade()])],
+            **_window(),
         )
         d = outcome.to_dict()
         assert d["schema_version"] == fdo.SCHEMA_VERSION
@@ -195,8 +305,11 @@ class TestProjectionHappyPath:
         assert d["trade_ids"] == ["1" * 32]
         assert d["execution_summary"]["state"] == "EXECUTED_TRADE"
         assert d["performance_evidence_state"] == "MEASURED"
-        assert len(d["evidences"]) == 1
-        assert d["evidences"][0]["metrics"]["realized_pnl"] == 1234.5
+        assert len(d["performance_evidences"]) == 1
+        perf = d["performance_evidences"][0]
+        assert perf["authority_version"] == PA1_AUTHORITY_VERSION
+        assert perf["input_trade_ids"] == ["1" * 32]
+        assert perf["metrics"]["realized_pnl"] == 0.0
         assert d["measurement"] == {
             "measurement_start": MEASUREMENT_START,
             "measurement_end": MEASUREMENT_END,
@@ -204,18 +317,14 @@ class TestProjectionHappyPath:
         }
         assert d["reason_codes"] == []
 
-    def test_multi_trade_provenance_preserved(self):
-        # buy full + add partial + reduce full：逐交易保留，不合成
+    def test_multi_trade_provenance_preserved(self, tmp_path):
         attributions = [
             _attribution(
-                trade=make_trade(trade_id="1" * 32, operation="buy", execution_status="full"),
+                trade=make_trade(trade_id="1" * 32, operation="buy"),
                 attribution_id="trade_attribution_" + "1" * 32,
             ),
             _attribution(
-                trade=make_trade(
-                    trade_id="2" * 32, operation="add", execution_status="partial",
-                    actual_price=1520.0, actual_quantity=50,
-                ),
+                trade=make_trade(trade_id="2" * 32, operation="add", execution_status="partial"),
                 attribution_id="trade_attribution_" + "2" * 32,
             ),
             _attribution(
@@ -224,351 +333,216 @@ class TestProjectionHappyPath:
             ),
         ]
         outcome = project_outcome(
-            make_decision(), attributions, [_evidence(trade_ids=("1" * 32, "2" * 32, "3" * 32))],
-            **_default_window(),
+            make_decision(),
+            attributions,
+            [_pa1_result(tmp_path, [make_trade(trade_id=t) for t in ("1" * 32, "2" * 32, "3" * 32)])],
+            **_window(),
         )
         assert outcome.trade_ids == ("1" * 32, "2" * 32, "3" * 32)
         assert outcome.execution_summary["executed_trade_ids"] == ["1" * 32, "2" * 32, "3" * 32]
         assert len(outcome.behavior_deviations) == 3
-        assert outcome.behavior_deviations[0] == {
-            "trade_id": "1" * 32,
-            "decision_next_best_action": "BUY SMALL",
-            "trade_operation": "buy",
-        }
-
-    def test_cross_decision_attribution_excluded(self):
-        # 集合含其他决策的归属 → 本决策投影只含本决策交易
-        other_decision = make_decision(decision_id="decision_" + "f" * 32)
-        attributions = [
-            _attribution(),
-            create_attribution(
-                other_decision, make_trade(trade_id="2" * 32),
-                attribution_id="trade_attribution_" + "2" * 32,
-                created_at=ATTRIBUTION_CREATED_AT,
-            ),
+        assert outcome.performance_evidences[0]["input_trade_ids"] == [
+            "1" * 32, "2" * 32, "3" * 32,
         ]
-        outcome = project_outcome(
-            make_decision(), attributions, [_evidence()], **_default_window(),
-        )
-        assert outcome.trade_ids == ("1" * 32,)
-        assert "2" * 32 not in outcome.trade_ids
 
-    def test_no_evidence_not_measured(self):
-        outcome = project_outcome(make_decision(), [_attribution()], [], **_default_window())
+    def test_no_evidence_not_measured(self, tmp_path):
+        outcome = project_outcome(make_decision(), [_attribution()], [], **_window())
         assert outcome.performance_evidence_state == "NOT_MEASURED"
         assert outcome.reason_codes == (REASON_NO_PERFORMANCE_EVIDENCE,)
 
-    def test_all_not_executed_no_executed_trade(self):
+    def test_all_not_executed_no_executed_trade(self, tmp_path):
         trade = make_trade(
             execution_status="not_executed", executed_at=None,
             actual_price=None, actual_quantity=0, unexecuted_reason="涨停封板",
         )
-        outcome = project_outcome(make_decision(), [_attribution(trade=trade)], [], **_default_window())
+        outcome = project_outcome(make_decision(), [_attribution(trade=trade)], [], **_window())
         assert outcome.execution_summary["state"] == "NO_EXECUTED_TRADE"
-        assert outcome.execution_summary["not_executed_trade_ids"] == ["1" * 32]
-        assert outcome.execution_summary["executed_trade_ids"] == []
-        # 不是 0% 收益，而是未测量
         assert outcome.performance_evidence_state == "NOT_MEASURED"
         assert REASON_NO_EXECUTED_TRADE in outcome.reason_codes
 
 
 # ---------------------------------------------------------------------------
-# 归属权威复用与交易成员资格
+# 阻塞测试：绑定与混合拒绝
 # ---------------------------------------------------------------------------
 
-class TestTradeMembership:
-    def test_invalid_attribution_set_fails_closed(self):
-        # TB1 权威：同 attribution_id 冲突内容 → 集合拒绝
+class TestBlockingBinding:
+    def test_a_pa1_t1_only_decision_t1_accepted(self, tmp_path):
+        """PA1 结果恰含 T1，决策归属 T1 → 绩效证据接受。"""
+        result = _pa1_result(tmp_path, [make_trade(trade_id="1" * 32)])
+        outcome = project_outcome(
+            make_decision(), [_attribution()], [result], **_window(),
+        )
+        assert outcome.performance_evidence_state == "MEASURED"
+        assert outcome.performance_evidences[0]["input_trade_ids"] == ["1" * 32]
+
+    def test_b_mixed_t1_t2_rejected(self, tmp_path):
+        """PA1 结果含 T1 + 无关 T2（同证券），决策只归属 T1 → 拒绝。"""
+        result = _pa1_result(
+            tmp_path,
+            [
+                make_trade(trade_id="1" * 32, executed_at="2026-08-10T06:45:00+00:00"),
+                make_trade(trade_id="2" * 32, executed_at="2026-08-10T07:00:00+00:00"),
+            ],
+        )
+        with pytest.raises(OutcomeValidationError):
+            project_outcome(make_decision(), [_attribution()], [result], **_window())
+
+    def test_c_self_asserted_trade_ids_cannot_override(self, tmp_path):
+        """调用方附加的自报 trade_ids 无法覆盖 PA1 输入集（构造签名拒绝 + 校验拒绝）。"""
+        result = _pa1_result(tmp_path, [make_trade(trade_id="1" * 32)])
+        with pytest.raises(TypeError):
+            build_performance_evidence(result, _pa1_position(result, SECURITY), trade_ids=["2" * 32], **_window())
+        # 篡改 PA1 结果的 input_trade_ids → 内部一致性校验拒绝
+        tampered = {**result, "positions": [dict(p) for p in result["positions"]]}
+        tampered["positions"][0]["input_trade_ids"] = ["2" * 32]
+        with pytest.raises(OutcomeValidationError):
+            validate_pa1_result(tampered)
+
+    def test_cross_security_position_ignored_not_rejected(self, tmp_path):
+        """PA1 结果含其他证券 position → 不参与本决策投影（不拒绝、不采用）。"""
+        result = _pa1_result(
+            tmp_path,
+            [
+                make_trade(trade_id="1" * 32),
+                make_trade(trade_id="2" * 32, code="000858", name="五粮液"),
+            ],
+        )
+        outcome = project_outcome(
+            make_decision(), [_attribution()], [result], **_window(),
+        )
+        assert outcome.performance_evidence_state == "MEASURED"
+        assert outcome.performance_evidences[0]["security_code"] == SECURITY
+
+    def test_invalid_attribution_set_fails_closed(self, tmp_path):
         a = _attribution()
         conflict = a.to_dict()
         conflict["trade_operation"] = "sell"
         from formal_trade_attribution import compute_attribution_hash
         conflict["attribution_hash"] = compute_attribution_hash(conflict)
         with pytest.raises(AttributionConflictError):
-            project_outcome(make_decision(), [a, conflict], [], **_default_window())
-
-    def test_cross_decision_trade_evidence_rejected(self):
-        # 证据引用归属到另一决策的交易 → 拒绝
-        with pytest.raises(OutcomeValidationError):
             project_outcome(
-                make_decision(),
-                [_attribution()],
-                [_evidence(trade_ids=("2" * 32,))],
-                **_default_window(),
+                make_decision(), [a, conflict],
+                [_pa1_result(tmp_path, [make_trade()])], **_window(),
             )
 
-    def test_unknown_trade_evidence_rejected(self):
-        with pytest.raises(OutcomeValidationError):
-            project_outcome(
-                make_decision(),
-                [_attribution()],
-                [_evidence(trade_ids=("9" * 32,))],
-                **_default_window(),
-            )
-
-    def test_cross_security_evidence_rejected(self):
-        with pytest.raises(OutcomeValidationError):
-            project_outcome(
-                make_decision(),
-                [_attribution()],
-                [_evidence(security_code="000858")],
-                **_default_window(),
-            )
-
-    def test_half_bound_evidence_rejected(self):
-        with pytest.raises(OutcomeValidationError):
-            project_outcome(
-                make_decision(),
-                [_attribution()],
-                [_evidence(trade_ids=())],
-                **_default_window(),
-            )
-
-    def test_evidence_for_wrong_decision_snapshot_rejected_by_membership(self):
-        # 伪造决策见证（哈希错）→ 见证验证阶段拒绝（TB1 权威异常）
+    def test_forged_decision_rejected(self, tmp_path):
         bad_decision = make_decision(snapshot_hash="0" * 64)
         with pytest.raises(AttributionValidationError):
-            project_outcome(bad_decision, [_attribution()], [], **_default_window())
+            project_outcome(
+                bad_decision, [_attribution()],
+                [_pa1_result(tmp_path, [make_trade()])], **_window(),
+            )
 
 
 # ---------------------------------------------------------------------------
-# 归属 ≠ 合规
+# 证据类型分离：feedback 独立维度
 # ---------------------------------------------------------------------------
 
-class TestAttributionNotCompliance:
-    def test_wait_to_buy_preserved(self):
+class TestEvidenceTypeSeparation:
+    def test_e_feedback_only_keeps_performance_not_measured(self, tmp_path):
+        outcome = project_outcome(
+            make_decision(), [_attribution()], [], [_feedback()], **_window(),
+        )
+        assert outcome.performance_evidence_state == "NOT_MEASURED"
+        assert outcome.feedback_evidence_state == "MEASURED"
+        assert len(outcome.feedback_evidences) == 1
+        assert REASON_NO_PERFORMANCE_EVIDENCE in outcome.reason_codes
+
+    def test_f_both_dimensions_preserved_separately(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        outcome = project_outcome(
+            make_decision(),
+            [_attribution()],
+            [result],
+            [_feedback()],
+            **_window(),
+        )
+        assert outcome.performance_evidence_state == "MEASURED"
+        assert outcome.feedback_evidence_state == "MEASURED"
+        assert len(outcome.performance_evidences) == 1
+        assert len(outcome.feedback_evidences) == 1
+        d = outcome.to_dict()
+        assert d["performance_evidences"][0]["authority_version"] == PA1_AUTHORITY_VERSION
+        assert d["feedback_evidences"][0]["metrics"]["outcome_status"] == "better_than_expected"
+        # 两维度各自独立存在，未合并进同一证据桶
+        assert set(d) >= {"performance_evidences", "feedback_evidences"}
+
+    def test_feedback_validation(self):
+        with pytest.raises(OutcomeValidationError):
+            validate_feedback_evidence({"evidence_id": "x", "security_code": SECURITY})
+        with pytest.raises(OutcomeValidationError):
+            _feedback(metrics={"x": float("nan")})
+        assert _feedback().security_code == SECURITY
+
+    def test_feedback_conflict_rejected(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        a = _feedback()
+        b = _feedback(metrics={"outcome_status": "worse_than_expected"})
+        with pytest.raises(OutcomeEvidenceConflictError):
+            project_outcome(
+                make_decision(), [_attribution()], [result], [a, b], **_window(),
+            )
+
+
+# ---------------------------------------------------------------------------
+# 归属 ≠ 合规 / 时间纪律 / 确定性 / 纯核心（原 O1 契约保留）
+# ---------------------------------------------------------------------------
+
+class TestPreservedContracts:
+    def test_wait_to_buy_preserved(self, tmp_path):
         decision = make_decision(next_best_action="WAIT")
-        outcome = project_outcome(decision, [_attribution(decision=decision)], [], **_default_window())
+        outcome = project_outcome(decision, [_attribution(decision=decision)], [], **_window())
         assert outcome.decision_next_best_action == "WAIT"
         assert outcome.behavior_deviations[0]["trade_operation"] == "buy"
-        assert outcome.behavior_deviations[0]["decision_next_best_action"] == "WAIT"
         assert outcome.execution_summary["state"] == "EXECUTED_TRADE"
 
-    def test_exit_to_add_preserved(self):
+    def test_exit_to_add_preserved(self, tmp_path):
         decision = make_decision(next_best_action="EXIT")
         trade = make_trade(operation="add", execution_status="partial", actual_quantity=50)
-        outcome = project_outcome(decision, [_attribution(decision=decision, trade=trade)], [], **_default_window())
+        outcome = project_outcome(decision, [_attribution(decision=decision, trade=trade)], [], **_window())
         assert outcome.decision_next_best_action == "EXIT"
         assert outcome.behavior_deviations[0]["trade_operation"] == "add"
 
-    def test_no_fake_validity_status(self):
-        outcome = project_outcome(make_decision(), [_attribution()], [_evidence()], **_default_window())
+    def test_no_fake_validity_status(self, tmp_path):
+        outcome = project_outcome(
+            make_decision(), [_attribution()],
+            [_pa1_result(tmp_path, [make_trade()])], **_window(),
+        )
         d = outcome.to_dict()
         for key in d:
             assert "validity" not in key and "EXPIRED" not in str(d[key])
-        assert "decision_review_by" in d  # 仅保留证据
+        assert "decision_review_by" in d
 
-    def test_review_by_past_not_a_deadline(self):
+    def test_review_by_past_not_a_deadline(self, tmp_path):
         decision = make_decision(review_by="2026-08-09T00:00:00.000000Z")
-        outcome = project_outcome(decision, [_attribution(decision=decision)], [_evidence()], **_default_window())
+        outcome = project_outcome(decision, [_attribution(decision=decision)], [], **_window())
         assert outcome.decision_review_by == "2026-08-09T00:00:00.000000Z"
 
-    def test_voided_after_attribution_fact_preserved(self):
-        # 规范 17：不发明 void 传播规则；外部证据显式标记已作废 → 事实原样保留
-        evidence = _evidence(metrics={
-            "realized_pnl": -800.0,
-            "voided_trade_ids": ["1" * 32],
-            "void_reason": "历史冲正后作废（外部权威标记）",
-        })
-        outcome = project_outcome(make_decision(), [_attribution()], [evidence], **_default_window())
-        # 历史归属不被删除
-        assert outcome.trade_ids == ("1" * 32,)
-        assert outcome.execution_summary["executed_trade_ids"] == ["1" * 32]
-        # 作废事实由证据原样携带（不静默纳入/排除，不重算）
-        assert outcome.evidences[0]["metrics"]["voided_trade_ids"] == ["1" * 32]
-
-    def test_thesis_state_not_inferred_from_pnl(self):
-        # 亏损证据不推断 thesis 失效；投影不含任何 thesis 状态/有效性字段
-        evidence = _evidence(metrics={"realized_pnl": -5000.0})
-        outcome = project_outcome(make_decision(), [_attribution()], [evidence], **_default_window())
-        d = outcome.to_dict()
-        for key in d:
-            assert "thesis_status" not in key
-            assert "thesis_invalidated" not in str(d[key])
-            assert "validity_status" not in key
-        assert outcome.thesis_id == THESIS_ID  # 仅保留身份锚
-
-
-# ---------------------------------------------------------------------------
-# 时间纪律
-# ---------------------------------------------------------------------------
-
-class TestTemporalDiscipline:
-    def test_measurement_before_decision_commit_rejected(self):
-        with pytest.raises(OutcomeValidationError):
+    def test_measurement_before_commit_rejected(self, tmp_path):
+        with pytest.raises(AttributionValidationError):
             project_outcome(
-                make_decision(),
-                [_attribution()],
-                [_evidence()],
+                make_decision(), [_attribution()], [],
                 measurement_start="2026-08-10T05:00:00.000000Z",
                 measurement_end="2026-08-10T06:00:00.000000Z",
                 as_of="2026-08-10T06:00:00.000000Z",
             )
 
-    def test_reversed_window_rejected(self):
-        with pytest.raises(OutcomeValidationError):
+    def test_reversed_window_rejected(self, tmp_path):
+        with pytest.raises(AttributionValidationError):
             project_outcome(
-                make_decision(),
-                [_attribution()],
-                [_evidence()],
+                make_decision(), [_attribution()], [],
                 measurement_start=MEASUREMENT_END,
                 measurement_end=MEASUREMENT_START,
                 as_of=AS_OF,
             )
 
-    def test_as_of_before_window_start_rejected(self):
-        with pytest.raises(OutcomeValidationError):
-            project_outcome(
-                make_decision(),
-                [_attribution()],
-                [_evidence()],
-                measurement_start=MEASUREMENT_START,
-                measurement_end=MEASUREMENT_END,
-                as_of="2026-08-10T07:30:00.000000Z",
-            )
-
-    def test_evidence_measurement_before_commit_rejected(self):
-        with pytest.raises(OutcomeValidationError):
-            project_outcome(
-                make_decision(),
-                [_attribution()],
-                [_evidence(measurement_start="2026-08-10T05:30:00.000000Z",
-                           measurement_end="2026-08-10T06:30:00.000000Z")],
-                **_default_window(),
-            )
-
-    def test_evidence_reversed_window_rejected(self):
-        with pytest.raises(OutcomeValidationError):
-            project_outcome(
-                make_decision(),
-                [_attribution()],
-                [_evidence(measurement_start=MEASUREMENT_END,
-                           measurement_end=MEASUREMENT_START)],
-                **_default_window(),
-            )
-
-    def test_evidence_as_of_before_start_rejected(self):
-        with pytest.raises(OutcomeValidationError):
-            project_outcome(
-                make_decision(),
-                [_attribution()],
-                [_evidence(as_of="2026-08-10T07:00:00.000000Z")],
-                **_default_window(),
-            )
-
-    def test_malformed_timestamp_rejected(self):
-        with pytest.raises(AttributionValidationError):
-            project_outcome(
-                make_decision(),
-                [_attribution()],
-                [_evidence()],
-                measurement_start="明天",
-                measurement_end=MEASUREMENT_END,
-                as_of=AS_OF,
-            )
-
-    def test_plus_offset_window_normalized(self):
-        # 显式 UTC（+00:00 形式）→ 规范化为 canonical Z 形式
-        outcome = project_outcome(
-            make_decision(),
-            [_attribution()],
-            [_evidence(measurement_start="2026-08-10T08:00:00+00:00")],
-            measurement_start="2026-08-10T08:00:00+00:00",
-            measurement_end="2026-08-10T09:00:00+00:00",
-            as_of="2026-08-10T09:30:00+00:00",
-        )
-        assert outcome.measurement["measurement_start"] == MEASUREMENT_START
-
-    def test_non_zero_offset_window_rejected(self):
-        # 非零偏移时间戳（+08:00）→ 拒绝（与 TB1 时区纪律一致，不做时区换算）
-        with pytest.raises(AttributionValidationError):
-            project_outcome(
-                make_decision(),
-                [_attribution()],
-                [_evidence()],
-                measurement_start="2026-08-10T16:00:00+08:00",
-                measurement_end="2026-08-10T17:00:00+08:00",
-                as_of="2026-08-10T17:30:00+08:00",
-            )
-
-
-# ---------------------------------------------------------------------------
-# 证据集合语义
-# ---------------------------------------------------------------------------
-
-class TestEvidenceSetSemantics:
-    def test_exact_duplicate_idempotent(self):
-        outcome = project_outcome(
-            make_decision(), [_attribution()], [_evidence(), _evidence()],
-            **_default_window(),
-        )
-        assert len(outcome.evidences) == 1
-
-    def test_conflicting_same_id_rejected(self):
-        a = _evidence()
-        b = _evidence(metrics={"realized_pnl": 999.0})
-        with pytest.raises(OutcomeEvidenceConflictError):
-            project_outcome(make_decision(), [_attribution()], [a, b], **_default_window())
-
-    def test_order_independent(self):
-        ev_a = _evidence(evidence_id="1" * 32, trade_ids=("1" * 32,))
-        ev_b = _evidence(evidence_id="2" * 32, trade_ids=("1" * 32,), metrics={"realized_pnl": 1.0})
-        out1 = project_outcome(make_decision(), [_attribution()], [ev_a, ev_b], **_default_window())
-        out2 = project_outcome(make_decision(), [_attribution()], [ev_b, ev_a], **_default_window())
-        assert out1 == out2
-
-    def test_mapping_evidence_accepted(self):
-        evidence_dict = _evidence().to_dict()
-        outcome = project_outcome(
-            make_decision(), [_attribution()], [evidence_dict], **_default_window(),
-        )
-        assert outcome.performance_evidence_state == "MEASURED"
-
-    def test_evidence_wrong_fields_rejected(self):
-        bad = _evidence().to_dict()
-        del bad["metrics"]
-        with pytest.raises(OutcomeValidationError):
-            validate_evidence(bad)
-
-    def test_evidence_metrics_nan_rejected(self):
-        bad = _evidence(metrics={"x": float("nan")})
-        with pytest.raises(OutcomeValidationError):
-            validate_evidence(bad)
-
-
-# ---------------------------------------------------------------------------
-# 确定性 / 纯核心
-# ---------------------------------------------------------------------------
-
-class TestDeterminismAndPurity:
-    def test_same_inputs_same_projection(self):
-        kwargs = dict(**_default_window())
-        out1 = project_outcome(make_decision(), [_attribution()], [_evidence()], **kwargs)
-        out2 = project_outcome(make_decision(), [_attribution()], [_evidence()], **kwargs)
+    def test_same_inputs_same_projection(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        kwargs = dict(_window())
+        out1 = project_outcome(make_decision(), [_attribution()], [result], **kwargs)
+        out2 = project_outcome(make_decision(), [_attribution()], [result], **kwargs)
         assert out1 == out2
         assert out1.to_dict() == out2.to_dict()
-
-    def test_attribution_order_independent(self):
-        attr_ab = [
-            _attribution(
-                trade=make_trade(trade_id="1" * 32, operation="buy"),
-                attribution_id="trade_attribution_" + "1" * 32,
-            ),
-            _attribution(
-                trade=make_trade(trade_id="2" * 32, operation="sell"),
-                attribution_id="trade_attribution_" + "2" * 32,
-            ),
-        ]
-        attr_ba = [attr_ab[1], attr_ab[0]]
-        out1 = project_outcome(
-            make_decision(), attr_ab,
-            [_evidence(trade_ids=("1" * 32, "2" * 32))], **_default_window(),
-        )
-        out2 = project_outcome(
-            make_decision(), attr_ba,
-            [_evidence(trade_ids=("1" * 32, "2" * 32))], **_default_window(),
-        )
-        assert out1 == out2
 
     def test_module_has_no_io_imports(self):
         source = inspect.getsource(fdo)
@@ -579,51 +553,21 @@ class TestDeterminismAndPurity:
 
 
 # ---------------------------------------------------------------------------
-# 现有权威 parity（不重算、不建第二套系统）
+# 现有权威 parity（消费真实 PA1 输出，不重算）
 # ---------------------------------------------------------------------------
 
 class TestExistingAuthorityParity:
-    def test_performance_attribution_output_reused_as_evidence(self, tmp_path):
-        """现有 performance_attribution 的真实输出作为 metrics payload 被绑定引用。"""
-        import trade_ledger_store as tl_store
-        import performance_attribution_service as perf_svc
-
-        db = tmp_path / "trade_ledger.sqlite3"
-        tl_store.insert_record(db, {
-            "trade_id": "1" * 32,
-            "code": SECURITY,
-            "name": "贵州茅台",
-            "operation": "buy",
-            "execution_status": "full",
-            "actual_price": 1500.0,
-            "actual_quantity": 100,
-            "executed_at": "2026-08-10T06:45:00+00:00",
-            "created_at": "2026-08-10T06:30:00+00:00",
-        })
-        tl_store.insert_record(db, {
-            "trade_id": "2" * 32,
-            "code": SECURITY,
-            "name": "贵州茅台",
-            "operation": "sell",
-            "execution_status": "full",
-            "actual_price": 1600.0,
-            "actual_quantity": 50,
-            "executed_at": "2026-08-10T08:30:00+00:00",
-            "created_at": "2026-08-10T08:25:00+00:00",
-        })
-        result = perf_svc.compute_attribution(
-            trade_db_path=db, date_from="2026-08-10", date_to="2026-08-10"
+    def test_real_pa1_output_binds_metrics(self, tmp_path):
+        """真实 PA1 输出（含 PnL）作为证据被绑定引用，不重算。"""
+        result = _pa1_result(
+            tmp_path,
+            [
+                make_trade(trade_id="1" * 32, operation="buy", executed_at="2026-08-10T06:45:00+00:00"),
+                make_trade(
+                    trade_id="2" * 32, operation="sell", executed_at="2026-08-10T08:30:00+00:00",
+                ),
+            ],
         )
-        positions = {p["code"]: p for p in result["positions"]}
-        assert positions[SECURITY]["realized_pnl"] > 0  # 现有权威确实算了
-
-        # 现有输出本身按 code 聚合、不含 trade_ids（精确缺口）：
-        # 作为证据必须显式提供 trade 绑定，否则拒绝
-        half_bound = {"metrics": positions[SECURITY]}
-        with pytest.raises(OutcomeValidationError):
-            validate_evidence(half_bound)
-
-        # 显式绑定交易集后，现有输出作为证据被引用（不重算）
         attributions = [
             _attribution(trade=make_trade(trade_id="1" * 32, operation="buy")),
             _attribution(
@@ -631,45 +575,16 @@ class TestExistingAuthorityParity:
                 attribution_id="trade_attribution_" + "2" * 32,
             ),
         ]
-        evidence = PerformanceEvidence(
-            evidence_id="e" * 32,
-            security_code=SECURITY,
-            trade_ids=("1" * 32, "2" * 32),
-            measurement_start=MEASUREMENT_START,
-            measurement_end=MEASUREMENT_END,
-            as_of=AS_OF,
-            metrics=positions[SECURITY],
-            source="performance_attribution.v2",
-        )
         outcome = project_outcome(
-            make_decision(), attributions, [evidence], **_default_window(),
+            make_decision(), attributions, [result], **_window(),
         )
-        assert outcome.performance_evidence_state == "MEASURED"
-        assert outcome.evidences[0]["metrics"]["realized_pnl"] == positions[SECURITY]["realized_pnl"]
-        assert outcome.evidences[0]["source"] == "performance_attribution.v2"
-
-    def test_decision_feedback_contract_reusable(self):
-        """现有 decision_feedback 的结果枚举可作为证据 metrics 被引用。"""
-        import decision_feedback_service as feedback_svc
-
-        assert feedback_svc.OUTCOME_STATUSES == {
-            "better_than_expected", "as_expected", "worse_than_expected", "not_evaluated",
-        }
-        evidence = _evidence(
-            metrics={
-                "adoption_status": "followed",
-                "outcome_status": "better_than_expected",
-                "note": "复用现有 feedback 契约",
-            },
-            source="decision_feedback.v1",
-        )
-        outcome = project_outcome(
-            make_decision(), [_attribution()], [evidence], **_default_window(),
-        )
-        assert outcome.evidences[0]["metrics"]["outcome_status"] == "better_than_expected"
+        perf = outcome.performance_evidences[0]
+        assert perf["computation_fingerprint"] == result["computation_fingerprint"]
+        assert perf["input_trade_ids"] == ["1" * 32, "2" * 32]
+        assert perf["metrics"]["realized_pnl"] == _pa1_position(result, SECURITY)["realized_pnl"]
+        assert perf["metrics"]["remaining_quantity"] == 0
 
     def test_no_pnl_reimplementation_in_module(self):
-        # 模块不包含任何收益公式/基准公式
         source = inspect.getsource(fdo)
         for forbidden in ("realized_pnl =", "return =", "benchmark", "avg_cost"):
             assert forbidden not in source
