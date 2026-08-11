@@ -497,3 +497,149 @@ class TestTradeSetProvenance:
 
     def test_authority_version_explicit(self):
         assert svc.AUTHORITY_VERSION == "performance_attribution.v2-provenance.v0.1"
+    def test_authority_version_explicit(self):
+        assert svc.AUTHORITY_VERSION == "performance_attribution.v2-provenance.v0.1"
+
+
+# ---------------------------------------------------------------------------
+# P0-PA1-R1：读失败 fail closed + 全序确定性排序
+# ---------------------------------------------------------------------------
+
+class TestReadFailureFailClosed:
+    """P1-A：trade_records 存在时任何读取失败 → fail closed，绝不空来源。"""
+
+    def test_a1_missing_trade_id_column_fails_closed(self, env):
+        # 表存在但缺 trade_id 列：读取计算投影失败 → fail closed
+        conn = sqlite3.connect(str(env["trade_db"]))
+        try:
+            conn.execute(
+                "CREATE TABLE trade_records ("
+                "rowid INTEGER PRIMARY KEY, code TEXT NOT NULL, operation TEXT"
+                ")"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        with pytest.raises(svc.PerformanceAttributionProvenanceError):
+            svc.compute_attribution()
+
+    def test_a2_missing_calculation_column_fails_closed(self, env):
+        # 表存在但缺必需计算列（actual_quantity）→ fail closed
+        conn = sqlite3.connect(str(env["trade_db"]))
+        try:
+            conn.execute(
+                "CREATE TABLE trade_records ("
+                "trade_id TEXT PRIMARY KEY, code TEXT NOT NULL,"
+                "name TEXT, operation TEXT, actual_price REAL,"
+                "fee REAL, other_cost REAL, executed_at TEXT, created_at TEXT"
+                ")"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        with pytest.raises(svc.PerformanceAttributionProvenanceError):
+            svc.compute_attribution()
+
+    def test_a3_corrupt_db_fails_closed(self, env):
+        env["trade_db"].write_bytes(b"this is not a sqlite database")
+        with pytest.raises(svc.PerformanceAttributionProvenanceError):
+            svc.compute_attribution()
+
+    def test_a3b_absent_db_remains_empty(self, env):
+        # 既有语义（文档化回归）：DB 文件不存在 = 合法空状态，不 fail
+        result = svc.compute_attribution()
+        assert result["positions"] == []
+        assert result["selected_trade_ids"] == []
+        assert result["selected_trade_count"] == 0
+
+    def test_a3c_absent_table_remains_empty(self, env):
+        # 既有语义（文档化回归）：DB 存在但 trade_records 表缺失 = 合法空状态
+        conn = sqlite3.connect(str(env["trade_db"]))
+        try:
+            conn.execute("CREATE TABLE unrelated_table (id INTEGER)")
+            conn.commit()
+        finally:
+            conn.close()
+        result = svc.compute_attribution()
+        assert result["positions"] == []
+        assert result["selected_trade_ids"] == []
+
+
+class TestTotalOrdering:
+    """P1-B：等时间戳交易由 trade_id 全序决胜，插入顺序无关。"""
+
+    def _pair(self, db: Path, buy_first: bool):
+        t_buy = _trade(
+            trade_id="1" * 32, operation="buy", price=10.0, quantity=1000,
+            fee=0.0, executed_at="2026-01-05T02:00:00+00:00",
+        )
+        t_sell = _trade(
+            trade_id="2" * 32, operation="sell", price=12.0, quantity=1000,
+            fee=0.0, executed_at="2026-01-05T02:00:00+00:00",
+        )
+        first, second = (t_buy, t_sell) if buy_first else (t_sell, t_buy)
+        tl_store.insert_record(db, first)
+        tl_store.insert_record(db, second)
+
+    def _compute_on(self, db: Path):
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("VIBE_RESEARCH_TRADE_LEDGER_DB", str(db))
+            return svc.compute_attribution()
+
+    def test_b1_reversed_insert_order_identical(self, env, tmp_path):
+        """同一对交易（同 executed_at / created_at），插入顺序相反 → 完全一致。"""
+        db_a = env["trade_db"]
+        db_b = tmp_path / "db_b.sqlite3"
+        self._pair(db_a, buy_first=True)
+        self._pair(db_b, buy_first=False)
+
+        result_a = self._compute_on(db_a)
+        result_b = self._compute_on(db_b)
+
+        # 全序：trade_id ASC → [T1, T2]，与插入顺序无关
+        assert result_a["selected_trade_ids"] == ["1" * 32, "2" * 32]
+        assert result_b["selected_trade_ids"] == ["1" * 32, "2" * 32]
+        assert _by_code(result_a, "000001")["input_trade_ids"] == ["1" * 32, "2" * 32]
+        assert _by_code(result_b, "000001")["input_trade_ids"] == ["1" * 32, "2" * 32]
+        # 指标逐项一致
+        assert result_a["positions"] == result_b["positions"]
+        assert result_a["totals"] == result_b["totals"]
+        # fingerprint 一致（同内容不同库路径）
+        assert result_a["computation_fingerprint"] == result_b["computation_fingerprint"]
+
+    def test_b2_three_equal_time_trades_shuffled(self, env, tmp_path):
+        """3 条同时刻交易 × 6 种插入顺序 → 计算顺序/指标/来源/fingerprint 全同。"""
+        trades = [
+            _trade(
+                trade_id="1" * 32, operation="buy", price=10.0, quantity=1000,
+                fee=0.0, executed_at="2026-01-05T02:00:00+00:00",
+            ),
+            _trade(
+                trade_id="3" * 32, operation="add", price=11.0, quantity=1000,
+                fee=0.0, executed_at="2026-01-05T02:00:00+00:00",
+            ),
+            _trade(
+                trade_id="2" * 32, operation="reduce", price=15.0, quantity=500,
+                fee=0.0, executed_at="2026-01-05T02:00:00+00:00",
+            ),
+        ]
+        import itertools
+
+        results = []
+        for index, order in enumerate(itertools.permutations(trades)):
+            db = tmp_path / f"db_shuffle_{index}.sqlite3"
+            for t in order:
+                tl_store.insert_record(db, t)
+            results.append(self._compute_on(db))
+
+        baseline = results[0]
+        for r in results[1:]:
+            assert r["selected_trade_ids"] == baseline["selected_trade_ids"]
+            assert r["positions"] == baseline["positions"]
+            assert r["totals"] == baseline["totals"]
+            assert r["computation_fingerprint"] == baseline["computation_fingerprint"]
+        # 冻结语义：trade_id ASC → [1, 2, 3]
+        assert baseline["selected_trade_ids"] == ["1" * 32, "2" * 32, "3" * 32]
+        assert _by_code(baseline, "000001")["input_trade_ids"] == [
+            "1" * 32, "2" * 32, "3" * 32,
+        ]

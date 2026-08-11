@@ -101,6 +101,17 @@ def _load_trades(
     date_from: str | None,
     date_to: str | None,
 ) -> list[dict[str, Any]]:
+    """读取计算投影（精确输入行集）。
+
+    合法空状态（既有产品语义，保留）：
+    - 交易流水 DB 文件不存在
+    - trade_records 表不存在
+
+    一旦 trade_records 存在：任何读取/查询失败（缺列、SQLite 损坏、
+    查询失败）→ PerformanceAttributionProvenanceError（fail closed）。
+
+    "无法证明输入集" 绝不降级为 "已证明空输入集"。
+    """
     if not db_path.is_file():
         return []
     sql = _SELECT_TRADES
@@ -111,25 +122,35 @@ def _load_trades(
     if date_to is not None:
         sql += " AND date(COALESCE(executed_at, created_at)) <= ?"
         params.append(date_to)
-    sql += " ORDER BY COALESCE(executed_at, created_at) ASC, created_at ASC"
+    # 全序确定性（P0-PA1-R1）：等时间戳由 trade_id 决胜（唯一账本身份）
+    sql += (
+        " ORDER BY COALESCE(executed_at, created_at) ASC,"
+        " created_at ASC, trade_id ASC"
+    )
+    path = db_path.resolve()
     try:
-        path = db_path.resolve()
         conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", timeout=30.0, uri=True)
-        try:
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA query_only = ON")
-            conn.execute("PRAGMA busy_timeout = 5000")
-            table = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                ("trade_records",),
-            ).fetchone()
-            if table is None:
-                return []
-            rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
-        finally:
-            conn.close()
-    except (sqlite3.DatabaseError, sqlite3.OperationalError):
-        return []
+    except sqlite3.DatabaseError as exc:
+        raise PerformanceAttributionProvenanceError(
+            f"无法打开交易流水库（只读）：{exc}"
+        ) from exc
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("trade_records",),
+        ).fetchone()
+        if table is None:
+            return []  # 既有产品语义：表缺失 = 有效空状态
+        rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    except sqlite3.DatabaseError as exc:
+        raise PerformanceAttributionProvenanceError(
+            f"交易流水读取失败，无法证明精确输入集：{exc}"
+        ) from exc
+    finally:
+        conn.close()
     # 来源证明：选中行必须全部携带合法 trade_id（fail closed，不静默跳行）
     return [
         {**row, "trade_id": _validate_trade_id(row.get("trade_id"), index)}
