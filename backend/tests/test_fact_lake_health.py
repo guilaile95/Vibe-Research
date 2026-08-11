@@ -137,6 +137,7 @@ def _evidence(
     reconciliation: ReconciliationResult | None = None,
     freshness_semantics: TemporalSemantics | None = None,
     freshness_value: str | None = None,
+    freshness_reference_at: str | None = None,
     primary_field: TemporalSemantics | None = None,
     primary_value: str | None = None,
     expected: str | None = None,
@@ -157,6 +158,7 @@ def _evidence(
         reconciliation_result=reconciliation,
         freshness_semantics=freshness_semantics,
         freshness_value=freshness_value,
+        freshness_reference_at=freshness_reference_at,
         primary_temporal_field=primary_field,
         primary_temporal_value=primary_value,
         expected_primary_temporal_value=expected,
@@ -187,7 +189,7 @@ def test_committed_all_verified_usable():
     ev = _evidence(spec=spec, primary_field=TemporalSemantics.TRADE_DATE,
                    primary_value="2026-08-10", expected="2026-08-10",
                    freshness_semantics=TemporalSemantics.FETCHED_AT,
-                   freshness_value=T_UTC)
+                   freshness_value=T_UTC, freshness_reference_at=T_UTC)
     a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
     assert a.publication_visibility == "COMMITTED"
     assert a.storage_integrity == "VERIFIED"
@@ -403,7 +405,7 @@ def test_by_date_expected_match_current():
     ev = _evidence(spec=spec, primary_field=TemporalSemantics.TRADE_DATE,
                    primary_value="2026-08-10", expected="2026-08-10",
                    freshness_semantics=TemporalSemantics.FETCHED_AT,
-                   freshness_value=T_UTC)
+                   freshness_value=T_UTC, freshness_reference_at=T_UTC)
     a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
     assert a.freshness == "CURRENT"
 
@@ -638,4 +640,274 @@ def test_projection_prevalidation():
     with pytest.raises(flh.HealthValidationError):
         flh.assessments_for_dataset("ds_limit_up_pool", [a, "not-an-assessment"])
     assert flh.assessments_for_dataset("ds_limit_up_pool", [a]) == [a]
+    assert flh.assessment_for_publication(a.publication_id, [a]) == a
+
+
+# ---------------------------------------------------------------------------
+# R1：P1-A 新鲜度（显式 reference + max_staleness 实际年龄）
+# ---------------------------------------------------------------------------
+
+OBSERVED_9H = "2026-08-09T19:00:00.000Z"   # reference 前 9 小时
+REFERENCE = "2026-08-10T04:00:00.000Z"     # = T_UTC（9h = 32400s）
+
+
+def _stale_spec(max_staleness: int = 300) -> DatasetSpec:
+    return DatasetSpec(
+        dataset_id="ds_limit_up_pool",
+        fetch_semantics=FetchSemantics.BY_DATE,
+        history_mode=HistoryMode.BY_DATE,
+        routes=(_route(),),
+        governance_revision_id="rev-1",
+        required_temporal_fields=(TemporalSemantics.TRADE_DATE,),
+        point_in_time_supported=False,
+        revision_semantics=RevisionSemantics.IMMUTABLE,
+        adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,
+        max_staleness_seconds=max_staleness,
+    )
+
+
+def test_r1a_expected_match_but_old_observed_stale():
+    """expected TRADE_DATE 匹配，但 OBSERVED_AT 9h old + max_staleness=300 +
+    显式 reference_at → STALE，绝不 CURRENT。"""
+    spec = _stale_spec(max_staleness=300)
+    ev = _evidence(spec=spec, primary_field=TemporalSemantics.TRADE_DATE,
+                   primary_value="2026-08-10", expected="2026-08-10",
+                   freshness_semantics=TemporalSemantics.OBSERVED_AT,
+                   freshness_value=OBSERVED_9H, freshness_reference_at=REFERENCE)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert a.freshness == "STALE"
+    assert a.freshness != "CURRENT"
+
+
+def test_r1b_reference_absent_unknown():
+    """同条件但 reference_at 缺失 → UNKNOWN（不猜墙钟）。"""
+    spec = _stale_spec(max_staleness=300)
+    ev = _evidence(spec=spec, primary_field=TemporalSemantics.TRADE_DATE,
+                   primary_value="2026-08-10", expected="2026-08-10",
+                   freshness_semantics=TemporalSemantics.OBSERVED_AT,
+                   freshness_value=OBSERVED_9H)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert a.freshness == "UNKNOWN"
+    assert a.freshness != "CURRENT"
+
+
+def test_r1c_age_exactly_threshold_frozen_stale():
+    """age 恰好等于 threshold → 冻结边界为 STALE（fail closed，不宽松）。"""
+    spec = _stale_spec(max_staleness=300)
+    exact = "2026-08-10T03:55:00.000Z"  # 距 REFERENCE 恰好 300s
+    ev = _evidence(spec=spec, primary_field=TemporalSemantics.TRADE_DATE,
+                   primary_value="2026-08-10", expected="2026-08-10",
+                   freshness_semantics=TemporalSemantics.OBSERVED_AT,
+                   freshness_value=exact, freshness_reference_at=REFERENCE)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert a.freshness == "STALE"
+
+
+def test_r1d_reference_before_freshness_value_reject():
+    """reference_at 早于 freshness_value → fail closed。"""
+    spec = _stale_spec()
+    ev = _evidence(spec=spec, primary_field=TemporalSemantics.TRADE_DATE,
+                   primary_value="2026-08-10", expected="2026-08-10",
+                   freshness_semantics=TemporalSemantics.OBSERVED_AT,
+                   freshness_value=REFERENCE,  # 晚于 reference
+                   freshness_reference_at=OBSERVED_9H)
+    with pytest.raises(flh.HealthValidationError):
+        flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+
+
+def test_r1e_snapshot_only_continuous_freshness_preserved():
+    """SNAPSHOT_ONLY：显式连续 staleness 契约不被抹除（保留评估）。"""
+    spec = DatasetSpec(
+        dataset_id="ds_snapshot",
+        fetch_semantics=FetchSemantics.SNAPSHOT,
+        history_mode=HistoryMode.SNAPSHOT_ONLY,
+        routes=(_route(),),
+        governance_revision_id="rev-s",
+        required_temporal_fields=(TemporalSemantics.TRADE_DATE,),
+        revision_semantics=RevisionSemantics.IMMUTABLE,
+        adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,
+        max_staleness_seconds=300,
+    )
+    ev = _evidence(spec=spec, freshness_semantics=TemporalSemantics.OBSERVED_AT,
+                   freshness_value=OBSERVED_9H, freshness_reference_at=REFERENCE)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert a.freshness == "STALE"  # 连续契约可评估，不因 snapshot_only 抹除
+
+
+# ---------------------------------------------------------------------------
+# R1：P1-B 对账身份绑定 + persisted 保留
+# ---------------------------------------------------------------------------
+
+def test_r1b_other_dataset_match_rejected():
+    spec = _limit_up_spec(with_verifier=True)
+    other = ReconciliationResult(
+        dataset_id="ds_other", status=ReconciliationStatus.MATCH,
+        comparison_policy_id="p", comparison_policy_version="1",
+        comparison_evidence={}, left_observation_id=OBS_ID,
+        right_observation_id="obs_" + "c" * 32, left_value=1, right_value=1,
+        reason_codes=())
+    ev = _evidence(spec=spec, reconciliation=other)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert flh.REASON_RECONCILIATION_UNBOUND in a.reason_codes
+    assert a.canonical_admissibility == "BLOCKED"
+
+
+def test_r1b_unrelated_observation_match_rejected():
+    spec = _limit_up_spec(with_verifier=True)
+    unrelated = ReconciliationResult(
+        dataset_id="ds_limit_up_pool", status=ReconciliationStatus.MATCH,
+        comparison_policy_id="p", comparison_policy_version="1",
+        comparison_evidence={}, left_observation_id="obs_" + "x" * 32,
+        right_observation_id="obs_" + "y" * 32, left_value=1, right_value=1,
+        reason_codes=())
+    ev = _evidence(spec=spec, reconciliation=unrelated)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert flh.REASON_RECONCILIATION_UNBOUND in a.reason_codes
+    assert a.canonical_admissibility == "BLOCKED"
+
+
+def test_r1b_persisted_mismatch_no_verifier_observable():
+    """fact.reconciliation_status=MISMATCH + 无 verifier → mismatch 保持可见（不静默抹除）。"""
+    spec = _limit_up_spec(with_verifier=False)
+    fact = _fact(spec=spec, quality=QualityStatus.VALID)
+    fact = CanonicalFact(
+        fact_id=FACT_ID, dataset_id=spec.dataset_id, canonical_key="2026-08-10",
+        canonical_payload={"count": 5}, canonical_source="eastmoney_push2ex",
+        dataset_contract_revision=spec.governance_revision_id,
+        revision_semantics=spec.revision_semantics,
+        adjustment_semantics=spec.adjustment_semantics,
+        source_observation_ids=(OBS_ID,),
+        provenance_chain=(_link(dataset_id=spec.dataset_id),),
+        quality_status=QualityStatus.VALID,
+        reconciliation_status=ReconciliationStatus.MISMATCH,
+        reason_codes=("recon-mismatch",),
+        trade_date="2026-08-10",
+    )
+    ev = _evidence(spec=spec, fact=fact)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert a.reconciliation == "mismatch"  # persisted 状态保留可见
+    assert flh.REASON_RECONCILIATION_MISMATCH in a.reason_codes
+
+
+def test_r1b_persisted_match_supplied_mismatch_drift_rejected():
+    """persisted MATCH + supplied MISMATCH → 证据不一致 fail-closed，绝不静默 MATCH/USABLE。"""
+    spec = _limit_up_spec(with_verifier=True)
+    fact = _fact(spec=spec, quality=QualityStatus.VALID)
+    fact = CanonicalFact(
+        fact_id=FACT_ID, dataset_id=spec.dataset_id, canonical_key="2026-08-10",
+        canonical_payload={"count": 5}, canonical_source="eastmoney_push2ex",
+        dataset_contract_revision=spec.governance_revision_id,
+        revision_semantics=spec.revision_semantics,
+        adjustment_semantics=spec.adjustment_semantics,
+        source_observation_ids=(OBS_ID,),
+        provenance_chain=(_link(dataset_id=spec.dataset_id),),
+        quality_status=QualityStatus.VALID,
+        reconciliation_status=ReconciliationStatus.MATCH,
+        reason_codes=(),
+        trade_date="2026-08-10",
+    )
+    ev = _evidence(spec=spec, fact=fact, reconciliation=_recon(ReconciliationStatus.MISMATCH))
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert flh.REASON_RECONCILIATION_STATUS_DRIFT in a.reason_codes
+    assert a.canonical_admissibility == "BLOCKED"
+    assert a.reconciliation != "match"  # 绝不静默 MATCH
+
+
+# ---------------------------------------------------------------------------
+# R1：P1-C temporal 权威（REPORT_PERIOD 非强制 YYYY-MM-DD / 真实校验）
+# ---------------------------------------------------------------------------
+
+def test_r1c_report_period_q2_quarter_valid():
+    """REPORT_PERIOD='2026Q2' 在 DS-A1 下有效 → H1 接受。"""
+    spec = _financial_spec()
+    fact = _fact(spec=spec, temporal_field=TemporalSemantics.REPORT_PERIOD,
+                 temporal_value="2026Q2", report_period="2026Q2")
+    ev = _evidence(spec=spec, fact=fact)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert flh.REASON_DATASET_SPEC_REJECTED_FACT not in a.reason_codes
+    assert a.canonical_admissibility != "BLOCKED"
+
+
+def test_r1c_invalid_trade_date_rejected():
+    """TRADE_DATE 2026-02-31（不存在）→ reject。"""
+    spec = _limit_up_spec()
+    with pytest.raises(flh.HealthValidationError):
+        _evidence(spec=spec, primary_field=TemporalSemantics.TRADE_DATE,
+                  primary_value="2026-02-31")
+
+
+def test_r1c_impossible_utc_rejected():
+    """不可能 UTC 时间戳（2026-02-31T00:00:00Z）→ reject。"""
+    spec = _limit_up_spec()
+    with pytest.raises(flh.HealthValidationError):
+        _evidence(spec=spec, freshness_semantics=TemporalSemantics.OBSERVED_AT,
+                  freshness_value="2026-02-31T00:00:00.000Z")
+
+
+def test_r1c_invalid_expected_for_trade_date_rejected():
+    """expected TRADE_DATE 非法日期 → reject。"""
+    spec = _limit_up_spec()
+    with pytest.raises(flh.HealthValidationError):
+        _evidence(spec=spec, primary_field=TemporalSemantics.TRADE_DATE,
+                  primary_value="2026-08-10", expected="not-a-date")
+
+
+def test_r1c_expected_without_primary_field_rejected():
+    """提供 expected 但无 primary field 契约 → fail closed。"""
+    spec = _limit_up_spec()
+    with pytest.raises(flh.HealthValidationError):
+        _evidence(spec=spec, expected="2026-08-10")
+
+
+def test_r1c_financial_yyyy_mm_dd_fixture_preserved():
+    """既有 financial YYYY-MM-DD fixture 仍有效。"""
+    spec = _financial_spec()
+    fact = _fact(spec=spec, temporal_field=TemporalSemantics.REPORT_PERIOD,
+                 temporal_value="2026-06-30", report_period="2026-06-30")
+    ev = _evidence(spec=spec, fact=fact)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert flh.REASON_DATASET_SPEC_REJECTED_FACT not in a.reason_codes
+
+
+# ---------------------------------------------------------------------------
+# R1：P1-D 严格 assessment 校验（from_dict + projection 不信任 dataclass）
+# ---------------------------------------------------------------------------
+
+def test_r1d_direct_dataclass_invalid_admissibility_projection_reject():
+    """直接构造非法 dataclass（非法 admissibility）→ projection 拒绝。"""
+    spec = _limit_up_spec()
+    ev = _evidence(spec=spec)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    from dataclasses import replace
+    bad = replace(a, canonical_admissibility="WEIRD")
+    with pytest.raises(flh.HealthValidationError):
+        flh.assessments_for_dataset("ds_limit_up_pool", [bad])
+
+
+def test_r1d_integer_dataset_id_from_dict_reject():
+    spec = _limit_up_spec()
+    ev = _evidence(spec=spec)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    data = a.to_dict()
+    data["dataset_id"] = 123
+    with pytest.raises(flh.HealthValidationError):
+        flh.FactLakeHealthAssessment.from_dict(data)
+
+
+def test_r1d_unknown_reason_code_from_dict_reject():
+    spec = _limit_up_spec()
+    ev = _evidence(spec=spec)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    data = a.to_dict()
+    data["reason_codes"] = ["NOT_A_REAL_CODE"]
+    with pytest.raises(flh.HealthValidationError):
+        flh.FactLakeHealthAssessment.from_dict(data)
+
+
+def test_r1d_valid_assessment_round_trip_remains_pass():
+    spec = _limit_up_spec()
+    ev = _evidence(spec=spec)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    restored = flh.FactLakeHealthAssessment.from_dict(a.to_dict())
+    assert restored == a
     assert flh.assessment_for_publication(a.publication_id, [a]) == a

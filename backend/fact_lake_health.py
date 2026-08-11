@@ -82,6 +82,8 @@ REASON_RECONCILIATION_PARTIAL = "RECONCILIATION_PARTIAL"
 REASON_RECONCILIATION_SOURCE_UNAVAILABLE = "RECONCILIATION_SOURCE_UNAVAILABLE"
 REASON_RECONCILIATION_TEMPORAL_INCOMPARABLE = "RECONCILIATION_TEMPORAL_INCOMPARABLE"
 REASON_RECONCILIATION_UNKNOWN = "RECONCILIATION_UNKNOWN"
+REASON_RECONCILIATION_UNBOUND = "RECONCILIATION_UNBOUND"
+REASON_RECONCILIATION_STATUS_DRIFT = "RECONCILIATION_STATUS_DRIFT"
 
 # 枚举 → reason code（稳定映射）
 _RECONCILIATION_REASON = {
@@ -114,6 +116,8 @@ _BLOCKING_REASONS = frozenset({
     REASON_REPLAY_MISMATCH,
     REASON_FACT_QUALITY_INVALID,
     REASON_TEMPORAL_INDEX_MISMATCH,
+    REASON_RECONCILIATION_UNBOUND,
+    REASON_RECONCILIATION_STATUS_DRIFT,
 })
 _WARNING_REASONS = frozenset({
     REASON_ARTIFACT_UNVERIFIED,
@@ -136,6 +140,44 @@ _UTC_RE = __import__("re").compile(
 _DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+# 已知 reason codes（严格校验用，防未知 code 混入）
+_KNOWN_REASON_CODES = frozenset({
+    REASON_PUBLICATION_NOT_COMMITTED,
+    REASON_DATASET_ID_MISMATCH,
+    REASON_CANONICAL_KEY_MISMATCH,
+    REASON_DATASET_SPEC_REJECTED_FACT,
+    REASON_TEMPORAL_INDEX_MISMATCH,
+    REASON_SOURCE_OBSERVATION_NOT_COMMITTED,
+    REASON_RAW_PAYLOAD_HASH_MISMATCH,
+    REASON_ARTIFACT_UNVERIFIED,
+    REASON_ARTIFACT_MISSING,
+    REASON_ARTIFACT_HASH_MISMATCH,
+    REASON_ARTIFACT_SCHEMA_MISMATCH,
+    REASON_REPLAY_NOT_RUN,
+    REASON_REPLAY_UNSUPPORTED,
+    REASON_REPLAY_MISMATCH,
+    REASON_FACT_QUALITY_DEGRADED,
+    REASON_FACT_QUALITY_UNKNOWN,
+    REASON_FACT_QUALITY_INVALID,
+    REASON_FRESHNESS_UNKNOWN,
+    REASON_TEMPORAL_VALUE_STALE,
+    REASON_RECONCILIATION_NOT_RUN,
+    REASON_RECONCILIATION_MISMATCH,
+    REASON_RECONCILIATION_PARTIAL,
+    REASON_RECONCILIATION_SOURCE_UNAVAILABLE,
+    REASON_RECONCILIATION_TEMPORAL_INCOMPARABLE,
+    REASON_RECONCILIATION_UNKNOWN,
+    REASON_RECONCILIATION_UNBOUND,
+    REASON_RECONCILIATION_STATUS_DRIFT,
+})
+
+# 各维度合法枚举值（严格校验用）
+_SEMANTIC_QUALITY_VALUES = ("valid", "degraded", "invalid", "unknown")
+_RECONCILIATION_VALUES = tuple(s.value for s in ReconciliationStatus) + (
+    "not_applicable", "not_run",
+)
+
+
 class FactLakeHealthError(Exception):
     """Fact Lake Health 领域异常基类。"""
 
@@ -149,15 +191,43 @@ def _parse_utc(value: str) -> datetime:
 
 
 def _require_utc(value: Any, field: str) -> str:
+    """真实可解析的 canonical UTC 时间戳（P1-C：非 regex-only）。"""
     if type(value) is not str or _UTC_RE.fullmatch(value) is None:
         raise HealthValidationError(f"{field} 必须是 canonical UTC 时间戳")
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HealthValidationError(f"{field} 不是真实 UTC 时间（如 2 月 30 日）") from exc
     return value
 
 
 def _require_date_only(value: Any, field: str) -> str:
+    """真实 ISO 日历日期（P1-C：拒绝 2026-02-31 之类不存在的日期）。"""
     if type(value) is not str or _DATE_RE.fullmatch(value) is None:
         raise HealthValidationError(f"{field} 必须是 ISO 日历日期")
+    try:
+        parsed = __import__("datetime").date.fromisoformat(value)
+    except ValueError as exc:
+        raise HealthValidationError(f"{field} 不是真实日历日期（如 2026-02-31）") from exc
+    if parsed.isoformat() != value:
+        raise HealthValidationError(f"{field} 不是规范 ISO 日历日期")
     return value
+
+
+def _require_canonical_text(value: Any, field: str) -> str:
+    """非空规范文本（REPORT_PERIOD 等；DS-A1 parity：不强制 YYYY-MM-DD）。"""
+    if type(value) is not str or not value.strip():
+        raise HealthValidationError(f"{field} 必须是非空规范文本")
+    return value
+
+
+def _require_text_or_date(semantics: TemporalSemantics, value: Any, field: str) -> str:
+    """按语义校验值：TRADE_DATE 用真实日期，REPORT_PERIOD 用非空规范文本，其余 UTC。"""
+    if semantics is TemporalSemantics.TRADE_DATE:
+        return _require_date_only(value, field)
+    if semantics is TemporalSemantics.REPORT_PERIOD:
+        return _require_canonical_text(value, field)
+    return _require_utc(value, field)
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +256,8 @@ class FactLakeHealthEvidence:
     # 可选权威新鲜度证据（显式语义，见 freshness_semantics）
     freshness_semantics: TemporalSemantics | None = None
     freshness_value: str | None = None
+    # P1-A：显式调用方提供的 UTC 评估/参考时间（无墙钟读取；仅连续时间戳新鲜度使用）
+    freshness_reference_at: str | None = None
     # 可选主 temporal 索引（validate 用）
     primary_temporal_field: TemporalSemantics | None = None
     primary_temporal_value: str | None = None
@@ -229,22 +301,35 @@ class FactLakeHealthEvidence:
                                             TemporalSemantics.FETCHED_AT):
                 _require_utc(self.freshness_value, "freshness_value")
             else:  # TRADE_DATE / REPORT_PERIOD
-                _require_date_only(self.freshness_value, "freshness_value")
+                _require_text_or_date(self.freshness_semantics, self.freshness_value,
+                                      "freshness_value")
+        if self.freshness_reference_at is not None:
+            _require_utc(self.freshness_reference_at, "freshness_reference_at")
         if self.primary_temporal_field is not None and not isinstance(
                 self.primary_temporal_field, TemporalSemantics):
             raise HealthValidationError("primary_temporal_field 必须是 TemporalSemantics")
         if self.primary_temporal_value is not None:
             if self.primary_temporal_field is None:
                 raise HealthValidationError("提供 primary_temporal_value 必须同时提供 primary_temporal_field")
-            if self.primary_temporal_field in (TemporalSemantics.TRADE_DATE,
-                                               TemporalSemantics.REPORT_PERIOD):
+            if self.primary_temporal_field is TemporalSemantics.TRADE_DATE:
                 _require_date_only(self.primary_temporal_value, "primary_temporal_value")
+            elif self.primary_temporal_field is TemporalSemantics.REPORT_PERIOD:
+                _require_canonical_text(self.primary_temporal_value, "primary_temporal_value")
             else:
                 _require_utc(self.primary_temporal_value, "primary_temporal_value")
         if self.expected_primary_temporal_value is not None:
-            if type(self.expected_primary_temporal_value) is not str or \
-                    not self.expected_primary_temporal_value.strip():
-                raise HealthValidationError("expected_primary_temporal_value 必须是非空字符串")
+            if self.primary_temporal_field is None:
+                raise HealthValidationError(
+                    "提供 expected_primary_temporal_value 必须同时提供 primary_temporal_field（fail closed）")
+            if self.primary_temporal_field is TemporalSemantics.TRADE_DATE:
+                _require_date_only(self.expected_primary_temporal_value,
+                                   "expected_primary_temporal_value")
+            elif self.primary_temporal_field is TemporalSemantics.REPORT_PERIOD:
+                _require_canonical_text(self.expected_primary_temporal_value,
+                                        "expected_primary_temporal_value")
+            else:
+                _require_utc(self.expected_primary_temporal_value,
+                             "expected_primary_temporal_value")
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +370,8 @@ class FactLakeHealthAssessment:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "FactLakeHealthAssessment":
-        """严格反序列化（exact field set / exact types / 无未知字段）。"""
+        """严格反序列化（P1-D 校验权威）：exact field set / exact types /
+        非空 str / 已知枚举 / 已知 reason codes / 无重复 / 无未知字段。"""
         if not isinstance(data, Mapping):
             raise HealthValidationError("assessment 必须是 Mapping")
         expected = {"schema_version", "dataset_id", "canonical_key", "publication_id",
@@ -300,13 +386,18 @@ class FactLakeHealthAssessment:
         if data["schema_version"] != SCHEMA_VERSION:
             raise HealthValidationError(
                 f"schema_version 漂移: {data['schema_version']!r}")
+        # 非空 str 标识字段
+        for field_name in ("dataset_id", "canonical_key", "publication_id"):
+            value = data[field_name]
+            if type(value) is not str or not value.strip():
+                raise HealthValidationError(f"{field_name} 必须是非空 str")
         for field_name, allowed in (
             ("publication_visibility", PublicationVisibility),
             ("storage_integrity", StorageIntegrity),
             ("reproducibility", Reproducibility),
-            ("semantic_quality", ("valid", "degraded", "invalid", "unknown")),
+            ("semantic_quality", _SEMANTIC_QUALITY_VALUES),
             ("freshness", Freshness),
-            ("reconciliation", tuple(s.value for s in ReconciliationStatus) + ("not_applicable", "not_run")),
+            ("reconciliation", _RECONCILIATION_VALUES),
             ("canonical_admissibility", CanonicalAdmissibility),
         ):
             if data[field_name] not in allowed:
@@ -317,6 +408,9 @@ class FactLakeHealthAssessment:
             raise HealthValidationError("reason_codes 必须是字符串列表")
         if len(codes) != len(set(codes)):
             raise HealthValidationError("reason_codes 不得重复")
+        unknown_codes = sorted(set(codes) - _KNOWN_REASON_CODES)
+        if unknown_codes:
+            raise HealthValidationError(f"reason_codes 含未知 code: {unknown_codes}")
         return cls(
             dataset_id=data["dataset_id"],
             canonical_key=data["canonical_key"],
@@ -465,39 +559,82 @@ def _assess_freshness(
     evidence: FactLakeHealthEvidence,
     reasons: list[str],
 ) -> str:
-    """新鲜度：仅当调用方提供显式权威 freshness basis 才可能 CURRENT/STALE。
+    """新鲜度（P1-A）：仅显式权威 basis + 显式 reference 时间才可能 CURRENT/STALE。
 
-    - freshness_semantics 为 None → UNKNOWN（不自动选 effective/published/...）；
-    - by_date 数据集无 expected_primary_temporal_value → UNKNOWN；
-    - max_staleness_seconds 仅在显式 UTC freshness basis 下应用；
-    - snapshot_only / NOT_APPLICABLE：不比较历史期望（§15）。
+    - freshness_semantics / freshness_value 缺失 → UNKNOWN；
+    - 连续时间戳新鲜度（EFFECTIVE/PUBLISHED/OBSERVED/FETCHED）：
+      * 缺 `freshness_reference_at` → UNKNOWN（不猜墙钟）；
+      * 有 reference_at 且 max_staleness_seconds 定义 → 按实际年龄判
+        CURRENT/STALE（边界冻结：age == threshold 视为 STALE，fail closed）；
+      * 有 reference_at 无 max_staleness → 仅当 reference_at >= freshness_value
+        才 CONTINUOUS_CURRENT，否则 fail closed（reference_at < freshness_value）；
+    - 坐标新鲜度（TRADE_DATE/REPORT_PERIOD）：expected 匹配 → 坐标 CURRENT；
+      expected 缺失/不匹配 → UNKNOWN/STALE；
+    - 两路保守合并：STALE 支配 UNKNOWN 支配 CURRENT；
+    - SNAPSHOT_ONLY：禁止伪造历史覆盖，但**不抹除显式可评估的连续 staleness
+      契约**（若调用方显式提供 freshness basis + reference_at，仍按连续语义评估）。
     """
+    # 连续时间戳新鲜度（可独立评估，SNAPSHOT_ONLY 也不抹除）
+    continuous: str | None = None
+    if evidence.freshness_semantics in (
+        TemporalSemantics.EFFECTIVE_AT,
+        TemporalSemantics.PUBLISHED_AT,
+        TemporalSemantics.OBSERVED_AT,
+        TemporalSemantics.FETCHED_AT,
+    ):
+        if evidence.freshness_value is None:
+            continuous = "UNKNOWN"
+        elif evidence.freshness_reference_at is None:
+            continuous = "UNKNOWN"  # 无显式 reference → 不猜墙钟
+        else:
+            ref = _parse_utc(evidence.freshness_reference_at)
+            val = _parse_utc(evidence.freshness_value)
+            if ref < val:
+                # reference 早于 freshness_value → 不可能历史，fail closed
+                raise HealthValidationError(
+                    "freshness_reference_at 早于 freshness_value（不可能的时间序）"
+                )
+            age_seconds = (ref - val).total_seconds()
+            if dataset_spec.max_staleness_seconds is not None:
+                # 边界冻结：age >= threshold → STALE（fail closed，不宽松）
+                continuous = ("CURRENT" if age_seconds < dataset_spec.max_staleness_seconds
+                              else "STALE")
+            else:
+                continuous = "CURRENT"  # 无阈值：显式 basis + 合法 reference 下可判 CURRENT
+
+    # 坐标新鲜度（TRADE_DATE/REPORT_PERIOD）；SNAPSHOT_ONLY 禁止伪造历史覆盖
+    coordinate: str | None = None
+    if dataset_spec.history_mode is not HistoryMode.SNAPSHOT_ONLY:
+        if evidence.expected_primary_temporal_value is None:
+            coordinate = "UNKNOWN"  # 无显式期望 → 不猜期望日期
+        elif evidence.primary_temporal_value is not None and \
+                evidence.primary_temporal_value == evidence.expected_primary_temporal_value:
+            coordinate = "CURRENT"
+        else:
+            coordinate = "STALE"
+
+    # SNAPSHOT_ONLY：无连续契约 → NOT_APPLICABLE；有显式连续契约 → 保留评估（不抹除）
     if dataset_spec.history_mode is HistoryMode.SNAPSHOT_ONLY:
-        return "NOT_APPLICABLE"
-    if evidence.freshness_semantics is None or evidence.freshness_value is None:
+        if continuous is None:
+            return "NOT_APPLICABLE"
+        if continuous == "STALE":
+            reasons.append(REASON_TEMPORAL_VALUE_STALE)
+        elif continuous == "UNKNOWN":
+            reasons.append(REASON_FRESHNESS_UNKNOWN)
+        return continuous
+
+    # 保守合并：STALE 支配 UNKNOWN 支配 CURRENT；无任何证据 → UNKNOWN
+    candidates = [c for c in (continuous, coordinate) if c is not None]
+    if not candidates:
         reasons.append(REASON_FRESHNESS_UNKNOWN)
         return "UNKNOWN"
-    # by_date：无显式 expected 值 → 不猜期望日期
-    if evidence.expected_primary_temporal_value is None:
-        reasons.append(REASON_FRESHNESS_UNKNOWN)
-        return "UNKNOWN"
-    # 仅当 expected 与 publication 主 temporal 值一致 → CURRENT；不一致 → STALE
-    if evidence.primary_temporal_value is not None and \
-            evidence.primary_temporal_value == evidence.expected_primary_temporal_value:
-        return "CURRENT"
-    # max_staleness_seconds：仅当显式 UTC basis（EFFECTIVE/PUBLISHED/OBSERVED）可用
-    if dataset_spec.max_staleness_seconds is not None and \
-            evidence.freshness_semantics in (
-                TemporalSemantics.EFFECTIVE_AT,
-                TemporalSemantics.PUBLISHED_AT,
-                TemporalSemantics.OBSERVED_AT,
-            ):
-        # 需要比较基准：当前仅能判断显式 expected 主值；时钟不可用 → 不做实时 staleness 推断
-        # 保持保守：不一致即 STALE（覆盖 expected 提供但主值不匹配的情形）
+    if "STALE" in candidates:
         reasons.append(REASON_TEMPORAL_VALUE_STALE)
         return "STALE"
-    reasons.append(REASON_TEMPORAL_VALUE_STALE)
-    return "STALE"
+    if "UNKNOWN" in candidates:
+        reasons.append(REASON_FRESHNESS_UNKNOWN)
+        return "UNKNOWN"
+    return "CURRENT"
 
 
 def _assess_reconciliation(
@@ -505,21 +642,63 @@ def _assess_reconciliation(
     evidence: FactLakeHealthEvidence,
     reasons: list[str],
 ) -> str:
-    """对账：无 VERIFIER 路由 → NOT_APPLICABLE（§21）；有 VERIFIER 无证据 → NOT_RUN（§22）。"""
+    """对账（P1-B）：绑定 dataset/observation 身份 + 保留 persisted 状态 + drift fail-closed。
+
+    - 无 VERIFIER 路由：不惩罚（NOT_APPLICABLE），但**保留** fact 上 persisted
+      reconciliation_status（若为 MISMATCH/PARTIAL 等仍保持可见，不静默抹除）；
+    - 有 verifier 无证据 → NOT_RUN（不伪造 MATCH）；
+    - 提供 ReconciliationResult 时必须绑定：
+      * result.dataset_id == spec.dataset_id == evidence.dataset_id == fact.dataset_id；
+      * left/right observation 至少一个 ∈ fact.source_observation_ids；
+      * 未绑定 → 显式 fail-closed（BLOCKED 级证据不一致）；
+    - persisted fact.reconciliation_status 与 supplied result 冲突 → 显式
+      fail-closed（REASON_RECONCILIATION_STATUS_DRIFT），绝不静默选一方；
+    - MISMATCH/PARTIAL 等保持可见（warning），绝不 provider switch。
+    """
+    fact = evidence.canonical_fact
     has_verifier = any(
         route.role.value == "verifier" for route in dataset_spec.routes)
+
+    # 1) 提供 result：强制身份绑定
+    result = evidence.reconciliation_result
+    if result is not None:
+        if result.dataset_id != dataset_spec.dataset_id or \
+                result.dataset_id != evidence.dataset_id or \
+                result.dataset_id != fact.dataset_id:
+            reasons.append(REASON_RECONCILIATION_UNBOUND)
+        else:
+            obs_ids = set(fact.source_observation_ids)
+            if result.left_observation_id not in obs_ids and \
+                    result.right_observation_id not in obs_ids:
+                reasons.append(REASON_RECONCILIATION_UNBOUND)
+            else:
+                # 2) 绑定通过：与 persisted fact.reconciliation_status 冲突 → drift
+                persisted = fact.reconciliation_status
+                supplied = result.status
+                if persisted is not ReconciliationStatus.UNKNOWN and \
+                        supplied is not persisted:
+                    reasons.append(REASON_RECONCILIATION_STATUS_DRIFT)
+                else:
+                    code = _RECONCILIATION_REASON.get(supplied)
+                    if code is not None:
+                        reasons.append(code)
+                    if supplied is ReconciliationStatus.MATCH:
+                        return "match"
+                    return supplied.value
+
+    # 3) 未提供 result：无 verifier 不惩罚；有 verifier → NOT_RUN
     if not has_verifier:
+        # 保留 persisted 状态（不静默抹除 MISMATCH/PARTIAL）
+        if fact.reconciliation_status is ReconciliationStatus.MATCH:
+            return "match"
+        if fact.reconciliation_status is not ReconciliationStatus.UNKNOWN:
+            code = _RECONCILIATION_REASON.get(fact.reconciliation_status)
+            if code is not None:
+                reasons.append(code)
+            return fact.reconciliation_status.value
         return "not_applicable"
-    if evidence.reconciliation_result is None:
-        reasons.append(REASON_RECONCILIATION_NOT_RUN)
-        return "not_run"
-    status = evidence.reconciliation_result.status
-    if status is ReconciliationStatus.MATCH:
-        return "match"
-    code = _RECONCILIATION_REASON.get(status)
-    if code is not None:
-        reasons.append(code)
-    return status.value
+    reasons.append(REASON_RECONCILIATION_NOT_RUN)
+    return "not_run"
 
 
 def _derive_admissibility(reasons: list[str]) -> str:
@@ -560,6 +739,8 @@ _REASON_ORDER = (
     REASON_RECONCILIATION_SOURCE_UNAVAILABLE,
     REASON_RECONCILIATION_TEMPORAL_INCOMPARABLE,
     REASON_RECONCILIATION_UNKNOWN,
+    REASON_RECONCILIATION_UNBOUND,
+    REASON_RECONCILIATION_STATUS_DRIFT,
 )
 _REASON_RANK = {code: index for index, code in enumerate(_REASON_ORDER)}
 
@@ -597,10 +778,17 @@ def assessment_for_publication(
 
 
 def _validate_assessment_list(assessments: list) -> None:
+    """严格集合校验（P1-D）：不信任 dataclass 类型，经 to_dict→from_dict 权威重建。
+
+    直接构造的非法 dataclass（非法 admissibility / 未知 reason code / 空 id）会在
+    round-trip 中被拒绝，投影绝不基于未校验对象。
+    """
     if not isinstance(assessments, list):
         raise HealthValidationError("assessments 必须是列表")
     for a in assessments:
         if not isinstance(a, FactLakeHealthAssessment):
             raise HealthValidationError("assessments 元素必须是 FactLakeHealthAssessment")
-        # 完整性自校验：schema_version + 枚举值
-        _ = a.to_dict()
+        # 权威重建：to_dict → strict from_dict（校验 exact 字段/枚举/reason codes/hash）
+        rebuilt = FactLakeHealthAssessment.from_dict(a.to_dict())
+        if rebuilt != a:
+            raise HealthValidationError("assessment 与严格反序列化重建不一致")
