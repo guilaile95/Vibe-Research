@@ -529,3 +529,171 @@ def test_source_purity():
     )
     for marker in forbidden:
         assert marker not in source, f"生产 H3 源码包含禁止内容: {marker!r}"
+
+
+# ---------------------------------------------------------------------------
+# R1：P1-A 维度严重度不得消失（不一致但结构合法的 assessment 也保守）
+# ---------------------------------------------------------------------------
+
+def test_r1a_usable_quality_degraded_empty_reasons_partial_degraded():
+    """A1：USABLE + semantic_quality=degraded + 空 reason_codes → partial/degraded，绝不 normal。"""
+    p = _project(_assessment(
+        canonical_admissibility="USABLE",
+        semantic_quality="degraded",
+        reason_codes=(),
+    ))
+    assert p.legacy_status == "partial"
+    assert p.legacy_is_degraded is True
+    assert p.legacy_error_code == "SOURCE_DEGRADED"
+
+
+def test_r1a_usable_stale_empty_reasons_normal_stale():
+    """A2：USABLE + freshness=STALE + 空 reasons + 其他 clean → normal + is_stale=True + SOURCE_STALE。"""
+    p = _project(_assessment(
+        canonical_admissibility="USABLE",
+        freshness="STALE",
+        reason_codes=(),
+    ))
+    assert p.legacy_status == "normal"
+    assert p.legacy_is_stale is True
+    assert p.legacy_error_code == "SOURCE_STALE"
+
+
+def test_r1a_usable_reproducibility_not_run_partial():
+    """A3：USABLE + reproducibility=NOT_RUN + 空 reasons → partial / SOURCE_PARTIAL。"""
+    p = _project(_assessment(
+        canonical_admissibility="USABLE",
+        reproducibility="NOT_RUN",
+        reason_codes=(),
+    ))
+    assert p.legacy_status == "partial"
+    assert p.legacy_error_code == "SOURCE_PARTIAL"
+
+
+def test_r1a_usable_storage_unverified_partial():
+    """A4：USABLE + storage_integrity=UNVERIFIED + 空 reasons → partial / SOURCE_PARTIAL。"""
+    p = _project(_assessment(
+        canonical_admissibility="USABLE",
+        storage_integrity="UNVERIFIED",
+        reason_codes=(),
+    ))
+    assert p.legacy_status == "partial"
+    assert p.legacy_error_code == "SOURCE_PARTIAL"
+
+
+def test_r1a_usable_reconciliation_mismatch_partial():
+    """A5：USABLE + reconciliation=mismatch + 空 reasons → partial / SOURCE_PARTIAL。"""
+    p = _project(_assessment(
+        canonical_admissibility="USABLE",
+        reconciliation="mismatch",
+        reason_codes=(),
+    ))
+    assert p.legacy_status == "partial"
+    assert p.legacy_error_code == "SOURCE_PARTIAL"
+
+
+def test_r1a_blocking_reason_floor_drift_unavailable():
+    """A6：USABLE_WITH_WARNING + (RECONCILIATION_STATUS_DRIFT,) → unavailable / SOURCE_UNAVAILABLE。
+    blocking reason 本身建立 floor，绝不因 caller 改成 WITH_WARNING 而变 partial。"""
+    p = _project(_assessment(
+        canonical_admissibility="USABLE_WITH_WARNING",
+        reason_codes=("RECONCILIATION_STATUS_DRIFT",),
+    ))
+    assert p.legacy_status == "unavailable"
+    assert p.legacy_error_code == "SOURCE_UNAVAILABLE"
+
+
+def test_r1a_blocking_reason_floor_corruption_unavailable():
+    """A7：USABLE + (ARTIFACT_HASH_MISMATCH,) + storage=VERIFIED → unavailable / SOURCE_CORRUPTED。
+    不信任与 blocking reason 不一致的 storage 维度。"""
+    p = _project(_assessment(
+        canonical_admissibility="USABLE",
+        storage_integrity="VERIFIED",
+        reason_codes=("ARTIFACT_HASH_MISMATCH",),
+    ))
+    assert p.legacy_status == "unavailable"
+    assert p.legacy_error_code == "SOURCE_CORRUPTED"
+
+
+def test_r1a_stale_plus_warning_dimension_partial():
+    """STALE + 其他 warning 维度（reason 缺失）→ partial + is_stale=True（非 normal）。"""
+    p = _project(_assessment(
+        canonical_admissibility="USABLE",
+        freshness="STALE",
+        reconciliation="not_run",  # warning 维度，无 reason codes
+        reason_codes=(),
+    ))
+    assert p.legacy_status == "partial"
+    assert p.legacy_is_stale is True
+    assert p.legacy_error_code == "SOURCE_PARTIAL"
+
+
+# ---------------------------------------------------------------------------
+# R1：P1-B 严格输出边界（序列化 payload 不能覆盖投影权威）
+# ---------------------------------------------------------------------------
+
+def test_r1b_from_dict_rejects_unknown_dimension_value():
+    """B1：fact_lake_storage_integrity="banana" → REJECT。"""
+    data = _project(_assessment()).to_dict()
+    data["fact_lake_storage_integrity"] = "banana"
+    with pytest.raises(flhp.LegacyProjectionError):
+        flhp.FactLakeLegacyHealthProjection.from_dict(data)
+
+
+def test_r1b_from_dict_rejects_admissibility_mutation():
+    """B2：canonical_admissibility 改成 BLOCKED 但 legacy 保持 normal → REJECT。"""
+    data = _project(_assessment()).to_dict()
+    data["fact_lake_canonical_admissibility"] = "BLOCKED"
+    with pytest.raises(flhp.LegacyProjectionError):
+        flhp.FactLakeLegacyHealthProjection.from_dict(data)
+
+
+def test_r1b_from_dict_rejects_semantic_projection_drift():
+    """B3：CORRUPTED 投影把 error_code 改成 SOURCE_UNAVAILABLE（summary 合法）→ REJECT。"""
+    p = _project(_assessment(
+        canonical_admissibility="BLOCKED",
+        storage_integrity="CORRUPTED",
+        reason_codes=("ARTIFACT_HASH_MISMATCH",),
+    ))
+    assert p.legacy_error_code == "SOURCE_CORRUPTED"
+    data = p.to_dict()
+    data["legacy_error_code"] = "SOURCE_UNAVAILABLE"
+    data["legacy_error_summary"] = flhp.error_summary("SOURCE_UNAVAILABLE")
+    with pytest.raises(flhp.LegacyProjectionError):
+        flhp.FactLakeLegacyHealthProjection.from_dict(data)
+
+
+def test_r1b_from_dict_rejects_collection_failure_extra_shape():
+    """B4：COLLECTION_FAILURE + dataset_id 非 None → REJECT。"""
+    p = flhp.project_fact_lake_health(
+        collection_failure=HealthEvidenceCollectionFailure(
+            code="FACT_LAKE_BUSY", detail="test"))
+    data = p.to_dict()
+    data["dataset_id"] = "fake"
+    with pytest.raises(flhp.LegacyProjectionError):
+        flhp.FactLakeLegacyHealthProjection.from_dict(data)
+    # 任一 H1 维度非 None 同样拒绝
+    data2 = p.to_dict()
+    data2["fact_lake_freshness"] = "CURRENT"
+    with pytest.raises(flhp.LegacyProjectionError):
+        flhp.FactLakeLegacyHealthProjection.from_dict(data2)
+
+
+def test_r1b_valid_round_trip_exact():
+    """B5：to_dict → from_dict 精确相等（normal / stale-only / blocked / failure）。"""
+    samples = [
+        _project(_assessment()),
+        _project(_assessment(
+            canonical_admissibility="USABLE_WITH_WARNING", freshness="STALE",
+            reason_codes=("TEMPORAL_VALUE_STALE",))),
+        _project(_assessment(
+            canonical_admissibility="BLOCKED",
+            storage_integrity="CORRUPTED",
+            reason_codes=("ARTIFACT_HASH_MISMATCH",))),
+        flhp.project_fact_lake_health(
+            collection_failure=HealthEvidenceCollectionFailure(
+                code="PUBLICATION_NOT_VISIBLE", detail="test")),
+    ]
+    for p in samples:
+        restored = flhp.FactLakeLegacyHealthProjection.from_dict(p.to_dict())
+        assert restored == p

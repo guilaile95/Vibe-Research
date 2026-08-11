@@ -28,7 +28,36 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from data_health_service import ERROR_SUMMARIES, VALID_STATUSES, error_summary
-from fact_lake_health import FactLakeHealthAssessment
+from fact_lake_health import (
+    REASON_ARTIFACT_HASH_MISMATCH,
+    REASON_ARTIFACT_MISSING,
+    REASON_ARTIFACT_SCHEMA_MISMATCH,
+    REASON_ARTIFACT_UNVERIFIED,
+    REASON_CANONICAL_KEY_MISMATCH,
+    REASON_DATASET_ID_MISMATCH,
+    REASON_DATASET_SPEC_REJECTED_FACT,
+    REASON_FACT_QUALITY_DEGRADED,
+    REASON_FACT_QUALITY_INVALID,
+    REASON_FACT_QUALITY_UNKNOWN,
+    REASON_FRESHNESS_UNKNOWN,
+    REASON_PUBLICATION_NOT_COMMITTED,
+    REASON_RAW_PAYLOAD_HASH_MISMATCH,
+    REASON_RECONCILIATION_MISMATCH,
+    REASON_RECONCILIATION_NOT_RUN,
+    REASON_RECONCILIATION_PARTIAL,
+    REASON_RECONCILIATION_SOURCE_UNAVAILABLE,
+    REASON_RECONCILIATION_STATUS_DRIFT,
+    REASON_RECONCILIATION_TEMPORAL_INCOMPARABLE,
+    REASON_RECONCILIATION_UNBOUND,
+    REASON_RECONCILIATION_UNKNOWN,
+    REASON_REPLAY_MISMATCH,
+    REASON_REPLAY_NOT_RUN,
+    REASON_REPLAY_UNSUPPORTED,
+    REASON_SOURCE_OBSERVATION_NOT_COMMITTED,
+    REASON_TEMPORAL_INDEX_MISMATCH,
+    REASON_TEMPORAL_VALUE_STALE,
+    FactLakeHealthAssessment,
+)
 from fact_lake_health_adapter import HealthEvidenceCollectionFailure
 
 SCHEMA_VERSION = "fact_lake_legacy_projection.v0.1"
@@ -50,36 +79,37 @@ CODE_CORRUPTED = "SOURCE_CORRUPTED"
 CODE_SCHEMA_INCOMPATIBLE = "SOURCE_SCHEMA_INCOMPATIBLE"
 CODE_DEGRADED = "SOURCE_DEGRADED"
 
-# H2 集合失败 → legacy（§20）；不含 BAD_ARGUMENT / INTERNAL（§21 拒绝）
+# H2 集合失败 → legacy（§20）；不含 BAD_ARGUMENT / INTERNAL（§21 拒绝）。
+# P2-2：code -> legacy_error_code（扁平字符串）。
 _COLLECTION_FAILURE_MAPPING = {
-    "FACT_LAKE_NOT_INITIALIZED": (CODE_NOT_INITIALIZED,),
-    "FACT_LAKE_SCHEMA_UNSUPPORTED": (CODE_SCHEMA_INCOMPATIBLE,),
-    "FACT_LAKE_CORRUPTED": (CODE_CORRUPTED,),
-    "FACT_LAKE_PATH_UNSAFE": (CODE_CORRUPTED,),
-    "FACT_LAKE_BUSY": (CODE_UNAVAILABLE,),
-    "PUBLICATION_NOT_VISIBLE": (CODE_UNAVAILABLE,),
-    "RECONCILIATION_AMBIGUOUS": (CODE_UNAVAILABLE,),
+    "FACT_LAKE_NOT_INITIALIZED": CODE_NOT_INITIALIZED,
+    "FACT_LAKE_SCHEMA_UNSUPPORTED": CODE_SCHEMA_INCOMPATIBLE,
+    "FACT_LAKE_CORRUPTED": CODE_CORRUPTED,
+    "FACT_LAKE_PATH_UNSAFE": CODE_CORRUPTED,
+    "FACT_LAKE_BUSY": CODE_UNAVAILABLE,
+    "PUBLICATION_NOT_VISIBLE": CODE_UNAVAILABLE,
+    "RECONCILIATION_AMBIGUOUS": CODE_UNAVAILABLE,
 }
 _NON_DATA_HEALTH_CODES = frozenset({"BAD_ARGUMENT", "INTERNAL"})
 
-# H1 blocking reasons（只读引用权威；顺序无关，按 frozenset 判定）
+# H1 blocking reasons（P2-1：引用 H1 公开 REASON_* 常量，不维护字面量副本）
 BLOCKING_REASON_CODES = frozenset({
-    "PUBLICATION_NOT_COMMITTED", "DATASET_ID_MISMATCH",
-    "CANONICAL_KEY_MISMATCH", "DATASET_SPEC_REJECTED_FACT",
-    "SOURCE_OBSERVATION_NOT_COMMITTED", "RAW_PAYLOAD_HASH_MISMATCH",
-    "ARTIFACT_MISSING", "ARTIFACT_HASH_MISMATCH",
-    "ARTIFACT_SCHEMA_MISMATCH", "REPLAY_MISMATCH",
-    "FACT_QUALITY_INVALID", "TEMPORAL_INDEX_MISMATCH",
-    "RECONCILIATION_UNBOUND", "RECONCILIATION_STATUS_DRIFT",
+    REASON_PUBLICATION_NOT_COMMITTED, REASON_DATASET_ID_MISMATCH,
+    REASON_CANONICAL_KEY_MISMATCH, REASON_DATASET_SPEC_REJECTED_FACT,
+    REASON_SOURCE_OBSERVATION_NOT_COMMITTED, REASON_RAW_PAYLOAD_HASH_MISMATCH,
+    REASON_ARTIFACT_MISSING, REASON_ARTIFACT_HASH_MISMATCH,
+    REASON_ARTIFACT_SCHEMA_MISMATCH, REASON_REPLAY_MISMATCH,
+    REASON_FACT_QUALITY_INVALID, REASON_TEMPORAL_INDEX_MISMATCH,
+    REASON_RECONCILIATION_UNBOUND, REASON_RECONCILIATION_STATUS_DRIFT,
 })
-# H1 warning reasons（含 stale；§13/§16 判定用）
+# H1 warning reasons（含 stale）
 WARNING_REASON_CODES = frozenset({
-    "ARTIFACT_UNVERIFIED", "REPLAY_NOT_RUN", "REPLAY_UNSUPPORTED",
-    "FACT_QUALITY_DEGRADED", "FACT_QUALITY_UNKNOWN", "FRESHNESS_UNKNOWN",
-    "TEMPORAL_VALUE_STALE", "RECONCILIATION_NOT_RUN",
-    "RECONCILIATION_MISMATCH", "RECONCILIATION_PARTIAL",
-    "RECONCILIATION_SOURCE_UNAVAILABLE",
-    "RECONCILIATION_TEMPORAL_INCOMPARABLE", "RECONCILIATION_UNKNOWN",
+    REASON_ARTIFACT_UNVERIFIED, REASON_REPLAY_NOT_RUN, REASON_REPLAY_UNSUPPORTED,
+    REASON_FACT_QUALITY_DEGRADED, REASON_FACT_QUALITY_UNKNOWN,
+    REASON_FRESHNESS_UNKNOWN, REASON_TEMPORAL_VALUE_STALE,
+    REASON_RECONCILIATION_NOT_RUN, REASON_RECONCILIATION_MISMATCH,
+    REASON_RECONCILIATION_PARTIAL, REASON_RECONCILIATION_SOURCE_UNAVAILABLE,
+    REASON_RECONCILIATION_TEMPORAL_INCOMPARABLE, REASON_RECONCILIATION_UNKNOWN,
 })
 _KNOWN_REASON_CODES = BLOCKING_REASON_CODES | WARNING_REASON_CODES
 
@@ -208,28 +238,87 @@ class FactLakeLegacyHealthProjection:
             raise LegacyProjectionError("ASSESSMENT 投影不得携带 collection_failure_code")
         if data["lossiness"] not in (LOSSINESS_EXACT, LOSSINESS_LOSSY):
             raise LegacyProjectionError(f"未知 lossiness: {data['lossiness']!r}")
-        return cls(
-            schema_version=data["schema_version"],
+        if data["source_kind"] == SOURCE_KIND_ASSESSMENT:
+            return cls._strict_from_assessment(data, code)
+        return cls._strict_from_collection_failure(data, code)
+
+    @classmethod
+    def _strict_from_assessment(
+        cls,
+        data: Mapping[str, Any],
+        code: str | None,
+    ) -> "FactLakeLegacyHealthProjection":
+        """ASSESSMENT 严格重建（P1-B）：序列化 payload 不能覆盖投影权威。
+
+        1. 非空 id + 非空 7 维；2. 经 H1 from_dict 严格重建 assessment；
+        3. 用 H3 权威重投影；4. legacy 字段 + lossiness 必须精确等于重投影结果。
+        """
+        for name in ("dataset_id", "canonical_key", "publication_id",
+                     "fact_lake_publication_visibility", "fact_lake_storage_integrity",
+                     "fact_lake_reproducibility", "fact_lake_semantic_quality",
+                     "fact_lake_freshness", "fact_lake_reconciliation"):
+            if data[name] is None:
+                raise LegacyProjectionError(
+                    f"ASSESSMENT 投影 {name} 必须非空（严格输出边界）")
+        candidate = FactLakeHealthAssessment(
             dataset_id=data["dataset_id"],
             canonical_key=data["canonical_key"],
             publication_id=data["publication_id"],
-            legacy_status=status,
-            legacy_is_stale=data["legacy_is_stale"],
-            legacy_is_degraded=data["legacy_is_degraded"],
-            legacy_error_code=code,
-            legacy_error_summary=data["legacy_error_summary"],
-            fact_lake_canonical_admissibility=data["fact_lake_canonical_admissibility"],
-            fact_lake_reason_codes=tuple(codes),
-            fact_lake_publication_visibility=data["fact_lake_publication_visibility"],
-            fact_lake_storage_integrity=data["fact_lake_storage_integrity"],
-            fact_lake_reproducibility=data["fact_lake_reproducibility"],
-            fact_lake_semantic_quality=data["fact_lake_semantic_quality"],
-            fact_lake_freshness=data["fact_lake_freshness"],
-            fact_lake_reconciliation=data["fact_lake_reconciliation"],
-            source_kind=data["source_kind"],
-            collection_failure_code=failure_code,
-            lossiness=data["lossiness"],
+            publication_visibility=data["fact_lake_publication_visibility"],
+            storage_integrity=data["fact_lake_storage_integrity"],
+            reproducibility=data["fact_lake_reproducibility"],
+            semantic_quality=data["fact_lake_semantic_quality"],
+            freshness=data["fact_lake_freshness"],
+            reconciliation=data["fact_lake_reconciliation"],
+            canonical_admissibility=data["fact_lake_canonical_admissibility"],
+            reason_codes=tuple(data["fact_lake_reason_codes"]),
         )
+        # 严格 H1 from_dict 重建（未知枚举/字段/reason/schema → REJECT）
+        rebuilt = _rebuild_assessment(candidate)
+        reprojected = _project_assessment(rebuilt)
+        cls._require_legacy_match(reprojected, data)
+        return reprojected
+
+    @classmethod
+    def _strict_from_collection_failure(
+        cls,
+        data: Mapping[str, Any],
+        code: str | None,
+    ) -> "FactLakeLegacyHealthProjection":
+        """COLLECTION_FAILURE 严格重建（P1-B）：shape 严格 + 重算 legacy 映射精确比对。"""
+        for name in ("dataset_id", "canonical_key", "publication_id",
+                     "fact_lake_publication_visibility", "fact_lake_storage_integrity",
+                     "fact_lake_reproducibility", "fact_lake_semantic_quality",
+                     "fact_lake_freshness", "fact_lake_reconciliation"):
+            if data[name] is not None:
+                raise LegacyProjectionError(
+                    f"COLLECTION_FAILURE 投影 {name} 必须为 None（严格输出边界）")
+        if data["fact_lake_canonical_admissibility"] is not None or \
+                data["fact_lake_reason_codes"]:
+            raise LegacyProjectionError(
+                "COLLECTION_FAILURE 投影不得携带 H1 评估字段（严格输出边界）")
+        failure = HealthEvidenceCollectionFailure(
+            code=data["collection_failure_code"], detail="from_dict")
+        reprojected = _project_collection_failure(failure)
+        cls._require_legacy_match(reprojected, data)
+        return reprojected
+
+    @staticmethod
+    def _require_legacy_match(
+        reprojected: "FactLakeLegacyHealthProjection",
+        data: Mapping[str, Any],
+    ) -> None:
+        """序列化 legacy 字段必须精确等于重投影结果（§语义投影漂移 → REJECT）。"""
+        if (
+            reprojected.legacy_status != data["legacy_status"]
+            or reprojected.legacy_is_stale != data["legacy_is_stale"]
+            or reprojected.legacy_is_degraded != data["legacy_is_degraded"]
+            or reprojected.legacy_error_code != data["legacy_error_code"]
+            or reprojected.legacy_error_summary != data["legacy_error_summary"]
+            or reprojected.lossiness != data["lossiness"]
+        ):
+            raise LegacyProjectionError(
+                "语义投影漂移：序列化 legacy 字段与投影权威不一致（payload 不能覆盖投影）")
 
 
 # ---------------------------------------------------------------------------
@@ -272,52 +361,93 @@ def _blocked_error_code(
     storage_integrity: str,
     reason_codes: frozenset[str],
 ) -> str:
-    """BLOCKED 错误码优先级（§17/§18）：SOURCE_CORRUPTED > SCHEMA > UNAVAILABLE。"""
+    """BLOCKED 错误码优先级（§17/§18）：SOURCE_CORRUPTED > SCHEMA > UNAVAILABLE。
+
+    blocking reason 本身即可证明损坏（即使 storage 维度声称 VERIFIED，
+    也不信任不一致的 storage 维度，§R1-A7）。
+    """
     if storage_integrity == "CORRUPTED" or \
-            "RAW_PAYLOAD_HASH_MISMATCH" in reason_codes or \
-            "ARTIFACT_MISSING" in reason_codes or \
-            "ARTIFACT_HASH_MISMATCH" in reason_codes:
+            REASON_RAW_PAYLOAD_HASH_MISMATCH in reason_codes or \
+            REASON_ARTIFACT_MISSING in reason_codes or \
+            REASON_ARTIFACT_HASH_MISMATCH in reason_codes:
         return CODE_CORRUPTED
-    if "ARTIFACT_SCHEMA_MISMATCH" in reason_codes:
+    if REASON_ARTIFACT_SCHEMA_MISMATCH in reason_codes:
         return CODE_SCHEMA_INCOMPATIBLE
     return CODE_UNAVAILABLE
 
 
-def _is_stale_only(*, freshness: str, reason_codes: frozenset[str]) -> bool:
-    """§13 stale-only：freshness=STALE 且无非 stale warning reason、无 blocking reason。"""
+def _is_clean(
+    assessment: FactLakeHealthAssessment,
+    reasons: frozenset[str],
+) -> bool:
+    """§R1 冻结 CLEAN 定义：全部 7 维干净 + 空 reason codes。"""
     return (
-        freshness == "STALE"
-        and not (reason_codes & BLOCKING_REASON_CODES)
-        and not (reason_codes & (WARNING_REASON_CODES - {_STALE_WARNING_REASON}))
+        assessment.publication_visibility == "COMMITTED"
+        and assessment.storage_integrity == "VERIFIED"
+        and assessment.reproducibility == "MATCH"
+        and assessment.semantic_quality == "valid"
+        and assessment.freshness in ("CURRENT", "NOT_APPLICABLE")
+        and assessment.reconciliation in ("match", "not_applicable")
+        and not reasons
+    )
+
+
+def _is_stale_only(
+    assessment: FactLakeHealthAssessment,
+    reasons: frozenset[str],
+) -> bool:
+    """§R1 stale-only：freshness=STALE 且其他维度全 clean、无 blocking、
+    无非 stale warning reason（不能仅凭缺失 reason codes 推断）。"""
+    return (
+        assessment.freshness == "STALE"
+        and assessment.publication_visibility == "COMMITTED"
+        and assessment.storage_integrity == "VERIFIED"
+        and assessment.reproducibility == "MATCH"
+        and assessment.semantic_quality == "valid"
+        and assessment.reconciliation in ("match", "not_applicable")
+        and not (reasons & BLOCKING_REASON_CODES)
+        and not (reasons & (WARNING_REASON_CODES - {_STALE_WARNING_REASON}))
     )
 
 
 def _project_assessment(
     assessment: FactLakeHealthAssessment,
 ) -> FactLakeLegacyHealthProjection:
-    """Assessment 路径（§10-§19）——确定性映射，reason 顺序无关（§30）。"""
+    """Assessment 路径（§10-§19 + R1 floor）——确定性映射，reason 顺序无关（§30）。
+
+    优先级：
+    1. blocking floor：BLOCKED / 硬失败维度 / 任一 H1 blocking reason
+       → unavailable（blocking reason 绝不因 caller 把 canonical_admissibility
+       改成 USABLE/WITH_WARNING 而变成 partial，§R1）。
+    2. clean（全部 7 维 + 空 reason）→ normal。
+    3. 非 blocked 非 clean：quality degraded → SOURCE_DEGRADED；stale-only
+       （维度级检查）→ normal + is_stale + SOURCE_STALE；其他 → SOURCE_PARTIAL。
+    warning 维度本身足以阻止 normal，即使 reason_codes 缺失（§R1）。
+    """
     reasons = frozenset(assessment.reason_codes)
     storage = assessment.storage_integrity
     quality = assessment.semantic_quality
     freshness = assessment.freshness
+    stale = freshness == "STALE"
 
-    # §11 硬失败维度地板（bridge 级，绝不 normal/partial usable）
-    hard_fail = (
-        assessment.publication_visibility == "NOT_COMMITTED"
+    # 1) blocking floor（§11 + R1 blocking reason floor）
+    blocked = (
+        assessment.canonical_admissibility == "BLOCKED"
+        or assessment.publication_visibility == "NOT_COMMITTED"
         or storage == "CORRUPTED"
         or assessment.reproducibility == "MISMATCH"
         or quality == "invalid"
+        or bool(reasons & BLOCKING_REASON_CODES)
     )
-    if hard_fail or assessment.canonical_admissibility == "BLOCKED":
-        status = "unavailable"
+    if blocked:
         error_code = _blocked_error_code(storage, reasons)
         return FactLakeLegacyHealthProjection(
             schema_version=SCHEMA_VERSION,
             dataset_id=assessment.dataset_id,
             canonical_key=assessment.canonical_key,
             publication_id=assessment.publication_id,
-            legacy_status=status,
-            legacy_is_stale=(freshness == "STALE"),
+            legacy_status="unavailable",
+            legacy_is_stale=stale,
             legacy_is_degraded=False,
             legacy_error_code=error_code,
             legacy_error_summary=error_summary(error_code),
@@ -334,33 +464,8 @@ def _project_assessment(
             lossiness=LOSSINESS_LOSSY,
         )
 
-    stale = freshness == "STALE"
-    if assessment.canonical_admissibility == "USABLE":
-        if reasons:
-            # 防御：声称 USABLE 却带 warning/block reason（内部不一致）→ 保守 partial
-            return FactLakeLegacyHealthProjection(
-                schema_version=SCHEMA_VERSION,
-                dataset_id=assessment.dataset_id,
-                canonical_key=assessment.canonical_key,
-                publication_id=assessment.publication_id,
-                legacy_status="partial",
-                legacy_is_stale=stale,
-                legacy_is_degraded=False,
-                legacy_error_code=CODE_PARTIAL,
-                legacy_error_summary=error_summary(CODE_PARTIAL),
-                fact_lake_canonical_admissibility=assessment.canonical_admissibility,
-                fact_lake_reason_codes=assessment.reason_codes,
-                fact_lake_publication_visibility=assessment.publication_visibility,
-                fact_lake_storage_integrity=storage,
-                fact_lake_reproducibility=assessment.reproducibility,
-                fact_lake_semantic_quality=quality,
-                fact_lake_freshness=freshness,
-                fact_lake_reconciliation=assessment.reconciliation,
-                source_kind=SOURCE_KIND_ASSESSMENT,
-                collection_failure_code=None,
-                lossiness=LOSSINESS_LOSSY,
-            )
-        # 干净 USABLE（§19）：normal
+    # 2) clean → normal（§19，R1 冻结定义）
+    if _is_clean(assessment, reasons):
         return FactLakeLegacyHealthProjection(
             schema_version=SCHEMA_VERSION,
             dataset_id=assessment.dataset_id,
@@ -384,13 +489,13 @@ def _project_assessment(
             lossiness=LOSSINESS_EXACT,
         )
 
-    # USABLE_WITH_WARNING（§14-§16）
+    # 3) 非 blocked 非 clean：warning projection（§14-§16）
     if quality == "degraded":
         error_code = CODE_DEGRADED
         status = "partial"
         is_degraded = True
         lossiness = LOSSINESS_LOSSY
-    elif _is_stale_only(freshness=freshness, reason_codes=reasons):
+    elif _is_stale_only(assessment, reasons):
         error_code = CODE_STALE
         status = "normal"
         is_degraded = False
@@ -434,7 +539,7 @@ def _project_collection_failure(
     mapping = _COLLECTION_FAILURE_MAPPING.get(failure.code)
     if mapping is None:
         raise LegacyProjectionError(f"未知 collection failure code: {failure.code!r}")
-    error_code = mapping[0]
+    error_code = mapping
     return FactLakeLegacyHealthProjection(
         schema_version=SCHEMA_VERSION,
         dataset_id=None,
