@@ -335,37 +335,153 @@ def _bind(campaign_id, thesis_id, revision, strategy) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# A. effective_state 纯规则（terminal 显式校验）
+# A. OPTION A: pure-core domain authority + adapter has no duplicate rules
 # ---------------------------------------------------------------------------
 
-def test_effective_state_rules():
-    project = formal_thesis_projection
-    assert project._effective_state([]) == "STABLE"
-    assert project._effective_state([{"delta_state": "STRENGTHENED"}]) == "STRENGTHENED"
-    assert (
-        project._effective_state(
-            [{"delta_state": "STRENGTHENED"}, {"delta_state": "WEAKENED"}]
+def _normalized_inputs(*, formal_state="frozen", deltas=None, strategy="SWING"):
+    """Build normalized pure-domain inputs for core / adapter parity tests."""
+    campaign_id = "campaign_" + "c" * 24
+    thesis_id = _tid(90)
+    binding = {
+        "campaign_id": campaign_id,
+        "thesis_id": thesis_id,
+        "thesis_revision_at_bind": 2,
+        "campaign_strategy_at_bind": strategy,
+        "bound_at": _TS,
+    }
+    thesis = {
+        "id": thesis_id,
+        "formal_state": formal_state,
+        "frozen_revision": 2 if formal_state == "frozen" else None,
+        "strategy": strategy if formal_state == "frozen" else None,
+        "expected_horizon": _HORIZONS[strategy] if formal_state == "frozen" else None,
+    }
+    frozen_original = {
+        "revision_number": 2,
+        "snapshot": _snapshot(strategy=strategy, revision=2),
+    }
+    delta_rows = []
+    for sequence, state in deltas or ():
+        delta_rows.append(
+            {
+                "delta_id": f"delta_{sequence:032x}",
+                "thesis_id": thesis_id,
+                "delta_sequence": sequence,
+                "base_revision": 2,
+                "delta_state": state,
+                "reason": f"r{sequence}",
+                "confirmed_at": _TS,
+                "evidence_links": [],
+            }
         )
-        == "WEAKENED"
+    return campaign_id, binding, thesis, frozen_original, delta_rows
+
+
+def test_adapter_has_no_independent_effective_state_authority():
+    """OPTION A: adapter must not reimplement effective_state / terminal rules."""
+    assert not hasattr(formal_thesis_projection, "_effective_state")
+
+
+def test_core_and_adapter_semantic_parity_effective_state():
+    import formal_thesis_projection_core as core
+
+    cases = [
+        ((), "STABLE"),
+        (((1, "STRENGTHENED"),), "STRENGTHENED"),
+        (((1, "STRENGTHENED"), (2, "WEAKENED")), "WEAKENED"),
+        (((1, "STRENGTHENED"), (2, "DISPROVEN")), "DISPROVEN"),
+    ]
+    for deltas, expected in cases:
+        campaign_id, binding, thesis, frozen_original, delta_rows = _normalized_inputs(
+            deltas=deltas
+        )
+        core_result = core.project_current_thesis(
+            campaign_id=campaign_id,
+            binding=binding,
+            thesis=thesis,
+            frozen_original=frozen_original,
+            deltas=[
+                {
+                    "delta_id": d["delta_id"],
+                    "thesis_id": d["thesis_id"],
+                    "delta_sequence": d["delta_sequence"],
+                    "base_revision": d["base_revision"],
+                    "delta_state": d["delta_state"],
+                    "reason": d["reason"],
+                    "confirmed_at": d["confirmed_at"],
+                }
+                for d in delta_rows
+            ],
+        )
+        adapted = formal_thesis_projection.project_current_thesis_from_normalized(
+            campaign_id=campaign_id,
+            binding=binding,
+            thesis=thesis,
+            frozen_original=frozen_original,
+            deltas=delta_rows,
+        )
+        assert core_result["formal_status"] == "READY"
+        assert core_result["effective_state"] == expected
+        assert adapted["formal_status"] == "READY"
+        assert adapted["ready"] is True
+        assert adapted["effective_state"] == core_result["effective_state"]
+        assert adapted["frozen_revision"] == core_result["original"]["revision"]
+        assert adapted["original_snapshot"] == core_result["original"]["snapshot"]
+
+
+def test_core_terminal_not_last_fail_closed_maps_through_adapter():
+    import formal_thesis_projection_core as core
+    from formal_thesis_projection_core import ProjectionIntegrityError
+
+    campaign_id, binding, thesis, frozen_original, delta_rows = _normalized_inputs(
+        deltas=((1, "DISPROVEN"), (2, "STRENGTHENED"))
     )
-    assert (
-        project._effective_state(
-            [{"delta_state": "STRENGTHENED"}, {"delta_state": "DISPROVEN"}]
+    with pytest.raises(ProjectionIntegrityError):
+        core.project_current_thesis(
+            campaign_id=campaign_id,
+            binding=binding,
+            thesis=thesis,
+            frozen_original=frozen_original,
+            deltas=delta_rows,
         )
-        == "DISPROVEN"
+    with pytest.raises(CurrentThesisProjectionError):
+        formal_thesis_projection.project_current_thesis_from_normalized(
+            campaign_id=campaign_id,
+            binding=binding,
+            thesis=thesis,
+            frozen_original=frozen_original,
+            deltas=delta_rows,
+        )
+
+
+def test_core_and_adapter_not_frozen_parity():
+    import formal_thesis_projection_core as core
+
+    campaign_id, binding, thesis, frozen_original, delta_rows = _normalized_inputs(
+        formal_state="draft",
+        deltas=(),
     )
-    with pytest.raises(CurrentThesisProjectionError):
-        project._effective_state(
-            [{"delta_state": "DISPROVEN"}, {"delta_state": "STRENGTHENED"}]
-        )
-    with pytest.raises(CurrentThesisProjectionError):
-        project._effective_state(
-            [
-                {"delta_state": "STRENGTHENED"},
-                {"delta_state": "INVALIDATED"},
-                {"delta_state": "WEAKENED"},
-            ]
-        )
+    thesis["strategy"] = None
+    thesis["frozen_revision"] = None
+    core_result = core.project_current_thesis(
+        campaign_id=campaign_id,
+        binding=binding,
+        thesis=thesis,
+        frozen_original={},
+        deltas=[],
+    )
+    adapted = formal_thesis_projection.project_current_thesis_from_normalized(
+        campaign_id=campaign_id,
+        binding=binding,
+        thesis=thesis,
+        frozen_original={},
+        deltas=[],
+    )
+    assert core_result["formal_status"] == "NOT_READY"
+    assert core_result["reason"] == "NOT_FROZEN"
+    assert adapted["formal_status"] == "NOT_READY"
+    assert adapted["ready"] is False
+    assert adapted["reason"] == "NOT_FROZEN"
 
 
 # ---------------------------------------------------------------------------

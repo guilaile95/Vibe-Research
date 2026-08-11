@@ -183,8 +183,8 @@ def test_cross_domain_modules_import_together():
         importlib.import_module(name)
 
 
-def test_runtime_current_thesis_authority_is_integrated_adapter_only():
-    """OPTION B: campaign router uses integrated projection, not pure core."""
+def test_runtime_current_thesis_option_a_router_adapter_core_delegation():
+    """OPTION A: router → adapter (I/O); adapter delegates domain rules to core."""
     router_path = BACKEND / "campaign_router.py"
     source = router_path.read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -198,11 +198,17 @@ def test_runtime_current_thesis_authority_is_integrated_adapter_only():
     assert "formal_thesis_projection" in imported
     assert "formal_thesis_projection_core" not in imported
 
-    import formal_thesis_projection as runtime
-    import formal_thesis_projection_core as pure
+    import formal_thesis_projection as adapter
+    import formal_thesis_projection_core as core
 
-    runtime_params = list(inspect.signature(runtime.project_current_thesis).parameters)
-    pure_params = list(inspect.signature(pure.project_current_thesis).parameters)
+    adapter_src = (BACKEND / "formal_thesis_projection.py").read_text(encoding="utf-8")
+    assert "formal_thesis_projection_core" in adapter_src
+    assert "projection_core.project_current_thesis" in adapter_src
+    # No independent domain reimplementation of effective_state in adapter.
+    assert "def _effective_state" not in adapter_src
+
+    runtime_params = list(inspect.signature(adapter.project_current_thesis).parameters)
+    pure_params = list(inspect.signature(core.project_current_thesis).parameters)
     assert runtime_params == ["campaign_id"]
     assert "binding" in pure_params
     assert "frozen_original" in pure_params
@@ -336,6 +342,9 @@ def test_registry_files_present_and_machine_readable():
     pr91 = next(e for e in supersession["entries"] if e["pr"] == 91)
     assert pr91["superseded_by"] == 95
     assert pr91["do_not_integrate"] is True
-    pr72 = next(e for e in supersession["entries"] if e["pr"] == 72)
-    assert pr72["authority_decision"] == "B"
-    assert pr72["superseded_by"] == 73
+    pr72 = next(e for e in accepted["entries"] if e["pr"] == 72)
+    assert pr72.get("authority_decision") == "OPTION_A_PURE_DOMAIN_AUTHORITY"
+    # #72 is pure-domain authority, not superseded.
+    supersession_prs = {e["pr"] for e in supersession["entries"] if e.get("do_not_integrate")}
+    assert 91 in supersession_prs
+    assert 72 not in supersession_prs

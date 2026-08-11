@@ -1,23 +1,17 @@
-"""P0-PH2 S2D-D：Current Thesis Projection（Formal Thesis 投影）。
+"""P0-PH2 S2D-D：Current Thesis Projection integrated I/O adapter.
 
 只读投影：Campaign → immutable binding → Formal Thesis（frozen_revision 的
 FORMAL_FREEZE snapshot + thesis_deltas 证据链），不写任何数据。
 
-Integration authority (Project Consolidation / OPTION B):
-- This module is the **sole runtime Current Thesis projection authority**
-  (router / I/O / store-validated path).
-- `formal_thesis_projection_core` is pure-domain unit logic only and is **not**
-  a second API authority. Campaign routers must import this module, not the core.
-
-规则（fail-closed）：
-- formal_state != frozen → NOT_READY/NOT_FROZEN，绝不把 thesis_revision_at_bind
-  当作 Formal Original（grandfather pre-freeze binding 允许，但未冻结不投影）；
-- Formal Original 永远取 frozen_revision 对应的 thesis_revisions snapshot；
-- deltas 按 delta_sequence ASC；无 delta → effective_state=STABLE；
-  仅 non-terminal → 最新 wins；terminal 之后仍有 delta → corrupted（500）；
-  （读路径 validate_persisted_delta_chain 已 fail-closed，这里显式再校验一遍）
-- thesis.strategy 与 binding.campaign_strategy_at_bind 不一致 → 409 semantic
-  conflict（复用 campaign_service.CampaignThesisStrategyConflictError）。
+Integration authority (Project Consolidation / OPTION A):
+- ``formal_thesis_projection_core`` is the **sole pure-domain projection
+  authority** (NOT_FROZEN / effective_state / terminal-last / strategy /
+  Formal Original semantics).
+- This module is the **I/O + persistence validation + API adapter**:
+  DB transaction, Campaign binding retrieval, persisted validators,
+  revision/delta-chain validation, immutable delta evidence retrieval,
+  exception mapping, and the existing #73 HTTP/API payload contract.
+- Routers import this module only. Domain rules are not reimplemented here.
 
 本模块只读 evidence_thesis_*，绝不调用其写 API。
 """
@@ -29,25 +23,15 @@ from typing import Any
 import campaign_service
 import evidence_thesis_service  # READ ONLY：只用于 resolve_db_path
 import evidence_thesis_store as evidence_store
-
-
-TERMINAL_DELTA_STATES = ("DISPROVEN", "INVALIDATED")
+import formal_thesis_projection_core as projection_core
+from formal_thesis_projection_core import (
+    ProjectionIntegrityError,
+    ProjectionStrategyConflictError,
+)
 
 
 class CurrentThesisProjectionError(RuntimeError):
     """投影无法产生 Formal Thesis（ledger 缺失/损坏/不一致，fail-closed → 500）。"""
-
-
-def _effective_state(deltas: list[dict]) -> str:
-    """无 delta → STABLE；仅 non-terminal → 最新 wins；terminal 后仍有 delta → corrupted。"""
-    if not deltas:
-        return "STABLE"
-    for index, delta in enumerate(deltas):
-        if delta["delta_state"] in TERMINAL_DELTA_STATES and index != len(deltas) - 1:
-            raise CurrentThesisProjectionError(
-                "terminal delta followed by later deltas (corrupted chain)"
-            )
-    return deltas[-1]["delta_state"]
 
 
 def _binding_audit(binding: dict) -> dict:
@@ -74,8 +58,101 @@ def _not_ready_payload(
     }
 
 
+def _core_delta_inputs(deltas: list[dict]) -> list[dict]:
+    """Build pure-domain delta inputs (no I/O-only evidence_links)."""
+    return [
+        {
+            "delta_id": delta.get("delta_id"),
+            "thesis_id": delta["thesis_id"],
+            "delta_sequence": delta["delta_sequence"],
+            "base_revision": delta["base_revision"],
+            "delta_state": delta["delta_state"],
+            "reason": delta.get("reason"),
+            "confirmed_at": delta.get("confirmed_at"),
+            "evidence_snapshots": None,
+        }
+        for delta in deltas
+    ]
+
+
+def _adapt_ready_payload(
+    *,
+    campaign_id: str,
+    thesis_id: str,
+    binding: dict,
+    core_result: dict,
+    io_deltas: list[dict],
+) -> dict:
+    """Map pure-core READY result into the existing #73 runtime/API shape.
+
+    Domain decisions (effective_state, formal_status, original revision,
+    strategy/terminal implications) come exclusively from core_result.
+    I/O-loaded deltas retain immutable evidence_links for the API surface.
+    """
+    ordered_io = sorted(io_deltas, key=lambda d: d["delta_sequence"])
+    return {
+        "campaign_id": campaign_id,
+        "thesis_id": thesis_id,
+        "binding": _binding_audit(binding),
+        "frozen_revision": core_result["original"]["revision"],
+        "original_snapshot": core_result["original"]["snapshot"],
+        "deltas": ordered_io,
+        "effective_state": core_result["effective_state"],
+        "ready": True,
+        "formal_status": "READY",
+    }
+
+
+def project_current_thesis_from_normalized(
+    *,
+    campaign_id: str,
+    binding: dict,
+    thesis: dict,
+    frozen_original: dict,
+    deltas: list,
+) -> dict:
+    """Pure-input path used by tests: core domain + #73 API adaptation only.
+
+    No I/O. Callers that already hold normalized immutable values use this
+    to prove core → adapter semantic parity without a database.
+    """
+    try:
+        core_result = projection_core.project_current_thesis(
+            campaign_id=campaign_id,
+            binding=binding,
+            thesis=thesis,
+            frozen_original=frozen_original,
+            deltas=_core_delta_inputs(list(deltas)),
+        )
+    except ProjectionStrategyConflictError as exc:
+        thesis_strategy = thesis.get("strategy")
+        bind_strategy = binding.get("campaign_strategy_at_bind")
+        raise campaign_service.CampaignThesisStrategyConflictError(
+            thesis_strategy,
+            bind_strategy,
+        ) from exc
+    except ProjectionIntegrityError as exc:
+        raise CurrentThesisProjectionError(str(exc)) from exc
+
+    if core_result.get("formal_status") != "READY":
+        return _not_ready_payload(
+            campaign_id,
+            binding.get("thesis_id") or thesis.get("id") or "",
+            binding,
+            thesis,
+        )
+
+    return _adapt_ready_payload(
+        campaign_id=campaign_id,
+        thesis_id=core_result["thesis_id"],
+        binding=binding,
+        core_result=core_result,
+        io_deltas=list(deltas),
+    )
+
+
 def project_current_thesis(campaign_id: str) -> dict:
-    """生成 Campaign 的 Current Formal Thesis 投影（只读）。"""
+    """生成 Campaign 的 Current Formal Thesis 投影（只读 I/O adapter）。"""
     # 1. Campaign → immutable binding → Formal Thesis
     campaign_service.get_campaign(campaign_id)  # 404 / 422 / 500 语义与既有 API 一致
     binding = campaign_service.get_campaign_thesis_binding(campaign_id)
@@ -95,17 +172,13 @@ def project_current_thesis(campaign_id: str) -> dict:
         evidence_store.validate_persisted_delta_chain(conn, thesis_id)
         thesis = evidence_store._thesis_row_to_dict(row)
 
-        # 2. 未冻结 → NOT_READY（不得用 thesis_revision_at_bind 冒充 Formal Original）
-        if thesis["formal_state"] != "frozen":
-            return _not_ready_payload(campaign_id, thesis_id, binding, thesis)
-
-        # 3. deltas（同快照读取 + 显式校验 terminal 规则）
+        # Load deltas + immutable evidence snapshots (I/O only).
         delta_rows = conn.execute(
             "SELECT * FROM thesis_deltas WHERE thesis_id = ? "
             "ORDER BY delta_sequence ASC",
             (thesis_id,),
         ).fetchall()
-        deltas = []
+        deltas: list[dict] = []
         for delta_row in delta_rows:
             delta = evidence_store._delta_row_to_dict(delta_row)
             # Delta evidence must come from the canonical immutable snapshots.
@@ -122,35 +195,47 @@ def project_current_thesis(campaign_id: str) -> dict:
                 for link_row in link_rows
             ]
             deltas.append(delta)
-        effective_state = _effective_state(deltas)
 
-        # 4. Strategy consistency（不一致 → 409 semantic conflict）
-        if thesis.get("strategy") != binding["campaign_strategy_at_bind"]:
+        # Formal Original snapshot for pure-core input (only when frozen).
+        frozen_original: dict = {}
+        if thesis.get("formal_state") == "frozen" and thesis.get("frozen_revision") is not None:
+            rev_row = evidence_store._get_revision_row(
+                conn, thesis_id, int(thesis["frozen_revision"])
+            )
+            if rev_row is None:
+                raise CurrentThesisProjectionError("frozen revision snapshot missing")
+            frozen_original = {
+                "revision_number": int(rev_row["revision_number"]),
+                "snapshot": evidence_store._revision_row_to_dict(rev_row)["snapshot"],
+            }
+
+        # 2. Domain projection — sole authority is pure core (OPTION A).
+        try:
+            core_result = projection_core.project_current_thesis(
+                campaign_id=campaign_id,
+                binding=binding,
+                thesis=thesis,
+                frozen_original=frozen_original,
+                deltas=_core_delta_inputs(deltas),
+            )
+        except ProjectionStrategyConflictError as exc:
             raise campaign_service.CampaignThesisStrategyConflictError(
                 thesis.get("strategy"),
                 binding["campaign_strategy_at_bind"],
-            )
+            ) from exc
+        except ProjectionIntegrityError as exc:
+            raise CurrentThesisProjectionError(str(exc)) from exc
 
-        # 5. Formal Original = snapshot(frozen_revision)
-        frozen_revision = thesis["frozen_revision"]
-        if frozen_revision is None:  # validator 已保证，防御性兜底
-            raise CurrentThesisProjectionError("frozen thesis missing frozen_revision")
-        rev_row = evidence_store._get_revision_row(conn, thesis_id, frozen_revision)
-        if rev_row is None:
-            raise CurrentThesisProjectionError("frozen revision snapshot missing")
-        original_snapshot = evidence_store._revision_row_to_dict(rev_row)["snapshot"]
+        if core_result.get("formal_status") != "READY":
+            return _not_ready_payload(campaign_id, thesis_id, binding, thesis)
 
-        return {
-            "campaign_id": campaign_id,
-            "thesis_id": thesis_id,
-            "binding": _binding_audit(binding),
-            "frozen_revision": frozen_revision,
-            "original_snapshot": original_snapshot,
-            "deltas": deltas,
-            "effective_state": effective_state,
-            "ready": True,
-            "formal_status": "READY",
-        }
+        return _adapt_ready_payload(
+            campaign_id=campaign_id,
+            thesis_id=thesis_id,
+            binding=binding,
+            core_result=core_result,
+            io_deltas=deltas,
+        )
 
     try:
         return evidence_store.read_transaction(db_path, _do)

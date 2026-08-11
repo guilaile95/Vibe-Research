@@ -1,9 +1,11 @@
 """Pure-domain Formal Current Thesis projection core v0.1 — no I/O / DB / AI.
 
-Integration authority (Project Consolidation / OPTION B):
-- Not the runtime Current Thesis API. Routers and services must use
-  `formal_thesis_projection` (PR #73 integrated adapter).
-- This module remains pure-domain unit-test authority only (no I/O).
+Integration authority (Project Consolidation / OPTION A):
+- This module is the **sole pure-domain Current Thesis projection authority**.
+- Domain rules (NOT_FROZEN, effective_state, terminal-last, strategy consistency,
+  Formal Original projection) are decided here only.
+- `formal_thesis_projection` is the integrated I/O adapter: load/validate from
+  store, call this core, adapt results/exceptions to the existing #73 API.
 
 Formal Current Thesis 纯确定性 Projection Core v0.1 —— 无 I/O、无 DB、无 AI。
 
