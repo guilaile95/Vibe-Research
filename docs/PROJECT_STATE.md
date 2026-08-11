@@ -181,7 +181,7 @@ P0 验收必须同时通过：
 
 详见 `docs/integration/accepted_heads.json`。核心域已进入 synthetic candidate：
 
-- Formal Thesis #73 + QA/migration #75/#76/#77；projection core #72 = OPTION B（非 runtime authority）
+- Formal Thesis #72 pure core = domain authority + #73 I/O adapter（OPTION A）+ QA #74/#75/#76/#77
 - Decision chain #88/#89/#92/#95
 - Fact Lake S1A–S3 + Q1 + H1–H3 已在同一 integration head 收敛
 - Data Governance docs #78/#80/#81/#82

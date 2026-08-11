@@ -34,13 +34,13 @@
       "status": "accepted_not_merged",
       "domain": "formal_thesis_projection_pure_core",
       "independent_acceptance_known": true,
-      "integration_status": "included_as_pure_domain_module",
-      "action": "NEEDS_AUTHORITY_DECISION",
-      "authority_decision": "OPTION_B_RUNTIME_SUPERSEDED_BY_73",
+      "integration_status": "integrated_as_pure_domain_authority",
+      "action": "CANDIDATE_FOR_INTEGRATION",
+      "authority_decision": "OPTION_A_PURE_DOMAIN_AUTHORITY",
       "notes": [
-        "Pure domain projection core; no I/O.",
-        "Runtime Current Thesis authority is PR #73 integrated adapter.",
-        "Module retained for pure-domain unit tests; not a second API authority."
+        "SOLE pure-domain Current Thesis projection authority (no I/O).",
+        "PR #73 integrated adapter must delegate domain rules to this core.",
+        "Not superseded; dual independent domain authority is forbidden."
       ]
     },
     {
@@ -53,9 +53,13 @@
       "status": "accepted_not_merged",
       "domain": "formal_thesis_lifecycle_projection_io",
       "independent_acceptance_known": true,
-      "integration_status": "integrated",
+      "integration_status": "integrated_as_io_adapter",
       "action": "CANDIDATE_FOR_INTEGRATION",
-      "notes": ["Runtime Formal Thesis + Current Thesis projection authority."]
+      "authority_decision": "OPTION_A_IO_ADAPTER_DELEGATES_TO_72",
+      "notes": [
+        "I/O + persisted validation + API adaptation only.",
+        "Domain projection rules delegated to #72 pure core."
+      ]
     },
     {
       "pr": 74,
@@ -67,9 +71,12 @@
       "status": "accepted_not_merged",
       "domain": "formal_thesis_qa1_acceptance",
       "independent_acceptance_known": true,
-      "integration_status": "historical_acceptance_evidence",
-      "action": "KEEP_AS_ACCEPTED",
-      "notes": ["QA-only; not mechanically required for production candidate."]
+      "integration_status": "integrated_acceptance_regression",
+      "action": "CANDIDATE_FOR_INTEGRATION",
+      "notes": [
+        "QA1 acceptance suite restored on consolidation candidate.",
+        "Not runtime authority; required acceptance regression asset."
+      ]
     },
     {
       "pr": 75,

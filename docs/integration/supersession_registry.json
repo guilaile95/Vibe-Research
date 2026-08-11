@@ -17,19 +17,34 @@
     {
       "pr": 72,
       "head": "4f1c6674429d062490b6eaf3b4074f64214cf8b8",
-      "status": "runtime_superseded_for_integrated_authority",
-      "superseded_by": 73,
-      "superseded_by_head": "07389e4debf20bbfd61bf521d03a9aba65f7afa6",
-      "reason": "OPTION B: #73 is the sole runtime Current Thesis projection authority (I/O + store validation + router). #72 pure core is retained as pure-domain unit-test module only; not a second API authority.",
-      "authority_decision": "B",
-      "should_merge": false,
+      "status": "pure_domain_authority",
+      "superseded_by": null,
+      "reason": "OPTION A: #72 formal_thesis_projection_core is the sole pure-domain Current Thesis projection authority. Not superseded.",
+      "authority_decision": "A",
+      "role": "pure_domain_projection_authority",
+      "paired_with": 73,
+      "should_merge": true,
       "should_close_later": false,
       "should_remain_for_history": true,
-      "do_not_integrate_as_independent_api": true,
+      "do_not_integrate": false,
       "files": {
         "pure_core": "backend/formal_thesis_projection_core.py",
-        "runtime_authority": "backend/formal_thesis_projection.py"
+        "io_adapter": "backend/formal_thesis_projection.py"
       }
+    },
+    {
+      "pr": 73,
+      "head": "07389e4debf20bbfd61bf521d03a9aba65f7afa6",
+      "status": "io_adapter_delegates_to_pure_core",
+      "superseded_by": null,
+      "reason": "OPTION A: #73 is integrated I/O adapter (DB/binding/validators/API). Domain rules delegate to #72 pure core.",
+      "authority_decision": "A",
+      "role": "integrated_io_adapter",
+      "delegates_domain_to": 72,
+      "should_merge": true,
+      "should_close_later": false,
+      "should_remain_for_history": true,
+      "do_not_integrate": false
     },
     {
       "pr": 69,

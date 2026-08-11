@@ -11,10 +11,9 @@ feature/research-system-v01
 
 ```text
 stable@1be2ecba505a8108740c311c103a2c72d3bcd444
-├─ #72 pure projection core
+├─ #72 pure projection core (SOLE pure-domain projection authority — OPTION A)
 │    4f1c6674429d062490b6eaf3b4074f64214cf8b8
-│    (runtime authority decision: OPTION B → not independent API)
-└─ #73 Formal Thesis contract
+└─ #73 Formal Thesis contract (I/O adapter delegates domain projection to #72)
      07389e4debf20bbfd61bf521d03a9aba65f7afa6
      ├─ #74 QA1 acceptance (history)
      │    e1e0b78c257bdfc2e83812db8ac8215cd97696cd
@@ -136,11 +135,12 @@ Result: single exact head contains S3+Q1+H1+H2+H3 with no nontrivial file confli
 ```mermaid
 flowchart TD
   S[stable 1be2ecba]
-  S --> TH73[07389e4 #73 Thesis]
+  S --> TH73[07389e4 #73 Thesis I/O adapter]
   TH73 --> TH75[4f1d91f #75 QA2]
   TH73 --> TH76[306f973 #76 Mig]
   TH76 --> TH77[4b9aabf #77 QA3]
-  S --> TH72[4f1c667 #72 pure core OPTION B]
+  S --> TH72[4f1c667 #72 pure core OPTION A domain authority]
+  TH72 --> TH73
   S --> CL87[0444111 #87 Lineage]
   S --> FD88[24f2431 #88 Decision]
   FD88 --> TB89[eacc8d7 #89 Attr]
