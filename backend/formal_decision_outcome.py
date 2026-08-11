@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
 from frozen_decision_store import NEXT_BEST_ACTIONS, STRATEGIES, canonical_json
@@ -68,6 +69,38 @@ _EVIDENCE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
 _TRADE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _SECURITY_CODE_RE = re.compile(r"^\d{6}$")
 _FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+# ---------------------------------------------------------------------------
+# 深度冻结 / 解冻（P0-O1-R3：集中式递归机制）
+# ---------------------------------------------------------------------------
+
+def _deep_freeze(value: Any) -> Any:
+    """递归冻结：Mapping → MappingProxyType（键原样，值递归冻结）；
+    list/tuple → tuple（元素递归冻结）；原语原样。
+
+    已冻结/验证的投影持有完全不可变的结构，且与原调用方输入零共享引用。
+    """
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {key: _deep_freeze(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze(item) for item in value)
+    return value
+
+
+def _deep_unfreeze(value: Any) -> Any:
+    """递归解冻为全新普通 JSON 兼容结构：Mapping → dict、tuple → list。
+
+    每次调用返回全新对象（detached copy），调用方对返回值的修改
+    绝不影响内部冻结结构。
+    """
+    if isinstance(value, Mapping):
+        return {key: _deep_unfreeze(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_deep_unfreeze(item) for item in value]
+    return value
 
 
 class FormalDecisionOutcomeError(RuntimeError):
@@ -184,6 +217,10 @@ class PerformanceEvidence:
     measurement_end: str
     as_of: str
 
+    def __post_init__(self) -> None:
+        # P0-O1-R3：深度冻结嵌套结构（metrics），构造后不可变
+        object.__setattr__(self, "metrics", _deep_freeze(self.metrics))
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "evidence_id": self.evidence_id,
@@ -191,7 +228,7 @@ class PerformanceEvidence:
             "computation_fingerprint": self.computation_fingerprint,
             "security_code": self.security_code,
             "input_trade_ids": list(self.input_trade_ids),
-            "metrics": self.metrics,
+            "metrics": _deep_unfreeze(self.metrics),
             "measurement_start": self.measurement_start,
             "measurement_end": self.measurement_end,
             "as_of": self.as_of,
@@ -331,11 +368,15 @@ class FeedbackEvidence:
     metrics: Mapping[str, Any]
     as_of: str
 
+    def __post_init__(self) -> None:
+        # P0-O1-R3：深度冻结嵌套结构（metrics），构造后不可变
+        object.__setattr__(self, "metrics", _deep_freeze(self.metrics))
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "evidence_id": self.evidence_id,
             "security_code": self.security_code,
-            "metrics": self.metrics,
+            "metrics": _deep_unfreeze(self.metrics),
             "as_of": self.as_of,
         }
 
@@ -423,7 +464,19 @@ class FormalDecisionOutcome:
     measurement: Mapping[str, str] = field(default_factory=dict)
     reason_codes: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        # P0-O1-R3：深度冻结全部嵌套容器，投影一旦验证完成即不可变
+        for field_name in (
+            "execution_summary",
+            "behavior_deviations",
+            "performance_evidences",
+            "feedback_evidences",
+            "measurement",
+        ):
+            object.__setattr__(self, field_name, _deep_freeze(getattr(self, field_name)))
+
     def to_dict(self) -> dict[str, Any]:
+        # P0-O1-R3：递归解冻为全新普通 JSON 兼容结构（detached copy）
         return {
             "schema_version": self.schema_version,
             "decision_id": self.decision_id,
@@ -438,13 +491,13 @@ class FormalDecisionOutcome:
             "decision_next_best_action": self.decision_next_best_action,
             "attribution_ids": list(self.attribution_ids),
             "trade_ids": list(self.trade_ids),
-            "execution_summary": dict(self.execution_summary),
-            "behavior_deviations": [dict(d) for d in self.behavior_deviations],
+            "execution_summary": _deep_unfreeze(self.execution_summary),
+            "behavior_deviations": _deep_unfreeze(self.behavior_deviations),
             "performance_evidence_state": self.performance_evidence_state,
-            "performance_evidences": [dict(e) for e in self.performance_evidences],
+            "performance_evidences": _deep_unfreeze(self.performance_evidences),
             "feedback_evidence_state": self.feedback_evidence_state,
-            "feedback_evidences": [dict(e) for e in self.feedback_evidences],
-            "measurement": dict(self.measurement),
+            "feedback_evidences": _deep_unfreeze(self.feedback_evidences),
+            "measurement": _deep_unfreeze(self.measurement),
             "reason_codes": list(self.reason_codes),
         }
 

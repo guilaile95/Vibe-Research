@@ -339,9 +339,10 @@ class TestProjectionHappyPath:
             **_window(),
         )
         assert outcome.trade_ids == ("1" * 32, "2" * 32, "3" * 32)
-        assert outcome.execution_summary["executed_trade_ids"] == ["1" * 32, "2" * 32, "3" * 32]
+        assert outcome.execution_summary["executed_trade_ids"] == ("1" * 32, "2" * 32, "3" * 32)
         assert len(outcome.behavior_deviations) == 3
-        assert outcome.performance_evidences[0]["input_trade_ids"] == [
+        # to_dict() 为 JSON 兼容普通结构视图
+        assert outcome.to_dict()["performance_evidences"][0]["input_trade_ids"] == [
             "1" * 32, "2" * 32, "3" * 32,
         ]
 
@@ -373,7 +374,7 @@ class TestBlockingBinding:
             make_decision(), [_attribution()], [result], **_window(),
         )
         assert outcome.performance_evidence_state == "MEASURED"
-        assert outcome.performance_evidences[0]["input_trade_ids"] == ["1" * 32]
+        assert outcome.to_dict()["performance_evidences"][0]["input_trade_ids"] == ["1" * 32]
 
     def test_b_mixed_t1_t2_rejected(self, tmp_path):
         """PA1 结果含 T1 + 无关 T2（同证券），决策只归属 T1 → 拒绝。"""
@@ -578,7 +579,7 @@ class TestExistingAuthorityParity:
         outcome = project_outcome(
             make_decision(), attributions, [result], **_window(),
         )
-        perf = outcome.performance_evidences[0]
+        perf = outcome.to_dict()["performance_evidences"][0]
         assert perf["computation_fingerprint"] == result["computation_fingerprint"]
         assert perf["input_trade_ids"] == ["1" * 32, "2" * 32]
         assert perf["metrics"]["realized_pnl"] == _pa1_position(result, SECURITY)["realized_pnl"]
@@ -734,3 +735,141 @@ class TestR2OrderPreservation:
         d["input_trade_ids"] = ["a" * 32, "b" * 32]  # 词法序 = 错误顺序
         with pytest.raises(OutcomeValidationError):
             performance_evidence_from_dict(d, result)
+        source = inspect.getsource(fdo)
+        for forbidden in ("realized_pnl =", "return =", "benchmark", "avg_cost"):
+            assert forbidden not in source
+
+
+# ---------------------------------------------------------------------------
+# P0-O1-R3：深度不可变 / 脱离来源闭合
+# ---------------------------------------------------------------------------
+
+class TestDeepImmutability:
+    """P1：已验证投影的所有嵌套来源必须不可变（无别名可修改）。"""
+
+    def _outcome_with_perf(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        return project_outcome(
+            make_decision(), [_attribution()], [result], **_window(),
+        ), result
+
+    def test_a_perf_metrics_mutation_impossible(self, tmp_path):
+        outcome, _ = self._outcome_with_perf(tmp_path)
+        with pytest.raises(TypeError):
+            outcome.performance_evidences[0]["metrics"]["realized_pnl"] = 999.0
+        with pytest.raises(TypeError):
+            outcome.performance_evidences[0]["metrics"]["new_key"] = 1
+
+    def test_a2_nested_perf_metrics_mutation_impossible(self, tmp_path):
+        """深层嵌套（metrics 内再嵌套 dict/list）同样不可变。"""
+        result = _pa1_result(tmp_path, [make_trade()])
+        outcome = project_outcome(
+            make_decision(), [_attribution()], [result], **_window(),
+        )
+        # list 冻结为 tuple：追加不可行；dict 冻结为 proxy：赋值不可行
+        with pytest.raises((TypeError, AttributeError)):
+            outcome.performance_evidences[0]["metrics"]["data_limitations"].append("y")
+        with pytest.raises(TypeError):
+            outcome.performance_evidences[0]["metrics"]["data_limitations"] = []
+
+    def test_b_execution_summary_and_measurement_immutable(self, tmp_path):
+        outcome, _ = self._outcome_with_perf(tmp_path)
+        with pytest.raises(TypeError):
+            outcome.execution_summary["state"] = "NO_EXECUTED_TRADE"
+        with pytest.raises(TypeError):
+            outcome.measurement["as_of"] = "2099-01-01T00:00:00.000000Z"
+
+    def test_c_feedback_metrics_immutable(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        outcome = project_outcome(
+            make_decision(), [_attribution()], [result], [_feedback()], **_window(),
+        )
+        with pytest.raises(TypeError):
+            outcome.feedback_evidences[0]["metrics"]["outcome_status"] = "worse_than_expected"
+
+    def test_behavior_deviations_immutable(self, tmp_path):
+        outcome, _ = self._outcome_with_perf(tmp_path)
+        with pytest.raises(TypeError):
+            outcome.behavior_deviations[0]["trade_operation"] = "sell"
+
+
+class TestInputAlias:
+    """P1：投影后修改原始调用方输入，不得改变 outcome。"""
+
+    def test_d_mutate_pa1_result_after_projection(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        outcome = project_outcome(
+            make_decision(), [_attribution()], [result], [_feedback()], **_window(),
+        )
+        before = outcome.to_dict()
+        # 篡改原始 PA1 结果的嵌套结构
+        result["positions"][0]["realized_pnl"] = 999999.0
+        result["positions"][0]["input_trade_ids"] = ["9" * 32]
+        result["selected_trade_ids"] = ["9" * 32]
+        result["selected_trade_count"] = 1
+        assert outcome.to_dict() == before
+
+    def test_d2_mutate_attribution_and_feedback_inputs(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        attribution_dict = _attribution().to_dict()  # 以可变 dict 作为调用方输入
+        feedback_dict = _feedback().to_dict()
+        outcome = project_outcome(
+            make_decision(), [attribution_dict], [result], [feedback_dict], **_window(),
+        )
+        before = outcome.to_dict()
+        # 篡改调用方原始输入：归属 dict 与反馈 dict
+        attribution_dict["trade_operation"] = "sell"
+        feedback_dict["metrics"]["outcome_status"] = "worse_than_expected"
+        feedback_dict["as_of"] = "2099-01-01T00:00:00.000000Z"
+        assert outcome.to_dict() == before
+
+    def test_e_to_dict_returns_detached_copies(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        outcome = project_outcome(
+            make_decision(), [_attribution()], [result], [_feedback()], **_window(),
+        )
+        serialized = outcome.to_dict()
+        # 修改序列化视图的所有嵌套层
+        serialized["performance_evidences"][0]["metrics"]["realized_pnl"] = 1.0
+        serialized["performance_evidences"][0]["input_trade_ids"].append("2" * 32)
+        serialized["execution_summary"]["state"] = "NO_EXECUTED_TRADE"
+        serialized["measurement"]["as_of"] = "2099-01-01T00:00:00.000000Z"
+        serialized["feedback_evidences"][0]["metrics"]["outcome_status"] = "worse"
+        serialized["behavior_deviations"][0]["trade_operation"] = "sell"
+        # outcome 本身不变
+        fresh = outcome.to_dict()
+        assert fresh["performance_evidences"][0]["metrics"]["realized_pnl"] == 0.0
+        assert fresh["performance_evidences"][0]["input_trade_ids"] == ["1" * 32]
+        assert fresh["execution_summary"]["state"] == "EXECUTED_TRADE"
+        assert fresh["measurement"]["as_of"] == AS_OF
+        assert fresh["feedback_evidences"][0]["metrics"]["outcome_status"] == "better_than_expected"
+        assert fresh["behavior_deviations"][0]["trade_operation"] == "buy"
+
+    def test_f_deterministic_equality_preserved(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        kwargs = dict(_window())
+        out1 = project_outcome(
+            make_decision(), [_attribution()], [result], [_feedback()], **kwargs
+        )
+        out2 = project_outcome(
+            make_decision(), [_attribution()], [result], [_feedback()], **kwargs
+        )
+        assert out1 == out2
+        assert out1.to_dict() == out2.to_dict()
+
+    def test_nested_to_dict_is_plain_json(self, tmp_path):
+        """to_dict() 不暴露内部不可变容器（全部为普通 dict/list）。"""
+        result = _pa1_result(tmp_path, [make_trade()])
+        outcome = project_outcome(
+            make_decision(), [_attribution()], [result], [_feedback()], **_window(),
+        )
+        d = outcome.to_dict()
+        assert type(d["execution_summary"]) is dict
+        assert type(d["measurement"]) is dict
+        assert type(d["behavior_deviations"]) is list
+        assert type(d["behavior_deviations"][0]) is dict
+        assert type(d["performance_evidences"]) is list
+        assert type(d["performance_evidences"][0]) is dict
+        assert type(d["performance_evidences"][0]["metrics"]) is dict
+        assert type(d["performance_evidences"][0]["input_trade_ids"]) is list
+        assert type(d["feedback_evidences"][0]["metrics"]) is dict
