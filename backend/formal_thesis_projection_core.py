@@ -1,4 +1,11 @@
-"""Formal Current Thesis 纯确定性 Projection Core v0.1 —— 无 I/O、无 DB、无 AI。
+"""Pure-domain Formal Current Thesis projection core v0.1 — no I/O / DB / AI.
+
+Integration authority (Project Consolidation / OPTION B):
+- Not the runtime Current Thesis API. Routers and services must use
+  `formal_thesis_projection` (PR #73 integrated adapter).
+- This module remains pure-domain unit-test authority only (no I/O).
+
+Formal Current Thesis 纯确定性 Projection Core v0.1 —— 无 I/O、无 DB、无 AI。
 
 输入为已规范化的 immutable 值（Campaign Binding / Formal Thesis metadata /
 Frozen Original Snapshot / Canonical Thesis Deltas），输出 deterministic

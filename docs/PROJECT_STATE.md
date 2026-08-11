@@ -1,17 +1,19 @@
 # 项目当前状态
 
 > 稳定分支：`feature/research-system-v01`
-> 稳定 Head：`306b7eea779b54fb3ef6880f424025f52735c07d`
-> （Merge PR #70 Foundation Router Wiring，2026-08-09；P0 Foundation Integration 完成）
-> 当前授权任务：[`docs/NEXT_TASK.md`](NEXT_TASK.md)
+> 稳定 Head：`1be2ecba505a8108740c311c103a2c72d3bcd444`
+> （Merge PR #71 docs/p0-foundation-state-sync；P0 Foundation Integration 完成后的 state sync）
+> 当前授权任务：[`docs/NEXT_TASK.md`](NEXT_TASK.md) — **Project Consolidation Gate**
 > 产品方向：[`docs/PRODUCT_NORTH_STAR_V01.md`](PRODUCT_NORTH_STAR_V01.md)
 > 治理契约：[`docs/GOVERNANCE.md`](GOVERNANCE.md)
 > 产品候选池：[`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)
 > 工程执行规则：根目录 [`AGENTS.md`](../AGENTS.md)
+> Consolidation registry（非 runtime authority）：[`docs/integration/`](integration/)
 
-本文件是**项目状态唯一权威**：只描述稳定分支事实、当前授权与总体状态；
-不维护 worktree、临时目录、瞬时 CI 等短生命周期信息。GitHub PR/branch 的瞬时状态
-必须现场核验。
+本文件描述**稳定分支事实** + **当前 consolidation 状态**。
+Synthetic integration candidate **不等于** stable merge。
+`PR_READY = NO`，`MERGE = NO`，`REAL_USER_DB_MIGRATION = NO`。
+GitHub PR/branch 的瞬时状态必须现场核验。
 
 ---
 
@@ -165,16 +167,26 @@ P0 验收必须同时通过：
 
 ## 7. 当前授权
 
-- **当前已授权任务：无。**
-- **当前已授权产品开发任务：无。**
-- North Star v0.1 的记录/合并不自动授权 P0 代码实施。
-- PR #59 不授权 Ready/Merge。
-- 不授权付费数据、券商连接、自动交易、后台常驻监控或生产 BK-11 ingestion。
-- **P0 Phase 2 — Formal Thesis Contract：未授权**（下一候选，见 `docs/NEXT_TASK.md`）。
-- P0-S1B-D、Decision Inbox、Sell Engine、Sector Regime：未授权。
+- **当前已授权任务：Project Consolidation Gate（synthetic integration only）。**
+- **当前已授权产品 feature 开发：无。**
+- North Star unchecked items 不自动成为 implementation backlog。
+- PR #59 不授权 Ready/Merge；本 consolidation 明确 OUT_OF_SCOPE。
+- PR #64 / #69：DO NOT TOUCH。
+- PR #91：superseded by #95；不得作为 authority 集成。
+- 不授权付费数据、券商连接、自动交易、后台常驻监控或 production canonical switch。
+- **REAL_USER_DB_MIGRATION = NO**（仅允许 temp DB rehearsal）。
+- **PR_READY = NO / MERGE = NO** 直至用户 + ChatGPT 独立审查授权。
 
-下一次需要开发时，应先做只读 Gap Analysis / 工作单设计，用户明确授权后再更新
-`docs/NEXT_TASK.md`。
+### Accepted-but-not-merged（stable 外）
+
+详见 `docs/integration/accepted_heads.json`。核心域已进入 synthetic candidate：
+
+- Formal Thesis #73 + QA/migration #75/#76/#77；projection core #72 = OPTION B（非 runtime authority）
+- Decision chain #88/#89/#92/#95
+- Fact Lake S1A–S3 + Q1 + H1–H3 已在同一 integration head 收敛
+- Data Governance docs #78/#80/#81/#82
+
+这些能力 **accepted ≠ merged to stable**。
 
 ---
 

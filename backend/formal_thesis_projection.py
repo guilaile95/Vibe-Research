@@ -3,6 +3,12 @@
 只读投影：Campaign → immutable binding → Formal Thesis（frozen_revision 的
 FORMAL_FREEZE snapshot + thesis_deltas 证据链），不写任何数据。
 
+Integration authority (Project Consolidation / OPTION B):
+- This module is the **sole runtime Current Thesis projection authority**
+  (router / I/O / store-validated path).
+- `formal_thesis_projection_core` is pure-domain unit logic only and is **not**
+  a second API authority. Campaign routers must import this module, not the core.
+
 规则（fail-closed）：
 - formal_state != frozen → NOT_READY/NOT_FROZEN，绝不把 thesis_revision_at_bind
   当作 Formal Original（grandfather pre-freeze binding 允许，但未冻结不投影）；

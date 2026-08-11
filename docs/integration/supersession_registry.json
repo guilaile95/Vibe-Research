@@ -1,0 +1,46 @@
+{
+  "schema_version": "supersession_registry.v0.1",
+  "registry_role": "release_consolidation_metadata_only",
+  "entries": [
+    {
+      "pr": 91,
+      "head": "2189b78f16a90fdec3b3382931f1da58f2396596",
+      "status": "superseded",
+      "superseded_by": 95,
+      "superseded_by_head": "6461ebd27adeacf141b72f7f4b4ee3c82947523e",
+      "reason": "O1 reintegration on accepted PA1 authority with evidence-type separation supersedes original O1 provenance core.",
+      "should_merge": false,
+      "should_close_later": true,
+      "should_remain_for_history": true,
+      "do_not_integrate": true
+    },
+    {
+      "pr": 72,
+      "head": "4f1c6674429d062490b6eaf3b4074f64214cf8b8",
+      "status": "runtime_superseded_for_integrated_authority",
+      "superseded_by": 73,
+      "superseded_by_head": "07389e4debf20bbfd61bf521d03a9aba65f7afa6",
+      "reason": "OPTION B: #73 is the sole runtime Current Thesis projection authority (I/O + store validation + router). #72 pure core is retained as pure-domain unit-test module only; not a second API authority.",
+      "authority_decision": "B",
+      "should_merge": false,
+      "should_close_later": false,
+      "should_remain_for_history": true,
+      "do_not_integrate_as_independent_api": true,
+      "files": {
+        "pure_core": "backend/formal_thesis_projection_core.py",
+        "runtime_authority": "backend/formal_thesis_projection.py"
+      }
+    },
+    {
+      "pr": 69,
+      "head": "981be698100755761a33ac090fae1d209a7099db",
+      "status": "duplicate_or_superseded_draft",
+      "superseded_by": null,
+      "reason": "Historical alert-rule concurrency draft; do not auto-modify in consolidation.",
+      "should_merge": false,
+      "should_close_later": true,
+      "should_remain_for_history": true,
+      "do_not_integrate": true
+    }
+  ]
+}
