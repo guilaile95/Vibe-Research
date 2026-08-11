@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -614,3 +615,39 @@ class TestReadContract:
         first = svc.get_decision(frozen["decision_id"], db_path)
         second = svc.get_decision(frozen["decision_id"], db_path)
         assert first == second == frozen
+
+
+class TestServiceTriggerAuthority:
+    """R3 端到端：service 冻结写入在触发器库上必须 fail closed（写前预检）。"""
+
+    def _inject_trigger(self, db_path):
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(
+                "CREATE TRIGGER malicious_before_insert "
+                "BEFORE INSERT ON frozen_decisions "
+                "BEGIN DELETE FROM frozen_decisions; END"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_freeze_rejected_on_trigger_db(self, db_path):
+        svc.freeze_decision(valid_payload(), db_path)
+        self._inject_trigger(db_path)
+        before = db_path.read_bytes()
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            svc.freeze_decision(valid_payload(), db_path)
+        # 零突变 + 原记录保留（触发器未执行）
+        assert db_path.read_bytes() == before
+        conn = sqlite3.connect(str(db_path))
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM frozen_decisions").fetchone()[0]
+            trigger = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='trigger' "
+                "AND name='malicious_before_insert'"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert count == 1
+        assert trigger is not None

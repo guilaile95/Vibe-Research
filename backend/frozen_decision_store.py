@@ -390,8 +390,9 @@ def _assert_table_contract(
 def _assert_index_contract(conn: sqlite3.Connection) -> None:
     """断言必需索引契约：存在、非自动索引、指向预期表与目标列。
 
-    不依赖索引名做最终判定：名称仅用于定位，tbl_name 与 index_info
-    列集合必须与契约一致。
+    不依赖索引名做最终判定：名称仅用于定位，tbl_name / index_info 列集合
+    必须与契约一致；并通过 index_list 断言为普通 CREATE INDEX
+    （unique=0、partial=0、origin='c'），防止同名同列的唯一/部分索引冒充。
     """
     for name, (table, columns) in _EXPECTED_INDEXES.items():
         row = conn.execute(
@@ -413,6 +414,17 @@ def _assert_index_contract(conn: sqlite3.Connection) -> None:
             raise FrozenDecisionCorruptedError(
                 f"索引 {name} 目标列不符：{actual_columns}（期望 {list(columns)}）"
             )
+        # unique / partial / origin：v0.1 契约要求普通非唯一非部分 CREATE INDEX
+        index_rows = conn.execute(f"PRAGMA index_list({table})").fetchall()
+        match = [r for r in index_rows if r["name"] == name]
+        if not match:
+            raise FrozenDecisionCorruptedError(f"索引 {name} 不在 index_list 中")
+        idx = match[0]
+        if idx["unique"] != 0 or idx["partial"] != 0 or idx["origin"] != "c":
+            raise FrozenDecisionCorruptedError(
+                f"索引 {name} 不是普通 CREATE INDEX"
+                f"（unique={idx['unique']} partial={idx['partial']} origin={idx['origin']}）"
+            )
 
 
 def _assert_schema(conn: sqlite3.Connection) -> None:
@@ -421,7 +433,11 @@ def _assert_schema(conn: sqlite3.Connection) -> None:
     - 应用表集合恰为 {schema_meta, frozen_decisions}，无意外表
     - schema_meta / frozen_decisions 的列集合、声明类型、NOT NULL、PK 契约
     - decision_id 必须是 frozen_decisions PRIMARY KEY
-    - 4 个必需索引存在且指向预期表与列
+    - 4 个必需索引存在、指向预期表与列，且为普通 CREATE INDEX
+      （unique=0、partial=0、origin='c'）
+    - 零触发器：v0.1 定义零触发器，任何触发器（含对合法 INSERT 的
+      恶意 DELETE 触发器）→ fail closed
+    - 零视图：v0.1 定义零视图，任何意外视图 → fail closed
 
     任一不符 → FrozenDecisionCorruptedError（fail closed），不做任何修复。
     此函数为读 / 初始化预检 / 写预检共用的唯一权威实现。
@@ -440,6 +456,22 @@ def _assert_schema(conn: sqlite3.Connection) -> None:
         _assert_table_contract(conn, "schema_meta", _SCHEMA_META_COLUMNS)
         _assert_table_contract(conn, "frozen_decisions", _FROZEN_DECISIONS_COLUMNS)
         _assert_index_contract(conn)
+        # 可执行对象：v0.1 定义零触发器，任何触发器都必须 fail closed
+        triggers = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+        ).fetchall()
+        if triggers:
+            raise FrozenDecisionCorruptedError(
+                f"不允许存在触发器：{[r['name'] for r in triggers]}"
+            )
+        # 视图：v0.1 定义零视图，任何意外视图都必须 fail closed
+        views = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'view'"
+        ).fetchall()
+        if views:
+            raise FrozenDecisionCorruptedError(
+                f"不允许存在视图：{[r['name'] for r in views]}"
+            )
     except FrozenDecisionError:
         raise
     except sqlite3.DatabaseError:

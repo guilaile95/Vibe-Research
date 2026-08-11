@@ -724,15 +724,23 @@ class TestWritePathDefense:
 # R2：Schema Authority — 同版本结构损坏 fail closed
 # ---------------------------------------------------------------------------
 
+def _db_fingerprint(path: Path) -> dict:
+    """库文件指纹：SHA-256、大小、目录树（零突变断言用）。"""
+    return {
+        "sha": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "size": path.stat().st_size,
+        "dir": {p.name for p in path.parent.iterdir()},
+    }
+
+
+def _assert_zero_side_files(path: Path) -> None:
+    assert not Path(str(path) + "-wal").exists()
+    assert not Path(str(path) + "-shm").exists()
+    assert not Path(str(path) + "-journal").exists()
+
+
 class TestSchemaAuthority:
     """R2：schema_version 正确但应用结构损坏的库必须 fail closed。"""
-
-    def _snapshot_state(self, path: Path) -> dict:
-        return {
-            "sha": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "size": path.stat().st_size,
-            "dir": {p.name for p in path.parent.iterdir()},
-        }
 
     @pytest.mark.parametrize(
         "build_kwargs",
@@ -747,7 +755,7 @@ class TestSchemaAuthority:
     )
     def test_same_version_malformed_fails_closed_all_paths(self, db_path, build_kwargs):
         _build_malformed_db(db_path, **build_kwargs)
-        state_before = self._snapshot_state(db_path)
+        state_before = _db_fingerprint(db_path)
         # 读
         with pytest.raises(store.FrozenDecisionCorruptedError):
             store.get_frozen_decision(db_path, "decision_" + "a" * 32)
@@ -760,10 +768,8 @@ class TestSchemaAuthority:
         with pytest.raises(store.FrozenDecisionCorruptedError):
             store.write_frozen_decision(db_path, _valid_frozen())
         # 零突变：字节、大小、目录树、无 WAL/SHM/journal
-        assert self._snapshot_state(db_path) == state_before
-        assert not Path(str(db_path) + "-wal").exists()
-        assert not Path(str(db_path) + "-shm").exists()
-        assert not Path(str(db_path) + "-journal").exists()
+        assert _db_fingerprint(db_path) == state_before
+        _assert_zero_side_files(db_path)
 
     def test_duplicate_decision_id_no_pk_fails_closed(self, db_path):
         """恶意库：无 decision_id PK，插两条同 id 不同内容的合法行。"""
@@ -822,5 +828,182 @@ class TestSchemaAuthority:
         got = store.get_frozen_decision(db_path, frozen["decision_id"])
         assert got is not None
         assert len(store.list_frozen_decisions(db_path)) == 1
+        store.initialize_store(db_path)
+        store.write_frozen_decision(db_path, frozen)
+
+
+# ---------------------------------------------------------------------------
+# R3：Trigger / Schema Side-Effect Authority
+# ---------------------------------------------------------------------------
+
+_MALICIOUS_TRIGGER_SQL = (
+    "CREATE TRIGGER malicious_before_insert "
+    "BEFORE INSERT ON frozen_decisions "
+    "BEGIN DELETE FROM frozen_decisions; END"
+)
+
+
+def _add_malicious_trigger(db_path: Path) -> str:
+    """OOB 注入恶意触发器，返回其 sql 定义（供零突变比对）。"""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(_MALICIOUS_TRIGGER_SQL)
+        conn.commit()
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+            "AND name='malicious_before_insert'"
+        ).fetchone()
+        return row[0]
+    finally:
+        conn.close()
+
+
+class TestTriggerAuthority:
+    """R3：任何触发器（含恶意 DELETE 触发器）→ schema 权威层 fail closed。"""
+
+    def test_malicious_delete_trigger_write_rejected_history_preserved(self, db_path):
+        """核心阻塞测试：恶意 BEFORE INSERT DELETE 触发器不得执行。"""
+        decision_a = _write_valid(db_path)  # 初始合法决策 A
+        trigger_sql = _add_malicious_trigger(db_path)
+        state_before = _db_fingerprint(db_path)
+
+        # 追加决策 B：必须在只读 schema 预检阶段拒绝，触发器不得执行
+        decision_b = _valid_frozen(decision_id="decision_" + "b" * 32)
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.write_frozen_decision(db_path, decision_b)
+
+        # 零突变
+        assert _db_fingerprint(db_path) == state_before
+        _assert_zero_side_files(db_path)
+
+        # A 原样保留、B 不存在、触发器未执行且定义原样保留
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT decision_id, snapshot_hash FROM frozen_decisions"
+            ).fetchall()
+            count = conn.execute("SELECT COUNT(*) FROM frozen_decisions").fetchone()[0]
+            trigger = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                "AND name='malicious_before_insert'"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert count == 1
+        assert rows[0]["decision_id"] == decision_a["decision_id"]
+        assert rows[0]["snapshot_hash"] == decision_a["snapshot_hash"]
+        assert decision_b["decision_id"] not in [r["decision_id"] for r in rows]
+        assert trigger is not None and trigger[0] == trigger_sql
+
+    def test_trigger_db_all_paths_fail_closed(self, db_path):
+        _write_valid(db_path)
+        _add_malicious_trigger(db_path)
+        state_before = _db_fingerprint(db_path)
+        # 读
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.get_frozen_decision(db_path, "decision_" + "a" * 32)
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.list_frozen_decisions(db_path)
+        # 初始化
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.initialize_store(db_path)
+        # 写
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.write_frozen_decision(db_path, _valid_frozen())
+        # 零突变：库不变、触发器保留、无修复/DROP
+        assert _db_fingerprint(db_path) == state_before
+        _assert_zero_side_files(db_path)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            trigger = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                "AND name='malicious_before_insert'"
+            ).fetchone()
+            count = conn.execute("SELECT COUNT(*) FROM frozen_decisions").fetchone()[0]
+        finally:
+            conn.close()
+        assert trigger is not None
+        assert count == 1
+
+    def test_trigger_on_schema_meta_rejected(self, db_path):
+        _write_valid(db_path)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(
+                "CREATE TRIGGER meta_guard AFTER UPDATE ON schema_meta "
+                "BEGIN SELECT RAISE(ABORT, 'forbidden'); END"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.get_frozen_decision(db_path, "decision_" + "a" * 32)
+
+    def test_unique_index_same_name_rejected(self, db_path):
+        """加固：同名同列 UNIQUE 索引不得冒充 v0.1 普通索引。"""
+        _write_valid(db_path)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("DROP INDEX idx_frozen_decisions_strategy")
+            conn.execute(
+                "CREATE UNIQUE INDEX idx_frozen_decisions_strategy "
+                "ON frozen_decisions(strategy)"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.get_frozen_decision(db_path, "decision_" + "a" * 32)
+
+    def test_partial_index_rejected(self, db_path):
+        """加固：同名同列 PARTIAL 索引不得冒充 v0.1 普通索引。"""
+        _write_valid(db_path)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("DROP INDEX idx_frozen_decisions_committed_at")
+            conn.execute(
+                "CREATE INDEX idx_frozen_decisions_committed_at "
+                "ON frozen_decisions(committed_at) "
+                "WHERE committed_at > '2026-01-01'"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.list_frozen_decisions(db_path)
+
+    def test_unexpected_view_rejected(self, db_path):
+        """视图政策：v0.1 定义零视图，任何意外视图 fail closed。"""
+        _write_valid(db_path)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(
+                "CREATE VIEW frozen_decisions_shadow AS "
+                "SELECT decision_id FROM frozen_decisions"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.get_frozen_decision(db_path, "decision_" + "a" * 32)
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.initialize_store(db_path)
+
+    def test_valid_db_without_triggers_views_all_paths_ok(self, db_path):
+        frozen = _write_valid(db_path)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger'"
+            ).fetchone()[0]
+            views = conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='view'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert count == 0
+        assert views == 0
+        assert store.get_frozen_decision(db_path, frozen["decision_id"]) is not None
         store.initialize_store(db_path)
         store.write_frozen_decision(db_path, frozen)
