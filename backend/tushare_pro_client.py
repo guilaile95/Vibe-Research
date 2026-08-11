@@ -232,11 +232,7 @@ def _inspect_json_string(
         pass
 
     stripped = s.strip()
-    if (
-        (stripped.startswith("{") and stripped.endswith("}"))
-        or (stripped.startswith("[") and stripped.endswith("]"))
-        or (stripped.startswith('"') and stripped.endswith('"') and len(stripped) >= 2)
-    ):
+    if stripped.startswith(("{", "[", '"')):
         try:
             nested_obj = json.loads(
                 stripped,
