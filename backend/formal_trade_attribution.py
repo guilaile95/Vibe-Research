@@ -116,12 +116,6 @@ def to_canonical_utc(value: Any, field: str) -> str:
     )
 
 
-def _utc_now_canonical() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
-        "+00:00", "Z"
-    )
-
-
 # ---------------------------------------------------------------------------
 # 输入 A — 正式冻结决策见证独立验证
 # ---------------------------------------------------------------------------
@@ -341,6 +335,51 @@ _ATTRIBUTION_FIELDS = (
 # 除 attribution_hash 自身外的全部语义/审计字段（含 id 与时间戳）参与哈希
 _HASHED_FIELDS = tuple(f for f in _ATTRIBUTION_FIELDS if f != "attribution_hash")
 
+# 完整决策锚：同 decision_id 的所有归属记录，这些决策派生字段必须完全一致
+# （集合验证唯一权威，禁止维护手写子集）
+DECISION_ANCHOR_FIELDS = (
+    "decision_snapshot_hash",
+    "security_code",
+    "strategy",
+    "campaign_id",
+    "thesis_id",
+    "thesis_revision",
+    "decision_committed_at",
+    "decision_review_by",
+    "decision_next_best_action",
+)
+
+
+def _validate_record_semantics(record: Mapping[str, Any]) -> None:
+    """单一记录语义权威（P1-A）：时域来源必须自洽。
+
+    - decision_committed_at <= trade_created_at（一律）
+    - 已执行交易（trade_executed_at 非 None）另需：
+      decision_committed_at <= trade_executed_at
+
+    使用解析后的 UTC instant 比较（跨 Z / +00:00 格式安全）。
+    此权威由严格 from_dict 强制，杜绝序列化后篡改时间戳绕过创建路径
+    的时域校验（拒绝事后归属伪造）。
+    """
+    committed_at_dt = parse_utc_instant(
+        record["decision_committed_at"], "decision_committed_at"
+    )
+    created_at_dt = parse_utc_instant(
+        record["trade_created_at"], "trade_created_at"
+    )
+    if committed_at_dt > created_at_dt:
+        raise AttributionValidationError(
+            "时域来源不合法：决策提交时刻不得晚于交易创建时刻（拒绝事后归属）"
+        )
+    if record["trade_executed_at"] is not None:
+        executed_at_dt = parse_utc_instant(
+            record["trade_executed_at"], "trade_executed_at"
+        )
+        if committed_at_dt > executed_at_dt:
+            raise AttributionValidationError(
+                "时域来源不合法：决策提交时刻不得晚于实际执行时刻（拒绝事后归属）"
+            )
+
 
 @dataclass(frozen=True)
 class FormalTradeAttribution:
@@ -393,29 +432,29 @@ def create_attribution(
     decision: Mapping[str, Any],
     trade: Mapping[str, Any],
     *,
-    attribution_id: str | None = None,
-    created_at: str | None = None,
+    attribution_id: str,
+    created_at: str,
 ) -> FormalTradeAttribution:
-    """构造一条正式归属（纯验证 + 构造，无任何持久化）。
+    """构造一条正式归属（纯验证 + 构造，无任何持久化，确定性）。
 
     验证顺序：
     1. 决策见证独立验证（防伪造）
     2. 交易记录验证（形状 / 状态 / 作废 / 既有 thesis 引用）
     3. 证券身份严格绑定（trade.code == decision.security_code）
     4. 决策 thesis 引用与交易既有引用交叉检查
-    5. 时域来源：决策提交必须不晚于交易创建 / 执行（拒绝事后伪造归属）
-    6. 构造不可变记录 + 确定性哈希
+    5. 构造不可变记录并通过严格 from_dict（统一执行格式、哈希与时域语义
+       验证——时域来源：决策提交必须不晚于交易创建 / 执行）
 
-    ``attribution_id`` / ``created_at`` 仅显式注入时使用（测试注入），
-    否则由创建路径生成当前时刻。
+    ``attribution_id`` / ``created_at`` 必须显式提供（调用方如需 UUID，
+    显式调用 ``new_attribution_id()``）。构造函数内部不读时钟、不生成
+    身份，保证同输入 → 同记录 → 同哈希。
     """
-    if attribution_id is not None and (
-        not isinstance(attribution_id, str)
-        or not _ATTRIBUTION_ID_RE.fullmatch(attribution_id)
+    if not isinstance(attribution_id, str) or not _ATTRIBUTION_ID_RE.fullmatch(
+        attribution_id
     ):
-        raise AttributionValidationError("attribution_id：格式不合法")
-    if created_at is not None and not is_canonical_utc_timestamp(created_at):
-        raise AttributionValidationError("created_at：必须是 canonical UTC 时间戳")
+        raise AttributionValidationError("attribution_id：必填且格式必须为 trade_attribution_<32 hex>")
+    if not is_canonical_utc_timestamp(created_at):
+        raise AttributionValidationError("created_at：必填且必须是 canonical UTC 时间戳")
 
     decision_anchor = verify_frozen_decision_witness(decision)
     trade_anchor = verify_trade_record(trade)
@@ -436,23 +475,8 @@ def create_attribution(
                 "thesis 引用冲突：交易既有 thesis 引用必须与决策完全一致"
             )
 
-    # 时域来源：解析为 UTC instant 后比较（跨 Z / +00:00 格式）
-    committed_at_dt = parse_utc_instant(
-        decision_anchor["decision_committed_at"], "decision.committed_at"
-    )
-    created_at_dt = parse_utc_instant(trade_anchor["trade_created_at"], "trade.created_at")
-    if committed_at_dt > created_at_dt:
-        raise AttributionValidationError(
-            "时域来源不合法：决策提交时刻不得晚于交易创建时刻（拒绝事后归属）"
-        )
-    if (
-        trade_anchor["trade_executed_at"] is not None
-        and committed_at_dt
-        > parse_utc_instant(trade_anchor["trade_executed_at"], "trade.executed_at")
-    ):
-        raise AttributionValidationError(
-            "时域来源不合法：决策提交时刻不得晚于实际执行时刻（拒绝事后归属）"
-        )
+    # 时域来源统一由 from_dict 内的记录语义权威（_validate_record_semantics）
+    # 强制执行（创建路径与序列化路径共用同一权威）。
 
     # review_by 仅保留为证据，不参与任何有效性/失效判断（非有效性引擎）
     record: dict[str, Any] = {
@@ -472,7 +496,7 @@ def create_attribution(
         "trade_execution_status": trade_anchor["trade_execution_status"],
         "trade_executed_at": trade_anchor["trade_executed_at"],
         "trade_created_at": trade_anchor["trade_created_at"],
-        "created_at": created_at or _utc_now_canonical(),
+        "created_at": created_at,
         "schema_version": SCHEMA_VERSION,
     }
     record["attribution_hash"] = compute_attribution_hash(record)
@@ -574,6 +598,9 @@ def from_dict(record: Mapping[str, Any]) -> FormalTradeAttribution:
     if record["attribution_hash"] != compute_attribution_hash(record):
         raise AttributionValidationError("record：attribution_hash 与内容不匹配")
 
+    # 记录语义权威：时域来源自洽（创建路径与序列化路径共用）
+    _validate_record_semantics(record)
+
     return FormalTradeAttribution(**record)
 
 
@@ -586,7 +613,8 @@ def _records_to_dicts(records: Iterable[Any]) -> list[dict[str, Any]]:
     dicts: list[dict[str, Any]] = []
     for record in records:
         if isinstance(record, FormalTradeAttribution):
-            dicts.append(record.to_dict())
+            # 不信任 dataclass 类型本身：实例与 Mapping 走同一严格验证路径
+            dicts.append(from_dict(record.to_dict()).to_dict())
         elif isinstance(record, Mapping):
             dicts.append(from_dict(record).to_dict())
         else:
@@ -597,16 +625,18 @@ def _records_to_dicts(records: Iterable[Any]) -> list[dict[str, Any]]:
 
 
 def validate_attribution_set(records: Iterable[Any]) -> list[dict[str, Any]]:
-    """验证归属集合的全局约束；返回规范化 dict 列表（供投影复用）。
+    """验证归属集合并返回确定性归一化集合（唯一、有序）。
 
     拒绝：
-    - 任一条记录无效（from_dict 级严格验证失败）
+    - 任一条记录无效（from_dict 级严格验证失败，含时域语义与时序篡改）
     - 同 attribution_id 但内容冲突
     - 同 trade_id 存在多条不同归属（one trade → one decision）
-    - 同 decision_id 的归属记录身份字段不一致（security/strategy/campaign/
-      thesis/committed_at/snapshot_hash 漂移）
+    - 同 decision_id 的归属记录决策锚字段不一致（DECISION_ANCHOR_FIELDS 全量）
 
-    完全相同的重复记录视为幂等等效，不报错。结果与输入顺序无关。
+    完全一致的重复记录去重为一条逻辑归属。
+
+    返回：唯一记录按 (created_at ASC, attribution_id ASC) 排序，
+    与输入顺序和重复次数无关。
     """
     dicts = _records_to_dicts(records)
 
@@ -633,22 +663,16 @@ def validate_attribution_set(records: Iterable[Any]) -> list[dict[str, Any]]:
         decision_id = record["decision_id"]
         if decision_id in by_decision:
             prev = by_decision[decision_id]
-            for field in (
-                "decision_snapshot_hash",
-                "security_code",
-                "strategy",
-                "campaign_id",
-                "thesis_id",
-                "thesis_revision",
-                "decision_committed_at",
-            ):
+            for field in DECISION_ANCHOR_FIELDS:
                 if prev[field] != record[field]:
                     raise AttributionConflictError(
-                        f"decision_id {decision_id} 的归属记录身份字段不一致：{field}"
+                        f"decision_id {decision_id} 的归属记录决策锚字段不一致：{field}"
                     )
         by_decision[decision_id] = record
 
-    return dicts
+    # 确定性归一化集合：同 attribution_id 的完全一致重复 → 一条逻辑归属；
+    # 输出按 (created_at ASC, attribution_id ASC) 排序，与输入顺序无关
+    return _sorted_by_provenance(list(by_id.values()))
 
 
 def _sorted_by_provenance(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
