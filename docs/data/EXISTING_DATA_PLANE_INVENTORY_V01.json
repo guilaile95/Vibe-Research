@@ -1,0 +1,1591 @@
+{
+    "doc_id": "EXISTING_DATA_PLANE_INVENTORY_V01",
+    "task": "DS-R1",
+    "owner": "DeepSeek",
+    "evidence": {
+        "stable_head": "1be2ecba505a8108740c311c103a2c72d3bcd444",
+        "stable_ref": "feature/research-system-v01",
+        "pinned": true,
+        "verified_working_tree_matches": true
+    },
+    "capability_states": {
+        "INTEGRATED_STABLE": [
+            "tencent_gtimg_quotes",
+            "eastmoney_push2_snapshot",
+            "eastmoney_reportapi",
+            "eastmoney_datacenter",
+            "eastmoney_push2ex_limit_pool",
+            "akshare_lazy_layers",
+            "mootdx_kline",
+            "gstock_us_hk",
+            "hkex_northbound",
+            "rss_newsradar",
+            "local_trade_calendar_artifact",
+            "bk11_history_router_http",
+            "short_term_fact_store_read_path",
+            {
+                "target": "tushare_pro_client_and_ingestion_cli",
+                "integration_state": "INTEGRATED_STABLE",
+                "runtime_exposure": "EXPLICIT_CLI_ONLY",
+                "http_app_route": false,
+                "auto_scheduler": false,
+                "startup_ingestion": false,
+                "note": "bk11_tushare_cli is an explicit production ingestion CLI calling ingest_trade_date() from stable; code present in stable head (1be2ecba); not wired into HTTP app routes, auto scheduler, or startup ingestion"
+            }
+        ],
+        "ACCEPTED_NOT_MERGED": [
+            {
+                "target": "ds_a1",
+                "integration_state": "NOT_IN_STABLE",
+                "review_state": "ACCEPTED_NOT_MERGED",
+                "note": "independently approved but unmerged work; not IN_PROGRESS"
+            },
+            {
+                "target": "ds_h1_pr79_hithink_probe",
+                "integration_state": "NOT_IN_STABLE",
+                "review_state": "ACCEPTED_NOT_MERGED",
+                "note": "independently approved but unmerged work; not IN_PROGRESS"
+            }
+        ],
+        "RESEARCH_ONLY": [
+            "a_stock_data_skill_package",
+            "global_stock_data_skill_package",
+            "iwencai_api_key_placeholder",
+            "vr_data_proxy_placeholder"
+        ],
+        "NOT_IMPLEMENTED": [
+            "fund_institutional_holdings"
+        ]
+    },
+    "terminology": {
+        "source_owner": "the organization that owns/produces the upstream data (who owns the data); never erased by a transport wrapper",
+        "source_domain": "addressable domain/endpoint family under a source_owner (e.g. push2 vs datacenter vs push2ex under eastmoney)",
+        "transport_client": "the client/library that performs the network transport (e.g. urllib/requests/akshare/mootdx/TushareClient); a transport client may carry multiple upstreams and must NOT erase source_owner identity",
+        "entrypoint": "the exact module symbol that fetches a given dataset",
+        "counts": {
+            "source_owners": 10,
+            "provider_domains": 14,
+            "distinct_transport_clients": 4
+        },
+        "source_owners": [
+            "tencent",
+            "eastmoney",
+            "hkex",
+            "tushare",
+            "tonghuashun",
+            "cninfo",
+            "baidu",
+            "unknown",
+            "rss",
+            "local"
+        ],
+        "provenance_rules": [
+            "THS_VIA_AKSHARE: upstream=tonghuashun, transport=akshare, entrypoint=astock.financials",
+            "EASTMONEY_VIA_AKSHARE: upstream=eastmoney, transport=akshare, entrypoint=astock.stock_news / stock_fund_flow_industry",
+            "CNINFO_VIA_AKSHARE: upstream=cninfo, transport=akshare, entrypoint=astock.disclosure",
+            "TDX_VIA_MOOTDX: upstream=UNKNOWN (TDX_PROTOCOL), transport=mootdx, entrypoint=astock.kline"
+        ],
+        "definitions": {
+            "eastmoney_push2": "provider_domain of source_owner eastmoney",
+            "eastmoney_reportapi": "provider_domain of source_owner eastmoney",
+            "eastmoney_datacenter": "provider_domain of source_owner eastmoney",
+            "eastmoney_push2ex": "provider_domain of source_owner eastmoney",
+            "gstock": "transport_wrapper reusing eastmoney push2/datacenter for US/HK quotes",
+            "akshare_lazy": "transport aggregate (AKSHARE_AGGREGATE); source_owner=UNKNOWN; real upstreams via THS/EASTMONEY/CNINFO/BAIDU VIA rules",
+            "mootdx": "transport_client for TDX_PROTOCOL upstream (source_owner=UNKNOWN)",
+            "cninfo_via_akshare": "transport aggregate (AKSHARE_AGGREGATE); source_owner=UNKNOWN; real upstreams via THS/EASTMONEY/CNINFO/BAIDU VIA rules",
+            "local_static": "provider_domain/source_owner for committed local artifacts (offline trade calendar)"
+        }
+    },
+    "providers": [
+        {
+            "provider_id": "tencent_gtimg",
+            "source_owner": "tencent",
+            "transport_client": "urllib (standard library)",
+            "entrypoint": "astock.tencent_quote / astock.index_quote",
+            "module": "backend/astock.py",
+            "symbols": [
+                "tencent_quote",
+                "index_quote",
+                "_fetch_gtimg"
+            ],
+            "network": true,
+            "credential": null,
+            "status": "INTEGRATED_STABLE",
+            "consumers": [
+                "daily_review",
+                "portfolio_quotes",
+                "stock_page"
+            ]
+        },
+        {
+            "provider_id": "eastmoney_push2",
+            "source_owner": "eastmoney",
+            "transport_client": "urllib/requests via astock.em_get",
+            "entrypoint": "astock.a_share_snapshot / market_turnover_rank / board_ranking",
+            "module": "backend/astock.py;backend/gstock.py",
+            "symbols": [
+                "a_share_snapshot",
+                "market_turnover_rank",
+                "board_ranking",
+                "_push2_stock_get"
+            ],
+            "network": true,
+            "credential": null,
+            "fallback": "push2delay.eastmoney.com (same-source dual-host, labeled delayed quote)",
+            "status": "INTEGRATED_STABLE",
+            "consumers": [
+                "market_breadth",
+                "sector_facts",
+                "daily_review"
+            ]
+        },
+        {
+            "provider_id": "eastmoney_reportapi",
+            "source_owner": "eastmoney",
+            "transport_client": "requests",
+            "entrypoint": "astock._report_session",
+            "module": "backend/astock.py",
+            "symbols": [
+                "_report_session"
+            ],
+            "network": true,
+            "credential": null,
+            "status": "INTEGRATED_STABLE",
+            "consumers": [
+                "research_reports"
+            ]
+        },
+        {
+            "provider_id": "eastmoney_datacenter",
+            "source_owner": "eastmoney",
+            "transport_client": "requests",
+            "entrypoint": "astock.dividend_history / lockup_expiry / block_trade / holder_num_change / dragon_tiger_board / margin_trading",
+            "module": "backend/astock.py;backend/gstock.py",
+            "symbols": [
+                "dividend_history",
+                "lockup_expiry",
+                "block_trade",
+                "holder_num_change",
+                "dragon_tiger_board",
+                "margin_trading",
+                "_key_metrics"
+            ],
+            "network": true,
+            "credential": null,
+            "status": "INTEGRATED_STABLE",
+            "consumers": [
+                "stock_page",
+                "top_risk"
+            ]
+        },
+        {
+            "provider_id": "eastmoney_push2ex",
+            "source_owner": "eastmoney",
+            "transport_client": "urllib/requests via astock.em_get",
+            "entrypoint": "astock.em_zt_topic_pool / pool_adapter.fetch_limit_up_pool_snapshot",
+            "module": "backend/astock.py;backend/short_term_limit_up_pool_adapter.py",
+            "symbols": [
+                "em_zt_topic_pool",
+                "fetch_limit_up_pool_snapshot"
+            ],
+            "network": true,
+            "credential": null,
+            "status": "INTEGRATED_STABLE",
+            "consumers": [
+                "short_term_fact_chain",
+                "daily_review_emotion"
+            ]
+        },
+        {
+            "provider_id": "akshare_lazy",
+            "source_owner": "UNKNOWN (transport aggregate; real upstreams listed in aggregates)",
+            "transport_client": "akshare (lazy import)",
+            "entrypoint": "astock._akshare() layer 3/4/5",
+            "module": "backend/astock.py;backend/market.py",
+            "symbols": [
+                "_akshare",
+                "stock_financial_abstract_ths",
+                "stock_fund_flow_industry",
+                "valuation_percentile",
+                "disclosure"
+            ],
+            "network": true,
+            "credential": null,
+            "failure": "DependencyMissing if library absent",
+            "status": "INTEGRATED_STABLE",
+            "aggregates": "THS_VIA_AKSHARE (tonghuashun, financials), EASTMONEY_VIA_AKSHARE (eastmoney, news/sector fund flow), CNINFO_VIA_AKSHARE (cninfo, disclosure), BAIDU_VIA_AKSHARE (valuation_percentile)",
+            "consumers": [
+                "financials",
+                "sector_capital_flow",
+                "valuation"
+            ],
+            "source_domain": "AKSHARE_AGGREGATE"
+        },
+        {
+            "provider_id": "ths_via_akshare",
+            "source_owner": "tonghuashun",
+            "transport_client": "akshare (lazy import)",
+            "entrypoint": "astock._akshare() THS financial abstract (stock_financial_abstract_ths)",
+            "module": "backend/astock.py",
+            "symbols": [
+                "stock_financial_abstract_ths"
+            ],
+            "network": true,
+            "credential": null,
+            "failure": "DependencyMissing if library absent",
+            "status": "INTEGRATED_STABLE",
+            "aggregates": "THS_VIA_AKSHARE: upstream=tonghuashun, transport=akshare, entrypoint=astock.financials",
+            "consumers": [
+                "financials"
+            ]
+        },
+        {
+            "provider_id": "cninfo_via_akshare",
+            "source_owner": "cninfo",
+            "transport_client": "akshare (lazy import)",
+            "entrypoint": "astock.disclosure",
+            "module": "backend/astock.py",
+            "symbols": [
+                "disclosure"
+            ],
+            "network": true,
+            "credential": null,
+            "failure": "labeled unstable fallback; routed through akshare_lazy",
+            "status": "INTEGRATED_STABLE",
+            "consumers": [
+                "stock_page"
+            ]
+        },
+        {
+            "provider_id": "mootdx",
+            "source_owner": "UNKNOWN",
+            "transport_client": "mootdx (Quotes.factory, TDX protocol)",
+            "entrypoint": "astock.kline / astock.finance",
+            "module": "backend/astock.py",
+            "symbols": [
+                "kline",
+                "finance"
+            ],
+            "network": true,
+            "credential": null,
+            "failure": "DependencyMissing if library absent",
+            "status": "INTEGRATED_STABLE",
+            "consumers": [
+                "screener",
+                "top_risk",
+                "technical_indicators"
+            ],
+            "source_domain": "TDX_PROTOCOL"
+        },
+        {
+            "provider_id": "gstock",
+            "source_owner": "eastmoney",
+            "transport_client": "urllib/requests via astock.em_get (reused)",
+            "entrypoint": "gstock.us_hk_stock / global_indices / _key_metrics",
+            "provider_kind": "transport_wrapper",
+            "module": "backend/gstock.py",
+            "symbols": [
+                "us_hk_stock",
+                "global_indices",
+                "_key_metrics",
+                "_push2_stock_get"
+            ],
+            "network": true,
+            "credential": null,
+            "fallback": "push2 -> push2delay via _gs_host latch",
+            "status": "INTEGRATED_STABLE",
+            "note": "US/HK quotes wrapper that reuses eastmoney push2/datacenter transport; not an independent source_owner (Yahoo/SEC not merged)",
+            "consumers": [
+                "gstock_quote",
+                "global_indices"
+            ]
+        },
+        {
+            "provider_id": "hkex_official",
+            "source_owner": "hkex",
+            "transport_client": "requests",
+            "entrypoint": "northbound_capital_flow.get_northbound_capital_flow",
+            "module": "backend/northbound_capital_flow.py",
+            "symbols": [
+                "get_northbound_capital_flow",
+                "get_northbound_history"
+            ],
+            "network": true,
+            "credential": null,
+            "source_tier": "authoritative",
+            "status": "INTEGRATED_STABLE",
+            "consumers": [
+                "daily_review",
+                "frontend"
+            ]
+        },
+        {
+            "provider_id": "tushare_pro",
+            "source_owner": "tushare",
+            "transport_client": "tushare_pro_client.TushareClient",
+            "entrypoint": "tushare_pro_client.TushareClient.query / bk11_tushare_ingestion_service.ingest_trade_date",
+            "module": "backend/tushare_pro_client.py;backend/bk11_tushare_facts_adapter.py;backend/bk11_tushare_ingestion_service.py;backend/bk11_tushare_cli.py",
+            "symbols": [
+                "TushareClient.query",
+                "ALLOWED_API_NAMES",
+                "ingest_trade_date"
+            ],
+            "network": true,
+            "credential": "TUSHARE_TOKEN",
+            "allowed_apis": [
+                "daily",
+                "suspend_d",
+                "stk_limit",
+                "stock_basic"
+            ],
+            "integration_state": "INTEGRATED_STABLE",
+            "runtime_exposure": "EXPLICIT_CLI_ONLY",
+            "http_app_route": false,
+            "auto_scheduler": false,
+            "startup_ingestion": false,
+            "note": "bk11_tushare_cli is an explicit production ingestion CLI calling ingest_trade_date() from stable; code is present in stable head",
+            "consumers": [
+                "bk11_history_service",
+                "short_term_fact_store"
+            ]
+        },
+        {
+            "provider_id": "rss_newsradar",
+            "source_owner": "rss",
+            "transport_client": "requests (RSS feeds)",
+            "entrypoint": "newsradar.newsradar",
+            "module": "backend/newsradar.py",
+            "symbols": [
+                "newsradar",
+                "news_sources.json"
+            ],
+            "network": true,
+            "credential": null,
+            "status": "INTEGRATED_STABLE",
+            "consumers": [
+                "intel_digest",
+                "news_radar_health"
+            ]
+        },
+        {
+            "provider_id": "local_static",
+            "source_owner": "local",
+            "transport_client": "standard library (file read)",
+            "entrypoint": "trade_calendar.previous_trade_date",
+            "module": "backend/trade_calendar.py;backend/data/cn_a_share_trade_calendar_v01.json",
+            "symbols": [
+                "previous_trade_date"
+            ],
+            "network": false,
+            "credential": null,
+            "status": "INTEGRATED_STABLE",
+            "consumers": [
+                "limit_up_pool",
+                "northbound_staleness",
+                "ingestion"
+            ]
+        }
+    ],
+    "datasets": [
+        {
+            "dataset_candidate_id": "ds_daily_history_price",
+            "module": "backend/astock.py",
+            "symbols": [
+                "kline"
+            ],
+            "provider": "TDX_VIA_MOOTDX (source_owner=UNKNOWN, transport=mootdx)",
+            "primary_source": "UNKNOWN (TDX_PROTOCOL)",
+            "fallback": null,
+            "fetch_semantics": "snapshot",
+            "retrieval_pattern": "rolling_window_last_N_bars (mootdx; re-fetched per call; no by-date historical persistence)",
+            "history_mode": "snapshot_with_backfill",
+            "temporal_fields": [
+                "datetime",
+                "date"
+            ],
+            "adjustment": "none",
+            "revision_support": "none",
+            "by_date_retrieval": false,
+            "historical_coordinate_safe": false,
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": false,
+            "survivorship_risk": "per-code none; full-market snapshot current-listed only",
+            "provenance": "none",
+            "storage": "memory_ttl",
+            "data_health": [
+                "quotes",
+                "technical_indicators"
+            ],
+            "cross_source_reconciliation": "none",
+            "consumers": [
+                "screener",
+                "top_risk",
+                "technical_indicators"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_snapshot_price",
+            "module": "backend/astock.py;backend/gstock.py",
+            "symbols": [
+                "tencent_quote",
+                "a_share_snapshot",
+                "index_quote",
+                "market_turnover_rank",
+                "us_hk_stock"
+            ],
+            "provider": "tencent_gtimg;eastmoney_push2",
+            "primary_source": "tencent (quote) / eastmoney push2 (snapshot)",
+            "fallback": "push2->push2delay",
+            "fetch_semantics": "snapshot",
+            "history_mode": "snapshot_only",
+            "temporal_fields": [
+                "fetched_at"
+            ],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": false,
+            "historical_coordinate_safe": false,
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": false,
+            "provenance": "fetched_at only, not persisted",
+            "storage": "memory_ttl",
+            "data_health": [
+                "quotes",
+                "portfolio_quotes"
+            ],
+            "cross_source_reconciliation": "none",
+            "consumers": [
+                "daily_review",
+                "portfolio_gate",
+                "top_risk"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_trading_calendar",
+            "module": "backend/trade_calendar.py;backend/data/cn_a_share_trade_calendar_v01.json",
+            "symbols": [
+                "previous_trade_date"
+            ],
+            "provider": "local_static",
+            "primary_source": "SSE/SZSE official consensus artifact",
+            "fallback": "fail-closed None on corruption",
+            "fetch_semantics": "by_date",
+            "retrieval_pattern": "deterministic offline artifact covering 2024-01-01..2026-12-31; queried by date",
+            "history_mode": "by_date",
+            "temporal_fields": [
+                "sessions",
+                "generated_at",
+                "source_checked_at",
+                "announcement_date",
+                "retrieved_at",
+                "verification_status"
+            ],
+            "adjustment": "n/a",
+            "revision_support": "schema_version + strict validation",
+            "by_date_retrieval": true,
+            "historical_coordinate_safe": true,
+            "survivorship_handling": "n/a",
+            "revision_safe": true,
+            "point_in_time_safe": true,
+            "survivorship_risk": "n/a",
+            "provenance": "per-source URLs + retrieval timestamps + verification status",
+            "storage": "repo_json",
+            "data_health": [
+                "freshness_rule_feed"
+            ],
+            "cross_source_reconciliation": "SSE+SZSE year consensus enforced",
+            "consumers": [
+                "limit_up_pool",
+                "final_snapshot",
+                "ingestion",
+                "northbound_staleness"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_market_breadth",
+            "module": "backend/market.py",
+            "symbols": [
+                "calculate_market_breadth",
+                "get_market_breadth"
+            ],
+            "provider": "eastmoney_push2 (derived)",
+            "primary_source": "derived from a_share_snapshot",
+            "fetch_semantics": "snapshot",
+            "history_mode": "snapshot_only",
+            "temporal_fields": [
+                "fetched_at"
+            ],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": false,
+            "historical_coordinate_safe": false,
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": false,
+            "provenance": "fetched_at + warnings",
+            "storage": "memory_ttl",
+            "data_health": [
+                "daily_review_core",
+                "portfolio_gate"
+            ],
+            "cross_source_reconciliation": "none (separate Tushare variant exists)",
+            "consumers": [
+                "sentiment",
+                "daily_review",
+                "portfolio_gate"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_limit_up_pool",
+            "module": "backend/astock.py;backend/short_term_limit_up_pool_adapter.py;backend/short_term_limit_up_final_snapshot.py",
+            "symbols": [
+                "em_zt_topic_pool",
+                "fetch_limit_up_pool_snapshot",
+                "fetch_final_limit_up_pool_snapshot"
+            ],
+            "provider": "eastmoney_push2ex",
+            "primary_source": "push2ex getTopicZTPool",
+            "fallback": "none (fail-closed; empty != legal zero)",
+            "fetch_semantics": "by_date",
+            "history_mode": "snapshot_with_backfill",
+            "temporal_fields": [
+                "requested_trade_date",
+                "observed_at"
+            ],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": true,
+            "historical_coordinate_safe": "UNKNOWN",
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": "UNKNOWN",
+            "pit_note": "final producer requires date<today to emit a final version, but no vintage is retained and no revision detection exists; historical as_of correctness is not proven",
+            "provenance": "rich contract: source_id, endpoint, http_status, reason_codes, transport/parse/field flags, trade_date_match, coverage_warning",
+            "storage": "memory + fact_snapshots JSON",
+            "data_health": [
+                "bk11_history",
+                "daily_review_emotion"
+            ],
+            "cross_source_reconciliation": "yes (v0.2 Tushare count vs eastmoney row count, tolerance 3/5%)",
+            "consumers": [
+                "short_term_fact_chain",
+                "daily_review"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_limit_up_ladder_gap",
+            "module": "backend/short_term_limit_up_ladder.py;backend/short_term_ladder_gap.py",
+            "symbols": [
+                "compute_limit_up_ladder",
+                "compute_ladder_gap"
+            ],
+            "provider": "derived",
+            "primary_source": "derived from pool lbc",
+            "fetch_semantics": "snapshot",
+            "history_mode": "snapshot_only",
+            "temporal_fields": [
+                "trade_date",
+                "session",
+                "fetched_at",
+                "snapshot_at",
+                "is_final"
+            ],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": true,
+            "historical_coordinate_safe": "UNKNOWN",
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": "UNKNOWN",
+            "pit_note": "derived from pool; persisted only inside the daily-facts envelope for a single authoritative day; no vintage retained",
+            "provenance": "source_ids via producer",
+            "storage": "fact_snapshots JSON",
+            "data_health": [
+                "bk11_history"
+            ],
+            "cross_source_reconciliation": "CROSS_SOURCE_COUNT_MISMATCH at v0.2",
+            "consumers": [
+                "daily_review_emotion",
+                "bk11_history_service"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_sector_industry_facts",
+            "module": "backend/astock.py;backend/sector_research_data.py",
+            "symbols": [
+                "board_ranking",
+                "industry_comparison",
+                "concept_blocks",
+                "eastmoney_industry_reports"
+            ],
+            "provider": "eastmoney_push2;eastmoney_reportapi",
+            "primary_source": "eastmoney clist/slist",
+            "fallback": "push2->push2delay",
+            "fetch_semantics": "snapshot",
+            "history_mode": "snapshot_only",
+            "temporal_fields": [],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": false,
+            "historical_coordinate_safe": false,
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": false,
+            "provenance": "none",
+            "storage": "memory_ttl (top100 cached)",
+            "data_health": [
+                "sector_research"
+            ],
+            "cross_source_reconciliation": "none",
+            "consumers": [
+                "daily_review",
+                "sector_workbench",
+                "screener"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_sector_capital_flow",
+            "module": "backend/market.py",
+            "symbols": [
+                "_sectors"
+            ],
+            "provider": "EASTMONEY_VIA_AKSHARE (source_owner=eastmoney, transport=akshare)",
+            "primary_source": "stock_fund_flow_industry (eastmoney via akshare)",
+            "fetch_semantics": "snapshot",
+            "history_mode": "snapshot_only",
+            "temporal_fields": [],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": false,
+            "historical_coordinate_safe": false,
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": false,
+            "provenance": "none",
+            "storage": "memory_ttl",
+            "data_health": "none direct",
+            "cross_source_reconciliation": "none",
+            "consumers": [
+                "overview",
+                "frontend"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_northbound_capital_flow",
+            "module": "backend/northbound_capital_flow.py",
+            "symbols": [
+                "get_northbound_capital_flow",
+                "get_northbound_history"
+            ],
+            "provider": "hkex_official",
+            "primary_source": "HKEX Stock Connect Daily Statistics (authoritative)",
+            "fallback": "7-day lookback; fail-closed unavailable envelope",
+            "fetch_semantics": "by_date",
+            "history_mode": "snapshot_with_backfill",
+            "temporal_fields": [
+                "trade_date",
+                "fetched_at"
+            ],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": true,
+            "historical_coordinate_safe": "UNKNOWN",
+            "survivorship_handling": "n/a",
+            "revision_safe": false,
+            "point_in_time_safe": "UNKNOWN",
+            "pit_note": "HKEX official daily statistics fetched per trade_date from payload, but no vintage is retained and no restatement detection exists; historical as_of correctness is not proven",
+            "provenance": "source, source_tier, limitations (net_buy nulled)",
+            "storage": "memory only",
+            "data_health": [
+                "northbound_capital_flow"
+            ],
+            "cross_source_reconciliation": "explicitly refuses eastmoney net-buy (fail-closed boundary)",
+            "consumers": [
+                "daily_review",
+                "frontend"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_valuation",
+            "module": "backend/astock.py",
+            "symbols": [
+                "valuation_percentile",
+                "full_valuation",
+                "profit_forecast"
+            ],
+            "provider": "BAIDU_VIA_AKSHARE + THS_VIA_AKSHARE + tencent",
+            "primary_source": "baidu guba (valuation_percentile via akshare); tonghuashun+tencent (full_valuation)",
+            "fetch_semantics": "by_date",
+            "retrieval_pattern": "PE/PB series fetched then only current percentile retained",
+            "history_mode": "snapshot_with_backfill",
+            "temporal_fields": [
+                "series_date_axis",
+                "eps_26e",
+                "eps_27e"
+            ],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": true,
+            "historical_coordinate_safe": false,
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": false,
+            "provenance": "none",
+            "storage": "app _PCT_CACHE (1800s)",
+            "data_health": "none direct",
+            "cross_source_reconciliation": "none",
+            "consumers": [
+                "top_risk",
+                "stock_page"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_financial_statements",
+            "module": "backend/astock.py;backend/gstock.py",
+            "symbols": [
+                "financials",
+                "finance",
+                "_key_metrics"
+            ],
+            "provider": "THS_VIA_AKSHARE + TDX_VIA_MOOTDX + eastmoney_datacenter",
+            "primary_source": "tonghuashun (financials via akshare); TDX_PROTOCOL via mootdx (source_owner=UNKNOWN, finance unreliable for revenue); eastmoney datacenter (gstock US/HK)",
+            "fetch_semantics": "snapshot",
+            "retrieval_pattern": "latest report period only (df.iloc[-1])",
+            "history_mode": "snapshot_only",
+            "temporal_fields": [
+                "period",
+                "REPORT_DATE"
+            ],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": false,
+            "historical_coordinate_safe": false,
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": false,
+            "provenance": "none",
+            "storage": "memory",
+            "data_health": [
+                "financials (REPORTING_PERIOD)"
+            ],
+            "cross_source_reconciliation": "mootdx vs THS discrepancy documented",
+            "consumers": [
+                "stock_page"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_corporate_actions",
+            "module": "backend/astock.py",
+            "symbols": [
+                "dividend_history",
+                "lockup_expiry",
+                "block_trade",
+                "holder_num_change",
+                "dragon_tiger_board"
+            ],
+            "provider": "eastmoney_datacenter",
+            "primary_source": "eastmoney RPT_*",
+            "fetch_semantics": "by_date",
+            "history_mode": "snapshot_with_backfill",
+            "temporal_fields": [
+                "EX_DIVIDEND_DATE",
+                "FREE_DATE",
+                "TRADE_DATE",
+                "END_DATE"
+            ],
+            "adjustment": "raw facts only, never applied to price series",
+            "revision_support": "none",
+            "by_date_retrieval": true,
+            "historical_coordinate_safe": "UNKNOWN",
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": "UNKNOWN",
+            "pit_note": "historical series returned, but no as-of reconstruction and no revision detection",
+            "provenance": "none",
+            "storage": "memory",
+            "data_health": "none direct",
+            "cross_source_reconciliation": "none",
+            "consumers": [
+                "stock_page",
+                "top_risk"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_instrument_universe",
+            "module": "backend/astock.py;backend/bk11_tushare_facts_adapter.py",
+            "symbols": [
+                "a_share_snapshot",
+                "stock_basic pool"
+            ],
+            "provider": "eastmoney_push2;tushare_pro",
+            "primary_source": "eastmoney current universe / Tushare stock_basic historical",
+            "fetch_semantics": "by_date",
+            "retrieval_pattern": "eastmoney current universe is snapshot-only; Tushare stock_basic pool is by-date",
+            "history_mode": "snapshot_with_backfill",
+            "temporal_fields": [
+                "list_date",
+                "delist_date"
+            ],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": true,
+            "historical_coordinate_safe": true,
+            "survivorship_handling": true,
+            "revision_safe": false,
+            "point_in_time_safe": "UNKNOWN",
+            "pit_note": "Tushare pool builds a per-date universe via list_date/delist_date with a boundary_uncertain flag, so point-in-time correctness is not fully proven",
+            "survivorship_risk": "eastmoney current-only; tushare includes delisted with boundary handling",
+            "provenance": "tushare sources[] per-API row counts",
+            "storage": "memory",
+            "data_health": [
+                "bk11_history"
+            ],
+            "cross_source_reconciliation": "tushare internal universe reconciliation",
+            "consumers": [
+                "facts_adapter",
+                "screener"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_index_concept_membership",
+            "module": "backend/astock.py",
+            "symbols": [
+                "concept_blocks",
+                "board_ranking",
+                "hot_concepts"
+            ],
+            "provider": "eastmoney_push2",
+            "primary_source": "eastmoney slist/clist",
+            "fetch_semantics": "snapshot",
+            "retrieval_pattern": "current membership only; membership drift not captured",
+            "history_mode": "snapshot_only",
+            "temporal_fields": [],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": false,
+            "historical_coordinate_safe": false,
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": false,
+            "provenance": "none",
+            "storage": "memory",
+            "data_health": "none",
+            "cross_source_reconciliation": "none",
+            "consumers": [
+                "stock_page",
+                "screener"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_sentiment_emotion",
+            "module": "backend/market.py",
+            "symbols": [
+                "_emotion",
+                "_sentiment",
+                "get_short_term_emotion"
+            ],
+            "provider": "eastmoney_push2ex (derived)",
+            "primary_source": "derived from 4 limit pools",
+            "fetch_semantics": "snapshot",
+            "retrieval_pattern": "derived from 4 limit pools; backtracks up to 8 calendar days to resolve most recent trading day",
+            "history_mode": "snapshot_only",
+            "temporal_fields": [
+                "date",
+                "zt_count",
+                "dt_count",
+                "zb_count",
+                "max_boards",
+                "lianban_count",
+                "ladder",
+                "seal_rate",
+                "break_rate",
+                "promotion_rate"
+            ],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": false,
+            "historical_coordinate_safe": false,
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": false,
+            "provenance": "none",
+            "storage": "memory_ttl 300s",
+            "data_health": [
+                "daily_review_emotion"
+            ],
+            "cross_source_reconciliation": "none",
+            "consumers": [
+                "daily_review",
+                "overview"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_top_risk_signals",
+            "module": "backend/top_risk_service.py;backend/top_risk_config.yaml",
+            "symbols": [
+                "analyze_top_risk"
+            ],
+            "provider": "derived (astock multi-source)",
+            "primary_source": "derived from kline/valuation/fund-flow/margin",
+            "fetch_semantics": "snapshot",
+            "history_mode": "snapshot_only",
+            "temporal_fields": [
+                "trade_date",
+                "fetched_at",
+                "input_fingerprint",
+                "config_hash"
+            ],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": false,
+            "historical_coordinate_safe": false,
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": false,
+            "provenance": "input_fingerprint (sha256), decision_run_id, decision_trace.sqlite3",
+            "storage": "ttl_cache 900s + decision_trace DB",
+            "data_health": [
+                "top_risk_analysis"
+            ],
+            "cross_source_reconciliation": "none",
+            "consumers": [
+                "stock_page",
+                "decision_analytics"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_news_announcements",
+            "module": "backend/astock.py;backend/newsradar.py;backend/intel_digest_service.py",
+            "symbols": [
+                "stock_news",
+                "announcements",
+                "disclosure",
+                "newsradar",
+                "intel_digest"
+            ],
+            "provider": "eastmoney + CNINFO_VIA_AKSHARE + rss_newsradar",
+            "primary_source": "eastmoney news / cninfo (disclosure via akshare) / RSS feeds",
+            "fetch_semantics": "by_date",
+            "retrieval_pattern": "news items carry publish timestamps; some endpoints behave as snapshot fetches",
+            "history_mode": "snapshot_with_backfill",
+            "temporal_fields": [
+                "notice_date",
+                "published_at",
+                "pubDate",
+                "generated_at",
+                "digest_date"
+            ],
+            "adjustment": "n/a",
+            "revision_support": "none (digest dedup by fingerprint)",
+            "by_date_retrieval": true,
+            "historical_coordinate_safe": false,
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": false,
+            "provenance": "newsradar stats; intel digest input_fingerprint/source_refs",
+            "storage": "radar.json + intel_digest.sqlite3",
+            "data_health": [
+                "news_radar",
+                "announcements"
+            ],
+            "cross_source_reconciliation": "newsradar multi-RSS; intel fingerprint dedup",
+            "consumers": [
+                "intel_digest_page",
+                "stock_page"
+            ]
+        },
+        {
+            "dataset_candidate_id": "ds_margin_block_trade",
+            "module": "backend/astock.py",
+            "symbols": [
+                "margin_trading",
+                "block_trade"
+            ],
+            "provider": "eastmoney_datacenter",
+            "primary_source": "eastmoney RPTA_WEB_RZRQ_GGMX / RPT_DATA_BLOCKTRADE",
+            "fetch_semantics": "by_date",
+            "history_mode": "snapshot_with_backfill",
+            "temporal_fields": [
+                "DATE",
+                "TRADE_DATE"
+            ],
+            "adjustment": "n/a",
+            "revision_support": "none",
+            "by_date_retrieval": true,
+            "historical_coordinate_safe": "UNKNOWN",
+            "survivorship_handling": false,
+            "revision_safe": false,
+            "point_in_time_safe": "UNKNOWN",
+            "pit_note": "historical series returned sorted by date, but no as-of reconstruction and no revision detection",
+            "provenance": "none",
+            "storage": "memory",
+            "data_health": "none direct",
+            "cross_source_reconciliation": "none",
+            "consumers": [
+                "top_risk",
+                "stock_page"
+            ]
+        }
+    ],
+    "stores": [
+        {
+            "store_id": "short_term_facts.sqlite3",
+            "module": "backend/short_term_fact_store.py",
+            "purpose": "BK-11 daily-facts strict JSON envelope persistence",
+            "mutable": true,
+            "append_style": "keyed by (trade_date, session); legacy save_daily_facts is plain INSERT OR REPLACE (same-key overwrite); v0.2 save_daily_facts_monotonic allows partial->normal UPDATE (upgraded) and blocks normal->partial / conflicting normal->normal / v0.1-same-key; unavailable/invalid/non-final never written",
+            "schema_version": "short-term-fact-store-v0.1 (schema_meta)",
+            "timestamp_semantics": "stored_at UTC; envelope fetched_at/snapshot_at UTC ISO; trade_date",
+            "provenance": "envelope source_ids/reason_codes/limitations",
+            "integrity": "WAL, read-only conns, FactStoreCorruptedError, strict JSON validation (rejects NaN)",
+            "ds_l1_reusable": true,
+            "reuse_note": "reusable storage/validation pattern (strict envelope + monotonic quality + schema_meta); NOT a completed DS-A1 CanonicalFact layer and NOT an immutable raw-observation store - it stores validated envelopes keyed by trade_date/session with permitted partial->normal UPDATE",
+            "boundary": "EXTEND (reusable pattern; raw immutable observation and revision/vintage semantics are NEW_FOR_FACT_LAKE)",
+            "operational_only": true
+        },
+        {
+            "store_id": "decision_trace.sqlite3",
+            "module": "backend/decision_trace_store.py;backend/signal_ledger_store.py",
+            "purpose": "decision runs + evidence + explanations + signal ledger + outcomes",
+            "mutable": false,
+            "append_style": "append with idempotent rewrite (ON CONFLICT DO UPDATE)",
+            "schema_version": "decision_trace_v1",
+            "timestamp_semantics": "created_at/generated_at UTC ISO; run trade_date",
+            "provenance": "source_fingerprint/source_module/source_ref_json/quality_status",
+            "integrity": "WAL, fail-closed",
+            "ds_l1_reusable": true,
+            "operational_only": true
+        },
+        {
+            "store_id": "intel_digest.sqlite3",
+            "module": "backend/intel_digest_store.py",
+            "purpose": "AI intel daily digests",
+            "mutable": false,
+            "append_style": "insert-only with dedup (DO NOTHING)",
+            "schema_version": null,
+            "timestamp_semantics": "digest_date/generated_at/created_at",
+            "provenance": "input_fingerprint/source_refs",
+            "integrity": "fail-closed",
+            "ds_l1_reusable": true,
+            "operational_only": true
+        },
+        {
+            "store_id": "trade_ledger.sqlite3",
+            "module": "backend/trade_ledger_store.py;backend/account_event_store.py",
+            "purpose": "trade execution + account fact chain",
+            "mutable": false,
+            "append_style": "append with soft-void (voided_at)",
+            "schema_version": "lazy table creation",
+            "timestamp_semantics": "created_at/executed_at/voided_at UTC ISO; advice_trade_date",
+            "provenance": "advice_snapshot/thesis_id/origin/provenance",
+            "integrity": "fail-closed",
+            "ds_l1_reusable": true,
+            "operational_only": true
+        },
+        {
+            "store_id": "review_db",
+            "module": "backend/review_store.py;backend/decision_cockpit_store.py",
+            "purpose": "daily review snapshots + decision cockpit",
+            "mutable": false,
+            "append_style": "append; multiple versions per day (UNIQUE trade_date+payload_hash)",
+            "schema_version": null,
+            "timestamp_semantics": "generated_at/created_at Beijing; cockpit observed_at/computed_at",
+            "provenance": "payload_hash; cockpit evidence_paths/input_fingerprint",
+            "integrity": "read-only conns, FK on, fail-closed",
+            "ds_l1_reusable": true,
+            "operational_only": true
+        },
+        {
+            "store_id": "decision_feedback.sqlite3",
+            "module": "backend/decision_feedback_store.py",
+            "purpose": "advice outcome feedback",
+            "mutable": false,
+            "append_style": "append with void",
+            "schema_version": null,
+            "timestamp_semantics": "created_at/advice_generated_at/advice_trade_date/voided_at",
+            "provenance": "trade_id",
+            "integrity": "fail-closed",
+            "ds_l1_reusable": true,
+            "operational_only": true
+        },
+        {
+            "store_id": "ai_generated_results",
+            "module": "backend/ai_result_store.py",
+            "purpose": "validated AI results",
+            "mutable": true,
+            "append_style": "upsert per (result_type, trade_date)",
+            "schema_version": null,
+            "timestamp_semantics": "generated_at/created_at/updated_at",
+            "provenance": "model_provider/model_name/input_fingerprint",
+            "integrity": "fail-closed",
+            "ds_l1_reusable": true,
+            "operational_only": true
+        },
+        {
+            "store_id": "performance_attribution.sqlite3",
+            "module": "backend/performance_attribution_store.py",
+            "purpose": "P&L attribution snapshots",
+            "mutable": false,
+            "append_style": "append",
+            "schema_version": null,
+            "timestamp_semantics": "as_of_date/created_at",
+            "provenance": "none",
+            "integrity": "fail-closed",
+            "ds_l1_reusable": true,
+            "operational_only": true
+        },
+        {
+            "store_id": "alert_rules.sqlite3",
+            "module": "backend/alert_rule_store.py",
+            "purpose": "alert rule definitions + eval state",
+            "mutable": true,
+            "append_style": "versioned records",
+            "schema_version": "schema_meta",
+            "timestamp_semantics": "canonical UTC",
+            "provenance": "versioned rule",
+            "integrity": "fail-closed",
+            "ds_l1_reusable": "partial",
+            "operational_only": true
+        },
+        {
+            "store_id": "campaigns.sqlite3",
+            "module": "backend/campaign_store.py",
+            "purpose": "campaign lifecycle + thesis bindings",
+            "mutable": true,
+            "append_style": "append + transitions",
+            "schema_version": "schema_meta",
+            "timestamp_semantics": "created_at etc.",
+            "provenance": "thesis binding",
+            "integrity": "fail-closed",
+            "ds_l1_reusable": "partial",
+            "operational_only": true
+        },
+        {
+            "store_id": "evidence_thesis.db",
+            "module": "backend/evidence_thesis_store.py",
+            "purpose": "investment evidence & thesis ledger",
+            "mutable": false,
+            "append_style": "append + versioned revisions + soft delete",
+            "schema_version": "schema_meta (evidence_thesis_ledger_v1)",
+            "timestamp_semantics": "created_at/updated_at/accessed_at/source_date",
+            "provenance": "source_title/url/date, claim, classification",
+            "integrity": "integrity_check, backup_database, WAL-aware readonly snapshot, schema-version lock",
+            "ds_l1_reusable": true,
+            "operational_only": true
+        }
+    ],
+    "json_files": [
+        "data_health_events.json",
+        "cn_a_share_trade_calendar_v01.json",
+        "daily_review_latest.json",
+        "watchlist.json",
+        "portfolio.json",
+        "backend/.cache/radar.json",
+        "myreports/index.json",
+        "top_risk_config.yaml",
+        "news_sources.json"
+    ],
+    "memory_caches": [
+        "market._cached (300s shared)",
+        "daily_review._review_cache (300s single-flight)",
+        "app.TTLCache (LRU max512: _DC/_PCT/_ANN/_FIN)",
+        "app.CachedDiscovery (FIFO 20min)",
+        "top_risk_service._CACHE (900s)",
+        "ai_result_service._cached_display_trade_date"
+    ],
+    "data_health": {
+        "record_fields": 21,
+        "source_registry_size": 15,
+        "wired_adapters": [
+            "DailyReviewAdapter",
+            "PortfolioAdviceGateAdapter",
+            "PortfolioQuotesAdapter",
+            "QuotesAdapter",
+            "AnnouncementsAdapter",
+            "FinancialsAdapter",
+            "NewsRadarAdapter",
+            "SectorResearchAdapter",
+            "MyReportsAdapter",
+            "WatchlistPortfolioStorageAdapter",
+            "EvidenceLedgerAdapter",
+            "NorthboundCapitalFlowAdapter",
+            "TechnicalIndicatorsAdapter",
+            "TopRiskAnalysisAdapter",
+            "Bk11HistoryAdapter"
+        ],
+        "status_states": [
+            "normal",
+            "partial",
+            "unavailable"
+        ],
+        "reason_codes": [
+            "SOURCE_NOT_INITIALIZED",
+            "SOURCE_STALE",
+            "SOURCE_PARTIAL",
+            "SOURCE_UNAVAILABLE",
+            "SOURCE_CORRUPTED",
+            "SOURCE_SCHEMA_INCOMPATIBLE",
+            "SOURCE_TIMEOUT",
+            "SOURCE_DEGRADED",
+            "NO_HOLDINGS",
+            "HOLDING_QUOTES_UNAVAILABLE",
+            "MARKET_BREADTH_UNAVAILABLE",
+            "REVIEW_TRADE_DATE_UNAVAILABLE"
+        ],
+        "adapter_read_error_codes": [
+            "SOURCE_UNAVAILABLE",
+            "SOURCE_CORRUPTED",
+            "SOURCE_SCHEMA_INCOMPATIBLE",
+            "SOURCE_TIMEOUT"
+        ],
+        "event_source_ids": [
+            "portfolio_advice_gate",
+            "portfolio_quotes",
+            "quotes",
+            "announcements",
+            "financials",
+            "sector_research",
+            "northbound_capital_flow",
+            "technical_indicators",
+            "top_risk_analysis"
+        ],
+        "read_only": true,
+        "provides": [
+            "provider_module_availability",
+            "freshness",
+            "coverage",
+            "reason_codes",
+            "degraded_unavailable_states",
+            "read_only_health",
+            "source_metadata"
+        ],
+        "gap_classification": {
+            "dataset_level_availability": "NEW_CONTRACT_REQUIRED",
+            "observation_level_freshness": "EXTEND_EXISTING",
+            "per_observation_provenance": "NEW_CONTRACT_REQUIRED",
+            "revision_health_state": "EXTEND_EXISTING",
+            "pit_query_health": "DEFER",
+            "coverage_gap_fill": "EXTEND_EXISTING"
+        },
+        "noted_in_baseline": [
+            "stale comment says 11 adapters but registry is 15",
+            "technical_indicators_router writes northbound_capital_flow_history event not in whitelist -> silently swallowed",
+            "record_degraded / SOURCE_DEGRADED defined but no production caller",
+            "EventSourceAdapter dead code branches"
+        ]
+    },
+    "fallback_routing": {
+        "provider_fallback": [
+            {
+                "location": "astock.a_share_snapshot/board_ranking/market_turnover_rank",
+                "behavior": "push2 -> push2delay dual-host probe + latch; bounded retry (max3); labeled delayed quote, not verification"
+            },
+            {
+                "location": "gstock._push2_stock_get",
+                "behavior": "push2 -> push2delay via _gs_host latch"
+            },
+            {
+                "location": "astock lazy layers",
+                "behavior": "DependencyMissing; no runtime fallback"
+            }
+        ],
+        "dataset_level_routing": [
+            {
+                "location": "astock.financials",
+                "behavior": "static route to tonghuashun (mootdx revenue unreliable)"
+            },
+            {
+                "location": "astock.valuation_percentile",
+                "behavior": "route to baidu guba"
+            },
+            {
+                "location": "bk11_tushare_facts_adapter + short_term_daily_facts_v02",
+                "behavior": "facts from Tushare, ladder from eastmoney final producer (dual-source composition)"
+            },
+            {
+                "location": "short_term_daily_facts_v02.compute_daily_facts_v02",
+                "behavior": "dataset-level substitution via empty_ladder_proof (gated by legal_zero AND limit_up_count==0)"
+            }
+        ],
+        "cross_source_verification": [
+            {
+                "location": "short_term_daily_facts_v02 (L277-287)",
+                "behavior": "Tushare limit_up_count vs eastmoney row_count; tolerance max(3, 5%); CROSS_SOURCE_COUNT_MISMATCH downgrades to partial",
+                "note": "sole real cross-source verification in codebase"
+            }
+        ],
+        "no_silent_conflation": true,
+        "bounded_retry": [
+            {
+                "location": "tushare_pro_client",
+                "behavior": "retry only transient network / HTTP 5xx, max 2, backoff 1s/2s"
+            },
+            {
+                "location": "astock._em_get_page_with_retries",
+                "behavior": "retry only transient network errors"
+            }
+        ]
+    },
+    "duplication_hotspots": [
+        {
+            "id": "H1a",
+            "description": "limit-up pool dual entry (astock.em_zt_topic_pool vs pool_adapter)",
+            "files": [
+                "backend/astock.py:541-554",
+                "backend/short_term_limit_up_pool_adapter.py:385,467-478"
+            ],
+            "intentional": "partial",
+            "risk": "medium",
+            "classification": "CONSOLIDATE_LATER"
+        },
+        {
+            "id": "H1b",
+            "description": "industry board ranking dual implementation (board_ranking vs industry_comparison)",
+            "files": [
+                "backend/astock.py:900-1040",
+                "backend/astock.py:1287-1306"
+            ],
+            "intentional": false,
+            "risk": "medium_low",
+            "classification": "REUSE_EXISTING"
+        },
+        {
+            "id": "H1c",
+            "description": "cross-source breadth dual computation (eastmoney vs tushare)",
+            "files": [
+                "backend/market.py:369-465",
+                "backend/bk11_tushare_facts_adapter.py:330-347"
+            ],
+            "intentional": true,
+            "risk": "medium",
+            "classification": "DS_A1_BOUNDARY_NEEDED"
+        },
+        {
+            "id": "H1d",
+            "description": "limit-up count three metrics (market zt_count / tushare limit_up_count / eastmoney row_count)",
+            "files": [
+                "backend/market.py:292",
+                "backend/bk11_tushare_facts_adapter.py:363-387",
+                "backend/short_term_limit_up_pool_adapter.py"
+            ],
+            "intentional": "partial",
+            "risk": "medium",
+            "classification": "DS_A1_BOUNDARY_NEEDED"
+        },
+        {
+            "id": "H2",
+            "description": "symbol normalization 13+ paths; multi-market rules duplicated",
+            "files": [
+                "13+ files _CODE_RE",
+                "screener_models.py:157",
+                "watchlist_store.py:66",
+                "evidence_thesis_service.py:151-210",
+                "gstock.py:126-141"
+            ],
+            "intentional": "partial",
+            "risk": "medium",
+            "classification": "REUSE_EXISTING"
+        },
+        {
+            "id": "H3",
+            "description": "date/UTC parsing ~25 regex + 4 strict_parse + 4 parse_utc + inline Z->+00:00 ~10; kline normalization x2",
+            "files": [
+                "~25 files _DATE_RE",
+                "short_term_limit_up_pool_adapter.py:73",
+                "technical_indicators.py:39-74",
+                "top_risk_service.py:163-224"
+            ],
+            "intentional": false,
+            "risk": "medium",
+            "classification": "CONSOLIDATE_LATER"
+        },
+        {
+            "id": "H4",
+            "description": "multiple cache abstractions (3 memory + 2 disk)",
+            "files": [
+                "app.py:1448,1806",
+                "market.py:17-30",
+                "trade_calendar.py:46",
+                "daily_review_cache.py",
+                "newsradar.py:201-240"
+            ],
+            "intentional": false,
+            "risk": "medium_low",
+            "classification": "CONSOLIDATE_LATER"
+        },
+        {
+            "id": "H5",
+            "description": "duplicate source-health status literals + 3 error-code sets",
+            "files": [
+                "data_health_service.py:9",
+                "alert_rules.py:59-63",
+                "top_risk_schema.py:19",
+                "bk11_history_service.py:34"
+            ],
+            "intentional": "partial",
+            "risk": "medium",
+            "classification": "REUSE_EXISTING"
+        },
+        {
+            "id": "H6",
+            "description": "Tushare wrapper: NOT_DUPLICATED (single client reused)",
+            "files": [
+                "tushare_pro_client.py"
+            ],
+            "intentional": true,
+            "risk": "none",
+            "classification": "KEEP_SEPARATE"
+        },
+        {
+            "id": "H7",
+            "description": "reconciliation logic: four modules serve distinct domains",
+            "files": [
+                "short_term_daily_facts_v02.py:277-287",
+                "portfolio_advice_fact_reconciler.py",
+                "short_term_fact_compare.py:450",
+                "review_compare.py"
+            ],
+            "intentional": true,
+            "risk": "low",
+            "classification": "KEEP_SEPARATE"
+        },
+        {
+            "id": "H8",
+            "description": "dataset identity strings scattered (~30 SCHEMA_VERSION; repeated literals)",
+            "files": [
+                "~30 files SCHEMA_VERSION",
+                "short_term_limit_up_pool_adapter.py:35",
+                "short_term_daily_facts_v02.py:187,275"
+            ],
+            "intentional": false,
+            "risk": "medium_low",
+            "classification": "CONSOLIDATE_LATER"
+        },
+        {
+            "id": "HX1",
+            "description": "reason-code normalization 5 copies (distinct vocabularies)",
+            "files": [
+                "short_term_limit_up_pool_adapter.py:130",
+                "short_term_limit_up_final_snapshot.py:132",
+                "short_term_layered_promotion_coverage_gate.py:108",
+                "short_term_layered_promotion_contract_validator.py:204",
+                "short_term_ladder_gap.py:130"
+            ],
+            "intentional": true,
+            "risk": "low",
+            "classification": "KEEP_SEPARATE"
+        },
+        {
+            "id": "HX2",
+            "description": "numeric normalization 7+ modules",
+            "files": [
+                "astock.py:557,562,588",
+                "market.py:33",
+                "position_reality_service.py:147",
+                "portfolio_advice_schema.py:30,51",
+                "top_risk_evaluators.py:34",
+                "top_risk_service.py:53",
+                "trade_ledger_service.py:127"
+            ],
+            "intentional": false,
+            "risk": "medium_low",
+            "classification": "REUSE_EXISTING"
+        }
+    ],
+    "ds_l1_reuse_boundary": {
+        "ALREADY_HAVE": [
+            "data_health_freshness_coverage_reason_codes",
+            "fact_store_strict_envelope_validation_pattern",
+            "envelope_level_provenance",
+            "trade_calendar_artifact_with_validation",
+            "northbound_authority_boundary",
+            "tushare_universe_pool_list_delist",
+            "decision_trace_persistence"
+        ],
+        "EXTEND": [
+            "bk11_fact_store_to_raw_immutable_observation",
+            "fact_store_to_canonical_fact_layer",
+            "per_observation_provenance_structured",
+            "provider_transport_reuse",
+            "normalization_convergence",
+            "cross_source_reconciliation_framework"
+        ],
+        "NEW_FOR_FACT_LAKE": [
+            "raw_immutable_observation_layer",
+            "dataset_identity_provider_id_registry",
+            "temporal_contract",
+            "pit_query_as_of",
+            "revision_detection",
+            "adjustment",
+            "historical_universe_survivorship"
+        ],
+        "DO_NOT_MOVE_TO_LAKE": [
+            "data_health_events_operational_metadata",
+            "evidence_thesis_user_content",
+            "portfolio_watchlist_myreports_user_content",
+            "decision_feedback_analytics_alert_campaign_attribution_business_stores",
+            "daily_review_cache"
+        ]
+    },
+    "ds_l1_candidate_shortlist": [
+        {
+            "rank": 1,
+            "candidate": "ds_limit_up_pool_ladder",
+            "benefit": "reproducible short-term Thesis/Decision",
+            "temporal_pit_revision": "by_date retrieval; point_in_time_safe UNKNOWN (final producer for completed days but no vintage retained); legal-zero detection exists; revision detection absent",
+            "existing_reusable": "high (strict envelope store + envelope provenance + cross-source count reconciliation point)",
+            "isolation": "high (CLI ingestion, explicit only)",
+            "provenance_importance": "high",
+            "path": "EXTEND"
+        },
+        {
+            "rank": 2,
+            "candidate": "ds_daily_history_price",
+            "benefit": "highest Thesis/Decision reproducibility value",
+            "temporal_pit_revision": "needs revision/adjustment; none exists",
+            "existing_reusable": "low (no persistence, no adjustment)",
+            "isolation": "medium",
+            "provenance_importance": "high",
+            "path": "NEW_FOR_FACT_LAKE"
+        },
+        {
+            "rank": 3,
+            "candidate": "ds_northbound_capital_flow",
+            "benefit": "medium-high decision value",
+            "temporal_pit_revision": "by_date historical-coordinate retrieval; point_in_time_safe=UNKNOWN; authoritative source; no persisted vintage/revision",
+            "existing_reusable": "medium (memory only, strong discipline)",
+            "isolation": "high",
+            "provenance_importance": "high",
+            "path": "EXTEND"
+        },
+        {
+            "rank": 4,
+            "candidate": "ds_instrument_universe",
+            "benefit": "medium (universe context)",
+            "temporal_pit_revision": "list/delist historical-coordinate logic; point_in_time_safe=UNKNOWN; boundary_uncertain",
+            "existing_reusable": "medium (Tushare pool only)",
+            "isolation": "high",
+            "provenance_importance": "medium",
+            "path": "EXTEND"
+        },
+        {
+            "rank": 5,
+            "candidate": "ds_trading_calendar",
+            "benefit": "low-medium (context)",
+            "temporal_pit_revision": "deterministic PIT; strongest provenance",
+            "existing_reusable": "high (artifact + validation)",
+            "isolation": "very high",
+            "provenance_importance": "very high",
+            "path": "EXTEND (ALREADY_HAVE base)"
+        }
+    ],
+    "final_selection": "deferred to DS-A1 approval + DS-A2 closure + ChatGPT review",
+    "metadata": {
+        "r1_correction_commit": "2551dd2",
+        "pr_head": "SEE_GITHUB_PR_METADATA",
+        "self_pin_pr_head": false
+    }
+}
