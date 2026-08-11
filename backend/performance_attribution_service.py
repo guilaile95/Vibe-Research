@@ -1,10 +1,21 @@
-"""Performance attribution computation service (P2-4B).
+"""Performance attribution computation service (P2-4B / P0-PA1).
 
 按加权平均成本法从交易流水计算逐股实现盈亏与持仓成本；
 未实现盈亏仅在调用方显式提供现价时计算（不发起任何网络请求）。
+
+P0-PA1：计算结果携带精确输入来源证明（provenance）——
+
+- 每个 position 暴露 ``input_trade_ids``：该证券实际处理的精确 Trade Ledger 行
+- 结果顶层暴露 ``selected_trade_ids``：全部选中行的精确集（计算顺序）
+- ``computation_fingerprint``：确定性 SHA-256，绑定算法版本 / 日期范围 /
+  精确选中交易集 / 证券范围 / 价格输入；不含文件系统路径、环境、墙钟
+- ``authority_version``：显式权威契约（下游消费者不得信任任意 source 字符串）
+
+来源证明由计算权威自身生成，绝不允许调用方事后自报交易绑定。
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -17,19 +28,46 @@ import performance_attribution_store as store
 import trade_ledger_service as trade_svc
 
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+# Trade Ledger 权威 trade_id：32 位小写 hex，无前缀（trade_ledger_service 生成）
+_TRADE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+# 显式权威版本契约（P0-PA1）
+AUTHORITY_VERSION = "performance_attribution.v2-provenance.v0.1"
+_ALGORITHM = "weighted_avg_cost"
 
 NO_PRICE_LIMITATION = "未提供现价，未实现盈亏不可用"
 OVERSELL_LIMITATION = "卖出数量超过可用持仓，已按可用数量计算"
 NO_POSITION_LIMITATION = "存在无持仓成本基准的卖出记录，该笔实现盈亏未计入"
 
 _SELECT_TRADES = """
-SELECT code, name, operation, actual_price, actual_quantity,
+SELECT trade_id, code, name, operation, actual_price, actual_quantity,
        fee, other_cost, executed_at, created_at
   FROM trade_records
  WHERE voided_at IS NULL
    AND execution_status != 'not_executed'
    AND actual_quantity > 0
 """
+
+
+class PerformanceAttributionProvenanceError(ValueError):
+    """来源证明失败：选中行缺少/含非法 trade_id（fail closed）。
+
+    来源与指标必须一致：绝不静默跳过 ID 却使用该行参与数值计算。
+    """
+
+
+def _deterministic_json(value: Any) -> str:
+    """项目确定性 canonical JSON（stdlib）：排序键、紧凑、UTF-8、禁 NaN。
+
+    不声明完整 RFC 8785 合规；用于 computation fingerprint 的稳定序列化。
+    """
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _utc_now() -> str:
@@ -46,6 +84,16 @@ def _validate_date(val: str | None, field: str) -> str | None:
     if not isinstance(val, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", val):
         raise ValueError(f"非法 {field}，格式须为 YYYY-MM-DD")
     return val
+
+
+def _validate_trade_id(value: Any, row_index: int) -> str:
+    """按 Trade Ledger 权威校验 trade_id；缺失/非法 → fail closed。"""
+    if not isinstance(value, str) or not _TRADE_ID_RE.fullmatch(value):
+        raise PerformanceAttributionProvenanceError(
+            f"计算候选行 #{row_index} trade_id 缺失或非法"
+            f"（Trade Ledger 权威要求 32 位小写 hex 无前缀）：{value!r}"
+        )
+    return value
 
 
 def _load_trades(
@@ -77,11 +125,42 @@ def _load_trades(
             ).fetchone()
             if table is None:
                 return []
-            return [dict(r) for r in conn.execute(sql, params).fetchall()]
+            rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
         finally:
             conn.close()
     except (sqlite3.DatabaseError, sqlite3.OperationalError):
         return []
+    # 来源证明：选中行必须全部携带合法 trade_id（fail closed，不静默跳行）
+    return [
+        {**row, "trade_id": _validate_trade_id(row.get("trade_id"), index)}
+        for index, row in enumerate(rows)
+    ]
+
+
+def _computation_fingerprint(
+    *,
+    date_from: str | None,
+    date_to: str | None,
+    selected_trade_ids: list[str],
+    security_codes: list[str],
+    price_inputs: Mapping[str, float],
+) -> str:
+    """确定性 SHA-256 计算身份：绑定算法/权威版本、日期范围、精确选中
+    交易集、证券范围、价格输入。
+
+    显式排除：文件系统路径、DB 路径、环境变量、墙钟创建时间。
+    同 DB 快照 + 同参数 → 同 fingerprint。
+    """
+    payload = {
+        "authority_version": AUTHORITY_VERSION,
+        "algorithm": _ALGORITHM,
+        "date_from": date_from,
+        "date_to": date_to,
+        "selected_trade_ids": selected_trade_ids,
+        "security_codes": security_codes,
+        "price_inputs": {code: price_inputs[code] for code in sorted(price_inputs)},
+    }
+    return hashlib.sha256(_deterministic_json(payload).encode("utf-8")).hexdigest()
 
 
 def compute_attribution(
@@ -97,6 +176,7 @@ def compute_attribution(
 
     db_path = Path(trade_svc.resolve_db_path(trade_db_path))
     trades = _load_trades(db_path, date_from, date_to)
+    selected_trade_ids = [row["trade_id"] for row in trades]
 
     states: dict[str, dict[str, Any]] = {}
     for row in trades:
@@ -114,8 +194,11 @@ def compute_attribution(
                 "realized_pnl": 0.0,
                 "total_fees": 0.0,
                 "limitations": [],
+                # 精确输入来源：该证券按计算行顺序处理过的全部 trade_id
+                "input_trade_ids": [],
             }
             states[code] = st
+        st["input_trade_ids"].append(row["trade_id"])
         if row.get("name"):
             st["name"] = row["name"]
 
@@ -178,6 +261,9 @@ def compute_attribution(
                 "total_fees": round(float(st["total_fees"]), 2),
                 "unrealized_pnl": unrealized,
                 "data_limitations": list(st["limitations"]),
+                # 精确输入来源：该证券实际处理的行（计算顺序，含 oversell /
+                # no-position 等仅记录 limitation 的行；不宣称超过算法支持的强度）
+                "input_trade_ids": list(st["input_trade_ids"]),
             }
         )
 
@@ -205,10 +291,22 @@ def compute_attribution(
     ):
         limitations.append("部分持仓缺少现价，未实现盈亏不完整")
 
+    fingerprint = _computation_fingerprint(
+        date_from=date_from,
+        date_to=date_to,
+        selected_trade_ids=selected_trade_ids,
+        security_codes=sorted(p["code"] for p in positions),
+        price_inputs=prices,
+    )
+
     return {
         "as_of_date": _today(),
         "date_from": date_from,
         "date_to": date_to,
+        "authority_version": AUTHORITY_VERSION,
+        "selected_trade_ids": selected_trade_ids,
+        "selected_trade_count": len(selected_trade_ids),
+        "computation_fingerprint": fingerprint,
         "positions": positions,
         "totals": totals,
         "data_limitations": limitations,
