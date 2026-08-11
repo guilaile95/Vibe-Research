@@ -200,38 +200,36 @@ class PerformanceEvidence:
 
 def build_performance_evidence(
     pa1_result: Any,
-    position: Mapping[str, Any],
     *,
+    security_code: str,
     measurement_start: str,
     measurement_end: str,
     as_of: str,
 ) -> PerformanceEvidence:
-    """从 PA1 结果构造绩效证据（权威派生路径，无调用方自报绑定）。
+    """从 PA1 结果构造绩效证据（P0-O1-R2：精确 position 绑定，无外部注入）。
 
     - ``pa1_result`` 必须是**原始** PA1 计算结果（内部先做完整权威校验）
-    - ``position`` 必须是该 PA1 结果内的一个 position（其 code /
-      input_trade_ids 由 PA1 校验）
+    - ``security_code``：builder 自己从已验证 PA1 结果中定位精确 position，
+      要求**恰好一个**匹配（同 code 伪造 position 无法注入）
+    - ``input_trade_ids`` 直接取自 PA1 position 的计算顺序（绝不排序）
     - 时间窗口为显式输入（解析并规范化为 canonical UTC）
     """
     validated = validate_pa1_result(pa1_result)
-    position_dict = dict(position)
-    code = position_dict.get("code")
-    if not isinstance(code, str) or not _SECURITY_CODE_RE.fullmatch(code):
-        raise OutcomeValidationError("position：code 不合法")
-    if "input_trade_ids" not in position_dict or not isinstance(
-        position_dict["input_trade_ids"], list
+    if not isinstance(security_code, str) or not _SECURITY_CODE_RE.fullmatch(
+        security_code
     ):
-        raise OutcomeValidationError("position：缺少 input_trade_ids")
-
-    # position 必须确实属于该 PA1 结果（防止跨结果拼凑）
-    if not any(p.get("code") == code for p in validated["positions"]):
+        raise OutcomeValidationError("security_code：必须是 6 位数字")
+    matches = [p for p in validated["positions"] if p["code"] == security_code]
+    if not matches:
         raise OutcomeValidationError(
-            f"position({code}) 不属于该 PA1 结果"
+            f"PA1 结果不含证券 {security_code} 的 position"
         )
-    input_trade_ids = tuple(position_dict["input_trade_ids"])
-    for tid in input_trade_ids:
-        if not isinstance(tid, str) or not _TRADE_ID_RE.fullmatch(tid):
-            raise OutcomeValidationError("position：input_trade_ids 含非法 trade_id")
+    if len(matches) > 1:
+        raise OutcomeValidationError(
+            f"PA1 结果含多个证券 {security_code} 的 position（异常结果）"
+        )
+    position = matches[0]
+    input_trade_ids = tuple(position["input_trade_ids"])  # 计算顺序，精确保留
     if not input_trade_ids:
         raise OutcomeValidationError(
             "position：input_trade_ids 为空（绩效证据必须绑定非空交易集）"
@@ -239,13 +237,13 @@ def build_performance_evidence(
 
     return PerformanceEvidence(
         evidence_id=_derive_performance_evidence_id(
-            validated["computation_fingerprint"], code
+            validated["computation_fingerprint"], security_code
         ),
         authority_version=validated["authority_version"],
         computation_fingerprint=validated["computation_fingerprint"],
-        security_code=code,
+        security_code=security_code,
         input_trade_ids=input_trade_ids,
-        metrics=position_dict,
+        metrics=position,
         measurement_start=to_canonical_utc(measurement_start, "measurement_start"),
         measurement_end=to_canonical_utc(measurement_end, "measurement_end"),
         as_of=to_canonical_utc(as_of, "as_of"),
@@ -257,82 +255,63 @@ def performance_evidence_to_dict(evidence: PerformanceEvidence) -> dict[str, Any
     return evidence.to_dict()
 
 
-def performance_evidence_from_dict(record: Mapping[str, Any]) -> PerformanceEvidence:
-    """严格反序列化绩效证据：精确字段集 + 逐字段校验 + 身份派生一致性。"""
-    _PERF_FIELDS = frozenset(
-        {
-            "evidence_id",
-            "authority_version",
-            "computation_fingerprint",
-            "security_code",
-            "input_trade_ids",
-            "metrics",
-            "measurement_start",
-            "measurement_end",
-            "as_of",
-        }
-    )
+_PERF_RECORD_FIELDS = frozenset(
+    {
+        "evidence_id",
+        "authority_version",
+        "computation_fingerprint",
+        "security_code",
+        "input_trade_ids",
+        "metrics",
+        "measurement_start",
+        "measurement_end",
+        "as_of",
+    }
+)
+
+
+def performance_evidence_from_dict(
+    record: Mapping[str, Any],
+    pa1_result: Any,
+) -> PerformanceEvidence:
+    """反序列化绩效证据（P0-O1-R2）：必须提供 PA1 结果作为权威。
+
+    - record 本身**绝不能**确立 PA1 权威（禁自报 fingerprint / input_trade_ids /
+      metrics）
+    - 流程：从 record 提取 security_code 与窗口 → 用 PA1 权威派生期望证据 →
+      精确比较（含 input_trade_ids 计算顺序）→ 返回期望
+    - 任何不一致 → OutcomeValidationError（含顺序错位）
+    """
     if not isinstance(record, Mapping):
         raise OutcomeValidationError("record：必须是 Mapping")
     keys = set(record)
-    if keys != _PERF_FIELDS:
+    if keys != _PERF_RECORD_FIELDS:
         raise OutcomeValidationError(
-            f"record：字段集必须精确为 {sorted(_PERF_FIELDS)}"
+            f"record：字段集必须精确为 {sorted(_PERF_RECORD_FIELDS)}"
         )
-    if record["authority_version"] != PA1_AUTHORITY_VERSION:
-        raise OutcomeValidationError(
-            f"record：authority_version 必须精确为 {PA1_AUTHORITY_VERSION}"
-        )
-    fingerprint = record["computation_fingerprint"]
-    if not isinstance(fingerprint, str) or not _FINGERPRINT_RE.fullmatch(fingerprint):
-        raise OutcomeValidationError("record：computation_fingerprint 格式不合法")
-    evidence_id = record["evidence_id"]
-    if not isinstance(evidence_id, str) or not _EVIDENCE_ID_RE.fullmatch(evidence_id):
-        raise OutcomeValidationError("record：evidence_id 格式不合法")
     security_code = record["security_code"]
     if not isinstance(security_code, str) or not _SECURITY_CODE_RE.fullmatch(
         security_code
     ):
         raise OutcomeValidationError("record：security_code 不合法")
-    if evidence_id != _derive_performance_evidence_id(fingerprint, security_code):
-        raise OutcomeValidationError("record：evidence_id 与 (fingerprint, security) 不一致")
-    input_ids_raw = record["input_trade_ids"]
-    if not isinstance(input_ids_raw, (list, tuple)) or not input_ids_raw:
-        raise OutcomeValidationError("record：input_trade_ids 必须是非空列表")
-    input_trade_ids = tuple(
-        sorted(
-            t
-            for t in input_ids_raw
-            if isinstance(t, str) and _TRADE_ID_RE.fullmatch(t)
-        )
-    )
-    if len(input_trade_ids) != len(input_ids_raw):
-        raise OutcomeValidationError("record：input_trade_ids 含非法 trade_id")
-    metrics = record["metrics"]
-    if not isinstance(metrics, Mapping):
-        raise OutcomeValidationError("record：metrics 必须是对象")
     for ts_field in ("measurement_start", "measurement_end", "as_of"):
-        try:
-            parse_utc_instant(record[ts_field], f"record.{ts_field}")
-        except AttributionValidationError:
-            raise OutcomeValidationError(
-                f"record：{ts_field} 不是合法 UTC 时间戳"
-            ) from None
-    return PerformanceEvidence(
-        evidence_id=evidence_id,
-        authority_version=record["authority_version"],
-        computation_fingerprint=fingerprint,
+        if not isinstance(record[ts_field], str) or not record[ts_field].strip():
+            raise OutcomeValidationError(f"record：{ts_field} 必填")
+
+    # 权威派生期望证据（record 的全部权威字段均来自 PA1，窗口来自 record）
+    expected = build_performance_evidence(
+        pa1_result,
         security_code=security_code,
-        input_trade_ids=input_trade_ids,
-        metrics=metrics,
-        measurement_start=to_canonical_utc(
-            record["measurement_start"], "record.measurement_start"
-        ),
-        measurement_end=to_canonical_utc(
-            record["measurement_end"], "record.measurement_end"
-        ),
-        as_of=to_canonical_utc(record["as_of"], "record.as_of"),
+        measurement_start=record["measurement_start"],
+        measurement_end=record["measurement_end"],
+        as_of=record["as_of"],
     )
+    if dict(record) != expected.to_dict():
+        raise OutcomeValidationError(
+            "record：与 PA1 权威派生证据不一致（自报 fingerprint / trade_ids / "
+            "metrics 被拒绝，含顺序错位）"
+        )
+    return expected
 
 
 # ---------------------------------------------------------------------------
@@ -525,39 +504,40 @@ def project_outcome(
     if as_of_dt < start_dt:
         raise OutcomeValidationError("as_of 不得早于测量窗口起点")
 
-    # 绩效证据：从 PA1 结果派生（无调用方自报绑定）
+    # 绩效证据：从 PA1 结果派生（无调用方自报绑定；position 由 builder 精确定位）
     perf_by_id: dict[str, dict[str, Any]] = {}
     for pa1_raw in pa1_results:
         validated_pa1 = validate_pa1_result(pa1_raw)
-        for position in validated_pa1["positions"]:
-            if position["code"] != anchor["security_code"]:
-                continue  # 其他证券的 position 不参与本决策投影（不拒绝，仅忽略）
-            evidence = build_performance_evidence(
-                pa1_raw,
-                position,
-                measurement_start=measurement_start,
-                measurement_end=measurement_end,
-                as_of=as_of,
+        if not any(
+            p["code"] == anchor["security_code"] for p in validated_pa1["positions"]
+        ):
+            continue  # 其他证券的 PA1 结果不参与本决策投影（不拒绝，仅忽略）
+        evidence = build_performance_evidence(
+            pa1_raw,
+            security_code=anchor["security_code"],
+            measurement_start=measurement_start,
+            measurement_end=measurement_end,
+            as_of=as_of,
+        )
+        # 绑定：position 输入集必须 ⊆ 本决策归属交易集（混合 → 拒绝）
+        extra = set(evidence.input_trade_ids) - decision_trade_set
+        if extra:
+            raise OutcomeValidationError(
+                "绩效证据被拒绝：PA1 position 包含本决策归属之外的交易"
+                f"（混合证据不得拆分或部分采用）：{sorted(extra)}"
             )
-            # 绑定：position 输入集必须 ⊆ 本决策归属交易集（混合 → 拒绝）
-            extra = set(evidence.input_trade_ids) - decision_trade_set
-            if extra:
-                raise OutcomeValidationError(
-                    "绩效证据被拒绝：PA1 position 包含本决策归属之外的交易"
-                    f"（混合证据不得拆分或部分采用）：{sorted(extra)}"
+        if parse_utc_instant(
+            evidence.measurement_start, "evidence.measurement_start"
+        ) < committed_dt:
+            raise OutcomeValidationError("绩效证据测量不得先于决策提交")
+        d = performance_evidence_to_dict(evidence)
+        if evidence.evidence_id in perf_by_id:
+            if perf_by_id[evidence.evidence_id] != d:
+                raise OutcomeEvidenceConflictError(
+                    f"绩效证据 {evidence.evidence_id} 内容冲突（不做 latest-wins）"
                 )
-            if parse_utc_instant(
-                evidence.measurement_start, "evidence.measurement_start"
-            ) < committed_dt:
-                raise OutcomeValidationError("绩效证据测量不得先于决策提交")
-            d = performance_evidence_to_dict(evidence)
-            if evidence.evidence_id in perf_by_id:
-                if perf_by_id[evidence.evidence_id] != d:
-                    raise OutcomeEvidenceConflictError(
-                        f"绩效证据 {evidence.evidence_id} 内容冲突（不做 latest-wins）"
-                    )
-                continue  # 精确重复：幂等
-            perf_by_id[evidence.evidence_id] = d
+            continue  # 精确重复：幂等
+        perf_by_id[evidence.evidence_id] = d
 
     # 反馈证据：独立维度（不驱动绩效状态）
     feedback_by_id: dict[str, dict[str, Any]] = {}

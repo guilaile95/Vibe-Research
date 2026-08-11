@@ -168,7 +168,7 @@ def _pa1_position(pa1_result: dict, code: str) -> dict:
 
 def _build_evidence(pa1_result: dict, code: str = SECURITY, **window) -> PerformanceEvidence:
     position = _pa1_position(pa1_result, code)
-    return build_performance_evidence(pa1_result, position, **window)
+    return build_performance_evidence(pa1_result, security_code=code, **window)
 
 
 def _window(**overrides) -> dict:
@@ -222,12 +222,12 @@ class TestPa1ResultValidation:
             validate_pa1_result(result)
 
     def test_c_no_self_asserted_trade_ids_parameter(self, tmp_path):
-        """证据构造签名不接受调用方 trade_ids（自报绑定在 API 层即不可能）。"""
+        """构造签名不接受调用方 trade_ids 或 position 载荷（R2：position 注入关闭）。"""
         result = _pa1_result(tmp_path, [make_trade()])
         with pytest.raises(TypeError):
             build_performance_evidence(
                 result,
-                _pa1_position(result, SECURITY),
+                _pa1_position(result, SECURITY),  # 位置参数不存在
                 trade_ids=["9" * 32],
                 **_window(),
             )
@@ -262,7 +262,7 @@ class TestPerformanceEvidenceConstruction:
     def test_strict_serialization_roundtrip(self, tmp_path):
         result = _pa1_result(tmp_path, [make_trade()])
         evidence = _build_evidence(result, **_window())
-        restored = performance_evidence_from_dict(evidence.to_dict())
+        restored = performance_evidence_from_dict(evidence.to_dict(), result)
         assert restored == evidence
 
     def test_from_dict_tampered_identity_rejected(self, tmp_path):
@@ -271,11 +271,11 @@ class TestPerformanceEvidenceConstruction:
         d = evidence.to_dict()
         d["evidence_id"] = "0" * 64
         with pytest.raises(OutcomeValidationError):
-            performance_evidence_from_dict(d)
+            performance_evidence_from_dict(d, result)
         d = evidence.to_dict()
         d["authority_version"] = "x"
         with pytest.raises(OutcomeValidationError):
-            performance_evidence_from_dict(d)
+            performance_evidence_from_dict(d, result)
 
 
 # ---------------------------------------------------------------------------
@@ -588,3 +588,149 @@ class TestExistingAuthorityParity:
         source = inspect.getsource(fdo)
         for forbidden in ("realized_pnl =", "return =", "benchmark", "avg_cost"):
             assert forbidden not in source
+        source = inspect.getsource(fdo)
+        for forbidden in ("realized_pnl =", "return =", "benchmark", "avg_cost"):
+            assert forbidden not in source
+
+
+# ---------------------------------------------------------------------------
+# P0-O1-R2：position 注入闭合 + 独立证据权威闭合 + 顺序保留
+# ---------------------------------------------------------------------------
+
+class TestR2PositionInjection:
+    """P1-A：position 必须精确来自 PA1 结果（builder 按 security_code 定位）。"""
+
+    def test_a1_fake_same_code_position_rejected(self, tmp_path):
+        """真实 PA1（600519 T1 realized_pnl=真值）+ 伪造同 code position → 注入关闭。"""
+        result = _pa1_result(tmp_path, [make_trade()])
+        real_pnl = _pa1_position(result, SECURITY)["realized_pnl"]
+
+        # 构造 API 不接受 position 载荷（位置参数不存在 → TypeError）
+        fake_position = dict(_pa1_position(result, SECURITY))
+        fake_position["realized_pnl"] = real_pnl + 999999.0
+        with pytest.raises(TypeError):
+            build_performance_evidence(result, fake_position, **_window())
+
+        # 权威路径：builder 从 PA1 定位，metrics 必为真实值
+        evidence = build_performance_evidence(
+            result, security_code=SECURITY, **_window()
+        )
+        assert evidence.metrics["realized_pnl"] == real_pnl
+        assert evidence.metrics["realized_pnl"] != real_pnl + 999999.0
+
+    def test_a2_external_same_code_t2_injection_rejected(self, tmp_path):
+        """真实 PA1 position=[T1]；外部同 code [T2] → 无法注入（签名拒绝 + 校验拒绝）。"""
+        result = _pa1_result(tmp_path, [make_trade(trade_id="1" * 32)])
+        with pytest.raises(TypeError):
+            build_performance_evidence(
+                result,
+                {"code": SECURITY, "input_trade_ids": ["2" * 32]},
+                **_window(),
+            )
+        # 权威路径返回 PA1 的真实输入集 [T1]
+        evidence = build_performance_evidence(
+            result, security_code=SECURITY, **_window()
+        )
+        assert evidence.input_trade_ids == ("1" * 32,)
+
+    def test_a3_real_position_accepted(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        evidence = build_performance_evidence(
+            result, security_code=SECURITY, **_window()
+        )
+        assert evidence.security_code == SECURITY
+        assert evidence.input_trade_ids == ("1" * 32,)
+
+    def test_builder_requires_exactly_one_matching_position(self, tmp_path):
+        # 无匹配证券 → 拒绝；同 code 重复 position（异常结果）→ 拒绝
+        result = _pa1_result(tmp_path, [make_trade()])
+        with pytest.raises(OutcomeValidationError):
+            build_performance_evidence(
+                result, security_code="000858", **_window()
+            )
+        duplicated = {
+            **result,
+            "positions": result["positions"] + [dict(result["positions"][0])],
+        }
+        with pytest.raises(OutcomeValidationError):
+            build_performance_evidence(
+                duplicated, security_code=SECURITY, **_window()
+            )
+
+
+class TestR2StandaloneAuthority:
+    """P1-B：record 本身绝不能确立 PA1 权威；反序列化必须带 pa1_result。"""
+
+    def test_b1_hand_built_record_without_pa1_rejected(self, tmp_path):
+        """手工 record（正确 authority、任意 fingerprint、[T1]、任意 metrics）
+        无 PA1 结果 → 无法创建可信证据。"""
+        result = _pa1_result(tmp_path, [make_trade(trade_id="1" * 32)])
+        hand_built = {
+            "evidence_id": "0" * 64,
+            "authority_version": PA1_AUTHORITY_VERSION,
+            "computation_fingerprint": "f" * 64,  # 任意 64 hex（非真实）
+            "security_code": SECURITY,
+            "input_trade_ids": ["1" * 32],
+            "metrics": {"realized_pnl": 12345.0, "code": SECURITY},
+            "measurement_start": MEASUREMENT_START,
+            "measurement_end": MEASUREMENT_END,
+            "as_of": AS_OF,
+        }
+        # 旧签名（无 pa1_result）不存在 → TypeError
+        with pytest.raises(TypeError):
+            performance_evidence_from_dict(hand_built)
+        # 带真实 PA1 结果 → 与派生期望不符 → REJECT
+        with pytest.raises(OutcomeValidationError):
+            performance_evidence_from_dict(hand_built, result)
+
+    def test_b2_changed_metrics_rejected(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade()])
+        evidence = _build_evidence(result, **_window())
+        d = evidence.to_dict()
+        d["metrics"] = {**d["metrics"], "realized_pnl": 777.0}
+        with pytest.raises(OutcomeValidationError):
+            performance_evidence_from_dict(d, result)
+
+    def test_b3_changed_input_trade_ids_rejected(self, tmp_path):
+        result = _pa1_result(tmp_path, [make_trade(trade_id="1" * 32)])
+        evidence = _build_evidence(result, **_window())
+        d = evidence.to_dict()
+        d["input_trade_ids"] = ["2" * 32]
+        with pytest.raises(OutcomeValidationError):
+            performance_evidence_from_dict(d, result)
+
+
+class TestR2OrderPreservation:
+    """反序列化必须精确保留 PA1 计算顺序（禁 sorted）。"""
+
+    def test_order_preserved_through_roundtrip(self, tmp_path):
+        """两条交易：计算顺序（时间序）≠ 词法序 → 往返后顺序不变。"""
+        t_b = make_trade(trade_id="b" * 32, executed_at="2026-08-10T06:45:00+00:00")
+        t_a = make_trade(
+            trade_id="a" * 32, operation="sell",
+            executed_at="2026-08-10T07:00:00+00:00",
+        )
+        result = _pa1_result(tmp_path, [t_b, t_a])
+        # PA1 计算顺序：时间序 [b, a]；词法序为 [a, b]
+        assert result["selected_trade_ids"] == ["b" * 32, "a" * 32]
+
+        evidence = _build_evidence(result, **_window())
+        assert evidence.input_trade_ids == ("b" * 32, "a" * 32)
+
+        restored = performance_evidence_from_dict(evidence.to_dict(), result)
+        assert restored.input_trade_ids == ("b" * 32, "a" * 32)
+        assert restored == evidence
+
+    def test_reordered_record_rejected(self, tmp_path):
+        """顺序错位（[a, b] 而非 [b, a]）→ 与派生期望不一致 → REJECT。"""
+        t_b = make_trade(trade_id="b" * 32, executed_at="2026-08-10T06:45:00+00:00")
+        t_a = make_trade(
+            trade_id="a" * 32, operation="sell",
+            executed_at="2026-08-10T07:00:00+00:00",
+        )
+        result = _pa1_result(tmp_path, [t_b, t_a])
+        evidence = _build_evidence(result, **_window())
+        d = evidence.to_dict()
+        d["input_trade_ids"] = ["a" * 32, "b" * 32]  # 词法序 = 错误顺序
+        with pytest.raises(OutcomeValidationError):
+            performance_evidence_from_dict(d, result)
