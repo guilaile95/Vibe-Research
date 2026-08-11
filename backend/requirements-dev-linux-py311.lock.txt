@@ -37,6 +37,8 @@ curl-cffi==0.16.0
     # via akshare
 decorator==5.3.1
     # via akshare
+duckdb==1.5.5
+    # via -r requirements.txt
 et-xmlfile==2.0.0
     # via openpyxl
 fastapi==0.141.1

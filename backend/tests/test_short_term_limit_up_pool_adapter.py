@@ -53,17 +53,20 @@ def _reset_em_calls():
     yield state, fake_em_get
 
 
-def _fake_response(*, status_code=200, json_body=None, json_raises=None):
+def _fake_response(*, status_code=200, json_body=None, json_raises=None, raw_bytes=None):
     class R:
         def __init__(self):
             self.status_code = status_code
             self._json_body = json_body
             self._json_raises = json_raises
+            self.content = (
+                raw_bytes if raw_bytes is not None
+                else (b"{invalid-json" if json_raises is not None
+                      else json.dumps(json_body).encode("utf-8"))
+            )
 
         def json(self):
-            if self._json_raises is not None:
-                raise self._json_raises
-            return self._json_body
+            raise AssertionError("adapter must interpret response.content, never response.json()")
     return R()
 
 
@@ -502,6 +505,111 @@ class TestSchema:
 
 
 # ---------------------------------------------------------------------------
+# 4b. Exact raw-byte interpreter / live equivalence
+# ---------------------------------------------------------------------------
+
+class TestRawByteInterpreter:
+    OBSERVED_AT = "2026-08-04T00:00:00Z"
+
+    @staticmethod
+    def _raw(payload):
+        return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+    def test_core_is_deterministic_and_uses_injected_observed_at(self):
+        raw = self._raw({
+            "data": {"date": GOOD_DATE, "pool": [{"c": "600000", "lbc": 2}]},
+        })
+        first = adapter.interpret_limit_up_pool_response_bytes(
+            raw, requested_trade_date=GOOD_DATE, http_status=200,
+            observed_at=self.OBSERVED_AT,
+        )
+        second = adapter.interpret_limit_up_pool_response_bytes(
+            raw, requested_trade_date=GOOD_DATE, http_status=200,
+            observed_at=self.OBSERVED_AT,
+        )
+        _assert_contract_shape(first)
+        assert first == second
+        assert first["observed_at"] == self.OBSERVED_AT
+        assert first["rows"] == [{"stock_code": "600000", "lbc": 2}]
+
+    @pytest.mark.parametrize("raw", [None, "not-bytes", bytearray(b"{}"), b"\xff", b"{bad"])
+    def test_core_fails_closed_for_non_bytes_or_invalid_json(self, raw):
+        result = adapter.interpret_limit_up_pool_response_bytes(
+            raw, requested_trade_date=GOOD_DATE, http_status=200,
+            observed_at=self.OBSERVED_AT,
+        )
+        _assert_contract_shape(result)
+        assert result["status"] == "unavailable"
+        assert result["reason_codes"] == ["PARSE_ERROR"]
+
+    def test_core_fails_closed_for_oversize_bytes(self):
+        result = adapter.interpret_limit_up_pool_response_bytes(
+            b" " * (adapter._MAX_RAW_RESPONSE_BYTES + 1),
+            requested_trade_date=GOOD_DATE, http_status=200,
+            observed_at=self.OBSERVED_AT,
+        )
+        _assert_contract_shape(result)
+        assert result["reason_codes"] == ["PARSE_ERROR"]
+
+    def test_non_2xx_precedes_raw_parsing(self):
+        result = adapter.interpret_limit_up_pool_response_bytes(
+            b"\xff", requested_trade_date=GOOD_DATE, http_status=429,
+            observed_at=self.OBSERVED_AT,
+        )
+        _assert_contract_shape(result)
+        assert result["reason_codes"] == ["RATE_LIMITED"]
+        assert result["parse_success"] is False
+
+    def test_live_result_matches_core_and_never_calls_json(self, monkeypatch):
+        raw = self._raw({
+            "data": {"date": GOOD_DATE, "pool": [{"c": "000001", "lbc": 3}]},
+        })
+
+        class R:
+            status_code = 200
+            content = raw
+            json_calls = 0
+
+            def json(self):
+                self.json_calls += 1
+                raise AssertionError("must not be called")
+
+        response = R()
+        _patch_em_get(monkeypatch, lambda calls: response)
+        monkeypatch.setattr(adapter, "_now_utc_iso", lambda: self.OBSERVED_AT)
+        live = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        replay = adapter.interpret_limit_up_pool_response_bytes(
+            raw, requested_trade_date=GOOD_DATE, http_status=200,
+            observed_at=self.OBSERVED_AT,
+        )
+        _assert_contract_shape(live)
+        assert live == replay
+        assert response.json_calls == 0
+
+    def test_response_content_is_authoritative_over_json_method(self, monkeypatch):
+        raw = self._raw({
+            "data": {"date": GOOD_DATE, "pool": [{"c": "600000", "lbc": 1}]},
+        })
+
+        class R:
+            status_code = 200
+            content = raw
+            json_calls = 0
+
+            def json(self):
+                self.json_calls += 1
+                return {"data": {"date": "2020-01-02", "pool": []}}
+
+        response = R()
+        _patch_em_get(monkeypatch, lambda calls: response)
+        result = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        _assert_contract_shape(result)
+        assert result["rows"] == [{"stock_code": "600000", "lbc": 1}]
+        assert result["trade_date_match"] is True
+        assert response.json_calls == 0
+
+
+# ---------------------------------------------------------------------------
 # 5. Process-control exceptions
 # ---------------------------------------------------------------------------
 
@@ -520,23 +628,29 @@ class TestProcessControl:
         with pytest.raises(SystemExit):
             adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
 
-    def test_json_keyboard_interrupt(self, monkeypatch):
+    def test_json_keyboard_interrupt_is_not_called(self, monkeypatch):
         class R:
             status_code = 200
+            content = b'{"data":{"date":"2026-07-30","pool":[{"c":"600000","lbc":1}]}}'
+
             def json(self):
                 raise KeyboardInterrupt()
         _patch_em_get(monkeypatch, lambda calls: R())
-        with pytest.raises(KeyboardInterrupt):
-            adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        result = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        _assert_contract_shape(result)
+        assert result["status"] == "normal"
 
     def test_json_system_exit(self, monkeypatch):
         class R:
             status_code = 200
+            content = b'{"data":{"date":"2026-07-30","pool":[{"c":"600000","lbc":1}]}}'
+
             def json(self):
                 raise SystemExit(1)
         _patch_em_get(monkeypatch, lambda calls: R())
-        with pytest.raises(SystemExit):
-            adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        result = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        _assert_contract_shape(result)
+        assert result["status"] == "normal"
 
     def test_em_get_generator_exit(self, monkeypatch):
         def raise_ge(*args, **kwargs):
@@ -548,11 +662,14 @@ class TestProcessControl:
     def test_json_generator_exit(self, monkeypatch):
         class R:
             status_code = 200
+            content = b'{"data":{"date":"2026-07-30","pool":[{"c":"600000","lbc":1}]}}'
+
             def json(self):
                 raise GeneratorExit()
         _patch_em_get(monkeypatch, lambda calls: R())
-        with pytest.raises(GeneratorExit):
-            adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        result = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        _assert_contract_shape(result)
+        assert result["status"] == "normal"
 
     def test_load_calendar_generator_exit(self, monkeypatch):
         def raise_ge():
@@ -827,7 +944,7 @@ class TestDateBinding:
         ({"trade_date": GOOD_DATE_EM}, {"qdate": "20260230"}),
         ({"trade_date": GOOD_DATE}, {"date": "not-a-date"}),
         ({"trade_date": GOOD_DATE}, {"qdate": True}),
-        ({"trade_date": GOOD_DATE}, {"date": object()}),
+        ({"trade_date": GOOD_DATE}, {"date": {}}),
     ])
     def test_match_plus_invalid_cases(self, monkeypatch, payload_extra,
                                       data_extra):
