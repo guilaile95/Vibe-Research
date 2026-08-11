@@ -521,26 +521,26 @@ def test_report_period_freshness_from_fact(tmp_path):
 
 
 def test_absent_semantic_preserves_unknown(tmp_path):
+    """P1-A：显式请求的语义永不消失；值缺失 → None → H1 UNKNOWN。"""
     root, _, _ = _committed_lake(
         tmp_path, _limit_up_spec(),
         TemporalSemantics.TRADE_DATE, TRADE_DATE)
     readonly = open_existing_fact_lake(root)
+    request = _request(freshness=flha.FreshnessRequest(
+        semantics=TemporalSemantics.EFFECTIVE_AT,  # fact 无 effective_at
+        reference_at=T_UTC,
+    ))
     evidence = flha.collect_fact_lake_health_evidence(
         lake=readonly,
         dataset_spec=_limit_up_spec(),
-        request=_request(freshness=flha.FreshnessRequest(
-            semantics=TemporalSemantics.EFFECTIVE_AT,  # fact 无 effective_at
-            reference_at=T_UTC,
-        )),
+        request=request,
     )
-    assert evidence.freshness_semantics is None  # 无值不发明
+    assert evidence.freshness_semantics is TemporalSemantics.EFFECTIVE_AT  # 语义保留
+    assert evidence.freshness_value is None  # 无值不发明
     assessment = flha.assess_fact_lake_publication(
         lake=readonly,
         dataset_spec=_limit_up_spec(),
-        request=_request(freshness=flha.FreshnessRequest(
-            semantics=TemporalSemantics.EFFECTIVE_AT,
-            reference_at=T_UTC,
-        )),
+        request=request,
     )
     assert assessment.freshness == "UNKNOWN"
 
@@ -913,3 +913,245 @@ def test_adapter_source_purity():
     )
     for marker in forbidden:
         assert marker not in source, f"生产 adapter 源码包含禁止内容: {marker!r}"
+
+
+# ---------------------------------------------------------------------------
+# R1：P1-A 显式 freshness 请求永不消失（UNKNOWN 支配 coordinate CURRENT）
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("missing_semantics", [
+    TemporalSemantics.EFFECTIVE_AT,
+    TemporalSemantics.PUBLISHED_AT,
+    TemporalSemantics.OBSERVED_AT,
+])
+def test_r1a_missing_continuous_freshness_never_current(tmp_path, missing_semantics):
+    """A1/A2：显式 continuous 请求值缺失 → H1 UNKNOWN（即使 primary 坐标 expected 匹配）。"""
+    root, _, _ = _committed_lake(
+        tmp_path, _limit_up_spec(),
+        TemporalSemantics.TRADE_DATE, TRADE_DATE)
+    readonly = open_existing_fact_lake(root)
+    request = _request(
+        freshness=flha.FreshnessRequest(semantics=missing_semantics, reference_at=T_UTC),
+        expected_primary_temporal_value=TRADE_DATE,  # coordinate 会匹配 CURRENT
+    )
+    evidence = flha.collect_fact_lake_health_evidence(
+        lake=readonly,
+        dataset_spec=_limit_up_spec(),
+        request=request,
+    )
+    assert evidence.freshness_semantics is missing_semantics  # 语义保留，不消失
+    assert evidence.freshness_value is None
+    assessment = flha.assess_fact_lake_publication(
+        lake=readonly,
+        dataset_spec=_limit_up_spec(),
+        request=request,
+    )
+    assert assessment.freshness == "UNKNOWN"  # UNKNOWN 支配 coordinate CURRENT
+    assert assessment.freshness != "CURRENT"
+
+
+def test_r1a_fetched_at_missing_never_current(tmp_path):
+    """FETCHED_AT 缺失（fact 无值场景）同样 UNKNOWN 不 CURRENT。"""
+    root, _, _ = _committed_lake(
+        tmp_path, _limit_up_spec(),
+        TemporalSemantics.TRADE_DATE, TRADE_DATE)
+    readonly = open_existing_fact_lake(root)
+    request = _request(
+        freshness=flha.FreshnessRequest(
+            semantics=TemporalSemantics.FETCHED_AT,
+            reference_at="2026-08-09T04:00:00.000Z",  # reference 早于 fetched_at → 实际也应 UNKNOWN
+        ),
+        expected_primary_temporal_value=TRADE_DATE,
+    )
+    # observation.fetched_at = T_UTC，reference 早于它 → H1 fail closed（不可能时间序）
+    with pytest.raises(flha.HealthEvidenceCollectionError) as exc:
+        flha.assess_fact_lake_publication(
+            lake=readonly,
+            dataset_spec=_limit_up_spec(),
+            request=request,
+        )
+    assert exc.value.failure.code == flha.FAILURE_INTERNAL  # H1 校验失败 → adapter 兜底失败
+    # 正确参考（reference >= fetched_at）→ 语义保留 + 值存在 → 可评估
+    good = _request(
+        freshness=flha.FreshnessRequest(
+            semantics=TemporalSemantics.FETCHED_AT, reference_at=T_UTC),
+        expected_primary_temporal_value=TRADE_DATE,
+    )
+    assessment = flha.assess_fact_lake_publication(
+        lake=readonly,
+        dataset_spec=_limit_up_spec(),
+        request=good,
+    )
+    assert assessment.freshness == "CURRENT"  # 值存在 + reference 合法 + age < 3600s
+
+
+def test_r1a_non_primary_discrete_request_fail_closed(tmp_path):
+    """A3：limit-up primary=TRADE_DATE，请求 REPORT_PERIOD → 显式 BAD_ARGUMENT，绝不 CURRENT。"""
+    root, _, _ = _committed_lake(
+        tmp_path, _limit_up_spec(),
+        TemporalSemantics.TRADE_DATE, TRADE_DATE)
+    readonly = open_existing_fact_lake(root)
+    request = _request(
+        freshness=flha.FreshnessRequest(semantics=TemporalSemantics.REPORT_PERIOD),
+        expected_primary_temporal_value=TRADE_DATE,
+    )
+    with pytest.raises(flha.HealthEvidenceCollectionError) as exc:
+        flha.assess_fact_lake_publication(
+            lake=readonly,
+            dataset_spec=_limit_up_spec(),
+            request=request,
+        )
+    assert exc.value.failure.code == flha.FAILURE_BAD_ARGUMENT
+
+
+def test_r1a_discrete_request_matching_primary_works(tmp_path):
+    """请求语义 == primary → 正常采集精确值；expected 匹配 → 合法 CURRENT。"""
+    root, _, fact = _committed_lake(
+        tmp_path, _limit_up_spec(),
+        TemporalSemantics.TRADE_DATE, TRADE_DATE)
+    readonly = open_existing_fact_lake(root)
+    request = _request(
+        freshness=flha.FreshnessRequest(semantics=TemporalSemantics.TRADE_DATE),
+        expected_primary_temporal_value=TRADE_DATE,
+    )
+    evidence = flha.collect_fact_lake_health_evidence(
+        lake=readonly,
+        dataset_spec=_limit_up_spec(),
+        request=request,
+    )
+    assert evidence.freshness_semantics is TemporalSemantics.TRADE_DATE
+    assert evidence.freshness_value == fact.trade_date
+    assessment = flha.assess_fact_lake_publication(
+        lake=readonly,
+        dataset_spec=_limit_up_spec(),
+        request=request,
+    )
+    assert assessment.freshness == "CURRENT"  # primary 坐标匹配 → 合法 CURRENT
+
+
+def test_r1a_financial_non_primary_discrete_request_fail_closed(tmp_path):
+    """financial primary=REPORT_PERIOD，请求 TRADE_DATE → BAD_ARGUMENT（对称矩阵）。"""
+    root, _, _ = _committed_lake(
+        tmp_path, _financial_spec(),
+        TemporalSemantics.REPORT_PERIOD, REPORT_PERIOD)
+    readonly = open_existing_fact_lake(root)
+    request = _request(freshness=flha.FreshnessRequest(
+        semantics=TemporalSemantics.TRADE_DATE))
+    with pytest.raises(flha.HealthEvidenceCollectionError) as exc:
+        flha.assess_fact_lake_publication(
+            lake=readonly,
+            dataset_spec=_financial_spec(),
+            request=request,
+        )
+    assert exc.value.failure.code == flha.FAILURE_BAD_ARGUMENT
+
+
+def test_r1a_invalid_freshness_request_bad_argument(tmp_path):
+    """严格请求校验：非法 freshness 类型 / semantics / reference_at → BAD_ARGUMENT 非 INTERNAL。"""
+    root, _, _ = _committed_lake(
+        tmp_path, _limit_up_spec(),
+        TemporalSemantics.TRADE_DATE, TRADE_DATE)
+    readonly = open_existing_fact_lake(root)
+    # 非法 freshness 类型（str 而非 FreshnessRequest）
+    with pytest.raises(flha.HealthEvidenceCollectionError) as exc:
+        flha.collect_fact_lake_health_evidence(
+            lake=readonly,
+            dataset_spec=_limit_up_spec(),
+            request=_request(freshness="not-a-freshness-request"),
+        )
+    assert exc.value.failure.code == flha.FAILURE_BAD_ARGUMENT
+    # 非法 semantics 类型
+    with pytest.raises(flha.HealthEvidenceCollectionError) as exc:
+        flha.collect_fact_lake_health_evidence(
+            lake=readonly,
+            dataset_spec=_limit_up_spec(),
+            request=_request(freshness=flha.FreshnessRequest(
+                semantics="trade_date")),
+        )
+    assert exc.value.failure.code == flha.FAILURE_BAD_ARGUMENT
+    # reference_at 非法（非 canonical UTC）
+    with pytest.raises(flha.HealthEvidenceCollectionError) as exc:
+        flha.collect_fact_lake_health_evidence(
+            lake=readonly,
+            dataset_spec=_limit_up_spec(),
+            request=_request(freshness=flha.FreshnessRequest(
+                semantics=TemporalSemantics.EFFECTIVE_AT,
+                reference_at="not-a-timestamp")),
+        )
+    assert exc.value.failure.code == flha.FAILURE_BAD_ARGUMENT
+    # 不可能时间（2026-02-31）同样 BAD_ARGUMENT
+    with pytest.raises(flha.HealthEvidenceCollectionError) as exc:
+        flha.collect_fact_lake_health_evidence(
+            lake=readonly,
+            dataset_spec=_limit_up_spec(),
+            request=_request(freshness=flha.FreshnessRequest(
+                semantics=TemporalSemantics.EFFECTIVE_AT,
+                reference_at="2026-02-31T00:00:00.000Z")),
+        )
+    assert exc.value.failure.code == flha.FAILURE_BAD_ARGUMENT
+
+
+# ---------------------------------------------------------------------------
+# R1：P1-B 通用 JSON 对账去重（JSONValue dict/list 不可哈希修复）
+# ---------------------------------------------------------------------------
+
+def _nested_recon(status: ReconciliationStatus, *, delta: dict | None = None) -> ReconciliationResult:
+    left = {"nested": {"a": 1, "b": [1, 2, {"c": 3}]}}
+    right = ["x", {"y": 2}, 3]
+    evidence = {"outer": {"inner": [1, {"z": True}]}}
+    if delta:
+        left = dict(left)
+        left["nested"] = dict(left["nested"])
+        left["nested"]["b"] = list(left["nested"]["b"])
+        left["nested"]["b"][2] = dict(left["nested"]["b"][2])
+        left["nested"]["b"][2].update(delta)
+    return ReconciliationResult(
+        dataset_id="ds_limit_up_pool",
+        status=status,
+        comparison_policy_id="pol-1",
+        comparison_policy_version="1",
+        comparison_evidence=evidence,
+        left_observation_id=OBS_ID,
+        right_observation_id="obs_" + "c" * 32,
+        left_value=left,
+        right_value=right,
+        reason_codes=(),
+    )
+
+
+def test_r1b_nested_json_duplicate_idempotent(tmp_path):
+    """B1：两条精确重复 bound result（nested dict/list）→ 收集成功、一个 result、无 INTERNAL。"""
+    root, _, _ = _committed_lake(
+        tmp_path, _limit_up_spec(),
+        TemporalSemantics.TRADE_DATE, TRADE_DATE)
+    lake = open_existing_fact_lake(root, readonly=False)
+    result = _nested_recon(ReconciliationStatus.MATCH)
+    lake.append_reconciliation(result)
+    lake.append_reconciliation(result)
+    readonly = open_existing_fact_lake(root)
+    evidence = flha.collect_fact_lake_health_evidence(
+        lake=readonly,
+        dataset_spec=_limit_up_spec(),
+        request=_request(),
+    )
+    assert evidence.reconciliation_result is not None
+    assert evidence.reconciliation_result.status is ReconciliationStatus.MATCH
+    assert evidence.reconciliation_result.left_value == result.left_value
+
+
+def test_r1b_nested_json_difference_ambiguous(tmp_path):
+    """B2：nested 值差一个 → RECONCILIATION_AMBIGUOUS，不是 INTERNAL、不是 winner。"""
+    root, _, _ = _committed_lake(
+        tmp_path, _limit_up_spec(),
+        TemporalSemantics.TRADE_DATE, TRADE_DATE)
+    lake = open_existing_fact_lake(root, readonly=False)
+    lake.append_reconciliation(_nested_recon(ReconciliationStatus.MATCH))
+    lake.append_reconciliation(_nested_recon(ReconciliationStatus.MATCH, delta={"x": 99}))
+    readonly = open_existing_fact_lake(root)
+    with pytest.raises(flha.HealthEvidenceCollectionError) as exc:
+        flha.collect_fact_lake_health_evidence(
+            lake=readonly,
+            dataset_spec=_limit_up_spec(),
+            request=_request(),
+        )
+    assert exc.value.failure.code == flha.FAILURE_RECONCILIATION_AMBIGUOUS

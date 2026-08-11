@@ -29,10 +29,14 @@ Health Core（H1）：
 - **零时钟**：不读墙钟 / mtime / 序 / vintage 推断新鲜度；只有调用方显式
   提供 ``freshness_semantics`` 与 ``freshness_reference_at`` 时，才按精确语义
   从 committed source 采集对应值（FETCHED_AT 来自 observation.fetched_at；
-  TRADE_DATE/REPORT_PERIOD 来自 fact 精确坐标；无值 → None → H1 保持 UNKNOWN）。
+  TRADE_DATE/REPORT_PERIOD 来自 fact 精确坐标；无值 → ``freshness_value=None``，
+  **语义永不消失** → H1 continuous=UNKNOWN 支配 coordinate CURRENT）。
+  非 primary 离散语义请求 → 显式 ``BAD_ARGUMENT`` fail closed（H1 v0.1 只评估
+  primary 离散坐标，绝不 CURRENT 替换）。
 - **对账 harvest**：只从 ``list_reconciliations`` 采集与当前 fact
   ``source_observation_ids`` 绑定的结果；0 个 → None（H1 用 persisted 状态）；
-  1 个唯一语义 → 提供给 H1；多个精确重复 → 确定性去重；多个不同 → 失败
+  1 个唯一语义 → 提供给 H1；多个精确重复（完整 ``result.to_dict()`` 的
+  canonical 序列化身份）→ 确定性去重；多个不同 → 失败
   ``RECONCILIATION_AMBIGUOUS``。绝不 latest/sequence/winner 选择。
 - **replay**：Fact Lake Store v3 无通用跨数据集 replay 公共权威 →
   ``replay_state = NOT_RUN``（REPLAY_COLLECTION = NOT_RUN_BY_GENERIC_ADAPTER_V01）。
@@ -54,6 +58,8 @@ from data_contracts import (
 from fact_lake_health import (
     FactLakeHealthAssessment,
     FactLakeHealthEvidence,
+    HealthValidationError,
+    _require_utc,
     assess_publication_health,
 )
 from fact_lake_store import (
@@ -184,13 +190,40 @@ def _require_nonempty_text(value: Any, field: str) -> str:
 
 def _require_publication_id(request: HealthCollectionRequest) -> None:
     if not isinstance(request, HealthCollectionRequest):
-        raise TypeError("request 必须是 HealthCollectionRequest")
+        raise HealthEvidenceCollectionError(HealthEvidenceCollectionFailure(
+            code=FAILURE_BAD_ARGUMENT,
+            detail="request 必须是 HealthCollectionRequest",
+        ))
     _require_nonempty_text(request.publication_id, "publication_id")
     if request.expected_primary_temporal_value is not None:
         _require_nonempty_text(
             request.expected_primary_temporal_value,
             "expected_primary_temporal_value",
         )
+    # P1-A：严格校验显式新鲜度请求（非法 → BAD_ARGUMENT，绝不 INTERNAL）
+    freshness = request.freshness
+    if freshness is None:
+        return
+    if not isinstance(freshness, FreshnessRequest):
+        raise HealthEvidenceCollectionError(HealthEvidenceCollectionFailure(
+            code=FAILURE_BAD_ARGUMENT,
+            detail="request.freshness 必须是 FreshnessRequest 或 None",
+        ))
+    if not isinstance(freshness.semantics, TemporalSemantics):
+        raise HealthEvidenceCollectionError(HealthEvidenceCollectionFailure(
+            code=FAILURE_BAD_ARGUMENT,
+            detail="FreshnessRequest.semantics 必须是 TemporalSemantics",
+        ))
+    if freshness.semantics in _CONTINUOUS_SEMANTICS and \
+            freshness.reference_at is not None:
+        # 复用 H1 的 canonical UTC 校验权威（不建立第二套时间戳权威）
+        try:
+            _require_utc(freshness.reference_at, "FreshnessRequest.reference_at")
+        except HealthValidationError as exc:
+            raise HealthEvidenceCollectionError(HealthEvidenceCollectionFailure(
+                code=FAILURE_BAD_ARGUMENT,
+                detail=f"FreshnessRequest.reference_at 非法: {exc}",
+            )) from exc
 
 
 def _normalize_failure(exc: BaseException, fallback_code: str) -> HealthEvidenceCollectionFailure:
@@ -225,26 +258,22 @@ def _harvest_reconciliation(
     lake: FactLake,
     bound: Sequence[ReconciliationResult],
 ) -> ReconciliationResult | None:
-    """对已绑定结果去重（R2 语义 key）并拒绝语义冲突（§14）。"""
+    """对已绑定结果去重（R2 语义 key）并拒绝语义冲突（§14）。
+
+    精确重复身份 = 完整 ``result.to_dict()`` 的确定性 canonical 序列化
+    （P1-B：left_value/right_value/comparison_evidence 是 JSONValue，可能为
+    dict/list，不能直接作 tuple key）。这仅是本地去重身份，不是 persistence
+    hash，也不是 Fact Lake canonical 权威。
+    """
     if not bound:
         return None
-    seen: dict[tuple[Any, ...], ReconciliationResult] = {}
+    seen: dict[str, ReconciliationResult] = {}
     for result in bound:
-        key = (
-            result.dataset_id,
-            result.status.value,
-            result.comparison_policy_id,
-            result.comparison_policy_version,
-            result.left_observation_id,
-            result.right_observation_id,
-            _canonical_json(result.comparison_evidence),
-            result.left_value,
-            result.right_value,
-        )
+        key = _canonical_json(result.to_dict())
         previous = seen.get(key)
         if previous is not None:
             if previous != result:
-                # 同一语义 key 但结果不同（契约不允许）→ 不静默选择
+                # 同一 canonical 内容但结果不同（契约不允许）→ 不静默选择
                 raise HealthEvidenceCollectionError(HealthEvidenceCollectionFailure(
                     code=FAILURE_RECONCILIATION_AMBIGUOUS,
                     detail="绑定对账结果语义重复但内容不同",
@@ -346,7 +375,8 @@ def _collect_evidence_from_lake(
         list(_bound_reconciliations(lake, publication, fact)),
     )
 
-    # 新鲜度（仅显式请求；无值 → None → H1 保持 UNKNOWN；无 cross-semantic）
+    # 新鲜度（P1-A：显式请求的语义永不消失；无值 → None → H1 UNKNOWN 支配
+    # coordinate CURRENT；非 primary 离散语义显式 fail closed，绝不 CURRENT 替换）
     freshness_semantics: TemporalSemantics | None = None
     freshness_value: str | None = None
     freshness_reference_at: str | None = None
@@ -354,17 +384,22 @@ def _collect_evidence_from_lake(
     if freshness_request is not None:
         semantics = freshness_request.semantics
         if semantics in _CONTINUOUS_SEMANTICS:
-            value = _freshness_value_for(semantics, fact, source.observation)
-            if value is not None:
-                freshness_semantics = semantics
-                freshness_value = value
-                freshness_reference_at = freshness_request.reference_at
-        else:  # TRADE_DATE / REPORT_PERIOD
-            value = getattr(fact, semantics.value, None)
-            if value is not None:
-                freshness_semantics = semantics
-                freshness_value = value
-                freshness_reference_at = None
+            # 显式请求 → 总是保留 semantics；值缺失 → None（H1 continuous=UNKNOWN）
+            freshness_semantics = semantics
+            freshness_value = _freshness_value_for(semantics, fact, source.observation)
+            freshness_reference_at = freshness_request.reference_at
+        else:  # TRADE_DATE / REPORT_PERIOD（离散）
+            if semantics != TemporalSemantics(publication.primary_temporal_field):
+                # H1 v0.1 只评估 primary 坐标；非 primary 离散请求 → fail closed
+                raise HealthEvidenceCollectionError(HealthEvidenceCollectionFailure(
+                    code=FAILURE_BAD_ARGUMENT,
+                    detail=f"离散新鲜度请求 {semantics.value!r} 不是 publication 的 "
+                           f"primary 坐标（{publication.primary_temporal_field!r}）；"
+                           "H1 v0.1 只评估 primary 离散坐标",
+                ))
+            freshness_semantics = semantics
+            freshness_value = getattr(fact, semantics.value, None)
+            freshness_reference_at = None
 
     return FactLakeHealthEvidence(
         publication_id=publication.publication_id,
