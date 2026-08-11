@@ -380,9 +380,14 @@ def _is_clean(
     assessment: FactLakeHealthAssessment,
     reasons: frozenset[str],
 ) -> bool:
-    """§R1 冻结 CLEAN 定义：全部 7 维干净 + 空 reason codes。"""
+    """§R2 冻结 CLEAN 定义：canonical_admissibility == USABLE + 全部 7 维干净 + 空 reason codes。
+
+    USABLE_WITH_WARNING 即使所有维度看似干净、reason_codes 为空也**绝不**是 clean
+    （warning admissibility 本身即 warning severity，§R2）。
+    """
     return (
-        assessment.publication_visibility == "COMMITTED"
+        assessment.canonical_admissibility == "USABLE"
+        and assessment.publication_visibility == "COMMITTED"
         and assessment.storage_integrity == "VERIFIED"
         and assessment.reproducibility == "MATCH"
         and assessment.semantic_quality == "valid"

@@ -697,3 +697,63 @@ def test_r1b_valid_round_trip_exact():
     for p in samples:
         restored = flhp.FactLakeLegacyHealthProjection.from_dict(p.to_dict())
         assert restored == p
+
+
+# ---------------------------------------------------------------------------
+# R2：USABLE_WITH_WARNING 绝不成为 clean（canonical admissibility floor）
+# ---------------------------------------------------------------------------
+
+def test_r2a_ww_empty_reason_never_normal():
+    """A：USABLE_WITH_WARNING + 全 7 维干净 + 空 reasons → partial/SOURCE_PARTIAL/LOSSY，绝不 normal。"""
+    p = _project(_assessment(canonical_admissibility="USABLE_WITH_WARNING"))
+    assert p.legacy_status == "partial"
+    assert p.legacy_is_stale is False
+    assert p.legacy_is_degraded is False
+    assert p.legacy_error_code == "SOURCE_PARTIAL"
+    assert p.lossiness == flhp.LOSSINESS_LOSSY
+    assert p.fact_lake_reason_codes == ()  # 不发明 warning reason；原空 reasons 保留
+
+
+def test_r2b_round_trip_then_mutation_rejected():
+    """B：WW 投影 round-trip 精确；序列化改成 normal/None/EXACT → from_dict REJECT（语义重投影）。"""
+    p = _project(_assessment(canonical_admissibility="USABLE_WITH_WARNING"))
+    assert flhp.FactLakeLegacyHealthProjection.from_dict(p.to_dict()) == p
+    data = p.to_dict()
+    data["legacy_status"] = "normal"
+    data["legacy_error_code"] = None
+    data["legacy_error_summary"] = None
+    data["lossiness"] = "EXACT"
+    with pytest.raises(flhp.LegacyProjectionError):
+        flhp.FactLakeLegacyHealthProjection.from_dict(data)
+
+
+def test_r2c_usable_clean_normal_regression():
+    """C：USABLE + 全维干净 + 空 reasons → normal / 无 error / EXACT（回归证明）。"""
+    p = _project(_assessment())
+    assert p.legacy_status == "normal"
+    assert p.legacy_error_code is None
+    assert p.lossiness == flhp.LOSSINESS_EXACT
+
+
+def test_r2d_stale_only_unchanged():
+    """D：WW + STALE + (TEMPORAL_VALUE_STALE,) + 其他干净 → 既有 stale-only 行为不变。"""
+    p = _project(_assessment(
+        canonical_admissibility="USABLE_WITH_WARNING",
+        freshness="STALE",
+        reason_codes=("TEMPORAL_VALUE_STALE",),
+    ))
+    assert p.legacy_status == "normal"
+    assert p.legacy_is_stale is True
+    assert p.legacy_error_code == "SOURCE_STALE"
+
+
+def test_r2d_usable_stale_empty_reasons_defensive_kept():
+    """防御性既有用例：USABLE + STALE + 空 reasons → normal + stale=True + SOURCE_STALE（不破坏）。"""
+    p = _project(_assessment(
+        canonical_admissibility="USABLE",
+        freshness="STALE",
+        reason_codes=(),
+    ))
+    assert p.legacy_status == "normal"
+    assert p.legacy_is_stale is True
+    assert p.legacy_error_code == "SOURCE_STALE"
