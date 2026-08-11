@@ -1,6 +1,8 @@
-"""Tests for performance attribution store/service/API (P2-4B)."""
+"""Tests for performance attribution store/service/API (P2-4B / P0-PA1)."""
 from __future__ import annotations
 
+import re
+import sqlite3
 import uuid
 from pathlib import Path
 
@@ -29,9 +31,11 @@ def _trade(
     other_cost: float = 0.0,
     executed_at: str = "2026-01-05T02:00:00+00:00",
     execution_status: str = "full",
+    trade_id: str | None = None,
 ) -> dict:
     return {
-        "trade_id": f"tr_{uuid.uuid4().hex}",
+        # Trade Ledger 权威格式：32 位小写 hex，无前缀（uuid4().hex）
+        "trade_id": trade_id if trade_id is not None else uuid.uuid4().hex,
         "code": code,
         "name": name,
         "operation": operation,
@@ -92,6 +96,11 @@ def test_empty_db_returns_empty_result(env):
         "total_cost_basis": 0.0,
         "position_count": 0,
     }
+    # PA1：空库的精确来源证明
+    assert result["selected_trade_ids"] == []
+    assert result["selected_trade_count"] == 0
+    assert result["authority_version"] == svc.AUTHORITY_VERSION
+    assert re.fullmatch(r"[0-9a-f]{64}", result["computation_fingerprint"])
 
 
 def test_single_buy_cost_includes_fee(env):
@@ -106,17 +115,15 @@ def test_single_buy_cost_includes_fee(env):
 
 
 def test_buy_then_full_sell_realized_pnl(env):
-    _insert(
-        env,
-        _trade(price=10.0, quantity=1000, fee=5.0, executed_at="2026-01-05T02:00:00+00:00"),
-        _trade(
-            operation="sell",
-            price=12.0,
-            quantity=1000,
-            fee=6.0,
-            executed_at="2026-01-06T02:00:00+00:00",
-        ),
+    buy = _trade(price=10.0, quantity=1000, fee=5.0, executed_at="2026-01-05T02:00:00+00:00")
+    sell = _trade(
+        operation="sell",
+        price=12.0,
+        quantity=1000,
+        fee=6.0,
+        executed_at="2026-01-06T02:00:00+00:00",
     )
+    _insert(env, buy, sell)
     pos = _by_code(svc.compute_attribution(), "000001")
     # cost 10005, proceeds 12000-6=11994 -> 1989
     assert pos["realized_pnl"] == 1989.0
@@ -124,6 +131,8 @@ def test_buy_then_full_sell_realized_pnl(env):
     assert pos["cost_basis"] == 0.0
     assert pos["avg_cost"] is None
     assert pos["closed_quantity"] == 1000
+    # PA1：精确输入来源（计算顺序）
+    assert pos["input_trade_ids"] == [buy["trade_id"], sell["trade_id"]]
 
 
 def test_weighted_average_cost_after_add_and_partial_sell(env):
@@ -363,3 +372,274 @@ def test_api_extra_field_rejected(env):
     client = TestClient(make_app())
     resp = client.post("/api/performance-attribution/snapshot", json={"foo": 1})
     assert resp.status_code == 422
+    client = TestClient(make_app())
+    resp = client.post("/api/performance-attribution/snapshot", json={"foo": 1})
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# P0-PA1：精确交易集来源证明
+# ---------------------------------------------------------------------------
+
+class TestTradeSetProvenance:
+    """来源证明：exact selected/input trade ids、确定性、与指标一致。"""
+
+    def test_selected_trade_ids_exact_ordered(self, env):
+        t1 = _trade(code="000001", executed_at="2026-01-05T02:00:00+00:00")
+        t2 = _trade(code="000002", name="万科A", executed_at="2026-01-06T02:00:00+00:00")
+        _insert(env, t1, t2)
+        result = svc.compute_attribution()
+        # 计算行顺序：COALESCE(executed_at, created_at) ASC, created_at ASC
+        assert result["selected_trade_ids"] == [t1["trade_id"], t2["trade_id"]]
+        assert result["selected_trade_count"] == 2
+        # 逐证券输入集
+        assert _by_code(result, "000001")["input_trade_ids"] == [t1["trade_id"]]
+        assert _by_code(result, "000002")["input_trade_ids"] == [t2["trade_id"]]
+
+    def test_oversell_row_included_in_input_not_contributed(self, env):
+        """included vs effective：oversell 行被选中但仅记 limitation。"""
+        buy = _trade(price=10.0, quantity=500, fee=0.0, executed_at="2026-01-05T02:00:00+00:00")
+        oversell = _trade(
+            operation="sell", price=12.0, quantity=800, fee=0.0,
+            executed_at="2026-01-06T02:00:00+00:00",
+        )
+        _insert(env, buy, oversell)
+        pos = _by_code(svc.compute_attribution(), "000001")
+        # 精确输入集包含两行（不宣称超过算法支持的强度）
+        assert pos["input_trade_ids"] == [buy["trade_id"], oversell["trade_id"]]
+        assert svc.OVERSELL_LIMITATION in pos["data_limitations"]
+        assert pos["closed_quantity"] == 500
+
+    def test_voided_and_not_executed_excluded_from_selected(self, env):
+        rec = _trade(price=10.0, quantity=1000, fee=0.0)
+        _insert(env, rec)
+        _void(env, rec["trade_id"])
+        result = svc.compute_attribution()
+        assert result["selected_trade_ids"] == []
+
+    def test_missing_or_invalid_trade_id_fails_closed(self, env):
+        """缺失/非法 trade_id 的行：来源与指标不得背离 → fail closed。"""
+        rec = _trade(price=10.0, quantity=1000, fee=0.0)
+        rec["trade_id"] = "tr_" + "a" * 32  # 非法前缀
+        _insert(env, rec)
+        with pytest.raises(svc.PerformanceAttributionProvenanceError):
+            svc.compute_attribution()
+        # 另一形状：NULL trade_id
+        conn = sqlite3.connect(str(env["trade_db"]))
+        try:
+            conn.execute(
+                "UPDATE trade_records SET trade_id = NULL "
+                "WHERE trade_id = ?", (rec["trade_id"],)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        with pytest.raises(svc.PerformanceAttributionProvenanceError):
+            svc.compute_attribution()
+
+    def test_cross_decision_same_security_counterexample(self, env):
+        """跨决策反例：同证券同日期，两行均被读取 → 结果必须证明选中集。"""
+        # T1 概念上属决策 A、T2 概念上属决策 B（PA1 不感知决策）
+        t1 = _trade(price=10.0, quantity=1000, fee=0.0, executed_at="2026-01-05T02:00:00+00:00")
+        t2 = _trade(price=11.0, quantity=1000, fee=0.0, executed_at="2026-01-06T02:00:00+00:00")
+        _insert(env, t1, t2)
+        result = svc.compute_attribution()
+        assert result["selected_trade_ids"] == [t1["trade_id"], t2["trade_id"]]
+        assert _by_code(result, "000001")["input_trade_ids"] == [
+            t1["trade_id"], t2["trade_id"],
+        ]
+        # 下游消费者无法诚实地把该聚合结果只绑定到 {T1}
+        assert len(result["selected_trade_ids"]) == 2
+
+    def test_fingerprint_deterministic_and_semantic(self, env):
+        t1 = _trade(price=10.0, quantity=1000, fee=0.0)
+        _insert(env, t1)
+        a = svc.compute_attribution(price_map={"000001": 11.5})
+        b = svc.compute_attribution(price_map={"000001": 11.5})
+        assert a["computation_fingerprint"] == b["computation_fingerprint"]
+        # 交易集变化 → fingerprint 变化
+        t2 = _trade(price=11.0, quantity=500, fee=0.0, executed_at="2026-01-06T02:00:00+00:00")
+        _insert(env, t2)
+        c = svc.compute_attribution(price_map={"000001": 11.5})
+        assert c["computation_fingerprint"] != a["computation_fingerprint"]
+        # 价格输入变化 → fingerprint 变化
+        d = svc.compute_attribution(price_map={"000001": 12.0})
+        assert d["computation_fingerprint"] != c["computation_fingerprint"]
+        # 日期范围变化 → fingerprint 变化
+        e = svc.compute_attribution(price_map={"000001": 12.0}, date_to="2026-01-05")
+        assert e["computation_fingerprint"] != d["computation_fingerprint"]
+
+    def test_fingerprint_excludes_path_and_wallclock(self, env, tmp_path):
+        """同 DB 内容 + 不同 DB 路径 → fingerprint 不变（路径不入指纹）。"""
+        other_db = tmp_path / "other" / "trade_ledger.sqlite3"
+        other_db.parent.mkdir(parents=True, exist_ok=True)
+        t1 = _trade(price=10.0, quantity=1000, fee=0.0)
+        tl_store.insert_record(env["trade_db"], t1)
+        # 相同 trade 行写入第二个库（同内容、不同路径）
+        tl_store.insert_record(other_db, dict(t1))
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("VIBE_RESEARCH_TRADE_LEDGER_DB", str(other_db))
+            result_other = svc.compute_attribution()
+        result_main = svc.compute_attribution()
+        assert result_other["computation_fingerprint"] == result_main["computation_fingerprint"]
+
+    def test_snapshot_preserves_provenance_in_payload(self, env):
+        _insert(env, _trade(price=10.0, quantity=1000, fee=0.0))
+        result = svc.compute_attribution(price_map={"000001": 11.0})
+        snapshot = svc.save_attribution_snapshot(result)
+        fetched = svc.get_attribution_snapshot(snapshot["snapshot_id"])
+        assert fetched is not None
+        payload = fetched["snapshot"]["payload"]
+        assert payload["selected_trade_ids"] == result["selected_trade_ids"]
+        assert payload["computation_fingerprint"] == result["computation_fingerprint"]
+        assert payload["authority_version"] == svc.AUTHORITY_VERSION
+        assert payload["positions"][0]["input_trade_ids"] == result["positions"][0]["input_trade_ids"]
+
+    def test_authority_version_explicit(self):
+        assert svc.AUTHORITY_VERSION == "performance_attribution.v2-provenance.v0.1"
+    def test_authority_version_explicit(self):
+        assert svc.AUTHORITY_VERSION == "performance_attribution.v2-provenance.v0.1"
+
+
+# ---------------------------------------------------------------------------
+# P0-PA1-R1：读失败 fail closed + 全序确定性排序
+# ---------------------------------------------------------------------------
+
+class TestReadFailureFailClosed:
+    """P1-A：trade_records 存在时任何读取失败 → fail closed，绝不空来源。"""
+
+    def test_a1_missing_trade_id_column_fails_closed(self, env):
+        # 表存在但缺 trade_id 列：读取计算投影失败 → fail closed
+        conn = sqlite3.connect(str(env["trade_db"]))
+        try:
+            conn.execute(
+                "CREATE TABLE trade_records ("
+                "rowid INTEGER PRIMARY KEY, code TEXT NOT NULL, operation TEXT"
+                ")"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        with pytest.raises(svc.PerformanceAttributionProvenanceError):
+            svc.compute_attribution()
+
+    def test_a2_missing_calculation_column_fails_closed(self, env):
+        # 表存在但缺必需计算列（actual_quantity）→ fail closed
+        conn = sqlite3.connect(str(env["trade_db"]))
+        try:
+            conn.execute(
+                "CREATE TABLE trade_records ("
+                "trade_id TEXT PRIMARY KEY, code TEXT NOT NULL,"
+                "name TEXT, operation TEXT, actual_price REAL,"
+                "fee REAL, other_cost REAL, executed_at TEXT, created_at TEXT"
+                ")"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        with pytest.raises(svc.PerformanceAttributionProvenanceError):
+            svc.compute_attribution()
+
+    def test_a3_corrupt_db_fails_closed(self, env):
+        env["trade_db"].write_bytes(b"this is not a sqlite database")
+        with pytest.raises(svc.PerformanceAttributionProvenanceError):
+            svc.compute_attribution()
+
+    def test_a3b_absent_db_remains_empty(self, env):
+        # 既有语义（文档化回归）：DB 文件不存在 = 合法空状态，不 fail
+        result = svc.compute_attribution()
+        assert result["positions"] == []
+        assert result["selected_trade_ids"] == []
+        assert result["selected_trade_count"] == 0
+
+    def test_a3c_absent_table_remains_empty(self, env):
+        # 既有语义（文档化回归）：DB 存在但 trade_records 表缺失 = 合法空状态
+        conn = sqlite3.connect(str(env["trade_db"]))
+        try:
+            conn.execute("CREATE TABLE unrelated_table (id INTEGER)")
+            conn.commit()
+        finally:
+            conn.close()
+        result = svc.compute_attribution()
+        assert result["positions"] == []
+        assert result["selected_trade_ids"] == []
+
+
+class TestTotalOrdering:
+    """P1-B：等时间戳交易由 trade_id 全序决胜，插入顺序无关。"""
+
+    def _pair(self, db: Path, buy_first: bool):
+        t_buy = _trade(
+            trade_id="1" * 32, operation="buy", price=10.0, quantity=1000,
+            fee=0.0, executed_at="2026-01-05T02:00:00+00:00",
+        )
+        t_sell = _trade(
+            trade_id="2" * 32, operation="sell", price=12.0, quantity=1000,
+            fee=0.0, executed_at="2026-01-05T02:00:00+00:00",
+        )
+        first, second = (t_buy, t_sell) if buy_first else (t_sell, t_buy)
+        tl_store.insert_record(db, first)
+        tl_store.insert_record(db, second)
+
+    def _compute_on(self, db: Path):
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("VIBE_RESEARCH_TRADE_LEDGER_DB", str(db))
+            return svc.compute_attribution()
+
+    def test_b1_reversed_insert_order_identical(self, env, tmp_path):
+        """同一对交易（同 executed_at / created_at），插入顺序相反 → 完全一致。"""
+        db_a = env["trade_db"]
+        db_b = tmp_path / "db_b.sqlite3"
+        self._pair(db_a, buy_first=True)
+        self._pair(db_b, buy_first=False)
+
+        result_a = self._compute_on(db_a)
+        result_b = self._compute_on(db_b)
+
+        # 全序：trade_id ASC → [T1, T2]，与插入顺序无关
+        assert result_a["selected_trade_ids"] == ["1" * 32, "2" * 32]
+        assert result_b["selected_trade_ids"] == ["1" * 32, "2" * 32]
+        assert _by_code(result_a, "000001")["input_trade_ids"] == ["1" * 32, "2" * 32]
+        assert _by_code(result_b, "000001")["input_trade_ids"] == ["1" * 32, "2" * 32]
+        # 指标逐项一致
+        assert result_a["positions"] == result_b["positions"]
+        assert result_a["totals"] == result_b["totals"]
+        # fingerprint 一致（同内容不同库路径）
+        assert result_a["computation_fingerprint"] == result_b["computation_fingerprint"]
+
+    def test_b2_three_equal_time_trades_shuffled(self, env, tmp_path):
+        """3 条同时刻交易 × 6 种插入顺序 → 计算顺序/指标/来源/fingerprint 全同。"""
+        trades = [
+            _trade(
+                trade_id="1" * 32, operation="buy", price=10.0, quantity=1000,
+                fee=0.0, executed_at="2026-01-05T02:00:00+00:00",
+            ),
+            _trade(
+                trade_id="3" * 32, operation="add", price=11.0, quantity=1000,
+                fee=0.0, executed_at="2026-01-05T02:00:00+00:00",
+            ),
+            _trade(
+                trade_id="2" * 32, operation="reduce", price=15.0, quantity=500,
+                fee=0.0, executed_at="2026-01-05T02:00:00+00:00",
+            ),
+        ]
+        import itertools
+
+        results = []
+        for index, order in enumerate(itertools.permutations(trades)):
+            db = tmp_path / f"db_shuffle_{index}.sqlite3"
+            for t in order:
+                tl_store.insert_record(db, t)
+            results.append(self._compute_on(db))
+
+        baseline = results[0]
+        for r in results[1:]:
+            assert r["selected_trade_ids"] == baseline["selected_trade_ids"]
+            assert r["positions"] == baseline["positions"]
+            assert r["totals"] == baseline["totals"]
+            assert r["computation_fingerprint"] == baseline["computation_fingerprint"]
+        # 冻结语义：trade_id ASC → [1, 2, 3]
+        assert baseline["selected_trade_ids"] == ["1" * 32, "2" * 32, "3" * 32]
+        assert _by_code(baseline, "000001")["input_trade_ids"] == [
+            "1" * 32, "2" * 32, "3" * 32,
+        ]
