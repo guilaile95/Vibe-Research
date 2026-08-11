@@ -41,6 +41,7 @@ T1 = "2026-07-02T00:00:00.000000Z"
 T2 = "2026-07-03T00:00:00.000000Z"
 T3 = "2026-07-04T00:00:00.000000Z"
 CREATED = "2026-07-05T00:00:00.000000Z"
+T4 = "2026-07-05T00:00:00.000000Z"
 
 
 def _campaign(cid: str, status: str, strategy: str = "SHORT", code: str = CODE,
@@ -183,10 +184,11 @@ def test_same_child_two_parents_rejected():
 # ---------------------------------------------------------------------------
 
 def test_chain_abc_valid():
+    # 严格递增：A created T0 → A closed T1 → B created T2 → B closed T3 → C created T4
     r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
                  child=_draft_child(PID_B, created=T2), closed_at=T1)
-    r_bc = _make(parent=_closed_short_parent(PID_B, created=T1),
-                 child=_draft_child(PID_C, created=T3), closed_at=T2)
+    r_bc = _make(parent=_closed_short_parent(PID_B, created=T2),
+                 child=_draft_child(PID_C, created=T4), closed_at=T3)
     validate_lineage_set([r_ab, r_bc])
     # C 的祖先链 = [r_ab, r_bc]（时间序 old→new）
     anc = ancestors(PID_C, [r_ab, r_bc])
@@ -214,8 +216,8 @@ def test_cycle_rejected():
 def test_input_order_independent_projection():
     r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
                  child=_draft_child(PID_B, created=T2), closed_at=T1)
-    r_bc = _make(parent=_closed_short_parent(PID_B, created=T1),
-                 child=_draft_child(PID_C, created=T3), closed_at=T2)
+    r_bc = _make(parent=_closed_short_parent(PID_B, created=T2),
+                 child=_draft_child(PID_C, created=T4), closed_at=T3)
     asc = ancestors(PID_C, [r_ab, r_bc])
     shuffled = ancestors(PID_C, [r_bc, r_ab])
     assert [r.lineage_id for r in asc] == [r.lineage_id for r in shuffled]
@@ -467,8 +469,8 @@ def test_timestamp_inversion_rejected():
 def test_descendants_projection():
     r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
                  child=_draft_child(PID_B, created=T2), closed_at=T1)
-    r_bc = _make(parent=_closed_short_parent(PID_B, created=T1),
-                 child=_draft_child(PID_C, created=T3), closed_at=T2)
+    r_bc = _make(parent=_closed_short_parent(PID_B, created=T2),
+                 child=_draft_child(PID_C, created=T4), closed_at=T3)
     desc = descendants(PID_A, [r_ab, r_bc])
     assert [r.child_campaign_id for r in desc] == [PID_B, PID_C]
 
@@ -610,8 +612,8 @@ def test_strategy_chain_consistent_across_edges_valid():
     """A SHORT→B MEDIUM、B MEDIUM→C SHORT：各 campaign 单一 Strategy → 合法。"""
     r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
                  child=_draft_child(PID_B, strategy="MEDIUM", created=T2), closed_at=T1)
-    r_bc = _make(parent=_closed_short_parent(PID_B, strategy="MEDIUM", created=T1),
-                 child=_draft_child(PID_C, strategy="SHORT", created=T3), closed_at=T2)
+    r_bc = _make(parent=_closed_short_parent(PID_B, strategy="MEDIUM", created=T2),
+                 child=_draft_child(PID_C, strategy="SHORT", created=T4), closed_at=T3)
     validate_lineage_set([r_ab, r_bc])  # 合法：A 恒 SHORT，B 恒 MEDIUM，C 恒 SHORT
 
 
@@ -667,8 +669,8 @@ def test_projection_rejects_cycle():
 def test_projection_valid_shuffled_identical():
     r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
                  child=_draft_child(PID_B, created=T2), closed_at=T1)
-    r_bc = _make(parent=_closed_short_parent(PID_B, created=T1),
-                 child=_draft_child(PID_C, created=T3), closed_at=T2)
+    r_bc = _make(parent=_closed_short_parent(PID_B, created=T2),
+                 child=_draft_child(PID_C, created=T4), closed_at=T3)
     assert [r.lineage_id for r in ancestors(PID_C, [r_ab, r_bc])] == \
            [r.lineage_id for r in ancestors(PID_C, [r_bc, r_ab])]
     assert [r.lineage_id for r in descendants(PID_A, [r_ab, r_bc])] == \
@@ -795,3 +797,73 @@ def test_transition_id_shape_matches_campaign_store_contract():
     import re as _re
     assert _re.fullmatch(r"^campaign_transition_[0-9a-f]{32}$",
                          _transitions(("DRAFT", "RESEARCHING", T0))[0]["transition_id"])
+
+
+# ---------------------------------------------------------------------------
+# R2：Campaign cross-edge temporal identity（A–E blocking tests）
+# ---------------------------------------------------------------------------
+
+def test_r2_a_close_before_create_chain_rejected():
+    """A closes T1 → B created T3；B closes T2 → C created T4；T2<T3 →
+    B 在创建前已关闭 → validate_lineage_set / ancestors / descendants 全拒绝。"""
+    r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
+                 child=_draft_child(PID_B, created=T3), closed_at=T1)
+    r_bc = _make(parent=_closed_short_parent(PID_B, created=T3, strategy="MEDIUM"),
+                 child=_draft_child(PID_C, created=T4), closed_at=T2)
+    # 单边均合法（T1<T3、T2<T4），但 B created T3 > closed T2 → 链级拒绝
+    with pytest.raises(LineageIntegrityError):
+        validate_lineage_set([r_ab, r_bc])
+    with pytest.raises(LineageIntegrityError):
+        ancestors(PID_C, [r_ab, r_bc])
+    with pytest.raises(LineageIntegrityError):
+        descendants(PID_A, [r_ab, r_bc])
+
+
+def test_r2_b_multiple_close_times_same_campaign_rejected():
+    """A closed T1 → B；A closed T2 → C；T1!=T2 → 同一 campaign 多个 CLOSED 锚点拒绝。"""
+    r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
+                 child=_draft_child(PID_B, created=T2), closed_at=T1)
+    r_ac = _make(parent=_closed_short_parent(PID_A, created=T0),
+                 child=_draft_child(PID_C, created=T3), closed_at=T2, reason="另一轮")
+    with pytest.raises(LineageIntegrityError):
+        validate_lineage_set([r_ab, r_ac])
+
+
+def test_r2_c_valid_strict_lifecycle_chain_passes():
+    """A closes T1 → B created T2；B closes T3 → C created T4；T1<T2<T3<T4 → PASS。"""
+    r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
+                 child=_draft_child(PID_B, created=T2), closed_at=T1)
+    r_bc = _make(parent=_closed_short_parent(PID_B, created=T2),
+                 child=_draft_child(PID_C, created=T4), closed_at=T3)
+    validate_lineage_set([r_ab, r_bc])
+    assert [r.lineage_id for r in ancestors(PID_C, [r_ab, r_bc])] == \
+           [r_ab.lineage_id, r_bc.lineage_id]
+
+
+def test_r2_d_shuffled_valid_same_projection():
+    r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
+                 child=_draft_child(PID_B, created=T2), closed_at=T1)
+    r_bc = _make(parent=_closed_short_parent(PID_B, created=T2),
+                 child=_draft_child(PID_C, created=T4), closed_at=T3)
+    asc = ancestors(PID_C, [r_ab, r_bc])
+    shuffled = ancestors(PID_C, [r_bc, r_ab])
+    assert [r.lineage_id for r in asc] == [r.lineage_id for r in shuffled]
+    assert [r.lineage_id for r in descendants(PID_A, [r_ab, r_bc])] == \
+           [r.lineage_id for r in descendants(PID_A, [r_bc, r_ab])]
+
+
+def test_r2_e_microsecond_chain_ordering():
+    """B created ...123456Z、B closed ...123457Z（微秒级严格序）→ PASS；反转 → REJECT。"""
+    b_created = "2026-07-03T10:00:00.123456Z"
+    b_closed = "2026-07-03T10:00:00.123457Z"
+    r_ab = _make(parent=_closed_short_parent(PID_A, created=T0),
+                 child=_draft_child(PID_B, created=b_created), closed_at=T1)
+    r_bc = _make(parent=_closed_short_parent(PID_B, created=b_created),
+                 child=_draft_child(PID_C, created=T4), closed_at=b_closed)
+    validate_lineage_set([r_ab, r_bc])  # created(123456) < closed(123457) → 合法
+    # 反转：B closed 早于 created → 拒绝
+    r_bc_bad = _make(parent=_closed_short_parent(PID_B, created=b_created),
+                     child=_draft_child(PID_C, created=T4),
+                     closed_at="2026-07-03T10:00:00.123455Z")
+    with pytest.raises(LineageIntegrityError):
+        validate_lineage_set([r_ab, r_bc_bad])

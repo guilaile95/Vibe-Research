@@ -563,7 +563,9 @@ def validate_lineage_set(records: list[CampaignLineageRecord]) -> list[CampaignL
     """校验一个 lineage 记录集合（纯函数，不修改输入）。
 
     拒绝：自环、重复冲突边、环、child 多父、security 跨链不一致、strategy 跨链
-    不一致、时间倒转、非法 ID、非法 Strategy、未知 relation、hash 漂移。
+    不一致、campaign 创建/关闭时间冲突（R2-A/B）、campaign 创建前已关闭
+    （R2-C，跨边生命周期倒转）、时间倒转、非法 ID、非法 Strategy、未知
+    relation、hash 漂移。
     返回原顺序列表（验证通过时）；异常一律 LineageIntegrityError / LineageValidationError。
     """
     if not isinstance(records, list):
@@ -572,6 +574,8 @@ def validate_lineage_set(records: list[CampaignLineageRecord]) -> list[CampaignL
     by_parent_child: dict[tuple[str, str], CampaignLineageRecord] = {}
     security_by_campaign: dict[str, str] = {}
     strategy_by_campaign: dict[str, str] = {}  # P1-A：一个 campaign_id 只能映射一个 Strategy
+    created_at_by_campaign: dict[str, str] = {}  # R2-A：一个 campaign 只能有一个 child_created_at
+    closed_at_by_campaign: dict[str, str] = {}   # R2-B：一个 campaign 的所有出边只能有一个 parent_closed_at
     for record in records:
         if not isinstance(record, CampaignLineageRecord):
             raise LineageValidationError("records 元素必须是 CampaignLineageRecord")
@@ -611,6 +615,22 @@ def validate_lineage_set(records: list[CampaignLineageRecord]) -> list[CampaignL
                     f"{strategy_by_campaign[cid]} vs {strat}"
                 )
             strategy_by_campaign[cid] = strat
+        # R2-A：同一 campaign 作为 child 只能有一个创建时间（canonical 字符串精确比较，不降精度）
+        if record.child_campaign_id in created_at_by_campaign and \
+                created_at_by_campaign[record.child_campaign_id] != record.child_created_at:
+            raise LineageIntegrityError(
+                f"campaign {record.child_campaign_id} 创建时间冲突: "
+                f"{created_at_by_campaign[record.child_campaign_id]} vs {record.child_created_at}"
+            )
+        created_at_by_campaign[record.child_campaign_id] = record.child_created_at
+        # R2-B：同一 campaign 作为 parent 的所有出边只能有一个 CLOSED 锚点
+        if record.parent_campaign_id in closed_at_by_campaign and \
+                closed_at_by_campaign[record.parent_campaign_id] != record.parent_closed_at:
+            raise LineageIntegrityError(
+                f"campaign {record.parent_campaign_id} 多个 CLOSED 时间: "
+                f"{closed_at_by_campaign[record.parent_campaign_id]} vs {record.parent_closed_at}"
+            )
+        closed_at_by_campaign[record.parent_campaign_id] = record.parent_closed_at
     # 2. child 单父（至多一个直接 RE_ENTRY parent）
     child_parents: dict[str, str] = {}
     for record in records:
@@ -618,7 +638,19 @@ def validate_lineage_set(records: list[CampaignLineageRecord]) -> list[CampaignL
         if cid in child_parents and child_parents[cid] != record.parent_campaign_id:
             raise LineageIntegrityError(f"child 多父（v0.1 至多一个 RE_ENTRY parent）: {cid}")
         child_parents[cid] = record.parent_campaign_id
-    # 3. 时间序（每条 parent_close < child_create 已校验；链级时间倒转 = 成环）
+    # 3. R2-C：同一 campaign 既作 child 又作 parent → 自身生命周期必须严格有序
+    #    （campaign.created_at < campaign.closed_at）；否则就是「创建前已关闭」的
+    #    不可能历史（例如 B created T3 却 closed T2）。
+    for cid in created_at_by_campaign:
+        if cid in closed_at_by_campaign:
+            created = _parse_utc(created_at_by_campaign[cid])
+            closed = _parse_utc(closed_at_by_campaign[cid])
+            if created >= closed:
+                raise LineageIntegrityError(
+                    f"campaign {cid} 在创建前已关闭（created {created_at_by_campaign[cid]}"
+                    f" >= closed {closed_at_by_campaign[cid]}）"
+                )
+    # 4. 时间序（每条 parent_close < child_create 已校验；链级时间倒转 = 成环）
     _assert_acyclic(records)
     return records
 
