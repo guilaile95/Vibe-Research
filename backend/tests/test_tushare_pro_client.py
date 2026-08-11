@@ -573,6 +573,159 @@ def test_stringified_request_json_in_msg_without_sink_succeeds(monkeypatch):
     assert rows == [{"ts_code": "600519.SH", "trade_date": "2026-07-30"}]
 
 
+def test_raw_sink_rejects_secret_bearing_object_key(monkeypatch):
+    token = 'TEST_ONLY_SECRET_"\\_KEY_ATTACK'
+    monkeypatch.setenv("TUSHARE_TOKEN", token)
+    params = {"ts_code": "600519.SH", "period": "20260331"}
+    fields = "ts_code,ann_date,end_date,update_flag,eps"
+
+    body_obj = {
+        "api_name": "fina_indicator",
+        "token": token,
+        "params": params,
+        "fields": fields,
+    }
+    body_bytes = json.dumps(
+        body_obj, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    body_json_text = body_bytes.decode("utf-8")
+
+    # The outer object key contains the secret-bearing request JSON
+    raw_dict = {
+        "code": 0,
+        "msg": "clean msg",
+        "data": {
+            "fields": ["ts_code", "ann_date", "end_date", "update_flag", "eps"],
+            "items": [["600519.SH", "20260430", "20260331", "1", 2.5]],
+        },
+        body_json_text: "clean_value",
+    }
+    raw = json.dumps(raw_dict, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    assert token.encode("utf-8") not in raw
+    assert body_bytes not in raw
+
+    captured = []
+    with _patch_urlopen(raw) as request:
+        with pytest.raises(tpc.TushareProtocolError) as exc:
+            _client().query(
+                "fina_indicator",
+                params,
+                fields,
+                raw_response_sink=lambda body, metadata: captured.append(
+                    (body, dict(metadata))
+                ),
+            )
+
+    assert request.call_count == 1
+    assert captured == []
+    assert str(exc.value) == "Tushare 响应包含禁止持久化的敏感材料"
+    assert token not in str(exc.value)
+
+
+def test_raw_sink_rejects_malformed_nested_json_string(monkeypatch):
+    token = 'TEST_ONLY_SECRET_"\\_MALFORMED_NESTED'
+    monkeypatch.setenv("TUSHARE_TOKEN", token)
+    # Outer JSON is valid, inner candidate is malformed JSON containing escaped token
+    escaped_token = json.dumps(token)
+    malformed_inner = f'{{"token":{escaped_token},}}'
+    raw = json.dumps({
+        "code": 0,
+        "msg": malformed_inner,
+        "data": {
+            "fields": ["ts_code"],
+            "items": [["600519.SH"]],
+        },
+    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    assert token.encode("utf-8") not in raw
+
+    captured = []
+    with _patch_urlopen(raw) as request:
+        with pytest.raises(tpc.TushareProtocolError) as exc:
+            _client().query(
+                "fina_indicator",
+                {"ts_code": "600519.SH", "period": "20260331"},
+                "ts_code",
+                raw_response_sink=lambda body, metadata: captured.append(
+                    (body, dict(metadata))
+                ),
+            )
+
+    assert request.call_count == 1
+    assert captured == []
+    assert str(exc.value) == "Tushare 响应包含禁止持久化的敏感材料"
+    assert token not in str(exc.value)
+
+
+def test_raw_sink_rejects_stringified_json_string_with_secret(monkeypatch):
+    token = 'TEST_ONLY_SECRET_"\\_STRINGIFIED_STRING'
+    monkeypatch.setenv("TUSHARE_TOKEN", token)
+
+    # stringified JSON string: json.dumps(json.dumps(token))
+    nested_string_json = json.dumps(json.dumps(token))
+    raw = json.dumps({
+        "code": 0,
+        "msg": nested_string_json,
+        "data": {
+            "fields": ["ts_code"],
+            "items": [["600519.SH"]],
+        },
+    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    captured = []
+    with _patch_urlopen(raw) as request:
+        with pytest.raises(tpc.TushareProtocolError) as exc:
+            _client().query(
+                "fina_indicator",
+                {"ts_code": "600519.SH", "period": "20260331"},
+                "ts_code",
+                raw_response_sink=lambda body, metadata: captured.append(
+                    (body, dict(metadata))
+                ),
+            )
+
+    assert request.call_count == 1
+    assert captured == []
+    assert str(exc.value) == "Tushare 响应包含禁止持久化的敏感材料"
+    assert token not in str(exc.value)
+
+
+def test_raw_sink_fails_closed_on_depth_limit_exceeded(monkeypatch):
+    token = "TEST_ONLY_SECRET_DEPTH_LIMIT"
+    monkeypatch.setenv("TUSHARE_TOKEN", token)
+
+    # Construct secret-free stringified JSON nested 6 levels deep
+    val = "clean_leaf"
+    for _ in range(6):
+        val = json.dumps(val)
+
+    raw = json.dumps({
+        "code": 0,
+        "msg": val,
+        "data": {
+            "fields": ["ts_code"],
+            "items": [["600519.SH"]],
+        },
+    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    captured = []
+    with _patch_urlopen(raw) as request:
+        with pytest.raises(tpc.TushareProtocolError) as exc:
+            _client().query(
+                "fina_indicator",
+                {"ts_code": "600519.SH", "period": "20260331"},
+                "ts_code",
+                raw_response_sink=lambda body, metadata: captured.append(
+                    (body, dict(metadata))
+                ),
+            )
+
+    assert request.call_count == 1
+    assert captured == []
+    assert str(exc.value) == "Tushare 响应包含禁止持久化的敏感材料"
+
+
 def test_raw_sink_rejects_malformed_response_without_capture(monkeypatch):
     monkeypatch.setenv("TUSHARE_TOKEN", "not-persisted")
     captured = []

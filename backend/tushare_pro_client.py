@@ -211,6 +211,50 @@ def _reject_duplicate_keys_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return dict(pairs)
 
 
+def _inspect_json_string(
+    s: str,
+    *,
+    token: str,
+    request_body_bytes: bytes,
+    depth: int = 0,
+) -> None:
+    if depth > _MAX_RECURSION_DEPTH:
+        raise TushareProtocolError("Tushare 响应包含禁止持久化的敏感材料")
+
+    if token in s:
+        raise TushareProtocolError("Tushare 响应包含禁止持久化的敏感材料")
+
+    try:
+        val_bytes = s.encode("utf-8")
+        if request_body_bytes in val_bytes:
+            raise TushareProtocolError("Tushare 响应包含禁止持久化的敏感材料")
+    except UnicodeEncodeError:
+        pass
+
+    stripped = s.strip()
+    if (
+        (stripped.startswith("{") and stripped.endswith("}"))
+        or (stripped.startswith("[") and stripped.endswith("]"))
+        or (stripped.startswith('"') and stripped.endswith('"') and len(stripped) >= 2)
+    ):
+        try:
+            nested_obj = json.loads(
+                stripped,
+                object_pairs_hook=_reject_duplicate_keys_hook,
+            )
+        except TushareProtocolError:
+            raise
+        except Exception:
+            raise TushareProtocolError("Tushare 响应包含禁止持久化的敏感材料") from None
+
+        _inspect_json_value(
+            nested_obj,
+            token=token,
+            request_body_bytes=request_body_bytes,
+            depth=depth + 1,
+        )
+
+
 def _inspect_json_value(
     val: Any,
     *,
@@ -222,45 +266,27 @@ def _inspect_json_value(
         raise TushareProtocolError("Tushare 响应包含禁止持久化的敏感材料")
 
     if type(val) is str:
-        if token in val:
-            raise TushareProtocolError("Tushare 响应包含禁止持久化的敏感材料")
-        try:
-            val_bytes = val.encode("utf-8")
-            if request_body_bytes in val_bytes:
-                raise TushareProtocolError("Tushare 响应包含禁止持久化的敏感材料")
-        except UnicodeEncodeError:
-            pass
-
-        stripped = val.strip()
-        if (stripped.startswith("{") and stripped.endswith("}")) or (
-            stripped.startswith("[") and stripped.endswith("]")
-        ):
-            try:
-                nested_obj = json.loads(
-                    stripped,
-                    object_pairs_hook=_reject_duplicate_keys_hook,
-                )
-                _inspect_json_value(
-                    nested_obj,
-                    token=token,
-                    request_body_bytes=request_body_bytes,
-                    depth=depth + 1,
-                )
-            except (UnicodeDecodeError, json.JSONDecodeError, TushareProtocolError) as exc:
-                if isinstance(exc, TushareProtocolError):
-                    raise
-
+        _inspect_json_string(
+            val,
+            token=token,
+            request_body_bytes=request_body_bytes,
+            depth=depth,
+        )
     elif type(val) is dict:
         for k, v in val.items():
-            if type(k) is str and token in k:
-                raise TushareProtocolError("Tushare 响应包含禁止持久化的敏感材料")
+            if type(k) is str:
+                _inspect_json_string(
+                    k,
+                    token=token,
+                    request_body_bytes=request_body_bytes,
+                    depth=depth,
+                )
             _inspect_json_value(
                 v,
                 token=token,
                 request_body_bytes=request_body_bytes,
                 depth=depth,
             )
-
     elif type(val) is list:
         for item in val:
             _inspect_json_value(
