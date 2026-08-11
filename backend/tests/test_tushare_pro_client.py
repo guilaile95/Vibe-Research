@@ -439,6 +439,140 @@ def test_json_escaped_token_in_msg_without_sink_succeeds(monkeypatch):
     assert rows == [{"ts_code": "600519.SH", "trade_date": "2026-07-30"}]
 
 
+def test_raw_sink_rejects_stringified_request_json_in_msg(monkeypatch):
+    token = 'TEST_ONLY_SECRET_"\\_X_STRINGIFIED'
+    monkeypatch.setenv("TUSHARE_TOKEN", token)
+    params = {"ts_code": "600519.SH", "period": "20260331"}
+    fields = "ts_code,ann_date,end_date,update_flag,eps"
+
+    body_obj = {
+        "api_name": "fina_indicator",
+        "token": token,
+        "params": params,
+        "fields": fields,
+    }
+    body_bytes = json.dumps(
+        body_obj, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+
+    body_json_text = body_bytes.decode("utf-8")
+    raw = json.dumps({
+        "code": 0,
+        "msg": body_json_text,
+        "data": {
+            "fields": ["ts_code", "ann_date", "end_date", "update_flag", "eps"],
+            "items": [["600519.SH", "20260430", "20260331", "1", 2.5]],
+        },
+    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    assert token.encode("utf-8") not in raw
+    assert body_bytes not in raw
+
+    captured = []
+    with _patch_urlopen(raw) as request:
+        with pytest.raises(tpc.TushareProtocolError) as exc:
+            _client().query(
+                "fina_indicator",
+                params,
+                fields,
+                raw_response_sink=lambda body, metadata: captured.append(
+                    (body, dict(metadata))
+                ),
+            )
+
+    assert request.call_count == 1
+    assert captured == []
+    assert str(exc.value) == "Tushare 响应包含禁止持久化的敏感材料"
+    assert token not in str(exc.value)
+
+
+def test_raw_sink_rejects_duplicate_keys_in_json_response(monkeypatch):
+    token = "TEST_ONLY_SECRET_SENTINEL_DUP_KEY"
+    monkeypatch.setenv("TUSHARE_TOKEN", token)
+    raw = f'{{"code": 0, "msg": "provider echoed {token}", "msg": "clean message", "data": {{"fields": ["ts_code"], "items": [["600519.SH"]]}}}}'.encode("utf-8")
+
+    captured = []
+    with _patch_urlopen(raw) as request:
+        with pytest.raises(tpc.TushareProtocolError) as exc:
+            _client().query(
+                "fina_indicator",
+                {"ts_code": "600519.SH", "period": "20260331"},
+                "ts_code",
+                raw_response_sink=lambda body, metadata: captured.append(
+                    (body, dict(metadata))
+                ),
+            )
+
+    assert request.call_count == 1
+    assert captured == []
+    assert str(exc.value) == "Tushare 响应包含禁止持久化的敏感材料"
+    assert token not in str(exc.value)
+
+
+def test_raw_sink_allows_clean_nested_json_string(monkeypatch):
+    token = "TEST_ONLY_SECRET_SENTINEL_CLEAN_NESTED"
+    monkeypatch.setenv("TUSHARE_TOKEN", token)
+    nested_clean_info = json.dumps({"status": "ok", "detail": "all systems nominal"})
+    raw = json.dumps({
+        "code": 0,
+        "msg": nested_clean_info,
+        "data": {
+            "fields": ["ts_code", "trade_date"],
+            "items": [["600519.SH", "2026-07-30"]],
+        },
+    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    captured = []
+    with _patch_urlopen(raw) as request:
+        rows = _client().query(
+            "daily",
+            {"trade_date": "20260730"},
+            "ts_code,trade_date",
+            raw_response_sink=lambda body, metadata: captured.append(
+                (body, dict(metadata))
+            ),
+        )
+
+    assert request.call_count == 1
+    assert len(captured) == 1
+    assert rows == [{"ts_code": "600519.SH", "trade_date": "2026-07-30"}]
+
+
+def test_stringified_request_json_in_msg_without_sink_succeeds(monkeypatch):
+    token = 'TEST_ONLY_SECRET_"\\_X_STRINGIFIED_NOSINK'
+    monkeypatch.setenv("TUSHARE_TOKEN", token)
+    params = {"trade_date": "20260730"}
+    fields = "ts_code,trade_date"
+
+    body_obj = {
+        "api_name": "daily",
+        "token": token,
+        "params": params,
+        "fields": fields,
+    }
+    body_json_text = json.dumps(
+        body_obj, ensure_ascii=False, separators=(",", ":")
+    )
+    raw = json.dumps({
+        "code": 0,
+        "msg": body_json_text,
+        "data": {
+            "fields": ["ts_code", "trade_date"],
+            "items": [["600519.SH", "2026-07-30"]],
+        },
+    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    with _patch_urlopen(raw) as request:
+        rows = _client().query(
+            "daily",
+            params,
+            fields,
+        )
+
+    assert request.call_count == 1
+    assert rows == [{"ts_code": "600519.SH", "trade_date": "2026-07-30"}]
+
+
 def test_raw_sink_rejects_malformed_response_without_capture(monkeypatch):
     monkeypatch.setenv("TUSHARE_TOKEN", "not-persisted")
     captured = []

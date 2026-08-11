@@ -27,6 +27,7 @@ from fact_lake_store import (
 )
 from financial_indicator_shadow import (
     ARTIFACT_SCHEMA_VERSION,
+    FINANCIAL_FIELDS_ARGUMENT,
     CANONICAL_ENDPOINT,
     DATASET_CONTRACT_REVISION,
     DATASET_ID,
@@ -680,6 +681,72 @@ def test_shadow_rejects_json_escaped_secret_echo_without_any_fact_lake_persisten
     }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
     assert sentinel.encode("utf-8") not in raw
+
+    with mock.patch(
+        "urllib.request.urlopen",
+        return_value=_Response(raw),
+    ) as request:
+        with pytest.raises(tpc.TushareProtocolError) as exc:
+            run_financial_indicator_shadow(
+                TS_CODE,
+                REPORT_PERIOD,
+                lake,
+            )
+
+    assert request.call_count == 1
+    assert str(exc.value) == "Tushare 响应包含禁止持久化的敏感材料"
+    assert sentinel not in str(exc.value)
+    conn = sqlite3.connect(root / CONTROL_DB_FILENAME)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM normalized_observations"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM canonical_publications"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+    assert list((root / "raw").rglob("*.blob")) == []
+    sentinel_bytes = sentinel.encode("utf-8")
+    assert all(
+        sentinel_bytes not in path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    )
+
+
+def test_shadow_rejects_stringified_request_json_without_any_fact_lake_persistence(
+    tmp_path,
+    monkeypatch,
+):
+    root = tmp_path / "lake"
+    lake = initialize_fact_lake(root)
+    sentinel = 'TEST_ONLY_SECRET_"\\_SHADOW_STRINGIFIED'
+    monkeypatch.setenv("TUSHARE_TOKEN", sentinel)
+    contract = FinancialRequestContract(TS_CODE, REPORT_PERIOD)
+    body_obj = {
+        "api_name": CANONICAL_ENDPOINT,
+        "token": sentinel,
+        "params": contract.params,
+        "fields": FINANCIAL_FIELDS_ARGUMENT,
+    }
+    body_bytes = json.dumps(
+        body_obj, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    body_json_text = body_bytes.decode("utf-8")
+
+    raw = json.dumps({
+        "code": 0,
+        "msg": body_json_text,
+        "data": {
+            "fields": list(FINANCIAL_FIELD_MANIFEST),
+            "items": [_row()],
+        },
+    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    assert sentinel.encode("utf-8") not in raw
+    assert body_bytes not in raw
 
     with mock.patch(
         "urllib.request.urlopen",

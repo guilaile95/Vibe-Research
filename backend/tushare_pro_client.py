@@ -199,20 +199,76 @@ def _safe_capture_params(params: dict[str, Any]) -> dict[str, Any]:
     return copied
 
 
-def _has_secret_string(val: Any, token: str) -> bool:
+_MAX_RECURSION_DEPTH = 5
+
+
+def _reject_duplicate_keys_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    keys = set()
+    for k, _ in pairs:
+        if k in keys:
+            raise TushareProtocolError("Tushare 响应包含禁止持久化的敏感材料")
+        keys.add(k)
+    return dict(pairs)
+
+
+def _inspect_json_value(
+    val: Any,
+    *,
+    token: str,
+    request_body_bytes: bytes,
+    depth: int = 0,
+) -> None:
+    if depth > _MAX_RECURSION_DEPTH:
+        raise TushareProtocolError("Tushare 响应包含禁止持久化的敏感材料")
+
     if type(val) is str:
-        return token in val
-    if type(val) is dict:
+        if token in val:
+            raise TushareProtocolError("Tushare 响应包含禁止持久化的敏感材料")
+        try:
+            val_bytes = val.encode("utf-8")
+            if request_body_bytes in val_bytes:
+                raise TushareProtocolError("Tushare 响应包含禁止持久化的敏感材料")
+        except UnicodeEncodeError:
+            pass
+
+        stripped = val.strip()
+        if (stripped.startswith("{") and stripped.endswith("}")) or (
+            stripped.startswith("[") and stripped.endswith("]")
+        ):
+            try:
+                nested_obj = json.loads(
+                    stripped,
+                    object_pairs_hook=_reject_duplicate_keys_hook,
+                )
+                _inspect_json_value(
+                    nested_obj,
+                    token=token,
+                    request_body_bytes=request_body_bytes,
+                    depth=depth + 1,
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError, TushareProtocolError) as exc:
+                if isinstance(exc, TushareProtocolError):
+                    raise
+
+    elif type(val) is dict:
         for k, v in val.items():
-            if (type(k) is str and token in k) or _has_secret_string(v, token):
-                return True
-        return False
-    if type(val) is list:
+            if type(k) is str and token in k:
+                raise TushareProtocolError("Tushare 响应包含禁止持久化的敏感材料")
+            _inspect_json_value(
+                v,
+                token=token,
+                request_body_bytes=request_body_bytes,
+                depth=depth,
+            )
+
+    elif type(val) is list:
         for item in val:
-            if _has_secret_string(item, token):
-                return True
-        return False
-    return False
+            _inspect_json_value(
+                item,
+                token=token,
+                request_body_bytes=request_body_bytes,
+                depth=depth,
+            )
 
 
 def _reject_secret_echo_for_capture(
@@ -229,16 +285,23 @@ def _reject_secret_echo_for_capture(
         )
     try:
         decoded_text = raw.decode("utf-8")
-        parsed_payload = json.loads(decoded_text)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        parsed_payload = json.loads(
+            decoded_text,
+            object_pairs_hook=_reject_duplicate_keys_hook,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, TushareProtocolError) as exc:
+        if isinstance(exc, TushareProtocolError):
+            raise
         raise TushareProtocolError(
             "Tushare 响应包含禁止持久化的敏感材料"
-        )
+        ) from None
 
-    if _has_secret_string(parsed_payload, token):
-        raise TushareProtocolError(
-            "Tushare 响应包含禁止持久化的敏感材料"
-        )
+    _inspect_json_value(
+        parsed_payload,
+        token=token,
+        request_body_bytes=request_body,
+        depth=0,
+    )
 
 
 def _emit_raw_response(
