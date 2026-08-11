@@ -199,15 +199,43 @@ def _safe_capture_params(params: dict[str, Any]) -> dict[str, Any]:
     return copied
 
 
+def _has_secret_string(val: Any, token: str) -> bool:
+    if type(val) is str:
+        return token in val
+    if type(val) is dict:
+        for k, v in val.items():
+            if (type(k) is str and token in k) or _has_secret_string(v, token):
+                return True
+        return False
+    if type(val) is list:
+        for item in val:
+            if _has_secret_string(item, token):
+                return True
+        return False
+    return False
+
+
 def _reject_secret_echo_for_capture(
     raw: bytes,
     *,
     token: str,
     request_body: bytes,
 ) -> None:
-    """Fail closed before a secret-bearing response can reach a raw sink."""
+    """Fail closed before a secret-bearing or uninspectable response can reach a raw sink."""
     token_bytes = token.encode("utf-8")
     if token_bytes in raw or request_body in raw:
+        raise TushareProtocolError(
+            "Tushare 响应包含禁止持久化的敏感材料"
+        )
+    try:
+        decoded_text = raw.decode("utf-8")
+        parsed_payload = json.loads(decoded_text)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise TushareProtocolError(
+            "Tushare 响应包含禁止持久化的敏感材料"
+        )
+
+    if _has_secret_string(parsed_payload, token):
         raise TushareProtocolError(
             "Tushare 响应包含禁止持久化的敏感材料"
         )

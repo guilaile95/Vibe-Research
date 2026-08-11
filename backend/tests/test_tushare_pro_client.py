@@ -374,18 +374,76 @@ def test_token_echo_guard_does_not_change_sink_absent_behavior(monkeypatch):
     assert rows == [{"ts_code": "600519.SH", "trade_date": "2026-07-30"}]
 
 
-def test_raw_sink_observes_malformed_terminal_bytes_before_parser_rejects(
+@pytest.mark.parametrize(
+    "token",
+    [
+        'TEST_ONLY_SECRET_SENTINEL_"\\_JSON_ESCAPED_7f6f57f1',
+        "TEST_ONLY_SECRET_SENTINEL_\n_CONTROL_CHAR_8a6e4312",
+        "TEST_ONLY_SECRET_SENTINEL_\t_TAB_CHAR_3b2a19e0",
+    ],
+)
+def test_raw_sink_rejects_json_escaped_token_echo_before_capture_without_retry(
     monkeypatch,
+    token,
 ):
+    monkeypatch.setenv("TUSHARE_TOKEN", token)
+    raw = json.dumps({
+        "code": 0,
+        "msg": f"provider echoed {token}",
+        "data": {
+            "fields": ["ts_code", "ann_date", "end_date", "update_flag", "eps"],
+            "items": [["600519.SH", "20260430", "20260331", "1", 2.5]],
+        },
+    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    assert token.encode("utf-8") not in raw
+
+    captured = []
+    with _patch_urlopen(raw) as request:
+        with pytest.raises(tpc.TushareProtocolError) as exc:
+            _client().query(
+                "fina_indicator",
+                {"ts_code": "600519.SH", "period": "20260331"},
+                "ts_code,ann_date,end_date,update_flag,eps",
+                raw_response_sink=lambda body, metadata: captured.append(
+                    (body, dict(metadata))
+                ),
+            )
+
+    assert request.call_count == 1
+    assert captured == []
+    assert str(exc.value) == "Tushare 响应包含禁止持久化的敏感材料"
+    assert token not in str(exc.value)
+
+
+def test_json_escaped_token_in_msg_without_sink_succeeds(monkeypatch):
+    token = 'TEST_ONLY_SECRET_SENTINEL_"\\_JSON_ESCAPED_7f6f57f1'
+    monkeypatch.setenv("TUSHARE_TOKEN", token)
+    raw = json.dumps({
+        "code": 0,
+        "msg": f"provider echoed {token}",
+        "data": {
+            "fields": ["ts_code", "trade_date"],
+            "items": [["600519.SH", "2026-07-30"]],
+        },
+    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    with _patch_urlopen(raw) as request:
+        rows = _client().query(
+            "daily",
+            {"trade_date": "20260730"},
+            "ts_code,trade_date",
+        )
+
+    assert request.call_count == 1
+    assert rows == [{"ts_code": "600519.SH", "trade_date": "2026-07-30"}]
+
+
+def test_raw_sink_rejects_malformed_response_without_capture(monkeypatch):
     monkeypatch.setenv("TUSHARE_TOKEN", "not-persisted")
-    monkeypatch.setattr(
-        tpc,
-        "_utc_now_iso",
-        lambda: "2026-08-11T08:00:00.000000Z",
-    )
     captured = []
     with _patch_urlopen(b"{malformed"):
-        with pytest.raises(tpc.TushareProtocolError):
+        with pytest.raises(tpc.TushareProtocolError) as exc:
             _client().query(
                 "fina_indicator",
                 {"ts_code": "600519.SH", "period": "20260331"},
@@ -394,7 +452,17 @@ def test_raw_sink_observes_malformed_terminal_bytes_before_parser_rejects(
                     (body, dict(metadata))
                 ),
             )
-    assert captured[0][0] == b"{malformed"
+    assert captured == []
+    assert str(exc.value) == "Tushare 响应包含禁止持久化的敏感材料"
+
+    with _patch_urlopen(b"{malformed"):
+        with pytest.raises(tpc.TushareProtocolError) as exc_nosink:
+            _client().query(
+                "fina_indicator",
+                {"ts_code": "600519.SH", "period": "20260331"},
+                "ts_code",
+            )
+    assert str(exc_nosink.value) == "Tushare 响应不是合法 JSON"
 
 
 def test_public_interpreter_preserves_exact_field_manifest():
