@@ -989,16 +989,16 @@ Observation / Fact 在适用时应区分：
 
 在 **Phase 2 Formal Thesis + S2D-M Migration / QA closure** 完成后，优先顺序冻结为：
 
-1. **DS-A1 — Canonical Data Source Contract v0.1**  
+1. **DS-A1 — Canonical Data Source Contract v0.1**
    先定义 DatasetSpec / ObservationEnvelope / TemporalSemantics / ProvenanceEnvelope / SourceRoutePolicy / ReconciliationPolicy；不先接新生产源。
 
-2. **DS-H1 — HiThink LIVE_SMOKE v0.1**  
+2. **DS-H1 — HiThink LIVE_SMOKE v0.1**
    独立验证认证/权限、rate limit、历史深度、分页、空值、财报 revision、report-date、复权、THS 板块/成分、基金、涨停与 market dumps；输出 machine-readable capability matrix。
 
-3. **DS-L1 — Local Fact Lake PoC v0.1**  
+3. **DS-L1 — Local Fact Lake PoC v0.1**
    首批只选择少量高价值 Dataset，证明 `immutable raw observation → normalize → provenance → repeat ingest → revision detection → as_of query → DuckDB read`；仅使用隔离本地测试数据，不迁移真实用户数据库。
 
-4. **DS-A2 — ashare-lake Semantic Gap Review**  
+4. **DS-A2 — ashare-lake Semantic Gap Review**
    将其 DatasetSpec / temporal / provenance 设计逐项与 Vibe contract 比较，明确 `COPY CONCEPT / ADAPT / REJECT / NOT APPLICABLE`，避免无边界复制整个项目。
 
 ### 30.6 Roadmap Gate

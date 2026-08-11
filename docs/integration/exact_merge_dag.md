@@ -7,7 +7,7 @@ feature/research-system-v01
 @1be2ecba505a8108740c311c103a2c72d3bcd444
 ```
 
-This is a **recommendation for future authorized merges**.  
+This is a **recommendation for future authorized merges**.
 `PR_READY = NO`, `MERGE = NO` for this consolidation task.
 
 ## Recommended production merge order
