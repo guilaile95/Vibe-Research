@@ -8,7 +8,8 @@
 ## 文件
 
 - `backend/fact_lake_health.py`：纯 core（新增，唯一生产文件）
-- `backend/tests/test_fact_lake_health.py`：41 tests（两矩阵 + 全 acceptance）
+- `backend/tests/test_fact_lake_health.py`：68 tests（41 原始 + 19 R1 + 8 R2；
+  两矩阵 + 全 acceptance + 无阈值新鲜度 + persisted 对账可见性）
 
 ## 7 维健康（不塌缩为单一 boolean）
 
@@ -18,8 +19,8 @@
 | storage_integrity | VERIFIED / UNVERIFIED / CORRUPTED（artifact/raw hash 失败 → CORRUPTED，§17） |
 | reproducibility | MATCH / NOT_RUN / UNSUPPORTED / MISMATCH（MISMATCH → BLOCKED；UNSUPPORTED ≠ corruption，§18） |
 | semantic_quality | valid / degraded / unknown / invalid（复用 QualityStatus，绝不升级，§19） |
-| freshness | CURRENT / STALE / UNKNOWN / NOT_APPLICABLE（仅显式权威 basis 才可能 CURRENT/STALE，§12-16） |
-| reconciliation | 复用 ReconciliationStatus + not_applicable/not_run（无 verifier 不惩罚，§21-23） |
+| freshness | CURRENT / STALE / UNKNOWN / NOT_APPLICABLE（仅显式权威 basis + 显式 reference + 显式 max_staleness 策略才可能 CURRENT/STALE；无阈值策略 → UNKNOWN，§12-16） |
+| reconciliation | 复用 ReconciliationStatus + not_applicable/not_run（persisted 状态始终可见，不依赖 verifier 路由；无 verifier 不惩罚，§21-23） |
 | canonical_admissibility | USABLE / USABLE_WITH_WARNING / BLOCKED（硬失败 → BLOCKED，§27） |
 
 ## 复用既有权威（无重复实现）
@@ -34,7 +35,8 @@
 ## 关键纪律
 
 - **NO_FAKE_FRESHNESS**：无显式 freshness_semantics → UNKNOWN；by_date 无 expected → UNKNOWN；
-  max_staleness 仅显式 UTC basis 才应用；从不隐式用墙钟 / mtime / 文件名 / 序。
+  max_staleness 仅显式 UTC basis 才应用；从不隐式用墙钟 / mtime / 文件名 / 序；
+  无 max_staleness 策略时时间戳+reference 只证明 age，不判可接受性（→ UNKNOWN，不推断隐式阈值）。
 - **NO_PIT / NO_AS_OF**：snapshot_only 不做历史回填；不实现 as_of / PIT。
 - **NO_PROVIDER_SWITCH**：对账 MISMATCH 仅产生 warning，绝不切换 provider / 选择 winner。
 - **LEGAL_ZERO**：空 payload 不是通用失败（dataset 专属 canonicalization 拥有该语义）。

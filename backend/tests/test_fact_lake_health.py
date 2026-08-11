@@ -100,7 +100,8 @@ def _fact(*, spec: DatasetSpec, quality: QualityStatus = QualityStatus.VALID,
           temporal_field: TemporalSemantics = TemporalSemantics.TRADE_DATE,
           temporal_value: str = "2026-08-10",
           revision_id: str | None = None,
-          report_period: str | None = None) -> CanonicalFact:
+          report_period: str | None = None,
+          reconciliation_status: ReconciliationStatus | None = None) -> CanonicalFact:
     kw = {
         "fact_id": FACT_ID,
         "dataset_id": spec.dataset_id,
@@ -122,6 +123,8 @@ def _fact(*, spec: DatasetSpec, quality: QualityStatus = QualityStatus.VALID,
         kw["report_period"] = report_period or temporal_value
     if revision_id is not None:
         kw["revision_id"] = revision_id
+    if reconciliation_status is not None:
+        kw["reconciliation_status"] = reconciliation_status
     return CanonicalFact(**kw)
 
 
@@ -911,3 +914,113 @@ def test_r1d_valid_assessment_round_trip_remains_pass():
     restored = flh.FactLakeHealthAssessment.from_dict(a.to_dict())
     assert restored == a
     assert flh.assessment_for_publication(a.publication_id, [a]) == a
+
+
+# ---------------------------------------------------------------------------
+# R2：P1-A 无阈值 ≠ CURRENT（时间戳+reference 只证明 age，无策略不判可接受性）
+# ---------------------------------------------------------------------------
+
+def _snapshot_spec(*, max_staleness: int | None = None) -> DatasetSpec:
+    return DatasetSpec(
+        dataset_id="ds_snapshot",
+        fetch_semantics=FetchSemantics.SNAPSHOT,
+        history_mode=HistoryMode.SNAPSHOT_ONLY,
+        routes=(_route(),),
+        governance_revision_id="rev-s",
+        required_temporal_fields=(TemporalSemantics.TRADE_DATE,),
+        revision_semantics=RevisionSemantics.IMMUTABLE,
+        adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,
+        max_staleness_seconds=max_staleness,
+    )
+
+
+def test_r2a_no_threshold_continuous_unknown_snapshot():
+    """SNAPSHOT_ONLY + max_staleness=None + OBSERVED_AT=2020 + reference →
+    freshness = UNKNOWN，绝不 CURRENT；不能仅凭该新鲜度证据判 USABLE。"""
+    spec = _snapshot_spec(max_staleness=None)
+    ev = _evidence(spec=spec, freshness_semantics=TemporalSemantics.OBSERVED_AT,
+                   freshness_value="2020-01-01T00:00:00.000Z",
+                   freshness_reference_at="2026-08-10T04:00:00.000Z")
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert a.freshness == "UNKNOWN"
+    assert a.freshness != "CURRENT"
+    assert flh.REASON_FRESHNESS_UNKNOWN in a.reason_codes
+    assert a.canonical_admissibility != "USABLE"
+
+
+def test_r2a_no_threshold_continuous_unknown_by_date():
+    """BY_DATE + max_staleness=None + 连续 freshness basis（无坐标 expected）→ UNKNOWN。"""
+    spec = _stale_spec(max_staleness=None)
+    ev = _evidence(spec=spec, freshness_semantics=TemporalSemantics.OBSERVED_AT,
+                   freshness_value=OBSERVED_9H, freshness_reference_at=REFERENCE)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert a.freshness == "UNKNOWN"
+    assert a.freshness != "CURRENT"
+    assert flh.REASON_FRESHNESS_UNKNOWN in a.reason_codes
+
+
+def test_r2a_threshold_present_still_evaluates():
+    """有 max_staleness 策略：age=9h > 1h → STALE（P1-A 不破坏既有评估）。"""
+    spec = _stale_spec(max_staleness=3600)
+    ev = _evidence(spec=spec, freshness_semantics=TemporalSemantics.OBSERVED_AT,
+                   freshness_value=OBSERVED_9H, freshness_reference_at=REFERENCE)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert a.freshness == "STALE"
+    assert flh.REASON_TEMPORAL_VALUE_STALE in a.reason_codes
+
+
+def test_r2a_snapshot_with_threshold_still_stale():
+    """SNAPSHOT_ONLY + 有 max_staleness 策略 → 仍按实际年龄评估（不抹除）。"""
+    spec = _snapshot_spec(max_staleness=300)
+    ev = _evidence(spec=spec, freshness_semantics=TemporalSemantics.OBSERVED_AT,
+                   freshness_value=OBSERVED_9H, freshness_reference_at=REFERENCE)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert a.freshness == "STALE"
+    assert flh.REASON_TEMPORAL_VALUE_STALE in a.reason_codes
+
+
+# ---------------------------------------------------------------------------
+# R2：P1-B persisted reconciliation 始终可见（不依赖 verifier 路由）
+# ---------------------------------------------------------------------------
+
+def test_r2b_persisted_mismatch_verifier_no_result():
+    """A. persisted MISMATCH + 有 verifier + 无 supplied result →
+    mismatch 保持可见；NOT_RUN 不得替换 persisted mismatch。"""
+    spec = _limit_up_spec(with_verifier=True)
+    fact = _fact(spec=spec, reconciliation_status=ReconciliationStatus.MISMATCH)
+    ev = _evidence(spec=spec, fact=fact, reconciliation=None)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert a.reconciliation == "mismatch"
+    assert flh.REASON_RECONCILIATION_MISMATCH in a.reason_codes
+    assert flh.REASON_RECONCILIATION_NOT_RUN not in a.reason_codes
+
+
+def test_r2b_persisted_match_verifier_no_result():
+    """B. persisted MATCH + 有 verifier + 无 supplied result → match，不是 not_run。"""
+    spec = _limit_up_spec(with_verifier=True)
+    fact = _fact(spec=spec, reconciliation_status=ReconciliationStatus.MATCH)
+    ev = _evidence(spec=spec, fact=fact, reconciliation=None)
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert a.reconciliation == "match"
+    assert flh.REASON_RECONCILIATION_NOT_RUN not in a.reason_codes
+
+
+def test_r2b_persisted_unknown_verifier_no_result():
+    """C. persisted UNKNOWN + 有 verifier + 无 supplied result → not_run（既有行为保留）。"""
+    spec = _limit_up_spec(with_verifier=True)
+    ev = _evidence(spec=spec, reconciliation=None)  # fact 默认 reconciliation_status=UNKNOWN
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert a.reconciliation == "not_run"
+    assert flh.REASON_RECONCILIATION_NOT_RUN in a.reason_codes
+
+
+def test_r2b_persisted_mismatch_supplied_mismatch_bound():
+    """D. persisted MISMATCH + supplied MISMATCH 正确绑定 → mismatch，无 drift。"""
+    spec = _limit_up_spec(with_verifier=True)
+    fact = _fact(spec=spec, reconciliation_status=ReconciliationStatus.MISMATCH)
+    ev = _evidence(spec=spec, fact=fact, reconciliation=_recon(ReconciliationStatus.MISMATCH))
+    a = flh.assess_publication_health(dataset_spec=spec, evidence=ev)
+    assert a.reconciliation == "mismatch"
+    assert flh.REASON_RECONCILIATION_STATUS_DRIFT not in a.reason_codes
+    assert flh.REASON_RECONCILIATION_MISMATCH in a.reason_codes
+    assert a.canonical_admissibility == "USABLE_WITH_WARNING"

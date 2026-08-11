@@ -284,8 +284,10 @@ class FactLakeHealthEvidence:
             if value not in allowed:
                 raise HealthValidationError(f"{name} 必须是 {allowed} 之一，got {value!r}")
         if self.artifact_sha256 is not None and (
-                type(self.artifact_sha256) is not str or len(self.artifact_sha256) != 64):
-            raise HealthValidationError("artifact_sha256 必须是 64 位 hex 或 None")
+                type(self.artifact_sha256) is not str
+                or len(self.artifact_sha256) != 64
+                or any(c not in "0123456789abcdef" for c in self.artifact_sha256)):
+            raise HealthValidationError("artifact_sha256 必须是 64 位小写 hex 或 None")
         if self.reconciliation_result is not None and not isinstance(
                 self.reconciliation_result, ReconciliationResult):
             raise HealthValidationError("reconciliation_result 必须是 ReconciliationResult")
@@ -566,8 +568,9 @@ def _assess_freshness(
       * 缺 `freshness_reference_at` → UNKNOWN（不猜墙钟）；
       * 有 reference_at 且 max_staleness_seconds 定义 → 按实际年龄判
         CURRENT/STALE（边界冻结：age == threshold 视为 STALE，fail closed）；
-      * 有 reference_at 无 max_staleness → 仅当 reference_at >= freshness_value
-        才 CONTINUOUS_CURRENT，否则 fail closed（reference_at < freshness_value）；
+      * 有 reference_at 无 max_staleness_seconds → UNKNOWN：时间戳+reference
+        只证明 age，无数据集新鲜度策略阈值则不能证明该 age 是否可接受；
+        绝不推断隐式无限阈值（reference_at < freshness_value 仍 fail closed）；
     - 坐标新鲜度（TRADE_DATE/REPORT_PERIOD）：expected 匹配 → 坐标 CURRENT；
       expected 缺失/不匹配 → UNKNOWN/STALE；
     - 两路保守合并：STALE 支配 UNKNOWN 支配 CURRENT；
@@ -600,7 +603,9 @@ def _assess_freshness(
                 continuous = ("CURRENT" if age_seconds < dataset_spec.max_staleness_seconds
                               else "STALE")
             else:
-                continuous = "CURRENT"  # 无阈值：显式 basis + 合法 reference 下可判 CURRENT
+                # R2：无新鲜度策略阈值 → UNKNOWN。时间戳+reference 只证明 age，
+                # 无阈值策略不能证明该 age 可接受；不推断隐式无限阈值。
+                continuous = "UNKNOWN"
 
     # 坐标新鲜度（TRADE_DATE/REPORT_PERIOD）；SNAPSHOT_ONLY 禁止伪造历史覆盖
     coordinate: str | None = None
@@ -642,60 +647,68 @@ def _assess_reconciliation(
     evidence: FactLakeHealthEvidence,
     reasons: list[str],
 ) -> str:
-    """对账（P1-B）：绑定 dataset/observation 身份 + 保留 persisted 状态 + drift fail-closed。
+    """对账（P1-B）：persisted 状态始终可见 + 绑定身份 + drift fail-closed。
 
-    - 无 VERIFIER 路由：不惩罚（NOT_APPLICABLE），但**保留** fact 上 persisted
-      reconciliation_status（若为 MISMATCH/PARTIAL 等仍保持可见，不静默抹除）；
-    - 有 verifier 无证据 → NOT_RUN（不伪造 MATCH）；
-    - 提供 ReconciliationResult 时必须绑定：
-      * result.dataset_id == spec.dataset_id == evidence.dataset_id == fact.dataset_id；
-      * left/right observation 至少一个 ∈ fact.source_observation_ids；
-      * 未绑定 → 显式 fail-closed（BLOCKED 级证据不一致）；
-    - persisted fact.reconciliation_status 与 supplied result 冲突 → 显式
-      fail-closed（REASON_RECONCILIATION_STATUS_DRIFT），绝不静默选一方；
-    - MISMATCH/PARTIAL 等保持可见（warning），绝不 provider switch。
+    优先级（persisted fact.reconciliation_status 是持久化证据，其可见性
+    不依赖 DatasetSpec 是否含 verifier 路由）：
+
+    1. 提供 ReconciliationResult 时：强制身份绑定（与 DS-A1
+       attach_reconciliation 语义一致：dataset 绑定 + 至少一个 observation
+       在 fact.source_observation_ids 内），未绑定 → 显式 fail-closed
+       （REASON_RECONCILIATION_UNBOUND）；
+    2. 绑定通过且 supplied 状态与 persisted 冲突 →
+       RECONCILIATION_STATUS_DRIFT → BLOCKED，绝不静默采用任何一方；
+    3. persisted 状态 != UNKNOWN → 始终保留可见（不因无 verifier 或
+       NOT_RUN 而静默抹除）；
+    4. 仅 persisted UNKNOWN：无 verifier → NOT_APPLICABLE（不惩罚）；
+       有 verifier 无 supplied result → NOT_RUN（不伪造 MATCH）；
+       有 verifier + 有效 supplied result → supplied 状态。
     """
     fact = evidence.canonical_fact
     has_verifier = any(
         route.role.value == "verifier" for route in dataset_spec.routes)
-
-    # 1) 提供 result：强制身份绑定
+    persisted = fact.reconciliation_status
     result = evidence.reconciliation_result
-    if result is not None:
-        if result.dataset_id != dataset_spec.dataset_id or \
-                result.dataset_id != evidence.dataset_id or \
-                result.dataset_id != fact.dataset_id:
-            reasons.append(REASON_RECONCILIATION_UNBOUND)
-        else:
-            obs_ids = set(fact.source_observation_ids)
-            if result.left_observation_id not in obs_ids and \
-                    result.right_observation_id not in obs_ids:
-                reasons.append(REASON_RECONCILIATION_UNBOUND)
-            else:
-                # 2) 绑定通过：与 persisted fact.reconciliation_status 冲突 → drift
-                persisted = fact.reconciliation_status
-                supplied = result.status
-                if persisted is not ReconciliationStatus.UNKNOWN and \
-                        supplied is not persisted:
-                    reasons.append(REASON_RECONCILIATION_STATUS_DRIFT)
-                else:
-                    code = _RECONCILIATION_REASON.get(supplied)
-                    if code is not None:
-                        reasons.append(code)
-                    if supplied is ReconciliationStatus.MATCH:
-                        return "match"
-                    return supplied.value
 
-    # 3) 未提供 result：无 verifier 不惩罚；有 verifier → NOT_RUN
-    if not has_verifier:
-        # 保留 persisted 状态（不静默抹除 MISMATCH/PARTIAL）
-        if fact.reconciliation_status is ReconciliationStatus.MATCH:
+    # 1) 提供 result：强制身份绑定（与 DS-A1 attach_reconciliation 一致）
+    bound = False
+    if result is not None:
+        if result.dataset_id == dataset_spec.dataset_id and \
+                result.dataset_id == evidence.dataset_id and \
+                result.dataset_id == fact.dataset_id:
+            obs_ids = set(fact.source_observation_ids)
+            bound = result.left_observation_id in obs_ids or \
+                result.right_observation_id in obs_ids
+        if not bound:
+            reasons.append(REASON_RECONCILIATION_UNBOUND)
+
+    if bound:
+        supplied = result.status
+        if persisted is not ReconciliationStatus.UNKNOWN and \
+                supplied is not persisted:
+            # persisted 与 supplied 冲突 → fail closed：绝不静默采用任何一方
+            # （R1：persisted MATCH + supplied MISMATCH 绝不返回 match）
+            reasons.append(REASON_RECONCILIATION_STATUS_DRIFT)
+            reasons.append(REASON_RECONCILIATION_NOT_RUN)
+            return "not_run"
+        code = _RECONCILIATION_REASON.get(supplied)
+        if code is not None:
+            reasons.append(code)
+        if supplied is ReconciliationStatus.MATCH:
             return "match"
-        if fact.reconciliation_status is not ReconciliationStatus.UNKNOWN:
-            code = _RECONCILIATION_REASON.get(fact.reconciliation_status)
-            if code is not None:
-                reasons.append(code)
-            return fact.reconciliation_status.value
+        return supplied.value
+
+    # 2) 无有效 supplied 结果（None / 未绑定）：persisted 状态始终可见
+    if persisted is ReconciliationStatus.MATCH:
+        return "match"
+    if persisted is not ReconciliationStatus.UNKNOWN:
+        code = _RECONCILIATION_REASON.get(persisted)
+        if code is not None:
+            reasons.append(code)
+        return persisted.value
+
+    # 3) 仅 persisted UNKNOWN：无 verifier 不惩罚；有 verifier 无结果 → NOT_RUN
+    if not has_verifier:
         return "not_applicable"
     reasons.append(REASON_RECONCILIATION_NOT_RUN)
     return "not_run"
