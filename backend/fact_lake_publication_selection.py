@@ -136,17 +136,28 @@ class CanonicalPublicationSelection:
     point_in_time_claim: str
 
     def __post_init__(self) -> None:
-        if type(self.schema_version) is not str or not self.schema_version:
-            raise PublicationSelectionInputError("schema_version is required")
+        # from_dict verifies structural/semantic self-consistency of the
+        # serialized selection itself; it does NOT re-run selection and
+        # does NOT invent original candidate provenance.
+        if self.schema_version != SELECTION_SCHEMA_VERSION:
+            raise PublicationSelectionInputError(
+                "schema_version must be "
+                f"{SELECTION_SCHEMA_VERSION!r}"
+            )
         if type(self.dataset_id) is not str or not self.dataset_id:
             raise PublicationSelectionInputError("dataset_id is required")
         if type(self.canonical_key) is not str or not self.canonical_key:
             raise PublicationSelectionInputError("canonical_key is required")
-        if type(self.primary_temporal_field) is not str \
-                or not self.primary_temporal_field:
+        if type(self.primary_temporal_field) is not str:
             raise PublicationSelectionInputError(
-                "primary_temporal_field is required"
+                "primary_temporal_field must be a TemporalSemantics value"
             )
+        try:
+            TemporalSemantics(self.primary_temporal_field)
+        except (TypeError, ValueError) as exc:
+            raise PublicationSelectionInputError(
+                "primary_temporal_field must be a TemporalSemantics value"
+            ) from exc
         if type(self.primary_temporal_value) is not str \
                 or not self.primary_temporal_value:
             raise PublicationSelectionInputError(
@@ -160,6 +171,18 @@ class CanonicalPublicationSelection:
             basis.value for basis in PublicationSelectionBasis
         }:
             raise PublicationSelectionInputError("selection_basis is invalid")
+        expected_basis = {
+            PublicationSelectionMode.ALL.value:
+                PublicationSelectionBasis.ALL_COMMITTED.value,
+            PublicationSelectionMode.PUBLICATION_ID.value:
+                PublicationSelectionBasis.EXACT_PUBLICATION_ID.value,
+            PublicationSelectionMode.LOCAL_LATEST.value:
+                PublicationSelectionBasis.LOCAL_VINTAGE_SEQUENCE.value,
+        }[self.selection_mode]
+        if self.selection_basis != expected_basis:
+            raise PublicationSelectionInputError(
+                "selection_basis does not match selection_mode"
+            )
         if type(self.selected_publication_ids) is not tuple \
                 or type(self.selected_vintage_sequences) is not tuple \
                 or type(self.dataset_contract_revisions) is not tuple \
@@ -180,6 +203,29 @@ class CanonicalPublicationSelection:
             raise PublicationSelectionInputError(
                 "selection metadata tuple lengths disagree"
             )
+        count = len(self.selected_publication_ids)
+        if self.selection_mode == PublicationSelectionMode.PUBLICATION_ID.value:
+            if count != 1:
+                raise PublicationSelectionInputError(
+                    "PUBLICATION_ID selection must contain exactly one "
+                    "publication"
+                )
+        elif self.selection_mode == PublicationSelectionMode.LOCAL_LATEST.value:
+            if count > 1:
+                raise PublicationSelectionInputError(
+                    "LOCAL_LATEST selection must contain at most one "
+                    "publication"
+                )
+        if self.selection_mode == PublicationSelectionMode.ALL.value:
+            vintages = list(self.selected_vintage_sequences)
+            if vintages != sorted(vintages):
+                raise PublicationSelectionInputError(
+                    "ALL selection vintages must be strictly ascending"
+                )
+            if len(set(vintages)) != len(vintages):
+                raise PublicationSelectionInputError(
+                    "ALL selection vintages must be unique"
+                )
         if len(set(self.selected_publication_ids)) != len(
             self.selected_publication_ids
         ):
@@ -197,6 +243,21 @@ class CanonicalPublicationSelection:
                 raise PublicationSelectionInputError(
                     "vintage_sequence must be a positive integer"
                 )
+        for publication_id in self.selected_publication_ids:
+            if type(publication_id) is not str or not publication_id:
+                raise PublicationSelectionInputError(
+                    "selected publication ids must be non-empty strings"
+                )
+        for metadata in (
+            self.dataset_contract_revisions,
+            self.normalizer_versions,
+            self.artifact_schema_versions,
+        ):
+            for value in metadata:
+                if type(value) is not str or not value:
+                    raise PublicationSelectionInputError(
+                        "selection metadata must be non-empty strings"
+                    )
         if self.provider_revision_claim != "NONE":
             raise PublicationSelectionInputError(
                 "provider_revision_claim must be NONE"

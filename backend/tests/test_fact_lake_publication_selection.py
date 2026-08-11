@@ -640,6 +640,128 @@ def test_output_roundtrip_rejects_unknown_claims():
         CanonicalPublicationSelection.from_dict(document)
 
 
+def _document_for(mode: PublicationSelectionMode):
+    spec = _spec()
+    publications = (
+        _publication(publication_id="pub-1", vintage=1),
+        _publication(publication_id="pub-2", vintage=2),
+    )
+    selection = select_canonical_publications(
+        spec,
+        _request(
+            mode=mode,
+            publication_id=(
+                "pub-1"
+                if mode is PublicationSelectionMode.PUBLICATION_ID
+                else None
+            ),
+        ),
+        publications,
+    )
+    return selection.to_dict()
+
+
+def test_blocking_a_unknown_schema_version_rejected():
+    document = _document_for(PublicationSelectionMode.LOCAL_LATEST)
+    document["schema_version"] = "fake-v9"
+    with pytest.raises(PublicationSelectionInputError, match="schema_version"):
+        CanonicalPublicationSelection.from_dict(document)
+
+
+def test_blocking_b_basis_mismatch_rejected():
+    document = _document_for(PublicationSelectionMode.LOCAL_LATEST)
+    document["selection_basis"] = "all_committed"
+    with pytest.raises(PublicationSelectionInputError, match="does not match"):
+        CanonicalPublicationSelection.from_dict(document)
+
+
+def test_blocking_c_local_latest_multi_publication_rejected():
+    document = _document_for(PublicationSelectionMode.LOCAL_LATEST)
+    document["selected_publication_ids"] = ["pub-1", "pub-2"]
+    document["selected_vintage_sequences"] = [1, 2]
+    document["dataset_contract_revisions"] = ["ds-test-contract-v0.1"] * 2
+    document["normalizer_versions"] = ["ds-test-normalizer-v0.1"] * 2
+    document["artifact_schema_versions"] = ["ds-test-parquet-v0.1"] * 2
+    with pytest.raises(PublicationSelectionInputError, match="at most one"):
+        CanonicalPublicationSelection.from_dict(document)
+
+
+def test_blocking_d_publication_id_cardinality_rejected():
+    document = _document_for(PublicationSelectionMode.PUBLICATION_ID)
+    document["selected_publication_ids"] = []
+    document["selected_vintage_sequences"] = []
+    document["dataset_contract_revisions"] = []
+    document["normalizer_versions"] = []
+    document["artifact_schema_versions"] = []
+    with pytest.raises(
+        PublicationSelectionInputError, match="exactly one"
+    ):
+        CanonicalPublicationSelection.from_dict(document)
+
+    document = _document_for(PublicationSelectionMode.PUBLICATION_ID)
+    document["selected_publication_ids"] = ["pub-1", "pub-2"]
+    document["selected_vintage_sequences"] = [1, 2]
+    document["dataset_contract_revisions"] = ["ds-test-contract-v0.1"] * 2
+    document["normalizer_versions"] = ["ds-test-normalizer-v0.1"] * 2
+    document["artifact_schema_versions"] = ["ds-test-parquet-v0.1"] * 2
+    with pytest.raises(
+        PublicationSelectionInputError, match="exactly one"
+    ):
+        CanonicalPublicationSelection.from_dict(document)
+
+
+def test_blocking_e_all_vintages_not_ascending_rejected():
+    document = _document_for(PublicationSelectionMode.ALL)
+    document["selected_publication_ids"] = ["pub-2", "pub-1"]
+    document["selected_vintage_sequences"] = [2, 1]
+    with pytest.raises(
+        PublicationSelectionInputError, match="strictly ascending"
+    ):
+        CanonicalPublicationSelection.from_dict(document)
+
+
+def test_blocking_f_unknown_temporal_field_rejected():
+    document = _document_for(PublicationSelectionMode.ALL)
+    document["primary_temporal_field"] = "magic_time"
+    with pytest.raises(
+        PublicationSelectionInputError, match="TemporalSemantics"
+    ):
+        CanonicalPublicationSelection.from_dict(document)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "selected_publication_ids",
+        "dataset_contract_revisions",
+        "normalizer_versions",
+        "artifact_schema_versions",
+    ],
+)
+def test_blocking_g_empty_selected_metadata_rejected(field):
+    document = _document_for(PublicationSelectionMode.ALL)
+    document[field] = ["", "ds-test-normalizer-v0.1"]
+    with pytest.raises(PublicationSelectionInputError, match="non-empty"):
+        CanonicalPublicationSelection.from_dict(document)
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        PublicationSelectionMode.ALL,
+        PublicationSelectionMode.PUBLICATION_ID,
+        PublicationSelectionMode.LOCAL_LATEST,
+    ],
+)
+def test_blocking_h_roundtrip_exact_for_all_modes(mode):
+    document = _document_for(mode)
+    restored = CanonicalPublicationSelection.from_dict(document)
+    assert restored.to_dict() == document
+    assert restored == CanonicalPublicationSelection.from_dict(
+        restored.to_dict()
+    )
+
+
 def test_s3_generic_parity_unknown_revision_local_latest():
     spec = _spec(revision=RevisionSemantics.UNKNOWN)
     publications = (
