@@ -4,7 +4,8 @@ Answers one question only:
 
 > For this Campaign, were the required decision dimensions actually evaluated?
 
-Does NOT answer safety, Hard Risk, Material Change, BUY/SELL, or Inbox visible state.
+Does NOT answer safety, Hard Risk, Material Change, recommendation generation,
+or Inbox visible state.
 
 ```text
 COVERAGE != SAFETY
@@ -12,16 +13,29 @@ UNKNOWN != NOT_EVALUATED
 ERROR != UNKNOWN
 ```
 
+Temporal contract (R1):
+
+```text
+as_of must be an explicit UTC zero-offset instant string.
+All five evaluation statuses must be normalized by the caller
+AS OF that same supplied as_of (not "ever ran historically").
+```
+
+RA1 does not compute freshness/TTL. Callers must not map stale domain results
+to EVALUATED unless temporally applicable to as_of.
+
 Pure domain boundary:
 - no I/O, SQLite, filesystem, env, network, HTTP frameworks, AI, wall clock
 - no imports of thesis / decision / risk / health / cockpit / advice authorities
 - consumes only explicit normalized evaluation status inputs
+- parsing supplied UTC as_of is allowed; never read wall clock
 """
 
 from __future__ import annotations
 
 import copy
 import re
+from datetime import datetime, timezone
 
 SCHEMA_VERSION = "decision_assurance.coverage.v0.1"
 
@@ -54,6 +68,20 @@ VALID_STRATEGIES = ("SHORT", "SWING", "MEDIUM")
 
 _SECURITY_CODE_RE = re.compile(r"^\d{6}$")
 _CAMPAIGN_ID_RE = re.compile(r"^campaign_[0-9a-f]{32}$")
+
+# Strict allowlist of UTC zero-offset instant forms only (no non-zero offsets,
+# no naive local times, no date-only, no silent timezone conversion).
+# Accepted:
+#   2026-08-12T00:00:00Z
+#   2026-08-12T00:00:00.000000Z   (1..6 fractional digits)
+#   2026-08-12T00:00:00+00:00
+#   2026-08-12T00:00:00.000000+00:00
+_AS_OF_UTC_FORMS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"),
+    re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,6}Z$"),
+    re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$"),
+    re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,6}\+00:00$"),
+)
 
 _INPUT_KEY_BY_DIMENSION: dict[str, str] = {
     "FORMAL_THESIS": "formal_thesis_evaluation",
@@ -108,7 +136,32 @@ def _require_campaign_id(value: object) -> str:
 
 
 def _require_as_of(value: object) -> str:
-    return _require_nonempty_str(value, "as_of")
+    """Strict UTC zero-offset instant; preserve exact accepted string.
+
+    Does not convert non-UTC offsets. Does not invent wall-clock time.
+    """
+    as_of = _require_nonempty_str(value, "as_of")
+    if not any(pattern.fullmatch(as_of) for pattern in _AS_OF_UTC_FORMS):
+        raise AssuranceIntegrityError(
+            "as_of must be a canonical UTC zero-offset instant "
+            "(...Z or ...+00:00); non-zero offsets and naive times are rejected"
+        )
+    # Parse-validate calendar components; Z is not accepted by fromisoformat
+    # until Python 3.11 in all forms — normalize only for parse, keep original.
+    parse_text = as_of[:-1] + "+00:00" if as_of.endswith("Z") else as_of
+    try:
+        parsed = datetime.fromisoformat(parse_text)
+    except ValueError as exc:
+        raise AssuranceIntegrityError(
+            f"as_of is not a deterministically parseable UTC instant: {as_of!r}"
+        ) from exc
+    if parsed.tzinfo is None:
+        raise AssuranceIntegrityError("as_of must be timezone-aware UTC")
+    if parsed.utcoffset() is None or parsed.utcoffset().total_seconds() != 0:
+        raise AssuranceIntegrityError("as_of must use UTC zero offset only")
+    # Round-trip sanity: equivalent instant in UTC.
+    _ = parsed.astimezone(timezone.utc)
+    return as_of
 
 
 def _require_evaluation_state(value: object, field: str) -> str:
@@ -159,6 +212,11 @@ def project_decision_assurance(
 
     Pure function of explicit normalized evaluation statuses.
     Does not interpret domain safety of EVALUATED results.
+
+    Caller contract: each evaluation status must already be normalized as
+    applicable **as of** the supplied ``as_of`` instant (same temporal context
+    for all five dimensions). Historical "once ran" results must not be mapped
+    to EVALUATED unless still temporally applicable at ``as_of``.
     """
     sec = _require_security_code(security_code)
     strat = _require_strategy(strategy)
