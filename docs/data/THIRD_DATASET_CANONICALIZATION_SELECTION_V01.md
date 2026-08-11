@@ -49,8 +49,12 @@ authority.
 - Temporal coordinate: `TemporalSemantics.TRADE_DATE` — the exchange
   trading date explicitly bound by the provider contract (Gate C PASS).
 - Revision semantics: Tushare `daily` returns unadjusted OHLCV rows for a
-  completed trade date with no restatement flag; the conservative contract
-  is `RevisionSemantics.IMMUTABLE` (Gate I PASS, no revision invented).
+  completed trade date, but the provider contract does not establish
+  historical revision semantics; the conservative state is
+  `RevisionSemantics.UNKNOWN` (Gate I PASS, no revision invented).
+- Row identity: `(ts_code, trade_date)` is the authoritative row identity;
+  exact duplicates collapse with `exact_duplicate_count`, same-identity
+  conflicts fail closed (no silent provider-revision claim).
 - Adjustment semantics: `AdjustmentSemantics.UNADJUSTED` — the `daily`
   endpoint serves unadjusted quotes; no adjustment claim is made.
 - PIT: `point_in_time_supported = False`; no as_of implementation (Gate H
@@ -78,7 +82,8 @@ authority.
 - `ARTIFACT_SCHEMA_VERSION` = `ds-tushare-daily-parquet-v0.1`
 - Provider: `tushare_pro` endpoint `daily`, role `CANONICAL`, single route
 - Temporal: `TRADE_DATE`, BY_DATE, no PIT
-- Revision: `IMMUTABLE`; Adjustment: `UNADJUSTED`
+- Revision: `UNKNOWN` (not established by provider contract); Adjustment:
+  `UNADJUSTED`
 - Fact Lake schema: `fact_lake_control_v3` (reused, no bump)
 
 ## Boundary

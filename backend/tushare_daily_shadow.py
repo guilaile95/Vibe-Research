@@ -12,9 +12,10 @@ Dataset selection evidence (DS-L1-S3 §17):
   the existing ``TemporalSemantics.TRADE_DATE`` (Gate C).
 - No change to ``data_contracts.py``, no Fact Lake schema bump, no new
   runtime dependency, no new credential (Gates D-G).
-- ``daily`` returns unadjusted OHLCV for a completed trade date; Tushare
-  does not provide restatement flags in this endpoint, so the conservative
-  contract is ``IMMUTABLE`` + ``UNADJUSTED``, BY_DATE, no PIT (Gates H-I).
+- ``daily`` returns unadjusted OHLCV for a completed trade date
+  (``UNADJUSTED``), but the provider contract does not establish historical
+  revision semantics, so the conservative revision state is ``UNKNOWN``,
+  BY_DATE, no PIT (Gates H-I).
 - Daily price cross-sections have clear research value beyond a test
   fixture (Gate J).
 
@@ -84,8 +85,8 @@ REVISION_ROW_ORDERING = (
     "deterministic presentation only, not provider revision chronology"
 )
 DUPLICATE_POLICY = (
-    "dedupe exact canonical source projections and retain exact_duplicate_count; "
-    "preserve every differing row for the trade date"
+    "row identity is (ts_code, trade_date); exact duplicates collapse with "
+    "exact_duplicate_count, same-identity conflicts fail closed"
 )
 
 IDENTITY_FIELDS = ("ts_code", "trade_date")
@@ -174,7 +175,7 @@ TUSHARE_DAILY_DATASET_SPEC = DatasetSpec(
     governance_revision_id=DATASET_CONTRACT_REVISION,
     required_temporal_fields=(TemporalSemantics.TRADE_DATE,),
     point_in_time_supported=False,
-    revision_semantics=RevisionSemantics.IMMUTABLE,
+    revision_semantics=RevisionSemantics.UNKNOWN,
     adjustment_semantics=AdjustmentSemantics.UNADJUSTED,
 )
 
@@ -418,7 +419,7 @@ def build_provider_observation(
         report_period=None,
         revision_id=None,
         data_version=None,
-        revision_semantics=RevisionSemantics.IMMUTABLE,
+        revision_semantics=RevisionSemantics.UNKNOWN,
         adjustment_semantics=AdjustmentSemantics.UNADJUSTED,
         quality_status=quality_status,
         reason_codes=reason_codes,
@@ -445,7 +446,7 @@ def normalize_tushare_daily(
     if len(parsed.rows) > MAX_DAILY_ROWS:
         raise TushareDailyNormalizationError("tushare_daily response row limit exceeded")
 
-    unique_rows: dict[str, dict[str, Any]] = {}
+    rows_by_identity: dict[tuple[str, str], dict[str, Any]] = {}
     duplicate_count = 0
     for raw_row in parsed.rows:
         if type(raw_row) is not dict or tuple(raw_row) != DAILY_FIELD_MANIFEST:
@@ -465,14 +466,21 @@ def normalize_tushare_daily(
         }
         for field in METRIC_FIELDS:
             row[field] = _finite_metric(raw_row[field], field)
-        row_json = _canonical_json(row)
-        if row_json in unique_rows:
+        identity = (row["ts_code"], row["trade_date"])
+        existing = rows_by_identity.get(identity)
+        if existing is None:
+            rows_by_identity[identity] = row
+            continue
+        if _canonical_json(existing) == _canonical_json(row):
             duplicate_count += 1
         else:
-            unique_rows[row_json] = row
+            raise TushareDailyNormalizationError(
+                "daily row identity conflict for "
+                f"{row['ts_code']} {row['trade_date']}"
+            )
 
     rows = sorted(
-        unique_rows.values(),
+        rows_by_identity.values(),
         key=lambda r: (
             r["ts_code"],
             _sha256_text(_canonical_json(r)),

@@ -164,11 +164,11 @@ class _Response:
         return self.body if limit is None else self.body[:limit]
 
 
-def test_dataset_contract_is_trade_date_immutable_unadjusted_and_not_pit():
+def test_dataset_contract_is_trade_date_unknown_revision_unadjusted_and_not_pit():
     spec = TUSHARE_DAILY_DATASET_SPEC
     assert spec.dataset_id == DATASET_ID
     assert spec.required_temporal_fields == (TemporalSemantics.TRADE_DATE,)
-    assert spec.revision_semantics is RevisionSemantics.IMMUTABLE
+    assert spec.revision_semantics is RevisionSemantics.UNKNOWN
     assert spec.point_in_time_supported is False
     assert spec.canonical_route.provider_id == "tushare_pro"
     assert spec.canonical_route.provider_endpoint == "daily"
@@ -291,6 +291,129 @@ def test_daily_dataset_row_limit_fails_closed():
         )
 
 
+def test_exact_duplicate_rows_collapse_by_identity():
+    raw = _raw([_row(), _row()])
+    parsed = tpc.interpret_tushare_response_bytes(raw, CANONICAL_ENDPOINT)
+    normalized = normalize_tushare_daily(
+        parsed,
+        TushareDailyRequestContract(TRADE_DATE),
+        source_observation_id="obs-test",
+    )
+    assert normalized["provider_row_count"] == 2
+    assert normalized["unique_row_count"] == 1
+    assert normalized["exact_duplicate_count"] == 1
+    assert len(normalized["rows"]) == 1
+
+
+def test_same_identity_conflicting_close_rejects():
+    raw = _raw([_row(close=1800.0), _row(close=1801.0)])
+    parsed = tpc.interpret_tushare_response_bytes(raw, CANONICAL_ENDPOINT)
+    with pytest.raises(TushareDailyNormalizationError, match="identity conflict"):
+        normalize_tushare_daily(
+            parsed,
+            TushareDailyRequestContract(TRADE_DATE),
+            source_observation_id="obs-test",
+        )
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"vol": 35001.0},
+        {"amount": 6280001.0},
+        {"high": 1811.0},
+        {"pct_chg": 1.6},
+        {"open": 1781.0},
+    ],
+)
+def test_same_identity_conflicting_metric_rejects_order_independent(override):
+    left = _row(**override)
+    right = _row()
+    for rows in ([left, right], [right, left]):
+        raw = _raw(rows)
+        parsed = tpc.interpret_tushare_response_bytes(raw, CANONICAL_ENDPOINT)
+        with pytest.raises(
+            TushareDailyNormalizationError, match="identity conflict"
+        ):
+            normalize_tushare_daily(
+                parsed,
+                TushareDailyRequestContract(TRADE_DATE),
+                source_observation_id="obs-test",
+            )
+
+
+def test_same_trade_date_distinct_payloads_preserve_both_without_revision_claims(
+    tmp_path,
+):
+    lake = initialize_fact_lake(tmp_path / "lake")
+    first_observation, _, first_fact = _persist_fact(
+        lake,
+        _raw([_row()]),
+        event=1,
+    )
+    first = publish_tushare_daily_canonical_fact(lake, first_fact)
+
+    second_observation, _, second_fact = _persist_fact(
+        lake,
+        _raw([_row(close=1801.0)]),
+        event=2,
+    )
+    second = publish_tushare_daily_canonical_fact(lake, second_fact)
+
+    assert first_observation.observation.observation_id \
+        != second_observation.observation.observation_id
+    assert first_observation.blob_hash != second_observation.blob_hash
+    assert first.publication_id != second.publication_id
+    assert first.vintage_sequence == 1
+    assert second.vintage_sequence == 2
+    assert first_observation.observation.revision_id is None
+    assert first_observation.observation.data_version is None
+    assert second_observation.observation.revision_id is None
+    assert second_observation.observation.data_version is None
+    assert first.fact.revision_semantics is RevisionSemantics.UNKNOWN
+    assert second.fact.revision_semantics is RevisionSemantics.UNKNOWN
+
+    all_rows = query_tushare_daily(lake, TRADE_DATE, selection="all")
+    assert [row["vintage_sequence"] for row in all_rows] == [1, 2]
+
+
+def test_shadow_rejects_identity_conflict_without_any_fact_lake_persistence(
+    tmp_path,
+    monkeypatch,
+):
+    root = tmp_path / "lake"
+    lake = initialize_fact_lake(root)
+    raw = _raw([_row(close=1800.0), _row(close=1801.0)])
+    monkeypatch.setenv("TUSHARE_TOKEN", "test-only-placeholder")
+    monkeypatch.setattr(
+        tpc,
+        "_utc_now_iso",
+        lambda: "2026-07-30T08:00:00.000000Z",
+    )
+    with mock.patch(
+        "urllib.request.urlopen",
+        return_value=_Response(raw),
+    ) as request:
+        with pytest.raises(TushareDailyNormalizationError, match="identity conflict"):
+            run_tushare_daily_shadow(
+                TRADE_DATE,
+                lake,
+            )
+    assert request.call_count == 1
+    conn = sqlite3.connect(root / CONTROL_DB_FILENAME)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM normalized_observations"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM canonical_publications"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+    assert list((root / "raw").rglob("*.blob")) == []
+
+
 def test_replay_from_committed_raw_matches_without_using_stored_input(tmp_path):
     root = tmp_path / "lake"
     lake = initialize_fact_lake(root)
@@ -392,17 +515,21 @@ def test_replay_rejects_corrupted_capture_event_binding(tmp_path):
         replay_tushare_daily_normalization(fresh, observation_id)
 
 
-def test_fact_binds_trade_date_without_fabricating_report_or_publish_time(tmp_path):
+def test_fact_binds_trade_date_without_fabricating_revision_or_publish_time(tmp_path):
     lake = initialize_fact_lake(tmp_path / "lake")
     observation, normalization, fact = _persist_fact(lake, _raw())
     assert observation.observation.trade_date == TRADE_DATE
     assert observation.observation.report_period is None
     assert observation.observation.published_at is None
+    assert observation.observation.revision_id is None
+    assert observation.observation.data_version is None
+    assert observation.observation.revision_semantics \
+        is RevisionSemantics.UNKNOWN
     assert fact.trade_date == TRADE_DATE
     assert fact.report_period is None
     assert fact.published_at is None
     assert fact.revision_id is None and fact.data_version is None
-    assert fact.revision_semantics is RevisionSemantics.IMMUTABLE
+    assert fact.revision_semantics is RevisionSemantics.UNKNOWN
     assert fact.canonical_payload["rows"][0]["close"] == 1800.0
     assert normalization.normalizer_version == NORMALIZER_VERSION
 
@@ -473,7 +600,7 @@ def test_publication_parquet_query_and_as_of_boundary(tmp_path):
     assert rows[0]["source_observation_id"] \
         == observation.observation.observation_id
     assert rows[0]["dataset_contract_revision"] == DATASET_CONTRACT_REVISION
-    assert rows[0]["revision_semantics"] == "immutable"
+    assert rows[0]["revision_semantics"] == "unknown"
     assert rows[0]["canonical_payload"] == normalization.normalized_payload
     assert query_tushare_daily(
         lake,
@@ -489,7 +616,7 @@ def test_publication_parquet_query_and_as_of_boundary(tmp_path):
         )
 
 
-def test_same_state_reobservation_dedups_but_corrections_are_immutable_vintages(
+def test_same_state_reobservation_dedups_but_distinct_payloads_are_local_vintages(
     tmp_path,
 ):
     lake = initialize_fact_lake(tmp_path / "lake")
