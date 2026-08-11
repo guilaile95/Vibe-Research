@@ -3,7 +3,7 @@
 > 稳定分支：`feature/research-system-v01`
 > 稳定 exact head：`7bd04a58dee44d613b97b302b6401a1256d753ff`
 > （Merge PR #98 Project Consolidation Candidate；Consolidation Gate **CLOSED**）
-> 当前授权任务：[`docs/NEXT_TASK.md`](NEXT_TASK.md) — **P0 Productization / P0-DI0**
+> 当前授权任务：[`docs/NEXT_TASK.md`](NEXT_TASK.md) — **P0 Productization / P0-DI1**
 > 产品方向：[`docs/PRODUCT_NORTH_STAR_V01.md`](PRODUCT_NORTH_STAR_V01.md)
 > 治理契约：[`docs/GOVERNANCE.md`](GOVERNANCE.md)
 > 产品候选池：[`docs/PRODUCT_BACKLOG.md`](PRODUCT_BACKLOG.md)
@@ -212,10 +212,22 @@ P0 验收必须同时通过：
 
 ## 7. 当前授权
 
+```text
+P0-DI0 = CLOSED
+P0-DI1 = AUTHORIZED
+DI1_EXECUTOR = K
+C = REST / FREE
+C_PREAUTHORIZED = NO
+```
+
 - **当前阶段：P0 PRODUCTIZATION**
-- **当前 Wave：P0-DI0 — Decision Inbox Reuse / Contract Freeze**
-- **当前已授权：docs/state sync + DI0 分析/contract 工作（见 `docs/NEXT_TASK.md`）**
-- **Production implementation：未授权**（`C = REST / FREE`；DI0 关闭不预选 C 为 DI1 executor）
+- **当前 Wave：P0-DI1 — Decision Inbox Pure Projection Core v0.1**
+- **K = AUTHORIZED**（Primary Implementer；DI1 pure projection 实现）
+- **Z = COMPLETE / FREE**（DI0 product acceptance 已完成）
+- **C = REST / FREE**（**不是** DI1 production executor；`C is NOT pre-authorized for DI1`）
+- **ChatGPT** = architecture authority / independent reviewer
+- DI1 scope 仅允许 pure-domain projection 文件（见 `docs/NEXT_TASK.md`）；
+  禁止 I/O / SQLite / FastAPI / AI / new persistence / numeric priority score
 - North Star unchecked items 不自动成为 implementation backlog
 - PR #59 不授权 Ready/Merge
 - PR #64 / #69：DO NOT TOUCH

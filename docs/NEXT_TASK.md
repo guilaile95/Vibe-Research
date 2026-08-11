@@ -8,7 +8,8 @@
 > 状态日期：2026-08-12
 >
 > 说明：Project Consolidation Gate **已关闭**（PR #98 MERGED）。
-> 当前阶段切换到 **P0 Productization**。本文件是执行授权，不是 North Star 重写。
+> P0-DI0 **已关闭**。当前执行 Wave 为 **P0-DI1**。
+> 本文件是执行授权，不是 North Star 重写。
 
 ```text
 North Star = product authority
@@ -30,13 +31,9 @@ REAL_USER_FORMAL_THESIS_MIGRATION = NOT_REQUIRED
 MIGRATION_STATUS = NOT_REQUIRED_NO_EXISTING_DB
 ```
 
-（runtime 权威路径下不存在既有 `evidence_thesis.db`；未伪造 v1 库。）
-
 Stable 受保护；禁止未经用户单独授权 direct push / force push。
 
 ### 已进入 stable 的 P0 foundation（摘要）
-
-以下能力已通过 Consolidation Merge 进入 stable（**不要再写 accepted-not-merged**）：
 
 - Formal Thesis
 - Current Thesis **OPTION A**（pure core + I/O adapter）
@@ -51,28 +48,84 @@ Stable 受保护；禁止未经用户单独授权 direct push / force push。
 
 Foundation in stable ≠ P0 产品闭环完成。
 
+### P0-DI0 状态（CLOSED）
+
+```text
+P0_DI0_INTERNAL_GAP_MAP = COMPLETE
+P0_DI0_PRODUCT_ACCEPTANCE = COMPLETE
+P0_DI0_ARCHITECTURE_DECISION = CLOSED
+```
+
 ---
 
 ## 2. 当前阶段与 Wave
 
 ```text
 阶段 = P0 PRODUCTIZATION
-目标 = Decision Inbox Readiness / First Vertical Slice
 ```
 
 当前 Wave：
 
 ```text
-P0-DI0
-Decision Inbox Reuse / Contract Freeze
+P0-DI1
+Decision Inbox Pure Projection Core v0.1
 ```
 
-目标：
+```text
+NEXT_SLICE =
+P0-DI1 Decision Inbox Pure Projection Core v0.1
 
-1. 在 exact stable head 上做 Decision Inbox **internal anti-rewheel / gap map**
-2. 冻结 Decision Inbox **product acceptance contract**
-3. 由 ChatGPT 给出 architecture decision + next-slice authorization
-4. **当前不开始 production implementation**（DI0 为 contract / gap map Wave）
+DI1_EXECUTOR = K
+```
+
+### DI1 已冻结架构（摘要，非重新设计）
+
+```text
+Decision Inbox =
+PURE CAMPAIGN-LEVEL READ-MODEL PROJECTION
+
+Decision Unit =
+Security + Strategy + Campaign
+
+NEW_PERSISTENCE = NO
+NEW_DB = NO
+NEW_TABLE = NO
+
+AI_AUTO_CALL = NO
+NUMERIC_PRIORITY_SCORE = NO
+CAMPAIGN_CAPITAL_RELEVANCE = UNKNOWN
+
+TOP_RISK != HARD_RISK AUTHORITY
+decision_cockpit_today != DI semantic authority
+```
+
+### DI1 production scope（仅允许）
+
+```text
+backend/decision_inbox_projection.py
+backend/tests/test_decision_inbox_projection.py
+```
+
+可选：
+
+```text
+docs/p0/DECISION_INBOX_PROJECTION_V01.md
+```
+
+核心边界：
+
+```text
+NO I/O
+NO SQLite
+NO filesystem
+NO network
+NO FastAPI
+NO AI
+NO wall clock
+NO new persistence
+NO BUY/SELL generation
+NO numeric priority score
+```
 
 ---
 
@@ -80,30 +133,40 @@ Decision Inbox Reuse / Contract Freeze
 
 | Lane | 授权 | 说明 |
 |---|---|---|
-| **K** | **AUTHORIZED** | Decision Inbox internal anti-rewheel / exact-head gap map |
-| **Z** | **AUTHORIZED** | Decision Inbox product acceptance contract |
-| **ChatGPT** | **AUTHORIZED** | architecture decision + next-slice authorization |
-| **C** | **REST / FREE** | `PRODUCTION_IMPLEMENTATION = NO` |
+| **K** | **AUTHORIZED** | Primary Implementer；P0-DI1 production implementation |
+| **Z** | **COMPLETE / FREE** | DI0 product acceptance 已完成；当前 FREE |
+| **C** | **REST / FREE** | 非 DI1 production executor |
+| **ChatGPT** | **AUTHORIZED** | architecture authority / independent reviewer |
 
 ```text
+K = AUTHORIZED
+ROLE = Primary Implementer
+SLICE = P0-DI1
+
+Z = COMPLETE / FREE
 C = REST / FREE
-PRODUCTION_IMPLEMENTATION = NO
+
+ChatGPT =
+architecture authority / independent reviewer
 ```
 
 明确：
 
 ```text
-DI0 closure does NOT pre-authorize C.
-After K/Z inputs and ChatGPT architecture decision,
-ChatGPT will select the production executor for DI1.
+C is NOT pre-authorized for DI1.
+C_PREAUTHORIZED = NO
+DI1_EXECUTOR = K
 ```
 
-当前禁止（全体 lane，非预选 C）：
+当前禁止（超出 DI1 pure-projection scope）：
 
-- Decision Inbox production UI/API 实现
-- Sell Engine / 新 Formal Decision 产品切片实现
+- 超出允许文件列表的 production 实现
+- I/O / SQLite / network / FastAPI / AI / wall-clock 接入
+- 新建 persistence / DB / table
+- BUY/SELL generation / numeric priority score
+- Sell Engine / 新 Formal Decision 产品切片（未单独授权）
 - 以 North Star unchecked item 为借口的 feature sprint
-- 将 C（或任何 lane）预选为 DI1 production executor
+- 将 C 预选或自动指派为 DI1 executor
 
 ---
 
@@ -124,7 +187,7 @@ ChatGPT will select the production executor for DI1.
 → Outcome
 ```
 
-本 Wave **只推进 Decision Inbox readiness / contract freeze**，不授权整条主链实现。
+本 Wave **只推进 Decision Inbox pure projection core v0.1**，不授权整条主链实现。
 
 ---
 
@@ -163,13 +226,13 @@ North Star v0.1 长期产品优先级仍保持：
 3. P2：全市场机会发现
 4. P3：Outcome / Behavioral / Calibration / Model Governance
 
-但 **当前唯一执行 Wave 是 P0-DI0**，不是并行开启 P1/P2/P3。
+但 **当前唯一执行 Wave 是 P0-DI1**，不是并行开启 P1/P2/P3。
 
 ---
 
 ## 7. 后续（均未授权自动开始）
 
-- DI0 关闭后的 Decision Inbox first vertical slice implementation（需新授权）
+- DI1 之后的 Decision Inbox I/O adapter / product surface（需新授权）
 - Sell Engine / Next Best Action productization
 - Frontend information architecture rework（替代 PR #59 路径）
 - Market Regime production path（PR #64 当前 BLOCKED）
