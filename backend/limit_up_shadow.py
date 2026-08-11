@@ -1021,6 +1021,8 @@ def publish_canonical_fact(
         fact,
         publication_id=publication_id,
         source_observation_id=fact.source_observation_ids[0],
+        primary_temporal_field=TemporalSemantics.TRADE_DATE,
+        primary_temporal_value=trade_date,
         normalizer_version=provenance.normalizer_version,
         raw_payload_hash=provenance.source_payload_hash,
         artifact_schema_version=ARTIFACT_SCHEMA_VERSION,
@@ -1315,7 +1317,7 @@ def _read_publication_with_duckdb(
     if (
         record["publication_id"] != expected.publication_id
         or record["dataset_id"] != expected.dataset_id
-        or record["trade_date"] != expected.trade_date
+        or record["trade_date"] != expected.fact.trade_date
         or int(record["vintage_sequence"]) != expected.vintage_sequence
         or record["fact_id"] != expected.fact.fact_id
         or record["canonical_key"] != expected.canonical_key
@@ -1361,7 +1363,8 @@ def query_limit_up_pool(
         raise ValueError("trade_date must be YYYY-MM-DD")
     publications = lake.list_canonical_publications(
         dataset_id=DATASET_ID,
-        trade_date=trade_date,
+        primary_temporal_field=TemporalSemantics.TRADE_DATE,
+        primary_temporal_value=trade_date,
     )
     if selection == "latest":
         selected = publications[-1:] if publications else ()

@@ -25,10 +25,15 @@ from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
-from data_contracts import CanonicalFact, ProviderObservation, ReconciliationResult
+from data_contracts import (
+    CanonicalFact,
+    ProviderObservation,
+    ReconciliationResult,
+    TemporalSemantics,
+)
 
 
-SCHEMA_VERSION = "fact_lake_control_v2"
+SCHEMA_VERSION = "fact_lake_control_v3"
 CONTROL_DB_FILENAME = "fact_lake_control.sqlite3"
 RAW_DIRECTORY_NAME = "raw"
 CANONICAL_DIRECTORY_NAME = "canonical"
@@ -111,7 +116,8 @@ class StoredCanonicalPublication:
     publication_id: str
     dataset_id: str
     canonical_key: str
-    trade_date: str
+    primary_temporal_field: str
+    primary_temporal_value: str
     vintage_sequence: int
     fact: CanonicalFact
     source_observation_id: str
@@ -205,7 +211,12 @@ _SCHEMA_DDL = (
         publication_id TEXT PRIMARY KEY,
         dataset_id TEXT NOT NULL,
         canonical_key TEXT NOT NULL,
-        trade_date TEXT NOT NULL,
+        primary_temporal_field TEXT NOT NULL
+            CHECK (primary_temporal_field IN (
+                'effective_at', 'published_at', 'observed_at', 'fetched_at',
+                'trade_date', 'report_period'
+            )),
+        primary_temporal_value TEXT NOT NULL,
         vintage_sequence INTEGER NOT NULL CHECK (vintage_sequence > 0),
         fact_id TEXT NOT NULL,
         canonical_fact_json TEXT NOT NULL,
@@ -225,7 +236,8 @@ _SCHEMA_DDL = (
     """,
     """
     CREATE INDEX canonical_publications_lookup_idx
-        ON canonical_publications(dataset_id, trade_date, vintage_sequence,
+        ON canonical_publications(dataset_id, primary_temporal_field,
+                                  primary_temporal_value, vintage_sequence,
                                   publication_id)
     """,
     """
@@ -295,7 +307,8 @@ _SCHEMA_DDL = (
         AND NEW.publication_id IS OLD.publication_id
         AND NEW.dataset_id IS OLD.dataset_id
         AND NEW.canonical_key IS OLD.canonical_key
-        AND NEW.trade_date IS OLD.trade_date
+        AND NEW.primary_temporal_field IS OLD.primary_temporal_field
+        AND NEW.primary_temporal_value IS OLD.primary_temporal_value
         AND NEW.vintage_sequence IS OLD.vintage_sequence
         AND NEW.fact_id IS OLD.fact_id
         AND NEW.canonical_fact_json IS OLD.canonical_fact_json
@@ -362,7 +375,8 @@ _EXPECTED_COLUMNS = {
         "publication_id",
         "dataset_id",
         "canonical_key",
-        "trade_date",
+        "primary_temporal_field",
+        "primary_temporal_value",
         "vintage_sequence",
         "fact_id",
         "canonical_fact_json",
@@ -528,7 +542,7 @@ def _is_immutable_read_during_write(error: sqlite3.DatabaseError) -> bool:
     """Detect rollback-journal pages observed by an immutable concurrent read.
 
     ``immutable=1`` deliberately ignores SQLite locks.  An already-validated
-    v2 handle may therefore briefly see a writer's in-flight page and receive
+    current-version handle may therefore briefly see a writer's in-flight page and receive
     SQLITE_CORRUPT even though a normal lock-aware reader sees the committed
     database.  Initial/open version gates never use this fallback.
     """
@@ -1479,6 +1493,34 @@ class FactLake:
             raise ValueError(f"{field} must be canonical non-empty text")
         return value
 
+    @classmethod
+    def _validate_primary_temporal_coordinate(
+        cls,
+        fact: CanonicalFact,
+        source: ProviderObservation,
+        primary_temporal_field: TemporalSemantics,
+        primary_temporal_value: str,
+    ) -> tuple[str, str]:
+        if not isinstance(primary_temporal_field, TemporalSemantics):
+            raise TypeError(
+                "primary_temporal_field must be TemporalSemantics"
+            )
+        value = cls._require_publication_text(
+            primary_temporal_value,
+            "primary_temporal_value",
+        )
+        fact_value = getattr(fact, primary_temporal_field.value, None)
+        source_value = getattr(source, primary_temporal_field.value, None)
+        if fact_value is None or source_value is None:
+            raise FactLakePublicationConflictError(
+                "primary temporal coordinate is missing from fact or observation"
+            )
+        if fact_value != value or source_value != value:
+            raise FactLakePublicationConflictError(
+                "primary temporal index disagrees with canonical evidence"
+            )
+        return primary_temporal_field.value, value
+
     def _row_to_publication(
         self,
         row: sqlite3.Row,
@@ -1491,11 +1533,18 @@ class FactLake:
             raise FactLakeCorruptedError(
                 "stored canonical fact JSON is corrupted"
             ) from exc
+        try:
+            temporal_field = TemporalSemantics(row["primary_temporal_field"])
+        except (TypeError, ValueError) as exc:
+            raise FactLakeCorruptedError(
+                "stored primary temporal field is invalid"
+            ) from exc
         if (
             fact.fact_id != row["fact_id"]
             or fact.dataset_id != row["dataset_id"]
             or fact.canonical_key != row["canonical_key"]
-            or fact.trade_date != row["trade_date"]
+            or getattr(fact, temporal_field.value, None)
+                != row["primary_temporal_value"]
             or fact.dataset_contract_revision != row["dataset_contract_revision"]
             or fact.source_observation_ids != (row["source_observation_id"],)
             or len(fact.provenance_chain) != 1
@@ -1523,6 +1572,29 @@ class FactLake:
             raise FactLakeCorruptedError(
                 "staging canonical publication has a committed artifact hash"
             )
+        source = self.get_observation(row["source_observation_id"])
+        if source is None:
+            raise FactLakeCorruptedError(
+                "canonical publication source observation is absent"
+            )
+        source_observation = source.observation
+        if (
+            source_observation.dataset_id != fact.dataset_id
+            or source_observation.provider_id != fact.canonical_source
+            or source_observation.provider_id
+                != fact.provenance_chain[0].provider_id
+            or source_observation.provider_endpoint
+                != fact.provenance_chain[0].provider_endpoint
+            or source_observation.source_payload_hash
+                != fact.provenance_chain[0].source_payload_hash
+            or source_observation.normalizer_version != row["normalizer_version"]
+            or source_observation.quality_status != fact.quality_status
+            or getattr(source_observation, temporal_field.value, None)
+                != row["primary_temporal_value"]
+        ):
+            raise FactLakeCorruptedError(
+                "canonical publication source observation drifted"
+            )
         normalization = self.get_normalization(row["source_observation_id"])
         if normalization is None or _canonical_json(
             normalization.normalized_payload
@@ -1534,7 +1606,8 @@ class FactLake:
             publication_id=row["publication_id"],
             dataset_id=row["dataset_id"],
             canonical_key=row["canonical_key"],
-            trade_date=row["trade_date"],
+            primary_temporal_field=row["primary_temporal_field"],
+            primary_temporal_value=row["primary_temporal_value"],
             vintage_sequence=int(row["vintage_sequence"]),
             fact=fact,
             source_observation_id=row["source_observation_id"],
@@ -1571,6 +1644,8 @@ class FactLake:
         *,
         publication_id: str,
         source_observation_id: str,
+        primary_temporal_field: TemporalSemantics,
+        primary_temporal_value: str,
         normalizer_version: str,
         raw_payload_hash: str,
         artifact_schema_version: str,
@@ -1593,10 +1668,6 @@ class FactLake:
             self._require_publication_text(value, field)
         _hash_digest(raw_payload_hash)
         self._canonical_relpath(artifact_relpath)
-        if fact.trade_date is None:
-            raise FactLakePublicationConflictError(
-                "canonical publication requires an explicit trade_date"
-            )
         if fact.source_observation_ids != (source_observation_id,):
             raise FactLakePublicationConflictError(
                 "canonical publication must bind exactly one source observation"
@@ -1606,6 +1677,12 @@ class FactLake:
             raise FactLakePublicationConflictError(
                 "canonical source observation is not committed"
             )
+        temporal_field, temporal_value = self._validate_primary_temporal_coordinate(
+            fact,
+            source.observation,
+            primary_temporal_field,
+            primary_temporal_value,
+        )
         if (
             source.observation.dataset_id != fact.dataset_id
             or source.observation.provider_id != fact.canonical_source
@@ -1613,7 +1690,6 @@ class FactLake:
                 != fact.provenance_chain[0].provider_id
             or source.observation.provider_endpoint
                 != fact.provenance_chain[0].provider_endpoint
-            or source.observation.trade_date != fact.trade_date
             or source.observation.quality_status != fact.quality_status
             or source.observation.source_payload_hash.lower()
                 != raw_payload_hash.lower()
@@ -1640,7 +1716,8 @@ class FactLake:
         exact_values = (
             fact.dataset_id,
             fact.canonical_key,
-            fact.trade_date,
+            temporal_field,
+            temporal_value,
             fact.fact_id,
             fact_json,
             source_observation_id,
@@ -1663,7 +1740,8 @@ class FactLake:
                     persisted_values = (
                         row["dataset_id"],
                         row["canonical_key"],
-                        row["trade_date"],
+                        row["primary_temporal_field"],
+                        row["primary_temporal_value"],
                         row["fact_id"],
                         row["canonical_fact_json"],
                         row["source_observation_id"],
@@ -1682,13 +1760,14 @@ class FactLake:
                                 equivalent_replay is not None
                                 and row["dataset_id"] == fact.dataset_id
                                 and row["canonical_key"] == fact.canonical_key
-                                and row["trade_date"] == fact.trade_date
+                                and row["primary_temporal_field"]
+                                    == temporal_field
+                                and row["primary_temporal_value"]
+                                    == temporal_value
                                 and row["dataset_contract_revision"]
                                     == fact.dataset_contract_revision
                                 and row["normalizer_version"]
                                     == normalizer_version
-                                and row["raw_payload_hash"].lower()
-                                    == raw_payload_hash.lower()
                                 and row["artifact_schema_version"]
                                     == artifact_schema_version
                                 and row["artifact_relpath"] == artifact_relpath
@@ -1720,19 +1799,21 @@ class FactLake:
                 conn.execute(
                     """
                     INSERT INTO canonical_publications(
-                        publication_id, dataset_id, canonical_key, trade_date,
+                        publication_id, dataset_id, canonical_key,
+                        primary_temporal_field, primary_temporal_value,
                         vintage_sequence, fact_id, canonical_fact_json,
                         source_observation_id, dataset_contract_revision,
                         normalizer_version, raw_payload_hash,
                         artifact_schema_version, artifact_relpath,
                         artifact_sha256, commit_state
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'STAGING')
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'STAGING')
                     """,
                     (
                         publication_id,
                         fact.dataset_id,
                         fact.canonical_key,
-                        fact.trade_date,
+                        temporal_field,
+                        temporal_value,
                         sequence,
                         fact.fact_id,
                         fact_json,
@@ -1868,18 +1949,31 @@ class FactLake:
         self,
         *,
         dataset_id: str,
-        trade_date: str,
+        primary_temporal_field: TemporalSemantics,
+        primary_temporal_value: str,
     ) -> tuple[StoredCanonicalPublication, ...]:
         self._require_publication_text(dataset_id, "dataset_id")
-        self._require_publication_text(trade_date, "trade_date")
+        if not isinstance(primary_temporal_field, TemporalSemantics):
+            raise TypeError(
+                "primary_temporal_field must be TemporalSemantics"
+            )
+        self._require_publication_text(
+            primary_temporal_value,
+            "primary_temporal_value",
+        )
         conn = self._connect(readonly=True)
         try:
             rows = conn.execute(
                 "SELECT * FROM canonical_publications"
-                " WHERE dataset_id = ? AND trade_date = ?"
+                " WHERE dataset_id = ? AND primary_temporal_field = ?"
+                " AND primary_temporal_value = ?"
                 " AND commit_state = 'COMMITTED'"
                 " ORDER BY vintage_sequence, publication_id",
-                (dataset_id, trade_date),
+                (
+                    dataset_id,
+                    primary_temporal_field.value,
+                    primary_temporal_value,
+                ),
             ).fetchall()
         finally:
             conn.close()
