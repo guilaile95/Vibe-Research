@@ -215,7 +215,7 @@ P0 验收必须同时通过：
 - **当前阶段：P0 PRODUCTIZATION**
 - **当前 Wave：P0-DI0 — Decision Inbox Reuse / Contract Freeze**
 - **当前已授权：docs/state sync + DI0 分析/contract 工作（见 `docs/NEXT_TASK.md`）**
-- **C / production implementation：未授权**（等待 DI0 Gate 关闭）
+- **Production implementation：未授权**（`C = REST / FREE`；DI0 关闭不预选 C 为 DI1 executor）
 - North Star unchecked items 不自动成为 implementation backlog
 - PR #59 不授权 Ready/Merge
 - PR #64 / #69：DO NOT TOUCH

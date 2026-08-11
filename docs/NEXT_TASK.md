@@ -72,7 +72,7 @@ Decision Inbox Reuse / Contract Freeze
 1. 在 exact stable head 上做 Decision Inbox **internal anti-rewheel / gap map**
 2. 冻结 Decision Inbox **product acceptance contract**
 3. 由 ChatGPT 给出 architecture decision + next-slice authorization
-4. **在 DI0 Gate 关闭前，不开始 production implementation**
+4. **当前不开始 production implementation**（DI0 为 contract / gap map Wave）
 
 ---
 
@@ -83,13 +83,27 @@ Decision Inbox Reuse / Contract Freeze
 | **K** | **AUTHORIZED** | Decision Inbox internal anti-rewheel / exact-head gap map |
 | **Z** | **AUTHORIZED** | Decision Inbox product acceptance contract |
 | **ChatGPT** | **AUTHORIZED** | architecture decision + next-slice authorization |
-| **C** | **NO PRODUCTION IMPLEMENTATION YET** | 等待 DI0 Gate 关闭；这是**依赖 Gate**，不是无限冻结 |
+| **C** | **REST / FREE** | `PRODUCTION_IMPLEMENTATION = NO` |
 
-C 在 DI0 关闭后可进入下一授权切片；在此之前禁止：
+```text
+C = REST / FREE
+PRODUCTION_IMPLEMENTATION = NO
+```
+
+明确：
+
+```text
+DI0 closure does NOT pre-authorize C.
+After K/Z inputs and ChatGPT architecture decision,
+ChatGPT will select the production executor for DI1.
+```
+
+当前禁止（全体 lane，非预选 C）：
 
 - Decision Inbox production UI/API 实现
 - Sell Engine / 新 Formal Decision 产品切片实现
 - 以 North Star unchecked item 为借口的 feature sprint
+- 将 C（或任何 lane）预选为 DI1 production executor
 
 ---
 
