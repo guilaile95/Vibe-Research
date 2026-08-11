@@ -317,6 +317,135 @@ _ALL_DDL = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# 应用 Schema 结构契约（frozen-decision-ledger.v0.1）
+# ---------------------------------------------------------------------------
+
+_EXPECTED_TABLES = frozenset({"schema_meta", "frozen_decisions"})
+
+# 列名 → (声明类型, NOT NULL, PRIMARY KEY)
+_SCHEMA_META_COLUMNS: dict[str, tuple[str, bool, bool]] = {
+    "key": ("TEXT", False, True),
+    "value": ("TEXT", True, False),
+}
+
+_FROZEN_DECISIONS_COLUMNS: dict[str, tuple[str, bool, bool]] = {
+    "decision_id": ("TEXT", False, True),
+    "security_code": ("TEXT", True, False),
+    "strategy": ("TEXT", True, False),
+    "campaign_id": ("TEXT", True, False),
+    "committed_at": ("TEXT", True, False),
+    "snapshot_schema_version": ("TEXT", True, False),
+    "snapshot_hash": ("TEXT", True, False),
+    "thesis_id": ("TEXT", True, False),
+    "thesis_revision": ("INTEGER", True, False),
+    "next_best_action": ("TEXT", True, False),
+    "review_by": ("TEXT", True, False),
+    "validity_status_at_commit": ("TEXT", True, False),
+    "risk_policy_version": ("TEXT", True, False),
+    "opportunity_policy_version": ("TEXT", True, False),
+    "decision_policy_version": ("TEXT", True, False),
+    "behavior_model_version": ("TEXT", True, False),
+    "user_confirmed": ("INTEGER", True, False),
+    "snapshot_json": ("TEXT", True, False),
+    "created_at": ("TEXT", True, False),
+}
+
+# 索引名 → (目标表, (目标列,))
+_EXPECTED_INDEXES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "idx_frozen_decisions_security_code": ("frozen_decisions", ("security_code",)),
+    "idx_frozen_decisions_strategy": ("frozen_decisions", ("strategy",)),
+    "idx_frozen_decisions_campaign_id": ("frozen_decisions", ("campaign_id",)),
+    "idx_frozen_decisions_committed_at": ("frozen_decisions", ("committed_at",)),
+}
+
+
+def _assert_table_contract(
+    conn: sqlite3.Connection,
+    table_name: str,
+    expected: Mapping[str, tuple[str, bool, bool]],
+) -> None:
+    """断言单表结构契约：精确列集合、声明类型、NOT NULL、PRIMARY KEY。
+
+    表名只来自模块常量，无注入面。
+    """
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    actual = {
+        row["name"]: (row["type"].upper(), bool(row["notnull"]), bool(row["pk"]))
+        for row in rows
+    }
+    if set(actual) != set(expected):
+        raise FrozenDecisionCorruptedError(
+            f"{table_name} 列集合不符合 v0.1 契约：{sorted(actual)}"
+        )
+    for name, (etype, enotnull, epk) in expected.items():
+        atype, anotnull, apk = actual[name]
+        if atype != etype or anotnull != enotnull or apk != epk:
+            raise FrozenDecisionCorruptedError(
+                f"{table_name}.{name} 结构不符契约"
+                f"（type={atype} notnull={anotnull} pk={apk}）"
+            )
+
+
+def _assert_index_contract(conn: sqlite3.Connection) -> None:
+    """断言必需索引契约：存在、非自动索引、指向预期表与目标列。
+
+    不依赖索引名做最终判定：名称仅用于定位，tbl_name 与 index_info
+    列集合必须与契约一致。
+    """
+    for name, (table, columns) in _EXPECTED_INDEXES.items():
+        row = conn.execute(
+            "SELECT tbl_name, sql FROM sqlite_master "
+            "WHERE type = 'index' AND name = ?",
+            (name,),
+        ).fetchone()
+        if row is None:
+            raise FrozenDecisionCorruptedError(f"必需索引缺失：{name}")
+        if row["sql"] is None:
+            raise FrozenDecisionCorruptedError(f"{name} 是自动索引，不符合契约")
+        if row["tbl_name"] != table:
+            raise FrozenDecisionCorruptedError(
+                f"索引 {name} 指向错误表：{row['tbl_name']}"
+            )
+        info = conn.execute(f"PRAGMA index_info({name})").fetchall()
+        actual_columns = [r["name"] for r in info]
+        if actual_columns != list(columns):
+            raise FrozenDecisionCorruptedError(
+                f"索引 {name} 目标列不符：{actual_columns}（期望 {list(columns)}）"
+            )
+
+
+def _assert_schema(conn: sqlite3.Connection) -> None:
+    """单一 schema 权威：现有库完整应用结构断言（只读，零突变）。
+
+    - 应用表集合恰为 {schema_meta, frozen_decisions}，无意外表
+    - schema_meta / frozen_decisions 的列集合、声明类型、NOT NULL、PK 契约
+    - decision_id 必须是 frozen_decisions PRIMARY KEY
+    - 4 个必需索引存在且指向预期表与列
+
+    任一不符 → FrozenDecisionCorruptedError（fail closed），不做任何修复。
+    此函数为读 / 初始化预检 / 写预检共用的唯一权威实现。
+    """
+    try:
+        tables = {
+            row["name"]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        if tables != set(_EXPECTED_TABLES):
+            raise FrozenDecisionCorruptedError(
+                f"应用表集合不符合 v0.1 契约：{sorted(tables)}"
+            )
+        _assert_table_contract(conn, "schema_meta", _SCHEMA_META_COLUMNS)
+        _assert_table_contract(conn, "frozen_decisions", _FROZEN_DECISIONS_COLUMNS)
+        _assert_index_contract(conn)
+    except FrozenDecisionError:
+        raise
+    except sqlite3.DatabaseError:
+        raise FrozenDecisionCorruptedError()
+
+
 def _read_schema_version(conn: sqlite3.Connection) -> str | None:
     row = conn.execute(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'"
@@ -327,7 +456,8 @@ def _read_schema_version(conn: sqlite3.Connection) -> str | None:
 def _validate_and_prepare_schema(conn: sqlite3.Connection, is_write: bool) -> None:
     """统一 Schema 校验与准备。
 
-    - 已有 schema_meta：版本必须与代码版本完全一致，否则 fail closed
+    - 已有 schema_meta：版本必须与代码版本完全一致，随后立即执行
+      应用结构断言（_assert_schema），任一不符 fail closed
     - 非空数据库缺 schema_meta：视为损坏，fail closed
     - 全新空数据库：仅写路径执行 DDL 并写入版本
     - 任何校验失败均不执行 DDL
@@ -341,6 +471,8 @@ def _validate_and_prepare_schema(conn: sqlite3.Connection, is_write: bool) -> No
             raise FrozenDecisionSchemaVersionError(
                 f"不支持的 schema 版本：{version}（期望 {SCHEMA_VERSION}）"
             )
+        # 现有库：版本确认后立即做应用结构断言（单一权威，只读零突变）
+        _assert_schema(conn)
         return
 
     has_any_table = (
@@ -366,9 +498,9 @@ def initialize_store(db_path: str | Path) -> None:
     """显式初始化存储（幂等）：创建目录、表、索引并写入 schema 版本。
 
     - 全新数据库：允许创建 schema 并设置 WAL
-    - 已有数据库：先以只读方式确认 schema/版本（零突变）；版本不匹配或
-      内容损坏直接 fail closed，绝不触碰 journal / WAL / SHM / 文件内容
-    - 仅版本确认匹配后才允许进入 WAL / 可写设置
+    - 已有数据库：先以只读方式确认 schema/版本与应用结构契约（零突变）；
+      版本不匹配或结构损坏直接 fail closed，绝不触碰 journal / WAL / SHM / 文件内容
+    - 仅版本与结构均确认匹配后才允许进入 WAL / 可写设置
     """
     path = _as_path(db_path)
     if path == ":memory:":
@@ -641,9 +773,24 @@ _FROZEN_COLUMNS = (
 
 
 def _open_for_write(db_path: str | Path) -> sqlite3.Connection:
-    """可写连接：初始化 schema（显式写路径才允许）+ 完整性检查。"""
+    """可写连接：只读预检（版本 + 结构断言）通过后才允许打开可写连接。
+
+    结构损坏的 current-version 库在可写连接打开前即被拒绝（零突变）；
+    全新库（文件不存在）允许创建精确 v0.1 schema。
+    """
     path = _as_path(db_path)
     if path != ":memory:":
+        if _db_file_exists(path):
+            # 只读预检：任何 schema 不合法都在可写连接打开前拒绝
+            conn_ro = _connect_readonly(path)
+            try:
+                _validate_and_prepare_schema(conn_ro, is_write=False)
+            except FrozenDecisionError:
+                raise
+            except sqlite3.DatabaseError:
+                raise FrozenDecisionCorruptedError()
+            finally:
+                conn_ro.close()
         _ensure_parent_dir(path)
     conn = _connect(path)
     try:

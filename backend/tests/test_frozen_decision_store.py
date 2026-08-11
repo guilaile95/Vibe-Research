@@ -96,6 +96,73 @@ def _tamper(db_path: Path, set_clause: str, value) -> None:
         conn.close()
 
 
+_FROZEN_TABLE_COLUMNS = [
+    "decision_id", "security_code", "strategy", "campaign_id", "committed_at",
+    "snapshot_schema_version", "snapshot_hash", "thesis_id", "thesis_revision",
+    "next_best_action", "review_by", "validity_status_at_commit",
+    "risk_policy_version", "opportunity_policy_version", "decision_policy_version",
+    "behavior_model_version", "user_confirmed", "snapshot_json", "created_at",
+]
+
+
+def _build_malformed_db(
+    db_path: Path,
+    *,
+    decision_id_pk: bool = True,
+    missing_review_by: bool = False,
+    strategy_index_col: str = "strategy",
+    missing_index: str | None = None,
+    extra_table: bool = False,
+) -> None:
+    """构造 schema_version 正确但结构损坏的 current-version 库。"""
+    columns = [
+        "decision_id TEXT PRIMARY KEY" if decision_id_pk else "decision_id TEXT",
+        "security_code TEXT NOT NULL",
+        "strategy TEXT NOT NULL",
+        "campaign_id TEXT NOT NULL",
+        "committed_at TEXT NOT NULL",
+        "snapshot_schema_version TEXT NOT NULL",
+        "snapshot_hash TEXT NOT NULL",
+        "thesis_id TEXT NOT NULL",
+        "thesis_revision INTEGER NOT NULL",
+        "next_best_action TEXT NOT NULL",
+    ]
+    if not missing_review_by:
+        columns.append("review_by TEXT NOT NULL")
+    columns += [
+        "validity_status_at_commit TEXT NOT NULL",
+        "risk_policy_version TEXT NOT NULL",
+        "opportunity_policy_version TEXT NOT NULL",
+        "decision_policy_version TEXT NOT NULL",
+        "behavior_model_version TEXT NOT NULL",
+        "user_confirmed INTEGER NOT NULL",
+        "snapshot_json TEXT NOT NULL",
+        "created_at TEXT NOT NULL",
+    ]
+    indexes = [
+        "CREATE INDEX idx_frozen_decisions_security_code ON frozen_decisions(security_code)",
+        f"CREATE INDEX idx_frozen_decisions_strategy ON frozen_decisions({strategy_index_col})",
+        "CREATE INDEX idx_frozen_decisions_campaign_id ON frozen_decisions(campaign_id)",
+        "CREATE INDEX idx_frozen_decisions_committed_at ON frozen_decisions(committed_at)",
+    ]
+    if missing_index:
+        indexes = [i for i in indexes if not i.startswith(f"CREATE INDEX {missing_index} ")]
+    stmts = [
+        "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        "INSERT INTO schema_meta VALUES ('schema_version', 'frozen-decision-ledger.v0.1')",
+        "CREATE TABLE frozen_decisions (" + ",\n".join(columns) + ")",
+    ] + indexes
+    if extra_table:
+        stmts.append("CREATE TABLE unexpected_app_table (id INTEGER)")
+    conn = sqlite3.connect(str(db_path))
+    try:
+        for stmt in stmts:
+            conn.execute(stmt)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _dir_snapshot(path: Path) -> set[str]:
     if not path.exists():
         return set()
@@ -642,8 +709,6 @@ class TestWritePathDefense:
         frozen["created_at"] = "garbage"
         with pytest.raises(ValueError):
             store.write_frozen_decision(db_path, frozen)
-
-    def test_write_rejects_non_canonical_timestamp_form(self, db_path):
         # 合法 ISO 但非 canonical（+00:00 偏移、无微秒）一律拒绝
         frozen = _valid_frozen()
         frozen["created_at"] = "2026-08-10T06:00:01+00:00"
@@ -653,3 +718,109 @@ class TestWritePathDefense:
         frozen["committed_at"] = "2026-08-10T06:00:01Z"
         with pytest.raises(store.FrozenDecisionCorruptedError):
             store.write_frozen_decision(db_path, frozen)
+
+
+# ---------------------------------------------------------------------------
+# R2：Schema Authority — 同版本结构损坏 fail closed
+# ---------------------------------------------------------------------------
+
+class TestSchemaAuthority:
+    """R2：schema_version 正确但应用结构损坏的库必须 fail closed。"""
+
+    def _snapshot_state(self, path: Path) -> dict:
+        return {
+            "sha": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "size": path.stat().st_size,
+            "dir": {p.name for p in path.parent.iterdir()},
+        }
+
+    @pytest.mark.parametrize(
+        "build_kwargs",
+        [
+            {"decision_id_pk": False},  # A：decision_id 不是 PK
+            {"missing_review_by": True},  # B：缺少必需列
+            {"strategy_index_col": "campaign_id"},  # C：索引目标列错误
+            {"missing_index": "idx_frozen_decisions_strategy"},  # D：缺少必需索引
+            {"extra_table": True},  # E：意外应用表
+        ],
+        ids=["no-pk", "missing-column", "wrong-index-target", "missing-index", "extra-table"],
+    )
+    def test_same_version_malformed_fails_closed_all_paths(self, db_path, build_kwargs):
+        _build_malformed_db(db_path, **build_kwargs)
+        state_before = self._snapshot_state(db_path)
+        # 读
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.get_frozen_decision(db_path, "decision_" + "a" * 32)
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.list_frozen_decisions(db_path)
+        # 初始化
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.initialize_store(db_path)
+        # 写（可写连接打开前即拒绝）
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.write_frozen_decision(db_path, _valid_frozen())
+        # 零突变：字节、大小、目录树、无 WAL/SHM/journal
+        assert self._snapshot_state(db_path) == state_before
+        assert not Path(str(db_path) + "-wal").exists()
+        assert not Path(str(db_path) + "-shm").exists()
+        assert not Path(str(db_path) + "-journal").exists()
+
+    def test_duplicate_decision_id_no_pk_fails_closed(self, db_path):
+        """恶意库：无 decision_id PK，插两条同 id 不同内容的合法行。"""
+        _build_malformed_db(db_path, decision_id_pk=False)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            for committed_at in ("2026-08-10T05:00:00.000000Z", "2026-08-10T06:00:00.000000Z"):
+                frozen = _valid_frozen(committed_at=committed_at)
+                cols = _FROZEN_TABLE_COLUMNS
+                conn.execute(
+                    f"INSERT INTO frozen_decisions ({', '.join(cols)}) "
+                    f"VALUES ({', '.join('?' for _ in cols)})",
+                    tuple(frozen[c] for c in cols),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        # 全部路径在 schema 权威层拒绝，而非任取一行
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.get_frozen_decision(db_path, "decision_" + "a" * 32)
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.list_frozen_decisions(db_path)
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.initialize_store(db_path)
+        with pytest.raises(store.FrozenDecisionCorruptedError):
+            store.write_frozen_decision(db_path, _valid_frozen())
+
+    def test_fresh_initialize_creates_exact_v0_1_schema(self, db_path):
+        store.initialize_store(db_path)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            pk = conn.execute(
+                "PRAGMA table_info(frozen_decisions)"
+            ).fetchall()
+            pk_cols = [r[1] for r in pk if r[5] == 1]
+        finally:
+            conn.close()
+        assert tables == {"schema_meta", "frozen_decisions"}
+        assert pk_cols == ["decision_id"]
+
+    def test_fresh_write_initializes_exact_schema(self, db_path):
+        _write_valid(db_path)
+        assert len(store.list_frozen_decisions(db_path)) == 1
+
+    def test_second_initialize_idempotent(self, db_path):
+        _write_valid(db_path)
+        store.initialize_store(db_path)
+        store.initialize_store(db_path)
+        assert len(store.list_frozen_decisions(db_path)) == 1
+
+    def test_existing_valid_db_all_paths_ok(self, db_path):
+        frozen = _write_valid(db_path)
+        got = store.get_frozen_decision(db_path, frozen["decision_id"])
+        assert got is not None
+        assert len(store.list_frozen_decisions(db_path)) == 1
+        store.initialize_store(db_path)
+        store.write_frozen_decision(db_path, frozen)
