@@ -9,6 +9,7 @@
 > - 产品方向：[`PRODUCT_NORTH_STAR_V01.md`](PRODUCT_NORTH_STAR_V01.md)
 > - 执行授权：[`NEXT_TASK.md`](NEXT_TASK.md)
 > - 调用链细节：[`ARCHITECTURE.md`](ARCHITECTURE.md)
+> - 新会话与 Validation V2 执行协议：[`CONVERSATION_HANDOFF.md`](CONVERSATION_HANDOFF.md)
 > - 统计数字（文件数/页面数）仅是该 Snapshot 的导航信息，不是长期不变量。
 >
 > **重要：本 Wiki 不是产品、语义或实施 Authority。** 任何开发决策必须回到 exact-head source/tests 验证。若本文与 North Star、NEXT_TASK、PROJECT_STATE 或 exact-head code/tests 冲突，本文让位。
@@ -104,6 +105,23 @@ ANTI-REWHEEL PREFLIGHT
 ```
 
 如果新模块只是重新命名现有 authority、复制已有状态或增加没有新决策信息的 wrapper，应优先拒绝或缩减。
+
+### 0.5 Validation execution authority
+
+本 Wiki **不复制 Validation 规则**。项目级执行协议唯一来源：
+
+```text
+docs/CONVERSATION_HANDOFF.md §4.2 VALIDATION_V2
+```
+
+任何 G/T/Z production implementation / correction 工作单默认使用该协议。关键冻结：
+
+```text
+TARGETED-FIRST
+FULL_SUITE_DEFAULT_BUDGET = 1
+EXACT_HEAD_CI = AUTOMATED VALIDATION GATE
+CI PASS != INDEPENDENT_REVIEW_APPROVED
+```
 
 ---
 
@@ -616,6 +634,16 @@ npm run test:e2e:intel-digest
 
 受保护 stable 的 required checks 以 GitHub branch protection 的 exact state 为准，不以本 Wiki 的静态列表作为最终 authority。
 
+### 10.4 Validation V2 reference
+
+测试命令这里只负责**导航**。实际执行频率、full-suite budget、CI 与主审职责分工的唯一项目级协议是：
+
+```text
+docs/CONVERSATION_HANDOFF.md §4.2 VALIDATION_V2
+```
+
+不要从本节的 full-suite 命令存在性推导“每次修改都必须运行全量测试”。
+
 ---
 
 ## 11. 关键工程纪律摘要
@@ -627,6 +655,7 @@ npm run test:e2e:intel-digest
 5. **Git discipline**：不 direct push stable、不 force push、不对已 push commit amend/rebase；修正用新 commit。
 6. **AI boundary**：AI 不修改 Canonical Fact、Original Thesis、Frozen Decision，不绕过 deterministic gate，不自动交易。
 7. **Authority before convenience**：性能更好、API 更方便、本地已有值，都不能自动获得 semantic authority。
+8. **Validation discipline**：targeted-first；重复 full-suite 不是严谨性的替代品；exact-head CI 与 independent semantic review 分工独立。
 
 ---
 
@@ -678,6 +707,7 @@ npm run test:e2e:intel-digest
 - PR 尚未进入 stable 时，不得把 Draft 实现写成 `IMPLEMENTED_IN_STABLE`；需要提及时必须明确 `IN_FLIGHT / NON-STABLE`，并避免让短生命周期 PR 状态污染长期地图。
 - 文件数、测试数、页面数等统计只是 Snapshot 导航信息；过期不构成架构 blocker。
 - 任何 Agent 使用本 Wiki 开发时，必须执行 §0.4 Anti-Rewheel Preflight；Wiki 中命中一个模块只能作为“去哪里验证”的线索，不能替代 source inspection。
+- Validation 规则不要复制进 Wiki；只引用 `CONVERSATION_HANDOFF.md §4.2`，避免形成第二份会漂移的执行协议。
 
 ---
 
