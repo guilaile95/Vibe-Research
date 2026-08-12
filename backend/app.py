@@ -133,21 +133,85 @@ def _safe_daily_review_ai_done_result(record) -> dict[str, str]:
     }
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _parse_bind_host(raw: str) -> str:
+    """规范化 VR_HOST：去空格/方括号；值必须是合法 IP 或纯主机名（无端口/协议/路径）。"""
+    import ipaddress
+
+    h = (raw or "").strip().lower()
+    if h.startswith("["):
+        h = h.strip("[]")
+    if not h or any(c.isspace() for c in h) or "://" in h or "/" in h or "@" in h:
+        raise RuntimeError(f"VR_HOST 非法：{raw!r}")
+    try:
+        ipaddress.ip_address(h)
+    except ValueError:
+        if not h or not all(c.isalnum() or c in ".-" for c in h):
+            raise RuntimeError(f"VR_HOST 非法：{raw!r}") from None
+    return h
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用启动时确保后台刷新调度器已启动（幂等）。"""
+    """应用启动时先强制校验访问边界（fail closed），再启动后台刷新调度器（幂等）。"""
+    vr_host = os.environ.get("VR_HOST", "").strip()
+    if vr_host and _parse_bind_host(vr_host) not in _LOOPBACK_HOSTS and not _API_KEY:
+        raise RuntimeError("VR_HOST 非 loopback 绑定必须设置 VR_API_KEY，已拒绝启动")
     pf.start_scheduler(1800)
     yield
 
 
 app = FastAPI(title="Vibe-Research API", version="0.1.3", lifespan=lifespan)
 
-# CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
-#   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）
-_ORIGINS = [o.strip() for o in os.environ.get("VR_ALLOW_ORIGINS", "*").split(",") if o.strip()] or ["*"]
+# ── 本地 API 访问边界（P0-SEC1） ──────────────────────────────────────────
+# 127.0.0.1 不是鉴权机制：默认 CORS 只允许正式本地前端 Origin，恶意网页无法
+# 从浏览器跨源读写私有 API；非 loopback 绑定且未配置 VR_API_KEY → fail closed。
+
+_LOCAL_FRONTEND_ORIGINS = (
+    "http://localhost:5899",
+    "http://127.0.0.1:5899",
+)
+
+
+def _parse_origins(raw: str) -> list[str]:
+    """严格解析 VR_ALLOW_ORIGINS：仅接受 http(s)://host[:port] 形式的 Origin。
+
+    通配符 * / 空值 / 畸形值一律抛错（fail closed），绝不回落 *。
+    """
+    from urllib.parse import urlparse
+
+    entries = [o.strip() for o in (raw or "").split(",") if o.strip()]
+    if not entries:
+        raise RuntimeError("VR_ALLOW_ORIGINS 不能为空；删除该环境变量可恢复默认本地前端白名单")
+    origins: list[str] = []
+    for entry in entries:
+        if entry == "*":
+            raise RuntimeError("VR_ALLOW_ORIGINS 不允许通配符 *（私有 API + 通配 Origin 为不安全配置）")
+        p = urlparse(entry)
+        if (
+            p.scheme not in ("http", "https")
+            or not p.hostname
+            or p.path not in ("", "/")
+            or p.query
+            or p.fragment
+            or p.params
+            or p.username is not None
+            or p.password is not None
+        ):
+            raise RuntimeError(f"VR_ALLOW_ORIGINS 包含非法 Origin：{entry!r}（应为 http(s)://host[:port]）")
+        port = f":{p.port}" if p.port is not None else ""
+        origins.append(f"{p.scheme}://{p.hostname}{port}")
+    return origins
+
+
+_ALLOW_ORIGINS_RAW = os.environ.get("VR_ALLOW_ORIGINS", "").strip()
+# 未配置 = 仅允许官方本地前端；显式配置 = 严格解析（畸形/通配直接拒绝启动）。
+_ALLOWED_ORIGINS = _parse_origins(_ALLOW_ORIGINS_RAW) if _ALLOW_ORIGINS_RAW else list(_LOCAL_FRONTEND_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_ORIGINS,
+    allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
@@ -192,9 +256,14 @@ async def _revision_conflict_handler(request: Request, exc: evidence_thesis_rout
         content={"detail": exc.message, "current_revision": exc.current_revision},
     )
 
-# 可选鉴权：设了 VR_API_KEY 就要求所有 /api/* 带 `Authorization: Bearer <key>`
-#   （本地自托管不设=开放；公网部署务必设，否则别人能读你的持仓/调你的后端）。
+# 可选鉴权：设了 VR_API_KEY 就要求所有 /api/*（除 _PUBLIC_API_PATHS）带
+#   `Authorization: Bearer <key>`。
+# 本地 loopback 单用户模式可不设（浏览器跨源访问已被 Origin 白名单挡住）；
+# 非 loopback 绑定且未设 key → 启动/请求 fail closed（见 _NonLoopbackGuard）。
 _API_KEY = os.environ.get("VR_API_KEY", "").strip()
+
+# 明确公开的 API 路径：除 health 外全部私有；health 只返回固定版本信息，不得含私有数据。
+_PUBLIC_API_PATHS = frozenset({"/api/health"})
 
 
 @app.exception_handler(RequestValidationError)
@@ -251,11 +320,87 @@ async def _require_api_key(request: Request, call_next):
         _API_KEY
         and request.method != "OPTIONS"
         and request.url.path.startswith("/api/")
-        and request.url.path != "/api/health"
+        and request.url.path not in _PUBLIC_API_PATHS
     ):
         if request.headers.get("authorization", "") != f"Bearer {_API_KEY}":
             return JSONResponse({"detail": "未授权：缺少或错误的 API Key（VR_API_KEY）"}, status_code=401)
     return await call_next(request)
+
+
+# TestClient 的 "testserver" 是进程内传输（永不暴露网络），视作 loopback 等价。
+_LOOPBACK_BINDS = _LOOPBACK_HOSTS | {"testserver"}
+
+
+def _parse_trusted_hosts(raw: str) -> set[str]:
+    """严格解析 VR_TRUSTED_HOSTS：仅接受纯主机名（无端口/协议/路径），拒绝畸形值。"""
+    entries = [h.strip() for h in (raw or "").split(",") if h.strip()]
+    for entry in entries:
+        if ":" in entry or "/" in entry or "@" in entry or not all(c.isalnum() or c in ".-" for c in entry):
+            raise RuntimeError(f"VR_TRUSTED_HOSTS 包含非法主机名：{entry!r}")
+    return set(entries)
+
+
+_ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]", "testserver"} | _parse_trusted_hosts(
+    os.environ.get("VR_TRUSTED_HOSTS", "")
+)
+
+
+def _host_header_name(host_header: str) -> str:
+    """Host 头 → 主机名：去端口；IPv6 字面量保留方括号。"""
+    h = (host_header or "").strip().lower()
+    if h.startswith("["):
+        end = h.find("]")
+        return h[: end + 1] if end != -1 else h
+    return h.split(":", 1)[0]
+
+
+class _LocalHostGate:
+    """最小 Host 边界：拒绝未知 Host（防 DNS rebinding / hostile Host），不反射原值。
+
+    starlette 的 TrustedHostMiddleware 会把 `[::1]:port` 按冒号切成 `[`，无法
+    干净支持 IPv6 字面量，故采用这个最小实现；额外主机名走 VR_TRUSTED_HOSTS。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = dict(scope.get("headers") or [])
+            host = headers.get(b"host", b"").decode("latin-1", "replace")
+            if _host_header_name(host) not in _ALLOWED_HOSTS:
+                resp = JSONResponse({"detail": "Host 头不在允许列表"}, status_code=400)
+                await resp(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+_NON_LOOPBACK_NO_KEY_DETAIL = "服务绑定在非 loopback 地址但未配置 VR_API_KEY，已拒绝服务"
+
+
+class _NonLoopbackGuard:
+    """运行时 bind 边界：实际监听地址非 loopback 且无鉴权 → 全部请求 503（含 health）。
+
+    scope["server"] 是 ASGI server（uvicorn）实际 bind 的接口地址，与 VR_HOST
+    声明无关，因此无论以何种方式启动都 fail closed；无法判定时放行。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and not _API_KEY:
+            server = scope.get("server")
+            if server and server[0] not in _LOOPBACK_BINDS:
+                resp = JSONResponse({"detail": _NON_LOOPBACK_NO_KEY_DETAIL}, status_code=503)
+                await resp(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+# 注册顺序即执行顺序（后注册在外层）：NonLoopbackGuard → HostGate → API Key → CORS。
+app.add_middleware(_LocalHostGate)
+app.add_middleware(_NonLoopbackGuard)
 
 _CODE_RE = r"^\d{6}$"
 
