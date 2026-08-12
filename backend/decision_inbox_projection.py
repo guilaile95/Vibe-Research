@@ -35,9 +35,10 @@ reason 全量收集，不因 early-state gating 删除 lower-precedence facts）
 
 - UNKNOWN != healthy：任何必要 authority 为 UNKNOWN / NOT_EVALUATED /
   NOT_AVAILABLE 时不得默认成 CLEAR
-- NOT_EVALUATED != CLEAR / NONE / USABLE：NOT_EVALUATED 是诚实输入状态，
-  不是干净证明；otherwise-clean + 任一 NOT_EVALUATED 时 NO_ACTION_REQUIRED
-  禁止，安全 fallback 为 BLOCKED_BY_DATA + 具体 NOT_EVALUATED reason
+- critical data 的 domain state 与 evaluation state 是独立双轴；
+  NOT_EVALUATED 属于 evaluation，绝不能伪装成 USABLE 或干净证明；
+  otherwise-clean + 任一 NOT_EVALUATED 时 NO_ACTION_REQUIRED 禁止，安全
+  fallback 为 BLOCKED_BY_DATA + 具体 NOT_EVALUATED reason
 - coverage_complete == false 只证明 MUST NOT NO_ACTION_REQUIRED，
   不无条件决定 BLOCKED_BY_DATA（terminal / setup / thesis review facts
   优先，generic coverage gap 不得洗掉它们）
@@ -97,9 +98,16 @@ HARD_RISK_STATES = ("CLEAR", "CONFIRMED", "UNKNOWN", "NOT_EVALUATED")
 MATERIAL_CHANGE_STATES = (
     "NONE", "MATERIAL", "CRITICAL", "UNKNOWN", "NOT_EVALUATED",
 )
-CRITICAL_DATA_STATES = (
-    "USABLE", "BLOCKED", "UNKNOWN", "STALE", "NOT_EVALUATED",
+CRITICAL_DATA_STATES = ("USABLE", "BLOCKED", "UNKNOWN", "STALE")
+CRITICAL_DATA_EVALUATIONS = (
+    "EVALUATED", "UNKNOWN", "NOT_EVALUATED", "ERROR",
 )
+_LEGAL_CRITICAL_DATA_PAIRS = {
+    "USABLE": frozenset({"EVALUATED"}),
+    "BLOCKED": frozenset(CRITICAL_DATA_EVALUATIONS),
+    "STALE": frozenset(CRITICAL_DATA_EVALUATIONS),
+    "UNKNOWN": frozenset({"UNKNOWN", "NOT_EVALUATED", "ERROR"}),
+}
 CONFIDENCE_LEVELS = ("HIGH", "MEDIUM", "LOW", "UNKNOWN")
 
 # 工作流动作（非投资 BUY/SELL 动作）
@@ -130,7 +138,9 @@ REASON_HARD_RISK_NOT_EVALUATED = "HARD_RISK_NOT_EVALUATED"
 REASON_CRITICAL_DATA_BLOCKED = "CRITICAL_DATA_BLOCKED"
 REASON_CRITICAL_DATA_UNKNOWN = "CRITICAL_DATA_UNKNOWN"
 REASON_CRITICAL_DATA_STALE = "CRITICAL_DATA_STALE"
+REASON_CRITICAL_DATA_EVALUATION_UNKNOWN = "CRITICAL_DATA_EVALUATION_UNKNOWN"
 REASON_CRITICAL_DATA_NOT_EVALUATED = "CRITICAL_DATA_NOT_EVALUATED"
+REASON_CRITICAL_DATA_ERROR = "CRITICAL_DATA_ERROR"
 REASON_COVERAGE_INCOMPLETE = "COVERAGE_INCOMPLETE"
 REASON_MATERIAL_CHANGE_MATERIAL = "MATERIAL_CHANGE_MATERIAL"
 REASON_MATERIAL_CHANGE_CRITICAL = "MATERIAL_CHANGE_CRITICAL"
@@ -157,7 +167,9 @@ REASON_CODES = (
     REASON_CRITICAL_DATA_BLOCKED,
     REASON_CRITICAL_DATA_UNKNOWN,
     REASON_CRITICAL_DATA_STALE,
+    REASON_CRITICAL_DATA_EVALUATION_UNKNOWN,
     REASON_CRITICAL_DATA_NOT_EVALUATED,
+    REASON_CRITICAL_DATA_ERROR,
     REASON_COVERAGE_INCOMPLETE,
     REASON_MATERIAL_CHANGE_MATERIAL,
     REASON_MATERIAL_CHANGE_CRITICAL,
@@ -247,6 +259,7 @@ class CampaignFacts:
     hard_risk_state: str
     material_change_state: str
     critical_data_state: str
+    critical_data_evaluation: str
     decision_confidence: str
     coverage_complete: bool
     as_of: str
@@ -315,6 +328,19 @@ class CampaignFacts:
             raise DecisionInboxValidationError(
                 f"critical_data_state：必须是 {CRITICAL_DATA_STATES} 之一"
             )
+        if self.critical_data_evaluation not in CRITICAL_DATA_EVALUATIONS:
+            raise DecisionInboxValidationError(
+                "critical_data_evaluation：必须是 "
+                f"{CRITICAL_DATA_EVALUATIONS} 之一"
+            )
+        if self.critical_data_evaluation not in _LEGAL_CRITICAL_DATA_PAIRS[
+            self.critical_data_state
+        ]:
+            raise DecisionInboxValidationError(
+                "critical_data_state / critical_data_evaluation："
+                f"非法 CCD1 组合 ({self.critical_data_state}, "
+                f"{self.critical_data_evaluation})"
+            )
         if self.decision_confidence not in CONFIDENCE_LEVELS:
             raise DecisionInboxValidationError(
                 f"decision_confidence：必须是 {CONFIDENCE_LEVELS} 之一"
@@ -349,6 +375,7 @@ class CampaignFacts:
             "hard_risk_state": self.hard_risk_state,
             "material_change_state": self.material_change_state,
             "critical_data_state": self.critical_data_state,
+            "critical_data_evaluation": self.critical_data_evaluation,
             "decision_confidence": self.decision_confidence,
             "coverage_complete": self.coverage_complete,
             "as_of": self.as_of,
@@ -397,6 +424,7 @@ class InboxItem:
     hard_risk_state: str = ""
     material_change_state: str = ""
     critical_data_state: str = ""
+    critical_data_evaluation: str = ""
     decision_confidence: str = ""
     coverage_complete: bool = False
     ai_review_recommended: bool = False
@@ -440,6 +468,7 @@ class InboxItem:
             "hard_risk_state": self.hard_risk_state,
             "material_change_state": self.material_change_state,
             "critical_data_state": self.critical_data_state,
+            "critical_data_evaluation": self.critical_data_evaluation,
             "decision_confidence": self.decision_confidence,
             "coverage_complete": self.coverage_complete,
             "ai_review_recommended": self.ai_review_recommended,
@@ -470,7 +499,9 @@ _WORKFLOW_BY_REASON: dict[str, str] = {
     REASON_CRITICAL_DATA_BLOCKED: "REPAIR_DATA",
     REASON_CRITICAL_DATA_UNKNOWN: "REPAIR_DATA",
     REASON_CRITICAL_DATA_STALE: "REPAIR_DATA",
+    REASON_CRITICAL_DATA_EVALUATION_UNKNOWN: "REPAIR_DATA",
     REASON_CRITICAL_DATA_NOT_EVALUATED: "REPAIR_DATA",
+    REASON_CRITICAL_DATA_ERROR: "REPAIR_DATA",
     REASON_COVERAGE_INCOMPLETE: "REPAIR_DATA",
     REASON_MATERIAL_CHANGE_MATERIAL: "REVIEW_THESIS",
     REASON_MATERIAL_CHANGE_CRITICAL: "REVIEW_THESIS",
@@ -512,8 +543,12 @@ def _build_explainability(facts: CampaignFacts, reasons: list[str]) -> dict[str,
         uncertainties.append(f"hard_risk_state={facts.hard_risk_state}")
     if facts.material_change_state in ("UNKNOWN", "NOT_EVALUATED"):
         uncertainties.append(f"material_change_state={facts.material_change_state}")
-    if facts.critical_data_state in ("UNKNOWN", "STALE", "NOT_EVALUATED"):
+    if facts.critical_data_state in ("UNKNOWN", "STALE"):
         uncertainties.append(f"critical_data_state={facts.critical_data_state}")
+    if facts.critical_data_evaluation in ("UNKNOWN", "NOT_EVALUATED", "ERROR"):
+        uncertainties.append(
+            f"critical_data_evaluation={facts.critical_data_evaluation}"
+        )
     if facts.decision_confidence == "UNKNOWN":
         uncertainties.append("decision_confidence=UNKNOWN")
     if not facts.coverage_complete:
@@ -528,6 +563,7 @@ def _build_explainability(facts: CampaignFacts, reasons: list[str]) -> dict[str,
         "hard_risk_state == CLEAR",
         "material_change_state == NONE",
         "critical_data_state == USABLE",
+        "critical_data_evaluation == EVALUATED",
         "coverage_complete == true",
     ]
 
@@ -570,7 +606,10 @@ def _project(facts: CampaignFacts) -> InboxItem:
     # 3) actual CRITICAL DATA blocking condition
     if facts.critical_data_state == "BLOCKED":
         reasons.append(REASON_CRITICAL_DATA_BLOCKED)
-    elif facts.critical_data_state == "UNKNOWN":
+    elif (
+        facts.critical_data_state == "UNKNOWN"
+        and facts.critical_data_evaluation == "UNKNOWN"
+    ):
         reasons.append(REASON_CRITICAL_DATA_UNKNOWN)
     elif facts.critical_data_state == "STALE":
         reasons.append(REASON_CRITICAL_DATA_STALE)
@@ -615,8 +654,15 @@ def _project(facts: CampaignFacts) -> InboxItem:
         reasons.append(REASON_MATERIAL_CHANGE_UNKNOWN)
     elif facts.material_change_state == "NOT_EVALUATED":
         reasons.append(REASON_MATERIAL_CHANGE_NOT_EVALUATED)
-    if facts.critical_data_state == "NOT_EVALUATED":
+    if (
+        facts.critical_data_evaluation == "UNKNOWN"
+        and facts.critical_data_state in ("BLOCKED", "STALE")
+    ):
+        reasons.append(REASON_CRITICAL_DATA_EVALUATION_UNKNOWN)
+    elif facts.critical_data_evaluation == "NOT_EVALUATED":
         reasons.append(REASON_CRITICAL_DATA_NOT_EVALUATED)
+    elif facts.critical_data_evaluation == "ERROR":
+        reasons.append(REASON_CRITICAL_DATA_ERROR)
 
     # 7) generic coverage gap（只证明 MUST NOT NO_ACTION_REQUIRED）
     if not facts.coverage_complete:
@@ -659,7 +705,9 @@ def _project(facts: CampaignFacts) -> InboxItem:
         or REASON_HARD_RISK_NOT_EVALUATED in reasons
         or REASON_MATERIAL_CHANGE_UNKNOWN in reasons
         or REASON_MATERIAL_CHANGE_NOT_EVALUATED in reasons
+        or REASON_CRITICAL_DATA_EVALUATION_UNKNOWN in reasons
         or REASON_CRITICAL_DATA_NOT_EVALUATED in reasons
+        or REASON_CRITICAL_DATA_ERROR in reasons
         or REASON_COVERAGE_INCOMPLETE in reasons
     ):
         visible_state = "BLOCKED_BY_DATA"
@@ -696,7 +744,9 @@ def _project(facts: CampaignFacts) -> InboxItem:
         REASON_HARD_RISK_NOT_EVALUATED: 6,
         REASON_MATERIAL_CHANGE_UNKNOWN: 6,
         REASON_MATERIAL_CHANGE_NOT_EVALUATED: 6,
+        REASON_CRITICAL_DATA_EVALUATION_UNKNOWN: 6,
         REASON_CRITICAL_DATA_NOT_EVALUATED: 6,
+        REASON_CRITICAL_DATA_ERROR: 6,
         REASON_COVERAGE_INCOMPLETE: 7,
         REASON_LOW_CONFIDENCE: 8,
     }
@@ -730,6 +780,7 @@ def _project(facts: CampaignFacts) -> InboxItem:
         hard_risk_state=facts.hard_risk_state,
         material_change_state=facts.material_change_state,
         critical_data_state=facts.critical_data_state,
+        critical_data_evaluation=facts.critical_data_evaluation,
         decision_confidence=facts.decision_confidence,
         coverage_complete=facts.coverage_complete,
         ai_review_recommended=ai_review,

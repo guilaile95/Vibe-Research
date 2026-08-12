@@ -1,9 +1,10 @@
-"""P0-DI1 Decision Inbox 纯域投影核心测试：26 项基础矩阵 + P0-DI1-R1 语义闭包。
+"""P0-DI1 Decision Inbox 纯域投影核心测试：基础矩阵 + R1-R3 语义闭包。
 
 零 I/O；验证：
 - 冻结语义 precedence（state 唯一、reason 全量收集、确定性排序）
 - COVERAGE_INCOMPLETE 不无条件决定 BLOCKED_BY_DATA
-- NOT_EVALUATED 诚实输入状态（≠ CLEAR / NONE / USABLE）
+- critical data domain / evaluation 双轴及严格 CCD1 pair
+- NOT_EVALUATED 诚实 evaluation 状态（≠ CLEAR / NONE / USABLE）
 - STRENGTHENED 合法 canonical 状态（→ REVIEW_REQUIRED）
 - DI1 只处理真实 Campaign（campaign_id 必填）
 """
@@ -55,6 +56,7 @@ def facts(**overrides) -> CampaignFacts:
         "hard_risk_state": "CLEAR",
         "material_change_state": "NONE",
         "critical_data_state": "USABLE",
+        "critical_data_evaluation": "EVALUATED",
         "decision_confidence": "HIGH",
         "coverage_complete": True,
         "as_of": AS_OF,
@@ -155,7 +157,14 @@ class TestHardRiskAndData:
             ("UNKNOWN", di.REASON_CRITICAL_DATA_UNKNOWN),
             ("STALE", di.REASON_CRITICAL_DATA_STALE),
         ):
-            item = project_campaign(facts(critical_data_state=state))
+            item = project_campaign(
+                facts(
+                    critical_data_state=state,
+                    critical_data_evaluation=(
+                        "UNKNOWN" if state == "UNKNOWN" else "EVALUATED"
+                    ),
+                )
+            )
             assert item.visible_state == "BLOCKED_BY_DATA"
             assert reason in item.reason_codes
 
@@ -340,6 +349,7 @@ class TestCampaignScopeAndValidation:
             {"hard_risk_state": "RISKY"},  # 枚举错
             {"material_change_state": "SOMEWHAT"},  # 枚举错
             {"critical_data_state": "MISSING"},  # 枚举错
+            {"critical_data_evaluation": "PARTIAL"},  # 枚举错
             {"coverage_complete": "yes"},  # 非严格 bool
             {"as_of": "明天"},  # 时间戳错
             {"as_of": "2026-08-12T16:00:00+08:00"},  # 非零偏移
@@ -398,7 +408,10 @@ class TestExplainability:
             (facts(current_thesis="STRENGTHENED"), "REVIEW_FORMAL_DECISION"),
             (facts(hard_risk_state="NOT_EVALUATED"), "REPAIR_DATA"),
             (facts(material_change_state="NOT_EVALUATED"), "REPAIR_DATA"),
-            (facts(critical_data_state="NOT_EVALUATED"), "REPAIR_DATA"),
+            (facts(
+                critical_data_state="UNKNOWN",
+                critical_data_evaluation="NOT_EVALUATED",
+            ), "REPAIR_DATA"),
             (facts(), "NONE"),
         ]
         for f, expected_action in cases:
@@ -423,8 +436,14 @@ class TestExplainability:
     def test_not_evaluated_exposed_in_uncertainties(self):
         item = project_campaign(facts(hard_risk_state="NOT_EVALUATED"))
         assert "hard_risk_state=NOT_EVALUATED" in item.explainability["uncertainties"]
-        item = project_campaign(facts(critical_data_state="NOT_EVALUATED"))
-        assert "critical_data_state=NOT_EVALUATED" in item.explainability["uncertainties"]
+        item = project_campaign(facts(
+            critical_data_state="UNKNOWN",
+            critical_data_evaluation="NOT_EVALUATED",
+        ))
+        assert (
+            "critical_data_evaluation=NOT_EVALUATED"
+            in item.explainability["uncertainties"]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -599,7 +618,10 @@ class TestR1NotEvaluated:
         assert item.reason_codes == (di.REASON_MATERIAL_CHANGE_NOT_EVALUATED,)
 
     def test_critical_data_not_evaluated_otherwise_clean_blocked(self):
-        item = project_campaign(facts(critical_data_state="NOT_EVALUATED"))
+        item = project_campaign(facts(
+            critical_data_state="UNKNOWN",
+            critical_data_evaluation="NOT_EVALUATED",
+        ))
         assert item.visible_state == "BLOCKED_BY_DATA"
         assert item.reason_codes == (di.REASON_CRITICAL_DATA_NOT_EVALUATED,)
 
@@ -623,7 +645,11 @@ class TestR1NotEvaluated:
         # CRITICAL_DATA_NOT_EVALUATED 属于 generic 层，不高于 setup gap；
         # primary reason 跟随 state precedence（FORMAL_DECISION_MISSING）
         item = project_campaign(
-            facts(critical_data_state="NOT_EVALUATED", latest_frozen_decision=None)
+            facts(
+                critical_data_state="UNKNOWN",
+                critical_data_evaluation="NOT_EVALUATED",
+                latest_frozen_decision=None,
+            )
         )
         assert item.visible_state == "SETUP_REQUIRED"
         assert item.reason_codes == (
@@ -710,9 +736,15 @@ class TestR1DeterminismAndPositiveProof:
             {"hard_risk_state": "NOT_EVALUATED"},
             {"material_change_state": "UNKNOWN"},
             {"material_change_state": "NOT_EVALUATED"},
-            {"critical_data_state": "UNKNOWN"},
+            {
+                "critical_data_state": "UNKNOWN",
+                "critical_data_evaluation": "UNKNOWN",
+            },
             {"critical_data_state": "STALE"},
-            {"critical_data_state": "NOT_EVALUATED"},
+            {
+                "critical_data_state": "UNKNOWN",
+                "critical_data_evaluation": "NOT_EVALUATED",
+            },
             {"coverage_complete": False},
         )
         for override in removals:
@@ -786,7 +818,8 @@ class TestR2PrimaryWorkflowActionPrecedence:
         item = project_campaign(
             facts(
                 latest_frozen_decision=None,
-                critical_data_state="NOT_EVALUATED",
+                critical_data_state="UNKNOWN",
+                critical_data_evaluation="NOT_EVALUATED",
             )
         )
         assert item.visible_state == "SETUP_REQUIRED"
@@ -803,7 +836,8 @@ class TestR2PrimaryWorkflowActionPrecedence:
         item = project_campaign(
             facts(
                 current_thesis="WEAKENED",
-                critical_data_state="NOT_EVALUATED",
+                critical_data_state="UNKNOWN",
+                critical_data_evaluation="NOT_EVALUATED",
             )
         )
         assert item.visible_state == "REVIEW_REQUIRED"
@@ -816,7 +850,10 @@ class TestR2PrimaryWorkflowActionPrecedence:
     def test_case3_otherwise_clean_plus_critical_data_not_evaluated(self):
         # otherwise clean + CRITICAL_DATA_NOT_EVALUATED
         # → BLOCKED_BY_DATA；reason 唯一；→ REPAIR_DATA
-        item = project_campaign(facts(critical_data_state="NOT_EVALUATED"))
+        item = project_campaign(facts(
+            critical_data_state="UNKNOWN",
+            critical_data_evaluation="NOT_EVALUATED",
+        ))
         assert item.visible_state == "BLOCKED_BY_DATA"
         assert item.reason_codes == (di.REASON_CRITICAL_DATA_NOT_EVALUATED,)
         assert item.explainability["next_workflow_action"] == "REPAIR_DATA"
@@ -827,7 +864,8 @@ class TestR2PrimaryWorkflowActionPrecedence:
         item = project_campaign(
             facts(
                 current_thesis="DISPROVEN",
-                critical_data_state="NOT_EVALUATED",
+                critical_data_state="UNKNOWN",
+                critical_data_evaluation="NOT_EVALUATED",
             )
         )
         assert item.visible_state == "REVIEW_REQUIRED"
@@ -887,7 +925,8 @@ class TestR2PrimaryWorkflowActionPrecedence:
         # reason 仍全量收集，不删除 lower-precedence reasons
         item = project_campaign(
             facts(
-                critical_data_state="NOT_EVALUATED",
+                critical_data_state="UNKNOWN",
+                critical_data_evaluation="NOT_EVALUATED",
                 current_thesis="WEAKENED",
                 coverage_complete=False,
             )
@@ -898,3 +937,181 @@ class TestR2PrimaryWorkflowActionPrecedence:
             di.REASON_CRITICAL_DATA_NOT_EVALUATED,
             di.REASON_COVERAGE_INCOMPLETE,
         )
+
+
+# ---------------------------------------------------------------------------
+# P0-DI1-R3：CCD1 domain / evaluation 双轴集成
+# ---------------------------------------------------------------------------
+
+class TestR3CriticalDataAxes:
+    @pytest.mark.parametrize(
+        "state,evaluation",
+        [
+            ("USABLE", "EVALUATED"),
+            ("BLOCKED", "EVALUATED"),
+            ("BLOCKED", "UNKNOWN"),
+            ("BLOCKED", "NOT_EVALUATED"),
+            ("BLOCKED", "ERROR"),
+            ("STALE", "EVALUATED"),
+            ("STALE", "UNKNOWN"),
+            ("STALE", "NOT_EVALUATED"),
+            ("STALE", "ERROR"),
+            ("UNKNOWN", "UNKNOWN"),
+            ("UNKNOWN", "NOT_EVALUATED"),
+            ("UNKNOWN", "ERROR"),
+        ],
+    )
+    def test_all_legal_ccd1_pairs_accepted(self, state, evaluation):
+        item = project_campaign(facts(
+            critical_data_state=state,
+            critical_data_evaluation=evaluation,
+        ))
+        assert item.critical_data_state == state
+        assert item.critical_data_evaluation == evaluation
+        assert item.to_dict()["critical_data_evaluation"] == evaluation
+
+    @pytest.mark.parametrize(
+        "state,evaluation",
+        [
+            ("USABLE", "UNKNOWN"),
+            ("USABLE", "NOT_EVALUATED"),
+            ("USABLE", "ERROR"),
+            ("UNKNOWN", "EVALUATED"),
+        ],
+    )
+    def test_all_illegal_ccd1_pairs_fail_closed(self, state, evaluation):
+        with pytest.raises(DecisionInboxValidationError):
+            facts(
+                critical_data_state=state,
+                critical_data_evaluation=evaluation,
+            )
+
+    def test_mapping_requires_critical_data_evaluation(self):
+        record = facts().to_dict()
+        del record["critical_data_evaluation"]
+        with pytest.raises(DecisionInboxValidationError):
+            project_campaign(record)
+
+    @pytest.mark.parametrize(
+        "state,evaluation,expected_reasons",
+        [
+            # CASE A-F：CCD1 canonical outputs。
+            ("USABLE", "EVALUATED", (di.REASON_CLEAN,)),
+            ("BLOCKED", "EVALUATED", (di.REASON_CRITICAL_DATA_BLOCKED,)),
+            ("STALE", "EVALUATED", (di.REASON_CRITICAL_DATA_STALE,)),
+            ("UNKNOWN", "UNKNOWN", (di.REASON_CRITICAL_DATA_UNKNOWN,)),
+            (
+                "UNKNOWN",
+                "NOT_EVALUATED",
+                (di.REASON_CRITICAL_DATA_NOT_EVALUATED,),
+            ),
+            ("UNKNOWN", "ERROR", (di.REASON_CRITICAL_DATA_ERROR,)),
+        ],
+    )
+    def test_case_a_to_f_canonical_projection(
+        self, state, evaluation, expected_reasons
+    ):
+        item = project_campaign(facts(
+            critical_data_state=state,
+            critical_data_evaluation=evaluation,
+        ))
+        assert item.reason_codes == expected_reasons
+        assert item.visible_state == (
+            "NO_ACTION_REQUIRED" if state == "USABLE" else "BLOCKED_BY_DATA"
+        )
+        assert item.explainability["next_workflow_action"] == (
+            "NONE" if state == "USABLE" else "REPAIR_DATA"
+        )
+
+    def test_blocked_error_preserves_domain_and_evaluation_reasons(self):
+        item = project_campaign(facts(
+            critical_data_state="BLOCKED",
+            critical_data_evaluation="ERROR",
+        ))
+        assert item.visible_state == "BLOCKED_BY_DATA"
+        assert item.reason_codes == (
+            di.REASON_CRITICAL_DATA_BLOCKED,
+            di.REASON_CRITICAL_DATA_ERROR,
+        )
+        assert "critical_data_evaluation=ERROR" in item.explainability["uncertainties"]
+
+    def test_stale_not_evaluated_preserves_domain_and_evaluation_reasons(self):
+        item = project_campaign(facts(
+            critical_data_state="STALE",
+            critical_data_evaluation="NOT_EVALUATED",
+        ))
+        assert item.visible_state == "BLOCKED_BY_DATA"
+        assert item.reason_codes == (
+            di.REASON_CRITICAL_DATA_STALE,
+            di.REASON_CRITICAL_DATA_NOT_EVALUATED,
+        )
+
+    @pytest.mark.parametrize("state", ["BLOCKED", "STALE"])
+    def test_domain_state_plus_unknown_evaluation_preserves_both_axes(self, state):
+        item = project_campaign(facts(
+            critical_data_state=state,
+            critical_data_evaluation="UNKNOWN",
+        ))
+        domain_reason = {
+            "BLOCKED": di.REASON_CRITICAL_DATA_BLOCKED,
+            "STALE": di.REASON_CRITICAL_DATA_STALE,
+        }[state]
+        assert item.reason_codes == (
+            domain_reason,
+            di.REASON_CRITICAL_DATA_EVALUATION_UNKNOWN,
+        )
+        assert (
+            "critical_data_evaluation=UNKNOWN"
+            in item.explainability["uncertainties"]
+        )
+
+    @pytest.mark.parametrize(
+        "evaluation,evaluation_reason",
+        [
+            ("UNKNOWN", di.REASON_CRITICAL_DATA_EVALUATION_UNKNOWN),
+            ("NOT_EVALUATED", di.REASON_CRITICAL_DATA_NOT_EVALUATED),
+            ("ERROR", di.REASON_CRITICAL_DATA_ERROR),
+        ],
+    )
+    def test_evaluation_reason_is_generic_below_setup_review_and_terminal(
+        self, evaluation, evaluation_reason
+    ):
+        # BLOCKED keeps the pair legal but contributes an actual domain blocker;
+        # use STALE only would do the same. For evaluation-only precedence, UNKNOWN
+        # domain pairs expose only evaluation reasons for NOT_EVALUATED / ERROR.
+        state = "BLOCKED" if evaluation == "UNKNOWN" else "UNKNOWN"
+        item = project_campaign(facts(
+            critical_data_state=state,
+            critical_data_evaluation=evaluation,
+            latest_frozen_decision=None,
+        ))
+        if evaluation == "UNKNOWN":
+            # Actual BLOCKED remains above setup by design; the evaluation reason
+            # itself is nevertheless ordered in the generic incomplete layer.
+            assert item.visible_state == "BLOCKED_BY_DATA"
+            assert item.reason_codes == (
+                di.REASON_CRITICAL_DATA_BLOCKED,
+                di.REASON_FORMAL_DECISION_MISSING,
+                evaluation_reason,
+            )
+        else:
+            assert item.visible_state == "SETUP_REQUIRED"
+            assert item.reason_codes == (
+                di.REASON_FORMAL_DECISION_MISSING,
+                evaluation_reason,
+            )
+
+    def test_clear_conditions_require_both_critical_data_axes(self):
+        clear_conditions = project_campaign(facts()).explainability["clear_conditions"]
+        assert "critical_data_state == USABLE" in clear_conditions
+        assert "critical_data_evaluation == EVALUATED" in clear_conditions
+
+    def test_coverage_complete_remains_independent(self):
+        item = project_campaign(facts(
+            critical_data_state="UNKNOWN",
+            critical_data_evaluation="ERROR",
+            coverage_complete=True,
+        ))
+        assert item.coverage_complete is True
+        assert di.REASON_CRITICAL_DATA_ERROR in item.reason_codes
+        assert di.REASON_COVERAGE_INCOMPLETE not in item.reason_codes
