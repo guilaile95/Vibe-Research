@@ -20,18 +20,31 @@
 
     NO_ACTION_REQUIRED / REVIEW_REQUIRED / BLOCKED_BY_DATA / SETUP_REQUIRED
 
-确定性优先级（单一 precedence authority）：
+确定性优先级（单一 precedence authority；precedence 只选择 STATE，
+reason 全量收集，不因 early-state gating 删除 lower-precedence facts）：
 
-    1. CONFIRMED HARD RISK 或 TERMINAL THESIS  → REVIEW_REQUIRED
-    2. CRITICAL DATA BLOCK                     → BLOCKED_BY_DATA
-    3. STRUCTURAL SETUP GAP                    → SETUP_REQUIRED
-    4. WEAKENED / MATERIAL CHANGE / REVIEW_BY  → REVIEW_REQUIRED
-    5. PROVEN CLEAN STATE                      → NO_ACTION_REQUIRED
+    1. CONFIRMED HARD RISK / TERMINAL THESIS    → REVIEW_REQUIRED
+    2. actual CRITICAL DATA blocking condition  → BLOCKED_BY_DATA
+    3. STRUCTURAL SETUP GAP                     → SETUP_REQUIRED
+    4. WEAKENED / STRENGTHENED / MATERIAL CHANGE /
+       REVIEW_BY / thesis UNKNOWN               → REVIEW_REQUIRED
+    5. generic incomplete evaluation / coverage → BLOCKED_BY_DATA
+    6. positive clean proof                     → NO_ACTION_REQUIRED
 
 原则：
 
 - UNKNOWN != healthy：任何必要 authority 为 UNKNOWN / NOT_EVALUATED /
   NOT_AVAILABLE 时不得默认成 CLEAR
+- NOT_EVALUATED != CLEAR / NONE / USABLE：NOT_EVALUATED 是诚实输入状态，
+  不是干净证明；otherwise-clean + 任一 NOT_EVALUATED 时 NO_ACTION_REQUIRED
+  禁止，安全 fallback 为 BLOCKED_BY_DATA + 具体 NOT_EVALUATED reason
+- coverage_complete == false 只证明 MUST NOT NO_ACTION_REQUIRED，
+  不无条件决定 BLOCKED_BY_DATA（terminal / setup / thesis review facts
+  优先，generic coverage gap 不得洗掉它们）
+- DI1 保持真正的 Campaign-level projection：只处理真实 Campaign
+  （campaign_id 必填）；UNASSIGNED_HOLDING 留给未来 DI2 Runtime
+  Assembler / Product Composition 层产生 SETUP_REQUIRED，本模块不伪造
+  campaign_id / strategy / campaign_status
 - terminal thesis / confirmed hard risk 不能被数据问题隐藏
 - review_by 只允许 ``as_of >= review_by → REVIEW_REQUIRED``；
   本模块不生成 AGING / STALE / EXPIRED / INVALIDATED（Validity Projection
@@ -64,7 +77,9 @@ VISIBLE_STATES = (
 )
 
 # 归一化输入枚举
-THESIS_STATES = ("STABLE", "WEAKENED", "DISPROVEN", "INVALIDATED", "UNKNOWN")
+THESIS_STATES = (
+    "STABLE", "WEAKENED", "STRENGTHENED", "DISPROVEN", "INVALIDATED", "UNKNOWN",
+)
 THESIS_STRUCTURAL_STATES = ("MISSING", "NOT_READY", "NOT_FROZEN", "READY")
 TERMINAL_THESIS_STATES = ("DISPROVEN", "INVALIDATED")
 CAMPAIGN_STATUSES = (
@@ -74,9 +89,13 @@ CAMPAIGN_STATUSES = (
 # P0 持仓 Decision Inbox 的正式 Campaign 范围
 CAMPAIGN_STATUSES_IN_SCOPE = ("ACTIVE", "REDUCING")
 STRATEGIES = ("SHORT", "SWING", "MEDIUM")
-HARD_RISK_STATES = ("CLEAR", "CONFIRMED", "UNKNOWN")
-MATERIAL_CHANGE_STATES = ("NONE", "MATERIAL", "CRITICAL", "UNKNOWN")
-CRITICAL_DATA_STATES = ("USABLE", "BLOCKED", "UNKNOWN", "STALE")
+HARD_RISK_STATES = ("CLEAR", "CONFIRMED", "UNKNOWN", "NOT_EVALUATED")
+MATERIAL_CHANGE_STATES = (
+    "NONE", "MATERIAL", "CRITICAL", "UNKNOWN", "NOT_EVALUATED",
+)
+CRITICAL_DATA_STATES = (
+    "USABLE", "BLOCKED", "UNKNOWN", "STALE", "NOT_EVALUATED",
+)
 CONFIDENCE_LEVELS = ("HIGH", "MEDIUM", "LOW", "UNKNOWN")
 
 # 工作流动作（非投资 BUY/SELL 动作）
@@ -91,11 +110,11 @@ WORKFLOW_ACTIONS = (
 
 # 原因码（可多值；visible state 唯一）
 REASON_CAMPAIGN_NOT_IN_SCOPE = "CAMPAIGN_NOT_IN_SCOPE"
-REASON_UNASSIGNED_HOLDING = "UNASSIGNED_HOLDING"
 REASON_THESIS_MISSING = "THESIS_MISSING"
 REASON_THESIS_NOT_READY = "THESIS_NOT_READY"
 REASON_THESIS_NOT_FROZEN = "THESIS_NOT_FROZEN"
 REASON_THESIS_WEAKENED = "THESIS_WEAKENED"
+REASON_THESIS_STRENGTHENED = "THESIS_STRENGTHENED"
 REASON_THESIS_DISPROVEN = "THESIS_DISPROVEN"
 REASON_THESIS_INVALIDATED = "THESIS_INVALIDATED"
 REASON_THESIS_UNKNOWN = "THESIS_UNKNOWN"
@@ -103,23 +122,26 @@ REASON_FORMAL_DECISION_MISSING = "FORMAL_DECISION_MISSING"
 REASON_REVIEW_BY_REACHED = "REVIEW_BY_REACHED"
 REASON_HARD_RISK_CONFIRMED = "HARD_RISK_CONFIRMED"
 REASON_HARD_RISK_UNKNOWN = "HARD_RISK_UNKNOWN"
+REASON_HARD_RISK_NOT_EVALUATED = "HARD_RISK_NOT_EVALUATED"
 REASON_CRITICAL_DATA_BLOCKED = "CRITICAL_DATA_BLOCKED"
 REASON_CRITICAL_DATA_UNKNOWN = "CRITICAL_DATA_UNKNOWN"
 REASON_CRITICAL_DATA_STALE = "CRITICAL_DATA_STALE"
+REASON_CRITICAL_DATA_NOT_EVALUATED = "CRITICAL_DATA_NOT_EVALUATED"
 REASON_COVERAGE_INCOMPLETE = "COVERAGE_INCOMPLETE"
 REASON_MATERIAL_CHANGE_MATERIAL = "MATERIAL_CHANGE_MATERIAL"
 REASON_MATERIAL_CHANGE_CRITICAL = "MATERIAL_CHANGE_CRITICAL"
 REASON_MATERIAL_CHANGE_UNKNOWN = "MATERIAL_CHANGE_UNKNOWN"
+REASON_MATERIAL_CHANGE_NOT_EVALUATED = "MATERIAL_CHANGE_NOT_EVALUATED"
 REASON_LOW_CONFIDENCE = "LOW_CONFIDENCE"
 REASON_CLEAN = "CLEAN"
 
 REASON_CODES = (
     REASON_CAMPAIGN_NOT_IN_SCOPE,
-    REASON_UNASSIGNED_HOLDING,
     REASON_THESIS_MISSING,
     REASON_THESIS_NOT_READY,
     REASON_THESIS_NOT_FROZEN,
     REASON_THESIS_WEAKENED,
+    REASON_THESIS_STRENGTHENED,
     REASON_THESIS_DISPROVEN,
     REASON_THESIS_INVALIDATED,
     REASON_THESIS_UNKNOWN,
@@ -127,13 +149,16 @@ REASON_CODES = (
     REASON_REVIEW_BY_REACHED,
     REASON_HARD_RISK_CONFIRMED,
     REASON_HARD_RISK_UNKNOWN,
+    REASON_HARD_RISK_NOT_EVALUATED,
     REASON_CRITICAL_DATA_BLOCKED,
     REASON_CRITICAL_DATA_UNKNOWN,
     REASON_CRITICAL_DATA_STALE,
+    REASON_CRITICAL_DATA_NOT_EVALUATED,
     REASON_COVERAGE_INCOMPLETE,
     REASON_MATERIAL_CHANGE_MATERIAL,
     REASON_MATERIAL_CHANGE_CRITICAL,
     REASON_MATERIAL_CHANGE_UNKNOWN,
+    REASON_MATERIAL_CHANGE_NOT_EVALUATED,
     REASON_LOW_CONFIDENCE,
     REASON_CLEAN,
 )
@@ -199,8 +224,10 @@ def _parse_utc_instant(value: Any, field: str) -> datetime:
 class CampaignFacts:
     """给定 Campaign 的已归一化事实（由上游 adapter 提供，本模块不查询）。
 
-    - ``campaign_id`` 为 None 时表达 ``UNASSIGNED_HOLDING``（无 Campaign 的
-      真实持仓；本模块不伪造 campaign_id）
+    - 只处理真实 Campaign：``campaign_id`` 必填且格式合法；本模块不表达
+      UNASSIGNED_HOLDING（无 Campaign 的真实持仓留给未来 DI2 Runtime
+      Assembler / Product Composition 层产生 SETUP_REQUIRED，DI1 不伪造
+      campaign_id / strategy / campaign_status）
     - ``latest_frozen_decision`` 为 None 或含
       decision_id / committed_at / review_by / previous_next_best_action
     - ``authority_refs`` 只承载上游给出的引用（如 thesis_id），不伪造
@@ -208,7 +235,7 @@ class CampaignFacts:
 
     security_code: str
     strategy: str
-    campaign_id: str | None
+    campaign_id: str
     campaign_status: str
     thesis_state: str
     current_thesis: str
@@ -231,12 +258,9 @@ class CampaignFacts:
             raise DecisionInboxValidationError(
                 f"strategy：必须是 {STRATEGIES} 之一"
             )
-        if self.campaign_id is not None and (
-            not isinstance(self.campaign_id, str)
-            or not _CAMPAIGN_ID_RE.fullmatch(self.campaign_id)
-        ):
+        if self.campaign_id is None or not _CAMPAIGN_ID_RE.fullmatch(self.campaign_id):
             raise DecisionInboxValidationError(
-                "campaign_id：必须是 campaign_ + 32 位小写 hex，或 None（未分配持仓）"
+                "campaign_id：必须是 campaign_ + 32 位小写 hex（DI1 只处理真实 Campaign）"
             )
         if self.campaign_status not in CAMPAIGN_STATUSES:
             raise DecisionInboxValidationError(
@@ -361,7 +385,7 @@ class InboxItem:
     reason_codes: tuple[str, ...] = ()
     security_code: str = ""
     strategy: str = ""
-    campaign_id: str | None = None
+    campaign_id: str = ""
     campaign_status: str = ""
     campaign_capital_relevance: str = "UNKNOWN"
     current_thesis: Mapping[str, Any] = field(default_factory=dict)
@@ -426,11 +450,11 @@ class InboxItem:
 
 _WORKFLOW_BY_REASON: dict[str, str] = {
     REASON_CAMPAIGN_NOT_IN_SCOPE: "NONE",
-    REASON_UNASSIGNED_HOLDING: "NONE",
     REASON_THESIS_MISSING: "REVIEW_THESIS",
     REASON_THESIS_NOT_READY: "REVIEW_THESIS",
     REASON_THESIS_NOT_FROZEN: "REVIEW_THESIS",
     REASON_THESIS_WEAKENED: "REVIEW_THESIS",
+    REASON_THESIS_STRENGTHENED: "REVIEW_FORMAL_DECISION",
     REASON_THESIS_DISPROVEN: "REVIEW_THESIS",
     REASON_THESIS_INVALIDATED: "REVIEW_THESIS",
     REASON_THESIS_UNKNOWN: "RESEARCH_EVIDENCE",
@@ -438,13 +462,16 @@ _WORKFLOW_BY_REASON: dict[str, str] = {
     REASON_REVIEW_BY_REACHED: "REVIEW_FORMAL_DECISION",
     REASON_HARD_RISK_CONFIRMED: "REVIEW_FORMAL_DECISION",
     REASON_HARD_RISK_UNKNOWN: "REPAIR_DATA",
+    REASON_HARD_RISK_NOT_EVALUATED: "REPAIR_DATA",
     REASON_CRITICAL_DATA_BLOCKED: "REPAIR_DATA",
     REASON_CRITICAL_DATA_UNKNOWN: "REPAIR_DATA",
     REASON_CRITICAL_DATA_STALE: "REPAIR_DATA",
+    REASON_CRITICAL_DATA_NOT_EVALUATED: "REPAIR_DATA",
     REASON_COVERAGE_INCOMPLETE: "REPAIR_DATA",
     REASON_MATERIAL_CHANGE_MATERIAL: "REVIEW_THESIS",
     REASON_MATERIAL_CHANGE_CRITICAL: "REVIEW_THESIS",
     REASON_MATERIAL_CHANGE_UNKNOWN: "REPAIR_DATA",
+    REASON_MATERIAL_CHANGE_NOT_EVALUATED: "REPAIR_DATA",
     REASON_LOW_CONFIDENCE: "NONE",
     REASON_CLEAN: "NONE",
 }
@@ -453,7 +480,7 @@ _WORKFLOW_BY_REASON: dict[str, str] = {
 def _build_explainability(facts: CampaignFacts, reasons: list[str]) -> dict[str, Any]:
     """确定性可解释性：WHAT / WHY_NOW / WHAT_CHANGED / WHICH_CAMPAIGN /
     AUTHORITY_REFS / UNCERTAINTIES / CLEAR_CONDITIONS / NEXT_WORKFLOW_ACTION。"""
-    campaign_label = facts.campaign_id or "UNASSIGNED_HOLDING"
+    campaign_label = facts.campaign_id
 
     what = (
         f"{facts.security_code} / {facts.strategy} / {campaign_label}："
@@ -465,6 +492,8 @@ def _build_explainability(facts: CampaignFacts, reasons: list[str]) -> dict[str,
     )
     if facts.current_thesis == "WEAKENED":
         changed = "THESIS_WEAKENED"
+    elif facts.current_thesis == "STRENGTHENED":
+        changed = "THESIS_STRENGTHENED"
     elif facts.current_thesis in ("DISPROVEN", "INVALIDATED"):
         changed = f"THESIS_{facts.current_thesis}"
     elif facts.material_change_state in ("MATERIAL", "CRITICAL"):
@@ -475,11 +504,11 @@ def _build_explainability(facts: CampaignFacts, reasons: list[str]) -> dict[str,
         changed = "NO_CHANGE_EVIDENCE"
 
     uncertainties: list[str] = []
-    if facts.hard_risk_state == "UNKNOWN":
-        uncertainties.append("hard_risk_state=UNKNOWN")
-    if facts.material_change_state == "UNKNOWN":
-        uncertainties.append("material_change_state=UNKNOWN")
-    if facts.critical_data_state in ("UNKNOWN", "STALE"):
+    if facts.hard_risk_state in ("UNKNOWN", "NOT_EVALUATED"):
+        uncertainties.append(f"hard_risk_state={facts.hard_risk_state}")
+    if facts.material_change_state in ("UNKNOWN", "NOT_EVALUATED"):
+        uncertainties.append(f"material_change_state={facts.material_change_state}")
+    if facts.critical_data_state in ("UNKNOWN", "STALE", "NOT_EVALUATED"):
         uncertainties.append(f"critical_data_state={facts.critical_data_state}")
     if facts.decision_confidence == "UNKNOWN":
         uncertainties.append("decision_confidence=UNKNOWN")
@@ -513,86 +542,157 @@ def _build_explainability(facts: CampaignFacts, reasons: list[str]) -> dict[str,
 
 
 # ---------------------------------------------------------------------------
-# 投影权威（单一确定性 precedence）
+# 投影权威（单一确定性 precedence；PHASE A 收集 → PHASE B 选状态 → PHASE C 排序）
 # ---------------------------------------------------------------------------
 
 def _project(facts: CampaignFacts) -> InboxItem:
+    # ------------------------------------------------------------------
+    # PHASE A：全量收集 applicable reason facts（不做 early-state gating，
+    # lower-precedence facts 不得被删除）
+    # ------------------------------------------------------------------
     reasons: list[str] = []
-    visible_state = ""
 
-    # 1) CONFIRMED HARD RISK 或 TERMINAL THESIS → REVIEW_REQUIRED
+    # 1) TERMINAL THESIS（structural READY 时 canonical thesis 状态才成立）
+    if facts.thesis_state == "READY":
+        if facts.current_thesis == "DISPROVEN":
+            reasons.append(REASON_THESIS_DISPROVEN)
+        elif facts.current_thesis == "INVALIDATED":
+            reasons.append(REASON_THESIS_INVALIDATED)
+
+    # 2) CONFIRMED HARD RISK
     if facts.hard_risk_state == "CONFIRMED":
         reasons.append(REASON_HARD_RISK_CONFIRMED)
-    if facts.thesis_state == "READY" and facts.current_thesis == "DISPROVEN":
-        reasons.append(REASON_THESIS_DISPROVEN)
-    if facts.thesis_state == "READY" and facts.current_thesis == "INVALIDATED":
-        reasons.append(REASON_THESIS_INVALIDATED)
-    if reasons:
+
+    # 3) actual CRITICAL DATA blocking condition
+    if facts.critical_data_state == "BLOCKED":
+        reasons.append(REASON_CRITICAL_DATA_BLOCKED)
+    elif facts.critical_data_state == "UNKNOWN":
+        reasons.append(REASON_CRITICAL_DATA_UNKNOWN)
+    elif facts.critical_data_state == "STALE":
+        reasons.append(REASON_CRITICAL_DATA_STALE)
+
+    # 4) STRUCTURAL SETUP GAP
+    if facts.campaign_status not in CAMPAIGN_STATUSES_IN_SCOPE:
+        reasons.append(REASON_CAMPAIGN_NOT_IN_SCOPE)
+    if facts.thesis_state == "MISSING":
+        reasons.append(REASON_THESIS_MISSING)
+    elif facts.thesis_state == "NOT_READY":
+        reasons.append(REASON_THESIS_NOT_READY)
+    elif facts.thesis_state == "NOT_FROZEN":
+        reasons.append(REASON_THESIS_NOT_FROZEN)
+    if facts.thesis_state == "READY" and facts.latest_frozen_decision is None:
+        reasons.append(REASON_FORMAL_DECISION_MISSING)
+
+    # 5) THESIS REVIEW / REVIEW_BY
+    if facts.current_thesis == "WEAKENED":
+        reasons.append(REASON_THESIS_WEAKENED)
+    elif facts.current_thesis == "STRENGTHENED":
+        reasons.append(REASON_THESIS_STRENGTHENED)
+    elif facts.current_thesis == "UNKNOWN":
+        reasons.append(REASON_THESIS_UNKNOWN)
+    if facts.material_change_state == "MATERIAL":
+        reasons.append(REASON_MATERIAL_CHANGE_MATERIAL)
+    elif facts.material_change_state == "CRITICAL":
+        reasons.append(REASON_MATERIAL_CHANGE_CRITICAL)
+    if facts.latest_frozen_decision is not None and _parse_utc_instant(
+        facts.as_of, "as_of"
+    ) >= _parse_utc_instant(
+        facts.latest_frozen_decision["review_by"],
+        "latest_frozen_decision.review_by",
+    ):
+        reasons.append(REASON_REVIEW_BY_REACHED)
+
+    # 6) unknown / not-evaluated authorities（UNKNOWN != healthy）
+    if facts.hard_risk_state == "UNKNOWN":
+        reasons.append(REASON_HARD_RISK_UNKNOWN)
+    elif facts.hard_risk_state == "NOT_EVALUATED":
+        reasons.append(REASON_HARD_RISK_NOT_EVALUATED)
+    if facts.material_change_state == "UNKNOWN":
+        reasons.append(REASON_MATERIAL_CHANGE_UNKNOWN)
+    elif facts.material_change_state == "NOT_EVALUATED":
+        reasons.append(REASON_MATERIAL_CHANGE_NOT_EVALUATED)
+    if facts.critical_data_state == "NOT_EVALUATED":
+        reasons.append(REASON_CRITICAL_DATA_NOT_EVALUATED)
+
+    # 7) generic coverage gap（只证明 MUST NOT NO_ACTION_REQUIRED）
+    if not facts.coverage_complete:
+        reasons.append(REASON_COVERAGE_INCOMPLETE)
+
+    # ------------------------------------------------------------------
+    # PHASE B：按 frozen semantic precedence 选择恰好一个 visible_state
+    # ------------------------------------------------------------------
+    if (
+        REASON_HARD_RISK_CONFIRMED in reasons
+        or REASON_THESIS_DISPROVEN in reasons
+        or REASON_THESIS_INVALIDATED in reasons
+    ):
         visible_state = "REVIEW_REQUIRED"
-
-    # 2) CRITICAL DATA BLOCK → BLOCKED_BY_DATA（terminal / hard risk 不被隐藏）
-    if not visible_state:
-        data_reasons: list[str] = []
-        if facts.critical_data_state == "BLOCKED":
-            data_reasons.append(REASON_CRITICAL_DATA_BLOCKED)
-        elif facts.critical_data_state == "UNKNOWN":
-            data_reasons.append(REASON_CRITICAL_DATA_UNKNOWN)
-        elif facts.critical_data_state == "STALE":
-            data_reasons.append(REASON_CRITICAL_DATA_STALE)
-        if not facts.coverage_complete:
-            data_reasons.append(REASON_COVERAGE_INCOMPLETE)
-        if facts.hard_risk_state == "UNKNOWN":
-            data_reasons.append(REASON_HARD_RISK_UNKNOWN)
-        if facts.material_change_state == "UNKNOWN":
-            data_reasons.append(REASON_MATERIAL_CHANGE_UNKNOWN)
-        if data_reasons:
-            reasons = data_reasons
-            visible_state = "BLOCKED_BY_DATA"
-
-    # 3) STRUCTURAL SETUP GAP → SETUP_REQUIRED
-    if not visible_state:
-        setup_reasons: list[str] = []
-        if facts.campaign_status not in CAMPAIGN_STATUSES_IN_SCOPE:
-            setup_reasons.append(REASON_CAMPAIGN_NOT_IN_SCOPE)
-        elif facts.campaign_id is None:
-            setup_reasons.append(REASON_UNASSIGNED_HOLDING)
-        if facts.thesis_state == "MISSING":
-            setup_reasons.append(REASON_THESIS_MISSING)
-        elif facts.thesis_state == "NOT_READY":
-            setup_reasons.append(REASON_THESIS_NOT_READY)
-        elif facts.thesis_state == "NOT_FROZEN":
-            setup_reasons.append(REASON_THESIS_NOT_FROZEN)
-        if facts.thesis_state == "READY" and facts.latest_frozen_decision is None:
-            setup_reasons.append(REASON_FORMAL_DECISION_MISSING)
-        if setup_reasons:
-            reasons = setup_reasons
-            visible_state = "SETUP_REQUIRED"
-
-    # 4) WEAKENED / MATERIAL CHANGE / REVIEW_BY / UNKNOWN THESIS → REVIEW_REQUIRED
-    if not visible_state:
-        review_reasons: list[str] = []
-        if facts.current_thesis == "WEAKENED":
-            review_reasons.append(REASON_THESIS_WEAKENED)
-        elif facts.current_thesis == "UNKNOWN":
-            review_reasons.append(REASON_THESIS_UNKNOWN)
-        if facts.material_change_state == "MATERIAL":
-            review_reasons.append(REASON_MATERIAL_CHANGE_MATERIAL)
-        elif facts.material_change_state == "CRITICAL":
-            review_reasons.append(REASON_MATERIAL_CHANGE_CRITICAL)
-        if facts.latest_frozen_decision is not None:
-            review_by = facts.latest_frozen_decision["review_by"]
-            if _parse_utc_instant(facts.as_of, "as_of") >= _parse_utc_instant(
-                review_by, "latest_frozen_decision.review_by"
-            ):
-                review_reasons.append(REASON_REVIEW_BY_REACHED)
-        if review_reasons:
-            reasons = review_reasons
-            visible_state = "REVIEW_REQUIRED"
-
-    # 5) PROVEN CLEAN STATE → NO_ACTION_REQUIRED
-    if not visible_state:
-        reasons = [REASON_CLEAN]
+    elif (
+        REASON_CRITICAL_DATA_BLOCKED in reasons
+        or REASON_CRITICAL_DATA_UNKNOWN in reasons
+        or REASON_CRITICAL_DATA_STALE in reasons
+    ):
+        visible_state = "BLOCKED_BY_DATA"
+    elif (
+        REASON_CAMPAIGN_NOT_IN_SCOPE in reasons
+        or REASON_THESIS_MISSING in reasons
+        or REASON_THESIS_NOT_READY in reasons
+        or REASON_THESIS_NOT_FROZEN in reasons
+        or REASON_FORMAL_DECISION_MISSING in reasons
+    ):
+        visible_state = "SETUP_REQUIRED"
+    elif (
+        REASON_THESIS_WEAKENED in reasons
+        or REASON_THESIS_STRENGTHENED in reasons
+        or REASON_THESIS_UNKNOWN in reasons
+        or REASON_MATERIAL_CHANGE_MATERIAL in reasons
+        or REASON_MATERIAL_CHANGE_CRITICAL in reasons
+        or REASON_REVIEW_BY_REACHED in reasons
+    ):
+        visible_state = "REVIEW_REQUIRED"
+    elif (
+        REASON_HARD_RISK_UNKNOWN in reasons
+        or REASON_HARD_RISK_NOT_EVALUATED in reasons
+        or REASON_MATERIAL_CHANGE_UNKNOWN in reasons
+        or REASON_MATERIAL_CHANGE_NOT_EVALUATED in reasons
+        or REASON_CRITICAL_DATA_NOT_EVALUATED in reasons
+        or REASON_COVERAGE_INCOMPLETE in reasons
+    ):
+        visible_state = "BLOCKED_BY_DATA"
+    else:
+        # 5) 积极证明：所有 authority 明确 clean → NO_ACTION_REQUIRED
         visible_state = "NO_ACTION_REQUIRED"
+
+    # ------------------------------------------------------------------
+    # PHASE C：确定性 reason 排序（frozen semantic precedence，非发现顺序）
+    # ------------------------------------------------------------------
+    semantic_order = {
+        REASON_THESIS_DISPROVEN: 1,
+        REASON_THESIS_INVALIDATED: 1,
+        REASON_HARD_RISK_CONFIRMED: 2,
+        REASON_CRITICAL_DATA_BLOCKED: 3,
+        REASON_CRITICAL_DATA_UNKNOWN: 3,
+        REASON_CRITICAL_DATA_STALE: 3,
+        REASON_CRITICAL_DATA_NOT_EVALUATED: 3,
+        REASON_CAMPAIGN_NOT_IN_SCOPE: 4,
+        REASON_THESIS_MISSING: 4,
+        REASON_THESIS_NOT_READY: 4,
+        REASON_THESIS_NOT_FROZEN: 4,
+        REASON_FORMAL_DECISION_MISSING: 4,
+        REASON_THESIS_WEAKENED: 5,
+        REASON_THESIS_STRENGTHENED: 5,
+        REASON_THESIS_UNKNOWN: 5,
+        REASON_MATERIAL_CHANGE_MATERIAL: 5,
+        REASON_MATERIAL_CHANGE_CRITICAL: 5,
+        REASON_REVIEW_BY_REACHED: 5,
+        REASON_HARD_RISK_UNKNOWN: 6,
+        REASON_HARD_RISK_NOT_EVALUATED: 6,
+        REASON_MATERIAL_CHANGE_UNKNOWN: 6,
+        REASON_MATERIAL_CHANGE_NOT_EVALUATED: 6,
+        REASON_COVERAGE_INCOMPLETE: 7,
+        REASON_LOW_CONFIDENCE: 8,
+    }
+    reasons.sort(key=lambda code: semantic_order[code])
 
     # LOW confidence：附注 + AI_REVIEW_RECOMMENDED（不改 visible state）
     if facts.decision_confidence == "LOW":
@@ -600,6 +700,11 @@ def _project(facts: CampaignFacts) -> InboxItem:
         ai_review = True
     else:
         ai_review = False
+
+    if visible_state == "NO_ACTION_REQUIRED":
+        reasons = [REASON_CLEAN]
+        if ai_review:
+            reasons.append(REASON_LOW_CONFIDENCE)
 
     current_thesis_payload = {
         "thesis_state": facts.thesis_state,

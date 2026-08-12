@@ -1,4 +1,12 @@
-"""P0-DI1 Decision Inbox 纯域投影核心测试：26 项测试矩阵，零 I/O。"""
+"""P0-DI1 Decision Inbox 纯域投影核心测试：26 项基础矩阵 + P0-DI1-R1 语义闭包。
+
+零 I/O；验证：
+- 冻结语义 precedence（state 唯一、reason 全量收集、确定性排序）
+- COVERAGE_INCOMPLETE 不无条件决定 BLOCKED_BY_DATA
+- NOT_EVALUATED 诚实输入状态（≠ CLEAR / NONE / USABLE）
+- STRENGTHENED 合法 canonical 状态（→ REVIEW_REQUIRED）
+- DI1 只处理真实 Campaign（campaign_id 必填）
+"""
 from __future__ import annotations
 
 import inspect
@@ -157,6 +165,7 @@ class TestHardRiskAndData:
         )
         assert item.visible_state == "REVIEW_REQUIRED"
         assert di.REASON_THESIS_DISPROVEN in item.reason_codes
+        assert di.REASON_CRITICAL_DATA_BLOCKED in item.reason_codes
 
     def test_13b_hard_risk_not_hidden_by_data_block(self):
         item = project_campaign(
@@ -164,6 +173,7 @@ class TestHardRiskAndData:
         )
         assert item.visible_state == "REVIEW_REQUIRED"
         assert di.REASON_HARD_RISK_CONFIRMED in item.reason_codes
+        assert di.REASON_CRITICAL_DATA_BLOCKED in item.reason_codes
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +320,7 @@ class TestPurityAndBoundaries:
 
 
 # ---------------------------------------------------------------------------
-# 边界：Campaign scope / UNASSIGNED / 严格校验
+# 边界：Campaign scope / 严格校验
 # ---------------------------------------------------------------------------
 
 class TestCampaignScopeAndValidation:
@@ -318,12 +328,6 @@ class TestCampaignScopeAndValidation:
         item = project_campaign(facts(campaign_status="PRE-ENTRY"))
         assert item.visible_state == "SETUP_REQUIRED"
         assert di.REASON_CAMPAIGN_NOT_IN_SCOPE in item.reason_codes
-
-    def test_unassigned_holding_setup_required(self):
-        item = project_campaign(facts(campaign_id=None, campaign_status="ACTIVE"))
-        assert item.visible_state == "SETUP_REQUIRED"
-        assert di.REASON_UNASSIGNED_HOLDING in item.reason_codes
-        assert item.campaign_id is None  # 不伪造 campaign_id
 
     def test_invalid_inputs_fail_closed(self):
         for bad in (
@@ -334,9 +338,22 @@ class TestCampaignScopeAndValidation:
             {"thesis_state": "FROZEN"},  # 枚举错
             {"current_thesis": "BULLISH"},  # 枚举错
             {"hard_risk_state": "RISKY"},  # 枚举错
+            {"material_change_state": "SOMEWHAT"},  # 枚举错
+            {"critical_data_state": "MISSING"},  # 枚举错
             {"coverage_complete": "yes"},  # 非严格 bool
             {"as_of": "明天"},  # 时间戳错
             {"as_of": "2026-08-12T16:00:00+08:00"},  # 非零偏移
+        ):
+            with pytest.raises(DecisionInboxValidationError):
+                facts(**bad)
+
+    def test_invalid_not_evaluated_and_strengthened_values_rejected(self):
+        # NOT_EVALUATED 枚举之外的值必须 fail closed
+        for bad in (
+            {"hard_risk_state": "NOT_EVALUATING"},
+            {"material_change_state": "NOT_EVALUATING"},
+            {"critical_data_state": "NOT_EVALUATING"},
+            {"current_thesis": "UPGRADED"},
         ):
             with pytest.raises(DecisionInboxValidationError):
                 facts(**bad)
@@ -378,6 +395,10 @@ class TestExplainability:
             (facts(hard_risk_state="CONFIRMED"), "REVIEW_FORMAL_DECISION"),
             (facts(current_thesis="WEAKENED"), "REVIEW_THESIS"),
             (facts(current_thesis="UNKNOWN"), "RESEARCH_EVIDENCE"),
+            (facts(current_thesis="STRENGTHENED"), "REVIEW_FORMAL_DECISION"),
+            (facts(hard_risk_state="NOT_EVALUATED"), "REPAIR_DATA"),
+            (facts(material_change_state="NOT_EVALUATED"), "REPAIR_DATA"),
+            (facts(critical_data_state="NOT_EVALUATED"), "REPAIR_DATA"),
             (facts(), "NONE"),
         ]
         for f, expected_action in cases:
@@ -399,6 +420,12 @@ class TestExplainability:
         item = project_campaign(facts(authority_refs=[]))
         assert list(item.explainability["authority_refs"]) == []
 
+    def test_not_evaluated_exposed_in_uncertainties(self):
+        item = project_campaign(facts(hard_risk_state="NOT_EVALUATED"))
+        assert "hard_risk_state=NOT_EVALUATED" in item.explainability["uncertainties"]
+        item = project_campaign(facts(critical_data_state="NOT_EVALUATED"))
+        assert "critical_data_state=NOT_EVALUATED" in item.explainability["uncertainties"]
+
 
 # ---------------------------------------------------------------------------
 # 输出契约
@@ -412,6 +439,7 @@ class TestOutputContract:
         )
         assert item.visible_state == "REVIEW_REQUIRED"
         assert di.REASON_THESIS_INVALIDATED in item.reason_codes
+        assert di.REASON_CRITICAL_DATA_BLOCKED in item.reason_codes
 
     def test_to_dict_plain_json(self):
         item = project_campaign(facts())
@@ -423,3 +451,321 @@ class TestOutputContract:
     def test_deterministic_repeat(self):
         assert project_campaign(facts()) == project_campaign(facts())
         assert project_campaign(facts()).to_dict() == project_campaign(facts()).to_dict()
+
+
+# ---------------------------------------------------------------------------
+# P0-DI1-R1：COVERAGE precedence（P0-1）
+# ---------------------------------------------------------------------------
+
+class TestR1CoveragePrecedence:
+    def test_coverage_false_weakened_review_with_both_reasons(self):
+        # Case A：current_thesis = WEAKENED + coverage false
+        # generic coverage gap 不得洗掉 thesis review fact
+        item = project_campaign(
+            facts(current_thesis="WEAKENED", coverage_complete=False)
+        )
+        assert item.visible_state == "REVIEW_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_THESIS_WEAKENED,
+            di.REASON_COVERAGE_INCOMPLETE,
+        )
+        assert di.REASON_CRITICAL_DATA_BLOCKED not in item.reason_codes
+
+    def test_coverage_false_missing_decision_setup_with_both_reasons(self):
+        # Case B：formal decision missing + coverage false
+        # generic coverage gap 不得洗掉 setup gap
+        item = project_campaign(
+            facts(latest_frozen_decision=None, coverage_complete=False)
+        )
+        assert item.visible_state == "SETUP_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_FORMAL_DECISION_MISSING,
+            di.REASON_COVERAGE_INCOMPLETE,
+        )
+
+    def test_coverage_false_only_not_no_action(self):
+        # Case C：全部 clean 但 coverage false → NO_ACTION_REQUIRED 禁止；
+        # 最终 fallback = BLOCKED_BY_DATA + COVERAGE_INCOMPLETE
+        item = project_campaign(facts(coverage_complete=False))
+        assert item.visible_state == "BLOCKED_BY_DATA"
+        assert item.reason_codes == (di.REASON_COVERAGE_INCOMPLETE,)
+        assert di.REASON_CLEAN not in item.reason_codes
+
+    def test_coverage_false_terminal_review_not_hidden(self):
+        # coverage false 不得隐藏 terminal fact
+        item = project_campaign(
+            facts(current_thesis="DISPROVEN", coverage_complete=False)
+        )
+        assert item.visible_state == "REVIEW_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_THESIS_DISPROVEN,
+            di.REASON_COVERAGE_INCOMPLETE,
+        )
+
+    def test_coverage_false_confirmed_hard_risk_review_not_hidden(self):
+        item = project_campaign(
+            facts(hard_risk_state="CONFIRMED", coverage_complete=False)
+        )
+        assert item.visible_state == "REVIEW_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_HARD_RISK_CONFIRMED,
+            di.REASON_COVERAGE_INCOMPLETE,
+        )
+
+
+# ---------------------------------------------------------------------------
+# P0-DI1-R1：Cumulative reason cases（P0-2 / R1-R5）
+# ---------------------------------------------------------------------------
+
+class TestR1CumulativeReasons:
+    def test_r1_terminal_plus_data_blocked(self):
+        item = project_campaign(
+            facts(current_thesis="INVALIDATED", critical_data_state="BLOCKED")
+        )
+        assert item.visible_state == "REVIEW_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_THESIS_INVALIDATED,
+            di.REASON_CRITICAL_DATA_BLOCKED,
+        )
+
+    def test_r2_hard_risk_confirmed_plus_decision_missing(self):
+        item = project_campaign(
+            facts(hard_risk_state="CONFIRMED", latest_frozen_decision=None)
+        )
+        assert item.visible_state == "REVIEW_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_HARD_RISK_CONFIRMED,
+            di.REASON_FORMAL_DECISION_MISSING,
+        )
+
+    def test_r3_weakened_plus_decision_missing(self):
+        item = project_campaign(
+            facts(current_thesis="WEAKENED", latest_frozen_decision=None)
+        )
+        assert item.visible_state == "SETUP_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_FORMAL_DECISION_MISSING,
+            di.REASON_THESIS_WEAKENED,
+        )
+
+    def test_r4_review_by_reached_plus_data_blocked(self):
+        item = project_campaign(
+            facts(
+                latest_frozen_decision=_decision(review_by=REVIEW_BY_PAST),
+                critical_data_state="BLOCKED",
+            )
+        )
+        assert item.visible_state == "BLOCKED_BY_DATA"
+        assert item.reason_codes == (
+            di.REASON_CRITICAL_DATA_BLOCKED,
+            di.REASON_REVIEW_BY_REACHED,
+        )
+
+    def test_r5_material_plus_low_confidence(self):
+        item = project_campaign(
+            facts(material_change_state="MATERIAL", decision_confidence="LOW")
+        )
+        assert item.visible_state == "REVIEW_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_MATERIAL_CHANGE_MATERIAL,
+            di.REASON_LOW_CONFIDENCE,
+        )
+        assert item.ai_review_recommended is True
+
+    def test_unknown_thesis_plus_missing_decision_golden(self):
+        item = project_campaign(
+            facts(current_thesis="UNKNOWN", latest_frozen_decision=None)
+        )
+        assert item.visible_state == "SETUP_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_FORMAL_DECISION_MISSING,
+            di.REASON_THESIS_UNKNOWN,
+        )
+
+
+# ---------------------------------------------------------------------------
+# P0-DI1-R1：NOT_EVALUATED 诚实输入状态（P0-3）
+# ---------------------------------------------------------------------------
+
+class TestR1NotEvaluated:
+    def test_hard_risk_not_evaluated_otherwise_clean_blocked(self):
+        item = project_campaign(facts(hard_risk_state="NOT_EVALUATED"))
+        assert item.visible_state == "BLOCKED_BY_DATA"
+        assert item.reason_codes == (di.REASON_HARD_RISK_NOT_EVALUATED,)
+
+    def test_material_change_not_evaluated_otherwise_clean_blocked(self):
+        item = project_campaign(facts(material_change_state="NOT_EVALUATED"))
+        assert item.visible_state == "BLOCKED_BY_DATA"
+        assert item.reason_codes == (di.REASON_MATERIAL_CHANGE_NOT_EVALUATED,)
+
+    def test_critical_data_not_evaluated_otherwise_clean_blocked(self):
+        item = project_campaign(facts(critical_data_state="NOT_EVALUATED"))
+        assert item.visible_state == "BLOCKED_BY_DATA"
+        assert item.reason_codes == (di.REASON_CRITICAL_DATA_NOT_EVALUATED,)
+
+    def test_not_evaluated_not_equal_clean(self):
+        # NOT_EVALUATED != CLEAR / NONE / USABLE
+        item = project_campaign(facts(hard_risk_state="NOT_EVALUATED"))
+        assert item.visible_state != "NO_ACTION_REQUIRED"
+        assert di.REASON_CLEAN not in item.reason_codes
+
+    def test_not_evaluated_never_hides_terminal_fact(self):
+        item = project_campaign(
+            facts(hard_risk_state="NOT_EVALUATED", current_thesis="DISPROVEN")
+        )
+        assert item.visible_state == "REVIEW_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_THESIS_DISPROVEN,
+            di.REASON_HARD_RISK_NOT_EVALUATED,
+        )
+
+    def test_not_evaluated_never_hides_setup_fact(self):
+        item = project_campaign(
+            facts(critical_data_state="NOT_EVALUATED", latest_frozen_decision=None)
+        )
+        assert item.visible_state == "SETUP_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_CRITICAL_DATA_NOT_EVALUATED,
+            di.REASON_FORMAL_DECISION_MISSING,
+        )
+
+
+# ---------------------------------------------------------------------------
+# P0-DI1-R1：STRENGTHENED canonical thesis（P0-4）
+# ---------------------------------------------------------------------------
+
+class TestR1Strengthened:
+    def test_strengthened_accepted_review(self):
+        item = project_campaign(facts(current_thesis="STRENGTHENED"))
+        assert item.visible_state == "REVIEW_REQUIRED"
+        assert item.reason_codes == (di.REASON_THESIS_STRENGTHENED,)
+
+    def test_strengthened_never_clean(self):
+        item = project_campaign(facts(current_thesis="STRENGTHENED"))
+        assert item.visible_state != "NO_ACTION_REQUIRED"
+        assert di.REASON_CLEAN not in item.reason_codes
+
+    def test_strengthened_not_terminal(self):
+        # STRENGTHENED 是正向变化，不是 terminal；但也不进 clean path
+        item = project_campaign(facts(current_thesis="STRENGTHENED"))
+        assert di.REASON_THESIS_DISPROVEN not in item.reason_codes
+        assert di.REASON_THESIS_INVALIDATED not in item.reason_codes
+
+
+# ---------------------------------------------------------------------------
+# P0-DI1-R1：确定性 / 输入顺序独立性 / 正向 NO_ACTION 证明
+# ---------------------------------------------------------------------------
+
+class TestR1DeterminismAndPositiveProof:
+    def test_reason_order_deterministic_across_instances(self):
+        def build():
+            return project_campaign(
+                facts(
+                    current_thesis="WEAKENED",
+                    material_change_state="MATERIAL",
+                    critical_data_state="BLOCKED",
+                    hard_risk_state="UNKNOWN",
+                    decision_confidence="LOW",
+                    coverage_complete=False,
+                )
+            )
+
+        first = build().reason_codes
+        for _ in range(3):
+            assert build().reason_codes == first
+
+    def test_input_order_independence_after_cumulative_reasons(self):
+        record = facts(
+            current_thesis="WEAKENED",
+            material_change_state="MATERIAL",
+            critical_data_state="BLOCKED",
+            hard_risk_state="UNKNOWN",
+            decision_confidence="LOW",
+            coverage_complete=False,
+        ).to_dict()
+        base = project_campaign(record).to_dict()
+        keys = list(record)
+        for _ in range(5):
+            shuffled = {k: record[k] for k in list(reversed(keys))}
+            keys = list(reversed(keys))
+            assert project_campaign(shuffled).to_dict() == base
+
+    def test_positive_no_action_exact_proof(self):
+        item = project_campaign(facts())
+        assert item.visible_state == "NO_ACTION_REQUIRED"
+        assert item.reason_codes == ("CLEAN",)
+
+    def test_each_clean_proof_requirement_individually_never_no_action(self):
+        # Frozen positive NO_ACTION proof 的每个必要项被单独破坏时，都不得 NO_ACTION。
+        # decision_confidence 不在 positive proof 清单内（LOW 不改 visible state）。
+        removals = (
+            {"campaign_status": "DRAFT"},
+            {"thesis_state": "MISSING"},
+            {"current_thesis": "WEAKENED"},
+            {"latest_frozen_decision": None},
+            {"latest_frozen_decision": _decision(review_by=REVIEW_BY_PAST)},
+            {"hard_risk_state": "UNKNOWN"},
+            {"hard_risk_state": "NOT_EVALUATED"},
+            {"material_change_state": "UNKNOWN"},
+            {"material_change_state": "NOT_EVALUATED"},
+            {"critical_data_state": "UNKNOWN"},
+            {"critical_data_state": "STALE"},
+            {"critical_data_state": "NOT_EVALUATED"},
+            {"coverage_complete": False},
+        )
+        for override in removals:
+            item = project_campaign(facts(**override))
+            assert item.visible_state != "NO_ACTION_REQUIRED", override
+
+    def test_material_change_unknown_never_no_action(self):
+        item = project_campaign(facts(material_change_state="UNKNOWN"))
+        assert item.visible_state != "NO_ACTION_REQUIRED"
+        assert di.REASON_MATERIAL_CHANGE_UNKNOWN in item.reason_codes
+
+
+# ---------------------------------------------------------------------------
+# P0-DI1-R1：P1 — DI1 只处理真实 Campaign（无 synthetic UNASSIGNED facts）
+# ---------------------------------------------------------------------------
+
+class TestR1RealCampaignOnly:
+    def test_campaign_id_none_rejected_fail_closed(self):
+        # DI1 不伪造 campaign_id / strategy / campaign_status；
+        # UNASSIGNED_HOLDING 留给未来 DI2 Assembler / Product Composition
+        with pytest.raises(DecisionInboxValidationError):
+            facts(campaign_id=None, campaign_status="ACTIVE")
+
+    def test_no_synthetic_unassigned_reason_code(self):
+        assert not hasattr(di, "REASON_UNASSIGNED_HOLDING")
+        assert "UNASSIGNED_HOLDING" not in di.REASON_CODES
+
+    def test_no_unassigned_strings_in_output(self):
+        item = project_campaign(facts())
+        assert "UNASSIGNED" not in str(item.to_dict())
+
+    def test_no_synthetic_campaign_fields(self):
+        # DI1 投影核心不存在 synthetic UNASSIGNED path：
+        # 无 campaign_id=None 分支、无 UNASSIGNED 决策/原因分支
+        source = inspect.getsource(di._project)
+        assert "campaign_id is None" not in source
+        assert "UNASSIGNED" not in source
+        assert not hasattr(di, "REASON_UNASSIGNED_HOLDING")
+
+    def test_multi_campaign_isolation_unchanged(self):
+        camp_b = "campaign_" + "d" * 32
+        item_a = project_campaign(facts(campaign_id=CAMPAIGN_ID))
+        item_b = project_campaign(facts(campaign_id=camp_b, current_thesis="WEAKENED"))
+        assert item_a.visible_state == "NO_ACTION_REQUIRED"
+        assert item_b.visible_state == "REVIEW_REQUIRED"
+        assert item_a.campaign_id == CAMPAIGN_ID
+        assert item_b.campaign_id == camp_b
+
+    def test_no_regression_no_io_ai_buy_sell(self):
+        # P0-DI1-R1 保持纯投影核心边界：零 I/O / 零 AI / 零交易动作
+        source = inspect.getsource(di)
+        for forbidden in ("import sqlite3", "import os", "import socket",
+                          "requests", "urllib", "import fastapi", "open(",
+                          "datetime.now", "time.time"):
+            assert forbidden not in source
+        for name in dir(di):
+            if name.isupper() and ("BUY" in name or "SELL" in name):
+                raise AssertionError(f"禁止的交易动作常量：{name}")
