@@ -620,13 +620,15 @@ class TestR1NotEvaluated:
         )
 
     def test_not_evaluated_never_hides_setup_fact(self):
+        # CRITICAL_DATA_NOT_EVALUATED 属于 generic 层，不高于 setup gap；
+        # primary reason 跟随 state precedence（FORMAL_DECISION_MISSING）
         item = project_campaign(
             facts(critical_data_state="NOT_EVALUATED", latest_frozen_decision=None)
         )
         assert item.visible_state == "SETUP_REQUIRED"
         assert item.reason_codes == (
-            di.REASON_CRITICAL_DATA_NOT_EVALUATED,
             di.REASON_FORMAL_DECISION_MISSING,
+            di.REASON_CRITICAL_DATA_NOT_EVALUATED,
         )
 
 
@@ -769,3 +771,130 @@ class TestR1RealCampaignOnly:
         for name in dir(di):
             if name.isupper() and ("BUY" in name or "SELL" in name):
                 raise AssertionError(f"禁止的交易动作常量：{name}")
+
+
+# ---------------------------------------------------------------------------
+# P0-DI1-R2：Primary Workflow Action Precedence（PRIMARY ACTION 与
+# visible-state precedence 一致；reason vector 仍 cumulative）
+# ---------------------------------------------------------------------------
+
+class TestR2PrimaryWorkflowActionPrecedence:
+    def test_case1_decision_missing_plus_critical_data_not_evaluated(self):
+        # FORMAL_DECISION_MISSING(3) + CRITICAL_DATA_NOT_EVALUATED(generic)
+        # → SETUP_REQUIRED；both reasons；primary = FORMAL_DECISION_MISSING
+        # → CREATE_FORMAL_DECISION（不得被 generic 层 REPAIR_DATA 覆盖）
+        item = project_campaign(
+            facts(
+                latest_frozen_decision=None,
+                critical_data_state="NOT_EVALUATED",
+            )
+        )
+        assert item.visible_state == "SETUP_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_FORMAL_DECISION_MISSING,
+            di.REASON_CRITICAL_DATA_NOT_EVALUATED,
+        )
+        assert item.explainability["next_workflow_action"] == "CREATE_FORMAL_DECISION"
+
+    def test_case2_weakened_plus_critical_data_not_evaluated(self):
+        # THESIS_WEAKENED(4) + CRITICAL_DATA_NOT_EVALUATED(generic)
+        # → REVIEW_REQUIRED；both reasons；primary = THESIS_WEAKENED
+        # → REVIEW_THESIS
+        item = project_campaign(
+            facts(
+                current_thesis="WEAKENED",
+                critical_data_state="NOT_EVALUATED",
+            )
+        )
+        assert item.visible_state == "REVIEW_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_THESIS_WEAKENED,
+            di.REASON_CRITICAL_DATA_NOT_EVALUATED,
+        )
+        assert item.explainability["next_workflow_action"] == "REVIEW_THESIS"
+
+    def test_case3_otherwise_clean_plus_critical_data_not_evaluated(self):
+        # otherwise clean + CRITICAL_DATA_NOT_EVALUATED
+        # → BLOCKED_BY_DATA；reason 唯一；→ REPAIR_DATA
+        item = project_campaign(facts(critical_data_state="NOT_EVALUATED"))
+        assert item.visible_state == "BLOCKED_BY_DATA"
+        assert item.reason_codes == (di.REASON_CRITICAL_DATA_NOT_EVALUATED,)
+        assert item.explainability["next_workflow_action"] == "REPAIR_DATA"
+
+    def test_case4_terminal_plus_critical_data_not_evaluated(self):
+        # THESIS_DISPROVEN(1) + CRITICAL_DATA_NOT_EVALUATED(generic)
+        # → REVIEW_REQUIRED；both reasons；terminal reason first
+        item = project_campaign(
+            facts(
+                current_thesis="DISPROVEN",
+                critical_data_state="NOT_EVALUATED",
+            )
+        )
+        assert item.visible_state == "REVIEW_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_THESIS_DISPROVEN,
+            di.REASON_CRITICAL_DATA_NOT_EVALUATED,
+        )
+        assert item.explainability["next_workflow_action"] == "REVIEW_THESIS"
+
+    def test_other_not_evaluated_same_generic_layer(self):
+        # 三个 NOT_EVALUATED 互不高于 setup / thesis review：
+        # hard risk NOT_EVALUATED + decision missing → primary=decision
+        item = project_campaign(
+            facts(
+                hard_risk_state="NOT_EVALUATED",
+                latest_frozen_decision=None,
+            )
+        )
+        assert item.visible_state == "SETUP_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_FORMAL_DECISION_MISSING,
+            di.REASON_HARD_RISK_NOT_EVALUATED,
+        )
+        assert item.explainability["next_workflow_action"] == "CREATE_FORMAL_DECISION"
+        # material change NOT_EVALUATED + weakened → primary=thesis
+        item = project_campaign(
+            facts(
+                material_change_state="NOT_EVALUATED",
+                current_thesis="WEAKENED",
+            )
+        )
+        assert item.visible_state == "REVIEW_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_THESIS_WEAKENED,
+            di.REASON_MATERIAL_CHANGE_NOT_EVALUATED,
+        )
+        assert item.explainability["next_workflow_action"] == "REVIEW_THESIS"
+
+    def test_actual_data_blocking_still_higher_than_generic(self):
+        # CRITICAL_DATA_BLOCKED(2) 仍高于 setup / generic：
+        # primary action 跟随 actual blocker（REPAIR_DATA）
+        item = project_campaign(
+            facts(
+                critical_data_state="BLOCKED",
+                latest_frozen_decision=None,
+            )
+        )
+        assert item.visible_state == "BLOCKED_BY_DATA"
+        assert item.reason_codes == (
+            di.REASON_CRITICAL_DATA_BLOCKED,
+            di.REASON_FORMAL_DECISION_MISSING,
+        )
+        assert item.explainability["next_workflow_action"] == "REPAIR_DATA"
+
+    def test_cumulative_reason_vector_unchanged(self):
+        # R2 只降 CRITICAL_DATA_NOT_EVALUATED 的 reason 顺序层，
+        # reason 仍全量收集，不删除 lower-precedence reasons
+        item = project_campaign(
+            facts(
+                critical_data_state="NOT_EVALUATED",
+                current_thesis="WEAKENED",
+                coverage_complete=False,
+            )
+        )
+        assert item.visible_state == "REVIEW_REQUIRED"
+        assert item.reason_codes == (
+            di.REASON_THESIS_WEAKENED,
+            di.REASON_CRITICAL_DATA_NOT_EVALUATED,
+            di.REASON_COVERAGE_INCOMPLETE,
+        )

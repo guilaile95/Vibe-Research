@@ -41,6 +41,10 @@ reason 全量收集，不因 early-state gating 删除 lower-precedence facts）
 - coverage_complete == false 只证明 MUST NOT NO_ACTION_REQUIRED，
   不无条件决定 BLOCKED_BY_DATA（terminal / setup / thesis review facts
   优先，generic coverage gap 不得洗掉它们）
+- PRIMARY WORKFLOW ACTION 必须跟随 highest-precedence applicable
+  semantic reason；visible-state precedence 与 primary actionable reason
+  不得互相矛盾。NOT_EVALUATED（含 CRITICAL_DATA_NOT_EVALUATED）属于
+  generic incomplete evaluation 层，不是 actual critical-data blocker
 - DI1 保持真正的 Campaign-level projection：只处理真实 Campaign
   （campaign_id 必填）；UNASSIGNED_HOLDING 留给未来 DI2 Runtime
   Assembler / Product Composition 层产生 SETUP_REQUIRED，本模块不伪造
@@ -666,6 +670,10 @@ def _project(facts: CampaignFacts) -> InboxItem:
     # ------------------------------------------------------------------
     # PHASE C：确定性 reason 排序（frozen semantic precedence，非发现顺序）
     # ------------------------------------------------------------------
+    # 注意：CRITICAL_DATA_NOT_EVALUATED 属于 generic incomplete evaluation
+    # 层（与 HARD_RISK/MATERIAL_CHANGE NOT_EVALUATED 同层），不是 actual
+    # critical-data blocking condition；故 reason 优先级为 generic 层，
+    # 保证 PRIMARY WORKFLOW ACTION 与 visible-state precedence 不矛盾。
     semantic_order = {
         REASON_THESIS_DISPROVEN: 1,
         REASON_THESIS_INVALIDATED: 1,
@@ -673,7 +681,6 @@ def _project(facts: CampaignFacts) -> InboxItem:
         REASON_CRITICAL_DATA_BLOCKED: 3,
         REASON_CRITICAL_DATA_UNKNOWN: 3,
         REASON_CRITICAL_DATA_STALE: 3,
-        REASON_CRITICAL_DATA_NOT_EVALUATED: 3,
         REASON_CAMPAIGN_NOT_IN_SCOPE: 4,
         REASON_THESIS_MISSING: 4,
         REASON_THESIS_NOT_READY: 4,
@@ -689,6 +696,7 @@ def _project(facts: CampaignFacts) -> InboxItem:
         REASON_HARD_RISK_NOT_EVALUATED: 6,
         REASON_MATERIAL_CHANGE_UNKNOWN: 6,
         REASON_MATERIAL_CHANGE_NOT_EVALUATED: 6,
+        REASON_CRITICAL_DATA_NOT_EVALUATED: 6,
         REASON_COVERAGE_INCOMPLETE: 7,
         REASON_LOW_CONFIDENCE: 8,
     }
