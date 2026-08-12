@@ -23,10 +23,25 @@ risk_allowed_cap_notional
 account_nav × risk_budget_ratio ÷ entry_to_invalidation_distance_ratio
 ```
 
+Numeric contract (v0.1):
+
+```text
+DETERMINISTIC FIXED-CONTEXT DECIMAL PROJECTION
+GLOBAL_DECIMAL_CONTEXT_DEPENDENCE = NO
+HIDDEN_MONEY_ROUNDING = NO
+```
+
+Non-terminating results (e.g. 1_000_000 × 0.01 ÷ 0.06) are projected under a
+module-owned frozen Decimal context. This is not a claim of mathematically
+exact infinite-decimal representation.
+
 Authority boundary:
 
 - Policy owns strategy → risk_budget_ratio / policy_backstop_ratio only.
-- Cap owns NAV + budget + explicit invalidation distance → risk-only notional.
+- Cap owns Official Settled NAV + budget + explicit invalidation distance
+  → risk-only notional.
+- ESTIMATED_INTRADAY is a recognized nav_basis but cannot form a formal
+  EVALUATED cap in RB1 v0.1 (no Intraday NAV Quality Envelope).
 - Backstop is policy comparison only; never substitutes invalidation distance
   and never silently clamps the cap.
 - Cap > NAV is retained raw (portfolio constraints are other authorities).
@@ -41,11 +56,37 @@ import copy
 import math
 import re
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import (
+    ROUND_HALF_EVEN,
+    Context,
+    Decimal,
+    DivisionByZero,
+    InvalidOperation,
+    Overflow,
+    localcontext,
+)
 from typing import Any, Mapping
 
 SCHEMA_VERSION = "risk_budget.projection.v0.1"
 AUTHORITY_REF = "rb:risk_budget_projection:v0.1"
+
+# Frozen v0.1 numeric context: module-owned, versioned, independent of
+# the process-global Decimal context. Precision is finite and well above
+# v0.1 policy ratios / typical NAV magnitude; it is not the CPython default
+# of 28, not input-length-adaptive, and not a money-cents contract.
+NUMERIC_CONTEXT_VERSION = "rb.numeric.v0.1"
+NUMERIC_PRECISION = 50
+NUMERIC_ROUNDING = ROUND_HALF_EVEN
+RISK_BUDGET_DECIMAL_CONTEXT = Context(
+    prec=NUMERIC_PRECISION,
+    rounding=NUMERIC_ROUNDING,
+    Emin=-999999,
+    Emax=999999,
+    capitals=1,
+    clamp=0,
+    flags=[],
+    traps=[InvalidOperation, DivisionByZero, Overflow],
+)
 
 POLICY_VERSION_V01 = "rb.risk_budget.v0.1"
 POLICY_AUTHORITY_REF_V01 = "rb:risk_budget_policy:v0.1"
@@ -273,13 +314,24 @@ def _to_decimal_positive(value: object, field: str) -> Decimal:
 
 
 def _decimal_to_str(value: Decimal) -> str:
-    """Canonical non-scientific decimal string (exact, no forced money quantize)."""
-    # normalize() collapses trailing zeros in exponent form; use format that
-    # preserves exact value without scientific notation.
+    """Canonical non-scientific decimal string (no cents quantize, no builtin rounding)."""
     s = format(value, "f")
     if "." in s:
         s = s.rstrip("0").rstrip(".")
     return s if s else "0"
+
+
+def _project_cap_under_frozen_context(
+    nav: Decimal, budget: Decimal, distance: Decimal
+) -> tuple[Decimal, Decimal]:
+    """Project cap and cap/NAV ratio under the frozen v0.1 Decimal context.
+
+    Caller process-global Decimal context must not affect the result.
+    """
+    with localcontext(RISK_BUDGET_DECIMAL_CONTEXT.copy()):
+        cap = (nav * budget) / distance
+        cap_nav_ratio = cap / nav
+        return cap, cap_nav_ratio
 
 
 def _backstop_comparison(distance: Decimal, backstop: Decimal) -> str:
@@ -312,9 +364,11 @@ def project_risk_budget(
 
     ``policy_version`` is required (no default / latest / as_of selection).
     Unknown but well-formed policy_version → cap_evaluation NOT_EVALUATED
-    (no implicit latest). Illegal inputs → RiskBudgetValidationError.
+    (no implicit latest). ESTIMATED_INTRADAY is valid input but cannot form
+    a formal EVALUATED cap in v0.1. Illegal inputs → RiskBudgetValidationError.
 
     Returns a detached dict. Never mutates inputs. Never reads wall clock.
+    Never depends on process-global Decimal context.
     """
     sec = _require_security_code(security_code)
     strat = _require_strategy(strategy)
@@ -335,60 +389,96 @@ def project_risk_budget(
         "entry_to_invalidation_distance_ratio",
     )
 
-    # Unknown policy: honest NOT_EVALUATED — never fall back to latest.
+    # Evaluation precedence: structural input (above) → policy availability
+    # → NAV eligibility. Reasons are cumulative and must not lie.
+    reason_codes: list[str] = []
     table = _POLICY_REGISTRY.get(version)
+    budget: Decimal | None = None
+    backstop: Decimal | None = None
+    policy_ref: str | None = None
     if table is None:
+        reason_codes.append("POLICY_VERSION_NOT_AVAILABLE")
+    else:
+        try:
+            row = table[strat]
+            budget = row["risk_budget_ratio"]
+            backstop = row["policy_backstop_ratio"]
+        except KeyError as exc:
+            # Integrity: known policy must cover all VALID_STRATEGIES.
+            raise RiskBudgetValidationError(
+                f"policy {version!r} missing strategy {strat!r}"
+            ) from exc
+        policy_ref = _POLICY_AUTHORITY_REF_BY_VERSION[version]
+
+    if basis == "ESTIMATED_INTRADAY":
+        reason_codes.append("INTRADAY_NAV_QUALITY_NOT_PROVEN")
+
+    if reason_codes:
+        comparison = (
+            _backstop_comparison(distance, backstop)
+            if backstop is not None
+            else None
+        )
+        authority_refs = [AUTHORITY_REF]
+        if policy_ref is not None:
+            authority_refs.append(policy_ref)
+        for ref in nav_refs + inv_refs:
+            if ref not in authority_refs:
+                authority_refs.append(ref)
         result = {
             "schema_version": SCHEMA_VERSION,
             "authority_ref": AUTHORITY_REF,
             "policy_version": version,
-            "policy_authority_ref": None,
+            "policy_authority_ref": policy_ref,
             "security_code": sec,
             "strategy": strat,
             "campaign_id": camp,
             "as_of": as_of_s,
             "cap_evaluation": "NOT_EVALUATED",
-            "reason_codes": ["POLICY_VERSION_NOT_AVAILABLE"],
+            "reason_codes": list(reason_codes),
             "account_nav": _decimal_to_str(nav),
             "nav_basis": basis,
             "entry_to_invalidation_distance_ratio": _decimal_to_str(distance),
-            "risk_budget_ratio": None,
-            "policy_backstop_ratio": None,
+            "risk_budget_ratio": (
+                _decimal_to_str(budget) if budget is not None else None
+            ),
+            "policy_backstop_ratio": (
+                _decimal_to_str(backstop) if backstop is not None else None
+            ),
             "risk_allowed_cap_notional": None,
             "risk_allowed_cap_nav_ratio": None,
-            "backstop_comparison": None,
+            "backstop_comparison": comparison,
             "nav_authority_refs": list(nav_refs),
             "invalidation_authority_refs": list(inv_refs),
-            "authority_refs": [AUTHORITY_REF] + list(nav_refs) + list(inv_refs),
+            "authority_refs": authority_refs,
             "explainability": {
-                "why_this_cap": "POLICY_VERSION_NOT_AVAILABLE",
+                "why_this_cap": "; ".join(reason_codes),
                 "formula": (
                     "account_nav × risk_budget_ratio "
                     "÷ entry_to_invalidation_distance_ratio"
                 ),
                 "note": (
                     "as_of does not select policy_version; "
-                    "no implicit latest policy"
+                    "no implicit latest policy; "
+                    "NAV_BASIS_PRESERVED; "
+                    "INTRADAY_TO_SETTLED_FALLBACK=NO; "
+                    "RUNTIME_INTRADAY_NAV_QUALITY=OUT_OF_SCOPE"
+                ),
+                "numeric_context": (
+                    "FROZEN_V0.1; "
+                    f"prec={NUMERIC_PRECISION}; "
+                    "ROUND_HALF_EVEN; "
+                    "GLOBAL_DECIMAL_CONTEXT_DEPENDENCE=NO; "
+                    "HIDDEN_MONEY_ROUNDING=NO"
                 ),
             },
         }
         return copy.deepcopy(result)
 
-    try:
-        row = table[strat]
-        budget = row["risk_budget_ratio"]
-        backstop = row["policy_backstop_ratio"]
-    except KeyError as exc:
-        # Integrity: known policy must cover all VALID_STRATEGIES.
-        raise RiskBudgetValidationError(
-            f"policy {version!r} missing strategy {strat!r}"
-        ) from exc
-
-    # Exact Decimal division — no silent clamp to NAV, no backstop substitute.
-    cap = (nav * budget) / distance
-    cap_nav_ratio = cap / nav
+    # Formal EVALUATED: known policy + OFFICIAL_SETTLED only.
+    assert budget is not None and backstop is not None and policy_ref is not None
+    cap, cap_nav_ratio = _project_cap_under_frozen_context(nav, budget, distance)
     comparison = _backstop_comparison(distance, backstop)
-    policy_ref = _POLICY_AUTHORITY_REF_BY_VERSION[version]
 
     why = (
         f"{strat} risk_budget_ratio={_decimal_to_str(budget)}; "
@@ -450,6 +540,13 @@ def project_risk_budget(
                 "authority_refs are provenance witnesses only; "
                 "UPSTREAM_AUTHORITY_BINDING_VERIFIED=NO; "
                 "RUNTIME_AUTHORITY_BINDING=OUT_OF_SCOPE"
+            ),
+            "numeric_context": (
+                "FROZEN_V0.1; "
+                f"prec={NUMERIC_PRECISION}; "
+                "ROUND_HALF_EVEN; "
+                "GLOBAL_DECIMAL_CONTEXT_DEPENDENCE=NO; "
+                "HIDDEN_MONEY_ROUNDING=NO"
             ),
         },
     }

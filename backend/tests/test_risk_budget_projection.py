@@ -8,7 +8,7 @@ import importlib
 import inspect
 import math
 import sys
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal, getcontext, localcontext
 from pathlib import Path
 
 import pytest
@@ -43,6 +43,26 @@ def _project(**overrides):
     }
     base.update(overrides)
     return rb.project_risk_budget(**base)
+
+
+def _frozen_cap_str(nav: str, budget: str, distance: str) -> str:
+    """Expected cap string under the module-owned frozen v0.1 context."""
+    with localcontext(rb.RISK_BUDGET_DECIMAL_CONTEXT.copy()):
+        cap = Decimal(nav) * Decimal(budget) / Decimal(distance)
+        s = format(cap, "f")
+        if "." in s:
+            s = s.rstrip("0").rstrip(".")
+        return s if s else "0"
+
+
+def _frozen_ratio_str(nav: str, budget: str, distance: str) -> str:
+    with localcontext(rb.RISK_BUDGET_DECIMAL_CONTEXT.copy()):
+        cap = Decimal(nav) * Decimal(budget) / Decimal(distance)
+        ratio = cap / Decimal(nav)
+        s = format(ratio, "f")
+        if "." in s:
+            s = s.rstrip("0").rstrip(".")
+        return s if s else "0"
 
 
 # ---------------------------------------------------------------------------
@@ -161,11 +181,11 @@ def test_i_backstop_never_substitutes_invalidation():
     # 1e6 * 0.01 / 0.06 = 166666.666...
     assert out["entry_to_invalidation_distance_ratio"] == "0.06"
     assert out["policy_backstop_ratio"] == "0.12"
-    expected = Decimal("1000000") * Decimal("0.01") / Decimal("0.06")
-    assert out["risk_allowed_cap_notional"] == format(expected, "f").rstrip("0").rstrip(".")
+    expected = _frozen_cap_str("1000000", "0.01", "0.06")
+    assert out["risk_allowed_cap_notional"] == expected
     # Must NOT equal cap computed with backstop as distance
-    wrong = Decimal("1000000") * Decimal("0.01") / Decimal("0.12")
-    assert out["risk_allowed_cap_notional"] != format(wrong, "f").rstrip("0").rstrip(".")
+    wrong = _frozen_cap_str("1000000", "0.01", "0.12")
+    assert out["risk_allowed_cap_notional"] != wrong
 
 
 # ---------------------------------------------------------------------------
@@ -182,9 +202,9 @@ def test_k_distance_at_backstop():
     out = _project(entry_to_invalidation_distance_ratio="0.12")
     assert out["backstop_comparison"] == "AT_BACKSTOP"
     # 1e6 * 0.01 / 0.12
-    assert out["risk_allowed_cap_notional"] == format(
-        Decimal("1000000") * Decimal("0.01") / Decimal("0.12"), "f"
-    ).rstrip("0").rstrip(".")
+    assert out["risk_allowed_cap_notional"] == _frozen_cap_str(
+        "1000000", "0.01", "0.12"
+    )
 
 
 def test_l_distance_beyond_backstop():
@@ -195,8 +215,8 @@ def test_l_distance_beyond_backstop():
 def test_m_no_silent_backstop_clamp_when_beyond():
     out = _project(entry_to_invalidation_distance_ratio="0.15")
     # Must use 0.15, not clamp to 0.12
-    expected = Decimal("1000000") * Decimal("0.01") / Decimal("0.15")
-    assert out["risk_allowed_cap_notional"] == format(expected, "f").rstrip("0").rstrip(".")
+    expected = _frozen_cap_str("1000000", "0.01", "0.15")
+    assert out["risk_allowed_cap_notional"] == expected
     assert out["entry_to_invalidation_distance_ratio"] == "0.15"
     # No sell/exit action from beyond backstop
     assert out.get("sell_state") is None
@@ -440,7 +460,13 @@ def test_nav_basis_official_vs_estimated():
     a = _project(nav_basis="OFFICIAL_SETTLED")
     b = _project(nav_basis="ESTIMATED_INTRADAY")
     assert a["nav_basis"] == "OFFICIAL_SETTLED"
+    assert a["cap_evaluation"] == "EVALUATED"
+    assert a["risk_allowed_cap_notional"] is not None
     assert b["nav_basis"] == "ESTIMATED_INTRADAY"
+    assert b["cap_evaluation"] == "NOT_EVALUATED"
+    assert b["risk_allowed_cap_notional"] is None
+    assert b["account_nav"] == a["account_nav"]
+    assert "INTRADAY_NAV_QUALITY_NOT_PROVEN" in b["reason_codes"]
     with pytest.raises(rb.RiskBudgetValidationError, match="nav_basis"):
         _project(nav_basis="OFFICIAL")  # must not silently alias
 
@@ -465,9 +491,142 @@ def test_public_api_keyword_only():
         p.kind == inspect.Parameter.KEYWORD_ONLY for p in sig.parameters.values()
     )
     assert rb.POLICY_VERSION_V01 == "rb.risk_budget.v0.1"
+    assert rb.NUMERIC_CONTEXT_VERSION == "rb.numeric.v0.1"
+    assert rb.NUMERIC_PRECISION == 50
+    assert rb.NUMERIC_ROUNDING == ROUND_HALF_EVEN
 
 
 def test_reload_pure():
     importlib.reload(rb)
     out = _project()
     assert out["schema_version"] == rb.SCHEMA_VERSION
+
+
+# ---------------------------------------------------------------------------
+# R1 P1-1: frozen numeric context (no global Decimal dependence)
+# ---------------------------------------------------------------------------
+
+
+def test_r1_global_decimal_prec_6_vs_50_same_output():
+    original = getcontext().copy()
+    try:
+        getcontext().prec = 6
+        out_a = _project(entry_to_invalidation_distance_ratio="0.06")
+        getcontext().prec = 50
+        out_b = _project(entry_to_invalidation_distance_ratio="0.06")
+        assert out_a == out_b
+        assert out_a["risk_allowed_cap_notional"] == out_b["risk_allowed_cap_notional"]
+        assert out_a["risk_allowed_cap_nav_ratio"] == out_b["risk_allowed_cap_nav_ratio"]
+        assert out_a["risk_allowed_cap_notional"] == _frozen_cap_str(
+            "1000000", "0.01", "0.06"
+        )
+        assert out_a["risk_allowed_cap_nav_ratio"] == _frozen_ratio_str(
+            "1000000", "0.01", "0.06"
+        )
+        # A poisoned global prec=6 must not collapse the repeating 6s.
+        assert out_a["risk_allowed_cap_notional"] != "1.67E+5"
+        assert "166666" in out_a["risk_allowed_cap_notional"]
+    finally:
+        getcontext().prec = original.prec
+        getcontext().rounding = original.rounding
+
+
+def test_r1_distance_006_deterministic_repeated():
+    original = getcontext().copy()
+    try:
+        getcontext().prec = 6
+        outputs = [
+            _project(entry_to_invalidation_distance_ratio="0.06") for _ in range(5)
+        ]
+        assert all(item == outputs[0] for item in outputs)
+        assert outputs[0]["risk_allowed_cap_notional"] == _frozen_cap_str(
+            "1000000", "0.01", "0.06"
+        )
+        assert outputs[0]["risk_allowed_cap_nav_ratio"] == _frozen_ratio_str(
+            "1000000", "0.01", "0.06"
+        )
+    finally:
+        getcontext().prec = original.prec
+        getcontext().rounding = original.rounding
+
+
+def test_r1_numeric_context_is_frozen_v01():
+    assert rb.RISK_BUDGET_DECIMAL_CONTEXT.prec == 50
+    assert str(rb.RISK_BUDGET_DECIMAL_CONTEXT.rounding) == "ROUND_HALF_EVEN"
+    src = Path(rb.__file__).read_text(encoding="utf-8")
+    assert "getcontext(" not in src
+    assert ".quantize(" not in src
+    assert "round(" not in src
+    assert "ROUND_HALF_EVEN" in src
+
+
+# ---------------------------------------------------------------------------
+# R1 P1-2 / P2: NAV eligibility and incomplete reasons
+# ---------------------------------------------------------------------------
+
+
+def test_r1_official_settled_known_policy_evaluated():
+    out = _project(nav_basis="OFFICIAL_SETTLED")
+    assert out["cap_evaluation"] == "EVALUATED"
+    assert out["risk_allowed_cap_notional"] == "100000"
+    assert "RISK_ALLOWED_CAP_COMPUTED" in out["reason_codes"]
+
+
+def test_r1_estimated_intraday_known_policy_not_evaluated():
+    out = _project(nav_basis="ESTIMATED_INTRADAY")
+    assert out["cap_evaluation"] == "NOT_EVALUATED"
+    assert out["risk_allowed_cap_notional"] is None
+    assert out["risk_allowed_cap_nav_ratio"] is None
+    assert out["nav_basis"] == "ESTIMATED_INTRADAY"
+    assert out["account_nav"] == "1000000"
+    assert out["nav_authority_refs"] == ["nav:settled:1"]
+    assert "INTRADAY_NAV_QUALITY_NOT_PROVEN" in out["reason_codes"]
+    assert "RISK_ALLOWED_CAP_COMPUTED" not in out["reason_codes"]
+
+
+def test_r1_estimated_intraday_no_formal_cap():
+    out = _project(nav_basis="ESTIMATED_INTRADAY")
+    assert out["risk_allowed_cap_notional"] is None
+    assert out["risk_allowed_cap_nav_ratio"] is None
+    assert out.get("sell_state") is None
+
+
+def test_r1_estimated_intraday_no_settled_fallback():
+    out = _project(nav_basis="ESTIMATED_INTRADAY")
+    assert out["nav_basis"] == "ESTIMATED_INTRADAY"
+    assert out["nav_basis"] != "OFFICIAL_SETTLED"
+    assert "INTRADAY_TO_SETTLED_FALLBACK=NO" in out["explainability"]["note"]
+    assert "NAV_BASIS_PRESERVED" in out["explainability"]["note"]
+
+
+def test_r1_unknown_policy_official_reason():
+    out = _project(
+        policy_version="rb.risk_budget.v9.9",
+        nav_basis="OFFICIAL_SETTLED",
+    )
+    assert out["cap_evaluation"] == "NOT_EVALUATED"
+    assert out["reason_codes"] == ["POLICY_VERSION_NOT_AVAILABLE"]
+    assert out["risk_allowed_cap_notional"] is None
+    assert out["risk_budget_ratio"] is None
+    assert out["policy_authority_ref"] is None
+
+
+def test_r1_known_policy_intraday_reason():
+    out = _project(nav_basis="ESTIMATED_INTRADAY")
+    assert out["reason_codes"] == ["INTRADAY_NAV_QUALITY_NOT_PROVEN"]
+    assert out["cap_evaluation"] == "NOT_EVALUATED"
+
+
+def test_r1_unknown_policy_and_intraday_cumulative_reasons():
+    out = _project(
+        policy_version="rb.unknown",
+        nav_basis="ESTIMATED_INTRADAY",
+    )
+    assert out["cap_evaluation"] == "NOT_EVALUATED"
+    assert out["reason_codes"] == [
+        "POLICY_VERSION_NOT_AVAILABLE",
+        "INTRADAY_NAV_QUALITY_NOT_PROVEN",
+    ]
+    assert out["risk_allowed_cap_notional"] is None
+    assert out["risk_budget_ratio"] is None
+    assert out["nav_basis"] == "ESTIMATED_INTRADAY"

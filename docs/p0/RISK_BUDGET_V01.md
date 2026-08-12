@@ -47,7 +47,8 @@ policy_authority_ref = rb:risk_budget_policy:v0.1
 
 - `policy_version` is **required** (no default / latest).
 - `as_of` does **not** select policy version.
-- Unknown well-formed version → `cap_evaluation=NOT_EVALUATED` (no implicit latest).
+- Unknown well-formed version → `cap_evaluation=NOT_EVALUATED` /
+  `POLICY_VERSION_NOT_AVAILABLE` (no implicit latest).
 
 ### v0.1 frozen table
 
@@ -113,6 +114,39 @@ NO silent clamp to 100% NAV
 - `nav_basis`: `OFFICIAL_SETTLED` | `ESTIMATED_INTRADAY`
 - Estimated must not silently alias Official.
 
+```text
+NAV_BASIS_PRESERVED = YES
+INTRADAY_TO_SETTLED_FALLBACK = NO
+```
+
+### Formal-cap eligibility (v0.1)
+
+| `nav_basis` | Formal Risk Allowed Cap |
+| --- | --- |
+| `OFFICIAL_SETTLED` | Eligible for `EVALUATED` (when policy is known) |
+| `ESTIMATED_INTRADAY` | Recognized input; formal cap **unavailable** in RB1 v0.1 |
+
+`ESTIMATED_INTRADAY` is syntactically valid, not illegal. It is Best-Effort
+intraday risk perception and cannot form a formal evaluated cap until a
+future **Intraday NAV Quality Envelope** exists (Coverage, Freshness,
+Confidence).
+
+```text
+nav_basis = ESTIMATED_INTRADAY
+→ cap_evaluation = NOT_EVALUATED
+→ risk_allowed_cap_notional = None
+→ risk_allowed_cap_nav_ratio = None
+→ reason_codes includes INTRADAY_NAV_QUALITY_NOT_PROVEN
+```
+
+Do not raise ERROR. Do not rewrite basis to `OFFICIAL_SETTLED`. Do not
+read another NAV. Do not invent Coverage / Freshness / Confidence.
+
+```text
+RUNTIME_INTRADAY_NAV_QUALITY = OUT_OF_SCOPE
+INTRADAY_NAV_QUALITY_ENGINE_IMPLEMENTED = NO
+```
+
 ## Provenance
 
 Evaluated formal cap requires:
@@ -133,9 +167,44 @@ RUNTIME_AUTHORITY_BINDING = OUT_OF_SCOPE
 
 ## Numeric discipline
 
-- Exact `Decimal` arithmetic.
-- No hidden cents rounding, no share-lot conversion.
-- Output ratios/notionals as exact decimal strings (no scientific notation).
+Decimal arithmetic under frozen v0.1 numeric context
+(`DETERMINISTIC FIXED-CONTEXT DECIMAL PROJECTION`).
+
+```text
+NUMERIC_CONTEXT = FROZEN_V0.1
+NUMERIC_CONTEXT_VERSION = rb.numeric.v0.1
+NUMERIC_PRECISION = 50
+NUMERIC_ROUNDING = ROUND_HALF_EVEN
+GLOBAL_DECIMAL_CONTEXT_DEPENDENCE = NO
+HIDDEN_MONEY_ROUNDING = NO
+MATHEMATICALLY_EXACT_INFINITE_DECIMAL_CLAIM = NO
+```
+
+- All non-terminating projections (`risk_allowed_cap_notional`,
+  `risk_allowed_cap_nav_ratio`) run inside
+  `localcontext(RISK_BUDGET_DECIMAL_CONTEXT)`.
+- The core must not call `getcontext()`, must not mutate process-global
+  Decimal state, must not use default precision=28, must not adapt
+  precision to input length, must not `quantize` to cents, must not
+  convert through `float`, and must not use `round()`.
+- Risk Allowed Cap is not a payment amount; do not impose a money-cents
+  contract.
+- Output ratios/notionals as canonical non-scientific decimal strings.
+
+Non-terminating examples (`0.06`, `0.12`, `0.15` as divisors) are
+deterministic under this context, not mathematically exact infinite
+decimals.
+
+## Evaluation precedence
+
+1. Validate structural input (illegal → `RiskBudgetValidationError`).
+2. Identify policy availability.
+3. Identify NAV eligibility.
+
+Unknown well-formed `policy_version` → `POLICY_VERSION_NOT_AVAILABLE`.
+`ESTIMATED_INTRADAY` → `INTRADAY_NAV_QUALITY_NOT_PROVEN`.
+Both gaps may appear together in `reason_codes`. Never fake-choose latest
+policy.
 
 ## Pure domain
 
