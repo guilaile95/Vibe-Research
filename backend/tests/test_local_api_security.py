@@ -1,13 +1,14 @@
 """P0-SEC1 本地 API 访问边界测试（全部离线，不联网）。
 
-覆盖（对应任务 §28 A–P）：
-- 默认 CORS 白名单 = 官方本地前端 Origin；evil origin 一律拿不到 ACAO；
-- 通配符 * 不是默认，且显式配置 * / 空 / 畸形值 → fail closed（含 import 期）；
+覆盖（对应任务 §28 A–P + R1 服务端 Origin gate）：
+- 默认 CORS 白名单 = 官方本地前端 Origin；通配符 * 不是默认，显式配置 * / 空 / 畸形值 fail closed；
+- 服务端 Origin gate：evil Origin 在路由执行前 403（handler 不被调用，不只检查 ACAO）；
+- 缺 Origin（非浏览器客户端）/ 白名单 / same-origin → 放行；
 - 本地前端 GET/POST/PUT/PATCH/DELETE 工作流不被破坏；
 - 配置 key 三态：缺 key 401 / 错 key 401 / 对 key 放行，且 token 永不回显；
 - /api/health 匿名豁免且不含私有数据；preflight 两态；
 - 非 loopback 绑定 + 无 key → 全部请求 503；VR_HOST 声明非 loopback + 无 key → 启动失败；
-- Host gate：拒绝未知 Host，放行 localhost/127.0.0.1/[::1]/VR_TRUSTED_HOSTS。
+- Host gate：拒绝未知 Host，放行 localhost/127.0.0.1/[::1]/VR_TRUSTED_HOSTS/缺失。
 """
 import base64
 import os
@@ -45,22 +46,96 @@ def test_default_origin_127_allowed():
     assert r.headers.get("access-control-allow-origin") == _LOCAL_ORIGIN_127
 
 
-# ── B：evil origin 拒绝 ──────────────────────────────────────────────────
+# ── B：evil Origin 在路由执行前拒绝（HANDLER_NOT_CALLED 证明） ──────────
 
-def test_evil_origin_read_not_allowed():
+def test_evil_origin_read_rejected_before_handler(monkeypatch):
+    calls = {"n": 0}
+
+    def spy():
+        calls["n"] += 1
+        return {"holdings": []}
+
+    monkeypatch.setattr(app_module.pf, "get_portfolio", spy)
     r = client.get("/api/portfolio", headers={"Origin": "https://evil.example"})
-    acao = r.headers.get("access-control-allow-origin")
-    assert acao is None          # 无 ACAO：浏览器无法读取响应
-    assert acao != "https://evil.example"
-    assert acao != "*"
+    assert r.status_code == 403
+    assert r.json()["detail"] == "Origin not allowed"
+    assert calls["n"] == 0                    # 路由未执行
+    assert r.headers.get("access-control-allow-origin") is None
+    assert "evil.example" not in r.text       # 不反射 hostile Origin
 
 
-def test_evil_origin_write_not_allowed():
-    r = client.post("/api/portfolio/refresh", headers={"Origin": "https://evil.example"})
-    acao = r.headers.get("access-control-allow-origin")
-    assert acao is None
-    assert acao != "https://evil.example"
-    assert acao != "*"
+def test_evil_origin_simple_post_rejected_before_handler(monkeypatch):
+    calls = {"n": 0}
+    real = app_module.newsradar.fetch_radar
+
+    def spy():
+        calls["n"] += 1
+        return real()
+
+    monkeypatch.setattr(app_module.newsradar, "fetch_radar", spy)
+    r = client.post("/api/radar/refresh", headers={"Origin": "https://evil.example"})
+    assert r.status_code == 403
+    assert calls["n"] == 0                    # simple POST 同样不执行路由
+    assert r.headers.get("access-control-allow-origin") is None
+    assert "evil.example" not in r.text
+
+
+# ── A/C：缺 Origin（非浏览器客户端）与 same-origin ───────────────────────
+
+def test_no_origin_header_local_client_allowed(monkeypatch):
+    calls = {"n": 0}
+
+    def spy():
+        calls["n"] += 1
+        return {"holdings": []}
+
+    monkeypatch.setattr(app_module.pf, "get_portfolio", spy)
+    r = client.get("/api/portfolio")          # 无 Origin 头（curl/本地脚本）
+    assert r.status_code == 200
+    assert calls["n"] == 1
+
+
+def test_same_origin_backend_request_allowed(monkeypatch):
+    calls = {"n": 0}
+
+    def spy():
+        calls["n"] += 1
+        return {"holdings": []}
+
+    monkeypatch.setattr(app_module.pf, "get_portfolio", spy)
+    # TestClient Host=testserver → Origin http://testserver 为 same-origin
+    r = client.post("/api/portfolio/refresh", headers={"Origin": "http://testserver"})
+    assert r.status_code == 200
+    assert calls["n"] == 1
+
+
+def test_same_origin_with_explicit_port_allowed(monkeypatch):
+    monkeypatch.setattr(app_module.pf, "get_portfolio", lambda: {"holdings": []})
+    r = client.post(
+        "/api/portfolio/refresh",
+        headers={"Origin": "http://localhost:8900", "host": "localhost:8900"},
+    )
+    assert r.status_code == 200
+
+
+def test_origin_port_mismatch_rejected(monkeypatch):
+    monkeypatch.setattr(app_module.pf, "get_portfolio", lambda: {"holdings": []})
+    r = client.post(
+        "/api/portfolio/refresh",
+        headers={"Origin": "http://localhost:9999", "host": "localhost:8900"},
+    )
+    assert r.status_code == 403
+
+
+def test_origin_allowed_helper():
+    f = app_module._origin_allowed
+    assert f("", "testserver", "http") is True                     # 缺 Origin
+    assert f("http://localhost:5899", "testserver", "http") is True  # 白名单
+    assert f("http://127.0.0.1:5899", "testserver", "http") is True  # 白名单
+    assert f("http://testserver", "testserver", "http") is True      # same-origin
+    assert f("http://testserver", "testserver:80", "http") is True   # 默认端口归一
+    assert f("https://evil.example", "testserver", "http") is False
+    assert f("null", "testserver", "http") is False
 
 
 # ── K/C：畸形 / 通配配置 fail closed ─────────────────────────────────────
@@ -233,6 +308,13 @@ def test_health_does_not_expose_private_data():
     body = r.text.lower()
     for needle in ("secret", "token", "password", "account", "portfolio", "path", "dir", "sqlite"):
         assert needle not in body
+
+
+def test_evil_origin_blocked_from_health():
+    """evil Origin 的浏览器请求连 health 都拿不到（无 CORS 可读性）。"""
+    r = client.get("/api/health", headers={"Origin": "https://evil.example"})
+    assert r.status_code == 403
+    assert r.headers.get("access-control-allow-origin") is None
 
 
 def test_no_routes_outside_api_prefix():

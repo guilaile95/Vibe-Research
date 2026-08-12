@@ -93,9 +93,14 @@ function findChromium() {
   return undefined;
 }
 
-function startBackend(dbPath, port) {
+function startBackend(dbPath, port, frontendPort) {
   return new Promise((resolve, reject) => {
-    const env = { ...process.env, VIBE_RESEARCH_EVIDENCE_THESIS_DB: dbPath };
+    const env = {
+      ...process.env,
+      VIBE_RESEARCH_EVIDENCE_THESIS_DB: dbPath,
+      // harness 页面 Origin 使用临时端口：显式加入后端 CORS/Origin 白名单
+      VR_ALLOW_ORIGINS: `http://127.0.0.1:${frontendPort}`,
+    };
     const { cmd, extraArgs } = getPythonConfig();
     const args = [...extraArgs, "app:app", `--port=${port}`, "--host=127.0.0.1"];
     const proc = spawn(cmd, args, { cwd: backendDir, env, stdio: ["ignore", "pipe", "pipe"], shell: false });
@@ -128,7 +133,7 @@ async function main() {
 
   try {
     console.log("[E2E] Starting backend...");
-    backend = await startBackend(dbPath, backendPort);
+    backend = await startBackend(dbPath, backendPort, frontendPort);
     await waitHttp(`${apiUrl}/api/health`);
 
     console.log("[E2E] Starting frontend...");

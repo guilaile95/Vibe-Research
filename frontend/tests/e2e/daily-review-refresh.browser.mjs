@@ -137,6 +137,8 @@ async function main() {
     VR_DATA_DIR: dataDir,
     VR_REPORTS_DIR: reportsDir,
     VIBE_RESEARCH_REVIEW_DB: reviewDb,
+    // harness 页面 Origin 使用临时端口：显式加入后端 CORS/Origin 白名单
+    VR_ALLOW_ORIGINS: `http://127.0.0.1:${frontendPort}`,
     PYTHONPATH: [backendDir, e2eDir, process.env.PYTHONPATH || ""].filter(Boolean).join(path.delimiter),
   };
 

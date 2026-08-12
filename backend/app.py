@@ -327,6 +327,52 @@ async def _require_api_key(request: Request, call_next):
     return await call_next(request)
 
 
+def _serialized_origin(scheme: str, host_header: str) -> str:
+    """scheme + Host 头 → Origin 序列化形式（小写，去默认端口）。"""
+    host = (host_header or "").strip().lower()
+    if scheme == "http" and host.endswith(":80"):
+        host = host[: -len(":80")]
+    if scheme == "https" and host.endswith(":443"):
+        host = host[: -len(":443")]
+    return f"{scheme}://{host}"
+
+
+def _origin_allowed(origin_header: str, host_header: str, scheme: str) -> bool:
+    """Origin gate 判定：缺 Origin（非浏览器客户端）/ 白名单 / same-origin → 放行。"""
+    origin = (origin_header or "").strip()
+    if not origin:
+        return True
+    if origin in _ALLOWED_ORIGINS:
+        return True
+    return origin == _serialized_origin(scheme, host_header)
+
+
+class _OriginGate:
+    """服务端 Origin 边界：/api/* 上，浏览器携带非白名单且非 same-origin 的
+    Origin → 在路由执行前 403（CORSMiddleware 只控制浏览器可读性，不阻止执行）。
+
+    语义：缺 Origin = 非浏览器客户端（curl/本地脚本）→ 放行。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path", "").startswith("/api/"):
+            headers = dict(scope.get("headers") or [])
+            origin = headers.get(b"origin", b"").decode("latin-1", "replace")
+            host = headers.get(b"host", b"").decode("latin-1", "replace")
+            if not _origin_allowed(origin, host, scope.get("scheme", "http")):
+                resp = JSONResponse({"detail": "Origin not allowed"}, status_code=403)
+                await resp(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+# OriginGate 在 API Key 之前执行：跨源浏览器请求在鉴权/路由前即被拒绝。
+app.add_middleware(_OriginGate)
+
+
 # TestClient 的 "testserver" 是进程内传输（永不暴露网络），视作 loopback 等价。
 _LOOPBACK_BINDS = _LOOPBACK_HOSTS | {"testserver"}
 
@@ -400,7 +446,7 @@ class _NonLoopbackGuard:
         await self.app(scope, receive, send)
 
 
-# 注册顺序即执行顺序（后注册在外层）：NonLoopbackGuard → HostGate → API Key → CORS。
+# 注册顺序即执行顺序（后注册在外层）：NonLoopbackGuard → HostGate → OriginGate → API Key → CORS。
 app.add_middleware(_LocalHostGate)
 app.add_middleware(_NonLoopbackGuard)
 

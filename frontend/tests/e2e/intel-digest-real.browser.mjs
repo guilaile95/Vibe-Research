@@ -113,6 +113,8 @@ async function main() {
     ...process.env,
     VR_DATA_DIR: tmpDataDir,
     VR_REPORTS_DIR: tmpReportsDir,
+    // harness 页面 Origin 使用临时端口：显式加入后端 CORS/Origin 白名单
+    VR_ALLOW_ORIGINS: `http://127.0.0.1:${frontendPort}`,
     PYTHONPATH: `${backendDir}${path.delimiter}${process.env.PYTHONPATH || ""}`,
   };
 

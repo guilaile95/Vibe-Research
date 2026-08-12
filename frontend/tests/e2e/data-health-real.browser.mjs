@@ -490,6 +490,8 @@ async function main() {
   const frontendPort = await getFreePort();
   const baseUrl = `http://127.0.0.1:${frontendPort}`;
   const apiUrl = `http://127.0.0.1:${backendPort}`;
+  // harness 页面 Origin 使用临时端口：显式加入后端 CORS/Origin 白名单
+  env.VR_ALLOW_ORIGINS = `http://127.0.0.1:${frontendPort}`;
 
   let backend;
   let browser;

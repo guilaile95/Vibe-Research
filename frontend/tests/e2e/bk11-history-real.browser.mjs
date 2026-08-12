@@ -104,6 +104,8 @@ function startStaticServer(dir, port, apiBackendPort) {
     const urlPath = decodeURIComponent((req.url || "/").split("?")[0] || "/");
     if (urlPath === "/api" || urlPath.startsWith("/api/")) {
       const headers = { ...req.headers, host: `127.0.0.1:${apiBackendPort}` };
+      // 浏览器 Origin 是 harness 页面临时端口产物；本地客户端代理不转发它
+      delete headers.origin;
       const r = httpRequest(
         {
           host: "127.0.0.1",

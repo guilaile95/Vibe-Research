@@ -32,6 +32,7 @@ Host 边界、可选 API Key 契约、health 公开面。
 |---|---|---|
 | 1 | DEFAULT_CORS_WILDCARD | NO |
 | 2 | EVIL_ORIGIN_ALLOWED | NO |
+| 2b | EVIL_ORIGIN_ROUTE_EXECUTION_BLOCKED | YES（服务端 Origin gate，403 于路由执行前） |
 | 3 | PRIVATE_API_ANONYMOUS_NON_LOOPBACK | NO |
 | 4 | NON_LOOPBACK_WITHOUT_AUTH | FAIL_CLOSED |
 | 5 | HEALTH_PUBLIC | YES |
@@ -44,7 +45,7 @@ Host 边界、可选 API Key 契约、health 公开面。
 
 | 环境变量 | 语义 |
 |---|---|
-| `VR_ALLOW_ORIGINS` | 逗号分隔 `http(s)://host[:port]`。未设置 = 默认本地前端白名单；显式设置 = 严格解析，`*`/空值/畸形值 → 启动失败（fail closed，不回落 `*`）。 |
+| `VR_ALLOW_ORIGINS` | 逗号分隔 `http(s)://host[:port]`。未设置 = 默认本地前端白名单；显式设置 = 严格解析，`*`/空值/畸形值 → 启动失败（fail closed，不回落 `*`）。同时作为服务端 Origin gate 的放行集合（非白名单且非 same-origin 的浏览器 Origin → 403）。 |
 | `VR_API_KEY` | 设置后所有 `/api/*`（除 `/api/health`）要求 `Authorization: Bearer <key>`。错误响应 401，固定文案，不回显 token。 |
 | `VR_HOST` | 可选，声明服务绑定地址。设置且为非 loopback 时，未配置 `VR_API_KEY` → 启动失败。未设置时以 uvicorn `--host` 实际绑定为准。 |
 | `VR_TRUSTED_HOSTS` | 可选，逗号分隔纯主机名，扩展 Host 头白名单（默认 `localhost` / `127.0.0.1` / `[::1]`）。 |
@@ -65,9 +66,13 @@ Host 边界、可选 API Key 契约、health 公开面。
   - `lifespan`：`VR_HOST` 启动 fail-closed 校验；
   - `_LocalHostGate`：最小 Host 边界（未用 starlette `TrustedHostMiddleware`，
     因其对 `[::1]:port` 的 Host 头按冒号切分会得到 `[`，无法干净支持 IPv6 字面量）；
+  - `_OriginGate`：服务端 Origin 边界——`/api/*` 上携带非白名单且非 same-origin
+    Origin 的浏览器请求在路由执行前 403（固定文案，不反射）；缺 Origin（curl/脚本）
+    或 same-origin（Origin == scheme://Host）放行；
   - `_NonLoopbackGuard`：运行时 bind 边界（读 `scope["server"]` 实际监听地址，
     与启动方式无关）；`testserver`（TestClient 进程内传输）视作 loopback 等价；
   - `_PUBLIC_API_PATHS = {"/api/health"}`：默认私有，只放行明确公开路径。
+  - 中间件链：`NonLoopbackGuard → HostGate → OriginGate → API Key → CORS → Routes`。
 - 测试：`backend/tests/test_local_api_security.py`（A–P，全部离线）。
 
 ## 7. 升级注意（行为变更）
