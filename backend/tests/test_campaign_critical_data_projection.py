@@ -253,6 +253,38 @@ def test_12b_empty_set_without_authority_refs_fail_closed():
         )
 
 
+def test_r1_resolved_nonempty_without_authority_refs_fail_closed():
+    """RESOLVED + non-empty required set still needs provenance refs."""
+    with pytest.raises(CriticalDataIntegrityError):
+        _project(
+            dependency_set_state="RESOLVED",
+            required_dependency_ids=[_DEP_QUOTE, _DEP_FIN],
+            dependency_results=[
+                _dep(_DEP_QUOTE, "USABLE"),
+                _dep(_DEP_FIN, "USABLE"),
+            ],
+            dependency_set_authority_refs=[],
+        )
+
+
+def test_r1_resolved_nonempty_with_authority_ref_unchanged():
+    result = _project(
+        dependency_set_state="RESOLVED",
+        required_dependency_ids=[_DEP_QUOTE, _DEP_FIN],
+        dependency_results=[
+            _dep(_DEP_QUOTE, "USABLE"),
+            _dep(_DEP_FIN, "USABLE"),
+        ],
+        dependency_set_authority_refs=["depset:strategy_template_v0"],
+    )
+    assert result["critical_data_state"] == "USABLE"
+    assert result["critical_data_evaluation"] == "EVALUATED"
+    assert result["dependency_set_authority_refs"] == [
+        "depset:strategy_template_v0"
+    ]
+    assert REASON_ALL_DEPENDENCIES_USABLE in result["reason_codes"]
+
+
 # ---------------------------------------------------------------------------
 # 13-16: exact cover / same-as_of fail closed
 # ---------------------------------------------------------------------------
@@ -370,14 +402,19 @@ def test_18_same_security_different_strategy_campaign_independent():
 
 
 def test_19_dynamic_equal_enum_strings():
+    """Adversarial: equal-by-value dynamic strings must use == semantics."""
     blocked = "".join(["BL", "OCKED"])
     error = "".join(["ER", "ROR"])
     resolved = "".join(["RE", "SOLVED"])
     assert blocked == "BLOCKED"
-    assert blocked is not "BLOCKED" or True  # force non-interned path below
+    assert error == "ERROR"
+    assert resolved == "RESOLVED"
+    # Values are equal; identity is irrelevant and must not be required.
+    assert blocked == "BLOCKED" and error == "ERROR" and resolved == "RESOLVED"
 
     result = _project(
         dependency_set_state=resolved,
+        dependency_set_authority_refs=["depset:dynamic"],
         dependency_results=[
             _dep(_DEP_QUOTE, blocked),
             _dep(_DEP_FIN, error),
@@ -389,6 +426,7 @@ def test_19_dynamic_equal_enum_strings():
 
 def test_19b_dynamic_set_state_not_evaluated():
     state = "".join(["NOT_", "EVALUATED"])
+    assert state == "NOT_EVALUATED"
     result = _project(
         dependency_set_state=state,
         required_dependency_ids=[],
@@ -396,6 +434,27 @@ def test_19b_dynamic_set_state_not_evaluated():
     )
     assert result["critical_data_evaluation"] == "NOT_EVALUATED"
     assert result["critical_data_state"] == "UNKNOWN"
+
+
+def test_19c_source_has_no_string_identity_comparisons():
+    """Forbid ``value is "ENUM"`` style checks; ``is None`` remains legal."""
+    source = MODULE_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    def _is_string_const(node: ast.AST) -> bool:
+        return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        comparators = [node.left, *node.comparators]
+        for op, left, right in zip(node.ops, comparators, comparators[1:]):
+            if isinstance(op, (ast.Is, ast.IsNot)) and (
+                _is_string_const(left) or _is_string_const(right)
+            ):
+                raise AssertionError(
+                    "production must not use identity comparisons for string enums"
+                )
 
 
 # ---------------------------------------------------------------------------

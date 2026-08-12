@@ -62,6 +62,30 @@ UNKNOWN != NOT_EVALUATED
 ERROR != UNKNOWN
 ```
 
+### RESOLVED requires authority provenance
+
+Any:
+
+```text
+dependency_set_state == RESOLVED
+```
+
+must include at least one valid `dependency_set_authority_refs` entry.
+
+This applies to:
+
+```text
+RESOLVED + empty required set
+RESOLVED + non-empty required set
+```
+
+Empty refs for `RESOLVED` is integrity failure (`CriticalDataIntegrityError`),
+not business `UNKNOWN` / `NOT_EVALUATED`, and never silent `USABLE`.
+
+Non-`RESOLVED` set states (`UNKNOWN` / `NOT_EVALUATED` / `ERROR`) do **not**
+require authority refs in v0.1; `NOT_EVALUATED` may legitimately mean the
+dependency authority is missing or unwired.
+
 ### Authoritative empty set
 
 `RESOLVED + required_dependencies = ()` is legal only with non-empty
@@ -74,8 +98,6 @@ critical_data_state = USABLE
 critical_data_evaluation = EVALUATED
 reason = DEPENDENCY_SET_AUTHORITATIVELY_EMPTY
 ```
-
-Missing authority refs for an empty set is integrity failure.
 
 ## Per-dependency result states
 

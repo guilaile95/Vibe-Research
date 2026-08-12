@@ -539,13 +539,16 @@ def project_campaign_critical_data(
         )
 
     # --- RESOLVED ----------------------------------------------------------
-    # Authoritative empty set requires authority refs (no silent clean).
+    # RESOLVED always requires provenance: dependency definition authority
+    # must be cited for empty and non-empty required sets alike.
+    if not set_refs:
+        raise CriticalDataIntegrityError(
+            "dependency_set_state RESOLVED requires non-empty "
+            "dependency_set_authority_refs"
+        )
+
+    # Authoritative empty set (no silent clean).
     if not required_ids:
-        if not set_refs:
-            raise CriticalDataIntegrityError(
-                "authoritatively empty dependency set requires non-empty "
-                "dependency_set_authority_refs"
-            )
         if raw_results:
             raise CriticalDataIntegrityError(
                 "dependency_results must be empty when required set is empty"
