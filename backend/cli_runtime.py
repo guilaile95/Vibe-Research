@@ -240,9 +240,11 @@ def _release_slot() -> None:
 
 
 def _terminate_process_tree(proc: subprocess.Popen) -> None:
-    """终止整个进程树：Windows 用 taskkill /T /F；POSIX 用 killpg。降级 proc.kill()。
+    """终止整个进程树：Windows 用 taskkill /T /F；POSIX 用 killpg。
 
-    绝不只杀父进程留下孤儿 CLI / 工具子进程。proc 已退出时直接返回。
+    绝不只杀父进程留下孤儿 CLI / 工具子进程；proc 已退出时直接返回。
+    防御性约束：POSIX 下若子进程未能脱离宿主进程组（start_new_session 失效或
+    异常），绝不 killpg 当前进程组（那会误杀宿主 runner），降级为单进程 kill。
     """
     if proc.poll() is not None:
         return
@@ -256,8 +258,13 @@ def _terminate_process_tree(proc: subprocess.Popen) -> None:
                 timeout=10,
             )
         else:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (OSError, subprocess.SubprocessError):
+            pgid = os.getpgid(proc.pid)
+            if pgid == os.getpgrp():
+                # 子进程仍在宿主进程组：killpg 会误杀宿主，改用单进程 kill
+                proc.kill()
+            else:
+                os.killpg(pgid, signal.SIGKILL)
+    except (OSError, TypeError, ValueError, subprocess.SubprocessError):
         try:
             proc.kill()
         except OSError:
@@ -361,13 +368,17 @@ def _run_cli_impl(kind, system_prompt, user_prompt, *, via_http, cancel_event):
         def _pump():
             try:
                 for ln in proc.stdout:
+                    if stop_event.is_set():
+                        break  # 清理已开始：停止读行，避免 busy-loop 空转
                     _bounded_put(q, ln, stop_event)
-                _bounded_put(q, None, stop_event)  # EOF 哨兵
+                if not stop_event.is_set():
+                    _bounded_put(q, None, stop_event)  # EOF 哨兵
             except Exception:
-                try:
-                    _bounded_put(q, _StreamReadFailure(), stop_event)
-                except Exception:
-                    pass
+                if not stop_event.is_set():
+                    try:
+                        _bounded_put(q, _StreamReadFailure(), stop_event)
+                    except Exception:
+                        pass
 
         reader_thread = threading.Thread(
             target=_pump,

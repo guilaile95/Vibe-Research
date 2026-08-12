@@ -611,3 +611,42 @@ def test_non_http_direct_call_not_gated(monkeypatch):
     monkeypatch.setattr(cli_runtime, "VR_ENABLE_LOCAL_CLI", False)
     monkeypatch.setattr(cli_runtime, "VR_API_KEY", "")
     assert cli_runtime.run_cli("fake", "s", "u") == "ok"
+
+
+# ================= POSIX 进程树终止逻辑（仅真实 Linux 跑，验证 killpg 防御） =================
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX-only")
+def test_posix_killpg_skips_host_process_group(monkeypatch):
+    # 防御：子进程未能脱离宿主进程组（start_new_session 失效）→ 绝不 killpg 宿主组，
+    # 降级为单进程 kill，避免误杀宿主 runner。
+    proc = MagicMock()
+    proc.pid = 12345
+    proc.poll.return_value = None
+    monkeypatch.setattr(cli_runtime.os, "getpgid", lambda pid: 999)
+    monkeypatch.setattr(cli_runtime.os, "getpgrp", lambda: 999)  # 宿主组 == 子进程组
+    killpg = MagicMock()
+    monkeypatch.setattr(cli_runtime.os, "killpg", killpg)
+    cli_runtime._terminate_process_tree(proc)
+    killpg.assert_not_called()  # 不杀宿主组
+    proc.kill.assert_called_once()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX-only")
+def test_posix_killpg_kills_isolated_group(monkeypatch):
+    # 正常：子进程已脱离为独立进程组 → killpg 杀该组。
+    proc = MagicMock()
+    proc.pid = 12345
+    proc.poll.return_value = None
+    monkeypatch.setattr(cli_runtime.os, "getpgid", lambda pid: 12345)
+    monkeypatch.setattr(cli_runtime.os, "getpgrp", lambda: 1)
+    killpg = MagicMock()
+    monkeypatch.setattr(cli_runtime.os, "killpg", killpg)
+    cli_runtime._terminate_process_tree(proc)
+    killpg.assert_called_once_with(12345, cli_runtime.signal.SIGKILL)
+
+
+def test_terminate_already_exited_is_noop(monkeypatch):
+    proc = MagicMock()
+    proc.poll.return_value = 0  # 已退出
+    cli_runtime._terminate_process_tree(proc)
+    proc.kill.assert_not_called()
