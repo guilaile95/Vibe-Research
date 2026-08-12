@@ -8,10 +8,18 @@
   `astock.eastmoney_datacenter`（datacenter 三表/指标已封装）。
 - push2 stock/get 直连偶发掉连 → **push2 优先、失败降级 push2delay**（延时行情，研究场景足够），
   latch 到可用主机整进程复用（同成交额榜的做法）。
-- Yahoo / SEC 等国外源不并入（需科学上网、且非必要）。
+- 指数分时按能力分层：腾讯负责恒生/恒科/上证，Yahoo 负责美股/日经/KOSPI；
+  全部零 key，单源失败即隔离并显式报告缺失，不跨源拼接。
 """
 
 from __future__ import annotations
+
+import json
+import math
+import time
+from datetime import datetime, timedelta, timezone
+from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 import astock
 
@@ -21,11 +29,14 @@ _gs_host = [0]  # 当前可用主机下标；首次 push2 掉连后 latch 到 pu
 
 # 全球指数（东财 push2 secid）—— A 股看隔夜外围脸色的核心几个，均已实测。
 _INDICES = (
-    {"key": "dji", "name": "道琼斯", "secid": "100.DJIA", "region": "美股"},
-    {"key": "spx", "name": "标普500", "secid": "100.SPX", "region": "美股"},
-    {"key": "ndx", "name": "纳斯达克", "secid": "100.NDX", "region": "美股"},
-    {"key": "hsi", "name": "恒生指数", "secid": "100.HSI", "region": "港股"},
-    {"key": "hstech", "name": "恒生科技", "secid": "124.HSTECH", "region": "港股"},
+    {"key": "dji", "name": "道琼斯", "secid": "100.DJIA", "region": "美股", "yahoo_symbol": "%5EDJI"},
+    {"key": "spx", "name": "标普500", "secid": "100.SPX", "region": "美股", "yahoo_symbol": "%5EGSPC"},
+    {"key": "ndx", "name": "纳斯达克", "secid": "100.NDX", "region": "美股", "yahoo_symbol": "%5EIXIC"},
+    {"key": "hsi", "name": "恒生指数", "secid": "100.HSI", "region": "港股", "tencent_code": "hkHSI"},
+    {"key": "hstech", "name": "恒生科技", "secid": "124.HSTECH", "region": "港股", "tencent_code": "hkHSTECH"},
+    {"key": "nikkei", "name": "日经225", "secid": "100.N225", "region": "日本", "yahoo_symbol": "%5EN225"},
+    {"key": "kospi", "name": "韩国KOSPI", "secid": "100.KS11", "region": "韩国", "yahoo_symbol": "%5EKS11"},
+    {"key": "shcomp", "name": "上证指数", "secid": "1.000001", "region": "A股", "tencent_code": "sh000001"},
 )
 
 # 搜索返回的 MktNum → (secucode 后缀, 市场名)
@@ -76,19 +87,177 @@ def _quote_from(d: dict) -> dict:
 
 
 def global_indices() -> list[dict]:
-    """全球指数快照（道指 / 标普500 / 纳斯达克 / 恒生 / 恒生科技）。源无的档跳过。"""
+    """全球与亚洲核心指数快照。源无的档跳过。"""
     out = []
     for idx in _INDICES:
-        d = _push2_stock_get(idx["secid"], "f43,f57,f58,f59,f60,f170")
+        d = _push2_stock_get(idx["secid"], "f43,f57,f58,f59,f60,f169,f170")
         if not d:
             continue
         chg = d.get("f170")
         out.append({
             "key": idx["key"], "name": idx["name"], "region": idx["region"],
             "price": _price(d, "f43"),
+            "change_amt": _price(d, "f169"),
             "change_pct": round(chg / 100, 2) if isinstance(chg, (int, float)) else None,
         })
     return out
+
+
+_TREND_RUN_BUDGET_SECONDS = 30.0
+_TREND_PROVIDER_TIMEOUT_SECONDS = 8.0
+
+
+def _trend_series(idx: dict, timeout: float) -> dict | None:
+    """读取单指数最近交易日分时，并归一化为相对昨收涨跌幅。"""
+    if idx.get("tencent_code"):
+        return _tencent_trend_series(idx, timeout)
+    if idx.get("yahoo_symbol"):
+        return _yahoo_trend_series(idx, timeout)
+    return None
+
+
+def _tencent_trend_series(idx: dict, timeout: float = _TREND_PROVIDER_TIMEOUT_SECONDS) -> dict | None:
+    """腾讯指数分钟线（恒生、恒生科技、上证）；该源优先且不依赖东财。"""
+    code = idx["tencent_code"]
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={code}"
+    request = Request(url, headers={"User-Agent": astock.UA, "Referer": "https://gu.qq.com/"})
+    with urlopen(request, timeout=timeout) as response:  # noqa: S310 - 固定 HTTPS 主机
+        payload = json.loads(response.read())
+    node = ((payload.get("data") or {}).get(code) or {})
+    data = node.get("data") or {}
+    quote = ((node.get("qt") or {}).get(code) or [])
+    date_raw = str(data.get("date") or "")
+    try:
+        trade_date = datetime.strptime(date_raw, "%Y%m%d").strftime("%Y-%m-%d")
+        previous_close = float(quote[4])
+    except (IndexError, TypeError, ValueError):
+        return None
+    if not math.isfinite(previous_close) or previous_close <= 0:
+        return None
+
+    deduped: dict[str, dict] = {}
+    for raw in data.get("data") or []:
+        if not isinstance(raw, str):
+            continue
+        parts = raw.split()
+        if len(parts) < 2 or len(parts[0]) != 4:
+            continue
+        timestamp = f"{trade_date} {parts[0][:2]}:{parts[0][2:]}"
+        try:
+            datetime.strptime(timestamp, "%Y-%m-%d %H:%M")
+            price = float(parts[1])
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(price) or price <= 0:
+            continue
+        deduped[timestamp] = {
+            "time": timestamp,
+            "price": price,
+            "change_pct": round((price / previous_close - 1) * 100, 4),
+        }
+    points = [deduped[key] for key in sorted(deduped)]
+    if len(points) < 2:
+        return None
+    last = points[-1]
+    return {
+        "key": idx["key"],
+        "name": idx["name"],
+        "region": idx["region"],
+        "source": "tencent",
+        "trade_date": trade_date,
+        "source_timezone": "Asia/Shanghai",
+        "display_timezone": "Asia/Shanghai",
+        "previous_close": previous_close,
+        "price": last["price"],
+        "change_amt": round(last["price"] - previous_close, 4),
+        "change_pct": last["change_pct"],
+        "points": points,
+    }
+
+
+def _yahoo_trend_series(idx: dict, timeout: float = _TREND_PROVIDER_TIMEOUT_SECONDS) -> dict | None:
+    """Yahoo 5 分钟 chart（美股、日本、韩国）；使用 UTC epoch 后统一转北京时间。"""
+    symbol = idx["yahoo_symbol"]
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=5m&range=1d"
+    request = Request(url, headers={"User-Agent": astock.UA})
+    with urlopen(request, timeout=timeout) as response:  # noqa: S310 - 固定 HTTPS 主机
+        payload = json.loads(response.read())
+    results = ((payload.get("chart") or {}).get("result") or [])
+    if not results:
+        return None
+    result = results[0]
+    meta = result.get("meta") or {}
+    previous_close = meta.get("previousClose")
+    timestamps = result.get("timestamp") or []
+    quote_rows = (((result.get("indicators") or {}).get("quote") or [{}])[0].get("close") or [])
+    if not isinstance(previous_close, (int, float)) or not math.isfinite(previous_close) or previous_close <= 0:
+        return None
+
+    beijing = timezone(timedelta(hours=8))
+    deduped: dict[str, dict] = {}
+    for timestamp_raw, price_raw in zip(timestamps, quote_rows):
+        if not isinstance(timestamp_raw, (int, float)) or not isinstance(price_raw, (int, float)):
+            continue
+        price = float(price_raw)
+        if not math.isfinite(price) or price <= 0:
+            continue
+        timestamp = datetime.fromtimestamp(timestamp_raw, timezone.utc).astimezone(beijing).strftime("%Y-%m-%d %H:%M")
+        deduped[timestamp] = {
+            "time": timestamp,
+            "price": price,
+            "change_pct": round((price / previous_close - 1) * 100, 4),
+        }
+    points = [deduped[key] for key in sorted(deduped)]
+    if len(points) < 2:
+        return None
+    last = points[-1]
+    source_timezone = str(meta.get("exchangeTimezoneName") or "UTC")
+    try:
+        source_zone = ZoneInfo(source_timezone)
+    except Exception:  # noqa: BLE001 - 非法上游时区必须失败关闭
+        return None
+    last_epoch = max(value for value in timestamps if isinstance(value, (int, float)))
+    trade_date = datetime.fromtimestamp(last_epoch, timezone.utc).astimezone(source_zone).strftime("%Y-%m-%d")
+    return {
+        "key": idx["key"],
+        "name": idx["name"],
+        "region": idx["region"],
+        "source": "yahoo",
+        "trade_date": trade_date,
+        "source_timezone": source_timezone,
+        "display_timezone": "Asia/Shanghai",
+        "previous_close": previous_close,
+        "price": last["price"],
+        "change_amt": round(last["price"] - previous_close, 4),
+        "change_pct": last["change_pct"],
+        "points": points,
+    }
+
+
+def global_index_trends() -> dict:
+    """八个核心指数的最近交易日分时对比；30 秒总预算，单源失败隔离。"""
+    series = []
+    missing_keys = []
+    deadline = time.monotonic() + _TREND_RUN_BUDGET_SECONDS
+    for position, idx in enumerate(_INDICES):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            missing_keys.extend(item["key"] for item in _INDICES[position:])
+            break
+        try:
+            trend = _trend_series(idx, min(_TREND_PROVIDER_TIMEOUT_SECONDS, max(1.0, remaining)))
+        except Exception:  # noqa: BLE001 - 单指数失败不得拖垮其余序列
+            trend = None
+        if trend is None:
+            missing_keys.append(idx["key"])
+        else:
+            series.append(trend)
+    return {
+        "series": series,
+        "missing_keys": missing_keys,
+        "budget_seconds": _TREND_RUN_BUDGET_SECONDS,
+        "fetched_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
 
 
 def _search(q: str) -> dict | None:

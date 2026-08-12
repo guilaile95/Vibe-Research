@@ -1,15 +1,14 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { lazy, Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { Link } from "react-router-dom";
 import {
-  Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, TrendingUp, TrendingDown,
+  Loader2, AlertCircle, RefreshCw, Gauge, TrendingUp, TrendingDown,
   Plus, X, Flame, BarChart3, Globe, Layers, Save, History, Eye, ChevronLeft, ChevronRight,
   GitCompare,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
+import { DailyReviewAiCard } from "@/components/dailyReview/DailyReviewAiCard";
 import {
   api, ApiError,
   type Quote, type DailyReviewData, type DailyReviewCacheMeta,
@@ -18,13 +17,11 @@ import {
   type DailyReviewComparison, type NumericComparison, type RankingComparison,
   type HighlightComparison, type NorthboundCapitalFlow,
   type Bk11HistoryEnvelope,
+  type GlobalIndexTrends,
 } from "@/lib/api";
 import { NorthboundCapitalFlowCard } from "@/components/market/NorthboundCapitalFlowCard";
 import { ShortTermHistoryCard } from "@/components/dailyReview/ShortTermHistoryCard";
 import { northboundErrorMessage } from "@/lib/northboundView";
-import { loadLlm } from "@/lib/llm";
-import { useDailyReviewAiTaskStore } from "@/stores/dailyReviewAiTaskStore";
-import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import {
   loadWatchAuthoritative,
   saveWatchAuthoritative,
@@ -35,9 +32,13 @@ import { cn } from "@/lib/utils";
 const HISTORY_LIMIT = 20;
 const COMPARE_BOARD_LIMIT = 10;
 const COMPARE_STOCK_LIMIT = 10;
+const GlobalMarketTrendChart = lazy(() => import("@/components/dailyReview/GlobalMarketTrendChart"));
 
 const rateCell = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v) ? "—" : `${(v * 100).toFixed(1)}%`;
+
+const indexNumber = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) ? "—" : value.toFixed(2);
 
 /** 相对变化比例 → ±xx.xx%（不重算，只格式化后端 change_pct） */
 const fmtChangePct = (v: number | null | undefined) => {
@@ -45,16 +46,6 @@ const fmtChangePct = (v: number | null | undefined) => {
   const p = v * 100;
   return `${p > 0 ? "+" : ""}${p.toFixed(2)}%`;
 };
-
-const formatTaskDuration = (ms: number): string => {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const m = Math.floor(totalSeconds / 60);
-  const s = totalSeconds % 60;
-  return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
-};
-
-const formatTaskTime = (date: Date): string =>
-  date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 
 const fmtSigned = (v: number | null | undefined, digits = 2) => {
   if (v == null || !Number.isFinite(v)) return "—";
@@ -121,7 +112,6 @@ const statusBadge = (status: DataStatus | undefined) => {
 };
 
 export function DailyReview() {
-  const [needConfig, setNeedConfig] = useState(false);
 
   // 统一聚合包
   const [dr, setDr] = useState<DailyReviewData | null>(null);
@@ -130,10 +120,14 @@ export function DailyReview() {
   const [drErr, setDrErr] = useState<string | null>(null);
   const [cacheMeta, setCacheMeta] = useState<DailyReviewCacheMeta | null>(null);
   const [staleRefreshNote, setStaleRefreshNote] = useState<string | null>(null);
+  const [globalTrends, setGlobalTrends] = useState<GlobalIndexTrends | null>(null);
+  const [globalTrendsLoading, setGlobalTrendsLoading] = useState(true);
+  const [globalTrendsError, setGlobalTrendsError] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollDeadlineRef = useRef<number>(0);
   const mountedRef = useRef(true);
   const drRefreshingRef = useRef(false);
+  const globalTrendsAbortRef = useRef<AbortController | null>(null);
 
   // 自选（后端权威；启动时一次性迁移 localStorage）
   const [watchCodes, setWatchCodes] = useState<string[]>([]);
@@ -307,6 +301,39 @@ export function DailyReview() {
       .finally(() => setDrDone(true));
   }, [applyDailyReviewPayload, clearPoll, startStalePoll]);
 
+  const loadGlobalTrends = useCallback(() => {
+    globalTrendsAbortRef.current?.abort();
+    const controller = new AbortController();
+    globalTrendsAbortRef.current = controller;
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 40_000);
+    setGlobalTrendsLoading(true);
+    setGlobalTrendsError(null);
+    api.globalIndexTrends(controller.signal)
+      .then((result) => {
+        if (!mountedRef.current || controller.signal.aborted) return;
+        setGlobalTrends(result);
+      })
+      .catch((error) => {
+        if (!mountedRef.current) return;
+        if (timedOut) {
+          setGlobalTrendsError("指数走势请求超时");
+          return;
+        }
+        if (controller.signal.aborted) return;
+        setGlobalTrendsError(error instanceof ApiError ? error.message : "指数走势加载失败");
+      })
+      .finally(() => {
+        window.clearTimeout(timeoutId);
+        if (mountedRef.current && globalTrendsAbortRef.current === controller) {
+          setGlobalTrendsLoading(false);
+        }
+      });
+  }, []);
+
   // 用户显式刷新：POST /api/daily-review/refresh（绕过完整包缓存）；防连点
   const refreshDailyReview = useCallback(() => {
     if (drRefreshingRef.current) return;
@@ -332,8 +359,9 @@ export function DailyReview() {
       .finally(() => {
         drRefreshingRef.current = false;
         setDrRefreshing(false);
+        loadGlobalTrends();
       });
-  }, [applyDailyReviewPayload, clearPoll]);
+  }, [applyDailyReviewPayload, clearPoll, loadGlobalTrends]);
 
   const loadHistory = (opts?: { trade_date?: string; offset?: number }) => {
     const offset = opts?.offset ?? histOffset;
@@ -377,6 +405,7 @@ export function DailyReview() {
   useEffect(() => {
     mountedRef.current = true;
     loadDailyReview();
+    loadGlobalTrends();
     loadNorthbound();
     loadBk11History();
     loadHistory({ trade_date: "", offset: 0 });
@@ -395,6 +424,7 @@ export function DailyReview() {
       mountedRef.current = false;
       clearPoll();
       bk11AbortRef.current?.abort();
+      globalTrendsAbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -882,6 +912,11 @@ export function DailyReview() {
   // —— 从聚合包取数 ——
   const indices = dr?.market_environment?.indices?.data ?? [];
   const globalIdx = dr?.market_environment?.global_indices?.data ?? [];
+  const trendKeys = new Set(globalTrends?.series.map((item) => item.key) ?? []);
+  const globalRows = [
+    ...(globalTrends?.series ?? []),
+    ...globalIdx.filter((item) => !trendKeys.has(item.key)),
+  ];
   const breadthEnv = dr?.market_environment?.breadth;
   const breadth = breadthEnv?.data ?? null;
   const emotionEnv = dr?.short_term_emotion;
@@ -900,50 +935,6 @@ export function DailyReview() {
   const dataSummary = indices.length
     ? indices.map((i) => `${i.name} ${i.price}（${i.change_pct > 0 ? "+" : ""}${i.change_pct}%）`).join("；")
     : "（指数数据未取到）";
-
-  const taskStatus = useDailyReviewAiTaskStore((s) => s.status);
-  const taskContent = useDailyReviewAiTaskStore((s) => s.content);
-  const taskStreamContent = useDailyReviewAiTaskStore((s) => s.streamContent);
-  const taskResultMeta = useDailyReviewAiTaskStore((s) => s.resultMeta);
-  const taskError = useDailyReviewAiTaskStore((s) => s.error);
-  const taskRestoreError = useDailyReviewAiTaskStore((s) => s.restoreError);
-  const taskStartedAt = useDailyReviewAiTaskStore((s) => s.startedAt);
-  const taskEstimatedDurationMs = useDailyReviewAiTaskStore((s) => s.estimatedDurationMs);
-  const [taskNow, setTaskNow] = useState(Date.now());
-
-  useEffect(() => {
-    if (!dr?.trade_date) return;
-    void useDailyReviewAiTaskStore.getState().restore(dr.trade_date);
-  }, [dr?.trade_date]);
-
-  useEffect(() => {
-    if (taskStatus !== "running") return;
-    setTaskNow(Date.now());
-    const id = setInterval(() => setTaskNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [taskStatus]);
-
-  const taskElapsedMs = taskStatus === "running" && taskStartedAt !== null
-    ? taskNow - taskStartedAt
-    : 0;
-  const taskRemainingMs = taskStatus === "running"
-    ? Math.max(0, taskEstimatedDurationMs - taskElapsedMs)
-    : 0;
-  const taskOverTimeMs = taskStatus === "running"
-    ? Math.max(0, taskElapsedMs - taskEstimatedDurationMs)
-    : 0;
-  const taskEta = taskStatus === "running" && taskStartedAt !== null
-    ? new Date(taskStartedAt + taskEstimatedDurationMs)
-    : null;
-
-  const runReview = async () => {
-    setNeedConfig(false);
-    const llm = loadLlm();
-    if (!llm) { setNeedConfig(true); return; }
-    if (!dr?.trade_date) return;
-    const store = useDailyReviewAiTaskStore.getState();
-    await store.start(llm, dr.trade_date);
-  };
 
   // 市场广度指标
   const breadthCells = breadth ? [
@@ -1119,70 +1110,132 @@ export function DailyReview() {
         </div>
       )}
 
-      {/* 1. 大盘指数 */}
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-          大盘指数
-          {statusBadge(dr?.data_health?.components?.indices) && (
-            <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", statusBadge(dr?.data_health?.components?.indices)!.cls)}>
-              {statusBadge(dr?.data_health?.components?.indices)!.text}
-            </span>
-          )}
-        </h3>
-      </div>
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {!drDone
-          ? [1, 2, 3, 4].map((i) => (
-              <GlassCard key={i} className="p-3">
-                <p className="text-xs text-muted-foreground">加载中…</p>
-                <p className="mt-1 font-mono text-lg font-bold text-muted-foreground/40">—</p>
-              </GlassCard>
-            ))
-          : indices.length === 0
-            ? [1, 2, 3, 4].map((i) => (
-                <GlassCard key={i} className="p-3">
-                  <p className="text-xs text-muted-foreground">行情未接通</p>
-                  <p className="mt-1 font-mono text-lg font-bold text-muted-foreground/40">—</p>
-                </GlassCard>
-              ))
-            : indices.map((i) => (
-                <GlassCard key={i.name} className="p-3">
-                  <p className="truncate text-xs text-muted-foreground">{i.name}</p>
-                  <p className={cn("mt-1 font-mono text-lg font-bold", pctColor(i.change_pct))}>{i.price}</p>
-                  <p className={cn("text-xs", pctColor(i.change_pct))}>{i.change_pct > 0 ? "+" : ""}{i.change_pct}%</p>
-                </GlassCard>
-              ))}
-      </div>
+      <section aria-labelledby="market-overview-title" className="mb-6 space-y-3">
+        <h2 id="market-overview-title" className="sr-only">市场概览</h2>
 
-      {/* 1b. 全球市场（可选组件） */}
-      {(globalIdx.length > 0 || (drDone && dr?.data_health?.components?.global_indices === "unavailable")) && (
-        <>
-          <div className="mb-3 flex items-center gap-2">
-            <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-              <Globe className="h-4 w-4" /> 全球市场
-            </h3>
-            <span className="text-[11px] text-muted-foreground/50">隔夜外围 · 可选组件</span>
-            {dr?.data_health?.components?.global_indices === "unavailable" && (
-              <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] text-destructive">不可用</span>
+        {/* A 方案只吸收分区布局：保留原主题和真实快照，不虚构分时曲线。 */}
+        <GlassCard className="overflow-hidden border border-border/60 p-0 sm:p-0">
+          <div className="flex flex-wrap items-center gap-2 border-b border-border/50 px-4 py-3 sm:px-5">
+            <h3 className="text-base font-semibold text-foreground">大盘指数</h3>
+            {statusBadge(dr?.data_health?.components?.indices) && (
+              <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", statusBadge(dr?.data_health?.components?.indices)!.cls)}>
+                {statusBadge(dr?.data_health?.components?.indices)!.text}
+              </span>
             )}
           </div>
-          {globalIdx.length > 0 ? (
-            <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
-              {globalIdx.map((g) => (
-                <GlassCard key={g.key} className="p-3">
-                  <p className="truncate text-xs text-muted-foreground">{g.name} <span className="text-muted-foreground/40">{g.region}</span></p>
-                  <p className={cn("mt-1 font-mono text-lg font-bold", g.change_pct == null ? "text-foreground" : pctColor(g.change_pct))}>{g.price ?? "—"}</p>
-                  <p className={cn("text-xs", g.change_pct == null ? "text-muted-foreground" : pctColor(g.change_pct))}>
-                    {g.change_pct == null ? "—" : `${g.change_pct > 0 ? "+" : ""}${g.change_pct}%`}
-                  </p>
-                </GlassCard>
-              ))}
+          <div className="grid grid-cols-2 sm:grid-cols-4">
+            {!drDone
+              ? [1, 2, 3, 4].map((i) => (
+                  <div key={i} className="min-w-0 border-b border-border/40 p-4 odd:border-r sm:border-b-0 sm:border-r sm:last:border-r-0">
+                    <p className="text-xs text-muted-foreground">加载中…</p>
+                    <p className="mt-1 font-mono text-xl font-bold text-muted-foreground/40">—</p>
+                  </div>
+                ))
+              : indices.length === 0
+                ? [1, 2, 3, 4].map((i) => (
+                    <div key={i} className="min-w-0 border-b border-border/40 p-4 odd:border-r sm:border-b-0 sm:border-r sm:last:border-r-0">
+                      <p className="text-xs text-muted-foreground">行情未接通</p>
+                      <p className="mt-1 font-mono text-xl font-bold text-muted-foreground/40">—</p>
+                    </div>
+                  ))
+                : indices.map((item) => (
+                    <div key={item.name} className="min-w-0 border-b border-border/40 p-4 odd:border-r sm:border-b-0 sm:border-r sm:last:border-r-0">
+                      <p className="truncate text-xs text-muted-foreground">{item.name}</p>
+                      <p className={cn("mt-1 font-mono text-xl font-bold tabular-nums", pctColor(item.change_pct))}>{item.price}</p>
+                      <p className={cn("mt-0.5 text-xs tabular-nums", pctColor(item.change_pct))}>{item.change_pct > 0 ? "+" : ""}{item.change_pct}%</p>
+                    </div>
+                  ))}
+          </div>
+        </GlassCard>
+
+        {(globalRows.length > 0 || globalTrendsLoading || globalTrendsError || (drDone && dr?.data_health?.components?.global_indices === "unavailable")) && (
+          <GlassCard className="overflow-hidden border border-border/60 p-0 sm:p-0">
+            <div className="flex flex-wrap items-center gap-2 border-b border-border/50 px-4 py-3 sm:px-5">
+              <h3 className="flex items-center gap-1.5 text-base font-semibold text-foreground"><Globe className="h-4 w-4" /> 全球市场</h3>
+              <span className="text-[11px] text-muted-foreground/60">分时涨跌幅 · 北京时间对齐</span>
+              {globalTrends?.fetched_at ? (
+                <span className="text-[10px] text-muted-foreground/50">
+                  更新 {new Date(globalTrends.fetched_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              ) : null}
+              {globalTrends?.missing_keys.length ? (
+                <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning">部分走势缺失</span>
+              ) : null}
+              {dr?.data_health?.components?.global_indices === "unavailable" && (
+                <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] text-destructive">不可用</span>
+              )}
             </div>
-          ) : (
-            <GlassCard className="mb-6">{pending(true, "全球指数暂不可用（不影响 A 股主体）")}</GlassCard>
-          )}
-        </>
-      )}
+            <div className="grid min-w-0 lg:grid-cols-[minmax(0,1.35fr)_minmax(450px,0.9fr)]">
+              <div className="min-w-0 border-b border-border/40 p-3 sm:p-4 lg:border-b-0 lg:border-r">
+                {globalTrendsLoading ? (
+                  <div className="flex h-[320px] items-center justify-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" /> 加载真实分时走势…
+                  </div>
+                ) : globalTrends?.series.length ? (
+                  <Suspense fallback={<div className="h-[320px] animate-pulse rounded-lg bg-muted/20" />}>
+                    <GlobalMarketTrendChart trends={globalTrends} />
+                  </Suspense>
+                ) : (
+                  <div className="flex h-[320px] items-center justify-center px-6 text-center text-sm text-muted-foreground">
+                    {globalTrendsError ?? "指数分时走势暂不可用"}
+                  </div>
+                )}
+              </div>
+              <div className="min-w-0">
+                {globalRows.length ? (
+                <>
+                <div className="divide-y divide-border/40 lg:hidden">
+                  {globalRows.map((item) => (
+                    <div key={item.key} className="flex items-center justify-between gap-3 px-4 py-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{item.name}</p>
+                        <p className="truncate text-[10px] text-muted-foreground">
+                          {item.region}
+                          {"trade_date" in item && item.trade_date ? ` · ${item.trade_date}` : ""}
+                          {"source" in item && item.source ? ` · ${item.source === "tencent" ? "腾讯" : "Yahoo"}` : ""}
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className={cn("font-mono text-sm font-semibold tabular-nums", item.change_pct == null ? "text-foreground" : pctColor(item.change_pct))}>{indexNumber(item.price)}</p>
+                        <p className={cn("text-xs tabular-nums", item.change_pct == null ? "text-muted-foreground" : pctColor(item.change_pct))}>{item.change_pct == null ? "—" : `${item.change_pct > 0 ? "+" : ""}${indexNumber(item.change_pct)}%`}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <table className="workspace-table hidden min-w-full lg:table">
+                  <thead>
+                    <tr className="text-left text-xs text-muted-foreground">
+                      <th scope="col" className="px-4 py-2.5 font-medium sm:px-5">指数</th>
+                      <th scope="col" className="px-4 py-2.5 text-right font-medium">最新价</th>
+                      <th scope="col" className="px-4 py-2.5 text-right font-medium">涨跌额</th>
+                      <th scope="col" className="px-4 py-2.5 text-right font-medium sm:px-5">涨跌幅</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {globalRows.map((item) => (
+                      <tr key={item.key}>
+                        <th scope="row" className="whitespace-nowrap px-3 py-2 text-left sm:px-4">
+                          <span className="block text-sm font-medium">{item.name}</span>
+                          <span className="text-[10px] font-normal text-muted-foreground">
+                            {item.region}
+                            {"trade_date" in item && item.trade_date ? ` · ${item.trade_date}` : ""}
+                            {"source" in item && item.source ? ` · ${item.source === "tencent" ? "腾讯" : "Yahoo"}` : ""}
+                          </span>
+                        </th>
+                        <td className={cn("whitespace-nowrap px-3 py-2 text-right font-mono text-sm font-semibold tabular-nums", item.change_pct == null ? "text-foreground" : pctColor(item.change_pct))}>{indexNumber(item.price)}</td>
+                        <td className={cn("whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums", item.change_pct == null ? "text-muted-foreground" : pctColor(item.change_pct))}>{item.change_amt == null ? "—" : `${item.change_amt > 0 ? "+" : ""}${indexNumber(item.change_amt)}`}</td>
+                        <td className={cn("whitespace-nowrap px-3 py-2 text-right text-sm tabular-nums sm:px-4", item.change_pct == null ? "text-muted-foreground" : pctColor(item.change_pct))}>{item.change_pct == null ? "—" : `${item.change_pct > 0 ? "+" : ""}${indexNumber(item.change_pct)}%`}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                </>
+                ) : <div className="p-4 sm:p-5">{pending(true, "全球指数快照暂不可用")}</div>}
+              </div>
+            </div>
+          </GlassCard>
+        )}
+      </section>
 
       <div className="flex flex-col">
       {[
@@ -1191,21 +1244,23 @@ export function DailyReview() {
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-muted-foreground">关注股票</h3>
         {watchCodes.length > 0 && (
-          <button onClick={() => refreshWatch(watchCodes)} className="text-muted-foreground hover:text-primary" title="刷新价格">
+          <button type="button" onClick={() => refreshWatch(watchCodes)} className="text-muted-foreground hover:text-primary" title="刷新价格" aria-label="刷新关注股票价格">
             {watchLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
           </button>
         )}
       </div>
       <GlassCard className="mb-6">
-        <div className="mb-3 flex gap-2">
+        <div className="mb-3 flex flex-wrap gap-2">
+          <label htmlFor="daily-review-watch-codes" className="sr-only">添加关注股票代码</label>
           <input
+            id="daily-review-watch-codes"
             value={watchInput}
             onChange={(e) => setWatchInput(e.target.value.replace(/[^\d,\s]/g, "").slice(0, 80))}
             onKeyDown={(e) => e.key === "Enter" && addWatch()}
             placeholder="加自选：可批量，如 600519 000858"
-            className="w-60 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
+            className="min-w-0 flex-1 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50 sm:max-w-sm"
           />
-          <button onClick={addWatch}
+          <button type="button" onClick={addWatch}
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
             <Plus className="h-4 w-4" /> 增加
           </button>
@@ -1218,7 +1273,7 @@ export function DailyReview() {
               const q = watchQuotes[c];
               return (
                 <div key={c} className="group relative rounded-lg bg-muted/25 p-3">
-                  <button onClick={() => removeWatch(c)} title="移除"
+                  <button type="button" onClick={() => removeWatch(c)} title="移除" aria-label={`移除关注股票 ${q?.name || c}`}
                     className="absolute right-1.5 top-1.5 text-muted-foreground/40 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100">
                     <X className="h-3.5 w-3.5" />
                   </button>
@@ -1235,86 +1290,9 @@ export function DailyReview() {
       </GlassCard>
       </section>) },
 
-	      /* 10. AI 当日复盘（恢复与生成分离；生成成功后后端持久化） */
+	      /* 10. AI 当日复盘（状态与秒级计时隔离，避免整页重渲染） */
 	      { order: 10, node: (<section key="ai" className="order-[10]">
-      <GlassCard glow className="mb-6">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="flex items-center gap-1.5 font-semibold"><Sparkles className="h-4 w-4 text-primary" /> AI 当日复盘</h3>
-          {taskStatus === "running" ? (
-            <button disabled
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow disabled:opacity-50">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              AI 复盘生成中
-            </button>
-          ) : (
-            <button onClick={runReview} disabled={!dr?.trade_date || taskStatus === "restoring"}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
-              <Sparkles className="h-4 w-4" />
-              {taskContent ? "重新复盘" : "让 AI 复盘今天"}
-            </button>
-          )}
-        </div>
-        {taskStatus === "restoring" && (
-          <p className="mt-3 inline-flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> 正在恢复已保存的 AI 复盘…
-          </p>
-        )}
-        {taskStatus === "empty" && (
-          <p className="mt-3 text-sm text-muted-foreground">今日尚未生成 AI 复盘，不会自动调用模型。</p>
-        )}
-        {taskRestoreError && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" /> 恢复失败：{taskRestoreError}
-          </div>
-        )}
-        {needConfig && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-muted-foreground">
-            <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
-            还没接入 AI。<Link to="/settings" className="text-primary">先去接入你的 AI</Link>，之后一键出复盘。
-          </div>
-        )}
-        {taskStatus === "running" && taskEta && (
-          <div className="mt-3 flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary">
-            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
-            <div>
-              <p className="font-medium">AI 复盘正在生成</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                {taskOverTimeMs > 0
-                  ? "已超过预计时间 " + formatTaskDuration(taskOverTimeMs) + "，仍在生成"
-                  : "预计 " + formatTaskTime(taskEta) + " 完成 · 剩余 " + formatTaskDuration(taskRemainingMs)}
-              </p>
-            </div>
-          </div>
-        )}
-        {taskError && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            {taskContent ? `重新生成失败，继续显示旧结果：${taskError}` : taskError}
-          </div>
-        )}
-        {taskResultMeta && (
-          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-            <span>结果交易日：{taskResultMeta.trade_date}</span>
-            <span>生成时间：{taskResultMeta.generated_at}</span>
-            <span>模型：{taskResultMeta.model_provider} / {taskResultMeta.model_name}</span>
-            <span>依据数据时间：{taskResultMeta.payload.source_data_cutoff || taskResultMeta.payload.source_review_generated_at}</span>
-          </div>
-        )}
-        {taskContent ? (
-          <>
-            <div className="prose prose-sm prose-invert mt-4 max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{taskContent}</ReactMarkdown></div>
-            {(taskStatus === "success" || taskStatus === "restored") && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${dr?.trade_date || today}`} content={taskContent} /></div>}
-          </>
-        ) : !needConfig && taskStatus === "idle" ? (
-          <p className="mt-3 text-sm text-muted-foreground">点上方按钮，由服务器聚合当日数据并按事实/推断/建议结构生成复盘。</p>
-        ) : null}
-        {taskStatus === "running" && taskStreamContent && (
-          <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
-            <p className="mb-2 text-xs font-medium text-primary">新结果临时预览（完成并保存后才会替换旧结果）</p>
-            <div className="prose prose-sm prose-invert max-w-none text-foreground/90"><ReactMarkdown remarkPlugins={[remarkGfm]}>{taskStreamContent}</ReactMarkdown></div>
-          </div>
-        )}
-      </GlassCard>
+        <DailyReviewAiCard tradeDate={dr?.trade_date} fallbackDate={today} />
       </section>) },
 
 	      /* 11. BK-11 短线市场历史（独立只读请求；不随复盘轮询） */

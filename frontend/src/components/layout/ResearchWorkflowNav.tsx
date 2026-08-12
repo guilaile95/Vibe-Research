@@ -2,7 +2,7 @@ import { Link, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
 const WORKFLOW_NAV = [
-  { to: "/stock-data", label: "数据" },
+  { to: "/stock-data", label: "研究" },
   { to: "/screener", label: "筛选" },
   { to: "/thesis", label: "逻辑" },
   { to: "/decision-evidence", label: "依据" },
@@ -11,16 +11,20 @@ const WORKFLOW_NAV = [
 ];
 
 function isActive(pathname: string, to: string) {
+  if (to === "/thesis" && pathname.startsWith("/thesis/")) return true;
   return pathname === to || pathname.startsWith(`${to}/`);
 }
 
 export function ResearchWorkflowNav() {
   const { pathname } = useLocation();
+
   return (
-    <div className="mb-6 flex min-w-0 items-center gap-4 border-b border-border/50">
-      <span className="hidden shrink-0 pb-2.5 text-[11px] font-medium text-muted-foreground lg:inline">研究链路</span>
+    <div className="mb-6 flex min-w-0 items-center gap-3 border-b border-border/45">
+      <span className="hidden shrink-0 pb-2.5 text-[11px] font-medium text-muted-foreground/70 lg:inline">
+        研究链路
+      </span>
       <nav aria-label="研究链路" className="min-w-0 flex-1 overflow-x-auto">
-        <div className="flex min-w-max items-center gap-1">
+        <div className="flex min-w-max items-center">
           {WORKFLOW_NAV.map(({ to, label }) => {
             const active = isActive(pathname, to);
             return (
@@ -29,8 +33,10 @@ export function ResearchWorkflowNav() {
                 to={to}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "relative px-3 pb-2.5 pt-1 text-[13px] transition-colors",
-                  active ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+                  "relative px-3 pb-2.5 pt-1.5 text-[13px] transition-colors",
+                  active
+                    ? "font-medium text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 {label}

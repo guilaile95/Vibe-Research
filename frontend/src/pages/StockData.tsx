@@ -117,6 +117,9 @@ export function StockData() {
   const [blocks, setBlocks] = useState<Blocks | null>(null);
   const [hotCon, setHotCon] = useState<HotConcept[]>([]);
   const [qa, setQa] = useState<QaRow[]>([]);
+  const [secondaryReady, setSecondaryReady] = useState(false);
+  const [secondaryLoading, setSecondaryLoading] = useState(false);
+  const [secondaryFailures, setSecondaryFailures] = useState<string[]>([]);
   const [gstock, setGStock] = useState<GlobalStock | null>(null);  // 美股 / 港股
   // 可选依赖面板：历史 K 线 / 季报财务 / 基本面 / 巨潮公告（缺失时 501 降级）
   // 每个面板有独立状态机：idle → loading → success/empty/error
@@ -140,6 +143,8 @@ export function StockData() {
   /** 与 panelStates 同步的镜像，供事件处理器在 setState 外做纯决策（不在 updater 里写副作用） */
   const panelStatesRef = useRef<PanelStates>(createInitialPanelStates());
   const runIdRef = useRef(0);
+  const secondaryDataRef = useRef<HTMLDivElement>(null);
+  const secondaryLoadedCodeRef = useRef("");
   /** 最新 activeCode 的 ref，供异步回调读取（避免闭包过期） */
   const activeCodeRef = useRef("");
   /** 全局单调面板请求序号（跨 panel 递增，区分同股并发） */
@@ -305,6 +310,55 @@ export function StockData() {
     })();
   }, [activeCode, tiQueryVersion]);
 
+  useEffect(() => {
+    if (!val || !/^\d{6}$/.test(activeCode)) return;
+    const target = secondaryDataRef.current;
+    if (!target || typeof IntersectionObserver === "undefined") {
+      setSecondaryReady(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) setSecondaryReady(true);
+      },
+      { rootMargin: "400px 0px" },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [activeCode, val]);
+
+  useEffect(() => {
+    if (!secondaryReady || !/^\d{6}$/.test(activeCode) || secondaryLoadedCodeRef.current === activeCode) return;
+    const codeToLoad = activeCode;
+    const rid = runIdRef.current;
+    secondaryLoadedCodeRef.current = codeToLoad;
+    setSecondaryLoading(true);
+    setSecondaryFailures([]);
+    const failures: string[] = [];
+    const guard = <T,>(setter: (value: T) => void) => (value: T) => {
+      if (rid === runIdRef.current && codeToLoad === activeCodeRef.current) setter(value);
+    };
+    const optional = <T,>(label: string, request: Promise<T>, setter: (value: T) => void) =>
+      request.then(guard(setter)).catch(() => { failures.push(label); });
+
+    void Promise.all([
+      optional("融资融券", api.margin(codeToLoad), setMargin),
+      optional("大宗交易", api.blockTrade(codeToLoad), setBlockT),
+      optional("股东户数", api.holders(codeToLoad), setHolders),
+      optional("分红", api.dividend(codeToLoad), setDividend),
+      optional("资金流", api.fundFlow(codeToLoad), setFundFlow),
+      optional("龙虎榜", api.dragonTiger(codeToLoad), setDt),
+      optional("限售解禁", api.lockup(codeToLoad), setLockup),
+      optional("板块归属", api.blocks(codeToLoad), setBlocks),
+      optional("热门概念", api.hotConcepts(codeToLoad), setHotCon),
+      optional("投资者互动", api.investorQa(codeToLoad), setQa),
+    ]).finally(() => {
+      if (rid !== runIdRef.current || codeToLoad !== activeCodeRef.current) return;
+      setSecondaryFailures(failures);
+      setSecondaryLoading(false);
+    });
+  }, [activeCode, secondaryReady]);
+
   const run = async () => {
     const c = code.trim().toUpperCase();
     if (!c) { setErr("请输入代码"); return; }
@@ -315,6 +369,7 @@ export function StockData() {
     activeCodeRef.current = c;
     setLoading(true); setErr(null); setDepNote(null); setVal(null); setReports([]); setNews([]); setPctl(null); setFin(null); setAnns([]);
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
+    setSecondaryReady(false); setSecondaryLoading(false); setSecondaryFailures([]); secondaryLoadedCodeRef.current = "";
     setGStock(null);
     setKline([]); setKlineErr(null); setFinance({}); setFinanceErr(null); setInfo({}); setInfoErr(null); setDisc([]); setDiscErr(null);
     setTiEnv(null); setTiLoading(false); setTiError(null);
@@ -333,18 +388,9 @@ export function StockData() {
       return;
     }
 
-    // A 股：竞态守卫（快速换代码时只让最新一次回填）+ 资金面/筹码独立回填、不阻塞主数据
+    // A 股：竞态守卫（快速换代码时只让最新一次回填）。
+    // 资金面/筹码/事件数据在用户接近对应区域时再加载，避免首个查询同时扇出十个可选请求。
     const ok = <T,>(set: (v: T) => void) => (v: T) => { if (rid === runIdRef.current) set(v); };
-    api.margin(c).then(ok(setMargin)).catch(() => {});
-    api.blockTrade(c).then(ok(setBlockT)).catch(() => {});
-    api.holders(c).then(ok(setHolders)).catch(() => {});
-    api.dividend(c).then(ok(setDividend)).catch(() => {});
-    api.fundFlow(c).then(ok(setFundFlow)).catch(() => {});
-    api.dragonTiger(c).then(ok(setDt)).catch(() => {});
-    api.lockup(c).then(ok(setLockup)).catch(() => {});
-    api.blocks(c).then(ok(setBlocks)).catch(() => {});
-    api.hotConcepts(c).then(ok(setHotCon)).catch(() => {});
-    api.investorQa(c).then(ok(setQa)).catch(() => {});
     // 顶部风险（影子模式）：独立加载/错误，不影响主页面数据
     setTopRiskLoading(true);
     setTopRiskErr(null);
@@ -430,7 +476,9 @@ export function StockData() {
 
       {/* 查询框 */}
       <div className="mb-5 flex gap-2">
+        <label htmlFor="stock-code" className="sr-only">股票代码或市场代码</label>
         <input
+          id="stock-code"
           value={code}
           onChange={(e) => setCode(e.target.value.replace(/[^a-zA-Z0-9.]/g, "").toUpperCase().slice(0, 12))}
           onKeyDown={(e) => e.key === "Enter" && run()}
@@ -638,6 +686,19 @@ export function StockData() {
               </div>
             )}
           </GlassCard>
+
+          <div ref={secondaryDataRef} className="mb-3 min-h-5" aria-live="polite">
+            {secondaryLoading && (
+              <p className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> 正在按需加载资金面与事件数据…
+              </p>
+            )}
+            {!secondaryLoading && secondaryFailures.length > 0 && (
+              <p className="text-xs text-warning">
+                部分扩展数据暂不可用：{secondaryFailures.join("、")}
+              </p>
+            )}
+          </div>
 
           {/* 资金面 · 筹码（融资融券 / 股东户数 / 主力资金流 / 分红 / 大宗交易） */}
           {(margin.length > 0 || holders.length > 0 || fundFlow.length > 0 || dividend.length > 0) && (

@@ -16,7 +16,8 @@
     "test:e2e:data-health": "node tests/e2e/data-health-real.browser.mjs",
     "test:e2e:bk11-history": "node tests/e2e/bk11-history-real.browser.mjs",
     "test:e2e:decision-evidence": "node tests/e2e/decision-evidence-real.browser.mjs",
-    "test:e2e:intel-digest": "node tests/e2e/intel-digest-real.browser.mjs"
+    "test:e2e:intel-digest": "node tests/e2e/intel-digest-real.browser.mjs",
+    "test:e2e:workspace-p2": "node tests/e2e/workspace-p2.browser.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.0",

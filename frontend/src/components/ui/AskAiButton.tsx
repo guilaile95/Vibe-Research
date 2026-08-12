@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
-import { Sparkles, X, Settings, Send, Loader2, Wrench, AlertCircle } from "lucide-react";
+import { Sparkles, X, Settings, Send, Loader2, Wrench, AlertCircle, GripVertical } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { hasLlm, chatStream, type ChatMsg } from "@/lib/llm";
 import { ApiError } from "@/lib/api";
@@ -19,6 +19,24 @@ const TOOL_LABEL: Record<string, string> = {
   query_news: "查新闻",
 };
 
+const AI_PANEL_WIDTH_KEY = "vibe-ai-panel-width";
+const AI_PANEL_MIN_WIDTH = 380;
+const AI_PANEL_MAX_WIDTH = 720;
+
+function clampPanelWidth(value: number) {
+  return Math.min(AI_PANEL_MAX_WIDTH, Math.max(AI_PANEL_MIN_WIDTH, value));
+}
+
+function initialPanelWidth() {
+  if (typeof window === "undefined") return 480;
+  try {
+    const saved = Number(window.localStorage.getItem(AI_PANEL_WIDTH_KEY));
+    return Number.isFinite(saved) && saved > 0 ? clampPanelWidth(saved) : 480;
+  } catch {
+    return 480;
+  }
+}
+
 const argStr = (a: Record<string, unknown>): string => {
   if (Array.isArray(a.codes)) return (a.codes as unknown[]).join(",");
   if (typeof a.code === "string") return a.code;
@@ -34,14 +52,63 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [panelWidth, setPanelWidth] = useState(initialPanelWidth);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   useEffect(() => {
     if (open) setConfigured(hasLlm());
   }, [open]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(AI_PANEL_WIDTH_KEY, String(panelWidth));
+    } catch {
+      // 受限存储环境仅失去宽度持久化，不影响 AI 面板使用。
+    }
+  }, [panelWidth]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!open) {
+      delete root.dataset.aiPanelOpen;
+      root.style.removeProperty("--vibe-ai-panel-width");
+      return;
+    }
+    root.dataset.aiPanelOpen = "true";
+    root.style.setProperty("--vibe-ai-panel-width", `${panelWidth}px`);
+    return () => {
+      delete root.dataset.aiPanelOpen;
+      root.style.removeProperty("--vibe-ai-panel-width");
+    };
+  }, [open, panelWidth]);
+
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const viewportMax = Math.max(AI_PANEL_MIN_WIDTH, Math.min(AI_PANEL_MAX_WIDTH, window.innerWidth * 0.72));
+      const next = drag.startWidth + (drag.startX - event.clientX);
+      setPanelWidth(Math.min(viewportMax, Math.max(AI_PANEL_MIN_WIDTH, next)));
+    };
+    const onPointerUp = () => {
+      dragRef.current = null;
+      document.body.style.removeProperty("cursor");
+      document.body.style.removeProperty("user-select");
+    };
+
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerup", onPointerUp);
+    return () => {
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerUp);
+      document.body.style.removeProperty("cursor");
+      document.body.style.removeProperty("user-select");
+    };
+  }, []);
 
   const close = () => {
     abortRef.current?.abort();
@@ -93,6 +160,8 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
     }
   };
 
+  const panelStyle = { "--ai-panel-width": `${panelWidth}px` } as CSSProperties;
+
   return (
     <>
       <button
@@ -105,12 +174,45 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex justify-end md:pointer-events-none md:left-auto md:w-[440px] xl:w-[480px]">
+        <div
+          className="fixed inset-0 z-50 flex justify-end md:pointer-events-none md:left-auto md:w-[var(--ai-panel-width)] md:max-w-[72vw]"
+          style={panelStyle}
+        >
           <div className="absolute inset-0 bg-black/35 md:hidden" onClick={close} aria-hidden="true" />
           <aside
             className="pointer-events-auto relative ml-auto flex h-full w-full max-w-[560px] flex-col border-l border-border/50 bg-background shadow-2xl md:max-w-none md:shadow-xl"
             aria-label="Vibe AI 对话"
           >
+            <button
+              type="button"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整 AI 面板宽度"
+              aria-valuemin={AI_PANEL_MIN_WIDTH}
+              aria-valuemax={AI_PANEL_MAX_WIDTH}
+              aria-valuenow={Math.round(panelWidth)}
+              onPointerDown={(event) => {
+                dragRef.current = { startX: event.clientX, startWidth: panelWidth };
+                document.body.style.cursor = "col-resize";
+                document.body.style.userSelect = "none";
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowLeft") {
+                  event.preventDefault();
+                  setPanelWidth((width) => clampPanelWidth(width + 24));
+                } else if (event.key === "ArrowRight") {
+                  event.preventDefault();
+                  setPanelWidth((width) => clampPanelWidth(width - 24));
+                }
+              }}
+              className="absolute inset-y-0 left-0 z-10 hidden w-3 -translate-x-1/2 cursor-col-resize items-center justify-center text-muted-foreground/0 transition-colors hover:text-muted-foreground focus:text-muted-foreground md:flex"
+            >
+              <span className="flex h-12 w-4 items-center justify-center rounded-full border border-border/60 bg-background shadow-sm">
+                <GripVertical className="h-3 w-3" />
+              </span>
+            </button>
+
             <div className="flex h-14 items-center justify-between border-b border-border/40 px-4 sm:px-5">
               <span className="flex items-center gap-2 text-sm font-semibold">
                 <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-foreground text-background">

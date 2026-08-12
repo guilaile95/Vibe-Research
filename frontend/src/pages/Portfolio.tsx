@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Plus, ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle, Sparkles, RotateCw, Pencil } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { AccessibleDialog } from "@/components/ui/AccessibleDialog";
 import {
   api,
   ApiError,
@@ -765,9 +766,15 @@ export function Portfolio() {
 
       {/* 账户资金填写窗口 */}
       {acctOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={closeAcct}>
-          <div className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-4 text-base font-semibold">{acctConfigured ? "编辑账户资金" : "填写账户资金"}</h3>
+        <AccessibleDialog
+          open
+          onClose={closeAcct}
+          closeOnOverlay
+          labelledBy="portfolio-account-dialog-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-xl"
+        >
+            <h3 id="portfolio-account-dialog-title" className="mb-4 text-base font-semibold">{acctConfigured ? "编辑账户资金" : "填写账户资金"}</h3>
             <div className="mb-3">
               <label className="mb-1 block text-xs text-muted-foreground">账户总资产</label>
               <input
@@ -801,15 +808,20 @@ export function Portfolio() {
                 {acctSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} 保存
               </button>
             </div>
-          </div>
-        </div>
+        </AccessibleDialog>
       )}
 
       {/* 持仓编辑窗口 */}
       {editOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={closeEdit}>
-          <div className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-4 text-base font-semibold">编辑持仓</h3>
+        <AccessibleDialog
+          open
+          onClose={closeEdit}
+          closeOnOverlay
+          labelledBy="portfolio-edit-dialog-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-xl"
+        >
+            <h3 id="portfolio-edit-dialog-title" className="mb-4 text-base font-semibold">编辑持仓</h3>
             <div className="mb-3">
               <label className="mb-1 block text-xs text-muted-foreground">股票代码</label>
               <input value={editCode} readOnly
@@ -843,15 +855,20 @@ export function Portfolio() {
                 {editing ? <Loader2 className="h-4 w-4 animate-spin" /> : null} 保存
               </button>
             </div>
-          </div>
-        </div>
+        </AccessibleDialog>
       )}
 
       {/* 删除确认窗口 */}
       {delConfirm !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { if (!delDeleting) { setDelConfirm(null); setDelErr(null); } }}>
-          <div className="w-full max-w-sm rounded-xl border border-border bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-3 text-base font-semibold">确认删除持仓</h3>
+        <AccessibleDialog
+          open
+          onClose={() => { if (!delDeleting) { setDelConfirm(null); setDelErr(null); } }}
+          closeOnOverlay
+          labelledBy="portfolio-delete-dialog-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          className="w-full max-w-sm rounded-xl border border-border bg-background p-5 shadow-xl"
+        >
+            <h3 id="portfolio-delete-dialog-title" className="mb-3 text-base font-semibold">确认删除持仓</h3>
             <p className="mb-2 text-sm text-muted-foreground">
               确认删除{" "}
               <span className="font-medium text-foreground">{delConfirm.name}</span>{" "}
@@ -877,8 +894,7 @@ export function Portfolio() {
                 {delDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : null} 确认删除
               </button>
             </div>
-          </div>
-        </div>
+        </AccessibleDialog>
       )}
 
       {/* 录入 */}

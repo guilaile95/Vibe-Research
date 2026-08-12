@@ -102,6 +102,10 @@ jobs:
         working-directory: frontend
         run: npm run test:e2e:top-risk
 
+      - name: Run workspace P2 browser acceptance
+        working-directory: frontend
+        run: npm run test:e2e:workspace-p2
+
   e2e-thesis-smoke:
     name: Playwright thesis smoke E2E
     runs-on: ubuntu-latest

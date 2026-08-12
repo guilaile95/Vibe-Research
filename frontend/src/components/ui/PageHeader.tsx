@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import { PrivacyModeButton } from "@/components/ui/PrivacyModeButton";
 
 interface Props {
   title: string;
@@ -19,11 +20,10 @@ export function PageHeader({ title, subtitle, actions }: Props) {
           </p>
         )}
       </div>
-      {actions && (
-        <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
-          {actions}
-        </div>
-      )}
+      <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
+        <PrivacyModeButton />
+        {actions}
+      </div>
     </div>
   );
 }

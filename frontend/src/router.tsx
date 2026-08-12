@@ -10,9 +10,9 @@ const Sectors = lazy(() => import("@/pages/Sectors").then((m) => ({ default: m.S
 const SectorDetail = lazy(() => import("@/pages/SectorDetail").then((m) => ({ default: m.SectorDetail })));
 const SectorResearchPage = lazy(() => import("@/pages/SectorResearchPage").then((m) => ({ default: m.SectorResearchPage })));
 const Portfolio = lazy(() => import("@/pages/Portfolio").then((m) => ({ default: m.Portfolio })));
-const DecisionCockpit = lazy(() => import("@/pages/DecisionCockpit").then((m) => ({ default: m.DecisionCockpit })));
-const StockData = lazy(() => import("@/pages/StockData").then((m) => ({ default: m.StockData })));
-const Screener = lazy(() => import("@/pages/Screener").then((m) => ({ default: m.Screener })));
+const DecisionCockpitWorkspace = lazy(() => import("@/pages/DecisionCockpitWorkspace").then((m) => ({ default: m.DecisionCockpitWorkspace })));
+const StockWorkspace = lazy(() => import("@/pages/StockWorkspace").then((m) => ({ default: m.StockWorkspace })));
+const ScreenerWorkspace = lazy(() => import("@/pages/ScreenerWorkspace").then((m) => ({ default: m.ScreenerWorkspace })));
 const MarketHistory = lazy(() => import("@/pages/MarketHistory").then((m) => ({ default: m.MarketHistory })));
 const Watchlist = lazy(() => import("@/pages/Watchlist").then((m) => ({ default: m.Watchlist })));
 const MyReports = lazy(() => import("@/pages/MyReports").then((m) => ({ default: m.MyReports })));
@@ -85,9 +85,9 @@ export const router = createBrowserRouter([
       { path: "/account-policy", element: withSuspense(<AccountPolicy />) },
       { path: "/decision-performance", element: withSuspense(<DecisionPerformance />) },
       { path: "/performance-attribution", element: withSuspense(<PerformanceAttribution />) },
-      { path: "/cockpit", element: withSuspense(<DecisionCockpit />) },
-      { path: "/stock-data", element: withSuspense(<StockData />) },
-      { path: "/screener", element: withSuspense(<Screener />) },
+      { path: "/cockpit", element: withSuspense(<DecisionCockpitWorkspace />) },
+      { path: "/stock-data", element: withSuspense(<StockWorkspace />) },
+      { path: "/screener", element: withSuspense(<ScreenerWorkspace />) },
       { path: "/watchlist", element: withSuspense(<Watchlist />) },
       { path: "/my-reports", element: withSuspense(<MyReports />) },
       { path: "/notes", element: withSuspense(<Notes />) },

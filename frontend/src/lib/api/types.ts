@@ -358,236 +358,7 @@ export interface BoardRankingData {
 }
 
 
-/** GET /api/daily-review 可选缓存元数据（stale-while-revalidate） */
-export interface DailyReviewCacheMeta {
-  source: "live" | "memory" | "persisted" | string;
-  stale: boolean;
-  refreshing: boolean;
-  saved_at: string | null;
-  age_seconds: number | null;
-  /** 后台刷新失败：继续展示旧结果 */
-  refresh_failed?: boolean;
-  refresh_error?: string | null;
-}
-
-
-/** 结构化每日复盘（GET /api/daily-review 的 data 字段） */
-export interface DailyReviewData {
-  schema_version: string;
-  generated_at: string;
-  trade_date: string | null;
-  data_cutoff: string | null;
-  status: DataStatus;
-  warnings: string[];
-  data_health: {
-    components: {
-      indices: DataStatus;
-      global_indices: DataStatus;
-      breadth: DataStatus;
-      emotion: DataStatus;
-      turnover: DataStatus;
-      industry_boards: DataStatus;
-      concept_boards: DataStatus;
-      region_boards: DataStatus;
-    };
-  };
-  market_environment: {
-    indices: ComponentEnvelope<IndexQuote[]>;
-    global_indices: ComponentEnvelope<GlobalIndex[]>;
-    breadth: TimedComponentEnvelope<MarketBreadthData>;
-  };
-  sector_rotation: {
-    industry: TimedComponentEnvelope<BoardRankingData>;
-    concept: TimedComponentEnvelope<BoardRankingData>;
-    region: TimedComponentEnvelope<BoardRankingData>;
-    highlights: {
-      strongest_industry: BoardRankItem | null;
-      weakest_industry: BoardRankItem | null;
-      strongest_concept: BoardRankItem | null;
-      weakest_concept: BoardRankItem | null;
-      strongest_region: BoardRankItem | null;
-      weakest_region: BoardRankItem | null;
-    };
-  };
-  short_term_emotion: ComponentEnvelope<ShortTermEmotionData>;
-  capital_activity: {
-    turnover_top: ComponentEnvelope<TurnoverTop>;
-    total_amount: number | null;
-    amount_valid_count: number | null;
-    amount_top: MarketSnapshotItem[];
-    high_turnover: MarketSnapshotItem[];
-  };
-}
-
-
-/** 历史列表元数据（不含完整 review） */
-export interface DailyReviewHistoryItem {
-  id: number;
-  trade_date: string;
-  schema_version: string;
-  generated_at: string;
-  data_cutoff: string | null;
-  status: DataStatus;
-  payload_hash: string;
-  created_at: string;
-}
-
-
-/** 历史快照详情（含完整 review） */
-export interface DailyReviewHistorySnapshot extends DailyReviewHistoryItem {
-  review: DailyReviewData;
-}
-
-
-/** POST /api/daily-review/history/save 结果 */
-export interface SaveDailyReviewHistoryResult {
-  snapshot: {
-    id: number;
-    inserted: boolean;
-    trade_date: string;
-    schema_version: string;
-    generated_at: string;
-    status: DataStatus;
-    payload_hash: string;
-    created_at: string;
-  };
-  review_status: "normal" | "partial";
-  review_warnings: string[];
-}
-
-
-/** GET /api/daily-review/history 列表响应 */
-export interface DailyReviewHistoryList {
-  items: DailyReviewHistoryItem[];
-  trade_date: string | null;
-  limit: number;
-  offset: number;
-  count: number;
-}
-
-
-/** 快照比较元数据 */
-export interface DailyReviewComparisonMeta {
-  id: number | null;
-  trade_date: string | null;
-  schema_version: string | null;
-  generated_at: string | null;
-  status: DataStatus | null;
-}
-
-
-/** 通用数值比较 */
-export interface NumericComparison {
-  base: number | null;
-  target: number | null;
-  delta: number | null;
-  change_pct: number | null;
-}
-
-
-export interface RankingEntered<T> {
-  key: string;
-  target_rank: number;
-  item: T;
-}
-
-
-export interface RankingExited<T> {
-  key: string;
-  base_rank: number;
-  item: T;
-}
-
-
-export interface RankingChange<T> {
-  key: string;
-  base_rank: number;
-  target_rank: number;
-  rank_delta: number;
-  base_item: T;
-  target_item: T;
-}
-
-
-export interface RankingComparison<T> {
-  base_count: number;
-  target_count: number;
-  entered: RankingEntered<T>[];
-  exited: RankingExited<T>[];
-  rank_changes: RankingChange<T>[];
-}
-
-
-export interface HighlightComparison<T> {
-  base: T | null;
-  target: T | null;
-  changed: boolean | null;
-}
-
-
-/** GET /api/daily-review/history/compare 结果 */
-export interface DailyReviewComparison {
-  schema_version: string;
-  base: DailyReviewComparisonMeta;
-  target: DailyReviewComparisonMeta;
-  comparison_status: DataStatus;
-  schema_compatible: boolean;
-  warnings: string[];
-  market_breadth: {
-    available: boolean;
-    stock_count: NumericComparison;
-    valid_count: NumericComparison;
-    up_count: NumericComparison;
-    down_count: NumericComparison;
-    flat_count: NumericComparison;
-    up_ratio: NumericComparison;
-    up_3pct_count: NumericComparison;
-    down_3pct_count: NumericComparison;
-    total_amount: NumericComparison;
-    amount_valid_count: NumericComparison;
-  };
-  short_term_emotion: {
-    available: boolean;
-    zt_count: NumericComparison;
-    dt_count: NumericComparison;
-    zb_count: NumericComparison;
-    max_boards: NumericComparison;
-    lianban_count: NumericComparison;
-    seal_rate: NumericComparison;
-    break_rate: NumericComparison;
-    promotion_rate: NumericComparison;
-    yzt_count: NumericComparison;
-  };
-  sector_rotation: {
-    industry: {
-      top: RankingComparison<BoardRankItem>;
-      bottom: RankingComparison<BoardRankItem>;
-    };
-    concept: {
-      top: RankingComparison<BoardRankItem>;
-      bottom: RankingComparison<BoardRankItem>;
-    };
-    region: {
-      top: RankingComparison<BoardRankItem>;
-      bottom: RankingComparison<BoardRankItem>;
-    };
-    highlights: {
-      strongest_industry: HighlightComparison<BoardRankItem>;
-      weakest_industry: HighlightComparison<BoardRankItem>;
-      strongest_concept: HighlightComparison<BoardRankItem>;
-      weakest_concept: HighlightComparison<BoardRankItem>;
-      strongest_region: HighlightComparison<BoardRankItem>;
-      weakest_region: HighlightComparison<BoardRankItem>;
-    };
-  };
-  capital_activity: {
-    total_amount: NumericComparison;
-    amount_valid_count: NumericComparison;
-    amount_top: RankingComparison<MarketSnapshotItem>;
-    high_turnover: RankingComparison<MarketSnapshotItem>;
-  };
-  unknowns: string[];
-}
+export type * from "./types/dailyReview.ts";
 
 
 export interface RadarItem {
@@ -837,13 +608,6 @@ export interface DataHealthDetailResult {
 
 
 
-export interface DailyReviewAiPayload {
-  markdown: string;
-  source_review_generated_at: string;
-  source_data_cutoff: string | null;
-}
-
-
 export interface AiGeneratedResult<TPayload> {
   result_type: AiResultType;
   trade_date: string;
@@ -918,7 +682,35 @@ export interface DisclosureItem {
 // 全球市场（美股 / 港股，移植自 global-stock-data · 东财域内源）
 export interface GlobalIndex {
   key: string; name: string; region: string;
-  price: number | null; change_pct: number | null;
+  price: number | null; change_amt: number | null; change_pct: number | null;
+}
+
+export interface GlobalIndexTrendPoint {
+  time: string;
+  price: number;
+  change_pct: number;
+}
+
+export interface GlobalIndexTrendSeries {
+  key: string;
+  name: string;
+  region: string;
+  source: "tencent" | "yahoo";
+  trade_date: string;
+  source_timezone: string;
+  display_timezone: "Asia/Shanghai";
+  previous_close: number;
+  price: number;
+  change_amt: number;
+  change_pct: number;
+  points: GlobalIndexTrendPoint[];
+}
+
+export interface GlobalIndexTrends {
+  series: GlobalIndexTrendSeries[];
+  missing_keys: string[];
+  budget_seconds: number;
+  fetched_at: string;
 }
 
 export interface GlobalQuote {
@@ -1130,12 +922,6 @@ export interface StreamLlmConfig {
   baseURL: string;
   apiKey: string;
   model: string;
-}
-
-
-export interface DailyReviewAnalyzeRequest {
-  user_request?: string | null;
-  llm: StreamLlmConfig;
 }
 
 

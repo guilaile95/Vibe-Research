@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { AccessibleDialog } from "@/components/ui/AccessibleDialog";
 import {
   api,
   ApiError,
@@ -396,22 +397,24 @@ export default function DecisionEvidence() {
 
       {/* Detail Modal */}
       {detailModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-          onClick={() => setDetailModalOpen(false)}
+        <AccessibleDialog
+          open
+          onClose={() => setDetailModalOpen(false)}
+          closeOnOverlay
+          labelledBy="decision-evidence-dialog-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-xl border border-border bg-background shadow-2xl overflow-hidden"
         >
-          <div
-            className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-xl border border-border bg-background shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-border/60 bg-black/20 px-5 py-4">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="h-5 w-5 text-primary" />
-                <h3 className="font-bold text-base">决策依据与链条详情</h3>
+                <h3 id="decision-evidence-dialog-title" className="font-bold text-base">决策依据与链条详情</h3>
               </div>
               <button
+                type="button"
                 onClick={() => setDetailModalOpen(false)}
+                aria-label="关闭决策依据与链条详情窗口"
                 className="rounded-lg p-1 text-muted-foreground hover:bg-black/30 hover:text-foreground"
               >
                 <X className="h-5 w-5" />
@@ -656,8 +659,7 @@ export default function DecisionEvidence() {
                 </>
               )}
             </div>
-          </div>
-        </div>
+        </AccessibleDialog>
       )}
     </div>
   );
