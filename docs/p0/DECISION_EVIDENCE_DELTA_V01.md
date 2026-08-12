@@ -7,7 +7,7 @@
 ## 文件
 
 - `backend/decision_evidence_delta_projection.py`：纯 core（新增，唯一生产文件）
-- `backend/tests/test_decision_evidence_delta_projection.py`：31 tests
+- `backend/tests/test_decision_evidence_delta_projection.py`：49 tests（27 项矩阵 + 三重要 case + R1：value-equality 动态字符串 / scope_id 规范化校验 / OOS 不减 coverage / from_dict 移除）
 - 依赖：零 I/O；复用仓库既有权威 idiom（canonical UTC 6 位微秒、
   STRATEGIES=(SHORT,SWING,MEDIUM)、campaign_id 格式）——不 import I/O modules
 
@@ -59,7 +59,8 @@ NormalizedEvidenceItem: evidence_id(32hex), scope_kind, scope_id,
                         authority_refs
 ```
 
-输出（frozen；to_dict/from_dict 严格）：
+输出（frozen；`to_dict()` detached；v0.1 无 `from_dict`——纯 projection 无
+persistence、无序列化消费者授权，不为未出现的需求增加反序列化 surface）：
 
 ```text
 schema_version, security_code, strategy, campaign_id, decision_id, decision_boundary_at,

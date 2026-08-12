@@ -38,7 +38,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any
 
 SCHEMA_VERSION = "decision_evidence_delta.v0.1"
 
@@ -60,6 +60,7 @@ _CANONICAL_UTC_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
 _CAMPAIGN_ID_RE = re.compile(r"^campaign_[0-9a-f]{32}$")
 _SECURITY_CODE_RE = re.compile(r"^\d{6}$")
+_DECISION_ID_RE = re.compile(r"^decision_[0-9a-f]{32}$")  # 复用 stable frozen_decision_store contract
 _STRATEGIES = ("SHORT", "SWING", "MEDIUM")
 _EVIDENCE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -112,7 +113,10 @@ class DecisionContext:
                 f"strategy 必须是 {_STRATEGIES} 之一，got {self.strategy!r}")
         if _CAMPAIGN_ID_RE.fullmatch(self.campaign_id) is None:
             raise EvidenceDeltaInputError("campaign_id 必须是 campaign_<32 位小写 hex>")
-        _require_nonempty_text(self.decision_id, "decision_id")
+        if _DECISION_ID_RE.fullmatch(self.decision_id) is None:
+            raise EvidenceDeltaInputError(
+                "decision_id 必须是 decision_<32 位小写 hex>（复用 stable "
+                "frozen_decision_store contract）")
         # boundary 是 canonical UTC；malformed → fail closed
         _parse_utc(self.decision_boundary_at, "decision_boundary_at")
 
@@ -136,11 +140,22 @@ class NormalizedEvidenceItem:
             raise EvidenceDeltaInputError(
                 f"scope_kind 必须是 {SCOPE_SECURITY}/{SCOPE_CAMPAIGN}，got {self.scope_kind!r}")
         _require_nonempty_text(self.scope_id, "scope_id")
+        # P1: 规范化 identity 校验——区分「合法但不同 identity」(OUT_OF_SCOPE)
+        # 与「malformed identity」(fail closed)，不依赖对象身份（value equality）
+        if self.scope_kind == SCOPE_SECURITY:
+            if _SECURITY_CODE_RE.fullmatch(self.scope_id) is None:
+                raise EvidenceDeltaInputError(
+                    "security scope_id 必须是 6 位数字（malformed identity → fail closed）")
+        elif self.scope_kind == SCOPE_CAMPAIGN:
+            if _CAMPAIGN_ID_RE.fullmatch(self.scope_id) is None:
+                raise EvidenceDeltaInputError(
+                    "campaign scope_id 必须是 campaign_<32 位小写 hex>"
+                    "（malformed identity → fail closed）")
         if self.time_semantics not in (
                 TIME_SEMANTICS_AUTHORITATIVE, TIME_SEMANTICS_UNKNOWN):
             raise EvidenceDeltaInputError(
                 f"time_semantics 必须是 AUTHORITATIVE/UNKNOWN，got {self.time_semantics!r}")
-        if self.time_semantics is TIME_SEMANTICS_AUTHORITATIVE:
+        if self.time_semantics == TIME_SEMANTICS_AUTHORITATIVE:
             if self.effective_at is None:
                 raise EvidenceDeltaInputError(
                     "AUTHORITATIVE_EFFECTIVE_TIME 必须提供 effective_at（fail closed，"
@@ -154,7 +169,7 @@ class NormalizedEvidenceItem:
             _parse_utc(self.retrieved_at, "retrieved_at")
         if type(self.authority_refs) is not tuple or \
                 any(type(r) is not str or not r.strip() for r in self.authority_refs):
-            raise EvidenceDeltaInputError("authority_refs 必须是非空字符串元组")
+            raise EvidenceDeltaInputError("authority_refs 必须是字符串 tuple")
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +194,7 @@ class DecisionEvidenceDelta:
     temporal_coverage_complete: bool
 
     def to_dict(self) -> dict:
+        """Detached serialization（debug / API adapter 后续使用；v0.1 无反序列化消费者）。"""
         return {
             "schema_version": self.schema_version,
             "security_code": self.security_code,
@@ -193,46 +209,10 @@ class DecisionEvidenceDelta:
             "has_new_evidence": self.has_new_evidence,
             "temporal_coverage_complete": self.temporal_coverage_complete,
         }
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "DecisionEvidenceDelta":
-        """严格反序列化（exact field set / exact types / 无未知字段）。"""
-        if not isinstance(data, Mapping):
-            raise EvidenceDeltaInputError("delta 必须是 Mapping")
-        expected = set(cls.__dataclass_fields__)
-        if set(data) != expected:
-            missing = sorted(expected - set(data))
-            extra = sorted(set(data) - expected)
-            raise EvidenceDeltaInputError(
-                f"delta 字段不匹配: missing={missing}, extra={extra}")
-        if data["schema_version"] != SCHEMA_VERSION:
-            raise EvidenceDeltaInputError(
-                f"schema_version 漂移: {data['schema_version']!r}")
-        for name in ("new_evidence", "preexisting_evidence",
-                     "unknown_temporal_evidence", "out_of_scope_evidence"):
-            values = data[name]
-            if not isinstance(values, list) or \
-                    any(type(v) is not str for v in values):
-                raise EvidenceDeltaInputError(f"{name} 必须是字符串列表")
-            if len(values) != len(set(values)):
-                raise EvidenceDeltaInputError(f"{name} 不得重复")
-        for name in ("has_new_evidence", "temporal_coverage_complete"):
-            if type(data[name]) is not bool:
-                raise EvidenceDeltaInputError(f"{name} 必须是 bool")
-        return cls(
-            schema_version=data["schema_version"],
-            security_code=data["security_code"],
-            strategy=data["strategy"],
-            campaign_id=data["campaign_id"],
-            decision_id=data["decision_id"],
-            decision_boundary_at=data["decision_boundary_at"],
-            new_evidence=tuple(data["new_evidence"]),
-            preexisting_evidence=tuple(data["preexisting_evidence"]),
-            unknown_temporal_evidence=tuple(data["unknown_temporal_evidence"]),
-            out_of_scope_evidence=tuple(data["out_of_scope_evidence"]),
-            has_new_evidence=data["has_new_evidence"],
-            temporal_coverage_complete=data["temporal_coverage_complete"],
-        )
+    # P0-2: v0.1 无 from_dict——EC1 是纯 projection，无 persistence、无序列化
+    # 消费者授权；不为未出现的需求增加反序列化 surface。保留 to_dict 即可满足
+    # detached serialization / debug / 未来 API adapter。若未来出现消费者，须按
+    # 完整 fail-closed contract（identity 格式/分桶互斥/派生 bool 一致性）重建。
 
 
 # ---------------------------------------------------------------------------
@@ -240,10 +220,13 @@ class DecisionEvidenceDelta:
 # ---------------------------------------------------------------------------
 
 def _is_scope_valid(item: NormalizedEvidenceItem, ctx: DecisionContext) -> bool:
-    """v0.1 scope 规则：security 匹配 security_code；campaign 匹配 campaign_id。"""
-    if item.scope_kind is SCOPE_SECURITY:
+    """v0.1 scope 规则：security 匹配 security_code；campaign 匹配 campaign_id。
+
+    value equality（==），不依赖字符串对象身份。
+    """
+    if item.scope_kind == SCOPE_SECURITY:
         return item.scope_id == ctx.security_code
-    if item.scope_kind is SCOPE_CAMPAIGN:
+    if item.scope_kind == SCOPE_CAMPAIGN:
         return item.scope_id == ctx.campaign_id
     return False  # 未知 scope_kind 已在 __post_init__ 拒绝；防御
 
@@ -259,7 +242,7 @@ def classify_evidence_item(
     """
     if not _is_scope_valid(item, ctx):
         return OUT_OF_SCOPE
-    if item.time_semantics is TIME_SEMANTICS_UNKNOWN:
+    if item.time_semantics == TIME_SEMANTICS_UNKNOWN:
         # 无有效 effective_at → 不用 retrieved_at 猜（UNKNOWN 是合法业务状态）
         return UNKNOWN_TEMPORAL_RELATION
     effective = _parse_utc(item.effective_at, "effective_at")
@@ -305,13 +288,13 @@ def project_decision_evidence_delta(
 
     for item in evidence_items:
         classification = classify_evidence_item(context, item)
-        if classification is OUT_OF_SCOPE:
+        if classification == OUT_OF_SCOPE:
             out_of_scope_ids.append(item.evidence_id)
             continue
         scope_valid_count += 1
-        if classification is NEW_AFTER_DECISION:
+        if classification == NEW_AFTER_DECISION:
             new_ids.append(item.evidence_id)
-        elif classification is PREEXISTING_AT_DECISION:
+        elif classification == PREEXISTING_AT_DECISION:
             preexisting_ids.append(item.evidence_id)
         else:  # UNKNOWN_TEMPORAL_RELATION
             unknown_ids.append(item.evidence_id)

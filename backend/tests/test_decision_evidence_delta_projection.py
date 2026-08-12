@@ -358,26 +358,202 @@ def test_no_io_imports():
 
 
 # ---------------------------------------------------------------------------
-# 输出契约 round-trip + 严格校验
+# R1: value-equality 字符串（不依赖对象身份 / CPython interning）
 # ---------------------------------------------------------------------------
 
-def test_output_round_trip_exact():
-    d = _project([
-        _evidence(evidence_id="f" * 32, effective_at="2026-08-11T00:00:00.000000Z"),
-        _evidence(evidence_id="d" * 32, effective_at=None, retrieved_at="2026-08-11T00:00:00.000000Z",
-                  time_semantics=ddp.TIME_SEMANTICS_UNKNOWN),
-    ])
-    restored = ddp.DecisionEvidenceDelta.from_dict(d.to_dict())
-    assert restored == d
+def _assert_distinct_identity(a: str, b: str) -> None:
+    """值相同、对象身份不同（动态拼接构造非 interned 字符串）。"""
+    assert a == b
+    assert a is not b
 
 
-def test_output_from_dict_rejects_drift():
-    d = _project([])
+def test_r1_dynamic_security_string_works():
+    """1. 动态拼接的 'security' → 匹配 security included（== 而非 is）。"""
+    dynamic = "".join(["secur", "ity"])
+    _assert_distinct_identity(dynamic, ddp.SCOPE_SECURITY)
+    item = _evidence(scope_kind=dynamic, effective_at="2026-08-11T00:00:00.000000Z")
+    d = _project([item])
+    assert d.new_evidence == ("e" * 32,)
+
+
+def test_r1_dynamic_campaign_string_works():
+    """2. 动态拼接的 'campaign' → 精确 campaign included。"""
+    dynamic = "".join(["camp", "aign"])
+    _assert_distinct_identity(dynamic, ddp.SCOPE_CAMPAIGN)
+    item = _evidence(scope_kind=dynamic, scope_id=CAMPAIGN_A,
+                     effective_at="2026-08-11T00:00:00.000000Z")
+    d = _project([item])
+    assert d.new_evidence == ("e" * 32,)
+
+
+def test_r1_dynamic_authoritative_time_semantics_works():
+    """3. 动态拼接 AUTHORITATIVE_EFFECTIVE_TIME → authoritative 路径。"""
+    dynamic = "".join(["AUTHORITATIVE_", "EFFECTIVE_TIME"])
+    _assert_distinct_identity(dynamic, ddp.TIME_SEMANTICS_AUTHORITATIVE)
+    item = _evidence(time_semantics=dynamic,
+                     effective_at="2026-08-11T00:00:00.000000Z")
+    assert ddp.classify_evidence_item(_context(), item) == ddp.NEW_AFTER_DECISION
+
+
+def test_r1_dynamic_unknown_time_semantics_works():
+    """4. 动态拼接 UNKNOWN → UNKNOWN_TEMPORAL_RELATION。"""
+    dynamic = "".join(["UNK", "NOWN"])
+    _assert_distinct_identity(dynamic, ddp.TIME_SEMANTICS_UNKNOWN)
+    item = _evidence(time_semantics=dynamic, effective_at=None,
+                     retrieved_at="2026-08-11T00:00:00.000000Z")
+    assert ddp.classify_evidence_item(_context(), item) == \
+        ddp.UNKNOWN_TEMPORAL_RELATION
+
+
+def test_r1_classification_value_equality():
+    """5. classification 字符串不依赖对象身份。"""
+    item = _evidence(effective_at="2026-08-11T00:00:00.000000Z")
+    cls = ddp.classify_evidence_item(_context(), item)
+    assert cls == ddp.NEW_AFTER_DECISION
+    assert cls is not ddp.NEW_AFTER_DECISION or cls == ddp.NEW_AFTER_DECISION
+
+
+# ---------------------------------------------------------------------------
+# R1: scope_id 规范化 identity 校验（VALID DIFFERENT vs MALFORMED）
+# ---------------------------------------------------------------------------
+
+def test_r1_malformed_security_scope_id_rejected():
+    """6. security scope_id malformed（abc / 60051）→ fail closed。"""
+    for bad in ("abc", "60051", "6005190"):
+        with pytest.raises(ddp.EvidenceDeltaInputError):
+            _evidence(scope_kind=ddp.SCOPE_SECURITY, scope_id=bad,
+                      effective_at="2026-08-11T00:00:00.000000Z")
+
+
+def test_r1_valid_different_security_out_of_scope():
+    """7. 合法但不同 security → OUT_OF_SCOPE（非 error）。"""
+    item = _evidence(scope_kind=ddp.SCOPE_SECURITY, scope_id="000001",
+                     effective_at="2026-08-11T00:00:00.000000Z")
+    assert ddp.classify_evidence_item(_context(), item) == ddp.OUT_OF_SCOPE
+
+
+def test_r1_malformed_campaign_scope_id_rejected():
+    """8. campaign scope_id malformed → fail closed。"""
+    for bad in ("campaign_xyz", "campaign_" + "A" * 32, "not-campaign"):
+        with pytest.raises(ddp.EvidenceDeltaInputError):
+            _evidence(scope_kind=ddp.SCOPE_CAMPAIGN, scope_id=bad,
+                      effective_at="2026-08-11T00:00:00.000000Z")
+
+
+def test_r1_valid_sibling_campaign_out_of_scope():
+    """9. 合法 sibling campaign → OUT_OF_SCOPE（非 error）。"""
+    item = _evidence(scope_kind=ddp.SCOPE_CAMPAIGN, scope_id=CAMPAIGN_B,
+                     effective_at="2026-08-11T00:00:00.000000Z")
+    assert ddp.classify_evidence_item(_context(), item) == ddp.OUT_OF_SCOPE
+
+
+def test_r1_decision_id_contract():
+    """decision_id 复用 stable frozen_decision_store contract（decision_<32hex>）。"""
+    assert ddp._DECISION_ID_RE.pattern == r"^decision_[0-9a-f]{32}$"
+    with pytest.raises(ddp.EvidenceDeltaInputError):
+        _context(decision_id="not-a-decision-id")
+
+
+# ---------------------------------------------------------------------------
+# R1: temporal coverage —— OUT_OF_SCOPE 不减 coverage
+# ---------------------------------------------------------------------------
+
+def test_r1_oos_unknown_time_does_not_reduce_coverage():
+    """9. 100 条 out-of-scope unknown-time evidence + 0 scope-valid unknown →
+    temporal_coverage_complete = true。"""
+    items = []
+    for i in range(100):
+        items.append(_evidence(
+            evidence_id=f"{i:032x}"[:32].ljust(32, "0"),
+            scope_kind=ddp.SCOPE_CAMPAIGN,
+            scope_id=CAMPAIGN_B,  # 兄弟 campaign → OUT_OF_SCOPE
+            effective_at=None,
+            retrieved_at="2026-08-11T00:00:00.000000Z",
+            time_semantics=ddp.TIME_SEMANTICS_UNKNOWN,
+        ))
+    d = _project(items)
+    assert d.out_of_scope_evidence == tuple(sorted(i.evidence_id for i in items))
+    assert d.unknown_temporal_evidence == ()
+    assert d.temporal_coverage_complete is True
+
+
+def test_r1_scope_valid_unknown_reduces_coverage():
+    """10. scope-valid UNKNOWN → coverage=false（保留既有语义）。"""
+    item = _evidence(effective_at=None, retrieved_at="2026-08-11T00:00:00.000000Z",
+                     time_semantics=ddp.TIME_SEMANTICS_UNKNOWN)
+    d = _project([item])
+    assert d.temporal_coverage_complete is False
+
+
+# ---------------------------------------------------------------------------
+# R1: 保留既有核心契约回归
+# ---------------------------------------------------------------------------
+
+def test_r1_retrieved_later_effective_earlier_preexisting():
+    """11. retrieved-later/effective-earlier 保持 PREEXISTING。"""
+    item = _evidence(effective_at="2026-07-01T00:00:00.000000Z",
+                     retrieved_at="2026-08-11T00:00:00.000000Z")
+    assert ddp.classify_evidence_item(_context(), item) == ddp.PREEXISTING_AT_DECISION
+
+
+def test_r1_effective_unknown_never_inferred_from_retrieved():
+    """12. effective unknown 绝不从 retrieved_at 推断 NEW。"""
+    item = _evidence(effective_at=None, retrieved_at="2026-08-11T00:00:00.000000Z",
+                     time_semantics=ddp.TIME_SEMANTICS_UNKNOWN)
+    assert ddp.classify_evidence_item(_context(), item) == \
+        ddp.UNKNOWN_TEMPORAL_RELATION
+
+
+def test_r1_has_new_evidence_temporal_only():
+    """13. has_new_evidence 纯时间语义（不含 materiality）。"""
+    item = _evidence(effective_at="2026-08-11T00:00:00.000000Z")
+    d = _project([item])
+    assert d.has_new_evidence is True
+    assert "material" not in str(d.to_dict()).lower()
+
+
+def test_r1_materiality_vocabulary_absent():
+    """14. materiality 词汇保持缺席。"""
+    d = _project([_evidence(effective_at="2026-08-11T00:00:00.000000Z")])
+    text = str(d.to_dict())
+    for token in ("MATERIAL", "CRITICAL", "REVIEW_REQUIRED", "BUY", "SELL",
+                  "EXIT", "REDUCE", "HOLD"):
+        assert token not in text
+
+
+def test_r1_deterministic_ordering_unchanged():
+    """15. 确定性排序不变。"""
+    items = (
+        _evidence(evidence_id="c" * 32, effective_at="2026-08-11T00:00:00.000000Z"),
+        _evidence(evidence_id="a" * 32, effective_at="2026-08-11T00:00:00.000000Z"),
+        _evidence(evidence_id="b" * 32, effective_at="2026-07-01T00:00:00.000000Z"),
+    )
+    assert _project(items) == _project(tuple(reversed(items)))
+
+
+def test_r1_input_zero_mutation_unchanged():
+    """16. 输入零突变不变。"""
+    item = _evidence(effective_at="2026-08-11T00:00:00.000000Z")
+    before = dict(item.__dict__)
+    _project([item])
+    assert item.__dict__ == before
+
+
+def test_r1_no_io_wall_clock_unchanged():
+    """17. 无 I/O / wall clock 不变。"""
+    source = inspect.getsource(ddp)
+    for marker in ("datetime.now", "date.today", "time.time", "sqlite3", "open("):
+        assert marker not in source
+
+
+# ---------------------------------------------------------------------------
+# 输出契约：to_dict detached（from_dict 已按 R1 删除）
+# ---------------------------------------------------------------------------
+
+def test_to_dict_is_detached():
+    """to_dict 返回独立副本（debug/API adapter 用；v0.1 无 from_dict）。"""
+    d = _project([_evidence(effective_at="2026-08-11T00:00:00.000000Z")])
     data = d.to_dict()
-    data["schema_version"] = "other.v1"
-    with pytest.raises(ddp.EvidenceDeltaInputError):
-        ddp.DecisionEvidenceDelta.from_dict(data)
-    data2 = d.to_dict()
-    data2["new_evidence"] = ["x", "x"]
-    with pytest.raises(ddp.EvidenceDeltaInputError):
-        ddp.DecisionEvidenceDelta.from_dict(data2)
+    data["new_evidence"].append("tampered")
+    assert d.new_evidence == ("e" * 32,)
+    assert not hasattr(ddp.DecisionEvidenceDelta, "from_dict")
