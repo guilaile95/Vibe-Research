@@ -86,7 +86,7 @@ Incomplete applicable dimensions without confirmed pressure →
 
 Removed from public API: raw `hard_risk` / `CONFIRMED` auto-EXIT.
 
-### Provenance (P1)
+### Provenance
 
 Any evaluated semantic assertion that can:
 
@@ -101,7 +101,27 @@ UNKNOWN / NOT_EVALUATED / ERROR / NOT_READY
 may omit authority_refs
 ```
 
-Caller self-asserted clean or self-asserted sell pressure is rejected.
+```text
+authority_refs
+=
+supplied provenance witness
+
+authority_refs
+!=
+cryptographic / runtime authority verification
+```
+
+Accurate claims:
+
+```text
+NAKED_SELF_ASSERTED_PROOF = REJECTED
+UPSTREAM_AUTHORITY_REF_REQUIRED = YES
+UPSTREAM_AUTHORITY_BINDING_VERIFIED = NO
+RUNTIME_AUTHORITY_BINDING = OUT_OF_SCOPE
+```
+
+Pure-domain core requires non-empty refs as witnesses only; it does **not**
+validate that a ref binds to a real upstream authority registry.
 
 ## Thesis boundary (P2)
 
@@ -123,12 +143,32 @@ Removed invented transforms:
 - CATALYST_FAILED + strategy → EXIT/REDUCE
 - R/R EXIT → forced REDUCE
 - Opportunity EXIT → forced REDUCE
-- Technical MEDIUM/SHORT strategy caps
+- Silent technical caps (EXIT → WATCH/REDUCE)
 - Strategy-owned catalyst NOT_APPLICABLE-only-MEDIUM
 
-Normalized upstream WATCH/REDUCE/EXIT pass through without silent downgrade.
+Normalized upstream WATCH/REDUCE/EXIT pass through without silent downgrade
+**except** the North Star product gate below.
 
 Catalyst `NOT_APPLICABLE` is **upstream-owned** for any strategy (with refs).
+
+### MEDIUM technical EXIT (R2)
+
+North Star: MEDIUM technical analysis is timing / scaling only; it must not be
+an independent long-horizon exit authority.
+
+```text
+MEDIUM + technical_execution.state == EXIT
+→ SellEngineValidationError (fail closed)
+```
+
+No silent cap. MEDIUM technical legal states:
+
+```text
+NONE / WATCH / REDUCE / NOT_APPLICABLE /
+UNKNOWN / NOT_EVALUATED / ERROR
+```
+
+SHORT / SWING technical EXIT remain accepted until Product Authority says otherwise.
 
 ## Required dimensions (P6)
 

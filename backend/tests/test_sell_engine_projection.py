@@ -255,14 +255,55 @@ def test_g_opportunity_cost_not_evaluated_blocks_hold():
 # ---------------------------------------------------------------------------
 
 
-def test_h_technical_exit_pass_through_medium():
+def test_h_medium_technical_exit_fail_closed():
+    with pytest.raises(se.SellEngineValidationError, match="MEDIUM"):
+        _project(
+            strategy="MEDIUM",
+            campaign_id=CAMP_MEDIUM,
+            catalyst=_dim("NOT_APPLICABLE", "cat:na"),
+            technical_execution=_dim("EXIT", "tech:e"),
+        )
+
+
+def test_h_medium_technical_watch_allowed():
     out = _project(
         strategy="MEDIUM",
         campaign_id=CAMP_MEDIUM,
         catalyst=_dim("NOT_APPLICABLE", "cat:na"),
+        technical_execution=_dim("WATCH", "tech:w"),
+    )
+    assert out["sell_state"] == "WATCH_TO_REDUCE"
+    assert out["primary_reason"] == "TECHNICAL_EXECUTION"
+
+
+def test_h_medium_technical_reduce_allowed():
+    out = _project(
+        strategy="MEDIUM",
+        campaign_id=CAMP_MEDIUM,
+        catalyst=_dim("NOT_APPLICABLE", "cat:na"),
+        technical_execution=_dim("REDUCE", "tech:r"),
+    )
+    assert out["sell_state"] == "REDUCE"
+    assert out["primary_reason"] == "TECHNICAL_EXECUTION"
+
+
+def test_h_medium_technical_not_applicable_allowed():
+    out = _project(
+        strategy="MEDIUM",
+        campaign_id=CAMP_MEDIUM,
+        catalyst=_dim("NOT_APPLICABLE", "cat:na"),
+        technical_execution=_dim("NOT_APPLICABLE", "tech:na"),
+    )
+    assert out["sell_state"] == "HOLD"
+    assert out["hold_positive_proof"] is True
+
+
+def test_h_short_technical_exit_still_allowed():
+    out = _project(
+        strategy="SHORT",
+        campaign_id=CAMP_SHORT,
         technical_execution=_dim("EXIT", "tech:e"),
     )
-    # No invented MEDIUM technical cap; upstream owns severity.
     assert out["sell_state"] == "EXIT"
     assert out["primary_reason"] == "TECHNICAL_EXECUTION"
 
@@ -544,10 +585,11 @@ def test_s_technical_only_not_thesis_invalidated():
         strategy="MEDIUM",
         campaign_id=CAMP_MEDIUM,
         catalyst=_dim("NOT_APPLICABLE", "c"),
-        technical_execution=_dim("EXIT", "t"),
+        technical_execution=_dim("REDUCE", "t"),
     )
     assert out["sell_state"] != "THESIS_INVALIDATED"
     assert out["primary_reason"] == "TECHNICAL_EXECUTION"
+    assert out["sell_state"] == "REDUCE"
 
 
 # ---------------------------------------------------------------------------

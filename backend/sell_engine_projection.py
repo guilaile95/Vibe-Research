@@ -272,12 +272,14 @@ def _require_dim(
             "(no pnl/price/ai payload)"
         )
 
-    # P1 provenance: positive semantic assertions require upstream refs.
-    # Incomplete honesty states may omit refs.
+    # Provenance witness: evaluated semantic assertions require non-empty refs.
+    # This rejects naked self-asserted proof only. Refs are not verified
+    # against a runtime authority registry (binding verification out of scope).
     if state not in _INCOMPLETE_STATES and not refs:
         raise SellEngineValidationError(
             f"{field}.authority_refs must be non-empty for evaluated "
-            f"semantic state {state!r} (caller self-asserted proof forbidden)"
+            f"semantic state {state!r} (naked self-asserted proof rejected; "
+            "refs are provenance witnesses, not verified bindings)"
         )
 
     return {"state": state, "authority_refs": list(refs)}
@@ -560,6 +562,17 @@ def project_sell_engine(
     tech_i = _require_dim(
         technical_execution, "technical_execution", PRESSURE_INPUT_STATES
     )
+
+    # North Star: MEDIUM technical is timing/scaling only — EXIT as an
+    # independent long-horizon exit authority is product-illegal. Fail closed
+    # (no silent cap to WATCH/REDUCE). SHORT/SWING unchanged without new PA.
+    if strat == "MEDIUM" and tech_i["state"] == "EXIT":
+        raise SellEngineValidationError(
+            "technical_execution.state EXIT is invalid for strategy=MEDIUM; "
+            "MEDIUM technical may only be timing/scaling "
+            "(NONE/WATCH/REDUCE/NOT_APPLICABLE/UNKNOWN/NOT_EVALUATED/ERROR), "
+            "not an independent long-horizon exit authority"
+        )
 
     interpretations: dict[str, dict[str, Any]] = {
         "thesis": _interpret_thesis(thesis_i),
