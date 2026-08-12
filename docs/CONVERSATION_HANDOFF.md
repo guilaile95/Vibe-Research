@@ -82,7 +82,7 @@ Agent 可以替换；Track semantic ownership 不应随 Agent 名字漂移。
 | `docs/CODE_WIKI.md` | 代码在哪里、现成能力、authority 导航、Anti-Rewheel | semantic truth / implementation authorization |
 | `docs/ARCHITECTURE.md` | 相关模块怎么连接、调用链/数据流 | 当前任务授权 |
 | `AGENTS.md` | 工程执行纪律 | 产品优先级 |
-| `docs/CONVERSATION_HANDOFF.md` | 新会话如何恢复项目 | 当前项目状态快照 |
+| `docs/CONVERSATION_HANDOFF.md` | 新会话如何恢复项目，以及项目级 Validation 执行协议 | 当前项目状态快照 |
 
 ### 2.1 解释优先级
 
@@ -256,7 +256,20 @@ REVIEW_STATE = <state>
 NEXT_ACTION = <immediate action>
 ```
 
-### STEP 10 — Produce Bootstrap Report before production work
+### STEP 10 — Load execution policies
+
+新会话继续任何 implementation / validation / review 工作前，必须确认：
+
+```text
+ANTI_REWHEEL_POLICY = LOADED
+VALIDATION_POLICY = V2
+FULL_SUITE_DEFAULT_BUDGET = 1
+CI_IS_SEMANTIC_APPROVAL = NO
+```
+
+`VALIDATION_V2` 的唯一项目级协议见 §4.2。`CODE_WIKI.md` 只能引用，不维护竞争副本。
+
+### STEP 11 — Produce Bootstrap Report before production work
 
 恢复完成后先输出：
 
@@ -304,6 +317,268 @@ ANTI-REWHEEL PREFLIGHT
 ```
 
 应优先拒绝或缩减，而不是新建 subsystem。
+
+### 4.2 VALIDATION_V2 — Targeted-first execution contract
+
+本节是 Vibe-Research 的项目级 Validation 执行协议。目标是提高**单位时间内的有效正确性证据**，而不是通过重复运行同一大测试集制造形式上的“更严谨”。
+
+核心原则：
+
+```text
+CORRECTNESS
+!=
+MORE REPEATED FULL-SUITE RUNS
+
+CORRECTNESS =
+TARGETED TESTS
++ RELEVANT REGRESSION
++ ADVERSARIAL TESTS
++ EXACT-HEAD CI
++ INDEPENDENT SEMANTIC REVIEW
+```
+
+#### 4.2.1 Implementation loop — targeted first
+
+开发迭代中默认只运行：
+
+```text
+changed capability targeted tests
++ directly affected regression tests
+```
+
+禁止默认模式：
+
+```text
+small change
+→ full offline suite
+→ another small change
+→ full offline suite again
+→ test-only change
+→ full offline suite again
+```
+
+每次语义修改后应选择**能证明该修改正确性的最小高价值测试集合**。
+
+#### 4.2.2 Final local validation
+
+准备 commit / push 前，默认执行：
+
+```text
+TARGETED_FINAL
+RELEVANT_REGRESSION
+PY_COMPILE
+GIT_DIFF_CHECK
+```
+
+适用时增加 domain-specific static/adversarial checks。
+
+#### 4.2.3 Full-suite budget
+
+默认：
+
+```text
+FULL_SUITE_DEFAULT_BUDGET = 1
+```
+
+含义：单个工作单最多进行 **一次有实质价值的最终本地 full-offline 尝试**，而不是每轮修改后重复跑。
+
+第二次或更多 full-suite 只有在存在明确技术理由时才允许，例如：
+
+```text
+shared foundation changed
+first full suite exposed cross-module regression
+full-suite-only failure was fixed
+validation environment materially changed
+```
+
+不得以以下理由重复运行：
+
+```text
+“为了更保险”
+“刚又改了一点”
+“习惯上再跑一次”
+```
+
+如果超出预算，最终报告必须填写：
+
+```text
+FULL_OFFLINE_RUN_COUNT = <N>
+FULL_OFFLINE_RERUN_REASON = <specific reason>
+```
+
+#### 4.2.4 Local full offline is not automatically a hard gate
+
+如果本地 full-offline 因会话、环境、资源限制而取消/未完成，但以下全部成立：
+
+```text
+TARGETED_TESTS = PASS
+RELEVANT_REGRESSION = PASS / NOT_APPLICABLE
+PY_COMPILE = PASS
+DIFF_CHECK = PASS
+EXACT_HEAD_CI = PASS
+```
+
+并且 exact-head CI 实际覆盖该工作单所需自动化合同，则：
+
+```text
+LOCAL_FULL_OFFLINE = NOT_COMPLETED
+```
+
+可以是 **NON_BLOCKING**。
+
+反之：
+
+```text
+LOCAL_FULL_OFFLINE = PASS
+EXACT_HEAD_CI = FAIL
+```
+
+绝不能通过自动化验证门禁。
+
+#### 4.2.5 CI vs independent review
+
+职责永久分离：
+
+```text
+EXACT_HEAD_CI
+= AUTOMATED VALIDATION GATE
+
+ChatGPT / project chief reviewer
+= SEMANTIC / ARCHITECTURE / INTEGRATION GATE
+```
+
+因此：
+
+```text
+CI PASS
+!= INDEPENDENT_REVIEW_APPROVED
+```
+
+CI 可以替代重复的本地 full-suite 执行，但不能替代 semantic / architecture review。
+
+#### 4.2.6 Tool execution policy
+
+同一阶段内相互独立的操作应在安全时并行：
+
+```text
+independent searches
+independent reads
+independent static checks
+independent targeted test groups
+```
+
+有数据依赖、写冲突、同一路径更新或顺序语义的操作必须串行。
+
+避免：
+
+```text
+read A → model → read B → model → grep C → model
+```
+
+如果三者互不依赖，应优先批量/并行获取后一次综合。
+
+#### 4.2.7 Large-output policy
+
+长测试日志、大型命令输出、重复 diagnostics 不应整段反复回灌模型上下文。
+
+优先：
+
+```text
+persist/log full output when needed
+→ inspect summary
+→ inspect failed tests / relevant slices
+```
+
+模型上下文保留：
+
+```text
+PASS/FAIL
+counts
+failed test names
+relevant traceback
+high-value summary
+```
+
+而不是数千行已通过测试日志。
+
+#### 4.2.8 Long-task phase discipline
+
+复杂任务应按阶段组织：
+
+```text
+A. Anti-Rewheel / repo inspection
+B. implementation
+C. targeted validation / fixes
+D. publish + exact-head CI verification
+E. independent review
+```
+
+阶段边界是工作组织方式，不要求为每个阶段创建独立 PR 或无意义停顿。
+
+如果出现大量重复 search/read、20+ 无必要串行工具循环、反复读取同一输出，应先压缩已有结论再继续。
+
+#### 4.2.9 Required final-report fields
+
+所有 G/T/Z production implementation / correction 工作单的最终报告至少包含：
+
+```text
+VALIDATION_POLICY = V2
+
+TARGETED_TESTS =
+PASS / FAIL
+
+RELEVANT_REGRESSION =
+PASS / FAIL / NOT_APPLICABLE
+
+FULL_OFFLINE =
+PASS / FAIL / NOT_COMPLETED / NOT_RUN
+
+FULL_OFFLINE_RUN_COUNT =
+0 / 1 / N
+
+FULL_OFFLINE_RERUN_REASON =
+NONE / <specific reason>
+
+PY_COMPILE =
+PASS / FAIL / NOT_APPLICABLE
+
+DIFF_CHECK =
+PASS / FAIL
+
+EXACT_HEAD_CI =
+PASS / FAIL / IN_PROGRESS / NOT_AVAILABLE
+
+VALIDATION_DUPLICATION =
+NO / <explanation>
+
+PR_READY = NO
+MERGE = NO
+```
+
+如果某项确实不适用，明确写 `NOT_APPLICABLE`，不得用另一个层级测试冒充。
+
+#### 4.2.10 Review enforcement
+
+主审在独立 review 时同时检查代码正确性与 Validation process 是否符合 V2。
+
+无理由重复 full-suite：
+
+```text
+VALIDATION_PROCESS_V2 = NON_COMPLIANT
+```
+
+这不自动等于 production code 有 bug，但必须作为执行流程问题纠正。
+
+反过来，如果：
+
+```text
+TARGETED = PASS
+RELEVANT_REGRESSION = PASS
+EXACT_HEAD_CI = PASS
+LOCAL_FULL_OFFLINE = NOT_COMPLETED
+```
+
+主审不得仅为了形式完整要求重复运行数千测试；应根据 CI 覆盖和实际风险判断。
 
 ---
 
@@ -399,6 +674,7 @@ ChatGPT / project chief reviewer 负责：
 - integration order
 - Ready / Merge gate
 - post-merge documentation sync judgement
+- Validation V2 process compliance review
 
 Track Agent 不因为自己的测试全绿就自动获得 merge authority。
 
@@ -419,7 +695,8 @@ Track Agent 不因为自己的测试全绿就自动获得 merge authority。
 6. Check NEXT_TASK / PROJECT_STATE sync need.
 7. Check CODE_WIKI structural impact.
 8. Check ARCHITECTURE structural impact.
-9. Produce compact NEW_CONVERSATION_BOOTSTRAP block if useful.
+9. Confirm VALIDATION_POLICY = V2 for future work.
+10. Produce compact NEW_CONVERSATION_BOOTSTRAP block if useful.
 ```
 
 ### 不应进入长期文档的短生命周期状态
@@ -477,6 +754,11 @@ DO_NOT_TOUCH =
 WIKI_SNAPSHOT_HEAD = <sha>
 WIKI_MATCHES_STABLE = YES / NO
 
+ANTI_REWHEEL_POLICY = LOADED
+VALIDATION_POLICY = V2
+FULL_SUITE_DEFAULT_BUDGET = 1
+CI_IS_SEMANTIC_APPROVAL = NO
+
 NEXT_ACTION =
 <single immediate next action or active parallel actions>
 ```
@@ -512,8 +794,9 @@ UNKNOWN / NEEDS_VERIFICATION
 6. Draft PR != stable implemented；CI PASS != independent review approved。
 7. 恢复 Product Priority / Active Tracks / Track Owners / Active PRs / Blockers / Missing Authorities / Do-not-touch。
 8. 开发前执行 Anti-Rewheel Preflight。
-9. 不重复实现已有 Semantic Authority。
-10. 不自行 Ready / Merge / direct push stable / force push。
+9. 加载 VALIDATION_V2：targeted-first、FULL_SUITE_DEFAULT_BUDGET=1、exact-head CI 是 automated gate 而非 semantic approval。
+10. 不重复实现已有 Semantic Authority。
+11. 不自行 Ready / Merge / direct push stable / force push。
 
 先输出 `NEW_CONVERSATION_BOOTSTRAP_REPORT`，然后继续工作。
 ```
@@ -569,7 +852,7 @@ AGENTS
 CONVERSATION_HANDOFF
 ```
 
-`CONVERSATION_HANDOFF.md` 只有在**项目恢复算法 / governance protocol 本身改变**时更新；不要随着每个 PR 修改。
+`CONVERSATION_HANDOFF.md` 只有在**项目恢复算法 / governance / validation protocol 本身改变**时更新；不要随着每个 PR 修改。
 
 ---
 
@@ -585,6 +868,7 @@ repository:
 bootstrap:
   resolve_exact_head_first: true
   produce_bootstrap_report_before_work: true
+  load_validation_policy: V2
 
 documents:
   product: docs/PRODUCT_NORTH_STAR_V01.md
@@ -612,6 +896,19 @@ anti_rewheel:
   require_exact_head_verification: true
   require_new_information_test: true
 
+validation_v2:
+  targeted_first: true
+  relevant_regression_required: true
+  full_suite_default_budget: 1
+  repeated_full_suite_requires_reason: true
+  local_full_not_completed_is_automatically_blocking: false
+  exact_head_ci_required_for_final_automated_gate: true
+  exact_head_ci_equals_semantic_approval: false
+  independent_review_required: true
+  parallelize_independent_tools_when_safe: true
+  summarize_large_outputs: true
+  require_final_report_fields: true
+
 post_merge_docs:
   project_state: evaluate_every_merge_wave
   next_task: evaluate_every_merge_wave
@@ -635,5 +932,10 @@ CI PASS != semantic approval
 Wiki locate != verify
 Unknown != healthy
 Anti-rewheel before implementation
+Targeted-first validation
+Full-suite default budget = 1
+Repeated full-suite requires explicit reason
+Exact-head CI = automated validation gate
+Independent review = semantic / architecture / integration gate
 Merge before stable documentation promotion
 ```
