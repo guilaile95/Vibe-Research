@@ -1,9 +1,11 @@
-"""BK-11 A-share trade calendar: offline ``previous_trade_date`` lookup.
+"""BK-11 A-share trade calendar: deterministic offline session lookup.
 
-This module provides a single public function :func:`previous_trade_date` that
-returns the most recent confirmed A-share trading day strictly before the
-given date, based on an offline artifact built from official SSE/SZSE holiday
-announcements.
+The public lookups use an offline artifact built from official SSE/SZSE
+holiday announcements.  :func:`previous_trade_date` returns the most recent
+confirmed session strictly before another confirmed session.
+:func:`completed_trade_date_at` maps an explicit UTC instant to the most recent
+A-share session completed by that instant using a frozen Asia/Shanghai 15:00
+close boundary.
 
 The module is pure standard library, performs no network I/O, and fails
 closed (returns ``None``) for any invalid input or corrupted data file.
@@ -18,7 +20,13 @@ import threading
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
-__all__ = ["previous_trade_date"]
+__all__ = [
+    "CALENDAR_AUTHORITY_REF",
+    "completed_trade_date_at",
+    "previous_trade_date",
+]
+
+CALENDAR_AUTHORITY_REF = "trade_calendar:completed_trade_date:v0.1"
 
 _DATA_PATH = os.path.join(
     os.path.dirname(__file__), "data", "cn_a_share_trade_calendar_v01.json"
@@ -41,6 +49,10 @@ _REQUIRED_EXCHANGE_YEARS = {
 _ALLOWED_OFFICIAL_HOSTS = {"www.sse.com.cn", "sse.com.cn", "www.szse.cn", "szse.cn"}
 
 _DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_UTC_ZERO_OFFSET_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
+    r"(?:\.\d{1,6})?(?:Z|\+00:00)$"
+)
 _URL_HOST_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://([^/?#]+)", re.IGNORECASE)
 
 _calendar_cache: Optional[tuple[str, ...]] = None
@@ -220,4 +232,59 @@ def previous_trade_date(current_trade_date: str) -> Optional[str]:
         return None  # not a confirmed trading day
     if idx == 0:
         return None  # no prior trading day
+    return sessions[idx - 1]
+
+
+def completed_trade_date_at(as_of: str) -> Optional[str]:
+    """Return the latest A-share session completed at explicit UTC *as_of*.
+
+    ``as_of`` must be a canonical UTC zero-offset instant accepted by the
+    decision-authority contract: seconds are required, fractional seconds may
+    contain one to six digits, and the suffix must be exactly ``Z`` or
+    ``+00:00``.  Naive timestamps and non-zero offsets are rejected rather
+    than silently normalized.
+
+    The instant is converted to Asia/Shanghai.  On a confirmed session date,
+    that session becomes completed at exactly 15:00:00 local time; before the
+    boundary, the preceding confirmed session is returned.  On a weekend or
+    exchange holiday, the latest earlier confirmed session is returned.
+
+    No wall clock is consulted.  ``None`` is returned when the timestamp is
+    invalid, its Shanghai calendar date is outside the artifact's supported
+    range, no prior completed session exists, or the artifact fails runtime
+    validation.
+    """
+    if not isinstance(as_of, str) or _UTC_ZERO_OFFSET_RE.fullmatch(as_of) is None:
+        return None
+    parse_text = as_of[:-1] + "+00:00" if as_of.endswith("Z") else as_of
+    try:
+        parsed = datetime.fromisoformat(parse_text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        return None
+
+    local = parsed.astimezone(_SHANGHAI_TZ)
+    local_date = local.date()
+    if local_date < _SUPPORTED_START or local_date > _SUPPORTED_END:
+        return None
+
+    sessions = _load_calendar()
+    if sessions is None:
+        return None
+
+    local_date_text = local_date.isoformat()
+    is_completed_boundary = (
+        local.hour,
+        local.minute,
+        local.second,
+        local.microsecond,
+    ) >= (15, 0, 0, 0)
+
+    if is_completed_boundary:
+        idx = bisect.bisect_right(sessions, local_date_text)
+    else:
+        idx = bisect.bisect_left(sessions, local_date_text)
+    if idx == 0:
+        return None
     return sessions[idx - 1]

@@ -1,4 +1,4 @@
-"""Tests for backend.trade_calendar.previous_trade_date.
+"""Tests for deterministic lookups in :mod:`backend.trade_calendar`.
 
 All holiday-boundary dates are derived mechanically from the offline
 data artifact (backend/data/cn_a_share_trade_calendar_v01.json) and the
@@ -152,6 +152,165 @@ class TestNormalPaths:
             f"{holiday_name}: previous_trade_date({first_after}) = {result}, "
             f"expected {last_before}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Explicit as_of -> completed session authority
+# ---------------------------------------------------------------------------
+
+class TestCompletedTradeDateAt:
+    def test_public_authority_reference_is_stable(self):
+        assert (
+            tc.CALENDAR_AUTHORITY_REF
+            == "trade_calendar:completed_trade_date:v0.1"
+        )
+        assert "CALENDAR_AUTHORITY_REF" in tc.__all__
+        assert "completed_trade_date_at" in tc.__all__
+
+    def test_intraday_uses_previous_confirmed_session(self):
+        # 2024-01-03 14:59:59.999999 Asia/Shanghai.
+        assert (
+            tc.completed_trade_date_at("2024-01-03T06:59:59.999999Z")
+            == "2024-01-02"
+        )
+
+    @pytest.mark.parametrize(
+        "as_of",
+        [
+            "2024-01-03T07:00:00Z",
+            "2024-01-03T07:00:00+00:00",
+            "2024-01-03T07:00:00.000000Z",
+            "2024-01-03T07:00:00.000000+00:00",
+        ],
+    )
+    def test_exact_1500_shanghai_boundary_completes_session(self, as_of):
+        assert tc.completed_trade_date_at(as_of) == "2024-01-03"
+
+    def test_after_close_uses_same_confirmed_session(self):
+        # 2024-01-03 15:00:00.000001 Asia/Shanghai.
+        assert (
+            tc.completed_trade_date_at("2024-01-03T07:00:00.000001Z")
+            == "2024-01-03"
+        )
+
+    def test_weekend_uses_latest_previous_session(self):
+        # Sunday 2024-01-07 12:00 Asia/Shanghai.
+        assert (
+            tc.completed_trade_date_at("2024-01-07T04:00:00Z")
+            == "2024-01-05"
+        )
+
+    def test_saturday_uses_latest_previous_session(self):
+        # Saturday 2024-01-06 12:00 Asia/Shanghai.
+        assert (
+            tc.completed_trade_date_at("2024-01-06T04:00:00Z")
+            == "2024-01-05"
+        )
+
+    def test_exchange_holiday_uses_latest_previous_session(self):
+        # Monday 2024-02-12 is inside the Spring Festival closure.
+        assert (
+            tc.completed_trade_date_at("2024-02-12T04:00:00Z")
+            == "2024-02-08"
+        )
+
+    def test_first_session_after_holiday_before_close_uses_preholiday_session(self):
+        # 2024-02-19 is the first confirmed session after Spring Festival.
+        assert (
+            tc.completed_trade_date_at("2024-02-19T06:59:59Z")
+            == "2024-02-08"
+        )
+
+    def test_first_session_after_holiday_at_close_uses_current_session(self):
+        assert (
+            tc.completed_trade_date_at("2024-02-19T07:00:00Z")
+            == "2024-02-19"
+        )
+
+    def test_utc_date_to_next_shanghai_date_crossover(self):
+        # 2024-01-02 23:30 UTC is 2024-01-03 07:30 Shanghai; the
+        # 2024-01-03 session is not yet completed, so 2024-01-02 is selected.
+        assert (
+            tc.completed_trade_date_at("2024-01-02T23:30:00Z")
+            == "2024-01-02"
+        )
+
+    def test_first_session_before_close_has_no_supported_predecessor(self):
+        assert tc.completed_trade_date_at("2024-01-02T06:59:59Z") is None
+
+    def test_first_session_at_close_is_completed(self):
+        assert (
+            tc.completed_trade_date_at("2024-01-02T07:00:00Z")
+            == "2024-01-02"
+        )
+
+    @pytest.mark.parametrize(
+        "as_of",
+        [
+            "2023-12-31T04:00:00Z",
+            "2027-01-01T04:00:00Z",
+        ],
+    )
+    def test_shanghai_date_outside_supported_range_fails_closed(self, as_of):
+        assert tc.completed_trade_date_at(as_of) is None
+
+    def test_last_supported_session_at_close_is_completed(self):
+        assert (
+            tc.completed_trade_date_at("2026-12-31T07:00:00Z")
+            == "2026-12-31"
+        )
+
+    @pytest.mark.parametrize(
+        "bad_input",
+        [
+            None,
+            20240102,
+            True,
+            "",
+            " 2024-01-03T07:00:00Z",
+            "2024-01-03T07:00:00Z ",
+            "2024-01-03",
+            "2024-01-03 07:00:00Z",
+            "2024-01-03T07:00Z",
+            "2024-01-03T07:00:00",
+            "2024-01-03T07:00:00z",
+            "2024-01-03T07:00:00+08:00",
+            "2024-01-03T07:00:00-00:00",
+            "2024-01-03T07:00:00+0000",
+            "2024-01-03T07:00:00.0000000Z",
+            "2024-02-30T07:00:00Z",
+            "2024-01-03T24:00:00Z",
+            [],
+            {},
+        ],
+    )
+    def test_invalid_or_nonzero_offset_input_fails_closed(self, bad_input):
+        assert tc.completed_trade_date_at(bad_input) is None
+
+    def test_corrupted_calendar_fails_closed(self, tmp_path, monkeypatch):
+        bad_file = tmp_path / "bad_calendar.json"
+        bad_file.write_text("{not valid json", encoding="utf-8")
+        tc._calendar_cache = None
+        monkeypatch.setattr(tc, "_DATA_PATH", str(bad_file))
+
+        assert tc.completed_trade_date_at("2024-01-03T07:00:00Z") is None
+
+    def test_does_not_consult_wall_clock(self, monkeypatch):
+        def forbidden_wall_clock():
+            raise AssertionError("completed_trade_date_at must not read wall clock")
+
+        monkeypatch.setattr(tc, "_today_shanghai", forbidden_wall_clock)
+        assert (
+            tc.completed_trade_date_at("2025-03-17T07:00:00Z")
+            == "2025-03-17"
+        )
+
+    def test_repeated_calls_are_deterministic(self):
+        results = {
+            tc.completed_trade_date_at("2025-03-17T07:00:00.000001Z")
+            for _ in range(100)
+        }
+        assert results == {"2025-03-17"}
 
 
 # ---------------------------------------------------------------------------
