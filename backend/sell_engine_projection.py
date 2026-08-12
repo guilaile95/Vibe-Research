@@ -1,30 +1,30 @@
-"""Sell Engine Projection Core v0.1 (P0-SE1).
+"""Sell Engine Projection Core v0.1 (P0-SE1 / R1).
 
 Answers one question only:
 
-> For a real holding Campaign, given already-normalized Thesis / Hard Risk /
-> Expectation / R/R / Catalyst / Portfolio / Opportunity Cost / Technical
-> conclusions, what is the current sell-side state and why?
+> For a real holding Campaign, given already-normalized sell-side dimension
+> conclusions (Thesis terminality + normalized sell pressures), what is the
+> current sell-side state and why?
 
 ```text
 Sell Engine
 =
-deterministic sell-side semantic authority
+normalized sell-pressure composition authority
 ```
 
 Not a BUY engine, Hard Risk engine, Thesis engine, price predictor,
 technical trading system, portfolio optimizer, or AI recommender.
 
-First principles (product law):
+R1 authority boundary:
 
-- LOSS != SELL REASON
-- PROFIT != HOLD REASON
-- MARKET / TECHNICAL WEAKNESS != AUTOMATIC EXIT
-- ONE TECHNICAL INDICATOR != SELL
-- NEW EVIDENCE / MATERIAL CHANGE != SELL
-- HARD RISK != COMPLETE SELL ENGINE
-- AI != SELL AUTHORITY
-- NO SELL SIGNAL != PROVEN HOLD
+- Consumes normalized sell pressure; does not invent action severity from
+  raw upstream domain facts (except Product-Authority thesis terminal map).
+- Formal Thesis DISPROVEN / INVALIDATED → THESIS_INVALIDATED only.
+- WEAKENED != THESIS_INVALIDATION and does not auto-create WATCH/REDUCE/EXIT.
+- Hard Risk raw CONFIRMED is not an input; RISK_EXIT is normalized pressure.
+- Does not own which dimensions are applicable to a Campaign.
+- HOLD requires authority-backed positive proof on applicable dimensions.
+- Primary reason must drive the final sell_state (no forged semantic ladder).
 
 Pure domain boundary:
 
@@ -56,7 +56,6 @@ SELL_STATES: tuple[str, ...] = (
     "THESIS_INVALIDATED",
 )
 
-# Evaluation completeness axis (separate from domain sell state).
 SELL_EVALUATIONS: tuple[str, ...] = (
     "EVALUATED",
     "UNKNOWN",
@@ -66,7 +65,6 @@ SELL_EVALUATIONS: tuple[str, ...] = (
 
 VALID_STRATEGIES: tuple[str, ...] = ("SHORT", "SWING", "MEDIUM")
 
-# North Star sell reason categories (primary / supporting).
 REASON_CATEGORIES: tuple[str, ...] = (
     "THESIS_INVALIDATION",
     "RISK_EXIT",
@@ -78,20 +76,18 @@ REASON_CATEGORIES: tuple[str, ...] = (
     "TECHNICAL_EXECUTION",
 )
 
-# Primary-reason precedence among confirmed sell pressures.
-# Only freezes necessary order: thesis terminal > hard risk > remaining.
-_PRIMARY_PRECEDENCE: tuple[str, ...] = (
+# Display-only order for co-driver tie-break (NOT semantic investment priority).
+_DISPLAY_TIE_BREAK_ORDER: tuple[str, ...] = (
     "THESIS_INVALIDATION",
     "RISK_EXIT",
-    "CATALYST_FAILURE",
-    "RISK_REWARD_DETERIORATION",
     "EXPECTATION_PRICE_IN",
+    "RISK_REWARD_DETERIORATION",
+    "CATALYST_FAILURE",
     "PORTFOLIO_REBALANCE",
     "OPPORTUNITY_COST",
     "TECHNICAL_EXECUTION",
 )
 
-# Domain pressure ranks for non-terminal aggregation.
 _STATE_RANK: dict[str, int] = {
     "HOLD": 0,
     "WATCH_TO_REDUCE": 1,
@@ -100,7 +96,6 @@ _STATE_RANK: dict[str, int] = {
     "THESIS_INVALIDATED": 4,
 }
 
-# Evaluation severity for aggregation (ERROR > NOT_EVALUATED > UNKNOWN > EVALUATED).
 _EVAL_RANK: dict[str, int] = {
     "EVALUATED": 0,
     "UNKNOWN": 1,
@@ -108,7 +103,7 @@ _EVAL_RANK: dict[str, int] = {
     "ERROR": 3,
 }
 
-# Thesis input states (consume Formal Current Thesis effective_state vocabulary).
+# Thesis: Formal Current Thesis vocabulary. Only terminal map is product-frozen.
 THESIS_INPUT_STATES: tuple[str, ...] = (
     "STABLE",
     "STRENGTHENED",
@@ -121,15 +116,7 @@ THESIS_INPUT_STATES: tuple[str, ...] = (
     "NOT_READY",
 )
 
-HARD_RISK_INPUT_STATES: tuple[str, ...] = (
-    "CLEAR",
-    "CONFIRMED",
-    "UNKNOWN",
-    "NOT_EVALUATED",
-    "ERROR",
-)
-
-# Shared pressure vocabulary for most sell dimensions.
+# Normalized sell-pressure dimensions (including RISK_EXIT consequence).
 PRESSURE_INPUT_STATES: tuple[str, ...] = (
     "NONE",
     "WATCH",
@@ -141,21 +128,22 @@ PRESSURE_INPUT_STATES: tuple[str, ...] = (
     "NOT_APPLICABLE",
 )
 
-# Catalyst keeps failure semantics distinct from "not yet happened".
+# Catalyst: same pressure composition + NOT_YET (not failure) + NOT_APPLICABLE.
 CATALYST_INPUT_STATES: tuple[str, ...] = (
     "NONE",
-    "FAILED",
     "NOT_YET",
+    "WATCH",
+    "REDUCE",
+    "EXIT",
     "UNKNOWN",
     "NOT_EVALUATED",
     "ERROR",
     "NOT_APPLICABLE",
 )
 
-# Dimension keys (stable order for explainability).
 _DIMENSIONS: tuple[str, ...] = (
     "thesis",
-    "hard_risk",
+    "risk_exit",
     "expectation_price_in",
     "risk_reward",
     "catalyst",
@@ -173,6 +161,9 @@ _AS_OF_UTC_FORMS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$"),
     re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,6}\+00:00$"),
 )
+
+# States that assert positive semantic proof and therefore require provenance.
+_INCOMPLETE_STATES = frozenset({"UNKNOWN", "NOT_EVALUATED", "ERROR", "NOT_READY"})
 
 
 class SellEngineError(Exception):
@@ -232,7 +223,6 @@ def _require_as_of(value: object) -> str:
             "as_of must be a UTC zero-offset instant "
             "(...Z or ...+00:00); wall clock is forbidden"
         )
-    # Parse only to reject impossible calendar values; never use wall clock.
     try:
         dt = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
     except ValueError as exc:
@@ -272,7 +262,7 @@ def _require_dim(
                 f"{field}.authority_refs[{i}] must be a non-empty stripped string"
             )
         refs.append(ref)
-    # Reject unknown keys that would smuggle PnL / price / AI payloads.
+
     allowed_keys = {"state", "authority_refs"}
     extra = set(value.keys()) - allowed_keys
     if extra:
@@ -281,6 +271,15 @@ def _require_dim(
             "Sell Engine consumes normalized state only "
             "(no pnl/price/ai payload)"
         )
+
+    # P1 provenance: positive semantic assertions require upstream refs.
+    # Incomplete honesty states may omit refs.
+    if state not in _INCOMPLETE_STATES and not refs:
+        raise SellEngineValidationError(
+            f"{field}.authority_refs must be non-empty for evaluated "
+            f"semantic state {state!r} (caller self-asserted proof forbidden)"
+        )
+
     return {"state": state, "authority_refs": list(refs)}
 
 
@@ -309,7 +308,7 @@ def _max_eval(a: str, b: str) -> str:
 def _eval_from_incomplete_state(state: str) -> str | None:
     if state == "ERROR":
         return "ERROR"
-    if state == "NOT_EVALUATED":
+    if state in ("NOT_EVALUATED", "NOT_READY"):
         return "NOT_EVALUATED"
     if state == "UNKNOWN":
         return "UNKNOWN"
@@ -317,17 +316,13 @@ def _eval_from_incomplete_state(state: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Dimension interpretation
+# Dimension interpretation — composition only, no invented severity
 # ---------------------------------------------------------------------------
 
 
-def _interpret_thesis(
-    dim: Mapping[str, Any],
-) -> dict[str, Any]:
+def _interpret_thesis(dim: Mapping[str, Any]) -> dict[str, Any]:
     state = dim["state"]
     incomplete = _eval_from_incomplete_state(state)
-    if state == "NOT_READY":
-        incomplete = "NOT_EVALUATED"
     if incomplete is not None:
         return {
             "pressure_state": None,
@@ -336,9 +331,12 @@ def _interpret_thesis(
             "opposing": [],
             "uncertainties": [f"THESIS_{incomplete}"],
             "evaluation": incomplete,
-            "terminal": False,
+            "applicable": True,
+            "hold_ok": False,
+            "blocks_hold": True,
         }
     if state in ("DISPROVEN", "INVALIDATED"):
+        # Sole Product-Authority action transform.
         return {
             "pressure_state": "THESIS_INVALIDATED",
             "category": "THESIS_INVALIDATION",
@@ -346,19 +344,24 @@ def _interpret_thesis(
             "opposing": [],
             "uncertainties": [],
             "evaluation": "EVALUATED",
-            "terminal": True,
+            "applicable": True,
+            "hold_ok": False,
+            "blocks_hold": True,
         }
     if state == "WEAKENED":
+        # WEAKENED != THESIS_INVALIDATION; no automatic WATCH/REDUCE/EXIT.
         return {
-            "pressure_state": "WATCH_TO_REDUCE",
-            "category": "THESIS_INVALIDATION",
+            "pressure_state": None,
+            "category": None,
             "reason_codes": ["THESIS_WEAKENED"],
             "opposing": [],
             "uncertainties": [],
             "evaluation": "EVALUATED",
-            "terminal": False,
+            "applicable": True,
+            "hold_ok": False,
+            "blocks_hold": True,
         }
-    # STABLE / STRENGTHENED → no sell pressure; positive for HOLD proof.
+    # STABLE / STRENGTHENED — no sell pressure; HOLD-positive when proven.
     return {
         "pressure_state": None,
         "category": None,
@@ -366,45 +369,9 @@ def _interpret_thesis(
         "opposing": [f"THESIS_{state}"],
         "uncertainties": [],
         "evaluation": "EVALUATED",
-        "terminal": False,
+        "applicable": True,
         "hold_ok": True,
-    }
-
-
-def _interpret_hard_risk(dim: Mapping[str, Any]) -> dict[str, Any]:
-    state = dim["state"]
-    incomplete = _eval_from_incomplete_state(state)
-    if incomplete is not None:
-        return {
-            "pressure_state": None,
-            "category": None,
-            "reason_codes": [f"HARD_RISK_{incomplete}"],
-            "opposing": [],
-            "uncertainties": [f"HARD_RISK_{incomplete}"],
-            "evaluation": incomplete,
-            "terminal": False,
-        }
-    if state == "CONFIRMED":
-        return {
-            "pressure_state": "EXIT",
-            "category": "RISK_EXIT",
-            "reason_codes": ["HARD_RISK_CONFIRMED"],
-            "opposing": [],
-            "uncertainties": [],
-            "evaluation": "EVALUATED",
-            "terminal": False,
-            "hard_exit": True,
-        }
-    # CLEAR
-    return {
-        "pressure_state": None,
-        "category": None,
-        "reason_codes": ["HARD_RISK_CLEAR"],
-        "opposing": ["HARD_RISK_CLEAR"],
-        "uncertainties": [],
-        "evaluation": "EVALUATED",
-        "terminal": False,
-        "hold_ok": True,
+        "blocks_hold": False,
     }
 
 
@@ -413,17 +380,9 @@ def _interpret_pressure_dim(
     *,
     category: str,
     prefix: str,
-    allow_exit: bool,
-    allow_not_applicable: bool,
-    strategy: str,
 ) -> dict[str, Any]:
     state = dim["state"]
     if state == "NOT_APPLICABLE":
-        if not allow_not_applicable:
-            raise SellEngineValidationError(
-                f"{prefix.lower()} state NOT_APPLICABLE is not allowed "
-                f"for strategy={strategy}"
-            )
         return {
             "pressure_state": None,
             "category": None,
@@ -431,9 +390,9 @@ def _interpret_pressure_dim(
             "opposing": [f"{prefix}_NOT_APPLICABLE"],
             "uncertainties": [],
             "evaluation": "EVALUATED",
-            "terminal": False,
-            "hold_ok": True,
             "applicable": False,
+            "hold_ok": True,
+            "blocks_hold": False,
         }
     incomplete = _eval_from_incomplete_state(state)
     if incomplete is not None:
@@ -444,8 +403,9 @@ def _interpret_pressure_dim(
             "opposing": [],
             "uncertainties": [f"{prefix}_{incomplete}"],
             "evaluation": incomplete,
-            "terminal": False,
             "applicable": True,
+            "hold_ok": False,
+            "blocks_hold": True,
         }
     if state == "NONE":
         return {
@@ -455,53 +415,40 @@ def _interpret_pressure_dim(
             "opposing": [f"{prefix}_NONE"],
             "uncertainties": [],
             "evaluation": "EVALUATED",
-            "terminal": False,
-            "hold_ok": True,
             "applicable": True,
+            "hold_ok": True,
+            "blocks_hold": False,
         }
-    if state == "EXIT" and not allow_exit:
-        # Dimension forbids EXIT alone → cap at REDUCE.
-        pressure = "REDUCE"
-        code = f"{prefix}_EXIT_CAPPED_TO_REDUCE"
-    else:
-        pressure = _pressure_to_sell_state(state)
-        code = f"{prefix}_{state}"
+    # WATCH / REDUCE / EXIT — pass through without silent downgrade.
+    pressure = _pressure_to_sell_state(state)
     return {
         "pressure_state": pressure,
         "category": category,
-        "reason_codes": [code],
+        "reason_codes": [f"{prefix}_{state}"],
         "opposing": [],
         "uncertainties": [],
         "evaluation": "EVALUATED",
-        "terminal": False,
         "applicable": True,
+        "hold_ok": False,
+        "blocks_hold": False,
     }
 
 
-def _interpret_catalyst(
-    dim: Mapping[str, Any],
-    *,
-    strategy: str,
-) -> dict[str, Any]:
+def _interpret_catalyst(dim: Mapping[str, Any]) -> dict[str, Any]:
     state = dim["state"]
     if state == "NOT_APPLICABLE":
-        # MEDIUM may declare catalyst not required; SHORT/SWING may not hide
-        # missing catalyst behind NOT_APPLICABLE.
-        if strategy == "MEDIUM":
-            return {
-                "pressure_state": None,
-                "category": None,
-                "reason_codes": ["CATALYST_NOT_APPLICABLE"],
-                "opposing": ["CATALYST_NOT_APPLICABLE"],
-                "uncertainties": [],
-                "evaluation": "EVALUATED",
-                "terminal": False,
-                "hold_ok": True,
-                "applicable": False,
-            }
-        raise SellEngineValidationError(
-            "catalyst.state NOT_APPLICABLE is only valid for MEDIUM"
-        )
+        # Applicability is upstream-owned for any strategy.
+        return {
+            "pressure_state": None,
+            "category": None,
+            "reason_codes": ["CATALYST_NOT_APPLICABLE"],
+            "opposing": ["CATALYST_NOT_APPLICABLE"],
+            "uncertainties": [],
+            "evaluation": "EVALUATED",
+            "applicable": False,
+            "hold_ok": True,
+            "blocks_hold": False,
+        }
     incomplete = _eval_from_incomplete_state(state)
     if incomplete is not None:
         return {
@@ -511,11 +458,12 @@ def _interpret_catalyst(
             "opposing": [],
             "uncertainties": [f"CATALYST_{incomplete}"],
             "evaluation": incomplete,
-            "terminal": False,
             "applicable": True,
+            "hold_ok": False,
+            "blocks_hold": True,
         }
     if state in ("NONE", "NOT_YET"):
-        # NOT_YET is not failure; NONE is clear. Both are HOLD-ok when required.
+        # NOT_YET is not failure; neither invents sell pressure.
         return {
             "pressure_state": None,
             "category": None,
@@ -523,151 +471,45 @@ def _interpret_catalyst(
             "opposing": [f"CATALYST_{state}"],
             "uncertainties": [],
             "evaluation": "EVALUATED",
-            "terminal": False,
-            "hold_ok": True,
             "applicable": True,
+            "hold_ok": True,
+            "blocks_hold": False,
         }
-    # FAILED → sell pressure. Not automatic full EXIT; REDUCE is the v0.1 floor.
-    # SHORT may escalate to EXIT (execution-horizon catalyst miss is material).
-    pressure = "EXIT" if strategy == "SHORT" else "REDUCE"
+    pressure = _pressure_to_sell_state(state)
     return {
         "pressure_state": pressure,
         "category": "CATALYST_FAILURE",
-        "reason_codes": ["CATALYST_FAILED"],
+        "reason_codes": [f"CATALYST_{state}"],
         "opposing": [],
         "uncertainties": [],
         "evaluation": "EVALUATED",
-        "terminal": False,
         "applicable": True,
+        "hold_ok": False,
+        "blocks_hold": False,
     }
 
 
-def _interpret_technical(
-    dim: Mapping[str, Any],
-    *,
-    strategy: str,
-) -> dict[str, Any]:
-    """Technical is a market-behavior sensor, not truth layer.
+def _pick_primary_for_state(
+    drivers: list[str],
+) -> tuple[str | None, str | None, list[str]]:
+    """Primary must come from reasons that drive final sell_state.
 
-    - SHORT: may contribute up to REDUCE (not thesis invalidation)
-    - SWING: timing gate → WATCH or REDUCE
-    - MEDIUM: alone cannot EXIT / THESIS_INVALIDATED; cap at WATCH
+    Multiple co-drivers: display tie-break only, explicitly non-semantic.
     """
-    state = dim["state"]
-    if state == "NOT_APPLICABLE":
-        return {
-            "pressure_state": None,
-            "category": None,
-            "reason_codes": ["TECHNICAL_NOT_APPLICABLE"],
-            "opposing": ["TECHNICAL_NOT_APPLICABLE"],
-            "uncertainties": [],
-            "evaluation": "EVALUATED",
-            "terminal": False,
-            "hold_ok": True,
-            "applicable": False,
-        }
-    incomplete = _eval_from_incomplete_state(state)
-    if incomplete is not None:
-        return {
-            "pressure_state": None,
-            "category": None,
-            "reason_codes": [f"TECHNICAL_{incomplete}"],
-            "opposing": [],
-            "uncertainties": [f"TECHNICAL_{incomplete}"],
-            "evaluation": incomplete,
-            "terminal": False,
-            "applicable": True,
-        }
-    if state == "NONE":
-        return {
-            "pressure_state": None,
-            "category": None,
-            "reason_codes": ["TECHNICAL_NONE"],
-            "opposing": ["TECHNICAL_NONE"],
-            "uncertainties": [],
-            "evaluation": "EVALUATED",
-            "terminal": False,
-            "hold_ok": True,
-            "applicable": True,
-        }
-
-    # Map raw pressure then strategy-cap.
-    raw = state  # WATCH | REDUCE | EXIT
-    if strategy == "MEDIUM":
-        # Medium: technical may only affect timing/scale, never alone exit.
-        capped = "WATCH"
-        code = f"TECHNICAL_{raw}_CAPPED_MEDIUM_WATCH"
-    elif strategy == "SWING":
-        if raw == "EXIT":
-            capped = "REDUCE"
-            code = "TECHNICAL_EXIT_CAPPED_SWING_REDUCE"
-        else:
-            capped = raw
-            code = f"TECHNICAL_{raw}"
-    else:  # SHORT
-        if raw == "EXIT":
-            capped = "REDUCE"
-            code = "TECHNICAL_EXIT_CAPPED_SHORT_REDUCE"
-        else:
-            capped = raw
-            code = f"TECHNICAL_{raw}"
-
-    return {
-        "pressure_state": _pressure_to_sell_state(capped)
-        if capped in ("WATCH", "REDUCE", "EXIT")
-        else None,
-        "category": "TECHNICAL_EXECUTION",
-        "reason_codes": [code],
-        "opposing": [],
-        "uncertainties": [],
-        "evaluation": "EVALUATED",
-        "terminal": False,
-        "applicable": True,
-    }
-
-
-def _interpret_opportunity_cost(
-    dim: Mapping[str, Any],
-    *,
-    strategy: str,
-) -> dict[str, Any]:
-    """Opportunity cost respects Replacement Hurdle + NO-TRADE ZONE.
-
-    v0.1 never lets opportunity cost alone produce EXIT.
-    """
-    return _interpret_pressure_dim(
-        dim,
-        category="OPPORTUNITY_COST",
-        prefix="OPPORTUNITY_COST",
-        allow_exit=False,
-        allow_not_applicable=False,
-        strategy=strategy,
-    )
-
-
-def _interpret_risk_reward(
-    dim: Mapping[str, Any],
-    *,
-    strategy: str,
-) -> dict[str, Any]:
-    """R/R below threshold is not mechanical EXIT."""
-    return _interpret_pressure_dim(
-        dim,
-        category="RISK_REWARD_DETERIORATION",
-        prefix="RISK_REWARD",
-        allow_exit=False,
-        allow_not_applicable=False,
-        strategy=strategy,
-    )
-
-
-def _pick_primary(categories: list[str]) -> str | None:
-    if not categories:
-        return None
-    for cat in _PRIMARY_PRECEDENCE:
-        if cat in categories:
-            return cat
-    return categories[0]
+    if not drivers:
+        return None, None, []
+    # Preserve first-seen order for co_driving list, unique.
+    ordered: list[str] = []
+    for d in drivers:
+        if d not in ordered:
+            ordered.append(d)
+    if len(ordered) == 1:
+        return ordered[0], "SOLE_DRIVER", ordered
+    # Display tie-break by fixed category order — not investment priority.
+    for cat in _DISPLAY_TIE_BREAK_ORDER:
+        if cat in ordered:
+            return cat, "DISPLAY_TIE_BREAK_NOT_SEMANTIC_PRIORITY", ordered
+    return ordered[0], "DISPLAY_TIE_BREAK_NOT_SEMANTIC_PRIORITY", ordered
 
 
 # ---------------------------------------------------------------------------
@@ -682,7 +524,7 @@ def project_sell_engine(
     campaign_id: str,
     as_of: str,
     thesis: Mapping[str, Any],
-    hard_risk: Mapping[str, Any],
+    risk_exit: Mapping[str, Any],
     expectation_price_in: Mapping[str, Any],
     risk_reward: Mapping[str, Any],
     catalyst: Mapping[str, Any],
@@ -692,6 +534,9 @@ def project_sell_engine(
 ) -> dict[str, Any]:
     """Project Campaign-scoped sell-side state from normalized inputs.
 
+    ``risk_exit`` is the normalized sell-pressure / consequence input owned by
+    future Hard Risk / Action Envelope authority — not raw hard-risk state.
+
     Returns a detached dict. Never mutates inputs. Never reads wall clock.
     """
     sec = _require_security_code(security_code)
@@ -700,7 +545,7 @@ def project_sell_engine(
     as_of_s = _require_as_of(as_of)
 
     thesis_i = _require_dim(thesis, "thesis", THESIS_INPUT_STATES)
-    risk_i = _require_dim(hard_risk, "hard_risk", HARD_RISK_INPUT_STATES)
+    risk_i = _require_dim(risk_exit, "risk_exit", PRESSURE_INPUT_STATES)
     exp_i = _require_dim(
         expectation_price_in, "expectation_price_in", PRESSURE_INPUT_STATES
     )
@@ -716,57 +561,50 @@ def project_sell_engine(
         technical_execution, "technical_execution", PRESSURE_INPUT_STATES
     )
 
-    # Reject NOT_APPLICABLE on dimensions that are always baseline-required.
-    for label, dim in (
-        ("expectation_price_in", exp_i),
-        ("risk_reward", rr_i),
-        ("portfolio_rebalance", port_i),
-        ("opportunity_cost", opp_i),
-    ):
-        if dim["state"] == "NOT_APPLICABLE":
-            raise SellEngineValidationError(
-                f"{label}.state NOT_APPLICABLE is not valid in sell engine v0.1"
-            )
-
     interpretations: dict[str, dict[str, Any]] = {
         "thesis": _interpret_thesis(thesis_i),
-        "hard_risk": _interpret_hard_risk(risk_i),
+        "risk_exit": _interpret_pressure_dim(
+            risk_i, category="RISK_EXIT", prefix="RISK_EXIT"
+        ),
         "expectation_price_in": _interpret_pressure_dim(
             exp_i,
             category="EXPECTATION_PRICE_IN",
             prefix="EXPECTATION_PRICE_IN",
-            allow_exit=True,
-            allow_not_applicable=False,
-            strategy=strat,
         ),
-        "risk_reward": _interpret_risk_reward(rr_i, strategy=strat),
-        "catalyst": _interpret_catalyst(cat_i, strategy=strat),
+        "risk_reward": _interpret_pressure_dim(
+            rr_i,
+            category="RISK_REWARD_DETERIORATION",
+            prefix="RISK_REWARD",
+        ),
+        "catalyst": _interpret_catalyst(cat_i),
         "portfolio_rebalance": _interpret_pressure_dim(
             port_i,
             category="PORTFOLIO_REBALANCE",
             prefix="PORTFOLIO_REBALANCE",
-            allow_exit=True,
-            allow_not_applicable=False,
-            strategy=strat,
         ),
-        "opportunity_cost": _interpret_opportunity_cost(opp_i, strategy=strat),
-        "technical_execution": _interpret_technical(tech_i, strategy=strat),
+        "opportunity_cost": _interpret_pressure_dim(
+            opp_i,
+            category="OPPORTUNITY_COST",
+            prefix="OPPORTUNITY_COST",
+        ),
+        "technical_execution": _interpret_pressure_dim(
+            tech_i,
+            category="TECHNICAL_EXECUTION",
+            prefix="TECHNICAL",
+        ),
     }
 
-    # MEDIUM technical-only cannot produce EXIT/THESIS_INVALIDATED — already
-    # capped inside interpreter. Additional guard: if the ONLY pressure
-    # category is TECHNICAL_EXECUTION on MEDIUM, force cap at WATCH_TO_REDUCE.
-    # (Already capped per-signal; keep for multi-code same category.)
-
     sell_state: str | None = None
-    categories_present: list[str] = []
     reason_codes: list[str] = []
     supporting: list[str] = []
     opposing: list[str] = []
     uncertainties: list[str] = []
     evaluation = "EVALUATED"
-    hold_positive_dims: list[str] = []
-    required_incomplete = False
+    # Drivers: (category, pressure_state) that contribute sell pressure.
+    pressure_drivers: list[tuple[str, str]] = []
+
+    hold_blocked = False
+    all_hold_ok = True
 
     for key in _DIMENSIONS:
         inter = interpretations[key]
@@ -780,75 +618,68 @@ def project_sell_engine(
             if code not in uncertainties:
                 uncertainties.append(code)
         evaluation = _max_eval(evaluation, inter["evaluation"])
-        if inter.get("hold_ok"):
-            hold_positive_dims.append(key)
-        if inter["evaluation"] != "EVALUATED" and inter.get("applicable", True):
-            # Applicable incomplete dimension blocks HOLD positive proof.
-            required_incomplete = True
+
+        if inter.get("blocks_hold"):
+            hold_blocked = True
+            all_hold_ok = False
+        elif not inter.get("hold_ok"):
+            # Pressure dimensions with active pressure are not hold_ok.
+            all_hold_ok = False
+
         cat = inter.get("category")
         pressure = inter.get("pressure_state")
         if cat and pressure is not None:
-            if cat not in categories_present:
-                categories_present.append(cat)
             if cat not in supporting:
                 supporting.append(cat)
+            pressure_drivers.append((cat, pressure))
             sell_state = _max_state(sell_state, pressure)
 
-    # Forced terminal / hard exit already reflected via pressure_state.
+    # Final sell_state first; primary from drivers of that state only.
+    final_state = sell_state
+    drivers_for_final: list[str] = []
+    if final_state is not None:
+        for cat, pressure in pressure_drivers:
+            if pressure == final_state:
+                drivers_for_final.append(cat)
 
-    primary_reason = _pick_primary(categories_present)
+    primary_reason, primary_selection, co_driving = _pick_primary_for_state(
+        drivers_for_final
+    )
 
-    # HOLD positive proof: all applicable required dimensions evaluated clear,
-    # no sell pressure, evaluation fully EVALUATED.
+    # HOLD positive proof: every provided dimension is either
+    # authority-backed clean applicable, or authority-backed NOT_APPLICABLE;
+    # no unresolved applicable dimension; no sell pressure.
     hold_positive_proof = False
-    if sell_state is None and not required_incomplete and evaluation == "EVALUATED":
-        # Required dimensions for HOLD:
-        # thesis + hard_risk + expectation + risk_reward + portfolio + opportunity
-        # + catalyst (unless NOT_APPLICABLE on MEDIUM)
-        # + technical (NONE or NOT_APPLICABLE)
-        required_keys = [
-            "thesis",
-            "hard_risk",
-            "expectation_price_in",
-            "risk_reward",
-            "portfolio_rebalance",
-            "opportunity_cost",
-            "catalyst",
-            "technical_execution",
-        ]
+    if (
+        final_state is None
+        and not hold_blocked
+        and all_hold_ok
+        and evaluation == "EVALUATED"
+    ):
         hold_positive_proof = all(
-            interpretations[k].get("hold_ok") for k in required_keys
+            interpretations[k].get("hold_ok") for k in _DIMENSIONS
         )
         if hold_positive_proof:
-            sell_state = "HOLD"
+            final_state = "HOLD"
             if "HOLD_POSITIVE_PROOF" not in reason_codes:
                 reason_codes.append("HOLD_POSITIVE_PROOF")
 
-    # Incomplete without any confirmed sell pressure → must not emit HOLD.
-    if sell_state is None:
-        # Domain state cannot be asserted as HOLD; leave null and surface eval.
-        sell_state_out: str | None = None
-    else:
-        sell_state_out = sell_state
-
-    # Supporting reasons = all pressure categories; primary is one of them.
-    # Keep supporting as full cumulative set (primary is not removed).
     if primary_reason and primary_reason not in supporting:
         supporting.insert(0, primary_reason)
 
-    # Authority refs: own + all input refs (deterministic order by dimension).
     authority_refs: list[str] = [AUTHORITY_REF]
-    for key, dim in (
-        ("thesis", thesis_i),
-        ("hard_risk", risk_i),
-        ("expectation_price_in", exp_i),
-        ("risk_reward", rr_i),
-        ("catalyst", cat_i),
-        ("portfolio_rebalance", port_i),
-        ("opportunity_cost", opp_i),
-        ("technical_execution", tech_i),
-    ):
-        for ref in dim["authority_refs"]:
+    input_dims = {
+        "thesis": thesis_i,
+        "risk_exit": risk_i,
+        "expectation_price_in": exp_i,
+        "risk_reward": rr_i,
+        "catalyst": cat_i,
+        "portfolio_rebalance": port_i,
+        "opportunity_cost": opp_i,
+        "technical_execution": tech_i,
+    }
+    for key in _DIMENSIONS:
+        for ref in input_dims[key]["authority_refs"]:
             if ref not in authority_refs:
                 authority_refs.append(ref)
 
@@ -856,19 +687,11 @@ def project_sell_engine(
     for key in _DIMENSIONS:
         inter = interpretations[key]
         dimension_views[key] = {
-            "input_state": {
-                "thesis": thesis_i,
-                "hard_risk": risk_i,
-                "expectation_price_in": exp_i,
-                "risk_reward": rr_i,
-                "catalyst": cat_i,
-                "portfolio_rebalance": port_i,
-                "opportunity_cost": opp_i,
-                "technical_execution": tech_i,
-            }[key]["state"],
+            "input_state": input_dims[key]["state"],
             "pressure_state": inter.get("pressure_state"),
             "category": inter.get("category"),
             "evaluation": inter["evaluation"],
+            "applicable": inter.get("applicable"),
             "reason_codes": list(inter.get("reason_codes", [])),
         }
 
@@ -879,9 +702,11 @@ def project_sell_engine(
         "strategy": strat,
         "campaign_id": camp,
         "as_of": as_of_s,
-        "sell_state": sell_state_out,
+        "sell_state": final_state,
         "sell_evaluation": evaluation,
         "primary_reason": primary_reason,
+        "primary_reason_selection": primary_selection,
+        "co_driving_reasons": list(co_driving),
         "reason_codes": list(reason_codes),
         "supporting_reasons": list(supporting),
         "opposing_reasons": list(opposing),
@@ -890,5 +715,4 @@ def project_sell_engine(
         "authority_refs": list(authority_refs),
         "dimensions": dimension_views,
     }
-    # Detach nested structures from any caller-owned input aliases.
     return copy.deepcopy(result)
