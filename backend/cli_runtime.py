@@ -355,11 +355,28 @@ def _run_cli_impl(kind, system_prompt, user_prompt, *, via_http, cancel_event):
         proc = subprocess.Popen([bin_path, *args], **popen_kwargs)
 
         if stdin_payload is not None:
-            try:
-                proc.stdin.write(stdin_payload)
-            except BrokenPipeError:
-                pass
-        if proc.stdin is not None:
+            # deadline 覆盖 stdin delivery：写入放独立线程，主线程用总 wall-clock
+            # 截止时间兜底——CLI 不读 stdin 时 write 会阻塞，不能卡死在主线程。
+            def _write_stdin():
+                try:
+                    proc.stdin.write(stdin_payload)
+                except (BrokenPipeError, OSError):
+                    pass
+                finally:
+                    try:
+                        proc.stdin.close()
+                    except OSError:
+                        pass
+
+            writer = threading.Thread(
+                target=_write_stdin,
+                name=f"vibe-cli-{kind}-stdin",
+                daemon=True,
+            )
+            writer.start()
+            writer.join(timeout=CLI_TOTAL_DEADLINE_SECONDS)
+            stdin_closed = True
+        elif proc.stdin is not None:
             proc.stdin.close()
             stdin_closed = True
 
