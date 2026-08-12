@@ -21,3 +21,7 @@ def pytest_configure(config):
         "markers",
         "live: 打真实数据源的网络冒烟测（会联网、可能受上游/限流影响；默认可 -m 'not live' 跳过）",
     )
+    # P0-SEC2 临时取证：任何测试挂起超过 300 秒即 dump 全线程栈并退出（定位 CI runner 失联根因，找到后移除）
+    import faulthandler
+
+    faulthandler.dump_traceback_later(420, exit=True, file=sys.stderr)
