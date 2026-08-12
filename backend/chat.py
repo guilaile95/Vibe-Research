@@ -262,7 +262,7 @@ def run_chat_cli(cfg: dict, user_messages: list, context: str = "") -> dict:
     kind = provider[4:] if provider.startswith("cli-") else provider
     system = SYSTEM_PROMPT.format(context=context or "（无）")
     user = "\n\n".join(m.get("content", "") for m in user_messages if m.get("content")) or "（无问题）"
-    content = cli_runtime.run_cli(kind, system, user)
+    content = cli_runtime.run_cli(kind, system, user, via_http=True)
     return {"content": content, "trace": [], "rounds": 1}
 
 
@@ -389,6 +389,7 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
             kind,
             system,
             user,
+            via_http=True,
             cancel_event=cfg.get("_cancel_event"),
         ):
             yield {"type": "delta", "text": chunk}
@@ -479,6 +480,6 @@ def run_chat_cli_stream(cfg: dict, user_messages: list, context: str = ""):
     kind = provider[4:] if provider.startswith("cli-") else provider
     system = SYSTEM_PROMPT.format(context=context or "（无）")
     user = "\n\n".join(m.get("content", "") for m in user_messages if m.get("content")) or "（无问题）"
-    for chunk in cli_runtime.run_cli_stream(kind, system, user):
+    for chunk in cli_runtime.run_cli_stream(kind, system, user, via_http=True):
         yield {"type": "delta", "text": chunk}
     yield {"type": "done", "trace": [], "rounds": 1}

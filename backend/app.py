@@ -292,6 +292,12 @@ def _require_llm_ready(llm: LLMConfig) -> bool:
     is_cli = (llm.provider or "").startswith("cli-")
     if is_cli:
         kind = llm.provider[4:]
+        # P0-SEC2：HTTP 可达 CLI 执行门在 CLI 存在性检查之前（fail-closed），
+        # 未授权直接 403，不泄露本机是否安装了某 CLI。
+        try:
+            cli_runtime.assert_http_cli_authorized(kind)
+        except cli_runtime.CliExecutionDisabled as e:
+            raise HTTPException(403, str(e)) from None
         if not cli_runtime.detect_cli(kind):
             raise HTTPException(
                 400,
@@ -978,6 +984,13 @@ def decision_cockpit_generate(req: TomorrowPlanGenerateIn):
     """
     try:
         cfg = req.llm.model_dump() if req.llm else None
+        # P0-SEC2：本路由不走 _require_llm_ready，cli-* 需在此显式过执行门。
+        # 未授权直接 403（CLI_EXECUTION_DISABLED），禁止静默回退确定性文本伪装成功。
+        if cfg and (cfg.get("provider") or "").startswith("cli-"):
+            try:
+                cli_runtime.assert_http_cli_authorized(cfg["provider"][4:])
+            except cli_runtime.CliExecutionDisabled as e:
+                raise HTTPException(403, str(e)) from None
         result = generate_tomorrow_plan(req.trade_date, cfg=cfg, force=req.force)
         return {"data": result}
     except DecisionCockpitMarketDataError as e:
