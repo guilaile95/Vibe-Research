@@ -375,6 +375,78 @@ def _collect_two_pass(
     return "VALID", first_s, first_at_s, second_s, second_at_s, None
 
 
+def _unknown_policy_result(
+    *,
+    version: str,
+    sec: str,
+    strat: str,
+    camp: str,
+    dec: str,
+    as_of_s: str,
+    requirement: str,
+    req_refs: list[str],
+) -> dict[str, Any]:
+    """Policy-independent fail-closed path. Never applies v0.1 packet rules."""
+    reason_codes = ["POLICY_VERSION_NOT_AVAILABLE"]
+    if requirement == "UNKNOWN":
+        reason_codes.append("CHALLENGE_REQUIREMENT_UNKNOWN")
+    elif requirement == "NOT_EVALUATED":
+        reason_codes.append("CHALLENGE_REQUIREMENT_NOT_EVALUATED")
+    elif requirement == "ERROR":
+        reason_codes.append("CHALLENGE_REQUIREMENT_ERROR")
+
+    authority_refs = [AUTHORITY_REF]
+    for ref in req_refs:
+        if ref not in authority_refs:
+            authority_refs.append(ref)
+
+    result = {
+        "schema_version": SCHEMA_VERSION,
+        "authority_ref": AUTHORITY_REF,
+        "policy_version": version,
+        "policy_authority_ref": None,
+        "security_code": sec,
+        "strategy": strat,
+        "campaign_id": camp,
+        "decision_id": dec,
+        "as_of": as_of_s,
+        "challenge_requirement": requirement,
+        "challenge_packet_state": "INCOMPLETE",
+        "challenge_evaluation": "NOT_EVALUATED",
+        "dimension_results": {},
+        "covered_dimensions": [],
+        "unknown_dimensions": [],
+        "incomplete_dimensions": [],
+        "two_pass_state": "INCOMPLETE",
+        "first_pass_ref": None,
+        "first_pass_at": None,
+        "second_pass_ref": None,
+        "second_pass_at": None,
+        "reason_codes": reason_codes,
+        "challenge_requirement_authority_refs": list(req_refs),
+        "authority_refs": authority_refs,
+        "explainability": {
+            "why_this_state": (
+                f"challenge_requirement={requirement}; "
+                "challenge_packet_state=INCOMPLETE; "
+                "challenge_evaluation=NOT_EVALUATED; "
+                f"reasons={','.join(reason_codes)}"
+            ),
+            "required_dimensions": [],
+            "note": (
+                "POLICY_SEMANTICS_APPLIED=NO; "
+                "POLICY_VERSION_NOT_AVAILABLE; "
+                "NO_IMPLICIT_V01_PACKET; "
+                "CHALLENGE_COVERAGE_NE_DECISION_CORRECTNESS; "
+                "CHALLENGE_COVERAGE_NE_DECISION_APPROVAL; "
+                "DC1_DECIDES_IMPORTANCE=NO; "
+                "UPSTREAM_AUTHORITY_BINDING_VERIFIED=NO"
+            ),
+        },
+    }
+    return copy.deepcopy(result)
+
+
 def project_decision_challenge(
     *,
     security_code: str,
@@ -395,7 +467,8 @@ def project_decision_challenge(
 
     ``challenge_requirement`` is an explicit upstream input. DC1 never infers
     REQUIRED from BUY/SELL vocabulary. ``policy_version`` is required
-    (no default / latest / as_of selection).
+    (no default / latest / as_of selection). Unknown well-formed policy
+    versions never apply v0.1 packet semantics.
     """
     sec = _require_security_code(security_code)
     strat = _require_strategy(strategy)
@@ -411,11 +484,20 @@ def project_decision_challenge(
         "challenge_requirement_authority_refs",
     )
 
-    reason_codes: list[str] = []
     policy_ref = _POLICY_REGISTRY.get(version)
     if policy_ref is None:
-        reason_codes.append("POLICY_VERSION_NOT_AVAILABLE")
+        return _unknown_policy_result(
+            version=version,
+            sec=sec,
+            strat=strat,
+            camp=camp,
+            dec=dec,
+            as_of_s=as_of_s,
+            requirement=requirement,
+            req_refs=req_refs,
+        )
 
+    reason_codes: list[str] = []
     packet_needed = requirement == "REQUIRED"
     dims = _normalize_dimension_results(dimension_results, required=packet_needed)
     two_pass_state, first_s, first_at_s, second_s, second_at_s, two_pass_reason = (
@@ -454,8 +536,8 @@ def project_decision_challenge(
             error_dims.append(dim)
             reason_codes.append(_REASON_BY_DIMENSION_STATE[(dim, ev)])
 
-    # Requirement uncertainty must not collapse to NOT_APPLICABLE.
-    if requirement == "NOT_REQUIRED" and policy_ref is not None:
+    # Known-policy packet semantics only. Unknown policy returns earlier.
+    if requirement == "NOT_REQUIRED":
         packet_state = "NOT_APPLICABLE"
         evaluation = "EVALUATED"
         reason_codes.append("CHALLENGE_NOT_REQUIRED")
@@ -471,9 +553,6 @@ def project_decision_challenge(
         packet_state = "INCOMPLETE"
         evaluation = "ERROR"
         reason_codes.append("CHALLENGE_REQUIREMENT_ERROR")
-    elif policy_ref is None:
-        packet_state = "INCOMPLETE"
-        evaluation = "NOT_EVALUATED"
     elif error_dims:
         packet_state = "INCOMPLETE"
         evaluation = "ERROR"

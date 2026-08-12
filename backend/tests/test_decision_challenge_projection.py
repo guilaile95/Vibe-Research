@@ -503,3 +503,124 @@ def test_reload_pure():
     out = _project()
     assert out["schema_version"] == dc.SCHEMA_VERSION
     assert out["challenge_packet_state"] == "COMPLETE"
+
+
+# ---------------------------------------------------------------------------
+# R1: unknown policy must not apply v0.1 packet semantics
+# ---------------------------------------------------------------------------
+
+
+def test_r1_a_unknown_policy_required_no_packet_not_evaluated():
+    out = _project(
+        policy_version="dc.decision_challenge.v9.9",
+        challenge_requirement="REQUIRED",
+        dimension_results=None,
+        first_pass_ref=None,
+        first_pass_at=None,
+        second_pass_ref=None,
+        second_pass_at=None,
+    )
+    assert out["challenge_evaluation"] == "NOT_EVALUATED"
+    assert out["challenge_packet_state"] == "INCOMPLETE"
+    assert "POLICY_VERSION_NOT_AVAILABLE" in out["reason_codes"]
+    assert "TWO_PASS_INCOMPLETE" not in out["reason_codes"]
+    assert "CHALLENGE_PACKET_COMPLETE" not in out["reason_codes"]
+
+
+def test_r1_b_unknown_policy_complete_looking_packet_still_not_evaluated():
+    out = _project(policy_version="dc.unknown")
+    assert out["challenge_evaluation"] == "NOT_EVALUATED"
+    assert out["challenge_packet_state"] == "INCOMPLETE"
+    assert out["challenge_packet_state"] != "COMPLETE"
+    assert "CHALLENGE_PACKET_COMPLETE" not in out["reason_codes"]
+    assert "CHALLENGE_PACKET_COVERED_WITH_UNKNOWN" not in out["reason_codes"]
+
+
+def test_r1_c_unknown_policy_unknown_requirement_cumulative():
+    out = _project(
+        policy_version="dc.unknown",
+        challenge_requirement="UNKNOWN",
+        dimension_results=None,
+        first_pass_ref=None,
+        first_pass_at=None,
+        second_pass_ref=None,
+        second_pass_at=None,
+    )
+    assert out["challenge_evaluation"] == "NOT_EVALUATED"
+    assert out["reason_codes"] == [
+        "POLICY_VERSION_NOT_AVAILABLE",
+        "CHALLENGE_REQUIREMENT_UNKNOWN",
+    ]
+    assert out["challenge_requirement"] == "UNKNOWN"
+
+
+def test_r1_d_unknown_policy_not_evaluated_requirement_cumulative():
+    out = _project(
+        policy_version="dc.unknown",
+        challenge_requirement="NOT_EVALUATED",
+        dimension_results=None,
+        first_pass_ref=None,
+        first_pass_at=None,
+        second_pass_ref=None,
+        second_pass_at=None,
+    )
+    assert out["challenge_evaluation"] == "NOT_EVALUATED"
+    assert out["reason_codes"] == [
+        "POLICY_VERSION_NOT_AVAILABLE",
+        "CHALLENGE_REQUIREMENT_NOT_EVALUATED",
+    ]
+
+
+def test_r1_e_unknown_policy_error_requirement_preserves_error_reason():
+    out = _project(
+        policy_version="dc.unknown",
+        challenge_requirement="ERROR",
+        dimension_results=None,
+        first_pass_ref=None,
+        first_pass_at=None,
+        second_pass_ref=None,
+        second_pass_at=None,
+    )
+    assert out["challenge_evaluation"] == "NOT_EVALUATED"
+    assert out["reason_codes"] == [
+        "POLICY_VERSION_NOT_AVAILABLE",
+        "CHALLENGE_REQUIREMENT_ERROR",
+    ]
+    assert out["challenge_requirement"] == "ERROR"
+
+
+def test_r1_f_unknown_policy_not_required_not_not_applicable():
+    out = _project(
+        policy_version="dc.unknown",
+        challenge_requirement="NOT_REQUIRED",
+        dimension_results=None,
+        first_pass_ref=None,
+        first_pass_at=None,
+        second_pass_ref=None,
+        second_pass_at=None,
+    )
+    assert out["challenge_evaluation"] == "NOT_EVALUATED"
+    assert out["challenge_packet_state"] == "INCOMPLETE"
+    assert out["challenge_packet_state"] != "NOT_APPLICABLE"
+    assert out["challenge_requirement"] == "NOT_REQUIRED"
+    assert "CHALLENGE_NOT_REQUIRED" not in out["reason_codes"]
+
+
+def test_r1_g_unknown_policy_does_not_expose_v01_required_dimensions():
+    out = _project(
+        policy_version="dc.unknown",
+        dimension_results=None,
+        first_pass_ref=None,
+        first_pass_at=None,
+        second_pass_ref=None,
+        second_pass_at=None,
+    )
+    assert out["explainability"]["required_dimensions"] == []
+    assert "POLICY_SEMANTICS_APPLIED=NO" in out["explainability"]["note"]
+    assert "NO_IMPLICIT_V01_PACKET" in out["explainability"]["note"]
+
+
+def test_r1_h_unknown_policy_never_packet_complete():
+    out = _project(policy_version="dc.unknown")
+    assert "CHALLENGE_PACKET_COMPLETE" not in out["reason_codes"]
+    assert out["challenge_packet_state"] != "COMPLETE"

@@ -117,13 +117,37 @@ a Review System. `second_pass_ref` is a structural witness only.
 | REQUIRED + any ERROR | INCOMPLETE | ERROR |
 | REQUIRED + Two-Pass missing | INCOMPLETE | NOT_EVALUATED |
 | NOT_REQUIRED | NOT_APPLICABLE | EVALUATED |
-| Requirement UNKNOWN / NOT_EVALUATED / ERROR | INCOMPLETE | preserved |
-| Unknown policy | INCOMPLETE | NOT_EVALUATED |
+| Requirement UNKNOWN / NOT_EVALUATED / ERROR (known policy) | INCOMPLETE | preserved |
+| Unknown well-formed policy | INCOMPLETE | NOT_EVALUATED |
 
 COMPLETE means structurally covered, not safe / correct / approved.
 
 Reasons accumulate. Policy version is explicit
 (`dc.decision_challenge.v0.1`); no implicit latest.
+
+## Unknown policy (no v0.1 packet fallback)
+
+Policy-independent validation only: identity, `as_of`, `policy_version`
+syntax, `challenge_requirement` enum, requirement authority refs.
+
+If `policy_version` is well-formed but unknown:
+
+```text
+challenge_packet_state = INCOMPLETE
+challenge_evaluation   = NOT_EVALUATED
+policy_authority_ref   = None
+POLICY_SEMANTICS_APPLIED = NO
+```
+
+Do **not** apply v0.1 four dimensions or Two-Pass structure. Optional
+caller packet inputs are ignored for completeness. Never emit
+`CHALLENGE_PACKET_COMPLETE` / `CHALLENGE_PACKET_COVERED_WITH_UNKNOWN`.
+`explainability.required_dimensions` is `[]`.
+
+`challenge_requirement` is preserved. Requirement reasons accumulate
+(`CHALLENGE_REQUIREMENT_UNKNOWN` / `_NOT_EVALUATED` / `_ERROR`).
+Unknown policy + `NOT_REQUIRED` is still `INCOMPLETE` / `NOT_EVALUATED`,
+never `NOT_APPLICABLE`.
 
 ## Explicit non-goals
 
