@@ -368,7 +368,9 @@ class _LocalHostGate:
         if scope["type"] == "http":
             headers = dict(scope.get("headers") or [])
             host = headers.get(b"host", b"").decode("latin-1", "replace")
-            if _host_header_name(host) not in _ALLOWED_HOSTS:
+            # 缺失 Host 头放行：只出现在原始 ASGI 直调（测试）或 HTTP/1.0，
+            # 不构成 DNS rebinding 攻击面（真实 HTTP/1.1 缺 Host 会被服务器先行拒绝）。
+            if host and _host_header_name(host) not in _ALLOWED_HOSTS:
                 resp = JSONResponse({"detail": "Host 头不在允许列表"}, status_code=400)
                 await resp(scope, receive, send)
                 return

@@ -351,3 +351,37 @@ def test_host_gate_accepts_local_hosts():
 def test_host_gate_trusted_extra_host(monkeypatch):
     monkeypatch.setattr(app_module, "_ALLOWED_HOSTS", app_module._ALLOWED_HOSTS | {"vrhost.lan"})
     assert client.get("/api/health", headers={"host": "vrhost.lan"}).status_code == 200
+
+
+def test_missing_host_header_passes_gate():
+    """原始 ASGI 直调（无 Host 头）不触发 Host gate：缺 Host 不构成 rebinding 攻击面。"""
+    import asyncio
+
+    async def exercise() -> int:
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/api/health",
+            "raw_path": b"/api/health",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [],  # 故意不带 Host
+            "client": ("127.0.0.1", 1),
+            "server": ("testserver", 80),
+            "state": {},
+        }
+        messages: list[dict] = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            messages.append(message)
+
+        await app_module.app(scope, receive, send)
+        return next(m["status"] for m in messages if m["type"] == "http.response.start")
+
+    assert asyncio.run(exercise()) == 200
