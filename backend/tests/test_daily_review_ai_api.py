@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import threading
 import time
@@ -682,7 +683,14 @@ def test_analyze_cli_disconnect_without_more_output_reaps_immediately(monkeypatc
     monkeypatch.setattr(
         chat_layer, "prepare_daily_review_analysis", MagicMock(return_value=_prepared())
     )
-    monkeypatch.setattr(cli_runtime, "_CLI_TIMEOUT_S", 3)
+    # P0-SEC2：模拟已 opt-in + 鉴权 + fake provider 已证明 text-only 的部署
+    monkeypatch.setattr(cli_runtime, "VR_ENABLE_LOCAL_CLI", True)
+    monkeypatch.setattr(cli_runtime, "VR_API_KEY", "test-key")
+    monkeypatch.setitem(
+        cli_runtime.CLI_SECURITY_CAPABILITIES, "fake",
+        {"text_only_proven": True, "proof_mode": "TEST", "http_allowed": True},
+    )
+    monkeypatch.setattr(cli_runtime, "CLI_TOTAL_DEADLINE_SECONDS", 3)
     monkeypatch.setitem(cli_runtime._CLI_DEFS, "fake", {
         "bins": [sys.executable],
         "delivery": "stdin",
@@ -696,6 +704,9 @@ def test_analyze_cli_disconnect_without_more_output_reaps_immediately(monkeypatc
     captured = {}
 
     def capture_popen(*args, **kwargs):
+        argv = args[0] if args else []
+        if argv and os.path.basename(str(argv[0])).lower().startswith("taskkill"):
+            return real_popen(*args, **kwargs)  # 树终止系统调用：不捕获
         proc = real_popen(*args, **kwargs)
         captured["proc"] = proc
         return proc

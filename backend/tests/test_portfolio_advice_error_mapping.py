@@ -41,6 +41,13 @@ def test_legal_cli_llm_enters_service(monkeypatch):
     monkeypatch.setattr(app_module.portfolio_advice_service, "generate_portfolio_advice", gen)
     # 不依赖本机是否真的安装了 CLI
     monkeypatch.setattr(app_module.cli_runtime, "detect_cli", lambda _kind: "/usr/bin/claude")
+    # P0-SEC2：模拟已 opt-in + 鉴权 + claude 已证明 text-only 的部署
+    monkeypatch.setattr(app_module.cli_runtime, "VR_ENABLE_LOCAL_CLI", True)
+    monkeypatch.setattr(app_module.cli_runtime, "VR_API_KEY", "test-key")
+    monkeypatch.setitem(
+        app_module.cli_runtime.CLI_SECURITY_CAPABILITIES, "claude",
+        {"text_only_proven": True, "proof_mode": "TEST", "http_allowed": True},
+    )
     r = client.post("/api/portfolio/advice", json={"user_request": None, "llm": _CLI_LLM})
     assert r.status_code == 200
     assert gen.call_args[0][0]["provider"] == "cli-claude"
@@ -166,6 +173,13 @@ def test_missing_model_400(monkeypatch):
 def test_cli_not_installed_400(monkeypatch):
     gen = MagicMock(return_value={"schema_version": "portfolio-advice-v0.1"})
     monkeypatch.setattr(app_module.portfolio_advice_service, "generate_portfolio_advice", gen)
+    # P0-SEC2：先满足执行门（opt-in + 鉴权 + proven），再验证「已授权但 CLI 未安装 → 400」
+    monkeypatch.setattr(app_module.cli_runtime, "VR_ENABLE_LOCAL_CLI", True)
+    monkeypatch.setattr(app_module.cli_runtime, "VR_API_KEY", "test-key")
+    monkeypatch.setitem(
+        app_module.cli_runtime.CLI_SECURITY_CAPABILITIES, "claude",
+        {"text_only_proven": True, "proof_mode": "TEST", "http_allowed": True},
+    )
     monkeypatch.setattr(app_module.cli_runtime, "detect_cli", lambda _kind: None)
     r = client.post("/api/portfolio/advice", json={"user_request": None, "llm": _CLI_LLM})
     assert r.status_code == 400

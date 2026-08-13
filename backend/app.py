@@ -298,6 +298,12 @@ def _require_llm_ready(llm: LLMConfig) -> bool:
     is_cli = (llm.provider or "").startswith("cli-")
     if is_cli:
         kind = llm.provider[4:]
+        # P0-SEC2：HTTP 可达 CLI 执行门在 CLI 存在性检查之前（fail-closed），
+        # 未授权直接 403，不泄露本机是否安装了某 CLI。
+        try:
+            cli_runtime.assert_http_cli_authorized(kind)
+        except cli_runtime.CliExecutionDisabled as e:
+            raise HTTPException(403, str(e)) from None
         if not cli_runtime.detect_cli(kind):
             raise HTTPException(
                 400,
@@ -328,16 +334,28 @@ def chat(req: ChatReq):
     is_cli = _require_llm_ready(req.llm)
 
     cfg = req.llm.model_dump()
+    # P0-SEC2：CLI 订阅接入需要 ASGI disconnect → cancel 传播（与 /api/daily-review/analyze 对齐）。
+    # run_chat_cli_stream 把 cancel_event 传给 cli_runtime.run_cli_stream，disconnect 时
+    # 终止进程树并清理；API 路径忽略 _cancel_event，语义不变。
+    disconnect_event = threading.Event()
+    cfg["_cancel_event"] = disconnect_event
 
     def gen():
         try:
             events = (chat_layer.run_chat_cli_stream if is_cli else chat_layer.run_chat_stream)(cfg, req.messages, req.context)
             for ev in events:
+                if disconnect_event.is_set():
+                    return
                 yield json.dumps(ev, ensure_ascii=False) + "\n"
         except Exception as e:  # noqa: BLE001 — 运行时错误以流内事件上报，不中断连接
-            yield json.dumps({"type": "error", "message": f"对话失败：{e}"}, ensure_ascii=False) + "\n"
+            if not disconnect_event.is_set():
+                yield json.dumps({"type": "error", "message": f"对话失败：{e}"}, ensure_ascii=False) + "\n"
 
-    return StreamingResponse(gen(), media_type="application/x-ndjson")
+    return _DisconnectAwareStreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        disconnect_event=disconnect_event,
+    )
 
 
 def _reject_bool_str(v, field: str) -> None:
@@ -984,6 +1002,13 @@ def decision_cockpit_generate(req: TomorrowPlanGenerateIn):
     """
     try:
         cfg = req.llm.model_dump() if req.llm else None
+        # P0-SEC2：本路由不走 _require_llm_ready，cli-* 需在此显式过执行门。
+        # 未授权直接 403（CLI_EXECUTION_DISABLED），禁止静默回退确定性文本伪装成功。
+        if cfg and (cfg.get("provider") or "").startswith("cli-"):
+            try:
+                cli_runtime.assert_http_cli_authorized(cfg["provider"][4:])
+            except cli_runtime.CliExecutionDisabled as e:
+                raise HTTPException(403, str(e)) from None
         result = generate_tomorrow_plan(req.trade_date, cfg=cfg, force=req.force)
         return {"data": result}
     except DecisionCockpitMarketDataError as e:

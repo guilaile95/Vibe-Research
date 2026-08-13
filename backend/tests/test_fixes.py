@@ -2,6 +2,7 @@
 鉴权中间件 / 持仓 CRUD 与坏文件降级 / 估值脏数据防护 / 涨停池脏数值 /
 空结果不缓存 / akshare 缺失降级 / 无 index 工具调用归位 / CLI 流式超时。
 """
+import os
 import pytest
 import sys
 from unittest.mock import MagicMock
@@ -264,7 +265,7 @@ def test_stream_tool_calls_without_index(monkeypatch):
 # ── CLI 流式：子进程挂起时超时真正生效（不再无限期阻塞） ────────────
 
 def test_run_cli_stream_timeout(monkeypatch):
-    monkeypatch.setattr(cli_runtime, "_CLI_TIMEOUT_S", 1)
+    monkeypatch.setattr(cli_runtime, "CLI_TOTAL_DEADLINE_SECONDS", 1)
     monkeypatch.setitem(cli_runtime._CLI_DEFS, "fake", {
         "bins": [sys.executable],
         "delivery": "stdin",
@@ -272,7 +273,7 @@ def test_run_cli_stream_timeout(monkeypatch):
         "env": {},
     })
     chunks = []
-    with pytest.raises(RuntimeError, match="超时"):
+    with pytest.raises(cli_runtime.CliError, match="超时"):
         for line in cli_runtime.run_cli_stream("fake", "s", "u"):
             chunks.append(line)
     assert chunks and chunks[0].strip() == "x"  # 挂起前的输出已正常流出
@@ -280,29 +281,30 @@ def test_run_cli_stream_timeout(monkeypatch):
 
 def test_run_cli_nonzero_with_stdout_is_failure(monkeypatch):
     monkeypatch.setitem(cli_runtime._CLI_DEFS, "fake", {
-        "bins": [sys.executable],
+        "bins": ["fake-bin"],
         "delivery": "stdin",
         "build_args": lambda _: [],
         "env": {},
     })
-    monkeypatch.setattr(
-        cli_runtime.subprocess,
-        "run",
-        lambda *_a, **_k: cli_runtime.subprocess.CompletedProcess(
-            args=[], returncode=7, stdout="partial output", stderr="secret detail"
-        ),
-    )
-    with pytest.raises(RuntimeError, match="退出码 7"):
+    monkeypatch.setattr(cli_runtime, "detect_cli", lambda _kind: "fake-bin")
+    proc = MagicMock()
+    proc.stdin = MagicMock()
+    proc.stdout.__iter__.return_value = iter(["partial output\n"])
+    proc.poll.return_value = 0  # 已退出：跳过进程树终止
+    proc.wait.return_value = 7
+    monkeypatch.setattr(cli_runtime.subprocess, "Popen", lambda *_a, **_k: proc)
+    with pytest.raises(cli_runtime.CliError, match="退出码 7"):
         cli_runtime.run_cli("fake", "s", "u")
 
 
 def test_run_cli_stream_close_reaps_child_and_closes_pipes(monkeypatch):
     monkeypatch.setitem(cli_runtime._CLI_DEFS, "fake", {
-        "bins": [sys.executable],
+        "bins": ["fake-bin"],
         "delivery": "stdin",
         "build_args": lambda _: [],
         "env": {},
     })
+    monkeypatch.setattr(cli_runtime, "detect_cli", lambda _kind: "fake-bin")
     proc = MagicMock()
     proc.stdin = MagicMock()
     proc.stdout = MagicMock()
@@ -310,12 +312,19 @@ def test_run_cli_stream_close_reaps_child_and_closes_pipes(monkeypatch):
     proc.poll.return_value = None
     proc.wait.return_value = -9
     monkeypatch.setattr(cli_runtime.subprocess, "Popen", lambda *_a, **_k: proc)
+    # 拦截进程树终止的系统调用（Windows 上为 taskkill），避免对 mock pid 发起真实调用
+    monkeypatch.setattr(cli_runtime.subprocess, "run", MagicMock())
 
     stream = cli_runtime.run_cli_stream("fake", "s", "u")
     assert next(stream) == "piece\n"
     stream.close()
 
-    proc.kill.assert_called_once_with()
+    # 跨平台清理断言：Windows 走 taskkill（subprocess.run 拦截）；POSIX 下
+    # MagicMock pid 无效 → 降级 proc.kill()，绝不 killpg init 组。
+    if os.name == "nt":
+        cli_runtime.subprocess.run.assert_called_once()  # 进程树终止已触发（taskkill）
+    else:
+        proc.kill.assert_called()  # pid 无效降级为单杀
     proc.wait.assert_called()
     proc.stdin.close.assert_called_once_with()
     proc.stdout.close.assert_called_once_with()
@@ -335,6 +344,9 @@ def test_run_cli_stream_close_reaps_real_child_and_reader_thread(monkeypatch):
     captured = {}
 
     def capture_popen(*args, **kwargs):
+        argv = args[0] if args else []
+        if argv and os.path.basename(str(argv[0])).lower().startswith("taskkill"):
+            return real_popen(*args, **kwargs)  # 树终止系统调用：不捕获
         proc = real_popen(*args, **kwargs)
         captured["proc"] = proc
         return proc
@@ -374,8 +386,10 @@ def test_run_cli_stream_stdout_read_error_is_failure(monkeypatch):
     proc.poll.return_value = None
     proc.wait.return_value = 0
     monkeypatch.setattr(cli_runtime.subprocess, "Popen", lambda *_a, **_k: proc)
+    # 拦截进程树终止的系统调用（Windows 上为 taskkill），避免对 mock pid 发起真实调用
+    monkeypatch.setattr(cli_runtime.subprocess, "run", MagicMock())
 
     stream = cli_runtime.run_cli_stream("fake", "s", "u")
     assert next(stream) == "piece\n"
-    with pytest.raises(RuntimeError, match="输出读取失败"):
+    with pytest.raises(cli_runtime.CliError, match="输出读取失败"):
         next(stream)
