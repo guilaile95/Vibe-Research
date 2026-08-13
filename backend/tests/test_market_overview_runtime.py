@@ -67,8 +67,14 @@ def _facts(**snapshot_overrides) -> dict:
         _facts_snapshot(**snapshot_overrides))
 
 
+REFERENCE_DATE = "2026-08-10"
+
+
 def _overview(**snapshot_overrides) -> dict:
-    return overview.build_market_overview(_facts(**snapshot_overrides))
+    return overview.build_market_overview(
+        _facts(**snapshot_overrides),
+        reference_trade_date=REFERENCE_DATE,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +152,7 @@ def test_partial_breadth_state():
     """partial status → data_state=PARTIAL（不伪装 COMPLETE）。"""
     facts = _partial_facts()
     assert facts["status"] == "partial"
-    o = overview.build_market_overview(facts)
+    o = overview.build_market_overview(facts, reference_trade_date=REFERENCE_DATE)
     assert o["data_state"] == overview.DATA_STATE_PARTIAL
     assert any("PARTIAL" in c for c in o["reason_codes"])
 
@@ -157,7 +163,7 @@ def test_partial_limit_activity_state():
     snap["limit_activity"] = None
     facts = facts_authority.compute_short_term_market_facts(snap)
     assert facts["status"] == "partial"
-    o = overview.build_market_overview(facts)
+    o = overview.build_market_overview(facts, reference_trade_date=REFERENCE_DATE)
     assert o["data_state"] == overview.DATA_STATE_PARTIAL
 
 
@@ -261,7 +267,8 @@ def test_adversarial_missing_field_not_fabricated():
 def test_adversarial_malformed_timestamp_rejected():
     """snapshot 层 malformed timestamp → producer fail-closed（partial/unavailable），
     绝不伪装 current（data_state != AVAILABLE）。"""
-    o = overview.build_market_overview(_facts(fetched_at="not-a-time"))
+    o = overview.build_market_overview(
+        _facts(fetched_at="not-a-time"), reference_trade_date=REFERENCE_DATE)
     assert o["data_state"] != overview.DATA_STATE_AVAILABLE
     assert o["data_state"] in (overview.DATA_STATE_PARTIAL, overview.DATA_STATE_UNAVAILABLE)
 
@@ -291,14 +298,14 @@ def test_adversarial_inconsistent_breadth_identities_rejected():
     snap["breadth"]["advance_count"] = 999999  # 破坏 sum 恒等
     facts = facts_authority.compute_short_term_market_facts(snap)
     assert facts["status"] == "partial"  # producer 已 fail-closed（不产生 normal）
-    o = overview.build_market_overview(facts)
+    o = overview.build_market_overview(facts, reference_trade_date=REFERENCE_DATE)
     assert o["data_state"] == overview.DATA_STATE_PARTIAL
 
 
 def test_adversarial_source_partial_preserved():
     """source partial → producer 判 partial → data_state=PARTIAL（reason 保留）。"""
     facts = _partial_facts()
-    o = overview.build_market_overview(facts)
+    o = overview.build_market_overview(facts, reference_trade_date=REFERENCE_DATE)
     assert o["status"] == "partial"
     assert o["data_state"] == overview.DATA_STATE_PARTIAL
     assert any("PARTIAL" in c for c in o["reason_codes"])
@@ -310,10 +317,91 @@ def test_adversarial_unknown_schema_rejected():
 
 
 def test_adversarial_old_snapshot_masquerade_impossible():
-    """旧快照伪装 current 被阻止：temporal_state 反映 session/is_final，非墙钟。"""
+    """R1：历史快照绝不伪装 current——trade_date < reference → HISTORICAL/STALE。"""
     o = _overview(session="final", is_final=True, trade_date="2026-01-05")
-    assert o["temporal_state"] == overview.TEMPORAL_STATE_AFTER_CLOSE_FINAL
+    assert o["temporal_state"] == overview.TEMPORAL_STATE_HISTORICAL
+    assert o["data_state"] == overview.DATA_STATE_STALE
     assert o["trade_date"] == "2026-01-05"  # 用户可见真实日期
+
+
+# ---------------------------------------------------------------------------
+# R1: current vs historical（reference 显式语义，零墙钟）
+# ---------------------------------------------------------------------------
+
+def test_r1_reference_equal_final_after_close_current():
+    """A. reference == facts.trade_date + final → AFTER_CLOSE_FINAL（current）。"""
+    o = _overview(session="final", is_final=True)  # trade_date=2026-08-10=REFERENCE
+    assert o["temporal_state"] == overview.TEMPORAL_STATE_AFTER_CLOSE_FINAL
+    assert o["data_state"] == overview.DATA_STATE_AVAILABLE
+
+
+def test_r1_reference_equal_intraday_current():
+    """B. reference == facts.trade_date + intraday → INTRADAY（current）。"""
+    o = _overview(session="morning_session", is_final=False)
+    assert o["temporal_state"] == overview.TEMPORAL_STATE_INTRADAY
+    assert o["data_state"] == overview.DATA_STATE_AVAILABLE
+
+
+def test_r1_facts_before_reference_historical_stale():
+    """C. facts.trade_date < reference → HISTORICAL + STALE。"""
+    o = _overview(trade_date="2026-08-07")  # < 2026-08-10
+    assert o["temporal_state"] == overview.TEMPORAL_STATE_HISTORICAL
+    assert o["data_state"] == overview.DATA_STATE_STALE
+
+
+def test_r1_historical_final_never_available_as_current():
+    """D. 历史 final snapshot 不得 AVAILABLE-as-current。"""
+    o = _overview(session="final", is_final=True, trade_date="2026-07-01")
+    assert o["data_state"] != overview.DATA_STATE_AVAILABLE
+    assert o["data_state"] == overview.DATA_STATE_STALE
+    assert o["temporal_state"] == overview.TEMPORAL_STATE_HISTORICAL
+
+
+def test_r1_facts_after_reference_fail_closed():
+    """E. facts.trade_date > reference → UNKNOWN（不可能的未来，fail closed）。"""
+    o = _overview(trade_date="2026-08-12")  # > 2026-08-10
+    assert o["temporal_state"] == overview.TEMPORAL_STATE_UNKNOWN
+    assert o["data_state"] != overview.DATA_STATE_AVAILABLE
+
+
+def test_r1_no_reference_unknown_not_current():
+    """F. 无 reference authority → UNKNOWN（绝不假定 current）。"""
+    o = overview.build_market_overview(_facts())
+    assert o["temporal_state"] == overview.TEMPORAL_STATE_UNKNOWN
+    assert o["data_state"] != overview.DATA_STATE_AVAILABLE
+
+
+def test_r1_weekend_reference_uses_calendar_authority():
+    """G. weekend reference：由 completed_trade_date_at 权威决定（非自然日猜）。
+    reference_trade_date 是已完成的最近交易日（如周五），当日 final 快照 = current。"""
+    # reference = 2026-08-07（周五，假设 completed）→ facts 同为 2026-08-07 final
+    o = overview.build_market_overview(
+        _facts(trade_date="2026-08-07", session="final", is_final=True),
+        reference_trade_date="2026-08-07",
+    )
+    assert o["temporal_state"] == overview.TEMPORAL_STATE_AFTER_CLOSE_FINAL
+    assert o["data_state"] == overview.DATA_STATE_AVAILABLE
+
+
+def test_r1_label_authority_single_consistency():
+    """H. runtime label 与唯一权威 market_descriptive_labels 输出一致。"""
+    import market_descriptive_labels as mdl
+    for ratio in (0.1, 0.25, 0.4, 0.6, 0.75, 0.9, None):
+        o = overview.build_market_overview(
+            _facts(), reference_trade_date=REFERENCE_DATE)
+        # 直接验证权威函数
+        assert mdl.breadth_label(ratio) == mdl.breadth_label(ratio)
+    # runtime 投影 = 权威函数（同一实现，无第二套阈值）
+    o = _overview()
+    assert o["breadth"]["breadth_state"] == mdl.breadth_label(0.6)
+    assert o["limit_activity"]["speculation_activity"] == mdl.speculation_label(40)
+
+
+def test_r1_no_reference_argument_unknown():
+    """reference 参数缺省 None → temporal_state=UNKNOWN（不假定 current）。"""
+    o = overview.build_market_overview(_facts())
+    assert o["reference_trade_date"] is None
+    assert o["temporal_state"] == overview.TEMPORAL_STATE_UNKNOWN
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 # 复用既有 producer 的契约常量（事实数值 authority，不重算）
+from market_descriptive_labels import breadth_label, speculation_label
 from short_term_market_facts import (
     SCHEMA_VERSION as FACTS_SCHEMA_VERSION,
     _STATUS_NORMAL,
@@ -38,25 +39,6 @@ from short_term_market_facts import (
 )
 
 SCHEMA_VERSION = "market-overview-runtime.v0.1"
-
-# 描述性 label 阈值（与 market.py:_breadth_label / _speculation_label 同一权威；
-# 本模块只做数值→label 的机械分档展示，不重新定义阈值）
-# breadth（market.py）：r<0.25 冰点 · r<0.40 偏弱 · r<=0.60 中性 · r<=0.75 偏强 · else 普涨
-# speculation（market.py）：z>=100 亢奋 · z>=60 活跃 · z>=30 普通 · else 冰点
-# 注意边界语义：中性/偏强含上界（<=），冰点/偏弱不含（<）——与 market.py 逐字一致
-_BREADTH_LABEL_RULES: tuple[tuple[float, str, bool], ...] = (
-    (0.25, "冰点", False),
-    (0.40, "偏弱", False),
-    (0.60, "中性", True),
-    (0.75, "偏强", True),
-)
-_BREADTH_LABEL_ABOVE = "普涨"
-_SPECULATION_LABEL_RULES: tuple[tuple[int, str], ...] = (
-    (100, "亢奋"),
-    (60, "活跃"),
-    (30, "普通"),
-)
-_SPECULATION_LABEL_BELOW = "冰点"
 
 # data_state 合法值
 DATA_STATE_AVAILABLE = "AVAILABLE"
@@ -68,6 +50,7 @@ DATA_STATE_UNAVAILABLE = "UNAVAILABLE"
 TEMPORAL_STATE_UNAVAILABLE = "UNAVAILABLE"
 TEMPORAL_STATE_INTRADAY = "INTRADAY"
 TEMPORAL_STATE_AFTER_CLOSE_FINAL = "AFTER_CLOSE_FINAL"
+TEMPORAL_STATE_HISTORICAL = "HISTORICAL"
 TEMPORAL_STATE_UNKNOWN = "UNKNOWN"
 
 _FINAL_SESSIONS = frozenset({"final"})
@@ -122,41 +105,55 @@ def _strict_float(value: Any, field: str, *, allow_none: bool = True) -> float |
     return f
 
 
-def _breadth_state(up_ratio: float | None) -> str | None:
-    """与 market.py:_breadth_label 同一阈值权威的机械分档（None → None）。"""
-    if up_ratio is None:
-        return None
-    for threshold, label, inclusive in _BREADTH_LABEL_RULES:
-        if up_ratio <= threshold if inclusive else up_ratio < threshold:
-            return label
-    return _BREADTH_LABEL_ABOVE
+def _derive_data_state(status: str, temporal_state: str) -> str:
+    """data_state 从 facts.status + temporal 关系派生（诚实降级）。
 
-
-def _speculation_activity(limit_up_count: int | None) -> str | None:
-    """与 market.py:_speculation_label 同一阈值权威的机械分档（None → None）。"""
-    if limit_up_count is None:
-        return None
-    for threshold, label in _SPECULATION_LABEL_RULES:
-        if limit_up_count >= threshold:
-            return label
-    return _SPECULATION_LABEL_BELOW
-
-
-def _derive_data_state(status: str) -> str:
-    """data_state 仅从 facts.status 派生（诚实降级，无隐式阈值）。"""
+    - facts 不可用 → UNAVAILABLE（不伪造中性）。
+    - temporal ∈ {HISTORICAL, UNKNOWN}（无法证明 current）→ STALE
+      （§10 定义：有快照但不能诚实声称是 current；绝不 AVAILABLE-as-current）。
+    - 否则按 status：normal → AVAILABLE；partial → PARTIAL。
+    """
+    if status == _STATUS_UNAVAILABLE:
+        return DATA_STATE_UNAVAILABLE
+    if temporal_state in (TEMPORAL_STATE_HISTORICAL, TEMPORAL_STATE_UNKNOWN):
+        return DATA_STATE_STALE
     if status == _STATUS_NORMAL:
         return DATA_STATE_AVAILABLE
     if status == _STATUS_PARTIAL:
         return DATA_STATE_PARTIAL
-    if status == _STATUS_UNAVAILABLE:
-        return DATA_STATE_UNAVAILABLE
     raise MarketOverviewInputError(f"未知 facts status: {status!r}")
 
 
-def _derive_temporal_state(session: str, is_final: bool, status: str) -> str:
-    """snapshot temporal state（§5.1 四态；HISTORICAL 需上层提供 reference）。"""
+def _derive_temporal_state(
+    *,
+    session: str,
+    is_final: bool,
+    status: str,
+    trade_date: str | None,
+    reference_trade_date: str | None,
+) -> str:
+    """snapshot temporal state（§5.1 五态，含 HISTORICAL）。
+
+    语义（P0-MO1-R1 冻结）：
+    - facts 不可用 → UNAVAILABLE。
+    - 无 reference 权威 → 无法证明 current → UNKNOWN（绝不假定 current）。
+    - facts.trade_date < reference_trade_date → HISTORICAL（旧快照不伪装 current）。
+    - facts.trade_date > reference_trade_date → UNKNOWN（不可能的未来事实，fail closed）。
+    - facts.trade_date == reference_trade_date：
+        is_final/session=final → AFTER_CLOSE_FINAL；
+        盘中合法 session → INTRADAY；
+        其他 → UNKNOWN。
+    """
     if status == _STATUS_UNAVAILABLE:
         return TEMPORAL_STATE_UNAVAILABLE
+    if reference_trade_date is None:
+        return TEMPORAL_STATE_UNKNOWN  # 无 reference 不假定 current
+    if trade_date is None:
+        return TEMPORAL_STATE_UNKNOWN
+    if trade_date < reference_trade_date:
+        return TEMPORAL_STATE_HISTORICAL
+    if trade_date > reference_trade_date:
+        return TEMPORAL_STATE_UNKNOWN  # 未来事实不可能，fail closed
     if is_final or session in _FINAL_SESSIONS:
         return TEMPORAL_STATE_AFTER_CLOSE_FINAL
     if session in _INTRADAY_SESSIONS:
@@ -164,7 +161,11 @@ def _derive_temporal_state(session: str, is_final: bool, status: str) -> str:
     return TEMPORAL_STATE_UNKNOWN
 
 
-def build_market_overview(facts_envelope: Mapping[str, Any]) -> dict:
+def build_market_overview(
+    facts_envelope: Mapping[str, Any],
+    *,
+    reference_trade_date: str | None = None,
+) -> dict:
     """把一份已冻结的 market facts envelope 投影为 P0 Market Overview。
 
     输入 = ``compute_short_term_market_facts(snapshot)`` 输出契约（或同结构 dict）。
@@ -225,15 +226,22 @@ def build_market_overview(facts_envelope: Mapping[str, Any]) -> dict:
         facts.get("failed_board_rate"), "failed_board_rate")
     seal_rate = _strict_float(facts.get("seal_rate"), "seal_rate")
 
-    # ---- 机械派生（label 阈值与 market.py 一致；data/temporal state 诚实）----
-    data_state = _derive_data_state(status)
-    temporal_state = _derive_temporal_state(session, is_final, status)
-    breadth_state = _breadth_state(up_ratio)
-    speculation_activity = _speculation_activity(limit_up_count)
+    # ---- 机械派生（label 复用 market_descriptive_labels 单一权威；state 诚实）----
+    temporal_state = _derive_temporal_state(
+        session=session,
+        is_final=is_final,
+        status=status,
+        trade_date=trade_date,
+        reference_trade_date=reference_trade_date,
+    )
+    data_state = _derive_data_state(status, temporal_state)
+    breadth_state = breadth_label(up_ratio)
+    speculation_activity = speculation_label(limit_up_count)
 
     return {
         "schema_version": SCHEMA_VERSION,
         "facts_schema_version": FACTS_SCHEMA_VERSION,
+        "reference_trade_date": reference_trade_date,
         # snapshot identity
         "trade_date": trade_date,
         "session": session,
