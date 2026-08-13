@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 import campaign_router
 import campaign_service
+import critical_data_dependency_policy as dda
 import decision_inbox_runtime_assembler as inbox_runtime
 import holdings_campaign_composition as composition
 import position_reality_service as position_svc
@@ -82,8 +83,39 @@ def _composition() -> dict:
     return composition.assemble_holdings_campaign_composition()
 
 
+def _fake_capability(dependency_id: str) -> dict:
+    """E2E 注入的确定性 capability fake（真实 evaluator 语义由专项测试覆盖）。"""
+
+    def _evaluator(_lake, definition):
+        return {
+            "dependency_id": dependency_id,
+            "state": "NOT_EVALUATED",
+            "as_of": definition["as_of"],
+            "authority_refs": [f"test-e2e:{dependency_id}"],
+        }
+
+    return _evaluator
+
+
 def _inbox() -> dict:
-    return inbox_runtime.assemble_current_decision_inbox()
+    """产品链真实组装（composition 真实读取），仅 capability evaluator 注入
+    fake（无网络、确定性）；产品链语义（UNASSIGNED → campaign item）不受影响。"""
+    return inbox_runtime.assemble_current_decision_inbox(ports=inbox_runtime.RuntimePorts(
+        composition_reader=composition.assemble_holdings_campaign_composition,
+        dependency_resolver=dda.resolve_strategy_dependencies,
+        price_evaluator=_fake_capability(
+            "cap.security.price_reference"
+        ),
+        market_sector_evaluator=_fake_capability(
+            "cap.context.market_sector"
+        ),
+        disclosures_evaluator=_fake_capability(
+            "cap.security.disclosures"
+        ),
+        financials_evaluator=_fake_capability(
+            "cap.security.financials"
+        ),
+    ))
 
 
 def _create_campaign(client, strategy: str = STRATEGY_SWING) -> dict:

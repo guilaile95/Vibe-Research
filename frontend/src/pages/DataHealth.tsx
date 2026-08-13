@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Activity, AlertTriangle, CheckCircle2, HelpCircle, Loader2, RefreshCw, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, CircleDashed, HelpCircle, Loader2, RefreshCw, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { cn } from "@/lib/utils";
@@ -14,10 +14,14 @@ import {
   degradedTag,
   emptySystemGuide,
   filterItems,
+  freshnessLabel,
+  freshnessState,
   gateAdviceLabel,
   gateAdviceState,
   isProblemSource,
   parseHealthSearchParams,
+  presentationLabel,
+  presentationState,
   requestScopeCardHint,
   requestScopeDetailDisclaimer,
   staleTag,
@@ -28,14 +32,24 @@ import {
 } from "@/lib/dataHealthView";
 
 function StatusBadge({ status }: { status: string }) {
-  const label = statusLabel(status);
+  const label = status === "not_initialized" ? presentationLabel("not_initialized") : statusLabel(status);
+  // P0-DS1：not_initialized 为中性展示（未检测 ≠ 不可用），绝不显示红色
   const cls =
-    status === "normal"
-      ? "bg-emerald-500/15 text-emerald-400"
-      : status === "partial"
-        ? "bg-amber-500/15 text-amber-400"
-        : "bg-rose-500/15 text-rose-400";
-  const Icon = status === "normal" ? CheckCircle2 : status === "partial" ? AlertTriangle : XCircle;
+    status === "not_initialized"
+      ? "bg-slate-500/15 text-slate-400"
+      : status === "normal"
+        ? "bg-emerald-500/15 text-emerald-400"
+        : status === "partial"
+          ? "bg-amber-500/15 text-amber-400"
+          : "bg-rose-500/15 text-rose-400";
+  const Icon =
+    status === "not_initialized"
+      ? CircleDashed
+      : status === "normal"
+        ? CheckCircle2
+        : status === "partial"
+          ? AlertTriangle
+          : XCircle;
   return (
     <span
       className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium", cls)}
@@ -180,11 +194,11 @@ export function DataHealth() {
               <Metric label="部分可用" value={overview.summary.partial} />
               <Metric label="不可用" value={overview.summary.unavailable} />
               <Metric label="数据陈旧" value={overview.summary.stale} hint="可与质量状态重叠" />
-              <Metric label="尚未初始化" value={overview.summary.not_initialized} hint="属于不可用子集" />
+              <Metric label="尚未初始化" value={overview.summary.not_initialized} hint="未检测 ≠ 不可用" />
             </div>
             <p className="mt-2 text-[11px] text-muted-foreground">
               质量三态合计 {summaryQualityTotal(overview.summary)} / 11；
-              「数据陈旧」「尚未初始化」不是互斥分区。
+              「数据陈旧」可与质量状态重叠；「尚未初始化」独立于质量三态，不视为不可用。
             </p>
             {emptySystemGuide(overview.summary) && (
               <p className="mt-2 rounded-lg bg-slate-500/10 px-3 py-2 text-xs text-muted-foreground">
@@ -233,7 +247,7 @@ export function DataHealth() {
                     >
                       {p.display_name}
                     </button>
-                    <StatusBadge status={p.status} />
+                    <StatusBadge status={presentationState(p)} />
                     {staleTag(p.is_stale) && <Tag>{staleTag(p.is_stale)!}</Tag>}
                   </li>
                 ))}
@@ -293,17 +307,16 @@ export function DataHealth() {
               >
                 <div className="mb-1 flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium">{it.display_name}</span>
-                  <StatusBadge status={it.status} />
+                  <StatusBadge status={presentationState(it)} />
                 </div>
                 <p className="mb-1 text-[11px] text-muted-foreground">{it.module}</p>
                 <div className="mb-2 flex flex-wrap gap-1">
-                  {staleTag(it.is_stale) && <Tag>{staleTag(it.is_stale)!}</Tag>}
+                  <Tag>{freshnessLabel(freshnessState(it))}</Tag>
                   {cacheTag(it.is_cached) && <Tag>{cacheTag(it.is_cached)!}</Tag>}
                   {degradedTag(it.is_degraded) && <Tag>{degradedTag(it.is_degraded)!}</Tag>}
                   {requestScopeCardHint(it.source_id) && (
                     <Tag>{requestScopeCardHint(it.source_id)!}</Tag>
                   )}
-                  {it.last_error_code === "SOURCE_NOT_INITIALIZED" && <Tag>尚未初始化</Tag>}
                 </div>
                 <p className="text-[11px] text-muted-foreground">
                   交易日：{it.data_trade_date ?? "—"} · 最近成功：{it.last_success_at ?? "—"}
@@ -358,7 +371,7 @@ export function DataHealth() {
               <div className="space-y-2 text-xs">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium">{detail.record.display_name}</span>
-                  <StatusBadge status={detail.record.status} />
+                  <StatusBadge status={presentationState(detail.record)} />
                 </div>
                 <p>观察时间：{detail.record.observed_at ?? "—"}</p>
                 <p>最近成功：{detail.record.last_success_at ?? "—"}</p>

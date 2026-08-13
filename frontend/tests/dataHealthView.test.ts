@@ -9,9 +9,14 @@ import {
   degradedTag,
   emptySystemGuide,
   filterItems,
+  freshnessLabel,
+  freshnessState,
   gateAdviceLabel,
   gateAdviceState,
+  isProblemSource,
   parseHealthSearchParams,
+  presentationLabel,
+  presentationState,
   requestScopeCardHint,
   requestScopeDetailDisclaimer,
   statusAriaLabel,
@@ -161,4 +166,64 @@ test("filter items", () => {
   ];
   assert.equal(filterItems(items, { status: "partial" }).length, 1);
   assert.equal(filterItems(items, { is_stale: true }).length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// P0-DS1：presentation 语义（未初始化/未检测 ≠ 不可用）与 freshness 独立
+// ---------------------------------------------------------------------------
+
+test("presentationState: SOURCE_NOT_INITIALIZED is not_initialized (never unavailable)", () => {
+  assert.equal(
+    presentationState(rec({ source_id: "quotes", status: "unavailable", last_error_code: "SOURCE_NOT_INITIALIZED" })),
+    "not_initialized",
+  );
+  assert.equal(presentationState(rec({ source_id: "quotes" })), "normal");
+  assert.equal(presentationState(rec({ source_id: "quotes", status: "partial" })), "partial");
+  assert.equal(
+    presentationState(rec({ source_id: "quotes", status: "unavailable", last_error_code: "SOURCE_UNAVAILABLE" })),
+    "unavailable",
+  );
+  assert.equal(presentationState(null), "not_initialized");
+});
+
+test("presentationLabel distinguishes not_initialized from unavailable", () => {
+  assert.equal(presentationLabel("not_initialized"), "未初始化");
+  assert.equal(presentationLabel("unavailable"), "不可用");
+  assert.notEqual(presentationLabel("not_initialized"), presentationLabel("unavailable"));
+});
+
+test("freshnessState: independent of quality status", () => {
+  // 未初始化 → 新鲜度未知
+  assert.equal(
+    freshnessState(rec({ source_id: "q", status: "unavailable", last_error_code: "SOURCE_NOT_INITIALIZED" })),
+    "UNKNOWN",
+  );
+  // 陈旧
+  assert.equal(freshnessState(rec({ source_id: "q", status: "normal", is_stale: true })), "STALE");
+  // 新鲜（质量正常）
+  assert.equal(freshnessState(rec({ source_id: "q", status: "normal", is_stale: false })), "FRESH");
+  // 新鲜（质量部分可用但数据不陈旧）
+  assert.equal(freshnessState(rec({ source_id: "q", status: "partial", is_stale: false })), "FRESH");
+  // stale 信号缺失 → 未知
+  assert.equal(freshnessState(rec({ source_id: "q", is_stale: null })), "UNKNOWN");
+  assert.equal(freshnessState(null), "UNKNOWN");
+});
+
+test("freshnessLabel maps FRESH/STALE/UNKNOWN", () => {
+  assert.equal(freshnessLabel("FRESH"), "数据新鲜");
+  assert.equal(freshnessLabel("STALE"), "数据陈旧");
+  assert.equal(freshnessLabel("UNKNOWN"), "新鲜度未知");
+});
+
+test("isProblemSource excludes not-initialized (unobserved is not a problem)", () => {
+  assert.equal(
+    isProblemSource(rec({ source_id: "q", status: "unavailable", last_error_code: "SOURCE_NOT_INITIALIZED" })),
+    false,
+  );
+  assert.equal(
+    isProblemSource(rec({ source_id: "q", status: "unavailable", last_error_code: "SOURCE_UNAVAILABLE" })),
+    true,
+  );
+  assert.equal(isProblemSource(rec({ source_id: "q", status: "partial" })), true);
+  assert.equal(isProblemSource(rec({ source_id: "q", status: "normal", is_stale: true })), true);
 });

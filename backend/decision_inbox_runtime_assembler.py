@@ -5,9 +5,12 @@
     #118 holdings_campaign_composition snapshot
       → 每个真实 ACTIVE / REDUCING Campaign
       → DDA1 resolve_strategy_dependencies
-      → per-capability results
+      → per-capability real evaluators（P0-DS1）
            ├─ cap.security.price_reference → #116 adapter（readonly lake）
-           └─ market_sector / disclosures / financials → NOT_EVALUATED（无 adapter）
+           ├─ cap.context.market_sector → 真实市场广度读取路径
+           ├─ cap.security.disclosures → 真实公告读取路径（EMPTY_BUT_VALID 区分）
+           └─ cap.security.financials → 真实财务读取路径
+              （report-period applicability 未解决 → NOT_EVALUATED + 显式 blocker）
       → CCD1 project_campaign_critical_data
       → RA1 project_decision_assurance
       → DI1 CampaignFacts → project_campaign
@@ -17,7 +20,8 @@
 - Formal Thesis / Frozen Decision 仅以 current-only 结构事实读取；
   RA1 的 FORMAL_THESIS / FORMAL_DECISION 维度无 same-as-of 适用性 authority，
   因此保持 NOT_EVALUATED（读取过记录 ≠ 完成评估）。
-- 未接 adapter 的 capability 必须 NOT_EVALUATED，绝不因价格可用而整体 USABLE。
+- capability NOT_EVALUATED 仍是合法结果（数据缺失 / applicability 未解决 /
+  未到评估时点），绝不为了灯变绿强制 USABLE。
 
 只读、零写入、fail closed。所有生产端口均基于既有只读 authorities；
 本模块不 import router / app / frontend。
@@ -33,6 +37,9 @@ from typing import Any, Callable, Mapping
 
 import campaign_service
 import critical_data_dependency_policy as dda
+import critical_data_disclosures_adapter as disclosures_adapter
+import critical_data_financials_adapter as financials_adapter
+import critical_data_market_sector_adapter as market_sector_adapter
 import critical_data_price_reference_adapter as price_adapter
 import decision_assurance_projection as ra
 import decision_inbox_projection as di
@@ -46,14 +53,6 @@ from security_exchange_policy import POLICY_VERSION_V01 as SER_POLICY_VERSION
 
 SCHEMA_VERSION = "decision_inbox_runtime.v0.1"
 DDA_POLICY_VERSION = dda.POLICY_VERSION_V01
-
-_CAPABILITY_NOT_EVALUATED = frozenset(
-    {
-        dda.CAP_CONTEXT_MARKET_SECTOR,
-        dda.CAP_SECURITY_DISCLOSURES,
-        dda.CAP_SECURITY_FINANCIALS,
-    }
-)
 
 _FACT_LAKE_ROOT_ENV = "VR_FACT_LAKE_ROOT"
 _FACT_LAKE_CONTROL_FILE = "fact_lake_control.sqlite3"
@@ -132,6 +131,36 @@ def _production_price_evaluator(
     )
 
 
+def _production_market_sector_evaluator(
+    lake: FactLake | None, definition: Mapping[str, Any]
+) -> dict[str, Any]:
+    return market_sector_adapter.evaluate_market_sector_capability(
+        security_code=definition["security_code"],
+        campaign_id=definition["campaign_id"],
+        as_of=definition["as_of"],
+    )
+
+
+def _production_disclosures_evaluator(
+    lake: FactLake | None, definition: Mapping[str, Any]
+) -> dict[str, Any]:
+    return disclosures_adapter.evaluate_disclosures_capability(
+        security_code=definition["security_code"],
+        campaign_id=definition["campaign_id"],
+        as_of=definition["as_of"],
+    )
+
+
+def _production_financials_evaluator(
+    lake: FactLake | None, definition: Mapping[str, Any]
+) -> dict[str, Any]:
+    return financials_adapter.evaluate_financials_capability(
+        security_code=definition["security_code"],
+        campaign_id=definition["campaign_id"],
+        as_of=definition["as_of"],
+    )
+
+
 def _production_frozen_decisions_reader(
     campaign_id: str,
 ) -> list[Mapping[str, Any]]:
@@ -152,25 +181,45 @@ def _production_frozen_decisions_reader(
             )
 
 
+CapabilityEvaluator = Callable[
+    [FactLake | None, Mapping[str, Any]], Mapping[str, Any]
+]
+
+
 @dataclass(frozen=True)
 class RuntimePorts:
-    """runtime 全部 I/O 端口；测试注入，生产默认绑定既有只读 authorities。"""
+    """runtime 全部 I/O 端口；测试注入，生产默认绑定既有只读 authorities。
+
+    四个 critical-data capability 各有真实 evaluator（P0-DS1）：
+    price_reference 读 Fact Lake；market_sector / disclosures / financials
+    走既有真实业务读取路径。NOT_EVALUATED 仍是合法结果（数据缺失 /
+    applicability 未解决 / 未到评估时点），绝不强制 USABLE。
+    """
 
     composition_reader: Callable[[], Mapping[str, Any]]
     dependency_resolver: Callable[..., Mapping[str, Any]]
-    price_evaluator: Callable[[Any, Mapping[str, Any]], Mapping[str, Any]]
-    thesis_reader: Callable[[str], Mapping[str, Any]]
-    frozen_decisions_reader: Callable[[str], list[Mapping[str, Any]]]
-    lake_provider: Callable[[], FactLake | None]
+    price_evaluator: CapabilityEvaluator = _production_price_evaluator
+    market_sector_evaluator: CapabilityEvaluator = (
+        _production_market_sector_evaluator
+    )
+    disclosures_evaluator: CapabilityEvaluator = (
+        _production_disclosures_evaluator
+    )
+    financials_evaluator: CapabilityEvaluator = (
+        _production_financials_evaluator
+    )
+    thesis_reader: Callable[[str], Mapping[str, Any]] = (
+        thesis_projection.project_current_thesis
+    )
+    frozen_decisions_reader: Callable[
+        [str], list[Mapping[str, Any]]
+    ] = _production_frozen_decisions_reader
+    lake_provider: Callable[[], FactLake | None] = _production_lake_provider
 
 
 PRODUCTION_PORTS = RuntimePorts(
     composition_reader=composition.assemble_holdings_campaign_composition,
     dependency_resolver=dda.resolve_strategy_dependencies,
-    price_evaluator=_production_price_evaluator,
-    thesis_reader=thesis_projection.project_current_thesis,
-    frozen_decisions_reader=_production_frozen_decisions_reader,
-    lake_provider=_production_lake_provider,
 )
 
 
@@ -326,39 +375,50 @@ def _capability_results(
     lake: FactLake | None,
     ports: RuntimePorts,
 ) -> list[Mapping[str, Any]]:
+    """per-capability 真实 evaluator 分发（P0-DS1）。
+
+    price_reference 依赖 Fact Lake（lake 未配置 → NOT_EVALUATED）；
+    market_sector / disclosures / financials 走既有真实业务读取路径
+    （lake 无关）。NOT_EVALUATED 仍是合法结果；provider 异常 → ERROR。
+    """
     results: list[Mapping[str, Any]] = []
     for dependency_id in definition.get("required_dependency_ids", []):
         if not isinstance(dependency_id, str) or not dependency_id:
             raise DecisionInboxRuntimeIntegrityError(
                 "required_dependency_ids 含非法元素"
             )
-        if dependency_id == price_adapter.DEPENDENCY_ID:
-            if lake is None:
-                result = _not_evaluated_result(
-                    dependency_id, definition["as_of"]
-                )
-            else:
-                try:
-                    result = ports.price_evaluator(lake, definition)
-                except price_adapter.PriceReferenceCapabilityError:
-                    result = _error_result(
+        try:
+            if dependency_id == price_adapter.DEPENDENCY_ID:
+                if lake is None:
+                    result = _not_evaluated_result(
                         dependency_id, definition["as_of"]
                     )
-            results.append(
-                _validate_capability_result(
-                    result,
-                    dependency_id=dependency_id,
-                    as_of=definition["as_of"],
+                else:
+                    result = ports.price_evaluator(lake, definition)
+            elif dependency_id == market_sector_adapter.DEPENDENCY_ID:
+                result = ports.market_sector_evaluator(lake, definition)
+            elif dependency_id == disclosures_adapter.DEPENDENCY_ID:
+                result = ports.disclosures_evaluator(lake, definition)
+            elif dependency_id == financials_adapter.DEPENDENCY_ID:
+                result = ports.financials_evaluator(lake, definition)
+            else:
+                raise DecisionInboxRuntimeIntegrityError(
+                    f"未知 capability: {dependency_id}"
                 )
+        except (
+            price_adapter.PriceReferenceCapabilityError,
+            market_sector_adapter.MarketSectorCapabilityError,
+            disclosures_adapter.DisclosuresCapabilityError,
+            financials_adapter.FinancialsCapabilityError,
+        ):
+            result = _error_result(dependency_id, definition["as_of"])
+        results.append(
+            _validate_capability_result(
+                result,
+                dependency_id=dependency_id,
+                as_of=definition["as_of"],
             )
-        elif dependency_id in _CAPABILITY_NOT_EVALUATED:
-            results.append(
-                _not_evaluated_result(dependency_id, definition["as_of"])
-            )
-        else:
-            raise DecisionInboxRuntimeIntegrityError(
-                f"未知 capability: {dependency_id}"
-            )
+        )
     return results
 
 

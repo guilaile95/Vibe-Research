@@ -66,6 +66,63 @@ export const REQUEST_SCOPED = new Set([
   "sector_research",
 ]);
 
+/**
+ * P0-DS1 presentation 层语义：未初始化/未检测 ≠ 不可用。
+ * backend 三态 contract（normal/partial/unavailable）保持不变，
+ * SOURCE_NOT_INITIALIZED（尚无成功运行记录）在展示层单列为
+ * not_initialized —— 绝不显示为红色「不可用」。
+ */
+export type PresentationState = "not_initialized" | HealthStatus;
+
+export function presentationState(
+  record: DataHealthRecord | null | undefined,
+): PresentationState {
+  if (!record) return "not_initialized";
+  if (record.last_error_code === "SOURCE_NOT_INITIALIZED") return "not_initialized";
+  return record.status;
+}
+
+export const PRESENTATION_LABEL: Record<PresentationState, string> = {
+  not_initialized: "未初始化",
+  normal: "正常",
+  partial: "部分可用",
+  unavailable: "不可用",
+};
+
+export function presentationLabel(state: PresentationState): string {
+  return PRESENTATION_LABEL[state];
+}
+
+export function presentationAriaLabel(state: PresentationState): string {
+  return `数据状态：${presentationLabel(state)}`;
+}
+
+/**
+ * P0-DS1：Freshness 独立于质量三态显示。
+ * FRESH=新鲜 / STALE=陈旧 / UNKNOWN=未初始化或未提供 stale 信号。
+ */
+export type FreshnessState = "FRESH" | "STALE" | "UNKNOWN";
+
+export function freshnessState(
+  record: DataHealthRecord | null | undefined,
+): FreshnessState {
+  if (!record) return "UNKNOWN";
+  if (record.last_error_code === "SOURCE_NOT_INITIALIZED") return "UNKNOWN";
+  if (record.is_stale === true) return "STALE";
+  if (record.is_stale === false) return "FRESH";
+  return "UNKNOWN";
+}
+
+export const FRESHNESS_LABEL: Record<FreshnessState, string> = {
+  FRESH: "数据新鲜",
+  STALE: "数据陈旧",
+  UNKNOWN: "新鲜度未知",
+};
+
+export function freshnessLabel(state: FreshnessState): string {
+  return FRESHNESS_LABEL[state];
+}
+
 export function statusLabel(status: HealthStatus | string | null | undefined): string {
   if (status === "normal" || status === "partial" || status === "unavailable") {
     return STATUS_LABEL[status];
@@ -138,6 +195,8 @@ export function gateAdviceLabel(state: GateAdviceState): string {
 }
 
 export function isProblemSource(r: DataHealthRecord): boolean {
+  // P0-DS1：未初始化/未检测不是「问题」——不是红色不可用。
+  if (r.last_error_code === "SOURCE_NOT_INITIALIZED") return false;
   return r.status === "partial" || r.status === "unavailable" || r.is_stale;
 }
 
