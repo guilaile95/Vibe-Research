@@ -115,16 +115,6 @@ def _as_path(db_path: str | Path) -> Path:
     return Path(db_path)
 
 
-def _open_wait_total() -> float:
-    raw = os.environ.get("VIBE_RESEARCH_FTA_STORE_OPEN_WAIT_SECONDS", "").strip()
-    if raw:
-        try:
-            return max(0.05, float(raw))
-        except ValueError:
-            pass
-    return _OPEN_WAIT_TOTAL_SECONDS
-
-
 def _classify_ledger_path(db_path: str | Path) -> str:
     """Distinguish true missing regular file from I/O / non-file paths.
 
@@ -145,22 +135,6 @@ def _classify_ledger_path(db_path: str | Path) -> str:
     raise FormalTradeAttributionStoreError(
         "归属账本路径存在但不是普通文件"
     )
-
-
-def _hold_after_excl_if_requested() -> None:
-    """Test-only gate: owner pauses after O_EXCL, before schema init."""
-    release = os.environ.get("VIBE_RESEARCH_FTA_STORE_INIT_HOLD", "").strip()
-    if not release:
-        return
-    signal = os.environ.get("VIBE_RESEARCH_FTA_STORE_INIT_HELD", "").strip()
-    if signal:
-        Path(signal).write_text("held", encoding="utf-8")
-    release_path = Path(release)
-    deadline = time.monotonic() + 30.0
-    while not release_path.is_file():
-        if time.monotonic() >= deadline:
-            raise FormalTradeAttributionStoreError("init hold timed out")
-        time.sleep(0.02)
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -457,9 +431,7 @@ def _open_write_connection(db_path: str | Path) -> sqlite3.Connection:
     except OSError as exc:
         raise FormalTradeAttributionStoreError("归属账本不可用") from exc
     owned = _acquire_initialization_ownership(path)
-    if owned:
-        _hold_after_excl_if_requested()
-    deadline = time.monotonic() + _open_wait_total()
+    deadline = time.monotonic() + _OPEN_WAIT_TOTAL_SECONDS
     while True:
         try:
             conn = sqlite3.connect(str(path), isolation_level=None, timeout=10.0)

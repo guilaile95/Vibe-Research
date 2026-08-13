@@ -437,6 +437,15 @@ def test_ag_garbage_file(tmp_path):
         )
 
 
+def test_r2_production_has_no_test_instrumentation():
+    src = Path(store.__file__).read_text(encoding="utf-8")
+    assert "VIBE_RESEARCH_FTA_STORE_INIT_HOLD" not in src
+    assert "VIBE_RESEARCH_FTA_STORE_INIT_HELD" not in src
+    assert "VIBE_RESEARCH_FTA_STORE_OPEN_WAIT_SECONDS" not in src
+    assert "_hold_after_excl_if_requested" not in src
+    assert "Test-only gate" not in src
+
+
 def test_ah_ai_aj_no_mutation_api():
     src = Path(store.__file__).read_text(encoding="utf-8")
     tree = ast.parse(src)
@@ -622,7 +631,7 @@ def test_r1_readonly_open_oserror_fail_closed(db_path, monkeypatch):
 
 def test_r1_empty_file_non_owner_times_out_fail_closed(db_path, monkeypatch):
     db_path.write_bytes(b"")
-    monkeypatch.setenv("VIBE_RESEARCH_FTA_STORE_OPEN_WAIT_SECONDS", "0.2")
+    monkeypatch.setattr(store, "_OPEN_WAIT_TOTAL_SECONDS", 0.2)
     rec = make_record(trade_id="b" * 32, attribution_id="trade_attribution_" + "c" * 32)
     with pytest.raises(
         store.FormalTradeAttributionStoreCorruptedError, match="INITIALIZATION_INCOMPLETE"
@@ -696,24 +705,44 @@ def test_r1_multiprocess_first_init(tmp_path):
     rec_a_path.write_text(json.dumps(rec_a), encoding="utf-8")
     rec_b_path.write_text(json.dumps(rec_b), encoding="utf-8")
     backend = str(Path(__file__).resolve().parents[1])
-    worker = (
-        "import json,sys;"
-        "sys.path.insert(0, sys.argv[1]);"
-        "import formal_trade_attribution_store as s;"
-        "rec=json.loads(open(sys.argv[2],encoding='utf-8').read());"
-        "s.write_attribution(db_path=sys.argv[3], record=rec)"
-    )
-    env_a = os.environ.copy()
-    env_a["VIBE_RESEARCH_FTA_STORE_INIT_HOLD"] = str(hold)
-    env_a["VIBE_RESEARCH_FTA_STORE_INIT_HELD"] = str(held)
-    env_a["PYTHONPATH"] = backend
-    env_b = os.environ.copy()
-    env_b["PYTHONPATH"] = backend
-    env_b.pop("VIBE_RESEARCH_FTA_STORE_INIT_HOLD", None)
-    env_b.pop("VIBE_RESEARCH_FTA_STORE_INIT_HELD", None)
+    # Test-only worker: pause after O_EXCL by wrapping production acquire.
+    # Production store has no hold/env instrumentation.
+    worker = r"""
+import json, sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import formal_trade_attribution_store as s
+hold, held = sys.argv[4], sys.argv[5]
+orig = s._acquire_initialization_ownership
+def acquire(path):
+    owned = orig(path)
+    if owned and hold:
+        Path(held).write_text("held", encoding="utf-8")
+        release = Path(hold)
+        deadline = time.monotonic() + 30
+        while not release.is_file():
+            if time.monotonic() >= deadline:
+                raise SystemExit("hold timeout")
+            time.sleep(0.02)
+    return owned
+s._acquire_initialization_ownership = acquire
+rec = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+s.write_attribution(db_path=sys.argv[3], record=rec)
+"""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = backend
     proc_a = subprocess.Popen(
-        [sys.executable, "-c", worker, backend, str(rec_a_path), str(db_path)],
-        env=env_a,
+        [
+            sys.executable,
+            "-c",
+            worker,
+            backend,
+            str(rec_a_path),
+            str(db_path),
+            str(hold),
+            str(held),
+        ],
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -730,8 +759,17 @@ def test_r1_multiprocess_first_init(tmp_path):
         time.sleep(0.02)
     assert db_path.is_file()
     proc_b = subprocess.Popen(
-        [sys.executable, "-c", worker, backend, str(rec_b_path), str(db_path)],
-        env=env_b,
+        [
+            sys.executable,
+            "-c",
+            worker,
+            backend,
+            str(rec_b_path),
+            str(db_path),
+            "",
+            "",
+        ],
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

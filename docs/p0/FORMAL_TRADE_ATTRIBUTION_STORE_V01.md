@@ -90,7 +90,12 @@ is not accepted.
 GLOBAL_UNIQUE_TRADE_ID = YES
 PARTIAL_UNIQUE_ACCEPTED = NO
 PARTIAL_UNIQUE_TRADE_ID_SCHEMA = REJECTED
+PRODUCTION_TEST_HOOKS = NO
 ```
+
+Multiprocess first-init is proven from the test process by wrapping
+``_acquire_initialization_ownership`` in the test worker. Production
+does not read test env gates or pause after ``O_EXCL``.
 
 ## Files
 
