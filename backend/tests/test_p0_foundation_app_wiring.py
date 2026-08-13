@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import app as app_module
 import campaign_service
+import holdings_campaign_composition_router
 import position_reality_service
 
 
@@ -226,6 +227,54 @@ class TestCampaignWiring:
         assert response.status_code == 422
 
 
+class TestHoldingsCampaignCompositionWiring:
+    PATH = "/api/holdings/campaign-composition"
+
+    def test_read_only_projection_available_through_main_app(
+        self, client, monkeypatch
+    ):
+        expected = {
+            "schema_version": "holdings-campaign-composition.v0.1",
+            "evaluation_status": "NOT_EVALUATED",
+            "canonical": False,
+            "reason_codes": ["POSITION_LEDGER_NOT_BOOTSTRAPPED"],
+            "items": [],
+            "total_holdings": 0,
+        }
+        calls = []
+
+        def fake_assemble():
+            calls.append(True)
+            return expected
+
+        monkeypatch.setattr(
+            holdings_campaign_composition_router.service,
+            "assemble_holdings_campaign_composition",
+            fake_assemble,
+        )
+
+        response = client.get(self.PATH)
+
+        assert response.status_code == 200
+        assert response.json() == {"data": expected}
+        assert calls == [True]
+
+    def test_real_app_registers_one_get_from_the_dedicated_router(self, client):
+        paths = _openapi_paths(client)
+        assert self.PATH in paths
+        assert set(paths[self.PATH]) == {"get"}
+
+        # paths is a mapping, so this also proves the path is emitted once.
+        assert len([path for path in paths if path == self.PATH]) == 1
+        operation_id = paths[self.PATH]["get"]["operationId"]
+        assert operation_id.startswith("get_holdings_campaign_composition_")
+
+        for method in ("post", "put", "patch", "delete"):
+            assert client.request(
+                method.upper(), self.PATH, json={}
+            ).status_code == 405
+
+
 class TestMainAppRouteUniqueness:
     TARGET_PATHS = {
         "/api/account/reality",
@@ -237,6 +286,7 @@ class TestMainAppRouteUniqueness:
         "/api/campaigns/{campaign_id}/transitions",
         "/api/campaigns/{campaign_id}/thesis-binding",
         "/api/campaigns/{campaign_id}/current-thesis",
+        "/api/holdings/campaign-composition",
         "/api/thesis/{thesis_id}/begin-formalization",
         "/api/thesis/{thesis_id}/confirm",
         "/api/thesis/{thesis_id}/freeze",
