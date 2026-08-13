@@ -317,6 +317,14 @@ def _is_allowed_transition(from_status: str, to_status: str) -> bool:
     return to_status in _TRANSITION_GRAPH.get(from_status, ())
 
 
+def next_actions(status: str) -> tuple[str, ...]:
+    """frozen graph 的下一合法动作（graph 声明顺序；terminal → 空）。
+
+    纯内存派生，frozen graph 的唯一权威在本文件；非法 status → InputError。
+    """
+    return _TRANSITION_GRAPH.get(_validated_status(status), ())
+
+
 # ---------------------------------------------------------------------------
 # schema 结构校验（fail-closed，不自动迁移）
 # ---------------------------------------------------------------------------

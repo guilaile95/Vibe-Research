@@ -6,6 +6,8 @@
 - ``GET  /api/campaigns/{campaign_id}``：精确读取
 - ``POST /api/campaigns/{campaign_id}/transitions``：原子状态迁移（CAS + 冻结 graph）
 - ``GET  /api/campaigns/{campaign_id}/transitions``：durable transition 历史
+- ``GET  /api/campaigns/{campaign_id}/next-actions``：下一合法动作 read-model
+  （派生自 frozen graph 单一权威；前端不复制 graph，动作仍走 transition API）
 
 不存在 PATCH / PUT / DELETE —— Strategy 结构性不可变、状态只能经 transition
 graph 变更。
@@ -194,6 +196,34 @@ def list_campaign_transitions(campaign_id: str) -> dict:
     except Exception:  # noqa: BLE001 — 未预期逃逸，安全兜底
         raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
     return {"data": records}
+
+
+@router.get("/campaigns/{campaign_id}/next-actions")
+def get_campaign_next_actions(campaign_id: str) -> dict:
+    """下一合法动作 read-model（只读，派生自 frozen graph 单一权威）。
+
+    响应自包含 campaign 身份与 status，前端不复制 graph；动作执行仍走
+    正式 transition API（CAS + graph 校验）。terminal → next_actions 为空。
+    """
+    try:
+        campaign, actions = campaign_service.next_campaign_actions(campaign_id)
+    except CampaignInputError:
+        raise HTTPException(422, _INVALID_INPUT_DETAIL) from None
+    except CampaignNotFoundError:
+        raise HTTPException(404, _NOT_FOUND_DETAIL) from None
+    except CampaignServiceError:
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    except Exception:  # noqa: BLE001 — 未预期逃逸，安全兜底
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    return {
+        "data": {
+            "campaign_id": campaign["campaign_id"],
+            "security_code": campaign["security_code"],
+            "strategy": campaign["strategy"],
+            "status": campaign["status"],
+            "next_actions": actions,
+        }
+    }
 
 
 @router.post("/campaigns/{campaign_id}/thesis-binding", status_code=201)

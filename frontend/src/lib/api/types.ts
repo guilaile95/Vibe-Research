@@ -1792,3 +1792,86 @@ export interface Bk11HistoryEnvelope {
   warnings: string[];
   limitations: string[];
 }
+
+// ---------------------------------------------------------------------------
+// Campaign（P0-CS1）：strategy / status 为 frozen 枚举，与 backend 逐字一致。
+// 前端绝不重新定义 transition graph；下一合法动作只来自 next-actions API。
+// ---------------------------------------------------------------------------
+
+export type CampaignStrategy = "SHORT" | "SWING" | "MEDIUM";
+
+export type CampaignStatus =
+  | "DRAFT"
+  | "RESEARCHING"
+  | "PRE-ENTRY"
+  | "ACTIVE"
+  | "REDUCING"
+  | "CLOSED"
+  | "REJECTED"
+  | "EXPIRED";
+
+export interface CampaignRecord {
+  campaign_id: string;
+  security_code: string;
+  strategy: CampaignStrategy;
+  status: CampaignStatus;
+  created_at: string;
+}
+
+export interface CampaignTransitionRecord {
+  transition_id: string;
+  campaign_id: string;
+  from_status: CampaignStatus;
+  to_status: CampaignStatus;
+  transitioned_at: string;
+}
+
+export interface CampaignTransitionResult {
+  campaign: CampaignRecord;
+  transition: CampaignTransitionRecord;
+}
+
+export interface CampaignNextActions {
+  campaign_id: string;
+  security_code: string;
+  strategy: CampaignStrategy;
+  status: CampaignStatus;
+  next_actions: CampaignStatus[];
+}
+
+// ---------------------------------------------------------------------------
+// Decision Inbox（P0-CS1）：只读快照，前端只展示 + 调用正式写 API。
+// ---------------------------------------------------------------------------
+
+export interface DecisionInboxHoldingSetupItem {
+  item_kind: "UNASSIGNED_HOLDING";
+  security_code: string;
+  security_name: string;
+  holding: Record<string, unknown>;
+  reason_codes: string[];
+  next_workflow_action: string;
+  as_of: string;
+}
+
+export interface DecisionInboxCampaignItem {
+  schema_version: string;
+  visible_state: string;
+  reason_codes: string[];
+  security_code: string;
+  strategy: CampaignStrategy;
+  campaign_id: string;
+  campaign_status: CampaignStatus;
+  as_of: string;
+}
+
+export interface DecisionInboxSnapshot {
+  schema_version: string;
+  as_of: string;
+  evaluation_status: "EVALUATED" | "NOT_EVALUATED";
+  canonical: boolean;
+  reason_codes: string[];
+  holding_setup_items: DecisionInboxHoldingSetupItem[];
+  campaign_items: DecisionInboxCampaignItem[];
+  total_holdings: number;
+  total_campaign_items: number;
+}

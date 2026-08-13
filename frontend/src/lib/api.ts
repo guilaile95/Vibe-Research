@@ -101,6 +101,13 @@ import type {
   AttributionSnapshotListResult,
   AttributionSnapshotDetailResult,
   Bk11HistoryEnvelope,
+  CampaignRecord,
+  CampaignStrategy,
+  CampaignStatus,
+  CampaignTransitionRecord,
+  CampaignTransitionResult,
+  CampaignNextActions,
+  DecisionInboxSnapshot,
 } from "./api/types.ts";
 
 
@@ -854,6 +861,18 @@ export const api = {
   listAttributionSnapshots: (params?: { date_from?: string; date_to?: string; limit?: number; offset?: number }) =>
     listAttributionSnapshots(params),
   getAttributionSnapshot: (snapshotId: string) => getAttributionSnapshot(snapshotId),
+
+  // ---- Campaign（P0-CS1）----
+  listCampaigns: (params?: { security_code?: string; strategy?: CampaignStrategy; status?: CampaignStatus }) =>
+    listCampaigns(params),
+  createCampaign: (securityCode: string, strategy: CampaignStrategy) =>
+    createCampaign(securityCode, strategy),
+  getCampaign: (campaignId: string) => getCampaign(campaignId),
+  transitionCampaign: (campaignId: string, expectedStatus: CampaignStatus, toStatus: CampaignStatus) =>
+    transitionCampaign(campaignId, expectedStatus, toStatus),
+  getCampaignTransitions: (campaignId: string) => getCampaignTransitions(campaignId),
+  getCampaignNextActions: (campaignId: string) => getCampaignNextActions(campaignId),
+  getDecisionInbox: () => getDecisionInbox(),
 };
 
 export async function listDecisionEvidence(params?: {
@@ -1075,4 +1094,73 @@ export async function getAttributionSnapshot(snapshotId: string): Promise<Attrib
   return get<AttributionSnapshotDetailResult>(
     `/performance-attribution/snapshots/${encodeURIComponent(snapshotId)}`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Campaign（P0-CS1）
+// 创建只提交 security_code + strategy（status/campaign_id/created_at 由服务端决定）；
+// transition 只提交 expected_status + to_status，由 backend frozen graph 校验。
+// ---------------------------------------------------------------------------
+
+export async function listCampaigns(params?: {
+  security_code?: string;
+  strategy?: CampaignStrategy;
+  status?: CampaignStatus;
+}): Promise<CampaignRecord[]> {
+  const q = new URLSearchParams();
+  if (params?.security_code) q.set("security_code", params.security_code);
+  if (params?.strategy) q.set("strategy", params.strategy);
+  if (params?.status) q.set("status", params.status);
+  const qs = q.toString();
+  return get<CampaignRecord[]>(`/campaigns${qs ? `?${qs}` : ""}`);
+}
+
+export async function createCampaign(
+  securityCode: string,
+  strategy: CampaignStrategy,
+): Promise<CampaignRecord> {
+  return request<CampaignRecord>("/campaigns", "POST", {
+    security_code: securityCode,
+    strategy,
+  });
+}
+
+export async function getCampaign(campaignId: string): Promise<CampaignRecord> {
+  return get<CampaignRecord>(`/campaigns/${encodeURIComponent(campaignId)}`);
+}
+
+export async function transitionCampaign(
+  campaignId: string,
+  expectedStatus: CampaignStatus,
+  toStatus: CampaignStatus,
+): Promise<CampaignTransitionResult> {
+  return request<CampaignTransitionResult>(
+    `/campaigns/${encodeURIComponent(campaignId)}/transitions`,
+    "POST",
+    { expected_status: expectedStatus, to_status: toStatus },
+  );
+}
+
+export async function getCampaignTransitions(
+  campaignId: string,
+): Promise<CampaignTransitionRecord[]> {
+  return get<CampaignTransitionRecord[]>(
+    `/campaigns/${encodeURIComponent(campaignId)}/transitions`,
+  );
+}
+
+export async function getCampaignNextActions(
+  campaignId: string,
+): Promise<CampaignNextActions> {
+  return get<CampaignNextActions>(
+    `/campaigns/${encodeURIComponent(campaignId)}/next-actions`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Decision Inbox（P0-CS1）：只读快照。
+// ---------------------------------------------------------------------------
+
+export async function getDecisionInbox(): Promise<DecisionInboxSnapshot> {
+  return get<DecisionInboxSnapshot>("/decision-inbox");
 }
