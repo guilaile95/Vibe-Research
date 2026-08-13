@@ -56,10 +56,16 @@ jobs:
             pytest_args: tests/test_daily_review_ai_api.py
           - phase: C1_TEST_API
             pytest_args: tests/test_api.py
-          - phase: C2A_FIXES_CLI
-            pytest_args: tests/test_fixes.py -k "run_cli or cli_stream or run_cli_stream"
-          - phase: C2B_FIXES_NONCLI
-            pytest_args: tests/test_fixes.py -k "not run_cli and not cli_stream and not run_cli_stream"
+          - phase: C2A1_FIXES_TIMEOUT
+            pytest_args: tests/test_fixes.py::test_run_cli_stream_timeout
+          - phase: C2A2_FIXES_NONZERO
+            pytest_args: tests/test_fixes.py::test_run_cli_nonzero_with_stdout_is_failure
+          - phase: C2A3_FIXES_CLOSEPIPES
+            pytest_args: tests/test_fixes.py::test_run_cli_stream_close_reaps_child_and_closes_pipes
+          - phase: C2A4_FIXES_REALCHILD
+            pytest_args: tests/test_fixes.py::test_run_cli_stream_close_reaps_real_child_and_reader_thread
+          - phase: C2A5_FIXES_READERR
+            pytest_args: tests/test_fixes.py::test_run_cli_stream_stdout_read_error_is_failure
           - phase: C3_PORTFOLIO_ERR
             pytest_args: tests/test_portfolio_advice_error_mapping.py
     steps:
