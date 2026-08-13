@@ -4,21 +4,24 @@ import test from "node:test";
 import {
   cacheDetailText,
   cacheTag,
+  confirmedUnavailableCount,
   coverageText,
   degradedDetailText,
   degradedTag,
-  emptySystemGuide,
+  emptySystemGuideFromItems,
   filterItems,
   freshnessLabel,
   freshnessState,
   gateAdviceLabel,
   gateAdviceState,
   isProblemSource,
+  notInitializedCount,
   parseHealthSearchParams,
   presentationLabel,
   presentationState,
   requestScopeCardHint,
   requestScopeDetailDisclaimer,
+  sourceTotalCount,
   statusAriaLabel,
   statusLabel,
   summaryQualityTotal,
@@ -142,10 +145,45 @@ test("request scoped hints", () => {
   assert.equal(requestScopeCardHint("daily_review"), null);
 });
 
-test("summary quality total and empty guide", () => {
+test("summary quality total counts backend tri-state only", () => {
   const s = { normal: 5, partial: 2, unavailable: 4, stale: 3, not_initialized: 2 };
   assert.equal(summaryQualityTotal(s), 11);
-  assert.equal(emptySystemGuide({ ...s, not_initialized: 11 }), true);
+});
+
+test("R1: confirmed unavailable excludes not-initialized; counts are item-derived", () => {
+  // 8 not_initialized + 1 true failure + 其余正常（验收 G/H）
+  const items: DataHealthRecord[] = [];
+  for (let i = 0; i < 8; i++) {
+    items.push(rec({
+      source_id: `s${i}`,
+      status: "unavailable",
+      last_error_code: "SOURCE_NOT_INITIALIZED",
+    }));
+  }
+  items.push(rec({
+    source_id: "failure",
+    status: "unavailable",
+    last_error_code: "SOURCE_UNAVAILABLE",
+  }));
+  items.push(rec({ source_id: "ok", status: "normal" }));
+  // unavailable = 1（真实失败），not initialized = 8
+  assert.equal(confirmedUnavailableCount(items), 1);
+  assert.equal(notInitializedCount(items), 8);
+  // source total 动态派生（10，不是 hardcoded 11/15）
+  assert.equal(sourceTotalCount(items), 10);
+  assert.equal(emptySystemGuideFromItems(items), false);
+});
+
+test("R1: empty-system guide only when every item is not-initialized (dynamic)", () => {
+  const all = [1, 2, 3].map((i) =>
+    rec({
+      source_id: `s${i}`,
+      status: "unavailable",
+      last_error_code: "SOURCE_NOT_INITIALIZED",
+    }),
+  );
+  assert.equal(emptySystemGuideFromItems(all), true);
+  assert.equal(emptySystemGuideFromItems([]), false);
 });
 
 test("url filter parse cleans invalid", () => {

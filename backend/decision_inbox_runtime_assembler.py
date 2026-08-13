@@ -131,6 +131,30 @@ def _production_price_evaluator(
     )
 
 
+def _record_observation_event(
+    source_id: str, event: str
+) -> None:
+    """在业务 observation boundary 更新既有 Data Health event（best effort）。
+
+    event: SUCCESS / PARTIAL / FAILURE。业务已成功使用后不得仍显示
+    SOURCE_NOT_INITIALIZED。写入副作用只在此 production wrapper 层，
+    绝不进入 pure evaluation core；上报失败绝不破坏 capability 评估。
+    """
+    try:
+        import data_health_event_store as event_store
+
+        if event == "FAILURE":
+            event_store.safe_call(
+                event_store.record_failure, source_id, "SOURCE_UNAVAILABLE"
+            )
+        elif event == "PARTIAL":
+            event_store.safe_call(event_store.record_partial, source_id)
+        else:
+            event_store.safe_call(event_store.record_success, source_id)
+    except Exception:
+        pass
+
+
 def _production_market_sector_evaluator(
     lake: FactLake | None, definition: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -144,21 +168,41 @@ def _production_market_sector_evaluator(
 def _production_disclosures_evaluator(
     lake: FactLake | None, definition: Mapping[str, Any]
 ) -> dict[str, Any]:
-    return disclosures_adapter.evaluate_disclosures_capability(
+    result = disclosures_adapter.evaluate_disclosures_capability(
         security_code=definition["security_code"],
         campaign_id=definition["campaign_id"],
         as_of=definition["as_of"],
     )
+    # 业务 observation boundary：真实读取后更新 announcements 健康事件
+    state = result["state"]
+    if state == "ERROR":
+        _record_observation_event("announcements", "FAILURE")
+    elif state == "UNKNOWN":
+        _record_observation_event("announcements", "PARTIAL")
+    else:
+        _record_observation_event("announcements", "SUCCESS")
+    return result
 
 
 def _production_financials_evaluator(
     lake: FactLake | None, definition: Mapping[str, Any]
 ) -> dict[str, Any]:
-    return financials_adapter.evaluate_financials_capability(
+    result = financials_adapter.evaluate_financials_capability(
         security_code=definition["security_code"],
         campaign_id=definition["campaign_id"],
         as_of=definition["as_of"],
     )
+    # 业务 observation boundary：真实读取后更新 financials 健康事件。
+    # NOT_EVALUATED（report-period applicability 未解决）代表业务读取成功
+    # 且拿到数据 → SUCCESS 口径，与 /api/financials 既有上报一致。
+    state = result["state"]
+    if state == "ERROR":
+        _record_observation_event("financials", "FAILURE")
+    elif state == "UNKNOWN":
+        _record_observation_event("financials", "PARTIAL")
+    else:
+        _record_observation_event("financials", "SUCCESS")
+    return result
 
 
 def _production_frozen_decisions_reader(

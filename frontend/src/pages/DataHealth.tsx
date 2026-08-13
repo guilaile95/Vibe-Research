@@ -9,31 +9,36 @@ import type { DataHealthDetailResult, DataHealthOverviewResult, DataHealthRecord
 import {
   cacheDetailText,
   cacheTag,
+  confirmedUnavailableCount,
   coverageText,
   degradedDetailText,
   degradedTag,
-  emptySystemGuide,
+  emptySystemGuideFromItems,
   filterItems,
   freshnessLabel,
   freshnessState,
   gateAdviceLabel,
   gateAdviceState,
   isProblemSource,
+  notInitializedCount,
   parseHealthSearchParams,
   presentationLabel,
   presentationState,
   requestScopeCardHint,
   requestScopeDetailDisclaimer,
   staleTag,
-  statusAriaLabel,
   statusLabel,
-  summaryQualityTotal,
   type DataHealthRecord,
 } from "@/lib/dataHealthView";
 
 function StatusBadge({ status }: { status: string }) {
   const label = status === "not_initialized" ? presentationLabel("not_initialized") : statusLabel(status);
-  // P0-DS1：not_initialized 为中性展示（未检测 ≠ 不可用），绝不显示红色
+  // P0-DS1：not_initialized 为中性展示（未检测 ≠ 不可用），绝不显示红色；
+  // aria-label 同样中性（不得读成「不可用」）
+  const aria =
+    status === "not_initialized"
+      ? "数据状态：未初始化"
+      : `数据状态：${label}`;
   const cls =
     status === "not_initialized"
       ? "bg-slate-500/15 text-slate-400"
@@ -53,7 +58,7 @@ function StatusBadge({ status }: { status: string }) {
   return (
     <span
       className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium", cls)}
-      aria-label={statusAriaLabel(status)}
+      aria-label={aria}
     >
       <Icon className="h-3 w-3" aria-hidden />
       {label}
@@ -192,15 +197,16 @@ export function DataHealth() {
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
               <Metric label="正常" value={overview.summary.normal} />
               <Metric label="部分可用" value={overview.summary.partial} />
-              <Metric label="不可用" value={overview.summary.unavailable} />
+              {/* P0-DS1-R1：确认不可用排除未初始化（未检测 ≠ 不可用） */}
+              <Metric label="确认不可用" value={confirmedUnavailableCount(overview.items)} />
               <Metric label="数据陈旧" value={overview.summary.stale} hint="可与质量状态重叠" />
-              <Metric label="尚未初始化" value={overview.summary.not_initialized} hint="未检测 ≠ 不可用" />
+              <Metric label="尚未初始化" value={notInitializedCount(overview.items)} hint="未检测 ≠ 不可用" />
             </div>
             <p className="mt-2 text-[11px] text-muted-foreground">
-              质量三态合计 {summaryQualityTotal(overview.summary)} / 11；
+              数据源合计 {overview.items.length}；
               「数据陈旧」可与质量状态重叠；「尚未初始化」独立于质量三态，不视为不可用。
             </p>
-            {emptySystemGuide(overview.summary) && (
+            {emptySystemGuideFromItems(overview.items) && (
               <p className="mt-2 rounded-lg bg-slate-500/10 px-3 py-2 text-xs text-muted-foreground">
                 当前系统尚无业务数据观察记录。请先使用每日复盘、资讯雷达、持仓等业务入口产生数据后，再查看健康状态。
               </p>

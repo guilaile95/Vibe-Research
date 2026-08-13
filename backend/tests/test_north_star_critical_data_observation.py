@@ -150,6 +150,7 @@ def _ports(
     *,
     campaigns: list[dict],
     market_reader=None,
+    sector_reader=None,
     announcements=None,
     financials_payload: dict | None = None,
     price_evaluator=_price_usable,
@@ -159,11 +160,13 @@ def _ports(
 
     def market(lake, definition):
         reader = market_reader or _breadth_reader(trade_date)
+        sector = sector_reader or (lambda _code: {"行业": "白酒"})
         return market_sector_adapter.evaluate_market_sector_capability(
             security_code=definition["security_code"],
             campaign_id=definition["campaign_id"],
             as_of=definition["as_of"],
             market_reader=reader,
+            sector_reader=sector,
         )
 
     def disclosures(lake, definition):
@@ -320,3 +323,20 @@ def test_no_false_clean_even_when_capabilities_usable():
     assert item["critical_data_state"] == "USABLE"
     assert item["visible_state"] != "NO_ACTION_REQUIRED"
     assert item["coverage_complete"] is False
+
+
+# ---------------------------------------------------------------------------
+# §6-C：market available + sector missing → NOT USABLE
+# ---------------------------------------------------------------------------
+
+def test_market_available_sector_missing_is_not_usable():
+    """验收 C：市场可用但 security 板块无法证明 → 非 USABLE + blocker。"""
+    ports = _ports(
+        campaigns=[_campaign()],
+        sector_reader=lambda _code: {},
+    )
+    item = _assemble(ports)["campaign_items"][0]
+    assert item["critical_data_state"] != "USABLE"
+    assert market_sector_adapter.SECTOR_CONTEXT_BLOCKER_REF in item[
+        "explainability"]["authority_refs"
+    ]

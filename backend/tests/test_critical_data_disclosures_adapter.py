@@ -102,10 +102,42 @@ def test_malformed_fetched_at_is_unknown():
     )["state"] == "UNKNOWN"
 
 
-def test_future_fetched_at_is_not_evaluated():
-    assert _evaluate(
-        lambda _code: _payload(fetched_at="2026-08-13T05:00:00.000000Z")
-    )["state"] == "NOT_EVALUATED"
+def test_fetched_at_after_as_of_is_normal_not_not_evaluated():
+    """§1/§A：生产实际顺序 snapshot → request → retrieval completes later；
+    fetched_at 晚于 as_of 是正常网络耗时，绝不天然 NOT_EVALUATED。"""
+    result = _evaluate(lambda _code: _payload(
+        fetched_at="2026-08-13T04:01:00.000000Z",  # 晚于 as_of 04:00:00
+    ))
+    assert result["state"] == "USABLE"
+    assert "disclosures:count=2" in result["authority_refs"]
+
+
+def test_lookahead_announcements_excluded_but_result_usable():
+    """§B：历史 as_of 不得 look-ahead —— 公告日晚于 as_of 北京日的条目
+    从判定排除；剩余可见公告仍正常评估。"""
+    result = _evaluate(lambda _code: _payload(announcements=[
+        {"date": "2026-08-13", "title": "可见", "type": "A", "url": "u"},
+        {"date": "2026-08-15", "title": "未来", "type": "B", "url": "u"},
+    ]))
+    assert result["state"] == "USABLE"
+    refs = result["authority_refs"]
+    assert "disclosures:count=1" in refs
+    assert "disclosures:latest_notice_date=2026-08-13" in refs
+    assert any(ref.startswith("disclosures:lookahead-excluded=") for ref in refs)
+
+
+def test_all_lookahead_announcements_is_empty_but_valid():
+    """全部公告都是未来 → as_of 时点无可见公告 = 有效空（非失败、非伪造）。"""
+    result = _evaluate(lambda _code: _payload(announcements=[
+        {"date": "2026-08-15", "title": "未来一", "type": "A", "url": "u"},
+        {"date": "2026-08-16", "title": "未来二", "type": "B", "url": "u"},
+    ]))
+    assert result["state"] == "USABLE"
+    assert EMPTY_BUT_VALID_REF in result["authority_refs"]
+    assert any(
+        ref.startswith("disclosures:lookahead-excluded=")
+        for ref in result["authority_refs"]
+    )
 
 
 # ---------------------------------------------------------------------------

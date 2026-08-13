@@ -254,6 +254,29 @@ export function summaryQualityTotal(s: DataHealthSummary): number {
   return s.normal + s.partial + s.unavailable;
 }
 
+/**
+ * P0-DS1-R1：confirmed unavailable 必须排除 SOURCE_NOT_INITIALIZED
+ * （未初始化 ≠ 确认不可用）。全部计数从真实 items 动态派生，
+ * 不得 hardcode 11 / 15。
+ */
+export function confirmedUnavailableCount(items: DataHealthRecord[]): number {
+  return items.filter(
+    (it) =>
+      it.status === "unavailable"
+      && it.last_error_code !== "SOURCE_NOT_INITIALIZED",
+  ).length;
+}
+
+export function notInitializedCount(items: DataHealthRecord[]): number {
+  return items.filter(
+    (it) => it.last_error_code === "SOURCE_NOT_INITIALIZED",
+  ).length;
+}
+
+export function sourceTotalCount(items: DataHealthRecord[]): number {
+  return items.length;
+}
+
 export function requestScopeCardHint(source_id: string): string | null {
   if (!REQUEST_SCOPED.has(source_id)) return null;
   return "最近一次真实调用";
@@ -265,6 +288,7 @@ export function requestScopeDetailDisclaimer(source_id: string, calcDisclaimer?:
   return "该状态来自此数据源最近一次真实业务调用，不代表全部股票或板块均已验证。";
 }
 
-export function emptySystemGuide(summary: DataHealthSummary): boolean {
-  return summary.not_initialized === 11;
+/** P0-DS1-R1：空系统引导从真实 items 动态判定（不再 hardcode 11）。 */
+export function emptySystemGuideFromItems(items: DataHealthRecord[]): boolean {
+  return items.length > 0 && notInitializedCount(items) === items.length;
 }

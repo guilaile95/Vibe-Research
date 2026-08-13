@@ -11,6 +11,7 @@ import pytest
 import critical_data_market_sector_adapter as adapter
 from critical_data_market_sector_adapter import (
     ADAPTER_AUTHORITY_REF,
+    SECTOR_CONTEXT_BLOCKER_REF,
     MarketSectorCapabilityError,
     evaluate_market_sector_capability,
 )
@@ -43,17 +44,30 @@ def _envelope(**overrides):
     return base
 
 
+def _industry_reader(industry: str | None):
+    """sector_reader fake：industry=None 表示无法证明板块上下文。"""
+
+    def _reader(_code):
+        if industry is None:
+            return {}
+        return {"行业": industry, "总股本": 1.26e9}
+
+    return _reader
+
+
 def _evaluate(
     reader,
     *,
     calendar=lambda _as_of: TRADE_DATE,
     as_of: str = AS_OF,
+    sector_reader=None,
 ):
     return evaluate_market_sector_capability(
         security_code=SECURITY,
         campaign_id=CAMPAIGN,
         as_of=as_of,
         market_reader=reader,
+        sector_reader=sector_reader or _industry_reader("白酒"),
         calendar=calendar,
     )
 
@@ -183,3 +197,59 @@ def test_result_uses_dependency_id_and_as_of():
     result = _evaluate(lambda: _envelope())
     assert result["dependency_id"] == adapter.DEPENDENCY_ID
     assert result["as_of"] == AS_OF
+
+
+# ---------------------------------------------------------------------------
+# §6-C/D：security-relevant sector context（market alone 不得 USABLE）
+# ---------------------------------------------------------------------------
+
+def test_market_alone_without_sector_context_is_not_usable():
+    """§6-C：市场可用 + sector 缺失 → NOT USABLE + 显式 blocker。"""
+    result = _evaluate(
+        lambda: _envelope(),
+        sector_reader=_industry_reader(None),
+    )
+    assert result["state"] == "UNKNOWN"
+    assert SECTOR_CONTEXT_BLOCKER_REF in result["authority_refs"]
+
+
+def test_market_plus_sector_proof_is_usable():
+    """§6-D：市场 + security 板块正向证明 → USABLE（带板块 ref）。"""
+    result = _evaluate(lambda: _envelope(), sector_reader=_industry_reader("白酒"))
+    assert result["state"] == "USABLE"
+    assert "market-sector:security-industry=白酒" in result["authority_refs"]
+
+
+def test_sector_reader_exception_is_error():
+    def broken(_code):
+        raise RuntimeError("sector provider down")
+
+    result = _evaluate(lambda: _envelope(), sector_reader=broken)
+    assert result["state"] == "ERROR"
+
+
+def test_sector_reader_none_or_non_mapping_is_unknown_with_blocker():
+    assert _evaluate(
+        lambda: _envelope(), sector_reader=lambda _code: None
+    )["state"] == "UNKNOWN"
+    result = _evaluate(lambda: _envelope(), sector_reader=lambda _code: "bad")
+    assert result["state"] == "UNKNOWN"
+    assert SECTOR_CONTEXT_BLOCKER_REF in result["authority_refs"]
+
+
+def test_sector_missing_industry_key_is_unknown_with_blocker():
+    result = _evaluate(
+        lambda: _envelope(),
+        sector_reader=lambda _code: {"总股本": 1.0},
+    )
+    assert result["state"] == "UNKNOWN"
+    assert SECTOR_CONTEXT_BLOCKER_REF in result["authority_refs"]
+
+
+def test_market_stale_short_circuits_even_with_sector_proof():
+    """STALE 市场快照不因 sector 证明而救回。"""
+    result = _evaluate(
+        lambda: _envelope(trade_date="2026-08-12"),
+        sector_reader=_industry_reader("白酒"),
+    )
+    assert result["state"] == "STALE"

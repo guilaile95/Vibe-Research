@@ -1,4 +1,25 @@
-# North-Star Critical Data Activation v0.1（P0-DS1）
+# North-Star Critical Data Activation v0.1（P0-DS1，含 R1 correction）
+
+## R1 Correction（reviewer blockers 修复）
+
+1. **Disclosures 时间语义**：FACT TIME（公告日，北京时间日历日）/ RETRIEVAL
+   TIME（fetched_at，仅 provenance）/ EVALUATION TIME（as_of）明确分离。
+   fetched_at 晚于 as_of 是正常网络耗时，绝不天然 NOT_EVALUATED；
+   look-ahead 防护只针对 FACT TIME：公告日晚于 as_of 北京日的条目从判定
+   排除（历史 as_of 无 look-ahead；全部未来 → EMPTY_BUT_VALID）。
+2. **market_sector 不再 market-only USABLE**：市场上下文（广度信封）+
+   security-relevant sector context（astock.individual_info 行业）必须同时
+   positive-proof；sector 无法证明 → UNKNOWN + 显式 blocker
+   `market-sector:blocker=SECURITY_SECTOR_CONTEXT_UNAVAILABLE`。
+3. **Data Health observation continuity**：production wrapper 在业务
+   observation boundary 更新既有 event store（announcements / financials
+   success/partial/failure）；写入副作用绝不进入 pure evaluation core。
+4. **Data Health 显示计数**：确认不可用排除 SOURCE_NOT_INITIALIZED；
+   全部计数从真实 items 动态派生（无 hardcode 11/15）；not_initialized
+   badge 与 aria-label 均中性。
+5. **Real provider path**：production wrapper 测试仅替换 transport
+   boundary（monkeypatch provider 函数），证明
+   wrapper → parse → temporal → capability result → Data Health 全链连通。
 
 ## 定位
 
