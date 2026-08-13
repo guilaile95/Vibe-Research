@@ -72,7 +72,7 @@ jobs:
           VR_REPORTS_DIR: ${{ runner.temp }}/vr-reports
           VIBE_RESEARCH_REVIEW_DB: ${{ runner.temp }}/review.db
         run: |
-          timeout 180 python -m pytest -vv -s ${{ matrix.pytest_args }} -m "not live" || true
+          timeout -k 5s 180 python -m pytest -vv -s ${{ matrix.pytest_args }} -m "not live" || true
 
   frontend:
     name: Frontend build & test
