@@ -17,12 +17,17 @@ import {
   TERMINAL_CAMPAIGN_STATUSES,
   isSetupCampaignStatus,
   isTerminalCampaignStatus,
+  isDestructiveTransition,
   collectHoldingUniverseSecurityCodes,
   selectSetupCampaigns,
   renderableTransitionTargets,
   createCampaignPayload,
   transitionPayload,
   errorMessage,
+  reasonCodeLabel,
+  visibleStateLabel,
+  presentReasonCodes,
+  formatCampaignIdShort,
 } from "../src/lib/decisionInbox.ts";
 import type {
   CampaignRecord,
@@ -293,6 +298,49 @@ test("J: next-actions present → exactly backend-declared targets (no extra edg
 });
 
 // ---- deterministic ordering ----
+
+test("ACTIVE display label does not say 已激活 / 买入 / 持有", () => {
+  assert.equal(CAMPAIGN_STATUS_LABELS.ACTIVE, "进行中");
+  assert.doesNotMatch(CAMPAIGN_STATUS_LABELS.ACTIVE, /买入|持有|已批准/);
+});
+
+test("reason codes stay semantic; labels are presentation-only", () => {
+  assert.equal(reasonCodeLabel("THESIS_MISSING"), "尚未绑定正式投资逻辑");
+  assert.equal(reasonCodeLabel("UNKNOWN_CODE_XYZ"), "UNKNOWN_CODE_XYZ");
+  assert.equal(visibleStateLabel("SETUP_REQUIRED"), "设置尚未完成");
+  assert.equal(visibleStateLabel("CUSTOM_STATE"), "CUSTOM_STATE");
+});
+
+test("presentReasonCodes keeps raw codes in details and surfaces readable primary", () => {
+  const presented = presentReasonCodes([
+    "THESIS_MISSING",
+    "CRITICAL_DATA_NOT_EVALUATED",
+    "COVERAGE_INCOMPLETE",
+  ]);
+  assert.deepEqual(presented.primary, [
+    "尚未绑定正式投资逻辑",
+    "关键数据尚未评估",
+  ]);
+  assert.equal(presented.extraCount, 1);
+  assert.deepEqual(
+    presented.details.map((item) => item.code),
+    ["THESIS_MISSING", "CRITICAL_DATA_NOT_EVALUATED", "COVERAGE_INCOMPLETE"],
+  );
+});
+
+test("formatCampaignIdShort keeps identity recognizable without the full UUID", () => {
+  const id = "campaign_" + "a".repeat(32);
+  assert.equal(formatCampaignIdShort(id), "campaign_aaaaaaaa…");
+  assert.equal(formatCampaignIdShort("short"), "short");
+});
+
+test("destructive transition styling uses terminal classification, not a copied graph", () => {
+  assert.equal(isDestructiveTransition("REJECTED"), true);
+  assert.equal(isDestructiveTransition("EXPIRED"), true);
+  assert.equal(isDestructiveTransition("CLOSED"), true);
+  assert.equal(isDestructiveTransition("RESEARCHING"), false);
+  assert.equal(isDestructiveTransition("ACTIVE"), false);
+});
 
 test("setup campaigns sort deterministically by security_code → created_at → campaign_id", () => {
   const universe = ["000001", "600519"];

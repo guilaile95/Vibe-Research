@@ -11,7 +11,7 @@
  * 4. 刷新后 DRAFT 仍持续存在（不依赖 transient success component）。
  * 5. 同 Security 再创建 MEDIUM DRAFT —— 两个 setup 卡共存。
  * 6. SWING 卡显式点击：开始研究 → 标记待入场 → 激活 Campaign（每步一次，无链式）。
- * 7. ACTIVE 后：SWING 离开 setup 区域，进入「Campaign 决策项」；
+ * 7. ACTIVE 后：SWING 离开 setup 区域，进入「当前 Campaign」；
  *    MEDIUM DRAFT sibling 仍可见（ACTIVE sibling 不隐藏 DRAFT sibling）；
  *    决策状态为诚实状态（绝不显示 NO_ACTION_REQUIRED）。
  * 8. 刷新后状态保持（backend 权威，无本地伪造）。
@@ -158,10 +158,10 @@ print("SEED_OK")
 async function createCampaignViaUi(page, strategyLabel) {
   // 前提：holding 行显示「创建 Campaign」按钮（DRAFT 不算 current，入口持续存在）
   await page.click("button:has-text('创建 Campaign')");
-  await page.waitForSelector("text=创建后状态为 DRAFT，不会自动激活");
+  await page.waitForSelector("text=不会自动激活");
   await page.click(`label:has-text('${strategyLabel}')`);
   await page.click("button:has-text('确认创建 Campaign')");
-  await page.waitForSelector("text=尚未进入 current Campaign");
+  await page.waitForSelector("text=尚未进入当前 Campaign");
 }
 
 async function runE2E() {
@@ -238,8 +238,13 @@ async function runE2E() {
     // 2. 创建表单：strategy 必选（未选时提交禁用）+ 显式 DRAFT 确认文案
     console.log("[E2E] 2. CREATE_CAMPAIGN form requires strategy...");
     await page.click("button:has-text('创建 Campaign')");
-    await page.waitForSelector("text=创建后状态为 DRAFT，不会自动激活");
+    await page.waitForSelector("text=不会自动激活");
     await page.waitForSelector("text=证券代码（固定，不可修改）");
+    assert.equal(
+      await page.locator("text=只读，所有变更经显式操作").count(),
+      0,
+      "page copy must not claim read-only while create/transition exist",
+    );
     const submitBtn = page.locator("button:has-text('确认创建 Campaign')");
     assert.equal(await submitBtn.isDisabled(), true, "strategy selection required");
 
@@ -249,9 +254,10 @@ async function runE2E() {
     await page.click("button:has-text('确认创建 Campaign')");
     await page.waitForSelector("h2:has-text('正在建立的 Campaign')");
     const swingCard = page.locator('[data-campaign-strategy="SWING"]');
-    await swingCard.getByText("尚未进入 current Campaign").waitFor();
+    await swingCard.getByText("尚未进入当前 Campaign").waitFor();
     await swingCard.getByText("600519").waitFor();
     assert.equal(await swingCard.getAttribute("data-campaign-status"), "DRAFT");
+    assert.equal(await swingCard.getAttribute("data-campaign-role"), "setup");
     // 成功卡片显示 campaign_id / strategy / DRAFT（§13.6），由用户显式关闭
     await page.waitForSelector("text=Campaign 已创建（状态：草稿）");
     await page.click("button:has-text('关闭')");
@@ -261,7 +267,7 @@ async function runE2E() {
     // 4. 刷新后 DRAFT 仍持续存在（§7：不依赖 transient success component）
     console.log("[E2E] 4. refresh keeps DRAFT reachable...");
     await page.click("button:has-text('刷新')");
-    await swingCard.getByText("尚未进入 current Campaign").waitFor();
+    await swingCard.getByText("尚未进入当前 Campaign").waitFor();
     assert.equal(await swingCard.getAttribute("data-campaign-status"), "DRAFT");
 
     // 5. 同 Security 再创建 MEDIUM DRAFT（两个 setup 卡共存）
@@ -269,8 +275,9 @@ async function runE2E() {
     await createCampaignViaUi(page, "中线");
     await page.click("button:has-text('关闭')");
     const mediumCard = page.locator('[data-campaign-strategy="MEDIUM"]');
-    await mediumCard.getByText("尚未进入 current Campaign").waitFor();
+    await mediumCard.getByText("尚未进入当前 Campaign").waitFor();
     assert.equal(await mediumCard.getAttribute("data-campaign-status"), "DRAFT");
+    assert.equal(await mediumCard.getAttribute("data-campaign-role"), "setup");
 
     // 6. SWING 显式 lifecycle（每步一次点击，无链式；用「下一动作按钮出现」证明到达）
     console.log("[E2E] 6. explicit SWING lifecycle...");
@@ -288,23 +295,40 @@ async function runE2E() {
       '[data-campaign-strategy="SWING"][data-campaign-status="ACTIVE"]',
     );
     await swingActiveCard.waitFor();
-    await page.waitForSelector("h2:has-text('Campaign 决策项')");
-    await swingActiveCard.getByText("已激活").waitFor();
+    await page.waitForSelector("h2:has-text('当前 Campaign')");
+    await swingActiveCard.getByText("当前 Campaign", { exact: true }).waitFor();
+    assert.equal(await swingActiveCard.getAttribute("data-campaign-role"), "current");
     // MEDIUM DRAFT 仍在 setup section（ACTIVE sibling 不隐藏 DRAFT sibling）
     await page.waitForSelector("h2:has-text('正在建立的 Campaign')");
-    await mediumCard.getByText("尚未进入 current Campaign").waitFor();
-    // 诚实状态：绝不显示 NO_ACTION_REQUIRED
+    await mediumCard.getByText("尚未进入当前 Campaign").waitFor();
+    assert.equal(await mediumCard.getAttribute("data-campaign-role"), "setup");
+    // 诚实状态：绝不显示 NO_ACTION_REQUIRED；reason code 不以调试串作为主解释
     assert.equal(
       await page.locator("text=NO_ACTION_REQUIRED").count(),
       0,
       "must not fake a clean NO_ACTION_REQUIRED",
     );
+    await swingActiveCard.getByText("尚未绑定正式投资逻辑", { exact: true }).waitFor();
+    await swingActiveCard.getByText("设置尚未完成", { exact: true }).waitFor();
+    assert.equal(
+      await swingActiveCard.getByText("THESIS_MISSING / THESIS_UNKNOWN").count(),
+      0,
+      "raw reason dump must not be the primary explanation",
+    );
 
     // 8. 刷新后状态保持（backend 权威）
     console.log("[E2E] 8. refresh preserves backend state...");
     await page.click("button:has-text('刷新')");
-    await swingActiveCard.getByText("已激活").waitFor();
-    await mediumCard.getByText("尚未进入 current Campaign").waitFor();
+    await swingActiveCard.getByText("当前 Campaign", { exact: true }).waitFor();
+    await mediumCard.getByText("尚未进入当前 Campaign").waitFor();
+
+    // 8b. destructive 需要二次确认，取消后状态不变
+    console.log("[E2E] 8b. destructive action requires confirm...");
+    await mediumCard.locator('button[data-action-kind="destructive"]:has-text("拒绝 Campaign")').click();
+    await mediumCard.locator('[data-destructive-confirm="REJECTED"]').waitFor();
+    await mediumCard.locator('button:has-text("取消")').click();
+    assert.equal(await mediumCard.locator("[data-destructive-confirm]").count(), 0);
+    assert.equal(await mediumCard.getAttribute("data-campaign-status"), "DRAFT");
 
     // 9. 非法 transition（MEDIUM DRAFT→ACTIVE 直跳）→ backend 409；刷新后仍「草稿」
     console.log("[E2E] 9. illegal transition rejected (409) + state unchanged...");
@@ -319,12 +343,28 @@ async function runE2E() {
     );
     assert.equal(illegal.status(), 409);
     await page.click("button:has-text('刷新')");
-    await mediumCard.getByText("尚未进入 current Campaign").waitFor();
+    await mediumCard.getByText("尚未进入当前 Campaign").waitFor();
     assert.equal(
       await mediumCard.getAttribute("data-campaign-status"),
       "DRAFT",
       "MEDIUM must remain DRAFT after rejected transition",
     );
+
+    // 9b. UI 409：点击合法推进但 backend 拒绝 → 显示失败，不本地改状态
+    console.log("[E2E] 9b. UI 409 honesty...");
+    await page.route(`**/api/campaigns/${mediumId}/transitions`, (route) => {
+      if (route.request().method() === "POST") {
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Campaign 状态冲突" }),
+        });
+      }
+      return route.continue();
+    });
+    await mediumCard.locator('button[data-action-kind="advance"]:has-text("开始研究")').click();
+    await mediumCard.getByText("未能变更状态").waitFor();
+    assert.equal(await mediumCard.getAttribute("data-campaign-status"), "DRAFT");
 
     console.log("[E2E] Decision Inbox E2E test passed successfully!");
   } finally {

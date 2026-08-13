@@ -35,12 +35,92 @@ export const CAMPAIGN_STATUS_LABELS: Record<CampaignStatus, string> = {
   DRAFT: "草稿",
   RESEARCHING: "研究中",
   "PRE-ENTRY": "待入场",
-  ACTIVE: "已激活",
+  // 「进行中」= 已进入 current membership，不等于买卖建议已批准。
+  ACTIVE: "进行中",
   REDUCING: "减仓中",
   CLOSED: "已关闭",
   REJECTED: "已拒绝",
   EXPIRED: "已过期",
 };
+
+/** Decision Inbox visible_state → 用户可读主解释（不改 semantic 值）。 */
+export const VISIBLE_STATE_LABELS: Record<string, string> = {
+  NO_ACTION_REQUIRED: "暂无待办",
+  REVIEW_REQUIRED: "需要复核",
+  BLOCKED_BY_DATA: "关键数据未就绪",
+  SETUP_REQUIRED: "设置尚未完成",
+};
+
+/** reason_code → 用户可读主解释；未知码原样回退，绝不改写 semantic 值。 */
+export const REASON_CODE_LABELS: Record<string, string> = {
+  UNASSIGNED_HOLDING: "持仓尚未分配 Campaign",
+  CAMPAIGN_NOT_IN_SCOPE: "该 Campaign 不在当前决策范围",
+  THESIS_MISSING: "尚未绑定正式投资逻辑",
+  THESIS_NOT_READY: "投资逻辑尚未就绪",
+  THESIS_NOT_FROZEN: "投资逻辑尚未冻结",
+  THESIS_WEAKENED: "投资逻辑已弱化",
+  THESIS_STRENGTHENED: "投资逻辑已强化",
+  THESIS_DISPROVEN: "投资逻辑已被证伪",
+  THESIS_INVALIDATED: "投资逻辑已失效",
+  THESIS_UNKNOWN: "投资逻辑状态未知",
+  FORMAL_DECISION_MISSING: "尚未形成正式决策",
+  REVIEW_BY_REACHED: "已到复核时点",
+  HARD_RISK_CONFIRMED: "硬风险已确认",
+  HARD_RISK_UNKNOWN: "硬风险状态未知",
+  HARD_RISK_NOT_EVALUATED: "硬风险尚未评估",
+  CRITICAL_DATA_BLOCKED: "关键数据被阻断",
+  CRITICAL_DATA_UNKNOWN: "关键数据状态未知",
+  CRITICAL_DATA_STALE: "关键数据已过期",
+  CRITICAL_DATA_EVALUATION_UNKNOWN: "关键数据评估未知",
+  CRITICAL_DATA_NOT_EVALUATED: "关键数据尚未评估",
+  CRITICAL_DATA_ERROR: "关键数据评估出错",
+  COVERAGE_INCOMPLETE: "评估覆盖不完整",
+  MATERIAL_CHANGE_MATERIAL: "出现实质性变化",
+  MATERIAL_CHANGE_CRITICAL: "出现关键变化",
+  MATERIAL_CHANGE_UNKNOWN: "实质变化状态未知",
+  MATERIAL_CHANGE_NOT_EVALUATED: "实质变化尚未评估",
+  LOW_CONFIDENCE: "置信度偏低",
+  CLEAN: "无额外原因",
+};
+
+export function visibleStateLabel(state: string): string {
+  return VISIBLE_STATE_LABELS[state] ?? state;
+}
+
+export function reasonCodeLabel(code: string): string {
+  return REASON_CODE_LABELS[code] ?? code;
+}
+
+export function presentReasonCodes(codes: readonly string[]): {
+  primary: string[];
+  extraCount: number;
+  details: { code: string; label: string }[];
+} {
+  const details = codes.map((code) => ({ code, label: reasonCodeLabel(code) }));
+  return {
+    primary: details.slice(0, 2).map((item) => item.label),
+    extraCount: Math.max(0, details.length - 2),
+    details,
+  };
+}
+
+/** 完整 campaign_id 仍保留在 data 属性 / title；主视觉只显示可辨认短码。 */
+export function formatCampaignIdShort(campaignId: string): string {
+  const prefix = "campaign_";
+  if (campaignId.startsWith(prefix) && campaignId.length > prefix.length + 8) {
+    return `${campaignId.slice(0, prefix.length + 8)}…`;
+  }
+  if (campaignId.length > 16) return `${campaignId.slice(0, 16)}…`;
+  return campaignId;
+}
+
+/**
+ * 按钮视觉层级用已有 terminal 分类，不复制 transition graph。
+ * 终态目标降权；推进目标保持主操作。
+ */
+export function isDestructiveTransition(toStatus: CampaignStatus): boolean {
+  return isTerminalCampaignStatus(toStatus);
+}
 
 /** transition 目标状态 → 用户动作按钮文案（只做文案，不做合法性判定）。 */
 export const TRANSITION_ACTION_LABELS: Record<CampaignStatus, string> = {
