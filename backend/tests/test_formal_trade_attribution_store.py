@@ -574,10 +574,50 @@ def test_path_resolution_no_io(tmp_path, monkeypatch):
 def test_r1_read_directory_fail_closed(tmp_path):
     directory = tmp_path / "not_a_db"
     directory.mkdir()
-    with pytest.raises(store.FormalTradeAttributionStoreCorruptedError):
-        store.get_attribution(
+    with pytest.raises(store.FormalTradeAttributionStoreError):
+        out = store.get_attribution(
             db_path=directory, attribution_id="trade_attribution_" + "c" * 32
         )
+        assert out is not None
+    with pytest.raises(store.FormalTradeAttributionStoreError):
+        listed = store.list_attributions(db_path=directory)
+        assert listed != []
+
+
+def test_r1_stat_oserror_not_empty(tmp_path, monkeypatch):
+    target = tmp_path / "ledger.sqlite3"
+    target.write_bytes(b"x")
+
+    def boom(self, *args, **kwargs):
+        raise PermissionError("simulated stat failure")
+
+    monkeypatch.setattr(store.Path, "stat", boom)
+    with pytest.raises(store.FormalTradeAttributionStoreError):
+        out = store.get_attribution(
+            db_path=target, attribution_id="trade_attribution_" + "c" * 32
+        )
+        assert out is not None
+    with pytest.raises(store.FormalTradeAttributionStoreError):
+        listed = store.list_attributions(db_path=target)
+        assert listed != []
+
+
+def test_r1_readonly_open_oserror_fail_closed(db_path, monkeypatch):
+    rec = make_record(trade_id="b" * 32, attribution_id="trade_attribution_" + "c" * 32)
+    store.write_attribution(db_path=db_path, record=rec)
+
+    def boom(_path):
+        raise PermissionError("readonly open denied")
+
+    monkeypatch.setattr(store, "_connect_readonly", boom)
+    with pytest.raises(store.FormalTradeAttributionStoreError):
+        out = store.get_attribution(
+            db_path=db_path, attribution_id=rec["attribution_id"]
+        )
+        assert out is not None
+    with pytest.raises(store.FormalTradeAttributionStoreError):
+        listed = store.list_attributions(db_path=db_path)
+        assert listed != []
 
 
 def test_r1_empty_file_non_owner_times_out_fail_closed(db_path, monkeypatch):
@@ -624,7 +664,7 @@ def test_r1_partial_unique_trade_id_rejected(db_path):
     conn.execute("DROP TABLE old_fta")
     conn.execute(
         "CREATE UNIQUE INDEX idx_partial_trade_id "
-        "ON formal_trade_attributions(trade_id) WHERE trade_id IS NOT NULL"
+        "ON formal_trade_attributions(trade_id) WHERE security_code = '600519'"
     )
     conn.execute(
         "CREATE INDEX idx_fta_decision_id ON formal_trade_attributions(decision_id)"

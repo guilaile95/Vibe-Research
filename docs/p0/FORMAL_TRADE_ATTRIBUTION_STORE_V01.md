@@ -75,8 +75,22 @@ Read path: a true missing regular file returns empty; a directory,
 permission/stat error, or other non-file path fails closed and is never
 classified as missing.
 
-``UNIQUE(trade_id)`` must be a full uniqueness constraint. A partial
-unique index on ``trade_id`` is not accepted.
+```text
+MISSING_DB_EMPTY_ALLOWED = YES
+NON_FILE_PATH_EMPTY_ALLOWED = NO
+STAT_ERROR_EMPTY_ALLOWED = NO
+UNREADABLE_DB_EMPTY_ALLOWED = NO
+```
+
+``UNIQUE(trade_id)`` must be a full table uniqueness constraint
+(``unique=1``, ``partial=0``). A partial unique index on ``trade_id``
+is not accepted.
+
+```text
+GLOBAL_UNIQUE_TRADE_ID = YES
+PARTIAL_UNIQUE_ACCEPTED = NO
+PARTIAL_UNIQUE_TRADE_ID_SCHEMA = REJECTED
+```
 
 ## Files
 

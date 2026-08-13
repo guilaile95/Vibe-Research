@@ -142,7 +142,7 @@ def _classify_ledger_path(db_path: str | Path) -> str:
         ) from exc
     if stat.S_ISREG(st.st_mode):
         return "file"
-    raise FormalTradeAttributionStoreCorruptedError(
+    raise FormalTradeAttributionStoreError(
         "归属账本路径存在但不是普通文件"
     )
 
