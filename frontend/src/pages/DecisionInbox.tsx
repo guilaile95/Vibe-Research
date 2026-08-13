@@ -12,9 +12,7 @@ import { api } from "@/lib/api";
 import type {
   CampaignNextActions,
   CampaignRecord,
-  CampaignStatus,
   CampaignStrategy,
-  DecisionInboxCampaignItem,
   DecisionInboxHoldingSetupItem,
   DecisionInboxSnapshot,
 } from "@/lib/api/types";
@@ -22,11 +20,12 @@ import {
   CAMPAIGN_STRATEGIES,
   CAMPAIGN_STRATEGY_LABELS,
   CAMPAIGN_STATUS_LABELS,
-  TRANSITION_ACTION_LABELS,
+  collectHoldingUniverseSecurityCodes,
+  selectSetupCampaigns,
   createCampaignPayload,
-  transitionPayload,
   errorMessage,
 } from "@/lib/decisionInbox";
+import { CampaignLifecycleCard } from "@/components/campaign/CampaignLifecycleCard";
 
 /** 创建表单：security_code 固定自 holding，strategy 必选，显式确认 DRAFT。 */
 function CreateCampaignForm({
@@ -35,7 +34,7 @@ function CreateCampaignForm({
   onClose,
 }: {
   holding: DecisionInboxHoldingSetupItem;
-  onCreated: (campaign: CampaignRecord) => void;
+  onCreated: () => void;
   onClose: () => void;
 }) {
   const [strategy, setStrategy] = useState<CampaignStrategy | null>(null);
@@ -56,7 +55,7 @@ function CreateCampaignForm({
       );
       const campaign = await api.createCampaign(security_code, chosen);
       setCreated(campaign);
-      onCreated(campaign);
+      onCreated();
     } catch (err: any) {
       // API 失败不伪造成功
       setError(errorMessage(err));
@@ -162,108 +161,42 @@ function CreateCampaignForm({
   );
 }
 
-/** Campaign 行：真实 status + 下一合法动作按钮（全部显式点击，绝不链式）。 */
-function CampaignRow({
-  item,
-  actions,
-  onChanged,
-}: {
-  item: DecisionInboxCampaignItem;
-  actions: CampaignNextActions | null;
-  onChanged: () => void;
-}) {
-  const [busy, setBusy] = useState<CampaignStatus | null>(null);
-  const [error, setError] = useState("");
-
-  const handleTransition = async (to: CampaignStatus) => {
-    if (!actions) return;
-    setBusy(to);
-    setError("");
-    try {
-      // payload 形状由 transitionPayload 保证：expected_status + to_status（CAS）
-      const { expected_status, to_status } = transitionPayload(actions.status, to);
-      await api.transitionCampaign(item.campaign_id, expected_status, to_status);
-      onChanged();
-    } catch (err: any) {
-      // 409 等冲突如实显示 backend detail，绝不伪装成功
-      setError(errorMessage(err));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  return (
-    <div className="rounded-lg border border-border/60 bg-card p-4 space-y-2">
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="font-mono font-medium">{item.security_code}</span>
-        <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-          {CAMPAIGN_STRATEGY_LABELS[item.strategy]}
-        </span>
-        <span className="text-xs text-muted-foreground">{CAMPAIGN_STATUS_LABELS[item.campaign_status]}</span>
-        <span className="ml-auto font-mono text-xs text-muted-foreground">{item.campaign_id}</span>
-      </div>
-
-      <div className="text-xs text-muted-foreground">
-        决策状态：<span className="font-medium text-foreground">{item.visible_state}</span>
-        {item.reason_codes.length > 0 && (
-          <span className="ml-2">{item.reason_codes.join(" / ")}</span>
-        )}
-      </div>
-
-      {actions && actions.next_actions.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">下一合法动作：</span>
-          {actions.next_actions.map((to) => (
-            <button
-              key={to}
-              type="button"
-              disabled={busy !== null}
-              onClick={() => handleTransition(to)}
-              className="inline-flex items-center gap-1 rounded-md border border-border/60 px-2.5 py-1 text-xs hover:border-primary/50 hover:text-primary disabled:opacity-50"
-            >
-              {busy === to && <Loader2 className="h-3 w-3 animate-spin" />}
-              {TRANSITION_ACTION_LABELS[to]}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {actions && actions.next_actions.length === 0 && (
-        <p className="text-xs text-muted-foreground">已处于终态，无下一合法动作。</p>
-      )}
-
-      {error && (
-        <div className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-600" role="alert">
-          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-          {error}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function DecisionInbox() {
   const [snapshot, setSnapshot] = useState<DecisionInboxSnapshot | null>(null);
+  const [setupCampaigns, setSetupCampaigns] = useState<CampaignRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [nextActions, setNextActions] = useState<Record<string, CampaignNextActions | null>>({});
   const [creatingFor, setCreatingFor] = useState<string | null>(null);
+  // 每次打开创建表单都重挂组件（清空上一次的成功卡片/选择），可连续创建多个 Campaign
+  const [formGeneration, setFormGeneration] = useState(0);
 
   const refresh = useCallback(async () => {
     setLoadError("");
     try {
       const snap = await api.getDecisionInbox();
-      setSnapshot(snap);
+      // R1：DRAFT/RESEARCHING/PRE-ENTRY 不在 campaign_items（backend membership
+      // 冻结为 {ACTIVE, REDUCING}），必须经 listCampaigns 补全 setup 视图。
+      const allCampaigns = await api.listCampaigns();
+      const universe = collectHoldingUniverseSecurityCodes(snap);
+      const setup = selectSetupCampaigns(allCampaigns, universe);
+
+      const ids = [
+        ...snap.campaign_items.map((item) => item.campaign_id),
+        ...setup.map((campaign) => campaign.campaign_id),
+      ];
       const entries = await Promise.all(
-        snap.campaign_items.map(async (item) => {
+        ids.map(async (id) => {
           try {
-            const actions = await api.getCampaignNextActions(item.campaign_id);
-            return [item.campaign_id, actions] as const;
+            const actions = await api.getCampaignNextActions(id);
+            return [id, actions] as const;
           } catch {
-            return [item.campaign_id, null] as const;
+            return [id, null] as const;
           }
         }),
       );
+      setSnapshot(snap);
+      setSetupCampaigns(setup);
       setNextActions(Object.fromEntries(entries));
     } catch (err: any) {
       setLoadError(errorMessage(err));
@@ -277,9 +210,16 @@ export default function DecisionInbox() {
   }, [refresh]);
 
   const handleCreated = useCallback(() => {
-    setCreatingFor(null);
+    // 立即刷新 setup list（DRAFT 卡持久出现，不依赖成功卡片）；
+    // 成功卡片保留显示 campaign_id/strategy/DRAFT，由用户点「关闭」收起。
     void refresh();
   }, [refresh]);
+
+  const isEmpty =
+    snapshot?.canonical
+    && snapshot.holding_setup_items.length === 0
+    && snapshot.campaign_items.length === 0
+    && setupCampaigns.length === 0;
 
   return (
     <div className="space-y-6">
@@ -289,7 +229,8 @@ export default function DecisionInbox() {
         <div>
           <h1 className="text-xl font-bold">决策待办</h1>
           <p className="text-sm text-muted-foreground">
-            未建立 Campaign 的持仓与已激活 Campaign 的决策状态（只读，所有变更经显式操作）
+            未建立 Campaign 的持仓、正在建立的 Campaign 与已激活 Campaign 的决策状态
+            （只读，所有变更经显式操作）
           </p>
         </div>
         <button
@@ -320,7 +261,7 @@ export default function DecisionInbox() {
             </div>
           )}
 
-          {snapshot.canonical && snapshot.holding_setup_items.length === 0 && snapshot.campaign_items.length === 0 && (
+          {isEmpty && (
             <div className="rounded-lg border border-border/60 bg-card p-6 text-sm text-muted-foreground">
               当前没有待处理的持仓设置项或 Campaign。
             </div>
@@ -341,7 +282,10 @@ export default function DecisionInbox() {
                     {holding.next_workflow_action === "CREATE_CAMPAIGN" && creatingFor !== holding.security_code && (
                       <button
                         type="button"
-                        onClick={() => setCreatingFor(holding.security_code)}
+                        onClick={() => {
+                          setCreatingFor(holding.security_code);
+                          setFormGeneration((n) => n + 1);
+                        }}
                         className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
                       >
                         <PlusCircle className="h-3.5 w-3.5" />
@@ -351,6 +295,7 @@ export default function DecisionInbox() {
                   </div>
                   {creatingFor === holding.security_code && (
                     <CreateCampaignForm
+                      key={`${holding.security_code}-${formGeneration}`}
                       holding={holding}
                       onCreated={handleCreated}
                       onClose={() => setCreatingFor(null)}
@@ -361,15 +306,42 @@ export default function DecisionInbox() {
             </section>
           )}
 
-          {/* campaign items */}
+          {/* NON_CURRENT_SETUP_CAMPAIGNS：DRAFT / RESEARCHING / PRE-ENTRY */}
+          {setupCampaigns.length > 0 && (
+            <section className="space-y-3">
+              <h2 className="text-sm font-semibold">正在建立的 Campaign</h2>
+              {setupCampaigns.map((campaign) => (
+                <CampaignLifecycleCard
+                  key={campaign.campaign_id}
+                  campaignId={campaign.campaign_id}
+                  securityCode={campaign.security_code}
+                  strategy={campaign.strategy}
+                  status={campaign.status}
+                  nextActions={nextActions[campaign.campaign_id] ?? null}
+                  setupContext
+                  onChanged={() => void refresh()}
+                />
+              ))}
+            </section>
+          )}
+
+          {/* current campaign items（ACTIVE / REDUCING，backend membership 决定） */}
           {snapshot.campaign_items.length > 0 && (
             <section className="space-y-3">
               <h2 className="text-sm font-semibold">Campaign 决策项</h2>
               {snapshot.campaign_items.map((item) => (
-                <CampaignRow
+                <CampaignLifecycleCard
                   key={item.campaign_id}
-                  item={item}
-                  actions={nextActions[item.campaign_id] ?? null}
+                  campaignId={item.campaign_id}
+                  securityCode={item.security_code}
+                  strategy={item.strategy}
+                  status={item.campaign_status}
+                  nextActions={nextActions[item.campaign_id] ?? null}
+                  setupContext={false}
+                  decision={{
+                    visible_state: item.visible_state,
+                    reason_codes: item.reason_codes,
+                  }}
                   onChanged={() => void refresh()}
                 />
               ))}
