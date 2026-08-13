@@ -54,8 +54,12 @@ jobs:
             pytest_args: tests/test_cli_runtime_security.py
           - phase: B_DAILY_REVIEW
             pytest_args: tests/test_daily_review_ai_api.py
-          - phase: C_OTHER_REGRESS
-            pytest_args: tests/test_api.py tests/test_fixes.py tests/test_portfolio_advice_error_mapping.py
+          - phase: C1_TEST_API
+            pytest_args: tests/test_api.py
+          - phase: C2_TEST_FIXES
+            pytest_args: tests/test_fixes.py
+          - phase: C3_PORTFOLIO_ERR
+            pytest_args: tests/test_portfolio_advice_error_mapping.py
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
