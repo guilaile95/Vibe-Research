@@ -243,8 +243,10 @@ def _terminate_process_tree(proc: subprocess.Popen) -> None:
     """终止整个进程树：Windows 用 taskkill /T /F；POSIX 用 killpg。
 
     绝不只杀父进程留下孤儿 CLI / 工具子进程；proc 已退出时直接返回。
-    防御性约束：POSIX 下若子进程未能脱离宿主进程组（start_new_session 失效或
-    异常），绝不 killpg 当前进程组（那会误杀宿主 runner），降级为单进程 kill。
+    防御性约束（P0-SEC2-R1 实测根因）：pid 必须是有意义的正 int 且 > 1——
+    unittest.mock.MagicMock.__int__ 恒返回 1，若传 MagicMock 进 os.getpgid 会解析成
+    pid=1 并 killpg(1, SIGKILL)（init 组），误伤宿主 runner 辅助进程导致 runner 失联。
+    同样，即使 pid 合法，若 getpgid 返回 pgid<=1 也绝不 killpg（init 组保护）。
     """
     if proc.poll() is not None:
         return
@@ -258,12 +260,18 @@ def _terminate_process_tree(proc: subprocess.Popen) -> None:
                 timeout=10,
             )
         else:
-            pgid = os.getpgid(proc.pid)
-            if pgid == os.getpgrp():
-                # 子进程仍在宿主进程组：killpg 会误杀宿主，改用单进程 kill
+            pid = proc.pid
+            if not isinstance(pid, int) or pid <= 1:
+                # pid 无效（如 MagicMock）或指向 init：不 killpg，降级单杀
                 proc.kill()
             else:
-                os.killpg(pgid, signal.SIGKILL)
+                pgid = os.getpgid(pid)
+                if pgid <= 1 or pgid == os.getpgrp():
+                    # 子进程仍在宿主进程组（start_new_session 失效）或 pgid 是 init 组：
+                    # killpg 会误杀宿主 runner，改用单进程 kill
+                    proc.kill()
+                else:
+                    os.killpg(pgid, signal.SIGKILL)
     except (OSError, TypeError, ValueError, subprocess.SubprocessError):
         try:
             proc.kill()

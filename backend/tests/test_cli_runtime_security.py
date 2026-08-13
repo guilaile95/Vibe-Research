@@ -652,6 +652,24 @@ def test_terminate_already_exited_is_noop(monkeypatch):
     proc.kill.assert_not_called()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX-only")
+def test_posix_killpg_never_targets_init_group_with_mock_pid(monkeypatch):
+    """R1 实测根因：MagicMock.__int__ 恒返回 1。若 proc.pid 是 MagicMock，
+    os.getpgid 会解析成 pid=1 → killpg(1, SIGKILL) 误伤 init 组/宿主 runner。
+    必须降级为 proc.kill()，绝不 killpg。"""
+    proc = MagicMock()
+    proc.pid = MagicMock()  # int(MagicMock()) == 1
+    proc.poll.return_value = None
+    getpgid = MagicMock()
+    killpg = MagicMock()
+    monkeypatch.setattr(cli_runtime.os, "getpgid", getpgid)
+    monkeypatch.setattr(cli_runtime.os, "killpg", killpg)
+    cli_runtime._terminate_process_tree(proc)
+    getpgid.assert_not_called()  # pid 非有效 int → 不解析
+    killpg.assert_not_called()   # 绝不 killpg init 组
+    proc.kill.assert_called_once()  # 降级单杀
+
+
 # ================= P0-SEC2-R1 补强 =================
 
 def _posix_wait_dead(pid: int, timeout: float = 10.0) -> bool:

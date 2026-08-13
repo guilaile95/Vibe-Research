@@ -319,7 +319,12 @@ def test_run_cli_stream_close_reaps_child_and_closes_pipes(monkeypatch):
     assert next(stream) == "piece\n"
     stream.close()
 
-    cli_runtime.subprocess.run.assert_called_once()  # 进程树终止已触发
+    # 跨平台清理断言：Windows 走 taskkill（subprocess.run 拦截）；POSIX 下
+    # MagicMock pid 无效 → 降级 proc.kill()，绝不 killpg init 组。
+    if os.name == "nt":
+        cli_runtime.subprocess.run.assert_called_once()  # 进程树终止已触发（taskkill）
+    else:
+        proc.kill.assert_called()  # pid 无效降级为单杀
     proc.wait.assert_called()
     proc.stdin.close.assert_called_once_with()
     proc.stdout.close.assert_called_once_with()
