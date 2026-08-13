@@ -652,6 +652,8 @@ async function main() {
         PYTHONPATH: [backendDir, e2eDir, process.env.PYTHONPATH || ""].filter(Boolean).join(process.platform === "win32" ? ";" : ":"),
         VR_DATA_DIR: dataDir,
         VR_REPORTS_DIR: reportsDir,
+        // harness 页面 Origin 使用临时端口：显式加入后端 CORS/Origin 白名单
+        VR_ALLOW_ORIGINS: `http://127.0.0.1:${frontendPort}`,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },

@@ -147,6 +147,8 @@ async function runE2E() {
       ...process.env,
       VR_DATA_DIR: tempDataDir,
       VIBE_RESEARCH_DECISION_TRACE_DB: dbPath,
+      // harness 页面 Origin 使用临时端口：显式加入后端 CORS/Origin 白名单
+      VR_ALLOW_ORIGINS: `http://127.0.0.1:${frontendPort}`,
       PYTHONUNBUFFERED: "1",
     };
 
