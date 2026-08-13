@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import app as app_module
 import campaign_service
 import holdings_campaign_composition_router
+import decision_inbox_runtime_router
 import position_reality_service
 
 
@@ -275,6 +276,55 @@ class TestHoldingsCampaignCompositionWiring:
             ).status_code == 405
 
 
+class TestDecisionInboxRuntimeWiring:
+    PATH = "/api/decision-inbox"
+
+    def test_read_only_projection_available_through_main_app(
+        self, client, monkeypatch
+    ):
+        expected = {
+            "schema_version": "decision_inbox_runtime.v0.1",
+            "as_of": "2026-08-13T04:00:00.000000Z",
+            "evaluation_status": "NOT_EVALUATED",
+            "canonical": False,
+            "reason_codes": ["POSITION_LEDGER_NOT_BOOTSTRAPPED"],
+            "holding_setup_items": [],
+            "campaign_items": [],
+            "total_holdings": 0,
+            "total_campaign_items": 0,
+        }
+        calls = []
+
+        def fake_assemble():
+            calls.append(True)
+            return expected
+
+        monkeypatch.setattr(
+            decision_inbox_runtime_router.service,
+            "assemble_current_decision_inbox",
+            fake_assemble,
+        )
+
+        response = client.get(self.PATH)
+
+        assert response.status_code == 200
+        assert response.json() == {"data": expected}
+        assert calls == [True]
+
+    def test_real_app_registers_one_get_from_the_dedicated_router(self, client):
+        paths = _openapi_paths(client)
+        assert self.PATH in paths
+        assert set(paths[self.PATH]) == {"get"}
+        assert len([path for path in paths if path == self.PATH]) == 1
+        operation_id = paths[self.PATH]["get"]["operationId"]
+        assert operation_id.startswith("get_decision_inbox_")
+
+        for method in ("post", "put", "patch", "delete"):
+            assert client.request(
+                method.upper(), self.PATH, json={}
+            ).status_code == 405
+
+
 class TestMainAppRouteUniqueness:
     TARGET_PATHS = {
         "/api/account/reality",
@@ -287,6 +337,7 @@ class TestMainAppRouteUniqueness:
         "/api/campaigns/{campaign_id}/thesis-binding",
         "/api/campaigns/{campaign_id}/current-thesis",
         "/api/holdings/campaign-composition",
+        "/api/decision-inbox",
         "/api/thesis/{thesis_id}/begin-formalization",
         "/api/thesis/{thesis_id}/confirm",
         "/api/thesis/{thesis_id}/freeze",

@@ -66,6 +66,7 @@ import account_reality_router
 import cash_event_router
 import campaign_router
 import holdings_campaign_composition_router
+import decision_inbox_runtime_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -185,6 +186,8 @@ app.include_router(cash_event_router.router)
 app.include_router(campaign_router.router)
 # P0-DI2A canonical Actual Holding → current Campaign read model
 app.include_router(holdings_campaign_composition_router.router)
+# P0-DI2 current-only Decision Inbox runtime read model
+app.include_router(decision_inbox_runtime_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)
