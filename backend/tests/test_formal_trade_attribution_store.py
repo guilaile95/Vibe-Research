@@ -6,9 +6,12 @@ import ast
 import concurrent.futures
 import importlib
 import inspect
+import json
 import os
 import sqlite3
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -566,3 +569,142 @@ def test_path_resolution_no_io(tmp_path, monkeypatch):
     )
     assert explicit == tmp_path / "x.sqlite3"
     assert not explicit.exists()
+
+
+def test_r1_read_directory_fail_closed(tmp_path):
+    directory = tmp_path / "not_a_db"
+    directory.mkdir()
+    with pytest.raises(store.FormalTradeAttributionStoreCorruptedError):
+        store.get_attribution(
+            db_path=directory, attribution_id="trade_attribution_" + "c" * 32
+        )
+
+
+def test_r1_empty_file_non_owner_times_out_fail_closed(db_path, monkeypatch):
+    db_path.write_bytes(b"")
+    monkeypatch.setenv("VIBE_RESEARCH_FTA_STORE_OPEN_WAIT_SECONDS", "0.2")
+    rec = make_record(trade_id="b" * 32, attribution_id="trade_attribution_" + "c" * 32)
+    with pytest.raises(
+        store.FormalTradeAttributionStoreCorruptedError, match="INITIALIZATION_INCOMPLETE"
+    ):
+        store.write_attribution(db_path=db_path, record=rec)
+
+
+def test_r1_partial_unique_trade_id_rejected(db_path):
+    rec = make_record(trade_id="b" * 32, attribution_id="trade_attribution_" + "c" * 32)
+    store.write_attribution(db_path=db_path, record=rec)
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE formal_trade_attributions RENAME TO old_fta")
+    conn.execute(
+        """
+        CREATE TABLE formal_trade_attributions (
+            attribution_id TEXT PRIMARY KEY,
+            trade_id TEXT NOT NULL,
+            decision_id TEXT NOT NULL,
+            decision_snapshot_hash TEXT NOT NULL,
+            security_code TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            campaign_id TEXT NOT NULL,
+            thesis_id TEXT NOT NULL,
+            thesis_revision INTEGER NOT NULL,
+            decision_committed_at TEXT NOT NULL,
+            decision_review_by TEXT NOT NULL,
+            decision_next_best_action TEXT NOT NULL,
+            trade_operation TEXT NOT NULL,
+            trade_execution_status TEXT NOT NULL,
+            trade_executed_at TEXT,
+            trade_created_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            attribution_hash TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("INSERT INTO formal_trade_attributions SELECT * FROM old_fta")
+    conn.execute("DROP TABLE old_fta")
+    conn.execute(
+        "CREATE UNIQUE INDEX idx_partial_trade_id "
+        "ON formal_trade_attributions(trade_id) WHERE trade_id IS NOT NULL"
+    )
+    conn.execute(
+        "CREATE INDEX idx_fta_decision_id ON formal_trade_attributions(decision_id)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_fta_campaign_id ON formal_trade_attributions(campaign_id)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_fta_security_code ON formal_trade_attributions(security_code)"
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(store.FormalTradeAttributionStoreCorruptedError):
+        store.list_attributions(db_path=db_path)
+
+
+def test_r1_multiprocess_first_init(tmp_path):
+    db_path = tmp_path / "mp.sqlite3"
+    hold = tmp_path / "release.flag"
+    held = tmp_path / "held.flag"
+    rec_a = make_record(
+        trade_id="1" * 32, attribution_id="trade_attribution_" + "1" * 32
+    )
+    rec_b = make_record(
+        trade_id="2" * 32, attribution_id="trade_attribution_" + "2" * 32
+    )
+    rec_a_path = tmp_path / "a.json"
+    rec_b_path = tmp_path / "b.json"
+    rec_a_path.write_text(json.dumps(rec_a), encoding="utf-8")
+    rec_b_path.write_text(json.dumps(rec_b), encoding="utf-8")
+    backend = str(Path(__file__).resolve().parents[1])
+    worker = (
+        "import json,sys;"
+        "sys.path.insert(0, sys.argv[1]);"
+        "import formal_trade_attribution_store as s;"
+        "rec=json.loads(open(sys.argv[2],encoding='utf-8').read());"
+        "s.write_attribution(db_path=sys.argv[3], record=rec)"
+    )
+    env_a = os.environ.copy()
+    env_a["VIBE_RESEARCH_FTA_STORE_INIT_HOLD"] = str(hold)
+    env_a["VIBE_RESEARCH_FTA_STORE_INIT_HELD"] = str(held)
+    env_a["PYTHONPATH"] = backend
+    env_b = os.environ.copy()
+    env_b["PYTHONPATH"] = backend
+    env_b.pop("VIBE_RESEARCH_FTA_STORE_INIT_HOLD", None)
+    env_b.pop("VIBE_RESEARCH_FTA_STORE_INIT_HELD", None)
+    proc_a = subprocess.Popen(
+        [sys.executable, "-c", worker, backend, str(rec_a_path), str(db_path)],
+        env=env_a,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 10
+    while not held.is_file():
+        if time.monotonic() >= deadline:
+            proc_a.kill()
+            out, err = proc_a.communicate()
+            pytest.fail(f"owner never signaled hold: {out} {err}")
+        if proc_a.poll() is not None:
+            out, err = proc_a.communicate()
+            pytest.fail(f"owner exited before hold: {out} {err}")
+        time.sleep(0.02)
+    assert db_path.is_file()
+    proc_b = subprocess.Popen(
+        [sys.executable, "-c", worker, backend, str(rec_b_path), str(db_path)],
+        env=env_b,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    time.sleep(0.2)
+    hold.write_text("go", encoding="utf-8")
+    rc_a = proc_a.wait(timeout=20)
+    rc_b = proc_b.wait(timeout=20)
+    if rc_a != 0 or rc_b != 0:
+        pytest.fail(
+            f"A={rc_a} {proc_a.stderr.read() if proc_a.stderr else ''} "
+            f"B={rc_b} {proc_b.stderr.read() if proc_b.stderr else ''}"
+        )
+    listed = store.list_attributions(db_path=db_path)
+    assert len(listed) == 2
+    assert {r["trade_id"] for r in listed} == {"1" * 32, "2" * 32}

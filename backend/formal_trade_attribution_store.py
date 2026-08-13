@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import stat
 import threading
 import time
 from pathlib import Path
@@ -114,11 +115,52 @@ def _as_path(db_path: str | Path) -> Path:
     return Path(db_path)
 
 
-def _db_file_exists(db_path: str | Path) -> bool:
+def _open_wait_total() -> float:
+    raw = os.environ.get("VIBE_RESEARCH_FTA_STORE_OPEN_WAIT_SECONDS", "").strip()
+    if raw:
+        try:
+            return max(0.05, float(raw))
+        except ValueError:
+            pass
+    return _OPEN_WAIT_TOTAL_SECONDS
+
+
+def _classify_ledger_path(db_path: str | Path) -> str:
+    """Distinguish true missing regular file from I/O / non-file paths.
+
+    Returns ``missing`` or ``file``. Any other filesystem object or OSError
+    fails closed and is never treated as a missing ledger.
+    """
+    path = _as_path(db_path)
     try:
-        return _as_path(db_path).is_file()
-    except OSError:
-        return False
+        st = path.stat()
+    except FileNotFoundError:
+        return "missing"
+    except OSError as exc:
+        raise FormalTradeAttributionStoreError(
+            f"无法访问归属账本路径：{exc}"
+        ) from exc
+    if stat.S_ISREG(st.st_mode):
+        return "file"
+    raise FormalTradeAttributionStoreCorruptedError(
+        "归属账本路径存在但不是普通文件"
+    )
+
+
+def _hold_after_excl_if_requested() -> None:
+    """Test-only gate: owner pauses after O_EXCL, before schema init."""
+    release = os.environ.get("VIBE_RESEARCH_FTA_STORE_INIT_HOLD", "").strip()
+    if not release:
+        return
+    signal = os.environ.get("VIBE_RESEARCH_FTA_STORE_INIT_HELD", "").strip()
+    if signal:
+        Path(signal).write_text("held", encoding="utf-8")
+    release_path = Path(release)
+    deadline = time.monotonic() + 30.0
+    while not release_path.is_file():
+        if time.monotonic() >= deadline:
+            raise FormalTradeAttributionStoreError("init hold timed out")
+        time.sleep(0.02)
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -288,6 +330,8 @@ def _assert_unique_trade_id(conn: sqlite3.Connection) -> None:
     for idx in listed:
         if idx["unique"] != 1:
             continue
+        if idx["partial"] != 0:
+            continue
         info = conn.execute(f"PRAGMA index_info({idx['name']})").fetchall()
         cols = [r["name"] for r in info]
         if cols == ["trade_id"]:
@@ -295,7 +339,7 @@ def _assert_unique_trade_id(conn: sqlite3.Connection) -> None:
             break
     if not found:
         raise FormalTradeAttributionStoreCorruptedError(
-            "缺少 UNIQUE(trade_id) 约束"
+            "缺少完整 UNIQUE(trade_id) 约束（partial unique 不接受）"
         )
 
 
@@ -408,13 +452,14 @@ def _safe_rollback(conn: sqlite3.Connection) -> None:
 
 def _open_write_connection(db_path: str | Path) -> sqlite3.Connection:
     path = _as_path(db_path)
-    existed_at_start = path.is_file()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise FormalTradeAttributionStoreError("归属账本不可用") from exc
     owned = _acquire_initialization_ownership(path)
-    deadline = time.monotonic() + _OPEN_WAIT_TOTAL_SECONDS
+    if owned:
+        _hold_after_excl_if_requested()
+    deadline = time.monotonic() + _open_wait_total()
     while True:
         try:
             conn = sqlite3.connect(str(path), isolation_level=None, timeout=10.0)
@@ -443,10 +488,10 @@ def _open_write_connection(db_path: str | Path) -> sqlite3.Connection:
                 _initialize(conn)
                 conn.execute("COMMIT")
                 return conn
-            if existed_at_start:
-                raise FormalTradeAttributionStoreCorruptedError()
             if time.monotonic() >= deadline:
-                raise FormalTradeAttributionStoreCorruptedError()
+                raise FormalTradeAttributionStoreCorruptedError(
+                    "INITIALIZATION_INCOMPLETE"
+                )
             _safe_rollback(conn)
             conn.close()
             time.sleep(_OPEN_WAIT_INTERVAL_SECONDS)
@@ -466,7 +511,8 @@ def _open_write_connection(db_path: str | Path) -> sqlite3.Connection:
 
 
 def _open_readonly_if_exists(db_path: str | Path) -> sqlite3.Connection | None:
-    if not _db_file_exists(db_path):
+    kind = _classify_ledger_path(db_path)
+    if kind == "missing":
         return None
     conn = None
     try:

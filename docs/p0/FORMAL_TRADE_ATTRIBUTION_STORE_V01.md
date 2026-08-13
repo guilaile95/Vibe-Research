@@ -60,6 +60,24 @@ rows fail closed.
 Resolution is pure. Reads use SQLite ``mode=ro``. First write uses
 ``O_EXCL`` ownership to initialize schema.
 
+```text
+O_EXCL_OWNER = ONLY PROCESS ALLOWED TO INITIALIZE
+NON_OWNER_EMPTY_DATABASE = WAIT_BOUNDED
+NON_OWNER_EMPTY_DATABASE_AFTER_TIMEOUT = FAIL_CLOSED
+```
+
+A non-owner that sees an empty file waits; it does not treat
+``existed_at_start`` as immediate corruption. After the wait budget the
+empty leftover file still fails closed as ``INITIALIZATION_INCOMPLETE``.
+Owner crash does not auto-rebuild or delete the file.
+
+Read path: a true missing regular file returns empty; a directory,
+permission/stat error, or other non-file path fails closed and is never
+classified as missing.
+
+``UNIQUE(trade_id)`` must be a full uniqueness constraint. A partial
+unique index on ``trade_id`` is not accepted.
+
 ## Files
 
 ```text
