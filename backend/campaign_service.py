@@ -219,6 +219,20 @@ def list_campaign_transitions(campaign_id: str) -> list[dict]:
         raise CampaignServiceError("Campaign 存储不可用") from exc
 
 
+def next_campaign_actions(campaign_id: str) -> tuple[dict, list[str]]:
+    """返回 (Campaign, 下一合法动作列表)。
+
+    下一合法动作派生自 frozen graph（本域唯一权威），只读、零写入；
+    terminal 状态 → 空列表。Campaign 不存在 → CampaignNotFoundError。
+    """
+    campaign = get_campaign(campaign_id)
+    try:
+        actions = list(campaign_store.next_actions(campaign["status"]))
+    except CampaignStoreInputError as exc:
+        raise CampaignInputError(str(exc)) from exc
+    return campaign, actions
+
+
 def _read_existing_thesis(thesis_id: str) -> dict:
     """通过 Evidence Thesis canonical read API 只读获取 thesis aggregate。
 

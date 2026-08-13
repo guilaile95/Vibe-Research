@@ -33,6 +33,7 @@ const SignalLedger = lazy(() => import("@/pages/SignalLedger").then((m) => ({ de
 const AccountPolicy = lazy(() => import("@/pages/AccountPolicy").then((m) => ({ default: m.default })));
 const DecisionPerformance = lazy(() => import("@/pages/DecisionPerformance").then((m) => ({ default: m.default })));
 const PerformanceAttribution = lazy(() => import("@/pages/PerformanceAttribution").then((m) => ({ default: m.default })));
+const DecisionInbox = lazy(() => import("@/pages/DecisionInbox").then((m) => ({ default: m.default })));
 
 function PageFallback() {
   return (
@@ -86,6 +87,7 @@ export const router = createBrowserRouter([
       { path: "/decision-performance", element: withSuspense(<DecisionPerformance />) },
       { path: "/performance-attribution", element: withSuspense(<PerformanceAttribution />) },
       { path: "/cockpit", element: withSuspense(<DecisionCockpit />) },
+      { path: "/decision-inbox", element: withSuspense(<DecisionInbox />) },
       { path: "/stock-data", element: withSuspense(<StockData />) },
       { path: "/screener", element: withSuspense(<Screener />) },
       { path: "/watchlist", element: withSuspense(<Watchlist />) },

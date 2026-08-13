@@ -8,6 +8,7 @@ import {
   ChevronsRight,
   ChevronDown,
   HeartPulse,
+  Inbox,
   LineChart,
   Moon,
   PieChart,
@@ -58,6 +59,7 @@ const LIBRARY_NAV = [
 
 /** Lower-frequency analytical surfaces remain reachable without competing with daily contexts. */
 const ANALYSIS_NAV = [
+  { to: "/decision-inbox", icon: Inbox, label: "决策待办" },
   { to: "/decision-evidence", icon: ShieldCheck, label: "决策依据" },
   { to: "/signal-ledger", icon: Activity, label: "信号账本" },
   { to: "/trades", icon: ReceiptText, label: "交易流水" },
