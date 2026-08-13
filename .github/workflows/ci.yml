@@ -42,50 +42,6 @@ jobs:
           VIBE_RESEARCH_REVIEW_DB: ${{ runner.temp }}/review.db
         run: python -m pytest -m "not live"
 
-  # ---- TEMP P0-SEC2-R1 DIAGNOSTIC (removed after root cause found) ----
-  diagnose:
-    name: Diagnose ${{ matrix.phase }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - phase: A_SEC2_CORE
-            pytest_args: tests/test_cli_runtime_security.py
-          - phase: B_DAILY_REVIEW
-            pytest_args: tests/test_daily_review_ai_api.py
-          - phase: C1_TEST_API
-            pytest_args: tests/test_api.py
-          - phase: C2A1_FIXES_TIMEOUT
-            pytest_args: tests/test_fixes.py::test_run_cli_stream_timeout
-          - phase: C2A2_FIXES_NONZERO
-            pytest_args: tests/test_fixes.py::test_run_cli_nonzero_with_stdout_is_failure
-          - phase: C2A3_FIXES_CLOSEPIPES
-            pytest_args: tests/test_fixes.py::test_run_cli_stream_close_reaps_child_and_closes_pipes
-          - phase: C2A4_FIXES_REALCHILD
-            pytest_args: tests/test_fixes.py::test_run_cli_stream_close_reaps_real_child_and_reader_thread
-          - phase: C2A5_FIXES_READERR
-            pytest_args: tests/test_fixes.py::test_run_cli_stream_stdout_read_error_is_failure
-          - phase: C3_PORTFOLIO_ERR
-            pytest_args: tests/test_portfolio_advice_error_mapping.py
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: backend/requirements-dev-linux-py311.lock.txt
-      - name: Install deps
-        run: python -m pip install -r backend/requirements-dev-linux-py311.lock.txt
-      - name: Run phase tests (180s bounded)
-        working-directory: backend
-        env:
-          VR_DATA_DIR: ${{ runner.temp }}/vr-data
-          VR_REPORTS_DIR: ${{ runner.temp }}/vr-reports
-          VIBE_RESEARCH_REVIEW_DB: ${{ runner.temp }}/review.db
-        run: |
-          timeout -k 5s 180 python -m pytest -vv -s ${{ matrix.pytest_args }} -m "not live" || true
-
   frontend:
     name: Frontend build & test
     runs-on: ubuntu-latest
