@@ -650,3 +650,243 @@ def test_terminate_already_exited_is_noop(monkeypatch):
     proc.poll.return_value = 0  # 已退出
     cli_runtime._terminate_process_tree(proc)
     proc.kill.assert_not_called()
+
+
+# ================= P0-SEC2-R1 补强 =================
+
+def _posix_wait_dead(pid: int, timeout: float = 10.0) -> bool:
+    """POSIX 判断 pid 是否不再存活（kill(pid, 0) 抛 ProcessLookupError = 已死）。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        time.sleep(0.05)
+    return False
+
+
+def _assert_no_cli_threads_alive():
+    alive = [
+        t.name for t in cli_runtime.threading.enumerate()
+        if t.name.startswith("vibe-cli-") and t.is_alive()
+    ]
+    assert not alive, f"残留 CLI 线程: {alive}"
+
+
+# ---------- BLOCKER A：ONE EXECUTION = ONE DEADLINE（阻塞 stdin 复用同一 deadline） ----------
+
+def test_blocked_stdin_uses_same_total_deadline(monkeypatch):
+    """CLI 不读 stdin + payload 超过 pipe 容量时，stdin 阻塞必须消费同一总 deadline
+    （不被拆成 writer 300s + stdout 300s 两个 budget）。证明 total elapsed 受单一
+    deadline + 清理 allowance 限制，且进程/线程/信号量/临时目录全部清理。"""
+    _register_fake(monkeypatch, code="import time\nprint('x', flush=True)\ntime.sleep(30)")
+    monkeypatch.setattr(cli_runtime, "CLI_TOTAL_DEADLINE_SECONDS", 2)
+    monkeypatch.setattr(cli_runtime, "CLI_INPUT_LIMIT_BYTES", 500_000)
+    big_system = "s" * 70_000  # > 常见 pipe 容量（64KB）但 < CLI_INPUT_LIMIT_BYTES
+    sem = _fresh_sem(monkeypatch, value=1)
+    dirs = _capture_tmpdir(monkeypatch)
+    cap = _capture_popen(monkeypatch)
+
+    started = time.monotonic()
+    with pytest.raises(cli_runtime.CliTimeout):
+        cli_runtime.run_cli("fake", big_system, "u")
+    elapsed = time.monotonic() - started
+
+    # 单一 2s deadline + 清理 allowance；若被拆成两个 budget 会 ~4s+
+    assert elapsed < 5.0, f"total elapsed {elapsed:.2f}s 超出单一 deadline 允许范围"
+    assert _wait_poll(cap["proc"]) is not None          # 进程树已终止
+    _assert_no_cli_threads_alive()                       # stdin writer + stdout pump 均死
+    assert sem._value == 1                               # 信号量释放
+    assert dirs and not os.path.exists(dirs[0])          # 临时目录已删除
+
+
+def test_deadline_not_reset_for_stdout(monkeypatch):
+    """stdin 快速完成 + stdout 持续输出：stdout 消费必须继续消费同一 deadline，
+    不得在 stdin 阶段后重置 300s。"""
+    _register_fake(monkeypatch, code="import time\nfor i in range(20):\n    print('x' * 1000, flush=True)\n    time.sleep(0.1)\ntime.sleep(30)")
+    monkeypatch.setattr(cli_runtime, "CLI_TOTAL_DEADLINE_SECONDS", 2)
+    sem = _fresh_sem(monkeypatch, value=1)
+    cap = _capture_popen(monkeypatch)
+
+    started = time.monotonic()
+    with pytest.raises(cli_runtime.CliTimeout):
+        for _ in cli_runtime.run_cli_stream("fake", "s", "u"):
+            pass
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5.0, f"stdout 阶段重置了 deadline：{elapsed:.2f}s"
+    assert _wait_poll(cap["proc"]) is not None
+    _assert_no_cli_threads_alive()
+    assert sem._value == 1
+
+
+# ---------- BLOCKER B：真实 POSIX 进程树终止（不 mock killpg） ----------
+
+_TREE_CODE_POSIX = (
+    "import subprocess, sys, time\n"
+    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+    "print('spawned', child.pid, flush=True)\n"
+    "time.sleep(120)\n"
+)
+
+_TREE_CODE_POSIX_FLOOD = (
+    "import subprocess, sys, time\n"
+    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+    "print('spawned', child.pid, flush=True)\n"
+    "for i in range(100):\n"
+    "    print('x' * 1000, flush=True)\n"
+    "time.sleep(120)\n"
+)
+
+
+def _run_posix_tree(monkeypatch, code, *, deadline_s=None, limit=None, cancel=None):
+    """spawn 真实 parent→child 树，返回 (captured_proc, child_pid)。不 mock killpg。"""
+    _register_fake(monkeypatch, code=code)
+    if deadline_s is not None:
+        monkeypatch.setattr(cli_runtime, "CLI_TOTAL_DEADLINE_SECONDS", deadline_s)
+    if limit is not None:
+        monkeypatch.setattr(cli_runtime, "CLI_OUTPUT_LIMIT_BYTES", limit)
+    cap = _capture_popen(monkeypatch)
+    child_pid = None
+
+    def consume(gen):
+        nonlocal child_pid
+        for line in gen:
+            if line.startswith("spawned"):
+                child_pid = int(line.split()[1])
+
+    if cancel is not None:
+        stream = cli_runtime.run_cli_stream("fake", "s", "u", cancel_event=cancel)
+        for line in stream:
+            if line.startswith("spawned"):
+                child_pid = int(line.split()[1])
+                break
+        assert child_pid is not None
+        cancel.set()
+        with pytest.raises(cli_runtime.CliError, match="取消"):
+            for _ in stream:
+                pass
+    elif deadline_s is not None:
+        with pytest.raises(cli_runtime.CliTimeout):
+            consume(cli_runtime.run_cli_stream("fake", "s", "u"))
+    elif limit is not None:
+        with pytest.raises(cli_runtime.CliOutputLimit):
+            consume(cli_runtime.run_cli_stream("fake", "s", "u"))
+    assert child_pid is not None
+    return cap, child_pid
+
+
+@pytest.mark.skipif(os.name != "posix", reason="真实 POSIX 进程树验证（ubuntu CI）")
+def test_posix_real_cancel_kills_full_tree(monkeypatch):
+    cap, child_pid = _run_posix_tree(
+        monkeypatch, _TREE_CODE_POSIX, cancel=threading.Event()
+    )
+    assert _wait_poll(cap["proc"]) is not None       # parent dead
+    assert _posix_wait_dead(child_pid)               # child dead
+    _assert_no_cli_threads_alive()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="真实 POSIX 进程树验证（ubuntu CI）")
+def test_posix_real_timeout_kills_full_tree(monkeypatch):
+    cap, child_pid = _run_posix_tree(
+        monkeypatch, _TREE_CODE_POSIX, deadline_s=2
+    )
+    assert _wait_poll(cap["proc"]) is not None
+    assert _posix_wait_dead(child_pid)
+    _assert_no_cli_threads_alive()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="真实 POSIX 进程树验证（ubuntu CI）")
+def test_posix_real_output_limit_kills_full_tree(monkeypatch):
+    cap, child_pid = _run_posix_tree(
+        monkeypatch, _TREE_CODE_POSIX_FLOOD, limit=1000
+    )
+    assert _wait_poll(cap["proc"]) is not None
+    assert _posix_wait_dead(child_pid)
+    _assert_no_cli_threads_alive()
+
+
+# ---------- BLOCKER C：/api/chat HTTP disconnect → cancel → 进程树清理 ----------
+
+def test_chat_cli_http_disconnect_propagates_cancel(monkeypatch):
+    """/api/chat 的 CLI 订阅接入：真实 ASGI disconnect 必须传播 cancel_event，
+    终止进程树并清理（与 /api/daily-review/analyze 对齐）。"""
+    import asyncio
+    import json
+
+    import app as app_module
+
+    _register_fake(monkeypatch, code="import time\nprint('chunk', flush=True)\ntime.sleep(30)")
+    _authorize_fake(monkeypatch)
+    monkeypatch.setattr(cli_runtime, "CLI_TOTAL_DEADLINE_SECONDS", 30)  # 靠 cancel 终止，不靠 deadline
+    sem = _fresh_sem(monkeypatch, value=1)
+    real_popen = cli_runtime.subprocess.Popen
+    captured = {}
+
+    def capture_popen(*args, **kwargs):
+        argv = args[0] if args else []
+        if argv and os.path.basename(str(argv[0])).lower().startswith("taskkill"):
+            return real_popen(*args, **kwargs)
+        proc = real_popen(*args, **kwargs)
+        captured["proc"] = proc
+        return proc
+
+    monkeypatch.setattr(cli_runtime.subprocess, "Popen", capture_popen)
+
+    body = json.dumps({
+        "messages": [{"role": "user", "content": "hi"}],
+        "context": "",
+        "llm": {"provider": "cli-fake", "model": "local-test", "baseURL": "", "apiKey": ""},
+    }).encode("utf-8")
+
+    async def exercise_disconnect():
+        first_body_sent = asyncio.Event()
+        sent = False
+
+        async def receive():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await first_body_sent.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.body" and message.get("body"):
+                first_body_sent.set()
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/chat",
+            "raw_path": b"/api/chat",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "state": {},
+        }
+        await app_module.app(scope, receive, send)
+
+    started = time.monotonic()
+    asyncio.run(exercise_disconnect())
+    elapsed = time.monotonic() - started
+
+    # disconnect 后 request 必须快速返回（cancel 传播，不等到 30s deadline）
+    assert elapsed < 5.0, f"disconnect 未及时传播 cancel：{elapsed:.2f}s"
+    proc = captured["proc"]
+    assert _wait_poll(proc) is not None        # CLI parent dead
+    assert proc.stdin.closed                   # stdin closed
+    assert proc.stdout.closed                  # stdout closed
+    _assert_no_cli_threads_alive()             # writer + pump 均死
+    assert sem._value == 1                     # semaphore released

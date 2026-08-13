@@ -328,16 +328,28 @@ def chat(req: ChatReq):
     is_cli = _require_llm_ready(req.llm)
 
     cfg = req.llm.model_dump()
+    # P0-SEC2：CLI 订阅接入需要 ASGI disconnect → cancel 传播（与 /api/daily-review/analyze 对齐）。
+    # run_chat_cli_stream 把 cancel_event 传给 cli_runtime.run_cli_stream，disconnect 时
+    # 终止进程树并清理；API 路径忽略 _cancel_event，语义不变。
+    disconnect_event = threading.Event()
+    cfg["_cancel_event"] = disconnect_event
 
     def gen():
         try:
             events = (chat_layer.run_chat_cli_stream if is_cli else chat_layer.run_chat_stream)(cfg, req.messages, req.context)
             for ev in events:
+                if disconnect_event.is_set():
+                    return
                 yield json.dumps(ev, ensure_ascii=False) + "\n"
         except Exception as e:  # noqa: BLE001 — 运行时错误以流内事件上报，不中断连接
-            yield json.dumps({"type": "error", "message": f"对话失败：{e}"}, ensure_ascii=False) + "\n"
+            if not disconnect_event.is_set():
+                yield json.dumps({"type": "error", "message": f"对话失败：{e}"}, ensure_ascii=False) + "\n"
 
-    return StreamingResponse(gen(), media_type="application/x-ndjson")
+    return _DisconnectAwareStreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        disconnect_event=disconnect_event,
+    )
 
 
 def _reject_bool_str(v, field: str) -> None:

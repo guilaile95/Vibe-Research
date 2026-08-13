@@ -320,9 +320,11 @@ def _run_cli_impl(kind, system_prompt, user_prompt, *, via_http, cancel_event):
     tmpdir = tempfile.mkdtemp(prefix="vibe-cli-")
     proc = None
     reader_thread = None
+    writer_thread = None
     stop_event = threading.Event()
     acquired = False
     stdin_closed = False
+    deadline = 0.0
     try:
         if d["delivery"] == "system-file":
             sys_file = str(Path(tmpdir) / "system.txt")
@@ -340,6 +342,10 @@ def _run_cli_impl(kind, system_prompt, user_prompt, *, via_http, cancel_event):
 
         _acquire_slot()
         acquired = True
+        # ONE EXECUTION = ONE DEADLINE：成功 acquire 后、Popen 前创建一次，
+        # 之后所有阶段（spawn / stdin delivery / stdout 消费 / process exit）
+        # 只消费 remaining = deadline - time.monotonic()，任何阶段不得重新创建。
+        deadline = time.monotonic() + CLI_TOTAL_DEADLINE_SECONDS
 
         popen_kwargs: dict = dict(
             stdin=subprocess.PIPE,
@@ -355,8 +361,9 @@ def _run_cli_impl(kind, system_prompt, user_prompt, *, via_http, cancel_event):
         proc = subprocess.Popen([bin_path, *args], **popen_kwargs)
 
         if stdin_payload is not None:
-            # deadline 覆盖 stdin delivery：写入放独立线程，主线程用总 wall-clock
-            # 截止时间兜底——CLI 不读 stdin 时 write 会阻塞，不能卡死在主线程。
+            # stdin delivery 消费同一 deadline：写入放独立线程，主线程用 remaining 兜底
+            # （CLI 不读 stdin 时 write 会阻塞，不能卡死在主线程；超时即 CliTimeout，
+            #  不得再获得新的 stdout deadline）。
             def _write_stdin():
                 try:
                     proc.stdin.write(stdin_payload)
@@ -368,13 +375,18 @@ def _run_cli_impl(kind, system_prompt, user_prompt, *, via_http, cancel_event):
                     except OSError:
                         pass
 
-            writer = threading.Thread(
+            writer_thread = threading.Thread(
                 target=_write_stdin,
                 name=f"vibe-cli-{kind}-stdin",
                 daemon=True,
             )
-            writer.start()
-            writer.join(timeout=CLI_TOTAL_DEADLINE_SECONDS)
+            writer_thread.start()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CliTimeout(f"{kind} 生成超时")
+            writer_thread.join(timeout=remaining)
+            if writer_thread.is_alive() or (deadline - time.monotonic()) <= 0:
+                raise CliTimeout(f"{kind} 生成超时")
             stdin_closed = True
         elif proc.stdin is not None:
             proc.stdin.close()
@@ -404,7 +416,6 @@ def _run_cli_impl(kind, system_prompt, user_prompt, *, via_http, cancel_event):
         )
         reader_thread.start()
 
-        deadline = time.monotonic() + CLI_TOTAL_DEADLINE_SECONDS
         total_out = 0
         while True:
             if cancel_event is not None and cancel_event.is_set():
@@ -427,7 +438,8 @@ def _run_cli_impl(kind, system_prompt, user_prompt, *, via_http, cancel_event):
             yield line
 
         try:
-            rc = proc.wait(timeout=min(10.0, max(0.1, deadline - time.monotonic())))
+            remaining = deadline - time.monotonic()
+            rc = proc.wait(timeout=min(10.0, max(0.1, remaining)))
         except subprocess.TimeoutExpired as e:
             raise CliError(f"{kind} 输出已结束但进程未退出") from e
         if rc != 0:
@@ -437,8 +449,10 @@ def _run_cli_impl(kind, system_prompt, user_prompt, *, via_http, cancel_event):
         if proc is not None:
             _terminate_process_tree(proc)
             _close_pipes(proc, stdin_closed)
+        if writer_thread is not None and writer_thread.is_alive():
+            writer_thread.join(timeout=5)
         if reader_thread is not None and reader_thread.is_alive():
-            reader_thread.join(timeout=10)
+            reader_thread.join(timeout=5)
         if acquired:
             _release_slot()
         shutil.rmtree(tmpdir, ignore_errors=True)

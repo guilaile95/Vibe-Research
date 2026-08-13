@@ -475,11 +475,17 @@ def run_chat_stream(cfg: dict, user_messages: list, context: str = ""):
 
 
 def run_chat_cli_stream(cfg: dict, user_messages: list, context: str = ""):
-    """订阅接入流式：CLI stdout 边出边推 delta。"""
+    """订阅接入流式：CLI stdout 边出边推 delta。
+
+    cancel_event（来自 HTTP disconnect，见 app.py /api/chat）传给
+    cli_runtime.run_cli_stream，disconnect 时终止进程树并清理。
+    """
     provider = str(cfg.get("provider", ""))
     kind = provider[4:] if provider.startswith("cli-") else provider
     system = SYSTEM_PROMPT.format(context=context or "（无）")
     user = "\n\n".join(m.get("content", "") for m in user_messages if m.get("content")) or "（无问题）"
-    for chunk in cli_runtime.run_cli_stream(kind, system, user, via_http=True):
+    for chunk in cli_runtime.run_cli_stream(
+        kind, system, user, via_http=True, cancel_event=cfg.get("_cancel_event")
+    ):
         yield {"type": "delta", "text": chunk}
     yield {"type": "done", "trace": [], "rounds": 1}
