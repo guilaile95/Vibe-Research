@@ -151,10 +151,13 @@ def test_envelope_unknown_status_is_unknown():
     assert result["state"] == "UNKNOWN"
 
 
-def test_missing_trade_date_is_unknown_not_fetched_at_fallback():
-    """无 market fact time → UNKNOWN；绝不拿 fetched_at 冒充。"""
+def test_missing_trade_date_derives_from_authoritative_calendar():
+    """真实 breadth 快照无 trade_date（P0-RU2 实测）→ 快照交易日归属由
+    权威日历推导为 completed trade date，绝不拿 fetched_at 冒充。"""
     result = _evaluate(lambda: _envelope(trade_date=None))
-    assert result["state"] == "UNKNOWN"
+    assert result["state"] == "USABLE"
+    assert "market-breadth:trade_date=calendar-derived" in result["authority_refs"]
+    assert f"market-breadth:trade_date={TRADE_DATE}" in result["authority_refs"]
 
 
 def test_malformed_trade_date_is_error():

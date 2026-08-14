@@ -155,8 +155,12 @@ def evaluate_market_sector_capability(
 
     envelope_trade_date = envelope.get("trade_date")
     if envelope_trade_date is None:
-        # 无 market fact time：绝不拿 fetched_at 冒充
-        return _result("UNKNOWN", as_of, refs)
+        # 真实 breadth 快照不携带交易日元数据（P0-RU2 实测）：该快照是评估
+        # 时点的实时全市场快照，其市场事实时点由权威日历推导为 as_of 的
+        # completed trade date —— 绝不以 fetched_at 冒充 fact time、绝不猜
+        # 数据内容；推导来源显式写入 provenance。
+        envelope_trade_date = trade_date
+        refs.append("market-breadth:trade_date=calendar-derived")
     if type(envelope_trade_date) is not str \
             or re.fullmatch(r"\d{4}-\d{2}-\d{2}", envelope_trade_date) is None:
         return _result("ERROR", as_of, refs)
