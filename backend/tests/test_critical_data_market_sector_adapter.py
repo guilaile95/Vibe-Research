@@ -1,7 +1,8 @@
 """P0-DS1 — cap.context.market_sector evaluator 专项测试。
 
 全部注入 fake market reader / calendar；不访问真实数据源、不发网络请求。
-覆盖：输入校验、retrieval time ≠ fact time、STALE 不冒充 current、
+覆盖：输入校验、retrieval time ≠ fact time、NO LOOKAHEAD、observation-time
+归属（盘中/收盘后/周末）、provider 显式 trade_date 优先、
 provider failure / partial 诚实映射、USABLE positive proof。
 """
 from __future__ import annotations
@@ -15,6 +16,7 @@ from critical_data_market_sector_adapter import (
     MarketSectorCapabilityError,
     evaluate_market_sector_capability,
 )
+from trade_calendar import observation_trade_date_at
 
 SECURITY = "600519"
 CAMPAIGN = "campaign_" + "a" * 32
@@ -119,13 +121,29 @@ def test_invalid_inputs_raise(kwargs):
 
 
 # ---------------------------------------------------------------------------
-# 时间闸门
+# 时间闸门 / temporal attribution（P0-RU2-R1）
 # ---------------------------------------------------------------------------
 
-def test_no_completed_trade_date_is_not_evaluated():
-    result = _evaluate(_envelope, calendar=lambda _as_of: None)
+def test_unresolvable_observation_date_is_not_evaluated():
+    """EXPECTED_OBSERVATION_DATE 无法映射（日历 fail-closed）→ NOT_EVALUATED。"""
+    result = _evaluate(
+        lambda: _envelope(trade_date=None),
+        calendar=lambda _inst: None,
+    )
     assert result["state"] == "NOT_EVALUATED"
     assert ADAPTER_AUTHORITY_REF in result["authority_refs"]
+
+
+def test_missing_or_invalid_observation_time_is_unknown():
+    """真实获取时点缺失/非法 → 无法做 temporal attribution → UNKNOWN。"""
+    assert _evaluate(
+        lambda: _envelope(trade_date=None, fetched_at=None)
+    )["state"] == "UNKNOWN"
+    result = _evaluate(lambda: _envelope(fetched_at="2026/08/13 15:05:00"))
+    assert result["state"] == "UNKNOWN"
+    assert "market-breadth:observation-time=missing-or-invalid" in (
+        result["authority_refs"]
+    )
 
 
 def test_reader_exception_is_error():
@@ -134,6 +152,17 @@ def test_reader_exception_is_error():
 
     result = _evaluate(broken)
     assert result["state"] == "ERROR"
+
+
+def test_impossible_as_of_date_fails_closed_as_not_evaluated():
+    """as_of 格式合规但非真实时刻（2月30日）→ 日历无法映射 → 不得崩溃
+    → NOT_EVALUATED。"""
+    result = _evaluate(
+        lambda: _envelope(),
+        as_of="2026-02-30T07:00:00Z",
+        calendar=observation_trade_date_at,
+    )
+    assert result["state"] == "NOT_EVALUATED"
 
 
 def test_reader_none_or_non_mapping_is_error():
@@ -151,10 +180,18 @@ def test_envelope_unknown_status_is_unknown():
     assert result["state"] == "UNKNOWN"
 
 
-def test_missing_trade_date_is_unknown_not_fetched_at_fallback():
-    """无 market fact time → UNKNOWN；绝不拿 fetched_at 冒充。"""
+def test_missing_trade_date_derives_from_observation_time():
+    """真实 breadth 快照无 trade_date → 事实日期由真实 observation timestamp
+    + 权威交易日历归属 MARKET OBSERVATION DATE；date-basis 显式
+    observation-time，绝不写 calendar-derived。"""
     result = _evaluate(lambda: _envelope(trade_date=None))
-    assert result["state"] == "UNKNOWN"
+    assert result["state"] == "USABLE"
+    refs = result["authority_refs"]
+    assert "market-breadth:date-basis=observation-time" in refs
+    assert "market-breadth:observed_at=2026-08-13 15:05:00" in refs
+    assert f"market-breadth:trade_date={TRADE_DATE}" in refs
+    assert f"market-breadth:expected_observation_date={TRADE_DATE}" in refs
+    assert not any("calendar-derived" in ref for ref in refs)
 
 
 def test_malformed_trade_date_is_error():
@@ -162,15 +199,25 @@ def test_malformed_trade_date_is_error():
     assert result["state"] == "ERROR"
 
 
-def test_future_trade_date_is_error():
+def test_provider_trade_date_after_as_of_is_not_evaluated():
+    """provider trade_date 晚于 caller as_of → NO LOOKAHEAD → NOT_EVALUATED。"""
     result = _evaluate(lambda: _envelope(trade_date="2026-08-14"))
-    assert result["state"] == "ERROR"
+    assert result["state"] == "NOT_EVALUATED"
+    assert "market-breadth:not-usable=fact-date-after-as_of" in (
+        result["authority_refs"]
+    )
 
 
-def test_old_trade_date_is_stale_not_current():
-    """§11-D：STALE 数据不冒充 current。"""
+def test_provider_observation_older_than_expected_is_stale():
+    """provider 显式旧 trade_date（< EXPECTED_OBSERVATION_DATE）→ STALE：
+    真实旧数据 ≠ 当前可用数据；日期仍保留 provider 值（不重标为 caller 日期）。"""
     result = _evaluate(lambda: _envelope(trade_date="2026-08-12"))
     assert result["state"] == "STALE"
+    refs = result["authority_refs"]
+    assert "market-breadth:freshness=stale" in refs
+    assert "market-breadth:date-basis=provider-trade_date" in refs
+    assert "market-breadth:trade_date=2026-08-12" in refs
+    assert "market-breadth:expected_observation_date=2026-08-13" in refs
 
 
 # ---------------------------------------------------------------------------
@@ -207,8 +254,10 @@ def test_normal_complete_is_usable_with_provenance():
     assert result["as_of"] == AS_OF
     refs = result["authority_refs"]
     assert ADAPTER_AUTHORITY_REF in refs
+    assert "market-breadth:date-basis=provider-trade_date" in refs
     assert any(ref.startswith("market-breadth:source=") for ref in refs)
     assert f"market-breadth:trade_date={TRADE_DATE}" in refs
+    assert f"market-breadth:expected_observation_date={TRADE_DATE}" in refs
     assert any(ref.startswith("market-breadth:fetched_at=") for ref in refs)
     assert "market-breadth:stock_count=5400" in refs
 
@@ -266,13 +315,206 @@ def test_sector_missing_industry_key_is_unknown_with_blocker():
     assert SECTOR_CONTEXT_BLOCKER_REF in result["authority_refs"]
 
 
-def test_market_stale_short_circuits_even_with_sector_proof():
-    """STALE 市场快照不因 sector 证明而救回。"""
+def test_lookahead_short_circuits_even_with_sector_proof():
+    """观察时点晚于 as_of → NOT_EVALUATED，不因 sector 证明而救回。"""
     result = _evaluate(
-        lambda: _envelope(trade_date="2026-08-12"),
+        lambda: _envelope(trade_date=None, fetched_at="2026-08-14 10:00:00"),
+        calendar=observation_trade_date_at,
         sector_reader=_industry_reader("白酒"),
     )
+    assert result["state"] == "NOT_EVALUATED"
+    assert "market-breadth:not-usable=fact-date-after-as_of" in (
+        result["authority_refs"]
+    )
+
+
+# ---------------------------------------------------------------------------
+# P0-RU2-R1：review required A–F
+# ---------------------------------------------------------------------------
+
+MONDAY = "2026-08-17"
+FRIDAY = "2026-08-14"
+MONDAY_MORNING_AS_OF = "2026-08-17T02:30:00.000000Z"  # 北京时间周一 10:30
+SATURDAY_AS_OF = "2026-08-15T03:00:00.000000Z"  # 北京时间周六 11:00
+
+
+def test_A_intraday_monday_observation_is_monday_not_friday():
+    """A：周一盘中 10:30 实时快照 → date = 周一，绝不上周五 completed。"""
+    result = _evaluate(
+        lambda: _envelope(trade_date=None, fetched_at="2026-08-17 10:30:00"),
+        as_of=MONDAY_MORNING_AS_OF,
+        calendar=observation_trade_date_at,
+        sector_observation=_overview_fake("白酒", updated="2026-08-17 10:35"),
+    )
+    assert result["state"] == "USABLE"
+    refs = result["authority_refs"]
+    assert f"market-breadth:trade_date={MONDAY}" in refs
+    assert f"market-breadth:trade_date={FRIDAY}" not in refs
+    assert "market-breadth:date-basis=observation-time" in refs
+    assert "market-breadth:observed_at=2026-08-17 10:30:00" in refs
+
+
+def test_B_post_close_monday_observation_is_monday():
+    """B：周一收盘后快照 → date = 周一。"""
+    result = _evaluate(
+        lambda: _envelope(trade_date=None, fetched_at="2026-08-17 15:30:00"),
+        as_of="2026-08-17T07:30:00.000000Z",  # 北京时间周一 15:30
+        calendar=observation_trade_date_at,
+        sector_observation=_overview_fake("白酒", updated="2026-08-17 15:35"),
+    )
+    assert result["state"] == "USABLE"
+    assert f"market-breadth:trade_date={MONDAY}" in result["authority_refs"]
+
+
+def test_C_weekend_observation_maps_to_recent_trading_day():
+    """C：周末读取 → 最近交易日（周五），绝不伪造周末为交易日。"""
+    result = _evaluate(
+        lambda: _envelope(trade_date=None, fetched_at="2026-08-15 11:00:00"),
+        as_of=SATURDAY_AS_OF,
+        calendar=observation_trade_date_at,
+        sector_observation=_overview_fake("白酒", updated="2026-08-15 11:05"),
+    )
+    assert result["state"] == "USABLE"
+    refs = result["authority_refs"]
+    assert f"market-breadth:trade_date={FRIDAY}" in refs
+    assert "market-breadth:trade_date=2026-08-15" not in refs
+    assert "market-breadth:date-basis=observation-time" in refs
+
+
+def test_D_historical_as_of_with_live_snapshot_is_not_usable():
+    """D：historical as_of + current/live 快照 → 不得重标为历史日期
+    → NOT_EVALUATED（NO LOOKAHEAD）。"""
+    result = _evaluate(
+        lambda: _envelope(trade_date=None, fetched_at="2026-08-13 15:05:00"),
+        as_of="2026-08-12T04:00:00.000000Z",  # 北京时间周三 12:00
+        calendar=observation_trade_date_at,
+    )
+    assert result["state"] == "NOT_EVALUATED"
+    refs = result["authority_refs"]
+    assert "market-breadth:not-usable=fact-date-after-as_of" in refs
+    assert "market-breadth:trade_date=2026-08-13" in refs
+
+
+def test_E_explicit_provider_trade_date_preserved_but_stale():
+    """E：provider 显式 trade_date 仍作为 FACT_DATE 保留（date-basis=
+    provider-trade_date），但 freshness gate 按 EXPECTED_OBSERVATION_DATE
+    判定：周一 as_of + 周五 provider 观察 → STALE。"""
+    result = _evaluate(
+        lambda: _envelope(trade_date="2026-08-14",
+                          fetched_at="2026-08-17 10:30:00"),
+        as_of=MONDAY_MORNING_AS_OF,
+        calendar=observation_trade_date_at,
+        sector_observation=_overview_fake("白酒", updated="2026-08-17 10:35"),
+    )
     assert result["state"] == "STALE"
+    refs = result["authority_refs"]
+    assert "market-breadth:freshness=stale" in refs
+    assert "market-breadth:date-basis=provider-trade_date" in refs
+    assert "market-breadth:trade_date=2026-08-14" in refs
+    assert f"market-breadth:trade_date={MONDAY}" not in refs
+    assert f"market-breadth:expected_observation_date={MONDAY}" in refs
+
+
+def test_F_fetched_at_is_observation_attribution_not_fact_time():
+    """F：fetched_at 只用于 observation attribution / freshness，
+    绝不充当市场事实精确时刻。"""
+    result = _evaluate(
+        lambda: _envelope(trade_date=None, fetched_at="2026-08-15 11:00:00"),
+        as_of=SATURDAY_AS_OF,
+        calendar=observation_trade_date_at,
+        sector_observation=_overview_fake("白酒", updated="2026-08-15 11:05"),
+    )
+    refs = result["authority_refs"]
+    assert "market-breadth:observed_at=2026-08-15 11:00:00" in refs
+    assert any(ref.startswith("market-breadth:fetched_at=") for ref in refs)
+    # fetched_at 的周六日期绝不作为 trade_date
+    assert "market-breadth:trade_date=2026-08-15" not in refs
+
+
+# ---------------------------------------------------------------------------
+# P0-RU2-R2：freshness closure（review required E–J）
+# （E 由上方 test_E_explicit_provider_trade_date_preserved_but_stale 覆盖）
+# ---------------------------------------------------------------------------
+
+def test_R2_F_provider_friday_on_saturday_as_of_is_usable():
+    """R2-F：as_of 周六 + provider trade_date=周五 → USABLE
+    （周末诚实归属最近交易日，不算 STALE）。"""
+    result = _evaluate(
+        lambda: _envelope(trade_date=FRIDAY,
+                          fetched_at="2026-08-15 11:00:00"),
+        as_of=SATURDAY_AS_OF,
+        calendar=observation_trade_date_at,
+        sector_observation=_overview_fake("白酒", updated="2026-08-15 11:05"),
+    )
+    assert result["state"] == "USABLE"
+    refs = result["authority_refs"]
+    assert "market-breadth:date-basis=provider-trade_date" in refs
+    assert f"market-breadth:trade_date={FRIDAY}" in refs
+    assert f"market-breadth:expected_observation_date={FRIDAY}" in refs
+
+
+def test_R2_G_provider_future_observation_is_not_evaluated():
+    """R2-G：as_of 周一 + provider trade_date=周二 → NOT_EVALUATED
+    （future / look-ahead）。"""
+    result = _evaluate(
+        lambda: _envelope(trade_date="2026-08-18",
+                          fetched_at="2026-08-17 10:30:00"),
+        as_of=MONDAY_MORNING_AS_OF,
+        calendar=observation_trade_date_at,
+    )
+    assert result["state"] == "NOT_EVALUATED"
+    assert "market-breadth:not-usable=fact-date-after-as_of" in (
+        result["authority_refs"]
+    )
+
+
+def test_R2_H_missing_trade_date_current_fetch_current_as_of_is_usable():
+    """R2-H：缺失 trade_date + 当前 fetched_at + 当前 as_of → USABLE；
+    fetched_at 比 as_of 晚 20 秒（正常网络耗时）不导致失败。"""
+    result = _evaluate(
+        lambda: _envelope(trade_date=None, fetched_at="2026-08-17 10:30:20"),
+        as_of="2026-08-17T02:30:00.000000Z",  # 北京时间周一 10:30:00
+        calendar=observation_trade_date_at,
+        sector_observation=_overview_fake("白酒", updated="2026-08-17 10:35"),
+    )
+    assert result["state"] == "USABLE"
+    refs = result["authority_refs"]
+    assert f"market-breadth:trade_date={MONDAY}" in refs
+    assert f"market-breadth:expected_observation_date={MONDAY}" in refs
+
+
+def test_R2_I_historical_as_of_with_later_live_observation_is_not_evaluated():
+    """R2-I：historical as_of（周四）+ 更晚 live observation（周五）
+    → NOT_EVALUATED，绝不重标为历史日期。"""
+    result = _evaluate(
+        lambda: _envelope(trade_date=None, fetched_at="2026-08-14 10:00:00"),
+        as_of="2026-08-13T04:00:00.000000Z",  # 北京时间周四 12:00
+        calendar=observation_trade_date_at,
+    )
+    assert result["state"] == "NOT_EVALUATED"
+    assert "market-breadth:not-usable=fact-date-after-as_of" in (
+        result["authority_refs"]
+    )
+
+
+def test_R2_J_caller_as_of_never_creates_fact_date():
+    """R2-J：caller as_of 不参与 FACT_DATE 归属 —— fact date 只来自
+    observation time，与 as_of 的 completed trade date 无关。"""
+    from trade_calendar import completed_trade_date_at
+
+    # as_of 周一 10:30：completed_trade_date_at 会给出上周五
+    assert completed_trade_date_at(MONDAY_MORNING_AS_OF) == FRIDAY
+    result = _evaluate(
+        lambda: _envelope(trade_date=None, fetched_at="2026-08-17 10:30:00"),
+        as_of=MONDAY_MORNING_AS_OF,
+        calendar=observation_trade_date_at,
+        sector_observation=_overview_fake("白酒", updated="2026-08-17 10:35"),
+    )
+    assert result["state"] == "USABLE"
+    refs = result["authority_refs"]
+    # fact date = 周一（observation time 归属），绝不上周五（as_of completed date）
+    assert f"market-breadth:trade_date={MONDAY}" in refs
+    assert f"market-breadth:trade_date={FRIDAY}" not in refs
 
 
 # ---------------------------------------------------------------------------
