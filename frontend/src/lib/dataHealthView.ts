@@ -66,6 +66,63 @@ export const REQUEST_SCOPED = new Set([
   "sector_research",
 ]);
 
+/**
+ * P0-DS1 presentation 层语义：未初始化/未检测 ≠ 不可用。
+ * backend 三态 contract（normal/partial/unavailable）保持不变，
+ * SOURCE_NOT_INITIALIZED（尚无成功运行记录）在展示层单列为
+ * not_initialized —— 绝不显示为红色「不可用」。
+ */
+export type PresentationState = "not_initialized" | HealthStatus;
+
+export function presentationState(
+  record: DataHealthRecord | null | undefined,
+): PresentationState {
+  if (!record) return "not_initialized";
+  if (record.last_error_code === "SOURCE_NOT_INITIALIZED") return "not_initialized";
+  return record.status;
+}
+
+export const PRESENTATION_LABEL: Record<PresentationState, string> = {
+  not_initialized: "未初始化",
+  normal: "正常",
+  partial: "部分可用",
+  unavailable: "不可用",
+};
+
+export function presentationLabel(state: PresentationState): string {
+  return PRESENTATION_LABEL[state];
+}
+
+export function presentationAriaLabel(state: PresentationState): string {
+  return `数据状态：${presentationLabel(state)}`;
+}
+
+/**
+ * P0-DS1：Freshness 独立于质量三态显示。
+ * FRESH=新鲜 / STALE=陈旧 / UNKNOWN=未初始化或未提供 stale 信号。
+ */
+export type FreshnessState = "FRESH" | "STALE" | "UNKNOWN";
+
+export function freshnessState(
+  record: DataHealthRecord | null | undefined,
+): FreshnessState {
+  if (!record) return "UNKNOWN";
+  if (record.last_error_code === "SOURCE_NOT_INITIALIZED") return "UNKNOWN";
+  if (record.is_stale === true) return "STALE";
+  if (record.is_stale === false) return "FRESH";
+  return "UNKNOWN";
+}
+
+export const FRESHNESS_LABEL: Record<FreshnessState, string> = {
+  FRESH: "数据新鲜",
+  STALE: "数据陈旧",
+  UNKNOWN: "新鲜度未知",
+};
+
+export function freshnessLabel(state: FreshnessState): string {
+  return FRESHNESS_LABEL[state];
+}
+
 export function statusLabel(status: HealthStatus | string | null | undefined): string {
   if (status === "normal" || status === "partial" || status === "unavailable") {
     return STATUS_LABEL[status];
@@ -138,9 +195,16 @@ export function gateAdviceLabel(state: GateAdviceState): string {
 }
 
 export function isProblemSource(r: DataHealthRecord): boolean {
+  // P0-DS1：未初始化/未检测不是「问题」——不是红色不可用。
+  if (r.last_error_code === "SOURCE_NOT_INITIALIZED") return false;
   return r.status === "partial" || r.status === "unavailable" || r.is_stale;
 }
 
+/**
+ * P0-DS1-R2：status 筛选改为 presentation-state 语义。
+ * - "unavailable" 匹配确认不可用（排除 SOURCE_NOT_INITIALIZED）；
+ * - "not_initialized" 只匹配 SOURCE_NOT_INITIALIZED。
+ */
 export function filterItems(
   items: DataHealthRecord[],
   opts: {
@@ -152,14 +216,25 @@ export function filterItems(
 ): DataHealthRecord[] {
   return items.filter((it) => {
     if (opts.module && it.module !== opts.module) return false;
-    if (opts.status && it.status !== opts.status) return false;
+    if (opts.status === "not_initialized") {
+      if (it.last_error_code !== "SOURCE_NOT_INITIALIZED") return false;
+    } else if (opts.status) {
+      if (it.status !== opts.status) return false;
+      // 不可用筛选不包含未初始化（未检测 ≠ 不可用）
+      if (
+        opts.status === "unavailable"
+        && it.last_error_code === "SOURCE_NOT_INITIALIZED"
+      ) {
+        return false;
+      }
+    }
     if (opts.is_stale != null && it.is_stale !== opts.is_stale) return false;
     if (opts.blocks_advice != null && it.blocks_advice !== opts.blocks_advice) return false;
     return true;
   });
 }
 
-const VALID_STATUS = new Set(["normal", "partial", "unavailable"]);
+const VALID_STATUS = new Set(["normal", "partial", "unavailable", "not_initialized"]);
 
 export type HealthUrlFilters = {
   module: string | null;
@@ -167,6 +242,24 @@ export type HealthUrlFilters = {
   is_stale: boolean | null;
   blocks_advice: boolean | null;
 };
+
+/**
+ * P0-DS1-R2：全局 presentation 状态。
+ * 所有来源都是 SOURCE_NOT_INITIALIZED → 中性「未初始化/尚未观测」，
+ * 绝不显示红色不可用；否则透传 backend overall_status。
+ */
+export function overallPresentation(
+  items: DataHealthRecord[],
+  overallStatus: HealthStatus,
+): PresentationState {
+  if (
+    items.length > 0
+    && items.every((it) => it.last_error_code === "SOURCE_NOT_INITIALIZED")
+  ) {
+    return "not_initialized";
+  }
+  return overallStatus;
+}
 
 /** 非法 query 清理为默认 null */
 export function parseHealthSearchParams(sp: URLSearchParams): HealthUrlFilters {
@@ -195,6 +288,29 @@ export function summaryQualityTotal(s: DataHealthSummary): number {
   return s.normal + s.partial + s.unavailable;
 }
 
+/**
+ * P0-DS1-R1：confirmed unavailable 必须排除 SOURCE_NOT_INITIALIZED
+ * （未初始化 ≠ 确认不可用）。全部计数从真实 items 动态派生，
+ * 不得 hardcode 11 / 15。
+ */
+export function confirmedUnavailableCount(items: DataHealthRecord[]): number {
+  return items.filter(
+    (it) =>
+      it.status === "unavailable"
+      && it.last_error_code !== "SOURCE_NOT_INITIALIZED",
+  ).length;
+}
+
+export function notInitializedCount(items: DataHealthRecord[]): number {
+  return items.filter(
+    (it) => it.last_error_code === "SOURCE_NOT_INITIALIZED",
+  ).length;
+}
+
+export function sourceTotalCount(items: DataHealthRecord[]): number {
+  return items.length;
+}
+
 export function requestScopeCardHint(source_id: string): string | null {
   if (!REQUEST_SCOPED.has(source_id)) return null;
   return "最近一次真实调用";
@@ -206,6 +322,7 @@ export function requestScopeDetailDisclaimer(source_id: string, calcDisclaimer?:
   return "该状态来自此数据源最近一次真实业务调用，不代表全部股票或板块均已验证。";
 }
 
-export function emptySystemGuide(summary: DataHealthSummary): boolean {
-  return summary.not_initialized === 11;
+/** P0-DS1-R1：空系统引导从真实 items 动态判定（不再 hardcode 11）。 */
+export function emptySystemGuideFromItems(items: DataHealthRecord[]): boolean {
+  return items.length > 0 && notInitializedCount(items) === items.length;
 }

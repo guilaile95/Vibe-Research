@@ -239,8 +239,13 @@ def announcements(code: str, limit: int = 15) -> list[dict]:
     for a in lst:
         cols = [c.get("column_name") for c in (a.get("columns") or []) if c.get("column_name")]
         art = a.get("art_code", "")
+        raw_date = a.get("notice_date", "") or ""
+        # 保留 provider 原始时间戳（notice_at，北京时间语义）；date 仅为展示
+        # 截断。下游 time 判定不得依赖 [:10] 截断丢失的时间。
+        notice_at = raw_date if isinstance(raw_date, str) and len(raw_date) >= 10 else None
         out.append({
-            "date": (a.get("notice_date", "") or "")[:10],
+            "date": raw_date[:10] if isinstance(raw_date, str) else "",
+            "notice_at": notice_at,
             "title": a.get("title", ""),
             "type": cols[0] if cols else "",
             "url": f"https://data.eastmoney.com/notices/detail/{code}/{art}.html" if art else "",

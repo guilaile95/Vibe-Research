@@ -4,16 +4,25 @@ import test from "node:test";
 import {
   cacheDetailText,
   cacheTag,
+  confirmedUnavailableCount,
   coverageText,
   degradedDetailText,
   degradedTag,
-  emptySystemGuide,
+  emptySystemGuideFromItems,
   filterItems,
+  freshnessLabel,
+  freshnessState,
   gateAdviceLabel,
   gateAdviceState,
+  isProblemSource,
+  notInitializedCount,
+  overallPresentation,
   parseHealthSearchParams,
+  presentationLabel,
+  presentationState,
   requestScopeCardHint,
   requestScopeDetailDisclaimer,
+  sourceTotalCount,
   statusAriaLabel,
   statusLabel,
   summaryQualityTotal,
@@ -137,10 +146,45 @@ test("request scoped hints", () => {
   assert.equal(requestScopeCardHint("daily_review"), null);
 });
 
-test("summary quality total and empty guide", () => {
+test("summary quality total counts backend tri-state only", () => {
   const s = { normal: 5, partial: 2, unavailable: 4, stale: 3, not_initialized: 2 };
   assert.equal(summaryQualityTotal(s), 11);
-  assert.equal(emptySystemGuide({ ...s, not_initialized: 11 }), true);
+});
+
+test("R1: confirmed unavailable excludes not-initialized; counts are item-derived", () => {
+  // 8 not_initialized + 1 true failure + 其余正常（验收 G/H）
+  const items: DataHealthRecord[] = [];
+  for (let i = 0; i < 8; i++) {
+    items.push(rec({
+      source_id: `s${i}`,
+      status: "unavailable",
+      last_error_code: "SOURCE_NOT_INITIALIZED",
+    }));
+  }
+  items.push(rec({
+    source_id: "failure",
+    status: "unavailable",
+    last_error_code: "SOURCE_UNAVAILABLE",
+  }));
+  items.push(rec({ source_id: "ok", status: "normal" }));
+  // unavailable = 1（真实失败），not initialized = 8
+  assert.equal(confirmedUnavailableCount(items), 1);
+  assert.equal(notInitializedCount(items), 8);
+  // source total 动态派生（10，不是 hardcoded 11/15）
+  assert.equal(sourceTotalCount(items), 10);
+  assert.equal(emptySystemGuideFromItems(items), false);
+});
+
+test("R1: empty-system guide only when every item is not-initialized (dynamic)", () => {
+  const all = [1, 2, 3].map((i) =>
+    rec({
+      source_id: `s${i}`,
+      status: "unavailable",
+      last_error_code: "SOURCE_NOT_INITIALIZED",
+    }),
+  );
+  assert.equal(emptySystemGuideFromItems(all), true);
+  assert.equal(emptySystemGuideFromItems([]), false);
 });
 
 test("url filter parse cleans invalid", () => {
@@ -161,4 +205,126 @@ test("filter items", () => {
   ];
   assert.equal(filterItems(items, { status: "partial" }).length, 1);
   assert.equal(filterItems(items, { is_stale: true }).length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// P0-DS1：presentation 语义（未初始化/未检测 ≠ 不可用）与 freshness 独立
+// ---------------------------------------------------------------------------
+
+test("presentationState: SOURCE_NOT_INITIALIZED is not_initialized (never unavailable)", () => {
+  assert.equal(
+    presentationState(rec({ source_id: "quotes", status: "unavailable", last_error_code: "SOURCE_NOT_INITIALIZED" })),
+    "not_initialized",
+  );
+  assert.equal(presentationState(rec({ source_id: "quotes" })), "normal");
+  assert.equal(presentationState(rec({ source_id: "quotes", status: "partial" })), "partial");
+  assert.equal(
+    presentationState(rec({ source_id: "quotes", status: "unavailable", last_error_code: "SOURCE_UNAVAILABLE" })),
+    "unavailable",
+  );
+  assert.equal(presentationState(null), "not_initialized");
+});
+
+test("presentationLabel distinguishes not_initialized from unavailable", () => {
+  assert.equal(presentationLabel("not_initialized"), "未初始化");
+  assert.equal(presentationLabel("unavailable"), "不可用");
+  assert.notEqual(presentationLabel("not_initialized"), presentationLabel("unavailable"));
+});
+
+test("freshnessState: independent of quality status", () => {
+  // 未初始化 → 新鲜度未知
+  assert.equal(
+    freshnessState(rec({ source_id: "q", status: "unavailable", last_error_code: "SOURCE_NOT_INITIALIZED" })),
+    "UNKNOWN",
+  );
+  // 陈旧
+  assert.equal(freshnessState(rec({ source_id: "q", status: "normal", is_stale: true })), "STALE");
+  // 新鲜（质量正常）
+  assert.equal(freshnessState(rec({ source_id: "q", status: "normal", is_stale: false })), "FRESH");
+  // 新鲜（质量部分可用但数据不陈旧）
+  assert.equal(freshnessState(rec({ source_id: "q", status: "partial", is_stale: false })), "FRESH");
+  // stale 信号缺失 → 未知
+  assert.equal(freshnessState(rec({ source_id: "q", is_stale: null })), "UNKNOWN");
+  assert.equal(freshnessState(null), "UNKNOWN");
+});
+
+test("freshnessLabel maps FRESH/STALE/UNKNOWN", () => {
+  assert.equal(freshnessLabel("FRESH"), "数据新鲜");
+  assert.equal(freshnessLabel("STALE"), "数据陈旧");
+  assert.equal(freshnessLabel("UNKNOWN"), "新鲜度未知");
+});
+
+test("isProblemSource excludes not-initialized (unobserved is not a problem)", () => {
+  assert.equal(
+    isProblemSource(rec({ source_id: "q", status: "unavailable", last_error_code: "SOURCE_NOT_INITIALIZED" })),
+    false,
+  );
+  assert.equal(
+    isProblemSource(rec({ source_id: "q", status: "unavailable", last_error_code: "SOURCE_UNAVAILABLE" })),
+    true,
+  );
+  assert.equal(isProblemSource(rec({ source_id: "q", status: "partial" })), true);
+  assert.equal(isProblemSource(rec({ source_id: "q", status: "normal", is_stale: true })), true);
+});
+
+// ---------------------------------------------------------------------------
+// P0-DS1-R2：presentation 筛选与全局 badge（acceptance G/H/I/J）
+// ---------------------------------------------------------------------------
+
+function mixedItems(): DataHealthRecord[] {
+  const items: DataHealthRecord[] = [];
+  for (let i = 0; i < 8; i++) {
+    items.push(rec({
+      source_id: `ni${i}`,
+      status: "unavailable",
+      last_error_code: "SOURCE_NOT_INITIALIZED",
+    }));
+  }
+  items.push(rec({
+    source_id: "failure",
+    status: "unavailable",
+    last_error_code: "SOURCE_UNAVAILABLE",
+  }));
+  items.push(rec({ source_id: "ok", status: "normal" }));
+  return items;
+}
+
+test("R2 G: unavailable filter excludes not-initialized", () => {
+  const filtered = filterItems(mixedItems(), { status: "unavailable" });
+  assert.deepEqual(filtered.map((it) => it.source_id), ["failure"]);
+});
+
+test("R2 H: not_initialized filter returns only not-initialized", () => {
+  const filtered = filterItems(mixedItems(), { status: "not_initialized" });
+  assert.equal(filtered.length, 8);
+  assert.ok(filtered.every((it) => it.last_error_code === "SOURCE_NOT_INITIALIZED"));
+});
+
+test("R2 I: all-not-initialized overall presentation is neutral", () => {
+  const allNi = [1, 2, 3].map((i) =>
+    rec({
+      source_id: `ni${i}`,
+      status: "unavailable",
+      last_error_code: "SOURCE_NOT_INITIALIZED",
+    }),
+  );
+  assert.equal(overallPresentation(allNi, "unavailable"), "not_initialized");
+  // 非全 NI → 透传 backend overall
+  assert.equal(overallPresentation(mixedItems(), "unavailable"), "unavailable");
+});
+
+test("R2 J: mixed true unavailable + NI remains distinct", () => {
+  const items = mixedItems();
+  assert.equal(confirmedUnavailableCount(items), 1);
+  assert.equal(notInitializedCount(items), 8);
+  const unavailableOnly = filterItems(items, { status: "unavailable" });
+  assert.equal(unavailableOnly.length, 1);
+  assert.equal(unavailableOnly[0].last_error_code, "SOURCE_UNAVAILABLE");
+});
+
+test("R2: url filter accepts not_initialized status", () => {
+  const f = parseHealthSearchParams(new URLSearchParams("status=not_initialized"));
+  assert.equal(f.status, "not_initialized");
+  const g = parseHealthSearchParams(new URLSearchParams("status=bad"));
+  assert.equal(g.status, null);
 });

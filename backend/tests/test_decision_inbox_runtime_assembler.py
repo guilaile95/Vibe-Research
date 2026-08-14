@@ -1,8 +1,10 @@
 """P0-DI2 — current-only Decision Inbox runtime assembler domain tests.
 
-全部使用注入式只读 ports；不访问真实数据库、不产生写入。
-DDA / CCD / RA / DI1 使用真实 pure cores，仅 thesis / frozen / price / lake
-端口注入，以证明组合链语义而不是 mock 掉权威。
+全部使用注入式只读 ports；不访问真实数据库、不产生写入、不发网络请求。
+DDA / CCD / RA / DI1 使用真实 pure cores，仅 thesis / frozen / price /
+market_sector / disclosures / financials / lake 端口注入，以证明组合链语义
+而不是 mock 掉权威。三个 capability evaluator 默认注入确定性 fake
+（NOT_EVALUATED），真实 evaluator 语义由其各自专项测试覆盖。
 """
 
 from __future__ import annotations
@@ -13,6 +15,9 @@ import pytest
 
 import campaign_service
 import critical_data_dependency_policy as dda
+import critical_data_disclosures_adapter as disclosures_adapter
+import critical_data_financials_adapter as financials_adapter
+import critical_data_market_sector_adapter as market_sector_adapter
 import critical_data_price_reference_adapter as price_adapter
 import decision_inbox_projection as di
 import decision_inbox_runtime_assembler as runtime
@@ -153,15 +158,58 @@ def _price_usable(_lake, definition: dict) -> dict:
     }
 
 
+def _market_sector_not_evaluated(_lake, definition: dict) -> dict:
+    return {
+        "dependency_id": market_sector_adapter.DEPENDENCY_ID,
+        "state": "NOT_EVALUATED",
+        "as_of": definition["as_of"],
+        "authority_refs": [market_sector_adapter.ADAPTER_AUTHORITY_REF],
+    }
+
+
+def _disclosures_not_evaluated(_lake, definition: dict) -> dict:
+    return {
+        "dependency_id": disclosures_adapter.DEPENDENCY_ID,
+        "state": "NOT_EVALUATED",
+        "as_of": definition["as_of"],
+        "authority_refs": [disclosures_adapter.ADAPTER_AUTHORITY_REF],
+    }
+
+
+def _financials_not_evaluated(_lake, definition: dict) -> dict:
+    return {
+        "dependency_id": financials_adapter.DEPENDENCY_ID,
+        "state": "NOT_EVALUATED",
+        "as_of": definition["as_of"],
+        "authority_refs": [
+            financials_adapter.ADAPTER_AUTHORITY_REF,
+            financials_adapter.REPORT_PERIOD_BLOCKER_REF,
+        ],
+    }
+
+
+def _capability_result(dependency_id: str, state: str, as_of: str) -> dict:
+    return {
+        "dependency_id": dependency_id,
+        "state": state,
+        "as_of": as_of,
+        "authority_refs": [f"test:{dependency_id}"],
+    }
+
+
 def _ports(
     *,
     composition_reader=None,
     thesis_reader=None,
     frozen_reader=None,
     price_evaluator=_price_usable,
+    market_sector_evaluator=_market_sector_not_evaluated,
+    disclosures_evaluator=_disclosures_not_evaluated,
+    financials_evaluator=_financials_not_evaluated,
     lake_provider=lambda: _FAKE_LAKE,
 ):
-    calls = {"thesis": [], "frozen": [], "lake": [], "price": []}
+    calls = {"thesis": [], "frozen": [], "lake": [], "price": [],
+             "market": [], "disclosures": [], "financials": []}
 
     def _thesis(campaign_id):
         calls["thesis"].append(campaign_id)
@@ -189,10 +237,25 @@ def _ports(
             return None
         return price_evaluator(lake, definition)
 
+    def _market(lake, definition):
+        calls["market"].append(True)
+        return market_sector_evaluator(lake, definition)
+
+    def _disclosures(lake, definition):
+        calls["disclosures"].append(True)
+        return disclosures_evaluator(lake, definition)
+
+    def _financials(lake, definition):
+        calls["financials"].append(True)
+        return financials_evaluator(lake, definition)
+
     ports = runtime.RuntimePorts(
         composition_reader=composition_reader or (lambda: _composition()),
         dependency_resolver=dda.resolve_strategy_dependencies,
         price_evaluator=_price,
+        market_sector_evaluator=_market,
+        disclosures_evaluator=_disclosures,
+        financials_evaluator=_financials,
         thesis_reader=_thesis,
         frozen_decisions_reader=_frozen_port,
         lake_provider=_lake,
@@ -216,7 +279,7 @@ class TestCompositionGate:
         assert result["holding_setup_items"] == []
         assert result["campaign_items"] == []
         assert result["total_holdings"] == 0
-        assert calls == {"thesis": [], "frozen": [], "lake": [], "price": []}
+        assert calls == {"thesis": [], "frozen": [], "lake": [], "price": [], "market": [], "disclosures": [], "financials": []}
 
     def test_unassigned_holding_is_setup_item_not_campaign_facts(self):
         ports, calls = _ports(
@@ -236,7 +299,7 @@ class TestCompositionGate:
         assert "campaign_id" not in setup
         assert "strategy" not in setup
         assert result["campaign_items"] == []
-        assert calls == {"thesis": [], "frozen": [], "lake": [], "price": []}
+        assert calls == {"thesis": [], "frozen": [], "lake": [], "price": [], "market": [], "disclosures": [], "financials": []}
 
 
 class TestFullChain:
@@ -263,7 +326,8 @@ class TestFullChain:
         }
         assert item["hard_risk_state"] == "NOT_EVALUATED"
         assert item["material_change_state"] == "NOT_EVALUATED"
-        # price USABLE 但 market_sector/disclosures 缺 adapter → 诚实 UNKNOWN
+        # price USABLE 但 market_sector/disclosures 未评估（fake NOT_EVALUATED）
+        # → 诚实 UNKNOWN / NOT_EVALUATED，绝无 false clean
         assert item["critical_data_state"] == "UNKNOWN"
         assert item["critical_data_evaluation"] == "NOT_EVALUATED"
         assert item["decision_confidence"] == "HIGH"
@@ -390,7 +454,7 @@ class TestCapabilityDispatch:
             campaign_id=CAMPAIGN_B,
             strategy=STRATEGY_MEDIUM,
         )
-        ports, _calls = _ports(
+        ports, calls = _ports(
             composition_reader=lambda: _composition(
                 [_composition_item(campaigns=[campaign_m])]
             )
@@ -399,6 +463,98 @@ class TestCapabilityDispatch:
         assert item["strategy"] == STRATEGY_MEDIUM
         assert item["critical_data_evaluation"] == "NOT_EVALUATED"
         assert item["visible_state"] == "BLOCKED_BY_DATA"
+        # MEDIUM required = price + disclosures + financials（DDA1 冻结），
+        # market_sector 不参与
+        assert calls["market"] == []
+        assert calls["disclosures"] == [True]
+        assert calls["financials"] == [True]
+
+    def test_all_capabilities_usable_maps_through_ccd(self):
+        """§11-A：真实 capability USABLE 时 CCD 能消费。"""
+
+        def market_usable(_lake, definition):
+            return _capability_result(
+                market_sector_adapter.DEPENDENCY_ID, "USABLE",
+                definition["as_of"],
+            )
+
+        def disclosures_usable(_lake, definition):
+            return _capability_result(
+                disclosures_adapter.DEPENDENCY_ID, "USABLE",
+                definition["as_of"],
+            )
+
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            market_sector_evaluator=market_usable,
+            disclosures_evaluator=disclosures_usable,
+        )
+        item = _assemble(ports)["campaign_items"][0]
+        # price + market_sector + disclosures 全 USABLE（SWING 依赖集）
+        assert item["critical_data_state"] == "USABLE"
+        assert item["critical_data_evaluation"] == "EVALUATED"
+        # 但仍不得 false clean：thesis/frozen 之外 hard risk 等仍 NOT_EVALUATED
+        assert item["visible_state"] != "NO_ACTION_REQUIRED"
+
+    def test_market_sector_usable_alone_keeps_unknown_for_swing(self):
+        """市场 USABLE 但 disclosures 未评估 → critical_data 仍非 USABLE。"""
+
+        def market_usable(_lake, definition):
+            return _capability_result(
+                market_sector_adapter.DEPENDENCY_ID, "USABLE",
+                definition["as_of"],
+            )
+
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            market_sector_evaluator=market_usable,
+        )
+        item = _assemble(ports)["campaign_items"][0]
+        assert item["critical_data_state"] == "UNKNOWN"
+        assert item["critical_data_evaluation"] == "NOT_EVALUATED"
+
+    def test_market_sector_error_maps_to_critical_data_error(self):
+        def broken(_lake, _definition):
+            raise market_sector_adapter.MarketSectorCapabilityError("broken")
+
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            market_sector_evaluator=broken,
+        )
+        item = _assemble(ports)["campaign_items"][0]
+        assert item["critical_data_evaluation"] == "ERROR"
+        assert di.REASON_CRITICAL_DATA_ERROR in item["reason_codes"]
+
+    def test_financials_blocker_ref_flows_into_explainability(self):
+        """§11-F：financials applicability 未解决 → NOT_EVALUATED + 显式 blocker。"""
+
+        def financials_blocked(_lake, definition):
+            return _financials_not_evaluated(_lake, definition)
+
+        campaign_m = _campaign(
+            campaign_id=CAMPAIGN_B,
+            strategy=STRATEGY_MEDIUM,
+        )
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[campaign_m])]
+            ),
+            financials_evaluator=financials_blocked,
+        )
+        item = _assemble(ports)["campaign_items"][0]
+        assert item["critical_data_evaluation"] == "NOT_EVALUATED"
+        assert item["visible_state"] != "NO_ACTION_REQUIRED"
+        # blocker 经 authority_refs 显式可见（CCD exact-shape contract 无法
+        # 扩字段，故 blocker 以稳定 ref 字符串承载）
+        assert financials_adapter.REPORT_PERIOD_BLOCKER_REF in item[
+            "explainability"]["authority_refs"
+        ]
 
     def test_multi_campaign_keeps_independent_identity(self):
         ports, _calls = _ports(
