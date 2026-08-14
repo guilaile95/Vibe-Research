@@ -6,9 +6,10 @@ confirmed session strictly before another confirmed session.
 :func:`completed_trade_date_at` maps an explicit UTC instant to the most recent
 A-share session completed by that instant using a frozen Asia/Shanghai 15:00
 close boundary.  :func:`observation_trade_date_at` maps an explicit UTC instant
-to the MARKET OBSERVATION DATE of that instant (session-day semantics: a
-session date maps to itself intraday or post-close, a weekend/holiday maps to
-the latest earlier session).
+to the MARKET OBSERVATION DATE of that instant (session-day semantics with a
+frozen Asia/Shanghai 09:30 open boundary: pre-open instants on a session date
+map to the previous session, from 09:30 onward they map to that session, and a
+weekend/holiday maps to the latest earlier session).
 
 The module is pure standard library, performs no network I/O, and fails
 closed (returns ``None``) for any invalid input or corrupted data file.
@@ -317,10 +318,12 @@ def observation_trade_date_at(observed_at: str) -> Optional[str]:
 
     The input contract is identical to :func:`completed_trade_date_at`
     (canonical UTC zero-offset instant).  The mapping uses session-day
-    semantics instead of the 15:00 close boundary:
+    semantics with a frozen Asia/Shanghai 09:30 open boundary:
 
-    - an instant on a confirmed session date belongs to that session's
-      market observation (intraday or post-close);
+    - an instant on a confirmed session date at or after 09:30 belongs to
+      that session's market observation (intraday or post-close);
+    - an instant on a confirmed session date before 09:30 maps to the
+      previous confirmed session (no current-session data exists yet);
     - an instant on a weekend or exchange holiday maps to the latest earlier
       confirmed session — the most recent trading day whose data a live
       snapshot can reflect.
@@ -331,4 +334,4 @@ def observation_trade_date_at(observed_at: str) -> Optional[str]:
     consulted; ``None`` is returned on the same fail-closed conditions as
     :func:`completed_trade_date_at`.
     """
-    return _session_date_at(observed_at, (0, 0, 0, 0))
+    return _session_date_at(observed_at, (9, 30, 0, 0))

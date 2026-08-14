@@ -7,6 +7,8 @@ positive-proof 才允许 USABLE：
       → MARKET CONTEXT（广度信封；provider 显式 trade_date 优先，
         缺失时以真实 observation timestamp + 权威交易日历归属
         MARKET OBSERVATION DATE，绝不由 caller as_of 创造 fact date）
+      → freshness gate（FACT_DATE vs EXPECTED_OBSERVATION_DATE：
+        fact < expected → STALE，fact > expected → NOT_EVALUATED）
       → industry identity（astock.individual_info「行业」）
       → matching sector observation（market.get_overview 板块资金流中
         找到该行业的板块观察数据）
@@ -14,8 +16,8 @@ positive-proof 才允许 USABLE：
         的北京日期不早于 market fact date）
 
 industry identity alone → UNKNOWN + 显式 blocker；不得新建 provider；
-retrieval time 绝不当作 fact time；NO LOOKAHEAD（fact date 晚于 as_of
-→ NOT_EVALUATED）。DDA1 未修改。只读、零写入。
+retrieval time 绝不当作 fact time；NO LOOKAHEAD。DDA1 未修改。
+只读、零写入。
 """
 
 from __future__ import annotations
@@ -87,19 +89,6 @@ def _observation_instant_utc(fetched_at: object) -> str | None:
         .astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _as_of_shanghai_date(as_of: str) -> str | None:
-    """caller as_of（canonical UTC）→ 北京时间日期；非法日期 → None。
-
-    仅用于 NO LOOKAHEAD 闸门（fact date 不得晚于 as_of），
-    绝不用于创造 fact date。"""
-    parse_text = as_of[:-1] + "+00:00" if as_of.endswith("Z") else as_of
-    try:
-        parsed = datetime.fromisoformat(parse_text)
-    except ValueError:
-        return None
-    return parsed.astimezone(_BEIJING_TZ).date().isoformat()
-
-
 def _extract_industry(info: Mapping[str, Any]) -> str | None:
     """从 individual_info（{item: value}）提取行业；缺失/非法 → None。"""
     value = info.get("行业")
@@ -158,18 +147,30 @@ def evaluate_market_sector_capability(
     isolated fake。USABLE 需要市场上下文 + industry identity + matching
     sector observation 三者同时 positive-proof。
 
-    Temporal attribution（P0-RU2-R1）：
+    Temporal attribution（P0-RU2-R1）与 freshness closure（P0-RU2-R2）：
 
-    - provider 显式 trade_date → 事实日期以 provider 为准；
-    - provider 缺失 trade_date → 以真实 observation timestamp（envelope
-      fetched_at）+ 权威交易日历归属 MARKET OBSERVATION DATE；
+    - FACT_DATE 来源优先级：provider 显式 trade_date → 缺失时以真实
+      observation timestamp（envelope fetched_at）+ 权威交易日历归属；
       caller as_of 绝不创造 provider 没有提供的 fact date；
-    - NO LOOKAHEAD：market fact date 晚于 as_of → NOT_EVALUATED；
+    - EXPECTED_OBSERVATION_DATE 独立计算（calendar(as_of)），只用于
+      freshness gate：fact < expected → STALE，fact > expected →
+      NOT_EVALUATED（look-ahead），相等才继续评估；绝不用于 fact date；
     - fetched_at 只用于 observation attribution / freshness，绝不充当
       市场事实精确时刻。
     """
     _require_inputs(security_code, campaign_id, as_of)
     refs = [ADAPTER_AUTHORITY_REF]
+
+    # —— EXPECTED_OBSERVATION_DATE：caller as_of 时点当前市场上下文应至少
+    # 对应的 observation date；仅用于 freshness gate，绝不创造 FACT_DATE ——
+    refs.append(OBSERVATION_AUTHORITY_REF)
+    expected = calendar(as_of)
+    if expected is None:
+        return _result("NOT_EVALUATED", as_of, refs)
+    if type(expected) is not str \
+            or re.fullmatch(r"\d{4}-\d{2}-\d{2}", expected) is None:
+        return _result("ERROR", as_of, refs)
+    refs.append(f"market-breadth:expected_observation_date={expected}")
 
     if market_reader is None:
         # 生产默认：真实市场广度信封（从不抛异常，状态在 envelope.status）
@@ -202,7 +203,7 @@ def evaluate_market_sector_capability(
         )
     refs.append(f"market-breadth:fetched_at={fetched_at}")
 
-    # —— Market fact date 解析 ——
+    # —— FACT_DATE 解析 ——
     envelope_trade_date = envelope.get("trade_date")
     if envelope_trade_date is not None:
         # provider 显式提供 trade_date → 优先使用 provider 日期（E），
@@ -216,7 +217,6 @@ def evaluate_market_sector_capability(
         # provider 未提供 trade_date：以真实 observation timestamp +
         # 权威交易日历确定该快照属于哪个 MARKET OBSERVATION DATE；
         # caller as_of 不能创造 provider 没有提供的 fact date
-        refs.append(OBSERVATION_AUTHORITY_REF)
         fact_date = calendar(observation_utc)
         if fact_date is None:
             return _result("NOT_EVALUATED", as_of, refs)
@@ -228,15 +228,18 @@ def evaluate_market_sector_capability(
 
     refs.append(f"market-breadth:trade_date={fact_date}")
 
-    # —— NO LOOKAHEAD：market fact date 不得晚于 caller as_of ——
-    as_of_date = _as_of_shanghai_date(as_of)
-    if as_of_date is None:
-        # as_of 虽格式合规但不是真实存在的 UTC 时刻 → fail closed
-        return _result("ERROR", as_of, refs)
-    if fact_date > as_of_date:
+    # —— Freshness gate：FACT_DATE vs EXPECTED_OBSERVATION_DATE ——
+    if fact_date > expected:
+        # 未来 / look-ahead：不得把晚于 as_of 预期的观察当作当前市场环境
         return _result(
             "NOT_EVALUATED", as_of,
             refs + ["market-breadth:not-usable=fact-date-after-as_of"],
+        )
+    if fact_date < expected:
+        # 真实旧数据 ≠ 当前可用数据：STALE 不冒充 current
+        return _result(
+            "STALE", as_of,
+            refs + ["market-breadth:freshness=stale"],
         )
 
     source = envelope.get("source")

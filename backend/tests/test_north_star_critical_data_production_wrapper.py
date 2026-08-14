@@ -160,10 +160,10 @@ def _breadth_fake(trade_date: str):
 
 
 def test_production_market_sector_wrapper_full_chain(monkeypatch):
-    from trade_calendar import completed_trade_date_at
+    from trade_calendar import observation_trade_date_at
 
     as_of = _as_of_past()
-    trade_date = completed_trade_date_at(as_of)
+    trade_date = observation_trade_date_at(as_of)
     assert trade_date is not None
     monkeypatch.setattr(
         market_module,
@@ -198,10 +198,10 @@ def test_production_market_sector_wrapper_full_chain(monkeypatch):
 
 
 def test_production_market_sector_market_only_is_not_usable(monkeypatch):
-    from trade_calendar import completed_trade_date_at
+    from trade_calendar import observation_trade_date_at
 
     as_of = _as_of_past()
-    trade_date = completed_trade_date_at(as_of)
+    trade_date = observation_trade_date_at(as_of)
     assert trade_date is not None
     monkeypatch.setattr(
         market_module,

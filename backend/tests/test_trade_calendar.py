@@ -341,11 +341,25 @@ class TestObservationTradeDateAt:
             == "2026-08-17"
         )
 
-    def test_pre_open_session_date_maps_to_same_session(self):
-        # 2026-08-17 (Mon) 08:30 Asia/Shanghai.
+    def test_pre_open_session_date_maps_to_previous_session(self):
+        # 2026-08-17 (Mon) 08:30 Asia/Shanghai → Friday 2026-08-14.
         assert (
             tc.observation_trade_date_at("2026-08-17T00:30:00Z")
+            == "2026-08-14"
+        )
+
+    def test_open_boundary_at_0930_maps_to_current_session(self):
+        # 2026-08-17 (Mon) 09:30:00 Asia/Shanghai → Monday.
+        assert (
+            tc.observation_trade_date_at("2026-08-17T01:30:00Z")
             == "2026-08-17"
+        )
+
+    def test_just_before_open_maps_to_previous_session(self):
+        # 2026-08-17 (Mon) 09:29:59 Asia/Shanghai → Friday 2026-08-14.
+        assert (
+            tc.observation_trade_date_at("2026-08-17T01:29:59Z")
+            == "2026-08-14"
         )
 
     def test_saturday_maps_to_previous_friday(self):

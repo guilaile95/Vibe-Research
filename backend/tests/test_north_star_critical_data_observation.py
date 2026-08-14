@@ -25,7 +25,7 @@ import decision_inbox_projection as di
 import decision_inbox_runtime_assembler as runtime
 import formal_thesis_projection as thesis_projection
 import holdings_campaign_composition as composition
-from trade_calendar import completed_trade_date_at
+from trade_calendar import observation_trade_date_at
 
 AS_OF = "2026-08-13T04:00:00.000000Z"
 SECURITY = "600519"
@@ -172,7 +172,7 @@ def _ports(
     price_evaluator=_price_usable,
 ):
     """真实 evaluator 链（市场/公告/财务真实判定逻辑 + 注入数据）+ fake price。"""
-    trade_date = completed_trade_date_at(AS_OF)
+    trade_date = observation_trade_date_at(AS_OF)
 
     def market(lake, definition):
         reader = market_reader or _breadth_reader(trade_date)
@@ -243,7 +243,7 @@ def _assemble(ports):
 # ---------------------------------------------------------------------------
 
 def test_swing_full_observation_chain_usable_through_ccd():
-    trade_date = completed_trade_date_at(AS_OF)
+    trade_date = observation_trade_date_at(AS_OF)
     assert trade_date is not None
     ports = _ports(campaigns=[_campaign()])
     item = _assemble(ports)["campaign_items"][0]
@@ -257,6 +257,7 @@ def test_swing_full_observation_chain_usable_through_ccd():
     assert disclosures_adapter.ADAPTER_AUTHORITY_REF in refs
     # 实际 provenance / timestamp（market fact time 与 retrieval time 区分）
     assert f"market-breadth:trade_date={trade_date}" in refs
+    assert f"market-breadth:expected_observation_date={trade_date}" in refs
     assert any(ref.startswith("market-breadth:fetched_at=") for ref in refs)
     assert f"disclosures:fetched_at={FETCHED_AT}" in refs
     assert "disclosures:latest_notice_date=2026-08-12" in refs
