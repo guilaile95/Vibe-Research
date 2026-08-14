@@ -5,7 +5,10 @@ holiday announcements.  :func:`previous_trade_date` returns the most recent
 confirmed session strictly before another confirmed session.
 :func:`completed_trade_date_at` maps an explicit UTC instant to the most recent
 A-share session completed by that instant using a frozen Asia/Shanghai 15:00
-close boundary.
+close boundary.  :func:`observation_trade_date_at` maps an explicit UTC instant
+to the MARKET OBSERVATION DATE of that instant (session-day semantics: a
+session date maps to itself intraday or post-close, a weekend/holiday maps to
+the latest earlier session).
 
 The module is pure standard library, performs no network I/O, and fails
 closed (returns ``None``) for any invalid input or corrupted data file.
@@ -22,11 +25,14 @@ from typing import Optional
 
 __all__ = [
     "CALENDAR_AUTHORITY_REF",
+    "OBSERVATION_AUTHORITY_REF",
     "completed_trade_date_at",
+    "observation_trade_date_at",
     "previous_trade_date",
 ]
 
 CALENDAR_AUTHORITY_REF = "trade_calendar:completed_trade_date:v0.1"
+OBSERVATION_AUTHORITY_REF = "trade_calendar:market_observation_date:v0.1"
 
 _DATA_PATH = os.path.join(
     os.path.dirname(__file__), "data", "cn_a_share_trade_calendar_v01.json"
@@ -235,24 +241,18 @@ def previous_trade_date(current_trade_date: str) -> Optional[str]:
     return sessions[idx - 1]
 
 
-def completed_trade_date_at(as_of: str) -> Optional[str]:
-    """Return the latest A-share session completed at explicit UTC *as_of*.
+def _session_date_at(
+    as_of: str, completed_from: tuple[int, int, int, int]
+) -> Optional[str]:
+    """Shared session lookup for an explicit canonical UTC instant.
 
-    ``as_of`` must be a canonical UTC zero-offset instant accepted by the
-    decision-authority contract: seconds are required, fractional seconds may
-    contain one to six digits, and the suffix must be exactly ``Z`` or
-    ``+00:00``.  Naive timestamps and non-zero offsets are rejected rather
-    than silently normalized.
-
-    The instant is converted to Asia/Shanghai.  On a confirmed session date,
-    that session becomes completed at exactly 15:00:00 local time; before the
-    boundary, the preceding confirmed session is returned.  On a weekend or
-    exchange holiday, the latest earlier confirmed session is returned.
-
-    No wall clock is consulted.  ``None`` is returned when the timestamp is
-    invalid, its Shanghai calendar date is outside the artifact's supported
-    range, no prior completed session exists, or the artifact fails runtime
-    validation.
+    Validate *as_of*, convert it to Asia/Shanghai, and return the latest
+    confirmed session for the local calendar date.  When the local time is
+    at or after *completed_from* on that date, the date itself may be the
+    returned session; otherwise only strictly earlier sessions are
+    considered.  Fails closed with ``None`` for invalid input, a Shanghai
+    date outside the supported range, no prior session, or a corrupted
+    artifact.  Never consults the wall clock.
     """
     if not isinstance(as_of, str) or _UTC_ZERO_OFFSET_RE.fullmatch(as_of) is None:
         return None
@@ -274,17 +274,61 @@ def completed_trade_date_at(as_of: str) -> Optional[str]:
         return None
 
     local_date_text = local_date.isoformat()
-    is_completed_boundary = (
+    reached = (
         local.hour,
         local.minute,
         local.second,
         local.microsecond,
-    ) >= (15, 0, 0, 0)
+    ) >= completed_from
 
-    if is_completed_boundary:
+    if reached:
         idx = bisect.bisect_right(sessions, local_date_text)
     else:
         idx = bisect.bisect_left(sessions, local_date_text)
     if idx == 0:
         return None
     return sessions[idx - 1]
+
+
+def completed_trade_date_at(as_of: str) -> Optional[str]:
+    """Return the latest A-share session completed at explicit UTC *as_of*.
+
+    ``as_of`` must be a canonical UTC zero-offset instant accepted by the
+    decision-authority contract: seconds are required, fractional seconds may
+    contain one to six digits, and the suffix must be exactly ``Z`` or
+    ``+00:00``.  Naive timestamps and non-zero offsets are rejected rather
+    than silently normalized.
+
+    The instant is converted to Asia/Shanghai.  On a confirmed session date,
+    that session becomes completed at exactly 15:00:00 local time; before the
+    boundary, the preceding confirmed session is returned.  On a weekend or
+    exchange holiday, the latest earlier confirmed session is returned.
+
+    No wall clock is consulted.  ``None`` is returned when the timestamp is
+    invalid, its Shanghai calendar date is outside the artifact's supported
+    range, no prior completed session exists, or the artifact fails runtime
+    validation.
+    """
+    return _session_date_at(as_of, (15, 0, 0, 0))
+
+
+def observation_trade_date_at(observed_at: str) -> Optional[str]:
+    """Return the A-share MARKET OBSERVATION DATE at explicit UTC *observed_at*.
+
+    The input contract is identical to :func:`completed_trade_date_at`
+    (canonical UTC zero-offset instant).  The mapping uses session-day
+    semantics instead of the 15:00 close boundary:
+
+    - an instant on a confirmed session date belongs to that session's
+      market observation (intraday or post-close);
+    - an instant on a weekend or exchange holiday maps to the latest earlier
+      confirmed session — the most recent trading day whose data a live
+      snapshot can reflect.
+
+    Callers must feed the real observation timestamp recorded at the data
+    fetch boundary (never a caller-supplied ``as_of``) to attribute which
+    market observation date a snapshot belongs to.  No wall clock is
+    consulted; ``None`` is returned on the same fail-closed conditions as
+    :func:`completed_trade_date_at`.
+    """
+    return _session_date_at(observed_at, (0, 0, 0, 0))

@@ -7,14 +7,13 @@ price_reference → market_sector → disclosures → financials。
 （不访问网络、不写真实用户数据）。
 
 产品级接受（§11）：A 真实 USABLE 被 CCD 消费 / C provider failure →
-ERROR / D STALE 不冒充 current / E 无公告 ≠ failure / F financial
-applicability 未解决不伪造 USABLE / G 无 false clean。
+ERROR / D 观察时点晚于 as_of 的 live 快照不冒充 historical（NO LOOKAHEAD）
+/ E 无公告 ≠ failure / F financial applicability 未解决不伪造 USABLE /
+G 无 false clean。
 """
 from __future__ import annotations
 
 from copy import deepcopy
-
-import pytest
 
 import campaign_service
 import critical_data_dependency_policy as dda
@@ -98,14 +97,16 @@ def _no_frozen(campaign_id):
     return []
 
 
-def _breadth_reader(trade_date: str | None):
+def _breadth_reader(
+    trade_date: str | None, fetched_at: str = "2026-08-13 15:05:00"
+):
     def _reader():
         return {
             "status": "normal",
             "source": "eastmoney_push2",
             "trade_date": trade_date,
             "data_time": "15:00:00",
-            "fetched_at": "2026-08-13 15:05:00",
+            "fetched_at": fetched_at,
             "is_stale": False,
             "warnings": [],
             "data": {
@@ -265,19 +266,16 @@ def test_swing_full_observation_chain_usable_through_ccd():
 # §11-D：STALE 不冒充 current
 # ---------------------------------------------------------------------------
 
-def test_market_sector_stale_is_not_current():
-    trade_date = completed_trade_date_at(AS_OF)
-    if trade_date is None:
-        pytest.skip("calendar has no completed trade date for as_of")
-    # 构造早于 completed trade date 的旧快照（2000-01-01 恒早于任何真实 trade date）
+def test_market_sector_live_snapshot_after_as_of_is_not_usable():
+    """§11-D（P0-RU2-R1 更新）：观察时点晚于 as_of 的 live 快照不得
+    重标为 historical fact date → NOT_EVALUATED，绝不 USABLE。"""
     ports = _ports(
         campaigns=[_campaign()],
-        market_reader=_breadth_reader("2000-01-01"),
+        market_reader=_breadth_reader(None, fetched_at="2026-08-14 10:00:00"),
     )
     item = _assemble(ports)["campaign_items"][0]
-    # STALE → CCD 域映射 STALE（绝不冒充 current USABLE）
-    assert item["critical_data_state"] == "STALE"
-    assert item["critical_data_evaluation"] == "EVALUATED"
+    assert item["critical_data_state"] != "USABLE"
+    assert item["critical_data_evaluation"] == "NOT_EVALUATED"
 
 
 # ---------------------------------------------------------------------------

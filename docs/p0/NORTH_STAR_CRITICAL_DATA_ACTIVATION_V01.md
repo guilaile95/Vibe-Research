@@ -61,9 +61,15 @@
 ### market_sector（`critical_data_market_sector_adapter.py`）
 
 - retrieval time（fetched_at）绝不当作 market fact time（trade_date）；
-- trade_date 与 as_of 的 completed trade date（权威日历）对齐：
-  - 相等 + 数据完整 → USABLE；落后 → STALE（旧快照不冒充 current）；
-  - 缺失 → UNKNOWN；未来/格式损坏 → ERROR；
+- provider 显式 trade_date → 事实日期以 provider 为准
+  （`date-basis=provider-trade_date`）；
+- provider 未提供 trade_date → 以真实 observation timestamp（fetched_at）
+  + 权威交易日历归属 MARKET OBSERVATION DATE
+  （`date-basis=observation-time`）；盘中/收盘后属当日 session，
+  周末/节假日属最近交易日；caller as_of 绝不创造 provider 没有提供的
+  fact date；
+- NO LOOKAHEAD：market fact date 晚于 as_of → NOT_EVALUATED（live 快照
+  不得重标为 historical date）；
 - envelope status=partial → UNKNOWN（数据不足不伪造 USABLE）；
 - provider 异常 → ERROR；不凭空产生 market regime。
 

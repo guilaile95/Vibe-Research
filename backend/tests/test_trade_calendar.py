@@ -314,6 +314,130 @@ class TestCompletedTradeDateAt:
 
 
 # ---------------------------------------------------------------------------
+# Explicit observed_at -> market observation date authority
+# ---------------------------------------------------------------------------
+
+class TestObservationTradeDateAt:
+    def test_public_authority_reference_is_stable(self):
+        assert (
+            tc.OBSERVATION_AUTHORITY_REF
+            == "trade_calendar:market_observation_date:v0.1"
+        )
+        assert "OBSERVATION_AUTHORITY_REF" in tc.__all__
+        assert "observation_trade_date_at" in tc.__all__
+
+    def test_intraday_session_date_maps_to_same_session(self):
+        # 2026-08-17 (Mon) 10:30 Asia/Shanghai → Monday observation,
+        # NOT the previous Friday's completed session.
+        assert (
+            tc.observation_trade_date_at("2026-08-17T02:30:00Z")
+            == "2026-08-17"
+        )
+
+    def test_post_close_session_date_maps_to_same_session(self):
+        # 2026-08-17 (Mon) 15:30 Asia/Shanghai.
+        assert (
+            tc.observation_trade_date_at("2026-08-17T07:30:00Z")
+            == "2026-08-17"
+        )
+
+    def test_pre_open_session_date_maps_to_same_session(self):
+        # 2026-08-17 (Mon) 08:30 Asia/Shanghai.
+        assert (
+            tc.observation_trade_date_at("2026-08-17T00:30:00Z")
+            == "2026-08-17"
+        )
+
+    def test_saturday_maps_to_previous_friday(self):
+        # Saturday 2026-08-15 → latest earlier session 2026-08-14 (Fri).
+        assert (
+            tc.observation_trade_date_at("2026-08-15T04:00:00Z")
+            == "2026-08-14"
+        )
+
+    def test_sunday_maps_to_previous_friday(self):
+        # Sunday 2026-08-16 → latest earlier session 2026-08-14 (Fri).
+        assert (
+            tc.observation_trade_date_at("2026-08-16T04:00:00Z")
+            == "2026-08-14"
+        )
+
+    def test_exchange_holiday_maps_to_previous_session(self):
+        # Monday 2024-02-12 is inside the Spring Festival closure.
+        assert (
+            tc.observation_trade_date_at("2024-02-12T04:00:00Z")
+            == "2024-02-08"
+        )
+
+    def test_utc_to_shanghai_date_crossover(self):
+        # 2026-08-14 23:30 UTC is Saturday 2026-08-15 07:30 Shanghai → Friday.
+        assert (
+            tc.observation_trade_date_at("2026-08-14T23:30:00Z")
+            == "2026-08-14"
+        )
+
+    def test_before_first_session_fails_closed(self):
+        # 2024-01-01 (Mon, holiday) precedes the first supported session.
+        assert tc.observation_trade_date_at("2024-01-01T04:00:00Z") is None
+
+    def test_first_session_maps_to_itself(self):
+        assert (
+            tc.observation_trade_date_at("2024-01-02T04:00:00Z")
+            == "2024-01-02"
+        )
+
+    @pytest.mark.parametrize(
+        "as_of",
+        [
+            "2023-12-31T04:00:00Z",
+            "2027-01-01T04:00:00Z",
+        ],
+    )
+    def test_shanghai_date_outside_supported_range_fails_closed(self, as_of):
+        assert tc.observation_trade_date_at(as_of) is None
+
+    @pytest.mark.parametrize(
+        "bad_input",
+        [
+            None,
+            20240102,
+            True,
+            "",
+            "2024-01-03",
+            "2024-01-03 07:00:00Z",
+            "2024-01-03T07:00Z",
+            "2024-01-03T07:00:00",
+            "2024-01-03T07:00:00z",
+            "2024-01-03T07:00:00+08:00",
+            "2024-02-30T07:00:00Z",
+            [],
+            {},
+        ],
+    )
+    def test_invalid_input_fails_closed(self, bad_input):
+        assert tc.observation_trade_date_at(bad_input) is None
+
+    def test_does_not_consult_wall_clock(self, monkeypatch):
+        def forbidden_wall_clock():
+            raise AssertionError(
+                "observation_trade_date_at must not read wall clock"
+            )
+
+        monkeypatch.setattr(tc, "_today_shanghai", forbidden_wall_clock)
+        assert (
+            tc.observation_trade_date_at("2025-03-17T02:00:00Z")
+            == "2025-03-17"
+        )
+
+    def test_repeated_calls_are_deterministic(self):
+        results = {
+            tc.observation_trade_date_at("2025-03-17T02:00:00.000001Z")
+            for _ in range(100)
+        }
+        assert results == {"2025-03-17"}
+
+
+# ---------------------------------------------------------------------------
 # Input boundaries
 # ---------------------------------------------------------------------------
 

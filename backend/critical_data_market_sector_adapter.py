@@ -4,7 +4,9 @@
 positive-proof 才允许 USABLE：
 
     security
-      → MARKET CONTEXT（广度信封，trade_date 与权威日历对齐）
+      → MARKET CONTEXT（广度信封；provider 显式 trade_date 优先，
+        缺失时以真实 observation timestamp + 权威交易日历归属
+        MARKET OBSERVATION DATE，绝不由 caller as_of 创造 fact date）
       → industry identity（astock.individual_info「行业」）
       → matching sector observation（market.get_overview 板块资金流中
         找到该行业的板块观察数据）
@@ -12,16 +14,18 @@ positive-proof 才允许 USABLE：
         的北京日期不早于 market fact date）
 
 industry identity alone → UNKNOWN + 显式 blocker；不得新建 provider；
-retrieval time 绝不当作 fact time；DDA1 未修改。只读、零写入。
+retrieval time 绝不当作 fact time；NO LOOKAHEAD（fact date 晚于 as_of
+→ NOT_EVALUATED）。DDA1 未修改。只读、零写入。
 """
 
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 
 from critical_data_dependency_policy import CAP_CONTEXT_MARKET_SECTOR
-from trade_calendar import CALENDAR_AUTHORITY_REF, completed_trade_date_at
+from trade_calendar import OBSERVATION_AUTHORITY_REF, observation_trade_date_at
 
 DEPENDENCY_ID = CAP_CONTEXT_MARKET_SECTOR
 ADAPTER_AUTHORITY_REF = "critical_data:market_sector:v0.3"
@@ -35,6 +39,8 @@ _UTC_ZERO_OFFSET_RE = re.compile(
     r"(?:\.\d{1,6})?(?:Z|\+00:00)$"
 )
 _CN_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_BEIJING_NAIVE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+_BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 class MarketSectorCapabilityError(RuntimeError):
@@ -64,6 +70,34 @@ def _require_inputs(security_code: str, campaign_id: str, as_of: str) -> None:
         raise MarketSectorCapabilityError(
             "as_of must be a canonical UTC instant"
         )
+
+
+def _observation_instant_utc(fetched_at: object) -> str | None:
+    """envelope.fetched_at（北京 naive ``YYYY-MM-DD HH:MM:SS``）→ canonical UTC。
+
+    真实获取时点才是 Observation Time；缺失或非法 → None（fail closed）。"""
+    if type(fetched_at) is not str \
+            or _BEIJING_NAIVE_RE.fullmatch(fetched_at) is None:
+        return None
+    try:
+        local = datetime.strptime(fetched_at, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return local.replace(tzinfo=_BEIJING_TZ) \
+        .astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _as_of_shanghai_date(as_of: str) -> str | None:
+    """caller as_of（canonical UTC）→ 北京时间日期；非法日期 → None。
+
+    仅用于 NO LOOKAHEAD 闸门（fact date 不得晚于 as_of），
+    绝不用于创造 fact date。"""
+    parse_text = as_of[:-1] + "+00:00" if as_of.endswith("Z") else as_of
+    try:
+        parsed = datetime.fromisoformat(parse_text)
+    except ValueError:
+        return None
+    return parsed.astimezone(_BEIJING_TZ).date().isoformat()
 
 
 def _extract_industry(info: Mapping[str, Any]) -> str | None:
@@ -116,21 +150,26 @@ def evaluate_market_sector_capability(
     market_reader: Callable[[], Mapping[str, Any] | None] | None = None,
     sector_reader: Callable[[str], Mapping[str, Any] | None] | None = None,
     sector_observation_reader: Callable[[], Mapping[str, Any] | None] | None = None,
-    calendar: Callable[[str], str | None] = completed_trade_date_at,
+    calendar: Callable[[str], str | None] = observation_trade_date_at,
 ) -> dict[str, Any]:
     """评估 market_sector capability。
 
     三个 reader 默认绑定生产读取路径（见 assembler 生产端口）；测试注入
     isolated fake。USABLE 需要市场上下文 + industry identity + matching
     sector observation 三者同时 positive-proof。
+
+    Temporal attribution（P0-RU2-R1）：
+
+    - provider 显式 trade_date → 事实日期以 provider 为准；
+    - provider 缺失 trade_date → 以真实 observation timestamp（envelope
+      fetched_at）+ 权威交易日历归属 MARKET OBSERVATION DATE；
+      caller as_of 绝不创造 provider 没有提供的 fact date；
+    - NO LOOKAHEAD：market fact date 晚于 as_of → NOT_EVALUATED；
+    - fetched_at 只用于 observation attribution / freshness，绝不充当
+      市场事实精确时刻。
     """
     _require_inputs(security_code, campaign_id, as_of)
     refs = [ADAPTER_AUTHORITY_REF]
-
-    trade_date = calendar(as_of)
-    if trade_date is None:
-        return _result("NOT_EVALUATED", as_of, refs)
-    refs.append(CALENDAR_AUTHORITY_REF)
 
     if market_reader is None:
         # 生产默认：真实市场广度信封（从不抛异常，状态在 envelope.status）
@@ -153,32 +192,56 @@ def evaluate_market_sector_capability(
     if status not in ("normal", "partial"):
         return _result("UNKNOWN", as_of, refs)
 
-    envelope_trade_date = envelope.get("trade_date")
-    if envelope_trade_date is None:
-        # 真实 breadth 快照不携带交易日元数据（P0-RU2 实测）：该快照是评估
-        # 时点的实时全市场快照，其市场事实时点由权威日历推导为 as_of 的
-        # completed trade date —— 绝不以 fetched_at 冒充 fact time、绝不猜
-        # 数据内容；推导来源显式写入 provenance。
-        envelope_trade_date = trade_date
-        refs.append("market-breadth:trade_date=calendar-derived")
-    if type(envelope_trade_date) is not str \
-            or re.fullmatch(r"\d{4}-\d{2}-\d{2}", envelope_trade_date) is None:
-        return _result("ERROR", as_of, refs)
+    # —— Observation Boundary：真实获取时点才是 Observation Time ——
+    fetched_at = envelope.get("fetched_at")
+    observation_utc = _observation_instant_utc(fetched_at)
+    if observation_utc is None:
+        return _result(
+            "UNKNOWN", as_of,
+            refs + ["market-breadth:observation-time=missing-or-invalid"],
+        )
+    refs.append(f"market-breadth:fetched_at={fetched_at}")
 
-    if envelope_trade_date > trade_date:
+    # —— Market fact date 解析 ——
+    envelope_trade_date = envelope.get("trade_date")
+    if envelope_trade_date is not None:
+        # provider 显式提供 trade_date → 优先使用 provider 日期（E），
+        # 绝不以 caller as_of 覆盖
+        if type(envelope_trade_date) is not str \
+                or re.fullmatch(r"\d{4}-\d{2}-\d{2}", envelope_trade_date) is None:
+            return _result("ERROR", as_of, refs)
+        fact_date = envelope_trade_date
+        refs.append("market-breadth:date-basis=provider-trade_date")
+    else:
+        # provider 未提供 trade_date：以真实 observation timestamp +
+        # 权威交易日历确定该快照属于哪个 MARKET OBSERVATION DATE；
+        # caller as_of 不能创造 provider 没有提供的 fact date
+        refs.append(OBSERVATION_AUTHORITY_REF)
+        fact_date = calendar(observation_utc)
+        if fact_date is None:
+            return _result("NOT_EVALUATED", as_of, refs)
+        if type(fact_date) is not str \
+                or re.fullmatch(r"\d{4}-\d{2}-\d{2}", fact_date) is None:
+            return _result("ERROR", as_of, refs)
+        refs.append("market-breadth:date-basis=observation-time")
+        refs.append(f"market-breadth:observed_at={fetched_at}")
+
+    refs.append(f"market-breadth:trade_date={fact_date}")
+
+    # —— NO LOOKAHEAD：market fact date 不得晚于 caller as_of ——
+    as_of_date = _as_of_shanghai_date(as_of)
+    if as_of_date is None:
+        # as_of 虽格式合规但不是真实存在的 UTC 时刻 → fail closed
         return _result("ERROR", as_of, refs)
-    if envelope_trade_date < trade_date:
-        # 旧快照不冒充 current market fact
-        return _result("STALE", as_of, refs)
+    if fact_date > as_of_date:
+        return _result(
+            "NOT_EVALUATED", as_of,
+            refs + ["market-breadth:not-usable=fact-date-after-as_of"],
+        )
 
     source = envelope.get("source")
     if type(source) is str and source.strip() and source == source.strip():
         refs.append(f"market-breadth:source={source}")
-    refs.append(f"market-breadth:trade_date={envelope_trade_date}")
-    fetched_at = envelope.get("fetched_at")
-    if type(fetched_at) is str and fetched_at:
-        # retrieval time 显式暴露为 provenance，绝不参与 fact time 判定
-        refs.append(f"market-breadth:fetched_at={fetched_at}")
 
     if status == "partial":
         # 有数据但覆盖不足：诚实 UNKNOWN，不因 HTTP 200 而 USABLE
@@ -250,7 +313,7 @@ def evaluate_market_sector_capability(
     fresh_date = _sector_fresh_date(overview)
     if fresh_date is None:
         return _result("UNKNOWN", as_of, refs + [SECTOR_CONTEXT_BLOCKER_REF])
-    if fresh_date < envelope_trade_date:
+    if fresh_date < fact_date:
         return _result("STALE", as_of, refs)
     refs.append(f"market-sector:sector={industry}")
     refs.append(f"market-sector:sector-pct={pct}")
