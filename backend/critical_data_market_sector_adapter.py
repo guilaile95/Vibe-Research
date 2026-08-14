@@ -1,16 +1,18 @@
-"""P0-DS1-R1 — cap.context.market_sector runtime evaluator（sector context 修正）。
+"""P0-DS1-R2 — cap.context.market_sector runtime evaluator（real sector context）。
 
-仅市场广度（market breadth）不足以证明 market_sector —— 市场上下文与
-security 相关板块上下文必须同时 positive-proof 才允许 USABLE：
+仅市场广度 + 行业名不足以证明 market_sector。完整链路必须全部
+positive-proof 才允许 USABLE：
 
-1. MARKET CONTEXT：既有市场广度信封，trade_date 与 as_of 的 completed
-   trade date（权威日历）对齐；落后 → STALE，缺失 → UNKNOWN；
-2. SECURITY-RELEVANT SECTOR CONTEXT：既有个股行业读取路径
-   （astock.individual_info，东财个股信息）证明该 security 的行业。
+    security
+      → MARKET CONTEXT（广度信封，trade_date 与权威日历对齐）
+      → industry identity（astock.individual_info「行业」）
+      → matching sector observation（market.get_overview 板块资金流中
+        找到该行业的板块观察数据）
+      → sector state/data + provenance + freshness（overview.updated
+        的北京日期不早于 market fact date）
 
-Sector 无法证明 → UNKNOWN + 显式 blocker ref（绝不因市场可用而 USABLE）。
-retrieval time（fetched_at）绝不当作 market fact time。DDA1 未修改。
-本模块只读、零写入、不引入新 provider。
+industry identity alone → UNKNOWN + 显式 blocker；不得新建 provider；
+retrieval time 绝不当作 fact time；DDA1 未修改。只读、零写入。
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from critical_data_dependency_policy import CAP_CONTEXT_MARKET_SECTOR
 from trade_calendar import CALENDAR_AUTHORITY_REF, completed_trade_date_at
 
 DEPENDENCY_ID = CAP_CONTEXT_MARKET_SECTOR
-ADAPTER_AUTHORITY_REF = "critical_data:market_sector:v0.2"
+ADAPTER_AUTHORITY_REF = "critical_data:market_sector:v0.3"
 SECTOR_CONTEXT_BLOCKER_REF = (
     "market-sector:blocker=SECURITY_SECTOR_CONTEXT_UNAVAILABLE"
 )
@@ -32,6 +34,7 @@ _UTC_ZERO_OFFSET_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
     r"(?:\.\d{1,6})?(?:Z|\+00:00)$"
 )
+_CN_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class MarketSectorCapabilityError(RuntimeError):
@@ -71,6 +74,40 @@ def _extract_industry(info: Mapping[str, Any]) -> str | None:
     return value
 
 
+def _matching_sector_observation(
+    overview: Mapping[str, Any], industry: str
+) -> Mapping[str, Any] | None:
+    """在 overview.sectors 中精确匹配行业条目；结构非法 → None（fail closed）。
+
+    不做模糊匹配（绝不 AI 猜板块）。"""
+    sectors = overview.get("sectors")
+    if not isinstance(sectors, list):
+        return None
+    for sector in sectors:
+        if not isinstance(sector, Mapping):
+            continue
+        name = sector.get("name")
+        if type(name) is not str or not name.strip():
+            continue
+        if name.strip() == industry:
+            return sector
+    return None
+
+
+def _sector_fresh_date(overview: Mapping[str, Any]) -> str | None:
+    """sector observation 的 freshness 证据：overview.updated 的北京日期。
+
+    updated 为北京 naive ``YYYY-MM-DD HH:MM``（provider retrieval time，
+    仅作 freshness 证据，绝不当作 fact time）。"""
+    updated = overview.get("updated")
+    if type(updated) is not str:
+        return None
+    date = updated[:10]
+    if _CN_DATE_RE.fullmatch(date) is None:
+        return None
+    return date
+
+
 def evaluate_market_sector_capability(
     *,
     security_code: str,
@@ -78,12 +115,14 @@ def evaluate_market_sector_capability(
     as_of: str,
     market_reader: Callable[[], Mapping[str, Any] | None] | None = None,
     sector_reader: Callable[[str], Mapping[str, Any] | None] | None = None,
+    sector_observation_reader: Callable[[], Mapping[str, Any] | None] | None = None,
     calendar: Callable[[str], str | None] = completed_trade_date_at,
 ) -> dict[str, Any]:
-    """评估 market_sector capability（市场上下文 + security 板块上下文）。
+    """评估 market_sector capability。
 
-    两个 reader 默认绑定生产读取路径（见 assembler 生产端口）；测试注入
-    isolated fake。USABLE 需要两部分同时 positive-proof。
+    三个 reader 默认绑定生产读取路径（见 assembler 生产端口）；测试注入
+    isolated fake。USABLE 需要市场上下文 + industry identity + matching
+    sector observation 三者同时 positive-proof。
     """
     _require_inputs(security_code, campaign_id, as_of)
     refs = [ADAPTER_AUTHORITY_REF]
@@ -163,7 +202,7 @@ def evaluate_market_sector_capability(
 
     refs.append(f"market-breadth:stock_count={stock_count}")
 
-    # SECURITY-RELEVANT SECTOR CONTEXT：市场上下文不足以证明 market_sector
+    # industry identity：市场上下文不足以证明 market_sector
     if sector_reader is None:
         import astock as astock_module
 
@@ -179,8 +218,40 @@ def evaluate_market_sector_capability(
     if industry is None:
         # Sector 无法证明 → UNKNOWN + 显式 blocker（绝不 market-only USABLE）
         return _result("UNKNOWN", as_of, refs + [SECTOR_CONTEXT_BLOCKER_REF])
-
     refs.append(f"market-sector:security-industry={industry}")
+
+    # matching sector observation：industry identity alone 不算 sector context
+    if sector_observation_reader is None:
+        import market as market_module
+
+        sector_observation_reader = market_module.get_overview
+
+    try:
+        overview = sector_observation_reader()
+    except Exception:
+        return _result("ERROR", as_of, refs)
+    if overview is None or not isinstance(overview, Mapping):
+        return _result("UNKNOWN", as_of, refs + [SECTOR_CONTEXT_BLOCKER_REF])
+    sector = _matching_sector_observation(overview, industry)
+    if sector is None:
+        return _result("UNKNOWN", as_of, refs + [SECTOR_CONTEXT_BLOCKER_REF])
+    pct = sector.get("pct")
+    net = sector.get("net")
+    if not all(
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        for value in (pct, net)
+    ):
+        return _result("UNKNOWN", as_of, refs + [SECTOR_CONTEXT_BLOCKER_REF])
+    # freshness：sector snapshot 的北京日期不早于 market fact date
+    fresh_date = _sector_fresh_date(overview)
+    if fresh_date is None:
+        return _result("UNKNOWN", as_of, refs + [SECTOR_CONTEXT_BLOCKER_REF])
+    if fresh_date < envelope_trade_date:
+        return _result("STALE", as_of, refs)
+    refs.append(f"market-sector:sector={industry}")
+    refs.append(f"market-sector:sector-pct={pct}")
+    refs.append(f"market-sector:sector-net={net}")
+    refs.append(f"market-sector:updated={fresh_date}")
     return _result("USABLE", as_of, refs)
 
 

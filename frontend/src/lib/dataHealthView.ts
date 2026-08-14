@@ -200,6 +200,11 @@ export function isProblemSource(r: DataHealthRecord): boolean {
   return r.status === "partial" || r.status === "unavailable" || r.is_stale;
 }
 
+/**
+ * P0-DS1-R2：status 筛选改为 presentation-state 语义。
+ * - "unavailable" 匹配确认不可用（排除 SOURCE_NOT_INITIALIZED）；
+ * - "not_initialized" 只匹配 SOURCE_NOT_INITIALIZED。
+ */
 export function filterItems(
   items: DataHealthRecord[],
   opts: {
@@ -211,14 +216,25 @@ export function filterItems(
 ): DataHealthRecord[] {
   return items.filter((it) => {
     if (opts.module && it.module !== opts.module) return false;
-    if (opts.status && it.status !== opts.status) return false;
+    if (opts.status === "not_initialized") {
+      if (it.last_error_code !== "SOURCE_NOT_INITIALIZED") return false;
+    } else if (opts.status) {
+      if (it.status !== opts.status) return false;
+      // 不可用筛选不包含未初始化（未检测 ≠ 不可用）
+      if (
+        opts.status === "unavailable"
+        && it.last_error_code === "SOURCE_NOT_INITIALIZED"
+      ) {
+        return false;
+      }
+    }
     if (opts.is_stale != null && it.is_stale !== opts.is_stale) return false;
     if (opts.blocks_advice != null && it.blocks_advice !== opts.blocks_advice) return false;
     return true;
   });
 }
 
-const VALID_STATUS = new Set(["normal", "partial", "unavailable"]);
+const VALID_STATUS = new Set(["normal", "partial", "unavailable", "not_initialized"]);
 
 export type HealthUrlFilters = {
   module: string | null;
@@ -226,6 +242,24 @@ export type HealthUrlFilters = {
   is_stale: boolean | null;
   blocks_advice: boolean | null;
 };
+
+/**
+ * P0-DS1-R2：全局 presentation 状态。
+ * 所有来源都是 SOURCE_NOT_INITIALIZED → 中性「未初始化/尚未观测」，
+ * 绝不显示红色不可用；否则透传 backend overall_status。
+ */
+export function overallPresentation(
+  items: DataHealthRecord[],
+  overallStatus: HealthStatus,
+): PresentationState {
+  if (
+    items.length > 0
+    && items.every((it) => it.last_error_code === "SOURCE_NOT_INITIALIZED")
+  ) {
+    return "not_initialized";
+  }
+  return overallStatus;
+}
 
 /** 非法 query 清理为默认 null */
 export function parseHealthSearchParams(sp: URLSearchParams): HealthUrlFilters {

@@ -16,6 +16,7 @@ import {
   gateAdviceState,
   isProblemSource,
   notInitializedCount,
+  overallPresentation,
   parseHealthSearchParams,
   presentationLabel,
   presentationState,
@@ -264,4 +265,66 @@ test("isProblemSource excludes not-initialized (unobserved is not a problem)", (
   );
   assert.equal(isProblemSource(rec({ source_id: "q", status: "partial" })), true);
   assert.equal(isProblemSource(rec({ source_id: "q", status: "normal", is_stale: true })), true);
+});
+
+// ---------------------------------------------------------------------------
+// P0-DS1-R2：presentation 筛选与全局 badge（acceptance G/H/I/J）
+// ---------------------------------------------------------------------------
+
+function mixedItems(): DataHealthRecord[] {
+  const items: DataHealthRecord[] = [];
+  for (let i = 0; i < 8; i++) {
+    items.push(rec({
+      source_id: `ni${i}`,
+      status: "unavailable",
+      last_error_code: "SOURCE_NOT_INITIALIZED",
+    }));
+  }
+  items.push(rec({
+    source_id: "failure",
+    status: "unavailable",
+    last_error_code: "SOURCE_UNAVAILABLE",
+  }));
+  items.push(rec({ source_id: "ok", status: "normal" }));
+  return items;
+}
+
+test("R2 G: unavailable filter excludes not-initialized", () => {
+  const filtered = filterItems(mixedItems(), { status: "unavailable" });
+  assert.deepEqual(filtered.map((it) => it.source_id), ["failure"]);
+});
+
+test("R2 H: not_initialized filter returns only not-initialized", () => {
+  const filtered = filterItems(mixedItems(), { status: "not_initialized" });
+  assert.equal(filtered.length, 8);
+  assert.ok(filtered.every((it) => it.last_error_code === "SOURCE_NOT_INITIALIZED"));
+});
+
+test("R2 I: all-not-initialized overall presentation is neutral", () => {
+  const allNi = [1, 2, 3].map((i) =>
+    rec({
+      source_id: `ni${i}`,
+      status: "unavailable",
+      last_error_code: "SOURCE_NOT_INITIALIZED",
+    }),
+  );
+  assert.equal(overallPresentation(allNi, "unavailable"), "not_initialized");
+  // 非全 NI → 透传 backend overall
+  assert.equal(overallPresentation(mixedItems(), "unavailable"), "unavailable");
+});
+
+test("R2 J: mixed true unavailable + NI remains distinct", () => {
+  const items = mixedItems();
+  assert.equal(confirmedUnavailableCount(items), 1);
+  assert.equal(notInitializedCount(items), 8);
+  const unavailableOnly = filterItems(items, { status: "unavailable" });
+  assert.equal(unavailableOnly.length, 1);
+  assert.equal(unavailableOnly[0].last_error_code, "SOURCE_UNAVAILABLE");
+});
+
+test("R2: url filter accepts not_initialized status", () => {
+  const f = parseHealthSearchParams(new URLSearchParams("status=not_initialized"));
+  assert.equal(f.status, "not_initialized");
+  const g = parseHealthSearchParams(new URLSearchParams("status=bad"));
+  assert.equal(g.status, null);
 });

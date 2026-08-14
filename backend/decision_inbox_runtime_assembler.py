@@ -158,11 +158,21 @@ def _record_observation_event(
 def _production_market_sector_evaluator(
     lake: FactLake | None, definition: Mapping[str, Any]
 ) -> dict[str, Any]:
-    return market_sector_adapter.evaluate_market_sector_capability(
+    result = market_sector_adapter.evaluate_market_sector_capability(
         security_code=definition["security_code"],
         campaign_id=definition["campaign_id"],
         as_of=definition["as_of"],
     )
+    # 业务 observation boundary：真实读取后更新 sector_research 健康事件
+    # （success / partial / failure 分别记录真实 observation）
+    state = result["state"]
+    if state == "ERROR":
+        _record_observation_event("sector_research", "FAILURE")
+    elif state == "USABLE":
+        _record_observation_event("sector_research", "SUCCESS")
+    else:
+        _record_observation_event("sector_research", "PARTIAL")
+    return result
 
 
 def _production_disclosures_evaluator(

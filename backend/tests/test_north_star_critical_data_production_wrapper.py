@@ -175,10 +175,26 @@ def test_production_market_sector_wrapper_full_chain(monkeypatch):
         "individual_info",
         lambda code: {"行业": "白酒", "总股本": 1.26e9},
     )
+    monkeypatch.setattr(
+        market_module,
+        "get_overview",
+        lambda: {
+            "sentiment": {},
+            "sectors": [
+                {"name": "白酒", "pct": 1.23, "net": 4.5e8,
+                 "inflow": 1.0e9, "outflow": 5.5e8, "firms": 40},
+            ],
+            "updated": f"{trade_date} 15:05",
+        },
+    )
 
     result = runtime._production_market_sector_evaluator(None, _definition(as_of))
     assert result["state"] == "USABLE"
     assert "market-sector:security-industry=白酒" in result["authority_refs"]
+    # acceptance F：market/sector 真实 wrapper 成功后
+    # sector_research 不再 SOURCE_NOT_INITIALIZED
+    record = _health_record("sector_research")
+    assert record["last_error_code"] != "SOURCE_NOT_INITIALIZED"
 
 
 def test_production_market_sector_market_only_is_not_usable(monkeypatch):
@@ -194,5 +210,17 @@ def test_production_market_sector_market_only_is_not_usable(monkeypatch):
     )
     # sector context 无法证明（individual_info 无行业）
     monkeypatch.setattr(astock, "individual_info", lambda code: {})
+    monkeypatch.setattr(
+        market_module,
+        "get_overview",
+        lambda: {
+            "sentiment": {},
+            "sectors": [],
+            "updated": f"{trade_date} 15:05",
+        },
+    )
     result = runtime._production_market_sector_evaluator(None, _definition(as_of))
     assert result["state"] != "USABLE"
+    # partial observation 也如实记录（不再是 NOT_INITIALIZED）
+    record = _health_record("sector_research")
+    assert record["last_error_code"] != "SOURCE_NOT_INITIALIZED"

@@ -21,6 +21,7 @@ import {
   gateAdviceState,
   isProblemSource,
   notInitializedCount,
+  overallPresentation,
   parseHealthSearchParams,
   presentationLabel,
   presentationState,
@@ -192,7 +193,7 @@ export function DataHealth() {
             <div className="mb-3 flex flex-wrap items-center gap-3">
               <Activity className="h-5 w-5 text-primary" />
               <h2 className="text-sm font-semibold">全局概览</h2>
-              <StatusBadge status={overview.overall_status} />
+              <StatusBadge status={overallPresentation(overview.items, overview.overall_status)} />
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
               <Metric label="正常" value={overview.summary.normal} />
@@ -271,7 +272,8 @@ export function DataHealth() {
               <option value="">全部状态</option>
               <option value="normal">正常</option>
               <option value="partial">部分可用</option>
-              <option value="unavailable">不可用</option>
+              <option value="unavailable">确认不可用</option>
+              <option value="not_initialized">未初始化</option>
             </select>
             <select
               className="rounded-lg border border-border bg-black/20 px-2 py-1"

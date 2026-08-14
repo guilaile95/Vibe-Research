@@ -1,4 +1,23 @@
-# North-Star Critical Data Activation v0.1（P0-DS1，含 R1 correction）
+# North-Star Critical Data Activation v0.1（P0-DS1，含 R1 + R2 correction）
+
+## R2 Correction（semantic closure blockers 修复）
+
+1. **Disclosures same-day look-ahead**：astock.announcements 保留 provider
+   原始 notice_at 时间戳（transport 层不再丢时间）。可见性按 publish time
+   <= as_of 精确证明（北京时间 naive → UTC，无任意 tolerance）：
+   同日早于 as_of 可见、晚于 as_of 排除；date-only 且 == as_of 北京当日 →
+   fail closed UNKNOWN（`disclosures:same-day-date-only-unprovable`，
+   绝不猜已发布）。
+2. **Real sector context**：industry identity alone 不再 USABLE。完整链路
+   security → industry identity（individual_info）→ matching sector
+   observation（get_overview 板块资金流精确匹配，不模糊猜）→ sector
+   state/data + provenance + freshness（updated 北京日期 >= market fact
+   date）。链任一环缺失 → UNKNOWN/STALE + 显式 blocker。
+3. **Market/sector Data Health 连续性**：production market_sector wrapper
+   按 success/partial/failure 更新 `sector_research` 健康事件。
+4. **Data Health presentation closure**：status 筛选改 presentation-state
+   语义（unavailable 排除 NOT_INITIALIZED；新增 not_initialized 筛选）；
+   全部来源未初始化 → 全局 badge 中性「未初始化」（绝不红色）。
 
 ## R1 Correction（reviewer blockers 修复）
 

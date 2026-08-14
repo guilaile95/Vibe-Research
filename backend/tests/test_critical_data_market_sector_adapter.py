@@ -55,12 +55,31 @@ def _industry_reader(industry: str | None):
     return _reader
 
 
+def _overview_fake(industry: str, *, updated: str | None = f"{TRADE_DATE} 15:05"):
+    """sector observation fake：含匹配 industry 的板块条目 + freshness。"""
+
+    def _reader():
+        return {
+            "sentiment": {},
+            "sectors": [
+                {"name": industry, "pct": 1.23, "net": 4.5e8,
+                 "inflow": 1.0e9, "outflow": 5.5e8, "firms": 40},
+                {"name": "银行", "pct": -0.1, "net": -1.0e8,
+                 "inflow": 2.0e8, "outflow": 3.0e8, "firms": 42},
+            ],
+            "updated": updated,
+        }
+
+    return _reader
+
+
 def _evaluate(
     reader,
     *,
     calendar=lambda _as_of: TRADE_DATE,
     as_of: str = AS_OF,
     sector_reader=None,
+    sector_observation=None,
 ):
     return evaluate_market_sector_capability(
         security_code=SECURITY,
@@ -68,6 +87,7 @@ def _evaluate(
         as_of=as_of,
         market_reader=reader,
         sector_reader=sector_reader or _industry_reader("白酒"),
+        sector_observation_reader=sector_observation or _overview_fake("白酒"),
         calendar=calendar,
     )
 
@@ -251,5 +271,62 @@ def test_market_stale_short_circuits_even_with_sector_proof():
     result = _evaluate(
         lambda: _envelope(trade_date="2026-08-12"),
         sector_reader=_industry_reader("白酒"),
+    )
+    assert result["state"] == "STALE"
+
+
+# ---------------------------------------------------------------------------
+# R2：real sector context（industry identity alone ≠ sector context）
+# ---------------------------------------------------------------------------
+
+def test_industry_identity_alone_is_not_usable():
+    """§D：行业名存在但没有 matching sector observation → 非 USABLE。"""
+    result = _evaluate(
+        lambda: _envelope(),
+        sector_reader=_industry_reader("白酒"),
+        sector_observation=_overview_fake("银行"),  # 无匹配板块
+    )
+    assert result["state"] == "UNKNOWN"
+    assert SECTOR_CONTEXT_BLOCKER_REF in result["authority_refs"]
+
+
+def test_matching_sector_observation_is_usable():
+    """§E：industry identity + matching sector observation → USABLE。"""
+    result = _evaluate(
+        lambda: _envelope(),
+        sector_reader=_industry_reader("酿酒行业"),
+        sector_observation=_overview_fake("酿酒行业"),
+    )
+    assert result["state"] == "USABLE"
+    refs = result["authority_refs"]
+    assert "market-sector:security-industry=酿酒行业" in refs
+    assert "market-sector:sector=酿酒行业" in refs
+    assert "market-sector:sector-pct=1.23" in refs
+    assert "market-sector:sector-net=450000000.0" in refs
+    assert f"market-sector:updated={TRADE_DATE}" in refs
+
+
+def test_sector_observation_reader_exception_is_error():
+    def broken():
+        raise RuntimeError("overview down")
+
+    result = _evaluate(lambda: _envelope(), sector_observation=broken)
+    assert result["state"] == "ERROR"
+
+
+def test_sector_observation_missing_updated_is_unknown():
+    result = _evaluate(
+        lambda: _envelope(),
+        sector_observation=_overview_fake("白酒", updated=None),
+    )
+    assert result["state"] == "UNKNOWN"
+    assert SECTOR_CONTEXT_BLOCKER_REF in result["authority_refs"]
+
+
+def test_sector_observation_stale_date_is_stale():
+    """sector snapshot 北京日期早于 market fact date → STALE。"""
+    result = _evaluate(
+        lambda: _envelope(),
+        sector_observation=_overview_fake("白酒", updated="2026-08-12 15:05"),
     )
     assert result["state"] == "STALE"

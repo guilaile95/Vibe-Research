@@ -13,6 +13,7 @@ from critical_data_disclosures_adapter import (
     ADAPTER_AUTHORITY_REF,
     DisclosuresCapabilityError,
     EMPTY_BUT_VALID_REF,
+    SAME_DAY_DATE_ONLY_REF,
     evaluate_disclosures_capability,
 )
 
@@ -113,11 +114,12 @@ def test_fetched_at_after_as_of_is_normal_not_not_evaluated():
 
 
 def test_lookahead_announcements_excluded_but_result_usable():
-    """§B：历史 as_of 不得 look-ahead —— 公告日晚于 as_of 北京日的条目
-    从判定排除；剩余可见公告仍正常评估。"""
+    """§B：历史 as_of 不得 look-ahead —— 未来公告从判定排除；可见公告正常评估。"""
     result = _evaluate(lambda _code: _payload(announcements=[
-        {"date": "2026-08-13", "title": "可见", "type": "A", "url": "u"},
-        {"date": "2026-08-15", "title": "未来", "type": "B", "url": "u"},
+        {"date": "2026-08-13", "notice_at": "2026-08-13 10:00:00",
+         "title": "可见", "type": "A", "url": "u"},
+        {"date": "2026-08-15", "notice_at": "2026-08-15 10:00:00",
+         "title": "未来", "type": "B", "url": "u"},
     ]))
     assert result["state"] == "USABLE"
     refs = result["authority_refs"]
@@ -129,8 +131,10 @@ def test_lookahead_announcements_excluded_but_result_usable():
 def test_all_lookahead_announcements_is_empty_but_valid():
     """全部公告都是未来 → as_of 时点无可见公告 = 有效空（非失败、非伪造）。"""
     result = _evaluate(lambda _code: _payload(announcements=[
-        {"date": "2026-08-15", "title": "未来一", "type": "A", "url": "u"},
-        {"date": "2026-08-16", "title": "未来二", "type": "B", "url": "u"},
+        {"date": "2026-08-15", "notice_at": "2026-08-15 10:00:00",
+         "title": "未来一", "type": "A", "url": "u"},
+        {"date": "2026-08-16", "notice_at": "2026-08-16 10:00:00",
+         "title": "未来二", "type": "B", "url": "u"},
     ]))
     assert result["state"] == "USABLE"
     assert EMPTY_BUT_VALID_REF in result["authority_refs"]
@@ -138,6 +142,53 @@ def test_all_lookahead_announcements_is_empty_but_valid():
         ref.startswith("disclosures:lookahead-excluded=")
         for ref in result["authority_refs"]
     )
+
+
+# ---------------------------------------------------------------------------
+# R2：same-day look-ahead（publish time <= as_of 证明可见）
+# ---------------------------------------------------------------------------
+
+def test_same_day_earlier_disclosure_visible():
+    """§A：as_of=当天 12:00（北京），公告 10:00 发布 → 可见。"""
+    result = _evaluate(lambda _code: _payload(announcements=[
+        {"date": "2026-08-13", "notice_at": "2026-08-13 10:00:00",
+         "title": "早于 as_of", "type": "A", "url": "u"},
+    ]))
+    assert result["state"] == "USABLE"
+    assert "disclosures:count=1" in result["authority_refs"]
+
+
+def test_same_day_later_disclosure_excluded():
+    """§B：as_of=当天 12:00（北京），公告 20:00 发布 → 排除（look-ahead）。"""
+    result = _evaluate(lambda _code: _payload(announcements=[
+        {"date": "2026-08-13", "notice_at": "2026-08-13 20:00:00",
+         "title": "晚于 as_of", "type": "A", "url": "u"},
+    ]))
+    assert result["state"] == "USABLE"  # 有效空（全部被排除）
+    assert EMPTY_BUT_VALID_REF in result["authority_refs"]
+    assert any(
+        ref.startswith("disclosures:lookahead-excluded=")
+        for ref in result["authority_refs"]
+    )
+
+
+def test_date_only_same_day_fails_closed():
+    """§C：date-only 且 == as_of 北京当日 + 历史 as_of → 不得猜已发布 →
+    UNKNOWN + 显式 ref。"""
+    result = _evaluate(lambda _code: _payload(announcements=[
+        {"date": "2026-08-13", "title": "同日无时间", "type": "A", "url": "u"},
+    ]))
+    assert result["state"] == "UNKNOWN"
+    assert SAME_DAY_DATE_ONLY_REF in result["authority_refs"]
+
+
+def test_date_only_past_day_still_visible():
+    """date-only 但早于北京当日 → 肯定已发布，可见。"""
+    result = _evaluate(lambda _code: _payload(announcements=[
+        {"date": "2026-08-12", "title": "昨日公告", "type": "A", "url": "u"},
+    ]))
+    assert result["state"] == "USABLE"
+    assert "disclosures:count=1" in result["authority_refs"]
 
 
 # ---------------------------------------------------------------------------

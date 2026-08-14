@@ -30,9 +30,10 @@ from typing import Any, Callable, Mapping
 from critical_data_dependency_policy import CAP_SECURITY_DISCLOSURES
 
 DEPENDENCY_ID = CAP_SECURITY_DISCLOSURES
-ADAPTER_AUTHORITY_REF = "critical_data:disclosures:v0.2"
+ADAPTER_AUTHORITY_REF = "critical_data:disclosures:v0.3"
 EMPTY_BUT_VALID_REF = "disclosures:empty-but-valid"
 LOOKAHEAD_EXCLUDED_REF = "disclosures:lookahead-excluded"
+SAME_DAY_DATE_ONLY_REF = "disclosures:same-day-date-only-unprovable"
 
 _CAMPAIGN_ID_RE = re.compile(r"^campaign_[0-9a-f]{32}$")
 _UTC_ZERO_OFFSET_RE = re.compile(
@@ -40,6 +41,11 @@ _UTC_ZERO_OFFSET_RE = re.compile(
     r"(?:\.\d{1,6})?(?:Z|\+00:00)$"
 )
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# 北京时间 naive 时间戳（provider notice_date 常见形态）或 ISO 形态
+_CN_DATETIME_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?"
+)
+_CN_TIMEZONE_DELTA = timedelta(hours=8)
 
 
 class DisclosuresCapabilityError(RuntimeError):
@@ -81,6 +87,29 @@ def _parse_utc_instant(value: Any) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _parse_notice_utc(value: Any) -> datetime | None:
+    """公告 publish time → UTC instant。
+
+    provider notice_date 为北京时间 naive 形态（如 ``2026-08-13 10:00:00``）
+    或 ISO 带时区形态；naive 按北京时间（UTC+8）解释，无任意 tolerance。
+    无法解析 → None（date-only 语义）。
+    """
+    if type(value) is not str:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        if _CN_DATETIME_RE.fullmatch(text) is None:
+            return None
+        return (parsed - _CN_TIMEZONE_DELTA).replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _beijing_calendar_date(as_of_dt: datetime) -> str:
@@ -147,8 +176,13 @@ def evaluate_disclosures_capability(
     if announcements is None or not isinstance(announcements, list):
         return _result("ERROR", as_of, refs)
 
-    # FACT TIME gate：公告日晚于 as_of 北京时间日 → look-ahead，排除出判定
-    # （历史 as_of 不得看到未来公告；live 请求数据源偶发未来脏数据同样排除）。
+    # FACT TIME gate（R2）：按公告 publish time <= as_of 证明可见。
+    # - notice_at 完整时间戳存在且可解析 → 精确判定（同日早于 as_of 可见、
+    #   晚于 as_of 排除）；
+    # - date-only 且 date < 北京今日 → 可见（肯定已发布）；
+    # - date-only 且 date > 北京今日 → 排除（look-ahead）；
+    # - date-only 且 date == 北京今日 → 无法证明当天是否已发布 →
+    #   fail closed UNKNOWN（绝不猜已发布）。
     visible: list[dict] = []
     excluded = 0
     for item in announcements:
@@ -158,10 +192,23 @@ def evaluate_disclosures_capability(
         date = item.get("date")
         if type(date) is not str or _DATE_RE.fullmatch(date) is None:
             return _result("ERROR", as_of, refs)
-        if date > beijing_today:
-            excluded += 1
+        notice_at = item.get("notice_at")
+        publish_utc = _parse_notice_utc(notice_at)
+        if publish_utc is not None:
+            if publish_utc <= as_of_dt:
+                visible.append(dict(item))
+            else:
+                excluded += 1
             continue
-        visible.append(dict(item))
+        # date-only：provider 只有日期没有时间
+        if date < beijing_today:
+            visible.append(dict(item))
+        elif date > beijing_today:
+            excluded += 1
+        else:
+            # 同日无时间戳：historical same-day 不得猜已发布 → fail closed
+            refs.append(SAME_DAY_DATE_ONLY_REF)
+            return _result("UNKNOWN", as_of, refs)
     if excluded:
         refs.append(f"{LOOKAHEAD_EXCLUDED_REF}={excluded}")
 

@@ -146,11 +146,26 @@ def _price_usable(_lake, definition):
     }
 
 
+def _sector_overview_fake(industry: str, *, trade_date: str | None = None):
+    def _reader():
+        return {
+            "sentiment": {},
+            "sectors": [
+                {"name": industry, "pct": 1.23, "net": 4.5e8,
+                 "inflow": 1.0e9, "outflow": 5.5e8, "firms": 40},
+            ],
+            "updated": f"{trade_date} 15:05" if trade_date else "2026-08-13 15:05",
+        }
+
+    return _reader
+
+
 def _ports(
     *,
     campaigns: list[dict],
     market_reader=None,
     sector_reader=None,
+    sector_observation=None,
     announcements=None,
     financials_payload: dict | None = None,
     price_evaluator=_price_usable,
@@ -161,12 +176,17 @@ def _ports(
     def market(lake, definition):
         reader = market_reader or _breadth_reader(trade_date)
         sector = sector_reader or (lambda _code: {"行业": "白酒"})
+        observation = (
+            sector_observation
+            or _sector_overview_fake("白酒", trade_date=trade_date)
+        )
         return market_sector_adapter.evaluate_market_sector_capability(
             security_code=definition["security_code"],
             campaign_id=definition["campaign_id"],
             as_of=definition["as_of"],
             market_reader=reader,
             sector_reader=sector,
+            sector_observation_reader=observation,
         )
 
     def disclosures(lake, definition):
