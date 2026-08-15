@@ -499,6 +499,17 @@ export function ThesisDetail() {
   const archived = aggregate?.thesis.status === "archived";
   const formalState = aggregate?.thesis.formal_state ?? null;
   const contentLocked = archived || formalState === "confirmed" || formalState === "frozen";
+  const campaignThesisContextMismatch = Boolean(
+    campaignContext
+    && campaign
+    && aggregate
+    && (
+      aggregate.thesis.subject_type !== "stock"
+      || aggregate.thesis.subject_id !== campaign.security_code
+      || (aggregate.thesis.strategy && aggregate.thesis.strategy !== campaign.strategy)
+    )
+  );
+  const campaignThesisContextBlocked = campaignContextBlocked || campaignThesisContextMismatch;
 
   useEffect(() => {
     if (!contentLocked) return;
@@ -542,6 +553,10 @@ export function ThesisDetail() {
   // 编辑
   const startEdit = () => {
     if (!aggregate) return;
+    if (aggregate.thesis.formal_state === "draft" && campaignThesisContextBlocked) {
+      setEditErr("当前 Thesis 与真实 Campaign 不一致，已禁止修改 Campaign-scoped Formal 草稿。");
+      return;
+    }
     setForm(toEditForm(aggregate.thesis, campaignStrategy));
     setEditErr(null);
     setConflict(null);
@@ -551,6 +566,10 @@ export function ThesisDetail() {
   const saveEdit = async () => {
     if (!id || !aggregate || !form) return;
     if (!form.title.trim()) { setEditErr("请填写标题"); return; }
+    if (aggregate.thesis.formal_state === "draft" && campaignThesisContextBlocked) {
+      setEditErr("当前 Thesis 与真实 Campaign 不一致，已禁止修改 Campaign-scoped Formal 草稿。");
+      return;
+    }
     let formalFields: Pick<ThesisUpdateInput, "strategy" | "expected_horizon" | "free_notes"> = {};
     if (aggregate.thesis.formal_state === "draft") {
       if (!form.strategy) { setEditErr("请选择 Formal Thesis 策略"); return; }
@@ -600,7 +619,7 @@ export function ThesisDetail() {
   };
 
   const beginFormalization = async () => {
-    if (!id || !aggregate || aggregate.thesis.formal_state !== null || campaignContextBlocked) return;
+    if (!id || !aggregate || aggregate.thesis.formal_state !== null || campaignThesisContextBlocked) return;
     const isCurrent = captureLifecycleRun();
     setLifecycleBusy(true);
     setLifecycleErr(null);
@@ -622,7 +641,7 @@ export function ThesisDetail() {
   };
 
   const confirmFormalization = async () => {
-    if (!id || !aggregate || !canConfirmFormalThesis(aggregate.thesis) || campaignContextBlocked) return;
+    if (!id || !aggregate || !canConfirmFormalThesis(aggregate.thesis) || campaignThesisContextBlocked) return;
     if (!window.confirm("确认后内容将锁定；下一步仍需你显式冻结。是否确认这份 Formal Thesis？")) return;
     const expectedRevision = aggregate.thesis.current_revision;
     const isCurrent = captureLifecycleRun();
@@ -647,7 +666,7 @@ export function ThesisDetail() {
   };
 
   const freezeFormalization = async () => {
-    if (!id || !aggregate || aggregate.thesis.formal_state !== "confirmed" || campaignContextBlocked) return;
+    if (!id || !aggregate || aggregate.thesis.formal_state !== "confirmed" || campaignThesisContextBlocked) return;
     if (!window.confirm("冻结会生成不可变的 Formal Original 版本。冻结后不可编辑，是否继续？")) return;
     const isCurrent = captureLifecycleRun();
     setLifecycleBusy(true);
@@ -672,7 +691,7 @@ export function ThesisDetail() {
   };
 
   const bindToCampaign = async () => {
-    if (!id || !aggregate || !campaignContext || !campaign || bindingStatus !== "unbound") return;
+    if (!id || !aggregate || !campaignContext || !campaign || bindingStatus !== "unbound" || campaignThesisContextBlocked) return;
     if (aggregate.thesis.formal_state !== "frozen") return;
     if (!window.confirm(`绑定到 Campaign ${campaign.security_code} 后不可更换。是否确认建立不可变绑定？`)) return;
     const isCurrent = captureLifecycleRun();
@@ -917,7 +936,7 @@ export function ThesisDetail() {
             <div className="flex items-center gap-2">
               <button
                 onClick={startEdit}
-                disabled={contentLocked || busy}
+                disabled={contentLocked || busy || (t.formal_state === "draft" && campaignThesisContextBlocked)}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-border/50 px-3 py-1.5 text-sm text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-50"
               >
                 <Pencil className="h-4 w-4" /> 编辑
@@ -949,6 +968,12 @@ export function ThesisDetail() {
         </div>
       )}
 
+      {campaignThesisContextMismatch && (
+        <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive" role="alert">
+          当前 Thesis 与真实 Campaign 的证券或策略不一致，已禁止 Formal setup / Confirm / Freeze / Bind。请返回 Decision Inbox 选择匹配的 Thesis。
+        </div>
+      )}
+
       <GlassCard className="mb-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -974,7 +999,7 @@ export function ThesisDetail() {
               <button
                 type="button"
                 onClick={beginFormalization}
-                disabled={lifecycleBusy || archived || campaignContextBlocked}
+                disabled={lifecycleBusy || archived || campaignThesisContextBlocked}
                 className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
                 开始 Formal 化
@@ -984,7 +1009,7 @@ export function ThesisDetail() {
               <button
                 type="button"
                 onClick={confirmFormalization}
-                disabled={lifecycleBusy || editing || !canConfirmFormalThesis(t) || campaignContextBlocked}
+                disabled={lifecycleBusy || editing || !canConfirmFormalThesis(t) || campaignThesisContextBlocked}
                 className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
                 确认 Formal Thesis
@@ -994,7 +1019,7 @@ export function ThesisDetail() {
               <button
                 type="button"
                 onClick={freezeFormalization}
-                disabled={lifecycleBusy || campaignContextBlocked}
+                disabled={lifecycleBusy || campaignThesisContextBlocked}
                 className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
                 冻结 Formal Original
@@ -1004,7 +1029,7 @@ export function ThesisDetail() {
               <button
                 type="button"
                 onClick={bindToCampaign}
-                disabled={lifecycleBusy || t.strategy !== campaign?.strategy || t.subject_id !== campaign?.security_code}
+                disabled={lifecycleBusy || campaignThesisContextBlocked}
                 className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
                 绑定到当前 Campaign
@@ -1022,8 +1047,8 @@ export function ThesisDetail() {
             确认门尚未满足：需要 active 状态、3-5 条核心论点、策略及合法预期周期。先编辑并保存草稿。
           </p>
         )}
-        {t.formal_state === "frozen" && campaignContext && t.strategy !== campaignStrategy && (
-          <p className="mt-3 text-xs text-warning">Thesis 策略与 Campaign 不一致，后端将拒绝绑定。</p>
+        {campaignThesisContextMismatch && (
+          <p className="mt-3 text-xs text-warning">Thesis 与 Campaign 的证券/策略不一致，Campaign-scoped Formal 生命周期已 fail-closed。</p>
         )}
         {campaignContext && bindingStatus === "loading" && (
           <p className="mt-3 text-xs text-muted-foreground">正在确认 Campaign Thesis binding…</p>
@@ -1293,7 +1318,7 @@ export function ThesisDetail() {
                 <div className="mt-4 flex items-center gap-2">
                   <button
                     onClick={saveEdit}
-                    disabled={busy}
+                    disabled={busy || (t.formal_state === "draft" && campaignThesisContextBlocked)}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
                   >
                     {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
