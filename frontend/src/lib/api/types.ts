@@ -1794,6 +1794,89 @@ export interface Bk11HistoryEnvelope {
 }
 
 // ---------------------------------------------------------------------------
+// 账户初始化（Bootstrap，P0-AB2）：契约与 backend position_reality_service 对齐。
+// LEGACY_POSITION_OPENING != BUY；PRE-VIBE 历史保持 UNKNOWN。
+// ---------------------------------------------------------------------------
+
+export interface PositionBootstrapPosition {
+  code: string;
+  name?: string;
+  shares: number;
+  cost_basis?: number;
+}
+
+export interface PositionBootstrapInput {
+  ledger_start_at: string;
+  opening_cash?: number;
+  note?: string;
+  positions: PositionBootstrapPosition[];
+}
+
+export interface PositionBootstrapOpeningEvent {
+  event_id: string;
+  event_type: string;
+  opening_cash: number | null;
+  ledger_start_at: string;
+  historical_trades: string;
+  provenance: string;
+  created_at: string;
+  [key: string]: unknown;
+}
+
+export interface PositionBootstrapPreviewPositionEvent {
+  event_id: string;
+  event_type: string;
+  code: string;
+  name: string | null;
+  shares: number;
+  cost_basis: number | null;
+  origin: string;
+  acquired_before_vibe: number;
+  historical_trades: string;
+  provenance: string;
+  created_at: string;
+  [key: string]: unknown;
+}
+
+export interface PositionBootstrapPreview {
+  preview: boolean;
+  validation: string;
+  opening: PositionBootstrapOpeningEvent;
+  positions: PositionBootstrapPreviewPositionEvent[];
+}
+
+export interface PositionBootstrapCommitResult {
+  status: string;
+  opening: PositionBootstrapOpeningEvent;
+  positions: PositionBootstrapPreviewPositionEvent[];
+}
+
+/** GET /api/position/derived（只读推导结果；当前 UI 不强依赖，类型最小化） */
+export interface DerivedPositionsResult {
+  derivation_status: string;
+  bootstrap_status: string;
+  canonical: boolean;
+  ledger_start: {
+    ledger_start_at: string | null;
+    opening_cash: number | null;
+    pre_vibe_history: string;
+    bootstrapped_at: string | null;
+  } | null;
+  positions: Array<{
+    code: string;
+    name: string;
+    shares: number;
+    cost_basis: number | null;
+    avg_cost: number | null;
+    status: string;
+    origin: string;
+    cost_known: boolean;
+  }>;
+  data_limitations: string[];
+}
+
+
+// ---------------------------------------------------------------------------
 // Campaign（P0-CS1）：strategy / status 为 frozen 枚举，与 backend 逐字一致。
 // 前端绝不重新定义 transition graph；下一合法动作只来自 next-actions API。
 // ---------------------------------------------------------------------------
