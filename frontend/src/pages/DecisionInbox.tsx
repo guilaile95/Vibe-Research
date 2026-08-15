@@ -240,7 +240,9 @@ function BootstrapActivationCard({ onBootstrapped }: { onBootstrapped: () => voi
     currentInput,
     confirmed,
   });
-  const commitEnabled = canCommitBootstrap({
+  // prefilling 未完成（portfolio 读取中）时 Commit 门 fail-closed：
+  // 即使 preview 有效且已确认，也不得开放。
+  const commitEnabled = !prefilling && canCommitBootstrap({
     preview,
     previewedInput,
     currentInput,
@@ -257,7 +259,9 @@ function BootstrapActivationCard({ onBootstrapped }: { onBootstrapped: () => voi
   }, []);
 
   const handlePreview = async () => {
-    if (!currentInput) return;
+    // 运行时 guard：prefilling 未完成（portfolio 预填进行中）时绝不允许发起 preview，
+    // 即使按钮被绕过或事件被直接触发。
+    if (prefilling || !currentInput) return;
     setBusy("preview");
     setError("");
     try {
@@ -276,6 +280,8 @@ function BootstrapActivationCard({ onBootstrapped }: { onBootstrapped: () => voi
   };
 
   const handleCommit = async () => {
+    // 运行时 guard：prefilling 未完成（portfolio 预填进行中）时 Commit 门 fail-closed。
+    if (prefilling) return;
     const payload = commitPayload({
       preview,
       previewedInput,
@@ -478,7 +484,7 @@ function BootstrapActivationCard({ onBootstrapped }: { onBootstrapped: () => voi
           <button
             type="button"
             onClick={() => void handlePreview()}
-            disabled={!canPreviewBootstrap(currentInput) || busy !== null}
+            disabled={prefilling || !canPreviewBootstrap(currentInput) || busy !== null}
             className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
           >
             {busy === "preview" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

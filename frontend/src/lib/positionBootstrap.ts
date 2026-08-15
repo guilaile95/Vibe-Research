@@ -43,15 +43,16 @@ export const ANTI_BUY_NOTICE =
 export const CONFIRM_CHECKBOX_LABEL =
   "我确认这些是 Vibe 启用时的实际持仓快照；此前交易历史保持未知，不重建为历史 BUY。";
 
-/** 是否显示 Bootstrap Activation Card：canonical=false 且原因精确为
- *  POSITION_LEDGER_NOT_BOOTSTRAPPED；其它 noncanonical 原因绝不显示。 */
+/** 是否显示 Bootstrap Activation Card：canonical=false 且 reason_codes 精确等于
+ *  单个 POSITION_LEDGER_NOT_BOOTSTRAPPED；混合、重复、其它原因绝不显示。 */
 export function shouldShowBootstrapCard(snapshot: {
   canonical: boolean;
   reason_codes: readonly string[];
 }): boolean {
   return (
     snapshot.canonical === false
-    && snapshot.reason_codes.includes(POSITION_LEDGER_NOT_BOOTSTRAPPED)
+    && snapshot.reason_codes.length === 1
+    && snapshot.reason_codes[0] === POSITION_LEDGER_NOT_BOOTSTRAPPED
   );
 }
 

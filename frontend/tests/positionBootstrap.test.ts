@@ -106,7 +106,7 @@ function gate(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test("A: POSITION_LEDGER_NOT_BOOTSTRAPPED 显示 Bootstrap Card", () => {
+test("A: 仅 canonical=false + 精确单个 POSITION_LEDGER_NOT_BOOTSTRAPPED 显示 Bootstrap Card", () => {
   assert.equal(
     shouldShowBootstrapCard({
       canonical: false,
@@ -114,12 +114,24 @@ test("A: POSITION_LEDGER_NOT_BOOTSTRAPPED 显示 Bootstrap Card", () => {
     }),
     true,
   );
+  // 混合其它原因 → 不显示
   assert.equal(
     shouldShowBootstrapCard({
       canonical: false,
       reason_codes: ["OTHER_REASON", "POSITION_LEDGER_NOT_BOOTSTRAPPED"],
     }),
-    true,
+    false,
+  );
+  // 重复同一原因 → 不显示
+  assert.equal(
+    shouldShowBootstrapCard({
+      canonical: false,
+      reason_codes: [
+        "POSITION_LEDGER_NOT_BOOTSTRAPPED",
+        "POSITION_LEDGER_NOT_BOOTSTRAPPED",
+      ],
+    }),
+    false,
   );
 });
 

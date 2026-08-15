@@ -220,6 +220,17 @@ async function runE2E() {
     const previewBodies = [];
     const commitBodies = [];
 
+    // —— portfolio Promise gate：显式挂起 GET /api/portfolio 响应，直到测试释放。
+    // 事件驱动等待请求到达（不用 sleep 猜时序）。
+    let portfolioRequestedResolve;
+    let portfolioRelease;
+    const portfolioRequested = new Promise((resolve) => {
+      portfolioRequestedResolve = resolve;
+    });
+    const portfolioGate = new Promise((resolve) => {
+      portfolioRelease = resolve;
+    });
+
     const proxyToBackend = (route) => {
       const u = new URL(route.request().url());
       return route.continue({
@@ -240,9 +251,11 @@ async function runE2E() {
       commitBodies.push(route.request().postDataJSON());
       await proxyToBackend(route);
     });
-    // legacy portfolio：模拟 holdings（只作为预填输入）
-    await page.route("**/api/portfolio", (route) => {
+    // legacy portfolio：挂起响应直到测试释放 gate；只作为预填输入
+    await page.route("**/api/portfolio", async (route) => {
       if (route.request().method() !== "GET") return proxyToBackend(route);
+      portfolioRequestedResolve();
+      await portfolioGate;
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -251,9 +264,11 @@ async function runE2E() {
     });
 
     // 1. Bootstrap Activation Card（不再是单纯“暂不可用”）
+    // 注意：portfolio 被 gate 挂起时 networkidle 永不满足，改用 domcontentloaded +
+    // 显式 waitForSelector 同步渲染。
     console.log("[E2E] 1. opening /decision-inbox (non-canonical)...");
     await page.goto(`http://127.0.0.1:${frontendPort}/decision-inbox`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
     });
     await page.waitForSelector("h1:has-text('决策待办')");
     await page.waitForSelector("h2:has-text('初始化持仓事实')");
@@ -263,8 +278,36 @@ async function runE2E() {
       "bootstrap card replaces the generic unavailable box",
     );
 
-    // 2. legacy portfolio 仅预填
-    console.log("[E2E] 2. legacy portfolio prefills positions (suggestion only)...");
+    // 2. prefilling 期间（portfolio pending）：Preview/Commit 门 fail-closed
+    console.log("[E2E] 2. prefilling gate: preview & commit stay closed while portfolio pending...");
+    // 事件驱动：等待 GET /api/portfolio 到达 route handler（防御性超时，防无限挂起）
+    await Promise.race([
+      portfolioRequested,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("GET /api/portfolio never reached the gate")), 15000),
+      ),
+    ]);
+    await page.waitForSelector("text=正在读取当前持仓…");
+    const previewBtn = page.locator("button:has-text('预览初始化')");
+    const commitBtn = page.locator("button:has-text('确认初始化账户事实')");
+    assert.equal(
+      await previewBtn.isDisabled(),
+      true,
+      "preview stays disabled while prefilling",
+    );
+    await page.fill("input[type='date']", "2026-08-01");
+    assert.equal(
+      await previewBtn.isDisabled(),
+      true,
+      "preview stays disabled while prefilling even with valid date",
+    );
+    assert.equal(await commitBtn.isDisabled(), true, "commit stays disabled while prefilling");
+    assert.equal(previewCount, 0, "no preview request while prefilling");
+    assert.equal(commitCount, 0, "no commit request while prefilling");
+
+    // 3. 释放 portfolio gate → legacy portfolio 仅预填 → 预览门开放
+    console.log("[E2E] 3. releasing portfolio gate -> prefill completes...");
+    portfolioRelease();
     await page.waitForSelector("input[aria-label='持仓 1 代码']");
     assert.equal(await page.inputValue("input[aria-label='持仓 1 代码']"), "001896");
     assert.equal(await page.inputValue("input[aria-label='持仓 2 代码']"), "002031");
@@ -272,12 +315,19 @@ async function runE2E() {
     await page.waitForSelector("text=以下内容从当前持仓预填");
     assert.equal(commitCount, 0, "prefill must never trigger commit");
 
-    // 3. ledger_start_at 为空 → 预览禁用
-    console.log("[E2E] 3. preview disabled without ledger_start_at...");
-    const previewBtn = page.locator("button:has-text('预览初始化')");
-    assert.equal(await previewBtn.isDisabled(), true);
+    // ledger_start_at 仍是独立必填门：prefill 完成后为空也不得 Preview。
+    await page.fill("input[type='date']", "");
+    assert.equal(
+      await previewBtn.isDisabled(),
+      true,
+      "preview stays disabled without ledger_start_at after prefilling",
+    );
     await page.fill("input[type='date']", "2026-08-01");
-    assert.equal(await previewBtn.isDisabled(), false);
+    assert.equal(
+      await previewBtn.isDisabled(),
+      false,
+      "preview opens only after prefilling finishes and ledger_start_at is explicit",
+    );
 
     // 4. Preview：只调用 bootstrap-preview，不调用 commit
     console.log("[E2E] 4. preview calls bootstrap-preview only...");
@@ -305,7 +355,6 @@ async function runE2E() {
 
     // 6. 未确认 → commit 禁用；预览后修改 → PREVIEW_INVALIDATED + 禁用
     console.log("[E2E] 6. commit gates: confirm + input equality...");
-    const commitBtn = page.locator("button:has-text('确认初始化账户事实')");
     assert.equal(await commitBtn.isDisabled(), true, "checkbox required");
     await page.fill("input[aria-label='持仓 1 数量']", "999");
     await page.waitForSelector("text=表单已在预览后修改");
