@@ -76,6 +76,16 @@ const ERROR_ITEM = item({
   campaign_id: `campaign_${"d".repeat(32)}`,
 });
 
+// BLOCKER 回归：CLEAR 但缺少 evaluation 与 authority refs
+// （contract 非法 → 页面绝不出现 safe green）。
+const MALFORMED_CLEAR_ITEM = item({
+  visible_state: "BLOCKED_BY_DATA",
+  reason_codes: [],
+  hard_risk_state: "CLEAR",
+  strategy: "MEDIUM",
+  campaign_id: `campaign_${"e".repeat(32)}`,
+});
+
 const SNAPSHOT = {
   schema_version: "decision_inbox_runtime.v0.1",
   as_of: AS_OF,
@@ -83,9 +93,15 @@ const SNAPSHOT = {
   canonical: true,
   reason_codes: [],
   holding_setup_items: [],
-  campaign_items: [CONFIRMED_ITEM, CLEAR_ITEM, NOT_EVALUATED_ITEM, ERROR_ITEM],
+  campaign_items: [
+    CONFIRMED_ITEM,
+    CLEAR_ITEM,
+    NOT_EVALUATED_ITEM,
+    ERROR_ITEM,
+    MALFORMED_CLEAR_ITEM,
+  ],
   total_holdings: 0,
-  total_campaign_items: 4,
+  total_campaign_items: 5,
 };
 
 function startStaticServer(dir, port) {
@@ -187,13 +203,20 @@ async function run() {
       assert.equal(confirmedText.includes(token), false, `CONFIRMED 面板不得含「${token}」`);
     }
 
-    // 3. CLEAR：显式 positive-proof 才显示安全
-    const clearPanel = page.locator(`[data-hard-risk-state="CLEAR"]`);
+    // 3. CLEAR：显式 positive-proof（CLEAR+EVALUATED+refs）才显示安全
+    const clearPanel = page.locator(`[data-hard-risk-state="CLEAR"][data-hard-risk-safe="true"]`);
     await clearPanel.waitFor();
     assert.equal(await clearPanel.getAttribute("data-hard-risk-tone"), "safe");
-    assert.equal(await clearPanel.getAttribute("data-hard-risk-safe"), "true");
     await clearPanel.getByText("已确认无 Hard Risk", { exact: false }).waitFor();
     await clearPanel.getByText("hard-risk:fixture-clear", { exact: false }).waitFor();
+
+    // BLOCKER 回归：CLEAR 缺少 evaluation/refs → fail closed，绝不安全
+    const malformedClearPanel = page.locator(`[data-hard-risk-state="CLEAR"][data-hard-risk-safe="false"]`);
+    await malformedClearPanel.waitFor();
+    assert.equal(await malformedClearPanel.getAttribute("data-hard-risk-tone"), "muted");
+    await malformedClearPanel.getByText("Hard Risk 状态未知", { exact: false }).first().waitFor();
+    const malformedText = await malformedClearPanel.innerText();
+    assert.equal(malformedText.includes("已确认无 Hard Risk"), false, "malformed CLEAR 不得显示已确认安全");
 
     // 4/5. NOT_EVALUATED / ERROR：一律不绿
     const notEvaluatedPanel = page.locator(`[data-hard-risk-state="NOT_EVALUATED"]`);
