@@ -2,17 +2,25 @@
  * P0-HR1 Hard Risk view-model 契约测试。
  *
  * 以 backend/hard_risk_contract.py 的 LEGAL_STATE_EVALUATION_PAIRS 为唯一
- * authority（不测试自己发明的宽松 frontend contract）：
+ * authority（不测试自己发明的宽松 frontend contract），且只消费 Hard Risk
+ * 专属 payload 字段：
  *
- * A. CLEAR + EVALUATED + nonempty authority refs      → safe green
- * B. CONFIRMED + EVALUATED + refs + nonempty reasons  → danger
- * C. UNKNOWN + UNKNOWN + nonempty reasons             → unknown
- * D. UNKNOWN + ERROR + nonempty reasons               → evaluation error
- * E. NOT_EVALUATED + NOT_EVALUATED + nonempty reasons → not evaluated
+ *   hard_risk_state / hard_risk_evaluation /
+ *   hard_risk_reason_codes / hard_risk_authority_refs
  *
- * 其它全部（missing / null / illegal enum / illegal pair /
- * CLEAR 或 CONFIRMED 缺 evaluation / 缺 authority refs / 非 CLEAR 缺 reasons）
- * → fail closed unavailable，绝不 safe green、绝不声称已确认。
+ * 严禁 generic fallback：
+ *   - Decision Inbox item.reason_codes（Campaign-level generic）
+ *   - item.authority_refs / explainability.authority_refs
+ *     （generic projection provenance，可能含 Critical Data / Thesis /
+ *     Decision / Hard Risk）
+ *
+ * A. CLEAR + EVALUATED + nonempty hard_risk_authority_refs      → safe green
+ * B. CONFIRMED + EVALUATED + refs + nonempty hard_risk_reason_codes → danger
+ * C. UNKNOWN + UNKNOWN + nonempty hard_risk_reason_codes        → unknown
+ * D. UNKNOWN + ERROR + nonempty hard_risk_reason_codes          → evaluation error
+ * E. NOT_EVALUATED + NOT_EVALUATED + nonempty hard_risk_reason_codes
+ *                                                               → not evaluated
+ * 其它全部 → fail closed unavailable。
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -22,6 +30,7 @@ import {
   HARD_RISK_STATES,
   LEGAL_STATE_EVALUATION_PAIRS,
   hardRiskDisplay,
+  type HardRiskInput,
 } from "../src/lib/hardRiskViewModel.ts";
 
 const FORBIDDEN = ["卖出", "退出", "清仓", "EXIT", "SELL"];
@@ -39,25 +48,25 @@ function assertUnavailable(view: ReturnType<typeof hardRiskDisplay>, label: stri
 }
 
 // ---------------------------------------------------------------------------
-// A. CLEAR 正证明门
+// A. CLEAR 正证明门（只认 hard_risk_authority_refs）
 // ---------------------------------------------------------------------------
 
 test("A1：CLEAR only（无 evaluation）→ fail closed，绝不安全", () => {
   assertUnavailable(hardRiskDisplay({ hard_risk_state: "CLEAR" }), "CLEAR only");
 });
 
-test("A2：CLEAR + EVALUATED + refs → safe green", () => {
+test("A2：CLEAR + EVALUATED + 专属 refs → safe green", () => {
   const view = hardRiskDisplay({
     hard_risk_state: "CLEAR",
     hard_risk_evaluation: "EVALUATED",
-    authority_refs: ["hard-risk:positive-clear"],
+    hard_risk_authority_refs: ["hard-risk:positive-clear"],
   });
   assert.equal(view.tone, "safe");
   assert.equal(view.showSafeGreen, true);
   assert.equal(view.statusLabel, "已确认无 Hard Risk");
 });
 
-test("A3：CLEAR + EVALUATED + no refs → fail closed", () => {
+test("A3：CLEAR + EVALUATED + 无专属 refs → fail closed", () => {
   assertUnavailable(
     hardRiskDisplay({
       hard_risk_state: "CLEAR",
@@ -67,11 +76,11 @@ test("A3：CLEAR + EVALUATED + no refs → fail closed", () => {
   );
 });
 
-test("A4：CLEAR + missing evaluation + refs → fail closed", () => {
+test("A4：CLEAR + missing evaluation + 专属 refs → fail closed", () => {
   assertUnavailable(
     hardRiskDisplay({
       hard_risk_state: "CLEAR",
-      authority_refs: ["hard-risk:ref-without-evaluation"],
+      hard_risk_authority_refs: ["hard-risk:ref-without-evaluation"],
     }),
     "CLEAR missing evaluation",
   );
@@ -83,7 +92,7 @@ test("A5：CLEAR + 非法 evaluation pair → fail closed", () => {
       hardRiskDisplay({
         hard_risk_state: "CLEAR",
         hard_risk_evaluation: evaluation,
-        authority_refs: ["hard-risk:ref"],
+        hard_risk_authority_refs: ["hard-risk:ref"],
       }),
       `CLEAR + ${evaluation}`,
     );
@@ -94,12 +103,12 @@ test("A5：CLEAR + 非法 evaluation pair → fail closed", () => {
 // B. CONFIRMED 正证明门
 // ---------------------------------------------------------------------------
 
-test("B1：CONFIRMED + EVALUATED + refs + reasons → danger 已确认", () => {
+test("B1：CONFIRMED + EVALUATED + 专属 refs + 专属 reasons → danger 已确认", () => {
   const view = hardRiskDisplay({
     hard_risk_state: "CONFIRMED",
     hard_risk_evaluation: "EVALUATED",
-    authority_refs: ["hard-risk:confirmed-authority"],
-    reason_codes: ["HARD_RISK_CONFIRMED"],
+    hard_risk_authority_refs: ["hard-risk:confirmed-authority"],
+    hard_risk_reason_codes: ["HARD_RISK_CONFIRMED"],
   });
   assert.equal(view.tone, "danger");
   assert.equal(view.showSafeGreen, false);
@@ -110,30 +119,30 @@ test("B2：CONFIRMED missing evaluation → fail closed（证据不足不声称�
   assertUnavailable(
     hardRiskDisplay({
       hard_risk_state: "CONFIRMED",
-      authority_refs: ["hard-risk:ref"],
-      reason_codes: ["HARD_RISK_CONFIRMED"],
+      hard_risk_authority_refs: ["hard-risk:ref"],
+      hard_risk_reason_codes: ["HARD_RISK_CONFIRMED"],
     }),
     "CONFIRMED missing evaluation",
   );
 });
 
-test("B3：CONFIRMED + EVALUATED + no refs → fail closed", () => {
+test("B3：CONFIRMED + EVALUATED + 无专属 refs → fail closed", () => {
   assertUnavailable(
     hardRiskDisplay({
       hard_risk_state: "CONFIRMED",
       hard_risk_evaluation: "EVALUATED",
-      reason_codes: ["HARD_RISK_CONFIRMED"],
+      hard_risk_reason_codes: ["HARD_RISK_CONFIRMED"],
     }),
     "CONFIRMED+EVALUATED no refs",
   );
 });
 
-test("B4：CONFIRMED + EVALUATED + refs + no reasons → fail closed", () => {
+test("B4：CONFIRMED + EVALUATED + 专属 refs + 无专属 reasons → fail closed", () => {
   assertUnavailable(
     hardRiskDisplay({
       hard_risk_state: "CONFIRMED",
       hard_risk_evaluation: "EVALUATED",
-      authority_refs: ["hard-risk:ref"],
+      hard_risk_authority_refs: ["hard-risk:ref"],
     }),
     "CONFIRMED no reasons",
   );
@@ -143,8 +152,8 @@ test("B5：CONFIRMED 文案绝不包含自动交易指令词", () => {
   const view = hardRiskDisplay({
     hard_risk_state: "CONFIRMED",
     hard_risk_evaluation: "EVALUATED",
-    authority_refs: ["hard-risk:confirmed-authority"],
-    reason_codes: ["HARD_RISK_CONFIRMED"],
+    hard_risk_authority_refs: ["hard-risk:confirmed-authority"],
+    hard_risk_reason_codes: ["HARD_RISK_CONFIRMED"],
   });
   assertNoAutoExitText(view.statusLabel);
   assertNoAutoExitText(view.description);
@@ -156,11 +165,11 @@ test("B5：CONFIRMED 文案绝不包含自动交易指令词", () => {
 // C/D/E. UNKNOWN / ERROR / NOT_EVALUATED
 // ---------------------------------------------------------------------------
 
-test("C1：UNKNOWN + UNKNOWN + reasons → unknown 不绿", () => {
+test("C1：UNKNOWN + UNKNOWN + 专属 reasons → unknown 不绿", () => {
   const view = hardRiskDisplay({
     hard_risk_state: "UNKNOWN",
     hard_risk_evaluation: "UNKNOWN",
-    reason_codes: ["HARD_RISK_INPUT_UNKNOWN"],
+    hard_risk_reason_codes: ["HARD_RISK_INPUT_UNKNOWN"],
   });
   assert.equal(view.tone, "unknown");
   assert.equal(view.showSafeGreen, false);
@@ -171,13 +180,13 @@ test("C2：UNKNOWN missing evaluation → fail closed", () => {
   assertUnavailable(
     hardRiskDisplay({
       hard_risk_state: "UNKNOWN",
-      reason_codes: ["HARD_RISK_INPUT_UNKNOWN"],
+      hard_risk_reason_codes: ["HARD_RISK_INPUT_UNKNOWN"],
     }),
     "UNKNOWN missing evaluation",
   );
 });
 
-test("C3：UNKNOWN + UNKNOWN + no reasons → fail closed", () => {
+test("C3：UNKNOWN + UNKNOWN + 无专属 reasons → fail closed", () => {
   assertUnavailable(
     hardRiskDisplay({
       hard_risk_state: "UNKNOWN",
@@ -187,11 +196,11 @@ test("C3：UNKNOWN + UNKNOWN + no reasons → fail closed", () => {
   );
 });
 
-test("D1：UNKNOWN + ERROR + reasons → 明确评估失败，不得 silently green", () => {
+test("D1：UNKNOWN + ERROR + 专属 reasons → 明确评估失败，不得 silently green", () => {
   const view = hardRiskDisplay({
     hard_risk_state: "UNKNOWN",
     hard_risk_evaluation: "ERROR",
-    reason_codes: ["HARD_RISK_EVALUATION_ERROR"],
+    hard_risk_reason_codes: ["HARD_RISK_EVALUATION_ERROR"],
   });
   assert.equal(view.showSafeGreen, false);
   assert.equal(view.tone, "unknown");
@@ -199,7 +208,7 @@ test("D1：UNKNOWN + ERROR + reasons → 明确评估失败，不得 silently gr
   assert.equal(view.evaluationLabel, "ERROR");
 });
 
-test("D2：UNKNOWN + ERROR + no reasons → fail closed", () => {
+test("D2：UNKNOWN + ERROR + 无专属 reasons → fail closed", () => {
   assertUnavailable(
     hardRiskDisplay({
       hard_risk_state: "UNKNOWN",
@@ -209,11 +218,11 @@ test("D2：UNKNOWN + ERROR + no reasons → fail closed", () => {
   );
 });
 
-test("E1：NOT_EVALUATED + NOT_EVALUATED + reasons → 尚未评估 不绿", () => {
+test("E1：NOT_EVALUATED + NOT_EVALUATED + 专属 reasons → 尚未评估 不绿", () => {
   const view = hardRiskDisplay({
     hard_risk_state: "NOT_EVALUATED",
     hard_risk_evaluation: "NOT_EVALUATED",
-    reason_codes: ["HARD_RISK_NOT_EVALUATED"],
+    hard_risk_reason_codes: ["HARD_RISK_NOT_EVALUATED"],
   });
   assert.equal(view.tone, "muted");
   assert.equal(view.showSafeGreen, false);
@@ -224,10 +233,82 @@ test("E2：NOT_EVALUATED missing evaluation → fail closed", () => {
   assertUnavailable(
     hardRiskDisplay({
       hard_risk_state: "NOT_EVALUATED",
-      reason_codes: ["HARD_RISK_NOT_EVALUATED"],
+      hard_risk_reason_codes: ["HARD_RISK_NOT_EVALUATED"],
     }),
     "NOT_EVALUATED missing evaluation",
   );
+});
+
+// ---------------------------------------------------------------------------
+// 关键 anti-contamination：generic Decision Inbox 数据严禁充当 Hard Risk
+// 专属 evidence（工作单 §5 A-E）
+// ---------------------------------------------------------------------------
+
+test("anti-A：generic authority 不得证明 CLEAR（explainability refs 不绿）", () => {
+  // hard_risk_authority_refs = []，generic explainability 有 refs →
+  // view-model 根本收不到 generic refs（输入形状不允许），必须 fail closed。
+  const view = hardRiskDisplay({
+    hard_risk_state: "CLEAR",
+    hard_risk_evaluation: "EVALUATED",
+    hard_risk_authority_refs: [],
+    // @ts-expect-error 输入形状不允许 generic 字段——防止误传的编译期护栏
+    explainability: { authority_refs: ["critical-data:proof"] },
+  });
+  assertUnavailable(view, "generic ref cannot prove CLEAR");
+  assert.deepEqual(view.authorityRefs, []);
+});
+
+test("anti-B：generic reason 不得证明 CONFIRMED（item.reason_codes 不生效）", () => {
+  // hard_risk_reason_codes = []，generic reason_codes 有 HARD_RISK_CONFIRMED →
+  // 不得显示 confirmed authority state，必须 fail closed。
+  const view = hardRiskDisplay({
+    hard_risk_state: "CONFIRMED",
+    hard_risk_evaluation: "EVALUATED",
+    hard_risk_authority_refs: ["hard-risk:proof"],
+    hard_risk_reason_codes: [],
+    // @ts-expect-error 输入形状不允许 generic 字段——防止误传的编译期护栏
+    reason_codes: ["HARD_RISK_CONFIRMED"],
+  });
+  assertUnavailable(view, "generic reason cannot prove CONFIRMED");
+  assert.notEqual(view.statusLabel, "已确认 Hard Risk");
+  assert.deepEqual(view.reasonCodes, []);
+});
+
+test("anti-C：专属 evidence 正常显示（prefixed payload）", () => {
+  const view = hardRiskDisplay({
+    hard_risk_state: "CONFIRMED",
+    hard_risk_evaluation: "EVALUATED",
+    hard_risk_authority_refs: ["hard-risk:proof"],
+    hard_risk_reason_codes: ["DELISTING_RISK_CONFIRMED"],
+  });
+  assert.equal(view.tone, "danger");
+  assert.equal(view.statusLabel, "已确认 Hard Risk");
+  assert.deepEqual(view.reasonCodes, ["DELISTING_RISK_CONFIRMED"]);
+  assert.deepEqual(view.authorityRefs, ["hard-risk:proof"]);
+});
+
+test("anti-D：reason list 只承载 hard_risk_reason_codes", () => {
+  const view = hardRiskDisplay({
+    hard_risk_state: "UNKNOWN",
+    hard_risk_evaluation: "UNKNOWN",
+    hard_risk_reason_codes: ["HARD_RISK_INPUT_UNKNOWN"],
+    // @ts-expect-error 输入形状不允许 generic 字段
+    reason_codes: ["CRITICAL_DATA_BLOCKED", "THESIS_MISSING"],
+  });
+  assert.deepEqual(view.reasonCodes, ["HARD_RISK_INPUT_UNKNOWN"]);
+});
+
+test("anti-E：Authority 引用只承载 hard_risk_authority_refs", () => {
+  const view = hardRiskDisplay({
+    hard_risk_state: "CLEAR",
+    hard_risk_evaluation: "EVALUATED",
+    hard_risk_authority_refs: ["hard-risk:only"],
+    // @ts-expect-error 输入形状不允许 generic 字段
+    authority_refs: ["critical-data:ref", "thesis:ref"],
+    // @ts-expect-error 输入形状不允许 generic 字段
+    explainability: { authority_refs: ["critical-data:proof"] },
+  });
+  assert.deepEqual(view.authorityRefs, ["hard-risk:only"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -250,8 +331,8 @@ test("非法 pair：legal pairs 之外全部 fail closed", () => {
       hardRiskDisplay({
         hard_risk_state: state,
         hard_risk_evaluation: evaluation,
-        reason_codes: ["SOME_REASON"],
-        authority_refs: ["hard-risk:ref"],
+        hard_risk_reason_codes: ["SOME_REASON"],
+        hard_risk_authority_refs: ["hard-risk:ref"],
       }),
       `${state} + ${evaluation}`,
     );
@@ -263,8 +344,8 @@ test("missing：state / evaluation 缺失或非法枚举 → fail closed 不绿"
     const view = hardRiskDisplay({
       hard_risk_state: state,
       hard_risk_evaluation: "EVALUATED",
-      authority_refs: ["hard-risk:ref"],
-      reason_codes: ["SOME_REASON"],
+      hard_risk_authority_refs: ["hard-risk:ref"],
+      hard_risk_reason_codes: ["SOME_REASON"],
     });
     assert.equal(view.showSafeGreen, false);
     assert.equal(view.statusLabel, "Hard Risk 状态未知");
@@ -273,44 +354,11 @@ test("missing：state / evaluation 缺失或非法枚举 → fail closed 不绿"
     const view = hardRiskDisplay({
       hard_risk_state: "CLEAR",
       hard_risk_evaluation: evaluation,
-      authority_refs: ["hard-risk:ref"],
+      hard_risk_authority_refs: ["hard-risk:ref"],
     });
     assert.equal(view.showSafeGreen, false);
     assert.equal(view.statusLabel, "Hard Risk 状态未知");
   }
-});
-
-// ---------------------------------------------------------------------------
-// reason codes / provenance 透传（合法 pair 下）
-// ---------------------------------------------------------------------------
-
-test("reason codes：合法 pair 下原样透传，不解释不推断", () => {
-  const view = hardRiskDisplay({
-    hard_risk_state: "UNKNOWN",
-    hard_risk_evaluation: "UNKNOWN",
-    reason_codes: ["HARD_RISK_INPUT_UNKNOWN", "REVIEW_BY_REACHED"],
-  });
-  assert.deepEqual(view.reasonCodes, ["HARD_RISK_INPUT_UNKNOWN", "REVIEW_BY_REACHED"]);
-});
-
-test("authority refs：顶层透传", () => {
-  const view = hardRiskDisplay({
-    hard_risk_state: "CLEAR",
-    hard_risk_evaluation: "EVALUATED",
-    authority_refs: ["hard-risk:lake-snapshot-1"],
-  });
-  assert.deepEqual(view.authorityRefs, ["hard-risk:lake-snapshot-1"]);
-});
-
-test("authority refs：顶层缺失时 fallback explainability", () => {
-  const view = hardRiskDisplay({
-    hard_risk_state: "CONFIRMED",
-    hard_risk_evaluation: "EVALUATED",
-    reason_codes: ["HARD_RISK_CONFIRMED"],
-    explainability: { authority_refs: ["hard-risk:di1-authority"] },
-  });
-  assert.equal(view.tone, "danger");
-  assert.deepEqual(view.authorityRefs, ["hard-risk:di1-authority"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -321,13 +369,13 @@ test("sibling Campaign：同一 security 不同策略的 hard risk 互不污染"
   const swing = hardRiskDisplay({
     hard_risk_state: "CONFIRMED",
     hard_risk_evaluation: "EVALUATED",
-    authority_refs: ["hard-risk:swing"],
-    reason_codes: ["HARD_RISK_CONFIRMED"],
+    hard_risk_authority_refs: ["hard-risk:swing"],
+    hard_risk_reason_codes: ["HARD_RISK_CONFIRMED"],
   });
   const short = hardRiskDisplay({
     hard_risk_state: "CLEAR",
     hard_risk_evaluation: "EVALUATED",
-    authority_refs: ["hard-risk:short"],
+    hard_risk_authority_refs: ["hard-risk:short"],
   });
   assert.equal(swing.tone, "danger");
   assert.equal(short.tone, "safe");
@@ -340,19 +388,19 @@ test("payload-driven：相同 payload 稳定，输入变化输出变化（refres
   const first = hardRiskDisplay({
     hard_risk_state: "UNKNOWN",
     hard_risk_evaluation: "UNKNOWN",
-    reason_codes: ["HARD_RISK_INPUT_UNKNOWN"],
+    hard_risk_reason_codes: ["HARD_RISK_INPUT_UNKNOWN"],
   });
   const second = hardRiskDisplay({
     hard_risk_state: "UNKNOWN",
     hard_risk_evaluation: "UNKNOWN",
-    reason_codes: ["HARD_RISK_INPUT_UNKNOWN"],
+    hard_risk_reason_codes: ["HARD_RISK_INPUT_UNKNOWN"],
   });
   assert.deepEqual(second, first, "相同 payload 必须产生相同视图");
 
   const refreshed = hardRiskDisplay({
     hard_risk_state: "CLEAR",
     hard_risk_evaluation: "EVALUATED",
-    authority_refs: ["hard-risk:now-clear"],
+    hard_risk_authority_refs: ["hard-risk:now-clear"],
   });
   assert.notEqual(refreshed.statusLabel, first.statusLabel);
   assert.equal(refreshed.showSafeGreen, true);

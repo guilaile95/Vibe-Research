@@ -38,12 +38,17 @@ function item(overrides) {
   };
 }
 
+// Hard Risk 只消费专属字段：hard_risk_state / hard_risk_evaluation /
+// hard_risk_reason_codes / hard_risk_authority_refs。
+// item.reason_codes 是 Campaign-level generic reason list（污染对照物）。
+
 const CONFIRMED_ITEM = item({
   visible_state: "REVIEW_REQUIRED",
   reason_codes: ["HARD_RISK_CONFIRMED", "REVIEW_BY_REACHED"],
   hard_risk_state: "CONFIRMED",
   hard_risk_evaluation: "EVALUATED",
-  authority_refs: ["hard-risk:fixture-confirmed"],
+  hard_risk_authority_refs: ["hard-risk:fixture-confirmed"],
+  hard_risk_reason_codes: ["HARD_RISK_CONFIRMED", "REVIEW_BY_REACHED"],
   campaign_id: `campaign_${"a".repeat(32)}`,
 });
 
@@ -52,7 +57,7 @@ const CLEAR_ITEM = item({
   reason_codes: ["CLEAN"],
   hard_risk_state: "CLEAR",
   hard_risk_evaluation: "EVALUATED",
-  authority_refs: ["hard-risk:fixture-clear"],
+  hard_risk_authority_refs: ["hard-risk:fixture-clear"],
   strategy: "SHORT",
   campaign_id: `campaign_${"b".repeat(32)}`,
 });
@@ -62,6 +67,7 @@ const NOT_EVALUATED_ITEM = item({
   reason_codes: ["HARD_RISK_NOT_EVALUATED", "COVERAGE_INCOMPLETE"],
   hard_risk_state: "NOT_EVALUATED",
   hard_risk_evaluation: "NOT_EVALUATED",
+  hard_risk_reason_codes: ["HARD_RISK_NOT_EVALUATED", "COVERAGE_INCOMPLETE"],
   security_code: "000001",
   strategy: "MEDIUM",
   campaign_id: `campaign_${"c".repeat(32)}`,
@@ -72,18 +78,30 @@ const ERROR_ITEM = item({
   reason_codes: ["HARD_RISK_UNKNOWN"],
   hard_risk_state: "UNKNOWN",
   hard_risk_evaluation: "ERROR",
+  hard_risk_reason_codes: ["HARD_RISK_EVALUATION_ERROR"],
   strategy: "SWING",
   campaign_id: `campaign_${"d".repeat(32)}`,
 });
 
-// BLOCKER 回归：CLEAR 但缺少 evaluation 与 authority refs
-// （contract 非法 → 页面绝不出现 safe green）。
+// BLOCKER 回归：CLEAR 但缺少专属 evaluation 与专属 authority refs
+// （generic 数据存在）→ 页面绝不出现 safe green。
 const MALFORMED_CLEAR_ITEM = item({
   visible_state: "BLOCKED_BY_DATA",
-  reason_codes: [],
+  reason_codes: ["CLEAN"],
   hard_risk_state: "CLEAR",
   strategy: "MEDIUM",
   campaign_id: `campaign_${"e".repeat(32)}`,
+});
+
+// 污染 fixture：generic reason 存在（含 HARD_RISK_CONFIRMED），
+// Hard Risk 专属 evidence 缺失 → 必须 fail closed，不得声称已确认。
+const GENERIC_ONLY_ITEM = item({
+  visible_state: "BLOCKED_BY_DATA",
+  reason_codes: ["HARD_RISK_CONFIRMED", "CRITICAL_DATA_BLOCKED"],
+  hard_risk_state: "CONFIRMED",
+  hard_risk_evaluation: "EVALUATED",
+  strategy: "SHORT",
+  campaign_id: `campaign_${"f".repeat(32)}`,
 });
 
 const SNAPSHOT = {
@@ -99,9 +117,10 @@ const SNAPSHOT = {
     NOT_EVALUATED_ITEM,
     ERROR_ITEM,
     MALFORMED_CLEAR_ITEM,
+    GENERIC_ONLY_ITEM,
   ],
   total_holdings: 0,
-  total_campaign_items: 5,
+  total_campaign_items: 6,
 };
 
 function startStaticServer(dir, port) {
@@ -189,8 +208,10 @@ async function run() {
 
     await page.goto(`http://127.0.0.1:${port}/decision-inbox`, { waitUntil: "networkidle" });
 
-    // 1. CONFIRMED：高优先级可见 + 文案安全
-    const confirmedPanel = page.locator(`[data-hard-risk-state="CONFIRMED"]`);
+    // 1. CONFIRMED：高优先级可见 + 文案安全（专属 evidence 齐备）
+    const confirmedPanel = page.locator(
+      `[data-hard-risk-state="CONFIRMED"][data-hard-risk-campaign="${CONFIRMED_ITEM.campaign_id}"]`,
+    );
     await confirmedPanel.waitFor();
     assert.equal(await confirmedPanel.getAttribute("data-hard-risk-tone"), "danger");
     assert.equal(await confirmedPanel.getAttribute("data-hard-risk-safe"), "false");
@@ -203,20 +224,36 @@ async function run() {
       assert.equal(confirmedText.includes(token), false, `CONFIRMED 面板不得含「${token}」`);
     }
 
-    // 3. CLEAR：显式 positive-proof（CLEAR+EVALUATED+refs）才显示安全
-    const clearPanel = page.locator(`[data-hard-risk-state="CLEAR"][data-hard-risk-safe="true"]`);
+    // 3. CLEAR：显式 positive-proof（CLEAR+EVALUATED+专属 refs）才显示安全
+    const clearPanel = page.locator(
+      `[data-hard-risk-state="CLEAR"][data-hard-risk-campaign="${CLEAR_ITEM.campaign_id}"]`,
+    );
     await clearPanel.waitFor();
     assert.equal(await clearPanel.getAttribute("data-hard-risk-tone"), "safe");
+    assert.equal(await clearPanel.getAttribute("data-hard-risk-safe"), "true");
     await clearPanel.getByText("已确认无 Hard Risk", { exact: false }).waitFor();
     await clearPanel.getByText("hard-risk:fixture-clear", { exact: false }).waitFor();
 
-    // BLOCKER 回归：CLEAR 缺少 evaluation/refs → fail closed，绝不安全
-    const malformedClearPanel = page.locator(`[data-hard-risk-state="CLEAR"][data-hard-risk-safe="false"]`);
+    // BLOCKER 回归：CLEAR 缺少专属 evaluation/refs（generic CLEAN 存在）→ fail closed
+    const malformedClearPanel = page.locator(
+      `[data-hard-risk-state="CLEAR"][data-hard-risk-campaign="${MALFORMED_CLEAR_ITEM.campaign_id}"]`,
+    );
     await malformedClearPanel.waitFor();
     assert.equal(await malformedClearPanel.getAttribute("data-hard-risk-tone"), "muted");
     await malformedClearPanel.getByText("Hard Risk 状态未知", { exact: false }).first().waitFor();
     const malformedText = await malformedClearPanel.innerText();
     assert.equal(malformedText.includes("已确认无 Hard Risk"), false, "malformed CLEAR 不得显示已确认安全");
+
+    // 污染回归：generic reason 存在（含 HARD_RISK_CONFIRMED）但专属 evidence 缺失
+    // → 不得声称已确认，必须 fail closed。
+    const genericOnlyPanel = page.locator(
+      `[data-hard-risk-state="CONFIRMED"][data-hard-risk-campaign="${GENERIC_ONLY_ITEM.campaign_id}"]`,
+    );
+    await genericOnlyPanel.waitFor();
+    assert.equal(await genericOnlyPanel.getAttribute("data-hard-risk-safe"), "false");
+    const genericOnlyText = await genericOnlyPanel.innerText();
+    assert.equal(genericOnlyText.includes("已确认 Hard Risk"), false, "generic reason 不得证明 CONFIRMED");
+    await genericOnlyPanel.getByText("Hard Risk 状态未知", { exact: false }).first().waitFor();
 
     // 4/5. NOT_EVALUATED / ERROR：一律不绿
     const notEvaluatedPanel = page.locator(`[data-hard-risk-state="NOT_EVALUATED"]`);
@@ -237,6 +274,12 @@ async function run() {
 
     // 8. provenance 可见
     await confirmedPanel.getByText("hard-risk:fixture-confirmed", { exact: false }).waitFor();
+
+    // anti-D/E：HardRiskPanel 不展示 generic reason / generic refs
+    // （CLEAR_ITEM 的 generic reason_codes=["CLEAN"] 只属于 lifecycle card 的
+    // Campaign-level explanation，不得进入 Hard Risk 面板）
+    const clearText = await clearPanel.innerText();
+    assert.equal(clearText.includes("CLEAN"), false, "generic reason 不得出现在 HardRiskPanel");
 
     // 9. sibling 隔离：同 security 600519 下 CONFIRMED(SWING) 与 CLEAR(SHORT) 互不影响
     assert.equal(await confirmedPanel.getAttribute("data-hard-risk-safe"), "false");

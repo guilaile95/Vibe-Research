@@ -9,10 +9,13 @@ import { reasonCodeLabel } from "@/lib/decisionInbox";
 /**
  * P0-HR1 HardRiskPanel：Decision Inbox Campaign 卡片的 Hard Risk 展示区。
  *
- * - 只消费 runtime payload（hard_risk_state / hard_risk_evaluation /
- *   reason_codes / authority_refs），不做任何风险推断。
+ * - 只消费 Hard Risk 专属 payload 字段（hard_risk_state /
+ *   hard_risk_evaluation / hard_risk_reason_codes / hard_risk_authority_refs）。
+ * - 严禁使用 item.reason_codes（Campaign-level generic）充当 Hard Risk
+ *   reasons；严禁使用 item.authority_refs / explainability.authority_refs
+ *   （generic projection provenance）充当 Hard Risk positive proof。
  * - 唯一绿色安全态 = backend 显式 positive-proof CLEAR；missing / null /
- *   UNKNOWN / NOT_EVALUATED / ERROR 一律不绿。
+ *   UNKNOWN / NOT_EVALUATED / ERROR / 证据不足一律不绿。
  * - CONFIRMED 只表达「需要重新审查 Decision / Action Envelope」，
  *   绝不出现卖出 / 退出 / 清仓 / EXIT 文案，也不产生任何交易动作。
  */
@@ -38,12 +41,13 @@ function ToneIcon({ tone }: { tone: HardRiskTone }) {
 }
 
 export function HardRiskPanel({ item }: { item: DecisionInboxCampaignItem }) {
+  // 只把 Hard Risk 专属字段交给 view-model；generic reason/authority
+  // （item.reason_codes / item.authority_refs / item.explainability）严禁传入。
   const view = hardRiskDisplay({
     hard_risk_state: item.hard_risk_state,
     hard_risk_evaluation: item.hard_risk_evaluation,
-    reason_codes: item.reason_codes,
-    authority_refs: item.authority_refs,
-    explainability: item.explainability,
+    hard_risk_reason_codes: item.hard_risk_reason_codes,
+    hard_risk_authority_refs: item.hard_risk_authority_refs,
   });
 
   return (
@@ -52,6 +56,7 @@ export function HardRiskPanel({ item }: { item: DecisionInboxCampaignItem }) {
       data-hard-risk-state={item.hard_risk_state ?? "MISSING"}
       data-hard-risk-tone={view.tone}
       data-hard-risk-safe={view.showSafeGreen ? "true" : "false"}
+      data-hard-risk-campaign={item.campaign_id}
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-muted-foreground">Hard Risk</span>
