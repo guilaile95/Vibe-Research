@@ -2018,6 +2018,11 @@ export interface DecisionInboxHoldingSetupItem {
   as_of: string;
 }
 
+/** P0-HR1：shared Hard Risk contract 的 hard_risk_state（DI1 已输出 4 态）。 */
+export type HardRiskState = "CLEAR" | "CONFIRMED" | "UNKNOWN" | "NOT_EVALUATED";
+/** P0-HR1：shared Hard Risk contract 的 hard_risk_evaluation（O lane 接入后输出）。 */
+export type HardRiskEvaluation = "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+
 export interface DecisionInboxCampaignItem {
   schema_version: string;
   visible_state: string;
@@ -2027,6 +2032,28 @@ export interface DecisionInboxCampaignItem {
   campaign_id: string;
   campaign_status: CampaignStatus;
   as_of: string;
+  /**
+   * P0-HR1：runtime 输出 hard_risk_state（DI1 已输出）。
+   * 缺失 / null → UI fail closed（按未知处理，绝不显示安全）。
+   */
+  hard_risk_state?: HardRiskState | null;
+  /**
+   * P0-HR1：runtime 输出 hard_risk_evaluation（contract 字段）。
+   * 缺失时 fail closed；ERROR 必须明确呈现失败。
+   */
+  hard_risk_evaluation?: HardRiskEvaluation | null;
+  /**
+   * P0-HR1：Hard Risk 专属 reason codes（O lane 输出）。
+   * 绝不使用 item.reason_codes（Campaign-level generic）充当 Hard Risk reasons。
+   */
+  hard_risk_reason_codes?: string[] | null;
+  /**
+   * P0-HR1：Hard Risk 专属 positive-proof authority refs（O lane 输出）。
+   * 绝不使用 item.authority_refs / explainability.authority_refs（generic
+   * projection provenance，可能含 Critical Data / Thesis / Decision）充当
+   * Hard Risk 证明。
+   */
+  hard_risk_authority_refs?: string[] | null;
 }
 
 export interface DecisionInboxSnapshot {
