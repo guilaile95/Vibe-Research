@@ -2018,6 +2018,11 @@ export interface DecisionInboxHoldingSetupItem {
   as_of: string;
 }
 
+/** P0-HR1：shared Hard Risk contract 的 hard_risk_state（DI1 已输出 4 态）。 */
+export type HardRiskState = "CLEAR" | "CONFIRMED" | "UNKNOWN" | "NOT_EVALUATED";
+/** P0-HR1：shared Hard Risk contract 的 hard_risk_evaluation（O lane 接入后输出）。 */
+export type HardRiskEvaluation = "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+
 export interface DecisionInboxCampaignItem {
   schema_version: string;
   visible_state: string;
@@ -2027,6 +2032,19 @@ export interface DecisionInboxCampaignItem {
   campaign_id: string;
   campaign_status: CampaignStatus;
   as_of: string;
+  /**
+   * P0-HR1：runtime 输出 hard_risk_state（DI1 已输出）。
+   * 缺失 / null → UI fail closed（按未知处理，绝不显示安全）。
+   */
+  hard_risk_state?: HardRiskState | null;
+  /**
+   * P0-HR1：runtime 输出 hard_risk_evaluation（contract 字段）。
+   * 缺失时按 hard_risk_state 语义展示；ERROR 必须明确呈现失败。
+   */
+  hard_risk_evaluation?: HardRiskEvaluation | null;
+  /** P0-HR1：provenance。当前 DI1 在 explainability.authority_refs；顶层供 O lane 接入。 */
+  authority_refs?: string[] | null;
+  explainability?: { authority_refs?: string[] | null } | null;
 }
 
 export interface DecisionInboxSnapshot {

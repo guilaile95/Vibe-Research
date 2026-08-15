@@ -47,6 +47,7 @@ import type {
 } from "@/lib/positionBootstrap";
 import { CampaignLifecycleCard } from "@/components/campaign/CampaignLifecycleCard";
 import { CampaignThesisActivationCard } from "@/components/campaign/CampaignThesisActivationCard";
+import { HardRiskPanel } from "@/components/campaign/HardRiskPanel";
 import { PageHeader } from "@/components/ui/PageHeader";
 
 /** 创建表单：security_code 固定自 holding，strategy 必选，显式确认 DRAFT。 */
@@ -809,6 +810,7 @@ export default function DecisionInbox() {
                     }}
                     onChanged={() => void refresh()}
                   />
+                  <HardRiskPanel item={item} />
                   <CampaignThesisActivationCard
                     campaignId={item.campaign_id}
                     securityCode={item.security_code}
