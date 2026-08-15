@@ -148,6 +148,12 @@ jobs:
           VIBE_RESEARCH_REVIEW_DB: ${{ runner.temp }}/review.db
         run: npm run test:e2e:thesis
 
+      - name: Run Current Thesis activation E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:current-thesis
+
   e2e-data-health-smoke:
     name: Playwright data health smoke E2E
     runs-on: ubuntu-latest

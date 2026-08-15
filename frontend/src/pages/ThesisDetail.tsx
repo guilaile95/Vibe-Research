@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft, Pencil, Save, X, Loader2, Lock, Plus, Link2, Unlink,
   RefreshCw, GitCompareArrows, History, ExternalLink, BookOpen,
@@ -9,8 +9,14 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import {
   api, ApiError,
   type ThesisAggregate, type ThesisRevisionListItem, type ThesisDiff,
-  type EvidenceRecord, type EvidenceLink,
+  type EvidenceRecord, type EvidenceLink, type CampaignStrategy,
+  type CampaignThesisBinding, type InvestmentThesis, type ThesisUpdateInput,
 } from "@/lib/api";
+import {
+  STRATEGY_HORIZON_RANGES,
+  canConfirmFormalThesis,
+  defaultHorizonForStrategy,
+} from "@/lib/campaignThesis";
 import { cn } from "@/lib/utils";
 
 const STATUSES = [
@@ -144,6 +150,10 @@ interface EditForm {
   catalysts: string[];
   risks: string[];
   invalidation_conditions: string[];
+  strategy: CampaignStrategy | "";
+  horizon_min: string;
+  horizon_max: string;
+  free_notes: string;
   change_summary: string;
 }
 
@@ -166,8 +176,44 @@ const renderValue = (v: unknown): string => {
   return String(v);
 };
 
+const toEditForm = (
+  thesis: InvestmentThesis,
+  campaignStrategy: CampaignStrategy | null,
+): EditForm => {
+  const strategy = thesis.strategy ?? campaignStrategy ?? "";
+  const fallback = strategy ? defaultHorizonForStrategy(strategy) : null;
+  const horizon = thesis.expected_horizon ?? fallback;
+  return {
+    title: thesis.title,
+    summary: thesis.summary,
+    status: thesis.status === "archived" ? "invalidated" : thesis.status,
+    core_claims: [...thesis.core_claims],
+    catalysts: [...thesis.catalysts],
+    risks: [...thesis.risks],
+    invalidation_conditions: [...thesis.invalidation_conditions],
+    strategy,
+    horizon_min: horizon ? String(horizon.min) : "",
+    horizon_max: horizon ? String(horizon.max) : "",
+    free_notes: thesis.free_notes ?? "",
+    change_summary: "",
+  };
+};
+
 export function ThesisDetail() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const campaignId = searchParams.get("campaign_id") || "";
+  const securityCode = searchParams.get("security_code") || "";
+  const strategyParam = searchParams.get("strategy");
+  const campaignStrategy = (["SHORT", "SWING", "MEDIUM"] as const).includes(
+    strategyParam as CampaignStrategy,
+  ) ? strategyParam as CampaignStrategy : null;
+  const returnParam = searchParams.get("return_to");
+  const returnTo = returnParam?.startsWith("/") && !returnParam.startsWith("//")
+    ? returnParam
+    : "/thesis";
+  const campaignContext = Boolean(campaignId && securityCode && campaignStrategy);
+  const setupError = searchParams.get("setup_error") === "1";
   const [aggregate, setAggregate] = useState<ThesisAggregate | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -177,6 +223,9 @@ export function ThesisDetail() {
   const [busy, setBusy] = useState(false);
   const [editErr, setEditErr] = useState<string | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
+  const [binding, setBinding] = useState<CampaignThesisBinding | null>(null);
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const [lifecycleErr, setLifecycleErr] = useState<string | null>(null);
 
   // 链接证据面板
   const [showLinkPanel, setShowLinkPanel] = useState(false);
@@ -238,9 +287,29 @@ export function ThesisDetail() {
     }
   }, [id]);
 
+  const loadBinding = useCallback(async () => {
+    if (!campaignContext) {
+      setBinding(null);
+      return;
+    }
+    try {
+      setBinding(await api.getCampaignThesisBinding(campaignId));
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        setBinding(null);
+        return;
+      }
+      setLifecycleErr(e instanceof ApiError ? e.message : "Campaign Thesis 绑定状态读取失败");
+    }
+  }, [campaignContext, campaignId]);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadBinding();
+  }, [loadBinding]);
 
   useEffect(() => {
     if (id && (activeTab === "history" || activeTab === "diff") && revisions.length === 0) {
@@ -249,6 +318,8 @@ export function ThesisDetail() {
   }, [id, activeTab, revisions.length, loadRevisions]);
 
   const archived = aggregate?.thesis.status === "archived";
+  const formalState = aggregate?.thesis.formal_state ?? null;
+  const contentLocked = archived || formalState === "confirmed" || formalState === "frozen";
 
   // 处理 409 冲突：保留用户输入，不覆盖；显示提示并提供 reload 按钮
   const handleConflict = (e: unknown): boolean => {
@@ -262,16 +333,7 @@ export function ThesisDetail() {
   // 编辑
   const startEdit = () => {
     if (!aggregate) return;
-    setForm({
-      title: aggregate.thesis.title,
-      summary: aggregate.thesis.summary,
-      status: aggregate.thesis.status === "archived" ? "invalidated" : aggregate.thesis.status,
-      core_claims: [...aggregate.thesis.core_claims],
-      catalysts: [...aggregate.thesis.catalysts],
-      risks: [...aggregate.thesis.risks],
-      invalidation_conditions: [...aggregate.thesis.invalidation_conditions],
-      change_summary: "",
-    });
+    setForm(toEditForm(aggregate.thesis, campaignStrategy));
     setEditErr(null);
     setConflict(null);
     setEditing(true);
@@ -280,11 +342,27 @@ export function ThesisDetail() {
   const saveEdit = async () => {
     if (!id || !aggregate || !form) return;
     if (!form.title.trim()) { setEditErr("请填写标题"); return; }
+    let formalFields: Pick<ThesisUpdateInput, "strategy" | "expected_horizon" | "free_notes"> = {};
+    if (aggregate.thesis.formal_state === "draft") {
+      if (!form.strategy) { setEditErr("请选择 Formal Thesis 策略"); return; }
+      const min = Number(form.horizon_min);
+      const max = Number(form.horizon_max);
+      const [rangeMin, rangeMax] = STRATEGY_HORIZON_RANGES[form.strategy];
+      if (!Number.isInteger(min) || !Number.isInteger(max) || min < rangeMin || max > rangeMax || max < min) {
+        setEditErr(`${form.strategy} 的预期周期必须在 ${rangeMin}-${rangeMax} 个交易日内`);
+        return;
+      }
+      formalFields = {
+        strategy: form.strategy,
+        expected_horizon: { unit: "TRADING_DAY", min, max, anchor: "FREEZE_AT" },
+        free_notes: form.free_notes.trim() || null,
+      };
+    }
     setBusy(true);
     setEditErr(null);
     setConflict(null);
     try {
-      const body = {
+      const body: ThesisUpdateInput = {
         title: form.title.trim(),
         summary: form.summary.trim(),
         status: form.status,
@@ -294,6 +372,7 @@ export function ThesisDetail() {
         invalidation_conditions: form.invalidation_conditions,
         expected_revision: aggregate.thesis.current_revision,
         change_summary: form.change_summary.trim() || "更新投资逻辑",
+        ...formalFields,
       };
       const r = await api.thesisUpdate(id, body);
       setAggregate(r);
@@ -305,6 +384,76 @@ export function ThesisDetail() {
       setEditErr(e instanceof ApiError ? e.message : "保存失败");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const beginFormalization = async () => {
+    if (!id || !aggregate || aggregate.thesis.formal_state !== null) return;
+    setLifecycleBusy(true);
+    setLifecycleErr(null);
+    setConflict(null);
+    try {
+      const next = await api.thesisBeginFormalization(id);
+      setAggregate(next);
+      setForm(toEditForm(next.thesis, campaignStrategy));
+      setEditing(true);
+      setRevisions([]);
+    } catch (e) {
+      if (handleConflict(e)) return;
+      setLifecycleErr(e instanceof ApiError ? e.message : "开始 Formal 化失败");
+    } finally {
+      setLifecycleBusy(false);
+    }
+  };
+
+  const confirmFormalization = async () => {
+    if (!id || !aggregate || !canConfirmFormalThesis(aggregate.thesis)) return;
+    if (!window.confirm("确认后内容将锁定；下一步仍需你显式冻结。是否确认这份 Formal Thesis？")) return;
+    setLifecycleBusy(true);
+    setLifecycleErr(null);
+    try {
+      const next = await api.thesisConfirm(id);
+      setAggregate(next);
+      setEditing(false);
+    } catch (e) {
+      if (handleConflict(e)) return;
+      setLifecycleErr(e instanceof ApiError ? e.message : "确认 Formal Thesis 失败");
+    } finally {
+      setLifecycleBusy(false);
+    }
+  };
+
+  const freezeFormalization = async () => {
+    if (!id || !aggregate || aggregate.thesis.formal_state !== "confirmed") return;
+    if (!window.confirm("冻结会生成不可变的 Formal Original 版本。冻结后不可编辑，是否继续？")) return;
+    setLifecycleBusy(true);
+    setLifecycleErr(null);
+    setConflict(null);
+    try {
+      await api.thesisFreeze(id, aggregate.thesis.current_revision);
+      setAggregate(await api.thesisGet(id));
+      setRevisions([]);
+    } catch (e) {
+      if (handleConflict(e)) return;
+      setLifecycleErr(e instanceof ApiError ? e.message : "冻结 Formal Thesis 失败");
+    } finally {
+      setLifecycleBusy(false);
+    }
+  };
+
+  const bindToCampaign = async () => {
+    if (!id || !aggregate || !campaignContext || binding) return;
+    if (aggregate.thesis.formal_state !== "frozen") return;
+    if (!window.confirm(`绑定到 Campaign ${securityCode} 后不可更换。是否确认建立不可变绑定？`)) return;
+    setLifecycleBusy(true);
+    setLifecycleErr(null);
+    try {
+      setBinding(await api.bindCampaignThesis(campaignId, id));
+    } catch (e) {
+      if (handleConflict(e)) return;
+      setLifecycleErr(e instanceof ApiError ? e.message : "绑定 Campaign 失败");
+    } finally {
+      setLifecycleBusy(false);
     }
   };
 
@@ -445,8 +594,8 @@ export function ThesisDetail() {
   if (loading && !aggregate) {
     return (
       <div>
-        <Link to="/thesis" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-4 w-4" /> 投资逻辑
+        <Link to={returnTo} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="h-4 w-4" /> {campaignContext ? "返回决策待办" : "投资逻辑"}
         </Link>
         <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
           <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 加载中…
@@ -458,8 +607,8 @@ export function ThesisDetail() {
   if (err && !aggregate) {
     return (
       <div>
-        <Link to="/thesis" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-4 w-4" /> 投资逻辑
+        <Link to={returnTo} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="h-4 w-4" /> {campaignContext ? "返回决策待办" : "投资逻辑"}
         </Link>
         <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
           {err}
@@ -473,9 +622,15 @@ export function ThesisDetail() {
 
   return (
     <div>
-      <Link to="/thesis" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="h-4 w-4" /> 投资逻辑
+      <Link to={returnTo} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+        <ArrowLeft className="h-4 w-4" /> {campaignContext ? "返回决策待办" : "投资逻辑"}
       </Link>
+
+      {setupError && (
+        <div className="mb-4 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-warning">
+          基础 Thesis 已创建，但 Formal 草稿设置未全部完成。请核对并显式继续，不会自动确认、冻结或绑定。
+        </div>
+      )}
 
       {archived && (
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-warning">
@@ -508,14 +663,15 @@ export function ThesisDetail() {
             <div className="flex items-center gap-2">
               <button
                 onClick={startEdit}
-                disabled={archived || busy}
+                disabled={contentLocked || busy}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-border/50 px-3 py-1.5 text-sm text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-50"
               >
                 <Pencil className="h-4 w-4" /> 编辑
               </button>
               <button
                 onClick={archive}
-                disabled={archived || busy}
+                disabled={archived || busy || formalState !== null}
+                title={formalState !== null ? "Formal Thesis 使用独立生命周期，不通过 legacy 归档入口处理" : undefined}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-warning/30 px-3 py-1.5 text-sm text-muted-foreground hover:border-warning hover:text-warning disabled:opacity-50"
               >
                 <Lock className="h-4 w-4" /> 归档
@@ -530,6 +686,85 @@ export function ThesisDetail() {
           {err}
         </div>
       )}
+
+      <GlassCard className="mb-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">Formal Thesis 生命周期</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              状态：{t.formal_state ?? "legacy"} · 当前 v{t.current_revision} · 冻结版本 {t.frozen_revision ? `v${t.frozen_revision}` : "—"}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              策略：{t.strategy ?? "—"} · 预期周期：{t.expected_horizon
+                ? `${t.expected_horizon.min}-${t.expected_horizon.max} 个交易日`
+                : "—"} · 更新：{fmtDate(t.updated_at)}
+            </p>
+            {campaignContext && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Campaign：{securityCode} / {campaignStrategy} · 绑定：{binding
+                  ? binding.thesis_id === t.id ? "当前 Thesis（不可变）" : `其他 Thesis ${binding.thesis_id}`
+                  : "未绑定"}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {t.formal_state === null && (
+              <button
+                type="button"
+                onClick={beginFormalization}
+                disabled={lifecycleBusy || archived}
+                className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                开始 Formal 化
+              </button>
+            )}
+            {t.formal_state === "draft" && (
+              <button
+                type="button"
+                onClick={confirmFormalization}
+                disabled={lifecycleBusy || editing || !canConfirmFormalThesis(t)}
+                className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                确认 Formal Thesis
+              </button>
+            )}
+            {t.formal_state === "confirmed" && (
+              <button
+                type="button"
+                onClick={freezeFormalization}
+                disabled={lifecycleBusy}
+                className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                冻结 Formal Original
+              </button>
+            )}
+            {t.formal_state === "frozen" && campaignContext && !binding && (
+              <button
+                type="button"
+                onClick={bindToCampaign}
+                disabled={lifecycleBusy || t.strategy !== campaignStrategy || t.subject_id !== securityCode}
+                className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                绑定到当前 Campaign
+              </button>
+            )}
+            {binding?.thesis_id === t.id && (
+              <Link to={returnTo} className="rounded-lg border border-success/30 px-3 py-1.5 text-sm text-success hover:bg-success/10">
+                返回 Decision Inbox
+              </Link>
+            )}
+          </div>
+        </div>
+        {t.formal_state === "draft" && !canConfirmFormalThesis(t) && (
+          <p className="mt-3 text-xs text-warning">
+            确认门尚未满足：需要 active 状态、3-5 条核心论点、策略及合法预期周期。先编辑并保存草稿。
+          </p>
+        )}
+        {t.formal_state === "frozen" && campaignContext && t.strategy !== campaignStrategy && (
+          <p className="mt-3 text-xs text-warning">Thesis 策略与 Campaign 不一致，后端将拒绝绑定。</p>
+        )}
+        {lifecycleErr && <p className="mt-3 text-sm text-destructive" role="alert">{lifecycleErr}</p>}
+      </GlassCard>
 
       {/* Tab 切换 */}
       <div className="mb-4 flex items-center gap-1 border-b border-border/30">
@@ -687,6 +922,63 @@ export function ThesisDetail() {
                       className={`${inputCls} resize-y`}
                     />
                   </label>
+                  {t.formal_state === "draft" && (
+                    <div className="sm:col-span-2 rounded-lg border border-primary/20 bg-primary/5 p-3">
+                      <p className="text-xs font-medium">Formal 设置</p>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                        <label className={labelCls}>
+                          策略
+                          <select
+                            value={form?.strategy ?? ""}
+                            disabled={campaignContext}
+                            onChange={(e) => {
+                              const strategy = e.target.value as CampaignStrategy | "";
+                              const horizon = strategy ? defaultHorizonForStrategy(strategy) : null;
+                              setForm((p) => p ? {
+                                ...p,
+                                strategy,
+                                horizon_min: horizon ? String(horizon.min) : "",
+                                horizon_max: horizon ? String(horizon.max) : "",
+                              } : p);
+                            }}
+                            className={inputCls}
+                          >
+                            <option value="">请选择…</option>
+                            <option value="SHORT">SHORT</option>
+                            <option value="SWING">SWING</option>
+                            <option value="MEDIUM">MEDIUM</option>
+                          </select>
+                        </label>
+                        <label className={labelCls}>
+                          最短交易日
+                          <input
+                            type="number"
+                            value={form?.horizon_min ?? ""}
+                            onChange={(e) => setForm((p) => p ? { ...p, horizon_min: e.target.value } : p)}
+                            className={inputCls}
+                          />
+                        </label>
+                        <label className={labelCls}>
+                          最长交易日
+                          <input
+                            type="number"
+                            value={form?.horizon_max ?? ""}
+                            onChange={(e) => setForm((p) => p ? { ...p, horizon_max: e.target.value } : p)}
+                            className={inputCls}
+                          />
+                        </label>
+                        <label className={`${labelCls} sm:col-span-3`}>
+                          Formal 备注（可选）
+                          <textarea
+                            value={form?.free_notes ?? ""}
+                            onChange={(e) => setForm((p) => p ? { ...p, free_notes: e.target.value } : p)}
+                            rows={2}
+                            className={`${inputCls} resize-y`}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  )}
                   <div className="sm:col-span-2">
                     <ArrayEditor
                       label="核心论点"
@@ -761,7 +1053,7 @@ export function ThesisDetail() {
               </h3>
               <button
                 onClick={openLinkPanel}
-                disabled={archived || busy}
+                disabled={contentLocked || busy}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-2.5 py-1 text-xs text-primary hover:bg-primary/25 disabled:opacity-50"
               >
                 <Plus className="h-3.5 w-3.5" /> 关联证据
@@ -921,14 +1213,14 @@ export function ThesisDetail() {
                         <div className="mt-2 flex items-center justify-end gap-2">
                           <button
                             onClick={() => startStanceEdit(link)}
-                            disabled={archived || busy}
+                            disabled={contentLocked || busy}
                             className="inline-flex items-center gap-1 rounded border border-border/50 px-2 py-1 text-[11px] text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-50"
                           >
                             <Pencil className="h-3 w-3" /> 修改立场
                           </button>
                           <button
                             onClick={() => unlink(link)}
-                            disabled={archived || busy}
+                            disabled={contentLocked || busy}
                             className="inline-flex items-center gap-1 rounded border border-border/50 px-2 py-1 text-[11px] text-muted-foreground hover:border-destructive/40 hover:text-destructive disabled:opacity-50"
                           >
                             <Unlink className="h-3 w-3" /> 取消关联

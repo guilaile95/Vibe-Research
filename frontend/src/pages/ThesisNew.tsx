@@ -3,7 +3,8 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Save, Loader2, Plus, X } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, type CampaignStrategy } from "@/lib/api";
+import { STRATEGY_HORIZON_RANGES, defaultHorizonForStrategy } from "@/lib/campaignThesis";
 
 const SUBJECT_TYPES = [
   { value: "stock", label: "个股" },
@@ -77,8 +78,22 @@ function ArrayEditor({ label, placeholder, items, onChange }: ArrayEditorProps) 
 export function ThesisNew() {
   const nav = useNavigate();
   const [searchParams] = useSearchParams();
-  const initSubjectType = (searchParams.get("subject_type") as "stock" | "sector" | "theme") || "stock";
-  const initSubjectId = searchParams.get("subject_id") || "";
+  const campaignId = searchParams.get("campaign_id") || "";
+  const campaignSecurityCode = searchParams.get("security_code") || "";
+  const strategyParam = searchParams.get("strategy");
+  const campaignStrategy = (["SHORT", "SWING", "MEDIUM"] as const).includes(
+    strategyParam as CampaignStrategy,
+  ) ? strategyParam as CampaignStrategy : null;
+  const returnParam = searchParams.get("return_to");
+  const returnTo = returnParam?.startsWith("/") && !returnParam.startsWith("//")
+    ? returnParam
+    : "/thesis";
+  const campaignContext = Boolean(campaignId && campaignSecurityCode && campaignStrategy);
+  const initSubjectType = campaignContext
+    ? "stock"
+    : (searchParams.get("subject_type") as "stock" | "sector" | "theme") || "stock";
+  const initSubjectId = campaignContext ? campaignSecurityCode : searchParams.get("subject_id") || "";
+  const initialHorizon = campaignStrategy ? defaultHorizonForStrategy(campaignStrategy) : null;
   const [form, setForm] = useState({
     subject_type: initSubjectType,
     subject_id: initSubjectId,
@@ -89,6 +104,10 @@ export function ThesisNew() {
     risks: [] as string[],
     invalidation_conditions: [] as string[],
     change_summary: "",
+    strategy: campaignStrategy,
+    horizon_min: initialHorizon ? String(initialHorizon.min) : "",
+    horizon_max: initialHorizon ? String(initialHorizon.max) : "",
+    free_notes: "",
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -100,8 +119,21 @@ export function ThesisNew() {
     if (!form.subject_id.trim()) { setErr("请填写主体代码/标识"); return; }
     if (!form.title.trim()) { setErr("请填写标题"); return; }
 
+    let formalHorizon: { min: number; max: number } | null = null;
+    if (campaignContext && form.strategy) {
+      const min = Number(form.horizon_min);
+      const max = Number(form.horizon_max);
+      const [rangeMin, rangeMax] = STRATEGY_HORIZON_RANGES[form.strategy];
+      if (!Number.isInteger(min) || !Number.isInteger(max) || min < rangeMin || max > rangeMax || max < min) {
+        setErr(`${form.strategy} 的预期周期必须在 ${rangeMin}-${rangeMax} 个交易日内`);
+        return;
+      }
+      formalHorizon = { min, max };
+    }
+
     setBusy(true);
     setErr(null);
+    let createdId: string | null = null;
     try {
       const body = {
         subject_type: form.subject_type,
@@ -115,8 +147,52 @@ export function ThesisNew() {
         change_summary: form.change_summary.trim() || "创建投资逻辑",
       };
       const r = await api.thesisCreate(body);
-      nav(`/thesis/${r.thesis.id}`);
+      createdId = r.thesis.id;
+
+      if (campaignContext && form.strategy && formalHorizon) {
+        const begun = await api.thesisBeginFormalization(r.thesis.id);
+        await api.thesisUpdate(r.thesis.id, {
+          title: begun.thesis.title,
+          summary: begun.thesis.summary,
+          status: begun.thesis.status === "archived" ? "invalidated" : begun.thesis.status,
+          core_claims: begun.thesis.core_claims,
+          catalysts: begun.thesis.catalysts,
+          risks: begun.thesis.risks,
+          invalidation_conditions: begun.thesis.invalidation_conditions,
+          expected_revision: begun.thesis.current_revision,
+          change_summary: "建立 Campaign Formal Thesis 草稿",
+          strategy: form.strategy,
+          expected_horizon: {
+            unit: "TRADING_DAY",
+            min: formalHorizon.min,
+            max: formalHorizon.max,
+            anchor: "FREEZE_AT",
+          },
+          free_notes: form.free_notes.trim() || null,
+        });
+      }
+
+      const detailQuery = campaignContext
+        ? `?${new URLSearchParams({
+          campaign_id: campaignId,
+          security_code: campaignSecurityCode,
+          strategy: campaignStrategy!,
+          return_to: returnTo,
+        }).toString()}`
+        : "";
+      nav(`/thesis/${r.thesis.id}${detailQuery}`);
     } catch (e) {
+      if (createdId && campaignContext) {
+        const query = new URLSearchParams({
+          campaign_id: campaignId,
+          security_code: campaignSecurityCode,
+          strategy: campaignStrategy!,
+          return_to: returnTo,
+          setup_error: "1",
+        });
+        nav(`/thesis/${createdId}?${query.toString()}`);
+        return;
+      }
       setErr(e instanceof ApiError ? e.message : "保存失败");
     } finally {
       setBusy(false);
@@ -125,8 +201,8 @@ export function ThesisNew() {
 
   return (
     <div>
-      <Link to="/thesis" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="h-4 w-4" /> 投资逻辑
+      <Link to={returnTo} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+        <ArrowLeft className="h-4 w-4" /> {campaignContext ? "返回决策待办" : "投资逻辑"}
       </Link>
 
       <PageHeader title="新建投资逻辑" subtitle="结构化记录你的核心论点、催化剂与失效条件；关联证据后形成可追溯的版本化账本。" />
@@ -143,6 +219,7 @@ export function ThesisNew() {
             主体类型 <span className="text-destructive">*</span>
             <select
               value={form.subject_type}
+              disabled={campaignContext}
               onChange={(e) => set("subject_type", e.target.value as "stock" | "sector" | "theme")}
               className={inputCls}
             >
@@ -155,11 +232,57 @@ export function ThesisNew() {
             主体代码/标识 <span className="text-destructive">*</span>
             <input
               value={form.subject_id}
+              disabled={campaignContext}
               onChange={(e) => set("subject_id", e.target.value)}
               placeholder="如 600519 / humanoid"
               className={inputCls}
             />
           </label>
+          {campaignContext && form.strategy && (
+            <div className="sm:col-span-2 rounded-lg border border-primary/20 bg-primary/5 p-3">
+              <p className="text-xs font-medium">Campaign Formal 设置</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                策略来自当前 Campaign，不可在这里改变；周期已按合法范围预填，请在保存前确认。
+              </p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                <label className={labelCls}>
+                  策略
+                  <input value={form.strategy} disabled className={inputCls} />
+                </label>
+                <label className={labelCls}>
+                  最短交易日
+                  <input
+                    type="number"
+                    value={form.horizon_min}
+                    min={STRATEGY_HORIZON_RANGES[form.strategy][0]}
+                    max={STRATEGY_HORIZON_RANGES[form.strategy][1]}
+                    onChange={(e) => set("horizon_min", e.target.value)}
+                    className={inputCls}
+                  />
+                </label>
+                <label className={labelCls}>
+                  最长交易日
+                  <input
+                    type="number"
+                    value={form.horizon_max}
+                    min={STRATEGY_HORIZON_RANGES[form.strategy][0]}
+                    max={STRATEGY_HORIZON_RANGES[form.strategy][1]}
+                    onChange={(e) => set("horizon_max", e.target.value)}
+                    className={inputCls}
+                  />
+                </label>
+                <label className={`${labelCls} sm:col-span-3`}>
+                  Formal 备注（可选）
+                  <textarea
+                    value={form.free_notes}
+                    onChange={(e) => set("free_notes", e.target.value)}
+                    rows={2}
+                    className={`${inputCls} resize-y`}
+                  />
+                </label>
+              </div>
+            </div>
+          )}
           <label className={`${labelCls} sm:col-span-2`}>
             <p className="text-xs text-muted-foreground/60 -mt-0.5 mb-1">
               市场由股票代码自动识别；新建逻辑初始状态为 active。
@@ -236,10 +359,10 @@ export function ThesisNew() {
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {busy ? "保存中…" : "保存"}
+            {busy ? "保存中…" : campaignContext ? "创建 Formal Thesis 草稿" : "保存"}
           </button>
           <Link
-            to="/thesis"
+            to={returnTo}
             className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-3 py-1.5 text-sm text-muted-foreground hover:border-primary/40"
           >
             取消

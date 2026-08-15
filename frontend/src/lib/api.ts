@@ -90,6 +90,9 @@ import type {
   ThesisDiff,
   LinkEvidenceInput,
   UpdateStanceInput,
+  FormalThesisSnapshot,
+  CampaignThesisBinding,
+  CampaignCurrentThesis,
   DataHealthOverviewResult,
   DataHealthDetailResult,
   DecisionEvidenceDetailResult,
@@ -718,6 +721,13 @@ export const api = {
   thesisCreate: (body: ThesisCreateInput) => request<ThesisAggregate>("/thesis", "POST", body),
   thesisGet: (id: string) => get<ThesisAggregate>(`/thesis/${id}`),
   thesisUpdate: (id: string, body: ThesisUpdateInput) => request<ThesisAggregate>(`/thesis/${id}`, "PUT", body),
+  // P0-CT1：Thesis Formal 化（LEGACY→DRAFT→CONFIRMED→FROZEN；端点与 backend 逐字一致）
+  thesisBeginFormalization: (id: string) =>
+    request<ThesisAggregate>(`/thesis/${encodeURIComponent(id)}/begin-formalization`, "POST"),
+  thesisConfirm: (id: string) =>
+    request<ThesisAggregate>(`/thesis/${encodeURIComponent(id)}/confirm`, "POST"),
+  thesisFreeze: (id: string, expected_revision: number) =>
+    request<FormalThesisSnapshot>(`/thesis/${encodeURIComponent(id)}/freeze`, "POST", { expected_revision }),
   thesisArchive: (id: string, expected_revision: number, change_summary?: string) => {
     const q = new URLSearchParams({ confirm: "true", expected_revision: String(expected_revision) });
     if (change_summary) q.set("change_summary", change_summary);
@@ -894,6 +904,11 @@ export const api = {
     transitionCampaign(campaignId, expectedStatus, toStatus),
   getCampaignTransitions: (campaignId: string) => getCampaignTransitions(campaignId),
   getCampaignNextActions: (campaignId: string) => getCampaignNextActions(campaignId),
+  // P0-CT1：Campaign ↔ Formal Thesis 绑定 / Current Thesis 投影
+  bindCampaignThesis: (campaignId: string, thesisId: string) =>
+    bindCampaignThesis(campaignId, thesisId),
+  getCampaignThesisBinding: (campaignId: string) => getCampaignThesisBinding(campaignId),
+  getCampaignCurrentThesis: (campaignId: string) => getCampaignCurrentThesis(campaignId),
   getDecisionInbox: () => getDecisionInbox(),
 };
 
@@ -1176,6 +1191,38 @@ export async function getCampaignNextActions(
 ): Promise<CampaignNextActions> {
   return get<CampaignNextActions>(
     `/campaigns/${encodeURIComponent(campaignId)}/next-actions`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// P0-CT1：Campaign ↔ Formal Thesis 绑定（POST 201）+ Current Thesis 投影（只读）
+// body 只提交 thesis_id；strategy 一致性由 backend 校验，前端不复制语义。
+// ---------------------------------------------------------------------------
+
+export async function bindCampaignThesis(
+  campaignId: string,
+  thesisId: string,
+): Promise<CampaignThesisBinding> {
+  return request<CampaignThesisBinding>(
+    `/campaigns/${encodeURIComponent(campaignId)}/thesis-binding`,
+    "POST",
+    { thesis_id: thesisId },
+  );
+}
+
+export async function getCampaignThesisBinding(
+  campaignId: string,
+): Promise<CampaignThesisBinding> {
+  return get<CampaignThesisBinding>(
+    `/campaigns/${encodeURIComponent(campaignId)}/thesis-binding`,
+  );
+}
+
+export async function getCampaignCurrentThesis(
+  campaignId: string,
+): Promise<CampaignCurrentThesis> {
+  return get<CampaignCurrentThesis>(
+    `/campaigns/${encodeURIComponent(campaignId)}/current-thesis`,
   );
 }
 

@@ -1182,6 +1182,17 @@ export interface EvidenceRecord {
   deleted_at: string | null;
 }
 
+// P0-CT1：Thesis 交易策略枚举（与 backend THESIS_STRATEGIES / Campaign strategy 逐字一致）
+export type ThesisStrategy = "SHORT" | "SWING" | "MEDIUM";
+
+// P0-CT1：预期持有周期（backend expected_horizon JSON 结构，anchor 恒为 FREEZE_AT）
+export interface ExpectedHorizon {
+  unit: "TRADING_DAY";
+  min: number;
+  max: number;
+  anchor: "FREEZE_AT";
+}
+
 // 投资逻辑（主表字段）
 export interface InvestmentThesis {
   id: string;
@@ -1198,6 +1209,16 @@ export interface InvestmentThesis {
   created_at: string;
   updated_at: string;
   current_revision: number;
+  // P0-CT1 Formal 化生命周期（与 backend 五态 matrix 逐字一致；legacy 行缺失视为 null）
+  formal_state: "draft" | "confirmed" | "frozen" | null;
+  formalization_started_at: string | null;
+  confirmed_at: string | null;
+  frozen_at: string | null;
+  frozen_revision: number | null;
+  archived_at: string | null;
+  strategy: ThesisStrategy | null;
+  expected_horizon: ExpectedHorizon | null;
+  free_notes: string | null;
 }
 
 // 证据关联（含证据快照字段）
@@ -1308,6 +1329,10 @@ export interface ThesisUpdateInput {
   invalidation_conditions: string[];
   expected_revision: number;
   change_summary?: string;
+  // P0-CT1 Formal 字段：仅 draft thesis 由服务端落库；legacy/confirmed/frozen 忽略（后端行为）。
+  strategy?: ThesisStrategy | null;
+  expected_horizon?: ExpectedHorizon | null;
+  free_notes?: string | null;
 }
 
 /** POST /api/thesis/{id}/evidence - 关联证据请求 */
@@ -1323,6 +1348,20 @@ export interface UpdateStanceInput {
   stance: "support" | "oppose" | "neutral";
   expected_revision: number;
   change_summary?: string;
+}
+
+// P0-CT1：Formal 化快照（POST /thesis/{id}/freeze 返回的 vNext flat snapshot：
+// 保留 thesis 嵌套聚合 + 顶层 flat 字段，后端两者为同一内容）。
+export interface FormalThesisSnapshot extends ThesisAggregate {
+  formal_state: "frozen";
+  formalization_started_at: string;
+  confirmed_at: string;
+  frozen_at: string;
+  frozen_revision: number;
+  archived_at: string | null;
+  status: "active" | "archived";
+  current_revision: number;
+  updated_at: string;
 }
 
 
@@ -1881,7 +1920,7 @@ export interface DerivedPositionsResult {
 // 前端绝不重新定义 transition graph；下一合法动作只来自 next-actions API。
 // ---------------------------------------------------------------------------
 
-export type CampaignStrategy = "SHORT" | "SWING" | "MEDIUM";
+export type CampaignStrategy = ThesisStrategy;
 
 export type CampaignStatus =
   | "DRAFT"
@@ -1921,6 +1960,49 @@ export interface CampaignNextActions {
   status: CampaignStatus;
   next_actions: CampaignStatus[];
 }
+
+// P0-CT1：Campaign ↔ Formal Thesis 不可变绑定（POST/GET /campaigns/{id}/thesis-binding）
+export interface CampaignThesisBinding {
+  campaign_id: string;
+  thesis_id: string;
+  thesis_revision_at_bind: number;
+  campaign_strategy_at_bind: CampaignStrategy;
+  bound_at: string;
+}
+
+/** GET /api/campaigns/{campaign_id}/current-thesis 只读投影中的 binding audit */
+export interface CampaignThesisBindingAudit {
+  thesis_revision_at_bind: number;
+  campaign_strategy_at_bind: CampaignStrategy;
+  bound_at: string;
+}
+
+/** 投影未就绪（已绑定但 thesis 未冻结）：只给 audit facts，不伪造 Formal Original */
+export interface CurrentThesisNotReady {
+  campaign_id: string;
+  thesis_id: string;
+  binding: CampaignThesisBindingAudit;
+  formal_state: string | null;
+  frozen_revision: number | null;
+  ready: false;
+  formal_status: "NOT_READY";
+  reason: string;
+}
+
+/** 投影就绪（frozen）：Formal Original（frozen_revision 快照）+ deltas + effective_state */
+export interface CurrentThesisReady {
+  campaign_id: string;
+  thesis_id: string;
+  binding: CampaignThesisBindingAudit;
+  frozen_revision: number;
+  original_snapshot: FormalThesisSnapshot;
+  deltas: unknown[];
+  effective_state: string;
+  ready: true;
+  formal_status: "READY";
+}
+
+export type CampaignCurrentThesis = CurrentThesisNotReady | CurrentThesisReady;
 
 // ---------------------------------------------------------------------------
 // Decision Inbox（P0-CS1）：只读快照，前端只展示 + 调用正式写 API。

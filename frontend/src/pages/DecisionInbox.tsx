@@ -46,6 +46,7 @@ import type {
   BootstrapPositionRow,
 } from "@/lib/positionBootstrap";
 import { CampaignLifecycleCard } from "@/components/campaign/CampaignLifecycleCard";
+import { CampaignThesisActivationCard } from "@/components/campaign/CampaignThesisActivationCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 
 /** 创建表单：security_code 固定自 holding，strategy 必选，显式确认 DRAFT。 */
@@ -762,16 +763,22 @@ export default function DecisionInbox() {
                 </p>
               </div>
               {setupCampaigns.map((campaign) => (
-                <CampaignLifecycleCard
-                  key={campaign.campaign_id}
-                  campaignId={campaign.campaign_id}
-                  securityCode={campaign.security_code}
-                  strategy={campaign.strategy}
-                  status={campaign.status}
-                  nextActions={nextActions[campaign.campaign_id] ?? null}
-                  setupContext
-                  onChanged={() => void refresh()}
-                />
+                <div key={campaign.campaign_id} className="space-y-2">
+                  <CampaignLifecycleCard
+                    campaignId={campaign.campaign_id}
+                    securityCode={campaign.security_code}
+                    strategy={campaign.strategy}
+                    status={campaign.status}
+                    nextActions={nextActions[campaign.campaign_id] ?? null}
+                    setupContext
+                    onChanged={() => void refresh()}
+                  />
+                  <CampaignThesisActivationCard
+                    campaignId={campaign.campaign_id}
+                    securityCode={campaign.security_code}
+                    strategy={campaign.strategy}
+                  />
+                </div>
               ))}
             </section>
           )}
@@ -785,20 +792,26 @@ export default function DecisionInbox() {
                 </p>
               </div>
               {snapshot.campaign_items.map((item) => (
-                <CampaignLifecycleCard
-                  key={item.campaign_id}
-                  campaignId={item.campaign_id}
-                  securityCode={item.security_code}
-                  strategy={item.strategy}
-                  status={item.campaign_status}
-                  nextActions={nextActions[item.campaign_id] ?? null}
-                  setupContext={false}
-                  decision={{
-                    visible_state: item.visible_state,
-                    reason_codes: item.reason_codes,
-                  }}
-                  onChanged={() => void refresh()}
-                />
+                <div key={item.campaign_id} className="space-y-2">
+                  <CampaignLifecycleCard
+                    campaignId={item.campaign_id}
+                    securityCode={item.security_code}
+                    strategy={item.strategy}
+                    status={item.campaign_status}
+                    nextActions={nextActions[item.campaign_id] ?? null}
+                    setupContext={false}
+                    decision={{
+                      visible_state: item.visible_state,
+                      reason_codes: item.reason_codes,
+                    }}
+                    onChanged={() => void refresh()}
+                  />
+                  <CampaignThesisActivationCard
+                    campaignId={item.campaign_id}
+                    securityCode={item.security_code}
+                    strategy={item.strategy}
+                  />
+                </div>
               ))}
             </section>
           )}
