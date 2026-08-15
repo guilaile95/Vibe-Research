@@ -36,6 +36,10 @@ import type {
   DailyReviewComparison,
   RadarData,
   PortfolioData,
+  PositionBootstrapInput,
+  PositionBootstrapPreview,
+  PositionBootstrapCommitResult,
+  DerivedPositionsResult,
   AccountProfileResponse,
   AccountProfileRequest,
   PortfolioAdviceResult,
@@ -520,6 +524,24 @@ export const api = {
   saveIntelDigest: (payload: IntelDigestSaveIn, signal?: AbortSignal) =>
     request<IntelDigestSaveResult>("/intel-digests", "POST", payload, { signal }),
   portfolio: () => get<PortfolioData>("/portfolio"),
+  /**
+   * 账户初始化（P0-AB2）：仅复用 stable 既有 position reality authority。
+   * preview 零写；commit 由用户显式确认后才允许调用。
+   */
+  positionBootstrapPreview: (payload: PositionBootstrapInput) =>
+    request<PositionBootstrapPreview>(
+      "/position/bootstrap-preview",
+      "POST",
+      payload,
+    ),
+  positionBootstrapCommit: (payload: PositionBootstrapInput) =>
+    request<PositionBootstrapCommitResult>(
+      "/position/bootstrap-commit",
+      "POST",
+      payload,
+    ),
+  getDerivedPositions: () =>
+    get<DerivedPositionsResult>("/position/derived"),
   addHolding: (code: string, shares: number, cost: number) => request<PortfolioData>("/portfolio/holding", "POST", { code, shares, cost }),
   updateHolding: (code: string, shares: number, cost: number) =>
     request<PortfolioData>("/portfolio/holding", "PUT", { code, shares, cost }),
