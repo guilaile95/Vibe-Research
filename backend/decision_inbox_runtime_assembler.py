@@ -16,7 +16,11 @@
       → DI1 CampaignFacts → project_campaign
 
 本 Slice 明确不产生 false clean：
-- Hard Risk / Material Change 无授权 authority → 恒 NOT_EVALUATED。
+- Hard Risk 走 P0-HR1 port：identity exact + literal same-as-of 校验后透传给
+  RA1 / DI1；C 的 production evaluator 未完成时，production 默认端口显式返回
+  NOT_EVALUATED（无 authority 不声称已评估），integration 阶段注入 fake port
+  证明全链语义。
+- Material Change 无授权 authority → 恒 NOT_EVALUATED。
 - Formal Thesis / Frozen Decision 仅以 current-only 结构事实读取；
   RA1 的 FORMAL_THESIS / FORMAL_DECISION 维度无 same-as-of 适用性 authority，
   因此保持 NOT_EVALUATED（读取过记录 ≠ 完成评估）。
@@ -45,6 +49,7 @@ import decision_assurance_projection as ra
 import decision_inbox_projection as di
 import formal_thesis_projection as thesis_projection
 import frozen_decision_service as frozen_service
+import hard_risk_contract as hr
 import holdings_campaign_composition as composition
 from campaign_critical_data_projection import project_campaign_critical_data
 from fact_lake_store import FactLake, open_existing_fact_lake
@@ -235,8 +240,35 @@ def _production_frozen_decisions_reader(
             )
 
 
+def _production_hard_risk_evaluator(
+    definition: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """P0-HR1 production 默认端口：显式 NOT_EVALUATED 占位（fail closed）。
+
+    C 的真实 evaluator 尚未接入。在 integration fan-in 绑定 C 之前，本端口
+    只返回契约合法的 NOT_EVALUATED 结果：绝不因「未接入」伪装成 CLEAR，
+    也绝不猜测 C 的内部 API。identity / as_of 从调用方 definition 原样携带。
+    """
+    return {
+        "schema_version": hr.SCHEMA_VERSION,
+        "policy_version": hr.POLICY_VERSION_V01,
+        "security_code": definition["security_code"],
+        "strategy": definition["strategy"],
+        "campaign_id": definition["campaign_id"],
+        "as_of": definition["as_of"],
+        "hard_risk_state": "NOT_EVALUATED",
+        "hard_risk_evaluation": "NOT_EVALUATED",
+        "reason_codes": ["HARD_RISK_NOT_EVALUATED"],
+        "authority_refs": [],
+    }
+
+
 CapabilityEvaluator = Callable[
     [FactLake | None, Mapping[str, Any]], Mapping[str, Any]
+]
+
+HardRiskEvaluator = Callable[
+    [Mapping[str, Any]], Mapping[str, Any]
 ]
 
 
@@ -248,6 +280,10 @@ class RuntimePorts:
     price_reference 读 Fact Lake；market_sector / disclosures / financials
     走既有真实业务读取路径。NOT_EVALUATED 仍是合法结果（数据缺失 /
     applicability 未解决 / 未到评估时点），绝不强制 USABLE。
+
+    hard_risk_evaluator（P0-HR1）接收含 security_code / strategy /
+    campaign_id / as_of 的 definition，返回 hard_risk_contract 契约结果；
+    production 默认在 C 接入前显式返回 NOT_EVALUATED（fail closed）。
     """
 
     composition_reader: Callable[[], Mapping[str, Any]]
@@ -262,6 +298,7 @@ class RuntimePorts:
     financials_evaluator: CapabilityEvaluator = (
         _production_financials_evaluator
     )
+    hard_risk_evaluator: HardRiskEvaluator = _production_hard_risk_evaluator
     thesis_reader: Callable[[str], Mapping[str, Any]] = (
         thesis_projection.project_current_thesis
     )
@@ -319,6 +356,42 @@ def _validate_capability_result(
         str(result.get("as_of", "")), as_of, label="capability result"
     )
     return result
+
+
+def _evaluate_hard_risk(
+    ports: RuntimePorts,
+    definition: Mapping[str, Any],
+) -> hr.HardRiskEvaluation:
+    """调用 HR1 port 并执行 identity / as_of / contract 三闸校验（fail closed）。
+
+    - evaluator 自身异常（IO / 网络 / 编程错误）→ 整体 fail closed（500）。
+      ERROR 状态的契约表达由 evaluator 显式返回 UNKNOWN/ERROR 结果承担，
+      组装层不猜 C 的异常类型（唯一共享界面是 hard_risk_contract）。
+    - 返回结果违反 shared contract（非法 state/evaluation pair、缺 authority
+      refs、非法 identity 格式、额外字段等）→ integrity 错误（500）。
+    - security_code / strategy / campaign_id 与调用方不逐字一致，或 as_of 非
+      literal 相同 → integrity 错误（与 DDA/CCD/RA 同款校验，防跨 Campaign
+      串结果与跨时点复用）。
+    """
+    try:
+        raw = ports.hard_risk_evaluator(definition)
+    except Exception as exc:
+        raise DecisionInboxRuntimeError(
+            f"Hard Risk evaluator 失败（campaign {definition['campaign_id']}）"
+        ) from exc
+    try:
+        normalized = hr.hard_risk_evaluation_from_mapping(raw)
+    except hr.HardRiskContractError as exc:
+        raise DecisionInboxRuntimeIntegrityError(
+            f"Hard Risk 结果违反 shared contract: {exc}"
+        ) from exc
+    _assert_same_identity(
+        normalized.to_dict(), definition, label="Hard Risk"
+    )
+    _assert_literal_as_of(
+        normalized.as_of, definition["as_of"], label="Hard Risk"
+    )
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +588,8 @@ def _project_campaign_item(
     _assert_same_identity(ccd, definition, label="CCD")
     _assert_literal_as_of(ccd["as_of"], as_of, label="CCD")
 
+    hard_risk = _evaluate_hard_risk(ports, definition)
+
     assurance = _require_mapping(
         ra.project_decision_assurance(
             security_code=ccd["security_code"],
@@ -523,7 +598,7 @@ def _project_campaign_item(
             # current-only：无 same-as-of 适用性 authority，不得声称已评估
             formal_thesis_evaluation="NOT_EVALUATED",
             formal_decision_evaluation="NOT_EVALUATED",
-            hard_risk_evaluation="NOT_EVALUATED",
+            hard_risk_evaluation=hard_risk.hard_risk_evaluation,
             material_change_evaluation="NOT_EVALUATED",
             critical_data_evaluation=ccd["critical_data_evaluation"],
             as_of=ccd["as_of"],
@@ -549,6 +624,7 @@ def _project_campaign_item(
     confidence = _decision_confidence(latest_frozen, latest_raw)
 
     authority_refs = list(ccd.get("authority_refs", []))
+    authority_refs.extend(hard_risk.authority_refs)
     facts = di.CampaignFacts(
         security_code=campaign["security_code"],
         strategy=campaign["strategy"],
@@ -557,7 +633,7 @@ def _project_campaign_item(
         thesis_state=thesis_state,
         current_thesis=current_thesis,
         latest_frozen_decision=latest_frozen,
-        hard_risk_state="NOT_EVALUATED",
+        hard_risk_state=hard_risk.hard_risk_state,
         material_change_state="NOT_EVALUATED",
         critical_data_state=ccd["critical_data_state"],
         critical_data_evaluation=ccd["critical_data_evaluation"],

@@ -22,6 +22,7 @@ import critical_data_price_reference_adapter as price_adapter
 import decision_inbox_projection as di
 import decision_inbox_runtime_assembler as runtime
 import formal_thesis_projection as thesis_projection
+import hard_risk_contract as hr
 
 
 AS_OF = "2026-08-13T04:00:00.000000Z"
@@ -197,6 +198,76 @@ def _capability_result(dependency_id: str, state: str, as_of: str) -> dict:
     }
 
 
+def _hr_result(
+    definition: dict,
+    *,
+    state: str,
+    evaluation: str,
+    reasons: list[str],
+    refs: list[str],
+) -> dict:
+    """构造契约合法 HardRiskEvaluation 形状（identity/as_of 取自 definition）。"""
+    return {
+        "schema_version": hr.SCHEMA_VERSION,
+        "policy_version": hr.POLICY_VERSION_V01,
+        "security_code": definition["security_code"],
+        "strategy": definition["strategy"],
+        "campaign_id": definition["campaign_id"],
+        "as_of": definition["as_of"],
+        "hard_risk_state": state,
+        "hard_risk_evaluation": evaluation,
+        "reason_codes": reasons,
+        "authority_refs": refs,
+    }
+
+
+def _hr_clear(definition: dict) -> dict:
+    return _hr_result(
+        definition, state="CLEAR", evaluation="EVALUATED",
+        reasons=[], refs=["hard-risk:fake-clear"],
+    )
+
+
+def _hr_confirmed(definition: dict) -> dict:
+    return _hr_result(
+        definition, state="CONFIRMED", evaluation="EVALUATED",
+        reasons=["HARD_RISK_CONFIRMED"], refs=["hard-risk:fake-confirmed"],
+    )
+
+
+def _hr_unknown(definition: dict) -> dict:
+    return _hr_result(
+        definition, state="UNKNOWN", evaluation="UNKNOWN",
+        reasons=["HARD_RISK_INPUT_UNKNOWN"], refs=[],
+    )
+
+
+def _hr_not_evaluated(definition: dict) -> dict:
+    return _hr_result(
+        definition, state="NOT_EVALUATED", evaluation="NOT_EVALUATED",
+        reasons=["HARD_RISK_NOT_EVALUATED"], refs=[],
+    )
+
+
+def _hr_error(definition: dict) -> dict:
+    return _hr_result(
+        definition, state="UNKNOWN", evaluation="ERROR",
+        reasons=["HARD_RISK_EVALUATION_ERROR"], refs=[],
+    )
+
+
+def _market_usable(_lake, definition: dict) -> dict:
+    return _capability_result(
+        market_sector_adapter.DEPENDENCY_ID, "USABLE", definition["as_of"]
+    )
+
+
+def _disclosures_usable(_lake, definition: dict) -> dict:
+    return _capability_result(
+        disclosures_adapter.DEPENDENCY_ID, "USABLE", definition["as_of"]
+    )
+
+
 def _ports(
     *,
     composition_reader=None,
@@ -206,6 +277,7 @@ def _ports(
     market_sector_evaluator=_market_sector_not_evaluated,
     disclosures_evaluator=_disclosures_not_evaluated,
     financials_evaluator=_financials_not_evaluated,
+    hard_risk_evaluator=_hr_not_evaluated,
     lake_provider=lambda: _FAKE_LAKE,
 ):
     calls = {"thesis": [], "frozen": [], "lake": [], "price": [],
@@ -249,6 +321,9 @@ def _ports(
         calls["financials"].append(True)
         return financials_evaluator(lake, definition)
 
+    def _hard_risk(definition):
+        return hard_risk_evaluator(definition)
+
     ports = runtime.RuntimePorts(
         composition_reader=composition_reader or (lambda: _composition()),
         dependency_resolver=dda.resolve_strategy_dependencies,
@@ -256,6 +331,7 @@ def _ports(
         market_sector_evaluator=_market,
         disclosures_evaluator=_disclosures,
         financials_evaluator=_financials,
+        hard_risk_evaluator=_hard_risk,
         thesis_reader=_thesis,
         frozen_decisions_reader=_frozen_port,
         lake_provider=_lake,
@@ -658,3 +734,343 @@ class TestDeterminism:
         assert result["as_of"] == AS_OF
         item = result["campaign_items"][0]
         assert item["as_of"] == AS_OF
+
+
+# ---------------------------------------------------------------------------
+# P0-HR1 — Hard Risk → Decision Inbox runtime integration
+# ---------------------------------------------------------------------------
+
+def _capture_assurance(monkeypatch) -> dict:
+    """包装 RA1，捕获 assembler 传入的维度状态（验证不复制/不降级）。"""
+    captured: dict = {}
+    real = runtime.ra.project_decision_assurance
+
+    def spy(**kwargs):
+        captured.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(runtime.ra, "project_decision_assurance", spy)
+    return captured
+
+
+def _swing_item(ports):
+    return _assemble(ports)["campaign_items"][0]
+
+
+class TestHardRiskIntegration:
+    """A/C：CLEAR + EVALUATED → RA EVALUATED → DI 收到 CLEAR。"""
+
+    def test_clear_maps_evaluated_and_di_receives_clear(self, monkeypatch):
+        captured = _capture_assurance(monkeypatch)
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=_hr_clear,
+        )
+        item = _swing_item(ports)
+        assert item["hard_risk_state"] == "CLEAR"
+        assert captured["hard_risk_evaluation"] == "EVALUATED"
+        # CLEAR 不产生任何 HARD_RISK reason；CLEAR 也不强制 NO_ACTION_REQUIRED
+        # （critical data 仍 NOT_EVALUATED → BLOCKED_BY_DATA，DI1 自己决定）
+        assert not any("HARD_RISK" in code for code in item["reason_codes"])
+        assert item["visible_state"] == "BLOCKED_BY_DATA"
+        # 正证明 refs 并入 explainability（不丢失 CLEAR 的依据）
+        assert "hard-risk:fake-clear" in item["explainability"]["authority_refs"]
+
+    def test_clear_is_never_in_uncertainties(self, monkeypatch):
+        _capture_assurance(monkeypatch)
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=_hr_clear,
+        )
+        item = _swing_item(ports)
+        uncertainties = " ".join(item["explainability"]["uncertainties"])
+        assert "hard_risk" not in uncertainties
+
+    """B：CONFIRMED + EVALUATED → DI1 REVIEW_REQUIRED（既有 reason 语义）。"""
+
+    def test_confirmed_maps_review_required_via_di1(self, monkeypatch):
+        captured = _capture_assurance(monkeypatch)
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=_hr_confirmed,
+        )
+        item = _swing_item(ports)
+        assert item["hard_risk_state"] == "CONFIRMED"
+        assert captured["hard_risk_evaluation"] == "EVALUATED"
+        assert di.REASON_HARD_RISK_CONFIRMED in item["reason_codes"]
+        assert item["visible_state"] == "REVIEW_REQUIRED"
+        assert (
+            item["explainability"]["next_workflow_action"]
+            == "REVIEW_FORMAL_DECISION"
+        )
+
+    """C/D：UNKNOWN / NOT_EVALUATED 绝不映射 CLEAR，绝不 clean。"""
+
+    def test_unknown_never_maps_clear(self, monkeypatch):
+        captured = _capture_assurance(monkeypatch)
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=_hr_unknown,
+            market_sector_evaluator=_market_usable,
+            disclosures_evaluator=_disclosures_usable,
+        )
+        item = _swing_item(ports)
+        assert item["hard_risk_state"] == "UNKNOWN"
+        assert captured["hard_risk_evaluation"] == "UNKNOWN"
+        assert di.REASON_HARD_RISK_UNKNOWN in item["reason_codes"]
+        assert item["visible_state"] != "NO_ACTION_REQUIRED"
+        assert item["visible_state"] != "REVIEW_REQUIRED"
+        assert item["hard_risk_state"] != "CLEAR"
+
+    def test_not_evaluated_never_maps_clear_and_coverage_incomplete(
+        self, monkeypatch
+    ):
+        captured = _capture_assurance(monkeypatch)
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=_hr_not_evaluated,
+            market_sector_evaluator=_market_usable,
+            disclosures_evaluator=_disclosures_usable,
+        )
+        item = _swing_item(ports)
+        assert item["hard_risk_state"] == "NOT_EVALUATED"
+        assert captured["hard_risk_evaluation"] == "NOT_EVALUATED"
+        assert di.REASON_HARD_RISK_NOT_EVALUATED in item["reason_codes"]
+        assert item["coverage_complete"] is False
+        assert item["visible_state"] != "NO_ACTION_REQUIRED"
+        assert item["hard_risk_state"] != "CLEAR"
+
+    """E：ERROR 保持 ERROR（RA1 维度不降级成 UNKNOWN/CLEAR）。"""
+
+    def test_error_is_not_downgraded(self, monkeypatch):
+        captured = _capture_assurance(monkeypatch)
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=_hr_error,
+            market_sector_evaluator=_market_usable,
+            disclosures_evaluator=_disclosures_usable,
+        )
+        item = _swing_item(ports)
+        # 契约 pair：UNKNOWN + ERROR
+        assert item["hard_risk_state"] == "UNKNOWN"
+        # RA1 收到的是 ERROR 原值（绝不降级成 UNKNOWN/CLEAR）
+        assert captured["hard_risk_evaluation"] == "ERROR"
+        assert item["coverage_complete"] is False
+        assert di.REASON_COVERAGE_INCOMPLETE in item["reason_codes"]
+        assert item["visible_state"] != "NO_ACTION_REQUIRED"
+
+    """F：malformed contract → fail closed（integrity）。"""
+
+    def test_extra_field_malformed_contract_fails_closed(self):
+        def malformed(definition):
+            return {**_hr_clear(definition), "unexpected": True}
+
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=malformed,
+        )
+        with pytest.raises(runtime.DecisionInboxRuntimeIntegrityError):
+            _assemble(ports)
+
+    def test_illegal_state_evaluation_pair_fails_closed(self):
+        def illegal(definition):
+            return _hr_result(
+                definition, state="CLEAR", evaluation="NOT_EVALUATED",
+                reasons=["INVALID_PAIR"], refs=["hard-risk:fake"],
+            )
+
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=illegal,
+        )
+        with pytest.raises(runtime.DecisionInboxRuntimeIntegrityError):
+            _assemble(ports)
+
+    """G/H/I：identity 不逐字一致 → fail closed。"""
+
+    @pytest.mark.parametrize(
+        "patch",
+        [
+            {"security_code": "000001"},
+            {"strategy": "SHORT"},
+            {"campaign_id": "campaign_" + "b" * 32},
+        ],
+    )
+    def test_identity_mismatch_fails_closed(self, patch):
+        def wrong_identity(definition):
+            result = _hr_clear(definition)
+            result.update(patch)
+            return result
+
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=wrong_identity,
+        )
+        with pytest.raises(runtime.DecisionInboxRuntimeIntegrityError):
+            _assemble(ports)
+
+    """J：as_of 必须 literal 相同（同一时刻不同格式也拒绝）。"""
+
+    def test_as_of_literal_mismatch_fails_closed(self):
+        def wrong_as_of(definition):
+            result = _hr_clear(definition)
+            result["as_of"] = "2026-08-13T04:00:00Z"
+            return result
+
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=wrong_as_of,
+        )
+        with pytest.raises(runtime.DecisionInboxRuntimeIntegrityError):
+            _assemble(ports)
+
+    """K：同 security 兄弟 Campaign 各自独立评估（identity 不串）。"""
+
+    def test_same_security_sibling_campaign_isolation(self):
+        campaign_swing = _campaign(
+            campaign_id=CAMPAIGN_A, strategy=STRATEGY
+        )
+        campaign_medium = _campaign(
+            campaign_id=CAMPAIGN_B, strategy=STRATEGY_MEDIUM
+        )
+        seen: list[tuple[str, str, str]] = []
+        states_by_campaign = {
+            CAMPAIGN_A: ("CLEAR", "EVALUATED", [], ["hard-risk:a"]),
+            CAMPAIGN_B: ("CONFIRMED", "EVALUATED", ["HARD_RISK_CONFIRMED"],
+                         ["hard-risk:b"]),
+        }
+
+        def evaluator(definition):
+            seen.append(
+                (
+                    definition["security_code"],
+                    definition["strategy"],
+                    definition["campaign_id"],
+                )
+            )
+            state, evaluation, reasons, refs = states_by_campaign[
+                definition["campaign_id"]
+            ]
+            return _hr_result(
+                definition, state=state, evaluation=evaluation,
+                reasons=reasons, refs=refs,
+            )
+
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [
+                    _composition_item(
+                        campaigns=[campaign_swing, campaign_medium]
+                    )
+                ]
+            ),
+            hard_risk_evaluator=evaluator,
+        )
+        items = _assemble(ports)["campaign_items"]
+        by_id = {item["campaign_id"]: item for item in items}
+        assert by_id[CAMPAIGN_A]["hard_risk_state"] == "CLEAR"
+        assert by_id[CAMPAIGN_B]["hard_risk_state"] == "CONFIRMED"
+        # 每个 evaluator 调用收到的 identity 与其 campaign 精确一致
+        assert (SECURITY, STRATEGY, CAMPAIGN_A) in seen
+        assert (SECURITY, STRATEGY_MEDIUM, CAMPAIGN_B) in seen
+
+    """L：CONFIRMED + Critical Data blocker → 既有 DI1 precedence 保持。"""
+
+    def test_confirmed_plus_critical_data_blocker_keeps_di1_precedence(self):
+        def broken_price(_lake, _definition):
+            raise price_adapter.PriceReferenceCapabilityError("broken")
+
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            price_evaluator=broken_price,
+            hard_risk_evaluator=_hr_confirmed,
+        )
+        item = _swing_item(ports)
+        assert item["hard_risk_state"] == "CONFIRMED"
+        assert di.REASON_HARD_RISK_CONFIRMED in item["reason_codes"]
+        assert di.REASON_CRITICAL_DATA_ERROR in item["reason_codes"]
+        # DI1 PHASE B：CONFIRMED 先于 generic data 层 → REVIEW_REQUIRED
+        assert item["visible_state"] == "REVIEW_REQUIRED"
+
+    """M：CONFIRMED 不产生 EXIT/SELL（action envelope 不越权）。"""
+
+    def test_confirmed_never_emits_exit_sell(self):
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=_hr_confirmed,
+        )
+        item = _swing_item(ports)
+        assert (
+            item["explainability"]["next_workflow_action"]
+            == "REVIEW_FORMAL_DECISION"
+        )
+        # 既有 frozen decision 的 next_best_action 不被覆盖
+        assert (
+            item["last_frozen_decision"]["previous_next_best_action"] == "HOLD"
+        )
+        serialized = str(item)
+        assert "EXIT" not in serialized
+        assert "SELL" not in serialized
+
+    """production 默认端口（C 未接入）：显式 NOT_EVALUATED，绝不猜 CLEAR。"""
+
+    def test_production_default_port_is_not_evaluated(self):
+        base, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            )
+        )
+        ports = runtime.RuntimePorts(
+            composition_reader=base.composition_reader,
+            dependency_resolver=dda.resolve_strategy_dependencies,
+            price_evaluator=base.price_evaluator,
+            market_sector_evaluator=base.market_sector_evaluator,
+            disclosures_evaluator=base.disclosures_evaluator,
+            financials_evaluator=base.financials_evaluator,
+            thesis_reader=base.thesis_reader,
+            frozen_decisions_reader=base.frozen_decisions_reader,
+            lake_provider=base.lake_provider,
+        )
+        item = _swing_item(ports)
+        assert item["hard_risk_state"] == "NOT_EVALUATED"
+        assert di.REASON_HARD_RISK_NOT_EVALUATED in item["reason_codes"]
+        assert item["hard_risk_state"] != "CLEAR"
+
+    """evaluator 自身异常 → 整体 fail closed（不猜 C 的异常类型）。"""
+
+    def test_evaluator_exception_fails_closed(self):
+        def broken(_definition):
+            raise RuntimeError("hard risk source down")
+
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=broken,
+        )
+        with pytest.raises(runtime.DecisionInboxRuntimeError):
+            _assemble(ports)
