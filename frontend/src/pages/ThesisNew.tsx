@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Save, Loader2, Plus, X } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { api, ApiError, type CampaignStrategy } from "@/lib/api";
+import { api, ApiError, type CampaignRecord, type CampaignStrategy } from "@/lib/api";
 import { STRATEGY_HORIZON_RANGES, defaultHorizonForStrategy } from "@/lib/campaignThesis";
 
 const SUBJECT_TYPES = [
@@ -75,25 +75,49 @@ function ArrayEditor({ label, placeholder, items, onChange }: ArrayEditorProps) 
   );
 }
 
+const CAMPAIGN_STRATEGIES = ["SHORT", "SWING", "MEDIUM"] as const;
+
+function parseCampaignStrategy(value: string | null): CampaignStrategy | null {
+  return CAMPAIGN_STRATEGIES.includes(value as CampaignStrategy)
+    ? value as CampaignStrategy
+    : null;
+}
+
+function safeInternalReturnTo(value: string | null, fallback: string): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
+    return fallback;
+  }
+  if (typeof window === "undefined") return fallback;
+  try {
+    const parsed = new URL(value, window.location.origin);
+    if (parsed.origin !== window.location.origin) return fallback;
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return fallback;
+  }
+}
+
 export function ThesisNew() {
   const nav = useNavigate();
   const [searchParams] = useSearchParams();
   const campaignId = searchParams.get("campaign_id") || "";
-  const campaignSecurityCode = searchParams.get("security_code") || "";
+  const querySecurityCode = searchParams.get("security_code") || "";
   const strategyParam = searchParams.get("strategy");
-  const campaignStrategy = (["SHORT", "SWING", "MEDIUM"] as const).includes(
-    strategyParam as CampaignStrategy,
-  ) ? strategyParam as CampaignStrategy : null;
-  const returnParam = searchParams.get("return_to");
-  const returnTo = returnParam?.startsWith("/") && !returnParam.startsWith("//")
-    ? returnParam
-    : "/thesis";
-  const campaignContext = Boolean(campaignId && campaignSecurityCode && campaignStrategy);
-  const initSubjectType = campaignContext
+  const queryCampaignStrategy = parseCampaignStrategy(strategyParam);
+  const campaignContextRequested = Boolean(campaignId || querySecurityCode || strategyParam);
+  const returnTo = safeInternalReturnTo(searchParams.get("return_to"), "/thesis");
+  const [campaign, setCampaign] = useState<CampaignRecord | null>(null);
+  const [campaignStatus, setCampaignStatus] = useState<"idle" | "loading" | "ready" | "error">(
+    campaignContextRequested ? "loading" : "idle",
+  );
+  const [campaignError, setCampaignError] = useState<string | null>(null);
+  const campaignContext = campaignStatus === "ready" && campaign !== null;
+  const campaignContextBlocked = campaignContextRequested && !campaignContext;
+  const initSubjectType = campaignContextRequested
     ? "stock"
     : (searchParams.get("subject_type") as "stock" | "sector" | "theme") || "stock";
-  const initSubjectId = campaignContext ? campaignSecurityCode : searchParams.get("subject_id") || "";
-  const initialHorizon = campaignStrategy ? defaultHorizonForStrategy(campaignStrategy) : null;
+  const initSubjectId = campaignContextRequested ? querySecurityCode : searchParams.get("subject_id") || "";
+  const initialHorizon = queryCampaignStrategy ? defaultHorizonForStrategy(queryCampaignStrategy) : null;
   const [form, setForm] = useState({
     subject_type: initSubjectType,
     subject_id: initSubjectId,
@@ -104,7 +128,7 @@ export function ThesisNew() {
     risks: [] as string[],
     invalidation_conditions: [] as string[],
     change_summary: "",
-    strategy: campaignStrategy,
+    strategy: queryCampaignStrategy,
     horizon_min: initialHorizon ? String(initialHorizon.min) : "",
     horizon_max: initialHorizon ? String(initialHorizon.max) : "",
     free_notes: "",
@@ -112,20 +136,91 @@ export function ThesisNew() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!campaignContextRequested) {
+      setCampaign(null);
+      setCampaignStatus("idle");
+      setCampaignError(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!campaignId) {
+      setCampaign(null);
+      setCampaignStatus("error");
+      setCampaignError("Campaign 上下文缺少 campaign_id，已禁止 Formal Thesis setup。");
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setCampaign(null);
+    setCampaignStatus("loading");
+    setCampaignError(null);
+    void api.getCampaign(campaignId).then((actual) => {
+      if (cancelled) return;
+      if (
+        (querySecurityCode && querySecurityCode !== actual.security_code)
+        || (strategyParam && queryCampaignStrategy === null)
+        || (queryCampaignStrategy && queryCampaignStrategy !== actual.strategy)
+      ) {
+        setCampaignStatus("error");
+        setCampaignError("Campaign 上下文与真实 Campaign 不一致，已禁止 Formal Thesis setup。");
+        return;
+      }
+      const horizon = defaultHorizonForStrategy(actual.strategy);
+      if (!horizon) {
+        setCampaignStatus("error");
+        setCampaignError("Campaign 策略缺少合法 Formal 周期，已禁止 Formal Thesis setup。");
+        return;
+      }
+      setCampaign(actual);
+      setCampaignStatus("ready");
+      setForm((previous) => {
+        return {
+          ...previous,
+          subject_type: "stock",
+          subject_id: actual.security_code,
+          strategy: actual.strategy,
+          horizon_min: String(horizon.min),
+          horizon_max: String(horizon.max),
+        };
+      });
+    }).catch((error: unknown) => {
+      if (cancelled) return;
+      setCampaign(null);
+      setCampaignStatus("error");
+      setCampaignError(error instanceof ApiError ? error.message : "Campaign 上下文读取失败，已禁止 Formal Thesis setup。");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [campaignContextRequested, campaignId, queryCampaignStrategy, querySecurityCode, strategyParam]);
+
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm((p) => ({ ...p, [k]: v }));
 
   const submit = async () => {
-    if (!form.subject_id.trim()) { setErr("请填写主体代码/标识"); return; }
+    if (campaignContextBlocked) {
+      setErr(campaignError || "Campaign 上下文不可用，已禁止 Formal Thesis setup");
+      return;
+    }
+    const activeCampaign = campaignContext ? campaign : null;
+    const subjectType = activeCampaign ? "stock" : form.subject_type;
+    const subjectId = activeCampaign?.security_code ?? form.subject_id.trim();
+    const strategy = activeCampaign?.strategy ?? form.strategy;
+    if (!subjectId) { setErr("请填写主体代码/标识"); return; }
     if (!form.title.trim()) { setErr("请填写标题"); return; }
 
     let formalHorizon: { min: number; max: number } | null = null;
-    if (campaignContext && form.strategy) {
+    if (activeCampaign && strategy) {
       const min = Number(form.horizon_min);
       const max = Number(form.horizon_max);
-      const [rangeMin, rangeMax] = STRATEGY_HORIZON_RANGES[form.strategy];
+      const [rangeMin, rangeMax] = STRATEGY_HORIZON_RANGES[strategy];
       if (!Number.isInteger(min) || !Number.isInteger(max) || min < rangeMin || max > rangeMax || max < min) {
-        setErr(`${form.strategy} 的预期周期必须在 ${rangeMin}-${rangeMax} 个交易日内`);
+        setErr(`${strategy} 的预期周期必须在 ${rangeMin}-${rangeMax} 个交易日内`);
         return;
       }
       formalHorizon = { min, max };
@@ -136,8 +231,8 @@ export function ThesisNew() {
     let createdId: string | null = null;
     try {
       const body = {
-        subject_type: form.subject_type,
-        subject_id: form.subject_id.trim(),
+        subject_type: subjectType,
+        subject_id: subjectId,
         title: form.title.trim(),
         summary: form.summary.trim(),
         core_claims: form.core_claims,
@@ -149,7 +244,7 @@ export function ThesisNew() {
       const r = await api.thesisCreate(body);
       createdId = r.thesis.id;
 
-      if (campaignContext && form.strategy && formalHorizon) {
+      if (activeCampaign && strategy && formalHorizon) {
         const begun = await api.thesisBeginFormalization(r.thesis.id);
         await api.thesisUpdate(r.thesis.id, {
           title: begun.thesis.title,
@@ -161,7 +256,7 @@ export function ThesisNew() {
           invalidation_conditions: begun.thesis.invalidation_conditions,
           expected_revision: begun.thesis.current_revision,
           change_summary: "建立 Campaign Formal Thesis 草稿",
-          strategy: form.strategy,
+          strategy,
           expected_horizon: {
             unit: "TRADING_DAY",
             min: formalHorizon.min,
@@ -174,19 +269,19 @@ export function ThesisNew() {
 
       const detailQuery = campaignContext
         ? `?${new URLSearchParams({
-          campaign_id: campaignId,
-          security_code: campaignSecurityCode,
-          strategy: campaignStrategy!,
+          campaign_id: campaign.campaign_id,
+          security_code: campaign.security_code,
+          strategy: campaign.strategy,
           return_to: returnTo,
         }).toString()}`
         : "";
       nav(`/thesis/${r.thesis.id}${detailQuery}`);
     } catch (e) {
-      if (createdId && campaignContext) {
+      if (createdId && campaignContext && campaign) {
         const query = new URLSearchParams({
-          campaign_id: campaignId,
-          security_code: campaignSecurityCode,
-          strategy: campaignStrategy!,
+          campaign_id: campaign.campaign_id,
+          security_code: campaign.security_code,
+          strategy: campaign.strategy,
           return_to: returnTo,
           setup_error: "1",
         });
@@ -213,13 +308,21 @@ export function ThesisNew() {
         </div>
       )}
 
+      {campaignContextRequested && !campaignContext && (
+        <div className="mb-4 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-warning" role="alert">
+          {campaignStatus === "loading"
+            ? "正在读取真实 Campaign，上下文确认前不会允许 Formal Thesis setup。"
+            : campaignError || "Campaign 上下文不可用，已禁止 Formal Thesis setup。"}
+        </div>
+      )}
+
       <GlassCard>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className={labelCls}>
             主体类型 <span className="text-destructive">*</span>
             <select
               value={form.subject_type}
-              disabled={campaignContext}
+              disabled={campaignContextRequested}
               onChange={(e) => set("subject_type", e.target.value as "stock" | "sector" | "theme")}
               className={inputCls}
             >
@@ -232,7 +335,7 @@ export function ThesisNew() {
             主体代码/标识 <span className="text-destructive">*</span>
             <input
               value={form.subject_id}
-              disabled={campaignContext}
+              disabled={campaignContextRequested}
               onChange={(e) => set("subject_id", e.target.value)}
               placeholder="如 600519 / humanoid"
               className={inputCls}
@@ -355,7 +458,7 @@ export function ThesisNew() {
         <div className="mt-4 flex items-center gap-2">
           <button
             onClick={submit}
-            disabled={busy}
+            disabled={busy || campaignContextBlocked}
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}

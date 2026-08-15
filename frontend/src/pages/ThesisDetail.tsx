@@ -9,7 +9,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import {
   api, ApiError,
   type ThesisAggregate, type ThesisRevisionListItem, type ThesisDiff,
-  type EvidenceRecord, type EvidenceLink, type CampaignStrategy,
+  type EvidenceRecord, type EvidenceLink, type CampaignRecord, type CampaignStrategy,
   type CampaignThesisBinding, type InvestmentThesis, type ThesisUpdateInput,
 } from "@/lib/api";
 import {
@@ -157,6 +157,28 @@ interface EditForm {
   change_summary: string;
 }
 
+const CAMPAIGN_STRATEGIES = ["SHORT", "SWING", "MEDIUM"] as const;
+
+function parseCampaignStrategy(value: string | null): CampaignStrategy | null {
+  return CAMPAIGN_STRATEGIES.includes(value as CampaignStrategy)
+    ? value as CampaignStrategy
+    : null;
+}
+
+function safeInternalReturnTo(value: string | null, fallback: string): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
+    return fallback;
+  }
+  if (typeof window === "undefined") return fallback;
+  try {
+    const parsed = new URL(value, window.location.origin);
+    if (parsed.origin !== window.location.origin) return fallback;
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return fallback;
+  }
+}
+
 interface LinkForm {
   evidence_id: string;
   stance: "support" | "oppose" | "neutral";
@@ -203,16 +225,20 @@ export function ThesisDetail() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const campaignId = searchParams.get("campaign_id") || "";
-  const securityCode = searchParams.get("security_code") || "";
+  const querySecurityCode = searchParams.get("security_code") || "";
   const strategyParam = searchParams.get("strategy");
-  const campaignStrategy = (["SHORT", "SWING", "MEDIUM"] as const).includes(
-    strategyParam as CampaignStrategy,
-  ) ? strategyParam as CampaignStrategy : null;
-  const returnParam = searchParams.get("return_to");
-  const returnTo = returnParam?.startsWith("/") && !returnParam.startsWith("//")
-    ? returnParam
-    : "/thesis";
-  const campaignContext = Boolean(campaignId && securityCode && campaignStrategy);
+  const queryCampaignStrategy = parseCampaignStrategy(strategyParam);
+  const campaignContextRequested = Boolean(campaignId || querySecurityCode || strategyParam);
+  const returnTo = safeInternalReturnTo(searchParams.get("return_to"), "/thesis");
+  const [campaign, setCampaign] = useState<CampaignRecord | null>(null);
+  const [campaignStatus, setCampaignStatus] = useState<"idle" | "loading" | "ready" | "error">(
+    campaignContextRequested ? "loading" : "idle",
+  );
+  const [campaignError, setCampaignError] = useState<string | null>(null);
+  const campaignContext = campaignStatus === "ready" && campaign !== null;
+  const campaignContextBlocked = campaignContextRequested && !campaignContext;
+  const campaignStrategy = campaign?.strategy ?? null;
+  const securityCode = campaign?.security_code ?? "—";
   const setupError = searchParams.get("setup_error") === "1";
   const [aggregate, setAggregate] = useState<ThesisAggregate | null>(null);
   const [loading, setLoading] = useState(false);
@@ -224,6 +250,9 @@ export function ThesisDetail() {
   const [editErr, setEditErr] = useState<string | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const [binding, setBinding] = useState<CampaignThesisBinding | null>(null);
+  const [bindingStatus, setBindingStatus] = useState<"idle" | "loading" | "unbound" | "bound" | "error">(
+    campaignContextRequested ? "loading" : "idle",
+  );
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const [lifecycleErr, setLifecycleErr] = useState<string | null>(null);
 
@@ -255,57 +284,207 @@ export function ThesisDetail() {
   const [diffErr, setDiffErr] = useState<string | null>(null);
 
   const runIdRef = useRef(0);
+  const campaignRunRef = useRef(0);
+  const bindingRunRef = useRef(0);
+  const revisionsRunRef = useRef(0);
+  const lifecycleRunRef = useRef(0);
+  const routeGenerationRef = useRef(0);
+  const routeKey = `${id ?? ""}|${campaignId}|${querySecurityCode}|${strategyParam ?? ""}`;
+  const routeKeyRef = useRef(routeKey);
+  const mountedRef = useRef(false);
+  routeKeyRef.current = routeKey;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    routeGenerationRef.current += 1;
+    lifecycleRunRef.current += 1;
+    setAggregate(null);
+    setLoading(false);
+    setBusy(false);
+    setEditing(false);
+    setForm(null);
+    setEditErr(null);
+    setConflict(null);
+    setLifecycleBusy(false);
+    setLifecycleErr(null);
+    setShowLinkPanel(false);
+    setEvidenceOptions([]);
+    setEvidenceLoading(false);
+    setLinkErr(null);
+    setStanceEdit(null);
+    setStanceErr(null);
+    setRevisions([]);
+    setRevisionsLoading(false);
+    setDiff(null);
+    setDiffLoading(false);
+    setDiffErr(null);
+  }, [routeKey]);
+
+  useEffect(() => {
+    const generation = routeGenerationRef.current;
+    const rid = ++campaignRunRef.current;
+    let cancelled = false;
+    const isCurrent = () => (
+      mountedRef.current
+      && !cancelled
+      && rid === campaignRunRef.current
+      && generation === routeGenerationRef.current
+      && routeKey === routeKeyRef.current
+    );
+
+    if (!campaignContextRequested) {
+      setCampaign(null);
+      setCampaignStatus("idle");
+      setCampaignError(null);
+      setBinding(null);
+      setBindingStatus("idle");
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!campaignId) {
+      setCampaign(null);
+      setCampaignStatus("error");
+      setCampaignError("Campaign 上下文缺少 campaign_id，已禁止 Formal setup / Freeze / Bind。");
+      setBinding(null);
+      setBindingStatus("error");
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setCampaign(null);
+    setCampaignStatus("loading");
+    setCampaignError(null);
+    setBinding(null);
+    setBindingStatus("loading");
+    void api.getCampaign(campaignId).then((actual) => {
+      if (!isCurrent()) return;
+      if (
+        (querySecurityCode && querySecurityCode !== actual.security_code)
+        || (strategyParam && queryCampaignStrategy === null)
+        || (queryCampaignStrategy && queryCampaignStrategy !== actual.strategy)
+      ) {
+        setCampaignStatus("error");
+        setCampaignError("Campaign 上下文与真实 Campaign 不一致，已禁止 Formal setup / Freeze / Bind。");
+        setBinding(null);
+        setBindingStatus("error");
+        return;
+      }
+      setCampaign(actual);
+      setCampaignStatus("ready");
+    }).catch((error: unknown) => {
+      if (!isCurrent()) return;
+      setCampaign(null);
+      setCampaignStatus("error");
+      setCampaignError(error instanceof ApiError
+        ? `${error.message}；已禁止 Formal setup / Freeze / Bind。`
+        : "Campaign 上下文读取失败，已禁止 Formal setup / Freeze / Bind.");
+      setBinding(null);
+      setBindingStatus("error");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [campaignContextRequested, campaignId, queryCampaignStrategy, querySecurityCode, routeKey, strategyParam]);
 
   const load = useCallback(async () => {
     if (!id) return;
+    const generation = routeGenerationRef.current;
+    const currentRouteKey = routeKeyRef.current;
     const rid = ++runIdRef.current;
     setLoading(true);
     setErr(null);
     setConflict(null);
+    lifecycleRunRef.current += 1;
+    setLifecycleBusy(false);
+    const isCurrent = () => (
+      mountedRef.current
+      && rid === runIdRef.current
+      && generation === routeGenerationRef.current
+      && currentRouteKey === routeKeyRef.current
+    );
     try {
       const r = await api.thesisGet(id);
-      if (rid !== runIdRef.current) return;
+      if (!isCurrent()) return;
       setAggregate(r);
     } catch (e) {
-      if (rid !== runIdRef.current) return;
+      if (!isCurrent()) return;
       setErr(e instanceof ApiError ? e.message : "加载投资逻辑失败");
     } finally {
-      if (rid === runIdRef.current) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [id]);
 
   const loadRevisions = useCallback(async () => {
     if (!id) return;
+    const generation = routeGenerationRef.current;
+    const currentRouteKey = routeKeyRef.current;
+    const rid = ++revisionsRunRef.current;
+    const isCurrent = () => (
+      mountedRef.current
+      && rid === revisionsRunRef.current
+      && generation === routeGenerationRef.current
+      && currentRouteKey === routeKeyRef.current
+    );
     setRevisionsLoading(true);
     try {
       const r = await api.thesisRevisions(id);
+      if (!isCurrent()) return;
       setRevisions(r.items ?? []);
     } catch (e) {
+      if (!isCurrent()) return;
       // 静默忽略，避免抢占主面板错误
     } finally {
-      setRevisionsLoading(false);
+      if (isCurrent()) setRevisionsLoading(false);
     }
   }, [id]);
 
   const loadBinding = useCallback(async () => {
-    if (!campaignContext) {
+    const generation = routeGenerationRef.current;
+    const currentRouteKey = routeKeyRef.current;
+    const rid = ++bindingRunRef.current;
+    const isCurrent = () => (
+      mountedRef.current
+      && rid === bindingRunRef.current
+      && generation === routeGenerationRef.current
+      && currentRouteKey === routeKeyRef.current
+    );
+
+    if (!campaignContext || !campaign) {
       setBinding(null);
+      setBindingStatus(campaignContextRequested ? "error" : "idle");
       return;
     }
+    setBindingStatus("loading");
     try {
-      setBinding(await api.getCampaignThesisBinding(campaignId));
+      const next = await api.getCampaignThesisBinding(campaign.campaign_id);
+      if (!isCurrent()) return;
+      setBinding(next);
+      setBindingStatus("bound");
     } catch (e) {
-      if (e instanceof ApiError && e.status === 404) {
+      if (!isCurrent()) return;
+      if (e instanceof ApiError && e.status === 404 && e.message === "Thesis Binding 不存在") {
         setBinding(null);
+        setBindingStatus("unbound");
         return;
       }
+      setBinding(null);
+      setBindingStatus("error");
       setLifecycleErr(e instanceof ApiError ? e.message : "Campaign Thesis 绑定状态读取失败");
     }
-  }, [campaignContext, campaignId]);
+  }, [campaign, campaignContext, campaignContextRequested]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, routeKey]);
 
   useEffect(() => {
     void loadBinding();
@@ -315,11 +494,19 @@ export function ThesisDetail() {
     if (id && (activeTab === "history" || activeTab === "diff") && revisions.length === 0) {
       void loadRevisions();
     }
-  }, [id, activeTab, revisions.length, loadRevisions]);
+  }, [id, activeTab, revisions.length, routeKey, loadRevisions]);
 
   const archived = aggregate?.thesis.status === "archived";
   const formalState = aggregate?.thesis.formal_state ?? null;
   const contentLocked = archived || formalState === "confirmed" || formalState === "frozen";
+
+  useEffect(() => {
+    if (!contentLocked) return;
+    setShowLinkPanel(false);
+    setLinkErr(null);
+    setStanceEdit(null);
+    setStanceErr(null);
+  }, [contentLocked]);
 
   // 处理 409 冲突：保留用户输入，不覆盖；显示提示并提供 reload 按钮
   const handleConflict = (e: unknown): boolean => {
@@ -328,6 +515,28 @@ export function ThesisDetail() {
       return true;
     }
     return false;
+  };
+
+  const captureLifecycleRun = () => {
+    const run = ++lifecycleRunRef.current;
+    const generation = routeGenerationRef.current;
+    const currentRouteKey = routeKeyRef.current;
+    return () => (
+      mountedRef.current
+      && run === lifecycleRunRef.current
+      && generation === routeGenerationRef.current
+      && currentRouteKey === routeKeyRef.current
+    );
+  };
+
+  const captureRouteRun = () => {
+    const generation = routeGenerationRef.current;
+    const currentRouteKey = routeKeyRef.current;
+    return () => (
+      mountedRef.current
+      && generation === routeGenerationRef.current
+      && currentRouteKey === routeKeyRef.current
+    );
   };
 
   // 编辑
@@ -358,6 +567,7 @@ export function ThesisDetail() {
         free_notes: form.free_notes.trim() || null,
       };
     }
+    const isCurrent = captureLifecycleRun();
     setBusy(true);
     setEditErr(null);
     setConflict(null);
@@ -375,85 +585,110 @@ export function ThesisDetail() {
         ...formalFields,
       };
       const r = await api.thesisUpdate(id, body);
+      if (!isCurrent()) return;
       setAggregate(r);
       setEditing(false);
       // 失效版本历史
       setRevisions([]);
     } catch (e) {
+      if (!isCurrent()) return;
       if (handleConflict(e)) return;
       setEditErr(e instanceof ApiError ? e.message : "保存失败");
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
 
   const beginFormalization = async () => {
-    if (!id || !aggregate || aggregate.thesis.formal_state !== null) return;
+    if (!id || !aggregate || aggregate.thesis.formal_state !== null || campaignContextBlocked) return;
+    const isCurrent = captureLifecycleRun();
     setLifecycleBusy(true);
     setLifecycleErr(null);
     setConflict(null);
     try {
       const next = await api.thesisBeginFormalization(id);
+      if (!isCurrent()) return;
       setAggregate(next);
       setForm(toEditForm(next.thesis, campaignStrategy));
       setEditing(true);
       setRevisions([]);
     } catch (e) {
+      if (!isCurrent()) return;
       if (handleConflict(e)) return;
       setLifecycleErr(e instanceof ApiError ? e.message : "开始 Formal 化失败");
     } finally {
-      setLifecycleBusy(false);
+      if (isCurrent()) setLifecycleBusy(false);
     }
   };
 
   const confirmFormalization = async () => {
-    if (!id || !aggregate || !canConfirmFormalThesis(aggregate.thesis)) return;
+    if (!id || !aggregate || !canConfirmFormalThesis(aggregate.thesis) || campaignContextBlocked) return;
     if (!window.confirm("确认后内容将锁定；下一步仍需你显式冻结。是否确认这份 Formal Thesis？")) return;
+    const expectedRevision = aggregate.thesis.current_revision;
+    const isCurrent = captureLifecycleRun();
     setLifecycleBusy(true);
     setLifecycleErr(null);
     try {
-      const next = await api.thesisConfirm(id);
+      const next = await api.thesisConfirm(id, expectedRevision);
+      if (!isCurrent()) return;
       setAggregate(next);
       setEditing(false);
+      setShowLinkPanel(false);
+      setLinkErr(null);
+      setStanceEdit(null);
+      setStanceErr(null);
     } catch (e) {
+      if (!isCurrent()) return;
       if (handleConflict(e)) return;
       setLifecycleErr(e instanceof ApiError ? e.message : "确认 Formal Thesis 失败");
     } finally {
-      setLifecycleBusy(false);
+      if (isCurrent()) setLifecycleBusy(false);
     }
   };
 
   const freezeFormalization = async () => {
-    if (!id || !aggregate || aggregate.thesis.formal_state !== "confirmed") return;
+    if (!id || !aggregate || aggregate.thesis.formal_state !== "confirmed" || campaignContextBlocked) return;
     if (!window.confirm("冻结会生成不可变的 Formal Original 版本。冻结后不可编辑，是否继续？")) return;
+    const isCurrent = captureLifecycleRun();
     setLifecycleBusy(true);
     setLifecycleErr(null);
     setConflict(null);
     try {
-      await api.thesisFreeze(id, aggregate.thesis.current_revision);
-      setAggregate(await api.thesisGet(id));
+      const frozen = await api.thesisFreeze(id, aggregate.thesis.current_revision);
+      if (!isCurrent()) return;
+      setAggregate(frozen);
       setRevisions([]);
+      setShowLinkPanel(false);
+      setLinkErr(null);
+      setStanceEdit(null);
+      setStanceErr(null);
     } catch (e) {
+      if (!isCurrent()) return;
       if (handleConflict(e)) return;
       setLifecycleErr(e instanceof ApiError ? e.message : "冻结 Formal Thesis 失败");
     } finally {
-      setLifecycleBusy(false);
+      if (isCurrent()) setLifecycleBusy(false);
     }
   };
 
   const bindToCampaign = async () => {
-    if (!id || !aggregate || !campaignContext || binding) return;
+    if (!id || !aggregate || !campaignContext || !campaign || bindingStatus !== "unbound") return;
     if (aggregate.thesis.formal_state !== "frozen") return;
-    if (!window.confirm(`绑定到 Campaign ${securityCode} 后不可更换。是否确认建立不可变绑定？`)) return;
+    if (!window.confirm(`绑定到 Campaign ${campaign.security_code} 后不可更换。是否确认建立不可变绑定？`)) return;
+    const isCurrent = captureLifecycleRun();
     setLifecycleBusy(true);
     setLifecycleErr(null);
     try {
-      setBinding(await api.bindCampaignThesis(campaignId, id));
+      const next = await api.bindCampaignThesis(campaign.campaign_id, id);
+      if (!isCurrent()) return;
+      setBinding(next);
+      setBindingStatus("bound");
     } catch (e) {
+      if (!isCurrent()) return;
       if (handleConflict(e)) return;
       setLifecycleErr(e instanceof ApiError ? e.message : "绑定 Campaign 失败");
     } finally {
-      setLifecycleBusy(false);
+      if (isCurrent()) setLifecycleBusy(false);
     }
   };
 
@@ -461,27 +696,31 @@ export function ThesisDetail() {
     if (!id || !aggregate) return;
     const summary = prompt("请输入归档原因（change_summary）", "归档：逻辑已不再追踪");
     if (summary === null) return;
+    const isCurrent = captureLifecycleRun();
     setBusy(true);
     setConflict(null);
     try {
       const r = await api.thesisArchive(id, aggregate.thesis.current_revision, summary.trim() || undefined);
+      if (!isCurrent()) return;
       setAggregate(r);
       setRevisions([]);
     } catch (e) {
+      if (!isCurrent()) return;
       if (handleConflict(e)) return;
       setErr(e instanceof ApiError ? e.message : "归档失败");
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
 
   // 加载证据选项
   const openLinkPanel = async () => {
-    if (!aggregate) return;
+    if (!aggregate || contentLocked) return;
     setShowLinkPanel(true);
     setLinkErr(null);
     setLinkForm({ evidence_id: "", stance: "support", change_summary: "" });
     if (evidenceOptions.length === 0) {
+      const isCurrent = captureRouteRun();
       setEvidenceLoading(true);
       try {
         // 拉取同主体的证据，最多 100 条
@@ -491,18 +730,21 @@ export function ThesisDetail() {
           limit: 100,
           offset: 0,
         });
+        if (!isCurrent()) return;
         setEvidenceOptions(r.items ?? []);
       } catch (e) {
+        if (!isCurrent()) return;
         setLinkErr(e instanceof ApiError ? e.message : "加载证据失败");
       } finally {
-        setEvidenceLoading(false);
+        if (isCurrent()) setEvidenceLoading(false);
       }
     }
   };
 
   const submitLink = async () => {
-    if (!id || !aggregate) return;
+    if (!id || !aggregate || contentLocked) return;
     if (!linkForm.evidence_id) { setLinkErr("请选择一条证据"); return; }
+    const isCurrent = captureLifecycleRun();
     setBusy(true);
     setLinkErr(null);
     setConflict(null);
@@ -514,18 +756,21 @@ export function ThesisDetail() {
         change_summary: linkForm.change_summary.trim() || "关联证据",
       };
       const r = await api.thesisLinkEvidence(id, body);
+      if (!isCurrent()) return;
       setAggregate(r);
       setShowLinkPanel(false);
       setRevisions([]);
     } catch (e) {
+      if (!isCurrent()) return;
       if (handleConflict(e)) return;
       setLinkErr(e instanceof ApiError ? e.message : "关联失败");
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
 
   const startStanceEdit = (link: EvidenceLink) => {
+    if (contentLocked) return;
     setStanceEdit({
       evidenceId: link.evidence_id,
       stance: link.stance,
@@ -535,7 +780,8 @@ export function ThesisDetail() {
   };
 
   const saveStance = async () => {
-    if (!id || !aggregate || !stanceEdit) return;
+    if (!id || !aggregate || !stanceEdit || contentLocked) return;
+    const isCurrent = captureLifecycleRun();
     setBusy(true);
     setStanceErr(null);
     setConflict(null);
@@ -546,48 +792,56 @@ export function ThesisDetail() {
         change_summary: stanceEdit.change_summary.trim() || "修改立场",
       };
       const r = await api.thesisUpdateStance(id, stanceEdit.evidenceId, body);
+      if (!isCurrent()) return;
       setAggregate(r);
       setStanceEdit(null);
       setRevisions([]);
     } catch (e) {
+      if (!isCurrent()) return;
       if (handleConflict(e)) return;
       setStanceErr(e instanceof ApiError ? e.message : "保存失败");
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
 
   const unlink = async (link: EvidenceLink) => {
-    if (!id || !aggregate) return;
+    if (!id || !aggregate || contentLocked) return;
     if (!confirm(`取消关联证据「${link.claim.slice(0, 40)}${link.claim.length > 40 ? "…" : ""}」？`)) return;
+    const isCurrent = captureLifecycleRun();
     setBusy(true);
     setConflict(null);
     try {
       const r = await api.thesisUnlinkEvidence(
         id, link.evidence_id, aggregate.thesis.current_revision, "取消关联证据",
       );
+      if (!isCurrent()) return;
       setAggregate(r);
       setRevisions([]);
     } catch (e) {
+      if (!isCurrent()) return;
       if (handleConflict(e)) return;
       setErr(e instanceof ApiError ? e.message : "取消关联失败");
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
 
   const loadDiff = async () => {
     if (!id) return;
     if (fromRev === "" || toRev === "") { setDiffErr("请选择起止版本"); return; }
+    const isCurrent = captureRouteRun();
     setDiffLoading(true);
     setDiffErr(null);
     try {
       const r = await api.thesisDiff(id, Number(fromRev), Number(toRev));
+      if (!isCurrent()) return;
       setDiff(r);
     } catch (e) {
+      if (!isCurrent()) return;
       setDiffErr(e instanceof ApiError ? e.message : "加载对比失败");
     } finally {
-      setDiffLoading(false);
+      if (isCurrent()) setDiffLoading(false);
     }
   };
 
@@ -687,6 +941,14 @@ export function ThesisDetail() {
         </div>
       )}
 
+      {campaignContextRequested && !campaignContext && (
+        <div className="mb-4 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-warning" role="alert">
+          {campaignStatus === "loading"
+            ? "正在读取真实 Campaign，上下文确认前不会允许 Formal setup / Freeze / Bind。"
+            : campaignError || "Campaign 上下文不可用，已禁止 Formal setup / Freeze / Bind。"}
+        </div>
+      )}
+
       <GlassCard className="mb-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -699,11 +961,11 @@ export function ThesisDetail() {
                 ? `${t.expected_horizon.min}-${t.expected_horizon.max} 个交易日`
                 : "—"} · 更新：{fmtDate(t.updated_at)}
             </p>
-            {campaignContext && (
+            {campaignContextRequested && (
               <p className="mt-1 text-xs text-muted-foreground">
-                Campaign：{securityCode} / {campaignStrategy} · 绑定：{binding
+                Campaign：{campaignContext ? `${securityCode} / ${campaignStrategy}` : `${campaignId}（上下文不可用）`} · 绑定：{binding
                   ? binding.thesis_id === t.id ? "当前 Thesis（不可变）" : `其他 Thesis ${binding.thesis_id}`
-                  : "未绑定"}
+                  : bindingStatus === "unbound" ? "未绑定" : bindingStatus === "loading" ? "读取中" : "未知（不可绑定）"}
               </p>
             )}
           </div>
@@ -712,7 +974,7 @@ export function ThesisDetail() {
               <button
                 type="button"
                 onClick={beginFormalization}
-                disabled={lifecycleBusy || archived}
+                disabled={lifecycleBusy || archived || campaignContextBlocked}
                 className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
                 开始 Formal 化
@@ -722,7 +984,7 @@ export function ThesisDetail() {
               <button
                 type="button"
                 onClick={confirmFormalization}
-                disabled={lifecycleBusy || editing || !canConfirmFormalThesis(t)}
+                disabled={lifecycleBusy || editing || !canConfirmFormalThesis(t) || campaignContextBlocked}
                 className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
                 确认 Formal Thesis
@@ -732,17 +994,17 @@ export function ThesisDetail() {
               <button
                 type="button"
                 onClick={freezeFormalization}
-                disabled={lifecycleBusy}
+                disabled={lifecycleBusy || campaignContextBlocked}
                 className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
                 冻结 Formal Original
               </button>
             )}
-            {t.formal_state === "frozen" && campaignContext && !binding && (
+            {t.formal_state === "frozen" && campaignContext && bindingStatus === "unbound" && (
               <button
                 type="button"
                 onClick={bindToCampaign}
-                disabled={lifecycleBusy || t.strategy !== campaignStrategy || t.subject_id !== securityCode}
+                disabled={lifecycleBusy || t.strategy !== campaign?.strategy || t.subject_id !== campaign?.security_code}
                 className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
                 绑定到当前 Campaign
@@ -762,6 +1024,12 @@ export function ThesisDetail() {
         )}
         {t.formal_state === "frozen" && campaignContext && t.strategy !== campaignStrategy && (
           <p className="mt-3 text-xs text-warning">Thesis 策略与 Campaign 不一致，后端将拒绝绑定。</p>
+        )}
+        {campaignContext && bindingStatus === "loading" && (
+          <p className="mt-3 text-xs text-muted-foreground">正在确认 Campaign Thesis binding…</p>
+        )}
+        {campaignContext && bindingStatus === "error" && (
+          <p className="mt-3 text-xs text-warning">无法确认当前 binding 状态，绑定操作已禁用；请刷新后重试。</p>
         )}
         {lifecycleErr && <p className="mt-3 text-sm text-destructive" role="alert">{lifecycleErr}</p>}
       </GlassCard>
@@ -1075,6 +1343,7 @@ export function ThesisDetail() {
                   <div className="space-y-2">
                     <select
                       value={linkForm.evidence_id}
+                      disabled={contentLocked}
                       onChange={(e) => setLinkForm((p) => ({ ...p, evidence_id: e.target.value }))}
                       className={inputCls}
                     >
@@ -1090,6 +1359,7 @@ export function ThesisDetail() {
                         立场
                         <select
                           value={linkForm.stance}
+                          disabled={contentLocked}
                           onChange={(e) => setLinkForm((p) => ({ ...p, stance: e.target.value as LinkForm["stance"] }))}
                           className={`${inputCls} w-32`}
                         >
@@ -1102,6 +1372,7 @@ export function ThesisDetail() {
                         变更说明
                         <input
                           value={linkForm.change_summary}
+                          disabled={contentLocked}
                           onChange={(e) => setLinkForm((p) => ({ ...p, change_summary: e.target.value }))}
                           placeholder="如：关联财报证据"
                           className={inputCls}
@@ -1114,7 +1385,7 @@ export function ThesisDetail() {
                 <div className="mt-2 flex items-center gap-2">
                   <button
                     onClick={submitLink}
-                    disabled={busy || !linkForm.evidence_id}
+                    disabled={contentLocked || busy || !linkForm.evidence_id}
                     className="inline-flex items-center gap-1 rounded bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
                   >
                     {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Link2 className="h-3 w-3" />}
@@ -1145,6 +1416,7 @@ export function ThesisDetail() {
                         <div className="flex items-center gap-2">
                           <select
                             value={stanceEdit.stance}
+                            disabled={contentLocked}
                             onChange={(e) => setStanceEdit((p) => p ? { ...p, stance: e.target.value as StanceForm["stance"] } : p)}
                             className={`${inputCls} w-32`}
                           >
@@ -1154,6 +1426,7 @@ export function ThesisDetail() {
                           </select>
                           <input
                             value={stanceEdit.change_summary}
+                            disabled={contentLocked}
                             onChange={(e) => setStanceEdit((p) => p ? { ...p, change_summary: e.target.value } : p)}
                             placeholder="变更说明"
                             className={inputCls}
@@ -1163,7 +1436,7 @@ export function ThesisDetail() {
                         <div className="mt-2 flex items-center gap-2">
                           <button
                             onClick={saveStance}
-                            disabled={busy}
+                            disabled={contentLocked || busy}
                             className="inline-flex items-center gap-1 rounded bg-primary px-2.5 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
                           >
                             {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />} 保存

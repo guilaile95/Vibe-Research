@@ -581,8 +581,10 @@ export default function DecisionInbox() {
   const [nextActions, setNextActions] = useState<Record<string, CampaignNextActions | null>>({});
   const [creatingFor, setCreatingFor] = useState<string | null>(null);
   const [formGeneration, setFormGeneration] = useState(0);
+  const [thesisReloadEpoch, setThesisReloadEpoch] = useState(0);
 
   const refresh = useCallback(async () => {
+    setThesisReloadEpoch((epoch) => epoch + 1);
     setLoadError("");
     try {
       const snap = await api.getDecisionInbox();
@@ -777,6 +779,7 @@ export default function DecisionInbox() {
                     campaignId={campaign.campaign_id}
                     securityCode={campaign.security_code}
                     strategy={campaign.strategy}
+                    reloadEpoch={thesisReloadEpoch}
                   />
                 </div>
               ))}
@@ -810,6 +813,7 @@ export default function DecisionInbox() {
                     campaignId={item.campaign_id}
                     securityCode={item.security_code}
                     strategy={item.strategy}
+                    reloadEpoch={thesisReloadEpoch}
                   />
                 </div>
               ))}

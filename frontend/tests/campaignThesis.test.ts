@@ -129,6 +129,17 @@ test("确认门：strategy 缺失（null）→ false", () => {
   assert.equal(canConfirmFormalThesis(makeThesis({ strategy: null })), false);
 });
 
+test("确认门：未知 runtime strategy fail-closed（不抛异常）→ false", () => {
+  for (const strategy of ["UNKNOWN", "toString"]) {
+    assert.doesNotThrow(() => {
+      assert.equal(
+        canConfirmFormalThesis(makeThesis({ strategy: strategy as ThesisStrategy })),
+        false,
+      );
+    });
+  }
+});
+
 test("确认门：expected_horizon 缺失（null）→ false", () => {
   assert.equal(canConfirmFormalThesis(makeThesis({ expected_horizon: null })), false);
 });

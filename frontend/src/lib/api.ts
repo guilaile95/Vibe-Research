@@ -724,8 +724,8 @@ export const api = {
   // P0-CT1：Thesis Formal 化（LEGACY→DRAFT→CONFIRMED→FROZEN；端点与 backend 逐字一致）
   thesisBeginFormalization: (id: string) =>
     request<ThesisAggregate>(`/thesis/${encodeURIComponent(id)}/begin-formalization`, "POST"),
-  thesisConfirm: (id: string) =>
-    request<ThesisAggregate>(`/thesis/${encodeURIComponent(id)}/confirm`, "POST"),
+  thesisConfirm: (id: string, expected_revision: number) =>
+    request<ThesisAggregate>(`/thesis/${encodeURIComponent(id)}/confirm`, "POST", { expected_revision }),
   thesisFreeze: (id: string, expected_revision: number) =>
     request<FormalThesisSnapshot>(`/thesis/${encodeURIComponent(id)}/freeze`, "POST", { expected_revision }),
   thesisArchive: (id: string, expected_revision: number, change_summary?: string) => {

@@ -85,7 +85,7 @@ def _draft(db):
 def _confirmed(db):
     """完整合法 confirmed thesis（current_revision=2）。"""
     tid = _draft(db)
-    svc.confirm_formalization(db, tid)
+    svc.confirm_formalization(db, tid, 2)
     return tid
 
 
@@ -108,7 +108,7 @@ def _confirmed_with_evidence(db, *, claim: str = "ORIGINAL"):
     })
     svc.link_evidence(db, tid, evidence["id"], "support", 1)
     svc.update_thesis(db, tid, dict(_FORMAL_UPDATE), 2)
-    svc.confirm_formalization(db, tid)
+    svc.confirm_formalization(db, tid, 3)
     return tid, evidence["id"]
 
 
@@ -131,7 +131,7 @@ def _frozen_with_evidence(db, *, count: int = 2):
         evidence_ids.append(ev["id"])
         svc.link_evidence(db, tid, ev["id"], "support", index + 1)
     svc.update_thesis(db, tid, dict(_FORMAL_UPDATE), count + 1)
-    svc.confirm_formalization(db, tid)
+    svc.confirm_formalization(db, tid, count + 2)
     svc.freeze_formalization(db, tid, count + 2)
     return tid, evidence_ids
 
@@ -284,8 +284,8 @@ def test_begin_formalization_race_exactly_one_wins(db):
 def test_confirm_race_exactly_one_wins(db):
     tid = _draft(db)
     results, errors = _race(
-        lambda: svc.confirm_formalization(db, tid),
-        lambda: svc.confirm_formalization(db, tid),
+        lambda: svc.confirm_formalization(db, tid, 2),
+        lambda: svc.confirm_formalization(db, tid, 2),
     )
     # Case 2：loser 必须严格为 FormalLifecycleConflictError
     _assert_winner_loser(results, errors, exception_type=svc.FormalLifecycleConflictError)

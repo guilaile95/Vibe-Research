@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { BookOpen, Loader2, PlusCircle, RefreshCw } from "lucide-react";
 import {
@@ -49,10 +49,12 @@ export function CampaignThesisActivationCard({
   campaignId,
   securityCode,
   strategy,
+  reloadEpoch,
 }: {
   campaignId: string;
   securityCode: string;
   strategy: CampaignStrategy;
+  reloadEpoch: number;
 }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -60,8 +62,10 @@ export function CampaignThesisActivationCard({
   const [current, setCurrent] = useState<CampaignCurrentThesis | null>(null);
   const [boundThesis, setBoundThesis] = useState<InvestmentThesis | null>(null);
   const [candidates, setCandidates] = useState<InvestmentThesis[]>([]);
+  const loadGeneration = useRef(0);
 
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     setLoading(true);
     setError("");
     try {
@@ -71,33 +75,44 @@ export function CampaignThesisActivationCard({
       } catch (err) {
         if (!(err instanceof ApiError) || err.status !== 404) throw err;
       }
+      if (generation !== loadGeneration.current) return;
 
       if (nextBinding) {
         const [projection, aggregate] = await Promise.all([
           api.getCampaignCurrentThesis(campaignId),
           api.thesisGet(nextBinding.thesis_id),
         ]);
+        if (generation !== loadGeneration.current) return;
         setBinding(nextBinding);
         setCurrent(projection);
         setBoundThesis(aggregate.thesis);
         setCandidates([]);
       } else {
-        const result = await api.thesisList({ subject_type: "stock", subject_id: securityCode });
+        const result = await api.thesisList({
+          subject_type: "stock",
+          subject_id: securityCode,
+          limit: 200,
+        });
+        if (generation !== loadGeneration.current) return;
         setBinding(null);
         setCurrent(null);
         setBoundThesis(null);
         setCandidates(selectCampaignThesisCandidates(result.items, securityCode));
       }
     } catch (err) {
+      if (generation !== loadGeneration.current) return;
       setError(err instanceof ApiError ? err.message : "Current Thesis 状态读取失败");
     } finally {
-      setLoading(false);
+      if (generation === loadGeneration.current) setLoading(false);
     }
   }, [campaignId, securityCode]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+    return () => {
+      loadGeneration.current += 1;
+    };
+  }, [load, reloadEpoch]);
 
   const query = contextQuery(campaignId, securityCode, strategy);
 

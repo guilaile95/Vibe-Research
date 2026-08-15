@@ -253,6 +253,15 @@ test("thesisUpdate 携带 expected_revision（乐观并发）", async () => {
   assert.equal(parsed.expected_revision, 3, "expected_revision 必须随 body 提交");
 });
 
+test("thesisConfirm 携带 expected_revision（确认也必须 CAS）", async () => {
+  reset();
+  await api.thesisConfirm("th-1", 3);
+  const r = lastReq();
+  assert.equal(r.method, "POST");
+  assert.equal(r.url, "/api/thesis/th-1/confirm");
+  assert.deepEqual(JSON.parse(r.body as string), { expected_revision: 3 });
+});
+
 test("thesisArchive 路径含 confirm=true 与 expected_revision（archived 冻结）", async () => {
   reset();
   await api.thesisArchive("th-1", 5, "归档：不再追踪");

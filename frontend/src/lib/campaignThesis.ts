@@ -48,7 +48,14 @@ export function canConfirmFormalThesis(thesis: InvestmentThesis): boolean {
   ) {
     return false;
   }
-  const [rangeMin, rangeMax] = STRATEGY_HORIZON_RANGES[thesis.strategy];
+  // Runtime API payloads are untrusted even though the TypeScript contract is
+  // a closed union.  An unknown truthy strategy must fail closed rather than
+  // throwing while the detail page renders.
+  const range = Object.prototype.hasOwnProperty.call(STRATEGY_HORIZON_RANGES, thesis.strategy)
+    ? STRATEGY_HORIZON_RANGES[thesis.strategy]
+    : undefined;
+  if (!range) return false;
+  const [rangeMin, rangeMax] = range;
   if (horizon.min < rangeMin || horizon.max > rangeMax) return false;
   return true;
 }

@@ -709,8 +709,13 @@ def begin_formalization(db_path, thesis_id: str) -> dict:
     return store.write_transaction(db_path, _do)
 
 
-def confirm_formalization(db_path, thesis_id: str) -> dict:
-    """DRAFT -> CONFIRMED hard-gated transition, without a revision bump."""
+def confirm_formalization(db_path, thesis_id: str, expected_revision: int) -> dict:
+    """DRAFT -> CONFIRMED hard-gated transition, without a revision bump.
+
+    ``expected_revision`` protects the user's reviewed draft from being
+    confirmed after another writer has changed the content.
+    """
+    expected_revision = _validate_expected_revision(expected_revision)
     now = _utc_now_iso()
 
     def _do(conn):
@@ -719,6 +724,12 @@ def confirm_formalization(db_path, thesis_id: str) -> dict:
             raise ThesisNotFoundError(f"投资逻辑 {thesis_id} 不存在")
         if row["formal_state"] != "draft":
             raise FormalLifecycleConflictError("只有 draft thesis 才能 confirm")
+        current = int(row["current_revision"])
+        if current != expected_revision:
+            raise RevisionConflictError(
+                "投资逻辑已发生变化，请重新加载后重试",
+                current_revision=current,
+            )
         if row["status"] != "active":
             raise ValidationError("confirm 要求 status=active")
         claims = json.loads(row["core_claims"])

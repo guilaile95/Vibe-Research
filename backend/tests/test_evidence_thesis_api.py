@@ -381,7 +381,10 @@ class TestConflict:
             "free_notes": "note", "expected_revision": 2, "change_summary": "formal content",
         }
         assert client.put(f"/api/thesis/{tid}", json=update_body).status_code == 200
-        assert client.post(f"/api/thesis/{tid}/confirm").status_code == 200
+        assert client.post(
+            f"/api/thesis/{tid}/confirm",
+            json={"expected_revision": 3},
+        ).status_code == 200
         expected_revision = 3
         expected_state = "confirmed"
         if frozen:

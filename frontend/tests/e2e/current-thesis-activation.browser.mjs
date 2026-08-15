@@ -119,6 +119,13 @@ async function postJson(baseUrl, pathname, body, expectedStatus) {
   return payload.data;
 }
 
+async function getJson(baseUrl, pathname, expectedStatus = 200) {
+  const response = await fetch(`${baseUrl}${pathname}`);
+  const payload = await response.json();
+  assert.equal(response.status, expectedStatus, `${pathname}: ${JSON.stringify(payload)}`);
+  return payload.data;
+}
+
 async function runE2E() {
   const tempDataDir = mkdtempSync(join(tmpdir(), "vr-current-thesis-e2e-"));
   let backendProc;
@@ -162,13 +169,33 @@ async function runE2E() {
       { security_code: "600519", strategy: "SWING" },
       201,
     );
+    // Fixture only: an existing, matching Thesis must remain a visible
+    // candidate and must never become the Campaign binding implicitly.
+    const candidate = await postJson(backendUrl, "/api/thesis", {
+      subject_type: "stock",
+      subject_id: "600519",
+      title: "已有唯一候选 Formal Thesis",
+      summary: "只用于验证候选不会自动绑定。",
+      core_claims: [],
+      catalysts: [],
+      risks: [],
+      invalidation_conditions: [],
+      change_summary: "创建唯一候选测试夹具",
+    }, 200);
 
     staticServer = await startStaticServer(frontendDist, frontendPort);
     browser = await chromium.launch({ executablePath: findChromium(), headless: true });
     const page = await browser.newPage();
     const consoleErrors = [];
+    const notFoundResponses = [];
     page.on("console", (message) => {
       if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("response", (response) => {
+      if (response.status() !== 404) return;
+      const request = response.request();
+      const url = new URL(response.url());
+      notFoundResponses.push({ method: request.method(), pathname: url.pathname });
     });
 
     const calls = { begin: 0, confirm: 0, freeze: 0, bind: 0 };
@@ -197,6 +224,8 @@ async function runE2E() {
     await page.goto(`http://127.0.0.1:${frontendPort}/decision-inbox`, { waitUntil: "networkidle" });
     const thesisCard = page.locator(`[data-campaign-thesis="${campaign.campaign_id}"]`);
     await thesisCard.getByText("尚未绑定", { exact: true }).waitFor();
+    await thesisCard.getByText(candidate.thesis.title, { exact: true }).waitFor();
+    assert.equal(await thesisCard.getByRole("link", { name: "继续设置" }).count(), 1);
     assert.deepEqual(calls, { begin: 0, confirm: 0, freeze: 0, bind: 0 });
 
     await thesisCard.getByRole("link", { name: "新建 Formal Thesis 草稿" }).click();
@@ -238,17 +267,50 @@ async function runE2E() {
     await page.getByRole("link", { name: "返回 Decision Inbox" }).click();
     await thesisCard.getByText("已绑定", { exact: true }).waitFor();
     await thesisCard.getByText("已冻结", { exact: false }).waitFor();
-    await thesisCard.getByText("Current 状态：", { exact: false }).waitFor();
+    await thesisCard.getByText("Current 状态：STABLE", { exact: true }).waitFor();
 
-    const binding = await (await fetch(
-      `${backendUrl}/api/campaigns/${campaign.campaign_id}/thesis-binding`,
-    )).json();
-    const current = await (await fetch(
-      `${backendUrl}/api/campaigns/${campaign.campaign_id}/current-thesis`,
-    )).json();
-    assert.equal(binding.data.campaign_id, campaign.campaign_id);
-    assert.equal(current.data.ready, true);
-    assert.equal(current.data.formal_status, "READY");
+    const binding = await getJson(
+      backendUrl,
+      `/api/campaigns/${campaign.campaign_id}/thesis-binding`,
+    );
+    const current = await getJson(
+      backendUrl,
+      `/api/campaigns/${campaign.campaign_id}/current-thesis`,
+    );
+    assert.equal(binding.campaign_id, campaign.campaign_id);
+    assert.equal(typeof binding.thesis_id, "string");
+    assert.notEqual(binding.thesis_id, candidate.thesis.id);
+    assert.equal(Number.isInteger(binding.thesis_revision_at_bind), true);
+    assert.equal(binding.campaign_strategy_at_bind, campaign.strategy);
+    assert.equal(current.campaign_id, campaign.campaign_id);
+    assert.equal(current.thesis_id, binding.thesis_id);
+    assert.deepEqual(current.binding, {
+      thesis_revision_at_bind: binding.thesis_revision_at_bind,
+      campaign_strategy_at_bind: binding.campaign_strategy_at_bind,
+      bound_at: binding.bound_at,
+    });
+    assert.equal(current.frozen_revision, binding.thesis_revision_at_bind);
+    assert.equal(current.ready, true);
+    assert.equal(current.formal_status, "READY");
+    assert.ok(current.original_snapshot && typeof current.original_snapshot === "object");
+    assert.equal(current.original_snapshot.thesis?.id, binding.thesis_id);
+    assert.equal(current.original_snapshot.thesis?.formal_state, "frozen");
+    assert.equal(current.original_snapshot.thesis?.current_revision, current.frozen_revision);
+    assert.deepEqual(current.deltas, []);
+    assert.equal(current.effective_state, "STABLE");
+
+    const expectedUnboundBindingPath = `/api/campaigns/${campaign.campaign_id}/thesis-binding`;
+    const unexpected404Responses = notFoundResponses.filter(
+      ({ method, pathname }) => method !== "GET" || pathname !== expectedUnboundBindingPath,
+    );
+    assert.deepEqual(unexpected404Responses, [], `unexpected browser 404 responses: ${JSON.stringify(notFoundResponses)}`);
+    assert.ok(
+      notFoundResponses.length > 0,
+      "expected at least one unbound thesis-binding GET to return 404",
+    );
+    // Chromium may log the expected unbound binding response as a console
+    // resource error.  The response allowlist above ensures this exception is
+    // limited to that exact GET; every other 404 fails before this check.
     const unexpectedConsoleErrors = consoleErrors.filter(
       (message) => !message.includes("server responded with a status of 404"),
     );

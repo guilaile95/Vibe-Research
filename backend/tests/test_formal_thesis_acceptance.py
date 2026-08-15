@@ -168,8 +168,18 @@ def begin_formalization(thesis_id: str, expect: int = 200) -> dict:
     return _post(f"/api/thesis/{thesis_id}/begin-formalization", expect=expect)
 
 
-def confirm_formalization(thesis_id: str, expect: int = 200) -> dict:
-    return _post(f"/api/thesis/{thesis_id}/confirm", expect=expect)
+def confirm_formalization(
+    thesis_id: str, expected_revision: int | None = None, expect: int = 200
+) -> dict:
+    if expected_revision is None:
+        expected_revision = _get(
+            f"/api/thesis/{thesis_id}"
+        )["thesis"]["current_revision"]
+    return _post(
+        f"/api/thesis/{thesis_id}/confirm",
+        {"expected_revision": expected_revision},
+        expect=expect,
+    )
 
 
 def freeze_formalization(thesis_id: str, expected_revision: int, expect: int = 200) -> dict:
@@ -404,6 +414,70 @@ def test_a1_new_revision_must_be_content(env):  # noqa: ARG001
     thesis_id = agg["thesis"]["id"]
     assert get_revision(thesis_id, 1)["revision_number"] == 1
     assert get_revision(thesis_id, 1)["revision_kind"] == "CONTENT"
+
+
+def test_confirm_rejects_stale_draft_revision(env):  # noqa: ARG001
+    """Confirm must not lock content changed after the caller's read."""
+    agg = create_thesis(claims=3)
+    thesis_id = agg["thesis"]["id"]
+    begin_formalization(thesis_id)
+    first = update_thesis(
+        thesis_id,
+        expected_revision=1,
+        strategy="SWING",
+        horizon=dict(SWING_HORIZON),
+    )
+    tab_a_revision = first["thesis"]["current_revision"]
+
+    tab_b = _put(f"/api/thesis/{thesis_id}", {
+        "title": "Tab B 未经 Tab A 审阅的内容",
+        "summary": "summary",
+        "status": "active",
+        "core_claims": ["claim-1", "claim-2", "claim-3"],
+        "catalysts": ["catalyst-1"],
+        "risks": ["risk-1"],
+        "invalidation_conditions": ["invalid-1"],
+        "expected_revision": tab_a_revision,
+        "change_summary": "Tab B update",
+        "strategy": "SWING",
+        "expected_horizon": dict(SWING_HORIZON),
+        "free_notes": "Tab B note",
+    })
+    tab_b_revision = tab_b["thesis"]["current_revision"]
+    assert tab_b_revision == tab_a_revision + 1
+
+    stale = client.post(
+        f"/api/thesis/{thesis_id}/confirm",
+        json={"expected_revision": tab_a_revision},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["current_revision"] == tab_b_revision
+
+    still_draft = _get(f"/api/thesis/{thesis_id}")
+    assert still_draft["thesis"]["formal_state"] == "draft"
+    assert still_draft["thesis"]["current_revision"] == tab_b_revision
+    assert still_draft["thesis"]["title"] == "Tab B 未经 Tab A 审阅的内容"
+
+    confirmed = confirm_formalization(thesis_id, expected_revision=tab_b_revision)
+    assert confirmed["thesis"]["formal_state"] == "confirmed"
+    assert confirmed["thesis"]["current_revision"] == tab_b_revision
+
+
+def test_confirm_requires_expected_revision(env):  # noqa: ARG001
+    agg = create_thesis(claims=3)
+    thesis_id = agg["thesis"]["id"]
+    begin_formalization(thesis_id)
+    update_thesis(
+        thesis_id,
+        expected_revision=1,
+        strategy="SWING",
+        horizon=dict(SWING_HORIZON),
+    )
+
+    missing = client.post(f"/api/thesis/{thesis_id}/confirm", json={})
+    assert missing.status_code == 422
+    still_draft = _get(f"/api/thesis/{thesis_id}")
+    assert still_draft["thesis"]["formal_state"] == "draft"
 
 
 # ---------------------------------------------------------------------------
