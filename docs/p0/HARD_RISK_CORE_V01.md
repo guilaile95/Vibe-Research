@@ -1,65 +1,83 @@
 # Formal Hard Risk Core v0.1
 
-Status: HR1 pure authority implementation boundary.
+Status: HR1 correction — named Current Thesis authority only.
 
-## Scope
+## Supported formal authority
 
-`backend/hard_risk_runtime.py` evaluates one explicit `Security + Strategy +
-Campaign + as_of` unit and returns the frozen contract from
-`backend/hard_risk_contract.py`:
+HR1 v0.1 accepts one input authority:
 
 ```text
-CLEAR | CONFIRMED | UNKNOWN | NOT_EVALUATED
+formal_current_thesis.projection.v0.1
 ```
 
-The function is pure. It does not read a Campaign, call a provider, inspect a
-score, use a clock, invoke AI, persist data, or emit an investment action.
+The runtime receives an explicit Current Thesis authority envelope together
+with the backend Campaign record and a literal UTC `as_of`. The envelope must
+carry:
 
-`campaign_id` is only the locator. The backend Campaign record is authoritative
-for `security_code` and `strategy`; every accepted authority envelope must
-repeat and match all three values and the exact caller-supplied UTC `as_of`.
+- the exact `campaign_id`, `security_code`, and `strategy` scope;
+- the exact literal `as_of` used for the evaluation;
+- non-empty `authority_refs` provenance; and
+- the existing Current Thesis `projection` payload.
 
-## Proof boundary
+`campaign_id` is only a locator. The backend Campaign record is authoritative
+for `security_code` and `strategy`; caller-supplied envelope identity cannot
+override it.
 
-The input envelopes are runtime composition inputs, not a new persisted schema.
+## v0.1 derivation
 
-`formal_thesis_projection` wraps the existing
-`formal_thesis_projection_core` result with scope, `as_of`, and
-`authority_refs`. A `READY` terminal projection (`DISPROVEN` or `INVALIDATED`)
-is a high-severity positive proof of the Hard Risk type
-`THESIS_CORE_FACT`; a stable/non-terminal projection is not a clear proof.
+```text
+formal_status = READY
+terminal = true
+effective_state = DISPROVEN
+    -> CONFIRMED + EVALUATED
 
-`hard_risk_proofs` accepts an already normalized proof from a formal upstream
-authority. `CONFIRMED` requires:
+formal_status = READY
+terminal = true
+effective_state = INVALIDATED
+    -> CONFIRMED + EVALUATED
+```
 
-- `hard_risk_evaluation = EVALUATED`;
-- `severity = HIGH` or `CRITICAL`;
-- `positive_proof = true`; and
-- non-empty `authority_refs` and `reason_codes`.
+The corresponding Thesis reason code and authority provenance are retained in
+the output. Terminal facts, schema, identity, UTC scope, and lookahead checks
+are all validated before confirmation.
 
-`CLEAR` requires an explicit positive proof plus
-`coverage = [ALL_IMPLEMENTED_HARD_RISK_CHECKS]`. Empty data, “no finding”,
-usable Critical Data, normal Data Health, or a stable Thesis cannot satisfy
-this condition.
+Valid non-terminal Thesis states (`STABLE`, `STRENGTHENED`, `WEAKENED`) mean
+that the Current Thesis authority ran, but they do not prove trading
+eligibility, solvency, financial authenticity, regulatory safety, or data
+integrity. They therefore return `UNKNOWN`, never `CLEAR`.
 
-Missing/unwired authority is `NOT_EVALUATED`. An authority that ran but is
-ambiguous is `UNKNOWN`; an explicit authority error remains
-`UNKNOWN + ERROR` on the evaluation axis. Conflicting duplicate proofs and
-confirmed-vs-clear proofs fail closed to `UNKNOWN`; mismatched Campaign or
-`as_of` inputs are rejected from the candidate set and cannot create a clean
-result.
+An `UNKNOWN` projection returns `UNKNOWN`. A missing or not-ready Thesis
+authority returns `NOT_EVALUATED`. Scope mismatch, literal `as_of` mismatch,
+lookahead, terminal-flag inconsistency, bad schema, and missing provenance fail
+closed and cannot produce a clean result.
 
-## Anti-rewheel boundary
+## CLEAR boundary
 
-The core reuses the existing Hard Risk contract, Campaign identity shape,
-Current Thesis projection state, UTC temporal convention, and provenance
-(`authority_refs`) pattern. Existing Critical Data, Data Health, disclosures,
-financials, security exchange routing, raw eligibility/special-status facts,
-and `top_risk_*` values remain inputs/context only. In particular, score,
-weighted score, crowding, runup, valuation thresholds, and shadow signals are
-not Hard Risk authority.
+HR1 v0.1 production produces no `CLEAR` result. The shared contract keeps the
+`CLEAR` enum for cross-lane compatibility and future semantics, but this core
+has no all-clear authority and no input path that can synthesize one.
 
-The repository currently lacks formal high-severity eligibility, going-concern,
-financial-authenticity, regulatory, and all-clear classifiers. HR1 therefore
-does not invent those rules: callers without a positive formal authority proof
-remain `UNKNOWN` or `NOT_EVALUATED`.
+## Not yet authoritative
+
+The following remain outside HR1 v0.1 because the repository does not yet have
+named deterministic classifiers that can prove them:
+
+- trading eligibility / special status;
+- going concern / solvency;
+- financial authenticity;
+- core-business regulatory risk;
+- data integrity / availability as a Hard Risk classification;
+- top-risk scores and technical signals;
+- raw disclosures or financial retrieval results.
+
+They do not enter this evaluator as context or as caller-declared conclusions.
+When a future classifier is genuinely implemented, it must add its own named
+deterministic domain adapter and derive Hard Risk from domain facts; HR1 v0.1
+does not reserve a generic proof or registry path for it.
+
+## Pure boundary
+
+`backend/hard_risk_runtime.py` has no I/O, database, filesystem, provider,
+AI, randomness, or wall-clock dependency. It returns the frozen
+`HardRiskEvaluation` contract or its detached `to_dict()` mapping and never
+emits an investment action.

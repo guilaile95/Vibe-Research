@@ -1,17 +1,18 @@
-"""Focused HR1 Formal Hard Risk pure-authority tests."""
+"""HR1 v0.1 tests for the named Current Thesis Hard Risk authority."""
 
 from __future__ import annotations
 
 import ast
 import copy
+import inspect
 from pathlib import Path
 
 import pytest
 
 from hard_risk_contract import hard_risk_evaluation_from_mapping
 from hard_risk_runtime import (
-    ALL_IMPLEMENTED_HARD_RISK_CHECKS,
     HardRiskRuntimeError,
+    THESIS_PROJECTION_SCHEMA_VERSION,
     evaluate_hard_risk,
 )
 
@@ -24,7 +25,10 @@ CAMPAIGN_B = "campaign_fedcba9876543210fedcba9876543210"
 
 
 def _campaign(
-    *, campaign_id: str = CAMPAIGN_A, security_code: str = "600519", strategy: str = "SWING"
+    *,
+    campaign_id: str = CAMPAIGN_A,
+    security_code: str = "600519",
+    strategy: str = "SWING",
 ) -> dict:
     return {
         "campaign_id": campaign_id,
@@ -34,425 +38,329 @@ def _campaign(
     }
 
 
-def _proof(
-    *,
-    campaign_id: str = CAMPAIGN_A,
-    security_code: str = "600519",
-    strategy: str = "SWING",
-    as_of: str = AS_OF,
-    check_id: str = "trading_eligibility",
-    risk_type: str = "TRADING_ELIGIBILITY",
-    state: str = "CONFIRMED",
-    evaluation: str = "EVALUATED",
-    severity: str | None = "HIGH",
-    positive_proof: bool = True,
-    refs: list[str] | None = None,
-    reasons: list[str] | None = None,
-    coverage: list[str] | None = None,
-    fact_time: str | None = None,
-) -> dict:
-    record = {
-        "campaign_id": campaign_id,
-        "security_code": security_code,
-        "strategy": strategy,
-        "as_of": as_of,
-        "check_id": check_id,
-        "risk_type": risk_type,
-        "hard_risk_state": state,
-        "hard_risk_evaluation": evaluation,
-        "positive_proof": positive_proof,
-        "authority_refs": refs if refs is not None else [f"authority:{check_id}:v1"],
-        "reason_codes": reasons if reasons is not None else [f"{check_id}:proof"],
-        "coverage": coverage if coverage is not None else [],
-    }
-    if severity is not None:
-        record["severity"] = severity
-    if fact_time is not None:
-        record["fact_time"] = fact_time
-    return record
-
-
 def _thesis_envelope(
     *,
     campaign_id: str = CAMPAIGN_A,
     security_code: str = "600519",
     strategy: str = "SWING",
     as_of: str = AS_OF,
+    formal_status: str = "READY",
     effective_state: str = "DISPROVEN",
-    terminal: bool = True,
+    terminal: bool | None = None,
+    schema_version: str = THESIS_PROJECTION_SCHEMA_VERSION,
     refs: list[str] | None = None,
     confirmed_at: str | None = "2026-08-15T00:00:00Z",
+    fact_time: str | None = None,
 ) -> dict:
+    if terminal is None:
+        terminal = effective_state in {"DISPROVEN", "INVALIDATED"}
     latest_delta = {
         "delta_state": effective_state,
         "confirmed_at": confirmed_at,
     }
-    return {
+    envelope = {
         "campaign_id": campaign_id,
         "security_code": security_code,
         "strategy": strategy,
         "as_of": as_of,
-        "authority_refs": refs or ["formal_current_thesis.projection:v0.1"],
+        "authority_refs": refs if refs is not None else ["formal_current_thesis:v0.1"],
         "projection": {
-            "schema_version": "formal_current_thesis.projection.v0.1",
+            "schema_version": schema_version,
             "campaign_id": campaign_id,
             "strategy": strategy,
-            "formal_status": "READY",
+            "formal_status": formal_status,
             "effective_state": effective_state,
             "terminal": terminal,
             "latest_delta": latest_delta,
             "deltas": [latest_delta],
         },
     }
+    if fact_time is not None:
+        envelope["fact_time"] = fact_time
+    return envelope
 
 
-def _evaluate(facts: dict, *, campaign: dict | None = None, as_of: str = AS_OF):
+def _evaluate(
+    formal_thesis_projection: dict | None,
+    *,
+    campaign: dict | None = None,
+    as_of: str = AS_OF,
+):
     current_campaign = campaign if campaign is not None else _campaign()
     return evaluate_hard_risk(
         campaign_id=current_campaign["campaign_id"],
         campaign=current_campaign,
         as_of=as_of,
-        authoritative_facts=facts,
+        formal_thesis_projection=formal_thesis_projection,
     )
 
 
-def test_confirmed_requires_high_severity_positive_proof_and_retains_refs():
-    result = _evaluate(
-        {
-            "hard_risk_proofs": [
-                _proof(
-                    refs=["z:source", "a:source"],
-                    reasons=["Z_REASON", "A_REASON"],
-                )
-            ]
-        }
-    )
-
-    assert result.hard_risk_state == "CONFIRMED"
-    assert result.hard_risk_evaluation == "EVALUATED"
-    assert result.authority_refs == ("a:source", "z:source")
-    assert "HARD_RISK_CONFIRMED" in result.reason_codes
-    assert result.to_dict()["authority_refs"] == ["a:source", "z:source"]
-    assert hard_risk_evaluation_from_mapping(result.to_dict()) == result
-
-
-def test_clear_requires_explicit_positive_proof_covering_all_implemented_checks():
-    result = _evaluate(
-        {
-            "hard_risk_proofs": [
-                _proof(
-                    check_id="hard_risk.aggregate",
-                    risk_type="HARD_RISK_AGGREGATE",
-                    state="CLEAR",
-                    severity=None,
-                    refs=["hard-risk-authority:v0.1"],
-                    reasons=[],
-                    coverage=[ALL_IMPLEMENTED_HARD_RISK_CHECKS],
-                )
-            ]
-        }
-    )
-
-    assert result.hard_risk_state == "CLEAR"
-    assert result.hard_risk_evaluation == "EVALUATED"
-    assert result.reason_codes == ("CLEAR_POSITIVE_PROOF",)
-    assert result.authority_refs == ("hard-risk-authority:v0.1",)
-
-
-def test_missing_required_authority_is_not_evaluated_not_clear():
-    result = _evaluate({})
-
-    assert result.hard_risk_state == "NOT_EVALUATED"
-    assert result.hard_risk_evaluation == "NOT_EVALUATED"
-    assert result.authority_refs == ()
-    assert "NO_HARD_RISK_AUTHORITY" in result.reason_codes
-
-
-def test_ambiguous_authority_is_unknown():
-    result = _evaluate(
-        {
-            "hard_risk_proofs": [
-                _proof(
-                    state="UNKNOWN",
-                    evaluation="UNKNOWN",
-                    severity=None,
-                    positive_proof=False,
-                    refs=["provider:ambiguous:v1"],
-                    reasons=["FACT_CONFLICT"],
-                )
-            ]
-        }
-    )
-
-    assert result.hard_risk_state == "UNKNOWN"
-    assert result.hard_risk_evaluation == "UNKNOWN"
-    assert "FACT_CONFLICT" in result.reason_codes
-    assert result.authority_refs == ("provider:ambiguous:v1",)
-
-
-def test_authority_error_remains_unknown_with_error_evaluation_axis():
-    result = _evaluate(
-        {
-            "hard_risk_proofs": [
-                _proof(
-                    state="UNKNOWN",
-                    evaluation="ERROR",
-                    severity=None,
-                    positive_proof=False,
-                    refs=["provider:error:v1"],
-                    reasons=["PROVIDER_ERROR"],
-                )
-            ]
-        }
-    )
-    assert result.hard_risk_state == "UNKNOWN"
-    assert result.hard_risk_evaluation == "ERROR"
-
-
-def test_low_severity_confirmed_claim_is_downgraded_to_unknown():
-    result = _evaluate(
-        {
-            "hard_risk_proofs": [
-                _proof(severity="MATERIAL", positive_proof=True)
-            ]
-        }
-    )
-
-    assert result.hard_risk_state == "UNKNOWN"
-    assert result.hard_risk_evaluation == "UNKNOWN"
-    assert "AUTHORITY_PROOF_AMBIGUOUS" in result.reason_codes
-    assert result.hard_risk_state != "CONFIRMED"
-
-
-def test_formal_thesis_terminal_projection_is_a_confirmed_hard_risk_proof():
-    result = _evaluate(
-        {"formal_thesis_projection": _thesis_envelope(effective_state="DISPROVEN")}
-    )
+def test_ready_terminal_disproven_is_confirmed_and_evaluated():
+    result = _evaluate(_thesis_envelope(effective_state="DISPROVEN"))
 
     assert result.hard_risk_state == "CONFIRMED"
     assert result.hard_risk_evaluation == "EVALUATED"
     assert "THESIS_CORE_FACT_DISPROVEN" in result.reason_codes
-    assert result.authority_refs == ("formal_current_thesis.projection:v0.1",)
+    assert result.authority_refs == ("formal_current_thesis:v0.1",)
+    assert hard_risk_evaluation_from_mapping(result.to_dict()) == result
 
 
-@pytest.mark.parametrize("state,reason", [("DISPROVEN", "THESIS_CORE_FACT_DISPROVEN"), ("INVALIDATED", "THESIS_CORE_FACT_INVALIDATED")])
-def test_formal_thesis_terminal_states_are_both_deterministic(state, reason):
-    result = _evaluate(
-        {"formal_thesis_projection": _thesis_envelope(effective_state=state)}
-    )
+def test_ready_terminal_invalidated_is_confirmed_and_evaluated():
+    result = _evaluate(_thesis_envelope(effective_state="INVALIDATED"))
+
     assert result.hard_risk_state == "CONFIRMED"
-    assert reason in result.reason_codes
+    assert result.hard_risk_evaluation == "EVALUATED"
+    assert "THESIS_CORE_FACT_INVALIDATED" in result.reason_codes
 
 
-def test_stable_thesis_is_not_a_clear_proof():
-    result = _evaluate(
-        {"formal_thesis_projection": _thesis_envelope(effective_state="STABLE", terminal=False)}
-    )
+@pytest.mark.parametrize("state", ["STABLE", "STRENGTHENED", "WEAKENED"])
+def test_ready_non_terminal_thesis_is_unknown_and_never_clear(state):
+    result = _evaluate(_thesis_envelope(effective_state=state, terminal=False))
+
     assert result.hard_risk_state == "UNKNOWN"
     assert result.hard_risk_evaluation == "UNKNOWN"
-    assert "NO_POSITIVE_HARD_RISK_PROOF" in result.reason_codes
+    assert result.hard_risk_state != "CLEAR"
+    assert "THESIS_HARD_RISK_NOT_PROVEN" in result.reason_codes
 
 
-def test_confirmed_and_clear_proofs_conflict_to_unknown():
-    result = _evaluate(
-        {
-            "hard_risk_proofs": [
-                _proof(check_id="confirmed.check"),
-                _proof(
-                    check_id="clear.check",
-                    risk_type="HARD_RISK_AGGREGATE",
-                    state="CLEAR",
-                    severity=None,
-                    refs=["clear:v1"],
-                    reasons=[],
-                    coverage=[ALL_IMPLEMENTED_HARD_RISK_CHECKS],
-                ),
-            ]
-        }
-    )
+def test_ready_unknown_projection_is_unknown_and_never_clear():
+    result = _evaluate(_thesis_envelope(effective_state="UNKNOWN", terminal=False))
+
     assert result.hard_risk_state == "UNKNOWN"
     assert result.hard_risk_evaluation == "UNKNOWN"
-    assert "HARD_RISK_PROOF_CONFLICT" in result.reason_codes
+    assert result.hard_risk_state != "CLEAR"
+    assert "THESIS_PROJECTION_UNKNOWN" in result.reason_codes
+
+
+def test_not_ready_thesis_is_not_evaluated_and_never_clear():
+    result = _evaluate(
+        _thesis_envelope(
+            formal_status="NOT_READY",
+            effective_state="STABLE",
+            terminal=False,
+        )
+    )
+
+    assert result.hard_risk_state == "NOT_EVALUATED"
+    assert result.hard_risk_evaluation == "NOT_EVALUATED"
+    assert result.hard_risk_state != "CLEAR"
+    assert "THESIS_NOT_READY" in result.reason_codes
+
+
+def test_absent_authority_is_not_evaluated_and_never_clear():
+    result = _evaluate(None)
+
+    assert result.hard_risk_state == "NOT_EVALUATED"
+    assert result.hard_risk_evaluation == "NOT_EVALUATED"
+    assert result.hard_risk_state != "CLEAR"
+    assert "THESIS_AUTHORITY_NOT_AVAILABLE" in result.reason_codes
 
 
 def test_malformed_campaign_identity_fails_closed():
     with pytest.raises(HardRiskRuntimeError):
-        _evaluate({}, campaign=_campaign(security_code="60051"))
+        _evaluate(None, campaign=_campaign(security_code="60051"))
 
 
-def test_campaign_locator_must_match_true_backend_campaign():
+def test_campaign_locator_must_match_backend_campaign():
     with pytest.raises(HardRiskRuntimeError, match="CAMPAIGN_LOCATOR_MISMATCH"):
         evaluate_hard_risk(
             campaign_id=CAMPAIGN_B,
             campaign=_campaign(campaign_id=CAMPAIGN_A),
             as_of=AS_OF,
-            authoritative_facts={},
+            formal_thesis_projection=None,
         )
 
 
-def test_sibling_campaign_fact_cannot_leak_into_target():
-    result = _evaluate(
-        {"hard_risk_proofs": [_proof(campaign_id=CAMPAIGN_B)]}
-    )
+@pytest.mark.parametrize(
+    "field,value,reason",
+    [
+        ("campaign_id", CAMPAIGN_B, "AUTHORITY_SCOPE_MISMATCH"),
+        ("security_code", "000001", "AUTHORITY_SCOPE_MISMATCH"),
+        ("strategy", "SHORT", "AUTHORITY_SCOPE_MISMATCH"),
+        ("as_of", "2026-08-15T00:00:00Z", "AUTHORITY_AS_OF_MISMATCH"),
+    ],
+)
+def test_authority_scope_mismatch_fails_closed(field, value, reason):
+    envelope = _thesis_envelope(**{field: value})
+    result = _evaluate(envelope)
+
     assert result.hard_risk_state == "NOT_EVALUATED"
     assert result.hard_risk_evaluation == "NOT_EVALUATED"
-    assert "AUTHORITY_IDENTITY_MISMATCH" in result.reason_codes
-    assert "HARD_RISK_CONFIRMED" not in result.reason_codes
+    assert result.hard_risk_state != "CLEAR"
+    assert reason in result.reason_codes
 
 
 def test_backend_campaign_security_and_strategy_are_authority():
     result = _evaluate(
-        {
-            "hard_risk_proofs": [
-                _proof(security_code="000001", strategy="SHORT")
-            ]
-        }
+        _thesis_envelope(security_code="000001", strategy="SHORT")
     )
+
     assert result.security_code == "600519"
     assert result.strategy == "SWING"
     assert result.hard_risk_state == "NOT_EVALUATED"
-    assert "AUTHORITY_IDENTITY_MISMATCH" in result.reason_codes
+    assert "AUTHORITY_SCOPE_MISMATCH" in result.reason_codes
 
 
-def test_same_security_sibling_campaign_is_still_isolated():
-    sibling = _campaign(campaign_id=CAMPAIGN_B, strategy="SWING")
-    result = evaluate_hard_risk(
-        campaign_id=CAMPAIGN_A,
-        campaign=_campaign(campaign_id=CAMPAIGN_A),
-        as_of=AS_OF,
-        authoritative_facts={
-            "hard_risk_proofs": [
-                _proof(campaign_id=sibling["campaign_id"]),
-            ]
-        },
-    )
+def test_sibling_campaign_projection_cannot_leak_into_target():
+    result = _evaluate(_thesis_envelope(campaign_id=CAMPAIGN_B))
+
     assert result.campaign_id == CAMPAIGN_A
-    assert result.hard_risk_state == "NOT_EVALUATED"
-
-
-def test_as_of_is_explicit_and_authority_mismatch_fails_closed():
-    result = _evaluate(
-        {"hard_risk_proofs": [_proof(as_of="2026-08-15T00:00:00Z")]}
-    )
-    assert result.as_of == AS_OF
-    assert result.hard_risk_state == "NOT_EVALUATED"
-    assert "AUTHORITY_AS_OF_MISMATCH" in result.reason_codes
-
-
-def test_fact_lookahead_fails_closed():
-    result = _evaluate(
-        {
-            "hard_risk_proofs": [
-                _proof(fact_time="2026-08-17T00:00:00Z")
-            ]
-        }
-    )
-    assert result.hard_risk_state == "NOT_EVALUATED"
-    assert "AUTHORITY_LOOKAHEAD" in result.reason_codes
-
-
-def test_top_risk_score_is_not_hard_risk_authority():
-    result = _evaluate(
-        {
-            "top_risk": {
-                "risk_score": 999,
-                "status": "critical",
-                "crowding": 1.0,
-                "runup": 1.0,
-            }
-        }
-    )
-    assert result.hard_risk_state == "NOT_EVALUATED"
-    assert result.hard_risk_evaluation == "NOT_EVALUATED"
-
-
-def test_critical_data_and_data_health_do_not_become_confirmed_hard_risk():
-    result = _evaluate(
-        {
-            "critical_data_projection": {
-                "critical_data_state": "BLOCKED",
-                "critical_data_evaluation": "ERROR",
-            },
-            "data_health": {"status": "unavailable"},
-            "disclosures": {"state": "ERROR"},
-            "financials": {"state": "NOT_EVALUATED"},
-            "trading_eligibility": {"status": "DELISTED"},
-        }
-    )
     assert result.hard_risk_state == "NOT_EVALUATED"
     assert result.hard_risk_state != "CONFIRMED"
 
 
-def test_authority_refs_and_reason_codes_are_deterministic_under_input_reordering():
-    first = _evaluate(
-        {
-            "hard_risk_proofs": [
-                _proof(
-                    check_id="z.check",
-                    refs=["z-ref"],
-                    reasons=["Z_REASON"],
-                ),
-                _proof(
-                    check_id="a.check",
-                    refs=["a-ref"],
-                    reasons=["A_REASON"],
-                ),
-            ]
-        }
+def test_envelope_fact_time_lookahead_fails_closed():
+    result = _evaluate(
+        _thesis_envelope(fact_time="2026-08-17T00:00:00Z")
     )
-    second = _evaluate(
-        {
-            "hard_risk_proofs": [
-                _proof(
-                    check_id="a.check",
-                    refs=["a-ref"],
-                    reasons=["A_REASON"],
-                ),
-                _proof(
-                    check_id="z.check",
-                    refs=["z-ref"],
-                    reasons=["Z_REASON"],
-                ),
-            ]
-        }
+
+    assert result.hard_risk_state == "NOT_EVALUATED"
+    assert result.hard_risk_evaluation == "NOT_EVALUATED"
+    assert "AUTHORITY_LOOKAHEAD" in result.reason_codes
+
+
+def test_projection_fact_time_lookahead_fails_closed():
+    result = _evaluate(
+        _thesis_envelope(confirmed_at="2026-08-17T00:00:00Z")
     )
-    assert first == second
-    assert first.authority_refs == ("a-ref", "z-ref")
-    assert first.reason_codes == tuple(sorted(first.reason_codes, key=lambda code: (code not in {"HARD_RISK_CONFIRMED"}, code)))
+
+    assert result.hard_risk_state == "NOT_EVALUATED"
+    assert result.hard_risk_evaluation == "NOT_EVALUATED"
+    assert "AUTHORITY_LOOKAHEAD" in result.reason_codes
 
 
-def test_input_and_output_are_detached():
-    facts = {"hard_risk_proofs": [_proof(refs=["authority:v1"], reasons=["R1"])]}
-    original = copy.deepcopy(facts)
-    result = _evaluate(facts)
-    assert facts == original
-    payload = result.to_dict()
-    payload["authority_refs"].append("caller:mutation")
-    payload["reason_codes"].append("caller:mutation")
-    assert result.authority_refs == ("authority:v1",)
-    assert result.reason_codes == ("HARD_RISK_CONFIRMED", "R1")
+def test_terminal_false_with_terminal_fact_is_unknown_not_confirmed():
+    result = _evaluate(
+        _thesis_envelope(effective_state="DISPROVEN", terminal=False)
+    )
+
+    assert result.hard_risk_state == "UNKNOWN"
+    assert result.hard_risk_evaluation == "UNKNOWN"
+    assert result.hard_risk_state != "CONFIRMED"
+    assert "THESIS_TERMINAL_FLAG_CONFLICT" in result.reason_codes
 
 
-def test_repeated_evaluation_is_deterministic():
-    facts = {"formal_thesis_projection": _thesis_envelope()}
-    expected = _evaluate(facts)
-    for _ in range(25):
-        assert _evaluate(copy.deepcopy(facts)) == expected
+def test_terminal_true_with_non_terminal_fact_is_unknown_not_confirmed():
+    result = _evaluate(
+        _thesis_envelope(effective_state="STABLE", terminal=True)
+    )
+
+    assert result.hard_risk_state == "UNKNOWN"
+    assert result.hard_risk_state != "CONFIRMED"
+
+
+def test_bad_projection_schema_fails_closed():
+    result = _evaluate(
+        _thesis_envelope(schema_version="formal_current_thesis.projection.v9")
+    )
+
+    assert result.hard_risk_state == "UNKNOWN"
+    assert result.hard_risk_evaluation == "UNKNOWN"
+    assert result.hard_risk_state != "CLEAR"
+    assert "THESIS_PROJECTION_INVALID" in result.reason_codes
+
+
+def test_missing_provenance_fails_closed():
+    result = _evaluate(_thesis_envelope(refs=[]))
+
+    assert result.hard_risk_state == "UNKNOWN"
+    assert result.hard_risk_evaluation == "UNKNOWN"
+    assert result.hard_risk_state != "CLEAR"
+    assert "AUTHORITY_PROVENANCE_MISSING" in result.reason_codes
+
+
+def test_public_api_has_only_named_current_thesis_authority_input():
+    parameters = inspect.signature(evaluate_hard_risk).parameters
+    assert tuple(parameters) == (
+        "campaign_id",
+        "campaign",
+        "as_of",
+        "formal_thesis_projection",
+    )
+    assert "hard_risk_state" not in parameters
+    assert "severity" not in parameters
+    assert "positive_proof" not in parameters
+    assert "coverage" not in parameters
+
+    with pytest.raises(TypeError):
+        evaluate_hard_risk(
+            campaign_id=CAMPAIGN_A,
+            campaign=_campaign(),
+            as_of=AS_OF,
+            formal_thesis_projection=None,
+            hard_risk_state="CONFIRMED",
+            severity="HIGH",
+            positive_proof=True,
+        )
+
+
+@pytest.mark.parametrize("keyword", ["top_risk", "technical_score", "critical_data"])
+def test_non_authority_context_has_no_runtime_input_path(keyword):
+    with pytest.raises(TypeError):
+        evaluate_hard_risk(
+            campaign_id=CAMPAIGN_A,
+            campaign=_campaign(),
+            as_of=AS_OF,
+            formal_thesis_projection=None,
+            **{keyword: {"state": "CONFIRMED", "score": 999}},
+        )
+
+
+def test_no_supported_v01_input_can_produce_clear():
+    inputs = [
+        None,
+        _thesis_envelope(effective_state="STABLE", terminal=False),
+        _thesis_envelope(effective_state="STRENGTHENED", terminal=False),
+        _thesis_envelope(effective_state="WEAKENED", terminal=False),
+        _thesis_envelope(effective_state="UNKNOWN", terminal=False),
+        _thesis_envelope(
+            formal_status="NOT_READY",
+            effective_state="STABLE",
+            terminal=False,
+        ),
+        _thesis_envelope(effective_state="DISPROVEN", terminal=False),
+        _thesis_envelope(schema_version="bad-schema"),
+    ]
+    assert all(_evaluate(item).hard_risk_state != "CLEAR" for item in inputs)
 
 
 def test_result_never_emits_action_fields():
-    result = _evaluate({"formal_thesis_projection": _thesis_envelope()})
-    payload = result.to_dict()
-    assert "EXIT" not in payload
+    payload = _evaluate(_thesis_envelope()).to_dict()
+
+    assert "BUY" not in payload
     assert "SELL" not in payload
+    assert "EXIT" not in payload
     assert "action" not in payload
 
 
-def test_unknown_inputs_fail_closed_instead_of_becoming_new_authority():
-    result = _evaluate({"invented_risk_engine": {"state": "CONFIRMED"}})
-    assert result.hard_risk_state == "NOT_EVALUATED"
-    assert result.hard_risk_evaluation == "NOT_EVALUATED"
-    assert "AUTHORITY_PAYLOAD_INVALID" in result.reason_codes
+def test_input_and_output_are_detached():
+    envelope = _thesis_envelope(refs=["z-ref", "a-ref"])
+    original = copy.deepcopy(envelope)
+    result = _evaluate(envelope)
+
+    assert envelope == original
+    payload = result.to_dict()
+    payload["authority_refs"].append("caller:mutation")
+    assert result.authority_refs == ("a-ref", "z-ref")
+
+
+def test_output_and_reason_codes_are_deterministic():
+    first = _evaluate(_thesis_envelope(refs=["z-ref", "a-ref"]))
+    second = _evaluate(_thesis_envelope(refs=["a-ref", "z-ref"]))
+
+    assert first == second
+    assert first.reason_codes == (
+        "HARD_RISK_CONFIRMED",
+        "THESIS_CORE_FACT_DISPROVEN",
+    )
+    assert first.authority_refs == ("a-ref", "z-ref")
+
+
+def test_repeated_evaluation_is_deterministic():
+    envelope = _thesis_envelope()
+    expected = _evaluate(envelope)
+    for _ in range(25):
+        assert _evaluate(copy.deepcopy(envelope)) == expected
 
 
 def test_static_module_has_no_io_ai_or_wall_clock_dependency():
@@ -469,6 +377,7 @@ def test_static_module_has_no_io_ai_or_wall_clock_dependency():
                 call_names.add(node.func.id)
             elif isinstance(node.func, ast.Attribute):
                 call_names.add(node.func.attr)
+
     assert imported.isdisjoint(
         {
             "os",
@@ -483,4 +392,6 @@ def test_static_module_has_no_io_ai_or_wall_clock_dependency():
             "ai",
         }
     )
-    assert call_names.isdisjoint({"open", "connect", "request", "post", "now", "utcnow", "today", "time"})
+    assert call_names.isdisjoint(
+        {"open", "connect", "request", "post", "now", "utcnow", "today", "time"}
+    )
