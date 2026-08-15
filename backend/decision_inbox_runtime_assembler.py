@@ -642,7 +642,22 @@ def _project_campaign_item(
         as_of=as_of,
         authority_refs=authority_refs,
     )
-    return di.project_campaign(facts).to_dict()
+    projected = di.project_campaign(facts).to_dict()
+
+    # P0-HR1 O lane：product composition 层暴露 Hard Risk 专属 provenance。
+    # 四个专属字段直接来自已通过 contract validation 的 HardRiskEvaluation；
+    # DI1 的 reason_codes / explainability.authority_refs 是 Campaign-level
+    # generic explainability（含 Critical Data / Thesis / Decision 等多 authority），
+    # 禁止充当 Hard Risk 专属 provenance。DI1 输出的 hard_risk_state 必须与
+    # HardRiskEvaluation 完全一致，否则 fail closed。
+    if projected.get("hard_risk_state") != hard_risk.hard_risk_state:
+        raise DecisionInboxRuntimeIntegrityError(
+            "DI1 hard_risk_state 与 HardRiskEvaluation 不一致"
+        )
+    projected["hard_risk_evaluation"] = hard_risk.hard_risk_evaluation
+    projected["hard_risk_reason_codes"] = list(hard_risk.reason_codes)
+    projected["hard_risk_authority_refs"] = list(hard_risk.authority_refs)
+    return projected
 
 
 def _holding_setup_item(

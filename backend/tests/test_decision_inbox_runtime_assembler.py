@@ -1074,3 +1074,157 @@ class TestHardRiskIntegration:
         )
         with pytest.raises(runtime.DecisionInboxRuntimeError):
             _assemble(ports)
+
+    # ------------------------------------------------------------------
+    # O lane：Campaign item 暴露 Hard Risk 专属 provenance（与 DI1 generic
+    # explainability 严格隔离；专属字段直接来自 contract-validated 结果）
+    # ------------------------------------------------------------------
+
+    def test_confirmed_exposes_exact_hard_risk_fields(self):
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=_hr_confirmed,
+        )
+        item = _swing_item(ports)
+        assert item["hard_risk_state"] == "CONFIRMED"
+        assert item["hard_risk_evaluation"] == "EVALUATED"
+        assert item["hard_risk_reason_codes"] == ["HARD_RISK_CONFIRMED"]
+        assert item["hard_risk_authority_refs"] == ["hard-risk:fake-confirmed"]
+
+    def test_clear_exposes_exact_hard_risk_fields(self):
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=_hr_clear,
+        )
+        item = _swing_item(ports)
+        assert item["hard_risk_state"] == "CLEAR"
+        assert item["hard_risk_evaluation"] == "EVALUATED"
+        assert item["hard_risk_reason_codes"] == []
+        assert item["hard_risk_authority_refs"] == ["hard-risk:fake-clear"]
+
+    def test_error_keeps_evaluation_error_in_payload(self):
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=_hr_error,
+        )
+        item = _swing_item(ports)
+        assert item["hard_risk_state"] == "UNKNOWN"
+        assert item["hard_risk_evaluation"] == "ERROR"
+        assert item["hard_risk_reason_codes"] == ["HARD_RISK_EVALUATION_ERROR"]
+        assert item["hard_risk_authority_refs"] == []
+
+    def test_not_evaluated_keeps_own_reasons(self):
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=_hr_not_evaluated,
+        )
+        item = _swing_item(ports)
+        assert item["hard_risk_state"] == "NOT_EVALUATED"
+        assert item["hard_risk_evaluation"] == "NOT_EVALUATED"
+        assert item["hard_risk_reason_codes"] == ["HARD_RISK_NOT_EVALUATED"]
+        assert item["hard_risk_authority_refs"] == []
+
+    def test_provenance_isolation_from_critical_data(self):
+        """E：Hard Risk refs 严格专属；generic explainability 允许两者。"""
+
+        def hr_proof(definition):
+            return _hr_result(
+                definition, state="CONFIRMED", evaluation="EVALUATED",
+                reasons=["HARD_RISK_CONFIRMED"], refs=["hard-risk:proof"],
+            )
+
+        def cd_proof(dependency_id):
+            def evaluator(_lake, definition):
+                return {
+                    "dependency_id": dependency_id,
+                    "state": "USABLE",
+                    "as_of": definition["as_of"],
+                    "authority_refs": ["critical-data:proof"],
+                }
+
+            return evaluator
+
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=hr_proof,
+            market_sector_evaluator=cd_proof(
+                market_sector_adapter.DEPENDENCY_ID
+            ),
+            disclosures_evaluator=cd_proof(
+                disclosures_adapter.DEPENDENCY_ID
+            ),
+        )
+        item = _swing_item(ports)
+        # 专属字段严格 == evaluator 原始 refs，绝不混入 critical-data:proof
+        assert item["hard_risk_authority_refs"] == ["hard-risk:proof"]
+        # generic explainability 允许同时包含两者
+        generic = item["explainability"]["authority_refs"]
+        assert "hard-risk:proof" in generic
+        assert "critical-data:proof" in generic
+
+    def test_reason_isolation_from_generic_reasons(self):
+        """F：专属 reason_codes 只能是 evaluator 原始 reasons。"""
+
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=_hr_confirmed,
+        )
+        item = _swing_item(ports)
+        # 专属字段不含 generic reasons（CRITICAL_DATA_* / COVERAGE_*）
+        assert item["hard_risk_reason_codes"] == ["HARD_RISK_CONFIRMED"]
+        assert not any(
+            code.startswith("CRITICAL_DATA_") or "COVERAGE" in code
+            for code in item["hard_risk_reason_codes"]
+        )
+        # generic reason_codes 同时包含 HR + Critical Data + Coverage
+        generic = item["reason_codes"]
+        assert di.REASON_HARD_RISK_CONFIRMED in generic
+        assert any(
+            code.startswith("CRITICAL_DATA_") for code in generic
+        )
+        assert di.REASON_COVERAGE_INCOMPLETE in generic
+
+    def test_di1_state_mismatch_fails_closed(self, monkeypatch):
+        """DI1 输出的 hard_risk_state 与 HardRiskEvaluation 不一致 → 500。"""
+
+        class _TamperedItem:
+            def __init__(self, inner, replacement):
+                self._inner = inner
+                self._replacement = replacement
+
+            def to_dict(self):
+                result = self._inner.to_dict()
+                result["hard_risk_state"] = self._replacement
+                return result
+
+        real = runtime.di.project_campaign
+
+        def tampered(facts):
+            inner = real(facts)
+            replacement = (
+                "CONFIRMED" if facts.hard_risk_state != "CONFIRMED"
+                else "CLEAR"
+            )
+            return _TamperedItem(inner, replacement)
+
+        monkeypatch.setattr(runtime.di, "project_campaign", tampered)
+        ports, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            ),
+            hard_risk_evaluator=_hr_confirmed,
+        )
+        with pytest.raises(runtime.DecisionInboxRuntimeIntegrityError):
+            _assemble(ports)
