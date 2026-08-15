@@ -119,6 +119,24 @@ async function postJson(baseUrl, pathname, body, expectedStatus) {
   return payload.data;
 }
 
+async function postEmpty(baseUrl, pathname, expectedStatus) {
+  const response = await fetch(`${baseUrl}${pathname}`, { method: "POST" });
+  const payload = await response.json();
+  assert.equal(response.status, expectedStatus, `${pathname}: ${JSON.stringify(payload)}`);
+  return payload.data;
+}
+
+async function putJson(baseUrl, pathname, body, expectedStatus) {
+  const response = await fetch(`${baseUrl}${pathname}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, expectedStatus, `${pathname}: ${JSON.stringify(payload)}`);
+  return payload.data;
+}
+
 async function getJson(baseUrl, pathname, expectedStatus = 200) {
   const response = await fetch(`${baseUrl}${pathname}`);
   const payload = await response.json();
@@ -136,6 +154,7 @@ async function runE2E() {
     const backendPort = await getFreePort();
     const frontendPort = await getFreePort();
     const backendUrl = `http://127.0.0.1:${backendPort}`;
+    const frontendUrl = `http://127.0.0.1:${frontendPort}`;
     const py = getPythonConfig();
     const env = {
       ...process.env,
@@ -221,13 +240,108 @@ async function runE2E() {
       await proxyToBackend(route);
     });
 
-    await page.goto(`http://127.0.0.1:${frontendPort}/decision-inbox`, { waitUntil: "networkidle" });
+    await page.goto(`${frontendUrl}/decision-inbox`, { waitUntil: "networkidle" });
     const thesisCard = page.locator(`[data-campaign-thesis="${campaign.campaign_id}"]`);
     await thesisCard.getByText("尚未绑定", { exact: true }).waitFor();
     await thesisCard.getByText(candidate.thesis.title, { exact: true }).waitFor();
     assert.equal(await thesisCard.getByRole("link", { name: "继续设置" }).count(), 1);
     assert.deepEqual(calls, { begin: 0, confirm: 0, freeze: 0, bind: 0 });
 
+    // Negative gate 1: campaign_id only locates the real Campaign; a Thesis
+    // for another security must not be allowed to start Formal lifecycle.
+    const campaignQuery = new URLSearchParams({
+      campaign_id: campaign.campaign_id,
+      security_code: campaign.security_code,
+      strategy: campaign.strategy,
+      return_to: "/decision-inbox",
+    }).toString();
+    const wrongSecurity = await postJson(backendUrl, "/api/thesis", {
+      subject_type: "stock",
+      subject_id: "000001",
+      title: "错误证券 Thesis",
+      summary: "用于验证 Campaign/Thesis subject fail-closed。",
+      core_claims: [],
+      catalysts: [],
+      risks: [],
+      invalidation_conditions: [],
+      change_summary: "创建错误证券测试夹具",
+    }, 200);
+    await page.goto(`${frontendUrl}/thesis/${wrongSecurity.thesis.id}?${campaignQuery}`, { waitUntil: "networkidle" });
+    await page.getByRole("alert").filter({ hasText: "当前 Thesis 与真实 Campaign 的证券或策略不一致" }).waitFor();
+    const wrongSecurityBegin = page.getByRole("button", { name: "开始 Formal 化" });
+    await wrongSecurityBegin.waitFor();
+    assert.equal(await wrongSecurityBegin.isDisabled(), true);
+    const wrongSecurityAfter = await getJson(backendUrl, `/api/thesis/${wrongSecurity.thesis.id}`);
+    assert.equal(wrongSecurityAfter.thesis.formal_state, null);
+    assert.deepEqual(calls, { begin: 0, confirm: 0, freeze: 0, bind: 0 });
+
+    // Negative gate 2: same security but conflicting non-null strategy must
+    // fail closed at Confirm, Freeze and Bind. Backend-only fixture mutation is
+    // intentional here so each browser gate can be exercised independently.
+    const strategySeed = await postJson(backendUrl, "/api/thesis", {
+      subject_type: "stock",
+      subject_id: "600519",
+      title: "策略错配 Thesis",
+      summary: "用于验证 SWING Campaign 不接受 SHORT Formal Thesis。",
+      core_claims: [],
+      catalysts: [],
+      risks: [],
+      invalidation_conditions: [],
+      change_summary: "创建策略错配测试夹具",
+    }, 200);
+    const strategyDraft = await postEmpty(
+      backendUrl,
+      `/api/thesis/${strategySeed.thesis.id}/begin-formalization`,
+      200,
+    );
+    const strategyMismatch = await putJson(backendUrl, `/api/thesis/${strategySeed.thesis.id}`, {
+      title: strategyDraft.thesis.title,
+      summary: strategyDraft.thesis.summary,
+      status: "active",
+      core_claims: ["策略错配论点一", "策略错配论点二", "策略错配论点三"],
+      catalysts: [],
+      risks: [],
+      invalidation_conditions: [],
+      strategy: "SHORT",
+      expected_horizon: { unit: "TRADING_DAY", min: 1, max: 10, anchor: "FREEZE_AT" },
+      free_notes: null,
+      expected_revision: strategyDraft.thesis.current_revision,
+      change_summary: "构造 SHORT 与 SWING 的策略错配",
+    }, 200);
+
+    await page.goto(`${frontendUrl}/thesis/${strategyMismatch.thesis.id}?${campaignQuery}`, { waitUntil: "networkidle" });
+    await page.getByRole("alert").filter({ hasText: "当前 Thesis 与真实 Campaign 的证券或策略不一致" }).waitFor();
+    const mismatchConfirm = page.getByRole("button", { name: "确认 Formal Thesis" });
+    await mismatchConfirm.waitFor();
+    assert.equal(await mismatchConfirm.isDisabled(), true);
+    assert.deepEqual(calls, { begin: 0, confirm: 0, freeze: 0, bind: 0 });
+
+    const mismatchConfirmed = await postJson(
+      backendUrl,
+      `/api/thesis/${strategyMismatch.thesis.id}/confirm`,
+      { expected_revision: strategyMismatch.thesis.current_revision },
+      200,
+    );
+    await page.reload({ waitUntil: "networkidle" });
+    const mismatchFreeze = page.getByRole("button", { name: "冻结 Formal Original" });
+    await mismatchFreeze.waitFor();
+    assert.equal(await mismatchFreeze.isDisabled(), true);
+    assert.deepEqual(calls, { begin: 0, confirm: 0, freeze: 0, bind: 0 });
+
+    const mismatchFrozen = await postJson(
+      backendUrl,
+      `/api/thesis/${strategyMismatch.thesis.id}/freeze`,
+      { expected_revision: mismatchConfirmed.thesis.current_revision },
+      200,
+    );
+    assert.equal(mismatchFrozen.thesis.formal_state, "frozen");
+    await page.reload({ waitUntil: "networkidle" });
+    const mismatchBind = page.getByRole("button", { name: "绑定到当前 Campaign" });
+    await mismatchBind.waitFor();
+    assert.equal(await mismatchBind.isDisabled(), true);
+    assert.deepEqual(calls, { begin: 0, confirm: 0, freeze: 0, bind: 0 });
+
+    await page.goto(`${frontendUrl}/decision-inbox`, { waitUntil: "networkidle" });
     await thesisCard.getByRole("link", { name: "新建 Formal Thesis 草稿" }).click();
     await page.getByRole("heading", { name: "新建投资逻辑" }).waitFor();
     assert.equal(await page.getByLabel("主体代码/标识 *").inputValue(), "600519");
