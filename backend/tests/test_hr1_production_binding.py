@@ -239,3 +239,58 @@ def test_production_result_passes_shared_contract():
         normalized = hard_risk_evaluation_from_mapping(raw)
         assert normalized.hard_risk_state == raw["hard_risk_state"]
         assert normalized.as_of == AS_OF
+
+
+# ---------------------------------------------------------------------------
+# §7：malformed READY projection 经 production port 必须 fail closed
+# ---------------------------------------------------------------------------
+
+def test_malformed_ready_without_thesis_id_cannot_confirm():
+    """effective_state=DISPROVEN 但缺 thesis_id → adapter error 传播，
+    production port 绝不得返回 CONFIRMED。"""
+    from hard_risk_current_thesis_adapter import CurrentThesisHardRiskAdapterError
+
+    projection = _readonly_projection(deltas=((1, "DISPROVEN"),))
+    assert projection["effective_state"] == "DISPROVEN"
+    projection.pop("thesis_id")
+
+    with pytest.raises(CurrentThesisHardRiskAdapterError):
+        runtime._production_hard_risk_evaluator(
+            _definition(), CAMPAIGN, projection
+        )
+
+
+def test_malformed_ready_binding_strategy_mismatch_fails_closed():
+    from hard_risk_current_thesis_adapter import CurrentThesisHardRiskAdapterError
+
+    projection = _readonly_projection(deltas=((1, "INVALIDATED"),))
+    projection["binding"]["campaign_strategy_at_bind"] = "MEDIUM"
+    with pytest.raises(CurrentThesisHardRiskAdapterError):
+        runtime._production_hard_risk_evaluator(
+            _definition(), CAMPAIGN, projection
+        )
+
+
+def test_assembler_level_malformed_projection_fails_closed_500():
+    """assembler 层：production port 的 adapter error 必须转 DecisionInboxRuntimeError
+    （500 fail closed），而不是产生 CONFIRMED/NOT_EVALUATED 结果。"""
+    from hard_risk_current_thesis_adapter import CurrentThesisHardRiskAdapterError
+
+    projection = _readonly_projection(deltas=((1, "DISPROVEN"),))
+    projection.pop("thesis_id")
+
+    def broken_evaluator(definition, campaign, current_thesis_projection):
+        raise CurrentThesisHardRiskAdapterError("malformed")
+
+    # 直接验证 assembler 的 _evaluate_hard_risk 对 evaluator 异常的整体 fail closed：
+    # adapter error 属于 evaluator 异常 → DecisionInboxRuntimeError。
+    from decision_inbox_runtime_assembler import (
+        DecisionInboxRuntimeError,
+        _evaluate_hard_risk,
+    )
+
+    class _Ports:
+        hard_risk_evaluator = staticmethod(broken_evaluator)
+
+    with pytest.raises(DecisionInboxRuntimeError):
+        _evaluate_hard_risk(_Ports(), _definition(), CAMPAIGN, projection)
