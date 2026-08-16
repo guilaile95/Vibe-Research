@@ -1,10 +1,10 @@
 """Formal Decision Proposal pure-domain contract for P0-DC1.
 
 This is a deterministic, uncommitted composition result.  It preserves
-Asset / Trade / Portfolio views, derives a frozen-vocabulary Next Best Action,
-and narrows the Action Envelope from named authority results.  It never calls
-``frozen_decision_service`` and never creates commit identity, timestamps,
-hashes, broker fields, or order fields.
+Asset / Trade / Portfolio proposed view content, derives a frozen-vocabulary
+Next Best Action, and narrows the Action Envelope from named authority
+results.  It never calls ``frozen_decision_service`` and never creates commit
+identity, timestamps, hashes, broker fields, or order fields.
 
 The input surface accepts typed results from the C-lane authorities rather
 than a generic ``action`` / ``severity`` / ``material_change_state`` mapping.
@@ -38,6 +38,11 @@ EVALUATION_STATES: tuple[str, ...] = (
     "UNKNOWN",
     "NOT_EVALUATED",
     "ERROR",
+)
+VIEW_ORIGINS: tuple[str, ...] = (
+    "USER_DRAFT",
+    "MODEL_PROPOSAL",
+    "DETERMINISTIC_PROPOSAL",
 )
 VALID_STRATEGIES = ("SHORT", "SWING", "MEDIUM")
 
@@ -181,13 +186,48 @@ def _ordered_actions(values: list[str] | tuple[str, ...], field: str) -> tuple[s
     return tuple(action for action in NEXT_BEST_ACTIONS if action in actions)
 
 
+def _view_provenance(value: Mapping[str, Any], field: str = "view_provenance") -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise DecisionProposalValidationError(f"{field} must be a Mapping")
+    expected_views = {"asset_view", "trade_view", "portfolio_view"}
+    if set(value) != expected_views:
+        raise DecisionProposalValidationError(
+            f"{field} must contain exactly {sorted(expected_views)}"
+        )
+    result: dict[str, Any] = {}
+    for view_name in ("asset_view", "trade_view", "portfolio_view"):
+        entry = value[view_name]
+        if not isinstance(entry, Mapping):
+            raise DecisionProposalValidationError(
+                f"{field}.{view_name} must be a Mapping"
+            )
+        if set(entry) != {"view_origin", "provenance_refs"}:
+            raise DecisionProposalValidationError(
+                f"{field}.{view_name} must contain view_origin and provenance_refs"
+            )
+        origin = _require_text(entry["view_origin"], f"{field}.{view_name}.view_origin")
+        if origin not in VIEW_ORIGINS:
+            raise DecisionProposalValidationError(
+                f"{field}.{view_name}.view_origin is not a supported origin"
+            )
+        refs = _string_list(
+            entry["provenance_refs"],
+            f"{field}.{view_name}.provenance_refs",
+        )
+        result[view_name] = {
+            "view_origin": origin,
+            "provenance_refs": list(refs),
+        }
+    return result
+
+
 @dataclass(frozen=True)
 class DecisionProposal:
     """Uncommitted Formal Decision proposal value/result."""
 
     schema_version: str
     proposal_status: str
-    proposal_evaluation: str
+    constraint_evaluation: str
     security_code: str
     strategy: str
     campaign_id: str
@@ -197,6 +237,7 @@ class DecisionProposal:
     asset_view: Mapping[str, Any]
     trade_view: Mapping[str, Any]
     portfolio_view: Mapping[str, Any]
+    view_provenance: Mapping[str, Any]
     next_best_action: str
     action_envelope: Mapping[str, Any]
     maintain_conditions: tuple[str, ...]
@@ -211,8 +252,8 @@ class DecisionProposal:
             raise DecisionProposalValidationError("unsupported Decision Proposal schema")
         if self.proposal_status != PROPOSAL_STATUS:
             raise DecisionProposalValidationError("Proposal must remain UNCOMMITTED")
-        if self.proposal_evaluation not in EVALUATION_STATES:
-            raise DecisionProposalValidationError("invalid proposal_evaluation")
+        if self.constraint_evaluation not in EVALUATION_STATES:
+            raise DecisionProposalValidationError("invalid constraint_evaluation")
         _require_security_code(self.security_code)
         _require_strategy(self.strategy)
         _require_campaign_id(self.campaign_id)
@@ -226,6 +267,8 @@ class DecisionProposal:
             ("portfolio_view", self.portfolio_view),
         ):
             _json_object(value, field_name)
+        _reject_forbidden_keys(self.view_provenance, "view_provenance")
+        normalized_view_provenance = _view_provenance(self.view_provenance)
         if self.next_best_action not in NEXT_BEST_ACTIONS:
             raise DecisionProposalValidationError("next_best_action is not frozen vocabulary")
         if not isinstance(self.action_envelope, Mapping):
@@ -270,6 +313,7 @@ class DecisionProposal:
         object.__setattr__(self, "asset_view", _json_object(self.asset_view, "asset_view"))
         object.__setattr__(self, "trade_view", _json_object(self.trade_view, "trade_view"))
         object.__setattr__(self, "portfolio_view", _json_object(self.portfolio_view, "portfolio_view"))
+        object.__setattr__(self, "view_provenance", normalized_view_provenance)
         object.__setattr__(self, "action_envelope", copy.deepcopy(envelope))
         object.__setattr__(self, "authority_facts", copy.deepcopy(dict(self.authority_facts)))
         object.__setattr__(self, "authority_refs", _string_list(self.authority_refs, "authority_refs"))
@@ -278,7 +322,7 @@ class DecisionProposal:
         return {
             "schema_version": self.schema_version,
             "proposal_status": self.proposal_status,
-            "proposal_evaluation": self.proposal_evaluation,
+            "constraint_evaluation": self.constraint_evaluation,
             "security_code": self.security_code,
             "strategy": self.strategy,
             "campaign_id": self.campaign_id,
@@ -288,6 +332,7 @@ class DecisionProposal:
             "asset_view": copy.deepcopy(dict(self.asset_view)),
             "trade_view": copy.deepcopy(dict(self.trade_view)),
             "portfolio_view": copy.deepcopy(dict(self.portfolio_view)),
+            "view_provenance": copy.deepcopy(dict(self.view_provenance)),
             "next_best_action": self.next_best_action,
             "action_envelope": copy.deepcopy(dict(self.action_envelope)),
             "maintain_conditions": list(self.maintain_conditions),
@@ -305,7 +350,7 @@ def decision_proposal_from_mapping(value: Mapping[str, Any]) -> DecisionProposal
     expected = {
         "schema_version",
         "proposal_status",
-        "proposal_evaluation",
+        "constraint_evaluation",
         "security_code",
         "strategy",
         "campaign_id",
@@ -315,6 +360,7 @@ def decision_proposal_from_mapping(value: Mapping[str, Any]) -> DecisionProposal
         "asset_view",
         "trade_view",
         "portfolio_view",
+        "view_provenance",
         "next_best_action",
         "action_envelope",
         "maintain_conditions",
@@ -331,7 +377,7 @@ def decision_proposal_from_mapping(value: Mapping[str, Any]) -> DecisionProposal
     return DecisionProposal(
         schema_version=value["schema_version"],
         proposal_status=value["proposal_status"],
-        proposal_evaluation=value["proposal_evaluation"],
+        constraint_evaluation=value["constraint_evaluation"],
         security_code=value["security_code"],
         strategy=value["strategy"],
         campaign_id=value["campaign_id"],
@@ -341,6 +387,7 @@ def decision_proposal_from_mapping(value: Mapping[str, Any]) -> DecisionProposal
         asset_view=value["asset_view"],
         trade_view=value["trade_view"],
         portfolio_view=value["portfolio_view"],
+        view_provenance=value["view_provenance"],
         next_best_action=value["next_best_action"],
         action_envelope=value["action_envelope"],
         maintain_conditions=tuple(value["maintain_conditions"]),
@@ -386,14 +433,11 @@ def _conditions_and_envelope(
     material_state: str | None,
     sell_state: str | None,
 ) -> tuple[dict[str, Any], str]:
-    if evaluation != "EVALUATED":
-        allowed = {"WAIT", "RESEARCH MORE"}
-        maintain = ["all required named authorities evaluate at the same literal as_of"]
-        upgrade = ["resolve every UNKNOWN / NOT_EVALUATED / ERROR authority before widening actions"]
-        downgrade = [f"proposal_evaluation == {evaluation}"]
-        invalidation = ["any authority identity or as_of mismatch"]
-        nba = "RESEARCH MORE"
-    elif thesis_state in {"DISPROVEN", "INVALIDATED"} or sell_state == "THESIS_INVALIDATED":
+    # Terminal Current Thesis and confirmed Hard Risk are review pressures
+    # even when the aggregate constraint set is incomplete.  The incomplete
+    # status remains visible in ``constraint_evaluation`` and narrows the
+    # envelope; it does not erase a separately authoritative risk signal.
+    if thesis_state in {"DISPROVEN", "INVALIDATED"} or sell_state == "THESIS_INVALIDATED":
         allowed = {"WATCH TO REDUCE", "REDUCE", "EXIT", "WAIT", "RESEARCH MORE"}
         maintain = ["thesis invalidation remains acknowledged", "no positive new-risk action is allowed"]
         upgrade = ["user must create a new valid Current Thesis before any positive action"]
@@ -409,6 +453,20 @@ def _conditions_and_envelope(
         nba = "WATCH TO REDUCE" if sell_state in {None, "WATCH_TO_REDUCE"} else (
             "REDUCE" if sell_state == "REDUCE" else "EXIT"
         )
+    elif material_state == "CONFIRMED" or thesis_state == "WEAKENED":
+        allowed = {"WAIT", "RESEARCH MORE"}
+        maintain = ["review the confirmed change before taking a new positive-risk action"]
+        upgrade = ["a new named authority evaluates the changed thesis and action envelope"]
+        downgrade = ["material_change_state == CONFIRMED or thesis_state == WEAKENED"]
+        invalidation = ["the changed fact is superseded by a newer authoritative projection"]
+        nba = "WAIT"
+    elif evaluation != "EVALUATED":
+        allowed = {"WAIT", "RESEARCH MORE"}
+        maintain = ["all required named authorities evaluate at the same literal as_of"]
+        upgrade = ["resolve every UNKNOWN / NOT_EVALUATED / ERROR authority before widening actions"]
+        downgrade = [f"constraint_evaluation == {evaluation}"]
+        invalidation = ["any authority identity or as_of mismatch"]
+        nba = "RESEARCH MORE"
     elif sell_state == "EXIT":
         allowed = {"EXIT", "WAIT", "RESEARCH MORE"}
         maintain = ["the named EXIT authority remains valid at the same as_of"]
@@ -430,13 +488,6 @@ def _conditions_and_envelope(
         downgrade = ["sell_state == WATCH_TO_REDUCE"]
         invalidation = ["the named watch/review authority is superseded by a newer valid result"]
         nba = "WATCH TO REDUCE"
-    elif material_state == "CONFIRMED" or thesis_state == "WEAKENED":
-        allowed = {"WAIT", "RESEARCH MORE"}
-        maintain = ["review the confirmed change before taking a new positive-risk action"]
-        upgrade = ["a new named authority evaluates the changed thesis and action envelope"]
-        downgrade = ["material_change_state == CONFIRMED or thesis_state == WEAKENED"]
-        invalidation = ["the changed fact is superseded by a newer authoritative projection"]
-        nba = "WAIT"
     elif sell_state == "HOLD" and hard_risk_state == "CLEAR" and material_state == "NONE":
         allowed = {"HOLD", "WAIT", "RESEARCH MORE"}
         maintain = ["hard_risk_state == CLEAR", "material_change_state == NONE", "sell_state == HOLD"]
@@ -559,7 +610,7 @@ def project_decision_proposal(
     material_evaluation = material_change.material_change_evaluation if material_change is not None else "NOT_EVALUATED"
     sell_state = sell_engine.sell_state if sell_engine is not None else None
     sell_evaluation = sell_engine.sell_evaluation if sell_engine is not None else "NOT_EVALUATED"
-    proposal_evaluation = _status_max(
+    constraint_evaluation = _status_max(
         [thesis_evaluation, hard_evaluation, material_evaluation, sell_evaluation]
     )
 
@@ -591,7 +642,7 @@ def project_decision_proposal(
     }
 
     envelope, nba = _conditions_and_envelope(
-        evaluation=proposal_evaluation,
+        evaluation=constraint_evaluation,
         thesis_state=thesis_state,
         hard_risk_state=hard_state,
         material_state=material_state,
@@ -605,10 +656,24 @@ def project_decision_proposal(
         authority_refs.extend(material_change.authority_refs)
     if sell_engine is not None:
         authority_refs.extend(sell_engine.authority_refs)
+    view_provenance = {
+        "asset_view": {
+            "view_origin": "USER_DRAFT",
+            "provenance_refs": [],
+        },
+        "trade_view": {
+            "view_origin": "USER_DRAFT",
+            "provenance_refs": [],
+        },
+        "portfolio_view": {
+            "view_origin": "USER_DRAFT",
+            "provenance_refs": [],
+        },
+    }
     return DecisionProposal(
         schema_version=SCHEMA_VERSION,
         proposal_status=PROPOSAL_STATUS,
-        proposal_evaluation=proposal_evaluation,
+        constraint_evaluation=constraint_evaluation,
         security_code=security,
         strategy=strategy_value,
         campaign_id=campaign,
@@ -618,6 +683,7 @@ def project_decision_proposal(
         asset_view=_json_object(asset_view, "asset_view"),
         trade_view=_json_object(trade_view, "trade_view"),
         portfolio_view=_json_object(portfolio_view, "portfolio_view"),
+        view_provenance=view_provenance,
         next_best_action=nba,
         action_envelope=envelope,
         maintain_conditions=tuple(envelope["maintain_conditions"]),
@@ -638,6 +704,7 @@ __all__ = [
     "NEXT_BEST_ACTIONS",
     "PROPOSAL_STATUS",
     "SCHEMA_VERSION",
+    "VIEW_ORIGINS",
     "decision_proposal_from_mapping",
     "project_decision_proposal",
 ]

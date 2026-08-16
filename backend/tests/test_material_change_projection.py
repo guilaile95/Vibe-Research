@@ -227,11 +227,43 @@ def test_unknown_temporal_relation_fails_closed():
     assert result.materiality_basis == "EC1_TEMPORAL_RELATION_UNKNOWN"
 
 
-def test_hard_risk_confirmed_is_a_named_material_change_fact():
+def test_hard_risk_confirmed_alone_is_not_a_material_change_fact():
     result = _project(hard=_hard("CONFIRMED"))
 
+    assert result.material_change_state == "UNKNOWN"
+    assert result.material_change_evaluation == "UNKNOWN"
+    assert result.materiality_basis == "HARD_RISK_CONFIRMED_WITHOUT_AFTER_DECISION_PROOF"
+    assert result.reason_codes == ("HARD_RISK_CONFIRMED_WITHOUT_AFTER_DECISION_PROOF",)
+
+
+def test_hard_risk_confirmed_with_preexisting_evidence_is_not_material():
+    result = _project(evidence="preexisting", hard=_hard("CONFIRMED"))
+
+    assert result.evidence_relation == "PREEXISTING_AT_DECISION"
+    assert result.material_change_state != "CONFIRMED"
+    assert result.material_change_state == "UNKNOWN"
+
+
+def test_hard_risk_confirmed_without_temporal_proof_is_not_material():
+    result = _project(evidence="unknown", hard=_hard("CONFIRMED"))
+
+    assert result.evidence_relation == "UNKNOWN_TEMPORAL_RELATION"
+    assert result.material_change_state != "CONFIRMED"
+    assert result.material_change_evaluation == "UNKNOWN"
+
+
+def test_weakened_thesis_after_decision_with_ec1_support_is_material():
+    result = _project(evidence="new", thesis=_thesis("WEAKENED"), hard=_hard("CONFIRMED"))
+
     assert result.material_change_state == "CONFIRMED"
-    assert result.materiality_basis == "HARD_RISK_CONFIRMED"
+    assert result.material_change_evaluation == "EVALUATED"
+
+
+def test_terminal_thesis_requires_after_decision_support():
+    result = _project(evidence="preexisting", thesis=_thesis("INVALIDATED"), hard=_hard("CONFIRMED"))
+
+    assert result.material_change_state != "CONFIRMED"
+    assert result.material_change_state == "UNKNOWN"
 
 
 def test_hard_risk_error_is_not_downgraded_to_unknown_evaluation():

@@ -1,16 +1,10 @@
-"""Sell Engine vNext domain composition for P0-DC1.
+"""Sell Engine v0.1 domain composition for P0-DC1.
 
-The useful #107 state and reason vocabulary is retained, but its generic
-``Mapping(state=WATCH|REDUCE|EXIT)`` input surface is intentionally gone.  A
-sell pressure can enter this projection only through a distinct, named
-authority-adapter type (for example ``ExpectationPriceInAuthority``).  The
-types are contracts for already-authoritative upstream adapters; this module
-does not manufacture those facts from PnL, price, technical text, or AI.
-
-The currently implemented product authorities are Current Thesis, HR1 Hard
-Risk, and DC1 Material Change.  The seven legacy sell dimensions remain
-explicitly named adapter slots so O/Z/G can wire a real producer later.  A
-missing slot is ``NOT_EVALUATED`` and cannot create a positive HOLD proof.
+The production input surface accepts only the three real formal authorities
+currently available to the product: Current Thesis, HR1 Hard Risk, and DC1
+Material Change.  The legacy sell vocabulary is retained in the output for
+diagnostics and future contracts, but those dimensions are explicitly marked
+``NOT_IMPLEMENTED`` and are not caller-supplied pressure ports.
 
 Pure-domain boundary: no I/O, provider, database, network, AI, randomness, or
 wall clock.
@@ -22,7 +16,7 @@ import copy
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, ClassVar, Mapping
+from typing import Any, Mapping
 
 from hard_risk_contract import HardRiskEvaluation
 from material_change_projection import (
@@ -59,16 +53,6 @@ REASON_CATEGORIES: tuple[str, ...] = (
     "TECHNICAL_EXECUTION",
 )
 
-PRESSURE_STATES: tuple[str, ...] = (
-    "NONE",
-    "WATCH",
-    "REDUCE",
-    "EXIT",
-    "UNKNOWN",
-    "NOT_EVALUATED",
-    "NOT_APPLICABLE",
-    "NOT_YET",
-)
 EVALUATION_STATES: tuple[str, ...] = (
     "EVALUATED",
     "UNKNOWN",
@@ -85,13 +69,6 @@ THESIS_STATES = (
     "UNKNOWN",
 )
 
-_STATE_RANK = {
-    "HOLD": 0,
-    "WATCH_TO_REDUCE": 1,
-    "REDUCE": 2,
-    "EXIT": 3,
-    "THESIS_INVALIDATED": 4,
-}
 _EVALUATION_RANK = {
     "EVALUATED": 0,
     "UNKNOWN": 1,
@@ -179,76 +156,6 @@ def _ordered_refs(value: tuple[str, ...] | list[str], *, allow_empty: bool = Fal
     if len(refs) != len(set(refs)):
         raise SellEngineValidationError("authority_refs must not contain duplicates")
     return tuple(sorted(refs))
-
-
-@dataclass(frozen=True)
-class _NamedPressureAuthority:
-    """Private common validation for distinct public source adapter types."""
-
-    state: str
-    evaluation: str = "EVALUATED"
-    authority_refs: tuple[str, ...] = ()
-    source_name: ClassVar[str] = "named_pressure_authority"
-
-    def __post_init__(self) -> None:
-        if self.state not in PRESSURE_STATES:
-            raise SellEngineValidationError(
-                f"{self.source_name}.state must be one of {PRESSURE_STATES}"
-            )
-        if self.evaluation not in EVALUATION_STATES:
-            raise SellEngineValidationError(
-                f"{self.source_name}.evaluation must be one of {EVALUATION_STATES}"
-            )
-        legal = {
-            "EVALUATED": {"NONE", "WATCH", "REDUCE", "EXIT", "NOT_APPLICABLE", "NOT_YET"},
-            "UNKNOWN": {"UNKNOWN"},
-            "NOT_EVALUATED": {"NOT_EVALUATED"},
-            "ERROR": {"UNKNOWN"},
-        }
-        if self.state not in legal[self.evaluation]:
-            raise SellEngineValidationError(
-                f"{self.source_name} has illegal state/evaluation pair"
-            )
-        object.__setattr__(
-            self,
-            "authority_refs",
-            _ordered_refs(self.authority_refs, allow_empty=self.evaluation != "EVALUATED"),
-        )
-
-
-@dataclass(frozen=True)
-class RiskExitAuthority(_NamedPressureAuthority):
-    source_name: ClassVar[str] = "risk_exit_authority"
-
-
-@dataclass(frozen=True)
-class ExpectationPriceInAuthority(_NamedPressureAuthority):
-    source_name: ClassVar[str] = "expectation_price_in_authority"
-
-
-@dataclass(frozen=True)
-class RiskRewardAuthority(_NamedPressureAuthority):
-    source_name: ClassVar[str] = "risk_reward_authority"
-
-
-@dataclass(frozen=True)
-class CatalystAuthority(_NamedPressureAuthority):
-    source_name: ClassVar[str] = "catalyst_authority"
-
-
-@dataclass(frozen=True)
-class PortfolioRebalanceAuthority(_NamedPressureAuthority):
-    source_name: ClassVar[str] = "portfolio_rebalance_authority"
-
-
-@dataclass(frozen=True)
-class OpportunityCostAuthority(_NamedPressureAuthority):
-    source_name: ClassVar[str] = "opportunity_cost_authority"
-
-
-@dataclass(frozen=True)
-class TechnicalExecutionAuthority(_NamedPressureAuthority):
-    source_name: ClassVar[str] = "technical_execution_authority"
 
 
 @dataclass(frozen=True)
@@ -390,75 +297,30 @@ def _max_evaluation(current: str, candidate: str) -> str:
     return candidate if _EVALUATION_RANK[candidate] > _EVALUATION_RANK[current] else current
 
 
-def _pressure_to_sell_state(state: str) -> str | None:
+_UNIMPLEMENTED_SELL_DIMENSIONS: tuple[str, ...] = (
+    "risk_exit",
+    "expectation_price_in",
+    "risk_reward",
+    "catalyst",
+    "portfolio_rebalance",
+    "opportunity_cost",
+    "technical_execution",
+)
+
+
+def _unimplemented_dimension(field_name: str) -> dict[str, Any]:
+    """Expose future vocabulary without exposing a live conclusion port."""
+
     return {
-        "WATCH": "WATCH_TO_REDUCE",
-        "REDUCE": "REDUCE",
-        "EXIT": "EXIT",
-    }.get(state)
-
-
-def _max_sell_state(current: str | None, candidate: str | None) -> str | None:
-    if current is None:
-        return candidate
-    if candidate is None:
-        return current
-    return candidate if _STATE_RANK[candidate] > _STATE_RANK[current] else current
-
-
-def _named_pressure_dimension(
-    value: _NamedPressureAuthority | None,
-    *,
-    field_name: str,
-    category: str,
-) -> dict[str, Any]:
-    if value is None:
-        return {
-            "source_contract": f"{field_name}_authority",
-            "input_state": "NOT_EVALUATED",
-            "pressure_state": None,
-            "category": None,
-            "evaluation": "NOT_EVALUATED",
-            "applicable": True,
-            "hold_ok": False,
-            "reason_codes": [f"{field_name.upper()}_NOT_EVALUATED"],
-            "authority_refs": [],
-        }
-    pressure = _pressure_to_sell_state(value.state)
-    if value.evaluation != "EVALUATED":
-        return {
-            "source_contract": value.source_name,
-            "input_state": value.state,
-            "pressure_state": None,
-            "category": None,
-            "evaluation": value.evaluation,
-            "applicable": True,
-            "hold_ok": False,
-            "reason_codes": [f"{field_name.upper()}_{value.evaluation}"],
-            "authority_refs": list(value.authority_refs),
-        }
-    if value.state in {"NONE", "NOT_APPLICABLE", "NOT_YET"}:
-        return {
-            "source_contract": value.source_name,
-            "input_state": value.state,
-            "pressure_state": None,
-            "category": None,
-            "evaluation": "EVALUATED",
-            "applicable": value.state not in {"NOT_APPLICABLE"},
-            "hold_ok": True,
-            "reason_codes": [f"{field_name.upper()}_{value.state}"],
-            "authority_refs": list(value.authority_refs),
-        }
-    return {
-        "source_contract": value.source_name,
-        "input_state": value.state,
-        "pressure_state": pressure,
-        "category": category,
-        "evaluation": "EVALUATED",
+        "source_contract": "NOT_IMPLEMENTED",
+        "input_state": "NOT_EVALUATED",
+        "pressure_state": None,
+        "category": None,
+        "evaluation": "NOT_EVALUATED",
         "applicable": True,
         "hold_ok": False,
-        "reason_codes": [f"{field_name.upper()}_{value.state}"],
-        "authority_refs": list(value.authority_refs),
+        "reason_codes": [f"{field_name.upper()}_NOT_IMPLEMENTED"],
+        "authority_refs": [],
     }
 
 
@@ -664,20 +526,13 @@ def project_sell_engine(
     current_thesis_authority: CurrentThesisAuthority | None,
     hard_risk_evaluation: HardRiskEvaluation | None,
     material_change: MaterialChangeProjection | None,
-    risk_exit: RiskExitAuthority | None = None,
-    expectation_price_in: ExpectationPriceInAuthority | None = None,
-    risk_reward: RiskRewardAuthority | None = None,
-    catalyst: CatalystAuthority | None = None,
-    portfolio_rebalance: PortfolioRebalanceAuthority | None = None,
-    opportunity_cost: OpportunityCostAuthority | None = None,
-    technical_execution: TechnicalExecutionAuthority | None = None,
 ) -> SellEngineProjection:
-    """Compose sell-side state from named authority results only.
+    """Compose production sell-side state from implemented authorities only.
 
-    Passing a plain Mapping, a raw Hard Risk label, PnL, price, or technical
-    payload is rejected by the typed signature and runtime type checks.  A
-    named adapter may produce REDUCE/EXIT for its own dimension, but this
-    composition module never infers that pressure from unrelated facts.
+    ``REDUCE`` and ``EXIT`` remain part of the frozen vocabulary, but this
+    production v0.1 projection cannot generate them from unimplemented
+    dimensions.  Future producers must enter through a dedicated domain
+    adapter owned by their own slice.
     """
 
     security = _require_security_code(security_code)
@@ -699,36 +554,6 @@ def project_sell_engine(
     ):
         raise SellEngineValidationError("Current Thesis identity/as_of mismatch")
 
-    expected_types = {
-        "risk_exit": RiskExitAuthority,
-        "expectation_price_in": ExpectationPriceInAuthority,
-        "risk_reward": RiskRewardAuthority,
-        "catalyst": CatalystAuthority,
-        "portfolio_rebalance": PortfolioRebalanceAuthority,
-        "opportunity_cost": OpportunityCostAuthority,
-        "technical_execution": TechnicalExecutionAuthority,
-    }
-    provided = {
-        "risk_exit": risk_exit,
-        "expectation_price_in": expectation_price_in,
-        "risk_reward": risk_reward,
-        "catalyst": catalyst,
-        "portfolio_rebalance": portfolio_rebalance,
-        "opportunity_cost": opportunity_cost,
-        "technical_execution": technical_execution,
-    }
-    for field_name, value in provided.items():
-        expected = expected_types[field_name]
-        if value is not None and type(value) is not expected:
-            raise SellEngineValidationError(
-                f"{field_name} must be the named {expected.__name__} adapter result; "
-                "generic Mapping is not accepted"
-            )
-    if strategy_value == "MEDIUM" and technical_execution is not None and technical_execution.state == "EXIT":
-        raise SellEngineValidationError(
-            "technical_execution EXIT is not an independent MEDIUM long-horizon authority"
-        )
-
     thesis_dimension, thesis_id, thesis_revision = _thesis_dimension(current_thesis_authority)
     hard_dimension = _hard_risk_dimension(
         hard_risk_evaluation,
@@ -748,38 +573,13 @@ def project_sell_engine(
         "thesis": thesis_dimension,
         "hard_risk": hard_dimension,
         "material_change": material_dimension,
-        "risk_exit": _named_pressure_dimension(
-            risk_exit, field_name="risk_exit", category="RISK_EXIT"
-        ),
-        "expectation_price_in": _named_pressure_dimension(
-            expectation_price_in,
-            field_name="expectation_price_in",
-            category="EXPECTATION_PRICE_IN",
-        ),
-        "risk_reward": _named_pressure_dimension(
-            risk_reward,
-            field_name="risk_reward",
-            category="RISK_REWARD_DETERIORATION",
-        ),
-        "catalyst": _named_pressure_dimension(
-            catalyst, field_name="catalyst", category="CATALYST_FAILURE"
-        ),
-        "portfolio_rebalance": _named_pressure_dimension(
-            portfolio_rebalance,
-            field_name="portfolio_rebalance",
-            category="PORTFOLIO_REBALANCE",
-        ),
-        "opportunity_cost": _named_pressure_dimension(
-            opportunity_cost,
-            field_name="opportunity_cost",
-            category="OPPORTUNITY_COST",
-        ),
-        "technical_execution": _named_pressure_dimension(
-            technical_execution,
-            field_name="technical_execution",
-            category="TECHNICAL_EXECUTION",
-        ),
     }
+    dimensions.update(
+        {
+            name: _unimplemented_dimension(name)
+            for name in _UNIMPLEMENTED_SELL_DIMENSIONS
+        }
+    )
 
     evaluation = "EVALUATED"
     reason_codes: list[str] = []
@@ -787,16 +587,12 @@ def project_sell_engine(
     opposing: list[str] = []
     supporting: list[str] = []
     authority_refs: list[str] = [AUTHORITY_REF]
-    pressure_drivers: list[tuple[str, str]] = []
-    hold_ok = True
     review_pressure = False
 
     for name, dimension in dimensions.items():
         evaluation = _max_evaluation(evaluation, dimension["evaluation"])
         reason_codes.extend(dimension["reason_codes"])
         authority_refs.extend(dimension["authority_refs"])
-        if not dimension["hold_ok"]:
-            hold_ok = False
         if dimension["evaluation"] != "EVALUATED":
             uncertainties.extend(dimension["reason_codes"])
         if dimension["input_state"] in {"STABLE", "STRENGTHENED", "NONE", "NOT_APPLICABLE", "NOT_YET"}:
@@ -804,7 +600,6 @@ def project_sell_engine(
         category = dimension["category"]
         pressure_state = dimension["pressure_state"]
         if category is not None and pressure_state is not None:
-            pressure_drivers.append((category, pressure_state))
             supporting.append(category)
         if name in {"hard_risk", "material_change"} and dimension["input_state"] == "CONFIRMED":
             review_pressure = True
@@ -818,18 +613,16 @@ def project_sell_engine(
     if thesis_dimension["pressure_state"] == "THESIS_INVALIDATED":
         sell_state = "THESIS_INVALIDATED"
         primary_reason = "THESIS_INVALIDATION"
-    else:
-        for category, pressure_state in pressure_drivers:
-            sell_state = _max_sell_state(sell_state, pressure_state)
-        if sell_state is not None:
-            final_drivers = [category for category, state in pressure_drivers if state == sell_state]
-            primary_reason = final_drivers[0] if len(final_drivers) == 1 else final_drivers[0]
+    elif hard_dimension["pressure_state"] == "WATCH_TO_REDUCE":
+        # Hard Risk is review pressure only.  It never becomes a production
+        # REDUCE/EXIT conclusion by itself.
+        sell_state = "WATCH_TO_REDUCE"
+        primary_reason = "RISK_EXIT"
 
+    # The seven legacy dimensions are intentionally present as
+    # NOT_IMPLEMENTED diagnostics above.  Therefore production v0.1 has no
+    # positive HOLD proof and must never manufacture HOLD from missing facts.
     hold_positive_proof = False
-    if sell_state is None and hold_ok and evaluation == "EVALUATED":
-        sell_state = "HOLD"
-        hold_positive_proof = True
-        reason_codes.append("HOLD_POSITIVE_PROOF")
 
     if primary_reason is not None and primary_reason not in supporting:
         supporting.insert(0, primary_reason)
@@ -871,21 +664,14 @@ def project_sell_engine(
 
 __all__ = [
     "AUTHORITY_REF",
-    "CatalystAuthority",
     "EVALUATION_STATES",
-    "ExpectationPriceInAuthority",
-    "OpportunityCostAuthority",
-    "PortfolioRebalanceAuthority",
     "REASON_CATEGORIES",
-    "RiskExitAuthority",
-    "RiskRewardAuthority",
     "SCHEMA_VERSION",
     "SELL_EVALUATIONS",
     "SELL_STATES",
     "SellEngineError",
     "SellEngineProjection",
     "SellEngineValidationError",
-    "TechnicalExecutionAuthority",
     "project_sell_engine",
     "sell_engine_projection_from_mapping",
 ]

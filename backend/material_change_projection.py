@@ -761,10 +761,7 @@ def project_material_change(
         and thesis.state in (*TERMINAL_THESIS_STATES, "WEAKENED")
         and relation != NEW_AFTER_DECISION
     )
-    if thesis_delta_without_new_temporal_support and not (
-        hard_risk_evaluation is not None
-        and hard_risk_evaluation.hard_risk_state == "CONFIRMED"
-    ):
+    if thesis_delta_without_new_temporal_support:
         return _build_result(
             security_code=security,
             strategy=strategy_value,
@@ -814,6 +811,11 @@ def project_material_change(
             authority_refs=tuple(authority_refs),
         )
 
+    # Hard Risk is an independent RA1 authority.  It may create review
+    # pressure and uncertainty for downstream consumers, but it cannot prove
+    # that a thesis change became material after the decision boundary.  That
+    # conclusion requires the independent thesis semantic delta plus EC1's
+    # NEW_AFTER_DECISION relation above.
     if hard_risk_evaluation is not None and hard_risk_evaluation.hard_risk_state == "CONFIRMED":
         return _build_result(
             security_code=security,
@@ -822,14 +824,14 @@ def project_material_change(
             decision_id=evidence.decision_id,
             decision_boundary_at=boundary_at,
             as_of=as_of_text,
-            state="CONFIRMED",
-            evaluation="EVALUATED",
+            state="UNKNOWN",
+            evaluation="UNKNOWN",
             thesis_id=thesis_id,
             thesis_state=thesis_state,
             evidence_relation=relation,
-            materiality_basis="HARD_RISK_CONFIRMED",
-            reason_codes=("HARD_RISK_CONFIRMED",),
-            uncertainties=(),
+            materiality_basis="HARD_RISK_CONFIRMED_WITHOUT_AFTER_DECISION_PROOF",
+            reason_codes=("HARD_RISK_CONFIRMED_WITHOUT_AFTER_DECISION_PROOF",),
+            uncertainties=("MATERIAL_CHANGE_AFTER_DECISION_PROOF_MISSING",),
             authority_refs=tuple(authority_refs),
         )
 
