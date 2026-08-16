@@ -50,6 +50,8 @@ import decision_inbox_projection as di
 import formal_thesis_projection as thesis_projection
 import frozen_decision_service as frozen_service
 import hard_risk_contract as hr
+import hard_risk_current_thesis_adapter as thesis_hr_adapter
+import hard_risk_runtime as hr_runtime
 import holdings_campaign_composition as composition
 from campaign_critical_data_projection import project_campaign_critical_data
 from fact_lake_store import FactLake, open_existing_fact_lake
@@ -242,25 +244,28 @@ def _production_frozen_decisions_reader(
 
 def _production_hard_risk_evaluator(
     definition: Mapping[str, Any],
+    campaign: Mapping[str, Any],
+    current_thesis_projection: Mapping[str, Any] | None,
 ) -> Mapping[str, Any]:
-    """P0-HR1 production 默认端口：显式 NOT_EVALUATED 占位（fail closed）。
+    """P0-HR1 production Hard Risk 端口：Current Thesis authority → C runtime。
 
-    C 的真实 evaluator 尚未接入。在 integration fan-in 绑定 C 之前，本端口
-    只返回契约合法的 NOT_EVALUATED 结果：绝不因「未接入」伪装成 CLEAR，
-    也绝不猜测 C 的内部 API。identity / as_of 从调用方 definition 原样携带。
+    - Current Thesis 已在 assembler 内 single-read，本端口不再自行读取。
+    - 只经 thesis_hr_adapter 做 shape adaptation（补 schema_version /
+      strategy / terminal），最终 state 由 hard_risk_runtime 决定。
+    - 未绑定（projection=None）→ C 返回 NOT_EVALUATED（fail closed）。
+    - v0.1 无 CLEAR authority：C 永不输出 CLEAR。
     """
-    return {
-        "schema_version": hr.SCHEMA_VERSION,
-        "policy_version": hr.POLICY_VERSION_V01,
-        "security_code": definition["security_code"],
-        "strategy": definition["strategy"],
-        "campaign_id": definition["campaign_id"],
-        "as_of": definition["as_of"],
-        "hard_risk_state": "NOT_EVALUATED",
-        "hard_risk_evaluation": "NOT_EVALUATED",
-        "reason_codes": ["HARD_RISK_NOT_EVALUATED"],
-        "authority_refs": [],
-    }
+    envelope = thesis_hr_adapter.build_current_thesis_envelope(
+        campaign=campaign,
+        as_of=definition["as_of"],
+        current_thesis_projection=current_thesis_projection,
+    )
+    return hr_runtime.evaluate_hard_risk_mapping(
+        campaign_id=campaign["campaign_id"],
+        campaign=campaign,
+        as_of=definition["as_of"],
+        formal_thesis_projection=envelope,
+    )
 
 
 CapabilityEvaluator = Callable[
@@ -268,7 +273,8 @@ CapabilityEvaluator = Callable[
 ]
 
 HardRiskEvaluator = Callable[
-    [Mapping[str, Any]], Mapping[str, Any]
+    [Mapping[str, Any], Mapping[str, Any], Mapping[str, Any] | None],
+    Mapping[str, Any],
 ]
 
 
@@ -281,9 +287,10 @@ class RuntimePorts:
     走既有真实业务读取路径。NOT_EVALUATED 仍是合法结果（数据缺失 /
     applicability 未解决 / 未到评估时点），绝不强制 USABLE。
 
-    hard_risk_evaluator（P0-HR1）接收含 security_code / strategy /
-    campaign_id / as_of 的 definition，返回 hard_risk_contract 契约结果；
-    production 默认在 C 接入前显式返回 NOT_EVALUATED（fail closed）。
+    hard_risk_evaluator（P0-HR1）接收 definition（DDA 展开的 Campaign 上下文）、
+    真实 Campaign record、以及同一 snapshot 内 single-read 的 Current Thesis
+    projection，返回 hard_risk_contract 契约结果；production 默认经 Current
+    Thesis adapter 绑定 hard_risk_runtime（C core），未绑定时 NOT_EVALUATED。
     """
 
     composition_reader: Callable[[], Mapping[str, Any]]
@@ -361,6 +368,8 @@ def _validate_capability_result(
 def _evaluate_hard_risk(
     ports: RuntimePorts,
     definition: Mapping[str, Any],
+    campaign: Mapping[str, Any],
+    current_thesis_projection: Mapping[str, Any] | None,
 ) -> hr.HardRiskEvaluation:
     """调用 HR1 port 并执行 identity / as_of / contract 三闸校验（fail closed）。
 
@@ -374,7 +383,9 @@ def _evaluate_hard_risk(
       串结果与跨时点复用）。
     """
     try:
-        raw = ports.hard_risk_evaluator(definition)
+        raw = ports.hard_risk_evaluator(
+            definition, campaign, current_thesis_projection
+        )
     except Exception as exc:
         raise DecisionInboxRuntimeError(
             f"Hard Risk evaluator 失败（campaign {definition['campaign_id']}）"
@@ -401,18 +412,22 @@ def _evaluate_hard_risk(
 def _thesis_normalized(
     thesis_reader: Callable[[str], Mapping[str, Any]],
     campaign_id: str,
-) -> tuple[str, str]:
-    """返回 (thesis_state, current_thesis)。
+) -> tuple[str, str, Mapping[str, Any] | None]:
+    """返回 (thesis_state, current_thesis, projection)。
 
-    - 未绑定 → (MISSING, UNKNOWN)
-    - 未冻结 → (NOT_FROZEN, UNKNOWN)
-    - 其他 NOT_READY → (NOT_READY, UNKNOWN)
-    - READY → (READY, effective_state)
+    Current Thesis projection 在本函数内 single-read 一次：同一 immutable
+    result 同时用于 DI1 归一化与 Hard Risk 生产评估，杜绝 snapshot race
+    （HR 读版本 A、DI1 读版本 B）。
+
+    - 未绑定 → (MISSING, UNKNOWN, None)
+    - 未冻结 → (NOT_FROZEN, UNKNOWN, projection)
+    - 其他 NOT_READY → (NOT_READY, UNKNOWN, projection)
+    - READY → (READY, effective_state, projection)
     """
     try:
         projection = thesis_reader(campaign_id)
     except campaign_service.ThesisBindingNotFoundError:
-        return "MISSING", "UNKNOWN"
+        return "MISSING", "UNKNOWN", None
     except (
         thesis_projection.CurrentThesisProjectionError,
         campaign_service.CampaignThesisStrategyConflictError,
@@ -424,14 +439,14 @@ def _thesis_normalized(
     if projection.get("formal_status") != "READY":
         reason = projection.get("reason")
         if reason == "NOT_FROZEN":
-            return "NOT_FROZEN", "UNKNOWN"
-        return "NOT_READY", "UNKNOWN"
+            return "NOT_FROZEN", "UNKNOWN", projection
+        return "NOT_READY", "UNKNOWN", projection
     effective = projection.get("effective_state")
     if not isinstance(effective, str) or effective not in di.THESIS_STATES:
         raise DecisionInboxRuntimeIntegrityError(
             "thesis effective_state 不是合法 DI1 枚举"
         )
-    return "READY", effective
+    return "READY", effective, projection
 
 
 def _latest_frozen_decision(
@@ -588,7 +603,14 @@ def _project_campaign_item(
     _assert_same_identity(ccd, definition, label="CCD")
     _assert_literal_as_of(ccd["as_of"], as_of, label="CCD")
 
-    hard_risk = _evaluate_hard_risk(ports, definition)
+    # Current Thesis 只读一次：同一 immutable projection 同时供 Hard Risk
+    # 生产评估与 DI1 归一化，杜绝 snapshot race（HR 读版本 A、DI1 读版本 B）。
+    thesis_state, current_thesis, thesis_projection = _thesis_normalized(
+        ports.thesis_reader, campaign["campaign_id"]
+    )
+    hard_risk = _evaluate_hard_risk(
+        ports, definition, campaign, thesis_projection
+    )
 
     assurance = _require_mapping(
         ra.project_decision_assurance(
@@ -608,9 +630,6 @@ def _project_campaign_item(
     _assert_same_identity(assurance, ccd, label="RA")
     _assert_literal_as_of(assurance["as_of"], as_of, label="RA")
 
-    thesis_state, current_thesis = _thesis_normalized(
-        ports.thesis_reader, campaign["campaign_id"]
-    )
     decisions = ports.frozen_decisions_reader(campaign["campaign_id"])
     latest_frozen = _latest_frozen_decision(
         lambda _campaign_id: decisions, campaign["campaign_id"], as_of

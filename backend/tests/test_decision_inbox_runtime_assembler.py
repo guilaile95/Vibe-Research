@@ -99,6 +99,12 @@ def _composition(items: list | None = None, evaluated: bool = True) -> dict:
     }
 
 
+
+def _missing_thesis(campaign_id: str) -> dict:
+    """模拟未绑定 Current Thesis（无 binding → thesis_reader 抛错）。"""
+    raise campaign_service.ThesisBindingNotFoundError("no thesis binding")
+
+
 def _thesis_ready(effective_state: str = "STABLE") -> dict:
     return {
         "campaign_id": CAMPAIGN_A,
@@ -221,35 +227,35 @@ def _hr_result(
     }
 
 
-def _hr_clear(definition: dict) -> dict:
+def _hr_clear(definition: dict, campaign: dict | None = None, thesis_projection: dict | None = None) -> dict:
     return _hr_result(
         definition, state="CLEAR", evaluation="EVALUATED",
         reasons=[], refs=["hard-risk:fake-clear"],
     )
 
 
-def _hr_confirmed(definition: dict) -> dict:
+def _hr_confirmed(definition: dict, campaign: dict | None = None, thesis_projection: dict | None = None) -> dict:
     return _hr_result(
         definition, state="CONFIRMED", evaluation="EVALUATED",
         reasons=["HARD_RISK_CONFIRMED"], refs=["hard-risk:fake-confirmed"],
     )
 
 
-def _hr_unknown(definition: dict) -> dict:
+def _hr_unknown(definition: dict, campaign: dict | None = None, thesis_projection: dict | None = None) -> dict:
     return _hr_result(
         definition, state="UNKNOWN", evaluation="UNKNOWN",
         reasons=["HARD_RISK_INPUT_UNKNOWN"], refs=[],
     )
 
 
-def _hr_not_evaluated(definition: dict) -> dict:
+def _hr_not_evaluated(definition: dict, campaign: dict | None = None, thesis_projection: dict | None = None) -> dict:
     return _hr_result(
         definition, state="NOT_EVALUATED", evaluation="NOT_EVALUATED",
         reasons=["HARD_RISK_NOT_EVALUATED"], refs=[],
     )
 
 
-def _hr_error(definition: dict) -> dict:
+def _hr_error(definition: dict, campaign: dict | None = None, thesis_projection: dict | None = None) -> dict:
     return _hr_result(
         definition, state="UNKNOWN", evaluation="ERROR",
         reasons=["HARD_RISK_EVALUATION_ERROR"], refs=[],
@@ -321,7 +327,7 @@ def _ports(
         calls["financials"].append(True)
         return financials_evaluator(lake, definition)
 
-    def _hard_risk(definition):
+    def _hard_risk(definition, campaign, thesis_projection):
         return hard_risk_evaluator(definition)
 
     ports = runtime.RuntimePorts(
@@ -1038,7 +1044,32 @@ class TestHardRiskIntegration:
 
     """production 默认端口（C 未接入）：显式 NOT_EVALUATED，绝不猜 CLEAR。"""
 
-    def test_production_default_port_is_not_evaluated(self):
+    def test_production_port_not_evaluated_when_thesis_missing(self):
+        """production port 真实绑定 C：未绑定 Current Thesis → NOT_EVALUATED。"""
+        base, _calls = _ports(
+            composition_reader=lambda: _composition(
+                [_composition_item(campaigns=[_campaign()])]
+            )
+        )
+        ports = runtime.RuntimePorts(
+            composition_reader=base.composition_reader,
+            dependency_resolver=dda.resolve_strategy_dependencies,
+            price_evaluator=base.price_evaluator,
+            market_sector_evaluator=base.market_sector_evaluator,
+            disclosures_evaluator=base.disclosures_evaluator,
+            financials_evaluator=base.financials_evaluator,
+            thesis_reader=_missing_thesis,
+            frozen_decisions_reader=base.frozen_decisions_reader,
+            lake_provider=base.lake_provider,
+        )
+        item = _swing_item(ports)
+        assert item["hard_risk_state"] == "NOT_EVALUATED"
+        assert item["hard_risk_evaluation"] == "NOT_EVALUATED"
+        assert di.REASON_HARD_RISK_NOT_EVALUATED in item["reason_codes"]
+        assert item["hard_risk_state"] != "CLEAR"
+
+    def test_production_port_stable_thesis_never_clear(self):
+        """production port：READY + STABLE（非 terminal）→ UNKNOWN，绝不 CLEAR。"""
         base, _calls = _ports(
             composition_reader=lambda: _composition(
                 [_composition_item(campaigns=[_campaign()])]
@@ -1056,9 +1087,11 @@ class TestHardRiskIntegration:
             lake_provider=base.lake_provider,
         )
         item = _swing_item(ports)
-        assert item["hard_risk_state"] == "NOT_EVALUATED"
-        assert di.REASON_HARD_RISK_NOT_EVALUATED in item["reason_codes"]
+        assert item["hard_risk_state"] == "UNKNOWN"
+        assert item["hard_risk_evaluation"] == "UNKNOWN"
         assert item["hard_risk_state"] != "CLEAR"
+        assert item["hard_risk_authority_refs"] != []
+        assert item["visible_state"] != "NO_ACTION_REQUIRED"
 
     """evaluator 自身异常 → 整体 fail closed（不猜 C 的异常类型）。"""
 
