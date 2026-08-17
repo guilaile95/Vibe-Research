@@ -41,6 +41,7 @@ import sell_engine_projection as sell_projection
 SCHEMA_VERSION = "decision_commit_runtime.v0.1"
 FINGERPRINT_SCHEMA_VERSION = "decision_proposal.fingerprint.v0.1"
 PROPOSAL_SOURCE_PREFIX = "decision_proposal:"
+CHALLENGE_SOURCE_PREFIX = "decision_challenge:"
 NO_PRIOR_DECISION_BOUNDARY = "NO_PRIOR_DECISION_BOUNDARY"
 
 # These are backend policy constants.  They are intentionally not accepted
@@ -81,6 +82,10 @@ class CommitConfirmationRequiredError(DecisionCommitRuntimeError):
 
 class FrozenDecisionIntegrityError(DecisionCommitRuntimeError):
     """The existing Frozen Decision read-back is not applicable to the scope."""
+
+
+class ChallengeBindingError(DecisionCommitRuntimeError, ValueError):
+    """Optional Challenge packet cannot be bound to this commit."""
 
 
 def utc_now_iso() -> str:
@@ -927,16 +932,65 @@ def preview_decision_proposal(
     return _preview_response(result, authorities, drafts, fingerprint)
 
 
+def _optional_challenge_id(payload: Mapping[str, Any]) -> str | None:
+    if "challenge_id" not in payload:
+        return None
+    value = payload.get("challenge_id")
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise DecisionCommitInputError("challenge_id is invalid")
+    return value
+
+
+def _challenge_refs(source_refs: object) -> list[str]:
+    if not isinstance(source_refs, list):
+        return []
+    return [
+        item
+        for item in source_refs
+        if isinstance(item, str) and item.startswith(CHALLENGE_SOURCE_PREFIX)
+    ]
+
+
+def _bind_challenge_packet(
+    *,
+    challenge_id: str,
+    campaign: Mapping[str, Any],
+    proposal: proposal_projection.DecisionProposal,
+    fingerprint: str,
+    as_of: str,
+) -> Mapping[str, Any]:
+    import decision_challenge_runtime as challenge_runtime
+
+    try:
+        return challenge_runtime.verify_challenge_for_commit(
+            challenge_id=challenge_id,
+            campaign=campaign,
+            proposal={
+                "thesis_id": proposal.thesis_id,
+                "thesis_revision": proposal.thesis_revision,
+            },
+            fingerprint=fingerprint,
+            as_of=as_of,
+        )
+    except challenge_runtime.DecisionChallengeBindError as exc:
+        raise ChallengeBindingError(str(exc)) from exc
+
+
 def _freeze_payload(
     proposal: proposal_projection.DecisionProposal,
     authorities: AuthorityEvaluations,
     drafts: Mapping[str, Any],
     fingerprint: str,
+    challenge_id: str | None = None,
 ) -> dict[str, Any]:
     source_refs = [
         f"{PROPOSAL_SOURCE_PREFIX}{fingerprint}",
         *proposal.authority_refs,
     ]
+    if challenge_id is not None:
+        source_refs.append(f"{CHALLENGE_SOURCE_PREFIX}{challenge_id}")
     return {
         "security_code": proposal.security_code,
         "strategy": proposal.strategy,
@@ -1005,6 +1059,7 @@ def commit_decision_proposal(
         "key_assumptions",
         "event_invalidation_conditions",
         "strategy_horizon",
+        "challenge_id",
     }
     extra = set(payload) - allowed
     if extra:
@@ -1108,9 +1163,28 @@ def commit_decision_proposal(
                 raise ProposalStaleError("proposal Thesis identity changed; re-preview required")
             fingerprint = expected
             marker = expected_marker
+        challenge_id = _optional_challenge_id(payload)
+        if challenge_id is not None:
+            _bind_challenge_packet(
+                challenge_id=challenge_id,
+                campaign=campaign,
+                proposal=result,
+                fingerprint=expected if existing is not None else fingerprint,
+                as_of=as_of,
+            )
+        if existing is not None:
+            bound = _challenge_refs(existing.get("source_refs"))
+            if challenge_id is not None:
+                expected_ref = f"{CHALLENGE_SOURCE_PREFIX}{challenge_id}"
+                if expected_ref not in bound:
+                    raise ChallengeBindingError(
+                        "a different challenge cannot replace the already-bound challenge"
+                    )
         idempotent = existing is not None
         if existing is None:
-            frozen_payload = _freeze_payload(result, authorities, drafts, fingerprint)
+            frozen_payload = _freeze_payload(
+                result, authorities, drafts, fingerprint, challenge_id=challenge_id
+            )
             stored = ports.freeze_writer(frozen_payload)
         else:
             stored = existing
@@ -1211,6 +1285,8 @@ def get_committed_decision(
 __all__ = [
     "AuthorityEvaluations",
     "BEHAVIOR_MODEL_VERSION",
+    "CHALLENGE_SOURCE_PREFIX",
+    "ChallengeBindingError",
     "CommitConfirmationRequiredError",
     "CurrentThesisUnavailableError",
     "DecisionCommitInputError",

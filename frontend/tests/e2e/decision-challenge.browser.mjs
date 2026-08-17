@@ -1,0 +1,344 @@
+/**
+ * P0-DCH1 pre-freeze Decision Challenge vertical — isolated FastAPI + Chromium.
+ *
+ * Preview → optional Challenge finalize → backend readback → Freeze binding.
+ * The no-challenge path must still freeze and must not invent a challenge ref.
+ */
+import assert from "node:assert/strict";
+import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
+import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import path, { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { chromium } from "playwright";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(__dirname, "../../..");
+const backendDir = path.join(root, "backend");
+const frontendDist = path.join(root, "frontend", "dist");
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      server.close(() => resolve(address.port));
+    });
+  });
+}
+
+async function waitHttp(url, attempts = 120) {
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const response = await fetch(url);
+      if (response.ok || response.status < 500) return;
+    } catch {
+      // Backend is still starting.
+    }
+    await sleep(250);
+  }
+  throw new Error(`timeout waiting for ${url}`);
+}
+
+function startStaticServer(dir, port) {
+  const mime = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+  };
+  const server = createServer((request, response) => {
+    let pathname = (request.url || "/").split("?")[0];
+    if (pathname === "/") pathname = "/index.html";
+    let target = path.join(dir, pathname);
+    const resolvedDir = path.resolve(dir);
+    const resolvedTarget = path.resolve(target);
+    if (!resolvedTarget.startsWith(resolvedDir + path.sep) && resolvedTarget !== resolvedDir) {
+      response.writeHead(403);
+      response.end("forbidden");
+      return;
+    }
+    if (!existsSync(target)) target = path.join(dir, "index.html");
+    response.setHeader("Content-Type", mime[path.extname(target)] || "application/octet-stream");
+    createReadStream(target).pipe(response);
+  });
+  return new Promise((resolve, reject) => {
+    server.on("error", reject);
+    server.listen(port, "127.0.0.1", () => resolve(server));
+  });
+}
+
+function pythonConfig() {
+  if (process.env.PYTHON) return { cmd: process.env.PYTHON, args: ["-m", "uvicorn"] };
+  if (process.platform === "win32") return { cmd: "py", args: ["-3", "-m", "uvicorn"] };
+  return { cmd: "python3", args: ["-m", "uvicorn"] };
+}
+
+function chromiumPath() {
+  const bases = [
+    process.env.PLAYWRIGHT_CHROMIUM_PATH,
+    join(process.env.LOCALAPPDATA || "", "ms-playwright"),
+    join(process.env.HOME || "", ".cache", "ms-playwright"),
+  ];
+  for (const base of bases) {
+    if (!base || !existsSync(base)) continue;
+    for (const entry of readdirSync(base)) {
+      if (!entry.startsWith("chromium-") || entry.includes("headless")) continue;
+      const candidates = [
+        join(base, entry, "chrome-win64", "chrome.exe"),
+        join(base, entry, "chrome-linux", "chrome"),
+        join(base, entry, "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"),
+      ];
+      const found = candidates.find((candidate) => existsSync(candidate));
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+async function jsonRequest(base, pathname, method = "GET", body, expected = 200) {
+  const response = await fetch(`${base}${pathname}`, {
+    method,
+    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, expected, `${method} ${pathname}: ${JSON.stringify(payload)}`);
+  return payload.data;
+}
+
+async function createFrozenCurrentThesis(base, title) {
+  const campaign = await jsonRequest(base, "/api/campaigns", "POST", {
+    security_code: "600519",
+    strategy: "SWING",
+  }, 201);
+  const created = await jsonRequest(base, "/api/thesis", "POST", {
+    subject_type: "stock",
+    subject_id: "600519",
+    title,
+    summary: "isolated current thesis",
+    core_claims: ["claim one", "claim two", "claim three"],
+    catalysts: [],
+    risks: [],
+    invalidation_conditions: [],
+    change_summary: "DCH1 browser fixture",
+  }, 200);
+  const thesisId = created.thesis.id;
+  const begun = await jsonRequest(base, `/api/thesis/${thesisId}/begin-formalization`, "POST", {}, 200);
+  const updated = await jsonRequest(base, `/api/thesis/${thesisId}`, "PUT", {
+    title: begun.thesis.title,
+    summary: begun.thesis.summary,
+    status: "active",
+    core_claims: begun.thesis.core_claims,
+    catalysts: [],
+    risks: [],
+    invalidation_conditions: [],
+    strategy: "SWING",
+    expected_horizon: { unit: "TRADING_DAY", min: 10, max: 30, anchor: "FREEZE_AT" },
+    free_notes: null,
+    expected_revision: begun.thesis.current_revision,
+    change_summary: "DCH1 browser formal content",
+  }, 200);
+  const confirmed = await jsonRequest(base, `/api/thesis/${thesisId}/confirm`, "POST", {
+    expected_revision: updated.thesis.current_revision,
+  }, 200);
+  const frozen = await jsonRequest(base, `/api/thesis/${thesisId}/freeze`, "POST", {
+    expected_revision: confirmed.thesis.current_revision,
+  }, 200);
+  assert.equal(frozen.thesis.formal_state, "frozen");
+  await jsonRequest(base, `/api/campaigns/${campaign.campaign_id}/thesis-binding`, "POST", {
+    thesis_id: thesisId,
+  }, 201);
+  for (const [from, to] of [["DRAFT", "RESEARCHING"], ["RESEARCHING", "PRE-ENTRY"], ["PRE-ENTRY", "ACTIVE"]]) {
+    await jsonRequest(base, `/api/campaigns/${campaign.campaign_id}/transitions`, "POST", {
+      expected_status: from,
+      to_status: to,
+    }, 200);
+  }
+  return campaign;
+}
+
+const draft = {
+  reviewBy: "2026-08-30T10:00:00Z",
+  horizon: "10 至 30 交易日",
+  assumptions: "流动性保持稳定",
+  invalidations: "业绩发生重大反转",
+};
+
+async function fillProposalDraft(page) {
+  await page.getByLabel("Review by").fill(draft.reviewBy);
+  await page.getByLabel("Strategy horizon").fill(draft.horizon);
+  await page.getByLabel("Key assumptions").fill(draft.assumptions);
+  await page.getByLabel("Event invalidation conditions").fill(draft.invalidations);
+  await page.waitForFunction((expected) => {
+    const review = document.querySelector('[aria-label="Review by"]');
+    const horizon = document.querySelector('[aria-label="Strategy horizon"]');
+    return Boolean(
+      review && review.value === expected.reviewBy
+      && horizon && horizon.value === expected.horizon
+    );
+  }, draft);
+}
+
+async function run() {
+  assert.ok(existsSync(frontendDist), "frontend/dist must be built before Chromium E2E");
+  const tempDataDir = mkdtempSync(join(tmpdir(), "vr-dch1-decision-challenge-e2e-"));
+  let backendProc;
+  let backendLog = "";
+  let staticServer;
+  let browser;
+  try {
+    const backendPort = await freePort();
+    const frontendPort = await freePort();
+    const backend = `http://127.0.0.1:${backendPort}`;
+    const frontend = `http://127.0.0.1:${frontendPort}`;
+    const py = pythonConfig();
+    const env = {
+      ...process.env,
+      VR_DATA_DIR: tempDataDir,
+      VR_REPORTS_DIR: tempDataDir,
+      VIBE_RESEARCH_TRADE_LEDGER_DB: join(tempDataDir, "trade_ledger.sqlite3"),
+      VIBE_RESEARCH_REVIEW_DB: join(tempDataDir, "review_history.db"),
+      VIBE_RESEARCH_EVIDENCE_THESIS_DB: join(tempDataDir, "evidence_thesis.db"),
+      VIBE_RESEARCH_CAMPAIGN_DB: join(tempDataDir, "campaigns.sqlite3"),
+      VIBE_RESEARCH_FROZEN_DECISION_DB: join(tempDataDir, "frozen_decisions.sqlite3"),
+      VIBE_RESEARCH_DECISION_CHALLENGE_DB: join(tempDataDir, "decision_challenges.sqlite3"),
+      PYTHONUNBUFFERED: "1",
+    };
+    backendProc = spawn(py.cmd, [...py.args, "app:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
+      cwd: backendDir,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    backendProc.stdout.on("data", (chunk) => { backendLog += chunk.toString(); });
+    backendProc.stderr.on("data", (chunk) => { backendLog += chunk.toString(); });
+    await waitHttp(`${backend}/api/health`);
+    await jsonRequest(backend, "/api/position/bootstrap-commit", "POST", {
+      ledger_start_at: "2026-08-01",
+      opening_cash: 100000,
+      positions: [{ code: "600519", name: "贵州茅台", shares: 100, cost_basis: 150000 }],
+    }, 200);
+    const withChallenge = await createFrozenCurrentThesis(backend, "DCH1 with challenge");
+    staticServer = await startStaticServer(frontendDist, frontendPort);
+    const launchOptions = { headless: true };
+    const executablePath = chromiumPath();
+    if (executablePath) launchOptions.executablePath = executablePath;
+    browser = await chromium.launch(launchOptions);
+    const page = await browser.newPage();
+    page.on("console", (message) => {
+      if (message.type() === "error") backendLog += `\n[browser] ${message.text()}`;
+    });
+    await page.route("**/api/**", (route) => {
+      const url = new URL(route.request().url());
+      return route.continue({ url: `${backend}${url.pathname}${url.search}` });
+    });
+
+    await page.goto(`${frontend}/campaigns/${withChallenge.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { name: "Formal Decision Review" }).waitFor();
+    await page.locator(`[data-decision-proposal-page="${withChallenge.campaign_id}"]`).waitFor();
+    await fillProposalDraft(page);
+    await page.getByRole("button", { name: "Preview Proposal" }).click();
+    await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
+    await page.locator('[data-challenge-state="UNFINALIZED"]').waitFor();
+    assert.equal(existsSync(join(tempDataDir, "decision_challenges.sqlite3")), false, "Preview must not write Challenge DB");
+    assert.equal(existsSync(join(tempDataDir, "frozen_decisions.sqlite3")), false, "Preview must not write Frozen DB");
+
+    await page.getByRole("textbox", { name: "Strongest supporting evidence" }).fill("渠道与报表支持当前等待");
+    await page.getByRole("textbox", { name: "Strongest opposing evidence" }).fill("估值不便宜");
+    await page.getByLabel("Pre-mortem status", { exact: true }).selectOption("UNKNOWN");
+    await page.getByRole("textbox", { name: "Pre-mortem" }).fill("还没有足够的失效路径样本");
+    await page.getByRole("textbox", { name: "Invalidation facts" }).fill("连续两个季度毛利率下修则失效");
+    const finalize = page.getByRole("button", { name: "Finalize Decision Challenge" });
+    assert.equal(await finalize.isEnabled(), false, "Finalize must require explicit confirmation");
+    await page.getByRole("checkbox", { name: /我已显式填写四个挑战维度/ }).check();
+    assert.equal(await finalize.isEnabled(), true);
+    await finalize.click();
+    await page.locator('[data-challenge-state="FINALIZED"]').waitFor();
+    const challengeId = await page.locator("[data-challenge-id]").getAttribute("data-challenge-id");
+    assert.match(challengeId, /^decision_challenge_[0-9a-f]{32}$/);
+    const durable = await jsonRequest(backend, `/api/decision-challenges/${challengeId}`);
+    assert.equal(durable.challenge.challenge_id, challengeId);
+    assert.equal(durable.challenge.packet_state, "COMPLETE");
+    assert.equal(durable.decision_quality, "NOT_EVALUATED");
+    assert.equal(durable.challenge.two_pass_semantic_independence_verified, "NO");
+
+    await page.reload({ waitUntil: "networkidle" });
+    await fillProposalDraft(page);
+    await page.getByRole("button", { name: "Preview Proposal" }).click();
+    await page.locator('[data-challenge-state="FINALIZED"]').waitFor();
+    assert.equal(await page.locator("[data-challenge-id]").getAttribute("data-challenge-id"), challengeId);
+    await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
+    await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
+    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
+    const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
+    const boundId = committedLine.replace(/^decision_id：/, "").trim();
+    const bound = await jsonRequest(backend, `/api/campaigns/${withChallenge.campaign_id}/decision-proposal/committed/${boundId}`);
+    assert.ok(
+      bound.committed.source_refs.includes(`decision_challenge:${challengeId}`),
+      `Frozen Decision must carry server challenge ref, got ${JSON.stringify(bound.committed.source_refs)}`,
+    );
+
+    const previewAfter = await jsonRequest(backend, `/api/campaigns/${withChallenge.campaign_id}/decision-proposal/preview`, "POST", {
+      asset_view: { view: "ASSET", stance: "WAIT", note: "changed after challenge" },
+      trade_view: { view: "TRADE", stance: "WAIT" },
+      portfolio_view: { view: "PORTFOLIO", constraint: "unknown" },
+      review_by: "2026-08-30T10:00:00.000000Z",
+      key_assumptions: ["流动性保持稳定"],
+      event_invalidation_conditions: ["业绩发生重大反转"],
+      strategy_horizon: "10 至 30 交易日",
+    });
+    const staleCommit = await fetch(`${backend}/api/campaigns/${withChallenge.campaign_id}/decision-proposal/commit`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        asset_view: previewAfter.proposal.asset_view,
+        trade_view: previewAfter.proposal.trade_view,
+        portfolio_view: previewAfter.proposal.portfolio_view,
+        review_by: previewAfter.commit_fields.review_by,
+        key_assumptions: previewAfter.commit_fields.key_assumptions,
+        event_invalidation_conditions: previewAfter.commit_fields.event_invalidation_conditions,
+        strategy_horizon: previewAfter.commit_fields.strategy_horizon,
+        as_of: previewAfter.proposal.as_of,
+        expected_proposal_fingerprint: previewAfter.proposal_fingerprint,
+        user_confirmed: true,
+        challenge_id: challengeId,
+      }),
+    });
+    assert.equal(staleCommit.status, 409, "stale proposal must not silently bind the old challenge");
+
+    const withoutChallenge = await createFrozenCurrentThesis(backend, "DCH1 without challenge");
+    await page.goto(`${frontend}/campaigns/${withoutChallenge.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
+    await fillProposalDraft(page);
+    await page.getByRole("button", { name: "Preview Proposal" }).click();
+    await page.locator('[data-challenge-state="UNFINALIZED"]').waitFor();
+    await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
+    await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
+    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
+    const plainLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
+    const plainId = plainLine.replace(/^decision_id：/, "").trim();
+    const plain = await jsonRequest(backend, `/api/campaigns/${withoutChallenge.campaign_id}/decision-proposal/committed/${plainId}`);
+    assert.equal(
+      plain.committed.source_refs.some((item) => String(item).startsWith("decision_challenge:")),
+      false,
+      "no-challenge freeze must not invent a challenge ref",
+    );
+    console.log("[E2E] P0-DCH1 Decision Challenge vertical passed");
+  } catch (error) {
+    if (backendProc && !backendProc.killed) console.error(backendLog || "backend log unavailable");
+    throw error;
+  } finally {
+    if (browser) await browser.close();
+    if (staticServer) await new Promise((resolve) => staticServer.close(resolve));
+    if (backendProc && !backendProc.killed) backendProc.kill();
+    rmSync(tempDataDir, { recursive: true, force: true });
+  }
+}
+
+run().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

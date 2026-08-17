@@ -20,6 +20,7 @@ _STALE_PROPOSAL = "Formal Decision Proposal 已失效，请重新预览"
 _CONFIRMATION_REQUIRED = "必须显式确认后才能冻结 Formal Decision"
 _COMMIT_UNAVAILABLE = "Formal Decision 提交暂不可用"
 _DECISION_NOT_FOUND = "Frozen Decision 不存在"
+_CHALLENGE_BIND = "Decision Challenge 无法绑定到这次 Freeze"
 
 
 class DecisionProposalPreviewIn(BaseModel):
@@ -42,6 +43,7 @@ class DecisionProposalCommitIn(DecisionProposalPreviewIn):
     as_of: str
     expected_proposal_fingerprint: str
     user_confirmed: bool
+    challenge_id: str | None = None
 
 
 def _draft_payload(body: DecisionProposalPreviewIn) -> dict[str, Any]:
@@ -89,6 +91,8 @@ def commit_decision_proposal(
         raise HTTPException(422, _CONFIRMATION_REQUIRED) from None
     except runtime.ProposalStaleError:
         raise HTTPException(409, _STALE_PROPOSAL) from None
+    except runtime.ChallengeBindingError:
+        raise HTTPException(409, _CHALLENGE_BIND) from None
     except runtime.DecisionCommitInputError:
         raise HTTPException(422, _INVALID_INPUT) from None
     except runtime.CurrentThesisUnavailableError:

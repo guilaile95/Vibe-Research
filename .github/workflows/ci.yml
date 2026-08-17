@@ -303,6 +303,11 @@ jobs:
         env:
           PYTHON: python
         run: npm run test:e2e:formal-outcome
+      - name: Run DCH1 pre-freeze decision challenge E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:decision-challenge
 
   e2e-account-bootstrap:
     name: Playwright account bootstrap E2E
