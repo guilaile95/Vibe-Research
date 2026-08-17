@@ -1182,6 +1182,40 @@ export interface EvidenceRecord {
   deleted_at: string | null;
 }
 
+export type TemporalAuthorityState = "PROVEN" | "UNPROVEN" | "ERROR";
+export type TemporalAuthorityBasis = "SOURCE_PUBLISHED_AT" | "EVENT_OCCURRED_AT" | "NONE";
+
+export interface EvidenceTemporalAuthority {
+  schema_version: string;
+  evidence_id: string;
+  temporal_state: TemporalAuthorityState;
+  effective_at: string | null;
+  temporal_basis: TemporalAuthorityBasis;
+  authority_refs: string[];
+  reason_codes: string[];
+  ec1_evaluation: "EVALUATED" | "NOT_EVALUATED";
+  ec1_safe_item: {
+    evidence_id: string;
+    scope_kind: string;
+    scope_id: string;
+    effective_at: string | null;
+    retrieved_at: string | null;
+    time_semantics: string;
+    authority_refs: string[];
+  } | null;
+  observed_time_is_not_effective_time: true;
+}
+
+export interface EvidenceTemporalIntakeInput {
+  source_identity?: string | null;
+  event_identity?: string | null;
+  source_published_at?: string | null;
+  event_occurred_at?: string | null;
+  observed_at?: string | null;
+  created_at?: string | null;
+  ingested_at?: string | null;
+}
+
 // P0-CT1：Thesis 交易策略枚举（与 backend THESIS_STRATEGIES / Campaign strategy 逐字一致）
 export type ThesisStrategy = "SHORT" | "SWING" | "MEDIUM";
 

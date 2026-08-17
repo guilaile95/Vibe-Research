@@ -70,6 +70,8 @@ import type {
   NdjsonStreamResult,
   NdjsonProtocolState,
   EvidenceRecord,
+  EvidenceTemporalAuthority,
+  EvidenceTemporalIntakeInput,
   EvidenceCreateInput,
   EvidenceUpdateInput,
   EvidenceListResult,
@@ -707,6 +709,12 @@ export const api = {
     request<EvidenceRecord>(`/evidence/${id}`, "PUT", body),
   evidenceDelete: (id: string) =>
     request<EvidenceRecord>(`/evidence/${id}?confirm=true`, "DELETE"),
+  evidenceTemporalAuthority: (id: string, evaluationAsOf?: string) => {
+    const qs = evaluationAsOf ? `?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}` : "";
+    return get<EvidenceTemporalAuthority>(`/evidence/${encodeURIComponent(id)}/temporal-authority${qs}`);
+  },
+  evidenceTemporalIntake: (id: string, body: EvidenceTemporalIntakeInput) =>
+    request<EvidenceTemporalAuthority>(`/evidence/${encodeURIComponent(id)}/temporal-authority`, "POST", body),
 
   // ---- Thesis ----
   thesisList: (params?: {
