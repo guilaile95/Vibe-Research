@@ -47,6 +47,7 @@ import northbound_capital_flow as ncf
 import top_risk_service as trs
 import watchlist_store
 import evidence_thesis_router
+import evidence_temporal_authority_router
 import data_health_router
 import trade_ledger_router
 import trade_attribution_router
@@ -159,6 +160,7 @@ app.add_middleware(
 
 # 投资逻辑与证据账本：独立路由模块最小接入
 app.include_router(evidence_thesis_router.router)
+app.include_router(evidence_temporal_authority_router.router)
 # 数据健康中心：只读聚合 API
 app.include_router(data_health_router.router)
 # 交易流水：独立存储与 API

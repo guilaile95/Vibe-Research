@@ -145,6 +145,38 @@ test("evidenceGet 路径含 id", async () => {
   assert.equal(r.url, "/api/evidence/ev-1");
 });
 
+test("evidence temporal authority readback uses the dedicated path", async () => {
+  requests.length = 0;
+  mockRules.push({
+    match: (url, method) => method === "GET" && url.includes("/api/evidence/ev-temporal/temporal-authority"),
+    status: 200,
+    body: { data: { evidence_id: "ev-temporal", temporal_state: "UNPROVEN" } },
+  });
+  await api.evidenceTemporalAuthority("ev-temporal");
+  assert.equal(requests.at(-1)?.method, "GET");
+  assert.equal(requests.at(-1)?.url, "/api/evidence/ev-temporal/temporal-authority");
+  mockRules.pop();
+});
+
+test("evidence temporal intake posts factual metadata only", async () => {
+  requests.length = 0;
+  mockRules.push({
+    match: (url, method) => method === "POST" && url.includes("/api/evidence/ev-temporal/temporal-authority"),
+    status: 200,
+    body: { data: { evidence_id: "ev-temporal", temporal_state: "PROVEN" } },
+  });
+  await api.evidenceTemporalIntake("ev-temporal", {
+    source_identity: "wire:1",
+    source_published_at: "2025-01-01T00:00:00.000000Z",
+  });
+  assert.equal(requests.at(-1)?.method, "POST");
+  assert.deepEqual(JSON.parse(requests.at(-1)?.body ?? "{}"), {
+    source_identity: "wire:1",
+    source_published_at: "2025-01-01T00:00:00.000000Z",
+  });
+  mockRules.pop();
+});
+
 test("evidenceUpdate 使用 PUT 且 body 为完整 EvidenceUpdateInput", async () => {
   reset();
   const body = {
