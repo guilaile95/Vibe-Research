@@ -954,10 +954,18 @@ export const api = {
       as_of: string;
       expected_proposal_fingerprint: string;
       user_confirmed: true;
+      challenge_id?: string;
     },
   ) => commitDecisionProposal(campaignId, body),
   getCommittedDecisionRuntime: (campaignId: string, decisionId: string) =>
     getCommittedDecisionRuntime(campaignId, decisionId),
+  finalizeDecisionChallenge: (
+    campaignId: string,
+    body: DecisionChallengeFinalizeInput,
+  ) => finalizeDecisionChallenge(campaignId, body),
+  getDecisionChallenge: (challengeId: string) => getDecisionChallenge(challengeId),
+  getDecisionChallengeForProposal: (campaignId: string, proposalFingerprint: string) =>
+    getDecisionChallengeForProposal(campaignId, proposalFingerprint),
   getDecisionInbox: () => getDecisionInbox(),
 };
 
@@ -1296,6 +1304,7 @@ export async function commitDecisionProposal(
     as_of: string;
     expected_proposal_fingerprint: string;
     user_confirmed: true;
+    challenge_id?: string;
   },
 ): Promise<DecisionProposalCommitResult> {
   return request<DecisionProposalCommitResult>(
@@ -1303,6 +1312,90 @@ export async function commitDecisionProposal(
     "POST",
     body,
   );
+}
+
+// ---------------------------------------------------------------------------
+// P0-DCH1：optional pre-freeze Decision Challenge packet
+// Types stay local to this file to avoid fan-in on api/types.ts.
+// ---------------------------------------------------------------------------
+
+export const DECISION_CHALLENGE_DIMENSIONS = [
+  "STRONGEST_SUPPORTING_EVIDENCE",
+  "STRONGEST_OPPOSING_EVIDENCE",
+  "PRE_MORTEM",
+  "INVALIDATION_FACTS",
+] as const;
+
+export type DecisionChallengeDimensionName = (typeof DECISION_CHALLENGE_DIMENSIONS)[number];
+
+export interface DecisionChallengeDimensionInput {
+  status: "ANSWERED" | "UNKNOWN";
+  text?: string;
+}
+
+export interface DecisionChallengeFinalizeInput extends DecisionProposalDraftInput {
+  expected_proposal_fingerprint: string;
+  as_of: string;
+  user_confirmed: true;
+  dimensions: Record<DecisionChallengeDimensionName, DecisionChallengeDimensionInput>;
+}
+
+export interface DecisionChallengePacket {
+  challenge_id: string;
+  packet_state: string;
+  challenge_evaluation: string;
+  challenge_coverage_state: string;
+  decision_quality: "NOT_EVALUATED";
+  two_pass_semantic_independence_verified: "NO";
+  proposal_fingerprint: string;
+  proposal_as_of: string;
+  finalized_at: string;
+  first_pass_ref: string;
+  first_pass_at: string;
+  second_pass_ref: string;
+  second_pass_at: string;
+  two_pass_state: string;
+  source_refs?: string[];
+  [key: string]: unknown;
+}
+
+export interface DecisionChallengeRead {
+  schema_version: string;
+  challenge: DecisionChallengePacket;
+  decision_quality: "NOT_EVALUATED";
+}
+
+export async function finalizeDecisionChallenge(
+  campaignId: string,
+  body: DecisionChallengeFinalizeInput,
+): Promise<DecisionChallengeRead> {
+  return request<DecisionChallengeRead>(
+    `/campaigns/${encodeURIComponent(campaignId)}/decision-challenge/finalize`,
+    "POST",
+    body,
+  );
+}
+
+export async function getDecisionChallenge(
+  challengeId: string,
+): Promise<DecisionChallengeRead> {
+  return get<DecisionChallengeRead>(
+    `/decision-challenges/${encodeURIComponent(challengeId)}`,
+  );
+}
+
+export async function getDecisionChallengeForProposal(
+  campaignId: string,
+  proposalFingerprint: string,
+): Promise<DecisionChallengeRead | null> {
+  try {
+    return await get<DecisionChallengeRead>(
+      `/campaigns/${encodeURIComponent(campaignId)}/decision-challenge?proposal_fingerprint=${encodeURIComponent(proposalFingerprint)}`,
+    );
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
 }
 
 export async function getCommittedDecisionRuntime(

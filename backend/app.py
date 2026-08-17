@@ -69,6 +69,7 @@ import campaign_router
 import holdings_campaign_composition_router
 import decision_inbox_runtime_router
 import decision_commit_router
+import decision_challenge_router
 import formal_decision_outcome_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
@@ -195,6 +196,8 @@ app.include_router(holdings_campaign_composition_router.router)
 app.include_router(decision_inbox_runtime_router.router)
 # P0-DC1 uncommitted Decision Proposal → explicit Frozen Decision commit
 app.include_router(decision_commit_router.router)
+# P0-DCH1 optional pre-freeze Decision Challenge packet
+app.include_router(decision_challenge_router.router)
 # P0-OL1 Formal Decision Outcome; legacy advice analytics remain separate.
 app.include_router(formal_decision_outcome_router.router)
 
