@@ -87,15 +87,11 @@ const toDateTimeLocal = (s: string | null) => {
 const inputCls = "mt-0.5 w-full rounded border border-border/50 bg-background px-2 py-1.5 text-sm outline-none focus:border-primary/50";
 const labelCls = "block text-xs text-muted-foreground";
 
-const toCanonicalUtc = (value: string) => {
-  if (!value) return null;
-  const iso = new Date(value).toISOString();
-  return iso.replace(/\.\d{3}Z$/, ".000000Z");
-};
+const toCanonicalUtc = (value: string) => value.trim() || null;
 
 const temporalStateLabel: Record<string, string> = {
   PROVEN: "已证明",
-  UNPROVEN: "未证明",
+  UNPROVEN: "未证明（ASSERTED metadata）",
   ERROR: "错误（已拒绝）",
 };
 
@@ -377,7 +373,8 @@ export function EvidenceDetail() {
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <p className="text-sm font-medium">Temporal authority</p>
-                  <p className="mt-0.5 text-[11px] text-muted-foreground/70">Observed time is not effective time.</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground/70">Submitted metadata is not source authority.</p>
+                  <p className="text-[11px] text-muted-foreground/70">Observed time is not effective time.</p>
                 </div>
                 {temporalLoading ? (
                   <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -397,16 +394,17 @@ export function EvidenceDetail() {
                 </div>
               )}
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className={labelCls}>Source identity<input value={temporalForm.source_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, source_identity: e.target.value }))} className={inputCls} placeholder="真实来源标识" /></label>
-                <label className={labelCls}>Source published at<input type="datetime-local" value={temporalForm.source_published_at} onChange={(e) => setTemporalForm((p) => ({ ...p, source_published_at: e.target.value }))} className={inputCls} /></label>
-                <label className={labelCls}>Event identity<input value={temporalForm.event_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, event_identity: e.target.value }))} className={inputCls} placeholder="真实事件标识" /></label>
-                <label className={labelCls}>Event occurred at<input type="datetime-local" value={temporalForm.event_occurred_at} onChange={(e) => setTemporalForm((p) => ({ ...p, event_occurred_at: e.target.value }))} className={inputCls} /></label>
-                <label className={labelCls}>Observed at<input type="datetime-local" value={temporalForm.observed_at} onChange={(e) => setTemporalForm((p) => ({ ...p, observed_at: e.target.value }))} className={inputCls} /></label>
-                <label className={labelCls}>Created at<input type="datetime-local" value={temporalForm.created_at} onChange={(e) => setTemporalForm((p) => ({ ...p, created_at: e.target.value }))} className={inputCls} /></label>
-                <label className={labelCls}>Ingested at<input type="datetime-local" value={temporalForm.ingested_at} onChange={(e) => setTemporalForm((p) => ({ ...p, ingested_at: e.target.value }))} className={inputCls} /></label>
+                <label className={labelCls}>Source identity<input value={temporalForm.source_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, source_identity: e.target.value }))} className={inputCls} placeholder="asserted source identity" /></label>
+                <label className={labelCls}>Source published at<input type="text" value={temporalForm.source_published_at} onChange={(e) => setTemporalForm((p) => ({ ...p, source_published_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
+                <label className={labelCls}>Event identity<input value={temporalForm.event_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, event_identity: e.target.value }))} className={inputCls} placeholder="asserted event identity" /></label>
+                <label className={labelCls}>Event occurred at<input type="text" value={temporalForm.event_occurred_at} onChange={(e) => setTemporalForm((p) => ({ ...p, event_occurred_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
+                <label className={labelCls}>Observed at<input type="text" value={temporalForm.observed_at} onChange={(e) => setTemporalForm((p) => ({ ...p, observed_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
+                <label className={labelCls}>Created at<input type="text" value={temporalForm.created_at} onChange={(e) => setTemporalForm((p) => ({ ...p, created_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
+                <label className={labelCls}>Ingested at<input type="text" value={temporalForm.ingested_at} onChange={(e) => setTemporalForm((p) => ({ ...p, ingested_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
               </div>
-              <button onClick={() => void submitTemporalIntake()} disabled={temporalBusy} className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-xs text-primary hover:bg-primary/25 disabled:opacity-50">
-                {temporalBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} 保存 factual temporal metadata
+              <p className="mt-3 text-[11px] text-muted-foreground/70">仅接受明确带 Z 的 canonical UTC 文本。提交的 metadata 不会自行成为 source authority。</p>
+              <button onClick={() => void submitTemporalIntake()} disabled={temporalBusy} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-xs text-primary hover:bg-primary/25 disabled:opacity-50">
+                {temporalBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} 保存 ASSERTED / OBSERVED METADATA
               </button>
             </div>
 

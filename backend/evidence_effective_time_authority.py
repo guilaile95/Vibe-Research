@@ -44,7 +44,7 @@ _TEMPORAL_TABLE = "evidence_temporal_intakes"
 
 _CREATE_TEMPORAL_TABLE = f"""
 CREATE TABLE IF NOT EXISTS {_TEMPORAL_TABLE} (
-    intake_id TEXT PRIMARY KEY,
+    intake_id TEXT PRIMARY KEY NOT NULL,
     evidence_id TEXT NOT NULL,
     source_identity TEXT,
     event_identity TEXT,
@@ -63,6 +63,27 @@ _CREATE_TEMPORAL_EVIDENCE_INDEX = f"""
 CREATE INDEX IF NOT EXISTS idx_{_TEMPORAL_TABLE}_evidence
 ON {_TEMPORAL_TABLE}(evidence_id, recorded_at, intake_id)
 """
+
+_EXPECTED_COLUMNS = (
+    ("intake_id", "TEXT", 1, None, 1),
+    ("evidence_id", "TEXT", 1, None, 0),
+    ("source_identity", "TEXT", 0, None, 0),
+    ("event_identity", "TEXT", 0, None, 0),
+    ("source_published_at", "TEXT", 0, None, 0),
+    ("event_occurred_at", "TEXT", 0, None, 0),
+    ("observed_at", "TEXT", 0, None, 0),
+    ("created_at", "TEXT", 0, None, 0),
+    ("ingested_at", "TEXT", 0, None, 0),
+    ("payload_hash", "TEXT", 1, None, 0),
+    ("recorded_at", "TEXT", 1, None, 0),
+    ("schema_version", "TEXT", 1, None, 0),
+)
+_EXPECTED_INDEX_COLUMNS = ("evidence_id", "recorded_at", "intake_id")
+_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+
+PROVEN_PRODUCTION_PATH = "NOT_IMPLEMENTED"
+TRUSTED_SOURCE_PRODUCER = "NOT_IMPLEMENTED"
+TRUSTED_EVENT_PRODUCER = "NOT_IMPLEMENTED"
 
 
 class TemporalAuthorityError(ValueError):
@@ -101,6 +122,12 @@ class TemporalIntake:
             value = getattr(self, field)
             if value is not None and (type(value) is not str or value != value.strip() or not value):
                 raise TemporalAuthorityError(f"{field} 必须是非空规范文本或 null")
+        for field in ("source_published_at", "event_occurred_at", "observed_at", "created_at", "ingested_at"):
+            value = getattr(self, field)
+            if value is not None:
+                # Canonicalize before any database transaction.  This makes a
+                # malformed public intake a 422 with zero durable writes.
+                object.__setattr__(self, field, _canonical_timestamp(value, field))
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -175,13 +202,120 @@ def _payload_hash(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _row_to_intake(row: Mapping[str, Any], expected_evidence_id: str) -> tuple[TemporalIntake, str]:
+    """Rebuild and hash-check one persisted factual row before projection."""
+    intake_id = row.get("intake_id")
+    evidence_id = row.get("evidence_id")
+    if (
+        type(intake_id) is not str
+        or not _EVIDENCE_ID_RE.fullmatch(intake_id)
+        or evidence_id != expected_evidence_id
+    ):
+        raise TemporalAuthorityCorruptedError("Evidence temporal authority row identity is malformed")
+    if row.get("schema_version") != SCHEMA_VERSION:
+        raise TemporalAuthorityCorruptedError("Evidence temporal authority row schema_version is unsupported")
+    persisted_hash = row.get("payload_hash")
+    if type(persisted_hash) is not str or _HASH_RE.fullmatch(persisted_hash) is None:
+        raise TemporalAuthorityCorruptedError("Evidence temporal authority payload_hash is malformed")
+    try:
+        recorded_at = row.get("recorded_at")
+        _parse_timestamp(recorded_at, "recorded_at")
+        intake = TemporalIntake(
+            evidence_id=evidence_id,
+            source_identity=row.get("source_identity"),
+            event_identity=row.get("event_identity"),
+            source_published_at=row.get("source_published_at"),
+            event_occurred_at=row.get("event_occurred_at"),
+            observed_at=row.get("observed_at"),
+            created_at=row.get("created_at"),
+            ingested_at=row.get("ingested_at"),
+        )
+    except TemporalAuthorityError as exc:
+        raise TemporalAuthorityCorruptedError("Evidence temporal authority factual row is malformed") from exc
+    recomputed = _payload_hash(intake.payload())
+    if recomputed != persisted_hash:
+        raise TemporalAuthorityCorruptedError("Evidence temporal authority payload_hash mismatch")
+    return intake, intake_id
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
-def _ensure_temporal_schema(conn: sqlite3.Connection) -> None:
-    conn.execute(_CREATE_TEMPORAL_TABLE)
-    conn.execute(_CREATE_TEMPORAL_EVIDENCE_INDEX)
+def _schema_object_type(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute(
+        "SELECT type FROM sqlite_master WHERE name = ?",
+        (_TEMPORAL_TABLE,),
+    ).fetchone()
+    return str(row[0]) if row is not None else None
+
+
+def _assert_temporal_schema(conn: sqlite3.Connection) -> None:
+    """Assert the exact ET1 extension schema; never repair an existing table."""
+    if _schema_object_type(conn) != "table":
+        raise TemporalAuthorityCorruptedError("Evidence temporal authority schema missing or is not a table")
+
+    columns = tuple(
+        (str(row[1]), str(row[2]), int(row[3]), row[4], int(row[5]))
+        for row in conn.execute(f"PRAGMA table_info({_TEMPORAL_TABLE})").fetchall()
+    )
+    if columns != _EXPECTED_COLUMNS:
+        raise TemporalAuthorityCorruptedError("Evidence temporal authority columns are malformed")
+
+    foreign_keys = tuple(
+        (str(row[2]), str(row[3]), str(row[4]))
+        for row in conn.execute(f"PRAGMA foreign_key_list({_TEMPORAL_TABLE})").fetchall()
+    )
+    if foreign_keys != (("evidence_records", "evidence_id", "id"),):
+        raise TemporalAuthorityCorruptedError("Evidence temporal authority foreign key is malformed")
+
+    indexes = []
+    for row in conn.execute(f"PRAGMA index_list({_TEMPORAL_TABLE})").fetchall():
+        name = str(row[1])
+        unique = int(row[2])
+        origin = str(row[3])
+        partial = int(row[4]) if len(row) > 4 else 0
+        index_columns = tuple(
+            str(info[2]) for info in conn.execute(f"PRAGMA index_info({name})").fetchall()
+        )
+        indexes.append((name, unique, origin, partial, index_columns))
+
+    required = (
+        (
+            f"idx_{_TEMPORAL_TABLE}_evidence",
+            0,
+            "c",
+            0,
+            _EXPECTED_INDEX_COLUMNS,
+        ),
+    )
+    if required[0] not in indexes:
+        raise TemporalAuthorityCorruptedError("Evidence temporal authority evidence index is malformed")
+    # The payload_hash UNIQUE contract is represented by SQLite's one
+    # autoindex.  Do not accept a manually-created partial/non-unique variant.
+    unique_hash_indexes = [
+        item for item in indexes
+        if item[1] == 1 and item[2] == "u" and item[3] == 0 and item[4] == ("payload_hash",)
+    ]
+    if len(unique_hash_indexes) != 1:
+        raise TemporalAuthorityCorruptedError("Evidence temporal authority payload_hash UNIQUE is malformed")
+    primary_key_indexes = [
+        item for item in indexes
+        if item[1] == 1 and item[2] == "pk" and item[3] == 0 and item[4] == ("intake_id",)
+    ]
+    if len(primary_key_indexes) != 1:
+        raise TemporalAuthorityCorruptedError("Evidence temporal authority primary key index is malformed")
+    allowed = {required[0], unique_hash_indexes[0], primary_key_indexes[0]}
+    if set(indexes) != allowed:
+        raise TemporalAuthorityCorruptedError("Evidence temporal authority has unexpected indexes")
+
+
+def _ensure_temporal_schema_for_write(conn: sqlite3.Connection) -> None:
+    """Create the extension only on first write; reject every existing mismatch."""
+    if _schema_object_type(conn) is None:
+        conn.execute(_CREATE_TEMPORAL_TABLE)
+        conn.execute(_CREATE_TEMPORAL_EVIDENCE_INDEX)
+    _assert_temporal_schema(conn)
 
 
 def record_temporal_intake(
@@ -194,7 +328,7 @@ def record_temporal_intake(
     payload_hash = _payload_hash(payload)
 
     def _write(conn: sqlite3.Connection) -> dict[str, Any]:
-        _ensure_temporal_schema(conn)
+        _ensure_temporal_schema_for_write(conn)
         evidence = evidence_store._get_evidence_row(conn, intake.evidence_id)
         if evidence is None:
             raise TemporalAuthorityError(f"证据 {intake.evidence_id} 不存在")
@@ -235,17 +369,25 @@ def record_temporal_intake(
 
 def _read_rows(evidence_id: str, *, db_path: str | Path) -> list[dict[str, Any]]:
     def _read(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-        table = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
-            (_TEMPORAL_TABLE,),
-        ).fetchone()
-        if table is None:
+        if _schema_object_type(conn) is None:
             return []
+        _assert_temporal_schema(conn)
         rows = conn.execute(
             f"SELECT * FROM {_TEMPORAL_TABLE} WHERE evidence_id = ? ORDER BY recorded_at ASC, intake_id ASC",
             (evidence_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        payloads: list[dict[str, Any]] = []
+        hashes: dict[str, str] = {}
+        for row in rows:
+            row_dict = dict(row)
+            intake, intake_id = _row_to_intake(row_dict, evidence_id)
+            payload_hash = str(row_dict["payload_hash"])
+            previous_id = hashes.get(payload_hash)
+            if previous_id is not None and previous_id != intake_id:
+                raise TemporalAuthorityCorruptedError("Evidence temporal authority hash collision")
+            hashes[payload_hash] = intake_id
+            payloads.append(intake.payload())
+        return payloads
 
     try:
         return evidence_store.read_transaction(db_path, _read)
@@ -325,122 +467,39 @@ def evaluate_temporal_authority(
     *,
     evaluation_as_of: str | None = None,
 ) -> TemporalAuthorityResult:
-    """Derive authority from persisted factual rows; never trust derived fields."""
+    """Project public factual metadata without promoting it to authority.
+
+    ET1 R1 deliberately has no trusted source/event producer in this base:
+    there is no durable source/event record linked to ``evidence_records.id``
+    that this module can verify.  Therefore every public intake remains
+    asserted metadata and can only produce UNPROVEN/NOT_EVALUATED.
+    """
     evidence_id = evidence.get("id")
     if type(evidence_id) is not str or not _EVIDENCE_ID_RE.fullmatch(evidence_id):
         raise TemporalAuthorityError("Evidence identity malformed")
     if evaluation_as_of is not None:
-        try:
-            _canonical_timestamp(evaluation_as_of, "evaluation_as_of")
-        except TemporalAuthorityError as exc:
-            return _result(
-                evidence,
-                state=ERROR,
-                effective_at=None,
-                basis=NONE,
-                refs=(),
-                reasons=("MALFORMED_TIMESTAMP", str(exc)),
-                observed_at=None,
-                ec1_evaluation=NOT_EVALUATED,
-            )
-    if not intakes:
-        return _result(
-            evidence,
-            state=UNPROVEN,
-            effective_at=None,
-            basis=NONE,
-            refs=(),
-            reasons=("NO_EFFECTIVE_TIME_AUTHORITY", "OBSERVED_TIME_NOT_EFFECTIVE_TIME"),
-            observed_at=None,
-            ec1_evaluation=NOT_EVALUATED,
-        )
-
-    candidates: list[tuple[str, str, str]] = []
-    observed_values: list[str] = []
-    reason_codes: list[str] = []
-    malformed = False
-    for row in intakes:
-        for field in ("source_published_at", "event_occurred_at", "observed_at", "created_at", "ingested_at"):
-            value = row.get(field)
-            if value is not None:
-                try:
-                    _parse_timestamp(value, field)
-                except TemporalAuthorityError:
-                    malformed = True
-        if row.get("observed_at"):
-            observed_values.append(row["observed_at"])
-        source_at = row.get("source_published_at")
-        source_identity = row.get("source_identity")
-        if source_at is not None and source_identity:
-            candidates.append((SOURCE_PUBLISHED_AT, source_at, f"source:{source_identity}"))
-        elif source_at is not None:
-            reason_codes.append("SOURCE_IDENTITY_MISSING")
-        event_at = row.get("event_occurred_at")
-        event_identity = row.get("event_identity")
-        if event_at is not None and event_identity:
-            candidates.append((EVENT_OCCURRED_AT, event_at, f"event:{event_identity}"))
-        elif event_at is not None:
-            reason_codes.append("EVENT_IDENTITY_MISSING")
-
-    if malformed:
-        return _result(
-            evidence,
-            state=ERROR,
-            effective_at=None,
-            basis=NONE,
-            refs=(),
-            reasons=("MALFORMED_TIMESTAMP",),
-            observed_at=observed_values[-1] if observed_values else None,
-            ec1_evaluation=NOT_EVALUATED,
-        )
-    # Re-observing the same source fact is not a conflict.  A different
-    # authority identity or a different timestamp is a conflict and has no
-    # deterministic winner.
-    unique_candidates = list(dict.fromkeys(candidates))
-    if len(unique_candidates) > 1:
-        return _result(
-            evidence,
-            state=ERROR,
-            effective_at=None,
-            basis=NONE,
-            refs=(),
-            reasons=("CONFLICTING_TEMPORAL_AUTHORITIES",),
-            observed_at=observed_values[-1] if observed_values else None,
-            ec1_evaluation=NOT_EVALUATED,
-        )
-    if not unique_candidates:
-        reasons = list(dict.fromkeys(reason_codes))
-        reasons.append("NO_EFFECTIVE_TIME_AUTHORITY")
+        _canonical_timestamp(evaluation_as_of, "evaluation_as_of")
+    observed_values = [row.get("observed_at") for row in intakes if row.get("observed_at")]
+    reasons = [
+        "PUBLIC_METADATA_NOT_AUTHORITY",
+        "SUBMITTED_METADATA_NOT_SOURCE_AUTHORITY",
+        "NO_EFFECTIVE_TIME_AUTHORITY",
+    ]
+    if observed_values:
         reasons.append("OBSERVED_TIME_NOT_EFFECTIVE_TIME")
-        if any(row.get("created_at") for row in intakes):
-            reasons.append("CREATED_TIME_NOT_EFFECTIVE_TIME")
-        if any(row.get("ingested_at") for row in intakes):
-            reasons.append("INGESTED_TIME_NOT_EFFECTIVE_TIME")
-        return _result(
-            evidence,
-            state=UNPROVEN,
-            effective_at=None,
-            basis=NONE,
-            refs=(),
-            reasons=tuple(dict.fromkeys(reasons)),
-            observed_at=observed_values[-1] if observed_values else None,
-            ec1_evaluation=NOT_EVALUATED,
-        )
-
-    basis, effective_at, ref = unique_candidates[0]
-    evaluation = EVALUATED
-    if evaluation_as_of is not None and effective_at > evaluation_as_of:
-        evaluation = NOT_EVALUATED
-        reason_codes.append("EFFECTIVE_AFTER_EVALUATION_AS_OF")
+    if any(row.get("created_at") for row in intakes):
+        reasons.append("CREATED_TIME_NOT_EFFECTIVE_TIME")
+    if any(row.get("ingested_at") for row in intakes):
+        reasons.append("INGESTED_TIME_NOT_EFFECTIVE_TIME")
     return _result(
         evidence,
-        state=PROVEN,
-        effective_at=effective_at,
-        basis=basis,
-        refs=(ref,),
-        reasons=tuple(dict.fromkeys(reason_codes + [f"{basis}_AUTHORITATIVE"])),
+        state=UNPROVEN,
+        effective_at=None,
+        basis=NONE,
+        refs=(),
+        reasons=tuple(dict.fromkeys(reasons)),
         observed_at=observed_values[-1] if observed_values else None,
-        ec1_evaluation=evaluation,
+        ec1_evaluation=NOT_EVALUATED,
     )
 
 
@@ -458,16 +517,23 @@ def get_temporal_authority(
         row = evidence_store._get_evidence_row(conn, evidence_id)
         if row is None:
             return None
-        table = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
-            (_TEMPORAL_TABLE,),
-        ).fetchone()
         rows: list[dict[str, Any]] = []
-        if table is not None:
-            rows = [dict(r) for r in conn.execute(
+        if _schema_object_type(conn) is not None:
+            _assert_temporal_schema(conn)
+            persisted_rows = conn.execute(
                 f"SELECT * FROM {_TEMPORAL_TABLE} WHERE evidence_id = ? ORDER BY recorded_at ASC, intake_id ASC",
                 (evidence_id,),
-            ).fetchall()]
+            ).fetchall()
+            hashes: dict[str, str] = {}
+            for persisted in persisted_rows:
+                row_dict = dict(persisted)
+                intake, intake_id = _row_to_intake(row_dict, evidence_id)
+                payload_hash = str(row_dict["payload_hash"])
+                previous_id = hashes.get(payload_hash)
+                if previous_id is not None and previous_id != intake_id:
+                    raise TemporalAuthorityCorruptedError("Evidence temporal authority hash collision")
+                hashes[payload_hash] = intake_id
+                rows.append(intake.payload())
         return {"evidence": evidence_store._evidence_row_to_dict(row), "rows": rows}
 
     try:
