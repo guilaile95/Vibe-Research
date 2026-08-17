@@ -27,6 +27,10 @@ from fact_lake_publication_selection import (
     select_canonical_publications,
 )
 from fact_lake_store import FactLake
+from security_price_point_authority import (
+    PricePointAuthorityError,
+    resolve_authoritative_price_point,
+)
 from security_exchange_policy import resolve_security_exchange
 from trade_calendar import CALENDAR_AUTHORITY_REF, completed_trade_date_at
 from tushare_daily_shadow import (
@@ -109,12 +113,6 @@ def evaluate_price_reference_capability(
     publication_id: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate one CCD1 dependency result using positive proof only."""
-    if not isinstance(lake, FactLake):
-        raise PriceReferenceCapabilityError("lake must be FactLake")
-    if not lake.readonly:
-        raise PriceReferenceCapabilityError(
-            "capability evaluation requires a readonly lake"
-        )
     if publication_id is not None and (
             type(publication_id) is not str or not publication_id.strip()
             or publication_id != publication_id.strip()):
@@ -122,166 +120,24 @@ def evaluate_price_reference_capability(
             "publication_id must be canonical non-empty text or None"
         )
     _require_inputs(security_code, campaign_id, as_of)
-    as_of_dt = _parse_utc(as_of)
-    refs = [ADAPTER_AUTHORITY_REF]
-
-    trade_date = completed_trade_date_at(as_of)
-    if trade_date is None:
-        return _result("NOT_EVALUATED", as_of, refs)
-
     try:
-        identity = resolve_security_exchange(
-            security_code=security_code,
-            policy_version=security_exchange_policy_version,
-        )
-    except Exception as exc:
-        raise PriceReferenceCapabilityError("security exchange identity is invalid") from exc
-    authority_ref = identity.get("authority_ref")
-    if type(authority_ref) is str and authority_ref:
-        refs.append(authority_ref)
-    if identity.get("exchange_resolution_state") != "RESOLVED":
-        return _result("NOT_EVALUATED", as_of, refs)
-    exchange = identity.get("exchange")
-    alias = _provider_alias(security_code, exchange)
-    # SER1 proves routing only.  TCA1 currently proves SSE/SZSE sessions only;
-    # legacy/current BSE aliases must therefore remain NOT_EVALUATED.
-    if alias is None:
-        return _result("NOT_EVALUATED", as_of, refs)
-    refs.insert(1, CALENDAR_AUTHORITY_REF)
-    refs.append(PROVIDER_ALIAS_AUTHORITY_REF)
-
-    canonical_key = f"{DATASET_ID}:{trade_date}"
-    try:
-        candidates = tuple(
-            item for item in lake.list_canonical_publications(
-                dataset_id=DATASET_ID,
-                primary_temporal_field=TemporalSemantics.TRADE_DATE,
-                primary_temporal_value=trade_date,
-            )
-            if item.canonical_key == canonical_key
-        )
-        mode = (
-            PublicationSelectionMode.PUBLICATION_ID
-            if publication_id is not None
-            else PublicationSelectionMode.ALL
-        )
-        selection = select_canonical_publications(
-            TUSHARE_DAILY_DATASET_SPEC,
-            PublicationSelectionRequest(
-                dataset_id=DATASET_ID,
-                canonical_key=canonical_key,
-                primary_temporal_field=TemporalSemantics.TRADE_DATE,
-                primary_temporal_value=trade_date,
-                mode=mode,
-                publication_id=publication_id,
-                as_of=None,
-            ),
-            candidates,
-        )
-    except PublicationSelectionNotFoundError:
-        # A missing explicitly pinned id is absence of selection authority;
-        # corrupt/ambiguous candidates remain an integrity error.
-        return _result("NOT_EVALUATED", as_of, refs)
-    except Exception:
-        return _result("ERROR", as_of, refs)
-    selected_ids = selection.selected_publication_ids
-    if len(selected_ids) != 1:
-        return _result("NOT_EVALUATED", as_of, refs)
-    selected_id = selected_ids[0]
-    selected = next(
-        (item for item in candidates if item.publication_id == selected_id),
-        None,
-    )
-    if selected is None:
-        return _result("ERROR", as_of, refs)
-    refs.extend((
-        f"selection:{selection.schema_version}:{selection.selection_basis}",
-        f"dataset:{DATASET_ID}:{DATASET_CONTRACT_REVISION}",
-        f"publication:{selected_id}",
-        f"observation:{selected.source_observation_id}",
-        f"normalizer:{NORMALIZER_VERSION}",
-        f"artifact-schema:{ARTIFACT_SCHEMA_VERSION}",
-    ))
-
-    observation = lake.get_observation(selected.source_observation_id)
-    if observation is None:
-        return _result("ERROR", as_of, refs)
-    try:
-        fetched_at = _parse_utc(observation.observation.fetched_at)
-    except PriceReferenceCapabilityError:
-        return _result("ERROR", as_of, refs)
-    if fetched_at > as_of_dt:
-        return _result("NOT_EVALUATED", as_of, refs)
-    fetched_completed_date = completed_trade_date_at(
-        observation.observation.fetched_at
-    )
-    if fetched_completed_date is None or fetched_completed_date < trade_date:
-        # A completed-session close cannot be supported by a receipt captured
-        # before that session completed.  This is a TCA1 chronology gate, not
-        # a provider revision or PIT claim; later historical backfill remains
-        # admissible when its receipt is visible by the caller's as_of.
-        return _result("NOT_EVALUATED", as_of, refs)
-
-    try:
-        replay = verify_tushare_daily_normalization_replay(
-            lake, selected.source_observation_id
-        )
-        if replay.status != "MATCH":
-            return _result("ERROR", as_of, refs)
-        evidence = collect_fact_lake_health_evidence(
+        point = resolve_authoritative_price_point(
             lake=lake,
-            dataset_spec=TUSHARE_DAILY_DATASET_SPEC,
-            request=HealthCollectionRequest(
-                publication_id=selected_id,
-                expected_primary_temporal_value=trade_date,
-            ),
+            security_code=security_code,
+            as_of=as_of,
+            security_exchange_policy_version=security_exchange_policy_version,
+            publication_id=publication_id,
+            replay_verifier=verify_tushare_daily_normalization_replay,
         )
-        assessment = assess_publication_health(
-            dataset_spec=TUSHARE_DAILY_DATASET_SPEC,
-            evidence=replace(evidence, replay_state="MATCH"),
-        )
-        if assessment.canonical_admissibility == "BLOCKED":
-            return _result("ERROR", as_of, refs)
-        if assessment.canonical_admissibility != "USABLE":
-            return _result("NOT_EVALUATED", as_of, refs)
-        refs.extend((
-            HEALTH_COLLECTION_AUTHORITY_REF,
-            HEALTH_AUTHORITY_REF,
-            REPLAY_AUTHORITY_REF,
-        ))
-        rows = query_tushare_daily(
-            lake,
-            trade_date,
-            selection="publication",
-            publication_id=selected_id,
-        )
-    except Exception:
-        return _result("ERROR", as_of, refs)
-    if len(rows) != 1:
-        return _result("ERROR", as_of, refs)
-    payload = rows[0].get("canonical_payload")
-    if type(payload) is not dict or payload.get("trade_date") != trade_date:
-        return _result("ERROR", as_of, refs)
-    payload_rows = payload.get("rows")
-    if type(payload_rows) is not list:
-        return _result("ERROR", as_of, refs)
-    target_rows = [
-        row for row in payload_rows
-        if type(row) is dict and row.get("ts_code") == alias
-    ]
-    if not target_rows:
-        return _result("NOT_EVALUATED", as_of, refs)
-    if len(target_rows) != 1:
-        return _result("ERROR", as_of, refs)
-    close = target_rows[0].get("close")
-    if close is None:
-        return _result("NOT_EVALUATED", as_of, refs)
-    if type(close) not in (int, float) or isinstance(close, bool) \
-            or not math.isfinite(close) or close <= 0:
-        return _result("ERROR", as_of, refs)
-
-    refs.append(f"security-row:{alias}:{trade_date}")
-    return _result("USABLE", as_of, refs)
+    except PricePointAuthorityError as exc:
+        raise PriceReferenceCapabilityError(str(exc)) from exc
+    point_refs = list(point["authority_refs"])
+    # Preserve the established CCD outward contract: unresolved/BSE routing
+    # stops before CCD claims the calendar authority, even though the shared
+    # primitive may use the calendar to establish its neutral boundary.
+    if point.get("provider_alias") is None and point["state"] == "NOT_EVALUATED":
+        point_refs = [ref for ref in point_refs if ref != CALENDAR_AUTHORITY_REF]
+    return _result(point["state"], as_of, [ADAPTER_AUTHORITY_REF, *point_refs])
 
 
 __all__ = [

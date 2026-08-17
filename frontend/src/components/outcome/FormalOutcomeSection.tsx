@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, BookOpenCheck, Loader2, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
-import type { FormalDecisionOutcome } from "@/lib/api/types";
+import type { FormalDecisionOutcome, FormalPricePoint } from "@/lib/api/types";
 
 const CARD = "rounded-xl border border-border/60 bg-card p-6 shadow-sm";
 
@@ -25,16 +25,41 @@ function counterfactualSummary(item: FormalDecisionOutcome): string {
   return stateLabel(value.state);
 }
 
+function pricePointText(point: FormalPricePoint | undefined): string {
+  if (!point || typeof point !== "object") return "—";
+  const tradeDate = "trade_date" in point && typeof point.trade_date === "string"
+    ? point.trade_date
+    : "—";
+  const close = "close" in point && typeof point.close === "number"
+    ? String(point.close)
+    : "—";
+  return `${tradeDate} @ ${close}`;
+}
+
+function returnText(value: string | number | null | undefined): string {
+  if (value == null) return "—";
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  return `${(numeric * 100).toFixed(2)}%`;
+}
+
 export function FormalOutcomeSection() {
   const [items, setItems] = useState<FormalDecisionOutcome[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [evaluationAsOf] = useState(() => (
+    new URLSearchParams(window.location.search).get("evaluation_as_of") || undefined
+  ));
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setItems(await api.listFormalDecisionOutcomes({ limit: 50, offset: 0 }));
+      setItems(await api.listFormalDecisionOutcomes({
+        evaluation_as_of: evaluationAsOf,
+        limit: 50,
+        offset: 0,
+      }));
     } catch (err: any) {
       setError(err?.message || "Formal Decision Outcome authority unavailable");
       setItems([]);
@@ -133,8 +158,30 @@ export function FormalOutcomeSection() {
                   <td className="py-4 pr-4 align-top">{actualSummary(item)}</td>
                   <td className="py-4 align-top">
                     <div>{counterfactualSummary(item)}</div>
+                    {item.counterfactual_outcome?.state === "EVALUATED" && (
+                      <div
+                        className="mt-2 space-y-1 text-xs"
+                        data-testid={`counterfactual-detail-${item.decision_id}`}
+                      >
+                        <div className="font-medium">
+                          Security close-to-close path
+                        </div>
+                        <div className="text-muted-foreground">
+                          decision reference: {pricePointText(item.counterfactual_outcome.start_price_point)}
+                        </div>
+                        <div className="text-muted-foreground">
+                          evaluation: {pricePointText(item.counterfactual_outcome.end_price_point)}
+                        </div>
+                        <div>
+                          return: {returnText(item.counterfactual_outcome.security_return)}
+                        </div>
+                        <div className="text-muted-foreground">
+                          security path only; not portfolio P&amp;L or decision quality
+                        </div>
+                      </div>
+                    )}
                     <div className="mt-1 text-xs text-muted-foreground">
-                      Profit/loss is not decision quality.
+                      Security path is separate from Actual Capital Outcome.
                     </div>
                   </td>
                 </tr>

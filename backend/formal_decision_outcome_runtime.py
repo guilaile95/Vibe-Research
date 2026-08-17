@@ -14,8 +14,11 @@ from typing import Any
 import formal_decision_outcome as domain
 import formal_trade_attribution as fta
 import formal_trade_attribution_store as attribution_store
+import campaign_critical_data_runtime as critical_data_runtime
 import frozen_decision_service
 import performance_attribution_service
+import security_price_point_authority as price_point_authority
+from security_exchange_policy import POLICY_VERSION_V01 as SER_POLICY_VERSION
 import trade_ledger_service
 import trade_ledger_store
 import trade_origin_store
@@ -130,6 +133,99 @@ def _load_trade_rows(
     return rows
 
 
+def _unavailable_price_point(
+    *,
+    security_code: str,
+    as_of: str,
+    state: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": price_point_authority.SCHEMA_VERSION,
+        "state": state,
+        "security_code": security_code,
+        "exchange": None,
+        "provider_alias": None,
+        "as_of": as_of,
+        "trade_date": None,
+        "close": None,
+        "publication_id": None,
+        "source_observation_id": None,
+        "observation_fetched_at": None,
+        "authority_refs": [],
+        "reason_codes": [reason],
+    }
+
+
+def _build_counterfactual(
+    decision: dict[str, Any],
+    *,
+    evaluation_as_of: str,
+) -> dict[str, Any]:
+    """Build CF1 from production Fact Lake authority, never caller fields."""
+    anchor = fta.verify_frozen_decision_witness(decision)
+    security_code = anchor["security_code"]
+    start_as_of = anchor["decision_committed_at"]
+    try:
+        lake = critical_data_runtime.production_lake_provider()
+    except Exception:
+        lake = None
+        start = _unavailable_price_point(
+            security_code=security_code,
+            as_of=start_as_of,
+            state="ERROR",
+            reason="FACT_LAKE_AUTHORITY_ERROR",
+        )
+        end = _unavailable_price_point(
+            security_code=security_code,
+            as_of=evaluation_as_of,
+            state="ERROR",
+            reason="FACT_LAKE_AUTHORITY_ERROR",
+        )
+        return domain.build_security_close_to_close_counterfactual(start, end)
+    if lake is None:
+        start = _unavailable_price_point(
+            security_code=security_code,
+            as_of=start_as_of,
+            state="NOT_EVALUATED",
+            reason="FACT_LAKE_UNAVAILABLE",
+        )
+        end = _unavailable_price_point(
+            security_code=security_code,
+            as_of=evaluation_as_of,
+            state="NOT_EVALUATED",
+            reason="FACT_LAKE_UNAVAILABLE",
+        )
+        return domain.build_security_close_to_close_counterfactual(start, end)
+    try:
+        start = price_point_authority.resolve_authoritative_price_point(
+            lake=lake,
+            security_code=security_code,
+            as_of=start_as_of,
+            security_exchange_policy_version=SER_POLICY_VERSION,
+        )
+        end = price_point_authority.resolve_authoritative_price_point(
+            lake=lake,
+            security_code=security_code,
+            as_of=evaluation_as_of,
+            security_exchange_policy_version=SER_POLICY_VERSION,
+        )
+    except price_point_authority.PricePointAuthorityError:
+        start = _unavailable_price_point(
+            security_code=security_code,
+            as_of=start_as_of,
+            state="ERROR",
+            reason="PRICE_POINT_AUTHORITY_INPUT_ERROR",
+        )
+        end = _unavailable_price_point(
+            security_code=security_code,
+            as_of=evaluation_as_of,
+            state="ERROR",
+            reason="PRICE_POINT_AUTHORITY_INPUT_ERROR",
+        )
+    return domain.build_security_close_to_close_counterfactual(start, end)
+
+
 def evaluate_outcome(
     decision_id: str,
     *,
@@ -185,12 +281,17 @@ def evaluate_outcome(
                 raise FormalOutcomeRuntimeError(
                     "精确交易集的 canonical P&L 无法证明"
                 ) from exc
+        counterfactual = _build_counterfactual(
+            decision,
+            evaluation_as_of=evaluation,
+        )
         result = domain.project_ol1_outcome(
             decision,
             evaluation_as_of=evaluation,
             attributions=attributions,
             trades=trades,
             actual_performance=performance,
+            counterfactual=counterfactual,
         )
         result["decision_time_replay"] = replay
         return result
