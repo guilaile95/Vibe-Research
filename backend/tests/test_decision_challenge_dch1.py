@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+import decision_challenge_router
 
 import decision_challenge_projection as domain
 import decision_challenge_runtime as challenge_runtime
@@ -15,6 +20,7 @@ from test_decision_commit_runtime import (
     AS_OF,
     CAMPAIGN_ID,
     THESIS_ID,
+    _critical_data,
     _draft,
     _ports,
     _thesis,
@@ -194,6 +200,43 @@ def test_stale_proposal_fingerprint_is_zero_write(tmp_path):
     assert challenge_store.get_challenge_by_fingerprint(
         preview["proposal_fingerprint"], db_path=db_path
     ) is None
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"as_of": "2026-08-17T00:00:00.000000Z"},
+        {"trade_view": {"view": "TRADE", "stance": "REDUCE"}},
+    ],
+)
+def test_changed_as_of_or_draft_is_stale_zero_write(tmp_path, override):
+    commit_ports, _state = _ports(_thesis())
+    challenge_ports, db_path = _challenge_ports(commit_ports, tmp_path)
+    preview = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=commit_ports, as_of=AS_OF
+    )
+    writes = {"count": 0}
+
+    def counting_append(packet):
+        writes["count"] += 1
+        return challenge_store.append_challenge(packet, db_path=db_path)
+
+    challenge_ports = challenge_runtime.ChallengePorts(
+        preview=challenge_ports.preview,
+        append=counting_append,
+        reader=challenge_ports.reader,
+        fingerprint_reader=challenge_ports.fingerprint_reader,
+        clock=challenge_ports.clock,
+        new_id=challenge_ports.new_id,
+    )
+    changed_payload = _finalize_payload(preview)
+    changed_payload.update(override)
+    with pytest.raises(challenge_runtime.DecisionChallengeStaleError):
+        challenge_runtime.finalize_decision_challenge(
+            CAMPAIGN_ID, changed_payload, ports=challenge_ports
+        )
+    assert writes["count"] == 0
+    assert not db_path.exists()
 
 
 def test_stale_thesis_revision_is_zero_write(tmp_path):
@@ -509,3 +552,136 @@ def test_finalize_rejects_caller_declared_identity_fields(tmp_path):
         challenge_runtime.finalize_decision_challenge(
             CAMPAIGN_ID, payload, ports=challenge_ports
         )
+
+
+def test_replay_ignores_retrieval_timestamp_provenance_but_not_identity(tmp_path):
+    calls = {"count": 0}
+
+    def critical_data_reader(_campaign, as_of):
+        calls["count"] += 1
+        return {
+            **_critical_data(
+                authority_refs=[
+                    f"disclosures:fetched_at=2026-08-17T00:00:{calls['count']:02d}.000000Z"
+                ]
+            ),
+            "as_of": as_of,
+        }
+
+    commit_ports, _state = _ports(
+        _thesis(), critical_data_reader=critical_data_reader
+    )
+    challenge_ports, db_path = _challenge_ports(commit_ports, tmp_path)
+    preview = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=commit_ports, as_of=AS_OF
+    )
+    finalized = challenge_runtime.finalize_decision_challenge(
+        CAMPAIGN_ID, _finalize_payload(preview), ports=challenge_ports
+    )
+    assert calls["count"] == 2
+    assert finalized["challenge"]["proposal_fingerprint"] == preview["proposal_fingerprint"]
+    assert challenge_store.get_challenge(
+        finalized["challenge"]["challenge_id"], db_path=db_path
+    ) is not None
+
+
+def _create_store_schema_without_fingerprint_unique(db_path: Path, index_sql: str | None = None):
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO schema_meta(key, value) VALUES ('schema_version', 'decision-challenge-packet.v0.1');
+        CREATE TABLE decision_challenges (
+            challenge_id TEXT PRIMARY KEY,
+            campaign_id TEXT NOT NULL,
+            proposal_fingerprint TEXT NOT NULL,
+            proposal_as_of TEXT NOT NULL,
+            packet_hash TEXT NOT NULL,
+            packet_json TEXT NOT NULL,
+            finalized_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    if index_sql:
+        conn.execute(index_sql)
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    "index_sql",
+    [
+        None,
+        "CREATE UNIQUE INDEX partial_fingerprint ON decision_challenges(proposal_fingerprint) WHERE campaign_id IS NOT NULL",
+        "CREATE INDEX non_unique_fingerprint ON decision_challenges(proposal_fingerprint)",
+    ],
+)
+def test_store_requires_full_single_column_fingerprint_unique(tmp_path, index_sql):
+    db_path = tmp_path / "malformed.sqlite3"
+    _create_store_schema_without_fingerprint_unique(db_path, index_sql)
+    with pytest.raises(challenge_store.DecisionChallengeStoreCorruptedError):
+        challenge_store.get_challenge_by_fingerprint("a" * 64, db_path=db_path)
+
+
+@pytest.mark.parametrize("column", ["campaign_id", "proposal_fingerprint", "proposal_as_of", "finalized_at"])
+def test_store_rejects_row_redundant_field_mismatch(tmp_path, column):
+    packet = _packet()
+    db_path = tmp_path / "row-mismatch.sqlite3"
+    challenge_store.append_challenge(packet, db_path=db_path)
+    conn = sqlite3.connect(db_path)
+    value = {
+        "campaign_id": "campaign_" + "f" * 32,
+        "proposal_fingerprint": "b" * 64,
+        "proposal_as_of": "2026-08-16T00:00:02.000000Z",
+        "finalized_at": "2026-08-16T00:00:02.000000Z",
+    }[column]
+    conn.execute(f"UPDATE decision_challenges SET {column} = ?", (value,))
+    conn.commit()
+    conn.close()
+    with pytest.raises(challenge_store.DecisionChallengeStoreCorruptedError):
+        challenge_store.get_challenge(packet["challenge_id"], db_path=db_path)
+
+
+def test_store_rejects_noncanonical_created_at(tmp_path):
+    packet = _packet()
+    db_path = tmp_path / "created-at.sqlite3"
+    challenge_store.append_challenge(packet, db_path=db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "UPDATE decision_challenges SET created_at = ?",
+        ("2026-08-16T00:00:01Z",),
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(challenge_store.DecisionChallengeStoreCorruptedError):
+        challenge_store.get_challenge(packet["challenge_id"], db_path=db_path)
+
+
+def test_finalize_route_exposes_stale_status_and_body(monkeypatch):
+    app = FastAPI()
+    app.include_router(decision_challenge_router.router)
+
+    def stale(*_args, **_kwargs):
+        raise challenge_runtime.DecisionChallengeStaleError("fingerprint mismatch")
+
+    monkeypatch.setattr(
+        decision_challenge_router.runtime,
+        "finalize_decision_challenge",
+        stale,
+    )
+    payload = {
+        "expected_proposal_fingerprint": "a" * 64,
+        "as_of": AS_OF,
+        "user_confirmed": True,
+        "dimensions": _dimensions(),
+        **_draft(),
+    }
+    response = TestClient(app).post(
+        f"/api/campaigns/{CAMPAIGN_ID}/decision-challenge/finalize",
+        json=payload,
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Decision Proposal 已失效，请重新预览后再 Finalize Challenge"
+    )

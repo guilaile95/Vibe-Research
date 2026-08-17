@@ -153,6 +153,39 @@ def _assert_table_contract(
             )
 
 
+def _quoted_pragma_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _assert_fingerprint_unique_constraint(conn: sqlite3.Connection) -> None:
+    indexes = conn.execute(
+        "PRAGMA index_list(decision_challenges)"
+    ).fetchall()
+    exact_indexes: list[sqlite3.Row] = []
+    for index in indexes:
+        if not bool(index["unique"]):
+            continue
+        index_name = index["name"]
+        columns = conn.execute(
+            f"PRAGMA index_info({_quoted_pragma_identifier(index_name)})"
+        ).fetchall()
+        names = [column["name"] for column in columns]
+        if names == ["proposal_fingerprint"]:
+            if bool(index["partial"]):
+                raise DecisionChallengeStoreCorruptedError(
+                    "proposal_fingerprint unique constraint must not be partial"
+                )
+            exact_indexes.append(index)
+        elif "proposal_fingerprint" in names:
+            raise DecisionChallengeStoreCorruptedError(
+                "proposal_fingerprint uniqueness must be a single-column constraint"
+            )
+    if len(exact_indexes) != 1:
+        raise DecisionChallengeStoreCorruptedError(
+            "decision_challenges requires exactly one full UNIQUE(proposal_fingerprint)"
+        )
+
+
 def _assert_schema(conn: sqlite3.Connection) -> None:
     tables = {
         row["name"]
@@ -166,6 +199,7 @@ def _assert_schema(conn: sqlite3.Connection) -> None:
         )
     _assert_table_contract(conn, "schema_meta", _SCHEMA_META_COLUMNS)
     _assert_table_contract(conn, "decision_challenges", _PACKET_COLUMNS)
+    _assert_fingerprint_unique_constraint(conn)
     triggers = conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'trigger'"
     ).fetchall()
@@ -264,6 +298,27 @@ def _row_to_packet(row: sqlite3.Row) -> dict[str, Any]:
         raise DecisionChallengeStoreCorruptedError("stored packet_hash mismatch")
     if packet["challenge_id"] != row["challenge_id"]:
         raise DecisionChallengeStoreCorruptedError("stored challenge_id mismatch")
+    if packet["campaign_id"] != row["campaign_id"]:
+        raise DecisionChallengeStoreCorruptedError("stored campaign_id mismatch")
+    if packet["proposal_fingerprint"] != row["proposal_fingerprint"]:
+        raise DecisionChallengeStoreCorruptedError(
+            "stored proposal_fingerprint mismatch"
+        )
+    if packet["proposal_as_of"] != row["proposal_as_of"]:
+        raise DecisionChallengeStoreCorruptedError("stored proposal_as_of mismatch")
+    if packet["finalized_at"] != row["finalized_at"]:
+        raise DecisionChallengeStoreCorruptedError("stored finalized_at mismatch")
+    created_at = row["created_at"]
+    try:
+        canonical_created_at, _ = domain.parse_utc_instant(created_at, "created_at")
+    except domain.DecisionChallengeValidationError as exc:
+        raise DecisionChallengeStoreCorruptedError(
+            "stored created_at is not canonical UTC"
+        ) from exc
+    if created_at != canonical_created_at:
+        raise DecisionChallengeStoreCorruptedError(
+            "stored created_at is not canonical UTC"
+        )
     return packet
 
 

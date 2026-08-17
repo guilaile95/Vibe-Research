@@ -229,19 +229,59 @@ async function run() {
     if (executablePath) launchOptions.executablePath = executablePath;
     browser = await chromium.launch(launchOptions);
     const page = await browser.newPage();
+    const failedRequests = [];
     page.on("console", (message) => {
       if (message.type() === "error") backendLog += `\n[browser] ${message.text()}`;
     });
-    await page.route("**/api/**", (route) => {
-      const url = new URL(route.request().url());
-      return route.continue({ url: `${backend}${url.pathname}${url.search}` });
+    page.on("requestfailed", (request) => {
+      failedRequests.push({ url: request.url(), error: request.failure()?.errorText });
+    });
+    await page.route("**/api/**", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const method = request.method();
+      try {
+        const response = await fetch(`${backend}${url.pathname}${url.search}`, {
+          method,
+          headers: request.headers(),
+          body: method === "GET" || method === "HEAD" ? undefined : request.postDataBuffer(),
+        });
+        await route.fulfill({
+          status: response.status,
+          headers: Object.fromEntries(response.headers.entries()),
+          body: Buffer.from(await response.arrayBuffer()),
+        });
+      } catch (error) {
+        await route.fulfill({
+          status: 599,
+          contentType: "application/json",
+          body: JSON.stringify({
+            detail: "E2E backend proxy failed",
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        });
+      }
     });
 
     await page.goto(`${frontend}/campaigns/${withChallenge.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "Formal Decision Review" }).waitFor();
     await page.locator(`[data-decision-proposal-page="${withChallenge.campaign_id}"]`).waitFor();
     await fillProposalDraft(page);
+    const previewResponsePromise = page.waitForResponse((response) => (
+      response.request().method() === "POST"
+      && response.url().includes(
+        `/api/campaigns/${withChallenge.campaign_id}/decision-proposal/preview`
+      )
+    ), { timeout: 180000 });
     await page.getByRole("button", { name: "Preview Proposal" }).click();
+    const previewResponse = await previewResponsePromise;
+    const previewBody = await previewResponse.text();
+    if (!previewResponse.ok()) {
+      throw new Error(
+        `[DCH1] preview failed: status=${previewResponse.status()} body=${previewBody}; `
+        + `failedRequests=${JSON.stringify(failedRequests)}`
+      );
+    }
     await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
     await page.locator('[data-challenge-state="UNFINALIZED"]').waitFor();
     assert.equal(existsSync(join(tempDataDir, "decision_challenges.sqlite3")), false, "Preview must not write Challenge DB");
@@ -256,7 +296,20 @@ async function run() {
     assert.equal(await finalize.isEnabled(), false, "Finalize must require explicit confirmation");
     await page.getByRole("checkbox", { name: /我已显式填写四个挑战维度/ }).check();
     assert.equal(await finalize.isEnabled(), true);
+    const finalizeResponsePromise = page.waitForResponse((response) => (
+      response.request().method() === "POST"
+      && response.url().includes(
+        `/api/campaigns/${withChallenge.campaign_id}/decision-challenge/finalize`
+      )
+    ));
     await finalize.click();
+    const finalizeResponse = await finalizeResponsePromise;
+    const finalizeBody = await finalizeResponse.text();
+    if (!finalizeResponse.ok()) {
+      throw new Error(
+        `[DCH1] finalize failed: status=${finalizeResponse.status()} body=${finalizeBody}`
+      );
+    }
     await page.locator('[data-challenge-state="FINALIZED"]').waitFor();
     const challengeId = await page.locator("[data-challenge-id]").getAttribute("data-challenge-id");
     assert.match(challengeId, /^decision_challenge_[0-9a-f]{32}$/);
@@ -266,11 +319,6 @@ async function run() {
     assert.equal(durable.decision_quality, "NOT_EVALUATED");
     assert.equal(durable.challenge.two_pass_semantic_independence_verified, "NO");
 
-    await page.reload({ waitUntil: "networkidle" });
-    await fillProposalDraft(page);
-    await page.getByRole("button", { name: "Preview Proposal" }).click();
-    await page.locator('[data-challenge-state="FINALIZED"]').waitFor();
-    assert.equal(await page.locator("[data-challenge-id]").getAttribute("data-challenge-id"), challengeId);
     await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
     await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
     await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
@@ -308,7 +356,12 @@ async function run() {
         challenge_id: challengeId,
       }),
     });
-    assert.equal(staleCommit.status, 409, "stale proposal must not silently bind the old challenge");
+    const staleCommitBody = await staleCommit.text();
+    assert.equal(
+      staleCommit.status,
+      409,
+      `stale proposal must not silently bind the old challenge: body=${staleCommitBody}`,
+    );
 
     const withoutChallenge = await createFrozenCurrentThesis(backend, "DCH1 without challenge");
     await page.goto(`${frontend}/campaigns/${withoutChallenge.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });

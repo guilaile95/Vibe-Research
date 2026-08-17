@@ -801,10 +801,30 @@ def _build_proposal(
     return result, authorities
 
 
+_VOLATILE_CCD_AUTHORITY_REF_PREFIXES = (
+    "market-breadth:fetched_at=",
+    "market-breadth:observed_at=",
+    "disclosures:fetched_at=",
+)
+
+
+def _stable_ccd_authority_refs(value: object) -> object:
+    if not isinstance(value, list):
+        return copy.deepcopy(value)
+    return [
+        copy.deepcopy(ref)
+        for ref in value
+        if not (
+            isinstance(ref, str)
+            and ref.startswith(_VOLATILE_CCD_AUTHORITY_REF_PREFIXES)
+        )
+    ]
+
+
 def _critical_data_fingerprint_snapshot(
     critical_data: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Keep only deterministic CCD authority facts in the proposal hash."""
+    """Keep deterministic CCD facts; retrieval timestamps are provenance only."""
 
     keys = (
         "security_code",
@@ -820,7 +840,23 @@ def _critical_data_fingerprint_snapshot(
         "reason_codes",
         "authority_refs",
     )
-    return {key: copy.deepcopy(critical_data.get(key)) for key in keys}
+    snapshot = {key: copy.deepcopy(critical_data.get(key)) for key in keys}
+    for key in ("dependency_set_authority_refs", "authority_refs"):
+        snapshot[key] = _stable_ccd_authority_refs(snapshot[key])
+    results = snapshot.get("dependency_results")
+    if isinstance(results, list):
+        stable_results: list[Any] = []
+        for result in results:
+            if isinstance(result, Mapping):
+                stable_result = copy.deepcopy(dict(result))
+                stable_result["authority_refs"] = _stable_ccd_authority_refs(
+                    stable_result.get("authority_refs")
+                )
+                stable_results.append(stable_result)
+            else:
+                stable_results.append(copy.deepcopy(result))
+        snapshot["dependency_results"] = stable_results
+    return snapshot
 
 
 def _fingerprint(
