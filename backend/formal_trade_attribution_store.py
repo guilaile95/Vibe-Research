@@ -35,6 +35,39 @@ _COLUMNS = (
 )
 _LOCK = threading.Lock()
 
+_SCHEMA_META_COLUMNS: dict[str, tuple[str, bool, bool]] = {
+    "key": ("TEXT", False, True),
+    "value": ("TEXT", True, False),
+}
+
+_ATTRIBUTION_COLUMNS: dict[str, tuple[str, bool, bool]] = {
+    "attribution_id": ("TEXT", False, True),
+    "trade_id": ("TEXT", True, False),
+    "decision_id": ("TEXT", True, False),
+    "decision_snapshot_hash": ("TEXT", True, False),
+    "security_code": ("TEXT", True, False),
+    "strategy": ("TEXT", True, False),
+    "campaign_id": ("TEXT", True, False),
+    "thesis_id": ("TEXT", True, False),
+    "thesis_revision": ("INTEGER", True, False),
+    "decision_committed_at": ("TEXT", True, False),
+    "decision_review_by": ("TEXT", True, False),
+    "decision_next_best_action": ("TEXT", True, False),
+    "trade_operation": ("TEXT", True, False),
+    "trade_execution_status": ("TEXT", True, False),
+    "trade_executed_at": ("TEXT", False, False),
+    "trade_created_at": ("TEXT", True, False),
+    "created_at": ("TEXT", True, False),
+    "schema_version": ("TEXT", True, False),
+    "attribution_hash": ("TEXT", True, False),
+}
+
+_EXPECTED_INDEXES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "idx_fta_decision_id": (_TABLE, ("decision_id",)),
+    "idx_fta_campaign_id": (_TABLE, ("campaign_id",)),
+    "idx_fta_security_code": (_TABLE, ("security_code",)),
+}
+
 
 class FormalTradeAttributionStoreError(RuntimeError):
     """Base persistence error."""
@@ -83,39 +116,118 @@ def _connect(path: Path, *, readonly: bool = False) -> sqlite3.Connection:
 
 
 def _schema_contract(conn: sqlite3.Connection) -> None:
-    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if tables != {"schema_meta", _TABLE}:
-        raise FormalTradeAttributionStoreCorruptedError("归属账本表集合损坏")
-    meta = [r[1] for r in conn.execute("PRAGMA table_info(schema_meta)")]
-    if meta != ["key", "value"]:
-        raise FormalTradeAttributionStoreCorruptedError("schema_meta 结构损坏")
-    cols = [r[1] for r in conn.execute(f"PRAGMA table_info({_TABLE})")]
-    if cols != list(_COLUMNS):
-        raise FormalTradeAttributionStoreCorruptedError("归属账本列契约损坏")
-    indexes = {r[1]: r for r in conn.execute(f"PRAGMA index_list({_TABLE})")}
-    unique_trade = False
-    for row in indexes.values():
-        info = [r[2] for r in conn.execute(f"PRAGMA index_info({row[1]})")]
-        if row[2] == 1 and info == ["trade_id"]:
-            unique_trade = True
-    if not unique_trade:
-        raise FormalTradeAttributionStoreCorruptedError("缺少 UNIQUE(trade_id)")
-    for name, column in (("idx_fta_decision_id", "decision_id"),
-                         ("idx_fta_campaign_id", "campaign_id"),
-                         ("idx_fta_security_code", "security_code")):
-        row = conn.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone()
-        if row is None or row[0] is None:
-            raise FormalTradeAttributionStoreCorruptedError(f"缺少索引 {name}")
-        info = [r[2] for r in conn.execute(f"PRAGMA index_info({name})")]
-        if info != [column]:
-            raise FormalTradeAttributionStoreCorruptedError(f"索引 {name} 结构损坏")
-    if conn.execute("SELECT 1 FROM sqlite_master WHERE type IN ('trigger','view') LIMIT 1").fetchone():
-        raise FormalTradeAttributionStoreCorruptedError("归属账本禁止触发器/视图")
-    version = conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()
-    if version is None:
-        raise FormalTradeAttributionStoreCorruptedError("缺少 schema_version")
-    if version[0] != STORE_SCHEMA_VERSION:
-        raise FormalTradeAttributionStoreSchemaVersionError(f"不支持的归属账本版本：{version[0]}")
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        if tables != {"schema_meta", _TABLE}:
+            raise FormalTradeAttributionStoreCorruptedError("归属账本表集合损坏")
+        _assert_table_contract(conn, "schema_meta", _SCHEMA_META_COLUMNS)
+        _assert_table_contract(conn, _TABLE, _ATTRIBUTION_COLUMNS)
+        _assert_query_indexes(conn)
+        _assert_unique_trade_id(conn)
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('trigger', 'view') LIMIT 1"
+        ).fetchone():
+            raise FormalTradeAttributionStoreCorruptedError(
+                "归属账本禁止触发器/视图"
+            )
+        version = conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+        ).fetchone()
+        if version is None:
+            raise FormalTradeAttributionStoreCorruptedError("缺少 schema_version")
+        if version[0] != STORE_SCHEMA_VERSION:
+            raise FormalTradeAttributionStoreSchemaVersionError(
+                f"不支持的归属账本版本：{version[0]}"
+            )
+    except FormalTradeAttributionStoreError:
+        raise
+    except sqlite3.DatabaseError as exc:
+        raise FormalTradeAttributionStoreCorruptedError() from exc
+
+
+def _assert_table_contract(
+    conn: sqlite3.Connection,
+    table_name: str,
+    expected: Mapping[str, tuple[str, bool, bool]],
+) -> None:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    actual = {
+        row[1]: (str(row[2]).upper(), bool(row[3]), bool(row[5]))
+        for row in rows
+    }
+    if set(actual) != set(expected):
+        raise FormalTradeAttributionStoreCorruptedError(
+            f"{table_name} 列契约损坏"
+        )
+    for name, (expected_type, expected_notnull, expected_pk) in expected.items():
+        actual_type, actual_notnull, actual_pk = actual[name]
+        if (
+            actual_type != expected_type
+            or actual_notnull != expected_notnull
+            or actual_pk != expected_pk
+        ):
+            raise FormalTradeAttributionStoreCorruptedError(
+                f"{table_name}.{name} 结构不符合契约"
+            )
+
+
+def _assert_query_indexes(conn: sqlite3.Connection) -> None:
+    for name, (expected_table, expected_columns) in _EXPECTED_INDEXES.items():
+        row = conn.execute(
+            "SELECT tbl_name, sql FROM sqlite_master "
+            "WHERE type = 'index' AND name = ?",
+            (name,),
+        ).fetchone()
+        if row is None or row[1] is None:
+            raise FormalTradeAttributionStoreCorruptedError(
+                f"缺少索引 {name}"
+            )
+        if row[0] != expected_table:
+            raise FormalTradeAttributionStoreCorruptedError(
+                f"索引 {name} 指向错误表"
+            )
+        actual_columns = [item[2] for item in conn.execute(
+            f"PRAGMA index_info({name})"
+        ).fetchall()]
+        if actual_columns != list(expected_columns):
+            raise FormalTradeAttributionStoreCorruptedError(
+                f"索引 {name} 目标列不符"
+            )
+        matches = [
+            item
+            for item in conn.execute(
+                f"PRAGMA index_list({expected_table})"
+            ).fetchall()
+            if item[1] == name
+        ]
+        if not matches:
+            raise FormalTradeAttributionStoreCorruptedError(
+                f"索引 {name} 不在 index_list 中"
+            )
+        index = matches[0]
+        if index[2] != 0 or index[4] != 0 or index[3] != "c":
+            raise FormalTradeAttributionStoreCorruptedError(
+                f"索引 {name} 不是普通 CREATE INDEX"
+            )
+
+
+def _assert_unique_trade_id(conn: sqlite3.Connection) -> None:
+    for index in conn.execute(f"PRAGMA index_list({_TABLE})").fetchall():
+        if index[2] != 1 or index[4] != 0:
+            continue
+        columns = [item[2] for item in conn.execute(
+            f"PRAGMA index_info({index[1]})"
+        ).fetchall()]
+        if columns == ["trade_id"]:
+            return
+    raise FormalTradeAttributionStoreCorruptedError(
+        "缺少完整 UNIQUE(trade_id) 约束（partial unique 不接受）"
+    )
 
 
 def _initialize(path: Path) -> sqlite3.Connection:
@@ -168,6 +280,7 @@ def _initialize(path: Path) -> sqlite3.Connection:
                 conn.execute(f"CREATE INDEX idx_fta_campaign_id ON {_TABLE}(campaign_id)")
                 conn.execute(f"CREATE INDEX idx_fta_security_code ON {_TABLE}(security_code)")
                 conn.execute("INSERT INTO schema_meta(key,value) VALUES ('schema_version',?)", (STORE_SCHEMA_VERSION,))
+                _schema_contract(conn)
                 conn.execute("COMMIT")
                 return conn
             conn.execute("ROLLBACK")

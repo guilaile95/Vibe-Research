@@ -10,6 +10,102 @@ import trade_campaign_reconciliation as tcr
 import trade_origin_store as origin_store
 
 
+def _create_attribution_schema_variant(
+    path,
+    *,
+    attribution_id_pk=True,
+    schema_meta_key_pk=True,
+    thesis_revision_type="INTEGER",
+    decision_id_notnull=True,
+    trade_unique="full",
+    decision_index="normal",
+    campaign_index="normal",
+    security_index="normal",
+):
+    meta_key = "key TEXT PRIMARY KEY" if schema_meta_key_pk else "key TEXT"
+    attribution_id = (
+        "attribution_id TEXT PRIMARY KEY"
+        if attribution_id_pk
+        else "attribution_id TEXT"
+    )
+    decision_id = "decision_id TEXT NOT NULL" if decision_id_notnull else "decision_id TEXT"
+    trade_id = "trade_id TEXT NOT NULL"
+    if trade_unique == "full":
+        trade_id += " UNIQUE"
+    conn = sqlite3.connect(path)
+    conn.execute(f"CREATE TABLE schema_meta ({meta_key}, value TEXT NOT NULL)")
+    conn.execute(
+        f"""CREATE TABLE formal_trade_attributions (
+            {attribution_id},
+            {trade_id},
+            {decision_id},
+            decision_snapshot_hash TEXT NOT NULL,
+            security_code TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            campaign_id TEXT NOT NULL,
+            thesis_id TEXT NOT NULL,
+            thesis_revision {thesis_revision_type} NOT NULL,
+            decision_committed_at TEXT NOT NULL,
+            decision_review_by TEXT NOT NULL,
+            decision_next_best_action TEXT NOT NULL,
+            trade_operation TEXT NOT NULL,
+            trade_execution_status TEXT NOT NULL,
+            trade_executed_at TEXT,
+            trade_created_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            attribution_hash TEXT NOT NULL
+        )"""
+    )
+    if trade_unique == "partial":
+        conn.execute(
+            "CREATE UNIQUE INDEX uq_fta_trade_id_partial "
+            "ON formal_trade_attributions(trade_id) WHERE trade_id IS NOT NULL"
+        )
+
+    def add_index(name, column, mode):
+        if mode == "normal":
+            conn.execute(f"CREATE INDEX {name} ON formal_trade_attributions({column})")
+        elif mode == "unique":
+            conn.execute(
+                f"CREATE UNIQUE INDEX {name} ON formal_trade_attributions({column})"
+            )
+        elif mode == "partial":
+            conn.execute(
+                f"CREATE INDEX {name} ON formal_trade_attributions({column}) "
+                f"WHERE {column} IS NOT NULL"
+            )
+        elif mode == "wrong_table":
+            conn.execute(f"CREATE INDEX {name} ON schema_meta(key)")
+        elif mode == "wrong_column":
+            conn.execute(
+                f"CREATE INDEX {name} ON formal_trade_attributions(trade_id)"
+            )
+        else:
+            raise AssertionError(mode)
+
+    add_index("idx_fta_decision_id", "decision_id", decision_index)
+    add_index("idx_fta_campaign_id", "campaign_id", campaign_index)
+    add_index("idx_fta_security_code", "security_code", security_index)
+    conn.execute(
+        "INSERT INTO schema_meta(key, value) VALUES ('schema_version', ?)",
+        (store.STORE_SCHEMA_VERSION,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _valid_attribution():
+    from test_formal_trade_attribution import make_decision, make_trade
+
+    return fta.create_attribution(
+        make_decision(),
+        make_trade(),
+        attribution_id="trade_attribution_" + "b" * 32,
+        created_at="2026-08-17T00:00:00.000000Z",
+    ).to_dict()
+
+
 def test_missing_read_has_no_side_effect(tmp_path):
     path = tmp_path / "nested" / "missing.sqlite3"
     assert store.list_attributions(db_path=path) == []
@@ -43,6 +139,56 @@ def test_corrupt_existing_store_fails_closed(tmp_path):
     path.write_bytes(b"not sqlite")
     with pytest.raises(store.FormalTradeAttributionStoreCorruptedError):
         store.list_attributions(db_path=path)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        {"attribution_id_pk": False},
+        {"schema_meta_key_pk": False},
+        {"thesis_revision_type": "TEXT"},
+        {"decision_id_notnull": False},
+        {"trade_unique": "partial"},
+        {"decision_index": "unique"},
+        {"campaign_index": "partial"},
+        {"security_index": "wrong_table"},
+        {"security_index": "wrong_column"},
+    ],
+)
+def test_existing_malformed_schema_fails_closed_for_reads_and_writes(tmp_path, variant):
+    path = tmp_path / "malformed.sqlite3"
+    _create_attribution_schema_variant(path, **variant)
+    record = _valid_attribution()
+
+    with pytest.raises(store.FormalTradeAttributionStoreCorruptedError):
+        store.list_attributions(db_path=path)
+    with pytest.raises(store.FormalTradeAttributionStoreCorruptedError):
+        store.write_attribution(db_path=path, record=record)
+
+
+def test_valid_existing_schema_roundtrip_remains_pass(tmp_path):
+    path = tmp_path / "valid.sqlite3"
+    record = _valid_attribution()
+    store.write_attribution(db_path=path, record=record)
+    assert store.get_attribution_for_trade(db_path=path, trade_id=record["trade_id"]) == record
+    assert store.write_attribution(db_path=path, record=record) == record
+
+
+def test_bad_attribution_hash_still_fails_closed(tmp_path):
+    path = tmp_path / "bad-row.sqlite3"
+    record = _valid_attribution()
+    store.write_attribution(db_path=path, record=record)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "UPDATE formal_trade_attributions SET attribution_hash = 'bad'"
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(store.FormalTradeAttributionStoreCorruptedError):
+        store.get_attribution_for_trade(db_path=path, trade_id=record["trade_id"])
+    with pytest.raises(store.FormalTradeAttributionStoreCorruptedError):
+        store.write_attribution(db_path=path, record=record)
 
 
 def test_origin_store_validates_identity_time_and_rows(tmp_path):
