@@ -63,10 +63,13 @@ function chromiumPath() {
 }
 
 function backendProcess(dbPath, port) {
-  const python = process.env.PYTHON || (process.platform === "win32" ? "py" : "python3");
-  const args = process.platform === "win32"
-    ? ["-3", "-m", "uvicorn", "app:app", `--port=${port}`, "--host=127.0.0.1"]
-    : ["-m", "uvicorn", "app:app", `--port=${port}`, "--host=127.0.0.1"];
+  const configuredPython = process.env.PYTHON;
+  const python = configuredPython || (process.platform === "win32" ? "py" : "python3");
+  const args = configuredPython
+    ? ["-m", "uvicorn", "app:app", `--port=${port}`, "--host=127.0.0.1"]
+    : process.platform === "win32"
+      ? ["-3", "-m", "uvicorn", "app:app", `--port=${port}`, "--host=127.0.0.1"]
+      : ["-m", "uvicorn", "app:app", `--port=${port}`, "--host=127.0.0.1"];
   const child = spawn(python, args, { cwd: backendDir, env: { ...process.env, VIBE_RESEARCH_EVIDENCE_THESIS_DB: dbPath }, stdio: ["ignore", "pipe", "pipe"], shell: false });
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { child.kill(); reject(new Error("backend startup timeout")); }, 30000);
@@ -78,6 +81,9 @@ function backendProcess(dbPath, port) {
     child.stdout.on("data", (data) => ready(data.toString()));
     child.stderr.on("data", (data) => ready(data.toString()));
     child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code !== 0) reject(new Error(`backend exited before readiness: ${code}`));
+    });
   });
 }
 
