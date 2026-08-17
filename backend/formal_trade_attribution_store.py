@@ -130,6 +130,7 @@ def _initialize(path: Path) -> sqlite3.Connection:
         raise FormalTradeAttributionStoreError("归属账本不可用") from exc
     deadline = time.monotonic() + 10
     while True:
+        conn: sqlite3.Connection | None = None
         try:
             conn = _connect(path)
             conn.execute("BEGIN IMMEDIATE")
@@ -175,14 +176,20 @@ def _initialize(path: Path) -> sqlite3.Connection:
                 raise FormalTradeAttributionStoreCorruptedError("归属账本初始化未完成")
             time.sleep(0.02)
         except FormalTradeAttributionStoreError:
-            try: conn.execute("ROLLBACK")
+            try:
+                if conn is not None:
+                    conn.execute("ROLLBACK")
             except Exception: pass
-            conn.close()
+            if conn is not None:
+                conn.close()
             raise
         except sqlite3.Error as exc:
-            try: conn.execute("ROLLBACK")
+            try:
+                if conn is not None:
+                    conn.execute("ROLLBACK")
             except Exception: pass
-            conn.close()
+            if conn is not None:
+                conn.close()
             raise FormalTradeAttributionStoreCorruptedError() from exc
 
 

@@ -55,6 +55,7 @@ def _readonly(path: Path) -> sqlite3.Connection | None:
         return None
     if not path.is_file():
         raise TradeOriginStoreCorruptedError("origin store is not a file")
+    conn: sqlite3.Connection | None = None
     try:
         conn = _connect(path, True)
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -65,11 +66,15 @@ def _readonly(path: Path) -> sqlite3.Connection | None:
             raise TradeOriginStoreCorruptedError("origin store columns corrupted")
         return conn
     except TradeOriginStoreError:
-        try: conn.close()
+        try:
+            if conn is not None:
+                conn.close()
         except Exception: pass
         raise
     except sqlite3.Error as exc:
-        try: conn.close()
+        try:
+            if conn is not None:
+                conn.close()
         except Exception: pass
         raise TradeOriginStoreCorruptedError() from exc
 
