@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 
 import formal_trade_attribution_store as attribution_store
 import trade_attribution_runtime as runtime
@@ -33,7 +33,7 @@ async def attribution_candidates(trade_id: str):
 
 
 @router.post("/trades/{trade_id}/attribution")
-async def create_attribution(trade_id: str, body: object):
+async def create_attribution(trade_id: str, body: object = Body(...)):
     try:
         return {"data": runtime.attribute(trade_id, body)}
     except Exception as exc:
@@ -41,7 +41,7 @@ async def create_attribution(trade_id: str, body: object):
 
 
 @router.post("/trades/{trade_id}/unplanned")
-async def mark_unplanned(trade_id: str, body: object):
+async def mark_unplanned(trade_id: str, body: object = Body(...)):
     try:
         return {"data": runtime.mark_unplanned(trade_id, body)}
     except Exception as exc:

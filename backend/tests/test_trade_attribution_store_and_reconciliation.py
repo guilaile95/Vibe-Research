@@ -7,6 +7,7 @@ import pytest
 import formal_trade_attribution as fta
 import formal_trade_attribution_store as store
 import trade_campaign_reconciliation as tcr
+import trade_origin_store as origin_store
 
 
 def test_missing_read_has_no_side_effect(tmp_path):
@@ -42,6 +43,31 @@ def test_corrupt_existing_store_fails_closed(tmp_path):
     path.write_bytes(b"not sqlite")
     with pytest.raises(store.FormalTradeAttributionStoreCorruptedError):
         store.list_attributions(db_path=path)
+
+
+def test_origin_store_validates_identity_time_and_rows(tmp_path):
+    path = tmp_path / "origins.sqlite3"
+    valid = {
+        "resolution_id": "trade_origin_" + "a" * 32,
+        "trade_id": "b" * 32,
+        "origin": "UNPLANNED",
+        "pre_trade_decision": "NONE",
+        "pre_trade_thesis": "NONE",
+        "created_at": "2026-08-17T00:00:00.000000Z",
+    }
+    assert origin_store.write(db_path=path, record=valid) == valid
+    assert origin_store.get_for_trade(db_path=path, trade_id=valid["trade_id"]) == valid
+    for field, value in (("resolution_id", "bad"), ("trade_id", "bad"), ("created_at", "2026-08-17T00:00:00Z")):
+        bad = dict(valid, **{field: value})
+        with pytest.raises(origin_store.TradeOriginStoreError):
+            origin_store.write(db_path=tmp_path / f"{field}.sqlite3", record=bad)
+
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE trade_origin_resolutions SET pre_trade_thesis='bad'")
+    conn.commit()
+    conn.close()
+    with pytest.raises(origin_store.TradeOriginStoreCorruptedError):
+        origin_store.get_for_trade(db_path=path, trade_id=valid["trade_id"])
 
 
 def _trade(status="full"):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
-import os
+import threading
 import uuid
 
 import formal_trade_attribution as fta
@@ -29,6 +29,11 @@ class TradeAttributionConflictError(TradeAttributionRuntimeError):
 
 class TradeAttributionValidationError(TradeAttributionRuntimeError, ValueError):
     pass
+
+
+TRADE_RESOLUTION_LOCK = threading.RLock()
+_DECISION_PAGE_SIZE = 500
+_DECISION_SAFETY_BOUND = 10_000
 
 
 def _now() -> str:
@@ -76,7 +81,20 @@ def list_candidates(trade_id: str) -> list[dict[str, Any]]:
     trade = _trade(trade_id)
     if trade.get("voided_at") is not None or trade.get("execution_status") == "not_executed":
         return []
-    decisions = frozen_decision_service.list_decisions(security_code=trade["code"], limit=500)
+    decisions: list[dict[str, Any]] = []
+    offset = 0
+    while offset < _DECISION_SAFETY_BOUND:
+        page = frozen_decision_service.list_decisions(
+            security_code=trade["code"],
+            limit=_DECISION_PAGE_SIZE,
+            offset=offset,
+        )
+        decisions.extend(page)
+        if len(page) < _DECISION_PAGE_SIZE:
+            break
+        offset += len(page)
+    else:
+        raise TradeAttributionRuntimeError("冻结决策候选超过安全分页上限，已停止读取")
     output = []
     for decision in decisions:
         if _eligible(decision, trade):
@@ -119,13 +137,17 @@ def attribute(trade_id: str, payload: object) -> dict[str, Any]:
         raise TradeAttributionValidationError("冻结决策不是该交易的可归属候选")
     try:
         record = fta.create_attribution(decision, trade, attribution_id=fta.new_attribution_id(), created_at=_now()).to_dict()
-        existing = attribution_store.get_attribution_for_trade(db_path=_attribution_path(), trade_id=trade_id)
-        if existing is not None:
-            if existing["decision_id"] == record["decision_id"] and existing["decision_snapshot_hash"] == record["decision_snapshot_hash"]:
-                return {"record": existing, "idempotent": True}
-            raise TradeAttributionConflictError("交易已归属其他冻结决策")
-        saved = attribution_store.write_attribution(db_path=_attribution_path(), record=record)
-        return {"record": saved, "idempotent": False}
+        with TRADE_RESOLUTION_LOCK:
+            existing_origin = origin_store.get_for_trade(db_path=_origin_path(), trade_id=trade_id)
+            if existing_origin is not None:
+                raise TradeAttributionConflictError("交易已明确为 UNPLANNED，不可再建立 Formal Attribution")
+            existing = attribution_store.get_attribution_for_trade(db_path=_attribution_path(), trade_id=trade_id)
+            if existing is not None:
+                if existing["decision_id"] == record["decision_id"] and existing["decision_snapshot_hash"] == record["decision_snapshot_hash"]:
+                    return {"record": existing, "idempotent": True}
+                raise TradeAttributionConflictError("交易已归属其他冻结决策")
+            saved = attribution_store.write_attribution(db_path=_attribution_path(), record=record)
+            return {"record": saved, "idempotent": False}
     except (fta.AttributionValidationError, fta.AttributionSchemaVersionError) as exc:
         raise TradeAttributionValidationError(str(exc)) from exc
     except attribution_store.FormalTradeAttributionStoreConflictError as exc:
@@ -139,6 +161,14 @@ def mark_unplanned(trade_id: str, payload: object) -> dict[str, Any]:
     trade = _trade(trade_id)
     if trade.get("voided_at") is not None or trade.get("execution_status") == "not_executed":
         raise TradeAttributionValidationError("作废或未执行交易不可标记 UNPLANNED")
+    try:
+        trade_anchor = fta.verify_trade_record(trade)
+    except fta.AttributionValidationError as exc:
+        raise TradeAttributionValidationError(str(exc)) from exc
+    if trade_anchor["thesis_id"] is not None or trade_anchor["thesis_revision"] is not None:
+        raise TradeAttributionConflictError(
+            "该 Trade 已有 pre-trade Thesis authority，不能声明 UNPLANNED/NONE"
+        )
     record = {
         "resolution_id": f"trade_origin_{uuid.uuid4().hex}",
         "trade_id": trade_id,
@@ -148,13 +178,17 @@ def mark_unplanned(trade_id: str, payload: object) -> dict[str, Any]:
         "created_at": _now(),
     }
     try:
-        existing = origin_store.get_for_trade(db_path=_origin_path(), trade_id=trade_id)
-        if existing is not None:
-            if existing == record or existing["origin"] == "UNPLANNED":
-                return {"record": existing, "idempotent": True}
-            raise TradeAttributionConflictError("交易已有冲突的 origin resolution")
-        saved = origin_store.write(db_path=_origin_path(), record=record)
-        return {"record": saved, "idempotent": False}
+        with TRADE_RESOLUTION_LOCK:
+            existing_attribution = attribution_store.get_attribution_for_trade(db_path=_attribution_path(), trade_id=trade_id)
+            if existing_attribution is not None:
+                raise TradeAttributionConflictError("交易已有 Formal Attribution，不可再声明 UNPLANNED")
+            existing = origin_store.get_for_trade(db_path=_origin_path(), trade_id=trade_id)
+            if existing is not None:
+                if existing["origin"] == "UNPLANNED":
+                    return {"record": existing, "idempotent": True}
+                raise TradeAttributionConflictError("交易已有冲突的 origin resolution")
+            saved = origin_store.write(db_path=_origin_path(), record=record)
+            return {"record": saved, "idempotent": False}
     except origin_store.TradeOriginStoreConflictError as exc:
         raise TradeAttributionConflictError(str(exc)) from exc
 
@@ -174,10 +208,19 @@ def reconciliation_for_trade(trade_id: str) -> dict[str, Any]:
         result["pre_trade_decision"] = None
         result["pre_trade_thesis"] = None
         return result
-    origin = origin_store.get_for_trade(db_path=_origin_path(), trade_id=trade_id)
+    try:
+        origin = origin_store.get_for_trade(db_path=_origin_path(), trade_id=trade_id)
+        attribution = attribution_store.get_attribution_for_trade(db_path=_attribution_path(), trade_id=trade_id)
+    except (origin_store.TradeOriginStoreError, attribution_store.FormalTradeAttributionStoreError) as exc:
+        return _resolution_error(trade, trade_id, "TRADE_RESOLUTION_STORE_ERROR", str(exc))
+    if origin is not None and attribution is not None:
+        return _resolution_error(
+            trade,
+            trade_id,
+            "CONFLICTING_TRADE_RESOLUTION_AUTHORITIES",
+            "UNPLANNED 与 Formal Attribution 同时存在",
+        )
     if origin is not None:
-        if origin["origin"] != "UNPLANNED" or origin["pre_trade_decision"] != "NONE" or origin["pre_trade_thesis"] != "NONE":
-            raise TradeAttributionRuntimeError("origin store record invalid")
         return {
             "schema_version": "trade_origin_reconciliation.v0.1",
             "authority_ref": "tar1:trade_origin_resolution:v0.1",
@@ -198,30 +241,33 @@ def reconciliation_for_trade(trade_id: str) -> dict[str, Any]:
             "reason_codes": ["EXPLICIT_UNPLANNED"],
         }
     try:
-        records = attribution_store.list_attributions(db_path=_attribution_path(), limit=500, offset=0)
         result = reconciliation.project_trade_campaign_reconciliation(
             as_of=_now(), policy_version=reconciliation.POLICY_VERSION_V01,
-            trade=trade, attribution_records=records, attribution_coverage="COMPLETE",
-            attribution_coverage_authority_refs=["formal_trade_attribution_store:complete_scan"],
+            trade=trade, attribution_records=[] if attribution is None else [attribution], attribution_coverage="COMPLETE",
+            attribution_coverage_authority_refs=["formal_trade_attribution_store:per_trade_exact_lookup"],
             trade_authority_refs=[f"trade_ledger:trade:{trade_id}"],
         )
         result["origin"] = None
         result["pre_trade_decision"] = None
         result["pre_trade_thesis"] = None
         return result
-    except (attribution_store.FormalTradeAttributionStoreError, reconciliation.TradeCampaignReconciliationError) as exc:
-        return {
-            "schema_version": reconciliation.SCHEMA_VERSION,
-            "authority_ref": reconciliation.AUTHORITY_REF,
-            "trade_id": trade_id,
-            "security_code": trade["code"],
-            "execution_status": trade["execution_status"],
-            "allocation_state": "ERROR",
-            "reconciliation_requirement": "ERROR",
-            "attribution_coverage": "ERROR",
-            "campaign_id": None, "decision_id": None, "attribution_id": None,
-            "origin": None, "pre_trade_decision": None, "pre_trade_thesis": None,
-            "reason_codes": ["ATTRIBUTION_STORE_ERROR"],
-            "authority_refs": [reconciliation.AUTHORITY_REF, "formal_trade_attribution_store:error"],
-            "error": str(exc),
-        }
+    except reconciliation.TradeCampaignReconciliationError as exc:
+        return _resolution_error(trade, trade_id, "TRADE_RESOLUTION_VALIDATION_ERROR", str(exc))
+
+
+def _resolution_error(trade: dict[str, Any], trade_id: str, reason: str, detail: str) -> dict[str, Any]:
+    return {
+        "schema_version": reconciliation.SCHEMA_VERSION,
+        "authority_ref": reconciliation.AUTHORITY_REF,
+        "trade_id": trade_id,
+        "security_code": trade["code"],
+        "execution_status": trade["execution_status"],
+        "allocation_state": "ERROR",
+        "reconciliation_requirement": "ERROR",
+        "attribution_coverage": "ERROR",
+        "campaign_id": None, "decision_id": None, "attribution_id": None,
+        "origin": None, "pre_trade_decision": None, "pre_trade_thesis": None,
+        "reason_codes": [reason],
+        "authority_refs": [reconciliation.AUTHORITY_REF, f"trade_resolution:{reason}"],
+        "error": detail,
+    }
