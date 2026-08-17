@@ -103,6 +103,57 @@ def _provider_alias(security_code: str, exchange: str) -> str | None:
     return None
 
 
+def _legacy_selection_preflight(
+    *,
+    lake: FactLake,
+    security_code: str,
+    trade_date: str,
+    publication_id: str | None,
+) -> tuple[str, str | None]:
+    """Preserve CCD/Q1 selection before CF1 visibility filtering.
+
+    CCD's frozen contract selects over every committed publication at the
+    coordinate.  CF1's shared authority intentionally filters by
+    ``fetched_at <= as_of`` first, so the adapter must keep this preflight
+    separate rather than inherit the stronger CF1 ambiguity semantics.
+    """
+    canonical_key = f"{DATASET_ID}:{trade_date}"
+    try:
+        candidates = tuple(
+            item for item in lake.list_canonical_publications(
+                dataset_id=DATASET_ID,
+                primary_temporal_field=TemporalSemantics.TRADE_DATE,
+                primary_temporal_value=trade_date,
+            )
+            if item.canonical_key == canonical_key
+        )
+        mode = (
+            PublicationSelectionMode.PUBLICATION_ID
+            if publication_id is not None
+            else PublicationSelectionMode.ALL
+        )
+        selection = select_canonical_publications(
+            TUSHARE_DAILY_DATASET_SPEC,
+            PublicationSelectionRequest(
+                dataset_id=DATASET_ID,
+                canonical_key=canonical_key,
+                primary_temporal_field=TemporalSemantics.TRADE_DATE,
+                primary_temporal_value=trade_date,
+                mode=mode,
+                publication_id=publication_id,
+                as_of=None,
+            ),
+            candidates,
+        )
+    except PublicationSelectionNotFoundError:
+        return "NOT_EVALUATED", None
+    except Exception:
+        return "ERROR", None
+    if len(selection.selected_publication_ids) != 1:
+        return "NOT_EVALUATED", None
+    return "SELECTED", selection.selected_publication_ids[0]
+
+
 def evaluate_price_reference_capability(
     *,
     lake: FactLake,
@@ -113,6 +164,12 @@ def evaluate_price_reference_capability(
     publication_id: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate one CCD1 dependency result using positive proof only."""
+    if not isinstance(lake, FactLake):
+        raise PriceReferenceCapabilityError("lake must be FactLake")
+    if not lake.readonly:
+        raise PriceReferenceCapabilityError(
+            "capability evaluation requires a readonly lake"
+        )
     if publication_id is not None and (
             type(publication_id) is not str or not publication_id.strip()
             or publication_id != publication_id.strip()):
@@ -120,13 +177,45 @@ def evaluate_price_reference_capability(
             "publication_id must be canonical non-empty text or None"
         )
     _require_inputs(security_code, campaign_id, as_of)
+    _parse_utc(as_of)
+    refs = [ADAPTER_AUTHORITY_REF]
+    trade_date = completed_trade_date_at(as_of)
+    if trade_date is None:
+        return _result("NOT_EVALUATED", as_of, refs)
+    try:
+        identity = resolve_security_exchange(
+            security_code=security_code,
+            policy_version=security_exchange_policy_version,
+        )
+    except Exception as exc:
+        raise PriceReferenceCapabilityError(
+            "security exchange identity is invalid"
+        ) from exc
+    authority_ref = identity.get("authority_ref")
+    if type(authority_ref) is str and authority_ref:
+        refs.append(authority_ref)
+    if identity.get("exchange_resolution_state") != "RESOLVED":
+        return _result("NOT_EVALUATED", as_of, refs)
+    alias = _provider_alias(security_code, identity.get("exchange"))
+    if alias is None:
+        return _result("NOT_EVALUATED", as_of, refs)
+    refs.insert(1, CALENDAR_AUTHORITY_REF)
+    refs.append(PROVIDER_ALIAS_AUTHORITY_REF)
+    selection_state, selected_publication_id = _legacy_selection_preflight(
+        lake=lake,
+        security_code=security_code,
+        trade_date=trade_date,
+        publication_id=publication_id,
+    )
+    if selection_state != "SELECTED":
+        return _result(selection_state, as_of, refs)
     try:
         point = resolve_authoritative_price_point(
             lake=lake,
             security_code=security_code,
             as_of=as_of,
             security_exchange_policy_version=security_exchange_policy_version,
-            publication_id=publication_id,
+            publication_id=selected_publication_id,
             replay_verifier=verify_tushare_daily_normalization_replay,
         )
     except PricePointAuthorityError as exc:
@@ -137,6 +226,13 @@ def evaluate_price_reference_capability(
     # primitive may use the calendar to establish its neutral boundary.
     if point.get("provider_alias") is None and point["state"] == "NOT_EVALUATED":
         point_refs = [ref for ref in point_refs if ref != CALENDAR_AUTHORITY_REF]
+    if publication_id is None:
+        point_refs = [
+            ref.replace(":exact_publication_id", ":all_committed")
+            if ref.startswith("selection:")
+            else ref
+            for ref in point_refs
+        ]
     return _result(point["state"], as_of, [ADAPTER_AUTHORITY_REF, *point_refs])
 
 

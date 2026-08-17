@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, localcontext
 import json
 from types import SimpleNamespace
 
@@ -278,3 +279,42 @@ def test_counterfactual_rejects_synthetic_pnl_in_ol1_projection():
                 "pnl": {"realized": 1},
             },
         )
+
+
+def test_counterfactual_decimal_payload_is_ambient_context_independent():
+    start = {
+        "state": "USABLE", "security_code": "600519",
+        "trade_date": "2026-07-29", "close": 3,
+        "authority_refs": ["start"],
+    }
+    end = {
+        "state": "USABLE", "security_code": "600519",
+        "trade_date": "2026-07-30", "close": 4,
+        "authority_refs": ["end"],
+    }
+    decision = make_decision()
+    outputs = []
+    for precision, rounding in (
+        (2, ROUND_DOWN),
+        (7, ROUND_CEILING),
+        (80, ROUND_FLOOR),
+    ):
+        with localcontext() as ambient:
+            ambient.prec = precision
+            ambient.rounding = rounding
+            counterfactual = outcome.build_security_close_to_close_counterfactual(
+                start, end
+            )
+            projection = outcome.project_ol1_outcome(
+                decision,
+                evaluation_as_of="2099-01-01T00:00:00Z",
+                attributions=[],
+                trades=[],
+                counterfactual=counterfactual,
+            )
+            outputs.append((counterfactual, projection["outcome_reveal"][
+                "outcome_reveal_hash"
+            ]))
+
+    assert outputs[0] == outputs[1] == outputs[2]
+    assert outputs[0][0]["security_return"].startswith("0.333333333333")

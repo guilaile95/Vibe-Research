@@ -31,7 +31,13 @@ P0-O1-R1（PA1 权威重集成）：
 from __future__ import annotations
 
 import hashlib
-from decimal import Decimal, InvalidOperation
+from decimal import (
+    Context,
+    Decimal,
+    InvalidOperation,
+    ROUND_HALF_EVEN,
+    localcontext,
+)
 import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -715,6 +721,10 @@ COUNTERFACTUAL_OUTCOME_STATES = (
 )
 PROCESS_QUALITY_STATE = "NOT_EVALUATED"
 COUNTERFACTUAL_METRIC_KIND = "SECURITY_CLOSE_TO_CLOSE_RETURN"
+_COUNTERFACTUAL_DECIMAL_CONTEXT = Context(
+    prec=50,
+    rounding=ROUND_HALF_EVEN,
+)
 
 
 def _ol1_hash(value: Mapping[str, Any]) -> str:
@@ -809,15 +819,19 @@ def build_security_close_to_close_counterfactual(
     if not start_close.is_finite() or not end_close.is_finite() \
             or start_close <= 0 or end_close <= 0:
         raise OutcomeValidationError("CF1 close must be finite and positive")
-    return_value = end_close / start_close - Decimal("1")
-    if not return_value.is_finite():
-        raise OutcomeValidationError("CF1 security return is not finite")
+    # Freeze the arithmetic locally so ambient precision/rounding cannot
+    # change the deterministic outcome payload or reveal hash.
+    with localcontext(_COUNTERFACTUAL_DECIMAL_CONTEXT):
+        return_value = end_close / start_close - Decimal("1")
+        if not return_value.is_finite():
+            raise OutcomeValidationError("CF1 security return is not finite")
+        return_text = format(return_value, "f")
     return {
         "state": "EVALUATED",
         "metric_kind": COUNTERFACTUAL_METRIC_KIND,
         "start_price_point": dict(start_price_point),
         "end_price_point": dict(end_price_point),
-        "security_return": format(return_value, "f"),
+        "security_return": return_text,
         "authority_refs": list(dict.fromkeys(
             list(start_price_point.get("authority_refs", []))
             + list(end_price_point.get("authority_refs", []))
