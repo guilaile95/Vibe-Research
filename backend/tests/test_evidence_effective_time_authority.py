@@ -189,6 +189,61 @@ def test_missing_required_index_fails_closed(tmp_path: Path):
         )
 
 
+def test_destructive_trigger_is_rejected_before_mutation(tmp_path: Path):
+    db = tmp_path / "evidence.db"
+    created = _create_evidence(db)
+    old = authority.TemporalIntake(created["id"], observed_at=BASE)
+    authority.record_temporal_intake(old, db_path=db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            CREATE TRIGGER destructive_temporal_insert
+            BEFORE INSERT ON evidence_temporal_intakes
+            BEGIN
+                DELETE FROM evidence_temporal_intakes;
+            END
+            """
+        )
+        conn.commit()
+    new = authority.TemporalIntake(created["id"], observed_at=LATER)
+    with pytest.raises(authority.TemporalAuthorityCorruptedError):
+        authority.record_temporal_intake(new, db_path=db)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM evidence_temporal_intakes").fetchone()[0] == 1
+        assert conn.execute("SELECT observed_at FROM evidence_temporal_intakes").fetchone()[0] == BASE
+
+
+def test_corrupt_existing_row_different_intake_is_zero_write(tmp_path: Path):
+    db = tmp_path / "evidence.db"
+    created = _create_evidence(db)
+    authority.record_temporal_intake(
+        authority.TemporalIntake(created["id"], observed_at=BASE), db_path=db
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE evidence_temporal_intakes SET observed_at = ?", (LATER,))
+        conn.commit()
+    with pytest.raises(authority.TemporalAuthorityCorruptedError):
+        authority.record_temporal_intake(
+            authority.TemporalIntake(created["id"], ingested_at=LATER), db_path=db
+        )
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM evidence_temporal_intakes").fetchone()[0] == 1
+
+
+def test_corrupt_existing_row_idempotent_path_fails_closed(tmp_path: Path):
+    db = tmp_path / "evidence.db"
+    created = _create_evidence(db)
+    intake = authority.TemporalIntake(created["id"], observed_at=BASE)
+    authority.record_temporal_intake(intake, db_path=db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE evidence_temporal_intakes SET observed_at = ?", (LATER,))
+        conn.commit()
+    with pytest.raises(authority.TemporalAuthorityCorruptedError):
+        authority.record_temporal_intake(intake, db_path=db)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM evidence_temporal_intakes").fetchone()[0] == 1
+
+
 def test_same_exact_factual_intake_is_idempotent_and_public_unproven(tmp_path: Path):
     db = tmp_path / "evidence.db"
     created = _create_evidence(db)
@@ -203,6 +258,19 @@ def test_same_exact_factual_intake_is_idempotent_and_public_unproven(tmp_path: P
     assert result.ec1_evaluation == authority.NOT_EVALUATED
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM evidence_temporal_intakes").fetchone()[0] == 1
+
+
+def test_valid_new_intake_appends_normally(tmp_path: Path):
+    db = tmp_path / "evidence.db"
+    created = _create_evidence(db)
+    authority.record_temporal_intake(
+        authority.TemporalIntake(created["id"], observed_at=BASE), db_path=db
+    )
+    authority.record_temporal_intake(
+        authority.TemporalIntake(created["id"], observed_at=LATER), db_path=db
+    )
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM evidence_temporal_intakes").fetchone()[0] == 2
 
 
 def test_conflicting_public_metadata_has_no_authority_winner(tmp_path: Path):

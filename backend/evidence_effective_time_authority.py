@@ -255,6 +255,16 @@ def _assert_temporal_schema(conn: sqlite3.Connection) -> None:
     if _schema_object_type(conn) != "table":
         raise TemporalAuthorityCorruptedError("Evidence temporal authority schema missing or is not a table")
 
+    triggers = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ? ORDER BY name",
+        (_TEMPORAL_TABLE,),
+    ).fetchall()
+    if triggers:
+        names = ", ".join(str(row[0]) for row in triggers)
+        raise TemporalAuthorityCorruptedError(
+            f"Evidence temporal authority must have zero triggers; found: {names}"
+        )
+
     columns = tuple(
         (str(row[1]), str(row[2]), int(row[3]), row[4], int(row[5]))
         for row in conn.execute(f"PRAGMA table_info({_TEMPORAL_TABLE})").fetchall()
@@ -332,6 +342,10 @@ def record_temporal_intake(
         evidence = evidence_store._get_evidence_row(conn, intake.evidence_id)
         if evidence is None:
             raise TemporalAuthorityError(f"证据 {intake.evidence_id} 不存在")
+        # Validate every existing row for this Evidence before even checking
+        # the idempotent hash path.  A corrupt old row must never be hidden by
+        # a replay or bypassed by a different new intake.
+        _validate_existing_rows(conn, intake.evidence_id)
         existing = conn.execute(
             f"SELECT * FROM {_TEMPORAL_TABLE} WHERE payload_hash = ?", (payload_hash,)
         ).fetchone()
@@ -359,6 +373,11 @@ def record_temporal_intake(
                     SCHEMA_VERSION,
                 ),
             )
+        else:
+            # The hash lookup may find a row outside the target Evidence only
+            # if the database has been tampered with.  Reuse the same row
+            # validator and identity check before returning idempotent success.
+            _row_to_intake(dict(existing), intake.evidence_id)
         return {"evidence_id": intake.evidence_id, "payload_hash": payload_hash}
 
     try:
@@ -367,27 +386,32 @@ def record_temporal_intake(
         raise TemporalAuthorityCorruptedError() from exc
 
 
+def _validate_existing_rows(conn: sqlite3.Connection, evidence_id: str) -> list[dict[str, Any]]:
+    """Validate all durable rows for one Evidence before any write decision."""
+    if _schema_object_type(conn) is None:
+        return []
+    _assert_temporal_schema(conn)
+    rows = conn.execute(
+        f"SELECT * FROM {_TEMPORAL_TABLE} WHERE evidence_id = ? ORDER BY recorded_at ASC, intake_id ASC",
+        (evidence_id,),
+    ).fetchall()
+    payloads: list[dict[str, Any]] = []
+    hashes: dict[str, str] = {}
+    for row in rows:
+        row_dict = dict(row)
+        intake, intake_id = _row_to_intake(row_dict, evidence_id)
+        payload_hash = str(row_dict["payload_hash"])
+        previous_id = hashes.get(payload_hash)
+        if previous_id is not None and previous_id != intake_id:
+            raise TemporalAuthorityCorruptedError("Evidence temporal authority hash collision")
+        hashes[payload_hash] = intake_id
+        payloads.append(intake.payload())
+    return payloads
+
+
 def _read_rows(evidence_id: str, *, db_path: str | Path) -> list[dict[str, Any]]:
     def _read(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-        if _schema_object_type(conn) is None:
-            return []
-        _assert_temporal_schema(conn)
-        rows = conn.execute(
-            f"SELECT * FROM {_TEMPORAL_TABLE} WHERE evidence_id = ? ORDER BY recorded_at ASC, intake_id ASC",
-            (evidence_id,),
-        ).fetchall()
-        payloads: list[dict[str, Any]] = []
-        hashes: dict[str, str] = {}
-        for row in rows:
-            row_dict = dict(row)
-            intake, intake_id = _row_to_intake(row_dict, evidence_id)
-            payload_hash = str(row_dict["payload_hash"])
-            previous_id = hashes.get(payload_hash)
-            if previous_id is not None and previous_id != intake_id:
-                raise TemporalAuthorityCorruptedError("Evidence temporal authority hash collision")
-            hashes[payload_hash] = intake_id
-            payloads.append(intake.payload())
-        return payloads
+        return _validate_existing_rows(conn, evidence_id)
 
     try:
         return evidence_store.read_transaction(db_path, _read)
@@ -517,23 +541,7 @@ def get_temporal_authority(
         row = evidence_store._get_evidence_row(conn, evidence_id)
         if row is None:
             return None
-        rows: list[dict[str, Any]] = []
-        if _schema_object_type(conn) is not None:
-            _assert_temporal_schema(conn)
-            persisted_rows = conn.execute(
-                f"SELECT * FROM {_TEMPORAL_TABLE} WHERE evidence_id = ? ORDER BY recorded_at ASC, intake_id ASC",
-                (evidence_id,),
-            ).fetchall()
-            hashes: dict[str, str] = {}
-            for persisted in persisted_rows:
-                row_dict = dict(persisted)
-                intake, intake_id = _row_to_intake(row_dict, evidence_id)
-                payload_hash = str(row_dict["payload_hash"])
-                previous_id = hashes.get(payload_hash)
-                if previous_id is not None and previous_id != intake_id:
-                    raise TemporalAuthorityCorruptedError("Evidence temporal authority hash collision")
-                hashes[payload_hash] = intake_id
-                rows.append(intake.payload())
+        rows = _validate_existing_rows(conn, evidence_id)
         return {"evidence": evidence_store._evidence_row_to_dict(row), "rows": rows}
 
     try:
