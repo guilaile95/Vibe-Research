@@ -117,6 +117,25 @@ test("voidTrade posts the reason", async () => {
   assert.deepEqual(JSON.parse(request.body || "{}"), { reason: "重复记录" });
 });
 
+test("TAR1 reads reconciliation and candidates from backend authority", async () => {
+  reset({ status: 200, body: { data: { allocation_state: "UNALLOCATED", reconciliation_requirement: "REQUIRED" } } });
+  await api.getTradeReconciliation("trade/1");
+  assert.equal(lastRequest().url, "/api/trades/trade%2F1/reconciliation");
+
+  reset({ status: 200, body: { data: [] } });
+  await api.listTradeAttributionCandidates("trade/1");
+  assert.equal(lastRequest().url, "/api/trades/trade%2F1/attribution-candidates");
+});
+
+test("TAR1 writes only decision_id or explicit confirm", async () => {
+  reset({ status: 200, body: { data: { record: {}, idempotent: false } } });
+  await api.attributeTrade("trade/1", "decision_1");
+  assert.deepEqual(JSON.parse(lastRequest().body || "{}"), { decision_id: "decision_1" });
+  reset({ status: 200, body: { data: { record: {}, idempotent: false } } });
+  await api.markTradeUnplanned("trade/1");
+  assert.deepEqual(JSON.parse(lastRequest().body || "{}"), { confirm: true });
+});
+
 test("trade API exposes backend detail for 404, 409 and 422", async () => {
   for (const status of [404, 409, 422]) {
     reset({ status, body: { detail: `trade error ${status}` } });

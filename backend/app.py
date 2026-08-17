@@ -49,6 +49,7 @@ import watchlist_store
 import evidence_thesis_router
 import data_health_router
 import trade_ledger_router
+import trade_attribution_router
 import decision_feedback_router
 import decision_evidence_router
 import signal_ledger_router
@@ -161,6 +162,8 @@ app.include_router(evidence_thesis_router.router)
 app.include_router(data_health_router.router)
 # 交易流水：独立存储与 API
 app.include_router(trade_ledger_router.router)
+# P0-TAR1: explicit Frozen Decision attribution / explicit UNPLANNED origin.
+app.include_router(trade_attribution_router.router)
 # 决策反馈：独立存储与 API
 app.include_router(decision_feedback_router.router)
 # 决策追踪与证据表达：只读 API

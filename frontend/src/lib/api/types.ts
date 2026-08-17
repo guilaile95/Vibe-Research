@@ -1450,6 +1450,38 @@ export interface TradeCreateInput {
   };
 }
 
+export interface TradeAttributionCandidate {
+  decision_id: string;
+  campaign_id: string;
+  security_code: string;
+  strategy: string;
+  thesis_id: string;
+  thesis_revision: number;
+  committed_at: string;
+  review_by: string;
+  next_best_action: string;
+  snapshot_hash: string;
+}
+
+export interface TradeReconciliationResult {
+  trade_id: string;
+  security_code: string;
+  execution_status: TradeExecutionStatus;
+  allocation_state: "ALLOCATED" | "UNALLOCATED" | "UNPLANNED" | "NOT_APPLICABLE" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  reconciliation_requirement: "NOT_REQUIRED" | "REQUIRED" | "NOT_APPLICABLE" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  attribution_coverage: "COMPLETE" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  campaign_id: string | null;
+  decision_id: string | null;
+  attribution_id: string | null;
+  origin: "UNPLANNED" | null;
+  pre_trade_decision: "NONE" | null;
+  pre_trade_thesis: "NONE" | null;
+  origin_resolution_id?: string;
+  reason_codes: string[];
+  authority_refs: string[];
+  [key: string]: unknown;
+}
+
 // ---- 决策反馈 (Decision Feedback P1-3) ----
 
 export type DecisionFeedbackAdoptionStatus =

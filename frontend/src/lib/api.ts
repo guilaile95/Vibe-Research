@@ -79,6 +79,8 @@ import type {
   TradeExecutionStatus,
   TradeRecord,
   TradeCreateInput,
+  TradeAttributionCandidate,
+  TradeReconciliationResult,
   DecisionFeedbackAdoptionStatus,
   DecisionFeedbackOutcomeStatus,
   DecisionFeedbackRecord,
@@ -798,6 +800,14 @@ export const api = {
   createTrade: (body: TradeCreateInput) => request<TradeRecord>("/trades", "POST", body),
   voidTrade: (tradeId: string, reason: string) =>
     request<TradeRecord>(`/trades/${encodeURIComponent(tradeId)}/void`, "POST", { reason }),
+  listTradeAttributionCandidates: (tradeId: string) =>
+    get<TradeAttributionCandidate[]>(`/trades/${encodeURIComponent(tradeId)}/attribution-candidates`),
+  getTradeReconciliation: (tradeId: string) =>
+    get<TradeReconciliationResult>(`/trades/${encodeURIComponent(tradeId)}/reconciliation`),
+  attributeTrade: (tradeId: string, decisionId: string) =>
+    request<{ record: Record<string, unknown>; idempotent: boolean }>(`/trades/${encodeURIComponent(tradeId)}/attribution`, "POST", { decision_id: decisionId }),
+  markTradeUnplanned: (tradeId: string) =>
+    request<{ record: Record<string, unknown>; idempotent: boolean }>(`/trades/${encodeURIComponent(tradeId)}/unplanned`, "POST", { confirm: true }),
 
   // ---- 决策反馈 ----
   listDecisionFeedbacks: (params?: {
