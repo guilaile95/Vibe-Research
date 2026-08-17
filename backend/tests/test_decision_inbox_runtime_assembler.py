@@ -14,6 +14,7 @@ from copy import deepcopy
 import pytest
 
 import campaign_service
+import campaign_critical_data_runtime as critical_data_runtime
 import critical_data_dependency_policy as dda
 import critical_data_disclosures_adapter as disclosures_adapter
 import critical_data_financials_adapter as financials_adapter
@@ -382,6 +383,30 @@ class TestCompositionGate:
         assert "strategy" not in setup
         assert result["campaign_items"] == []
         assert calls == {"thesis": [], "frozen": [], "lake": [], "price": [], "market": [], "disclosures": [], "financials": []}
+
+def test_inbox_critical_data_is_the_shared_runtime_projection():
+    campaign = _campaign()
+    ports, _calls = _ports(
+        composition_reader=lambda: _composition(
+            [_composition_item(campaigns=[campaign])]
+        )
+    )
+
+    result = _assemble(ports)
+    expected = critical_data_runtime.project_campaign_critical_data(
+        campaign=campaign,
+        as_of=AS_OF,
+        ports=critical_data_runtime.critical_data_ports_from(ports),
+        lake=_FAKE_LAKE,
+    )
+    item = result["campaign_items"][0]
+
+    assert item["critical_data"]["campaign_id"] == expected["campaign_id"]
+    assert item["critical_data"]["security_code"] == expected["security_code"]
+    assert item["critical_data"]["strategy"] == expected["strategy"]
+    assert item["critical_data"]["as_of"] == expected["as_of"]
+    assert item["critical_data"]["critical_data_state"] == expected["critical_data_state"]
+    assert item["critical_data"]["critical_data_evaluation"] == expected["critical_data_evaluation"]
 
 
 class TestFullChain:

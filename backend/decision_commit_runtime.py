@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 import campaign_service
+import campaign_critical_data_runtime as critical_data_runtime
 import decision_assurance_projection as assurance
 import decision_evidence_delta_projection as evidence_delta
 import decision_proposal_projection as proposal_projection
@@ -509,6 +510,7 @@ class AuthorityEvaluations:
     current_thesis_authority: material_projection.CurrentThesisAuthority | None
     formal_thesis_evaluation: str
     formal_thesis_reason_codes: tuple[str, ...]
+    critical_data: Mapping[str, Any]
     hard_risk: hard_risk_contract.HardRiskEvaluation
     material_change: material_projection.MaterialChangeProjection | None
     material_change_evaluation: str
@@ -526,7 +528,7 @@ def evaluate_authorities(
     as_of: str,
     current_thesis_projection: Mapping[str, Any] | None,
     frozen_decisions: Sequence[Mapping[str, Any]],
-    critical_data_evaluation: str = "NOT_EVALUATED",
+    critical_data: Mapping[str, Any],
     evidence_reader: Callable[[Mapping[str, Any]], Sequence[evidence_delta.NormalizedEvidenceItem]] = _default_evidence_reader,
     hard_risk: hard_risk_contract.HardRiskEvaluation | None = None,
 ) -> AuthorityEvaluations:
@@ -598,7 +600,7 @@ def evaluate_authorities(
         formal_decision_evaluation=formal_decision["evaluation"],
         hard_risk_evaluation=hard.hard_risk_evaluation,
         material_change_evaluation=material_eval,
-        critical_data_evaluation=critical_data_evaluation,
+        critical_data_evaluation=critical_data["critical_data_evaluation"],
         as_of=as_of,
     )
     return AuthorityEvaluations(
@@ -606,6 +608,7 @@ def evaluate_authorities(
         current_thesis_authority=current_authority,
         formal_thesis_evaluation=thesis_eval,
         formal_thesis_reason_codes=tuple(thesis_reasons),
+        critical_data=copy.deepcopy(dict(critical_data)),
         hard_risk=hard,
         material_change=material,
         material_change_evaluation=material_eval,
@@ -626,9 +629,19 @@ class RuntimePorts:
     evidence_reader: Callable[[Mapping[str, Any]], Sequence[evidence_delta.NormalizedEvidenceItem]] = _default_evidence_reader
     freeze_writer: Callable[[Mapping[str, Any]], Mapping[str, Any]] = frozen_decision_service.freeze_decision
     decision_reader: Callable[[str], Mapping[str, Any] | None] = frozen_decision_service.get_decision
+    critical_data_reader: Callable[[Mapping[str, Any], str], Mapping[str, Any]] | None = None
 
 
-PRODUCTION_PORTS = RuntimePorts()
+def _production_critical_data_reader(
+    campaign: Mapping[str, Any], as_of: str
+) -> Mapping[str, Any]:
+    return critical_data_runtime.project_campaign_critical_data(
+        campaign=campaign,
+        as_of=as_of,
+    )
+
+
+PRODUCTION_PORTS = RuntimePorts(critical_data_reader=_production_critical_data_reader)
 _COMMIT_LOCK = threading.Lock()
 
 
@@ -659,6 +672,36 @@ def _read_thesis_once(
         raise CurrentThesisUnavailableError("Current Thesis projection is unavailable") from exc
     if not isinstance(value, Mapping):
         raise CurrentThesisUnavailableError("Current Thesis projection is invalid")
+    return copy.deepcopy(dict(value))
+
+
+def _read_critical_data(
+    ports: RuntimePorts, campaign: Mapping[str, Any], as_of: str
+) -> Mapping[str, Any]:
+    reader = ports.critical_data_reader
+    if reader is None:
+        raise DecisionCommitRuntimeError("Critical Data authority is not wired")
+    try:
+        value = reader(campaign, as_of)
+    except critical_data_runtime.CriticalDataRuntimeError as exc:
+        raise DecisionCommitRuntimeError("Critical Data authority is unavailable") from exc
+    except Exception as exc:  # noqa: BLE001 - fail closed at the boundary
+        raise DecisionCommitRuntimeError("Critical Data authority is unavailable") from exc
+    if not isinstance(value, Mapping):
+        raise DecisionCommitRuntimeError("Critical Data authority is invalid")
+    for key in ("security_code", "strategy", "campaign_id"):
+        if value.get(key) != campaign.get(key):
+            raise DecisionCommitRuntimeError(
+                f"Critical Data authority identity mismatch on {key}"
+            )
+    if value.get("as_of") != as_of:
+        raise DecisionCommitRuntimeError("Critical Data authority as_of mismatch")
+    if value.get("critical_data_state") not in {"USABLE", "UNKNOWN"}:
+        raise DecisionCommitRuntimeError("Critical Data authority state is invalid")
+    if value.get("critical_data_evaluation") not in {
+        "EVALUATED", "UNKNOWN", "NOT_EVALUATED", "ERROR"
+    }:
+        raise DecisionCommitRuntimeError("Critical Data authority evaluation is invalid")
     return copy.deepcopy(dict(value))
 
 
@@ -715,6 +758,7 @@ def _build_proposal(
     frozen: Sequence[Mapping[str, Any]],
     drafts: Mapping[str, Any],
     ports: RuntimePorts,
+    critical_data: Mapping[str, Any],
     evidence_reader: Callable[[Mapping[str, Any]], Sequence[evidence_delta.NormalizedEvidenceItem]] | None = None,
 ) -> tuple[proposal_projection.DecisionProposal, AuthorityEvaluations]:
     # ``raw_thesis`` is passed in, never read by this function.  This is the
@@ -724,6 +768,7 @@ def _build_proposal(
         as_of=as_of,
         current_thesis_projection=raw_thesis,
         frozen_decisions=frozen,
+        critical_data=critical_data,
         evidence_reader=evidence_reader or ports.evidence_reader,
     )
     if (
@@ -752,14 +797,42 @@ def _build_proposal(
     return result, authorities
 
 
+def _critical_data_fingerprint_snapshot(
+    critical_data: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep only deterministic CCD authority facts in the proposal hash."""
+
+    keys = (
+        "security_code",
+        "strategy",
+        "campaign_id",
+        "as_of",
+        "dependency_set_state",
+        "dependency_set_authority_refs",
+        "required_dependency_ids",
+        "dependency_results",
+        "critical_data_state",
+        "critical_data_evaluation",
+        "reason_codes",
+        "authority_refs",
+    )
+    return {key: copy.deepcopy(critical_data.get(key)) for key in keys}
+
+
 def _fingerprint(
-    *, proposal: proposal_projection.DecisionProposal, drafts: Mapping[str, Any]
+    *,
+    proposal: proposal_projection.DecisionProposal,
+    drafts: Mapping[str, Any],
+    critical_data: Mapping[str, Any],
 ) -> str:
     """Hash every relevant proposal fact, exact identity, and literal as_of."""
 
     content = {
         "fingerprint_schema_version": FINGERPRINT_SCHEMA_VERSION,
         "proposal": proposal.to_dict(),
+        "authority_snapshot": {
+            "critical_data": _critical_data_fingerprint_snapshot(critical_data),
+        },
         "commit_fields": {
             "review_by": drafts["review_by"],
             "key_assumptions": copy.deepcopy(drafts["key_assumptions"]),
@@ -798,6 +871,7 @@ def _preview_response(
                 "evaluation": authorities.formal_thesis_evaluation,
                 "reason_codes": list(authorities.formal_thesis_reason_codes),
             },
+            "critical_data": copy.deepcopy(dict(authorities.critical_data)),
             "formal_decision": copy.deepcopy(dict(authorities.formal_decision)),
             "hard_risk": authorities.hard_risk.to_dict(),
             "material_change": (
@@ -838,6 +912,7 @@ def preview_decision_proposal(
     campaign = _read_campaign(ports, campaign_key)
     raw_thesis = _read_thesis_once(ports, campaign_key)
     frozen = _read_frozen(ports, campaign)
+    critical_data = _read_critical_data(ports, campaign, snapshot_as_of)
     result, authorities = _build_proposal(
         campaign=campaign,
         as_of=snapshot_as_of,
@@ -845,8 +920,11 @@ def preview_decision_proposal(
         frozen=frozen,
         drafts=drafts,
         ports=ports,
+        critical_data=critical_data,
     )
-    fingerprint = _fingerprint(proposal=result, drafts=drafts)
+    fingerprint = _fingerprint(
+        proposal=result, drafts=drafts, critical_data=critical_data
+    )
     return _preview_response(result, authorities, drafts, fingerprint)
 
 
@@ -954,6 +1032,7 @@ def commit_decision_proposal(
         campaign = _read_campaign(ports, campaign_key)
         raw_thesis = _read_thesis_once(ports, campaign_key)
         frozen = _read_frozen(ports, campaign)
+        critical_data = _read_critical_data(ports, campaign, as_of)
         evidence_cache: tuple[evidence_delta.NormalizedEvidenceItem, ...] | None = None
 
         def snapshot_evidence_reader(
@@ -971,9 +1050,12 @@ def commit_decision_proposal(
             frozen=frozen,
             drafts=drafts,
             ports=ports,
+            critical_data=critical_data,
             evidence_reader=snapshot_evidence_reader,
         )
-        fingerprint = _fingerprint(proposal=result, drafts=drafts)
+        fingerprint = _fingerprint(
+            proposal=result, drafts=drafts, critical_data=critical_data
+        )
         marker = f"{PROPOSAL_SOURCE_PREFIX}{fingerprint}"
         expected_marker = f"{PROPOSAL_SOURCE_PREFIX}{expected}"
         existing_index: int | None = None
@@ -1009,9 +1091,14 @@ def commit_decision_proposal(
                 frozen=replay_frozen,
                 drafts=drafts,
                 ports=ports,
+                critical_data=critical_data,
                 evidence_reader=snapshot_evidence_reader,
             )
-            if _fingerprint(proposal=replay_result, drafts=drafts) != expected:
+            if _fingerprint(
+                proposal=replay_result,
+                drafts=drafts,
+                critical_data=critical_data,
+            ) != expected:
                 raise ProposalStaleError(
                     "proposal authority graph changed; re-preview required"
                 )
@@ -1049,6 +1136,7 @@ def commit_decision_proposal(
             "idempotent": idempotent,
             "committed": copy.deepcopy(dict(reread)),
             "formal_decision": formal_decision,
+            "critical_data": copy.deepcopy(dict(authorities.critical_data)),
             "decision_assurance": copy.deepcopy(dict(authorities.decision_assurance)),
             "re_read_required": True,
         }
@@ -1076,11 +1164,13 @@ def get_committed_decision(
     _assert_identity(reread, campaign, label="Frozen Decision")
     raw_thesis = _read_thesis_once(ports, campaign_key)
     frozen = _read_frozen(ports, campaign)
+    critical_data = _read_critical_data(ports, campaign, snapshot_as_of)
     authorities = evaluate_authorities(
         campaign=campaign,
         as_of=snapshot_as_of,
         current_thesis_projection=raw_thesis,
         frozen_decisions=frozen,
+        critical_data=critical_data,
         evidence_reader=ports.evidence_reader,
     )
     if authorities.latest_frozen_raw is None or authorities.latest_frozen_raw.get("decision_id") != decision_id:
@@ -1102,6 +1192,7 @@ def get_committed_decision(
             "evaluation": authorities.formal_thesis_evaluation,
             "reason_codes": list(authorities.formal_thesis_reason_codes),
         },
+        "critical_data": copy.deepcopy(dict(authorities.critical_data)),
         "formal_decision": copy.deepcopy(dict(formal_decision)),
         "hard_risk": authorities.hard_risk.to_dict(),
         "material_change": (

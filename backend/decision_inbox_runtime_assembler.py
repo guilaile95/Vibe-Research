@@ -37,16 +37,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import copy
-import os
-from pathlib import Path
 from typing import Any, Callable, Mapping
 
 import campaign_service
-import critical_data_dependency_policy as dda
-import critical_data_disclosures_adapter as disclosures_adapter
-import critical_data_financials_adapter as financials_adapter
-import critical_data_market_sector_adapter as market_sector_adapter
-import critical_data_price_reference_adapter as price_adapter
+import campaign_critical_data_runtime as cdr
 import decision_assurance_projection as ra
 import decision_commit_runtime as dc_runtime
 import decision_inbox_projection as di
@@ -56,13 +50,11 @@ import hard_risk_contract as hr
 import hard_risk_current_thesis_adapter as thesis_hr_adapter
 import hard_risk_runtime as hr_runtime
 import holdings_campaign_composition as composition
-from campaign_critical_data_projection import project_campaign_critical_data
-from fact_lake_store import FactLake, open_existing_fact_lake
-from security_exchange_policy import POLICY_VERSION_V01 as SER_POLICY_VERSION
+from fact_lake_store import FactLake
 
 
 SCHEMA_VERSION = "decision_inbox_runtime.v0.1"
-DDA_POLICY_VERSION = dda.POLICY_VERSION_V01
+DDA_POLICY_VERSION = cdr.DDA_POLICY_VERSION
 
 _FACT_LAKE_ROOT_ENV = "VR_FACT_LAKE_ROOT"
 _FACT_LAKE_CONTROL_FILE = "fact_lake_control.sqlite3"
@@ -96,133 +88,12 @@ def _parse_utc_instant(value: str, field: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def _not_evaluated_result(dependency_id: str, as_of: str) -> dict[str, Any]:
-    return {
-        "dependency_id": dependency_id,
-        "state": "NOT_EVALUATED",
-        "as_of": as_of,
-        "authority_refs": [],
-    }
-
-
-def _error_result(dependency_id: str, as_of: str) -> dict[str, Any]:
-    return {
-        "dependency_id": dependency_id,
-        "state": "ERROR",
-        "as_of": as_of,
-        "authority_refs": [],
-    }
-
-
-# ---------------------------------------------------------------------------
-# 生产默认 ports（全部只读）
-# ---------------------------------------------------------------------------
-
-def _production_lake_provider() -> FactLake | None:
-    """返回 readonly Fact Lake；根未配置或不存在 → None（价格未评估）。"""
-    raw = os.environ.get(_FACT_LAKE_ROOT_ENV, "").strip()
-    if not raw:
-        return None
-    root = Path(raw)
-    if not (root / _FACT_LAKE_CONTROL_FILE).exists():
-        return None
-    return open_existing_fact_lake(root, readonly=True)
-
-
-def _production_price_evaluator(
-    lake: FactLake, definition: Mapping[str, Any]
-) -> dict[str, Any]:
-    return price_adapter.evaluate_price_reference_capability(
-        lake=lake,
-        security_code=definition["security_code"],
-        campaign_id=definition["campaign_id"],
-        as_of=definition["as_of"],
-        security_exchange_policy_version=SER_POLICY_VERSION,
-    )
-
-
-def _record_observation_event(
-    source_id: str, event: str
-) -> None:
-    """在业务 observation boundary 更新既有 Data Health event（best effort）。
-
-    event: SUCCESS / PARTIAL / FAILURE。业务已成功使用后不得仍显示
-    SOURCE_NOT_INITIALIZED。写入副作用只在此 production wrapper 层，
-    绝不进入 pure evaluation core；上报失败绝不破坏 capability 评估。
-    """
-    try:
-        import data_health_event_store as event_store
-
-        if event == "FAILURE":
-            event_store.safe_call(
-                event_store.record_failure, source_id, "SOURCE_UNAVAILABLE"
-            )
-        elif event == "PARTIAL":
-            event_store.safe_call(event_store.record_partial, source_id)
-        else:
-            event_store.safe_call(event_store.record_success, source_id)
-    except Exception:
-        pass
-
-
-def _production_market_sector_evaluator(
-    lake: FactLake | None, definition: Mapping[str, Any]
-) -> dict[str, Any]:
-    result = market_sector_adapter.evaluate_market_sector_capability(
-        security_code=definition["security_code"],
-        campaign_id=definition["campaign_id"],
-        as_of=definition["as_of"],
-    )
-    # 业务 observation boundary：真实读取后更新 sector_research 健康事件
-    # （success / partial / failure 分别记录真实 observation）
-    state = result["state"]
-    if state == "ERROR":
-        _record_observation_event("sector_research", "FAILURE")
-    elif state == "USABLE":
-        _record_observation_event("sector_research", "SUCCESS")
-    else:
-        _record_observation_event("sector_research", "PARTIAL")
-    return result
-
-
-def _production_disclosures_evaluator(
-    lake: FactLake | None, definition: Mapping[str, Any]
-) -> dict[str, Any]:
-    result = disclosures_adapter.evaluate_disclosures_capability(
-        security_code=definition["security_code"],
-        campaign_id=definition["campaign_id"],
-        as_of=definition["as_of"],
-    )
-    # 业务 observation boundary：真实读取后更新 announcements 健康事件
-    state = result["state"]
-    if state == "ERROR":
-        _record_observation_event("announcements", "FAILURE")
-    elif state == "UNKNOWN":
-        _record_observation_event("announcements", "PARTIAL")
-    else:
-        _record_observation_event("announcements", "SUCCESS")
-    return result
-
-
-def _production_financials_evaluator(
-    lake: FactLake | None, definition: Mapping[str, Any]
-) -> dict[str, Any]:
-    result = financials_adapter.evaluate_financials_capability(
-        security_code=definition["security_code"],
-        campaign_id=definition["campaign_id"],
-        as_of=definition["as_of"],
-    )
-    # 业务 observation boundary：真实读取后更新 financials 健康事件。
-    # NOT_EVALUATED（report-period applicability 未解决）代表业务读取成功
-    # 且拿到数据 → SUCCESS 口径，与 /api/financials 既有上报一致。
-    state = result["state"]
-    if state == "ERROR":
-        _record_observation_event("financials", "FAILURE")
-    elif state == "UNKNOWN":
-        _record_observation_event("financials", "PARTIAL")
-    else:
-        _record_observation_event("financials", "SUCCESS")
-    return result
+_production_lake_provider = cdr.production_lake_provider
+_production_price_evaluator = cdr.production_price_evaluator
+_record_observation_event = cdr.record_observation_event
+_production_market_sector_evaluator = cdr.production_market_sector_evaluator
+_production_disclosures_evaluator = cdr.production_disclosures_evaluator
+_production_financials_evaluator = cdr.production_financials_evaluator
 
 
 def _production_frozen_decisions_reader(
@@ -271,9 +142,7 @@ def _production_hard_risk_evaluator(
     )
 
 
-CapabilityEvaluator = Callable[
-    [FactLake | None, Mapping[str, Any]], Mapping[str, Any]
-]
+CapabilityEvaluator = cdr.CapabilityEvaluator
 
 HardRiskEvaluator = Callable[
     [Mapping[str, Any], Mapping[str, Any], Mapping[str, Any] | None],
@@ -320,7 +189,7 @@ class RuntimePorts:
 
 PRODUCTION_PORTS = RuntimePorts(
     composition_reader=composition.assemble_holdings_campaign_composition,
-    dependency_resolver=dda.resolve_strategy_dependencies,
+    dependency_resolver=cdr.PRODUCTION_PORTS.dependency_resolver,
 )
 
 
@@ -520,51 +389,10 @@ def _capability_results(
     lake: FactLake | None,
     ports: RuntimePorts,
 ) -> list[Mapping[str, Any]]:
-    """per-capability 真实 evaluator 分发（P0-DS1）。
+    """Compatibility wrapper for the shared Critical Data runtime."""
 
-    price_reference 依赖 Fact Lake（lake 未配置 → NOT_EVALUATED）；
-    market_sector / disclosures / financials 走既有真实业务读取路径
-    （lake 无关）。NOT_EVALUATED 仍是合法结果；provider 异常 → ERROR。
-    """
-    results: list[Mapping[str, Any]] = []
-    for dependency_id in definition.get("required_dependency_ids", []):
-        if not isinstance(dependency_id, str) or not dependency_id:
-            raise DecisionInboxRuntimeIntegrityError(
-                "required_dependency_ids 含非法元素"
-            )
-        try:
-            if dependency_id == price_adapter.DEPENDENCY_ID:
-                if lake is None:
-                    result = _not_evaluated_result(
-                        dependency_id, definition["as_of"]
-                    )
-                else:
-                    result = ports.price_evaluator(lake, definition)
-            elif dependency_id == market_sector_adapter.DEPENDENCY_ID:
-                result = ports.market_sector_evaluator(lake, definition)
-            elif dependency_id == disclosures_adapter.DEPENDENCY_ID:
-                result = ports.disclosures_evaluator(lake, definition)
-            elif dependency_id == financials_adapter.DEPENDENCY_ID:
-                result = ports.financials_evaluator(lake, definition)
-            else:
-                raise DecisionInboxRuntimeIntegrityError(
-                    f"未知 capability: {dependency_id}"
-                )
-        except (
-            price_adapter.PriceReferenceCapabilityError,
-            market_sector_adapter.MarketSectorCapabilityError,
-            disclosures_adapter.DisclosuresCapabilityError,
-            financials_adapter.FinancialsCapabilityError,
-        ):
-            result = _error_result(dependency_id, definition["as_of"])
-        results.append(
-            _validate_capability_result(
-                result,
-                dependency_id=dependency_id,
-                as_of=definition["as_of"],
-            )
-        )
-    return results
+    shared_ports = cdr.critical_data_ports_from(ports)
+    return list(cdr._capability_results(definition, lake=lake, ports=shared_ports))
 
 
 def _project_campaign_item(
@@ -587,22 +415,18 @@ def _project_campaign_item(
     _assert_same_identity(definition, campaign, label="DDA")
     _assert_literal_as_of(definition["as_of"], as_of, label="DDA")
 
-    results = _capability_results(definition, lake=lake, ports=ports)
-    ccd = _require_mapping(
-        project_campaign_critical_data(
-            security_code=definition["security_code"],
-            strategy=definition["strategy"],
-            campaign_id=definition["campaign_id"],
-            as_of=definition["as_of"],
-            dependency_set_state=definition["dependency_set_state"],
-            dependency_set_authority_refs=definition[
-                "dependency_set_authority_refs"
-            ],
-            required_dependency_ids=definition["required_dependency_ids"],
-            dependency_results=results,
-        ),
-        "CCD projection",
-    )
+    try:
+        ccd = _require_mapping(
+            cdr.project_campaign_critical_data(
+                campaign=campaign,
+                as_of=as_of,
+                ports=cdr.critical_data_ports_from(ports),
+                lake=lake,
+            ),
+            "CCD projection",
+        )
+    except cdr.CriticalDataRuntimeIntegrityError as exc:
+        raise DecisionInboxRuntimeIntegrityError(str(exc)) from exc
     _assert_same_identity(ccd, definition, label="CCD")
     _assert_literal_as_of(ccd["as_of"], as_of, label="CCD")
 
@@ -649,7 +473,7 @@ def _project_campaign_item(
                 as_of=as_of,
                 current_thesis_projection=thesis_projection,
                 frozen_decisions=decisions,
-                critical_data_evaluation=ccd["critical_data_evaluation"],
+                critical_data=ccd,
                 evidence_reader=dc_runtime.PRODUCTION_PORTS.evidence_reader,
                 hard_risk=hard_risk,
             )
@@ -756,6 +580,7 @@ def _project_campaign_item(
     projected["formal_decision_evaluation"] = formal_decision_evaluation
     projected["material_change_evaluation"] = material_evaluation
     projected["material_change_reason_codes"] = material_reason_codes
+    projected["critical_data"] = copy.deepcopy(dict(ccd))
     projected["decision_assurance"] = copy.deepcopy(dict(assurance))
     if sell_engine_payload is not None:
         projected["sell_engine"] = sell_engine_payload

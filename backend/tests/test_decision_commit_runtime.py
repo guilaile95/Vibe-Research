@@ -60,7 +60,40 @@ def _draft() -> dict:
     }
 
 
-def _ports(thesis: dict | None = None, frozen: list[dict] | None = None):
+def _critical_data(
+    *,
+    evaluation: str = "UNKNOWN",
+    state: str = "UNKNOWN",
+    authority_refs: list[str] | None = None,
+    reason_codes: list[str] | None = None,
+) -> dict:
+    return {
+        "schema_version": "campaign_critical_data.v0.1",
+        "security_code": "600519",
+        "strategy": "SWING",
+        "campaign_id": CAMPAIGN_ID,
+        "as_of": AS_OF,
+        "dependency_set_state": "UNKNOWN",
+        "dependency_set_authority_refs": ["dda:test"],
+        "required_dependency_ids": ["cap.security.price_reference"],
+        "dependency_results": [{
+            "dependency_id": "cap.security.price_reference",
+            "state": "UNKNOWN",
+            "as_of": AS_OF,
+            "authority_refs": ["cap:test"],
+        }],
+        "critical_data_state": state,
+        "critical_data_evaluation": evaluation,
+        "reason_codes": reason_codes or ["TEST_CRITICAL_DATA"],
+        "authority_refs": authority_refs or ["ccd:test"],
+    }
+
+
+def _ports(
+    thesis: dict | None = None,
+    frozen: list[dict] | None = None,
+    critical_data_reader=None,
+):
     state = {"frozen": list(frozen or []), "writes": 0}
 
     def frozen_reader(*, campaign_id: str, limit: int, offset: int):
@@ -92,6 +125,9 @@ def _ports(thesis: dict | None = None, frozen: list[dict] | None = None):
         evidence_reader=lambda _campaign: (),
         freeze_writer=freeze_writer,
         decision_reader=decision_reader,
+        critical_data_reader=critical_data_reader or (
+            lambda _campaign, as_of: {**_critical_data(), "as_of": as_of}
+        ),
     ), state
 
 
@@ -113,6 +149,78 @@ def test_preview_is_uncommitted_and_has_no_prior_boundary_without_fake_id():
         runtime.NO_PRIOR_DECISION_BOUNDARY
     ]
     assert "decision_id" not in result["proposal"]
+    assert state["writes"] == 0
+
+
+@pytest.mark.parametrize(
+    ("evaluation", "state"),
+    [("UNKNOWN", "UNKNOWN"), ("EVALUATED", "USABLE"), ("ERROR", "UNKNOWN")],
+)
+def test_preview_uses_real_critical_data_in_ra1_and_response(evaluation, state):
+    ports, _state = _ports(
+        _thesis(),
+        critical_data_reader=lambda _campaign, as_of: {
+            **_critical_data(evaluation=evaluation, state=state),
+            "as_of": as_of,
+        },
+    )
+
+    result = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
+    )
+
+    critical_data = result["authority_evaluations"]["critical_data"]
+    assert critical_data["critical_data_evaluation"] == evaluation
+    assert critical_data["critical_data_state"] == state
+    assert critical_data["campaign_id"] == CAMPAIGN_ID
+    assert critical_data["as_of"] == AS_OF
+    assert result["decision_assurance"]["dimension_states"]["CRITICAL_DATA"] == evaluation
+    assert _state["writes"] == 0
+
+
+def test_critical_data_state_change_stales_commit_before_any_frozen_write():
+    current = {"value": _critical_data(evaluation="UNKNOWN", state="UNKNOWN")}
+    ports, state = _ports(
+        _thesis(),
+        critical_data_reader=lambda _campaign, as_of: {
+            **current["value"],
+            "as_of": as_of,
+        },
+    )
+    preview = runtime.preview_decision_proposal(CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF)
+    current["value"] = _critical_data(evaluation="EVALUATED", state="USABLE")
+    commit = {
+        **_draft(),
+        "as_of": AS_OF,
+        "expected_proposal_fingerprint": preview["proposal_fingerprint"],
+        "user_confirmed": True,
+    }
+
+    with pytest.raises(runtime.ProposalStaleError):
+        runtime.commit_decision_proposal(CAMPAIGN_ID, commit, ports=ports)
+    assert state["writes"] == 0
+
+
+def test_critical_data_authority_refs_change_stales_commit_before_any_frozen_write():
+    current = {"value": _critical_data()}
+    ports, state = _ports(
+        _thesis(),
+        critical_data_reader=lambda _campaign, as_of: {
+            **current["value"],
+            "as_of": as_of,
+        },
+    )
+    preview = runtime.preview_decision_proposal(CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF)
+    current["value"] = _critical_data(authority_refs=["ccd:changed"])
+    commit = {
+        **_draft(),
+        "as_of": AS_OF,
+        "expected_proposal_fingerprint": preview["proposal_fingerprint"],
+        "user_confirmed": True,
+    }
+
+    with pytest.raises(runtime.ProposalStaleError):
+        runtime.commit_decision_proposal(CAMPAIGN_ID, commit, ports=ports)
     assert state["writes"] == 0
 
 

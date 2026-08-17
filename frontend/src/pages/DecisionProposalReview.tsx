@@ -37,11 +37,13 @@ function evaluationOf(value: unknown): string {
   if (!value || typeof value !== "object") return "NOT_EVALUATED";
   const record = value as {
     evaluation?: unknown;
+    critical_data_evaluation?: unknown;
     hard_risk_evaluation?: unknown;
     material_change_evaluation?: unknown;
     sell_evaluation?: unknown;
   };
   const evaluation = record.evaluation
+    ?? record.critical_data_evaluation
     ?? record.hard_risk_evaluation
     ?? record.material_change_evaluation
     ?? record.sell_evaluation;
@@ -59,6 +61,13 @@ function stringList(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function shortestReason(value: unknown): string {
+  if (!value || typeof value !== "object") return "—";
+  const record = value as Record<string, unknown>;
+  const reasons = stringList(record.reason_codes ?? record.reasons);
+  return reasons[0] ?? "—";
 }
 
 const defaultAsset = JSON.stringify({ view: "ASSET", stance: "WAIT", note: "用户填写资产判断" }, null, 2);
@@ -151,6 +160,7 @@ export function DecisionProposalReview() {
   const authorities = preview?.authority_evaluations ?? {};
   const material = authorities.material_change;
   const hardRisk = authorities.hard_risk;
+  const criticalData = authorities.critical_data;
   const previewAssurance = preview?.decision_assurance as Record<string, unknown> | undefined;
   const dimensions = (previewAssurance?.dimension_states ?? {}) as Record<string, unknown>;
   const envelope = preview?.proposal.action_envelope as Record<string, unknown> | undefined;
@@ -224,16 +234,34 @@ export function DecisionProposalReview() {
             <span className="font-mono text-[10px] text-muted-foreground" title={preview.proposal_fingerprint}>fingerprint {preview.proposal_fingerprint.slice(0, 16)}…</span>
           </div>
 
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
             {[
               ["Formal Thesis", authorities.formal_thesis],
               ["Formal Decision", authorities.formal_decision],
               ["Hard Risk", hardRisk],
+              ["Critical Data", criticalData],
               ["Material Change", material],
               ["Sell Engine", authorities.sell_engine],
             ].map(([label, value]) => {
               const evaluation = evaluationOf(value);
-              return <div key={String(label)} className="rounded-md border border-border/50 bg-background/45 p-2 text-xs"><p className="text-muted-foreground">{String(label)}</p><p className="mt-1 font-medium">{authorityLabel(evaluation)}</p><span className="font-mono text-[10px] text-muted-foreground">{evaluation}</span></div>;
+              const isCriticalData = label === "Critical Data";
+              const record = value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+              return <div
+                key={String(label)}
+                className="rounded-md border border-border/50 bg-background/45 p-2 text-xs"
+                {...(isCriticalData ? {
+                  "data-critical-data-state": String(record?.critical_data_state ?? "UNKNOWN"),
+                  "data-critical-data-evaluation": evaluation,
+                } : {})}
+              >
+                <p className="text-muted-foreground">{String(label)}</p>
+                <p className="mt-1 font-medium">{authorityLabel(evaluation)}</p>
+                <span className="font-mono text-[10px] text-muted-foreground">{evaluation}</span>
+                {isCriticalData && <>
+                  <p className="mt-1 font-mono text-[10px]">state: {String(record?.critical_data_state ?? "UNKNOWN")}</p>
+                  <p className="mt-1 truncate text-[10px] text-muted-foreground" title={shortestReason(value)}>reason: {shortestReason(value)}</p>
+                </>}
+              </div>;
             })}
           </div>
 

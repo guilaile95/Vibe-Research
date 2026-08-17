@@ -2135,6 +2135,7 @@ export interface DecisionProposalCommitResult {
   idempotent: boolean;
   committed: Record<string, unknown>;
   formal_decision: Record<string, unknown>;
+  critical_data: Record<string, unknown>;
   decision_assurance: Record<string, unknown>;
   re_read_required: true;
 }
@@ -2144,6 +2145,7 @@ export interface CommittedDecisionRuntimeRead {
   as_of: string;
   committed: Record<string, unknown>;
   formal_thesis: Record<string, unknown>;
+  critical_data: Record<string, unknown>;
   formal_decision: Record<string, unknown>;
   hard_risk: Record<string, unknown>;
   material_change: Record<string, unknown>;

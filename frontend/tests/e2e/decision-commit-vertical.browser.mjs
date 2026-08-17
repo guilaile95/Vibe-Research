@@ -224,6 +224,15 @@ async function run() {
     await page.getByLabel("Event invalidation conditions").fill("业绩发生重大反转");
     await page.getByRole("button", { name: "Preview Proposal" }).click();
     await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
+    const criticalDataCard = page.locator("[data-critical-data-state]").first();
+    await criticalDataCard.waitFor();
+    const previewCriticalData = {
+      state: await criticalDataCard.getAttribute("data-critical-data-state"),
+      evaluation: await criticalDataCard.getAttribute("data-critical-data-evaluation"),
+    };
+    assert.ok(previewCriticalData.state, "Preview must expose Critical Data state");
+    assert.ok(previewCriticalData.evaluation, "Preview must expose Critical Data evaluation");
+    assert.notEqual(previewCriticalData.evaluation, "HEALTHY", "Critical Data must use authority evaluation vocabulary");
     assert.equal(existsSync(join(tempDataDir, "frozen_decisions.sqlite3")), false, "Preview must not create Frozen DB");
     const freeze = page.getByRole("button", { name: "Freeze Formal Decision" });
     assert.equal(await freeze.isEnabled(), false, "Freeze must be closed before checkbox");
@@ -236,11 +245,21 @@ async function run() {
     assert.match(committedId, /^decision_[0-9a-f]{32}$/);
     const reread = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed/${committedId}`);
     assert.equal(reread.formal_decision.evaluation, "EVALUATED");
+    assert.equal(reread.critical_data.critical_data_state, previewCriticalData.state);
+    assert.equal(reread.critical_data.critical_data_evaluation, previewCriticalData.evaluation);
+    assert.equal(reread.critical_data.campaign_id, campaign.campaign_id);
+    assert.equal(reread.critical_data.security_code, "600519");
+    assert.equal(reread.critical_data.strategy, "SWING");
     const inbox = await jsonRequest(backend, "/api/decision-inbox");
     const item = inbox.campaign_items.find((entry) => entry.campaign_id === campaign.campaign_id);
     assert.ok(item, "Decision Inbox must contain the active Campaign");
     assert.equal(item.last_frozen_decision.decision_id, committedId);
     assert.equal(item.formal_decision_evaluation, "EVALUATED");
+    assert.equal(item.critical_data.critical_data_state, reread.critical_data.critical_data_state);
+    assert.equal(item.critical_data.critical_data_evaluation, reread.critical_data.critical_data_evaluation);
+    assert.equal(item.critical_data.campaign_id, reread.critical_data.campaign_id);
+    assert.equal(item.critical_data.security_code, reread.critical_data.security_code);
+    assert.equal(item.critical_data.strategy, reread.critical_data.strategy);
     const expectedFontBlock = "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap";
     const unexpectedConsoleErrors = consoleErrors.filter((message) => !message.includes("ERR_NETWORK_ACCESS_DENIED"));
     const unexpectedFailedRequests = failedRequests.filter((request) => request.url !== expectedFontBlock);
