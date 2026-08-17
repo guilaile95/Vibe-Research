@@ -24,6 +24,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import campaign_service
 import campaign_critical_data_runtime as critical_data_runtime
+import campaign_critical_data_projection as critical_data_projection
 import decision_assurance_projection as assurance
 import decision_evidence_delta_projection as evidence_delta
 import decision_proposal_projection as proposal_projection
@@ -696,11 +697,9 @@ def _read_critical_data(
             )
     if value.get("as_of") != as_of:
         raise DecisionCommitRuntimeError("Critical Data authority as_of mismatch")
-    if value.get("critical_data_state") not in {"USABLE", "UNKNOWN"}:
+    if value.get("critical_data_state") not in critical_data_projection.CRITICAL_DATA_STATES:
         raise DecisionCommitRuntimeError("Critical Data authority state is invalid")
-    if value.get("critical_data_evaluation") not in {
-        "EVALUATED", "UNKNOWN", "NOT_EVALUATED", "ERROR"
-    }:
+    if value.get("critical_data_evaluation") not in critical_data_projection.CRITICAL_DATA_EVALUATIONS:
         raise DecisionCommitRuntimeError("Critical Data authority evaluation is invalid")
     return copy.deepcopy(dict(value))
 

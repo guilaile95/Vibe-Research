@@ -409,6 +409,46 @@ def test_inbox_critical_data_is_the_shared_runtime_projection():
     assert item["critical_data"]["critical_data_evaluation"] == expected["critical_data_evaluation"]
 
 
+@pytest.mark.parametrize("critical_state", ["USABLE", "BLOCKED", "UNKNOWN", "STALE"])
+def test_inbox_shared_ccd_preserves_all_canonical_domain_states(critical_state):
+    campaign = _campaign()
+
+    def result_for(dependency_id):
+        def evaluator(_lake, definition):
+            return _capability_result(
+                dependency_id, critical_state, definition["as_of"]
+            )
+
+        return evaluator
+
+    ports, _calls = _ports(
+        composition_reader=lambda: _composition(
+            [_composition_item(campaigns=[campaign])]
+        ),
+        price_evaluator=result_for(price_adapter.DEPENDENCY_ID),
+        market_sector_evaluator=result_for(market_sector_adapter.DEPENDENCY_ID),
+        disclosures_evaluator=result_for(disclosures_adapter.DEPENDENCY_ID),
+    )
+
+    result = _assemble(ports)
+    expected = critical_data_runtime.project_campaign_critical_data(
+        campaign=campaign,
+        as_of=AS_OF,
+        ports=critical_data_runtime.critical_data_ports_from(ports),
+        lake=_FAKE_LAKE,
+    )
+    item = result["campaign_items"][0]
+
+    assert item["critical_data"]["critical_data_state"] == critical_state
+    assert item["critical_data"]["critical_data_evaluation"] == (
+        "EVALUATED" if critical_state != "UNKNOWN" else "UNKNOWN"
+    )
+    for key in ("security_code", "strategy", "campaign_id", "as_of"):
+        assert item["critical_data"][key] == expected[key]
+    assert item["critical_data"]["critical_data_state"] == expected["critical_data_state"]
+    assert item["critical_data"]["critical_data_evaluation"] == expected["critical_data_evaluation"]
+
+
 class TestFullChain:
     def test_single_assigned_campaign_full_chain_honest_blocked(self):
         ports, _calls = _ports(

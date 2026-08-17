@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import pytest
 
+import campaign_critical_data_projection as critical_data_projection
 import decision_commit_runtime as runtime
 
 
@@ -154,7 +155,13 @@ def test_preview_is_uncommitted_and_has_no_prior_boundary_without_fake_id():
 
 @pytest.mark.parametrize(
     ("evaluation", "state"),
-    [("UNKNOWN", "UNKNOWN"), ("EVALUATED", "USABLE"), ("ERROR", "UNKNOWN")],
+    [
+        ("UNKNOWN", "UNKNOWN"),
+        ("EVALUATED", "USABLE"),
+        ("EVALUATED", "BLOCKED"),
+        ("EVALUATED", "STALE"),
+        ("ERROR", "UNKNOWN"),
+    ],
 )
 def test_preview_uses_real_critical_data_in_ra1_and_response(evaluation, state):
     ports, _state = _ports(
@@ -178,8 +185,21 @@ def test_preview_uses_real_critical_data_in_ra1_and_response(evaluation, state):
     assert _state["writes"] == 0
 
 
-def test_critical_data_state_change_stales_commit_before_any_frozen_write():
-    current = {"value": _critical_data(evaluation="UNKNOWN", state="UNKNOWN")}
+def test_critical_data_state_vocabulary_is_canonical_not_locally_redefined():
+    assert tuple(critical_data_projection.CRITICAL_DATA_STATES) == (
+        "USABLE", "BLOCKED", "UNKNOWN", "STALE"
+    )
+    assert tuple(critical_data_projection.CRITICAL_DATA_EVALUATIONS) == (
+        "EVALUATED", "UNKNOWN", "NOT_EVALUATED", "ERROR"
+    )
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [("BLOCKED", "STALE"), ("STALE", "BLOCKED")],
+)
+def test_critical_data_state_change_stales_commit_before_any_frozen_write(before, after):
+    current = {"value": _critical_data(evaluation="EVALUATED", state=before)}
     ports, state = _ports(
         _thesis(),
         critical_data_reader=lambda _campaign, as_of: {
@@ -188,7 +208,7 @@ def test_critical_data_state_change_stales_commit_before_any_frozen_write():
         },
     )
     preview = runtime.preview_decision_proposal(CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF)
-    current["value"] = _critical_data(evaluation="EVALUATED", state="USABLE")
+    current["value"] = _critical_data(evaluation="EVALUATED", state=after)
     commit = {
         **_draft(),
         "as_of": AS_OF,
