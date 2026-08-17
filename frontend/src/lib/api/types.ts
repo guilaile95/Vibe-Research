@@ -1565,6 +1565,22 @@ export type FormalOutcomeStatus =
   | "NOT_EVALUATED"
   | "ERROR";
 
+export interface FormalPricePoint {
+  state?: string;
+  security_code?: string;
+  exchange?: string | null;
+  provider_alias?: string | null;
+  as_of?: string;
+  trade_date?: string | null;
+  close?: number | null;
+  publication_id?: string | null;
+  source_observation_id?: string | null;
+  observation_fetched_at?: string | null;
+  authority_refs?: string[];
+  reason_codes?: string[];
+  [key: string]: unknown;
+}
+
 export interface FormalDecisionOutcome {
   schema_version: string;
   decision_id: string;
@@ -1598,6 +1614,10 @@ export interface FormalDecisionOutcome {
   };
   counterfactual_outcome?: {
     state?: string;
+    metric_kind?: string;
+    start_price_point?: FormalPricePoint;
+    end_price_point?: FormalPricePoint;
+    security_return?: string | number | null;
     reason_codes?: string[];
     authority_refs?: string[];
     [key: string]: unknown;

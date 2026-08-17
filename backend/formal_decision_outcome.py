@@ -31,6 +31,13 @@ P0-O1-R1（PA1 权威重集成）：
 from __future__ import annotations
 
 import hashlib
+from decimal import (
+    Context,
+    Decimal,
+    InvalidOperation,
+    ROUND_HALF_EVEN,
+    localcontext,
+)
 import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -713,10 +720,124 @@ COUNTERFACTUAL_OUTCOME_STATES = (
     "ERROR",
 )
 PROCESS_QUALITY_STATE = "NOT_EVALUATED"
+COUNTERFACTUAL_METRIC_KIND = "SECURITY_CLOSE_TO_CLOSE_RETURN"
+_COUNTERFACTUAL_DECIMAL_CONTEXT = Context(
+    prec=50,
+    rounding=ROUND_HALF_EVEN,
+)
 
 
 def _ol1_hash(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _counterfactual_failure(
+    *,
+    state: str,
+    reason: str,
+    start_price_point: Mapping[str, Any],
+    end_price_point: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "state": state,
+        "metric_kind": COUNTERFACTUAL_METRIC_KIND,
+        "start_price_point": dict(start_price_point),
+        "end_price_point": dict(end_price_point),
+        "security_return": None,
+        "authority_refs": list(dict.fromkeys(
+            list(start_price_point.get("authority_refs", []))
+            + list(end_price_point.get("authority_refs", []))
+        )),
+        "reason_codes": [reason],
+    }
+
+
+def build_security_close_to_close_counterfactual(
+    start_price_point: Mapping[str, Any],
+    end_price_point: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build the pure CF1 security close-to-close outcome.
+
+    The inputs are already-proven read-only authority results.  This function
+    does not load data, read a clock, infer a session, or accept capital,
+    quantity, fill, slippage, or portfolio fields.
+    """
+    if not isinstance(start_price_point, Mapping) \
+            or not isinstance(end_price_point, Mapping):
+        raise OutcomeValidationError("CF1 price points must be mappings")
+    start_state = start_price_point.get("state")
+    end_state = end_price_point.get("state")
+    if start_state == "ERROR" or end_state == "ERROR":
+        return _counterfactual_failure(
+            state="ERROR",
+            reason="PRICE_POINT_AUTHORITY_ERROR",
+            start_price_point=start_price_point,
+            end_price_point=end_price_point,
+        )
+    if start_state != "USABLE":
+        return _counterfactual_failure(
+            state="NOT_EVALUATED",
+            reason="START_PRICE_POINT_NOT_EVALUATED",
+            start_price_point=start_price_point,
+            end_price_point=end_price_point,
+        )
+    if end_state != "USABLE":
+        return _counterfactual_failure(
+            state="NOT_EVALUATED",
+            reason="END_PRICE_POINT_NOT_EVALUATED",
+            start_price_point=start_price_point,
+            end_price_point=end_price_point,
+        )
+    if start_price_point.get("security_code") != end_price_point.get("security_code"):
+        return _counterfactual_failure(
+            state="ERROR",
+            reason="PRICE_POINT_SECURITY_MISMATCH",
+            start_price_point=start_price_point,
+            end_price_point=end_price_point,
+        )
+    start_trade_date = start_price_point.get("trade_date")
+    end_trade_date = end_price_point.get("trade_date")
+    if type(start_trade_date) is not str or type(end_trade_date) is not str:
+        return _counterfactual_failure(
+            state="NOT_EVALUATED",
+            reason="NO_COMPLETED_TRADE_DATE",
+            start_price_point=start_price_point,
+            end_price_point=end_price_point,
+        )
+    if end_trade_date <= start_trade_date:
+        return _counterfactual_failure(
+            state="NOT_EVALUATED",
+            reason="NO_POST_DECISION_COMPLETED_SESSION",
+            start_price_point=start_price_point,
+            end_price_point=end_price_point,
+        )
+    try:
+        start_close = Decimal(str(start_price_point.get("close")))
+        end_close = Decimal(str(end_price_point.get("close")))
+    except (InvalidOperation, ValueError) as exc:
+        raise OutcomeValidationError("CF1 close is not a finite Decimal") from exc
+    if not start_close.is_finite() or not end_close.is_finite() \
+            or start_close <= 0 or end_close <= 0:
+        raise OutcomeValidationError("CF1 close must be finite and positive")
+    # Freeze the arithmetic locally so ambient precision/rounding cannot
+    # change the deterministic outcome payload or reveal hash.
+    with localcontext(_COUNTERFACTUAL_DECIMAL_CONTEXT):
+        return_value = end_close / start_close - Decimal("1")
+        if not return_value.is_finite():
+            raise OutcomeValidationError("CF1 security return is not finite")
+        return_text = format(return_value, "f")
+    return {
+        "state": "EVALUATED",
+        "metric_kind": COUNTERFACTUAL_METRIC_KIND,
+        "start_price_point": dict(start_price_point),
+        "end_price_point": dict(end_price_point),
+        "security_return": return_text,
+        "authority_refs": list(dict.fromkeys(
+            list(start_price_point.get("authority_refs", []))
+            + list(end_price_point.get("authority_refs", []))
+        )),
+        "reason_codes": [],
+    }
 
 
 def build_decision_time_replay(decision: Mapping[str, Any]) -> dict[str, Any]:

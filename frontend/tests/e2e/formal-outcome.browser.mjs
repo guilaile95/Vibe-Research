@@ -1,10 +1,11 @@
 /**
- * P0-OL1 real browser vertical.
+ * P0-CF1 real browser vertical on the OL1 Formal Outcome surface.
  *
  * Creates two real Frozen Decisions, one exact TAR1 attribution, one
  * same-security UNPLANNED trade, and one same-security UNALLOCATED trade in
- * isolated databases.  The browser reads the Formal Outcome surface from
- * FastAPI and verifies refresh/readback and two-pass replay stability.
+ * isolated databases and two Fact Lake daily closes. The browser reads the
+ * Formal Outcome surface from FastAPI and verifies the security close-to-close
+ * path, refresh/readback and two-pass replay stability.
  */
 import assert from "node:assert/strict";
 import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -140,12 +141,49 @@ import formal_trade_attribution_store as ats
 import frozen_decision_service as fds
 import trade_attribution_runtime as tar
 import trade_ledger_service as tls
+from fact_lake_store import initialize_fact_lake, payload_sha256
+from trade_calendar import completed_trade_date_at
+from tushare_daily_shadow import (
+    DAILY_FIELD_MANIFEST,
+    TushareDailyRawResponseCapture,
+    TushareDailyRequestContract,
+    build_request_fingerprint,
+    build_tushare_daily_canonical_fact,
+    persist_tushare_daily_evidence,
+    publish_tushare_daily_canonical_fact,
+)
 
 payload = json.loads(os.environ['OL1_PAYLOAD'])
 first = fds.freeze_decision(payload)
 second_payload = dict(payload)
 second_payload['thesis_id'] = 'c' * 32
 second = fds.freeze_decision(second_payload)
+lake = initialize_fact_lake(os.environ['VR_FACT_LAKE_ROOT'])
+evaluation_as_of = os.environ['OL1_CF_EVALUATION_AS_OF']
+start_trade_date = completed_trade_date_at(first['committed_at'])
+end_trade_date = completed_trade_date_at(evaluation_as_of)
+assert start_trade_date and end_trade_date and end_trade_date > start_trade_date
+def publish_price(trade_date, close, event):
+    defaults = {'open': close, 'high': close + 1, 'low': close - 1,
+                'close': close, 'pre_close': close - 1,
+                'change': 1, 'pct_chg': 1, 'vol': 1000, 'amount': 100000}
+    row = {**defaults, 'ts_code': '600519.SH', 'trade_date': trade_date.replace('-', '')}
+    raw = json.dumps({'code': 0, 'msg': 'synthetic',
+                      'data': {'fields': list(DAILY_FIELD_MANIFEST),
+                               'items': [[row[field] for field in DAILY_FIELD_MANIFEST]]}},
+                     separators=(',', ':')).encode()
+    contract = TushareDailyRequestContract(trade_date)
+    capture = TushareDailyRawResponseCapture(
+        capture_event_id=f'capture-{event:032x}', contract=contract,
+        raw_bytes=raw, request_fingerprint=build_request_fingerprint(contract),
+        source_payload_hash=payload_sha256(raw), http_status=200,
+        content_type='application/json; charset=utf-8',
+        fetched_at=f'{trade_date}T08:00:00.000000Z')
+    observation, normalization = persist_tushare_daily_evidence(lake, capture)
+    fact = build_tushare_daily_canonical_fact(observation.observation, normalization)
+    publish_tushare_daily_canonical_fact(lake, fact)
+publish_price(start_trade_date, 100.0, 1)
+publish_price(end_trade_date, 110.0, 2)
 exact = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'buy', 'execution_status': 'full', 'actual_price': 100, 'actual_quantity': 1, 'executed_at': '2026-08-18T01:00:00Z'})
 unplanned = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 101, 'actual_quantity': 1, 'executed_at': '2026-08-18T01:01:00Z'})
 unallocated = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 102, 'actual_quantity': 1, 'executed_at': '2026-08-18T01:02:00Z'})
@@ -203,6 +241,8 @@ async function run() {
       ...process.env,
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
+      VR_FACT_LAKE_ROOT: join(tempDataDir, "fact-lake"),
+      OL1_CF_EVALUATION_AS_OF: "2026-09-01T00:00:00.000000Z",
       VIBE_RESEARCH_TRADE_LEDGER_DB: join(tempDataDir, "trade_ledger.sqlite3"),
       VIBE_RESEARCH_REVIEW_DB: join(tempDataDir, "review_history.db"),
       VIBE_RESEARCH_EVIDENCE_THESIS_DB: join(tempDataDir, "evidence_thesis.db"),
@@ -228,7 +268,11 @@ async function run() {
       `/api/formal-decisions/${fixtures.first.decision_id}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
     );
     assert.deepEqual(firstBefore.actual_capital_outcome.trade_ids, [fixtures.exact.trade_id]);
-    assert.equal(firstBefore.counterfactual_outcome.state, "NOT_EVALUATED");
+    assert.equal(firstBefore.counterfactual_outcome.state, "EVALUATED");
+    assert.equal(firstBefore.counterfactual_outcome.metric_kind, "SECURITY_CLOSE_TO_CLOSE_RETURN");
+    assert.equal(firstBefore.counterfactual_outcome.security_return, "0.1");
+    assert.equal(firstBefore.counterfactual_outcome.start_price_point.close, 100);
+    assert.equal(firstBefore.counterfactual_outcome.end_price_point.close, 110);
     assert.equal(firstBefore.decision_time_replay.snapshot.actual_view, undefined);
     const replayHashBefore = firstBefore.decision_time_replay.replay_hash;
     const snapshotHashBefore = firstBefore.decision_snapshot_hash;
@@ -259,10 +303,12 @@ async function run() {
       return route.continue({ url: `${backend}${url.pathname}${url.search}` });
     });
 
-    await page.goto(`${frontend}/decision-performance`, { waitUntil: "networkidle" });
+    await page.goto(`${frontend}/decision-performance?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "Formal Decision Outcome" }).waitFor();
     await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
-    await page.getByText("NOT_EVALUATED", { exact: true }).last().waitFor();
+    await page.getByText("Security close-to-close path", { exact: true }).first().waitFor();
+    await page.getByText("security path only; not portfolio P&L or decision quality", { exact: true }).first().waitFor();
+    assert.equal(await page.getByText("Security close-to-close path", { exact: true }).count(), 2);
     assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 2);
     const actionableConsoleErrors = consoleErrors.filter(
       (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED"),
@@ -272,7 +318,7 @@ async function run() {
     await page.reload({ waitUntil: "networkidle" });
     await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
     assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 2);
-    console.log("[E2E] P0-OL1 Formal Decision Outcome vertical passed");
+    console.log("[E2E] P0-CF1 Formal Decision Outcome vertical passed");
   } catch (error) {
     const detail = backendLog ? `\nBackend log:\n${backendLog}` : "";
     throw new Error(`${error.message}${detail}`, { cause: error });

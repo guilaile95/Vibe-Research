@@ -7,6 +7,7 @@ import json
 import pytest
 
 import critical_data_price_reference_adapter as adapter
+import security_price_point_authority as shared_price_point
 from critical_data_price_reference_adapter import (
     ADAPTER_AUTHORITY_REF,
     DEPENDENCY_ID,
@@ -205,6 +206,61 @@ def test_multiple_unpinned_publications_do_not_claim_latest_wins(tmp_path):
     assert all(not ref.startswith("publication:") for ref in unpinned["authority_refs"])
     assert pinned["state"] == "USABLE"
     assert f"publication:{first.publication_id}" in pinned["authority_refs"]
+
+
+def test_one_visible_one_future_keeps_distinct_cf1_and_legacy_ccd_contracts(tmp_path):
+    lake = initialize_fact_lake(tmp_path / "lake")
+    _, visible = _publish(lake, event=1, fetched_at="2026-07-30T08:00:00.000000Z")
+    _publish(
+        lake,
+        event=2,
+        rows=[{"ts_code": "600519.SH", "close": 1801.0}],
+        fetched_at="2026-07-30T08:31:00.000000Z",
+    )
+    readonly = _readonly(lake)
+
+    cf1 = shared_price_point.resolve_authoritative_price_point(
+        lake=readonly,
+        security_code="600519",
+        as_of=AS_OF,
+        security_exchange_policy_version=POLICY_VERSION_V01,
+    )
+    ccd = _evaluate(readonly)
+
+    assert cf1["state"] == "USABLE"
+    assert cf1["publication_id"] == visible.publication_id
+    assert ccd["state"] == "NOT_EVALUATED"
+    assert ccd["authority_refs"] == [
+        ADAPTER_AUTHORITY_REF,
+        CALENDAR_AUTHORITY_REF,
+        POLICY_AUTHORITY_REF_V01,
+        PROVIDER_ALIAS_AUTHORITY_REF,
+    ]
+
+
+def test_one_unpinned_ccd_publication_keeps_all_committed_selection_ref(tmp_path):
+    lake = initialize_fact_lake(tmp_path / "lake")
+    observation, publication = _publish(lake)
+
+    result = _evaluate(_readonly(lake))
+
+    assert result["state"] == "USABLE"
+    assert result["authority_refs"] == [
+        ADAPTER_AUTHORITY_REF,
+        CALENDAR_AUTHORITY_REF,
+        POLICY_AUTHORITY_REF_V01,
+        PROVIDER_ALIAS_AUTHORITY_REF,
+        f"selection:{SELECTION_SCHEMA_VERSION}:all_committed",
+        f"dataset:{DATASET_ID}:{DATASET_CONTRACT_REVISION}",
+        f"publication:{publication.publication_id}",
+        f"observation:{observation.observation.observation_id}",
+        f"normalizer:{NORMALIZER_VERSION}",
+        f"artifact-schema:{ARTIFACT_SCHEMA_VERSION}",
+        HEALTH_COLLECTION_AUTHORITY_REF,
+        HEALTH_AUTHORITY_REF,
+        REPLAY_AUTHORITY_REF,
+        "security-row:600519.SH:2026-07-30",
+    ]
 
 
 def test_future_evidence_and_missing_security_row_are_not_evaluated(tmp_path):
