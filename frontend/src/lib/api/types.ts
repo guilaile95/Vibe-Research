@@ -1522,6 +1522,61 @@ export interface DecisionFeedbackCreateInput {
   note?: string | null;
 }
 
+// ---- Formal Decision Outcome (P0-OL1) ----
+
+export type FormalOutcomeStatus =
+  | "PENDING"
+  | "EVALUATED"
+  | "UNKNOWN"
+  | "NOT_EVALUATED"
+  | "ERROR";
+
+export interface FormalDecisionOutcome {
+  schema_version: string;
+  decision_id: string;
+  decision_snapshot_hash?: string;
+  security_code?: string;
+  strategy?: string;
+  campaign_id?: string;
+  thesis_id?: string;
+  thesis_revision?: number;
+  decision_committed_at?: string;
+  decision_review_by?: string;
+  decision_next_best_action?: string;
+  evaluation_as_of?: string | null;
+  outcome_status: FormalOutcomeStatus | string;
+  due_state?: string;
+  decision_time_replay?: {
+    replay_hash?: string;
+    snapshot?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+  replay_future_fact_leak?: boolean;
+  outcome_reveal?: Record<string, unknown> | null;
+  actual_capital_outcome?: {
+    state?: string;
+    pnl_state?: string;
+    trade_count?: number;
+    trade_ids?: string[];
+    pnl?: Record<string, unknown> | null;
+    reason_codes?: string[];
+    [key: string]: unknown;
+  };
+  counterfactual_outcome?: {
+    state?: string;
+    reason_codes?: string[];
+    authority_refs?: string[];
+    [key: string]: unknown;
+  };
+  process_quality?: {
+    state?: string;
+    reason_codes?: string[];
+    [key: string]: unknown;
+  };
+  reason_codes?: string[];
+  [key: string]: unknown;
+}
+
 
 // ---- 决策依据与可解释性 (Decision Evidence & Explainability P2-1) ----
 

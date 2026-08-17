@@ -36,7 +36,12 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
-from frozen_decision_store import NEXT_BEST_ACTIONS, STRATEGIES, canonical_json
+from frozen_decision_store import (
+    NEXT_BEST_ACTIONS,
+    SNAPSHOT_KEYS,
+    STRATEGIES,
+    canonical_json,
+)
 from formal_trade_attribution import (
     DECISION_ANCHOR_FIELDS,
     TRADE_EXECUTION_STATUSES,
@@ -680,3 +685,265 @@ def project_outcome(
         },
         reason_codes=tuple(reason_codes),
     )
+
+
+# ---------------------------------------------------------------------------
+# P0-OL1 Formal Outcome vertical
+# ---------------------------------------------------------------------------
+
+OL1_SCHEMA_VERSION = "formal_decision_outcome.ol1.v0.1"
+OL1_OUTCOME_STATES = (
+    "PENDING",
+    "EVALUATED",
+    "UNKNOWN",
+    "NOT_EVALUATED",
+    "ERROR",
+)
+ACTUAL_CAPITAL_OUTCOME_STATES = (
+    "PENDING",
+    "NO_ACTUAL_TRADE",
+    "EVALUATED",
+    "ERROR",
+)
+COUNTERFACTUAL_OUTCOME_STATES = (
+    "PENDING",
+    "EVALUATED",
+    "UNKNOWN",
+    "NOT_EVALUATED",
+    "ERROR",
+)
+PROCESS_QUALITY_STATE = "NOT_EVALUATED"
+
+
+def _ol1_hash(value: Mapping[str, Any]) -> str:
+    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def build_decision_time_replay(decision: Mapping[str, Any]) -> dict[str, Any]:
+    """Build an immutable replay envelope from the Frozen Decision only.
+
+    No evaluation time, Trade Ledger row, attribution, price, outcome, or
+    current Thesis/Evidence state is admitted into this pass.
+    """
+    anchor = verify_frozen_decision_witness(decision)
+    snapshot = {
+        key: _deep_unfreeze(decision[key])
+        for key in sorted(SNAPSHOT_KEYS)
+    }
+    envelope: dict[str, Any] = {
+        "schema_version": OL1_SCHEMA_VERSION,
+        "replay_schema_version": "formal_decision_time_replay.v0.1",
+        "decision_id": anchor["decision_id"],
+        "decision_snapshot_hash": anchor["decision_snapshot_hash"],
+        "snapshot": snapshot,
+    }
+    return {
+        **envelope,
+        "replay_hash": _ol1_hash(envelope),
+    }
+
+
+def _ol1_actual_outcome(
+    *,
+    executed_trade_ids: list[str],
+    actual_performance: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not executed_trade_ids:
+        if actual_performance is not None:
+            raise OutcomeValidationError(
+                "无实际执行交易时不得提供绩效计算结果"
+            )
+        return {
+            "state": "NO_ACTUAL_TRADE",
+            "pnl_state": "NOT_APPLICABLE",
+            "trade_count": 0,
+            "trade_ids": [],
+            "pnl": None,
+            "authority_refs": ["tar1:formal_trade_attribution:none"],
+            "reason_codes": ["NO_ACTUAL_TRADE"],
+        }
+
+    if actual_performance is None:
+        return {
+            "state": "EVALUATED",
+            "pnl_state": "NOT_EVALUATED",
+            "trade_count": len(executed_trade_ids),
+            "trade_ids": list(executed_trade_ids),
+            "pnl": None,
+            "authority_refs": ["tar1:formal_trade_attribution", "trade_ledger"],
+            "reason_codes": ["CANONICAL_PNL_NOT_AVAILABLE"],
+        }
+
+    selected_ids = actual_performance.get("selected_trade_ids")
+    if not isinstance(selected_ids, list) or set(selected_ids) != set(executed_trade_ids):
+        raise OutcomeValidationError(
+            "PA1 结果的 selected_trade_ids 必须精确等于 Formal Attribution 执行交易集"
+        )
+    positions = actual_performance.get("positions")
+    if not isinstance(positions, list):
+        raise OutcomeValidationError("PA1 结果 positions 不合法")
+    position = next(
+        (item for item in positions if isinstance(item, Mapping)),
+        None,
+    )
+    if position is None:
+        raise OutcomeValidationError("PA1 结果缺少实际交易 position")
+    measured = (
+        position.get("closed_quantity", 0) > 0
+        or position.get("unrealized_pnl") is not None
+    )
+    return {
+        "state": "EVALUATED",
+        "pnl_state": "MEASURED" if measured else "NOT_EVALUATED",
+        "trade_count": len(executed_trade_ids),
+        "trade_ids": list(executed_trade_ids),
+        "pnl": {
+            "realized_pnl": position.get("realized_pnl"),
+            "unrealized_pnl": position.get("unrealized_pnl"),
+            "cost_basis": position.get("cost_basis"),
+            "total_fees": position.get("total_fees"),
+            "computation_fingerprint": actual_performance.get(
+                "computation_fingerprint"
+            ),
+        },
+        "authority_refs": [
+            "tar1:formal_trade_attribution",
+            "trade_ledger",
+            str(actual_performance.get("authority_version")),
+        ],
+        "reason_codes": [] if measured else ["CANONICAL_PNL_INCOMPLETE"],
+    }
+
+
+def project_ol1_outcome(
+    decision: Mapping[str, Any],
+    *,
+    evaluation_as_of: str,
+    attributions: Iterable[Any],
+    trades: Iterable[Mapping[str, Any]],
+    actual_performance: Mapping[str, Any] | None = None,
+    counterfactual: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project OL1 from immutable authorities and an explicit evaluation time.
+
+    This is deterministic and has no I/O or hidden wall-clock reads.  Runtime
+    owns loading authorities; this function owns the two-pass contract.
+    """
+    anchor = verify_frozen_decision_witness(decision)
+    replay = build_decision_time_replay(decision)
+    evaluation = to_canonical_utc(evaluation_as_of, "evaluation_as_of")
+    evaluation_dt = parse_utc_instant(evaluation, "evaluation_as_of")
+    committed_dt = parse_utc_instant(
+        anchor["decision_committed_at"], "decision.committed_at"
+    )
+    review_dt = parse_utc_instant(anchor["decision_review_by"], "decision.review_by")
+    if evaluation_dt < committed_dt:
+        raise OutcomeValidationError(
+            "evaluation_as_of 不得早于 Frozen Decision committed_at"
+        )
+
+    identity = {
+        "schema_version": OL1_SCHEMA_VERSION,
+        **anchor,
+        "evaluation_as_of": evaluation,
+        "decision_time_replay": replay,
+        "replay_future_fact_leak": False,
+        "process_quality": {
+            "state": PROCESS_QUALITY_STATE,
+            "reason_codes": ["NO_PROCESS_QUALITY_AUTHORITY"],
+        },
+    }
+
+    if evaluation_dt < review_dt:
+        return {
+            **identity,
+            "outcome_status": "PENDING",
+            "due_state": "NOT_DUE",
+            "outcome_reveal": None,
+            "actual_capital_outcome": {
+                "state": "PENDING",
+                "pnl_state": "NOT_APPLICABLE",
+                "trade_count": 0,
+                "trade_ids": [],
+                "pnl": None,
+                "authority_refs": ["frozen_decision:review_by"],
+                "reason_codes": ["REVIEW_NOT_DUE"],
+            },
+            "counterfactual_outcome": {
+                "state": "PENDING",
+                "authority_refs": ["frozen_decision:review_by"],
+                "reason_codes": ["REVIEW_NOT_DUE"],
+            },
+            "reason_codes": ["REVIEW_NOT_DUE"],
+        }
+
+    validated_attributions = validate_attribution_set(attributions)
+    if any(item["decision_id"] != anchor["decision_id"] for item in validated_attributions):
+        raise OutcomeValidationError("Outcome 输入含其他 Frozen Decision 的归属记录")
+    for item in validated_attributions:
+        for field_name in DECISION_ANCHOR_FIELDS:
+            if item[field_name] != anchor[field_name]:
+                raise OutcomeValidationError(
+                    f"Formal Attribution 决策锚不一致：{field_name}"
+                )
+    trade_by_id = {}
+    for trade in trades:
+        if not isinstance(trade, Mapping):
+            raise OutcomeValidationError("Trade Ledger row 必须是 Mapping")
+        trade_id = trade.get("trade_id")
+        if not isinstance(trade_id, str) or trade_id in trade_by_id:
+            raise OutcomeValidationError("Trade Ledger row trade_id 不合法或重复")
+        trade_by_id[trade_id] = dict(trade)
+
+    expected_ids = {item["trade_id"] for item in validated_attributions}
+    if set(trade_by_id) != expected_ids:
+        raise OutcomeValidationError(
+            "Trade Ledger 输入集必须精确覆盖 Formal Attribution 输入集"
+        )
+
+    executed_ids: list[str] = []
+    included_attributions: list[str] = []
+    for attribution in validated_attributions:
+        trade = trade_by_id[attribution["trade_id"]]
+        if trade.get("voided_at") is not None:
+            continue
+        if attribution["trade_execution_status"] in ("full", "partial"):
+            executed_ids.append(attribution["trade_id"])
+        included_attributions.append(attribution["attribution_id"])
+
+    actual = _ol1_actual_outcome(
+        executed_trade_ids=executed_ids,
+        actual_performance=actual_performance,
+    )
+    cf = dict(counterfactual or {
+        "state": "NOT_EVALUATED",
+        "authority_refs": ["ol1:no-authoritative-future-price-path"],
+        "reason_codes": ["NO_AUTHORITATIVE_FUTURE_PRICE"],
+    })
+    if cf.get("state") not in COUNTERFACTUAL_OUTCOME_STATES:
+        raise OutcomeValidationError("counterfactual state 不合法")
+    if "pnl" in cf:
+        raise OutcomeValidationError(
+            "OL1 counterfactual 不接受未由正式价格路径证明的 P&L"
+        )
+
+    reveal_base = {
+        "schema_version": "formal_outcome_reveal.v0.1",
+        "decision_id": anchor["decision_id"],
+        "decision_time_replay_hash": replay["replay_hash"],
+        "evaluation_as_of": evaluation,
+        "attribution_ids": included_attributions,
+        "actual_capital_outcome": actual,
+        "counterfactual_outcome": cf,
+    }
+    reveal = {**reveal_base, "outcome_reveal_hash": _ol1_hash(reveal_base)}
+    reason_codes = list(actual["reason_codes"]) + list(cf.get("reason_codes", []))
+    return {
+        **identity,
+        "outcome_status": "EVALUATED",
+        "due_state": "DUE",
+        "outcome_reveal": reveal,
+        "actual_capital_outcome": actual,
+        "counterfactual_outcome": cf,
+        "reason_codes": list(dict.fromkeys(reason_codes)),
+    }

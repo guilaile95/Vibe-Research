@@ -298,6 +298,11 @@ jobs:
         env:
           PYTHON: python
         run: npm run test:e2e:trade-attribution-reconciliation
+      - name: Run OL1 formal decision outcome E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:formal-outcome
 
   e2e-account-bootstrap:
     name: Playwright account bootstrap E2E

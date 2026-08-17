@@ -105,6 +105,7 @@ import type {
   AdoptionSummary,
   OutcomeSummary,
   StockAnalyticsItem,
+  FormalDecisionOutcome,
   AttributionResult,
   AttributionSnapshotSummary,
   AttributionSnapshotListResult,
@@ -897,6 +898,28 @@ export const api = {
     limit?: number;
   }): Promise<StockAnalyticsItem[]> {
     return getStockAnalytics(params);
+  },
+
+  // ---- Formal Decision Outcome (P0-OL1); separate from legacy analytics ----
+  listFormalDecisionOutcomes: (params?: {
+    evaluation_as_of?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.evaluation_as_of) q.set("evaluation_as_of", params.evaluation_as_of);
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return get<FormalDecisionOutcome[]>(`/formal-decision-outcomes${qs ? `?${qs}` : ""}`);
+  },
+  getFormalDecisionOutcome: (decisionId: string, evaluationAsOf?: string) => {
+    const q = new URLSearchParams();
+    if (evaluationAsOf) q.set("evaluation_as_of", evaluationAsOf);
+    const qs = q.toString();
+    return get<FormalDecisionOutcome>(
+      `/formal-decisions/${encodeURIComponent(decisionId)}/outcome${qs ? `?${qs}` : ""}`,
+    );
   },
 
   // ---- 收益归因 (P2-4B) ----

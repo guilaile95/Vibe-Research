@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { BarChart3, Loader2, AlertCircle, TrendingUp, Target } from "lucide-react";
 import { api } from "@/lib/api";
 import type { AdoptionSummary, OutcomeSummary, StockAnalyticsItem } from "@/lib/api/types";
+import { FormalOutcomeSection } from "@/components/outcome/FormalOutcomeSection";
 
 const DecisionPerformance: React.FC = () => {
   const [loading, setLoading] = useState(true);
@@ -87,6 +88,8 @@ const DecisionPerformance: React.FC = () => {
           <span>{error}</span>
         </div>
       )}
+
+      <FormalOutcomeSection />
 
       {loading ? (
         <div className="flex h-40 items-center justify-center">
