@@ -469,6 +469,34 @@ def test_commit_with_valid_challenge_binds_server_source_ref(tmp_path, monkeypat
     assert state["writes"] == 1
 
 
+def test_challenge_finalized_after_commit_time_is_rejected_before_frozen_write(tmp_path, monkeypatch):
+    commit_ports, state = _ports(_thesis())
+    challenge_ports, _db = _challenge_ports(commit_ports, tmp_path)
+    preview = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=commit_ports, as_of=AS_OF
+    )
+    finalized = challenge_runtime.finalize_decision_challenge(
+        CAMPAIGN_ID,
+        _finalize_payload(preview),
+        ports=challenge_ports,
+    )
+    monkeypatch.setattr(challenge_runtime, "PRODUCTION_PORTS", challenge_ports)
+    monkeypatch.setattr(runtime, "utc_now_iso", lambda: AS_OF)
+    with pytest.raises(runtime.ChallengeBindingError, match="finalized_at"):
+        runtime.commit_decision_proposal(
+            CAMPAIGN_ID,
+            {
+                **_draft(),
+                "as_of": AS_OF,
+                "expected_proposal_fingerprint": preview["proposal_fingerprint"],
+                "user_confirmed": True,
+                "challenge_id": finalized["challenge"]["challenge_id"],
+            },
+            ports=commit_ports,
+        )
+    assert state["writes"] == 0
+
+
 def test_commit_with_foreign_challenge_is_rejected_before_frozen_write(tmp_path, monkeypatch):
     commit_ports, state = _ports(_thesis())
     challenge_ports, _db = _challenge_ports(commit_ports, tmp_path)

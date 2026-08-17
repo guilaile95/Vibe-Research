@@ -285,32 +285,28 @@ def get_decision_challenge_for_proposal(
     }
 
 
-def verify_challenge_for_commit(
+def _validate_loaded_packet(
     *,
+    packet: Mapping[str, Any] | None,
     challenge_id: object,
     campaign: Mapping[str, Any],
     proposal: Mapping[str, Any],
     fingerprint: str,
     as_of: str,
-    ports: ChallengePorts | None = None,
+    committed_at: str | None = None,
 ) -> dict[str, Any]:
-    """Load and bind-check a packet before any Frozen Decision write."""
-
-    active_ports = ports or PRODUCTION_PORTS
     try:
         cid = domain.require_challenge_id(challenge_id)
     except domain.DecisionChallengeValidationError as exc:
         raise DecisionChallengeBindError(str(exc)) from exc
-    try:
-        packet = active_ports.reader(cid)
-    except store.DecisionChallengeStoreCorruptedError as exc:
-        raise DecisionChallengeBindError("challenge packet is corrupt") from exc
     if packet is None:
         raise DecisionChallengeBindError("challenge packet does not exist")
     try:
         validated = domain.challenge_packet_from_mapping(packet)
     except domain.DecisionChallengeValidationError as exc:
         raise DecisionChallengeBindError("challenge packet failed validation") from exc
+    if validated["challenge_id"] != cid:
+        raise DecisionChallengeBindError("challenge identity mismatch")
     if validated["campaign_id"] != campaign.get("campaign_id"):
         raise DecisionChallengeBindError("challenge Campaign identity mismatch")
     if validated["security_code"] != campaign.get("security_code"):
@@ -329,13 +325,95 @@ def verify_challenge_for_commit(
         raise DecisionChallengeBindError("challenge packet is not finalized")
     if validated["two_pass_state"] != "VALID":
         raise DecisionChallengeBindError("challenge two-pass structure is incomplete")
-    first_at = datetime.fromisoformat(validated["first_pass_at"].replace("Z", "+00:00"))
-    second_at = datetime.fromisoformat(validated["second_pass_at"].replace("Z", "+00:00"))
+    try:
+        first_at = datetime.fromisoformat(validated["first_pass_at"].replace("Z", "+00:00"))
+        second_at = datetime.fromisoformat(validated["second_pass_at"].replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise DecisionChallengeBindError("challenge two-pass timestamps are invalid") from exc
     if second_at < first_at:
         raise DecisionChallengeBindError("challenge two-pass ordering is invalid")
     if validated["decision_quality"] != domain.DECISION_QUALITY:
         raise DecisionChallengeBindError("challenge must not carry a quality grade")
+    if committed_at is not None:
+        try:
+            commit_dt = datetime.fromisoformat(committed_at.replace("Z", "+00:00"))
+            finalized_dt = datetime.fromisoformat(validated["finalized_at"].replace("Z", "+00:00"))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise DecisionChallengeBindError("Frozen Decision committed_at is invalid") from exc
+        if finalized_dt > commit_dt:
+            raise DecisionChallengeBindError("challenge finalized_at is after Frozen Decision committed_at")
     return validated
+
+
+def verify_challenge_for_commit(
+    *,
+    challenge_id: object,
+    campaign: Mapping[str, Any],
+    proposal: Mapping[str, Any],
+    fingerprint: str,
+    as_of: str,
+    committed_at: str | None = None,
+    ports: ChallengePorts | None = None,
+) -> dict[str, Any]:
+    """Load and bind-check a packet before any Frozen Decision write."""
+    active_ports = ports or PRODUCTION_PORTS
+    try:
+        cid = domain.require_challenge_id(challenge_id)
+        packet = active_ports.reader(cid)
+    except domain.DecisionChallengeValidationError as exc:
+        raise DecisionChallengeBindError(str(exc)) from exc
+    except store.DecisionChallengeStoreCorruptedError as exc:
+        raise DecisionChallengeBindError("challenge packet is corrupt") from exc
+    return _validate_loaded_packet(
+        packet=packet,
+        challenge_id=challenge_id,
+        campaign=campaign,
+        proposal=proposal,
+        fingerprint=fingerprint,
+        as_of=as_of,
+        committed_at=committed_at,
+    )
+
+
+def verify_bound_challenge_for_frozen_decision(
+    decision: Mapping[str, Any],
+    *,
+    ports: ChallengePorts | None = None,
+) -> dict[str, Any]:
+    """Verify the server-owned Challenge binding on one Frozen Decision."""
+    if not isinstance(decision, Mapping):
+        raise DecisionChallengeBindError("Frozen Decision is invalid")
+    refs = decision.get("source_refs")
+    if not isinstance(refs, list):
+        raise DecisionChallengeBindError("Frozen Decision source_refs are invalid")
+    challenge_refs = [
+        ref for ref in refs
+        if isinstance(ref, str) and ref.startswith(domain.CHALLENGE_SOURCE_PREFIX)
+    ]
+    proposal_refs = [
+        ref for ref in refs
+        if isinstance(ref, str) and ref.startswith(domain.PROPOSAL_SOURCE_PREFIX)
+    ]
+    if len(challenge_refs) != 1 or len(proposal_refs) != 1:
+        raise DecisionChallengeBindError("Frozen Decision Challenge/proposal binding is not unique")
+    challenge_id = challenge_refs[0][len(domain.CHALLENGE_SOURCE_PREFIX):]
+    fingerprint = proposal_refs[0][len(domain.PROPOSAL_SOURCE_PREFIX):]
+    active_ports = ports or PRODUCTION_PORTS
+    try:
+        packet = active_ports.reader(domain.require_challenge_id(challenge_id))
+    except domain.DecisionChallengeValidationError as exc:
+        raise DecisionChallengeBindError(str(exc)) from exc
+    except store.DecisionChallengeStoreCorruptedError as exc:
+        raise DecisionChallengeBindError("challenge packet is corrupt") from exc
+    return _validate_loaded_packet(
+        packet=packet,
+        challenge_id=challenge_id,
+        campaign=decision,
+        proposal=decision,
+        fingerprint=fingerprint,
+        as_of=packet.get("proposal_as_of") if isinstance(packet, Mapping) else None,
+        committed_at=decision.get("committed_at"),
+    )
 
 
 __all__ = [
@@ -351,5 +429,6 @@ __all__ = [
     "finalize_decision_challenge",
     "get_decision_challenge",
     "get_decision_challenge_for_proposal",
+    "verify_bound_challenge_for_frozen_decision",
     "verify_challenge_for_commit",
 ]

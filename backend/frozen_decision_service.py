@@ -326,7 +326,10 @@ def _build_snapshot(cleaned: Mapping[str, Any], decision_id: str, committed_at: 
 
 
 def freeze_decision(
-    payload: Mapping[str, Any], db_path: str | Path | None = None
+    payload: Mapping[str, Any],
+    db_path: str | Path | None = None,
+    *,
+    committed_at: str | None = None,
 ) -> dict[str, Any]:
     """显式冻结一条正式决策（用户确认门之后）。
 
@@ -343,8 +346,10 @@ def freeze_decision(
 
     cleaned = _validate_input(payload)
     decision_id = f"decision_{uuid.uuid4().hex}"
-    committed_at = _utc_now_iso()
-    snapshot = _build_snapshot(cleaned, decision_id, committed_at)
+    commit_instant = _utc_now_iso() if committed_at is None else _normalize_utc_timestamp(
+        committed_at, "committed_at"
+    )
+    snapshot = _build_snapshot(cleaned, decision_id, commit_instant)
     snapshot_json = store.canonical_json(snapshot)
     digest = store.snapshot_hash(snapshot)
     frozen = {

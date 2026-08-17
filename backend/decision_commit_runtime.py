@@ -627,6 +627,12 @@ def evaluate_authorities(
     )
 
 
+def _production_freeze_writer_with_commit_time(
+    payload: Mapping[str, Any], *, committed_at: str
+) -> Mapping[str, Any]:
+    return frozen_decision_service.freeze_decision(payload, committed_at=committed_at)
+
+
 @dataclass(frozen=True)
 class RuntimePorts:
     campaign_reader: Callable[[str], Mapping[str, Any]] = campaign_service.get_campaign
@@ -634,6 +640,7 @@ class RuntimePorts:
     frozen_reader: Callable[..., list[Mapping[str, Any]]] = frozen_decision_service.list_decisions
     evidence_reader: Callable[[Mapping[str, Any]], Sequence[evidence_delta.NormalizedEvidenceItem]] = _default_evidence_reader
     freeze_writer: Callable[[Mapping[str, Any]], Mapping[str, Any]] = frozen_decision_service.freeze_decision
+    freeze_writer_with_commit_time: Callable[..., Mapping[str, Any]] | None = None
     decision_reader: Callable[[str], Mapping[str, Any] | None] = frozen_decision_service.get_decision
     critical_data_reader: Callable[[Mapping[str, Any], str], Mapping[str, Any]] | None = None
 
@@ -647,7 +654,10 @@ def _production_critical_data_reader(
     )
 
 
-PRODUCTION_PORTS = RuntimePorts(critical_data_reader=_production_critical_data_reader)
+PRODUCTION_PORTS = RuntimePorts(
+    critical_data_reader=_production_critical_data_reader,
+    freeze_writer_with_commit_time=_production_freeze_writer_with_commit_time,
+)
 _COMMIT_LOCK = threading.Lock()
 
 
@@ -996,6 +1006,7 @@ def _bind_challenge_packet(
     proposal: proposal_projection.DecisionProposal,
     fingerprint: str,
     as_of: str,
+    committed_at: str,
 ) -> Mapping[str, Any]:
     import decision_challenge_runtime as challenge_runtime
 
@@ -1009,6 +1020,7 @@ def _bind_challenge_packet(
             },
             fingerprint=fingerprint,
             as_of=as_of,
+            committed_at=committed_at,
         )
     except challenge_runtime.DecisionChallengeBindError as exc:
         raise ChallengeBindingError(str(exc)) from exc
@@ -1200,6 +1212,15 @@ def commit_decision_proposal(
             fingerprint = expected
             marker = expected_marker
         challenge_id = _optional_challenge_id(payload)
+        committed_at = (
+            existing.get("committed_at")
+            if existing is not None
+            else utc_now_iso()
+        )
+        if not isinstance(committed_at, str) or committed_at != _canonical_utc(
+            committed_at, "committed_at"
+        ):
+            raise FrozenDecisionIntegrityError("Frozen Decision committed_at is invalid")
         if challenge_id is not None:
             _bind_challenge_packet(
                 challenge_id=challenge_id,
@@ -1207,6 +1228,7 @@ def commit_decision_proposal(
                 proposal=result,
                 fingerprint=expected if existing is not None else fingerprint,
                 as_of=as_of,
+                committed_at=committed_at if existing is None else None,
             )
         if existing is not None:
             bound = _challenge_refs(existing.get("source_refs"))
@@ -1221,7 +1243,11 @@ def commit_decision_proposal(
             frozen_payload = _freeze_payload(
                 result, authorities, drafts, fingerprint, challenge_id=challenge_id
             )
-            stored = ports.freeze_writer(frozen_payload)
+            writer = ports.freeze_writer_with_commit_time
+            if writer is not None:
+                stored = writer(frozen_payload, committed_at=committed_at)
+            else:
+                stored = ports.freeze_writer(frozen_payload)
         else:
             stored = existing
 

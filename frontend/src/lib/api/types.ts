@@ -1581,6 +1581,39 @@ export interface FormalPricePoint {
   [key: string]: unknown;
 }
 
+export interface DecisionProcessReviewDimension {
+  status?: "ANSWERED" | "UNKNOWN" | string;
+  text?: string;
+  [key: string]: unknown;
+}
+
+export interface DecisionProcessReview {
+  schema_version?: string;
+  state?: "BOUND" | "NONE" | "ERROR" | string;
+  challenge_id?: string | null;
+  finalized_at?: string | null;
+  packet_state?: string | null;
+  challenge_evaluation?: string | null;
+  challenge_coverage_state?: string | null;
+  dimensions?: Record<string, DecisionProcessReviewDimension>;
+  covered_dimensions?: string[];
+  unknown_dimensions?: string[];
+  two_pass_state?: string | null;
+  two_pass_semantic_independence_verified?: string | null;
+  first_pass_ref?: string | null;
+  first_pass_at?: string | null;
+  second_pass_ref?: string | null;
+  second_pass_at?: string | null;
+  reason_codes?: string[];
+  authority_refs?: string[];
+  process_quality?: {
+    state?: string;
+    reason_codes?: string[];
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 export interface FormalDecisionOutcome {
   schema_version: string;
   decision_id: string;
@@ -1627,6 +1660,7 @@ export interface FormalDecisionOutcome {
     reason_codes?: string[];
     [key: string]: unknown;
   };
+  process_review?: DecisionProcessReview;
   reason_codes?: string[];
   [key: string]: unknown;
 }

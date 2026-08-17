@@ -131,7 +131,10 @@ function createFixtures(env) {
     decision_confidence: null,
     evidence_refs: [],
     risk_refs: [],
-    source_refs: [],
+    source_refs: [
+      "decision_proposal:" + "a".repeat(64),
+      "decision_challenge:decision_challenge_" + "d".repeat(32),
+    ],
     user_confirmed: true,
   };
   const script = `
@@ -141,6 +144,8 @@ import formal_trade_attribution_store as ats
 import frozen_decision_service as fds
 import trade_attribution_runtime as tar
 import trade_ledger_service as tls
+import decision_challenge_projection as dcp
+import decision_challenge_store as dcs
 from fact_lake_store import initialize_fact_lake, payload_sha256
 from trade_calendar import completed_trade_date_at
 from tushare_daily_shadow import (
@@ -154,10 +159,11 @@ from tushare_daily_shadow import (
 )
 
 payload = json.loads(os.environ['OL1_PAYLOAD'])
-first = fds.freeze_decision(payload)
+first = fds.freeze_decision(payload, committed_at='2026-08-01T00:00:00.000000Z')
 second_payload = dict(payload)
 second_payload['thesis_id'] = 'c' * 32
-second = fds.freeze_decision(second_payload)
+second_payload['source_refs'] = []
+second = fds.freeze_decision(second_payload, committed_at='2026-08-01T00:00:01.000000Z')
 lake = initialize_fact_lake(os.environ['VR_FACT_LAKE_ROOT'])
 evaluation_as_of = os.environ['OL1_CF_EVALUATION_AS_OF']
 start_trade_date = completed_trade_date_at(first['committed_at'])
@@ -190,7 +196,26 @@ unallocated = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'opera
 record = fta.create_attribution(first, exact, attribution_id=fta.new_attribution_id(), created_at='2026-08-18T02:00:00.000000Z').to_dict()
 ats.write_attribution(db_path=ats.resolve_formal_trade_attribution_db_path(), record=record)
 tar.mark_unplanned(unplanned['trade_id'], {'confirm': True})
-print(json.dumps({'first': first, 'second': second, 'exact': exact, 'unplanned': unplanned, 'unallocated': unallocated}))
+challenge_id = 'decision_challenge_' + 'd' * 32
+challenge_dimensions = {
+    name: {'status': 'ANSWERED', 'text': f'text:{name}'}
+    for name in dcp.REQUIRED_DIMENSIONS
+}
+challenge_dimensions['PRE_MORTEM'] = {'status': 'UNKNOWN', 'text': 'not enough evidence'}
+packet = dcp.project_challenge_packet(
+    challenge_id=challenge_id,
+    security_code=first['security_code'], strategy=first['strategy'],
+    campaign_id=first['campaign_id'], thesis_id=first['thesis_id'],
+    thesis_revision=first['thesis_revision'],
+    proposal_fingerprint=first['source_refs'][0].split(':', 1)[1],
+    proposal_as_of=first['committed_at'], finalized_at=first['committed_at'],
+    user_dimensions=challenge_dimensions,
+)
+dcs.append_challenge(packet)
+first['source_refs'] = [
+    first['source_refs'][0], 'decision_challenge:' + challenge_id,
+]
+print(json.dumps({'first': first, 'second': second, 'exact': exact, 'unplanned': unplanned, 'unallocated': unallocated, 'challenge_id': challenge_id}))
 `;
   const result = spawnSync(env.PYTHON || "python3", ["-c", script], {
     cwd: backendDir,
@@ -268,6 +293,14 @@ async function run() {
       `/api/formal-decisions/${fixtures.first.decision_id}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
     );
     assert.deepEqual(firstBefore.actual_capital_outcome.trade_ids, [fixtures.exact.trade_id]);
+    assert.equal(firstBefore.process_review.state, "BOUND");
+    assert.equal(firstBefore.process_review.challenge_id, fixtures.challenge_id);
+    assert.equal(firstBefore.process_review.packet_state, "COMPLETE");
+    assert.equal(firstBefore.process_review.two_pass_state, "VALID");
+    assert.equal(firstBefore.process_review.two_pass_semantic_independence_verified, "NO");
+    assert.equal(firstBefore.process_review.dimensions.PRE_MORTEM.status, "UNKNOWN");
+    assert.equal(firstBefore.process_quality.state, "NOT_EVALUATED");
+    assert.deepEqual(firstBefore.process_quality.reason_codes, ["NO_PROCESS_QUALITY_AUTHORITY"]);
     assert.equal(firstBefore.counterfactual_outcome.state, "EVALUATED");
     assert.equal(firstBefore.counterfactual_outcome.metric_kind, "SECURITY_CLOSE_TO_CLOSE_RETURN");
     assert.equal(firstBefore.counterfactual_outcome.security_return, "0.1");
@@ -276,6 +309,9 @@ async function run() {
     assert.equal(firstBefore.decision_time_replay.snapshot.actual_view, undefined);
     const replayHashBefore = firstBefore.decision_time_replay.replay_hash;
     const snapshotHashBefore = firstBefore.decision_snapshot_hash;
+    const outcomeRevealHashBefore = firstBefore.outcome_reveal?.outcome_reveal_hash;
+    const actualCapitalBefore = JSON.stringify(firstBefore.actual_capital_outcome);
+    const counterfactualBefore = JSON.stringify(firstBefore.counterfactual_outcome);
 
     const laterTrade = await jsonRequest(backend, "/api/trades", "POST", {
       code: "600519", name: "贵州茅台", operation: "add", execution_status: "full",
@@ -289,6 +325,17 @@ async function run() {
     assert.equal(firstAfter.decision_time_replay.replay_hash, replayHashBefore);
     assert.equal(firstAfter.decision_snapshot_hash, snapshotHashBefore);
     assert.deepEqual(firstAfter.actual_capital_outcome.trade_ids, [fixtures.exact.trade_id]);
+    assert.equal(firstAfter.outcome_reveal?.outcome_reveal_hash, outcomeRevealHashBefore);
+    assert.equal(JSON.stringify(firstAfter.actual_capital_outcome), actualCapitalBefore);
+    assert.equal(JSON.stringify(firstAfter.counterfactual_outcome), counterfactualBefore);
+
+    const secondOutcome = await jsonRequest(
+      backend,
+      `/api/formal-decisions/${fixtures.second.decision_id}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
+    );
+    assert.equal(secondOutcome.process_review.state, "NONE");
+    assert.equal(typeof secondOutcome.decision_time_replay.replay_hash, "string");
+    assert.equal(secondOutcome.process_quality.state, "NOT_EVALUATED");
 
     staticServer = await startStaticServer(frontendDist, frontendPort);
     const launchOptions = { headless: true };
@@ -306,6 +353,9 @@ async function run() {
     await page.goto(`${frontend}/decision-performance?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "Formal Decision Outcome" }).waitFor();
     await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
+    await page.getByTestId(`process-review-bound-${fixtures.first.decision_id}`).waitFor();
+    await page.getByText("Challenge coverage is not decision correctness.", { exact: true }).waitFor();
+    await page.getByTestId(`process-review-none-${fixtures.second.decision_id}`).waitFor();
     await page.getByText("Security close-to-close path", { exact: true }).first().waitFor();
     await page.getByText("security path only; not portfolio P&L or decision quality", { exact: true }).first().waitFor();
     assert.equal(await page.getByText("Security close-to-close path", { exact: true }).count(), 2);
@@ -317,6 +367,8 @@ async function run() {
 
     await page.reload({ waitUntil: "networkidle" });
     await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
+    await page.getByTestId(`process-review-bound-${fixtures.first.decision_id}`).waitFor();
+    await page.getByTestId(`process-review-none-${fixtures.second.decision_id}`).waitFor();
     assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 2);
     console.log("[E2E] P0-CF1 Formal Decision Outcome vertical passed");
   } catch (error) {
