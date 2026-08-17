@@ -154,6 +154,12 @@ jobs:
           PYTHON: python
         run: npm run test:e2e:current-thesis
 
+      - name: Run ET1 evidence effective-time E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:evidence-effective-time
+
   e2e-data-health-smoke:
     name: Playwright data health smoke E2E
     runs-on: ubuntu-latest
