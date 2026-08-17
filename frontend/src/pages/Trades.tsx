@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { api, ApiError, type TradeRecord } from "@/lib/api";
+import { api, ApiError, type TradeAttributionCandidate, type TradeRecord, type TradeReconciliationResult } from "@/lib/api";
 import {
   buildTradeCreateInput,
   buildTradeListQuery,
@@ -65,6 +65,11 @@ export function Trades() {
   const [detailTrade, setDetailTrade] = useState<TradeRecord | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [reconciliation, setReconciliation] = useState<TradeReconciliationResult | null>(null);
+  const [attributionCandidates, setAttributionCandidates] = useState<TradeAttributionCandidate[]>([]);
+  const [reconciliationLoading, setReconciliationLoading] = useState(false);
+  const [reconciliationError, setReconciliationError] = useState<string | null>(null);
+  const [reconciliationActionLoading, setReconciliationActionLoading] = useState(false);
 
   // 新建 modal state
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -149,6 +154,78 @@ export function Trades() {
       setDetailError(null);
     }
   }, [selectedTradeId, loadDetail]);
+
+  useEffect(() => {
+    if (!selectedTradeId) {
+      setReconciliation(null);
+      setAttributionCandidates([]);
+      setReconciliationError(null);
+      return;
+    }
+    let active = true;
+    setReconciliationLoading(true);
+    setReconciliationError(null);
+    Promise.all([
+      api.getTradeReconciliation(selectedTradeId),
+      api.listTradeAttributionCandidates(selectedTradeId),
+    ]).then(([state, candidates]) => {
+      if (!active) return;
+      setReconciliation(state);
+      setAttributionCandidates(candidates);
+    }).catch((e) => {
+      if (!active) return;
+      setReconciliationError(e instanceof Error ? e.message : "获取交易归属状态失败");
+    }).finally(() => {
+      if (active) setReconciliationLoading(false);
+    });
+    return () => { active = false; };
+  }, [selectedTradeId]);
+
+  const refreshReconciliation = async () => {
+    if (!selectedTradeId) return;
+    setReconciliationLoading(true);
+    setReconciliationError(null);
+    try {
+      const [state, candidates] = await Promise.all([
+        api.getTradeReconciliation(selectedTradeId),
+        api.listTradeAttributionCandidates(selectedTradeId),
+      ]);
+      setReconciliation(state);
+      setAttributionCandidates(candidates);
+    } catch (e) {
+      setReconciliationError(e instanceof Error ? e.message : "刷新交易归属状态失败");
+    } finally {
+      setReconciliationLoading(false);
+    }
+  };
+
+  const handleAttribution = async (decisionId: string) => {
+    if (!selectedTradeId) return;
+    setReconciliationActionLoading(true);
+    setReconciliationError(null);
+    try {
+      await api.attributeTrade(selectedTradeId, decisionId);
+      await refreshReconciliation();
+    } catch (e) {
+      setReconciliationError(e instanceof Error ? e.message : "交易归属失败");
+    } finally {
+      setReconciliationActionLoading(false);
+    }
+  };
+
+  const handleMarkUnplanned = async () => {
+    if (!selectedTradeId) return;
+    setReconciliationActionLoading(true);
+    setReconciliationError(null);
+    try {
+      await api.markTradeUnplanned(selectedTradeId);
+      await refreshReconciliation();
+    } catch (e) {
+      setReconciliationError(e instanceof Error ? e.message : "标记 UNPLANNED 失败");
+    } finally {
+      setReconciliationActionLoading(false);
+    }
+  };
 
   // 筛选操作
   const handleFilterSubmit = (e?: React.FormEvent) => {
@@ -1058,6 +1135,50 @@ export function Trades() {
                         该交易已于 {formatTradeTime(detailTrade.voided_at)} 作废
                       </div>
                       <div>作废原因：{detailTrade.void_reason || "无"}</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* TAR1：只显示后端权威归属，不按时间/代码推断。 */}
+                <div className="rounded-lg border border-border/40 bg-card p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="font-semibold text-foreground">交易归属与 Campaign 对账</h4>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        仅接受明确 Frozen Decision 归属或明确 UNPLANNED；系统不自动匹配。
+                      </p>
+                    </div>
+                    {reconciliationLoading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+                  </div>
+
+                  {reconciliationError && (
+                    <div className="rounded border border-rose-500/20 bg-rose-500/10 p-2 text-rose-400">{reconciliationError}</div>
+                  )}
+                  {reconciliation && (
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <div><span className="text-muted-foreground">状态：</span><span className="font-semibold text-foreground">{reconciliation.allocation_state}</span></div>
+                      <div><span className="text-muted-foreground">对账：</span><span className="font-semibold text-foreground">{reconciliation.reconciliation_requirement}</span></div>
+                      {reconciliation.campaign_id && <div><span className="text-muted-foreground">Campaign：</span><span className="font-mono text-foreground">{reconciliation.campaign_id}</span></div>}
+                      {reconciliation.decision_id && <div><span className="text-muted-foreground">Frozen Decision：</span><span className="font-mono text-foreground">{reconciliation.decision_id}</span></div>}
+                      {reconciliation.origin === "UNPLANNED" && <div className="col-span-2 text-amber-400">来源：明确 UNPLANNED（pre_trade_decision=NONE，pre_trade_thesis=NONE）</div>}
+                    </div>
+                  )}
+
+                  {reconciliation?.allocation_state === "UNALLOCATED" && (
+                    <div className="space-y-2 border-t border-border/40 pt-3">
+                      <div className="text-[11px] font-semibold text-amber-400">RECONCILIATION REQUIRED：选择真实、已提交且时间有效的 Frozen Decision</div>
+                      {attributionCandidates.length === 0 ? (
+                        <p className="text-[11px] text-muted-foreground">没有可归属候选；请明确标记 UNPLANNED，系统不会猜测。</p>
+                      ) : attributionCandidates.map((candidate) => (
+                        <div key={candidate.decision_id} className="flex items-center justify-between gap-3 rounded border border-border/40 bg-muted/20 p-2">
+                          <div className="min-w-0">
+                            <div className="truncate font-mono text-[11px] text-foreground">{candidate.decision_id}</div>
+                            <div className="text-[10px] text-muted-foreground">Campaign {candidate.campaign_id} · {candidate.strategy} · {formatTradeTime(candidate.committed_at)}</div>
+                          </div>
+                          <button type="button" disabled={reconciliationActionLoading} onClick={() => handleAttribution(candidate.decision_id)} className="shrink-0 rounded bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground disabled:opacity-50">明确归属</button>
+                        </div>
+                      ))}
+                      <button type="button" disabled={reconciliationActionLoading} onClick={handleMarkUnplanned} className="rounded border border-amber-500/40 px-2.5 py-1 text-[11px] font-medium text-amber-400 hover:bg-amber-500/10 disabled:opacity-50">标记为 UNPLANNED</button>
                     </div>
                   )}
                 </div>

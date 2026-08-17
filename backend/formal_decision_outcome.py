@@ -31,12 +31,24 @@ P0-O1-R1（PA1 权威重集成）：
 from __future__ import annotations
 
 import hashlib
+from decimal import (
+    Context,
+    Decimal,
+    InvalidOperation,
+    ROUND_HALF_EVEN,
+    localcontext,
+)
 import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
-from frozen_decision_store import NEXT_BEST_ACTIONS, STRATEGIES, canonical_json
+from frozen_decision_store import (
+    NEXT_BEST_ACTIONS,
+    SNAPSHOT_KEYS,
+    STRATEGIES,
+    canonical_json,
+)
 from formal_trade_attribution import (
     DECISION_ANCHOR_FIELDS,
     TRADE_EXECUTION_STATUSES,
@@ -680,3 +692,379 @@ def project_outcome(
         },
         reason_codes=tuple(reason_codes),
     )
+
+
+# ---------------------------------------------------------------------------
+# P0-OL1 Formal Outcome vertical
+# ---------------------------------------------------------------------------
+
+OL1_SCHEMA_VERSION = "formal_decision_outcome.ol1.v0.1"
+OL1_OUTCOME_STATES = (
+    "PENDING",
+    "EVALUATED",
+    "UNKNOWN",
+    "NOT_EVALUATED",
+    "ERROR",
+)
+ACTUAL_CAPITAL_OUTCOME_STATES = (
+    "PENDING",
+    "NO_ACTUAL_TRADE",
+    "EVALUATED",
+    "ERROR",
+)
+COUNTERFACTUAL_OUTCOME_STATES = (
+    "PENDING",
+    "EVALUATED",
+    "UNKNOWN",
+    "NOT_EVALUATED",
+    "ERROR",
+)
+PROCESS_QUALITY_STATE = "NOT_EVALUATED"
+COUNTERFACTUAL_METRIC_KIND = "SECURITY_CLOSE_TO_CLOSE_RETURN"
+_COUNTERFACTUAL_DECIMAL_CONTEXT = Context(
+    prec=50,
+    rounding=ROUND_HALF_EVEN,
+)
+
+
+def _ol1_hash(value: Mapping[str, Any]) -> str:
+    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _counterfactual_failure(
+    *,
+    state: str,
+    reason: str,
+    start_price_point: Mapping[str, Any],
+    end_price_point: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "state": state,
+        "metric_kind": COUNTERFACTUAL_METRIC_KIND,
+        "start_price_point": dict(start_price_point),
+        "end_price_point": dict(end_price_point),
+        "security_return": None,
+        "authority_refs": list(dict.fromkeys(
+            list(start_price_point.get("authority_refs", []))
+            + list(end_price_point.get("authority_refs", []))
+        )),
+        "reason_codes": [reason],
+    }
+
+
+def build_security_close_to_close_counterfactual(
+    start_price_point: Mapping[str, Any],
+    end_price_point: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build the pure CF1 security close-to-close outcome.
+
+    The inputs are already-proven read-only authority results.  This function
+    does not load data, read a clock, infer a session, or accept capital,
+    quantity, fill, slippage, or portfolio fields.
+    """
+    if not isinstance(start_price_point, Mapping) \
+            or not isinstance(end_price_point, Mapping):
+        raise OutcomeValidationError("CF1 price points must be mappings")
+    start_state = start_price_point.get("state")
+    end_state = end_price_point.get("state")
+    if start_state == "ERROR" or end_state == "ERROR":
+        return _counterfactual_failure(
+            state="ERROR",
+            reason="PRICE_POINT_AUTHORITY_ERROR",
+            start_price_point=start_price_point,
+            end_price_point=end_price_point,
+        )
+    if start_state != "USABLE":
+        return _counterfactual_failure(
+            state="NOT_EVALUATED",
+            reason="START_PRICE_POINT_NOT_EVALUATED",
+            start_price_point=start_price_point,
+            end_price_point=end_price_point,
+        )
+    if end_state != "USABLE":
+        return _counterfactual_failure(
+            state="NOT_EVALUATED",
+            reason="END_PRICE_POINT_NOT_EVALUATED",
+            start_price_point=start_price_point,
+            end_price_point=end_price_point,
+        )
+    if start_price_point.get("security_code") != end_price_point.get("security_code"):
+        return _counterfactual_failure(
+            state="ERROR",
+            reason="PRICE_POINT_SECURITY_MISMATCH",
+            start_price_point=start_price_point,
+            end_price_point=end_price_point,
+        )
+    start_trade_date = start_price_point.get("trade_date")
+    end_trade_date = end_price_point.get("trade_date")
+    if type(start_trade_date) is not str or type(end_trade_date) is not str:
+        return _counterfactual_failure(
+            state="NOT_EVALUATED",
+            reason="NO_COMPLETED_TRADE_DATE",
+            start_price_point=start_price_point,
+            end_price_point=end_price_point,
+        )
+    if end_trade_date <= start_trade_date:
+        return _counterfactual_failure(
+            state="NOT_EVALUATED",
+            reason="NO_POST_DECISION_COMPLETED_SESSION",
+            start_price_point=start_price_point,
+            end_price_point=end_price_point,
+        )
+    try:
+        start_close = Decimal(str(start_price_point.get("close")))
+        end_close = Decimal(str(end_price_point.get("close")))
+    except (InvalidOperation, ValueError) as exc:
+        raise OutcomeValidationError("CF1 close is not a finite Decimal") from exc
+    if not start_close.is_finite() or not end_close.is_finite() \
+            or start_close <= 0 or end_close <= 0:
+        raise OutcomeValidationError("CF1 close must be finite and positive")
+    # Freeze the arithmetic locally so ambient precision/rounding cannot
+    # change the deterministic outcome payload or reveal hash.
+    with localcontext(_COUNTERFACTUAL_DECIMAL_CONTEXT):
+        return_value = end_close / start_close - Decimal("1")
+        if not return_value.is_finite():
+            raise OutcomeValidationError("CF1 security return is not finite")
+        return_text = format(return_value, "f")
+    return {
+        "state": "EVALUATED",
+        "metric_kind": COUNTERFACTUAL_METRIC_KIND,
+        "start_price_point": dict(start_price_point),
+        "end_price_point": dict(end_price_point),
+        "security_return": return_text,
+        "authority_refs": list(dict.fromkeys(
+            list(start_price_point.get("authority_refs", []))
+            + list(end_price_point.get("authority_refs", []))
+        )),
+        "reason_codes": [],
+    }
+
+
+def build_decision_time_replay(decision: Mapping[str, Any]) -> dict[str, Any]:
+    """Build an immutable replay envelope from the Frozen Decision only.
+
+    No evaluation time, Trade Ledger row, attribution, price, outcome, or
+    current Thesis/Evidence state is admitted into this pass.
+    """
+    anchor = verify_frozen_decision_witness(decision)
+    snapshot = {
+        key: _deep_unfreeze(decision[key])
+        for key in sorted(SNAPSHOT_KEYS)
+    }
+    envelope: dict[str, Any] = {
+        "schema_version": OL1_SCHEMA_VERSION,
+        "replay_schema_version": "formal_decision_time_replay.v0.1",
+        "decision_id": anchor["decision_id"],
+        "decision_snapshot_hash": anchor["decision_snapshot_hash"],
+        "snapshot": snapshot,
+    }
+    return {
+        **envelope,
+        "replay_hash": _ol1_hash(envelope),
+    }
+
+
+def _ol1_actual_outcome(
+    *,
+    executed_trade_ids: list[str],
+    actual_performance: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not executed_trade_ids:
+        if actual_performance is not None:
+            raise OutcomeValidationError(
+                "无实际执行交易时不得提供绩效计算结果"
+            )
+        return {
+            "state": "NO_ACTUAL_TRADE",
+            "pnl_state": "NOT_APPLICABLE",
+            "trade_count": 0,
+            "trade_ids": [],
+            "pnl": None,
+            "authority_refs": ["tar1:formal_trade_attribution:none"],
+            "reason_codes": ["NO_ACTUAL_TRADE"],
+        }
+
+    if actual_performance is None:
+        return {
+            "state": "EVALUATED",
+            "pnl_state": "NOT_EVALUATED",
+            "trade_count": len(executed_trade_ids),
+            "trade_ids": list(executed_trade_ids),
+            "pnl": None,
+            "authority_refs": ["tar1:formal_trade_attribution", "trade_ledger"],
+            "reason_codes": ["CANONICAL_PNL_NOT_AVAILABLE"],
+        }
+
+    selected_ids = actual_performance.get("selected_trade_ids")
+    if not isinstance(selected_ids, list) or set(selected_ids) != set(executed_trade_ids):
+        raise OutcomeValidationError(
+            "PA1 结果的 selected_trade_ids 必须精确等于 Formal Attribution 执行交易集"
+        )
+    positions = actual_performance.get("positions")
+    if not isinstance(positions, list):
+        raise OutcomeValidationError("PA1 结果 positions 不合法")
+    position = next(
+        (item for item in positions if isinstance(item, Mapping)),
+        None,
+    )
+    if position is None:
+        raise OutcomeValidationError("PA1 结果缺少实际交易 position")
+    measured = (
+        position.get("closed_quantity", 0) > 0
+        or position.get("unrealized_pnl") is not None
+    )
+    return {
+        "state": "EVALUATED",
+        "pnl_state": "MEASURED" if measured else "NOT_EVALUATED",
+        "trade_count": len(executed_trade_ids),
+        "trade_ids": list(executed_trade_ids),
+        "pnl": {
+            "realized_pnl": position.get("realized_pnl"),
+            "unrealized_pnl": position.get("unrealized_pnl"),
+            "cost_basis": position.get("cost_basis"),
+            "total_fees": position.get("total_fees"),
+            "computation_fingerprint": actual_performance.get(
+                "computation_fingerprint"
+            ),
+        },
+        "authority_refs": [
+            "tar1:formal_trade_attribution",
+            "trade_ledger",
+            str(actual_performance.get("authority_version")),
+        ],
+        "reason_codes": [] if measured else ["CANONICAL_PNL_INCOMPLETE"],
+    }
+
+
+def project_ol1_outcome(
+    decision: Mapping[str, Any],
+    *,
+    evaluation_as_of: str,
+    attributions: Iterable[Any],
+    trades: Iterable[Mapping[str, Any]],
+    actual_performance: Mapping[str, Any] | None = None,
+    counterfactual: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project OL1 from immutable authorities and an explicit evaluation time.
+
+    This is deterministic and has no I/O or hidden wall-clock reads.  Runtime
+    owns loading authorities; this function owns the two-pass contract.
+    """
+    anchor = verify_frozen_decision_witness(decision)
+    replay = build_decision_time_replay(decision)
+    evaluation = to_canonical_utc(evaluation_as_of, "evaluation_as_of")
+    evaluation_dt = parse_utc_instant(evaluation, "evaluation_as_of")
+    committed_dt = parse_utc_instant(
+        anchor["decision_committed_at"], "decision.committed_at"
+    )
+    review_dt = parse_utc_instant(anchor["decision_review_by"], "decision.review_by")
+    if evaluation_dt < committed_dt:
+        raise OutcomeValidationError(
+            "evaluation_as_of 不得早于 Frozen Decision committed_at"
+        )
+
+    identity = {
+        "schema_version": OL1_SCHEMA_VERSION,
+        **anchor,
+        "evaluation_as_of": evaluation,
+        "decision_time_replay": replay,
+        "replay_future_fact_leak": False,
+        "process_quality": {
+            "state": PROCESS_QUALITY_STATE,
+            "reason_codes": ["NO_PROCESS_QUALITY_AUTHORITY"],
+        },
+    }
+
+    if evaluation_dt < review_dt:
+        return {
+            **identity,
+            "outcome_status": "PENDING",
+            "due_state": "NOT_DUE",
+            "outcome_reveal": None,
+            "actual_capital_outcome": {
+                "state": "PENDING",
+                "pnl_state": "NOT_APPLICABLE",
+                "trade_count": 0,
+                "trade_ids": [],
+                "pnl": None,
+                "authority_refs": ["frozen_decision:review_by"],
+                "reason_codes": ["REVIEW_NOT_DUE"],
+            },
+            "counterfactual_outcome": {
+                "state": "PENDING",
+                "authority_refs": ["frozen_decision:review_by"],
+                "reason_codes": ["REVIEW_NOT_DUE"],
+            },
+            "reason_codes": ["REVIEW_NOT_DUE"],
+        }
+
+    validated_attributions = validate_attribution_set(attributions)
+    if any(item["decision_id"] != anchor["decision_id"] for item in validated_attributions):
+        raise OutcomeValidationError("Outcome 输入含其他 Frozen Decision 的归属记录")
+    for item in validated_attributions:
+        for field_name in DECISION_ANCHOR_FIELDS:
+            if item[field_name] != anchor[field_name]:
+                raise OutcomeValidationError(
+                    f"Formal Attribution 决策锚不一致：{field_name}"
+                )
+    trade_by_id = {}
+    for trade in trades:
+        if not isinstance(trade, Mapping):
+            raise OutcomeValidationError("Trade Ledger row 必须是 Mapping")
+        trade_id = trade.get("trade_id")
+        if not isinstance(trade_id, str) or trade_id in trade_by_id:
+            raise OutcomeValidationError("Trade Ledger row trade_id 不合法或重复")
+        trade_by_id[trade_id] = dict(trade)
+
+    expected_ids = {item["trade_id"] for item in validated_attributions}
+    if set(trade_by_id) != expected_ids:
+        raise OutcomeValidationError(
+            "Trade Ledger 输入集必须精确覆盖 Formal Attribution 输入集"
+        )
+
+    executed_ids: list[str] = []
+    included_attributions: list[str] = []
+    for attribution in validated_attributions:
+        trade = trade_by_id[attribution["trade_id"]]
+        if trade.get("voided_at") is not None:
+            continue
+        if attribution["trade_execution_status"] in ("full", "partial"):
+            executed_ids.append(attribution["trade_id"])
+        included_attributions.append(attribution["attribution_id"])
+
+    actual = _ol1_actual_outcome(
+        executed_trade_ids=executed_ids,
+        actual_performance=actual_performance,
+    )
+    cf = dict(counterfactual or {
+        "state": "NOT_EVALUATED",
+        "authority_refs": ["ol1:no-authoritative-future-price-path"],
+        "reason_codes": ["NO_AUTHORITATIVE_FUTURE_PRICE"],
+    })
+    if cf.get("state") not in COUNTERFACTUAL_OUTCOME_STATES:
+        raise OutcomeValidationError("counterfactual state 不合法")
+    if "pnl" in cf:
+        raise OutcomeValidationError(
+            "OL1 counterfactual 不接受未由正式价格路径证明的 P&L"
+        )
+
+    reveal_base = {
+        "schema_version": "formal_outcome_reveal.v0.1",
+        "decision_id": anchor["decision_id"],
+        "decision_time_replay_hash": replay["replay_hash"],
+        "evaluation_as_of": evaluation,
+        "attribution_ids": included_attributions,
+        "actual_capital_outcome": actual,
+        "counterfactual_outcome": cf,
+    }
+    reveal = {**reveal_base, "outcome_reveal_hash": _ol1_hash(reveal_base)}
+    reason_codes = list(actual["reason_codes"]) + list(cf.get("reason_codes", []))
+    return {
+        **identity,
+        "outcome_status": "EVALUATED",
+        "due_state": "DUE",
+        "outcome_reveal": reveal,
+        "actual_capital_outcome": actual,
+        "counterfactual_outcome": cf,
+        "reason_codes": list(dict.fromkeys(reason_codes)),
+    }

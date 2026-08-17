@@ -148,6 +148,18 @@ jobs:
           VIBE_RESEARCH_REVIEW_DB: ${{ runner.temp }}/review.db
         run: npm run test:e2e:thesis
 
+      - name: Run Current Thesis activation E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:current-thesis
+
+      - name: Run ET1 evidence effective-time E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:evidence-effective-time
+
   e2e-data-health-smoke:
     name: Playwright data health smoke E2E
     runs-on: ubuntu-latest
@@ -282,6 +294,26 @@ jobs:
         env:
           PYTHON: python
         run: npm run test:e2e:decision-inbox
+      - name: Run HR1 production vertical E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:hr1-vertical
+      - name: Run TAR1 trade attribution reconciliation E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:trade-attribution-reconciliation
+      - name: Run OL1 formal decision outcome E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:formal-outcome
+      - name: Run DCH1 pre-freeze decision challenge E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:decision-challenge
 
   e2e-account-bootstrap:
     name: Playwright account bootstrap E2E

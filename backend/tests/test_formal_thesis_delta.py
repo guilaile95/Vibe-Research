@@ -34,7 +34,7 @@ def _frozen(db):
         "expected_horizon": {"unit": "TRADING_DAY", "min": 5, "max": 20, "anchor": "FREEZE_AT"},
         "free_notes": "note",
     }, 1)
-    svc.confirm_formalization(db, tid)
+    svc.confirm_formalization(db, tid, 2)
     svc.freeze_formalization(db, tid, 2)
     return tid
 
@@ -110,7 +110,7 @@ def test_evidence_snapshot_is_immutable(db):
         "expected_horizon": {"unit": "TRADING_DAY", "min": 5, "max": 20, "anchor": "FREEZE_AT"},
         "free_notes": "note",
     }, 2)
-    svc.confirm_formalization(db, tid)
+    svc.confirm_formalization(db, tid, 3)
     svc.freeze_formalization(db, tid, 3)
     delta = svc.create_thesis_delta(db, tid, "STRENGTHENED", "snapshot", [ev["id"]])
     svc.update_evidence(db, ev["id"], {

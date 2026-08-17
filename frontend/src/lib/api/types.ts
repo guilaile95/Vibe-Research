@@ -1182,6 +1182,51 @@ export interface EvidenceRecord {
   deleted_at: string | null;
 }
 
+export type TemporalAuthorityState = "PROVEN" | "UNPROVEN" | "ERROR";
+export type TemporalAuthorityBasis = "SOURCE_PUBLISHED_AT" | "EVENT_OCCURRED_AT" | "NONE";
+
+export interface EvidenceTemporalAuthority {
+  schema_version: string;
+  evidence_id: string;
+  temporal_state: TemporalAuthorityState;
+  effective_at: string | null;
+  temporal_basis: TemporalAuthorityBasis;
+  authority_refs: string[];
+  reason_codes: string[];
+  ec1_evaluation: "EVALUATED" | "NOT_EVALUATED";
+  ec1_safe_item: {
+    evidence_id: string;
+    scope_kind: string;
+    scope_id: string;
+    effective_at: string | null;
+    retrieved_at: string | null;
+    time_semantics: string;
+    authority_refs: string[];
+  } | null;
+  observed_time_is_not_effective_time: true;
+}
+
+export interface EvidenceTemporalIntakeInput {
+  source_identity?: string | null;
+  event_identity?: string | null;
+  source_published_at?: string | null;
+  event_occurred_at?: string | null;
+  observed_at?: string | null;
+  created_at?: string | null;
+  ingested_at?: string | null;
+}
+
+// P0-CT1：Thesis 交易策略枚举（与 backend THESIS_STRATEGIES / Campaign strategy 逐字一致）
+export type ThesisStrategy = "SHORT" | "SWING" | "MEDIUM";
+
+// P0-CT1：预期持有周期（backend expected_horizon JSON 结构，anchor 恒为 FREEZE_AT）
+export interface ExpectedHorizon {
+  unit: "TRADING_DAY";
+  min: number;
+  max: number;
+  anchor: "FREEZE_AT";
+}
+
 // 投资逻辑（主表字段）
 export interface InvestmentThesis {
   id: string;
@@ -1198,6 +1243,16 @@ export interface InvestmentThesis {
   created_at: string;
   updated_at: string;
   current_revision: number;
+  // P0-CT1 Formal 化生命周期（与 backend 五态 matrix 逐字一致；legacy 行缺失视为 null）
+  formal_state: "draft" | "confirmed" | "frozen" | null;
+  formalization_started_at: string | null;
+  confirmed_at: string | null;
+  frozen_at: string | null;
+  frozen_revision: number | null;
+  archived_at: string | null;
+  strategy: ThesisStrategy | null;
+  expected_horizon: ExpectedHorizon | null;
+  free_notes: string | null;
 }
 
 // 证据关联（含证据快照字段）
@@ -1308,6 +1363,10 @@ export interface ThesisUpdateInput {
   invalidation_conditions: string[];
   expected_revision: number;
   change_summary?: string;
+  // P0-CT1 Formal 字段：仅 draft thesis 由服务端落库；legacy/confirmed/frozen 忽略（后端行为）。
+  strategy?: ThesisStrategy | null;
+  expected_horizon?: ExpectedHorizon | null;
+  free_notes?: string | null;
 }
 
 /** POST /api/thesis/{id}/evidence - 关联证据请求 */
@@ -1323,6 +1382,20 @@ export interface UpdateStanceInput {
   stance: "support" | "oppose" | "neutral";
   expected_revision: number;
   change_summary?: string;
+}
+
+// P0-CT1：Formal 化快照（POST /thesis/{id}/freeze 返回的 vNext flat snapshot：
+// 保留 thesis 嵌套聚合 + 顶层 flat 字段，后端两者为同一内容）。
+export interface FormalThesisSnapshot extends ThesisAggregate {
+  formal_state: "frozen";
+  formalization_started_at: string;
+  confirmed_at: string;
+  frozen_at: string;
+  frozen_revision: number;
+  archived_at: string | null;
+  status: "active" | "archived";
+  current_revision: number;
+  updated_at: string;
 }
 
 
@@ -1411,6 +1484,38 @@ export interface TradeCreateInput {
   };
 }
 
+export interface TradeAttributionCandidate {
+  decision_id: string;
+  campaign_id: string;
+  security_code: string;
+  strategy: string;
+  thesis_id: string;
+  thesis_revision: number;
+  committed_at: string;
+  review_by: string;
+  next_best_action: string;
+  snapshot_hash: string;
+}
+
+export interface TradeReconciliationResult {
+  trade_id: string;
+  security_code: string;
+  execution_status: TradeExecutionStatus;
+  allocation_state: "ALLOCATED" | "UNALLOCATED" | "UNPLANNED" | "NOT_APPLICABLE" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  reconciliation_requirement: "NOT_REQUIRED" | "REQUIRED" | "NOT_APPLICABLE" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  attribution_coverage: "COMPLETE" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  campaign_id: string | null;
+  decision_id: string | null;
+  attribution_id: string | null;
+  origin: "UNPLANNED" | null;
+  pre_trade_decision: "NONE" | null;
+  pre_trade_thesis: "NONE" | null;
+  origin_resolution_id?: string;
+  reason_codes: string[];
+  authority_refs: string[];
+  [key: string]: unknown;
+}
+
 // ---- 决策反馈 (Decision Feedback P1-3) ----
 
 export type DecisionFeedbackAdoptionStatus =
@@ -1449,6 +1554,81 @@ export interface DecisionFeedbackCreateInput {
   adoption_status: DecisionFeedbackAdoptionStatus;
   outcome_status: DecisionFeedbackOutcomeStatus;
   note?: string | null;
+}
+
+// ---- Formal Decision Outcome (P0-OL1) ----
+
+export type FormalOutcomeStatus =
+  | "PENDING"
+  | "EVALUATED"
+  | "UNKNOWN"
+  | "NOT_EVALUATED"
+  | "ERROR";
+
+export interface FormalPricePoint {
+  state?: string;
+  security_code?: string;
+  exchange?: string | null;
+  provider_alias?: string | null;
+  as_of?: string;
+  trade_date?: string | null;
+  close?: number | null;
+  publication_id?: string | null;
+  source_observation_id?: string | null;
+  observation_fetched_at?: string | null;
+  authority_refs?: string[];
+  reason_codes?: string[];
+  [key: string]: unknown;
+}
+
+export interface FormalDecisionOutcome {
+  schema_version: string;
+  decision_id: string;
+  decision_snapshot_hash?: string;
+  security_code?: string;
+  strategy?: string;
+  campaign_id?: string;
+  thesis_id?: string;
+  thesis_revision?: number;
+  decision_committed_at?: string;
+  decision_review_by?: string;
+  decision_next_best_action?: string;
+  evaluation_as_of?: string | null;
+  outcome_status: FormalOutcomeStatus | string;
+  due_state?: string;
+  decision_time_replay?: {
+    replay_hash?: string;
+    snapshot?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+  replay_future_fact_leak?: boolean;
+  outcome_reveal?: Record<string, unknown> | null;
+  actual_capital_outcome?: {
+    state?: string;
+    pnl_state?: string;
+    trade_count?: number;
+    trade_ids?: string[];
+    pnl?: Record<string, unknown> | null;
+    reason_codes?: string[];
+    [key: string]: unknown;
+  };
+  counterfactual_outcome?: {
+    state?: string;
+    metric_kind?: string;
+    start_price_point?: FormalPricePoint;
+    end_price_point?: FormalPricePoint;
+    security_return?: string | number | null;
+    reason_codes?: string[];
+    authority_refs?: string[];
+    [key: string]: unknown;
+  };
+  process_quality?: {
+    state?: string;
+    reason_codes?: string[];
+    [key: string]: unknown;
+  };
+  reason_codes?: string[];
+  [key: string]: unknown;
 }
 
 
@@ -1881,7 +2061,7 @@ export interface DerivedPositionsResult {
 // 前端绝不重新定义 transition graph；下一合法动作只来自 next-actions API。
 // ---------------------------------------------------------------------------
 
-export type CampaignStrategy = "SHORT" | "SWING" | "MEDIUM";
+export type CampaignStrategy = ThesisStrategy;
 
 export type CampaignStatus =
   | "DRAFT"
@@ -1922,6 +2102,49 @@ export interface CampaignNextActions {
   next_actions: CampaignStatus[];
 }
 
+// P0-CT1：Campaign ↔ Formal Thesis 不可变绑定（POST/GET /campaigns/{id}/thesis-binding）
+export interface CampaignThesisBinding {
+  campaign_id: string;
+  thesis_id: string;
+  thesis_revision_at_bind: number;
+  campaign_strategy_at_bind: CampaignStrategy;
+  bound_at: string;
+}
+
+/** GET /api/campaigns/{campaign_id}/current-thesis 只读投影中的 binding audit */
+export interface CampaignThesisBindingAudit {
+  thesis_revision_at_bind: number;
+  campaign_strategy_at_bind: CampaignStrategy;
+  bound_at: string;
+}
+
+/** 投影未就绪（已绑定但 thesis 未冻结）：只给 audit facts，不伪造 Formal Original */
+export interface CurrentThesisNotReady {
+  campaign_id: string;
+  thesis_id: string;
+  binding: CampaignThesisBindingAudit;
+  formal_state: string | null;
+  frozen_revision: number | null;
+  ready: false;
+  formal_status: "NOT_READY";
+  reason: string;
+}
+
+/** 投影就绪（frozen）：Formal Original（frozen_revision 快照）+ deltas + effective_state */
+export interface CurrentThesisReady {
+  campaign_id: string;
+  thesis_id: string;
+  binding: CampaignThesisBindingAudit;
+  frozen_revision: number;
+  original_snapshot: FormalThesisSnapshot;
+  deltas: unknown[];
+  effective_state: string;
+  ready: true;
+  formal_status: "READY";
+}
+
+export type CampaignCurrentThesis = CurrentThesisNotReady | CurrentThesisReady;
+
 // ---------------------------------------------------------------------------
 // Decision Inbox（P0-CS1）：只读快照，前端只展示 + 调用正式写 API。
 // ---------------------------------------------------------------------------
@@ -1936,6 +2159,11 @@ export interface DecisionInboxHoldingSetupItem {
   as_of: string;
 }
 
+/** P0-HR1：shared Hard Risk contract 的 hard_risk_state（DI1 已输出 4 态）。 */
+export type HardRiskState = "CLEAR" | "CONFIRMED" | "UNKNOWN" | "NOT_EVALUATED";
+/** P0-HR1：shared Hard Risk contract 的 hard_risk_evaluation（O lane 接入后输出）。 */
+export type HardRiskEvaluation = "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+
 export interface DecisionInboxCampaignItem {
   schema_version: string;
   visible_state: string;
@@ -1945,6 +2173,35 @@ export interface DecisionInboxCampaignItem {
   campaign_id: string;
   campaign_status: CampaignStatus;
   as_of: string;
+  /**
+   * P0-HR1：runtime 输出 hard_risk_state（DI1 已输出）。
+   * 缺失 / null → UI fail closed（按未知处理，绝不显示安全）。
+   */
+  hard_risk_state?: HardRiskState | null;
+  /**
+   * P0-HR1：runtime 输出 hard_risk_evaluation（contract 字段）。
+   * 缺失时 fail closed；ERROR 必须明确呈现失败。
+   */
+  hard_risk_evaluation?: HardRiskEvaluation | null;
+  /**
+   * P0-HR1：Hard Risk 专属 reason codes（O lane 输出）。
+   * 绝不使用 item.reason_codes（Campaign-level generic）充当 Hard Risk reasons。
+   */
+  hard_risk_reason_codes?: string[] | null;
+  /**
+   * P0-HR1：Hard Risk 专属 positive-proof authority refs（O lane 输出）。
+   * 绝不使用 item.authority_refs / explainability.authority_refs（generic
+   * projection provenance，可能含 Critical Data / Thesis / Decision）充当
+   * Hard Risk 证明。
+   */
+  hard_risk_authority_refs?: string[] | null;
+  /** P0-DC1 additive RA1 / Formal Decision runtime fields. */
+  formal_thesis_evaluation?: "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  formal_decision_evaluation?: "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  material_change_evaluation?: "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  material_change_reason_codes?: string[];
+  decision_assurance?: Record<string, unknown>;
+  sell_engine?: Record<string, unknown>;
 }
 
 export interface DecisionInboxSnapshot {
@@ -1957,4 +2214,82 @@ export interface DecisionInboxSnapshot {
   campaign_items: DecisionInboxCampaignItem[];
   total_holdings: number;
   total_campaign_items: number;
+}
+
+// ---------------------------------------------------------------------------
+// P0-DC1：Current Thesis → uncommitted Decision Proposal → explicit Freeze
+// ---------------------------------------------------------------------------
+
+export interface DecisionProposalProjection {
+  schema_version: string;
+  proposal_status: "UNCOMMITTED";
+  constraint_evaluation: "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  security_code: string;
+  strategy: CampaignStrategy;
+  campaign_id: string;
+  thesis_id: string;
+  thesis_revision: number;
+  as_of: string;
+  asset_view: Record<string, unknown>;
+  trade_view: Record<string, unknown>;
+  portfolio_view: Record<string, unknown>;
+  view_provenance: Record<string, unknown>;
+  next_best_action: string;
+  action_envelope: Record<string, unknown>;
+  maintain_conditions: string[];
+  upgrade_conditions: string[];
+  downgrade_conditions: string[];
+  invalidation_conditions: string[];
+  authority_facts: Record<string, unknown>;
+  authority_refs: string[];
+}
+
+export interface DecisionProposalCommitFields {
+  review_by: string;
+  key_assumptions: unknown[];
+  event_invalidation_conditions: unknown[];
+  strategy_horizon: string;
+}
+
+export interface DecisionProposalDraftInput extends DecisionProposalCommitFields {
+  asset_view: Record<string, unknown>;
+  trade_view: Record<string, unknown>;
+  portfolio_view: Record<string, unknown>;
+}
+
+export interface DecisionProposalPreview {
+  schema_version: string;
+  proposal: DecisionProposalProjection;
+  proposal_fingerprint: string;
+  commit_fields: DecisionProposalCommitFields;
+  authority_evaluations: Record<string, unknown>;
+  decision_assurance: Record<string, unknown>;
+  commit_requirements: {
+    user_confirmed: true;
+    expected_proposal_fingerprint: string;
+  };
+}
+
+export interface DecisionProposalCommitResult {
+  schema_version: string;
+  proposal_fingerprint: string;
+  idempotent: boolean;
+  committed: Record<string, unknown>;
+  formal_decision: Record<string, unknown>;
+  critical_data: Record<string, unknown>;
+  decision_assurance: Record<string, unknown>;
+  re_read_required: true;
+}
+
+export interface CommittedDecisionRuntimeRead {
+  schema_version: string;
+  as_of: string;
+  committed: Record<string, unknown>;
+  formal_thesis: Record<string, unknown>;
+  critical_data: Record<string, unknown>;
+  formal_decision: Record<string, unknown>;
+  hard_risk: Record<string, unknown>;
+  material_change: Record<string, unknown>;
+  sell_engine: Record<string, unknown>;
+  decision_assurance: Record<string, unknown>;
 }

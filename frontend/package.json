@@ -13,12 +13,20 @@
     "test:e2e:smoke": "node tests/e2e/stock-data-panel.smoke.browser.mjs",
     "test:e2e:top-risk": "node tests/e2e/top-risk-real.browser.mjs",
     "test:e2e:thesis": "node tests/e2e/evidence-thesis-real.browser.mjs",
+    "test:e2e:current-thesis": "node tests/e2e/current-thesis-activation.browser.mjs",
+    "test:e2e:hard-risk-render": "node tests/e2e/hard-risk-render.browser.mjs",
     "test:e2e:data-health": "node tests/e2e/data-health-real.browser.mjs",
     "test:e2e:bk11-history": "node tests/e2e/bk11-history-real.browser.mjs",
     "test:e2e:decision-evidence": "node tests/e2e/decision-evidence-real.browser.mjs",
     "test:e2e:intel-digest": "node tests/e2e/intel-digest-real.browser.mjs",
     "test:e2e:decision-inbox": "node tests/e2e/decision-inbox.browser.mjs",
-    "test:e2e:account-bootstrap": "node tests/e2e/account-bootstrap.browser.mjs"
+    "test:e2e:account-bootstrap": "node tests/e2e/account-bootstrap.browser.mjs",
+    "test:e2e:hr1-vertical": "node tests/e2e/hr1-production-vertical.browser.mjs",
+    "test:e2e:decision-commit": "node tests/e2e/decision-commit-vertical.browser.mjs",
+    "test:e2e:trade-attribution-reconciliation": "node tests/e2e/trade-attribution-reconciliation.browser.mjs",
+    "test:e2e:formal-outcome": "node tests/e2e/formal-outcome.browser.mjs",
+    "test:e2e:decision-challenge": "node tests/e2e/decision-challenge.browser.mjs",
+    "test:e2e:evidence-effective-time": "node tests/e2e/evidence-effective-time-real.browser.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.0",

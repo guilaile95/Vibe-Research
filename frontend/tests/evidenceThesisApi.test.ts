@@ -145,6 +145,38 @@ test("evidenceGet 路径含 id", async () => {
   assert.equal(r.url, "/api/evidence/ev-1");
 });
 
+test("evidence temporal authority readback uses the dedicated path", async () => {
+  requests.length = 0;
+  mockRules.push({
+    match: (url, method) => method === "GET" && url.includes("/api/evidence/ev-temporal/temporal-authority"),
+    status: 200,
+    body: { data: { evidence_id: "ev-temporal", temporal_state: "UNPROVEN" } },
+  });
+  await api.evidenceTemporalAuthority("ev-temporal");
+  assert.equal(requests.at(-1)?.method, "GET");
+  assert.equal(requests.at(-1)?.url, "/api/evidence/ev-temporal/temporal-authority");
+  mockRules.pop();
+});
+
+test("evidence temporal intake posts factual metadata only", async () => {
+  requests.length = 0;
+  mockRules.push({
+    match: (url, method) => method === "POST" && url.includes("/api/evidence/ev-temporal/temporal-authority"),
+    status: 200,
+    body: { data: { evidence_id: "ev-temporal", temporal_state: "PROVEN" } },
+  });
+  await api.evidenceTemporalIntake("ev-temporal", {
+    source_identity: "wire:1",
+    source_published_at: "2025-01-01T00:00:00.000000Z",
+  });
+  assert.equal(requests.at(-1)?.method, "POST");
+  assert.deepEqual(JSON.parse(requests.at(-1)?.body ?? "{}"), {
+    source_identity: "wire:1",
+    source_published_at: "2025-01-01T00:00:00.000000Z",
+  });
+  mockRules.pop();
+});
+
 test("evidenceUpdate 使用 PUT 且 body 为完整 EvidenceUpdateInput", async () => {
   reset();
   const body = {
@@ -251,6 +283,15 @@ test("thesisUpdate 携带 expected_revision（乐观并发）", async () => {
   assert.equal(r.url, "/api/thesis/th-1");
   const parsed = JSON.parse(r.body as string);
   assert.equal(parsed.expected_revision, 3, "expected_revision 必须随 body 提交");
+});
+
+test("thesisConfirm 携带 expected_revision（确认也必须 CAS）", async () => {
+  reset();
+  await api.thesisConfirm("th-1", 3);
+  const r = lastReq();
+  assert.equal(r.method, "POST");
+  assert.equal(r.url, "/api/thesis/th-1/confirm");
+  assert.deepEqual(JSON.parse(r.body as string), { expected_revision: 3 });
 });
 
 test("thesisArchive 路径含 confirm=true 与 expected_revision（archived 冻结）", async () => {

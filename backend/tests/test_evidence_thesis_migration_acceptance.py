@@ -445,7 +445,7 @@ def test_3_backup_immutable_through_v2_lifecycle(v1_db, env):
         "expected_horizon": {"unit": "TRADING_DAY", "min": 5, "max": 20, "anchor": "FREEZE_AT"},
     })
     assert edited["thesis"]["current_revision"] == 2  # CONTENT bump
-    confirmed = _post(f"/api/thesis/{T1_ID}/confirm", {})
+    confirmed = _post(f"/api/thesis/{T1_ID}/confirm", {"expected_revision": 2})
     assert confirmed["thesis"]["formal_state"] == "confirmed"
     assert confirmed["thesis"]["current_revision"] == 2  # confirm NO bump
     frozen = _post(f"/api/thesis/{T1_ID}/freeze", {"expected_revision": 2})
@@ -498,7 +498,7 @@ def test_4_migrated_legacy_formal_lifecycle(v1_db, env):
     assert _get(f"/api/thesis/{T1_ID}/revisions/2")["revision_kind"] == "CONTENT"
 
     # confirm → NO bump
-    confirmed = _post(f"/api/thesis/{T1_ID}/confirm", {})
+    confirmed = _post(f"/api/thesis/{T1_ID}/confirm", {"expected_revision": 2})
     assert confirmed["thesis"]["formal_state"] == "confirmed"
     assert confirmed["thesis"]["current_revision"] == 2
 

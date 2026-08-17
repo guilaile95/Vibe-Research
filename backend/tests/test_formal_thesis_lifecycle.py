@@ -55,7 +55,7 @@ def _formalized_with_link(db, *, frozen: bool):
         "expected_horizon": {"unit": "TRADING_DAY", "min": 5, "max": 20, "anchor": "FREEZE_AT"},
         "free_notes": "note",
     }, 2)
-    svc.confirm_formalization(db, tid)
+    svc.confirm_formalization(db, tid, 3)
     expected_revision = 3
     if frozen:
         svc.freeze_formalization(db, tid, expected_revision)
@@ -72,7 +72,7 @@ def db(tmp_path):
 
 def test_begin_confirm_freeze_archive_without_revision_bump_on_markers(db):
     tid = _draft(db)
-    assert svc.confirm_formalization(db, tid)["thesis"]["current_revision"] == 2
+    assert svc.confirm_formalization(db, tid, 2)["thesis"]["current_revision"] == 2
     frozen = svc.freeze_formalization(db, tid, 2)
     assert frozen["formal_state"] == "frozen"
     assert frozen["current_revision"] == frozen["frozen_revision"] == 3
@@ -93,9 +93,9 @@ def test_confirm_hard_gate_and_content_lock(db):
     tid = result["thesis"]["id"]
     svc.begin_formalization(db, tid)
     with pytest.raises(svc.ValidationError):
-        svc.confirm_formalization(db, tid)
+        svc.confirm_formalization(db, tid, 1)
     draft_id = _draft(db)
-    svc.confirm_formalization(db, draft_id)
+    svc.confirm_formalization(db, draft_id, 2)
     with pytest.raises(svc.ContentLockedError):
         svc.update_thesis(db, draft_id, {
             "title": "改", "summary": "摘要", "status": "active",
@@ -188,7 +188,7 @@ def test_freeze_preserves_confirmed_evidence_and_rejects_live_drift(db):
         "classification": "fact", "confidence": "high",
     })
     svc.link_evidence(db, tid, evidence["id"], "support", 2)
-    svc.confirm_formalization(db, tid)
+    svc.confirm_formalization(db, tid, 3)
     svc.update_evidence(db, evidence["id"], {
         "evidence_type": "news", "claim": "mutated later", "source_title": "source",
         "source_url": None, "source_date": None, "accessed_at": "2026-01-01T00:00:00+00:00",
@@ -199,7 +199,7 @@ def test_freeze_preserves_confirmed_evidence_and_rejects_live_drift(db):
 
     # Direct live-row drift on a still-confirmed thesis is fail-closed.
     drift_id = _draft(db)
-    svc.confirm_formalization(db, drift_id)
+    svc.confirm_formalization(db, drift_id, 2)
     conn = sqlite3.connect(db)
     conn.execute("UPDATE investment_theses SET strategy='SHORT' WHERE id=?", (drift_id,))
     conn.commit(); conn.close()

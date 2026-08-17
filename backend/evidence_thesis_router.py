@@ -294,10 +294,10 @@ def begin_formalization(thesis_id: str):
 
 
 @router.post("/thesis/{thesis_id}/confirm")
-def confirm_formalization(thesis_id: str):
+def confirm_formalization(thesis_id: str, body: FormalRevisionIn):
     db = _resolve_db()
     try:
-        return {"data": svc.confirm_formalization(db, thesis_id)}
+        return {"data": svc.confirm_formalization(db, thesis_id, body.expected_revision)}
     except Exception as e:
         _raise_service_error(e)
 

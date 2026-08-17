@@ -70,6 +70,8 @@ import type {
   NdjsonStreamResult,
   NdjsonProtocolState,
   EvidenceRecord,
+  EvidenceTemporalAuthority,
+  EvidenceTemporalIntakeInput,
   EvidenceCreateInput,
   EvidenceUpdateInput,
   EvidenceListResult,
@@ -79,6 +81,8 @@ import type {
   TradeExecutionStatus,
   TradeRecord,
   TradeCreateInput,
+  TradeAttributionCandidate,
+  TradeReconciliationResult,
   DecisionFeedbackAdoptionStatus,
   DecisionFeedbackOutcomeStatus,
   DecisionFeedbackRecord,
@@ -90,6 +94,9 @@ import type {
   ThesisDiff,
   LinkEvidenceInput,
   UpdateStanceInput,
+  FormalThesisSnapshot,
+  CampaignThesisBinding,
+  CampaignCurrentThesis,
   DataHealthOverviewResult,
   DataHealthDetailResult,
   DecisionEvidenceDetailResult,
@@ -100,6 +107,7 @@ import type {
   AdoptionSummary,
   OutcomeSummary,
   StockAnalyticsItem,
+  FormalDecisionOutcome,
   AttributionResult,
   AttributionSnapshotSummary,
   AttributionSnapshotListResult,
@@ -112,6 +120,10 @@ import type {
   CampaignTransitionResult,
   CampaignNextActions,
   DecisionInboxSnapshot,
+  DecisionProposalDraftInput,
+  DecisionProposalPreview,
+  DecisionProposalCommitResult,
+  CommittedDecisionRuntimeRead,
 } from "./api/types.ts";
 
 
@@ -697,6 +709,12 @@ export const api = {
     request<EvidenceRecord>(`/evidence/${id}`, "PUT", body),
   evidenceDelete: (id: string) =>
     request<EvidenceRecord>(`/evidence/${id}?confirm=true`, "DELETE"),
+  evidenceTemporalAuthority: (id: string, evaluationAsOf?: string) => {
+    const qs = evaluationAsOf ? `?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}` : "";
+    return get<EvidenceTemporalAuthority>(`/evidence/${encodeURIComponent(id)}/temporal-authority${qs}`);
+  },
+  evidenceTemporalIntake: (id: string, body: EvidenceTemporalIntakeInput) =>
+    request<EvidenceTemporalAuthority>(`/evidence/${encodeURIComponent(id)}/temporal-authority`, "POST", body),
 
   // ---- Thesis ----
   thesisList: (params?: {
@@ -718,6 +736,13 @@ export const api = {
   thesisCreate: (body: ThesisCreateInput) => request<ThesisAggregate>("/thesis", "POST", body),
   thesisGet: (id: string) => get<ThesisAggregate>(`/thesis/${id}`),
   thesisUpdate: (id: string, body: ThesisUpdateInput) => request<ThesisAggregate>(`/thesis/${id}`, "PUT", body),
+  // P0-CT1：Thesis Formal 化（LEGACY→DRAFT→CONFIRMED→FROZEN；端点与 backend 逐字一致）
+  thesisBeginFormalization: (id: string) =>
+    request<ThesisAggregate>(`/thesis/${encodeURIComponent(id)}/begin-formalization`, "POST"),
+  thesisConfirm: (id: string, expected_revision: number) =>
+    request<ThesisAggregate>(`/thesis/${encodeURIComponent(id)}/confirm`, "POST", { expected_revision }),
+  thesisFreeze: (id: string, expected_revision: number) =>
+    request<FormalThesisSnapshot>(`/thesis/${encodeURIComponent(id)}/freeze`, "POST", { expected_revision }),
   thesisArchive: (id: string, expected_revision: number, change_summary?: string) => {
     const q = new URLSearchParams({ confirm: "true", expected_revision: String(expected_revision) });
     if (change_summary) q.set("change_summary", change_summary);
@@ -784,6 +809,14 @@ export const api = {
   createTrade: (body: TradeCreateInput) => request<TradeRecord>("/trades", "POST", body),
   voidTrade: (tradeId: string, reason: string) =>
     request<TradeRecord>(`/trades/${encodeURIComponent(tradeId)}/void`, "POST", { reason }),
+  listTradeAttributionCandidates: (tradeId: string) =>
+    get<TradeAttributionCandidate[]>(`/trades/${encodeURIComponent(tradeId)}/attribution-candidates`),
+  getTradeReconciliation: (tradeId: string) =>
+    get<TradeReconciliationResult>(`/trades/${encodeURIComponent(tradeId)}/reconciliation`),
+  attributeTrade: (tradeId: string, decisionId: string) =>
+    request<{ record: Record<string, unknown>; idempotent: boolean }>(`/trades/${encodeURIComponent(tradeId)}/attribution`, "POST", { decision_id: decisionId }),
+  markTradeUnplanned: (tradeId: string) =>
+    request<{ record: Record<string, unknown>; idempotent: boolean }>(`/trades/${encodeURIComponent(tradeId)}/unplanned`, "POST", { confirm: true }),
 
   // ---- 决策反馈 ----
   listDecisionFeedbacks: (params?: {
@@ -875,6 +908,28 @@ export const api = {
     return getStockAnalytics(params);
   },
 
+  // ---- Formal Decision Outcome (P0-OL1); separate from legacy analytics ----
+  listFormalDecisionOutcomes: (params?: {
+    evaluation_as_of?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.evaluation_as_of) q.set("evaluation_as_of", params.evaluation_as_of);
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return get<FormalDecisionOutcome[]>(`/formal-decision-outcomes${qs ? `?${qs}` : ""}`);
+  },
+  getFormalDecisionOutcome: (decisionId: string, evaluationAsOf?: string) => {
+    const q = new URLSearchParams();
+    if (evaluationAsOf) q.set("evaluation_as_of", evaluationAsOf);
+    const qs = q.toString();
+    return get<FormalDecisionOutcome>(
+      `/formal-decisions/${encodeURIComponent(decisionId)}/outcome${qs ? `?${qs}` : ""}`,
+    );
+  },
+
   // ---- 收益归因 (P2-4B) ----
   getPerformanceAttribution: (params?: { date_from?: string; date_to?: string }) =>
     getPerformanceAttribution(params),
@@ -894,6 +949,31 @@ export const api = {
     transitionCampaign(campaignId, expectedStatus, toStatus),
   getCampaignTransitions: (campaignId: string) => getCampaignTransitions(campaignId),
   getCampaignNextActions: (campaignId: string) => getCampaignNextActions(campaignId),
+  // P0-CT1：Campaign ↔ Formal Thesis 绑定 / Current Thesis 投影
+  bindCampaignThesis: (campaignId: string, thesisId: string) =>
+    bindCampaignThesis(campaignId, thesisId),
+  getCampaignThesisBinding: (campaignId: string) => getCampaignThesisBinding(campaignId),
+  getCampaignCurrentThesis: (campaignId: string) => getCampaignCurrentThesis(campaignId),
+  previewDecisionProposal: (campaignId: string, body: DecisionProposalDraftInput) =>
+    previewDecisionProposal(campaignId, body),
+  commitDecisionProposal: (
+    campaignId: string,
+    body: DecisionProposalDraftInput & {
+      as_of: string;
+      expected_proposal_fingerprint: string;
+      user_confirmed: true;
+      challenge_id?: string;
+    },
+  ) => commitDecisionProposal(campaignId, body),
+  getCommittedDecisionRuntime: (campaignId: string, decisionId: string) =>
+    getCommittedDecisionRuntime(campaignId, decisionId),
+  finalizeDecisionChallenge: (
+    campaignId: string,
+    body: DecisionChallengeFinalizeInput,
+  ) => finalizeDecisionChallenge(campaignId, body),
+  getDecisionChallenge: (challengeId: string) => getDecisionChallenge(challengeId),
+  getDecisionChallengeForProposal: (campaignId: string, proposalFingerprint: string) =>
+    getDecisionChallengeForProposal(campaignId, proposalFingerprint),
   getDecisionInbox: () => getDecisionInbox(),
 };
 
@@ -1176,6 +1256,162 @@ export async function getCampaignNextActions(
 ): Promise<CampaignNextActions> {
   return get<CampaignNextActions>(
     `/campaigns/${encodeURIComponent(campaignId)}/next-actions`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// P0-CT1：Campaign ↔ Formal Thesis 绑定（POST 201）+ Current Thesis 投影（只读）
+// body 只提交 thesis_id；strategy 一致性由 backend 校验，前端不复制语义。
+// ---------------------------------------------------------------------------
+
+export async function bindCampaignThesis(
+  campaignId: string,
+  thesisId: string,
+): Promise<CampaignThesisBinding> {
+  return request<CampaignThesisBinding>(
+    `/campaigns/${encodeURIComponent(campaignId)}/thesis-binding`,
+    "POST",
+    { thesis_id: thesisId },
+  );
+}
+
+export async function getCampaignThesisBinding(
+  campaignId: string,
+): Promise<CampaignThesisBinding> {
+  return get<CampaignThesisBinding>(
+    `/campaigns/${encodeURIComponent(campaignId)}/thesis-binding`,
+  );
+}
+
+export async function getCampaignCurrentThesis(
+  campaignId: string,
+): Promise<CampaignCurrentThesis> {
+  return get<CampaignCurrentThesis>(
+    `/campaigns/${encodeURIComponent(campaignId)}/current-thesis`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// P0-DC1：Decision Proposal（Preview 只读；Commit 显式确认；提交后重读）
+// ---------------------------------------------------------------------------
+
+export async function previewDecisionProposal(
+  campaignId: string,
+  body: DecisionProposalDraftInput,
+): Promise<DecisionProposalPreview> {
+  return request<DecisionProposalPreview>(
+    `/campaigns/${encodeURIComponent(campaignId)}/decision-proposal/preview`,
+    "POST",
+    body,
+  );
+}
+
+export async function commitDecisionProposal(
+  campaignId: string,
+  body: DecisionProposalDraftInput & {
+    as_of: string;
+    expected_proposal_fingerprint: string;
+    user_confirmed: true;
+    challenge_id?: string;
+  },
+): Promise<DecisionProposalCommitResult> {
+  return request<DecisionProposalCommitResult>(
+    `/campaigns/${encodeURIComponent(campaignId)}/decision-proposal/commit`,
+    "POST",
+    body,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// P0-DCH1：optional pre-freeze Decision Challenge packet
+// Types stay local to this file to avoid fan-in on api/types.ts.
+// ---------------------------------------------------------------------------
+
+export const DECISION_CHALLENGE_DIMENSIONS = [
+  "STRONGEST_SUPPORTING_EVIDENCE",
+  "STRONGEST_OPPOSING_EVIDENCE",
+  "PRE_MORTEM",
+  "INVALIDATION_FACTS",
+] as const;
+
+export type DecisionChallengeDimensionName = (typeof DECISION_CHALLENGE_DIMENSIONS)[number];
+
+export interface DecisionChallengeDimensionInput {
+  status: "ANSWERED" | "UNKNOWN";
+  text?: string;
+}
+
+export interface DecisionChallengeFinalizeInput extends DecisionProposalDraftInput {
+  expected_proposal_fingerprint: string;
+  as_of: string;
+  user_confirmed: true;
+  dimensions: Record<DecisionChallengeDimensionName, DecisionChallengeDimensionInput>;
+}
+
+export interface DecisionChallengePacket {
+  challenge_id: string;
+  packet_state: string;
+  challenge_evaluation: string;
+  challenge_coverage_state: string;
+  decision_quality: "NOT_EVALUATED";
+  two_pass_semantic_independence_verified: "NO";
+  proposal_fingerprint: string;
+  proposal_as_of: string;
+  finalized_at: string;
+  first_pass_ref: string;
+  first_pass_at: string;
+  second_pass_ref: string;
+  second_pass_at: string;
+  two_pass_state: string;
+  source_refs?: string[];
+  [key: string]: unknown;
+}
+
+export interface DecisionChallengeRead {
+  schema_version: string;
+  challenge: DecisionChallengePacket;
+  decision_quality: "NOT_EVALUATED";
+}
+
+export async function finalizeDecisionChallenge(
+  campaignId: string,
+  body: DecisionChallengeFinalizeInput,
+): Promise<DecisionChallengeRead> {
+  return request<DecisionChallengeRead>(
+    `/campaigns/${encodeURIComponent(campaignId)}/decision-challenge/finalize`,
+    "POST",
+    body,
+  );
+}
+
+export async function getDecisionChallenge(
+  challengeId: string,
+): Promise<DecisionChallengeRead> {
+  return get<DecisionChallengeRead>(
+    `/decision-challenges/${encodeURIComponent(challengeId)}`,
+  );
+}
+
+export async function getDecisionChallengeForProposal(
+  campaignId: string,
+  proposalFingerprint: string,
+): Promise<DecisionChallengeRead | null> {
+  try {
+    return await get<DecisionChallengeRead>(
+      `/campaigns/${encodeURIComponent(campaignId)}/decision-challenge?proposal_fingerprint=${encodeURIComponent(proposalFingerprint)}`,
+    );
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export async function getCommittedDecisionRuntime(
+  campaignId: string,
+  decisionId: string,
+): Promise<CommittedDecisionRuntimeRead> {
+  return get<CommittedDecisionRuntimeRead>(
+    `/campaigns/${encodeURIComponent(campaignId)}/decision-proposal/committed/${encodeURIComponent(decisionId)}`,
   );
 }
 

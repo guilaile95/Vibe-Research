@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   PlusCircle,
   AlertCircle,
@@ -46,7 +47,39 @@ import type {
   BootstrapPositionRow,
 } from "@/lib/positionBootstrap";
 import { CampaignLifecycleCard } from "@/components/campaign/CampaignLifecycleCard";
+import { CampaignThesisActivationCard } from "@/components/campaign/CampaignThesisActivationCard";
+import { HardRiskPanel } from "@/components/campaign/HardRiskPanel";
 import { PageHeader } from "@/components/ui/PageHeader";
+
+function DecisionCommitInboxStatus({
+  campaignId,
+  evaluation,
+}: {
+  campaignId: string;
+  evaluation: string | null | undefined;
+}) {
+  if (!evaluation) return null;
+  return (
+    <div
+      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-background/35 p-3 text-xs"
+      data-formal-decision-inbox-evaluation={evaluation}
+    >
+      <div>
+        <p className="font-medium">Formal Decision</p>
+        <p className="mt-0.5 text-muted-foreground">
+          当前 backend Decision Inbox snapshot：<span className="font-mono">{evaluation}</span>
+          {evaluation === "EVALUATED" ? "（已读取适用的 Frozen Decision）" : "（不代表可执行建议）"}
+        </p>
+      </div>
+      <Link
+        to={`/campaigns/${encodeURIComponent(campaignId)}/decision-proposal`}
+        className="text-primary hover:underline"
+      >
+        打开 Formal Decision Review →
+      </Link>
+    </div>
+  );
+}
 
 /** 创建表单：security_code 固定自 holding，strategy 必选，显式确认 DRAFT。 */
 function CreateCampaignForm({
@@ -580,8 +613,10 @@ export default function DecisionInbox() {
   const [nextActions, setNextActions] = useState<Record<string, CampaignNextActions | null>>({});
   const [creatingFor, setCreatingFor] = useState<string | null>(null);
   const [formGeneration, setFormGeneration] = useState(0);
+  const [thesisReloadEpoch, setThesisReloadEpoch] = useState(0);
 
   const refresh = useCallback(async () => {
+    setThesisReloadEpoch((epoch) => epoch + 1);
     setLoadError("");
     try {
       const snap = await api.getDecisionInbox();
@@ -762,16 +797,23 @@ export default function DecisionInbox() {
                 </p>
               </div>
               {setupCampaigns.map((campaign) => (
-                <CampaignLifecycleCard
-                  key={campaign.campaign_id}
-                  campaignId={campaign.campaign_id}
-                  securityCode={campaign.security_code}
-                  strategy={campaign.strategy}
-                  status={campaign.status}
-                  nextActions={nextActions[campaign.campaign_id] ?? null}
-                  setupContext
-                  onChanged={() => void refresh()}
-                />
+                <div key={campaign.campaign_id} className="space-y-2">
+                  <CampaignLifecycleCard
+                    campaignId={campaign.campaign_id}
+                    securityCode={campaign.security_code}
+                    strategy={campaign.strategy}
+                    status={campaign.status}
+                    nextActions={nextActions[campaign.campaign_id] ?? null}
+                    setupContext
+                    onChanged={() => void refresh()}
+                  />
+                  <CampaignThesisActivationCard
+                    campaignId={campaign.campaign_id}
+                    securityCode={campaign.security_code}
+                    strategy={campaign.strategy}
+                    reloadEpoch={thesisReloadEpoch}
+                  />
+                </div>
               ))}
             </section>
           )}
@@ -785,20 +827,32 @@ export default function DecisionInbox() {
                 </p>
               </div>
               {snapshot.campaign_items.map((item) => (
-                <CampaignLifecycleCard
-                  key={item.campaign_id}
-                  campaignId={item.campaign_id}
-                  securityCode={item.security_code}
-                  strategy={item.strategy}
-                  status={item.campaign_status}
-                  nextActions={nextActions[item.campaign_id] ?? null}
-                  setupContext={false}
-                  decision={{
-                    visible_state: item.visible_state,
-                    reason_codes: item.reason_codes,
-                  }}
-                  onChanged={() => void refresh()}
-                />
+                <div key={item.campaign_id} className="space-y-2">
+                  <CampaignLifecycleCard
+                    campaignId={item.campaign_id}
+                    securityCode={item.security_code}
+                    strategy={item.strategy}
+                    status={item.campaign_status}
+                    nextActions={nextActions[item.campaign_id] ?? null}
+                    setupContext={false}
+                    decision={{
+                      visible_state: item.visible_state,
+                      reason_codes: item.reason_codes,
+                    }}
+                    onChanged={() => void refresh()}
+                  />
+                  <HardRiskPanel item={item} />
+                  <DecisionCommitInboxStatus
+                    campaignId={item.campaign_id}
+                    evaluation={item.formal_decision_evaluation}
+                  />
+                  <CampaignThesisActivationCard
+                    campaignId={item.campaign_id}
+                    securityCode={item.security_code}
+                    strategy={item.strategy}
+                    reloadEpoch={thesisReloadEpoch}
+                  />
+                </div>
               ))}
             </section>
           )}

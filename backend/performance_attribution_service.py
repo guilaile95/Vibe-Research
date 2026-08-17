@@ -100,6 +100,7 @@ def _load_trades(
     db_path: Path,
     date_from: str | None,
     date_to: str | None,
+    trade_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """读取计算投影（精确输入行集）。
 
@@ -114,8 +115,24 @@ def _load_trades(
     """
     if not db_path.is_file():
         return []
+    requested_ids: set[str] | None = None
+    if trade_ids is not None:
+        requested_ids = set()
+        if not trade_ids:
+            return []
+        for index, trade_id in enumerate(trade_ids):
+            requested_ids.add(_validate_trade_id(trade_id, index))
+        if len(requested_ids) != len(trade_ids):
+            raise PerformanceAttributionProvenanceError(
+                "精确交易集含重复 trade_id，拒绝计算"
+            )
+
     sql = _SELECT_TRADES
     params: list[Any] = []
+    if requested_ids is not None:
+        placeholders = ",".join("?" for _ in requested_ids)
+        sql += f" AND trade_id IN ({placeholders})"
+        params.extend(sorted(requested_ids))
     if date_from is not None:
         sql += " AND date(COALESCE(executed_at, created_at)) >= ?"
         params.append(date_from)
@@ -152,10 +169,17 @@ def _load_trades(
     finally:
         conn.close()
     # 来源证明：选中行必须全部携带合法 trade_id（fail closed，不静默跳行）
-    return [
+    validated_rows = [
         {**row, "trade_id": _validate_trade_id(row.get("trade_id"), index)}
         for index, row in enumerate(rows)
     ]
+    if requested_ids is not None and {
+        row["trade_id"] for row in validated_rows
+    } != requested_ids:
+        raise PerformanceAttributionProvenanceError(
+            "精确交易集无法由 Trade Ledger 完整证明"
+        )
+    return validated_rows
 
 
 def _computation_fingerprint(
@@ -184,19 +208,14 @@ def _computation_fingerprint(
     return hashlib.sha256(_deterministic_json(payload).encode("utf-8")).hexdigest()
 
 
-def compute_attribution(
+def _compute_attribution_from_trades(
     *,
+    trades: list[dict[str, Any]],
     date_from: str | None = None,
     date_to: str | None = None,
     price_map: Mapping[str, float] | None = None,
-    trade_db_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Compute deterministic per-stock realized/unrealized PnL from trade ledger."""
-    date_from = _validate_date(date_from, "date_from")
-    date_to = _validate_date(date_to, "date_to")
-
-    db_path = Path(trade_svc.resolve_db_path(trade_db_path))
-    trades = _load_trades(db_path, date_from, date_to)
+    """Compute the existing PA1 algorithm over an already proven exact row set."""
     selected_trade_ids = [row["trade_id"] for row in trades]
 
     states: dict[str, dict[str, Any]] = {}
@@ -332,6 +351,52 @@ def compute_attribution(
         "totals": totals,
         "data_limitations": limitations,
     }
+
+
+def compute_attribution(
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    price_map: Mapping[str, float] | None = None,
+    trade_db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Compute the legacy PA1 result over its normal ledger selection."""
+    date_from = _validate_date(date_from, "date_from")
+    date_to = _validate_date(date_to, "date_to")
+    db_path = Path(trade_svc.resolve_db_path(trade_db_path))
+    trades = _load_trades(db_path, date_from, date_to)
+    return _compute_attribution_from_trades(
+        trades=trades,
+        date_from=date_from,
+        date_to=date_to,
+        price_map=price_map,
+    )
+
+
+def compute_attribution_for_trade_ids(
+    trade_ids: list[str] | tuple[str, ...],
+    *,
+    price_map: Mapping[str, float] | None = None,
+    trade_db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Reuse PA1 accounting over an exact, caller-proven Trade Ledger set.
+
+    OL1 calls this only after TAR1 attribution and current Trade Ledger rows
+    have been independently validated.  The helper refuses missing, voided,
+    not-executed, or duplicate IDs instead of silently shrinking the set.
+    """
+    if not isinstance(trade_ids, (list, tuple)):
+        raise PerformanceAttributionProvenanceError(
+            "精确交易集必须是 list 或 tuple"
+        )
+    db_path = Path(trade_svc.resolve_db_path(trade_db_path))
+    trades = _load_trades(db_path, None, None, list(trade_ids))
+    return _compute_attribution_from_trades(
+        trades=trades,
+        date_from=None,
+        date_to=None,
+        price_map=price_map,
+    )
 
 
 def save_attribution_snapshot(

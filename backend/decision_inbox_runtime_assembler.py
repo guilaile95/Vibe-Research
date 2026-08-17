@@ -16,10 +16,15 @@
       → DI1 CampaignFacts → project_campaign
 
 本 Slice 明确不产生 false clean：
-- Hard Risk / Material Change 无授权 authority → 恒 NOT_EVALUATED。
-- Formal Thesis / Frozen Decision 仅以 current-only 结构事实读取；
-  RA1 的 FORMAL_THESIS / FORMAL_DECISION 维度无 same-as-of 适用性 authority，
-  因此保持 NOT_EVALUATED（读取过记录 ≠ 完成评估）。
+- Hard Risk 走 P0-HR1 port：identity exact + literal same-as-of 校验后透传给
+  RA1 / DI1；C 的 production evaluator 未完成时，production 默认端口显式返回
+  NOT_EVALUATED（无 authority 不声称已评估），integration 阶段注入 fake port
+  证明全链语义。
+- Material Change 在 DC1 production path 由 approved C projection 评估；
+  没有历史 Frozen Decision boundary 时保持 NOT_EVALUATED。
+- Formal Thesis / Frozen Decision 在 DC1 production path 使用 same-as-of
+  适用性评估；读取过记录 ≠ 完成评估。旧的注入式 current-only fixture
+  没有 Formal Original snapshot 时保持 NOT_EVALUATED。
 - capability NOT_EVALUATED 仍是合法结果（数据缺失 / applicability 未解决 /
   未到评估时点），绝不为了灯变绿强制 USABLE。
 
@@ -31,28 +36,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import os
-from pathlib import Path
+import copy
 from typing import Any, Callable, Mapping
 
 import campaign_service
-import critical_data_dependency_policy as dda
-import critical_data_disclosures_adapter as disclosures_adapter
-import critical_data_financials_adapter as financials_adapter
-import critical_data_market_sector_adapter as market_sector_adapter
-import critical_data_price_reference_adapter as price_adapter
+import campaign_critical_data_runtime as cdr
 import decision_assurance_projection as ra
+import decision_commit_runtime as dc_runtime
 import decision_inbox_projection as di
 import formal_thesis_projection as thesis_projection
 import frozen_decision_service as frozen_service
+import hard_risk_contract as hr
+import hard_risk_current_thesis_adapter as thesis_hr_adapter
+import hard_risk_runtime as hr_runtime
 import holdings_campaign_composition as composition
-from campaign_critical_data_projection import project_campaign_critical_data
-from fact_lake_store import FactLake, open_existing_fact_lake
-from security_exchange_policy import POLICY_VERSION_V01 as SER_POLICY_VERSION
+from fact_lake_store import FactLake
 
 
 SCHEMA_VERSION = "decision_inbox_runtime.v0.1"
-DDA_POLICY_VERSION = dda.POLICY_VERSION_V01
+DDA_POLICY_VERSION = cdr.DDA_POLICY_VERSION
 
 _FACT_LAKE_ROOT_ENV = "VR_FACT_LAKE_ROOT"
 _FACT_LAKE_CONTROL_FILE = "fact_lake_control.sqlite3"
@@ -86,133 +88,12 @@ def _parse_utc_instant(value: str, field: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def _not_evaluated_result(dependency_id: str, as_of: str) -> dict[str, Any]:
-    return {
-        "dependency_id": dependency_id,
-        "state": "NOT_EVALUATED",
-        "as_of": as_of,
-        "authority_refs": [],
-    }
-
-
-def _error_result(dependency_id: str, as_of: str) -> dict[str, Any]:
-    return {
-        "dependency_id": dependency_id,
-        "state": "ERROR",
-        "as_of": as_of,
-        "authority_refs": [],
-    }
-
-
-# ---------------------------------------------------------------------------
-# 生产默认 ports（全部只读）
-# ---------------------------------------------------------------------------
-
-def _production_lake_provider() -> FactLake | None:
-    """返回 readonly Fact Lake；根未配置或不存在 → None（价格未评估）。"""
-    raw = os.environ.get(_FACT_LAKE_ROOT_ENV, "").strip()
-    if not raw:
-        return None
-    root = Path(raw)
-    if not (root / _FACT_LAKE_CONTROL_FILE).exists():
-        return None
-    return open_existing_fact_lake(root, readonly=True)
-
-
-def _production_price_evaluator(
-    lake: FactLake, definition: Mapping[str, Any]
-) -> dict[str, Any]:
-    return price_adapter.evaluate_price_reference_capability(
-        lake=lake,
-        security_code=definition["security_code"],
-        campaign_id=definition["campaign_id"],
-        as_of=definition["as_of"],
-        security_exchange_policy_version=SER_POLICY_VERSION,
-    )
-
-
-def _record_observation_event(
-    source_id: str, event: str
-) -> None:
-    """在业务 observation boundary 更新既有 Data Health event（best effort）。
-
-    event: SUCCESS / PARTIAL / FAILURE。业务已成功使用后不得仍显示
-    SOURCE_NOT_INITIALIZED。写入副作用只在此 production wrapper 层，
-    绝不进入 pure evaluation core；上报失败绝不破坏 capability 评估。
-    """
-    try:
-        import data_health_event_store as event_store
-
-        if event == "FAILURE":
-            event_store.safe_call(
-                event_store.record_failure, source_id, "SOURCE_UNAVAILABLE"
-            )
-        elif event == "PARTIAL":
-            event_store.safe_call(event_store.record_partial, source_id)
-        else:
-            event_store.safe_call(event_store.record_success, source_id)
-    except Exception:
-        pass
-
-
-def _production_market_sector_evaluator(
-    lake: FactLake | None, definition: Mapping[str, Any]
-) -> dict[str, Any]:
-    result = market_sector_adapter.evaluate_market_sector_capability(
-        security_code=definition["security_code"],
-        campaign_id=definition["campaign_id"],
-        as_of=definition["as_of"],
-    )
-    # 业务 observation boundary：真实读取后更新 sector_research 健康事件
-    # （success / partial / failure 分别记录真实 observation）
-    state = result["state"]
-    if state == "ERROR":
-        _record_observation_event("sector_research", "FAILURE")
-    elif state == "USABLE":
-        _record_observation_event("sector_research", "SUCCESS")
-    else:
-        _record_observation_event("sector_research", "PARTIAL")
-    return result
-
-
-def _production_disclosures_evaluator(
-    lake: FactLake | None, definition: Mapping[str, Any]
-) -> dict[str, Any]:
-    result = disclosures_adapter.evaluate_disclosures_capability(
-        security_code=definition["security_code"],
-        campaign_id=definition["campaign_id"],
-        as_of=definition["as_of"],
-    )
-    # 业务 observation boundary：真实读取后更新 announcements 健康事件
-    state = result["state"]
-    if state == "ERROR":
-        _record_observation_event("announcements", "FAILURE")
-    elif state == "UNKNOWN":
-        _record_observation_event("announcements", "PARTIAL")
-    else:
-        _record_observation_event("announcements", "SUCCESS")
-    return result
-
-
-def _production_financials_evaluator(
-    lake: FactLake | None, definition: Mapping[str, Any]
-) -> dict[str, Any]:
-    result = financials_adapter.evaluate_financials_capability(
-        security_code=definition["security_code"],
-        campaign_id=definition["campaign_id"],
-        as_of=definition["as_of"],
-    )
-    # 业务 observation boundary：真实读取后更新 financials 健康事件。
-    # NOT_EVALUATED（report-period applicability 未解决）代表业务读取成功
-    # 且拿到数据 → SUCCESS 口径，与 /api/financials 既有上报一致。
-    state = result["state"]
-    if state == "ERROR":
-        _record_observation_event("financials", "FAILURE")
-    elif state == "UNKNOWN":
-        _record_observation_event("financials", "PARTIAL")
-    else:
-        _record_observation_event("financials", "SUCCESS")
-    return result
+_production_lake_provider = cdr.production_lake_provider
+_production_price_evaluator = cdr.production_price_evaluator
+_record_observation_event = cdr.record_observation_event
+_production_market_sector_evaluator = cdr.production_market_sector_evaluator
+_production_disclosures_evaluator = cdr.production_disclosures_evaluator
+_production_financials_evaluator = cdr.production_financials_evaluator
 
 
 def _production_frozen_decisions_reader(
@@ -235,8 +116,37 @@ def _production_frozen_decisions_reader(
             )
 
 
-CapabilityEvaluator = Callable[
-    [FactLake | None, Mapping[str, Any]], Mapping[str, Any]
+def _production_hard_risk_evaluator(
+    definition: Mapping[str, Any],
+    campaign: Mapping[str, Any],
+    current_thesis_projection: Mapping[str, Any] | None,
+) -> Mapping[str, Any]:
+    """P0-HR1 production Hard Risk 端口：Current Thesis authority → C runtime。
+
+    - Current Thesis 已在 assembler 内 single-read，本端口不再自行读取。
+    - 只经 thesis_hr_adapter 做 shape adaptation（补 schema_version /
+      strategy / terminal），最终 state 由 hard_risk_runtime 决定。
+    - 未绑定（projection=None）→ C 返回 NOT_EVALUATED（fail closed）。
+    - v0.1 无 CLEAR authority：C 永不输出 CLEAR。
+    """
+    envelope = thesis_hr_adapter.build_current_thesis_envelope(
+        campaign=campaign,
+        as_of=definition["as_of"],
+        current_thesis_projection=current_thesis_projection,
+    )
+    return hr_runtime.evaluate_hard_risk_mapping(
+        campaign_id=campaign["campaign_id"],
+        campaign=campaign,
+        as_of=definition["as_of"],
+        formal_thesis_projection=envelope,
+    )
+
+
+CapabilityEvaluator = cdr.CapabilityEvaluator
+
+HardRiskEvaluator = Callable[
+    [Mapping[str, Any], Mapping[str, Any], Mapping[str, Any] | None],
+    Mapping[str, Any],
 ]
 
 
@@ -248,6 +158,11 @@ class RuntimePorts:
     price_reference 读 Fact Lake；market_sector / disclosures / financials
     走既有真实业务读取路径。NOT_EVALUATED 仍是合法结果（数据缺失 /
     applicability 未解决 / 未到评估时点），绝不强制 USABLE。
+
+    hard_risk_evaluator（P0-HR1）接收 definition（DDA 展开的 Campaign 上下文）、
+    真实 Campaign record、以及同一 snapshot 内 single-read 的 Current Thesis
+    projection，返回 hard_risk_contract 契约结果；production 默认经 Current
+    Thesis adapter 绑定 hard_risk_runtime（C core），未绑定时 NOT_EVALUATED。
     """
 
     composition_reader: Callable[[], Mapping[str, Any]]
@@ -262,6 +177,7 @@ class RuntimePorts:
     financials_evaluator: CapabilityEvaluator = (
         _production_financials_evaluator
     )
+    hard_risk_evaluator: HardRiskEvaluator = _production_hard_risk_evaluator
     thesis_reader: Callable[[str], Mapping[str, Any]] = (
         thesis_projection.project_current_thesis
     )
@@ -273,7 +189,7 @@ class RuntimePorts:
 
 PRODUCTION_PORTS = RuntimePorts(
     composition_reader=composition.assemble_holdings_campaign_composition,
-    dependency_resolver=dda.resolve_strategy_dependencies,
+    dependency_resolver=cdr.PRODUCTION_PORTS.dependency_resolver,
 )
 
 
@@ -321,6 +237,46 @@ def _validate_capability_result(
     return result
 
 
+def _evaluate_hard_risk(
+    ports: RuntimePorts,
+    definition: Mapping[str, Any],
+    campaign: Mapping[str, Any],
+    current_thesis_projection: Mapping[str, Any] | None,
+) -> hr.HardRiskEvaluation:
+    """调用 HR1 port 并执行 identity / as_of / contract 三闸校验（fail closed）。
+
+    - evaluator 自身异常（IO / 网络 / 编程错误）→ 整体 fail closed（500）。
+      ERROR 状态的契约表达由 evaluator 显式返回 UNKNOWN/ERROR 结果承担，
+      组装层不猜 C 的异常类型（唯一共享界面是 hard_risk_contract）。
+    - 返回结果违反 shared contract（非法 state/evaluation pair、缺 authority
+      refs、非法 identity 格式、额外字段等）→ integrity 错误（500）。
+    - security_code / strategy / campaign_id 与调用方不逐字一致，或 as_of 非
+      literal 相同 → integrity 错误（与 DDA/CCD/RA 同款校验，防跨 Campaign
+      串结果与跨时点复用）。
+    """
+    try:
+        raw = ports.hard_risk_evaluator(
+            definition, campaign, current_thesis_projection
+        )
+    except Exception as exc:
+        raise DecisionInboxRuntimeError(
+            f"Hard Risk evaluator 失败（campaign {definition['campaign_id']}）"
+        ) from exc
+    try:
+        normalized = hr.hard_risk_evaluation_from_mapping(raw)
+    except hr.HardRiskContractError as exc:
+        raise DecisionInboxRuntimeIntegrityError(
+            f"Hard Risk 结果违反 shared contract: {exc}"
+        ) from exc
+    _assert_same_identity(
+        normalized.to_dict(), definition, label="Hard Risk"
+    )
+    _assert_literal_as_of(
+        normalized.as_of, definition["as_of"], label="Hard Risk"
+    )
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Thesis / Frozen Decision 归一化（current-only 结构事实）
 # ---------------------------------------------------------------------------
@@ -328,18 +284,22 @@ def _validate_capability_result(
 def _thesis_normalized(
     thesis_reader: Callable[[str], Mapping[str, Any]],
     campaign_id: str,
-) -> tuple[str, str]:
-    """返回 (thesis_state, current_thesis)。
+) -> tuple[str, str, Mapping[str, Any] | None]:
+    """返回 (thesis_state, current_thesis, projection)。
 
-    - 未绑定 → (MISSING, UNKNOWN)
-    - 未冻结 → (NOT_FROZEN, UNKNOWN)
-    - 其他 NOT_READY → (NOT_READY, UNKNOWN)
-    - READY → (READY, effective_state)
+    Current Thesis projection 在本函数内 single-read 一次：同一 immutable
+    result 同时用于 DI1 归一化与 Hard Risk 生产评估，杜绝 snapshot race
+    （HR 读版本 A、DI1 读版本 B）。
+
+    - 未绑定 → (MISSING, UNKNOWN, None)
+    - 未冻结 → (NOT_FROZEN, UNKNOWN, projection)
+    - 其他 NOT_READY → (NOT_READY, UNKNOWN, projection)
+    - READY → (READY, effective_state, projection)
     """
     try:
         projection = thesis_reader(campaign_id)
     except campaign_service.ThesisBindingNotFoundError:
-        return "MISSING", "UNKNOWN"
+        return "MISSING", "UNKNOWN", None
     except (
         thesis_projection.CurrentThesisProjectionError,
         campaign_service.CampaignThesisStrategyConflictError,
@@ -351,14 +311,14 @@ def _thesis_normalized(
     if projection.get("formal_status") != "READY":
         reason = projection.get("reason")
         if reason == "NOT_FROZEN":
-            return "NOT_FROZEN", "UNKNOWN"
-        return "NOT_READY", "UNKNOWN"
+            return "NOT_FROZEN", "UNKNOWN", projection
+        return "NOT_READY", "UNKNOWN", projection
     effective = projection.get("effective_state")
     if not isinstance(effective, str) or effective not in di.THESIS_STATES:
         raise DecisionInboxRuntimeIntegrityError(
             "thesis effective_state 不是合法 DI1 枚举"
         )
-    return "READY", effective
+    return "READY", effective, projection
 
 
 def _latest_frozen_decision(
@@ -429,51 +389,10 @@ def _capability_results(
     lake: FactLake | None,
     ports: RuntimePorts,
 ) -> list[Mapping[str, Any]]:
-    """per-capability 真实 evaluator 分发（P0-DS1）。
+    """Compatibility wrapper for the shared Critical Data runtime."""
 
-    price_reference 依赖 Fact Lake（lake 未配置 → NOT_EVALUATED）；
-    market_sector / disclosures / financials 走既有真实业务读取路径
-    （lake 无关）。NOT_EVALUATED 仍是合法结果；provider 异常 → ERROR。
-    """
-    results: list[Mapping[str, Any]] = []
-    for dependency_id in definition.get("required_dependency_ids", []):
-        if not isinstance(dependency_id, str) or not dependency_id:
-            raise DecisionInboxRuntimeIntegrityError(
-                "required_dependency_ids 含非法元素"
-            )
-        try:
-            if dependency_id == price_adapter.DEPENDENCY_ID:
-                if lake is None:
-                    result = _not_evaluated_result(
-                        dependency_id, definition["as_of"]
-                    )
-                else:
-                    result = ports.price_evaluator(lake, definition)
-            elif dependency_id == market_sector_adapter.DEPENDENCY_ID:
-                result = ports.market_sector_evaluator(lake, definition)
-            elif dependency_id == disclosures_adapter.DEPENDENCY_ID:
-                result = ports.disclosures_evaluator(lake, definition)
-            elif dependency_id == financials_adapter.DEPENDENCY_ID:
-                result = ports.financials_evaluator(lake, definition)
-            else:
-                raise DecisionInboxRuntimeIntegrityError(
-                    f"未知 capability: {dependency_id}"
-                )
-        except (
-            price_adapter.PriceReferenceCapabilityError,
-            market_sector_adapter.MarketSectorCapabilityError,
-            disclosures_adapter.DisclosuresCapabilityError,
-            financials_adapter.FinancialsCapabilityError,
-        ):
-            result = _error_result(dependency_id, definition["as_of"])
-        results.append(
-            _validate_capability_result(
-                result,
-                dependency_id=dependency_id,
-                as_of=definition["as_of"],
-            )
-        )
-    return results
+    shared_ports = cdr.critical_data_ports_from(ports)
+    return list(cdr._capability_results(definition, lake=lake, ports=shared_ports))
 
 
 def _project_campaign_item(
@@ -496,59 +415,131 @@ def _project_campaign_item(
     _assert_same_identity(definition, campaign, label="DDA")
     _assert_literal_as_of(definition["as_of"], as_of, label="DDA")
 
-    results = _capability_results(definition, lake=lake, ports=ports)
-    ccd = _require_mapping(
-        project_campaign_critical_data(
-            security_code=definition["security_code"],
-            strategy=definition["strategy"],
-            campaign_id=definition["campaign_id"],
-            as_of=definition["as_of"],
-            dependency_set_state=definition["dependency_set_state"],
-            dependency_set_authority_refs=definition[
-                "dependency_set_authority_refs"
-            ],
-            required_dependency_ids=definition["required_dependency_ids"],
-            dependency_results=results,
-        ),
-        "CCD projection",
-    )
+    try:
+        ccd = _require_mapping(
+            cdr.project_campaign_critical_data(
+                campaign=campaign,
+                as_of=as_of,
+                ports=cdr.critical_data_ports_from(ports),
+                lake=lake,
+            ),
+            "CCD projection",
+        )
+    except cdr.CriticalDataRuntimeIntegrityError as exc:
+        raise DecisionInboxRuntimeIntegrityError(str(exc)) from exc
     _assert_same_identity(ccd, definition, label="CCD")
     _assert_literal_as_of(ccd["as_of"], as_of, label="CCD")
 
-    assurance = _require_mapping(
-        ra.project_decision_assurance(
-            security_code=ccd["security_code"],
-            strategy=ccd["strategy"],
-            campaign_id=ccd["campaign_id"],
-            # current-only：无 same-as-of 适用性 authority，不得声称已评估
-            formal_thesis_evaluation="NOT_EVALUATED",
-            formal_decision_evaluation="NOT_EVALUATED",
-            hard_risk_evaluation="NOT_EVALUATED",
-            material_change_evaluation="NOT_EVALUATED",
-            critical_data_evaluation=ccd["critical_data_evaluation"],
-            as_of=ccd["as_of"],
-        ),
-        "RA projection",
-    )
-    _assert_same_identity(assurance, ccd, label="RA")
-    _assert_literal_as_of(assurance["as_of"], as_of, label="RA")
-
-    thesis_state, current_thesis = _thesis_normalized(
+    # Current Thesis 只读一次：同一 immutable projection 同时供 Hard Risk
+    # 生产评估与 DI1 归一化，杜绝 snapshot race（HR 读版本 A、DI1 读版本 B）。
+    thesis_state, current_thesis, thesis_projection = _thesis_normalized(
         ports.thesis_reader, campaign["campaign_id"]
     )
-    decisions = ports.frozen_decisions_reader(campaign["campaign_id"])
-    latest_frozen = _latest_frozen_decision(
-        lambda _campaign_id: decisions, campaign["campaign_id"], as_of
+    hard_risk = _evaluate_hard_risk(
+        ports, definition, campaign, thesis_projection
     )
+
+    decisions = ports.frozen_decisions_reader(campaign["campaign_id"])
+    # DC1 consumes the same single-read Current Thesis projection already used
+    # by HR1.  Production READY data always takes the strict DC1 path, so a
+    # malformed/missing Formal Original snapshot fails closed.  A custom
+    # injected fixture may intentionally use the pre-DC1 transport shape
+    # (empty Original snapshot); preserve its current-only compatibility path.
+    original_snapshot = (
+        thesis_projection.get("original_snapshot")
+        if isinstance(thesis_projection, Mapping)
+        else None
+    )
+    dc1_ready_shape = (
+        isinstance(thesis_projection, Mapping)
+        and thesis_projection.get("formal_status") == "READY"
+        and (
+            ports is PRODUCTION_PORTS
+            or (
+                isinstance(original_snapshot, Mapping)
+                and bool(original_snapshot)
+                and (
+                    isinstance(original_snapshot.get("thesis"), Mapping)
+                    or "subject_type" in original_snapshot
+                )
+            )
+        )
+    )
+    dc1_authorities = None
+    if dc1_ready_shape:
+        try:
+            dc1_authorities = dc_runtime.evaluate_authorities(
+                campaign=campaign,
+                as_of=as_of,
+                current_thesis_projection=thesis_projection,
+                frozen_decisions=decisions,
+                critical_data=ccd,
+                evidence_reader=dc_runtime.PRODUCTION_PORTS.evidence_reader,
+                hard_risk=hard_risk,
+            )
+        except dc_runtime.DecisionCommitRuntimeError as exc:
+            raise DecisionInboxRuntimeIntegrityError(
+                "DC1 authority evaluation failed"
+            ) from exc
+
+    if dc1_authorities is None:
+        assurance = _require_mapping(
+            ra.project_decision_assurance(
+                security_code=ccd["security_code"],
+                strategy=ccd["strategy"],
+                campaign_id=ccd["campaign_id"],
+                # current-only / legacy injected shape：无 same-as-of 适用性
+                # authority，不得声称 Formal Thesis / Decision 已评估。
+                formal_thesis_evaluation="NOT_EVALUATED",
+                formal_decision_evaluation="NOT_EVALUATED",
+                hard_risk_evaluation=hard_risk.hard_risk_evaluation,
+                material_change_evaluation="NOT_EVALUATED",
+                critical_data_evaluation=ccd["critical_data_evaluation"],
+                as_of=ccd["as_of"],
+            ),
+            "RA projection",
+        )
+        _assert_same_identity(assurance, ccd, label="RA")
+        _assert_literal_as_of(assurance["as_of"], as_of, label="RA")
+        latest_frozen = _latest_frozen_decision(
+            lambda _campaign_id: decisions, campaign["campaign_id"], as_of
+        )
+        material_state = "NOT_EVALUATED"
+        material_evaluation = "NOT_EVALUATED"
+        material_reason_codes: list[str] = []
+        formal_thesis_evaluation = "NOT_EVALUATED"
+        formal_decision_evaluation = "NOT_EVALUATED"
+        sell_engine_payload = None
+    else:
+        assurance = _require_mapping(
+            dc1_authorities.decision_assurance, "RA projection"
+        )
+        _assert_same_identity(assurance, ccd, label="RA")
+        _assert_literal_as_of(assurance["as_of"], as_of, label="RA")
+        latest_frozen = dc1_authorities.latest_frozen
+        material_state = (
+            dc1_authorities.material_change.material_change_state
+            if dc1_authorities.material_change is not None
+            else "NOT_EVALUATED"
+        )
+        material_evaluation = dc1_authorities.material_change_evaluation
+        material_reason_codes = list(dc1_authorities.material_change_reason_codes)
+        formal_thesis_evaluation = dc1_authorities.formal_thesis_evaluation
+        formal_decision_evaluation = dc1_authorities.formal_decision["evaluation"]
+        sell_engine_payload = dc1_authorities.sell_engine.to_dict()
+
     latest_raw = None
-    if latest_frozen is not None:
+    if latest_frozen is not None and dc1_authorities is None:
         for decision in decisions:
             if decision.get("decision_id") == latest_frozen["decision_id"]:
                 latest_raw = decision
                 break
+    elif dc1_authorities is not None:
+        latest_raw = dc1_authorities.latest_frozen_raw
     confidence = _decision_confidence(latest_frozen, latest_raw)
 
     authority_refs = list(ccd.get("authority_refs", []))
+    authority_refs.extend(hard_risk.authority_refs)
     facts = di.CampaignFacts(
         security_code=campaign["security_code"],
         strategy=campaign["strategy"],
@@ -557,8 +548,8 @@ def _project_campaign_item(
         thesis_state=thesis_state,
         current_thesis=current_thesis,
         latest_frozen_decision=latest_frozen,
-        hard_risk_state="NOT_EVALUATED",
-        material_change_state="NOT_EVALUATED",
+        hard_risk_state=hard_risk.hard_risk_state,
+        material_change_state=material_state,
         critical_data_state=ccd["critical_data_state"],
         critical_data_evaluation=ccd["critical_data_evaluation"],
         decision_confidence=confidence,
@@ -566,7 +557,34 @@ def _project_campaign_item(
         as_of=as_of,
         authority_refs=authority_refs,
     )
-    return di.project_campaign(facts).to_dict()
+    projected = di.project_campaign(facts).to_dict()
+
+    # P0-HR1 O lane：product composition 层暴露 Hard Risk 专属 provenance。
+    # 四个专属字段直接来自已通过 contract validation 的 HardRiskEvaluation；
+    # DI1 的 reason_codes / explainability.authority_refs 是 Campaign-level
+    # generic explainability（含 Critical Data / Thesis / Decision 等多 authority），
+    # 禁止充当 Hard Risk 专属 provenance。DI1 输出的 hard_risk_state 必须与
+    # HardRiskEvaluation 完全一致，否则 fail closed。
+    if projected.get("hard_risk_state") != hard_risk.hard_risk_state:
+        raise DecisionInboxRuntimeIntegrityError(
+            "DI1 hard_risk_state 与 HardRiskEvaluation 不一致"
+        )
+    projected["hard_risk_evaluation"] = hard_risk.hard_risk_evaluation
+    projected["hard_risk_reason_codes"] = list(hard_risk.reason_codes)
+    projected["hard_risk_authority_refs"] = list(hard_risk.authority_refs)
+    # DC1 fields are additive to the frozen DI1 payload.  DI1's existing
+    # visible-state projection remains the authority for inbox state; these
+    # fields expose the real RA1 / Formal Decision / Material / Sell results
+    # without changing the legacy CampaignFacts contract.
+    projected["formal_thesis_evaluation"] = formal_thesis_evaluation
+    projected["formal_decision_evaluation"] = formal_decision_evaluation
+    projected["material_change_evaluation"] = material_evaluation
+    projected["material_change_reason_codes"] = material_reason_codes
+    projected["critical_data"] = copy.deepcopy(dict(ccd))
+    projected["decision_assurance"] = copy.deepcopy(dict(assurance))
+    if sell_engine_payload is not None:
+        projected["sell_engine"] = sell_engine_payload
+    return projected
 
 
 def _holding_setup_item(

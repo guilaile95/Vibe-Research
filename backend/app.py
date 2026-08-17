@@ -47,8 +47,10 @@ import northbound_capital_flow as ncf
 import top_risk_service as trs
 import watchlist_store
 import evidence_thesis_router
+import evidence_temporal_authority_router
 import data_health_router
 import trade_ledger_router
+import trade_attribution_router
 import decision_feedback_router
 import decision_evidence_router
 import signal_ledger_router
@@ -67,6 +69,9 @@ import cash_event_router
 import campaign_router
 import holdings_campaign_composition_router
 import decision_inbox_runtime_router
+import decision_commit_router
+import decision_challenge_router
+import formal_decision_outcome_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -156,10 +161,13 @@ app.add_middleware(
 
 # 投资逻辑与证据账本：独立路由模块最小接入
 app.include_router(evidence_thesis_router.router)
+app.include_router(evidence_temporal_authority_router.router)
 # 数据健康中心：只读聚合 API
 app.include_router(data_health_router.router)
 # 交易流水：独立存储与 API
 app.include_router(trade_ledger_router.router)
+# P0-TAR1: explicit Frozen Decision attribution / explicit UNPLANNED origin.
+app.include_router(trade_attribution_router.router)
 # 决策反馈：独立存储与 API
 app.include_router(decision_feedback_router.router)
 # 决策追踪与证据表达：只读 API
@@ -188,6 +196,12 @@ app.include_router(campaign_router.router)
 app.include_router(holdings_campaign_composition_router.router)
 # P0-DI2 current-only Decision Inbox runtime read model
 app.include_router(decision_inbox_runtime_router.router)
+# P0-DC1 uncommitted Decision Proposal → explicit Frozen Decision commit
+app.include_router(decision_commit_router.router)
+# P0-DCH1 optional pre-freeze Decision Challenge packet
+app.include_router(decision_challenge_router.router)
+# P0-OL1 Formal Decision Outcome; legacy advice analytics remain separate.
+app.include_router(formal_decision_outcome_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)

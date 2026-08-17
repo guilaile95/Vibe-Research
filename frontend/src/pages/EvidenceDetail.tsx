@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Pencil, Save, X, Trash2, Loader2, ExternalLink } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { api, ApiError, type EvidenceRecord } from "@/lib/api";
+import { api, ApiError, type EvidenceRecord, type EvidenceTemporalAuthority } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const SUBJECT_TYPES = [
@@ -87,6 +87,26 @@ const toDateTimeLocal = (s: string | null) => {
 const inputCls = "mt-0.5 w-full rounded border border-border/50 bg-background px-2 py-1.5 text-sm outline-none focus:border-primary/50";
 const labelCls = "block text-xs text-muted-foreground";
 
+const toCanonicalUtc = (value: string) => value.trim() || null;
+
+const temporalStateLabel: Record<string, string> = {
+  PROVEN: "已证明",
+  UNPROVEN: "未证明（ASSERTED metadata）",
+  ERROR: "错误（已拒绝）",
+};
+
+const temporalStateColor: Record<string, string> = {
+  PROVEN: "bg-success/15 text-success",
+  UNPROVEN: "bg-warning/15 text-warning",
+  ERROR: "bg-danger/15 text-danger",
+};
+
+const temporalBasisLabel: Record<string, string> = {
+  SOURCE_PUBLISHED_AT: "来源发布时间",
+  EVENT_OCCURRED_AT: "事件发生时间",
+  NONE: "无权威时间",
+};
+
 export function EvidenceDetail() {
   const { id } = useParams<{ id: string }>();
   const [record, setRecord] = useState<EvidenceRecord | null>(null);
@@ -97,6 +117,19 @@ export function EvidenceDetail() {
   const [form, setForm] = useState<Partial<EvidenceRecord>>({});
   const [busy, setBusy] = useState(false);
   const [editErr, setEditErr] = useState<string | null>(null);
+  const [temporal, setTemporal] = useState<EvidenceTemporalAuthority | null>(null);
+  const [temporalLoading, setTemporalLoading] = useState(false);
+  const [temporalErr, setTemporalErr] = useState<string | null>(null);
+  const [temporalBusy, setTemporalBusy] = useState(false);
+  const [temporalForm, setTemporalForm] = useState({
+    source_identity: "",
+    source_published_at: "",
+    event_identity: "",
+    event_occurred_at: "",
+    observed_at: "",
+    created_at: "",
+    ingested_at: "",
+  });
 
   const runIdRef = useRef(0);
 
@@ -109,6 +142,15 @@ export function EvidenceDetail() {
       const r = await api.evidenceGet(id);
       if (rid !== runIdRef.current) return;
       setRecord(r);
+      setTemporalLoading(true);
+      try {
+        const t = await api.evidenceTemporalAuthority(id);
+        if (rid === runIdRef.current) setTemporal(t);
+      } catch (e) {
+        if (rid === runIdRef.current) setTemporalErr(e instanceof ApiError ? e.message : "加载时间权威失败");
+      } finally {
+        if (rid === runIdRef.current) setTemporalLoading(false);
+      }
     } catch (e) {
       if (rid !== runIdRef.current) return;
       setErr(e instanceof ApiError ? e.message : "加载证据失败");
@@ -116,6 +158,33 @@ export function EvidenceDetail() {
       if (rid === runIdRef.current) setLoading(false);
     }
   }, [id]);
+
+  const submitTemporalIntake = async () => {
+    if (!id) return;
+    setTemporalBusy(true);
+    setTemporalErr(null);
+    try {
+      const body = {
+        source_identity: temporalForm.source_identity.trim() || null,
+        source_published_at: toCanonicalUtc(temporalForm.source_published_at),
+        event_identity: temporalForm.event_identity.trim() || null,
+        event_occurred_at: toCanonicalUtc(temporalForm.event_occurred_at),
+        observed_at: toCanonicalUtc(temporalForm.observed_at),
+        created_at: toCanonicalUtc(temporalForm.created_at),
+        ingested_at: toCanonicalUtc(temporalForm.ingested_at),
+      };
+      const result = await api.evidenceTemporalIntake(id, body);
+      setTemporal(result);
+      setTemporalForm({
+        source_identity: "", source_published_at: "", event_identity: "", event_occurred_at: "",
+        observed_at: "", created_at: "", ingested_at: "",
+      });
+    } catch (e) {
+      setTemporalErr(e instanceof ApiError ? e.message : "保存时间元数据失败");
+    } finally {
+      setTemporalBusy(false);
+    }
+  };
 
   useEffect(() => {
     void load();
@@ -298,6 +367,45 @@ export function EvidenceDetail() {
                   来源日期：{fmtDateOnly(record.source_date)} · 查阅于：{fmtDate(record.accessed_at)}
                 </p>
               </div>
+            </div>
+
+            <div className="border-t border-border/30 pt-4">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium">Temporal authority</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground/70">Submitted metadata is not source authority.</p>
+                  <p className="text-[11px] text-muted-foreground/70">Observed time is not effective time.</p>
+                </div>
+                {temporalLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                ) : temporal ? (
+                  <span className={cn("rounded px-2 py-1 text-[11px]", temporalStateColor[temporal.temporal_state] ?? "bg-muted/50 text-muted-foreground")}>
+                    {temporalStateLabel[temporal.temporal_state] ?? temporal.temporal_state}
+                  </span>
+                ) : null}
+              </div>
+              {temporalErr && <p className="mt-2 text-xs text-destructive">{temporalErr}</p>}
+              {temporal && (
+                <div className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
+                  <div><span className="text-muted-foreground">Basis：</span>{temporalBasisLabel[temporal.temporal_basis] ?? temporal.temporal_basis}</div>
+                  <div><span className="text-muted-foreground">Effective at：</span><span className="font-mono">{temporal.effective_at ?? "—"}</span></div>
+                  <div><span className="text-muted-foreground">EC1：</span>{temporal.ec1_evaluation}</div>
+                  <div className="sm:col-span-3"><span className="text-muted-foreground">Reason：</span>{temporal.reason_codes.join(" · ") || "—"}</div>
+                </div>
+              )}
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className={labelCls}>Source identity<input value={temporalForm.source_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, source_identity: e.target.value }))} className={inputCls} placeholder="asserted source identity" /></label>
+                <label className={labelCls}>Source published at<input type="text" value={temporalForm.source_published_at} onChange={(e) => setTemporalForm((p) => ({ ...p, source_published_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
+                <label className={labelCls}>Event identity<input value={temporalForm.event_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, event_identity: e.target.value }))} className={inputCls} placeholder="asserted event identity" /></label>
+                <label className={labelCls}>Event occurred at<input type="text" value={temporalForm.event_occurred_at} onChange={(e) => setTemporalForm((p) => ({ ...p, event_occurred_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
+                <label className={labelCls}>Observed at<input type="text" value={temporalForm.observed_at} onChange={(e) => setTemporalForm((p) => ({ ...p, observed_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
+                <label className={labelCls}>Created at<input type="text" value={temporalForm.created_at} onChange={(e) => setTemporalForm((p) => ({ ...p, created_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
+                <label className={labelCls}>Ingested at<input type="text" value={temporalForm.ingested_at} onChange={(e) => setTemporalForm((p) => ({ ...p, ingested_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
+              </div>
+              <p className="mt-3 text-[11px] text-muted-foreground/70">仅接受明确带 Z 的 canonical UTC 文本。提交的 metadata 不会自行成为 source authority。</p>
+              <button onClick={() => void submitTemporalIntake()} disabled={temporalBusy} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-xs text-primary hover:bg-primary/25 disabled:opacity-50">
+                {temporalBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} 保存 ASSERTED / OBSERVED METADATA
+              </button>
             </div>
 
             <div className="border-t border-border/30 pt-3 text-[11px] text-muted-foreground/60">
