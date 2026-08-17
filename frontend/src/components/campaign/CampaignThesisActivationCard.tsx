@@ -161,6 +161,15 @@ export function CampaignThesisActivationCard({
           <Link to={`/thesis/${boundThesis.id}?${query}`} className="inline-flex text-primary hover:underline">
             查看 Current Thesis →
           </Link>
+          {current.ready && (
+            <Link
+              to={`/campaigns/${encodeURIComponent(campaignId)}/decision-proposal`}
+              className="ml-3 inline-flex text-primary hover:underline"
+              data-action="open-decision-proposal"
+            >
+              进入 Formal Decision Review →
+            </Link>
+          )}
         </div>
       ) : (
         <div className="mt-3 space-y-3">

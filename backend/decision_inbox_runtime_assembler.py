@@ -20,10 +20,11 @@
   RA1 / DI1；C 的 production evaluator 未完成时，production 默认端口显式返回
   NOT_EVALUATED（无 authority 不声称已评估），integration 阶段注入 fake port
   证明全链语义。
-- Material Change 无授权 authority → 恒 NOT_EVALUATED。
-- Formal Thesis / Frozen Decision 仅以 current-only 结构事实读取；
-  RA1 的 FORMAL_THESIS / FORMAL_DECISION 维度无 same-as-of 适用性 authority，
-  因此保持 NOT_EVALUATED（读取过记录 ≠ 完成评估）。
+- Material Change 在 DC1 production path 由 approved C projection 评估；
+  没有历史 Frozen Decision boundary 时保持 NOT_EVALUATED。
+- Formal Thesis / Frozen Decision 在 DC1 production path 使用 same-as-of
+  适用性评估；读取过记录 ≠ 完成评估。旧的注入式 current-only fixture
+  没有 Formal Original snapshot 时保持 NOT_EVALUATED。
 - capability NOT_EVALUATED 仍是合法结果（数据缺失 / applicability 未解决 /
   未到评估时点），绝不为了灯变绿强制 USABLE。
 
@@ -35,6 +36,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import copy
 import os
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -46,6 +48,7 @@ import critical_data_financials_adapter as financials_adapter
 import critical_data_market_sector_adapter as market_sector_adapter
 import critical_data_price_reference_adapter as price_adapter
 import decision_assurance_projection as ra
+import decision_commit_runtime as dc_runtime
 import decision_inbox_projection as di
 import formal_thesis_projection as thesis_projection
 import frozen_decision_service as frozen_service
@@ -612,34 +615,103 @@ def _project_campaign_item(
         ports, definition, campaign, thesis_projection
     )
 
-    assurance = _require_mapping(
-        ra.project_decision_assurance(
-            security_code=ccd["security_code"],
-            strategy=ccd["strategy"],
-            campaign_id=ccd["campaign_id"],
-            # current-only：无 same-as-of 适用性 authority，不得声称已评估
-            formal_thesis_evaluation="NOT_EVALUATED",
-            formal_decision_evaluation="NOT_EVALUATED",
-            hard_risk_evaluation=hard_risk.hard_risk_evaluation,
-            material_change_evaluation="NOT_EVALUATED",
-            critical_data_evaluation=ccd["critical_data_evaluation"],
-            as_of=ccd["as_of"],
-        ),
-        "RA projection",
-    )
-    _assert_same_identity(assurance, ccd, label="RA")
-    _assert_literal_as_of(assurance["as_of"], as_of, label="RA")
-
     decisions = ports.frozen_decisions_reader(campaign["campaign_id"])
-    latest_frozen = _latest_frozen_decision(
-        lambda _campaign_id: decisions, campaign["campaign_id"], as_of
+    # DC1 consumes the same single-read Current Thesis projection already used
+    # by HR1.  Production READY data always takes the strict DC1 path, so a
+    # malformed/missing Formal Original snapshot fails closed.  A custom
+    # injected fixture may intentionally use the pre-DC1 transport shape
+    # (empty Original snapshot); preserve its current-only compatibility path.
+    original_snapshot = (
+        thesis_projection.get("original_snapshot")
+        if isinstance(thesis_projection, Mapping)
+        else None
     )
+    dc1_ready_shape = (
+        isinstance(thesis_projection, Mapping)
+        and thesis_projection.get("formal_status") == "READY"
+        and (
+            ports is PRODUCTION_PORTS
+            or (
+                isinstance(original_snapshot, Mapping)
+                and bool(original_snapshot)
+                and (
+                    isinstance(original_snapshot.get("thesis"), Mapping)
+                    or "subject_type" in original_snapshot
+                )
+            )
+        )
+    )
+    dc1_authorities = None
+    if dc1_ready_shape:
+        try:
+            dc1_authorities = dc_runtime.evaluate_authorities(
+                campaign=campaign,
+                as_of=as_of,
+                current_thesis_projection=thesis_projection,
+                frozen_decisions=decisions,
+                critical_data_evaluation=ccd["critical_data_evaluation"],
+                evidence_reader=dc_runtime.PRODUCTION_PORTS.evidence_reader,
+                hard_risk=hard_risk,
+            )
+        except dc_runtime.DecisionCommitRuntimeError as exc:
+            raise DecisionInboxRuntimeIntegrityError(
+                "DC1 authority evaluation failed"
+            ) from exc
+
+    if dc1_authorities is None:
+        assurance = _require_mapping(
+            ra.project_decision_assurance(
+                security_code=ccd["security_code"],
+                strategy=ccd["strategy"],
+                campaign_id=ccd["campaign_id"],
+                # current-only / legacy injected shape：无 same-as-of 适用性
+                # authority，不得声称 Formal Thesis / Decision 已评估。
+                formal_thesis_evaluation="NOT_EVALUATED",
+                formal_decision_evaluation="NOT_EVALUATED",
+                hard_risk_evaluation=hard_risk.hard_risk_evaluation,
+                material_change_evaluation="NOT_EVALUATED",
+                critical_data_evaluation=ccd["critical_data_evaluation"],
+                as_of=ccd["as_of"],
+            ),
+            "RA projection",
+        )
+        _assert_same_identity(assurance, ccd, label="RA")
+        _assert_literal_as_of(assurance["as_of"], as_of, label="RA")
+        latest_frozen = _latest_frozen_decision(
+            lambda _campaign_id: decisions, campaign["campaign_id"], as_of
+        )
+        material_state = "NOT_EVALUATED"
+        material_evaluation = "NOT_EVALUATED"
+        material_reason_codes: list[str] = []
+        formal_thesis_evaluation = "NOT_EVALUATED"
+        formal_decision_evaluation = "NOT_EVALUATED"
+        sell_engine_payload = None
+    else:
+        assurance = _require_mapping(
+            dc1_authorities.decision_assurance, "RA projection"
+        )
+        _assert_same_identity(assurance, ccd, label="RA")
+        _assert_literal_as_of(assurance["as_of"], as_of, label="RA")
+        latest_frozen = dc1_authorities.latest_frozen
+        material_state = (
+            dc1_authorities.material_change.material_change_state
+            if dc1_authorities.material_change is not None
+            else "NOT_EVALUATED"
+        )
+        material_evaluation = dc1_authorities.material_change_evaluation
+        material_reason_codes = list(dc1_authorities.material_change_reason_codes)
+        formal_thesis_evaluation = dc1_authorities.formal_thesis_evaluation
+        formal_decision_evaluation = dc1_authorities.formal_decision["evaluation"]
+        sell_engine_payload = dc1_authorities.sell_engine.to_dict()
+
     latest_raw = None
-    if latest_frozen is not None:
+    if latest_frozen is not None and dc1_authorities is None:
         for decision in decisions:
             if decision.get("decision_id") == latest_frozen["decision_id"]:
                 latest_raw = decision
                 break
+    elif dc1_authorities is not None:
+        latest_raw = dc1_authorities.latest_frozen_raw
     confidence = _decision_confidence(latest_frozen, latest_raw)
 
     authority_refs = list(ccd.get("authority_refs", []))
@@ -653,7 +725,7 @@ def _project_campaign_item(
         current_thesis=current_thesis,
         latest_frozen_decision=latest_frozen,
         hard_risk_state=hard_risk.hard_risk_state,
-        material_change_state="NOT_EVALUATED",
+        material_change_state=material_state,
         critical_data_state=ccd["critical_data_state"],
         critical_data_evaluation=ccd["critical_data_evaluation"],
         decision_confidence=confidence,
@@ -676,6 +748,17 @@ def _project_campaign_item(
     projected["hard_risk_evaluation"] = hard_risk.hard_risk_evaluation
     projected["hard_risk_reason_codes"] = list(hard_risk.reason_codes)
     projected["hard_risk_authority_refs"] = list(hard_risk.authority_refs)
+    # DC1 fields are additive to the frozen DI1 payload.  DI1's existing
+    # visible-state projection remains the authority for inbox state; these
+    # fields expose the real RA1 / Formal Decision / Material / Sell results
+    # without changing the legacy CampaignFacts contract.
+    projected["formal_thesis_evaluation"] = formal_thesis_evaluation
+    projected["formal_decision_evaluation"] = formal_decision_evaluation
+    projected["material_change_evaluation"] = material_evaluation
+    projected["material_change_reason_codes"] = material_reason_codes
+    projected["decision_assurance"] = copy.deepcopy(dict(assurance))
+    if sell_engine_payload is not None:
+        projected["sell_engine"] = sell_engine_payload
     return projected
 
 

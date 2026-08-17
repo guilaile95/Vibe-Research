@@ -2054,6 +2054,13 @@ export interface DecisionInboxCampaignItem {
    * Hard Risk 证明。
    */
   hard_risk_authority_refs?: string[] | null;
+  /** P0-DC1 additive RA1 / Formal Decision runtime fields. */
+  formal_thesis_evaluation?: "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  formal_decision_evaluation?: "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  material_change_evaluation?: "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  material_change_reason_codes?: string[];
+  decision_assurance?: Record<string, unknown>;
+  sell_engine?: Record<string, unknown>;
 }
 
 export interface DecisionInboxSnapshot {
@@ -2066,4 +2073,80 @@ export interface DecisionInboxSnapshot {
   campaign_items: DecisionInboxCampaignItem[];
   total_holdings: number;
   total_campaign_items: number;
+}
+
+// ---------------------------------------------------------------------------
+// P0-DC1：Current Thesis → uncommitted Decision Proposal → explicit Freeze
+// ---------------------------------------------------------------------------
+
+export interface DecisionProposalProjection {
+  schema_version: string;
+  proposal_status: "UNCOMMITTED";
+  constraint_evaluation: "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  security_code: string;
+  strategy: CampaignStrategy;
+  campaign_id: string;
+  thesis_id: string;
+  thesis_revision: number;
+  as_of: string;
+  asset_view: Record<string, unknown>;
+  trade_view: Record<string, unknown>;
+  portfolio_view: Record<string, unknown>;
+  view_provenance: Record<string, unknown>;
+  next_best_action: string;
+  action_envelope: Record<string, unknown>;
+  maintain_conditions: string[];
+  upgrade_conditions: string[];
+  downgrade_conditions: string[];
+  invalidation_conditions: string[];
+  authority_facts: Record<string, unknown>;
+  authority_refs: string[];
+}
+
+export interface DecisionProposalCommitFields {
+  review_by: string;
+  key_assumptions: unknown[];
+  event_invalidation_conditions: unknown[];
+  strategy_horizon: string;
+}
+
+export interface DecisionProposalDraftInput extends DecisionProposalCommitFields {
+  asset_view: Record<string, unknown>;
+  trade_view: Record<string, unknown>;
+  portfolio_view: Record<string, unknown>;
+}
+
+export interface DecisionProposalPreview {
+  schema_version: string;
+  proposal: DecisionProposalProjection;
+  proposal_fingerprint: string;
+  commit_fields: DecisionProposalCommitFields;
+  authority_evaluations: Record<string, unknown>;
+  decision_assurance: Record<string, unknown>;
+  commit_requirements: {
+    user_confirmed: true;
+    expected_proposal_fingerprint: string;
+  };
+}
+
+export interface DecisionProposalCommitResult {
+  schema_version: string;
+  proposal_fingerprint: string;
+  idempotent: boolean;
+  committed: Record<string, unknown>;
+  formal_decision: Record<string, unknown>;
+  decision_assurance: Record<string, unknown>;
+  re_read_required: true;
+}
+
+export interface CommittedDecisionRuntimeRead {
+  schema_version: string;
+  as_of: string;
+  committed: Record<string, unknown>;
+  formal_thesis: Record<string, unknown>;
+  formal_decision: Record<string, unknown>;
+  hard_risk: Record<string, unknown>;
+  material_change: Record<string, unknown>;
+  sell_engine: Record<string, unknown>;
+  decision_assurance: Record<string, unknown>;
 }

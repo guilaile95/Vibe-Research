@@ -115,6 +115,10 @@ import type {
   CampaignTransitionResult,
   CampaignNextActions,
   DecisionInboxSnapshot,
+  DecisionProposalDraftInput,
+  DecisionProposalPreview,
+  DecisionProposalCommitResult,
+  CommittedDecisionRuntimeRead,
 } from "./api/types.ts";
 
 
@@ -909,6 +913,18 @@ export const api = {
     bindCampaignThesis(campaignId, thesisId),
   getCampaignThesisBinding: (campaignId: string) => getCampaignThesisBinding(campaignId),
   getCampaignCurrentThesis: (campaignId: string) => getCampaignCurrentThesis(campaignId),
+  previewDecisionProposal: (campaignId: string, body: DecisionProposalDraftInput) =>
+    previewDecisionProposal(campaignId, body),
+  commitDecisionProposal: (
+    campaignId: string,
+    body: DecisionProposalDraftInput & {
+      as_of: string;
+      expected_proposal_fingerprint: string;
+      user_confirmed: true;
+    },
+  ) => commitDecisionProposal(campaignId, body),
+  getCommittedDecisionRuntime: (campaignId: string, decisionId: string) =>
+    getCommittedDecisionRuntime(campaignId, decisionId),
   getDecisionInbox: () => getDecisionInbox(),
 };
 
@@ -1223,6 +1239,45 @@ export async function getCampaignCurrentThesis(
 ): Promise<CampaignCurrentThesis> {
   return get<CampaignCurrentThesis>(
     `/campaigns/${encodeURIComponent(campaignId)}/current-thesis`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// P0-DC1：Decision Proposal（Preview 只读；Commit 显式确认；提交后重读）
+// ---------------------------------------------------------------------------
+
+export async function previewDecisionProposal(
+  campaignId: string,
+  body: DecisionProposalDraftInput,
+): Promise<DecisionProposalPreview> {
+  return request<DecisionProposalPreview>(
+    `/campaigns/${encodeURIComponent(campaignId)}/decision-proposal/preview`,
+    "POST",
+    body,
+  );
+}
+
+export async function commitDecisionProposal(
+  campaignId: string,
+  body: DecisionProposalDraftInput & {
+    as_of: string;
+    expected_proposal_fingerprint: string;
+    user_confirmed: true;
+  },
+): Promise<DecisionProposalCommitResult> {
+  return request<DecisionProposalCommitResult>(
+    `/campaigns/${encodeURIComponent(campaignId)}/decision-proposal/commit`,
+    "POST",
+    body,
+  );
+}
+
+export async function getCommittedDecisionRuntime(
+  campaignId: string,
+  decisionId: string,
+): Promise<CommittedDecisionRuntimeRead> {
+  return get<CommittedDecisionRuntimeRead>(
+    `/campaigns/${encodeURIComponent(campaignId)}/decision-proposal/committed/${encodeURIComponent(decisionId)}`,
   );
 }
 

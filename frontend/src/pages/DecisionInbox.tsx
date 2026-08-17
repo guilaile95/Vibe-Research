@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   PlusCircle,
   AlertCircle,
@@ -49,6 +50,36 @@ import { CampaignLifecycleCard } from "@/components/campaign/CampaignLifecycleCa
 import { CampaignThesisActivationCard } from "@/components/campaign/CampaignThesisActivationCard";
 import { HardRiskPanel } from "@/components/campaign/HardRiskPanel";
 import { PageHeader } from "@/components/ui/PageHeader";
+
+function DecisionCommitInboxStatus({
+  campaignId,
+  evaluation,
+}: {
+  campaignId: string;
+  evaluation: string | null | undefined;
+}) {
+  if (!evaluation) return null;
+  return (
+    <div
+      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-background/35 p-3 text-xs"
+      data-formal-decision-inbox-evaluation={evaluation}
+    >
+      <div>
+        <p className="font-medium">Formal Decision</p>
+        <p className="mt-0.5 text-muted-foreground">
+          当前 backend Decision Inbox snapshot：<span className="font-mono">{evaluation}</span>
+          {evaluation === "EVALUATED" ? "（已读取适用的 Frozen Decision）" : "（不代表可执行建议）"}
+        </p>
+      </div>
+      <Link
+        to={`/campaigns/${encodeURIComponent(campaignId)}/decision-proposal`}
+        className="text-primary hover:underline"
+      >
+        打开 Formal Decision Review →
+      </Link>
+    </div>
+  );
+}
 
 /** 创建表单：security_code 固定自 holding，strategy 必选，显式确认 DRAFT。 */
 function CreateCampaignForm({
@@ -811,6 +842,10 @@ export default function DecisionInbox() {
                     onChanged={() => void refresh()}
                   />
                   <HardRiskPanel item={item} />
+                  <DecisionCommitInboxStatus
+                    campaignId={item.campaign_id}
+                    evaluation={item.formal_decision_evaluation}
+                  />
                   <CampaignThesisActivationCard
                     campaignId={item.campaign_id}
                     securityCode={item.security_code}
