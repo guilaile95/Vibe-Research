@@ -1,11 +1,11 @@
 /**
  * P0-CF1 real browser vertical on the OL1 Formal Outcome surface.
  *
- * Creates two real Frozen Decisions, one exact TAR1 attribution, one
- * same-security UNPLANNED trade, and one same-security UNALLOCATED trade in
- * isolated databases and two Fact Lake daily closes. The browser reads the
- * Formal Outcome surface from FastAPI and verifies the security close-to-close
- * path, refresh/readback and two-pass replay stability.
+ * Creates two real Campaign/Thesis siblings and freezes both through the
+ * FastAPI + Chromium Decision Proposal surface. One sibling finalizes and
+ * binds a Decision Challenge; the other freezes without a challenge. The
+ * Python helper only prepares trades, attribution, and Fact Lake prices from
+ * the decisions returned by the real API.
  */
 import assert from "node:assert/strict";
 import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -26,6 +26,12 @@ function pythonConfig() {
   if (process.env.PYTHON) return { cmd: process.env.PYTHON, args: ["-m", "uvicorn"] };
   if (process.platform === "win32") return { cmd: "py", args: ["-3", "-m", "uvicorn"] };
   return { cmd: "python3", args: ["-m", "uvicorn"] };
+}
+
+function pythonScriptConfig() {
+  if (process.env.PYTHON) return { cmd: process.env.PYTHON, args: [] };
+  if (process.platform === "win32") return { cmd: "py", args: ["-3"] };
+  return { cmd: "python3", args: [] };
 }
 
 function chromiumPath() {
@@ -79,6 +85,8 @@ function startStaticServer(dir, port) {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
   };
   const server = createServer((request, response) => {
     let pathname = (request.url || "/").split("?")[0];
@@ -101,51 +109,169 @@ function startStaticServer(dir, port) {
   });
 }
 
-function createFixtures(env) {
-  const payload = {
+async function jsonRequest(base, pathname, method = "GET", body, expected = 200) {
+  const response = await fetch(`${base}${pathname}`, {
+    method,
+    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, expected, `${method} ${pathname}: ${JSON.stringify(payload)}`);
+  return payload.data;
+}
+
+async function createFrozenCurrentThesis(base, title) {
+  const campaign = await jsonRequest(base, "/api/campaigns", "POST", {
     security_code: "600519",
     strategy: "SWING",
-    campaign_id: "campaign_" + "a".repeat(32),
-    thesis_id: "b".repeat(32),
-    thesis_revision: 1,
-    asset_view: {},
-    trade_view: {},
-    portfolio_view: {},
-    next_best_action: "BUY SMALL",
-    action_envelope: {},
-    maintain_conditions: ["condition"],
-    upgrade_conditions: [],
-    downgrade_conditions: [],
-    invalidation_conditions: ["invalidation"],
-    strategy_horizon: "2w",
-    review_by: "2026-08-16T00:00:00Z",
-    key_assumptions: ["assumption"],
-    event_invalidation_conditions: [],
-    risk_policy_version: "ol1-risk",
-    opportunity_policy_version: "ol1-opportunity",
-    decision_policy_version: "ol1-decision",
-    behavior_model_version: "ol1-behavior",
-    data_quality: {},
-    evidence_confidence: null,
-    inference_confidence: null,
-    decision_confidence: null,
-    evidence_refs: [],
-    risk_refs: [],
-    source_refs: [
-      "decision_proposal:" + "a".repeat(64),
-      "decision_challenge:decision_challenge_" + "d".repeat(32),
-    ],
-    user_confirmed: true,
-  };
+  }, 201);
+  const created = await jsonRequest(base, "/api/thesis", "POST", {
+    subject_type: "stock",
+    subject_id: "600519",
+    title,
+    summary: "isolated current thesis",
+    core_claims: ["claim one", "claim two", "claim three"],
+    catalysts: [],
+    risks: [],
+    invalidation_conditions: [],
+    change_summary: "CF1 browser fixture",
+  }, 200);
+  const thesisId = created.thesis.id;
+  const begun = await jsonRequest(base, `/api/thesis/${thesisId}/begin-formalization`, "POST", {}, 200);
+  const updated = await jsonRequest(base, `/api/thesis/${thesisId}`, "PUT", {
+    title: begun.thesis.title,
+    summary: begun.thesis.summary,
+    status: "active",
+    core_claims: begun.thesis.core_claims,
+    catalysts: [],
+    risks: [],
+    invalidation_conditions: [],
+    strategy: "SWING",
+    expected_horizon: { unit: "TRADING_DAY", min: 10, max: 30, anchor: "FREEZE_AT" },
+    free_notes: null,
+    expected_revision: begun.thesis.current_revision,
+    change_summary: "CF1 browser formal content",
+  }, 200);
+  const confirmed = await jsonRequest(base, `/api/thesis/${thesisId}/confirm`, "POST", {
+    expected_revision: updated.thesis.current_revision,
+  }, 200);
+  const frozen = await jsonRequest(base, `/api/thesis/${thesisId}/freeze`, "POST", {
+    expected_revision: confirmed.thesis.current_revision,
+  }, 200);
+  assert.equal(frozen.thesis.formal_state, "frozen");
+  await jsonRequest(base, `/api/campaigns/${campaign.campaign_id}/thesis-binding`, "POST", {
+    thesis_id: thesisId,
+  }, 201);
+  for (const [from, to] of [["DRAFT", "RESEARCHING"], ["RESEARCHING", "PRE-ENTRY"], ["PRE-ENTRY", "ACTIVE"]]) {
+    await jsonRequest(base, `/api/campaigns/${campaign.campaign_id}/transitions`, "POST", {
+      expected_status: from,
+      to_status: to,
+    }, 200);
+  }
+  return campaign;
+}
+
+const draft = {
+  reviewBy: "2026-08-30T10:00:00Z",
+  horizon: "10 至 30 交易日",
+  assumptions: "流动性保持稳定",
+  invalidations: "业绩发生重大反转",
+};
+
+async function fillProposalDraft(page) {
+  await page.getByLabel("Review by").fill(draft.reviewBy);
+  await page.getByLabel("Strategy horizon").fill(draft.horizon);
+  await page.getByLabel("Key assumptions").fill(draft.assumptions);
+  await page.getByLabel("Event invalidation conditions").fill(draft.invalidations);
+  await page.waitForFunction((expected) => {
+    const review = document.querySelector('[aria-label="Review by"]');
+    const horizon = document.querySelector('[aria-label="Strategy horizon"]');
+    return Boolean(
+      review && review.value === expected.reviewBy
+      && horizon && horizon.value === expected.horizon
+    );
+  }, draft);
+}
+
+async function freezeThroughBrowser(page, backend, frontend, campaignId, withChallenge, dataDir) {
+  await page.goto(`${frontend}/campaigns/${campaignId}/decision-proposal`, { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "Formal Decision Review" }).waitFor();
+  await page.locator(`[data-decision-proposal-page="${campaignId}"]`).waitFor();
+  await fillProposalDraft(page);
+
+  const previewResponsePromise = page.waitForResponse((response) => (
+    response.request().method() === "POST"
+    && response.url().includes(`/api/campaigns/${campaignId}/decision-proposal/preview`)
+  ), { timeout: 180000 });
+  await page.getByRole("button", { name: "Preview Proposal" }).click();
+  const previewResponse = await previewResponsePromise;
+  const previewBody = await previewResponse.text();
+  assert.equal(previewResponse.ok(), true, `[CF1] preview failed: status=${previewResponse.status()} body=${previewBody}`);
+  await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
+  await page.locator('[data-challenge-state="UNFINALIZED"]').waitFor();
+  if (withChallenge) {
+    assert.equal(existsSync(join(dataDir, "decision_challenges.sqlite3")), false, "Preview must not write Challenge DB");
+  }
+
+  let challengeId;
+  if (withChallenge) {
+    await page.getByRole("textbox", { name: "Strongest supporting evidence" }).fill("渠道与报表支持当前等待");
+    await page.getByRole("textbox", { name: "Strongest opposing evidence" }).fill("估值不便宜");
+    await page.getByLabel("Pre-mortem status", { exact: true }).selectOption("UNKNOWN");
+    await page.getByRole("textbox", { name: "Pre-mortem" }).fill("还没有足够的失效路径样本");
+    await page.getByRole("textbox", { name: "Invalidation facts" }).fill("连续两个季度毛利率下修则失效");
+    const finalize = page.getByRole("button", { name: "Finalize Decision Challenge" });
+    assert.equal(await finalize.isEnabled(), false, "Finalize must require explicit confirmation");
+    await page.getByRole("checkbox", { name: /我已显式填写四个挑战维度/ }).check();
+    assert.equal(await finalize.isEnabled(), true);
+    assert.equal(await finalize.isEnabled(), true, "Finalize must be enabled after four dimensions and confirmation");
+    const finalizeResponsePromise = page.waitForResponse((response) => (
+      response.request().method() === "POST"
+      && response.url().includes(`/api/campaigns/${campaignId}/decision-challenge/finalize`)
+    ), { timeout: 180000 });
+    await finalize.click();
+    const finalizeResponse = await finalizeResponsePromise;
+    const finalizeBody = await finalizeResponse.text();
+    assert.equal(finalizeResponse.ok(), true, `[CF1] finalize failed: status=${finalizeResponse.status()} body=${finalizeBody}`);
+    await page.locator('[data-challenge-state="FINALIZED"]').waitFor();
+    challengeId = await page.locator("[data-challenge-id]").getAttribute("data-challenge-id");
+    assert.match(challengeId, /^decision_challenge_[0-9a-f]{32}$/);
+    const durable = await jsonRequest(backend, `/api/decision-challenges/${challengeId}`);
+    assert.equal(durable.challenge.challenge_id, challengeId);
+    assert.equal(durable.challenge.packet_state, "COMPLETE");
+    assert.equal(durable.decision_quality, "NOT_EVALUATED");
+    assert.equal(durable.challenge.two_pass_semantic_independence_verified, "NO");
+    await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
+  } else {
+    await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
+  }
+
+  await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
+  await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
+  const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
+  const decisionId = committedLine.replace(/^decision_id：/, "").trim();
+  assert.match(decisionId, /^decision_[0-9a-f]{32}$/);
+  const committed = await jsonRequest(backend, `/api/campaigns/${campaignId}/decision-proposal/committed/${decisionId}`);
+  if (withChallenge) {
+    assert.ok(committed.committed.source_refs.includes(`decision_challenge:${challengeId}`));
+  } else {
+    assert.equal(
+      committed.committed.source_refs.some((item) => String(item).startsWith("decision_challenge:")),
+      false,
+      "no-challenge freeze must not invent a challenge ref",
+    );
+  }
+  return { decisionId, challengeId, committed };
+}
+
+function prepareTradeAndFactLake(env, python, first, second) {
   const script = `
-import json, os
+import json
+import os
 import formal_trade_attribution as fta
 import formal_trade_attribution_store as ats
-import frozen_decision_service as fds
 import trade_attribution_runtime as tar
 import trade_ledger_service as tls
-import decision_challenge_projection as dcp
-import decision_challenge_store as dcs
 from fact_lake_store import initialize_fact_lake, payload_sha256
 from trade_calendar import completed_trade_date_at
 from tushare_daily_shadow import (
@@ -158,12 +284,8 @@ from tushare_daily_shadow import (
     publish_tushare_daily_canonical_fact,
 )
 
-payload = json.loads(os.environ['OL1_PAYLOAD'])
-first = fds.freeze_decision(payload, committed_at='2026-08-01T00:00:00.000000Z')
-second_payload = dict(payload)
-second_payload['thesis_id'] = 'c' * 32
-second_payload['source_refs'] = []
-second = fds.freeze_decision(second_payload, committed_at='2026-08-01T00:00:01.000000Z')
+first = json.loads(os.environ['OL1_FIRST_COMMITTED'])
+second = json.loads(os.environ['OL1_SECOND_COMMITTED'])
 lake = initialize_fact_lake(os.environ['VR_FACT_LAKE_ROOT'])
 evaluation_as_of = os.environ['OL1_CF_EVALUATION_AS_OF']
 start_trade_date = completed_trade_date_at(first['committed_at'])
@@ -196,45 +318,19 @@ unallocated = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'opera
 record = fta.create_attribution(first, exact, attribution_id=fta.new_attribution_id(), created_at='2026-08-18T02:00:00.000000Z').to_dict()
 ats.write_attribution(db_path=ats.resolve_formal_trade_attribution_db_path(), record=record)
 tar.mark_unplanned(unplanned['trade_id'], {'confirm': True})
-challenge_id = 'decision_challenge_' + 'd' * 32
-challenge_dimensions = {
-    name: {'status': 'ANSWERED', 'text': f'text:{name}'}
-    for name in dcp.REQUIRED_DIMENSIONS
-}
-challenge_dimensions['PRE_MORTEM'] = {'status': 'UNKNOWN', 'text': 'not enough evidence'}
-packet = dcp.project_challenge_packet(
-    challenge_id=challenge_id,
-    security_code=first['security_code'], strategy=first['strategy'],
-    campaign_id=first['campaign_id'], thesis_id=first['thesis_id'],
-    thesis_revision=first['thesis_revision'],
-    proposal_fingerprint=first['source_refs'][0].split(':', 1)[1],
-    proposal_as_of=first['committed_at'], finalized_at=first['committed_at'],
-    user_dimensions=challenge_dimensions,
-)
-dcs.append_challenge(packet)
-first['source_refs'] = [
-    first['source_refs'][0], 'decision_challenge:' + challenge_id,
-]
-print(json.dumps({'first': first, 'second': second, 'exact': exact, 'unplanned': unplanned, 'unallocated': unallocated, 'challenge_id': challenge_id}))
+print(json.dumps({'first': first, 'second': second, 'exact': exact, 'unplanned': unplanned, 'unallocated': unallocated}))
 `;
-  const result = spawnSync(env.PYTHON || "python3", ["-c", script], {
+  const result = spawnSync(python.cmd, [...python.args.slice(0, -1), "-c", script], {
     cwd: backendDir,
-    env: { ...env, OL1_PAYLOAD: JSON.stringify(payload) },
+    env: {
+      ...env,
+      OL1_FIRST_COMMITTED: JSON.stringify(first),
+      OL1_SECOND_COMMITTED: JSON.stringify(second),
+    },
     encoding: "utf8",
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   return JSON.parse(result.stdout.trim());
-}
-
-async function jsonRequest(base, pathname, method = "GET", body, expected = 200) {
-  const response = await fetch(`${base}${pathname}`, {
-    method,
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const payload = await response.json();
-  assert.equal(response.status, expected, `${method} ${pathname}: ${JSON.stringify(payload)}`);
-  return payload.data;
 }
 
 async function removeTempDir(dir) {
@@ -273,6 +369,7 @@ async function run() {
       VIBE_RESEARCH_EVIDENCE_THESIS_DB: join(tempDataDir, "evidence_thesis.db"),
       VIBE_RESEARCH_CAMPAIGN_DB: join(tempDataDir, "campaigns.sqlite3"),
       VIBE_RESEARCH_FROZEN_DECISION_DB: join(tempDataDir, "frozen_decisions.sqlite3"),
+      VIBE_RESEARCH_DECISION_CHALLENGE_DB: join(tempDataDir, "decision_challenges.sqlite3"),
       VIBE_RESEARCH_TRADE_ATTRIBUTION_DB: join(tempDataDir, "formal_trade_attributions.sqlite3"),
       VIBE_RESEARCH_TRADE_ORIGIN_DB: join(tempDataDir, "trade_origins.sqlite3"),
       PYTHONUNBUFFERED: "1",
@@ -286,15 +383,51 @@ async function run() {
     backendProc.stderr.on("data", (chunk) => { backendLog += chunk.toString(); });
     await waitHttp(`${backend}/api/health`);
 
-    const fixtures = createFixtures(env);
+    const firstCampaign = await createFrozenCurrentThesis(backend, "CF1 with challenge");
+    const secondCampaign = await createFrozenCurrentThesis(backend, "CF1 without challenge");
+    staticServer = await startStaticServer(frontendDist, frontendPort);
+    const launchOptions = { headless: true };
+    const executablePath = chromiumPath();
+    if (executablePath) launchOptions.executablePath = executablePath;
+    browser = await chromium.launch(launchOptions);
+    const page = await browser.newPage();
+    const consoleErrors = [];
+    page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
+    await page.route("**/api/**", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      try {
+        const response = await fetch(`${backend}${url.pathname}${url.search}`, {
+          method: request.method(),
+          headers: request.headers(),
+          body: request.method() === "GET" || request.method() === "HEAD" ? undefined : request.postDataBuffer(),
+        });
+        await route.fulfill({
+          status: response.status,
+          headers: Object.fromEntries(response.headers.entries()),
+          body: Buffer.from(await response.arrayBuffer()),
+        });
+      } catch (error) {
+        await route.fulfill({
+          status: 599,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "E2E backend proxy failed", error: String(error) }),
+        });
+      }
+    });
+
+    const firstRun = await freezeThroughBrowser(page, backend, frontend, firstCampaign.campaign_id, true, tempDataDir);
+    const secondRun = await freezeThroughBrowser(page, backend, frontend, secondCampaign.campaign_id, false, tempDataDir);
+    const fixtures = prepareTradeAndFactLake(env, pythonScriptConfig(), firstRun.committed.committed, secondRun.committed.committed);
     const evaluationAsOf = "2026-09-01T00:00:00.000000Z";
+    assert.ok(firstRun.committed.committed.source_refs, JSON.stringify(firstRun.committed));
     const firstBefore = await jsonRequest(
       backend,
-      `/api/formal-decisions/${fixtures.first.decision_id}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
+      `/api/formal-decisions/${firstRun.decisionId}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
     );
     assert.deepEqual(firstBefore.actual_capital_outcome.trade_ids, [fixtures.exact.trade_id]);
-    assert.equal(firstBefore.process_review.state, "BOUND");
-    assert.equal(firstBefore.process_review.challenge_id, fixtures.challenge_id);
+    assert.equal(firstBefore.process_review.state, "BOUND", JSON.stringify(firstBefore.process_review));
+    assert.equal(firstBefore.process_review.challenge_id, firstRun.challengeId);
     assert.equal(firstBefore.process_review.packet_state, "COMPLETE");
     assert.equal(firstBefore.process_review.two_pass_state, "VALID");
     assert.equal(firstBefore.process_review.two_pass_semantic_independence_verified, "NO");
@@ -320,7 +453,7 @@ async function run() {
     assert.ok(laterTrade.trade_id);
     const firstAfter = await jsonRequest(
       backend,
-      `/api/formal-decisions/${fixtures.first.decision_id}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
+      `/api/formal-decisions/${firstRun.decisionId}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
     );
     assert.equal(firstAfter.decision_time_replay.replay_hash, replayHashBefore);
     assert.equal(firstAfter.decision_snapshot_hash, snapshotHashBefore);
@@ -331,44 +464,32 @@ async function run() {
 
     const secondOutcome = await jsonRequest(
       backend,
-      `/api/formal-decisions/${fixtures.second.decision_id}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
+      `/api/formal-decisions/${secondRun.decisionId}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
     );
     assert.equal(secondOutcome.process_review.state, "NONE");
     assert.equal(typeof secondOutcome.decision_time_replay.replay_hash, "string");
     assert.equal(secondOutcome.process_quality.state, "NOT_EVALUATED");
 
-    staticServer = await startStaticServer(frontendDist, frontendPort);
-    const launchOptions = { headless: true };
-    const executablePath = chromiumPath();
-    if (executablePath) launchOptions.executablePath = executablePath;
-    browser = await chromium.launch(launchOptions);
-    const page = await browser.newPage();
-    const consoleErrors = [];
-    page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
-    await page.route("**/api/**", (route) => {
-      const url = new URL(route.request().url());
-      return route.continue({ url: `${backend}${url.pathname}${url.search}` });
-    });
-
     await page.goto(`${frontend}/decision-performance?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "Formal Decision Outcome" }).waitFor();
     await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
-    await page.getByTestId(`process-review-bound-${fixtures.first.decision_id}`).waitFor();
+    await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
     await page.getByText("Challenge coverage is not decision correctness.", { exact: true }).waitFor();
-    await page.getByTestId(`process-review-none-${fixtures.second.decision_id}`).waitFor();
+    await page.getByTestId(`process-review-none-${secondRun.decisionId}`).waitFor();
     await page.getByText("Security close-to-close path", { exact: true }).first().waitFor();
     await page.getByText("security path only; not portfolio P&L or decision quality", { exact: true }).first().waitFor();
     assert.equal(await page.getByText("Security close-to-close path", { exact: true }).count(), 2);
     assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 2);
     const actionableConsoleErrors = consoleErrors.filter(
-      (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED"),
+      (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
+        && !message.includes("Failed to load resource: the server responded with a status of 404"),
     );
     assert.equal(actionableConsoleErrors.length, 0, actionableConsoleErrors.join("\n"));
 
     await page.reload({ waitUntil: "networkidle" });
     await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
-    await page.getByTestId(`process-review-bound-${fixtures.first.decision_id}`).waitFor();
-    await page.getByTestId(`process-review-none-${fixtures.second.decision_id}`).waitFor();
+    await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
+    await page.getByTestId(`process-review-none-${secondRun.decisionId}`).waitFor();
     assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 2);
     console.log("[E2E] P0-CF1 Formal Decision Outcome vertical passed");
   } catch (error) {

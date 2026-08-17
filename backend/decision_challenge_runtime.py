@@ -392,7 +392,9 @@ def verify_bound_challenge_for_frozen_decision(
     ]
     proposal_refs = [
         ref for ref in refs
-        if isinstance(ref, str) and ref.startswith(domain.PROPOSAL_SOURCE_PREFIX)
+        if isinstance(ref, str)
+        and ref.startswith(domain.PROPOSAL_SOURCE_PREFIX)
+        and ref[len(domain.PROPOSAL_SOURCE_PREFIX):] != "projection:v0.1"
     ]
     if len(challenge_refs) != 1 or len(proposal_refs) != 1:
         raise DecisionChallengeBindError("Frozen Decision Challenge/proposal binding is not unique")

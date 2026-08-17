@@ -83,6 +83,7 @@ def _build_process_review(decision: dict[str, Any]) -> dict[str, Any]:
         proposal_refs = [
             ref for ref in refs
             if ref.startswith(challenge_domain.PROPOSAL_SOURCE_PREFIX)
+            and ref[len(challenge_domain.PROPOSAL_SOURCE_PREFIX):] != "projection:v0.1"
         ]
         for ref in (*challenge_refs, *proposal_refs):
             if ref.startswith(challenge_domain.CHALLENGE_SOURCE_PREFIX):
@@ -93,6 +94,8 @@ def _build_process_review(decision: dict[str, Any]) -> dict[str, Any]:
                     return decision_process_review.error_review("MALFORMED_SOURCE_REF")
             else:
                 value = ref[len(challenge_domain.PROPOSAL_SOURCE_PREFIX):]
+                if value == "projection:v0.1":
+                    continue
                 try:
                     challenge_domain.require_fingerprint(value)
                 except challenge_domain.DecisionChallengeValidationError:

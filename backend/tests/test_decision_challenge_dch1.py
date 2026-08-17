@@ -423,7 +423,7 @@ def test_commit_without_challenge_retains_existing_behavior():
 
 
 def test_commit_with_valid_challenge_binds_server_source_ref(tmp_path, monkeypatch):
-    commit_ports, state = _ports(_thesis())
+    commit_ports, state = _ports(_thesis(), committed_at=FINALIZED_AT)
     challenge_ports, _db = _challenge_ports(commit_ports, tmp_path)
     preview = runtime.preview_decision_proposal(
         CAMPAIGN_ID, _draft(), ports=commit_ports, as_of=AS_OF
@@ -470,7 +470,7 @@ def test_commit_with_valid_challenge_binds_server_source_ref(tmp_path, monkeypat
 
 
 def test_challenge_finalized_after_commit_time_is_rejected_before_frozen_write(tmp_path, monkeypatch):
-    commit_ports, state = _ports(_thesis())
+    commit_ports, state = _ports(_thesis(), committed_at=AS_OF)
     challenge_ports, _db = _challenge_ports(commit_ports, tmp_path)
     preview = runtime.preview_decision_proposal(
         CAMPAIGN_ID, _draft(), ports=commit_ports, as_of=AS_OF
@@ -481,7 +481,6 @@ def test_challenge_finalized_after_commit_time_is_rejected_before_frozen_write(t
         ports=challenge_ports,
     )
     monkeypatch.setattr(challenge_runtime, "PRODUCTION_PORTS", challenge_ports)
-    monkeypatch.setattr(runtime, "utc_now_iso", lambda: AS_OF)
     with pytest.raises(runtime.ChallengeBindingError, match="finalized_at"):
         runtime.commit_decision_proposal(
             CAMPAIGN_ID,
