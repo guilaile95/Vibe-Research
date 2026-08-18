@@ -915,7 +915,7 @@ export interface DisclosureItem {
 }
 
 
-// 全球市场（美股 / 港股，移植自 global-stock-data · 东财域内源）
+// 全球市场（美国 / 香港 / 日本 / 韩国，移植自 global-stock-data · 东财域内源）
 export interface GlobalIndex {
   key: string; name: string; region: string;
   price: number | null; change_pct: number | null;

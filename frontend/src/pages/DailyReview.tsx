@@ -1161,7 +1161,7 @@ export function DailyReview() {
             <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
               <Globe className="h-4 w-4" /> 全球市场
             </h3>
-            <span className="text-[11px] text-muted-foreground/50">隔夜外围 · 可选组件</span>
+            <span className="text-[11px] text-muted-foreground/50">欧美亚太 · 可选组件</span>
             {dr?.data_health?.components?.global_indices === "unavailable" && (
               <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] text-destructive">不可用</span>
             )}

@@ -1428,7 +1428,7 @@ def daily_review_history_detail(snapshot_id: int):
 
 @app.get("/api/global/indices")
 def global_indices():
-    """全球指数快照（道指 / 标普500 / 纳斯达克 / 恒生 / 恒生科技）—— A 股看隔夜外围脸色。缓存 5 分钟。"""
+    """全球指数快照（纳斯达克 / 标普500 / 恒生 / 日经225 / 韩国KOSPI）。缓存 5 分钟。"""
     try:
         return {"data": market.get_global_indices()}
     except Exception as e:  # noqa: BLE001

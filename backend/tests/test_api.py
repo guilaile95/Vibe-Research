@@ -69,3 +69,28 @@ def test_gstock_quote_full_null_shape():
     q = gstock._quote_from({})
     assert set(q) == {"code", "name", "price", "open", "high", "low", "prev_close", "amount", "mcap", "change_pct"}
     assert all(v is None for v in q.values())
+
+
+def test_global_indices_use_requested_country_authority_order(monkeypatch):
+    """全球市场卡片固定使用美国、香港、日本、韩国的五个代表指数。"""
+    import gstock
+
+    requested_secids = []
+
+    def quote(secid, _fields):
+        requested_secids.append(secid)
+        return {"f43": 123456, "f59": 2, "f170": 25}
+
+    monkeypatch.setattr(gstock, "_push2_stock_get", quote)
+
+    rows = gstock.global_indices()
+
+    assert requested_secids == ["100.NDX", "100.SPX", "100.HSI", "100.N225", "100.KS11"]
+    assert [(row["key"], row["name"], row["region"]) for row in rows] == [
+        ("ndx", "纳斯达克", "美国"),
+        ("spx", "标普500", "美国"),
+        ("hsi", "恒生指数", "香港"),
+        ("nikkei225", "日经225", "日本"),
+        ("kospi", "韩国KOSPI", "韩国"),
+    ]
+    assert all(row["price"] == 1234.56 and row["change_pct"] == 0.25 for row in rows)

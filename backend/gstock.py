@@ -1,7 +1,7 @@
 """美股 / 港股数据层 —— 移植自 global-stock-data（美港股全栈工具包）。
 
 只并入「域内(东财)」子集：全球指数 + 美港股行情 + 关键财务指标。
-用途＝A 股「看隔夜外围脸色」+ 个股页支持美港股代码。
+用途＝A 股观察欧美亚太市场 + 个股页支持美港股代码。
 
 工程要点：
 - 东财调用全部复用 `astock.em_get`（直连优先、避开用户 Clash 代理挂国内站）+
@@ -19,13 +19,13 @@ _UA_H = {"User-Agent": astock.UA}
 _GS_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
 _gs_host = [0]  # 当前可用主机下标；首次 push2 掉连后 latch 到 push2delay
 
-# 全球指数（东财 push2 secid）—— A 股看隔夜外围脸色的核心几个，均已实测。
+# 全球指数（东财 push2 secid）—— 美国、香港、日本、韩国代表指数，均已实测。
 _INDICES = (
-    {"key": "dji", "name": "道琼斯", "secid": "100.DJIA", "region": "美股"},
-    {"key": "spx", "name": "标普500", "secid": "100.SPX", "region": "美股"},
-    {"key": "ndx", "name": "纳斯达克", "secid": "100.NDX", "region": "美股"},
-    {"key": "hsi", "name": "恒生指数", "secid": "100.HSI", "region": "港股"},
-    {"key": "hstech", "name": "恒生科技", "secid": "124.HSTECH", "region": "港股"},
+    {"key": "ndx", "name": "纳斯达克", "secid": "100.NDX", "region": "美国"},
+    {"key": "spx", "name": "标普500", "secid": "100.SPX", "region": "美国"},
+    {"key": "hsi", "name": "恒生指数", "secid": "100.HSI", "region": "香港"},
+    {"key": "nikkei225", "name": "日经225", "secid": "100.N225", "region": "日本"},
+    {"key": "kospi", "name": "韩国KOSPI", "secid": "100.KS11", "region": "韩国"},
 )
 
 # 搜索返回的 MktNum → (secucode 后缀, 市场名)
@@ -76,7 +76,7 @@ def _quote_from(d: dict) -> dict:
 
 
 def global_indices() -> list[dict]:
-    """全球指数快照（道指 / 标普500 / 纳斯达克 / 恒生 / 恒生科技）。源无的档跳过。"""
+    """全球指数快照（纳斯达克 / 标普500 / 恒生 / 日经225 / 韩国KOSPI）。源无的档跳过。"""
     out = []
     for idx in _INDICES:
         d = _push2_stock_get(idx["secid"], "f43,f57,f58,f59,f60,f170")

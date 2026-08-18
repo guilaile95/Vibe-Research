@@ -328,7 +328,7 @@ def get_turnover_top() -> dict:
 
 
 def get_global_indices() -> list[dict]:
-    """全球指数快照（美股 / 港股，含缓存 5 分钟）。空结果不缓存。"""
+    """全球指数快照（美国 / 香港 / 日本 / 韩国，含缓存 5 分钟）。空结果不缓存。"""
     return _cached("global_indices", gstock.global_indices, valid=bool)
 
 
