@@ -1614,6 +1614,40 @@ export interface DecisionProcessReview {
   [key: string]: unknown;
 }
 
+export type FormalDueState = "DUE" | "NOT_DUE" | "ERROR";
+
+export type FormalReviewWorklistGroup = "due" | "upcoming" | "unavailable";
+
+export interface FormalReviewWorklistItem {
+  decision_id: string;
+  decision_snapshot_hash?: string;
+  security_code?: string;
+  strategy?: string;
+  campaign_id?: string;
+  decision_committed_at?: string;
+  decision_review_by: string;
+  due_state: FormalDueState;
+  outcome_status?: string;
+  reason_codes?: string[];
+  group: FormalReviewWorklistGroup;
+  error_code?: string;
+}
+
+export interface FormalDecisionReviewWorklist {
+  schema_version: string;
+  evaluation_as_of: string;
+  due: FormalReviewWorklistItem[];
+  upcoming: FormalReviewWorklistItem[];
+  unavailable: FormalReviewWorklistItem[];
+  counts: {
+    due: number;
+    upcoming: number;
+    unavailable: number;
+    total: number;
+  };
+  authority_refs?: string[];
+}
+
 export interface FormalDecisionOutcome {
   schema_version: string;
   decision_id: string;

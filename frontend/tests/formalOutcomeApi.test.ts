@@ -28,6 +28,17 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
 const { api } = await import("../src/lib/api.ts");
 
+test("Review Due Worklist uses a server-owned read-only endpoint", async () => {
+  requests.length = 0;
+  responseBody = { data: { evaluation_as_of: "2026-09-01T00:00:00.000000Z" } };
+  await api.getFormalDecisionReviewWorklist();
+  const request = requests.at(-1);
+  assert.ok(request);
+  assert.equal(request.url, "/api/formal-decision-review-worklist");
+  assert.equal(request.method, "GET");
+  assert.equal(request.body, null);
+});
+
 test("Formal Outcome list is separate and carries only evaluation boundary query", async () => {
   requests.length = 0;
   responseBody = { data: [] };

@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, BookOpenCheck, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, BookOpenCheck, ListChecks, Loader2, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
-import type { FormalDecisionOutcome, FormalPricePoint } from "@/lib/api/types";
+import type {
+  FormalDecisionOutcome,
+  FormalDecisionReviewWorklist,
+  FormalPricePoint,
+  FormalReviewWorklistItem,
+} from "@/lib/api/types";
+import { worklistItems, worklistLabel, type FormalReviewWorklistFilter } from "@/lib/formalOutcomeWorklist";
 
 const CARD = "rounded-xl border border-border/60 bg-card p-6 shadow-sm";
 
@@ -50,6 +56,26 @@ const PROCESS_DIMENSIONS = [
   "INVALIDATION_FACTS",
 ] as const;
 
+function reviewWorklistItem(item: FormalReviewWorklistItem, onFocus: (decisionId: string) => void) {
+  return (
+    <button
+      key={item.decision_id}
+      type="button"
+      onClick={() => onFocus(item.decision_id)}
+      data-testid={`review-worklist-${item.group}-${item.decision_id}`}
+      className="w-full rounded-md border border-border/60 p-3 text-left hover:bg-accent/40"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-mono text-xs font-medium">{item.decision_id}</span>
+        <span className="rounded bg-muted px-2 py-0.5 text-xs">{item.due_state}</span>
+      </div>
+      <div className="mt-1 text-sm">{item.security_code || "—"} · {item.strategy || "—"}</div>
+      <div className="mt-1 text-xs text-muted-foreground">Campaign: {item.campaign_id || "—"}</div>
+      <div className="mt-1 text-xs text-muted-foreground">review_by: {item.decision_review_by}</div>
+    </button>
+  );
+}
+
 function processReview(item: FormalDecisionOutcome) {
   const review = item.process_review;
   if (!review || review.state === "NONE") {
@@ -96,8 +122,10 @@ function processReview(item: FormalDecisionOutcome) {
 
 export function FormalOutcomeSection() {
   const [items, setItems] = useState<FormalDecisionOutcome[]>([]);
+  const [worklist, setWorklist] = useState<FormalDecisionReviewWorklist | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [worklistError, setWorklistError] = useState<string | null>(null);
   const [evaluationAsOf] = useState(() => (
     new URLSearchParams(window.location.search).get("evaluation_as_of") || undefined
   ));
@@ -105,18 +133,35 @@ export function FormalOutcomeSection() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    try {
-      setItems(await api.listFormalDecisionOutcomes({
+    setWorklistError(null);
+    const [outcomeResult, worklistResult] = await Promise.allSettled([
+      api.listFormalDecisionOutcomes({
         evaluation_as_of: evaluationAsOf,
         limit: 50,
         offset: 0,
-      }));
-    } catch (err: any) {
-      setError(err?.message || "Formal Decision Outcome authority unavailable");
+      }),
+      api.getFormalDecisionReviewWorklist(),
+    ]);
+    if (outcomeResult.status === "fulfilled") {
+      setItems(outcomeResult.value);
+    } else {
+      setError(outcomeResult.reason?.message || "Formal Decision Outcome authority unavailable");
       setItems([]);
-    } finally {
-      setLoading(false);
     }
+    if (worklistResult.status === "fulfilled") {
+      setWorklist(worklistResult.value);
+    } else {
+      setWorklistError(worklistResult.reason?.message || "Review Due Worklist authority unavailable");
+      setWorklist(null);
+    }
+    setLoading(false);
+  }, [evaluationAsOf]);
+
+  const focusOutcome = useCallback((decisionId: string) => {
+    const row = document.getElementById(`formal-outcome-${decisionId}`);
+    if (!row) return;
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (row instanceof HTMLElement) row.focus({ preventScroll: true });
   }, []);
 
   useEffect(() => {
@@ -155,6 +200,47 @@ export function FormalOutcomeSection() {
         </div>
       )}
 
+      {worklistError && (
+        <div className="mt-4 flex items-center gap-2 rounded-md bg-amber-500/10 p-3 text-sm text-amber-600">
+          <AlertCircle className="h-4 w-4" />
+          <span>{worklistError}</span>
+        </div>
+      )}
+
+      {worklist && (
+        <section className="mt-5 rounded-lg border border-border/60 p-4" aria-label="Review Due Worklist">
+          <div className="flex items-center gap-2">
+            <ListChecks className="h-4 w-4" />
+            <h3 className="font-medium">Review Due Worklist</h3>
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            Server evaluation_as_of: {worklist.evaluation_as_of}
+          </div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-3">
+            {(["due", "upcoming", "unavailable"] as FormalReviewWorklistFilter[]).map((filter) => {
+              const entries = worklistItems(worklist, filter);
+              return (
+                <div key={filter} data-testid={`review-worklist-group-${filter}`}>
+                  <div className="mb-2 flex items-center justify-between text-sm font-medium">
+                    <span>{worklistLabel(filter)}</span>
+                    <span className="text-xs text-muted-foreground">{entries.length}</span>
+                  </div>
+                  {entries.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-border/50 p-3 text-xs text-muted-foreground">
+                      None
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {entries.map((entry) => reviewWorklistItem(entry, focusOutcome))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {loading ? (
         <div className="flex h-24 items-center justify-center text-muted-foreground">
           <Loader2 className="h-6 w-6 animate-spin" />
@@ -178,7 +264,12 @@ export function FormalOutcomeSection() {
             </thead>
             <tbody className="divide-y divide-border">
               {items.map((item) => (
-                <tr key={item.decision_id} data-testid={`formal-outcome-${item.decision_id}`}>
+                <tr
+                  key={item.decision_id}
+                  id={`formal-outcome-${item.decision_id}`}
+                  tabIndex={-1}
+                  data-testid={`formal-outcome-${item.decision_id}`}
+                >
                   <td className="py-4 pr-4 align-top">
                     <div className="font-mono font-medium">{item.decision_id}</div>
                     <div className="mt-1 text-muted-foreground">

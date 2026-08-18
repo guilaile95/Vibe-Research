@@ -172,32 +172,31 @@ async function createFrozenCurrentThesis(base, title) {
 }
 
 const draft = {
-  reviewBy: "2026-08-30T10:00:00Z",
   horizon: "10 至 30 交易日",
   assumptions: "流动性保持稳定",
   invalidations: "业绩发生重大反转",
 };
 
-async function fillProposalDraft(page) {
-  await page.getByLabel("Review by").fill(draft.reviewBy);
+async function fillProposalDraft(page, reviewBy) {
+  await page.getByLabel("Review by").fill(reviewBy);
   await page.getByLabel("Strategy horizon").fill(draft.horizon);
   await page.getByLabel("Key assumptions").fill(draft.assumptions);
   await page.getByLabel("Event invalidation conditions").fill(draft.invalidations);
-  await page.waitForFunction((expected) => {
+  await page.waitForFunction(({ reviewBy, horizon }) => {
     const review = document.querySelector('[aria-label="Review by"]');
-    const horizon = document.querySelector('[aria-label="Strategy horizon"]');
+    const horizonInput = document.querySelector('[aria-label="Strategy horizon"]');
     return Boolean(
-      review && review.value === expected.reviewBy
-      && horizon && horizon.value === expected.horizon
+      review && review.value === reviewBy
+      && horizonInput && horizonInput.value === horizon
     );
-  }, draft);
+  }, { reviewBy, horizon: draft.horizon });
 }
 
-async function freezeThroughBrowser(page, backend, frontend, campaignId, withChallenge, dataDir) {
+async function freezeThroughBrowser(page, backend, frontend, campaignId, withChallenge, dataDir, reviewBy) {
   await page.goto(`${frontend}/campaigns/${campaignId}/decision-proposal`, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Formal Decision Review" }).waitFor();
   await page.locator(`[data-decision-proposal-page="${campaignId}"]`).waitFor();
-  await fillProposalDraft(page);
+  await fillProposalDraft(page, reviewBy);
 
   const previewResponsePromise = page.waitForResponse((response) => (
     response.request().method() === "POST"
@@ -416,8 +415,24 @@ async function run() {
       }
     });
 
-    const firstRun = await freezeThroughBrowser(page, backend, frontend, firstCampaign.campaign_id, true, tempDataDir);
-    const secondRun = await freezeThroughBrowser(page, backend, frontend, secondCampaign.campaign_id, false, tempDataDir);
+    const firstRun = await freezeThroughBrowser(
+      page,
+      backend,
+      frontend,
+      firstCampaign.campaign_id,
+      true,
+      tempDataDir,
+      "2026-08-01T10:00:00Z",
+    );
+    const secondRun = await freezeThroughBrowser(
+      page,
+      backend,
+      frontend,
+      secondCampaign.campaign_id,
+      false,
+      tempDataDir,
+      "2026-09-10T10:00:00Z",
+    );
     const fixtures = prepareTradeAndFactLake(env, pythonScriptConfig(), firstRun.committed.committed, secondRun.committed.committed);
     const evaluationAsOf = "2026-09-01T00:00:00.000000Z";
     assert.ok(firstRun.committed.committed.source_refs, JSON.stringify(firstRun.committed));
@@ -470,15 +485,48 @@ async function run() {
     assert.equal(typeof secondOutcome.decision_time_replay.replay_hash, "string");
     assert.equal(secondOutcome.process_quality.state, "NOT_EVALUATED");
 
+    const worklist = await jsonRequest(backend, "/api/formal-decision-review-worklist");
+    assert.equal(worklist.due.length, 1, JSON.stringify(worklist));
+    assert.equal(worklist.upcoming.length, 1, JSON.stringify(worklist));
+    assert.equal(worklist.unavailable.length, 0, JSON.stringify(worklist));
+    assert.equal(worklist.due[0].decision_id, firstRun.decisionId);
+    assert.equal(worklist.due[0].due_state, "DUE");
+    assert.equal(worklist.upcoming[0].decision_id, secondRun.decisionId);
+    assert.equal(worklist.upcoming[0].due_state, "NOT_DUE");
+    assert.equal(worklist.due.some((item) => item.due_state === "OVERDUE"), false);
+    assert.equal(worklist.upcoming.some((item) => item.due_state === "UPCOMING"), false);
+    assert.deepEqual(
+      [...worklist.due, ...worklist.upcoming].map((item) => item.decision_review_by),
+      [...worklist.due, ...worklist.upcoming]
+        .map((item) => item.decision_review_by)
+        .sort(),
+    );
+    assert.equal(
+      readdirSync(tempDataDir).some((name) => /queue/i.test(name)),
+      false,
+      "RQ1 must not create queue persistence",
+    );
+
     await page.goto(`${frontend}/decision-performance?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "Formal Decision Outcome" }).waitFor();
-    await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
+    await page.getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
     await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
     await page.getByText("Challenge coverage is not decision correctness.", { exact: true }).waitFor();
     await page.getByTestId(`process-review-none-${secondRun.decisionId}`).waitFor();
     await page.getByText("Security close-to-close path", { exact: true }).first().waitFor();
     await page.getByText("security path only; not portfolio P&L or decision quality", { exact: true }).first().waitFor();
-    assert.equal(await page.getByText("Security close-to-close path", { exact: true }).count(), 2);
+    await page.getByTestId("review-worklist-group-due").waitFor();
+    await page.getByTestId("review-worklist-group-upcoming").waitFor();
+    await page.getByTestId("review-worklist-group-unavailable").waitFor();
+    const dueItem = page.getByTestId(`review-worklist-due-${firstRun.decisionId}`);
+    const upcomingItem = page.getByTestId(`review-worklist-upcoming-${secondRun.decisionId}`);
+    await dueItem.waitFor();
+    await upcomingItem.waitFor();
+    assert.equal(await dueItem.getByText("DUE", { exact: true }).count(), 1);
+    assert.equal(await upcomingItem.getByText("NOT_DUE", { exact: true }).count(), 1);
+    assert.equal(await page.getByTestId("review-worklist-unavailable").count(), 0);
+    await upcomingItem.click();
+    await page.waitForFunction((decisionId) => document.activeElement?.id === `formal-outcome-${decisionId}`, secondRun.decisionId);
     assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 2);
     const actionableConsoleErrors = consoleErrors.filter(
       (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
@@ -487,7 +535,7 @@ async function run() {
     assert.equal(actionableConsoleErrors.length, 0, actionableConsoleErrors.join("\n"));
 
     await page.reload({ waitUntil: "networkidle" });
-    await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
+    await page.getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
     await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
     await page.getByTestId(`process-review-none-${secondRun.decisionId}`).waitFor();
     assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 2);
