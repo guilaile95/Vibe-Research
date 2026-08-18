@@ -267,6 +267,7 @@ function prepareTradeAndFactLake(env, python, first, second) {
   const script = `
 import json
 import os
+from datetime import datetime, timedelta
 import formal_trade_attribution as fta
 import formal_trade_attribution_store as ats
 import trade_attribution_runtime as tar
@@ -287,6 +288,14 @@ first = json.loads(os.environ['OL1_FIRST_COMMITTED'])
 second = json.loads(os.environ['OL1_SECOND_COMMITTED'])
 lake = initialize_fact_lake(os.environ['VR_FACT_LAKE_ROOT'])
 evaluation_as_of = os.environ['OL1_CF_EVALUATION_AS_OF']
+committed_at = datetime.fromisoformat(first['committed_at'].replace('Z', '+00:00'))
+evaluation_at = datetime.fromisoformat(evaluation_as_of.replace('Z', '+00:00'))
+executed_at = committed_at + timedelta(seconds=1)
+assert committed_at <= executed_at < evaluation_at
+executed_at_text = executed_at.isoformat(timespec='seconds').replace('+00:00', 'Z')
+unplanned_at_text = (executed_at + timedelta(seconds=1)).isoformat(timespec='seconds').replace('+00:00', 'Z')
+unallocated_at_text = (executed_at + timedelta(seconds=2)).isoformat(timespec='seconds').replace('+00:00', 'Z')
+created_at_text = (executed_at + timedelta(seconds=3)).isoformat(timespec='microseconds').replace('+00:00', 'Z')
 start_trade_date = completed_trade_date_at(first['committed_at'])
 end_trade_date = completed_trade_date_at(evaluation_as_of)
 assert start_trade_date and end_trade_date and end_trade_date > start_trade_date
@@ -311,10 +320,10 @@ def publish_price(trade_date, close, event):
     publish_tushare_daily_canonical_fact(lake, fact)
 publish_price(start_trade_date, 100.0, 1)
 publish_price(end_trade_date, 110.0, 2)
-exact = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'buy', 'execution_status': 'full', 'actual_price': 100, 'actual_quantity': 1, 'executed_at': '2026-08-18T01:00:00Z'})
-unplanned = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 101, 'actual_quantity': 1, 'executed_at': '2026-08-18T01:01:00Z'})
-unallocated = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 102, 'actual_quantity': 1, 'executed_at': '2026-08-18T01:02:00Z'})
-record = fta.create_attribution(first, exact, attribution_id=fta.new_attribution_id(), created_at='2026-08-18T02:00:00.000000Z').to_dict()
+exact = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'buy', 'execution_status': 'full', 'actual_price': 100, 'actual_quantity': 1, 'executed_at': executed_at_text})
+unplanned = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 101, 'actual_quantity': 1, 'executed_at': unplanned_at_text})
+unallocated = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 102, 'actual_quantity': 1, 'executed_at': unallocated_at_text})
+record = fta.create_attribution(first, exact, attribution_id=fta.new_attribution_id(), created_at=created_at_text).to_dict()
 ats.write_attribution(db_path=ats.resolve_formal_trade_attribution_db_path(), record=record)
 tar.mark_unplanned(unplanned['trade_id'], {'confirm': True})
 print(json.dumps({'first': first, 'second': second, 'exact': exact, 'unplanned': unplanned, 'unallocated': unallocated}))
@@ -384,6 +393,7 @@ async function run() {
 
     const firstCampaign = await createFrozenCurrentThesis(backend, "CF1 with challenge");
     const secondCampaign = await createFrozenCurrentThesis(backend, "CF1 without challenge");
+    const thirdCampaign = await createFrozenCurrentThesis(backend, "RQ1 NOT_DUE sibling");
     staticServer = await startStaticServer(frontendDist, frontendPort);
     const launchOptions = { headless: true };
     const executablePath = chromiumPath();
@@ -429,6 +439,15 @@ async function run() {
       backend,
       frontend,
       secondCampaign.campaign_id,
+      false,
+      tempDataDir,
+      "2026-08-02T10:00:00Z",
+    );
+    const thirdRun = await freezeThroughBrowser(
+      page,
+      backend,
+      frontend,
+      thirdCampaign.campaign_id,
       false,
       tempDataDir,
       "2026-09-10T10:00:00Z",
@@ -481,17 +500,28 @@ async function run() {
       backend,
       `/api/formal-decisions/${secondRun.decisionId}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
     );
+    assert.equal(secondOutcome.outcome_status, "EVALUATED");
     assert.equal(secondOutcome.process_review.state, "NONE");
     assert.equal(typeof secondOutcome.decision_time_replay.replay_hash, "string");
     assert.equal(secondOutcome.process_quality.state, "NOT_EVALUATED");
+    assert.equal(secondOutcome.actual_capital_outcome.state, "NO_ACTUAL_TRADE");
+    assert.equal(secondOutcome.counterfactual_outcome.state, "EVALUATED");
+    assert.equal(secondOutcome.counterfactual_outcome.security_return, "0.1");
+    const thirdOutcome = await jsonRequest(
+      backend,
+      `/api/formal-decisions/${thirdRun.decisionId}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
+    );
+    assert.equal(thirdOutcome.outcome_status, "PENDING");
+    assert.equal(thirdOutcome.due_state, "NOT_DUE");
+    assert.equal(thirdOutcome.actual_capital_outcome.state, "PENDING");
 
     const worklist = await jsonRequest(backend, "/api/formal-decision-review-worklist");
-    assert.equal(worklist.due.length, 1, JSON.stringify(worklist));
+    assert.equal(worklist.due.length, 2, JSON.stringify(worklist));
     assert.equal(worklist.upcoming.length, 1, JSON.stringify(worklist));
     assert.equal(worklist.unavailable.length, 0, JSON.stringify(worklist));
-    assert.equal(worklist.due[0].decision_id, firstRun.decisionId);
-    assert.equal(worklist.due[0].due_state, "DUE");
-    assert.equal(worklist.upcoming[0].decision_id, secondRun.decisionId);
+    assert.deepEqual(worklist.due.map((item) => item.decision_id), [firstRun.decisionId, secondRun.decisionId]);
+    assert.equal(worklist.due.every((item) => item.due_state === "DUE"), true);
+    assert.equal(worklist.upcoming[0].decision_id, thirdRun.decisionId);
     assert.equal(worklist.upcoming[0].due_state, "NOT_DUE");
     assert.equal(worklist.due.some((item) => item.due_state === "OVERDUE"), false);
     assert.equal(worklist.upcoming.some((item) => item.due_state === "UPCOMING"), false);
@@ -510,24 +540,29 @@ async function run() {
     await page.goto(`${frontend}/decision-performance?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "Formal Decision Outcome" }).waitFor();
     await page.getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
+    await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
     await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
     await page.getByText("Challenge coverage is not decision correctness.", { exact: true }).waitFor();
     await page.getByTestId(`process-review-none-${secondRun.decisionId}`).waitFor();
     await page.getByText("Security close-to-close path", { exact: true }).first().waitFor();
     await page.getByText("security path only; not portfolio P&L or decision quality", { exact: true }).first().waitFor();
+    assert.equal(await page.getByText("Security close-to-close path", { exact: true }).count(), 2);
     await page.getByTestId("review-worklist-group-due").waitFor();
     await page.getByTestId("review-worklist-group-upcoming").waitFor();
     await page.getByTestId("review-worklist-group-unavailable").waitFor();
     const dueItem = page.getByTestId(`review-worklist-due-${firstRun.decisionId}`);
-    const upcomingItem = page.getByTestId(`review-worklist-upcoming-${secondRun.decisionId}`);
+    const secondDueItem = page.getByTestId(`review-worklist-due-${secondRun.decisionId}`);
+    const upcomingItem = page.getByTestId(`review-worklist-upcoming-${thirdRun.decisionId}`);
     await dueItem.waitFor();
+    await secondDueItem.waitFor();
     await upcomingItem.waitFor();
     assert.equal(await dueItem.getByText("DUE", { exact: true }).count(), 1);
+    assert.equal(await secondDueItem.getByText("DUE", { exact: true }).count(), 1);
     assert.equal(await upcomingItem.getByText("NOT_DUE", { exact: true }).count(), 1);
     assert.equal(await page.getByTestId("review-worklist-unavailable").count(), 0);
     await upcomingItem.click();
-    await page.waitForFunction((decisionId) => document.activeElement?.id === `formal-outcome-${decisionId}`, secondRun.decisionId);
-    assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 2);
+    await page.waitForFunction((decisionId) => document.activeElement?.id === `formal-outcome-${decisionId}`, thirdRun.decisionId);
+    assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 3);
     const actionableConsoleErrors = consoleErrors.filter(
       (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
         && !message.includes("Failed to load resource: the server responded with a status of 404"),
@@ -536,9 +571,17 @@ async function run() {
 
     await page.reload({ waitUntil: "networkidle" });
     await page.getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
+    await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
     await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
     await page.getByTestId(`process-review-none-${secondRun.decisionId}`).waitFor();
-    assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 2);
+    await page.getByTestId("review-worklist-group-due").waitFor();
+    await page.getByTestId("review-worklist-group-upcoming").waitFor();
+    await page.getByTestId(`review-worklist-due-${firstRun.decisionId}`).waitFor();
+    await page.getByTestId(`review-worklist-due-${secondRun.decisionId}`).waitFor();
+    const reloadedUpcoming = page.getByTestId(`review-worklist-upcoming-${thirdRun.decisionId}`);
+    await reloadedUpcoming.waitFor();
+    assert.equal(await reloadedUpcoming.getByText("NOT_DUE", { exact: true }).count(), 1);
+    assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 3);
     console.log("[E2E] P0-CF1 Formal Decision Outcome vertical passed");
   } catch (error) {
     const detail = backendLog ? `\nBackend log:\n${backendLog}` : "";

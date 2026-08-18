@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  mergeOutcomeItem,
   worklistItems,
   worklistLabel,
 } from "../src/lib/formalOutcomeWorklist.ts";
@@ -34,4 +35,20 @@ test("worklist groups are read-only projections", () => {
   assert.equal(worklistItems(worklist, "due").length, 0);
   assert.equal(worklistItems(worklist, "unavailable").length, 0);
   assert.equal(JSON.stringify(worklist), before);
+});
+
+test("missing historical row can be merged from exact outcome authority", () => {
+  const existing = {
+    decision_id: "decision_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    outcome_status: "EVALUATED",
+    schema_version: "formal_decision_outcome.v0.1",
+  } as any;
+  const fetched = {
+    decision_id: "decision_cccccccccccccccccccccccccccccccc",
+    outcome_status: "PENDING",
+    schema_version: "formal_decision_outcome.v0.1",
+  } as any;
+  const merged = mergeOutcomeItem([existing], fetched);
+  assert.deepEqual(merged.map((item) => item.decision_id), [existing.decision_id, fetched.decision_id]);
+  assert.equal(mergeOutcomeItem(merged, { ...fetched, outcome_status: "EVALUATED" } as any)[1].outcome_status, "EVALUATED");
 });

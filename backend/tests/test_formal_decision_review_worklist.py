@@ -93,12 +93,14 @@ def test_duplicate_and_malformed_rows_fail_closed():
 def test_runtime_uses_one_server_owned_boundary_and_reads_all_pages(monkeypatch):
     calls: list[tuple[str, str]] = []
     decisions = [
-        {"decision_id": "decision_" + "a" * 32},
-        {"decision_id": "decision_" + "b" * 32},
+        {"decision_id": f"decision_{index:032x}"}
+        for index in range(205)
     ]
+    page_offsets: list[int] = []
 
     def list_decisions(*, limit, offset, **_kwargs):
         assert limit == 100
+        page_offsets.append(offset)
         return decisions[offset : offset + limit]
 
     def evaluate(decision_id, *, evaluation_as_of):
@@ -114,11 +116,12 @@ def test_runtime_uses_one_server_owned_boundary_and_reads_all_pages(monkeypatch)
     monkeypatch.setattr(runtime, "evaluate_outcome", evaluate)
     result = runtime.build_review_worklist()
 
-    assert result["counts"]["total"] == 2
-    assert calls == [
-        ("decision_" + "a" * 32, EVALUATION_AS_OF),
-        ("decision_" + "b" * 32, EVALUATION_AS_OF),
-    ]
+    assert result["counts"]["total"] == 205
+    assert page_offsets == [0, 100, 200]
+    assert len(calls) == 205
+    assert {evaluation_as_of for _, evaluation_as_of in calls} == {EVALUATION_AS_OF}
+    assert result["due"][0]["decision_id"] == "decision_" + "0" * 32
+    assert result["due"][-1]["decision_id"] == f"decision_{204:032x}"
     assert result["evaluation_as_of"] == EVALUATION_AS_OF
 
 

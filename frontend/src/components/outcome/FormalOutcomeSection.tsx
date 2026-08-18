@@ -7,7 +7,12 @@ import type {
   FormalPricePoint,
   FormalReviewWorklistItem,
 } from "@/lib/api/types";
-import { worklistItems, worklistLabel, type FormalReviewWorklistFilter } from "@/lib/formalOutcomeWorklist";
+import {
+  mergeOutcomeItem,
+  worklistItems,
+  worklistLabel,
+  type FormalReviewWorklistFilter,
+} from "@/lib/formalOutcomeWorklist";
 
 const CARD = "rounded-xl border border-border/60 bg-card p-6 shadow-sm";
 
@@ -126,6 +131,7 @@ export function FormalOutcomeSection() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [worklistError, setWorklistError] = useState<string | null>(null);
+  const [pendingFocusDecisionId, setPendingFocusDecisionId] = useState<string | null>(null);
   const [evaluationAsOf] = useState(() => (
     new URLSearchParams(window.location.search).get("evaluation_as_of") || undefined
   ));
@@ -157,12 +163,31 @@ export function FormalOutcomeSection() {
     setLoading(false);
   }, [evaluationAsOf]);
 
-  const focusOutcome = useCallback((decisionId: string) => {
-    const row = document.getElementById(`formal-outcome-${decisionId}`);
+  const focusOutcome = useCallback(async (decisionId: string) => {
+    const existing = document.getElementById(`formal-outcome-${decisionId}`);
+    if (existing) {
+      existing.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (existing instanceof HTMLElement) existing.focus({ preventScroll: true });
+      return;
+    }
+    setPendingFocusDecisionId(decisionId);
+    try {
+      const outcome = await api.getFormalDecisionOutcome(decisionId, evaluationAsOf);
+      setItems((current) => mergeOutcomeItem(current, outcome));
+    } catch (err: any) {
+      setPendingFocusDecisionId(null);
+      setError(err?.message || "Formal Decision Outcome authority unavailable");
+    }
+  }, [evaluationAsOf]);
+
+  useEffect(() => {
+    if (!pendingFocusDecisionId) return;
+    const row = document.getElementById(`formal-outcome-${pendingFocusDecisionId}`);
     if (!row) return;
     row.scrollIntoView({ behavior: "smooth", block: "center" });
     if (row instanceof HTMLElement) row.focus({ preventScroll: true });
-  }, []);
+    setPendingFocusDecisionId(null);
+  }, [items, pendingFocusDecisionId]);
 
   useEffect(() => {
     load();
