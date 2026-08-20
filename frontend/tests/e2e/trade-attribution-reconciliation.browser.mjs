@@ -148,7 +148,10 @@ async function run() {
     const frontend = `http://127.0.0.1:${frontendPort}`;
     const py = pythonConfig();
     const env = {
-      ...process.env, VR_DATA_DIR: tempDataDir, VR_REPORTS_DIR: tempDataDir,
+      ...process.env,
+      VR_ALLOW_ORIGINS: frontend,
+      VR_DATA_DIR: tempDataDir,
+      VR_REPORTS_DIR: tempDataDir,
       VIBE_RESEARCH_TRADE_LEDGER_DB: join(tempDataDir, "trade_ledger.sqlite3"),
       VIBE_RESEARCH_REVIEW_DB: join(tempDataDir, "review_history.db"),
       VIBE_RESEARCH_EVIDENCE_THESIS_DB: join(tempDataDir, "evidence_thesis.db"),
