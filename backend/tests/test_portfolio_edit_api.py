@@ -365,7 +365,7 @@ def test_cors_options_preflight_portfolio_holding():
     r = client.options(
         "/api/portfolio/holding",
         headers={
-            "Origin": "https://frontend.example",
+            "Origin": "http://localhost:5899",
             "Access-Control-Request-Method": "PUT",
             "Access-Control-Request-Headers": "content-type",
         },
@@ -373,8 +373,7 @@ def test_cors_options_preflight_portfolio_holding():
     assert r.status_code == 200
     allow_methods = r.headers.get("access-control-allow-methods", "")
     assert "PUT" in [m.strip() for m in allow_methods.split(",")]
-    allow_origin = r.headers.get("access-control-allow-origin", "")
-    assert allow_origin in ("*", "https://frontend.example")
+    assert r.headers.get("access-control-allow-origin") == "http://localhost:5899"
 
 
 def test_cors_options_preflight_account_profile():
@@ -382,7 +381,7 @@ def test_cors_options_preflight_account_profile():
     r = client.options(
         "/api/account-profile",
         headers={
-            "Origin": "https://frontend.example",
+            "Origin": "http://127.0.0.1:5899",
             "Access-Control-Request-Method": "PUT",
             "Access-Control-Request-Headers": "content-type",
         },
@@ -390,5 +389,4 @@ def test_cors_options_preflight_account_profile():
     assert r.status_code == 200
     allow_methods = r.headers.get("access-control-allow-methods", "")
     assert "PUT" in [m.strip() for m in allow_methods.split(",")]
-    allow_origin = r.headers.get("access-control-allow-origin", "")
-    assert allow_origin in ("*", "https://frontend.example")
+    assert r.headers.get("access-control-allow-origin") == "http://127.0.0.1:5899"

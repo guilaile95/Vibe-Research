@@ -17,9 +17,14 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: 5899,
+      strictPort: true,
       proxy: {
         "/api": { target: apiTarget, changeOrigin: true },
       },
+    },
+    preview: {
+      port: 5899,
+      strictPort: true,
     },
     build: {
       rollupOptions: {

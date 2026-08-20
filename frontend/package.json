@@ -21,6 +21,7 @@
     "test:e2e:intel-digest": "node tests/e2e/intel-digest-real.browser.mjs",
     "test:e2e:decision-inbox": "node tests/e2e/decision-inbox.browser.mjs",
     "test:e2e:account-bootstrap": "node tests/e2e/account-bootstrap.browser.mjs",
+    "test:e2e:local-api-security": "node tests/e2e/local-api-security.browser.mjs",
     "test:e2e:hr1-vertical": "node tests/e2e/hr1-production-vertical.browser.mjs",
     "test:e2e:decision-commit": "node tests/e2e/decision-commit-vertical.browser.mjs",
     "test:e2e:trade-attribution-reconciliation": "node tests/e2e/trade-attribution-reconciliation.browser.mjs",

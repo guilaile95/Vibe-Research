@@ -582,6 +582,7 @@ def test_analyze_real_asgi_disconnect_never_saves_or_sends_done(monkeypatch):
             "query_string": b"",
             "root_path": "",
             "headers": [
+                (b"host", b"testserver"),
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode("ascii")),
             ],
@@ -657,6 +658,7 @@ def test_analyze_disconnect_during_save_cancels_transaction(monkeypatch):
             "query_string": b"",
             "root_path": "",
             "headers": [
+                (b"host", b"testserver"),
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode("ascii")),
             ],
@@ -748,6 +750,7 @@ def test_analyze_cli_disconnect_without_more_output_reaps_immediately(monkeypatc
             "query_string": b"",
             "root_path": "",
             "headers": [
+                (b"host", b"testserver"),
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode("ascii")),
             ],
