@@ -16,7 +16,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import frozen_decision_store as store
 
@@ -326,15 +326,30 @@ def _build_snapshot(cleaned: Mapping[str, Any], decision_id: str, committed_at: 
 
 
 def freeze_decision(
-    payload: Mapping[str, Any], db_path: str | Path | None = None
+    payload: Mapping[str, Any],
+    db_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """显式冻结一条正式决策（用户确认门之后）。
 
-    - payload 不含 ``decision_id``：新正式决策，服务生成身份与提交时刻
-    - payload 含 ``decision_id``：精确重放（幂等成功，或冲突 fail closed）
+    - payload 不含 ``decision_id``：服务生成身份与唯一提交时刻；提交时刻
+      不接受调用方注入。
+    - payload 含 ``decision_id``：精确重放（幂等成功，或冲突 fail closed）。
+
+    ``pre_write_validator`` 是服务内部使用的窄范围校验钩子；它接收本服务
+    生成的同一 commit instant，成功后才允许 snapshot 写入。公共调用方不能
+    传入该钩子或 committed_at。
 
     返回完整冻结对象（含 decision_id / snapshot_hash / committed_at）。
     """
+    return _freeze_decision(payload, db_path)
+
+
+def _freeze_decision(
+    payload: Mapping[str, Any],
+    db_path: str | Path | None = None,
+    *,
+    pre_write_validator: Callable[[Mapping[str, Any], str], None] | None = None,
+) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise FrozenDecisionValidationError("payload 必须是 JSON 对象")
 
@@ -343,8 +358,10 @@ def freeze_decision(
 
     cleaned = _validate_input(payload)
     decision_id = f"decision_{uuid.uuid4().hex}"
-    committed_at = _utc_now_iso()
-    snapshot = _build_snapshot(cleaned, decision_id, committed_at)
+    commit_instant = _utc_now_iso()
+    if pre_write_validator is not None:
+        pre_write_validator(cleaned, commit_instant)
+    snapshot = _build_snapshot(cleaned, decision_id, commit_instant)
     snapshot_json = store.canonical_json(snapshot)
     digest = store.snapshot_hash(snapshot)
     frozen = {

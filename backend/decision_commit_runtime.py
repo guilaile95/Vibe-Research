@@ -627,6 +627,16 @@ def evaluate_authorities(
     )
 
 
+def _production_freeze_writer_with_pre_write_validation(
+    payload: Mapping[str, Any], *,
+    pre_write_validator: Callable[[Mapping[str, Any], str], None] | None = None,
+) -> Mapping[str, Any]:
+    return frozen_decision_service._freeze_decision(
+        payload,
+        pre_write_validator=pre_write_validator,
+    )
+
+
 @dataclass(frozen=True)
 class RuntimePorts:
     campaign_reader: Callable[[str], Mapping[str, Any]] = campaign_service.get_campaign
@@ -634,6 +644,7 @@ class RuntimePorts:
     frozen_reader: Callable[..., list[Mapping[str, Any]]] = frozen_decision_service.list_decisions
     evidence_reader: Callable[[Mapping[str, Any]], Sequence[evidence_delta.NormalizedEvidenceItem]] = _default_evidence_reader
     freeze_writer: Callable[[Mapping[str, Any]], Mapping[str, Any]] = frozen_decision_service.freeze_decision
+    freeze_writer_with_pre_write_validation: Callable[..., Mapping[str, Any]] | None = None
     decision_reader: Callable[[str], Mapping[str, Any] | None] = frozen_decision_service.get_decision
     critical_data_reader: Callable[[Mapping[str, Any], str], Mapping[str, Any]] | None = None
 
@@ -647,7 +658,10 @@ def _production_critical_data_reader(
     )
 
 
-PRODUCTION_PORTS = RuntimePorts(critical_data_reader=_production_critical_data_reader)
+PRODUCTION_PORTS = RuntimePorts(
+    critical_data_reader=_production_critical_data_reader,
+    freeze_writer_with_pre_write_validation=_production_freeze_writer_with_pre_write_validation,
+)
 _COMMIT_LOCK = threading.Lock()
 
 
@@ -996,6 +1010,7 @@ def _bind_challenge_packet(
     proposal: proposal_projection.DecisionProposal,
     fingerprint: str,
     as_of: str,
+    committed_at: str | None = None,
 ) -> Mapping[str, Any]:
     import decision_challenge_runtime as challenge_runtime
 
@@ -1009,9 +1024,31 @@ def _bind_challenge_packet(
             },
             fingerprint=fingerprint,
             as_of=as_of,
+            committed_at=committed_at,
         )
     except challenge_runtime.DecisionChallengeBindError as exc:
         raise ChallengeBindingError(str(exc)) from exc
+
+
+def _challenge_pre_write_validator(
+    *,
+    challenge_id: str,
+    campaign: Mapping[str, Any],
+    proposal: proposal_projection.DecisionProposal,
+    fingerprint: str,
+    as_of: str,
+) -> Callable[[Mapping[str, Any], str], None]:
+    def validate(_payload: Mapping[str, Any], committed_at: str) -> None:
+        _bind_challenge_packet(
+            challenge_id=challenge_id,
+            campaign=campaign,
+            proposal=proposal,
+            fingerprint=fingerprint,
+            as_of=as_of,
+            committed_at=committed_at,
+        )
+
+    return validate
 
 
 def _freeze_payload(
@@ -1200,14 +1237,20 @@ def commit_decision_proposal(
             fingerprint = expected
             marker = expected_marker
         challenge_id = _optional_challenge_id(payload)
-        if challenge_id is not None:
-            _bind_challenge_packet(
-                challenge_id=challenge_id,
-                campaign=campaign,
-                proposal=result,
-                fingerprint=expected if existing is not None else fingerprint,
-                as_of=as_of,
-            )
+        if existing is not None:
+            existing_committed_at = existing.get("committed_at")
+            if not isinstance(existing_committed_at, str) or existing_committed_at != _canonical_utc(
+                existing_committed_at, "committed_at"
+            ):
+                raise FrozenDecisionIntegrityError("Frozen Decision committed_at is invalid")
+            if challenge_id is not None:
+                _bind_challenge_packet(
+                    challenge_id=challenge_id,
+                    campaign=campaign,
+                    proposal=result,
+                    fingerprint=expected,
+                    as_of=as_of,
+                )
         if existing is not None:
             bound = _challenge_refs(existing.get("source_refs"))
             if challenge_id is not None:
@@ -1221,7 +1264,27 @@ def commit_decision_proposal(
             frozen_payload = _freeze_payload(
                 result, authorities, drafts, fingerprint, challenge_id=challenge_id
             )
-            stored = ports.freeze_writer(frozen_payload)
+            validator = None
+            if challenge_id is not None:
+                validator = _challenge_pre_write_validator(
+                    challenge_id=challenge_id,
+                    campaign=campaign,
+                    proposal=result,
+                    fingerprint=fingerprint,
+                    as_of=as_of,
+                )
+            writer = ports.freeze_writer_with_pre_write_validation
+            if writer is not None:
+                stored = writer(
+                    frozen_payload,
+                    pre_write_validator=validator,
+                )
+            else:
+                if validator is not None:
+                    raise FrozenDecisionIntegrityError(
+                        "Challenge-bound Frozen Decision writer lacks service-owned pre-write validation"
+                    )
+                stored = ports.freeze_writer(frozen_payload)
         else:
             stored = existing
 

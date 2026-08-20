@@ -43,6 +43,57 @@ function returnText(value: string | number | null | undefined): string {
   return `${(numeric * 100).toFixed(2)}%`;
 }
 
+const PROCESS_DIMENSIONS = [
+  "STRONGEST_SUPPORTING_EVIDENCE",
+  "STRONGEST_OPPOSING_EVIDENCE",
+  "PRE_MORTEM",
+  "INVALIDATION_FACTS",
+] as const;
+
+function processReview(item: FormalDecisionOutcome) {
+  const review = item.process_review;
+  if (!review || review.state === "NONE") {
+    return (
+      <div data-testid={`process-review-none-${item.decision_id}`}>
+        No pre-freeze Challenge was bound to this Frozen Decision.
+      </div>
+    );
+  }
+  if (review.state === "ERROR") {
+    return (
+      <div data-testid={`process-review-error-${item.decision_id}`}>
+        Process Review unavailable; the bound Challenge authority is corrupt or unavailable.
+      </div>
+    );
+  }
+  return (
+    <div data-testid={`process-review-bound-${item.decision_id}`} className="space-y-2">
+      <div className="font-medium">Challenge bound</div>
+      <div className="font-mono text-xs">challenge_id: {review.challenge_id || "—"}</div>
+      <div className="text-xs text-muted-foreground">finalized_at: {review.finalized_at || "—"}</div>
+      <div className="text-xs text-muted-foreground">
+        packet: {review.packet_state || "—"} · evaluation: {review.challenge_evaluation || "—"}
+      </div>
+      <div className="text-xs text-muted-foreground">
+        two-pass: {review.two_pass_state || "—"} · semantic independence verified: {review.two_pass_semantic_independence_verified || "—"}
+      </div>
+      <div className="space-y-1">
+        {PROCESS_DIMENSIONS.map((name) => {
+          const dimension = review.dimensions?.[name];
+          return (
+            <div key={name} className="rounded border border-border/50 p-2 text-xs">
+              <div className="font-medium">{name}: {dimension?.status || "—"}</div>
+              <div className="mt-1 whitespace-pre-wrap text-muted-foreground">{dimension?.text || ""}</div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="text-xs font-medium">Process quality: NOT_EVALUATED</div>
+      <div className="text-xs text-muted-foreground">Challenge coverage is not decision correctness.</div>
+    </div>
+  );
+}
+
 export function FormalOutcomeSection() {
   const [items, setItems] = useState<FormalDecisionOutcome[]>([]);
   const [loading, setLoading] = useState(true);
@@ -120,6 +171,7 @@ export function FormalOutcomeSection() {
                 <th className="pb-3 pr-4">Decision / Security</th>
                 <th className="pb-3 pr-4">Boundary</th>
                 <th className="pb-3 pr-4">Replay</th>
+                <th className="pb-3 pr-4">Process Review</th>
                 <th className="pb-3 pr-4">Actual Capital</th>
                 <th className="pb-3">Counterfactual</th>
               </tr>
@@ -155,6 +207,7 @@ export function FormalOutcomeSection() {
                       {item.replay_future_fact_leak === false ? "future facts excluded" : "replay status unknown"}
                     </div>
                   </td>
+                  <td className="py-4 pr-4 align-top">{processReview(item)}</td>
                   <td className="py-4 pr-4 align-top">{actualSummary(item)}</td>
                   <td className="py-4 align-top">
                     <div>{counterfactualSummary(item)}</div>

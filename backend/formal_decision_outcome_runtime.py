@@ -12,6 +12,9 @@ import re
 from typing import Any
 
 import formal_decision_outcome as domain
+import decision_challenge_projection as challenge_domain
+import decision_challenge_runtime as challenge_runtime
+import decision_process_review
 import formal_trade_attribution as fta
 import formal_trade_attribution_store as attribution_store
 import campaign_critical_data_runtime as critical_data_runtime
@@ -65,6 +68,57 @@ def _load_decision(decision_id: str) -> dict[str, Any]:
     except Exception as exc:
         raise FormalOutcomeRuntimeError("Frozen Decision witness 校验失败") from exc
     return decision
+
+
+def _build_process_review(decision: dict[str, Any]) -> dict[str, Any]:
+    """Read Process Review strictly from Frozen Decision server-owned refs."""
+    try:
+        refs = decision.get("source_refs")
+        if not isinstance(refs, list) or not all(isinstance(ref, str) for ref in refs):
+            return decision_process_review.error_review("MALFORMED_SOURCE_REFS")
+        challenge_refs = [
+            ref for ref in refs
+            if ref.startswith(challenge_domain.CHALLENGE_SOURCE_PREFIX)
+        ]
+        proposal_refs = [
+            ref for ref in refs
+            if ref.startswith(challenge_domain.PROPOSAL_SOURCE_PREFIX)
+            and ref[len(challenge_domain.PROPOSAL_SOURCE_PREFIX):] != "projection:v0.1"
+        ]
+        for ref in (*challenge_refs, *proposal_refs):
+            if ref.startswith(challenge_domain.CHALLENGE_SOURCE_PREFIX):
+                value = ref[len(challenge_domain.CHALLENGE_SOURCE_PREFIX):]
+                try:
+                    challenge_domain.require_challenge_id(value)
+                except challenge_domain.DecisionChallengeValidationError:
+                    return decision_process_review.error_review("MALFORMED_SOURCE_REF")
+            else:
+                value = ref[len(challenge_domain.PROPOSAL_SOURCE_PREFIX):]
+                if value == "projection:v0.1":
+                    continue
+                try:
+                    challenge_domain.require_fingerprint(value)
+                except challenge_domain.DecisionChallengeValidationError:
+                    return decision_process_review.error_review("MALFORMED_SOURCE_REF")
+        if len(proposal_refs) > 1:
+            return decision_process_review.error_review("NON_UNIQUE_BINDING_REFS")
+        if len(challenge_refs) == 0:
+            return decision_process_review.none_review()
+        if len(proposal_refs) != 1:
+            return decision_process_review.error_review("NON_UNIQUE_BINDING_REFS")
+        if len(challenge_refs) != 1:
+            return decision_process_review.error_review("NON_UNIQUE_BINDING_REFS")
+        packet = challenge_runtime.verify_bound_challenge_for_frozen_decision(decision)
+        return decision_process_review.bound_review(packet)
+    except Exception:
+        return decision_process_review.error_review("CHALLENGE_BINDING_ERROR")
+
+
+def _attach_process_review(
+    result: dict[str, Any], decision: dict[str, Any]
+) -> dict[str, Any]:
+    result["process_review"] = _build_process_review(decision)
+    return result
 
 
 def _load_attributions(decision_id: str) -> list[dict[str, Any]]:
@@ -251,11 +305,14 @@ def evaluate_outcome(
         if fta.parse_utc_instant(evaluation, "evaluation_as_of") < fta.parse_utc_instant(
             anchor["decision_review_by"], "decision.review_by"
         ):
-            return domain.project_ol1_outcome(
+            return _attach_process_review(
+                domain.project_ol1_outcome(
+                    decision,
+                    evaluation_as_of=evaluation,
+                    attributions=[],
+                    trades=[],
+                ),
                 decision,
-                evaluation_as_of=evaluation,
-                attributions=[],
-                trades=[],
             )
 
         attributions = _load_attributions(decision_id)
@@ -294,7 +351,7 @@ def evaluate_outcome(
             counterfactual=counterfactual,
         )
         result["decision_time_replay"] = replay
-        return result
+        return _attach_process_review(result, decision)
     except domain.OutcomeValidationError as exc:
         raise FormalOutcomeValidationError(str(exc)) from exc
     except FormalOutcomeRuntimeError:
@@ -334,6 +391,7 @@ def _error_projection(decision: dict[str, Any], error: Exception) -> dict[str, A
                 "state": domain.PROCESS_QUALITY_STATE,
                 "reason_codes": ["NO_PROCESS_QUALITY_AUTHORITY"],
             },
+            "process_review": _build_process_review(decision),
             "reason_codes": ["FORMAL_OUTCOME_ERROR"],
             "error_code": type(error).__name__,
         }

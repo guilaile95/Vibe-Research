@@ -94,6 +94,7 @@ def _ports(
     thesis: dict | None = None,
     frozen: list[dict] | None = None,
     critical_data_reader=None,
+    committed_at: str = AS_OF,
 ):
     state = {"frozen": list(frozen or []), "writes": 0}
 
@@ -106,10 +107,15 @@ def _ports(
         record = {
             **payload,
             "decision_id": DECISION_ID,
-            "committed_at": AS_OF,
+            "committed_at": committed_at,
         }
         state["frozen"].append(record)
         return deepcopy(record)
+
+    def freeze_writer_with_pre_write_validation(payload, *, pre_write_validator=None):
+        if pre_write_validator is not None:
+            pre_write_validator(payload, committed_at)
+        return freeze_writer(payload)
 
     def decision_reader(decision_id: str):
         return next(
@@ -125,6 +131,7 @@ def _ports(
         frozen_reader=frozen_reader,
         evidence_reader=lambda _campaign: (),
         freeze_writer=freeze_writer,
+        freeze_writer_with_pre_write_validation=freeze_writer_with_pre_write_validation,
         decision_reader=decision_reader,
         critical_data_reader=critical_data_reader or (
             lambda _campaign, as_of: {**_critical_data(), "as_of": as_of}
