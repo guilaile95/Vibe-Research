@@ -172,32 +172,31 @@ async function createFrozenCurrentThesis(base, title) {
 }
 
 const draft = {
-  reviewBy: "2026-08-30T10:00:00Z",
   horizon: "10 至 30 交易日",
   assumptions: "流动性保持稳定",
   invalidations: "业绩发生重大反转",
 };
 
-async function fillProposalDraft(page) {
-  await page.getByLabel("Review by").fill(draft.reviewBy);
+async function fillProposalDraft(page, reviewBy) {
+  await page.getByLabel("Review by").fill(reviewBy);
   await page.getByLabel("Strategy horizon").fill(draft.horizon);
   await page.getByLabel("Key assumptions").fill(draft.assumptions);
   await page.getByLabel("Event invalidation conditions").fill(draft.invalidations);
-  await page.waitForFunction((expected) => {
+  await page.waitForFunction(({ reviewBy, horizon }) => {
     const review = document.querySelector('[aria-label="Review by"]');
-    const horizon = document.querySelector('[aria-label="Strategy horizon"]');
+    const horizonInput = document.querySelector('[aria-label="Strategy horizon"]');
     return Boolean(
-      review && review.value === expected.reviewBy
-      && horizon && horizon.value === expected.horizon
+      review && review.value === reviewBy
+      && horizonInput && horizonInput.value === horizon
     );
-  }, draft);
+  }, { reviewBy, horizon: draft.horizon });
 }
 
-async function freezeThroughBrowser(page, backend, frontend, campaignId, withChallenge, dataDir) {
+async function freezeThroughBrowser(page, backend, frontend, campaignId, withChallenge, dataDir, reviewBy) {
   await page.goto(`${frontend}/campaigns/${campaignId}/decision-proposal`, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Formal Decision Review" }).waitFor();
   await page.locator(`[data-decision-proposal-page="${campaignId}"]`).waitFor();
-  await fillProposalDraft(page);
+  await fillProposalDraft(page, reviewBy);
 
   const previewResponsePromise = page.waitForResponse((response) => (
     response.request().method() === "POST"
@@ -225,13 +224,32 @@ async function freezeThroughBrowser(page, backend, frontend, campaignId, withCha
     await page.getByRole("checkbox", { name: /我已显式填写四个挑战维度/ }).check();
     assert.equal(await finalize.isEnabled(), true);
     assert.equal(await finalize.isEnabled(), true, "Finalize must be enabled after four dimensions and confirmation");
-    const finalizeResponsePromise = page.waitForResponse((response) => (
-      response.request().method() === "POST"
-      && response.url().includes(`/api/campaigns/${campaignId}/decision-challenge/finalize`)
-    ), { timeout: 180000 });
-    await finalize.click();
-    const finalizeResponse = await finalizeResponsePromise;
-    const finalizeBody = await finalizeResponse.text();
+    let finalizeResponse;
+    let finalizeBody = "";
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const finalizeResponsePromise = page.waitForResponse((response) => (
+        response.request().method() === "POST"
+        && response.url().includes(`/api/campaigns/${campaignId}/decision-challenge/finalize`)
+      ), { timeout: 180000 });
+      await finalize.click();
+      finalizeResponse = await finalizeResponsePromise;
+      finalizeBody = await finalizeResponse.text();
+      if (finalizeResponse.ok()) break;
+      assert.equal(finalizeResponse.status(), 409, `[CF1] unexpected finalize failure: ${finalizeBody}`);
+      assert.equal(attempt, 0, `[CF1] finalize remained stale after one re-preview: ${finalizeBody}`);
+      assert.equal(existsSync(join(dataDir, "decision_challenges.sqlite3")), false, "Stale finalize must be zero-write");
+      const retryPreviewResponsePromise = page.waitForResponse((response) => (
+        response.request().method() === "POST"
+        && response.url().includes(`/api/campaigns/${campaignId}/decision-proposal/preview`)
+      ), { timeout: 180000 });
+      await page.getByRole("button", { name: "Preview Proposal" }).click();
+      const retryPreviewResponse = await retryPreviewResponsePromise;
+      assert.equal(retryPreviewResponse.ok(), true, `[CF1] re-preview failed: ${await retryPreviewResponse.text()}`);
+      await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
+      await page.getByRole("checkbox", { name: /我已显式填写四个挑战维度/ }).check();
+      assert.equal(await finalize.isEnabled(), true, "Finalize must re-enable after re-preview confirmation");
+    }
+    assert.ok(finalizeResponse);
     assert.equal(finalizeResponse.ok(), true, `[CF1] finalize failed: status=${finalizeResponse.status()} body=${finalizeBody}`);
     await page.locator('[data-challenge-state="FINALIZED"]').waitFor();
     challengeId = await page.locator("[data-challenge-id]").getAttribute("data-challenge-id");
@@ -268,6 +286,7 @@ function prepareTradeAndFactLake(env, python, first, second) {
   const script = `
 import json
 import os
+from datetime import datetime, timedelta
 import formal_trade_attribution as fta
 import formal_trade_attribution_store as ats
 import trade_attribution_runtime as tar
@@ -288,10 +307,20 @@ first = json.loads(os.environ['OL1_FIRST_COMMITTED'])
 second = json.loads(os.environ['OL1_SECOND_COMMITTED'])
 lake = initialize_fact_lake(os.environ['VR_FACT_LAKE_ROOT'])
 evaluation_as_of = os.environ['OL1_CF_EVALUATION_AS_OF']
+committed_at = datetime.fromisoformat(first['committed_at'].replace('Z', '+00:00'))
+evaluation_at = datetime.fromisoformat(evaluation_as_of.replace('Z', '+00:00'))
+executed_at = committed_at + timedelta(seconds=1)
+assert committed_at <= executed_at < evaluation_at
+executed_at_text = executed_at.isoformat(timespec='seconds').replace('+00:00', 'Z')
+unplanned_at_text = (executed_at + timedelta(seconds=1)).isoformat(timespec='seconds').replace('+00:00', 'Z')
+unallocated_at_text = (executed_at + timedelta(seconds=2)).isoformat(timespec='seconds').replace('+00:00', 'Z')
+created_at_text = (executed_at + timedelta(seconds=3)).isoformat(timespec='microseconds').replace('+00:00', 'Z')
 start_trade_date = completed_trade_date_at(first['committed_at'])
 end_trade_date = completed_trade_date_at(evaluation_as_of)
 assert start_trade_date and end_trade_date and end_trade_date > start_trade_date
-def publish_price(trade_date, close, event):
+def visible_before(value):
+    return (value - timedelta(microseconds=1)).isoformat(timespec='microseconds').replace('+00:00', 'Z')
+def publish_price(trade_date, close, event, fetched_at):
     defaults = {'open': close, 'high': close + 1, 'low': close - 1,
                 'close': close, 'pre_close': close - 1,
                 'change': 1, 'pct_chg': 1, 'vol': 1000, 'amount': 100000}
@@ -306,16 +335,16 @@ def publish_price(trade_date, close, event):
         raw_bytes=raw, request_fingerprint=build_request_fingerprint(contract),
         source_payload_hash=payload_sha256(raw), http_status=200,
         content_type='application/json; charset=utf-8',
-        fetched_at=f'{trade_date}T08:00:00.000000Z')
+        fetched_at=fetched_at)
     observation, normalization = persist_tushare_daily_evidence(lake, capture)
     fact = build_tushare_daily_canonical_fact(observation.observation, normalization)
     publish_tushare_daily_canonical_fact(lake, fact)
-publish_price(start_trade_date, 100.0, 1)
-publish_price(end_trade_date, 110.0, 2)
-exact = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'buy', 'execution_status': 'full', 'actual_price': 100, 'actual_quantity': 1, 'executed_at': '2026-08-18T01:00:00Z'})
-unplanned = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 101, 'actual_quantity': 1, 'executed_at': '2026-08-18T01:01:00Z'})
-unallocated = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 102, 'actual_quantity': 1, 'executed_at': '2026-08-18T01:02:00Z'})
-record = fta.create_attribution(first, exact, attribution_id=fta.new_attribution_id(), created_at='2026-08-18T02:00:00.000000Z').to_dict()
+publish_price(start_trade_date, 100.0, 1, visible_before(committed_at))
+publish_price(end_trade_date, 110.0, 2, visible_before(evaluation_at))
+exact = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'buy', 'execution_status': 'full', 'actual_price': 100, 'actual_quantity': 1, 'executed_at': executed_at_text})
+unplanned = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 101, 'actual_quantity': 1, 'executed_at': unplanned_at_text})
+unallocated = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 102, 'actual_quantity': 1, 'executed_at': unallocated_at_text})
+record = fta.create_attribution(first, exact, attribution_id=fta.new_attribution_id(), created_at=created_at_text).to_dict()
 ats.write_attribution(db_path=ats.resolve_formal_trade_attribution_db_path(), record=record)
 tar.mark_unplanned(unplanned['trade_id'], {'confirm': True})
 print(json.dumps({'first': first, 'second': second, 'exact': exact, 'unplanned': unplanned, 'unallocated': unallocated}))
@@ -331,6 +360,41 @@ print(json.dumps({'first': first, 'second': second, 'exact': exact, 'unplanned':
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   return JSON.parse(result.stdout.trim());
+}
+
+function createOutcomeHistoryFillers(env, python, template, count = 50) {
+  const script = `
+import json
+import os
+import frozen_decision_service as frozen
+
+template = json.loads(os.environ['RQ1_FILLER_TEMPLATE'])
+count = int(os.environ['RQ1_FILLER_COUNT'])
+service_fields = {
+    'decision_id', 'committed_at', 'snapshot_schema_version',
+    'snapshot_hash', 'validity_status_at_commit', 'created_at',
+    'snapshot_json',
+}
+payload = {key: value for key, value in template.items() if key not in service_fields}
+payload['review_by'] = '2099-09-09T10:00:00Z'
+payload['source_refs'] = ['rq1:e2e-history-filler']
+created = [frozen.freeze_decision(payload)['decision_id'] for _ in range(count)]
+print(json.dumps(created))
+`;
+  const result = spawnSync(python.cmd, [...python.args, "-c", script], {
+    cwd: backendDir,
+    env: {
+      ...env,
+      RQ1_FILLER_TEMPLATE: JSON.stringify(template),
+      RQ1_FILLER_COUNT: String(count),
+    },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const ids = JSON.parse(result.stdout.trim());
+  assert.equal(ids.length, count);
+  assert.equal(new Set(ids).size, count);
+  return ids;
 }
 
 async function removeTempDir(dir) {
@@ -385,6 +449,7 @@ async function run() {
 
     const firstCampaign = await createFrozenCurrentThesis(backend, "CF1 with challenge");
     const secondCampaign = await createFrozenCurrentThesis(backend, "CF1 without challenge");
+    const thirdCampaign = await createFrozenCurrentThesis(backend, "RQ1 NOT_DUE sibling");
     staticServer = await startStaticServer(frontendDist, frontendPort);
     const launchOptions = { headless: true };
     const executablePath = chromiumPath();
@@ -392,7 +457,17 @@ async function run() {
     browser = await chromium.launch(launchOptions);
     const page = await browser.newPage();
     const consoleErrors = [];
+    const exactOutcomeRequests = [];
     page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (
+        request.method() === "GET"
+        && /^\/api\/formal-decisions\/decision_[0-9a-f]{32}\/outcome$/.test(url.pathname)
+      ) {
+        exactOutcomeRequests.push(url);
+      }
+    });
     await page.route("**/api/**", async (route) => {
       const request = route.request();
       const url = new URL(request.url());
@@ -416,8 +491,38 @@ async function run() {
       }
     });
 
-    const firstRun = await freezeThroughBrowser(page, backend, frontend, firstCampaign.campaign_id, true, tempDataDir);
-    const secondRun = await freezeThroughBrowser(page, backend, frontend, secondCampaign.campaign_id, false, tempDataDir);
+    const firstRun = await freezeThroughBrowser(
+      page,
+      backend,
+      frontend,
+      firstCampaign.campaign_id,
+      true,
+      tempDataDir,
+      "2026-08-01T10:00:00Z",
+    );
+    const secondRun = await freezeThroughBrowser(
+      page,
+      backend,
+      frontend,
+      secondCampaign.campaign_id,
+      false,
+      tempDataDir,
+      "2026-08-02T10:00:00Z",
+    );
+    const historyFillerIds = createOutcomeHistoryFillers(
+      env,
+      pythonScriptConfig(),
+      secondRun.committed.committed,
+    );
+    const thirdRun = await freezeThroughBrowser(
+      page,
+      backend,
+      frontend,
+      thirdCampaign.campaign_id,
+      false,
+      tempDataDir,
+      "2099-09-10T10:00:00Z",
+    );
     const fixtures = prepareTradeAndFactLake(env, pythonScriptConfig(), firstRun.committed.committed, secondRun.committed.committed);
     const evaluationAsOf = "2026-09-01T00:00:00.000000Z";
     assert.ok(firstRun.committed.committed.source_refs, JSON.stringify(firstRun.committed));
@@ -434,7 +539,7 @@ async function run() {
     assert.equal(firstBefore.process_review.dimensions.PRE_MORTEM.status, "UNKNOWN");
     assert.equal(firstBefore.process_quality.state, "NOT_EVALUATED");
     assert.deepEqual(firstBefore.process_quality.reason_codes, ["NO_PROCESS_QUALITY_AUTHORITY"]);
-    assert.equal(firstBefore.counterfactual_outcome.state, "EVALUATED");
+    assert.equal(firstBefore.counterfactual_outcome.state, "EVALUATED", JSON.stringify(firstBefore.counterfactual_outcome));
     assert.equal(firstBefore.counterfactual_outcome.metric_kind, "SECURITY_CLOSE_TO_CLOSE_RETURN");
     assert.equal(firstBefore.counterfactual_outcome.security_return, "0.1");
     assert.equal(firstBefore.counterfactual_outcome.start_price_point.close, 100);
@@ -466,12 +571,48 @@ async function run() {
       backend,
       `/api/formal-decisions/${secondRun.decisionId}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
     );
+    assert.equal(secondOutcome.outcome_status, "EVALUATED");
     assert.equal(secondOutcome.process_review.state, "NONE");
     assert.equal(typeof secondOutcome.decision_time_replay.replay_hash, "string");
     assert.equal(secondOutcome.process_quality.state, "NOT_EVALUATED");
+    assert.equal(secondOutcome.actual_capital_outcome.state, "NO_ACTUAL_TRADE");
+    assert.equal(secondOutcome.counterfactual_outcome.state, "EVALUATED");
+    assert.equal(secondOutcome.counterfactual_outcome.security_return, "0.1");
+    const thirdOutcome = await jsonRequest(
+      backend,
+      `/api/formal-decisions/${thirdRun.decisionId}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
+    );
+    assert.equal(thirdOutcome.outcome_status, "PENDING");
+    assert.equal(thirdOutcome.due_state, "NOT_DUE");
+    assert.equal(thirdOutcome.actual_capital_outcome.state, "PENDING");
+
+    const worklist = await jsonRequest(backend, "/api/formal-decision-review-worklist");
+    assert.equal(worklist.due.length, 2, JSON.stringify(worklist));
+    assert.equal(worklist.upcoming.length, historyFillerIds.length + 1, JSON.stringify(worklist));
+    assert.equal(worklist.unavailable.length, 0, JSON.stringify(worklist));
+    assert.deepEqual(worklist.due.map((item) => item.decision_id), [firstRun.decisionId, secondRun.decisionId]);
+    assert.equal(worklist.due.every((item) => item.due_state === "DUE"), true);
+    const upcomingDecisionIds = worklist.upcoming.map((item) => item.decision_id);
+    assert.equal(upcomingDecisionIds.includes(thirdRun.decisionId), true);
+    assert.equal(historyFillerIds.every((decisionId) => upcomingDecisionIds.includes(decisionId)), true);
+    assert.equal(worklist.upcoming.every((item) => item.due_state === "NOT_DUE"), true);
+    assert.equal(worklist.due.some((item) => item.due_state === "OVERDUE"), false);
+    assert.equal(worklist.upcoming.some((item) => item.due_state === "UPCOMING"), false);
+    assert.deepEqual(
+      [...worklist.due, ...worklist.upcoming].map((item) => item.decision_review_by),
+      [...worklist.due, ...worklist.upcoming]
+        .map((item) => item.decision_review_by)
+        .sort(),
+    );
+    assert.equal(
+      readdirSync(tempDataDir).some((name) => /queue/i.test(name)),
+      false,
+      "RQ1 must not create queue persistence",
+    );
 
     await page.goto(`${frontend}/decision-performance?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "Formal Decision Outcome" }).waitFor();
+    await page.getByTestId(`formal-outcome-${historyFillerIds[0]}`).getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
     await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
     await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
     await page.getByText("Challenge coverage is not decision correctness.", { exact: true }).waitFor();
@@ -479,7 +620,38 @@ async function run() {
     await page.getByText("Security close-to-close path", { exact: true }).first().waitFor();
     await page.getByText("security path only; not portfolio P&L or decision quality", { exact: true }).first().waitFor();
     assert.equal(await page.getByText("Security close-to-close path", { exact: true }).count(), 2);
-    assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 2);
+    await page.getByTestId("review-worklist-group-due").waitFor();
+    await page.getByTestId("review-worklist-group-upcoming").waitFor();
+    await page.getByTestId("review-worklist-group-unavailable").waitFor();
+    const dueItem = page.getByTestId(`review-worklist-due-${firstRun.decisionId}`);
+    const secondDueItem = page.getByTestId(`review-worklist-due-${secondRun.decisionId}`);
+    const upcomingItem = page.getByTestId(`review-worklist-upcoming-${thirdRun.decisionId}`);
+    await dueItem.waitFor();
+    await secondDueItem.waitFor();
+    await upcomingItem.waitFor();
+    assert.equal(await dueItem.getByText("DUE", { exact: true }).count(), 1);
+    assert.equal(await secondDueItem.getByText("DUE", { exact: true }).count(), 1);
+    assert.equal(await upcomingItem.getByText("NOT_DUE", { exact: true }).count(), 1);
+    assert.equal(await page.getByTestId("review-worklist-unavailable").count(), 0);
+    assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 50);
+    assert.equal(await page.getByTestId(`formal-outcome-${thirdRun.decisionId}`).count(), 0);
+    assert.equal(
+      exactOutcomeRequests.filter((url) => url.pathname === `/api/formal-decisions/${thirdRun.decisionId}/outcome`).length,
+      0,
+    );
+    const exactOutcomeRequestPromise = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return request.method() === "GET"
+        && url.pathname === `/api/formal-decisions/${thirdRun.decisionId}/outcome`;
+    });
+    await upcomingItem.click();
+    const exactOutcomeRequest = await exactOutcomeRequestPromise;
+    assert.equal(new URL(exactOutcomeRequest.url()).searchParams.get("evaluation_as_of"), evaluationAsOf);
+    const mergedTargetOutcome = page.getByTestId(`formal-outcome-${thirdRun.decisionId}`);
+    await mergedTargetOutcome.waitFor();
+    await mergedTargetOutcome.getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
+    await page.waitForFunction((decisionId) => document.activeElement?.id === `formal-outcome-${decisionId}`, thirdRun.decisionId);
+    assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 51);
     const actionableConsoleErrors = consoleErrors.filter(
       (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
         && !message.includes("Failed to load resource: the server responded with a status of 404"),
@@ -487,10 +659,19 @@ async function run() {
     assert.equal(actionableConsoleErrors.length, 0, actionableConsoleErrors.join("\n"));
 
     await page.reload({ waitUntil: "networkidle" });
+    await page.getByTestId(`formal-outcome-${historyFillerIds[0]}`).getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
     await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
     await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
     await page.getByTestId(`process-review-none-${secondRun.decisionId}`).waitFor();
-    assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 2);
+    await page.getByTestId("review-worklist-group-due").waitFor();
+    await page.getByTestId("review-worklist-group-upcoming").waitFor();
+    await page.getByTestId(`review-worklist-due-${firstRun.decisionId}`).waitFor();
+    await page.getByTestId(`review-worklist-due-${secondRun.decisionId}`).waitFor();
+    const reloadedUpcoming = page.getByTestId(`review-worklist-upcoming-${thirdRun.decisionId}`);
+    await reloadedUpcoming.waitFor();
+    assert.equal(await reloadedUpcoming.getByText("NOT_DUE", { exact: true }).count(), 1);
+    assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 50);
+    assert.equal(await page.getByTestId(`formal-outcome-${thirdRun.decisionId}`).count(), 0);
     console.log("[E2E] P0-CF1 Formal Decision Outcome vertical passed");
   } catch (error) {
     const detail = backendLog ? `\nBackend log:\n${backendLog}` : "";

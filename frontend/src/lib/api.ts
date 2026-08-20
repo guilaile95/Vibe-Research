@@ -108,6 +108,7 @@ import type {
   OutcomeSummary,
   StockAnalyticsItem,
   FormalDecisionOutcome,
+  FormalDecisionReviewWorklist,
   AttributionResult,
   AttributionSnapshotSummary,
   AttributionSnapshotListResult,
@@ -909,6 +910,8 @@ export const api = {
   },
 
   // ---- Formal Decision Outcome (P0-OL1); separate from legacy analytics ----
+  getFormalDecisionReviewWorklist: () =>
+    get<FormalDecisionReviewWorklist>("/formal-decision-review-worklist"),
   listFormalDecisionOutcomes: (params?: {
     evaluation_as_of?: string;
     limit?: number;
