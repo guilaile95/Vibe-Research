@@ -37,6 +37,14 @@ def get_formal_decision_outcome(
         _raise(exc)
 
 
+@router.get("/api/formal-decision-review-worklist")
+def get_formal_decision_review_worklist():
+    try:
+        return {"data": runtime.build_review_worklist()}
+    except Exception as exc:
+        _raise(exc)
+
+
 @router.get("/api/formal-decision-outcomes")
 def list_formal_decision_outcomes(
     evaluation_as_of: str | None = Query(None),

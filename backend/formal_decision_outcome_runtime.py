@@ -15,6 +15,7 @@ import formal_decision_outcome as domain
 import decision_challenge_projection as challenge_domain
 import decision_challenge_runtime as challenge_runtime
 import decision_process_review
+import formal_decision_review_worklist as review_worklist
 import formal_trade_attribution as fta
 import formal_trade_attribution_store as attribution_store
 import campaign_critical_data_runtime as critical_data_runtime
@@ -30,6 +31,8 @@ import trade_origin_store
 _DECISION_ID_RE = re.compile(r"^decision_[0-9a-f]{32}$")
 _PAGE_SIZE = 500
 _SAFETY_BOUND = 10_000
+_WORKLIST_PAGE_SIZE = 100
+_WORKLIST_SAFETY_BOUND = 10_000
 
 
 class FormalOutcomeRuntimeError(RuntimeError):
@@ -404,6 +407,58 @@ def _error_projection(decision: dict[str, Any], error: Exception) -> dict[str, A
         }
 
 
+def build_review_worklist() -> dict[str, Any]:
+    """Build one complete server-time Review Due Worklist snapshot."""
+    evaluation_as_of = fta.to_canonical_utc(_now(), "evaluation_as_of")
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    offset = 0
+    while offset < _WORKLIST_SAFETY_BOUND:
+        try:
+            decisions = frozen_decision_service.list_decisions(
+                limit=_WORKLIST_PAGE_SIZE,
+                offset=offset,
+            )
+        except Exception as exc:
+            raise FormalOutcomeRuntimeError(
+                "Frozen Decision list authority 读取失败"
+            ) from exc
+        if not decisions:
+            break
+        for decision in decisions:
+            decision_id = decision.get("decision_id")
+            if not isinstance(decision_id, str) or decision_id in seen:
+                raise FormalOutcomeRuntimeError(
+                    "Frozen Decision pagination contains duplicate or invalid identity"
+                )
+            seen.add(decision_id)
+            try:
+                rows.append(
+                    evaluate_outcome(
+                        decision_id,
+                        evaluation_as_of=evaluation_as_of,
+                    )
+                )
+            except (FormalOutcomeRuntimeError, FormalOutcomeValidationError) as exc:
+                rows.append(_error_projection(decision, exc))
+        next_offset = offset + len(decisions)
+        if next_offset <= offset or len(decisions) > _WORKLIST_PAGE_SIZE:
+            raise FormalOutcomeRuntimeError("Frozen Decision pagination did not progress")
+        offset = next_offset
+        if len(decisions) < _WORKLIST_PAGE_SIZE:
+            break
+    else:
+        raise FormalOutcomeRuntimeError("Frozen Decision pagination exceeded safety bound")
+
+    try:
+        return review_worklist.project_review_worklist(
+            rows,
+            evaluation_as_of=evaluation_as_of,
+        )
+    except review_worklist.ReviewWorklistProjectionError as exc:
+        raise FormalOutcomeRuntimeError("Formal Review Due Worklist projection failed") from exc
+
+
 def list_outcomes(
     *,
     evaluation_as_of: str | None = None,
@@ -440,6 +495,7 @@ __all__ = [
     "FormalOutcomeNotFoundError",
     "FormalOutcomeRuntimeError",
     "FormalOutcomeValidationError",
+    "build_review_worklist",
     "evaluate_outcome",
     "list_outcomes",
 ]
