@@ -93,9 +93,13 @@ function findChromium() {
   return undefined;
 }
 
-function startBackend(dbPath, port) {
+function startBackend(dbPath, port, allowedOrigin) {
   return new Promise((resolve, reject) => {
-    const env = { ...process.env, VIBE_RESEARCH_EVIDENCE_THESIS_DB: dbPath };
+    const env = {
+      ...process.env,
+      VR_ALLOW_ORIGINS: allowedOrigin,
+      VIBE_RESEARCH_EVIDENCE_THESIS_DB: dbPath,
+    };
     const { cmd, extraArgs } = getPythonConfig();
     const args = [...extraArgs, "app:app", `--port=${port}`, "--host=127.0.0.1"];
     const proc = spawn(cmd, args, { cwd: backendDir, env, stdio: ["ignore", "pipe", "pipe"], shell: false });
@@ -128,7 +132,7 @@ async function main() {
 
   try {
     console.log("[E2E] Starting backend...");
-    backend = await startBackend(dbPath, backendPort);
+    backend = await startBackend(dbPath, backendPort, baseUrl);
     await waitHttp(`${apiUrl}/api/health`);
 
     console.log("[E2E] Starting frontend...");

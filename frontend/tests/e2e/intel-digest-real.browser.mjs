@@ -111,6 +111,7 @@ async function main() {
   const py = getPythonConfig();
   const pyEnv = {
     ...process.env,
+    VR_ALLOW_ORIGINS: `http://127.0.0.1:${frontendPort}`,
     VR_DATA_DIR: tmpDataDir,
     VR_REPORTS_DIR: tmpReportsDir,
     PYTHONPATH: `${backendDir}${path.delimiter}${process.env.PYTHONPATH || ""}`,

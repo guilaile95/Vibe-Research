@@ -424,6 +424,7 @@ async function run() {
     const py = pythonConfig();
     const env = {
       ...process.env,
+      VR_ALLOW_ORIGINS: frontend,
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
       VR_FACT_LAKE_ROOT: join(tempDataDir, "fact-lake"),
