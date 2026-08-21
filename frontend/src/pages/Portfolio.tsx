@@ -13,6 +13,7 @@ import {
   type PortfolioAdviceConfidence,
   type AccountProfileData,
   type AccountFundingData,
+  type AccountReality,
   type DataHealthRecordDto,
 } from "@/lib/api";
 import { loadLlm } from "@/lib/llm";
@@ -386,6 +387,9 @@ export function Portfolio() {
   const [acctConfigured, setAcctConfigured] = useState(false);
   const [acctLoading, setAcctLoading] = useState(false);
   const [acctLoadError, setAcctLoadError] = useState<string | null>(null);
+  // P1-CASH1：canonical ledger cash readback（bootstrap 后无需重复填写即可见正常资金状态）。
+  const [acctReality, setAcctReality] = useState<AccountReality | null>(null);
+  const [acctRealityError, setAcctRealityError] = useState<string | null>(null);
   const [acctOpen, setAcctOpen] = useState(false);
   const [accTotal, setAccTotal] = useState("");
   const [accCash, setAccCash] = useState("");
@@ -456,6 +460,15 @@ export function Portfolio() {
       setAcct(prev => prev);
     } finally {
       setAcctLoading(false);
+    }
+    // P1-CASH1：canonical cash readback。失败显式降级（fail closed），
+    // 不阻塞 manual profile 展示，也不把读取失败伪装成“未配置”。
+    try {
+      setAcctReality(await api.getAccountReality());
+      setAcctRealityError(null);
+    } catch (e) {
+      setAcctReality(null);
+      setAcctRealityError(e instanceof ApiError ? e.message : "账户现实读取失败");
     }
   }, []);
 
@@ -678,6 +691,12 @@ export function Portfolio() {
   const mismatchRows = (data?.ledger_view?.reconciliation?.items || []).filter(
     (i) => i.status !== "MATCH"
   );
+  // P1-CASH1：canonical ledger cash（bootstrap 期初 + 成交/现金事件推演）。
+  // 语义与手工 account_profile 快照不同：仅在未配置手工快照时作为当前现金展示，
+  // 并始终标注来源；两者同存时显示对账状态，不互相覆盖。
+  const ledgerCash = acctReality?.cash?.ledger_candidate;
+  const ledgerCashAvailable =
+    !acctConfigured && ledgerCash?.status === "AVAILABLE" && typeof ledgerCash.value === "number";
   const summary = advice?.portfolio_summary;
   const account = advice?.account_action;
 
@@ -773,6 +792,21 @@ export function Portfolio() {
             <div>
               <p className="mb-1 text-xs text-muted-foreground">可用现金</p>
               <p className="font-mono text-lg font-bold text-foreground">{fmtCny(acct.available_cash)}</p>
+              {acctReality?.cash?.ledger_candidate?.status === "AVAILABLE" && (
+                <span
+                  data-testid="account-cash-reconciliation"
+                  className={cn(
+                    "mt-1 inline-block rounded px-1.5 py-0.5 text-[11px]",
+                    acctReality.cash.reconciliation === "MATCH"
+                      ? "bg-success/15 text-success"
+                      : "bg-destructive/15 text-destructive",
+                  )}
+                >
+                  {acctReality.cash.reconciliation === "MATCH"
+                    ? "与 Ledger 推演现金一致"
+                    : `与 Ledger 推演现金不一致（Ledger ${fmtCny(acctReality.cash.ledger_candidate.value ?? 0)}）`}
+                </span>
+              )}
             </div>
             <div className="ml-auto flex flex-col items-end gap-1">
               <span className="text-[11px] text-muted-foreground/60">更新于 {acct.updated_at}</span>
@@ -781,6 +815,51 @@ export function Portfolio() {
                 编辑
               </button>
             </div>
+          </div>
+        ) : ledgerCashAvailable && ledgerCash ? (
+          <div data-testid="account-cash-ledger-view" className="space-y-2">
+            <div className="flex flex-wrap items-end gap-4">
+              <div>
+                <p className="mb-1 text-xs text-muted-foreground">当前现金（Position Ledger 推演）</p>
+                <p className="font-mono text-lg font-bold text-foreground">{fmtCny(ledgerCash.value ?? 0)}</p>
+              </div>
+              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">
+                canonical · bootstrap 期初现金 + 成交与现金事件推演
+              </span>
+              {acctReality?.cash?.current_fact?.status === "AVAILABLE" && (
+                <span
+                  data-testid="account-cash-reconciliation"
+                  className={cn(
+                    "rounded px-1.5 py-0.5 text-[11px]",
+                    acctReality.cash.reconciliation === "MATCH"
+                      ? "bg-success/15 text-success"
+                      : "bg-destructive/15 text-destructive",
+                  )}
+                >
+                  与手工快照{acctReality.cash.reconciliation === "MATCH" ? "一致" : `不一致（手工 ${fmtCny(acctReality.cash.current_fact.value ?? 0)}）`}
+                </span>
+              )}
+              <div className="ml-auto">
+                <button onClick={openAcct}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25">
+                  填写手工快照
+                </button>
+              </div>
+            </div>
+            <p className="text-[11px] leading-4 text-muted-foreground/60">
+              以上为 Position Ledger 的 canonical 推演现金，无需重复录入。手工快照是另一语义（当前时点人工确认值，用于持仓建议与 NAV 对账），可选填写。
+            </p>
+          </div>
+        ) : acctRealityError ? (
+          <div data-testid="account-reality-error" className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              账户现实不可用：{acctRealityError}（fail closed，不猜测资金状态）
+            </div>
+            <button onClick={loadAcct}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
+              重试
+            </button>
           </div>
         ) : (
           <div className="flex flex-wrap items-center justify-between gap-3">

@@ -27,6 +27,7 @@
     "test:e2e:trade-attribution-reconciliation": "node tests/e2e/trade-attribution-reconciliation.browser.mjs",
     "test:e2e:formal-outcome": "node tests/e2e/formal-outcome.browser.mjs",
     "test:e2e:has1-holding-authority": "node tests/e2e/has1-holding-authority.browser.mjs",
+    "test:e2e:cash1-cash-readback": "node tests/e2e/cash1-cash-readback.browser.mjs",
     "test:e2e:decision-challenge": "node tests/e2e/decision-challenge.browser.mjs",
     "test:e2e:evidence-effective-time": "node tests/e2e/evidence-effective-time-real.browser.mjs"
   },

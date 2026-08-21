@@ -42,6 +42,7 @@ import type {
   DerivedPositionsResult,
   AccountProfileResponse,
   AccountProfileRequest,
+  AccountReality,
   PortfolioAdviceResult,
   PortfolioAdviceRequest,
   AiResultType,
@@ -574,6 +575,8 @@ export const api = {
       total_assets: data.total_assets,
       available_cash: data.available_cash,
     }, { unwrapData: false }),
+  /** 只读账户现实（P1-CASH1）：canonical ledger cash candidate 与 manual fact 的对账 read model。 */
+  getAccountReality: () => get<AccountReality>("/account/reality"),
   /**
    * 结构化持仓操作建议（普通 JSON）。
    * 只发送 user_request + llm；持仓与市场上下文由服务器读取，不注入 portfolio/context/messages。

@@ -668,6 +668,35 @@ export interface AccountProfileRequest {
 }
 
 
+// P1-CASH1：GET /api/account/reality 只读账户现实（canonical cash readback 用其 cash 段）。
+// current_fact = account_profile 手工快照（MANUAL）；ledger_candidate = bootstrap 期初现金
+// + 成交/现金事件推演（DERIVED）。两者语义不同，UI 必须区分，不得互相当作对方。
+export interface AccountRealityCashFact {
+  value: number | null;
+  source: string;
+  fact_type: string;
+  status: "AVAILABLE" | "UNKNOWN";
+  reason_code?: string;
+  updated_at?: string | null;
+  coverage?: string;
+}
+
+export interface AccountReality {
+  account_status?: string;
+  bootstrap_status?: string;
+  cash: {
+    current_fact: AccountRealityCashFact;
+    ledger_candidate: AccountRealityCashFact;
+    reconciliation: "MATCH" | "MISMATCH" | "UNKNOWN";
+    coverage?: string;
+  };
+  settled_nav?: number | null;
+  confidence?: string;
+  reason_codes?: string[];
+  as_of?: string;
+}
+
+
 // ---------------------------------------------------------------------------
 // 持仓操作建议（POST /api/portfolio/advice，普通 JSON，非流式）
 // 契约与 backend portfolio_advice_validator 权威结果对齐
