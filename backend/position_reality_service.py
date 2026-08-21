@@ -82,6 +82,25 @@ def resolve_db_path():
     return trade_ledger_service.resolve_db_path()
 
 
+def get_holding_authority_state() -> str:
+    """HAS1 single-writer gate 的权威检测输入。
+
+    CANONICAL — 存在 active ACCOUNT_OPENING：ledger-derived Position Reality 是
+    唯一 Holding writer，legacy portfolio.json 持仓 CRUD 必须 fail closed。
+    LEGACY — 无 bootstrap 证据：legacy portfolio.json CRUD 仍是合法路径。
+    ERROR — 权威不可读（账本缺失/损坏等）：调用方必须 fail closed，
+    不得默认为“允许 legacy 写”。
+    """
+    try:
+        db_path = resolve_db_path()
+        openings = account_event_store.count_non_voided(
+            db_path, event_type=_EVENT_ACCOUNT_OPENING
+        )
+    except Exception:
+        return "ERROR"
+    return "CANONICAL" if openings > 0 else "LEGACY"
+
+
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 

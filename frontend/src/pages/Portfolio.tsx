@@ -672,6 +672,12 @@ export function Portfolio() {
   const holdings = data?.holdings || [];
   const totals = data?.totals;
   const closed = data?.closed || [];
+  // HAS1：持仓权威标记与对账分歧（post-bootstrap 由 Position Ledger 派生）。
+  const holdingAuthority = data?.holding_authority;
+  const canonicalHoldings = holdingAuthority === "LEDGER_DERIVED";
+  const mismatchRows = (data?.ledger_view?.reconciliation?.items || []).filter(
+    (i) => i.status !== "MATCH"
+  );
   const summary = advice?.portfolio_summary;
   const account = advice?.account_action;
 
@@ -691,10 +697,35 @@ export function Portfolio() {
         }
       />
 
-      <div className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
-        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-        <span>持仓<b className="text-foreground">只存在你本地</b>，不上传、不进仓库。行情每半小时自动刷新，也可手动刷新。结构化操作建议由本地配置的 AI 生成，数量与盈亏以代码校验结果为准。</span>
-      </div>
+      {canonicalHoldings ? (
+        <div data-testid="portfolio-authority-banner" data-authority="LEDGER_DERIVED"
+          className="mb-4 flex items-start gap-2 rounded-lg border border-primary/25 bg-primary/5 p-3 text-xs text-muted-foreground">
+          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+          <span>持仓权威：<b className="text-foreground">Position Ledger（canonical）</b>。当前持仓数量与成本由成交账本派生，与 Decision Inbox 同一权威；请通过 <b className="text-foreground">Trades 成交录入</b>或 Position Correction 维护持仓，手动录入/编辑已停用。旧 portfolio.json 仅作为归档与对账证据保留。</span>
+        </div>
+      ) : holdingAuthority === "UNKNOWN" ? (
+        <div data-testid="portfolio-authority-banner" data-authority="UNKNOWN"
+          className="mb-4 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>无法确认持仓权威状态（Position Ledger 读取失败）。以下持仓为 legacy 归档展示；所有修改请求会被服务端拒绝（fail closed）。</span>
+        </div>
+      ) : (
+        <div data-testid="portfolio-authority-banner" data-authority="LEGACY_PORTFOLIO"
+          className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
+          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+          <span>持仓<b className="text-foreground">只存在你本地</b>，不上传、不进仓库（legacy 模式，尚未 bootstrap）。行情每半小时自动刷新，也可手动刷新。结构化操作建议由本地配置的 AI 生成，数量与盈亏以代码校验结果为准。</span>
+        </div>
+      )}
+
+      {canonicalHoldings && mismatchRows.length > 0 && (
+        <div data-testid="portfolio-mismatch-banner"
+          className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+          <p className="font-medium">持仓对账不一致（{mismatchRows.length} 条）</p>
+          <p className="mt-1 leading-5">
+            {mismatchRows.map((i) => `${i.code}: ${i.status}${i.reason ? `（${i.reason}）` : ""}`).join("；")}。以 Position Ledger 为准；legacy 归档不会被自动修改，请通过 Position Correction 或补录成交处理分歧。
+          </p>
+        </div>
+      )}
 
       {/* 汇总 */}
       {totals && holdings.length > 0 && (
@@ -881,7 +912,14 @@ export function Portfolio() {
         </div>
       )}
 
-      {/* 录入 */}
+      {/* 录入（HAS1：canonical 模式下停用 legacy 手动录入） */}
+      {canonicalHoldings ? (
+        <GlassCard className="mb-4" data-testid="portfolio-legacy-entry-disabled">
+          <p className="text-xs text-muted-foreground">
+            手动添加持仓已停用：当前持仓由 Position Ledger 权威维护。请到 <b className="text-foreground">Trades</b> 页录入成交，或使用 Position Correction 修正期初持仓。
+          </p>
+        </GlassCard>
+      ) : (
       <GlassCard className="mb-4">
         <h3 className="mb-3 text-sm font-semibold">添加持仓</h3>
         <div className="flex flex-wrap items-end gap-2">
@@ -907,6 +945,7 @@ export function Portfolio() {
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground/60">同一代码再次添加会按加权平均成本合并（加仓）。</p>
       </GlassCard>
+      )}
 
       {err && (
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
@@ -946,21 +985,23 @@ export function Portfolio() {
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{fmtSigned(h.pnl)}</td>
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{fmtPct(h.pnl_pct)}</td>
                     <td className="px-2 py-2.5">
-                      <div className="flex items-center gap-1.5">
-                        <button onClick={() => openEdit(h.code, h.shares, h.cost)} className="text-muted-foreground/50 hover:text-primary" title="编辑">
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            setDelConfirm({ code: h.code, name: h.name, shares: h.shares });
-                            setDelErr(null);
-                          }}
-                          className="text-muted-foreground/50 hover:text-destructive"
-                          title="删除"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
+                      {!canonicalHoldings && (
+                        <div className="flex items-center gap-1.5">
+                          <button onClick={() => openEdit(h.code, h.shares, h.cost)} className="text-muted-foreground/50 hover:text-primary" title="编辑">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setDelConfirm({ code: h.code, name: h.name, shares: h.shares });
+                              setDelErr(null);
+                            }}
+                            className="text-muted-foreground/50 hover:text-destructive"
+                            title="删除"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -1162,7 +1203,8 @@ export function Portfolio() {
         )}
       </GlassCard>
 
-      {/* 清仓录入 */}
+      {/* 清仓录入（HAS1：canonical 模式下停用，卖出请走 Trades） */}
+      {!canonicalHoldings && (
       <GlassCard className="mb-4 mt-6">
         <h3 className="mb-3 text-sm font-semibold">添加清仓记录</h3>
         <div className="flex flex-wrap items-end gap-2">
@@ -1197,6 +1239,7 @@ export function Portfolio() {
           </button>
         </div>
       </GlassCard>
+      )}
 
       {/* 已清仓列表 */}
       <div className="mb-2 flex items-center justify-between">
@@ -1234,9 +1277,11 @@ export function Portfolio() {
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{fmtSigned(c.pnl)}</td>
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{fmtPct(c.pnl_pct)}</td>
                     <td className="px-2 py-2.5">
-                      <button onClick={() => removeClosed(i)} className="text-muted-foreground/50 hover:text-destructive" title="删除">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      {!canonicalHoldings && (
+                        <button onClick={() => removeClosed(i)} className="text-muted-foreground/50 hover:text-destructive" title="删除">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

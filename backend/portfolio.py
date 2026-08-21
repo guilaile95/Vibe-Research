@@ -218,11 +218,29 @@ def get_portfolio_holdings_snapshot() -> dict:
     return {"holdings": copy.deepcopy(d.get("holdings", []))}
 
 
-def get_portfolio() -> dict:
-    """读持仓 + 实时行情，算每笔与汇总的市值/浮动盈亏。"""
+def get_portfolio(derived_positions: dict | None = None, reconciliation: dict | None = None) -> dict:
+    """读持仓 + 实时行情，算每笔与汇总的市值/浮动盈亏。
+
+    HAS1：传入 derived_positions（position_reality_service.derive_positions 的输出）时，
+    holdings 行改由 canonical ledger-derived OPEN positions 提供（code/shares/avg_cost），
+    portfolio.json 中的 holdings 不再决定显示数量/成本；closed 历史仍作为 legacy archive
+    原样展示，reconciliation 原样附在 ledger_view 中。不传参时行为与旧版完全一致。
+    """
     with _LOCK:
         d = _load()
-    hs = d.get("holdings", [])
+    if derived_positions is not None:
+        hs = [
+            {
+                "code": p["code"],
+                "shares": int(p["shares"]),
+                "cost": float(p["avg_cost"]) if p.get("avg_cost") is not None else 0.0,
+                "cost_known": bool(p.get("cost_known", True)),
+            }
+            for p in derived_positions.get("positions", [])
+            if p.get("status") == "OPEN"
+        ]
+    else:
+        hs = d.get("holdings", [])
     rows = []
     valid_count = 0
     tmv_sum = 0.0
@@ -261,6 +279,7 @@ def get_portfolio() -> dict:
                     "pnl": round(pnl, 2),
                     "pnl_pct": pnl_pct,
                     "data_status": "normal",
+                    **({"cost_known": h["cost_known"]} if "cost_known" in h else {}),
                 })
                 valid_count += 1
                 tmv_sum += mv
@@ -275,6 +294,7 @@ def get_portfolio() -> dict:
                     "pnl": None,
                     "pnl_pct": None,
                     "data_status": "unavailable",
+                    **({"cost_known": h["cost_known"]} if "cost_known" in h else {}),
                 })
 
     total_count = len(hs)
@@ -319,6 +339,14 @@ def get_portfolio() -> dict:
         "data_status": data_status,
         "quote_coverage": quote_coverage,
     }
+    if derived_positions is not None:
+        # HAS1：canonical 派生视图附元数据；closed 仍来自 portfolio.json（legacy archive）。
+        result["ledger_view"] = {
+            "bootstrap_status": derived_positions.get("bootstrap_status"),
+            "canonical": bool(derived_positions.get("canonical")),
+            "data_limitations": list(derived_positions.get("data_limitations") or []),
+            "reconciliation": reconciliation,
+        }
     # 数据健康：记录持仓行情覆盖观察（失败不影响业务结果）
     try:
         import data_health_event_store as _dhes
