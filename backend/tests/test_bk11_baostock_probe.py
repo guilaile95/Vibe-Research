@@ -675,22 +675,116 @@ def test_universe_too_large_fails_closed():
     assert summary["probe"] is None
 
 
-def test_output_contains_no_full_stock_rows():
+_BK11_ROW_FIELD_KEYS = frozenset(
+    {"date", "code", "open", "high", "low", "close", "preclose", "tradestatus", "pctChg", "isST"}
+)
+# fixture universe（sh.600000..sh.600009）+ k_map 中的 sz.000001：裸码与前缀码都是真实证券标识
+_BK11_REAL_CODE_TOKENS = tuple(
+    [f"{600000 + i}" for i in range(10)]
+    + [f"sh.{600000 + i}" for i in range(10)]
+    + ["sz.000001"]
+)
+_BK11_FORBIDDEN_STRING_TOKENS = _BK11_REAL_CODE_TOKENS + ("9.4900", "10.1000")
+_BK11_FORBIDDEN_CONTAINER_KEYS = frozenset({"rows"})
+
+
+def _assert_redacted_aggregate_summary(summary) -> None:
+    """结构化 redaction 契约检查：汇总只允许 aggregate statistics，不得泄漏行情明细。
+
+    三层检查：
+    - 容器键：禁止 ``rows`` 这类 raw 行容器键；
+    - 行结构：任何 dict 同时具备 ≥3 个 BaoStock 行字段键即为结构化行泄漏；
+    - 字符串：任何 dict 键或字符串值都不得包含真实证券代码或 fixture OHLC 明细。
+
+    int/float 数值不做数字子串扫描：``determinism.details[].elapsed`` 是原始
+    monotonic 差值浮点，其十进制表示可能合法地包含任意数字序列（2026-08-21 CI
+    attempt-1 实测 ``6.260000020574807e-07`` 触发旧式全文扫描的 ``"600000"``
+    误报），而证券代码与行情行在 provider schema 中以字符串/结构化字段存在，
+    数值豁免不影响泄漏检出。
+    """
+
+    def walk(node):
+        if isinstance(node, dict):
+            forbidden_keys = set(node) & _BK11_FORBIDDEN_CONTAINER_KEYS
+            assert not forbidden_keys, f"raw row container key leaked: {sorted(forbidden_keys)}"
+            row_keys = set(node) & _BK11_ROW_FIELD_KEYS
+            assert len(row_keys) < 3, f"stock-row-shaped object leaked with keys {sorted(row_keys)}"
+            for key, value in node.items():
+                assert isinstance(key, str), f"non-string dict key: {key!r}"
+                hits = [token for token in _BK11_FORBIDDEN_STRING_TOKENS if token in key]
+                assert not hits, f"forbidden token(s) {hits} in dict key {key!r}"
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+        elif isinstance(node, str):
+            hits = [token for token in _BK11_FORBIDDEN_STRING_TOKENS if token in node]
+            assert not hits, f"forbidden token(s) {hits} leaked in string {node!r}"
+
+    walk(summary)
+
+
+def _sample_probe_summary_for_redaction():
     client = _make_client(
         k_map={
             "sh.600000": [_stock_row("sh.600000", pct="1.25", ohlc="9.4900")],
             "sz.000001": [_stock_row("sz.000001", pct="-0.50", ohlc="10.1000")],
         }
     )
-    summary = probe.run_sample_probe(
-        client, DAY, sample_size=2, sleep=lambda _: None
-    )
-    text = json.dumps(summary, ensure_ascii=False)
+    return probe.run_sample_probe(client, DAY, sample_size=2, sleep=lambda _: None)
+
+
+def test_output_contains_no_full_stock_rows():
+    summary = _sample_probe_summary_for_redaction()
     # 汇总中不得出现完整行情行 / 代码列表 / OHLC / pct 明细
-    assert '"rows"' not in text
-    assert "9.4900" not in text
-    assert "10.1000" not in text
-    assert "600000" not in text
+    _assert_redacted_aggregate_summary(summary)
+
+
+def test_redaction_check_rejects_bare_real_code():
+    poisoned = copy.deepcopy(_sample_probe_summary_for_redaction())
+    poisoned["circuit_open"] = "600000"
+    with pytest.raises(AssertionError):
+        _assert_redacted_aggregate_summary(poisoned)
+
+
+def test_redaction_check_rejects_prefixed_real_codes():
+    for token in ("sh.600000", "sz.000001"):
+        poisoned = copy.deepcopy(_sample_probe_summary_for_redaction())
+        poisoned["circuit_open"] = token
+        with pytest.raises(AssertionError):
+            _assert_redacted_aggregate_summary(poisoned)
+
+
+def test_redaction_check_rejects_raw_rows_container():
+    poisoned = copy.deepcopy(_sample_probe_summary_for_redaction())
+    poisoned["probe"]["rows"] = [_stock_row("sh.600000")]
+    with pytest.raises(AssertionError):
+        _assert_redacted_aggregate_summary(poisoned)
+
+
+def test_redaction_check_rejects_row_shaped_object_without_container_key():
+    poisoned = copy.deepcopy(_sample_probe_summary_for_redaction())
+    poisoned["universe_stats"]["leaked"] = {
+        "date": DAY,
+        "code": "sh.600000",
+        "close": "9.49",
+    }
+    with pytest.raises(AssertionError):
+        _assert_redacted_aggregate_summary(poisoned)
+
+
+def test_redaction_check_tolerates_timing_float_digit_collisions():
+    """2026-08-21 CI 事故回归：timing 浮点 repr 含 ``600000`` 不是代码泄漏。
+
+    attempt-1 实测碰撞值 ``6.260000020574807e-07`` 出现在 determinism.details[]
+    的原始 elapsed 中；旧式对 json.dumps 全文的裸子串扫描会因此误报，而输出中
+    并不存在任何证券标识。结构化检查必须 PASS，末尾断言保留事故机制存档。
+    """
+    poisoned = copy.deepcopy(_sample_probe_summary_for_redaction())
+    poisoned["probe"]["determinism"]["details"][0]["elapsed"] = 6.260000020574807e-07
+    poisoned["probe"]["requests_per_second"] = 600000.5
+    _assert_redacted_aggregate_summary(poisoned)
+    assert "600000" in json.dumps(poisoned, ensure_ascii=False)
 
 
 def _breadth_summary(universe, k_map, **kwargs):
