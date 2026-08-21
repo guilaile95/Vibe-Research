@@ -33,19 +33,23 @@ import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
 
 /**
  * Sidebar follows user contexts instead of mirroring implementation modules.
- * Primary destinations answer five recurring questions:
+ * Primary destinations answer five recurring questions plus the core
+ * decision workflow chain (P1-NAV1):
  * - 今天：现在发生了什么？
  * - 自选：我正在关注什么？
  * - 研究：这个标的值不值得继续研究？
  * - 持仓：我现在暴露了什么风险？
- * - 决策：下一步应该做什么？
+ * - 决策：下一步应该做什么？（Decision Inbox 是正式决策主入口）
+ * - 交易 / 复盘：Inbox → Formal Decision → Trade → Review/Outcome 主链直达。
  */
 const PRIMARY_NAV = [
   { to: "/daily-review", icon: Activity, label: "今天" },
   { to: "/watchlist", icon: Star, label: "自选" },
   { to: "/stock-data", icon: Search, label: "研究" },
   { to: "/portfolio", icon: Wallet, label: "持仓" },
-  { to: "/cockpit", icon: Target, label: "决策" },
+  { to: "/decision-inbox", icon: Inbox, label: "决策" },
+  { to: "/trades", icon: ReceiptText, label: "交易" },
+  { to: "/decision-performance", icon: BarChart3, label: "复盘" },
 ];
 
 /** Research artifacts and market context live in a lower-frequency library. */
@@ -59,12 +63,10 @@ const LIBRARY_NAV = [
 
 /** Lower-frequency analytical surfaces remain reachable without competing with daily contexts. */
 const ANALYSIS_NAV = [
-  { to: "/decision-inbox", icon: Inbox, label: "决策待办" },
+  { to: "/cockpit", icon: Target, label: "决策驾驶舱（Legacy）" },
   { to: "/decision-evidence", icon: ShieldCheck, label: "决策依据" },
   { to: "/signal-ledger", icon: Activity, label: "信号账本" },
-  { to: "/trades", icon: ReceiptText, label: "交易流水" },
   { to: "/decision-feedback", icon: BarChart3, label: "决策反馈" },
-  { to: "/decision-performance", icon: BarChart3, label: "决策绩效" },
   { to: "/performance-attribution", icon: PieChart, label: "收益归因" },
   { to: "/account-policy", icon: Settings2, label: "执行策略" },
 ];
@@ -102,6 +104,7 @@ function getCurrentNavPath(pathname: string) {
   if (SECTOR_PATHS.some((to) => isActive(pathname, to))) return "/sectors";
   if (pathname.startsWith("/thesis/")) return "/thesis";
   if (pathname.startsWith("/evidence")) return "/decision-evidence";
+  if (pathname.startsWith("/campaigns/")) return "/decision-inbox";
   return ALL_NAV.reduce<string | null>((best, item) => {
     if (!isActive(pathname, item.to)) return best;
     return !best || item.to.length > best.length ? item.to : best;
