@@ -91,8 +91,8 @@ jobs:
         run: npm run build
 
       - name: Install Playwright Chromium
-        working-directory: frontend
-        run: npx playwright install chromium --with-deps
+        uses: ./.github/actions/setup-playwright
+        timeout-minutes: 15
 
       - name: Run stock-data panel smoke E2E
         working-directory: frontend
@@ -136,8 +136,8 @@ jobs:
         run: npm run build
 
       - name: Install Playwright Chromium
-        working-directory: frontend
-        run: npx playwright install chromium --with-deps
+        uses: ./.github/actions/setup-playwright
+        timeout-minutes: 15
 
       - name: Run local API browser security E2E
         working-directory: frontend
@@ -200,8 +200,8 @@ jobs:
         run: npm run build
 
       - name: Install Playwright Chromium
-        working-directory: frontend
-        run: npx playwright install chromium --with-deps
+        uses: ./.github/actions/setup-playwright
+        timeout-minutes: 15
 
       - name: Run data health real E2E
         working-directory: frontend
@@ -247,8 +247,8 @@ jobs:
         run: npm run build
 
       - name: Install Playwright Chromium
-        working-directory: frontend
-        run: npx playwright install chromium --with-deps
+        uses: ./.github/actions/setup-playwright
+        timeout-minutes: 15
 
       - name: Run Intel digest real E2E
         working-directory: frontend
@@ -292,8 +292,8 @@ jobs:
         run: npm run build
 
       - name: Install Playwright Chromium
-        working-directory: frontend
-        run: npx playwright install chromium --with-deps
+        uses: ./.github/actions/setup-playwright
+        timeout-minutes: 15
 
       - name: Run decision inbox real E2E
         working-directory: frontend
@@ -355,8 +355,8 @@ jobs:
         run: npm run build
 
       - name: Install Playwright Chromium
-        working-directory: frontend
-        run: npx playwright install chromium --with-deps
+        uses: ./.github/actions/setup-playwright
+        timeout-minutes: 15
 
       - name: Run account bootstrap real E2E
         working-directory: frontend
