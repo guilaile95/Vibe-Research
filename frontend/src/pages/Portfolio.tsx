@@ -691,9 +691,9 @@ export function Portfolio() {
   const mismatchRows = (data?.ledger_view?.reconciliation?.items || []).filter(
     (i) => i.status !== "MATCH"
   );
-  // P1-CASH1：canonical ledger cash（bootstrap 期初 + 成交/现金事件推演）。
-  // 语义与手工 account_profile 快照不同：仅在未配置手工快照时作为当前现金展示，
-  // 并始终标注来源；两者同存时显示对账状态，不互相覆盖。
+  // P1-CASH1：ledger-derived cash candidate（opening_cash + 成交/现金事件推演，
+  // DERIVED_FACT，非 MANUAL_CURRENT_FACT）。仅未配置手工快照时展示，并始终标注
+  // candidate 语义；两者同存时显示对账状态，不互相覆盖。settled NAV 仍依赖手工快照。
   const ledgerCash = acctReality?.cash?.ledger_candidate;
   const ledgerCashAvailable =
     !acctConfigured && ledgerCash?.status === "AVAILABLE" && typeof ledgerCash.value === "number";
@@ -803,8 +803,8 @@ export function Portfolio() {
                   )}
                 >
                   {acctReality.cash.reconciliation === "MATCH"
-                    ? "与 Ledger 推演现金一致"
-                    : `与 Ledger 推演现金不一致（Ledger ${fmtCny(acctReality.cash.ledger_candidate.value ?? 0)}）`}
+                    ? "与 ledger-derived candidate 一致"
+                    : `与 ledger-derived candidate 不一致（candidate ${fmtCny(acctReality.cash.ledger_candidate.value ?? 0)}）`}
                 </span>
               )}
             </div>
@@ -820,11 +820,11 @@ export function Portfolio() {
           <div data-testid="account-cash-ledger-view" className="space-y-2">
             <div className="flex flex-wrap items-end gap-4">
               <div>
-                <p className="mb-1 text-xs text-muted-foreground">当前现金（Position Ledger 推演）</p>
+                <p className="mb-1 text-xs text-muted-foreground">现金候选值（ledger-derived candidate）</p>
                 <p className="font-mono text-lg font-bold text-foreground">{fmtCny(ledgerCash.value ?? 0)}</p>
               </div>
               <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">
-                canonical · bootstrap 期初现金 + 成交与现金事件推演
+                DERIVED_FACT · opening_cash + 成交 + 现金事件推演
               </span>
               {acctReality?.cash?.current_fact?.status === "AVAILABLE" && (
                 <span
@@ -847,7 +847,7 @@ export function Portfolio() {
               </div>
             </div>
             <p className="text-[11px] leading-4 text-muted-foreground/60">
-              以上为 Position Ledger 的 canonical 推演现金，无需重复录入。手工快照是另一语义（当前时点人工确认值，用于持仓建议与 NAV 对账），可选填写。
+              以上是由 Position Ledger 推演出的 ledger-derived candidate（opening_cash + 成交 + 现金事件），不是手工确认的当前现金。settled NAV 与 NAV 对账仍依赖 account_profile 的 MANUAL CURRENT FACT——手工快照仍需维护，两个事实并存并对账。
             </p>
           </div>
         ) : acctRealityError ? (

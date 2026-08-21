@@ -4,7 +4,8 @@
  * Proves on the real FastAPI + built-frontend surface, isolated data dir:
  * A  pre-bootstrap Portfolio still shows the honest "not configured" empty state;
  * B  after canonical bootstrap with opening_cash, the account area reads the
- *    canonical ledger-derived cash — no duplicate manual entry required;
+ *    ledger-derived cash candidate (opening_cash + trades + cash events) with
+ *    explicit candidate semantics — no duplicate manual entry required;
  * C  a new trade updates the displayed cash through the same authority;
  * D  when a manual snapshot exists, both facts are distinguished and their
  *    mismatch is explicit (never silently merged or overwritten).
@@ -205,8 +206,14 @@ async function run() {
     await openPortfolio();
     const ledgerView = page.getByTestId("account-cash-ledger-view");
     await ledgerView.waitFor();
-    assert.ok((await ledgerView.innerText()).includes("¥100,000.00"), "canonical opening cash must display");
-    assert.ok((await ledgerView.innerText()).includes("Position Ledger"), "authority label must be explicit");
+    assert.ok((await ledgerView.innerText()).includes("¥100,000.00"), "candidate value must display");
+    const candidateText = await ledgerView.innerText();
+    // R1 语义：必须表达为 ledger-derived candidate，不得称为 canonical/current cash；
+    // 且必须保留 settled NAV 依赖 manual CURRENT FACT 的事实。
+    assert.ok(candidateText.includes("ledger-derived candidate"));
+    assert.ok(candidateText.includes("DERIVED_FACT"));
+    assert.ok(candidateText.includes("MANUAL CURRENT FACT"), "manual snapshot dependency must stay visible");
+    assert.equal(candidateText.includes("canonical"), false, "must not be labelled canonical");
     assert.equal(await page.getByText("尚未配置账户资金").count(), 0);
 
     // ---- C. trade 通过同一权威更新展示现金 -------------------------------
