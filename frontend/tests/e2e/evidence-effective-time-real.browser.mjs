@@ -62,7 +62,7 @@ function chromiumPath() {
   return undefined;
 }
 
-function backendProcess(dbPath, port) {
+function backendProcess(dbPath, port, allowedOrigin) {
   const configuredPython = process.env.PYTHON;
   const python = configuredPython || (process.platform === "win32" ? "py" : "python3");
   const args = configuredPython
@@ -70,7 +70,16 @@ function backendProcess(dbPath, port) {
     : process.platform === "win32"
       ? ["-3", "-m", "uvicorn", "app:app", `--port=${port}`, "--host=127.0.0.1"]
       : ["-m", "uvicorn", "app:app", `--port=${port}`, "--host=127.0.0.1"];
-  const child = spawn(python, args, { cwd: backendDir, env: { ...process.env, VIBE_RESEARCH_EVIDENCE_THESIS_DB: dbPath }, stdio: ["ignore", "pipe", "pipe"], shell: false });
+  const child = spawn(python, args, {
+    cwd: backendDir,
+    env: {
+      ...process.env,
+      VR_ALLOW_ORIGINS: allowedOrigin,
+      VIBE_RESEARCH_EVIDENCE_THESIS_DB: dbPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: false,
+  });
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { child.kill(); reject(new Error("backend startup timeout")); }, 30000);
     const ready = (chunk) => {
@@ -109,7 +118,7 @@ async function main() {
   let frontend;
   let browser;
   try {
-    backend = await backendProcess(dbPath, backendPort);
+    backend = await backendProcess(dbPath, backendPort, frontendUrl);
     await waitHttp(`${apiUrl}/api/health`);
     frontend = await staticServer(dist, frontendPort);
     browser = await chromium.launch({ headless: true, executablePath: chromiumPath() });

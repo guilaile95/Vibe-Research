@@ -10,8 +10,11 @@
 from __future__ import annotations
 
 import json
+import hmac
+import ipaddress
 import logging
 import os
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -27,6 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
+from starlette.datastructures import Headers
 
 import account_profile
 import ai_result_service
@@ -140,6 +144,211 @@ def _safe_daily_review_ai_done_result(record) -> dict[str, str]:
     }
 
 
+# ── Local-private HTTP runtime boundary (P1-SB1) ──────────────────────────
+
+_DEFAULT_LOCAL_ORIGINS = (
+    "http://localhost:5899",
+    "http://127.0.0.1:5899",
+)
+_PUBLIC_API_PATHS = frozenset({"/api/health"})
+_AUTH_ERROR_DETAIL = "Authentication required"
+_ORIGIN_ERROR_DETAIL = "Origin not allowed"
+_HOST_ERROR_DETAIL = "Host not allowed"
+_NON_LOOPBACK_NO_KEY_DETAIL = "Service unavailable for unauthenticated non-loopback access"
+_HOST_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def _normalize_host_name(raw: str, *, setting: str) -> str:
+    """Return a canonical host without a port, or reject the configuration.
+
+    IPv6 literals must be bracketed so configuration and HTTP Host headers use
+    one unambiguous representation. Hostnames are deliberately limited to DNS
+    ASCII labels; wildcard, path, userinfo, and port syntax are not accepted.
+    """
+
+    value = (raw or "").strip().lower()
+    if not value or len(value) > 255 or any(char.isspace() for char in value):
+        raise RuntimeError(f"{setting} contains an invalid host")
+    if any(marker in value for marker in ("/", "\\", "@", ",", "://")):
+        raise RuntimeError(f"{setting} contains an invalid host")
+
+    if value.startswith("["):
+        if not value.endswith("]") or value.count("[") != 1 or value.count("]") != 1:
+            raise RuntimeError(f"{setting} contains an invalid host")
+        try:
+            address = ipaddress.ip_address(value[1:-1])
+        except ValueError:
+            raise RuntimeError(f"{setting} contains an invalid host") from None
+        if address.version != 6:
+            raise RuntimeError(f"{setting} contains an invalid host")
+        return f"[{address.compressed}]"
+
+    if ":" in value:
+        raise RuntimeError(f"{setting} contains an invalid host")
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        if all(char.isdigit() or char == "." for char in value):
+            raise RuntimeError(f"{setting} contains an invalid host") from None
+        labels = value.split(".")
+        if len(value) > 253 or any(not _HOST_LABEL_RE.fullmatch(label) for label in labels):
+            raise RuntimeError(f"{setting} contains an invalid host") from None
+        return value
+    if address.version != 4:
+        raise RuntimeError(f"{setting} contains an invalid host")
+    return address.compressed
+
+
+def _canonical_origin(raw: str, *, setting: str = "Origin") -> str:
+    """Strictly parse and serialize one HTTP(S) Origin."""
+
+    from urllib.parse import urlsplit
+
+    value = (raw or "").strip()
+    if (
+        not value
+        or len(value) > 2048
+        or any(char.isspace() for char in value)
+        or "\\" in value
+        or "," in value
+        or "?" in value
+        or "#" in value
+    ):
+        raise RuntimeError(f"{setting} contains an invalid Origin")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise RuntimeError(f"{setting} contains an invalid Origin") from None
+    scheme = parsed.scheme.lower()
+    if (
+        scheme not in ("http", "https")
+        or not parsed.netloc
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or parsed.netloc.endswith(":")
+    ):
+        raise RuntimeError(f"{setting} contains an invalid Origin")
+    host = _normalize_host_name(
+        f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname,
+        setting=setting,
+    )
+    if port == (80 if scheme == "http" else 443):
+        port = None
+    return f"{scheme}://{host}{f':{port}' if port is not None else ''}"
+
+
+def _parse_origins(raw: str) -> list[str]:
+    """Parse VR_ALLOW_ORIGINS without permissive fallback or empty CSV items."""
+
+    parts = (raw or "").split(",")
+    if not parts or any(not part.strip() for part in parts):
+        raise RuntimeError("VR_ALLOW_ORIGINS must contain one or more explicit Origins")
+    origins: list[str] = []
+    for part in parts:
+        if part.strip() == "*":
+            raise RuntimeError("VR_ALLOW_ORIGINS does not allow wildcard Origins")
+        origin = _canonical_origin(part, setting="VR_ALLOW_ORIGINS")
+        if origin not in origins:
+            origins.append(origin)
+    return origins
+
+
+def _parse_trusted_hosts(raw: str) -> set[str]:
+    """Parse optional VR_TRUSTED_HOSTS as exact host names without ports."""
+
+    if not (raw or "").strip():
+        return set()
+    parts = raw.split(",")
+    if any(not part.strip() for part in parts):
+        raise RuntimeError("VR_TRUSTED_HOSTS contains an empty host")
+    return {_normalize_host_name(part, setting="VR_TRUSTED_HOSTS") for part in parts}
+
+
+def _parse_host_header(raw: str) -> str:
+    """Return the canonical host name from an HTTP Host header."""
+
+    value = (raw or "").strip().lower()
+    if not value or len(value) > 512 or any(char.isspace() for char in value):
+        raise ValueError("invalid Host header")
+    if value.startswith("["):
+        end = value.find("]")
+        if end < 0:
+            raise ValueError("invalid Host header")
+        host, suffix = value[: end + 1], value[end + 1 :]
+        if suffix:
+            if not suffix.startswith(":") or not _valid_port(suffix[1:]):
+                raise ValueError("invalid Host header")
+    else:
+        if value.count(":") > 1:
+            raise ValueError("invalid Host header")
+        host, separator, port = value.partition(":")
+        if separator and not _valid_port(port):
+            raise ValueError("invalid Host header")
+    try:
+        return _normalize_host_name(host, setting="Host")
+    except RuntimeError:
+        raise ValueError("invalid Host header") from None
+
+
+def _valid_port(raw: str) -> bool:
+    return raw.isascii() and raw.isdigit() and 1 <= int(raw) <= 65535
+
+
+def _origin_allowed(origin_header: str, host_header: str, scheme: str) -> bool:
+    """Allow no-Origin clients, exact configured Origins, and exact same-Origin."""
+
+    origin = (origin_header or "").strip()
+    if not origin:
+        return True
+    try:
+        canonical = _canonical_origin(origin)
+    except RuntimeError:
+        return False
+    # Browser Origin serialization is canonical. Requiring the exact form also
+    # rejects trailing slashes, explicit default ports, and mixed encodings.
+    if origin != canonical:
+        return False
+    if canonical in _ALLOWED_ORIGINS:
+        return True
+    try:
+        same_origin = _canonical_origin(f"{scheme}://{host_header}")
+    except RuntimeError:
+        return False
+    return canonical == same_origin
+
+
+def _server_is_loopback(scope) -> bool:
+    server = scope.get("server")
+    if not server or not server[0]:
+        return False
+    host = str(server[0]).strip().lower()
+    # Starlette TestClient uses this in-memory ASGI transport marker. A real
+    # Uvicorn socket reports an IP address instead.
+    if host == "testserver":
+        return True
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+_API_KEY = os.environ.get("VR_API_KEY", "").strip()
+if "VR_ALLOW_ORIGINS" in os.environ:
+    _ALLOWED_ORIGINS = _parse_origins(os.environ["VR_ALLOW_ORIGINS"])
+else:
+    _ALLOWED_ORIGINS = list(_DEFAULT_LOCAL_ORIGINS)
+_ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"} | _parse_trusted_hosts(
+    os.environ.get("VR_TRUSTED_HOSTS", "")
+)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用启动时确保后台刷新调度器已启动（幂等）。"""
@@ -149,15 +358,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Vibe-Research API", version="0.1.3", lifespan=lifespan)
 
-# CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
-#   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）
-_ORIGINS = [o.strip() for o in os.environ.get("VR_ALLOW_ORIGINS", "*").split(",") if o.strip()] or ["*"]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_ORIGINS,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
+# CORS registration is intentionally deferred until after the request guards.
+# The resulting middleware order is documented below next to the wiring.
 
 # 投资逻辑与证据账本：独立路由模块最小接入
 app.include_router(evidence_thesis_router.router)
@@ -212,9 +414,8 @@ async def _revision_conflict_handler(request: Request, exc: evidence_thesis_rout
         content={"detail": exc.message, "current_revision": exc.current_revision},
     )
 
-# 可选鉴权：设了 VR_API_KEY 就要求所有 /api/* 带 `Authorization: Bearer <key>`
-#   （本地自托管不设=开放；公网部署务必设，否则别人能读你的持仓/调你的后端）。
-_API_KEY = os.environ.get("VR_API_KEY", "").strip()
+# Intentional public exception: health is anonymous only when the deployment
+# itself satisfies the Host and non-loopback boundaries.
 
 
 @app.exception_handler(RequestValidationError)
@@ -271,11 +472,104 @@ async def _require_api_key(request: Request, call_next):
         _API_KEY
         and request.method != "OPTIONS"
         and request.url.path.startswith("/api/")
-        and request.url.path != "/api/health"
+        and request.url.path not in _PUBLIC_API_PATHS
     ):
-        if request.headers.get("authorization", "") != f"Bearer {_API_KEY}":
-            return JSONResponse({"detail": "未授权：缺少或错误的 API Key（VR_API_KEY）"}, status_code=401)
+        authorization_values = request.headers.getlist("authorization")
+        supplied = (
+            authorization_values[0] if len(authorization_values) == 1 else ""
+        ).encode("utf-8", "surrogatepass")
+        expected = f"Bearer {_API_KEY}".encode("utf-8", "surrogatepass")
+        if not hmac.compare_digest(supplied, expected):
+            return JSONResponse(
+                {"detail": _AUTH_ERROR_DETAIL},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
     return await call_next(request)
+
+
+class _OriginGate:
+    """Reject hostile browser Origins before any private handler executes."""
+
+    def __init__(self, wrapped_app):
+        self.app = wrapped_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path", "").startswith("/api/"):
+            headers = Headers(scope=scope)
+            origin_values = headers.getlist("origin")
+            if len(origin_values) > 1 or not _origin_allowed(
+                origin_values[0] if origin_values else "",
+                headers.get("host", ""),
+                scope.get("scheme", "http"),
+            ):
+                response = JSONResponse({"detail": _ORIGIN_ERROR_DETAIL}, status_code=403)
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+class _LocalHostGate:
+    """Exact Host allowlist for loopback use and explicit non-local deployment."""
+
+    def __init__(self, wrapped_app):
+        self.app = wrapped_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = Headers(scope=scope)
+            host_values = headers.getlist("host")
+            try:
+                host = (
+                    _parse_host_header(host_values[0])
+                    if len(host_values) == 1
+                    else ""
+                )
+            except ValueError:
+                host = ""
+            server = scope.get("server")
+            in_memory_testserver = bool(
+                host == "testserver"
+                and server
+                and str(server[0]).strip().lower() == "testserver"
+            )
+            if not in_memory_testserver and host not in _ALLOWED_HOSTS:
+                response = JSONResponse({"detail": _HOST_ERROR_DETAIL}, status_code=400)
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+class _NonLoopbackGuard:
+    """Block an accidentally exposed non-loopback server unless auth is set."""
+
+    def __init__(self, wrapped_app):
+        self.app = wrapped_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and not _API_KEY and not _server_is_loopback(scope):
+            response = JSONResponse(
+                {"detail": _NON_LOOPBACK_NO_KEY_DETAIL},
+                status_code=503,
+            )
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
+# add_middleware inserts the latest entry outermost. Request execution order:
+# NonLoopbackGuard → HostGate → OriginGate → CORS → API-key gate → route.
+# This keeps preflight behind the deployment/Host boundary while allowing an
+# approved frontend Origin to read a fixed 401 from the API-key gate.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
+app.add_middleware(_OriginGate)
+app.add_middleware(_LocalHostGate)
+app.add_middleware(_NonLoopbackGuard)
 
 _CODE_RE = r"^\d{6}$"
 

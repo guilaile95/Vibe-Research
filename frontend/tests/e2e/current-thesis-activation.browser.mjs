@@ -158,6 +158,7 @@ async function runE2E() {
     const py = getPythonConfig();
     const env = {
       ...process.env,
+      VR_ALLOW_ORIGINS: frontendUrl,
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
       VIBE_RESEARCH_TRADE_LEDGER_DB: path.join(tempDataDir, "trade_ledger.sqlite3"),

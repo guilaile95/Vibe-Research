@@ -887,6 +887,7 @@ def test_chat_cli_http_disconnect_propagates_cancel(monkeypatch):
             "query_string": b"",
             "root_path": "",
             "headers": [
+                (b"host", b"testserver"),
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode("ascii")),
             ],
