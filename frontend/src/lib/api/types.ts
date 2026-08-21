@@ -632,6 +632,16 @@ export interface PortfolioData {
   updated: string; last_refresh: string | null;
   data_status?: "normal" | "partial" | "unavailable";
   quote_coverage?: { valid_holdings: number; total_holdings: number; complete: boolean };
+  holding_authority?: "LEDGER_DERIVED" | "LEGACY_PORTFOLIO" | "UNKNOWN";
+  ledger_view?: {
+    bootstrap_status?: string;
+    canonical?: boolean;
+    data_limitations?: string[];
+    reconciliation?: {
+      summary?: { match: number; mismatch: number; missing_in_ledger: number; missing_in_portfolio: number };
+      items?: Array<{ code: string; status: string; reason: string | null }>;
+    };
+  };
 }
 
 

@@ -68,6 +68,7 @@ import technical_indicators_router
 import bk11_history_router
 import intel_digest_router
 import position_reality_router
+import position_reality_service as prs
 import account_reality_router
 import cash_event_router
 import campaign_router
@@ -708,15 +709,64 @@ class HoldingUpdate(BaseModel):
         return values
 
 
-@app.get("/api/portfolio")
-def portfolio_get():
-    """持仓 + 实时盈亏（浮动盈亏红涨绿跌）。"""
+_HOLDING_AUTHORITY_SWITCHED_DETAIL = (
+    "HOLDING_AUTHORITY_SWITCHED：Holding 权威已切换为 Position Ledger（canonical bootstrap 已完成）；"
+    "请通过 Trades 成交录入、Position Correction 或 Account Events 维护持仓。"
+)
+_HOLDING_AUTHORITY_UNPROVEN_DETAIL = (
+    "HOLDING_AUTHORITY_UNPROVEN：无法确认 Holding 权威状态，已拒绝修改以避免产生第二份持仓事实。"
+)
+
+
+def _reject_post_bootstrap_holding_mutation() -> None:
+    """HAS1 single-writer gate。
+
+    canonical bootstrap 后，legacy portfolio.json 持仓 CRUD 不再是合法 Holding
+    writer；权威状态读取失败时同样拒绝（fail closed），绝不 fallback 到 legacy 写。
+    """
+    state = prs.get_holding_authority_state()
+    if state == "CANONICAL":
+        raise HTTPException(409, _HOLDING_AUTHORITY_SWITCHED_DETAIL)
+    if state == "ERROR":
+        raise HTTPException(503, _HOLDING_AUTHORITY_UNPROVEN_DETAIL)
+
+
+def _portfolio_payload() -> dict:
+    """GET /api/portfolio 的统一读模型。
+
+    CANONICAL：holdings 由 ledger-derived Position Reality 派生，portfolio.json
+    降级为 legacy archive（closed 历史）+ reconciliation 证据。
+    LEGACY / UNKNOWN：保持既有 legacy 读行为，并显式标记 authority。
+    """
+    state = prs.get_holding_authority_state()
     try:
-        return {"data": pf.get_portfolio()}
+        if state == "CANONICAL":
+            derived = prs.derive_positions()
+            data = pf.get_portfolio(
+                derived_positions=derived,
+                reconciliation=prs.reconcile_positions(),
+            )
+            data["holding_authority"] = "LEDGER_DERIVED"
+            return data
+        data = pf.get_portfolio()
     except pf.PortfolioDataCorruptedError:
         raise
+    except prs.PositionDerivationError as e:
+        raise HTTPException(502, f"Holding 权威派生失败：{e}") from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"持仓读取异常：{e}") from e
+    data["holding_authority"] = "LEGACY_PORTFOLIO" if state == "LEGACY" else "UNKNOWN"
+    return data
+
+
+@app.get("/api/portfolio")
+def portfolio_get():
+    """持仓 + 实时盈亏（浮动盈亏红涨绿跌）。
+
+    HAS1：响应含 holding_authority 标记；canonical bootstrap 后 holdings 来自
+    Position Ledger，与 Decision Inbox 同一权威。
+    """
+    return {"data": _portfolio_payload()}
 
 
 class PortfolioAdviceRequest(BaseModel):
@@ -800,6 +850,7 @@ def portfolio_advice(req: PortfolioAdviceRequest):
 @app.post("/api/portfolio/holding")
 def portfolio_add(h: HoldingIn):
     """加一笔持仓（同代码按加权平均成本合并）。存本地，不上传。"""
+    _reject_post_bootstrap_holding_mutation()
     code = (h.code or "").strip()
     if not code.isdigit() or len(code) != 6:
         raise HTTPException(400, "代码必须是 6 位数字")
@@ -813,6 +864,7 @@ def portfolio_add(h: HoldingIn):
 
 @app.delete("/api/portfolio/holding")
 def portfolio_remove(code: str = Query(...)):
+    _reject_post_bootstrap_holding_mutation()
     return {"data": pf.remove_holding(code.strip())}
 
 
@@ -822,6 +874,7 @@ def portfolio_update(h: HoldingUpdate):
 
     语义：精确覆盖 shares/cost；不新增不存在代码；不改 code；不写清仓记录；不调用建议。
     """
+    _reject_post_bootstrap_holding_mutation()
     code = (h.code or "").strip()
     if not code.isdigit() or len(code) != 6:
         raise HTTPException(400, "代码必须是 6 位数字")
@@ -998,6 +1051,7 @@ class CloseIn(BaseModel):
 @app.post("/api/portfolio/close")
 def portfolio_close(c: CloseIn):
     """记一笔已清仓（已实现盈亏）。存本地。"""
+    _reject_post_bootstrap_holding_mutation()
     code = (c.code or "").strip()
     if not code.isdigit() or len(code) != 6:
         raise HTTPException(400, "代码必须是 6 位数字")
@@ -1024,15 +1078,18 @@ def portfolio_close(c: CloseIn):
 
 @app.delete("/api/portfolio/close")
 def portfolio_close_remove(index: int = Query(...)):
+    _reject_post_bootstrap_holding_mutation()
     return {"data": pf.remove_closed(index)}
 
 
 @app.post("/api/portfolio/refresh")
 def portfolio_refresh():
-    """手动刷新：立即重拉行情算盈亏。"""
+    """手动刷新：立即重拉行情算盈亏（权威规则与 GET /api/portfolio 一致）。"""
     try:
-        return {"data": pf.get_portfolio()}
+        return {"data": _portfolio_payload()}
     except pf.PortfolioDataCorruptedError:
+        raise
+    except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"刷新失败：{e}") from e
