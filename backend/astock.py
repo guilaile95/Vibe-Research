@@ -225,10 +225,12 @@ def disclosure(code: str) -> list[dict]:
 
 
 def announcements(code: str, limit: int = 15) -> list[dict]:
-    """个股近期公告（东财公开接口，仅 requests，稳定）。返回 日期/标题/类型/详情链接。"""
-    import requests
+    """个股近期公告（东财公开接口，仅 requests，稳定）。返回 日期/标题/类型/详情链接。
 
-    r = requests.get(
+    与其他东财数据路径一致使用固定直连会话（trust_env=False）：系统代理
+    （Clash 等）停机会把该请求掐断，公告能力不应受代理环境影响。
+    """
+    r = _em_session(True).get(
         "https://np-anotice-stock.eastmoney.com/api/security/ann",
         params={"sr": -1, "page_size": limit, "page_index": 1, "ann_type": "A",
                 "client_source": "web", "stock_list": code, "f_node": 0, "s_node": 0},
