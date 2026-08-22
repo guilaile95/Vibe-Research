@@ -211,8 +211,30 @@ def _is_valid_price(px: Any) -> bool:
     return True
 
 
-def get_portfolio_holdings_snapshot() -> dict:
-    """Read local holdings only; no quotes, calculations, writes, or timestamp updates."""
+def _holdings_from_derived_positions(derived_positions: dict) -> list[dict[str, Any]]:
+    return [
+        {
+            "code": p["code"],
+            "shares": int(p["shares"]),
+            "cost": float(p["avg_cost"]) if p.get("avg_cost") is not None else 0.0,
+            "cost_known": bool(p.get("cost_known", True)),
+        }
+        for p in derived_positions.get("positions", [])
+        if p.get("status") == "OPEN"
+    ]
+
+
+def get_portfolio_holdings_snapshot(
+    derived_positions: dict | None = None,
+) -> dict:
+    """Read holdings without quotes or writes.
+
+    With a Position Reality projection, the returned holdings are canonical
+    ledger positions.  Without one, the pre-bootstrap legacy file remains the
+    source exactly as before.
+    """
+    if derived_positions is not None:
+        return {"holdings": copy.deepcopy(_holdings_from_derived_positions(derived_positions))}
     with _LOCK:
         d = _load()
     return {"holdings": copy.deepcopy(d.get("holdings", []))}
@@ -229,16 +251,7 @@ def get_portfolio(derived_positions: dict | None = None, reconciliation: dict | 
     with _LOCK:
         d = _load()
     if derived_positions is not None:
-        hs = [
-            {
-                "code": p["code"],
-                "shares": int(p["shares"]),
-                "cost": float(p["avg_cost"]) if p.get("avg_cost") is not None else 0.0,
-                "cost_known": bool(p.get("cost_known", True)),
-            }
-            for p in derived_positions.get("positions", [])
-            if p.get("status") == "OPEN"
-        ]
+        hs = _holdings_from_derived_positions(derived_positions)
     else:
         hs = d.get("holdings", [])
     rows = []

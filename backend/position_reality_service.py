@@ -64,6 +64,15 @@ class PositionDerivationError(RuntimeError):
     pass
 
 
+class HoldingAuthorityReadError(RuntimeError):
+    """Holding authority cannot be read safely."""
+
+    MESSAGE = "持仓权威不可读，已停止读取以避免回退到 legacy 持仓"
+
+    def __init__(self):
+        super().__init__(self.MESSAGE)
+
+
 class CorrectionTargetNotFoundError(LookupError):
     pass
 
@@ -99,6 +108,29 @@ def get_holding_authority_state() -> str:
     except Exception:
         return "ERROR"
     return "CANONICAL" if openings > 0 else "LEGACY"
+
+
+def read_holding_authority() -> tuple[str, dict[str, Any] | None]:
+    """Read the current holding authority and its canonical projection.
+
+    ``LEGACY`` deliberately returns no projection so callers retain the existing
+    portfolio.json path before bootstrap.  Once bootstrap exists, every read
+    failure is explicit and cannot fall back to the archive.
+    """
+    state = get_holding_authority_state()
+    if state == "ERROR":
+        raise HoldingAuthorityReadError()
+    if state == "LEGACY":
+        return state, None
+    try:
+        derived = derive_positions()
+    except Exception as exc:
+        if isinstance(exc, HoldingAuthorityReadError):
+            raise
+        raise HoldingAuthorityReadError() from exc
+    if not isinstance(derived, dict) or derived.get("canonical") is not True:
+        raise HoldingAuthorityReadError()
+    return state, derived
 
 
 def _new_id(prefix: str) -> str:

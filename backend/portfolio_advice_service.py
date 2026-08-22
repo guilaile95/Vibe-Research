@@ -18,6 +18,7 @@ import portfolio
 import portfolio_advice_context
 import portfolio_advice_prompt
 import portfolio_advice_validator
+import position_reality_service
 import signal_ledger_service
 from portfolio_advice_account_metrics import attach_account_funding_metrics
 from portfolio_advice_cash_constraint import apply_available_cash_constraints
@@ -74,6 +75,7 @@ _INVALID_JSON_MSG = "持仓建议模型输出不是有效的JSON对象"
 _VALIDATOR_FAIL_MSG = "持仓建议模型输出未通过结构和执行约束校验"
 _HOLDING_QUOTE_UNAVAILABLE_MSG = "持仓核心行情暂不可用，无法生成可靠的持仓操作建议"
 _MARKET_UNAVAILABLE_MSG = "市场核心数据暂不可用，无法生成可靠的持仓操作建议"
+_HOLDING_AUTHORITY_UNAVAILABLE_MSG = "持仓权威暂不可用，无法生成可靠的持仓操作建议"
 
 
 def _require_holdings(portfolio_data: dict) -> None:
@@ -158,7 +160,15 @@ def prepare_portfolio_advice_messages(
     request = _normalize_user_request(user_request)
 
     try:
-        portfolio_data = portfolio.get_portfolio()
+        try:
+            authority_state, derived_positions = position_reality_service.read_holding_authority()
+            if authority_state == "CANONICAL":
+                portfolio_data = portfolio.get_portfolio(derived_positions=derived_positions)
+            else:
+                portfolio_data = portfolio.get_portfolio()
+        except position_reality_service.HoldingAuthorityReadError as exc:
+            _record_gate_blocked("HOLDING_AUTHORITY_UNAVAILABLE")
+            raise PortfolioAdviceMarketDataError(_HOLDING_AUTHORITY_UNAVAILABLE_MSG) from exc
         if not isinstance(portfolio_data, dict):
             _record_gate_blocked("NO_HOLDINGS")
             raise PortfolioAdviceUnavailableError(_EMPTY_HOLDINGS_MSG)

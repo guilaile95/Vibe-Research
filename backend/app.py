@@ -806,7 +806,7 @@ def portfolio_advice(req: PortfolioAdviceRequest):
     except portfolio_advice_service.PortfolioAdviceUnavailableError as e:
         raise HTTPException(409, str(e)) from e
     except portfolio_advice_service.PortfolioAdviceMarketDataError as e:
-        # 市场核心数据 / 复盘交易日不可用：503 + 安全业务文案
+        # 市场核心数据 / 复盘交易日 / Holding authority 不可用：503 + 安全业务文案
         raise HTTPException(
             503, str(e) or "市场核心数据暂不可用，无法生成可靠的持仓操作建议"
         ) from None
@@ -1651,6 +1651,8 @@ def get_ai_result(
         return {"data": result}
     except ai_result_service.AiResultValidationError:
         raise HTTPException(422, "AI结果查询参数无效") from None
+    except prs.HoldingAuthorityReadError:
+        raise HTTPException(503, "持仓权威暂不可用，AI结果新鲜度无法确认") from None
     except Exception:  # noqa: BLE001 — never expose path, SQL, payload, or traceback
         raise HTTPException(500, "AI结果读取失败") from None
 

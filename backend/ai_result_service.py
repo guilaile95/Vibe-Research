@@ -14,6 +14,7 @@ import ai_result_store
 import daily_review
 import daily_review_cache
 import portfolio
+import position_reality_service
 import review_history
 
 
@@ -176,6 +177,16 @@ def _portfolio_holdings(portfolio_data: Any) -> list[dict[str, Any]]:
     if not isinstance(portfolio_data, dict) or not isinstance(portfolio_data.get("holdings"), list):
         raise AiResultValidationError("portfolio 缺少 holdings")
     return portfolio_data["holdings"]
+
+
+def _current_portfolio_holdings_snapshot() -> dict[str, Any]:
+    """Read the current holdings from the active authority without fallback."""
+    authority_state, derived_positions = position_reality_service.read_holding_authority()
+    if authority_state == "CANONICAL":
+        return portfolio.get_portfolio_holdings_snapshot(
+            derived_positions=derived_positions
+        )
+    return portfolio.get_portfolio_holdings_snapshot()
 
 
 def _require_exact_object(
@@ -485,17 +496,33 @@ def save_portfolio_advice(
     if not isinstance(review, dict):
         raise AiResultValidationError("review 必须是对象")
     _, trade_date = validate_result_identity(PORTFOLIO_ADVICE, review.get("trade_date"))
-    computed_fingerprint = compute_portfolio_fingerprint(_portfolio_holdings(portfolio_data))
+    prepared_fingerprint = compute_portfolio_fingerprint(_portfolio_holdings(portfolio_data))
     if input_fingerprint is None:
-        fingerprint = computed_fingerprint
+        fingerprint = prepared_fingerprint
     elif not isinstance(input_fingerprint, str) or not re.fullmatch(
         r"[0-9a-f]{64}", input_fingerprint
     ):
         raise AiResultValidationError("input_fingerprint 格式不合法")
-    elif input_fingerprint != computed_fingerprint:
+    elif input_fingerprint != prepared_fingerprint:
         raise AiResultValidationError("生成期间持仓快照发生变化")
     else:
         fingerprint = input_fingerprint
+
+    # Canonical holdings may change while the model is running. Re-read the
+    # active authority immediately before validation/upsert so an old Advice
+    # can never be persisted as current after a ledger mutation. Legacy keeps
+    # its established caller-provided snapshot contract.
+    authority_state, derived_positions = position_reality_service.read_holding_authority()
+    if authority_state == "CANONICAL":
+        current_portfolio = portfolio.get_portfolio_holdings_snapshot(
+            derived_positions=derived_positions
+        )
+        current_fingerprint = compute_portfolio_fingerprint(
+            _portfolio_holdings(current_portfolio)
+        )
+        if current_fingerprint != fingerprint:
+            raise AiResultValidationError("生成期间持仓快照发生变化")
+        fingerprint = current_fingerprint
     payload = _validate_payload(advice_payload)
     payload_trade_date = payload.get("trade_date")
     if payload_trade_date is not None and payload_trade_date != trade_date:
@@ -625,7 +652,7 @@ def get_ai_result(
     stale = False
     if result_type == PORTFOLIO_ADVICE:
         if current_portfolio is None:
-            current_portfolio = portfolio.get_portfolio_holdings_snapshot()
+            current_portfolio = _current_portfolio_holdings_snapshot()
         current_fingerprint = compute_portfolio_fingerprint(
             _portfolio_holdings(current_portfolio)
         )
