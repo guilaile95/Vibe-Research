@@ -1718,6 +1718,7 @@ export interface FormalReviewWorklistItem {
   strategy?: string;
   campaign_id?: string;
   decision_committed_at?: string;
+  decision_next_best_action?: string | null;
   decision_review_by: string;
   due_state: FormalDueState;
   outcome_status?: string;

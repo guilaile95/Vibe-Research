@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  frozenDecisionNbaLabel,
   mergeOutcomeItem,
   worklistItems,
   worklistLabel,
@@ -35,6 +36,18 @@ test("worklist groups are read-only projections", () => {
   assert.equal(worklistItems(worklist, "due").length, 0);
   assert.equal(worklistItems(worklist, "unavailable").length, 0);
   assert.equal(JSON.stringify(worklist), before);
+});
+
+test("Frozen NBA labels preserve historical actions without evaluation", () => {
+  assert.equal(frozenDecisionNbaLabel("WAIT"), "WAIT");
+  assert.equal(frozenDecisionNbaLabel("HOLD"), "HOLD");
+  assert.equal(frozenDecisionNbaLabel("EXIT"), "EXIT");
+});
+
+test("missing Frozen NBA remains UNKNOWN instead of being inferred", () => {
+  for (const value of ["", "  ", null, undefined, 42, { action: "WAIT" }]) {
+    assert.equal(frozenDecisionNbaLabel(value), "UNKNOWN");
+  }
 });
 
 test("missing historical row can be merged from exact outcome authority", () => {
