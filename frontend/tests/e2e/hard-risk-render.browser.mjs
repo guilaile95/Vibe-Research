@@ -68,9 +68,19 @@ const NOT_EVALUATED_ITEM = item({
   hard_risk_state: "NOT_EVALUATED",
   hard_risk_evaluation: "NOT_EVALUATED",
   hard_risk_reason_codes: ["HARD_RISK_NOT_EVALUATED", "COVERAGE_INCOMPLETE"],
+  formal_decision_evaluation: "NOT_EVALUATED",
   security_code: "000001",
   strategy: "MEDIUM",
   campaign_id: `campaign_${"c".repeat(32)}`,
+});
+
+const EVALUATED_ITEM = item({
+  visible_state: "REVIEW_REQUIRED",
+  reason_codes: ["REVIEW_BY_REACHED"],
+  formal_decision_evaluation: "EVALUATED",
+  security_code: "300750",
+  strategy: "SWING",
+  campaign_id: `campaign_${"g".repeat(32)}`,
 });
 
 const ERROR_ITEM = item({
@@ -118,9 +128,10 @@ const SNAPSHOT = {
     ERROR_ITEM,
     MALFORMED_CLEAR_ITEM,
     GENERIC_ONLY_ITEM,
+    EVALUATED_ITEM,
   ],
   total_holdings: 0,
-  total_campaign_items: 6,
+  total_campaign_items: 7,
 };
 
 function startStaticServer(dir, port) {
@@ -260,6 +271,33 @@ async function run() {
     await notEvaluatedPanel.waitFor();
     assert.equal(await notEvaluatedPanel.getAttribute("data-hard-risk-safe"), "false");
     await notEvaluatedPanel.getByText("尚未完成 Hard Risk 评估", { exact: false }).first().waitFor();
+
+    // DIUX3：适用 Frozen Decision 只提供两个显式、语义分离的下一步入口。
+    const evaluatedDecision = page.locator(
+      `[data-formal-decision-inbox-evaluation="EVALUATED"]`,
+    );
+    await evaluatedDecision.waitFor();
+    await evaluatedDecision.getByTestId("formal-decision-next-step-review").waitFor();
+    await evaluatedDecision.getByTestId("formal-decision-next-step-new-decision").waitFor();
+    assert.equal(
+      await evaluatedDecision.getByTestId("formal-decision-next-step-review").getAttribute("href"),
+      "/decision-performance",
+    );
+    assert.equal(
+      await evaluatedDecision.getByTestId("formal-decision-next-step-new-decision").getAttribute("href"),
+      `/campaigns/${encodeURIComponent(EVALUATED_ITEM.campaign_id)}/decision-proposal`,
+    );
+    await evaluatedDecision.getByText("已有 Frozen Decision 不代表需要立刻 Freeze 新 Decision", { exact: false }).waitFor();
+    assert.equal(await evaluatedDecision.getByText("打开 Formal Decision Review", { exact: true }).count(), 0);
+
+    const notEvaluatedDecision = page.locator(
+      `[data-formal-decision-inbox-evaluation="NOT_EVALUATED"]`,
+    );
+    await notEvaluatedDecision.waitFor();
+    await notEvaluatedDecision.getByTestId("formal-decision-next-step-proposal").waitFor();
+    assert.equal(await notEvaluatedDecision.getByTestId("formal-decision-next-step-review").count(), 0);
+    assert.equal(await notEvaluatedDecision.getByTestId("formal-decision-next-step-new-decision").count(), 0);
+    await notEvaluatedDecision.getByText("打开 Formal Decision Review", { exact: true }).waitFor();
 
     const errorPanel = page.locator(`[data-hard-risk-state="UNKNOWN"]`);
     await errorPanel.waitFor();

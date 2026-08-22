@@ -27,6 +27,7 @@ import {
   createCampaignPayload,
   errorMessage,
   reasonCodeLabel,
+  formalDecisionNextSteps,
 } from "@/lib/decisionInbox";
 import {
   ANTI_BUY_NOTICE,
@@ -57,25 +58,38 @@ function DecisionCommitInboxStatus({
   campaignId: string;
   evaluation: string | null | undefined;
 }) {
-  if (!evaluation) return null;
+  const steps = formalDecisionNextSteps(evaluation, campaignId);
+  if (!evaluation || steps.length === 0) return null;
+  const evaluated = evaluation === "EVALUATED";
   return (
     <div
-      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-background/35 p-3 text-xs"
+      className="space-y-3 rounded-lg border border-border/60 bg-background/35 p-3 text-xs"
       data-formal-decision-inbox-evaluation={evaluation}
     >
       <div>
         <p className="font-medium">Formal Decision</p>
         <p className="mt-0.5 text-muted-foreground">
           当前 backend Decision Inbox snapshot：<span className="font-mono">{evaluation}</span>
-          {evaluation === "EVALUATED" ? "（已读取适用的 Frozen Decision）" : "（不代表可执行建议）"}
+          {evaluated ? "（已读取适用的 Frozen Decision）" : "（不代表可执行建议）"}
         </p>
+        {evaluated && (
+          <p className="mt-1 text-muted-foreground">
+            已有 Frozen Decision 不代表需要立刻 Freeze 新 Decision；以下入口均需由你显式选择。
+          </p>
+        )}
       </div>
-      <Link
-        to={`/campaigns/${encodeURIComponent(campaignId)}/decision-proposal`}
-        className="text-primary hover:underline"
-      >
-        打开 Formal Decision Review →
-      </Link>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        {steps.map((step) => (
+          <Link
+            key={step.kind}
+            to={step.href}
+            data-testid={`formal-decision-next-step-${step.kind}`}
+            className={step.kind === "review" ? "font-medium text-primary hover:underline" : "text-primary hover:underline"}
+          >
+            {step.label} →
+          </Link>
+        ))}
+      </div>
     </div>
   );
 }

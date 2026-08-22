@@ -225,6 +225,28 @@ export function transitionPayload(
   return { expected_status: currentStatus, to_status: toStatus };
 }
 
+export type FormalDecisionNextStep = {
+  kind: "review" | "new-decision" | "proposal";
+  label: string;
+  href: string;
+};
+
+/** Formal Decision 状态只映射到显式入口，不推断用户是否应创建新决策。 */
+export function formalDecisionNextSteps(
+  evaluation: string | null | undefined,
+  campaignId: string,
+): FormalDecisionNextStep[] {
+  if (!evaluation) return [];
+  const proposalHref = `/campaigns/${encodeURIComponent(campaignId)}/decision-proposal`;
+  if (evaluation === "EVALUATED") {
+    return [
+      { kind: "review", label: "打开决策复盘", href: "/decision-performance" },
+      { kind: "new-decision", label: "形成新的 Formal Decision", href: proposalHref },
+    ];
+  }
+  return [{ kind: "proposal", label: "打开 Formal Decision Review", href: proposalHref }];
+}
+
 /** 提取用户可读错误文案（409 等 backend detail 如实显示，绝不伪装成功）。 */
 export function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
