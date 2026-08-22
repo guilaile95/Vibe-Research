@@ -38,8 +38,12 @@ import astock
 import chat as chat_layer
 import cli_runtime
 import daily_review
+import debate as debate_layer
 import gstock
 import newsradar
+import reflection as reflect_layer
+import signals
+from version import read_version
 import portfolio as pf
 import portfolio_advice_service
 import market
@@ -357,7 +361,8 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Vibe-Research API", version="0.1.3", lifespan=lifespan)
+__version__ = read_version()
+app = FastAPI(title="Vibe-Research API", version=__version__, lifespan=lifespan)
 
 # CORS registration is intentionally deferred until after the request guards.
 # The resulting middleware order is documented below next to the wiring.
@@ -584,7 +589,7 @@ def _validate(code: str) -> str:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "vibe-research-api", "version": "0.1.3"}
+    return {"ok": True, "service": "vibe-research-api", "version": __version__}
 
 
 class LLMConfig(BaseModel):
@@ -659,6 +664,74 @@ def chat(req: ChatReq):
         except Exception as e:  # noqa: BLE001 — 运行时错误以流内事件上报，不中断连接
             if not disconnect_event.is_set():
                 yield json.dumps({"type": "error", "message": f"对话失败：{e}"}, ensure_ascii=False) + "\n"
+
+    return _DisconnectAwareStreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        disconnect_event=disconnect_event,
+    )
+
+
+class DebateReq(BaseModel):
+    code: str
+    rounds: int = 1
+    llm: LLMConfig
+
+
+@app.post("/api/debate")
+def debate(req: DebateReq):
+    """多空辩论：后端先拉客观事实底稿，再让多方 / 空方 / 中立主持依次发言，**流式** NDJSON。
+
+    刻意不产出买卖结论——终点是「分歧点 + 验证清单」，判断留给用户自己。
+    配置校验复用 /api/chat 的 _require_llm_ready（含 P0-SEC2 CLI 执行门）。
+    """
+    code = _validate(req.code)
+    _require_llm_ready(req.llm)
+    rounds = 2 if req.rounds >= 2 else 1
+    cfg = req.llm.model_dump()
+    disconnect_event = threading.Event()
+
+    def gen():
+        try:
+            for ev in debate_layer.run_debate_stream(cfg, code, rounds):
+                if disconnect_event.is_set():
+                    return
+                yield json.dumps(ev, ensure_ascii=False) + "\n"
+        except Exception as e:  # noqa: BLE001 — 运行时错误以流内事件上报，不中断连接
+            if not disconnect_event.is_set():
+                yield json.dumps({"type": "error", "message": f"辩论失败：{e}"}, ensure_ascii=False) + "\n"
+
+    return _DisconnectAwareStreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        disconnect_event=disconnect_event,
+    )
+
+
+class ReflectReq(BaseModel):
+    source: str
+    title: str = ""
+    llm: LLMConfig
+
+
+@app.post("/api/reflect")
+def reflect(req: ReflectReq):
+    """反思：对一段已写好的分析做推理审计（哪些有数据支撑、最脆弱一环、验证清单），流式 NDJSON。"""
+    if not (req.source or "").strip():
+        raise HTTPException(400, "source 不能为空")
+    _require_llm_ready(req.llm)
+    cfg = req.llm.model_dump()
+    disconnect_event = threading.Event()
+
+    def gen():
+        try:
+            for ev in reflect_layer.run_reflection_stream(cfg, req.source, req.title):
+                if disconnect_event.is_set():
+                    return
+                yield json.dumps(ev, ensure_ascii=False) + "\n"
+        except Exception as e:  # noqa: BLE001 — 运行时错误以流内事件上报，不中断连接
+            if not disconnect_event.is_set():
+                yield json.dumps({"type": "error", "message": f"反思失败：{e}"}, ensure_ascii=False) + "\n"
 
     return _DisconnectAwareStreamingResponse(
         gen(),
@@ -1118,6 +1191,24 @@ def radar_refresh():
         return {"data": newsradar.fetch_radar()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"资讯雷达刷新失败：{e}") from e
+
+
+@app.get("/api/signals/gpu-rent")
+def signals_gpu_rent():
+    """GPU 租金信号（算力温度计）：读缓存，无缓存返回结构骨架。"""
+    try:
+        return {"data": signals.get_gpu_rent(force=False)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"GPU 租金信号异常：{e}") from e
+
+
+@app.post("/api/signals/gpu-rent/refresh")
+def signals_gpu_rent_refresh():
+    """强制重抓 500.farm 历史/现货 + Kalshi 远期，更新缓存；部分失败按块 stale 回填。"""
+    try:
+        return {"data": signals.fetch_gpu_rent()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"GPU 租金信号刷新失败：{e}") from e
 
 
 @app.get("/api/market/overview")
@@ -1806,8 +1897,26 @@ def global_stock(symbol: str = Query(..., min_length=1, max_length=16)):
         return {"data": data}
     except HTTPException:
         raise
+    except gstock.SearchUnavailable as e:
+        raise HTTPException(503, str(e)) from None
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"美港股查询异常：{e}") from e
+
+
+@app.get("/api/global/hk/cashflow")
+def global_hk_cashflow(symbol: str = Query(..., min_length=1, max_length=16)):
+    """港股现金流量表（东财域内源 RPT_HKSK_FN_CASHFLOW）：经营/投资/筹资/净增加，多期。symbol 如 00700。"""
+    try:
+        data = gstock.hk_cashflow(symbol.strip())
+        if not data:
+            raise HTTPException(404, f"未找到港股「{symbol}」的现金流数据（仅港股支持）")
+        return {"data": data}
+    except HTTPException:
+        raise
+    except gstock.SearchUnavailable as e:
+        raise HTTPException(503, str(e)) from None
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"港股现金流查询异常：{e}") from e
 
 
 @app.get("/api/indices")
