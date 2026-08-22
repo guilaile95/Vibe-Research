@@ -212,6 +212,25 @@ async function run() {
     await page.getByRole("button", { name: "详情" }).last().click();
     await page.getByText("ALLOCATED", { exact: true }).waitFor();
 
+    await page.route(`**/trades/${secondTrade.trade_id}/attribution-candidates`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            candidates: [],
+            scan_state: "INVALID_WITNESS",
+            reason_codes: ["FROZEN_DECISION_WITNESS_INVALID"],
+          },
+        }),
+      });
+    });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "详情" }).first().click();
+    await page.getByText("UNALLOCATED", { exact: true }).waitFor();
+    await page.getByText("Frozen Decision，但见证校验失败", { exact: false }).waitFor();
+    assert.equal(await page.getByText("若该交易确实非计划内", { exact: false }).count(), 0);
+    await page.unroute(`**/trades/${secondTrade.trade_id}/attribution-candidates`);
     await page.reload({ waitUntil: "networkidle" });
     await page.getByRole("button", { name: "详情" }).first().click();
     await page.getByText("UNALLOCATED", { exact: true }).waitFor();

@@ -77,10 +77,29 @@ def _eligible(decision: dict[str, Any], trade: dict[str, Any]) -> bool:
     return True
 
 
-def list_candidates(trade_id: str) -> list[dict[str, Any]]:
+def _candidate_item(decision: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "decision_id": decision["decision_id"],
+        "campaign_id": decision["campaign_id"],
+        "security_code": decision["security_code"],
+        "strategy": decision["strategy"],
+        "thesis_id": decision["thesis_id"],
+        "thesis_revision": decision["thesis_revision"],
+        "committed_at": decision["committed_at"],
+        "review_by": decision["review_by"],
+        "next_best_action": decision["next_best_action"],
+        "snapshot_hash": decision["snapshot_hash"],
+    }
+
+
+def scan_candidates(trade_id: str) -> dict[str, Any]:
     trade = _trade(trade_id)
     if trade.get("voided_at") is not None or trade.get("execution_status") == "not_executed":
-        return []
+        return {
+            "candidates": [],
+            "scan_state": "NOT_APPLICABLE",
+            "reason_codes": ["TRADE_NOT_APPLICABLE"],
+        }
     decisions: list[dict[str, Any]] = []
     offset = 0
     while offset < _DECISION_SAFETY_BOUND:
@@ -96,21 +115,30 @@ def list_candidates(trade_id: str) -> list[dict[str, Any]]:
     else:
         raise TradeAttributionRuntimeError("冻结决策候选超过安全分页上限，已停止读取")
     output = []
+    invalid_witness_count = 0
     for decision in decisions:
+        try:
+            fta.verify_frozen_decision_witness(decision)
+        except fta.AttributionValidationError:
+            invalid_witness_count += 1
+            continue
         if _eligible(decision, trade):
-            output.append({
-                "decision_id": decision["decision_id"],
-                "campaign_id": decision["campaign_id"],
-                "security_code": decision["security_code"],
-                "strategy": decision["strategy"],
-                "thesis_id": decision["thesis_id"],
-                "thesis_revision": decision["thesis_revision"],
-                "committed_at": decision["committed_at"],
-                "review_by": decision["review_by"],
-                "next_best_action": decision["next_best_action"],
-                "snapshot_hash": decision["snapshot_hash"],
-            })
-    return output
+            output.append(_candidate_item(decision))
+    if output:
+        state = "COMPLETE"
+        reasons = []
+    elif invalid_witness_count:
+        state = "INVALID_WITNESS"
+        reasons = ["FROZEN_DECISION_WITNESS_INVALID"]
+    else:
+        state = "COMPLETE_EMPTY"
+        reasons = ["NO_ELIGIBLE_CANDIDATE"]
+    return {"candidates": output, "scan_state": state, "reason_codes": reasons}
+
+
+def list_candidates(trade_id: str) -> list[dict[str, Any]]:
+    """Return only candidate items for internal callers; HTTP exposes scan state too."""
+    return scan_candidates(trade_id)["candidates"]
 
 
 def _request_keys(payload: object, allowed: set[str]) -> dict[str, Any]:

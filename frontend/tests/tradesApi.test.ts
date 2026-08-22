@@ -122,9 +122,15 @@ test("TAR1 reads reconciliation and candidates from backend authority", async ()
   await api.getTradeReconciliation("trade/1");
   assert.equal(lastRequest().url, "/api/trades/trade%2F1/reconciliation");
 
-  reset({ status: 200, body: { data: [] } });
-  await api.listTradeAttributionCandidates("trade/1");
+  reset({ status: 200, body: { data: {
+    candidates: [],
+    scan_state: "COMPLETE_EMPTY",
+    reason_codes: ["NO_ELIGIBLE_CANDIDATE"],
+  } } });
+  const scan = await api.listTradeAttributionCandidates("trade/1");
   assert.equal(lastRequest().url, "/api/trades/trade%2F1/attribution-candidates");
+  assert.equal(scan.scan_state, "COMPLETE_EMPTY");
+  assert.deepEqual(scan.candidates, []);
 });
 
 test("TAR1 writes only decision_id or explicit confirm", async () => {

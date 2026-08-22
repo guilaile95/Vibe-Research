@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import os
+from copy import deepcopy
 
 import pytest
 
@@ -68,6 +69,67 @@ def test_initial_complete_scan_is_unallocated_and_no_inference(runtime_env):
     assert result["reconciliation_requirement"] == "REQUIRED"
     assert result["campaign_id"] is None
     assert runtime.list_candidates(trade["trade_id"])[0]["decision_id"] == decision["decision_id"]
+    scan = runtime.scan_candidates(trade["trade_id"])
+    assert scan["scan_state"] == "COMPLETE"
+    assert scan["reason_codes"] == []
+    assert scan["candidates"][0]["decision_id"] == decision["decision_id"]
+
+
+@pytest.mark.parametrize(
+    ("next_best_action", "operation"),
+    [("WAIT", "buy"), ("EXIT", "add")],
+)
+def test_candidate_scan_and_explicit_attribution_preserve_action_deviation(
+    runtime_env, next_best_action, operation
+):
+    decision = frozen_decision_service.freeze_decision(
+        decision_payload(next_best_action=next_best_action)
+    )
+    trade = trade_ledger_service.create_trade(trade_payload(operation=operation))
+    scan = runtime.scan_candidates(trade["trade_id"])
+    assert scan["scan_state"] == "COMPLETE"
+    assert [item["decision_id"] for item in scan["candidates"]] == [decision["decision_id"]]
+    result = runtime.attribute(trade["trade_id"], {"decision_id": decision["decision_id"]})
+    assert result["record"]["decision_next_best_action"] == next_best_action
+    assert result["record"]["trade_operation"] == operation
+    assert runtime.reconciliation_for_trade(trade["trade_id"])["allocation_state"] == "ALLOCATED"
+
+
+def test_not_executed_trade_has_non_applicable_candidate_scan(runtime_env):
+    decision = frozen_decision_service.freeze_decision(decision_payload())
+    trade = trade_ledger_service.create_trade(
+        trade_payload(
+            execution_status="not_executed",
+            executed_at=None,
+            actual_price=None,
+            actual_quantity=0,
+            unexecuted_reason="等待确认",
+        )
+    )
+    scan = runtime.scan_candidates(trade["trade_id"])
+    assert scan == {
+        "candidates": [],
+        "scan_state": "NOT_APPLICABLE",
+        "reason_codes": ["TRADE_NOT_APPLICABLE"],
+    }
+    assert runtime.reconciliation_for_trade(trade["trade_id"])["allocation_state"] == "NOT_APPLICABLE"
+    with pytest.raises(runtime.TradeAttributionValidationError):
+        runtime.attribute(trade["trade_id"], {"decision_id": decision["decision_id"]})
+
+
+def test_invalid_witness_scan_state_does_not_look_like_empty(runtime_env, monkeypatch):
+    decision, trade = _setup(runtime_env)
+    invalid = deepcopy(decision)
+    invalid["snapshot_hash"] = "0" * 64
+    monkeypatch.setattr(
+        runtime.frozen_decision_service,
+        "list_decisions",
+        lambda **_kwargs: [invalid],
+    )
+    scan = runtime.scan_candidates(trade["trade_id"])
+    assert scan["candidates"] == []
+    assert scan["scan_state"] == "INVALID_WITNESS"
+    assert scan["reason_codes"] == ["FROZEN_DECISION_WITNESS_INVALID"]
 
 
 def test_explicit_attribution_is_exact_and_replay_is_idempotent(runtime_env):
