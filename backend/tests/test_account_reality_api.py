@@ -103,7 +103,8 @@ class TestAccountRealityApi:
         assert data["cash"]["current_fact"]["effective_at"] is None
         assert data["cash"]["ledger_candidate"]["effective_at"] is None
         assert data["cash"]["current_fact"]["temporal_status"] == "UNPROVEN"
-        assert "CASH_EVENTS_UNSUPPORTED" in data["reason_codes"]
+        assert "CORPORATE_ACTION_UNSUPPORTED" in data["reason_codes"]
+        assert "CASH_EVENTS_UNSUPPORTED" not in data["reason_codes"]
 
     def test_reality_cash_unknown(self, client, tmp_path, monkeypatch):
         _fake_kline(monkeypatch, {"600519": [{"datetime": "2026-08-04 15:00:00", "close": 20.0}]})

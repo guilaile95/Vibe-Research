@@ -257,7 +257,8 @@ class TestCashReconciliation:
             "CASH_DEPOSIT", "CASH_WITHDRAWAL", "CASH_DIVIDEND", "CASH_FEE", "CASH_TAX",
         ])
         assert reality["cash_event_support"]["unsupported"] == ["CORPORATE_ACTION"]
-        assert "CASH_EVENTS_UNSUPPORTED" in reality["reason_codes"]
+        assert "CORPORATE_ACTION_UNSUPPORTED" in reality["reason_codes"]
+        assert "CASH_EVENTS_UNSUPPORTED" not in reality["reason_codes"]
 
 
 # ---------------------------------------------------------------------------

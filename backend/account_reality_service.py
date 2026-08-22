@@ -34,7 +34,7 @@ _CASH_SOURCE_LEDGER = "LEDGER_DERIVED"
 _CASH_COVERAGE_TRADES_ONLY = "TRADES_ONLY"
 _CASH_COVERAGE_TRADES_PLUS_CASH_EVENTS = "TRADES_PLUS_MANUAL_CASH_EVENTS"
 
-_REASON_CASH_EVENTS_UNSUPPORTED = "CASH_EVENTS_UNSUPPORTED"
+_REASON_CORPORATE_ACTION_UNSUPPORTED = "CORPORATE_ACTION_UNSUPPORTED"
 _REASON_ACCOUNT_PROFILE_CORRUPTED = "ACCOUNT_PROFILE_CORRUPTED"
 _REASON_CASH_UNKNOWN = "CASH_UNKNOWN"
 _REASON_OPENING_CASH_UNKNOWN = "OPENING_CASH_UNKNOWN"
@@ -365,7 +365,7 @@ def get_account_reality() -> dict[str, Any]:
 
     settled_nav, nav_skip = _settled_nav(derived, current_fact, pricing)
 
-    reason_codes: list[str] = [_REASON_CASH_EVENTS_UNSUPPORTED]  # 事实边界：非交易现金事件（corporate action 等）仍不支持
+    reason_codes: list[str] = [_REASON_CORPORATE_ACTION_UNSUPPORTED]  # 事实边界：corporate action 尚未纳入现金覆盖
     if current_fact.get("status") == "CORRUPTED":
         reason_codes.append(_REASON_ACCOUNT_PROFILE_CORRUPTED)
     if nav_skip:
