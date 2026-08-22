@@ -207,15 +207,19 @@ async function runE2E() {
     browser = await chromium.launch({ executablePath: findChromium(), headless: true });
     const page = await browser.newPage();
     const consoleErrors = [];
+    const errorResponses = [];
     const notFoundResponses = [];
     page.on("console", (message) => {
       if (message.type() === "error") consoleErrors.push(message.text());
     });
     page.on("response", (response) => {
-      if (response.status() !== 404) return;
+      if (response.status() < 400) return;
       const request = response.request();
       const url = new URL(response.url());
-      notFoundResponses.push({ method: request.method(), pathname: url.pathname });
+      errorResponses.push({ method: request.method(), pathname: url.pathname, status: response.status() });
+      if (response.status() === 404) {
+        notFoundResponses.push({ method: request.method(), pathname: url.pathname });
+      }
     });
 
     const calls = { begin: 0, confirm: 0, freeze: 0, bind: 0 };
@@ -499,19 +503,29 @@ async function runE2E() {
 
     projectionMode = "normal";
     const expectedUnboundBindingPath = `/api/campaigns/${campaign.campaign_id}/thesis-binding`;
-    const unexpected404Responses = notFoundResponses.filter(
-      ({ method, pathname }) => method !== "GET" || pathname !== expectedUnboundBindingPath,
+    const expectedProjectionErrorPath = `/api/campaigns/${campaign.campaign_id}/current-thesis`;
+    const unexpectedErrorResponses = errorResponses.filter(
+      ({ method, pathname, status }) => !(
+        method === "GET"
+        && pathname === expectedUnboundBindingPath
+        && status === 404
+      ) && !(
+        method === "GET"
+        && pathname === expectedProjectionErrorPath
+        && status === 409
+      ),
     );
-    assert.deepEqual(unexpected404Responses, [], `unexpected browser 404 responses: ${JSON.stringify(notFoundResponses)}`);
+    assert.deepEqual(unexpectedErrorResponses, [], `unexpected browser error responses: ${JSON.stringify(errorResponses)}`);
     assert.ok(
       notFoundResponses.length > 0,
       "expected at least one unbound thesis-binding GET to return 404",
     );
-    // Chromium may log the expected unbound binding response as a console
-    // resource error.  The response allowlist above ensures this exception is
-    // limited to that exact GET; every other 404 fails before this check.
+    // Chromium logs both deliberately exercised fail-closed responses as
+    // resource errors; response-level allowlisting above keeps this check
+    // limited to those exact GET paths and statuses.
     const unexpectedConsoleErrors = consoleErrors.filter(
-      (message) => !message.includes("server responded with a status of 404"),
+      (message) => !message.includes("server responded with a status of 404")
+        && !message.includes("server responded with a status of 409"),
     );
     assert.equal(
       unexpectedConsoleErrors.length,
