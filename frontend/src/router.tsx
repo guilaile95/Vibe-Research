@@ -35,6 +35,8 @@ const DecisionPerformance = lazy(() => import("@/pages/DecisionPerformance").the
 const PerformanceAttribution = lazy(() => import("@/pages/PerformanceAttribution").then((m) => ({ default: m.default })));
 const DecisionInbox = lazy(() => import("@/pages/DecisionInbox").then((m) => ({ default: m.default })));
 const DecisionProposalReview = lazy(() => import("@/pages/DecisionProposalReview").then((m) => ({ default: m.default })));
+const Signals = lazy(() => import("@/pages/Signals").then((m) => ({ default: m.Signals })));
+const Debate = lazy(() => import("@/pages/Debate").then((m) => ({ default: m.Debate })));
 
 function PageFallback() {
   return (
@@ -76,6 +78,9 @@ export const router = createBrowserRouter([
       { path: "/daily-review", element: withSuspense(<DailyReview />) },
       { path: "/market-history", element: withSuspense(<MarketHistory />) },
       { path: "/intel", element: withSuspense(<Intel />) },
+      { path: "/signals", element: withSuspense(<Signals />) },
+      { path: "/signals/:tab", element: withSuspense(<Signals />) },
+      { path: "/debate", element: withSuspense(<Debate />) },
       { path: "/sectors", element: withSuspense(<Sectors />) },
       { path: "/sectors/:key/:tag", element: <SectorResearchTagRoute /> },
       { path: "/sectors/:key", element: withSuspense(<SectorDetail />) },
