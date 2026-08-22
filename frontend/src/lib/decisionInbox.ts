@@ -225,7 +225,6 @@ export function transitionPayload(
   return { expected_status: currentStatus, to_status: toStatus };
 }
 
-/** 提取用户可读错误文案（409 等 backend detail 如实显示，绝不伪装成功）。 */
 export type FormalDecisionNextStep = {
   kind: "review" | "new-decision" | "proposal";
   label: string;
@@ -248,6 +247,7 @@ export function formalDecisionNextSteps(
   return [{ kind: "proposal", label: "打开 Formal Decision Review", href: proposalHref }];
 }
 
+/** 提取用户可读错误文案（409 等 backend detail 如实显示，绝不伪装成功）。 */
 export function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
   return "操作失败，请重试";
