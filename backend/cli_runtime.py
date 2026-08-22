@@ -84,6 +84,8 @@ _CLI_DEFS: dict[str, dict] = {
 
 _EXTRA_PATH_DIRS = [
     "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin",
+    # Codex 桌面版把 CLI 装在 app bundle 里，不进 PATH（upstream issue #16 / PR #11）
+    "/Applications/Codex.app/Contents/Resources",
     str(Path.home() / ".local/bin"), str(Path.home() / ".npm-global/bin"),
     str(Path.home() / ".bun/bin"), str(Path.home() / ".deno/bin"),
     str(Path.home() / ".yarn/bin"),
@@ -362,6 +364,10 @@ def _run_cli_impl(kind, system_prompt, user_prompt, *, via_http, cancel_event):
             cwd=tmpdir,
             env=_build_child_env(d.get("env")),
             text=True,
+            # 中文 Windows 的 locale 编码是 GBK，而这些 CLI 输出 UTF-8；
+            # 不显式指定就会 UnicodeDecodeError 或整段乱码。
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         if os.name != "nt":
