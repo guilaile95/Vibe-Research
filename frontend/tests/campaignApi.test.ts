@@ -42,7 +42,13 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   });
 }) as typeof fetch;
 
-const { api, ApiError } = await import("../src/lib/api.ts");
+const { api, ApiError, DecisionChallengeReadError } = await import("../src/lib/api.ts");
+
+const CHALLENGE_READ = {
+  schema_version: "decision_challenge.v0.1",
+  challenge: { challenge_id: "decision_challenge_" + "d".repeat(32) },
+  decision_quality: "NOT_EVALUATED",
+};
 
 function reset(response: { status: number; body: unknown } = { status: 200, body: { data: [] } }) {
   requests.length = 0;
@@ -54,6 +60,52 @@ function lastRequest(): RecordedRequest {
   assert.ok(request, "expected a recorded request");
   return request;
 }
+
+test("Decision Challenge read maps only 404 to ABSENT and preserves other failures", async () => {
+  reset({ status: 200, body: { data: CHALLENGE_READ } });
+  const found = await api.getDecisionChallengeForProposal("campaign_" + "a".repeat(32), "a".repeat(64));
+  assert.equal(found?.challenge.challenge_id, CHALLENGE_READ.challenge.challenge_id);
+
+  reset({ status: 404, body: { detail: "Decision Challenge 不存在" } });
+  assert.equal(
+    await api.getDecisionChallengeForProposal("campaign_" + "a".repeat(32), "a".repeat(64)),
+    null,
+  );
+
+  for (const status of [422, 500]) {
+    reset({ status, body: { detail: `failure-${status}` } });
+    await assert.rejects(
+      () => api.getDecisionChallengeForProposal("campaign_" + "a".repeat(32), "a".repeat(64)),
+      (err: unknown) => err instanceof ApiError && err.status === status,
+    );
+  }
+
+  globalThis.fetch = (async () => {
+    throw new Error("simulated network failure");
+  }) as typeof fetch;
+  await assert.rejects(
+    () => api.getDecisionChallengeForProposal("campaign_" + "a".repeat(32), "a".repeat(64)),
+    (err: unknown) => err instanceof ApiError && err.status === 0,
+  );
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    requests.push({
+      url,
+      method: (init?.method || "GET").toUpperCase(),
+      body: typeof init?.body === "string" ? init.body : null,
+    });
+    return new Response(JSON.stringify(nextResponse.body), {
+      status: nextResponse.status,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  reset({ status: 200, body: { data: { challenge: {} } } });
+  await assert.rejects(
+    () => api.getDecisionChallengeForProposal("campaign_" + "a".repeat(32), "a".repeat(64)),
+    (err: unknown) => err instanceof DecisionChallengeReadError,
+  );
+});
 
 const DRAFT_CAMPAIGN = {
   campaign_id: "campaign_" + "a".repeat(32),

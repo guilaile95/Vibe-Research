@@ -207,7 +207,7 @@ async function freezeThroughBrowser(page, backend, frontend, campaignId, withCha
   const previewBody = await previewResponse.text();
   assert.equal(previewResponse.ok(), true, `[CF1] preview failed: status=${previewResponse.status()} body=${previewBody}`);
   await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
-  await page.locator('[data-challenge-state="UNFINALIZED"]').waitFor();
+  await page.locator('[data-challenge-state="ABSENT"]').waitFor();
   if (withChallenge) {
     assert.equal(existsSync(join(dataDir, "decision_challenges.sqlite3")), false, "Preview must not write Challenge DB");
   }
@@ -251,7 +251,7 @@ async function freezeThroughBrowser(page, backend, frontend, campaignId, withCha
     }
     assert.ok(finalizeResponse);
     assert.equal(finalizeResponse.ok(), true, `[CF1] finalize failed: status=${finalizeResponse.status()} body=${finalizeBody}`);
-    await page.locator('[data-challenge-state="FINALIZED"]').waitFor();
+    await page.locator('[data-challenge-state="FOUND"]').waitFor();
     challengeId = await page.locator("[data-challenge-id]").getAttribute("data-challenge-id");
     assert.match(challengeId, /^decision_challenge_[0-9a-f]{32}$/);
     const durable = await jsonRequest(backend, `/api/decision-challenges/${challengeId}`);

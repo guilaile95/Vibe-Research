@@ -8,6 +8,8 @@ import { hydratedHorizonValue, resolveDecisionContext, type DecisionContextHydra
 import { browserTimeZoneName, formatUtcOffsetMinutes, parseReviewBoundary } from "@/lib/reviewBoundaryInput";
 import type { CampaignRecord, CampaignThesisBinding, CampaignCurrentThesis, ThesisAggregate } from "@/lib/api";
 
+type ChallengeReadState = "PENDING" | "FOUND" | "ABSENT" | "ERROR";
+
 const challengeLabels: Record<DecisionChallengeDimensionName, string> = {
   STRONGEST_SUPPORTING_EVIDENCE: "Strongest supporting evidence",
   STRONGEST_OPPOSING_EVIDENCE: "Strongest opposing evidence",
@@ -100,6 +102,7 @@ export function DecisionProposalReview() {
   const [challengeDraft, setChallengeDraft] = useState(emptyChallenge);
   const [challengeConfirmed, setChallengeConfirmed] = useState(false);
   const [challengePacket, setChallengePacket] = useState<DecisionChallengePacket | null>(null);
+  const [challengeReadState, setChallengeReadState] = useState<ChallengeReadState>("ABSENT");
   const [bindChallenge, setBindChallenge] = useState(false);
 
   useEffect(() => {
@@ -180,11 +183,14 @@ export function DecisionProposalReview() {
     setError("");
     setCommitted(null);
     setConfirmed(false);
+    setPreview(null);
     setChallengePacket(null);
+    setChallengeReadState("PENDING");
     setChallengeConfirmed(false);
     setBindChallenge(false);
     if (!campaignId || !draft) {
-      setError("请先选择 review 时间与填写 strategy horizon。");
+      setChallengeReadState("ERROR");
+      setError("请先选择有效的 review 时间、填写 strategy horizon，并确保三个 View 输入合法。");
       return;
     }
     setBusy("preview");
@@ -193,14 +199,23 @@ export function DecisionProposalReview() {
       setPreview(next);
       try {
         const existing = await api.getDecisionChallengeForProposal(campaignId, next.proposal_fingerprint);
-        setChallengePacket(existing?.challenge ?? null);
-        setBindChallenge(Boolean(existing?.challenge));
-      } catch {
+        if (existing) {
+          setChallengePacket(existing.challenge);
+          setChallengeReadState("FOUND");
+          setBindChallenge(true);
+        } else {
+          setChallengeReadState("ABSENT");
+          setBindChallenge(false);
+        }
+      } catch (err) {
         setChallengePacket(null);
+        setChallengeReadState("ERROR");
         setBindChallenge(false);
+        setError(err instanceof ApiError ? `CHALLENGE_READ_ERROR：${err.message}` : "CHALLENGE_READ_ERROR：Challenge 状态当前无法验证。");
       }
     } catch (err) {
       setPreview(null);
+      setChallengeReadState("ERROR");
       setError(err instanceof ApiError ? err.message : "Preview 失败，Proposal 未生成。");
     } finally {
       setBusy(null);
@@ -208,8 +223,11 @@ export function DecisionProposalReview() {
   };
 
   const handleFinalizeChallenge = async () => {
-    if (!preview || !draft || !challengeConfirmed || challengePacket) return;
+    if (!preview || !draft || !challengeConfirmed || challengeReadState !== "ABSENT") return;
     setBusy("challenge");
+    setChallengeReadState("PENDING");
+    setChallengePacket(null);
+    setBindChallenge(false);
     setError("");
     try {
       const result = await api.finalizeDecisionChallenge(campaignId, {
@@ -221,14 +239,17 @@ export function DecisionProposalReview() {
       });
       const reread = await api.getDecisionChallenge(result.challenge.challenge_id);
       setChallengePacket(reread.challenge);
+      setChallengeReadState("FOUND");
       setBindChallenge(true);
     } catch (err) {
+      setChallengeReadState("ERROR");
+      setChallengePacket(null);
+      setBindChallenge(false);
       if (err instanceof ApiError && err.status === 409) {
         setPreview(null);
-        setChallengePacket(null);
         setError("Proposal 已失效，Challenge 未写入，请重新 Preview。");
       } else {
-        setError(err instanceof ApiError ? err.message : "Decision Challenge Finalize 失败。");
+        setError(err instanceof ApiError ? `CHALLENGE_READ_ERROR：${err.message}` : "CHALLENGE_READ_ERROR：Challenge 状态当前无法验证。");
       }
     } finally {
       setBusy(null);
@@ -236,7 +257,12 @@ export function DecisionProposalReview() {
   };
 
   const handleCommit = async () => {
-    if (!preview || !draft || !confirmed) return;
+    if (
+      !preview
+      || !draft
+      || !confirmed
+      || (challengeReadState !== "FOUND" && challengeReadState !== "ABSENT")
+    ) return;
     setBusy("commit");
     setError("");
     try {
@@ -267,6 +293,14 @@ export function DecisionProposalReview() {
       setBusy(null);
     }
   };
+
+  const challengeStateLabel = challengeReadState === "FOUND"
+    ? "FOUND"
+    : challengeReadState === "ABSENT"
+      ? "UNFINALIZED"
+      : challengeReadState;
+  const challengeReadError = challengeReadState === "ERROR";
+  const challengeReadPending = challengeReadState === "PENDING";
 
   const authorities = preview?.authority_evaluations ?? {};
   const material = authorities.material_change;
@@ -515,23 +549,33 @@ export function DecisionProposalReview() {
 
           <section
             className="space-y-3 rounded-md border border-border/60 bg-background/45 p-3"
-            data-challenge-state={challengePacket ? "FINALIZED" : "UNFINALIZED"}
+            data-challenge-state={challengeReadState}
             data-challenge-id={challengePacket?.challenge_id ?? ""}
             data-decision-quality="NOT_EVALUATED"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold">Decision Challenge（可选，不阻断 Freeze）</h3>
+              <h3 className="text-sm font-semibold">Decision Challenge（可选；读取失败时不会安全降级）</h3>
               <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-                {challengePacket ? "FINALIZED" : "UNFINALIZED"}
+                {challengeStateLabel}
               </span>
             </div>
             <p className="text-[11px] text-muted-foreground">
               四个维度必须由用户显式填写。UNKNOWN 计为覆盖，但不是正面证据。Challenge 不改变 NBA / Action Envelope，也不产生 decision quality score。
             </p>
+            {challengeReadPending && (
+              <p role="status" className="rounded border border-border/40 bg-muted/30 p-2 text-xs">
+                正在读取 Challenge 状态；在读取完成前不会开放 Freeze、Finalize 或 Bind。
+              </p>
+            )}
+            {challengeReadError && (
+              <p role="alert" className="rounded border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-600">
+                CHALLENGE_READ_ERROR：Challenge 状态当前无法验证；本次不会绑定未验证的 Challenge，也不会开放 Freeze、Finalize 或 Bind。
+              </p>
+            )}
             <div className="grid gap-3 md:grid-cols-2">
               {DECISION_CHALLENGE_DIMENSIONS.map((name) => {
                 const row = challengeDraft[name];
-                const finalized = Boolean(challengePacket);
+                const finalized = challengeReadState === "FOUND" && Boolean(challengePacket);
                 return (
                   <label key={name} className="text-xs text-muted-foreground">
                     {challengeLabels[name]}
@@ -563,7 +607,7 @@ export function DecisionProposalReview() {
                 );
               })}
             </div>
-            {challengePacket ? (
+            {challengeReadState === "FOUND" && challengePacket ? (
               <div className="space-y-1 rounded border border-border/40 bg-background/40 p-2 text-[11px]" data-challenge-readback>
                 <p>challenge_id：<span className="font-mono">{challengePacket.challenge_id}</span></p>
                 <p>packet_state：<span className="font-mono">{challengePacket.packet_state}</span> · evaluation：<span className="font-mono">{challengePacket.challenge_evaluation}</span></p>
@@ -579,7 +623,7 @@ export function DecisionProposalReview() {
                 <button
                   type="button"
                   onClick={() => void handleFinalizeChallenge()}
-                  disabled={!challengeConfirmed || busy !== null || !draft}
+                  disabled={!challengeConfirmed || busy !== null || !draft || challengeReadState !== "ABSENT"}
                   className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50"
                 >
                   {busy === "challenge" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
@@ -591,14 +635,16 @@ export function DecisionProposalReview() {
               <input
                 type="checkbox"
                 checked={bindChallenge}
-                disabled={!challengePacket || busy !== null}
+                disabled={challengeReadState !== "FOUND" || !challengePacket || busy !== null}
                 onChange={(event) => setBindChallenge(event.target.checked)}
                 className="mt-0.5"
               />
               <span data-challenge-bind={bindChallenge && challengePacket ? "yes" : "no"}>
-                {challengePacket
+                {challengeReadState === "FOUND"
                   ? "Freeze 将绑定这份已 Finalize 的 Challenge（decision_challenge:<id>）。"
-                  : "尚未 Finalize Challenge；Freeze 仍可继续，且不会写入假的 challenge 引用。"}
+                  : challengeReadState === "ABSENT"
+                    ? "未找到已 Finalize 的 Challenge；Freeze 仍可继续，且不会写入假的 challenge 引用。"
+                    : "Challenge 状态当前无法安全验证；读取完成前不会 Freeze，也不会绑定未验证的 Challenge。"}
               </span>
             </label>
           </section>
@@ -607,7 +653,7 @@ export function DecisionProposalReview() {
             <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} className="mt-0.5" />
             <span>我已检查三个独立 View、同一 as_of、Authority 状态与 Action Envelope；确认提交这份 Proposal 为 Frozen Decision。</span>
           </label>
-          <button type="button" onClick={() => void handleCommit()} disabled={!confirmed || busy !== null} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+          <button type="button" onClick={() => void handleCommit()} disabled={!confirmed || busy !== null || challengeReadState === "PENDING" || challengeReadState === "ERROR"} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
             {busy === "commit" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LockKeyhole className="h-3.5 w-3.5" />}
             Freeze Formal Decision
           </button>
