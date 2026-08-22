@@ -6,9 +6,9 @@
  *
  * 1. 种子：bootstrap position reality（600519 legacy holding）。
  * 2. /decision-inbox → UNASSIGNED_HOLDING 行 + 「创建 Campaign」按钮。
- * 3. 创建 SWING → DRAFT 卡片出现在「正在建立的 Campaign」区域；
- *    holding 仍 UNASSIGNED（DRAFT 不算 current，创建入口仍在）。
- * 4. 刷新后 DRAFT 仍持续存在（不依赖 transient success component）。
+ * 3. 创建 SWING → 创建表单自动收起，页面定位并高亮新 DRAFT setup card；
+ *    同一 card 直接展示 Campaign lifecycle 与 Current Thesis 下一步入口。
+ * 4. 刷新后 DRAFT 仍持续存在（不依赖 transient focus component）。
  * 5. 同 Security 再创建 MEDIUM DRAFT —— 两个 setup 卡共存。
  * 6. SWING 卡显式点击：开始研究 → 标记待入场 → 激活 Campaign（每步一次，无链式）。
  * 7. ACTIVE 后：SWING 离开 setup 区域，进入「当前 Campaign」；
@@ -220,6 +220,18 @@ async function runE2E() {
     });
     const context = await browser.newContext();
     const page = await context.newPage();
+    const forbiddenMutationRequests = [];
+    page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      const pathname = new URL(request.url()).pathname;
+      if (
+        /\/api\/campaigns\/[^/]+\/transitions$/.test(pathname)
+        || /\/api\/campaigns\/[^/]+\/thesis-binding$/.test(pathname)
+        || /\/api\/thesis\/[^/]+\/(begin-formalization|confirm|freeze)$/.test(pathname)
+      ) {
+        forbiddenMutationRequests.push(pathname);
+      }
+    });
 
     await page.route("**/api/**", (route) => {
       const u = new URL(route.request().url());
@@ -249,23 +261,29 @@ async function runE2E() {
     const submitBtn = page.locator("button:has-text('确认创建 Campaign')");
     assert.equal(await submitBtn.isDisabled(), true, "strategy selection required");
 
-    // 3. 创建 SWING → DRAFT setup card；holding 仍 UNASSIGNED
-    console.log("[E2E] 3. creating SWING campaign (DRAFT)...");
+    // 3. 创建 SWING → 自动收起表单并定位到 DRAFT setup card；holding 仍 UNASSIGNED
+    console.log("[E2E] 3. creating SWING campaign (DRAFT) and continuing to setup...");
     await page.click("label:has-text('波段')");
     await page.click("button:has-text('确认创建 Campaign')");
     await page.waitForSelector("h2:has-text('正在建立的 Campaign')");
-    const swingCard = page.locator('[data-campaign-strategy="SWING"]');
+    await page.waitForSelector('[data-campaign-setup-focused="true"]');
+    const focusedSetupCard = page.locator('[data-campaign-setup-focused="true"]');
+    await focusedSetupCard.getByTestId("campaign-setup-continuation").getByText("下一步从这里继续").waitFor();
+    await focusedSetupCard.locator('[data-campaign-role="setup"]').waitFor();
+    const swingCard = page.locator('[data-campaign-strategy="SWING"][data-campaign-role="setup"]');
     await swingCard.getByText("尚未进入当前 Campaign").waitFor();
     await swingCard.getByText("600519").waitFor();
+    await focusedSetupCard.locator('[data-campaign-thesis]').waitFor();
+    await focusedSetupCard.getByText("新建 Formal Thesis 草稿").waitFor();
     assert.equal(await swingCard.getAttribute("data-campaign-status"), "DRAFT");
     assert.equal(await swingCard.getAttribute("data-campaign-role"), "setup");
-    // 成功卡片显示 campaign_id / strategy / DRAFT（§13.6），由用户显式关闭
-    await page.waitForSelector("text=Campaign 已创建（状态：草稿）");
-    await page.click("button:has-text('关闭')");
+    assert.equal(await page.getByTestId("create-campaign-form").count(), 0, "create form must auto-close after success");
+    assert.equal(await page.getByText("Campaign 已创建（状态：草稿）").count(), 0, "success card must not block setup continuation");
+    assert.deepEqual(forbiddenMutationRequests, [], "creation continuation must not mutate lifecycle or Thesis");
     // DRAFT 不算 current：holding 行仍 UNASSIGNED（创建入口仍在）
     await page.waitForSelector("text=未分配 Campaign");
 
-    // 4. 刷新后 DRAFT 仍持续存在（§7：不依赖 transient success component）
+    // 4. 刷新后 DRAFT 仍持续存在（不依赖 transient focus component）
     console.log("[E2E] 4. refresh keeps DRAFT reachable...");
     await page.click("button:has-text('刷新')");
     await swingCard.getByText("尚未进入当前 Campaign").waitFor();
@@ -274,7 +292,6 @@ async function runE2E() {
     // 5. 同 Security 再创建 MEDIUM DRAFT（两个 setup 卡共存）
     console.log("[E2E] 5. second campaign (MEDIUM DRAFT) coexists...");
     await createCampaignViaUi(page, "中线");
-    await page.click("button:has-text('关闭')");
     const mediumCard = page.locator('[data-campaign-strategy="MEDIUM"]');
     await mediumCard.getByText("尚未进入当前 Campaign").waitFor();
     assert.equal(await mediumCard.getAttribute("data-campaign-status"), "DRAFT");

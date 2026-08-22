@@ -21,7 +21,6 @@ import type {
 import {
   CAMPAIGN_STRATEGIES,
   CAMPAIGN_STRATEGY_LABELS,
-  CAMPAIGN_STATUS_LABELS,
   collectHoldingUniverseSecurityCodes,
   presentReasonCodes,
   selectSetupCampaigns,
@@ -88,13 +87,12 @@ function CreateCampaignForm({
   onClose,
 }: {
   holding: DecisionInboxHoldingSetupItem;
-  onCreated: () => void;
+  onCreated: (campaign: CampaignRecord) => void;
   onClose: () => void;
 }) {
   const [strategy, setStrategy] = useState<CampaignStrategy | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const [created, setCreated] = useState<CampaignRecord | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,8 +105,7 @@ function CreateCampaignForm({
         strategy,
       );
       const campaign = await api.createCampaign(security_code, chosen);
-      setCreated(campaign);
-      onCreated();
+      onCreated(campaign);
     } catch (err: unknown) {
       setError(errorMessage(err));
     } finally {
@@ -116,39 +113,11 @@ function CreateCampaignForm({
     }
   };
 
-  if (created) {
-    return (
-      <div
-        className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4"
-        role="status"
-      >
-        <div className="space-y-1.5 text-sm">
-          <p className="font-medium">Campaign 已创建（状态：草稿）</p>
-          <p className="text-xs leading-5 text-muted-foreground">
-            这只是建立中的草稿，不会自动激活，也不会自动创建投资逻辑或正式决策。
-          </p>
-          <p className="font-mono text-[11px] text-muted-foreground" title={created.campaign_id}>
-            campaign_id：{created.campaign_id}
-          </p>
-          <p className="text-muted-foreground">
-            {CAMPAIGN_STRATEGY_LABELS[created.strategy]} · {CAMPAIGN_STATUS_LABELS[created.status]}
-          </p>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-xs text-primary hover:underline"
-          >
-            关闭
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <form
       onSubmit={handleSubmit}
       className="rounded-lg border border-border/60 bg-background/40 p-4 space-y-3"
+      data-testid="create-campaign-form"
     >
       <div className="grid gap-1.5">
         <label className="text-xs font-medium text-muted-foreground">
@@ -176,6 +145,7 @@ function CreateCampaignForm({
                 checked={strategy === value}
                 onChange={() => setStrategy(value)}
                 className="sr-only"
+                data-testid={`create-campaign-strategy-${value}`}
               />
               {CAMPAIGN_STRATEGY_LABELS[value]}
             </label>
@@ -201,6 +171,7 @@ function CreateCampaignForm({
         <button
           type="submit"
           disabled={!strategy || submitting}
+          data-testid="create-campaign-submit"
           className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         >
           {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
@@ -612,6 +583,7 @@ export default function DecisionInbox() {
   const [loadError, setLoadError] = useState("");
   const [nextActions, setNextActions] = useState<Record<string, CampaignNextActions | null>>({});
   const [creatingFor, setCreatingFor] = useState<string | null>(null);
+  const [focusedSetupCampaignId, setFocusedSetupCampaignId] = useState<string | null>(null);
   const [formGeneration, setFormGeneration] = useState(0);
   const [thesisReloadEpoch, setThesisReloadEpoch] = useState(0);
 
@@ -652,9 +624,24 @@ export default function DecisionInbox() {
     void refresh();
   }, [refresh]);
 
-  const handleCreated = useCallback(() => {
+  const handleCreated = useCallback((campaign: CampaignRecord) => {
+    setCreatingFor(null);
+    setFocusedSetupCampaignId(campaign.campaign_id);
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!focusedSetupCampaignId || !setupCampaigns.some((campaign) => campaign.campaign_id === focusedSetupCampaignId)) {
+      return;
+    }
+    const target = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-campaign-setup-card]"),
+    ).find((element) => element.dataset.campaignSetupCard === focusedSetupCampaignId);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timeout = window.setTimeout(() => setFocusedSetupCampaignId(null), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [focusedSetupCampaignId, setupCampaigns]);
 
   const isEmpty =
     snapshot?.canonical
@@ -764,6 +751,7 @@ export default function DecisionInbox() {
                       && creatingFor !== holding.security_code && (
                       <button
                         type="button"
+                        data-testid={`decision-inbox-create-campaign-${holding.security_code}`}
                         onClick={() => {
                           setCreatingFor(holding.security_code);
                           setFormGeneration((n) => n + 1);
@@ -796,8 +784,23 @@ export default function DecisionInbox() {
                   草稿 / 研究中 / 待入场尚未进入当前 Campaign，需要逐步显式推进。
                 </p>
               </div>
-              {setupCampaigns.map((campaign) => (
-                <div key={campaign.campaign_id} className="space-y-2">
+              {setupCampaigns.map((campaign) => {
+                const focused = focusedSetupCampaignId === campaign.campaign_id;
+                return (
+                  <div
+                    key={campaign.campaign_id}
+                    className={`space-y-2 rounded-lg transition-shadow ${focused ? "ring-2 ring-primary/60 ring-offset-2 ring-offset-background" : ""}`}
+                    data-campaign-setup-card={campaign.campaign_id}
+                    data-campaign-setup-focused={focused ? "true" : "false"}
+                  >
+                    {focused && (
+                      <p
+                        className="rounded-md bg-primary/10 px-3 py-2 text-xs font-medium text-primary"
+                        data-testid="campaign-setup-continuation"
+                      >
+                        下一步从这里继续
+                      </p>
+                    )}
                   <CampaignLifecycleCard
                     campaignId={campaign.campaign_id}
                     securityCode={campaign.security_code}
@@ -807,14 +810,15 @@ export default function DecisionInbox() {
                     setupContext
                     onChanged={() => void refresh()}
                   />
-                  <CampaignThesisActivationCard
-                    campaignId={campaign.campaign_id}
-                    securityCode={campaign.security_code}
-                    strategy={campaign.strategy}
-                    reloadEpoch={thesisReloadEpoch}
-                  />
-                </div>
-              ))}
+                    <CampaignThesisActivationCard
+                      campaignId={campaign.campaign_id}
+                      securityCode={campaign.security_code}
+                      strategy={campaign.strategy}
+                      reloadEpoch={thesisReloadEpoch}
+                    />
+                  </div>
+                );
+              })}
             </section>
           )}
 
