@@ -21,6 +21,8 @@ function executedDraft(status: "full" | "partial"): TradeDraft {
     actual_price: 1500,
     actual_quantity: status === "partial" ? 100 : 100,
     executed_at: "2098-01-02T10:00",
+    fee: 0,
+    other_cost: 0,
     unexecuted_reason: status === "partial" ? "仅成交一半" : "",
   };
 }
@@ -51,6 +53,36 @@ test("显式成交时间的预览和 payload 使用同一个 canonical UTC ISO",
     assert.equal(payload.executed_at, canonicalizeTradeExecutionTime(draft.executed_at));
     assert.match(payload.executed_at ?? "", /Z$/);
   }
+});
+
+test("executed Trade 必须显式填写非负费用，0 是用户确认值", () => {
+  for (const status of ["full", "partial"] as const) {
+    const valid = executedDraft(status);
+    assert.equal(validateTradeDraft({ ...valid, fee: "", other_cost: 0 }), `${status === "full" ? "已全部执行" : "部分执行"}状态下，手续费不能为空`);
+    assert.equal(validateTradeDraft({ ...valid, fee: 0, other_cost: "" }), `${status === "full" ? "已全部执行" : "部分执行"}状态下，其他费用不能为空`);
+    assert.equal(validateTradeDraft({ ...valid, fee: 0, other_cost: 0 }), null);
+    const payload = buildTradeCreateInput({ ...valid, fee: 0, other_cost: 0 });
+    assert.equal(payload.fee, 0);
+    assert.equal(payload.other_cost, 0);
+  }
+});
+
+test("费用拒绝负数、非有限值和非法文本", () => {
+  const valid = executedDraft("full");
+  for (const value of [-0.01, Number.NaN, Number.POSITIVE_INFINITY, "not-a-cost"]) {
+    assert.equal(validateTradeDraft({ ...valid, fee: value }), "手续费不得小于 0");
+    assert.equal(validateTradeDraft({ ...valid, other_cost: value }), "其他费用不得小于 0");
+  }
+});
+
+test("页面费用输入默认为空、执行态必填且不猜测费用", () => {
+  assert.match(pageSource, /fee: ""/);
+  assert.match(pageSource, /other_cost: ""/);
+  assert.doesNotMatch(pageSource, /fee: "0"/);
+  assert.doesNotMatch(pageSource, /other_cost: "0"/);
+  assert.match(pageSource, /placeholder="请输入实际费用，0 表示确认费用为 0"/);
+  assert.match(pageSource, /手续费 \(¥\)[\s\S]*?required/);
+  assert.match(pageSource, /其他费用 \(¥\)[\s\S]*?required/);
 });
 
 test("not_executed 继续不要求并且不提交 executed_at", () => {

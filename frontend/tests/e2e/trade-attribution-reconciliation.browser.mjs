@@ -289,7 +289,15 @@ async function run() {
       await page.getByRole("button", { name: "新建交易" }).click();
       return page.locator("div.fixed.inset-0").filter({ hasText: "新建交易流水" });
     };
-    const fillCreateForm = async (modal, { status = "full", executionTime = "2098-01-02T10:00" } = {}) => {
+    const fillCreateForm = async (
+      modal,
+      {
+        status = "full",
+        executionTime = "2098-01-02T10:00",
+        fee = status === "partial" ? "0" : "12.50",
+        otherCost = status === "partial" ? "0" : "3.25",
+      } = {},
+    ) => {
       await modal.getByPlaceholder("6位数字，如 600519").fill("600519");
       await modal.getByPlaceholder("如 贵州茅台").fill("贵州茅台");
       if (status === "not_executed") {
@@ -305,6 +313,9 @@ async function run() {
       await modal.getByPlaceholder("大于0", { exact: true }).fill("102");
       await modal.getByPlaceholder("正整数", { exact: true }).fill(status === "partial" ? "1" : "1");
       await modal.locator('input[type="datetime-local"]').fill(executionTime);
+      const costInputs = modal.getByPlaceholder("请输入实际费用，0 表示确认费用为 0");
+      await costInputs.nth(0).fill(fee);
+      await costInputs.nth(1).fill(otherCost);
     };
 
     // --- TRT1：executed Trade 未显式选择成交时间时，浏览器阻断提交且不产生 POST ---
@@ -314,15 +325,22 @@ async function run() {
     await missingTimeModal.getByPlaceholder("大于0", { exact: true }).fill("102");
     await missingTimeModal.getByPlaceholder("正整数", { exact: true }).fill("1");
     const missingTimeInput = missingTimeModal.locator('input[type="datetime-local"]');
+    const missingTimeCosts = missingTimeModal.getByPlaceholder("请输入实际费用，0 表示确认费用为 0");
     assert.equal(await missingTimeInput.inputValue(), "");
     assert.equal(await missingTimeInput.evaluate((input) => input.required && !input.checkValidity()), true);
+    assert.equal(await missingTimeCosts.nth(0).inputValue(), "");
+    assert.equal(await missingTimeCosts.nth(1).inputValue(), "");
+    assert.equal(await missingTimeCosts.nth(0).evaluate((input) => input.required && !input.checkValidity()), true);
+    assert.equal(await missingTimeCosts.nth(1).evaluate((input) => input.required && !input.checkValidity()), true);
     await missingTimeModal.getByRole("button", { name: "提交创建" }).click();
-    assert.equal(tradeCreatePosts, 0, "missing execution time must not issue trade POST");
-    assert.equal(await missingTimeModal.count(), 1, "missing execution time must keep the form open");
+    assert.equal(tradeCreatePosts, 0, "missing execution time/cost must not issue trade POST");
+    assert.equal(await missingTimeModal.count(), 1, "missing execution time/cost must keep the form open");
 
-    // --- TRT1 + TRUX1：显式时间预览 → 创建成功 → 自动详情 → 候选/对账可见 ---
+    // --- TRT1 + TRT2 + TRUX1：显式时间与费用预览 → 创建成功 → 自动详情 ---
     const executedModal = missingTimeModal;
     await executedModal.locator('input[type="datetime-local"]').fill("2098-01-02T10:00");
+    await executedModal.getByPlaceholder("请输入实际费用，0 表示确认费用为 0").nth(0).fill("12.50");
+    await executedModal.getByPlaceholder("请输入实际费用，0 表示确认费用为 0").nth(1).fill("3.25");
     const expectedExecutedIso = await page.evaluate(() => new Date("2098-01-02T10:00").toISOString());
     await executedModal.getByText("本地时间：2098-01-02T10:00", { exact: true }).waitFor();
     await executedModal.getByText(/浏览器解析时区：/).waitFor();
@@ -346,10 +364,12 @@ async function run() {
     assert.equal(truxWritePosts, 1, "explicit attribution must be the only write");
     const createdReadback = await jsonRequest(backend, `/api/trades/${createdRecord.trade_id}`);
     assert.equal(new Date(createdReadback.executed_at).toISOString(), expectedExecutedIso);
+    assert.equal(createdReadback.fee, 12.5);
+    assert.equal(createdReadback.other_cost, 3.25);
 
-    // --- TRT1：partial 使用用户显式成交时间并保持同一 readback 语义 ---
+    // --- TRT1 + TRT2：partial 使用显式 0 费用并保持同一 readback 语义 ---
     const partialModal = await openCreateModal();
-    await fillCreateForm(partialModal, { status: "partial", executionTime: "2098-01-03T11:15" });
+    await fillCreateForm(partialModal, { status: "partial", executionTime: "2098-01-03T11:15", fee: "0", otherCost: "0" });
     const expectedPartialIso = await page.evaluate(() => new Date("2098-01-03T11:15").toISOString());
     await partialModal.getByText(`Canonical UTC ISO：${expectedPartialIso}`, { exact: true }).waitFor();
     const [partialResponse] = await Promise.all([
@@ -370,6 +390,8 @@ async function run() {
     assert.equal(partialReadback.planned_quantity, 2);
     assert.equal(partialReadback.actual_quantity, 1);
     assert.equal(partialReadback.unexecuted_reason, "仅成交一半");
+    assert.equal(partialReadback.fee, 0);
+    assert.equal(partialReadback.other_cost, 0);
     assert.equal(new Date(partialReadback.executed_at).toISOString(), expectedPartialIso);
     const partialState = await jsonRequest(backend, `/api/trades/${partialRecord.trade_id}/reconciliation`);
     assert.equal(partialState.allocation_state, "UNALLOCATED");

@@ -288,8 +288,8 @@ export function Trades() {
       actual_price: "",
       actual_quantity: "",
       executed_at: "",
-      fee: "0",
-      other_cost: "0",
+      fee: "",
+      other_cost: "",
       unexecuted_reason: "",
       note: "",
       advice_ref: null,
@@ -897,12 +897,14 @@ export function Trades() {
 
                     <div>
                       <label className="block text-xs font-medium text-foreground mb-1">
-                        手续费 (¥)
+                        手续费 (¥) <span className="text-rose-400">*</span>
                       </label>
                       <input
                         type="number"
                         step="any"
-                        placeholder="默认为 0"
+                        required
+                        min="0"
+                        placeholder="请输入实际费用，0 表示确认费用为 0"
                         value={createDraft.fee ?? ""}
                         onChange={(e) => setCreateDraft({ ...createDraft, fee: e.target.value })}
                         className="w-full rounded-md border border-input bg-background/50 px-3 py-1.5 text-xs text-foreground focus:ring-1 focus:ring-primary"
@@ -911,12 +913,14 @@ export function Trades() {
 
                     <div>
                       <label className="block text-xs font-medium text-foreground mb-1">
-                        其他费用 (¥)
+                        其他费用 (¥) <span className="text-rose-400">*</span>
                       </label>
                       <input
                         type="number"
                         step="any"
-                        placeholder="默认为 0"
+                        required
+                        min="0"
+                        placeholder="请输入实际费用，0 表示确认费用为 0"
                         value={createDraft.other_cost ?? ""}
                         onChange={(e) =>
                           setCreateDraft({ ...createDraft, other_cost: e.target.value })
