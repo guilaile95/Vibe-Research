@@ -28,6 +28,8 @@ import {
   visibleStateLabel,
   presentReasonCodes,
   formatCampaignIdShort,
+  FORMAL_DECISION_EVALUATION_UNKNOWN,
+  formalDecisionEvaluationStatus,
   formalDecisionNextSteps,
 } from "../src/lib/decisionInbox.ts";
 import type {
@@ -359,7 +361,7 @@ test("EVALUATED exposes review first and a separate explicit new-decision entry"
   ]);
 });
 
-test("NOT_EVALUATED keeps only the existing proposal workflow", () => {
+test("known non-evaluated statuses keep only the existing proposal workflow", () => {
   for (const evaluation of ["NOT_EVALUATED", "UNKNOWN", "ERROR"]) {
     assert.deepEqual(formalDecisionNextSteps(evaluation, "campaign_demo"), [
       {
@@ -368,9 +370,21 @@ test("NOT_EVALUATED keeps only the existing proposal workflow", () => {
         href: "/campaigns/campaign_demo/decision-proposal",
       },
     ]);
+    assert.equal(formalDecisionEvaluationStatus(evaluation), evaluation);
   }
   assert.deepEqual(formalDecisionNextSteps(null, "campaign_demo"), []);
   assert.deepEqual(formalDecisionNextSteps(undefined, "campaign_demo"), []);
+  assert.equal(formalDecisionEvaluationStatus(null), null);
+  assert.equal(formalDecisionEvaluationStatus(undefined), null);
+});
+
+test("unsupported Formal Decision evaluations fail closed without navigation", () => {
+  for (const evaluation of ["FUTURE_ENUM", "CORRUPTED", "EVALUATED ", "NOT_EVALUATED_EXTRA"]) {
+    assert.deepEqual(formalDecisionNextSteps(evaluation, "campaign_demo"), []);
+    assert.equal(formalDecisionEvaluationStatus(evaluation), FORMAL_DECISION_EVALUATION_UNKNOWN);
+  }
+  assert.equal(formalDecisionEvaluationStatus(42), FORMAL_DECISION_EVALUATION_UNKNOWN);
+  assert.equal(formalDecisionEvaluationStatus({}), FORMAL_DECISION_EVALUATION_UNKNOWN);
 });
 
 
