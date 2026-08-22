@@ -390,9 +390,14 @@ def _validate_portfolio_authoritative_payload(
                 "tracked_stock_weight_pct",
                 "quote_coverage",
             },
+            {"status", "reason_code"},
         )
         if not isinstance(funding["configured"], bool):
             raise AiResultValidationError("account_funding.configured 必须是布尔值")
+        if "status" in funding and funding["status"] not in {"valid", "not_configured", "corrupted"}:
+            raise AiResultValidationError("account_funding.status 非法")
+        if "reason_code" in funding and funding["reason_code"] is not None and not isinstance(funding["reason_code"], str):
+            raise AiResultValidationError("account_funding.reason_code 必须是字符串或 null")
         for field in (
             "total_assets",
             "available_cash",
