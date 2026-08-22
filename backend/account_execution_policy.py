@@ -17,6 +17,14 @@ from pathlib import Path
 from typing import Any, Mapping
 
 _LOCK = threading.Lock()
+ACCOUNT_EXECUTION_POLICY_CORRUPTED_REASON = "ACCOUNT_EXECUTION_POLICY_CORRUPTED"
+
+
+class AccountExecutionPolicyCorruptedError(ValueError):
+    """Raised when a present policy file cannot be trusted as executable input."""
+
+    reason_code = ACCOUNT_EXECUTION_POLICY_CORRUPTED_REASON
+
 
 DEFAULT_POLICY: dict[str, Any] = {
     "lot_size": 100,
@@ -82,19 +90,36 @@ def validate_policy_data(data: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def get_account_execution_policy(db_file: Path | None = None) -> dict[str, Any]:
-    """Load policy from file, falling back to default policy if missing or corrupt."""
+def _status(status: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+    result = {"status": status, "data": data, "reason_code": None}
+    if status == "corrupted":
+        result["reason_code"] = ACCOUNT_EXECUTION_POLICY_CORRUPTED_REASON
+    return result
+
+
+def get_account_execution_policy_status(db_file: Path | None = None) -> dict[str, Any]:
+    """Return default/configured/corrupted policy state without repairing the file."""
     path = db_file or resolve_policy_file_path()
     if not path.exists():
-        return dict(DEFAULT_POLICY)
+        return _status("default", dict(DEFAULT_POLICY))
 
     with _LOCK:
         try:
             content = path.read_text(encoding="utf-8")
             raw = json.loads(content)
-            return validate_policy_data(raw)
+            return _status("configured", validate_policy_data(raw))
         except Exception:
-            return dict(DEFAULT_POLICY)
+            return _status("corrupted")
+
+
+def get_account_execution_policy(db_file: Path | None = None) -> dict[str, Any]:
+    """Load a usable policy; a present corrupted file fails closed."""
+    status = get_account_execution_policy_status(db_file=db_file)
+    if status["status"] == "corrupted":
+        raise AccountExecutionPolicyCorruptedError(
+            ACCOUNT_EXECUTION_POLICY_CORRUPTED_REASON
+        )
+    return dict(status["data"])
 
 
 def save_account_execution_policy(data: Mapping[str, Any], db_file: Path | None = None) -> dict[str, Any]:

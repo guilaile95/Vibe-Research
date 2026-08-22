@@ -105,6 +105,7 @@ import type {
   SignalLedgerQueryResult,
   SignalLedgerRunDetailResult,
   AccountExecutionPolicy,
+  AccountExecutionPolicyResponse,
   AdoptionSummary,
   OutcomeSummary,
   StockAnalyticsItem,
@@ -886,11 +887,16 @@ export const api = {
   getRunSignalLedger: (decisionRunId: string) => getRunSignalLedger(decisionRunId),
 
   // ---- 账户资金执行策略 (P2-3) ----
-  getAccountExecutionPolicy(): Promise<AccountExecutionPolicy> {
-    return get<AccountExecutionPolicy>("/account-execution-policy");
+  getAccountExecutionPolicy(): Promise<AccountExecutionPolicyResponse> {
+    return get<AccountExecutionPolicyResponse>("/account-execution-policy", { unwrapData: false });
   },
-  updateAccountExecutionPolicy(body: AccountExecutionPolicy): Promise<AccountExecutionPolicy> {
-    return request<AccountExecutionPolicy>("/account-execution-policy", "PUT", body);
+  updateAccountExecutionPolicy(body: AccountExecutionPolicy): Promise<AccountExecutionPolicyResponse> {
+    return request<AccountExecutionPolicyResponse>(
+      "/account-execution-policy",
+      "PUT",
+      body,
+      { unwrapData: false },
+    );
   },
 
   // ---- 决策绩效分析 (P2-4A) ----
@@ -1113,11 +1119,11 @@ export async function getRunSignalLedger(decisionRunId: string): Promise<SignalL
   };
 }
 
-export async function getAccountExecutionPolicy(): Promise<AccountExecutionPolicy> {
+export async function getAccountExecutionPolicy(): Promise<AccountExecutionPolicyResponse> {
   return api.getAccountExecutionPolicy();
 }
 
-export async function updateAccountExecutionPolicy(body: AccountExecutionPolicy): Promise<AccountExecutionPolicy> {
+export async function updateAccountExecutionPolicy(body: AccountExecutionPolicy): Promise<AccountExecutionPolicyResponse> {
   return api.updateAccountExecutionPolicy(body);
 }
 

@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { Settings2, Save, RotateCcw, CheckCircle2, AlertCircle } from "lucide-react";
 import { api } from "@/lib/api";
-import type { AccountExecutionPolicy } from "@/lib/api/types";
+import type {
+  AccountExecutionPolicy,
+  AccountExecutionPolicyStatus,
+} from "@/lib/api/types";
 
 const DEFAULT_POLICY: AccountExecutionPolicy = {
   lot_size: 100,
@@ -13,6 +16,8 @@ const DEFAULT_POLICY: AccountExecutionPolicy = {
 
 export default function AccountPolicy() {
   const [policy, setPolicy] = useState<AccountExecutionPolicy>(DEFAULT_POLICY);
+  const [policyStatus, setPolicyStatus] = useState<AccountExecutionPolicyStatus | "error">("default");
+  const [policyReasonCode, setPolicyReasonCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveResult, setSaveResult] = useState<"ok" | "error" | null>(null);
@@ -20,8 +25,16 @@ export default function AccountPolicy() {
 
   useEffect(() => {
     api.getAccountExecutionPolicy()
-      .then(setPolicy)
-      .catch(() => {})
+      .then((response) => {
+        setPolicyStatus(response.status);
+        setPolicyReasonCode(response.reason_code);
+        if (response.data) setPolicy(response.data);
+      })
+      .catch((err: any) => {
+        setPolicyStatus("error");
+        setPolicyReasonCode(null);
+        setErrorMsg(err?.message || "执行策略读取失败");
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -31,7 +44,10 @@ export default function AccountPolicy() {
     setSaveResult(null);
     try {
       const saved = await api.updateAccountExecutionPolicy(policy);
-      setPolicy(saved);
+      if (!saved.data) throw new Error("保存后的执行策略不可用");
+      setPolicy(saved.data);
+      setPolicyStatus(saved.status);
+      setPolicyReasonCode(saved.reason_code);
       setSaveResult("ok");
     } catch (err: any) {
       setErrorMsg(err?.message || "保存失败");
@@ -62,7 +78,30 @@ export default function AccountPolicy() {
           加载中…
         </div>
       ) : (
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <>
+          {policyStatus === "corrupted" && (
+            <div data-testid="account-execution-policy-corrupted" className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+              <p className="font-semibold">账户执行策略损坏/不可读取</p>
+              <p className="mt-1">当前不会使用默认策略生成可执行数量；请修改后显式保存新策略。</p>
+              <p className="mt-1 font-mono text-xs">{policyReasonCode || "ACCOUNT_EXECUTION_POLICY_CORRUPTED"}</p>
+            </div>
+          )}
+          {policyStatus === "default" && (
+            <div data-testid="account-execution-policy-default" className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+              未配置账户执行策略，当前使用默认策略；如需持久化，请显式保存。
+            </div>
+          )}
+          {policyStatus === "configured" && (
+            <div data-testid="account-execution-policy-configured" className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+              当前使用已配置的账户执行策略。
+            </div>
+          )}
+          {policyStatus === "error" && (
+            <div data-testid="account-execution-policy-load-error" className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+              {errorMsg || "执行策略读取失败"}
+            </div>
+          )}
+          <form onSubmit={handleSubmit} className="space-y-6">
           <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm space-y-6">
 
             {/* lot_size */}
@@ -95,7 +134,7 @@ export default function AccountPolicy() {
                 可用现金安全垫（%）
               </label>
               <p className="text-xs text-muted-foreground">
-                执行后账户剩余现金不得低于总资产的此比例
+                执行后仍保留可用现金的此比例；仅作用于可用现金，不是总资产比例
               </p>
               <div className="flex items-center gap-2">
                 <input
@@ -235,6 +274,7 @@ export default function AccountPolicy() {
             </button>
           </div>
         </form>
+        </>
       )}
     </div>
   );
