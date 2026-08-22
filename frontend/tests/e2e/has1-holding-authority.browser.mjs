@@ -224,8 +224,23 @@ async function run() {
     });
 
     // ---- C. post-bootstrap /portfolio reads canonical positions ----------
+    // Simulate an empty legacy archive after bootstrap: the ledger remains the
+    // current authority and the empty archive is only reconciliation evidence.
+    const pfFile = join(tempDataDir, "portfolio.json");
+    writeFileSync(pfFile, JSON.stringify({ holdings: [], last_refresh: null }), "utf-8");
     banner = await openPortfolio();
     assert.equal(await banner.getAttribute("data-authority"), "LEDGER_DERIVED");
+    const missingInArchiveBanner = page.getByTestId("portfolio-mismatch-banner");
+    await missingInArchiveBanner.waitFor();
+    assert.equal(await missingInArchiveBanner.getAttribute("data-reconciliation"), "LEGACY_ARCHIVE_DIVERGENCE");
+    const missingInArchiveText = await missingInArchiveBanner.innerText();
+    assert.ok(missingInArchiveText.includes("MISSING_IN_PORTFOLIO"));
+    assert.ok(missingInArchiveText.includes("Legacy archive"));
+    assert.ok(missingInArchiveText.includes("Position Ledger 是 post-bootstrap 的当前持仓事实"));
+    assert.equal(missingInArchiveText.includes("持仓对账不一致"), false);
+    assert.equal(missingInArchiveText.includes("为了消除 archive 差异"), true);
+    assert.ok((await page.locator("table tbody tr").first().innerText()).includes("600519"));
+    assert.equal(missingInArchiveText.includes("自动写入"), true);
     assert.equal(await page.getByTestId("portfolio-legacy-entry-disabled").count(), 1);
     assert.equal(
       await page.getByRole("heading", { name: "添加持仓" }).count(),
@@ -318,11 +333,16 @@ async function run() {
     assert.equal(stillCanonical.holdings[0].code, "600519");
 
     // ---- I/J. deliberate mismatch stays explicit; file preserved ---------
-    const pfFile = join(tempDataDir, "portfolio.json");
     assert.ok(existsSync(pfFile), "J: portfolio.json must be preserved");
     writeFileSync(
       pfFile,
-      JSON.stringify({ holdings: [{ code: "600519", shares: 999, cost: 1 }], last_refresh: null }),
+      JSON.stringify({
+        holdings: [
+          { code: "600519", shares: 999, cost: 1 },
+          { code: "000001", shares: 20, cost: 12 },
+        ],
+        last_refresh: null,
+      }),
       "utf-8",
     );
 
@@ -330,7 +350,16 @@ async function run() {
     assert.equal(await banner.getAttribute("data-authority"), "LEDGER_DERIVED");
     const mismatchBanner = page.getByTestId("portfolio-mismatch-banner");
     await mismatchBanner.waitFor();
-    assert.ok((await mismatchBanner.innerText()).includes("600519"));
+    assert.equal(await mismatchBanner.getAttribute("data-reconciliation"), "LEGACY_ARCHIVE_DIVERGENCE");
+    const mismatchText = await mismatchBanner.innerText();
+    assert.ok(mismatchText.includes("600519"));
+    assert.ok(mismatchText.includes("000001"));
+    assert.ok(mismatchText.includes("MISSING_IN_LEDGER"));
+    assert.ok(mismatchText.includes("MISMATCH"));
+    assert.ok(mismatchText.includes("Ledger 180 股"));
+    assert.ok(mismatchText.includes("archive 999 股"));
+    assert.equal(mismatchText.includes("持仓对账不一致"), false);
+    assert.equal(mismatchText.includes("不要为了消除 archive 差异而修改当前账本"), true);
 
     const mismatchView = await jsonRequest(backend, "/api/portfolio");
     assert.equal(mismatchView.holdings[0].shares, 180, "display must stay canonical despite mismatch");

@@ -639,7 +639,15 @@ export interface PortfolioData {
     data_limitations?: string[];
     reconciliation?: {
       summary?: { match: number; mismatch: number; missing_in_ledger: number; missing_in_portfolio: number };
-      items?: Array<{ code: string; status: string; reason: string | null }>;
+      items?: Array<{
+        code: string;
+        status: string;
+        reason: string | null;
+        ledger_shares?: number | null;
+        ledger_cost?: number | null;
+        portfolio_shares?: number | null;
+        portfolio_cost?: number | null;
+      }>;
     };
   };
 }
