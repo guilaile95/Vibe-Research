@@ -324,9 +324,14 @@ export function Trades() {
     setCreateLoading(true);
     try {
       const payload = buildTradeCreateInput(draftToSubmit);
-      await api.createTrade(payload);
+      const created = await api.createTrade(payload);
+      // P1-TRUX1：创建成功即续接详情链路——detail / reconciliation /
+      // candidates 由 selectedTradeId 的既有 effect 复用加载。若 Trade 已
+      // 持久化但后续读取失败，只诚实展示读取错误，不回滚、不伪装创建失败；
+      // 归属与 UNPLANNED 仍只能由用户显式点击触发。
       setIsCreateOpen(false);
-      setSuccessMsg("交易流水创建成功");
+      setSelectedTradeId(created.trade_id);
+      setSuccessMsg("交易流水创建成功，已打开该笔交易详情");
       setTimeout(() => setSuccessMsg(null), 3000);
       loadTrades();
     } catch (e) {
