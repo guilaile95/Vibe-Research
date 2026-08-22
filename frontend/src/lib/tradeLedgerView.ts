@@ -7,8 +7,8 @@ import type {
 export interface TradeDraft {
   code: string;
   name: string;
-  operation: TradeOperation;
-  execution_status: TradeExecutionStatus;
+  operation: TradeOperation | "";
+  execution_status: TradeExecutionStatus | "";
 
   planned_price?: number | string | null;
   planned_quantity?: number | string | null;
@@ -208,8 +208,14 @@ export function validateTradeDraft(draft: TradeDraft): string | null {
   if (!draft.name || !draft.name.trim()) {
     return "股票名称不能为空";
   }
+  if (draft.operation === "") {
+    return "请选择操作类型";
+  }
   if (!["buy", "add", "reduce", "sell"].includes(draft.operation)) {
     return "操作类型不合法";
+  }
+  if (draft.execution_status === "") {
+    return "请选择执行状态";
   }
   if (!["full", "partial", "not_executed"].includes(draft.execution_status)) {
     return "执行状态不合法";
@@ -311,7 +317,16 @@ export function validateTradeDraft(draft: TradeDraft): string | null {
 }
 
 export function buildTradeCreateInput(draft: TradeDraft): TradeCreateInput {
-  const isNotExecuted = draft.execution_status === "not_executed";
+  if (draft.operation === "") {
+    throw new Error("创建交易前必须选择操作类型");
+  }
+  if (draft.execution_status === "") {
+    throw new Error("创建交易前必须选择执行状态");
+  }
+
+  const operation = draft.operation;
+  const executionStatus = draft.execution_status;
+  const isNotExecuted = executionStatus === "not_executed";
 
   const plannedPrice = draft.planned_price != null && draft.planned_price !== "" ? Number(draft.planned_price) : null;
   const plannedQty = draft.planned_quantity != null && draft.planned_quantity !== "" ? Number(draft.planned_quantity) : null;
@@ -328,8 +343,8 @@ export function buildTradeCreateInput(draft: TradeDraft): TradeCreateInput {
   const res: TradeCreateInput = {
     code: draft.code.trim(),
     name: draft.name.trim(),
-    operation: draft.operation,
-    execution_status: draft.execution_status,
+    operation,
+    execution_status: executionStatus,
     planned_price: plannedPrice,
     planned_quantity: plannedQty,
     unexecuted_reason: draft.unexecuted_reason?.trim() || null,
