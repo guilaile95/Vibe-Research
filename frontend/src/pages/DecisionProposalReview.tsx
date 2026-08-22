@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, LockKeyhole } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ApiError, api, DECISION_CHALLENGE_DIMENSIONS, type DecisionChallengeDimensionInput, type DecisionChallengeDimensionName, type DecisionChallengePacket, type DecisionProposalDraftInput, type DecisionProposalPreview, type CommittedDecisionRuntimeRead } from "@/lib/api";
+import { VIEW_STANCE_LABELS, VIEW_STANCE_OPTIONS, buildJudgedView, buildPortfolioView, type ViewStance } from "@/lib/decisionProposalForm";
 
 const challengeLabels: Record<DecisionChallengeDimensionName, string> = {
   STRONGEST_SUPPORTING_EVIDENCE: "Strongest supporting evidence",
@@ -32,19 +33,6 @@ function canonicalReviewBy(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) throw new Error("请填写有效的 review_by 时间");
   return parsed.toISOString();
-}
-
-function parseObject(value: string, label: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error(`${label} 必须是合法 JSON 对象`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${label} 必须是 JSON object`);
-  }
-  return parsed as Record<string, unknown>;
 }
 
 function evaluationOf(value: unknown): string {
@@ -84,16 +72,16 @@ function shortestReason(value: unknown): string {
   return reasons[0] ?? "—";
 }
 
-const defaultAsset = JSON.stringify({ view: "ASSET", stance: "WAIT", note: "用户填写资产判断" }, null, 2);
-const defaultTrade = JSON.stringify({ view: "TRADE", stance: "WAIT", note: "用户填写交易判断" }, null, 2);
-const defaultPortfolio = JSON.stringify({ view: "PORTFOLIO", constraint: "用户填写组合约束" }, null, 2);
-
 export function DecisionProposalReview() {
   const { campaignId = "" } = useParams();
   const navigate = useNavigate();
-  const [assetText, setAssetText] = useState(defaultAsset);
-  const [tradeText, setTradeText] = useState(defaultTrade);
-  const [portfolioText, setPortfolioText] = useState(defaultPortfolio);
+  // 三视图结构化输入（P1-DF1）：用户通过 select/text 控件表达判断，
+  // payload 由 decisionProposalForm 纯函数生成，不再手写 JSON。
+  const [assetStance, setAssetStance] = useState<ViewStance>("WAIT");
+  const [assetNote, setAssetNote] = useState("");
+  const [tradeStance, setTradeStance] = useState<ViewStance>("WAIT");
+  const [tradeNote, setTradeNote] = useState("");
+  const [portfolioConstraint, setPortfolioConstraint] = useState("");
   const [reviewBy, setReviewBy] = useState("");
   const [horizon, setHorizon] = useState("");
   const [assumptions, setAssumptions] = useState("");
@@ -109,12 +97,12 @@ export function DecisionProposalReview() {
   const [bindChallenge, setBindChallenge] = useState(false);
 
   const draft = useMemo<DecisionProposalDraftInput | null>(() => {
+    if (!reviewBy || !horizon.trim()) return null;
     try {
-      if (!reviewBy || !horizon.trim()) return null;
       return {
-        asset_view: parseObject(assetText, "Asset View"),
-        trade_view: parseObject(tradeText, "Trade View"),
-        portfolio_view: parseObject(portfolioText, "Portfolio View"),
+        asset_view: buildJudgedView("ASSET", assetStance, assetNote),
+        trade_view: buildJudgedView("TRADE", tradeStance, tradeNote),
+        portfolio_view: buildPortfolioView(portfolioConstraint),
         review_by: canonicalReviewBy(reviewBy),
         key_assumptions: splitLines(assumptions),
         event_invalidation_conditions: splitLines(invalidations),
@@ -123,7 +111,7 @@ export function DecisionProposalReview() {
     } catch {
       return null;
     }
-  }, [assetText, tradeText, portfolioText, reviewBy, horizon, assumptions, invalidations]);
+  }, [assetStance, assetNote, tradeStance, tradeNote, portfolioConstraint, reviewBy, horizon, assumptions, invalidations]);
 
   const handlePreview = async () => {
     setError("");
@@ -133,7 +121,7 @@ export function DecisionProposalReview() {
     setChallengeConfirmed(false);
     setBindChallenge(false);
     if (!campaignId || !draft) {
-      setError("请先填写 review_by、strategy horizon，并确保三个 View 是合法 JSON object。");
+      setError("请先填写 review_by 与 strategy horizon。");
       return;
     }
     setBusy("preview");
@@ -249,15 +237,74 @@ export function DecisionProposalReview() {
       </section>
 
       <section className="grid gap-4 lg:grid-cols-3">
-        <label className="text-xs text-muted-foreground">Asset View（JSON object）
-          <textarea aria-label="Asset View" value={assetText} onChange={(event) => setAssetText(event.target.value)} rows={7} className={`${inputCls} font-mono text-[11px]`} />
-        </label>
-        <label className="text-xs text-muted-foreground">Trade View（JSON object）
-          <textarea aria-label="Trade View" value={tradeText} onChange={(event) => setTradeText(event.target.value)} rows={7} className={`${inputCls} font-mono text-[11px]`} />
-        </label>
-        <label className="text-xs text-muted-foreground">Portfolio View（JSON object）
-          <textarea aria-label="Portfolio View" value={portfolioText} onChange={(event) => setPortfolioText(event.target.value)} rows={7} className={`${inputCls} font-mono text-[11px]`} />
-        </label>
+        <fieldset className="rounded-md border border-border/50 bg-background/35 p-3 text-xs" data-view-form="asset_view">
+          <legend className="px-1 font-medium text-foreground">Asset View</legend>
+          <label className="mt-1 block text-muted-foreground">
+            资产判断（stance）
+            <select
+              aria-label="Asset stance"
+              value={assetStance}
+              onChange={(event) => setAssetStance(event.target.value as ViewStance)}
+              className={inputCls}
+            >
+              {VIEW_STANCE_OPTIONS.map((option) => (
+                <option key={option} value={option}>{VIEW_STANCE_LABELS[option]}</option>
+              ))}
+            </select>
+          </label>
+          <label className="mt-2 block text-muted-foreground">
+            判断说明（选填）
+            <input
+              aria-label="Asset note"
+              type="text"
+              value={assetNote}
+              onChange={(event) => setAssetNote(event.target.value)}
+              placeholder="例如：高端白酒需求稳定"
+              className={inputCls}
+            />
+          </label>
+        </fieldset>
+        <fieldset className="rounded-md border border-border/50 bg-background/35 p-3 text-xs" data-view-form="trade_view">
+          <legend className="px-1 font-medium text-foreground">Trade View</legend>
+          <label className="mt-1 block text-muted-foreground">
+            交易判断（stance）
+            <select
+              aria-label="Trade stance"
+              value={tradeStance}
+              onChange={(event) => setTradeStance(event.target.value as ViewStance)}
+              className={inputCls}
+            >
+              {VIEW_STANCE_OPTIONS.map((option) => (
+                <option key={option} value={option}>{VIEW_STANCE_LABELS[option]}</option>
+              ))}
+            </select>
+          </label>
+          <label className="mt-2 block text-muted-foreground">
+            判断说明（选填）
+            <input
+              aria-label="Trade note"
+              type="text"
+              value={tradeNote}
+              onChange={(event) => setTradeNote(event.target.value)}
+              placeholder="例如：等待缩量回调再入场"
+              className={inputCls}
+            />
+          </label>
+        </fieldset>
+        <fieldset className="rounded-md border border-border/50 bg-background/35 p-3 text-xs" data-view-form="portfolio_view">
+          <legend className="px-1 font-medium text-foreground">Portfolio View</legend>
+          <label className="mt-1 block text-muted-foreground">
+            组合约束（选填）
+            <input
+              aria-label="Portfolio constraint"
+              type="text"
+              value={portfolioConstraint}
+              onChange={(event) => setPortfolioConstraint(event.target.value)}
+              placeholder="例如：单笔风险不超过组合 2%"
+              className={inputCls}
+            />
+          </label>
+        </fieldset>
       </section>
 
       <section className="grid gap-4 rounded-lg border border-border/60 bg-background/35 p-4 sm:grid-cols-2">
