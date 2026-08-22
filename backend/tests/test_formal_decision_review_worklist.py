@@ -28,9 +28,24 @@ def row(decision_id: str, review_by: str, due_state: str, **extra):
 def test_projection_preserves_canonical_states_and_orders_each_group():
     result = worklist.project_review_worklist(
         [
-            row("decision_" + "b" * 32, "2026-09-03T00:00:00.000000Z", "DUE"),
-            row("decision_" + "a" * 32, "2026-09-02T00:00:00.000000Z", "DUE"),
-            row("decision_" + "d" * 32, "2026-09-04T00:00:00.000000Z", "NOT_DUE"),
+            row(
+                "decision_" + "b" * 32,
+                "2026-09-03T00:00:00.000000Z",
+                "DUE",
+                decision_next_best_action="WAIT",
+            ),
+            row(
+                "decision_" + "a" * 32,
+                "2026-09-02T00:00:00.000000Z",
+                "DUE",
+                decision_next_best_action="HOLD",
+            ),
+            row(
+                "decision_" + "d" * 32,
+                "2026-09-04T00:00:00.000000Z",
+                "NOT_DUE",
+                decision_next_best_action="EXIT",
+            ),
             row("decision_" + "c" * 32, "2026-09-01T00:00:00.000000Z", "NOT_DUE"),
         ],
         evaluation_as_of=EVALUATION_AS_OF,
@@ -45,7 +60,33 @@ def test_projection_preserves_canonical_states_and_orders_each_group():
     ]
     assert {item["due_state"] for item in result["upcoming"]} == {"NOT_DUE"}
     assert {item["group"] for item in result["upcoming"]} == {"upcoming"}
-    assert "OVERDUE" not in result["schema_version"]
+    assert result["due"][0]["decision_next_best_action"] == "HOLD"
+    assert result["due"][1]["decision_next_best_action"] == "WAIT"
+    assert result["upcoming"][0]["decision_next_best_action"] is None
+    assert result["upcoming"][1]["decision_next_best_action"] == "EXIT"
+    assert result["schema_version"] == "formal_decision_review_worklist.v0.2"
+
+
+def test_missing_or_empty_historical_nba_is_not_inferred():
+    result = worklist.project_review_worklist(
+        [
+            row(
+                "decision_" + "a" * 32,
+                "2026-09-01T00:00:00.000000Z",
+                "DUE",
+                decision_next_best_action="",
+            ),
+            row(
+                "decision_" + "b" * 32,
+                "2026-09-02T00:00:00.000000Z",
+                "NOT_DUE",
+                decision_next_best_action=None,
+            ),
+        ],
+        evaluation_as_of=EVALUATION_AS_OF,
+    )
+    assert result["due"][0]["decision_next_best_action"] == ""
+    assert result["upcoming"][0]["decision_next_best_action"] is None
 
 
 def test_equal_and_after_boundary_are_ol1_due_not_overdue():
