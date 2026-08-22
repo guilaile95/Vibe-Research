@@ -664,8 +664,12 @@ export interface AccountProfileData {
 }
 
 
+export type AccountProfileStatus = "valid" | "not_configured" | "corrupted";
+
 export interface AccountProfileResponse {
   configured: boolean;
+  status: AccountProfileStatus;
+  reason_code: string | null;
   data: AccountProfileData | null;
 }
 
@@ -683,7 +687,7 @@ export interface AccountRealityCashFact {
   value: number | null;
   source: string;
   fact_type: string;
-  status: "AVAILABLE" | "UNKNOWN";
+  status: "AVAILABLE" | "UNKNOWN" | "CORRUPTED";
   reason_code?: string;
   updated_at?: string | null;
   effective_at?: string | null;
@@ -786,6 +790,8 @@ export interface AccountFundingQuoteCoverage {
 
 export interface AccountFundingData {
   configured: boolean;
+  status?: AccountProfileStatus;
+  reason_code?: string | null;
   total_assets: number | null;
   available_cash: number | null;
   available_cash_pct: number | null;

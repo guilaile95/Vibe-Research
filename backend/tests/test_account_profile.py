@@ -19,10 +19,30 @@ def _account_file() -> str:
     return account_profile._account_path()
 
 
-def test_unconfigured_returns_none():
-    """文件不存在 → None（未配置，不是 0）。"""
+def test_unconfigured_returns_none_and_explicit_status():
+    """文件不存在 → None，但状态明确为 not_configured。"""
     assert not os.path.exists(_account_file())
     assert account_profile.load_account_profile() is None
+    assert account_profile.get_account_profile_status() == {
+        "status": "not_configured",
+        "data": None,
+        "reason_code": None,
+    }
+
+
+def test_corrupted_returns_no_data_and_explicit_status():
+    """损坏文件 → 无有效数据、明确 reason，读取不重写原文件。"""
+    os.makedirs(account_profile.CACHE_DIR, exist_ok=True)
+    with open(_account_file(), "w", encoding="utf-8") as f:
+        f.write("{invalid")
+    before = open(_account_file(), "rb").read()
+    assert account_profile.load_account_profile() is None
+    assert account_profile.get_account_profile_status() == {
+        "status": "corrupted",
+        "data": None,
+        "reason_code": account_profile.ACCOUNT_PROFILE_CORRUPTED_REASON,
+    }
+    assert open(_account_file(), "rb").read() == before
 
 
 def test_save_and_load_round_trip():

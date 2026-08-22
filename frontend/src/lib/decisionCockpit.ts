@@ -58,7 +58,8 @@ export interface MarketShortEnvelope {
 /** 账户资金：未配置时 configured=false/data=null；已配置时 data 含 total_assets/available_cash/updated_at。 */
 export interface AccountFundingEnvelope {
   configured: boolean;
-  status?: string;
+  status?: "valid" | "not_configured" | "corrupted" | string;
+  reason_code?: string | null;
   data: { total_assets: number; available_cash: number; updated_at: string } | null;
 }
 

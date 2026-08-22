@@ -216,6 +216,40 @@ def test_portfolio_save_and_stale_matrix(tmp_path, monkeypatch):
         assert result["stale_message"] == service.PORTFOLIO_STALE_MESSAGE
 
 
+def test_portfolio_save_accepts_account_funding_state_fields(tmp_path, monkeypatch):
+    db = tmp_path / "daily_reviews.sqlite3"
+    monkeypatch.setattr(service.review_history, "resolve_review_db_path", lambda: db)
+    payload = _advice_payload(
+        account_funding={
+            "configured": False,
+            "status": "corrupted",
+            "reason_code": "ACCOUNT_PROFILE_CORRUPTED",
+            "total_assets": None,
+            "available_cash": None,
+            "available_cash_pct": None,
+            "updated_at": None,
+            "tracked_stock_market_value": None,
+            "tracked_stock_weight_pct": None,
+            "quote_coverage": {
+                "valid_holdings": 0,
+                "total_holdings": 1,
+                "complete": False,
+            },
+        },
+    )
+    service.save_portfolio_advice(
+        _portfolio(),
+        _review(),
+        payload,
+        {"provider": "cli-codex", "model": "gpt"},
+    )
+    restored = service.get_ai_result(
+        "portfolio_advice", trade_date="2026-07-23", current_portfolio=_portfolio()
+    )
+    assert restored["payload"]["account_funding"]["status"] == "corrupted"
+    assert restored["payload"]["account_funding"]["reason_code"] == "ACCOUNT_PROFILE_CORRUPTED"
+
+
 def test_portfolio_advice_restore_uses_static_holdings_snapshot_without_quotes(
     tmp_path,
     monkeypatch,

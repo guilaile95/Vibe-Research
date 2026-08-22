@@ -24,11 +24,34 @@ def _account_file() -> str:
 
 
 def test_get_unconfigured():
-    """未配置 → configured=false, data=null。"""
+    """未配置 → configured=false 且明确 not_configured。"""
     assert not os.path.exists(_account_file())
     resp = client.get("/api/account-profile")
     assert resp.status_code == 200
-    assert resp.json() == {"configured": False, "data": None}
+    assert resp.json() == {
+        "configured": False,
+        "status": "not_configured",
+        "reason_code": None,
+        "data": None,
+    }
+
+
+def test_get_corrupted_is_not_unconfigured_and_does_not_rewrite():
+    """损坏 → 明确 corrupted/reason_code，原始文件保持不变。"""
+    os.makedirs(account_profile.CACHE_DIR, exist_ok=True)
+    with open(_account_file(), "w", encoding="utf-8") as f:
+        f.write("{invalid")
+    before = open(_account_file(), "rb").read()
+    resp = client.get("/api/account-profile")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "configured": False,
+        "status": "corrupted",
+        "reason_code": "ACCOUNT_PROFILE_CORRUPTED",
+        "data": None,
+    }
+    assert open(_account_file(), "rb").read() == before
+    assert [p for p in os.listdir(account_profile.CACHE_DIR) if ".tmp." in p] == []
 
 
 def test_put_and_get_round_trip():
@@ -39,6 +62,8 @@ def test_put_and_get_round_trip():
     assert resp.status_code == 200
     body = resp.json()
     assert body["configured"] is True
+    assert body["status"] == "valid"
+    assert body["reason_code"] is None
     assert body["data"]["total_assets"] == 100000.0
     assert body["data"]["available_cash"] == 20000.0
     assert isinstance(body["data"]["updated_at"], str)

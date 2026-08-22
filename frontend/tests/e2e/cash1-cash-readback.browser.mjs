@@ -11,7 +11,7 @@
  *    mismatch is explicit (never silently merged or overwritten).
  */
 import assert from "node:assert/strict";
-import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -280,6 +280,32 @@ astock.kline = _cash1_kline
     assert.ok(temporalText.includes("MIXED_UNPROVEN"));
     assert.ok(temporalText.includes("effective_at 未证明"));
     assert.equal(temporalText.includes("统一 cutoff 下的正式账户事实"), true);
+
+    // ---- E. 损坏手工快照必须与未配置严格区分，并全链路 fail closed ----
+    const accountProfilePath = join(tempDataDir, "account_profile.json");
+    const corruptedProfile = Buffer.from("{invalid_json: true", "utf8");
+    writeFileSync(accountProfilePath, corruptedProfile);
+    const corruptedBefore = Buffer.from(corruptedProfile);
+
+    await openPortfolio();
+    const corruptedCard = page.getByTestId("account-profile-corrupted");
+    await corruptedCard.waitFor();
+    const corruptedText = await corruptedCard.innerText();
+    assert.ok(corruptedText.includes("账户资金快照损坏/不可读取"));
+    assert.ok(corruptedText.includes("ACCOUNT_PROFILE_CORRUPTED"));
+    assert.equal(await page.getByText("尚未配置账户资金").count(), 0);
+    assert.equal(await page.getByTestId("account-cash-ledger-view").count(), 0);
+
+    const corruptedReality = await jsonRequest(backend, "/api/account/reality");
+    assert.equal(corruptedReality.cash.current_fact.status, "CORRUPTED");
+    assert.equal(corruptedReality.cash.current_fact.reason_code, "ACCOUNT_PROFILE_CORRUPTED");
+    assert.equal(corruptedReality.cash.ledger_candidate.status, "AVAILABLE");
+    assert.equal(corruptedReality.cash.reconciliation, "UNKNOWN");
+    assert.equal(corruptedReality.settled_nav, null);
+    assert.equal(corruptedReality.nav_reconciliation.status, "UNKNOWN");
+    assert.equal(corruptedReality.nav_reconciliation.reason_code, "ACCOUNT_PROFILE_CORRUPTED");
+    assert.ok(corruptedReality.reason_codes.includes("ACCOUNT_PROFILE_CORRUPTED"));
+    assert.deepEqual(readFileSync(accountProfilePath), corruptedBefore);
 
     // portfolio.json 未被资金读取触碰（HAS1 边界不回退）。
     assert.ok(existsSync(join(tempDataDir, "portfolio.json")) === false || true);

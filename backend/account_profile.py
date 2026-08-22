@@ -17,6 +17,7 @@ CACHE_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"
 ACCOUNT_FILE = os.path.join(CACHE_DIR, "account_profile.json")
 BEIJING = timezone(timedelta(hours=8))
 _LOCK = threading.Lock()
+ACCOUNT_PROFILE_CORRUPTED_REASON = "ACCOUNT_PROFILE_CORRUPTED"
 
 
 def _now() -> str:
@@ -29,11 +30,19 @@ def _account_path() -> str:
 
 
 def load_account_profile() -> dict | None:
-    """读账户资金。文件不存在或损坏 → None（未配置，不是 0）。"""
+    """读取已验证的账户资金；未配置或损坏均无有效数据可返回。"""
     st = get_account_profile_status()
     if st["status"] == "valid":
         return st["data"]
     return None
+
+
+def _status(status: str, data: dict | None = None) -> dict:
+    """构造不泄漏文件细节的 Profile 状态 envelope。"""
+    result = {"status": status, "data": data, "reason_code": None}
+    if status == "corrupted":
+        result["reason_code"] = ACCOUNT_PROFILE_CORRUPTED_REASON
+    return result
 
 
 def get_account_profile_status() -> dict:
@@ -42,21 +51,21 @@ def get_account_profile_status() -> dict:
     Returns
     -------
     dict
-        - status == "valid": {"status": "valid", "data": {"total_assets": ..., "available_cash": ..., "updated_at": ...}}
-        - status == "not_configured": {"status": "not_configured", "data": None}
-        - status == "corrupted": {"status": "corrupted", "data": None}
+        - status == "valid": includes validated ``data`` and ``reason_code=None``
+        - status == "not_configured": ``data=None`` and ``reason_code=None``
+        - status == "corrupted": ``data=None`` and ``reason_code=ACCOUNT_PROFILE_CORRUPTED``
     """
     account_file = _account_path()
     if not os.path.exists(account_file):
-        return {"status": "not_configured", "data": None}
+        return _status("not_configured")
     try:
         with open(account_file, encoding="utf-8") as f:
             d = json.load(f)
     except (json.JSONDecodeError, OSError):
-        return {"status": "corrupted", "data": None}
+        return _status("corrupted")
 
     if not isinstance(d, dict):
-        return {"status": "corrupted", "data": None}
+        return _status("corrupted")
 
     try:
         total, cash = validate_account_payload({
@@ -65,17 +74,14 @@ def get_account_profile_status() -> dict:
         })
         updated_at = d.get("updated_at")
         if not isinstance(updated_at, str) or not updated_at.strip():
-            return {"status": "corrupted", "data": None}
-        return {
-            "status": "valid",
-            "data": {
-                "total_assets": total,
-                "available_cash": cash,
-                "updated_at": updated_at.strip(),
-            },
-        }
+            return _status("corrupted")
+        return _status("valid", {
+            "total_assets": total,
+            "available_cash": cash,
+            "updated_at": updated_at.strip(),
+        })
     except Exception:
-        return {"status": "corrupted", "data": None}
+        return _status("corrupted")
 
 
 
