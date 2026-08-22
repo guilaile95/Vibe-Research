@@ -282,9 +282,18 @@ export function DecisionProposalReview() {
         title="Formal Decision Review"
         subtitle="Campaign-scoped deterministic proposal。Preview 不写 Frozen Decision；只有显式确认后才允许 Freeze。"
         actions={(
-          <button type="button" onClick={() => navigate(-1)} className="inline-flex items-center gap-1.5 rounded border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="h-3.5 w-3.5" /> 返回
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              to="/decision-inbox"
+              className="inline-flex items-center gap-1.5 rounded border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+              data-testid="decision-inbox-secondary-entry"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> 返回 Decision Inbox
+            </Link>
+            <button type="button" onClick={() => navigate(-1)} className="inline-flex items-center gap-1.5 rounded border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
+              返回
+            </button>
+          </div>
         )}
       />
 
