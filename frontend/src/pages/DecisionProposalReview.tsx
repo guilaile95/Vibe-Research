@@ -1,9 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, LockKeyhole } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ApiError, api, DECISION_CHALLENGE_DIMENSIONS, type DecisionChallengeDimensionInput, type DecisionChallengeDimensionName, type DecisionChallengePacket, type DecisionProposalDraftInput, type DecisionProposalPreview, type CommittedDecisionRuntimeRead } from "@/lib/api";
 import { VIEW_STANCE_LABELS, VIEW_STANCE_OPTIONS, buildJudgedView, buildPortfolioView, type ViewStance } from "@/lib/decisionProposalForm";
+import { hydratedHorizonValue, resolveDecisionContext, type DecisionContextHydrationResult } from "@/lib/decisionContextHydration";
+import type { CampaignRecord, CampaignThesisBinding, CampaignCurrentThesis, ThesisAggregate } from "@/lib/api";
 
 const challengeLabels: Record<DecisionChallengeDimensionName, string> = {
   STRONGEST_SUPPORTING_EVIDENCE: "Strongest supporting evidence",
@@ -84,6 +86,15 @@ export function DecisionProposalReview() {
   const [portfolioConstraint, setPortfolioConstraint] = useState("");
   const [reviewBy, setReviewBy] = useState("");
   const [horizon, setHorizon] = useState("");
+  const [campaign, setCampaign] = useState<CampaignRecord | null>(null);
+  const [binding, setBinding] = useState<CampaignThesisBinding | null>(null);
+  const [currentThesis, setCurrentThesis] = useState<CampaignCurrentThesis | null>(null);
+  const [boundThesis, setBoundThesis] = useState<ThesisAggregate | null>(null);
+  const [contextState, setContextState] = useState<"loading" | "ready" | "unavailable">("loading");
+  const [contextMessage, setContextMessage] = useState("");
+  const [hydration, setHydration] = useState<DecisionContextHydrationResult | null>(null);
+  const horizonTouched = useRef(false);
+  const contextGeneration = useRef(0);
   const [assumptions, setAssumptions] = useState("");
   const [invalidations, setInvalidations] = useState("");
   const [preview, setPreview] = useState<DecisionProposalPreview | null>(null);
@@ -95,6 +106,63 @@ export function DecisionProposalReview() {
   const [challengeConfirmed, setChallengeConfirmed] = useState(false);
   const [challengePacket, setChallengePacket] = useState<DecisionChallengePacket | null>(null);
   const [bindChallenge, setBindChallenge] = useState(false);
+
+  useEffect(() => {
+    const generation = ++contextGeneration.current;
+    let cancelled = false;
+    setContextState("loading");
+    setContextMessage("");
+    setCampaign(null);
+    setBinding(null);
+    setCurrentThesis(null);
+    setBoundThesis(null);
+    setHydration(null);
+    horizonTouched.current = false;
+
+    if (!campaignId) {
+      setContextState("unavailable");
+      setContextMessage("缺少 campaign_id；无法读取 Campaign authority。");
+      return () => {
+        cancelled = true;
+        contextGeneration.current += 1;
+      };
+    }
+
+    void (async () => {
+      try {
+        const nextCampaign = await api.getCampaign(campaignId);
+        const nextBinding = await api.getCampaignThesisBinding(campaignId);
+        const [nextCurrent, nextAggregate] = await Promise.all([
+          api.getCampaignCurrentThesis(campaignId),
+          api.thesisGet(nextBinding.thesis_id),
+        ]);
+        if (cancelled || generation !== contextGeneration.current) return;
+        const result = resolveDecisionContext(nextCampaign, nextBinding, nextCurrent, nextAggregate);
+        setCampaign(nextCampaign);
+        setBinding(nextBinding);
+        setCurrentThesis(nextCurrent);
+        setBoundThesis(nextAggregate);
+        setHydration(result);
+        if (result.status === "READY") {
+          setContextState("ready");
+          setContextMessage("");
+          setHorizon((value) => hydratedHorizonValue(value, horizonTouched.current, result));
+        } else {
+          setContextState("unavailable");
+          setContextMessage(result.reason);
+        }
+      } catch (err) {
+        if (cancelled || generation !== contextGeneration.current) return;
+        setContextState("unavailable");
+        setContextMessage(err instanceof ApiError ? err.message : "Campaign / Current Thesis authority 读取失败");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      contextGeneration.current += 1;
+    };
+  }, [campaignId]);
 
   const draft = useMemo<DecisionProposalDraftInput | null>(() => {
     if (!reviewBy || !horizon.trim()) return null;
@@ -225,15 +293,31 @@ export function DecisionProposalReview() {
         )}
       />
 
-      <section className="rounded-lg border border-border/60 bg-background/35 p-4 space-y-3">
+      <section className="rounded-lg border border-border/60 bg-background/35 p-4 space-y-3" data-decision-context={contextState} data-context-binding={binding?.thesis_id ?? ""} data-context-bound-thesis={boundThesis?.thesis.id ?? ""}>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="text-muted-foreground">Campaign</span>
-          <span className={codeCls}>{campaignId || "缺少 campaign_id"}</span>
+          <span className={codeCls}>{(campaign?.campaign_id ?? campaignId) || "缺少 campaign_id"}</span>
           <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-700">backend authority</span>
+          {contextState === "loading" && <span className="text-muted-foreground">正在读取上下文…</span>}
         </div>
-        <p className="text-xs leading-5 text-muted-foreground">
-          证券代码、策略、Thesis id/revision 都由 backend 根据真实 Campaign 与 Current Thesis 读取；页面不提交这些 authority 字段。
-        </p>
+        <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-5">
+          <div><p className="text-muted-foreground">Security</p><p className="mt-1 font-medium" data-context-security>{campaign?.security_code ?? "UNKNOWN"}</p></div>
+          <div><p className="text-muted-foreground">Campaign Strategy</p><p className="mt-1 font-medium" data-context-strategy>{campaign?.strategy ?? "UNKNOWN"}</p></div>
+          <div><p className="text-muted-foreground">Current Thesis 状态</p><p className="mt-1 font-medium" data-context-thesis-status>{currentThesis?.ready ? currentThesis.effective_state : currentThesis?.formal_status ?? "UNAVAILABLE"}</p></div>
+          <div><p className="text-muted-foreground">Frozen Thesis / revision</p><p className="mt-1 font-medium" data-context-frozen-revision>{hydration?.frozenRevision ? `v${hydration.frozenRevision}` : "UNKNOWN"}</p></div>
+          <div><p className="text-muted-foreground">Expected Horizon</p><p className="mt-1 font-medium" data-context-horizon>{hydration?.status === "READY" ? hydration.horizonText : "UNKNOWN"}</p></div>
+        </div>
+        {contextState === "ready" ? (
+          <p className="text-xs leading-5 text-success" data-horizon-source="CURRENT_THESIS">
+            Strategy horizon 已从 Current Thesis 的 backend authority 预填。来源：Current Thesis；不是用户重新声明。你仍可按当前 Proposal 需要修改。
+          </p>
+        ) : contextState === "unavailable" ? (
+          <p className="text-xs leading-5 text-warning" role="status" data-horizon-source="MANUAL_FALLBACK">
+            Current Thesis authority 当前不可用于合法 horizon（{contextMessage || "UNKNOWN"}）。不会猜测 horizon；请在下方手工填写 strategy horizon。
+          </p>
+        ) : (
+          <p className="text-xs leading-5 text-muted-foreground">证券代码、策略、Thesis id/revision 都由 backend 根据真实 Campaign 与 Current Thesis 读取；页面不提交这些 authority 字段。</p>
+        )}
       </section>
 
       <section className="grid gap-4 lg:grid-cols-3">
@@ -312,7 +396,7 @@ export function DecisionProposalReview() {
           <input aria-label="Review by" type="text" value={reviewBy} onChange={(event) => setReviewBy(event.target.value)} placeholder="2026-08-30T10:00:00Z" className={inputCls} />
         </label>
         <label className="text-xs text-muted-foreground">Strategy horizon（必填，显式用户字段）
-          <input aria-label="Strategy horizon" value={horizon} onChange={(event) => setHorizon(event.target.value)} placeholder="例如：2 至 4 周" className={inputCls} />
+          <input aria-label="Strategy horizon" value={horizon} onChange={(event) => { horizonTouched.current = true; setHorizon(event.target.value); }} placeholder="例如：2 至 4 周" className={inputCls} />
         </label>
         <label className="text-xs text-muted-foreground">Key assumptions（逗号或换行分隔）
           <textarea aria-label="Key assumptions" value={assumptions} onChange={(event) => setAssumptions(event.target.value)} rows={3} className={inputCls} />

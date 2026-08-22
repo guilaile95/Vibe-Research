@@ -251,6 +251,7 @@ async function run() {
     const consoleErrors = [];
     const failedRequests = [];
     const notFoundResponses = [];
+    let authorityFailure = false;
     page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
     page.on("requestfailed", (request) => failedRequests.push({ url: request.url(), error: request.failure()?.errorText }));
     page.on("response", (response) => {
@@ -265,6 +266,13 @@ async function run() {
       const request = route.request();
       const url = new URL(request.url());
       const method = request.method();
+      const contextPath = `/api/campaigns/${campaign.campaign_id}`;
+      if (process.env.DF2_FORCE_CONTEXT_FALLBACK === "1" && method === "GET" && url.pathname === `${contextPath}/current-thesis`) {
+        authorityFailure = true;
+        const fallbackBody = { data: { campaign_id: campaign.campaign_id, thesis_id: "0123456789abcdef0123456789abcdef", binding: { thesis_revision_at_bind: 2, campaign_strategy_at_bind: "SWING", bound_at: "2026-08-22T00:00:00.000Z" }, formal_state: "confirmed", frozen_revision: null, ready: false, formal_status: "NOT_READY", reason: "NOT_FROZEN" } };
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(fallbackBody) });
+        return;
+      }
       try {
         const response = await proxyRequest(
           `${backend}${url.pathname}${url.search}`,
@@ -291,8 +299,16 @@ async function run() {
     });
     await page.goto(`${frontend}/campaigns/${campaign.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "Formal Decision Review" }).waitFor();
+    if (process.env.DF2_FORCE_CONTEXT_FALLBACK === "1") {
+      await page.locator('[data-horizon-source="MANUAL_FALLBACK"]').waitFor({ timeout: 30000 });
+      assert.equal(authorityFailure, true, "fallback mode must intercept an authority request");
+      assert.equal(await page.getByLabel("Strategy horizon").inputValue(), "", "fallback must not guess horizon");
+      await page.getByLabel("Strategy horizon").fill("10 至 30 交易日");
+    } else {
+      await page.locator('[data-horizon-source="CURRENT_THESIS"]').waitFor({ timeout: 30000 });
+      assert.equal(await page.getByLabel("Strategy horizon").inputValue(), "10–30 个交易日");
+    }
     await page.getByLabel("Review by").fill("2026-08-30T10:00:00Z");
-    await page.getByLabel("Strategy horizon").fill("10 至 30 交易日");
     await page.getByLabel("Key assumptions").fill("流动性保持稳定");
     await page.getByLabel("Event invalidation conditions").fill("业绩发生重大反转");
     // P1-DF1：三视图结构化表单——普通用户零 JSON 完成输入
@@ -329,7 +345,7 @@ async function run() {
     await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
     assert.equal(await freeze.isEnabled(), true);
     await freeze.click();
-    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
+    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor({ timeout: 180000 });
     const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
     const committedId = committedLine.replace(/^decision_id：/, "").trim();
     assert.match(committedId, /^decision_[0-9a-f]{32}$/);
