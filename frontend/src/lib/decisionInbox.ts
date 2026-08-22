@@ -225,6 +225,33 @@ export function transitionPayload(
   return { expected_status: currentStatus, to_status: toStatus };
 }
 
+export const FORMAL_DECISION_EVALUATIONS = [
+  "EVALUATED",
+  "NOT_EVALUATED",
+  "UNKNOWN",
+  "ERROR",
+] as const;
+
+export type FormalDecisionEvaluation = (typeof FORMAL_DECISION_EVALUATIONS)[number];
+export const FORMAL_DECISION_EVALUATION_UNKNOWN = "FORMAL_DECISION_EVALUATION_UNKNOWN" as const;
+export type FormalDecisionEvaluationStatus =
+  | FormalDecisionEvaluation
+  | typeof FORMAL_DECISION_EVALUATION_UNKNOWN;
+
+/** 将运行时 evaluation 限定为 backend 已知状态，未知值保持显式不支持。 */
+export function formalDecisionEvaluationStatus(
+  evaluation: unknown,
+): FormalDecisionEvaluationStatus | null {
+  if (evaluation === null || evaluation === undefined) return null;
+  if (
+    typeof evaluation === "string" &&
+    (FORMAL_DECISION_EVALUATIONS as readonly string[]).includes(evaluation)
+  ) {
+    return evaluation as FormalDecisionEvaluation;
+  }
+  return FORMAL_DECISION_EVALUATION_UNKNOWN;
+}
+
 export type FormalDecisionNextStep = {
   kind: "review" | "new-decision" | "proposal";
   label: string;
@@ -236,15 +263,20 @@ export function formalDecisionNextSteps(
   evaluation: string | null | undefined,
   campaignId: string,
 ): FormalDecisionNextStep[] {
-  if (!evaluation) return [];
+  const status = formalDecisionEvaluationStatus(evaluation);
+  if (!status || status === FORMAL_DECISION_EVALUATION_UNKNOWN) return [];
   const proposalHref = `/campaigns/${encodeURIComponent(campaignId)}/decision-proposal`;
-  if (evaluation === "EVALUATED") {
-    return [
-      { kind: "review", label: "打开决策复盘", href: "/decision-performance" },
-      { kind: "new-decision", label: "形成新的 Formal Decision", href: proposalHref },
-    ];
+  switch (status) {
+    case "EVALUATED":
+      return [
+        { kind: "review", label: "打开决策复盘", href: "/decision-performance" },
+        { kind: "new-decision", label: "形成新的 Formal Decision", href: proposalHref },
+      ];
+    case "NOT_EVALUATED":
+    case "UNKNOWN":
+    case "ERROR":
+      return [{ kind: "proposal", label: "打开 Formal Decision Review", href: proposalHref }];
   }
-  return [{ kind: "proposal", label: "打开 Formal Decision Review", href: proposalHref }];
 }
 
 /** 提取用户可读错误文案（409 等 backend detail 如实显示，绝不伪装成功）。 */

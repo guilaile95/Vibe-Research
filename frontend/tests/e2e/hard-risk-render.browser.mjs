@@ -83,6 +83,27 @@ const EVALUATED_ITEM = item({
   campaign_id: `campaign_${"g".repeat(32)}`,
 });
 
+const UNKNOWN_FORMAL_DECISION_ITEM = item({
+  formal_decision_evaluation: "UNKNOWN",
+  security_code: "601318",
+  strategy: "MEDIUM",
+  campaign_id: `campaign_${"h".repeat(32)}`,
+});
+
+const ERROR_FORMAL_DECISION_ITEM = item({
+  formal_decision_evaluation: "ERROR",
+  security_code: "601398",
+  strategy: "SHORT",
+  campaign_id: `campaign_${"i".repeat(32)}`,
+});
+
+const MALFORMED_FORMAL_DECISION_ITEM = item({
+  formal_decision_evaluation: "FUTURE_ENUM",
+  security_code: "601988",
+  strategy: "SWING",
+  campaign_id: `campaign_${"j".repeat(32)}`,
+});
+
 const ERROR_ITEM = item({
   visible_state: "BLOCKED_BY_DATA",
   reason_codes: ["HARD_RISK_UNKNOWN"],
@@ -129,9 +150,12 @@ const SNAPSHOT = {
     MALFORMED_CLEAR_ITEM,
     GENERIC_ONLY_ITEM,
     EVALUATED_ITEM,
+    UNKNOWN_FORMAL_DECISION_ITEM,
+    ERROR_FORMAL_DECISION_ITEM,
+    MALFORMED_FORMAL_DECISION_ITEM,
   ],
   total_holdings: 0,
-  total_campaign_items: 7,
+  total_campaign_items: 10,
 };
 
 function startStaticServer(dir, port) {
@@ -297,7 +321,63 @@ async function run() {
     await notEvaluatedDecision.getByTestId("formal-decision-next-step-proposal").waitFor();
     assert.equal(await notEvaluatedDecision.getByTestId("formal-decision-next-step-review").count(), 0);
     assert.equal(await notEvaluatedDecision.getByTestId("formal-decision-next-step-new-decision").count(), 0);
-    await notEvaluatedDecision.getByText("打开 Formal Decision Review", { exact: true }).waitFor();
+    assert.equal(
+      await notEvaluatedDecision.getByTestId("formal-decision-next-step-proposal").innerText(),
+      "打开 Formal Decision Review →",
+    );
+
+    const unknownFormalDecision = page.locator(
+      `[data-formal-decision-inbox-evaluation="UNKNOWN"]`,
+    );
+    await unknownFormalDecision.waitFor();
+    assert.equal(
+      await unknownFormalDecision.getAttribute("data-formal-decision-evaluation-status"),
+      "UNKNOWN",
+    );
+    await unknownFormalDecision.getByText("当前无法评价 Formal Decision。", { exact: true }).waitFor();
+    await unknownFormalDecision.getByTestId("formal-decision-next-step-proposal").waitFor();
+    assert.equal(
+      await unknownFormalDecision.getByTestId("formal-decision-next-step-proposal").innerText(),
+      "打开 Formal Decision Review →",
+    );
+    assert.equal(await unknownFormalDecision.getByTestId("formal-decision-next-step-review").count(), 0);
+    assert.equal(await unknownFormalDecision.getByTestId("formal-decision-next-step-new-decision").count(), 0);
+
+    const errorFormalDecision = page.locator(
+      `[data-formal-decision-inbox-evaluation="ERROR"]`,
+    );
+    await errorFormalDecision.waitFor();
+    assert.equal(
+      await errorFormalDecision.getAttribute("data-formal-decision-evaluation-status"),
+      "ERROR",
+    );
+    await errorFormalDecision.getByText("Formal Decision 评估读取失败。", { exact: true }).waitFor();
+    await errorFormalDecision.getByTestId("formal-decision-next-step-proposal").waitFor();
+    assert.equal(
+      await errorFormalDecision.getByTestId("formal-decision-next-step-proposal").innerText(),
+      "打开 Formal Decision Review →",
+    );
+    assert.equal(await errorFormalDecision.getByTestId("formal-decision-next-step-review").count(), 0);
+    assert.equal(await errorFormalDecision.getByTestId("formal-decision-next-step-new-decision").count(), 0);
+
+    const malformedFormalDecision = page.locator(
+      `[data-formal-decision-inbox-evaluation="FUTURE_ENUM"]`,
+    );
+    await malformedFormalDecision.waitFor();
+    assert.equal(
+      await malformedFormalDecision.getAttribute("data-formal-decision-evaluation-status"),
+      "FORMAL_DECISION_EVALUATION_UNKNOWN",
+    );
+    await malformedFormalDecision.getByText("FUTURE_ENUM", { exact: true }).waitFor();
+    await malformedFormalDecision.getByText("FORMAL_DECISION_EVALUATION_UNKNOWN", { exact: true }).waitFor();
+    assert.equal(await malformedFormalDecision.getByTestId("formal-decision-next-step-proposal").count(), 0);
+    assert.equal(await malformedFormalDecision.getByTestId("formal-decision-next-step-review").count(), 0);
+    assert.equal(await malformedFormalDecision.getByTestId("formal-decision-next-step-new-decision").count(), 0);
+    assert.equal(
+      (await malformedFormalDecision.innerText()).includes("已读取适用的 Frozen Decision"),
+      false,
+    );
+    assert.equal(page.url().endsWith("/decision-inbox"), true);
 
     const errorPanel = page.locator(`[data-hard-risk-state="UNKNOWN"]`);
     await errorPanel.waitFor();
