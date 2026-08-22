@@ -1576,6 +1576,14 @@ export interface TradeAttributionCandidate {
   snapshot_hash: string;
 }
 
+export type TradeAttributionCandidateScanState = "COMPLETE" | "COMPLETE_EMPTY" | "INVALID_WITNESS" | "NOT_APPLICABLE";
+
+export interface TradeAttributionCandidateScan {
+  candidates: TradeAttributionCandidate[];
+  scan_state: TradeAttributionCandidateScanState;
+  reason_codes: string[];
+}
+
 export interface TradeReconciliationResult {
   trade_id: string;
   security_code: string;

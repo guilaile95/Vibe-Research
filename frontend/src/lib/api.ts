@@ -82,7 +82,7 @@ import type {
   TradeExecutionStatus,
   TradeRecord,
   TradeCreateInput,
-  TradeAttributionCandidate,
+  TradeAttributionCandidateScan,
   TradeReconciliationResult,
   DecisionFeedbackAdoptionStatus,
   DecisionFeedbackOutcomeStatus,
@@ -814,7 +814,7 @@ export const api = {
   voidTrade: (tradeId: string, reason: string) =>
     request<TradeRecord>(`/trades/${encodeURIComponent(tradeId)}/void`, "POST", { reason }),
   listTradeAttributionCandidates: (tradeId: string) =>
-    get<TradeAttributionCandidate[]>(`/trades/${encodeURIComponent(tradeId)}/attribution-candidates`),
+    get<TradeAttributionCandidateScan>(`/trades/${encodeURIComponent(tradeId)}/attribution-candidates`),
   getTradeReconciliation: (tradeId: string) =>
     get<TradeReconciliationResult>(`/trades/${encodeURIComponent(tradeId)}/reconciliation`),
   attributeTrade: (tradeId: string, decisionId: string) =>

@@ -27,7 +27,7 @@ def _error(exc: Exception) -> HTTPException:
 @router.get("/trades/{trade_id}/attribution-candidates")
 async def attribution_candidates(trade_id: str):
     try:
-        return {"data": runtime.list_candidates(trade_id)}
+        return {"data": runtime.scan_candidates(trade_id)}
     except Exception as exc:
         raise _error(exc)
 

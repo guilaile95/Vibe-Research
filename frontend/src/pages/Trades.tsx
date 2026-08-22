@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { api, ApiError, type TradeAttributionCandidate, type TradeRecord, type TradeReconciliationResult } from "@/lib/api";
+import { api, ApiError, type TradeAttributionCandidate, type TradeAttributionCandidateScan, type TradeRecord, type TradeReconciliationResult } from "@/lib/api";
 import {
   buildTradeCreateInput,
   buildTradeListQuery,
@@ -67,8 +67,10 @@ export function Trades() {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [reconciliation, setReconciliation] = useState<TradeReconciliationResult | null>(null);
   const [attributionCandidates, setAttributionCandidates] = useState<TradeAttributionCandidate[]>([]);
+  const [candidateScanState, setCandidateScanState] = useState<TradeAttributionCandidateScan["scan_state"] | null>(null);
   const [reconciliationLoading, setReconciliationLoading] = useState(false);
   const [reconciliationError, setReconciliationError] = useState<string | null>(null);
+  const [candidateError, setCandidateError] = useState<string | null>(null);
   const [reconciliationActionLoading, setReconciliationActionLoading] = useState(false);
 
   // 新建 modal state
@@ -159,22 +161,33 @@ export function Trades() {
     if (!selectedTradeId) {
       setReconciliation(null);
       setAttributionCandidates([]);
+      setCandidateScanState(null);
       setReconciliationError(null);
+      setCandidateError(null);
       return;
     }
     let active = true;
     setReconciliationLoading(true);
     setReconciliationError(null);
-    Promise.all([
+    setCandidateError(null);
+    Promise.allSettled([
       api.getTradeReconciliation(selectedTradeId),
       api.listTradeAttributionCandidates(selectedTradeId),
-    ]).then(([state, candidates]) => {
+    ]).then(([reconciliationResult, candidatesResult]) => {
       if (!active) return;
-      setReconciliation(state);
-      setAttributionCandidates(candidates);
-    }).catch((e) => {
-      if (!active) return;
-      setReconciliationError(e instanceof Error ? e.message : "获取交易归属状态失败");
+      if (reconciliationResult.status === "fulfilled") {
+        setReconciliation(reconciliationResult.value);
+      } else {
+        const error = reconciliationResult.reason;
+        setReconciliationError(error instanceof Error ? error.message : "获取交易对账状态失败");
+      }
+      if (candidatesResult.status === "fulfilled") {
+        setAttributionCandidates(candidatesResult.value.candidates);
+        setCandidateScanState(candidatesResult.value.scan_state);
+      } else {
+        const error = candidatesResult.reason;
+        setCandidateError(error instanceof Error ? error.message : "获取归属候选失败");
+      }
     }).finally(() => {
       if (active) setReconciliationLoading(false);
     });
@@ -185,18 +198,25 @@ export function Trades() {
     if (!selectedTradeId) return;
     setReconciliationLoading(true);
     setReconciliationError(null);
-    try {
-      const [state, candidates] = await Promise.all([
-        api.getTradeReconciliation(selectedTradeId),
-        api.listTradeAttributionCandidates(selectedTradeId),
-      ]);
-      setReconciliation(state);
-      setAttributionCandidates(candidates);
-    } catch (e) {
-      setReconciliationError(e instanceof Error ? e.message : "刷新交易归属状态失败");
-    } finally {
-      setReconciliationLoading(false);
+    setCandidateError(null);
+    const [reconciliationResult, candidatesResult] = await Promise.allSettled([
+      api.getTradeReconciliation(selectedTradeId),
+      api.listTradeAttributionCandidates(selectedTradeId),
+    ]);
+    if (reconciliationResult.status === "fulfilled") {
+      setReconciliation(reconciliationResult.value);
+    } else {
+      const error = reconciliationResult.reason;
+      setReconciliationError(error instanceof Error ? error.message : "刷新交易对账状态失败");
     }
+    if (candidatesResult.status === "fulfilled") {
+      setAttributionCandidates(candidatesResult.value.candidates);
+      setCandidateScanState(candidatesResult.value.scan_state);
+    } else {
+      const error = candidatesResult.reason;
+      setCandidateError(error instanceof Error ? error.message : "刷新归属候选失败");
+    }
+    setReconciliationLoading(false);
   };
 
   const handleAttribution = async (decisionId: string) => {
@@ -1152,7 +1172,10 @@ export function Trades() {
                   </div>
 
                   {reconciliationError && (
-                    <div className="rounded border border-rose-500/20 bg-rose-500/10 p-2 text-rose-400">{reconciliationError}</div>
+                    <div className="rounded border border-rose-500/20 bg-rose-500/10 p-2 text-rose-400">对账状态加载失败：{reconciliationError}</div>
+                  )}
+                  {candidateError && (
+                    <div className="rounded border border-rose-500/20 bg-rose-500/10 p-2 text-rose-400">归属候选加载失败：{candidateError}</div>
                   )}
                   {reconciliation && (
                     <div className="grid grid-cols-2 gap-2 text-[11px]">
@@ -1167,8 +1190,10 @@ export function Trades() {
                   {reconciliation?.allocation_state === "UNALLOCATED" && (
                     <div className="space-y-2 border-t border-border/40 pt-3">
                       <div className="text-[11px] font-semibold text-amber-400">RECONCILIATION REQUIRED：选择真实、已提交且时间有效的 Frozen Decision</div>
-                      {attributionCandidates.length === 0 ? (
-                        <p className="text-[11px] text-muted-foreground">没有可归属候选；请明确标记 UNPLANNED，系统不会猜测。</p>
+                      {candidateScanState === "INVALID_WITNESS" ? (
+                        <p className="text-[11px] text-rose-400">发现 Frozen Decision，但见证校验失败，系统已拒绝归属；请修复决策数据或联系管理员。</p>
+                      ) : candidateError ? null : attributionCandidates.length === 0 ? (
+                        <p className="text-[11px] text-muted-foreground">没有可归属候选；若该交易确实非计划内，请明确标记 UNPLANNED，系统不会猜测。</p>
                       ) : attributionCandidates.map((candidate) => (
                         <div key={candidate.decision_id} className="flex items-center justify-between gap-3 rounded border border-border/40 bg-muted/20 p-2">
                           <div className="min-w-0">

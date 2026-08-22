@@ -122,9 +122,33 @@ test("TAR1 reads reconciliation and candidates from backend authority", async ()
   await api.getTradeReconciliation("trade/1");
   assert.equal(lastRequest().url, "/api/trades/trade%2F1/reconciliation");
 
-  reset({ status: 200, body: { data: [] } });
-  await api.listTradeAttributionCandidates("trade/1");
+  reset({ status: 200, body: { data: {
+    candidates: [],
+    scan_state: "COMPLETE_EMPTY",
+    reason_codes: ["NO_ELIGIBLE_CANDIDATE"],
+  } } });
+  const scan = await api.listTradeAttributionCandidates("trade/1");
   assert.equal(lastRequest().url, "/api/trades/trade%2F1/attribution-candidates");
+  assert.equal(scan.scan_state, "COMPLETE_EMPTY");
+  assert.deepEqual(scan.candidates, []);
+});
+
+test("TAR1 keeps invalid witness scans non-complete and machine-readable", async () => {
+  reset({
+    status: 200,
+    body: {
+      data: {
+        candidates: [],
+        scan_state: "INVALID_WITNESS",
+        reason_codes: ["FROZEN_DECISION_WITNESS_INVALID"],
+      },
+    },
+  });
+  const scan = await api.listTradeAttributionCandidates("trade/1");
+  assert.notEqual(scan.scan_state, "COMPLETE");
+  assert.equal(scan.scan_state, "INVALID_WITNESS");
+  assert.deepEqual(scan.candidates, []);
+  assert.ok(scan.reason_codes.includes("FROZEN_DECISION_WITNESS_INVALID"));
 });
 
 test("TAR1 writes only decision_id or explicit confirm", async () => {
