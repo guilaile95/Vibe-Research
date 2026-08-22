@@ -91,7 +91,7 @@ async function jsonRequest(base, pathname, method = "GET", body, expected = 200)
 
 async function run() {
   assert.ok(existsSync(frontendDist), "frontend/dist must be built before policy browser vertical");
-  const tempDataDir = mkdtempSync(join(tmpdir(), "vr-aep1-policy-e2e-"));
+  const tempDataDir = mkdtempSync(join(tmpdir(), "vr-aep2-policy-e2e-"));
   let backendProc;
   let staticServer;
   let browser;
@@ -119,13 +119,16 @@ async function run() {
     await waitHttp(`${backend}/api/health`);
 
     const policyPath = join(tempDataDir, "account_execution_policy.json");
-    const corrupted = Buffer.from("{broken", "utf8");
-    writeFileSync(policyPath, corrupted);
-    const before = Buffer.from(corrupted);
+    const configuredPolicy = {
+      lot_size: 100,
+      min_cash_reserve_pct: 0.1,
+      max_single_stock_allocation_pct: 0.47,
+      tie_breaker_order: "code_desc",
+      allow_partial_execution: false,
+    };
+    writeFileSync(policyPath, JSON.stringify(configuredPolicy), "utf8");
     const initial = await jsonRequest(backend, "/api/account-execution-policy");
-    assert.deepEqual(initial, { status: "corrupted", data: null, reason_code: "ACCOUNT_EXECUTION_POLICY_CORRUPTED" });
-    assert.deepEqual(readFileSync(policyPath), before);
-    assert.equal(existsSync(`${policyPath}.tmp`), false);
+    assert.deepEqual(initial, { status: "configured", data: configuredPolicy, reason_code: null });
 
     staticServer = await startStaticServer(frontendDist, frontendPort);
     const launchOptions = { headless: true };
@@ -143,26 +146,52 @@ async function run() {
     });
 
     await page.goto(`${frontend}/account-policy`, { waitUntil: "networkidle" });
+    await page.getByTestId("account-execution-policy-configured").waitFor();
+    assert.equal(await page.getByTestId("account-execution-policy-default").count(), 0);
+    assert.equal(await page.getByTestId("account-execution-policy-corrupted").count(), 0);
+
+    const maxAllocation = page.getByTestId("account-execution-policy-max-allocation-readonly");
+    const tieBreaker = page.getByTestId("account-execution-policy-tie-breaker-readonly");
+    const partialExecution = page.getByTestId("account-execution-policy-partial-execution-readonly");
+    assert.equal(await maxAllocation.getAttribute("readonly"), "");
+    assert.equal(await tieBreaker.isDisabled(), true);
+    assert.equal(await partialExecution.isDisabled(), true);
+    assert.ok((await page.locator("body").innerText()).includes("NOT_IMPLEMENTED"));
+    assert.ok((await page.locator("body").innerText()).includes("当前仅保存该配置，尚未参与 runtime 仓位约束"));
+
+    assert.equal(await page.locator("#lot_size").isEditable(), true);
+    assert.equal(await page.locator("#min_cash_reserve_pct").isEditable(), true);
+    assert.equal(await maxAllocation.inputValue(), "47");
+    assert.equal(await tieBreaker.inputValue(), "code_desc");
+    assert.equal(await partialExecution.isChecked(), false);
+
+    await page.locator("#lot_size").fill("200");
+    await page.getByRole("button", { name: "保存策略" }).click();
+    await page.getByTestId("account-execution-policy-configured").waitFor();
+    const saved = await jsonRequest(backend, "/api/account-execution-policy");
+    assert.deepEqual(saved, {
+      status: "configured",
+      data: {
+        ...configuredPolicy,
+        lot_size: 200,
+      },
+      reason_code: null,
+    });
+    assert.equal(existsSync(`${policyPath}.tmp`), false);
+
+    writeFileSync(policyPath, "{broken", "utf8");
+    await page.reload({ waitUntil: "networkidle" });
     const corruptedCard = page.getByTestId("account-execution-policy-corrupted");
     await corruptedCard.waitFor();
     const corruptedText = await corruptedCard.innerText();
     assert.ok(corruptedText.includes("账户执行策略损坏/不可读取"));
     assert.ok(corruptedText.includes("ACCOUNT_EXECUTION_POLICY_CORRUPTED"));
     assert.equal(await page.getByTestId("account-execution-policy-default").count(), 0);
-    assert.deepEqual(readFileSync(policyPath), before);
-
-    await page.locator("#lot_size").fill("200");
-    await page.getByRole("button", { name: "保存策略" }).click();
-    await page.getByTestId("account-execution-policy-configured").waitFor();
-    const saved = await jsonRequest(backend, "/api/account-execution-policy");
-    assert.equal(saved.status, "configured");
-    assert.equal(saved.data.lot_size, 200);
-    assert.equal(saved.reason_code, null);
-    assert.equal(existsSync(`${policyPath}.tmp`), false);
+    assert.equal(readFileSync(policyPath, "utf8"), "{broken");
 
     const fatalConsole = consoleErrors.filter((text) => !text.includes("favicon") && !text.includes("Failed to load resource"));
     assert.deepEqual(fatalConsole, [], `unexpected console errors: ${fatalConsole.join("\n")}`);
-    console.log("[E2E] P1-AEP1 execution policy corruption vertical passed");
+    console.log("[E2E] P1-AEP2 effective policy surface vertical passed");
   } catch (error) {
     console.error("--- backend log tail ---");
     console.error(backendLog.slice(-4000));

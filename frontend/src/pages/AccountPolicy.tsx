@@ -16,6 +16,7 @@ const DEFAULT_POLICY: AccountExecutionPolicy = {
 
 export default function AccountPolicy() {
   const [policy, setPolicy] = useState<AccountExecutionPolicy>(DEFAULT_POLICY);
+  const [policySnapshot, setPolicySnapshot] = useState<AccountExecutionPolicy>(DEFAULT_POLICY);
   const [policyStatus, setPolicyStatus] = useState<AccountExecutionPolicyStatus | "error">("default");
   const [policyReasonCode, setPolicyReasonCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -28,7 +29,10 @@ export default function AccountPolicy() {
       .then((response) => {
         setPolicyStatus(response.status);
         setPolicyReasonCode(response.reason_code);
-        if (response.data) setPolicy(response.data);
+        if (response.data) {
+          setPolicy(response.data);
+          setPolicySnapshot(response.data);
+        }
       })
       .catch((err: any) => {
         setPolicyStatus("error");
@@ -43,9 +47,15 @@ export default function AccountPolicy() {
     setSaving(true);
     setSaveResult(null);
     try {
-      const saved = await api.updateAccountExecutionPolicy(policy);
+      const payload: AccountExecutionPolicy = {
+        ...policySnapshot,
+        lot_size: policy.lot_size,
+        min_cash_reserve_pct: policy.min_cash_reserve_pct,
+      };
+      const saved = await api.updateAccountExecutionPolicy(payload);
       if (!saved.data) throw new Error("保存后的执行策略不可用");
       setPolicy(saved.data);
+      setPolicySnapshot(saved.data);
       setPolicyStatus(saved.status);
       setPolicyReasonCode(saved.reason_code);
       setSaveResult("ok");
@@ -58,7 +68,11 @@ export default function AccountPolicy() {
   };
 
   const handleReset = () => {
-    setPolicy(DEFAULT_POLICY);
+    setPolicy((current) => ({
+      ...current,
+      lot_size: DEFAULT_POLICY.lot_size,
+      min_cash_reserve_pct: DEFAULT_POLICY.min_cash_reserve_pct,
+    }));
     setSaveResult(null);
   };
 
@@ -107,10 +121,10 @@ export default function AccountPolicy() {
             {/* lot_size */}
             <div className="grid gap-1.5">
               <label className="text-sm font-medium" htmlFor="lot_size">
-                每手股数
+                每手股数 <span className="text-xs font-normal text-emerald-600 dark:text-emerald-400">当前生效约束</span>
               </label>
               <p className="text-xs text-muted-foreground">
-                A 股标准为 100 股/手，不足一手时不执行买入
+                A 股标准为 100 股/手，不足一手时不执行买入；当前 runtime 会在现金不足时按此手数下调加仓数量
               </p>
               <input
                 id="lot_size"
@@ -131,7 +145,7 @@ export default function AccountPolicy() {
             {/* min_cash_reserve_pct */}
             <div className="grid gap-1.5">
               <label className="text-sm font-medium" htmlFor="min_cash_reserve_pct">
-                可用现金安全垫（%）
+                可用现金安全垫（%） <span className="text-xs font-normal text-emerald-600 dark:text-emerald-400">当前生效约束</span>
               </label>
               <p className="text-xs text-muted-foreground">
                 执行后仍保留可用现金的此比例；仅作用于可用现金，不是总资产比例
@@ -162,27 +176,20 @@ export default function AccountPolicy() {
             {/* max_single_stock_allocation_pct */}
             <div className="grid gap-1.5">
               <label className="text-sm font-medium" htmlFor="max_single_stock_allocation_pct">
-                单股最大仓位占比（%）
+                单股最大仓位占比（%） <span className="text-xs font-normal text-muted-foreground">当前未生效</span>
               </label>
               <p className="text-xs text-muted-foreground">
-                任意单只股票市值不超过总资产的此比例
+                当前仅保存该配置，尚未参与 runtime 仓位约束；不会改变实际建议。<span className="ml-1 font-mono text-[11px]">NOT_IMPLEMENTED</span>
               </p>
               <div className="flex items-center gap-2">
                 <input
                   id="max_single_stock_allocation_pct"
+                  data-testid="account-execution-policy-max-allocation-readonly"
                   type="number"
-                  min={1}
-                  max={100}
-                  step={1}
-                  required
                   value={Math.round(policy.max_single_stock_allocation_pct * 100)}
-                  onChange={(e) =>
-                    setPolicy((p) => ({
-                      ...p,
-                      max_single_stock_allocation_pct: Number(e.target.value) / 100,
-                    }))
-                  }
-                  className="w-32 rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  readOnly
+                  aria-readonly="true"
+                  className="w-32 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
                 />
                 <span className="text-sm text-muted-foreground">%</span>
               </div>
@@ -193,21 +200,18 @@ export default function AccountPolicy() {
             {/* tie_breaker_order */}
             <div className="grid gap-1.5">
               <label className="text-sm font-medium" htmlFor="tie_breaker_order">
-                多笔加仓排序规则
+                多笔加仓排序规则 <span className="text-xs font-normal text-muted-foreground">当前未生效</span>
               </label>
               <p className="text-xs text-muted-foreground">
-                当多笔建议同时加仓时，按此规则决定执行优先顺序
+                当前多笔加仓不会按此规则自动分配，配置仅保存供后续使用。<span className="ml-1 font-mono text-[11px]">NOT_IMPLEMENTED</span>
               </p>
               <select
                 id="tie_breaker_order"
+                data-testid="account-execution-policy-tie-breaker-readonly"
                 value={policy.tie_breaker_order}
-                onChange={(e) =>
-                  setPolicy((p) => ({
-                    ...p,
-                    tie_breaker_order: e.target.value as AccountExecutionPolicy["tie_breaker_order"],
-                  }))
-                }
-                className="mt-1 w-52 rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+                disabled
+                aria-disabled="true"
+                className="mt-1 w-52 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
               >
                 <option value="code_asc">股票代码升序（code_asc）</option>
                 <option value="code_desc">股票代码降序（code_desc）</option>
@@ -221,19 +225,20 @@ export default function AccountPolicy() {
             <div className="flex items-start gap-3">
               <input
                 id="allow_partial_execution"
+                data-testid="account-execution-policy-partial-execution-readonly"
                 type="checkbox"
                 checked={policy.allow_partial_execution}
-                onChange={(e) =>
-                  setPolicy((p) => ({ ...p, allow_partial_execution: e.target.checked }))
-                }
-                className="mt-0.5 h-4 w-4 rounded border-border accent-primary cursor-pointer"
+                disabled
+                aria-disabled="true"
+                readOnly
+                className="mt-0.5 h-4 w-4 rounded border-border accent-primary"
               />
               <div>
-                <label htmlFor="allow_partial_execution" className="text-sm font-medium cursor-pointer">
-                  允许按现金下调执行数量
+                <label htmlFor="allow_partial_execution" className="text-sm font-medium">
+                  允许按现金下调执行数量 <span className="text-xs font-normal text-muted-foreground">当前未生效</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  勾选后，当现金不足以完整执行时，按剩余可用现金比例缩减执行数量
+                  当前 runtime 尚未读取此开关；配置仅保存，不改变实际执行数量。<span className="ml-1 font-mono text-[11px]">NOT_IMPLEMENTED</span>
                 </p>
               </div>
             </div>

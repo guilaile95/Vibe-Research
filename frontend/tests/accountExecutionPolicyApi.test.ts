@@ -81,3 +81,25 @@ test("updateAccountExecutionPolicy sends policy and returns configured envelope"
   assert.equal(result.status, "configured");
   assert.equal(result.data?.lot_size, 200);
 });
+
+test("active-field edits retain non-effective policy fields in the full contract", async () => {
+  const snapshot = {
+    lot_size: 100,
+    min_cash_reserve_pct: 0.1,
+    max_single_stock_allocation_pct: 0.47,
+    tie_breaker_order: "code_desc" as const,
+    allow_partial_execution: false,
+  };
+  const activeEdits = { lot_size: 200, min_cash_reserve_pct: 0.2 };
+  reset({ status: "configured", reason_code: null, data: { ...snapshot, ...activeEdits } });
+
+  await api.updateAccountExecutionPolicy({ ...snapshot, ...activeEdits });
+
+  assert.deepEqual(JSON.parse(requests[0]?.body || "{}"), {
+    ...snapshot,
+    ...activeEdits,
+  });
+  assert.equal(JSON.parse(requests[0]?.body || "{}").max_single_stock_allocation_pct, 0.47);
+  assert.equal(JSON.parse(requests[0]?.body || "{}").tie_breaker_order, "code_desc");
+  assert.equal(JSON.parse(requests[0]?.body || "{}").allow_partial_execution, false);
+});
