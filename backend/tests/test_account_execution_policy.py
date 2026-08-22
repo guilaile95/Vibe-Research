@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -39,6 +41,43 @@ def test_default_policy_returned_when_no_file(tmp_path):
     db_file = tmp_path / "account_execution_policy.json"
     result = _svc.get_account_execution_policy(db_file=db_file)
     assert result == _svc.DEFAULT_POLICY
+    assert _svc.get_account_execution_policy_status(db_file=db_file) == {
+        "status": "default",
+        "data": _svc.DEFAULT_POLICY,
+        "reason_code": None,
+    }
+
+
+def test_corrupted_policy_is_explicit_and_read_only(tmp_path):
+    db_file = tmp_path / "account_execution_policy.json"
+    original = b"{broken"
+    db_file.write_bytes(original)
+
+    status = _svc.get_account_execution_policy_status(db_file=db_file)
+
+    assert status == {
+        "status": "corrupted",
+        "data": None,
+        "reason_code": _svc.ACCOUNT_EXECUTION_POLICY_CORRUPTED_REASON,
+    }
+    with pytest.raises(_svc.AccountExecutionPolicyCorruptedError):
+        _svc.get_account_execution_policy(db_file=db_file)
+    assert db_file.read_bytes() == original
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_save_explicitly_recovers_corrupted_policy(tmp_path):
+    db_file = tmp_path / "account_execution_policy.json"
+    db_file.write_text("{broken", encoding="utf-8")
+
+    saved = _svc.save_account_execution_policy(VALID_POLICY, db_file=db_file)
+
+    assert _svc.get_account_execution_policy_status(db_file=db_file) == {
+        "status": "configured",
+        "data": saved,
+        "reason_code": None,
+    }
+    assert json.loads(db_file.read_text(encoding="utf-8")) == saved
 
 
 def test_save_and_reload(tmp_path):
@@ -105,8 +144,9 @@ def test_api_get_policy(tmp_path, monkeypatch):
     resp = client.get("/api/account-execution-policy")
     assert resp.status_code == 200
     body = resp.json()
-    for key in VALID_POLICY:
-        assert key in body
+    assert body["status"] == "default"
+    assert body["reason_code"] is None
+    assert body["data"] == VALID_POLICY
 
 
 def test_api_put_policy_valid(tmp_path, monkeypatch):
@@ -122,9 +162,11 @@ def test_api_put_policy_valid(tmp_path, monkeypatch):
     resp = client.put("/api/account-execution-policy", json=payload)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["lot_size"] == 50
-    assert body["tie_breaker_order"] == "code_desc"
-    assert body["allow_partial_execution"] is False
+    assert body["status"] == "configured"
+    assert body["reason_code"] is None
+    assert body["data"]["lot_size"] == 50
+    assert body["data"]["tie_breaker_order"] == "code_desc"
+    assert body["data"]["allow_partial_execution"] is False
 
 
 def test_api_put_policy_invalid(tmp_path, monkeypatch):

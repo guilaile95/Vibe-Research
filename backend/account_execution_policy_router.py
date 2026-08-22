@@ -25,12 +25,13 @@ class AccountExecutionPolicyModel(BaseModel):
 
 @router.get("/account-execution-policy")
 def get_policy() -> dict:
-    return _svc.get_account_execution_policy()
+    return _svc.get_account_execution_policy_status()
 
 
 @router.put("/account-execution-policy")
 def update_policy(body: AccountExecutionPolicyModel) -> dict:
     try:
-        return _svc.save_account_execution_policy(body.model_dump())
+        saved = _svc.save_account_execution_policy(body.model_dump())
+        return {"status": "configured", "data": saved, "reason_code": None}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

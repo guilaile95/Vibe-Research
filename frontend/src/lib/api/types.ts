@@ -1942,6 +1942,14 @@ export interface AccountExecutionPolicy {
   allow_partial_execution: boolean;
 }
 
+export type AccountExecutionPolicyStatus = "default" | "configured" | "corrupted";
+
+export interface AccountExecutionPolicyResponse {
+  status: AccountExecutionPolicyStatus;
+  reason_code: string | null;
+  data: AccountExecutionPolicy | null;
+}
+
 
 // ---- 决策绩效分析 (Decision Feedback Analytics P2-4A) ----
 
