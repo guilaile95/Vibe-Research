@@ -77,6 +77,8 @@ describe("tradeLedgerView pure helpers", () => {
       actual_price: 1500,
       actual_quantity: 100,
       executed_at: "2026-07-28T09:30",
+      fee: 0,
+      other_cost: 0,
     };
     assert.equal(validateTradeDraft(valid), null);
 
@@ -122,6 +124,8 @@ describe("tradeLedgerView pure helpers", () => {
       actual_price: 1500,
       actual_quantity: 100,
       executed_at: "2026-07-28T09:30",
+      fee: 0,
+      other_cost: 0,
       unexecuted_reason: "资金不足",
     };
     assert.equal(validateTradeDraft(valid), null);

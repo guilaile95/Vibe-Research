@@ -194,6 +194,8 @@ test("创建 partial 交易规则", () => {
     actual_price: 1680,
     actual_quantity: 100,
     executed_at: "2026-07-29T10:00:00",
+    fee: 0,
+    other_cost: 0,
     unexecuted_reason: "资金不足",
   };
   assert.equal(validateTradeDraft(draft), null);
@@ -240,6 +242,8 @@ test("创建失败后保留输入 (API 异常冒泡)", async () => {
     actual_price: 9999,
     actual_quantity: 10,
     executed_at: "2026-07-29T10:00:00Z",
+    fee: 0,
+    other_cost: 0,
   });
 
   await assert.rejects(

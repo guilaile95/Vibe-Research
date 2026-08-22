@@ -243,6 +243,12 @@ export function validateTradeDraft(draft: TradeDraft): string | null {
     if (plannedQty != null && plannedQty > 0 && actualQty !== plannedQty) {
       return "已全部执行状态下，实际数量必须等于计划数量";
     }
+    if (draft.fee == null || draft.fee === "") {
+      return "已全部执行状态下，手续费不能为空";
+    }
+    if (draft.other_cost == null || draft.other_cost === "") {
+      return "已全部执行状态下，其他费用不能为空";
+    }
     if (draft.unexecuted_reason?.trim()) {
       return "已全部执行状态下，不得填写未执行原因";
     }
@@ -267,6 +273,12 @@ export function validateTradeDraft(draft: TradeDraft): string | null {
     }
     if (!draft.unexecuted_reason || !draft.unexecuted_reason.trim()) {
       return "部分执行状态下，未执行原因不能为空";
+    }
+    if (draft.fee == null || draft.fee === "") {
+      return "部分执行状态下，手续费不能为空";
+    }
+    if (draft.other_cost == null || draft.other_cost === "") {
+      return "部分执行状态下，其他费用不能为空";
     }
   } else if (draft.execution_status === "not_executed") {
     if (!draft.unexecuted_reason || !draft.unexecuted_reason.trim()) {
