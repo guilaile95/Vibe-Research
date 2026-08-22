@@ -125,7 +125,13 @@ function createRealFrozenDecision(env, campaignId) {
     evidence_refs: [], risk_refs: [], source_refs: [], user_confirmed: true,
   };
   const script = "import json, os; import frozen_decision_service as s; print(json.dumps(s.freeze_decision(json.loads(os.environ['TAR1_DECISION_PAYLOAD']))))";
-  const result = spawnSync(env.PYTHON || "python3", ["-c", script], {
+  // 与 pythonConfig() 同构：PYTHON 显式指定时直接执行，Windows 用 py -3。
+  const py = env.PYTHON
+    ? { cmd: env.PYTHON, prefixArgs: [] }
+    : process.platform === "win32"
+      ? { cmd: "py", prefixArgs: ["-3"] }
+      : { cmd: "python3", prefixArgs: [] };
+  const result = spawnSync(py.cmd, [...py.prefixArgs, "-c", script], {
     cwd: backendDir,
     env: { ...env, TAR1_DECISION_PAYLOAD: JSON.stringify(payload) },
     encoding: "utf8",
@@ -259,7 +265,106 @@ async function run() {
     assert.equal(secondState.reconciliation_requirement, "NOT_REQUIRED");
     assert.equal(existsSync(join(tempDataDir, "formal_trade_attributions.sqlite3")), true);
     assert.equal(existsSync(join(tempDataDir, "trade_origins.sqlite3")), true);
-    assert.equal(consoleErrors.filter((message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")).length, 0, JSON.stringify(consoleErrors));
+
+    // ===== P1-TRUX1：UI 创建 → 自动续接详情（零自动归属） =====
+    let truxWritePosts = 0;
+    page.on("request", (request) => {
+      if (request.method() === "POST" && /\/attribution|\/unplanned/.test(request.url())) {
+        truxWritePosts += 1;
+      }
+    });
+    const waitForCreatedTrade = () => page.waitForResponse((response) => (
+      response.request().method() === "POST"
+      && new URL(response.url()).pathname === "/api/trades"
+    ), { timeout: 60000 });
+    // 创建表单与详情面板都是 fixed 遮罩；用标题精确锁定创建弹窗。
+    const openCreateModal = async () => {
+      await page.reload({ waitUntil: "networkidle" });
+      await page.getByRole("button", { name: "新建交易" }).click();
+      return page.locator("div.fixed.inset-0").filter({ hasText: "新建交易流水" });
+    };
+    const fillCreateForm = async (modal, { notExecuted }) => {
+      await modal.getByPlaceholder("6位数字，如 600519").fill("600519");
+      await modal.getByPlaceholder("如 贵州茅台").fill("贵州茅台");
+      if (notExecuted) {
+        await modal.locator("select").nth(1).selectOption("not_executed");
+        await modal.getByPlaceholder("请输入未执行或部分执行的原因").fill("触发价未到达，放弃追高");
+      } else {
+        await modal.getByPlaceholder("大于0", { exact: true }).fill("102");
+        await modal.getByPlaceholder("正整数", { exact: true }).fill("1");
+        // 显式选择晚于 fixture 决策 committed_at 的成交时间；
+        // 默认预填按分钟取整，可能早于决策导致候选资格竞态。
+        await modal.locator('input[type="datetime-local"]').fill("2098-01-02T10:00");
+      }
+    };
+
+    // --- executed：创建成功 → 表单关闭 → 新 Trade 自动打开 → 候选/对账可见 → 点击前归属 POST 为 0 ---
+    const executedModal = await openCreateModal();
+    await fillCreateForm(executedModal, { notExecuted: false });
+    const [createdResponse] = await Promise.all([
+      waitForCreatedTrade(),
+      executedModal.getByRole("button", { name: "提交创建" }).click(),
+    ]);
+    assert.equal(createdResponse.ok(), true, await createdResponse.text());
+    const createdRecord = (await createdResponse.json()).data;
+    assert.match(createdRecord.trade_id, /^[0-9a-f]{32}$/);
+    await executedModal.waitFor({ state: "detached" });
+    await page.getByText(`ID: ${createdRecord.trade_id}`).waitFor();
+    await page.getByText("交易归属与 Campaign 对账").waitFor();
+    await page.getByText("UNALLOCATED", { exact: true }).waitFor();
+    await page.getByText(decision.decision_id, { exact: true }).waitFor();
+    assert.equal(truxWritePosts, 0, "attribution/unplanned POST must stay 0 before explicit user click");
+    await page.getByRole("button", { name: "明确归属" }).click();
+    await page.getByText("ALLOCATED", { exact: true }).waitFor();
+    assert.equal(truxWritePosts, 1, "explicit attribution must be the only write");
+
+    // --- not_executed：同样自动打开详情，但诚实显示 NOT_APPLICABLE ---
+    const notExecutedModal = await openCreateModal();
+    await fillCreateForm(notExecutedModal, { notExecuted: true });
+    const [notExecutedResponse] = await Promise.all([
+      waitForCreatedTrade(),
+      notExecutedModal.getByRole("button", { name: "提交创建" }).click(),
+    ]);
+    assert.equal(notExecutedResponse.ok(), true, await notExecutedResponse.text());
+    const notExecutedRecord = (await notExecutedResponse.json()).data;
+    await notExecutedModal.waitFor({ state: "detached" });
+    await page.getByText(`ID: ${notExecutedRecord.trade_id}`).waitFor();
+    // 状态与对账字段都诚实显示 NOT_APPLICABLE（TRADE_NOT_EXECUTED）
+    await page.getByText("NOT_APPLICABLE", { exact: true }).first().waitFor();
+    assert.equal(await page.getByRole("button", { name: "明确归属" }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "标记为 UNPLANNED" }).count(), 0);
+    assert.equal(truxWritePosts, 1, "not_executed continuation must not issue attribution/unplanned writes");
+
+    // --- 持久化成功但详情读取失败：不回滚、不伪装失败，诚实显示读取错误 ---
+    // trade_id 为无前缀 hex；模式只匹配详情单段路径，不影响列表/recon/candidates。
+    await page.route("**/api/trades/*", async (route) => {
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "TRUX1_DETAIL_READ_FAILED" }) });
+    });
+    const failingReadModal = await openCreateModal();
+    await fillCreateForm(failingReadModal, { notExecuted: false });
+    const [failingReadResponse] = await Promise.all([
+      waitForCreatedTrade(),
+      failingReadModal.getByRole("button", { name: "提交创建" }).click(),
+    ]);
+    assert.equal(failingReadResponse.ok(), true, await failingReadResponse.text());
+    const failingReadRecord = (await failingReadResponse.json()).data;
+    await failingReadModal.waitFor({ state: "detached" });
+    await page.getByText("交易流水创建成功，已打开该笔交易详情").waitFor();
+    await page.getByText("TRUX1_DETAIL_READ_FAILED").waitFor();
+    assert.equal(truxWritePosts, 1, "read failure must not trigger attribution/unplanned writes");
+    await page.unroute("**/api/trades/*");
+
+    const persistedIds = [createdRecord.trade_id, notExecutedRecord.trade_id, failingReadRecord.trade_id];
+    for (const tradeId of persistedIds) {
+      const persisted = await jsonRequest(backend, `/api/trades/${tradeId}`);
+      assert.equal(persisted.trade_id, tradeId);
+    }
+    assert.equal(
+      consoleErrors.filter((message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
+        && !message.includes("503 (Service Unavailable)")).length,
+      0,
+      JSON.stringify(consoleErrors),
+    );
     console.log("[E2E] P0-TAR1 trade attribution and reconciliation passed");
   } catch (error) {
     if (backendProc && !backendProc.killed) console.error(backendLog || "backend log unavailable");
