@@ -9,7 +9,10 @@ import {
   type CampaignThesisBinding,
   type InvestmentThesis,
 } from "@/lib/api";
-import { selectCampaignThesisCandidates } from "@/lib/campaignThesis";
+import {
+  canOpenFormalDecisionReview,
+  selectCampaignThesisCandidates,
+} from "@/lib/campaignThesis";
 
 const FORMAL_LABELS: Record<string, string> = {
   draft: "Formal 草稿",
@@ -161,11 +164,19 @@ export function CampaignThesisActivationCard({
           <Link to={`/thesis/${boundThesis.id}?${query}`} className="inline-flex text-primary hover:underline">
             查看 Current Thesis →
           </Link>
-          {current.ready && (
+          {canOpenFormalDecisionReview({
+            campaignId,
+            securityCode,
+            strategy,
+            binding,
+            current,
+            boundThesis,
+          }) && (
             <Link
               to={`/campaigns/${encodeURIComponent(campaignId)}/decision-proposal`}
               className="ml-3 inline-flex text-primary hover:underline"
               data-action="open-decision-proposal"
+              data-testid="formal-decision-review-cta"
             >
               进入 Formal Decision Review →
             </Link>

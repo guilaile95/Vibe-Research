@@ -4,6 +4,9 @@
 // - canConfirmFormalThesis 镜像 backend confirm_formalization 的 hard gate
 // - selectCampaignThesisCandidates 只做过滤 + 排序，绝不自动选唯一权威
 import type {
+  CampaignCurrentThesis,
+  CampaignStrategy,
+  CampaignThesisBinding,
   ExpectedHorizon,
   InvestmentThesis,
   ThesisStrategy,
@@ -78,4 +81,80 @@ export function selectCampaignThesisCandidates(
     )
     .slice()
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+}
+
+const REVIEWABLE_CURRENT_STATES = new Set([
+  "STABLE",
+  "STRENGTHENED",
+  "WEAKENED",
+  "DISPROVEN",
+  "INVALIDATED",
+]);
+
+/**
+ * Formal Decision Review 展示门：只接受完整且相互一致的 backend binding/current/thesis 事实。
+ * UNKNOWN、缺失字段和任何不一致都保持不可进入，不推断正式可审查状态。
+ */
+export function canOpenFormalDecisionReview({
+  campaignId,
+  securityCode,
+  strategy,
+  binding,
+  current,
+  boundThesis,
+}: {
+  campaignId: string;
+  securityCode: string;
+  strategy: CampaignStrategy;
+  binding: CampaignThesisBinding;
+  current: CampaignCurrentThesis;
+  boundThesis: InvestmentThesis;
+}): boolean {
+  const revision = binding.thesis_revision_at_bind;
+  if (
+    binding.campaign_id !== campaignId
+    || binding.thesis_id !== boundThesis.id
+    || binding.campaign_strategy_at_bind !== strategy
+    || !Number.isInteger(revision)
+    || revision < 1
+  ) {
+    return false;
+  }
+
+  if (
+    boundThesis.subject_type !== "stock"
+    || boundThesis.subject_id !== securityCode
+    || boundThesis.strategy !== strategy
+    || boundThesis.formal_state !== "frozen"
+    || boundThesis.frozen_revision !== revision
+  ) {
+    return false;
+  }
+
+  if (
+    !current.ready
+    || current.formal_status !== "READY"
+    || current.campaign_id !== binding.campaign_id
+    || current.thesis_id !== binding.thesis_id
+    || current.frozen_revision !== revision
+    || !REVIEWABLE_CURRENT_STATES.has(current.effective_state)
+  ) {
+    return false;
+  }
+
+  const audit = current.binding;
+  const snapshotThesis = current.original_snapshot?.thesis;
+  if (
+    !audit
+    || audit.thesis_revision_at_bind !== binding.thesis_revision_at_bind
+    || audit.campaign_strategy_at_bind !== binding.campaign_strategy_at_bind
+    || audit.bound_at !== binding.bound_at
+    || !snapshotThesis
+    || snapshotThesis.id !== boundThesis.id
+    || !Array.isArray(current.deltas)
+  ) {
+    return false;
+  }
+
+  return true;
 }

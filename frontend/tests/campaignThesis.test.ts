@@ -12,10 +12,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ExpectedHorizon, InvestmentThesis, ThesisStrategy } from "../src/lib/api/types.ts";
+import type {
+  CampaignCurrentThesis,
+  CampaignThesisBinding,
+  ExpectedHorizon,
+  InvestmentThesis,
+  ThesisStrategy,
+} from "../src/lib/api/types.ts";
 import {
   STRATEGY_HORIZON_RANGES,
   canConfirmFormalThesis,
+  canOpenFormalDecisionReview,
   defaultHorizonForStrategy,
   selectCampaignThesisCandidates,
 } from "../src/lib/campaignThesis.ts";
@@ -224,4 +231,85 @@ test("候选：不修改输入数组顺序（纯函数）", () => {
   const input = [old, newest];
   selectCampaignThesisCandidates(input, "600519");
   assert.deepEqual(input.map((t) => t.id), ["old", "new"]);
+});
+
+function reviewFixture() {
+  const boundThesis = makeThesis({
+    id: "bound-thesis",
+    formal_state: "frozen",
+    frozen_revision: 2,
+    current_revision: 2,
+  });
+  const binding: CampaignThesisBinding = {
+    campaign_id: "campaign-1",
+    thesis_id: boundThesis.id,
+    thesis_revision_at_bind: 2,
+    campaign_strategy_at_bind: "SWING",
+    bound_at: "2026-08-12T00:00:00.000Z",
+  };
+  const current: CampaignCurrentThesis = {
+    campaign_id: "campaign-1",
+    thesis_id: boundThesis.id,
+    binding: {
+      thesis_revision_at_bind: 2,
+      campaign_strategy_at_bind: "SWING",
+      bound_at: binding.bound_at,
+    },
+    frozen_revision: 2,
+    original_snapshot: {
+      thesis: boundThesis,
+      evidence_links: [],
+      formal_state: "frozen",
+      formalization_started_at: "2026-08-05T00:00:00.000Z",
+      confirmed_at: "2026-08-11T00:00:00.000Z",
+      frozen_at: "2026-08-12T00:00:00.000Z",
+      frozen_revision: 2,
+      archived_at: null,
+      status: "active",
+      current_revision: 2,
+      updated_at: "2026-08-12T00:00:00.000Z",
+    },
+    deltas: [],
+    effective_state: "STABLE",
+    ready: true,
+    formal_status: "READY",
+  };
+  return { binding, current, boundThesis };
+}
+
+test("Formal Decision Review 门：完整且一致的 frozen READY binding → true", () => {
+  const { binding, current, boundThesis } = reviewFixture();
+  assert.equal(canOpenFormalDecisionReview({
+    campaignId: "campaign-1",
+    securityCode: "600519",
+    strategy: "SWING",
+    binding,
+    current,
+    boundThesis,
+  }), true);
+});
+
+test("Formal Decision Review 门：binding/current/thesis 任一不一致 → false", () => {
+  const fixture = reviewFixture();
+  assert.equal(canOpenFormalDecisionReview({ ...fixture, campaignId: "other" }), false);
+  assert.equal(canOpenFormalDecisionReview({ ...fixture, binding: { ...fixture.binding, thesis_id: "other" } }), false);
+  assert.equal(canOpenFormalDecisionReview({ ...fixture, current: { ...fixture.current, campaign_id: "other" } }), false);
+  assert.equal(canOpenFormalDecisionReview({ ...fixture, current: { ...fixture.current, binding: { ...fixture.current.binding, bound_at: "other" } } }), false);
+  assert.equal(canOpenFormalDecisionReview({ ...fixture, boundThesis: { ...fixture.boundThesis, strategy: "MEDIUM" } }), false);
+});
+
+test("Formal Decision Review 门：UNKNOWN、NOT_READY、缺失或非法 projection → false", () => {
+  const fixture = reviewFixture();
+  assert.equal(canOpenFormalDecisionReview({ ...fixture, current: { ...fixture.current, effective_state: "UNKNOWN" } }), false);
+  assert.equal(canOpenFormalDecisionReview({
+    ...fixture,
+    current: {
+      ...fixture.current,
+      ready: false,
+      formal_status: "NOT_READY",
+      frozen_revision: null,
+    },
+  }), false);
+  assert.equal(canOpenFormalDecisionReview({ ...fixture, current: { ...fixture.current, effective_state: "" } }), false);
+  assert.equal(canOpenFormalDecisionReview({ ...fixture, current: { ...fixture.current, effective_state: "NEW_STATE" } }), false);
 });
