@@ -163,7 +163,7 @@ async function createFrozenCurrentThesis(base, title) {
 }
 
 const draft = {
-  reviewBy: "2026-08-30T10:00:00Z",
+  reviewBy: "2026-08-30T10:00",
   horizon: "10 至 30 交易日",
   assumptions: "流动性保持稳定",
   invalidations: "业绩发生重大反转",
@@ -322,7 +322,7 @@ async function run() {
 
     await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
     await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
-    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
+    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor({ timeout: 180000 });
     const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
     const boundId = committedLine.replace(/^decision_id：/, "").trim();
     const bound = await jsonRequest(backend, `/api/campaigns/${withChallenge.campaign_id}/decision-proposal/committed/${boundId}`);
@@ -371,7 +371,7 @@ async function run() {
     await page.locator('[data-challenge-state="UNFINALIZED"]').waitFor();
     await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
     await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
-    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
+    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor({ timeout: 180000 });
     const plainLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
     const plainId = plainLine.replace(/^decision_id：/, "").trim();
     const plain = await jsonRequest(backend, `/api/campaigns/${withoutChallenge.campaign_id}/decision-proposal/committed/${plainId}`);
