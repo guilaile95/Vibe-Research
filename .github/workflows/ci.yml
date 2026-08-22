@@ -300,6 +300,30 @@ jobs:
         env:
           PYTHON: python
         run: npm run test:e2e:decision-inbox
+      - name: Run DCR1 Decision Commit valid readback E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+          DCR1_READBACK_VARIANT: valid
+        run: npm run test:e2e:decision-commit
+      - name: Run DCR1 Decision Commit malformed readback E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+          DCR1_READBACK_VARIANT: malformed
+        run: npm run test:e2e:decision-commit
+      - name: Run DCR1 Decision Commit decision mismatch E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+          DCR1_READBACK_VARIANT: decision-mismatch
+        run: npm run test:e2e:decision-commit
+      - name: Run DCR1 Decision Commit campaign mismatch E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+          DCR1_READBACK_VARIANT: campaign-mismatch
+        run: npm run test:e2e:decision-commit
       - name: Run HR1 production vertical E2E
         working-directory: frontend
         env:

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, LockKeyhole } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { ApiError, api, DECISION_CHALLENGE_DIMENSIONS, type DecisionChallengeDimensionInput, type DecisionChallengeDimensionName, type DecisionChallengePacket, type DecisionProposalDraftInput, type DecisionProposalPreview, type CommittedDecisionRuntimeRead } from "@/lib/api";
+import { ApiError, CommittedDecisionReadError, api, DECISION_CHALLENGE_DIMENSIONS, type DecisionChallengeDimensionInput, type DecisionChallengeDimensionName, type DecisionChallengePacket, type DecisionProposalDraftInput, type DecisionProposalPreview, type CommittedDecisionRuntimeRead } from "@/lib/api";
 import { VIEW_STANCE_LABELS, VIEW_STANCE_OPTIONS, buildJudgedView, buildPortfolioView, type ViewStance } from "@/lib/decisionProposalForm";
 import { hydratedHorizonValue, resolveDecisionContext, type DecisionContextHydrationResult } from "@/lib/decisionContextHydration";
 import { browserTimeZoneName, formatUtcOffsetMinutes, parseReviewBoundary } from "@/lib/reviewBoundaryInput";
@@ -265,6 +265,7 @@ export function DecisionProposalReview() {
     ) return;
     setBusy("commit");
     setError("");
+    setCommitted(null);
     try {
       const result = await api.commitDecisionProposal(campaignId, {
         ...draft,
@@ -279,8 +280,18 @@ export function DecisionProposalReview() {
       if (typeof decisionId !== "string") throw new Error("提交成功但缺少真实 decision_id");
       // Commit response is not the final UI authority.  Re-read through the
       // backend GET so Formal Decision is never rendered from a write result.
-      const reread = await api.getCommittedDecisionRuntime(campaignId, decisionId);
-      setCommitted(reread);
+      try {
+        const reread = await api.getCommittedDecisionRuntime(campaignId, decisionId);
+        setCommitted(reread);
+      } catch (err) {
+        if (err instanceof ApiError) {
+          setError(`COMMITTED_DECISION_READ_ERROR：Commit 已成功，但 durable GET 无法验证（${err.message}）。不会显示已验证的 Frozen Decision，请勿重复提交。`);
+        } else if (err instanceof CommittedDecisionReadError) {
+          setError(`${err.message}。Commit 已成功，但不会显示未经验证的 Frozen Decision，请勿重复提交。`);
+        } else {
+          setError("COMMITTED_DECISION_READ_ERROR：Commit 已成功，但 durable GET 状态当前无法验证。不会显示未经验证的 Frozen Decision，请勿重复提交。");
+        }
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         setPreview(null);

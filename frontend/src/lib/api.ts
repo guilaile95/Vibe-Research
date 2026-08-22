@@ -144,6 +144,12 @@ export class DecisionChallengeReadError extends Error {
   }
 }
 
+export class CommittedDecisionReadError extends Error {
+  constructor(message = "COMMITTED_DECISION_READ_ERROR：Committed Decision durable readback 格式无效") {
+    super(message);
+  }
+}
+
 
 // 后端访问密钥（对应后端部署时的 VR_API_KEY，公网部署防蹭用）。只存本地浏览器。
 const ACCESS_KEY = "vr-access-key";
@@ -1446,13 +1452,88 @@ export async function getDecisionChallengeForProposal(
   }
 }
 
+const COMMITTED_RUNTIME_SCHEMA_VERSION = "decision_commit_runtime.v0.1";
+
+type RuntimeRecord = Record<string, unknown>;
+
+function isRuntimeRecord(value: unknown): value is RuntimeRecord {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readbackError(field: string): never {
+  throw new CommittedDecisionReadError(
+    `COMMITTED_DECISION_READ_ERROR：${field} 缺失或格式无效`,
+  );
+}
+
+function requireRecord(value: unknown, field: string): RuntimeRecord {
+  if (!isRuntimeRecord(value)) readbackError(field);
+  return value;
+}
+
+function validateCommittedSnapshot(
+  value: unknown,
+  campaignId: string,
+  decisionId: string,
+): RuntimeRecord {
+  const committed = requireRecord(value, "committed");
+  if (committed.decision_id !== decisionId) readbackError("committed.decision_id");
+  if (committed.campaign_id !== campaignId) readbackError("committed.campaign_id");
+  return committed;
+}
+
+function validateFormalDecision(value: unknown, decisionId: string): RuntimeRecord {
+  const formalDecision = requireRecord(value, "formal_decision");
+  if (formalDecision.decision_id !== decisionId) {
+    readbackError("formal_decision.decision_id");
+  }
+  return formalDecision;
+}
+
+
+export function parseCommittedDecisionRuntimeRead(
+  value: unknown,
+  campaignId: string,
+  decisionId: string,
+): CommittedDecisionRuntimeRead {
+  const runtime = requireRecord(value, "committed runtime");
+  if (runtime.schema_version !== COMMITTED_RUNTIME_SCHEMA_VERSION) readbackError("schema_version");
+  const committed = validateCommittedSnapshot(runtime.committed, campaignId, decisionId);
+  const authorityFields = [
+    "formal_thesis",
+    "critical_data",
+    "formal_decision",
+    "hard_risk",
+    "material_change",
+    "sell_engine",
+    "decision_assurance",
+  ] as const;
+  const authorities = Object.fromEntries(
+    authorityFields.map((field) => [field, requireRecord(runtime[field], field)]),
+  );
+  const formalDecision = validateFormalDecision(authorities.formal_decision, decisionId);
+  return {
+    ...runtime,
+    schema_version: runtime.schema_version,
+    committed,
+    formal_thesis: authorities.formal_thesis,
+    critical_data: authorities.critical_data,
+    formal_decision: formalDecision,
+    hard_risk: authorities.hard_risk,
+    material_change: authorities.material_change,
+    sell_engine: authorities.sell_engine,
+    decision_assurance: authorities.decision_assurance,
+  } as CommittedDecisionRuntimeRead;
+}
+
 export async function getCommittedDecisionRuntime(
   campaignId: string,
   decisionId: string,
 ): Promise<CommittedDecisionRuntimeRead> {
-  return get<CommittedDecisionRuntimeRead>(
+  const result = await get<unknown>(
     `/campaigns/${encodeURIComponent(campaignId)}/decision-proposal/committed/${encodeURIComponent(decisionId)}`,
   );
+  return parseCommittedDecisionRuntimeRead(result, campaignId, decisionId);
 }
 
 // ---------------------------------------------------------------------------

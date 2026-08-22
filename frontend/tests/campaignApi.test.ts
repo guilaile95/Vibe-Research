@@ -42,7 +42,13 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   });
 }) as typeof fetch;
 
-const { api, ApiError, DecisionChallengeReadError } = await import("../src/lib/api.ts");
+const {
+  api,
+  ApiError,
+  CommittedDecisionReadError,
+  DecisionChallengeReadError,
+  parseCommittedDecisionRuntimeRead,
+} = await import("../src/lib/api.ts");
 
 const CHALLENGE_READ = {
   schema_version: "decision_challenge.v0.1",
@@ -114,6 +120,77 @@ const DRAFT_CAMPAIGN = {
   status: "DRAFT",
   created_at: "2026-08-14T00:00:00.000000Z",
 };
+
+const COMMITTED_CAMPAIGN_ID = "campaign_" + "a".repeat(32);
+const COMMITTED_DECISION_ID = "decision_" + "b".repeat(32);
+const COMMITTED_AS_OF = "2026-08-16T00:00:00.000000Z";
+
+function committedRuntimeFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    schema_version: "decision_commit_runtime.v0.1",
+    as_of: COMMITTED_AS_OF,
+    committed: {
+      decision_id: COMMITTED_DECISION_ID,
+      campaign_id: COMMITTED_CAMPAIGN_ID,
+    },
+    formal_thesis: {},
+    critical_data: {},
+    formal_decision: { decision_id: COMMITTED_DECISION_ID },
+    hard_risk: {},
+    material_change: {},
+    sell_engine: {},
+    decision_assurance: {},
+    ...overrides,
+  };
+}
+
+test("Committed Decision durable readback validates the live identity and authority envelope", async () => {
+  reset({ status: 200, body: { data: committedRuntimeFixture() } });
+  const result = await api.getCommittedDecisionRuntime(COMMITTED_CAMPAIGN_ID, COMMITTED_DECISION_ID);
+  assert.equal(result.committed.decision_id, COMMITTED_DECISION_ID);
+  assert.equal(result.committed.campaign_id, COMMITTED_CAMPAIGN_ID);
+  assert.equal(lastRequest().url, `/api/campaigns/${COMMITTED_CAMPAIGN_ID}/decision-proposal/committed/${COMMITTED_DECISION_ID}`);
+});
+
+test("Committed Decision malformed 200 and identity mismatches fail closed", () => {
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ["missing committed decision_id", { committed: { ...committedRuntimeFixture().committed as Record<string, unknown>, decision_id: undefined } }],
+    ["decision mismatch", { committed: { ...committedRuntimeFixture().committed as Record<string, unknown>, decision_id: "decision_" + "e".repeat(32) } }],
+    ["campaign mismatch", { committed: { ...committedRuntimeFixture().committed as Record<string, unknown>, campaign_id: "campaign_" + "f".repeat(32) } }],
+    ["missing formal_decision", { formal_decision: undefined }],
+    ["missing formal_thesis", { formal_thesis: undefined }],
+    ["missing critical_data", { critical_data: undefined }],
+    ["missing hard_risk", { hard_risk: undefined }],
+    ["missing material_change", { material_change: undefined }],
+    ["missing sell_engine", { sell_engine: undefined }],
+    ["missing decision_assurance", { decision_assurance: undefined }],
+  ];
+  for (const [label, override] of cases) {
+    assert.throws(
+      () => parseCommittedDecisionRuntimeRead({ ...committedRuntimeFixture(), ...override }, COMMITTED_CAMPAIGN_ID, COMMITTED_DECISION_ID),
+      (err: unknown) => err instanceof CommittedDecisionReadError && err.message.includes("COMMITTED_DECISION_READ_ERROR"),
+      label,
+    );
+  }
+});
+
+test("Committed Decision HTTP and network failures preserve ApiError", async () => {
+  reset({ status: 500, body: { detail: "backend unavailable" } });
+  await assert.rejects(
+    () => api.getCommittedDecisionRuntime(COMMITTED_CAMPAIGN_ID, COMMITTED_DECISION_ID),
+    (err: unknown) => err instanceof ApiError && err.status === 500,
+  );
+  globalThis.fetch = (async () => { throw new Error("simulated network failure"); }) as typeof fetch;
+  await assert.rejects(
+    () => api.getCommittedDecisionRuntime(COMMITTED_CAMPAIGN_ID, COMMITTED_DECISION_ID),
+    (err: unknown) => err instanceof ApiError && err.status === 0,
+  );
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    requests.push({ url, method: (init?.method || "GET").toUpperCase(), body: typeof init?.body === "string" ? init.body : null });
+    return new Response(JSON.stringify(nextResponse.body), { status: nextResponse.status, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+});
 
 test("createCampaign POSTs to /api/campaigns with exact payload (security_code + strategy only)", async () => {
   reset({ status: 201, body: { data: DRAFT_CAMPAIGN } });

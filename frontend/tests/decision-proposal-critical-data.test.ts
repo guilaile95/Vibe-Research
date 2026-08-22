@@ -15,6 +15,15 @@ test("Formal Decision Review renders CCD state/evaluation verbatim", () => {
   assert.doesNotMatch(reviewSource, /critical_data_state[^\n]*USABLE[^\n]*healthy/i);
 });
 
+test("Formal Decision Review only renders committed success after validated durable readback", () => {
+  assert.match(reviewSource, /CommittedDecisionReadError/);
+  assert.match(reviewSource, /COMMITTED_DECISION_READ_ERROR/);
+  assert.match(reviewSource, /api\.getCommittedDecisionRuntime\(campaignId, decisionId\)/);
+  assert.match(reviewSource, /setCommitted\(reread\)/);
+  assert.match(reviewSource, /setCommitted\(null\);/);
+  assert.match(reviewSource, /Frozen Decision 已由 backend re-read/);
+});
+
 test("Formal Decision Review exposes truthful optional Decision Challenge read states", () => {
   assert.match(reviewSource, /data-challenge-state/);
   for (const state of ["PENDING", "FOUND", "ABSENT", "ERROR"]) {
