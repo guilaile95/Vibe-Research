@@ -810,8 +810,23 @@ def portfolio_advice(req: PortfolioAdviceRequest):
             type(e.__cause__ or e).__name__,
         )
         raise HTTPException(502, detail) from None
-    except portfolio_advice_service.PortfolioAdviceModelOutputError:
-        raise HTTPException(502, "持仓建议模型输出无效") from None
+    except portfolio_advice_service.PortfolioAdviceModelOutputError as e:
+        # 结构化安全诊断：reason 为固定安全中文文案（code/字段/数字），
+        # 不含 prompt、raw output、路径、SQL、凭据或 traceback。
+        log.warning(
+            "portfolio_advice output invalid stage=%s reason=%s",
+            getattr(e, "stage", "internal"),
+            getattr(e, "reason", ""),
+        )
+        raise HTTPException(
+            502,
+            {
+                "message": "持仓建议模型输出无效",
+                "error_code": "PORTFOLIO_ADVICE_OUTPUT_INVALID",
+                "stage": getattr(e, "stage", "internal"),
+                "reason": getattr(e, "reason", None) or "持仓建议模型输出无效",
+            },
+        ) from None
     except portfolio_advice_service.PortfolioAdvicePersistError as e:
         log.warning(
             "portfolio_advice persist failed stage=%s type=%s",

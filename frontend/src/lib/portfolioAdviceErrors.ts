@@ -3,6 +3,7 @@
 type StatusError = {
   status: number;
   message?: string;
+  detail?: unknown;
 };
 
 function asStatusError(error: unknown): StatusError | null {
@@ -13,7 +14,24 @@ function asStatusError(error: unknown): StatusError | null {
   return {
     status,
     message: typeof message === "string" ? message : undefined,
+    detail: (error as { detail?: unknown }).detail,
   };
+}
+
+/** 后端 502 结构化诊断：{message,error_code,stage,reason}；reason 为安全中文文案。 */
+type OutputInvalidDetail = {
+  message: string;
+  reason: string;
+};
+
+function asOutputInvalidDetail(detail: unknown): OutputInvalidDetail | null {
+  if (!detail || typeof detail !== "object") return null;
+  const message = (detail as { message?: unknown }).message;
+  const reason = (detail as { reason?: unknown }).reason;
+  if (typeof message !== "string" || typeof reason !== "string" || !reason.trim()) return null;
+  // 安全长度上限：异常超长文案不透传，回退通用失败
+  if (reason.length > 300) return null;
+  return { message, reason: reason.trim() };
 }
 
 /** 后端 502 公开文案白名单：透传；未知 502 文案仍回退通用失败，避免把上游 body 直接刷屏。 */
@@ -35,6 +53,15 @@ export function getPortfolioAdviceErrorMessage(error: unknown): string {
     return apiErr.message || "市场核心数据暂不可用，无法生成可靠的持仓操作建议";
   }
   if (apiErr.status === 502) {
+    // 结构化输出诊断：message 在白名单内时透传安全 reason（哪条规则失败）
+    const structured = asOutputInvalidDetail(apiErr.detail);
+    if (
+      structured &&
+      PORTFOLIO_ADVICE_502_MESSAGES.has(structured.message) &&
+      PORTFOLIO_ADVICE_502_MESSAGES.has(apiErr.message || structured.message)
+    ) {
+      return `${structured.message}：${structured.reason}`;
+    }
     const msg = (apiErr.message || "").trim();
     if (PORTFOLIO_ADVICE_502_MESSAGES.has(msg)) return msg;
     // 兼容「未检测到「xxx」对应的本机命令…」等后端动态但安全的 CLI 文案

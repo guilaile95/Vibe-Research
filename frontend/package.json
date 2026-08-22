@@ -22,6 +22,7 @@
     "test:e2e:core-navigation": "node tests/e2e/core-navigation.browser.mjs",
     "test:e2e:decision-inbox": "node tests/e2e/decision-inbox.browser.mjs",
     "test:e2e:account-bootstrap": "node tests/e2e/account-bootstrap.browser.mjs",
+    "test:e2e:portfolio-advice-error": "node tests/e2e/portfolio-advice-error.browser.mjs",
     "test:e2e:account-execution-policy": "node tests/e2e/account-execution-policy.browser.mjs",
     "test:e2e:local-api-security": "node tests/e2e/local-api-security.browser.mjs",
     "test:e2e:hr1-vertical": "node tests/e2e/hr1-production-vertical.browser.mjs",

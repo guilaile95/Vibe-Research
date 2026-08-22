@@ -191,11 +191,19 @@ def test_model_output_error_502(monkeypatch):
     monkeypatch.setattr(
         app_module.portfolio_advice_service,
         "generate_portfolio_advice",
-        MagicMock(side_effect=advice_svc.PortfolioAdviceModelOutputError("bad json")),
+        MagicMock(
+            side_effect=advice_svc.PortfolioAdviceModelOutputError(
+                "bad json", stage="json_parse", reason="持仓建议模型输出不是有效的JSON对象"
+            )
+        ),
     )
     r = client.post("/api/portfolio/advice", json={"llm": _LLM})
     assert r.status_code == 502
-    assert r.json()["detail"] == "持仓建议模型输出无效"
+    detail = r.json()["detail"]
+    assert detail["message"] == "持仓建议模型输出无效"
+    assert detail["error_code"] == "PORTFOLIO_ADVICE_OUTPUT_INVALID"
+    assert detail["stage"] == "json_parse"
+    assert detail["reason"] == "持仓建议模型输出不是有效的JSON对象"
 
 
 def test_internal_typeerror_is_500_not_param_invalid(monkeypatch):
@@ -279,3 +287,144 @@ def test_public_model_error_detail_cli_unavailable():
     detail = advice_svc.public_model_error_detail(exc)
     assert "未检测到" in detail
     assert "claude" in detail
+
+
+# ---------------------------------------------------------------------------
+# Product Reality：输出无效必须给出确切失败阶段与安全原因（不再只有一句静态文案）。
+# 走真实 service → pipeline → validator 链路，仅注入 prepare / model runner / archive。
+# ---------------------------------------------------------------------------
+
+import json as _json
+
+import decision_evidence_service
+import signal_ledger_service
+
+
+def _diag_context():
+    return {
+        "holdings": [{
+            "code": "002031", "name": "股002031", "shares": 100, "cost_price": 10.0,
+            "current_price": 12.0, "market_value": 1200.0, "pnl_amount": 200.0,
+            "pnl_pct": 20.0, "holding_weight_pct": 100.0,
+        }],
+        "market_evidence": {"trade_date": "2026-08-23", "review_status": "normal"},
+        "market_context": {"review_metadata": {"status": "normal", "trade_date": "2026-08-23"}},
+        "portfolio_meta": {"trade_date": "2026-08-23"},
+        "data_limitations": [],
+        "warnings": [],
+    }
+
+
+def _prepared_payload():
+    return {
+        "portfolio": {
+            "holdings": [{"code": "002031", "name": "股002031", "shares": 100,
+                          "cost": 10.0, "price": 12.0, "market_value": 1200.0,
+                          "pnl": 200.0, "pnl_pct": 20.0}],
+            "totals": {"market_value": 1200.0, "cost": 1000.0, "pnl": 200.0, "pnl_pct": 20.0},
+        },
+        "input_fingerprint": "f" * 64,
+        "daily_review": {"trade_date": "2026-08-23", "generated_at": "2026-08-23 15:00:00"},
+        "context": _diag_context(),
+        "context_json": "{}",
+        "messages": [],
+    }
+
+
+def _ai_holding_text(action="hold", pct=None, trigger="市场广度修复后可继续持有"):
+    holding = {
+        "code": "002031", "name": "股002031", "action": action,
+        "execution_size_pct_of_holding": pct, "execution_quantity": None,
+        "trigger_conditions": [trigger],
+        "price_conditions": [], "execution_plan": ["按计划持有"],
+        "risk_conditions": ["个股相对板块明显转弱"],
+        "invalidation_conditions": ["原风险证据消失"],
+        "confidence": "medium", "data_limitations": [],
+    }
+    return _json.dumps({
+        "schema_version": "portfolio-advice-v0.1",
+        "generated_at": "2026-08-23 15:30:00",
+        "market_status": "normal",
+        "portfolio_summary": {"holding_count": 1, "market_value": 1200.0,
+                              "cost": 1000.0, "pnl": 200.0, "pnl_pct": 20.0},
+        "account_action": {"action": "hold", "reason": "结构完整", "confidence": "medium"},
+        "holdings": [holding],
+        "warnings": [], "data_limitations": [],
+    }, ensure_ascii=False)
+
+
+def _post_with_model_output(monkeypatch, model_text):
+    monkeypatch.setattr(
+        app_module.portfolio_advice_service,
+        "prepare_portfolio_advice_messages",
+        MagicMock(return_value=_prepared_payload()),
+    )
+    monkeypatch.setattr(
+        app_module.portfolio_advice_service,
+        "_default_model_runner",
+        MagicMock(return_value=model_text),
+    )
+    monkeypatch.setattr(
+        app_module.ai_result_service,
+        "save_portfolio_advice",
+        MagicMock(return_value={"trade_date": "2026-08-23"}),
+    )
+    monkeypatch.setattr(decision_evidence_service, "archive_decision_evidence", MagicMock())
+    monkeypatch.setattr(signal_ledger_service, "archive_signal_ledger", MagicMock())
+    return client.post("/api/portfolio/advice", json={"llm": _LLM})
+
+
+def test_valid_model_output_succeeds(monkeypatch):
+    r = _post_with_model_output(monkeypatch, _ai_holding_text())
+    assert r.status_code == 200, (r.status_code, r.text)
+    assert r.json()["data"]["holdings"][0]["action"] == "hold"
+
+
+def test_malformed_json_diagnoses_parse_stage(monkeypatch):
+    r = _post_with_model_output(monkeypatch, "好的，以下是建议：\n" + _ai_holding_text())
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert detail["error_code"] == "PORTFOLIO_ADVICE_OUTPUT_INVALID"
+    assert detail["stage"] == "json_parse"
+    assert "JSON" in detail["reason"]
+
+
+def test_invalid_action_diagnoses_schema_stage(monkeypatch):
+    r = _post_with_model_output(monkeypatch, _ai_holding_text(action="trim"))
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert detail["stage"] == "schema_validation"
+    assert "非法 action" in detail["reason"]
+    assert "trim" in detail["reason"]
+
+
+def test_off_tier_reduce_diagnoses_policy_stage(monkeypatch):
+    r = _post_with_model_output(monkeypatch, _ai_holding_text(action="reduce", pct=25))
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert detail["stage"] == "policy_audit"
+    assert "reduce" in detail["reason"]
+    assert "25" in detail["reason"]
+    assert "002031" in detail["reason"]
+
+
+def test_untraceable_number_diagnoses_narrative_stage(monkeypatch):
+    r = _post_with_model_output(
+        monkeypatch, _ai_holding_text(trigger="跌破 9.9 元后减仓")
+    )
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert detail["stage"] == "narrative_audit"
+    assert "无法追溯的数字" in detail["reason"]
+    assert "9.9" in detail["reason"]
+
+
+def test_diagnostic_detail_is_safe(monkeypatch):
+    r = _post_with_model_output(monkeypatch, _ai_holding_text(action="reduce", pct=25))
+    detail = r.json()["detail"]
+    # 不泄露请求中的 API key、prompt 或路径
+    serialized = _json.dumps(detail, ensure_ascii=False)
+    assert "sk-test-secret" not in serialized
+    assert "http://" not in serialized
+    assert "baseURL" not in serialized
+    assert set(detail) == {"message", "error_code", "stage", "reason"}

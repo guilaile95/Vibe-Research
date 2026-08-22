@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getPortfolioAdviceErrorMessage } from "../src/lib/portfolioAdviceErrors.ts";
 
-function apiError(message: string, status: number) {
-  return Object.assign(new Error(message), { status });
+function apiError(message: string, status: number, detail?: unknown) {
+  return Object.assign(new Error(message), { status, detail });
 }
 
 test("maps 409 / 503 / 500 business statuses", () => {
@@ -74,4 +74,56 @@ test("maps 400 missing AI config clearly", () => {
 
 test("non-status error falls back", () => {
   assert.equal(getPortfolioAdviceErrorMessage(new Error("boom")), "持仓建议生成失败，请重试");
+});
+
+test("structured 502 detail shows safe rule reason", () => {
+  const detail = {
+    message: "持仓建议模型输出无效",
+    error_code: "PORTFOLIO_ADVICE_OUTPUT_INVALID",
+    stage: "policy_audit",
+    reason: "reduce 比例仅允许 [10, 20, 30]，收到 25.0（code=002031）",
+  };
+  assert.equal(
+    getPortfolioAdviceErrorMessage(apiError("持仓建议模型输出无效", 502, detail)),
+    "持仓建议模型输出无效：reduce 比例仅允许 [10, 20, 30]，收到 25.0（code=002031）",
+  );
+  const parseDetail = {
+    message: "持仓建议模型输出无效",
+    error_code: "PORTFOLIO_ADVICE_OUTPUT_INVALID",
+    stage: "narrative_audit",
+    reason: "条件字段含无法追溯的数字 9.9（field=trigger_conditions, code=002031）",
+  };
+  assert.ok(
+    getPortfolioAdviceErrorMessage(apiError("持仓建议模型输出无效", 502, parseDetail)).includes(
+      "无法追溯的数字 9.9",
+    ),
+  );
+});
+
+test("structured 502 detail falls back when unsafe or oversized", () => {
+  // message 不在白名单：不透传 reason
+  assert.equal(
+    getPortfolioAdviceErrorMessage(
+      apiError("持仓建议模型输出无效", 502, {
+        message: "some upstream message",
+        reason: "sk-secret leaked",
+      }),
+    ),
+    "持仓建议模型输出无效",
+  );
+  // reason 超长：不透传
+  assert.equal(
+    getPortfolioAdviceErrorMessage(
+      apiError("持仓建议模型输出无效", 502, {
+        message: "持仓建议模型输出无效",
+        reason: "x".repeat(301),
+      }),
+    ),
+    "持仓建议模型输出无效",
+  );
+  // 无 detail 的普通 ApiError（向后兼容）
+  assert.equal(
+    getPortfolioAdviceErrorMessage(apiError("持仓建议模型输出无效", 502)),
+    "持仓建议模型输出无效",
+  );
 });

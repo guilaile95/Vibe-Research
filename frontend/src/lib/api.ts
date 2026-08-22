@@ -132,9 +132,12 @@ import type {
 
 export class ApiError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  /** 后端结构化 detail（如 Portfolio Advice 的 {message,error_code,stage,reason}），无则为 undefined。 */
+  readonly detail?: unknown;
+  constructor(message: string, status: number, detail?: unknown) {
     super(message);
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -243,7 +246,15 @@ export async function request<T>(
     if (resp.status === 401) {
       throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
     }
-    throw new ApiError(payload?.error || payload?.detail || payload?.message || `HTTP ${resp.status}`, resp.status);
+    const rawDetail = payload?.detail;
+    // 结构化 detail（对象）取其 message 字段做兜底文案，并保留原始对象供上层解析
+    const detailText =
+      typeof rawDetail === "string"
+        ? rawDetail
+        : rawDetail && typeof rawDetail === "object" && typeof (rawDetail as { message?: unknown }).message === "string"
+          ? (rawDetail as { message: string }).message
+          : undefined;
+    throw new ApiError(payload?.error || detailText || payload?.message || `HTTP ${resp.status}`, resp.status, rawDetail);
   }
   const result = unwrapData ? unwrapApiPayload(payload) : payload;
   return result as T;
