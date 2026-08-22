@@ -268,9 +268,15 @@ async function run() {
 
     // ===== P1-TRUX1：UI 创建 → 自动续接详情（零自动归属） =====
     let truxWritePosts = 0;
+    let tradeCreatePosts = 0;
     page.on("request", (request) => {
-      if (request.method() === "POST" && /\/attribution|\/unplanned/.test(request.url())) {
+      if (request.method() !== "POST") return;
+      const pathname = new URL(request.url()).pathname;
+      if (/\/attribution|\/unplanned/.test(pathname)) {
         truxWritePosts += 1;
+      }
+      if (pathname === "/api/trades") {
+        tradeCreatePosts += 1;
       }
     });
     const waitForCreatedTrade = () => page.waitForResponse((response) => (
@@ -283,24 +289,45 @@ async function run() {
       await page.getByRole("button", { name: "新建交易" }).click();
       return page.locator("div.fixed.inset-0").filter({ hasText: "新建交易流水" });
     };
-    const fillCreateForm = async (modal, { notExecuted }) => {
+    const fillCreateForm = async (modal, { status = "full", executionTime = "2098-01-02T10:00" } = {}) => {
       await modal.getByPlaceholder("6位数字，如 600519").fill("600519");
       await modal.getByPlaceholder("如 贵州茅台").fill("贵州茅台");
-      if (notExecuted) {
+      if (status === "not_executed") {
         await modal.locator("select").nth(1).selectOption("not_executed");
         await modal.getByPlaceholder("请输入未执行或部分执行的原因").fill("触发价未到达，放弃追高");
-      } else {
-        await modal.getByPlaceholder("大于0", { exact: true }).fill("102");
-        await modal.getByPlaceholder("正整数", { exact: true }).fill("1");
-        // 显式选择晚于 fixture 决策 committed_at 的成交时间；
-        // 默认预填按分钟取整，可能早于决策导致候选资格竞态。
-        await modal.locator('input[type="datetime-local"]').fill("2098-01-02T10:00");
+        return;
       }
+      if (status === "partial") {
+        await modal.locator("select").nth(1).selectOption("partial");
+        await modal.getByPlaceholder("可选，正整数", { exact: true }).fill("2");
+        await modal.getByPlaceholder("请输入未执行或部分执行的原因").fill("仅成交一半");
+      }
+      await modal.getByPlaceholder("大于0", { exact: true }).fill("102");
+      await modal.getByPlaceholder("正整数", { exact: true }).fill(status === "partial" ? "1" : "1");
+      await modal.locator('input[type="datetime-local"]').fill(executionTime);
     };
 
-    // --- executed：创建成功 → 表单关闭 → 新 Trade 自动打开 → 候选/对账可见 → 点击前归属 POST 为 0 ---
-    const executedModal = await openCreateModal();
-    await fillCreateForm(executedModal, { notExecuted: false });
+    // --- TRT1：executed Trade 未显式选择成交时间时，浏览器阻断提交且不产生 POST ---
+    const missingTimeModal = await openCreateModal();
+    await missingTimeModal.getByPlaceholder("6位数字，如 600519").fill("600519");
+    await missingTimeModal.getByPlaceholder("如 贵州茅台").fill("贵州茅台");
+    await missingTimeModal.getByPlaceholder("大于0", { exact: true }).fill("102");
+    await missingTimeModal.getByPlaceholder("正整数", { exact: true }).fill("1");
+    const missingTimeInput = missingTimeModal.locator('input[type="datetime-local"]');
+    assert.equal(await missingTimeInput.inputValue(), "");
+    assert.equal(await missingTimeInput.evaluate((input) => input.required && !input.checkValidity()), true);
+    await missingTimeModal.getByRole("button", { name: "提交创建" }).click();
+    assert.equal(tradeCreatePosts, 0, "missing execution time must not issue trade POST");
+    assert.equal(await missingTimeModal.count(), 1, "missing execution time must keep the form open");
+
+    // --- TRT1 + TRUX1：显式时间预览 → 创建成功 → 自动详情 → 候选/对账可见 ---
+    const executedModal = missingTimeModal;
+    await executedModal.locator('input[type="datetime-local"]').fill("2098-01-02T10:00");
+    const expectedExecutedIso = await page.evaluate(() => new Date("2098-01-02T10:00").toISOString());
+    await executedModal.getByText("本地时间：2098-01-02T10:00", { exact: true }).waitFor();
+    await executedModal.getByText(/浏览器解析时区：/).waitFor();
+    await executedModal.getByText(/UTC offset：UTC[+-]\d{2}:\d{2}/).waitFor();
+    await executedModal.getByText(`Canonical UTC ISO：${expectedExecutedIso}`, { exact: true }).waitFor();
     const [createdResponse] = await Promise.all([
       waitForCreatedTrade(),
       executedModal.getByRole("button", { name: "提交创建" }).click(),
@@ -317,10 +344,40 @@ async function run() {
     await page.getByRole("button", { name: "明确归属" }).click();
     await page.getByText("ALLOCATED", { exact: true }).waitFor();
     assert.equal(truxWritePosts, 1, "explicit attribution must be the only write");
+    const createdReadback = await jsonRequest(backend, `/api/trades/${createdRecord.trade_id}`);
+    assert.equal(new Date(createdReadback.executed_at).toISOString(), expectedExecutedIso);
+
+    // --- TRT1：partial 使用用户显式成交时间并保持同一 readback 语义 ---
+    const partialModal = await openCreateModal();
+    await fillCreateForm(partialModal, { status: "partial", executionTime: "2098-01-03T11:15" });
+    const expectedPartialIso = await page.evaluate(() => new Date("2098-01-03T11:15").toISOString());
+    await partialModal.getByText(`Canonical UTC ISO：${expectedPartialIso}`, { exact: true }).waitFor();
+    const [partialResponse] = await Promise.all([
+      waitForCreatedTrade(),
+      partialModal.getByRole("button", { name: "提交创建" }).click(),
+    ]);
+    assert.equal(partialResponse.ok(), true, await partialResponse.text());
+    const partialRecord = (await partialResponse.json()).data;
+    await partialModal.waitFor({ state: "detached" });
+    const partialDetailModal = page.locator("div.fixed.inset-0").filter({ hasText: `ID: ${partialRecord.trade_id}` });
+    await partialDetailModal.getByText(`ID: ${partialRecord.trade_id}`, { exact: true }).waitFor();
+    await partialDetailModal.getByText("部分执行", { exact: true }).waitFor();
+    await partialDetailModal.getByText("仅成交一半", { exact: true }).waitFor();
+    await partialDetailModal.getByText("UNALLOCATED", { exact: true }).waitFor();
+    assert.equal(truxWritePosts, 1, "partial continuation must not issue attribution/unplanned writes");
+    const partialReadback = await jsonRequest(backend, `/api/trades/${partialRecord.trade_id}`);
+    assert.equal(partialReadback.execution_status, "partial");
+    assert.equal(partialReadback.planned_quantity, 2);
+    assert.equal(partialReadback.actual_quantity, 1);
+    assert.equal(partialReadback.unexecuted_reason, "仅成交一半");
+    assert.equal(new Date(partialReadback.executed_at).toISOString(), expectedPartialIso);
+    const partialState = await jsonRequest(backend, `/api/trades/${partialRecord.trade_id}/reconciliation`);
+    assert.equal(partialState.allocation_state, "UNALLOCATED");
+    assert.equal(partialState.reconciliation_requirement, "REQUIRED");
 
     // --- not_executed：同样自动打开详情，但诚实显示 NOT_APPLICABLE ---
     const notExecutedModal = await openCreateModal();
-    await fillCreateForm(notExecutedModal, { notExecuted: true });
+    await fillCreateForm(notExecutedModal, { status: "not_executed" });
     const [notExecutedResponse] = await Promise.all([
       waitForCreatedTrade(),
       notExecutedModal.getByRole("button", { name: "提交创建" }).click(),
@@ -354,11 +411,14 @@ async function run() {
     assert.equal(truxWritePosts, 1, "read failure must not trigger attribution/unplanned writes");
     await page.unroute("**/api/trades/*");
 
-    const persistedIds = [createdRecord.trade_id, notExecutedRecord.trade_id, failingReadRecord.trade_id];
+    const persistedIds = [createdRecord.trade_id, partialRecord.trade_id, notExecutedRecord.trade_id, failingReadRecord.trade_id];
     for (const tradeId of persistedIds) {
       const persisted = await jsonRequest(backend, `/api/trades/${tradeId}`);
       assert.equal(persisted.trade_id, tradeId);
     }
+    const notExecutedReadback = await jsonRequest(backend, `/api/trades/${notExecutedRecord.trade_id}`);
+    assert.equal(notExecutedReadback.execution_status, "not_executed");
+    assert.equal(notExecutedReadback.executed_at, null);
     assert.equal(
       consoleErrors.filter((message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
         && !message.includes("503 (Service Unavailable)")).length,

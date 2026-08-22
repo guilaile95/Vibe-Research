@@ -11,6 +11,7 @@ import {
   formatTradePercentage,
   formatTradeQuantity,
   formatTradeTime,
+  getTradeExecutionTimePreview,
   operationLabel,
   validateTradeDraft,
   validateTradeListFilters,
@@ -277,11 +278,6 @@ export function Trades() {
 
   // 打开与关闭新建
   const handleOpenCreate = () => {
-    const nowLocal = new Date();
-    const isoNow = new Date(nowLocal.getTime() - nowLocal.getTimezoneOffset() * 60000)
-      .toISOString()
-      .slice(0, 16);
-
     setCreateDraft({
       code: "",
       name: "",
@@ -291,7 +287,7 @@ export function Trades() {
       planned_quantity: "",
       actual_price: "",
       actual_quantity: "",
-      executed_at: isoNow,
+      executed_at: "",
       fee: "0",
       other_cost: "0",
       unexecuted_reason: "",
@@ -407,6 +403,10 @@ export function Trades() {
       setOffset(offset + PAGE_LIMIT);
     }
   };
+
+  const executionTimePreview = createDraft.execution_status !== "not_executed"
+    ? getTradeExecutionTimePreview(createDraft.executed_at)
+    : null;
 
   return (
     <div className="space-y-6">
@@ -863,19 +863,36 @@ export function Trades() {
                       />
                     </div>
 
-                    <div>
+                    <div className="sm:col-span-2">
                       <label className="block text-xs font-medium text-foreground mb-1">
-                        成交时间 <span className="text-rose-400">*</span>
+                        实际成交时间 <span className="text-rose-400">*</span>
                       </label>
                       <input
                         type="datetime-local"
                         required
+                        aria-label="实际成交时间"
                         value={createDraft.executed_at ?? ""}
                         onChange={(e) =>
                           setCreateDraft({ ...createDraft, executed_at: e.target.value })
                         }
                         className="w-full rounded-md border border-input bg-background/50 px-3 py-1.5 text-xs text-foreground focus:ring-1 focus:ring-primary"
                       />
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        请显式选择真实成交时间；系统不会使用录入时间、创建时间或其他事实自动填充。
+                      </p>
+                      {createDraft.executed_at && !executionTimePreview && (
+                        <p className="mt-1 text-[11px] text-rose-400">
+                          成交时间格式无效，请重新选择有效的本地时间。
+                        </p>
+                      )}
+                      {executionTimePreview && (
+                        <div className="mt-2 rounded border border-border/40 bg-muted/20 p-2 text-[11px] text-muted-foreground">
+                          <div>本地时间：<span className="font-mono text-foreground">{executionTimePreview.localValue}</span></div>
+                          <div>浏览器解析时区：<span className="font-mono text-foreground">{executionTimePreview.timeZone}</span></div>
+                          <div>UTC offset：<span className="font-mono text-foreground">{executionTimePreview.utcOffset}</span></div>
+                          <div>Canonical UTC ISO：<span className="font-mono text-foreground">{executionTimePreview.canonicalUtcIso}</span></div>
+                        </div>
+                      )}
                     </div>
 
                     <div>
