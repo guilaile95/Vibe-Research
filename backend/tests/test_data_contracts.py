@@ -8,6 +8,7 @@ import pytest
 from data_contracts import (
     AdjustmentSemantics,
     CanonicalFact,
+    CoverageMode,
     DataContractError,
     DatasetSpec,
     FetchSemantics,
@@ -61,6 +62,7 @@ def _spec(**overrides) -> DatasetSpec:
         "routes": _routes(),
         "governance_revision_id": "gov-1",
         "required_temporal_fields": (TemporalSemantics.TRADE_DATE,),
+        "coverage_mode": CoverageMode.SESSION_DENSE,
         "point_in_time_supported": True,
         "revision_semantics": RevisionSemantics.VERSIONED,
         "adjustment_semantics": AdjustmentSemantics.NOT_APPLICABLE,

@@ -22,6 +22,7 @@ import duckdb
 from data_contracts import (
     AdjustmentSemantics,
     CanonicalFact,
+    CoverageMode,
     DataContractError,
     DatasetSpec,
     FetchSemantics,
@@ -157,6 +158,7 @@ FINANCIAL_DATASET_SPEC = DatasetSpec(
     ),
     governance_revision_id=DATASET_CONTRACT_REVISION,
     required_temporal_fields=(TemporalSemantics.REPORT_PERIOD,),
+    coverage_mode=CoverageMode.SPARSE,
     point_in_time_supported=False,
     revision_semantics=RevisionSemantics.RESTATABLE,
     adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,

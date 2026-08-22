@@ -18,6 +18,7 @@ import pytest
 import fact_lake_health as flh
 from data_contracts import (
     CanonicalFact,
+    CoverageMode,
     DatasetSpec,
     ProviderRoute,
     ReconciliationResult,
@@ -31,6 +32,7 @@ from data_contracts import (
     TemporalSemantics,
     ProvenanceLink,
 )
+from fact_lake_coverage import CoverageState, assess_coverage
 
 T_UTC = "2026-08-10T04:00:00.000Z"
 OBS_ID = "obs_" + "a" * 32
@@ -74,6 +76,7 @@ def _limit_up_spec(*, with_verifier: bool = False) -> DatasetSpec:
         routes=tuple(routes),
         governance_revision_id="rev-1",
         required_temporal_fields=(TemporalSemantics.TRADE_DATE,),
+        coverage_mode=CoverageMode.SESSION_DENSE,
         point_in_time_supported=False,
         revision_semantics=RevisionSemantics.IMMUTABLE,
         adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,
@@ -89,6 +92,7 @@ def _financial_spec() -> DatasetSpec:
         routes=(_route(),),
         governance_revision_id="rev-f1",
         required_temporal_fields=(TemporalSemantics.REPORT_PERIOD,),
+        coverage_mode=CoverageMode.SPARSE,
         point_in_time_supported=False,
         revision_semantics=RevisionSemantics.RESTATABLE,
         adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,
@@ -144,6 +148,7 @@ def _evidence(
     primary_field: TemporalSemantics | None = None,
     primary_value: str | None = None,
     expected: str | None = None,
+    coverage=None,
 ) -> flh.FactLakeHealthEvidence:
     if fact is None:
         fact = _fact(spec=spec)
@@ -165,6 +170,7 @@ def _evidence(
         primary_temporal_field=primary_field,
         primary_temporal_value=primary_value,
         expected_primary_temporal_value=expected,
+        coverage=coverage,
     )
 
 
@@ -421,6 +427,7 @@ def test_snapshot_only_freshness_not_applicable():
         routes=(_route(),),
         governance_revision_id="rev-s",
         required_temporal_fields=(TemporalSemantics.TRADE_DATE,),
+        coverage_mode=CoverageMode.SESSION_DENSE,
         revision_semantics=RevisionSemantics.IMMUTABLE,
         adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,
     )
@@ -662,6 +669,7 @@ def _stale_spec(max_staleness: int = 300) -> DatasetSpec:
         routes=(_route(),),
         governance_revision_id="rev-1",
         required_temporal_fields=(TemporalSemantics.TRADE_DATE,),
+        coverage_mode=CoverageMode.SESSION_DENSE,
         point_in_time_supported=False,
         revision_semantics=RevisionSemantics.IMMUTABLE,
         adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,
@@ -727,6 +735,7 @@ def test_r1e_snapshot_only_continuous_freshness_preserved():
         routes=(_route(),),
         governance_revision_id="rev-s",
         required_temporal_fields=(TemporalSemantics.TRADE_DATE,),
+        coverage_mode=CoverageMode.SESSION_DENSE,
         revision_semantics=RevisionSemantics.IMMUTABLE,
         adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,
         max_staleness_seconds=300,
@@ -928,6 +937,7 @@ def _snapshot_spec(*, max_staleness: int | None = None) -> DatasetSpec:
         routes=(_route(),),
         governance_revision_id="rev-s",
         required_temporal_fields=(TemporalSemantics.TRADE_DATE,),
+        coverage_mode=CoverageMode.SESSION_DENSE,
         revision_semantics=RevisionSemantics.IMMUTABLE,
         adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,
         max_staleness_seconds=max_staleness,

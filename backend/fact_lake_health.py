@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
+from fact_lake_coverage import CoverageAssessment, CoverageState
 from data_contracts import (
     CanonicalFact,
     DatasetSpec,
@@ -84,6 +85,9 @@ REASON_RECONCILIATION_TEMPORAL_INCOMPARABLE = "RECONCILIATION_TEMPORAL_INCOMPARA
 REASON_RECONCILIATION_UNKNOWN = "RECONCILIATION_UNKNOWN"
 REASON_RECONCILIATION_UNBOUND = "RECONCILIATION_UNBOUND"
 REASON_RECONCILIATION_STATUS_DRIFT = "RECONCILIATION_STATUS_DRIFT"
+REASON_COVERAGE_INTERIOR_GAP = "COVERAGE_INTERIOR_GAP"
+REASON_COVERAGE_EXPECTED_NOT_REACHED = "COVERAGE_EXPECTED_NOT_REACHED"
+REASON_COVERAGE_UNKNOWN = "COVERAGE_UNKNOWN"
 
 # 枚举 → reason code（稳定映射）
 _RECONCILIATION_REASON = {
@@ -118,6 +122,9 @@ _BLOCKING_REASONS = frozenset({
     REASON_TEMPORAL_INDEX_MISMATCH,
     REASON_RECONCILIATION_UNBOUND,
     REASON_RECONCILIATION_STATUS_DRIFT,
+    REASON_COVERAGE_INTERIOR_GAP,
+    REASON_COVERAGE_EXPECTED_NOT_REACHED,
+    REASON_COVERAGE_UNKNOWN,
 })
 _WARNING_REASONS = frozenset({
     REASON_ARTIFACT_UNVERIFIED,
@@ -169,6 +176,9 @@ _KNOWN_REASON_CODES = frozenset({
     REASON_RECONCILIATION_UNKNOWN,
     REASON_RECONCILIATION_UNBOUND,
     REASON_RECONCILIATION_STATUS_DRIFT,
+    REASON_COVERAGE_INTERIOR_GAP,
+    REASON_COVERAGE_EXPECTED_NOT_REACHED,
+    REASON_COVERAGE_UNKNOWN,
 })
 
 # 各维度合法枚举值（严格校验用）
@@ -263,6 +273,8 @@ class FactLakeHealthEvidence:
     primary_temporal_value: str | None = None
     # 可选 by_date 期望值（显式提供才允许比较）
     expected_primary_temporal_value: str | None = None
+    # 可选显式 coverage 证据；不提供时保持旧 H1 语义
+    coverage: CoverageAssessment | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.publication_id, str) or not self.publication_id.strip():
@@ -319,6 +331,11 @@ class FactLakeHealthEvidence:
                 _require_canonical_text(self.primary_temporal_value, "primary_temporal_value")
             else:
                 _require_utc(self.primary_temporal_value, "primary_temporal_value")
+        if self.coverage is not None and not isinstance(
+                self.coverage, CoverageAssessment):
+            raise HealthValidationError("coverage 必须是 CoverageAssessment")
+        if self.coverage is not None and self.coverage.dataset_id != self.dataset_id:
+            raise HealthValidationError("coverage dataset_id 必须匹配 evidence dataset_id")
         if self.expected_primary_temporal_value is not None:
             if self.primary_temporal_field is None:
                 raise HealthValidationError(
@@ -458,6 +475,15 @@ def assess_publication_health(
     if not evidence.source_observations_committed:
         reasons.append(REASON_SOURCE_OBSERVATION_NOT_COMMITTED)
 
+    # ---- coverage contract binding (explicit evidence only) ----
+    if evidence.coverage is not None:
+        if evidence.coverage.coverage_mode.value != dataset_spec.coverage_mode.value:
+            reasons.append(REASON_DATASET_SPEC_REJECTED_FACT)
+        elif evidence.coverage.state is CoverageState.PARTIAL:
+            reasons.extend(evidence.coverage.reason_codes)
+        elif evidence.coverage.state is CoverageState.UNKNOWN:
+            reasons.append(REASON_COVERAGE_UNKNOWN)
+
     # ---- §10 dataset/fact 契约绑定 ----
     if evidence.dataset_id != dataset_spec.dataset_id:
         reasons.append(REASON_DATASET_ID_MISMATCH)
@@ -531,6 +557,9 @@ def assess_publication_health(
 
     # ---- E. freshness（§12-16：无显式权威语义 → UNKNOWN；不伪造）----
     freshness = _assess_freshness(dataset_spec, evidence, reasons)
+    if evidence.coverage is not None and evidence.coverage.state is CoverageState.PARTIAL:
+        if freshness in {"CURRENT", "UNKNOWN"}:
+            freshness = "STALE"
 
     # ---- F. reconciliation（§20-23：无 verifier → NOT_APPLICABLE；有 verifier 无证据 → NOT_RUN）----
     reconciliation = _assess_reconciliation(dataset_spec, evidence, reasons)

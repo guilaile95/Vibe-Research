@@ -41,6 +41,7 @@ import duckdb
 from data_contracts import (
     AdjustmentSemantics,
     CanonicalFact,
+    CoverageMode,
     DataContractError,
     DatasetSpec,
     FetchSemantics,
@@ -174,6 +175,7 @@ TUSHARE_DAILY_DATASET_SPEC = DatasetSpec(
     ),
     governance_revision_id=DATASET_CONTRACT_REVISION,
     required_temporal_fields=(TemporalSemantics.TRADE_DATE,),
+    coverage_mode=CoverageMode.SESSION_DENSE,
     point_in_time_supported=False,
     revision_semantics=RevisionSemantics.UNKNOWN,
     adjustment_semantics=AdjustmentSemantics.UNADJUSTED,

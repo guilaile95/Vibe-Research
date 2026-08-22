@@ -21,6 +21,7 @@ import short_term_limit_up_pool_adapter as pool_adapter
 from data_contracts import (
     AdjustmentSemantics,
     CanonicalFact,
+    CoverageMode,
     DataContractError,
     DatasetSpec,
     FetchSemantics,
@@ -160,6 +161,7 @@ LIMIT_UP_DATASET_SPEC = DatasetSpec(
     ),
     governance_revision_id=DATASET_CONTRACT_REVISION,
     required_temporal_fields=(TemporalSemantics.TRADE_DATE,),
+    coverage_mode=CoverageMode.SESSION_DENSE,
     point_in_time_supported=False,
     revision_semantics=RevisionSemantics.UNKNOWN,
     adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,
