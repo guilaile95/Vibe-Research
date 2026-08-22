@@ -4,7 +4,15 @@ from __future__ import annotations
 
 
 class PortfolioAdviceValidationError(ValueError):
-    """结构化结果无法校验时抛出。"""
+    """结构化结果无法校验时抛出。
+
+    stage 由 pipeline 按失败阶段回填（PIPELINE_STAGE_NAMES 之一），
+    消息本身为安全中文文案（含 code / 字段名 / 数字），可透传给用户。
+    """
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.stage: str | None = None
 
 
 # 对外 502 文案（固定安全字符串，不回传上游原始 body / 密钥）

@@ -173,14 +173,26 @@ def validate_portfolio_advice(
     *,
     generated_at: str | None = None,
 ) -> dict:
-    """按固定顺序运行 Schema、兼容、事实、政策、执行和文案阶段。"""
+    """按固定顺序运行 Schema、兼容、事实、政策、执行和文案阶段。
+
+    失败时 PortfolioAdviceValidationError.stage 标注确切阶段，
+    供上层输出结构化安全诊断（不再只剩「输出无效」）。
+    """
     state = PipelineState(ai_result, context, generated_at)
-    state = schema_validation(state)
-    state = legacy_compatibility(state)
-    state = fact_reconciliation(state)
-    state = policy_audit(state)
-    state = execution_calculation(state)
-    state = narrative_audit(state)
-    state = final_assembly(state)
+    for stage_name, stage_fn in (
+        ("schema_validation", schema_validation),
+        ("legacy_compatibility", legacy_compatibility),
+        ("fact_reconciliation", fact_reconciliation),
+        ("policy_audit", policy_audit),
+        ("execution_calculation", execution_calculation),
+        ("narrative_audit", narrative_audit),
+        ("final_assembly", final_assembly),
+    ):
+        try:
+            state = stage_fn(state)
+        except PortfolioAdviceValidationError as exc:
+            if exc.stage is None:
+                exc.stage = stage_name
+            raise
     assert state.result is not None
     return state.result

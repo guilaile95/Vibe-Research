@@ -189,9 +189,14 @@ def test_advice_model_output_error_502_generic(monkeypatch):
     r = client.post("/api/portfolio/advice", json={"llm": _LLM})
     assert r.status_code == 502
     detail = r.json()["detail"]
-    assert detail == "持仓建议模型输出无效"
-    assert "schema_version" not in detail
-    assert "secret" not in detail
+    # 结构化安全诊断：未显式提供 reason 时不得透传异常 message（可能含内部细节）
+    assert detail["message"] == "持仓建议模型输出无效"
+    assert detail["error_code"] == "PORTFOLIO_ADVICE_OUTPUT_INVALID"
+    assert detail["stage"] == "internal"
+    assert detail["reason"] == "持仓建议模型输出无效"
+    serialized = json.dumps(detail, ensure_ascii=False)
+    assert "schema_version" not in serialized
+    assert "secret" not in serialized
     assert "invalid model JSON" not in detail
 
 

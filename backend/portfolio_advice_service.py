@@ -43,7 +43,19 @@ class PortfolioAdviceModelError(RuntimeError):
 
 
 class PortfolioAdviceModelOutputError(ValueError):
-    """模型输出无法解析或未通过结构/执行约束校验。"""
+    """模型输出无法解析或未通过结构/执行约束校验。
+
+    stage / reason 是可安全展示的诊断字段：
+    - stage：json_parse 或 validator 失败阶段（PIPELINE_STAGE_NAMES 之一）；
+    - reason：固定安全中文文案（含 code / 字段名 / 数字），不含 prompt、
+      完整 raw output、路径、SQL、凭据或 traceback。
+    """
+
+    def __init__(self, message: str, *, stage: str = "internal", reason: str | None = None):
+        super().__init__(message)
+        self.stage = stage
+        # reason 必须显式传入安全文案；默认 None（不透传 message，防内部细节泄漏）
+        self.reason = reason
 
 
 class PortfolioAdvicePersistError(RuntimeError):
@@ -287,32 +299,51 @@ def _parse_model_json(text: Any) -> dict:
     拒绝：前后说明文字、数组顶层、单引号、截断、多对象等。
     """
     if text is None:
-        raise PortfolioAdviceModelOutputError(_EMPTY_OUTPUT_MSG)
+        raise PortfolioAdviceModelOutputError(
+            _EMPTY_OUTPUT_MSG, stage="json_parse", reason=_EMPTY_OUTPUT_MSG
+        )
     if not isinstance(text, str):
-        raise PortfolioAdviceModelOutputError(_INVALID_JSON_MSG)
+        raise PortfolioAdviceModelOutputError(
+            _INVALID_JSON_MSG, stage="json_parse", reason=_INVALID_JSON_MSG
+        )
 
     stripped = text.strip()
     if not stripped:
-        raise PortfolioAdviceModelOutputError(_EMPTY_OUTPUT_MSG)
+        raise PortfolioAdviceModelOutputError(
+            _EMPTY_OUTPUT_MSG, stage="json_parse", reason=_EMPTY_OUTPUT_MSG
+        )
 
     body: str
     if stripped.startswith("```"):
         inner = _strip_single_fence(stripped)
         if inner is None:
-            raise PortfolioAdviceModelOutputError(_INVALID_JSON_MSG)
+            raise PortfolioAdviceModelOutputError(
+                _INVALID_JSON_MSG, stage="json_parse", reason=_INVALID_JSON_MSG
+            )
         body = inner.strip()
         if not body:
-            raise PortfolioAdviceModelOutputError(_EMPTY_OUTPUT_MSG)
+            raise PortfolioAdviceModelOutputError(
+                _EMPTY_OUTPUT_MSG, stage="json_parse", reason=_EMPTY_OUTPUT_MSG
+            )
     else:
         body = stripped
 
     try:
         obj = json.loads(body)
     except (json.JSONDecodeError, TypeError, ValueError):
-        raise PortfolioAdviceModelOutputError(_INVALID_JSON_MSG) from None
+        reason = _INVALID_JSON_MSG
+        if not body.startswith("{"):
+            reason = "持仓建议模型输出不是合法的 JSON 对象（JSON 前后不得有说明文字或 Markdown）"
+        raise PortfolioAdviceModelOutputError(
+            _INVALID_JSON_MSG, stage="json_parse", reason=reason
+        ) from None
 
     if not isinstance(obj, dict):
-        raise PortfolioAdviceModelOutputError(_INVALID_JSON_MSG)
+        raise PortfolioAdviceModelOutputError(
+            _INVALID_JSON_MSG,
+            stage="json_parse",
+            reason="持仓建议模型输出顶层必须是 JSON 对象",
+        )
     return obj
 
 
@@ -391,9 +422,13 @@ def generate_portfolio_advice(
         raise PortfolioAdviceModelError(public_model_error_detail(exc)) from exc
 
     if raw_text is None:
-        raise PortfolioAdviceModelOutputError(_EMPTY_OUTPUT_MSG)
+        raise PortfolioAdviceModelOutputError(
+            _EMPTY_OUTPUT_MSG, stage="json_parse", reason=_EMPTY_OUTPUT_MSG
+        )
     if not isinstance(raw_text, str):
-        raise PortfolioAdviceModelOutputError(_INVALID_JSON_MSG)
+        raise PortfolioAdviceModelOutputError(
+            _INVALID_JSON_MSG, stage="json_parse", reason=_INVALID_JSON_MSG
+        )
 
     ai_result = _parse_model_json(raw_text)
 
@@ -409,12 +444,20 @@ def generate_portfolio_advice(
             prepared["portfolio"],
         )
     except PortfolioAdviceValidationError as exc:
-        raise PortfolioAdviceModelOutputError(_VALIDATOR_FAIL_MSG) from exc
+        # PortfolioAdviceValidationError 消息为安全中文文案（code/字段/数字），
+        # 连同 pipeline 标注的确切 stage 透传，用户可见「哪条规则失败」。
+        raise PortfolioAdviceModelOutputError(
+            _VALIDATOR_FAIL_MSG,
+            stage=exc.stage or "schema_validation",
+            reason=str(exc),
+        ) from exc
     except PortfolioAdviceModelOutputError:
         raise
     except Exception as exc:  # noqa: BLE001
-        # 非预期异常也包装为输出错误，避免泄漏内部细节
-        raise PortfolioAdviceModelOutputError(_VALIDATOR_FAIL_MSG) from exc
+        # 非预期异常不透传细节（可能含路径/内部结构）
+        raise PortfolioAdviceModelOutputError(
+            _VALIDATOR_FAIL_MSG, stage="internal", reason=_VALIDATOR_FAIL_MSG
+        ) from exc
 
     try:
         ai_result_service.save_portfolio_advice(
