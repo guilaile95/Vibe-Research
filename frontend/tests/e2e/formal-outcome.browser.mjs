@@ -611,6 +611,12 @@ async function run() {
       "RQ1 must not create queue persistence",
     );
 
+    const legacyAnalyticsRequests = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/api/decision-analytics/")) {
+        legacyAnalyticsRequests.push(request.url());
+      }
+    });
     await page.goto(`${frontend}/decision-performance?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "Formal Decision Outcome" }).waitFor();
     await page.getByTestId(`formal-outcome-${historyFillerIds[0]}`).getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
@@ -658,6 +664,26 @@ async function run() {
         && !message.includes("Failed to load resource: the server responded with a status of 404"),
     );
     assert.equal(actionableConsoleErrors.length, 0, actionableConsoleErrors.join("\n"));
+
+    // P1-REV1: 决策复盘面权威分离——Formal Outcome 是默认主内容；legacy 反馈分析
+    // 明确标记 Legacy、默认折叠；进入页面不触发 decision-analytics 请求，展开才加载。
+    assert.equal(await page.getByRole("heading", { name: "决策复盘", exact: true }).count(), 1);
+    assert.equal(
+      legacyAnalyticsRequests.length,
+      0,
+      `进入复盘页不应触发 legacy decision-analytics 请求：${legacyAnalyticsRequests.join(", ")}`,
+    );
+    const legacyToggle = page.getByTestId("legacy-analytics-toggle");
+    assert.ok(await legacyToggle.isVisible(), "legacy analytics 折叠开关应可见");
+    assert.match(await legacyToggle.innerText(), /Legacy/, "legacy 区域必须带 Legacy 标识");
+    assert.equal(await page.getByTestId("legacy-analytics-panel").count(), 0, "legacy analytics 默认折叠");
+    await legacyToggle.click();
+    await page.getByTestId("legacy-analytics-panel").waitFor();
+    await page.getByRole("heading", { name: "采纳率" }).waitFor();
+    assert.ok(
+      legacyAnalyticsRequests.length >= 3,
+      `展开 legacy analytics 应触发三组请求，实际：${legacyAnalyticsRequests.join(", ")}`,
+    );
 
     await page.reload({ waitUntil: "networkidle" });
     await page.getByTestId(`formal-outcome-${historyFillerIds[0]}`).getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
