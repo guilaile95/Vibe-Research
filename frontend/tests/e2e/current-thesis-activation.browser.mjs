@@ -234,15 +234,6 @@ async function runE2E() {
     };
     await page.route("**/api/**", async (route) => {
       const pathname = new URL(route.request().url()).pathname;
-      if (projectionMode === "binding-mismatch" && pathname.endsWith("/thesis-binding") && route.request().method() === "GET") {
-        const binding = await getJson(backendUrl, `/api/campaigns/${campaign.campaign_id}/thesis-binding`);
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({ data: { ...binding, campaign_id: "other-campaign" } }),
-        });
-        return;
-      }
       if (projectionMode === "unknown" && pathname.endsWith("/current-thesis") && route.request().method() === "GET") {
         const current = await getJson(backendUrl, `/api/campaigns/${campaign.campaign_id}/current-thesis`);
         await route.fulfill({
@@ -275,7 +266,20 @@ async function runE2E() {
       await proxyToBackend(route);
     });
     await page.route("**/api/campaigns/*/thesis-binding", async (route) => {
-      if (route.request().method() === "POST") calls.bind += 1;
+      if (route.request().method() === "POST") {
+        calls.bind += 1;
+        await proxyToBackend(route);
+        return;
+      }
+      if (projectionMode === "binding-mismatch" && route.request().method() === "GET") {
+        const binding = await getJson(backendUrl, `/api/campaigns/${campaign.campaign_id}/thesis-binding`);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ data: { ...binding, campaign_id: "other-campaign" } }),
+        });
+        return;
+      }
       await proxyToBackend(route);
     });
 
