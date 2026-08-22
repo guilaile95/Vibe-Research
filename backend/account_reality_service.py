@@ -41,6 +41,10 @@ _REASON_NOT_BOOTSTRAPPED = "NOT_BOOTSTRAPPED"
 _REASON_PRICING_PARTIAL = "PRICING_PARTIAL"
 _REASON_PRICING_UNAVAILABLE = "PRICING_UNAVAILABLE"
 _REASON_PRICING_MIXED_CUTOFF = "PRICING_MIXED_CUTOFF"
+_REASON_CASH_EFFECTIVE_AT_UNPROVEN = "CASH_EFFECTIVE_AT_UNPROVEN"
+_TEMPORAL_UNPROVEN = "UNPROVEN"
+_NAV_TEMPORAL_MIXED_UNPROVEN = "MIXED_UNPROVEN"
+_NAV_TEMPORAL_UNAVAILABLE = "UNAVAILABLE"
 
 
 class AccountRealityError(RuntimeError):
@@ -89,6 +93,9 @@ def _current_cash_fact() -> dict[str, Any]:
             "value": None,
             "source": _CASH_SOURCE_ACCOUNT_PROFILE,
             "updated_at": None,
+            "effective_at": None,
+            "temporal_status": _TEMPORAL_UNPROVEN,
+            "temporal_reason_code": _REASON_CASH_EFFECTIVE_AT_UNPROVEN,
             "fact_type": _FACT_MANUAL,
             "status": "UNKNOWN",
         }
@@ -96,6 +103,9 @@ def _current_cash_fact() -> dict[str, Any]:
         "value": round(float(profile["available_cash"]), 2),
         "source": _CASH_SOURCE_ACCOUNT_PROFILE,
         "updated_at": profile.get("updated_at"),
+        "effective_at": None,
+        "temporal_status": _TEMPORAL_UNPROVEN,
+        "temporal_reason_code": _REASON_CASH_EFFECTIVE_AT_UNPROVEN,
         "fact_type": _FACT_MANUAL,
         "status": "AVAILABLE",
     }
@@ -120,6 +130,9 @@ def _ledger_cash_candidate(derived: dict[str, Any]) -> dict[str, Any]:
             "source": _CASH_SOURCE_LEDGER,
             "coverage": _CASH_COVERAGE_TRADES_PLUS_CASH_EVENTS,
             "fact_type": _FACT_DERIVED,
+            "effective_at": None,
+            "temporal_status": _TEMPORAL_UNPROVEN,
+            "temporal_reason_code": _REASON_CASH_EFFECTIVE_AT_UNPROVEN,
             "status": "UNKNOWN",
             "reason_code": _REASON_NOT_BOOTSTRAPPED,
         }
@@ -130,6 +143,9 @@ def _ledger_cash_candidate(derived: dict[str, Any]) -> dict[str, Any]:
             "source": _CASH_SOURCE_LEDGER,
             "coverage": _CASH_COVERAGE_TRADES_PLUS_CASH_EVENTS,
             "fact_type": _FACT_DERIVED,
+            "effective_at": None,
+            "temporal_status": _TEMPORAL_UNPROVEN,
+            "temporal_reason_code": _REASON_CASH_EFFECTIVE_AT_UNPROVEN,
             "status": "UNKNOWN",
             "reason_code": _REASON_OPENING_CASH_UNKNOWN,
         }
@@ -177,6 +193,9 @@ def _ledger_cash_candidate(derived: dict[str, Any]) -> dict[str, Any]:
         "source": _CASH_SOURCE_LEDGER,
         "coverage": _CASH_COVERAGE_TRADES_PLUS_CASH_EVENTS,
         "fact_type": _FACT_DERIVED,
+        "effective_at": None,
+        "temporal_status": _TEMPORAL_UNPROVEN,
+        "temporal_reason_code": _REASON_CASH_EFFECTIVE_AT_UNPROVEN,
         "status": "AVAILABLE",
     }
 
@@ -366,6 +385,22 @@ def get_account_reality() -> dict[str, Any]:
     else:
         confidence = "LOW"
 
+    # 当前没有任何可信的 cash effective_at producer。即使 settled_nav 数值可计算，
+    # 也只能作为 pricing date + 未证明现金时间的 mixed candidate，不能给出统一 cutoff。
+    nav_temporal_state = (
+        _NAV_TEMPORAL_MIXED_UNPROVEN
+        if settled_nav is not None
+        else _NAV_TEMPORAL_UNAVAILABLE
+    )
+    nav_temporal_reason_codes = sorted({
+        _REASON_CASH_EFFECTIVE_AT_UNPROVEN,
+        *([nav_skip] if nav_skip else []),
+        *(
+            [_REASON_PRICING_MIXED_CUTOFF]
+            if pricing["status"] == "MIXED_CUTOFF"
+            else []
+        ),
+    })
     return {
         "account_status": derived.get("bootstrap_status", "UNKNOWN"),
         "canonical": False,
@@ -392,8 +427,12 @@ def get_account_reality() -> dict[str, Any]:
         "settled_nav": settled_nav,
         "nav_cash_source": _CASH_SOURCE_ACCOUNT_PROFILE if settled_nav is not None else None,
         "nav_reconciliation": nav_recon,
+        "nav_temporal_state": nav_temporal_state,
+        "nav_temporal_reason_codes": nav_temporal_reason_codes,
         "confidence": confidence,
         "reason_codes": sorted(set(reason_codes)),
-        "data_cutoff": pricing["unified_price_date"],
+        # pricing.unified_price_date 只描述收盘价事实；cash effective_at 未证明，
+        # 因而不能将其提升为统一账户 data_cutoff。
+        "data_cutoff": None,
         "as_of": _utc_now(),
     }
