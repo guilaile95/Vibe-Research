@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { ApiError, api, DECISION_CHALLENGE_DIMENSIONS, type DecisionChallengeDimensionInput, type DecisionChallengeDimensionName, type DecisionChallengePacket, type DecisionProposalDraftInput, type DecisionProposalPreview, type CommittedDecisionRuntimeRead } from "@/lib/api";
 import { VIEW_STANCE_LABELS, VIEW_STANCE_OPTIONS, buildJudgedView, buildPortfolioView, type ViewStance } from "@/lib/decisionProposalForm";
 import { hydratedHorizonValue, resolveDecisionContext, type DecisionContextHydrationResult } from "@/lib/decisionContextHydration";
+import { browserTimeZoneName, formatUtcOffsetMinutes, parseReviewBoundary } from "@/lib/reviewBoundaryInput";
 import type { CampaignRecord, CampaignThesisBinding, CampaignCurrentThesis, ThesisAggregate } from "@/lib/api";
 
 const challengeLabels: Record<DecisionChallengeDimensionName, string> = {
@@ -29,12 +30,6 @@ function splitLines(value: string): string[] {
     .split(/[,\n]/)
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function canonicalReviewBy(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) throw new Error("请填写有效的 review_by 时间");
-  return parsed.toISOString();
 }
 
 function evaluationOf(value: unknown): string {
@@ -84,7 +79,7 @@ export function DecisionProposalReview() {
   const [tradeStance, setTradeStance] = useState<ViewStance>("WAIT");
   const [tradeNote, setTradeNote] = useState("");
   const [portfolioConstraint, setPortfolioConstraint] = useState("");
-  const [reviewBy, setReviewBy] = useState("");
+  const [reviewByLocal, setReviewByLocal] = useState("");
   const [horizon, setHorizon] = useState("");
   const [campaign, setCampaign] = useState<CampaignRecord | null>(null);
   const [binding, setBinding] = useState<CampaignThesisBinding | null>(null);
@@ -164,22 +159,22 @@ export function DecisionProposalReview() {
     };
   }, [campaignId]);
 
+  // P1-DF3：review boundary 只来自用户在 datetime-local 控件里的显式选择；
+  // 过去时间等业务校验仍由 backend Preview authority 负责，这里不复制规则。
+  const reviewBoundary = useMemo(() => parseReviewBoundary(reviewByLocal), [reviewByLocal]);
+
   const draft = useMemo<DecisionProposalDraftInput | null>(() => {
-    if (!reviewBy || !horizon.trim()) return null;
-    try {
-      return {
-        asset_view: buildJudgedView("ASSET", assetStance, assetNote),
-        trade_view: buildJudgedView("TRADE", tradeStance, tradeNote),
-        portfolio_view: buildPortfolioView(portfolioConstraint),
-        review_by: canonicalReviewBy(reviewBy),
-        key_assumptions: splitLines(assumptions),
-        event_invalidation_conditions: splitLines(invalidations),
-        strategy_horizon: horizon.trim(),
-      };
-    } catch {
-      return null;
-    }
-  }, [assetStance, assetNote, tradeStance, tradeNote, portfolioConstraint, reviewBy, horizon, assumptions, invalidations]);
+    if (reviewBoundary.status !== "VALID" || !horizon.trim()) return null;
+    return {
+      asset_view: buildJudgedView("ASSET", assetStance, assetNote),
+      trade_view: buildJudgedView("TRADE", tradeStance, tradeNote),
+      portfolio_view: buildPortfolioView(portfolioConstraint),
+      review_by: reviewBoundary.iso,
+      key_assumptions: splitLines(assumptions),
+      event_invalidation_conditions: splitLines(invalidations),
+      strategy_horizon: horizon.trim(),
+    };
+  }, [assetStance, assetNote, tradeStance, tradeNote, portfolioConstraint, reviewBoundary, horizon, assumptions, invalidations]);
 
   const handlePreview = async () => {
     setError("");
@@ -189,7 +184,7 @@ export function DecisionProposalReview() {
     setChallengeConfirmed(false);
     setBindChallenge(false);
     if (!campaignId || !draft) {
-      setError("请先填写 review_by 与 strategy horizon。");
+      setError("请先选择 review 时间与填写 strategy horizon。");
       return;
     }
     setBusy("preview");
@@ -392,9 +387,19 @@ export function DecisionProposalReview() {
       </section>
 
       <section className="grid gap-4 rounded-lg border border-border/60 bg-background/35 p-4 sm:grid-cols-2">
-        <label className="text-xs text-muted-foreground">Review by（必填，显式用户字段）
-          <input aria-label="Review by" type="text" value={reviewBy} onChange={(event) => setReviewBy(event.target.value)} placeholder="2026-08-30T10:00:00Z" className={inputCls} />
-        </label>
+        <div className="text-xs text-muted-foreground">Review by（必填，由你显式选择；不自动生成）
+          <input aria-label="Review by" type="datetime-local" value={reviewByLocal} onChange={(event) => setReviewByLocal(event.target.value)} className={inputCls} />
+          <p className="mt-1 font-mono text-[10px] text-muted-foreground" data-review-by-canonical>
+            {reviewBoundary.status === "VALID" ? reviewBoundary.iso : "尚未选择有效 review 时间"}
+          </p>
+          <p className="text-[10px] text-muted-foreground" data-review-by-tz>
+            解析时区：{browserTimeZoneName()}
+            {reviewBoundary.status === "VALID"
+              ? `（${formatUtcOffsetMinutes(reviewBoundary.date.getTimezoneOffset())}）`
+              : "（选择时间后显示偏移）"}
+            ；上方为将提交的 canonical UTC 时间。
+          </p>
+        </div>
         <label className="text-xs text-muted-foreground">Strategy horizon（必填，显式用户字段）
           <input aria-label="Strategy horizon" value={horizon} onChange={(event) => { horizonTouched.current = true; setHorizon(event.target.value); }} placeholder="例如：2 至 4 周" className={inputCls} />
         </label>

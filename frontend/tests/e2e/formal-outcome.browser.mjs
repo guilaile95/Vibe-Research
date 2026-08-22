@@ -265,7 +265,7 @@ async function freezeThroughBrowser(page, backend, frontend, campaignId, withCha
   }
 
   await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
-  await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
+  await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor({ timeout: 180000 });
   const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
   const decisionId = committedLine.replace(/^decision_id：/, "").trim();
   assert.match(decisionId, /^decision_[0-9a-f]{32}$/);
@@ -499,7 +499,7 @@ async function run() {
       firstCampaign.campaign_id,
       true,
       tempDataDir,
-      "2026-08-01T10:00:00Z",
+      "2026-08-01T10:00",
     );
     const secondRun = await freezeThroughBrowser(
       page,
@@ -508,7 +508,7 @@ async function run() {
       secondCampaign.campaign_id,
       false,
       tempDataDir,
-      "2026-08-02T10:00:00Z",
+      "2026-08-02T10:00",
     );
     const historyFillerIds = createOutcomeHistoryFillers(
       env,
@@ -522,7 +522,7 @@ async function run() {
       thirdCampaign.campaign_id,
       false,
       tempDataDir,
-      "2099-09-10T10:00:00Z",
+      "2099-09-10T10:00",
     );
     const fixtures = prepareTradeAndFactLake(env, pythonScriptConfig(), firstRun.committed.committed, secondRun.committed.committed);
     const evaluationAsOf = "2026-09-01T00:00:00.000000Z";

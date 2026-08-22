@@ -308,7 +308,15 @@ async function run() {
       await page.locator('[data-horizon-source="CURRENT_THESIS"]').waitFor({ timeout: 30000 });
       assert.equal(await page.getByLabel("Strategy horizon").inputValue(), "10–30 个交易日");
     }
-    await page.getByLabel("Review by").fill("2026-08-30T10:00:00Z");
+    // P1-DF3：结构化 review boundary——用户显式选择本地时间，页面展示
+    // 解析时区与最终 canonical ISO；断言 canonical 确实等于所选时刻。
+    await page.getByLabel("Review by").fill("2026-08-30T10:00");
+    const expectedCanonicalIso = await page.evaluate(() => new Date("2026-08-30T10:00").toISOString());
+    const displayedCanonical = (await page.locator("[data-review-by-canonical]").innerText()).trim();
+    assert.equal(displayedCanonical, expectedCanonicalIso, "displayed canonical ISO must equal the user-selected local time");
+    assert.match(displayedCanonical, /Z$/);
+    const tzText = await page.locator("[data-review-by-tz]").innerText();
+    assert.match(tzText, /解析时区/);
     await page.getByLabel("Key assumptions").fill("流动性保持稳定");
     await page.getByLabel("Event invalidation conditions").fill("业绩发生重大反转");
     // P1-DF1：三视图结构化表单——普通用户零 JSON 完成输入
