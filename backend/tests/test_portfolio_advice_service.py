@@ -12,6 +12,7 @@ import portfolio_advice_prompt
 import portfolio_advice_service as svc
 import portfolio_advice_validator
 from portfolio_advice_service import (
+    PortfolioAdviceMarketDataError,
     PortfolioAdviceModelError,
     PortfolioAdviceModelOutputError,
     PortfolioAdviceUnavailableError,
@@ -258,6 +259,8 @@ def test_prepare_full_chain_and_structure():
 
 
 def test_prepare_fails_closed_when_holding_authority_is_unproven():
+    # 权威不可读必须走 503 service-unavailable 边界（MarketDataError），
+    # 不得包装成“空持仓”类 409（UnavailableError）。
     with (
         patch.object(
             svc.holding_authority,
@@ -266,7 +269,7 @@ def test_prepare_fails_closed_when_holding_authority_is_unproven():
         ),
         patch.object(svc.daily_review, "generate_daily_review") as daily_review,
     ):
-        with pytest.raises(PortfolioAdviceUnavailableError, match="持仓数据不完整"):
+        with pytest.raises(PortfolioAdviceMarketDataError, match="持仓权威不可读"):
             prepare_portfolio_advice_messages()
     daily_review.assert_not_called()
 

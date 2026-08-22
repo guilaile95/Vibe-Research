@@ -106,8 +106,6 @@ def read_portfolio_authority(*, include_metadata: bool = False) -> dict[str, Any
     """读取当前 Portfolio 投影，统一 CANONICAL/LEGACY authority 选择。"""
     state = get_holding_authority_state()
     if state == "ERROR":
-        if include_metadata:
-            return {"authority_state": state, "holding_authority": "UNKNOWN"}
         raise PositionDerivationError("Holding 权威不可读")
     if state == "CANONICAL":
         derived = derive_positions()

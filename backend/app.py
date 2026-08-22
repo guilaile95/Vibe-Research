@@ -716,6 +716,9 @@ _HOLDING_AUTHORITY_SWITCHED_DETAIL = (
 _HOLDING_AUTHORITY_UNPROVEN_DETAIL = (
     "HOLDING_AUTHORITY_UNPROVEN：无法确认 Holding 权威状态，已拒绝修改以避免产生第二份持仓事实。"
 )
+_HOLDING_AUTHORITY_UNPROVEN_READ_DETAIL = (
+    "HOLDING_AUTHORITY_UNPROVEN：持仓权威不可读，无法校验持仓建议的过期状态。"
+)
 
 
 def _reject_post_bootstrap_holding_mutation() -> None:
@@ -1634,6 +1637,9 @@ def get_ai_result(
         return {"data": result}
     except ai_result_service.AiResultValidationError:
         raise HTTPException(422, "AI结果查询参数无效") from None
+    except prs.PositionDerivationError:
+        # stale 校验依赖 canonical holdings；权威不可读时显式 503，不落入 generic 500。
+        raise HTTPException(503, _HOLDING_AUTHORITY_UNPROVEN_READ_DETAIL) from None
     except Exception:  # noqa: BLE001 — never expose path, SQL, payload, or traceback
         raise HTTPException(500, "AI结果读取失败") from None
 
