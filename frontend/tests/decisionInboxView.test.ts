@@ -28,6 +28,7 @@ import {
   visibleStateLabel,
   presentReasonCodes,
   formatCampaignIdShort,
+  formalDecisionNextSteps,
 } from "../src/lib/decisionInbox.ts";
 import type {
   CampaignRecord,
@@ -341,6 +342,37 @@ test("destructive transition styling uses terminal classification, not a copied 
   assert.equal(isDestructiveTransition("RESEARCHING"), false);
   assert.equal(isDestructiveTransition("ACTIVE"), false);
 });
+
+test("EVALUATED exposes review first and a separate explicit new-decision entry", () => {
+  const steps = formalDecisionNextSteps("EVALUATED", "campaign_abc/unsafe");
+  assert.deepEqual(steps, [
+    {
+      kind: "review",
+      label: "打开决策复盘",
+      href: "/decision-performance",
+    },
+    {
+      kind: "new-decision",
+      label: "形成新的 Formal Decision",
+      href: "/campaigns/campaign_abc%2Funsafe/decision-proposal",
+    },
+  ]);
+});
+
+test("NOT_EVALUATED keeps only the existing proposal workflow", () => {
+  for (const evaluation of ["NOT_EVALUATED", "UNKNOWN", "ERROR"]) {
+    assert.deepEqual(formalDecisionNextSteps(evaluation, "campaign_demo"), [
+      {
+        kind: "proposal",
+        label: "打开 Formal Decision Review",
+        href: "/campaigns/campaign_demo/decision-proposal",
+      },
+    ]);
+  }
+  assert.deepEqual(formalDecisionNextSteps(null, "campaign_demo"), []);
+  assert.deepEqual(formalDecisionNextSteps(undefined, "campaign_demo"), []);
+});
+
 
 test("setup campaigns sort deterministically by security_code → created_at → campaign_id", () => {
   const universe = ["000001", "600519"];
