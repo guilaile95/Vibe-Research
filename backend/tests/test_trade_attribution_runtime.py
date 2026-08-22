@@ -132,6 +132,25 @@ def test_invalid_witness_scan_state_does_not_look_like_empty(runtime_env, monkey
     assert scan["reason_codes"] == ["FROZEN_DECISION_WITNESS_INVALID"]
 
 
+def test_mixed_valid_and_invalid_witness_fails_closed(runtime_env, monkeypatch):
+    valid, trade = _setup(runtime_env)
+    invalid = deepcopy(valid)
+    invalid["decision_id"] = "decision_" + "d" * 32
+    invalid["snapshot_hash"] = "0" * 64
+    monkeypatch.setattr(
+        runtime.frozen_decision_service,
+        "list_decisions",
+        lambda **_kwargs: [valid, invalid],
+    )
+
+    scan = runtime.scan_candidates(trade["trade_id"])
+
+    assert scan["scan_state"] == "INVALID_WITNESS"
+    assert scan["scan_state"] != "COMPLETE"
+    assert scan["candidates"] == []
+    assert "FROZEN_DECISION_WITNESS_INVALID" in scan["reason_codes"]
+
+
 def test_explicit_attribution_is_exact_and_replay_is_idempotent(runtime_env):
     decision, trade = _setup(runtime_env)
     first = runtime.attribute(trade["trade_id"], {"decision_id": decision["decision_id"]})
@@ -269,9 +288,11 @@ def test_candidate_pagination_reaches_page_after_500(runtime_env, monkeypatch):
         return []
 
     monkeypatch.setattr(runtime.frozen_decision_service, "list_decisions", paged)
-    candidates = runtime.list_candidates(trade["trade_id"])
+    scan = runtime.scan_candidates(trade["trade_id"])
     assert calls == [0, 500]
-    assert [item["decision_id"] for item in candidates] == [decision["decision_id"]]
+    assert scan["scan_state"] == "INVALID_WITNESS"
+    assert scan["candidates"] == []
+    assert "FROZEN_DECISION_WITNESS_INVALID" in scan["reason_codes"]
 
 
 def test_exact_trade_lookup_survives_more_than_500_other_attributions(runtime_env):

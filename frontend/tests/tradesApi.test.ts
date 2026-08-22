@@ -133,6 +133,24 @@ test("TAR1 reads reconciliation and candidates from backend authority", async ()
   assert.deepEqual(scan.candidates, []);
 });
 
+test("TAR1 keeps invalid witness scans non-complete and machine-readable", async () => {
+  reset({
+    status: 200,
+    body: {
+      data: {
+        candidates: [],
+        scan_state: "INVALID_WITNESS",
+        reason_codes: ["FROZEN_DECISION_WITNESS_INVALID"],
+      },
+    },
+  });
+  const scan = await api.listTradeAttributionCandidates("trade/1");
+  assert.notEqual(scan.scan_state, "COMPLETE");
+  assert.equal(scan.scan_state, "INVALID_WITNESS");
+  assert.deepEqual(scan.candidates, []);
+  assert.ok(scan.reason_codes.includes("FROZEN_DECISION_WITNESS_INVALID"));
+});
+
 test("TAR1 writes only decision_id or explicit confirm", async () => {
   reset({ status: 200, body: { data: { record: {}, idempotent: false } } });
   await api.attributeTrade("trade/1", "decision_1");

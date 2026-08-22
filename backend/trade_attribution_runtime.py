@@ -124,16 +124,23 @@ def scan_candidates(trade_id: str) -> dict[str, Any]:
             continue
         if _eligible(decision, trade):
             output.append(_candidate_item(decision))
+    if invalid_witness_count:
+        return {
+            "candidates": [],
+            "scan_state": "INVALID_WITNESS",
+            "reason_codes": ["FROZEN_DECISION_WITNESS_INVALID"],
+        }
     if output:
-        state = "COMPLETE"
-        reasons = []
-    elif invalid_witness_count:
-        state = "INVALID_WITNESS"
-        reasons = ["FROZEN_DECISION_WITNESS_INVALID"]
-    else:
-        state = "COMPLETE_EMPTY"
-        reasons = ["NO_ELIGIBLE_CANDIDATE"]
-    return {"candidates": output, "scan_state": state, "reason_codes": reasons}
+        return {
+            "candidates": output,
+            "scan_state": "COMPLETE",
+            "reason_codes": [],
+        }
+    return {
+        "candidates": [],
+        "scan_state": "COMPLETE_EMPTY",
+        "reason_codes": ["NO_ELIGIBLE_CANDIDATE"],
+    }
 
 
 def list_candidates(trade_id: str) -> list[dict[str, Any]]:
