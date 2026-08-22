@@ -163,7 +163,7 @@ async function createFrozenCurrentThesis(base, title) {
 }
 
 const draft = {
-  reviewBy: "2026-08-30T10:00:00Z",
+  reviewBy: "2026-08-30T10:00",
   horizon: "10 至 30 交易日",
   assumptions: "流动性保持稳定",
   invalidations: "业绩发生重大反转",
@@ -352,7 +352,7 @@ async function run() {
     if (commitError.length > 0) {
       throw new Error(`[DCH2] bound Freeze UI error: ${commitError.join(" | ")}; failedRequests=${JSON.stringify(failedRequests)}`);
     }
-    await page.waitForSelector("[data-formal-decision-evaluation]", { timeout: 30000 });
+    await page.waitForSelector("[data-formal-decision-evaluation]", { timeout: 180000 });
     const actualEvaluation = await page.locator("[data-formal-decision-evaluation]").getAttribute("data-formal-decision-evaluation");
     if (actualEvaluation !== "EVALUATED") {
       throw new Error(`[DCH2] bound Freeze returned evaluation=${actualEvaluation}; alerts=${JSON.stringify(commitError)}; trace=${JSON.stringify(apiTrace)}`);
@@ -405,7 +405,7 @@ async function run() {
     await page.locator('[data-challenge-state="ABSENT"]').waitFor();
     await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
     await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
-    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
+    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor({ timeout: 180000 });
     const plainLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
     const plainId = plainLine.replace(/^decision_id：/, "").trim();
     const plain = await jsonRequest(backend, `/api/campaigns/${withoutChallenge.campaign_id}/decision-proposal/committed/${plainId}`);

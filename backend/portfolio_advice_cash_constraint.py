@@ -16,13 +16,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from account_execution_policy import get_account_execution_policy
+from account_execution_policy import (
+    get_account_execution_policy,
+    get_account_execution_policy_status,
+)
 from portfolio_advice_contracts import LOT_SIZE
 from portfolio_advice_execution import compute_estimated_amount, floor_to_lot
 from portfolio_advice_policy import CASH_RESERVE_PCT
 
 # 未配置账户：无法形成可执行加仓数量（方向性 action 仍保留）
 _LIMITATION_UNCONFIGURED = "未配置账户资金，无法形成可执行加仓数量"
+_LIMITATION_POLICY_CORRUPTED = "账户执行策略文件读取失败或损坏，未计算可执行加仓数量"
 _LIMITATION_INSUFFICIENT = (
     "可用现金不足（已预留可用现金安全垫），本次加仓无法形成可执行数量"
 )
@@ -129,18 +133,36 @@ def apply_available_cash_constraints(result: dict) -> dict:
     if not isinstance(holdings, list):
         return result
 
-    policy = get_account_execution_policy()
-    lot_unit = int(policy.get("lot_size", LOT_SIZE))
+    policy_status = get_account_execution_policy_status()
+    result["execution_policy"] = {
+        "status": policy_status["status"],
+        "reason_code": policy_status.get("reason_code"),
+    }
 
     top_limitations = list(result.get("data_limitations") or [])
-    funding_valid, remaining = _funding_usable_cash(result, policy=policy)
-
     add_indices = [
         i
         for i, h in enumerate(holdings)
         if isinstance(h, dict) and h.get("action") == "add"
     ]
     has_add = len(add_indices) > 0
+
+    if policy_status["status"] == "corrupted":
+        if has_add:
+            result["holdings"] = [
+                _null_add_executables(item)
+                if isinstance(item, dict) and item.get("action") == "add"
+                else dict(item) if isinstance(item, dict) else item
+                for item in holdings
+            ]
+            _append_limitation(top_limitations, _LIMITATION_POLICY_CORRUPTED)
+        result["data_limitations"] = top_limitations
+        return result
+
+    policy = policy_status["data"]
+    lot_unit = int(policy.get("lot_size", LOT_SIZE))
+    funding_valid, remaining = _funding_usable_cash(result, policy=policy)
+
     multi_add = len(add_indices) > 1
 
     # 1) 账户未配置：方向保留，可执行数量/金额清空

@@ -19,6 +19,10 @@ export function worklistLabel(filter: FormalReviewWorklistFilter): string {
   return "Authority unavailable";
 }
 
+export function frozenDecisionNbaLabel(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value : "UNKNOWN";
+}
+
 export function mergeOutcomeItem(
   items: readonly FormalDecisionOutcome[],
   outcome: FormalDecisionOutcome,

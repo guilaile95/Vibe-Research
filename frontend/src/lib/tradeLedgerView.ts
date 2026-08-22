@@ -110,6 +110,78 @@ export function formatTradePercentage(val: number | null | undefined): string {
   })}%`;
 }
 
+export interface TradeExecutionTimePreview {
+  localValue: string;
+  timeZone: string;
+  utcOffset: string;
+  canonicalUtcIso: string;
+}
+
+function parseTradeExecutionTime(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+  if (!match) return null;
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = secondText ? Number(secondText) : 0;
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
+    return null;
+  }
+
+  const parsed = new Date(0);
+  parsed.setFullYear(year, month - 1, day);
+  parsed.setHours(hour, minute, second, 0);
+  if (
+    parsed.getFullYear() !== year
+    || parsed.getMonth() !== month - 1
+    || parsed.getDate() !== day
+    || parsed.getHours() !== hour
+    || parsed.getMinutes() !== minute
+    || parsed.getSeconds() !== second
+  ) {
+    return null;
+  }
+  return parsed;
+}
+
+export function canonicalizeTradeExecutionTime(value: string | null | undefined): string | null {
+  const parsed = parseTradeExecutionTime(value);
+  return parsed ? parsed.toISOString() : null;
+}
+
+function formatUtcOffset(date: Date): string {
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absoluteMinutes = Math.abs(offsetMinutes);
+  const hours = String(Math.floor(absoluteMinutes / 60)).padStart(2, "0");
+  const minutes = String(absoluteMinutes % 60).padStart(2, "0");
+  return `UTC${sign}${hours}:${minutes}`;
+}
+
+export function getTradeExecutionTimePreview(value: string | null | undefined): TradeExecutionTimePreview | null {
+  const parsed = parseTradeExecutionTime(value);
+  if (!parsed) return null;
+
+  let timeZone = "浏览器本地时区";
+  try {
+    timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || timeZone;
+  } catch {
+    // Keep the explicit fallback when the runtime does not report an IANA zone.
+  }
+
+  return {
+    localValue: value as string,
+    timeZone,
+    utcOffset: formatUtcOffset(parsed),
+    canonicalUtcIso: parsed.toISOString(),
+  };
+}
+
 export function formatTradeTime(isoStr: string | null | undefined): string {
   if (!isoStr) return "—";
   try {
@@ -165,7 +237,7 @@ export function validateTradeDraft(draft: TradeDraft): string | null {
     if (!draft.executed_at) {
       return "已全部执行状态下，成交时间不能为空";
     }
-    if (!Number.isFinite(new Date(draft.executed_at).getTime())) {
+    if (!canonicalizeTradeExecutionTime(draft.executed_at)) {
       return "已全部执行状态下，成交时间不合法";
     }
     if (plannedQty != null && plannedQty > 0 && actualQty !== plannedQty) {
@@ -190,7 +262,7 @@ export function validateTradeDraft(draft: TradeDraft): string | null {
     if (!draft.executed_at) {
       return "部分执行状态下，成交时间不能为空";
     }
-    if (!Number.isFinite(new Date(draft.executed_at).getTime())) {
+    if (!canonicalizeTradeExecutionTime(draft.executed_at)) {
       return "部分执行状态下，成交时间不合法";
     }
     if (!draft.unexecuted_reason || !draft.unexecuted_reason.trim()) {
@@ -234,14 +306,9 @@ export function buildTradeCreateInput(draft: TradeDraft): TradeCreateInput {
   const actualPrice = isNotExecuted ? null : (draft.actual_price != null && draft.actual_price !== "" ? Number(draft.actual_price) : null);
   const actualQty = isNotExecuted ? 0 : (draft.actual_quantity != null && draft.actual_quantity !== "" ? Number(draft.actual_quantity) : 0);
 
-  let executedAt: string | null = null;
-  if (!isNotExecuted && draft.executed_at) {
-    try {
-      executedAt = new Date(draft.executed_at).toISOString();
-    } catch {
-      executedAt = draft.executed_at;
-    }
-  }
+  const executedAt = isNotExecuted
+    ? null
+    : canonicalizeTradeExecutionTime(draft.executed_at);
 
   const fee = isNotExecuted ? 0 : (draft.fee != null && draft.fee !== "" ? Number(draft.fee) : 0);
   const otherCost = isNotExecuted ? 0 : (draft.other_cost != null && draft.other_cost !== "" ? Number(draft.other_cost) : 0);

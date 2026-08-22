@@ -12,6 +12,7 @@ import {
   type PortfolioAdviceAccountAction,
   type PortfolioAdviceConfidence,
   type AccountProfileData,
+  type AccountProfileStatus,
   type AccountFundingData,
   type AccountReality,
   type DataHealthRecordDto,
@@ -184,11 +185,11 @@ function TruncatedNotes({ title, items }: { title: string; items: string[] }) {
 }
 
 function AccountFundingCard({ funding, corrupted }: { funding?: AccountFundingData | null; corrupted?: boolean }) {
-  if (corrupted) {
+  if (corrupted || funding?.status === "corrupted") {
     return (
       <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive flex items-center gap-2">
         <AlertCircle className="h-4 w-4 shrink-0" />
-        <span>账户资金配置文件读取失败或损坏，未计算账户级仓位指标。</span>
+        <span>账户资金配置文件读取失败或损坏，未计算账户级仓位指标。不会自动修复。</span>
       </div>
     );
   }
@@ -385,6 +386,7 @@ export function Portfolio() {
   // 账户资金（手工填写）
   const [acct, setAcct] = useState<AccountProfileData | null>(null);
   const [acctConfigured, setAcctConfigured] = useState(false);
+  const [acctStatus, setAcctStatus] = useState<AccountProfileStatus>("not_configured");
   const [acctLoading, setAcctLoading] = useState(false);
   const [acctLoadError, setAcctLoadError] = useState<string | null>(null);
   // P1-CASH1：canonical ledger cash readback（bootstrap 后无需重复填写即可见正常资金状态）。
@@ -445,7 +447,8 @@ export function Portfolio() {
       const resp = await api.getAccountProfile();
       // resp 现在是 AccountProfileResponse（{configured, data}），
       // 因为 getAccountProfile 使用 unwrapData=false。
-      if (resp.configured && resp.data) {
+      setAcctStatus(resp.status);
+      if (resp.status === "valid" && resp.configured && resp.data) {
         setAcctConfigured(true);
         setAcct(resp.data);
       } else {
@@ -595,7 +598,8 @@ export function Portfolio() {
     try {
       const resp = await api.saveAccountProfile({ total_assets: total, available_cash: cash });
       // resp 现在是 AccountProfileResponse（由于使用了 unwrapData=false）。
-      if (resp.configured && resp.data) {
+      if (resp.status === "valid" && resp.configured && resp.data) {
+        setAcctStatus("valid");
         setAcctConfigured(true);
         setAcct(resp.data);
         setAcctOpen(false);
@@ -696,7 +700,7 @@ export function Portfolio() {
   // candidate 语义；两者同存时显示对账状态，不互相覆盖。settled NAV 仍依赖手工快照。
   const ledgerCash = acctReality?.cash?.ledger_candidate;
   const ledgerCashAvailable =
-    !acctConfigured && ledgerCash?.status === "AVAILABLE" && typeof ledgerCash.value === "number";
+    acctStatus === "not_configured" && !acctConfigured && ledgerCash?.status === "AVAILABLE" && typeof ledgerCash.value === "number";
   const summary = advice?.portfolio_summary;
   const account = advice?.account_action;
 
@@ -720,7 +724,7 @@ export function Portfolio() {
         <div data-testid="portfolio-authority-banner" data-authority="LEDGER_DERIVED"
           className="mb-4 flex items-start gap-2 rounded-lg border border-primary/25 bg-primary/5 p-3 text-xs text-muted-foreground">
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-          <span>持仓权威：<b className="text-foreground">Position Ledger（canonical）</b>。当前持仓数量与成本由成交账本派生，与 Decision Inbox 同一权威；请通过 <b className="text-foreground">Trades 成交录入</b>或 Position Correction 维护持仓，手动录入/编辑已停用。旧 portfolio.json 仅作为归档与对账证据保留。</span>
+          <span>持仓权威：<b className="text-foreground">Position Ledger（canonical）</b>。当前持仓数量与成本由成交账本派生，与 Decision Inbox 同一权威；手动录入/编辑已停用。旧 portfolio.json 仅作为只读 legacy archive 与对账证据保留。只有独立确认 Position Ledger 本身有误时，才考虑通过 Trades 或 Position Correction 修正当前账本。</span>
         </div>
       ) : holdingAuthority === "UNKNOWN" ? (
         <div data-testid="portfolio-authority-banner" data-authority="UNKNOWN"
@@ -738,10 +742,27 @@ export function Portfolio() {
 
       {canonicalHoldings && mismatchRows.length > 0 && (
         <div data-testid="portfolio-mismatch-banner"
-          className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-          <p className="font-medium">持仓对账不一致（{mismatchRows.length} 条）</p>
+          data-reconciliation="LEGACY_ARCHIVE_DIVERGENCE"
+          className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-800 dark:text-amber-200">
+          <p className="font-medium">Legacy archive 对账差异（{mismatchRows.length} 条）</p>
           <p className="mt-1 leading-5">
-            {mismatchRows.map((i) => `${i.code}: ${i.status}${i.reason ? `（${i.reason}）` : ""}`).join("；")}。以 Position Ledger 为准；legacy 归档不会被自动修改，请通过 Position Correction 或补录成交处理分歧。
+            Position Ledger 是 post-bootstrap 的当前持仓事实；portfolio.json 仅作为只读 legacy archive / reconciliation evidence。以下差异表示当前账本与归档快照不同，不表示当前持仓初始化失败，也不要求修改 Position Ledger 去匹配 archive。
+          </p>
+          <ul className="mt-2 space-y-1.5">
+            {mismatchRows.map((i) => (
+              <li key={`${i.code}-${i.status}`} data-testid={`portfolio-reconciliation-${i.code}`}>
+                <span className="font-mono">{i.code}</span>：{i.status}
+                {i.reason ? `（${i.reason}）` : ""}
+                {(i.status === "MISMATCH" || i.status === "MISSING_IN_PORTFOLIO" || i.status === "MISSING_IN_LEDGER") && (
+                  <span className="ml-1 text-amber-700/80 dark:text-amber-200/80">
+                    [Ledger {fmtShares(i.ledger_shares)} 股 / {fmt(i.ledger_cost)}；archive {fmtShares(i.portfolio_shares)} 股 / {fmt(i.portfolio_cost)}]
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 leading-5 text-amber-700/80 dark:text-amber-200/80">
+            archive 不会被自动写入、同步或覆盖。只有在你独立确认 Position Ledger 本身有误时，才考虑使用 Position Correction 或补录成交；不要为了消除 archive 差异而修改当前账本。
           </p>
         </div>
       )}
@@ -783,6 +804,21 @@ export function Portfolio() {
               重试
             </button>
           </div>
+        ) : acctStatus === "corrupted" ? (
+          <div data-testid="account-profile-corrupted" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+            <div className="flex items-start gap-2 text-sm text-destructive">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">账户资金快照损坏/不可读取</p>
+                <p className="mt-1 text-xs">账户资金事实已停止使用，不会自动修复；请确认文件后显式重新填写。</p>
+                <p className="mt-1 font-mono text-[11px]">ACCOUNT_PROFILE_CORRUPTED</p>
+              </div>
+            </div>
+            <button onClick={openAcct}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
+              重新填写
+            </button>
+          </div>
         ) : acctConfigured && acct ? (
           <div className="flex flex-wrap items-end gap-4">
             <div>
@@ -809,7 +845,7 @@ export function Portfolio() {
               )}
             </div>
             <div className="ml-auto flex flex-col items-end gap-1">
-              <span className="text-[11px] text-muted-foreground/60">更新于 {acct.updated_at}</span>
+              <span className="text-[11px] text-muted-foreground/60">快照保存于 {acct.updated_at}（provenance，非资金 effective_at）</span>
               <button onClick={openAcct}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25">
                 编辑
@@ -868,6 +904,28 @@ export function Portfolio() {
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25">
               填写账户资金
             </button>
+          </div>
+        )}
+        {acctReality?.nav_temporal_state && (
+          <div
+            data-testid="account-nav-temporal-state"
+            data-nav-temporal-state={acctReality.nav_temporal_state}
+            className={cn(
+              "mt-3 rounded-md border p-2 text-[11px] leading-4",
+              acctReality.nav_temporal_state === "MIXED_UNPROVEN"
+                ? "border-amber-500/25 bg-amber-500/5 text-amber-700 dark:text-amber-200"
+                : "border-border/60 bg-black/5 text-muted-foreground",
+            )}
+          >
+            {acctReality.nav_temporal_state === "MIXED_UNPROVEN" ? (
+              <>
+                <b>{acctReality.nav_temporal_state}：settled NAV 是 mixed/unproven temporal candidate</b>：价格日期
+                {acctReality.pricing?.unified_price_date ? ` ${acctReality.pricing.unified_price_date}` : ""}
+                与现金的 effective_at 未证明，不能视为统一 cutoff 下的正式账户事实。
+              </>
+            ) : (
+              <>settled NAV temporal state：{acctReality.nav_temporal_state}；统一账户时间截面不可用，未知不作正常事实展示。</>
+            )}
           </div>
         )}
         <p className="mt-2 text-[11px] text-muted-foreground/60">手工填写、存在本地，不上传、不进仓库。用于后续持仓建议参考（本轮仅维护展示）。</p>
@@ -995,7 +1053,7 @@ export function Portfolio() {
       {canonicalHoldings ? (
         <GlassCard className="mb-4" data-testid="portfolio-legacy-entry-disabled">
           <p className="text-xs text-muted-foreground">
-            手动添加持仓已停用：当前持仓由 Position Ledger 权威维护。请到 <b className="text-foreground">Trades</b> 页录入成交，或使用 Position Correction 修正期初持仓。
+            手动添加持仓已停用：当前持仓由 Position Ledger 权威维护。只有在独立确认当前账本本身有误时，才考虑到 <b className="text-foreground">Trades</b> 页录入成交或使用 Position Correction；不要为了匹配 legacy archive 修改当前账本。
           </p>
         </GlassCard>
       ) : (
@@ -1244,7 +1302,7 @@ export function Portfolio() {
             {/* 账户资金参考 */}
             <AccountFundingCard
               funding={advice.account_funding}
-              corrupted={advice.data_limitations?.some((l) => l.includes("读取失败或损坏"))}
+              corrupted={advice.account_funding?.status === "corrupted"}
             />
 
             {/* 账户级建议 */}

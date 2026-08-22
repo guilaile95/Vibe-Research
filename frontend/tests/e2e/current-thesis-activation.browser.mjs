@@ -207,23 +207,56 @@ async function runE2E() {
     browser = await chromium.launch({ executablePath: findChromium(), headless: true });
     const page = await browser.newPage();
     const consoleErrors = [];
+    const errorResponses = [];
     const notFoundResponses = [];
     page.on("console", (message) => {
       if (message.type() === "error") consoleErrors.push(message.text());
     });
     page.on("response", (response) => {
-      if (response.status() !== 404) return;
+      if (response.status() < 400) return;
       const request = response.request();
       const url = new URL(response.url());
-      notFoundResponses.push({ method: request.method(), pathname: url.pathname });
+      errorResponses.push({ method: request.method(), pathname: url.pathname, status: response.status() });
+      if (response.status() === 404) {
+        notFoundResponses.push({ method: request.method(), pathname: url.pathname });
+      }
     });
 
     const calls = { begin: 0, confirm: 0, freeze: 0, bind: 0 };
+    let projectionMode = "normal";
+    const decisionProposalMutations = [];
+    page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      const pathname = new URL(request.url()).pathname;
+      if (/\/api\/campaigns\/[^/]+\/decision-proposal\/(preview|commit)$/.test(pathname)) {
+        decisionProposalMutations.push(pathname);
+      }
+    });
     const proxyToBackend = (route) => {
       const url = new URL(route.request().url());
       return route.continue({ url: `${backendUrl}${url.pathname}${url.search}` });
     };
-    await page.route("**/api/**", proxyToBackend);
+    await page.route("**/api/**", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (projectionMode === "unknown" && pathname.endsWith("/current-thesis") && route.request().method() === "GET") {
+        const current = await getJson(backendUrl, `/api/campaigns/${campaign.campaign_id}/current-thesis`);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ data: { ...current, effective_state: "UNKNOWN" } }),
+        });
+        return;
+      }
+      if (projectionMode === "error" && pathname.endsWith("/current-thesis") && route.request().method() === "GET") {
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "projection mismatch" }),
+        });
+        return;
+      }
+      await proxyToBackend(route);
+    });
     await page.route("**/api/thesis/*/begin-formalization", async (route) => {
       calls.begin += 1;
       await proxyToBackend(route);
@@ -237,7 +270,20 @@ async function runE2E() {
       await proxyToBackend(route);
     });
     await page.route("**/api/campaigns/*/thesis-binding", async (route) => {
-      if (route.request().method() === "POST") calls.bind += 1;
+      if (route.request().method() === "POST") {
+        calls.bind += 1;
+        await proxyToBackend(route);
+        return;
+      }
+      if (projectionMode === "binding-mismatch" && route.request().method() === "GET") {
+        const binding = await getJson(backendUrl, `/api/campaigns/${campaign.campaign_id}/thesis-binding`);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ data: { ...binding, campaign_id: "other-campaign" } }),
+        });
+        return;
+      }
       await proxyToBackend(route);
     });
 
@@ -383,6 +429,27 @@ async function runE2E() {
     await thesisCard.getByText("已绑定", { exact: true }).waitFor();
     await thesisCard.getByText("已冻结", { exact: false }).waitFor();
     await thesisCard.getByText("Current 状态：STABLE", { exact: true }).waitFor();
+    const reviewCta = thesisCard.getByTestId("formal-decision-review-cta");
+    await reviewCta.waitFor();
+    assert.equal(
+      await reviewCta.getAttribute("href"),
+      `/campaigns/${encodeURIComponent(campaign.campaign_id)}/decision-proposal`,
+    );
+    assert.deepEqual(calls, { begin: 1, confirm: 1, freeze: 1, bind: 1 });
+    assert.deepEqual(decisionProposalMutations, []);
+
+    await page.reload({ waitUntil: "networkidle" });
+    const reloadedThesisCard = page.locator(`[data-campaign-thesis="${campaign.campaign_id}"]`);
+    await reloadedThesisCard.getByText("已绑定", { exact: true }).waitFor();
+    await reloadedThesisCard.getByTestId("formal-decision-review-cta").waitFor();
+    assert.deepEqual(calls, { begin: 1, confirm: 1, freeze: 1, bind: 1 });
+    assert.deepEqual(decisionProposalMutations, []);
+
+    await reloadedThesisCard.getByTestId("formal-decision-review-cta").click();
+    await page.locator(`[data-decision-proposal-page="${campaign.campaign_id}"]`).waitFor();
+    await page.getByTestId("decision-inbox-secondary-entry").waitFor();
+    assert.deepEqual(calls, { begin: 1, confirm: 1, freeze: 1, bind: 1 });
+    assert.deepEqual(decisionProposalMutations, []);
 
     const binding = await getJson(
       backendUrl,
@@ -414,20 +481,51 @@ async function runE2E() {
     assert.deepEqual(current.deltas, []);
     assert.equal(current.effective_state, "STABLE");
 
+    await page.goto(`${frontendUrl}/decision-inbox`, { waitUntil: "networkidle" });
+    const gatedThesisCard = page.locator(`[data-campaign-thesis="${campaign.campaign_id}"]`);
+
+    projectionMode = "binding-mismatch";
+    await page.reload({ waitUntil: "networkidle" });
+    await gatedThesisCard.getByText("已绑定", { exact: true }).waitFor();
+    assert.equal(await gatedThesisCard.getByTestId("formal-decision-review-cta").count(), 0);
+
+    projectionMode = "unknown";
+    await page.reload({ waitUntil: "networkidle" });
+    await gatedThesisCard.getByText("Current 状态：UNKNOWN", { exact: true }).waitFor();
+    assert.equal(await gatedThesisCard.getByTestId("formal-decision-review-cta").count(), 0);
+
+    projectionMode = "error";
+    await page.reload({ waitUntil: "networkidle" });
+    await gatedThesisCard.getByRole("alert").waitFor();
+    assert.equal(await gatedThesisCard.getByTestId("formal-decision-review-cta").count(), 0);
+    assert.deepEqual(calls, { begin: 1, confirm: 1, freeze: 1, bind: 1 });
+    assert.deepEqual(decisionProposalMutations, []);
+
+    projectionMode = "normal";
     const expectedUnboundBindingPath = `/api/campaigns/${campaign.campaign_id}/thesis-binding`;
-    const unexpected404Responses = notFoundResponses.filter(
-      ({ method, pathname }) => method !== "GET" || pathname !== expectedUnboundBindingPath,
+    const expectedProjectionErrorPath = `/api/campaigns/${campaign.campaign_id}/current-thesis`;
+    const unexpectedErrorResponses = errorResponses.filter(
+      ({ method, pathname, status }) => !(
+        method === "GET"
+        && pathname === expectedUnboundBindingPath
+        && status === 404
+      ) && !(
+        method === "GET"
+        && pathname === expectedProjectionErrorPath
+        && status === 409
+      ),
     );
-    assert.deepEqual(unexpected404Responses, [], `unexpected browser 404 responses: ${JSON.stringify(notFoundResponses)}`);
+    assert.deepEqual(unexpectedErrorResponses, [], `unexpected browser error responses: ${JSON.stringify(errorResponses)}`);
     assert.ok(
       notFoundResponses.length > 0,
       "expected at least one unbound thesis-binding GET to return 404",
     );
-    // Chromium may log the expected unbound binding response as a console
-    // resource error.  The response allowlist above ensures this exception is
-    // limited to that exact GET; every other 404 fails before this check.
+    // Chromium logs both deliberately exercised fail-closed responses as
+    // resource errors; response-level allowlisting above keeps this check
+    // limited to those exact GET paths and statuses.
     const unexpectedConsoleErrors = consoleErrors.filter(
-      (message) => !message.includes("server responded with a status of 404"),
+      (message) => !message.includes("server responded with a status of 404")
+        && !message.includes("server responded with a status of 409"),
     );
     assert.equal(
       unexpectedConsoleErrors.length,

@@ -265,7 +265,7 @@ async function freezeThroughBrowser(page, backend, frontend, campaignId, withCha
   }
 
   await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
-  await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
+  await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor({ timeout: 180000 });
   const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
   const decisionId = committedLine.replace(/^decision_id：/, "").trim();
   assert.match(decisionId, /^decision_[0-9a-f]{32}$/);
@@ -397,6 +397,57 @@ print(json.dumps(created))
   return ids;
 }
 
+function createHistoricalActionFixtures(env, python, template, specs) {
+  const script = `
+import json
+import os
+import frozen_decision_service as frozen
+
+template = json.loads(os.environ['REV2_ACTION_TEMPLATE'])
+specs = json.loads(os.environ['REV2_ACTION_SPECS'])
+service_fields = {
+    'decision_id', 'committed_at', 'snapshot_schema_version',
+    'snapshot_hash', 'validity_status_at_commit', 'created_at',
+    'snapshot_json',
+}
+all_actions = ('WAIT', 'HOLD', 'BUY NOW', 'BUY SMALL', 'SCALE IN', 'WATCH TO REDUCE', 'REDUCE', 'EXIT', 'AVOID', 'RESEARCH MORE')
+allowed_by_action = {
+    'WAIT': ('WAIT', 'RESEARCH MORE'),
+    'HOLD': ('HOLD', 'WAIT', 'RESEARCH MORE'),
+    'EXIT': ('EXIT', 'WAIT', 'RESEARCH MORE'),
+}
+created = []
+for spec in specs:
+    action = spec['next_best_action']
+    payload = {key: value for key, value in template.items() if key not in service_fields}
+    payload['review_by'] = spec['review_by']
+    payload['strategy'] = spec.get('strategy', payload['strategy'])
+    payload['next_best_action'] = action
+    payload['action_envelope'] = {
+        **payload['action_envelope'],
+        'allowed_actions': list(allowed_by_action[action]),
+        'blocked_actions': [value for value in all_actions if value not in allowed_by_action[action]],
+    }
+    payload['source_refs'] = [f"rev2:e2e-historical-nba:{action}"]
+    created.append(frozen.freeze_decision(payload)['decision_id'])
+print(json.dumps(created))
+`;
+  const result = spawnSync(python.cmd, [...python.args, "-c", script], {
+    cwd: backendDir,
+    env: {
+      ...env,
+      REV2_ACTION_TEMPLATE: JSON.stringify(template),
+      REV2_ACTION_SPECS: JSON.stringify(specs),
+    },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const ids = JSON.parse(result.stdout.trim());
+  assert.equal(ids.length, specs.length);
+  assert.equal(new Set(ids).size, specs.length);
+  return ids;
+}
+
 async function removeTempDir(dir) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     try {
@@ -499,7 +550,7 @@ async function run() {
       firstCampaign.campaign_id,
       true,
       tempDataDir,
-      "2026-08-01T10:00:00Z",
+      "2026-08-01T10:00",
     );
     const secondRun = await freezeThroughBrowser(
       page,
@@ -508,12 +559,22 @@ async function run() {
       secondCampaign.campaign_id,
       false,
       tempDataDir,
-      "2026-08-02T10:00:00Z",
+      "2026-08-02T10:00",
     );
     const historyFillerIds = createOutcomeHistoryFillers(
       env,
       pythonScriptConfig(),
       secondRun.committed.committed,
+    );
+    const historicalActionIds = createHistoricalActionFixtures(
+      env,
+      pythonScriptConfig(),
+      firstRun.committed.committed,
+      [
+        { next_best_action: "WAIT", review_by: "2099-09-11T10:00:00Z", strategy: "SWING" },
+        { next_best_action: "HOLD", review_by: "2099-09-12T10:00:00Z", strategy: "MEDIUM" },
+        { next_best_action: "EXIT", review_by: "2099-09-13T10:00:00Z", strategy: "SWING" },
+      ],
     );
     const thirdRun = await freezeThroughBrowser(
       page,
@@ -522,7 +583,7 @@ async function run() {
       thirdCampaign.campaign_id,
       false,
       tempDataDir,
-      "2099-09-10T10:00:00Z",
+      "2099-09-10T10:00",
     );
     const fixtures = prepareTradeAndFactLake(env, pythonScriptConfig(), firstRun.committed.committed, secondRun.committed.committed);
     const evaluationAsOf = "2026-09-01T00:00:00.000000Z";
@@ -532,6 +593,8 @@ async function run() {
       `/api/formal-decisions/${firstRun.decisionId}/outcome?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`,
     );
     assert.deepEqual(firstBefore.actual_capital_outcome.trade_ids, [fixtures.exact.trade_id]);
+    assert.equal(typeof firstBefore.decision_next_best_action, "string");
+    assert.equal(firstBefore.actual_capital_outcome.state, "EVALUATED");
     assert.equal(firstBefore.process_review.state, "BOUND", JSON.stringify(firstBefore.process_review));
     assert.equal(firstBefore.process_review.challenge_id, firstRun.challengeId);
     assert.equal(firstBefore.process_review.packet_state, "COMPLETE");
@@ -589,8 +652,14 @@ async function run() {
 
     const worklist = await jsonRequest(backend, "/api/formal-decision-review-worklist");
     assert.equal(worklist.due.length, 2, JSON.stringify(worklist));
-    assert.equal(worklist.upcoming.length, historyFillerIds.length + 1, JSON.stringify(worklist));
+    assert.equal(worklist.upcoming.length, historyFillerIds.length + 1 + historicalActionIds.length, JSON.stringify(worklist));
     assert.equal(worklist.unavailable.length, 0, JSON.stringify(worklist));
+    assert.equal(worklist.schema_version, "formal_decision_review_worklist.v0.2");
+    const firstDueItem = worklist.due.find((item) => item.decision_id === firstRun.decisionId);
+    assert.equal(firstDueItem.decision_next_best_action, firstBefore.decision_next_best_action);
+    for (const [decisionId, action] of historicalActionIds.map((id, index) => [id, ["WAIT", "HOLD", "EXIT"][index]])) {
+      assert.equal(worklist.upcoming.find((item) => item.decision_id === decisionId).decision_next_best_action, action);
+    }
     assert.deepEqual(worklist.due.map((item) => item.decision_id), [firstRun.decisionId, secondRun.decisionId]);
     assert.equal(worklist.due.every((item) => item.due_state === "DUE"), true);
     const upcomingDecisionIds = worklist.upcoming.map((item) => item.decision_id);
@@ -611,9 +680,17 @@ async function run() {
       "RQ1 must not create queue persistence",
     );
 
+    const legacyAnalyticsRequests = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/api/decision-analytics/")) {
+        legacyAnalyticsRequests.push(request.url());
+      }
+    });
     await page.goto(`${frontend}/decision-performance?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "Formal Decision Outcome" }).waitFor();
     await page.getByTestId(`formal-outcome-${historyFillerIds[0]}`).getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
+    await page.getByText("Frozen Decision Context", { exact: true }).first().waitFor();
+    await page.getByTestId(`formal-decision-context-${firstRun.decisionId}`).getByText(`Frozen NBA at decision time: ${firstBefore.decision_next_best_action}`, { exact: true }).waitFor();
     await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
     await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
     await page.getByText("Challenge coverage is not decision correctness.", { exact: true }).waitFor();
@@ -627,9 +704,15 @@ async function run() {
     const dueItem = page.getByTestId(`review-worklist-due-${firstRun.decisionId}`);
     const secondDueItem = page.getByTestId(`review-worklist-due-${secondRun.decisionId}`);
     const upcomingItem = page.getByTestId(`review-worklist-upcoming-${thirdRun.decisionId}`);
+    const historicalActionItems = historicalActionIds.map((decisionId) => page.getByTestId(`review-worklist-upcoming-${decisionId}`));
     await dueItem.waitFor();
     await secondDueItem.waitFor();
     await upcomingItem.waitFor();
+    for (const item of historicalActionItems) await item.waitFor();
+    await dueItem.getByTestId(`review-worklist-nba-${firstRun.decisionId}`).getByText(`Frozen NBA at decision time: ${firstDueItem.strategy || "—"} · ${firstBefore.decision_next_best_action}`, { exact: true }).waitFor();
+    await historicalActionItems[0].getByText("Frozen NBA at decision time: SWING · WAIT", { exact: true }).waitFor();
+    await historicalActionItems[1].getByText("Frozen NBA at decision time: MEDIUM · HOLD", { exact: true }).waitFor();
+    await historicalActionItems[2].getByText("Frozen NBA at decision time: SWING · EXIT", { exact: true }).waitFor();
     assert.equal(await dueItem.getByText("DUE", { exact: true }).count(), 1);
     assert.equal(await secondDueItem.getByText("DUE", { exact: true }).count(), 1);
     assert.equal(await upcomingItem.getByText("NOT_DUE", { exact: true }).count(), 1);
@@ -653,11 +736,53 @@ async function run() {
     await mergedTargetOutcome.getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
     await page.waitForFunction((decisionId) => document.activeElement?.id === `formal-outcome-${decisionId}`, thirdRun.decisionId);
     assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 51);
+
+    for (const [index, decisionId] of historicalActionIds.entries()) {
+      const action = ["WAIT", "HOLD", "EXIT"][index];
+      const actionItem = page.getByTestId(`review-worklist-upcoming-${decisionId}`);
+      const detailRequest = page.waitForRequest((request) => {
+        const url = new URL(request.url());
+        return request.method() === "GET"
+          && url.pathname === `/api/formal-decisions/${decisionId}/outcome`;
+      });
+      await actionItem.click();
+      await detailRequest;
+      const actionOutcome = page.getByTestId(`formal-outcome-${decisionId}`);
+      await actionOutcome.waitFor();
+      await actionOutcome.getByText(`Frozen NBA at decision time: ${action}`, { exact: true }).waitFor();
+      await actionOutcome.getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
+    }
+    assert.equal(typeof firstBefore.decision_next_best_action, "string");
+    assert.equal(
+      await page.getByTestId(`formal-outcome-${firstRun.decisionId}`).getByText(firstBefore.decision_next_best_action, { exact: true }).count() >= 1,
+      true,
+    );
+    assert.equal(await page.getByTestId(`formal-outcome-${firstRun.decisionId}`).getByText("BUY", { exact: true }).count(), 0);
     const actionableConsoleErrors = consoleErrors.filter(
       (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
         && !message.includes("Failed to load resource: the server responded with a status of 404"),
     );
     assert.equal(actionableConsoleErrors.length, 0, actionableConsoleErrors.join("\n"));
+
+    // P1-REV1: 决策复盘面权威分离——Formal Outcome 是默认主内容；legacy 反馈分析
+    // 明确标记 Legacy、默认折叠；进入页面不触发 decision-analytics 请求，展开才加载。
+    assert.equal(await page.getByRole("heading", { name: "决策复盘", exact: true }).count(), 1);
+    assert.equal(
+      legacyAnalyticsRequests.length,
+      0,
+      `进入复盘页不应触发 legacy decision-analytics 请求：${legacyAnalyticsRequests.join(", ")}`,
+    );
+    const legacyToggle = page.getByTestId("legacy-analytics-toggle");
+    assert.ok(await legacyToggle.isVisible(), "legacy analytics 折叠开关应可见");
+    assert.match(await legacyToggle.innerText(), /Legacy/, "legacy 区域必须带 Legacy 标识");
+    assert.equal(await page.getByTestId("legacy-analytics-panel").count(), 0, "legacy analytics 默认折叠");
+    await legacyToggle.click();
+    await page.getByTestId("legacy-analytics-panel").waitFor();
+    await page.getByRole("heading", { name: "采纳率" }).waitFor();
+    assert.ok(
+      legacyAnalyticsRequests.length >= 3,
+      `展开 legacy analytics 应触发三组请求，实际：${legacyAnalyticsRequests.join(", ")}`,
+    );
 
     await page.reload({ waitUntil: "networkidle" });
     await page.getByTestId(`formal-outcome-${historyFillerIds[0]}`).getByText("PENDING / NOT_DUE", { exact: true }).waitFor();

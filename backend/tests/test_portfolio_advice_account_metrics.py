@@ -140,6 +140,8 @@ def test_account_not_configured(tmp_env):
     _write_pf(tmp_env, [{"code": "000001", "shares": 1500, "cost": 14.0}])
     res = portfolio_advice_service.generate_portfolio_advice({}, model_runner=_mock_runner)
     assert res["account_funding"]["configured"] is False
+    assert res["account_funding"]["status"] == "not_configured"
+    assert res["account_funding"]["reason_code"] is None
     assert res["account_funding"]["total_assets"] is None
     assert res["account_funding"]["available_cash"] is None
     assert res["account_funding"]["quote_coverage"]["complete"] is True
@@ -156,6 +158,8 @@ def test_account_profile_corrupted(tmp_env):
 
     res = portfolio_advice_service.generate_portfolio_advice({}, model_runner=_mock_runner)
     assert res["account_funding"]["configured"] is False
+    assert res["account_funding"]["status"] == "corrupted"
+    assert res["account_funding"]["reason_code"] == "ACCOUNT_PROFILE_CORRUPTED"
     assert any("读取失败或损坏" in lim for lim in res["data_limitations"])
     assert os.path.exists(acct_file)
     with open(acct_file, encoding="utf-8") as f:

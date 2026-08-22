@@ -3,6 +3,7 @@ import test, { describe } from "node:test";
 import {
   buildTradeCreateInput,
   buildTradeListQuery,
+  canonicalizeTradeExecutionTime,
   executionStatusLabel,
   formatTradeMoney,
   formatTradePercentage,
@@ -11,6 +12,7 @@ import {
   operationLabel,
   validateTradeDraft,
   validateTradeListFilters,
+  getTradeExecutionTimePreview,
   type TradeDraft,
 } from "../src/lib/tradeLedgerView.ts";
 
@@ -51,6 +53,21 @@ describe("tradeLedgerView pure helpers", () => {
     assert.ok(formatted.includes("2026"), `Expected date format, got: ${formatted}`);
   });
 
+  test("canonicalizes only explicit datetime-local values and previews browser semantics", () => {
+    const localValue = "2026-07-28T09:30";
+    const canonical = canonicalizeTradeExecutionTime(localValue);
+    assert.equal(canonical, new Date(localValue).toISOString());
+    const preview = getTradeExecutionTimePreview(localValue);
+    assert.ok(preview);
+    assert.equal(preview.localValue, localValue);
+    assert.match(preview.timeZone, /.+/);
+    assert.match(preview.utcOffset, /^UTC[+-]\d{2}:\d{2}$/);
+    assert.equal(preview.canonicalUtcIso, canonical);
+    assert.equal(canonicalizeTradeExecutionTime(""), null);
+    assert.equal(canonicalizeTradeExecutionTime("2026-02-30T09:30"), null);
+    assert.equal(canonicalizeTradeExecutionTime("not-a-datetime"), null);
+  });
+
   test("validateTradeDraft checks full execution rules", () => {
     const valid: TradeDraft = {
       code: "600519",
@@ -76,6 +93,14 @@ describe("tradeLedgerView pure helpers", () => {
     assert.equal(
       validateTradeDraft({ ...valid, actual_quantity: 100.5 }),
       "已全部执行状态下，实际数量必须是正整数",
+    );
+    assert.equal(
+      validateTradeDraft({ ...valid, executed_at: "" }),
+      "已全部执行状态下，成交时间不能为空",
+    );
+    assert.equal(
+      validateTradeDraft({ ...valid, executed_at: "2026-02-30T09:30" }),
+      "已全部执行状态下，成交时间不合法",
     );
     assert.equal(
       validateTradeDraft({ ...valid, executed_at: "invalid" }),

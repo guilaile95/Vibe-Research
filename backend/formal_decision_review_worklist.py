@@ -11,7 +11,7 @@ import re
 from datetime import datetime
 from typing import Any, Iterable, Mapping
 
-SCHEMA_VERSION = "formal_decision_review_worklist.v0.1"
+SCHEMA_VERSION = "formal_decision_review_worklist.v0.2"
 DUE_STATES = ("DUE", "NOT_DUE", "ERROR")
 WORKLIST_GROUPS = ("due", "upcoming", "unavailable")
 _DECISION_ID_RE = re.compile(r"^decision_[0-9a-f]{32}$")
@@ -73,6 +73,7 @@ def _compact_item(
         "campaign_id": row.get("campaign_id"),
         "decision_committed_at": row.get("decision_committed_at"),
         "decision_review_by": review_by,
+        "decision_next_best_action": row.get("decision_next_best_action"),
         "due_state": due_state,
         "outcome_status": row.get("outcome_status"),
         "reason_codes": _reason_codes(row),

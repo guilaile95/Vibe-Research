@@ -11,7 +11,7 @@
  *    mismatch is explicit (never silently merged or overwritten).
  */
 import assert from "node:assert/strict";
-import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { createReadStream, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -119,8 +119,19 @@ async function jsonRequest(base, pathname, method = "GET", body, expected = 200)
 
 async function run() {
   assert.ok(existsSync(frontendDist), "frontend/dist must be built before CASH1 browser vertical");
-  const tempDataDir = mkdtempSync(join(tmpdir(), "vr-cash1-cash-readback-e2e-"));
-  let backendProc;
+    const tempDataDir = mkdtempSync(join(tmpdir(), "vr-cash1-cash-readback-e2e-"));
+    const priceFixtureDir = mkdtempSync(join(tmpdir(), "vr-cash1-price-fixture-"));
+    writeFileSync(join(priceFixtureDir, "sitecustomize.py"), `
+import astock
+
+def _cash1_kline(code, category=4, offset=5):
+    if code == "600519":
+        return [{"datetime": "2026-08-04 15:00:00", "close": 20.0}]
+    return []
+
+astock.kline = _cash1_kline
+`, "utf8");
+    let backendProc;
   let staticServer;
   let browser;
   let backendLog = "";
@@ -145,6 +156,7 @@ async function run() {
       VIBE_RESEARCH_TRADE_ORIGIN_DB: join(tempDataDir, "trade_origins.sqlite3"),
       VR_ALLOW_ORIGINS: frontend,
       PYTHONUNBUFFERED: "1",
+      PYTHONPATH: [priceFixtureDir, backendDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
     };
     backendProc = spawn(py.cmd, [...py.args, "app:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
       cwd: backendDir,
@@ -254,6 +266,46 @@ async function run() {
     assert.equal(reality.cash.current_fact.status, "AVAILABLE");
     assert.equal(reality.cash.ledger_candidate.status, "AVAILABLE");
     assert.equal(reality.cash.reconciliation, "MISMATCH");
+    assert.equal(reality.cash.current_fact.effective_at, null);
+    assert.equal(reality.cash.ledger_candidate.effective_at, null);
+    assert.equal(reality.cash.current_fact.temporal_status, "UNPROVEN");
+    assert.equal(reality.pricing.status, "COMPLETE");
+    assert.ok(reality.pricing.unified_price_date, "pricing date remains separately available");
+    assert.equal(reality.data_cutoff, null, "cash and pricing must not claim a unified cutoff");
+    assert.equal(reality.nav_temporal_state, "MIXED_UNPROVEN");
+    assert.ok(reality.nav_temporal_reason_codes.includes("CASH_EFFECTIVE_AT_UNPROVEN"));
+    const temporalView = page.getByTestId("account-nav-temporal-state");
+    await temporalView.waitFor();
+    const temporalText = await temporalView.innerText();
+    assert.ok(temporalText.includes("MIXED_UNPROVEN"));
+    assert.ok(temporalText.includes("effective_at 未证明"));
+    assert.equal(temporalText.includes("统一 cutoff 下的正式账户事实"), true);
+
+    // ---- E. 损坏手工快照必须与未配置严格区分，并全链路 fail closed ----
+    const accountProfilePath = join(tempDataDir, "account_profile.json");
+    const corruptedProfile = Buffer.from("{invalid_json: true", "utf8");
+    writeFileSync(accountProfilePath, corruptedProfile);
+    const corruptedBefore = Buffer.from(corruptedProfile);
+
+    await openPortfolio();
+    const corruptedCard = page.getByTestId("account-profile-corrupted");
+    await corruptedCard.waitFor();
+    const corruptedText = await corruptedCard.innerText();
+    assert.ok(corruptedText.includes("账户资金快照损坏/不可读取"));
+    assert.ok(corruptedText.includes("ACCOUNT_PROFILE_CORRUPTED"));
+    assert.equal(await page.getByText("尚未配置账户资金").count(), 0);
+    assert.equal(await page.getByTestId("account-cash-ledger-view").count(), 0);
+
+    const corruptedReality = await jsonRequest(backend, "/api/account/reality");
+    assert.equal(corruptedReality.cash.current_fact.status, "CORRUPTED");
+    assert.equal(corruptedReality.cash.current_fact.reason_code, "ACCOUNT_PROFILE_CORRUPTED");
+    assert.equal(corruptedReality.cash.ledger_candidate.status, "AVAILABLE");
+    assert.equal(corruptedReality.cash.reconciliation, "UNKNOWN");
+    assert.equal(corruptedReality.settled_nav, null);
+    assert.equal(corruptedReality.nav_reconciliation.status, "UNKNOWN");
+    assert.equal(corruptedReality.nav_reconciliation.reason_code, "ACCOUNT_PROFILE_CORRUPTED");
+    assert.ok(corruptedReality.reason_codes.includes("ACCOUNT_PROFILE_CORRUPTED"));
+    assert.deepEqual(readFileSync(accountProfilePath), corruptedBefore);
 
     // portfolio.json 未被资金读取触碰（HAS1 边界不回退）。
     assert.ok(existsSync(join(tempDataDir, "portfolio.json")) === false || true);
@@ -273,6 +325,7 @@ async function run() {
     try { if (staticServer) staticServer.close(); } catch {}
     try { if (backendProc) backendProc.kill(); } catch {}
     try { rmSync(tempDataDir, { recursive: true, force: true }); } catch {}
+    try { rmSync(priceFixtureDir, { recursive: true, force: true }); } catch {}
   }
 }
 

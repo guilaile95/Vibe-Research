@@ -242,7 +242,7 @@ def _validate_portfolio_authoritative_payload(
         "warnings",
         "data_limitations",
     }
-    _require_exact_object(payload, "payload", top_required, {"account_funding"})
+    _require_exact_object(payload, "payload", top_required, {"account_funding", "execution_policy"})
     if payload["schema_version"] != "portfolio-advice-v0.1":
         raise AiResultValidationError("portfolio payload schema 不匹配")
     if payload["trade_date"] != trade_date:
@@ -376,6 +376,20 @@ def _validate_portfolio_authoritative_payload(
 
     _string_list(payload["warnings"], "warnings")
     _string_list(payload["data_limitations"], "data_limitations")
+    if "execution_policy" in payload:
+        policy = _require_exact_object(
+            payload["execution_policy"],
+            "execution_policy",
+            {"status", "reason_code"},
+        )
+        if policy["status"] not in {"default", "configured", "corrupted"}:
+            raise AiResultValidationError("execution_policy.status 非法")
+        if policy["reason_code"] is not None and not isinstance(policy["reason_code"], str):
+            raise AiResultValidationError("execution_policy.reason_code 必须是字符串或 null")
+        if policy["status"] == "corrupted" and policy["reason_code"] != "ACCOUNT_EXECUTION_POLICY_CORRUPTED":
+            raise AiResultValidationError("execution_policy.reason_code 与 corrupted 状态不匹配")
+        if policy["status"] != "corrupted" and policy["reason_code"] is not None:
+            raise AiResultValidationError("execution_policy.reason_code 仅 corrupted 状态可用")
     if "account_funding" in payload and payload["account_funding"] is not None:
         funding = _require_exact_object(
             payload["account_funding"],
@@ -390,9 +404,14 @@ def _validate_portfolio_authoritative_payload(
                 "tracked_stock_weight_pct",
                 "quote_coverage",
             },
+            {"status", "reason_code"},
         )
         if not isinstance(funding["configured"], bool):
             raise AiResultValidationError("account_funding.configured 必须是布尔值")
+        if "status" in funding and funding["status"] not in {"valid", "not_configured", "corrupted"}:
+            raise AiResultValidationError("account_funding.status 非法")
+        if "reason_code" in funding and funding["reason_code"] is not None and not isinstance(funding["reason_code"], str):
+            raise AiResultValidationError("account_funding.reason_code 必须是字符串或 null")
         for field in (
             "total_assets",
             "available_cash",

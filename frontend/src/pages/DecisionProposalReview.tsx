@@ -1,8 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, LockKeyhole } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ApiError, api, DECISION_CHALLENGE_DIMENSIONS, type DecisionChallengeDimensionInput, type DecisionChallengeDimensionName, type DecisionChallengePacket, type DecisionProposalDraftInput, type DecisionProposalPreview, type CommittedDecisionRuntimeRead } from "@/lib/api";
+import { VIEW_STANCE_LABELS, VIEW_STANCE_OPTIONS, buildJudgedView, buildPortfolioView, type ViewStance } from "@/lib/decisionProposalForm";
+import { hydratedHorizonValue, resolveDecisionContext, type DecisionContextHydrationResult } from "@/lib/decisionContextHydration";
+import { browserTimeZoneName, formatUtcOffsetMinutes, parseReviewBoundary } from "@/lib/reviewBoundaryInput";
+import type { CampaignRecord, CampaignThesisBinding, CampaignCurrentThesis, ThesisAggregate } from "@/lib/api";
 
 type ChallengeReadState = "PENDING" | "FOUND" | "ABSENT" | "ERROR";
 
@@ -28,25 +32,6 @@ function splitLines(value: string): string[] {
     .split(/[,\n]/)
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function canonicalReviewBy(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) throw new Error("请填写有效的 review_by 时间");
-  return parsed.toISOString();
-}
-
-function parseObject(value: string, label: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error(`${label} 必须是合法 JSON 对象`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${label} 必须是 JSON object`);
-  }
-  return parsed as Record<string, unknown>;
 }
 
 function evaluationOf(value: unknown): string {
@@ -86,18 +71,27 @@ function shortestReason(value: unknown): string {
   return reasons[0] ?? "—";
 }
 
-const defaultAsset = JSON.stringify({ view: "ASSET", stance: "WAIT", note: "用户填写资产判断" }, null, 2);
-const defaultTrade = JSON.stringify({ view: "TRADE", stance: "WAIT", note: "用户填写交易判断" }, null, 2);
-const defaultPortfolio = JSON.stringify({ view: "PORTFOLIO", constraint: "用户填写组合约束" }, null, 2);
-
 export function DecisionProposalReview() {
   const { campaignId = "" } = useParams();
   const navigate = useNavigate();
-  const [assetText, setAssetText] = useState(defaultAsset);
-  const [tradeText, setTradeText] = useState(defaultTrade);
-  const [portfolioText, setPortfolioText] = useState(defaultPortfolio);
-  const [reviewBy, setReviewBy] = useState("");
+  // 三视图结构化输入（P1-DF1）：用户通过 select/text 控件表达判断，
+  // payload 由 decisionProposalForm 纯函数生成，不再手写 JSON。
+  const [assetStance, setAssetStance] = useState<ViewStance>("WAIT");
+  const [assetNote, setAssetNote] = useState("");
+  const [tradeStance, setTradeStance] = useState<ViewStance>("WAIT");
+  const [tradeNote, setTradeNote] = useState("");
+  const [portfolioConstraint, setPortfolioConstraint] = useState("");
+  const [reviewByLocal, setReviewByLocal] = useState("");
   const [horizon, setHorizon] = useState("");
+  const [campaign, setCampaign] = useState<CampaignRecord | null>(null);
+  const [binding, setBinding] = useState<CampaignThesisBinding | null>(null);
+  const [currentThesis, setCurrentThesis] = useState<CampaignCurrentThesis | null>(null);
+  const [boundThesis, setBoundThesis] = useState<ThesisAggregate | null>(null);
+  const [contextState, setContextState] = useState<"loading" | "ready" | "unavailable">("loading");
+  const [contextMessage, setContextMessage] = useState("");
+  const [hydration, setHydration] = useState<DecisionContextHydrationResult | null>(null);
+  const horizonTouched = useRef(false);
+  const contextGeneration = useRef(0);
   const [assumptions, setAssumptions] = useState("");
   const [invalidations, setInvalidations] = useState("");
   const [preview, setPreview] = useState<DecisionProposalPreview | null>(null);
@@ -111,22 +105,79 @@ export function DecisionProposalReview() {
   const [challengeReadState, setChallengeReadState] = useState<ChallengeReadState>("ABSENT");
   const [bindChallenge, setBindChallenge] = useState(false);
 
-  const draft = useMemo<DecisionProposalDraftInput | null>(() => {
-    try {
-      if (!reviewBy || !horizon.trim()) return null;
-      return {
-        asset_view: parseObject(assetText, "Asset View"),
-        trade_view: parseObject(tradeText, "Trade View"),
-        portfolio_view: parseObject(portfolioText, "Portfolio View"),
-        review_by: canonicalReviewBy(reviewBy),
-        key_assumptions: splitLines(assumptions),
-        event_invalidation_conditions: splitLines(invalidations),
-        strategy_horizon: horizon.trim(),
+  useEffect(() => {
+    const generation = ++contextGeneration.current;
+    let cancelled = false;
+    setContextState("loading");
+    setContextMessage("");
+    setCampaign(null);
+    setBinding(null);
+    setCurrentThesis(null);
+    setBoundThesis(null);
+    setHydration(null);
+    horizonTouched.current = false;
+
+    if (!campaignId) {
+      setContextState("unavailable");
+      setContextMessage("缺少 campaign_id；无法读取 Campaign authority。");
+      return () => {
+        cancelled = true;
+        contextGeneration.current += 1;
       };
-    } catch {
-      return null;
     }
-  }, [assetText, tradeText, portfolioText, reviewBy, horizon, assumptions, invalidations]);
+
+    void (async () => {
+      try {
+        const nextCampaign = await api.getCampaign(campaignId);
+        const nextBinding = await api.getCampaignThesisBinding(campaignId);
+        const [nextCurrent, nextAggregate] = await Promise.all([
+          api.getCampaignCurrentThesis(campaignId),
+          api.thesisGet(nextBinding.thesis_id),
+        ]);
+        if (cancelled || generation !== contextGeneration.current) return;
+        const result = resolveDecisionContext(nextCampaign, nextBinding, nextCurrent, nextAggregate);
+        setCampaign(nextCampaign);
+        setBinding(nextBinding);
+        setCurrentThesis(nextCurrent);
+        setBoundThesis(nextAggregate);
+        setHydration(result);
+        if (result.status === "READY") {
+          setContextState("ready");
+          setContextMessage("");
+          setHorizon((value) => hydratedHorizonValue(value, horizonTouched.current, result));
+        } else {
+          setContextState("unavailable");
+          setContextMessage(result.reason);
+        }
+      } catch (err) {
+        if (cancelled || generation !== contextGeneration.current) return;
+        setContextState("unavailable");
+        setContextMessage(err instanceof ApiError ? err.message : "Campaign / Current Thesis authority 读取失败");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      contextGeneration.current += 1;
+    };
+  }, [campaignId]);
+
+  // P1-DF3：review boundary 只来自用户在 datetime-local 控件里的显式选择；
+  // 过去时间等业务校验仍由 backend Preview authority 负责，这里不复制规则。
+  const reviewBoundary = useMemo(() => parseReviewBoundary(reviewByLocal), [reviewByLocal]);
+
+  const draft = useMemo<DecisionProposalDraftInput | null>(() => {
+    if (reviewBoundary.status !== "VALID" || !horizon.trim()) return null;
+    return {
+      asset_view: buildJudgedView("ASSET", assetStance, assetNote),
+      trade_view: buildJudgedView("TRADE", tradeStance, tradeNote),
+      portfolio_view: buildPortfolioView(portfolioConstraint),
+      review_by: reviewBoundary.iso,
+      key_assumptions: splitLines(assumptions),
+      event_invalidation_conditions: splitLines(invalidations),
+      strategy_horizon: horizon.trim(),
+    };
+  }, [assetStance, assetNote, tradeStance, tradeNote, portfolioConstraint, reviewBoundary, horizon, assumptions, invalidations]);
 
   const handlePreview = async () => {
     setError("");
@@ -139,7 +190,7 @@ export function DecisionProposalReview() {
     setBindChallenge(false);
     if (!campaignId || !draft) {
       setChallengeReadState("ERROR");
-      setError("请先填写 review_by、strategy horizon，并确保三个 View 是合法 JSON object。");
+      setError("请先选择有效的 review 时间、填写 strategy horizon，并确保三个 View 输入合法。");
       return;
     }
     setBusy("preview");
@@ -265,41 +316,135 @@ export function DecisionProposalReview() {
         title="Formal Decision Review"
         subtitle="Campaign-scoped deterministic proposal。Preview 不写 Frozen Decision；只有显式确认后才允许 Freeze。"
         actions={(
-          <button type="button" onClick={() => navigate(-1)} className="inline-flex items-center gap-1.5 rounded border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="h-3.5 w-3.5" /> 返回
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              to="/decision-inbox"
+              className="inline-flex items-center gap-1.5 rounded border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+              data-testid="decision-inbox-secondary-entry"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> 返回 Decision Inbox
+            </Link>
+            <button type="button" onClick={() => navigate(-1)} className="inline-flex items-center gap-1.5 rounded border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
+              返回
+            </button>
+          </div>
         )}
       />
 
-      <section className="rounded-lg border border-border/60 bg-background/35 p-4 space-y-3">
+      <section className="rounded-lg border border-border/60 bg-background/35 p-4 space-y-3" data-decision-context={contextState} data-context-binding={binding?.thesis_id ?? ""} data-context-bound-thesis={boundThesis?.thesis.id ?? ""}>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="text-muted-foreground">Campaign</span>
-          <span className={codeCls}>{campaignId || "缺少 campaign_id"}</span>
+          <span className={codeCls}>{(campaign?.campaign_id ?? campaignId) || "缺少 campaign_id"}</span>
           <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-700">backend authority</span>
+          {contextState === "loading" && <span className="text-muted-foreground">正在读取上下文…</span>}
         </div>
-        <p className="text-xs leading-5 text-muted-foreground">
-          证券代码、策略、Thesis id/revision 都由 backend 根据真实 Campaign 与 Current Thesis 读取；页面不提交这些 authority 字段。
-        </p>
+        <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-5">
+          <div><p className="text-muted-foreground">Security</p><p className="mt-1 font-medium" data-context-security>{campaign?.security_code ?? "UNKNOWN"}</p></div>
+          <div><p className="text-muted-foreground">Campaign Strategy</p><p className="mt-1 font-medium" data-context-strategy>{campaign?.strategy ?? "UNKNOWN"}</p></div>
+          <div><p className="text-muted-foreground">Current Thesis 状态</p><p className="mt-1 font-medium" data-context-thesis-status>{currentThesis?.ready ? currentThesis.effective_state : currentThesis?.formal_status ?? "UNAVAILABLE"}</p></div>
+          <div><p className="text-muted-foreground">Frozen Thesis / revision</p><p className="mt-1 font-medium" data-context-frozen-revision>{hydration?.frozenRevision ? `v${hydration.frozenRevision}` : "UNKNOWN"}</p></div>
+          <div><p className="text-muted-foreground">Expected Horizon</p><p className="mt-1 font-medium" data-context-horizon>{hydration?.status === "READY" ? hydration.horizonText : "UNKNOWN"}</p></div>
+        </div>
+        {contextState === "ready" ? (
+          <p className="text-xs leading-5 text-success" data-horizon-source="CURRENT_THESIS">
+            Strategy horizon 已从 Current Thesis 的 backend authority 预填。来源：Current Thesis；不是用户重新声明。你仍可按当前 Proposal 需要修改。
+          </p>
+        ) : contextState === "unavailable" ? (
+          <p className="text-xs leading-5 text-warning" role="status" data-horizon-source="MANUAL_FALLBACK">
+            Current Thesis authority 当前不可用于合法 horizon（{contextMessage || "UNKNOWN"}）。不会猜测 horizon；请在下方手工填写 strategy horizon。
+          </p>
+        ) : (
+          <p className="text-xs leading-5 text-muted-foreground">证券代码、策略、Thesis id/revision 都由 backend 根据真实 Campaign 与 Current Thesis 读取；页面不提交这些 authority 字段。</p>
+        )}
       </section>
 
       <section className="grid gap-4 lg:grid-cols-3">
-        <label className="text-xs text-muted-foreground">Asset View（JSON object）
-          <textarea aria-label="Asset View" value={assetText} onChange={(event) => setAssetText(event.target.value)} rows={7} className={`${inputCls} font-mono text-[11px]`} />
-        </label>
-        <label className="text-xs text-muted-foreground">Trade View（JSON object）
-          <textarea aria-label="Trade View" value={tradeText} onChange={(event) => setTradeText(event.target.value)} rows={7} className={`${inputCls} font-mono text-[11px]`} />
-        </label>
-        <label className="text-xs text-muted-foreground">Portfolio View（JSON object）
-          <textarea aria-label="Portfolio View" value={portfolioText} onChange={(event) => setPortfolioText(event.target.value)} rows={7} className={`${inputCls} font-mono text-[11px]`} />
-        </label>
+        <fieldset className="rounded-md border border-border/50 bg-background/35 p-3 text-xs" data-view-form="asset_view">
+          <legend className="px-1 font-medium text-foreground">Asset View</legend>
+          <label className="mt-1 block text-muted-foreground">
+            资产判断（stance）
+            <select
+              aria-label="Asset stance"
+              value={assetStance}
+              onChange={(event) => setAssetStance(event.target.value as ViewStance)}
+              className={inputCls}
+            >
+              {VIEW_STANCE_OPTIONS.map((option) => (
+                <option key={option} value={option}>{VIEW_STANCE_LABELS[option]}</option>
+              ))}
+            </select>
+          </label>
+          <label className="mt-2 block text-muted-foreground">
+            判断说明（选填）
+            <input
+              aria-label="Asset note"
+              type="text"
+              value={assetNote}
+              onChange={(event) => setAssetNote(event.target.value)}
+              placeholder="例如：高端白酒需求稳定"
+              className={inputCls}
+            />
+          </label>
+        </fieldset>
+        <fieldset className="rounded-md border border-border/50 bg-background/35 p-3 text-xs" data-view-form="trade_view">
+          <legend className="px-1 font-medium text-foreground">Trade View</legend>
+          <label className="mt-1 block text-muted-foreground">
+            交易判断（stance）
+            <select
+              aria-label="Trade stance"
+              value={tradeStance}
+              onChange={(event) => setTradeStance(event.target.value as ViewStance)}
+              className={inputCls}
+            >
+              {VIEW_STANCE_OPTIONS.map((option) => (
+                <option key={option} value={option}>{VIEW_STANCE_LABELS[option]}</option>
+              ))}
+            </select>
+          </label>
+          <label className="mt-2 block text-muted-foreground">
+            判断说明（选填）
+            <input
+              aria-label="Trade note"
+              type="text"
+              value={tradeNote}
+              onChange={(event) => setTradeNote(event.target.value)}
+              placeholder="例如：等待缩量回调再入场"
+              className={inputCls}
+            />
+          </label>
+        </fieldset>
+        <fieldset className="rounded-md border border-border/50 bg-background/35 p-3 text-xs" data-view-form="portfolio_view">
+          <legend className="px-1 font-medium text-foreground">Portfolio View</legend>
+          <label className="mt-1 block text-muted-foreground">
+            组合约束（选填）
+            <input
+              aria-label="Portfolio constraint"
+              type="text"
+              value={portfolioConstraint}
+              onChange={(event) => setPortfolioConstraint(event.target.value)}
+              placeholder="例如：单笔风险不超过组合 2%"
+              className={inputCls}
+            />
+          </label>
+        </fieldset>
       </section>
 
       <section className="grid gap-4 rounded-lg border border-border/60 bg-background/35 p-4 sm:grid-cols-2">
-        <label className="text-xs text-muted-foreground">Review by（必填，显式用户字段）
-          <input aria-label="Review by" type="text" value={reviewBy} onChange={(event) => setReviewBy(event.target.value)} placeholder="2026-08-30T10:00:00Z" className={inputCls} />
-        </label>
+        <div className="text-xs text-muted-foreground">Review by（必填，由你显式选择；不自动生成）
+          <input aria-label="Review by" type="datetime-local" value={reviewByLocal} onChange={(event) => setReviewByLocal(event.target.value)} className={inputCls} />
+          <p className="mt-1 font-mono text-[10px] text-muted-foreground" data-review-by-canonical>
+            {reviewBoundary.status === "VALID" ? reviewBoundary.iso : "尚未选择有效 review 时间"}
+          </p>
+          <p className="text-[10px] text-muted-foreground" data-review-by-tz>
+            解析时区：{browserTimeZoneName()}
+            {reviewBoundary.status === "VALID"
+              ? `（${formatUtcOffsetMinutes(reviewBoundary.date.getTimezoneOffset())}）`
+              : "（选择时间后显示偏移）"}
+            ；上方为将提交的 canonical UTC 时间。
+          </p>
+        </div>
         <label className="text-xs text-muted-foreground">Strategy horizon（必填，显式用户字段）
-          <input aria-label="Strategy horizon" value={horizon} onChange={(event) => setHorizon(event.target.value)} placeholder="例如：2 至 4 周" className={inputCls} />
+          <input aria-label="Strategy horizon" value={horizon} onChange={(event) => { horizonTouched.current = true; setHorizon(event.target.value); }} placeholder="例如：2 至 4 周" className={inputCls} />
         </label>
         <label className="text-xs text-muted-foreground">Key assumptions（逗号或换行分隔）
           <textarea aria-label="Key assumptions" value={assumptions} onChange={(event) => setAssumptions(event.target.value)} rows={3} className={inputCls} />

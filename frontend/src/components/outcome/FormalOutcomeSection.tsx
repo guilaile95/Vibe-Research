@@ -8,6 +8,7 @@ import type {
   FormalReviewWorklistItem,
 } from "@/lib/api/types";
 import {
+  frozenDecisionNbaLabel,
   mergeOutcomeItem,
   worklistItems,
   worklistLabel,
@@ -75,6 +76,12 @@ function reviewWorklistItem(item: FormalReviewWorklistItem, onFocus: (decisionId
         <span className="rounded bg-muted px-2 py-0.5 text-xs">{item.due_state}</span>
       </div>
       <div className="mt-1 text-sm">{item.security_code || "—"} · {item.strategy || "—"}</div>
+      <div
+        className="mt-1 text-xs text-muted-foreground"
+        data-testid={`review-worklist-nba-${item.decision_id}`}
+      >
+        Frozen NBA at decision time: {item.strategy || "—"} · {frozenDecisionNbaLabel(item.decision_next_best_action)}
+      </div>
       <div className="mt-1 text-xs text-muted-foreground">Campaign: {item.campaign_id || "—"}</div>
       <div className="mt-1 text-xs text-muted-foreground">review_by: {item.decision_review_by}</div>
     </button>
@@ -296,12 +303,23 @@ export function FormalOutcomeSection() {
                   data-testid={`formal-outcome-${item.decision_id}`}
                 >
                   <td className="py-4 pr-4 align-top">
-                    <div className="font-mono font-medium">{item.decision_id}</div>
-                    <div className="mt-1 text-muted-foreground">
-                      {item.security_code || "—"} · {item.strategy || "—"}
+                    <div
+                      className="space-y-1"
+                      data-testid={`formal-decision-context-${item.decision_id}`}
+                    >
+                      <div className="font-medium">Frozen Decision Context</div>
+                      <div className="text-xs text-muted-foreground">
+                        Frozen NBA at decision time: <span className="font-medium text-foreground">{frozenDecisionNbaLabel(item.decision_next_best_action)}</span>
+                      </div>
+                      <div className="font-mono text-xs">decision_id: {item.decision_id}</div>
+                      <div className="text-xs text-muted-foreground">Security: {item.security_code || "—"}</div>
+                      <div className="text-xs text-muted-foreground">Strategy: {item.strategy || "—"}</div>
+                      <div className="text-xs text-muted-foreground">Campaign: {item.campaign_id || "—"}</div>
+                      <div className="text-xs text-muted-foreground">committed_at: {item.decision_committed_at || "—"}</div>
+                      <div className="text-xs text-muted-foreground">review_by: {item.decision_review_by || "—"}</div>
+                      <div className="text-[11px] text-muted-foreground">Historical decision fact only; not an evaluation.</div>
                     </div>
-                    <div className="mt-1 text-xs text-muted-foreground">{item.campaign_id || "—"}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
+                    <div className="mt-2 text-xs text-muted-foreground">
                       snapshot {item.decision_snapshot_hash || "—"}
                     </div>
                   </td>

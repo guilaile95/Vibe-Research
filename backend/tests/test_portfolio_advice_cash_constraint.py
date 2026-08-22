@@ -159,6 +159,54 @@ def test_cash_too_low_clears_quantity() -> None:
     assert any("可用现金不足" in m for m in out["data_limitations"])
 
 
+def test_corrupted_execution_policy_add_nulls_executable_qty(tmp_path, monkeypatch) -> None:
+    """损坏策略不使用默认 lot/reserve，add 数量与金额 fail closed。"""
+    policy_file = tmp_path / "account_execution_policy.json"
+    original = b"{broken"
+    policy_file.write_bytes(original)
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
+    h = _add_holding(qty=300, amount=3000.0, price=10.0)
+
+    res = apply_available_cash_constraints(_base_result(holdings=[h], cash=5000.0))
+
+    out = res["holdings"][0]
+    assert out["action"] == "add"
+    assert out["execution_quantity"] is None
+    assert out["estimated_amount"] is None
+    assert res["execution_policy"] == {
+        "status": "corrupted",
+        "reason_code": "ACCOUNT_EXECUTION_POLICY_CORRUPTED",
+    }
+    assert any("账户执行策略文件读取失败或损坏" in item for item in res["data_limitations"])
+    assert policy_file.read_bytes() == original
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_corrupted_execution_policy_multi_add_nulls_all_executables(tmp_path, monkeypatch) -> None:
+    """损坏策略下多笔 add 不按默认策略分配，全部数量与金额 fail closed。"""
+    policy_file = tmp_path / "account_execution_policy.json"
+    policy_file.write_bytes(b"{broken")
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
+
+    res = apply_available_cash_constraints(
+        _base_result(
+            holdings=[
+                _add_holding("000001", qty=200, amount=2000.0, price=10.0),
+                _add_holding("000002", qty=300, amount=3000.0, price=10.0),
+            ],
+            cash=5000.0,
+        )
+    )
+
+    assert [item["action"] for item in res["holdings"]] == ["add", "add"]
+    assert all(item["execution_quantity"] is None for item in res["holdings"])
+    assert all(item["estimated_amount"] is None for item in res["holdings"])
+    assert res["execution_policy"] == {
+        "status": "corrupted",
+        "reason_code": "ACCOUNT_EXECUTION_POLICY_CORRUPTED",
+    }
+
+
 def test_unconfigured_account_add_nulls_executable_qty() -> None:
     """未配置账户 + add：action 保留，execution_quantity/estimated_amount 必须 null。"""
     h = _add_holding(qty=100, amount=1000.0, price=10.0)

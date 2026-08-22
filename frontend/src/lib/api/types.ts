@@ -639,7 +639,15 @@ export interface PortfolioData {
     data_limitations?: string[];
     reconciliation?: {
       summary?: { match: number; mismatch: number; missing_in_ledger: number; missing_in_portfolio: number };
-      items?: Array<{ code: string; status: string; reason: string | null }>;
+      items?: Array<{
+        code: string;
+        status: string;
+        reason: string | null;
+        ledger_shares?: number | null;
+        ledger_cost?: number | null;
+        portfolio_shares?: number | null;
+        portfolio_cost?: number | null;
+      }>;
     };
   };
 }
@@ -656,8 +664,12 @@ export interface AccountProfileData {
 }
 
 
+export type AccountProfileStatus = "valid" | "not_configured" | "corrupted";
+
 export interface AccountProfileResponse {
   configured: boolean;
+  status: AccountProfileStatus;
+  reason_code: string | null;
   data: AccountProfileData | null;
 }
 
@@ -675,22 +687,54 @@ export interface AccountRealityCashFact {
   value: number | null;
   source: string;
   fact_type: string;
-  status: "AVAILABLE" | "UNKNOWN";
+  status: "AVAILABLE" | "UNKNOWN" | "CORRUPTED";
   reason_code?: string;
   updated_at?: string | null;
+  effective_at?: string | null;
+  temporal_status?: "UNPROVEN" | string;
+  temporal_reason_code?: string;
   coverage?: string;
+}
+
+export interface AccountRealityPosition {
+  code: string;
+  name: string;
+  shares: number;
+  price: number | null;
+  price_date: string | null;
+  pricing_status: "PRICED" | "UNPRICED" | string;
+  market_value: number | null;
 }
 
 export interface AccountReality {
   account_status?: string;
   bootstrap_status?: string;
+  canonical?: boolean;
   cash: {
     current_fact: AccountRealityCashFact;
     ledger_candidate: AccountRealityCashFact;
     reconciliation: "MATCH" | "MISMATCH" | "UNKNOWN";
     coverage?: string;
   };
+  positions?: AccountRealityPosition[];
+  pricing?: {
+    mode: string;
+    status: "COMPLETE" | "PARTIAL" | "UNAVAILABLE" | "MIXED_CUTOFF" | string;
+    priced_holdings: number;
+    total_holdings: number;
+    unified_price_date: string | null;
+  };
+  market_value?: number | null;
   settled_nav?: number | null;
+  nav_cash_source?: string | null;
+  nav_reconciliation?: {
+    status: "MATCH" | "MISMATCH" | "UNKNOWN";
+    account_profile_total_assets: number | null;
+    computed_nav: number | null;
+  };
+  nav_temporal_state?: "MIXED_UNPROVEN" | "UNAVAILABLE" | string;
+  nav_temporal_reason_codes?: string[];
+  data_cutoff?: string | null;
   confidence?: string;
   reason_codes?: string[];
   as_of?: string;
@@ -746,6 +790,8 @@ export interface AccountFundingQuoteCoverage {
 
 export interface AccountFundingData {
   configured: boolean;
+  status?: AccountProfileStatus;
+  reason_code?: string | null;
   total_assets: number | null;
   available_cash: number | null;
   available_cash_pct: number | null;
@@ -1672,6 +1718,7 @@ export interface FormalReviewWorklistItem {
   strategy?: string;
   campaign_id?: string;
   decision_committed_at?: string;
+  decision_next_best_action?: string | null;
   decision_review_by: string;
   due_state: FormalDueState;
   outcome_status?: string;
@@ -1894,6 +1941,14 @@ export interface AccountExecutionPolicy {
   max_single_stock_allocation_pct: number;
   tie_breaker_order: "code_asc" | "code_desc" | "proportional";
   allow_partial_execution: boolean;
+}
+
+export type AccountExecutionPolicyStatus = "default" | "configured" | "corrupted";
+
+export interface AccountExecutionPolicyResponse {
+  status: AccountExecutionPolicyStatus;
+  reason_code: string | null;
+  data: AccountExecutionPolicy | null;
 }
 
 

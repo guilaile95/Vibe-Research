@@ -8,7 +8,8 @@
 import assert from "node:assert/strict";
 import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
+import { request as httpRequest } from "node:http";
+import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +21,42 @@ const backendDir = path.join(root, "backend");
 const frontendDist = path.join(root, "frontend", "dist");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 每次新建 TCP 连接的代理请求（Connection: close，规避 stale keep-alive ECONNRESET）。 */
+function proxyRequest(url, method, headers, body) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const forwardHeaders = { ...headers, connection: "close" };
+    delete forwardHeaders.host;
+    const req = httpRequest(
+      {
+        hostname: target.hostname,
+        port: target.port,
+        path: `${target.pathname}${target.search}`,
+        method,
+        headers: forwardHeaders,
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode ?? 599,
+            headers: Object.fromEntries(
+              Object.entries(res.headers)
+                .filter(([, value]) => value !== undefined)
+                .map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : String(value)]),
+            ),
+            body: Buffer.concat(chunks),
+          }),
+        );
+      },
+    );
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -187,6 +224,9 @@ async function run() {
       VIBE_RESEARCH_CAMPAIGN_DB: join(tempDataDir, "campaigns.sqlite3"),
       VIBE_RESEARCH_FROZEN_DECISION_DB: join(tempDataDir, "frozen_decisions.sqlite3"),
       PYTHONUNBUFFERED: "1",
+      // P1-SB1 Origin gate：page.route 转发保留 frontend Origin，
+      // 与 decision-challenge.browser.mjs 相同，显式加入白名单。
+      VR_ALLOW_ORIGINS: frontend,
     };
     backendProc = spawn(py.cmd, [...py.args, "app:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
       cwd: backendDir,
@@ -210,20 +250,94 @@ async function run() {
     const page = await browser.newPage();
     const consoleErrors = [];
     const failedRequests = [];
+    const notFoundResponses = [];
+    let authorityFailure = false;
     page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
     page.on("requestfailed", (request) => failedRequests.push({ url: request.url(), error: request.failure()?.errorText }));
-    await page.route("**/api/**", (route) => {
-      const url = new URL(route.request().url());
-      return route.continue({ url: `${backend}${url.pathname}${url.search}` });
+    page.on("response", (response) => {
+      if (response.status() === 404) notFoundResponses.push(new URL(response.url()).pathname);
+    });
+    // 与 decision-challenge.browser.mjs 相同方向的 node 侧代理：
+    // route.continue({url}) 在当前 Chromium/Playwright 组合下会挂起；
+    // undici fetch 连接池会复用已被 uvicorn keep-alive 超时关闭的连接
+    // （表单交互跨越 5s 窗口后必现 ECONNRESET），因此用 node:http 每次
+    // 新建连接并强制 Connection: close。
+    await page.route("**/api/**", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const method = request.method();
+      const contextPath = `/api/campaigns/${campaign.campaign_id}`;
+      if (process.env.DF2_FORCE_CONTEXT_FALLBACK === "1" && method === "GET" && url.pathname === `${contextPath}/current-thesis`) {
+        authorityFailure = true;
+        const fallbackBody = { data: { campaign_id: campaign.campaign_id, thesis_id: "0123456789abcdef0123456789abcdef", binding: { thesis_revision_at_bind: 2, campaign_strategy_at_bind: "SWING", bound_at: "2026-08-22T00:00:00.000Z" }, formal_state: "confirmed", frozen_revision: null, ready: false, formal_status: "NOT_READY", reason: "NOT_FROZEN" } };
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(fallbackBody) });
+        return;
+      }
+      try {
+        const response = await proxyRequest(
+          `${backend}${url.pathname}${url.search}`,
+          method,
+          request.headers(),
+          method === "GET" || method === "HEAD" ? undefined : request.postDataBuffer(),
+        );
+        await route.fulfill({
+          status: response.status,
+          headers: response.headers,
+          body: response.body,
+        });
+      } catch (error) {
+        console.error(`[proxy] ${method} ${url.pathname} failed:`, error instanceof Error ? `${error.message} ${error.code ?? ""}` : error);
+        await route.fulfill({
+          status: 599,
+          contentType: "application/json",
+          body: JSON.stringify({
+            detail: "E2E backend proxy failed",
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        });
+      }
     });
     await page.goto(`${frontend}/campaigns/${campaign.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "Formal Decision Review" }).waitFor();
-    await page.getByLabel("Review by").fill("2026-08-30T10:00:00Z");
-    await page.getByLabel("Strategy horizon").fill("10 至 30 交易日");
+    if (process.env.DF2_FORCE_CONTEXT_FALLBACK === "1") {
+      await page.locator('[data-horizon-source="MANUAL_FALLBACK"]').waitFor({ timeout: 30000 });
+      assert.equal(authorityFailure, true, "fallback mode must intercept an authority request");
+      assert.equal(await page.getByLabel("Strategy horizon").inputValue(), "", "fallback must not guess horizon");
+      await page.getByLabel("Strategy horizon").fill("10 至 30 交易日");
+    } else {
+      await page.locator('[data-horizon-source="CURRENT_THESIS"]').waitFor({ timeout: 30000 });
+      assert.equal(await page.getByLabel("Strategy horizon").inputValue(), "10–30 个交易日");
+    }
+    // P1-DF3：结构化 review boundary——用户显式选择本地时间，页面展示
+    // 解析时区与最终 canonical ISO；断言 canonical 确实等于所选时刻。
+    await page.getByLabel("Review by").fill("2026-08-30T10:00");
+    const expectedCanonicalIso = await page.evaluate(() => new Date("2026-08-30T10:00").toISOString());
+    const displayedCanonical = (await page.locator("[data-review-by-canonical]").innerText()).trim();
+    assert.equal(displayedCanonical, expectedCanonicalIso, "displayed canonical ISO must equal the user-selected local time");
+    assert.match(displayedCanonical, /Z$/);
+    const tzText = await page.locator("[data-review-by-tz]").innerText();
+    assert.match(tzText, /解析时区/);
     await page.getByLabel("Key assumptions").fill("流动性保持稳定");
     await page.getByLabel("Event invalidation conditions").fill("业绩发生重大反转");
+    // P1-DF1：三视图结构化表单——普通用户零 JSON 完成输入
+    await page.getByLabel("Asset stance").selectOption("SUPPORT");
+    await page.getByLabel("Asset note").fill("高端白酒需求稳定");
+    await page.getByLabel("Trade stance").selectOption("WAIT");
+    await page.getByLabel("Trade note").fill("等待缩量回调再入场");
+    await page.getByLabel("Portfolio constraint").fill("单笔风险不超过组合 2%");
+    const previewResponsePromise = page.waitForResponse((response) => (
+      response.request().method() === "POST"
+      && response.url().includes(
+        `/api/campaigns/${campaign.campaign_id}/decision-proposal/preview`,
+      )
+    ), { timeout: 180000 });
     await page.getByRole("button", { name: "Preview Proposal" }).click();
+    const previewResponse = await previewResponsePromise;
+    assert.equal(previewResponse.ok(), true, `Preview failed: ${await previewResponse.text()}`);
     await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
+    for (const viewName of ["asset_view", "trade_view", "portfolio_view"]) {
+      await page.locator(`[data-view-form="${viewName}"]`).waitFor();
+    }
     const criticalDataCard = page.locator("[data-critical-data-state]").first();
     await criticalDataCard.waitFor();
     const previewCriticalData = {
@@ -239,7 +353,7 @@ async function run() {
     await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
     assert.equal(await freeze.isEnabled(), true);
     await freeze.click();
-    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
+    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor({ timeout: 180000 });
     const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
     const committedId = committedLine.replace(/^decision_id：/, "").trim();
     assert.match(committedId, /^decision_[0-9a-f]{32}$/);
@@ -261,7 +375,12 @@ async function run() {
     assert.equal(item.critical_data.security_code, reread.critical_data.security_code);
     assert.equal(item.critical_data.strategy, reread.critical_data.strategy);
     const expectedFontBlock = "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap";
-    const unexpectedConsoleErrors = consoleErrors.filter((message) => !message.includes("ERR_NETWORK_ACCESS_DENIED"));
+    const expectedChallenge404 = `/api/campaigns/${campaign.campaign_id}/decision-challenge`;
+    assert.deepEqual(notFoundResponses, [expectedChallenge404], "only the optional challenge lookup may be 404");
+    const unexpectedConsoleErrors = consoleErrors.filter(
+      (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
+        && !message.includes("Failed to load resource: the server responded with a status of 404 (Not Found)"),
+    );
     const unexpectedFailedRequests = failedRequests.filter((request) => request.url !== expectedFontBlock);
     assert.equal(unexpectedConsoleErrors.length, 0, `unexpected browser console errors: ${JSON.stringify(unexpectedConsoleErrors)}`);
     assert.equal(unexpectedFailedRequests.length, 0, `unexpected failed requests: ${JSON.stringify(unexpectedFailedRequests)}`);
@@ -273,7 +392,17 @@ async function run() {
   } finally {
     if (browser) await browser.close();
     if (staticServer) await new Promise((resolve) => staticServer.close(resolve));
-    if (backendProc && !backendProc.killed) backendProc.kill();
+    if (backendProc && !backendProc.killed) {
+      if (process.platform === "win32") {
+        spawnSync("taskkill", ["/PID", String(backendProc.pid), "/T", "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+      } else {
+        backendProc.kill();
+      }
+      await new Promise((resolve) => backendProc.once("close", resolve));
+    }
     rmSync(tempDataDir, { recursive: true, force: true });
   }
 }

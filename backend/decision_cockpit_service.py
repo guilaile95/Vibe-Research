@@ -489,8 +489,18 @@ def _market_short_summary() -> dict:
 def _account_funding_summary() -> dict:
     st = account_profile.get_account_profile_status()
     if st["status"] != "valid":
-        return {"configured": False, "data": None, "status": st.get("status")}
-    return {"configured": True, "data": st["data"], "status": "valid"}
+        return {
+            "configured": False,
+            "data": None,
+            "status": st.get("status"),
+            "reason_code": st.get("reason_code"),
+        }
+    return {
+        "configured": True,
+        "data": st["data"],
+        "status": "valid",
+        "reason_code": None,
+    }
 
 
 def _payload_hash(obj: Any) -> str:
