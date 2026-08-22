@@ -400,6 +400,12 @@ jobs:
           PYTHON: python
         run: npm run test:e2e:portfolio-advice-error
 
+      - name: Run signals GPU rent E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:signals
+
   windows-lock-check:
     name: Python Windows lock check
     runs-on: windows-latest
