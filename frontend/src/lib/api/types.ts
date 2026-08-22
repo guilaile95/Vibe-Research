@@ -1024,6 +1024,59 @@ export interface GlobalStock {
   quote: GlobalQuote; metrics: GlobalMetrics | null;
 }
 
+// 港股现金流量表（GET /api/global/hk/cashflow，东财 RPT_HKSK_FN_CASHFLOW）
+export interface HkCashflowItem { amount: number | null; yoy: number | null }
+export interface HkCashflowPeriod {
+  report_date: string; report: string | null;
+  currency: string | null; account_standard: string | null;
+  items: Record<string, HkCashflowItem>;
+}
+export interface HkCashflow {
+  code: string; name: string; market: string;
+  currency: string | null; item_order: string[]; periods: HkCashflowPeriod[];
+}
+
+// ---------------------------------------------------------------------------
+// 产业信号 · GPU 租金（GET /api/signals/gpu-rent）
+// ---------------------------------------------------------------------------
+
+export interface GpuSpot {
+  gpu: string; median?: number; asof_ts?: number;
+  available_gpus?: number | null; total_gpus?: number | null;
+  unavailable?: boolean; note?: string; err?: string;
+  stale?: boolean; fetch_error?: string; observed_at?: string | null;
+}
+export interface GpuHistSeries {
+  gpu: string; n_points?: number; points?: [number, number][]; latest?: number;
+  unavailable?: boolean; note?: string; err?: string;
+  stale?: boolean; fetch_error?: string; observed_at?: string | null;
+}
+export interface ForwardRung { strike: number; p_above: number; open_interest: number | null }
+export interface DistBin { label: string; lo: number | null; hi: number | null; p: number }
+export interface ImpliedMedian { value: number; bound: "exact" | "above" | "below" }
+export interface ForwardMonth {
+  month: string; close_date: string; rungs: ForwardRung[];
+  lowest_strike: number; p_below_lowest: number;
+  implied_median: ImpliedMedian | null;
+  distribution: DistBin[]; most_likely: DistBin;
+}
+export interface SettledMonth { month: string; lo: number | null; hi: number | null }
+export interface GpuForward {
+  months?: ForwardMonth[]; n_contracts?: number; n_months?: number;
+  settled?: SettledMonth[]; settled_error?: string | null;
+  unavailable?: boolean; note?: string; err?: string;
+  stale?: boolean; fetch_error?: string; observed_at?: string | null;
+}
+export interface GpuRentData {
+  generated_at: string | null;
+  how_to_read: string[];
+  spot_source: string; history_source: string; forward_source: string;
+  spot: { gpus: GpuSpot[] };
+  history: { gpus: GpuHistSeries[]; days: number };
+  forward: GpuForward | null;
+  errors: string[] | null;
+}
+
 
 // ---------------------------------------------------------------------------
 // 北向资金（GET /api/market/northbound）

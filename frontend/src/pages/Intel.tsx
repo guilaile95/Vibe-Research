@@ -374,7 +374,7 @@ function InvestmentNewsPanel() {
                   <div className="space-y-2">
                     <p className="flex items-center gap-2 text-sm text-primary"><Loader2 className="h-3.5 w-3.5 animate-spin" /> 摘要已生成，正在保存到数据库…</p>
                     {dg?.text && (
-                      <div className="prose prose-sm prose-invert max-w-none text-foreground opacity-80"><ReactMarkdown remarkPlugins={[remarkGfm]}>{dg.text}</ReactMarkdown></div>
+                      <div className="prose prose-sm dark:prose-invert max-w-none text-foreground opacity-80"><ReactMarkdown remarkPlugins={[remarkGfm]}>{dg.text}</ReactMarkdown></div>
                     )}
                   </div>
                 ) : dg?.text ? (
@@ -384,7 +384,7 @@ function InvestmentNewsPanel() {
                         <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {dg.err}
                       </div>
                     )}
-                    <div className="prose prose-sm prose-invert max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{dg.text}</ReactMarkdown></div>
+                    <div className="prose prose-sm dark:prose-invert max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{dg.text}</ReactMarkdown></div>
                     <div className="mt-2"><SaveNoteButton kind="今日要点" title={`${cur.name} 今日要点`} content={dg.text} /></div>
                   </>
                 ) : dg?.needKey ? (

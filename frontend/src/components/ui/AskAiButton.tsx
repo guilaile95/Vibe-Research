@@ -1,15 +1,85 @@
 import { useState, useRef, useEffect } from "react";
-import { Link } from "react-router-dom";
-import { Sparkles, X, Settings, Send, Loader2, Wrench, AlertCircle } from "lucide-react";
+import { Link, useLocation } from "react-router-dom";
+import { Sparkles, X, Settings, Send, Loader2, Wrench, AlertCircle, Trash2 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
 import { hasLlm, chatStream, type ChatMsg } from "@/lib/llm";
 import { ApiError } from "@/lib/api";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
+import { storageGet, storageSet, storageRemove } from "@/lib/storage";
+
+// 对话持久化。此前 msgs 只是组件内的 useState：切页面卸载、刷新、
+// 关标签页，问过的东西全没了——每轮对话是花了自己 API 额度换来的，丢掉的是真金白银。
+//
+// 按路由分开存：不同页面的「问 AI」上下文不同（个股页 vs 板块页），
+// 混在一起会把上一页的对话带到下一页，比不存更让人困惑。
+const CHAT_KEY_PREFIX = "vr-askai-chat:";
+// 单页对话上限。localStorage 总配额约 5MB，而一轮研报级回答可能上万字；
+// 不设上限迟早写爆，届时 storageSet 静默失败、用户以为存上了。
+const MAX_PERSISTED_MSGS = 40;
+
+type StoredMsg = ChatMsg & {
+  tools?: ToolUse[];
+  // 流式中途被中止、只收到半截的回答。**不落盘、也不进下一轮 history**：
+  // 否则刷新后它会以「完整回答」的身份被喂回模型，后续推理建立在残句上。
+  // UI 仍然显示，用户能看到已经拿到的部分。
+  partial?: boolean;
+};
+
+function loadChat(key: string): StoredMsg[] {
+  const raw = storageGet(key);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    // 存量数据可能来自旧版本或被手工改坏，形状不对就当没有，别让页面崩。
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (m): m is StoredMsg =>
+        m && typeof m === "object" && typeof m.content === "string" &&
+        (m.role === "user" || m.role === "assistant"),
+    );
+  } catch {
+    return [];
+  }
+}
+
+// 只保留「完整的轮次」。partial 的 assistant 要连同它前面那条 user 一起丢：
+// 只丢 assistant 会留下一个孤立的提问，模型在 history 里看到连续两条 user 发言，
+// 会把那个被放弃的问题当成还在等回答，去答错的题。
+function completeTurns(msgs: StoredMsg[]): StoredMsg[] {
+  const out: StoredMsg[] = [];
+  for (const m of msgs) {
+    if (m.partial) {
+      if (out.length && out[out.length - 1].role === "user") out.pop();
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
+}
+
+function saveChat(key: string, msgs: StoredMsg[]): void {
+  if (!msgs.length) {
+    storageRemove(key);
+    return;
+  }
+  const keep = completeTurns(msgs);
+  if (!keep.length) {
+    storageRemove(key);
+    return;
+  }
+  storageSet(key, JSON.stringify(keep.slice(-MAX_PERSISTED_MSGS)));
+}
 
 interface Props {
   context: string;
   suggestions?: string[];
   label?: string;
+  // 用来在**同一路由内**再切分对话。不传则只按路由区分——目前每个页面都只挂
+  // 一个 AskAiButton、且一个路由对应一个对象，够用。
+  // ⚠️ 不换路由就能换标的的页面（如个股页）必须传入已解析的代码，否则对话会串台。
+  scopeKey?: string;
 }
 
 const TOOL_LABEL: Record<string, string> = {
@@ -27,21 +97,67 @@ const argStr = (a: Record<string, unknown>): string => {
 
 interface ToolUse { name: string; arg: string }
 
-export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Props) {
+export function AskAiButton({ context, suggestions = [], label = "问 AI", scopeKey }: Props) {
+  const { pathname } = useLocation();
+  const chatKey = CHAT_KEY_PREFIX + pathname + (scopeKey ? `#${scopeKey}` : "");
+
   const [open, setOpen] = useState(false);
   const [configured, setConfigured] = useState(false);
-  const [msgs, setMsgs] = useState<(ChatMsg & { tools?: ToolUse[] })[]>([]);
+  // key 与消息放在**同一个 state 里原子更新**——这是正确性的关键，不是风格问题。
+  // 若分成 msgs + 一个记录归属的 ref，key 变化那一帧 ref 已指向新 key 而 msgs 仍是旧的
+  // （setState 下一帧才生效），落盘守卫会误放行，把来源页对话写进目标 key、
+  // 覆盖掉目标页已存的对话。捆在一起后，转场帧里 chat.key 天然还是旧值，守卫必然拦住。
+  // 惰性初始化：首帧就带上已存的对话，避免先渲染空列表再闪一下补上。
+  const [chat, setChat] = useState<{ key: string; msgs: StoredMsg[] }>(
+    () => ({ key: chatKey, msgs: loadChat(chatKey) }),
+  );
+  const msgs = chat.msgs;
+  const setMsgs = (
+    updater: StoredMsg[] | ((prev: StoredMsg[]) => StoredMsg[]),
+  ) =>
+    setChat((c) => ({
+      key: c.key,
+      msgs: typeof updater === "function" ? updater(c.msgs) : updater,
+    }));
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // 始终镜像当前 chatKey，供异步回调判断「对话是否已经被换掉」。
+  const chatKeyRef = useRef(chatKey);
+  chatKeyRef.current = chatKey;
 
   useEffect(() => {
     if (open) setConfigured(hasLlm());
   }, [open]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  // 换页面/换标的 = 换一份对话（key 变了），把目标 key 已存的读进来。
+  // 同时**中止在跑的流式请求**：否则它的 alive() 仍然成立，迟到的 chunk 会被
+  // 追加到目标页的最后一条助手消息上，并把「用来源页上下文生成的回答」存进目标 key。
+  useEffect(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setLoading(false);
+    setChat({ key: chatKey, msgs: loadChat(chatKey) });
+  }, [chatKey]);
+
+  // 每次消息变动落盘。守卫见上方 chat state 的注释：转场帧里 chat.key 仍是旧值，
+  // 与 chatKey 不等，于是不会把旧对话写进新 key。
+  useEffect(() => {
+    if (chat.key !== chatKey) return;
+    saveChat(chatKey, chat.msgs);
+  }, [chatKey, chat]);
+
+  useEffect(() => () => abortRef.current?.abort(), []); // 组件卸载兜底
+
+  const clearChat = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setLoading(false);
+    setErr(null);
+    setMsgs([]);          // saveChat 见空数组会 storageRemove，不留空壳
+  };
 
   const close = () => {
     abortRef.current?.abort();
@@ -68,23 +184,56 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
     if (!q || loading) return;
     setInput("");
     setErr(null);
-    const history: ChatMsg[] = [...msgs.map(({ role, content }) => ({ role, content })), { role: "user", content: q }];
-    setMsgs((m) => [...m, { role: "user", content: q }, { role: "assistant", content: "", tools: [] }]);
+    // 未完成的轮次整轮不进 history（半截回答 + 它的提问）：
+    // 模型会把残句当成自己上一轮的完整发言继续推理，孤立的提问则会被当成待答问题。
+    const history: ChatMsg[] = [
+      ...completeTurns(msgs).map(({ role, content }) => ({ role, content })),
+      { role: "user", content: q },
+    ];
+    // assistant 气泡**从创建就是 partial**，只有流式正常结束才摘掉这个标记。
+    // 这样「流到一半用户换页/换标的」时，落盘的那份天然就不含这条残句——
+    // 靠中止时再补标记是来不及的：每个 delta 都会触发落盘。
+    setMsgs((m) => [
+      ...m,
+      { role: "user", content: q },
+      { role: "assistant", content: "", tools: [], partial: true },
+    ]);
     setLoading(true);
-    const patchLast = (fn: (msg: ChatMsg & { tools?: ToolUse[] }) => ChatMsg & { tools?: ToolUse[] }) =>
+    const patchLast = (fn: (msg: StoredMsg) => StoredMsg) =>
       setMsgs((m) => m.map((msg, i) => (i === m.length - 1 && msg.role === "assistant" ? fn(msg) : msg)));
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
+    const startedKey = chatKeyRef.current;   // 这次请求属于哪份对话
+    // 只有仍是「当前这次请求」才允许写 UI——旧请求的迟到 chunk 直接丢弃
     const alive = () => abortRef.current === ac && !ac.signal.aborted;
     try {
       await chatStream(history, context, {
         onTool: (tool, args) => { if (alive()) patchLast((msg) => ({ ...msg, tools: [...(msg.tools || []), { name: tool, arg: argStr(args) }] })); },
         onDelta: (t) => { if (alive()) patchLast((msg) => ({ ...msg, content: msg.content + t })); },
       }, ac.signal);
+      // 正常收完：摘掉 partial，这条回答才开始落盘、才进下一轮 history。
+      if (alive()) patchLast((msg) => {
+        const { partial: _drop, ...rest } = msg;
+        return rest;
+      });
     } catch (e) {
-      setMsgs((m) => m.filter((msg, i) => !(i === m.length - 1 && msg.role === "assistant" && !msg.content)));
-      if (!ac.signal.aborted) setErr(e instanceof ApiError ? e.message : "对话失败");
+      // 三种「不该清理」的情况要分开判，不能简单用 abortRef.current === ac：
+      //   · 有更新的请求接管了（abortRef 指向别人）→ 别删人家的气泡
+      //   · 对话已经被换掉（key 变了）→ 别动新对话
+      //   · 面板被关闭（close 把 abortRef 置 null，但对话没变）→ **仍要清理**
+      const superseded = abortRef.current !== null && abortRef.current !== ac;
+      if (!superseded && chatKeyRef.current === startedKey) {
+        // 只处理「一个字都没收到」：把空气泡**连同它的提问**一起从界面移除——
+        // 有内容的半截回答带着 partial 标记，completeTurns 已挡在落盘与 history 之外。
+        setMsgs((m) => {
+          const last = m[m.length - 1];
+          if (!last || last.role !== "assistant" || last.content) return m;
+          const dropUser = m[m.length - 2]?.role === "user";
+          return m.slice(0, dropUser ? -2 : -1);
+        });
+        if (!ac.signal.aborted) setErr(e instanceof ApiError ? e.message : "对话失败");
+      }
     } finally {
       if (abortRef.current === ac) {
         abortRef.current = null;
@@ -118,14 +267,28 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
                 </span>
                 Vibe AI
               </span>
-              <button
-                type="button"
-                onClick={close}
-                className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                aria-label="关闭"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <div className="flex items-center gap-1">
+                {msgs.length > 0 && (
+                  // 存了就得能删：对话留在本机 localStorage，用户得有办法清掉。
+                  <button
+                    type="button"
+                    onClick={clearChat}
+                    title="清空本页对话"
+                    aria-label="清空本页对话"
+                    className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={close}
+                  className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  aria-label="关闭"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             </div>
 
             {!configured ? (
@@ -182,7 +345,13 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
                                 ))}
                               </div>
                             )}
-                            <p className="whitespace-pre-wrap">{m.content}</p>
+                            {m.role === "assistant" ? (
+                              <div className="prose prose-sm dark:prose-invert max-w-none break-words text-foreground">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                              </div>
+                            ) : (
+                              <p className="whitespace-pre-wrap break-words">{m.content}</p>
+                            )}
                             {m.content && !(loading && i === msgs.length - 1) && (
                               <div className="mt-2"><SaveNoteButton kind="问AI" title={`问 AI · ${msgs[i - 1]?.content?.slice(0, 24) || "对话"}`} content={m.content} /></div>
                             )}

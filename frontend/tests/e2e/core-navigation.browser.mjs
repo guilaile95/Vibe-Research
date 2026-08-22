@@ -97,9 +97,24 @@ try {
   );
 
   // 3) 点击主链：决策 → 交易 → 复盘，全程不需要打开任何折叠菜单。
+  // aria-current 由 React 提交渲染；waitForURL 先于 commit 返回，直接读会偶发 null，
+  // 因此轮询等待属性就位（断言仍是严格 "page"，只是允许渲染提交的时差）。
+  const expectAriaCurrent = async (selector) => {
+    await page.waitForFunction(
+      (sel) => {
+        const el = document.querySelector(sel);
+        if (!el || !el.offsetParent) return false;
+        return el.getAttribute("aria-current") === "page";
+      },
+      selector,
+      { timeout: 15000 },
+    );
+    assert.equal(await sidebar.locator(selector).getAttribute("aria-current"), "page");
+  };
+
   await sidebar.getByRole("link", { name: "决策", exact: true }).click();
   await page.waitForURL("**/decision-inbox");
-  assert.equal(await sidebar.locator('a[href="/decision-inbox"]').getAttribute("aria-current"), "page");
+  await expectAriaCurrent('a[href="/decision-inbox"]');
 
   await sidebar.getByRole("link", { name: "交易", exact: true }).click();
   await page.waitForURL("**/trades");
@@ -109,7 +124,7 @@ try {
 
   // 4) campaign Formal Decision 提案页归属「决策」高亮。
   await page.goto(`${frontend}/campaigns/c-smoke/decision-proposal`, { waitUntil: "networkidle" });
-  assert.equal(await sidebar.locator('a[href="/decision-inbox"]').getAttribute("aria-current"), "page");
+  await expectAriaCurrent('a[href="/decision-inbox"]');
 
   // 5) legacy Cockpit 保留在「分析」折叠区并带 Legacy 标识。
   await sidebar.getByRole("button", { name: "分析" }).click();

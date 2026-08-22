@@ -91,6 +91,21 @@ def global_indices() -> list[dict]:
     return out
 
 
+class SearchUnavailable(RuntimeError):
+    """证券搜索接口不可用（网络 / 风控 / 返回体变形）。
+
+    ⚠️ 与「查无此代码」严格区分：前者是基础设施问题、重试可能就好，后者是用户输错了。
+    压成同一个 None 会让用户对着"未找到对应美股/港股/韩股代码"完全无从下手（upstream #26）。
+    """
+
+
+# 主端点 + 备用端点。单一端点被风控/变更就让整块功能瘫痪，代价太大。
+_SEARCH_ENDPOINTS = (
+    "https://searchapi.eastmoney.com/api/suggest/get",
+    "https://searchadapter.eastmoney.com/api/suggest/get",
+)
+
+
 def _search(q: str) -> dict | None:
     """东财搜索一次：市场过滤 + **精确代码匹配优先**，退而取第一条。
 
@@ -98,14 +113,45 @@ def _search(q: str) -> dict | None:
     搜 BABA 混入 05593(窝轮)，且 SecurityType 分不开(正股与 ETF 同为 Type7、正股港股与窝轮同为 Type6)。
     正股的 Code 恰好等于查询词，故精确匹配 Code==q 最稳；无精确匹配(名称查询)才退回第一条。
     """
-    url = "https://searchapi.eastmoney.com/api/suggest/get"
     params = {"input": q, "type": 14,
               "token": "D43BF722C8E33BDC906FB84D85E326E8", "count": 10}
-    try:
-        r = astock.em_get(url, params=params, headers=_UA_H, timeout=10)
-        rows = (r.json().get("QuotationCodeTable") or {}).get("Data") or []
-    except Exception:
-        return None
+
+    rows, last_error = None, None
+    for url in _SEARCH_ENDPOINTS:
+        try:
+            r = astock.em_get(url, params=params, headers=_UA_H, timeout=10)
+            status = getattr(r, "status_code", 200)
+            if status >= 400:
+                # em_get 不会 raise_for_status，HTTP 错误页照样能 .json() 成功
+                raise RuntimeError(f"HTTP {status}")
+            payload = r.json()
+        except Exception as e:  # noqa: BLE001 — 网络/HTTP/JSON 解析都可能
+            last_error = f"{url} → {type(e).__name__}: {str(e)[:80]}"
+            continue
+
+        # 🔴 必须校验响应结构再决定收手。主端点返回「合法 JSON 但没有
+        # QuotationCodeTable」（错误响应 / 接口改版 / 风控页）时若当成
+        # "查得到但没有匹配"直接 break，备用端点根本轮不上（upstream #26）。
+        # payload 本身也可能不是对象（`null` / 数组）；Data 也可能不是列表。
+        table = payload.get("QuotationCodeTable") if isinstance(payload, dict) else None
+        data = table.get("Data") if isinstance(table, dict) else None
+        if not isinstance(data, list):
+            last_error = (
+                f"{url} → 响应结构异常（缺少 QuotationCodeTable.Data 或类型不对）"
+                f"，可能是接口改版或被风控页拦截"
+            )
+            continue
+
+        rows = data   # 结构正常但为空 = 真的没匹配到
+        break
+
+    if rows is None:
+        # 🔴 全部端点都请求失败 ≠ 查无此票——两种情况不能压成同一个"未找到"。
+        raise SearchUnavailable(
+            f"证券搜索接口暂时不可用（已尝试 {len(_SEARCH_ENDPOINTS)} 个端点）。"
+            f"最后一个错误：{last_error}。"
+            f"这与「查无此代码」是两回事——请检查网络环境，或稍后重试。"
+        )
     matches = []
     for s in rows:
         try:
@@ -177,4 +223,63 @@ def us_hk_stock(query: str) -> dict:
         "market": info["market"],
         "quote": quote,
         "metrics": _key_metrics(info["secucode"]) if info["market"] != "KR" else None,  # 韩股东财无 F10 财务
+    }
+_HK_CF_ITEMS = {
+    "003999": "经营活动现金流净额",
+    "005999": "投资活动现金流净额",
+    "007999": "筹资活动现金流净额",
+    "006999": "汇率变动前现金净额",
+    "011997": "汇率变动等其他影响",
+    "010999": "现金及等价物净增加",
+    "011001": "期初现金及等价物",
+    "011999": "期末现金及等价物",
+}
+_HK_CF_ORDER = ("003999", "005999", "007999", "006999", "011997", "010999", "011001", "011999")
+
+
+def hk_cashflow(query: str, periods: int = 8) -> dict:
+    """港股现金流量表（东财 datacenter RPT_HKSK_FN_CASHFLOW，与已接入 GMAININDICATOR 同为东财域内源）。
+
+    按 REPORT_DATE 分组还原每期汇总（经营 / 投资 / 筹资 / 净增加 / 期初期末），返回最近 `periods` 期。
+    金额为原生币种（见 `currency`，港股多为人民币或港元），季度为 YTD 累计、附同比。
+    非港股（美/韩股，其现金流走 F10/SK 或无）或查不到 → 返回 {}。
+    """
+    info = resolve_symbol(query)
+    if not info or not info["secucode"].endswith(".HK"):
+        return {}
+    # ⚠️ 该端点是**按科目逐行**返回的，一期就有几十行（实测腾讯 00700 最多 52 行/期、
+    # 工行 01398 38 行/期）。只按 SECUCODE 取 300 行，最新 8 期根本装不下——
+    # 最旧的那期会被截断成残缺科目，而且不报错。所以在**服务端**就按需要的科目码过滤：
+    # 实测同样 300 行，覆盖期数从 13 期升到 39 期，请求量反而更小。
+    item_filter = "(STD_ITEM_CODE in (" + ",".join(f'"{c}"' for c in _HK_CF_ORDER) + "))"
+    rows = astock.eastmoney_datacenter(
+        "RPT_HKSK_FN_CASHFLOW",
+        filter_str=f'(SECUCODE="{info["secucode"]}"){item_filter}',
+        page_size=300, sort_columns="REPORT_DATE", sort_types="-1")
+    if not rows:
+        return {}
+    by_period: dict[str, dict] = {}
+    for r in rows:
+        rd = str(r.get("REPORT_DATE") or "")[:10]
+        code = str(r.get("STD_ITEM_CODE") or "")
+        if not rd or code not in _HK_CF_ITEMS:
+            continue
+        p = by_period.setdefault(rd, {
+            "report_date": rd, "report": r.get("REPORT"),
+            "currency": r.get("CURRENCY"), "account_standard": r.get("ACCOUNT_STANDARD"),
+            "items": {},
+        })
+        amt, yoy = r.get("AMOUNT"), r.get("YOY_RATIO")
+        p["items"][_HK_CF_ITEMS[code]] = {
+            "amount": amt if isinstance(amt, (int, float)) else None,
+            "yoy": yoy if isinstance(yoy, (int, float)) else None,
+        }
+    if not by_period:
+        return {}
+    periods_out = sorted(by_period.values(), key=lambda x: x["report_date"], reverse=True)[:periods]
+    return {
+        "code": info["code"], "name": info["name"], "market": "HK",
+        "currency": periods_out[0].get("currency"),
+        "item_order": [_HK_CF_ITEMS[c] for c in _HK_CF_ORDER],
+        "periods": periods_out,
     }

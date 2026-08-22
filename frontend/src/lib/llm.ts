@@ -2,6 +2,7 @@
 
 import { ApiError, streamNdjson, type NdjsonStreamResult } from "./api.ts";
 import { isCliProvider, type ProviderId } from "./ai-models.ts";
+import { storageSet, storageRemove } from "./storage.ts";
 
 export interface LlmConfig {
   provider: ProviderId;
@@ -33,11 +34,11 @@ export function loadLlm(): LlmConfig | null {
 }
 
 export function saveLlm(cfg: LlmConfig) {
-  localStorage.setItem(KEY, JSON.stringify(cfg));
+  storageSet(KEY, JSON.stringify(cfg));
 }
 
 export function clearLlm() {
-  localStorage.removeItem(KEY);
+  storageRemove(KEY);
 }
 
 export function hasLlm(): boolean {

@@ -56,8 +56,10 @@ const PRIMARY_NAV = [
 const LIBRARY_NAV = [
   { to: "/intel", label: "市场情报" },
   { to: "/sectors", label: "板块" },
+  { to: "/signals", label: "产业信号" },
   { to: "/thesis", label: "投资逻辑" },
   { to: "/my-reports", label: "研报" },
+  { to: "/debate", label: "多空辩论" },
   { to: "/notes", label: "笔记" },
 ];
 
