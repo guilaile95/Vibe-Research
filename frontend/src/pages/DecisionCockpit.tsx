@@ -863,7 +863,11 @@ function SummaryBlock({ account, advice }: { account: Overview["account_funding"
         <h3 className="mb-2 flex items-center gap-1 text-xs font-semibold text-muted-foreground">
           <ShieldCheck className="h-3.5 w-3.5" /> 账户资金（只读）
         </h3>
-        {!account.configured ? (
+        {account.status === "corrupted" ? (
+          <p className="text-xs text-destructive" data-testid="cash-corrupted">
+            账户资金快照损坏/不可读取（{account.reason_code ?? "ACCOUNT_PROFILE_CORRUPTED"}）。现金可执行性保持不可用，不会自动修复。
+          </p>
+        ) : !account.configured ? (
           <p className="text-xs text-muted-foreground" data-testid="cash-unconfigured">
             未配置。请到「我的持仓」填写账户总资产与可用现金。现金可执行性将标记为 cash_unconfigured。
           </p>

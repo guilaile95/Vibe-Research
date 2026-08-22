@@ -135,6 +135,8 @@ def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
 
         res["account_funding"] = {
             "configured": True,
+            "status": "valid",
+            "reason_code": None,
             "total_assets": total_assets_val,
             "available_cash": available_cash_val,
             "available_cash_pct": available_cash_pct,
@@ -150,6 +152,8 @@ def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
     else:
         res["account_funding"] = {
             "configured": False,
+            "status": st["status"],
+            "reason_code": st.get("reason_code"),
             "total_assets": None,
             "available_cash": None,
             "available_cash_pct": None,

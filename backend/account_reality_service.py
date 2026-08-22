@@ -35,6 +35,7 @@ _CASH_COVERAGE_TRADES_ONLY = "TRADES_ONLY"
 _CASH_COVERAGE_TRADES_PLUS_CASH_EVENTS = "TRADES_PLUS_MANUAL_CASH_EVENTS"
 
 _REASON_CASH_EVENTS_UNSUPPORTED = "CASH_EVENTS_UNSUPPORTED"
+_REASON_ACCOUNT_PROFILE_CORRUPTED = "ACCOUNT_PROFILE_CORRUPTED"
 _REASON_CASH_UNKNOWN = "CASH_UNKNOWN"
 _REASON_OPENING_CASH_UNKNOWN = "OPENING_CASH_UNKNOWN"
 _REASON_NOT_BOOTSTRAPPED = "NOT_BOOTSTRAPPED"
@@ -86,9 +87,20 @@ def _valid_price_date(value: Any) -> str | None:
 
 
 def _current_cash_fact() -> dict[str, Any]:
-    """account_profile.available_cash → MANUAL CURRENT FACT；缺失 → UNKNOWN（不是 0）。"""
-    profile = account_profile.load_account_profile()
-    if profile is None:
+    """读取 MANUAL CURRENT FACT，保留 Profile 缺失与损坏三态。"""
+    status = account_profile.get_account_profile_status()
+    profile = status.get("data")
+    if status["status"] != "valid" or profile is None:
+        fact_status = (
+            "CORRUPTED"
+            if status["status"] == "corrupted"
+            else "UNKNOWN"
+        )
+        reason_code = (
+            _REASON_ACCOUNT_PROFILE_CORRUPTED
+            if fact_status == "CORRUPTED"
+            else _REASON_CASH_UNKNOWN
+        )
         return {
             "value": None,
             "source": _CASH_SOURCE_ACCOUNT_PROFILE,
@@ -97,7 +109,8 @@ def _current_cash_fact() -> dict[str, Any]:
             "temporal_status": _TEMPORAL_UNPROVEN,
             "temporal_reason_code": _REASON_CASH_EFFECTIVE_AT_UNPROVEN,
             "fact_type": _FACT_MANUAL,
-            "status": "UNKNOWN",
+            "status": fact_status,
+            "reason_code": reason_code,
         }
     return {
         "value": round(float(profile["available_cash"]), 2),
@@ -108,6 +121,7 @@ def _current_cash_fact() -> dict[str, Any]:
         "temporal_reason_code": _REASON_CASH_EFFECTIVE_AT_UNPROVEN,
         "fact_type": _FACT_MANUAL,
         "status": "AVAILABLE",
+        "reason_code": None,
     }
 
 
@@ -203,10 +217,10 @@ def _ledger_cash_candidate(derived: dict[str, Any]) -> dict[str, Any]:
 def _cash_reconciliation(
     current_fact: dict[str, Any], ledger_candidate: dict[str, Any]
 ) -> dict[str, Any]:
-    """两者都存在 → 按 2 位金额精度比较 MATCH/MISMATCH；任一缺失 → UNKNOWN。"""
+    """仅有效手工事实允许 MATCH/MISMATCH；损坏或缺失均保持 UNKNOWN。"""
     current_value = current_fact.get("value")
     ledger_value = ledger_candidate.get("value")
-    if current_value is not None and ledger_value is not None:
+    if current_fact.get("status") == "AVAILABLE" and current_value is not None and ledger_value is not None:
         status = (
             "MATCH"
             if round(float(current_value), 2) == round(float(ledger_value), 2)
@@ -218,6 +232,7 @@ def _cash_reconciliation(
         "status": status,
         "current_fact_value": current_value,
         "ledger_candidate_value": ledger_value,
+        "reason_code": current_fact.get("reason_code") if status == "UNKNOWN" else None,
     }
 
 
@@ -325,7 +340,7 @@ def _settled_nav(
     if derived.get("bootstrap_status") != "BOOTSTRAPPED":
         return None, _REASON_NOT_BOOTSTRAPPED
     if current_fact.get("value") is None:
-        return None, _REASON_CASH_UNKNOWN
+        return None, current_fact.get("reason_code") or _REASON_CASH_UNKNOWN
     if pricing["status"] != "COMPLETE":
         return None, pricing["status"]
     nav = round(float(current_fact["value"]) + float(pricing["priced_market_value"]), 2)
@@ -351,6 +366,8 @@ def get_account_reality() -> dict[str, Any]:
     settled_nav, nav_skip = _settled_nav(derived, current_fact, pricing)
 
     reason_codes: list[str] = [_REASON_CASH_EVENTS_UNSUPPORTED]  # 事实边界：非交易现金事件（corporate action 等）仍不支持
+    if current_fact.get("status") == "CORRUPTED":
+        reason_codes.append(_REASON_ACCOUNT_PROFILE_CORRUPTED)
     if nav_skip:
         reason_codes.append(nav_skip)
     if pricing["status"] == "PARTIAL":
@@ -366,9 +383,11 @@ def get_account_reality() -> dict[str, Any]:
         "account_profile_total_assets": None,
         "computed_nav": None,
     }
-    profile = account_profile.load_account_profile()
+    profile_status = account_profile.get_account_profile_status()
+    profile = profile_status.get("data")
     if (
-        profile is not None
+        profile_status["status"] == "valid"
+        and profile is not None
         and profile.get("total_assets") is not None
         and settled_nav is not None
     ):
@@ -426,7 +445,14 @@ def get_account_reality() -> dict[str, Any]:
         "market_value": pricing["priced_market_value"],
         "settled_nav": settled_nav,
         "nav_cash_source": _CASH_SOURCE_ACCOUNT_PROFILE if settled_nav is not None else None,
-        "nav_reconciliation": nav_recon,
+        "nav_reconciliation": {
+            **nav_recon,
+            "reason_code": (
+                _REASON_ACCOUNT_PROFILE_CORRUPTED
+                if profile_status["status"] == "corrupted"
+                else None
+            ),
+        },
         "nav_temporal_state": nav_temporal_state,
         "nav_temporal_reason_codes": nav_temporal_reason_codes,
         "confidence": confidence,

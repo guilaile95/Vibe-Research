@@ -117,6 +117,27 @@ class TestAccountRealityApi:
         assert data["settled_nav"] is None
         assert "CASH_UNKNOWN" in data["reason_codes"]
 
+    def test_reality_corrupted_profile_is_explicit_and_fail_closed(self, client, tmp_path, monkeypatch):
+        _fake_kline(monkeypatch, {"600519": [{"datetime": "2026-08-04 15:00:00", "close": 20.0}]})
+        profile_file = tmp_path / "account_profile.json"
+        monkeypatch.setattr(account_profile, "CACHE_DIR", str(tmp_path))
+        profile_file.write_text("{corrupted json", encoding="utf-8")
+        before = profile_file.read_bytes()
+        _bootstrap(opening_cash=100000.0, positions=[
+            {"code": "600519", "shares": 100, "cost_basis": 10.0},
+        ])
+        resp = client.get("/api/account/reality")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["cash"]["current_fact"]["status"] == "CORRUPTED"
+        assert data["cash"]["current_fact"]["reason_code"] == "ACCOUNT_PROFILE_CORRUPTED"
+        assert data["cash"]["ledger_candidate"]["status"] == "AVAILABLE"
+        assert data["cash"]["reconciliation"] == "UNKNOWN"
+        assert data["settled_nav"] is None
+        assert "ACCOUNT_PROFILE_CORRUPTED" in data["reason_codes"]
+        assert data["nav_reconciliation"]["status"] == "UNKNOWN"
+        assert profile_file.read_bytes() == before
+
     def test_reality_not_bootstrapped(self, client, tmp_path, monkeypatch):
         """未 bootstrap → settled NAV null + NOT_BOOTSTRAPPED。"""
         _fake_kline(monkeypatch, {"600519": [{"datetime": "2026-08-04 15:00:00", "close": 20.0}]})

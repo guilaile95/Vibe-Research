@@ -919,12 +919,15 @@ class AccountProfileIn(BaseModel):
 
 @app.get("/api/account-profile")
 def account_profile_get():
-    """账户资金。未配置 → configured=false, data=null；不把未配置解释为 0。"""
+    """账户资金状态；缺失与损坏必须保持可区分且只读。"""
     try:
-        d = account_profile.load_account_profile()
-        if d is None:
-            return {"configured": False, "data": None}
-        return {"configured": True, "data": d}
+        status = account_profile.get_account_profile_status()
+        return {
+            "configured": status["status"] == "valid",
+            "status": status["status"],
+            "reason_code": status.get("reason_code"),
+            "data": status.get("data"),
+        }
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"账户资金读取异常：{e}") from e
 
@@ -935,7 +938,7 @@ def account_profile_save(req: AccountProfileIn):
     try:
         total, cash = account_profile.validate_account_payload(req.model_dump())
         data = account_profile.save_account_profile(total, cash)
-        return {"configured": True, "data": data}
+        return {"configured": True, "status": "valid", "reason_code": None, "data": data}
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001

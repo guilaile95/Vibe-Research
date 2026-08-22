@@ -12,6 +12,7 @@ import {
   type PortfolioAdviceAccountAction,
   type PortfolioAdviceConfidence,
   type AccountProfileData,
+  type AccountProfileStatus,
   type AccountFundingData,
   type AccountReality,
   type DataHealthRecordDto,
@@ -184,11 +185,11 @@ function TruncatedNotes({ title, items }: { title: string; items: string[] }) {
 }
 
 function AccountFundingCard({ funding, corrupted }: { funding?: AccountFundingData | null; corrupted?: boolean }) {
-  if (corrupted) {
+  if (corrupted || funding?.status === "corrupted") {
     return (
       <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive flex items-center gap-2">
         <AlertCircle className="h-4 w-4 shrink-0" />
-        <span>账户资金配置文件读取失败或损坏，未计算账户级仓位指标。</span>
+        <span>账户资金配置文件读取失败或损坏，未计算账户级仓位指标。不会自动修复。</span>
       </div>
     );
   }
@@ -385,6 +386,7 @@ export function Portfolio() {
   // 账户资金（手工填写）
   const [acct, setAcct] = useState<AccountProfileData | null>(null);
   const [acctConfigured, setAcctConfigured] = useState(false);
+  const [acctStatus, setAcctStatus] = useState<AccountProfileStatus>("not_configured");
   const [acctLoading, setAcctLoading] = useState(false);
   const [acctLoadError, setAcctLoadError] = useState<string | null>(null);
   // P1-CASH1：canonical ledger cash readback（bootstrap 后无需重复填写即可见正常资金状态）。
@@ -445,7 +447,8 @@ export function Portfolio() {
       const resp = await api.getAccountProfile();
       // resp 现在是 AccountProfileResponse（{configured, data}），
       // 因为 getAccountProfile 使用 unwrapData=false。
-      if (resp.configured && resp.data) {
+      setAcctStatus(resp.status);
+      if (resp.status === "valid" && resp.configured && resp.data) {
         setAcctConfigured(true);
         setAcct(resp.data);
       } else {
@@ -595,7 +598,8 @@ export function Portfolio() {
     try {
       const resp = await api.saveAccountProfile({ total_assets: total, available_cash: cash });
       // resp 现在是 AccountProfileResponse（由于使用了 unwrapData=false）。
-      if (resp.configured && resp.data) {
+      if (resp.status === "valid" && resp.configured && resp.data) {
+        setAcctStatus("valid");
         setAcctConfigured(true);
         setAcct(resp.data);
         setAcctOpen(false);
@@ -696,7 +700,7 @@ export function Portfolio() {
   // candidate 语义；两者同存时显示对账状态，不互相覆盖。settled NAV 仍依赖手工快照。
   const ledgerCash = acctReality?.cash?.ledger_candidate;
   const ledgerCashAvailable =
-    !acctConfigured && ledgerCash?.status === "AVAILABLE" && typeof ledgerCash.value === "number";
+    acctStatus === "not_configured" && !acctConfigured && ledgerCash?.status === "AVAILABLE" && typeof ledgerCash.value === "number";
   const summary = advice?.portfolio_summary;
   const account = advice?.account_action;
 
@@ -798,6 +802,21 @@ export function Portfolio() {
               className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
               <RotateCw className={cn("h-4 w-4", acctLoading && "animate-spin")} />
               重试
+            </button>
+          </div>
+        ) : acctStatus === "corrupted" ? (
+          <div data-testid="account-profile-corrupted" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+            <div className="flex items-start gap-2 text-sm text-destructive">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">账户资金快照损坏/不可读取</p>
+                <p className="mt-1 text-xs">账户资金事实已停止使用，不会自动修复；请确认文件后显式重新填写。</p>
+                <p className="mt-1 font-mono text-[11px]">ACCOUNT_PROFILE_CORRUPTED</p>
+              </div>
+            </div>
+            <button onClick={openAcct}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
+              重新填写
             </button>
           </div>
         ) : acctConfigured && acct ? (
@@ -1283,7 +1302,7 @@ export function Portfolio() {
             {/* 账户资金参考 */}
             <AccountFundingCard
               funding={advice.account_funding}
-              corrupted={advice.data_limitations?.some((l) => l.includes("读取失败或损坏"))}
+              corrupted={advice.account_funding?.status === "corrupted"}
             />
 
             {/* 账户级建议 */}
