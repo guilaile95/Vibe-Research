@@ -252,6 +252,12 @@ async function run() {
     const failedRequests = [];
     const notFoundResponses = [];
     let authorityFailure = false;
+    let committedDecisionId = null;
+    const readbackVariant = process.env.DCR1_READBACK_VARIANT || "valid";
+    assert.ok(
+      ["valid", "malformed", "decision-mismatch", "campaign-mismatch"].includes(readbackVariant),
+      `unsupported DCR1_READBACK_VARIANT: ${readbackVariant}`,
+    );
     page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
     page.on("requestfailed", (request) => failedRequests.push({ url: request.url(), error: request.failure()?.errorText }));
     page.on("response", (response) => {
@@ -267,6 +273,10 @@ async function run() {
       const url = new URL(request.url());
       const method = request.method();
       const contextPath = `/api/campaigns/${campaign.campaign_id}`;
+      const committedPathPrefix = `${contextPath}/decision-proposal/committed/`;
+      if (method === "GET" && url.pathname.startsWith(committedPathPrefix)) {
+        committedDecisionId = url.pathname.slice(committedPathPrefix.length);
+      }
       if (process.env.DF2_FORCE_CONTEXT_FALLBACK === "1" && method === "GET" && url.pathname === `${contextPath}/current-thesis`) {
         authorityFailure = true;
         const fallbackBody = { data: { campaign_id: campaign.campaign_id, thesis_id: "0123456789abcdef0123456789abcdef", binding: { thesis_revision_at_bind: 2, campaign_strategy_at_bind: "SWING", bound_at: "2026-08-22T00:00:00.000Z" }, formal_state: "confirmed", frozen_revision: null, ready: false, formal_status: "NOT_READY", reason: "NOT_FROZEN" } };
@@ -280,10 +290,32 @@ async function run() {
           request.headers(),
           method === "GET" || method === "HEAD" ? undefined : request.postDataBuffer(),
         );
+        let responseBody = response.body;
+        if (
+          method === "GET"
+          && url.pathname.startsWith(committedPathPrefix)
+          && readbackVariant !== "valid"
+          && response.status === 200
+        ) {
+          const payload = JSON.parse(response.body.toString("utf8"));
+          if (readbackVariant === "malformed") {
+            delete payload.data.formal_decision;
+          } else if (readbackVariant === "decision-mismatch") {
+            payload.data.committed.decision_id = `decision_${"e".repeat(32)}`;
+          } else if (readbackVariant === "campaign-mismatch") {
+            payload.data.committed.campaign_id = `campaign_${"f".repeat(32)}`;
+          }
+          responseBody = Buffer.from(JSON.stringify(payload));
+        }
+        const responseHeaders = { ...response.headers };
+        if (responseBody !== response.body) {
+          delete responseHeaders["content-length"];
+          delete responseHeaders["Content-Length"];
+        }
         await route.fulfill({
           status: response.status,
-          headers: response.headers,
-          body: response.body,
+          headers: responseHeaders,
+          body: responseBody,
         });
       } catch (error) {
         console.error(`[proxy] ${method} ${url.pathname} failed:`, error instanceof Error ? `${error.message} ${error.code ?? ""}` : error);
@@ -353,12 +385,24 @@ async function run() {
     await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
     assert.equal(await freeze.isEnabled(), true);
     await freeze.click();
-    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor({ timeout: 180000 });
-    const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
-    const committedId = committedLine.replace(/^decision_id：/, "").trim();
-    assert.match(committedId, /^decision_[0-9a-f]{32}$/);
-    const reread = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed/${committedId}`);
+    await page.waitForFunction(() => document.querySelector('[data-formal-decision-evaluation]') !== null || document.querySelector('[role="alert"]') !== null, null, { timeout: 180000 });
+    assert.ok(committedDecisionId, "durable committed GET must be observed");
+    assert.match(committedDecisionId, /^decision_[0-9a-f]{32}$/);
+    const committedSuccess = page.locator('[data-formal-decision-evaluation="EVALUATED"]');
+    if (readbackVariant === "valid") {
+      await committedSuccess.waitFor({ timeout: 30000 });
+      const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
+      const committedId = committedLine.replace(/^decision_id：/, "").trim();
+      assert.equal(committedId, committedDecisionId);
+    } else {
+      assert.equal(await committedSuccess.count(), 0, `${readbackVariant} must not render committed success UI`);
+      const readbackError = await page.locator('[role="alert"]').innerText();
+      assert.match(readbackError, /COMMITTED_DECISION_READ_ERROR/);
+    }
+    const reread = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed/${committedDecisionId}`);
     assert.equal(reread.formal_decision.evaluation, "EVALUATED");
+    assert.equal(reread.committed.decision_id, committedDecisionId);
+    assert.equal(reread.committed.campaign_id, campaign.campaign_id);
     assert.equal(reread.critical_data.critical_data_state, previewCriticalData.state);
     assert.equal(reread.critical_data.critical_data_evaluation, previewCriticalData.evaluation);
     assert.equal(reread.critical_data.campaign_id, campaign.campaign_id);
@@ -367,7 +411,7 @@ async function run() {
     const inbox = await jsonRequest(backend, "/api/decision-inbox");
     const item = inbox.campaign_items.find((entry) => entry.campaign_id === campaign.campaign_id);
     assert.ok(item, "Decision Inbox must contain the active Campaign");
-    assert.equal(item.last_frozen_decision.decision_id, committedId);
+    assert.equal(item.last_frozen_decision.decision_id, committedDecisionId);
     assert.equal(item.formal_decision_evaluation, "EVALUATED");
     assert.equal(item.critical_data.critical_data_state, reread.critical_data.critical_data_state);
     assert.equal(item.critical_data.critical_data_evaluation, reread.critical_data.critical_data_evaluation);

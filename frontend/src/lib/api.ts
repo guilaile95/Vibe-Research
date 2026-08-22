@@ -144,6 +144,12 @@ export class DecisionChallengeReadError extends Error {
   }
 }
 
+export class CommittedDecisionReadError extends Error {
+  constructor(message = "COMMITTED_DECISION_READ_ERROR：Committed Decision durable readback 格式无效") {
+    super(message);
+  }
+}
+
 
 // 后端访问密钥（对应后端部署时的 VR_API_KEY，公网部署防蹭用）。只存本地浏览器。
 const ACCESS_KEY = "vr-access-key";
@@ -1446,13 +1452,312 @@ export async function getDecisionChallengeForProposal(
   }
 }
 
+const COMMITTED_RUNTIME_SCHEMA_VERSION = "decision_commit_runtime.v0.1";
+const FROZEN_DECISION_SCHEMA_VERSION = "frozen-decision-ledger.v0.1";
+const HARD_RISK_SCHEMA_VERSION = "hard_risk_runtime.v0.1";
+const HARD_RISK_POLICY_VERSION = "hard_risk_policy.v0.1";
+const MATERIAL_CHANGE_SCHEMA_VERSION = "material_change.projection.v0.1";
+const MATERIAL_CHANGE_AUTHORITY_REF = "material_change:projection:v0.1";
+const NO_PRIOR_DECISION_BOUNDARY = "NO_PRIOR_DECISION_BOUNDARY";
+const CAMPAIGN_ID_RE = /^campaign_[0-9a-f]{32}$/;
+const DECISION_ID_RE = /^decision_[0-9a-f]{32}$/;
+const THESIS_ID_RE = /^[0-9a-f]{32}$/;
+const SECURITY_CODE_RE = /^\d{6}$/;
+const SNAPSHOT_HASH_RE = /^[0-9a-f]{64}$/;
+const CANONICAL_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+const EVALUATIONS = new Set(["EVALUATED", "UNKNOWN", "NOT_EVALUATED", "ERROR"]);
+const STRATEGIES = new Set(["SHORT", "SWING", "MEDIUM"]);
+const HARD_RISK_PAIRS = new Set([
+  "CLEAR:EVALUATED",
+  "CONFIRMED:EVALUATED",
+  "UNKNOWN:UNKNOWN",
+  "UNKNOWN:ERROR",
+  "NOT_EVALUATED:NOT_EVALUATED",
+]);
+const MATERIAL_CHANGE_PAIRS = new Set([
+  "NONE:EVALUATED",
+  "CONFIRMED:EVALUATED",
+  "UNKNOWN:UNKNOWN",
+  "UNKNOWN:ERROR",
+  "NOT_EVALUATED:NOT_EVALUATED",
+]);
+
+type RuntimeRecord = Record<string, unknown>;
+
+function isRuntimeRecord(value: unknown): value is RuntimeRecord {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readbackError(field: string): never {
+  throw new CommittedDecisionReadError(
+    `COMMITTED_DECISION_READ_ERROR：${field} 缺失或格式无效`,
+  );
+}
+
+function requireRecord(value: unknown, field: string): RuntimeRecord {
+  if (!isRuntimeRecord(value)) readbackError(field);
+  return value;
+}
+
+function requireNonEmptyString(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim() || value !== value.trim()) {
+    readbackError(field);
+  }
+  return value;
+}
+
+function requireStringArray(value: unknown, field: string, nonEmpty = false): string[] {
+  if (
+    !Array.isArray(value)
+    || !value.every(
+      (item) => typeof item === "string" && Boolean(item.trim()) && item.trim() === item,
+    )
+  ) {
+    readbackError(field);
+  }
+  if (nonEmpty && value.length === 0) readbackError(field);
+  return value;
+}
+
+function requireCanonicalUtc(value: unknown, field: string): string {
+  const text = requireNonEmptyString(value, field);
+  if (!CANONICAL_UTC_RE.test(text)) readbackError(field);
+  const normalized = text.replace(
+    /\.(\d{6})Z$/,
+    (_match, micros: string) => `.${micros.slice(0, 3)}Z`,
+  );
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== normalized) {
+    readbackError(field);
+  }
+  return text;
+}
+
+function requireEvaluation(value: unknown, field: string): string {
+  const evaluation = requireNonEmptyString(value, field);
+  if (!EVALUATIONS.has(evaluation)) readbackError(field);
+  return evaluation;
+}
+
+function requireAuthorityEnvelope(value: unknown, field: string): RuntimeRecord {
+  return requireRecord(value, field);
+}
+
+function validateCommittedSnapshot(
+  value: unknown,
+  campaignId: string,
+  decisionId: string,
+): RuntimeRecord {
+  const committed = requireRecord(value, "committed");
+  if (committed.snapshot_schema_version !== FROZEN_DECISION_SCHEMA_VERSION) {
+    readbackError("committed.snapshot_schema_version");
+  }
+  if (committed.decision_id !== decisionId || !DECISION_ID_RE.test(String(committed.decision_id))) {
+    readbackError("committed.decision_id");
+  }
+  if (committed.campaign_id !== campaignId || !CAMPAIGN_ID_RE.test(String(committed.campaign_id))) {
+    readbackError("committed.campaign_id");
+  }
+  if (typeof committed.security_code !== "string" || !SECURITY_CODE_RE.test(committed.security_code)) {
+    readbackError("committed.security_code");
+  }
+  if (typeof committed.strategy !== "string" || !STRATEGIES.has(committed.strategy)) {
+    readbackError("committed.strategy");
+  }
+  requireCanonicalUtc(committed.committed_at, "committed.committed_at");
+  requireCanonicalUtc(committed.created_at, "committed.created_at");
+  for (const field of [
+    "asset_view",
+    "trade_view",
+    "portfolio_view",
+    "action_envelope",
+  ]) {
+    requireRecord(committed[field], `committed.${field}`);
+  }
+  for (const field of [
+    "maintain_conditions",
+    "upgrade_conditions",
+    "downgrade_conditions",
+    "invalidation_conditions",
+    "key_assumptions",
+    "event_invalidation_conditions",
+    "evidence_refs",
+    "risk_refs",
+    "source_refs",
+  ]) {
+    requireStringArray(committed[field], `committed.${field}`);
+  }
+  if (
+    typeof committed.strategy_horizon === "string"
+    ? !committed.strategy_horizon.trim() || committed.strategy_horizon !== committed.strategy_horizon.trim()
+    : !isRuntimeRecord(committed.strategy_horizon)
+  ) {
+    readbackError("committed.strategy_horizon");
+  }
+  requireCanonicalUtc(committed.review_by, "committed.review_by");
+  if (committed.validity_status_at_commit !== "CURRENT") {
+    readbackError("committed.validity_status_at_commit");
+  }
+  for (const field of [
+    "risk_policy_version",
+    "opportunity_policy_version",
+    "decision_policy_version",
+    "behavior_model_version",
+  ]) {
+    requireNonEmptyString(committed[field], `committed.${field}`);
+  }
+  for (const field of [
+    "data_quality",
+    "evidence_confidence",
+    "inference_confidence",
+    "decision_confidence",
+  ]) {
+    if (!(field in committed)) readbackError(`committed.${field}`);
+  }
+  if (typeof committed.thesis_id !== "string" || !THESIS_ID_RE.test(committed.thesis_id)) {
+    readbackError("committed.thesis_id");
+  }
+  if (
+    typeof committed.thesis_revision !== "number"
+    || !Number.isInteger(committed.thesis_revision)
+    || committed.thesis_revision < 1
+  ) {
+    readbackError("committed.thesis_revision");
+  }
+  if (typeof committed.snapshot_hash !== "string" || !SNAPSHOT_HASH_RE.test(committed.snapshot_hash)) {
+    readbackError("committed.snapshot_hash");
+  }
+  requireNonEmptyString(committed.snapshot_json, "committed.snapshot_json");
+  if (committed.user_confirmed !== true) readbackError("committed.user_confirmed");
+  return committed;
+}
+
+function validateFormalDecision(
+  value: unknown,
+  decisionId: string,
+): RuntimeRecord {
+  const formalDecision = requireAuthorityEnvelope(value, "formal_decision");
+  requireEvaluation(formalDecision.evaluation, "formal_decision.evaluation");
+  requireStringArray(formalDecision.reason_codes, "formal_decision.reason_codes");
+  requireStringArray(formalDecision.authority_refs, "formal_decision.authority_refs", true);
+  if (formalDecision.decision_id !== decisionId) readbackError("formal_decision.decision_id");
+  if (formalDecision.committed_at !== undefined) {
+    requireCanonicalUtc(formalDecision.committed_at, "formal_decision.committed_at");
+  }
+  return formalDecision;
+}
+
+function validateHardRisk(value: unknown, campaignId: string, asOf: string): RuntimeRecord {
+  const hardRisk = requireAuthorityEnvelope(value, "hard_risk");
+  if (hardRisk.schema_version !== HARD_RISK_SCHEMA_VERSION) readbackError("hard_risk.schema_version");
+  if (hardRisk.policy_version !== HARD_RISK_POLICY_VERSION) readbackError("hard_risk.policy_version");
+  if (hardRisk.campaign_id !== campaignId) readbackError("hard_risk.campaign_id");
+  if (typeof hardRisk.security_code !== "string" || !SECURITY_CODE_RE.test(hardRisk.security_code)) {
+    readbackError("hard_risk.security_code");
+  }
+  if (typeof hardRisk.strategy !== "string" || !STRATEGIES.has(hardRisk.strategy)) {
+    readbackError("hard_risk.strategy");
+  }
+  if (hardRisk.as_of !== asOf) readbackError("hard_risk.as_of");
+  const state = requireNonEmptyString(hardRisk.hard_risk_state, "hard_risk.hard_risk_state");
+  const evaluation = requireEvaluation(hardRisk.hard_risk_evaluation, "hard_risk.hard_risk_evaluation");
+  if (!HARD_RISK_PAIRS.has(`${state}:${evaluation}`)) readbackError("hard_risk.state/evaluation");
+  const reasons = requireStringArray(hardRisk.reason_codes, "hard_risk.reason_codes");
+  const refs = requireStringArray(hardRisk.authority_refs, "hard_risk.authority_refs");
+  if (state !== "CLEAR" && reasons.length === 0) readbackError("hard_risk.reason_codes");
+  if (evaluation === "EVALUATED" && refs.length === 0) readbackError("hard_risk.authority_refs");
+  return hardRisk;
+}
+
+function validateMaterialChange(
+  value: unknown,
+  campaignId: string,
+  decisionId: string,
+  asOf: string,
+): RuntimeRecord {
+  const material = requireAuthorityEnvelope(value, "material_change");
+  if (
+    material.state === "NOT_EVALUATED"
+    && material.evaluation === "NOT_EVALUATED"
+    && Array.isArray(material.reason_codes)
+  ) {
+    const reasons = requireStringArray(material.reason_codes, "material_change.reason_codes", true);
+    if (reasons.length !== 1 || reasons[0] !== NO_PRIOR_DECISION_BOUNDARY) {
+      readbackError("material_change.reason_codes");
+    }
+    if (Object.keys(material).some((key) => !["state", "evaluation", "reason_codes"].includes(key))) {
+      readbackError("material_change.reduced_envelope");
+    }
+    return material;
+  }
+  if (material.schema_version !== MATERIAL_CHANGE_SCHEMA_VERSION) {
+    readbackError("material_change.schema_version");
+  }
+  if (material.authority_ref !== MATERIAL_CHANGE_AUTHORITY_REF) {
+    readbackError("material_change.authority_ref");
+  }
+  if (material.campaign_id !== campaignId) readbackError("material_change.campaign_id");
+  if (material.as_of !== asOf) readbackError("material_change.as_of");
+  if (typeof material.security_code !== "string" || !SECURITY_CODE_RE.test(material.security_code)) {
+    readbackError("material_change.security_code");
+  }
+  if (typeof material.strategy !== "string" || !STRATEGIES.has(material.strategy)) {
+    readbackError("material_change.strategy");
+  }
+  if (material.decision_id !== decisionId || !DECISION_ID_RE.test(String(material.decision_id))) {
+    readbackError("material_change.decision_id");
+  }
+  requireCanonicalUtc(material.decision_boundary_at, "material_change.decision_boundary_at");
+  const state = requireNonEmptyString(material.material_change_state, "material_change.material_change_state");
+  const evaluation = requireEvaluation(material.material_change_evaluation, "material_change.material_change_evaluation");
+  if (!MATERIAL_CHANGE_PAIRS.has(`${state}:${evaluation}`)) readbackError("material_change.state/evaluation");
+  requireStringArray(material.reason_codes, "material_change.reason_codes");
+  requireStringArray(material.uncertainties, "material_change.uncertainties");
+  requireStringArray(material.authority_refs, "material_change.authority_refs", true);
+  return material;
+}
+
+export function parseCommittedDecisionRuntimeRead(
+  value: unknown,
+  campaignId: string,
+  decisionId: string,
+): CommittedDecisionRuntimeRead {
+  const runtime = requireRecord(value, "committed runtime");
+  if (runtime.schema_version !== COMMITTED_RUNTIME_SCHEMA_VERSION) readbackError("schema_version");
+  const asOf = requireCanonicalUtc(runtime.as_of, "as_of");
+  const committed = validateCommittedSnapshot(runtime.committed, campaignId, decisionId);
+  const formalThesis = requireAuthorityEnvelope(runtime.formal_thesis, "formal_thesis");
+  requireEvaluation(formalThesis.evaluation, "formal_thesis.evaluation");
+  requireStringArray(formalThesis.reason_codes, "formal_thesis.reason_codes");
+  const formalDecision = validateFormalDecision(runtime.formal_decision, decisionId);
+  const hardRisk = validateHardRisk(runtime.hard_risk, campaignId, asOf);
+  const materialChange = validateMaterialChange(runtime.material_change, campaignId, decisionId, asOf);
+  for (const field of ["critical_data", "sell_engine", "decision_assurance"]) {
+    requireAuthorityEnvelope(runtime[field], field);
+  }
+  return {
+    ...runtime,
+    schema_version: runtime.schema_version,
+    as_of: asOf,
+    committed,
+    formal_thesis: formalThesis,
+    critical_data: runtime.critical_data as Record<string, unknown>,
+    formal_decision: formalDecision,
+    hard_risk: hardRisk,
+    material_change: materialChange,
+    sell_engine: runtime.sell_engine as Record<string, unknown>,
+    decision_assurance: runtime.decision_assurance as Record<string, unknown>,
+  } as CommittedDecisionRuntimeRead;
+}
+
 export async function getCommittedDecisionRuntime(
   campaignId: string,
   decisionId: string,
 ): Promise<CommittedDecisionRuntimeRead> {
-  return get<CommittedDecisionRuntimeRead>(
+  const result = await get<unknown>(
     `/campaigns/${encodeURIComponent(campaignId)}/decision-proposal/committed/${encodeURIComponent(decisionId)}`,
   );
+  return parseCommittedDecisionRuntimeRead(result, campaignId, decisionId);
 }
 
 // ---------------------------------------------------------------------------
