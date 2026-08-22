@@ -231,6 +231,9 @@ async function run() {
     browser = await chromium.launch(launchOptions);
     const page = await browser.newPage();
     const failedRequests = [];
+    const apiTrace = [];
+    let challengeReadFailureStatus = null;
+    let challengeReadFailureCampaignId = null;
     page.on("console", (message) => {
       if (message.type() === "error") backendLog += `\n[browser] ${message.text()}`;
     });
@@ -241,7 +244,20 @@ async function run() {
       const request = route.request();
       const url = new URL(request.url());
       const method = request.method();
+      apiTrace.push(`${method} ${url.pathname}${url.search}`);
       try {
+        if (
+          challengeReadFailureStatus !== null
+          && method === "GET"
+          && url.pathname === `/api/campaigns/${challengeReadFailureCampaignId}/decision-challenge`
+        ) {
+          await route.fulfill({
+            status: challengeReadFailureStatus,
+            contentType: "application/json",
+            body: JSON.stringify({ detail: "simulated Challenge read failure" }),
+          });
+          return;
+        }
         const response = await fetch(`${backend}${url.pathname}${url.search}`, {
           method,
           headers: request.headers(),
@@ -284,7 +300,7 @@ async function run() {
       );
     }
     await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
-    await page.locator('[data-challenge-state="UNFINALIZED"]').waitFor();
+    await page.locator('[data-challenge-state="ABSENT"]').waitFor();
     assert.equal(existsSync(join(tempDataDir, "decision_challenges.sqlite3")), false, "Preview must not write Challenge DB");
     assert.equal(existsSync(join(tempDataDir, "frozen_decisions.sqlite3")), false, "Preview must not write Frozen DB");
 
@@ -311,7 +327,7 @@ async function run() {
         `[DCH1] finalize failed: status=${finalizeResponse.status()} body=${finalizeBody}`
       );
     }
-    await page.locator('[data-challenge-state="FINALIZED"]').waitFor();
+    await page.locator('[data-challenge-state="FOUND"]').waitFor();
     const challengeId = await page.locator("[data-challenge-id]").getAttribute("data-challenge-id");
     assert.match(challengeId, /^decision_challenge_[0-9a-f]{32}$/);
     const durable = await jsonRequest(backend, `/api/decision-challenges/${challengeId}`);
@@ -320,9 +336,27 @@ async function run() {
     assert.equal(durable.decision_quality, "NOT_EVALUATED");
     assert.equal(durable.challenge.two_pass_semantic_independence_verified, "NO");
 
+    const commitResponsePromise = page.waitForResponse((response) => (
+      response.request().method() === "POST"
+      && response.url().includes(`/api/campaigns/${withChallenge.campaign_id}/decision-proposal/commit`)
+    ));
     await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
     await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
-    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
+    const commitResponse = await commitResponsePromise;
+    const commitBody = await commitResponse.json();
+    if (!commitResponse.ok()) {
+      throw new Error(`[DCH2] bound Freeze HTTP error: ${commitResponse.status()} ${JSON.stringify(commitBody)}`);
+    }
+    await page.waitForTimeout(500);
+    const commitError = await page.locator('[role="alert"]').allTextContents();
+    if (commitError.length > 0) {
+      throw new Error(`[DCH2] bound Freeze UI error: ${commitError.join(" | ")}; failedRequests=${JSON.stringify(failedRequests)}`);
+    }
+    await page.waitForSelector("[data-formal-decision-evaluation]", { timeout: 30000 });
+    const actualEvaluation = await page.locator("[data-formal-decision-evaluation]").getAttribute("data-formal-decision-evaluation");
+    if (actualEvaluation !== "EVALUATED") {
+      throw new Error(`[DCH2] bound Freeze returned evaluation=${actualEvaluation}; alerts=${JSON.stringify(commitError)}; trace=${JSON.stringify(apiTrace)}`);
+    }
     const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
     const boundId = committedLine.replace(/^decision_id：/, "").trim();
     const bound = await jsonRequest(backend, `/api/campaigns/${withChallenge.campaign_id}/decision-proposal/committed/${boundId}`);
@@ -368,7 +402,7 @@ async function run() {
     await page.goto(`${frontend}/campaigns/${withoutChallenge.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
     await fillProposalDraft(page);
     await page.getByRole("button", { name: "Preview Proposal" }).click();
-    await page.locator('[data-challenge-state="UNFINALIZED"]').waitFor();
+    await page.locator('[data-challenge-state="ABSENT"]').waitFor();
     await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
     await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
     await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
@@ -380,7 +414,24 @@ async function run() {
       false,
       "no-challenge freeze must not invent a challenge ref",
     );
-    console.log("[E2E] P0-DCH1 Decision Challenge vertical passed");
+
+    const readErrorCampaign = await createFrozenCurrentThesis(backend, "DCH2 read error");
+    challengeReadFailureCampaignId = readErrorCampaign.campaign_id;
+    challengeReadFailureStatus = 500;
+    await page.goto(`${frontend}/campaigns/${readErrorCampaign.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
+    await fillProposalDraft(page);
+    await page.getByRole("button", { name: "Preview Proposal" }).click();
+    const challengeErrorSection = page.locator('[data-challenge-state="ERROR"]');
+    await challengeErrorSection.waitFor();
+    await challengeErrorSection.getByText("CHALLENGE_READ_ERROR", { exact: false }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Finalize Decision Challenge" }).isDisabled(), true);
+    assert.equal(await page.getByRole("checkbox", { name: /Freeze 将绑定|未找到已 Finalize|Challenge 状态当前无法安全验证/ }).isDisabled(), true);
+    await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
+    assert.equal(await page.getByRole("button", { name: "Freeze Formal Decision" }).isDisabled(), true);
+    assert.equal(await page.locator("[data-challenge-id]").getAttribute("data-challenge-id"), "");
+    assert.equal(existsSync(join(tempDataDir, "frozen_decisions.sqlite3")), true, "prior freezes may exist, but error path adds no linkage");
+
+    console.log("[E2E] P1-DCH2 Decision Challenge truthful read states passed");
   } catch (error) {
     if (backendProc && !backendProc.killed) console.error(backendLog || "backend log unavailable");
     throw error;

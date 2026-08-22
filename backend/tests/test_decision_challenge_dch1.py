@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import campaign_service
 import decision_challenge_router
 
 import decision_challenge_projection as domain
@@ -683,6 +684,130 @@ def test_store_rejects_noncanonical_created_at(tmp_path):
     conn.close()
     with pytest.raises(challenge_store.DecisionChallengeStoreCorruptedError):
         challenge_store.get_challenge(packet["challenge_id"], db_path=db_path)
+
+
+def _route_app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(decision_challenge_router.router)
+    return app
+
+
+def _route_finalize_payload() -> dict:
+    return {
+        "expected_proposal_fingerprint": "a" * 64,
+        "as_of": AS_OF,
+        "user_confirmed": True,
+        "dimensions": _dimensions(),
+        **_draft(),
+    }
+
+
+def test_get_challenge_route_maps_read_states(monkeypatch):
+    app = _route_app()
+    expected = {"schema_version": domain.SCHEMA_VERSION, "challenge": _packet(), "decision_quality": "NOT_EVALUATED"}
+    monkeypatch.setattr(decision_challenge_router.runtime, "get_decision_challenge", lambda *_args, **_kwargs: expected)
+    response = TestClient(app).get(f"/api/decision-challenges/{CHALLENGE_ID}")
+    assert response.status_code == 200
+    assert response.json() == {"data": expected}
+
+    monkeypatch.setattr(
+        decision_challenge_router.runtime,
+        "get_decision_challenge",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(challenge_runtime.DecisionChallengeNotFoundError()),
+    )
+    assert TestClient(app).get(f"/api/decision-challenges/{CHALLENGE_ID}").status_code == 404
+
+    monkeypatch.setattr(
+        decision_challenge_router.runtime,
+        "get_decision_challenge",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(challenge_runtime.DecisionChallengeInputError()),
+    )
+    assert TestClient(app).get(f"/api/decision-challenges/{CHALLENGE_ID}").status_code == 422
+
+    for failure in [challenge_runtime.DecisionChallengeRuntimeError("corrupt"), RuntimeError("secret path")]:
+        monkeypatch.setattr(
+            decision_challenge_router.runtime,
+            "get_decision_challenge",
+            lambda *_args, failure=failure, **_kwargs: (_ for _ in ()).throw(failure),
+        )
+        response = TestClient(app).get(f"/api/decision-challenges/{CHALLENGE_ID}")
+        assert response.status_code == 500
+        assert response.json()["detail"] == "Decision Challenge 暂不可用"
+        assert "secret" not in response.text
+
+
+def test_get_challenge_for_proposal_route_maps_read_states(monkeypatch):
+    app = _route_app()
+    expected = {"schema_version": domain.SCHEMA_VERSION, "challenge": _packet(), "decision_quality": "NOT_EVALUATED"}
+    monkeypatch.setattr(decision_challenge_router.runtime, "get_decision_challenge_for_proposal", lambda *_args, **_kwargs: expected)
+    path = f"/api/campaigns/{CAMPAIGN_ID}/decision-challenge?proposal_fingerprint={'a' * 64}"
+    response = TestClient(app).get(path)
+    assert response.status_code == 200
+    assert response.json() == {"data": expected}
+
+    for exception, status in [
+        (challenge_runtime.DecisionChallengeNotFoundError(), 404),
+        (challenge_runtime.DecisionChallengeInputError(), 422),
+        (challenge_runtime.DecisionChallengeRuntimeError("corrupt"), 500),
+        (RuntimeError("secret path"), 500),
+    ]:
+        monkeypatch.setattr(
+            decision_challenge_router.runtime,
+            "get_decision_challenge_for_proposal",
+            lambda *_args, exception=exception, **_kwargs: (_ for _ in ()).throw(exception),
+        )
+        response = TestClient(app).get(path)
+        assert response.status_code == status
+        if status == 500:
+            assert response.json()["detail"] == "Decision Challenge 暂不可用"
+            assert "secret" not in response.text
+
+
+def test_get_challenge_for_proposal_rejects_invalid_fingerprint_without_runtime(monkeypatch):
+    app = _route_app()
+    called = False
+
+    def unexpected(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("runtime must not run for invalid query")
+
+    monkeypatch.setattr(decision_challenge_router.runtime, "get_decision_challenge_for_proposal", unexpected)
+    response = TestClient(app).get(f"/api/campaigns/{CAMPAIGN_ID}/decision-challenge?proposal_fingerprint=short")
+    assert response.status_code == 422
+    assert called is False
+
+
+def test_finalize_route_maps_success_and_read_errors(monkeypatch):
+    app = _route_app()
+    expected = {"schema_version": domain.SCHEMA_VERSION, "challenge": _packet(), "decision_quality": "NOT_EVALUATED"}
+    monkeypatch.setattr(decision_challenge_router.runtime, "finalize_decision_challenge", lambda *_args, **_kwargs: expected)
+    response = TestClient(app).post(
+        f"/api/campaigns/{CAMPAIGN_ID}/decision-challenge/finalize",
+        json=_route_finalize_payload(),
+    )
+    assert response.status_code == 200
+    assert response.json() == {"data": expected}
+
+    for exception, status in [
+        (campaign_service.CampaignNotFoundError(), 404),
+        (challenge_runtime.DecisionChallengeInputError(), 422),
+        (challenge_runtime.DecisionChallengeRuntimeError("corrupt"), 500),
+        (RuntimeError("secret path"), 500),
+    ]:
+        monkeypatch.setattr(
+            decision_challenge_router.runtime,
+            "finalize_decision_challenge",
+            lambda *_args, exception=exception, **_kwargs: (_ for _ in ()).throw(exception),
+        )
+        response = TestClient(app).post(
+            f"/api/campaigns/{CAMPAIGN_ID}/decision-challenge/finalize",
+            json=_route_finalize_payload(),
+        )
+        assert response.status_code == status
+        if status == 500:
+            assert response.json()["detail"] == "Decision Challenge 暂不可用"
+            assert "secret" not in response.text
 
 
 def test_finalize_route_exposes_stale_status_and_body(monkeypatch):

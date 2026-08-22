@@ -137,6 +137,12 @@ export class ApiError extends Error {
   }
 }
 
+export class DecisionChallengeReadError extends Error {
+  constructor(message = "Decision Challenge readback 格式无效") {
+    super(message);
+  }
+}
+
 
 // 后端访问密钥（对应后端部署时的 VR_API_KEY，公网部署防蹭用）。只存本地浏览器。
 const ACCESS_KEY = "vr-access-key";
@@ -1379,23 +1385,44 @@ export interface DecisionChallengeRead {
   decision_quality: "NOT_EVALUATED";
 }
 
+function parseDecisionChallengeRead(value: unknown): DecisionChallengeRead {
+  if (!value || typeof value !== "object") {
+    throw new DecisionChallengeReadError();
+  }
+  const record = value as Record<string, unknown>;
+  const challenge = record.challenge;
+  if (
+    typeof record.schema_version !== "string"
+    || !challenge
+    || typeof challenge !== "object"
+    || typeof (challenge as Record<string, unknown>).challenge_id !== "string"
+    || !(challenge as Record<string, unknown>).challenge_id
+    || record.decision_quality !== "NOT_EVALUATED"
+  ) {
+    throw new DecisionChallengeReadError();
+  }
+  return value as DecisionChallengeRead;
+}
+
 export async function finalizeDecisionChallenge(
   campaignId: string,
   body: DecisionChallengeFinalizeInput,
 ): Promise<DecisionChallengeRead> {
-  return request<DecisionChallengeRead>(
+  const result = await request<unknown>(
     `/campaigns/${encodeURIComponent(campaignId)}/decision-challenge/finalize`,
     "POST",
     body,
   );
+  return parseDecisionChallengeRead(result);
 }
 
 export async function getDecisionChallenge(
   challengeId: string,
 ): Promise<DecisionChallengeRead> {
-  return get<DecisionChallengeRead>(
+  const result = await get<unknown>(
     `/decision-challenges/${encodeURIComponent(challengeId)}`,
   );
+  return parseDecisionChallengeRead(result);
 }
 
 export async function getDecisionChallengeForProposal(
@@ -1403,9 +1430,10 @@ export async function getDecisionChallengeForProposal(
   proposalFingerprint: string,
 ): Promise<DecisionChallengeRead | null> {
   try {
-    return await get<DecisionChallengeRead>(
+    const result = await get<unknown>(
       `/campaigns/${encodeURIComponent(campaignId)}/decision-challenge?proposal_fingerprint=${encodeURIComponent(proposalFingerprint)}`,
     );
+    return parseDecisionChallengeRead(result);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;
