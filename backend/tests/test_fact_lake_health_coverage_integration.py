@@ -3,7 +3,7 @@ from __future__ import annotations
 import fact_lake_health as flh
 from data_contracts import CoverageMode
 from fact_lake_coverage import CoverageState, assess_coverage
-from test_fact_lake_health import _evidence, _limit_up_spec
+from test_fact_lake_health import _evidence, _financial_spec, _limit_up_spec
 
 
 def test_dense_interior_gap_blocks_current_health():
@@ -30,12 +30,13 @@ def test_dense_interior_gap_blocks_current_health():
 
 
 def test_sparse_quiet_day_does_not_create_dense_gap():
-    spec = _limit_up_spec()
+    spec = _financial_spec()
     sparse = assess_coverage(
         dataset_id=spec.dataset_id,
         coverage_mode=CoverageMode.SPARSE,
         sessions=("2026-08-08", "2026-08-09", "2026-08-10"),
         observed_dates=("2026-08-08", "2026-08-10"),
+        expected_through="2026-08-10",
     )
     assessment = flh.assess_publication_health(
         dataset_spec=spec,

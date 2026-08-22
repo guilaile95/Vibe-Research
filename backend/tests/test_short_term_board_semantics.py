@@ -23,6 +23,13 @@ def test_parse_exact_n_over_m_and_rebound_label():
     assert result["label"] == "4天2板"
 
 
+def test_adapter_shape_projects_to_rebound_semantics():
+    result = classify_board({"stock_code": "000001", "boards": 1, "zt_stat": "3/2"})
+    assert result["stock_code"] == "000001"
+    assert result["label"] == "3天2板"
+    assert result["effective_height"] == 2
+
+
 def test_regular_stat_preserves_consecutive_board_height():
     result = classify_board({"boards": 3, "zt_stat": "3/3"})
     assert result["stat_boards"] == 3
@@ -68,6 +75,7 @@ def test_existing_projection_is_sorted_by_effective_height():
         ],
     )
     assert [item["label"] for item in result["members"]] == ["3板", "4天2板"]
+    assert [item["code"] for item in result["members"]] == ["B", "A"]
 
 
 def test_input_is_not_mutated_and_invalid_rows_fail_closed():

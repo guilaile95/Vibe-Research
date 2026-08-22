@@ -27,7 +27,7 @@ SESSIONS = (
 )
 TODAY = date(2026, 8, 4)
 GOOD_DATE = "2026-07-30"
-ADAPTER_SCHEMA = "short-term-limit-up-pool-adapter-v0.1"
+ADAPTER_SCHEMA = "short-term-limit-up-pool-adapter-v0.2"
 _UNSET = object()
 
 
@@ -59,7 +59,7 @@ def _adapter_obs(**overrides):
         "observed_at": "2026-07-30T15:10:00Z",
         "status": "normal",
         "reason_codes": [],
-        "rows": [{"stock_code": "600000", "lbc": 1}],
+        "rows": [{"stock_code": "600000", "lbc": 1, "zt_stat": None}],
         "transport_success": True,
         "parse_success": True,
         "required_field_present": True,
@@ -354,9 +354,9 @@ class TestFinalSuccess:
         assert r["is_final"] is True
 
     def test_dict_insertion_order_differs_still_stable(self, monkeypatch):
-        obs1 = _adapter_obs(rows=[{"stock_code": "600000", "lbc": 1}])
-        obs2 = _adapter_obs(rows=[{"lbc": 1, "stock_code": "600000"}])
-        obs3 = _adapter_obs(rows=[{"stock_code": "600000", "lbc": 1}])
+        obs1 = _adapter_obs(rows=[{"stock_code": "600000", "lbc": 1, "zt_stat": None}])
+        obs2 = _adapter_obs(rows=[{"lbc": 1, "stock_code": "600000", "zt_stat": None}])
+        obs3 = _adapter_obs(rows=[{"stock_code": "600000", "lbc": 1, "zt_stat": None}])
         r, _ = _run(monkeypatch, [obs1, obs2, obs3])
         assert r["status"] == "normal"
         assert r["is_final"] is True
@@ -371,7 +371,7 @@ class TestUnstable:
         {"rows": [{"stock_code": "600001", "lbc": 1}], "row_count": 1,
          "source_pool_row_count": 1},
         {"rows": [{"stock_code": "600000", "lbc": 2}], "row_count": 1},
-        {"rows": [{"stock_code": "600000", "lbc": 1},
+        {"rows": [{"stock_code": "600000", "lbc": 1, "zt_stat": None},
                   {"stock_code": "600001", "lbc": 1}], "row_count": 2,
          "source_pool_row_count": 2},
         {"source_pool_row_count": 2, "excluded_universe_count": 1},
@@ -531,9 +531,9 @@ class TestSchemaInvalid:
         {"rows": [{"stock_code": "600000", "lbc": True}], "row_count": 1},
         {"rows": [{"stock_code": "600000", "lbc": "2"}], "row_count": 1},
         {"rows": [{"stock_code": "600001", "lbc": 1},
-                  {"stock_code": "600000", "lbc": 1}], "row_count": 2,
+                  {"stock_code": "600000", "lbc": 1, "zt_stat": None}], "row_count": 2,
          "source_pool_row_count": 2},
-        {"rows": [{"stock_code": "600000", "lbc": 1},
+        {"rows": [{"stock_code": "600000", "lbc": 1, "zt_stat": None},
                   {"stock_code": "600000", "lbc": 2}], "row_count": 2,
          "source_pool_row_count": 2},
     ])
@@ -783,7 +783,7 @@ class TestHashCollision:
             return ConstantSHA(*a, **k)
 
         monkeypatch.setattr(producer.hashlib, "sha256", fake_sha)
-        obs1 = _adapter_obs(rows=[{"stock_code": "600000", "lbc": 1}])
+        obs1 = _adapter_obs(rows=[{"stock_code": "600000", "lbc": 1, "zt_stat": None}])
         obs2 = _adapter_obs(rows=[{"stock_code": "600000", "lbc": 2}])
         obs3 = _adapter_obs(rows=[{"stock_code": "000001", "lbc": 1}])
         r, state = _run(monkeypatch, [obs1, obs2, obs3])
@@ -1069,7 +1069,7 @@ class TestRuntimeReuse:
         _assert_output_shape(r)
         assert r["status"] == "normal"
         assert r["is_final"] is True
-        assert r["snapshot"]["rows"] == [{"stock_code": "600000", "lbc": 1}]
+        assert r["snapshot"]["rows"] == [{"stock_code": "600000", "lbc": 1, "zt_stat": None}]
         assert state["adapter_calls"] == 3
         assert state["sleep_calls"] == 2
         assert upstream["n"] == 3

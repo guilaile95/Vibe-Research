@@ -10,7 +10,6 @@ from fact_lake_coverage import (
     CoverageState,
     CoverageValidationError,
     REASON_COVERAGE_INTERIOR_GAP,
-    REASON_COVERAGE_UNKNOWN,
     assess_coverage,
 )
 
@@ -55,7 +54,7 @@ def test_sparse_quiet_day_is_not_a_dense_gap():
     assert result.reason_codes == ()
 
 
-def test_sparse_explicit_boundary_without_observation_remains_unknown():
+def test_sparse_explicit_boundary_without_observation_is_not_applicable():
     result = assess_coverage(
         dataset_id="corporate-events",
         coverage_mode=CoverageMode.SPARSE,
@@ -63,8 +62,9 @@ def test_sparse_explicit_boundary_without_observation_remains_unknown():
         observed_dates=("2026-07-20",),
         expected_through="2026-07-22",
     )
-    assert result.state is CoverageState.UNKNOWN
-    assert result.reason_codes == (REASON_COVERAGE_UNKNOWN,)
+    assert result.safe_watermark is None
+    assert result.state is CoverageState.NOT_APPLICABLE
+    assert result.reason_codes == ()
 
 
 @pytest.mark.parametrize("sessions", [

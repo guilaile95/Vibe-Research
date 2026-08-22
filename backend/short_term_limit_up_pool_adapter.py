@@ -1,7 +1,7 @@
 """BK-11 涨停池结构化来源适配器 v0.1。
 
 通过 ``astock.em_get`` 请求东财 push2ex 的 ``getTopicZTPool``，
-标准化为 ``stock_code + lbc`` 最小行集，并输出失败关闭的十字段合同。
+标准化为 ``stock_code + lbc + zt_stat`` 行集，并输出失败关闭的结构化合同。
 
 公开 API
 --------
@@ -32,7 +32,7 @@ __all__ = [
     "interpret_limit_up_pool_response_bytes",
 ]
 
-SCHEMA_VERSION = "short-term-limit-up-pool-adapter-v0.1"
+SCHEMA_VERSION = "short-term-limit-up-pool-adapter-v0.2"
 
 _SOURCE_ID = "eastmoney_getTopicZTPool"
 _ENDPOINT = "getTopicZTPool"
@@ -362,6 +362,19 @@ def _evaluate_trade_date_match(
 # 行标准化
 # ---------------------------------------------------------------------------
 
+def _normalize_zt_stat(value: Any) -> str | None:
+    """Normalize EastMoney ``zttj`` without turning malformed data into fact."""
+    if not isinstance(value, dict):
+        return None
+    days = value.get("days")
+    count = value.get("ct")
+    if type(days) is not int or days <= 0:
+        return None
+    if type(count) is not int or count <= 0 or days < count:
+        return None
+    return f"{days}/{count}"
+
+
 def _normalize_rows(pool: list) -> tuple[list[dict], int, int, int]:
     """返回 ``(rows, excluded_universe_count, invalid_row_count, duplicate_code_count)``。
 
@@ -404,7 +417,11 @@ def _normalize_rows(pool: list) -> tuple[list[dict], int, int, int]:
             duplicates += 1
             continue
         seen.add(code)
-        rows.append({"stock_code": code, "lbc": int(lbc_raw)})
+        rows.append({
+            "stock_code": code,
+            "lbc": int(lbc_raw),
+            "zt_stat": _normalize_zt_stat(entry.get("zttj")),
+        })
     rows.sort(key=lambda x: x["stock_code"])
     return rows, excluded, invalid, duplicates
 

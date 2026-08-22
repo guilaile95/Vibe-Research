@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import short_term_board_semantics
 import short_term_ladder_gap
 import short_term_limit_up_ladder
 import short_term_market_facts
@@ -26,8 +27,10 @@ import short_term_market_facts
 SCHEMA_VERSION = "short-term-daily-facts-v0.2"
 FACTS_ADAPTER_SCHEMA_VERSION = "bk11-tushare-facts-adapter-v0.1"
 PRODUCER_SCHEMA_VERSION = "short-term-limit-up-final-snapshot-v0.1"
+ADAPTER_SCHEMA_VERSION = "short-term-limit-up-pool-adapter-v0.2"
 
 _TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ZT_STAT_RE = re.compile(r"^(?P<days>[1-9]\d*)/(?P<count>[1-9]\d*)$")
 _ALLOWED_SESSIONS = frozenset({
     "pre_open", "call_auction", "morning_session", "midday_break",
     "afternoon_session", "close_pending", "final", "unavailable",
@@ -132,7 +135,7 @@ def _validate_producer(producer: Any) -> dict[str, Any] | None:
 
 
 def _ladder_rows_from_producer(producer: dict[str, Any]) -> list[dict[str, Any]]:
-    """机械行映射：adapter rows（stock_code+lbc）→ ladder 池行。"""
+    """保留 lbc authority，并将 optional zt_stat 穿透到既有 ladder 输入。"""
     snapshot = producer.get("snapshot") or {}
     rows = snapshot.get("rows")
     if not isinstance(rows, list):
@@ -143,9 +146,19 @@ def _ladder_rows_from_producer(producer: dict[str, Any]) -> list[dict[str, Any]]
             raise ValueError("invalid producer row")
         code = row.get("stock_code")
         lbc = row.get("lbc")
-        if not isinstance(code, str) or not isinstance(lbc, int):
+        zt_stat = row.get("zt_stat")
+        if (not isinstance(code, str) or not isinstance(lbc, int)
+                or isinstance(lbc, bool) or lbc <= 0):
             raise ValueError("invalid producer row fields")
-        out.append({"stock_code": code, "consecutive_limit_up_days": lbc})
+        if zt_stat is not None:
+            match = _ZT_STAT_RE.fullmatch(zt_stat) if isinstance(zt_stat, str) else None
+            if match is None or int(match.group("days")) < int(match.group("count")):
+                raise ValueError("invalid producer row fields")
+        out.append({
+            "stock_code": code,
+            "consecutive_limit_up_days": lbc,
+            "zt_stat": zt_stat,
+        })
     return out
 
 
@@ -265,6 +278,14 @@ def compute_daily_facts_v02(
                     _producer_ladder_snapshot(producer, em_rows))
                 gap_envelope = short_term_ladder_gap.compute_ladder_gap(
                     ladder_envelope)
+                ladder_envelope["board_semantics"] = [
+                    short_term_board_semantics.classify_board({
+                        "stock_code": row["stock_code"],
+                        "boards": row["consecutive_limit_up_days"],
+                        "zt_stat": row.get("zt_stat"),
+                    })
+                    for row in em_rows
+                ]
             except Exception:  # noqa: BLE001
                 ladder_envelope = None
                 gap_envelope = None

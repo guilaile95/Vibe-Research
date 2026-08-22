@@ -530,7 +530,7 @@ class TestRawByteInterpreter:
         _assert_contract_shape(first)
         assert first == second
         assert first["observed_at"] == self.OBSERVED_AT
-        assert first["rows"] == [{"stock_code": "600000", "lbc": 2}]
+        assert first["rows"] == [{"stock_code": "600000", "lbc": 2, "zt_stat": None}]
 
     @pytest.mark.parametrize("raw", [None, "not-bytes", bytearray(b"{}"), b"\xff", b"{bad"])
     def test_core_fails_closed_for_non_bytes_or_invalid_json(self, raw):
@@ -604,7 +604,7 @@ class TestRawByteInterpreter:
         _patch_em_get(monkeypatch, lambda calls: response)
         result = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
         _assert_contract_shape(result)
-        assert result["rows"] == [{"stock_code": "600000", "lbc": 1}]
+        assert result["rows"] == [{"stock_code": "600000", "lbc": 1, "zt_stat": None}]
         assert result["trade_date_match"] is True
         assert response.json_calls == 0
 
@@ -1106,7 +1106,7 @@ class TestRowContract:
         _patch_em_get(monkeypatch, lambda calls: resp())
         r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
         _assert_contract_shape(r)
-        assert r["rows"] == [{"stock_code": "600000", "lbc": 1}]
+        assert r["rows"] == [{"stock_code": "600000", "lbc": 1, "zt_stat": None}]
 
     def test_string_leading_zero_preserved(self, monkeypatch):
         def resp(*args, **kwargs):
@@ -1116,7 +1116,7 @@ class TestRowContract:
         _patch_em_get(monkeypatch, lambda calls: resp())
         r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
         _assert_contract_shape(r)
-        assert r["rows"] == [{"stock_code": "000009", "lbc": 1}]
+        assert r["rows"] == [{"stock_code": "000009", "lbc": 1, "zt_stat": None}]
 
     def test_int_code_rejected(self, monkeypatch):
         def resp(*args, **kwargs):
@@ -1130,7 +1130,7 @@ class TestRowContract:
         r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
         _assert_contract_shape(r)
         assert r["invalid_row_count"] == 1
-        assert r["rows"] == [{"stock_code": "600000", "lbc": 1}]
+        assert r["rows"] == [{"stock_code": "600000", "lbc": 1, "zt_stat": None}]
         assert "INVALID_POOL_ROW" in r["reason_codes"]
 
     @pytest.mark.parametrize("bad_code", ["60000", "6000000", "60abcd"])
@@ -1171,8 +1171,8 @@ class TestRowContract:
         assert r["duplicate_code_count"] == 1
         assert "DUPLICATE_STOCK_CODE" in r["reason_codes"]
         assert r["rows"] == [
-            {"stock_code": "000001", "lbc": 2},
-            {"stock_code": "600000", "lbc": 3},
+            {"stock_code": "000001", "lbc": 2, "zt_stat": None},
+            {"stock_code": "600000", "lbc": 3, "zt_stat": None},
         ]
 
     def test_sorted_ascending(self, monkeypatch):
@@ -1288,7 +1288,7 @@ class TestRowCombinations:
         _patch_em_get(monkeypatch, lambda calls: resp())
         r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
         _assert_contract_shape(r)
-        assert r["rows"] == [{"stock_code": "600000", "lbc": 1}]
+        assert r["rows"] == [{"stock_code": "600000", "lbc": 1, "zt_stat": None}]
         assert r["invalid_row_count"] == 1
 
     def test_first_valid_second_invalid(self, monkeypatch):
@@ -1302,7 +1302,7 @@ class TestRowCombinations:
         _patch_em_get(monkeypatch, lambda calls: resp())
         r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
         _assert_contract_shape(r)
-        assert r["rows"] == [{"stock_code": "600000", "lbc": 1}]
+        assert r["rows"] == [{"stock_code": "600000", "lbc": 1, "zt_stat": None}]
         assert r["invalid_row_count"] == 1
 
     def test_included_duplicate_same_lbc(self, monkeypatch):
@@ -1317,7 +1317,7 @@ class TestRowCombinations:
         r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
         _assert_contract_shape(r)
         assert r["duplicate_code_count"] == 1
-        assert r["rows"] == [{"stock_code": "600000", "lbc": 3}]
+        assert r["rows"] == [{"stock_code": "600000", "lbc": 3, "zt_stat": None}]
 
     def test_included_duplicate_different_lbc(self, monkeypatch):
         def resp(*args, **kwargs):
@@ -1331,7 +1331,7 @@ class TestRowCombinations:
         r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
         _assert_contract_shape(r)
         assert r["duplicate_code_count"] == 1
-        assert r["rows"] == [{"stock_code": "600000", "lbc": 3}]
+        assert r["rows"] == [{"stock_code": "600000", "lbc": 3, "zt_stat": None}]
 
     def test_excluded_duplicate(self, monkeypatch):
         def resp(*args, **kwargs):
@@ -1361,7 +1361,7 @@ class TestRowCombinations:
         assert "INVALID_POOL_ROW" in r["reason_codes"]
         assert "DUPLICATE_STOCK_CODE" in r["reason_codes"]
         assert r["status"] == "partial"
-        assert r["rows"] == [{"stock_code": "600000", "lbc": 2}]
+        assert r["rows"] == [{"stock_code": "600000", "lbc": 2, "zt_stat": None}]
 
     def test_invalid_plus_included_valid(self, monkeypatch):
         def resp(*args, **kwargs):
@@ -1374,7 +1374,7 @@ class TestRowCombinations:
         _patch_em_get(monkeypatch, lambda calls: resp())
         r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
         _assert_contract_shape(r)
-        assert r["rows"] == [{"stock_code": "000001", "lbc": 2}]
+        assert r["rows"] == [{"stock_code": "000001", "lbc": 2, "zt_stat": None}]
         assert r["invalid_row_count"] == 1
         assert r["status"] == "partial"
 
@@ -1389,9 +1389,33 @@ class TestRowCombinations:
         _patch_em_get(monkeypatch, lambda calls: resp())
         r = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
         _assert_contract_shape(r)
-        assert r["rows"] == [{"stock_code": "000001", "lbc": 2}]
+        assert r["rows"] == [{"stock_code": "000001", "lbc": 2, "zt_stat": None}]
         assert r["excluded_universe_count"] == 1
         assert r["status"] == "normal"
+
+    @pytest.mark.parametrize("zttj", [None, {}, {"days": 0, "ct": 1}, {"days": 2, "ct": 3}, {"days": "3", "ct": 2}])
+    def test_malformed_zttj_is_optional_and_not_fabricated(self, monkeypatch, zttj):
+        def resp(*args, **kwargs):
+            return _fake_response(status_code=200, json_body={
+                "data": {"date": GOOD_DATE, "pool": [
+                    {"c": "000001", "lbc": 1, "zttj": zttj},
+                ]},
+            })
+        _patch_em_get(monkeypatch, lambda calls: resp())
+        result = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        assert result["status"] == "normal"
+        assert result["rows"] == [{"stock_code": "000001", "lbc": 1, "zt_stat": None}]
+
+    def test_valid_zttj_is_normalized(self, monkeypatch):
+        def resp(*args, **kwargs):
+            return _fake_response(status_code=200, json_body={
+                "data": {"date": GOOD_DATE, "pool": [
+                    {"c": "000001", "lbc": 1, "zttj": {"days": 3, "ct": 2}},
+                ]},
+            })
+        _patch_em_get(monkeypatch, lambda calls: resp())
+        result = adapter.fetch_limit_up_pool_snapshot(GOOD_DATE)
+        assert result["rows"] == [{"stock_code": "000001", "lbc": 1, "zt_stat": "3/2"}]
 
 
 # ---------------------------------------------------------------------------

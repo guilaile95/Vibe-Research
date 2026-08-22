@@ -54,7 +54,7 @@ CANONICAL_ENDPOINT = "https://push2ex.eastmoney.com/getTopicZTPool"
 VERIFIER_PROVIDER_ID = "tushare_pro"
 VERIFIER_ENDPOINT = "stk_limit"
 DATASET_CONTRACT_REVISION = "ds-limit-up-pool-contract-v0.1"
-NORMALIZER_VERSION = "ds-limit-up-pool-normalizer-v0.2"
+NORMALIZER_VERSION = "ds-limit-up-pool-normalizer-v0.3"
 ARTIFACT_SCHEMA_VERSION = "ds-limit-up-pool-parquet-v0.1"
 RECONCILIATION_POLICY_ID = "bk11-limit-up-count-tolerance"
 RECONCILIATION_POLICY_VERSION = "v0.1"
@@ -64,6 +64,7 @@ MAX_SOURCE_POOL_ROWS = 10_000
 MAX_NORMALIZED_JSON_BYTES = 4 * 1024 * 1024
 
 _TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ZT_STAT_RE = re.compile(r"^(?P<days>[1-9]\d*)/(?P<count>[1-9]\d*)$")
 _FINGERPRINT_FIELDS = (
     "operation",
     "endpoint",
@@ -283,6 +284,17 @@ def _strict_int(value: Any, field: str, *, minimum: int = 0) -> int:
     return value
 
 
+def _validate_zt_stat(value: Any) -> str | None:
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise LimitUpNormalizationError("normalized zt_stat is invalid")
+    match = _ZT_STAT_RE.fullmatch(value)
+    if match is None or int(match.group("days")) < int(match.group("count")):
+        raise LimitUpNormalizationError("normalized zt_stat is invalid")
+    return value
+
+
 def normalize_adapter_snapshot(
     snapshot: Mapping[str, Any],
     *,
@@ -322,10 +334,13 @@ def normalize_adapter_snapshot(
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for row in rows_value:
-        if type(row) is not dict or set(row) != {"stock_code", "lbc"}:
+        if type(row) is not dict or set(row) not in (
+            {"stock_code", "lbc"}, {"stock_code", "lbc", "zt_stat"}
+        ):
             raise LimitUpNormalizationError("normalized row schema is invalid")
         code = row["stock_code"]
         lbc = row["lbc"]
+        zt_stat = _validate_zt_stat(row.get("zt_stat"))
         if type(code) is not str or re.fullmatch(r"\d{6}", code) is None:
             raise LimitUpNormalizationError("normalized stock code is invalid")
         if code in seen:
@@ -333,7 +348,7 @@ def normalize_adapter_snapshot(
         if type(lbc) is not int or lbc <= 0:
             raise LimitUpNormalizationError("normalized lbc is invalid")
         seen.add(code)
-        rows.append({"stock_code": code, "lbc": lbc})
+        rows.append({"stock_code": code, "lbc": lbc, "zt_stat": zt_stat})
     rows.sort(key=lambda row: row["stock_code"])
     if _strict_int(snapshot["row_count"], "row_count") != len(rows):
         raise LimitUpNormalizationError("adapter row_count does not match rows")

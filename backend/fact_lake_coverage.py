@@ -161,26 +161,14 @@ def assess_coverage(
         raise CoverageValidationError("coverage boundary must include a session")
 
     if coverage_mode is CoverageMode.SPARSE:
-        if expected is None:
-            return CoverageAssessment(
-                dataset_id=dataset_id,
-                coverage_mode=coverage_mode,
-                safe_watermark=None,
-                state=CoverageState.NOT_APPLICABLE,
-            )
-        if expected in observed:
-            return CoverageAssessment(
-                dataset_id=dataset_id,
-                coverage_mode=coverage_mode,
-                safe_watermark=expected,
-                state=CoverageState.COMPLETE,
-            )
+        # Sparse/event datasets do not promise one observation per session.
+        # ``expected_through`` is not an expected-delivery contract and must
+        # never turn a quiet day into a coverage failure.
         return CoverageAssessment(
             dataset_id=dataset_id,
             coverage_mode=coverage_mode,
             safe_watermark=None,
-            state=CoverageState.UNKNOWN,
-            reason_codes=(REASON_COVERAGE_UNKNOWN,),
+            state=CoverageState.NOT_APPLICABLE,
         )
 
     observed_bounded = observed.intersection(bounded)

@@ -27,7 +27,7 @@ TRADE_DATE = "2026-07-30"
 FETCHED_AT = "2026-07-30T08:00:00Z"
 CONTENT_TYPE = "application/json; charset=utf-8"
 NORMALIZER_V01 = "ds-limit-up-pool-normalizer-v0.1"
-NORMALIZER_V02 = "ds-limit-up-pool-normalizer-v0.2"
+NORMALIZER_V02 = "ds-limit-up-pool-normalizer-v0.3"
 
 
 def _raw(*, lbc: int = 2, marker: str = "base") -> bytes:

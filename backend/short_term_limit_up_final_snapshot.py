@@ -46,7 +46,7 @@ OBSERVATION_INTERVAL_SECONDS = 2.2
 _ADAPTER_SCHEMA_VERSION = pool_adapter.SCHEMA_VERSION
 _ADAPTER_SOURCE_ID = "eastmoney_getTopicZTPool"
 _ADAPTER_ENDPOINT = "getTopicZTPool"
-# status=normal 的 final 候选必须携带完整适配器 v0.1 合同（25 字段）
+# status=normal 的 final 候选必须携带完整适配器 v0.2 合同（25 字段）
 _ADAPTER_REQUIRED_FIELDS = frozenset({
     "schema_version",
     "source_id",
@@ -77,6 +77,7 @@ _ADAPTER_REQUIRED_FIELDS = frozenset({
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
 _STRICT_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 _SIX_DIGIT_RE = re.compile(r"^\d{6}$")
+_ZT_STAT_RE = re.compile(r"^(?P<days>[1-9]\d*)/(?P<count>[1-9]\d*)$")
 _VALID_SESSION_TYPES = (tuple, list, set, frozenset)
 _STABILITY_EPSILON = 1e-9
 
@@ -286,17 +287,24 @@ def _fetch_adapter(requested_trade_date: str) -> tuple[Optional[dict], Optional[
 
 
 def _check_row(row: Any) -> Optional[str]:
-    """行合同：dict、字段集严格等于 stock_code+lbc、代码六位数字、lbc int>0。"""
+    """行合同：stock_code、lbc 及可选但显式的 zt_stat。"""
     if not isinstance(row, dict):
         return "SNAPSHOT_SCHEMA_INVALID"
-    if set(row.keys()) != {"stock_code", "lbc"}:
+    if set(row.keys()) not in (
+        {"stock_code", "lbc"}, {"stock_code", "lbc", "zt_stat"}
+    ):
         return "SNAPSHOT_SCHEMA_INVALID"
     code = row.get("stock_code")
     lbc = row.get("lbc")
+    zt_stat = row.get("zt_stat")
     if not isinstance(code, str) or _SIX_DIGIT_RE.match(code) is None:
         return "SNAPSHOT_SCHEMA_INVALID"
     if isinstance(lbc, bool) or not isinstance(lbc, int) or lbc <= 0:
         return "SNAPSHOT_SCHEMA_INVALID"
+    if zt_stat is not None:
+        match = _ZT_STAT_RE.fullmatch(zt_stat) if isinstance(zt_stat, str) else None
+        if match is None or int(match.group("days")) < int(match.group("count")):
+            return "SNAPSHOT_SCHEMA_INVALID"
     return None
 
 

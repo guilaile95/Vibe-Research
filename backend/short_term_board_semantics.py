@@ -42,7 +42,8 @@ def _row_semantics(row: Mapping[str, Any]) -> dict[str, Any]:
     boards = _strict_positive_int(row.get("boards"), "boards")
     raw_stat = row.get("zt_stat")
     parsed = parse_zt_stat(raw_stat)
-    result: dict[str, Any] = {
+    result: dict[str, Any] = dict(row)
+    result.update({
         "boards": boards,
         "zt_stat": raw_stat if type(raw_stat) is str else None,
         "stat_days": parsed[0] if parsed else None,
@@ -51,7 +52,7 @@ def _row_semantics(row: Mapping[str, Any]) -> dict[str, Any]:
         "is_rebound": bool(parsed and parsed[0] > parsed[1]),
         "zt_stat_status": "VALID" if parsed else "UNKNOWN",
         "reason_codes": [],
-    }
+    })
     if raw_stat is not None and parsed is None:
         result["reason_codes"].append(REASON_ZT_STAT_INVALID)
     if parsed and parsed[0] > parsed[1]:
@@ -94,7 +95,12 @@ def order_by_effective_height(
     if type(limit) is not int or limit <= 0:
         raise ValueError("limit must be a positive integer")
     members = [classify_board(row) for row in theme_projection]
-    members.sort(key=lambda item: (-item["effective_height"], str(item.get("code", ""))))
+    members.sort(
+        key=lambda item: (
+            -item["effective_height"],
+            str(item.get("code", item.get("stock_code", ""))),
+        )
+    )
     return {"status": "APPLICABLE", "reason_codes": [], "members": members[:limit]}
 
 

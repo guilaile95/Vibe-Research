@@ -611,7 +611,7 @@ def test_fresh_process_hard_exit_after_durable_parquet_recovers_exactly_one_vint
 
         raw = b'{"date":"20260730","marker":"hard-exit","data":{"pool":[{"c":"000001","lbc":2}]}}'
         snapshot = {
-            "schema_version": "short-term-limit-up-pool-adapter-v0.1",
+            "schema_version": "short-term-limit-up-pool-adapter-v0.2",
             "source_id": "eastmoney_getTopicZTPool",
             "endpoint": CANONICAL_OPERATION,
             "requested_trade_date": "2026-07-30",
