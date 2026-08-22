@@ -27,6 +27,16 @@ function executedDraft(status: "full" | "partial"): TradeDraft {
   };
 }
 
+test("新建 Trade 不自动选择 operation 或 execution status", () => {
+  assert.match(pageSource, /operation: ""/);
+  assert.match(pageSource, /execution_status: ""/);
+  assert.doesNotMatch(pageSource, /operation: "buy",\s*execution_status: "full"/);
+  assert.match(pageSource, /<option value="" disabled>请选择操作类型<\/option>/);
+  assert.match(pageSource, /<option value="" disabled>请选择执行状态<\/option>/);
+  assert.match(pageSource, /<select\s+required\s+value=\{createDraft\.operation\}/);
+  assert.match(pageSource, /<select\s+required\s+value=\{createDraft\.execution_status\}/);
+});
+
 test("新建 executed Trade 不自动生成成交时间", () => {
   assert.match(pageSource, /executed_at: ""/);
   assert.doesNotMatch(pageSource, /const nowLocal = new Date\(\)/);
@@ -97,6 +107,11 @@ test("not_executed 继续不要求并且不提交 executed_at", () => {
   assert.equal(validateTradeDraft(draft), null);
   const payload = buildTradeCreateInput(draft);
   assert.equal("executed_at" in payload, false);
+});
+
+test("未选择执行状态时不显示成交事实字段", () => {
+  assert.match(pageSource, /明确选择 full\/partial 时展示/);
+  assert.match(pageSource, /createDraft\.execution_status === "full" \|\| createDraft\.execution_status === "partial"/);
 });
 
 test("页面显示时区、offset 和 canonical UTC 预览", () => {

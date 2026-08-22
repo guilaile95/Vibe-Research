@@ -292,7 +292,8 @@ async function run() {
     const fillCreateForm = async (
       modal,
       {
-        status = "full",
+        operation,
+        status,
         executionTime = "2098-01-02T10:00",
         fee = status === "partial" ? "0" : "12.50",
         otherCost = status === "partial" ? "0" : "3.25",
@@ -300,13 +301,13 @@ async function run() {
     ) => {
       await modal.getByPlaceholder("6位数字，如 600519").fill("600519");
       await modal.getByPlaceholder("如 贵州茅台").fill("贵州茅台");
+      if (operation) await modal.locator("select").nth(0).selectOption(operation);
+      if (status) await modal.locator("select").nth(1).selectOption(status);
       if (status === "not_executed") {
-        await modal.locator("select").nth(1).selectOption("not_executed");
         await modal.getByPlaceholder("请输入未执行或部分执行的原因").fill("触发价未到达，放弃追高");
         return;
       }
       if (status === "partial") {
-        await modal.locator("select").nth(1).selectOption("partial");
         await modal.getByPlaceholder("可选，正整数", { exact: true }).fill("2");
         await modal.getByPlaceholder("请输入未执行或部分执行的原因").fill("仅成交一半");
       }
@@ -318,10 +319,34 @@ async function run() {
       await costInputs.nth(1).fill(otherCost);
     };
 
-    // --- TRT1：executed Trade 未显式选择成交时间时，浏览器阻断提交且不产生 POST ---
-    const missingTimeModal = await openCreateModal();
-    await missingTimeModal.getByPlaceholder("6位数字，如 600519").fill("600519");
-    await missingTimeModal.getByPlaceholder("如 贵州茅台").fill("贵州茅台");
+    // --- TRT3：operation/status 未显式选择时，浏览器阻断提交且不产生 POST ---
+    const missingOperationModal = await openCreateModal();
+    const missingOperationSelects = missingOperationModal.locator("select");
+    assert.equal(await missingOperationSelects.nth(0).inputValue(), "");
+    assert.equal(await missingOperationSelects.nth(1).inputValue(), "");
+    assert.equal(await missingOperationSelects.nth(0).evaluate((input) => input.required && !input.checkValidity()), true);
+    assert.equal(await missingOperationSelects.nth(1).evaluate((input) => input.required && !input.checkValidity()), true);
+    await missingOperationSelects.nth(1).selectOption("full");
+    await missingOperationModal.getByPlaceholder("6位数字，如 600519").fill("600519");
+    await missingOperationModal.getByPlaceholder("如 贵州茅台").fill("贵州茅台");
+    await missingOperationModal.getByRole("button", { name: "提交创建" }).click();
+    assert.equal(tradeCreatePosts, 0, "missing operation must not issue trade POST");
+    assert.equal(await missingOperationModal.count(), 1, "missing operation must keep the form open");
+
+    const missingStatusModal = await openCreateModal();
+    const missingStatusSelects = missingStatusModal.locator("select");
+    await missingStatusSelects.nth(0).selectOption("buy");
+    await missingStatusModal.getByPlaceholder("6位数字，如 600519").fill("600519");
+    await missingStatusModal.getByPlaceholder("如 贵州茅台").fill("贵州茅台");
+    assert.equal(await missingStatusSelects.nth(1).inputValue(), "");
+    assert.equal(await missingStatusSelects.nth(1).evaluate((input) => input.required && !input.checkValidity()), true);
+    await missingStatusModal.getByRole("button", { name: "提交创建" }).click();
+    assert.equal(tradeCreatePosts, 0, "missing execution status must not issue trade POST");
+    assert.equal(await missingStatusModal.count(), 1, "missing execution status must keep the form open");
+
+    // --- TRT1 + TRT2：显式 status 后缺少成交时间/费用仍阻断 ---
+    const missingTimeModal = missingStatusModal;
+    await missingTimeModal.locator("select").nth(1).selectOption("full");
     await missingTimeModal.getByPlaceholder("大于0", { exact: true }).fill("102");
     await missingTimeModal.getByPlaceholder("正整数", { exact: true }).fill("1");
     const missingTimeInput = missingTimeModal.locator('input[type="datetime-local"]');
@@ -336,7 +361,7 @@ async function run() {
     assert.equal(tradeCreatePosts, 0, "missing execution time/cost must not issue trade POST");
     assert.equal(await missingTimeModal.count(), 1, "missing execution time/cost must keep the form open");
 
-    // --- TRT1 + TRT2 + TRUX1：显式时间与费用预览 → 创建成功 → 自动详情 ---
+    // --- TRT1 + TRT2 + TRUX1：显式 BUY + FULL → 创建成功 → 自动详情 ---
     const executedModal = missingTimeModal;
     await executedModal.locator('input[type="datetime-local"]').fill("2098-01-02T10:00");
     await executedModal.getByPlaceholder("请输入实际费用，0 表示确认费用为 0").nth(0).fill("12.50");
@@ -363,13 +388,15 @@ async function run() {
     await page.getByText("ALLOCATED", { exact: true }).waitFor();
     assert.equal(truxWritePosts, 1, "explicit attribution must be the only write");
     const createdReadback = await jsonRequest(backend, `/api/trades/${createdRecord.trade_id}`);
+    assert.equal(createdReadback.operation, "buy");
+    assert.equal(createdReadback.execution_status, "full");
     assert.equal(new Date(createdReadback.executed_at).toISOString(), expectedExecutedIso);
     assert.equal(createdReadback.fee, 12.5);
     assert.equal(createdReadback.other_cost, 3.25);
 
-    // --- TRT1 + TRT2：partial 使用显式 0 费用并保持同一 readback 语义 ---
+    // --- TRT1 + TRT2：显式 ADD + PARTIAL 使用 0 费用并保持同一 readback 语义 ---
     const partialModal = await openCreateModal();
-    await fillCreateForm(partialModal, { status: "partial", executionTime: "2098-01-03T11:15", fee: "0", otherCost: "0" });
+    await fillCreateForm(partialModal, { operation: "add", status: "partial", executionTime: "2098-01-03T11:15", fee: "0", otherCost: "0" });
     const expectedPartialIso = await page.evaluate(() => new Date("2098-01-03T11:15").toISOString());
     await partialModal.getByText(`Canonical UTC ISO：${expectedPartialIso}`, { exact: true }).waitFor();
     const [partialResponse] = await Promise.all([
@@ -386,6 +413,7 @@ async function run() {
     await partialDetailModal.getByText("UNALLOCATED", { exact: true }).waitFor();
     assert.equal(truxWritePosts, 1, "partial continuation must not issue attribution/unplanned writes");
     const partialReadback = await jsonRequest(backend, `/api/trades/${partialRecord.trade_id}`);
+    assert.equal(partialReadback.operation, "add");
     assert.equal(partialReadback.execution_status, "partial");
     assert.equal(partialReadback.planned_quantity, 2);
     assert.equal(partialReadback.actual_quantity, 1);
@@ -399,7 +427,7 @@ async function run() {
 
     // --- not_executed：同样自动打开详情，但诚实显示 NOT_APPLICABLE ---
     const notExecutedModal = await openCreateModal();
-    await fillCreateForm(notExecutedModal, { status: "not_executed" });
+    await fillCreateForm(notExecutedModal, { operation: "sell", status: "not_executed" });
     const [notExecutedResponse] = await Promise.all([
       waitForCreatedTrade(),
       notExecutedModal.getByRole("button", { name: "提交创建" }).click(),
@@ -420,13 +448,15 @@ async function run() {
       await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "TRUX1_DETAIL_READ_FAILED" }) });
     });
     const failingReadModal = await openCreateModal();
-    await fillCreateForm(failingReadModal, { notExecuted: false });
+    await fillCreateForm(failingReadModal, { operation: "reduce", status: "full" });
     const [failingReadResponse] = await Promise.all([
       waitForCreatedTrade(),
       failingReadModal.getByRole("button", { name: "提交创建" }).click(),
     ]);
     assert.equal(failingReadResponse.ok(), true, await failingReadResponse.text());
     const failingReadRecord = (await failingReadResponse.json()).data;
+    assert.equal(failingReadRecord.operation, "reduce");
+    assert.equal(failingReadRecord.execution_status, "full");
     await failingReadModal.waitFor({ state: "detached" });
     await page.getByText("交易流水创建成功，已打开该笔交易详情").waitFor();
     await page.getByText("TRUX1_DETAIL_READ_FAILED").waitFor();
@@ -439,6 +469,7 @@ async function run() {
       assert.equal(persisted.trade_id, tradeId);
     }
     const notExecutedReadback = await jsonRequest(backend, `/api/trades/${notExecutedRecord.trade_id}`);
+    assert.equal(notExecutedReadback.operation, "sell");
     assert.equal(notExecutedReadback.execution_status, "not_executed");
     assert.equal(notExecutedReadback.executed_at, null);
     assert.equal(

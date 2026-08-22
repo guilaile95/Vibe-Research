@@ -79,8 +79,8 @@ export function Trades() {
   const [createDraft, setCreateDraft] = useState<TradeDraft>({
     code: "",
     name: "",
-    operation: "buy",
-    execution_status: "full",
+    operation: "",
+    execution_status: "",
     planned_price: "",
     planned_quantity: "",
     actual_price: "",
@@ -281,8 +281,8 @@ export function Trades() {
     setCreateDraft({
       code: "",
       name: "",
-      operation: "buy",
-      execution_status: "full",
+      operation: "",
+      execution_status: "",
       planned_price: "",
       planned_quantity: "",
       actual_price: "",
@@ -404,7 +404,7 @@ export function Trades() {
     }
   };
 
-  const executionTimePreview = createDraft.execution_status !== "not_executed"
+  const executionTimePreview = (createDraft.execution_status === "full" || createDraft.execution_status === "partial")
     ? getTradeExecutionTimePreview(createDraft.executed_at)
     : null;
 
@@ -768,12 +768,14 @@ export function Trades() {
                     操作类型 <span className="text-rose-400">*</span>
                   </label>
                   <select
+                    required
                     value={createDraft.operation}
                     onChange={(e) =>
-                      setCreateDraft({ ...createDraft, operation: e.target.value as any })
+                      setCreateDraft({ ...createDraft, operation: e.target.value as TradeDraft["operation"] })
                     }
                     className="w-full rounded-md border border-input bg-background/50 px-3 py-1.5 text-xs text-foreground focus:ring-1 focus:ring-primary"
                   >
+                    <option value="" disabled>请选择操作类型</option>
                     <option value="buy">买入</option>
                     <option value="add">加仓</option>
                     <option value="reduce">减仓</option>
@@ -786,12 +788,14 @@ export function Trades() {
                     执行状态 <span className="text-rose-400">*</span>
                   </label>
                   <select
+                    required
                     value={createDraft.execution_status}
                     onChange={(e) =>
-                      setCreateDraft({ ...createDraft, execution_status: e.target.value as any })
+                      setCreateDraft({ ...createDraft, execution_status: e.target.value as TradeDraft["execution_status"] })
                     }
                     className="w-full rounded-md border border-input bg-background/50 px-3 py-1.5 text-xs text-foreground focus:ring-1 focus:ring-primary"
                   >
+                    <option value="" disabled>请选择执行状态</option>
                     <option value="full">已全部执行</option>
                     <option value="partial">部分执行</option>
                     <option value="not_executed">未执行</option>
@@ -826,8 +830,8 @@ export function Trades() {
                   />
                 </div>
 
-                {/* 实际成交字段：非 not_executed 时展示 */}
-                {createDraft.execution_status !== "not_executed" && (
+                {/* 实际成交字段：明确选择 full/partial 时展示 */}
+                {(createDraft.execution_status === "full" || createDraft.execution_status === "partial") && (
                   <>
                     <div>
                       <label className="block text-xs font-medium text-foreground mb-1">

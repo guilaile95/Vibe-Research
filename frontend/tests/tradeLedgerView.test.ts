@@ -68,6 +68,26 @@ describe("tradeLedgerView pure helpers", () => {
     assert.equal(canonicalizeTradeExecutionTime("not-a-datetime"), null);
   });
 
+  test("validateTradeDraft requires explicit operation and execution status", () => {
+    const valid: TradeDraft = {
+      code: "600519",
+      name: "贵州茅台",
+      operation: "buy",
+      execution_status: "not_executed",
+      unexecuted_reason: "等待确认",
+    };
+    assert.equal(validateTradeDraft({ ...valid, operation: "" }), "请选择操作类型");
+    assert.equal(validateTradeDraft({ ...valid, execution_status: "" }), "请选择执行状态");
+    assert.throws(
+      () => buildTradeCreateInput({ ...valid, operation: "" }),
+      /创建交易前必须选择操作类型/,
+    );
+    assert.throws(
+      () => buildTradeCreateInput({ ...valid, execution_status: "" }),
+      /创建交易前必须选择执行状态/,
+    );
+  });
+
   test("validateTradeDraft checks full execution rules", () => {
     const valid: TradeDraft = {
       code: "600519",
@@ -180,6 +200,19 @@ describe("tradeLedgerView pure helpers", () => {
       trade_date: "2026-07-28",
       generated_at: "2026-07-28 09:00:00",
     });
+  });
+
+  test("buildTradeCreateInput preserves every explicit operation", () => {
+    const base: TradeDraft = {
+      code: "600519",
+      name: "贵州茅台",
+      operation: "buy",
+      execution_status: "not_executed",
+      unexecuted_reason: "等待确认",
+    };
+    for (const operation of ["buy", "add", "reduce", "sell"] as const) {
+      assert.equal(buildTradeCreateInput({ ...base, operation }).operation, operation);
+    }
   });
 
   test("buildTradeCreateInput formats executed trades in UTC", () => {
