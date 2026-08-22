@@ -63,6 +63,8 @@ import type {
   DisclosureItem,
   GlobalIndex,
   GlobalStock,
+  HkCashflow,
+  GpuRentData,
   NorthboundCapitalFlow,
   TechnicalIndicators,
   TopRiskAnalysis,
@@ -555,8 +557,11 @@ export const api = {
     get<TimedComponentEnvelope<BoardRankingData>>(`/market/boards?type=${type}&top_n=${topN}`),
   globalIndices: () => get<GlobalIndex[]>("/global/indices"),
   globalStock: (symbol: string) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`),
+  hkCashflow: (symbol: string) => get<HkCashflow>(`/global/hk/cashflow?symbol=${encodeURIComponent(symbol)}`),
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
+  gpuRent: () => get<GpuRentData>("/signals/gpu-rent"),
+  gpuRentRefresh: () => request<GpuRentData>("/signals/gpu-rent/refresh", "POST"),
   getIntelDigestLatest: (sectorKey: string) =>
     get<IntelDigestLatestResult>(`/intel-digests/latest?sector_key=${encodeURIComponent(sectorKey)}`, { unwrapData: false }),
   saveIntelDigest: (payload: IntelDigestSaveIn, signal?: AbortSignal) =>
