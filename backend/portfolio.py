@@ -218,6 +218,20 @@ def get_portfolio_holdings_snapshot() -> dict:
     return {"holdings": copy.deepcopy(d.get("holdings", []))}
 
 
+def holdings_from_derived_positions(derived_positions: dict) -> list[dict[str, Any]]:
+    """将 Position Reality 的 OPEN 投影转换为 portfolio holdings 行。"""
+    return [
+        {
+            "code": p["code"],
+            "shares": int(p["shares"]),
+            "cost": float(p["avg_cost"]) if p.get("avg_cost") is not None else 0.0,
+            "cost_known": bool(p.get("cost_known", True)),
+        }
+        for p in derived_positions.get("positions", [])
+        if p.get("status") == "OPEN"
+    ]
+
+
 def get_portfolio(derived_positions: dict | None = None, reconciliation: dict | None = None) -> dict:
     """读持仓 + 实时行情，算每笔与汇总的市值/浮动盈亏。
 
@@ -229,16 +243,7 @@ def get_portfolio(derived_positions: dict | None = None, reconciliation: dict | 
     with _LOCK:
         d = _load()
     if derived_positions is not None:
-        hs = [
-            {
-                "code": p["code"],
-                "shares": int(p["shares"]),
-                "cost": float(p["avg_cost"]) if p.get("avg_cost") is not None else 0.0,
-                "cost_known": bool(p.get("cost_known", True)),
-            }
-            for p in derived_positions.get("positions", [])
-            if p.get("status") == "OPEN"
-        ]
+        hs = holdings_from_derived_positions(derived_positions)
     else:
         hs = d.get("holdings", [])
     rows = []

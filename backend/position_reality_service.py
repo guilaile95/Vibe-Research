@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 import uuid
@@ -99,6 +100,42 @@ def get_holding_authority_state() -> str:
     except Exception:
         return "ERROR"
     return "CANONICAL" if openings > 0 else "LEGACY"
+
+
+def read_portfolio_authority(*, include_metadata: bool = False) -> dict[str, Any]:
+    """读取当前 Portfolio 投影，统一 CANONICAL/LEGACY authority 选择。"""
+    state = get_holding_authority_state()
+    if state == "ERROR":
+        if include_metadata:
+            return {"authority_state": state, "holding_authority": "UNKNOWN"}
+        raise PositionDerivationError("Holding 权威不可读")
+    if state == "CANONICAL":
+        derived = derive_positions()
+        data = portfolio.get_portfolio(
+            derived_positions=derived,
+            reconciliation=reconcile_positions(derived),
+        )
+        if include_metadata:
+            data = copy.copy(data)
+            data["holding_authority"] = "LEDGER_DERIVED"
+            data["authority_state"] = state
+        return data
+    data = portfolio.get_portfolio()
+    if include_metadata:
+        data = copy.copy(data)
+        data["holding_authority"] = "LEGACY_PORTFOLIO"
+        data["authority_state"] = state
+    return data
+
+
+def read_current_holdings_snapshot() -> dict[str, Any]:
+    """读取当前 authority 的无行情 holdings 快照，供 fingerprint/stale 使用。"""
+    state = get_holding_authority_state()
+    if state == "ERROR":
+        raise PositionDerivationError("Holding 权威不可读")
+    if state == "CANONICAL":
+        return {"holdings": portfolio.holdings_from_derived_positions(derive_positions())}
+    return portfolio.get_portfolio_holdings_snapshot()
 
 
 def _new_id(prefix: str) -> str:
@@ -918,9 +955,9 @@ def derive_positions() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def reconcile_positions() -> dict[str, Any]:
+def reconcile_positions(derived_positions: dict[str, Any] | None = None) -> dict[str, Any]:
     """Read-only reconciliation: ledger-derived OPEN positions vs portfolio.json holdings."""
-    derived = derive_positions()
+    derived = derived_positions if derived_positions is not None else derive_positions()
     snapshot = portfolio.get_portfolio_holdings_snapshot()
     portfolio_holdings = snapshot.get("holdings") or []
     portfolio_map: dict[str, dict[str, Any]] = {}

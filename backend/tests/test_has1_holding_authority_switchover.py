@@ -7,6 +7,8 @@ Portfolio 与 Position Ledger exact equality / trade & correction propagation /
 mismatch 显式且零自动修复 / authority 读取失败 fail closed / 无第三 store /
 无 canonical→legacy fallback / portfolio.json 保留。
 """
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -267,3 +269,78 @@ def test_portfolio_json_preserved_and_no_third_store(isolated):
     }
     unexpected = [p.name for p in isolated.iterdir() if p.name not in allowed]
     assert unexpected == []
+
+
+def test_portfolio_advice_uses_canonical_holdings_and_stales_after_correction(isolated, monkeypatch):
+    """Advice generation/readback follows Position Ledger, not legacy holdings."""
+    import ai_result_service
+    import daily_review
+    import portfolio_advice_service as advice
+
+    _bootstrap()
+    (isolated / "portfolio.json").write_text(
+        '{"holdings": [{"code": "600519", "shares": 999, "cost": 1.0}], "last_refresh": null}',
+        encoding="utf-8",
+    )
+    review = {
+        "trade_date": "2026-08-05",
+        "generated_at": "2026-08-05 15:00:00",
+        "data_cutoff": None,
+        "status": "normal",
+        "data_health": {"components": {"breadth": "normal"}},
+        "market_environment": {"breadth": {"status": "normal"}},
+    }
+    monkeypatch.setattr(daily_review, "generate_daily_review", lambda: review)
+    monkeypatch.setattr(
+        advice.portfolio_advice_context,
+        "build_portfolio_advice_context",
+        lambda portfolio_data, _review: {
+            "holdings": portfolio_data["holdings"],
+            "market_evidence": {"trade_date": "2026-08-05"},
+        },
+    )
+    monkeypatch.setattr(
+        advice.portfolio_advice_prompt,
+        "build_portfolio_advice_messages",
+        lambda *_args, **_kwargs: [{"role": "user", "content": "test"}],
+    )
+    payload = {
+        "schema_version": "portfolio-advice-v0.1",
+        "generated_at": "2026-08-05 15:30:00",
+        "trade_date": "2026-08-05",
+        "market_status": "normal",
+        "portfolio_summary": {"holding_count": 1, "market_value": 1, "cost": 800, "pnl": 0, "pnl_pct": 0},
+        "account_action": {"action": "hold", "reason": "test", "confidence": "medium"},
+        "holdings": [{
+            "code": "600519", "name": "股600519", "action": "hold",
+            "execution_size_pct_of_holding": None, "execution_quantity": None,
+            "trigger_conditions": [], "price_conditions": [], "execution_plan": [],
+            "risk_conditions": [], "invalidation_conditions": [], "confidence": "medium",
+            "data_limitations": [],
+        }],
+        "warnings": [], "data_limitations": [],
+    }
+    result = advice.generate_portfolio_advice(
+        {"provider": "cli-codex", "model": "test"},
+        model_runner=lambda _cfg, _messages: json.dumps(payload),
+    )
+    assert result["holdings"][0]["code"] == "600519"
+    stored = ai_result_service.get_ai_result("portfolio_advice", trade_date="2026-08-05")
+    assert stored["stale"] is False
+    assert ai_result_service.compute_portfolio_fingerprint(
+        [{"code": "600519", "shares": 100, "cost": 8.0}]
+    ) != ai_result_service.compute_portfolio_fingerprint(
+        [{"code": "600519", "shares": 999, "cost": 1.0}]
+    )
+
+    trade = _create_trade(qty=20, price=10.0)
+    correction = client.post("/api/position/correction", json={
+        "target_event_type": "trade",
+        "target_event_id": trade["trade_id"],
+        "after_payload": {"actual_quantity": 10},
+        "reason": "PAA1 stale acceptance",
+    })
+    assert correction.status_code == 200, correction.text
+    assert client.get("/api/position/derived").json()["data"]["positions"][0]["shares"] == 110
+    stored = ai_result_service.get_ai_result("portfolio_advice", trade_date="2026-08-05")
+    assert stored["stale"] is True

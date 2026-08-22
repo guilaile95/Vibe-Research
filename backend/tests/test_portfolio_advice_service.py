@@ -257,6 +257,50 @@ def test_prepare_full_chain_and_structure():
     assert json.loads(out["context_json"]) == ctx
 
 
+def test_prepare_fails_closed_when_holding_authority_is_unproven():
+    with (
+        patch.object(
+            svc.holding_authority,
+            "read_portfolio_authority",
+            side_effect=svc.holding_authority.PositionDerivationError("broken ledger"),
+        ),
+        patch.object(svc.daily_review, "generate_daily_review") as daily_review,
+    ):
+        with pytest.raises(PortfolioAdviceUnavailableError, match="持仓数据不完整"):
+            prepare_portfolio_advice_messages()
+    daily_review.assert_not_called()
+
+
+def test_prepare_uses_authority_read_model_for_canonical_holdings():
+    canonical = _portfolio([_holding(shares=80, cost=10.0)])
+    canonical["holding_authority"] = "LEDGER_DERIVED"
+    canonical["authority_state"] = "CANONICAL"
+    legacy = _portfolio([_holding(shares=999, cost=1.0)])
+    review = _review()
+
+    with (
+        patch.object(svc.holding_authority, "read_portfolio_authority", return_value=canonical),
+        patch.object(svc.portfolio, "get_portfolio", return_value=legacy) as legacy_read,
+        patch.object(svc.daily_review, "generate_daily_review", return_value=review),
+        patch.object(
+            svc.portfolio_advice_context,
+            "build_portfolio_advice_context",
+            return_value={"holdings": []},
+        ),
+        patch.object(
+            svc.portfolio_advice_prompt,
+            "build_portfolio_advice_messages",
+            return_value=_msgs(),
+        ),
+    ):
+        prepared = prepare_portfolio_advice_messages()
+
+    legacy_read.assert_not_called()
+    assert prepared["portfolio"] is canonical
+    assert prepared["portfolio"]["holdings"][0]["shares"] == 80
+    assert "authority_state" not in prepared["portfolio"]
+
+
 # ---------------------------------------------------------------------------
 # 3–5 空持仓 / 缺失 / 非法类型
 # ---------------------------------------------------------------------------

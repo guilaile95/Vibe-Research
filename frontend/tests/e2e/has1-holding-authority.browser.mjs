@@ -17,7 +17,7 @@
 import assert from "node:assert/strict";
 import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -317,6 +317,64 @@ async function run() {
     assert.equal(stillCanonical.holdings.length, 1);
     assert.equal(stillCanonical.holdings[0].code, "600519");
 
+    // ---- PAA1. canonical Advice snapshot/stale follows ledger -----------
+    const python = process.env.PYTHON || (process.platform === "win32" ? "py" : "python3");
+    const pythonArgs = process.env.PYTHON
+      ? ["-c"]
+      : process.platform === "win32" ? ["-3", "-c"] : ["-c"];
+    const seedAdvice = `
+import json
+import os
+import ai_result_service
+import position_reality_service
+import review_history
+
+payload = {
+    "schema_version": "portfolio-advice-v0.1",
+    "generated_at": "2026-08-05 15:30:00",
+    "trade_date": "2026-08-05",
+    "market_status": "normal",
+    "portfolio_summary": {"holding_count": 1, "market_value": 1800, "cost": 1440, "pnl": 360, "pnl_pct": 25},
+    "account_action": {"action": "hold", "reason": "test", "confidence": "medium"},
+    "holdings": [{
+        "code": "600519", "name": "贵州茅台", "shares": 180, "cost_price": 8,
+        "current_price": 10, "market_value": 1800, "pnl_amount": 360,
+        "pnl_pct": 25, "holding_weight_pct": 100, "action": "hold",
+        "execution_size_pct_of_holding": None, "execution_quantity": None,
+        "trigger_conditions": [], "price_conditions": [], "execution_plan": [],
+        "risk_conditions": [], "invalidation_conditions": [], "confidence": "medium",
+        "data_limitations": []
+    }],
+    "warnings": [], "data_limitations": []
+}
+review = {"trade_date": "2026-08-05", "generated_at": "2026-08-05 15:00:00", "data_cutoff": None}
+canonical = position_reality_service.read_current_holdings_snapshot()
+payload["holdings"][0]["shares"] = canonical["holdings"][0]["shares"]
+payload["holdings"][0]["cost_price"] = canonical["holdings"][0]["cost"]
+ai_result_service.save_portfolio_advice(
+    canonical,
+    review,
+    payload,
+    {"provider": "test", "model": "paa1-e2e"},
+)
+`;
+    execFileSync(python, [...pythonArgs, seedAdvice], {
+      cwd: backendDir,
+      env: { ...process.env, VR_DATA_DIR: tempDataDir, VIBE_RESEARCH_REVIEW_DB: join(tempDataDir, "review_history.db") },
+      stdio: "pipe",
+    });
+    const freshAdvice = await jsonRequest(backend, "/api/ai-results/portfolio_advice?trade_date=2026-08-05");
+    assert.equal(freshAdvice.stale, false, "canonical holdings unchanged must keep Advice fresh");
+    assert.equal(freshAdvice.payload.holdings[0].code, "600519");
+
+    await jsonRequest(backend, "/api/trades", "POST", {
+      code: "600519", name: "贵州茅台", operation: "buy", execution_status: "full",
+      actual_price: 10, actual_quantity: 20, executed_at: "2026-08-06T10:00:00Z",
+    });
+    const staleAdvice = await jsonRequest(backend, "/api/ai-results/portfolio_advice?trade_date=2026-08-05");
+    assert.equal(staleAdvice.stale, true, "ledger trade must stale prior Advice");
+    assert.ok(staleAdvice.stale_message);
+
     // ---- I/J. deliberate mismatch stays explicit; file preserved ---------
     const pfFile = join(tempDataDir, "portfolio.json");
     assert.ok(existsSync(pfFile), "J: portfolio.json must be preserved");
@@ -333,7 +391,7 @@ async function run() {
     assert.ok((await mismatchBanner.innerText()).includes("600519"));
 
     const mismatchView = await jsonRequest(backend, "/api/portfolio");
-    assert.equal(mismatchView.holdings[0].shares, 180, "display must stay canonical despite mismatch");
+    assert.equal(mismatchView.holdings[0].shares, 200, "display must stay canonical despite mismatch");
     assert.ok(mismatchView.ledger_view.reconciliation.summary.mismatch >= 1);
     assert.ok(existsSync(pfFile), "J: portfolio.json still preserved after mismatch read");
 

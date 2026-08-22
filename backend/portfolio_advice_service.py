@@ -15,6 +15,7 @@ import chat
 import daily_review
 import decision_evidence_service
 import portfolio
+import position_reality_service as holding_authority
 import portfolio_advice_context
 import portfolio_advice_prompt
 import portfolio_advice_validator
@@ -158,7 +159,15 @@ def prepare_portfolio_advice_messages(
     request = _normalize_user_request(user_request)
 
     try:
-        portfolio_data = portfolio.get_portfolio()
+        try:
+            portfolio_data = holding_authority.read_portfolio_authority()
+        except holding_authority.PositionDerivationError as exc:
+            _record_gate_blocked("HOLDING_AUTHORITY_UNPROVEN")
+            raise PortfolioAdviceUnavailableError(_HOLDINGS_SHAPE_MSG) from exc
+        if portfolio_data.get("authority_state") == "ERROR":
+            _record_gate_blocked("HOLDING_AUTHORITY_UNPROVEN")
+            raise PortfolioAdviceUnavailableError(_HOLDINGS_SHAPE_MSG)
+        portfolio_data.pop("authority_state", None)
         if not isinstance(portfolio_data, dict):
             _record_gate_blocked("NO_HOLDINGS")
             raise PortfolioAdviceUnavailableError(_EMPTY_HOLDINGS_MSG)

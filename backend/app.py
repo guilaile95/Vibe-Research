@@ -732,30 +732,16 @@ def _reject_post_bootstrap_holding_mutation() -> None:
 
 
 def _portfolio_payload() -> dict:
-    """GET /api/portfolio 的统一读模型。
-
-    CANONICAL：holdings 由 ledger-derived Position Reality 派生，portfolio.json
-    降级为 legacy archive（closed 历史）+ reconciliation 证据。
-    LEGACY / UNKNOWN：保持既有 legacy 读行为，并显式标记 authority。
-    """
-    state = prs.get_holding_authority_state()
+    """GET /api/portfolio 的统一读模型。"""
     try:
-        if state == "CANONICAL":
-            derived = prs.derive_positions()
-            data = pf.get_portfolio(
-                derived_positions=derived,
-                reconciliation=prs.reconcile_positions(),
-            )
-            data["holding_authority"] = "LEDGER_DERIVED"
-            return data
-        data = pf.get_portfolio()
+        data = prs.read_portfolio_authority(include_metadata=True)
     except pf.PortfolioDataCorruptedError:
         raise
     except prs.PositionDerivationError as e:
         raise HTTPException(502, f"Holding 权威派生失败：{e}") from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"持仓读取异常：{e}") from e
-    data["holding_authority"] = "LEGACY_PORTFOLIO" if state == "LEGACY" else "UNKNOWN"
+    data.pop("authority_state", None)
     return data
 
 
