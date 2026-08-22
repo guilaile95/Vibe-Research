@@ -716,6 +716,9 @@ _HOLDING_AUTHORITY_SWITCHED_DETAIL = (
 _HOLDING_AUTHORITY_UNPROVEN_DETAIL = (
     "HOLDING_AUTHORITY_UNPROVEN：无法确认 Holding 权威状态，已拒绝修改以避免产生第二份持仓事实。"
 )
+_HOLDING_AUTHORITY_UNPROVEN_READ_DETAIL = (
+    "HOLDING_AUTHORITY_UNPROVEN：持仓权威不可读，无法校验持仓建议的过期状态。"
+)
 
 
 def _reject_post_bootstrap_holding_mutation() -> None:
@@ -732,30 +735,16 @@ def _reject_post_bootstrap_holding_mutation() -> None:
 
 
 def _portfolio_payload() -> dict:
-    """GET /api/portfolio 的统一读模型。
-
-    CANONICAL：holdings 由 ledger-derived Position Reality 派生，portfolio.json
-    降级为 legacy archive（closed 历史）+ reconciliation 证据。
-    LEGACY / UNKNOWN：保持既有 legacy 读行为，并显式标记 authority。
-    """
-    state = prs.get_holding_authority_state()
+    """GET /api/portfolio 的统一读模型。"""
     try:
-        if state == "CANONICAL":
-            derived = prs.derive_positions()
-            data = pf.get_portfolio(
-                derived_positions=derived,
-                reconciliation=prs.reconcile_positions(),
-            )
-            data["holding_authority"] = "LEDGER_DERIVED"
-            return data
-        data = pf.get_portfolio()
+        data = prs.read_portfolio_authority(include_metadata=True)
     except pf.PortfolioDataCorruptedError:
         raise
     except prs.PositionDerivationError as e:
         raise HTTPException(502, f"Holding 权威派生失败：{e}") from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"持仓读取异常：{e}") from e
-    data["holding_authority"] = "LEGACY_PORTFOLIO" if state == "LEGACY" else "UNKNOWN"
+    data.pop("authority_state", None)
     return data
 
 
@@ -1651,6 +1640,9 @@ def get_ai_result(
         return {"data": result}
     except ai_result_service.AiResultValidationError:
         raise HTTPException(422, "AI结果查询参数无效") from None
+    except prs.PositionDerivationError:
+        # stale 校验依赖 canonical holdings；权威不可读时显式 503，不落入 generic 500。
+        raise HTTPException(503, _HOLDING_AUTHORITY_UNPROVEN_READ_DETAIL) from None
     except Exception:  # noqa: BLE001 — never expose path, SQL, payload, or traceback
         raise HTTPException(500, "AI结果读取失败") from None
 

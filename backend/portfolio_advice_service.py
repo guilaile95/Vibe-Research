@@ -15,6 +15,7 @@ import chat
 import daily_review
 import decision_evidence_service
 import portfolio
+import position_reality_service as holding_authority
 import portfolio_advice_context
 import portfolio_advice_prompt
 import portfolio_advice_validator
@@ -74,6 +75,7 @@ _INVALID_JSON_MSG = "持仓建议模型输出不是有效的JSON对象"
 _VALIDATOR_FAIL_MSG = "持仓建议模型输出未通过结构和执行约束校验"
 _HOLDING_QUOTE_UNAVAILABLE_MSG = "持仓核心行情暂不可用，无法生成可靠的持仓操作建议"
 _MARKET_UNAVAILABLE_MSG = "市场核心数据暂不可用，无法生成可靠的持仓操作建议"
+_HOLDING_AUTHORITY_UNPROVEN_MSG = "HOLDING_AUTHORITY_UNPROVEN：持仓权威不可读，无法生成可靠的持仓操作建议"
 
 
 def _require_holdings(portfolio_data: dict) -> None:
@@ -158,7 +160,14 @@ def prepare_portfolio_advice_messages(
     request = _normalize_user_request(user_request)
 
     try:
-        portfolio_data = portfolio.get_portfolio()
+        try:
+            portfolio_data = holding_authority.read_portfolio_authority()
+        except holding_authority.PositionDerivationError as exc:
+            # 权威不可读是服务端数据源故障，映射到既有 503 边界，
+            # 不得伪装成“空持仓”类 409 业务前置条件。
+            _record_gate_blocked("HOLDING_AUTHORITY_UNPROVEN")
+            raise PortfolioAdviceMarketDataError(_HOLDING_AUTHORITY_UNPROVEN_MSG) from exc
+        portfolio_data.pop("authority_state", None)
         if not isinstance(portfolio_data, dict):
             _record_gate_blocked("NO_HOLDINGS")
             raise PortfolioAdviceUnavailableError(_EMPTY_HOLDINGS_MSG)

@@ -14,6 +14,7 @@ import ai_result_store
 import daily_review
 import daily_review_cache
 import portfolio
+import position_reality_service as holding_authority
 import review_history
 
 
@@ -625,7 +626,7 @@ def get_ai_result(
     stale = False
     if result_type == PORTFOLIO_ADVICE:
         if current_portfolio is None:
-            current_portfolio = portfolio.get_portfolio_holdings_snapshot()
+            current_portfolio = holding_authority.read_current_holdings_snapshot()
         current_fingerprint = compute_portfolio_fingerprint(
             _portfolio_holdings(current_portfolio)
         )
