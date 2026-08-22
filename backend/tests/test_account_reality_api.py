@@ -94,8 +94,15 @@ class TestAccountRealityApi:
         assert data["cash"]["reconciliation"] in ("MATCH", "MISMATCH", "UNKNOWN")
         assert data["cash"]["coverage"] == "TRADES_PLUS_MANUAL_CASH_EVENTS"
         assert data["pricing"]["status"] == "COMPLETE"
+        assert data["pricing"]["unified_price_date"] == "2026-08-04"
         assert data["settled_nav"] == 50000.0 + 2000.0
         assert data["nav_cash_source"] == "ACCOUNT_PROFILE"
+        assert data["data_cutoff"] is None
+        assert data["nav_temporal_state"] == "MIXED_UNPROVEN"
+        assert "CASH_EFFECTIVE_AT_UNPROVEN" in data["nav_temporal_reason_codes"]
+        assert data["cash"]["current_fact"]["effective_at"] is None
+        assert data["cash"]["ledger_candidate"]["effective_at"] is None
+        assert data["cash"]["current_fact"]["temporal_status"] == "UNPROVEN"
         assert "CASH_EVENTS_UNSUPPORTED" in data["reason_codes"]
 
     def test_reality_cash_unknown(self, client, tmp_path, monkeypatch):

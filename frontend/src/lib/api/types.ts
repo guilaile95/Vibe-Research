@@ -686,19 +686,51 @@ export interface AccountRealityCashFact {
   status: "AVAILABLE" | "UNKNOWN";
   reason_code?: string;
   updated_at?: string | null;
+  effective_at?: string | null;
+  temporal_status?: "UNPROVEN" | string;
+  temporal_reason_code?: string;
   coverage?: string;
+}
+
+export interface AccountRealityPosition {
+  code: string;
+  name: string;
+  shares: number;
+  price: number | null;
+  price_date: string | null;
+  pricing_status: "PRICED" | "UNPRICED" | string;
+  market_value: number | null;
 }
 
 export interface AccountReality {
   account_status?: string;
   bootstrap_status?: string;
+  canonical?: boolean;
   cash: {
     current_fact: AccountRealityCashFact;
     ledger_candidate: AccountRealityCashFact;
     reconciliation: "MATCH" | "MISMATCH" | "UNKNOWN";
     coverage?: string;
   };
+  positions?: AccountRealityPosition[];
+  pricing?: {
+    mode: string;
+    status: "COMPLETE" | "PARTIAL" | "UNAVAILABLE" | "MIXED_CUTOFF" | string;
+    priced_holdings: number;
+    total_holdings: number;
+    unified_price_date: string | null;
+  };
+  market_value?: number | null;
   settled_nav?: number | null;
+  nav_cash_source?: string | null;
+  nav_reconciliation?: {
+    status: "MATCH" | "MISMATCH" | "UNKNOWN";
+    account_profile_total_assets: number | null;
+    computed_nav: number | null;
+  };
+  nav_temporal_state?: "MIXED_UNPROVEN" | "UNAVAILABLE" | string;
+  nav_temporal_reason_codes?: string[];
+  data_cutoff?: string | null;
   confidence?: string;
   reason_codes?: string[];
   as_of?: string;

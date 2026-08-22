@@ -109,6 +109,10 @@ class TestAccountProfileCash:
         assert fact["source"] == "ACCOUNT_PROFILE"
         assert fact["fact_type"] == "MANUAL_CURRENT_FACT"
         assert fact["status"] == "AVAILABLE"
+        assert fact["effective_at"] is None
+        assert fact["temporal_status"] == "UNPROVEN"
+        assert fact["temporal_reason_code"] == "CASH_EFFECTIVE_AT_UNPROVEN"
+        assert fact["updated_at"] is not None
 
     def test_not_configured_is_unknown_not_zero(self, profile_file):
         fact = svc._current_cash_fact()
@@ -134,6 +138,9 @@ class TestLedgerCashCandidate:
         assert cand["value"] == 100000.0
         assert cand["coverage"] == "TRADES_PLUS_MANUAL_CASH_EVENTS"
         assert cand["fact_type"] == "DERIVED_FACT"
+        assert cand["effective_at"] is None
+        assert cand["temporal_status"] == "UNPROVEN"
+        assert cand["temporal_reason_code"] == "CASH_EFFECTIVE_AT_UNPROVEN"
 
     def test_buy_deduction(self):
         _bootstrap([], opening_cash=100000.0)
@@ -328,6 +335,13 @@ class TestSettledNav:
         reality = svc.get_account_reality()
         assert reality["settled_nav"] == 50000.0 + 2000.0
         assert reality["nav_cash_source"] == "ACCOUNT_PROFILE"
+        assert reality["pricing"]["unified_price_date"] == "2026-08-04"
+        assert reality["data_cutoff"] is None
+        assert reality["nav_temporal_state"] == "MIXED_UNPROVEN"
+        assert "CASH_EFFECTIVE_AT_UNPROVEN" in reality["nav_temporal_reason_codes"]
+        assert reality["cash"]["current_fact"]["effective_at"] is None
+        assert reality["cash"]["ledger_candidate"]["effective_at"] is None
+        assert reality["cash"]["current_fact"]["updated_at"] != reality["cash"]["current_fact"]["effective_at"]
 
     def test_cash_unknown_nav_null(self, profile_file, monkeypatch):
         _fake_kline(monkeypatch, {"600519": [_BAR_20260804]})
@@ -335,7 +349,9 @@ class TestSettledNav:
         _bootstrap([_legacy("600519", 100, 10.0)])
         reality = svc.get_account_reality()
         assert reality["settled_nav"] is None
+        assert reality["nav_temporal_state"] == "UNAVAILABLE"
         assert "CASH_UNKNOWN" in reality["reason_codes"]
+        assert "CASH_EFFECTIVE_AT_UNPROVEN" in reality["nav_temporal_reason_codes"]
 
     def test_partial_pricing_nav_null(self, profile_file, monkeypatch):
         _fake_kline(monkeypatch, {"600519": [_BAR_20260804]})

@@ -826,7 +826,7 @@ export function Portfolio() {
               )}
             </div>
             <div className="ml-auto flex flex-col items-end gap-1">
-              <span className="text-[11px] text-muted-foreground/60">更新于 {acct.updated_at}</span>
+              <span className="text-[11px] text-muted-foreground/60">快照保存于 {acct.updated_at}（provenance，非资金 effective_at）</span>
               <button onClick={openAcct}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25">
                 编辑
@@ -885,6 +885,28 @@ export function Portfolio() {
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25">
               填写账户资金
             </button>
+          </div>
+        )}
+        {acctReality?.nav_temporal_state && (
+          <div
+            data-testid="account-nav-temporal-state"
+            data-nav-temporal-state={acctReality.nav_temporal_state}
+            className={cn(
+              "mt-3 rounded-md border p-2 text-[11px] leading-4",
+              acctReality.nav_temporal_state === "MIXED_UNPROVEN"
+                ? "border-amber-500/25 bg-amber-500/5 text-amber-700 dark:text-amber-200"
+                : "border-border/60 bg-black/5 text-muted-foreground",
+            )}
+          >
+            {acctReality.nav_temporal_state === "MIXED_UNPROVEN" ? (
+              <>
+                <b>{acctReality.nav_temporal_state}：settled NAV 是 mixed/unproven temporal candidate</b>：价格日期
+                {acctReality.pricing?.unified_price_date ? ` ${acctReality.pricing.unified_price_date}` : ""}
+                与现金的 effective_at 未证明，不能视为统一 cutoff 下的正式账户事实。
+              </>
+            ) : (
+              <>settled NAV temporal state：{acctReality.nav_temporal_state}；统一账户时间截面不可用，未知不作正常事实展示。</>
+            )}
           </div>
         )}
         <p className="mt-2 text-[11px] text-muted-foreground/60">手工填写、存在本地，不上传、不进仓库。用于后续持仓建议参考（本轮仅维护展示）。</p>
