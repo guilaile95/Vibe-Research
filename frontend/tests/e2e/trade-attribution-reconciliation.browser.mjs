@@ -289,6 +289,13 @@ async function run() {
       await page.getByRole("button", { name: "新建交易" }).click();
       return page.locator("div.fixed.inset-0").filter({ hasText: "新建交易流水" });
     };
+    const continuationUrl = `${frontend}/trades?create=1&code=600519&campaign_id=${campaign.campaign_id}&decision_id=${decision.decision_id}&next_best_action=BUY%20SMALL`;
+    const openContinuationModal = async () => {
+      await page.goto(continuationUrl, { waitUntil: "networkidle" });
+      const modal = page.locator("div.fixed.inset-0").filter({ hasText: "新建交易流水" });
+      await modal.getByText("从 Frozen Decision 续接实际执行", { exact: true }).waitFor();
+      return modal;
+    };
     const fillCreateForm = async (
       modal,
       {
@@ -318,6 +325,21 @@ async function run() {
       await costInputs.nth(0).fill(fee);
       await costInputs.nth(1).fill(otherCost);
     };
+
+    // --- FDTC1：continuation 只是一次性导航 hint，只预填证券代码。 ---
+    const continuationModal = await openContinuationModal();
+    const continuationLocation = new URL(page.url());
+    assert.equal(continuationLocation.pathname, "/trades");
+    assert.equal(continuationLocation.search, "", "continuation query must be consumed with replace semantics");
+    assert.equal(await continuationModal.getByLabel("股票代码").inputValue(), "600519");
+    assert.equal(await continuationModal.getByLabel("股票名称").inputValue(), "");
+    assert.equal(await continuationModal.locator("select").nth(0).inputValue(), "");
+    assert.equal(await continuationModal.locator("select").nth(1).inputValue(), "");
+    assert.equal(await continuationModal.locator('input[type="datetime-local"]').count(), 0);
+    assert.equal(await continuationModal.getByPlaceholder("请输入实际费用，0 表示确认费用为 0").count(), 0);
+    assert.equal(tradeCreatePosts, 0, "opening a continuation must not create a Trade");
+    assert.equal(truxWritePosts, 0, "opening a continuation must not write attribution or UNPLANNED");
+    await continuationModal.locator('button[type="button"]').first().click();
 
     // --- TRT3：operation/status 未显式选择时，浏览器阻断提交且不产生 POST ---
     const missingOperationModal = await openCreateModal();
@@ -361,11 +383,15 @@ async function run() {
     assert.equal(tradeCreatePosts, 0, "missing execution time/cost must not issue trade POST");
     assert.equal(await missingTimeModal.count(), 1, "missing execution time/cost must keep the form open");
 
-    // --- TRT1 + TRT2 + TRUX1：显式 BUY + FULL → 创建成功 → 自动详情 ---
-    const executedModal = missingTimeModal;
-    await executedModal.locator('input[type="datetime-local"]').fill("2098-01-02T10:00");
-    await executedModal.getByPlaceholder("请输入实际费用，0 表示确认费用为 0").nth(0).fill("12.50");
-    await executedModal.getByPlaceholder("请输入实际费用，0 表示确认费用为 0").nth(1).fill("3.25");
+    // --- FDTC1 + TRT1 + TRT2 + TRUX1：用户显式补全执行事实后创建，候选只高亮不自动归属。 ---
+    const executedModal = await openContinuationModal();
+    await fillCreateForm(executedModal, {
+      operation: "buy",
+      status: "full",
+      executionTime: "2098-01-02T10:00",
+      fee: "12.50",
+      otherCost: "3.25",
+    });
     const expectedExecutedIso = await page.evaluate(() => new Date("2098-01-02T10:00").toISOString());
     await executedModal.getByText("本地时间：2098-01-02T10:00", { exact: true }).waitFor();
     await executedModal.getByText(/浏览器解析时区：/).waitFor();
@@ -383,6 +409,8 @@ async function run() {
     await page.getByText("交易归属与 Campaign 对账").waitFor();
     await page.getByText("UNALLOCATED", { exact: true }).waitFor();
     await page.getByText(decision.decision_id, { exact: true }).waitFor();
+    await page.locator('[data-continuation-candidate="preferred"]').waitFor();
+    await page.getByText("来自 Frozen Decision 续接；仍需你明确归属", { exact: true }).waitFor();
     assert.equal(truxWritePosts, 0, "attribution/unplanned POST must stay 0 before explicit user click");
     await page.getByRole("button", { name: "明确归属" }).click();
     await page.getByText("ALLOCATED", { exact: true }).waitFor();

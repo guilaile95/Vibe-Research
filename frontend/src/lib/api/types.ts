@@ -2387,6 +2387,45 @@ export type HardRiskState = "CLEAR" | "CONFIRMED" | "UNKNOWN" | "NOT_EVALUATED";
 /** P0-HR1：shared Hard Risk contract 的 hard_risk_evaluation（O lane 接入后输出）。 */
 export type HardRiskEvaluation = "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
 
+export type FormalDecisionEvaluation = "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+
+export interface DecisionInboxFrozenDecision {
+  decision_id: string;
+  committed_at: string;
+  review_by: string;
+  /** Historical user-frozen action; never a newly generated current recommendation. */
+  previous_next_best_action: string;
+}
+
+export type SellEngineState =
+  | "HOLD"
+  | "WATCH_TO_REDUCE"
+  | "REDUCE"
+  | "EXIT"
+  | "THESIS_INVALIDATED";
+
+export interface DecisionInboxSellEngine {
+  schema_version: "sell_engine.projection.vnext.v0.1";
+  authority_ref: "sell_engine:projection:vnext.v0.1";
+  security_code: string;
+  strategy: CampaignStrategy;
+  campaign_id: string;
+  as_of: string;
+  sell_state: SellEngineState | null;
+  sell_evaluation: FormalDecisionEvaluation;
+  primary_reason: string | null;
+  reason_codes: string[];
+  supporting_reasons: string[];
+  opposing_reasons: string[];
+  uncertainties: string[];
+  hold_positive_proof: boolean;
+  review_pressure: boolean;
+  thesis_id: string | null;
+  thesis_revision: number | null;
+  authority_refs: string[];
+  dimensions: Record<string, unknown>;
+}
+
 export interface DecisionInboxCampaignItem {
   schema_version: string;
   visible_state: string;
@@ -2419,12 +2458,15 @@ export interface DecisionInboxCampaignItem {
    */
   hard_risk_authority_refs?: string[] | null;
   /** P0-DC1 additive RA1 / Formal Decision runtime fields. */
-  formal_thesis_evaluation?: "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
-  formal_decision_evaluation?: "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
-  material_change_evaluation?: "EVALUATED" | "UNKNOWN" | "NOT_EVALUATED" | "ERROR";
+  formal_thesis_evaluation?: FormalDecisionEvaluation;
+  formal_decision_evaluation?: FormalDecisionEvaluation;
+  material_change_evaluation?: FormalDecisionEvaluation;
   material_change_reason_codes?: string[];
   decision_assurance?: Record<string, unknown>;
-  sell_engine?: Record<string, unknown>;
+  /** Last user-frozen decision. It is historical unless formal_decision_evaluation proves applicability. */
+  last_frozen_decision?: DecisionInboxFrozenDecision | null;
+  /** Read-only current Sell Engine projection. It never mutates the Frozen Decision or creates a Trade. */
+  sell_engine?: DecisionInboxSellEngine | null;
 }
 
 export interface DecisionInboxSnapshot {

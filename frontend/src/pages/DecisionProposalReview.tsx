@@ -6,6 +6,7 @@ import { ApiError, CommittedDecisionReadError, api, DECISION_CHALLENGE_DIMENSION
 import { VIEW_STANCE_LABELS, VIEW_STANCE_OPTIONS, buildJudgedView, buildPortfolioView, type ViewStance } from "@/lib/decisionProposalForm";
 import { hydratedHorizonValue, resolveDecisionContext, type DecisionContextHydrationResult } from "@/lib/decisionContextHydration";
 import { browserTimeZoneName, formatUtcOffsetMinutes, parseReviewBoundary } from "@/lib/reviewBoundaryInput";
+import { buildEvaluatedTradeContinuationHref } from "@/lib/tradeContinuation";
 import type { CampaignRecord, CampaignThesisBinding, CampaignCurrentThesis, ThesisAggregate } from "@/lib/api";
 
 type ChallengeReadState = "PENDING" | "FOUND" | "ABSENT" | "ERROR";
@@ -320,6 +321,15 @@ export function DecisionProposalReview() {
   const previewAssurance = preview?.decision_assurance as Record<string, unknown> | undefined;
   const dimensions = (previewAssurance?.dimension_states ?? {}) as Record<string, unknown>;
   const envelope = preview?.proposal.action_envelope as Record<string, unknown> | undefined;
+  const committedTradeHref = committed && campaign
+    ? buildEvaluatedTradeContinuationHref({
+        securityCode: campaign.security_code,
+        campaignId,
+        decisionId: committed.committed.decision_id,
+        nextBestAction: committed.committed.next_best_action,
+        formalDecisionEvaluation: evaluationOf(committed.formal_decision),
+      })
+    : null;
 
   return (
     <div className="space-y-6" data-decision-proposal-page={campaignId}>
@@ -682,7 +692,18 @@ export function DecisionProposalReview() {
             <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">Material：{authorityLabel(evaluationOf(committed.material_change))}</div>
           </div>
           <p className="text-xs text-muted-foreground">Decision Inbox 将在下一次 backend snapshot 中读取这条 LAST_FROZEN_DECISION；它不是 CURRENT_RECOMMENDATION。</p>
-          <Link to="/decision-inbox" className="inline-flex text-xs text-primary hover:underline">打开 Decision Inbox →</Link>
+          <div className="flex flex-wrap gap-x-4 gap-y-2">
+            <Link to="/decision-inbox" className="inline-flex text-xs text-primary hover:underline">打开 Decision Inbox →</Link>
+            {committedTradeHref ? (
+              <Link
+                to={committedTradeHref}
+                className="inline-flex text-xs font-medium text-primary hover:underline"
+                data-testid="committed-decision-trade-continuation"
+              >
+                如已实际执行，记录交易 →
+              </Link>
+            ) : null}
+          </div>
         </section>
       )}
     </div>

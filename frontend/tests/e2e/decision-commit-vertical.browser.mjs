@@ -418,6 +418,45 @@ async function run() {
     assert.equal(item.critical_data.campaign_id, reread.critical_data.campaign_id);
     assert.equal(item.critical_data.security_code, reread.critical_data.security_code);
     assert.equal(item.critical_data.strategy, reread.critical_data.strategy);
+    await page.goto(`${frontend}/decision-inbox`, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { name: "决策待办" }).waitFor();
+    const actionPanel = page.locator(`[data-decision-action-panel="${campaign.campaign_id}"]`);
+    await actionPanel.waitFor();
+    assert.equal(
+      await actionPanel.locator("[data-frozen-decision-state]").getAttribute("data-frozen-decision-state"),
+      "APPLICABLE",
+      "backend EVALUATED must expose the Frozen Decision as applicable",
+    );
+    assert.equal(
+      await actionPanel.locator("[data-frozen-decision-action]").getAttribute("data-frozen-decision-action"),
+      item.last_frozen_decision.previous_next_best_action,
+    );
+    await actionPanel.getByText(committedDecisionId, { exact: true }).waitFor();
+    await actionPanel.getByText("当前 Sell Review（只读）", { exact: true }).waitFor();
+    assert.ok(item.sell_engine, "Decision Inbox backend must contain the Sell Engine projection");
+    assert.equal(
+      await actionPanel.locator("[data-sell-engine-evaluation]").getAttribute("data-sell-engine-evaluation"),
+      item.sell_engine.sell_evaluation,
+      "Sell Review must preserve the backend evaluation state",
+    );
+    assert.notEqual(
+      await actionPanel.locator("[data-sell-engine-state]").getAttribute("data-sell-engine-state"),
+      "UNAVAILABLE",
+      "the exact backend Sell Engine contract must be productized, not silently discarded",
+    );
+    assert.equal(
+      (await actionPanel.innerText()).includes("CURRENT_RECOMMENDATION"),
+      false,
+      "Frozen Decision must never be presented as CURRENT_RECOMMENDATION",
+    );
+    assert.equal(
+      await actionPanel.getByRole("link", { name: "重新形成 Formal Decision →" }).getAttribute("href"),
+      `/campaigns/${campaign.campaign_id}/decision-proposal`,
+    );
+    assert.equal(
+      await actionPanel.getByRole("link", { name: "打开决策复盘 →" }).getAttribute("href"),
+      "/decision-performance",
+    );
     const expectedFontBlock = "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap";
     const expectedChallenge404 = `/api/campaigns/${campaign.campaign_id}/decision-challenge`;
     assert.deepEqual(notFoundResponses, [expectedChallenge404], "only the optional challenge lookup may be 404");
