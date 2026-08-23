@@ -22,6 +22,7 @@ import fact_lake_health_adapter as flha
 import fact_lake_store as flha_store
 from data_contracts import (
     CanonicalFact,
+    CoverageMode,
     DatasetSpec,
     ProviderObservation,
     ProvenanceLink,
@@ -75,6 +76,7 @@ def _limit_up_spec() -> DatasetSpec:
         routes=(_route(),),
         governance_revision_id="rev-1",
         required_temporal_fields=(TemporalSemantics.TRADE_DATE,),
+        coverage_mode=CoverageMode.SESSION_DENSE,
         point_in_time_supported=False,
         revision_semantics=RevisionSemantics.IMMUTABLE,
         adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,
@@ -90,6 +92,7 @@ def _financial_spec() -> DatasetSpec:
         routes=(_route(),),
         governance_revision_id="rev-f1",
         required_temporal_fields=(TemporalSemantics.REPORT_PERIOD,),
+        coverage_mode=CoverageMode.SPARSE,
         point_in_time_supported=False,
         revision_semantics=RevisionSemantics.RESTATABLE,
         adjustment_semantics=AdjustmentSemantics.NOT_APPLICABLE,

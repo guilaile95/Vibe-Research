@@ -29,7 +29,7 @@ __all__ = [
 
 SCHEMA_VERSION = "short-term-layered-promotion-coverage-gate-v0.1"
 FINAL_SNAPSHOT_SCHEMA_VERSION = "short-term-limit-up-final-snapshot-v0.1"
-_ADAPTER_SCHEMA_VERSION = "short-term-limit-up-pool-adapter-v0.1"
+_ADAPTER_SCHEMA_VERSION = "short-term-limit-up-pool-adapter-v0.2"
 _ADAPTER_SOURCE_ID = "eastmoney_getTopicZTPool"
 _ADAPTER_ENDPOINT = "getTopicZTPool"
 _FINALITY_BASIS = "three_identical_normal_observations"
@@ -102,6 +102,7 @@ _ADAPTER_FIELDS = frozenset({
 })
 _STRICT_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _SIX_DIGIT_RE = re.compile(r"^\d{6}$")
+_ZT_STAT_RE = re.compile(r"^(?P<days>[1-9]\d*)/(?P<count>[1-9]\d*)$")
 _STABILITY_EPSILON = 1e-9
 
 
@@ -240,14 +241,23 @@ def _validate_producer_contract(result: Any) -> bool:
 
 
 def _validate_adapter_row(row: Any) -> bool:
-    if type(row) is not dict or set(row.keys()) != {"stock_code", "lbc"}:
+    if type(row) is not dict or set(row.keys()) not in (
+        {"stock_code", "lbc"}, {"stock_code", "lbc", "zt_stat"}
+    ):
         return False
     code = row.get("stock_code")
     lbc = row.get("lbc")
+    zt_stat = row.get("zt_stat")
     if type(code) is not str or _SIX_DIGIT_RE.match(code) is None:
         return False
     if type(lbc) is not int or lbc <= 0:
         return False
+    if zt_stat is not None:
+        if type(zt_stat) is not str:
+            return False
+        match = _ZT_STAT_RE.fullmatch(zt_stat)
+        if match is None or int(match.group("days")) < int(match.group("count")):
+            return False
     return True
 
 

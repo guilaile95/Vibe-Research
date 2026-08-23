@@ -34,7 +34,7 @@ __all__ = [
 
 SCHEMA_VERSION = "short-term-daily-facts-v0.1"
 PRODUCER_SCHEMA_VERSION = "short-term-limit-up-final-snapshot-v0.1"
-ADAPTER_SCHEMA_VERSION = "short-term-limit-up-pool-adapter-v0.1"
+ADAPTER_SCHEMA_VERSION = "short-term-limit-up-pool-adapter-v0.2"
 
 # 固定组合 reason-code 顺序（gate 层专属；上游码保留在各 section envelope 内）
 _REASON_ORDER: Tuple[str, ...] = (
@@ -61,6 +61,7 @@ _PRODUCER_SESSIONS = frozenset({"final", "not_final"})
 
 _TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _SIX_DIGIT_RE = re.compile(r"^\d{6}$")
+_ZT_STAT_RE = re.compile(r"^(?P<days>[1-9]\d*)/(?P<count>[1-9]\d*)$")
 
 _INPUT_FIELDS: Tuple[str, ...] = (
     "final_snapshot",
@@ -205,6 +206,15 @@ def _validate_metadata(envelope: Dict[str, Any]) -> bool:
     return True
 
 
+def _valid_zt_stat(value: Any) -> bool:
+    if value is None:
+        return True
+    if type(value) is not str:
+        return False
+    match = _ZT_STAT_RE.fullmatch(value)
+    return match is not None and int(match.group("days")) >= int(match.group("count"))
+
+
 def _validate_nested_adapter(snapshot: Dict[str, Any], outer_date: str) -> bool:
     if type(snapshot) is not dict or set(snapshot.keys()) != _ADAPTER_FIELDS:
         return False
@@ -255,13 +265,16 @@ def _validate_nested_adapter(snapshot: Dict[str, Any], outer_date: str) -> bool:
     seen: set = set()
     prev_code: Optional[str] = None
     for row in rows:
-        if type(row) is not dict or set(row.keys()) != {"stock_code", "lbc"}:
+        if type(row) is not dict or set(row.keys()) not in (
+            {"stock_code", "lbc"}, {"stock_code", "lbc", "zt_stat"}
+        ):
             return False
         code = row.get("stock_code")
         lbc = row.get("lbc")
+        zt_stat = row.get("zt_stat")
         if type(code) is not str or _SIX_DIGIT_RE.match(code) is None:
             return False
-        if not _is_strict_int(lbc) or lbc <= 0:
+        if not _is_strict_int(lbc) or lbc <= 0 or not _valid_zt_stat(zt_stat):
             return False
         if code in seen:
             return False
@@ -444,6 +457,7 @@ def _build_ladder_snapshot(producer: Dict[str, Any]) -> Dict[str, Any]:
             {
                 "stock_code": row["stock_code"],
                 "consecutive_limit_up_days": row["lbc"],
+                "zt_stat": row.get("zt_stat"),
             }
             for row in adapter["rows"]
         ],

@@ -37,7 +37,7 @@ ACTUAL_2 = SECOND_MONO - FIRST_MONO
 
 def _adapter_snapshot(date_str, **overrides):
     snapshot = {
-        "schema_version": "short-term-limit-up-pool-adapter-v0.1",
+        "schema_version": "short-term-limit-up-pool-adapter-v0.2",
         "source_id": "eastmoney_getTopicZTPool",
         "endpoint": "getTopicZTPool",
         "requested_trade_date": date_str,
@@ -649,6 +649,19 @@ class TestRows:
 
     def test_lbc_bool(self):
         self._invalid_row([{"stock_code": "600001", "lbc": True}])
+
+    @pytest.mark.parametrize("zt_stat", [
+        "2/3", "0/1", "2/0", "2/-1", "2/1/1",  "2/1", None,
+    ])
+    def test_zt_stat_contract(self, zt_stat):
+        row = {"stock_code": "600001", "lbc": 1, "zt_stat": zt_stat}
+        if zt_stat == "2/1" or zt_stat is None:
+            snap = _adapter_snapshot(PREV_DATE, rows=[row])
+            prev = _producer_result(PREV_DATE, snapshot=snap)
+            result = _gate(prev, _producer_result(CURR_DATE))
+            assert result["status"] == "complete"
+        else:
+            self._invalid_row([row])
 
     def test_unsorted(self):
         self._invalid_row([

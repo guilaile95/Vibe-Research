@@ -9,6 +9,7 @@ import pytest
 from data_contracts import (
     AdjustmentSemantics,
     CanonicalFact,
+    CoverageMode,
     DatasetSpec,
     FetchSemantics,
     HistoryMode,
@@ -57,6 +58,7 @@ def _spec(
         ),
         governance_revision_id="ds-test-contract-v0.1",
         required_temporal_fields=(TemporalSemantics.TRADE_DATE,),
+        coverage_mode=CoverageMode.SESSION_DENSE,
         point_in_time_supported=pit,
         revision_semantics=revision,
         adjustment_semantics=AdjustmentSemantics.UNADJUSTED,

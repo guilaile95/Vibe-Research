@@ -110,7 +110,7 @@ def _producer(status="normal", rows=None):
         "first_observation_monotonic": 100.0,
         "last_observation_monotonic": 104.4,
         "snapshot": {
-            "schema_version": "short-term-limit-up-pool-adapter-v0.1",
+            "schema_version": "short-term-limit-up-pool-adapter-v0.2",
             "source_id": "eastmoney_getTopicZTPool",
             "endpoint": "getTopicZTPool",
             "requested_trade_date": T,

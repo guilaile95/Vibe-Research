@@ -35,6 +35,13 @@ class HistoryMode(StrEnum):
     SNAPSHOT_ONLY = "snapshot_only"
 
 
+class CoverageMode(StrEnum):
+    """How a dataset's business-date coverage may be interpreted."""
+
+    SESSION_DENSE = "session_dense"
+    SPARSE = "sparse"
+
+
 class ProviderRole(StrEnum):
     CANONICAL = "canonical"
     VERIFIER = "verifier"
@@ -368,6 +375,7 @@ class DatasetSpec:
     routes: tuple[ProviderRoute, ...]
     governance_revision_id: str
     required_temporal_fields: tuple[TemporalSemantics, ...]
+    coverage_mode: CoverageMode
     history_floor: str | None = None
     history_horizon: str | None = None
     point_in_time_supported: bool = False
@@ -418,6 +426,8 @@ class DatasetSpec:
         if not isinstance(self.adjustment_semantics, AdjustmentSemantics):
             raise DataContractError(
                 "adjustment_semantics must be AdjustmentSemantics")
+        if not isinstance(self.coverage_mode, CoverageMode):
+            raise DataContractError("coverage_mode must be CoverageMode")
         if self.max_staleness_seconds is not None and (
             type(self.max_staleness_seconds) is not int
             or self.max_staleness_seconds < 0
@@ -597,6 +607,7 @@ class DatasetSpec:
             "survivorship_semantics": self.survivorship_semantics,
             "source_retired_at": self.source_retired_at,
             "max_staleness_seconds": self.max_staleness_seconds,
+            "coverage_mode": self.coverage_mode.value,
         }
 
     @classmethod
@@ -614,6 +625,7 @@ class DatasetSpec:
                 data["revision_semantics"]),
             "adjustment_semantics": AdjustmentSemantics(
                 data["adjustment_semantics"]),
+            "coverage_mode": CoverageMode(data["coverage_mode"]),
             "routes": tuple(
                 ProviderRoute.from_dict(route)
                 for route in _json_array(data, "routes")
