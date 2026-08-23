@@ -268,7 +268,30 @@ def _mootdx_client():
 
 
 def kline(code: str, category: int = 4, offset: int = 60) -> list[dict]:
-    """K线：category 4=日 5=周 6=月 11=60分钟。"""
+    """K线：category 4=日 5=周 6=月 11=60分钟。
+
+    日线在配置 HiThink credential 时优先使用已资格认定的 direct API；
+    未配置、身份不覆盖、传输失败或契约失败时保留既有 mootdx 路径。
+    周/月/60 分钟不在本次 HiThink cutover 范围内。
+    """
+    if category == 4:
+        try:
+            import hithink_finance_client as hithink
+
+            if hithink.is_configured():
+                return hithink.fetch_daily_bars(code, offset)
+        except hithink.HiThinkClientError:
+            # A failed provider observation is never consumed.  Availability
+            # falls back to the pre-existing route without changing the
+            # Tushare Fact Lake or any formal investment authority.
+            # Current BSE 920xxx codes cannot use mootdx 0.11.7 as fallback:
+            # it misroutes them to Shanghai.  Fail closed instead.
+            if hithink.is_current_bse_security(code):
+                raise
+        if hithink.is_current_bse_security(code):
+            raise hithink.HiThinkNotConfiguredError(
+                "HiThink is required for current BSE daily bars"
+            )
     client = _mootdx_client()
     df = client.bars(symbol=code, category=category, offset=offset)
     return df.to_dict("records") if df is not None and not df.empty else []
