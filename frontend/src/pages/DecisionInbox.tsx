@@ -51,6 +51,7 @@ import type {
 import { CampaignLifecycleCard } from "@/components/campaign/CampaignLifecycleCard";
 import { CampaignThesisActivationCard } from "@/components/campaign/CampaignThesisActivationCard";
 import { HardRiskPanel } from "@/components/campaign/HardRiskPanel";
+import { DecisionActionPanel } from "@/components/campaign/DecisionActionPanel";
 import { PageHeader } from "@/components/ui/PageHeader";
 
 function DecisionCommitInboxStatus({
@@ -881,6 +882,7 @@ export default function DecisionInbox() {
                     onChanged={() => void refresh()}
                   />
                   <HardRiskPanel item={item} />
+                  <DecisionActionPanel item={item} />
                   <DecisionCommitInboxStatus
                     campaignId={item.campaign_id}
                     evaluation={item.formal_decision_evaluation}

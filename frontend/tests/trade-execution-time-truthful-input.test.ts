@@ -10,6 +10,7 @@ import {
 } from "../src/lib/tradeLedgerView.ts";
 
 const pageSource = readFileSync(new URL("../src/pages/Trades.tsx", import.meta.url), "utf8");
+const emptyDraftSource = readFileSync(new URL("../src/lib/tradeContinuation.ts", import.meta.url), "utf8");
 
 function executedDraft(status: "full" | "partial"): TradeDraft {
   return {
@@ -28,8 +29,9 @@ function executedDraft(status: "full" | "partial"): TradeDraft {
 }
 
 test("新建 Trade 不自动选择 operation 或 execution status", () => {
-  assert.match(pageSource, /operation: ""/);
-  assert.match(pageSource, /execution_status: ""/);
+  assert.match(pageSource, /emptyTradeDraft\(\)/);
+  assert.match(emptyDraftSource, /operation: ""/);
+  assert.match(emptyDraftSource, /execution_status: ""/);
   assert.doesNotMatch(pageSource, /operation: "buy",\s*execution_status: "full"/);
   assert.match(pageSource, /<option value="" disabled>请选择操作类型<\/option>/);
   assert.match(pageSource, /<option value="" disabled>请选择执行状态<\/option>/);
@@ -38,7 +40,7 @@ test("新建 Trade 不自动选择 operation 或 execution status", () => {
 });
 
 test("新建 executed Trade 不自动生成成交时间", () => {
-  assert.match(pageSource, /executed_at: ""/);
+  assert.match(emptyDraftSource, /executed_at: ""/);
   assert.doesNotMatch(pageSource, /const nowLocal = new Date\(\)/);
   assert.doesNotMatch(pageSource, /const isoNow =/);
   assert.doesNotMatch(pageSource, /executed_at: isoNow/);
@@ -86,10 +88,11 @@ test("费用拒绝负数、非有限值和非法文本", () => {
 });
 
 test("页面费用输入默认为空、执行态必填且不猜测费用", () => {
-  assert.match(pageSource, /fee: ""/);
-  assert.match(pageSource, /other_cost: ""/);
-  assert.doesNotMatch(pageSource, /fee: "0"/);
-  assert.doesNotMatch(pageSource, /other_cost: "0"/);
+  assert.match(pageSource, /emptyTradeDraft\(\)/);
+  assert.match(emptyDraftSource, /fee: ""/);
+  assert.match(emptyDraftSource, /other_cost: ""/);
+  assert.doesNotMatch(emptyDraftSource, /fee: "0"/);
+  assert.doesNotMatch(emptyDraftSource, /other_cost: "0"/);
   assert.match(pageSource, /placeholder="请输入实际费用，0 表示确认费用为 0"/);
   assert.match(pageSource, /手续费 \(¥\)[\s\S]*?required/);
   assert.match(pageSource, /其他费用 \(¥\)[\s\S]*?required/);

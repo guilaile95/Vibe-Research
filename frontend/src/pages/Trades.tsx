@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError, type TradeAttributionCandidate, type TradeAttributionCandidateScan, type TradeRecord, type TradeReconciliationResult } from "@/lib/api";
@@ -19,6 +19,14 @@ import {
   type TradeListFilters,
 } from "@/lib/tradeLedgerView";
 import {
+  continuationTradeDraft,
+  emptyTradeDraft,
+  isPreferredAttributionCandidate,
+  parseTradeContinuation,
+  type TradeAttributionHint,
+  type TradeContinuationContext,
+} from "@/lib/tradeContinuation";
+import {
   AlertCircle,
   CheckCircle2,
   Filter,
@@ -35,6 +43,8 @@ import { cn } from "@/lib/utils";
 const PAGE_LIMIT = 10;
 
 export function Trades() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const continuationConsumed = useRef(false);
   // 列表 state
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,23 +86,9 @@ export function Trades() {
 
   // 新建 modal state
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [createDraft, setCreateDraft] = useState<TradeDraft>({
-    code: "",
-    name: "",
-    operation: "",
-    execution_status: "",
-    planned_price: "",
-    planned_quantity: "",
-    actual_price: "",
-    actual_quantity: "",
-    executed_at: "",
-    fee: "",
-    other_cost: "",
-    unexecuted_reason: "",
-    note: "",
-    advice_ref: null,
-    thesis_ref: null,
-  });
+  const [createDraft, setCreateDraft] = useState<TradeDraft>(() => emptyTradeDraft());
+  const [activeContinuation, setActiveContinuation] = useState<TradeContinuationContext | null>(null);
+  const [attributionHint, setAttributionHint] = useState<TradeAttributionHint | null>(null);
   const [enableAdviceRef, setEnableAdviceRef] = useState(false);
   const [enableThesisRef, setEnableThesisRef] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
@@ -278,28 +274,41 @@ export function Trades() {
 
   // 打开与关闭新建
   const handleOpenCreate = () => {
-    setCreateDraft({
-      code: "",
-      name: "",
-      operation: "",
-      execution_status: "",
-      planned_price: "",
-      planned_quantity: "",
-      actual_price: "",
-      actual_quantity: "",
-      executed_at: "",
-      fee: "",
-      other_cost: "",
-      unexecuted_reason: "",
-      note: "",
-      advice_ref: null,
-      thesis_ref: null,
-    });
+    setCreateDraft(emptyTradeDraft());
+    setActiveContinuation(null);
+    setAttributionHint(null);
     setEnableAdviceRef(false);
     setEnableThesisRef(false);
     setCreateError(null);
     setIsCreateOpen(true);
   };
+
+  const handleCloseCreate = () => {
+    setIsCreateOpen(false);
+    setActiveContinuation(null);
+  };
+
+  // Frozen Decision continuation is a one-shot navigation hint, never write
+  // authority. Only validated identity fields open the form; every execution
+  // fact remains empty and the URL is consumed with replace semantics.
+  useEffect(() => {
+    if (continuationConsumed.current || searchParams.get("create") !== "1") return;
+    continuationConsumed.current = true;
+    const continuation = parseTradeContinuation(searchParams);
+    if (!continuation) return;
+    setCreateDraft(continuationTradeDraft(continuation));
+    setActiveContinuation(continuation);
+    setAttributionHint(null);
+    setEnableAdviceRef(false);
+    setEnableThesisRef(false);
+    setCreateError(null);
+    setIsCreateOpen(true);
+    const consumed = new URLSearchParams(searchParams);
+    for (const key of ["create", "code", "campaign_id", "decision_id", "next_best_action"]) {
+      consumed.delete(key);
+    }
+    setSearchParams(consumed, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -325,7 +334,17 @@ export function Trades() {
       // candidates 由 selectedTradeId 的既有 effect 复用加载。若 Trade 已
       // 持久化但后续读取失败，只诚实展示读取错误，不回滚、不伪装创建失败；
       // 归属与 UNPLANNED 仍只能由用户显式点击触发。
+      if (activeContinuation) {
+        setAttributionHint({
+          tradeId: created.trade_id,
+          campaignId: activeContinuation.campaignId,
+          decisionId: activeContinuation.decisionId,
+        });
+      } else {
+        setAttributionHint(null);
+      }
       setIsCreateOpen(false);
+      setActiveContinuation(null);
       setSelectedTradeId(created.trade_id);
       setSuccessMsg("交易流水创建成功，已打开该笔交易详情");
       setTimeout(() => setSuccessMsg(null), 3000);
@@ -725,7 +744,8 @@ export function Trades() {
               <h3 className="text-base font-semibold text-foreground">新建交易流水</h3>
               <button
                 type="button"
-                onClick={() => setIsCreateOpen(false)}
+                onClick={handleCloseCreate}
+                aria-label="关闭新建交易表单"
                 className="rounded-lg p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 <X className="h-5 w-5" />
@@ -733,6 +753,20 @@ export function Trades() {
             </div>
 
             <form onSubmit={handleCreateSubmit} className="space-y-4">
+              {activeContinuation ? (
+                <div
+                  className="rounded-md border border-primary/30 bg-primary/5 p-3 text-xs"
+                  data-trade-continuation={activeContinuation.decisionId}
+                >
+                  <p className="font-medium">从 Frozen Decision 续接实际执行</p>
+                  <p className="mt-1 text-muted-foreground">
+                    {activeContinuation.securityCode} · {activeContinuation.nextBestAction} · {activeContinuation.decisionId}
+                  </p>
+                  <p className="mt-1 leading-5 text-muted-foreground">
+                    仅预填证券代码。操作类型、执行状态、成交时间、价格、数量和费用必须按真实执行显式填写；提交后仍需你明确选择归属。
+                  </p>
+                </div>
+              ) : null}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-foreground mb-1">
@@ -741,6 +775,7 @@ export function Trades() {
                   <input
                     type="text"
                     required
+                    aria-label="股票代码"
                     placeholder="6位数字，如 600519"
                     maxLength={6}
                     value={createDraft.code}
@@ -756,6 +791,7 @@ export function Trades() {
                   <input
                     type="text"
                     required
+                    aria-label="股票名称"
                     placeholder="如 贵州茅台"
                     value={createDraft.name}
                     onChange={(e) => setCreateDraft({ ...createDraft, name: e.target.value })}
@@ -1112,7 +1148,7 @@ export function Trades() {
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-border/40">
                 <button
                   type="button"
-                  onClick={() => setIsCreateOpen(false)}
+                  onClick={handleCloseCreate}
                   className="rounded-md border border-input px-4 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent"
                 >
                   取消
@@ -1224,15 +1260,34 @@ export function Trades() {
                         <p className="text-[11px] text-rose-400">发现 Frozen Decision，但见证校验失败，系统已拒绝归属；请修复决策数据或联系管理员。</p>
                       ) : candidateError ? null : attributionCandidates.length === 0 ? (
                         <p className="text-[11px] text-muted-foreground">没有可归属候选；若该交易确实非计划内，请明确标记 UNPLANNED，系统不会猜测。</p>
-                      ) : attributionCandidates.map((candidate) => (
-                        <div key={candidate.decision_id} className="flex items-center justify-between gap-3 rounded border border-border/40 bg-muted/20 p-2">
+                      ) : attributionCandidates.map((candidate) => {
+                        const preferred = isPreferredAttributionCandidate(
+                          attributionHint,
+                          selectedTradeId,
+                          candidate,
+                        );
+                        return (
+                        <div
+                          key={candidate.decision_id}
+                          className={cn(
+                            "flex items-center justify-between gap-3 rounded border bg-muted/20 p-2",
+                            preferred ? "border-primary/70 ring-1 ring-primary/30" : "border-border/40",
+                          )}
+                          data-continuation-candidate={preferred ? "preferred" : "available"}
+                        >
                           <div className="min-w-0">
                             <div className="truncate font-mono text-[11px] text-foreground">{candidate.decision_id}</div>
                             <div className="text-[10px] text-muted-foreground">Campaign {candidate.campaign_id} · {candidate.strategy} · {formatTradeTime(candidate.committed_at)}</div>
+                            {preferred ? (
+                              <div className="mt-1 text-[10px] font-medium text-primary">
+                                来自 Frozen Decision 续接；仍需你明确归属
+                              </div>
+                            ) : null}
                           </div>
                           <button type="button" disabled={reconciliationActionLoading} onClick={() => handleAttribution(candidate.decision_id)} className="shrink-0 rounded bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground disabled:opacity-50">明确归属</button>
                         </div>
-                      ))}
+                        );
+                      })}
                       <button type="button" disabled={reconciliationActionLoading} onClick={handleMarkUnplanned} className="rounded border border-amber-500/40 px-2.5 py-1 text-[11px] font-medium text-amber-400 hover:bg-amber-500/10 disabled:opacity-50">标记为 UNPLANNED</button>
                     </div>
                   )}
@@ -1450,7 +1505,10 @@ export function Trades() {
             <div className="flex justify-end pt-3 border-t border-border/40">
               <button
                 type="button"
-                onClick={() => setSelectedTradeId(null)}
+                onClick={() => {
+                  setSelectedTradeId(null);
+                  setAttributionHint(null);
+                }}
                 className="rounded-md border border-input px-4 py-1.5 text-xs font-medium hover:bg-accent"
               >
                 关闭
