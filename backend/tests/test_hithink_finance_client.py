@@ -31,12 +31,34 @@ class _Session:
         return self.response
 
 
+class _SequenceSession(_Session):
+    def __init__(self, *responses):
+        super().__init__()
+        self.responses = list(responses)
+
+    def get(self, url, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        return self.responses.pop(0)
+
+
 def _bar(day_ms: int, close: float = 10.5) -> dict:
     return {
         "date_ms": day_ms,
         "open_price": 10.0,
         "high_price": 11.0,
         "low_price": 9.0,
+        "close_price": close,
+        "volume": 1234.0,
+        "turnover": 5678.0,
+    }
+
+
+def _index_bar(day_ms: int, close: float) -> dict:
+    return {
+        "date_ms": day_ms,
+        "open_price": close - 1,
+        "high_price": close + 1,
+        "low_price": close - 2,
         "close_price": close,
         "volume": 1234.0,
         "turnover": 5678.0,
@@ -245,6 +267,110 @@ def test_fetch_watchlist_anomalies_keeps_supported_codes_when_one_is_not_covered
     assert result["items"] == []
     assert result["unavailable_codes"] == ["837023"]
     assert session.calls[0]["params"] == {"thscodes": "600519.SH"}
+
+
+def test_fetch_index_market_observation_validates_history_and_current_constituents():
+    days = [client._milliseconds(date(2026, 8, day)) for day in (19, 20, 21)]
+    history = _payload(*[_index_bar(day, 100 + index) for index, day in enumerate(days)], thscode="884092.TI", adjust=None)
+    constituents = {
+        "code": 0,
+        "data": {
+            "timestamp": 1787542767000,
+            "item": [
+                {"thscode": "002463.SZ", "ticker": "002463", "name": "沪电股份"},
+                {"thscode": "002916.SZ", "ticker": "002916", "name": "深南电路"},
+            ],
+        },
+    }
+    session = _SequenceSession(_Response(history), _Response(constituents))
+
+    result = client.fetch_index_market_observation(
+        "884092.TI", offset=3, session=session, end_date=date(2026, 8, 24)
+    )
+
+    assert [row["close"] for row in result["history"]] == [100.0, 101.0, 102.0]
+    assert [row["ticker"] for row in result["constituents"]] == ["002463", "002916"]
+    assert result["constituents_as_of_ms"] == 1787542767000
+    assert session.calls[0]["url"] == client.BASE_URL + client.INDEX_HISTORY_ENDPOINT
+    assert session.calls[0]["params"]["interval"] == "1d"
+    assert session.calls[1]["url"] == client.BASE_URL + client.INDEX_CONSTITUENTS_ENDPOINT
+    assert session.calls[1]["params"] == {"thscode": "884092.TI"}
+
+
+def test_index_overview_can_skip_constituents_and_rejects_invalid_identity():
+    day = client._milliseconds(date(2026, 8, 21))
+    session = _SequenceSession(_Response(_payload(_index_bar(day, 100), thscode="886069.TI", adjust=None)))
+    result = client.fetch_index_market_observation(
+        "886069.TI", offset=1, include_constituents=False, session=session, end_date=date(2026, 8, 24)
+    )
+    assert result["constituents"] is None
+    assert len(session.calls) == 1
+    with pytest.raises(client.HiThinkContractError, match="identity is invalid"):
+        client.fetch_index_market_observation("885959.SH", session=session)
+
+
+def test_index_observation_preserves_history_when_optional_detail_calls_fail():
+    day = client._milliseconds(date(2026, 8, 21))
+    history = _payload(_index_bar(day, 100), thscode="884092.TI", adjust=None)
+    constituents = {
+        "code": 0,
+        "data": {
+            "timestamp": 1787542767000,
+            "item": [{"thscode": "002463.SZ", "ticker": "002463", "name": "沪电股份"}],
+        },
+    }
+
+    constituent_failure = _SequenceSession(
+        _Response(history),
+        _Response({"code": 429, "data": None}),
+    )
+    result = client.fetch_index_market_observation(
+        "884092.TI", offset=1, session=constituent_failure, end_date=date(2026, 8, 24)
+    )
+    assert len(result["history"]) == 1
+    assert result["constituents"] is None
+    assert result["constituents_error"] == "HiThinkBusinessError"
+
+    snapshot_failure = _SequenceSession(
+        _Response(history),
+        _Response(constituents),
+        _Response({"code": 429, "data": None}),
+    )
+    result = client.fetch_index_market_observation(
+        "884092.TI",
+        offset=1,
+        include_constituent_snapshots=True,
+        session=snapshot_failure,
+        end_date=date(2026, 8, 24),
+    )
+    assert len(result["history"]) == 1
+    assert result["constituents"][0]["ticker"] == "002463"
+    assert result["constituent_snapshots"] is None
+    assert result["constituent_snapshots_error"] == "HiThinkBusinessError"
+
+
+def test_fetch_stock_snapshots_projects_current_change_and_preserves_null():
+    payload = {
+        "code": 0,
+        "data": {
+            "timestamp": 1787542768000,
+            "total": 2,
+            "item": [
+                {"thscode": "002463.SZ", "ticker": "002463", "price_change_ratio_pct": 1.2, "turnover": 100.0},
+                {"thscode": "002916.SZ", "ticker": "002916", "price_change_ratio_pct": None, "turnover": None},
+            ],
+        },
+    }
+    session = _Session(_Response(payload))
+    result = client.fetch_stock_snapshots(["002463.SZ", "002916.SZ"], session=session)
+    assert result == {
+        "as_of_ms": 1787542768000,
+        "items": [
+            {"thscode": "002463.SZ", "ticker": "002463", "change_pct": 1.2, "turnover": 100.0},
+            {"thscode": "002916.SZ", "ticker": "002916", "change_pct": None, "turnover": None},
+        ],
+    }
+    assert session.calls[0]["params"] == {"thscodes": "002463.SZ,002916.SZ"}
 
 
 class _Frame:

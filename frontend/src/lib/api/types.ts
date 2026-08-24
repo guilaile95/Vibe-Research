@@ -118,6 +118,67 @@ export type SectorDynamicData = {
   error?: string;
 };
 
+
+export type SectorMarketIndex = {
+  thscode: string;
+  name: string;
+  kind: "industry" | "concept";
+};
+
+
+export type SectorMarketMetrics = {
+  trade_date: string | null;
+  return_5d_pct: number | null;
+  return_20d_pct: number | null;
+  return_60d_pct: number | null;
+  return_5d_delta_vs_previous_5d_pct: number | null;
+  turnover_vs_prior_20d: number | null;
+  prior_20d_return_pct: number | null;
+};
+
+
+export type SectorMarketBreadth = {
+  constituents_total: number;
+  snapshot_valid_count: number;
+  coverage_ratio: number | null;
+  up_count: number;
+  down_count: number;
+  flat_count: number;
+  up_ratio: number | null;
+  equal_weight_change_pct: number | null;
+  constituents_sample: { code: string; name: string; change_pct: number | null }[];
+  constituent_semantics: "CURRENT_CONSTITUENTS_ONLY";
+};
+
+
+export type SectorMarketContextItem = {
+  sector_key: string;
+  sector_label: string;
+  mapping_status: "mapped" | "unavailable";
+  index: SectorMarketIndex | null;
+  status: "normal" | "partial" | "unavailable";
+  warnings: string[];
+  metrics: SectorMarketMetrics | null;
+  breadth: SectorMarketBreadth | null;
+  constituents_as_of_ms: number | null;
+  constituent_snapshot_as_of_ms: number | null;
+  rank_20d_within_mapped: number | null;
+  rank_change_vs_5_sessions_ago: number | null;
+  rank_universe_count: number | null;
+};
+
+
+export type SectorMarketContextData = {
+  schema_version: "sector_market_context.v0.1";
+  status: "normal" | "partial" | "unavailable";
+  source: string;
+  fetched_at: string;
+  mapped_count: number;
+  total_count: number;
+  warnings: string[];
+  items: SectorMarketContextItem[];
+};
+
 export interface IntelDigestInputItem {
   title?: string;
   source?: string;

@@ -14,6 +14,7 @@ import type {
   SectorReportScope,
   SectorReportsDiscoveryResult,
   SectorDynamicData,
+  SectorMarketContextData,
   Quote,
   Valuation,
   Report,
@@ -714,6 +715,12 @@ export const api = {
   /** 板块动态数据（一致预期 / 公告等） */
   getSectorResearchData: (sectorKey: string) =>
     get<SectorDynamicData>(`/sector-research/data/${encodeURIComponent(sectorKey)}`),
+
+  /** 显式 THS 映射的板块强度；传 key 时补当前成分股截面。 */
+  getSectorMarketContext: (sectorKey?: string) =>
+    get<SectorMarketContextData>(
+      `/sector-research/market-context${sectorKey ? `?sector_key=${encodeURIComponent(sectorKey)}` : ""}`,
+    ),
 
   // -------------------------------------------------------------------------
   // 投资逻辑与证据账本（Investment Thesis & Evidence Ledger）
