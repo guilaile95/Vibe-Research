@@ -4,7 +4,7 @@ Last reviewed: 2026-08-24
 
 This file is a **recovery pointer**, not Engineering Truth and not a second task database.
 
-Always verify live GitHub before acting. Any SHA / Issue / PR / CI below is only a recovery hint.
+Always verify live GitHub before acting. Any Issue / PR / state hint below is only a recovery coordinate.
 
 ## Maintenance Rule
 
@@ -19,6 +19,8 @@ Update this file only when recovery coordinates materially change, for example:
 
 Do **not** update it for every commit, CI run, test result, temporary worktree or minor implementation detail. At a Stage transition or final handover, refresh the recovery coordinates once. If this file becomes stale, live GitHub wins and the recovering Agent should report the conflict rather than asking the user to reconstruct history.
 
+Do not store an “exact current stable SHA” here: merging this file would immediately make that SHA stale by construction. Recovering Agents must resolve `EXACT_STABLE_SHA` from live GitHub.
+
 ## Product North Star
 
 > Vibe-Research is a single-user, local-first A-share investment research and decision system. Its purpose is to reduce real buy / hold / sell decision errors around the user's holdings and candidates; final Formal Decision and real trading authority remain with the user.
@@ -32,13 +34,11 @@ Current state authority:
 - GitHub Issue **#203** — read the **latest comment**, not the original issue body.
 - At this review point: `PROJECT_FREEZE = PARTIALLY_LIFTED_FOR_THIS_RUN` for the explicitly authorized product-activation sequence.
 
-Recovery hint for stable:
+Stable recovery coordinate:
 
 - Stable branch: `feature/research-system-v01`
-- Exact stable at last review: `7be4a8bb4236bef62bf3abe6a685a35b247414b3`
-- Last merged vertical: PR #210 — Watchlist Anomaly Activation
-
-Do not trust these values without checking live GitHub.
+- Exact stable SHA: **resolve live; intentionally not persisted here**
+- Last product vertical at this review point: PR #210 — Watchlist Anomaly Activation
 
 ## Immediate Work
 
@@ -49,13 +49,11 @@ Current active Issue:
 Current active PR:
 
 - **#212 — P1-FH1 — StockData Fundamental Health & Cashflow Quality**
-- Last observed state: Draft / open / mergeable
-- Last observed head: `dd2c98a21016128f588b30822e3a0610367dc2e2`
-- Last observed CI: run `32683220657` was in progress when this file was reviewed
+- State / head / CI: **resolve live**
 
 Current blocker:
 
-- None confirmed from live product semantics at this review point. Resolve current PR CI / review state live before acting.
+- None confirmed from live product semantics at this review point. Resolve current PR state, reviews and CI before acting.
 
 Next after current work:
 
