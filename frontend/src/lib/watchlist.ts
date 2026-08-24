@@ -3,10 +3,12 @@
 
 import {
   getWatchlist,
+  type WatchlistAnomalyItem,
   saveWatchlist,
   importLocalWatchlist,
   type WatchlistStatus,
 } from "./decisionCockpit.ts";
+import type { Quote } from "./api.ts";
 
 const KEY = "vr-watchlist";
 
@@ -21,6 +23,30 @@ export function addCodes(
 ): { next: string[]; added: number } {
   const incoming = parseCodes(raw).filter((c) => !existing.includes(c));
   return { next: [...existing, ...incoming], added: incoming.length };
+}
+
+export type WatchlistSort = "anomaly" | "watchlist" | "change" | "amount";
+
+export function filterAndSortWatchlistCodes(
+  codes: string[],
+  quotes: Record<string, Quote>,
+  anomalies: WatchlistAnomalyItem[],
+  sort: WatchlistSort,
+  onlyAnomalies: boolean,
+): string[] {
+  const anomalyCodes = new Set(anomalies.map((item) => item.code));
+  const rows = codes
+    .map((code, index) => ({ code, index }))
+    .filter(({ code }) => !onlyAnomalies || anomalyCodes.has(code));
+  if (sort === "watchlist") return rows.map(({ code }) => code);
+  const score = (code: string) => {
+    if (sort === "anomaly") return anomalyCodes.has(code) ? 1 : 0;
+    const value = sort === "amount" ? quotes[code]?.amount_wan : quotes[code]?.change_pct;
+    return value == null ? Number.NEGATIVE_INFINITY : sort === "change" ? Math.abs(value) : value;
+  };
+  return rows
+    .sort((a, b) => score(b.code) - score(a.code) || a.index - b.index)
+    .map(({ code }) => code);
 }
 
 /** 读取残留的 localStorage 草稿（迁移前）；不作为权威源。 */

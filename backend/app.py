@@ -40,6 +40,7 @@ import cli_runtime
 import daily_review
 import debate as debate_layer
 import gstock
+import hithink_finance_client as hithink
 import newsradar
 import reflection as reflect_layer
 import signals
@@ -1403,6 +1404,19 @@ def watchlist_import_local(req: WatchlistImportLocalIn):
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"自选股并入异常：{e}") from e
+
+
+@app.get("/api/watchlist/anomalies")
+def watchlist_anomalies_get():
+    """权威自选股的 HiThink 当日异动观察；空集不表示没有市场事件。"""
+    try:
+        return {"data": hithink.fetch_watchlist_anomalies(watchlist_store.load_watchlist())}
+    except hithink.HiThinkNotConfiguredError as e:
+        raise HTTPException(503, "HiThink 异动数据未配置") from e
+    except hithink.HiThinkClientError as e:
+        raise HTTPException(502, "HiThink 异动数据暂不可用") from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, "自选股异动读取异常") from e
 
 
 # ---------------------------------------------------------------------------
