@@ -3,6 +3,114 @@
 本文件是 Vibe-Research 中 AI 与工程代理工作规范的**唯一正文来源**。
 其他文档（`docs/DECISIONS.md`、`docs/CHAT_HANDOFF.md` 等）只引用本文件，不复制规则正文。
 
+## Agent Recovery Entry
+
+本项目必须能够在**没有历史聊天记录**的情况下恢复。
+
+### 什么时候执行恢复流程
+
+仅在以下情况执行一次完整恢复：
+
+- 新对话 / 新模型接管；
+- 中断任务恢复；
+- 当前 Stage、授权状态或 live engineering state 不确定；
+- 用户明确要求重新接管项目。
+
+普通同一任务的连续开发不要反复执行全量恢复。
+
+### Fast Recovery
+
+开始显著工作前：
+
+1. 读取 `docs/CURRENT_STAGE.md`。
+2. 检查 live GitHub：
+   - 当前稳定分支与 exact stable SHA；
+   - `docs/CURRENT_STAGE.md` 指向的状态 / 授权 authority 最新评论；
+   - 当前 Open Issues；
+   - 当前 Open / Draft PRs；
+   - active PR 最新 review / comments；
+   - relevant CI；
+   - 当前 blocker 对应的代码和测试。
+3. 读取 `docs/CURRENT_STAGE.md` 中列出的 GitHub / repo 文档；只读当前 Stage 真正需要的内容。
+4. 需要长期产品 / 架构背景时，通过已连接的 Notion 读取 `docs/CURRENT_STAGE.md` 点名的页面；不要全库扫描。
+5. 不要求用户重新拼接或复述旧聊天历史。
+
+`docs/CURRENT_STAGE.md` 是**恢复坐标，不是 Engineering Truth，也不是第二个任务数据库**。
+
+如果它与 live GitHub 冲突：
+
+- 明确报告 `SOURCE_CONFLICTS`；
+- 当前实现、PR、CI、Issue 状态以 live GitHub 为准；
+- 产品长期意图与实现冲突时报告 `Intent vs Reality conflict`，不要静默覆盖任一侧。
+
+### Required First Output
+
+恢复完成后先输出一次：
+
+```text
+CURRENT ENGINEERING STATE
+
+STABLE_BRANCH:
+EXACT_STABLE_SHA:
+AUTHORIZATION_STATE:
+STATE_AUTHORITY:
+CURRENT_STAGE:
+ACTIVE_ISSUE:
+ACTIVE_PR / HEAD:
+LOCAL_WORKSPACE:
+CI:
+CURRENT_BLOCKER:
+BLOCKING_DEFECTS:
+PRODUCT_REALITY_BLOCKERS:
+DEFERRED_SCOPE:
+SOURCE_CONFLICTS:
+NEXT_ACTION:
+```
+
+其中：
+
+- `LOCAL_WORKSPACE`：能访问本地仓库时必须先检查未提交修改 / worktree；不能访问时写 `NOT_AVAILABLE_FROM_CURRENT_AGENT`，不得猜测。
+- `BLOCKING_DEFECTS`：只列真实会阻塞当前工作的缺陷，不把产品优先级 P0/P1 标签混进缺陷等级。
+- `AUTHORIZATION_STATE` 必须从 live authority 解析。若为 `FROZEN`，不得仅因为 Next Action 清晰就自行开发；若当前用户指令已明确解冻 / 授权，则按最新用户指令和 live GitHub 记录继续。
+
+若 `NEXT_ACTION` 清晰、授权允许、且没有 Stop / Escalation 条件，恢复报告后直接继续，不等待用户再次确认。
+
+### Recovery Discipline
+
+- 开始新实现前先检查 active / open PR，已有实现则继续或审查，不创建重复路径。
+- Green CI、实现者自报、旧 Agent 完成报告都不是单独充分证据；对当前任务检查实际 diff、关键 source-to-sink 和 acceptance。
+- 不因新会话自动重开已经冻结的架构决定；只有代码、测试、真实使用或明确新产品方向提供反证时才重开。
+- 先读当前 Stage 相关代码，不做 repository-wide redesign / audit。
+- Recovery 不是重构授权。
+- 新增基础设施前先复用现有 capability。
+- 历史 Draft PR 默认是历史上下文，不自动复活。
+
+### Source Roles
+
+**GitHub = current Engineering Reality**：代码、稳定分支、Issues、PRs、reviews、tests、CI、当前授权 / freeze authority。
+
+**Notion = durable Product / Architecture Context**：Product North Star、长期 invariant、Architecture Direction、已验证 lessons、research conclusions、stage-transition reasoning。
+
+**Local workspace = uncommitted execution reality**：用户未提交修改、worktree、临时验证现场。不得被远程状态静默覆盖。
+
+### Recovery Handover
+
+正常跨模型 / 新对话交接只需要给出：
+
+```text
+接管项目
+
+先读 AGENTS.md，
+通过已连接的 GitHub + Notion 自主恢复项目。
+
+不要依赖聊天历史。
+
+恢复后输出 CURRENT ENGINEERING STATE，
+然后继续当前最高优先级且未阻塞的工作。
+```
+
+交接传递恢复坐标，不重新编写项目历史。
+
 ## Source of truth
 
 - 仓库代码和 Git 状态优先于完成报告与旧文档。旧文档与 AI 报告不能覆盖实际代码与 Git 状态。
