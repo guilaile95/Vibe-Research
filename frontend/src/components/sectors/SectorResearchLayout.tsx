@@ -13,6 +13,7 @@ import {
 import { SectorResearchContent } from "./SectorResearchContent";
 import { SectorReportDiscoveryPanel } from "./SectorReportDiscoveryPanel";
 import { SectorResearchLiveData } from "./SectorResearchLiveData";
+import { SectorMarketContext } from "./SectorMarketContext";
 import { cn } from "@/lib/utils";
 
 /**
@@ -130,6 +131,8 @@ export function SectorResearchLayout() {
           );
         })}
       </nav>
+
+      <SectorMarketContext sectorKey={meta.key} />
 
       {contentLoading || !activeTag ? (
         <div className="flex min-h-[12rem] items-center justify-center gap-2 text-sm text-muted-foreground">

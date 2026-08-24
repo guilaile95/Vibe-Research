@@ -52,6 +52,7 @@ import myreports as mr
 import review_compare
 import review_history
 import sector_research_data as srd
+import sector_market_context as smc
 import northbound_capital_flow as ncf
 import top_risk_service as trs
 import watchlist_store
@@ -2466,6 +2467,23 @@ def sector_research_data(sector_key: str):
         except Exception:
             pass
         raise HTTPException(502, f"板块动态数据异常：{e}") from e
+    return {"data": data}
+
+
+@app.get("/api/sector-research/market-context")
+def sector_research_market_context(sector_key: str | None = Query(None)):
+    """Mapped multi-window sector strength; optional key adds current breadth."""
+    key = ("sector_market_context", sector_key or "__overview__")
+    hit = _DC_CACHE.get(key, 300)
+    if hit is not _CACHE_MISS:
+        return {"data": hit}
+    try:
+        data = smc.build_sector_market_context(sector_key=sector_key)
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+    except Exception as e:  # noqa: BLE001 — unexpected orchestration failure
+        raise HTTPException(502, f"板块市场上下文异常：{type(e).__name__}") from e
+    _DC_CACHE.set(key, data)
     return {"data": data}
 
 

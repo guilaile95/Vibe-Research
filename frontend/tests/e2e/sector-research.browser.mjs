@@ -493,6 +493,37 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
   }
 }
 
+async function testSectorStrengthWorkflow(page, errors, label) {
+  await page.goto(`http://127.0.0.1:${frontendPort}/sectors`, { waitUntil: "networkidle" });
+  await expectVisibleTexts(page, ["板块强度", "今日行业横截面", "Vibe 赛道多周期观察", "20日排名", "5日动能变化", "印制电路板"], `${label} strength`, errors);
+  const pcbStrengthLink = page.getByRole("link", { name: "PCB（印制电路板）" }).first();
+  if (await pcbStrengthLink.isVisible().catch(() => false)) {
+    await pcbStrengthLink.click();
+    await page.waitForLoadState("networkidle");
+    if (!page.url().includes("/sectors/pcb/overview")) errors.push(`${label}: strength row did not continue to PCB research`);
+    await page.locator('[data-sector-market-context="pcb"]').waitFor({ state: "visible", timeout: 5000 }).catch(async () => {
+      errors.push(`${label}: PCB market context container missing; body=${(await page.locator("body").innerText()).slice(0, 500)}`);
+    });
+    await expectVisibleTexts(page, ["市场上下文", "884092.TI", "当前成分 47", "当前成分等权代理", "沪电股份"], `${label} market context`, errors);
+  } else {
+    errors.push(`${label}: mapped PCB strength continuation missing`);
+  }
+  await assertNoHorizontalOverflow(page, `${label} strength`, errors);
+}
+
+async function runStrengthOnly(browser, errors, networkBag) {
+  const label = "sector-strength";
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  page.on("pageerror", (error) => errors.push(`${label} pageerror: ${error.message}`));
+  page.on("console", (msg) => {
+    if (msg.type() === "error") errors.push(`${label} console: ${msg.text()}`);
+  });
+  page.on("response", networkBag.onResponse);
+  await testSectorStrengthWorkflow(page, errors, label);
+  await context.close();
+}
+
 async function runDesktop(browser, errors, networkBag) {
   const label = "desktop";
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -506,7 +537,10 @@ async function runDesktop(browser, errors, networkBag) {
   });
   page.on("response", networkBag.onResponse);
 
-  // 1. PCB full workflow
+  // 1. Sector strength -> mapped market context -> existing research path
+  await testSectorStrengthWorkflow(page, errors, label);
+
+  // 2. PCB full workflow
   await page.goto(`http://127.0.0.1:${frontendPort}/sectors/pcb/overview`, { waitUntil: "networkidle" });
   await expectVisibleTexts(page, ["总览", "原理与技术路线", "价值量", "铜中板", "产业格局", "定价权地图"], label, errors);
   await page.screenshot({ path: path.join(shotDir, "desktop-pcb-overview.png"), fullPage: true });
@@ -616,6 +650,7 @@ function assertNetworkBag(bag, errors) {
 }
 
 async function main() {
+  const strengthOnly = process.argv.includes("--strength-only");
   if (!existsSync(frontendDist)) {
     throw new Error("frontend/dist missing; run npm run build first");
   }
@@ -676,10 +711,20 @@ async function main() {
 
     const browser = await launchBrowser();
     try {
-      await runDesktop(browser, errors, networkBag);
-      await runMobile(browser, errors, networkBag);
+      if (strengthOnly) {
+        await runStrengthOnly(browser, errors, networkBag);
+      } else {
+        await runDesktop(browser, errors, networkBag);
+        await runMobile(browser, errors, networkBag);
+      }
     } finally {
       await browser.close().catch(() => {});
+    }
+
+    if (strengthOnly) {
+      if (errors.length) throw new Error(`sector strength browser vertical failed:\n${errors.join("\n")}`);
+      console.log(`Sector strength browser vertical OK; browser=${browserLabel}`);
+      return;
     }
 
     assertNetworkBag(networkBag.bag, errors);

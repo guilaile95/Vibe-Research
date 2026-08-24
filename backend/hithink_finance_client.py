@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -28,13 +29,19 @@ from security_exchange_policy import (
 BASE_URL = "https://fuyao.aicubes.cn"
 DAILY_ENDPOINT = "/api/a-share/prices/historical"
 ANOMALY_ENDPOINT = "/api/a-share/special-data/anomaly-analysis-stock"
+INDEX_HISTORY_ENDPOINT = "/api/a-share-index/prices/historical"
+INDEX_CONSTITUENTS_ENDPOINT = "/api/a-share-index/constituents/ths-stock-list"
+STOCK_SNAPSHOT_ENDPOINT = "/api/a-share/prices/snapshot"
 API_KEY_ENV = "HITHINK_FINANCE_API_KEY"
 PROVIDER_ID = "hithink_financial_api"
 PROVIDER_CONTRACT = "hithink-daily-bars-v0.1"
 ANOMALY_PROVIDER_CONTRACT = "hithink-watchlist-anomalies-v0.1"
+INDEX_PROVIDER_CONTRACT = "hithink-index-market-context-v0.1"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_OFFSET = 2000
 MAX_ANOMALY_CODES = 50
+MAX_SNAPSHOT_CODES = 2000
+SNAPSHOT_BATCH_SIZE = 100
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _PROVIDER_SUFFIX = {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}
 
@@ -406,12 +413,299 @@ def fetch_watchlist_anomalies(
     return result
 
 
+def _parse_index_history_payload(
+    payload: Any,
+    *,
+    expected_thscode: str,
+    start_ms: int,
+    end_ms: int,
+    offset: int,
+) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        raise HiThinkContractError("HiThink response envelope is not an object")
+    code = payload.get("code")
+    if type(code) is not int:
+        raise HiThinkContractError("HiThink business code is not an integer")
+    if code != 0:
+        raise _safe_provider_error(code)
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise HiThinkContractError("HiThink index history data is not an object")
+    if data.get("thscode") != expected_thscode:
+        raise HiThinkContractError("HiThink index identity drifted")
+    if data.get("interval") != "1d" or data.get("adjust") is not None:
+        raise HiThinkContractError("HiThink index interval/adjustment drifted")
+    items = data.get("item")
+    if not isinstance(items, list) or not items:
+        raise HiThinkContractError("HiThink index history is unexpectedly empty")
+    if len(items) > 3000:
+        raise HiThinkContractError("HiThink index history exceeds the bounded limit")
+
+    rows: list[dict[str, Any]] = []
+    seen_dates: set[int] = set()
+    previous_date: int | None = None
+    for item in items:
+        if not isinstance(item, dict):
+            raise HiThinkContractError("HiThink index history row is not an object")
+        date_ms = item.get("date_ms")
+        if isinstance(date_ms, bool) or not isinstance(date_ms, int):
+            raise HiThinkContractError("HiThink index date_ms is not an integer")
+        if not start_ms <= date_ms <= end_ms:
+            raise HiThinkContractError("HiThink index row escaped the request window")
+        if date_ms in seen_dates:
+            raise HiThinkContractError("HiThink index history contains a duplicate date")
+        if previous_date is not None and date_ms <= previous_date:
+            raise HiThinkContractError("HiThink index history is not strictly ascending")
+        if _milliseconds(datetime.fromtimestamp(date_ms / 1000, _SHANGHAI).date()) != date_ms:
+            raise HiThinkContractError("HiThink index date_ms is not Shanghai midnight")
+        seen_dates.add(date_ms)
+        previous_date = date_ms
+
+        opened = _finite_number(item.get("open_price"), "open_price")
+        high = _finite_number(item.get("high_price"), "high_price")
+        low = _finite_number(item.get("low_price"), "low_price")
+        closed = _finite_number(item.get("close_price"), "close_price")
+        volume = _finite_number(item.get("volume"), "volume")
+        turnover = _finite_number(item.get("turnover"), "turnover")
+        if high < low or not low <= opened <= high or not low <= closed <= high:
+            raise HiThinkContractError("HiThink index OHLC invariants failed")
+        if closed <= 0 or volume < 0 or turnover < 0:
+            raise HiThinkContractError("HiThink index price/volume invariant failed")
+        rows.append({
+            "date": datetime.fromtimestamp(date_ms / 1000, _SHANGHAI).date().isoformat(),
+            "date_ms": date_ms,
+            "close": closed,
+            "turnover": turnover,
+        })
+    return rows[-offset:]
+
+
+def _parse_index_constituents_payload(
+    payload: Any,
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise HiThinkContractError("HiThink response envelope is not an object")
+    code = payload.get("code")
+    if type(code) is not int:
+        raise HiThinkContractError("HiThink business code is not an integer")
+    if code != 0:
+        raise _safe_provider_error(code)
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise HiThinkContractError("HiThink index constituents data is not an object")
+    timestamp = data.get("timestamp")
+    if isinstance(timestamp, bool) or not isinstance(timestamp, int):
+        raise HiThinkContractError("HiThink constituents timestamp is not an integer")
+    items = data.get("item")
+    if not isinstance(items, list) or not items:
+        raise HiThinkContractError("HiThink index constituents are unexpectedly empty")
+    if len(items) > 10000:
+        raise HiThinkContractError("HiThink index constituents exceed the bounded limit")
+
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise HiThinkContractError("HiThink constituent row is not an object")
+        thscode = item.get("thscode")
+        ticker = item.get("ticker")
+        name = item.get("name")
+        if not all(isinstance(value, str) and value.strip() for value in (thscode, ticker, name)):
+            raise HiThinkContractError("HiThink constituent identity drifted")
+        if len(ticker) != 6 or not ticker.isdigit() or not thscode.startswith(f"{ticker}."):
+            raise HiThinkContractError("HiThink constituent identity drifted")
+        if thscode in seen:
+            raise HiThinkContractError("HiThink constituents contain a duplicate identity")
+        seen.add(thscode)
+        rows.append({"thscode": thscode, "ticker": ticker, "name": name.strip()})
+    return {"as_of_ms": timestamp, "items": rows}
+
+
+def _optional_finite_number(value: Any, field: str) -> float | None:
+    if value is None:
+        return None
+    return _finite_number(value, field)
+
+
+def _parse_stock_snapshot_payload(
+    payload: Any,
+    *,
+    expected_thscodes: set[str],
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise HiThinkContractError("HiThink response envelope is not an object")
+    code = payload.get("code")
+    if type(code) is not int:
+        raise HiThinkContractError("HiThink business code is not an integer")
+    if code != 0:
+        raise _safe_provider_error(code)
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise HiThinkContractError("HiThink stock snapshot data is not an object")
+    timestamp = data.get("timestamp")
+    if timestamp is not None and (isinstance(timestamp, bool) or not isinstance(timestamp, int)):
+        raise HiThinkContractError("HiThink stock snapshot timestamp drifted")
+    items = data.get("item")
+    if not isinstance(items, list):
+        raise HiThinkContractError("HiThink stock snapshot item is not a list")
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise HiThinkContractError("HiThink stock snapshot row is not an object")
+        thscode = item.get("thscode")
+        ticker = item.get("ticker")
+        if thscode not in expected_thscodes or not isinstance(ticker, str) or not thscode.startswith(f"{ticker}."):
+            raise HiThinkContractError("HiThink stock snapshot identity drifted")
+        if thscode in seen:
+            raise HiThinkContractError("HiThink stock snapshot contains a duplicate identity")
+        seen.add(thscode)
+        rows.append({
+            "thscode": thscode,
+            "ticker": ticker,
+            "change_pct": _optional_finite_number(item.get("price_change_ratio_pct"), "price_change_ratio_pct"),
+            "turnover": _optional_finite_number(item.get("turnover"), "turnover"),
+        })
+    return {"as_of_ms": timestamp, "items": rows}
+
+
+def fetch_stock_snapshots(
+    thscodes: list[str],
+    *,
+    session: requests.Session | None = None,
+    timeout: tuple[int, int] = (5, 30),
+) -> dict[str, Any]:
+    """Fetch current snapshots for a bounded explicit constituent list."""
+    if not isinstance(thscodes, list):
+        raise HiThinkContractError("thscodes must be a list")
+    unique = list(dict.fromkeys(thscodes))
+    if len(unique) > MAX_SNAPSHOT_CODES:
+        raise HiThinkContractError(f"stock snapshot query exceeds {MAX_SNAPSHOT_CODES} identities")
+    if any(not isinstance(code, str) or not re.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)", code) for code in unique):
+        raise HiThinkContractError("stock snapshot identity is invalid")
+    if not unique:
+        return {"as_of_ms": None, "items": []}
+    active_session = session or requests.Session()
+    rows: list[dict[str, Any]] = []
+    timestamps: list[int] = []
+    for start in range(0, len(unique), SNAPSHOT_BATCH_SIZE):
+        batch = unique[start:start + SNAPSHOT_BATCH_SIZE]
+        try:
+            response = active_session.get(
+                BASE_URL + STOCK_SNAPSHOT_ENDPOINT,
+                params={"thscodes": ",".join(batch)},
+                headers={"X-api-key": _api_key()},
+                timeout=timeout,
+                allow_redirects=False,
+            )
+        except requests.RequestException as exc:
+            raise HiThinkTransportError(
+                f"HiThink transport failed: {type(exc).__name__}"
+            ) from exc
+        if response.status_code != 200:
+            raise HiThinkTransportError(f"HiThink HTTP status {response.status_code}")
+        raw = response.content
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise HiThinkContractError("HiThink stock snapshot response exceeds size limit")
+        try:
+            payload = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HiThinkTransportError("HiThink response is not valid JSON") from exc
+        parsed = _parse_stock_snapshot_payload(payload, expected_thscodes=set(batch))
+        rows.extend(parsed["items"])
+        if isinstance(parsed["as_of_ms"], int):
+            timestamps.append(parsed["as_of_ms"])
+    return {"as_of_ms": max(timestamps) if timestamps else None, "items": rows}
+
+
+def fetch_index_market_observation(
+    thscode: str,
+    *,
+    offset: int = 90,
+    include_constituents: bool = True,
+    include_constituent_snapshots: bool = False,
+    session: requests.Session | None = None,
+    end_date: date | None = None,
+    timeout: tuple[int, int] = (5, 30),
+) -> dict[str, Any]:
+    """Fetch one explicitly mapped THS index history and current constituents."""
+    if not isinstance(thscode, str) or not re.fullmatch(r"\d{6}\.TI", thscode):
+        raise HiThinkContractError("THS index identity is invalid")
+    active_end = end_date or datetime.now(_SHANGHAI).date()
+    start, end = _date_window(offset, active_end)
+    start_ms, end_ms = _milliseconds(start), _milliseconds(end)
+    active_session = session or requests.Session()
+
+    def request_payload(endpoint: str, params: dict[str, Any]) -> Any:
+        try:
+            response = active_session.get(
+                BASE_URL + endpoint,
+                params=params,
+                headers={"X-api-key": _api_key()},
+                timeout=timeout,
+                allow_redirects=False,
+            )
+        except requests.RequestException as exc:
+            raise HiThinkTransportError(
+                f"HiThink transport failed: {type(exc).__name__}"
+            ) from exc
+        if response.status_code != 200:
+            raise HiThinkTransportError(f"HiThink HTTP status {response.status_code}")
+        raw = response.content
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise HiThinkContractError("HiThink index response exceeds size limit")
+        try:
+            return json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HiThinkTransportError("HiThink response is not valid JSON") from exc
+
+    history = _parse_index_history_payload(
+        request_payload(
+            INDEX_HISTORY_ENDPOINT,
+            {"thscode": thscode, "interval": "1d", "start": start_ms, "end": end_ms},
+        ),
+        expected_thscode=thscode,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        offset=offset,
+    )
+    result = {
+        "provider_id": PROVIDER_ID,
+        "provider_contract": INDEX_PROVIDER_CONTRACT,
+        "thscode": thscode,
+        "history": history,
+        "constituents_as_of_ms": None,
+        "constituents": None,
+        "constituent_snapshot_as_of_ms": None,
+        "constituent_snapshots": None,
+    }
+    if include_constituents:
+        constituents = _parse_index_constituents_payload(
+            request_payload(INDEX_CONSTITUENTS_ENDPOINT, {"thscode": thscode}),
+        )
+        result["constituents_as_of_ms"] = constituents["as_of_ms"]
+        result["constituents"] = constituents["items"]
+        if include_constituent_snapshots:
+            snapshots = fetch_stock_snapshots(
+                [item["thscode"] for item in constituents["items"]],
+                session=active_session,
+                timeout=timeout,
+            )
+            result["constituent_snapshot_as_of_ms"] = snapshots["as_of_ms"]
+            result["constituent_snapshots"] = snapshots["items"]
+    return result
+
+
 __all__ = [
     "ANOMALY_ENDPOINT",
     "ANOMALY_PROVIDER_CONTRACT",
     "API_KEY_ENV",
     "BASE_URL",
     "DAILY_ENDPOINT",
+    "INDEX_CONSTITUENTS_ENDPOINT",
+    "INDEX_HISTORY_ENDPOINT",
+    "INDEX_PROVIDER_CONTRACT",
+    "STOCK_SNAPSHOT_ENDPOINT",
     "HiThinkBusinessError",
     "HiThinkClientError",
     "HiThinkContractError",
@@ -421,6 +715,8 @@ __all__ = [
     "PROVIDER_CONTRACT",
     "PROVIDER_ID",
     "fetch_daily_bars",
+    "fetch_index_market_observation",
+    "fetch_stock_snapshots",
     "fetch_watchlist_anomalies",
     "is_current_bse_security",
     "is_configured",

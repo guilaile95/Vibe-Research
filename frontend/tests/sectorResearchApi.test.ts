@@ -61,6 +61,10 @@ function dataPath(sectorKey: string): string {
   return `/sector-research/data/${encodeURIComponent(sectorKey)}`;
 }
 
+function marketContextPath(sectorKey?: string): string {
+  return `/sector-research/market-context${sectorKey ? `?sector_key=${encodeURIComponent(sectorKey)}` : ""}`;
+}
+
 /** 与 api.importSectorReport 一致：body 仅 external_id */
 function buildImportBody(externalId: string): Record<string, unknown> {
   return { external_id: externalId };
@@ -92,6 +96,12 @@ test("getSectorResearchData path has exactly one /api prefix", () => {
   const full = `/api${path}`;
   assert.ok(full.startsWith("/api/sector-research/data/"));
   assert.ok(!full.startsWith("/api/api"));
+});
+
+test("sector market context uses one endpoint for overview and mapped detail", () => {
+  assert.equal(`/api${marketContextPath()}`, "/api/sector-research/market-context");
+  assert.equal(`/api${marketContextPath("solid-state-battery")}`, "/api/sector-research/market-context?sector_key=solid-state-battery");
+  assert.ok(!`/api${marketContextPath("pcb")}`.startsWith("/api/api"));
 });
 
 test("importSectorReport body contains only external_id", () => {
