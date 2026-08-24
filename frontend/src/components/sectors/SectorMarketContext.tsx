@@ -63,6 +63,9 @@ export function SectorMarketContext({ sectorKey }: { sectorKey: string }) {
       {!loading && item?.mapping_status === "unavailable" && (
         <p className="mt-4 text-xs text-muted-foreground">未配置可核验的 Vibe Sector → THS Index 映射；不按名称猜测。</p>
       )}
+      {!loading && item?.mapping_status === "mapped" && !item.metrics && (
+        <p className="mt-4 text-xs text-muted-foreground">指数市场观察暂不可用，产业研究内容不受影响。</p>
+      )}
       {!loading && item?.metrics && (
         <div className="mt-4 space-y-4">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">

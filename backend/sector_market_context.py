@@ -250,19 +250,22 @@ def build_sector_market_context(
         overall_status = items[0]["status"]
     else:
         overall_status = "partial" if len(THS_INDEX_BY_SECTOR) < len(items) else "normal"
-    warnings = (
-        [f"{len(THS_INDEX_BY_SECTOR)}/{len(items)} 个 Vibe Sector 有显式 THS 指数映射"]
-        if sector_key is None
-        else ["宽度仅使用当前成分股截面，不代表历史成分或指数贡献"]
-    )
+    if sector_key is None:
+        warnings = [f"{len(THS_INDEX_BY_SECTOR)}/{len(items)} 个 Vibe Sector 有显式 THS 指数映射"]
+        source = "hithink_index" if successful else "none"
+    elif items[0]["breadth"] is not None:
+        warnings = ["宽度仅使用当前成分股截面，不代表历史成分或指数贡献"]
+        source = "hithink_index+hithink_stock_snapshot"
+    elif items[0]["metrics"] is not None:
+        warnings = ["指数历史可用；当前成分股宽度暂不可用"]
+        source = "hithink_index"
+    else:
+        warnings = items[0]["warnings"]
+        source = "none"
     return {
         "schema_version": "sector_market_context.v0.1",
         "status": overall_status,
-        "source": (
-            "hithink_index+hithink_stock_snapshot"
-            if sector_key is not None
-            else "hithink_index"
-        ),
+        "source": source,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "mapped_count": sum(item["mapping_status"] == "mapped" for item in items),
         "total_count": len(items),

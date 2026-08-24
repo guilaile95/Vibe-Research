@@ -101,6 +101,19 @@ def test_mapped_detail_adds_current_breadth_without_historical_backfill():
     assert item["rank_20d_within_mapped"] is None
 
 
+def test_mapped_detail_keeps_history_when_optional_breadth_is_unavailable():
+    result = context.build_sector_market_context(
+        sector_key="pcb",
+        index_reader=lambda thscode: _observation(thscode),
+    )
+    item = result["items"][0]
+    assert item["status"] == "partial"
+    assert item["metrics"]["return_20d_pct"] is not None
+    assert item["breadth"] is None
+    assert "当前成分股列表暂不可用" in item["warnings"]
+    assert result["source"] == "hithink_index"
+
+
 def test_overview_isolates_one_index_failure_and_ranks_only_mapped_universe():
     def read_index(thscode: str):
         if thscode == "886033.TI":
@@ -129,3 +142,18 @@ def test_market_context_api_wraps_data_and_validates_sector_key(monkeypatch):
     monkeypatch.setattr(app_module.smc, "build_sector_market_context", invalid)
     response = client.get("/api/sector-research/market-context?sector_key=missing")
     assert response.status_code == 404
+
+
+def test_market_context_cache_does_not_alias_overview_and_user_sector_key(monkeypatch):
+    app_module._DC_CACHE._data.clear()
+    payload = {"schema_version": "sector_market_context.v0.1", "status": "normal", "items": []}
+
+    def build(*, sector_key=None):
+        if sector_key is not None:
+            raise ValueError(f"未注册的板块：{sector_key}")
+        return payload
+
+    monkeypatch.setattr(app_module.smc, "build_sector_market_context", build)
+    client = TestClient(app_module.app)
+    assert client.get("/api/sector-research/market-context").status_code == 200
+    assert client.get("/api/sector-research/market-context?sector_key=__overview__").status_code == 404

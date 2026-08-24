@@ -309,6 +309,46 @@ def test_index_overview_can_skip_constituents_and_rejects_invalid_identity():
         client.fetch_index_market_observation("885959.SH", session=session)
 
 
+def test_index_observation_preserves_history_when_optional_detail_calls_fail():
+    day = client._milliseconds(date(2026, 8, 21))
+    history = _payload(_index_bar(day, 100), thscode="884092.TI", adjust=None)
+    constituents = {
+        "code": 0,
+        "data": {
+            "timestamp": 1787542767000,
+            "item": [{"thscode": "002463.SZ", "ticker": "002463", "name": "沪电股份"}],
+        },
+    }
+
+    constituent_failure = _SequenceSession(
+        _Response(history),
+        _Response({"code": 429, "data": None}),
+    )
+    result = client.fetch_index_market_observation(
+        "884092.TI", offset=1, session=constituent_failure, end_date=date(2026, 8, 24)
+    )
+    assert len(result["history"]) == 1
+    assert result["constituents"] is None
+    assert result["constituents_error"] == "HiThinkBusinessError"
+
+    snapshot_failure = _SequenceSession(
+        _Response(history),
+        _Response(constituents),
+        _Response({"code": 429, "data": None}),
+    )
+    result = client.fetch_index_market_observation(
+        "884092.TI",
+        offset=1,
+        include_constituent_snapshots=True,
+        session=snapshot_failure,
+        end_date=date(2026, 8, 24),
+    )
+    assert len(result["history"]) == 1
+    assert result["constituents"][0]["ticker"] == "002463"
+    assert result["constituent_snapshots"] is None
+    assert result["constituent_snapshots_error"] == "HiThinkBusinessError"
+
+
 def test_fetch_stock_snapshots_projects_current_change_and_preserves_null():
     payload = {
         "code": 0,

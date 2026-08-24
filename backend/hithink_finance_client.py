@@ -676,21 +676,31 @@ def fetch_index_market_observation(
         "history": history,
         "constituents_as_of_ms": None,
         "constituents": None,
+        "constituents_error": None,
         "constituent_snapshot_as_of_ms": None,
         "constituent_snapshots": None,
+        "constituent_snapshots_error": None,
     }
     if include_constituents:
-        constituents = _parse_index_constituents_payload(
-            request_payload(INDEX_CONSTITUENTS_ENDPOINT, {"thscode": thscode}),
-        )
+        try:
+            constituents = _parse_index_constituents_payload(
+                request_payload(INDEX_CONSTITUENTS_ENDPOINT, {"thscode": thscode}),
+            )
+        except HiThinkClientError as exc:
+            result["constituents_error"] = type(exc).__name__
+            return result
         result["constituents_as_of_ms"] = constituents["as_of_ms"]
         result["constituents"] = constituents["items"]
         if include_constituent_snapshots:
-            snapshots = fetch_stock_snapshots(
-                [item["thscode"] for item in constituents["items"]],
-                session=active_session,
-                timeout=timeout,
-            )
+            try:
+                snapshots = fetch_stock_snapshots(
+                    [item["thscode"] for item in constituents["items"]],
+                    session=active_session,
+                    timeout=timeout,
+                )
+            except HiThinkClientError as exc:
+                result["constituent_snapshots_error"] = type(exc).__name__
+                return result
             result["constituent_snapshot_as_of_ms"] = snapshots["as_of_ms"]
             result["constituent_snapshots"] = snapshots["items"]
     return result

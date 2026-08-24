@@ -168,7 +168,7 @@ def _fake_sector_market_context(*, sector_key: str | None = None) -> dict:
             "sector_label": {"pcb": "PCB（印制电路板）", "humanoid": "人形机器人", "cpo": "光互联与CPO"}[key],
             "mapping_status": "mapped",
             "index": index,
-            "status": "normal",
+            "status": "partial" if sector_key == "humanoid" else "normal",
             "warnings": [],
             "metrics": {
                 "trade_date": "2026-08-24",
@@ -193,7 +193,7 @@ def _fake_sector_market_context(*, sector_key: str | None = None) -> dict:
                     {"code": "002916", "name": "深南电路", "change_pct": -0.5},
                 ],
                 "constituent_semantics": "CURRENT_CONSTITUENTS_ONLY",
-            } if sector_key else None),
+            } if sector_key and key != "humanoid" else None),
             "constituents_as_of_ms": 1787542767000 if sector_key else None,
             "constituent_snapshot_as_of_ms": 1787542768000 if sector_key else None,
             "rank_20d_within_mapped": rank,

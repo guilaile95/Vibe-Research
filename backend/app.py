@@ -2473,7 +2473,10 @@ def sector_research_data(sector_key: str):
 @app.get("/api/sector-research/market-context")
 def sector_research_market_context(sector_key: str | None = Query(None)):
     """Mapped multi-window sector strength; optional key adds current breadth."""
-    key = ("sector_market_context", sector_key or "__overview__")
+    key = (
+        "sector_market_context",
+        "overview" if sector_key is None else f"sector:{sector_key}",
+    )
     hit = _DC_CACHE.get(key, 300)
     if hit is not _CACHE_MISS:
         return {"data": hit}

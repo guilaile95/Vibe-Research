@@ -508,6 +508,8 @@ async function testSectorStrengthWorkflow(page, errors, label) {
   } else {
     errors.push(`${label}: mapped PCB strength continuation missing`);
   }
+  await page.goto(`http://127.0.0.1:${frontendPort}/sectors/humanoid/overview`, { waitUntil: "networkidle" });
+  await expectVisibleTexts(page, ["市场上下文", "886069.TI", "+3.21%", "当前成分股宽度暂不可用"], `${label} partial breadth`, errors);
   await assertNoHorizontalOverflow(page, `${label} strength`, errors);
 }
 
