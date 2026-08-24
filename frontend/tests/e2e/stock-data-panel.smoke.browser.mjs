@@ -372,19 +372,57 @@ function createApiMockController() {
     }
 
     if (pathname.includes("/financials")) {
+      const latest = {
+        period: "2026-06-30",
+        period_end: "2026-06-30",
+        report_date: null,
+        revenue: "1000亿",
+        revenue_yoy: "8%",
+        net_profit: "200亿",
+        net_profit_yoy: "10%",
+        deduct_net_profit: "190亿",
+        deduct_net_profit_yoy: "9%",
+        eps: "1.50",
+        bvps: "15.0",
+        roe: "12%",
+        gross_margin: "40%",
+        net_margin: "20%",
+        op_cf_ps: "2.1",
+        current_ratio: "1.8",
+        quick_ratio: "1.4",
+        debt_to_equity_ratio: "0.5",
+        debt_ratio: "33%",
+        revenue_amount: 100_000_000_000,
+        net_profit_amount: 20_000_000_000,
+        parent_holder_net_profit_amount: 19_000_000_000,
+        operating_cash_flow: 30_000_000_000,
+        capital_expenditure: 4_000_000_000,
+        free_cash_flow: 26_000_000_000,
+        assets_total: 200_000_000_000,
+        cash: 50_000_000_000,
+        accounts_receivable: 10_000_000_000,
+        total_debt: 80_000_000_000,
+        holder_equity_total: 120_000_000_000,
+        cash_conversion_ratio: 1.5,
+        free_cash_flow_margin: 0.26,
+        accrual_ratio: -0.05,
+        receivables_pressure: 0.1,
+        net_cash_ratio: -0.15,
+      };
       await route.fulfill(
         jsonOk({
-          period: "2025Q4",
-          revenue: "1000亿",
-          revenue_yoy: "8%",
-          net_profit: "200亿",
-          net_profit_yoy: "10%",
-          eps: "1.50",
-          bvps: "15.0",
-          roe: "12%",
-          gross_margin: "40%",
-          net_margin: "20%",
-          op_cf_ps: "2.1",
+          ...latest,
+          history: [latest, { ...latest, period: "2026-03-31", period_end: "2026-03-31" }],
+          data_quality: {
+            status: "normal",
+            source: "tonghuashun_via_akshare",
+            fetch_mode: "snapshot",
+            report_basis: "cumulative_report_period",
+            point_in_time_supported: false,
+            publication_date_known: false,
+            missing_fields: [],
+            warnings: [],
+          },
         }),
       );
       return;
@@ -607,6 +645,29 @@ async function runSmoke(page, mock, errors) {
   } catch (e) {
     errors.push(`${label}: after query 000001 missing header: ${e.message}`);
     return;
+  }
+
+  const health = page.getByTestId("fundamental-health");
+  if (!(await health.isVisible().catch(() => false))) errors.push(`${label}: fundamental health module not visible`);
+  for (const text of [
+    "Growth · 增长",
+    "Profitability · 盈利能力",
+    "Cash Flow Quality · 现金流质量",
+    "Balance Sheet Quality · 资产负债表",
+    "Data Quality · 数据质量",
+    "披露日期：未知（数据源未提供）",
+    "现金转化率",
+    "150.0%",
+    "自由现金流",
+    "260.00 亿元",
+  ]) {
+    if (!(await health.getByText(text, { exact: true }).first().isVisible().catch(() => false))) {
+      errors.push(`${label}: fundamental health text not visible: ${text}`);
+    }
+  }
+  const healthText = await health.innerText();
+  for (const forbidden of ["归母净利润", "高增长", "高 ROE", "财务评分"]) {
+    if (healthText.includes(forbidden)) errors.push(`${label}: forbidden health wording present: ${forbidden}`);
   }
 
   // Ensure 扩展数据 section is present

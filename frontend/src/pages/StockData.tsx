@@ -104,6 +104,7 @@ export function StockData() {
   const [news, setNews] = useState<NewsItem[]>([]);
   const [pctl, setPctl] = useState<ValPercentile | null>(null);
   const [fin, setFin] = useState<Financials | null>(null);
+  const [finError, setFinError] = useState<string | null>(null);
   const [anns, setAnns] = useState<Announcement[]>([]);
   const [depNote, setDepNote] = useState<string | null>(null);
   // 资金面 / 筹码 / 信号（v3.3 并入）
@@ -314,7 +315,7 @@ export function StockData() {
     setActiveCode(c);
     setTiQueryVersion((version) => version + 1);
     activeCodeRef.current = c;
-    setLoading(true); setErr(null); setDepNote(null); setVal(null); setReports([]); setNews([]); setPctl(null); setFin(null); setAnns([]);
+    setLoading(true); setErr(null); setDepNote(null); setVal(null); setReports([]); setNews([]); setPctl(null); setFin(null); setFinError(null); setAnns([]);
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
     setGStock(null);
     setCashflow(null);
@@ -361,18 +362,21 @@ export function StockData() {
     // K 线 / 季报财务 / 基本面 / 巨潮公告：均为可选依赖，改为按需展开加载（避免每次查询都发 501）
     try {
       // 行情+估值+研报+历史分位+财务+公告（新闻单独降级）
-      const [v, r, p, f, a] = await Promise.all([
+      const [v, r, p, financialResult, a] = await Promise.all([
         api.valuation(c),
         api.reports(c).catch(() => []),
         api.percentile(c).catch(() => null),
-        api.financials(c).catch(() => null),
+        api.financials(c)
+          .then((data) => ({ data, error: null as string | null }))
+          .catch((e) => ({ data: null, error: e instanceof ApiError ? e.message : "财务数据暂不可用" })),
         api.announcements(c).catch(() => []),
       ]);
       if (rid !== runIdRef.current) return;
       setVal(v);
       setReports(r);
       setPctl(p);
-      setFin(f);
+      setFin(financialResult.data);
+      setFinError(financialResult.error);
       setAnns(a);
       try {
         const n = await api.news(c);
@@ -413,7 +417,7 @@ export function StockData() {
     ? `个股：${val.name}（${val.code}）\n现价 ${val.price} · PE(TTM) ${val.pe_ttm} · PB ${val.pb} · 市值 ${val.mcap_yi}亿\n` +
       `26E EPS ${val.eps_26e ?? "—"} · 前向PE ${val.pe_26e ?? "—"} · PEG ${val.peg ?? "—"} · 消化 ${val.digest_years ?? "—"}年 · 机构覆盖 ${val.analyst_count} 家\n` +
       (pctl?.metrics.pe_ttm ? `估值历史分位(近5年)：PE-TTM 处于 ${pctl.metrics.pe_ttm.percentile}% 分位、PB 处于 ${pctl.metrics.pb?.percentile ?? "—"}% 分位\n` : "") +
-      (fin?.revenue ? `财务(${fin.period ?? "—"})：营收 ${fin.revenue}(同比${fin.revenue_yoy ?? "—"})、净利 ${fin.net_profit ?? "—"}(同比${fin.net_profit_yoy ?? "—"})、ROE ${fin.roe ?? "—"}、毛利率 ${fin.gross_margin ?? "—"}\n` : "") +
+      (fin?.revenue ? `财务快照(报告期末${fin.period_end ?? "未知"}，披露日期未知，非PIT)：营收 ${fin.revenue}(同比${fin.revenue_yoy ?? "未知"})、净利润 ${fin.net_profit ?? "未知"}(同比${fin.net_profit_yoy ?? "未知"})、扣非净利润同比 ${fin.deduct_net_profit_yoy ?? "未知"}、ROE ${fin.roe ?? "未知"}、毛利率 ${fin.gross_margin ?? "未知"}、经营现金流 ${fin.operating_cash_flow ?? "未知"}、现金转化率 ${fin.cash_conversion_ratio ?? "未知"}、自由现金流 ${fin.free_cash_flow ?? "未知"}、资产负债率 ${fin.debt_ratio ?? "未知"}\n` : "") +
       (anns.length ? `近期公告：${anns.slice(0, 5).map((a) => a.title.replace(/^[^:：]*[:：]/, "")).join("；")}\n` : "") +
       `近期研报：${reports.slice(0, 5).map((r) => r.title).join("；") || "无"}`
     : "还没查询个股。输入代码后可让 AI 帮你分析。";
@@ -594,7 +598,7 @@ export function StockData() {
 
           <TopRiskAnalysisCard env={topRisk} loading={topRiskLoading} error={topRiskErr} />
 
-          <EarningsSnapshot val={val} fin={fin} pctl={pctl} />
+          <EarningsSnapshot fin={fin} error={finError} />
 
           {pctl && (pctl.metrics.pe_ttm || pctl.metrics.pb) && (
             <GlassCard glow className="mb-4">
@@ -603,31 +607,6 @@ export function StockData() {
               <div className="space-y-4">
                 {pctl.metrics.pe_ttm && <ValBand label="PE-TTM" m={pctl.metrics.pe_ttm} />}
                 {pctl.metrics.pb && <ValBand label="市净率 PB" m={pctl.metrics.pb} />}
-              </div>
-            </GlassCard>
-          )}
-
-          {fin && (fin.revenue || fin.roe) && (
-            <GlassCard className="mb-4">
-              <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold"><BarChart3 className="h-4 w-4 text-primary" /> 财务关键指标{fin.period && <span className="text-xs font-normal text-muted-foreground/60">· {fin.period}</span>}</h3>
-              <p className="mb-3 text-[11px] text-muted-foreground/60">同花顺财务摘要,最新报告期。</p>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                {[
-                  { k: "营业总收入", v: fin.revenue, yoy: fin.revenue_yoy },
-                  { k: "归母净利润", v: fin.net_profit, yoy: fin.net_profit_yoy },
-                  { k: "每股收益", v: fin.eps },
-                  { k: "ROE", v: fin.roe },
-                  { k: "销售毛利率", v: fin.gross_margin },
-                  { k: "销售净利率", v: fin.net_margin },
-                  { k: "每股净资产", v: fin.bvps },
-                  { k: "每股经营现金流", v: fin.op_cf_ps },
-                ].map((m) => (
-                  <div key={m.k} className="rounded-lg bg-muted/30 p-3">
-                    <p className="text-xs text-muted-foreground">{m.k}</p>
-                    <p className="mt-0.5 font-mono text-base font-bold">{m.v ?? "—"}</p>
-                    {m.yoy && <p className="text-[11px] text-muted-foreground">同比 {m.yoy}</p>}
-                  </div>
-                ))}
               </div>
             </GlassCard>
           )}

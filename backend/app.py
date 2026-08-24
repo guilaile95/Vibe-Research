@@ -2063,13 +2063,16 @@ def financials(code: str = Query(...)):
     if hit is not _CACHE_MISS:
         return {"data": hit}
     try:
-        data = astock.financials(code)
+        data = astock.financials(code, include_health=True)
         _FIN_CACHE.set(code, data)
         try:
             import data_health_event_store as _dhes
             if not isinstance(data, dict) or not data:
                 _dhes.safe_call(_dhes.record_failure, "financials", "SOURCE_UNAVAILABLE")
-            elif data.get("revenue") is None and data.get("net_profit") is None:
+            elif (
+                data.get("revenue") is None
+                and data.get("net_profit") is None
+            ) or data.get("data_quality", {}).get("status") == "partial":
                 _dhes.safe_call(_dhes.record_partial, "financials")
             else:
                 _dhes.safe_call(_dhes.record_success, "financials")

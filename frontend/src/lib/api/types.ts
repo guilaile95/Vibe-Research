@@ -199,12 +199,40 @@ export interface Announcement {
 }
 
 
-export interface Financials {
+export interface FinancialPeriod {
   period: string | null;
+  period_end: string | null;
+  report_date: string | null;
   revenue: string | null; revenue_yoy: string | null;
   net_profit: string | null; net_profit_yoy: string | null;
+  deduct_net_profit: string | null; deduct_net_profit_yoy: string | null;
   eps: string | null; bvps: string | null; roe: string | null;
   gross_margin: string | null; net_margin: string | null; op_cf_ps: string | null;
+  current_ratio: string | null; quick_ratio: string | null;
+  debt_to_equity_ratio: string | null; debt_ratio: string | null;
+  revenue_amount: number | null; net_profit_amount: number | null;
+  parent_holder_net_profit_amount: number | null;
+  operating_cash_flow: number | null; capital_expenditure: number | null;
+  free_cash_flow: number | null; assets_total: number | null;
+  cash: number | null; accounts_receivable: number | null;
+  total_debt: number | null; holder_equity_total: number | null;
+  cash_conversion_ratio: number | null; free_cash_flow_margin: number | null;
+  accrual_ratio: number | null; receivables_pressure: number | null;
+  net_cash_ratio: number | null;
+}
+
+export interface Financials extends FinancialPeriod {
+  history: FinancialPeriod[];
+  data_quality: {
+    status: "normal" | "partial";
+    source: "tonghuashun_via_akshare";
+    fetch_mode: "snapshot";
+    report_basis: "cumulative_report_period";
+    point_in_time_supported: false;
+    publication_date_known: false;
+    missing_fields: string[];
+    warnings: string[];
+  };
 }
 
 

@@ -324,28 +324,181 @@ def pe_digestion(current_pe: float, cagr: float, target_pe: float = 30) -> float
     return math.log(current_pe / target_pe) / math.log(1 + cagr)
 
 
-def financials(code: str) -> dict:
-    """财务关键指标（同花顺财务摘要，最新报告期）—— 干净可靠的营收/净利/ROE/毛利率等。
+def financials(code: str, *, include_health: bool = False) -> dict:
+    """同花顺财务体检：最新摘要 + 同报告期现金流/资产负债事实。
 
     注：mootdx finance() 的营收/净利数值不可靠(实测放大数倍)，故财务摘要走此源。
+    新版三表中的 ``report_date`` 实际是报告期末，不是公告日；公开契约因此
+    始终把 ``report_date`` 保持为 ``None``，不提供历史 PIT 保证。
+    三表 enrichment 仅供 StockData 产品面显式开启，避免拖慢既有批量消费者。
     """
     ak = _akshare()
     df = ak.stock_financial_abstract_ths(symbol=code, indicator="按报告期")
     if df is None or df.empty:
         return {}
-    row = df.iloc[-1].to_dict()  # 最新报告期（按报告期升序，取末行）
+    summary_rows = df.to_dict("records")
 
-    def g(k):
-        v = row.get(k)
-        return None if v in (False, "false", "", None) else v
+    def present(value):
+        if value in (False, "false", "", None):
+            return None
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return value
 
+    def summary(row: dict) -> dict:
+        period_end = present(row.get("报告期"))
+        return {
+            "period": period_end,  # legacy consumer alias
+            "period_end": period_end,
+            "report_date": None,
+            "revenue": present(row.get("营业总收入")),
+            "revenue_yoy": present(row.get("营业总收入同比增长率")),
+            "net_profit": present(row.get("净利润")),
+            "net_profit_yoy": present(row.get("净利润同比增长率")),
+            "deduct_net_profit": present(row.get("扣非净利润")),
+            "deduct_net_profit_yoy": present(row.get("扣非净利润同比增长率")),
+            "eps": present(row.get("基本每股收益")),
+            "bvps": present(row.get("每股净资产")),
+            "roe": present(row.get("净资产收益率")),
+            "gross_margin": present(row.get("销售毛利率")),
+            "net_margin": present(row.get("销售净利率")),
+            "op_cf_ps": present(row.get("每股经营现金流")),
+            "current_ratio": present(row.get("流动比率")),
+            "quick_ratio": present(row.get("速动比率")),
+            "debt_to_equity_ratio": present(row.get("产权比率")),
+            "debt_ratio": present(row.get("资产负债率")),
+        }
+
+    history = [summary(row) for row in summary_rows[-5:]]
+    if not include_health:
+        return history[-1]
+    warnings: list[str] = []
+
+    def metric_rows(frame, wanted: set[str], source: str) -> dict[str, dict[str, float | None]]:
+        if frame is None or frame.empty:
+            warnings.append(f"{source}_unavailable")
+            return {}
+        result: dict[str, dict[str, float | None]] = {}
+        for raw in frame.to_dict("records"):
+            metric = raw.get("metric_name")
+            if metric not in wanted:
+                continue
+            period_end = raw.get("report_date")
+            if not isinstance(period_end, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", period_end):
+                raise ValueError(f"{source} period_end contract drifted")
+            bucket = result.setdefault(period_end, {})
+            if metric in bucket:
+                raise ValueError(f"{source} contains duplicate period metric")
+            value = raw.get("value")
+            if value in (False, "false", "", None):
+                bucket[metric] = None
+                continue
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{source} metric is not numeric") from exc
+            if not math.isfinite(parsed):
+                raise ValueError(f"{source} metric is not finite")
+            bucket[metric] = parsed
+        return result
+
+    tables: dict[str, dict[str, dict[str, float | None]]] = {}
+    table_specs = (
+        (
+            "income",
+            "stock_financial_benefit_new_ths",
+            {"operating_income_total", "net_profit", "parent_holder_net_profit"},
+        ),
+        (
+            "cashflow",
+            "stock_financial_cash_new_ths",
+            {"act_cash_flow_net", "pay_fixed_assets_etc_cash"},
+        ),
+        (
+            "balance",
+            "stock_financial_debt_new_ths",
+            {"assets_total", "cash", "accounts_receivable", "total_debt", "holder_equity_total"},
+        ),
+    )
+    for source, function_name, wanted in table_specs:
+        try:
+            frame = getattr(ak, function_name)(symbol=code, indicator="按报告期")
+            tables[source] = metric_rows(frame, wanted, source)
+        except Exception:  # one optional statement must not erase the reliable summary
+            warnings.append(f"{source}_unavailable")
+            tables[source] = {}
+
+    def ratio(numerator: float | None, denominator: float | None) -> float | None:
+        if numerator is None or denominator in (None, 0):
+            return None
+        result = numerator / denominator
+        return result if math.isfinite(result) else None
+
+    for item in history:
+        period_end = item["period_end"]
+        income = tables["income"].get(period_end, {})
+        cashflow = tables["cashflow"].get(period_end, {})
+        balance = tables["balance"].get(period_end, {})
+        revenue = income.get("operating_income_total")
+        net_profit = income.get("net_profit")
+        operating_cash_flow = cashflow.get("act_cash_flow_net")
+        capital_expenditure = cashflow.get("pay_fixed_assets_etc_cash")
+        assets_total = balance.get("assets_total")
+        cash = balance.get("cash")
+        accounts_receivable = balance.get("accounts_receivable")
+        total_debt = balance.get("total_debt")
+        free_cash_flow = (
+            operating_cash_flow - capital_expenditure
+            if operating_cash_flow is not None and capital_expenditure is not None
+            else None
+        )
+        item.update({
+            "revenue_amount": revenue,
+            "net_profit_amount": net_profit,
+            "parent_holder_net_profit_amount": income.get("parent_holder_net_profit"),
+            "operating_cash_flow": operating_cash_flow,
+            "capital_expenditure": capital_expenditure,
+            "free_cash_flow": free_cash_flow,
+            "assets_total": assets_total,
+            "cash": cash,
+            "accounts_receivable": accounts_receivable,
+            "total_debt": total_debt,
+            "holder_equity_total": balance.get("holder_equity_total"),
+            "cash_conversion_ratio": ratio(operating_cash_flow, net_profit),
+            "free_cash_flow_margin": ratio(free_cash_flow, revenue),
+            "accrual_ratio": ratio(
+                net_profit - operating_cash_flow
+                if net_profit is not None and operating_cash_flow is not None
+                else None,
+                assets_total,
+            ),
+            "receivables_pressure": ratio(accounts_receivable, revenue),
+            "net_cash_ratio": ratio(
+                cash - total_debt if cash is not None and total_debt is not None else None,
+                assets_total,
+            ),
+        })
+
+    latest = history[-1]
+    required = (
+        "revenue", "net_profit", "roe", "gross_margin", "net_margin",
+        "operating_cash_flow", "capital_expenditure", "assets_total",
+        "accounts_receivable", "total_debt", "cash",
+    )
+    missing_fields = [field for field in required if latest.get(field) is None]
     return {
-        "period": g("报告期"),
-        "revenue": g("营业总收入"), "revenue_yoy": g("营业总收入同比增长率"),
-        "net_profit": g("净利润"), "net_profit_yoy": g("净利润同比增长率"),
-        "eps": g("基本每股收益"), "bvps": g("每股净资产"),
-        "roe": g("净资产收益率"), "gross_margin": g("销售毛利率"), "net_margin": g("销售净利率"),
-        "op_cf_ps": g("每股经营现金流"),
+        **latest,
+        "history": list(reversed(history)),
+        "data_quality": {
+            "status": "partial" if warnings or missing_fields else "normal",
+            "source": "tonghuashun_via_akshare",
+            "fetch_mode": "snapshot",
+            "report_basis": "cumulative_report_period",
+            "point_in_time_supported": False,
+            "publication_date_known": False,
+            "missing_fields": missing_fields,
+            "warnings": list(dict.fromkeys(warnings)),
+        },
     }
 
 
