@@ -6,6 +6,19 @@ This file is a **recovery pointer**, not Engineering Truth and not a second task
 
 Always verify live GitHub before acting. Any SHA / Issue / PR / CI below is only a recovery hint.
 
+## Maintenance Rule
+
+Update this file only when recovery coordinates materially change, for example:
+
+- current Stage changes;
+- the authorization / freeze authority changes;
+- the leading active Issue / PR changes;
+- a completed vertical changes what the next recovering Agent should inspect;
+- the named repo / Notion read-first pointers change;
+- a genuinely durable invariant changes.
+
+Do **not** update it for every commit, CI run, test result, temporary worktree or minor implementation detail. At a Stage transition or final handover, refresh the recovery coordinates once. If this file becomes stale, live GitHub wins and the recovering Agent should report the conflict rather than asking the user to reconstruct history.
+
 ## Product North Star
 
 > Vibe-Research is a single-user, local-first A-share investment research and decision system. Its purpose is to reduce real buy / hold / sell decision errors around the user's holdings and candidates; final Formal Decision and real trading authority remain with the user.
