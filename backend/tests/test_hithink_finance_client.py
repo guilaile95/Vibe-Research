@@ -182,6 +182,71 @@ def test_fetch_daily_bars_transport_error_is_credential_safe():
     assert "test-value" not in str(captured.value)
 
 
+def _anomaly_payload(*items: dict, timestamp: int = 1787529600000) -> dict:
+    return {
+        "code": 0,
+        "message": "ok",
+        "data": {"timestamp": timestamp, "item": list(items)},
+    }
+
+
+def test_fetch_watchlist_anomalies_projects_multiple_rows_and_request_contract():
+    session = _Session(_Response(_anomaly_payload(
+        {
+            "stock_name": "贵州茅台",
+            "analysis_content": "成交活跃",
+            "keyword_list": ["白酒"],
+            "thscode": "600519.SH",
+            "tag_name": "大幅上涨",
+        },
+        {
+            "stock_name": "贵州茅台",
+            "analysis_content": "快速反弹",
+            "keyword_list": [],
+            "thscode": "600519.SH",
+            "tag_name": "快速反弹",
+        },
+    )))
+
+    result = client.fetch_watchlist_anomalies(
+        ["600519", "000001", "600519"], session=session
+    )
+
+    assert result["as_of_ms"] == 1787529600000
+    assert [item["type"] for item in result["items"]] == ["大幅上涨", "快速反弹"]
+    call = session.calls[0]
+    assert call["url"] == client.BASE_URL + client.ANOMALY_ENDPOINT
+    assert call["params"] == {"thscodes": "600519.SH,000001.SZ"}
+    assert call["headers"] == {"X-api-key": "test-value"}
+    assert call["allow_redirects"] is False
+
+
+def test_fetch_watchlist_anomalies_preserves_successful_empty_and_rejects_identity_drift():
+    empty = _Session(_Response(_anomaly_payload()))
+    result = client.fetch_watchlist_anomalies(["600519"], session=empty)
+    assert result["items"] == []
+
+    drift = _Session(_Response(_anomaly_payload({
+        "stock_name": "平安银行",
+        "analysis_content": "原因",
+        "keyword_list": [],
+        "thscode": "000001.SZ",
+        "tag_name": "大幅上涨",
+    })))
+    with pytest.raises(client.HiThinkContractError, match="identity drifted"):
+        client.fetch_watchlist_anomalies(["600519"], session=drift)
+
+
+def test_fetch_watchlist_anomalies_keeps_supported_codes_when_one_is_not_covered():
+    session = _Session(_Response(_anomaly_payload()))
+
+    result = client.fetch_watchlist_anomalies(["600519", "837023"], session=session)
+
+    assert result["items"] == []
+    assert result["unavailable_codes"] == ["837023"]
+    assert session.calls[0]["params"] == {"thscodes": "600519.SH"}
+
+
 class _Frame:
     empty = False
 

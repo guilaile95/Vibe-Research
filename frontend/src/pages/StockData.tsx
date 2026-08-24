@@ -306,8 +306,8 @@ export function StockData() {
     })();
   }, [activeCode, tiQueryVersion]);
 
-  const run = async () => {
-    const c = code.trim().toUpperCase();
+  const run = async (requestedCode?: string) => {
+    const c = (requestedCode ?? code).trim().toUpperCase();
     if (!c) { setErr("请输入代码"); return; }
     const rid = ++runIdRef.current;
     // 正式换股：绑定 activeCode，重置全部可选面板
@@ -388,6 +388,16 @@ export function StockData() {
     }
   };
 
+  const queryStartedRef = useRef(false);
+  useEffect(() => {
+    if (queryStartedRef.current) return;
+    const initialCode = new URLSearchParams(window.location.search).get("code")?.trim().toUpperCase();
+    if (!initialCode || !/^\d{6}$/.test(initialCode)) return;
+    queryStartedRef.current = true;
+    setCode(initialCode);
+    void run(initialCode);
+  }, []);
+
   const metrics = val ? [
     { k: "现价", v: fmt(val.price) },
     { k: "PE(TTM)", v: fmt(val.pe_ttm) },
@@ -444,7 +454,7 @@ export function StockData() {
           className="w-80 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
         />
         <button
-          onClick={run}
+          onClick={() => void run()}
           disabled={loading}
           className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
         >

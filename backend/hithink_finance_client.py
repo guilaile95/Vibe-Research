@@ -27,11 +27,14 @@ from security_exchange_policy import (
 
 BASE_URL = "https://fuyao.aicubes.cn"
 DAILY_ENDPOINT = "/api/a-share/prices/historical"
+ANOMALY_ENDPOINT = "/api/a-share/special-data/anomaly-analysis-stock"
 API_KEY_ENV = "HITHINK_FINANCE_API_KEY"
 PROVIDER_ID = "hithink_financial_api"
 PROVIDER_CONTRACT = "hithink-daily-bars-v0.1"
+ANOMALY_PROVIDER_CONTRACT = "hithink-watchlist-anomalies-v0.1"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_OFFSET = 2000
+MAX_ANOMALY_CODES = 50
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _PROVIDER_SUFFIX = {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}
 
@@ -285,7 +288,127 @@ def fetch_daily_bars(
     )
 
 
+def _parse_anomaly_payload(
+    payload: Any,
+    *,
+    expected_thscodes: set[str],
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise HiThinkContractError("HiThink response envelope is not an object")
+    code = payload.get("code")
+    if type(code) is not int:
+        raise HiThinkContractError("HiThink business code is not an integer")
+    if code != 0:
+        raise _safe_provider_error(code)
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise HiThinkContractError("HiThink anomaly data is not an object")
+    timestamp = data.get("timestamp")
+    if isinstance(timestamp, bool) or not isinstance(timestamp, int):
+        raise HiThinkContractError("HiThink anomaly timestamp is not an integer")
+    items = data.get("item")
+    if not isinstance(items, list):
+        raise HiThinkContractError("HiThink anomaly item is not a list")
+
+    rows: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise HiThinkContractError("HiThink anomaly row is not an object")
+        thscode = item.get("thscode")
+        stock_name = item.get("stock_name")
+        anomaly_type = item.get("tag_name")
+        reason = item.get("analysis_content")
+        keywords = item.get("keyword_list")
+        if thscode not in expected_thscodes:
+            raise HiThinkContractError("HiThink anomaly security identity drifted")
+        if not all(isinstance(value, str) for value in (stock_name, anomaly_type, reason)):
+            raise HiThinkContractError("HiThink anomaly text field drifted")
+        if not isinstance(keywords, list) or not all(isinstance(value, str) for value in keywords):
+            raise HiThinkContractError("HiThink anomaly keyword list drifted")
+        rows.append({
+            "code": thscode[:6],
+            "provider_symbol": thscode,
+            "name": stock_name,
+            "type": anomaly_type,
+            "reason": reason,
+            "keywords": keywords,
+        })
+    return {
+        "provider_id": PROVIDER_ID,
+        "provider_contract": ANOMALY_PROVIDER_CONTRACT,
+        "as_of_ms": timestamp,
+        "unavailable_codes": [],
+        "items": rows,
+    }
+
+
+def fetch_watchlist_anomalies(
+    security_codes: list[str],
+    *,
+    session: requests.Session | None = None,
+    timeout: tuple[int, int] = (5, 30),
+) -> dict[str, Any]:
+    """Fetch today's HiThink anomaly observations for an authoritative watchlist."""
+    if not isinstance(security_codes, list):
+        raise HiThinkContractError("security_codes must be a list")
+    unique_codes = list(dict.fromkeys(security_codes))
+    if len(unique_codes) > MAX_ANOMALY_CODES:
+        raise HiThinkContractError(
+            f"watchlist anomaly query exceeds {MAX_ANOMALY_CODES} securities"
+        )
+    if not unique_codes:
+        return {
+            "provider_id": PROVIDER_ID,
+            "provider_contract": ANOMALY_PROVIDER_CONTRACT,
+            "as_of_ms": None,
+            "unavailable_codes": [],
+            "items": [],
+        }
+    thscodes: list[str] = []
+    unavailable_codes: list[str] = []
+    for code in unique_codes:
+        try:
+            thscodes.append(provider_thscode(code))
+        except HiThinkUnsupportedSecurityError:
+            unavailable_codes.append(code)
+    if not thscodes:
+        return {
+            "provider_id": PROVIDER_ID,
+            "provider_contract": ANOMALY_PROVIDER_CONTRACT,
+            "as_of_ms": None,
+            "unavailable_codes": unavailable_codes,
+            "items": [],
+        }
+    active_session = session or requests.Session()
+    try:
+        response = active_session.get(
+            BASE_URL + ANOMALY_ENDPOINT,
+            params={"thscodes": ",".join(thscodes)},
+            headers={"X-api-key": _api_key()},
+            timeout=timeout,
+            allow_redirects=False,
+        )
+    except requests.RequestException as exc:
+        raise HiThinkTransportError(
+            f"HiThink transport failed: {type(exc).__name__}"
+        ) from exc
+    if response.status_code != 200:
+        raise HiThinkTransportError(f"HiThink HTTP status {response.status_code}")
+    raw = response.content
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise HiThinkContractError("HiThink anomaly response exceeds size limit")
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HiThinkTransportError("HiThink response is not valid JSON") from exc
+    result = _parse_anomaly_payload(payload, expected_thscodes=set(thscodes))
+    result["unavailable_codes"] = unavailable_codes
+    return result
+
+
 __all__ = [
+    "ANOMALY_ENDPOINT",
+    "ANOMALY_PROVIDER_CONTRACT",
     "API_KEY_ENV",
     "BASE_URL",
     "DAILY_ENDPOINT",
@@ -298,6 +421,7 @@ __all__ = [
     "PROVIDER_CONTRACT",
     "PROVIDER_ID",
     "fetch_daily_bars",
+    "fetch_watchlist_anomalies",
     "is_current_bse_security",
     "is_configured",
     "provider_thscode",

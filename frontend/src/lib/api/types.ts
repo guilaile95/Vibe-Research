@@ -165,6 +165,7 @@ export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;
   pe_ttm: number; pb: number; mcap_yi: number; turnover_pct: number;
   limit_up: number; limit_down: number;
+  amount_wan?: number;
 }
 
 

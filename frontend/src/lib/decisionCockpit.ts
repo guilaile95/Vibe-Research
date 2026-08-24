@@ -13,6 +13,23 @@ export type WatchlistStatus =
   | { status: "not_configured"; data: null; etag: null }
   | { status: "corrupted"; data: null; etag: null };
 
+export interface WatchlistAnomalyItem {
+  code: string;
+  provider_symbol: string;
+  name: string;
+  type: string;
+  reason: string;
+  keywords: string[];
+}
+
+export interface WatchlistAnomalies {
+  provider_id: "hithink_financial_api";
+  provider_contract: string;
+  as_of_ms: number | null;
+  unavailable_codes: string[];
+  items: WatchlistAnomalyItem[];
+}
+
 export interface Signal {
   plan_id: string;
   candidate_code: string;
@@ -93,6 +110,10 @@ export interface Overview {
 
 export async function getWatchlist(): Promise<WatchlistStatus> {
   return get<WatchlistStatus>("/watchlist");
+}
+
+export async function getWatchlistAnomalies(): Promise<WatchlistAnomalies> {
+  return get<WatchlistAnomalies>("/watchlist/anomalies");
 }
 
 export async function saveWatchlist(codes: string[], expectedEtag?: string) {

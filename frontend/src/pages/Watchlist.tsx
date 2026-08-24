@@ -1,13 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, X, RefreshCw, Star } from "lucide-react";
+import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import {
   addCodes,
+  filterAndSortWatchlistCodes,
   loadWatchAuthoritative,
   saveWatchAuthoritative,
+  type WatchlistSort,
 } from "@/lib/watchlist";
+import {
+  getWatchlistAnomalies,
+  type WatchlistAnomalies,
+  type WatchlistAnomalyItem,
+} from "@/lib/decisionCockpit";
 import { useLiveQuotes, isTradingHours } from "@/hooks/useLiveQuotes";
 import { cn } from "@/lib/utils";
 
@@ -15,6 +23,8 @@ import { cn } from "@/lib/utils";
 const color = (v: number | undefined) =>
   v == null ? "text-muted-foreground" : v > 0 ? "text-danger" : v < 0 ? "text-success" : "text-muted-foreground";
 const pct = (v: number | undefined) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v}%`);
+const money = (v: number | undefined) =>
+  v == null ? "—" : v >= 10_000 ? `${(v / 10_000).toFixed(2)} 亿` : `${v.toFixed(0)} 万`;
 
 const LIVE_KEY = "vr-watchlist-live";
 
@@ -41,6 +51,12 @@ export function Watchlist() {
   const [input, setInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
+  const [anomalies, setAnomalies] = useState<WatchlistAnomalies | null>(null);
+  const [anomalyLoading, setAnomalyLoading] = useState(false);
+  const [anomalyError, setAnomalyError] = useState<string | null>(null);
+  const [onlyAnomalies, setOnlyAnomalies] = useState(false);
+  const [sort, setSort] = useState<WatchlistSort>("anomaly");
+  const anomalyRunRef = useRef(0);
   // 实时行情默认**关闭**——开着会持续请求，让用户自己决定要不要开。
   const [live, setLive] = useState(loadLive);
 
@@ -70,6 +86,33 @@ export function Watchlist() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const loadAnomalies = useCallback(async () => {
+    const run = ++anomalyRunRef.current;
+    if (codes.length === 0) {
+      setAnomalies(null);
+      setAnomalyError(null);
+      setAnomalyLoading(false);
+      return;
+    }
+    setAnomalyLoading(true);
+    setAnomalyError(null);
+    try {
+      const result = await getWatchlistAnomalies();
+      if (run === anomalyRunRef.current) setAnomalies(result);
+    } catch (e) {
+      if (run === anomalyRunRef.current) {
+        setAnomalies(null);
+        setAnomalyError(e instanceof Error ? e.message : "异动数据暂不可用");
+      }
+    } finally {
+      if (run === anomalyRunRef.current) setAnomalyLoading(false);
+    }
+  }, [codes]);
+
+  useEffect(() => {
+    void loadAnomalies();
+  }, [loadAnomalies]);
 
   const persist = async (next: string[], msg?: string) => {
     setSaving(true);
@@ -103,6 +146,30 @@ export function Watchlist() {
     void persist(next);
   };
 
+  const anomalyByCode = useMemo(() => {
+    const grouped: Record<string, WatchlistAnomalyItem[]> = {};
+    for (const item of anomalies?.items ?? []) {
+      (grouped[item.code] ??= []).push(item);
+    }
+    return grouped;
+  }, [anomalies]);
+
+  const anomalyUnavailableCodes = useMemo(
+    () => new Set(anomalies?.unavailable_codes ?? []),
+    [anomalies],
+  );
+
+  const visibleCodes = useMemo(
+    () => filterAndSortWatchlistCodes(
+      codes,
+      quotes,
+      anomalies?.items ?? [],
+      sort,
+      onlyAnomalies && anomalies !== null,
+    ),
+    [anomalies, codes, onlyAnomalies, quotes, sort],
+  );
+
   const aiContext = useMemo(
     () =>
       codes.length
@@ -110,13 +177,17 @@ export function Watchlist() {
           codes
             .map((c) => {
               const q = quotes[c];
+              const events = anomalyByCode[c] ?? [];
+              const eventText = events.length
+                ? ` 异动：${events.map((item) => `${item.type}（${item.reason}）`).join("；")}`
+                : "";
               return q
-                ? `${q.name}(${c}) 现价${q.price} ${pct(q.change_pct)} PE(TTM)${q.pe_ttm ?? "—"} 换手${q.turnover_pct ?? "—"}%`
-                : `${c}（行情未取到）`;
+                ? `${q.name}(${c}) 现价${q.price} ${pct(q.change_pct)} PE(TTM)${q.pe_ttm ?? "—"} 换手${q.turnover_pct ?? "—"}%${eventText}`
+                : `${c}（行情未取到）${eventText}`;
             })
             .join("\n")
         : "还没有自选股。",
-    [codes, quotes],
+    [anomalyByCode, codes, quotes],
   );
 
   return (
@@ -187,7 +258,7 @@ export function Watchlist() {
       </GlassCard>
 
       <GlassCard glow>
-        <div className="mb-2 flex items-center justify-between">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h3 className="flex items-center gap-1.5 font-semibold">
             <Star className="h-4 w-4 text-primary" /> 自选总览
             <span className="text-xs font-normal text-muted-foreground">（{codes.length}）</span>
@@ -208,12 +279,15 @@ export function Watchlist() {
               </>
             )}
             <button
-              onClick={() => refreshQuotes()}
-              disabled={loading}
+              onClick={() => {
+                refreshQuotes();
+                void loadAnomalies();
+              }}
+              disabled={loading || anomalyLoading}
               className="text-muted-foreground hover:text-primary"
-              title="刷新价格"
+              title="刷新行情与异动"
             >
-              <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+              <RefreshCw className={cn("h-3.5 w-3.5", (loading || anomalyLoading) && "animate-spin")} />
             </button>
           </div>
         </div>
@@ -222,22 +296,97 @@ export function Watchlist() {
             还没有自选股，用上面的框粘贴一串代码批量添加。
           </p>
         ) : (
-          <div className="divide-y divide-border/40">
-            {codes.map((c) => {
-              const q = quotes[c];
-              return (
-                <div key={c} className="flex items-center justify-between gap-2 py-2 text-sm">
-                  <div className="min-w-0">
-                    <span className="font-mono">{c}</span>
-                    {q?.name && (
-                      <span className="ml-2 text-muted-foreground">{q.name}</span>
+          <>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/20 px-3 py-2 text-xs">
+              <div className="text-muted-foreground">
+                <span>HiThink · 当日异动快照</span>
+                {anomalies?.as_of_ms != null && (
+                  <span className="ml-2 font-mono">
+                    数据截至 {new Date(anomalies.as_of_ms).toLocaleString("zh-CN", { hour12: false })}
+                  </span>
+                )}
+                {anomalyError && <span className="ml-2 text-warning">异动数据暂不可用：{anomalyError}</span>}
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1.5 text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={onlyAnomalies}
+                    disabled={anomalies === null}
+                    onChange={(e) => setOnlyAnomalies(e.target.checked)}
+                  />
+                  仅看有异动
+                </label>
+                <select
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value as WatchlistSort)}
+                  className="rounded border border-border bg-background px-2 py-1"
+                  aria-label="自选排序"
+                >
+                  <option value="anomaly">异动优先</option>
+                  <option value="watchlist">自选顺序</option>
+                  <option value="change">涨跌幅绝对值</option>
+                  <option value="amount">成交额</option>
+                </select>
+              </div>
+            </div>
+            {visibleCodes.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground/60">
+                当前筛选下没有可显示的异动记录。
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[760px] text-sm" data-testid="watchlist-anomaly-table">
+                  <thead>
+                    <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
+                      <th className="px-2 py-2 font-normal">股票</th>
+                      <th className="px-2 py-2 text-right font-normal">最新价</th>
+                      <th className="px-2 py-2 text-right font-normal">涨跌幅</th>
+                      <th className="px-2 py-2 text-right font-normal">成交额</th>
+                      <th className="px-2 py-2 font-normal">当日异动事实</th>
+                      <th className="w-8 px-2 py-2" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/40">
+                    {visibleCodes.map((c) => {
+                      const q = quotes[c];
+                      const events = anomalyByCode[c] ?? [];
+                      return (
+                        <tr key={c} data-watchlist-code={c}>
+                  <td className="px-2 py-3">
+                    <Link to={`/stock-data?code=${c}`} className="font-mono hover:text-primary hover:underline">
+                      {c}
+                    </Link>
+                    {(q?.name || events[0]?.name) && (
+                      <span className="ml-2 text-muted-foreground">{q?.name || events[0]?.name}</span>
                     )}
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono">{q?.price ?? "—"}</span>
-                    <span className={cn("font-mono", color(q?.change_pct))}>
+                  </td>
+                  <td className="px-2 py-3 text-right font-mono">{q?.price ?? "—"}</td>
+                  <td className={cn("px-2 py-3 text-right font-mono", color(q?.change_pct))}>
                       {pct(q?.change_pct)}
-                    </span>
+                  </td>
+                  <td className="px-2 py-3 text-right font-mono">{money(q?.amount_wan)}</td>
+                  <td className="max-w-[420px] px-2 py-3">
+                    {events.length > 0 ? (
+                      <div className="space-y-1">
+                        {events.map((item, index) => (
+                          <div key={`${item.provider_symbol}-${item.type}-${index}`}>
+                            <span className="mr-2 rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">{item.type}</span>
+                            <span className="text-muted-foreground">{item.reason || "当前数据源未提供原因"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : anomalyLoading ? (
+                      <span className="text-muted-foreground/60">读取中…</span>
+                    ) : anomalies && anomalyUnavailableCodes.has(c) ? (
+                      <span className="text-warning">当前数据源未覆盖该标的异动查询</span>
+                    ) : anomalies ? (
+                      <span className="text-muted-foreground/60">当前数据源未返回异动记录</span>
+                    ) : (
+                      <span className="text-warning">异动数据暂不可用</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-3 text-right">
                     <button
                       onClick={() => remove(c)}
                       disabled={saving}
@@ -246,11 +395,15 @@ export function Watchlist() {
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                  </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         )}
       </GlassCard>
     </div>
