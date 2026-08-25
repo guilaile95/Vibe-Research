@@ -20,6 +20,7 @@ from typing import Any, Iterable
 import duckdb
 
 SCHEMA_VERSION = "research-data-plane.v0.1"
+FULL_MARKET_SCHEMA_VERSION = "research-data-plane.full-market.v0.1"
 DATASET_ID = "ashare_daily_unadjusted"
 PROVIDER_ID = "local_bulk_dump"
 ADJUSTMENT = "UNADJUSTED"
@@ -29,6 +30,47 @@ _CODE_RE = re.compile(r"^\d{6}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _MAX_LIMIT = 1000
 _MAX_OFFSET = 10_000_000
+_FULL_MARKET_METRICS = frozenset(
+    {
+        "code",
+        "latest_date",
+        "latest_close",
+        "return_5d",
+        "return_20d",
+        "return_60d",
+        "ma20",
+        "ma60",
+        "close_vs_ma20",
+        "close_vs_ma60",
+        "avg_volume_20d",
+        "current_volume",
+        "volume_ratio_20d",
+    }
+)
+_FULL_MARKET_NUMERIC_METRICS = frozenset(
+    {
+        "latest_close",
+        "return_5d",
+        "return_20d",
+        "return_60d",
+        "ma20",
+        "ma60",
+        "close_vs_ma20",
+        "close_vs_ma60",
+        "avg_volume_20d",
+        "current_volume",
+        "volume_ratio_20d",
+    }
+)
+_FULL_MARKET_OPERATORS = frozenset({"gt", "gte", "lt", "lte", "eq", "neq"})
+_FULL_MARKET_OPERATORS_SQL = {
+    "gt": ">",
+    "gte": ">=",
+    "lt": "<",
+    "lte": "<=",
+    "eq": "=",
+    "neq": "<>",
+}
 
 
 class ResearchDataPlaneError(RuntimeError):
@@ -37,6 +79,10 @@ class ResearchDataPlaneError(RuntimeError):
 
 class ResearchDataPlaneValidationError(ResearchDataPlaneError):
     pass
+
+
+class ResearchDataPlaneQueryValidationError(ResearchDataPlaneValidationError):
+    """Invalid full-market query parameters, distinct from artifact corruption."""
 
 
 class ResearchDataPlaneUnavailableError(ResearchDataPlaneError):
@@ -234,13 +280,54 @@ def import_csv(
     return manifest
 
 
+def _manifest_date(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not _DATE_RE.fullmatch(value):
+        raise ResearchDataPlaneValidationError(f"research dataset manifest {field} is invalid")
+    try:
+        date.fromisoformat(value)
+    except ValueError as exc:
+        raise ResearchDataPlaneValidationError(f"research dataset manifest {field} is invalid") from exc
+    return value
+
+
+def _manifest_datetime(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ResearchDataPlaneValidationError(f"research dataset manifest {field} is invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ResearchDataPlaneValidationError(f"research dataset manifest {field} is invalid") from exc
+    if parsed.tzinfo is None:
+        raise ResearchDataPlaneValidationError(f"research dataset manifest {field} must include timezone")
+    return value
+
+
+def _manifest_count(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ResearchDataPlaneValidationError(f"research dataset manifest {field} is invalid")
+    return value
+
+
+def _read_artifact_bytes(artifact: Path) -> bytes:
+    try:
+        if not artifact.is_file():
+            raise ResearchDataPlaneUnavailableError("research dataset artifact is unavailable")
+        return artifact.read_bytes()
+    except ResearchDataPlaneUnavailableError:
+        raise
+    except OSError as exc:
+        raise ResearchDataPlaneUnavailableError("research dataset artifact is unreadable") from exc
+
+
 def read_manifest(root: str | Path | None = None) -> dict[str, Any]:
     root_path = resolve_root(root)
     path = _manifest_path(root_path)
-    if not path.is_file():
-        raise ResearchDataPlaneUnavailableError("research bulk dataset is not configured")
     try:
+        if not path.is_file():
+            raise ResearchDataPlaneUnavailableError("research bulk dataset is not configured")
         manifest = json.loads(path.read_text(encoding="utf-8"))
+    except ResearchDataPlaneUnavailableError:
+        raise
     except (OSError, json.JSONDecodeError) as exc:
         raise ResearchDataPlaneUnavailableError("research dataset manifest is unreadable") from exc
     if not isinstance(manifest, dict) or manifest.get("schema_version") != SCHEMA_VERSION:
@@ -249,7 +336,9 @@ def read_manifest(root: str | Path | None = None) -> dict[str, Any]:
         "dataset_id",
         "provider_id",
         "adjustment",
+        "license_status",
         "source_kind",
+        "source_name",
         "artifact_sha256",
         "artifact_file",
         "row_count",
@@ -261,17 +350,72 @@ def read_manifest(root: str | Path | None = None) -> dict[str, Any]:
     }
     if not required.issubset(manifest):
         raise ResearchDataPlaneValidationError("research dataset manifest is incomplete")
+    expected_values = {
+        "schema_version": SCHEMA_VERSION,
+        "dataset_id": DATASET_ID,
+        "provider_id": PROVIDER_ID,
+        "adjustment": ADJUSTMENT,
+        "license_status": LICENSE_STATUS,
+        "source_kind": "LOCAL_BULK_DUMP",
+        "update_semantics": "immutable_artifact_per_import",
+    }
+    for field, expected in expected_values.items():
+        if manifest.get(field) != expected:
+            raise ResearchDataPlaneValidationError(
+                f"research dataset manifest {field} is invalid"
+            )
+    if not isinstance(manifest["source_name"], str) or not manifest["source_name"].strip():
+        raise ResearchDataPlaneValidationError("research dataset manifest source_name is invalid")
+    row_count = _manifest_count(manifest["row_count"], "row_count")
+    code_count = _manifest_count(manifest["code_count"], "code_count")
+    if code_count > row_count:
+        raise ResearchDataPlaneValidationError(
+            "research dataset manifest code_count exceeds row_count"
+        )
+    coverage_start = _manifest_date(manifest["coverage_start"], "coverage_start")
+    coverage_end = _manifest_date(manifest["coverage_end"], "coverage_end")
+    if coverage_start > coverage_end:
+        raise ResearchDataPlaneValidationError(
+            "research dataset manifest coverage_start exceeds coverage_end"
+        )
+    _manifest_datetime(manifest["imported_at"], "imported_at")
     digest = manifest["artifact_sha256"]
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise ResearchDataPlaneValidationError("research dataset artifact hash is invalid")
     artifact = _artifact_path(root_path, digest)
     if manifest.get("artifact_file") != artifact.name:
         raise ResearchDataPlaneValidationError("research dataset artifact filename is invalid")
-    if not artifact.is_file():
-        raise ResearchDataPlaneUnavailableError("research dataset artifact is unavailable")
-    actual_digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    actual_digest = hashlib.sha256(_read_artifact_bytes(artifact)).hexdigest()
     if actual_digest != digest:
         raise ResearchDataPlaneValidationError("research dataset artifact hash mismatch")
+    connection = duckdb.connect(database=":memory:")
+    try:
+        try:
+            stats = connection.execute(
+                "SELECT COUNT(*), COUNT(DISTINCT code), "
+                "CAST(MIN(trade_date) AS VARCHAR), CAST(MAX(trade_date) AS VARCHAR) "
+                "FROM read_parquet(?)",
+                [str(artifact)],
+            ).fetchone()
+        except Exception as exc:
+            raise ResearchDataPlaneValidationError(
+                "research dataset artifact schema is invalid"
+            ) from exc
+    finally:
+        connection.close()
+    artifact_row_count = int(stats[0] or 0)
+    artifact_code_count = int(stats[1] or 0)
+    artifact_coverage_start = stats[2]
+    artifact_coverage_end = stats[3]
+    if (
+        artifact_row_count != row_count
+        or artifact_code_count != code_count
+        or artifact_coverage_start != coverage_start
+        or artifact_coverage_end != coverage_end
+    ):
+        raise ResearchDataPlaneValidationError(
+            "research dataset manifest metadata does not match artifact"
+        )
     return manifest
 
 
@@ -372,6 +516,327 @@ def query_daily_bars(
         "returned_rows": len(rows),
         "next_offset": offset + len(rows) if len(rows) == limit else None,
         "limitations": ["Research Runtime 数据不是 Canonical Fact Authority。"],
+    }
+
+
+def _validate_full_market_query(
+    *,
+    as_of: str | None,
+    latest: bool,
+    filter_metric: str | None,
+    filter_operator: str | None,
+    filter_value: float | None,
+    sort_by: str,
+    sort_order: str,
+    limit: int,
+    offset: int,
+) -> None:
+    if as_of is not None:
+        if not _DATE_RE.fullmatch(as_of):
+            raise ResearchDataPlaneQueryValidationError("as_of must use YYYY-MM-DD")
+        try:
+            date.fromisoformat(as_of)
+        except ValueError as exc:
+            raise ResearchDataPlaneQueryValidationError("as_of is invalid") from exc
+    if not isinstance(latest, bool):
+        raise ResearchDataPlaneQueryValidationError("latest must be boolean")
+    if not latest and as_of is None:
+        raise ResearchDataPlaneQueryValidationError("as_of is required when latest=false")
+    if filter_metric is None:
+        if filter_operator is not None or filter_value is not None:
+            raise ResearchDataPlaneQueryValidationError(
+                "filter_metric is required when a filter is provided"
+            )
+    else:
+        if filter_metric not in _FULL_MARKET_NUMERIC_METRICS:
+            raise ResearchDataPlaneQueryValidationError(
+                f"filter_metric must be a numeric named metric: {', '.join(sorted(_FULL_MARKET_NUMERIC_METRICS))}"
+            )
+        if filter_operator is None or filter_operator not in _FULL_MARKET_OPERATORS:
+            raise ResearchDataPlaneQueryValidationError(
+                f"filter_operator must be one of: {', '.join(sorted(_FULL_MARKET_OPERATORS))}"
+            )
+        if filter_value is None:
+            raise ResearchDataPlaneQueryValidationError("filter_value is required when filter_metric is provided")
+        try:
+            numeric = float(filter_value)
+        except (TypeError, ValueError) as exc:
+            raise ResearchDataPlaneQueryValidationError("filter_value must be numeric") from exc
+        if not math.isfinite(numeric):
+            raise ResearchDataPlaneQueryValidationError("filter_value must be finite")
+    if sort_by not in _FULL_MARKET_METRICS:
+        raise ResearchDataPlaneQueryValidationError(
+            f"sort_by must be one of: {', '.join(sorted(_FULL_MARKET_METRICS))}"
+        )
+    if sort_order not in {"asc", "desc"}:
+        raise ResearchDataPlaneQueryValidationError("sort_order must be asc or desc")
+    if not 1 <= limit <= _MAX_LIMIT:
+        raise ResearchDataPlaneQueryValidationError(f"limit must be between 1 and {_MAX_LIMIT}")
+    if not 0 <= offset <= _MAX_OFFSET:
+        raise ResearchDataPlaneQueryValidationError(f"offset must be between 0 and {_MAX_OFFSET}")
+
+
+def _full_market_provenance(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_kind": manifest.get("source_kind"),
+        "source_name": manifest.get("source_name"),
+        "artifact_sha256": manifest["artifact_sha256"],
+        "license_status": manifest.get("license_status", LICENSE_STATUS),
+    }
+
+
+def build_full_market_unavailable_envelope(
+    reason: str,
+    *,
+    as_of: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": FULL_MARKET_SCHEMA_VERSION,
+        "dataset_id": DATASET_ID,
+        "provider_id": PROVIDER_ID,
+        "adjustment": ADJUSTMENT,
+        "status": "unavailable",
+        "fetched_at": _utc_now(),
+        "as_of": as_of,
+        "latest_date": None,
+        "coverage": None,
+        "provenance": {
+            "source_kind": "LOCAL_BULK_DUMP",
+            "source_name": None,
+            "artifact_sha256": None,
+            "license_status": LICENSE_STATUS,
+        },
+        "breadth": {
+            "ma20": {
+                "breadth": None,
+                "above_count": 0,
+                "evaluable_count": 0,
+                "insufficient_count": 0,
+                "status": "INSUFFICIENT_HISTORY",
+            },
+            "ma60": {
+                "breadth": None,
+                "above_count": 0,
+                "evaluable_count": 0,
+                "insufficient_count": 0,
+                "status": "INSUFFICIENT_HISTORY",
+            },
+        },
+        "rows": [],
+        "returned_rows": 0,
+        "total_rows": 0,
+        "next_offset": None,
+        "limitations": [reason, "未将缺失数据伪装成事实或回退到逐票 HTTP/K 线请求。"],
+    }
+
+
+def query_full_market(
+    *,
+    root: str | Path | None = None,
+    as_of: str | None = None,
+    latest: bool = True,
+    filter_metric: str | None = None,
+    filter_operator: str | None = None,
+    filter_value: float | None = None,
+    sort_by: str = "code",
+    sort_order: str = "asc",
+    sort_metric: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Build one bounded full-market cross-section from the immutable Parquet artifact.
+
+    This path intentionally performs set-based DuckDB aggregation. It does not invoke
+    Screener's per-stock evaluator, any HTTP provider, or the legacy K-line client.
+    ``latest=true`` resolves the latest available observation at or before ``as_of``;
+    ``latest=false`` requires an explicit ``as_of`` date.
+    """
+    if sort_metric is not None:
+        if sort_by != "code":
+            raise ResearchDataPlaneValidationError("use only one of sort_by and sort_metric")
+        sort_by = sort_metric
+    _validate_full_market_query(
+        as_of=as_of,
+        latest=latest,
+        filter_metric=filter_metric,
+        filter_operator=filter_operator,
+        filter_value=filter_value,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        limit=limit,
+        offset=offset,
+    )
+    manifest = read_manifest(root)
+    root_path = resolve_root(root)
+    artifact = _artifact_path(root_path, str(manifest["artifact_sha256"]))
+    connection = duckdb.connect(database=":memory:")
+    try:
+        try:
+            target_row = connection.execute(
+                "SELECT MAX(trade_date) FROM read_parquet(?) "
+                "WHERE trade_date <= CAST(? AS DATE)",
+                [str(artifact), as_of or manifest["coverage_end"]],
+            ).fetchone()
+            target_date = target_row[0] if target_row else None
+            if target_date is None:
+                return build_full_market_unavailable_envelope(
+                    "as_of 之前没有可用的研究数据",
+                    as_of=as_of,
+                )
+            target_date_text = target_date.isoformat() if hasattr(target_date, "isoformat") else str(target_date)
+
+            base_cte = (
+                "WITH ranked AS ("
+                "SELECT code, trade_date, close, volume, "
+                "ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_date DESC) AS rn "
+                "FROM read_parquet(?) WHERE trade_date <= CAST(? AS DATE)"
+                "), features AS ("
+                "SELECT code, "
+                "MAX(CASE WHEN rn = 1 THEN CAST(trade_date AS VARCHAR) END) AS latest_date, "
+                "MAX(CASE WHEN rn = 1 THEN close END) AS latest_close, "
+                "MAX(CASE WHEN rn = 6 THEN close END) AS prior_5_close, "
+                "MAX(CASE WHEN rn = 21 THEN close END) AS prior_20_close, "
+                "MAX(CASE WHEN rn = 61 THEN close END) AS prior_60_close, "
+                "AVG(close) FILTER (WHERE rn <= 20) AS ma20, "
+                "AVG(close) FILTER (WHERE rn <= 60) AS ma60, "
+                "AVG(volume) FILTER (WHERE rn <= 20) AS avg_volume_20d, "
+                "MAX(CASE WHEN rn = 1 THEN volume END) AS current_volume, "
+                "COUNT(*) AS observations_count, "
+                "SUM(CASE WHEN rn <= 20 THEN 1 ELSE 0 END) AS observations_20, "
+                "SUM(CASE WHEN rn <= 60 THEN 1 ELSE 0 END) AS observations_60 "
+                "FROM ranked GROUP BY code"
+                "), computed AS ("
+                "SELECT code, latest_date, latest_close, "
+                "CASE WHEN observations_count >= 6 THEN latest_close / prior_5_close - 1 END AS return_5d, "
+                "CASE WHEN observations_count >= 21 THEN latest_close / prior_20_close - 1 END AS return_20d, "
+                "CASE WHEN observations_count >= 61 THEN latest_close / prior_60_close - 1 END AS return_60d, "
+                "CASE WHEN observations_20 >= 20 THEN ma20 END AS ma20, "
+                "CASE WHEN observations_60 >= 60 THEN ma60 END AS ma60, "
+                "CASE WHEN observations_20 >= 20 THEN latest_close / ma20 - 1 END AS close_vs_ma20, "
+                "CASE WHEN observations_60 >= 60 THEN latest_close / ma60 - 1 END AS close_vs_ma60, "
+                "CASE WHEN observations_20 >= 20 THEN avg_volume_20d END AS avg_volume_20d, "
+                "current_volume, "
+                "CASE WHEN observations_20 >= 20 AND avg_volume_20d > 0 THEN current_volume / avg_volume_20d END AS volume_ratio_20d, "
+                "observations_count, "
+                "CASE WHEN observations_count >= 6 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS return_5d_status, "
+                "CASE WHEN observations_count >= 21 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS return_20d_status, "
+                "CASE WHEN observations_count >= 61 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS return_60d_status, "
+                "CASE WHEN observations_20 >= 20 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS ma20_status, "
+                "CASE WHEN observations_60 >= 60 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS ma60_status, "
+                "CASE WHEN observations_20 >= 20 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS close_vs_ma20_status, "
+                "CASE WHEN observations_60 >= 60 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS close_vs_ma60_status, "
+                "CASE WHEN observations_20 >= 20 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS avg_volume_20d_status, "
+                "CASE WHEN observations_20 >= 20 AND avg_volume_20d > 0 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS volume_ratio_20d_status "
+                "FROM features"
+                ") "
+            )
+            cte_params = [str(artifact), target_date_text]
+            stats = connection.execute(
+                base_cte
+                + "SELECT COUNT(*), "
+                + "COUNT(*) FILTER (WHERE ma20_status = 'normal'), "
+                + "COUNT(*) FILTER (WHERE ma20_status != 'normal'), "
+                + "COUNT(*) FILTER (WHERE close_vs_ma20 > 0), "
+                + "COUNT(*) FILTER (WHERE ma60_status = 'normal'), "
+                + "COUNT(*) FILTER (WHERE ma60_status != 'normal'), "
+                + "COUNT(*) FILTER (WHERE close_vs_ma60 > 0) FROM computed",
+                cte_params,
+            ).fetchone()
+            total_universe = int(stats[0] or 0)
+            ma20_evaluable = int(stats[1] or 0)
+            ma20_insufficient = int(stats[2] or 0)
+            ma20_above = int(stats[3] or 0)
+            ma60_evaluable = int(stats[4] or 0)
+            ma60_insufficient = int(stats[5] or 0)
+            ma60_above = int(stats[6] or 0)
+
+            filter_clause = ""
+            filter_params: list[Any] = []
+            if filter_metric is not None:
+                filter_clause = f" WHERE {filter_metric} {_FULL_MARKET_OPERATORS_SQL[filter_operator]} ?"
+                filter_params.append(float(filter_value))
+            rows_query = (
+                base_cte
+                + "SELECT code, latest_date, latest_close, return_5d, return_20d, return_60d, "
+                "ma20, ma60, close_vs_ma20, close_vs_ma60, avg_volume_20d, current_volume, volume_ratio_20d, "
+                "observations_count, return_5d_status, return_20d_status, return_60d_status, ma20_status, ma60_status, "
+                "close_vs_ma20_status, close_vs_ma60_status, avg_volume_20d_status, volume_ratio_20d_status "
+                "FROM computed"
+                + filter_clause
+                + f" ORDER BY {sort_by} {sort_order.upper()} NULLS LAST, code ASC LIMIT ? OFFSET ?"
+            )
+            rows_result = connection.execute(
+                rows_query,
+                cte_params + filter_params + [limit, offset],
+            ).fetchall()
+            count_query = base_cte + "SELECT COUNT(*) FROM computed" + filter_clause
+            filtered_total = int(
+                connection.execute(count_query, cte_params + filter_params).fetchone()[0] or 0
+            )
+        except Exception as exc:
+            raise ResearchDataPlaneValidationError("full-market cross-section query failed closed") from exc
+    finally:
+        connection.close()
+
+    columns = (
+        "code", "latest_date", "latest_close", "return_5d", "return_20d", "return_60d",
+        "ma20", "ma60", "close_vs_ma20", "close_vs_ma60", "avg_volume_20d", "current_volume",
+        "volume_ratio_20d", "observations_count", "return_5d_status", "return_20d_status",
+        "return_60d_status", "ma20_status", "ma60_status", "close_vs_ma20_status",
+        "close_vs_ma60_status", "avg_volume_20d_status", "volume_ratio_20d_status",
+    )
+    output_rows: list[dict[str, Any]] = []
+    for raw in rows_result:
+        row = dict(zip(columns, raw))
+        metric_status = {
+            key: row[f"{key}_status"]
+            for key in (
+                "return_5d", "return_20d", "return_60d", "ma20", "ma60",
+                "close_vs_ma20", "close_vs_ma60", "avg_volume_20d", "volume_ratio_20d",
+            )
+        }
+        row["metric_status"] = metric_status
+        output_rows.append(row)
+
+    def breadth_payload(evaluable: int, insufficient: int, above: int) -> dict[str, Any]:
+        return {
+            "breadth": (above / evaluable) if evaluable else None,
+            "above_count": above,
+            "evaluable_count": evaluable,
+            "insufficient_count": insufficient,
+            "status": "normal" if evaluable else "INSUFFICIENT_HISTORY",
+        }
+
+    return {
+        "schema_version": FULL_MARKET_SCHEMA_VERSION,
+        "dataset_id": manifest["dataset_id"],
+        "provider_id": manifest.get("provider_id", PROVIDER_ID),
+        "adjustment": manifest.get("adjustment", ADJUSTMENT),
+        "status": "normal",
+        "fetched_at": manifest.get("imported_at"),
+        "as_of": target_date_text,
+        "latest_date": target_date_text,
+        "coverage": {
+            "start": manifest["coverage_start"],
+            "end": manifest["coverage_end"],
+            "row_count": manifest["row_count"],
+            "code_count": manifest["code_count"],
+            "universe_count": total_universe,
+        },
+        "provenance": _full_market_provenance(manifest),
+        "breadth": {
+            "ma20": breadth_payload(ma20_evaluable, ma20_insufficient, ma20_above),
+            "ma60": breadth_payload(ma60_evaluable, ma60_insufficient, ma60_above),
+        },
+        "rows": output_rows,
+        "returned_rows": len(output_rows),
+        "total_rows": filtered_total,
+        "next_offset": offset + len(output_rows) if offset + len(output_rows) < filtered_total else None,
+        "limitations": [
+            "Research Runtime 数据不是 Canonical Fact Authority。",
+            "当前 schema 仅提供 volume；未声明 turnover、amount 或 liquidity amount。",
+            "各指标在历史观测不足时返回 null，并标记 INSUFFICIENT_HISTORY。",
+        ],
     }
 
 

@@ -88,6 +88,43 @@ def test_manifest_missing_query_field_fails_closed(tmp_path):
         rdp.read_manifest(root)
 
 
+def test_manifest_semantic_corruption_fails_closed(tmp_path):
+    root = tmp_path / "rdp"
+    rdp.import_csv(_source(tmp_path), root=root)
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["coverage_end"] = "2027-01-01"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(rdp.ResearchDataPlaneValidationError, match="metadata does not match"):
+        rdp.read_manifest(root)
+
+
+def test_manifest_metadata_type_corruption_fails_closed(tmp_path):
+    root = tmp_path / "rdp"
+    rdp.import_csv(_source(tmp_path), root=root)
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["row_count"] = "3"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(rdp.ResearchDataPlaneValidationError, match="row_count is invalid"):
+        rdp.read_manifest(root)
+
+
+def test_artifact_io_failure_is_unavailable(monkeypatch, tmp_path):
+    root = tmp_path / "rdp"
+    rdp.import_csv(_source(tmp_path), root=root)
+    original = Path.read_bytes
+
+    def fail_for_artifact(path):
+        if path.suffix == ".parquet":
+            raise OSError("simulated artifact read failure")
+        return original(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_for_artifact)
+    with pytest.raises(rdp.ResearchDataPlaneUnavailableError, match="artifact is unreadable"):
+        rdp.read_manifest(root)
+
+
 def test_artifact_tampering_fails_closed(tmp_path):
     root = tmp_path / "rdp"
     manifest = rdp.import_csv(_source(tmp_path), root=root)
