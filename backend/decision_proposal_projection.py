@@ -530,6 +530,7 @@ def project_decision_proposal(
     hard_risk_evaluation: HardRiskEvaluation | None,
     material_change: MaterialChangeProjection | None,
     sell_engine: SellEngineProjection | None,
+    view_provenance: Mapping[str, Any] | None = None,
 ) -> DecisionProposal:
     """Compose one exact-scope, uncommitted Formal Decision Proposal."""
 
@@ -656,20 +657,24 @@ def project_decision_proposal(
         authority_refs.extend(material_change.authority_refs)
     if sell_engine is not None:
         authority_refs.extend(sell_engine.authority_refs)
-    view_provenance = {
-        "asset_view": {
-            "view_origin": "USER_DRAFT",
-            "provenance_refs": [],
-        },
-        "trade_view": {
-            "view_origin": "USER_DRAFT",
-            "provenance_refs": [],
-        },
-        "portfolio_view": {
-            "view_origin": "USER_DRAFT",
-            "provenance_refs": [],
-        },
-    }
+    view_provenance = (
+        _view_provenance(view_provenance)
+        if view_provenance is not None
+        else {
+            "asset_view": {
+                "view_origin": "USER_DRAFT",
+                "provenance_refs": [],
+            },
+            "trade_view": {
+                "view_origin": "USER_DRAFT",
+                "provenance_refs": [],
+            },
+            "portfolio_view": {
+                "view_origin": "USER_DRAFT",
+                "provenance_refs": [],
+            },
+        }
+    )
     return DecisionProposal(
         schema_version=SCHEMA_VERSION,
         proposal_status=PROPOSAL_STATUS,

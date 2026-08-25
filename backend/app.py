@@ -78,6 +78,7 @@ import position_reality_service as prs
 import account_reality_router
 import cash_event_router
 import campaign_router
+import campaign_ai_draft_router
 import holdings_campaign_composition_router
 import decision_inbox_runtime_router
 import decision_commit_router
@@ -403,6 +404,8 @@ app.include_router(position_reality_router.router)
 app.include_router(account_reality_router.router)
 app.include_router(cash_event_router.router)
 app.include_router(campaign_router.router)
+# #206 explicit server-owned Campaign AI Draft; ephemeral witness only.
+app.include_router(campaign_ai_draft_router.router)
 # P0-DI2A canonical Actual Holding → current Campaign read model
 app.include_router(holdings_campaign_composition_router.router)
 # P0-DI2 current-only Decision Inbox runtime read model

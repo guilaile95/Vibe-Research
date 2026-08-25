@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 import campaign_service
+import campaign_ai_draft_service as ai_draft_service
 import campaign_critical_data_runtime as critical_data_runtime
 import campaign_critical_data_projection as critical_data_projection
 import decision_assurance_projection as assurance
@@ -124,24 +125,30 @@ def _require_campaign_id(value: object) -> str:
     return value
 
 
+def _require_json(value: object, field: str) -> Any:
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
+        return json.loads(encoded)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise DecisionCommitInputError(f"{field} is not strict JSON") from exc
+
+
 def _require_mapping(value: object, field: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise DecisionCommitInputError(f"{field} must be a JSON object")
-    try:
-        json.dumps(value, ensure_ascii=False, allow_nan=False)
-    except (TypeError, ValueError) as exc:
-        raise DecisionCommitInputError(f"{field} is not JSON-safe") from exc
-    return value
+    normalized = _require_json(value, field)
+    if not isinstance(normalized, dict):
+        raise DecisionCommitInputError(f"{field} must be a JSON object")
+    return normalized
 
 
 def _require_list(value: object, field: str) -> list[Any]:
     if not isinstance(value, list):
         raise DecisionCommitInputError(f"{field} must be a JSON array")
-    try:
-        json.dumps(value, ensure_ascii=False, allow_nan=False)
-    except (TypeError, ValueError) as exc:
-        raise DecisionCommitInputError(f"{field} is not JSON-safe") from exc
-    return copy.deepcopy(value)
+    normalized = _require_json(value, field)
+    if not isinstance(normalized, list):
+        raise DecisionCommitInputError(f"{field} must be a JSON array")
+    return normalized
 
 
 def _require_fingerprint(value: object) -> str:
@@ -778,6 +785,7 @@ def _build_proposal(
     ports: RuntimePorts,
     critical_data: Mapping[str, Any],
     evidence_reader: Callable[[Mapping[str, Any]], Sequence[evidence_delta.NormalizedEvidenceItem]] | None = None,
+    view_provenance: Mapping[str, Any] | None = None,
 ) -> tuple[proposal_projection.DecisionProposal, AuthorityEvaluations]:
     # ``raw_thesis`` is passed in, never read by this function.  This is the
     # single-read guarantee for Current Thesis inside one snapshot.
@@ -811,6 +819,7 @@ def _build_proposal(
         hard_risk_evaluation=authorities.hard_risk,
         material_change=authorities.material_change,
         sell_engine=authorities.sell_engine,
+        view_provenance=view_provenance,
     )
     return result, authorities
 
@@ -907,8 +916,10 @@ def _preview_response(
     authorities: AuthorityEvaluations,
     drafts: Mapping[str, Any],
     fingerprint: str,
+    *,
+    draft_witness: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "schema_version": SCHEMA_VERSION,
         "proposal": proposal.to_dict(),
         "proposal_fingerprint": fingerprint,
@@ -945,6 +956,9 @@ def _preview_response(
             "expected_proposal_fingerprint": fingerprint,
         },
     }
+    if draft_witness is not None:
+        result["draft_witness"] = copy.deepcopy(dict(draft_witness))
+    return result
 
 
 def preview_decision_proposal(
@@ -957,7 +971,20 @@ def preview_decision_proposal(
     """Read/compute an uncommitted Proposal; never writes Frozen storage."""
 
     campaign_key = _require_campaign_id(campaign_id)
-    drafts = _validate_draft_inputs(payload)
+    if not isinstance(payload, Mapping):
+        raise DecisionCommitInputError("preview payload must be a JSON object")
+    allowed_preview = {
+        "asset_view", "trade_view", "portfolio_view", "review_by",
+        "key_assumptions", "event_invalidation_conditions", "strategy_horizon",
+        "draft_witness",
+    }
+    extra_preview = set(payload) - allowed_preview
+    if extra_preview:
+        raise DecisionCommitInputError(f"unknown proposal input: {sorted(extra_preview)}")
+    draft_witness = payload.get("draft_witness")
+    draft_payload = dict(payload)
+    draft_payload.pop("draft_witness", None)
+    drafts = _validate_draft_inputs(draft_payload)
     snapshot_as_of = utc_now_iso() if as_of is None else as_of
     if not isinstance(snapshot_as_of, str):
         raise DecisionCommitInputError("as_of must be a string")
@@ -967,6 +994,24 @@ def preview_decision_proposal(
     raw_thesis = _read_thesis_once(ports, campaign_key)
     frozen = _read_frozen(ports, campaign)
     critical_data = _read_critical_data(ports, campaign, snapshot_as_of)
+    validated_witness = None
+    provenance = None
+    if draft_witness is not None:
+        if raw_thesis is None:
+            raise ProposalStaleError("AI Draft witness Current Thesis unavailable")
+        context = ai_draft_service._read_context(
+            campaign, raw_thesis, as_of=snapshot_as_of, critical_data=critical_data
+        )
+        try:
+            validated_witness = ai_draft_service.validate_witness_for_context(
+                draft_witness,
+                campaign=campaign,
+                current_thesis=raw_thesis,
+                context=context,
+            )
+        except ai_draft_service.CampaignAIDraftWitnessStaleError as exc:
+            raise ProposalStaleError("AI Draft witness is stale") from exc
+        provenance = ai_draft_service.provenance_for_draft(validated_witness, drafts)
     result, authorities = _build_proposal(
         campaign=campaign,
         as_of=snapshot_as_of,
@@ -975,11 +1020,18 @@ def preview_decision_proposal(
         drafts=drafts,
         ports=ports,
         critical_data=critical_data,
+        view_provenance=provenance,
     )
     fingerprint = _fingerprint(
         proposal=result, drafts=drafts, critical_data=critical_data
     )
-    return _preview_response(result, authorities, drafts, fingerprint)
+    return _preview_response(
+        result,
+        authorities,
+        drafts,
+        fingerprint,
+        draft_witness=validated_witness,
+    )
 
 
 def _optional_challenge_id(payload: Mapping[str, Any]) -> str | None:
@@ -1133,6 +1185,7 @@ def commit_decision_proposal(
         "event_invalidation_conditions",
         "strategy_horizon",
         "challenge_id",
+        "draft_witness",
     }
     extra = set(payload) - allowed
     if extra:
@@ -1143,6 +1196,7 @@ def commit_decision_proposal(
     as_of = payload.get("as_of")
     if not isinstance(as_of, str) or as_of != _canonical_utc(as_of, "as_of"):
         raise DecisionCommitInputError("commit as_of must be the exact canonical preview instant")
+    draft_witness = payload.get("draft_witness")
     drafts = _validate_draft_inputs(
         {key: payload.get(key) for key in (
             "asset_view",
@@ -1160,6 +1214,24 @@ def commit_decision_proposal(
         raw_thesis = _read_thesis_once(ports, campaign_key)
         frozen = _read_frozen(ports, campaign)
         critical_data = _read_critical_data(ports, campaign, as_of)
+        validated_witness = None
+        provenance = None
+        if draft_witness is not None:
+            if raw_thesis is None:
+                raise ProposalStaleError("AI Draft witness Current Thesis unavailable")
+            context = ai_draft_service._read_context(
+                campaign, raw_thesis, as_of=as_of, critical_data=critical_data
+            )
+            try:
+                validated_witness = ai_draft_service.validate_witness_for_context(
+                    draft_witness,
+                    campaign=campaign,
+                    current_thesis=raw_thesis,
+                    context=context,
+                )
+            except ai_draft_service.CampaignAIDraftWitnessStaleError as exc:
+                raise ProposalStaleError("AI Draft witness is stale") from exc
+            provenance = ai_draft_service.provenance_for_draft(validated_witness, drafts)
         evidence_cache: tuple[evidence_delta.NormalizedEvidenceItem, ...] | None = None
 
         def snapshot_evidence_reader(
@@ -1179,6 +1251,7 @@ def commit_decision_proposal(
             ports=ports,
             critical_data=critical_data,
             evidence_reader=snapshot_evidence_reader,
+            view_provenance=provenance,
         )
         fingerprint = _fingerprint(
             proposal=result, drafts=drafts, critical_data=critical_data
@@ -1220,6 +1293,7 @@ def commit_decision_proposal(
                 ports=ports,
                 critical_data=critical_data,
                 evidence_reader=snapshot_evidence_reader,
+                view_provenance=provenance,
             )
             if _fingerprint(
                 proposal=replay_result,

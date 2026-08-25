@@ -270,6 +270,34 @@ def test_stale_thesis_revision_is_zero_write(tmp_path):
     assert not db_path.exists()
 
 
+def test_finalize_forwards_optional_draft_witness_to_preview(tmp_path):
+    commit_ports, _state = _ports(_thesis())
+    preview = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=commit_ports, as_of=AS_OF
+    )
+    witness = {"draft_id": "campaign_ai_draft_" + "d" * 32}
+    seen = {}
+    challenge_ports, _db = _challenge_ports(commit_ports, tmp_path)
+
+    def capturing_preview(campaign_id, payload, as_of=None):
+        seen["payload"] = deepcopy(payload)
+        return preview
+
+    challenge_ports = challenge_runtime.ChallengePorts(
+        preview=capturing_preview,
+        append=challenge_ports.append,
+        reader=challenge_ports.reader,
+        fingerprint_reader=challenge_ports.fingerprint_reader,
+        clock=challenge_ports.clock,
+        new_id=challenge_ports.new_id,
+    )
+    payload = _finalize_payload(preview, draft_witness=witness)
+    challenge_runtime.finalize_decision_challenge(
+        CAMPAIGN_ID, payload, ports=challenge_ports,
+    )
+    assert seen["payload"]["draft_witness"] == witness
+
+
 def test_preview_identity_is_backend_derived(tmp_path):
     commit_ports, _state = _ports(_thesis())
     challenge_ports, _db = _challenge_ports(commit_ports, tmp_path)

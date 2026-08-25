@@ -2588,7 +2588,7 @@ export interface DecisionProposalProjection {
   asset_view: Record<string, unknown>;
   trade_view: Record<string, unknown>;
   portfolio_view: Record<string, unknown>;
-  view_provenance: Record<string, unknown>;
+  view_provenance: Record<string, { view_origin?: string; provenance_refs?: string[] } | unknown>;
   next_best_action: string;
   action_envelope: Record<string, unknown>;
   maintain_conditions: string[];
@@ -2606,10 +2606,34 @@ export interface DecisionProposalCommitFields {
   strategy_horizon: string;
 }
 
+export interface DecisionProposalDraftWitness {
+  schema_version: string;
+  draft_id: string;
+  campaign_id: string;
+  thesis_id: string;
+  thesis_revision: number;
+  context_fingerprint: string;
+  generated_fields: DecisionProposalDraftInput;
+}
+
 export interface DecisionProposalDraftInput extends DecisionProposalCommitFields {
   asset_view: Record<string, unknown>;
   trade_view: Record<string, unknown>;
   portfolio_view: Record<string, unknown>;
+  draft_witness?: DecisionProposalDraftWitness | null;
+}
+
+export interface CampaignAIDraftGenerateResult {
+  schema_version: string;
+  draft_status: "AI_DRAFT";
+  proposal_status: "UNCOMMITTED";
+  draft_id: string;
+  campaign_id: string;
+  thesis_id: string;
+  thesis_revision: number;
+  context_fingerprint: string;
+  generated_fields: DecisionProposalDraftInput;
+  draft_witness: DecisionProposalDraftWitness;
 }
 
 export interface DecisionProposalPreview {
@@ -2623,6 +2647,7 @@ export interface DecisionProposalPreview {
     user_confirmed: true;
     expected_proposal_fingerprint: string;
   };
+  draft_witness?: DecisionProposalDraftWitness;
 }
 
 export interface DecisionProposalCommitResult {
