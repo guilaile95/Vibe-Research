@@ -15,12 +15,12 @@ if not hasattr(ti, "PRICE_RANGE_TRIGGER_UNAVAILABLE_PREFIX"):
     ti.PRICE_RANGE_TRIGGER_UNAVAILABLE_PREFIX = "价格区间触发不可评估"
 
 import screener_service as svc
-from screener_models import ScreenerEvaluateIn, SectorRepresentativesOut
+from screener_models import ScreenerEvaluateIn, ScreenerEvaluateOut, SectorRepresentativesOut
 
 router = APIRouter(prefix="/api/screener", tags=["screener"])
 
 
-@router.post("/evaluate")
+@router.post("/evaluate", response_model=ScreenerEvaluateOut)
 def evaluate_screener_endpoint(body: ScreenerEvaluateIn):
     """Evaluate technical conditions (AND) for up to 30 A-share codes."""
     try:

@@ -217,6 +217,33 @@ class StockResultOut(_StrictModel):
     limitations: list[str] = Field(default_factory=list)
 
 
+class ResearchCoverageOut(_StrictModel):
+    start: str
+    end: str
+    row_count: int
+    code_count: int
+
+
+class ResearchProvenanceOut(_StrictModel):
+    source_kind: str | None = None
+    source_name: str | None = None
+    artifact_sha256: str | None = None
+    license_status: str | None = None
+
+
+class ResearchDataSourceOut(_StrictModel):
+    schema_version: str
+    dataset_id: str
+    provider_id: str
+    adjustment: str
+    status: Literal["normal", "unavailable"]
+    fetched_at: str | None
+    as_of: str | None
+    coverage: ResearchCoverageOut | None
+    provenance: ResearchProvenanceOut
+    limitations: list[str] = Field(default_factory=list)
+
+
 class ScreenerEvaluateOut(_StrictModel):
     status: Literal["normal", "partial", "unavailable"]
     evaluated_at: str
@@ -224,6 +251,7 @@ class ScreenerEvaluateOut(_StrictModel):
     matched: list[StockResultOut]
     rejected: list[StockResultOut]
     unavailable: list[StockResultOut]
+    research_data: ResearchDataSourceOut
     limitations: list[str] = Field(default_factory=list)
     schema_version: Literal["screener-v0.1"] = SCHEMA_VERSION
 

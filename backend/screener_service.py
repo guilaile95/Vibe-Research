@@ -12,7 +12,7 @@ from typing import Any
 
 import re
 
-import astock
+import research_data_plane as rdp
 import sector_research_data as srd
 import technical_indicators as ti
 from screener_models import (
@@ -25,6 +25,74 @@ from screener_models import (
 _CODE_RE = re.compile(r"^\d{6}$")
 
 _MAX_WORKERS = 4
+
+
+def _research_bars(code: str, days: int) -> tuple[list[dict], dict[str, Any]]:
+    """Load one code from the bounded Research Runtime and preserve its envelope."""
+    envelope = rdp.query_daily_bars(code=code, limit=min(days, rdp._MAX_LIMIT))
+    if envelope.get("status") != "normal":
+        return [], envelope
+    rows = envelope.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return [], envelope
+    normalized = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        normalized.append(
+            {
+                "datetime": row["trade_date"],
+                "close": row["close"],
+                "high": row["high"],
+                "low": row["low"],
+                "volume": row["volume"],
+            }
+        )
+    return normalized, envelope
+
+
+def _injected_data_envelope() -> dict[str, Any]:
+    return {
+        "schema_version": rdp.SCHEMA_VERSION,
+        "dataset_id": "test-in-memory",
+        "provider_id": "test-injection",
+        "adjustment": "UNKNOWN",
+        "status": "normal",
+        "fetched_at": None,
+        "as_of": None,
+        "coverage": None,
+        "provenance": {"source_kind": "TEST_IN_MEMORY"},
+        "limitations": ["测试注入的内存 K 线；未声明 Research Runtime provenance"],
+    }
+
+
+_RESEARCH_DATA_RESPONSE_KEYS = (
+    "schema_version",
+    "dataset_id",
+    "provider_id",
+    "adjustment",
+    "status",
+    "fetched_at",
+    "as_of",
+    "coverage",
+    "provenance",
+    "limitations",
+)
+
+
+def _public_research_data(envelope: dict[str, Any]) -> dict[str, Any]:
+    return {key: envelope.get(key) for key in _RESEARCH_DATA_RESPONSE_KEYS}
+
+
+def _research_data_for(stocks: list[dict]) -> dict[str, Any]:
+    for stock in stocks:
+        envelope = stock.get("research_data")
+        if isinstance(envelope, dict):
+            return _public_research_data(envelope)
+    return _public_research_data(
+        rdp.build_unavailable_envelope("Research Runtime provenance unavailable")
+    )
+
 
 # Trigger keys from technical_indicators._detect_triggers (do not invent names)
 _TRIGGER_BREAKOUT = "close_above_20d_high"
@@ -231,21 +299,32 @@ def evaluate_one_stock(
     days: int = SCREENER_KLINE_DAYS,
 ) -> dict:
     """Evaluate a single code. Isolates all exceptions into unavailable."""
-    kline_fn = kline_fn or (lambda c, d: astock.kline(c, category=4, offset=d))
     compute_fn = compute_fn or ti.compute_indicators
     fetched_at = _utc_now_iso()
+    research_data: dict[str, Any] | None = None
 
     try:
         try:
-            raw_klines = kline_fn(code, days)
-        except Exception:
+            if kline_fn is not None:
+                raw_klines = kline_fn(code, days)
+                research_data = _injected_data_envelope()
+            else:
+                raw_klines, research_data = _research_bars(code, days)
+        except Exception as exc:
+            research_data = rdp.build_unavailable_envelope(f"Research Runtime 查询失败: {exc}")
+            raw_klines = []
+        if research_data is None:
+            research_data = rdp.build_unavailable_envelope("Research Runtime provenance unavailable")
+
+        if research_data.get("status") != "normal":
             return _unavailable_stock(
                 code,
                 technical_status="unavailable",
                 trade_date=None,
                 condition_results=[],
-                limitations=["K 线数据不可用"],
+                limitations=list(research_data.get("limitations") or ["研究数据不可用"]),
                 conditions=conditions,
+                research_data=research_data,
             )
 
         if not raw_klines:
@@ -254,8 +333,9 @@ def evaluate_one_stock(
                 technical_status="unavailable",
                 trade_date=None,
                 condition_results=[],
-                limitations=["无有效 K 线数据"],
+                limitations=["无有效研究 K 线数据"],
                 conditions=conditions,
+                research_data=research_data,
             )
 
         envelope = compute_fn(
@@ -278,6 +358,7 @@ def evaluate_one_stock(
                 condition_results=[],
                 limitations=limitations or ["技术指标不可用"],
                 conditions=conditions,
+                research_data=research_data,
             )
 
         condition_results = [evaluate_condition(c, envelope) for c in conditions]
@@ -298,6 +379,7 @@ def evaluate_one_stock(
             "trade_date": trade_date if isinstance(trade_date, str) else None,
             "condition_results": condition_results,
             "limitations": limitations,
+            "research_data": research_data,
         }
     except Exception:
         return _unavailable_stock(
@@ -307,6 +389,7 @@ def evaluate_one_stock(
             condition_results=[],
             limitations=["单票评估异常"],
             conditions=conditions,
+            research_data=research_data,
         )
 
 
@@ -318,6 +401,7 @@ def _unavailable_stock(
     condition_results: list[dict],
     limitations: list[str],
     conditions: list[ScreenerCondition],
+    research_data: dict[str, Any] | None = None,
 ) -> dict:
     # If no condition results yet, still return empty list (not fabricated passes)
     return {
@@ -328,6 +412,9 @@ def _unavailable_stock(
         "trade_date": trade_date,
         "condition_results": condition_results,
         "limitations": limitations,
+        "research_data": research_data or rdp.build_unavailable_envelope(
+            limitations[0] if limitations else "研究数据不可用"
+        ),
     }
 
 
@@ -400,14 +487,19 @@ def evaluate_screener(
     unavailable = sorted(
         [s for s in stocks if s["bucket"] == "unavailable"], key=lambda x: x["code"]
     )
+    research_data = _research_data_for(stocks)
+
+    def public_stock(stock: dict[str, Any]) -> dict[str, Any]:
+        return {key: value for key, value in stock.items() if key != "research_data"}
 
     return {
         "status": _top_status(stocks),
         "evaluated_at": evaluated_at,
         "logic": "AND",
-        "matched": matched,
-        "rejected": rejected,
-        "unavailable": unavailable,
+        "matched": [public_stock(stock) for stock in matched],
+        "rejected": [public_stock(stock) for stock in rejected],
+        "unavailable": [public_stock(stock) for stock in unavailable],
+        "research_data": research_data,
         "limitations": [],
         "schema_version": SCHEMA_VERSION,
     }
