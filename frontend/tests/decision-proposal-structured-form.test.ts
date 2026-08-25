@@ -8,6 +8,7 @@ import {
   VIEW_STANCE_OPTIONS,
   buildJudgedView,
   buildPortfolioView,
+  joinDraftLines,
 } from "../src/lib/decisionProposalForm.ts";
 
 test("stance 枚举封闭且含中文标签", () => {
@@ -33,6 +34,21 @@ test("buildPortfolioView 生成 {view[, constraint]}，留空不伪造约束", (
     view: "PORTFOLIO",
     constraint: "单笔风险不超过组合 2%",
   });
+});
+
+test("Apply AI Draft 将 assumptions 与 invalidations 保留为真实多行文本", () => {
+  assert.equal(joinDraftLines(["估值维持合理", "现金流不恶化"]), "估值维持合理\n现金流不恶化");
+  assert.equal(joinDraftLines(["业绩低于预期", "核心产品降价"]), "业绩低于预期\n核心产品降价");
+});
+
+test("页面使用真实换行写入 AI Draft 数组", () => {
+  const source = readFileSync(
+    new URL("../src/pages/DecisionProposalReview.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /joinDraftLines\(fields\.key_assumptions\)/);
+  assert.match(source, /joinDraftLines\(fields\.event_invalidation_conditions\)/);
+  assert.doesNotMatch(source, /join\("\\\\n"\)/);
 });
 
 test("页面不再要求手写三份 JSON object，改用结构化控件", () => {

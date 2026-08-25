@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { loadLlm } from "@/lib/llm";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, LockKeyhole } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ApiError, CommittedDecisionReadError, api, DECISION_CHALLENGE_DIMENSIONS, type DecisionChallengeDimensionInput, type DecisionChallengeDimensionName, type DecisionChallengePacket, type DecisionProposalDraftInput, type DecisionProposalPreview, type CommittedDecisionRuntimeRead } from "@/lib/api";
-import { VIEW_STANCE_LABELS, VIEW_STANCE_OPTIONS, buildJudgedView, buildPortfolioView, type ViewStance } from "@/lib/decisionProposalForm";
+import { VIEW_STANCE_LABELS, VIEW_STANCE_OPTIONS, buildJudgedView, buildPortfolioView, joinDraftLines, type ViewStance } from "@/lib/decisionProposalForm";
 import { hydratedHorizonValue, resolveDecisionContext, type DecisionContextHydrationResult } from "@/lib/decisionContextHydration";
 import { browserTimeZoneName, formatUtcOffsetMinutes, parseReviewBoundary } from "@/lib/reviewBoundaryInput";
 import { buildEvaluatedTradeContinuationHref } from "@/lib/tradeContinuation";
-import type { CampaignRecord, CampaignThesisBinding, CampaignCurrentThesis, ThesisAggregate } from "@/lib/api";
+import type { CampaignRecord, CampaignThesisBinding, CampaignCurrentThesis, ThesisAggregate, CampaignAIDraftGenerateResult, DecisionProposalDraftWitness } from "@/lib/api";
 
 type ChallengeReadState = "PENDING" | "FOUND" | "ABSENT" | "ERROR";
 
@@ -96,6 +97,9 @@ export function DecisionProposalReview() {
   const [assumptions, setAssumptions] = useState("");
   const [invalidations, setInvalidations] = useState("");
   const [preview, setPreview] = useState<DecisionProposalPreview | null>(null);
+  const [aiDraft, setAiDraft] = useState<CampaignAIDraftGenerateResult | null>(null);
+  const [draftWitness, setDraftWitness] = useState<DecisionProposalDraftWitness | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
   const [committed, setCommitted] = useState<CommittedDecisionRuntimeRead | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState<"preview" | "commit" | "challenge" | null>(null);
@@ -177,8 +181,52 @@ export function DecisionProposalReview() {
       key_assumptions: splitLines(assumptions),
       event_invalidation_conditions: splitLines(invalidations),
       strategy_horizon: horizon.trim(),
+      ...(draftWitness ? { draft_witness: draftWitness } : {}),
     };
-  }, [assetStance, assetNote, tradeStance, tradeNote, portfolioConstraint, reviewBoundary, horizon, assumptions, invalidations]);
+  }, [assetStance, assetNote, tradeStance, tradeNote, portfolioConstraint, reviewBoundary, horizon, assumptions, invalidations, draftWitness]);
+
+  const applyAIDraft = (result: CampaignAIDraftGenerateResult) => {
+    const fields = result.generated_fields;
+    const asset = fields.asset_view as { stance?: ViewStance; note?: string };
+    const trade = fields.trade_view as { stance?: ViewStance; note?: string };
+    const portfolio = fields.portfolio_view as { constraint?: string };
+    setAssetStance(asset.stance === "SUPPORT" || asset.stance === "OPPOSE" || asset.stance === "WAIT" ? asset.stance : "WAIT");
+    setAssetNote(typeof asset.note === "string" ? asset.note : "");
+    setTradeStance(trade.stance === "SUPPORT" || trade.stance === "OPPOSE" || trade.stance === "WAIT" ? trade.stance : "WAIT");
+    setTradeNote(typeof trade.note === "string" ? trade.note : "");
+    setPortfolioConstraint(typeof portfolio.constraint === "string" ? portfolio.constraint : "");
+    const date = new Date(fields.review_by);
+    if (!Number.isNaN(date.getTime())) {
+      const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      setReviewByLocal(local);
+    }
+    setAssumptions(joinDraftLines(fields.key_assumptions));
+    setInvalidations(joinDraftLines(fields.event_invalidation_conditions));
+    setHorizon(fields.strategy_horizon);
+    horizonTouched.current = true;
+    setDraftWitness(result.draft_witness);
+    setPreview(null);
+    setConfirmed(false);
+  };
+
+  const handleGenerateAIDraft = async () => {
+    setError("");
+    const llm = loadLlm();
+    if (!campaignId || !llm) {
+      setError("请先在「接入 AI」配置模型，并确保 Campaign context 可用。");
+      return;
+    }
+    setAiBusy(true);
+    try {
+      const result = await api.generateCampaignAIDraft(campaignId, llm);
+      setAiDraft(result);
+      applyAIDraft(result);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "AI Draft 生成失败。");
+    } finally {
+      setAiBusy(false);
+    }
+  };
 
   const handlePreview = async () => {
     setError("");
@@ -478,11 +526,24 @@ export function DecisionProposalReview() {
       {error && <div role="alert" className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-600"><AlertCircle className="h-4 w-4 shrink-0" />{error}</div>}
 
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" onClick={() => void handlePreview()} disabled={busy !== null} className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50">
+        <button type="button" onClick={() => void handleGenerateAIDraft()} disabled={busy !== null || aiBusy || contextState !== "ready"} className="inline-flex items-center gap-1.5 rounded-md border border-primary/50 px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50" data-testid="generate-ai-draft">
+          {aiBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Generate AI Draft
+        </button>
+        <button type="button" onClick={() => void handlePreview()} disabled={busy !== null || aiBusy} className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50">
           {busy === "preview" && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Preview Proposal
         </button>
-        <span className="text-xs text-muted-foreground">Preview 是只读计算，不会创建 Frozen Decision。</span>
+        <span className="text-xs text-muted-foreground">AI Draft 只载入 editable fields；Preview 是只读计算，不会创建 Frozen Decision。</span>
       </div>
+      {aiDraft && (
+        <section className="rounded-md border border-primary/40 bg-primary/5 p-3 text-xs" data-ai-draft-status="UNCOMMITTED">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-medium">AI DRAFT / UNCOMMITTED</p>
+            <span className="font-mono text-[10px]">{aiDraft.draft_id}</span>
+          </div>
+          <p className="mt-1 text-muted-foreground">已 Apply 到下方 editable form。你修改任一 View 后，该 View 会由 server 标记为 USER_DRAFT；浏览器不能声明 MODEL_PROPOSAL。</p>
+          <button type="button" onClick={() => applyAIDraft(aiDraft)} disabled={busy !== null || aiBusy} className="mt-2 rounded border border-border/60 px-2 py-1 hover:bg-muted">Apply again</button>
+        </section>
+      )}
 
       {preview && (
         <section className="space-y-4 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4" data-proposal-status="UNCOMMITTED" role="status">
@@ -527,7 +588,7 @@ export function DecisionProposalReview() {
 
           <div className="grid gap-4 md:grid-cols-3">
             {["asset_view", "trade_view", "portfolio_view"].map((name) => (
-              <div key={name} className="rounded-md border border-border/50 bg-background/35 p-3 text-xs"><p className="font-medium">{name}</p><p className="mt-1 text-muted-foreground">USER_DRAFT · 尚未进入 Frozen Decision</p></div>
+              <div key={name} className="rounded-md border border-border/50 bg-background/35 p-3 text-xs"><p className="font-medium">{name}</p><p className="mt-1 text-muted-foreground">{preview.proposal.view_provenance?.[name] && typeof preview.proposal.view_provenance[name] === "object" ? String((preview.proposal.view_provenance[name] as { view_origin?: unknown }).view_origin ?? "USER_DRAFT") : "USER_DRAFT"} · 尚未进入 Frozen Decision</p></div>
             ))}
           </div>
 

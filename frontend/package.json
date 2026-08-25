@@ -36,7 +36,8 @@
     "test:e2e:decision-challenge": "node tests/e2e/decision-challenge.browser.mjs",
     "test:e2e:evidence-effective-time": "node tests/e2e/evidence-effective-time-real.browser.mjs",
     "test:e2e:watchlist-anomaly": "node tests/e2e/watchlist-anomaly.browser.mjs",
-    "test:e2e:candidate-campaign": "node tests/e2e/candidate-campaign.browser.mjs"
+    "test:e2e:candidate-campaign": "node tests/e2e/candidate-campaign.browser.mjs",
+    "test:e2e:ai-draft-206": "node tests/e2e/ai-draft-206.browser.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.0",

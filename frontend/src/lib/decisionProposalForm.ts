@@ -37,3 +37,8 @@ export function buildPortfolioView(constraint: string): Record<string, unknown> 
   const trimmed = constraint.trim();
   return trimmed ? { view: "PORTFOLIO", constraint: trimmed } : { view: "PORTFOLIO" };
 }
+
+/** AI Draft 数组在 editable textarea 中的真实多行表示。 */
+export function joinDraftLines(values: readonly unknown[]): string {
+  return values.map(String).join("\n");
+}
