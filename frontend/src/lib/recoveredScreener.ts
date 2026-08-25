@@ -1,4 +1,7 @@
 import type {
+  FullMarketFilterOperator,
+  FullMarketMetric,
+  FullMarketQuery,
   ScreenerCondition,
   ScreenerConditionId,
   ScreenerEvaluateResult,
@@ -84,6 +87,47 @@ export function buildEvaluatePayload(codes: string[], conditions: ScreenerCondit
   const error = validateScreenerDraft(codes, conditions);
   if (error) throw new Error(error);
   return { codes: normalizeCodes(codes), conditions };
+}
+
+export const FULL_MARKET_METRIC_CATALOG: Array<{ id: FullMarketMetric; label: string }> = [
+  { id: "return_5d", label: "5D 收益" },
+  { id: "return_20d", label: "20D 收益" },
+  { id: "return_60d", label: "60D 收益" },
+  { id: "close_vs_ma20", label: "收盘 / MA20" },
+  { id: "close_vs_ma60", label: "收盘 / MA60" },
+  { id: "volume_ratio_20d", label: "当前量 / 20D 均量" },
+  { id: "latest_close", label: "最新收盘" },
+  { id: "ma20", label: "MA20" },
+  { id: "ma60", label: "MA60" },
+  { id: "avg_volume_20d", label: "20D 均量" },
+  { id: "current_volume", label: "当前量" },
+];
+
+export const FULL_MARKET_FILTER_OPERATORS: Array<{ id: FullMarketFilterOperator; label: string }> = [
+  { id: "gte", label: "≥" },
+  { id: "gt", label: ">" },
+  { id: "lte", label: "≤" },
+  { id: "lt", label: "<" },
+  { id: "eq", label: "=" },
+  { id: "neq", label: "≠" },
+];
+
+export function buildFullMarketQuery(query: FullMarketQuery): FullMarketQuery {
+  const next: FullMarketQuery = { latest: true, sort_by: "code", sort_order: "asc", limit: 50, offset: 0, ...query };
+  if (next.latest === false && !next.as_of) throw new Error("latest=false 时必须指定 as_of");
+  if (next.filter_metric && (!next.filter_operator || next.filter_value == null || !Number.isFinite(next.filter_value))) {
+    throw new Error("全市场筛选参数无效");
+  }
+  return next;
+}
+
+export function formatFullMarketMetric(metric: FullMarketMetric, value: unknown): string {
+  if (value == null) return "不可评估";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "不可评估";
+  if (metric.startsWith("return_") || metric.startsWith("close_vs_")) return `${(numeric * 100).toFixed(2)}%`;
+  if (metric === "volume_ratio_20d") return `${numeric.toFixed(2)}x`;
+  return numeric.toFixed(2);
 }
 
 export function groupResults(result: ScreenerEvaluateResult | null): {

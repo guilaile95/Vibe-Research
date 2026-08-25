@@ -115,3 +115,89 @@ export type ScreenerSectorRepresentativesResult = {
   count: number;
   schema_version?: string;
 };
+
+export type FullMarketMetric =
+  | "code"
+  | "latest_date"
+  | "latest_close"
+  | "return_5d"
+  | "return_20d"
+  | "return_60d"
+  | "ma20"
+  | "ma60"
+  | "close_vs_ma20"
+  | "close_vs_ma60"
+  | "avg_volume_20d"
+  | "current_volume"
+  | "volume_ratio_20d";
+
+export type FullMarketFilterOperator = "gt" | "gte" | "lt" | "lte" | "eq" | "neq";
+
+export type FullMarketRow = {
+  code: string;
+  latest_date: string | null;
+  latest_close: number | null;
+  return_5d: number | null;
+  return_20d: number | null;
+  return_60d: number | null;
+  ma20: number | null;
+  ma60: number | null;
+  close_vs_ma20: number | null;
+  close_vs_ma60: number | null;
+  avg_volume_20d: number | null;
+  current_volume: number | null;
+  volume_ratio_20d: number | null;
+  observations_count: number;
+  metric_status: Partial<Record<Exclude<FullMarketMetric, "code" | "latest_date">, "normal" | "INSUFFICIENT_HISTORY">>;
+  [key: string]: unknown;
+};
+
+export type FullMarketBreadth = {
+  breadth: number | null;
+  above_count: number;
+  evaluable_count: number;
+  insufficient_count: number;
+  status: "normal" | "INSUFFICIENT_HISTORY";
+};
+
+export type FullMarketResult = {
+  schema_version: string;
+  dataset_id: string;
+  provider_id: string;
+  adjustment: string;
+  status: "normal" | "unavailable";
+  fetched_at: string | null;
+  as_of: string | null;
+  latest_date: string | null;
+  coverage: {
+    start: string;
+    end: string;
+    row_count: number;
+    code_count: number;
+    universe_count: number;
+  } | null;
+  provenance: {
+    source_kind: string | null;
+    source_name: string | null;
+    artifact_sha256: string | null;
+    license_status: string | null;
+  };
+  breadth: { ma20: FullMarketBreadth; ma60: FullMarketBreadth };
+  rows: FullMarketRow[];
+  returned_rows: number;
+  total_rows: number;
+  next_offset: number | null;
+  limitations: string[];
+};
+
+export type FullMarketQuery = {
+  as_of?: string;
+  latest?: boolean;
+  filter_metric?: Exclude<FullMarketMetric, "code" | "latest_date">;
+  filter_operator?: FullMarketFilterOperator;
+  filter_value?: number;
+  sort_by?: FullMarketMetric;
+  sort_order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+};
