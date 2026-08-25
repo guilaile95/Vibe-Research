@@ -28,6 +28,7 @@ _REQUIRED_COLUMNS = ("code", "trade_date", "open", "high", "low", "close", "volu
 _CODE_RE = re.compile(r"^\d{6}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _MAX_LIMIT = 1000
+_MAX_OFFSET = 10_000_000
 
 
 class ResearchDataPlaneError(RuntimeError):
@@ -77,7 +78,11 @@ def _finite_number(raw: Any, field: str, row_number: int) -> float:
         raise ResearchDataPlaneValidationError(
             f"row {row_number}: {field} must be finite"
         )
-    if value < 0 and field in {"volume"}:
+    if field in {"open", "high", "low", "close"} and value <= 0:
+        raise ResearchDataPlaneValidationError(
+            f"row {row_number}: {field} must be positive"
+        )
+    if field == "volume" and value < 0:
         raise ResearchDataPlaneValidationError(
             f"row {row_number}: {field} must be non-negative"
         )
@@ -124,6 +129,11 @@ def _read_csv(source: str | Path) -> list[tuple[str, str, float, float, float, f
             reader = csv.DictReader(handle)
             if reader.fieldnames is None:
                 raise ResearchDataPlaneValidationError("bulk dump has no header")
+            actual_columns = tuple(column.strip() for column in reader.fieldnames)
+            if actual_columns != _REQUIRED_COLUMNS:
+                raise ResearchDataPlaneValidationError(
+                    "bulk dump schema must exactly match: " + ",".join(_REQUIRED_COLUMNS)
+                )
             rows = [_normalize_row(row, index) for index, row in enumerate(reader, start=2)]
     except UnicodeDecodeError as exc:
         raise ResearchDataPlaneValidationError("bulk dump must be UTF-8 CSV") from exc
@@ -143,7 +153,7 @@ def _read_csv(source: str | Path) -> list[tuple[str, str, float, float, float, f
 def _write_parquet(
     root: Path,
     rows: Iterable[tuple[str, str, float, float, float, float, float]],
-) -> tuple[Path, str]:
+) -> tuple[Path, str, bool]:
     artifact_dir = root / "artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix="research-bars-", suffix=".parquet", dir=artifact_dir)
@@ -169,14 +179,15 @@ def _write_parquet(
             connection.close()
         digest = hashlib.sha256(temp_path.read_bytes()).hexdigest()
         target = _artifact_path(root, digest)
-        if target.exists():
-            temp_path.unlink()
-        else:
+        created = not target.exists()
+        if created:
             os.replace(temp_path, target)
+        else:
+            temp_path.unlink()
     except Exception:
         temp_path.unlink(missing_ok=True)
         raise
-    return target, digest
+    return target, digest, created
 
 
 def import_csv(
@@ -189,7 +200,7 @@ def import_csv(
     rows = _read_csv(source)
     root_path = resolve_root(root)
     root_path.mkdir(parents=True, exist_ok=True)
-    artifact, digest = _write_parquet(root_path, rows)
+    artifact, digest, artifact_created = _write_parquet(root_path, rows)
     dates = [row[1] for row in rows]
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -217,6 +228,8 @@ def import_csv(
         os.replace(temp_manifest, manifest_path)
     except Exception:
         temp_manifest.unlink(missing_ok=True)
+        if artifact_created:
+            artifact.unlink(missing_ok=True)
         raise
     return manifest
 
@@ -232,13 +245,28 @@ def read_manifest(root: str | Path | None = None) -> dict[str, Any]:
         raise ResearchDataPlaneUnavailableError("research dataset manifest is unreadable") from exc
     if not isinstance(manifest, dict) or manifest.get("schema_version") != SCHEMA_VERSION:
         raise ResearchDataPlaneValidationError("research dataset manifest schema is invalid")
-    required = {"dataset_id", "artifact_sha256", "row_count", "coverage_start", "coverage_end"}
+    required = {
+        "dataset_id",
+        "provider_id",
+        "adjustment",
+        "source_kind",
+        "artifact_sha256",
+        "artifact_file",
+        "row_count",
+        "code_count",
+        "coverage_start",
+        "coverage_end",
+        "imported_at",
+        "update_semantics",
+    }
     if not required.issubset(manifest):
         raise ResearchDataPlaneValidationError("research dataset manifest is incomplete")
     digest = manifest["artifact_sha256"]
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise ResearchDataPlaneValidationError("research dataset artifact hash is invalid")
     artifact = _artifact_path(root_path, digest)
+    if manifest.get("artifact_file") != artifact.name:
+        raise ResearchDataPlaneValidationError("research dataset artifact filename is invalid")
     if not artifact.is_file():
         raise ResearchDataPlaneUnavailableError("research dataset artifact is unavailable")
     actual_digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
@@ -262,8 +290,10 @@ def _validate_query(code: str | None, date_from: str | None, date_to: str | None
         raise ResearchDataPlaneValidationError("date_from must not exceed date_to")
     if not 1 <= limit <= _MAX_LIMIT:
         raise ResearchDataPlaneValidationError(f"limit must be between 1 and {_MAX_LIMIT}")
-    if offset < 0:
-        raise ResearchDataPlaneValidationError("offset must be non-negative")
+    if not 0 <= offset <= _MAX_OFFSET:
+        raise ResearchDataPlaneValidationError(
+            f"offset must be between 0 and {_MAX_OFFSET}"
+        )
 
 
 def query_daily_bars(
@@ -298,7 +328,12 @@ def query_daily_bars(
     params.extend([limit, offset])
     connection = duckdb.connect(database=":memory:")
     try:
-        result = connection.execute(query, params).fetchall()
+        try:
+            result = connection.execute(query, params).fetchall()
+        except Exception as exc:
+            raise ResearchDataPlaneValidationError(
+                "research dataset query failed closed"
+            ) from exc
     finally:
         connection.close()
     rows = [

@@ -48,10 +48,20 @@ def test_duplicate_observation_fails_closed(tmp_path):
 
 
 def test_schema_drift_and_invalid_date_fail_closed(tmp_path):
-    with pytest.raises(rdp.ResearchDataPlaneValidationError, match="missing required"):
+    with pytest.raises(rdp.ResearchDataPlaneValidationError, match="schema"):
         rdp.import_csv(_source(tmp_path, "code,trade_date,close\n600519,2026-08-20,1\n"), root=tmp_path / "rdp")
+    with pytest.raises(rdp.ResearchDataPlaneValidationError, match="schema"):
+        rdp.import_csv(
+            _source(tmp_path, CSV.replace("volume", "volume,unexpected", 1).replace("1000", "1000,ignored", 1)),
+            root=tmp_path / "rdp",
+        )
     with pytest.raises(rdp.ResearchDataPlaneValidationError, match="trade_date"):
         rdp.import_csv(_source(tmp_path, CSV.replace("2026-08-20", "2026-02-30")), root=tmp_path / "rdp")
+
+
+def test_non_positive_price_fails_closed(tmp_path):
+    with pytest.raises(rdp.ResearchDataPlaneValidationError, match="positive"):
+        rdp.import_csv(_source(tmp_path, CSV.replace(",10,12,9,11,", ",0,12,9,11,")), root=tmp_path / "rdp")
 
 
 def test_query_bounds_and_date_order_fail_closed(tmp_path):
@@ -61,8 +71,21 @@ def test_query_bounds_and_date_order_fail_closed(tmp_path):
         rdp.query_daily_bars(root=root, date_from="2026-08-21", date_to="2026-08-20")
     with pytest.raises(rdp.ResearchDataPlaneValidationError, match="between"):
         rdp.query_daily_bars(root=root, limit=1001)
+    with pytest.raises(rdp.ResearchDataPlaneValidationError, match="offset"):
+        rdp.query_daily_bars(root=root, offset=10_000_001)
     with pytest.raises(rdp.ResearchDataPlaneValidationError, match="six-digit"):
         rdp.query_daily_bars(root=root, code="600519 OR 1=1")
+
+
+def test_manifest_missing_query_field_fails_closed(tmp_path):
+    root = tmp_path / "rdp"
+    rdp.import_csv(_source(tmp_path), root=root)
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["code_count"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(rdp.ResearchDataPlaneValidationError, match="incomplete"):
+        rdp.read_manifest(root)
 
 
 def test_artifact_tampering_fails_closed(tmp_path):
