@@ -83,6 +83,11 @@ class TradeLedgerCorruptedError(TradeLedgerError):
         super().__init__("交易流水数据损坏，无法读取")
 
 
+class TradeLedgerSchemaError(TradeLedgerError):
+    def __init__(self):
+        super().__init__("交易流水数据库缺少续接结构，需显式迁移")
+
+
 class TradeNotFoundError(TradeLedgerError, LookupError):
     pass
 
@@ -116,6 +121,14 @@ def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:
 
 def _ensure_table(conn: sqlite3.Connection) -> None:
     conn.execute(_CREATE_TABLE_SQL)
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -167,8 +180,15 @@ def insert_record(db_path: str | Path, record: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
             with _connect(path) as conn:
+                had_trade_records = _table_exists(conn, "trade_records")
+                has_continuations = _table_exists(conn, "trade_continuations")
                 _ensure_table(conn)
-                conn.execute(_CREATE_CONTINUATION_SQL)
+                if not has_continuations:
+                    if had_trade_records:
+                        if record.get("continuation_ref") is not None:
+                            raise TradeLedgerSchemaError()
+                    else:
+                        conn.execute(_CREATE_CONTINUATION_SQL)
                 conn.execute(_INSERT_SQL, (
                     record["trade_id"],
                     record["code"],

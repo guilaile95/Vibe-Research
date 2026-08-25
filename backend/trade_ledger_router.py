@@ -62,6 +62,8 @@ async def create_trade(request: Request):
         raise HTTPException(status_code=404, detail="未找到投资逻辑")
     except svc.ThesisRevisionNotFoundError:
         raise HTTPException(status_code=404, detail="未找到投资逻辑版本")
+    except store.TradeLedgerSchemaError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except store.TradeLedgerCorruptedError:
         raise HTTPException(status_code=500, detail="交易流水数据损坏，已停止读写")
     return {"data": record}

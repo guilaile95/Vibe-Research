@@ -239,6 +239,42 @@ class TestCorruptedDB:
             ]))
         assert store.get_continuation_ref(db_path, "abc123") is None
 
+    def test_old_database_plain_write_does_not_create_continuation_table(self, db_path, sample_record):
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(store._CREATE_TABLE_SQL)
+        store.insert_record(db_path, sample_record)
+        with sqlite3.connect(db_path) as conn:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+        assert "trade_records" in tables
+        assert "trade_continuations" not in tables
+
+    def test_old_database_continuation_write_requires_explicit_migration(self, db_path, sample_record):
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(store._CREATE_TABLE_SQL)
+        record = dict(
+            sample_record,
+            continuation_ref={
+                "decision_id": "decision_" + "a" * 32,
+                "snapshot_hash": "b" * 64,
+            },
+        )
+        with pytest.raises(store.TradeLedgerSchemaError):
+            store.insert_record(db_path, record)
+        with sqlite3.connect(db_path) as conn:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            assert "trade_continuations" not in tables
+            assert conn.execute("SELECT COUNT(*) FROM trade_records").fetchone()[0] == 0
+
     def test_list_corrupted_raises(self, db_path, sample_record):
         store.insert_record(db_path, sample_record)
         with open(db_path, "wb") as f:
