@@ -2,10 +2,12 @@ import type {
   TradeCreateInput,
   TradeExecutionStatus,
   TradeOperation,
+  TradeContinuationRef,
 } from "./api/types";
 
 export interface TradeDraft {
   code: string;
+  continuation_ref?: TradeContinuationRef | null;
   name: string;
   operation: TradeOperation | "";
   execution_status: TradeExecutionStatus | "";
@@ -342,6 +344,7 @@ export function buildTradeCreateInput(draft: TradeDraft): TradeCreateInput {
 
   const res: TradeCreateInput = {
     code: draft.code.trim(),
+    continuation_ref: draft.continuation_ref ?? null,
     name: draft.name.trim(),
     operation,
     execution_status: executionStatus,

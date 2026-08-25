@@ -123,6 +123,9 @@ export function presentFrozenDecision(
     };
   }
   const applicable = item.formal_decision_evaluation === "EVALUATED";
+  const executable = new Set(["BUY NOW", "BUY SMALL", "SCALE IN", "REDUCE", "EXIT"]).has(
+    frozen.previous_next_best_action,
+  );
   const asOf = validIso(item.as_of) ? Date.parse(item.as_of) : null;
   const reviewAt = Date.parse(frozen.review_by);
   const reviewState = asOf === null
@@ -140,13 +143,13 @@ export function presentFrozenDecision(
     committedAt: frozen.committed_at,
     reviewBy: frozen.review_by,
     reviewState,
-    tradeHref: buildEvaluatedTradeContinuationHref({
-      securityCode: item.security_code,
-      campaignId: item.campaign_id,
-      decisionId: frozen.decision_id,
-      nextBestAction: frozen.previous_next_best_action,
-      formalDecisionEvaluation: item.formal_decision_evaluation,
-    }),
+    tradeHref: executable
+      ? buildEvaluatedTradeContinuationHref({
+          securityCode: item.security_code,
+          continuationRef: item.trade_continuation_ref,
+          formalDecisionEvaluation: item.formal_decision_evaluation,
+        })
+      : null,
   };
 }
 

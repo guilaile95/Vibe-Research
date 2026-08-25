@@ -192,6 +192,53 @@ class TestCorruptedDB:
         with pytest.raises(store.TradeLedgerCorruptedError):
             store.get_record(db_path, "abc123")
 
+    def test_continuation_ref_is_atomic_and_read_back(self, db_path, sample_record):
+        record = dict(
+            sample_record,
+            continuation_ref={
+                "decision_id": "decision_" + "a" * 32,
+                "snapshot_hash": "b" * 64,
+            },
+        )
+        store.insert_record(db_path, record)
+        assert store.get_continuation_ref(db_path, "abc123") == record["continuation_ref"]
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM trade_records").fetchone()[0] == 1
+            assert conn.execute("SELECT COUNT(*) FROM trade_continuations").fetchone()[0] == 1
+
+    def test_malformed_continuation_ref_fails_closed(self, db_path, sample_record):
+        record = dict(
+            sample_record,
+            continuation_ref={
+                "decision_id": "decision_" + "a" * 32,
+                "snapshot_hash": "b" * 64,
+            },
+        )
+        store.insert_record(db_path, record)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "UPDATE trade_continuations SET decision_id = ?, snapshot_hash = ?",
+                ("bad", "bad"),
+            )
+        with pytest.raises(store.TradeLedgerCorruptedError):
+            store.get_continuation_ref(db_path, "abc123")
+
+    def test_old_database_without_continuation_table_returns_none(self, db_path, sample_record):
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(store._CREATE_TABLE_SQL)
+            conn.execute(store._INSERT_SQL, tuple([
+                sample_record["trade_id"], sample_record["code"], sample_record["name"],
+                sample_record["operation"], sample_record["execution_status"],
+                sample_record["planned_price"], sample_record["planned_quantity"],
+                sample_record["actual_price"], sample_record["actual_quantity"],
+                sample_record["executed_at"], sample_record["fee"], sample_record["other_cost"],
+                sample_record["unexecuted_reason"], sample_record["note"],
+                sample_record["advice_trade_date"], sample_record["advice_generated_at"],
+                sample_record["advice_snapshot"], sample_record["thesis_id"],
+                sample_record["thesis_revision"], sample_record["created_at"], None, None,
+            ]))
+        assert store.get_continuation_ref(db_path, "abc123") is None
+
     def test_list_corrupted_raises(self, db_path, sample_record):
         store.insert_record(db_path, sample_record)
         with open(db_path, "wb") as f:

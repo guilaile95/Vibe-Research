@@ -86,6 +86,51 @@ class TestValidation:
         with pytest.raises(svc.TradeValidationError):
             svc.validate_and_build_record(self._base_input(extra_field="x"))
 
+    def test_continuation_ref_requires_matching_frozen_decision(self, monkeypatch):
+        decision_id = "decision_" + "a" * 32
+        monkeypatch.setattr(svc.frozen_decision_service, "get_decision", lambda _id: None)
+        with pytest.raises(svc.TradeContinuationValidationError):
+            svc.validate_and_build_record(self._base_input(
+                continuation_ref={"decision_id": decision_id, "snapshot_hash": "b" * 64},
+            ))
+
+    def test_not_executed_rejects_continuation_ref(self):
+        with pytest.raises(svc.TradeContinuationValidationError, match="not_executed"):
+            svc.validate_and_build_record(self._base_input(
+                execution_status="not_executed",
+                executed_at=None,
+                unexecuted_reason="取消",
+                continuation_ref={
+                    "decision_id": "decision_" + "a" * 32,
+                    "snapshot_hash": "b" * 64,
+                },
+            ))
+
+    def test_continuation_ref_rejects_decision_after_execution(self, monkeypatch):
+        decision_id = "decision_" + "a" * 32
+        decision = {
+            "decision_id": decision_id,
+            "snapshot_hash": "b" * 64,
+            "security_code": "600519",
+            "strategy": "SWING",
+            "campaign_id": "campaign_" + "c" * 32,
+            "thesis_id": "d" * 32,
+            "thesis_revision": 1,
+            "committed_at": "2099-01-02T00:00:00.000000Z",
+            "review_by": "2099-02-01T00:00:00.000000Z",
+            "next_best_action": "BUY SMALL",
+        }
+        monkeypatch.setattr(svc.frozen_decision_service, "get_decision", lambda _id: decision)
+        monkeypatch.setattr(svc.attribution, "verify_frozen_decision_witness", lambda _decision: {
+            "security_code": "600519",
+            "decision_committed_at": decision["committed_at"],
+        })
+        with pytest.raises(svc.TradeContinuationValidationError, match="晚于交易执行时间"):
+            svc.validate_and_build_record(self._base_input(
+                continuation_ref={"decision_id": decision_id, "snapshot_hash": "b" * 64},
+                executed_at="2099-01-01T00:00:00.000000Z",
+            ))
+
 
 class TestAdviceRefValidation:
     def test_advice_ref_extra_field_rejected(self):

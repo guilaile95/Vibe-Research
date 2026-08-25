@@ -324,9 +324,10 @@ export function DecisionProposalReview() {
   const committedTradeHref = committed && campaign
     ? buildEvaluatedTradeContinuationHref({
         securityCode: campaign.security_code,
-        campaignId,
-        decisionId: committed.committed.decision_id,
-        nextBestAction: committed.committed.next_best_action,
+        continuationRef: {
+          decision_id: committed.committed.decision_id,
+          snapshot_hash: committed.committed.snapshot_hash,
+        },
         formalDecisionEvaluation: evaluationOf(committed.formal_decision),
       })
     : null;

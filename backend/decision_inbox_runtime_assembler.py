@@ -37,6 +37,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import copy
+import re
 from typing import Any, Callable, Mapping
 
 import campaign_service
@@ -584,6 +585,23 @@ def _project_campaign_item(
     projected["decision_assurance"] = copy.deepcopy(dict(assurance))
     if sell_engine_payload is not None:
         projected["sell_engine"] = sell_engine_payload
+
+    # Only an authority-validated, currently applicable Frozen Decision may
+    # issue a trade continuation reference.  The browser receives the durable
+    # identity and witness hash; it never gets to derive either value.
+    if formal_decision_evaluation == "EVALUATED" and isinstance(latest_raw, Mapping):
+        decision_id = latest_raw.get("decision_id")
+        snapshot_hash = latest_raw.get("snapshot_hash")
+        if (
+            isinstance(decision_id, str)
+            and re.fullmatch(r"^decision_[0-9a-f]{32}$", decision_id)
+            and isinstance(snapshot_hash, str)
+            and re.fullmatch(r"^[0-9a-f]{64}$", snapshot_hash)
+        ):
+            projected["trade_continuation_ref"] = {
+                "decision_id": decision_id,
+                "snapshot_hash": snapshot_hash,
+            }
     return projected
 
 

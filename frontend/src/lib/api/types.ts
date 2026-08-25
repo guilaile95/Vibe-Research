@@ -1633,6 +1633,11 @@ export type TradeOperation = "buy" | "add" | "reduce" | "sell";
 
 export type TradeExecutionStatus = "full" | "partial" | "not_executed";
 
+export interface TradeContinuationRef {
+  decision_id: string;
+  snapshot_hash: string;
+}
+
 export interface TradeAdviceSnapshot {
   action: "add" | "hold" | "reduce" | "sell" | "watch" | "avoid";
   execution_quantity: number | null;
@@ -1673,6 +1678,7 @@ export interface TradeRecord {
   created_at: string;
   voided_at: string | null;
   void_reason: string | null;
+  continuation_ref: TradeContinuationRef | null;
 
   gross_amount: number;
   total_cost: number;
@@ -1710,6 +1716,7 @@ export interface TradeCreateInput {
     thesis_id: string;
     revision_number: number;
   };
+  continuation_ref?: TradeContinuationRef | null;
 }
 
 export interface TradeAttributionCandidate {
@@ -2487,6 +2494,11 @@ export interface DecisionInboxFrozenDecision {
   previous_next_best_action: string;
 }
 
+export interface DecisionInboxTradeContinuationRef {
+  decision_id: string;
+  snapshot_hash: string;
+}
+
 export type SellEngineState =
   | "HOLD"
   | "WATCH_TO_REDUCE"
@@ -2555,6 +2567,8 @@ export interface DecisionInboxCampaignItem {
   decision_assurance?: Record<string, unknown>;
   /** Last user-frozen decision. It is historical unless formal_decision_evaluation proves applicability. */
   last_frozen_decision?: DecisionInboxFrozenDecision | null;
+  /** Server-issued proof of the currently applicable Frozen Decision for manual trade continuation. */
+  trade_continuation_ref?: DecisionInboxTradeContinuationRef | null;
   /** Read-only current Sell Engine projection. It never mutates the Frozen Decision or creates a Trade. */
   sell_engine?: DecisionInboxSellEngine | null;
 }

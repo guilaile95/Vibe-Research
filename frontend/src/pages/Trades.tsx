@@ -304,7 +304,7 @@ export function Trades() {
     setCreateError(null);
     setIsCreateOpen(true);
     const consumed = new URLSearchParams(searchParams);
-    for (const key of ["create", "code", "campaign_id", "decision_id", "next_best_action"]) {
+    for (const key of ["create", "code", "decision_id", "snapshot_hash"]) {
       consumed.delete(key);
     }
     setSearchParams(consumed, { replace: true });
@@ -334,15 +334,12 @@ export function Trades() {
       // candidates 由 selectedTradeId 的既有 effect 复用加载。若 Trade 已
       // 持久化但后续读取失败，只诚实展示读取错误，不回滚、不伪装创建失败；
       // 归属与 UNPLANNED 仍只能由用户显式点击触发。
-      if (activeContinuation) {
-        setAttributionHint({
-          tradeId: created.trade_id,
-          campaignId: activeContinuation.campaignId,
-          decisionId: activeContinuation.decisionId,
-        });
-      } else {
-        setAttributionHint(null);
-      }
+      setAttributionHint(activeContinuation
+        ? {
+            tradeId: created.trade_id,
+            decisionId: activeContinuation.continuationRef.decision_id,
+          }
+        : null);
       setIsCreateOpen(false);
       setActiveContinuation(null);
       setSelectedTradeId(created.trade_id);
@@ -756,11 +753,11 @@ export function Trades() {
               {activeContinuation ? (
                 <div
                   className="rounded-md border border-primary/30 bg-primary/5 p-3 text-xs"
-                  data-trade-continuation={activeContinuation.decisionId}
+                  data-trade-continuation={activeContinuation.continuationRef.decision_id}
                 >
                   <p className="font-medium">从 Frozen Decision 续接实际执行</p>
                   <p className="mt-1 text-muted-foreground">
-                    {activeContinuation.securityCode} · {activeContinuation.nextBestAction} · {activeContinuation.decisionId}
+                    {activeContinuation.securityCode} · Frozen Decision {activeContinuation.continuationRef.decision_id}
                   </p>
                   <p className="mt-1 leading-5 text-muted-foreground">
                     仅预填证券代码。操作类型、执行状态、成交时间、价格、数量和费用必须按真实执行显式填写；提交后仍需你明确选择归属。
@@ -1493,6 +1490,16 @@ export function Trades() {
                         ? `${detailTrade.thesis_id} (Rev ${detailTrade.thesis_revision})`
                         : "无"}
                     </span>
+                  </div>
+                  <div className="border border-primary/30 rounded-lg p-2.5 bg-primary/5 sm:col-span-2">
+                    <span className="text-muted-foreground">Frozen Decision 续接见证：</span>
+                    {detailTrade.continuation_ref ? (
+                      <span className="ml-1 text-foreground font-mono break-all">
+                        {detailTrade.continuation_ref.decision_id} · {detailTrade.continuation_ref.snapshot_hash}
+                      </span>
+                    ) : (
+                      <span className="ml-1 text-muted-foreground">无</span>
+                    )}
                   </div>
                 </div>
 

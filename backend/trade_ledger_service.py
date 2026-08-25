@@ -11,6 +11,9 @@ from typing import Any
 
 import ai_result_store
 import evidence_thesis_service
+import formal_trade_attribution as attribution
+import frozen_decision_service
+import frozen_decision_store
 import trade_ledger_store as store
 
 # ---------------------------------------------------------------------------
@@ -70,6 +73,10 @@ class ThesisNotFoundError(LookupError):
 
 
 class ThesisRevisionNotFoundError(LookupError):
+    pass
+
+
+class TradeContinuationValidationError(TradeValidationError):
     pass
 
 
@@ -180,7 +187,7 @@ def validate_and_build_record(data: dict[str, Any]) -> dict[str, Any]:
         "code", "name", "operation", "execution_status",
         "planned_price", "planned_quantity", "actual_price", "actual_quantity",
         "executed_at", "fee", "other_cost", "unexecuted_reason", "note",
-        "advice_ref", "thesis_ref",
+        "advice_ref", "thesis_ref", "continuation_ref",
     }
     unknown = set(data.keys()) - allowed
     if unknown:
@@ -269,6 +276,51 @@ def validate_and_build_record(data: dict[str, Any]) -> dict[str, Any]:
             advice_ref, code
         )
 
+    continuation_ref = data.get("continuation_ref")
+    if continuation_ref is not None:
+        if execution_status == "not_executed":
+            raise TradeContinuationValidationError(
+                "not_executed 状态不能绑定 Trade continuation"
+            )
+        if not isinstance(continuation_ref, dict) or set(continuation_ref) != {"decision_id", "snapshot_hash"}:
+            raise TradeContinuationValidationError("continuation_ref 格式不合法")
+        decision_id = continuation_ref.get("decision_id")
+        snapshot_hash = continuation_ref.get("snapshot_hash")
+        if not isinstance(decision_id, str) or not re.fullmatch(r"^decision_[0-9a-f]{32}$", decision_id):
+            raise TradeContinuationValidationError("continuation_ref.decision_id 格式不合法")
+        if not isinstance(snapshot_hash, str) or not re.fullmatch(r"^[0-9a-f]{64}$", snapshot_hash):
+            raise TradeContinuationValidationError("continuation_ref.snapshot_hash 格式不合法")
+        try:
+            decision = frozen_decision_service.get_decision(decision_id)
+            if decision is None or decision.get("snapshot_hash") != snapshot_hash:
+                raise TradeContinuationValidationError("continuation_ref 未匹配有效 Frozen Decision")
+            witness = attribution.verify_frozen_decision_witness(decision)
+        except (
+            attribution.AttributionValidationError,
+            frozen_decision_service.FrozenDecisionValidationError,
+            frozen_decision_store.FrozenDecisionError,
+        ) as exc:
+            raise TradeContinuationValidationError("continuation_ref 对应 Frozen Decision 无法验证") from exc
+        if witness["security_code"] != code:
+            raise TradeContinuationValidationError("continuation_ref 与交易证券不一致")
+        try:
+            committed_at = attribution.parse_utc_instant(
+                witness["decision_committed_at"], "continuation_ref.committed_at"
+            )
+            if execution_status in ("full", "partial"):
+                executed_at_dt = attribution.parse_utc_instant(
+                    executed_at, "executed_at"
+                )
+                if committed_at > executed_at_dt:
+                    raise TradeContinuationValidationError(
+                        "continuation_ref 的 Frozen Decision 晚于交易执行时间"
+                    )
+        except attribution.AttributionValidationError as exc:
+            raise TradeContinuationValidationError(
+                "continuation_ref 的 Frozen Decision 时间无法验证"
+            ) from exc
+        continuation_ref = {"decision_id": decision_id, "snapshot_hash": snapshot_hash}
+
     # Thesis reference
     thesis_id = None
     thesis_revision = None
@@ -298,6 +350,7 @@ def validate_and_build_record(data: dict[str, Any]) -> dict[str, Any]:
         "advice_snapshot": advice_snapshot,
         "thesis_id": thesis_id,
         "thesis_revision": thesis_revision,
+        "continuation_ref": continuation_ref,
         "created_at": now,
     }
 
@@ -530,7 +583,15 @@ def create_trade(data: dict[str, Any]) -> dict[str, Any]:
     record = validate_and_build_record(data)
     db_path = resolve_db_path()
     store.insert_record(db_path, record)
-    return compute_fields(record)
+    result = compute_fields(record)
+    result["continuation_ref"] = store.get_continuation_ref(db_path, record["trade_id"])
+    return result
+
+
+def _with_continuation(db_path: Path, record: dict[str, Any]) -> dict[str, Any]:
+    result = compute_fields(record)
+    result["continuation_ref"] = store.get_continuation_ref(db_path, record["trade_id"])
+    return result
 
 
 def get_trade(trade_id: str) -> dict[str, Any] | None:
@@ -538,7 +599,7 @@ def get_trade(trade_id: str) -> dict[str, Any] | None:
     record = store.get_record(db_path, trade_id)
     if record is None:
         return None
-    return compute_fields(record)
+    return _with_continuation(db_path, record)
 
 
 def list_trades(
@@ -564,7 +625,7 @@ def list_trades(
         limit=limit,
         offset=offset,
     )
-    return [compute_fields(r) for r in records]
+    return [_with_continuation(db_path, r) for r in records]
 
 
 def void_trade(trade_id: str, reason: str) -> dict[str, Any]:

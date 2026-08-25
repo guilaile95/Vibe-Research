@@ -1,74 +1,54 @@
-import type { TradeAttributionCandidate } from "./api/types";
+import type { TradeAttributionCandidate, TradeContinuationRef } from "./api/types";
 import type { TradeDraft } from "./tradeLedgerView";
 
-const CAMPAIGN_ID_RE = /^campaign_[0-9a-f]{32}$/;
 const DECISION_ID_RE = /^decision_[0-9a-f]{32}$/;
-const SECURITY_CODE_RE = /^[0-9]{6}$/;
-
-export const EXECUTION_NEXT_BEST_ACTIONS = [
-  "BUY NOW",
-  "BUY SMALL",
-  "SCALE IN",
-  "REDUCE",
-  "EXIT",
-] as const;
+const SNAPSHOT_HASH_RE = /^[0-9a-f]{64}$/;
 
 export interface TradeContinuationContext {
+  continuationRef: TradeContinuationRef;
   securityCode: string;
-  campaignId: string;
-  decisionId: string;
-  nextBestAction: string | null;
 }
 
 export interface TradeAttributionHint {
   tradeId: string;
-  campaignId: string;
+  campaignId?: string;
   decisionId: string;
-}
-
-export function isExecutionNextBestAction(value: unknown): value is string {
-  return (
-    typeof value === "string"
-    && (EXECUTION_NEXT_BEST_ACTIONS as readonly string[]).includes(value)
-  );
 }
 
 export function buildTradeContinuationHref(input: {
   securityCode: unknown;
-  campaignId: unknown;
-  decisionId: unknown;
-  nextBestAction: unknown;
+  continuationRef: unknown;
 }): string | null {
   if (
     typeof input.securityCode !== "string"
-    || !SECURITY_CODE_RE.test(input.securityCode)
-    || typeof input.campaignId !== "string"
-    || !CAMPAIGN_ID_RE.test(input.campaignId)
-    || typeof input.decisionId !== "string"
-    || !DECISION_ID_RE.test(input.decisionId)
-    || !isExecutionNextBestAction(input.nextBestAction)
-  ) {
-    return null;
-  }
+    || !/^\d{6}$/.test(input.securityCode)
+    || !isValidContinuationRef(input.continuationRef)
+  ) return null;
   const query = new URLSearchParams({
     create: "1",
     code: input.securityCode,
-    campaign_id: input.campaignId,
-    decision_id: input.decisionId,
-    next_best_action: input.nextBestAction,
+    decision_id: input.continuationRef.decision_id,
+    snapshot_hash: input.continuationRef.snapshot_hash,
   });
   return `/trades?${query.toString()}`;
 }
 
 export function buildEvaluatedTradeContinuationHref(input: {
   securityCode: unknown;
-  campaignId: unknown;
-  decisionId: unknown;
-  nextBestAction: unknown;
+  continuationRef: unknown;
   formalDecisionEvaluation: unknown;
 }): string | null {
   if (input.formalDecisionEvaluation !== "EVALUATED") return null;
   return buildTradeContinuationHref(input);
+}
+
+function isValidContinuationRef(value: unknown): value is TradeContinuationRef {
+  if (!value || typeof value !== "object") return false;
+  const ref = value as Record<string, unknown>;
+  return typeof ref.decision_id === "string"
+    && DECISION_ID_RE.test(ref.decision_id)
+    && typeof ref.snapshot_hash === "string"
+    && SNAPSHOT_HASH_RE.test(ref.snapshot_hash);
 }
 
 export function parseTradeContinuation(
@@ -76,18 +56,16 @@ export function parseTradeContinuation(
 ): TradeContinuationContext | null {
   if (params.get("create") !== "1") return null;
   const securityCode = params.get("code") ?? "";
-  const campaignId = params.get("campaign_id") ?? "";
   const decisionId = params.get("decision_id") ?? "";
-  const nextBestAction = params.get("next_best_action");
-  if (
-    !SECURITY_CODE_RE.test(securityCode)
-    || !CAMPAIGN_ID_RE.test(campaignId)
-    || !DECISION_ID_RE.test(decisionId)
-    || !isExecutionNextBestAction(nextBestAction)
-  ) {
-    return null;
-  }
-  return { securityCode, campaignId, decisionId, nextBestAction };
+  const snapshotHash = params.get("snapshot_hash") ?? "";
+  if (!/^\d{6}$/.test(securityCode) || !isValidContinuationRef({
+    decision_id: decisionId,
+    snapshot_hash: snapshotHash,
+  })) return null;
+  return {
+    securityCode,
+    continuationRef: { decision_id: decisionId, snapshot_hash: snapshotHash },
+  };
 }
 
 export function emptyTradeDraft(code = ""): TradeDraft {
@@ -115,7 +93,10 @@ export function continuationTradeDraft(
 ): TradeDraft {
   // Only the immutable security identity is carried into the draft. Operation,
   // execution status, time, price, quantity, costs and attribution stay empty.
-  return emptyTradeDraft(context.securityCode);
+  return {
+    ...emptyTradeDraft(context.securityCode),
+    continuation_ref: context.continuationRef,
+  };
 }
 
 export function isPreferredAttributionCandidate(
@@ -127,6 +108,6 @@ export function isPreferredAttributionCandidate(
     hint
     && selectedTradeId === hint.tradeId
     && candidate.decision_id === hint.decisionId
-    && candidate.campaign_id === hint.campaignId,
+    && (hint.campaignId === undefined || candidate.campaign_id === hint.campaignId),
   );
 }

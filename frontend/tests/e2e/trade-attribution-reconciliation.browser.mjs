@@ -289,7 +289,7 @@ async function run() {
       await page.getByRole("button", { name: "新建交易" }).click();
       return page.locator("div.fixed.inset-0").filter({ hasText: "新建交易流水" });
     };
-    const continuationUrl = `${frontend}/trades?create=1&code=600519&campaign_id=${campaign.campaign_id}&decision_id=${decision.decision_id}&next_best_action=BUY%20SMALL`;
+    const continuationUrl = `${frontend}/trades?create=1&code=600519&decision_id=${decision.decision_id}&snapshot_hash=${decision.snapshot_hash}`;
     const openContinuationModal = async () => {
       await page.goto(continuationUrl, { waitUntil: "networkidle" });
       const modal = page.locator("div.fixed.inset-0").filter({ hasText: "新建交易流水" });
@@ -404,6 +404,10 @@ async function run() {
     assert.equal(createdResponse.ok(), true, await createdResponse.text());
     const createdRecord = (await createdResponse.json()).data;
     assert.match(createdRecord.trade_id, /^[0-9a-f]{32}$/);
+    assert.deepEqual(createdRecord.continuation_ref, {
+      decision_id: decision.decision_id,
+      snapshot_hash: decision.snapshot_hash,
+    });
     await executedModal.waitFor({ state: "detached" });
     await page.getByText(`ID: ${createdRecord.trade_id}`).waitFor();
     await page.getByText("交易归属与 Campaign 对账").waitFor();

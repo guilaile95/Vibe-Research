@@ -1,6 +1,7 @@
 """Trade ledger SQLite storage layer."""
 from __future__ import annotations
 
+import re
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -37,6 +38,22 @@ CREATE TABLE IF NOT EXISTS trade_records (
     void_reason TEXT
 )
 """
+
+_CREATE_CONTINUATION_SQL = """
+CREATE TABLE IF NOT EXISTS trade_continuations (
+    trade_id TEXT PRIMARY KEY,
+    decision_id TEXT NOT NULL,
+    snapshot_hash TEXT NOT NULL
+)
+"""
+
+_INSERT_CONTINUATION_SQL = """
+INSERT INTO trade_continuations (trade_id, decision_id, snapshot_hash)
+VALUES (?, ?, ?)
+"""
+
+_CONTINUATION_DECISION_ID_RE = r"^decision_[0-9a-f]{32}$"
+_CONTINUATION_SNAPSHOT_HASH_RE = r"^[0-9a-f]{64}$"
 
 _INSERT_SQL = """
 INSERT INTO trade_records (
@@ -151,6 +168,7 @@ def insert_record(db_path: str | Path, record: dict[str, Any]) -> None:
         try:
             with _connect(path) as conn:
                 _ensure_table(conn)
+                conn.execute(_CREATE_CONTINUATION_SQL)
                 conn.execute(_INSERT_SQL, (
                     record["trade_id"],
                     record["code"],
@@ -175,9 +193,48 @@ def insert_record(db_path: str | Path, record: dict[str, Any]) -> None:
                     None,
                     None,
                 ))
+                continuation = record.get("continuation_ref")
+                if continuation is not None:
+                    conn.execute(_INSERT_CONTINUATION_SQL, (
+                        record["trade_id"],
+                        continuation["decision_id"],
+                        continuation["snapshot_hash"],
+                    ))
                 conn.commit()
         except sqlite3.DatabaseError as exc:
             raise TradeLedgerCorruptedError() from exc
+
+
+def get_continuation_ref(db_path: str | Path, trade_id: str) -> dict[str, str] | None:
+    path = Path(db_path)
+    if not path.is_file():
+        return None
+    try:
+        with _connect_readonly(path) as conn:
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                ("trade_continuations",),
+            ).fetchone()
+            if table is None:
+                return None
+            row = conn.execute(
+                "SELECT decision_id, snapshot_hash FROM trade_continuations WHERE trade_id = ?",
+                (trade_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            decision_id = row["decision_id"]
+            snapshot_hash = row["snapshot_hash"]
+            if (
+                not isinstance(decision_id, str)
+                or not re.fullmatch(_CONTINUATION_DECISION_ID_RE, decision_id)
+                or not isinstance(snapshot_hash, str)
+                or not re.fullmatch(_CONTINUATION_SNAPSHOT_HASH_RE, snapshot_hash)
+            ):
+                raise TradeLedgerCorruptedError()
+            return {"decision_id": decision_id, "snapshot_hash": snapshot_hash}
+    except sqlite3.DatabaseError as exc:
+        raise TradeLedgerCorruptedError() from exc
 
 
 def get_record(db_path: str | Path, trade_id: str) -> dict[str, Any] | None:

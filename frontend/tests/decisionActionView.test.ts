@@ -9,6 +9,7 @@ import type { DecisionInboxCampaignItem } from "../src/lib/api/types.ts";
 
 const CAMPAIGN_ID = "campaign_" + "a".repeat(32);
 const DECISION_ID = "decision_" + "b".repeat(32);
+const SNAPSHOT_HASH = "c".repeat(64);
 
 function item(
   overrides: Partial<DecisionInboxCampaignItem> = {},
@@ -29,6 +30,10 @@ function item(
       review_by: "2026-08-30T00:00:00.000000Z",
       previous_next_best_action: "BUY SMALL",
     },
+    trade_continuation_ref: {
+      decision_id: DECISION_ID,
+      snapshot_hash: SNAPSHOT_HASH,
+    },
     ...overrides,
   };
 }
@@ -41,7 +46,7 @@ test("applicable executable Frozen Decision exposes an explicit Trade continuati
   assert.equal(view.reviewState, "UPCOMING");
   assert.equal(
     view.tradeHref,
-    `/trades?create=1&code=600519&campaign_id=${CAMPAIGN_ID}&decision_id=${DECISION_ID}&next_best_action=BUY+SMALL`,
+    `/trades?create=1&code=600519&decision_id=${DECISION_ID}&snapshot_hash=${SNAPSHOT_HASH}`,
   );
 });
 
