@@ -375,6 +375,18 @@ function createApiMockController() {
       return;
     }
 
+    // Candidate Research is mounted on StockData and reads the existing Campaign
+    // list contract even when this smoke scenario is focused on top risk.
+    if (pathname === "/api/campaigns" && request.method() === "GET") {
+      const code = new URL(url).searchParams.get("security_code");
+      if (!/^\d{6}$/.test(code || "")) {
+        await route.fulfill(jsonErr(400, "invalid security_code"));
+        return;
+      }
+      await route.fulfill(jsonOk([]));
+      return;
+    }
+
     // StockData also requests technical indicators; keep this unrelated panel
     // explicit so the top-risk E2E remains fully mocked after integration.
     if (pathname === "/api/market/technical-indicators") {
