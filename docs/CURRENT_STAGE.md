@@ -1,6 +1,6 @@
 # Current Stage — Recovery Coordinates
 
-Last reviewed: 2026-08-24
+Last reviewed: 2026-08-25
 
 This file is a **recovery pointer**, not Engineering Truth and not a second task database.
 
@@ -12,8 +12,8 @@ Update this file only when recovery coordinates materially change, for example:
 
 - current Stage changes;
 - the authorization / freeze authority changes;
-- the leading active Issue / PR changes;
-- a completed vertical changes what the next recovering Agent should inspect;
+- the leading coordination Issue or active keeper PR changes;
+- a completed workstream changes what the next recovering Agent should inspect;
 - the named repo / Notion read-first pointers change;
 - a genuinely durable invariant changes.
 
@@ -27,55 +27,90 @@ Do not store an “exact current stable SHA” here: merging this file would imm
 
 ## Current Stage
 
-**North Star Best-Practice Product Activation / Acceleration Run**
+**GLOBAL-ACCEL2 — Full Project Advancement**
 
-Current state authority:
+Owner direction:
+
+> 全面推进，不要聚焦 1～2 个小问题，着眼全局。
+
+Current state / authorization authority:
 
 - GitHub Issue **#203** — read the **latest comment**, not the original issue body.
-- At this review point: `PROJECT_FREEZE = PARTIALLY_LIFTED_FOR_THIS_RUN` for the explicitly authorized product-activation sequence.
+- Current expected authorization coordinate: `PROJECT_FREEZE = PARTIALLY_LIFTED_FOR_GLOBAL_ADVANCEMENT_RUN`.
+- Coordination Epic: **#217 — GLOBAL-ACCEL2 — Full Project Advancement: Product Truth, Decision Flow, Research & Discovery**.
 
 Stable recovery coordinate:
 
 - Stable branch: `feature/research-system-v01`
 - Exact stable SHA: **resolve live; intentionally not persisted here**
-- Last product vertical at this review point: PR #210 — Watchlist Anomaly Activation
+- Last completed product run before GLOBAL-ACCEL2: #210 Watchlist Anomaly, #212 Fundamental Health + Cashflow Quality, #216 Sector Strength + Concept Context.
 
-## Immediate Work
+## Active Global Workstreams
 
-Current active Issue:
+Treat #217 as the top-level scope. Recover live state before selecting an implementation lane.
 
-- **#211 — P1-FH1 — StockData Fundamental Health & Cashflow Quality Activation**
+### A — Product Truth / Real-Use Readiness
 
-Current active PR:
+- Issue **#162 Product Reality Sprint** remains the formal real-use truth gate.
+- Historical prerequisites #164 security baseline and #171 Holding single-writer closure are merged.
+- During GLOBAL-ACCEL2, use short workflow/product-reality smokes to expose structural blockers.
+- Do not start #162's formal 10-trading-day feature-freeze observation window until GLOBAL-ACCEL2 reaches a stable engineering baseline.
 
-- **#212 — P1-FH1 — StockData Fundamental Health & Cashflow Quality**
-- State / head / CI: **resolve live**
+### B — Core Decision Workflow
 
-Current blocker:
+- Existing high-value candidate: **#206 Campaign AI Draft → Formal Decision**.
+- Verify live anti-rewheel first; if the gap still exists, advance the real Holding/Candidate → Research → Thesis/Evidence → Draft → Preview → explicit Freeze → Trade → Outcome path.
+- Reduce repeated input and context loss without creating a second Decision/Thesis/Holding authority.
 
-- None confirmed from live product semantics at this review point. Resolve current PR state, reviews and CI before acting.
+### C — Candidate Research / P1
 
-Next after current work:
+Build a coherent candidate-decision path from existing StockData, Fundamental Health, Sector/Concept context, valuation/risk, Evidence and Campaign capabilities before inventing new frameworks.
 
-- Re-read latest #203 after #212 resolves.
-- If the authorized run remains open and no Stop Boundary fired, evaluate the next product vertical from the current Goal, with **Sector Market Context** as the leading recovery hint.
-- Do not create a parallel implementation while #212 remains the only active product slice unless the user explicitly changes scope.
+### D — P2 Discovery / Research Data Plane
 
-## Read First — GitHub / Repository
+Re-evaluate the already-qualified HiThink Market Dumps / Parquet / DuckDB path as bulk Research Data Plane input and connect it toward existing Screener / Sector / Candidate research.
 
-Read only what is needed for the current Stage:
+Keep `Research Runtime != Canonical Fact Authority`.
 
-1. `AGENTS.md`
-2. `docs/CURRENT_STAGE.md`
-3. GitHub Issue #203 latest comments — authorization / freeze authority
-4. Current active Issue and PR, including latest comments / reviews / CI
-5. `docs/PRODUCT_NORTH_STAR_V01.md`
-6. `docs/ARCHITECTURE.md` only when the active change touches architecture boundaries
-7. relevant source files and directly related tests
+### E — Correctness Audit
 
-Before implementing, inspect live Open PRs. If another PR already implements the task, review or continue it instead of creating a duplicate path.
+- **#169** runs as a parallel **READ_ONLY** cross-cutting audit.
+- Its old lane references are historical; final findings must be delta-revalidated against the then-live GLOBAL-ACCEL2 stable.
+- Only validated CRITICAL/HIGH findings directly affecting active user paths should interrupt product work.
 
-### Legacy current-state documents
+### F — Product Surface Coherence
+
+Evaluate the whole user flow, not isolated pages:
+
+`Today / Decision Inbox → Watchlist / Stock / Sector Research → Campaign / Thesis / Evidence → Formal Decision → Trade / Attribution → Outcome / Review → Screener / Discovery`
+
+Fix navigation/context/repeated-input problems only where they materially break this flow.
+
+## Immediate Recovery Actions
+
+1. Read `AGENTS.md`.
+2. Resolve live stable SHA and exact-head CI.
+3. Read #203 latest comment for authorization state.
+4. Read #217 and its latest comments for global execution state.
+5. Inspect live Open / Draft PRs. Historical Drafts are context only unless #217 explicitly reuses them.
+6. Identify the active keeper implementation lane, if any; do not create a duplicate path.
+7. Read #206 / #162 / #169 only as required by the current workstream.
+8. Read `docs/PRODUCT_NORTH_STAR_V01.md` and `docs/ARCHITECTURE.md` only when the active work requires their durable contracts.
+9. Use named Notion pages only for durable Product / Architecture context.
+
+## Read First — Notion
+
+Use the connected Notion workspace when durable context is needed. Search these exact page titles first:
+
+1. `Vibe-Research｜A股投资决策系统`
+2. `Vibe-Research｜North Star Autonomous Run 接管｜2026-08-24`
+3. `Vibe-Research｜Architecture Reality Map`
+
+Notion does not override live GitHub implementation or execution state. If durable intent and live implementation disagree, report:
+
+`Intent vs Reality conflict`
+
+## Legacy Current-State Documents
 
 The following files are retained as historical context but are **not current recovery authority**:
 
@@ -83,56 +118,47 @@ The following files are retained as historical context but are **not current rec
 - `docs/NEXT_TASK.md`
 - `docs/CHAT_HANDOFF.md`
 
-They contain useful historical reasoning but may carry stale SHA / Stage / authorization statements. Do not use them to override live GitHub or `docs/CURRENT_STAGE.md` recovery coordinates.
-
-## Read First — Notion
-
-Use the connected Notion workspace only when durable product / architecture context is needed. Search these exact page titles first:
-
-1. `Vibe-Research｜A股投资决策系统`
-2. `Vibe-Research｜North Star Autonomous Run 接管｜2026-08-24`
-3. `Vibe-Research｜Architecture Reality Map`
-
-Read deeper Notion pages only when the current blocker requires them.
-
-Notion does not override live GitHub implementation or execution state. If durable intent and live implementation disagree, report:
-
-`Intent vs Reality conflict`
+Do not use them to override live GitHub, #203, #217 or this recovery coordinate.
 
 ## Durable Engineering Invariants
 
-Only genuinely durable boundaries belong here:
-
-- **User owns formal investment authority.** AI / providers may analyze, explain, challenge or propose, but do not automatically create Formal Decision, Frozen Decision, Trade, attribution or real execution facts.
-- **Provider Observation != Canonical Fact Authority.** A data provider does not become a second Holding / Trade / Decision authority.
-- **Research Runtime != Canonical Fact Authority.** Fast local research paths may be used without redefining formal fact history.
+- **User owns formal investment authority.** AI / providers may analyze, explain, challenge or draft, but do not automatically create Formal Decision, Frozen Decision, Trade, attribution or real execution facts.
+- **Provider Observation != Canonical Fact Authority.** A provider never becomes a second Holding / Trade / Decision authority.
+- **Research Runtime != Canonical Fact Authority.** Bulk/local research paths may optimize discovery without redefining formal fact history.
 - **User data and credentials stay local.** Real holdings, account data and secrets do not enter Git.
-- **Reuse before infrastructure.** Do not build a second Watchlist, Sector system, Fact Lake, provider framework or equivalent authority when the existing capability can be extended.
+- **Reuse before infrastructure.** Extend existing Watchlist, StockData, Sector, Campaign, Fact Lake, provider and research capabilities before creating competing systems.
+- **Global advancement != uncontrolled parallel coding.** One implementation lane per overlapping authority/product surface; independent read-only research/audit may run in parallel.
 
 ## Current Acceptance Direction
 
-The current product-activation stage should prove real user paths rather than API presence.
+GLOBAL-ACCEL2 is complete only when the project has materially advanced across the whole product, not when one PR merges.
 
-At this review point the sequence is:
+Strong completion evidence should include, where live evidence supports it:
 
-1. Watchlist Anomaly — already merged via #210.
-2. Fundamental Health + Cashflow Quality — active via #211 / #212.
-3. Sector Market Context — candidate only after live re-evaluation and only if the current authorization still permits it.
+- no known structural blocker in the holding → research → decision → trade → outcome workflow;
+- #206 resolved or superseded by an equivalent real product path;
+- Candidate Research has a coherent usable path;
+- P2 Discovery / Research Data Plane has a real bulk-data/query foundation connected toward product use, or a concrete evidence-backed blocker;
+- #169 has a current delta verdict and validated CRITICAL/HIGH findings are resolved or explicitly blocked;
+- no half-finished keeper PR;
+- stable exact-head CI green;
+- recovery coordinates and Notion durable context synchronized;
+- #162 ready to start its formal 10-trading-day Product Reality Sprint on a stable baseline.
 
-Each vertical should close a source → backend → frontend → real user task path, then pass targeted tests, relevant regression, browser/runtime validation where applicable, independent review and current-base CI before merge.
+Then restore project freeze.
 
-## Deferred Scope
+## Deferred / Escalation Boundary
 
-Unless new evidence makes one of these a blocker, do not build them as part of the current Stage:
+Do not autonomously cross these boundaries:
 
-- large BK11 rewrite or provider replacement;
-- Market Heat Radar as a separate large slice;
-- Market Dumps / full Research Data Plane ingestion;
-- full-market Screener expansion;
-- strategy / backtest lab;
-- unrelated provider framework, navigation redesign, stale-PR cleanup or broad refactor.
+- destructive migration or irreversible user-data rewrite;
+- broker/order/automatic trading execution;
+- new paid account/service or material recurring cost;
+- credential/account-security changes;
+- unresolved conflict between two plausible Formal Authorities;
+- irreversible real-user holdings/trades mutation without a safe explicit user action.
 
-Historical Draft PRs are context only and must not be automatically revived.
+Normal architecture, implementation, provider, UI, testing, Ready and Merge decisions inside #217 remain autonomous when their independent Gate and current-base CI pass.
 
 ## Recovery Output
 
@@ -158,4 +184,4 @@ SOURCE_CONFLICTS:
 NEXT_ACTION:
 ```
 
-Then continue the highest-priority unblocked action **only when the current authorization state permits it**.
+Then continue the highest-priority unblocked work allowed by #217 and the latest #203 authorization state.
