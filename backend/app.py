@@ -83,6 +83,7 @@ import decision_inbox_runtime_router
 import decision_commit_router
 import decision_challenge_router
 import formal_decision_outcome_router
+import research_data_plane_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -412,6 +413,8 @@ app.include_router(decision_commit_router.router)
 app.include_router(decision_challenge_router.router)
 # P0-OL1 Formal Decision Outcome; legacy advice analytics remain separate.
 app.include_router(formal_decision_outcome_router.router)
+# Local bulk research read model; never a Canonical Fact or decision authority.
+app.include_router(research_data_plane_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)
