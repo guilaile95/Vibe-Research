@@ -33,6 +33,7 @@ export function CampaignLifecycleCard({
   status,
   nextActions,
   setupContext,
+  researchContext = false,
   decision,
   onChanged,
 }: {
@@ -43,6 +44,8 @@ export function CampaignLifecycleCard({
   nextActions: CampaignNextActions | null;
   /** true：尚未进入 current Campaign composition（工作单 §8 诚实标签）。 */
   setupContext: boolean;
+  /** true：StockData Candidate Research 上下文，明确区分继续/停止研究。 */
+  researchContext?: boolean;
   decision?: { visible_state: string; reason_codes: string[] } | null;
   onChanged: () => void;
 }) {
@@ -80,6 +83,12 @@ export function CampaignLifecycleCard({
   const targets = renderableTransitionTargets(nextActions);
   const advanceTargets = targets.filter((to) => !isDestructiveTransition(to));
   const destructiveTargets = targets.filter((to) => isDestructiveTransition(to));
+  const actionLabel = (to: CampaignStatus) =>
+    researchContext
+      ? isDestructiveTransition(to)
+        ? `停止研究（${CAMPAIGN_STATUS_LABELS[to]}）`
+        : "继续研究"
+      : TRANSITION_ACTION_LABELS[to];
   const reasons = decision ? presentReasonCodes(decision.reason_codes) : null;
 
   return (
@@ -188,7 +197,9 @@ export function CampaignLifecycleCard({
         <div className="space-y-2">
           {advanceTargets.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-muted-foreground">下一步：</span>
+              <span className="text-xs text-muted-foreground">
+                {researchContext ? "继续研究：" : "下一步："}
+              </span>
               {advanceTargets.map((to) => (
                 <button
                   key={to}
@@ -199,14 +210,16 @@ export function CampaignLifecycleCard({
                   className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
                   {busy === to && <Loader2 className="h-3 w-3 animate-spin" />}
-                  {TRANSITION_ACTION_LABELS[to]}
+                  {actionLabel(to)}
                 </button>
               ))}
             </div>
           )}
           {destructiveTargets.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-muted-foreground">结束此 Campaign：</span>
+              <span className="text-xs text-muted-foreground">
+                {researchContext ? "停止研究：" : "结束此 Campaign："}
+              </span>
               {destructiveTargets.map((to) => (
                 <button
                   key={to}
@@ -218,7 +231,7 @@ export function CampaignLifecycleCard({
                   className="inline-flex items-center gap-1 rounded-md border border-destructive/40 px-2.5 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
                 >
                   {busy === to && <Loader2 className="h-3 w-3 animate-spin" />}
-                  {TRANSITION_ACTION_LABELS[to]}
+                  {actionLabel(to)}
                 </button>
               ))}
             </div>
@@ -234,7 +247,7 @@ export function CampaignLifecycleCard({
           data-destructive-confirm={pendingDestructive}
         >
           <p id={`confirm-${campaignId}`} className="text-xs leading-5">
-            确认{TRANSITION_ACTION_LABELS[pendingDestructive]}？此操作进入终态后不可再推进。
+            确认{actionLabel(pendingDestructive)}？此操作进入终态后不可再推进。
           </p>
           <div className="flex flex-wrap gap-2">
             <button
@@ -244,7 +257,7 @@ export function CampaignLifecycleCard({
               className="inline-flex items-center gap-1 rounded-md bg-destructive px-2.5 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
             >
               {busy === pendingDestructive && <Loader2 className="h-3 w-3 animate-spin" />}
-              确认{TRANSITION_ACTION_LABELS[pendingDestructive]}
+              确认{actionLabel(pendingDestructive)}
             </button>
             <button
               type="button"
