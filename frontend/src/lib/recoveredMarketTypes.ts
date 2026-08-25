@@ -71,6 +71,33 @@ export type ScreenerStockResult = {
   limitations: string[];
 };
 
+export type ScreenerResearchCoverage = {
+  start: string;
+  end: string;
+  row_count: number;
+  code_count: number;
+};
+
+export type ScreenerResearchProvenance = {
+  source_kind: string | null;
+  source_name: string | null;
+  artifact_sha256: string | null;
+  license_status: string | null;
+};
+
+export type ScreenerResearchData = {
+  schema_version: string;
+  dataset_id: string;
+  provider_id: string;
+  adjustment: string;
+  status: "normal" | "unavailable";
+  fetched_at: string | null;
+  as_of: string | null;
+  coverage: ScreenerResearchCoverage | null;
+  provenance: ScreenerResearchProvenance;
+  limitations: string[];
+};
+
 export type ScreenerEvaluateResult = {
   status: string;
   evaluated_at: string;
@@ -78,6 +105,7 @@ export type ScreenerEvaluateResult = {
   matched: ScreenerStockResult[];
   rejected: ScreenerStockResult[];
   unavailable: ScreenerStockResult[];
+  research_data: ScreenerResearchData;
   limitations: string[];
   schema_version: string;
 };

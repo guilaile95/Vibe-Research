@@ -42,6 +42,18 @@ test("result grouping preserves matched/rejected/unavailable buckets", () => {
     matched: [{ code: "000001", bucket: "matched", matched: true, technical_status: "normal", trade_date: null, condition_results: [], limitations: [] }],
     rejected: [{ code: "000002", bucket: "rejected", matched: false, technical_status: "normal", trade_date: null, condition_results: [], limitations: [] }],
     unavailable: [{ code: "000003", bucket: "unavailable", matched: null, technical_status: "unavailable", trade_date: null, condition_results: [], limitations: [] }],
+    research_data: {
+      schema_version: "research-data-plane.v0.1",
+      dataset_id: "ashare_daily_unadjusted",
+      provider_id: "local_bulk_dump",
+      adjustment: "UNADJUSTED",
+      status: "normal",
+      fetched_at: "2026-07-31T00:00:00Z",
+      as_of: "2026-07-30",
+      coverage: { start: "2026-01-01", end: "2026-07-30", row_count: 120, code_count: 3 },
+      provenance: { source_kind: "LOCAL_BULK_DUMP", artifact_sha256: "abc" },
+      limitations: ["Research Runtime 数据不是 Canonical Fact Authority。"],
+    },
     limitations: [],
     schema_version: "screener-v0.1",
   };

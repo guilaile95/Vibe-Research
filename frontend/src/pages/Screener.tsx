@@ -231,6 +231,31 @@ export function Screener() {
 
       {result ? (
         <>
+          <GlassCard className="space-y-2 p-4" data-testid="screener-research-source">
+            <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+              <span>研究数据来源</span>
+              <span className={result.research_data.status === "normal" ? "text-emerald-600" : "text-destructive"}>
+                {result.research_data.status === "normal" ? "可用" : "不可评估"}
+              </span>
+            </div>
+            <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-4">
+              <span>Dataset：{result.research_data.dataset_id}</span>
+              <span>Provider：{result.research_data.provider_id}</span>
+              <span>调整：{result.research_data.adjustment}</span>
+              <span>As of：{result.research_data.as_of || "未知"}</span>
+            </div>
+            {result.research_data.coverage ? (
+              <p className="text-xs text-muted-foreground">
+                覆盖：{String(result.research_data.coverage.start || "未知")} 至 {String(result.research_data.coverage.end || "未知")} · {String(result.research_data.coverage.row_count || 0)} 行 · {String(result.research_data.coverage.code_count || 0)} 个代码
+              </p>
+            ) : (
+              <p className="text-xs text-destructive">无本地研究数据，当前结果不可评估。</p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Artifact：{String(result.research_data.provenance.artifact_sha256 || result.research_data.provenance.source_name || "未提供")}
+            </p>
+            {result.research_data.limitations.map((line) => <p key={line} className="text-xs text-muted-foreground">{line}</p>)}
+          </GlassCard>
           <div className="grid gap-3 lg:grid-cols-3">
             <ResultGroup title="命中" items={groups.matched} />
             <ResultGroup title="未命中" items={groups.rejected} />
