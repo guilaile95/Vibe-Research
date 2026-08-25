@@ -103,8 +103,9 @@ Fix navigation/context/repeated-input problems only where they materially break 
 Use the connected Notion workspace when durable context is needed. Search these exact page titles first:
 
 1. `Vibe-Research｜A股投资决策系统`
-2. `Vibe-Research｜North Star Autonomous Run 接管｜2026-08-24`
-3. `Vibe-Research｜Architecture Reality Map`
+2. `Vibe-Research｜GLOBAL-ACCEL2 全面推进｜2026-08-25`
+3. `Vibe-Research｜North Star Autonomous Run 接管｜2026-08-24`
+4. `Vibe-Research｜Architecture Reality Map`
 
 Notion does not override live GitHub implementation or execution state. If durable intent and live implementation disagree, report:
 
