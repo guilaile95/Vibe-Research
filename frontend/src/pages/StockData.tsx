@@ -9,6 +9,7 @@ import { AskAiButton } from "@/components/ui/AskAiButton";
 import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
 import { OptionalDataPanel } from "@/components/ui/OptionalDataPanel";
 import { StockThesisPanel } from "@/components/stock/StockThesisPanel";
+import { CandidateCampaignPanel } from "@/components/campaign/CandidateCampaignPanel";
 import { TechnicalIndicatorsCard } from "@/components/stock/TechnicalIndicatorsCard";
 import { TopRiskAnalysisCard } from "@/components/market/TopRiskAnalysisCard";
 import {
@@ -816,6 +817,9 @@ export function StockData() {
 
           {/* 技术指标与价格触发（独立 fetch，与 K 线面板解耦） */}
           <TechnicalIndicatorsCard env={tiEnv} loading={tiLoading} error={tiError} />
+
+          {/* Candidate Research continuation：Campaign lifecycle 与 Thesis 编辑保持分离 */}
+          <CandidateCampaignPanel code={activeCode} />
 
           {/* 投资逻辑面板（独立、可折叠、懒加载） */}
           <StockThesisPanel code={activeCode} />
