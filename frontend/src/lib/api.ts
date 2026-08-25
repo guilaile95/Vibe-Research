@@ -128,8 +128,11 @@ import type {
   DecisionInboxSnapshot,
   DecisionProposalDraftInput,
   DecisionProposalPreview,
+  DecisionProposalDraftWitness,
+  CampaignAIDraftGenerateResult,
   DecisionProposalCommitResult,
   CommittedDecisionRuntimeRead,
+  StreamLlmConfig,
 } from "./api/types.ts";
 
 
@@ -1001,6 +1004,8 @@ export const api = {
     bindCampaignThesis(campaignId, thesisId),
   getCampaignThesisBinding: (campaignId: string) => getCampaignThesisBinding(campaignId),
   getCampaignCurrentThesis: (campaignId: string) => getCampaignCurrentThesis(campaignId),
+  generateCampaignAIDraft: (campaignId: string, llm: StreamLlmConfig) =>
+    generateCampaignAIDraft(campaignId, llm),
   previewDecisionProposal: (campaignId: string, body: DecisionProposalDraftInput) =>
     previewDecisionProposal(campaignId, body),
   commitDecisionProposal: (
@@ -1342,6 +1347,17 @@ export async function getCampaignCurrentThesis(
 // P0-DC1：Decision Proposal（Preview 只读；Commit 显式确认；提交后重读）
 // ---------------------------------------------------------------------------
 
+export async function generateCampaignAIDraft(
+  campaignId: string,
+  llm: StreamLlmConfig,
+): Promise<CampaignAIDraftGenerateResult> {
+  return request<CampaignAIDraftGenerateResult>(
+    `/campaigns/${encodeURIComponent(campaignId)}/ai-draft/generate`,
+    "POST",
+    { llm },
+  );
+}
+
 export async function previewDecisionProposal(
   campaignId: string,
   body: DecisionProposalDraftInput,
@@ -1360,6 +1376,7 @@ export async function commitDecisionProposal(
     expected_proposal_fingerprint: string;
     user_confirmed: true;
     challenge_id?: string;
+    draft_witness?: DecisionProposalDraftWitness | null;
   },
 ): Promise<DecisionProposalCommitResult> {
   return request<DecisionProposalCommitResult>(

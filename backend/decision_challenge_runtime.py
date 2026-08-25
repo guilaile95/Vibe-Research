@@ -127,6 +127,7 @@ def finalize_decision_challenge(
         "key_assumptions",
         "event_invalidation_conditions",
         "strategy_horizon",
+        "draft_witness",
     }
     extra = set(payload) - allowed
     if extra:
@@ -176,10 +177,13 @@ def finalize_decision_challenge(
         raise DecisionChallengeInputError(
             "finalize requires the same user draft used for preview"
         )
+    preview_payload = {key: payload[key] for key in draft_keys}
+    if "draft_witness" in payload:
+        preview_payload["draft_witness"] = copy.deepcopy(payload["draft_witness"])
     try:
         preview = preview_override or ports.preview(
             campaign_id,
-            {key: payload[key] for key in draft_keys},
+            preview_payload,
             as_of=as_of,
         )
     except commit_runtime.ProposalStaleError as exc:

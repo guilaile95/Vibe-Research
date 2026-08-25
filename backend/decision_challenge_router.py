@@ -43,6 +43,7 @@ class DecisionChallengeFinalizeIn(BaseModel):
     key_assumptions: list[Any]
     event_invalidation_conditions: list[Any]
     strategy_horizon: str
+    draft_witness: dict[str, Any] | None = None
 
 
 @router.post("/campaigns/{campaign_id}/decision-challenge/finalize")
