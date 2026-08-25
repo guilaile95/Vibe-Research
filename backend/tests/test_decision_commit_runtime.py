@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 
 import pytest
 
+import campaign_ai_draft_service
 import campaign_critical_data_projection as critical_data_projection
 import decision_commit_runtime as runtime
 
@@ -158,6 +160,117 @@ def test_preview_is_uncommitted_and_has_no_prior_boundary_without_fake_id():
     ]
     assert "decision_id" not in result["proposal"]
     assert state["writes"] == 0
+
+
+def test_validate_draft_inputs_allows_only_the_seven_editable_fields():
+    assert set(runtime._validate_draft_inputs(_draft())) == set(campaign_ai_draft_service.EDITABLE_FIELDS)
+    with pytest.raises(runtime.DecisionCommitInputError):
+        runtime._validate_draft_inputs({**_draft(), "draft_witness": {}})
+
+
+def test_preview_accepts_optional_witness_and_returns_it_without_writes(monkeypatch):
+    ports, state = _ports(_thesis())
+    witness = {
+        "schema_version": "campaign_ai_draft.witness.v0.1",
+        "draft_id": "campaign_ai_draft_" + "d" * 32,
+        "campaign_id": CAMPAIGN_ID,
+        "thesis_id": THESIS_ID,
+        "thesis_revision": 1,
+        "context_fingerprint": "a" * 64,
+        "generated_fields": _draft(),
+    }
+    monkeypatch.setattr(
+        campaign_ai_draft_service,
+        "_read_context",
+        lambda *args, **kwargs: {
+            "campaign": _campaign(),
+            "current_thesis": _thesis(),
+            "holding": {"status": "UNKNOWN", "reason_codes": ["TEST"]},
+            "account": {"status": "UNKNOWN", "reason_codes": ["TEST"]},
+            "critical_data": _critical_data(),
+        },
+    )
+    monkeypatch.setattr(
+        campaign_ai_draft_service,
+        "validate_witness_for_context",
+        lambda value, **kwargs: value,
+    )
+    result = runtime.preview_decision_proposal(
+        CAMPAIGN_ID,
+        {**_draft(), "draft_witness": witness},
+        ports=ports,
+        as_of=AS_OF,
+    )
+    assert result["draft_witness"] == witness
+    assert state["writes"] == 0
+    assert result["proposal"]["view_provenance"]["asset_view"]["view_origin"] == "MODEL_PROPOSAL"
+
+
+def test_real_process_local_witness_replay_is_idempotent_and_drift_fails_closed(monkeypatch):
+    ports, state = _ports(_thesis())
+    context = {
+        "schema_version": "campaign_ai_draft.context.v0.1",
+        "campaign": _campaign(),
+        "current_thesis": _thesis(),
+        "holding": {"status": "UNKNOWN", "reason_codes": ["TEST"]},
+        "account": {"status": "UNKNOWN", "reason_codes": ["TEST"]},
+        "critical_data": _critical_data(),
+        "deterministic_boundary": {"proposal_status": "UNCOMMITTED"},
+    }
+    current_context = {"value": deepcopy(context)}
+    monkeypatch.setattr(
+        campaign_ai_draft_service,
+        "_read_campaign_and_thesis",
+        lambda _campaign_id: (deepcopy(_campaign()), deepcopy(_thesis())),
+    )
+    monkeypatch.setattr(
+        campaign_ai_draft_service,
+        "_read_context",
+        lambda *args, **kwargs: deepcopy(current_context["value"]),
+    )
+
+    generated = campaign_ai_draft_service.generate_ai_draft(
+        None,
+        CAMPAIGN_ID,
+        model_runner=lambda _cfg, _messages: json.dumps(_draft(), ensure_ascii=False),
+    )
+    witness = generated["draft_witness"]
+    assert witness["draft_id"].startswith("campaign_ai_draft_")
+
+    preview = runtime.preview_decision_proposal(
+        CAMPAIGN_ID,
+        {**generated["generated_fields"], "draft_witness": witness},
+        ports=ports,
+        as_of=AS_OF,
+    )
+    assert all(
+        preview["proposal"]["view_provenance"][field]["view_origin"] == "MODEL_PROPOSAL"
+        for field in ("asset_view", "trade_view", "portfolio_view")
+    )
+    commit = {
+        **generated["generated_fields"],
+        "draft_witness": witness,
+        "as_of": AS_OF,
+        "expected_proposal_fingerprint": preview["proposal_fingerprint"],
+        "user_confirmed": True,
+    }
+
+    first = runtime.commit_decision_proposal(CAMPAIGN_ID, commit, ports=ports)
+    repeat = runtime.commit_decision_proposal(CAMPAIGN_ID, commit, ports=ports)
+
+    assert first["idempotent"] is False
+    assert repeat["idempotent"] is True
+    assert repeat["proposal_fingerprint"] == preview["proposal_fingerprint"]
+    assert repeat["committed"]["decision_id"] == DECISION_ID
+    assert state["writes"] == 1
+
+    current_context["value"]["critical_data"] = {
+        **current_context["value"]["critical_data"],
+        "authority_refs": ["ccd:drifted"],
+    }
+    with pytest.raises(runtime.ProposalStaleError):
+        runtime.commit_decision_proposal(CAMPAIGN_ID, commit, ports=ports)
+    assert state["writes"] == 1
 
 
 @pytest.mark.parametrize(

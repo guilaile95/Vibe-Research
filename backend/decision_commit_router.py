@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
 
+import campaign_ai_draft_service as ai_draft_service
 import campaign_service
 import decision_commit_runtime as runtime
 
@@ -35,6 +36,7 @@ class DecisionProposalPreviewIn(BaseModel):
     key_assumptions: list[Any]
     event_invalidation_conditions: list[Any]
     strategy_horizon: str
+    draft_witness: dict[str, Any] | None = None
 
 
 class DecisionProposalCommitIn(DecisionProposalPreviewIn):
@@ -63,6 +65,8 @@ def preview_decision_proposal(
         raise HTTPException(404, _CAMPAIGN_NOT_FOUND) from None
     except runtime.DecisionCommitInputError:
         raise HTTPException(422, _INVALID_INPUT) from None
+    except runtime.ProposalStaleError:
+        raise HTTPException(409, _STALE_PROPOSAL) from None
     except runtime.CurrentThesisUnavailableError:
         raise HTTPException(409, _THESIS_UNAVAILABLE) from None
     except campaign_service.CampaignServiceError:
@@ -90,6 +94,8 @@ def commit_decision_proposal(
     except runtime.CommitConfirmationRequiredError:
         raise HTTPException(422, _CONFIRMATION_REQUIRED) from None
     except runtime.ProposalStaleError:
+        raise HTTPException(409, _STALE_PROPOSAL) from None
+    except ai_draft_service.CampaignAIDraftWitnessStaleError:
         raise HTTPException(409, _STALE_PROPOSAL) from None
     except runtime.ChallengeBindingError:
         raise HTTPException(409, _CHALLENGE_BIND) from None
