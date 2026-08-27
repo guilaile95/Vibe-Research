@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import ipaddress
 import os
-import socket
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -210,7 +209,7 @@ class McpSdkHttpTransport:
     - 首选 fastmcp-slim 仅发布 3.x（无与 pinned 服务端 fastmcp==2.12.5
       同代的 2.x 线），PyPI 解析实测 ``No matching distribution found``；
     - 服务端认证 venv 实证其依赖族为官方 ``mcp==1.16.0``；
-    - 故按官方 SDK 客户端收口，pin 与服务端同代 ``>=1.16,<2``。
+    - 故按官方 SDK 客户端收口，Windows canonical 锁 pin ``mcp==1.16.0``。
 
     每次操作独立短连接（本地 sidecar 场景足够），sync 包装 async 实现，
     总deadline 由 asyncio.wait_for 统一强制（含取消语义）。
@@ -242,8 +241,6 @@ class McpSdkHttpTransport:
                 # MCP 协议要求先 initialize 才能发起任何请求；
                 # 每次（连接, 操作）都是完整生命周期。
                 async with ClientSession(read_stream, write_stream) as session:
-                    # MCP 协议要求先 initialize 才能发起任何请求；
-                    # 每次（连接, 操作）都是完整生命周期。
                     initialize_result = await session.initialize()
                     return await coro_factory(session, initialize_result)
 
