@@ -2771,3 +2771,18 @@ export interface TrendradarAttentionContext {
     observation_count?: number;
   }>;
 }
+
+export interface TrendradarWatchlistContext {
+  status: string;
+  retrieved_at?: string;
+  authority_ref?: string;
+  usage_boundary?: string;
+  upstream?: TrendradarUpstreamIdentity;
+  error?: string;
+  watchlist: {
+    status: string;
+    codes: string[];
+    count: number;
+  };
+  items: TrendradarAttentionContext[];
+}
