@@ -32,6 +32,10 @@ UPSTREAM_SOURCE_COMMIT = "8ee26026ba6c11dec41a95fb3895a7162876caa1"
 UPSTREAM_CORE_VERSION = "6.10.0"
 UPSTREAM_MCP_VERSION = "4.1.0"
 UPSTREAM_LICENSE = "GPL-3.0"
+# pinned MCP runtime identity observed during qualification
+EXPECTED_SERVER_NAME = "trendradar-news"
+EXPECTED_SERVER_VERSION = "1.16.0"
+EXPECTED_PROTOCOL_VERSION = "2025-06-18"
 CORE_IMAGE_TAG_DIGEST = (
     "wantcat/trendradar:6.10.0@sha256:"
     "de396d242c105d697c2765f5341ca71a45d9bcefe934d1d32b511eeae2f0d0be"
@@ -312,11 +316,10 @@ def default_transport_factory(config: GatewayConfig) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# allow-list：Phase 0 只暴露经过类型化验证的窄能力面；
-# 名称来自 pinned 运行时的 tools/list 发现结果（QUALIFICATION.md 记录）。
-# ---------------------------------------------------------------------------
-
-ALLOWED_TOOL_NAMES: frozenset[str] = frozenset()
+# allow-list 语义（TR1-P1 起）：默认全拒；调用方必须显式传入
+# allowed_names（trendradar_console.READ_TOOL_NAMES 是唯一的生产名单，
+# 且永远不含 send_notification / trigger_crawl / sync_from_remote /
+# read_article* 等外发或写类工具——见 console 模块注释）。
 
 
 def _base_envelope(status: str, error: str | None = None) -> dict[str, Any]:
@@ -335,6 +338,30 @@ def _base_envelope(status: str, error: str | None = None) -> dict[str, Any]:
 def _transport_error_status(error: McpTransportError) -> str:
     return error.reason if error.reason in (STATUS_UNAVAILABLE, STATUS_TIMEOUT) \
         else STATUS_UNAVAILABLE
+
+
+def _contract_error(detail: str) -> dict[str, Any]:
+    return _base_envelope(STATUS_CONTRACT_MISMATCH, detail)
+
+
+def _valid_server_info(server: Any) -> bool:
+    return (
+        isinstance(server, dict)
+        and server.get("server_name") == EXPECTED_SERVER_NAME
+        and server.get("server_version") == EXPECTED_SERVER_VERSION
+        and server.get("protocol_version") == EXPECTED_PROTOCOL_VERSION
+    )
+
+
+def _valid_tool_descriptors(tools: Any, required: frozenset[str] | None = None) -> bool:
+    if not isinstance(tools, list):
+        return False
+    descriptors: set[str] = set()
+    for item in tools:
+        if not isinstance(item, ToolDescriptor) or not item.name or not isinstance(item.input_schema, (dict, type(None))):
+            return False
+        descriptors.add(item.name)
+    return required is None or required.issubset(descriptors)
 
 
 def _disabled_gateway_view() -> dict[str, Any]:
@@ -368,9 +395,20 @@ def status_snapshot(
         envelope = _base_envelope(_transport_error_status(exc), exc.detail)
         envelope["gateway"] = enabled_view
         return envelope
+    except Exception as exc:  # noqa: BLE001 — normalize adapter failures
+        envelope = _base_envelope(STATUS_UNAVAILABLE, f"initialize failed: {exc}")
+        envelope["gateway"] = enabled_view
+        return envelope
+    if not _valid_server_info(server_info):
+        envelope = _contract_error(
+            "MCP initialize identity does not match the pinned TrendRadar contract"
+        )
+        envelope["gateway"] = enabled_view
+        envelope["server"] = server_info if isinstance(server_info, dict) else None
+        return envelope
     envelope = _base_envelope(STATUS_OK)
     envelope["gateway"] = enabled_view
-    envelope["server"] = server_info if isinstance(server_info, dict) else None
+    envelope["server"] = server_info
     return envelope
 
 
@@ -385,9 +423,23 @@ def tool_inventory(
     if config is None:
         return _base_envelope(STATUS_DISABLED)
     try:
-        tools = transport_factory(config).list_tools()
+        transport = transport_factory(config)
+        server_info = getattr(transport, "server_info", lambda: None)()
+        tools = transport.list_tools()
     except McpTransportError as exc:
         return _base_envelope(_transport_error_status(exc), exc.detail)
+    except Exception as exc:  # noqa: BLE001 — normalize adapter failures
+        return _base_envelope(STATUS_UNAVAILABLE, f"tools/list failed: {exc}")
+    if not _valid_server_info(server_info):
+        return _base_envelope(
+            STATUS_CONTRACT_MISMATCH,
+            "MCP initialize identity does not match the pinned TrendRadar contract",
+        )
+    if not _valid_tool_descriptors(tools):
+        return _base_envelope(
+            STATUS_CONTRACT_MISMATCH,
+            "MCP tools/list returned malformed tool descriptors",
+        )
     envelope = _base_envelope(STATUS_OK)
     envelope["tools"] = [
         {
@@ -397,23 +449,28 @@ def tool_inventory(
         }
         for t in tools
     ]
-    envelope["allowed_tool_names"] = sorted(ALLOWED_TOOL_NAMES)
+    # inventory 只报告发现结果；allow 名单属调用方（console），不在此泄露/声称。
+    envelope["tool_count"] = len(tools)
     return envelope
 
 
-def call_allowed_tool(
+def call_tool(
     name: str,
     arguments: dict[str, Any],
+    *,
+    allowed_names: frozenset[str],
     env: dict[str, str] | None = None,
     transport_factory: Callable[[GatewayConfig], Any] = default_transport_factory,
 ) -> dict[str, Any]:
-    """strict allow-listed tool 调用；当前 allow-list 为空集（P0 无公开工具面）。"""
+    """strict allow-listed tool 调用（默认拒绝：allowed_names 必须显式给出）。"""
     config, config_error = load_config(env)
     if config_error is not None:
         return _base_envelope(STATUS_CONFIG_ERROR, config_error)
     if config is None:
         return _base_envelope(STATUS_DISABLED)
-    if type(name) is not str or name not in ALLOWED_TOOL_NAMES:
+    if type(allowed_names) is not frozenset:
+        return _base_envelope(STATUS_BAD_ARGUMENT, "allowed_names must be a frozenset")
+    if type(name) is not str or name not in allowed_names:
         return _base_envelope(
             STATUS_BAD_ARGUMENT,
             f"tool {name!r} is not in the TrendRadar allow-list",
@@ -421,9 +478,24 @@ def call_allowed_tool(
     if type(arguments) is not dict:
         return _base_envelope(STATUS_BAD_ARGUMENT, "arguments must be an object")
     try:
-        raw = transport_factory(config).call_tool(name, arguments)
+        transport = transport_factory(config)
+        server_info = getattr(transport, "server_info", lambda: None)()
+        if not _valid_server_info(server_info):
+            return _contract_error(
+                "MCP initialize identity does not match the pinned TrendRadar contract"
+            )
+        tools = transport.list_tools()
+        if not _valid_tool_descriptors(tools) or name not in {tool.name for tool in tools}:
+            return _contract_error(
+                f"MCP tools/list does not advertise allow-listed tool {name!r}"
+            )
+        raw = transport.call_tool(name, arguments)
     except McpTransportError as exc:
         return _base_envelope(_transport_error_status(exc), exc.detail)
+    except Exception as exc:  # noqa: BLE001 — normalize adapter failures
+        return _base_envelope(STATUS_UNAVAILABLE, f"tools/call:{name} failed: {exc}")
+    if not isinstance(raw, RawToolResult):
+        return _contract_error("MCP tools/call returned a malformed result")
     envelope = _base_envelope(
         STATUS_UPSTREAM_ERROR if raw.is_error else STATUS_OK,
         raw.payload_text if raw.is_error else None,

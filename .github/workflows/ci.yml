@@ -271,6 +271,12 @@ jobs:
           VR_REPORTS_DIR: ${{ runner.temp }}/vr-intel-reports
         run: npm run test:e2e:intel-digest
 
+      - name: Run TrendRadar radar render E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:trendradar
+
   e2e-decision-inbox:
     name: Playwright decision inbox E2E
     runs-on: ubuntu-latest

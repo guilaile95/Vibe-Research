@@ -144,3 +144,172 @@ def test_no_arbitrary_tool_call_endpoint_exists():
         and any(word in p for word in ("call", "invoke", "exec"))
     ]
     assert forbidden == []
+
+
+# ---------------------------------------------------------------------------
+# P1 雷达控制台面
+# ---------------------------------------------------------------------------
+
+
+import trendradar_console as tr_console  # noqa: E402
+
+
+def test_console_forbidden_tools_never_reachable():
+    captured: dict[str, object] = {}
+
+    class Spy:
+        def __init__(self, config):
+            pass
+
+    def spy_factory(config):
+        return Spy(config)
+
+    def spy_gateway(name, arguments, **kwargs):
+        captured["name"] = name
+        envelope = {
+            "status": "OK",
+            "retrieved_at": "t",
+            "upstream": {"repo": "x"},
+            "result": {},
+        }
+        return envelope
+
+    original = tr_console.gw.call_tool
+    try:
+        tr_console.gw.call_tool = spy_gateway  # type: ignore[assignment]
+        for bad in ("send_notification", "get_notification_channels", "trigger_crawl",
+                    "sync_from_remote", "read_article", "read_articles_batch",
+                    "generate_summary_report", "analyze_data_insights"):
+            result = tr_console.call_read_tool(bad, {}, transport_factory=spy_factory)
+            assert result["status"] == "BAD_ARGUMENT", bad
+            captured.clear()
+    finally:
+        tr_console.gw.call_tool = original  # type: ignore[assignment]
+
+
+def test_console_excludes_notification_channel_tool():
+    assert "get_notification_channels" not in tr_console.READ_TOOL_NAMES
+    response = client.get("/api/trendradar/radar/channels")
+    assert response.status_code == 404
+
+
+def test_console_allows_only_declared_read_names(monkeypatch):
+    seen: dict[str, tuple] = {}
+
+    def fake_gateway(name, arguments, *, allowed_names, env=None,
+                     transport_factory=None):
+        seen["call"] = (name, arguments, allowed_names)
+        return {"status": "OK", "retrieved_at": "t", "upstream": {},
+                "result": {"ok": True}}
+
+    monkeypatch.setattr(tr_console.gw, "call_tool", fake_gateway)
+    result = tr_console.call_read_tool(
+        "get_latest_news", {"limit": 5},
+    )
+    assert result["status"] == "OK"
+    name, args, allowed = seen["call"]
+    assert name == "get_latest_news" and args == {"limit": 5}
+    assert "send_notification" not in allowed
+    assert result["tool"] == "get_latest_news"
+    assert result["authority_ref"].startswith("vibe:trendradar_console:")
+
+
+def _radar_endpoint_env(monkeypatch):
+    """路由层工厂注入点：monkeypatch console.call_read_tool 记录装配参数。"""
+    calls: list[tuple[str, dict]] = []
+
+    def fake_call(name, arguments, env=None, transport_factory=None):
+        calls.append((name, arguments))
+        return {"status": "DISABLED", "retrieved_at": "t", "upstream": {}}
+
+    monkeypatch.setattr(tr_router_module(), "console", _FakeConsole(fake_call))
+    return calls
+
+
+class _FakeConsole:
+    def __init__(self, fn):
+        self._fn = fn
+
+    def call_read_tool(self, name, arguments, env=None, transport_factory=None):
+        return self._fn(name, arguments, env, transport_factory)
+
+    def drop_none(self, args):
+        return {k: v for k, v in args.items() if v is not None}
+
+
+def tr_router_module():
+    import trendradar_router as rr
+    return rr
+
+
+def test_radar_latest_assembles_args(monkeypatch):
+    import trendradar_router as rr
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        rr, "console", _SimpleConsole(calls)
+    )
+    client.get("/api/trendradar/radar/latest?limit=7&platforms=weibo,baidu")
+    assert calls == [
+        ("get_latest_news", {"limit": 7, "platforms": ["weibo", "baidu"]})
+    ]
+
+
+class _SimpleConsole:
+    def __init__(self, sink):
+        self.sink = sink
+
+    def call_read_tool(self, name, arguments, env=None, transport_factory=None):
+        self.sink.append((name, arguments))
+        return {"status": "DISABLED", "retrieved_at": "t", "upstream": {}}
+
+    def drop_none(self, args):
+        return {k: v for k, v in args.items() if v is not None}
+
+
+def test_radar_hotlist_validates_date_and_routes_tool(monkeypatch):
+    import trendradar_router as rr
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(rr, "console", _SimpleConsole(calls))
+
+    bad = client.get("/api/trendradar/radar/hotlist/not-a-date")
+    assert bad.status_code == 422
+
+    ok = client.get("/api/trendradar/radar/hotlist/2026-08-27?limit=3")
+    assert ok.status_code == 200
+    assert calls[-1] == (
+        "get_news_by_date",
+        {"date_range": "2026-08-27", "limit": 3},
+    )
+
+
+def test_radar_search_passes_window_and_url_flag(monkeypatch):
+    import trendradar_router as rr
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(rr, "console", _SimpleConsole(calls))
+
+    client.get("/api/trendradar/radar/search?q=%E7%AE%97%E5%8A%9B&days_back=14")
+    assert calls and calls[0][0] == "search_news"
+    args = calls[0][1]
+    assert args["query"] == "算力"
+    assert args["include_url"] is True
+    assert args["date_range"] == "最近14天"
+
+
+def test_radar_group_registered_in_openapi():
+    paths = _openapi_paths()
+    for expected in (
+        "/api/trendradar/radar/dates",
+        "/api/trendradar/radar/latest",
+        "/api/trendradar/radar/hotlist/{date}",
+        "/api/trendradar/radar/rss-latest",
+        "/api/trendradar/radar/search",
+        "/api/trendradar/radar/trending",
+        "/api/trendradar/radar/topic-trend",
+        "/api/trendradar/radar/sentiment",
+        "/api/trendradar/radar/aggregate",
+        "/api/trendradar/radar/related",
+        "/api/trendradar/radar/system-status",
+        "/api/trendradar/radar/storage-status",
+    ):
+        assert expected in paths
+    assert "/api/trendradar/radar/channels" not in paths
