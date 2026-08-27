@@ -312,11 +312,10 @@ def default_transport_factory(config: GatewayConfig) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# allow-list：Phase 0 只暴露经过类型化验证的窄能力面；
-# 名称来自 pinned 运行时的 tools/list 发现结果（QUALIFICATION.md 记录）。
-# ---------------------------------------------------------------------------
-
-ALLOWED_TOOL_NAMES: frozenset[str] = frozenset()
+# allow-list 语义（TR1-P1 起）：默认全拒；调用方必须显式传入
+# allowed_names（trendradar_console.READ_TOOL_NAMES 是唯一的生产名单，
+# 且永远不含 send_notification / trigger_crawl / sync_from_remote /
+# read_article* 等外发或写类工具——见 console 模块注释）。
 
 
 def _base_envelope(status: str, error: str | None = None) -> dict[str, Any]:
@@ -397,23 +396,28 @@ def tool_inventory(
         }
         for t in tools
     ]
-    envelope["allowed_tool_names"] = sorted(ALLOWED_TOOL_NAMES)
+    # inventory 只报告发现结果；allow 名单属调用方（console），不在此泄露/声称。
+    envelope["tool_count"] = len(tools)
     return envelope
 
 
-def call_allowed_tool(
+def call_tool(
     name: str,
     arguments: dict[str, Any],
+    *,
+    allowed_names: frozenset[str],
     env: dict[str, str] | None = None,
     transport_factory: Callable[[GatewayConfig], Any] = default_transport_factory,
 ) -> dict[str, Any]:
-    """strict allow-listed tool 调用；当前 allow-list 为空集（P0 无公开工具面）。"""
+    """strict allow-listed tool 调用（默认拒绝：allowed_names 必须显式给出）。"""
     config, config_error = load_config(env)
     if config_error is not None:
         return _base_envelope(STATUS_CONFIG_ERROR, config_error)
     if config is None:
         return _base_envelope(STATUS_DISABLED)
-    if type(name) is not str or name not in ALLOWED_TOOL_NAMES:
+    if type(allowed_names) is not frozenset:
+        return _base_envelope(STATUS_BAD_ARGUMENT, "allowed_names must be a frozenset")
+    if type(name) is not str or name not in allowed_names:
         return _base_envelope(
             STATUS_BAD_ARGUMENT,
             f"tool {name!r} is not in the TrendRadar allow-list",

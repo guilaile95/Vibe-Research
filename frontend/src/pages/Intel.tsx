@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import { TrendingUp, FileText, Newspaper, Rss, RefreshCw, Loader2, ExternalLink, AlertCircle, Sparkles, Lightbulb, Star, XCircle } from "lucide-react";
+import { TrendingUp, FileText, Newspaper, Rss, RefreshCw, Loader2, ExternalLink, AlertCircle, Sparkles, Lightbulb, Star, XCircle, Activity } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -11,12 +11,14 @@ import { loadWatchAuthoritative } from "@/lib/watchlist";
 import { hasLlm } from "@/lib/llm";
 import { cn } from "@/lib/utils";
 import { runIntelDigestGeneration } from "@/lib/intelDigestOrchestrator";
+import TrendRadarPanel from "@/components/trendradar/TrendRadarPanel";
 
 const TABS = [
   { key: "events", label: "事件概率", icon: TrendingUp, integrated: false, desc: "全球宏观预期概率（公开数据、免登录只读），后续接入" },
   { key: "filings", label: "A股公告", icon: FileText, integrated: false, desc: "汇总关注列表里各个股的近期公告（东财公开披露）" },
   { key: "news", label: "公开新闻", icon: Newspaper, integrated: false, desc: "汇总关注列表里各个股的近期新闻（公开源）" },
   { key: "investment-news", label: "Investment News", icon: Rss, integrated: true, desc: "12 赛道全球公开 RSS 资讯（集成自 investment-news 仓库）" },
+  { key: "attention-radar", label: "关注雷达", icon: Activity, integrated: true, desc: "TrendRadar sidecar 全平台热榜 / RSS / 趋势 / 情绪观察（本地只读）" },
 ];
 
 export type DigestPhase = "idle" | "generating" | "saving" | "saved" | "cancelled" | "error" | "save_failed" | "empty";
@@ -581,7 +583,9 @@ export function Intel() {
           <h3 className="font-semibold">{cur.label}</h3>
           {cur.integrated && <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary">investment-news</span>}
         </div>
-        {cur.key === "investment-news" ? (
+        {cur.key === "attention-radar" ? (
+          <TrendRadarPanel />
+        ) : cur.key === "investment-news" ? (
           <InvestmentNewsPanel />
         ) : cur.key === "filings" ? (
           <WatchlistFeed kind="filings" />

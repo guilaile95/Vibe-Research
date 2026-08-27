@@ -193,46 +193,56 @@ def test_tool_inventory_lists_discovered_tools():
 
 
 def test_call_blocked_while_disabled():
-    envelope = gw.call_allowed_tool("get_latest_news", {}, env=ENV_DISABLED)
+    envelope = gw.call_tool(
+        "get_latest_news",
+        {},
+        env=ENV_DISABLED,
+        allowed_names=frozenset({"get_latest_news"}),
+    )
     assert envelope["status"] == "DISABLED"
 
 
-def test_allowlist_is_empty_in_phase_zero():
-    assert gw.ALLOWED_TOOL_NAMES == frozenset()
+def test_default_allowlist_is_empty_and_call_path_requires_explicit_names():
+    """默认拒绝：不传 allowed_names 时任何工具都不可达。"""
+    envelope = gw.call_tool(
+        "get_latest_news", {}, env=ENV_ENABLED, transport_factory=_factory(),
+        allowed_names=frozenset(),
+    )
+    assert envelope["status"] == "BAD_ARGUMENT"
 
 
 def test_call_rejects_non_allowlisted_tool_even_when_enabled():
-    envelope = gw.call_allowed_tool(
-        "get_latest_news", {}, env=ENV_ENABLED, transport_factory=_factory()
+    envelope = gw.call_tool(
+        "get_latest_news",
+        {},
+        env=ENV_ENABLED,
+        transport_factory=_factory(),
+        allowed_names=frozenset({"other_tool"}),
     )
     assert envelope["status"] == "BAD_ARGUMENT"
     assert "allow-list" in envelope["error"]
 
 
 def test_call_rejects_non_object_arguments_via_contract_path():
-    # allow-list 为空所以先命 BAD_ARGUMENT；这里临时扩名单验证后续分支
-    original = gw.ALLOWED_TOOL_NAMES
-    try:
-        gw.ALLOWED_TOOL_NAMES = frozenset({"get_latest_news"})  # type: ignore[assignment]
-        fake_env = ENV_ENABLED
-        envelope = gw.call_allowed_tool(
-            "get_latest_news",
-            ["not", "a", "dict"],  # type: ignore[arg-type]
-            env=fake_env,
-            transport_factory=_factory(),
-        )
-        assert envelope["status"] == "BAD_ARGUMENT"
+    allowed = frozenset({"get_latest_news"})
+    envelope = gw.call_tool(
+        "get_latest_news",
+        ["not", "a", "dict"],  # type: ignore[arg-type]
+        env=ENV_ENABLED,
+        transport_factory=_factory(),
+        allowed_names=allowed,
+    )
+    assert envelope["status"] == "BAD_ARGUMENT"
 
-        ok_envelope = gw.call_allowed_tool(
-            "get_latest_news",
-            {},
-            env=fake_env,
-            transport_factory=_factory(),
-        )
-        assert ok_envelope["status"] == "OK"
-        assert ok_envelope["result"] == {"ok": True}
-    finally:
-        gw.ALLOWED_TOOL_NAMES = original  # type: ignore[assignment]
+    ok_envelope = gw.call_tool(
+        "get_latest_news",
+        {},
+        env=ENV_ENABLED,
+        transport_factory=_factory(),
+        allowed_names=allowed,
+    )
+    assert ok_envelope["status"] == "OK"
+    assert ok_envelope["result"] == {"ok": True}
 
 
 def test_upstream_error_result_maps_to_upstream_error_status():
@@ -245,16 +255,15 @@ def test_upstream_error_result_maps_to_upstream_error_status():
     def factory(config):
         return ErroringTransport(config)
 
-    original = gw.ALLOWED_TOOL_NAMES
-    try:
-        gw.ALLOWED_TOOL_NAMES = frozenset({"get_latest_news"})  # type: ignore[assignment]
-        envelope = gw.call_allowed_tool(
-            "get_latest_news", {}, env=ENV_ENABLED, transport_factory=factory
-        )
-        assert envelope["status"] == "UPSTREAM_ERROR"
-        assert envelope["error"] == "boom"
-    finally:
-        gw.ALLOWED_TOOL_NAMES = original  # type: ignore[assignment]
+    envelope = gw.call_tool(
+        "get_latest_news",
+        {},
+        env=ENV_ENABLED,
+        transport_factory=factory,
+        allowed_names=frozenset({"get_latest_news"}),
+    )
+    assert envelope["status"] == "UPSTREAM_ERROR"
+    assert envelope["error"] == "boom"
 
 
 def test_unknown_internal_status_is_impossible():

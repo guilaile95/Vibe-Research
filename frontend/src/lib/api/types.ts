@@ -2673,3 +2673,48 @@ export interface CommittedDecisionRuntimeRead {
   sell_engine: Record<string, unknown>;
   decision_assurance: Record<string, unknown>;
 }
+
+// ---------------------------------------------------------------------------
+// TrendRadar 关注雷达（TR1-P1）：后端 envelope 直传，前端按 status 诚实渲染。
+// ---------------------------------------------------------------------------
+
+export interface TrendradarUpstreamIdentity {
+  repo: string;
+  source_commit: string;
+  core_version: string;
+  mcp_version: string;
+  license: string;
+  core_image: string;
+  mcp_image: string;
+  integration_authority_ref: string;
+  usage_boundary: string;
+}
+
+export interface TrendradarEnvelope<T = unknown> {
+  status: string;
+  retrieved_at?: string;
+  upstream?: TrendradarUpstreamIdentity;
+  error?: string;
+  gateway?: {
+    enabled: boolean;
+    mcp_url_host?: string | null;
+    timeout_seconds?: number | null;
+  };
+  server?: { server_name?: string; server_version?: string; protocol_version?: string } | null;
+  tool_count?: number;
+  tools?: Array<{ name: string; description?: string; input_schema?: unknown }>;
+  result?: T;
+  result_text?: string;
+  tool?: string;
+  authority_ref?: string;
+}
+
+export interface TrNewsRow {
+  title?: string;
+  platform?: string;
+  platform_name?: string;
+  rank?: number;
+  timestamp?: string;
+  url?: string;
+  hotness_score?: number;
+}
