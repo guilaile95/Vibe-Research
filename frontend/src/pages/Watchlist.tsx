@@ -18,6 +18,7 @@ import {
 } from "@/lib/decisionCockpit";
 import { useLiveQuotes, isTradingHours } from "@/hooks/useLiveQuotes";
 import { cn } from "@/lib/utils";
+import { TrendRadarWatchlistContext } from "@/components/trendradar/TrendRadarWatchlistContext";
 
 // A 股红涨绿跌（与整个看板一致）。
 const color = (v: number | undefined) =>
@@ -291,12 +292,14 @@ export function Watchlist() {
             </button>
           </div>
         </div>
-        {codes.length === 0 ? (
-          <p className="py-8 text-center text-sm text-muted-foreground/60">
-            还没有自选股，用上面的框粘贴一串代码批量添加。
-          </p>
-        ) : (
-          <>
+            {codes.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground/60">
+                还没有自选股，用上面的框粘贴一串代码批量添加。
+              </p>
+            ) : (
+              <>
+                <TrendRadarWatchlistContext codes={codes} />
+
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/20 px-3 py-2 text-xs">
               <div className="text-muted-foreground">
                 <span>HiThink · 当日异动快照</span>

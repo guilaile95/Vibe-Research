@@ -39,6 +39,7 @@ import type {
   TrendradarEnvelope,
   TrNewsRow,
   TrendradarAttentionContext,
+  TrendradarWatchlistContext,
   PortfolioData,
   PositionBootstrapInput,
   PositionBootstrapPreview,
@@ -607,6 +608,11 @@ export const api = {
   trendradarAttentionContext: (code: string, signal?: AbortSignal) =>
     get<TrendradarAttentionContext>(
       `/trendradar/attention-context/${encodeURIComponent(code)}`,
+      signal ? { signal } : undefined,
+    ),
+  trendradarWatchlistContext: (signal?: AbortSignal) =>
+    get<TrendradarWatchlistContext>(
+      "/trendradar/watchlist-context",
       signal ? { signal } : undefined,
     ),
   radar: () => get<RadarData>("/radar"),

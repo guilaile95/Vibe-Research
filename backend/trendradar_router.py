@@ -24,6 +24,8 @@ import trendradar_attention_context as attention_context
 import trendradar_console as console
 import trendradar_gateway as gateway
 import trendradar_observation_adapter as observer
+import trendradar_watchlist_context as watchlist_context
+import watchlist_store
 
 router = APIRouter(prefix="/api/trendradar", tags=["trendradar"])
 
@@ -258,3 +260,23 @@ def attention_context_for_security(code: str):
             detail={"status": "BAD_ARGUMENT", "error": "code must be a 6-digit A-share code"},
         )
     return attention_context.build_attention_context(code)
+
+
+@router.get("/watchlist-context")
+def attention_context_for_watchlist():
+    """后端权威自选股的批量关注上下文；只读 observation projection。"""
+    try:
+        status = watchlist_store.get_watchlist_status()
+        if status.get("status") == "valid":
+            codes = status.get("data", {}).get("codes", [])
+        else:
+            codes = []
+        return watchlist_context.build_watchlist_context(
+            codes,
+            watchlist_status=str(status.get("status", "unavailable")),
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": gateway.STATUS_BAD_ARGUMENT, "error": "watchlist contains invalid codes"},
+        ) from None
