@@ -34,17 +34,11 @@ jobs:
           python -m piptools compile --no-emit-index-url --output-file=requirements-dev-linux-py311.lock.txt requirements.txt requirements-dev.txt
           git diff --exit-code -- requirements-linux-py311.lock.txt requirements-dev-linux-py311.lock.txt
 
-      - name: TrendRadar client lock check (isolated tree)
+      - name: TrendRadar MCP client Linux compat probe (pinned install)
         working-directory: backend
         run: |
-          python -m piptools compile --no-emit-index-url --output-file=requirements-trendradar-linux-py311.lock.txt requirements-trendradar.txt
-          git diff --exit-code -- requirements-trendradar-linux-py311.lock.txt
-
-      - name: Install TrendRadar MCP client (isolated lock)
-        working-directory: backend
-        run: |
-          python -m pip install -r requirements-trendradar-linux-py311.lock.txt
-          python -c "import mcp; from mcp.client.streamable_http import streamablehttp_client; print('trendradar mcp client import ok')"
+          python -m pip install "mcp==1.16.0"
+          python -c "import mcp; from mcp.client.streamable_http import streamablehttp_client; print('trendradar mcp client import ok on linux py3.11')"
 
       - name: Run offline backend tests
         working-directory: backend

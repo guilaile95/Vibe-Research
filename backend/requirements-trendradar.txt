@@ -3,7 +3,9 @@
 # 为什么独立：官方 mcp SDK 自 1.0.0 起要求 httpx>=0.27，而主依赖树中
 # mootdx 全版本线要求 httpx<0.26，单环境 ResolutionImpossible（2026-08-27 双平台
 # pip-tools 实测证据）。按仓库重数据源依赖约定（akshare/mootdx 同款模式）
-# 独立安装：pip install -r requirements-trendradar.lock.txt
+# Windows 侧以 canonical 锁安装：pip install -r requirements-trendradar-windows-py312.lock.txt
+（Linux 侧不做 Vibe-owned 锁文件——生成需真实 Linux 解释器环境做 marker 求值；
+ CI 的 backend job 用 mcp==1.16.0 钉定安装 + import 冒烟作为 Linux py3.11 兼容性证据。）
 # 未安装时 trendradar_gateway 返回显式 UNAVAILABLE(client-missing) envelope。
 #
 # pin 依据：与 pinned 服务端（fastmcp==2.12.5）认证 venv 实证同族 mcp==1.16.0；

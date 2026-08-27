@@ -150,14 +150,19 @@ tool_inventory() -> OK; 27 tools （连续两次独立生命周期均 OK）
    - **依赖冲突发现**：`mcp>=1.x 全线 requires httpx>=0.27`（PyPI metadata 全版本核对），
      而 Vibe 主依赖树 mootdx 全版本线钉死 `httpx<0.24~<0.26` → 单环境解析
      `ResolutionImpossible`（完整冲突链已留痕）。
-3. 最终形态：**isolated dependency tree**
-   `backend/requirements-trendradar.txt`（pin `mcp==1.16.0`）+ 双平台独立锁
-   （linux-py311 / windows-py312）+ CI 两个 job 各加「编译一致性 + 安装 + import 冒烟」步骤。
-   运行端遵循本仓库既有重数据源约定（akshare/mootdx 同款模式）：未安装该锁时网关
-   一切调用返回显式 `UNAVAILABLE(client-missing)` envelope，不影响其余功能；
-   gateway 全部离线测试走 fake transport，不依赖该包存在。
+3. 最终形态：**isolated dependency tree（Windows canonical）+ Linux 兼容性探针**
+   - `backend/requirements-trendradar.txt`（pin `mcp==1.16.0`）+
+     `requirements-trendradar-windows-py312.lock.txt` canonical 锁；
+     Windows CI job 做「编译一致性→安装→import 冒烟」；
+   - **诚实边界**：Vibe-owned 的 Linux 锁文件需要真实 Linux 解释器环境求值
+     sys_platform 标记（首版在 Windows 上误编入 pywin32 被 CI 抓获并撤下），
+     本机无 Docker/WSL，故不伪造；Linux 证据改为 backend job 中
+     `pip install mcp==1.16.0` 钉定安装 + Streamable HTTP client import 冒烟
+     （py3.11）；运行端遵循本仓库既有重数据源约定（akshare/mootdx 同款模式）：
+     未安装该锁时网关一切调用返回显式 `UNAVAILABLE(client-missing)` envelope。
+   - 全部离线测试走 fake transport，不依赖该包存在。
 
-结论：**QUALIFIED**（官方 mcp SDK、isolated lock、双平台 CI 校验、缺装行为显式降级）。
+结论：**QUALIFIED**（官方 mcp SDK、Windows canonical 锁、Linux pinned 探针、缺装显式降级）。
 
 ## 6. GPL 边界证明（GPL_BOUNDARY）
 
