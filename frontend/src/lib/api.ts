@@ -38,6 +38,7 @@ import type {
   RadarData,
   TrendradarEnvelope,
   TrNewsRow,
+  TrendradarAttentionContext,
   PortfolioData,
   PositionBootstrapInput,
   PositionBootstrapPreview,
@@ -603,6 +604,11 @@ export const api = {
     ),
   trendradarStorageStatus: () =>
     get<TrendradarEnvelope>("/trendradar/radar/storage-status", { unwrapData: false }),
+  trendradarAttentionContext: (code: string, signal?: AbortSignal) =>
+    get<TrendradarAttentionContext>(
+      `/trendradar/attention-context/${encodeURIComponent(code)}`,
+      signal ? { signal } : undefined,
+    ),
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
   gpuRent: () => get<GpuRentData>("/signals/gpu-rent"),

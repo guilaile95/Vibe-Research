@@ -153,6 +153,90 @@ function klineBars(code) {
   }));
 }
 
+function attentionContextPayload(code, { status = "OK" } = {}) {
+  if (status !== "OK" && status !== "PARTIAL") {
+    return {
+      status,
+      retrieved_at: "2026-08-27T10:00:00Z",
+      authority_ref: "vibe:trendradar_attention_context:v0.1",
+      usage_boundary: "observation_only_not_an_investment_authority",
+      error: "模拟 TrendRadar 不可用",
+      security: { code, company_name: stockName(code) },
+      mapping: {
+        status: "MAPPED",
+        sector: { value: "银行", source: "fixture" },
+        topics: [{ term: "数字金融", source: "fixture" }],
+        matched_terms: [stockName(code), "银行", "数字金融"],
+        reasons: [],
+        errors: [],
+      },
+      observation: {
+        window_days: 7,
+        window_semantics: "TrendRadar search_news date_range relative window",
+        items: [],
+        item_count: 0,
+        rank_history_semantics: "missing means UNKNOWN",
+      },
+      source_statuses: [{ term: stockName(code), status, tool: "search_news", error: "模拟 TrendRadar 不可用" }],
+    };
+  }
+  return {
+    status,
+    retrieved_at: "2026-08-27T10:00:00Z",
+    authority_ref: "vibe:trendradar_attention_context:v0.1",
+    usage_boundary: "observation_only_not_an_investment_authority",
+    upstream: {
+      repo: "sansan0/TrendRadar",
+      source_commit: "8ee26026ba6c11dec41a95fb3895a7162876caa1",
+      core_version: "6.10.0",
+      mcp_version: "4.1.0",
+      license: "GPL-3.0",
+      core_image: "wantcat/trendradar:6.10.0@sha256:fixture",
+      mcp_image: "wantcat/trendradar-mcp:4.1.0@sha256:fixture",
+      integration_authority_ref: "vibe:trendradar_gateway:v0.1",
+      usage_boundary: "observation_only_not_an_investment_authority",
+    },
+    security: { code, company_name: stockName(code) },
+    mapping: {
+      status: "MAPPED",
+      sector: { value: "银行", source: "fixture" },
+      topics: [{ term: "数字金融", source: "fixture" }, { term: "算力租赁", source: "fixture" }],
+      matched_terms: [stockName(code), "银行", "数字金融", "算力租赁"],
+      reasons: [
+        { kind: "security_code", value: code, source: "user_query_exact" },
+        { kind: "company_name", value: stockName(code), source: "fixture" },
+      ],
+      errors: [],
+    },
+    observation: {
+      window_days: 7,
+      window_semantics: "TrendRadar search_news date_range relative window",
+      items: [
+        {
+          title: `${stockName(code)}公开关注观察`,
+          platform: "微博",
+          url: "https://example.com/trendradar-observation",
+          timestamp: "2026-08-27 09:30:00",
+          rank: 3,
+          off_list: false,
+          hotness_score: null,
+          first_seen: "2026-08-27 09:00:00",
+          last_seen: "2026-08-27 09:30:00",
+          crawl_count: 2,
+          rank_timeline: [
+            { crawl_time: "2026-08-27 09:00:00", rank: 5, off_list: false },
+            { crawl_time: "2026-08-27 09:30:00", rank: 3, off_list: false },
+          ],
+          matched_terms: [stockName(code)],
+        },
+      ],
+      item_count: 1,
+      rank_history_semantics: "Only returned when upstream exposes rank_timeline; missing means UNKNOWN",
+    },
+    source_statuses: [{ term: stockName(code), status: "OK", tool: "search_news", observation_count: 1 }],
+  };
+}
+
 function technicalIndicatorsEnvelope(code, { status = "normal" } = {}) {
   const bars = klineBars(code);
   if (status === "unavailable") {
@@ -262,6 +346,10 @@ function createApiMockController() {
     valuationCalls: [],
     technicalIndicatorsStatus: "normal",
     technicalIndicatorsCalls: [],
+    attentionContextStatus: "OK",
+    attentionContextCalls: [],
+    attentionContextHoldCode: null,
+    attentionContextHold: null,
   };
 
   function pathnameOf(url) {
@@ -452,6 +540,22 @@ function createApiMockController() {
       return;
     }
 
+    if (pathname.includes("/trendradar/attention-context/")) {
+      const attentionCode = pathname.split("/").pop() || code;
+      state.attentionContextCalls.push({ code: attentionCode, url, ts: Date.now() });
+      if (state.attentionContextHoldCode === attentionCode) {
+        await new Promise((resolve) => {
+          state.attentionContextHold = { resolve, route, code: attentionCode };
+        });
+      }
+      try {
+        await route.fulfill(jsonOk(attentionContextPayload(attentionCode, { status: state.attentionContextStatus })));
+      } catch {
+        // A formal code change may abort the stale request before the held route is released.
+      }
+      return;
+    }
+
     // 技术指标与价格触发：返回与 klineBars 日期对齐的 envelope
     if (pathname.includes("/technical-indicators")) {
       state.technicalIndicatorsCalls.push({ code, url, ts: Date.now() });
@@ -583,6 +687,24 @@ function createApiMockController() {
     setTechnicalIndicatorsStatus(status) {
       state.technicalIndicatorsStatus = status;
     },
+    setAttentionContextStatus(status) {
+      state.attentionContextStatus = status;
+    },
+    resetAttentionContextCalls() {
+      state.attentionContextCalls = [];
+    },
+    holdAttentionContextFor(code) {
+      state.attentionContextHoldCode = code;
+      state.attentionContextHold = null;
+    },
+    async releaseHeldAttentionContext() {
+      if (state.attentionContextHold && typeof state.attentionContextHold.resolve === "function") {
+        const hold = state.attentionContextHold;
+        state.attentionContextHold = null;
+        state.attentionContextHoldCode = null;
+        hold.resolve();
+      }
+    },
     armManualHold() {
       state.klineHold = "armed";
     },
@@ -647,6 +769,67 @@ async function runSmoke(page, mock, errors) {
     return;
   }
 
+  // Attention Context 只读面板：绑定已提交代码，展示映射、观察和 provenance。
+  try {
+    const attention = page.getByTestId("trendradar-attention-context");
+    await attention.waitFor({ state: "visible", timeout: 10000 });
+    await attention.getByText("公开关注上下文", { exact: false }).waitFor({ state: "visible", timeout: 10000 });
+    for (const text of [
+      "平安银行（000001）",
+      "行业依据：银行",
+      "检索词：平安银行、银行、数字金融、算力租赁",
+      "平安银行公开关注观察",
+      "来源：微博",
+      "排名轨迹：",
+      "来源身份：sansan0/TrendRadar@8ee26026",
+      "authority_ref：vibe:trendradar_attention_context:v0.1",
+    ]) {
+      if (!(await attention.getByText(text, { exact: false }).first().isVisible().catch(() => false))) {
+        errors.push(`${label}: attention context text not visible: ${text}`);
+      }
+    }
+    if ((await attention.getAttribute("data-security-code")) !== "000001") {
+      errors.push(`${label}: attention context is not bound to submitted 000001`);
+    }
+    const attentionText = await attention.innerText();
+    for (const forbidden of ["投资评分", "Formal Decision", "BUY", "SELL"]) {
+      if (attentionText.includes(forbidden)) errors.push(`${label}: forbidden attention wording present: ${forbidden}`);
+    }
+  } catch (e) {
+    errors.push(`${label}: attention context success scenario failed: ${e.message}`);
+  }
+
+  // TrendRadar 不可用只影响 attention 区块，不遮蔽正式 StockData 主数据。
+  mock.setAttentionContextStatus("UNAVAILABLE");
+  await fillCode(page, "000002");
+  await clickQuery(page);
+  try {
+    await waitForStockHeader(page, "000002", "万科A");
+    const unavailableAttention = page.getByTestId("trendradar-attention-context");
+    await unavailableAttention.getByText(/公开关注上下文暂不可用/).waitFor({ state: "visible", timeout: 10000 });
+    if ((await unavailableAttention.getAttribute("data-security-code")) !== "000002") {
+      errors.push(`${label}: unavailable attention context is not bound to 000002`);
+    }
+    if (!(await page.getByRole("heading", { name: "万科A" }).isVisible().catch(() => false))) {
+      errors.push(`${label}: TrendRadar unavailable broke formal StockData header`);
+    }
+    if (!(await page.getByText("估值", { exact: false }).first().isVisible().catch(() => false))) {
+      errors.push(`${label}: TrendRadar unavailable hid valuation content`);
+    }
+  } catch (e) {
+    errors.push(`${label}: attention context unavailable scenario failed: ${e.message}`);
+  }
+  mock.setAttentionContextStatus("OK");
+  await fillCode(page, "000001");
+  await clickQuery(page);
+  try {
+    await waitForStockHeader(page, "000001", "平安银行");
+  } catch (e) {
+    errors.push(`${label}: restoring 000001 after unavailable scenario failed: ${e.message}`);
+  }
+  mock.resetAttentionContextCalls();
+  await sleep(300);
+
   const health = page.getByTestId("fundamental-health");
   if (!(await health.isVisible().catch(() => false))) errors.push(`${label}: fundamental health module not visible`);
   for (const text of [
@@ -705,12 +888,69 @@ async function runSmoke(page, mock, errors) {
     errors.push(`${label}: 平安银行 header hidden (TI fetch broke main page)`);
   }
 
-  // 2) Change input to 000002 without clicking query
+  // 2) Change input to 000002 without clicking query: activeCode must remain 000001
+  mock.resetAttentionContextCalls();
   await fillCode(page, "000002");
+  await sleep(300);
+  if (mock.state.attentionContextCalls.length !== 0) {
+    errors.push(`${label}: editing unsubmitted code issued attention-context request`);
+  }
   // Header must still show 000001
   if (!(await page.getByRole("heading", { name: "平安银行" }).isVisible().catch(() => false))) {
     errors.push(`${label}: changing input to 000002 without query should keep 平安银行`);
   }
+
+  // 2b) Hold the old Attention response, switch formally, and ensure stale data cannot overwrite 000002.
+  mock.resetAttentionContextCalls();
+  mock.holdAttentionContextFor("000001");
+  await fillCode(page, "000001");
+  await clickQuery(page);
+  let deadline = Date.now() + 5000;
+  while (Date.now() < deadline && !mock.state.attentionContextHold) {
+    await sleep(30);
+  }
+  if (!mock.state.attentionContextHold) {
+    errors.push(`${label}: attention race setup failed — old 000001 request was not held`);
+  } else {
+    await fillCode(page, "000002");
+    await clickQuery(page);
+    try {
+      await waitForStockHeader(page, "000002", "万科A");
+    } catch (e) {
+      errors.push(`${label}: attention race query 000002 failed: ${e.message}`);
+    }
+    deadline = Date.now() + 5000;
+    while (Date.now() < deadline && !mock.state.attentionContextCalls.some((item) => item.code === "000002")) {
+      await sleep(30);
+    }
+    if (!mock.state.attentionContextCalls.some((item) => item.code === "000002")) {
+      errors.push(`${label}: formal 000002 query did not issue attention-context request`);
+    }
+    try {
+      await page.getByTestId("trendradar-attention-context").getByText("万科A（000002）", { exact: false }).waitFor({ state: "visible", timeout: 10000 });
+    } catch (e) {
+      errors.push(`${label}: current 000002 attention response was not rendered before stale release: ${e.message}`);
+    }
+    await mock.releaseHeldAttentionContext();
+    await sleep(500);
+    const currentAttention = page.getByTestId("trendradar-attention-context");
+    if ((await currentAttention.getAttribute("data-security-code")) !== "000002") {
+      errors.push(`${label}: stale 000001 attention response overwrote 000002 panel`);
+    }
+    const currentAttentionText = await currentAttention.innerText();
+    if (!currentAttentionText.includes("万科A（000002）")) {
+      errors.push(`${label}: stale attention response removed current 000002 content`);
+    }
+  }
+  mock.resetAttentionContextCalls();
+  await fillCode(page, "000001");
+  await clickQuery(page);
+  try {
+    await waitForStockHeader(page, "000001", "平安银行");
+  } catch (e) {
+    errors.push(`${label}: restoring 000001 after attention race failed: ${e.message}`);
+  }
+  mock.resetAttentionContextCalls();
 
   // 3) Expand K-line → request still uses 000001
   mock.resetKlineCalls();
@@ -729,7 +969,7 @@ async function runSmoke(page, mock, errors) {
   }
 
   // Wait until kline call recorded with code=000001
-  let deadline = Date.now() + 5000;
+  deadline = Date.now() + 5000;
   while (Date.now() < deadline && mock.state.klineCalls.length === 0) {
     await sleep(50);
   }

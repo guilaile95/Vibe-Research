@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 import app as app_module
 import trendradar_observation_adapter as obs
+import trendradar_gateway as gateway
 import trendradar_router
 
 client = TestClient(app_module.app)
@@ -76,6 +77,7 @@ def test_routes_are_registered():
         "/api/trendradar/observation/news/{date}",
         "/api/trendradar/observation/rss/{date}",
         "/api/trendradar/observation/news-ai-filter/{date}",
+        "/api/trendradar/attention-context/{code}",
     ):
         assert expected in paths
 
@@ -93,7 +95,8 @@ def test_status_config_error_for_non_loopback(monkeypatch):
     monkeypatch.setenv("VIBE_TRENDRADAR_MCP_URL", "http://10.0.0.5:3333/mcp")
     body = client.get("/api/trendradar/status").json()
     assert body["status"] == "CONFIG_ERROR"
-    assert "loopback" in body["error"]
+    assert body["error"] == gateway.safe_public_error(gateway.STATUS_CONFIG_ERROR)
+    assert "10.0.0.5" not in str(body)
 
 
 def test_tools_disabled_returns_envelope():

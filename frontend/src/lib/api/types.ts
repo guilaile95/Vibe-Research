@@ -2718,3 +2718,56 @@ export interface TrNewsRow {
   url?: string;
   hotness_score?: number;
 }
+
+export interface TrendradarAttentionMapping {
+  status: string;
+  sector: { value: string | null; source: string | null } | null;
+  topics: Array<{ term: string; source: string }>;
+  matched_terms: string[];
+  reasons: Array<{ kind: string; value: string; source: string }>;
+  errors: Array<{ source: string; error: string }>;
+}
+
+export interface TrendradarAttentionItem {
+  title: string;
+  platform: string | null;
+  url: string | null;
+  timestamp: string | null;
+  rank: number | null;
+  off_list: boolean | null;
+  hotness_score: number | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  crawl_count: number | null;
+  rank_timeline: Array<{
+    crawl_time: string;
+    rank: number;
+    off_list: boolean;
+  }> | null;
+  matched_terms: string[];
+}
+
+export interface TrendradarAttentionContext {
+  status: string;
+  retrieved_at?: string;
+  authority_ref?: string;
+  usage_boundary?: string;
+  upstream?: TrendradarUpstreamIdentity;
+  error?: string;
+  security: { code: string; company_name: string | null };
+  mapping: TrendradarAttentionMapping;
+  observation: {
+    window_days: number;
+    window_semantics: string;
+    items: TrendradarAttentionItem[];
+    item_count: number;
+    rank_history_semantics: string;
+  };
+  source_statuses: Array<{
+    term: string;
+    status: string;
+    tool: string;
+    error?: string;
+    observation_count?: number;
+  }>;
+}

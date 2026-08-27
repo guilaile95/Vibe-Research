@@ -105,6 +105,7 @@ def test_non_loopback_refused_fail_closed():
     assert config is None and error and "loopback" in error
     envelope, _transport = _ok({gw.MCP_URL_ENV: "http://0.0.0.0:3333/mcp"})
     assert envelope["status"] == "CONFIG_ERROR"
+    assert envelope["error"] == gw.safe_public_error(gw.STATUS_CONFIG_ERROR)
     assert envelope["gateway"]["enabled"] is False
 
 
@@ -173,12 +174,65 @@ def test_status_snapshot_rejects_pinned_identity_drift():
         FakeTransport.server_payload = original
 
 
+def test_non_ok_status_snapshot_hides_server_details_and_transport_host():
+    class UntrustedTransport(FakeTransport):
+        def server_info(self):
+            return {
+                "server_name": "impostor",
+                "server_version": "bad",
+                "protocol_version": "bad",
+                "detail": "ProxyError https://secret.example/path?token=x",
+            }
+
+    envelope = gw.status_snapshot(
+        env=ENV_ENABLED,
+        transport_factory=lambda config: UntrustedTransport(config),
+    )
+    assert envelope["status"] == gw.STATUS_CONTRACT_MISMATCH
+    assert "server" not in envelope
+    assert "mcp_url_host" not in envelope["gateway"]
+    assert "secret.example" not in str(envelope)
+    assert "ProxyError" not in str(envelope)
+
+
+def test_non_ok_transport_status_hides_transport_host():
+    def broken_factory(_config):
+        raise gw.McpTransportError("TIMEOUT", "https://secret.example/mcp")
+
+    envelope = gw.status_snapshot(env=ENV_ENABLED, transport_factory=broken_factory)
+    assert envelope["status"] == gw.STATUS_TIMEOUT
+    assert envelope["gateway"] == {"enabled": True, "timeout_seconds": gw.DEFAULT_TIMEOUT_SECONDS}
+    assert "secret.example" not in str(envelope)
+
+
 def test_status_snapshot_normalizes_unexpected_transport_error():
     def broken_factory(_config):
-        raise ValueError("malformed transport")
+        raise ValueError("ProxyError https://secret.example/mcp?token=abc")
 
     envelope = gw.status_snapshot(env=ENV_ENABLED, transport_factory=broken_factory)
     assert envelope["status"] == gw.STATUS_UNAVAILABLE
+    assert envelope["error"] == gw.safe_public_error(gw.STATUS_UNAVAILABLE)
+    assert "ProxyError" not in str(envelope)
+    assert "secret.example" not in str(envelope)
+
+
+def test_config_errors_are_sanitized_at_public_boundary():
+    env = {gw.MCP_URL_ENV: "http://10.0.0.5:3333/mcp"}
+    for operation in (
+        gw.status_snapshot,
+        gw.tool_inventory,
+    ):
+        envelope = operation(env=env)
+        assert envelope["status"] == gw.STATUS_CONFIG_ERROR
+        assert envelope["error"] == gw.safe_public_error(gw.STATUS_CONFIG_ERROR)
+        assert "10.0.0.5" not in str(envelope)
+
+    envelope = gw.call_tool(
+        "get_latest_news", {}, env=env, allowed_names=frozenset({"get_latest_news"})
+    )
+    assert envelope["status"] == gw.STATUS_CONFIG_ERROR
+    assert envelope["error"] == gw.safe_public_error(gw.STATUS_CONFIG_ERROR)
+    assert "10.0.0.5" not in str(envelope)
 
 
 def test_unreachable_server_maps_to_unavailable(monkeypatch):
@@ -250,7 +304,7 @@ def test_call_rejects_non_allowlisted_tool_even_when_enabled():
         allowed_names=frozenset({"other_tool"}),
     )
     assert envelope["status"] == "BAD_ARGUMENT"
-    assert "allow-list" in envelope["error"]
+    assert envelope["error"] == gw.safe_public_error(gw.STATUS_BAD_ARGUMENT)
 
 
 def test_call_rejects_allowlisted_tool_missing_from_upstream_inventory():
@@ -307,7 +361,8 @@ def test_upstream_error_result_maps_to_upstream_error_status():
         allowed_names=frozenset({"get_latest_news"}),
     )
     assert envelope["status"] == "UPSTREAM_ERROR"
-    assert envelope["error"] == "boom"
+    assert envelope["error"] == gw.safe_public_error(gw.STATUS_UPSTREAM_ERROR)
+    assert "boom" not in str(envelope)
 
 
 def test_call_preserves_text_only_result():
@@ -332,7 +387,7 @@ def test_call_preserves_text_only_result():
 def test_call_normalizes_unexpected_transport_error():
     class BrokenTransport(FakeTransport):
         def call_tool(self, name, arguments):
-            raise ValueError("malformed result")
+            raise ValueError("ProxyError https://secret.example/mcp")
 
     envelope = gw.call_tool(
         "get_latest_news", {}, env=ENV_ENABLED,
@@ -340,6 +395,9 @@ def test_call_normalizes_unexpected_transport_error():
         allowed_names=frozenset({"get_latest_news"}),
     )
     assert envelope["status"] == gw.STATUS_UNAVAILABLE
+    assert envelope["error"] == gw.safe_public_error(gw.STATUS_UNAVAILABLE)
+    assert "ProxyError" not in str(envelope)
+    assert "secret.example" not in str(envelope)
 
 
 def test_unknown_internal_status_is_impossible():

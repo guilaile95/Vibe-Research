@@ -331,7 +331,7 @@ def _base_envelope(status: str, error: str | None = None) -> dict[str, Any]:
         "upstream": upstream_identity(),
     }
     if error is not None:
-        envelope["error"] = error
+        envelope["error"] = error if status == STATUS_OK else safe_public_error(status)
     return envelope
 
 
@@ -340,8 +340,27 @@ def _transport_error_status(error: McpTransportError) -> str:
         else STATUS_UNAVAILABLE
 
 
-def _contract_error(detail: str) -> dict[str, Any]:
-    return _base_envelope(STATUS_CONTRACT_MISMATCH, detail)
+def safe_public_error(status: str) -> str:
+    """返回固定公开错误；transport/上游异常原文只留在进程内部。"""
+    return {
+        STATUS_DISABLED: "TrendRadar 未启用",
+        STATUS_CONFIG_ERROR: "TrendRadar 配置无效",
+        STATUS_UNAVAILABLE: "TrendRadar 暂不可用",
+        STATUS_TIMEOUT: "TrendRadar 查询超时",
+        STATUS_CONTRACT_MISMATCH: "TrendRadar 返回契约不匹配",
+        STATUS_UPSTREAM_ERROR: "TrendRadar 上游返回错误",
+        STATUS_BAD_ARGUMENT: "TrendRadar 请求参数无效",
+    }.get(status, "TrendRadar 暂不可用")
+
+
+def _public_error(status: str, _detail: Any = None) -> str:
+    """所有非成功 envelope 只携带固定文案，不把异常原文送到客户端。"""
+    return safe_public_error(status)
+
+
+def _contract_error(_detail: str) -> dict[str, Any]:
+    # 详细契约诊断只留在进程内部；公开 envelope 只给固定分类文案。
+    return _base_envelope(STATUS_CONTRACT_MISMATCH, safe_public_error(STATUS_CONTRACT_MISMATCH))
 
 
 def _valid_server_info(server: Any) -> bool:
@@ -376,7 +395,7 @@ def status_snapshot(
     config, config_error = load_config(env)
     if config_error is not None:
         # 配置存在但非法：CONFIG_ERROR fail-closed（绝不静默当成未启用）。
-        envelope = _base_envelope(STATUS_CONFIG_ERROR, config_error)
+        envelope = _base_envelope(STATUS_CONFIG_ERROR, safe_public_error(STATUS_CONFIG_ERROR))
         envelope["gateway"] = _disabled_gateway_view()
         return envelope
     if config is None:
@@ -388,23 +407,27 @@ def status_snapshot(
         "mcp_url_host": config.host,
         "timeout_seconds": config.timeout_seconds,
     }
+    failure_gateway_view = {
+        "enabled": True,
+        "timeout_seconds": config.timeout_seconds,
+    }
     try:
         transport = transport_factory(config)
         server_info = getattr(transport, "server_info", lambda: None)()
     except McpTransportError as exc:
-        envelope = _base_envelope(_transport_error_status(exc), exc.detail)
-        envelope["gateway"] = enabled_view
+        status = _transport_error_status(exc)
+        envelope = _base_envelope(status, safe_public_error(status))
+        envelope["gateway"] = failure_gateway_view
         return envelope
-    except Exception as exc:  # noqa: BLE001 — normalize adapter failures
-        envelope = _base_envelope(STATUS_UNAVAILABLE, f"initialize failed: {exc}")
-        envelope["gateway"] = enabled_view
+    except Exception:  # noqa: BLE001 — normalize adapter failures
+        envelope = _base_envelope(STATUS_UNAVAILABLE, safe_public_error(STATUS_UNAVAILABLE))
+        envelope["gateway"] = failure_gateway_view
         return envelope
     if not _valid_server_info(server_info):
         envelope = _contract_error(
             "MCP initialize identity does not match the pinned TrendRadar contract"
         )
-        envelope["gateway"] = enabled_view
-        envelope["server"] = server_info if isinstance(server_info, dict) else None
+        envelope["gateway"] = failure_gateway_view
         return envelope
     envelope = _base_envelope(STATUS_OK)
     envelope["gateway"] = enabled_view
@@ -419,7 +442,7 @@ def tool_inventory(
     """strict tools/list 发现（只在 enabled 且可达时返回工具清单）。"""
     config, config_error = load_config(env)
     if config_error is not None:
-        return _base_envelope(STATUS_CONFIG_ERROR, config_error)
+        return _base_envelope(STATUS_CONFIG_ERROR, safe_public_error(STATUS_CONFIG_ERROR))
     if config is None:
         return _base_envelope(STATUS_DISABLED)
     try:
@@ -427,9 +450,10 @@ def tool_inventory(
         server_info = getattr(transport, "server_info", lambda: None)()
         tools = transport.list_tools()
     except McpTransportError as exc:
-        return _base_envelope(_transport_error_status(exc), exc.detail)
-    except Exception as exc:  # noqa: BLE001 — normalize adapter failures
-        return _base_envelope(STATUS_UNAVAILABLE, f"tools/list failed: {exc}")
+        status = _transport_error_status(exc)
+        return _base_envelope(status, safe_public_error(status))
+    except Exception:  # noqa: BLE001 — normalize adapter failures
+        return _base_envelope(STATUS_UNAVAILABLE, safe_public_error(STATUS_UNAVAILABLE))
     if not _valid_server_info(server_info):
         return _base_envelope(
             STATUS_CONTRACT_MISMATCH,
@@ -465,7 +489,7 @@ def call_tool(
     """strict allow-listed tool 调用（默认拒绝：allowed_names 必须显式给出）。"""
     config, config_error = load_config(env)
     if config_error is not None:
-        return _base_envelope(STATUS_CONFIG_ERROR, config_error)
+        return _base_envelope(STATUS_CONFIG_ERROR, safe_public_error(STATUS_CONFIG_ERROR))
     if config is None:
         return _base_envelope(STATUS_DISABLED)
     if type(allowed_names) is not frozenset:
@@ -491,16 +515,20 @@ def call_tool(
             )
         raw = transport.call_tool(name, arguments)
     except McpTransportError as exc:
-        return _base_envelope(_transport_error_status(exc), exc.detail)
-    except Exception as exc:  # noqa: BLE001 — normalize adapter failures
-        return _base_envelope(STATUS_UNAVAILABLE, f"tools/call:{name} failed: {exc}")
+        status = _transport_error_status(exc)
+        return _base_envelope(status, safe_public_error(status))
+    except Exception:  # noqa: BLE001 — normalize adapter failures
+        return _base_envelope(STATUS_UNAVAILABLE, safe_public_error(STATUS_UNAVAILABLE))
     if not isinstance(raw, RawToolResult):
         return _contract_error("MCP tools/call returned a malformed result")
     envelope = _base_envelope(
         STATUS_UPSTREAM_ERROR if raw.is_error else STATUS_OK,
-        raw.payload_text if raw.is_error else None,
+        safe_public_error(STATUS_UPSTREAM_ERROR) if raw.is_error else None,
     )
     envelope["tool"] = name
+    if raw.is_error:
+        # 上游错误 payload 可能包含 URL、凭据或内部堆栈；仅公开固定错误分类。
+        return envelope
     if raw.structured_content is not None:
         envelope["result"] = raw.structured_content
     elif raw.payload_text is not None:
