@@ -176,6 +176,30 @@ function technicalIndicatorsEnvelope(code) {
   };
 }
 
+function trendradarAttentionDisabledEnvelope(code) {
+  return {
+    status: "DISABLED",
+    error: "TrendRadar 未启用",
+    security: { code, company_name: stockName(code) },
+    mapping: {
+      status: "EXACT_CODE_ONLY",
+      sector: null,
+      topics: [],
+      matched_terms: [code],
+      reasons: [{ kind: "security_code", value: code, source: "user_query_exact" }],
+      errors: [],
+    },
+    observation: {
+      window_days: 7,
+      window_semantics: "TrendRadar search_news date_range relative window",
+      items: [],
+      item_count: 0,
+      rank_history_semantics: "Only returned when upstream exposes rank_timeline; missing means UNKNOWN",
+    },
+    source_statuses: [{ term: code, status: "DISABLED", tool: "search_news" }],
+  };
+}
+
 /**
  * Build a realistic normal top risk envelope.
  */
@@ -372,6 +396,13 @@ function createApiMockController() {
     // Top risk endpoint: explicit mock
     if (pathname === "/api/market/top-risk") {
       await handleTopRisk(route);
+      return;
+    }
+
+    // TrendRadar is optional; keep this unrelated StockData dependency explicitly disabled.
+    if (pathname.startsWith("/api/trendradar/attention-context/")) {
+      const code = pathname.split("/").pop() || "000001";
+      await route.fulfill(jsonOk(trendradarAttentionDisabledEnvelope(code)));
       return;
     }
 

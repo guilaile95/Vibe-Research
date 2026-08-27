@@ -1405,25 +1405,94 @@ def lockup_expiry(code: str, trade_date: str | None = None, forward_days: int = 
     return {"history": history, "upcoming": upcoming}
 
 
-def concept_blocks(code: str) -> dict:
-    """个股所属板块/概念归属（东财 slist，行业/概念/地域混合，板块名自解释）。"""
+_MAX_STRICT_NUMERIC = 1_000_000_000
+
+
+def _strict_scalar_field(
+    row: dict,
+    field: str,
+    *,
+    required: bool = False,
+    text: bool = False,
+    numeric: bool = False,
+) -> None:
+    """Validate an upstream scalar without turning malformed rows into empty data."""
+    if field not in row:
+        if required:
+            raise ValueError(f"missing required field: {field}")
+        return
+    value = row[field]
+    if value is None:
+        if required:
+            raise ValueError(f"required field is null: {field}")
+        return
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise ValueError(f"field has invalid type: {field}")
+    if text and (not isinstance(value, str) or not value.strip()):
+        raise ValueError(f"field is not non-empty text: {field}")
+    if numeric:
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError(f"field is not numeric: {field}") from None
+        if not math.isfinite(number) or abs(number) > _MAX_STRICT_NUMERIC:
+            raise ValueError(f"field is not a finite reasonable number: {field}")
+
+
+def _validate_strict_concept_block_row(row: dict) -> None:
+    _strict_scalar_field(row, "f12", required=True, text=True)
+    _strict_scalar_field(row, "f14", required=True, text=True)
+    _strict_scalar_field(row, "f3", numeric=True)
+    _strict_scalar_field(row, "f128", text=True)
+
+
+def _validate_strict_hot_concept_row(row: dict) -> None:
+    _strict_scalar_field(row, "conceptName", required=True, text=True)
+    _strict_scalar_field(row, "conceptId")
+    _strict_scalar_field(row, "hitCount", numeric=True)
+
+
+def concept_blocks(code: str, *, strict: bool = False) -> dict:
+    """个股所属板块/概念归属（东财 slist，行业/概念/地域混合，板块名自解释）。
+
+    ``strict`` 仅供需要区分“真实空结果”和“源失败”的只读组合层使用；
+    默认保持既有调用方的空结果降级语义。
+    """
     market_code = 1 if code.startswith("6") else 0
     params = {"fltt": "2", "invt": "2", "secid": f"{market_code}.{code}",
               "spt": "3", "pi": "0", "pz": "200", "po": "1", "fields": "f12,f14,f3,f128"}
     headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
     try:
         d = em_get("https://push2.eastmoney.com/api/qt/slist/get", params=params, headers=headers, timeout=15).json()
+        if strict:
+            if not isinstance(d, dict) or not isinstance(d.get("data"), dict):
+                raise ValueError("concept_blocks response missing data object")
+            diff = d["data"].get("diff")
+            if not isinstance(diff, (dict, list)):
+                raise ValueError("concept_blocks response missing diff collection")
+            items = list(diff.values()) if isinstance(diff, dict) else list(diff)
+            if any(not isinstance(item, dict) for item in items):
+                raise ValueError("concept_blocks response contains malformed rows")
+            for item in items:
+                _validate_strict_concept_block_row(item)
+        else:
+            diff = (d.get("data") or {}).get("diff") or {}
+            items = diff.values() if isinstance(diff, dict) else diff
     except Exception:
+        if strict:
+            raise
         return {"total": 0, "boards": [], "concept_tags": []}
-    diff = (d.get("data") or {}).get("diff") or {}
-    items = diff.values() if isinstance(diff, dict) else diff
     boards = [{"name": it.get("f14", ""), "code": it.get("f12", ""),
                "change_pct": it.get("f3", ""), "lead_stock": it.get("f128", "")} for it in items]
     return {"total": len(boards), "boards": boards, "concept_tags": [b["name"] for b in boards]}
 
 
-def hot_concepts(code: str) -> list[dict]:
-    """个股当下被市场归到哪些概念在炒（东财热门概念命中，按热度降序）。"""
+def hot_concepts(code: str, *, strict: bool = False) -> list[dict]:
+    """个股当下被市场归到哪些概念在炒（东财热门概念命中，按热度降序）。
+
+    ``strict`` 仅供需要区分“真实空结果”和“源失败”的只读组合层使用；
+    默认保持既有调用方的空结果降级语义。
+    """
     import requests
 
     try:
@@ -1432,8 +1501,20 @@ def hot_concepts(code: str) -> list[dict]:
             "https://emappdata.eastmoney.com/stockrank/getHotStockRankList",
             json={"appId": "appId01", "globalId": "786e4c21-70dc-435a-93bb-38", "srcSecurityCode": prefix + code},
             headers={"User-Agent": UA}, timeout=10)
-        data = r.json().get("data") or []
+        payload = r.json()
+        if strict:
+            if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                raise ValueError("hot_concepts response missing data list")
+            data = payload["data"]
+            if any(not isinstance(item, dict) for item in data):
+                raise ValueError("hot_concepts response contains malformed rows")
+            for item in data:
+                _validate_strict_hot_concept_row(item)
+        else:
+            data = payload.get("data") or []
     except Exception:
+        if strict:
+            raise
         return []
     return [{"concept": x.get("conceptName"), "bk": x.get("conceptId"), "hit": x.get("hitCount")} for x in data]
 

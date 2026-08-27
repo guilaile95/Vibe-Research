@@ -20,6 +20,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
+import trendradar_attention_context as attention_context
 import trendradar_console as console
 import trendradar_gateway as gateway
 import trendradar_observation_adapter as observer
@@ -246,3 +247,14 @@ def radar_system_status():
 @router.get("/radar/storage-status")
 def radar_storage_status():
     return console.call_read_tool("get_storage_status", {})
+
+
+@router.get("/attention-context/{code}")
+def attention_context_for_security(code: str):
+    """单证券公开关注上下文；只读 observation projection，不进入投资权威链。"""
+    if not isinstance(code, str) or len(code) != 6 or not code.isdigit():
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "BAD_ARGUMENT", "error": "code must be a 6-digit A-share code"},
+        )
+    return attention_context.build_attention_context(code)
