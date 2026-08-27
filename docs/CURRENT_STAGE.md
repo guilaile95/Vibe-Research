@@ -1,25 +1,10 @@
 # Current Stage — Recovery Coordinates
 
-Last reviewed: 2026-08-26
+Last reviewed: 2026-08-27
 
 This file is a **recovery pointer**, not Engineering Truth and not a second task database.
 
-Always verify live GitHub before acting. Any Issue / PR / state hint below is only a recovery coordinate.
-
-## Maintenance Rule
-
-Update this file only when recovery coordinates materially change, for example:
-
-- current Stage changes;
-- the authorization / freeze authority changes;
-- the leading coordination Issue or active keeper PR changes;
-- a completed workstream changes what the next recovering Agent should inspect;
-- the named repo / Notion read-first pointers change;
-- a genuinely durable invariant changes.
-
-Do **not** update it for every commit, CI run, test result, temporary worktree or minor implementation detail. If this file becomes stale, live GitHub wins and the recovering Agent should report the conflict rather than asking the user to reconstruct history.
-
-Do not store an “exact current stable SHA” here. Recovering Agents must resolve `EXACT_STABLE_SHA` and exact-head CI from live GitHub.
+Always verify live GitHub before acting. Any Issue / PR / state hint below is only a recovery coordinate. Do not persist an “exact current stable SHA” here; recovering Agents must resolve it and exact-head CI live.
 
 ## Product North Star
 
@@ -27,176 +12,234 @@ Do not store an “exact current stable SHA” here. Recovering Agents must reso
 
 ## Current Stage
 
-**PRX1 — Product Reality Sprint / Formal 10-Trading-Day Real-Use Observation**
+**TREND-RADAR1 — TrendRadar Full-Capability Sidecar Integration**
 
 Current status:
 
-- GitHub Issue **#162 — Product Reality Sprint** is the next product-truth authority.
-- `STATE = READY_FOR_FORMAL_10_TRADING_DAY_OBSERVATION`.
-- The formal sample has **not started automatically**; do not invent Day 1 or synthetic real-use evidence.
-- GitHub Issue **#217 GLOBAL-ACCEL2** is **CLOSED / COMPLETED** after its Final Closure Gate passed.
-- GitHub Issue **#203** latest comment is the authorization / freeze authority and currently records `PROJECT_FREEZE = RESTORED` / `PROJECT_STATE = FROZEN`.
+- GitHub Issue **#228** is the active coordination authority for this integration run.
+- The Owner explicitly authorized TrendRadar integration on 2026-08-27 and asked to retain essentially all useful upstream capability.
+- GitHub Issue **#203** latest comment records `PROJECT_FREEZE = PARTIALLY_LIFTED_FOR_TRENDRADAR1` / `PROJECT_STATE = ACTIVE_TRENDRADAR_INTEGRATION`.
+- GitHub Issue **#162 Product Reality Sprint** is paused **before Day 1**; its formal sample has not started and has not been invalidated.
+- GitHub Issue **#217 GLOBAL-ACCEL2** remains CLOSED / COMPLETED.
 
 Stable recovery coordinate:
 
 - Stable branch: `feature/research-system-v01`
 - Exact stable SHA: **resolve live; intentionally not persisted here**
-- GLOBAL-ACCEL2 final runtime baseline before this recovery-coordinate update was the stable containing merged PRs #224 Campaign AI Draft, #225 Candidate Research and #226 Full Market Discovery v0.1; always resolve the current live SHA/CI before use.
+- Starting stable for TREND-RADAR1 was the Product-Reality recovery baseline after PR #227; always resolve current live SHA/CI before use.
 
-## What GLOBAL-ACCEL2 Established
+## TREND-RADAR1 Architecture Decision
 
-The completed engineering phase materially activated the following product paths:
+TrendRadar remains a **separate local sidecar**, not copied into the Vibe repository.
 
-- Watchlist anomaly monitoring;
-- StockData Fundamental Health + Cashflow Quality;
-- Sector Strength + Concept Context;
-- HiThink-qualified A-share unadjusted daily bars as dataset-level runtime primary where configured;
-- local Parquet / manifest / DuckDB Research Data Plane foundation;
-- RDP-backed Screener with corruption fail-closed behavior;
-- Full Market Discovery v0.1 with named, explainable cross-section metrics;
-- Campaign-scoped `AI_DRAFT / UNCOMMITTED` with server-owned context witness and existing Formal Decision authority preserved;
-- StockData Candidate Research continuation into explicit DRAFT → RESEARCHING → PRE-ENTRY / stop Campaign lifecycle;
-- final black-box Holding → Decision → Manual Trade → Attribution/UNPLANNED → Outcome/Review path;
-- final black-box Full Market → StockData → Candidate Research path.
+Reason:
 
-The final GLOBAL-ACCEL2 closure audit reported zero validated current CRITICAL/HIGH blockers on the active paths. Verify any claim that matters against live GitHub before relying on it.
+- TrendRadar is GPL-3.0;
+- Vibe-Research is MIT;
+- TrendRadar already owns a mature crawler / RSS / scheduler / filter / AI / translation / report / notification / storage / MCP runtime.
 
-## Active Product Truth Track — #162
+Target boundary:
 
-The next high-value unknown is no longer “can we add another subsystem?” It is:
+```text
+(optional self-hosted) NewsNow
+            ↓
+TrendRadar Core sidecar
+crawler / RSS / scheduler / filter / AI / translation / reports / notifications
+            ↓ TrendRadar-owned local/remote storage
+TrendRadar MCP sidecar
+            ↓ local HTTP/MCP
+Vibe TrendRadar Gateway
+            ↓
+Attention / Public-Opinion Observation Plane
+            ↓
+Intel / Watchlist / StockData / Discovery / Candidate Research / Daily Review
+```
 
-> Does the current system materially improve the user's real investment decision process enough to justify further engineering investment?
+Do **not** vendor/copy/import TrendRadar GPL source into Vibe and do not reimplement its entire runtime merely to make it look native.
 
-Read Issue **#162** for the exact observation contract.
+## Authority Boundary
 
-Core observation target:
+TrendRadar provides **research observations / attention context**, not formal investment authority.
 
-- 10 A-share trading days;
-- minimum valid sample defined by #162;
-- small private working set of real holdings plus one researched candidate;
-- normal workflow only; do not manufacture trades, Frozen Decisions or Outcome events to satisfy the sample.
+It may provide:
 
-Record privately per meaningful session:
+- hotlist / RSS observations;
+- rank history, first/last seen, crawl count and attention acceleration;
+- keyword / AI-filter metadata;
+- trend/lifecycle/viral/sentiment analysis;
+- article-read results;
+- report, scheduler, storage and notification status.
 
-- task;
-- elapsed time;
-- major page span;
-- repeated input;
-- confusion;
-- value event;
-- bypass;
-- blocker;
-- UNKNOWN / NOT_EVALUATED / ERROR load.
+It must not directly create or mutate:
 
-Privacy rule:
+- Holding;
+- Current/Formal Thesis;
+- Formal Decision;
+- Frozen Decision;
+- Trade;
+- Trade Attribution;
+- BUY/SELL actions.
 
-- real holdings, quantities, NAV, trade amounts, broker data, private Thesis text and personal notes stay out of this public repository;
-- GitHub receives only anonymized aggregate findings;
-- detailed Product Reality observations belong in private Notion / local project context.
+TrendRadar AI relevance, sentiment or hotness means “worth attention/research”, never “worth buying”.
 
-## Engineering Freeze During Product Reality
+## #228 Execution Direction
 
-Current engineering state is frozen by #203.
+The integration is a multi-keeper global run. Do not stop after a single Intel card.
 
-Do not autonomously start:
+### Phase 0 — Upstream Qualification / Sidecar Bootstrap
 
-- new feature Slice;
-- broad refactor;
-- provider expansion;
-- data-plane expansion;
-- architecture migration;
-- historical Draft revival/cleanup;
-- broker/order integration;
-- automatic trading or automatic Formal Decision behavior.
+- pin an exact qualified TrendRadar runtime/image rather than durable `latest`;
+- run TrendRadar Core and MCP as separate local-only services;
+- keep config/output/secrets outside Git;
+- qualify crawl, RSS, SQLite/storage, report server, current MCP tools/resources, scheduler, AI-disabled behavior, notification-disabled behavior;
+- preserve self-hosted NewsNow as the long-term local-first target option.
 
-A new engineering change during the Product Reality phase requires either:
+### Phase 1 — Vibe Gateway + Intel
 
-1. a new explicit owner resume/authorization; or
-2. a directly observed critical correctness/security/data-loss/path-blocking defect where the latest #203/#162 authority explicitly permits a minimal hotfix.
+Build a strict Vibe-owned gateway over the local TrendRadar boundary and expose the useful query/analysis surface in the existing `/intel` product area.
 
-Do not treat ordinary UX friction as automatic implementation authorization. During PRX1, friction is primarily evidence.
+Failure must be explicit `UNAVAILABLE`; do not silently substitute Investment News and label it TrendRadar.
 
-## Known Nonblocking Follow-Up
+### Phase 2 — Investment Research Context
 
-Issue **#220** remains open for real Market Dump import/update and production-completeness work beyond the accepted Full Market v0.1 local-artifact path.
+Connect public-attention observations into existing:
 
-It is **not** an active engineering keeper while the project is frozen. Do not infer that “open Issue” means “resume now.”
+- Intel;
+- Watchlist;
+- StockData;
+- Full Market / Discovery;
+- Candidate Research;
+- Daily Review / AI context.
 
-Full Market v0.1 must not be described as universally complete/current by default; provenance and local-artifact limitations remain part of its product contract.
+Reuse existing Evidence/Note authority for any user-explicit promotion; never auto-promote TrendRadar observations into Formal Decision facts.
 
-Issue **#169** remains a read-only historical deep-audit asset. Its GLOBAL-ACCEL2 current-live delta found no validated CRITICAL/HIGH blocker on the active paths. Do not restart the full audit during Product Reality unless real-use evidence makes it the highest-value next action.
+### Phase 3 — Full Upstream Capability Retention
+
+Keep TrendRadar as execution owner for:
+
+- keyword / AI filtering;
+- AI analysis;
+- AI translation;
+- scheduler;
+- reports;
+- local/remote storage;
+- notification fanout;
+- MCP analysis and article reader.
+
+Vibe may provide status/readback and explicit user-triggered actions. Automated tests must use fake/local notification capture and must not message real people.
+
+### Phase 4 — Operational Convenience
+
+Provide sidecar health/version/config-location/report/storage diagnostics. Prefer TrendRadar's own visual configuration editor/operator flow instead of duplicating every YAML field in Vibe. Add narrow local config management only if later evidence proves it necessary.
+
+## Existing Vibe Capability to Reuse
+
+- `/intel` already has Investment News + Vibe AI Digest; TrendRadar must not become a second generic RSS page.
+- Watchlist already has anomaly product surface.
+- `/stock-data?code=...` already supports research continuation.
+- Candidate Research / PRE-ENTRY already exists.
+- Full Market / Screener v0.1 already exists.
+- Vibe AlertRule currently owns CRUD only and explicitly does not own runtime evaluation/notification/scheduling/history; do not make TrendRadar a second AlertRule authority.
+
+## Privacy / Secrets
+
+Never put in Git or logs:
+
+- AI API keys;
+- notification webhook URLs/tokens;
+- Telegram credentials;
+- SMTP passwords;
+- S3 credentials;
+- private feed credentials;
+- real holdings/account/trade/private Thesis data.
+
+TrendRadar runtime config/output/secrets stay local/private.
+
+## Product Reality #162
+
+`PRX1` is paused before formal Day 1 while #228 is active.
+
+Do not collect or claim formal 10-trading-day Product Reality observations against a moving TrendRadar integration baseline.
+
+After #228 closes:
+
+1. resolve new stable/exact-head CI;
+2. re-establish Product Reality baseline;
+3. re-run readiness smoke if core user paths materially changed;
+4. set #162 READY again;
+5. only then may formal Day 1 start.
 
 ## Immediate Recovery Actions
 
 1. Read root `AGENTS.md`.
 2. Resolve live `feature/research-system-v01` SHA and exact-head CI.
-3. Read **#203 latest comment** for current freeze / authorization state.
-4. Read **#162 latest comments** for Product Reality state and whether Day 1 has actually begun.
-5. Confirm #217 remains closed and inspect any newer owner instruction that may supersede this stage.
-6. Inspect live Open / Draft PRs only to avoid duplicate work; historical Drafts are context, not active work.
-7. If Product Reality has begun, continue the observation contract rather than inventing engineering work.
-8. If Product Reality has not begun, report `READY / NOT_STARTED`; do not fabricate a session.
-9. Use named Notion pages below for durable context and private/anonymized Product Reality notes as appropriate.
+3. Read **#203 latest comment** for authorization state.
+4. Read **#228** and its latest comments for TREND-RADAR1 progress / keeper boundaries.
+5. Read **#162 latest comments** to confirm Product Reality remains paused before Day 1 while #228 is active.
+6. Inspect current Open / Draft PRs to avoid duplicate work; historical Draft PRs are context only.
+7. Read only source/tests needed for the current #228 keeper.
+8. Use the named Notion research page below for durable TrendRadar architecture context.
 
 ## Read First — GitHub
 
 1. `AGENTS.md`
 2. `docs/CURRENT_STAGE.md`
 3. Issue #203 latest comment
-4. Issue #162 latest comments
+4. Issue #228 latest comments
 5. live stable / exact-head CI
-6. only the source/tests relevant to any observed blocker
-
-Read #217 only when GLOBAL-ACCEL2 historical rationale is needed.
+6. Issue #162 latest comment when Product Reality sequencing matters
 
 ## Read First — Notion
 
-Use the connected Notion workspace when durable/private context is needed. Search these exact page titles first:
+Search these exact page titles first when durable context is needed:
 
 1. `Vibe-Research｜A股投资决策系统`
-2. `Vibe-Research｜GLOBAL-ACCEL2 全面推进｜2026-08-25`
-3. `Vibe-Research｜North Star Autonomous Run 接管｜2026-08-24`
-4. `Vibe-Research｜Architecture Reality Map`
+2. `TrendRadar × Vibe-Research｜全能力接入调研与架构决策｜2026-08-27`
+3. `Vibe-Research｜GLOBAL-ACCEL2 全面推进｜2026-08-25`
+4. `Vibe-Research｜North Star Autonomous Run 接管｜2026-08-24`
+5. `Vibe-Research｜Architecture Reality Map`
 
-Notion does not override live GitHub implementation or execution state. If durable intent and live implementation disagree, report:
+Notion does not override live GitHub implementation/execution state.
 
-`Intent vs Reality conflict`
+## Known Nonblocking Follow-Up
+
+- #220 remains open for real Market Dump operational completeness beyond Full Market v0.1. It is not automatically active during TREND-RADAR1 unless required by the integration.
+- #169 remains a historical/read-only audit asset. Do not restart the entire audit unless a current TrendRadar keeper creates a validated authority/correctness concern.
 
 ## Legacy Current-State Documents
 
-The following files are retained as historical context but are **not current recovery authority**:
+These are historical context, not current recovery authority:
 
 - `docs/PROJECT_STATE.md`
 - `docs/NEXT_TASK.md`
 - `docs/CHAT_HANDOFF.md`
 
-Do not use them to override live GitHub, #203, #162 or this recovery coordinate.
-
 ## Durable Engineering Invariants
 
-- **User owns formal investment authority.** AI / providers may analyze, explain, challenge or draft, but do not automatically create Formal Decision, Frozen Decision, Trade, attribution or real execution facts.
-- **Provider Observation != Canonical Fact Authority.** A provider never becomes a second Holding / Trade / Decision authority.
-- **Research Runtime != Canonical Fact Authority.** Bulk/local research paths may optimize discovery without redefining formal fact history.
-- **User data and credentials stay local/private.** Real holdings, account data and secrets do not enter Git.
-- **Reuse before infrastructure.** Extend existing product/authority paths before creating competing systems.
-- **Product Reality evidence outranks speculative feature demand.** During this Stage, observe actual value/friction before expanding architecture.
+- **User owns formal investment authority.** AI/providers may analyze, explain, challenge or draft, but do not automatically create Formal Decision, Frozen Decision, Trade, Attribution or real execution facts.
+- **Provider/attention Observation != Canonical Fact Authority.**
+- **Research Runtime != Canonical Fact Authority.**
+- **GPL sidecar != Vibe source tree.** Interact across a process/data boundary; do not copy its implementation into the MIT repository.
+- **User data and credentials stay local/private.**
+- **Reuse before infrastructure.** Extend existing Intel/Watchlist/StockData/Discovery/Candidate paths before creating competing product surfaces.
 
 ## Current Acceptance Direction
 
-The current Stage is complete only when Issue #162's formal sample and final report are validly completed, or when the sample is explicitly classified `INVALID_SAMPLE / BLOCKED` with evidence.
+TREND-RADAR1 completes only when Issue #228's Global Completion Target is honestly re-evaluated, including upstream capability retention, Vibe integration surfaces, licensing/authority/secrets boundaries, no active keeper PRs, stable exact-head CI, recovery-coordinate sync and Notion handoff.
 
-At the end of #162, use its evidence-driven conclusion framework rather than sunk-cost reasoning. Do not automatically start the next refactor after the report; first convert observed evidence into one bounded engineering priority and explicitly choose what not to build.
+Do not manufacture completion by silently omitting blocked upstream features; record concrete `BLOCKED` evidence instead.
 
 ## Deferred / Escalation Boundary
 
-Do not autonomously cross these boundaries:
+Do not autonomously cross:
 
-- destructive migration or irreversible user-data rewrite;
+- destructive/irreversible user-data migration;
 - broker/order/automatic trading execution;
+- real external notification/message during automated validation;
 - new paid account/service or material recurring cost;
 - credential/account-security changes;
 - unresolved conflict between two plausible Formal Authorities;
-- irreversible real-user holdings/trades mutation without a safe explicit user action.
+- irreversible real-user holding/trade mutation without explicit user action.
 
 ## Recovery Output
 
@@ -222,4 +265,4 @@ SOURCE_CONFLICTS:
 NEXT_ACTION:
 ```
 
-Then follow #203 + #162. If the project is frozen and Product Reality is merely READY, do not start engineering work without a new explicit owner instruction or an allowed real-use blocker hotfix.
+Then follow #203 + #228. While #228 is active, do not revert to Product Reality observation just because #162 remains open.
