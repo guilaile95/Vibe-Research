@@ -1,0 +1,40 @@
+# TREND-RADAR1 TR1-P0 qualification compose (Vibe-owned).
+#
+# References ONLY official public images pinned by immutable digests.
+# No TrendRadar GPL source/config bodies live in this repository.
+# Runtime dirs and secrets stay outside Vibe, on the local machine.
+#
+# Loopback-only by default: every host binding is 127.0.0.1.
+# Core and MCP remain separate services; both start healthy-degraded
+# without AI keys or notification channels.
+#
+# Digest provenance: Docker Hub registry API, resolved 2026-08-27
+# (see QUALIFICATION.md §image-identity for raw evidence).
+
+name: vibe-trendradar-qualify
+
+services:
+  trendradar-core:
+    image: wantcat/trendradar:6.10.0@sha256:de396d242c105d697c2765f5341ca71a45d9bcefe934d1d32b511eeae2f0d0be
+    container_name: vibe-tr-core
+    environment:
+      # 运行目录/secrets 全部由宿主 env 提供；本文件不携带任何真实凭据。
+      - CONFIG_PATH=/runtime/config/config.yaml
+    volumes:
+      - ${VIBE_TR_RUNTIME:-./runtime}/config:/runtime/config
+      - ${VIBE_TR_RUNTIME:-./runtime}/output:/app/output
+    ports:
+      - "127.0.0.1:8080:8080"   # report server（loopback-only）
+
+  trendradar-mcp:
+    image: wantcat/trendradar-mcp:4.1.0@sha256:92eabda020223f94a3e0a65aa9bc9b83fb25ebc10b31bd0fad097fd2260ed1dc
+    container_name: vibe-tr-mcp
+    depends_on:
+      - trendradar-core
+    environment:
+      - CONFIG_PATH=/runtime/config/config.yaml
+    volumes:
+      - ${VIBE_TR_RUNTIME:-./runtime}/config:/runtime/config
+      - ${VIBE_TR_RUNTIME:-./runtime}/output:/app/output
+    ports:
+      - "127.0.0.1:3333:3333"   # MCP streamable HTTP /mcp（loopback-only）

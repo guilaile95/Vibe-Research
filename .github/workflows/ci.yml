@@ -34,6 +34,18 @@ jobs:
           python -m piptools compile --no-emit-index-url --output-file=requirements-dev-linux-py311.lock.txt requirements.txt requirements-dev.txt
           git diff --exit-code -- requirements-linux-py311.lock.txt requirements-dev-linux-py311.lock.txt
 
+      - name: TrendRadar client lock check (isolated tree)
+        working-directory: backend
+        run: |
+          python -m piptools compile --no-emit-index-url --output-file=requirements-trendradar-linux-py311.lock.txt requirements-trendradar.txt
+          git diff --exit-code -- requirements-trendradar-linux-py311.lock.txt
+
+      - name: Install TrendRadar MCP client (isolated lock)
+        working-directory: backend
+        run: |
+          python -m pip install -r requirements-trendradar-linux-py311.lock.txt
+          python -c "import mcp; from mcp.client.streamable_http import streamablehttp_client; print('trendradar mcp client import ok')"
+
       - name: Run offline backend tests
         working-directory: backend
         env:
@@ -429,6 +441,12 @@ jobs:
         working-directory: backend
         run: python -m pip install -r requirements-tooling.txt
 
+      - name: TrendRadar client lock check (isolated tree, Windows authority)
+        working-directory: backend
+        run: |
+          python -m piptools compile --no-emit-index-url --output-file=requirements-trendradar-windows-py312.lock.txt requirements-trendradar.txt
+          git diff --exit-code -- requirements-trendradar-windows-py312.lock.txt
+
       - name: Canonical Windows lock check
         working-directory: backend
         run: |
@@ -437,6 +455,12 @@ jobs:
 
       - name: Install backend dependencies (exact Windows lock)
         run: python -m pip install -r backend/requirements-dev-windows-py312.lock.txt
+
+      - name: Install TrendRadar MCP client (isolated lock)
+        working-directory: backend
+        run: |
+          python -m pip install -r requirements-trendradar-windows-py312.lock.txt
+          python -c "import mcp; from mcp.client.streamable_http import streamablehttp_client; print('trendradar mcp client import ok')"
 
       - name: Run offline backend tests
         working-directory: backend
