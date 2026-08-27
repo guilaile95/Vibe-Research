@@ -37,8 +37,11 @@ jobs:
       - name: TrendRadar MCP client Linux compat probe (pinned install)
         working-directory: backend
         run: |
-          python -m pip install "mcp==1.16.0"
-          python -c "import mcp; from mcp.client.streamable_http import streamablehttp_client; print('trendradar mcp client import ok on linux py3.11')"
+          # 独立一次性 venv：绝不污染主测试环境（mcp 树会把 httpx 升级，
+          # 与主锁的 httpx==0.25.2 共存会改变既有 API 测试行为）。
+          python -m venv "$RUNNER_TEMP/tr-mcp-probe"
+          "$RUNNER_TEMP/tr-mcp-probe/bin/python" -m pip install --quiet "mcp==1.16.0"
+          "$RUNNER_TEMP/tr-mcp-probe/bin/python" -c "import mcp; from mcp.client.streamable_http import streamablehttp_client; print('trendradar mcp client import ok on linux py3.11')"
 
       - name: Run offline backend tests
         working-directory: backend
@@ -450,11 +453,14 @@ jobs:
       - name: Install backend dependencies (exact Windows lock)
         run: python -m pip install -r backend/requirements-dev-windows-py312.lock.txt
 
-      - name: Install TrendRadar MCP client (isolated lock)
+      - name: Install TrendRadar MCP client (isolated venv, zero pollution)
         working-directory: backend
+        shell: bash
         run: |
-          python -m pip install -r requirements-trendradar-windows-py312.lock.txt
-          python -c "import mcp; from mcp.client.streamable_http import streamablehttp_client; print('trendradar mcp client import ok')"
+          # 与主测试环境物理隔离：mcp 依赖树禁止触碰主解释器任何包。
+          python -m venv "$RUNNER_TEMP/tr-mcp-probe"
+          "$RUNNER_TEMP/tr-mcp-probe/Scripts/python.exe" -m pip install --quiet -r requirements-trendradar-windows-py312.lock.txt
+          "$RUNNER_TEMP/tr-mcp-probe/Scripts/python.exe" -c "import mcp; from mcp.client.streamable_http import streamablehttp_client; print('trendradar mcp client import ok (windows, isolated venv)')"
 
       - name: Run offline backend tests
         working-directory: backend
