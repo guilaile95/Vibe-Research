@@ -177,14 +177,20 @@ def test_console_forbidden_tools_never_reachable():
     original = tr_console.gw.call_tool
     try:
         tr_console.gw.call_tool = spy_gateway  # type: ignore[assignment]
-        for bad in ("send_notification", "trigger_crawl", "sync_from_remote",
-                    "read_article", "read_articles_batch",
+        for bad in ("send_notification", "get_notification_channels", "trigger_crawl",
+                    "sync_from_remote", "read_article", "read_articles_batch",
                     "generate_summary_report", "analyze_data_insights"):
             result = tr_console.call_read_tool(bad, {}, transport_factory=spy_factory)
             assert result["status"] == "BAD_ARGUMENT", bad
             captured.clear()
     finally:
         tr_console.gw.call_tool = original  # type: ignore[assignment]
+
+
+def test_console_excludes_notification_channel_tool():
+    assert "get_notification_channels" not in tr_console.READ_TOOL_NAMES
+    response = client.get("/api/trendradar/radar/channels")
+    assert response.status_code == 404
 
 
 def test_console_allows_only_declared_read_names(monkeypatch):
@@ -304,6 +310,6 @@ def test_radar_group_registered_in_openapi():
         "/api/trendradar/radar/related",
         "/api/trendradar/radar/system-status",
         "/api/trendradar/radar/storage-status",
-        "/api/trendradar/radar/channels",
     ):
         assert expected in paths
+    assert "/api/trendradar/radar/channels" not in paths

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   Activity,
   AlertCircle,
@@ -49,6 +49,21 @@ function failureText(env: TrendradarEnvelope): string {
   const base =
     _FAILURE_HINTS[env.status] ?? `sidecar 返回异常状态 ${env.status}`;
   return env.error ? `${base} — ${env.error}` : base;
+}
+
+/** MCP 工具可能返回 structuredContent，也可能按上游声明返回 JSON 文本。 */
+function envelopeResult(env: TrendradarEnvelope): unknown {
+  if (env.result !== undefined) return env.result;
+  if (typeof env.result_text !== "string") return undefined;
+  try {
+    return JSON.parse(env.result_text) as unknown;
+  } catch {
+    return env.result_text;
+  }
+}
+
+function sectionState(env: TrendradarEnvelope): SectionStateInfo {
+  return { state: env.status === "OK" ? "ok" : "failed", envelope: env };
 }
 
 function StatusBadge({ env }: { env?: TrendradarEnvelope }) {
@@ -110,7 +125,8 @@ export default function TrendRadarPanel() {
   const loadLatest = useCallback(async () => {
     setLatest({ state: "loading" });
     try {
-      setLatest({ state: "ok", envelope: await api.trendradarLatest(30) });
+      const envelope = await api.trendradarLatest(30);
+      setLatest(sectionState(envelope));
     } catch (e) {
       setLatest({
         state: "failed",
@@ -125,7 +141,8 @@ export default function TrendRadarPanel() {
   const loadTrending = useCallback(async () => {
     setTrending({ state: "loading" });
     try {
-      setTrending({ state: "ok", envelope: await api.trendradarTrending() });
+      const envelope = await api.trendradarTrending();
+      setTrending(sectionState(envelope));
     } catch (e) {
       setTrending({
         state: "failed",
@@ -140,7 +157,8 @@ export default function TrendRadarPanel() {
   const loadRss = useCallback(async () => {
     setRss({ state: "loading" });
     try {
-      setRss({ state: "ok", envelope: await api.trendradarRssLatest(1, 20) });
+      const envelope = await api.trendradarRssLatest(1, 20);
+      setRss(sectionState(envelope));
     } catch (e) {
       setRss({
         state: "failed",
@@ -263,7 +281,7 @@ export default function TrendRadarPanel() {
             {latest.state !== "ok" ? (
               latest.envelope ? <FailureBanner env={latest.envelope} /> : null
             ) : (
-              <HotlistTable rows={latest.envelope?.result as TrNewsRow[] | undefined} />
+              <HotlistContent env={latest.envelope!} />
             )}
           </section>
 
@@ -300,8 +318,7 @@ export default function TrendRadarPanel() {
                 )}
               </div>
             )}
-            {trending.state === "ok" &&
-              renderGenericResult(trending.envelope?.result)}
+            {trending.state === "ok" && renderTrendingResult(trending.envelope)}
           </section>
 
           {/* RSS */}
@@ -319,7 +336,7 @@ export default function TrendRadarPanel() {
               rss.envelope ? <FailureBanner env={rss.envelope} /> : null
             ) : (
               <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] text-muted-foreground">
-                {JSON.stringify(rss.envelope?.result ?? {}, null, 1)}
+                {summarizeEnvelope(rss.envelope!)}
               </pre>
             )}
           </section>
@@ -373,6 +390,18 @@ function HotlistTable({ rows }: { rows?: TrNewsRow[] }) {
   );
 }
 
+function HotlistContent({ env }: { env: TrendradarEnvelope }) {
+  const result = envelopeResult(env);
+  if (Array.isArray(result)) {
+    return <HotlistTable rows={result as TrNewsRow[]} />;
+  }
+  return (
+    <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border/40 bg-muted/10 p-2 font-mono text-[10px] text-muted-foreground">
+      {summarizeEnvelope(env)}
+    </pre>
+  );
+}
+
 function TopicProbeStrip({
   onProbe,
   busy,
@@ -411,16 +440,42 @@ function TopicProbeStrip({
 /** 通用 result 展示：找不到结构化摘要字段时退化为 JSON 文本（诚实原样）。 */
 function summarizeEnvelope(env: TrendradarEnvelope): string {
   if (env.status !== "OK") return failureText(env);
-  const result = env.result;
+  const result = envelopeResult(env);
   if (result == null) return "(工具未返回结果)";
   try {
-    return JSON.stringify(result, null, 1).slice(0, 4000);
+    return typeof result === "string"
+      ? result.slice(0, 4000)
+      : JSON.stringify(result, null, 1).slice(0, 4000);
   } catch {
-    return env.result_text ?? "(不可序列化结果)";
+    return "(不可序列化结果)";
   }
 }
 
-function renderGenericResult(_result: unknown): null {
-  // 热点话题的结构化摘要后续 keeper 再做可视化；此处仅靠 StatusBadge 反映成败。
-  return null;
+function renderTrendingResult(env?: TrendradarEnvelope): ReactNode {
+  if (!env || env.status !== "OK") return null;
+  const result = envelopeResult(env);
+  const topics = Array.isArray(result)
+    ? result.filter((topic): topic is string => typeof topic === "string")
+    : result && typeof result === "object"
+      ? Object.values(result).find(
+          (value): value is string[] =>
+            Array.isArray(value) && value.every((topic) => typeof topic === "string"),
+        )
+      : undefined;
+  if (topics && topics.length > 0) {
+    return (
+      <div className="mt-3 flex flex-wrap gap-1.5" aria-label="热点话题列表">
+        {topics.slice(0, 30).map((topic) => (
+          <span key={topic} className="rounded-full bg-primary/10 px-2 py-1 text-[11px] text-primary">
+            {topic}
+          </span>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border/40 bg-muted/10 p-2 font-mono text-[10px] text-muted-foreground">
+      {summarizeEnvelope(env)}
+    </pre>
+  );
 }

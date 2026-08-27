@@ -8,6 +8,8 @@
  *   with platform chips; trending probe section is interactive.
  * Scenario 3 (harness "down"): explicit UNAVAILABLE banner per envelope,
  *   still zero fabricated rows.
+ * Scenario 4 (harness "ok" + one failing tool): per-section failure remains
+ *   visible while other successful text payloads still render.
  */
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -193,7 +195,7 @@ function startRealBackend(port, tempDataDir) {
   );
 }
 
-function startHarness(mode) {
+function startHarness(mode, radarFailure = "") {
   return (port, tempDataDir) => {
     const py = pythonConfig();
     return spawn(
@@ -215,6 +217,7 @@ function startHarness(mode) {
           PYTHONPATH: `${join(root, "backend")}${path.delimiter}${join(root, "frontend", "tests", "e2e")}`,
           VR_DATA_DIR: tempDataDir,
           TR_HARNESS_MODE: mode,
+          TR_HARNESS_RADAR_FAILURE: radarFailure,
           PYTHONUNBUFFERED: "1",
         },
         stdio: ["ignore", "pipe", "pipe"],
@@ -264,7 +267,19 @@ async function run() {
     },
   });
 
-  console.log("[E2E] TrendRadar radar vertical passed (3 scenarios)");
+  // ---- Scenario 4: status OK but one radar read fails ----------------------
+  await runScenario({
+    label: "partial-failure-harness",
+    spawnBackend: startHarness("ok", "get_latest_news"),
+    check: async (page) => {
+      await page.getByText("trendradar-news").waitFor({ timeout: 20000 });
+      await page.getByText(/sidecar 工具返回错误|sidecar 不可达\/未安装客户端/).first().waitFor({ timeout: 20000 });
+      assert.equal(await page.getByText("FAKE 热榜").count(), 0, "failed hotlist must not render fabricated rows");
+      await page.getByText("算力租赁").waitFor({ timeout: 20000 });
+    },
+  });
+
+  console.log("[E2E] TrendRadar radar vertical passed (4 scenarios)");
 }
 
 run().catch((e) => {

@@ -12,6 +12,7 @@ Scenarios via env `TR_HARNESS_MODE`:
 
 from __future__ import annotations
 
+import json
 import os
 
 from fastapi import FastAPI
@@ -21,6 +22,7 @@ import trendradar_gateway as gw
 from trendradar_router import router as trendradar_router
 
 MODE = os.environ.get("TR_HARNESS_MODE", "ok")
+RADAR_FAILURE = os.environ.get("TR_HARNESS_RADAR_FAILURE", "").strip()
 
 app = FastAPI(title="TrendRadar TR1-P1 harness", version="0.0.0")
 app.include_router(trendradar_router)
@@ -88,6 +90,8 @@ else:
     def _call_tool(name, arguments, *, allowed_names, env=None, transport_factory=None):  # noqa: ARG001
         if name not in console.READ_TOOL_NAMES:
             return _envelope("BAD_ARGUMENT", error=f"{name} not allow-listed")
+        if name == RADAR_FAILURE:
+            return _envelope("UNAVAILABLE", tool=name, error=f"{name} failed: harness")
         payloads = {
             "get_latest_news": [
                 {"title": "FAKE 热榜 甲 · 固态电池量产提速", "platform": "weibo",
@@ -100,10 +104,11 @@ else:
             "get_trending_topics": {"topics": ["固态电池", "算力租赁"]},
         }
         result = payloads.get(name)
+        # 使用真实 MCP 的文本返回形态，验证前端不会只依赖 structured result。
         return _envelope(
             "OK",
             tool=name,
-            result=result if result is not None else {"ok": True},
+            result_text=json.dumps(result if result is not None else {"ok": True}, ensure_ascii=False),
         )
 
 

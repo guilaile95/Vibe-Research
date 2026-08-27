@@ -3,9 +3,9 @@
 Phase 1 只读工具面：把 pinned sidecar MCP 的**读类**工具包装成 Vibe-owned
 typed 调用。名单是唯一生产 allow-list，且结构性排除外发/写类能力：
 
-- 永不进入本名单：send_notification / trigger_crawl / sync_from_remote /
-  read_article* / generate_summary_report / analyze_data_insights
-  （通知与爬取触发属 Phase 3 授权面；文章抓取涉及服务端任意 URL 出网，
+- 永不进入本名单：send_notification / get_notification_channels / trigger_crawl /
+  sync_from_remote / read_article* / generate_summary_report / analyze_data_insights
+  （通知面与爬取触发属后续单独授权；文章抓取涉及服务端任意 URL 出网，
   留给显式安全评审 keeper；AI 报告类依赖 sidecar key，属 AI parity phase）。
 
 每个调用都经 gateway.call_tool 的 strict 校验（默认拒绝 + loopback 强制 +
@@ -41,7 +41,6 @@ READ_TOOL_NAMES: frozenset[str] = frozenset(
         "get_system_status",
         "get_storage_status",
         "get_current_config",
-        "get_notification_channels",
     }
 )
 
@@ -49,6 +48,7 @@ READ_TOOL_NAMES: frozenset[str] = frozenset(
 FORBIDDEN_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "send_notification",
+        "get_notification_channels",
         "trigger_crawl",
         "sync_from_remote",
         "read_article",

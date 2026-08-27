@@ -14,7 +14,7 @@ class FakeTransport:
     failure: str | None = None  # None|TIMEOUT|UNAVAILABLE
     server_payload = {
         "server_name": "trendradar-news",
-        "server_version": "4.1.0",
+        "server_version": "1.16.0",
         "protocol_version": "2025-06-18",
     }
     tools_payload = [
@@ -163,6 +163,24 @@ def test_status_snapshot_reports_server_identity_when_enabled():
     assert envelope["server"] == FakeTransport.server_payload
 
 
+def test_status_snapshot_rejects_pinned_identity_drift():
+    original = FakeTransport.server_payload
+    try:
+        FakeTransport.server_payload = {**original, "server_name": "impostor"}
+        envelope, _ = _ok(ENV_ENABLED)
+        assert envelope["status"] == gw.STATUS_CONTRACT_MISMATCH
+    finally:
+        FakeTransport.server_payload = original
+
+
+def test_status_snapshot_normalizes_unexpected_transport_error():
+    def broken_factory(_config):
+        raise ValueError("malformed transport")
+
+    envelope = gw.status_snapshot(env=ENV_ENABLED, transport_factory=broken_factory)
+    assert envelope["status"] == gw.STATUS_UNAVAILABLE
+
+
 def test_unreachable_server_maps_to_unavailable(monkeypatch):
     def broken_factory(_config):
         raise gw.McpTransportError(
@@ -190,6 +208,18 @@ def test_tool_inventory_lists_discovered_tools():
     names = [tool["name"] for tool in envelope["tools"]]
     assert names == ["get_latest_news", "send_notification"]
     assert isinstance(envelope["tools"][0], dict)
+
+
+def test_tool_inventory_rejects_malformed_descriptor():
+    class BadTransport(FakeTransport):
+        def list_tools(self):
+            return [{"name": "get_latest_news"}]  # type: ignore[return-value]
+
+    envelope = gw.tool_inventory(
+        env=ENV_ENABLED,
+        transport_factory=lambda config: BadTransport(config),
+    )
+    assert envelope["status"] == gw.STATUS_CONTRACT_MISMATCH
 
 
 def test_call_blocked_while_disabled():
@@ -221,6 +251,20 @@ def test_call_rejects_non_allowlisted_tool_even_when_enabled():
     )
     assert envelope["status"] == "BAD_ARGUMENT"
     assert "allow-list" in envelope["error"]
+
+
+def test_call_rejects_allowlisted_tool_missing_from_upstream_inventory():
+    class MissingTransport(FakeTransport):
+        tools_payload = [
+            gw.ToolDescriptor(name="other_tool", description="d", input_schema={}),
+        ]
+
+    envelope = gw.call_tool(
+        "get_latest_news", {}, env=ENV_ENABLED,
+        transport_factory=lambda config: MissingTransport(config),
+        allowed_names=frozenset({"get_latest_news"}),
+    )
+    assert envelope["status"] == gw.STATUS_CONTRACT_MISMATCH
 
 
 def test_call_rejects_non_object_arguments_via_contract_path():
@@ -264,6 +308,38 @@ def test_upstream_error_result_maps_to_upstream_error_status():
     )
     assert envelope["status"] == "UPSTREAM_ERROR"
     assert envelope["error"] == "boom"
+
+
+def test_call_preserves_text_only_result():
+    class TextTransport(FakeTransport):
+        def call_tool(self, name, arguments):
+            return gw.RawToolResult(
+                is_error=False,
+                payload_text='{"items": ["headline"]}',
+                structured_content=None,
+            )
+
+    envelope = gw.call_tool(
+        "get_latest_news", {}, env=ENV_ENABLED,
+        transport_factory=lambda config: TextTransport(config),
+        allowed_names=frozenset({"get_latest_news"}),
+    )
+    assert envelope["status"] == gw.STATUS_OK
+    assert envelope["result_text"] == '{"items": ["headline"]}'
+    assert "result" not in envelope
+
+
+def test_call_normalizes_unexpected_transport_error():
+    class BrokenTransport(FakeTransport):
+        def call_tool(self, name, arguments):
+            raise ValueError("malformed result")
+
+    envelope = gw.call_tool(
+        "get_latest_news", {}, env=ENV_ENABLED,
+        transport_factory=lambda config: BrokenTransport(config),
+        allowed_names=frozenset({"get_latest_news"}),
+    )
+    assert envelope["status"] == gw.STATUS_UNAVAILABLE
 
 
 def test_unknown_internal_status_is_impossible():

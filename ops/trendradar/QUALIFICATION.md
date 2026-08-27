@@ -32,14 +32,16 @@ SOURCE_CRAWL_STATUS_READ= PASS          crawl_source_status × crawl_records / r
 SCHEMA_DRIFT_FAIL_CLOSED= PASS          缺列/缺表 → CONTRACT_MISMATCH（测试矩阵覆盖）
 AI_DISABLED_SEMANTICS   = PASS          无任何 key 配置时全链路 healthy-degraded
 NOTIFICATION_DISABLED_SEMANTICS = PASS  总开关 False + 空 channels，全程零外发
-NO_REAL_NOTIFICATION_SENT = PASS        自动化全过程无真实通知（含 MCP send_notification
-                                          工具存在于 inventory 但 Vibe allow-list 恒空集）
+NO_REAL_NOTIFICATION_SENT = PASS        自动化全过程无真实通知；MCP notification
+                                          tools 存在于上游 inventory，但 Phase 1 Vibe
+                                          console allow-list 与 router 均不可达
 NEWSNOW_PROVENANCE      = PASS          默认公共 NewsNow endpoint（DataFetcher.DEFAULT_API_URL），
                                           未做生产自托管依赖
 CUSTOM_NEWSNOW_ENDPOINT_CONTRACT = PASS DataFetcher(api_url=...) 参数化端点（源码事实）+
                                           fetch_data 状态 success/cache 双态契约实测
 GPL_BOUNDARY            = PASS          见 §5
-AUTHORITY_BOUNDARY      = PASS          所有输出 observation-only 标注；allow-list P0=∅
+AUTHORITY_BOUNDARY      = PASS          所有输出 observation-only 标注；Phase 1 仅显式
+                                          read allow-list，通知/写入面不可达
 SECRET_SCAN             = PASS          新增文件零凭据（见 §6）
 CRITICAL = 0 ; HIGH = 0
 ```
@@ -104,8 +106,9 @@ wantcat/trendradar-mcp:4.1.0  tag manifest-list digest =
   `get_latest_news(limit=2)`（真实热点内容返回）。
 - 错参被服务端 pydantic 校验拒绝（错误路径真实验证过一次，即 probe 第一版
   get_latest_news 参数名不匹配 → ToolError）。
-- **send_notification 与 trigger_crawl 存在于服务端工具面**；Vibe 网关侧
-  `ALLOWED_TOOL_NAMES = frozenset()` 在 Phase 0 使其永不可达（离线断言 + live 断言双保险）。
+- **send_notification / get_notification_channels / trigger_crawl 存在于服务端工具面**；
+  Phase 1 Vibe console 的显式 read allow-list 与 `/radar/*` router 均不暴露通知面，
+  发送、渠道读取和爬取触发需后续单独授权（离线断言 + browser 断言双保险）。
 
 ### 3.3 RSS 通道
 

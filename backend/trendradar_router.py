@@ -246,9 +246,3 @@ def radar_system_status():
 @router.get("/radar/storage-status")
 def radar_storage_status():
     return console.call_read_tool("get_storage_status", {})
-
-
-@router.get("/radar/channels")
-def radar_notification_channels():
-    """仅渠道状态读取；发送永远不经过本路由。"""
-    return console.call_read_tool("get_notification_channels", {})
