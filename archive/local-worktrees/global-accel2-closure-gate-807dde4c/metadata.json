@@ -1,0 +1,44 @@
+{
+  "worktree_name": "global-accel2-closure-gate-807dde4c",
+  "original_worktree": "E:\\AI Projects\\.worktrees\\global-accel2-closure-gate-807dde4c",
+  "original_branch": "DETACHED",
+  "original_head": "807dde4c0bacdb027d991fcb4062cfe6b5c8ce57",
+  "git_status": [
+    " M docs/screenshots/full-market-source-to-sink/corrupt-03-unavailable.png",
+    " M docs/screenshots/full-market-source-to-sink/normal-04-stock-data-code-000001.png",
+    " M frontend/tests/e2e/ai-draft-206.browser.mjs",
+    " M frontend/tests/e2e/formal-outcome.browser.mjs",
+    " M frontend/tests/e2e/trade-attribution-reconciliation.browser.mjs",
+    " M frontend/tests/e2e/trades-real.browser.mjs",
+    "?? frontend/tests/e2e/candidate-campaign-real.browser.mjs",
+    "?? frontend/tests/e2e/path-a-trade-outcome-real.browser.mjs",
+    "?? gui-test-screenshots/t0-context.png",
+    "?? gui-test-screenshots/t1-ai-draft.png",
+    "?? gui-test-screenshots/t1b-applied.png",
+    "?? gui-test-screenshots/t2-model-proposal.png",
+    "?? gui-test-screenshots/t3-edited-user-view.png",
+    "?? gui-test-screenshots/t4-user-draft-preview.png"
+  ],
+  "retained_tracked_files": [
+    "frontend/tests/e2e/ai-draft-206.browser.mjs",
+    "frontend/tests/e2e/formal-outcome.browser.mjs",
+    "frontend/tests/e2e/trade-attribution-reconciliation.browser.mjs",
+    "frontend/tests/e2e/trades-real.browser.mjs"
+  ],
+  "retained_untracked_files": [
+    "frontend/tests/e2e/candidate-campaign-real.browser.mjs",
+    "frontend/tests/e2e/path-a-trade-outcome-real.browser.mjs"
+  ],
+  "discarded_temporary_files": [
+    "docs/screenshots/full-market-source-to-sink/corrupt-03-unavailable.png",
+    "docs/screenshots/full-market-source-to-sink/normal-04-stock-data-code-000001.png",
+    "gui-test-screenshots/t0-context.png",
+    "gui-test-screenshots/t1-ai-draft.png",
+    "gui-test-screenshots/t1b-applied.png",
+    "gui-test-screenshots/t2-model-proposal.png",
+    "gui-test-screenshots/t3-edited-user-view.png",
+    "gui-test-screenshots/t4-user-draft-preview.png"
+  ],
+  "retained_patch": "tracked-code-tests.diff",
+  "notes": "Disaster-recovery archive only; not approved for stable or product integration."
+}

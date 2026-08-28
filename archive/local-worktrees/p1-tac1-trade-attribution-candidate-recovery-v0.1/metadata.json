@@ -1,0 +1,16 @@
+{
+  "worktree_name": "p1-tac1-trade-attribution-candidate-recovery-v0.1",
+  "original_worktree": "E:\\AI Projects\\Vibe-Research\\.worktrees\\p1-tac1-trade-attribution-candidate-recovery-v0.1",
+  "original_branch": "fix/p1-tac1-trade-attribution-candidate-recovery-v0.1",
+  "original_head": "9ce322c5b15b6c7a1c37d5802b0f38c6748e7a04",
+  "git_status": [
+    " M frontend/src/lib/api.ts"
+  ],
+  "retained_tracked_files": [
+    "frontend/src/lib/api.ts"
+  ],
+  "retained_untracked_files": [],
+  "discarded_temporary_files": [],
+  "retained_patch": "tracked-code-tests.diff",
+  "notes": "Disaster-recovery archive only; not approved for stable or product integration."
+}

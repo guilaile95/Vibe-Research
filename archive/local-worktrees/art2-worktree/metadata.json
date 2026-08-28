@@ -1,0 +1,20 @@
+{
+  "worktree_name": "art2-worktree",
+  "original_worktree": "E:\\AI Projects\\art2-worktree",
+  "original_branch": "feat/p1-art2-account-cash-effective-time-provenance-v0.1",
+  "original_head": "1988504126ae02da504e506d36395c940f4239c1",
+  "git_status": [
+    " M backend/account_profile.py",
+    " M backend/account_reality_service.py",
+    " M backend/app.py"
+  ],
+  "retained_tracked_files": [
+    "backend/account_profile.py",
+    "backend/account_reality_service.py",
+    "backend/app.py"
+  ],
+  "retained_untracked_files": [],
+  "discarded_temporary_files": [],
+  "retained_patch": "tracked-code-tests.diff",
+  "notes": "Disaster-recovery archive only; not approved for stable or product integration."
+}

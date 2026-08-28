@@ -1,0 +1,20 @@
+ M backend/app.py
+ M backend/decision_challenge_router.py
+ M backend/decision_challenge_runtime.py
+ M backend/decision_commit_router.py
+ M backend/decision_commit_runtime.py
+ M backend/decision_proposal_projection.py
+ M backend/tests/test_decision_challenge_dch1.py
+ M backend/tests/test_decision_commit_runtime.py
+ M frontend/package.json
+ M frontend/src/lib/api.ts
+ M frontend/src/lib/api/types.ts
+ M frontend/src/pages/DecisionProposalReview.tsx
+ M frontend/src/pages/Portfolio.tsx
+?? backend/decision_draft_router.py
+?? backend/decision_draft_service.py
+?? backend/decision_draft_store.py
+?? backend/tests/test_decision_draft_vertical.py
+?? frontend/src/lib/decisionAiDraft.ts
+?? frontend/tests/decision-ai-draft.test.ts
+?? frontend/tests/e2e/decision-ai-draft.browser.mjs

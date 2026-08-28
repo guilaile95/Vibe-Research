@@ -1,0 +1,14 @@
+ M docs/screenshots/full-market-source-to-sink/corrupt-03-unavailable.png
+ M docs/screenshots/full-market-source-to-sink/normal-04-stock-data-code-000001.png
+ M frontend/tests/e2e/ai-draft-206.browser.mjs
+ M frontend/tests/e2e/formal-outcome.browser.mjs
+ M frontend/tests/e2e/trade-attribution-reconciliation.browser.mjs
+ M frontend/tests/e2e/trades-real.browser.mjs
+?? frontend/tests/e2e/candidate-campaign-real.browser.mjs
+?? frontend/tests/e2e/path-a-trade-outcome-real.browser.mjs
+?? gui-test-screenshots/t0-context.png
+?? gui-test-screenshots/t1-ai-draft.png
+?? gui-test-screenshots/t1b-applied.png
+?? gui-test-screenshots/t2-model-proposal.png
+?? gui-test-screenshots/t3-edited-user-view.png
+?? gui-test-screenshots/t4-user-draft-preview.png

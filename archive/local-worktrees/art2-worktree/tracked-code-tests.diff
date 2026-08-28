@@ -1,0 +1,198 @@
+diff --git a/backend/account_profile.py b/backend/account_profile.py
+index 35d7476..e0a606b 100644
+--- a/backend/account_profile.py
++++ b/backend/account_profile.py
+@@ -9,6 +9,7 @@ from __future__ import annotations
+ 
+ import json
+ import os
++import re
+ import threading
+ from datetime import datetime, timezone, timedelta
+ 
+@@ -18,6 +19,11 @@ ACCOUNT_FILE = os.path.join(CACHE_DIR, "account_profile.json")
+ BEIJING = timezone(timedelta(hours=8))
+ _LOCK = threading.Lock()
+ ACCOUNT_PROFILE_CORRUPTED_REASON = "ACCOUNT_PROFILE_CORRUPTED"
++CASH_EFFECTIVE_AT_PROVENANCE = "USER_ASSERTED"
++_CASH_EFFECTIVE_AT_RE = re.compile(
++    r"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
++    r"(?:\\.\\d{1,6})?(?:Z|[+-]\\d{2}:\\d{2})$"
++)
+ 
+ 
+ def _now() -> str:
+@@ -29,6 +35,24 @@ def _account_path() -> str:
+     return os.path.join(CACHE_DIR, "account_profile.json")
+ 
+ 
++def _canonical_cash_effective_at(value: object) -> str | None:
++    """将用户明确声明的带时区时间规范化为 canonical UTC；空值表示未声明。"""
++    if value is None:
++        return None
++    if not isinstance(value, str) or not value.strip():
++        raise ValueError("cash_effective_at 必须是带时区的 ISO 8601 时间或 null")
++    text = value.strip()
++    if not _CASH_EFFECTIVE_AT_RE.fullmatch(text):
++        raise ValueError("cash_effective_at 必须是带时区的 ISO 8601 时间")
++    try:
++        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
++    except ValueError as exc:
++        raise ValueError("cash_effective_at 不是合法时间") from exc
++    if parsed.tzinfo is None or parsed.utcoffset() is None:
++        raise ValueError("cash_effective_at 必须包含时区偏移")
++    return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
++
++
+ def load_account_profile() -> dict | None:
+     """读取已验证的账户资金；未配置或损坏均无有效数据可返回。"""
+     st = get_account_profile_status()
+@@ -71,25 +95,38 @@ def get_account_profile_status() -> dict:
+         total, cash = validate_account_payload({
+             "total_assets": d.get("total_assets"),
+             "available_cash": d.get("available_cash"),
++            "cash_effective_at": d.get("cash_effective_at"),
+         })
++        cash_effective_at = _canonical_cash_effective_at(d.get("cash_effective_at"))
+         updated_at = d.get("updated_at")
+         if not isinstance(updated_at, str) or not updated_at.strip():
+             return _status("corrupted")
+-        return _status("valid", {
++        data = {
+             "total_assets": total,
+             "available_cash": cash,
+             "updated_at": updated_at.strip(),
+-        })
++            "cash_effective_at": cash_effective_at,
++            "cash_effective_at_provenance": (
++                CASH_EFFECTIVE_AT_PROVENANCE if cash_effective_at is not None else None
++            ),
++        }
++        return _status("valid", data)
+     except Exception:
+         return _status("corrupted")
+ 
+ 
+ 
+-def save_account_profile(total_assets: float, available_cash: float) -> dict:
+-    """原子写入账户资金，updated_at 由后端生成。返回保存后的数据（含 updated_at）。"""
++def save_account_profile(
++    total_assets: float,
++    available_cash: float,
++    cash_effective_at: str | None = None,
++) -> dict:
++    """原子写入账户资金；有效时间仅接受用户显式声明的带时区时间。"""
++    canonical_effective_at = _canonical_cash_effective_at(cash_effective_at)
+     payload = {
+         "total_assets": round(float(total_assets), 2),
+         "available_cash": round(float(available_cash), 2),
++        "cash_effective_at": canonical_effective_at,
+         "updated_at": _now(),
+     }
+     account_file = _account_path()
+@@ -120,6 +157,7 @@ def validate_account_payload(raw: dict) -> tuple[float, float]:
+     - available_cash <= total_assets
+     - 拒绝 NaN、Infinity、非数字类型、布尔值
+     - 拒绝未知字段与 updated_at 客户端注入
++    - cash_effective_at 只能是带时区时间或 null
+     返回 (total_assets, available_cash)；不通过则抛 ValueError。
+     """
+     if not isinstance(raw, dict):
+@@ -132,10 +170,12 @@ def validate_account_payload(raw: dict) -> tuple[float, float]:
+             raise ValueError("updated_at 由后端生成，禁止客户端提交")
+ 
+     # 拒绝未知字段
+-    unknown = set(raw.keys()) - {"total_assets", "available_cash"}
++    unknown = set(raw.keys()) - {"total_assets", "available_cash", "cash_effective_at"}
+     if unknown:
+         raise ValueError(f"未知字段：{sorted(unknown)}")
+ 
++    _canonical_cash_effective_at(raw.get("cash_effective_at"))
++
+     total = raw.get("total_assets")
+     cash = raw.get("available_cash")
+ 
+diff --git a/backend/account_reality_service.py b/backend/account_reality_service.py
+index c232dec..6bb8eaa 100644
+--- a/backend/account_reality_service.py
++++ b/backend/account_reality_service.py
+@@ -43,7 +43,10 @@ _REASON_PRICING_PARTIAL = "PRICING_PARTIAL"
+ _REASON_PRICING_UNAVAILABLE = "PRICING_UNAVAILABLE"
+ _REASON_PRICING_MIXED_CUTOFF = "PRICING_MIXED_CUTOFF"
+ _REASON_CASH_EFFECTIVE_AT_UNPROVEN = "CASH_EFFECTIVE_AT_UNPROVEN"
++_REASON_NAV_TEMPORAL_BASIS_INCOMPLETE = "NAV_TEMPORAL_BASIS_INCOMPLETE"
++_TEMPORAL_PROVEN = "PROVEN"
+ _TEMPORAL_UNPROVEN = "UNPROVEN"
++_PROVENANCE_USER_ASSERTED = "USER_ASSERTED"
+ _NAV_TEMPORAL_MIXED_UNPROVEN = "MIXED_UNPROVEN"
+ _NAV_TEMPORAL_UNAVAILABLE = "UNAVAILABLE"
+ 
+@@ -112,13 +115,20 @@ def _current_cash_fact() -> dict[str, Any]:
+             "status": fact_status,
+             "reason_code": reason_code,
+         }
++    effective_at = profile.get("cash_effective_at")
++    has_proven_time = isinstance(effective_at, str) and bool(effective_at.strip())
+     return {
+         "value": round(float(profile["available_cash"]), 2),
+         "source": _CASH_SOURCE_ACCOUNT_PROFILE,
+         "updated_at": profile.get("updated_at"),
+-        "effective_at": None,
+-        "temporal_status": _TEMPORAL_UNPROVEN,
+-        "temporal_reason_code": _REASON_CASH_EFFECTIVE_AT_UNPROVEN,
++        "effective_at": effective_at if has_proven_time else None,
++        "effective_at_provenance": (
++            _PROVENANCE_USER_ASSERTED if has_proven_time else None
++        ),
++        "temporal_status": _TEMPORAL_PROVEN if has_proven_time else _TEMPORAL_UNPROVEN,
++        "temporal_reason_code": (
++            None if has_proven_time else _REASON_CASH_EFFECTIVE_AT_UNPROVEN
++        ),
+         "fact_type": _FACT_MANUAL,
+         "status": "AVAILABLE",
+         "reason_code": None,
+@@ -412,7 +422,11 @@ def get_account_reality() -> dict[str, Any]:
+         else _NAV_TEMPORAL_UNAVAILABLE
+     )
+     nav_temporal_reason_codes = sorted({
+-        _REASON_CASH_EFFECTIVE_AT_UNPROVEN,
++        (
++            _REASON_NAV_TEMPORAL_BASIS_INCOMPLETE
++            if current_fact.get("temporal_status") == _TEMPORAL_PROVEN
++            else _REASON_CASH_EFFECTIVE_AT_UNPROVEN
++        ),
+         *([nav_skip] if nav_skip else []),
+         *(
+             [_REASON_PRICING_MIXED_CUTOFF]
+diff --git a/backend/app.py b/backend/app.py
+index 7f4fd2f..84f8550 100644
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -898,12 +898,13 @@ def portfolio_update(h: HoldingUpdate):
+ # ---- 账户资金（用户手工填写，存本地、不上传、不进仓库）----
+ 
+ class AccountProfileIn(BaseModel):
+-    """账户资金手工填写请求。updated_at 由后端生成，禁止客户端提交。"""
++    """账户资金手工填写请求；保存时间由后端生成，现金有效时间由用户显式声明。"""
+ 
+     model_config = ConfigDict(extra="forbid")
+ 
+     total_assets: float
+     available_cash: float
++    cash_effective_at: str | None = None
+ 
+     @model_validator(mode="before")
+     @classmethod
+@@ -937,7 +938,11 @@ def account_profile_save(req: AccountProfileIn):
+     """保存账户资金。后端校验 + 生成 updated_at，返回保存后的数据。"""
+     try:
+         total, cash = account_profile.validate_account_payload(req.model_dump())
+-        data = account_profile.save_account_profile(total, cash)
++        data = account_profile.save_account_profile(
++            total,
++            cash,
++            req.cash_effective_at,
++        )
+         return {"configured": True, "status": "valid", "reason_code": None, "data": data}
+     except ValueError as e:
+         raise HTTPException(400, str(e)) from e

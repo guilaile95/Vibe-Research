@@ -1,0 +1,942 @@
+warning: in the working copy of 'backend/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/decision_challenge_router.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/decision_challenge_runtime.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/decision_commit_router.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/decision_commit_runtime.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/decision_proposal_projection.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/test_decision_challenge_dch1.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/test_decision_commit_runtime.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/package.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/src/lib/api.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/src/lib/api/types.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/src/pages/DecisionProposalReview.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/src/pages/Portfolio.tsx', LF will be replaced by CRLF the next time Git touches it
+diff --git a/backend/app.py b/backend/app.py
+index c65ad50..12d52ec 100644
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -80,6 +80,7 @@ import holdings_campaign_composition_router
+ import decision_inbox_runtime_router
+ import decision_commit_router
+ import decision_challenge_router
++import decision_draft_router
+ import formal_decision_outcome_router
+ from decision_cockpit_service import (
+     generate_tomorrow_plan,
+@@ -406,6 +407,8 @@ app.include_router(holdings_campaign_composition_router.router)
+ app.include_router(decision_inbox_runtime_router.router)
+ # P0-DC1 uncommitted Decision Proposal → explicit Frozen Decision commit
+ app.include_router(decision_commit_router.router)
++# North Star acceleration: Campaign-scoped advisory AI draft; never a Formal Decision.
++app.include_router(decision_draft_router.router)
+ # P0-DCH1 optional pre-freeze Decision Challenge packet
+ app.include_router(decision_challenge_router.router)
+ # P0-OL1 Formal Decision Outcome; legacy advice analytics remain separate.
+diff --git a/backend/decision_challenge_router.py b/backend/decision_challenge_router.py
+index 3e64c5d..873d035 100644
+--- a/backend/decision_challenge_router.py
++++ b/backend/decision_challenge_router.py
+@@ -43,6 +43,7 @@ class DecisionChallengeFinalizeIn(BaseModel):
+     key_assumptions: list[Any]
+     event_invalidation_conditions: list[Any]
+     strategy_horizon: str
++    ai_draft_id: str | None = None
+ 
+ 
+ @router.post("/campaigns/{campaign_id}/decision-challenge/finalize")
+diff --git a/backend/decision_challenge_runtime.py b/backend/decision_challenge_runtime.py
+index 991052a..cf19aef 100644
+--- a/backend/decision_challenge_runtime.py
++++ b/backend/decision_challenge_runtime.py
+@@ -127,6 +127,7 @@ def finalize_decision_challenge(
+         "key_assumptions",
+         "event_invalidation_conditions",
+         "strategy_horizon",
++        "ai_draft_id",
+     }
+     extra = set(payload) - allowed
+     if extra:
+@@ -163,7 +164,7 @@ def finalize_decision_challenge(
+     except domain.DecisionChallengeValidationError as exc:
+         raise DecisionChallengeInputError(str(exc)) from exc
+ 
+-    draft_keys = (
++    required_draft_keys = (
+         "asset_view",
+         "trade_view",
+         "portfolio_view",
+@@ -172,14 +173,17 @@ def finalize_decision_challenge(
+         "event_invalidation_conditions",
+         "strategy_horizon",
+     )
+-    if preview_override is None and not all(key in payload for key in draft_keys):
++    if preview_override is None and not all(key in payload for key in required_draft_keys):
+         raise DecisionChallengeInputError(
+             "finalize requires the same user draft used for preview"
+         )
+     try:
+         preview = preview_override or ports.preview(
+             campaign_id,
+-            {key: payload[key] for key in draft_keys},
++            {
++                **{key: payload[key] for key in required_draft_keys},
++                **({"ai_draft_id": payload["ai_draft_id"]} if payload.get("ai_draft_id") else {}),
++            },
+             as_of=as_of,
+         )
+     except commit_runtime.ProposalStaleError as exc:
+diff --git a/backend/decision_commit_router.py b/backend/decision_commit_router.py
+index 58185fb..4f73e84 100644
+--- a/backend/decision_commit_router.py
++++ b/backend/decision_commit_router.py
+@@ -35,6 +35,7 @@ class DecisionProposalPreviewIn(BaseModel):
+     key_assumptions: list[Any]
+     event_invalidation_conditions: list[Any]
+     strategy_horizon: str
++    ai_draft_id: str | None = None
+ 
+ 
+ class DecisionProposalCommitIn(DecisionProposalPreviewIn):
+@@ -65,6 +66,8 @@ def preview_decision_proposal(
+         raise HTTPException(422, _INVALID_INPUT) from None
+     except runtime.CurrentThesisUnavailableError:
+         raise HTTPException(409, _THESIS_UNAVAILABLE) from None
++    except runtime.ProposalStaleError:
++        raise HTTPException(409, _STALE_PROPOSAL) from None
+     except campaign_service.CampaignServiceError:
+         raise HTTPException(500, _COMMIT_UNAVAILABLE) from None
+     except runtime.DecisionCommitRuntimeError:
+diff --git a/backend/decision_commit_runtime.py b/backend/decision_commit_runtime.py
+index f1d6b5b..ff188c5 100644
+--- a/backend/decision_commit_runtime.py
++++ b/backend/decision_commit_runtime.py
+@@ -26,6 +26,7 @@ import campaign_service
+ import campaign_critical_data_runtime as critical_data_runtime
+ import campaign_critical_data_projection as critical_data_projection
+ import decision_assurance_projection as assurance
++import decision_draft_store
+ import decision_evidence_delta_projection as evidence_delta
+ import decision_proposal_projection as proposal_projection
+ import decision_trace_store
+@@ -57,6 +58,7 @@ _UTC_RE = re.compile(
+ _CAMPAIGN_RE = re.compile(r"^campaign_[0-9a-f]{32}$")
+ _THESIS_RE = re.compile(r"^[0-9a-f]{32}$")
+ _DECISION_RE = re.compile(r"^decision_[0-9a-f]{32}$")
++_DRAFT_RE = re.compile(r"^decision_draft_[0-9a-f]{32}$")
+ _FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
+ 
+ 
+@@ -744,11 +746,12 @@ def _validate_draft_inputs(payload: Mapping[str, Any]) -> dict[str, Any]:
+         "key_assumptions",
+         "event_invalidation_conditions",
+         "strategy_horizon",
++        "ai_draft_id",
+     }
+     extra = set(payload) - allowed
+     if extra:
+         raise DecisionCommitInputError(f"unknown proposal input: {sorted(extra)}")
+-    required = allowed
++    required = allowed - {"ai_draft_id"}
+     missing = required - set(payload)
+     if missing:
+         raise DecisionCommitInputError(f"proposal input is missing: {sorted(missing)}")
+@@ -762,12 +765,72 @@ def _validate_draft_inputs(payload: Mapping[str, Any]) -> dict[str, Any]:
+             payload["event_invalidation_conditions"], "event_invalidation_conditions"
+         ),
+         "strategy_horizon": payload["strategy_horizon"],
++        "ai_draft_id": payload.get("ai_draft_id"),
+     }
+     if not isinstance(drafts["strategy_horizon"], str) or not drafts["strategy_horizon"].strip():
+         raise DecisionCommitInputError("strategy_horizon must be a non-empty string")
++    draft_id = drafts["ai_draft_id"]
++    if draft_id is not None and (
++        not isinstance(draft_id, str) or not _DRAFT_RE.fullmatch(draft_id)
++    ):
++        raise DecisionCommitInputError("ai_draft_id is invalid")
+     return drafts
+ 
+ 
++def _resolve_view_provenance(
++    *,
++    drafts: Mapping[str, Any],
++    campaign: Mapping[str, Any],
++    thesis_id: str,
++    thesis_revision: int,
++) -> Mapping[str, Any] | None:
++    """Resolve browser-supplied draft id to server-trusted per-view provenance."""
++
++    draft_id = drafts.get("ai_draft_id")
++    if draft_id is None:
++        return None
++    try:
++        record = decision_draft_store.get(draft_id)
++    except decision_draft_store.DecisionDraftStoreError as exc:
++        raise DecisionCommitRuntimeError("AI draft provenance is unreadable") from exc
++    if record is None:
++        raise ProposalStaleError("AI draft does not exist")
++    expected_identity = {
++        "campaign_id": campaign["campaign_id"],
++        "security_code": campaign["security_code"],
++        "strategy": campaign["strategy"],
++        "thesis_id": thesis_id,
++        "thesis_revision": thesis_revision,
++    }
++    if any(record.get(key) != value for key, value in expected_identity.items()):
++        raise ProposalStaleError("AI draft Campaign or Current Thesis identity changed")
++    try:
++        import decision_draft_service
++
++        _holding, current_holding_fingerprint = decision_draft_service.current_holding_context(
++            campaign["security_code"]
++        )
++    except Exception as exc:  # noqa: BLE001 - stale/fail-closed boundary
++        raise ProposalStaleError("AI draft Canonical Holding can no longer be verified") from exc
++    if record.get("holding_fingerprint") != current_holding_fingerprint:
++        raise ProposalStaleError("AI draft Canonical Holding changed")
++    source_ref = f"decision_ai_draft:{draft_id}"
++    payload = record.get("payload")
++    if not isinstance(payload, Mapping):
++        raise DecisionCommitRuntimeError("AI draft payload is invalid")
++    result: dict[str, Any] = {}
++    for view_name in ("asset_view", "trade_view", "portfolio_view"):
++        exact_model_view = (
++            decision_draft_store.canonical_json(payload.get(view_name))
++            == decision_draft_store.canonical_json(drafts[view_name])
++        )
++        result[view_name] = {
++            "view_origin": "MODEL_PROPOSAL" if exact_model_view else "USER_DRAFT",
++            "provenance_refs": [source_ref] if exact_model_view else [],
++        }
++    return result
++
++
+ def _build_proposal(
+     *,
+     campaign: Mapping[str, Any],
+@@ -797,6 +860,12 @@ def _build_proposal(
+         raise CurrentThesisUnavailableError("Current Thesis is not applicable at this as_of")
+     thesis_id = authorities.current_thesis_projection["thesis_id"]
+     thesis_revision = authorities.current_thesis_projection["original"]["revision"]
++    view_provenance = _resolve_view_provenance(
++        drafts=drafts,
++        campaign=campaign,
++        thesis_id=thesis_id,
++        thesis_revision=thesis_revision,
++    )
+     result = proposal_projection.project_decision_proposal(
+         security_code=campaign["security_code"],
+         strategy=campaign["strategy"],
+@@ -811,6 +880,7 @@ def _build_proposal(
+         hard_risk_evaluation=authorities.hard_risk,
+         material_change=authorities.material_change,
+         sell_engine=authorities.sell_engine,
++        view_provenance=view_provenance,
+     )
+     return result, authorities
+ 
+@@ -894,6 +964,7 @@ def _fingerprint(
+                 drafts["event_invalidation_conditions"]
+             ),
+             "strategy_horizon": drafts["strategy_horizon"],
++            "ai_draft_id": drafts.get("ai_draft_id"),
+         },
+     }
+     encoded = json.dumps(
+@@ -919,6 +990,7 @@ def _preview_response(
+                 drafts["event_invalidation_conditions"]
+             ),
+             "strategy_horizon": drafts["strategy_horizon"],
++            "ai_draft_id": drafts.get("ai_draft_id"),
+         },
+         "authority_evaluations": {
+             "formal_thesis": {
+@@ -944,6 +1016,18 @@ def _preview_response(
+             "user_confirmed": True,
+             "expected_proposal_fingerprint": fingerprint,
+         },
++        "draft_binding": (
++            {
++                "draft_id": drafts["ai_draft_id"],
++                "matching_views": [
++                    name
++                    for name, provenance in proposal.view_provenance.items()
++                    if provenance.get("view_origin") == "MODEL_PROPOSAL"
++                ],
++            }
++            if drafts.get("ai_draft_id") is not None
++            else None
++        ),
+     }
+ 
+ 
+@@ -1062,6 +1146,19 @@ def _freeze_payload(
+         f"{PROPOSAL_SOURCE_PREFIX}{fingerprint}",
+         *proposal.authority_refs,
+     ]
++    draft_id = drafts.get("ai_draft_id")
++    if draft_id is not None:
++        try:
++            import decision_draft_service
++
++            record = decision_draft_store.get(draft_id)
++            if record is None:
++                raise ProposalStaleError("AI draft disappeared before Freeze")
++            source_refs.extend(decision_draft_service.provenance_refs(record))
++        except ProposalStaleError:
++            raise
++        except Exception as exc:  # noqa: BLE001
++            raise DecisionCommitRuntimeError("AI draft provenance is unreadable") from exc
+     if challenge_id is not None:
+         source_refs.append(f"{CHALLENGE_SOURCE_PREFIX}{challenge_id}")
+     return {
+@@ -1132,6 +1229,7 @@ def commit_decision_proposal(
+         "key_assumptions",
+         "event_invalidation_conditions",
+         "strategy_horizon",
++        "ai_draft_id",
+         "challenge_id",
+     }
+     extra = set(payload) - allowed
+@@ -1152,6 +1250,7 @@ def commit_decision_proposal(
+             "key_assumptions",
+             "event_invalidation_conditions",
+             "strategy_horizon",
++            "ai_draft_id",
+         )}
+     )
+ 
+@@ -1201,6 +1300,14 @@ def commit_decision_proposal(
+         if fingerprint != expected and existing is None:
+             raise ProposalStaleError("proposal fingerprint mismatch; re-preview required")
+         if existing is not None:
++            ai_draft_id = drafts.get("ai_draft_id")
++            if ai_draft_id is not None and (
++                not isinstance(existing.get("source_refs"), list)
++                or f"decision_ai_draft:{ai_draft_id}" not in existing["source_refs"]
++            ):
++                raise FrozenDecisionIntegrityError(
++                    "Frozen Decision AI draft provenance is missing"
++                )
+             # A replay may observe the newly written Frozen Decision at the
+             # exact supplied as_of.  Recompute the original proposal with that
+             # one record excluded, so the marker is an idempotency key only
+diff --git a/backend/decision_proposal_projection.py b/backend/decision_proposal_projection.py
+index e132d90..3123158 100644
+--- a/backend/decision_proposal_projection.py
++++ b/backend/decision_proposal_projection.py
+@@ -530,6 +530,7 @@ def project_decision_proposal(
+     hard_risk_evaluation: HardRiskEvaluation | None,
+     material_change: MaterialChangeProjection | None,
+     sell_engine: SellEngineProjection | None,
++    view_provenance: Mapping[str, Any] | None = None,
+ ) -> DecisionProposal:
+     """Compose one exact-scope, uncommitted Formal Decision Proposal."""
+ 
+@@ -656,19 +657,10 @@ def project_decision_proposal(
+         authority_refs.extend(material_change.authority_refs)
+     if sell_engine is not None:
+         authority_refs.extend(sell_engine.authority_refs)
+-    view_provenance = {
+-        "asset_view": {
+-            "view_origin": "USER_DRAFT",
+-            "provenance_refs": [],
+-        },
+-        "trade_view": {
+-            "view_origin": "USER_DRAFT",
+-            "provenance_refs": [],
+-        },
+-        "portfolio_view": {
+-            "view_origin": "USER_DRAFT",
+-            "provenance_refs": [],
+-        },
++    trusted_view_provenance = _view_provenance(view_provenance) if view_provenance is not None else {
++        "asset_view": {"view_origin": "USER_DRAFT", "provenance_refs": []},
++        "trade_view": {"view_origin": "USER_DRAFT", "provenance_refs": []},
++        "portfolio_view": {"view_origin": "USER_DRAFT", "provenance_refs": []},
+     }
+     return DecisionProposal(
+         schema_version=SCHEMA_VERSION,
+@@ -683,7 +675,7 @@ def project_decision_proposal(
+         asset_view=_json_object(asset_view, "asset_view"),
+         trade_view=_json_object(trade_view, "trade_view"),
+         portfolio_view=_json_object(portfolio_view, "portfolio_view"),
+-        view_provenance=view_provenance,
++        view_provenance=trusted_view_provenance,
+         next_best_action=nba,
+         action_envelope=envelope,
+         maintain_conditions=tuple(envelope["maintain_conditions"]),
+diff --git a/backend/tests/test_decision_challenge_dch1.py b/backend/tests/test_decision_challenge_dch1.py
+index 905832b..7e7c8a4 100644
+--- a/backend/tests/test_decision_challenge_dch1.py
++++ b/backend/tests/test_decision_challenge_dch1.py
+@@ -24,6 +24,7 @@ from test_decision_commit_runtime import (
+     _critical_data,
+     _draft,
+     _ports,
++    _stored_ai_draft,
+     _thesis,
+ )
+ 
+@@ -203,6 +204,25 @@ def test_stale_proposal_fingerprint_is_zero_write(tmp_path):
+     ) is None
+ 
+ 
++def test_ai_draft_id_is_revalidated_through_challenge_preview(tmp_path, monkeypatch):
++    record = _stored_ai_draft(tmp_path, monkeypatch)
++    commit_ports, _state = _ports(_thesis())
++    challenge_ports, _db_path = _challenge_ports(commit_ports, tmp_path)
++    draft = {**_draft(), "ai_draft_id": record["draft_id"]}
++    preview = runtime.preview_decision_proposal(
++        CAMPAIGN_ID, draft, ports=commit_ports, as_of=AS_OF
++    )
++
++    result = challenge_runtime.finalize_decision_challenge(
++        CAMPAIGN_ID,
++        _finalize_payload(preview, ai_draft_id=record["draft_id"]),
++        ports=challenge_ports,
++    )
++
++    assert result["proposal_fingerprint"] == preview["proposal_fingerprint"]
++    assert result["challenge"]["proposal_fingerprint"] == preview["proposal_fingerprint"]
++
++
+ @pytest.mark.parametrize(
+     "override",
+     [
+diff --git a/backend/tests/test_decision_commit_runtime.py b/backend/tests/test_decision_commit_runtime.py
+index 3b7d45c..99ae924 100644
+--- a/backend/tests/test_decision_commit_runtime.py
++++ b/backend/tests/test_decision_commit_runtime.py
+@@ -6,6 +6,8 @@ import pytest
+ 
+ import campaign_critical_data_projection as critical_data_projection
+ import decision_commit_runtime as runtime
++import decision_draft_service
++import decision_draft_store
+ 
+ 
+ AS_OF = "2026-08-16T00:00:00.000000Z"
+@@ -61,6 +63,42 @@ def _draft() -> dict:
+     }
+ 
+ 
++def _stored_ai_draft(tmp_path, monkeypatch) -> dict:
++    db = tmp_path / "decision-drafts.sqlite3"
++    monkeypatch.setenv("VIBE_RESEARCH_DECISION_DRAFT_DB", str(db))
++    holding_fingerprint = "d" * 64
++    monkeypatch.setattr(
++        decision_draft_service,
++        "current_holding_context",
++        lambda _security_code: ({"code": "600519", "shares": 100, "cost": 1000.0}, holding_fingerprint),
++    )
++    return decision_draft_store.append({
++        "schema_version": decision_draft_store.DRAFT_SCHEMA_VERSION,
++        "draft_id": "decision_draft_" + "e" * 32,
++        "campaign_id": CAMPAIGN_ID,
++        "security_code": "600519",
++        "strategy": "SWING",
++        "thesis_id": THESIS_ID,
++        "thesis_revision": 1,
++        "holding_fingerprint": holding_fingerprint,
++        "context_fingerprint": "f" * 64,
++        "context_as_of": AS_OF,
++        "generated_at": AS_OF,
++        "model_provider": "test-provider",
++        "model_name": "test-model",
++        "prompt_version": decision_draft_service.PROMPT_VERSION,
++        "analysis_policy_version": decision_draft_service.ANALYSIS_POLICY_VERSION,
++        "payload": {
++            "asset_view": {"view": "ASSET", "stance": "WAIT"},
++            "trade_view": {"view": "TRADE", "stance": "WAIT"},
++            "portfolio_view": {"view": "PORTFOLIO", "constraint": "unknown"},
++            "key_assumptions": ["AI assumption"],
++            "event_invalidation_conditions": ["AI invalidation"],
++            "limitations": ["UNKNOWN remains UNKNOWN"],
++        },
++    })
++
++
+ def _critical_data(
+     *,
+     evaluation: str = "UNKNOWN",
+@@ -160,6 +198,82 @@ def test_preview_is_uncommitted_and_has_no_prior_boundary_without_fake_id():
+     assert state["writes"] == 0
+ 
+ 
++def test_ai_draft_exact_views_are_model_proposals_and_edit_downgrades_one_view(tmp_path, monkeypatch):
++    record = _stored_ai_draft(tmp_path, monkeypatch)
++    ports, state = _ports(_thesis())
++    draft = {**_draft(), "ai_draft_id": record["draft_id"]}
++
++    exact = runtime.preview_decision_proposal(
++        CAMPAIGN_ID, draft, ports=ports, as_of=AS_OF
++    )
++    assert exact["draft_binding"] == {
++        "draft_id": record["draft_id"],
++        "matching_views": ["asset_view", "trade_view", "portfolio_view"],
++    }
++    assert {
++        key: value["view_origin"]
++        for key, value in exact["proposal"]["view_provenance"].items()
++    } == {
++        "asset_view": "MODEL_PROPOSAL",
++        "trade_view": "MODEL_PROPOSAL",
++        "portfolio_view": "MODEL_PROPOSAL",
++    }
++    assert state["writes"] == 0
++
++    edited = deepcopy(draft)
++    edited["trade_view"] = {"view": "TRADE", "stance": "OPPOSE", "note": "user edit"}
++    changed = runtime.preview_decision_proposal(
++        CAMPAIGN_ID, edited, ports=ports, as_of=AS_OF
++    )
++    assert changed["proposal"]["view_provenance"]["asset_view"]["view_origin"] == "MODEL_PROPOSAL"
++    assert changed["proposal"]["view_provenance"]["trade_view"]["view_origin"] == "USER_DRAFT"
++    assert changed["proposal_fingerprint"] != exact["proposal_fingerprint"]
++
++
++def test_ai_draft_freeze_keeps_durable_source_provenance(tmp_path, monkeypatch):
++    record = _stored_ai_draft(tmp_path, monkeypatch)
++    ports, state = _ports(_thesis())
++    draft = {**_draft(), "ai_draft_id": record["draft_id"]}
++    preview = runtime.preview_decision_proposal(
++        CAMPAIGN_ID, draft, ports=ports, as_of=AS_OF
++    )
++    result = runtime.commit_decision_proposal(
++        CAMPAIGN_ID,
++        {
++            **draft,
++            "as_of": preview["proposal"]["as_of"],
++            "expected_proposal_fingerprint": preview["proposal_fingerprint"],
++            "user_confirmed": True,
++        },
++        ports=ports,
++    )
++
++    refs = result["committed"]["source_refs"]
++    assert f"decision_ai_draft:{record['draft_id']}" in refs
++    assert "decision_ai_model:test-provider/test-model" in refs
++    assert f"decision_ai_prompt:{decision_draft_service.PROMPT_VERSION}" in refs
++    assert f"decision_ai_policy:{decision_draft_service.ANALYSIS_POLICY_VERSION}" in refs
++    assert state["writes"] == 1
++
++
++def test_ai_draft_holding_change_fails_closed_without_formal_write(tmp_path, monkeypatch):
++    record = _stored_ai_draft(tmp_path, monkeypatch)
++    ports, state = _ports(_thesis())
++    monkeypatch.setattr(
++        decision_draft_service,
++        "current_holding_context",
++        lambda _security_code: ({"code": "600519", "shares": 200}, "0" * 64),
++    )
++    with pytest.raises(runtime.ProposalStaleError):
++        runtime.preview_decision_proposal(
++            CAMPAIGN_ID,
++            {**_draft(), "ai_draft_id": record["draft_id"]},
++            ports=ports,
++            as_of=AS_OF,
++        )
++    assert state["writes"] == 0
++
++
+ @pytest.mark.parametrize(
+     ("evaluation", "state"),
+     [
+diff --git a/frontend/package.json b/frontend/package.json
+index 60c8f21..e41fb93 100644
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -28,6 +28,7 @@
+     "test:e2e:local-api-security": "node tests/e2e/local-api-security.browser.mjs",
+     "test:e2e:hr1-vertical": "node tests/e2e/hr1-production-vertical.browser.mjs",
+     "test:e2e:decision-commit": "node tests/e2e/decision-commit-vertical.browser.mjs",
++    "test:e2e:decision-ai-draft": "node tests/e2e/decision-ai-draft.browser.mjs",
+     "test:e2e:trade-attribution-reconciliation": "node tests/e2e/trade-attribution-reconciliation.browser.mjs",
+     "test:e2e:formal-outcome": "node tests/e2e/formal-outcome.browser.mjs",
+     "test:e2e:has1-holding-authority": "node tests/e2e/has1-holding-authority.browser.mjs",
+diff --git a/frontend/src/lib/api.ts b/frontend/src/lib/api.ts
+index 51a87bf..6726b80 100644
+--- a/frontend/src/lib/api.ts
++++ b/frontend/src/lib/api.ts
+@@ -69,6 +69,7 @@ import type {
+   TechnicalIndicators,
+   TopRiskAnalysis,
+   DailyReviewAnalyzeRequest,
++  StreamLlmConfig,
+   NdjsonStreamHandlers,
+   NdjsonStreamResult,
+   NdjsonProtocolState,
+@@ -126,6 +127,7 @@ import type {
+   CampaignNextActions,
+   DecisionInboxSnapshot,
+   DecisionProposalDraftInput,
++  CampaignDecisionDraft,
+   DecisionProposalPreview,
+   DecisionProposalCommitResult,
+   CommittedDecisionRuntimeRead,
+@@ -994,6 +996,8 @@ export const api = {
+     bindCampaignThesis(campaignId, thesisId),
+   getCampaignThesisBinding: (campaignId: string) => getCampaignThesisBinding(campaignId),
+   getCampaignCurrentThesis: (campaignId: string) => getCampaignCurrentThesis(campaignId),
++  generateCampaignDecisionDraft: (campaignId: string, body: { llm: StreamLlmConfig; focus?: string | null }) =>
++    generateCampaignDecisionDraft(campaignId, body),
+   previewDecisionProposal: (campaignId: string, body: DecisionProposalDraftInput) =>
+     previewDecisionProposal(campaignId, body),
+   commitDecisionProposal: (
+@@ -1335,6 +1339,17 @@ export async function getCampaignCurrentThesis(
+ // P0-DC1：Decision Proposal（Preview 只读；Commit 显式确认；提交后重读）
+ // ---------------------------------------------------------------------------
+ 
++export async function generateCampaignDecisionDraft(
++  campaignId: string,
++  body: { llm: StreamLlmConfig; focus?: string | null },
++): Promise<CampaignDecisionDraft> {
++  return request<CampaignDecisionDraft>(
++    `/campaigns/${encodeURIComponent(campaignId)}/decision-draft`,
++    "POST",
++    body,
++  );
++}
++
+ export async function previewDecisionProposal(
+   campaignId: string,
+   body: DecisionProposalDraftInput,
+diff --git a/frontend/src/lib/api/types.ts b/frontend/src/lib/api/types.ts
+index 62f3617..9745934 100644
+--- a/frontend/src/lib/api/types.ts
++++ b/frontend/src/lib/api/types.ts
+@@ -2485,6 +2485,33 @@ export interface DecisionInboxSnapshot {
+ // P0-DC1：Current Thesis → uncommitted Decision Proposal → explicit Freeze
+ // ---------------------------------------------------------------------------
+ 
++export interface CampaignDecisionDraft {
++  schema_version: "campaign-decision-draft.v0.1";
++  draft_id: string;
++  campaign_id: string;
++  security_code: string;
++  strategy: CampaignStrategy;
++  thesis_id: string;
++  thesis_revision: number;
++  holding_fingerprint: string;
++  context_fingerprint: string;
++  context_as_of: string;
++  generated_at: string;
++  model_provider: string;
++  model_name: string;
++  prompt_version: string;
++  analysis_policy_version: string;
++  payload: {
++    asset_view: { view: "ASSET"; stance: "WAIT" | "SUPPORT" | "OPPOSE"; note: string };
++    trade_view: { view: "TRADE"; stance: "WAIT" | "SUPPORT" | "OPPOSE"; note: string };
++    portfolio_view: { view: "PORTFOLIO"; constraint: string };
++    key_assumptions: string[];
++    event_invalidation_conditions: string[];
++    limitations: string[];
++  };
++  record_hash: string;
++}
++
+ export interface DecisionProposalProjection {
+   schema_version: string;
+   proposal_status: "UNCOMMITTED";
+@@ -2520,6 +2547,7 @@ export interface DecisionProposalDraftInput extends DecisionProposalCommitFields
+   asset_view: Record<string, unknown>;
+   trade_view: Record<string, unknown>;
+   portfolio_view: Record<string, unknown>;
++  ai_draft_id?: string;
+ }
+ 
+ export interface DecisionProposalPreview {
+@@ -2533,6 +2561,10 @@ export interface DecisionProposalPreview {
+     user_confirmed: true;
+     expected_proposal_fingerprint: string;
+   };
++  draft_binding: {
++    draft_id: string;
++    matching_views: string[];
++  } | null;
+ }
+ 
+ export interface DecisionProposalCommitResult {
+diff --git a/frontend/src/pages/DecisionProposalReview.tsx b/frontend/src/pages/DecisionProposalReview.tsx
+index b0465ee..2f617f1 100644
+--- a/frontend/src/pages/DecisionProposalReview.tsx
++++ b/frontend/src/pages/DecisionProposalReview.tsx
+@@ -1,12 +1,14 @@
+ import { useEffect, useMemo, useRef, useState } from "react";
+ import { Link, useNavigate, useParams } from "react-router-dom";
+-import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, LockKeyhole } from "lucide-react";
++import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, LockKeyhole, Sparkles } from "lucide-react";
+ import { PageHeader } from "@/components/ui/PageHeader";
+-import { ApiError, CommittedDecisionReadError, api, DECISION_CHALLENGE_DIMENSIONS, type DecisionChallengeDimensionInput, type DecisionChallengeDimensionName, type DecisionChallengePacket, type DecisionProposalDraftInput, type DecisionProposalPreview, type CommittedDecisionRuntimeRead } from "@/lib/api";
++import { ApiError, CommittedDecisionReadError, api, DECISION_CHALLENGE_DIMENSIONS, type CampaignDecisionDraft, type DecisionChallengeDimensionInput, type DecisionChallengeDimensionName, type DecisionChallengePacket, type DecisionProposalDraftInput, type DecisionProposalPreview, type CommittedDecisionRuntimeRead } from "@/lib/api";
+ import { VIEW_STANCE_LABELS, VIEW_STANCE_OPTIONS, buildJudgedView, buildPortfolioView, type ViewStance } from "@/lib/decisionProposalForm";
+ import { hydratedHorizonValue, resolveDecisionContext, type DecisionContextHydrationResult } from "@/lib/decisionContextHydration";
+ import { browserTimeZoneName, formatUtcOffsetMinutes, parseReviewBoundary } from "@/lib/reviewBoundaryInput";
+ import { buildEvaluatedTradeContinuationHref } from "@/lib/tradeContinuation";
++import { appliedDecisionDraftFields, proposalViewOrigin } from "@/lib/decisionAiDraft";
++import { loadLlm } from "@/lib/llm";
+ import type { CampaignRecord, CampaignThesisBinding, CampaignCurrentThesis, ThesisAggregate } from "@/lib/api";
+ 
+ type ChallengeReadState = "PENDING" | "FOUND" | "ABSENT" | "ERROR";
+@@ -95,10 +97,12 @@ export function DecisionProposalReview() {
+   const contextGeneration = useRef(0);
+   const [assumptions, setAssumptions] = useState("");
+   const [invalidations, setInvalidations] = useState("");
++  const [aiDraft, setAiDraft] = useState<CampaignDecisionDraft | null>(null);
++  const [appliedAiDraftId, setAppliedAiDraftId] = useState<string | null>(null);
+   const [preview, setPreview] = useState<DecisionProposalPreview | null>(null);
+   const [committed, setCommitted] = useState<CommittedDecisionRuntimeRead | null>(null);
+   const [confirmed, setConfirmed] = useState(false);
+-  const [busy, setBusy] = useState<"preview" | "commit" | "challenge" | null>(null);
++  const [busy, setBusy] = useState<"draft" | "preview" | "commit" | "challenge" | null>(null);
+   const [error, setError] = useState("");
+   const [challengeDraft, setChallengeDraft] = useState(emptyChallenge);
+   const [challengeConfirmed, setChallengeConfirmed] = useState(false);
+@@ -116,6 +120,8 @@ export function DecisionProposalReview() {
+     setCurrentThesis(null);
+     setBoundThesis(null);
+     setHydration(null);
++    setAiDraft(null);
++    setAppliedAiDraftId(null);
+     horizonTouched.current = false;
+ 
+     if (!campaignId) {
+@@ -177,8 +183,55 @@ export function DecisionProposalReview() {
+       key_assumptions: splitLines(assumptions),
+       event_invalidation_conditions: splitLines(invalidations),
+       strategy_horizon: horizon.trim(),
++      ...(appliedAiDraftId ? { ai_draft_id: appliedAiDraftId } : {}),
+     };
+-  }, [assetStance, assetNote, tradeStance, tradeNote, portfolioConstraint, reviewBoundary, horizon, assumptions, invalidations]);
++  }, [assetStance, assetNote, tradeStance, tradeNote, portfolioConstraint, reviewBoundary, horizon, assumptions, invalidations, appliedAiDraftId]);
++
++  const resetProposalFlow = () => {
++    setPreview(null);
++    setCommitted(null);
++    setConfirmed(false);
++    setChallengePacket(null);
++    setChallengeReadState("ABSENT");
++    setChallengeConfirmed(false);
++    setBindChallenge(false);
++  };
++
++  const handleGenerateAiDraft = async () => {
++    if (!campaignId || contextState !== "ready") return;
++    const llm = loadLlm();
++    if (!llm) {
++      setError("尚未接入 AI，请先在「接入 AI」里配置。");
++      return;
++    }
++    setBusy("draft");
++    setError("");
++    try {
++      const generated = await api.generateCampaignDecisionDraft(campaignId, { llm });
++      setAiDraft(generated);
++      setAppliedAiDraftId(null);
++      resetProposalFlow();
++    } catch (err) {
++      setError(err instanceof ApiError ? err.message : "AI 草案生成失败。");
++    } finally {
++      setBusy(null);
++    }
++  };
++
++  const handleApplyAiDraft = () => {
++    if (!aiDraft) return;
++    const fields = appliedDecisionDraftFields(aiDraft);
++    setAssetStance(fields.assetStance);
++    setAssetNote(fields.assetNote);
++    setTradeStance(fields.tradeStance);
++    setTradeNote(fields.tradeNote);
++    setPortfolioConstraint(fields.portfolioConstraint);
++    setAssumptions(fields.assumptions);
++    setInvalidations(fields.invalidations);
++    setAppliedAiDraftId(aiDraft.draft_id);
++    resetProposalFlow();
++    setError("");
++  };
+ 
+   const handlePreview = async () => {
+     setError("");
+@@ -379,6 +432,70 @@ export function DecisionProposalReview() {
+         )}
+       </section>
+ 
++      <section
++        className="space-y-3 rounded-lg border border-primary/30 bg-primary/5 p-4"
++        data-ai-draft-state={aiDraft ? (appliedAiDraftId === aiDraft.draft_id ? "APPLIED" : "READY") : "EMPTY"}
++      >
++        <div className="flex flex-wrap items-start justify-between gap-3">
++          <div>
++            <h2 className="flex items-center gap-2 text-sm font-semibold">
++              <Sparkles className="h-4 w-4 text-primary" /> Campaign AI Draft
++              <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">AI DRAFT · UNCOMMITTED</span>
++            </h2>
++            <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
++              由 backend 重读同一 Campaign、Current Thesis / Evidence snapshots、Canonical Holding、Account Reality 与风险状态后起草。生成和应用都不会写入 Formal Decision；NBA 与 Action Envelope 仍只来自下方 deterministic Preview。
++            </p>
++          </div>
++          <button
++            type="button"
++            onClick={() => void handleGenerateAiDraft()}
++            disabled={busy !== null || contextState !== "ready"}
++            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
++            data-action="generate-ai-decision-draft"
++          >
++            {busy === "draft" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
++            {aiDraft ? "重新生成 AI 草案" : "生成 AI 草案"}
++          </button>
++        </div>
++        {aiDraft && (
++          <div className="space-y-3 rounded-md border border-primary/20 bg-background/60 p-3" data-ai-draft-id={aiDraft.draft_id}>
++            <div className="grid gap-2 text-[11px] sm:grid-cols-2 lg:grid-cols-4">
++              <div><p className="text-muted-foreground">Model</p><p className="font-medium">{aiDraft.model_provider} / {aiDraft.model_name}</p></div>
++              <div><p className="text-muted-foreground">Generated</p><p className="font-mono">{aiDraft.generated_at}</p></div>
++              <div><p className="text-muted-foreground">Context cutoff</p><p className="font-mono">{aiDraft.context_as_of}</p></div>
++              <div><p className="text-muted-foreground">Thesis</p><p className="font-mono">{aiDraft.thesis_id.slice(0, 8)}… / v{aiDraft.thesis_revision}</p></div>
++            </div>
++            <div className="grid gap-2 text-xs md:grid-cols-3">
++              <div className="rounded border border-border/50 p-2"><p className="font-medium">Asset · {aiDraft.payload.asset_view.stance}</p><p className="mt-1 text-muted-foreground">{aiDraft.payload.asset_view.note}</p></div>
++              <div className="rounded border border-border/50 p-2"><p className="font-medium">Trade · {aiDraft.payload.trade_view.stance}</p><p className="mt-1 text-muted-foreground">{aiDraft.payload.trade_view.note}</p></div>
++              <div className="rounded border border-border/50 p-2"><p className="font-medium">Portfolio</p><p className="mt-1 text-muted-foreground">{aiDraft.payload.portfolio_view.constraint}</p></div>
++            </div>
++            <div className="rounded border border-amber-500/25 bg-amber-500/5 p-2 text-xs">
++              <p className="font-medium text-amber-700">草案限制</p>
++              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted-foreground">
++                {aiDraft.payload.limitations.map((item) => <li key={item}>{item}</li>)}
++              </ul>
++            </div>
++            <div className="flex flex-wrap items-center gap-3">
++              <button
++                type="button"
++                onClick={handleApplyAiDraft}
++                disabled={busy !== null}
++                className="rounded-md border border-primary/40 px-3 py-2 text-xs font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
++                data-action="apply-ai-decision-draft"
++              >
++                应用到可编辑表单
++              </button>
++              <span className="text-xs text-muted-foreground">
++                {appliedAiDraftId === aiDraft.draft_id
++                  ? "已应用；你仍可逐项修改。Preview 会由 server 判定每个 View 是 MODEL_PROPOSAL 还是 USER_DRAFT。"
++                  : "尚未应用，当前用户表单未被修改。"}
++              </span>
++            </div>
++          </div>
++        )}
++      </section>
++
+       <section className="grid gap-4 lg:grid-cols-3">
+         <fieldset className="rounded-md border border-border/50 bg-background/35 p-3 text-xs" data-view-form="asset_view">
+           <legend className="px-1 font-medium text-foreground">Asset View</legend>
+@@ -526,9 +643,15 @@ export function DecisionProposalReview() {
+           </div>
+ 
+           <div className="grid gap-4 md:grid-cols-3">
+-            {["asset_view", "trade_view", "portfolio_view"].map((name) => (
+-              <div key={name} className="rounded-md border border-border/50 bg-background/35 p-3 text-xs"><p className="font-medium">{name}</p><p className="mt-1 text-muted-foreground">USER_DRAFT · 尚未进入 Frozen Decision</p></div>
+-            ))}
++            {(["asset_view", "trade_view", "portfolio_view"] as const).map((name) => {
++              const origin = proposalViewOrigin(preview.proposal.view_provenance, name);
++              return (
++                <div key={name} className="rounded-md border border-border/50 bg-background/35 p-3 text-xs" data-view-origin={origin}>
++                  <p className="font-medium">{name}</p>
++                  <p className="mt-1 text-muted-foreground">{origin} · 尚未进入 Frozen Decision</p>
++                </div>
++              );
++            })}
+           </div>
+ 
+           <div className="rounded-md border border-border/50 bg-background/35 p-3 text-xs">
+diff --git a/frontend/src/pages/Portfolio.tsx b/frontend/src/pages/Portfolio.tsx
+index 46f6707..ec62971 100644
+--- a/frontend/src/pages/Portfolio.tsx
++++ b/frontend/src/pages/Portfolio.tsx
+@@ -16,6 +16,7 @@ import {
+   type AccountFundingData,
+   type AccountReality,
+   type DataHealthRecordDto,
++  type CampaignRecord,
+ } from "@/lib/api";
+ import { loadLlm } from "@/lib/llm";
+ import { usePortfolioAdviceTaskStore } from "@/stores/portfolioAdviceTaskStore";
+@@ -248,7 +249,7 @@ function AccountFundingCard({ funding, corrupted }: { funding?: AccountFundingDa
+   );
+ }
+ 
+-function HoldingAdviceCard({ h }: { h: PortfolioAdviceHoldingAdvice }) {
++function HoldingAdviceCard({ h, campaigns }: { h: PortfolioAdviceHoldingAdvice; campaigns: CampaignRecord[] }) {
+   const actionLabel = HOLDING_ACTION_LABEL[h.action] ?? h.action;
+   const confLabel = CONFIDENCE_LABEL[h.confidence] ?? h.confidence;
+   const showQty = h.action === "reduce" || h.action === "sell";
+@@ -376,6 +377,27 @@ function HoldingAdviceCard({ h }: { h: PortfolioAdviceHoldingAdvice }) {
+         <ConditionList title="失效条件" items={h.invalidation_conditions} />
+         <ConditionList title="数据限制" items={h.data_limitations} emphasize />
+       </div>
++      <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 p-2.5 text-xs">
++        <p className="font-medium">继续形成 Formal Decision</p>
++        <p className="mt-1 text-muted-foreground">这条 Holding Advice 不是正式事实。进入 Campaign 后，系统会重读 Current Thesis / Evidence / Holding 并生成可编辑 AI Draft。</p>
++        <div className="mt-2 flex flex-wrap gap-2">
++          {campaigns.map((campaign) => (
++            <Link
++              key={campaign.campaign_id}
++              to={`/campaigns/${encodeURIComponent(campaign.campaign_id)}/decision-proposal`}
++              className="rounded border border-primary/30 px-2 py-1 font-medium text-primary hover:bg-primary/10"
++              data-action="holding-advice-formal-decision"
++            >
++              {campaign.strategy} · {campaign.status} → Review
++            </Link>
++          ))}
++          {campaigns.length === 0 && (
++            <Link to="/decision-inbox" className="font-medium text-primary hover:underline">
++              尚无可用 Campaign，前往 Decision Inbox 设置 →
++            </Link>
++          )}
++        </div>
++      </div>
+     </GlassCard>
+   );
+ }
+@@ -422,6 +444,7 @@ export function Portfolio() {
+   const [delErr, setDelErr] = useState<string | null>(null);
+ 
+   const [adviceRequest, setAdviceRequest] = useState("");
++  const [decisionCampaigns, setDecisionCampaigns] = useState<CampaignRecord[]>([]);
+ 
+   const refreshSavedAdvice = useCallback(async () => {
+     await usePortfolioAdviceTaskStore.getState().restore();
+@@ -492,6 +515,20 @@ export function Portfolio() {
+     return () => clearInterval(t);
+   }, [load, loadAcct, refreshSavedAdvice]);
+ 
++  useEffect(() => {
++    let cancelled = false;
++    api.listCampaigns()
++      .then((items) => {
++        if (!cancelled) {
++          setDecisionCampaigns(items.filter((item) => item.status === "ACTIVE" || item.status === "REDUCING"));
++        }
++      })
++      .catch(() => {
++        if (!cancelled) setDecisionCampaigns([]);
++      });
++    return () => { cancelled = true; };
++  }, []);
++
+   // 数量校验：空值 / 含非数字字符（除负号和小数点）/ 非整数 / <=0 / NaN·Infinity → 拒绝
+   const validateShares = (raw: string): number | null => {
+     const v = raw.trim();
+@@ -1330,7 +1367,11 @@ export function Portfolio() {
+             <div className="space-y-3">
+               <p className="text-xs font-semibold text-muted-foreground">逐股操作建议</p>
+               {(advice.holdings || []).map((h) => (
+-                <HoldingAdviceCard key={h.code} h={h} />
++                <HoldingAdviceCard
++                  key={h.code}
++                  h={h}
++                  campaigns={decisionCampaigns.filter((campaign) => campaign.security_code === h.code)}
++                />
+               ))}
+               {(!advice.holdings || advice.holdings.length === 0) && (
+                 <p className="text-sm text-muted-foreground">暂无逐股建议</p>

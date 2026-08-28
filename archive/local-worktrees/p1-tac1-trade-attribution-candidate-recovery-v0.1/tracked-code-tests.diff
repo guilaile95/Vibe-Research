@@ -1,0 +1,12 @@
+diff --git a/frontend/src/lib/api.ts b/frontend/src/lib/api.ts
+index 41a5c2d..204fe1c 100644
+--- a/frontend/src/lib/api.ts
++++ b/frontend/src/lib/api.ts
+@@ -138,6 +138,7 @@ export class ApiError extends Error {
+ }
+ 
+ 
++
+ // 后端访问密钥（对应后端部署时的 VR_API_KEY，公网部署防蹭用）。只存本地浏览器。
+ const ACCESS_KEY = "vr-access-key";
+ 

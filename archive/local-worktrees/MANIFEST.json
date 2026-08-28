@@ -1,0 +1,142 @@
+{
+  "archive_branch": "archive/local-worktree-salvage-20260828",
+  "based_on_stable": "0f247b5e93da08992d79a6ccdad73fa44c03bb30",
+  "worktrees": [
+    {
+      "worktree_name": "global-accel2-closure-gate-807dde4c",
+      "original_worktree": "E:\\AI Projects\\.worktrees\\global-accel2-closure-gate-807dde4c",
+      "original_branch": "DETACHED",
+      "original_head": "807dde4c0bacdb027d991fcb4062cfe6b5c8ce57",
+      "git_status": [
+        " M docs/screenshots/full-market-source-to-sink/corrupt-03-unavailable.png",
+        " M docs/screenshots/full-market-source-to-sink/normal-04-stock-data-code-000001.png",
+        " M frontend/tests/e2e/ai-draft-206.browser.mjs",
+        " M frontend/tests/e2e/formal-outcome.browser.mjs",
+        " M frontend/tests/e2e/trade-attribution-reconciliation.browser.mjs",
+        " M frontend/tests/e2e/trades-real.browser.mjs",
+        "?? frontend/tests/e2e/candidate-campaign-real.browser.mjs",
+        "?? frontend/tests/e2e/path-a-trade-outcome-real.browser.mjs",
+        "?? gui-test-screenshots/t0-context.png",
+        "?? gui-test-screenshots/t1-ai-draft.png",
+        "?? gui-test-screenshots/t1b-applied.png",
+        "?? gui-test-screenshots/t2-model-proposal.png",
+        "?? gui-test-screenshots/t3-edited-user-view.png",
+        "?? gui-test-screenshots/t4-user-draft-preview.png"
+      ],
+      "retained_tracked_files": [
+        "frontend/tests/e2e/ai-draft-206.browser.mjs",
+        "frontend/tests/e2e/formal-outcome.browser.mjs",
+        "frontend/tests/e2e/trade-attribution-reconciliation.browser.mjs",
+        "frontend/tests/e2e/trades-real.browser.mjs"
+      ],
+      "retained_untracked_files": [
+        "frontend/tests/e2e/candidate-campaign-real.browser.mjs",
+        "frontend/tests/e2e/path-a-trade-outcome-real.browser.mjs"
+      ],
+      "discarded_temporary_files": [
+        "docs/screenshots/full-market-source-to-sink/corrupt-03-unavailable.png",
+        "docs/screenshots/full-market-source-to-sink/normal-04-stock-data-code-000001.png",
+        "gui-test-screenshots/t0-context.png",
+        "gui-test-screenshots/t1-ai-draft.png",
+        "gui-test-screenshots/t1b-applied.png",
+        "gui-test-screenshots/t2-model-proposal.png",
+        "gui-test-screenshots/t3-edited-user-view.png",
+        "gui-test-screenshots/t4-user-draft-preview.png"
+      ],
+      "retained_patch": "tracked-code-tests.diff",
+      "notes": "Disaster-recovery archive only; not approved for stable or product integration."
+    },
+    {
+      "worktree_name": "art2-worktree",
+      "original_worktree": "E:\\AI Projects\\art2-worktree",
+      "original_branch": "feat/p1-art2-account-cash-effective-time-provenance-v0.1",
+      "original_head": "1988504126ae02da504e506d36395c940f4239c1",
+      "git_status": [
+        " M backend/account_profile.py",
+        " M backend/account_reality_service.py",
+        " M backend/app.py"
+      ],
+      "retained_tracked_files": [
+        "backend/account_profile.py",
+        "backend/account_reality_service.py",
+        "backend/app.py"
+      ],
+      "retained_untracked_files": [],
+      "discarded_temporary_files": [],
+      "retained_patch": "tracked-code-tests.diff",
+      "notes": "Disaster-recovery archive only; not approved for stable or product integration."
+    },
+    {
+      "worktree_name": "north-star-accel-ai-decision-draft-20260824",
+      "original_worktree": "E:\\AI Projects\\Vibe-Research\\.worktrees\\north-star-accel-ai-decision-draft-20260824",
+      "original_branch": "codex/p0-ai-decision-draft-v0.1",
+      "original_head": "51ecb26f13c4821b80ad80f9101ca036daa74c85",
+      "git_status": [
+        " M backend/app.py",
+        " M backend/decision_challenge_router.py",
+        " M backend/decision_challenge_runtime.py",
+        " M backend/decision_commit_router.py",
+        " M backend/decision_commit_runtime.py",
+        " M backend/decision_proposal_projection.py",
+        " M backend/tests/test_decision_challenge_dch1.py",
+        " M backend/tests/test_decision_commit_runtime.py",
+        " M frontend/package.json",
+        " M frontend/src/lib/api.ts",
+        " M frontend/src/lib/api/types.ts",
+        " M frontend/src/pages/DecisionProposalReview.tsx",
+        " M frontend/src/pages/Portfolio.tsx",
+        "?? backend/decision_draft_router.py",
+        "?? backend/decision_draft_service.py",
+        "?? backend/decision_draft_store.py",
+        "?? backend/tests/test_decision_draft_vertical.py",
+        "?? frontend/src/lib/decisionAiDraft.ts",
+        "?? frontend/tests/decision-ai-draft.test.ts",
+        "?? frontend/tests/e2e/decision-ai-draft.browser.mjs"
+      ],
+      "retained_tracked_files": [
+        "backend/app.py",
+        "backend/decision_challenge_router.py",
+        "backend/decision_challenge_runtime.py",
+        "backend/decision_commit_router.py",
+        "backend/decision_commit_runtime.py",
+        "backend/decision_proposal_projection.py",
+        "backend/tests/test_decision_challenge_dch1.py",
+        "backend/tests/test_decision_commit_runtime.py",
+        "frontend/package.json",
+        "frontend/src/lib/api.ts",
+        "frontend/src/lib/api/types.ts",
+        "frontend/src/pages/DecisionProposalReview.tsx",
+        "frontend/src/pages/Portfolio.tsx"
+      ],
+      "retained_untracked_files": [
+        "backend/decision_draft_router.py",
+        "backend/decision_draft_service.py",
+        "backend/decision_draft_store.py",
+        "backend/tests/test_decision_draft_vertical.py",
+        "frontend/src/lib/decisionAiDraft.ts",
+        "frontend/tests/decision-ai-draft.test.ts",
+        "frontend/tests/e2e/decision-ai-draft.browser.mjs"
+      ],
+      "discarded_temporary_files": [],
+      "retained_patch": "tracked-code-tests.diff",
+      "notes": "Disaster-recovery archive only; not approved for stable or product integration."
+    },
+    {
+      "worktree_name": "p1-tac1-trade-attribution-candidate-recovery-v0.1",
+      "original_worktree": "E:\\AI Projects\\Vibe-Research\\.worktrees\\p1-tac1-trade-attribution-candidate-recovery-v0.1",
+      "original_branch": "fix/p1-tac1-trade-attribution-candidate-recovery-v0.1",
+      "original_head": "9ce322c5b15b6c7a1c37d5802b0f38c6748e7a04",
+      "git_status": [
+        " M frontend/src/lib/api.ts"
+      ],
+      "retained_tracked_files": [
+        "frontend/src/lib/api.ts"
+      ],
+      "retained_untracked_files": [],
+      "discarded_temporary_files": [],
+      "retained_patch": "tracked-code-tests.diff",
+      "notes": "Disaster-recovery archive only; not approved for stable or product integration."
+    }
+  ],
+  "scope": "Retained code/test diffs and valuable untracked test/text files only; screenshots/caches/nul artifacts intentionally discarded."
+}

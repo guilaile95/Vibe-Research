@@ -1,0 +1,310 @@
+diff --git a/frontend/tests/e2e/ai-draft-206.browser.mjs b/frontend/tests/e2e/ai-draft-206.browser.mjs
+index 7837f73..92281c5 100644
+--- a/frontend/tests/e2e/ai-draft-206.browser.mjs
++++ b/frontend/tests/e2e/ai-draft-206.browser.mjs
+@@ -1,5 +1,5 @@
+ import assert from "node:assert/strict";
+-import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
++import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+ import { createServer } from "node:http";
+ import { spawn } from "node:child_process";
+ import { tmpdir } from "node:os";
+@@ -83,6 +83,58 @@ function systemChromePath() {
+   return candidates.find((candidate) => candidate && existsSync(candidate));
+ }
+ 
++function writeDeterministicProviderFixture(dir) {
++  writeFileSync(join(dir, "sitecustomize.py"), `
++import astock
++import market
++
++
++def _kline(code, category=4, offset=5):
++    if code == "600519":
++        return [{"datetime": "2026-08-25 15:00:00", "close": 1600.0}]
++    return []
++
++
++def _individual_info(code):
++    return {"行业": "白酒", "总股本": "100000000"} if code == "600519" else {}
++
++
++def _announcements(code, limit=15):
++    if code != "600519":
++        return []
++    return [{
++        "date": "2026-08-20",
++        "notice_at": "2026-08-20 10:00:00",
++        "title": "isolated fixture announcement",
++        "type": "定期报告",
++        "url": "https://example.invalid/fixture",
++    }]
++
++
++def _financials(code, **kwargs):
++    return {"period": "2026-06-30"} if code == "600519" else {}
++
++
++def _market_breadth():
++    return {"status": "unavailable", "source": "isolated-fixture", "data": None}
++
++
++def _overview():
++    return {
++        "updated": "2026-08-26 10:00",
++        "sectors": [{"name": "白酒", "pct": 1.2, "net": 1000000.0}],
++    }
++
++
++astock.kline = _kline
++astock.individual_info = _individual_info
++astock.announcements = _announcements
++astock.financials = _financials
++market.get_market_breadth = _market_breadth
++market.get_overview = _overview
++`, "utf8");
++}
++
+ async function jsonRequest(base, pathname, method = "GET", body, expected = 200) {
+   const response = await fetch(`${base}${pathname}`, {
+     method,
+@@ -193,6 +245,8 @@ function bodyHasProvenance(body, view, origin) {
+ async function run() {
+   assert.ok(existsSync(frontendDist), "frontend/dist must be built before browser E2E");
+   const tempDataDir = mkdtempSync(join(tmpdir(), "vr-206-ai-draft-e2e-"));
++  const providerFixtureDir = mkdtempSync(join(tmpdir(), "vr-206-provider-fixture-"));
++  writeDeterministicProviderFixture(providerFixtureDir);
+   let backendProc;
+   let backendLog = "";
+   let staticServer;
+@@ -218,6 +272,7 @@ async function run() {
+       VIBE_RESEARCH_FROZEN_DECISION_DB: join(tempDataDir, "frozen_decisions.sqlite3"),
+       VIBE_RESEARCH_DECISION_CHALLENGE_DB: join(tempDataDir, "decision_challenges.sqlite3"),
+       PYTHONUNBUFFERED: "1",
++      PYTHONPATH: [providerFixtureDir, backendDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+     };
+     backendProc = spawn(py.cmd, [...py.args, "app:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
+       cwd: backendDir,
+@@ -248,14 +303,19 @@ async function run() {
+     assert.ok(executablePath, "system Chrome executable not found");
+     browser = await chromium.launch({ headless: true, executablePath });
+     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: "UTC" });
+-    // Environment preparation only: configure a dummy local model endpoint in isolated browser storage.
++    // Keep the synthetic test credential in page memory only; never persist it.
+     await context.addInitScript(({ mockLlm }) => {
+-      localStorage.setItem("vr-llm", JSON.stringify({
++      const config = JSON.stringify({
+         provider: "api-compatible",
+         baseURL: mockLlm,
+-        apiKey: "local-test-key",
++        apiKey: crypto.randomUUID(),
+         model: "local-test-model",
+-      }));
++      });
++      const originalGetItem = Storage.prototype.getItem;
++      Storage.prototype.getItem = function getItem(key) {
++        if (key === "vr-llm") return config;
++        return originalGetItem.call(this, key);
++      };
+     }, { mockLlm });
+     const page = await context.newPage();
+     const consoleErrors = [];
+@@ -423,6 +483,9 @@ async function run() {
+     try { rmSync(tempDataDir, { recursive: true, force: true }); } catch (cleanupError) {
+       console.error(`temporary data cleanup warning: ${cleanupError?.message || cleanupError}`);
+     }
++    try { rmSync(providerFixtureDir, { recursive: true, force: true }); } catch (cleanupError) {
++      console.error(`provider fixture cleanup warning: ${cleanupError?.message || cleanupError}`);
++    }
+   }
+ }
+ 
+diff --git a/frontend/tests/e2e/formal-outcome.browser.mjs b/frontend/tests/e2e/formal-outcome.browser.mjs
+index 7640fc7..343c44f 100644
+--- a/frontend/tests/e2e/formal-outcome.browser.mjs
++++ b/frontend/tests/e2e/formal-outcome.browser.mjs
+@@ -8,7 +8,7 @@
+  * the decisions returned by the real API.
+  */
+ import assert from "node:assert/strict";
+-import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
++import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+ import { createServer } from "node:http";
+ import { spawn, spawnSync } from "node:child_process";
+ import { tmpdir } from "node:os";
+@@ -35,8 +35,9 @@ function pythonScriptConfig() {
+ }
+ 
+ function chromiumPath() {
++  const configured = process.env.PLAYWRIGHT_CHROMIUM_PATH;
++  if (configured && existsSync(configured)) return configured;
+   const bases = [
+-    process.env.PLAYWRIGHT_CHROMIUM_PATH,
+     join(process.env.LOCALAPPDATA || "", "ms-playwright"),
+     join(process.env.HOME || "", ".cache", "ms-playwright"),
+   ];
+@@ -56,6 +57,58 @@ function chromiumPath() {
+   return undefined;
+ }
+ 
++function writeDeterministicProviderFixture(dir) {
++  writeFileSync(join(dir, "sitecustomize.py"), `
++import astock
++import market
++
++
++def _kline(code, category=4, offset=5):
++    if code == "600519":
++        return [{"datetime": "2026-08-25 15:00:00", "close": 1600.0}]
++    return []
++
++
++def _individual_info(code):
++    return {"行业": "白酒", "总股本": "100000000"} if code == "600519" else {}
++
++
++def _announcements(code, limit=15):
++    if code != "600519":
++        return []
++    return [{
++        "date": "2026-08-20",
++        "notice_at": "2026-08-20 10:00:00",
++        "title": "isolated fixture announcement",
++        "type": "定期报告",
++        "url": "https://example.invalid/fixture",
++    }]
++
++
++def _financials(code, **kwargs):
++    return {"period": "2026-06-30"} if code == "600519" else {}
++
++
++def _market_breadth():
++    return {"status": "unavailable", "source": "isolated-fixture", "data": None}
++
++
++def _overview():
++    return {
++        "updated": "2026-08-26 10:00",
++        "sectors": [{"name": "白酒", "pct": 1.2, "net": 1000000.0}],
++    }
++
++
++astock.kline = _kline
++astock.individual_info = _individual_info
++astock.announcements = _announcements
++astock.financials = _financials
++market.get_market_breadth = _market_breadth
++market.get_overview = _overview
++`, "utf8");
++}
++
+ function freePort() {
+   return new Promise((resolve, reject) => {
+     const server = createServer();
+@@ -264,7 +317,18 @@ async function freezeThroughBrowser(page, backend, frontend, campaignId, withCha
+     await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
+   }
+ 
++  const commitResponsePromise = page.waitForResponse((response) => (
++    response.request().method() === "POST"
++    && response.url().includes(`/api/campaigns/${campaignId}/decision-proposal/commit`)
++  ), { timeout: 180000 });
+   await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
++  const commitResponse = await commitResponsePromise;
++  const commitBody = await commitResponse.text();
++  assert.equal(
++    commitResponse.ok(),
++    true,
++    `[CF1] commit failed: status=${commitResponse.status()} body=${commitBody} request=${commitResponse.request().postData()}`,
++  );
+   await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor({ timeout: 180000 });
+   const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
+   const decisionId = committedLine.replace(/^decision_id：/, "").trim();
+@@ -349,7 +413,7 @@ ats.write_attribution(db_path=ats.resolve_formal_trade_attribution_db_path(), re
+ tar.mark_unplanned(unplanned['trade_id'], {'confirm': True})
+ print(json.dumps({'first': first, 'second': second, 'exact': exact, 'unplanned': unplanned, 'unallocated': unallocated}))
+ `;
+-  const result = spawnSync(python.cmd, [...python.args.slice(0, -1), "-c", script], {
++  const result = spawnSync(python.cmd, [...python.args, "-c", script], {
+     cwd: backendDir,
+     env: {
+       ...env,
+@@ -463,6 +527,8 @@ async function removeTempDir(dir) {
+ async function run() {
+   assert.ok(existsSync(frontendDist), "frontend/dist must be built before OL1 browser E2E");
+   const tempDataDir = mkdtempSync(join(tmpdir(), "vr-ol1-formal-outcome-e2e-"));
++  const providerFixtureDir = mkdtempSync(join(tmpdir(), "vr-ol1-provider-fixture-"));
++  writeDeterministicProviderFixture(providerFixtureDir);
+   let backendProc;
+   let staticServer;
+   let browser;
+@@ -489,6 +555,7 @@ async function run() {
+       VIBE_RESEARCH_TRADE_ATTRIBUTION_DB: join(tempDataDir, "formal_trade_attributions.sqlite3"),
+       VIBE_RESEARCH_TRADE_ORIGIN_DB: join(tempDataDir, "trade_origins.sqlite3"),
+       PYTHONUNBUFFERED: "1",
++      PYTHONPATH: [providerFixtureDir, backendDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+     };
+     backendProc = spawn(py.cmd, [...py.args, "app:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
+       cwd: backendDir,
+@@ -807,6 +874,7 @@ async function run() {
+     if (staticServer) await new Promise((resolve) => staticServer.close(resolve));
+     if (backendProc) backendProc.kill();
+     await removeTempDir(tempDataDir);
++    await removeTempDir(providerFixtureDir);
+   }
+ }
+ 
+diff --git a/frontend/tests/e2e/trade-attribution-reconciliation.browser.mjs b/frontend/tests/e2e/trade-attribution-reconciliation.browser.mjs
+index 8146cfd..f1b940a 100644
+--- a/frontend/tests/e2e/trade-attribution-reconciliation.browser.mjs
++++ b/frontend/tests/e2e/trade-attribution-reconciliation.browser.mjs
+@@ -89,6 +89,7 @@ function chromiumPath() {
+   const bases = [process.env.PLAYWRIGHT_CHROMIUM_PATH, join(process.env.LOCALAPPDATA || "", "ms-playwright"), join(process.env.HOME || "", ".cache", "ms-playwright")];
+   for (const base of bases) {
+     if (!base || !existsSync(base)) continue;
++    if (base.toLowerCase().endsWith(process.platform === "win32" ? ".exe" : "/chromium")) return base;
+     for (const entry of readdirSync(base)) {
+       if (!entry.startsWith("chromium-") || entry.includes("headless")) continue;
+       const candidates = [join(base, entry, "chrome-win64", "chrome.exe"), join(base, entry, "chrome-linux", "chrome"), join(base, entry, "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium")];
+diff --git a/frontend/tests/e2e/trades-real.browser.mjs b/frontend/tests/e2e/trades-real.browser.mjs
+index 8b1e6e1..61aa3b9 100644
+--- a/frontend/tests/e2e/trades-real.browser.mjs
++++ b/frontend/tests/e2e/trades-real.browser.mjs
+@@ -96,8 +96,9 @@ function getPythonConfig() {
+ }
+ 
+ function findChromium() {
++  const configured = process.env.PLAYWRIGHT_CHROMIUM_PATH;
++  if (configured && existsSync(configured)) return configured;
+   const candidates = [
+-    process.env.PLAYWRIGHT_CHROMIUM_PATH,
+     join(process.env.LOCALAPPDATA || "", "ms-playwright"),
+     join(process.env.HOME || "", ".cache", "ms-playwright"),
+   ];
+@@ -142,10 +143,13 @@ async function runE2E() {
+     const frontendPort = await getFreePort();
+ 
+     const py = getPythonConfig();
++    const frontend = `http://127.0.0.1:${frontendPort}`;
+     const env = {
+       ...process.env,
++      VR_ALLOW_ORIGINS: frontend,
+       VR_DATA_DIR: tempDataDir,
+       VR_REPORTS_DIR: tempDataDir,
++      VIBE_RESEARCH_TRADE_LEDGER_DB: join(tempDataDir, "trade_ledger.sqlite3"),
+       PYTHONUNBUFFERED: "1",
+     };
+ 
+@@ -228,9 +232,8 @@ async function runE2E() {
+     await page.waitForSelector("td:has-text('贵州茅台')");
+     await page.waitForSelector("td:has-text('未执行')");
+ 
+-    // 4. 打开交易详情并核对关键字段
+-    console.log("[E2E] 4. Opening trade detail modal...");
+-    await page.click("td button:has-text('详情')");
++    // 4. 创建成功后页面会自动打开真实详情续接面板。
++    console.log("[E2E] 4. Verifying automatically opened trade detail...");
+     await page.waitForSelector("text=交易流水详情");
+     await page.waitForSelector("text=等待回调至 1600 买入");
+ 
