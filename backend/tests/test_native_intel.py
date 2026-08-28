@@ -49,7 +49,7 @@ def _insert(path: Path, key: str, title: str, summary: str = "") -> int:
         "seed",
         "official-rss",
         _item(key, title, summary),
-        observed_at="2026-08-28T01:00:00Z",
+        observed_at=service.utc_now_iso(),
         has_real_rank=False,
         db_path=path,
     )
@@ -276,3 +276,123 @@ def test_native_intel_router_source_to_sink(tmp_path: Path, monkeypatch) -> None
         and "POST" in getattr(route, "methods", set())
         for route in native_intel_router.router.routes
     )
+
+
+def test_cross_source_observations_drive_provenance_counts_and_source_filter(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "native-intel.sqlite3"
+    sources = [_source("source-a", "Source A"), _source("source-b", "Source B")]
+    store.upsert_sources(sources, path)
+    store.start_run("shared-run", "test", len(sources), path)
+    observed_at = service.utc_now_iso()
+    for source in sources:
+        store.upsert_observation(
+            "shared-run",
+            source["source_id"],
+            _item("shared-item", "贵州茅台发布年度报告"),
+            observed_at=observed_at,
+            has_real_rank=False,
+            db_path=path,
+        )
+
+    state = store.export_state(path)
+    assert len(state["items"]) == 1
+    assert {row["source_id"] for row in state["observations"]} == {"source-a", "source-b"}
+
+    store.upsert_security_directory(
+        [{"code": "600519", "name": "贵州茅台", "industry": "白酒"}], path
+    )
+    store.replace_entity_terms(
+        "600519",
+        [
+            {
+                "term": "贵州茅台",
+                "term_kind": store.TERM_COMPANY_NAME,
+                "source_ref": "fixture",
+            }
+        ],
+        path,
+    )
+    service.link_entities_for_items([int(state["items"][0]["item_id"])], str(path))
+
+    filtered, total = store.query_items(path, source_id="source-b")
+    assert total == 1
+    assert filtered[0]["item_key"] == "shared-item"
+    stats = store.get_security_mention_stats(["600519"], path)["600519"]
+    assert stats["source_count"] == 2
+    entity = service._entity_trend_rows(
+        str(path), service._iso_hours_ago(24), service._iso_hours_ago(48)
+    )
+    assert entity[0]["source_count"] == 2
+
+    monkeypatch.setattr(
+        service,
+        "ensure_security_terms",
+        lambda _code, _path: {"errors": [], "refreshed": False},
+    )
+    security = service.security_context("600519", str(path))
+    assert security["observation"]["source_count"] == 2
+
+    import watchlist_store
+
+    monkeypatch.setattr(
+        watchlist_store,
+        "get_watchlist_status",
+        lambda: {"status": "valid", "data": {"codes": ["600519"]}},
+    )
+    watchlist = service.watchlist_context(str(path))
+    assert watchlist["securities"][0]["source_count"] == 2
+
+
+def test_entity_backfill_pages_beyond_public_500_item_limit(tmp_path: Path) -> None:
+    path = tmp_path / "native-intel.sqlite3"
+    _seed_source(path)
+    target_id = _insert(path, "old-target", "贵州茅台历史公告")
+    for index in range(500):
+        _insert(path, f"newer-{index}", f"无关资讯 {index}")
+
+    store.replace_entity_terms(
+        "600519",
+        [
+            {
+                "term": "贵州茅台",
+                "term_kind": store.TERM_COMPANY_NAME,
+                "source_ref": "fixture",
+            }
+        ],
+        path,
+    )
+    service.backfill_entities_for_terms("600519", str(path))
+
+    mapped_ids = {row["item_id"] for row in store.query_items_by_security("600519", path)}
+    assert target_id in mapped_ids
+
+
+def test_replacing_entity_terms_removes_stale_security_links(tmp_path: Path) -> None:
+    path = tmp_path / "native-intel.sqlite3"
+    _seed_source(path)
+    item_ids = [
+        _insert(path, "concept-a", "概念A取得新进展"),
+        _insert(path, "concept-b", "概念B取得新进展"),
+    ]
+    store.replace_entity_terms(
+        "600519",
+        [{"term": "概念A", "term_kind": store.TERM_CONCEPT, "source_ref": "fixture"}],
+        path,
+    )
+    service.link_entities_for_items(item_ids, str(path))
+    assert {row["item_key"] for row in store.query_items_by_security("600519", path)} == {
+        "concept-a"
+    }
+
+    store.replace_entity_terms(
+        "600519",
+        [{"term": "概念B", "term_kind": store.TERM_CONCEPT, "source_ref": "fixture"}],
+        path,
+    )
+    service.backfill_entities_for_terms("600519", str(path))
+
+    assert {row["item_key"] for row in store.query_items_by_security("600519", path)} == {
+        "concept-b"
+    }

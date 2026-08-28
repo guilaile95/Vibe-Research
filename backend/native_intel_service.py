@@ -739,8 +739,20 @@ def backfill_entities_for_terms(code: str, path: str | None = None) -> int:
     since = (datetime.now(timezone.utc) - timedelta(days=BACKFILL_WINDOW_DAYS)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
-    rows, _ = store.query_items(target, since=since, limit=BACKFILL_MAX_ITEMS)
-    return link_entities_for_items([int(r["item_id"]) for r in rows], target)
+    item_ids: list[int] = []
+    offset = 0
+    while len(item_ids) < BACKFILL_MAX_ITEMS:
+        page_size = min(500, BACKFILL_MAX_ITEMS - len(item_ids))
+        rows, total = store.query_items(
+            target, since=since, limit=page_size, offset=offset
+        )
+        if not rows:
+            break
+        item_ids.extend(int(row["item_id"]) for row in rows)
+        offset += len(rows)
+        if offset >= total:
+            break
+    return link_entities_for_items(item_ids, target)
 
 
 # ---------------------------------------------------------------------------
@@ -870,7 +882,7 @@ def _entity_trend_rows(target: str, since: str, prev_since: str) -> list[dict[st
             """
             SELECT e.term AS term, e.term_kind AS term_kind, e.security_code AS security_code,
                    COUNT(DISTINCT ie.item_id) AS item_count,
-                   COUNT(DISTINCT i.source_id) AS source_count,
+                   COUNT(DISTINCT o.source_id) AS source_count,
                    MIN(i.first_seen_at) AS first_seen_at,
                    MAX(i.last_seen_at) AS last_seen_at
             FROM intel_item_entities ie
@@ -878,6 +890,7 @@ def _entity_trend_rows(target: str, since: str, prev_since: str) -> list[dict[st
               ON e.term = ie.term AND e.term_kind = ie.term_kind
              AND IFNULL(e.security_code, '') = IFNULL(ie.security_code, '')
             JOIN intel_items i ON i.item_id = ie.item_id
+            JOIN intel_observations o ON o.item_id = i.item_id
             WHERE i.last_seen_at >= ?
             GROUP BY e.term, e.term_kind, e.security_code
             """,

@@ -731,7 +731,10 @@ def query_items(
         clauses.append("i.hint = ?")
         args.append(hint)
     if source_id:
-        clauses.append("i.source_id = ?")
+        clauses.append(
+            "EXISTS (SELECT 1 FROM intel_observations o "
+            "WHERE o.item_id = i.item_id AND o.source_id = ?)"
+        )
         args.append(source_id)
     if since:
         clauses.append("i.last_seen_at >= ?")
@@ -958,9 +961,16 @@ def replace_entity_terms(
                         conn.execute(
                             "DELETE FROM intel_entity_terms WHERE security_code IS NULL"
                         )
+                        conn.execute(
+                            "DELETE FROM intel_item_entities WHERE security_code IS NULL"
+                        )
                     else:
                         conn.execute(
                             "DELETE FROM intel_entity_terms WHERE security_code = ?",
+                            (security_code,),
+                        )
+                        conn.execute(
+                            "DELETE FROM intel_item_entities WHERE security_code = ?",
                             (security_code,),
                         )
                     count = 0
@@ -1114,11 +1124,12 @@ def get_security_mention_stats(
                     f"""
                     SELECT e.security_code AS code,
                            COUNT(DISTINCT i.item_id) AS mention_count,
-                           COUNT(DISTINCT i.source_id) AS source_count,
+                           COUNT(DISTINCT o.source_id) AS source_count,
                            MIN(i.first_seen_at) AS first_seen_at,
                            MAX(i.last_seen_at) AS last_seen_at
                     FROM intel_item_entities e
                     JOIN intel_items i ON i.item_id = e.item_id
+                    JOIN intel_observations o ON o.item_id = i.item_id
                     WHERE e.security_code IN ({placeholders}){window_clause}
                     GROUP BY e.security_code
                     """,
