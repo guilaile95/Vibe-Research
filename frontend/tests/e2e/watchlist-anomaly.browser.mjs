@@ -30,6 +30,15 @@ function chromiumPath() {
   return candidates.filter((candidate) => existsSync(candidate)).sort().at(-1);
 }
 
+async function launchBrowser() {
+  const executablePath = chromiumPath();
+  try {
+    return await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+  } catch {
+    return chromium.launch({ headless: true, channel: "chrome" });
+  }
+}
+
 async function freePort() {
   const server = createServer();
   const port = await new Promise((resolve, reject) => {
@@ -59,45 +68,32 @@ try {
   assert.ok(existsSync(join(dist, "index.html")), "dist/index.html missing; run npm run build");
   const port = await freePort();
   server = await staticServer(dist, port);
-  browser = await chromium.launch({ headless: true, executablePath: chromiumPath() });
+  browser = await launchBrowser();
   const page = await browser.newPage();
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/api/trendradar/watchlist-context") {
+    if (path === "/api/native-intel/watchlist-context") {
       return route.fulfill({ json: { data: {
-        status: "OK",
+        status: "partial",
         retrieved_at: "2026-08-27T16:00:00Z",
-        authority_ref: "vibe:trendradar_watchlist_context:v0.1",
+        authority_ref: "vibe:native_intel:v0.1",
         usage_boundary: "observation_only_not_an_investment_authority",
-        upstream: {
-          repo: "sansan0/TrendRadar", source_commit: "8ee26026ba6c11dec41a95fb3895a7162876caa1",
-          core_version: "6.10.0", mcp_version: "4.1.0", license: "GPL-3.0",
-          core_image: "wantcat/trendradar:6.10.0@sha256:qualified",
-          mcp_image: "wantcat/trendradar-mcp:4.1.0@sha256:qualified",
-          integration_authority_ref: "vibe:trendradar_gateway:v0.1",
-          usage_boundary: "observation_only_not_an_investment_authority",
-        },
-        watchlist: { status: "valid", codes: ["600519", "000001", "837023"], count: 3 },
-        items: [
+        watchlist_status: "valid",
+        codes: ["600519", "000001", "837023"],
+        degraded: [{ code: "837023", error: "mapping_partial" }],
+        securities: [
           {
-            status: "OK", security: { code: "600519", company_name: "贵州茅台" },
-            mapping: { status: "MAPPED", sector: { value: "白酒", source: "fixture" }, topics: [], matched_terms: ["600519", "白酒"], reasons: [], errors: [] },
-            observation: { window_days: 7, window_semantics: "TrendRadar search_news date_range relative window", item_count: 1, rank_history_semantics: "missing means UNKNOWN", items: [{ title: "白酒行业公开资讯", platform: "微博", url: "https://example.test/news", timestamp: "2026-08-27T09:00:00Z", rank: 2, off_list: false, hotness_score: null, first_seen: null, last_seen: null, crawl_count: null, rank_timeline: null, matched_terms: ["白酒"] }] },
-            source_statuses: [],
+            code: "600519", company_name: "贵州茅台", mention_count: 1, source_count: 1,
+            first_seen_at: "2026-08-27T09:00:00Z", last_seen_at: "2026-08-27T09:30:00Z",
+            items: [{ item_id: 1, title: "白酒行业公开资讯", url: "https://example.test/news", source_id: "official-rss", source_name: "官方 RSS", hint: "a-share", first_seen_at: "2026-08-27T09:00:00Z", last_seen_at: "2026-08-27T09:30:00Z", observation_count: 1 }],
           },
           {
-            status: "OK", security: { code: "000001", company_name: "平安银行" },
-            mapping: { status: "EXACT_CODE_ONLY", sector: null, topics: [], matched_terms: ["000001"], reasons: [], errors: [] },
-            observation: { window_days: 7, window_semantics: "TrendRadar search_news date_range relative window", item_count: 0, rank_history_semantics: "missing means UNKNOWN", items: [] },
-            source_statuses: [],
+            code: "000001", company_name: "平安银行", mention_count: 0, source_count: 0, items: [],
           },
           {
-            status: "UNAVAILABLE", error: "TrendRadar 暂不可用", security: { code: "837023", company_name: null },
-            mapping: { status: "EXACT_CODE_ONLY", sector: null, topics: [], matched_terms: ["837023"], reasons: [], errors: [] },
-            observation: { window_days: 7, window_semantics: "TrendRadar search_news date_range relative window", item_count: 0, rank_history_semantics: "missing means UNKNOWN", items: [] },
-            source_statuses: [],
+            code: "837023", company_name: null, mention_count: 0, source_count: 0, items: [],
           },
         ],
       } } });
@@ -132,11 +128,11 @@ try {
   });
 
   await page.goto(`http://127.0.0.1:${port}/watchlist`, { waitUntil: "networkidle" });
-  await page.getByTestId("trendradar-watchlist-context").waitFor();
-  await page.getByText("1 条公开标题", { exact: true }).waitFor();
-  await page.getByText("当前窗口真实空态", { exact: true }).waitFor();
-  assert.equal(await page.locator('[data-watchlist-attention-code="600519"]').count(), 1);
-  assert.equal(await page.getByText("买卖建议", { exact: false }).count(), 1);
+  await page.getByTestId("native-intel-watchlist-context").waitFor();
+  await page.getByText("1 条 / 1 源", { exact: true }).waitFor();
+  await page.getByText("0 条 / 0 源", { exact: true }).first().waitFor();
+  assert.equal(await page.locator('[data-watchlist-intel-code="600519"]').count(), 1);
+  assert.equal(await page.getByText("不修改自选、论点或决策", { exact: false }).count(), 1);
   await page.getByText("成交活跃且价格快速上行", { exact: true }).waitFor();
   await page.getByText("盘中价格快速回升", { exact: true }).waitFor();
   assert.equal(await page.getByText("当前数据源未返回异动记录", { exact: true }).count(), 1);

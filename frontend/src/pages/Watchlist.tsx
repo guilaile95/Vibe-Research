@@ -18,7 +18,7 @@ import {
 } from "@/lib/decisionCockpit";
 import { useLiveQuotes, isTradingHours } from "@/hooks/useLiveQuotes";
 import { cn } from "@/lib/utils";
-import { TrendRadarWatchlistContext } from "@/components/trendradar/TrendRadarWatchlistContext";
+import { NativeIntelWatchlistContext } from "@/components/native-intel/NativeIntelWatchlistContext";
 
 // A 股红涨绿跌（与整个看板一致）。
 const color = (v: number | undefined) =>
@@ -298,7 +298,7 @@ export function Watchlist() {
               </p>
             ) : (
               <>
-                <TrendRadarWatchlistContext codes={codes} />
+                <NativeIntelWatchlistContext codes={codes} />
 
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/20 px-3 py-2 text-xs">
               <div className="text-muted-foreground">

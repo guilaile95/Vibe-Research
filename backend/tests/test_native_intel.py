@@ -1,0 +1,467 @@
+"""Focused NATIVE-INTEL1 contracts: persistence, failures, and A-share mapping."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import astock
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+import native_intel_router
+import native_intel_service as service
+import native_intel_store as store
+
+
+def _source(source_id: str, name: str) -> dict:
+    return {
+        "source_id": source_id,
+        "name": name,
+        "hint": "a-share",
+        "url": f"https://example.test/{source_id}.xml",
+        "source_type": "rss",
+        "has_real_rank": False,
+    }
+
+
+def _item(key: str, title: str, summary: str = "") -> dict:
+    return {
+        "item_key": key,
+        "canonical_url": f"https://example.test/{key}",
+        "url": f"https://example.test/{key}",
+        "title": title,
+        "title_key": title,
+        "summary": summary,
+        "hint": "a-share",
+        "published_at": "2026-08-28T09:00:00+08:00",
+        "published_ts": 1787878800,
+        "rank": 1,
+    }
+
+
+def _seed_source(path: Path) -> None:
+    store.upsert_sources([_source("official-rss", "Official RSS")], path)
+    store.start_run("seed", "test", 1, path)
+
+
+def _insert(path: Path, key: str, title: str, summary: str = "") -> int:
+    item_id, _ = store.upsert_observation(
+        "seed",
+        "official-rss",
+        _item(key, title, summary),
+        observed_at=service.utc_now_iso(),
+        has_real_rank=False,
+        db_path=path,
+    )
+    return item_id
+
+
+def test_fetch_isolates_failed_source_dedupes_and_never_invents_rss_rank(tmp_path: Path) -> None:
+    path = tmp_path / "native-intel.sqlite3"
+    sources = [_source("good", "Good"), _source("bad", "Bad")]
+    registry = {
+        "sources": sources,
+        "registry_version": "test",
+        "redline": [],
+        "recent_days": 7,
+        "per_source": 6,
+    }
+
+    def fetcher(source, **_kwargs):
+        if source["source_id"] == "bad":
+            return [], store.ERROR_KIND_NETWORK, "URLError"
+        row = _item("one", "贵州茅台发布年度报告")
+        return [row, dict(row)], None, None
+
+    result = service.run_fetch(
+        "test", str(path), registry=registry, sources_override=sources, fetcher=fetcher
+    )
+    state = store.export_state(path)
+
+    assert result["status"] == store.RUN_STATUS_PARTIAL
+    assert result["source_ok"] == 1
+    assert result["source_failed"] == 1
+    assert result["item_seen"] == 1
+    assert len(state["items"]) == 1
+    assert len(state["observations"]) == 1
+    assert state["observations"][0]["rank"] is None
+    assert service.data_status(str(path))["status"] == service.STATUS_PARTIAL
+    trend = service.trending(str(path), window_hours=24, top_n=5)
+    assert trend["status"] == service.STATUS_PARTIAL
+    assert trend["items"][0]["title"] == "贵州茅台发布年度报告"
+
+
+def test_realistic_a_share_terms_map_code_company_industry_and_concept_without_fuzzy_aliases(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "native-intel.sqlite3"
+    store.upsert_security_directory(
+        [
+            {"code": "600519", "name": "贵州茅台", "industry": "白酒"},
+            {"code": "000858", "name": "五粮液", "industry": "白酒"},
+            {"code": "300750", "name": "宁德时代", "industry": "电池"},
+        ],
+        path,
+    )
+    store.set_meta("directory_synced_at", service.utc_now_iso(), path)
+    monkeypatch.setattr(astock, "individual_info", lambda _code: {})
+    monkeypatch.setattr(
+        astock,
+        "concept_blocks",
+        lambda code, strict=True: {
+            "boards": [{"name": "白酒概念" if code in {"600519", "000858"} else "固态电池"}]
+        },
+    )
+    monkeypatch.setattr(astock, "hot_concepts", lambda _code, strict=True: [])
+
+    for code in ("600519", "000858", "300750"):
+        result = service.ensure_security_terms(code, str(path), force=True)
+        assert result["errors"] == []
+
+    _seed_source(path)
+    ids = [
+        _insert(path, "maotai", "贵州茅台发布年度报告"),
+        _insert(path, "baijiu", "白酒行业景气度回升"),
+        _insert(path, "battery", "固态电池产业化进展加速"),
+        _insert(path, "unrelated", "贵州旅游市场迎来旺季"),
+    ]
+    service.link_entities_for_items(ids, str(path))
+
+    maotai = {row["title"] for row in store.query_items_by_security("600519", path)}
+    wuliangye = {row["title"] for row in store.query_items_by_security("000858", path)}
+    catl = {row["title"] for row in store.query_items_by_security("300750", path)}
+
+    assert "贵州茅台发布年度报告" in maotai
+    assert "白酒行业景气度回升" in maotai
+    assert "白酒行业景气度回升" in wuliangye
+    assert "贵州茅台发布年度报告" not in wuliangye
+    assert "固态电池产业化进展加速" in catl
+    assert "贵州旅游市场迎来旺季" not in maotai
+    assert service._normalize_security_name("五 粮 液") == "五粮液"
+
+
+def test_ascii_concept_and_security_code_require_real_boundaries() -> None:
+    terms = [
+        {"term": "AI", "term_kind": store.TERM_CONCEPT, "security_code": "300750"},
+        {"term": "600519", "term_kind": store.TERM_SECURITY_CODE, "security_code": "600519"},
+    ]
+
+    assert service._match_terms("AI 算力需求增长", terms)[0]["term"] == "AI"
+    assert service._match_terms("CHAIRMAN published results", terms) == []
+    assert service._match_terms("代码600519发布公告", terms)[0]["term"] == "600519"
+    assert service._match_terms("金额16005190元", terms) == []
+
+
+def test_security_profile_uses_existing_delayed_source_for_real_sample(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class Response:
+        @staticmethod
+        def json():
+            return {"data": {"f57": "600519", "f58": "贵州茅台", "f127": "白酒Ⅱ"}}
+
+    def fake_get(url, **_kwargs):
+        calls.append(url)
+        if "push2.eastmoney.com" in url:
+            raise ConnectionError("primary unavailable")
+        return Response()
+
+    monkeypatch.setattr(astock, "em_get", fake_get)
+
+    assert astock.security_profile("600519", strict=True) == {
+        "code": "600519",
+        "name": "贵州茅台",
+        "industry": "白酒Ⅱ",
+    }
+    assert len(calls) == 2
+
+
+def test_unresolved_security_fails_closed_to_exact_code(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "native-intel.sqlite3"
+    monkeypatch.setattr(
+        service,
+        "_refresh_security_profile",
+        lambda _code, _path: {"status": service.STATUS_UNAVAILABLE, "error": "A 股证券资料暂不可用"},
+    )
+    monkeypatch.setattr(service, "resolve_security_name", lambda _code, _path: (None, "unresolved"))
+    monkeypatch.setattr(
+        service,
+        "_astock_terms",
+        lambda _code, _path: ([], [{"source": "astock", "error": "数据源暂不可用"}]),
+    )
+
+    result = service.ensure_security_terms("601318", str(path), force=True)
+    terms = store.list_entity_terms(path, security_code="601318")
+
+    assert result["errors"]
+    assert [(term["term"], term["term_kind"]) for term in terms] == [
+        ("601318", store.TERM_SECURITY_CODE)
+    ]
+    assert service._match_terms("中国平安发布公告", terms) == []
+
+
+def test_interrupted_run_is_failed_on_restart_without_losing_items(tmp_path: Path) -> None:
+    path = tmp_path / "native-intel.sqlite3"
+    _seed_source(path)
+    _insert(path, "persisted", "宁德时代供应链更新")
+
+    assert store.recover_stale_runs(path) == 1
+    assert store.get_run("seed", path)["status"] == store.RUN_STATUS_FAILED
+    assert store.count_items(path) == 1
+    assert service.data_status(str(path))["status"] == service.STATUS_STALE
+
+
+def test_native_intel_router_source_to_sink(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "native-intel.sqlite3"
+    sources = [_source("good", "Good"), _source("bad", "Bad")]
+    registry = {
+        "sources": sources,
+        "registry_version": "test",
+        "redline": [],
+        "recent_days": 7,
+        "per_source": 6,
+    }
+
+    def fetcher(source, **_kwargs):
+        if source["source_id"] == "bad":
+            return [], store.ERROR_KIND_NETWORK, "URLError"
+        return [_item("router", "贵州茅台白酒行业资讯")], None, None
+
+    service.run_fetch(
+        "test", str(path), registry=registry, sources_override=sources, fetcher=fetcher
+    )
+    store.upsert_security_directory(
+        [{"code": "600519", "name": "贵州茅台", "industry": "白酒"}], path
+    )
+    store.replace_entity_terms(
+        "600519",
+        [
+            {"term": "贵州茅台", "term_kind": store.TERM_COMPANY_NAME, "source_ref": "fixture"},
+            {"term": "白酒", "term_kind": store.TERM_INDUSTRY, "source_ref": "fixture"},
+        ],
+        path,
+    )
+    rows, _ = store.query_items(path)
+    service.link_entities_for_items([int(rows[0]["item_id"])], str(path))
+
+    monkeypatch.setenv("VIBE_NATIVE_INTEL_DB", str(path))
+    monkeypatch.setattr(
+        service,
+        "_refresh_security_profile",
+        lambda _code, _path: {"status": service.STATUS_NORMAL, "error": None},
+    )
+    import watchlist_store
+
+    monkeypatch.setattr(
+        watchlist_store,
+        "get_watchlist_status",
+        lambda: {"status": "valid", "data": {"codes": ["600519"]}},
+    )
+    app = FastAPI()
+    app.include_router(native_intel_router.router)
+    client = TestClient(app)
+
+    assert client.get("/api/native-intel/status").json()["status"] == "partial"
+    assert client.get("/api/native-intel/items").json()["items"][0]["title"] == "贵州茅台白酒行业资讯"
+    assert client.get("/api/native-intel/trending").json()["status"] == "partial"
+    security = client.get("/api/native-intel/security-context/600519").json()
+    assert security["status"] == "partial"
+    assert security["observation"]["item_count"] == 1
+    watchlist = client.get("/api/native-intel/watchlist-context").json()
+    assert watchlist["status"] == "partial"
+    assert watchlist["securities"][0]["code"] == "600519"
+    assert client.get("/api/native-intel/security-context/not-a-code").status_code == 422
+    assert any(
+        getattr(route, "path", None) == "/api/native-intel/refresh"
+        and "POST" in getattr(route, "methods", set())
+        for route in native_intel_router.router.routes
+    )
+
+
+def test_cross_source_observations_drive_provenance_counts_and_source_filter(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "native-intel.sqlite3"
+    sources = [_source("source-a", "Source A"), _source("source-b", "Source B")]
+    store.upsert_sources(sources, path)
+    store.start_run("shared-run", "test", len(sources), path)
+    observed_at = service.utc_now_iso()
+    for source in sources:
+        store.upsert_observation(
+            "shared-run",
+            source["source_id"],
+            _item("shared-item", "贵州茅台发布年度报告"),
+            observed_at=observed_at,
+            has_real_rank=False,
+            db_path=path,
+        )
+
+    state = store.export_state(path)
+    assert len(state["items"]) == 1
+    assert {row["source_id"] for row in state["observations"]} == {"source-a", "source-b"}
+
+    store.upsert_security_directory(
+        [{"code": "600519", "name": "贵州茅台", "industry": "白酒"}], path
+    )
+    store.replace_entity_terms(
+        "600519",
+        [
+            {
+                "term": "贵州茅台",
+                "term_kind": store.TERM_COMPANY_NAME,
+                "source_ref": "fixture",
+            }
+        ],
+        path,
+    )
+    service.link_entities_for_items([int(state["items"][0]["item_id"])], str(path))
+
+    filtered, total = store.query_items(path, source_id="source-b")
+    assert total == 1
+    assert filtered[0]["item_key"] == "shared-item"
+    stats = store.get_security_mention_stats(["600519"], path)["600519"]
+    assert stats["source_count"] == 2
+    entity = service._entity_trend_rows(
+        str(path), service._iso_hours_ago(24), service._iso_hours_ago(48)
+    )
+    assert entity[0]["source_count"] == 2
+
+    monkeypatch.setattr(
+        service,
+        "ensure_security_terms",
+        lambda _code, _path: {"errors": [], "refreshed": False},
+    )
+    security = service.security_context("600519", str(path))
+    assert security["observation"]["source_count"] == 2
+
+    import watchlist_store
+
+    monkeypatch.setattr(
+        watchlist_store,
+        "get_watchlist_status",
+        lambda: {"status": "valid", "data": {"codes": ["600519"]}},
+    )
+    watchlist = service.watchlist_context(str(path))
+    assert watchlist["securities"][0]["source_count"] == 2
+
+
+def test_windowed_source_counts_ignore_observations_outside_window(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "native-intel.sqlite3"
+    sources = [_source("source-a", "Source A"), _source("source-b", "Source B")]
+    store.upsert_sources(sources, path)
+    store.start_run("window-run", "test", len(sources), path)
+    now = datetime.now(timezone.utc)
+    outside = (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    inside = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    since = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for source_id, observed_at in (("source-a", outside), ("source-b", inside)):
+        store.upsert_observation(
+            "window-run",
+            source_id,
+            _item("windowed-item", "贵州茅台窗口资讯"),
+            observed_at=observed_at,
+            has_real_rank=False,
+            db_path=path,
+        )
+
+    item_id = int(store.export_state(path)["items"][0]["item_id"])
+    store.upsert_security_directory(
+        [{"code": "600519", "name": "贵州茅台", "industry": "白酒"}], path
+    )
+    store.replace_entity_terms(
+        "600519",
+        [
+            {
+                "term": "贵州茅台",
+                "term_kind": store.TERM_COMPANY_NAME,
+                "source_ref": "fixture",
+            }
+        ],
+        path,
+    )
+    service.link_entities_for_items([item_id], str(path))
+
+    assert store.query_items(path, source_id="source-a", since=since)[1] == 0
+    assert store.query_items(path, source_id="source-a", until=since)[1] == 1
+    assert store.query_items(path, source_id="source-b", since=since)[1] == 1
+    assert store.get_security_mention_stats(
+        ["600519"], path, window_hours=24 * 7
+    )["600519"]["source_count"] == 1
+    entity = service._entity_trend_rows(str(path), since, outside)
+    assert entity[0]["source_count"] == 1
+
+    monkeypatch.setattr(
+        service,
+        "ensure_security_terms",
+        lambda _code, _path: {"errors": [], "refreshed": False},
+    )
+    assert service.security_context(
+        "600519", str(path), window_hours=24 * 7
+    )["observation"]["source_count"] == 1
+
+    import watchlist_store
+
+    monkeypatch.setattr(
+        watchlist_store,
+        "get_watchlist_status",
+        lambda: {"status": "valid", "data": {"codes": ["600519"]}},
+    )
+    assert service.watchlist_context(
+        str(path), window_hours=24 * 7
+    )["securities"][0]["source_count"] == 1
+
+
+def test_entity_backfill_pages_beyond_public_500_item_limit(tmp_path: Path) -> None:
+    path = tmp_path / "native-intel.sqlite3"
+    _seed_source(path)
+    target_id = _insert(path, "old-target", "贵州茅台历史公告")
+    for index in range(500):
+        _insert(path, f"newer-{index}", f"无关资讯 {index}")
+
+    store.replace_entity_terms(
+        "600519",
+        [
+            {
+                "term": "贵州茅台",
+                "term_kind": store.TERM_COMPANY_NAME,
+                "source_ref": "fixture",
+            }
+        ],
+        path,
+    )
+    service.backfill_entities_for_terms("600519", str(path))
+
+    mapped_ids = {row["item_id"] for row in store.query_items_by_security("600519", path)}
+    assert target_id in mapped_ids
+
+
+def test_replacing_entity_terms_removes_stale_security_links(tmp_path: Path) -> None:
+    path = tmp_path / "native-intel.sqlite3"
+    _seed_source(path)
+    item_ids = [
+        _insert(path, "concept-a", "概念A取得新进展"),
+        _insert(path, "concept-b", "概念B取得新进展"),
+    ]
+    store.replace_entity_terms(
+        "600519",
+        [{"term": "概念A", "term_kind": store.TERM_CONCEPT, "source_ref": "fixture"}],
+        path,
+    )
+    service.link_entities_for_items(item_ids, str(path))
+    assert {row["item_key"] for row in store.query_items_by_security("600519", path)} == {
+        "concept-a"
+    }
+
+    store.replace_entity_terms(
+        "600519",
+        [{"term": "概念B", "term_kind": store.TERM_CONCEPT, "source_ref": "fixture"}],
+        path,
+    )
+    service.backfill_entities_for_terms("600519", str(path))
+
+    assert {row["item_key"] for row in store.query_items_by_security("600519", path)} == {
+        "concept-b"
+    }

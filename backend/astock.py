@@ -216,6 +216,40 @@ def individual_info(code: str) -> dict:
     return {str(row["item"]): row["value"] for _, row in df.iterrows()}
 
 
+def security_profile(code: str, *, strict: bool = False) -> dict:
+    """单只 A 股代码、简称与行业（东财 stock/get，实时源失败后走延迟源）。"""
+    if not (isinstance(code, str) and len(code) == 6 and code.isdigit()):
+        raise ValueError("code must be a 6-digit A-share code")
+    secid = f"{1 if code.startswith('6') else 0}.{code}"
+    params = {"secid": secid, "fields": "f57,f58,f127"}
+    headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+    last_error: Exception | None = None
+    for host in _A_SHARE_CLIST_HOSTS:
+        try:
+            payload = em_get(
+                f"https://{host}/api/qt/stock/get",
+                params=params,
+                headers=headers,
+                timeout=15,
+            ).json()
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(data, dict):
+                raise RuntimeError("security_profile response missing data")
+            name = str(data.get("f58") or "").strip()
+            if not name:
+                raise RuntimeError("security_profile response missing name")
+            return {
+                "code": str(data.get("f57") or code).strip(),
+                "name": name,
+                "industry": str(data.get("f127") or "").strip(),
+            }
+        except Exception as exc:  # noqa: BLE001 - 有限主机降级，最终仍 fail closed
+            last_error = exc
+    if strict:
+        raise RuntimeError("security_profile unavailable") from last_error
+    return {}
+
+
 def disclosure(code: str) -> list[dict]:
     """巨潮公告全文列表（akshare cninfo，本环境不稳，保留作备用）。"""
     ak = _akshare()
