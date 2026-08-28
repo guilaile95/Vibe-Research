@@ -731,15 +731,23 @@ def query_items(
         clauses.append("i.hint = ?")
         args.append(hint)
     if source_id:
+        observation_clauses = ["o.item_id = i.item_id", "o.source_id = ?"]
+        observation_args: list[Any] = [source_id]
+        if since:
+            observation_clauses.append("o.observed_at >= ?")
+            observation_args.append(since)
+        if until:
+            observation_clauses.append("o.observed_at <= ?")
+            observation_args.append(until)
         clauses.append(
             "EXISTS (SELECT 1 FROM intel_observations o "
-            "WHERE o.item_id = i.item_id AND o.source_id = ?)"
+            f"WHERE {' AND '.join(observation_clauses)})"
         )
-        args.append(source_id)
-    if since:
+        args.extend(observation_args)
+    if since and not source_id:
         clauses.append("i.last_seen_at >= ?")
         args.append(since)
-    if until:
+    if until and not source_id:
         clauses.append("i.last_seen_at <= ?")
         args.append(until)
     for term in include or []:
@@ -1115,7 +1123,7 @@ def get_security_mention_stats(
         from datetime import timedelta
 
         since_dt = datetime.now(timezone.utc) - timedelta(hours=int(window_hours))
-        window_clause = " AND i.last_seen_at >= ?"
+        window_clause = " AND o.observed_at >= ?"
         args.append(since_dt.strftime("%Y-%m-%dT%H:%M:%SZ"))
     with _LOCK:
         try:

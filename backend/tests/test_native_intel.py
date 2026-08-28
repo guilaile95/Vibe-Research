@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import astock
@@ -343,6 +344,74 @@ def test_cross_source_observations_drive_provenance_counts_and_source_filter(
     )
     watchlist = service.watchlist_context(str(path))
     assert watchlist["securities"][0]["source_count"] == 2
+
+
+def test_windowed_source_counts_ignore_observations_outside_window(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "native-intel.sqlite3"
+    sources = [_source("source-a", "Source A"), _source("source-b", "Source B")]
+    store.upsert_sources(sources, path)
+    store.start_run("window-run", "test", len(sources), path)
+    now = datetime.now(timezone.utc)
+    outside = (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    inside = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    since = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for source_id, observed_at in (("source-a", outside), ("source-b", inside)):
+        store.upsert_observation(
+            "window-run",
+            source_id,
+            _item("windowed-item", "贵州茅台窗口资讯"),
+            observed_at=observed_at,
+            has_real_rank=False,
+            db_path=path,
+        )
+
+    item_id = int(store.export_state(path)["items"][0]["item_id"])
+    store.upsert_security_directory(
+        [{"code": "600519", "name": "贵州茅台", "industry": "白酒"}], path
+    )
+    store.replace_entity_terms(
+        "600519",
+        [
+            {
+                "term": "贵州茅台",
+                "term_kind": store.TERM_COMPANY_NAME,
+                "source_ref": "fixture",
+            }
+        ],
+        path,
+    )
+    service.link_entities_for_items([item_id], str(path))
+
+    assert store.query_items(path, source_id="source-a", since=since)[1] == 0
+    assert store.query_items(path, source_id="source-a", until=since)[1] == 1
+    assert store.query_items(path, source_id="source-b", since=since)[1] == 1
+    assert store.get_security_mention_stats(
+        ["600519"], path, window_hours=24 * 7
+    )["600519"]["source_count"] == 1
+    entity = service._entity_trend_rows(str(path), since, outside)
+    assert entity[0]["source_count"] == 1
+
+    monkeypatch.setattr(
+        service,
+        "ensure_security_terms",
+        lambda _code, _path: {"errors": [], "refreshed": False},
+    )
+    assert service.security_context(
+        "600519", str(path), window_hours=24 * 7
+    )["observation"]["source_count"] == 1
+
+    import watchlist_store
+
+    monkeypatch.setattr(
+        watchlist_store,
+        "get_watchlist_status",
+        lambda: {"status": "valid", "data": {"codes": ["600519"]}},
+    )
+    assert service.watchlist_context(
+        str(path), window_hours=24 * 7
+    )["securities"][0]["source_count"] == 1
 
 
 def test_entity_backfill_pages_beyond_public_500_item_limit(tmp_path: Path) -> None:

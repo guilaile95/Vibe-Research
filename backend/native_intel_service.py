@@ -891,7 +891,7 @@ def _entity_trend_rows(target: str, since: str, prev_since: str) -> list[dict[st
              AND IFNULL(e.security_code, '') = IFNULL(ie.security_code, '')
             JOIN intel_items i ON i.item_id = ie.item_id
             JOIN intel_observations o ON o.item_id = i.item_id
-            WHERE i.last_seen_at >= ?
+            WHERE o.observed_at >= ?
             GROUP BY e.term, e.term_kind, e.security_code
             """,
             (since,),
