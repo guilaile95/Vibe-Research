@@ -11,14 +11,14 @@ import { loadWatchAuthoritative } from "@/lib/watchlist";
 import { hasLlm } from "@/lib/llm";
 import { cn } from "@/lib/utils";
 import { runIntelDigestGeneration } from "@/lib/intelDigestOrchestrator";
-import TrendRadarPanel from "@/components/trendradar/TrendRadarPanel";
+import NativeIntelPanel from "@/components/native-intel/NativeIntelPanel";
 
 const TABS = [
   { key: "events", label: "事件概率", icon: TrendingUp, integrated: false, desc: "全球宏观预期概率（公开数据、免登录只读），后续接入" },
   { key: "filings", label: "A股公告", icon: FileText, integrated: false, desc: "汇总关注列表里各个股的近期公告（东财公开披露）" },
   { key: "news", label: "公开新闻", icon: Newspaper, integrated: false, desc: "汇总关注列表里各个股的近期新闻（公开源）" },
   { key: "investment-news", label: "Investment News", icon: Rss, integrated: true, desc: "12 赛道全球公开 RSS 资讯（集成自 investment-news 仓库）" },
-  { key: "attention-radar", label: "关注雷达", icon: Activity, integrated: true, desc: "TrendRadar sidecar 全平台热榜 / RSS / 趋势 / 情绪观察（本地只读）" },
+  { key: "attention-radar", label: "关注雷达", icon: Activity, integrated: true, desc: "Vibe 原生多来源资讯、来源健康与关注趋势（本地只读）" },
 ];
 
 export type DigestPhase = "idle" | "generating" | "saving" | "saved" | "cancelled" | "error" | "save_failed" | "empty";
@@ -581,10 +581,10 @@ export function Intel() {
         <div className="mb-3 flex items-center gap-2">
           <cur.icon className="h-5 w-5 text-primary" />
           <h3 className="font-semibold">{cur.label}</h3>
-          {cur.integrated && <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary">investment-news</span>}
+          {cur.integrated && <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary">{cur.key === "attention-radar" ? "Native Intel" : "investment-news"}</span>}
         </div>
         {cur.key === "attention-radar" ? (
-          <TrendRadarPanel />
+          <NativeIntelPanel />
         ) : cur.key === "investment-news" ? (
           <InvestmentNewsPanel />
         ) : cur.key === "filings" ? (

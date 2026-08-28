@@ -12,7 +12,7 @@ import { StockThesisPanel } from "@/components/stock/StockThesisPanel";
 import { CandidateCampaignPanel } from "@/components/campaign/CandidateCampaignPanel";
 import { TechnicalIndicatorsCard } from "@/components/stock/TechnicalIndicatorsCard";
 import { TopRiskAnalysisCard } from "@/components/market/TopRiskAnalysisCard";
-import { TrendRadarAttentionContext } from "@/components/trendradar/TrendRadarAttentionContext";
+import { NativeIntelSecurityContext } from "@/components/native-intel/NativeIntelSecurityContext";
 import {
   type PanelId,
   type PanelStates,
@@ -600,7 +600,7 @@ export function StockData() {
 
           <TopRiskAnalysisCard env={topRisk} loading={topRiskLoading} error={topRiskErr} />
 
-          <TrendRadarAttentionContext code={activeCode} />
+          <NativeIntelSecurityContext code={activeCode} />
 
           <EarningsSnapshot fin={fin} error={finError} />
 

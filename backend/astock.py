@@ -216,6 +216,40 @@ def individual_info(code: str) -> dict:
     return {str(row["item"]): row["value"] for _, row in df.iterrows()}
 
 
+def security_profile(code: str, *, strict: bool = False) -> dict:
+    """单只 A 股代码、简称与行业（东财 stock/get，实时源失败后走延迟源）。"""
+    if not (isinstance(code, str) and len(code) == 6 and code.isdigit()):
+        raise ValueError("code must be a 6-digit A-share code")
+    secid = f"{1 if code.startswith('6') else 0}.{code}"
+    params = {"secid": secid, "fields": "f57,f58,f127"}
+    headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+    last_error: Exception | None = None
+    for host in _A_SHARE_CLIST_HOSTS:
+        try:
+            payload = em_get(
+                f"https://{host}/api/qt/stock/get",
+                params=params,
+                headers=headers,
+                timeout=15,
+            ).json()
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(data, dict):
+                raise RuntimeError("security_profile response missing data")
+            name = str(data.get("f58") or "").strip()
+            if not name:
+                raise RuntimeError("security_profile response missing name")
+            return {
+                "code": str(data.get("f57") or code).strip(),
+                "name": name,
+                "industry": str(data.get("f127") or "").strip(),
+            }
+        except Exception as exc:  # noqa: BLE001 - 有限主机降级，最终仍 fail closed
+            last_error = exc
+    if strict:
+        raise RuntimeError("security_profile unavailable") from last_error
+    return {}
+
+
 def disclosure(code: str) -> list[dict]:
     """巨潮公告全文列表（akshare cninfo，本环境不稳，保留作备用）。"""
     ak = _akshare()
@@ -811,7 +845,7 @@ def market_turnover_rank(n: int = 20) -> list[dict]:
 # 全 A 股行情快照（沪深京 · 分页 clist）
 # ---------------------------------------------------------------------------
 _A_SHARE_FS = "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048"
-_A_SHARE_FIELDS = "f2,f3,f4,f5,f6,f7,f8,f12,f13,f14,f15,f16,f17,f18,f20,f21"
+_A_SHARE_FIELDS = "f2,f3,f4,f5,f6,f7,f8,f12,f13,f14,f15,f16,f17,f18,f20,f21,f100"
 _A_SHARE_PAGE_SIZE = 200
 _A_SHARE_CLIST_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
 
@@ -859,6 +893,7 @@ def _map_a_share_row(d: dict) -> dict | None:
         "prev_close": _optional_float(d.get("f18")),
         "market_cap": _optional_float(d.get("f20")),
         "float_market_cap": _optional_float(d.get("f21")),
+        "industry": str(d.get("f100") or "").strip(),
     }
 
 

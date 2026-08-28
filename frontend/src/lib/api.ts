@@ -36,10 +36,12 @@ import type {
   DailyReviewHistoryList,
   DailyReviewComparison,
   RadarData,
-  TrendradarEnvelope,
-  TrNewsRow,
-  TrendradarAttentionContext,
-  TrendradarWatchlistContext,
+  NativeIntelStatus,
+  NativeIntelItemsResponse,
+  NativeIntelTrending,
+  NativeIntelSecurityContext,
+  NativeIntelWatchlistContext,
+  NativeIntelRefreshResult,
   PortfolioData,
   PositionBootstrapInput,
   PositionBootstrapPreview,
@@ -566,53 +568,29 @@ export const api = {
   globalIndices: () => get<GlobalIndex[]>("/global/indices"),
   globalStock: (symbol: string) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`),
   hkCashflow: (symbol: string) => get<HkCashflow>(`/global/hk/cashflow?symbol=${encodeURIComponent(symbol)}`),
-  // ---- TrendRadar 关注雷达（TR1-P1，envelope 直传，unwrapData:false）----
-  trendradarStatus: () =>
-    get<TrendradarEnvelope>("/trendradar/status", { unwrapData: false }),
-  trendradarDates: () =>
-    get<TrendradarEnvelope>("/trendradar/radar/dates", { unwrapData: false }),
-  trendradarLatest: (limit = 20, platforms?: string) =>
-    get<TrendradarEnvelope<TrNewsRow[]>>(
-      `/trendradar/radar/latest?limit=${limit}${platforms ? `&platforms=${encodeURIComponent(platforms)}` : ""}`,
+  // ---- Native Intel（NATIVE-INTEL1，Vibe 本地持久化，无 sidecar / MCP）----
+  nativeIntelStatus: () =>
+    get<NativeIntelStatus>("/native-intel/status", { unwrapData: false }),
+  nativeIntelItems: (limit = 30, signal?: AbortSignal) =>
+    get<NativeIntelItemsResponse>(
+      `/native-intel/items?limit=${limit}&order_by=last_seen`,
+      { unwrapData: false, ...(signal ? { signal } : {}) },
+    ),
+  nativeIntelRefresh: () =>
+    request<NativeIntelRefreshResult>("/native-intel/refresh", "POST", undefined, { unwrapData: false }),
+  nativeIntelTrending: (windowHours = 24, topN = 20) =>
+    get<NativeIntelTrending>(
+      `/native-intel/trending?window_hours=${windowHours}&top_n=${topN}`,
       { unwrapData: false },
     ),
-  trendradarRssLatest: (days = 1, limit = 30, includeSummary = true) =>
-    get<TrendradarEnvelope>(
-      `/trendradar/radar/rss-latest?days=${days}&limit=${limit}&include_summary=${includeSummary}`,
-      { unwrapData: false },
-    ),
-  trendradarHotlistByDate: (date: string, limit = 50, platforms?: string) =>
-    get<TrendradarEnvelope<TrNewsRow[]>>(
-      `/trendradar/radar/hotlist/${date}?limit=${limit}${platforms ? `&platforms=${encodeURIComponent(platforms)}` : ""}`,
-      { unwrapData: false },
-    ),
-  trendradarSearch: (q: string, daysBack = 7, limit = 30) =>
-    get<TrendradarEnvelope<TrNewsRow[]>>(
-      `/trendradar/radar/search?q=${encodeURIComponent(q)}&days_back=${daysBack}&limit=${limit}`,
-      { unwrapData: false },
-    ),
-  trendradarTrending: () =>
-    get<TrendradarEnvelope>("/trendradar/radar/trending", { unwrapData: false }),
-  trendradarTopicTrend: (topic: string, analysisType = "trend", daysBack = 14) =>
-    get<TrendradarEnvelope>(
-      `/trendradar/radar/topic-trend?topic=${encodeURIComponent(topic)}&analysis_type=${analysisType}&days_back=${daysBack}`,
-      { unwrapData: false },
-    ),
-  trendradarSentiment: (topic: string, daysBack = 14) =>
-    get<TrendradarEnvelope>(
-      `/trendradar/radar/sentiment?topic=${encodeURIComponent(topic)}&days_back=${daysBack}&limit=20`,
-      { unwrapData: false },
-    ),
-  trendradarStorageStatus: () =>
-    get<TrendradarEnvelope>("/trendradar/radar/storage-status", { unwrapData: false }),
-  trendradarAttentionContext: (code: string, signal?: AbortSignal) =>
-    get<TrendradarAttentionContext>(
-      `/trendradar/attention-context/${encodeURIComponent(code)}`,
+  nativeIntelSecurityContext: (code: string, signal?: AbortSignal) =>
+    get<NativeIntelSecurityContext>(
+      `/native-intel/security-context/${encodeURIComponent(code)}`,
       signal ? { signal } : undefined,
     ),
-  trendradarWatchlistContext: (signal?: AbortSignal) =>
-    get<TrendradarWatchlistContext>(
-      "/trendradar/watchlist-context",
+  nativeIntelWatchlistContext: (signal?: AbortSignal) =>
+    get<NativeIntelWatchlistContext>(
+      "/native-intel/watchlist-context",
       signal ? { signal } : undefined,
     ),
   radar: () => get<RadarData>("/radar"),

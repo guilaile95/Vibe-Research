@@ -2675,114 +2675,157 @@ export interface CommittedDecisionRuntimeRead {
 }
 
 // ---------------------------------------------------------------------------
-// TrendRadar 关注雷达（TR1-P1）：后端 envelope 直传，前端按 status 诚实渲染。
+// Native Intel（NATIVE-INTEL1）：Vibe 自有本地资讯数据面。
 // ---------------------------------------------------------------------------
 
-export interface TrendradarUpstreamIdentity {
-  repo: string;
-  source_commit: string;
-  core_version: string;
-  mcp_version: string;
-  license: string;
-  core_image: string;
-  mcp_image: string;
-  integration_authority_ref: string;
-  usage_boundary: string;
-}
+export type NativeIntelStatusValue = "normal" | "partial" | "stale" | "unavailable";
 
-export interface TrendradarEnvelope<T = unknown> {
-  status: string;
-  retrieved_at?: string;
-  upstream?: TrendradarUpstreamIdentity;
-  error?: string;
-  gateway?: {
-    enabled: boolean;
-    mcp_url_host?: string | null;
-    timeout_seconds?: number | null;
-  };
-  server?: { server_name?: string; server_version?: string; protocol_version?: string } | null;
-  tool_count?: number;
-  tools?: Array<{ name: string; description?: string; input_schema?: unknown }>;
-  result?: T;
-  result_text?: string;
-  tool?: string;
-  authority_ref?: string;
-}
-
-export interface TrNewsRow {
-  title?: string;
-  platform?: string;
-  platform_name?: string;
-  rank?: number;
-  timestamp?: string;
-  url?: string;
-  hotness_score?: number;
-}
-
-export interface TrendradarAttentionMapping {
-  status: string;
-  sector: { value: string | null; source: string | null } | null;
-  topics: Array<{ term: string; source: string }>;
-  matched_terms: string[];
-  reasons: Array<{ kind: string; value: string; source: string }>;
-  errors: Array<{ source: string; error: string }>;
-}
-
-export interface TrendradarAttentionItem {
+export interface NativeIntelItem {
+  item_id: number;
   title: string;
-  platform: string | null;
-  url: string | null;
-  timestamp: string | null;
-  rank: number | null;
-  off_list: boolean | null;
-  hotness_score: number | null;
-  first_seen: string | null;
-  last_seen: string | null;
-  crawl_count: number | null;
-  rank_timeline: Array<{
-    crawl_time: string;
-    rank: number;
-    off_list: boolean;
-  }> | null;
-  matched_terms: string[];
+  summary?: string | null;
+  url: string;
+  canonical_url?: string;
+  source_id: string;
+  source_name?: string | null;
+  source_type?: string | null;
+  hint: string;
+  published_at?: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+  observation_count: number;
+  rank?: number | null;
+  rank_history?: Array<{ observed_at: string; rank: number }>;
 }
 
-export interface TrendradarAttentionContext {
-  status: string;
-  retrieved_at?: string;
+export interface NativeIntelStatus {
+  status: NativeIntelStatusValue;
+  error?: string | null;
   authority_ref?: string;
   usage_boundary?: string;
-  upstream?: TrendradarUpstreamIdentity;
-  error?: string;
-  security: { code: string; company_name: string | null };
-  mapping: TrendradarAttentionMapping;
-  observation: {
-    window_days: number;
-    window_semantics: string;
-    items: TrendradarAttentionItem[];
-    item_count: number;
-    rank_history_semantics: string;
-  };
-  source_statuses: Array<{
-    term: string;
+  generated_at?: string;
+  store?: { readable: boolean; schema_version?: string | null; item_count?: number };
+  scheduler?: { started: boolean; enabled: boolean; interval_seconds: number };
+  last_run?: {
+    run_id: string;
     status: string;
-    tool: string;
-    error?: string;
-    observation_count?: number;
+    started_at: string;
+    finished_at?: string | null;
+    source_ok: number;
+    source_failed: number;
+    item_seen: number;
+    item_new: number;
+  } | null;
+  sources?: {
+    total: number;
+    healthy: number;
+    failing: number;
+    never_run: number;
+    failing_names: string[];
+  };
+  source_health?: Array<{
+    source_id: string;
+    name: string;
+    hint: string;
+    last_status: string;
+    last_item_count: number;
+    last_error_kind?: string | null;
   }>;
 }
 
-export interface TrendradarWatchlistContext {
-  status: string;
+export interface NativeIntelItemsResponse {
+  status: NativeIntelStatusValue;
+  error?: string | null;
+  items: NativeIntelItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface NativeIntelTrendEntity {
+  term: string;
+  term_kind: string;
+  security_code?: string | null;
+  item_count: number;
+  source_count: number;
+  previous_item_count: number;
+  delta: number;
+}
+
+export interface NativeIntelTrending {
+  status: NativeIntelStatusValue;
+  error?: string | null;
+  generated_at?: string;
+  window_hours: number;
+  item_count: number;
+  items: NativeIntelItem[];
+  entities: NativeIntelTrendEntity[];
+  rank_history?: { available: boolean; reason: string; semantics?: string };
+}
+
+export interface NativeIntelEntityTerm {
+  term: string;
+  term_kind: "security_code" | "company_name" | "industry" | "concept";
+  source_ref: string;
+}
+
+export interface NativeIntelSecurityContext {
+  status: NativeIntelStatusValue;
+  error?: string | null;
   retrieved_at?: string;
   authority_ref?: string;
   usage_boundary?: string;
-  upstream?: TrendradarUpstreamIdentity;
-  error?: string;
-  watchlist: {
+  window_hours: number;
+  security: { code: string; company_name: string | null };
+  mapping: {
     status: string;
-    codes: string[];
-    count: number;
+    term_count: number;
+    terms: NativeIntelEntityTerm[];
+    errors: Array<{ source: string; error: string }>;
+    refreshed?: boolean;
   };
-  items: TrendradarAttentionContext[];
+  observation: {
+    items: NativeIntelItem[];
+    item_count: number;
+    mention_count?: number;
+    source_count?: number;
+    first_seen_at?: string | null;
+    last_seen_at?: string | null;
+  };
+  rank_history?: { available: boolean; reason: string; semantics?: string };
+}
+
+export interface NativeIntelWatchlistSecurity {
+  code: string;
+  company_name: string | null;
+  mention_count: number;
+  source_count: number;
+  first_seen_at?: string | null;
+  last_seen_at?: string | null;
+  items: NativeIntelItem[];
+}
+
+export interface NativeIntelWatchlistContext {
+  status: NativeIntelStatusValue;
+  error?: string | null;
+  retrieved_at?: string;
+  authority_ref?: string;
+  usage_boundary?: string;
+  watchlist_status: string;
+  codes: string[];
+  securities: NativeIntelWatchlistSecurity[];
+  degraded?: Array<{ code: string; error: string }>;
+}
+
+export interface NativeIntelRefreshResult {
+  status: NativeIntelStatusValue;
+  accepted: boolean;
+  run_id?: string;
+  source_total?: number;
+  source_ok?: number;
+  source_failed?: number;
+  item_seen?: number;
+  item_new?: number;
+  failed_sources?: string[];
+  error?: string;
 }

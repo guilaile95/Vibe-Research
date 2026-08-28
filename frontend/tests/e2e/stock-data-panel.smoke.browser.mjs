@@ -153,87 +153,61 @@ function klineBars(code) {
   }));
 }
 
-function attentionContextPayload(code, { status = "OK" } = {}) {
-  if (status !== "OK" && status !== "PARTIAL") {
+function attentionContextPayload(code, { status = "normal" } = {}) {
+  if (status === "unavailable") {
     return {
       status,
       retrieved_at: "2026-08-27T10:00:00Z",
-      authority_ref: "vibe:trendradar_attention_context:v0.1",
+      authority_ref: "vibe:native_intel:v0.1",
       usage_boundary: "observation_only_not_an_investment_authority",
-      error: "模拟 TrendRadar 不可用",
+      error: "模拟 Native Intel 不可用",
+      window_hours: 168,
       security: { code, company_name: stockName(code) },
-      mapping: {
-        status: "MAPPED",
-        sector: { value: "银行", source: "fixture" },
-        topics: [{ term: "数字金融", source: "fixture" }],
-        matched_terms: [stockName(code), "银行", "数字金融"],
-        reasons: [],
-        errors: [],
-      },
-      observation: {
-        window_days: 7,
-        window_semantics: "TrendRadar search_news date_range relative window",
-        items: [],
-        item_count: 0,
-        rank_history_semantics: "missing means UNKNOWN",
-      },
-      source_statuses: [{ term: stockName(code), status, tool: "search_news", error: "模拟 TrendRadar 不可用" }],
+      mapping: { status: "MAPPED", term_count: 1, terms: [], errors: [] },
+      observation: { items: [], item_count: 0 },
     };
   }
   return {
     status,
     retrieved_at: "2026-08-27T10:00:00Z",
-    authority_ref: "vibe:trendradar_attention_context:v0.1",
+    authority_ref: "vibe:native_intel:v0.1",
     usage_boundary: "observation_only_not_an_investment_authority",
-    upstream: {
-      repo: "sansan0/TrendRadar",
-      source_commit: "8ee26026ba6c11dec41a95fb3895a7162876caa1",
-      core_version: "6.10.0",
-      mcp_version: "4.1.0",
-      license: "GPL-3.0",
-      core_image: "wantcat/trendradar:6.10.0@sha256:fixture",
-      mcp_image: "wantcat/trendradar-mcp:4.1.0@sha256:fixture",
-      integration_authority_ref: "vibe:trendradar_gateway:v0.1",
-      usage_boundary: "observation_only_not_an_investment_authority",
-    },
+    window_hours: 168,
     security: { code, company_name: stockName(code) },
     mapping: {
       status: "MAPPED",
-      sector: { value: "银行", source: "fixture" },
-      topics: [{ term: "数字金融", source: "fixture" }, { term: "算力租赁", source: "fixture" }],
-      matched_terms: [stockName(code), "银行", "数字金融", "算力租赁"],
-      reasons: [
-        { kind: "security_code", value: code, source: "user_query_exact" },
-        { kind: "company_name", value: stockName(code), source: "fixture" },
+      term_count: 5,
+      terms: [
+        { term: code, term_kind: "security_code", source_ref: "user_query_exact" },
+        { term: stockName(code), term_kind: "company_name", source_ref: "fixture" },
+        { term: "银行", term_kind: "industry", source_ref: "fixture" },
+        { term: "数字金融", term_kind: "concept", source_ref: "fixture" },
+        { term: "算力租赁", term_kind: "concept", source_ref: "fixture" },
       ],
       errors: [],
     },
     observation: {
-      window_days: 7,
-      window_semantics: "TrendRadar search_news date_range relative window",
       items: [
         {
-          title: `${stockName(code)}公开关注观察`,
-          platform: "微博",
-          url: "https://example.com/trendradar-observation",
-          timestamp: "2026-08-27 09:30:00",
-          rank: 3,
-          off_list: false,
-          hotness_score: null,
-          first_seen: "2026-08-27 09:00:00",
-          last_seen: "2026-08-27 09:30:00",
-          crawl_count: 2,
-          rank_timeline: [
-            { crawl_time: "2026-08-27 09:00:00", rank: 5, off_list: false },
-            { crawl_time: "2026-08-27 09:30:00", rank: 3, off_list: false },
-          ],
-          matched_terms: [stockName(code)],
+          item_id: Number(code),
+          title: `${stockName(code)}公开资讯观察`,
+          url: "https://example.com/native-intel-observation",
+          source_id: "official-rss",
+          source_name: "官方 RSS",
+          hint: "a-share",
+          published_at: "2026-08-27T08:30:00+08:00",
+          first_seen_at: "2026-08-27T09:00:00Z",
+          last_seen_at: "2026-08-27T09:30:00Z",
+          observation_count: 2,
         },
       ],
       item_count: 1,
-      rank_history_semantics: "Only returned when upstream exposes rank_timeline; missing means UNKNOWN",
+      mention_count: 1,
+      source_count: 1,
+      first_seen_at: "2026-08-27T09:00:00Z",
+      last_seen_at: "2026-08-27T09:30:00Z",
     },
-    source_statuses: [{ term: stockName(code), status: "OK", tool: "search_news", observation_count: 1 }],
+    rank_history: { available: false, reason: "registry_sources_have_no_real_rank" },
   };
 }
 
@@ -346,7 +320,7 @@ function createApiMockController() {
     valuationCalls: [],
     technicalIndicatorsStatus: "normal",
     technicalIndicatorsCalls: [],
-    attentionContextStatus: "OK",
+    attentionContextStatus: "normal",
     attentionContextCalls: [],
     attentionContextHoldCode: null,
     attentionContextHold: null,
@@ -540,7 +514,7 @@ function createApiMockController() {
       return;
     }
 
-    if (pathname.includes("/trendradar/attention-context/")) {
+    if (pathname.includes("/native-intel/security-context/")) {
       const attentionCode = pathname.split("/").pop() || code;
       state.attentionContextCalls.push({ code: attentionCode, url, ts: Date.now() });
       if (state.attentionContextHoldCode === attentionCode) {
@@ -771,18 +745,16 @@ async function runSmoke(page, mock, errors) {
 
   // Attention Context 只读面板：绑定已提交代码，展示映射、观察和 provenance。
   try {
-    const attention = page.getByTestId("trendradar-attention-context");
+    const attention = page.getByTestId("native-intel-security-context");
     await attention.waitFor({ state: "visible", timeout: 10000 });
-    await attention.getByText("公开关注上下文", { exact: false }).waitFor({ state: "visible", timeout: 10000 });
+    await attention.getByText("公开资讯上下文", { exact: false }).waitFor({ state: "visible", timeout: 10000 });
     for (const text of [
       "平安银行（000001）",
-      "行业依据：银行",
-      "检索词：平安银行、银行、数字金融、算力租赁",
-      "平安银行公开关注观察",
-      "来源：微博",
-      "排名轨迹：",
-      "来源身份：sansan0/TrendRadar@8ee26026",
-      "authority_ref：vibe:trendradar_attention_context:v0.1",
+      "行业：银行",
+      "概念：数字金融、算力租赁",
+      "平安银行公开资讯观察",
+      "官方 RSS",
+      "authority_ref：vibe:native_intel:v0.1",
     ]) {
       if (!(await attention.getByText(text, { exact: false }).first().isVisible().catch(() => false))) {
         errors.push(`${label}: attention context text not visible: ${text}`);
@@ -799,27 +771,27 @@ async function runSmoke(page, mock, errors) {
     errors.push(`${label}: attention context success scenario failed: ${e.message}`);
   }
 
-  // TrendRadar 不可用只影响 attention 区块，不遮蔽正式 StockData 主数据。
-  mock.setAttentionContextStatus("UNAVAILABLE");
+  // Native Intel 不可用只影响资讯区块，不遮蔽正式 StockData 主数据。
+  mock.setAttentionContextStatus("unavailable");
   await fillCode(page, "000002");
   await clickQuery(page);
   try {
     await waitForStockHeader(page, "000002", "万科A");
-    const unavailableAttention = page.getByTestId("trendradar-attention-context");
-    await unavailableAttention.getByText(/公开关注上下文暂不可用/).waitFor({ state: "visible", timeout: 10000 });
+    const unavailableAttention = page.getByTestId("native-intel-security-context");
+    await unavailableAttention.getByText(/Native Intel 暂不可用/).waitFor({ state: "visible", timeout: 10000 });
     if ((await unavailableAttention.getAttribute("data-security-code")) !== "000002") {
       errors.push(`${label}: unavailable attention context is not bound to 000002`);
     }
     if (!(await page.getByRole("heading", { name: "万科A" }).isVisible().catch(() => false))) {
-      errors.push(`${label}: TrendRadar unavailable broke formal StockData header`);
+      errors.push(`${label}: Native Intel unavailable broke formal StockData header`);
     }
     if (!(await page.getByText("估值", { exact: false }).first().isVisible().catch(() => false))) {
-      errors.push(`${label}: TrendRadar unavailable hid valuation content`);
+      errors.push(`${label}: Native Intel unavailable hid valuation content`);
     }
   } catch (e) {
     errors.push(`${label}: attention context unavailable scenario failed: ${e.message}`);
   }
-  mock.setAttentionContextStatus("OK");
+  mock.setAttentionContextStatus("normal");
   await fillCode(page, "000001");
   await clickQuery(page);
   try {
@@ -927,13 +899,13 @@ async function runSmoke(page, mock, errors) {
       errors.push(`${label}: formal 000002 query did not issue attention-context request`);
     }
     try {
-      await page.getByTestId("trendradar-attention-context").getByText("万科A（000002）", { exact: false }).waitFor({ state: "visible", timeout: 10000 });
+      await page.getByTestId("native-intel-security-context").getByText("万科A（000002）", { exact: false }).waitFor({ state: "visible", timeout: 10000 });
     } catch (e) {
       errors.push(`${label}: current 000002 attention response was not rendered before stale release: ${e.message}`);
     }
     await mock.releaseHeldAttentionContext();
     await sleep(500);
-    const currentAttention = page.getByTestId("trendradar-attention-context");
+    const currentAttention = page.getByTestId("native-intel-security-context");
     if ((await currentAttention.getAttribute("data-security-code")) !== "000002") {
       errors.push(`${label}: stale 000001 attention response overwrote 000002 panel`);
     }

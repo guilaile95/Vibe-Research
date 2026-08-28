@@ -1,0 +1,1211 @@
+"""Native Intel 本地资讯数据层（NATIVE-INTEL1）。
+
+Vibe 自有的 MIT 原生资讯持久化：source registry / fetch run / item / observation /
+entity mapping。
+
+时间语义严格区分（不得混用）：
+- ``published_at``  来源声明的发布时间；来源未声明时为 NULL，**绝不用抓取时间伪造**。
+- ``observed_at``   本次抓取实际观测到的时间。
+- ``first_seen_at`` / ``last_seen_at``  跨 observation 聚合的首见 / 末见时间。
+
+排名语义：只有 ``has_real_rank = 1`` 的来源才会写入 ``observations.rank``。
+RSS 源没有真实排名，``rank`` 恒为 NULL，读取侧必须诚实报告 UNKNOWN，禁止补 0。
+
+来源失败语义：单源失败写入 ``intel_source_runs(status='failed')`` 且不影响其他源；
+``partial`` 与空列表是两种不同状态，失败绝不能退化成「无数据」。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+_LOCK = threading.Lock()
+
+SCHEMA_VERSION = "native_intel.v1"
+DB_FILENAME = "native_intel.sqlite3"
+
+# fetch run 状态
+RUN_STATUS_RUNNING = "running"
+RUN_STATUS_OK = "ok"
+RUN_STATUS_PARTIAL = "partial"
+RUN_STATUS_FAILED = "failed"
+RUN_STATUSES = (RUN_STATUS_RUNNING, RUN_STATUS_OK, RUN_STATUS_PARTIAL, RUN_STATUS_FAILED)
+
+# 单源在一次 run 内的状态
+SOURCE_RUN_OK = "ok"
+SOURCE_RUN_EMPTY = "empty"
+SOURCE_RUN_FAILED = "failed"
+SOURCE_RUN_STATUSES = (SOURCE_RUN_OK, SOURCE_RUN_EMPTY, SOURCE_RUN_FAILED)
+
+# 失败归类；detail 只存异常类名，绝不存 URL / 消息正文（可能含查询串与凭证）
+ERROR_KIND_NETWORK = "network"
+ERROR_KIND_TIMEOUT = "timeout"
+ERROR_KIND_HTTP = "http"
+ERROR_KIND_PARSE = "parse"
+ERROR_KIND_UNKNOWN = "unknown"
+ERROR_KINDS = (
+    ERROR_KIND_NETWORK,
+    ERROR_KIND_TIMEOUT,
+    ERROR_KIND_HTTP,
+    ERROR_KIND_PARSE,
+    ERROR_KIND_UNKNOWN,
+)
+
+# 实体词类型
+TERM_SECURITY_CODE = "security_code"
+TERM_COMPANY_NAME = "company_name"
+TERM_INDUSTRY = "industry"
+TERM_CONCEPT = "concept"
+TERM_KINDS = (TERM_SECURITY_CODE, TERM_COMPANY_NAME, TERM_INDUSTRY, TERM_CONCEPT)
+
+
+class NativeIntelStoreError(RuntimeError):
+    """本地资讯持久化不可用。"""
+
+    MESSAGE = "本地资讯数据存储不可用，无法读写"
+
+    def __init__(self):
+        super().__init__(self.MESSAGE)
+
+
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS intel_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS intel_sources (
+    source_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    hint TEXT NOT NULL,
+    url TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    has_real_rank INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS intel_fetch_runs (
+    run_id TEXT PRIMARY KEY,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    source_total INTEGER NOT NULL DEFAULT 0,
+    source_ok INTEGER NOT NULL DEFAULT 0,
+    source_failed INTEGER NOT NULL DEFAULT 0,
+    item_seen INTEGER NOT NULL DEFAULT 0,
+    item_new INTEGER NOT NULL DEFAULT 0,
+    note TEXT
+);
+
+CREATE TABLE IF NOT EXISTS intel_source_runs (
+    run_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    item_count INTEGER NOT NULL DEFAULT 0,
+    error_kind TEXT,
+    error_detail TEXT,
+    duration_ms INTEGER,
+    PRIMARY KEY (run_id, source_id)
+);
+
+CREATE TABLE IF NOT EXISTS intel_items (
+    item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_key TEXT NOT NULL UNIQUE,
+    canonical_url TEXT NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT NOT NULL,
+    title_key TEXT NOT NULL,
+    summary TEXT,
+    source_id TEXT NOT NULL,
+    hint TEXT NOT NULL,
+    published_at TEXT,
+    published_ts INTEGER NOT NULL DEFAULT 0,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    observation_count INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS intel_observations (
+    obs_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    source_id TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    rank INTEGER,
+    observed_title TEXT NOT NULL,
+    published_at TEXT,
+    UNIQUE (run_id, source_id, item_id)
+);
+
+CREATE TABLE IF NOT EXISTS intel_security_directory (
+    code TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    industry TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS intel_entity_terms (
+    term TEXT NOT NULL,
+    term_kind TEXT NOT NULL,
+    security_code TEXT,
+    source_ref TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (term, term_kind, security_code)
+);
+
+CREATE TABLE IF NOT EXISTS intel_item_entities (
+    item_id INTEGER NOT NULL,
+    term_kind TEXT NOT NULL,
+    term TEXT NOT NULL,
+    security_code TEXT,
+    matched_in TEXT NOT NULL,
+    PRIMARY KEY (item_id, term_kind, term, security_code)
+);
+"""
+
+_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_intel_items_hint_seen ON intel_items (hint, last_seen_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_intel_items_source ON intel_items (source_id, last_seen_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_intel_items_published ON intel_items (published_ts DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_intel_obs_item ON intel_observations (item_id, observed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_intel_obs_run ON intel_observations (run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_intel_source_runs_src ON intel_source_runs (source_id, run_id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_intel_item_entities_code ON intel_item_entities (security_code, item_id)",
+    "CREATE INDEX IF NOT EXISTS idx_intel_entity_terms_code ON intel_entity_terms (security_code)",
+)
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def get_default_db_path() -> Path:
+    env_dir = os.environ.get("VR_DATA_DIR", "").strip()
+    base = Path(env_dir) if env_dir else Path.home() / ".vibe-research"
+    return base / DB_FILENAME
+
+
+def _connect(db_path: str | Path) -> sqlite3.Connection:
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA journal_mode = WAL")
+    return conn
+
+
+def initialize_store(db_path: str | Path | None = None) -> None:
+    path = Path(db_path) if db_path else get_default_db_path()
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                conn.executescript(_SCHEMA_SQL)
+                _migrate_schema(conn)
+                for sql in _INDEX_SQL:
+                    conn.execute(sql)
+                conn.execute(
+                    "INSERT INTO intel_meta (key, value) VALUES ('schema_version', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (SCHEMA_VERSION,),
+                )
+                conn.commit()
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Upgrade the uncommitted NATIVE-INTEL1 draft without losing local observations."""
+    directory_columns = {
+        str(row["name"]) for row in conn.execute("PRAGMA table_info(intel_security_directory)")
+    }
+    if "industry" not in directory_columns:
+        conn.execute("ALTER TABLE intel_security_directory ADD COLUMN industry TEXT")
+
+    item_entity_pk = [
+        str(row["name"])
+        for row in sorted(
+            conn.execute("PRAGMA table_info(intel_item_entities)").fetchall(),
+            key=lambda row: int(row["pk"] or 0),
+        )
+        if row["pk"]
+    ]
+    expected_pk = ["item_id", "term_kind", "term", "security_code"]
+    if item_entity_pk == expected_pk:
+        return
+
+    conn.execute("ALTER TABLE intel_item_entities RENAME TO intel_item_entities_legacy")
+    conn.execute(
+        """
+        CREATE TABLE intel_item_entities (
+            item_id INTEGER NOT NULL,
+            term_kind TEXT NOT NULL,
+            term TEXT NOT NULL,
+            security_code TEXT,
+            matched_in TEXT NOT NULL,
+            PRIMARY KEY (item_id, term_kind, term, security_code)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO intel_item_entities
+            (item_id, term_kind, term, security_code, matched_in)
+        SELECT item_id, term_kind, term, security_code, matched_in
+        FROM intel_item_entities_legacy
+        """
+    )
+    conn.execute("DROP TABLE intel_item_entities_legacy")
+
+
+# ---------------------------------------------------------------------------
+# source registry
+# ---------------------------------------------------------------------------
+
+
+def upsert_sources(
+    sources: list[dict[str, Any]],
+    db_path: str | Path | None = None,
+) -> int:
+    """写入 / 更新来源注册表；返回注册表内来源总数。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    now = utc_now_iso()
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    for src in sources:
+                        conn.execute(
+                            """
+                            INSERT INTO intel_sources
+                                (source_id, name, hint, url, source_type, has_real_rank, enabled, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+                            ON CONFLICT(source_id) DO UPDATE SET
+                                name = excluded.name,
+                                hint = excluded.hint,
+                                url = excluded.url,
+                                source_type = excluded.source_type,
+                                has_real_rank = excluded.has_real_rank,
+                                updated_at = excluded.updated_at
+                            """,
+                            (
+                                src["source_id"],
+                                src["name"],
+                                src["hint"],
+                                src["url"],
+                                src.get("source_type", "rss"),
+                                1 if src.get("has_real_rank") else 0,
+                                now,
+                            ),
+                        )
+                return int(
+                    conn.execute("SELECT COUNT(*) AS n FROM intel_sources").fetchone()["n"]
+                )
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def list_sources(
+    db_path: str | Path | None = None,
+    *,
+    enabled_only: bool = True,
+) -> list[dict[str, Any]]:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    sql = "SELECT * FROM intel_sources"
+    if enabled_only:
+        sql += " WHERE enabled = 1"
+    sql += " ORDER BY hint, name"
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                return [dict(row) for row in conn.execute(sql).fetchall()]
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+# ---------------------------------------------------------------------------
+# fetch run 生命周期
+# ---------------------------------------------------------------------------
+
+
+def start_run(
+    run_id: str,
+    trigger: str,
+    source_total: int,
+    db_path: str | Path | None = None,
+) -> None:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT INTO intel_fetch_runs
+                            (run_id, started_at, status, trigger, source_total)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (run_id, utc_now_iso(), RUN_STATUS_RUNNING, trigger, source_total),
+                    )
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def finish_run(
+    run_id: str,
+    *,
+    status: str,
+    source_ok: int,
+    source_failed: int,
+    item_seen: int,
+    item_new: int,
+    note: str | None = None,
+    db_path: str | Path | None = None,
+) -> None:
+    path = Path(db_path) if db_path else get_default_db_path()
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    conn.execute(
+                        """
+                        UPDATE intel_fetch_runs
+                        SET finished_at = ?, status = ?, source_ok = ?, source_failed = ?,
+                            item_seen = ?, item_new = ?, note = ?
+                        WHERE run_id = ?
+                        """,
+                        (
+                            utc_now_iso(),
+                            status if status in RUN_STATUSES else RUN_STATUS_FAILED,
+                            source_ok,
+                            source_failed,
+                            item_seen,
+                            item_new,
+                            note,
+                            run_id,
+                        ),
+                    )
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def record_source_run(
+    run_id: str,
+    source_id: str,
+    *,
+    status: str,
+    item_count: int = 0,
+    error_kind: str | None = None,
+    error_detail: str | None = None,
+    duration_ms: int | None = None,
+    db_path: str | Path | None = None,
+) -> None:
+    path = Path(db_path) if db_path else get_default_db_path()
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT INTO intel_source_runs
+                            (run_id, source_id, status, item_count, error_kind, error_detail, duration_ms)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(run_id, source_id) DO UPDATE SET
+                            status = excluded.status,
+                            item_count = excluded.item_count,
+                            error_kind = excluded.error_kind,
+                            error_detail = excluded.error_detail,
+                            duration_ms = excluded.duration_ms
+                        """,
+                        (
+                            run_id,
+                            source_id,
+                            status if status in SOURCE_RUN_STATUSES else SOURCE_RUN_FAILED,
+                            item_count,
+                            error_kind if error_kind in ERROR_KINDS else None,
+                            error_detail,
+                            duration_ms,
+                        ),
+                    )
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def get_run(
+    run_id: str,
+    db_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                row = conn.execute(
+                    "SELECT * FROM intel_fetch_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                return dict(row) if row else None
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def get_latest_run(
+    db_path: str | Path | None = None,
+    *,
+    statuses: tuple[str, ...] | None = None,
+) -> dict[str, Any] | None:
+    """最近一次 run；``statuses`` 非空时只在该集合内取最近一次（用于取最近成功 run）。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    sql = "SELECT * FROM intel_fetch_runs"
+    args: tuple[Any, ...] = ()
+    if statuses:
+        placeholders = ",".join("?" for _ in statuses)
+        sql += f" WHERE status IN ({placeholders})"
+        args = statuses
+    sql += " ORDER BY started_at DESC, run_id DESC LIMIT 1"
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                row = conn.execute(sql, args).fetchone()
+                return dict(row) if row else None
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def get_source_runs(
+    run_id: str,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT sr.*, s.name, s.hint, s.url, s.source_type, s.has_real_rank
+                    FROM intel_source_runs sr
+                    LEFT JOIN intel_sources s ON s.source_id = sr.source_id
+                    WHERE sr.run_id = ?
+                    ORDER BY s.hint, s.name
+                    """,
+                    (run_id,),
+                ).fetchall()
+                return [dict(row) for row in rows]
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def get_source_health(
+    db_path: str | Path | None = None,
+    *,
+    limit_runs: int = 5,
+) -> list[dict[str, Any]]:
+    """每个来源最近若干次 run 的健康状况，用于 status 面板诚实展示失败来源。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                sources = conn.execute(
+                    "SELECT * FROM intel_sources ORDER BY hint, name"
+                ).fetchall()
+                out: list[dict[str, Any]] = []
+                for src in sources:
+                    rows = conn.execute(
+                        """
+                        SELECT sr.status, sr.item_count, sr.error_kind, sr.duration_ms, r.started_at
+                        FROM intel_source_runs sr
+                        JOIN intel_fetch_runs r ON r.run_id = sr.run_id
+                        WHERE sr.source_id = ?
+                        ORDER BY r.started_at DESC
+                        LIMIT ?
+                        """,
+                        (src["source_id"], limit_runs),
+                    ).fetchall()
+                    statuses = [r["status"] for r in rows]
+                    last = rows[0] if rows else None
+                    out.append(
+                        {
+                            "source_id": src["source_id"],
+                            "name": src["name"],
+                            "hint": src["hint"],
+                            "source_type": src["source_type"],
+                            "has_real_rank": bool(src["has_real_rank"]),
+                            "enabled": bool(src["enabled"]),
+                            "run_count": len(rows),
+                            "last_status": last["status"] if last else "unknown",
+                            "last_item_count": last["item_count"] if last else 0,
+                            "last_error_kind": last["error_kind"] if last else None,
+                            "last_observed_at": last["started_at"] if last else None,
+                            "consecutive_failures": _count_leading(statuses, SOURCE_RUN_FAILED),
+                            "recent_statuses": statuses,
+                        }
+                    )
+                return out
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def _count_leading(values: list[str], target: str) -> int:
+    count = 0
+    for value in values:
+        if value == target:
+            count += 1
+        else:
+            break
+    return count
+
+
+def recover_stale_runs(db_path: str | Path | None = None) -> int:
+    """重启恢复：把上次进程留下的 ``running`` run 标记为 failed。
+
+    返回被回收的 run 数。绝不能让一个半途中断的 run 继续被当作成功证据。
+    """
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    cursor = conn.execute(
+                        """
+                        UPDATE intel_fetch_runs
+                        SET status = ?, finished_at = ?, note = ?
+                        WHERE status = ?
+                        """,
+                        (
+                            RUN_STATUS_FAILED,
+                            utc_now_iso(),
+                            "interrupted_by_process_restart",
+                            RUN_STATUS_RUNNING,
+                        ),
+                    )
+                    return int(cursor.rowcount or 0)
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+# ---------------------------------------------------------------------------
+# items / observations
+# ---------------------------------------------------------------------------
+
+
+def upsert_observation(
+    run_id: str,
+    source_id: str,
+    item: dict[str, Any],
+    *,
+    observed_at: str,
+    has_real_rank: bool = False,
+    db_path: str | Path | None = None,
+) -> tuple[int, bool]:
+    """写入一次观测；返回 ``(item_id, is_new_item)``。
+
+    去重键由调用方给出 ``item_key``（URL 归一化优先，回退标题归一化）。
+    ``rank`` 仅当来源真正有排名时写入，否则强制为 None —— 禁止补 0 伪造 off-list。
+    """
+    path = Path(db_path) if db_path else get_default_db_path()
+    rank = item.get("rank") if has_real_rank else None
+    if rank is not None and not isinstance(rank, int):
+        rank = None
+    published_at = item.get("published_at")
+    published_ts = int(item.get("published_ts") or 0)
+    title = str(item.get("title") or "")
+    summary = item.get("summary") or ""
+
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    row = conn.execute(
+                        "SELECT item_id, observation_count FROM intel_items WHERE item_key = ?",
+                        (item["item_key"],),
+                    ).fetchone()
+                    if row is None:
+                        cursor = conn.execute(
+                            """
+                            INSERT INTO intel_items
+                                (item_key, canonical_url, url, title, title_key, summary,
+                                 source_id, hint, published_at, published_ts,
+                                 first_seen_at, last_seen_at, observation_count, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                            """,
+                            (
+                                item["item_key"],
+                                item["canonical_url"],
+                                item["url"],
+                                title,
+                                item["title_key"],
+                                summary,
+                                source_id,
+                                item.get("hint") or "",
+                                published_at,
+                                published_ts,
+                                observed_at,
+                                observed_at,
+                                utc_now_iso(),
+                            ),
+                        )
+                        item_id = int(cursor.lastrowid)
+                        is_new = True
+                    else:
+                        item_id = int(row["item_id"])
+                        is_new = False
+                        conn.execute(
+                            """
+                            UPDATE intel_items
+                            SET last_seen_at = ?,
+                                observation_count = observation_count + 1,
+                                published_at = COALESCE(?, published_at),
+                                published_ts = CASE WHEN published_ts = 0 THEN ? ELSE published_ts END,
+                                summary = CASE WHEN (summary IS NULL OR summary = '') AND ? != ''
+                                               THEN ? ELSE summary END
+                            WHERE item_id = ?
+                            """,
+                            (
+                                observed_at,
+                                published_at,
+                                published_ts,
+                                summary,
+                                summary,
+                                item_id,
+                            ),
+                        )
+
+                    conn.execute(
+                        """
+                        INSERT INTO intel_observations
+                            (run_id, item_id, source_id, observed_at, rank, observed_title, published_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(run_id, source_id, item_id) DO UPDATE SET
+                            observed_at = excluded.observed_at,
+                            rank = excluded.rank,
+                            observed_title = excluded.observed_title,
+                            published_at = excluded.published_at
+                        """,
+                        (run_id, item_id, source_id, observed_at, rank, title, published_at),
+                    )
+                    return item_id, is_new
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def query_items(
+    db_path: str | Path | None = None,
+    *,
+    hint: str | None = None,
+    source_id: str | None = None,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    search: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    order_by: str = "last_seen",
+) -> tuple[list[dict[str, Any]], int]:
+    """统一条目查询；返回 ``(rows, total)``。
+
+    ``order_by`` 取值：``last_seen`` / ``first_seen`` / ``published``。
+    ``published`` 排序时 ``published_ts = 0``（来源未声明时间）的行排在最后，
+    不把「未知发布时间」混进「最新发布」。
+    """
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    clauses: list[str] = []
+    args: list[Any] = []
+    if hint:
+        clauses.append("i.hint = ?")
+        args.append(hint)
+    if source_id:
+        clauses.append("i.source_id = ?")
+        args.append(source_id)
+    if since:
+        clauses.append("i.last_seen_at >= ?")
+        args.append(since)
+    if until:
+        clauses.append("i.last_seen_at <= ?")
+        args.append(until)
+    for term in include or []:
+        if term:
+            clauses.append("(i.title LIKE ? OR i.summary LIKE ?)")
+            args.extend([f"%{term}%", f"%{term}%"])
+    for term in exclude or []:
+        if term:
+            clauses.append("(i.title NOT LIKE ? AND COALESCE(i.summary, '') NOT LIKE ?)")
+            args.extend([f"%{term}%", f"%{term}%"])
+    if search:
+        clauses.append("(i.title LIKE ? OR i.summary LIKE ?)")
+        args.extend([f"%{search}%", f"%{search}%"])
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+    order_sql = {
+        "first_seen": "i.first_seen_at DESC",
+        "published": "(i.published_ts = 0) ASC, i.published_ts DESC",
+    }.get(order_by, "i.last_seen_at DESC")
+
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                total = int(
+                    conn.execute(
+                        f"SELECT COUNT(*) AS n FROM intel_items i{where}", tuple(args)
+                    ).fetchone()["n"]
+                )
+                rows = conn.execute(
+                    f"""
+                    SELECT i.*, s.name AS source_name, s.source_type, s.has_real_rank
+                    FROM intel_items i
+                    LEFT JOIN intel_sources s ON s.source_id = i.source_id
+                    {where}
+                    ORDER BY {order_sql}, i.item_id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    tuple([*args, max(1, min(int(limit), 500)), max(0, int(offset))]),
+                ).fetchall()
+                return [_item_row(row) for row in rows], total
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def _item_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "item_id": row["item_id"],
+        "item_key": row["item_key"],
+        "title": row["title"],
+        "title_key": row["title_key"],
+        "summary": row["summary"],
+        "url": row["url"],
+        "canonical_url": row["canonical_url"],
+        "source_id": row["source_id"],
+        "source_name": row["source_name"],
+        "source_type": row["source_type"],
+        "hint": row["hint"],
+        "published_at": row["published_at"],
+        "published_ts": row["published_ts"],
+        "first_seen_at": row["first_seen_at"],
+        "last_seen_at": row["last_seen_at"],
+        "observation_count": row["observation_count"],
+        "created_at": row["created_at"],
+        "has_real_rank": bool(row["has_real_rank"]) if row["has_real_rank"] is not None else False,
+    }
+
+
+def get_item_rank_history(
+    item_id: int,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """某条目的排名历史；只返回真实存在过的 rank（NULL 不入列）。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT observed_at, rank FROM intel_observations
+                    WHERE item_id = ? AND rank IS NOT NULL
+                    ORDER BY observed_at ASC
+                    """,
+                    (item_id,),
+                ).fetchall()
+                return [
+                    {"observed_at": r["observed_at"], "rank": r["rank"]}
+                    for r in rows
+                ]
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+# ---------------------------------------------------------------------------
+# 实体目录与映射
+# ---------------------------------------------------------------------------
+
+
+def upsert_security_directory(
+    rows: list[dict[str, str]],
+    db_path: str | Path | None = None,
+) -> int:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    now = utc_now_iso()
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    for row in rows:
+                        code = str(row.get("code") or "").strip()
+                        name = str(row.get("name") or "").strip()
+                        industry = str(row.get("industry") or "").strip() or None
+                        if not code or not name:
+                            continue
+                        conn.execute(
+                            """
+                            INSERT INTO intel_security_directory (code, name, industry, updated_at)
+                            VALUES (?, ?, ?, ?)
+                            ON CONFLICT(code) DO UPDATE SET
+                                name = excluded.name,
+                                industry = COALESCE(excluded.industry, intel_security_directory.industry),
+                                updated_at = excluded.updated_at
+                            """,
+                            (code, name, industry, now),
+                        )
+                return int(
+                    conn.execute("SELECT COUNT(*) AS n FROM intel_security_directory").fetchone()["n"]
+                )
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def get_security_directory_size(db_path: str | Path | None = None) -> int:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                return int(
+                    conn.execute("SELECT COUNT(*) AS n FROM intel_security_directory").fetchone()["n"]
+                )
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def get_security_name(
+    code: str,
+    db_path: str | Path | None = None,
+) -> str | None:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                row = conn.execute(
+                    "SELECT name FROM intel_security_directory WHERE code = ?", (code,)
+                ).fetchone()
+                return row["name"] if row else None
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def get_security_industry(
+    code: str,
+    db_path: str | Path | None = None,
+) -> str | None:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                row = conn.execute(
+                    "SELECT industry FROM intel_security_directory WHERE code = ?", (code,)
+                ).fetchone()
+                return row["industry"] if row and row["industry"] else None
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def search_directory(
+    query: str,
+    db_path: str | Path | None = None,
+    *,
+    limit: int = 20,
+) -> list[dict[str, str]]:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT code, name FROM intel_security_directory
+                    WHERE code LIKE ? OR name LIKE ?
+                    ORDER BY code LIMIT ?
+                    """,
+                    (f"{query}%", f"%{query}%", max(1, min(int(limit), 100))),
+                ).fetchall()
+                return [{"code": r["code"], "name": r["name"]} for r in rows]
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def replace_entity_terms(
+    security_code: str | None,
+    terms: list[dict[str, str]],
+    db_path: str | Path | None = None,
+) -> int:
+    """替换某证券（或全局，security_code=None）登记的全部实体词，返回写入条数。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    now = utc_now_iso()
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    if security_code is None:
+                        conn.execute(
+                            "DELETE FROM intel_entity_terms WHERE security_code IS NULL"
+                        )
+                    else:
+                        conn.execute(
+                            "DELETE FROM intel_entity_terms WHERE security_code = ?",
+                            (security_code,),
+                        )
+                    count = 0
+                    for term in terms:
+                        value = str(term.get("term") or "").strip()
+                        kind = term.get("term_kind")
+                        if not value or kind not in TERM_KINDS:
+                            continue
+                        conn.execute(
+                            """
+                            INSERT INTO intel_entity_terms (term, term_kind, security_code, source_ref, updated_at)
+                            VALUES (?, ?, ?, ?, ?)
+                            ON CONFLICT(term, term_kind, security_code) DO UPDATE SET
+                                source_ref = excluded.source_ref, updated_at = excluded.updated_at
+                            """,
+                            (value, kind, security_code, term.get("source_ref") or "unknown", now),
+                        )
+                        count += 1
+                return count
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def list_entity_terms(
+    db_path: str | Path | None = None,
+    *,
+    security_code: str | None = None,
+    term_kinds: tuple[str, ...] | None = None,
+    limit: int = 2000,
+) -> list[dict[str, Any]]:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    clauses: list[str] = []
+    args: list[Any] = []
+    if security_code is not None:
+        clauses.append("security_code = ?")
+        args.append(security_code)
+    if term_kinds:
+        placeholders = ",".join("?" for _ in term_kinds)
+        clauses.append(f"term_kind IN ({placeholders})")
+        args.extend(term_kinds)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    f"SELECT * FROM intel_entity_terms{where} ORDER BY term_kind, term LIMIT ?",
+                    tuple([*args, max(1, int(limit))]),
+                ).fetchall()
+                return [dict(row) for row in rows]
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def link_item_entities(
+    item_id: int,
+    matches: list[dict[str, Any]],
+    db_path: str | Path | None = None,
+) -> None:
+    path = Path(db_path) if db_path else get_default_db_path()
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    for match in matches:
+                        conn.execute(
+                            """
+                            INSERT INTO intel_item_entities (item_id, term_kind, term, security_code, matched_in)
+                            VALUES (?, ?, ?, ?, ?)
+                            ON CONFLICT(item_id, term_kind, term, security_code) DO UPDATE SET
+                                matched_in = CASE
+                                    WHEN intel_item_entities.matched_in = 'title' THEN 'title'
+                                    ELSE excluded.matched_in
+                                END
+                            """,
+                            (
+                                item_id,
+                                match["term_kind"],
+                                match["term"],
+                                match.get("security_code"),
+                                match.get("matched_in") or "title",
+                            ),
+                        )
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def query_items_by_security(
+    code: str,
+    db_path: str | Path | None = None,
+    *,
+    limit: int = 30,
+    window_hours: int | None = None,
+) -> list[dict[str, Any]]:
+    """取映射到某证券代码的所有条目（按末见时间倒序）。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    clauses = ["e.security_code = ?"]
+    args: list[Any] = [code]
+    if window_hours:
+        from datetime import timedelta
+
+        since_dt = datetime.now(timezone.utc) - timedelta(hours=int(window_hours))
+        clauses.append("i.last_seen_at >= ?")
+        args.append(since_dt.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    args.append(max(1, min(int(limit), 200)))
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT DISTINCT i.*, s.name AS source_name, s.source_type, s.has_real_rank
+                    FROM intel_item_entities e
+                    JOIN intel_items i ON i.item_id = e.item_id
+                    LEFT JOIN intel_sources s ON s.source_id = i.source_id
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY i.last_seen_at DESC
+                    LIMIT ?
+                    """,
+                    tuple(args),
+                ).fetchall()
+                return [_item_row(row) for row in rows]
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def get_security_mention_stats(
+    codes: list[str],
+    db_path: str | Path | None = None,
+    *,
+    window_hours: int | None = None,
+) -> dict[str, dict[str, Any]]:
+    """批量统计每个代码的 mentions / source_count / first_seen / last_seen。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    if not codes:
+        return {}
+    placeholders = ",".join("?" for _ in codes)
+    args: list[Any] = list(codes)
+    window_clause = ""
+    if window_hours:
+        from datetime import timedelta
+
+        since_dt = datetime.now(timezone.utc) - timedelta(hours=int(window_hours))
+        window_clause = " AND i.last_seen_at >= ?"
+        args.append(since_dt.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT e.security_code AS code,
+                           COUNT(DISTINCT i.item_id) AS mention_count,
+                           COUNT(DISTINCT i.source_id) AS source_count,
+                           MIN(i.first_seen_at) AS first_seen_at,
+                           MAX(i.last_seen_at) AS last_seen_at
+                    FROM intel_item_entities e
+                    JOIN intel_items i ON i.item_id = e.item_id
+                    WHERE e.security_code IN ({placeholders}){window_clause}
+                    GROUP BY e.security_code
+                    """,
+                    tuple(args),
+                ).fetchall()
+                result: dict[str, dict[str, Any]] = {}
+                for code in codes:
+                    result[code] = {
+                        "code": code,
+                        "mention_count": 0,
+                        "source_count": 0,
+                        "first_seen_at": None,
+                        "last_seen_at": None,
+                    }
+                for row in rows:
+                    result[row["code"]] = {
+                        "code": row["code"],
+                        "mention_count": int(row["mention_count"] or 0),
+                        "source_count": int(row["source_count"] or 0),
+                        "first_seen_at": row["first_seen_at"],
+                        "last_seen_at": row["last_seen_at"],
+                    }
+                return result
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def count_items(db_path: str | Path | None = None) -> int:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                return int(conn.execute("SELECT COUNT(*) AS n FROM intel_items").fetchone()["n"])
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def get_meta(key: str, db_path: str | Path | None = None) -> str | None:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                row = conn.execute(
+                    "SELECT value FROM intel_meta WHERE key = ?", (key,)
+                ).fetchone()
+                return row["value"] if row else None
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def set_meta(key: str, value: str, db_path: str | Path | None = None) -> None:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT INTO intel_meta (key, value) VALUES (?, ?)
+                        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                        """,
+                        (key, value),
+                    )
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def export_state(db_path: str | Path | None = None) -> dict[str, Any]:
+    """测试与诊断用：导出库内关键状态。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        with _connect(path) as conn:
+            return {
+                "sources": [dict(r) for r in conn.execute("SELECT * FROM intel_sources ORDER BY source_id")],
+                "runs": [dict(r) for r in conn.execute("SELECT * FROM intel_fetch_runs ORDER BY started_at")],
+                "source_runs": [dict(r) for r in conn.execute("SELECT * FROM intel_source_runs ORDER BY run_id, source_id")],
+                "items": [dict(r) for r in conn.execute("SELECT * FROM intel_items ORDER BY item_id")],
+                "observations": [dict(r) for r in conn.execute("SELECT * FROM intel_observations ORDER BY obs_id")],
+                "directory": [dict(r) for r in conn.execute("SELECT * FROM intel_security_directory ORDER BY code")],
+                "entity_terms": [dict(r) for r in conn.execute("SELECT * FROM intel_entity_terms ORDER BY term_kind, term")],
+                "item_entities": [dict(r) for r in conn.execute("SELECT * FROM intel_item_entities ORDER BY item_id")],
+            }
+
+
+def to_json(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)

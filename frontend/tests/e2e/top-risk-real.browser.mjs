@@ -176,27 +176,19 @@ function technicalIndicatorsEnvelope(code) {
   };
 }
 
-function trendradarAttentionDisabledEnvelope(code) {
+function nativeIntelUnavailableEnvelope(code) {
   return {
-    status: "DISABLED",
-    error: "TrendRadar 未启用",
+    status: "unavailable",
+    error: "Native Intel 暂不可用",
+    window_hours: 168,
     security: { code, company_name: stockName(code) },
     mapping: {
       status: "EXACT_CODE_ONLY",
-      sector: null,
-      topics: [],
-      matched_terms: [code],
-      reasons: [{ kind: "security_code", value: code, source: "user_query_exact" }],
+      term_count: 1,
+      terms: [{ term: code, term_kind: "security_code", source_ref: "user_query_exact" }],
       errors: [],
     },
-    observation: {
-      window_days: 7,
-      window_semantics: "TrendRadar search_news date_range relative window",
-      items: [],
-      item_count: 0,
-      rank_history_semantics: "Only returned when upstream exposes rank_timeline; missing means UNKNOWN",
-    },
-    source_statuses: [{ term: code, status: "DISABLED", tool: "search_news" }],
+    observation: { items: [], item_count: 0 },
   };
 }
 
@@ -399,10 +391,10 @@ function createApiMockController() {
       return;
     }
 
-    // TrendRadar is optional; keep this unrelated StockData dependency explicitly disabled.
-    if (pathname.startsWith("/api/trendradar/attention-context/")) {
+    // Native Intel failure is isolated from this unrelated StockData path.
+    if (pathname.startsWith("/api/native-intel/security-context/")) {
       const code = pathname.split("/").pop() || "000001";
-      await route.fulfill(jsonOk(trendradarAttentionDisabledEnvelope(code)));
+      await route.fulfill(jsonOk(nativeIntelUnavailableEnvelope(code)));
       return;
     }
 
