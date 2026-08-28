@@ -845,7 +845,7 @@ def market_turnover_rank(n: int = 20) -> list[dict]:
 # 全 A 股行情快照（沪深京 · 分页 clist）
 # ---------------------------------------------------------------------------
 _A_SHARE_FS = "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048"
-_A_SHARE_FIELDS = "f2,f3,f4,f5,f6,f7,f8,f12,f13,f14,f15,f16,f17,f18,f20,f21,f100"
+_A_SHARE_FIELDS = "f2,f3,f4,f5,f6,f7,f8,f12,f13,f14,f15,f16,f17,f18,f20,f21"
 _A_SHARE_PAGE_SIZE = 200
 _A_SHARE_CLIST_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
 
@@ -893,7 +893,6 @@ def _map_a_share_row(d: dict) -> dict | None:
         "prev_close": _optional_float(d.get("f18")),
         "market_cap": _optional_float(d.get("f20")),
         "float_market_cap": _optional_float(d.get("f21")),
-        "industry": str(d.get("f100") or "").strip(),
     }
 
 
