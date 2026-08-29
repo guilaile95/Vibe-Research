@@ -68,17 +68,19 @@ jobs:
         shell: pwsh
         run: |
           foreach ($port in 8900, 5899) {
+            $connected = $false
             $client = [System.Net.Sockets.TcpClient]::new()
             try {
               $task = $client.ConnectAsync("127.0.0.1", $port)
-              if ($task.Wait(500) -and $client.Connected) {
-                throw "launcher left port $port open"
-              }
+              $connected = $task.Wait(500) -and $client.Connected
             }
-            catch [System.Net.Sockets.SocketException] {
-              # Expected: the launcher-owned service was stopped.
+            catch {
+              $connected = $false
             }
             finally {
               $client.Dispose()
+            }
+            if ($connected) {
+              throw "launcher left port $port open"
             }
           }
