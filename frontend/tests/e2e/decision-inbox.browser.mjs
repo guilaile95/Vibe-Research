@@ -33,6 +33,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
@@ -157,22 +158,6 @@ result = ps.bootstrap_commit({
 })
 assert result.get("status") == "BOOTSTRAPPED", result
 print("SEED_OK")
-`;
-
-const SEED_ACTIVE_CAMPAIGN_SCRIPT = `
-import os, sys, uuid
-from datetime import datetime, timezone
-sys.path.insert(0, os.getcwd())
-import campaign_store
-campaign, _transition = campaign_store.transition_campaign(
-    campaign_id=os.environ["E2E_CAMPAIGN_ID"],
-    expected_status="PRE-ENTRY",
-    to_status="ACTIVE",
-    transition_id=f"campaign_transition_{uuid.uuid4().hex}",
-    transitioned_at=datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
-)
-assert campaign.get("status") == "ACTIVE", campaign
-print("ACTIVE_SEED_OK")
 `;
 
 async function createCampaignViaUi(page, strategyLabel) {
@@ -338,13 +323,7 @@ async function runE2E() {
 
     // Decision Inbox 只验证既有 ACTIVE 的组合读取；直接 store seed 是隔离夹具，
     // 不伪装成生产命令，也不放宽公开 API 的 trade-proven gate。
-    const activeSeedOut = execSync(pyCmd, {
-      input: SEED_ACTIVE_CAMPAIGN_SCRIPT,
-      env: { ...env, E2E_CAMPAIGN_ID: swingId },
-      cwd: backendDir,
-      encoding: "utf8",
-    });
-    assert.ok(activeSeedOut.includes("ACTIVE_SEED_OK"), `ACTIVE fixture seed failed: ${activeSeedOut}`);
+    seedActiveCampaign(backendDir, env, swingId);
     await page.click("button:has-text('刷新')");
 
     // 7. ACTIVE fixture：SWING 离开 setup，进入决策项；MEDIUM DRAFT sibling 仍可见

@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
@@ -194,11 +195,13 @@ async function runE2E() {
     async function activateCampaign(securityCode, strategy) {
       const campaign = await postJson(backendUrl, "/api/campaigns",
         { security_code: securityCode, strategy }, 201);
-      for (const to of ["RESEARCHING", "PRE-ENTRY", "ACTIVE"]) {
+      for (const to of ["RESEARCHING", "PRE-ENTRY"]) {
         await postJson(backendUrl, `/api/campaigns/${campaign.campaign_id}/transitions`,
           { expected_status: campaign.status, to_status: to }, 200);
         campaign.status = to;
       }
+      seedActiveCampaign(backendDir, env, campaign.campaign_id);
+      campaign.status = "ACTIVE";
       return campaign;
     }
 

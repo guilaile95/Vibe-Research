@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
@@ -96,7 +97,7 @@ async function jsonRequest(base, pathname, method = "GET", body, expected = 200)
   return payload.data;
 }
 
-async function createFrozenCurrentThesis(base, title) {
+async function createFrozenCurrentThesis(base, title, env) {
   const campaign = await jsonRequest(base, "/api/campaigns", "POST", {
     security_code: "600519",
     strategy: "SWING",
@@ -138,12 +139,13 @@ async function createFrozenCurrentThesis(base, title) {
   await jsonRequest(base, `/api/campaigns/${campaign.campaign_id}/thesis-binding`, "POST", {
     thesis_id: thesisId,
   }, 201);
-  for (const [from, to] of [["DRAFT", "RESEARCHING"], ["RESEARCHING", "PRE-ENTRY"], ["PRE-ENTRY", "ACTIVE"]]) {
+  for (const [from, to] of [["DRAFT", "RESEARCHING"], ["RESEARCHING", "PRE-ENTRY"]]) {
     await jsonRequest(base, `/api/campaigns/${campaign.campaign_id}/transitions`, "POST", {
       expected_status: from,
       to_status: to,
     }, 200);
   }
+  seedActiveCampaign(backendDir, env, campaign.campaign_id);
   return campaign;
 }
 
@@ -232,7 +234,7 @@ async function run() {
       opening_cash: 100000,
       positions: [{ code: "600519", name: "贵州茅台", shares: 100, cost_basis: 150000 }],
     }, 200);
-    const campaign = await createFrozenCurrentThesis(backend, "#206 AI Draft browser fixture");
+    const campaign = await createFrozenCurrentThesis(backend, "#206 AI Draft browser fixture", env);
     await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}`);
     const baselineCampaigns = await jsonRequest(backend, "/api/campaigns");
     const baselineTransitions = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/transitions`);

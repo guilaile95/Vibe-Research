@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
@@ -120,7 +121,7 @@ async function jsonRequest(base, pathname, method = "GET", body, expected = 200)
   return payload.data;
 }
 
-async function createFrozenCurrentThesis(base, title) {
+async function createFrozenCurrentThesis(base, env, title) {
   const campaign = await jsonRequest(base, "/api/campaigns", "POST", {
     security_code: "600519",
     strategy: "SWING",
@@ -162,12 +163,13 @@ async function createFrozenCurrentThesis(base, title) {
   await jsonRequest(base, `/api/campaigns/${campaign.campaign_id}/thesis-binding`, "POST", {
     thesis_id: thesisId,
   }, 201);
-  for (const [from, to] of [["DRAFT", "RESEARCHING"], ["RESEARCHING", "PRE-ENTRY"], ["PRE-ENTRY", "ACTIVE"]]) {
+  for (const [from, to] of [["DRAFT", "RESEARCHING"], ["RESEARCHING", "PRE-ENTRY"]]) {
     await jsonRequest(base, `/api/campaigns/${campaign.campaign_id}/transitions`, "POST", {
       expected_status: from,
       to_status: to,
     }, 200);
   }
+  seedActiveCampaign(backendDir, env, campaign.campaign_id);
   return campaign;
 }
 
@@ -499,9 +501,9 @@ async function run() {
     backendProc.stderr.on("data", (chunk) => { backendLog += chunk.toString(); });
     await waitHttp(`${backend}/api/health`);
 
-    const firstCampaign = await createFrozenCurrentThesis(backend, "CF1 with challenge");
-    const secondCampaign = await createFrozenCurrentThesis(backend, "CF1 without challenge");
-    const thirdCampaign = await createFrozenCurrentThesis(backend, "RQ1 NOT_DUE sibling");
+    const firstCampaign = await createFrozenCurrentThesis(backend, env, "CF1 with challenge");
+    const secondCampaign = await createFrozenCurrentThesis(backend, env, "CF1 without challenge");
+    const thirdCampaign = await createFrozenCurrentThesis(backend, env, "RQ1 NOT_DUE sibling");
     staticServer = await startStaticServer(frontendDist, frontendPort);
     const launchOptions = { headless: true };
     const executablePath = chromiumPath();
