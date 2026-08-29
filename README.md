@@ -41,14 +41,15 @@ reasoning; the user owns the final decision.
 
 - 市场环境、每日复盘、历史快照与比较；
 - A 股个股数据、全球指数及美股 / 港股子集；
-- 板块研究、公开资讯、公告、研报与个人研报归档；
+- 板块研究、Native Intel、公告、研报与个人研报归档；
 - 自选股、持仓、账户资金与执行约束；
 - Thesis、Evidence、Decision Evidence 与 Signal Ledger；
 - Trade Ledger、Decision Feedback、Decision Performance 与 Performance Attribution；
 - Data Health、OpenAI-compatible API、本机 CLI 与 MCP 辅助入口。
 
-详细实现状态见 [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md)，架构与边界见
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。Draft PR 或研究分支不代表稳定版本。
+当前恢复坐标见 [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md)，架构与边界见
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。实时工程状态始终以 GitHub 的稳定分支、
+Issues、PR 和 CI 为准；Draft PR 或研究分支不代表稳定版本。
 
 ## 数据与隐私
 
@@ -67,8 +68,39 @@ AI 服务可能产生外部网络请求；使用前应自行确认相应服务�
 稳定分支当前验证的环境为：
 
 - Linux / Ubuntu：CPython 3.11；
-- Windows：CPython 3.12.10；
+- Windows：PowerShell 7 + CPython 3.12.10；
 - 前端 CI：Node.js 22。
+
+### Windows 一键启动（推荐）
+
+先安装 PowerShell 7、Python 3.12 和 Node.js 22。之后在仓库根目录双击：
+
+```text
+Start-Vibe.cmd
+```
+
+它只通过 `pwsh.exe` 运行，会自动：
+
+1. 创建或复用 `backend\.venv`；
+2. 按 Windows exact lock 同步后端依赖；
+3. 按 `package-lock.json` 同步前端依赖；
+4. 启动后端和前端；
+5. 等待两个服务真实就绪；
+6. 自动打开 `http://localhost:5899`。
+
+首次安装依赖会比后续启动更久。保持启动窗口开启；按 `Ctrl+C` 会停止本次启动器创建的
+服务。日志和依赖指纹保存在被 Git 忽略的 `.vibe-runtime/`。
+
+也可以显式通过 PowerShell 7 运行：
+
+```powershell
+pwsh.exe -NoLogo -NoProfile -File .\start-vibe.ps1
+```
+
+强制重新核对依赖使用 `-Setup`；不自动打开浏览器使用 `-NoBrowser`。
+
+Native Intel 在首次或陈旧启动时会在后台刷新。应用不再等待整轮网络抓取后才开放；
+刷新完成前，资讯页面会诚实显示 `unavailable / stale / partial`，不会伪装成正常空数据。
 
 ### Linux
 
@@ -80,7 +112,7 @@ python3.11 -m venv .venv
 .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8900
 ```
 
-### Windows PowerShell
+### Windows PowerShell 7（手动方式）
 
 ```powershell
 git clone https://github.com/guilaile95/Vibe-Research.git
@@ -96,10 +128,10 @@ runtime-only lock。平台依赖合同见
 
 另开终端启动前端：
 
-```bash
-cd frontend
-npm ci
-npm run dev
+```powershell
+Set-Location Vibe-Research\frontend
+npm.cmd ci
+npm.cmd run dev
 ```
 
 默认访问地址为 `http://localhost:5899`，后端为 `http://127.0.0.1:8900`。
@@ -132,12 +164,12 @@ AI 功能是可选的。稳定版本包含：
 
 ## 项目状态
 
-本仓库持续开发中，部分研究和实验分支不会进入稳定版本。当前稳定实现、已知限制与
-仓库治理分别见：
+本仓库持续开发中，部分研究和实验分支不会进入稳定版本。恢复、已知限制和治理入口为：
 
-- [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md)
-- [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md)
-- [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md)
+- [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md) — 当前恢复坐标；
+- [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) — 已知限制；
+- [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md) — 仓库治理；
+- [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md) — 历史快照提示，不是当前状态权威。
 
 ## 免责声明
 
