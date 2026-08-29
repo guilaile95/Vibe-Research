@@ -143,6 +143,7 @@ let scenario = "normal";
 let nativeRefreshCalls = 0;
 let radarRefreshCalls = 0;
 const requestedScopes = [];
+const marketCloudAuthorization = [];
 
 async function handleApi(route) {
   const request = route.request();
@@ -152,6 +153,7 @@ async function handleApi(route) {
   if (pathName === "/api/market/cloud") {
     const scope = url.searchParams.get("scope") || "all";
     requestedScopes.push(scope);
+    marketCloudAuthorization.push(request.headers()["authorization"] || null);
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: marketCloud(scope) }) });
   }
   if (pathName === "/api/native-intel/status") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(nativeRuntime) });
@@ -199,11 +201,40 @@ try {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.addInitScript(() => {
+    localStorage.setItem("vr-access-key", "test-key");
+    const originalFetch = window.fetch.bind(window);
+    window.__marketCloudPendingScopes = [];
+    window.__marketCloudAbortScopes = [];
+    window.fetch = (input, init) => {
+      const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const url = new URL(rawUrl, window.location.origin);
+      const scope = url.pathname === "/api/market/cloud" ? url.searchParams.get("scope") : null;
+      if (scope === "star") {
+        window.__marketCloudPendingScopes.push(scope);
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            window.__marketCloudAbortScopes.push(scope);
+            reject(new DOMException("Aborted", "AbortError"));
+          }, { once: true });
+        });
+      }
+      return originalFetch(input, init);
+    };
+  });
   await page.route("**/api/**", handleApi);
 
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
-  const marketPanel = page.getByTestId("market-intel-panel");
-  await marketPanel.waitFor({ state: "visible", timeout: 15000 });
+  await page.getByRole("heading", { name: "今天", exact: true }).waitFor();
+  await page.locator("#daily-review-section-title").waitFor();
+  assert.equal(await page.locator("[data-market-cloud]").count(), 0, "Today must not embed Market Cloud");
+  assert.equal(await page.getByTestId("market-intel-panel").count(), 0, "Today must not embed market intel");
+  const primaryLabels = (await page.locator('nav[aria-label="主导航"] > div:first-child a').allTextContents()).map((value) => value.trim());
+  assert.deepEqual(primaryLabels.slice(0, 3), ["今天", "市场热力", "资讯"]);
+  assert.equal(await page.getByRole("link", { name: "市场热力", exact: true }).getAttribute("href"), "/market-cloud");
+  assert.equal(await page.getByRole("link", { name: "资讯", exact: true }).getAttribute("href"), "/intel");
+
+  await page.goto(`http://127.0.0.1:${port}/market-cloud`, { waitUntil: "domcontentloaded" });
   const chart = page.locator("[data-market-cloud-chart]");
   await chart.waitFor({ state: "visible", timeout: 15000 });
 
@@ -211,25 +242,32 @@ try {
   assert.ok(chartBox && chartBox.width > 1400, `expected wide market cloud, got ${chartBox?.width}`);
   assert.ok(chartBox && chartBox.height >= 620, `expected tall market cloud, got ${chartBox?.height}`);
 
-  const order = await page.evaluate(() => ({
-    market: document.querySelector("[data-market-cloud]")?.getBoundingClientRect().top,
-    intel: document.querySelector('[data-testid="market-intel-panel"]')?.getBoundingClientRect().top,
-    review: document.querySelector("#daily-review-section-title")?.getBoundingClientRect().top,
-  }));
-  assert.ok(order.market < order.intel && order.intel < order.review, `unexpected Today order: ${JSON.stringify(order)}`);
+  await page.getByTestId("market-cloud-scope-cyb").click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="market-cloud-scope-cyb"]')?.getAttribute("aria-pressed") === "true");
+  assert.ok(requestedScopes.includes("cyb"), "scope switch did not request cyb");
+
+  await page.getByTestId("market-cloud-scope-star").click();
+  await page.waitForFunction(() => window.__marketCloudPendingScopes?.includes("star"));
+  await page.getByTestId("market-cloud-scope-sh").click();
+  await page.waitForFunction(() => window.__marketCloudAbortScopes?.includes("star"));
+  await page.waitForFunction(() => document.querySelector('[data-testid="market-cloud-scope-sh"]')?.getAttribute("aria-pressed") === "true");
+  assert.ok(requestedScopes.includes("sh"), "scope switch did not request sh after aborting star");
+  assert.ok(marketCloudAuthorization.length >= 3, "expected authenticated market cloud requests");
+  assert.ok(marketCloudAuthorization.every((value) => value === "Bearer test-key"), `unexpected market cloud Authorization headers: ${JSON.stringify(marketCloudAuthorization)}`);
+
+  await page.goto(`http://127.0.0.1:${port}/intel`, { waitUntil: "domcontentloaded" });
+  const marketPanel = page.getByTestId("market-intel-panel");
+  await marketPanel.waitFor({ state: "visible", timeout: 15000 });
   assert.equal(await page.getByRole("heading", { name: "市场情报", exact: true }).count(), 1);
+  assert.equal(await page.locator("[data-market-cloud]").count(), 0, "Intel must not embed Market Cloud");
   assert.equal(await page.getByText("Investment News", { exact: true }).count(), 0);
   assert.equal(await page.getByText("关注雷达", { exact: true }).count(), 0);
   await marketPanel.getByText("半导体产业链出现重要进展", { exact: true }).waitFor();
+  await marketPanel.getByText("2026-08-29 11:00", { exact: true }).first().waitFor();
   await marketPanel.getByText("半导体", { exact: false }).first().waitFor();
   await marketPanel.getByRole("button", { name: /AI 人工智能/ }).waitFor();
   assert.equal(await marketPanel.getByText("RADAR_NEWS_MUST_NOT_RENDER", { exact: true }).count(), 0);
   assert.equal(await marketPanel.getByRole("button", { name: "刷新", exact: true }).count(), 1);
-
-  await page.getByTestId("market-cloud-scope-cyb").click();
-  await page.waitForFunction(() => document.querySelector('[data-testid="market-cloud-scope-cyb"]')?.getAttribute("aria-pressed") === "true");
-  assert.ok(requestedScopes.includes("cyb"), "scope switch did not request cyb");
-  assert.equal(await page.locator('nav a[href="/intel"]').count(), 0, "sidebar must not expose /intel");
 
   scenario = "radar-fail";
   nativeRefreshCalls = 0;
@@ -254,12 +292,8 @@ try {
   await page.getByText("板块强度", { exact: true }).waitFor();
   assert.equal(await page.locator("[data-market-cloud]").count(), 0);
 
-  await page.goto(`http://127.0.0.1:${port}/intel`, { waitUntil: "domcontentloaded" });
-  await page.getByTestId("market-intel-panel").waitFor({ state: "visible" });
-  assert.equal(await page.getByText("Investment News", { exact: true }).count(), 0);
-  assert.equal(await page.getByText("关注雷达", { exact: true }).count(), 0);
   assert.deepEqual(pageErrors, []);
-  console.log("Today market context browser vertical: PASS");
+  console.log("Market surface navigation browser vertical: PASS");
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (server) await new Promise((resolve) => server.close(resolve));

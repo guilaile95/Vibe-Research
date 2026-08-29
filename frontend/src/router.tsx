@@ -5,6 +5,7 @@ import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { hasSectorResearchWorkspace } from "@/data/sectorResearch";
 
 const DailyReview = lazy(() => import("@/pages/DailyReview").then((m) => ({ default: m.DailyReview })));
+const MarketCloudPage = lazy(() => import("@/pages/MarketCloudPage").then((m) => ({ default: m.MarketCloudPage })));
 const Intel = lazy(() => import("@/pages/Intel").then((m) => ({ default: m.Intel })));
 const Sectors = lazy(() => import("@/pages/Sectors").then((m) => ({ default: m.Sectors })));
 const SectorDetail = lazy(() => import("@/pages/SectorDetail").then((m) => ({ default: m.SectorDetail })));
@@ -76,6 +77,7 @@ export const router = createBrowserRouter([
     children: [
       { path: "/", element: <Navigate to="/daily-review" replace /> },
       { path: "/daily-review", element: withSuspense(<DailyReview />) },
+      { path: "/market-cloud", element: withSuspense(<MarketCloudPage />) },
       { path: "/market-history", element: withSuspense(<MarketHistory />) },
       { path: "/intel", element: withSuspense(<Intel />) },
       { path: "/signals", element: withSuspense(<Signals />) },

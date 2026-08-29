@@ -26,6 +26,7 @@ import {
   type RadarData,
 } from "@/lib/api";
 import { runIntelDigestGeneration } from "@/lib/intelDigestOrchestrator";
+import { formatShanghaiTime } from "@/lib/intelDigestView";
 import { hasLlm } from "@/lib/llm";
 import { deriveMarketIntelStatus } from "@/lib/marketIntelStatus";
 import { cn } from "@/lib/utils";
@@ -43,8 +44,6 @@ interface Digest {
   deduped?: boolean;
   digest_date?: string;
 }
-
-const displayTime = (value?: string | null) => value ? value.replace("T", " ").replace(/Z$/, "") : "未知";
 
 const errorMessage = (cause: unknown, fallback: string) => cause instanceof ApiError ? cause.message : fallback;
 
@@ -370,7 +369,7 @@ export default function MarketIntelPanel() {
                 overallStatus === "unavailable" && "bg-destructive/10 text-destructive",
               )}>{statusLabel}</span>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">来源状态与本地保存历史 · 更新时间 {displayTime(updatedAt || radar?.generated_at)}</p>
+            <p className="mt-1 text-xs text-muted-foreground">来源状态与本地保存历史 · 更新时间 {formatShanghaiTime(updatedAt || radar?.generated_at)}</p>
           </div>
           <button
             type="button"
@@ -390,7 +389,7 @@ export default function MarketIntelPanel() {
             <div className="rounded-lg border border-border/50 bg-background/60 p-2"><Database className="mr-1 inline h-3.5 w-3.5" />历史资讯 {runtime?.store?.item_count ?? items?.total ?? 0}</div>
             <div className="rounded-lg border border-border/50 bg-background/60 p-2">公开来源 {runtime?.sources?.healthy ?? 0}/{runtime?.sources?.total ?? 0} 正常</div>
             <div className="rounded-lg border border-border/50 bg-background/60 p-2">赛道来源 {radar?.stats.total_sources ?? 0} · {radar?.stats.industries ?? industries.length} 赛道</div>
-            <div className="rounded-lg border border-border/50 bg-background/60 p-2"><Clock className="mr-1 inline h-3.5 w-3.5" />{displayTime(updatedAt || radar?.generated_at)}</div>
+            <div className="rounded-lg border border-border/50 bg-background/60 p-2"><Clock className="mr-1 inline h-3.5 w-3.5" />{formatShanghaiTime(updatedAt || radar?.generated_at)}</div>
           </div>
         )}
 
@@ -525,7 +524,7 @@ export default function MarketIntelPanel() {
                   <span className="truncate">{item.title}</span><ExternalLink className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-60" />
                 </a>
                 <span className="truncate text-xs text-muted-foreground">{item.source_name || item.hint}</span>
-                <span className="font-mono text-xs text-muted-foreground">{displayTime(item.published_at || item.last_seen_at)}</span>
+                <span className="font-mono text-xs text-muted-foreground">{formatShanghaiTime(item.published_at || item.last_seen_at)}</span>
               </li>
             ))}
           </ul>

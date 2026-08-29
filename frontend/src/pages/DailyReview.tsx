@@ -21,7 +21,6 @@ import {
 } from "@/lib/api";
 import { NorthboundCapitalFlowCard } from "@/components/market/NorthboundCapitalFlowCard";
 import { ShortTermHistoryCard } from "@/components/dailyReview/ShortTermHistoryCard";
-import { TodayMarketContext } from "@/components/dailyReview/TodayMarketContext";
 import { northboundErrorMessage } from "@/lib/northboundView";
 import { loadLlm } from "@/lib/llm";
 import { useDailyReviewAiTaskStore } from "@/stores/dailyReviewAiTaskStore";
@@ -987,10 +986,8 @@ export function DailyReview() {
     <div>
       <PageHeader
         title="今天"
-        subtitle="A股全市场热力、市场情报与每日复盘"
+        subtitle="每日复盘与自选观察"
       />
-
-      <TodayMarketContext />
 
       <section aria-labelledby="daily-review-section-title" className="mb-4 flex flex-wrap items-start justify-between gap-3 border-t border-border/60 pt-6">
         <div>

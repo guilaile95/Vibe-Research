@@ -83,6 +83,25 @@ export function isValidTimezoneAwareIso(value: string): boolean {
   return !Number.isNaN(ms);
 }
 
+const SHANGHAI_DISPLAY_FORMAT = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+/** Format a timezone-aware ISO timestamp as Beijing time; preserve invalid input. */
+export function formatShanghaiTime(value: string | null | undefined): string {
+  if (!value) return "未知";
+  const raw = value.trim();
+  if (!raw) return "未知";
+  if (!isValidTimezoneAwareIso(raw)) return raw;
+  return SHANGHAI_DISPLAY_FORMAT.format(new Date(raw));
+}
+
 /** Convert unix seconds to Asia/Shanghai ISO-8601 with +08:00 offset. */
 export function toShanghaiIsoFromTs(tsSeconds: number): string {
   const d = new Date(tsSeconds * 1000);

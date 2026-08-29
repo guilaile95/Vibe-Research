@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { api, ApiError } from "@/lib/api";
 import type { MarketCloudEnvelope } from "@/lib/marketCloud";
 
 export type MarketCloudScope = "all" | "cyb" | "star" | "sh" | "sz";
@@ -23,31 +24,23 @@ export function useMarketCloud({ scope, period }: UseMarketCloudOptions): UseMar
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
 
-    const url = `/api/market/cloud?scope=${encodeURIComponent(scope)}&period=${encodeURIComponent(period)}`;
-
-    fetch(url)
-      .then(async (res) => {
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
-        const json = await res.json();
-        if (cancelled) return;
-        setData(json.data as MarketCloudEnvelope);
+    api.marketCloud(scope, period, controller.signal)
+      .then((nextData) => {
+        if (controller.signal.aborted) return;
+        setData(nextData);
         setLoading(false);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : String(err));
+        if (controller.signal.aborted) return;
+        setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err));
         setLoading(false);
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [scope, period, reloadKey]);
 
   return {

@@ -5,6 +5,7 @@ import {
   prepareDigestItems,
   shouldSaveDigest,
   digestStatusBadge,
+  formatShanghaiTime,
   isSectorMatch,
   isValidHttpUrl,
   isValidTimezoneAwareIso,
@@ -169,6 +170,14 @@ test("isValidTimezoneAwareIso rejects naive dates", () => {
   assert.equal(isValidTimezoneAwareIso("2026-07-31T02:00:00Z"), true);
   assert.equal(isValidHttpUrl("https://"), false);
   assert.equal(isValidHttpUrl("https://example.com/a"), true);
+});
+
+test("formatShanghaiTime renders timezone-aware ISO values in Beijing time", () => {
+  assert.equal(formatShanghaiTime("2026-08-29T03:00:00Z"), "2026-08-29 11:00");
+  assert.equal(formatShanghaiTime("2026-08-29T11:00:00+08:00"), "2026-08-29 11:00");
+  assert.equal(formatShanghaiTime("2026-08-29 11:00"), "2026-08-29 11:00");
+  assert.equal(formatShanghaiTime("invalid-time"), "invalid-time");
+  assert.equal(formatShanghaiTime(null), "未知");
 });
 
 test("resolvePublishedAt never uses display time fields", () => {
