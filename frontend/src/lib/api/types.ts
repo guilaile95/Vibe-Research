@@ -428,7 +428,6 @@ export interface BoardRankItem {
   code: string;
   name: string;
   change_pct: number | null;
-  amount: number | null;
   turnover_pct: number | null;
   market_cap: number | null;
   up_count: number | null;
@@ -446,7 +445,6 @@ export interface BoardRankingData {
   unknown_count: number;
   top: BoardRankItem[];
   bottom: BoardRankItem[];
-  amount_top: BoardRankItem[];
 }
 
 

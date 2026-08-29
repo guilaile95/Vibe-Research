@@ -671,15 +671,18 @@ def _em_session(direct: bool = True):
     return s
 
 
-def em_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int = 15):
+def em_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int = 15, *, min_interval: float = _EM_MIN_INTERVAL):
     """东财统一请求入口：串行限流 + **固定直连**（trust_env=False）。
 
     不读取环境/系统代理，避免 Clash 等代理导致国内站 ProxyError。
     瞬时失败由调用方（如 a_share_snapshot 分页）做有限页级重试。
+
+    min_interval: 两次请求最小间隔（秒）。默认全局 _EM_MIN_INTERVAL=1.0；
+    批量分页（如全 A 快照）可传入更短值以加速，同端点连续请求风险可控。
     """
-    wait = _EM_MIN_INTERVAL - (time.time() - _em_last_call[0])
+    wait = min_interval - (time.time() - _em_last_call[0])
     if wait > 0:
-        time.sleep(wait + random.uniform(0.1, 0.5))
+        time.sleep(wait + random.uniform(0.1, 0.3))
     try:
         _em_mode[0] = "direct"
         return _em_session(True).get(url, params=params, headers=headers, timeout=timeout)
@@ -730,13 +733,14 @@ def _em_get_page_with_retries(
     timeout: int = 15,
     max_attempts: int = _A_SHARE_PAGE_MAX_ATTEMPTS,
     backoff: tuple[float, ...] = _A_SHARE_PAGE_RETRY_BACKOFF,
+    min_interval: float = _EM_MIN_INTERVAL,
 ):
     """单页请求：瞬时网络错误有限重试；解析/结构类错误不重试。"""
     last_err: BaseException | None = None
     attempts = max(1, int(max_attempts))
     for attempt in range(attempts):
         try:
-            return em_get(url, params=params, headers=headers, timeout=timeout)
+            return em_get(url, params=params, headers=headers, timeout=timeout, min_interval=min_interval)
         except Exception as e:  # noqa: BLE001
             last_err = e
             if not _is_transient_network_error(e):
@@ -950,6 +954,7 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
                     params=params,
                     headers=headers,
                     timeout=15,
+                    min_interval=0.1,
                 )
                 try:
                     payload = r.json()
@@ -1108,7 +1113,6 @@ def _map_board_row(d: dict) -> dict | None:
         "code": code,
         "name": name,
         "change_pct": _optional_float(d.get("f3")),
-        "amount": None,  # clist 不返回板块成交额，由 _enrich_board_amounts 补充
         "turnover_pct": _optional_float(d.get("f8")),
         "market_cap": _optional_float(d.get("f20")),
         "up_count": up_count,
@@ -1117,53 +1121,6 @@ def _map_board_row(d: dict) -> dict | None:
         "leader": leader,
         "leader_change_pct": _optional_float(d.get("f136")),
     }
-
-
-def _fetch_board_amount_single(code: str) -> tuple[str, float | None]:
-    """获取单个板块的成交额（stock/get API，f48=成交额）。失败返回 (code, None)。"""
-    params = {
-        "secid": f"90.{code}",
-        "fields": "f48,f57,f58",
-        "fltt": "2",
-        "invt": "2",
-    }
-    headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
-    for host in _BOARD_CLIST_HOSTS:
-        try:
-            r = em_get(
-                f"https://{host}/api/qt/stock/get",
-                params=params,
-                headers=headers,
-                timeout=10,
-            )
-            payload = r.json()
-            data = payload.get("data") or {}
-            amount = _optional_float(data.get("f48"))
-            return code, amount
-        except Exception:
-            continue
-    return code, None
-
-
-def _enrich_board_amounts(boards: list[dict]) -> None:
-    """就地补充板块成交额（并发调用 stock/get）。失败时 amount 保持 None。"""
-    codes = [b["code"] for b in boards if b.get("amount") is None]
-    if not codes:
-        return
-    # 并发获取，控制 worker 数避免触发东财限流
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    results: dict[str, float | None] = {}
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(_fetch_board_amount_single, code): code for code in codes}
-        for future in as_completed(futures, timeout=60):
-            try:
-                code, amount = future.result()
-                results[code] = amount
-            except Exception:
-                pass
-    for b in boards:
-        if b["code"] in results:
-            b["amount"] = results[b["code"]]
 
 
 def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: int = _BOARD_PAGE_SIZE) -> dict:
@@ -1292,15 +1249,10 @@ def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: i
         seen.add(mapped["code"])
         boards.append(mapped)
 
-    # 补充板块成交额（clist 不提供，从 ulist 批量获取；失败时 amount 保持 None）
-    _enrich_board_amounts(boards)
-
     ranked = [b for b in boards if b["change_pct"] is not None]
     unknown_count = len(boards) - len(ranked)
     ranked_desc = sorted(ranked, key=lambda x: float(x["change_pct"]), reverse=True)
     ranked_asc = sorted(ranked, key=lambda x: float(x["change_pct"]))
-    amount_ranked = [b for b in boards if b["amount"] is not None]
-    amount_top = sorted(amount_ranked, key=lambda x: float(x["amount"]), reverse=True)
 
     return {
         "type": board_type,
@@ -1309,7 +1261,6 @@ def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: i
         "unknown_count": unknown_count,
         "top": ranked_desc[:top_n],
         "bottom": ranked_asc[:top_n],
-        "amount_top": amount_top[:top_n],
     }
 
 

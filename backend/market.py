@@ -652,7 +652,6 @@ def get_board_ranking(board_type: str = "industry", top_n: int = 20) -> dict:
         unknown_count = int(raw.get("unknown_count") or 0)
         top = list(raw.get("top") or [])
         bottom = list(raw.get("bottom") or [])
-        amount_top = list(raw.get("amount_top") or [])
     except (TypeError, ValueError) as e:
         return _breadth_envelope(
             "unavailable",
@@ -676,7 +675,6 @@ def get_board_ranking(board_type: str = "industry", top_n: int = 20) -> dict:
         "unknown_count": unknown_count,
         "top": top[:top_n],
         "bottom": bottom[:top_n],
-        "amount_top": amount_top[:top_n],
     }
 
     base_warns = [_WARN_NO_TRADE_META]

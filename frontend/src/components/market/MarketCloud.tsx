@@ -45,19 +45,22 @@ export function MarketCloud() {
         formatter: (params: { data?: TreemapNode; name?: string; value?: number }) => {
           const d = params.data;
           if (!d) return "";
+          const fetched = data?.fetched_at ? `<div style="margin-top:4px;color:#71717a;font-size:11px">数据更新：${data.fetched_at}</div>` : "";
           if (d.node_type === "industry") {
             return `<div style="font-weight:600;margin-bottom:4px">${d.name}</div>` +
               `<div>股票数：${d.stock_count ?? "—"}</div>` +
               `<div>平均涨跌：${formatChangePct(d.change_pct)}</div>` +
               `<div>流通市值：${formatMarketCap(d.value)}</div>` +
-              `<div>上涨：${d.up_count ?? "—"} / 下跌：${d.down_count ?? "—"}</div>`;
+              `<div>上涨：${d.up_count ?? "—"} / 下跌：${d.down_count ?? "—"}</div>` +
+              fetched;
           }
           return `<div style="font-weight:600;margin-bottom:4px">${d.name} (${d.code ?? "—"})</div>` +
             `<div>涨跌幅：${formatChangePct(d.change_pct)}</div>` +
             `<div>最新价：${formatPrice(d.price)}</div>` +
             `<div>流通市值：${formatMarketCap(d.value)}</div>` +
             `<div>成交额：${formatAmount(d.amount)}</div>` +
-            `<div>所属行业：${d.industry ?? "—"}</div>`;
+            `<div>所属行业：${d.industry ?? "—"}</div>` +
+            fetched;
         },
       },
       series: [
