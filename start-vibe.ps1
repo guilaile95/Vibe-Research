@@ -50,9 +50,10 @@ function Invoke-CheckedCommand {
 
     Push-Location $WorkingDirectory
     try {
-        & $FilePath @ArgumentList
-        if ($LASTEXITCODE -ne 0) {
-            throw "$Description 失败，退出码：$LASTEXITCODE"
+        & $FilePath @ArgumentList | Out-Host
+        $commandExitCode = $LASTEXITCODE
+        if ($commandExitCode -ne 0) {
+            throw "$Description 失败，退出码：$commandExitCode"
         }
     }
     finally {
