@@ -152,8 +152,8 @@ export function MarketCloud() {
               数据过期
             </span>
           )}
-          {data?.updated_at && (
-            <span style={{ fontSize: 11, color: "#71717a" }}>更新于 {data.updated_at.slice(11, 16)}</span>
+          {data?.fetched_at && (
+            <span style={{ fontSize: 11, color: "#71717a" }}>更新于 {data.fetched_at.slice(11, 16)}</span>
           )}
         </div>
         <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>

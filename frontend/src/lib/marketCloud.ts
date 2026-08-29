@@ -47,7 +47,10 @@ export interface MarketCloudEnvelope {
   data: MarketCloudData | null;
   warnings: string[];
   is_stale: boolean;
-  updated_at?: string;
+  fetched_at?: string;
+  source?: string;
+  trade_date?: string | null;
+  data_time?: string | null;
 }
 
 // ── 颜色映射 ──────────────────────────────────────────────────────────

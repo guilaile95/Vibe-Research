@@ -846,7 +846,7 @@ def market_turnover_rank(n: int = 20) -> list[dict]:
 # ---------------------------------------------------------------------------
 _A_SHARE_FS = "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048"
 _A_SHARE_FIELDS = "f2,f3,f4,f5,f6,f7,f8,f12,f13,f14,f15,f16,f17,f18,f20,f21,f100"
-_A_SHARE_PAGE_SIZE = 200
+_A_SHARE_PAGE_SIZE = 500
 _A_SHARE_CLIST_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
 
 
