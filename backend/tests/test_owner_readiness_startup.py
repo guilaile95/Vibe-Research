@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -137,8 +137,29 @@ def test_windows_launcher_contract_uses_pwsh_and_keeps_runtime_state_private() -
     assert script.startswith("#requires -Version 7.0")
     assert "[switch]$ValidateOnly" in script
     assert "app:app" in script
+    assert 'Get-Command "node.exe"' in script
+    assert "'^v22\\.'" in script
+    assert '$FrontendUrl = "http://127.0.0.1:5899"' in script
     assert "npm.cmd" in script
     assert ".vibe-runtime/" in ignore
+
+
+def test_all_browser_e2e_scripts_preload_the_deterministic_runtime_environment() -> None:
+    package = json.loads((REPO_ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
+    e2e_scripts = {
+        name: command
+        for name, command in package["scripts"].items()
+        if name.startswith("test:e2e:")
+    }
+    assert e2e_scripts
+    for name, command in e2e_scripts.items():
+        assert "node --import ./tests/e2e/runtime-env.mjs " in command, name
+
+    runtime_env = (
+        REPO_ROOT / "frontend" / "tests" / "e2e" / "runtime-env.mjs"
+    ).read_text(encoding="utf-8")
+    assert "VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH" in runtime_env
+    assert 'process.env.VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH = "1"' in runtime_env
 
 
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell launcher syntax is validated on Windows CI")
