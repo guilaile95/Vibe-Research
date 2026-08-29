@@ -21,7 +21,7 @@ $FrontendModules = Join-Path $FrontendDir "node_modules"
 $BackendMarker = Join-Path $RuntimeDir "backend-lock.sha256"
 $FrontendMarker = Join-Path $RuntimeDir "frontend-lock.sha256"
 $BackendUrl = "http://127.0.0.1:8900"
-$FrontendUrl = "http://localhost:5899"
+$FrontendUrl = "http://127.0.0.1:5899"
 
 function Assert-ProjectLayout {
     $required = @(
@@ -130,9 +130,15 @@ function Ensure-BackendEnvironment {
 }
 
 function Ensure-FrontendEnvironment {
+    $node = Get-Command "node.exe" -ErrorAction SilentlyContinue
     $npm = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
-    if ($null -eq $npm) {
-        throw "未找到 npm.cmd。请先安装 Node.js 22。"
+    if ($null -eq $node -or $null -eq $npm) {
+        throw "未找到 Node.js 22 / npm.cmd。请先安装 Node.js 22。"
+    }
+
+    $nodeVersion = (& $node.Source --version 2>$null | Select-Object -First 1)
+    if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v22\.') {
+        throw "当前 Node.js 版本为 $nodeVersion；Vibe-Research 需要 Node.js 22。"
     }
 
     $expected = Get-ContentHash $FrontendLock
