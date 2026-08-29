@@ -1,4 +1,4 @@
-"""a_share_snapshot 分页完整性离线测试（Mock 网络，不打真实东财）。
+﻿"""a_share_snapshot 分页完整性离线测试（Mock 网络，不打真实东财）。
 
 覆盖：上游每页强制 100 条、多页合并、去重、重复页保护、失败不返回半截数据。
 """
@@ -36,7 +36,7 @@ class _FakeResp:
 def _install(monkeypatch, handler):
     calls: list[dict] = []
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         calls.append({"url": url, "params": dict(params or {})})
         return _FakeResp(handler(url, params or {}))
 
@@ -388,7 +388,7 @@ def test_page_retry_first_fail_second_success(monkeypatch):
     """第 2 页首次 ConnectionError，重试后成功；不回到第 1 页重跑。"""
     attempts_by_pn: dict[int, int] = {}
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         pn = int((params or {}).get("pn", "0"))
         attempts_by_pn[pn] = attempts_by_pn.get(pn, 0) + 1
         if pn == 2 and attempts_by_pn[pn] == 1:
@@ -412,7 +412,7 @@ def test_page_retry_first_fail_second_success(monkeypatch):
 def test_page_retry_two_fails_third_success(monkeypatch):
     attempts = {"n": 0}
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         pn = int((params or {}).get("pn", "0"))
         if pn == 1:
             return _FakeResp({"data": {"total": 3, "diff": _codes(3, 0)}})
@@ -426,7 +426,7 @@ def test_page_retry_two_fails_third_success(monkeypatch):
     monkeypatch.setattr(astock, "_em_last_call", [0.0])
     monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
     # total=3 page1 has all → may not need page2; force multi-page with larger total
-    def fake_em_get2(url, params=None, headers=None, timeout=15):
+    def fake_em_get2(url, params=None, headers=None, timeout=15, **kwargs):
         pn = int((params or {}).get("pn", "0"))
         if pn == 1:
             return _FakeResp({"data": {"total": 6, "diff": _codes(3, 0)}})
@@ -445,7 +445,7 @@ def test_page_retry_two_fails_third_success(monkeypatch):
 def test_page_retry_three_fails_raises_no_partial(monkeypatch):
     got_partial = {"codes": None}
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         pn = int((params or {}).get("pn", "0"))
         if pn == 1:
             return _FakeResp({"data": {"total": 10, "diff": _codes(5, 0)}})
@@ -469,7 +469,7 @@ def test_page_retry_three_fails_raises_no_partial(monkeypatch):
 def test_retry_stays_on_same_page(monkeypatch):
     seq: list[int] = []
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         pn = int((params or {}).get("pn", "0"))
         seq.append(pn)
         if pn == 2 and seq.count(2) < 2:
@@ -502,7 +502,7 @@ def test_json_error_not_retried_as_network(monkeypatch):
             calls["n"] += 1
             raise ValueError("not json")
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         return _BadJson()
 
     monkeypatch.setattr(astock, "em_get", fake_em_get)
@@ -520,3 +520,80 @@ def test_is_transient_network_error_helpers():
     assert astock._is_transient_network_error(TimeoutError("t")) is True
     assert astock._is_transient_network_error(ValueError("bad")) is False
     assert astock._is_transient_network_error(RuntimeError("parse")) is False
+
+
+# ---------------------------------------------------------------------------
+# 并发分页完整性回归（强制进入真实并发路径：第一页 >= 50 条）
+# ---------------------------------------------------------------------------
+
+def test_concurrent_multi_page_complete_success(monkeypatch):
+    """并发多页正常获取 → 完整成功，fetched_raw >= total。"""
+    def handler(url, params):
+        pn = int(params["pn"])
+        if pn == 1:
+            return {"data": {"total": 250, "diff": _codes(100, 0)}}
+        if pn == 2:
+            return {"data": {"total": 250, "diff": _codes(100, 100)}}
+        if pn == 3:
+            return {"data": {"total": 250, "diff": _codes(50, 200)}}
+        raise AssertionError(f"unexpected page {pn}")
+
+    calls = _install(monkeypatch, handler)
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
+    out = astock.a_share_snapshot(page_size=100)
+    assert len(out) == 250
+    # 第一页串行 + 后续并发，总共 3 次请求
+    assert len(calls) == 3
+
+
+def test_concurrent_middle_empty_page_raises_incomplete(monkeypatch):
+    """中间页为空且 fetched_raw < total → 不允许返回 partial success。"""
+    def handler(url, params):
+        pn = int(params["pn"])
+        if pn == 1:
+            return {"data": {"total": 250, "diff": _codes(100, 0)}}
+        if pn == 2:
+            return {"data": {"total": 250, "diff": []}}  # 中间空页
+        if pn == 3:
+            return {"data": {"total": 250, "diff": _codes(50, 200)}}
+        raise AssertionError(f"unexpected page {pn}")
+
+    _install(monkeypatch, handler)
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
+    with pytest.raises(RuntimeError, match="incomplete data"):
+        astock.a_share_snapshot(page_size=100)
+
+
+def test_concurrent_repeated_page_raises_no_partial(monkeypatch):
+    """并发页重复（fingerprint 相同）→ 不允许返回 partial success。"""
+    page1_rows = _codes(100, 0)
+
+    def handler(url, params):
+        pn = int(params["pn"])
+        if pn == 1:
+            return {"data": {"total": 200, "diff": page1_rows}}
+        if pn == 2:
+            return {"data": {"total": 200, "diff": list(page1_rows)}}  # 完全重复
+        raise AssertionError(f"unexpected page {pn}")
+
+    _install(monkeypatch, handler)
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
+    with pytest.raises(RuntimeError, match="repeated page content"):
+        astock.a_share_snapshot(page_size=100)
+
+
+def test_concurrent_future_failure_raises_no_partial(monkeypatch):
+    """某个 concurrent future 请求失败 → 必须抛错，不返回已拿到的部分数据。"""
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
+        pn = int((params or {}).get("pn", "0"))
+        if pn == 1:
+            return _FakeResp({"data": {"total": 200, "diff": _codes(100, 0)}})
+        # 所有后续页永远失败（_em_get_page_with_retries 重试 3 次后抛 RuntimeError）
+        raise ConnectionError("always down")
+
+    monkeypatch.setattr(astock, "em_get", fake_em_get)
+    monkeypatch.setattr(astock, "_EM_MIN_INTERVAL", 0)
+    monkeypatch.setattr(astock, "_em_last_call", [0.0])
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
+    with pytest.raises(RuntimeError, match="request failed"):
+        astock.a_share_snapshot(page_size=100)

@@ -27,13 +27,14 @@ def _row(
     f18=1679.0,
     f20=2.1e12,
     f21=2.0e12,
+    f100="白酒",
     **extra,
 ):
     d = {
         "f2": f2, "f3": f3, "f4": f4, "f5": f5, "f6": f6, "f7": f7, "f8": f8,
         "f12": code, "f13": f13, "f14": name,
         "f15": f15, "f16": f16, "f17": f17, "f18": f18,
-        "f20": f20, "f21": f21,
+        "f20": f20, "f21": f21, "f100": f100,
     }
     d.update(extra)
     return d
@@ -55,8 +56,8 @@ def _install_em_get(monkeypatch, handler):
     """handler(url, params) -> payload dict or raises."""
     calls: list[dict] = []
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
-        calls.append({"url": url, "params": dict(params or {}), "headers": headers, "timeout": timeout})
+    def fake_em_get(url, params=None, headers=None, timeout=15, *, min_interval=1.0):
+        calls.append({"url": url, "params": dict(params or {}), "headers": headers, "timeout": timeout, "min_interval": min_interval})
         return _FakeResp(handler(url, params or {}))
 
     monkeypatch.setattr(astock, "em_get", fake_em_get)
@@ -77,8 +78,9 @@ def test_snapshot_single_page_list(monkeypatch):
     def handler(url, params):
         assert "clist/get" in url
         assert params["pn"] == "1"
-        assert params["pz"] == "200"
+        assert params["pz"] == "500"
         assert "f12" in params["fields"] and "f2" in params["fields"]
+        assert "f100" in params["fields"], "a_share_snapshot 必须请求 f100（行业归属）"
         return {"data": {"total": 2, "diff": rows}}
 
     calls = _install_em_get(monkeypatch, handler)
@@ -103,10 +105,13 @@ def test_snapshot_single_page_list(monkeypatch):
     assert a["prev_close"] == pytest.approx(1679.0)
     assert a["market_cap"] == pytest.approx(2.1e12)
     assert a["float_market_cap"] == pytest.approx(2.0e12)
+    # f100 → industry 映射（市场云图必需字段）
+    assert a["industry"] == "白酒"
     assert set(a.keys()) == {
         "code", "name", "market", "price", "change_pct", "change",
         "volume", "amount", "amplitude_pct", "turnover_pct",
         "high", "low", "open", "prev_close", "market_cap", "float_market_cap",
+        "industry",
     }
 
     b = out[1]
@@ -230,7 +235,7 @@ def test_snapshot_request_failure_not_empty_list(monkeypatch):
 def test_snapshot_invalid_json_raises(monkeypatch):
     calls: list = []
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, *, min_interval=1.0):
         calls.append(1)
 
         class Bad:
