@@ -21,6 +21,7 @@
     "test:e2e:decision-evidence": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/decision-evidence-real.browser.mjs",
     "test:e2e:intel-digest": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/intel-digest-real.browser.mjs",
     "test:e2e:native-intel": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/native-intel.browser.mjs",
+    "test:e2e:today-market-context": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/today-market-context.browser.mjs",
     "test:e2e:core-navigation": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/core-navigation.browser.mjs",
     "test:e2e:decision-inbox": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/decision-inbox.browser.mjs",
     "test:e2e:account-bootstrap": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/account-bootstrap.browser.mjs",

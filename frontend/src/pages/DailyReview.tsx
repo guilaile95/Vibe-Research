@@ -21,6 +21,7 @@ import {
 } from "@/lib/api";
 import { NorthboundCapitalFlowCard } from "@/components/market/NorthboundCapitalFlowCard";
 import { ShortTermHistoryCard } from "@/components/dailyReview/ShortTermHistoryCard";
+import { TodayMarketContext } from "@/components/dailyReview/TodayMarketContext";
 import { northboundErrorMessage } from "@/lib/northboundView";
 import { loadLlm } from "@/lib/llm";
 import { useDailyReviewAiTaskStore } from "@/stores/dailyReviewAiTaskStore";
@@ -985,10 +986,20 @@ export function DailyReview() {
   return (
     <div>
       <PageHeader
-        title="每日复盘"
-        subtitle={`${tradeDateLabel !== "—" ? tradeDateLabel : today} · 大盘 / 情绪 / 板块涨幅一屏看全`}
-        actions={
-          <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
+        title="今天"
+        subtitle="A股全市场热力、市场情报与每日复盘"
+      />
+
+      <TodayMarketContext />
+
+      <section aria-labelledby="daily-review-section-title" className="mb-4 flex flex-wrap items-start justify-between gap-3 border-t border-border/60 pt-6">
+        <div>
+          <h2 id="daily-review-section-title" className="text-lg font-semibold text-foreground">每日复盘</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {tradeDateLabel !== "—" ? tradeDateLabel : today} · 大盘 / 情绪 / 板块与自选
+          </p>
+        </div>
+        <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
             <button
               onClick={refreshDailyReview}
               disabled={drRefreshing || !drDone}
@@ -1012,9 +1023,8 @@ export function DailyReview() {
               label="问 AI"
               suggestions={["今天大盘怎么走", "哪些指数领涨领跌", "盘面有什么值得注意"]}
             />
-          </div>
-        }
-      />
+        </div>
+      </section>
 
       {saveMsg && (
         <div className="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary">

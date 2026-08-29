@@ -11,7 +11,7 @@ echarts.use([LineChart, BarChart, TreemapChart, GridComponent, TooltipComponent,
 
 interface Props {
   option: echarts.EChartsCoreOption;
-  height?: number;
+  height?: number | string;
   onClick?: (params: unknown) => void;
 }
 

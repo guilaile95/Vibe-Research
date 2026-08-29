@@ -10,6 +10,7 @@ import {
   formatPrice,
   type TreemapNode,
 } from "@/lib/marketCloud";
+import { cn } from "@/lib/utils";
 
 const SCOPE_OPTIONS: { value: MarketCloudScope; label: string }[] = [
   { value: "all", label: "全A" },
@@ -140,87 +141,79 @@ export function MarketCloud() {
   const status = data?.status;
   const warnings = data?.warnings ?? [];
 
+  const chartHeight = "clamp(560px, 68vh, 700px)";
+
   return (
-    <div data-market-cloud style={{ marginBottom: 24 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "#e4e4e7" }}>市场热力</h3>
-          {status === "partial" && (
-            <span style={{ fontSize: 11, color: "#fbbf24", background: "rgba(251,191,36,0.1)", padding: "2px 8px", borderRadius: 4 }}>
-              部分数据缺失
-            </span>
-          )}
-          {status === "stale" && (
-            <span style={{ fontSize: 11, color: "#fb923c", background: "rgba(251,146,60,0.1)", padding: "2px 8px", borderRadius: 4 }}>
-              数据过期
-            </span>
-          )}
-          {data?.fetched_at && (
-            <span style={{ fontSize: 11, color: "#71717a" }}>更新于 {data.fetched_at.slice(11, 16)}</span>
-          )}
-        </div>
-        <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ display: "flex", gap: 4 }}>
-            {SCOPE_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => setScope(opt.value)}
-                style={{
-                  padding: "4px 12px",
-                  fontSize: 12,
-                  borderRadius: 4,
-                  border: "1px solid #3f3f46",
-                  background: scope === opt.value ? "#3f3f46" : "transparent",
-                  color: scope === opt.value ? "#fafafa" : "#a1a1aa",
-                  cursor: "pointer",
-                }}
-              >
-                {opt.label}
-              </button>
-            ))}
+    <section data-market-cloud aria-labelledby="market-cloud-title" className="mb-10">
+      <header className="mb-3 flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 id="market-cloud-title" className="text-lg font-semibold text-foreground">A股市场热力</h2>
+            {status === "partial" && (
+              <span className="rounded-md bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">部分数据缺失</span>
+            )}
+            {status === "stale" && (
+              <span className="rounded-md bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">数据已过期</span>
+            )}
+            {data?.fetched_at && (
+              <span className="text-[11px] text-muted-foreground">更新于 {data.fetched_at.slice(11, 16)}</span>
+            )}
           </div>
-          <div style={{ display: "flex", gap: 4 }}>
-            {PERIOD_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                style={{
-                  padding: "4px 12px",
-                  fontSize: 12,
-                  borderRadius: 4,
-                  border: "1px solid #3f3f46",
-                  background: "#3f3f46",
-                  color: "#fafafa",
-                  cursor: "default",
-                }}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+          <p className="mt-1 text-xs text-muted-foreground">一眼查看全市场结构；面积代表流通市值，红涨绿跌。</p>
         </div>
-      </div>
+
+        <div role="toolbar" aria-label="市场热力范围" className="flex flex-wrap items-center gap-1 rounded-lg border border-border/70 bg-card/70 p-1 shadow-sm">
+          {SCOPE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              aria-pressed={scope === opt.value}
+              data-testid={`market-cloud-scope-${opt.value}`}
+              onClick={() => setScope(opt.value)}
+              className={cn(
+                "rounded-md px-2.5 py-1.5 text-xs transition-colors",
+                scope === opt.value
+                  ? "bg-foreground font-medium text-background"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+          <span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
+          {PERIOD_OPTIONS.map((opt) => (
+            <span key={opt.value} className="rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary">
+              {opt.label}
+            </span>
+          ))}
+        </div>
+      </header>
 
       {loading && (
-        <div style={{ height: 500, display: "flex", alignItems: "center", justifyContent: "center", color: "#71717a", fontSize: 13, background: "#18181b", borderRadius: 8 }}>
-          加载市场热力（全 A 股快照，首次约 30-60 秒）…
+        <div
+          data-testid="market-cloud-loading"
+          style={{ height: chartHeight }}
+          className="flex items-center justify-center rounded-xl border border-border/60 bg-muted/20 text-sm text-muted-foreground"
+        >
+          正在加载全 A 股市场快照…
         </div>
       )}
 
       {!loading && error && (
-        <div style={{ height: 500, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, background: "#18181b", borderRadius: 8 }}>
-          <div style={{ color: "#f87171", fontSize: 14 }}>数据暂不可用</div>
-          <div style={{ color: "#71717a", fontSize: 12 }}>{error}</div>
-          <button onClick={reload} style={{ padding: "6px 16px", fontSize: 12, borderRadius: 4, border: "1px solid #3f3f46", background: "transparent", color: "#a1a1aa", cursor: "pointer" }}>
+        <div style={{ height: chartHeight }} className="flex flex-col items-center justify-center gap-3 rounded-xl border border-destructive/30 bg-destructive/5">
+          <p className="text-sm font-medium text-destructive">市场快照暂不可用</p>
+          <p className="max-w-xl text-center text-xs text-muted-foreground">{error}</p>
+          <button type="button" onClick={reload} className="rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-muted">
             重试
           </button>
         </div>
       )}
 
       {!loading && !error && status === "unavailable" && (
-        <div style={{ height: 500, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, background: "#18181b", borderRadius: 8 }}>
-          <div style={{ color: "#f87171", fontSize: 14 }}>数据暂不可用</div>
-          {warnings.length > 0 && <div style={{ color: "#71717a", fontSize: 12 }}>{warnings[0]}</div>}
-          <button onClick={reload} style={{ padding: "6px 16px", fontSize: 12, borderRadius: 4, border: "1px solid #3f3f46", background: "transparent", color: "#a1a1aa", cursor: "pointer" }}>
+        <div style={{ height: chartHeight }} className="flex flex-col items-center justify-center gap-3 rounded-xl border border-destructive/30 bg-destructive/5">
+          <p className="text-sm font-medium text-destructive">市场快照暂不可用</p>
+          {warnings.length > 0 && <p className="max-w-xl text-center text-xs text-muted-foreground">{warnings[0]}</p>}
+          <button type="button" onClick={reload} className="rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-muted">
             重试
           </button>
         </div>
@@ -228,18 +221,18 @@ export function MarketCloud() {
 
       {!loading && !error && data?.data && (status === "normal" || status === "partial" || status === "stale") && (
         <>
-          <EChart option={option} height={520} onClick={handleClick} />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 8, fontSize: 11, color: "#71717a", flexWrap: "wrap", gap: 8 }}>
-            <span>矩形面积 = 流通市值 · 颜色 = 当日涨跌幅（红涨绿跌） · 点击行业聚焦 · 点击个股进入研究 · 滚轮缩放 / 拖拽平移</span>
+          <div data-market-cloud-chart className="overflow-hidden rounded-xl border border-zinc-700/80 bg-zinc-950 shadow-sm">
+            <EChart option={option} height={chartHeight} onClick={handleClick} />
+          </div>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+            <span>点击行业聚焦 · 通过顶部层级返回全市场 · 点击个股进入研究 · 滚轮缩放 / 拖拽平移</span>
             <span>{data.data.valid_count}/{data.data.stock_count} 只有效数据 · {data.data.industry_count} 个行业</span>
           </div>
           {warnings.length > 0 && (
-            <div style={{ marginTop: 6, fontSize: 11, color: "#fbbf24" }}>
-              {warnings.join("；")}
-            </div>
+            <p className="mt-1.5 text-[11px] text-warning">{warnings.join("；")}</p>
           )}
         </>
       )}
-    </div>
+    </section>
   );
 }

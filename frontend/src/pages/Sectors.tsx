@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import { Activity, ChevronRight, Flame, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { MarketCloud } from "@/components/market/MarketCloud";
 import sectorsData from "@/data/sectors.json";
 import { api, type BoardRankingData, type SectorMarketContextData, type TimedComponentEnvelope } from "@/lib/api";
 import { formatActivity, formatSectorPercent, mappedSectorRows } from "@/lib/sectorMarketView";
@@ -59,8 +58,6 @@ export function Sectors() {
         title="板块中心"
         subtitle={`${sectors.length} 个研究赛道 · 市场观察与产业研究在同一路径`}
       />
-
-      <MarketCloud />
 
       <GlassCard className="mb-5 p-4 sm:p-5" data-sector-strength-matrix>
         <div className="flex flex-wrap items-start justify-between gap-2">
