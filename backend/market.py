@@ -693,3 +693,147 @@ def get_board_ranking(board_type: str = "industry", top_n: int = 20) -> dict:
         warnings=base_warns,
         is_stale=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# 市场云图（全 A 股按行业分组 · 面积=流通市值 · 颜色=涨跌幅）
+# ---------------------------------------------------------------------------
+_MARKET_CLOUD_SCOPES = frozenset({"all", "cyb", "star", "sh", "sz"})
+_MARKET_CLOUD_PERIODS = frozenset({"today"})
+
+
+def _filter_by_scope(snapshot: list[dict], scope: str) -> list[dict]:
+    """按市场范围过滤全 A 快照。V1 基于代码前缀，不使用估算成分。"""
+    if scope == "all":
+        return snapshot
+    if scope == "cyb":
+        return [s for s in snapshot if str(s.get("code", "")).startswith("30")]
+    if scope == "star":
+        return [s for s in snapshot if str(s.get("code", "")).startswith("68")]
+    if scope == "sh":
+        return [s for s in snapshot if str(s.get("code", "")).startswith(("60", "68"))]
+    if scope == "sz":
+        return [s for s in snapshot if str(s.get("code", "")).startswith(("00", "30"))]
+    return snapshot
+
+
+def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
+    """市场云图状态信封：全 A 股按行业分组，面积=流通市值，颜色=涨跌幅。
+
+    V1 仅支持 period=today。scope 支持 all/cyb/star/sh/sz（基于代码前缀）。
+    沪深300/A50/A500/自选需要真实成分数据，V1 不开放。
+    缺流通市值或缺涨跌幅的股票不进入云图（不伪造 0），计入 partial。
+    """
+    if scope not in _MARKET_CLOUD_SCOPES:
+        raise ValueError(f"不支持的市场范围：{scope}")
+    if period not in _MARKET_CLOUD_PERIODS:
+        raise ValueError(f"不支持的周期：{period}（V1 仅支持 today）")
+
+    try:
+        snapshot = get_a_share_snapshot()
+    except Exception as e:  # noqa: BLE001
+        return _breadth_envelope(
+            "unavailable",
+            data=None,
+            warnings=[f"全市场快照不可用：{type(e).__name__}: {e}"],
+            is_stale=False,
+        )
+
+    if not isinstance(snapshot, list) or not snapshot:
+        return _breadth_envelope(
+            "unavailable",
+            data=None,
+            warnings=["全市场快照为空"],
+            is_stale=False,
+        )
+
+    filtered = _filter_by_scope(snapshot, scope)
+    stock_count = len(filtered)
+
+    # 有效股票：同时有流通市值和涨跌幅
+    valid: list[dict] = []
+    missing_cap = 0
+    missing_pct = 0
+    for s in filtered:
+        cap = s.get("float_market_cap")
+        pct = s.get("change_pct")
+        has_cap = isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap == cap and cap > 0
+        has_pct = isinstance(pct, (int, float)) and not isinstance(pct, bool) and pct == pct
+        if has_cap and has_pct:
+            valid.append(s)
+        else:
+            if not has_cap:
+                missing_cap += 1
+            if not has_pct:
+                missing_pct += 1
+
+    if not valid:
+        return _breadth_envelope(
+            "unavailable",
+            data=None,
+            warnings=["无有效股票数据（缺流通市值或涨跌幅）"],
+            is_stale=False,
+        )
+
+    # 按行业分组
+    industry_map: dict[str, list[dict]] = {}
+    no_industry: list[dict] = []
+    for s in valid:
+        ind = s.get("industry")
+        if not ind:
+            no_industry.append(s)
+            continue
+        industry_map.setdefault(ind, []).append(s)
+
+    industries = []
+    for ind_name, stocks in industry_map.items():
+        total_cap = sum(float(s["float_market_cap"]) for s in stocks)
+        up = sum(1 for s in stocks if float(s["change_pct"]) > 0)
+        down = sum(1 for s in stocks if float(s["change_pct"]) < 0)
+        avg_pct = round(sum(float(s["change_pct"]) for s in stocks) / len(stocks), 4)
+        # 行业内按流通市值降序
+        stocks_sorted = sorted(stocks, key=lambda x: float(x["float_market_cap"]), reverse=True)
+        industries.append({
+            "name": ind_name,
+            "stock_count": len(stocks),
+            "total_float_cap": total_cap,
+            "avg_change_pct": avg_pct,
+            "up_count": up,
+            "down_count": down,
+            "stocks": [
+                {
+                    "code": s["code"],
+                    "name": s["name"],
+                    "price": s.get("price"),
+                    "change_pct": float(s["change_pct"]),
+                    "amount": s.get("amount"),
+                    "float_market_cap": float(s["float_market_cap"]),
+                    "turnover_pct": s.get("turnover_pct"),
+                    "industry": ind_name,
+                }
+                for s in stocks_sorted
+            ],
+        })
+
+    # 行业按总流通市值降序
+    industries.sort(key=lambda x: x["total_float_cap"], reverse=True)
+
+    data = {
+        "scope": scope,
+        "period": period,
+        "stock_count": stock_count,
+        "valid_count": len(valid),
+        "industry_count": len(industries),
+        "no_industry_count": len(no_industry),
+        "industries": industries,
+    }
+
+    warnings = []
+    if missing_cap > 0 or missing_pct > 0:
+        warnings.append(f"有 {missing_cap} 只缺流通市值、{missing_pct} 只缺涨跌幅，未进入云图")
+    if no_industry:
+        warnings.append(f"有 {len(no_industry)} 只股票无行业归属，未进入云图")
+
+    if warnings:
+        return _breadth_envelope("partial", data=data, warnings=warnings, is_stale=False)
+    return _breadth_envelope("normal", data=data, warnings=[], is_stale=False)

@@ -4,6 +4,7 @@ import { Activity, ChevronRight, Flame, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { SectorHeatmap } from "@/components/sectors/SectorHeatmap";
+import { MarketCloud } from "@/components/market/MarketCloud";
 import sectorsData from "@/data/sectors.json";
 import { api, type BoardRankingData, type SectorMarketContextData, type TimedComponentEnvelope } from "@/lib/api";
 import { formatActivity, formatSectorPercent, mappedSectorRows } from "@/lib/sectorMarketView";
@@ -21,6 +22,7 @@ type SectorRow = (typeof sectorsData.sectors)[number] & {
 export function Sectors() {
   const sectors = sectorsData.sectors as SectorRow[];
   const hotCount = sectors.filter((s) => s.hot).length;
+  const [heatView, setHeatView] = useState<"cloud" | "sector">("cloud");
   const [marketContext, setMarketContext] = useState<SectorMarketContextData | null>(null);
   const [industryBoards, setIndustryBoards] = useState<TimedComponentEnvelope<BoardRankingData> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,7 +62,40 @@ export function Sectors() {
         subtitle={`${sectors.length} 个研究赛道 · 市场观察与产业研究在同一路径`}
       />
 
-      <SectorHeatmap />
+      <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
+        <button
+          onClick={() => setHeatView("cloud")}
+          style={{
+            padding: "6px 16px",
+            fontSize: 13,
+            fontWeight: 600,
+            borderRadius: 6,
+            border: "1px solid #3f3f46",
+            background: heatView === "cloud" ? "#3f3f46" : "transparent",
+            color: heatView === "cloud" ? "#fafafa" : "#a1a1aa",
+            cursor: "pointer",
+          }}
+        >
+          市场云图
+        </button>
+        <button
+          onClick={() => setHeatView("sector")}
+          style={{
+            padding: "6px 16px",
+            fontSize: 13,
+            fontWeight: 600,
+            borderRadius: 6,
+            border: "1px solid #3f3f46",
+            background: heatView === "sector" ? "#3f3f46" : "transparent",
+            color: heatView === "sector" ? "#fafafa" : "#a1a1aa",
+            cursor: "pointer",
+          }}
+        >
+          板块
+        </button>
+      </div>
+
+      {heatView === "cloud" ? <MarketCloud /> : <SectorHeatmap />}
 
       <GlassCard className="mb-5 p-4 sm:p-5" data-sector-strength-matrix>
         <div className="flex flex-wrap items-start justify-between gap-2">
