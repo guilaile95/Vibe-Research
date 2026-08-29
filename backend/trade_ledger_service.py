@@ -11,6 +11,7 @@ from typing import Any
 
 import ai_result_store
 import evidence_thesis_service
+import review_db_path
 import trade_ledger_store as store
 
 # ---------------------------------------------------------------------------
@@ -328,7 +329,7 @@ def _resolve_advice_ref(advice_ref: Any, code: str) -> tuple[str, str, str]:
     if not generated_at or not isinstance(generated_at, str) or not generated_at.strip():
         raise TradeValidationError("advice_ref.generated_at 必须是非空字符串")
 
-    review_db = _resolve_review_db_path()
+    review_db = review_db_path.resolve_review_db_path()
     record = ai_result_store.get_result(review_db, "portfolio_advice", trade_date)
     if record is None:
         raise AdviceNotFoundError()
@@ -411,15 +412,6 @@ def _validate_and_extract_advice_snapshot(holding: dict[str, Any]) -> dict[str, 
         "invalidation_conditions": invalidation_conditions,
         "confidence": confidence,
     }
-
-
-def _resolve_review_db_path() -> Path:
-    """Resolve the ai_generated_results DB path."""
-    env_val = os.environ.get("VIBE_RESEARCH_REVIEW_DB")
-    if env_val and str(env_val).strip():
-        return Path(str(env_val).strip())
-    data_dir = os.environ.get("VR_DATA_DIR") or str(Path.home() / ".vibe-research")
-    return Path(data_dir) / "daily_reviews.sqlite3"
 
 
 # ---------------------------------------------------------------------------
