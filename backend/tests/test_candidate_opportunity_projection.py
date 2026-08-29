@@ -259,8 +259,9 @@ def _draft() -> dict:
     }
 
 
-def _ports():
+def _ports(thesis: dict | None = None):
     state = {"frozen": [], "writes": 0}
+    thesis_source = thesis if thesis is not None else _thesis()
 
     def frozen_reader(**_kwargs):
         return deepcopy(state["frozen"])
@@ -283,7 +284,7 @@ def _ports():
             "strategy": "SWING",
             "status": "PRE-ENTRY",
         },
-        thesis_reader=lambda _campaign_id: _thesis(),
+        thesis_reader=lambda _campaign_id: deepcopy(thesis_source),
         frozen_reader=frozen_reader,
         evidence_reader=lambda _campaign: (),
         freeze_writer=freeze_writer,
@@ -303,8 +304,7 @@ def _ports():
     ), state
 
 
-def test_pre_entry_buy_requires_challenge_and_freezes_candidate_policy(monkeypatch):
-    ports, state = _ports()
+def _clear_hard_risk(monkeypatch):
     monkeypatch.setattr(
         runtime,
         "_hard_risk_for_snapshot",
@@ -319,6 +319,11 @@ def test_pre_entry_buy_requires_challenge_and_freezes_candidate_policy(monkeypat
             authority_refs=("hard-risk:test",),
         ),
     )
+
+
+def test_pre_entry_buy_requires_challenge_and_freezes_candidate_policy(monkeypatch):
+    ports, state = _ports()
+    _clear_hard_risk(monkeypatch)
     preview = runtime.preview_decision_proposal(
         CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
     )
@@ -347,3 +352,89 @@ def test_pre_entry_buy_requires_challenge_and_freezes_candidate_policy(monkeypat
     assert frozen["evidence_refs"] == ["e" * 32]
     assert frozen["asset_view"]["analysis_metadata"]["analysis_policy_version"] == candidate.ANALYSIS_POLICY_VERSION
     assert state["writes"] == 1
+
+
+def test_current_thesis_delta_evidence_conflict_changes_fingerprint_and_freeze_refs(monkeypatch):
+    thesis = _thesis()
+    thesis["effective_state"] = "STRENGTHENED"
+    thesis["deltas"] = [{
+        "delta_id": "d" * 32,
+        "delta_sequence": 1,
+        "delta_state": "STRENGTHENED",
+        "reason": "new immutable evidence",
+        "confirmed_at": "2026-08-15T12:00:00.000000Z",
+        "evidence_links": [],
+    }]
+    ports, state = _ports(thesis)
+    _clear_hard_risk(monkeypatch)
+
+    before = runtime.preview_decision_proposal(CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF)
+    assert before["proposal"]["next_best_action"] == "BUY NOW"
+
+    opposing = {
+        **_support_evidence(),
+        "evidence_id": "f" * 32,
+        "stance": "oppose",
+        "claim": "后续 Delta 的高置信度反对事实",
+    }
+    thesis["deltas"][0]["evidence_links"] = [_support_evidence(), opposing]
+    after = runtime.preview_decision_proposal(CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF)
+    candidate_fact = after["proposal"]["authority_facts"]["candidate_opportunity"]
+
+    assert after["proposal_fingerprint"] != before["proposal_fingerprint"]
+    assert candidate_fact["evidence"]["status"] == "CONFLICT"
+    assert candidate_fact["evidence"]["total_count"] == 2
+    assert "FORMAL_EVIDENCE_OPPOSING_HIGH_CONFLICT" in candidate_fact["reason_codes"]
+    assert candidate.BUY_ACTIONS <= set(after["proposal"]["action_envelope"]["blocked_actions"])
+
+    stale = {
+        **_draft(),
+        "as_of": AS_OF,
+        "expected_proposal_fingerprint": before["proposal_fingerprint"],
+        "user_confirmed": True,
+    }
+    with pytest.raises(runtime.ProposalStaleError):
+        runtime.commit_decision_proposal(CAMPAIGN_ID, stale, ports=ports)
+
+    committed = runtime.commit_decision_proposal(
+        CAMPAIGN_ID,
+        {
+            **stale,
+            "expected_proposal_fingerprint": after["proposal_fingerprint"],
+        },
+        ports=ports,
+    )["committed"]
+    assert committed["evidence_refs"] == ["e" * 32, "f" * 32]
+    assert any(ref.startswith("current_thesis_evidence:original:") for ref in committed["source_refs"])
+    assert any(ref.startswith("current_thesis_evidence:delta:") for ref in committed["source_refs"])
+    assert state["writes"] == 1
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_action"),
+    [("WEAKENED", "WAIT"), ("DISPROVEN", "AVOID"), ("INVALIDATED", "AVOID")],
+)
+def test_current_thesis_pressure_cannot_reopen_candidate_buy(monkeypatch, state, expected_action):
+    thesis = _thesis()
+    thesis["effective_state"] = state
+    thesis["deltas"] = [{
+        "delta_id": "d" * 32,
+        "delta_sequence": 1,
+        "delta_state": state,
+        "reason": "authoritative Current Thesis pressure",
+        "confirmed_at": "2026-08-15T12:00:00.000000Z",
+        "evidence_links": [],
+    }]
+    ports, _state = _ports(thesis)
+    _clear_hard_risk(monkeypatch)
+
+    proposal = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
+    )["proposal"]
+
+    assert proposal["next_best_action"] == expected_action
+    assert candidate.BUY_ACTIONS <= set(proposal["action_envelope"]["blocked_actions"])
+    if state == "WEAKENED":
+        assert "review the confirmed change before taking a new positive-risk action" in proposal["maintain_conditions"]
+    else:
+        assert "thesis invalidation remains acknowledged" in proposal["maintain_conditions"]

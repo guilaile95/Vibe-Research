@@ -374,6 +374,55 @@ def _current_thesis_authority(
     return canonical, authority, "EVALUATED", []
 
 
+def _current_thesis_evidence_chain(
+    current_thesis: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Return the immutable Original + applicable Delta evidence authority.
+
+    ``_current_thesis_authority`` has already rejected any Delta confirmed
+    after the literal ``as_of``.  Later snapshots win for the same formal
+    evidence identity while every immutable origin remains in provenance.
+    """
+
+    thesis_id = current_thesis["thesis_id"]
+    revision = current_thesis["original"]["revision"]
+    original = current_thesis["original"]["snapshot"]
+    if not isinstance(original, Mapping) or not isinstance(original.get("evidence_links"), list):
+        raise CurrentThesisUnavailableError("Current Thesis Original evidence is invalid")
+
+    evidence_by_id: dict[str, dict[str, Any]] = {}
+
+    def add(items: object, origin: str) -> None:
+        if not isinstance(items, list):
+            raise CurrentThesisUnavailableError("Current Thesis Delta evidence is invalid")
+        for item in items:
+            if not isinstance(item, Mapping):
+                raise CurrentThesisUnavailableError("Current Thesis evidence snapshot is invalid")
+            evidence_id = item.get("evidence_id")
+            if not isinstance(evidence_id, str) or not evidence_id:
+                raise CurrentThesisUnavailableError("Current Thesis evidence identity is invalid")
+            prior_refs = evidence_by_id.get(evidence_id, {}).get("provenance_refs", [])
+            snapshot = copy.deepcopy(dict(item))
+            snapshot["provenance_refs"] = list(dict.fromkeys([*prior_refs, f"{origin}:{evidence_id}"]))
+            evidence_by_id[evidence_id] = snapshot
+
+    add(
+        original["evidence_links"],
+        f"current_thesis_evidence:original:{thesis_id}:v{revision}",
+    )
+    for delta in current_thesis.get("deltas", []):
+        if not isinstance(delta, Mapping):
+            raise CurrentThesisUnavailableError("Current Thesis Delta is invalid")
+        delta_id = delta.get("delta_id")
+        if not isinstance(delta_id, str) or not delta_id:
+            raise CurrentThesisUnavailableError("Current Thesis Delta identity is invalid")
+        add(
+            delta.get("evidence_snapshots"),
+            f"current_thesis_evidence:delta:{delta_id}",
+        )
+    return list(evidence_by_id.values())
+
+
 def _hard_risk_for_snapshot(
     campaign: Mapping[str, Any],
     as_of: str,
@@ -855,11 +904,8 @@ def _build_proposal(
             isinstance(entry, Mapping) and entry.get("view_origin") == "MODEL_PROPOSAL"
             for entry in (view_provenance or {}).values()
         )
-        original_snapshot = authorities.current_thesis_projection["original"]["snapshot"]
-        evidence_links = (
-            original_snapshot.get("evidence_links")
-            if isinstance(original_snapshot, Mapping)
-            else None
+        evidence_links = _current_thesis_evidence_chain(
+            authorities.current_thesis_projection
         )
         candidate = candidate_projection.project_candidate_opportunity(
             security_code=campaign["security_code"],

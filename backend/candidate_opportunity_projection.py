@@ -221,7 +221,30 @@ def _evidence_summary(value: object) -> tuple[dict[str, Any], str, list[str], tu
             ["FORMAL_EVIDENCE_INVALID"],
             (),
         )
-    refs: list[str] = []
+    evidence_by_id: dict[str, dict[str, Any]] = {}
+    provenance_by_id: dict[str, list[str]] = {}
+    for item in value:
+        if not isinstance(item, Mapping):
+            return ({"status": "UNKNOWN", "total_count": 0}, "ERROR", ["FORMAL_EVIDENCE_INVALID"], ())
+        evidence_id = _text(item.get("evidence_id"))
+        stance = item.get("stance")
+        classification = item.get("classification")
+        confidence = item.get("confidence")
+        provenance = item.get("provenance_refs", [])
+        if (
+            evidence_id is None
+            or stance not in {"support", "oppose", "neutral"}
+            or classification not in {"fact", "inference", "unknown"}
+            or confidence not in {"high", "medium", "low"}
+            or not isinstance(provenance, (list, tuple))
+            or any(_text(ref) is None for ref in provenance)
+        ):
+            return ({"status": "UNKNOWN", "total_count": 0}, "ERROR", ["FORMAL_EVIDENCE_INVALID"], ())
+        evidence_by_id[evidence_id] = dict(item)
+        refs = provenance_by_id.setdefault(evidence_id, [])
+        refs.extend(ref for ref in provenance if ref not in refs)
+
+    refs = list(evidence_by_id)
     supporting_fact = 0
     opposing_high = 0
     counts = {
@@ -232,21 +255,10 @@ def _evidence_summary(value: object) -> tuple[dict[str, Any], str, list[str], tu
         "inference": 0,
         "unknown": 0,
     }
-    for item in value:
-        if not isinstance(item, Mapping):
-            return ({"status": "UNKNOWN", "total_count": 0}, "ERROR", ["FORMAL_EVIDENCE_INVALID"], ())
-        evidence_id = _text(item.get("evidence_id"))
+    for evidence_id, item in evidence_by_id.items():
         stance = item.get("stance")
         classification = item.get("classification")
         confidence = item.get("confidence")
-        if (
-            evidence_id is None
-            or stance not in {"support", "oppose", "neutral"}
-            or classification not in {"fact", "inference", "unknown"}
-            or confidence not in {"high", "medium", "low"}
-        ):
-            return ({"status": "UNKNOWN", "total_count": 0}, "ERROR", ["FORMAL_EVIDENCE_INVALID"], ())
-        refs.append(evidence_id)
         counts[stance] += 1
         counts[classification] += 1
         if stance == "support" and classification == "fact":
@@ -265,7 +277,7 @@ def _evidence_summary(value: object) -> tuple[dict[str, Any], str, list[str], tu
     return (
         {
             "status": status,
-            "total_count": len(value),
+            "total_count": len(evidence_by_id),
             "supporting_count": counts["support"],
             "opposing_count": counts["oppose"],
             "neutral_count": counts["neutral"],
@@ -276,10 +288,17 @@ def _evidence_summary(value: object) -> tuple[dict[str, Any], str, list[str], tu
                 "inference": counts["inference"],
                 "unknown": counts["unknown"],
             },
+            "provenance": [
+                {
+                    "evidence_id": evidence_id,
+                    "authority_refs": provenance_by_id[evidence_id],
+                }
+                for evidence_id in evidence_by_id
+            ],
         },
         "EVALUATED",
         reasons,
-        tuple(dict.fromkeys(refs)),
+        tuple(refs),
     )
 
 
@@ -340,6 +359,11 @@ def project_candidate_opportunity(
     )
     confidence, confidence_ceiling, confidence_reasons = _confidence(asset_view)
     evidence, evidence_eval, evidence_reasons, evidence_refs = _evidence_summary(evidence_links)
+    evidence_provenance_refs = tuple(
+        ref
+        for item in evidence.get("provenance", [])
+        for ref in item.get("authority_refs", [])
+    )
 
     critical_state = critical_data.get("critical_data_state")
     critical_eval = critical_data.get("critical_data_evaluation")
@@ -537,6 +561,7 @@ def project_candidate_opportunity(
                 *hard_risk_refs,
                 *critical_refs,
                 *(f"formal_evidence:{item}" for item in evidence_refs),
+                *evidence_provenance_refs,
             )
         )
     )
