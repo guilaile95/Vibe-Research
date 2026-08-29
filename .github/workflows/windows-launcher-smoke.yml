@@ -1,0 +1,84 @@
+name: Windows launcher smoke
+
+on:
+  push:
+    branches:
+      - feature/research-system-v01
+    paths:
+      - "Start-Vibe.cmd"
+      - "start-vibe.ps1"
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/windows-launcher-smoke.yml"
+  pull_request:
+    paths:
+      - "Start-Vibe.cmd"
+      - "start-vibe.ps1"
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/windows-launcher-smoke.yml"
+
+concurrency:
+  group: windows-launcher-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  launcher:
+    name: Double-click entry starts and stops both services
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12.10"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev-windows-py312.lock.txt
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Run the real double-click entry in smoke mode
+        shell: pwsh
+        env:
+          VR_DATA_DIR: ${{ runner.temp }}/vr-launcher-data
+          VR_REPORTS_DIR: ${{ runner.temp }}/vr-launcher-reports
+          VIBE_RESEARCH_REVIEW_DB: ${{ runner.temp }}/vr-launcher-review.db
+          VIBE_RESEARCH_EVIDENCE_THESIS_DB: ${{ runner.temp }}/vr-launcher-evidence.db
+          VIBE_NATIVE_INTEL_DB: ${{ runner.temp }}/vr-launcher-native-intel.db
+          VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH: "1"
+          VIBE_NATIVE_INTEL_DISABLE_SCHEDULER: "1"
+        run: |
+          & .\Start-Vibe.cmd -SmokeTest -NoBrowser
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Prove launcher cleaned up its ports
+        shell: pwsh
+        run: |
+          foreach ($port in 8900, 5899) {
+            $client = [System.Net.Sockets.TcpClient]::new()
+            try {
+              $task = $client.ConnectAsync("127.0.0.1", $port)
+              if ($task.Wait(500) -and $client.Connected) {
+                throw "launcher left port $port open"
+              }
+            }
+            catch [System.Net.Sockets.SocketException] {
+              # Expected: the launcher-owned service was stopped.
+            }
+            finally {
+              $client.Dispose()
+            }
+          }
