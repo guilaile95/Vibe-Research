@@ -771,13 +771,20 @@ def _fetch_snapshot_page(pn: int, *, page_size: int, host: str, headers: dict) -
         "fs": _A_SHARE_FS,
         "fields": _A_SHARE_FIELDS,
     }
-    r = _em_get_page_with_retries(
-        f"https://{host}/api/qt/clist/get",
-        params=params,
-        headers=headers,
-        timeout=15,
-        min_interval=0.1,
-    )
+    try:
+        r = _em_get_page_with_retries(
+            f"https://{host}/api/qt/clist/get",
+            params=params,
+            headers=headers,
+            timeout=15,
+            min_interval=0.1,
+        )
+    except RuntimeError:
+        raise
+    except Exception as e:  # noqa: BLE001 — 与串行路径一致：网络失败包装为 request failed
+        raise RuntimeError(
+            f"a_share_snapshot page {pn}: request failed: {e}"
+        ) from e
     try:
         payload = r.json()
     except Exception as e:  # noqa: BLE001
@@ -1132,10 +1139,11 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
                 for future in as_completed(futures):
                     p = futures[future]
                     results[p] = future.result()
-            # 按页码顺序处理剩余页
+            # 按页码顺序处理剩余页（与串行路径等价的完整性检查）
             for p in sorted(results.keys()):
                 page_rows = results[p]
                 if not page_rows:
+                    # 空页：不立即失败，最终完整性校验捕获 fetched_raw < total
                     continue
                 page_codes = [
                     str(item.get("f12") or "").strip()
@@ -1149,6 +1157,7 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
                     )
                 prev_page_fingerprint = fingerprint
                 fetched_raw += len(page_rows)
+                page_new_unique = 0
                 for item in page_rows:
                     mapped = _map_a_share_row(item)
                     if mapped is None:
@@ -1158,6 +1167,19 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
                         continue
                     seen_codes.add(code)
                     out.append(mapped)
+                    page_new_unique += 1
+                # 与串行路径等价：有数据但没有任何新 code -> no progress -> fail closed
+                if page_new_unique == 0:
+                    raise RuntimeError(
+                        f"a_share_snapshot page {p}: no new unique codes "
+                        f"(fetched_raw={fetched_raw}, unique={len(out)}, total={total})"
+                    )
+            # 并发结束后完整性校验：必须证明 fetched_raw >= total 才允许成功
+            if total > 0 and fetched_raw < total:
+                raise RuntimeError(
+                    f"a_share_snapshot concurrent: incomplete data "
+                    f"(fetched_raw={fetched_raw}, total={total}, unique={len(out)})"
+                )
             break
 
         pn += 1

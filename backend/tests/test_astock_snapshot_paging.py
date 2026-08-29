@@ -520,3 +520,80 @@ def test_is_transient_network_error_helpers():
     assert astock._is_transient_network_error(TimeoutError("t")) is True
     assert astock._is_transient_network_error(ValueError("bad")) is False
     assert astock._is_transient_network_error(RuntimeError("parse")) is False
+
+
+# ---------------------------------------------------------------------------
+# 并发分页完整性回归（强制进入真实并发路径：第一页 >= 50 条）
+# ---------------------------------------------------------------------------
+
+def test_concurrent_multi_page_complete_success(monkeypatch):
+    """并发多页正常获取 → 完整成功，fetched_raw >= total。"""
+    def handler(url, params):
+        pn = int(params["pn"])
+        if pn == 1:
+            return {"data": {"total": 250, "diff": _codes(100, 0)}}
+        if pn == 2:
+            return {"data": {"total": 250, "diff": _codes(100, 100)}}
+        if pn == 3:
+            return {"data": {"total": 250, "diff": _codes(50, 200)}}
+        raise AssertionError(f"unexpected page {pn}")
+
+    calls = _install(monkeypatch, handler)
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
+    out = astock.a_share_snapshot(page_size=100)
+    assert len(out) == 250
+    # 第一页串行 + 后续并发，总共 3 次请求
+    assert len(calls) == 3
+
+
+def test_concurrent_middle_empty_page_raises_incomplete(monkeypatch):
+    """中间页为空且 fetched_raw < total → 不允许返回 partial success。"""
+    def handler(url, params):
+        pn = int(params["pn"])
+        if pn == 1:
+            return {"data": {"total": 250, "diff": _codes(100, 0)}}
+        if pn == 2:
+            return {"data": {"total": 250, "diff": []}}  # 中间空页
+        if pn == 3:
+            return {"data": {"total": 250, "diff": _codes(50, 200)}}
+        raise AssertionError(f"unexpected page {pn}")
+
+    _install(monkeypatch, handler)
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
+    with pytest.raises(RuntimeError, match="incomplete data"):
+        astock.a_share_snapshot(page_size=100)
+
+
+def test_concurrent_repeated_page_raises_no_partial(monkeypatch):
+    """并发页重复（fingerprint 相同）→ 不允许返回 partial success。"""
+    page1_rows = _codes(100, 0)
+
+    def handler(url, params):
+        pn = int(params["pn"])
+        if pn == 1:
+            return {"data": {"total": 200, "diff": page1_rows}}
+        if pn == 2:
+            return {"data": {"total": 200, "diff": list(page1_rows)}}  # 完全重复
+        raise AssertionError(f"unexpected page {pn}")
+
+    _install(monkeypatch, handler)
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
+    with pytest.raises(RuntimeError, match="repeated page content"):
+        astock.a_share_snapshot(page_size=100)
+
+
+def test_concurrent_future_failure_raises_no_partial(monkeypatch):
+    """某个 concurrent future 请求失败 → 必须抛错，不返回已拿到的部分数据。"""
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
+        pn = int((params or {}).get("pn", "0"))
+        if pn == 1:
+            return _FakeResp({"data": {"total": 200, "diff": _codes(100, 0)}})
+        # 所有后续页永远失败（_em_get_page_with_retries 重试 3 次后抛 RuntimeError）
+        raise ConnectionError("always down")
+
+    monkeypatch.setattr(astock, "em_get", fake_em_get)
+    monkeypatch.setattr(astock, "_EM_MIN_INTERVAL", 0)
+    monkeypatch.setattr(astock, "_em_last_call", [0.0])
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
+    with pytest.raises(RuntimeError, match="request failed"):
+        astock.a_share_snapshot(page_size=100)
