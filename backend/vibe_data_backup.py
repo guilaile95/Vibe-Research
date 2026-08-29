@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 import local_data_snapshot as snapshot
+import research_data_plane_path
 import review_db_path
 
 
@@ -59,7 +60,13 @@ _POSSIBLE_VIBE_HOSTS = frozenset(
     }
 )
 _REQUIRED_ASSET_NAMES = frozenset(
-    {"data_root", "shared_review_db", "reports", "fact_lake"}
+    {
+        "data_root",
+        "shared_review_db",
+        "reports",
+        "fact_lake",
+        "research_data_plane",
+    }
 )
 
 QuiescentProbe = Callable[[], object]
@@ -194,6 +201,10 @@ def discover_bundle_sources() -> tuple[
     reports = _configured_path("VR_REPORTS_DIR", data_root / "myreports")
     reports_explicit = bool(os.environ.get("VR_REPORTS_DIR", "").strip())
     fact_lake = _configured_path("VR_FACT_LAKE_ROOT")
+    research_data = research_data_plane_path.resolve_research_data_root().absolute()
+    research_data_explicit = bool(
+        os.environ.get(research_data_plane_path.RESEARCH_DATA_DIR_ENV, "").strip()
+    )
 
     groups: list[tuple[str, Path]] = []
     assets: list[dict[str, str]] = []
@@ -261,6 +272,43 @@ def discover_bundle_sources() -> tuple[
         assets.append(_asset("fact_lake", "directory", "fact-lake", "ABSENT_OPTIONAL"))
     if fact_lake is not None:
         protected_paths.append((fact_lake, "directory"))
+
+    if _plain_path_exists(research_data, "Research Data Plane", "directory"):
+        same_root_prefix = next(
+            (
+                prefix
+                for prefix, root in [("data", data_root), *groups]
+                if root.resolve() == research_data.resolve()
+            ),
+            None,
+        )
+        research_prefix = same_root_prefix or "research-data"
+        if same_root_prefix is None:
+            groups.append((research_prefix, research_data))
+        research_status = (
+            "EXTERNAL_OVERRIDE_INCLUDED"
+            if research_data_explicit
+            and _relative_to(research_data, data_root) is None
+            else "PRESENT"
+        )
+        assets.append(
+            _asset(
+                "research_data_plane",
+                "directory",
+                research_prefix,
+                research_status,
+            )
+        )
+    else:
+        assets.append(
+            _asset(
+                "research_data_plane",
+                "directory",
+                "research-data",
+                "ABSENT_OPTIONAL",
+            )
+        )
+    protected_paths.append((research_data, "directory"))
 
     external_overrides: list[tuple[str, Path]] = []
     configured_overrides: list[tuple[str, Path, bool]] = []
@@ -526,6 +574,10 @@ def _safe_bundle_prefix(prefix: object) -> bool:
     return snapshot._member_name_violation(f"{prefix}/_") is None
 
 
+def _has_excluded_component(path: str) -> bool:
+    return any(part.casefold() in _EXCLUDED_NAMES for part in path.split("/"))
+
+
 def _validate_bundle(manifest: dict) -> dict:
     bundle = manifest.get("vibe_bundle")
     if not isinstance(bundle, dict):
@@ -561,6 +613,8 @@ def _validate_bundle(manifest: dict) -> dict:
         prefix = directory["archive_prefix"]
         if not _safe_bundle_prefix(prefix):
             raise BundleError(f"vibe_bundle directories[{index}] prefix 不可信")
+        if _has_excluded_component(prefix):
+            raise BundleError(f"vibe_bundle directories[{index}] 命中排除项")
         if directory["status"] != "PRESENT":
             raise BundleError(f"vibe_bundle directories[{index}] status 不合法")
         if prefix in directory_prefixes:
@@ -580,6 +634,8 @@ def _validate_bundle(manifest: dict) -> dict:
         for entry in manifest.get("files", [])
         if isinstance(entry, dict) and isinstance(entry.get("path"), str)
     }
+    if any(_has_excluded_component(path) for path in file_paths):
+        raise BundleError("vibe_bundle file path 命中排除项")
     portable_files = {
         snapshot._windows_member_key(path): path for path in file_paths
     }
@@ -598,6 +654,9 @@ def _validate_bundle(manifest: dict) -> dict:
                     f"文件 {conflicting_file!r} 是目录 {prefix!r} 的祖先"
                 )
     names: set[str] = set()
+    present_files: set[str] = set()
+    present_directories: set[str] = set()
+    absent_assets: list[tuple[str, str, int]] = []
     for index, asset in enumerate(assets):
         if not isinstance(asset, dict):
             raise BundleError(f"vibe_bundle assets[{index}] 不是 object")
@@ -617,17 +676,50 @@ def _validate_bundle(manifest: dict) -> dict:
         if not _safe_bundle_prefix(asset["archive_prefix"]):
             raise BundleError(f"vibe_bundle assets[{index}] archive prefix 不可信")
         prefix = asset["archive_prefix"]
+        if _has_excluded_component(prefix):
+            raise BundleError(f"vibe_bundle assets[{index}] 命中排除项")
         present = asset["status"] in {"PRESENT", "EXTERNAL_OVERRIDE_INCLUDED"}
         if asset["kind"] == "file" and present and prefix not in file_paths:
             raise BundleError(f"vibe_bundle assets[{index}] file 未登记")
         if asset["kind"] == "directory" and present and prefix not in directory_prefixes:
             raise BundleError(f"vibe_bundle assets[{index}] directory 未登记")
-        if asset["status"] == "ABSENT_OPTIONAL":
-            registered = file_paths | directory_prefixes
-            if any(path == prefix or path.startswith(prefix + "/") for path in registered):
-                raise BundleError(f"vibe_bundle assets[{index}] absence 与内容冲突")
+        if present and asset["kind"] == "file":
+            present_files.add(prefix)
+        elif present:
+            present_directories.add(prefix)
+        else:
+            absent_assets.append((asset["kind"], prefix, index))
     if not _REQUIRED_ASSET_NAMES.issubset(names):
         raise BundleError("vibe_bundle 缺少核心资产声明")
+
+    registered = file_paths | directory_prefixes
+    for kind, prefix, index in absent_assets:
+        blocked = {prefix}
+        if kind == "file":
+            blocked.update(prefix + suffix for suffix in _SQLITE_SIDECAR_SUFFIXES)
+        if any(path in blocked or path.startswith(prefix + "/") for path in registered):
+            raise BundleError(f"vibe_bundle assets[{index}] absence 与内容冲突")
+
+    for path in file_paths:
+        if path in present_files:
+            continue
+        if any(
+            path == prefix + suffix
+            for prefix in present_files
+            if Path(prefix).suffix.lower() in _DB_SUFFIXES
+            for suffix in _SQLITE_SIDECAR_SUFFIXES
+        ):
+            continue
+        if any(path.startswith(prefix + "/") for prefix in present_directories):
+            continue
+        raise BundleError(f"vibe_bundle file 未被资产声明覆盖: {path!r}")
+
+    for prefix in directory_prefixes:
+        if not any(
+            prefix == root or prefix.startswith(root + "/")
+            for root in present_directories
+        ):
+            raise BundleError(f"vibe_bundle directory 未被资产声明覆盖: {prefix!r}")
     return bundle
 
 

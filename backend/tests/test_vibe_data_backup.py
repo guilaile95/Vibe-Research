@@ -19,7 +19,13 @@ import vibe_data_backup as backup
 def _clear_bundle_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in list(os.environ):
         if (
-            name in {"VR_DATA_DIR", "VR_REPORTS_DIR", "VR_FACT_LAKE_ROOT"}
+            name
+            in {
+                "VR_DATA_DIR",
+                "VR_REPORTS_DIR",
+                "VR_FACT_LAKE_ROOT",
+                "VIBE_RESEARCH_RESEARCH_DATA_DIR",
+            }
             or (name.startswith("VIBE_RESEARCH_") and name.endswith("_DB"))
             or name == "VIBE_NATIVE_INTEL_DB"
         ):
@@ -73,20 +79,43 @@ def _quick_check(path: Path) -> str:
         connection.close()
 
 
-def _forge_bundle_manifest(source: Path, target: Path, mutate) -> None:
-    with zipfile.ZipFile(source) as original, zipfile.ZipFile(
-        target, "w", zipfile.ZIP_DEFLATED
-    ) as output:
-        for info in original.infolist():
-            raw = original.read(info.filename)
-            if info.filename == local_snapshot.MANIFEST_MEMBER_NAME:
-                manifest = json.loads(raw.decode("utf-8"))
-                mutate(manifest["vibe_bundle"])
-                raw = (
-                    json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2)
-                    + "\n"
-                ).encode("utf-8")
-            output.writestr(info.filename, raw)
+def _forge_bundle_manifest(
+    source: Path,
+    target: Path,
+    mutate,
+    *,
+    extra_members: dict[str, bytes] | None = None,
+) -> None:
+    extra_members = extra_members or {}
+    with zipfile.ZipFile(source) as original:
+        members = {
+            info.filename: original.read(info.filename)
+            for info in original.infolist()
+            if info.filename != local_snapshot.MANIFEST_MEMBER_NAME
+        }
+        manifest = json.loads(
+            original.read(local_snapshot.MANIFEST_MEMBER_NAME).decode("utf-8")
+        )
+    assert not (members.keys() & extra_members.keys())
+    members.update(extra_members)
+    mutate(manifest["vibe_bundle"])
+    manifest["files"] = [
+        {
+            "path": name,
+            "size": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+        for name, raw in sorted(members.items())
+    ]
+    manifest["file_count"] = len(manifest["files"])
+    manifest["total_bytes"] = sum(entry["size"] for entry in manifest["files"])
+    manifest_raw = (
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    ).encode("utf-8")
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as output:
+        for name, raw in sorted(members.items()):
+            output.writestr(name, raw)
+        output.writestr(local_snapshot.MANIFEST_MEMBER_NAME, manifest_raw)
 
 
 def _synthetic_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
@@ -96,12 +125,15 @@ def _synthetic_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[s
     reports = tmp_path / "reports"
     fact = tmp_path / "fact-lake"
     external = tmp_path / "external" / "custom.sqlite3"
+    research = data / "research_data_plane"
 
     data.mkdir()
     (data / "portfolio.json").write_text(
         json.dumps({"holdings": [], "closed": []}), encoding="utf-8"
     )
     _sqlite(data / "native_intel.sqlite3")
+    research.mkdir()
+    (research / "manifest.json").write_text('{"schema_version": 1}', encoding="utf-8")
     _sqlite(review)
     reports.mkdir()
     (reports / "report.md").write_text("synthetic report", encoding="utf-8")
@@ -130,6 +162,7 @@ def _synthetic_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[s
         "reports": reports,
         "fact": fact,
         "external": external,
+        "research": research,
     }
 
 
@@ -153,6 +186,7 @@ def test_complete_bundle_snapshot_verify_restore_drill(
         "shared_review_db": "EXTERNAL_OVERRIDE_INCLUDED",
         "reports": "EXTERNAL_OVERRIDE_INCLUDED",
         "fact_lake": "EXTERNAL_OVERRIDE_INCLUDED",
+        "research_data_plane": "PRESENT",
         "VIBE_NATIVE_INTEL_DB": "PRESENT",
         "VIBE_RESEARCH_CUSTOM_DB": "EXTERNAL_OVERRIDE_INCLUDED",
     }
@@ -166,6 +200,10 @@ def test_complete_bundle_snapshot_verify_restore_drill(
     assert json.loads((restored / "fact-lake" / "raw" / "item.json").read_text()) == {
         "ok": True
     }
+    assert json.loads((restored / "research-data" / "manifest.json").read_text()) == {
+        "schema_version": 1
+    }
+    assert not (restored / "data" / "research_data_plane").exists()
 
     restored_sqlite = [
         restored / "data" / "native_intel.sqlite3",
@@ -215,13 +253,85 @@ def test_optional_absence_is_recorded_without_creating_paths(
     assert statuses["shared_review_db"] == "ABSENT_OPTIONAL"
     assert statuses["reports"] == "ABSENT_OPTIONAL"
     assert statuses["fact_lake"] == "ABSENT_OPTIONAL"
+    assert statuses["research_data_plane"] == "ABSENT_OPTIONAL"
 
     target = tmp_path / "target"
     backup.restore_bundle(archive, target)
     assert (target / "data").is_dir()
     assert not (target / "reports").exists()
     assert not (target / "fact-lake").exists()
+    assert not (target / "research-data").exists()
     assert not (target / "shared-review").exists()
+
+
+def test_research_data_plane_default_inside_data_root_uses_logical_partition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = _minimal_data_root(tmp_path, monkeypatch)
+    research = data / "research_data_plane"
+    research.mkdir()
+    (research / "manifest.json").write_text("{}", encoding="utf-8")
+
+    archive = tmp_path / "research-default.zip"
+    backup.create_bundle(archive, quiescent_probe=lambda: backup.QUIESCENT)
+    manifest = local_snapshot.read_verified_manifest(archive)
+    asset = next(
+        item
+        for item in manifest["vibe_bundle"]["assets"]
+        if item["name"] == "research_data_plane"
+    )
+    assert asset == {
+        "name": "research_data_plane",
+        "kind": "directory",
+        "archive_prefix": "research-data",
+        "status": "PRESENT",
+    }
+    file_paths = {entry["path"] for entry in manifest["files"]}
+    assert "research-data/manifest.json" in file_paths
+    assert "data/research_data_plane/manifest.json" not in file_paths
+
+
+def test_research_data_plane_explicit_external_root_is_included_without_source_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _minimal_data_root(tmp_path, monkeypatch)
+    research = tmp_path / "external-research"
+    research.mkdir()
+    (research / "dataset.json").write_text('{"rows": 1}', encoding="utf-8")
+    monkeypatch.setenv(
+        backup.research_data_plane_path.RESEARCH_DATA_DIR_ENV,
+        str(research),
+    )
+
+    archive = tmp_path / "research-external.zip"
+    backup.create_bundle(archive, quiescent_probe=lambda: backup.QUIESCENT)
+    manifest = local_snapshot.read_verified_manifest(archive)
+    asset = next(
+        item
+        for item in manifest["vibe_bundle"]["assets"]
+        if item["name"] == "research_data_plane"
+    )
+    assert asset["archive_prefix"] == "research-data"
+    assert asset["status"] == "EXTERNAL_OVERRIDE_INCLUDED"
+    assert {entry["path"] for entry in manifest["files"]} == {
+        "research-data/dataset.json"
+    }
+    serialized_manifest = json.dumps(manifest).replace("\\\\", "\\")
+    assert str(tmp_path) not in serialized_manifest
+
+
+def test_empty_research_data_plane_directory_is_restored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = _minimal_data_root(tmp_path, monkeypatch)
+    (data / "research_data_plane").mkdir()
+    archive = tmp_path / "research-empty.zip"
+    backup.create_bundle(archive, quiescent_probe=lambda: backup.QUIESCENT)
+
+    target = tmp_path / "restored-empty"
+    backup.restore_bundle(archive, target)
+    assert (target / "research-data").is_dir()
+    assert not any((target / "research-data").iterdir())
 
 
 @pytest.mark.parametrize("missing_kind", ["review", "override"])
@@ -583,6 +693,72 @@ def test_restore_rejects_windows_colliding_bundle_directories_before_write(
         )
 
     _forge_bundle_manifest(source, forged, add_directories)
+    assert backup.verify_bundle(forged)["status"] == "FAILED"
+    target = tmp_path / "target"
+    with pytest.raises(local_snapshot.RestoreRefused):
+        backup.restore_bundle(forged, target)
+    assert not target.exists()
+
+
+def test_bundle_rejects_undeclared_file_before_restore_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _minimal_data_root(tmp_path, monkeypatch)
+    source = tmp_path / "source.zip"
+    backup.create_bundle(source, quiescent_probe=lambda: backup.QUIESCENT)
+    forged = tmp_path / "undeclared.zip"
+    _forge_bundle_manifest(
+        source,
+        forged,
+        lambda _bundle: None,
+        extra_members={"surprise/file.txt": b"not declared"},
+    )
+
+    assert backup.verify_bundle(forged)["status"] == "FAILED"
+    target = tmp_path / "target"
+    with pytest.raises(local_snapshot.RestoreRefused):
+        backup.restore_bundle(forged, target)
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("member", ["data/.git/config", "data/node_modules/x"])
+def test_bundle_rejects_excluded_path_before_restore_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, member: str
+) -> None:
+    _minimal_data_root(tmp_path, monkeypatch)
+    source = tmp_path / "source.zip"
+    backup.create_bundle(source, quiescent_probe=lambda: backup.QUIESCENT)
+    forged = tmp_path / "excluded.zip"
+    _forge_bundle_manifest(
+        source,
+        forged,
+        lambda _bundle: None,
+        extra_members={member: b"excluded"},
+    )
+
+    assert backup.verify_bundle(forged)["status"] == "FAILED"
+    target = tmp_path / "target"
+    with pytest.raises(local_snapshot.RestoreRefused):
+        backup.restore_bundle(forged, target)
+    assert not target.exists()
+
+
+def test_bundle_rejects_sidecar_for_absent_file_asset_before_restore_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _minimal_data_root(tmp_path, monkeypatch)
+    source = tmp_path / "source.zip"
+    backup.create_bundle(source, quiescent_probe=lambda: backup.QUIESCENT)
+    forged = tmp_path / "absent-sidecar.zip"
+    _forge_bundle_manifest(
+        source,
+        forged,
+        lambda _bundle: None,
+        extra_members={
+            "shared-review/daily_reviews.sqlite3-wal": b"orphan sidecar"
+        },
+    )
+
     assert backup.verify_bundle(forged)["status"] == "FAILED"
     target = tmp_path / "target"
     with pytest.raises(local_snapshot.RestoreRefused):

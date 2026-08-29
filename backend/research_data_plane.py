@@ -19,6 +19,8 @@ from typing import Any, Iterable
 
 import duckdb
 
+from research_data_plane_path import resolve_research_data_root as resolve_root
+
 SCHEMA_VERSION = "research-data-plane.v0.1"
 FULL_MARKET_SCHEMA_VERSION = "research-data-plane.full-market.v0.1"
 DATASET_ID = "ashare_daily_unadjusted"
@@ -91,18 +93,6 @@ class ResearchDataPlaneUnavailableError(ResearchDataPlaneError):
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def resolve_root(root: str | Path | None = None) -> Path:
-    if root is not None:
-        return Path(root)
-    configured = os.environ.get("VIBE_RESEARCH_RESEARCH_DATA_DIR", "").strip()
-    if configured:
-        return Path(configured)
-    data_dir = os.environ.get("VR_DATA_DIR", "").strip()
-    if data_dir:
-        return Path(data_dir) / "research_data_plane"
-    return Path.home() / ".vibe-research" / "research_data_plane"
 
 
 def _manifest_path(root: Path) -> Path:

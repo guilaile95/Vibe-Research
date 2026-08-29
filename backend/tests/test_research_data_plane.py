@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import research_data_plane as rdp
+import research_data_plane_path as rdp_path
 
 
 CSV = """code,trade_date,open,high,low,close,volume
@@ -14,6 +15,31 @@ CSV = """code,trade_date,open,high,low,close,volume
 000001,2026-08-20,5,6,4,5.5,2000
 600519,2026-08-21,11,13,10,12,1100
 """
+
+
+def test_shared_root_resolver_preserves_priority_and_has_no_side_effects(
+    monkeypatch, tmp_path
+):
+    explicit = tmp_path / "explicit"
+    configured = tmp_path / "configured"
+    data_root = tmp_path / "data"
+    monkeypatch.setenv(rdp_path.RESEARCH_DATA_DIR_ENV, str(configured))
+    monkeypatch.setenv("VR_DATA_DIR", str(data_root))
+
+    assert rdp.resolve_root is rdp_path.resolve_research_data_root
+    assert rdp.resolve_root(explicit) == explicit
+    assert rdp.resolve_root() == configured
+    assert not explicit.exists()
+    assert not configured.exists()
+
+    monkeypatch.setenv(rdp_path.RESEARCH_DATA_DIR_ENV, "  ")
+    assert rdp.resolve_root() == data_root / "research_data_plane"
+    assert not data_root.exists()
+
+    monkeypatch.delenv("VR_DATA_DIR")
+    monkeypatch.setattr(rdp_path.Path, "home", lambda: tmp_path)
+    assert rdp.resolve_root() == tmp_path / ".vibe-research" / "research_data_plane"
+    assert list(tmp_path.iterdir()) == []
 
 
 def _source(tmp_path: Path, content: str = CSV) -> Path:
