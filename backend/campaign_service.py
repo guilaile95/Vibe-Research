@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -31,6 +32,7 @@ from campaign_store import CampaignTransitionConflictError as StoreCampaignTrans
 import evidence_thesis_service  # READ ONLY：只调用 canonical read API，绝不写 thesis
 
 DRAFT_STATUS = "DRAFT"
+_TRADE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 class CampaignServiceError(RuntimeError):
@@ -59,6 +61,14 @@ class CampaignConflictError(CampaignServiceError):
 
 class CampaignTransitionConflictError(CampaignServiceError):
     """expected_status 不符或 transition graph 不允许（→ 409）。"""
+
+
+class CampaignActivationNotEligibleError(CampaignTransitionConflictError):
+    """PRE-ENTRY 缺少已执行、已归属且已形成持仓的 BUY 证据。"""
+
+
+class CampaignActivationTradeNotFoundError(CampaignServiceError, LookupError):
+    """用于激活的 Trade 不存在。"""
 
 
 class CampaignThesisBindingConflictError(CampaignServiceError):
@@ -180,6 +190,19 @@ def transition_campaign(
     """
     if expected_status not in STATUSES or to_status not in STATUSES:
         raise CampaignInputError("expected_status/to_status must be frozen enum values")
+    if expected_status == "PRE-ENTRY" and to_status == "ACTIVE":
+        raise CampaignActivationNotEligibleError(
+            "PRE-ENTRY -> ACTIVE requires an executed attributed BUY"
+        )
+    return _persist_transition(campaign_id, expected_status, to_status)
+
+
+def _persist_transition(
+    campaign_id: str,
+    expected_status: str,
+    to_status: str,
+) -> tuple[dict, dict]:
+    """调用 Campaign store 的唯一适配点；产品命令必须先完成各自门禁。"""
     transition_id = f"campaign_transition_{uuid.uuid4().hex}"
     transitioned_at = campaign_store._format_timestamp(datetime.now(timezone.utc))
     try:
@@ -230,7 +253,124 @@ def next_campaign_actions(campaign_id: str) -> tuple[dict, list[str]]:
         actions = list(campaign_store.next_actions(campaign["status"]))
     except CampaignStoreInputError as exc:
         raise CampaignInputError(str(exc)) from exc
+    if campaign["status"] == "PRE-ENTRY":
+        actions = [action for action in actions if action != "ACTIVE"]
     return campaign, actions
+
+
+def activate_pre_entry_campaign_from_trade(
+    campaign_id: str,
+    trade_id: str,
+) -> dict:
+    """用一笔已执行且正式归属的首次 BUY 显式激活 PRE-ENTRY Campaign。
+
+    Frozen Decision、Trade 或 Attribution 本身都不会自动迁移 Campaign。此命令
+    重新读取全部 authority；任何缺失、冲突或不可读状态都保持 PRE-ENTRY。
+    """
+    if not isinstance(trade_id, str) or not _TRADE_ID_RE.fullmatch(trade_id.strip()):
+        raise CampaignInputError("trade_id must be 32 lowercase hex characters")
+
+    campaign = get_campaign(campaign_id)
+    if campaign["status"] != "PRE-ENTRY":
+        raise CampaignActivationNotEligibleError("campaign must be PRE-ENTRY")
+
+    # 局部 import 避免 Campaign Core 与 Trade/Position runtime 形成初始化环。
+    import frozen_decision_service
+    import position_reality_service
+    import trade_attribution_runtime
+    import trade_ledger_service
+
+    try:
+        trade = trade_ledger_service.get_trade(trade_id.strip())
+    except Exception as exc:  # noqa: BLE001 — authority 不可读必须 fail closed
+        raise CampaignServiceError("Trade authority unavailable") from exc
+    if trade is None:
+        raise CampaignActivationTradeNotFoundError(
+            f"trade {trade_id.strip()} not found"
+        )
+    if (
+        trade.get("voided_at") is not None
+        or trade.get("execution_status") not in {"full", "partial"}
+        or trade.get("operation") != "buy"
+        or trade.get("code") != campaign["security_code"]
+    ):
+        raise CampaignActivationNotEligibleError(
+            "trade must be an executed, non-voided BUY for this security"
+        )
+
+    try:
+        reconciliation = trade_attribution_runtime.reconciliation_for_trade(
+            trade_id.strip()
+        )
+    except Exception as exc:  # noqa: BLE001 — resolution 读取失败不得乐观激活
+        raise CampaignServiceError("Trade attribution authority unavailable") from exc
+    decision_id = reconciliation.get("decision_id")
+    if (
+        reconciliation.get("allocation_state") != "ALLOCATED"
+        or reconciliation.get("reconciliation_requirement") != "NOT_REQUIRED"
+        or reconciliation.get("campaign_id") != campaign_id
+        or not isinstance(decision_id, str)
+        or not decision_id
+    ):
+        raise CampaignActivationNotEligibleError(
+            "trade must be formally attributed to this campaign"
+        )
+
+    try:
+        decision = frozen_decision_service.get_decision(decision_id)
+    except Exception as exc:  # noqa: BLE001 — Frozen witness 不可读必须 fail closed
+        raise CampaignServiceError("Frozen Decision authority unavailable") from exc
+    if (
+        not isinstance(decision, dict)
+        or decision.get("campaign_id") != campaign_id
+        or decision.get("security_code") != campaign["security_code"]
+        or decision.get("next_best_action")
+        not in {"BUY NOW", "BUY SMALL", "SCALE IN"}
+    ):
+        raise CampaignActivationNotEligibleError(
+            "attributed Frozen Decision does not authorize added risk"
+        )
+
+    try:
+        authority_state = position_reality_service.get_holding_authority_state()
+        snapshot = position_reality_service.read_current_holdings_snapshot()
+    except Exception as exc:  # noqa: BLE001 — 空响应/读失败不等于零持仓
+        raise CampaignServiceError("Position Reality unavailable") from exc
+    holdings = snapshot.get("holdings") if isinstance(snapshot, dict) else None
+    if authority_state != "CANONICAL" or not isinstance(holdings, list):
+        raise CampaignServiceError("Position Reality unavailable")
+    holding = next(
+        (
+            item
+            for item in holdings
+            if isinstance(item, dict)
+            and item.get("code") == campaign["security_code"]
+        ),
+        None,
+    )
+    shares = holding.get("shares") if holding is not None else None
+    if (
+        isinstance(shares, bool)
+        or not isinstance(shares, (int, float))
+        or shares <= 0
+    ):
+        raise CampaignActivationNotEligibleError(
+            "Position Reality does not prove an open position"
+        )
+
+    activated, transition = _persist_transition(
+        campaign_id,
+        "PRE-ENTRY",
+        "ACTIVE",
+    )
+    return {
+        "campaign": activated,
+        "transition": transition,
+        "trade_id": trade["trade_id"],
+        "decision_id": decision_id,
+        "attribution_id": reconciliation.get("attribution_id"),
+        "position_authority": authority_state,
+    }
 
 
 def _read_existing_thesis(thesis_id: str) -> dict:

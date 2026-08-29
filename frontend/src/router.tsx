@@ -13,6 +13,7 @@ const SectorResearchPage = lazy(() => import("@/pages/SectorResearchPage").then(
 const Portfolio = lazy(() => import("@/pages/Portfolio").then((m) => ({ default: m.Portfolio })));
 const DecisionCockpit = lazy(() => import("@/pages/DecisionCockpit").then((m) => ({ default: m.DecisionCockpit })));
 const StockData = lazy(() => import("@/pages/StockData").then((m) => ({ default: m.StockData })));
+const CandidateWorkspace = lazy(() => import("@/pages/CandidateWorkspace").then((m) => ({ default: m.CandidateWorkspace })));
 const Screener = lazy(() => import("@/pages/Screener").then((m) => ({ default: m.Screener })));
 const MarketHistory = lazy(() => import("@/pages/MarketHistory").then((m) => ({ default: m.MarketHistory })));
 const Watchlist = lazy(() => import("@/pages/Watchlist").then((m) => ({ default: m.Watchlist })));
@@ -98,6 +99,7 @@ export const router = createBrowserRouter([
       { path: "/decision-inbox", element: withSuspense(<DecisionInbox />) },
       { path: "/campaigns/:campaignId/decision-proposal", element: withSuspense(<DecisionProposalReview />) },
       { path: "/stock-data", element: withSuspense(<StockData />) },
+      { path: "/candidates/:code", element: withSuspense(<CandidateWorkspace />) },
       { path: "/screener", element: withSuspense(<Screener />) },
       { path: "/watchlist", element: withSuspense(<Watchlist />) },
       { path: "/my-reports", element: withSuspense(<MyReports />) },

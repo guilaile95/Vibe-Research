@@ -34,6 +34,7 @@ import {
   validateScreenerDraft,
 } from "@/lib/recoveredScreener";
 import { loadWatchAuthoritative } from "@/lib/watchlist";
+import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 
 type FullMarketValueMetric = Exclude<FullMarketMetric, "code" | "latest_date">;
 
@@ -69,7 +70,10 @@ function FullMarketResultTable({ result }: { result: FullMarketResult }) {
             <tbody className="divide-y divide-border/40">
               {result.rows.map((row) => (
                 <tr key={row.code} className="hover:bg-muted/30">
-                  <td className="px-4 py-2 font-mono font-medium"><Link className="hover:text-primary hover:underline" to={`/stock-data?code=${row.code}`}>{row.code}</Link></td>
+                  <td className="px-4 py-2 font-medium">
+                    <Link className="font-mono hover:text-primary hover:underline" to={`/stock-data?code=${row.code}`}>{row.code}</Link>
+                    <Link className="ml-2 text-[10px] text-primary hover:underline" to={candidateWorkspaceHref(row.code)}>候选研究</Link>
+                  </td>
                   <td className="px-4 py-2">{row.latest_date || "—"}</td>
                   <td className="px-4 py-2">{metric(row, "latest_close")}</td>
                   <td className="px-4 py-2">{metric(row, "return_5d")}</td>
@@ -101,7 +105,21 @@ function ResultGroup({ title, items }: { title: string; items: ScreenerStockResu
           {items.map((item) => (
             <details key={`${title}-${item.code}`} className="group px-4 py-3">
               <summary className="flex cursor-pointer list-none items-center gap-3 text-sm">
-                <span className="font-mono font-medium">{item.code}</span>
+                <Link
+                  to={`/stock-data?code=${item.code}`}
+                  onClick={(event) => event.stopPropagation()}
+                  className="font-mono font-medium hover:text-primary hover:underline"
+                >
+                  {item.code}
+                </Link>
+                <Link
+                  to={candidateWorkspaceHref(item.code)}
+                  onClick={(event) => event.stopPropagation()}
+                  className="text-[11px] text-primary hover:underline"
+                  data-testid={`screener-candidate-${item.code}`}
+                >
+                  候选研究
+                </Link>
                 <span className="text-xs text-muted-foreground">{item.trade_date || "—"}</span>
                 <span className="ml-auto text-xs text-muted-foreground">{item.technical_status}</span>
               </summary>

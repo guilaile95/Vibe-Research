@@ -131,6 +131,7 @@ import type {
   CampaignStatus,
   CampaignTransitionRecord,
   CampaignTransitionResult,
+  CampaignTradeActivationResult,
   CampaignNextActions,
   DecisionInboxSnapshot,
   DecisionProposalDraftInput,
@@ -1034,6 +1035,8 @@ export const api = {
   getCampaign: (campaignId: string) => getCampaign(campaignId),
   transitionCampaign: (campaignId: string, expectedStatus: CampaignStatus, toStatus: CampaignStatus) =>
     transitionCampaign(campaignId, expectedStatus, toStatus),
+  activateCampaignFromTrade: (campaignId: string, tradeId: string) =>
+    activateCampaignFromTrade(campaignId, tradeId),
   getCampaignTransitions: (campaignId: string) => getCampaignTransitions(campaignId),
   getCampaignNextActions: (campaignId: string) => getCampaignNextActions(campaignId),
   // P0-CT1：Campaign ↔ Formal Thesis 绑定 / Current Thesis 投影
@@ -1329,6 +1332,17 @@ export async function transitionCampaign(
     `/campaigns/${encodeURIComponent(campaignId)}/transitions`,
     "POST",
     { expected_status: expectedStatus, to_status: toStatus },
+  );
+}
+
+export async function activateCampaignFromTrade(
+  campaignId: string,
+  tradeId: string,
+): Promise<CampaignTradeActivationResult> {
+  return request<CampaignTradeActivationResult>(
+    `/campaigns/${encodeURIComponent(campaignId)}/activate-from-trade`,
+    "POST",
+    { trade_id: tradeId },
   );
 }
 

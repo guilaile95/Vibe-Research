@@ -86,6 +86,9 @@ function pythonConfig() {
 }
 
 function chromiumPath() {
+  if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH && existsSync(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)) {
+    return process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+  }
   const bases = [process.env.PLAYWRIGHT_CHROMIUM_PATH, join(process.env.LOCALAPPDATA || "", "ms-playwright"), join(process.env.HOME || "", ".cache", "ms-playwright")];
   for (const base of bases) {
     if (!base || !existsSync(base)) continue;
@@ -172,7 +175,15 @@ async function run() {
     backendProc.stderr.on("data", (chunk) => { backendLog += chunk.toString(); });
     await waitHttp(`${backend}/api/health`);
 
+    await jsonRequest(backend, "/api/position/bootstrap-commit", "POST", {
+      ledger_start_at: "2026-08-01",
+      opening_cash: 1000000,
+      positions: [],
+      note: "isolated P1 activation fixture",
+    });
     const campaign = await jsonRequest(backend, "/api/campaigns", "POST", { security_code: "600519", strategy: "SWING" }, 201);
+    await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/transitions`, "POST", { expected_status: "DRAFT", to_status: "RESEARCHING" });
+    await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/transitions`, "POST", { expected_status: "RESEARCHING", to_status: "PRE-ENTRY" });
     const decision = createRealFrozenDecision(env, campaign.campaign_id);
     const trade = await jsonRequest(backend, "/api/trades", "POST", {
       code: "600519", name: "贵州茅台", operation: "buy", execution_status: "full",
@@ -208,6 +219,10 @@ async function run() {
     await page.getByText(campaign.campaign_id, { exact: true }).waitFor();
     await page.getByText(decision.decision_id, { exact: true }).waitFor();
     assert.equal((await jsonRequest(backend, `/api/trades/${trade.trade_id}/reconciliation`)).allocation_state, "ALLOCATED");
+    assert.equal((await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}`)).status, "PRE-ENTRY", "attribution must not auto-activate");
+    await page.getByRole("button", { name: "确认激活 Campaign" }).click();
+    await page.getByText("Campaign 已激活", { exact: true }).waitFor();
+    assert.equal((await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}`)).status, "ACTIVE");
 
     const secondTrade = await jsonRequest(backend, "/api/trades", "POST", {
       code: "600519", name: "贵州茅台", operation: "add", execution_status: "full",

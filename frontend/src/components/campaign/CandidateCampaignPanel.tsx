@@ -5,6 +5,7 @@ import { api, ApiError, type CampaignNextActions, type CampaignRecord, type Camp
 import { CAMPAIGN_STRATEGIES, CAMPAIGN_STRATEGY_LABELS, errorMessage } from "@/lib/decisionInbox";
 import { selectCandidateCampaigns } from "@/lib/candidateCampaign";
 import { CampaignLifecycleCard } from "./CampaignLifecycleCard";
+import { CampaignThesisActivationCard } from "./CampaignThesisActivationCard";
 
 /**
  * StockData 的候选研究 continuation。
@@ -13,7 +14,15 @@ import { CampaignLifecycleCard } from "./CampaignLifecycleCard";
  * 选择策略并点击，状态推进由 CampaignLifecycleCard 显式调用 transition API。
  * 本组件不创建 Thesis、不自动迁移、不生成 PRE-ENTRY/BUY 或评分。
  */
-export function CandidateCampaignPanel({ code }: { code: string }) {
+export function CandidateCampaignPanel({
+  code,
+  workspace = false,
+  returnTo = "/decision-inbox",
+}: {
+  code: string;
+  workspace?: boolean;
+  returnTo?: string;
+}) {
   const [campaigns, setCampaigns] = useState<CampaignRecord[]>([]);
   const [nextActions, setNextActions] = useState<Record<string, CampaignNextActions | null>>({});
   const [loading, setLoading] = useState(false);
@@ -92,7 +101,9 @@ export function CandidateCampaignPanel({ code }: { code: string }) {
     <GlassCard className="mt-4" data-testid="candidate-campaign-panel" data-security-code={code}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3 className="text-sm font-semibold">Candidate Research · PRE-ENTRY</h3>
+          <h3 className="text-sm font-semibold">
+            {workspace ? "步骤 2 · 建立 Candidate Campaign" : "Candidate Research · PRE-ENTRY"}
+          </h3>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             仅显示该证券现有的 DRAFT / RESEARCHING / PRE-ENTRY Campaign。每一步都需要你显式选择；这里不自动创建 Thesis、推进状态或产生买入动作。
           </p>
@@ -128,17 +139,35 @@ export function CandidateCampaignPanel({ code }: { code: string }) {
       {!loading && campaigns.length > 0 && (
         <div className="mt-4 space-y-3">
           {campaigns.map((campaign) => (
-            <CampaignLifecycleCard
-              key={campaign.campaign_id}
-              campaignId={campaign.campaign_id}
-              securityCode={campaign.security_code}
-              strategy={campaign.strategy}
-              status={campaign.status}
-              nextActions={nextActions[campaign.campaign_id] ?? null}
-              setupContext
-              researchContext
-              onChanged={() => void load()}
-            />
+            <div key={campaign.campaign_id} className="space-y-3">
+              <CampaignLifecycleCard
+                campaignId={campaign.campaign_id}
+                securityCode={campaign.security_code}
+                strategy={campaign.strategy}
+                status={campaign.status}
+                nextActions={nextActions[campaign.campaign_id] ?? null}
+                setupContext
+                researchContext
+                onChanged={() => void load()}
+              />
+              {workspace && (
+                <section className="space-y-2" data-testid="candidate-thesis-decision-step">
+                  <div>
+                    <h4 className="text-sm font-semibold">步骤 3 · 固化 Thesis，再进入 Formal Decision</h4>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      先把 Formal Thesis 确认并冻结；满足 backend gate 后才会开放 Decision Review。
+                    </p>
+                  </div>
+                  <CampaignThesisActivationCard
+                    campaignId={campaign.campaign_id}
+                    securityCode={campaign.security_code}
+                    strategy={campaign.strategy}
+                    reloadEpoch={0}
+                    returnTo={returnTo}
+                  />
+                </section>
+              )}
+            </div>
           ))}
         </div>
       )}

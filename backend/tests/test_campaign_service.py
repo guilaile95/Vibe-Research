@@ -186,16 +186,18 @@ def test_transition_success_returns_campaign_and_transition():
     assert tr["campaign_id"] == rec["campaign_id"]
 
 
-def test_full_lifecycle_chain_strategy_immutable():
-    """SWING Campaign 走完 DRAFT→…→CLOSED 全链后 strategy 始终 SWING。"""
+def test_pre_entry_activation_requires_trade_authority():
+    """研究迁移保持 strategy；PRE-ENTRY 不能再由普通 lifecycle 激活。"""
     rec = create_campaign("600519", "SWING")
     for frm, to in (
         ("DRAFT", "RESEARCHING"), ("RESEARCHING", "PRE-ENTRY"),
-        ("PRE-ENTRY", "ACTIVE"), ("ACTIVE", "REDUCING"), ("REDUCING", "CLOSED"),
     ):
         campaign, tr = transition_campaign(rec["campaign_id"], frm, to)
         assert tr["to_status"] == to
         assert campaign["strategy"] == "SWING"
+    with pytest.raises(CampaignTransitionConflictError):
+        transition_campaign(rec["campaign_id"], "PRE-ENTRY", "ACTIVE")
+    assert get_campaign(rec["campaign_id"])["status"] == "PRE-ENTRY"
     assert get_campaign(rec["campaign_id"])["strategy"] == "SWING"
 
 

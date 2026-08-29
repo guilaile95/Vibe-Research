@@ -30,6 +30,7 @@ import { formatShanghaiTime } from "@/lib/intelDigestView";
 import { hasLlm } from "@/lib/llm";
 import { deriveMarketIntelStatus } from "@/lib/marketIntelStatus";
 import { cn } from "@/lib/utils";
+import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 
 export type DigestPhase = "idle" | "generating" | "saving" | "saved" | "cancelled" | "error" | "save_failed" | "empty";
 
@@ -409,11 +410,23 @@ export default function MarketIntelPanel() {
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground"><TrendingUp className="h-4 w-4 text-primary" />近 24 小时关注趋势</h3>
         {entities.length ? (
           <div className="mt-3 flex flex-wrap gap-2" aria-label="近 24 小时关注趋势">
-            {entities.slice(0, 20).map((entity) => (
-              <span key={`${entity.term_kind}:${entity.security_code || ""}:${entity.term}`} className="rounded-full bg-primary/10 px-2.5 py-1 text-xs text-primary">
-                {entity.term}<span className="ml-1 text-muted-foreground">· {entity.item_count} 条{entity.delta ? ` · ${entity.delta > 0 ? "+" : ""}${entity.delta}` : ""}</span>
-              </span>
-            ))}
+            {entities.slice(0, 20).map((entity) => {
+              const candidateCode = /^\d{6}$/.test(entity.security_code || "") ? entity.security_code : null;
+              return (
+                <span key={`${entity.term_kind}:${entity.security_code || ""}:${entity.term}`} className="rounded-full bg-primary/10 px-2.5 py-1 text-xs text-primary">
+                  {entity.term}<span className="ml-1 text-muted-foreground">· {entity.item_count} 条{entity.delta ? ` · ${entity.delta > 0 ? "+" : ""}${entity.delta}` : ""}</span>
+                  {candidateCode && (
+                    <Link
+                      to={candidateWorkspaceHref(candidateCode)}
+                      className="ml-2 font-medium hover:underline"
+                      data-testid={`market-intel-candidate-${candidateCode}`}
+                    >
+                      候选研究
+                    </Link>
+                  )}
+                </span>
+              );
+            })}
           </div>
         ) : (
           <p className="mt-3 text-xs text-muted-foreground">{loading ? "正在计算关注趋势…" : "当前窗口暂无可计算的关注趋势。"}</p>

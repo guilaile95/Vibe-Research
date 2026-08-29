@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import campaign_router
 import campaign_service
+import campaign_store
 
 
 def make_app() -> FastAPI:
@@ -42,6 +43,17 @@ def _next_actions(client, campaign_id: str) -> dict:
     return resp.json()["data"]
 
 
+def _seed_verified_active(campaign_id: str) -> None:
+    """Fixture-only: activation command tests own the cross-authority eligibility gate."""
+    campaign_store.transition_campaign(
+        campaign_id=campaign_id,
+        expected_status="PRE-ENTRY",
+        to_status="ACTIVE",
+        transition_id="campaign_transition_" + "a" * 32,
+        transitioned_at="2026-08-30T00:00:00.000000Z",
+    )
+
+
 def test_draft_next_actions_exact_order(client):
     campaign = _create(client)
     data = _next_actions(client, campaign["campaign_id"])
@@ -62,10 +74,7 @@ def test_active_next_actions(client):
         f"/api/campaigns/{campaign['campaign_id']}/transitions",
         json={"expected_status": "RESEARCHING", "to_status": "PRE-ENTRY"},
     )
-    client.post(
-        f"/api/campaigns/{campaign['campaign_id']}/transitions",
-        json={"expected_status": "PRE-ENTRY", "to_status": "ACTIVE"},
-    )
+    _seed_verified_active(campaign["campaign_id"])
     data = _next_actions(client, campaign["campaign_id"])
     assert data["status"] == "ACTIVE"
     assert data["next_actions"] == ["REDUCING", "CLOSED"]
@@ -76,7 +85,7 @@ def test_active_next_actions(client):
     [
         ("DRAFT", ["RESEARCHING", "REJECTED", "EXPIRED"]),
         ("RESEARCHING", ["PRE-ENTRY", "REJECTED", "EXPIRED"]),
-        ("PRE-ENTRY", ["ACTIVE", "REJECTED", "EXPIRED"]),
+        ("PRE-ENTRY", ["REJECTED", "EXPIRED"]),
         ("ACTIVE", ["REDUCING", "CLOSED"]),
         ("REDUCING", ["CLOSED"]),
         ("CLOSED", []),
@@ -110,6 +119,12 @@ def test_next_actions_all_frozen_statuses(client, seed_status, expected):
         "EXPIRED": [("DRAFT", "EXPIRED")],
     }
     for expected_status, to_status in seed_paths[seed_status]:
+        if expected_status == "PRE-ENTRY" and to_status == "ACTIVE":
+            _seed_verified_active(campaign["campaign_id"])
+            campaign = client.get(
+                f"/api/campaigns/{campaign['campaign_id']}"
+            ).json()["data"]
+            continue
         resp = client.post(
             f"/api/campaigns/{campaign['campaign_id']}/transitions",
             json={"expected_status": expected_status, "to_status": to_status},

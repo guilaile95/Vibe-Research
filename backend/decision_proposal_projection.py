@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
+from candidate_opportunity_projection import CandidateOpportunityProjection
 from frozen_decision_store import NEXT_BEST_ACTIONS
 from hard_risk_contract import HardRiskEvaluation
 from material_change_projection import (
@@ -531,6 +532,7 @@ def project_decision_proposal(
     material_change: MaterialChangeProjection | None,
     sell_engine: SellEngineProjection | None,
     view_provenance: Mapping[str, Any] | None = None,
+    candidate_opportunity: CandidateOpportunityProjection | None = None,
 ) -> DecisionProposal:
     """Compose one exact-scope, uncommitted Formal Decision Proposal."""
 
@@ -549,6 +551,7 @@ def project_decision_proposal(
         ("hard_risk_evaluation", hard_risk_evaluation, HardRiskEvaluation),
         ("material_change", material_change, MaterialChangeProjection),
         ("sell_engine", sell_engine, SellEngineProjection),
+        ("candidate_opportunity", candidate_opportunity, CandidateOpportunityProjection),
     ):
         if value is not None and not isinstance(value, expected):
             raise DecisionProposalValidationError(
@@ -642,13 +645,27 @@ def project_decision_proposal(
         ),
     }
 
-    envelope, nba = _conditions_and_envelope(
-        evaluation=constraint_evaluation,
-        thesis_state=thesis_state,
-        hard_risk_state=hard_state,
-        material_state=material_state,
-        sell_state=sell_state,
-    )
+    if candidate_opportunity is None:
+        envelope, nba = _conditions_and_envelope(
+            evaluation=constraint_evaluation,
+            thesis_state=thesis_state,
+            hard_risk_state=hard_state,
+            material_state=material_state,
+            sell_state=sell_state,
+        )
+        projected_asset_view = asset_view
+        projected_trade_view = trade_view
+        projected_portfolio_view = portfolio_view
+    else:
+        constraint_evaluation = candidate_opportunity.constraint_evaluation
+        envelope = copy.deepcopy(dict(candidate_opportunity.action_envelope))
+        nba = candidate_opportunity.next_best_action
+        authority_facts["candidate_opportunity"] = copy.deepcopy(
+            dict(candidate_opportunity.authority_fact)
+        )
+        projected_asset_view = candidate_opportunity.asset_view
+        projected_trade_view = candidate_opportunity.trade_view
+        projected_portfolio_view = candidate_opportunity.portfolio_view
     authority_refs = [AUTHORITY_REF]
     authority_refs.extend(thesis_refs)
     if hard_risk_evaluation is not None:
@@ -657,6 +674,8 @@ def project_decision_proposal(
         authority_refs.extend(material_change.authority_refs)
     if sell_engine is not None:
         authority_refs.extend(sell_engine.authority_refs)
+    if candidate_opportunity is not None:
+        authority_refs.extend(candidate_opportunity.authority_refs)
     view_provenance = (
         _view_provenance(view_provenance)
         if view_provenance is not None
@@ -685,9 +704,9 @@ def project_decision_proposal(
         thesis_id=thesis_id_value,
         thesis_revision=revision,
         as_of=as_of_text,
-        asset_view=_json_object(asset_view, "asset_view"),
-        trade_view=_json_object(trade_view, "trade_view"),
-        portfolio_view=_json_object(portfolio_view, "portfolio_view"),
+        asset_view=_json_object(projected_asset_view, "asset_view"),
+        trade_view=_json_object(projected_trade_view, "trade_view"),
+        portfolio_view=_json_object(projected_portfolio_view, "portfolio_view"),
         view_provenance=view_provenance,
         next_best_action=nba,
         action_envelope=envelope,

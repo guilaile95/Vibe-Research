@@ -229,18 +229,17 @@ def test_transition_api_success_200(client):
     assert body["transition"]["transition_id"].startswith("campaign_transition_")
 
 
-def test_transition_api_full_chain(client):
+def test_transition_api_requires_trade_proven_activation(client):
     created = _post(client, security_code="600519", strategy="MEDIUM").json()["data"]
     cid = created["campaign_id"]
     for frm, to in (
         ("DRAFT", "RESEARCHING"), ("RESEARCHING", "PRE-ENTRY"),
-        ("PRE-ENTRY", "ACTIVE"), ("ACTIVE", "REDUCING"), ("REDUCING", "CLOSED"),
     ):
         r = _post_transition(client, cid, frm, to)
         assert r.status_code == 200
         assert r.json()["data"]["campaign"]["status"] == to
-    # 终态后拒绝
-    assert _post_transition(client, cid, "CLOSED", "ACTIVE").status_code == 409
+    assert _post_transition(client, cid, "PRE-ENTRY", "ACTIVE").status_code == 409
+    assert client.get(f"/api/campaigns/{cid}").json()["data"]["status"] == "PRE-ENTRY"
 
 
 def test_transition_api_unknown_campaign_404(client):

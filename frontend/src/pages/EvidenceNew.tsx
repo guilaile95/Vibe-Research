@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Save, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -44,9 +44,18 @@ const nowLocal = () => {
 
 export function EvidenceNew() {
   const nav = useNavigate();
-  const [form, setForm] = useState({
-    subject_type: "stock" as "stock" | "sector" | "theme",
-    subject_id: "",
+  const [searchParams] = useSearchParams();
+  const querySubjectType = searchParams.get("subject_type");
+  const querySubjectId = searchParams.get("subject_id") ?? "";
+  const queryReturnTo = searchParams.get("return_to") ?? "";
+  const initialSubjectType = querySubjectType === "stock" || querySubjectType === "sector" || querySubjectType === "theme"
+    ? querySubjectType
+    : "stock";
+  const initialSubjectId = initialSubjectType === "stock" && /^\d{6}$/.test(querySubjectId) ? querySubjectId : "";
+  const returnTo = queryReturnTo === `/candidates/${initialSubjectId}` ? queryReturnTo : "";
+  const [form, setForm] = useState(() => ({
+    subject_type: initialSubjectType as "stock" | "sector" | "theme",
+    subject_id: initialSubjectId,
     evidence_type: "news" as "news" | "announcement" | "report" | "research_note" | "financial_filing" | "other",
     claim: "",
     source_title: "",
@@ -55,7 +64,7 @@ export function EvidenceNew() {
     accessed_at: nowLocal(),
     classification: "fact" as "fact" | "inference" | "unknown",
     confidence: "medium" as "high" | "medium" | "low",
-  });
+  }));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -84,7 +93,7 @@ export function EvidenceNew() {
         confidence: form.confidence,
       };
       const r = await api.evidenceCreate(body);
-      nav(`/evidence/${r.id}`);
+      nav(returnTo || `/evidence/${r.id}`);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "保存失败");
     } finally {
@@ -94,8 +103,8 @@ export function EvidenceNew() {
 
   return (
     <div>
-      <Link to="/evidence" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="h-4 w-4" /> 证据库
+      <Link to={returnTo || "/evidence"} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+        <ArrowLeft className="h-4 w-4" /> {returnTo ? "Candidate Workspace" : "证据库"}
       </Link>
 
       <PageHeader title="新建证据" subtitle="记录一条可追溯到来源的客观信息或推断，便于后续关联到投资逻辑。" />
@@ -223,7 +232,7 @@ export function EvidenceNew() {
             {busy ? "保存中…" : "保存"}
           </button>
           <Link
-            to="/evidence"
+            to={returnTo || "/evidence"}
             className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-3 py-1.5 text-sm text-muted-foreground hover:border-primary/40"
           >
             取消

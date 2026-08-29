@@ -2407,6 +2407,13 @@ export interface CampaignTransitionResult {
   transition: CampaignTransitionRecord;
 }
 
+export interface CampaignTradeActivationResult extends CampaignTransitionResult {
+  trade_id: string;
+  decision_id: string;
+  attribution_id: string | null;
+  position_authority: "CANONICAL" | "LEGACY";
+}
+
 export interface CampaignNextActions {
   campaign_id: string;
   security_code: string;
@@ -2646,6 +2653,7 @@ export interface DecisionProposalPreview {
   commit_requirements: {
     user_confirmed: true;
     expected_proposal_fingerprint: string;
+    challenge_required?: boolean;
   };
   draft_witness?: DecisionProposalDraftWitness;
 }

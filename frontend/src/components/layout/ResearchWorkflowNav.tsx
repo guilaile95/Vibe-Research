@@ -11,6 +11,7 @@ const WORKFLOW_NAV = [
 ];
 
 function isActive(pathname: string, to: string) {
+  if (to === "/stock-data" && pathname.startsWith("/candidates/")) return true;
   return pathname === to || pathname.startsWith(`${to}/`);
 }
 
