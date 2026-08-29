@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import socket
@@ -63,8 +64,12 @@ MIN_TERM_LEN = {
 _FETCH_LOCK = threading.Lock()
 _SCHEDULER_LOCK = threading.Lock()
 _SCHEDULER_STARTED = False
+_STARTUP_FETCH_LOCK = threading.Lock()
+_STARTUP_FETCHING: set[str] = set()
+_LOGGER = logging.getLogger("native_intel")
 
 _ENV_DB = "VIBE_NATIVE_INTEL_DB"
+_ENV_DISABLE_STARTUP_FETCH = "VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH"
 
 
 def utc_now_iso() -> str:
@@ -1222,11 +1227,65 @@ def status(path: str | None = None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def startup_recover(path: str | None = None) -> dict[str, Any]:
-    """进程启动恢复：建库 / 同步注册表 / 回收中断 run / 无历史数据时首抓。"""
+def _startup_fetch_key(target: str) -> str:
+    return os.path.normcase(os.path.abspath(os.fspath(target)))
+
+
+def _startup_fetch_is_running(target: str) -> bool:
+    key = _startup_fetch_key(target)
+    with _STARTUP_FETCH_LOCK:
+        return key in _STARTUP_FETCHING
+
+
+def _schedule_startup_fetch(target: str, registry: dict[str, Any]) -> bool:
+    """Schedule one startup refresh per database path without delaying API readiness."""
+    key = _startup_fetch_key(target)
+    with _STARTUP_FETCH_LOCK:
+        if key in _STARTUP_FETCHING:
+            return False
+        _STARTUP_FETCHING.add(key)
+
+    def worker() -> None:
+        try:
+            run_fetch("startup", target, registry=registry)
+        except Exception as exc:  # noqa: BLE001 - data_status remains the user-visible truth
+            _LOGGER.warning(
+                "Native Intel background startup fetch unavailable: %s",
+                type(exc).__name__,
+            )
+        finally:
+            with _STARTUP_FETCH_LOCK:
+                _STARTUP_FETCHING.discard(key)
+
+    thread = threading.Thread(
+        target=worker,
+        daemon=True,
+        name="native-intel-startup-fetch",
+    )
+    try:
+        thread.start()
+    except Exception:
+        with _STARTUP_FETCH_LOCK:
+            _STARTUP_FETCHING.discard(key)
+        raise
+    return True
+
+
+def startup_recover(
+    path: str | None = None,
+    *,
+    background_fetch: bool = True,
+) -> dict[str, Any]:
+    """建库、同步注册表并恢复中断 run；陈旧资讯默认在后台刷新。
+
+    存储恢复仍在 API readiness 前完成。网络抓取不再阻塞应用启动；读取侧在刷新完成前
+    继续诚实返回 unavailable / stale / partial。测试或维护工具可显式传入
+    ``background_fetch=False`` 保留同步行为。
+    """
     target = path or db_path()
+    background_running = background_fetch and _startup_fetch_is_running(target)
     store.initialize_store(target)
-    reclaimed = store.recover_stale_runs(target)
+    reclaimed = 0 if background_running else store.recover_stale_runs(target)
     registry = load_registry()
     store.upsert_sources(registry["sources"], target)
     store.set_meta("registry_version", registry["registry_version"], target)
@@ -1247,11 +1306,37 @@ def startup_recover(path: str | None = None) -> dict[str, Any]:
             needs_fetch = datetime.now(timezone.utc) - parsed > timedelta(hours=STALE_AFTER_HOURS)
         except ValueError:
             needs_fetch = True
-    if needs_fetch:
+    if not needs_fetch:
+        return result
+
+    if os.environ.get(_ENV_DISABLE_STARTUP_FETCH, "").strip() == "1":
+        result["initial_fetch"] = {
+            "status": "disabled",
+            "reason": "startup_fetch_disabled",
+        }
+        return result
+
+    if background_fetch:
         try:
-            result["initial_fetch"] = run_fetch("startup", target, registry=registry)
+            scheduled = _schedule_startup_fetch(target, registry)
+            result["initial_fetch"] = {
+                "status": "scheduled" if scheduled else "already_running",
+                "trigger": "startup",
+            }
         except Exception as exc:  # noqa: BLE001 - 启动首抓失败不能阻止服务起来
-            result["initial_fetch"] = {"status": store.RUN_STATUS_FAILED, "error": type(exc).__name__}
+            result["initial_fetch"] = {
+                "status": store.RUN_STATUS_FAILED,
+                "error": type(exc).__name__,
+            }
+        return result
+
+    try:
+        result["initial_fetch"] = run_fetch("startup", target, registry=registry)
+    except Exception as exc:  # noqa: BLE001 - 同步维护调用也保留既有失败语义
+        result["initial_fetch"] = {
+            "status": store.RUN_STATUS_FAILED,
+            "error": type(exc).__name__,
+        }
     return result
 
 

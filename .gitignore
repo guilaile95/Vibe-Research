@@ -10,6 +10,7 @@ VibeResearch-专业化建议.md
 my-watchlist.json
 portfolio.json
 public/user-data/
+.vibe-runtime/
 
 # ── 密钥 / 环境（绝不进仓库） ──────────────────────────────────────
 .env

@@ -14,6 +14,10 @@ os.environ["VR_REPORTS_DIR"] = os.path.join(_TEST_DATA_DIR, "myreports")
 os.environ["VIBE_RESEARCH_REVIEW_DB"] = os.path.join(
     _TEST_DATA_DIR, "daily_reviews.sqlite3"
 )
+# App lifespan now schedules a real RSS refresh in the background when data is stale.
+# Offline tests must never leave network threads racing isolated temp databases; focused
+# startup tests explicitly remove this flag and inject a deterministic fetcher.
+os.environ["VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH"] = "1"
 
 
 def pytest_configure(config):

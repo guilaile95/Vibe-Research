@@ -2,7 +2,13 @@ name: CI
 
 on:
   push:
+    branches:
+      - feature/research-system-v01
   pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
