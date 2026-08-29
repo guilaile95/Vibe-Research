@@ -83,14 +83,13 @@ try {
     await route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers.entries()), body: Buffer.from(await response.arrayBuffer()) });
   });
   await page.goto(`http://127.0.0.1:${frontendPort}/intel`, { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: /关注雷达/ }).click();
-  const panel = page.getByTestId("native-intel-panel");
+  const panel = page.getByTestId("market-intel-panel");
   await panel.waitFor({ state: "visible", timeout: 20000 });
-  await panel.getByText("部分来源不可用", { exact: true }).waitFor();
-  await panel.getByText("历史条目 1", { exact: false }).waitFor();
+  await panel.getByText("PARTIAL · 部分可用", { exact: true }).waitFor();
+  await panel.getByText("历史资讯 1", { exact: false }).waitFor();
   await panel.getByText("失败来源：失败测试源", { exact: false }).waitFor();
   await panel.getByText("固态电池产业化进展加速", { exact: true }).waitFor();
-  await panel.getByText("固态电池 · 1 条", { exact: false }).waitFor();
+  await panel.getByText(/固态电池.*1 条/).waitFor();
   assert.deepEqual(pageErrors, []);
   console.log("Native Intel rendered vertical: PASS");
 } finally {

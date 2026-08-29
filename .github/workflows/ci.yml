@@ -274,6 +274,10 @@ jobs:
           PYTHON: python
         run: npm run test:e2e:native-intel
 
+      - name: Run Today market context E2E
+        working-directory: frontend
+        run: npm run test:e2e:today-market-context
+
   e2e-decision-inbox:
     name: Playwright decision inbox E2E
     runs-on: ubuntu-latest

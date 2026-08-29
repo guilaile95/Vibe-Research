@@ -1290,6 +1290,25 @@ def market_boards(
         raise HTTPException(502, f"板块排名异常：{e}") from e
 
 
+@app.get("/api/market/cloud")
+def market_cloud(
+    scope: str = Query("all", description="市场范围：all | cyb | star | sh | sz"),
+    period: str = Query("today", description="周期：today（V1 仅支持今日）"),
+):
+    """市场云图：全 A 股按行业分组，面积=流通市值，颜色=涨跌幅。
+
+    - normal / partial / unavailable → HTTP 200（状态在 body.data.status）
+    - 非法 scope / period → HTTP 400
+    - 未预期异常 → HTTP 502
+    """
+    try:
+        return {"data": market.get_market_cloud(scope, period)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"市场云图异常：{e}") from e
+
+
 @app.get("/api/market/northbound")
 def market_northbound():
     """北向资金（沪股通 / 深股通）权威日统计。共享缓存 15 分钟（unavailable 不缓存）。

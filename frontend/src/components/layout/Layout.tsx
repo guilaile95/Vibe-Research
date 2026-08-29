@@ -44,6 +44,8 @@ import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
  */
 const PRIMARY_NAV = [
   { to: "/daily-review", icon: Activity, label: "今天" },
+  { to: "/market-cloud", icon: BarChart3, label: "市场热力" },
+  { to: "/intel", icon: BookOpen, label: "资讯" },
   { to: "/watchlist", icon: Star, label: "自选" },
   { to: "/stock-data", icon: Search, label: "研究" },
   { to: "/portfolio", icon: Wallet, label: "持仓" },
@@ -54,7 +56,6 @@ const PRIMARY_NAV = [
 
 /** Research artifacts and market context live in a lower-frequency library. */
 const LIBRARY_NAV = [
-  { to: "/intel", label: "市场情报" },
   { to: "/sectors", label: "板块" },
   { to: "/signals", label: "产业信号" },
   { to: "/thesis", label: "投资逻辑" },
@@ -479,7 +480,12 @@ export function Layout() {
       </aside>
 
       <main ref={mainRef} className="flex-1 overflow-auto bg-background">
-        <div className="mx-auto w-full max-w-[1320px] px-4 pb-12 pt-16 sm:px-6 md:px-8 md:pt-7 lg:px-10">
+        <div
+          className={cn(
+            "mx-auto w-full px-4 pb-12 pt-16 sm:px-6 md:px-8 md:pt-7 lg:px-10",
+            pathname === "/market-cloud" ? "max-w-[1760px]" : "max-w-[1320px]",
+          )}
+        >
           <DailyReviewAiTaskIndicator />
           <PortfolioAdviceTaskIndicator />
           {showResearchWorkflow ? <ResearchWorkflowNav /> : null}

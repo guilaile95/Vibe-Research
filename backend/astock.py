@@ -671,15 +671,18 @@ def _em_session(direct: bool = True):
     return s
 
 
-def em_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int = 15):
+def em_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int = 15, *, min_interval: float = _EM_MIN_INTERVAL):
     """东财统一请求入口：串行限流 + **固定直连**（trust_env=False）。
 
     不读取环境/系统代理，避免 Clash 等代理导致国内站 ProxyError。
     瞬时失败由调用方（如 a_share_snapshot 分页）做有限页级重试。
+
+    min_interval: 两次请求最小间隔（秒）。默认全局 _EM_MIN_INTERVAL=1.0；
+    批量分页（如全 A 快照）可传入更短值以加速，同端点连续请求风险可控。
     """
-    wait = _EM_MIN_INTERVAL - (time.time() - _em_last_call[0])
+    wait = min_interval - (time.time() - _em_last_call[0])
     if wait > 0:
-        time.sleep(wait + random.uniform(0.1, 0.5))
+        time.sleep(wait + random.uniform(0.1, 0.3))
     try:
         _em_mode[0] = "direct"
         return _em_session(True).get(url, params=params, headers=headers, timeout=timeout)
@@ -730,13 +733,14 @@ def _em_get_page_with_retries(
     timeout: int = 15,
     max_attempts: int = _A_SHARE_PAGE_MAX_ATTEMPTS,
     backoff: tuple[float, ...] = _A_SHARE_PAGE_RETRY_BACKOFF,
+    min_interval: float = _EM_MIN_INTERVAL,
 ):
     """单页请求：瞬时网络错误有限重试；解析/结构类错误不重试。"""
     last_err: BaseException | None = None
     attempts = max(1, int(max_attempts))
     for attempt in range(attempts):
         try:
-            return em_get(url, params=params, headers=headers, timeout=timeout)
+            return em_get(url, params=params, headers=headers, timeout=timeout, min_interval=min_interval)
         except Exception as e:  # noqa: BLE001
             last_err = e
             if not _is_transient_network_error(e):
@@ -747,6 +751,58 @@ def _em_get_page_with_retries(
             time.sleep(delay)
     assert last_err is not None
     raise last_err
+
+
+def _fetch_snapshot_page(pn: int, *, page_size: int, host: str, headers: dict) -> list[dict]:
+    """获取单页全 A 快照并返回原始 diff list[dict]。
+
+    用于有界并发分页：第一页串行获取确定 total 后，后续页并发调用本函数。
+    仍走 em_get 全局限流（测试可 mock），但多线程重叠网络等待。
+    失败抛出异常，由调用方处理。
+    """
+    params = {
+        "pn": str(pn),
+        "pz": str(page_size),
+        "po": "1",
+        "np": "1",
+        "fltt": "2",
+        "invt": "2",
+        "fid": "f3",
+        "fs": _A_SHARE_FS,
+        "fields": _A_SHARE_FIELDS,
+    }
+    try:
+        r = _em_get_page_with_retries(
+            f"https://{host}/api/qt/clist/get",
+            params=params,
+            headers=headers,
+            timeout=15,
+            min_interval=0.1,
+        )
+    except RuntimeError:
+        raise
+    except Exception as e:  # noqa: BLE001 — 与串行路径一致：网络失败包装为 request failed
+        raise RuntimeError(
+            f"a_share_snapshot page {pn}: request failed: {e}"
+        ) from e
+    try:
+        payload = r.json()
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"a_share_snapshot page {pn}: invalid JSON from {host}: {e}") from e
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"a_share_snapshot page {pn}: response is not a dict")
+    if "data" not in payload or payload["data"] is None:
+        raise RuntimeError(f"a_share_snapshot page {pn}: missing data in response")
+    data = payload["data"]
+    if not isinstance(data, dict):
+        raise RuntimeError(f"a_share_snapshot page {pn}: data is not a dict")
+    try:
+        return _normalize_clist_diff(data.get("diff"))
+    except RuntimeError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"a_share_snapshot page {pn}: bad diff: {e}") from e
+
 
 # ---------------------------------------------------------------------------
 # 打板层 · 涨停/炸板/跌停/昨涨停 原始池（东财 push2ex，走 em_get 限流）
@@ -845,8 +901,8 @@ def market_turnover_rank(n: int = 20) -> list[dict]:
 # 全 A 股行情快照（沪深京 · 分页 clist）
 # ---------------------------------------------------------------------------
 _A_SHARE_FS = "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048"
-_A_SHARE_FIELDS = "f2,f3,f4,f5,f6,f7,f8,f12,f13,f14,f15,f16,f17,f18,f20,f21"
-_A_SHARE_PAGE_SIZE = 200
+_A_SHARE_FIELDS = "f2,f3,f4,f5,f6,f7,f8,f12,f13,f14,f15,f16,f17,f18,f20,f21,f100"
+_A_SHARE_PAGE_SIZE = 500
 _A_SHARE_CLIST_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
 
 
@@ -893,6 +949,7 @@ def _map_a_share_row(d: dict) -> dict | None:
         "prev_close": _optional_float(d.get("f18")),
         "market_cap": _optional_float(d.get("f20")),
         "float_market_cap": _optional_float(d.get("f21")),
+        "industry": (str(d.get("f100") or "").strip() or None),
     }
 
 
@@ -949,6 +1006,7 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
                     params=params,
                     headers=headers,
                     timeout=15,
+                    min_interval=0.1,
                 )
                 try:
                     payload = r.json()
@@ -1051,9 +1109,77 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
         if total > 0 and fetched_raw >= total:
             break
 
+
         # total 未知时：本页短于请求页大小 → 视为末页
         # total 已知且未取完：即使上游强制每页 100 < page_size，也必须继续翻页
         if total <= 0 and len(rows) < page_size:
+            break
+
+        # 第一页串行获取确定 total 后，后续页有界并发获取（4 workers）
+        # 仅当第一页返回合理数量(>=50)且剩余页数合理(<=200)时才用并发
+        # 否则回退串行（处理空页、mid-page failure 等边界情况）
+        if pn == 1 and total > 0 and fetched_raw < total and len(rows) >= 50:
+            remaining = total - fetched_raw
+            # 用第一页实际返回条数估算剩余页数（上游可能强制每页 < page_size）
+            items_per_page = max(1, len(rows))
+            num_remaining_pages = (remaining + items_per_page - 1) // items_per_page
+            if num_remaining_pages > 200:
+                # 剩余页数过多（total 可能不可靠），回退串行逐页获取
+                pn += 1
+                continue
+            page_numbers = list(range(2, 2 + num_remaining_pages))
+            headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            results: dict[int, list[dict]] = {}
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = {
+                    executor.submit(_fetch_snapshot_page, p, page_size=page_size, host=host, headers=headers): p
+                    for p in page_numbers
+                }
+                for future in as_completed(futures):
+                    p = futures[future]
+                    results[p] = future.result()
+            # 按页码顺序处理剩余页（与串行路径等价的完整性检查）
+            for p in sorted(results.keys()):
+                page_rows = results[p]
+                if not page_rows:
+                    # 空页：不立即失败，最终完整性校验捕获 fetched_raw < total
+                    continue
+                page_codes = [
+                    str(item.get("f12") or "").strip()
+                    for item in page_rows
+                    if isinstance(item, dict)
+                ]
+                fingerprint = tuple(page_codes)
+                if prev_page_fingerprint is not None and fingerprint == prev_page_fingerprint:
+                    raise RuntimeError(
+                        f"a_share_snapshot page {p}: repeated page content without progress"
+                    )
+                prev_page_fingerprint = fingerprint
+                fetched_raw += len(page_rows)
+                page_new_unique = 0
+                for item in page_rows:
+                    mapped = _map_a_share_row(item)
+                    if mapped is None:
+                        continue
+                    code = mapped["code"]
+                    if code in seen_codes:
+                        continue
+                    seen_codes.add(code)
+                    out.append(mapped)
+                    page_new_unique += 1
+                # 与串行路径等价：有数据但没有任何新 code -> no progress -> fail closed
+                if page_new_unique == 0:
+                    raise RuntimeError(
+                        f"a_share_snapshot page {p}: no new unique codes "
+                        f"(fetched_raw={fetched_raw}, unique={len(out)}, total={total})"
+                    )
+            # 并发结束后完整性校验：必须证明 fetched_raw >= total 才允许成功
+            if total > 0 and fetched_raw < total:
+                raise RuntimeError(
+                    f"a_share_snapshot concurrent: incomplete data "
+                    f"(fetched_raw={fetched_raw}, total={total}, unique={len(out)})"
+                )
             break
 
         pn += 1
@@ -1078,6 +1204,9 @@ BOARD_FS: dict[str, str] = {
 _BOARD_FIELDS = "f3,f8,f12,f14,f20,f104,f105,f128,f136"
 _BOARD_PAGE_SIZE = 200
 _BOARD_CLIST_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
+# 板块成交额需要从详情接口补充（clist 的 f6 对板块不返回成交额）
+_BOARD_AMOUNT_FIELDS = "f48,f57,f58"
+_BOARD_AMOUNT_BATCH = 50
 
 
 def _map_board_row(d: dict) -> dict | None:

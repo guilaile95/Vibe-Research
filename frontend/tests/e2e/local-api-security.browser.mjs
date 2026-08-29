@@ -104,6 +104,16 @@ async function stopProcess(processHandle) {
 }
 
 
+async function launchBrowser() {
+  try {
+    return await chromium.launch({ headless: true });
+  } catch (error) {
+    if (!String(error).includes("Executable doesn't exist")) throw error;
+    return chromium.launch({ headless: true, channel: "chrome" });
+  }
+}
+
+
 const pageHtml = Buffer.from("<!doctype html><meta charset=utf-8><title>Origin fixture</title>");
 const trustedServer = createServer((_request, response) => {
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -145,7 +155,7 @@ try {
   );
   await waitForHealth(backendUrl, backend);
 
-  browser = await chromium.launch({ headless: true });
+  browser = await launchBrowser();
   const page = await browser.newPage();
 
   for (const frontendUrl of ["http://localhost:5899", "http://127.0.0.1:5899"]) {

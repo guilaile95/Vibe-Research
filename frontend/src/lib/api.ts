@@ -4,6 +4,7 @@
 
 export type * from "./api/types.ts";
 
+import type { MarketCloudEnvelope } from "./marketCloud.ts";
 import type {
   MyReport,
   IntelDigestLatestResult,
@@ -552,6 +553,11 @@ export const api = {
   },
   marketBreadth: () => get<TimedComponentEnvelope<MarketBreadthData>>("/market/breadth"),
   marketNorthbound: () => get<NorthboundCapitalFlow>("/market/northbound"),
+  marketCloud: (scope: string, period: string, signal?: AbortSignal) =>
+    get<MarketCloudEnvelope>(
+      `/market/cloud?scope=${encodeURIComponent(scope)}&period=${encodeURIComponent(period)}`,
+      signal ? { signal } : undefined,
+    ),
   /** BK-11 短线市场历史（只读；有界窗口，默认最近 5 个交易日） */
   bk11History: (days = 5, signal?: AbortSignal) =>
     get<Bk11HistoryEnvelope>(

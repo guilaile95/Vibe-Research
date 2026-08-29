@@ -207,7 +207,7 @@ async function caseOpenKeyboard(browser, errors) {
       errors.push(`${label}: aria-expanded should be true when open, got ${await ariaExpanded(page)}`);
     }
     // mobile drawer keeps full labels (never icon-only)
-    if (!(await sidebar(page).getByRole("link", { name: "每日复盘" }).isVisible().catch(() => false))) {
+    if (!(await sidebar(page).getByRole("link", { name: "今天" }).isVisible().catch(() => false))) {
       errors.push(`${label}: mobile drawer should show full nav labels`);
     }
     // focus moved into drawer
