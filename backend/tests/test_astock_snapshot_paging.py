@@ -1,4 +1,4 @@
-"""a_share_snapshot 分页完整性离线测试（Mock 网络，不打真实东财）。
+﻿"""a_share_snapshot 分页完整性离线测试（Mock 网络，不打真实东财）。
 
 覆盖：上游每页强制 100 条、多页合并、去重、重复页保护、失败不返回半截数据。
 """
@@ -36,7 +36,7 @@ class _FakeResp:
 def _install(monkeypatch, handler):
     calls: list[dict] = []
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         calls.append({"url": url, "params": dict(params or {})})
         return _FakeResp(handler(url, params or {}))
 
@@ -388,7 +388,7 @@ def test_page_retry_first_fail_second_success(monkeypatch):
     """第 2 页首次 ConnectionError，重试后成功；不回到第 1 页重跑。"""
     attempts_by_pn: dict[int, int] = {}
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         pn = int((params or {}).get("pn", "0"))
         attempts_by_pn[pn] = attempts_by_pn.get(pn, 0) + 1
         if pn == 2 and attempts_by_pn[pn] == 1:
@@ -412,7 +412,7 @@ def test_page_retry_first_fail_second_success(monkeypatch):
 def test_page_retry_two_fails_third_success(monkeypatch):
     attempts = {"n": 0}
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         pn = int((params or {}).get("pn", "0"))
         if pn == 1:
             return _FakeResp({"data": {"total": 3, "diff": _codes(3, 0)}})
@@ -426,7 +426,7 @@ def test_page_retry_two_fails_third_success(monkeypatch):
     monkeypatch.setattr(astock, "_em_last_call", [0.0])
     monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
     # total=3 page1 has all → may not need page2; force multi-page with larger total
-    def fake_em_get2(url, params=None, headers=None, timeout=15):
+    def fake_em_get2(url, params=None, headers=None, timeout=15, **kwargs):
         pn = int((params or {}).get("pn", "0"))
         if pn == 1:
             return _FakeResp({"data": {"total": 6, "diff": _codes(3, 0)}})
@@ -445,7 +445,7 @@ def test_page_retry_two_fails_third_success(monkeypatch):
 def test_page_retry_three_fails_raises_no_partial(monkeypatch):
     got_partial = {"codes": None}
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         pn = int((params or {}).get("pn", "0"))
         if pn == 1:
             return _FakeResp({"data": {"total": 10, "diff": _codes(5, 0)}})
@@ -469,7 +469,7 @@ def test_page_retry_three_fails_raises_no_partial(monkeypatch):
 def test_retry_stays_on_same_page(monkeypatch):
     seq: list[int] = []
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         pn = int((params or {}).get("pn", "0"))
         seq.append(pn)
         if pn == 2 and seq.count(2) < 2:
@@ -502,7 +502,7 @@ def test_json_error_not_retried_as_network(monkeypatch):
             calls["n"] += 1
             raise ValueError("not json")
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         return _BadJson()
 
     monkeypatch.setattr(astock, "em_get", fake_em_get)

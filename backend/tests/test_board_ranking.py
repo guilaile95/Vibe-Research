@@ -1,4 +1,4 @@
-"""board_ranking 统一板块排名离线测试（全部 Mock 网络）。"""
+﻿"""board_ranking 统一板块排名离线测试（全部 Mock 网络）。"""
 from __future__ import annotations
 
 import json
@@ -44,7 +44,7 @@ class _FakeResp:
 def _install_em_get(monkeypatch, handler):
     calls: list[dict] = []
 
-    def fake_em_get(url, params=None, headers=None, timeout=15):
+    def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         calls.append({"url": url, "params": dict(params or {})})
         return _FakeResp(handler(url, params or {}))
 

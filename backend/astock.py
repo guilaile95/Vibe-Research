@@ -752,6 +752,51 @@ def _em_get_page_with_retries(
     assert last_err is not None
     raise last_err
 
+
+def _fetch_snapshot_page(pn: int, *, page_size: int, host: str, headers: dict) -> list[dict]:
+    """获取单页全 A 快照并返回原始 diff list[dict]。
+
+    用于有界并发分页：第一页串行获取确定 total 后，后续页并发调用本函数。
+    仍走 em_get 全局限流（测试可 mock），但多线程重叠网络等待。
+    失败抛出异常，由调用方处理。
+    """
+    params = {
+        "pn": str(pn),
+        "pz": str(page_size),
+        "po": "1",
+        "np": "1",
+        "fltt": "2",
+        "invt": "2",
+        "fid": "f3",
+        "fs": _A_SHARE_FS,
+        "fields": _A_SHARE_FIELDS,
+    }
+    r = _em_get_page_with_retries(
+        f"https://{host}/api/qt/clist/get",
+        params=params,
+        headers=headers,
+        timeout=15,
+        min_interval=0.1,
+    )
+    try:
+        payload = r.json()
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"a_share_snapshot page {pn}: invalid JSON from {host}: {e}") from e
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"a_share_snapshot page {pn}: response is not a dict")
+    if "data" not in payload or payload["data"] is None:
+        raise RuntimeError(f"a_share_snapshot page {pn}: missing data in response")
+    data = payload["data"]
+    if not isinstance(data, dict):
+        raise RuntimeError(f"a_share_snapshot page {pn}: data is not a dict")
+    try:
+        return _normalize_clist_diff(data.get("diff"))
+    except RuntimeError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"a_share_snapshot page {pn}: bad diff: {e}") from e
+
+
 # ---------------------------------------------------------------------------
 # 打板层 · 涨停/炸板/跌停/昨涨停 原始池（东财 push2ex，走 em_get 限流）
 # 原始池含个股 code/name，由 market.py 聚合为短线情绪指标，也可输出连板股清单。
@@ -1057,9 +1102,62 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
         if total > 0 and fetched_raw >= total:
             break
 
+
         # total 未知时：本页短于请求页大小 → 视为末页
         # total 已知且未取完：即使上游强制每页 100 < page_size，也必须继续翻页
         if total <= 0 and len(rows) < page_size:
+            break
+
+        # 第一页串行获取确定 total 后，后续页有界并发获取（4 workers）
+        # 仅当第一页返回合理数量(>=50)且剩余页数合理(<=200)时才用并发
+        # 否则回退串行（处理空页、mid-page failure 等边界情况）
+        if pn == 1 and total > 0 and fetched_raw < total and len(rows) >= 50:
+            remaining = total - fetched_raw
+            # 用第一页实际返回条数估算剩余页数（上游可能强制每页 < page_size）
+            items_per_page = max(1, len(rows))
+            num_remaining_pages = (remaining + items_per_page - 1) // items_per_page
+            if num_remaining_pages > 200:
+                # 剩余页数过多（total 可能不可靠），回退串行逐页获取
+                pn += 1
+                continue
+            page_numbers = list(range(2, 2 + num_remaining_pages))
+            headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            results: dict[int, list[dict]] = {}
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = {
+                    executor.submit(_fetch_snapshot_page, p, page_size=page_size, host=host, headers=headers): p
+                    for p in page_numbers
+                }
+                for future in as_completed(futures):
+                    p = futures[future]
+                    results[p] = future.result()
+            # 按页码顺序处理剩余页
+            for p in sorted(results.keys()):
+                page_rows = results[p]
+                if not page_rows:
+                    continue
+                page_codes = [
+                    str(item.get("f12") or "").strip()
+                    for item in page_rows
+                    if isinstance(item, dict)
+                ]
+                fingerprint = tuple(page_codes)
+                if prev_page_fingerprint is not None and fingerprint == prev_page_fingerprint:
+                    raise RuntimeError(
+                        f"a_share_snapshot page {p}: repeated page content without progress"
+                    )
+                prev_page_fingerprint = fingerprint
+                fetched_raw += len(page_rows)
+                for item in page_rows:
+                    mapped = _map_a_share_row(item)
+                    if mapped is None:
+                        continue
+                    code = mapped["code"]
+                    if code in seen_codes:
+                        continue
+                    seen_codes.add(code)
+                    out.append(mapped)
             break
 
         pn += 1
