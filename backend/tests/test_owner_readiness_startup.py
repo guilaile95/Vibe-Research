@@ -134,8 +134,11 @@ def test_windows_launcher_contract_uses_pwsh_and_keeps_runtime_state_private() -
 
     assert "pwsh.exe" in cmd
     assert "powershell.exe" not in cmd
+    assert "%*" in cmd
     assert script.startswith("#requires -Version 7.0")
     assert "[switch]$ValidateOnly" in script
+    assert "[switch]$SmokeTest" in script
+    assert "One-click launcher smoke: PASS" in script
     assert "app:app" in script
     assert 'Get-Command "node.exe"' in script
     assert "'^v22\\.'" in script
