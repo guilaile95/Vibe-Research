@@ -269,3 +269,110 @@ def test_empty_result_not_cached(monkeypatch):
     assert calls["n"] == 2
     assert r3["total"] == 50
     market._CACHE.clear()
+
+
+# ── 13 成交额字段（enrichment via stock/get）与 amount_top ─────────────────────────
+
+
+def test_map_board_row_sets_amount_none_by_default():
+    """_map_board_row 应将 amount 初始化为 None（fail-closed，不伪造 0）。"""
+    import astock
+
+    row = astock._map_board_row({
+        "f12": "BK0447", "f14": "电子", "f3": 1.5,
+        "f8": 2.0, "f20": 1e12, "f104": 50, "f105": 30, "f128": "领涨股", "f136": 5.0,
+    })
+    assert row is not None
+    assert row["amount"] is None, "amount should be None before enrichment"
+    assert row["change_pct"] == 1.5
+
+
+def test_enrich_board_amounts_populates_amount(monkeypatch):
+    """_enrich_board_amounts 应通过 stock/get 补充成交额，失败保留 None。"""
+    import astock
+
+    fake_amounts = {"BK001": 1e8, "BK002": 5e8}
+
+    def fake_fetch_single(code):
+        return code, fake_amounts.get(code)
+
+    monkeypatch.setattr(astock, "_fetch_board_amount_single", fake_fetch_single)
+
+    boards = [
+        {"code": "BK001", "name": "小成交额", "amount": None},
+        {"code": "BK002", "name": "大成交额", "amount": None},
+        {"code": "BK003", "name": "无成交额", "amount": None},
+    ]
+    astock._enrich_board_amounts(boards)
+
+    assert boards[0]["amount"] == 1e8
+    assert boards[1]["amount"] == 5e8
+    assert boards[2]["amount"] is None, "failed fetch should keep None (fail-closed)"
+
+
+def test_board_ranking_amount_top_sorted_by_amount(monkeypatch):
+    """astock.board_ranking 应返回按成交额降序的 amount_top，null amount 不进入。"""
+    import astock
+
+    raw_pages = [
+        {
+            "data": {
+                "total": 3,
+                "diff": [
+                    {"f12": "BK001", "f14": "小成交额", "f3": 5.0, "f8": 1.0, "f20": 1e10, "f104": 10, "f105": 5},
+                    {"f12": "BK002", "f14": "大成交额", "f3": -2.0, "f8": 2.0, "f20": 1e10, "f104": 5, "f105": 10},
+                    {"f12": "BK003", "f14": "无成交额", "f3": 1.0, "f8": 1.0, "f20": 1e10, "f104": 8, "f105": 7},
+                ],
+            },
+        },
+    ]
+
+    def fake_em_get(url, params=None, headers=None, timeout=15):
+        class _Resp:
+            def json(self_inner):
+                return raw_pages[0]
+        return _Resp()
+
+    # Mock amount enrichment: BK001=1e8, BK002=5e8, BK003=None
+    fake_amounts = {"BK001": 1e8, "BK002": 5e8}
+
+    def fake_enrich(boards):
+        for b in boards:
+            b["amount"] = fake_amounts.get(b["code"])
+
+    monkeypatch.setattr(astock, "em_get", fake_em_get)
+    monkeypatch.setattr(astock, "_enrich_board_amounts", fake_enrich)
+
+    result = astock.board_ranking("industry", top_n=10)
+
+    assert result["total"] == 3
+    assert len(result["amount_top"]) == 2, "null amount should be excluded from amount_top"
+    # 按成交额降序
+    assert result["amount_top"][0]["code"] == "BK002"
+    assert result["amount_top"][0]["amount"] == 5e8
+    assert result["amount_top"][1]["code"] == "BK001"
+    assert result["amount_top"][1]["amount"] == 1e8
+
+
+def test_get_board_ranking_passes_amount_top(monkeypatch):
+    """market.get_board_ranking 应透传 amount_top 并按 top_n 切片。"""
+    market._CACHE.clear()
+    amount_top = [
+        {"code": f"A{i}", "name": f"板块{i}", "change_pct": 1.0, "amount": float(100 - i) * 1e6,
+         "turnover_pct": 1.0, "market_cap": 1e10, "up_count": 10, "down_count": 5,
+         "up_ratio": 0.6667, "leader": None, "leader_change_pct": None}
+        for i in range(50)
+    ]
+    raw = {
+        "type": "industry", "total": 50, "ranked_count": 50, "unknown_count": 0,
+        "top": amount_top[:20], "bottom": amount_top[-20:], "amount_top": amount_top,
+    }
+    monkeypatch.setattr(market, "get_cached_board_ranking", lambda bt: raw)
+    env = market.get_board_ranking("industry", top_n=10)
+
+    assert env["status"] == "normal"
+    assert env["data"] is not None
+    assert len(env["data"]["amount_top"]) == 10, "amount_top should be sliced by top_n"
+    assert env["data"]["amount_top"][0]["code"] == "A0"
+    assert env["data"]["amount_top"][0]["amount"] == 100e6
+    market._CACHE.clear()

@@ -1078,6 +1078,9 @@ BOARD_FS: dict[str, str] = {
 _BOARD_FIELDS = "f3,f8,f12,f14,f20,f104,f105,f128,f136"
 _BOARD_PAGE_SIZE = 200
 _BOARD_CLIST_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
+# 板块成交额需要从详情接口补充（clist 的 f6 对板块不返回成交额）
+_BOARD_AMOUNT_FIELDS = "f48,f57,f58"
+_BOARD_AMOUNT_BATCH = 50
 
 
 def _map_board_row(d: dict) -> dict | None:
@@ -1104,6 +1107,7 @@ def _map_board_row(d: dict) -> dict | None:
         "code": code,
         "name": name,
         "change_pct": _optional_float(d.get("f3")),
+        "amount": None,  # clist 不返回板块成交额，由 _enrich_board_amounts 补充
         "turnover_pct": _optional_float(d.get("f8")),
         "market_cap": _optional_float(d.get("f20")),
         "up_count": up_count,
@@ -1112,6 +1116,53 @@ def _map_board_row(d: dict) -> dict | None:
         "leader": leader,
         "leader_change_pct": _optional_float(d.get("f136")),
     }
+
+
+def _fetch_board_amount_single(code: str) -> tuple[str, float | None]:
+    """获取单个板块的成交额（stock/get API，f48=成交额）。失败返回 (code, None)。"""
+    params = {
+        "secid": f"90.{code}",
+        "fields": "f48,f57,f58",
+        "fltt": "2",
+        "invt": "2",
+    }
+    headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+    for host in _BOARD_CLIST_HOSTS:
+        try:
+            r = em_get(
+                f"https://{host}/api/qt/stock/get",
+                params=params,
+                headers=headers,
+                timeout=10,
+            )
+            payload = r.json()
+            data = payload.get("data") or {}
+            amount = _optional_float(data.get("f48"))
+            return code, amount
+        except Exception:
+            continue
+    return code, None
+
+
+def _enrich_board_amounts(boards: list[dict]) -> None:
+    """就地补充板块成交额（并发调用 stock/get）。失败时 amount 保持 None。"""
+    codes = [b["code"] for b in boards if b.get("amount") is None]
+    if not codes:
+        return
+    # 并发获取，控制 worker 数避免触发东财限流
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    results: dict[str, float | None] = {}
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_fetch_board_amount_single, code): code for code in codes}
+        for future in as_completed(futures, timeout=60):
+            try:
+                code, amount = future.result()
+                results[code] = amount
+            except Exception:
+                pass
+    for b in boards:
+        if b["code"] in results:
+            b["amount"] = results[b["code"]]
 
 
 def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: int = _BOARD_PAGE_SIZE) -> dict:
@@ -1240,10 +1291,15 @@ def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: i
         seen.add(mapped["code"])
         boards.append(mapped)
 
+    # 补充板块成交额（clist 不提供，从 ulist 批量获取；失败时 amount 保持 None）
+    _enrich_board_amounts(boards)
+
     ranked = [b for b in boards if b["change_pct"] is not None]
     unknown_count = len(boards) - len(ranked)
     ranked_desc = sorted(ranked, key=lambda x: float(x["change_pct"]), reverse=True)
     ranked_asc = sorted(ranked, key=lambda x: float(x["change_pct"]))
+    amount_ranked = [b for b in boards if b["amount"] is not None]
+    amount_top = sorted(amount_ranked, key=lambda x: float(x["amount"]), reverse=True)
 
     return {
         "type": board_type,
@@ -1252,6 +1308,7 @@ def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: i
         "unknown_count": unknown_count,
         "top": ranked_desc[:top_n],
         "bottom": ranked_asc[:top_n],
+        "amount_top": amount_top[:top_n],
     }
 
 
