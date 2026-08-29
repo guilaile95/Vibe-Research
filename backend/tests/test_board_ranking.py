@@ -51,6 +51,8 @@ def _install_em_get(monkeypatch, handler):
     monkeypatch.setattr(astock, "em_get", fake_em_get)
     monkeypatch.setattr(astock, "_EM_MIN_INTERVAL", 0)
     monkeypatch.setattr(astock, "_em_last_call", [0.0])
+    # amount enrichment 有独立 targeted test；此处 mock 掉避免触发 stock/get 调用
+    monkeypatch.setattr(astock, "_enrich_board_amounts", lambda boards: None)
     return calls
 
 
@@ -279,6 +281,7 @@ def test_board_ranking_empty(monkeypatch):
         "unknown_count": 0,
         "top": [],
         "bottom": [],
+        "amount_top": [],
     }
 
 
