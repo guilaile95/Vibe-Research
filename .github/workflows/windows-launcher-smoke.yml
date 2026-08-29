@@ -7,15 +7,23 @@ on:
     paths:
       - "Start-Vibe.cmd"
       - "start-vibe.ps1"
-      - "backend/**"
-      - "frontend/**"
+      - "backend/app.py"
+      - "backend/native_intel_service.py"
+      - "backend/requirements*.txt"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "frontend/vite.config.ts"
       - ".github/workflows/windows-launcher-smoke.yml"
   pull_request:
     paths:
       - "Start-Vibe.cmd"
       - "start-vibe.ps1"
-      - "backend/**"
-      - "frontend/**"
+      - "backend/app.py"
+      - "backend/native_intel_service.py"
+      - "backend/requirements*.txt"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "frontend/vite.config.ts"
       - ".github/workflows/windows-launcher-smoke.yml"
 
 concurrency:
