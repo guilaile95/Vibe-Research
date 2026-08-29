@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from candidate_opportunity_projection import CandidateOpportunityProjection
 from decision_evidence_delta_projection import (
     DecisionContext,
     NormalizedEvidenceItem,
@@ -120,6 +121,26 @@ def _hard(state: str = "CLEAR", evaluation: str = "EVALUATED") -> HardRiskEvalua
         hard_risk_evaluation=evaluation,
         reason_codes=() if state == "CLEAR" else (f"HARD_RISK_{state}",),
         authority_refs=("hard_risk:fixture",),
+    )
+
+
+def _candidate_buy() -> CandidateOpportunityProjection:
+    return CandidateOpportunityProjection(
+        constraint_evaluation="EVALUATED",
+        asset_view={"view": "ASSET", "stance": "SUPPORT"},
+        trade_view={"view": "TRADE", "stance": "SUPPORT"},
+        portfolio_view={"view": "PORTFOLIO"},
+        next_best_action="BUY NOW",
+        action_envelope={
+            "allowed_actions": ["BUY NOW", "BUY SMALL", "WAIT", "AVOID", "RESEARCH MORE"],
+            "blocked_actions": ["SCALE IN", "HOLD", "WATCH TO REDUCE", "REDUCE", "EXIT"],
+            "maintain_conditions": ["candidate-maintain"],
+            "upgrade_conditions": ["candidate-upgrade"],
+            "downgrade_conditions": ["candidate-downgrade"],
+            "invalidation_conditions": ["candidate-invalidation"],
+        },
+        authority_fact={"state": "READY"},
+        authority_refs=("candidate:fixture",),
     )
 
 
@@ -268,6 +289,34 @@ def test_material_unknown_and_unimplemented_sell_side_narrow_to_research():
     assert result.next_best_action == "RESEARCH MORE"
     assert set(result.action_envelope["allowed_actions"]) == {"WAIT", "RESEARCH MORE"}
     assert "HOLD" in result.action_envelope["blocked_actions"]
+
+
+def test_candidate_intersects_material_change_envelope_and_preserves_conditions():
+    thesis = _thesis("WEAKENED")
+    hard = _hard()
+    material = _material(evidence="new", thesis=thesis, hard=hard)
+    result = project_decision_proposal(
+        security_code=SECURITY,
+        strategy=STRATEGY,
+        campaign_id=CAMPAIGN,
+        thesis_id=THESIS_ID,
+        thesis_revision=1,
+        as_of=AS_OF,
+        asset_view={"view": "ASSET"},
+        trade_view={"view": "TRADE"},
+        portfolio_view={"view": "PORTFOLIO"},
+        current_thesis_authority=thesis,
+        hard_risk_evaluation=hard,
+        material_change=material,
+        sell_engine=_sell(thesis=thesis, hard=hard, material=material),
+        candidate_opportunity=_candidate_buy(),
+    )
+
+    assert material.material_change_state == "CONFIRMED"
+    assert set(result.action_envelope["allowed_actions"]) == {"WAIT", "RESEARCH MORE"}
+    assert result.next_best_action == "WAIT"
+    assert "review the confirmed change before taking a new positive-risk action" in result.maintain_conditions
+    assert "candidate-maintain" in result.maintain_conditions
 
 
 def test_not_evaluated_is_distinct_from_unknown_in_authority_facts():

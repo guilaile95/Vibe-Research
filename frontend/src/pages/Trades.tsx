@@ -83,6 +83,9 @@ export function Trades() {
   const [reconciliationError, setReconciliationError] = useState<string | null>(null);
   const [candidateError, setCandidateError] = useState<string | null>(null);
   const [reconciliationActionLoading, setReconciliationActionLoading] = useState(false);
+  const [activationLoading, setActivationLoading] = useState(false);
+  const [activationError, setActivationError] = useState<string | null>(null);
+  const [activatedCampaignId, setActivatedCampaignId] = useState<string | null>(null);
 
   // 新建 modal state
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -146,6 +149,8 @@ export function Trades() {
   }, []);
 
   useEffect(() => {
+    setActivationError(null);
+    setActivatedCampaignId(null);
     if (selectedTradeId) {
       loadDetail(selectedTradeId);
     } else {
@@ -241,6 +246,27 @@ export function Trades() {
       setReconciliationError(e instanceof Error ? e.message : "标记 UNPLANNED 失败");
     } finally {
       setReconciliationActionLoading(false);
+    }
+  };
+
+  const handleActivateCampaign = async () => {
+    if (!selectedTradeId || !reconciliation?.campaign_id) return;
+    setActivationLoading(true);
+    setActivationError(null);
+    try {
+      const result = await api.activateCampaignFromTrade(
+        reconciliation.campaign_id,
+        selectedTradeId,
+      );
+      setActivatedCampaignId(result.campaign.campaign_id);
+      setSuccessMsg("真实买入已核验，PRE-ENTRY Campaign 已显式激活");
+      setTimeout(() => setSuccessMsg(null), 3000);
+    } catch (error) {
+      setActivationError(
+        error instanceof Error ? error.message : "Campaign 激活失败",
+      );
+    } finally {
+      setActivationLoading(false);
     }
   };
 
@@ -1289,6 +1315,38 @@ export function Trades() {
                         );
                       })}
                       <button type="button" disabled={reconciliationActionLoading} onClick={handleMarkUnplanned} className="rounded border border-amber-500/40 px-2.5 py-1 text-[11px] font-medium text-amber-400 hover:bg-amber-500/10 disabled:opacity-50">标记为 UNPLANNED</button>
+                    </div>
+                  )}
+
+                  {reconciliation?.allocation_state === "ALLOCATED"
+                    && reconciliation.campaign_id
+                    && detailTrade.operation === "buy"
+                    && (detailTrade.execution_status === "full" || detailTrade.execution_status === "partial")
+                    && !detailTrade.voided_at && (
+                    <div className="space-y-2 border-t border-border/40 pt-3">
+                      <p className="text-[11px] text-muted-foreground">
+                        归属只建立追踪关系；Position Reality 确认持仓后，仍需你显式激活 Campaign。
+                      </p>
+                      {activationError && (
+                        <div className="rounded border border-rose-500/20 bg-rose-500/10 p-2 text-rose-400">
+                          {activationError}
+                        </div>
+                      )}
+                      {activatedCampaignId === reconciliation.campaign_id ? (
+                        <div className="inline-flex items-center gap-1.5 text-emerald-500">
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Campaign 已激活
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={activationLoading}
+                          onClick={handleActivateCampaign}
+                          className="rounded bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground disabled:opacity-50"
+                          data-testid="activate-campaign-from-trade"
+                        >
+                          {activationLoading ? "核验中…" : "确认激活 Campaign"}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

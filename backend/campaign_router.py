@@ -28,6 +28,8 @@ from typing import Literal
 
 import campaign_service
 from campaign_service import (
+    CampaignActivationNotEligibleError,
+    CampaignActivationTradeNotFoundError,
     CampaignConflictError,
     CampaignInputError,
     CampaignNotFoundError,
@@ -53,6 +55,8 @@ _THESIS_NOT_FOUND_DETAIL = "Thesis 不存在"
 _BINDING_NOT_FOUND_DETAIL = "Thesis Binding 不存在"
 _CONFLICT_DETAIL = "Campaign 已存在"
 _TRANSITION_CONFLICT_DETAIL = "Campaign 状态冲突"
+_ACTIVATION_NOT_ELIGIBLE_DETAIL = "Campaign 尚不满足真实买入激活条件"
+_TRADE_NOT_FOUND_DETAIL = "Trade 不存在"
 _BINDING_CONFLICT_DETAIL = "Thesis Binding 冲突"
 _THESIS_ARCHIVED_DETAIL = "Thesis 已归档，不可绑定"
 _THESIS_FORMAL_INCOMPLETE_DETAIL = "Thesis 未完成 Formal 化（NEEDS_USER_COMPLETION）"
@@ -97,6 +101,14 @@ class CampaignThesisBindingIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     thesis_id: str
+
+
+class CampaignTradeActivationIn(BaseModel):
+    """显式激活意图：只接受已有 Trade identity，不接受客户端声明结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trade_id: str
 
 
 @router.post("/campaigns", status_code=201)
@@ -182,6 +194,34 @@ def transition_campaign(campaign_id: str, body: CampaignTransitionIn) -> dict:
     except Exception:  # noqa: BLE001 — 未预期逃逸，安全兜底
         raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
     return {"data": {"campaign": campaign, "transition": transition}}
+
+
+@router.post("/campaigns/{campaign_id}/activate-from-trade")
+def activate_campaign_from_trade(
+    campaign_id: str,
+    body: CampaignTradeActivationIn,
+) -> dict:
+    """在真实 BUY 已执行、正式归属且 Position Reality 已 OPEN 后显式激活。"""
+    try:
+        result = campaign_service.activate_pre_entry_campaign_from_trade(
+            campaign_id=campaign_id,
+            trade_id=body.trade_id,
+        )
+    except CampaignInputError:
+        raise HTTPException(422, _INVALID_INPUT_DETAIL) from None
+    except CampaignNotFoundError:
+        raise HTTPException(404, _NOT_FOUND_DETAIL) from None
+    except CampaignActivationTradeNotFoundError:
+        raise HTTPException(404, _TRADE_NOT_FOUND_DETAIL) from None
+    except CampaignActivationNotEligibleError:
+        raise HTTPException(409, _ACTIVATION_NOT_ELIGIBLE_DETAIL) from None
+    except CampaignTransitionConflictError:
+        raise HTTPException(409, _TRANSITION_CONFLICT_DETAIL) from None
+    except CampaignServiceError:
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    except Exception:  # noqa: BLE001 — 未预期逃逸，安全兜底
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    return {"data": result}
 
 
 @router.get("/campaigns/{campaign_id}/transitions")

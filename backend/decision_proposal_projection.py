@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
+from candidate_opportunity_projection import CandidateOpportunityProjection
 from frozen_decision_store import NEXT_BEST_ACTIONS
 from hard_risk_contract import HardRiskEvaluation
 from material_change_projection import (
@@ -515,6 +516,98 @@ def _conditions_and_envelope(
     return envelope, nba
 
 
+def _candidate_authority_envelope(
+    *,
+    evaluation: str,
+    thesis_state: str | None,
+    thesis_evaluation: str,
+    hard_risk_state: str | None,
+    hard_risk_evaluation: str,
+    material_state: str | None,
+    material_evaluation: str,
+    sell_state: str | None,
+) -> tuple[dict[str, Any], str]:
+    """Existing named authorities' maximum PRE-ENTRY envelope.
+
+    Sell-only dimensions without an active position are not positive BUY
+    proof, but they are also not a PRE-ENTRY veto.  Current Thesis, Hard Risk,
+    Material Change, and any actual sell pressure remain authoritative vetoes.
+    """
+
+    existing, existing_nba = _conditions_and_envelope(
+        evaluation=evaluation,
+        thesis_state=thesis_state,
+        hard_risk_state=hard_risk_state,
+        material_state=material_state,
+        sell_state=sell_state,
+    )
+    if thesis_state in {"DISPROVEN", "INVALIDATED"} or sell_state == "THESIS_INVALIDATED":
+        allowed = {"AVOID", "WAIT", "RESEARCH MORE"}
+        nba = "AVOID"
+    elif hard_risk_state == "CONFIRMED":
+        allowed = {"AVOID", "WAIT", "RESEARCH MORE"}
+        nba = "AVOID"
+    elif material_state == "CONFIRMED" or thesis_state == "WEAKENED":
+        return existing, existing_nba
+    elif (
+        thesis_evaluation == "EVALUATED"
+        and thesis_state in {"STABLE", "STRENGTHENED"}
+        and hard_risk_evaluation in {"EVALUATED", "UNKNOWN"}
+        and hard_risk_state in {"CLEAR", "UNKNOWN"}
+        and material_state in {None, "NONE"}
+        and material_evaluation in {"EVALUATED", "NOT_EVALUATED"}
+        and sell_state is None
+    ):
+        allowed = {"BUY NOW", "BUY SMALL", "SCALE IN", "WAIT", "AVOID", "RESEARCH MORE"}
+        existing = {
+            "maintain_conditions": [
+                "Current Thesis remains STABLE or STRENGTHENED",
+                "no named Hard Risk, Material Change, or Sell authority blocks added risk",
+            ],
+            "upgrade_conditions": ["a newer named authority may only narrow this PRE-ENTRY envelope"],
+            "downgrade_conditions": ["Current Thesis weakens or named risk/review pressure appears"],
+            "invalidation_conditions": ["Current Thesis becomes terminal or authority scope/as_of changes"],
+        }
+        nba = "WAIT"
+    else:
+        return existing, existing_nba
+
+    allowed_actions, blocked_actions = _ordered_action_partition(allowed)
+    return {
+        **existing,
+        "allowed_actions": allowed_actions,
+        "blocked_actions": blocked_actions,
+    }, nba
+
+
+def _narrow_candidate_envelope(
+    base: Mapping[str, Any],
+    base_nba: str,
+    candidate: CandidateOpportunityProjection,
+) -> tuple[dict[str, Any], str]:
+    candidate_envelope = dict(candidate.action_envelope)
+    allowed = set(base["allowed_actions"]) & set(candidate_envelope["allowed_actions"])
+    if not allowed:
+        allowed = {"RESEARCH MORE"}
+
+    def merged(key: str) -> list[str]:
+        return list(dict.fromkeys([*base[key], *candidate_envelope[key]]))
+
+    allowed_actions, blocked_actions = _ordered_action_partition(allowed)
+    envelope = {
+        "allowed_actions": allowed_actions,
+        "blocked_actions": blocked_actions,
+        "maintain_conditions": merged("maintain_conditions"),
+        "upgrade_conditions": merged("upgrade_conditions"),
+        "downgrade_conditions": merged("downgrade_conditions"),
+        "invalidation_conditions": merged("invalidation_conditions"),
+    }
+    for action in (candidate.next_best_action, base_nba, "AVOID", "RESEARCH MORE", "WAIT"):
+        if action in allowed:
+            return envelope, action
+    return envelope, "RESEARCH MORE"
+
+
 def project_decision_proposal(
     *,
     security_code: str,
@@ -531,6 +624,7 @@ def project_decision_proposal(
     material_change: MaterialChangeProjection | None,
     sell_engine: SellEngineProjection | None,
     view_provenance: Mapping[str, Any] | None = None,
+    candidate_opportunity: CandidateOpportunityProjection | None = None,
 ) -> DecisionProposal:
     """Compose one exact-scope, uncommitted Formal Decision Proposal."""
 
@@ -549,6 +643,7 @@ def project_decision_proposal(
         ("hard_risk_evaluation", hard_risk_evaluation, HardRiskEvaluation),
         ("material_change", material_change, MaterialChangeProjection),
         ("sell_engine", sell_engine, SellEngineProjection),
+        ("candidate_opportunity", candidate_opportunity, CandidateOpportunityProjection),
     ):
         if value is not None and not isinstance(value, expected):
             raise DecisionProposalValidationError(
@@ -642,13 +737,39 @@ def project_decision_proposal(
         ),
     }
 
-    envelope, nba = _conditions_and_envelope(
-        evaluation=constraint_evaluation,
-        thesis_state=thesis_state,
-        hard_risk_state=hard_state,
-        material_state=material_state,
-        sell_state=sell_state,
-    )
+    if candidate_opportunity is None:
+        envelope, nba = _conditions_and_envelope(
+            evaluation=constraint_evaluation,
+            thesis_state=thesis_state,
+            hard_risk_state=hard_state,
+            material_state=material_state,
+            sell_state=sell_state,
+        )
+        projected_asset_view = asset_view
+        projected_trade_view = trade_view
+        projected_portfolio_view = portfolio_view
+    else:
+        base_constraint_evaluation = constraint_evaluation
+        constraint_evaluation = candidate_opportunity.constraint_evaluation
+        base_envelope, base_nba = _candidate_authority_envelope(
+            evaluation=base_constraint_evaluation,
+            thesis_state=thesis_state,
+            thesis_evaluation=thesis_evaluation,
+            hard_risk_state=hard_state,
+            hard_risk_evaluation=hard_evaluation,
+            material_state=material_state,
+            material_evaluation=material_evaluation,
+            sell_state=sell_state,
+        )
+        envelope, nba = _narrow_candidate_envelope(
+            base_envelope, base_nba, candidate_opportunity
+        )
+        authority_facts["candidate_opportunity"] = copy.deepcopy(
+            dict(candidate_opportunity.authority_fact)
+        )
+        projected_asset_view = candidate_opportunity.asset_view
+        projected_trade_view = candidate_opportunity.trade_view
+        projected_portfolio_view = candidate_opportunity.portfolio_view
     authority_refs = [AUTHORITY_REF]
     authority_refs.extend(thesis_refs)
     if hard_risk_evaluation is not None:
@@ -657,6 +778,8 @@ def project_decision_proposal(
         authority_refs.extend(material_change.authority_refs)
     if sell_engine is not None:
         authority_refs.extend(sell_engine.authority_refs)
+    if candidate_opportunity is not None:
+        authority_refs.extend(candidate_opportunity.authority_refs)
     view_provenance = (
         _view_provenance(view_provenance)
         if view_provenance is not None
@@ -685,9 +808,9 @@ def project_decision_proposal(
         thesis_id=thesis_id_value,
         thesis_revision=revision,
         as_of=as_of_text,
-        asset_view=_json_object(asset_view, "asset_view"),
-        trade_view=_json_object(trade_view, "trade_view"),
-        portfolio_view=_json_object(portfolio_view, "portfolio_view"),
+        asset_view=_json_object(projected_asset_view, "asset_view"),
+        trade_view=_json_object(projected_trade_view, "trade_view"),
+        portfolio_view=_json_object(projected_portfolio_view, "portfolio_view"),
         view_provenance=view_provenance,
         next_best_action=nba,
         action_envelope=envelope,

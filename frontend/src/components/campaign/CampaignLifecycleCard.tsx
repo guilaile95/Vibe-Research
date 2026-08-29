@@ -87,7 +87,9 @@ export function CampaignLifecycleCard({
     researchContext
       ? isDestructiveTransition(to)
         ? `停止研究（${CAMPAIGN_STATUS_LABELS[to]}）`
-        : "继续研究"
+        : to === "RESEARCHING" || to === "PRE-ENTRY"
+          ? "继续研究"
+          : TRANSITION_ACTION_LABELS[to]
       : TRANSITION_ACTION_LABELS[to];
   const reasons = decision ? presentReasonCodes(decision.reason_codes) : null;
 

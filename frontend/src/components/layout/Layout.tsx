@@ -81,6 +81,7 @@ const SYSTEM_NAV = [
 
 const RESEARCH_WORKFLOW_PATHS = [
   "/stock-data",
+  "/candidates",
   "/thesis",
   "/decision-evidence",
   "/portfolio",
@@ -108,6 +109,7 @@ function getCurrentNavPath(pathname: string) {
   if (pathname.startsWith("/thesis/")) return "/thesis";
   if (pathname.startsWith("/evidence")) return "/decision-evidence";
   if (pathname.startsWith("/campaigns/")) return "/decision-inbox";
+  if (pathname.startsWith("/candidates/")) return "/stock-data";
   return ALL_NAV.reduce<string | null>((best, item) => {
     if (!isActive(pathname, item.to)) return best;
     return !best || item.to.length > best.length ? item.to : best;

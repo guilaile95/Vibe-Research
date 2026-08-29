@@ -11,6 +11,7 @@ import {
   saveWatchAuthoritative,
   type WatchlistSort,
 } from "@/lib/watchlist";
+import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import {
   getWatchlistAnomalies,
   type WatchlistAnomalies,
@@ -357,9 +358,18 @@ export function Watchlist() {
                       return (
                         <tr key={c} data-watchlist-code={c}>
                   <td className="px-2 py-3">
-                    <Link to={`/stock-data?code=${c}`} className="font-mono hover:text-primary hover:underline">
-                      {c}
-                    </Link>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <Link to={`/stock-data?code=${c}`} className="font-mono hover:text-primary hover:underline">
+                        {c}
+                      </Link>
+                      <Link
+                        to={candidateWorkspaceHref(c)}
+                        className="text-[11px] text-primary hover:underline"
+                        data-testid={`watchlist-candidate-${c}`}
+                      >
+                        候选研究
+                      </Link>
+                    </div>
                     {(q?.name || events[0]?.name) && (
                       <span className="ml-2 text-muted-foreground">{q?.name || events[0]?.name}</span>
                     )}

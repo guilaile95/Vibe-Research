@@ -258,6 +258,41 @@ test("transitionCampaign 409 conflict reflected honestly", async () => {
   );
 });
 
+test("activateCampaignFromTrade submits only the exact Trade identity", async () => {
+  const tradeId = "c".repeat(32);
+  reset({
+    status: 200,
+    body: {
+      data: {
+        campaign: { ...DRAFT_CAMPAIGN, status: "ACTIVE" },
+        transition: {
+          transition_id: "campaign_transition_" + "d".repeat(32),
+          campaign_id: DRAFT_CAMPAIGN.campaign_id,
+          from_status: "PRE-ENTRY",
+          to_status: "ACTIVE",
+          transitioned_at: "2026-08-30T01:00:00.000000Z",
+        },
+        trade_id: tradeId,
+        decision_id: "decision_" + "e".repeat(32),
+        attribution_id: "trade_attribution_" + "f".repeat(32),
+        position_authority: "CANONICAL",
+      },
+    },
+  });
+  const result = await api.activateCampaignFromTrade(
+    DRAFT_CAMPAIGN.campaign_id,
+    tradeId,
+  );
+  const req = lastRequest();
+  assert.equal(req.method, "POST");
+  assert.equal(
+    req.url,
+    `/api/campaigns/${DRAFT_CAMPAIGN.campaign_id}/activate-from-trade`,
+  );
+  assert.deepEqual(JSON.parse(req.body as string), { trade_id: tradeId });
+  assert.equal(result.campaign.status, "ACTIVE");
+});
+
 test("getCampaignNextActions GETs read-model and unwraps data", async () => {
   reset({
     status: 200,

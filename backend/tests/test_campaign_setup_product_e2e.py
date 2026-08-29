@@ -16,11 +16,13 @@
 from __future__ import annotations
 
 import pytest
+import uuid
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import campaign_router
 import campaign_service
+import campaign_store
 import critical_data_dependency_policy as dda
 import decision_inbox_runtime_assembler as inbox_runtime
 import holdings_campaign_composition as composition
@@ -128,6 +130,17 @@ def _create_campaign(client, strategy: str = STRATEGY_SWING) -> dict:
 
 
 def _transition(client, campaign_id: str, expected: str, to: str) -> dict:
+    if expected == "PRE-ENTRY" and to == "ACTIVE":
+        # Fixture-only seed for downstream composition/inbox coverage. The public
+        # activation gate is covered by test_campaign_trade_activation.py.
+        campaign, transition = campaign_store.transition_campaign(
+            campaign_id=campaign_id,
+            expected_status=expected,
+            to_status=to,
+            transition_id=f"campaign_transition_{uuid.uuid4().hex}",
+            transitioned_at="2026-08-30T00:00:00.000000Z",
+        )
+        return {"campaign": campaign, "transition": transition}
     resp = client.post(
         f"/api/campaigns/{campaign_id}/transitions",
         json={"expected_status": expected, "to_status": to},
@@ -206,16 +219,12 @@ def test_matrix_b_after_create_draft_not_treated_current(client, env):
 # §8-C/D/E：显式推进到 ACTIVE，中间态不伪造 current
 # ---------------------------------------------------------------------------
 
-def test_matrix_cde_explicit_transitions_to_active(client, env):
+def test_matrix_cde_generic_activation_is_blocked_then_verified_fixture_is_active(client, env):
     _bootstrap_holding()
     campaign = _create_campaign(client)
     cid = campaign["campaign_id"]
 
-    for expected, to in (
-        ("DRAFT", "RESEARCHING"),
-        ("RESEARCHING", "PRE-ENTRY"),
-        ("PRE-ENTRY", "ACTIVE"),
-    ):
+    for expected, to in (("DRAFT", "RESEARCHING"), ("RESEARCHING", "PRE-ENTRY")):
         campaign = _transition(client, cid, expected, to)["campaign"]
         assert campaign["status"] == to
         # RESEARCHING / PRE-ENTRY 不伪造 current Campaign（ACTIVE 见 §8-F）
@@ -223,6 +232,14 @@ def test_matrix_cde_explicit_transitions_to_active(client, env):
             comp = _composition_items(_composition())
             assert comp[0]["composition_status"] == "UNASSIGNED_HOLDING"
             assert comp[0]["campaigns"] == []
+
+    blocked = client.post(
+        f"/api/campaigns/{cid}/transitions",
+        json={"expected_status": "PRE-ENTRY", "to_status": "ACTIVE"},
+    )
+    assert blocked.status_code == 409
+    campaign = _transition(client, cid, "PRE-ENTRY", "ACTIVE")["campaign"]
+    assert campaign["status"] == "ACTIVE"
 
     # transition history durable（3 次显式迁移）
     history = client.get(f"/api/campaigns/{cid}/transitions").json()["data"]

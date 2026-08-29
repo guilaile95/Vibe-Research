@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
@@ -111,7 +112,7 @@ async function jsonRequest(base, pathname, method = "GET", body, expected = 200)
   return payload.data;
 }
 
-async function createFrozenCurrentThesis(base, title) {
+async function createFrozenCurrentThesis(base, env, title) {
   const campaign = await jsonRequest(base, "/api/campaigns", "POST", {
     security_code: "600519",
     strategy: "SWING",
@@ -153,12 +154,13 @@ async function createFrozenCurrentThesis(base, title) {
   await jsonRequest(base, `/api/campaigns/${campaign.campaign_id}/thesis-binding`, "POST", {
     thesis_id: thesisId,
   }, 201);
-  for (const [from, to] of [["DRAFT", "RESEARCHING"], ["RESEARCHING", "PRE-ENTRY"], ["PRE-ENTRY", "ACTIVE"]]) {
+  for (const [from, to] of [["DRAFT", "RESEARCHING"], ["RESEARCHING", "PRE-ENTRY"]]) {
     await jsonRequest(base, `/api/campaigns/${campaign.campaign_id}/transitions`, "POST", {
       expected_status: from,
       to_status: to,
     }, 200);
   }
+  seedActiveCampaign(backendDir, env, campaign.campaign_id);
   return campaign;
 }
 
@@ -223,7 +225,7 @@ async function run() {
       opening_cash: 100000,
       positions: [{ code: "600519", name: "贵州茅台", shares: 100, cost_basis: 150000 }],
     }, 200);
-    const withChallenge = await createFrozenCurrentThesis(backend, "DCH1 with challenge");
+    const withChallenge = await createFrozenCurrentThesis(backend, env, "DCH1 with challenge");
     staticServer = await startStaticServer(frontendDist, frontendPort);
     const launchOptions = { headless: true };
     const executablePath = chromiumPath();
@@ -398,7 +400,7 @@ async function run() {
       `stale proposal must not silently bind the old challenge: body=${staleCommitBody}`,
     );
 
-    const withoutChallenge = await createFrozenCurrentThesis(backend, "DCH1 without challenge");
+    const withoutChallenge = await createFrozenCurrentThesis(backend, env, "DCH1 without challenge");
     await page.goto(`${frontend}/campaigns/${withoutChallenge.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
     await fillProposalDraft(page);
     await page.getByRole("button", { name: "Preview Proposal" }).click();
@@ -415,7 +417,7 @@ async function run() {
       "no-challenge freeze must not invent a challenge ref",
     );
 
-    const readErrorCampaign = await createFrozenCurrentThesis(backend, "DCH2 read error");
+    const readErrorCampaign = await createFrozenCurrentThesis(backend, env, "DCH2 read error");
     challengeReadFailureCampaignId = readErrorCampaign.campaign_id;
     challengeReadFailureStatus = 500;
     await page.goto(`${frontend}/campaigns/${readErrorCampaign.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });

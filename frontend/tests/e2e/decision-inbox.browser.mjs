@@ -10,8 +10,8 @@
  *    同一 card 直接展示 Campaign lifecycle 与 Current Thesis 下一步入口。
  * 4. 刷新后 DRAFT 仍持续存在（不依赖 transient focus component）。
  * 5. 同 Security 再创建 MEDIUM DRAFT —— 两个 setup 卡共存。
- * 6. SWING 卡显式点击：开始研究 → 标记待入场 → 激活 Campaign（每步一次，无链式）。
- * 7. ACTIVE 后：SWING 离开 setup 区域，进入「当前 Campaign」；
+ * 6. SWING 卡显式点击：开始研究 → 标记待入场；PRE-ENTRY 不提供无交易激活。
+ * 7. 夹具在 store 层种入既有 ACTIVE 历史后：SWING 离开 setup 区域，进入「当前 Campaign」；
  *    MEDIUM DRAFT sibling 仍可见（ACTIVE sibling 不隐藏 DRAFT sibling）；
  *    决策状态为诚实状态（绝不显示 NO_ACTION_REQUIRED）。
  * 8. 刷新后状态保持（backend 权威，无本地伪造）。
@@ -33,6 +33,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
@@ -109,6 +110,10 @@ function getPythonConfig() {
 }
 
 function findChromium() {
+  if (
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+    && existsSync(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)
+  ) return process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
   const candidates = [
     process.env.PLAYWRIGHT_CHROMIUM_PATH,
     join(process.env.LOCALAPPDATA || "", "ms-playwright"),
@@ -297,17 +302,31 @@ async function runE2E() {
     assert.equal(await mediumCard.getAttribute("data-campaign-status"), "DRAFT");
     assert.equal(await mediumCard.getAttribute("data-campaign-role"), "setup");
 
-    // 6. SWING 显式 lifecycle（每步一次点击，无链式；用「下一动作按钮出现」证明到达）
+    // 6. SWING 显式 lifecycle（每步一次点击，无链式）；PRE-ENTRY 必须等待交易证明。
     console.log("[E2E] 6. explicit SWING lifecycle...");
+    const swingId = await swingCard.getAttribute("data-campaign-id");
+    assert.ok(swingId, "SWING Campaign id must be present on the lifecycle card");
     await swingCard.locator('button:has-text("开始研究")').click();
     await swingCard.locator('button:has-text("标记待入场")').waitFor(); // RESEARCHING
     assert.equal(await swingCard.getAttribute("data-campaign-status"), "RESEARCHING");
     await swingCard.locator('button:has-text("标记待入场")').click();
-    await swingCard.locator('button:has-text("激活 Campaign")').waitFor(); // PRE-ENTRY
+    await page.waitForFunction(
+      (campaignId) => document.querySelector(`[data-campaign-id="${campaignId}"]`)?.getAttribute("data-campaign-status") === "PRE-ENTRY",
+      swingId,
+    );
     assert.equal(await swingCard.getAttribute("data-campaign-status"), "PRE-ENTRY");
-    await swingCard.locator('button:has-text("激活 Campaign")').click();
+    assert.equal(
+      await swingCard.locator('button:has-text("激活 Campaign")').count(),
+      0,
+      "PRE-ENTRY must not expose generic activation without an attributed executed BUY",
+    );
 
-    // 7. ACTIVE：SWING 离开 setup，进入决策项；MEDIUM DRAFT sibling 仍可见
+    // Decision Inbox 只验证既有 ACTIVE 的组合读取；直接 store seed 是隔离夹具，
+    // 不伪装成生产命令，也不放宽公开 API 的 trade-proven gate。
+    seedActiveCampaign(backendDir, env, swingId);
+    await page.click("button:has-text('刷新')");
+
+    // 7. ACTIVE fixture：SWING 离开 setup，进入决策项；MEDIUM DRAFT sibling 仍可见
     console.log("[E2E] 7. ACTIVE recognized by inbox; DRAFT sibling stays reachable...");
     const swingActiveCard = page.locator(
       '[data-campaign-strategy="SWING"][data-campaign-status="ACTIVE"]',

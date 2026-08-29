@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { EChart } from "@/components/ui/EChart";
 import { useMarketCloud, type MarketCloudScope, type MarketCloudPeriod } from "@/hooks/useMarketCloud";
 import {
@@ -11,6 +11,7 @@ import {
   type TreemapNode,
 } from "@/lib/marketCloud";
 import { cn } from "@/lib/utils";
+import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 
 const SCOPE_OPTIONS: { value: MarketCloudScope; label: string }[] = [
   { value: "all", label: "全A" },
@@ -28,6 +29,7 @@ export function MarketCloud() {
   const navigate = useNavigate();
   const [scope, setScope] = useState<MarketCloudScope>("all");
   const [period] = useState<MarketCloudPeriod>("today");
+  const [candidateCodeDraft, setCandidateCodeDraft] = useState("");
   const { data, loading, error, reload } = useMarketCloud({ scope, period });
 
   const treemapData = useMemo(() => {
@@ -61,6 +63,7 @@ export function MarketCloud() {
             `<div>流通市值：${formatMarketCap(d.value)}</div>` +
             `<div>成交额：${formatAmount(d.amount)}</div>` +
             `<div>所属行业：${d.industry ?? "—"}</div>` +
+            `<div style="margin-top:4px;color:#a1a1aa;font-size:11px">单击：个股数据 · Shift + 单击：候选研究</div>` +
             fetched;
         },
       },
@@ -128,10 +131,10 @@ export function MarketCloud() {
 
   const handleClick = useCallback(
     (params: unknown) => {
-      const p = params as { data?: TreemapNode };
+      const p = params as { data?: TreemapNode; event?: { event?: { shiftKey?: boolean } } };
       const d = p.data;
       if (!d || d.node_type !== "stock" || !d.code) return;
-      navigate(`/stock-data?code=${d.code}`);
+      navigate(p.event?.event?.shiftKey ? candidateWorkspaceHref(d.code) : `/stock-data?code=${d.code}`);
     },
     [navigate],
   );
@@ -162,30 +165,53 @@ export function MarketCloud() {
           <p className="mt-1 text-xs text-muted-foreground">一眼查看全市场结构；面积代表流通市值，红涨绿跌。</p>
         </div>
 
-        <div role="toolbar" aria-label="市场热力范围" className="flex flex-wrap items-center gap-1 rounded-lg border border-border/70 bg-card/70 p-1 shadow-sm">
-          {SCOPE_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              aria-pressed={scope === opt.value}
-              data-testid={`market-cloud-scope-${opt.value}`}
-              onClick={() => setScope(opt.value)}
-              className={cn(
-                "rounded-md px-2.5 py-1.5 text-xs transition-colors",
-                scope === opt.value
-                  ? "bg-foreground font-medium text-background"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
-              )}
-            >
-              {opt.label}
-            </button>
-          ))}
-          <span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
-          {PERIOD_OPTIONS.map((opt) => (
-            <span key={opt.value} className="rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary">
-              {opt.label}
-            </span>
-          ))}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex items-center gap-1 rounded-lg border border-primary/30 bg-card/70 p-1 shadow-sm">
+            <input
+              aria-label="候选研究代码"
+              inputMode="numeric"
+              value={candidateCodeDraft}
+              onChange={(event) => setCandidateCodeDraft(event.target.value.replace(/\D/g, "").slice(0, 6))}
+              placeholder="6 位代码"
+              className="w-24 rounded bg-background/70 px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary/50"
+            />
+            {/^[0-9]{6}$/.test(candidateCodeDraft) ? (
+              <Link
+                to={candidateWorkspaceHref(candidateCodeDraft)}
+                className="rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground"
+                data-testid="market-cloud-candidate-entry"
+              >
+                候选研究
+              </Link>
+            ) : (
+              <span className="rounded-md px-2.5 py-1.5 text-xs text-muted-foreground" aria-disabled="true">候选研究</span>
+            )}
+          </div>
+          <div role="toolbar" aria-label="市场热力范围" className="flex flex-wrap items-center gap-1 rounded-lg border border-border/70 bg-card/70 p-1 shadow-sm">
+            {SCOPE_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                aria-pressed={scope === opt.value}
+                data-testid={`market-cloud-scope-${opt.value}`}
+                onClick={() => setScope(opt.value)}
+                className={cn(
+                  "rounded-md px-2.5 py-1.5 text-xs transition-colors",
+                  scope === opt.value
+                    ? "bg-foreground font-medium text-background"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+            <span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
+            {PERIOD_OPTIONS.map((opt) => (
+              <span key={opt.value} className="rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary">
+                {opt.label}
+              </span>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -225,7 +251,7 @@ export function MarketCloud() {
             <EChart option={option} height={chartHeight} onClick={handleClick} />
           </div>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
-            <span>点击行业聚焦 · 通过顶部层级返回全市场 · 点击个股进入研究 · 滚轮缩放 / 拖拽平移</span>
+            <span>点击行业聚焦 · 单击个股进入数据 · Shift + 单击个股进入候选研究 · 滚轮缩放 / 拖拽平移</span>
             <span>{data.data.valid_count}/{data.data.stock_count} 只有效数据 · {data.data.industry_count} 个行业</span>
           </div>
           {warnings.length > 0 && (

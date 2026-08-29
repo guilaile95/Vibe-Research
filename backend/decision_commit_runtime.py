@@ -22,10 +22,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import account_reality_service
 import campaign_service
 import campaign_ai_draft_service as ai_draft_service
 import campaign_critical_data_runtime as critical_data_runtime
 import campaign_critical_data_projection as critical_data_projection
+import candidate_opportunity_projection as candidate_projection
 import decision_assurance_projection as assurance
 import decision_evidence_delta_projection as evidence_delta
 import decision_proposal_projection as proposal_projection
@@ -36,6 +38,7 @@ import hard_risk_contract as hard_risk_contract
 import hard_risk_current_thesis_adapter as thesis_hr_adapter
 import hard_risk_runtime as hard_risk_runtime
 import material_change_projection as material_projection
+import position_reality_service
 import sell_engine_projection as sell_projection
 
 
@@ -371,6 +374,55 @@ def _current_thesis_authority(
     return canonical, authority, "EVALUATED", []
 
 
+def _current_thesis_evidence_chain(
+    current_thesis: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Return the immutable Original + applicable Delta evidence authority.
+
+    ``_current_thesis_authority`` has already rejected any Delta confirmed
+    after the literal ``as_of``.  Later snapshots win for the same formal
+    evidence identity while every immutable origin remains in provenance.
+    """
+
+    thesis_id = current_thesis["thesis_id"]
+    revision = current_thesis["original"]["revision"]
+    original = current_thesis["original"]["snapshot"]
+    if not isinstance(original, Mapping) or not isinstance(original.get("evidence_links"), list):
+        raise CurrentThesisUnavailableError("Current Thesis Original evidence is invalid")
+
+    evidence_by_id: dict[str, dict[str, Any]] = {}
+
+    def add(items: object, origin: str) -> None:
+        if not isinstance(items, list):
+            raise CurrentThesisUnavailableError("Current Thesis Delta evidence is invalid")
+        for item in items:
+            if not isinstance(item, Mapping):
+                raise CurrentThesisUnavailableError("Current Thesis evidence snapshot is invalid")
+            evidence_id = item.get("evidence_id")
+            if not isinstance(evidence_id, str) or not evidence_id:
+                raise CurrentThesisUnavailableError("Current Thesis evidence identity is invalid")
+            prior_refs = evidence_by_id.get(evidence_id, {}).get("provenance_refs", [])
+            snapshot = copy.deepcopy(dict(item))
+            snapshot["provenance_refs"] = list(dict.fromkeys([*prior_refs, f"{origin}:{evidence_id}"]))
+            evidence_by_id[evidence_id] = snapshot
+
+    add(
+        original["evidence_links"],
+        f"current_thesis_evidence:original:{thesis_id}:v{revision}",
+    )
+    for delta in current_thesis.get("deltas", []):
+        if not isinstance(delta, Mapping):
+            raise CurrentThesisUnavailableError("Current Thesis Delta is invalid")
+        delta_id = delta.get("delta_id")
+        if not isinstance(delta_id, str) or not delta_id:
+            raise CurrentThesisUnavailableError("Current Thesis Delta identity is invalid")
+        add(
+            delta.get("evidence_snapshots"),
+            f"current_thesis_evidence:delta:{delta_id}",
+        )
+    return list(evidence_by_id.values())
+
+
 def _hard_risk_for_snapshot(
     campaign: Mapping[str, Any],
     as_of: str,
@@ -654,6 +706,8 @@ class RuntimePorts:
     freeze_writer_with_pre_write_validation: Callable[..., Mapping[str, Any]] | None = None
     decision_reader: Callable[[str], Mapping[str, Any] | None] = frozen_decision_service.get_decision
     critical_data_reader: Callable[[Mapping[str, Any], str], Mapping[str, Any]] | None = None
+    position_reader: Callable[[], Mapping[str, Any]] | None = None
+    account_reader: Callable[[], Mapping[str, Any]] | None = None
 
 
 def _production_critical_data_reader(
@@ -665,9 +719,21 @@ def _production_critical_data_reader(
     )
 
 
+def _production_position_reader() -> Mapping[str, Any]:
+    state = position_reality_service.get_holding_authority_state()
+    if state != "CANONICAL":
+        return {"authority_state": state}
+    return {
+        "authority_state": state,
+        **position_reality_service.read_current_holdings_snapshot(),
+    }
+
+
 PRODUCTION_PORTS = RuntimePorts(
     critical_data_reader=_production_critical_data_reader,
     freeze_writer_with_pre_write_validation=_production_freeze_writer_with_pre_write_validation,
+    position_reader=_production_position_reader,
+    account_reader=account_reality_service.get_account_reality,
 )
 _COMMIT_LOCK = threading.Lock()
 
@@ -730,6 +796,31 @@ def _read_critical_data(
     return copy.deepcopy(dict(value))
 
 
+def _read_candidate_authority(
+    reader: Callable[[], Mapping[str, Any]] | None,
+) -> Mapping[str, Any] | None:
+    if reader is None:
+        return None
+    try:
+        value = reader()
+    except Exception:  # noqa: BLE001 - Candidate stays usable but fail closed
+        return {"_candidate_read_error": True}
+    if not isinstance(value, Mapping):
+        return {"_candidate_read_error": True}
+    return copy.deepcopy(dict(value))
+
+
+def _read_candidate_authorities(
+    ports: RuntimePorts, campaign: Mapping[str, Any]
+) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
+    if campaign.get("status") != "PRE-ENTRY":
+        return None, None
+    return (
+        _read_candidate_authority(ports.position_reader),
+        _read_candidate_authority(ports.account_reader),
+    )
+
+
 def _read_frozen(ports: RuntimePorts, campaign: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     values = ports.frozen_reader(campaign_id=campaign["campaign_id"], limit=10000, offset=0)
     if not isinstance(values, list):
@@ -784,6 +875,8 @@ def _build_proposal(
     drafts: Mapping[str, Any],
     ports: RuntimePorts,
     critical_data: Mapping[str, Any],
+    candidate_position: Mapping[str, Any] | None = None,
+    candidate_account: Mapping[str, Any] | None = None,
     evidence_reader: Callable[[Mapping[str, Any]], Sequence[evidence_delta.NormalizedEvidenceItem]] | None = None,
     view_provenance: Mapping[str, Any] | None = None,
 ) -> tuple[proposal_projection.DecisionProposal, AuthorityEvaluations]:
@@ -805,6 +898,31 @@ def _build_proposal(
         raise CurrentThesisUnavailableError("Current Thesis is not applicable at this as_of")
     thesis_id = authorities.current_thesis_projection["thesis_id"]
     thesis_revision = authorities.current_thesis_projection["original"]["revision"]
+    candidate = None
+    if campaign.get("status") == "PRE-ENTRY":
+        model_proposed = any(
+            isinstance(entry, Mapping) and entry.get("view_origin") == "MODEL_PROPOSAL"
+            for entry in (view_provenance or {}).values()
+        )
+        evidence_links = _current_thesis_evidence_chain(
+            authorities.current_thesis_projection
+        )
+        candidate = candidate_projection.project_candidate_opportunity(
+            security_code=campaign["security_code"],
+            strategy=campaign["strategy"],
+            as_of=as_of,
+            asset_view=drafts["asset_view"],
+            trade_view=drafts["trade_view"],
+            portfolio_view=drafts["portfolio_view"],
+            hard_risk_state=authorities.hard_risk.hard_risk_state,
+            hard_risk_evaluation=authorities.hard_risk.hard_risk_evaluation,
+            hard_risk_refs=authorities.hard_risk.authority_refs,
+            critical_data=critical_data,
+            evidence_links=evidence_links,
+            position_snapshot=candidate_position,
+            account_reality=candidate_account,
+            model_proposed=model_proposed,
+        )
     result = proposal_projection.project_decision_proposal(
         security_code=campaign["security_code"],
         strategy=campaign["strategy"],
@@ -820,6 +938,7 @@ def _build_proposal(
         material_change=authorities.material_change,
         sell_engine=authorities.sell_engine,
         view_provenance=view_provenance,
+        candidate_opportunity=candidate,
     )
     return result, authorities
 
@@ -954,6 +1073,10 @@ def _preview_response(
         "commit_requirements": {
             "user_confirmed": True,
             "expected_proposal_fingerprint": fingerprint,
+            "challenge_required": (
+                "candidate_opportunity" in proposal.authority_facts
+                and proposal.next_best_action in candidate_projection.BUY_ACTIONS
+            ),
         },
     }
     if draft_witness is not None:
@@ -994,6 +1117,7 @@ def preview_decision_proposal(
     raw_thesis = _read_thesis_once(ports, campaign_key)
     frozen = _read_frozen(ports, campaign)
     critical_data = _read_critical_data(ports, campaign, snapshot_as_of)
+    candidate_position, candidate_account = _read_candidate_authorities(ports, campaign)
     validated_witness = None
     provenance = None
     if draft_witness is not None:
@@ -1020,6 +1144,8 @@ def preview_decision_proposal(
         drafts=drafts,
         ports=ports,
         critical_data=critical_data,
+        candidate_position=candidate_position,
+        candidate_account=candidate_account,
         view_provenance=provenance,
     )
     fingerprint = _fingerprint(
@@ -1110,13 +1236,15 @@ def _freeze_payload(
     fingerprint: str,
     challenge_id: str | None = None,
 ) -> dict[str, Any]:
+    candidate = proposal.authority_facts.get("candidate_opportunity")
+    candidate = candidate if isinstance(candidate, Mapping) else None
     source_refs = [
         f"{PROPOSAL_SOURCE_PREFIX}{fingerprint}",
         *proposal.authority_refs,
     ]
     if challenge_id is not None:
         source_refs.append(f"{CHALLENGE_SOURCE_PREFIX}{challenge_id}")
-    return {
+    payload = {
         "security_code": proposal.security_code,
         "strategy": proposal.strategy,
         "campaign_id": proposal.campaign_id,
@@ -1137,14 +1265,33 @@ def _freeze_payload(
         "event_invalidation_conditions": copy.deepcopy(
             drafts["event_invalidation_conditions"]
         ),
-        "risk_policy_version": RISK_POLICY_VERSION,
-        "opportunity_policy_version": OPPORTUNITY_POLICY_VERSION,
-        "decision_policy_version": DECISION_POLICY_VERSION,
+        "risk_policy_version": (
+            candidate.get("risk_policy_version") if candidate else RISK_POLICY_VERSION
+        ),
+        "opportunity_policy_version": (
+            candidate.get("opportunity_policy_version") if candidate else OPPORTUNITY_POLICY_VERSION
+        ),
+        "decision_policy_version": (
+            candidate.get("decision_policy_version") if candidate else DECISION_POLICY_VERSION
+        ),
         "behavior_model_version": BEHAVIOR_MODEL_VERSION,
         "risk_refs": list(authorities.hard_risk.authority_refs),
         "source_refs": list(dict.fromkeys(source_refs)),
         "user_confirmed": True,
     }
+    if candidate is not None:
+        confidence = candidate.get("confidence")
+        confidence = confidence if isinstance(confidence, Mapping) else {}
+        payload.update(
+            {
+                "data_quality": confidence.get("data_quality", "UNKNOWN"),
+                "evidence_confidence": confidence.get("evidence_confidence", "UNKNOWN"),
+                "inference_confidence": confidence.get("inference_confidence", "UNKNOWN"),
+                "decision_confidence": confidence.get("decision_confidence", "UNKNOWN"),
+                "evidence_refs": copy.deepcopy(candidate.get("evidence_refs", [])),
+            }
+        )
+    return payload
 
 
 def _validate_committed_readback(
@@ -1214,6 +1361,7 @@ def commit_decision_proposal(
         raw_thesis = _read_thesis_once(ports, campaign_key)
         frozen = _read_frozen(ports, campaign)
         critical_data = _read_critical_data(ports, campaign, as_of)
+        candidate_position, candidate_account = _read_candidate_authorities(ports, campaign)
         validated_witness = None
         provenance = None
         if draft_witness is not None:
@@ -1250,6 +1398,8 @@ def commit_decision_proposal(
             drafts=drafts,
             ports=ports,
             critical_data=critical_data,
+            candidate_position=candidate_position,
+            candidate_account=candidate_account,
             evidence_reader=snapshot_evidence_reader,
             view_provenance=provenance,
         )
@@ -1292,6 +1442,8 @@ def commit_decision_proposal(
                 drafts=drafts,
                 ports=ports,
                 critical_data=critical_data,
+                candidate_position=candidate_position,
+                candidate_account=candidate_account,
                 evidence_reader=snapshot_evidence_reader,
                 view_provenance=provenance,
             )
@@ -1311,6 +1463,14 @@ def commit_decision_proposal(
             fingerprint = expected
             marker = expected_marker
         challenge_id = _optional_challenge_id(payload)
+        if (
+            campaign.get("status") == "PRE-ENTRY"
+            and result.next_best_action in candidate_projection.BUY_ACTIONS
+            and challenge_id is None
+        ):
+            raise ChallengeBindingError(
+                "PRE-ENTRY BUY decisions require a verified Decision Challenge"
+            )
         if existing is not None:
             existing_committed_at = existing.get("committed_at")
             if not isinstance(existing_committed_at, str) or existing_committed_at != _canonical_utc(

@@ -262,7 +262,16 @@ def test_strategy_snapshot_survives_lifecycle(db_path, fake_evidence):
         ("DRAFT", "RESEARCHING"), ("RESEARCHING", "PRE-ENTRY"),
         ("PRE-ENTRY", "ACTIVE"), ("ACTIVE", "REDUCING"), ("REDUCING", "CLOSED"),
     ):
-        campaign, _ = transition_campaign(rec["campaign_id"], frm, to)
+        if frm == "PRE-ENTRY" and to == "ACTIVE":
+            campaign, _ = campaign_store.transition_campaign(
+                campaign_id=rec["campaign_id"],
+                expected_status=frm,
+                to_status=to,
+                transition_id="campaign_transition_" + "b" * 32,
+                transitioned_at="2026-08-30T00:00:00.000000Z",
+            )
+        else:
+            campaign, _ = transition_campaign(rec["campaign_id"], frm, to)
         assert campaign["strategy"] == "SWING"
     assert get_campaign(rec["campaign_id"])["strategy"] == "SWING"
     assert get_campaign_thesis_binding(rec["campaign_id"])["campaign_strategy_at_bind"] == "SWING"

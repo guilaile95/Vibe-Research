@@ -39,12 +39,13 @@ function contextQuery(
   campaignId: string,
   securityCode: string,
   strategy: CampaignStrategy,
+  returnTo: string,
 ): string {
   return new URLSearchParams({
     campaign_id: campaignId,
     security_code: securityCode,
     strategy,
-    return_to: "/decision-inbox",
+    return_to: returnTo,
   }).toString();
 }
 
@@ -53,11 +54,13 @@ export function CampaignThesisActivationCard({
   securityCode,
   strategy,
   reloadEpoch,
+  returnTo = "/decision-inbox",
 }: {
   campaignId: string;
   securityCode: string;
   strategy: CampaignStrategy;
   reloadEpoch: number;
+  returnTo?: string;
 }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -117,7 +120,7 @@ export function CampaignThesisActivationCard({
     };
   }, [load, reloadEpoch]);
 
-  const query = contextQuery(campaignId, securityCode, strategy);
+  const query = contextQuery(campaignId, securityCode, strategy, returnTo);
 
   return (
     <div className="rounded-lg border border-border/60 bg-background/35 p-3" data-campaign-thesis={campaignId}>

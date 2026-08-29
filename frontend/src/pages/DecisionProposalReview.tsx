@@ -8,6 +8,14 @@ import { VIEW_STANCE_LABELS, VIEW_STANCE_OPTIONS, buildJudgedView, buildPortfoli
 import { hydratedHorizonValue, resolveDecisionContext, type DecisionContextHydrationResult } from "@/lib/decisionContextHydration";
 import { browserTimeZoneName, formatUtcOffsetMinutes, parseReviewBoundary } from "@/lib/reviewBoundaryInput";
 import { buildEvaluatedTradeContinuationHref } from "@/lib/tradeContinuation";
+import {
+  CANDIDATE_CONFIDENCE_LEVELS,
+  buildCandidateTradeTerms,
+  buildCandidateValuationCase,
+  type CandidateConfidence,
+  type CandidateTradeTermsDraft,
+  type CandidateValuationCaseDraft,
+} from "@/lib/candidateCampaign";
 import type { CampaignRecord, CampaignThesisBinding, CampaignCurrentThesis, ThesisAggregate, CampaignAIDraftGenerateResult, DecisionProposalDraftWitness } from "@/lib/api";
 
 type ChallengeReadState = "PENDING" | "FOUND" | "ABSENT" | "ERROR";
@@ -28,6 +36,57 @@ const emptyChallenge = (): Record<DecisionChallengeDimensionName, DecisionChalle
 
 const inputCls = "mt-1 w-full rounded-md border border-border/60 bg-background px-2.5 py-2 text-sm outline-none focus:border-primary/60";
 const codeCls = "rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px]";
+
+type CandidateScenarioName = "bear" | "base" | "bull";
+type CandidateConfidenceName = "data_quality" | "evidence_confidence" | "inference_confidence" | "decision_confidence";
+
+const CANDIDATE_SCENARIOS: readonly CandidateScenarioName[] = ["bear", "base", "bull"];
+const CANDIDATE_SCENARIO_LABELS: Record<CandidateScenarioName, string> = {
+  bear: "Bear",
+  base: "Base",
+  bull: "Bull",
+};
+const CANDIDATE_CONFIDENCE_LABELS: Record<CandidateConfidenceName, string> = {
+  data_quality: "Data quality",
+  evidence_confidence: "Evidence confidence",
+  inference_confidence: "Inference confidence",
+  decision_confidence: "Decision confidence",
+};
+
+function emptyCandidateCase(): CandidateValuationCaseDraft {
+  return {
+    assumptions: "",
+    inputMetric: "",
+    inputValue: "",
+    inputPeriod: "",
+    source: "",
+    dataAt: "",
+    priceLow: "",
+    priceHigh: "",
+    horizon: "",
+    changeConditions: "",
+  };
+}
+
+function isCandidateBuyAction(value: string): boolean {
+  return value === "BUY NOW" || value === "BUY SMALL" || value === "SCALE IN";
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function presentAuthorityValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "UNKNOWN";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(presentAuthorityValue).join("、") || "—";
+  const record = recordValue(value);
+  if (!record) return "UNKNOWN";
+  const entries = Object.entries(record).map(([key, item]) => `${key}: ${presentAuthorityValue(item)}`);
+  return entries.join(" · ") || "—";
+}
 
 function splitLines(value: string): string[] {
   return value
@@ -83,6 +142,24 @@ export function DecisionProposalReview() {
   const [tradeStance, setTradeStance] = useState<ViewStance>("WAIT");
   const [tradeNote, setTradeNote] = useState("");
   const [portfolioConstraint, setPortfolioConstraint] = useState("");
+  const [candidateCases, setCandidateCases] = useState<Record<CandidateScenarioName, CandidateValuationCaseDraft>>({
+    bear: emptyCandidateCase(),
+    base: emptyCandidateCase(),
+    bull: emptyCandidateCase(),
+  });
+  const [candidateConfidence, setCandidateConfidence] = useState<Record<CandidateConfidenceName, CandidateConfidence | "">>({
+    data_quality: "",
+    evidence_confidence: "",
+    inference_confidence: "",
+    decision_confidence: "",
+  });
+  const [candidateTrade, setCandidateTrade] = useState<CandidateTradeTermsDraft>({
+    entryLow: "",
+    entryHigh: "",
+    invalidationPrice: "",
+    executionStyle: "",
+  });
+  const [candidateAnchorsUnavailable, setCandidateAnchorsUnavailable] = useState(false);
   const [reviewByLocal, setReviewByLocal] = useState("");
   const [horizon, setHorizon] = useState("");
   const [campaign, setCampaign] = useState<CampaignRecord | null>(null);
@@ -171,11 +248,50 @@ export function DecisionProposalReview() {
   // 过去时间等业务校验仍由 backend Preview authority 负责，这里不复制规则。
   const reviewBoundary = useMemo(() => parseReviewBoundary(reviewByLocal), [reviewByLocal]);
 
+  const candidateConfidenceValues = useMemo(() => {
+    if (
+      !candidateConfidence.data_quality
+      || !candidateConfidence.evidence_confidence
+      || !candidateConfidence.inference_confidence
+      || !candidateConfidence.decision_confidence
+    ) return null;
+    return candidateConfidence as Record<CandidateConfidenceName, CandidateConfidence>;
+  }, [candidateConfidence]);
+
+  const candidateValuation = useMemo(() => {
+    const cases = {
+      bear: buildCandidateValuationCase(candidateCases.bear),
+      base: buildCandidateValuationCase(candidateCases.base),
+      bull: buildCandidateValuationCase(candidateCases.bull),
+    };
+    if (
+      !cases.bear
+      || !cases.base
+      || !cases.bull
+      || !candidateConfidenceValues
+    ) return null;
+    return { cases, confidence: candidateConfidenceValues };
+  }, [candidateCases, candidateConfidenceValues]);
+
+  const candidateTradeTerms = useMemo(() => buildCandidateTradeTerms(candidateTrade), [candidateTrade]);
+  const isPreEntry = campaign?.status === "PRE-ENTRY";
+
   const draft = useMemo<DecisionProposalDraftInput | null>(() => {
     if (reviewBoundary.status !== "VALID" || !horizon.trim()) return null;
+    if (isPreEntry && !candidateConfidenceValues) return null;
+    if (isPreEntry && !candidateAnchorsUnavailable && (!candidateValuation || !candidateTradeTerms)) return null;
+    const assetView: Record<string, unknown> = buildJudgedView("ASSET", assetStance, assetNote);
+    const tradeView: Record<string, unknown> = buildJudgedView("TRADE", tradeStance, tradeNote);
+    if (isPreEntry && candidateConfidenceValues) {
+      Object.assign(assetView, candidateConfidenceValues);
+      if (!candidateAnchorsUnavailable && candidateValuation && candidateTradeTerms) {
+        assetView.candidate_valuation = candidateValuation.cases;
+        Object.assign(tradeView, candidateTradeTerms);
+      }
+    }
     return {
-      asset_view: buildJudgedView("ASSET", assetStance, assetNote),
-      trade_view: buildJudgedView("TRADE", tradeStance, tradeNote),
+      asset_view: assetView,
+      trade_view: tradeView,
       portfolio_view: buildPortfolioView(portfolioConstraint),
       review_by: reviewBoundary.iso,
       key_assumptions: splitLines(assumptions),
@@ -183,7 +299,7 @@ export function DecisionProposalReview() {
       strategy_horizon: horizon.trim(),
       ...(draftWitness ? { draft_witness: draftWitness } : {}),
     };
-  }, [assetStance, assetNote, tradeStance, tradeNote, portfolioConstraint, reviewBoundary, horizon, assumptions, invalidations, draftWitness]);
+  }, [assetStance, assetNote, tradeStance, tradeNote, portfolioConstraint, reviewBoundary, horizon, assumptions, invalidations, draftWitness, isPreEntry, candidateConfidenceValues, candidateAnchorsUnavailable, candidateValuation, candidateTradeTerms]);
 
   const applyAIDraft = (result: CampaignAIDraftGenerateResult) => {
     const fields = result.generated_fields;
@@ -239,7 +355,9 @@ export function DecisionProposalReview() {
     setBindChallenge(false);
     if (!campaignId || !draft) {
       setChallengeReadState("ERROR");
-      setError("请先选择有效的 review 时间、填写 strategy horizon，并确保三个 View 输入合法。");
+      setError(isPreEntry
+        ? "请显式选择四项 confidence；若估值锚可用，请完整填写 Bear / Base / Bull、entry range 与低于 entry low 的 invalidation price；若不可用，请勾选 UNKNOWN 分支并选择有效 review 时间。"
+        : "请先选择有效的 review 时间、填写 strategy horizon，并确保三个 View 输入合法。");
       return;
     }
     setBusy("preview");
@@ -311,6 +429,9 @@ export function DecisionProposalReview() {
       || !draft
       || !confirmed
       || (challengeReadState !== "FOUND" && challengeReadState !== "ABSENT")
+      || (campaign?.status === "PRE-ENTRY"
+        && isCandidateBuyAction(preview.proposal.next_best_action)
+        && (challengeReadState !== "FOUND" || !bindChallenge || !challengePacket?.challenge_id))
     ) return;
     setBusy("commit");
     setError("");
@@ -369,6 +490,14 @@ export function DecisionProposalReview() {
   const previewAssurance = preview?.decision_assurance as Record<string, unknown> | undefined;
   const dimensions = (previewAssurance?.dimension_states ?? {}) as Record<string, unknown>;
   const envelope = preview?.proposal.action_envelope as Record<string, unknown> | undefined;
+  const candidateOpportunity = recordValue(preview?.proposal.authority_facts?.candidate_opportunity);
+  const candidatePolicyFacts = candidateOpportunity
+    ? Object.entries(candidateOpportunity).filter(([key]) => key === "analysis_metadata" || key.endsWith("policy_version"))
+    : [];
+  const challengeRequiredForFreeze = Boolean(preview?.commit_requirements.challenge_required)
+    || (campaign?.status === "PRE-ENTRY" && Boolean(preview && isCandidateBuyAction(preview.proposal.next_best_action)));
+  const requiredChallengeReady = !challengeRequiredForFreeze
+    || (challengeReadState === "FOUND" && bindChallenge && Boolean(challengePacket?.challenge_id));
   const committedTradeHref = committed && campaign
     ? buildEvaluatedTradeContinuationHref({
         securityCode: campaign.security_code,
@@ -498,6 +627,132 @@ export function DecisionProposalReview() {
         </fieldset>
       </section>
 
+      {isPreEntry && (
+        <section
+          className="space-y-4 rounded-lg border border-primary/30 bg-primary/5 p-4"
+          data-testid="pre-entry-candidate-form"
+          data-candidate-form-valid={candidateConfidenceValues && (candidateAnchorsUnavailable || (candidateValuation && candidateTradeTerms)) ? "yes" : "no"}
+        >
+          <div>
+            <h2 className="text-sm font-semibold">PRE-ENTRY Candidate Opportunity</h2>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              结构化填写 Bear / Base / Bull、来源日期、估值区间与入场失效条件。Portfolio position/account/risk-cap 仍由 backend authority 注入，浏览器不声明仓位事实。
+              Confidence 可显式选择 UNKNOWN；这不会伪装成低置信度，backend 会 fail closed 并收窄到 RESEARCH MORE。
+            </p>
+          </div>
+
+          <label className="flex items-start gap-2 rounded-md border border-warning/30 bg-background/50 p-3 text-xs">
+            <input
+              type="checkbox"
+              aria-label="Candidate valuation anchors unavailable"
+              checked={candidateAnchorsUnavailable}
+              onChange={(event) => setCandidateAnchorsUnavailable(event.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              <span className="font-medium">关键盈利 / 估值 / 入场锚当前不可用</span>
+              <span className="mt-1 block text-muted-foreground">勾选后不会提交任何 Bear/Base/Bull 或 entry/invalidation 价格；仍需显式选择 confidence，backend 应保持 UNKNOWN / RESEARCH MORE，而不是前端伪造价格。</span>
+            </span>
+          </label>
+
+          <fieldset>
+            <legend className="text-xs font-medium">Confidence（全部显式选择）</legend>
+            <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {(Object.keys(CANDIDATE_CONFIDENCE_LABELS) as CandidateConfidenceName[]).map((name) => (
+                <label key={name} className="text-xs text-muted-foreground">
+                  {CANDIDATE_CONFIDENCE_LABELS[name]}
+                  <select
+                    aria-label={CANDIDATE_CONFIDENCE_LABELS[name]}
+                    value={candidateConfidence[name]}
+                    onChange={(event) => setCandidateConfidence((current) => ({
+                      ...current,
+                      [name]: event.target.value as CandidateConfidence | "",
+                    }))}
+                    className={inputCls}
+                  >
+                    <option value="">请选择</option>
+                    {CANDIDATE_CONFIDENCE_LEVELS.map((level) => <option key={level} value={level}>{level}</option>)}
+                  </select>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          <div className="grid gap-4 xl:grid-cols-3" aria-disabled={candidateAnchorsUnavailable}>
+            {CANDIDATE_SCENARIOS.map((scenario) => {
+              const row = candidateCases[scenario];
+              const update = (name: keyof CandidateValuationCaseDraft, value: string) => setCandidateCases((current) => ({
+                ...current,
+                [scenario]: { ...current[scenario], [name]: value },
+              }));
+              return (
+                <fieldset key={scenario} disabled={candidateAnchorsUnavailable} className="space-y-2 rounded-md border border-border/60 bg-background/50 p-3 disabled:opacity-50" data-candidate-scenario={scenario}>
+                  <legend className="px-1 text-sm font-semibold">{CANDIDATE_SCENARIO_LABELS[scenario]} case</legend>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-xs text-muted-foreground">Price low
+                      <input aria-label={`${CANDIDATE_SCENARIO_LABELS[scenario]} price low`} type="number" min="0" step="any" value={row.priceLow} onChange={(event) => update("priceLow", event.target.value)} className={inputCls} />
+                    </label>
+                    <label className="text-xs text-muted-foreground">Price high
+                      <input aria-label={`${CANDIDATE_SCENARIO_LABELS[scenario]} price high`} type="number" min="0" step="any" value={row.priceHigh} onChange={(event) => update("priceHigh", event.target.value)} className={inputCls} />
+                    </label>
+                  </div>
+                  <label className="block text-xs text-muted-foreground">Assumptions（逗号或换行分隔）
+                    <textarea aria-label={`${CANDIDATE_SCENARIO_LABELS[scenario]} assumptions`} rows={2} value={row.assumptions} onChange={(event) => update("assumptions", event.target.value)} className={inputCls} />
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <label className="text-xs text-muted-foreground">Input metric
+                      <input aria-label={`${CANDIDATE_SCENARIO_LABELS[scenario]} input metric`} value={row.inputMetric} onChange={(event) => update("inputMetric", event.target.value)} placeholder="EPS" className={inputCls} />
+                    </label>
+                    <label className="text-xs text-muted-foreground">Value
+                      <input aria-label={`${CANDIDATE_SCENARIO_LABELS[scenario]} input value`} value={row.inputValue} onChange={(event) => update("inputValue", event.target.value)} placeholder="8.5" className={inputCls} />
+                    </label>
+                    <label className="text-xs text-muted-foreground">Period
+                      <input aria-label={`${CANDIDATE_SCENARIO_LABELS[scenario]} input period`} value={row.inputPeriod} onChange={(event) => update("inputPeriod", event.target.value)} placeholder="2026E" className={inputCls} />
+                    </label>
+                  </div>
+                  <label className="block text-xs text-muted-foreground">Source
+                    <input aria-label={`${CANDIDATE_SCENARIO_LABELS[scenario]} source`} value={row.source} onChange={(event) => update("source", event.target.value)} placeholder="公告 / 研报标题" className={inputCls} />
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-xs text-muted-foreground">Data at
+                      <input aria-label={`${CANDIDATE_SCENARIO_LABELS[scenario]} data at`} type="date" value={row.dataAt} onChange={(event) => update("dataAt", event.target.value)} className={inputCls} />
+                    </label>
+                    <label className="text-xs text-muted-foreground">Horizon
+                      <input aria-label={`${CANDIDATE_SCENARIO_LABELS[scenario]} horizon`} value={row.horizon} onChange={(event) => update("horizon", event.target.value)} placeholder="12 个月" className={inputCls} />
+                    </label>
+                  </div>
+                  <label className="block text-xs text-muted-foreground">Change conditions（逗号或换行分隔）
+                    <textarea aria-label={`${CANDIDATE_SCENARIO_LABELS[scenario]} change conditions`} rows={2} value={row.changeConditions} onChange={(event) => update("changeConditions", event.target.value)} className={inputCls} />
+                  </label>
+                </fieldset>
+              );
+            })}
+          </div>
+
+          <fieldset disabled={candidateAnchorsUnavailable} className="rounded-md border border-border/60 bg-background/50 p-3 disabled:opacity-50">
+            <legend className="px-1 text-sm font-semibold">Entry / invalidation</legend>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <label className="text-xs text-muted-foreground">Entry low
+                <input aria-label="Candidate entry low" type="number" min="0" step="any" value={candidateTrade.entryLow} onChange={(event) => setCandidateTrade((current) => ({ ...current, entryLow: event.target.value }))} className={inputCls} />
+              </label>
+              <label className="text-xs text-muted-foreground">Entry high
+                <input aria-label="Candidate entry high" type="number" min="0" step="any" value={candidateTrade.entryHigh} onChange={(event) => setCandidateTrade((current) => ({ ...current, entryHigh: event.target.value }))} className={inputCls} />
+              </label>
+              <label className="text-xs text-muted-foreground">Invalidation price
+                <input aria-label="Candidate invalidation price" type="number" min="0" step="any" value={candidateTrade.invalidationPrice} onChange={(event) => setCandidateTrade((current) => ({ ...current, invalidationPrice: event.target.value }))} className={inputCls} />
+              </label>
+              <label className="text-xs text-muted-foreground">Execution style（选填）
+                <select aria-label="Candidate execution style" value={candidateTrade.executionStyle} onChange={(event) => setCandidateTrade((current) => ({ ...current, executionStyle: event.target.value as "" | "SCALE_IN" }))} className={inputCls}>
+                  <option value="">未指定</option>
+                  <option value="SCALE_IN">SCALE_IN</option>
+                </select>
+              </label>
+            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground">必须满足 0 &lt; invalidation price &lt; entry low ≤ entry high；不合法时不会生成可 Preview 的 draft。</p>
+          </fieldset>
+        </section>
+      )}
+
       <section className="grid gap-4 rounded-lg border border-border/60 bg-background/35 p-4 sm:grid-cols-2">
         <div className="text-xs text-muted-foreground">Review by（必填，由你显式选择；不自动生成）
           <input aria-label="Review by" type="datetime-local" value={reviewByLocal} onChange={(event) => setReviewByLocal(event.target.value)} className={inputCls} />
@@ -586,6 +841,55 @@ export function DecisionProposalReview() {
             })}
           </div>
 
+          {candidateOpportunity && (
+            <section className="space-y-3 rounded-md border border-primary/30 bg-primary/5 p-3 text-xs" data-testid="candidate-opportunity-authority">
+              <div>
+                <h3 className="font-semibold">Candidate Opportunity · backend authority facts</h3>
+                <p className="mt-1 text-[11px] text-muted-foreground">这些状态由 Preview policy 计算；页面只读呈现，不从表单或浏览器仓位推导。</p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {[
+                  ["Valuation", "valuation_status"],
+                  ["Position", "position_state"],
+                  ["Account", "account_state"],
+                  ["Account canonical", "account_canonical"],
+                  ["Account confidence", "account_confidence"],
+                  ["Hard risk", "hard_risk_state"],
+                  ["Critical data", "critical_data_state"],
+                  ["Confidence", "confidence"],
+                  ["Confidence ceiling", "confidence_ceiling"],
+                  ["Evidence", "evidence"],
+                  ["Evidence refs", "evidence_refs"],
+                  ["Risk / reward", "risk_reward"],
+                  ["Risk cap", "risk_cap"],
+                ].map(([label, key]) => (
+                  <div key={key} className="rounded border border-border/50 bg-background/45 p-2">
+                    <p className="text-muted-foreground">{label}</p>
+                    <p className="mt-1 break-words font-medium">{presentAuthorityValue(candidateOpportunity[key])}</p>
+                  </div>
+                ))}
+              </div>
+              {stringList(candidateOpportunity.reason_codes).length > 0 && (
+                <div>
+                  <p className="font-medium">Reason codes</p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-4 font-mono text-[11px] text-muted-foreground">
+                    {stringList(candidateOpportunity.reason_codes).map((reason) => <li key={reason}>{reason}</li>)}
+                  </ul>
+                </div>
+              )}
+              {candidatePolicyFacts.length > 0 && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {candidatePolicyFacts.map(([key, value]) => (
+                    <div key={key} className="rounded border border-border/40 bg-background/35 p-2">
+                      <p className="font-mono text-[10px] text-muted-foreground">{key}</p>
+                      <p className="mt-1 break-words">{presentAuthorityValue(value)}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
           <div className="grid gap-4 md:grid-cols-3">
             {["asset_view", "trade_view", "portfolio_view"].map((name) => (
               <div key={name} className="rounded-md border border-border/50 bg-background/35 p-3 text-xs"><p className="font-medium">{name}</p><p className="mt-1 text-muted-foreground">{preview.proposal.view_provenance?.[name] && typeof preview.proposal.view_provenance[name] === "object" ? String((preview.proposal.view_provenance[name] as { view_origin?: unknown }).view_origin ?? "USER_DRAFT") : "USER_DRAFT"} · 尚未进入 Frozen Decision</p></div>
@@ -636,7 +940,9 @@ export function DecisionProposalReview() {
             data-decision-quality="NOT_EVALUATED"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold">Decision Challenge（可选；读取失败时不会安全降级）</h3>
+              <h3 className="text-sm font-semibold">
+                Decision Challenge（{challengeRequiredForFreeze ? "本次 BUY action 必需" : "可选"}；读取失败时不会安全降级）
+              </h3>
               <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
                 {challengeStateLabel}
               </span>
@@ -725,7 +1031,9 @@ export function DecisionProposalReview() {
                 {challengeReadState === "FOUND"
                   ? "Freeze 将绑定这份已 Finalize 的 Challenge（decision_challenge:<id>）。"
                   : challengeReadState === "ABSENT"
-                    ? "未找到已 Finalize 的 Challenge；Freeze 仍可继续，且不会写入假的 challenge 引用。"
+                    ? challengeRequiredForFreeze
+                      ? "本次 Preview 允许新增风险；必须先 Finalize 并绑定 Challenge，才会开放 Freeze。"
+                      : "未找到已 Finalize 的 Challenge；本次非 BUY action 可继续 Freeze，且不会写入假的 challenge 引用。"
                     : "Challenge 状态当前无法安全验证；读取完成前不会 Freeze，也不会绑定未验证的 Challenge。"}
               </span>
             </label>
@@ -735,7 +1043,7 @@ export function DecisionProposalReview() {
             <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} className="mt-0.5" />
             <span>我已检查三个独立 View、同一 as_of、Authority 状态与 Action Envelope；确认提交这份 Proposal 为 Frozen Decision。</span>
           </label>
-          <button type="button" onClick={() => void handleCommit()} disabled={!confirmed || busy !== null || challengeReadState === "PENDING" || challengeReadState === "ERROR"} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+          <button type="button" onClick={() => void handleCommit()} disabled={!confirmed || busy !== null || challengeReadState === "PENDING" || challengeReadState === "ERROR" || !requiredChallengeReady} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
             {busy === "commit" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LockKeyhole className="h-3.5 w-3.5" />}
             Freeze Formal Decision
           </button>

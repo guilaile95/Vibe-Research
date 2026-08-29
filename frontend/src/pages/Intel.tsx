@@ -6,6 +6,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { api, ApiError, type Announcement, type NewsItem } from "@/lib/api";
 import { loadWatchAuthoritative } from "@/lib/watchlist";
+import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import { cn } from "@/lib/utils";
 
 const TABS = [
@@ -139,13 +140,24 @@ function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
       ) : (
         <div className="space-y-2">
           {rows.map((row, index) => (
-            <a key={index} href={row.url || undefined} target={row.url ? "_blank" : undefined} rel="noreferrer" className={cn("group flex items-baseline gap-3 border-b border-border/30 pb-2 text-sm last:border-0", row.url && "cursor-pointer")}>
+            <div key={index} className="flex items-baseline gap-3 border-b border-border/30 pb-2 text-sm last:border-0">
               <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground/70">{(row.when || "").slice(kind === "filings" ? 0 : 5, kind === "filings" ? 10 : 16)}</span>
               <span className="w-16 shrink-0 truncate text-xs text-primary/90" title={row.code}>{row.name}</span>
               {kind === "filings" && row.meta && <span className="hidden w-20 shrink-0 truncate text-xs text-muted-foreground sm:block">{row.meta}</span>}
-              <span className="flex-1 group-hover:text-primary">{row.title}</span>
-              {row.url && <ExternalLink className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/0 group-hover:text-primary/60" />}
-            </a>
+              {row.url ? (
+                <a href={row.url} target="_blank" rel="noreferrer noopener" className="group flex min-w-0 flex-1 items-center gap-1 hover:text-primary hover:underline">
+                  <span className="truncate">{row.title}</span>
+                  <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground/0 group-hover:text-primary/60" />
+                </a>
+              ) : <span className="min-w-0 flex-1 truncate">{row.title}</span>}
+              <Link
+                to={candidateWorkspaceHref(row.code)}
+                className="shrink-0 text-[11px] text-primary hover:underline"
+                data-testid={`intel-candidate-${row.code}`}
+              >
+                候选研究
+              </Link>
+            </div>
           ))}
         </div>
       )}

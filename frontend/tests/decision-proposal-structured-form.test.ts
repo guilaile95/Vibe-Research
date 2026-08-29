@@ -75,3 +75,22 @@ test("页面不再要求手写三份 JSON object，改用结构化控件", () =>
   assert.match(source, /Preview Proposal/);
   assert.match(source, /Freeze Formal Decision/);
 });
+
+test("PRE-ENTRY 使用结构化 Candidate Opportunity 表单且不暴露 JSON 输入", () => {
+  const source = readFileSync(
+    new URL("../src/pages/DecisionProposalReview.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /CANDIDATE_SCENARIOS\.map/);
+  assert.match(source, /aria-label=\{`\$\{CANDIDATE_SCENARIO_LABELS\[scenario\]\} price low`\}/);
+  for (const label of ["Candidate entry low", "Candidate invalidation price"]) {
+    assert.match(source, new RegExp(`aria-label="${label}"`));
+  }
+  for (const key of ["data_quality", "evidence_confidence", "inference_confidence", "decision_confidence"]) {
+    assert.match(source, new RegExp(`${key}:`));
+  }
+  assert.match(source, /assetView\.candidate_valuation = candidateValuation\.cases/);
+  assert.match(source, /Object\.assign\(tradeView, candidateTradeTerms\)/);
+  assert.match(source, /UNKNOWN；这不会伪装成低置信度/);
+  assert.doesNotMatch(source, /Candidate Opportunity（JSON/);
+});
