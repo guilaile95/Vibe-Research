@@ -3,7 +3,8 @@
 param(
     [switch]$Setup,
     [switch]$NoBrowser,
-    [switch]$ValidateOnly
+    [switch]$ValidateOnly,
+    [switch]$SmokeTest
 )
 
 Set-StrictMode -Version Latest
@@ -287,6 +288,9 @@ if ($ValidateOnly) {
     if ($cmdText -match '(?i)\bpowershell\.exe\b') {
         throw "Start-Vibe.cmd 不得调用旧版 powershell.exe。"
     }
+    if ($cmdText -notmatch '%\*') {
+        throw "Start-Vibe.cmd 必须把显式参数转交给 PowerShell 7 启动器。"
+    }
     Write-Host "One-click launcher validation: PASS"
     exit 0
 }
@@ -340,21 +344,26 @@ try {
             -Process $frontendEntry.Process
     }
 
-    if (-not $NoBrowser) {
+    if (-not $NoBrowser -and -not $SmokeTest) {
         Start-Process $FrontendUrl | Out-Null
     }
 
     Write-Host "`nVibe-Research 已就绪：$FrontendUrl" -ForegroundColor Green
-    Write-Host "保持此窗口开启；按 Ctrl+C 会停止本次启动的服务。" -ForegroundColor DarkGray
 
-    while ($true) {
-        foreach ($entry in $ownedProcesses) {
-            $entry.Process.Refresh()
-            if ($entry.Process.HasExited) {
-                throw "$($entry.Name) 已意外退出，退出码：$($entry.Process.ExitCode)"
+    if ($SmokeTest) {
+        Write-Host "One-click launcher smoke: PASS" -ForegroundColor Green
+    }
+    else {
+        Write-Host "保持此窗口开启；按 Ctrl+C 会停止本次启动的服务。" -ForegroundColor DarkGray
+        while ($true) {
+            foreach ($entry in $ownedProcesses) {
+                $entry.Process.Refresh()
+                if ($entry.Process.HasExited) {
+                    throw "$($entry.Name) 已意外退出，退出码：$($entry.Process.ExitCode)"
+                }
             }
+            Start-Sleep -Seconds 2
         }
-        Start-Sleep -Seconds 2
     }
 }
 catch [System.Management.Automation.PipelineStoppedException] {
