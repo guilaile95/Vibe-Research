@@ -257,7 +257,17 @@ def test_acceptance_7_duplicate_member_verify_fail(tmp_path):
 
 @pytest.mark.parametrize(
     "bad_name",
-    ["a\\b.txt", "CON.txt", "sub/NUL", "dir/", "with:colon.txt"],
+    [
+        "a\\b.txt",
+        "CON.txt",
+        "CON .txt",
+        "sub/NUL",
+        "dir/",
+        "dir/./file.txt",
+        "trailing-dot.",
+        "trailing-space ",
+        "with:colon.txt",
+    ],
 )
 def test_acceptance_7_dangerous_registered_names_fail(tmp_path, bad_name):
     payloads = {bad_name: b"x"}
@@ -280,6 +290,29 @@ def test_acceptance_7_unregistered_extra_member_fail(tmp_path):
     report = lds.verify_snapshot(extra)
     assert report["status"] == "FAILED"
     assert any("smuggled.txt" in e for e in report["errors"])
+
+
+@pytest.mark.parametrize(
+    ("member_payloads", "reason"),
+    [
+        ({"Foo": b"upper", "foo": b"lower"}, "Windows 上碰撞"),
+        ({"parent": b"file", "parent/child.txt": b"child"}, "路径拓扑冲突"),
+    ],
+)
+def test_acceptance_7_portable_path_collisions_block_restore(
+    tmp_path, member_payloads, reason
+):
+    forged = tmp_path / "portable-collision.zip"
+    build_custom_archive(forged, member_payloads)
+
+    report = lds.verify_snapshot(forged)
+    assert report["status"] == "FAILED"
+    assert any(reason in error for error in report["errors"])
+
+    target = tmp_path / "target"
+    with pytest.raises(lds.RestoreRefused):
+        lds.restore_snapshot(forged, target)
+    assert not target.exists()
 
 
 # ================= 8. ../ traversal FAIL =================
@@ -603,3 +636,86 @@ def test_larger_file_streaming_roundtrip(tmp_path):
 def test_main_guard_module_runs_as_script():
     """python -m 形式可被发现（模块含 __main__ guard 且 main 可独立调用）。"""
     assert callable(lds.main)
+
+
+# ================= multi-asset 复用接口 =================
+
+
+def test_collect_snapshot_sources_prefix_and_excluded_names(tmp_path):
+    root = tmp_path / "data"
+    (root / "keep").mkdir(parents=True)
+    (root / "skip" / "nested").mkdir(parents=True)
+    (root / "keep" / "a.json").write_text('{"ok": true}', encoding="utf-8")
+    (root / "skip" / "nested" / "secret.txt").write_text("skip", encoding="utf-8")
+    (root / "ignored.tmp").write_text("skip", encoding="utf-8")
+
+    entries = lds.collect_snapshot_sources(
+        root,
+        archive_prefix="data_root",
+        excluded_names={"skip", "ignored.tmp"},
+    )
+
+    assert entries == [
+        ("data_root/keep/a.json", (root / "keep" / "a.json").resolve())
+    ]
+
+
+def test_create_snapshot_from_files_extension_verify_restore(tmp_path):
+    data_file = tmp_path / "portfolio.json"
+    review_db = tmp_path / "daily_reviews.sqlite3"
+    data_file.write_text('{"holdings": []}', encoding="utf-8")
+    review_db.write_bytes(b"synthetic-db-bytes")
+    archive = tmp_path / "bundle.zip"
+    extension = {
+        "vibe_bundle": {
+            "schema_version": "vibe_data_backup.manifest.v0.1",
+            "assets": [
+                {"name": "data_root", "status": "PRESENT"},
+                {"name": "shared_review", "status": "EXTERNAL_OVERRIDE_INCLUDED"},
+            ],
+        }
+    }
+
+    result = lds.create_snapshot_from_files(
+        [
+            ("data_root/portfolio.json", data_file),
+            ("shared_review/daily_reviews.sqlite3", review_db),
+        ],
+        archive,
+        manifest_extension=extension,
+    )
+
+    assert result["status"] == "OK"
+    manifest = lds.read_verified_manifest(archive)
+    assert manifest["vibe_bundle"] == extension["vibe_bundle"]
+    assert "_manifest_sha256" not in manifest
+    assert [entry["path"] for entry in manifest["files"]] == [
+        "data_root/portfolio.json",
+        "shared_review/daily_reviews.sqlite3",
+    ]
+
+    restored = tmp_path / "restored"
+    lds.restore_snapshot(archive, restored)
+    assert (restored / "data_root" / "portfolio.json").read_bytes() == data_file.read_bytes()
+    assert (
+        restored / "shared_review" / "daily_reviews.sqlite3"
+    ).read_bytes() == review_db.read_bytes()
+
+
+def test_create_snapshot_from_files_rejects_core_override_and_unsafe_entry(tmp_path):
+    source = tmp_path / "source.txt"
+    source.write_text("x", encoding="utf-8")
+
+    with pytest.raises(lds.LocalSnapshotError, match="核心字段"):
+        lds.create_snapshot_from_files(
+            [("safe/source.txt", source)],
+            tmp_path / "core-override.zip",
+            manifest_extension={"files": []},
+        )
+    with pytest.raises(lds.LocalSnapshotError, match="PATH_TRAVERSAL"):
+        lds.create_snapshot_from_files(
+            [("../escape.txt", source)],
+            tmp_path / "unsafe.zip",
+        )
+    assert not (tmp_path / "core-override.zip").exists()
+    assert not (tmp_path / "unsafe.zip").exists()

@@ -10,6 +10,7 @@ import pytest
 
 import ai_result_store
 import evidence_thesis_service
+import review_db_path
 import trade_ledger_service as svc
 
 
@@ -104,6 +105,53 @@ class TestAdviceRefValidation:
             with pytest.raises(svc.TradeValidationError) as exc:
                 svc._resolve_advice_ref(ref, "600519")
             assert "advice_ref.trade_date" in str(exc.value)
+
+
+class TestSharedReviewDbPath:
+    _REF = {
+        "trade_date": "2026-07-28",
+        "generated_at": "2026-07-28 09:00:00",
+    }
+
+    @staticmethod
+    def _capture_lookup(monkeypatch):
+        seen = []
+
+        def fake_get_result(db_path, *_args):
+            seen.append(Path(db_path))
+            return None
+
+        monkeypatch.setattr(ai_result_store, "get_result", fake_get_result)
+        with pytest.raises(svc.AdviceNotFoundError):
+            svc._resolve_advice_ref(TestSharedReviewDbPath._REF, "600519")
+        return seen
+
+    def test_override_uses_shared_contract_without_creating_files(self, tmp_path, monkeypatch):
+        target = tmp_path / "external" / "daily_reviews.sqlite3"
+        monkeypatch.setenv(review_db_path.REVIEW_DB_ENV, str(target))
+
+        assert self._capture_lookup(monkeypatch) == [target.resolve()]
+        assert not target.parent.exists()
+        assert not target.exists()
+
+    def test_windows_default_ignores_vr_data_dir_without_creating_sidecars(
+        self, tmp_path, monkeypatch
+    ):
+        local_app_data = tmp_path / "Local"
+        monkeypatch.delenv(review_db_path.REVIEW_DB_ENV, raising=False)
+        monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+        with monkeypatch.context() as platform_patch:
+            platform_patch.setattr(review_db_path.sys, "platform", "win32")
+            expected = (
+                local_app_data / "VibeResearch" / "daily_reviews.sqlite3"
+            ).resolve()
+            assert self._capture_lookup(platform_patch) == [expected]
+
+        assert expected != (Path(os.environ["VR_DATA_DIR"]) / "daily_reviews.sqlite3").resolve()
+        assert not expected.parent.exists()
+        assert not expected.exists()
+        for suffix in ("-wal", "-shm", "-journal"):
+            assert not expected.with_name(expected.name + suffix).exists()
 
 
 class TestRealAdviceReference:

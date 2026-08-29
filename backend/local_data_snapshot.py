@@ -66,6 +66,18 @@ MANIFEST_SCHEMA_VERSION = "local_data_snapshot.manifest.v0.1"
 TOOL_VERSION = "p1-br1.v0.1"
 CONSISTENCY_CONTRACT = "USER_ASSERTED_OFFLINE"
 
+_CORE_MANIFEST_FIELDS = frozenset(
+    {
+        "manifest_schema_version",
+        "tool_version",
+        "created_at_utc",
+        "consistency_contract",
+        "file_count",
+        "total_bytes",
+        "files",
+    }
+)
+
 _HASH_CHUNK_SIZE = 1024 * 1024
 
 # Windows 保留设备名（不分扩展名）；restore 目标可能在 Windows，命中即拒。
@@ -178,9 +190,21 @@ def _member_name_violation(name: str) -> str | None:
         return "PATH_TRAVERSAL"
     if any(p == "" for p in parts):
         return "EMPTY_PATH_SEGMENT"
-    if any(p.split(".")[0].upper() in _WINDOWS_RESERVED_STEMS for p in parts):
+    if any(p == "." for p in parts):
+        return "DOT_PATH_SEGMENT"
+    if any(p.endswith((" ", ".")) for p in parts):
+        return "WINDOWS_TRAILING_DOT_OR_SPACE"
+    if any(
+        p.split(".", 1)[0].rstrip(" .").upper() in _WINDOWS_RESERVED_STEMS
+        for p in parts
+    ):
         return "WINDOWS_RESERVED_NAME"
     return None
+
+
+def _windows_member_key(name: str) -> tuple[str, ...]:
+    """Return the conservative Windows-equivalent key for a safe member name."""
+    return tuple(part.rstrip(" .").casefold() for part in name.split("/"))
 
 
 def _validate_manifest_payload_shape(manifest: dict) -> list[str]:
@@ -205,6 +229,7 @@ def _validate_manifest_payload_shape(manifest: dict) -> list[str]:
         errors.append("files 缺失或类型错误")
         return errors
     seen_paths: set[str] = set()
+    portable_paths: dict[tuple[str, ...], str] = {}
     total = 0
     for i, entry in enumerate(files):
         if not isinstance(entry, dict):
@@ -221,6 +246,15 @@ def _validate_manifest_payload_shape(manifest: dict) -> list[str]:
         if p in seen_paths:
             errors.append(f"files 中重复 path: {p!r}")
         seen_paths.add(p)
+        portable_key = _windows_member_key(p)
+        portable_peer = portable_paths.get(portable_key)
+        if portable_peer is not None and portable_peer != p:
+            errors.append(
+                "files 路径在 Windows 上碰撞: "
+                f"{portable_peer!r} 与 {p!r}"
+            )
+        else:
+            portable_paths.setdefault(portable_key, p)
         size = entry.get("size")
         if not isinstance(size, int) or isinstance(size, bool) or size < 0:
             errors.append(f"files[{i}].size 缺失或非法")
@@ -233,6 +267,15 @@ def _validate_manifest_payload_shape(manifest: dict) -> list[str]:
             or any(c not in "0123456789abcdef" for c in sha)
         ):
             errors.append(f"files[{i}].sha256 缺失或格式非法: {p!r}")
+    for portable_key, path in portable_paths.items():
+        for end in range(1, len(portable_key)):
+            ancestor = portable_paths.get(portable_key[:end])
+            if ancestor is not None:
+                errors.append(
+                    "files 路径拓扑冲突: "
+                    f"文件 {ancestor!r} 是文件 {path!r} 的祖先路径"
+                )
+                break
     declared_count = manifest.get("file_count")
     if declared_count != len(files):
         errors.append(f"file_count 不符: 声明 {declared_count!r} 实际 {len(files)}")
@@ -245,55 +288,163 @@ def _validate_manifest_payload_shape(manifest: dict) -> list[str]:
 # ================= snapshot =================
 
 
-def create_snapshot(data_dir, output_archive) -> dict:
-    """把 data root 下的 regular files 打包成带 canonical manifest 的 zip。
+def collect_snapshot_sources(
+    root,
+    archive_prefix: str = "",
+    excluded_names=(),
+) -> list[tuple[str, Path]]:
+    """收集 plain regular files，返回 ``(archive path, source Path)``。
 
-    输出 archive 已存在则拒绝（不覆盖）。写入走同目录临时文件 +
-    rename，避免半成品冒充成品。
+    ``excluded_names`` 仅匹配单个文件或目录名；命中的目录整棵跳过。
+    archive prefix 必须是安全的 relative POSIX path，且不带尾随斜杠。
     """
-    root = Path(data_dir)
-    if not root.is_dir():
-        raise LocalSnapshotError(f"data dir 不存在或不是目录: {root.name}")
-    resolved_root = root.resolve()
+    source_root = Path(root)
+    if not source_root.is_dir():
+        raise LocalSnapshotError(f"data dir 不存在或不是目录: {source_root.name}")
+    resolved_root = source_root.resolve()
     _current_root[0] = resolved_root
 
+    if not isinstance(archive_prefix, str):
+        raise LocalSnapshotError("archive prefix 必须是字符串")
+    if archive_prefix:
+        violation = _member_name_violation(f"{archive_prefix}/_")
+        if violation is not None:
+            raise LocalSnapshotError(
+                f"archive prefix 不可信（{violation}）: {archive_prefix!r}"
+            )
+
+    excluded = frozenset(excluded_names or ())
+    for name in excluded:
+        if (
+            not isinstance(name, str)
+            or not name
+            or name in {".", ".."}
+            or "/" in name
+            or "\\" in name
+            or "\x00" in name
+        ):
+            raise LocalSnapshotError(f"excluded name 必须是单个安全路径名: {name!r}")
+
+    entries: list[tuple[str, Path]] = []
+    for dirpath, dirnames, filenames in os.walk(resolved_root, followlinks=False):
+        here = Path(dirpath)
+        dirnames[:] = sorted(name for name in dirnames if name not in excluded)
+        for dname in dirnames:
+            _assert_plain_entry(here / dname, "目录")
+        for fname in sorted(name for name in filenames if name not in excluded):
+            child = here / fname
+            _assert_plain_entry(child, "文件")
+            relative = child.relative_to(resolved_root).as_posix()
+            archive_path = f"{archive_prefix}/{relative}" if archive_prefix else relative
+            violation = _member_name_violation(archive_path)
+            if violation is not None:
+                raise LocalSnapshotError(
+                    f"archive 成员名不可信（{violation}）: {archive_path!r}"
+                )
+            entries.append((archive_path, child))
+    entries.sort(key=lambda item: item[0])
+    return entries
+
+
+def _snapshot_output_path(output_archive) -> Path:
     output = Path(output_archive)
     if output.exists() or output.is_symlink():
         raise LocalSnapshotError(f"输出 archive 已存在，拒绝覆盖: {output.name}")
     if not output.parent.is_dir():
         raise LocalSnapshotError(f"输出目录不存在: {output.parent.name}")
+    return output
 
-    # 收集阶段：逐条目 lstat，任何 symlink / junction / special file 都 fail closed。
+
+def create_snapshot_from_files(
+    entries,
+    output_archive,
+    manifest_extension: dict | None = None,
+) -> dict:
+    """把显式 source files 按安全 archive path 写入 v0.1 snapshot。
+
+    ``entries`` 是 ``(archive_relative_path, source_path)``；source 必须是
+    plain regular file。可选 manifest extension 不得覆盖 v0.1 核心字段。
+    """
+    output = _snapshot_output_path(output_archive)
+    if manifest_extension is None:
+        extension = {}
+    elif isinstance(manifest_extension, dict):
+        extension = dict(manifest_extension)
+    else:
+        raise LocalSnapshotError("manifest extension 必须是 JSON object")
+    overlap = sorted(_CORE_MANIFEST_FIELDS.intersection(extension))
+    if overlap:
+        raise LocalSnapshotError(f"manifest extension 不得覆盖核心字段: {overlap!r}")
+
     collected: list[dict] = []
-    for dirpath, dirnames, filenames in os.walk(resolved_root, followlinks=False):
-        here = Path(dirpath)
-        for dname in sorted(dirnames):
-            _assert_plain_entry(here / dname, "目录")
-        for fname in sorted(filenames):
-            child = here / fname
-            _assert_plain_entry(child, "文件")
-            size, digest = _sha256_of_file(child)
-            collected.append(
-                {
-                    "path": child.relative_to(resolved_root).as_posix(),
-                    "size": size,
-                    "sha256": digest,
-                }
+    seen_paths: set[str] = set()
+    for index, item in enumerate(entries):
+        try:
+            archive_path, source_path = item
+        except (TypeError, ValueError) as e:
+            raise LocalSnapshotError(
+                f"entries[{index}] 必须是 (archive path, source path)"
+            ) from e
+        if not isinstance(archive_path, str):
+            raise LocalSnapshotError(f"entries[{index}] archive path 必须是字符串")
+        violation = _member_name_violation(archive_path)
+        if violation is not None:
+            raise LocalSnapshotError(
+                f"archive 成员名不可信（{violation}）: {archive_path!r}"
             )
-    collected.sort(key=lambda e: e["path"])
+        if archive_path == MANIFEST_MEMBER_NAME:
+            raise LocalSnapshotError("source 成员名与固定 manifest 成员冲突")
+        if archive_path in seen_paths:
+            raise LocalSnapshotError(f"重复 archive path: {archive_path!r}")
+        seen_paths.add(archive_path)
 
+        source = Path(source_path)
+        try:
+            st = os.lstat(source)
+        except OSError as e:
+            raise LocalSnapshotError(
+                f"无法读取 source 状态: {archive_path!r}: {type(e).__name__}"
+            ) from e
+        violation = _entry_violation(st)
+        if violation is not None or not stat.S_ISREG(st.st_mode):
+            reason = violation or "NOT_A_REGULAR_FILE"
+            raise LocalSnapshotError(
+                f"source 不是 plain regular file（{reason}）: {archive_path!r}"
+            )
+        size, digest = _sha256_of_file(source)
+        collected.append(
+            {
+                "path": archive_path,
+                "source": source,
+                "size": size,
+                "sha256": digest,
+            }
+        )
+    collected.sort(key=lambda entry: entry["path"])
+
+    manifest_files = [
+        {"path": entry["path"], "size": entry["size"], "sha256": entry["sha256"]}
+        for entry in collected
+    ]
     manifest = {
         "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
         "tool_version": TOOL_VERSION,
         "created_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "consistency_contract": CONSISTENCY_CONTRACT,
-        "file_count": len(collected),
-        "total_bytes": sum(e["size"] for e in collected),
-        "files": collected,
+        "file_count": len(manifest_files),
+        "total_bytes": sum(entry["size"] for entry in manifest_files),
+        "files": manifest_files,
+        **extension,
     }
-    manifest_bytes = (
-        json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-    ).encode("utf-8")
+    shape_errors = _validate_manifest_payload_shape(manifest)
+    if shape_errors:
+        raise LocalSnapshotError(f"manifest 不可安全恢复: {shape_errors[0]}")
+    try:
+        manifest_bytes = (
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        ).encode("utf-8")
+    except (TypeError, ValueError) as e:
+        raise LocalSnapshotError("manifest extension 不是可序列化 JSON") from e
 
     fd, tmp_name = tempfile.mkstemp(
         dir=str(output.parent), prefix=output.name + ".", suffix=".tmp"
@@ -302,7 +453,7 @@ def create_snapshot(data_dir, output_archive) -> dict:
     try:
         with os.fdopen(fd, "wb") as raw, zipfile.ZipFile(raw, "w", zipfile.ZIP_DEFLATED) as zf:
             for entry in collected:
-                zf.write(resolved_root / entry["path"], arcname=entry["path"])
+                zf.write(entry["source"], arcname=entry["path"])
             zf.writestr(MANIFEST_MEMBER_NAME, manifest_bytes)
         # rename 前复检目标仍不存在（缩小 no-overwrite 的竞态窗口；Windows 上
         # rename 到已存在目标本就失败，POSIX 窗口内的并发创建属用户自担）。
@@ -321,6 +472,20 @@ def create_snapshot(data_dir, output_archive) -> dict:
         "consistency_contract": CONSISTENCY_CONTRACT,
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
     }
+
+
+def create_snapshot(data_dir, output_archive) -> dict:
+    """把 data root 下的 regular files 打包成带 canonical manifest 的 zip。
+
+    输出 archive 已存在则拒绝（不覆盖）。写入走同目录临时文件 +
+    rename，避免半成品冒充成品。
+    """
+    # 保持旧 no-overwrite / missing-output-parent 的先验拒绝顺序。
+    _snapshot_output_path(output_archive)
+    return create_snapshot_from_files(
+        collect_snapshot_sources(data_dir),
+        output_archive,
+    )
 
 
 # ================= verify（只读） =================
@@ -421,6 +586,22 @@ def _verify_archive(archive: Path):
     except BaseException:
         zf.close()
         raise
+
+
+def read_verified_manifest(archive_path) -> dict:
+    """完整验证 archive 后返回其中的原始 manifest；失败则抛 VerifyError。"""
+    errors, zf, manifest = _verify_archive(Path(archive_path))
+    if errors or zf is None or manifest is None:
+        if zf is not None:
+            zf.close()
+        detail = "; ".join(errors) if errors else "unknown"
+        raise VerifyError(f"archive 未通过完整性验证: {detail}")
+    try:
+        result = dict(manifest)
+        result.pop("_manifest_sha256", None)
+        return result
+    finally:
+        zf.close()
 
 
 # ================= restore =================

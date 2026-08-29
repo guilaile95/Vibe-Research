@@ -16,17 +16,14 @@
 
 from __future__ import annotations
 
-import os
 import re
-import sys
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 import daily_review
+from review_db_path import REVIEW_DB_ENV, resolve_review_db_path
 import review_store
-
-REVIEW_DB_ENV = "VIBE_RESEARCH_REVIEW_DB"
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _SAVABLE_STATUS = frozenset({"normal", "partial"})
@@ -34,64 +31,6 @@ _SAVABLE_STATUS = frozenset({"normal", "partial"})
 
 class ReviewSnapshotNotSavableError(ValueError):
     """当前每日复盘不满足历史保存策略（unavailable / 无交易日等）。"""
-
-
-def resolve_review_db_path(
-    db_path: str | Path | None = None,
-) -> Path:
-    """解析每日复盘 SQLite 文件绝对路径。
-
-    优先级：显式 db_path → VIBE_RESEARCH_REVIEW_DB → 系统用户数据目录默认值。
-
-    本函数不创建文件或目录，不写库。
-    """
-    if db_path is not None:
-        return _normalize_db_path(db_path, source="db_path")
-
-    env_val = os.environ.get(REVIEW_DB_ENV)
-    if env_val is not None and str(env_val).strip():
-        return _normalize_db_path(str(env_val).strip(), source=REVIEW_DB_ENV)
-
-    return _default_review_db_path()
-
-
-def _normalize_db_path(value: str | Path, *, source: str) -> Path:
-    if isinstance(value, Path):
-        p = value.expanduser()
-    elif isinstance(value, str):
-        if not value.strip():
-            raise ValueError("db_path 不能为空")
-        p = Path(value).expanduser()
-    else:
-        raise TypeError("db_path 必须是字符串、Path或None")
-    # 解析后要求非空路径名（例如仅空白已在上面拒绝）
-    resolved = p.resolve()
-    return resolved
-
-
-def _default_review_db_path() -> Path:
-    """跨平台用户数据目录下的默认 daily_reviews.sqlite3（绝对路径）。"""
-    if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA", "").strip()
-        if not base:
-            home = os.environ.get("USERPROFILE") or str(Path.home())
-            base = str(Path(home) / "AppData" / "Local")
-        return (Path(base) / "VibeResearch" / "daily_reviews.sqlite3").resolve()
-
-    if sys.platform == "darwin":
-        return (
-            Path.home()
-            / "Library"
-            / "Application Support"
-            / "VibeResearch"
-            / "daily_reviews.sqlite3"
-        ).resolve()
-
-    # Linux 及其他 Unix
-    xdg = os.environ.get("XDG_DATA_HOME", "").strip()
-    if xdg:
-        return (Path(xdg).expanduser() / "vibe-research" / "daily_reviews.sqlite3").resolve()
-    return (Path.home() / ".local" / "share" / "vibe-research" / "daily_reviews.sqlite3").resolve()
 
 
 def validate_review_for_history(review: dict) -> None:

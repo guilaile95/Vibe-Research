@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import daily_review
+import review_db_path
 import review_history
 import review_store
 from review_history import (
@@ -79,7 +80,7 @@ def test_env_path_used_when_no_explicit(tmp_path, monkeypatch):
 
 def test_blank_env_falls_through_to_default(monkeypatch):
     monkeypatch.setenv(REVIEW_DB_ENV, "   ")
-    with patch.object(review_history, "_default_review_db_path") as mock_def:
+    with patch.object(review_db_path, "_default_review_db_path") as mock_def:
         mock_def.return_value = Path("/tmp/default.sqlite3").resolve()
         got = resolve_review_db_path(None)
     assert got == mock_def.return_value
@@ -91,18 +92,18 @@ def test_default_paths_by_platform(monkeypatch):
 
     # Windows LOCALAPPDATA
     with (
-        patch.object(review_history.sys, "platform", "win32"),
+        patch.object(review_db_path.sys, "platform", "win32"),
         patch.dict(os.environ, {"LOCALAPPDATA": r"C:\Users\Dino\AppData\Local"}, clear=False),
     ):
         monkeypatch.delenv("USERPROFILE", raising=False)
-        p = review_history._default_review_db_path()
+        p = review_db_path._default_review_db_path()
         assert p.name == "daily_reviews.sqlite3"
         assert "VibeResearch" in p.parts
         assert "AppData" in str(p) or "Local" in p.parts
 
     # Windows fallback USERPROFILE
     with (
-        patch.object(review_history.sys, "platform", "win32"),
+        patch.object(review_db_path.sys, "platform", "win32"),
         patch.dict(
             os.environ,
             {"USERPROFILE": r"C:\Users\Dino", "LOCALAPPDATA": ""},
@@ -112,41 +113,41 @@ def test_default_paths_by_platform(monkeypatch):
         # ensure empty LOCALAPPDATA
         monkeypatch.setenv("LOCALAPPDATA", "")
         monkeypatch.setenv("USERPROFILE", r"C:\Users\Dino")
-        p = review_history._default_review_db_path()
+        p = review_db_path._default_review_db_path()
         assert p.as_posix().endswith("VibeResearch/daily_reviews.sqlite3") or (
             "VibeResearch" in p.parts and p.name == "daily_reviews.sqlite3"
         )
 
     # macOS
     with (
-        patch.object(review_history.sys, "platform", "darwin"),
+        patch.object(review_db_path.sys, "platform", "darwin"),
         patch.object(Path, "home", return_value=Path("/Users/dino")),
     ):
-        p = review_history._default_review_db_path()
+        p = review_db_path._default_review_db_path()
         assert "Application Support" in p.parts
         assert "VibeResearch" in p.parts
         assert p.name == "daily_reviews.sqlite3"
 
     # Linux XDG_DATA_HOME
     with (
-        patch.object(review_history.sys, "platform", "linux"),
+        patch.object(review_db_path.sys, "platform", "linux"),
         patch.dict(os.environ, {"XDG_DATA_HOME": "/custom/data"}, clear=False),
     ):
         monkeypatch.setenv("XDG_DATA_HOME", "/custom/data")
-        p = review_history._default_review_db_path()
+        p = review_db_path._default_review_db_path()
         assert "vibe-research" in p.parts
         assert p.name == "daily_reviews.sqlite3"
         assert "custom" in p.parts or "data" in p.parts
 
     # Linux default ~/.local/share
     with (
-        patch.object(review_history.sys, "platform", "linux"),
+        patch.object(review_db_path.sys, "platform", "linux"),
         patch.object(Path, "home", return_value=Path("/home/dino")),
     ):
         monkeypatch.delenv("XDG_DATA_HOME", raising=False)
         # also clear if set empty
         monkeypatch.setenv("XDG_DATA_HOME", "")
-        p = review_history._default_review_db_path()
+        p = review_db_path._default_review_db_path()
         assert ".local" in p.parts or "share" in p.parts
         assert "vibe-research" in p.parts
         assert p.name == "daily_reviews.sqlite3"
@@ -159,6 +160,22 @@ def test_resolve_has_no_side_effects(tmp_path, monkeypatch):
     assert got == target.resolve()
     assert not target.exists()
     assert not target.parent.exists()
+
+
+def test_windows_default_has_no_side_effects(tmp_path, monkeypatch):
+    local_app_data = tmp_path / "Local"
+    monkeypatch.delenv(REVIEW_DB_ENV, raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+
+    with patch.object(review_db_path.sys, "platform", "win32"):
+        got = resolve_review_db_path()
+
+    expected = (local_app_data / "VibeResearch" / "daily_reviews.sqlite3").resolve()
+    assert got == expected
+    assert not expected.parent.exists()
+    assert not expected.exists()
+    for suffix in ("-wal", "-shm", "-journal"):
+        assert not expected.with_name(expected.name + suffix).exists()
 
 
 def test_tilde_expand(tmp_path, monkeypatch):
