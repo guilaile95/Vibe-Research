@@ -165,7 +165,7 @@ def parse_account_funding(
     if not isinstance(funding, dict):
         return None, "missing"
     configured = funding.get("configured")
-    if configured is True:
+    if configured is True and funding.get("canonical") is True:
         return funding, "valid"
     if configured is False:
         return funding, "partial"
@@ -177,7 +177,7 @@ def account_funding_severity(funding: Mapping[str, Any] | None) -> str | None:
     """Severity for account_constraint signal. None if no funding object."""
     if not isinstance(funding, dict):
         return None
-    if funding.get("configured") is not True:
+    if funding.get("configured") is not True or funding.get("canonical") is not True:
         return "warning"
     coverage = funding.get("quote_coverage")
     if isinstance(coverage, dict) and coverage.get("complete") is True:
@@ -216,6 +216,7 @@ def extract_constraint_state(advice_result: Mapping[str, Any]) -> dict[str, Any]
     funding = advice_result.get("account_funding")
     funding_present = isinstance(funding, dict)
     funding_configured = funding_present and funding.get("configured") is True
+    funding_canonical = funding_present and funding.get("canonical") is True
 
     sellable_advisory_count = 0
     constrained_add_count = 0
@@ -231,6 +232,7 @@ def extract_constraint_state(advice_result: Mapping[str, Any]) -> dict[str, Any]
     return {
         "account_funding_available": funding_present,
         "account_funding_configured": funding_configured,
+        "account_funding_canonical": funding_canonical,
         "cash_constraint_evaluated": funding_present,
         "sellable_quantity_evaluated": sellable_advisory_count > 0,
         "constrained_add_count": constrained_add_count,

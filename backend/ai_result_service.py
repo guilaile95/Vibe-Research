@@ -405,14 +405,45 @@ def _validate_portfolio_authoritative_payload(
                 "tracked_stock_weight_pct",
                 "quote_coverage",
             },
-            {"status", "reason_code"},
+            {
+                "status",
+                "reason_code",
+                "canonical",
+                "canonical_reason_codes",
+                "authority_state",
+                "confirmation_id",
+                "effective_at",
+                "recorded_at",
+            },
         )
         if not isinstance(funding["configured"], bool):
             raise AiResultValidationError("account_funding.configured 必须是布尔值")
-        if "status" in funding and funding["status"] not in {"valid", "not_configured", "corrupted"}:
+        if "canonical" in funding and not isinstance(funding["canonical"], bool):
+            raise AiResultValidationError("account_funding.canonical 必须是布尔值")
+        if "status" in funding and funding["status"] not in {
+            "valid",
+            "partial",
+            "not_configured",
+            "corrupted",
+        }:
             raise AiResultValidationError("account_funding.status 非法")
         if "reason_code" in funding and funding["reason_code"] is not None and not isinstance(funding["reason_code"], str):
             raise AiResultValidationError("account_funding.reason_code 必须是字符串或 null")
+        if "canonical_reason_codes" in funding:
+            _string_list(
+                funding["canonical_reason_codes"],
+                "account_funding.canonical_reason_codes",
+            )
+        for field in ("authority_state", "confirmation_id"):
+            if field in funding and funding[field] is not None:
+                _nonempty_string(funding[field], f"account_funding.{field}")
+        for field in ("effective_at", "recorded_at"):
+            if field in funding:
+                _valid_timestamp(
+                    funding[field],
+                    f"account_funding.{field}",
+                    allow_none=True,
+                )
         for field in (
             "total_assets",
             "available_cash",
@@ -537,11 +568,16 @@ def _cached_display_trade_date() -> str | None:
 
 
 def _safe_api_result(record: dict[str, Any], *, stale: bool) -> dict[str, Any]:
+    payload = copy.deepcopy(record["payload"])
+    if record["result_type"] == PORTFOLIO_ADVICE:
+        from portfolio_advice_cash_constraint import apply_noncanonical_account_gate
+
+        payload = apply_noncanonical_account_gate(payload)
     result = {
         "result_type": record["result_type"],
         "trade_date": record["trade_date"],
         "schema_version": record["schema_version"],
-        "payload": copy.deepcopy(record["payload"]),
+        "payload": payload,
         "generated_at": record["generated_at"],
         "model_provider": record["model_provider"],
         "model_name": record["model_name"],

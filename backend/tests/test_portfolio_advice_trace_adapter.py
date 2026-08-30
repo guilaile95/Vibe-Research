@@ -87,7 +87,11 @@ def test_summarize_holding_reason_fallback():
 
 def test_constraint_state_evaluated_not_applied():
     advice = {
-        "account_funding": {"configured": True, "quote_coverage": {"complete": True}},
+        "account_funding": {
+            "configured": True,
+            "canonical": True,
+            "quote_coverage": {"complete": True},
+        },
         "holdings": [
             {
                 "code": "000001",
@@ -107,6 +111,7 @@ def test_constraint_state_evaluated_not_applied():
     state = adapter.extract_constraint_state(advice)
     assert state["account_funding_available"] is True
     assert state["account_funding_configured"] is True
+    assert state["account_funding_canonical"] is True
     assert state["cash_constraint_evaluated"] is True
     assert state["sellable_quantity_evaluated"] is True
     assert state["constrained_add_count"] == 1
@@ -121,6 +126,18 @@ def test_constraint_state_evaluated_not_applied():
         "execution_quantity": None,
     }
     assert adapter.holding_is_cash_constrained(bad) is False
+
+
+def test_configured_noncanonical_funding_is_partial_and_warning():
+    funding = {"configured": True, "canonical": False}
+    parsed, quality = adapter.parse_account_funding({"account_funding": funding})
+
+    assert parsed == funding
+    assert quality == "partial"
+    assert adapter.account_funding_severity(funding) == "warning"
+    assert adapter.extract_constraint_state({"account_funding": funding})[
+        "account_funding_canonical"
+    ] is False
 
 
 def test_resolve_advice_schema_version():

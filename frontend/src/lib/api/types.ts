@@ -906,8 +906,14 @@ export interface AccountFundingQuoteCoverage {
 
 export interface AccountFundingData {
   configured: boolean;
-  status?: AccountProfileStatus;
+  canonical?: boolean;
+  status?: AccountProfileStatus | "partial";
   reason_code?: string | null;
+  canonical_reason_codes?: string[];
+  authority_state?: string | null;
+  confirmation_id?: string | null;
+  effective_at?: string | null;
+  recorded_at?: string | null;
   total_assets: number | null;
   available_cash: number | null;
   available_cash_pct: number | null;

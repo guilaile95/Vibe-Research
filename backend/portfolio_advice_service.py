@@ -11,6 +11,7 @@ import json
 from typing import Any, Callable
 
 import ai_result_service
+import account_reality_service
 import chat
 import daily_review
 import decision_evidence_service
@@ -437,7 +438,17 @@ def generate_portfolio_advice(
             ai_result,
             context,
         )
-        authoritative = attach_account_funding_metrics(validated, prepared["portfolio"])
+        try:
+            account_reality = account_reality_service.get_account_reality()
+        except Exception:  # Account authority unavailable must not suppress risk reduction.
+            account_reality = {
+                "canonical": False,
+                "canonical_reason_codes": ["ACCOUNT_REALITY_UNAVAILABLE"],
+                "account_authority": {"state": "UNKNOWN"},
+            }
+        authoritative = attach_account_funding_metrics(
+            validated, prepared["portfolio"], account_reality
+        )
         authoritative = apply_available_cash_constraints(authoritative)
         authoritative = apply_sellable_quantity_advisory(
             authoritative,

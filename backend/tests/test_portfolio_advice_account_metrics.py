@@ -45,6 +45,8 @@ def tmp_env(tmp_path, monkeypatch):
     monkeypatch.setattr(pf, "PF_FILE", str(tmp_path / "portfolio.json"))
     monkeypatch.setattr(account_profile, "CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(account_profile, "ACCOUNT_FILE", str(tmp_path / "account_profile.json"))
+    monkeypatch.setenv("VIBE_RESEARCH_TRADE_LEDGER_DB", str(tmp_path / "trade_ledger.sqlite3"))
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(
         portfolio_advice_service.ai_result_service,
         "save_portfolio_advice",
@@ -141,7 +143,7 @@ def test_account_not_configured(tmp_env):
     res = portfolio_advice_service.generate_portfolio_advice({}, model_runner=_mock_runner)
     assert res["account_funding"]["configured"] is False
     assert res["account_funding"]["status"] == "not_configured"
-    assert res["account_funding"]["reason_code"] is None
+    assert res["account_funding"]["reason_code"] == "CASH_UNKNOWN"
     assert res["account_funding"]["total_assets"] is None
     assert res["account_funding"]["available_cash"] is None
     assert res["account_funding"]["quote_coverage"]["complete"] is True
@@ -174,6 +176,9 @@ def test_valid_account_funding_metrics(tmp_env):
     res = portfolio_advice_service.generate_portfolio_advice({}, model_runner=_mock_runner)
     af = res["account_funding"]
     assert af["configured"] is True
+    assert af["canonical"] is False
+    assert af["status"] == "partial"
+    assert "POSITION_AUTHORITY_NOT_CANONICAL" in af["canonical_reason_codes"]
     assert af["total_assets"] == 100000.0
     assert af["available_cash"] == 20000.0
     assert af["available_cash_pct"] == 20.0
@@ -184,6 +189,48 @@ def test_valid_account_funding_metrics(tmp_env):
     h = res["holdings"][0]
     assert h["account_metrics"]["market_value"] == 15000.0
     assert h["account_metrics"]["account_weight_pct"] == 15.0
+
+
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "ACCOUNT_CASH_RECONCILIATION_MISMATCH",
+        "ACCOUNT_CASH_RECONCILIATION_UNKNOWN",
+        "ACCOUNT_COVERAGE_INCOMPLETE",
+    ],
+)
+def test_noncanonical_account_reasons_preserve_confirmed_funding_provenance(
+    tmp_env, reason_code
+):
+    result = json.loads(_mock_runner(None, None))
+    portfolio_data = {
+        "holdings": [{"code": "000001", "shares": 1500, "price": 10.0}]
+    }
+    reality = {
+        "canonical": False,
+        "canonical_reason_codes": [reason_code],
+        "account_authority": {"state": "PARTIAL"},
+        "account_total_assets": {"current_fact": {"value": 100000.0}},
+        "cash": {
+            "current_fact": {
+                "value": 20000.0,
+                "confirmation_id": "account_confirmation_test",
+                "effective_at": "2026-08-31T00:00:00Z",
+                "recorded_at": "2026-08-31T00:00:00Z",
+            }
+        },
+    }
+
+    funding = am.attach_account_funding_metrics(
+        result, portfolio_data, reality
+    )["account_funding"]
+
+    assert funding["configured"] is True
+    assert funding["canonical"] is False
+    assert funding["status"] == "partial"
+    assert funding["reason_code"] == reason_code
+    assert funding["canonical_reason_codes"] == [reason_code]
+    assert funding["confirmation_id"] == "account_confirmation_test"
 
 
 def test_partial_quote_coverage(tmp_env):
@@ -263,9 +310,11 @@ def test_action_and_ratios_unchanged(tmp_env):
     # 未配置：不得返回看起来可执行的加仓数量
     assert h_before["execution_quantity"] is None
     assert h_before["estimated_amount"] is None
-    # 已配置且 usable=4500 > 1000：可执行数量保留
-    assert h_after["execution_quantity"] == 100
-    assert h_after["estimated_amount"] == 1000.0
+    # 旧三字段 profile 只是 LEGACY_UNPROVEN，不能形成可执行加仓数量。
+    assert h_after["execution_quantity"] is None
+    assert h_after["estimated_amount"] is None
+    assert res_after["account_funding"]["configured"] is True
+    assert res_after["account_funding"]["canonical"] is False
 
 
 def test_prompt_and_validator_isolation(tmp_env):

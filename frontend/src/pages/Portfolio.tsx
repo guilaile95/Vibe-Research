@@ -194,6 +194,14 @@ function AccountFundingCard({ funding, corrupted }: { funding?: AccountFundingDa
     );
   }
 
+  if (funding?.reason_code === "ACCOUNT_REALITY_UNAVAILABLE") {
+    return (
+      <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
+        账户现实暂不可用；新增风险操作不提供可执行数量，减仓/卖出建议仍按已验证持仓事实显示。
+      </div>
+    );
+  }
+
   if (!funding || !funding.configured) {
     return (
       <div className="rounded-lg border border-border/50 bg-black/10 p-3 text-xs text-muted-foreground">
@@ -205,6 +213,7 @@ function AccountFundingCard({ funding, corrupted }: { funding?: AccountFundingDa
 
   const cov = funding.quote_coverage;
   const isComplete = cov?.complete;
+  const canonicalReasons = funding.canonical_reason_codes ?? [];
 
   return (
     <div className="rounded-lg border border-border/50 bg-black/10 p-3.5">
@@ -214,6 +223,18 @@ function AccountFundingCard({ funding, corrupted }: { funding?: AccountFundingDa
           <span className="text-[11px] text-muted-foreground">更新于 {funding.updated_at}</span>
         )}
       </div>
+      {funding.canonical !== true && (
+        <div
+          data-testid="account-funding-authority-status"
+          data-canonical="false"
+          className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-700 dark:text-amber-400"
+        >
+          <p>账户金额已记录，但 Account Reality 尚未达到 canonical；新增风险操作不提供可执行数量。</p>
+          {canonicalReasons.length > 0 && (
+            <p className="mt-1 font-mono">{canonicalReasons.join(" · ")}</p>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
         <div>
           <p className="text-muted-foreground">账户总资产</p>
@@ -256,7 +277,7 @@ function HoldingAdviceCard({ h }: { h: PortfolioAdviceHoldingAdvice }) {
   const isNoQty = h.action === "hold" || h.action === "watch" || h.action === "avoid";
 
   return (
-    <GlassCard className="p-4">
+    <GlassCard className="p-4" data-testid={`portfolio-advice-holding-${h.code}`}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <span className="text-base font-semibold">{h.name}</span>

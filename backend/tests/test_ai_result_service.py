@@ -221,13 +221,19 @@ def test_portfolio_save_accepts_account_funding_state_fields(tmp_path, monkeypat
     monkeypatch.setattr(service.review_history, "resolve_review_db_path", lambda: db)
     payload = _advice_payload(
         account_funding={
-            "configured": False,
-            "status": "corrupted",
-            "reason_code": "ACCOUNT_PROFILE_CORRUPTED",
-            "total_assets": None,
-            "available_cash": None,
-            "available_cash_pct": None,
-            "updated_at": None,
+            "configured": True,
+            "canonical": False,
+            "status": "partial",
+            "reason_code": "ACCOUNT_CASH_RECONCILIATION_MISMATCH",
+            "canonical_reason_codes": ["ACCOUNT_CASH_RECONCILIATION_MISMATCH"],
+            "authority_state": "PARTIAL",
+            "confirmation_id": "confirmation-1",
+            "effective_at": "2026-07-23T08:00:00+00:00",
+            "recorded_at": "2026-07-23T08:00:00+00:00",
+            "total_assets": 100000.0,
+            "available_cash": 50000.0,
+            "available_cash_pct": 50.0,
+            "updated_at": "2026-07-23T08:00:00+00:00",
             "tracked_stock_market_value": None,
             "tracked_stock_weight_pct": None,
             "quote_coverage": {
@@ -246,8 +252,56 @@ def test_portfolio_save_accepts_account_funding_state_fields(tmp_path, monkeypat
     restored = service.get_ai_result(
         "portfolio_advice", trade_date="2026-07-23", current_portfolio=_portfolio()
     )
-    assert restored["payload"]["account_funding"]["status"] == "corrupted"
-    assert restored["payload"]["account_funding"]["reason_code"] == "ACCOUNT_PROFILE_CORRUPTED"
+    funding = restored["payload"]["account_funding"]
+    assert funding["status"] == "partial"
+    assert funding["canonical"] is False
+    assert funding["confirmation_id"] == "confirmation-1"
+    assert funding["canonical_reason_codes"] == [
+        "ACCOUNT_CASH_RECONCILIATION_MISMATCH"
+    ]
+
+
+def test_legacy_noncanonical_restore_hides_add_execution_without_rewriting_store(
+    tmp_path, monkeypatch
+):
+    db = tmp_path / "daily_reviews.sqlite3"
+    monkeypatch.setattr(service.review_history, "resolve_review_db_path", lambda: db)
+    portfolio_data = _portfolio([{"code": "600519", "shares": 100, "cost": 1500.5}])
+    holding = {
+        **_advice_payload()["holdings"][0],
+        "action": "add",
+        "execution_size_pct_of_holding": 10,
+        "execution_quantity": 100,
+        "estimated_amount": 170000.0,
+    }
+    legacy_funding = {
+        "configured": True,
+        "status": "valid",
+        "reason_code": None,
+        "total_assets": 500000.0,
+        "available_cash": 200000.0,
+        "available_cash_pct": 40.0,
+        "updated_at": "2026-07-23T08:00:00+00:00",
+        "tracked_stock_market_value": 170000.0,
+        "tracked_stock_weight_pct": 34.0,
+        "quote_coverage": {"valid_holdings": 1, "total_holdings": 1, "complete": True},
+    }
+    service.save_portfolio_advice(
+        portfolio_data,
+        _review(),
+        _advice_payload(holdings=[holding], account_funding=legacy_funding),
+        {"provider": "cli-codex", "model": "gpt"},
+    )
+
+    restored = service.get_ai_result(
+        "portfolio_advice", trade_date="2026-07-23", current_portfolio=portfolio_data
+    )
+    restored_holding = restored["payload"]["holdings"][0]
+    assert restored_holding["execution_quantity"] is None
+    assert restored_holding["estimated_amount"] is None
+    assert store.get_result(db, "portfolio_advice", "2026-07-23")["payload"][
+        "holdings"
+    ][0]["execution_quantity"] == 100
 
 
 def test_portfolio_advice_restore_uses_static_holdings_snapshot_without_quotes(
