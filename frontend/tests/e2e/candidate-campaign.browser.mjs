@@ -278,10 +278,57 @@ function thesisContext(campaign) {
   };
 }
 
-function previewFor(campaign, body) {
+function capitalContextFor(scenario) {
+  const base = {
+    schema_version: "portfolio_capital_context.v0.1",
+    position_sizing_status: "AVAILABLE",
+    authority_refs: ["portfolio_capital_allocation:fixture"],
+  };
+  if (scenario === "C") return {
+    ...base,
+    position_sizing_status: "UNKNOWN",
+    capital_availability: { state: "UNKNOWN", confirmed_cash: null, reason_codes: ["ACCOUNT_REALITY_UNKNOWN"] },
+    portfolio_fit: { state: "UNKNOWN", existing_position_count: null, reason_codes: ["ACCOUNT_REALITY_UNKNOWN"] },
+    replacement_review: { state: "UNKNOWN", reason_codes: ["ACCOUNT_REALITY_UNKNOWN"], candidates: [] },
+  };
+  if (scenario === "E") return {
+    ...base,
+    capital_availability: { state: "CONSTRAINED", confirmed_cash: 50000, reason_codes: ["CAPITAL_CONSTRAINED"] },
+    portfolio_fit: { state: "CONSTRAINED", existing_position_count: 1, reason_codes: ["CAPITAL_CONSTRAINED"] },
+    replacement_review: {
+      state: "WORTH_REVIEW",
+      reason_codes: ["INCUMBENT_THESIS_WEAKENED"],
+      candidates: [{ security_code: "000001", campaign_id: `campaign_${"9".repeat(32)}`, strategy: "SWING", reason_codes: ["INCUMBENT_THESIS_WEAKENED"] }],
+    },
+  };
+  if (scenario === "B" || scenario === "D") return {
+    ...base,
+    capital_availability: { state: "CONSTRAINED", confirmed_cash: 50000, reason_codes: ["CAPITAL_CONSTRAINED"] },
+    portfolio_fit: { state: "CONSTRAINED", existing_position_count: 1, reason_codes: ["CAPITAL_CONSTRAINED"] },
+    replacement_review: {
+      state: "NOT_PROVEN",
+      reason_codes: [scenario === "D" ? "REPLACEMENT_SUPERIORITY_NOT_PROVEN" : "CAPITAL_CONSTRAINED_NO_AUTOMATIC_REPLACEMENT"],
+      candidates: [],
+    },
+  };
+  return {
+    ...base,
+    capital_availability: { state: "AVAILABLE", confirmed_cash: 200000, reason_codes: [] },
+    portfolio_fit: { state: "SUPPORTIVE", existing_position_count: 0, reason_codes: [] },
+    replacement_review: { state: "NOT_REQUIRED", reason_codes: [], candidates: [] },
+  };
+}
+
+function previewFor(campaign, body, capitalScenario = "A") {
   const isA = campaign.campaign_id === CAMPAIGN_A;
   const isB = campaign.campaign_id === CAMPAIGN_B;
-  const nextBestAction = isA ? "BUY SMALL" : isB ? "RESEARCH MORE" : "AVOID";
+  const scenario = isA ? capitalScenario : isB ? "C" : "E";
+  const capitalContext = capitalContextFor(scenario);
+  const capitalUnknown = capitalContext.capital_availability.state === "UNKNOWN";
+  const replacementReview = capitalContext.replacement_review.state === "WORTH_REVIEW";
+  const nextBestAction = isA
+    ? capitalUnknown || replacementReview || scenario === "D" ? "WAIT" : "BUY SMALL"
+    : isB ? "RESEARCH MORE" : "AVOID";
   const candidate = {
     valuation_status: isB ? "UNKNOWN" : "EVALUATED",
     position_state: isA ? "NOT_HELD" : "UNKNOWN",
@@ -324,11 +371,18 @@ function previewFor(campaign, body) {
       as_of: "2026-08-30T00:00:00.000Z",
       asset_view: isB ? { view: "ASSET", stance: body.asset_view.stance, candidate_valuation: { status: "UNKNOWN", cases: {} } } : body.asset_view,
       trade_view: body.trade_view,
-      portfolio_view: { ...body.portfolio_view, position_state: candidate.position_state, account_state: candidate.account_state },
+      portfolio_view: {
+        ...body.portfolio_view,
+        position_state: candidate.position_state,
+        account_state: candidate.account_state,
+        portfolio_capital_context: capitalContext,
+      },
       view_provenance: { asset_view: { view_origin: "USER_DRAFT" }, trade_view: { view_origin: "USER_DRAFT" }, portfolio_view: { view_origin: "USER_DRAFT" } },
       next_best_action: nextBestAction,
       action_envelope: {
-        allowed_actions: isA ? ["BUY SMALL", "WAIT"] : isB ? ["RESEARCH MORE", "WAIT"] : ["AVOID", "RESEARCH MORE", "WAIT"],
+        allowed_actions: isA
+          ? capitalUnknown || replacementReview || scenario === "D" ? ["WAIT", "RESEARCH MORE"] : ["BUY SMALL", "WAIT"]
+          : isB ? ["RESEARCH MORE", "WAIT"] : ["AVOID", "RESEARCH MORE", "WAIT"],
         blocked_actions: campaign.campaign_id === CAMPAIGN_C ? ["BUY NOW", "BUY SMALL", "SCALE IN"] : [],
         maintain_conditions: [], upgrade_conditions: [], downgrade_conditions: [], invalidation_conditions: [],
       },
@@ -405,6 +459,8 @@ try {
     previewPayloads: {},
     challenge: null,
     committed: false,
+    capitalScenario: "A",
+    failNextCommitStale: false,
     apiPaths: [],
   };
 
@@ -547,7 +603,7 @@ try {
       assert.ok(campaign, "preview requested for unknown campaign");
       const body = request.postDataJSON();
       state.previewPayloads[campaign.campaign_id] = body;
-      await route.fulfill(ok(previewFor(campaign, body)));
+      await route.fulfill(ok(previewFor(campaign, body, state.capitalScenario)));
       return;
     }
     const challengeLookupMatch = pathname.match(/^\/api\/campaigns\/([^/]+)\/decision-challenge$/);
@@ -583,6 +639,15 @@ try {
       assert.equal(commitMatch[1], CAMPAIGN_A);
       const body = request.postDataJSON();
       assert.equal(body.challenge_id, CHALLENGE_A, "bounded BUY Freeze must bind finalized Challenge");
+      if (state.failNextCommitStale) {
+        state.failNextCommitStale = false;
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "proposal fingerprint mismatch; re-preview required" }),
+        });
+        return;
+      }
       state.committed = true;
       await route.fulfill(ok({
         schema_version: "decision_commit_runtime.v0.1", proposal_fingerprint: FINGERPRINTS[CAMPAIGN_A], idempotent: false,
@@ -759,10 +824,40 @@ try {
   await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
   await page.getByText("BUY SMALL", { exact: true }).first().waitFor();
   await page.getByTestId("candidate-opportunity-authority").getByText("NOT_HELD", { exact: true }).waitFor();
+  const capitalCard = page.getByTestId("portfolio-capital-context");
+  await capitalCard.locator('[data-capital-dimension="capital-availability"]').getByText("AVAILABLE", { exact: true }).waitFor();
+  assert.equal(await capitalCard.getAttribute("data-portfolio-fit"), "SUPPORTIVE");
+  assert.equal(await capitalCard.getAttribute("data-replacement-review"), "NOT_REQUIRED");
+  const themeToggle = page.getByRole("button", { name: /^(亮色|暗色)模式$/ });
+  await themeToggle.click();
+  assert.equal(await capitalCard.isVisible(), true, "CAP1 context must remain visible after theme switch");
+  await themeToggle.click();
   const aDraft = state.previewPayloads[CAMPAIGN_A];
   assert.deepEqual(Object.keys(aDraft.asset_view.candidate_valuation).sort(), ["base", "bear", "bull"]);
   assert.deepEqual(aDraft.trade_view.entry_range, { low: 100, high: 102 });
   assert.equal(Object.hasOwn(aDraft.portfolio_view, "position_state"), false, "browser must not submit a fake position state");
+  assert.equal(Object.hasOwn(aDraft.portfolio_view, "portfolio_capital_context"), false, "browser must not submit CAP1 authority facts");
+
+  // CAP1 A-E: one existing Candidate path renders each deterministic capital
+  // state without introducing a replacement or trading control.
+  for (const scenario of [
+    ["B", "CONSTRAINED", "CONSTRAINED", "NOT_PROVEN", "CAPITAL_CONSTRAINED_NO_AUTOMATIC_REPLACEMENT"],
+    ["C", "UNKNOWN", "UNKNOWN", "UNKNOWN", "ACCOUNT_REALITY_UNKNOWN"],
+    ["D", "CONSTRAINED", "CONSTRAINED", "NOT_PROVEN", "REPLACEMENT_SUPERIORITY_NOT_PROVEN"],
+    ["E", "CONSTRAINED", "CONSTRAINED", "WORTH_REVIEW", "INCUMBENT_THESIS_WEAKENED"],
+  ]) {
+    const [name, availability, fit, replacement, reason] = scenario;
+    state.capitalScenario = name;
+    await page.getByRole("button", { name: "Preview Proposal" }).click();
+    await page.locator(
+      `[data-testid="portfolio-capital-context"][data-capital-availability="${availability}"][data-portfolio-fit="${fit}"][data-replacement-review="${replacement}"]`,
+    ).waitFor();
+    await capitalCard.getByText(reason, { exact: true }).first().waitFor();
+  }
+  assert.equal(await capitalCard.getByRole("button").count(), 0, "Replacement Review must not create an automatic action control");
+  state.capitalScenario = "A";
+  await page.getByRole("button", { name: "Preview Proposal" }).click();
+  await page.locator('[data-testid="portfolio-capital-context"][data-capital-availability="AVAILABLE"]').waitFor();
 
   for (const label of ["Strongest supporting evidence", "Strongest opposing evidence", "Pre-mortem", "Invalidation facts"]) {
     await page.getByRole("textbox", { name: label }).fill(`${label} fixture`);
@@ -770,6 +865,13 @@ try {
   await page.getByRole("checkbox", { name: /我已显式填写四个挑战维度/ }).check();
   await page.getByRole("button", { name: "Finalize Decision Challenge" }).click();
   await page.locator('[data-challenge-state="FOUND"]').waitFor();
+  await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
+  state.failNextCommitStale = true;
+  await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
+  await page.getByRole("alert").getByText(/Proposal 已失效/).waitFor();
+  assert.equal(state.committed, false, "stale CAP1 Preview must not create a Frozen Decision");
+  await page.getByRole("button", { name: "Preview Proposal" }).click();
+  await page.locator('[data-testid="portfolio-capital-context"][data-capital-availability="AVAILABLE"]').waitFor();
   await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
   await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
   await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
@@ -797,6 +899,11 @@ try {
   const bAuthority = page.getByTestId("candidate-opportunity-authority");
   await bAuthority.getByText("UNAVAILABLE", { exact: true }).first().waitFor();
   await bAuthority.getByText(/INSUFFICIENT/).waitFor();
+  const bCapital = page.getByTestId("portfolio-capital-context");
+  assert.equal(await bCapital.getAttribute("data-capital-availability"), "UNKNOWN");
+  assert.equal(await bCapital.getAttribute("data-portfolio-fit"), "UNKNOWN");
+  assert.equal(await bCapital.getAttribute("data-replacement-review"), "UNKNOWN");
+  assert.equal(await bCapital.getByTestId("portfolio-capital-confirmed-cash").textContent(), "UNKNOWN");
 
   // C: Hard Risk CONFIRMED blocks all added-risk actions and remains traceable.
   await page.goto(`http://127.0.0.1:${port}/campaigns/${CAMPAIGN_C}/decision-proposal`, { waitUntil: "domcontentloaded" });
@@ -809,6 +916,8 @@ try {
   await page.getByText("AVOID", { exact: true }).first().waitFor();
   await page.getByTestId("candidate-opportunity-authority").getByText("CONFIRMED", { exact: true }).waitFor();
   await page.getByText("HARD_RISK_CONFIRMED", { exact: true }).waitFor();
+  assert.equal(await page.getByTestId("portfolio-capital-context").getAttribute("data-replacement-review"), "WORTH_REVIEW");
+  await page.getByTestId("portfolio-capital-context").getByText("INCUMBENT_THESIS_WEAKENED", { exact: true }).first().waitFor();
   for (const action of ["BUY NOW", "BUY SMALL", "SCALE IN"]) {
     await page.locator('[data-action-envelope]').getByText(action, { exact: true }).waitFor();
   }

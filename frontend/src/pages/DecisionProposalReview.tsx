@@ -12,6 +12,7 @@ import {
   CANDIDATE_CONFIDENCE_LEVELS,
   buildCandidateTradeTerms,
   buildCandidateValuationCase,
+  presentPortfolioCapitalContext,
   type CandidateConfidence,
   type CandidateTradeTermsDraft,
   type CandidateValuationCaseDraft,
@@ -86,6 +87,21 @@ function presentAuthorityValue(value: unknown): string {
   if (!record) return "UNKNOWN";
   const entries = Object.entries(record).map(([key, item]) => `${key}: ${presentAuthorityValue(item)}`);
   return entries.join(" · ") || "—";
+}
+
+function portfolioCapitalBadgeClass(state: string): string {
+  if (state === "AVAILABLE" || state === "SUPPORTIVE" || state === "NOT_REQUIRED") {
+    return "bg-success/15 text-success";
+  }
+  return state === "UNKNOWN"
+    ? "bg-warning/15 text-warning"
+    : "bg-amber-500/15 text-amber-700 dark:text-amber-300";
+}
+
+function formatConfirmedCash(value: number | null): string {
+  return value === null
+    ? "UNKNOWN"
+    : `¥${value.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function splitLines(value: string): string[] {
@@ -490,6 +506,7 @@ export function DecisionProposalReview() {
   const previewAssurance = preview?.decision_assurance as Record<string, unknown> | undefined;
   const dimensions = (previewAssurance?.dimension_states ?? {}) as Record<string, unknown>;
   const envelope = preview?.proposal.action_envelope as Record<string, unknown> | undefined;
+  const portfolioCapital = presentPortfolioCapitalContext(preview?.proposal.portfolio_view, envelope);
   const candidateOpportunity = recordValue(preview?.proposal.authority_facts?.candidate_opportunity);
   const candidatePolicyFacts = candidateOpportunity
     ? Object.entries(candidateOpportunity).filter(([key]) => key === "analysis_metadata" || key.endsWith("policy_version"))
@@ -887,6 +904,134 @@ export function DecisionProposalReview() {
                   ))}
                 </div>
               )}
+            </section>
+          )}
+
+          {isPreEntry && (
+            <section
+              className="space-y-3 rounded-md border border-border/60 bg-background/35 p-3 text-xs"
+              data-testid="portfolio-capital-context"
+              data-capital-availability={portfolioCapital.capitalAvailability.state}
+              data-portfolio-fit={portfolioCapital.portfolioFit.state}
+              data-replacement-review={portfolioCapital.replacementReview.state}
+              data-capital-context-valid={portfolioCapital.valid ? "true" : "false"}
+              aria-labelledby="portfolio-capital-context-title"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h3 id="portfolio-capital-context-title" className="font-semibold">Portfolio Capital Context</h3>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Preview 的只读资本配置上下文；状态与原因来自 backend authority，不从浏览器输入推导。
+                  </p>
+                </div>
+                <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                  {portfolioCapital.schemaVersion ?? "UNKNOWN"}
+                </span>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-3">
+                {[
+                  {
+                    key: "capital-availability",
+                    label: "Capital Availability",
+                    state: portfolioCapital.capitalAvailability.state,
+                    metricLabel: "Confirmed cash",
+                    metricValue: formatConfirmedCash(portfolioCapital.capitalAvailability.confirmedCash),
+                    metricTestId: "portfolio-capital-confirmed-cash",
+                    reasonCodes: portfolioCapital.capitalAvailability.reasonCodes,
+                  },
+                  {
+                    key: "portfolio-fit",
+                    label: "Portfolio Fit",
+                    state: portfolioCapital.portfolioFit.state,
+                    metricLabel: "Existing positions",
+                    metricValue: portfolioCapital.portfolioFit.existingPositionCount === null
+                      ? "UNKNOWN"
+                      : String(portfolioCapital.portfolioFit.existingPositionCount),
+                    metricTestId: "portfolio-capital-existing-positions",
+                    reasonCodes: portfolioCapital.portfolioFit.reasonCodes,
+                  },
+                  {
+                    key: "replacement-review",
+                    label: "Replacement Review",
+                    state: portfolioCapital.replacementReview.state,
+                    metricLabel: "Review candidates",
+                    metricValue: portfolioCapital.replacementReview.state === "UNKNOWN"
+                      ? "UNKNOWN"
+                      : String(portfolioCapital.replacementReview.candidates.length),
+                    metricTestId: "portfolio-capital-replacement-count",
+                    reasonCodes: portfolioCapital.replacementReview.reasonCodes,
+                  },
+                ].map((item) => (
+                  <div key={item.key} className="rounded border border-border/50 bg-background/45 p-2" data-capital-dimension={item.key}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-muted-foreground">{item.label}</p>
+                      <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-medium ${portfolioCapitalBadgeClass(item.state)}`}>
+                        {item.state}
+                      </span>
+                    </div>
+                    <p className="mt-2">
+                      {item.metricLabel}: <span className="font-mono font-medium" data-testid={item.metricTestId}>{item.metricValue}</span>
+                    </p>
+                    <p className="mt-2 text-[10px] text-muted-foreground">Reason codes</p>
+                    {item.reasonCodes.length > 0 ? (
+                      <ul className="mt-1 list-disc space-y-0.5 pl-4 font-mono text-[10px] text-muted-foreground">
+                        {item.reasonCodes.map((reason) => <li key={reason}>{reason}</li>)}
+                      </ul>
+                    ) : (
+                      <p className="mt-1 font-mono text-[10px] text-muted-foreground">{item.state === "UNKNOWN" ? "UNKNOWN" : "—"}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="rounded border border-border/50 bg-background/45 p-2">
+                  <p className="text-muted-foreground">Position sizing status</p>
+                  <p className="mt-1 font-mono font-medium" data-testid="portfolio-capital-position-sizing">{portfolioCapital.positionSizingStatus}</p>
+                </div>
+                <div className="rounded border border-border/50 bg-background/45 p-2" data-testid="portfolio-capital-final-actions">
+                  <p className="text-muted-foreground">Final allowed actions</p>
+                  {portfolioCapital.finalAllowedActions === null ? (
+                    <p className="mt-1 font-mono font-medium text-warning">UNKNOWN</p>
+                  ) : portfolioCapital.finalAllowedActions.length > 0 ? (
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {portfolioCapital.finalAllowedActions.map((action) => (
+                        <span key={action} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">{action}</span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-1 font-mono font-medium">NONE</p>
+                  )}
+                </div>
+              </div>
+
+              {portfolioCapital.replacementReview.candidates.length > 0 && (
+                <div className="space-y-1.5" data-testid="portfolio-capital-replacement-candidates">
+                  <p className="font-medium">Replacement review candidates</p>
+                  {portfolioCapital.replacementReview.candidates.map((candidate) => (
+                    <div key={`${candidate.campaign_id}:${candidate.security_code}`} className="rounded border border-border/40 bg-background/40 p-2">
+                      <p className="font-mono text-[11px]">{candidate.security_code} · {candidate.strategy} · {candidate.campaign_id}</p>
+                      <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+                        {candidate.reason_codes.length > 0 ? candidate.reason_codes.join(" · ") : "—"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {portfolioCapital.authorityRefs.length > 0 && (
+                <details className="text-muted-foreground">
+                  <summary className="cursor-pointer select-none hover:text-foreground">Authority refs（{portfolioCapital.authorityRefs.length}）</summary>
+                  <ul className="mt-1 space-y-0.5 font-mono text-[10px]">
+                    {portfolioCapital.authorityRefs.map((ref) => <li key={ref}>{ref}</li>)}
+                  </ul>
+                </details>
+              )}
+
+              <p className="text-[11px] leading-5 text-muted-foreground">
+                Replacement Review 仅用于复核，不会自动换仓、买卖、减仓、再平衡或创建交易。
+              </p>
             </section>
           )}
 

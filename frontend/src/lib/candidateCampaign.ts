@@ -3,6 +3,10 @@ import type {
   CampaignStatus,
   DerivedPositionsResult,
   EvidenceRecord,
+  PortfolioCapitalAvailabilityState,
+  PortfolioCapitalReplacementCandidate,
+  PortfolioFitState,
+  ReplacementReviewState,
 } from "./api/types";
 
 /** StockData 只呈现仍处于候选研究链路的 Campaign，不重新定义 transition graph。 */
@@ -80,6 +84,157 @@ export interface CandidateTradeTerms {
   entry_range: { low: number; high: number };
   invalidation_price: number;
   execution_style?: "SCALE_IN";
+}
+
+export interface PortfolioCapitalContextPresentation {
+  valid: boolean;
+  schemaVersion: string | null;
+  capitalAvailability: {
+    state: PortfolioCapitalAvailabilityState;
+    confirmedCash: number | null;
+    reasonCodes: string[];
+  };
+  portfolioFit: {
+    state: PortfolioFitState;
+    existingPositionCount: number | null;
+    reasonCodes: string[];
+  };
+  replacementReview: {
+    state: ReplacementReviewState;
+    reasonCodes: string[];
+    candidates: PortfolioCapitalReplacementCandidate[];
+  };
+  positionSizingStatus: string;
+  authorityRefs: string[];
+  finalAllowedActions: string[] | null;
+}
+
+const CAPITAL_AVAILABILITY_STATES = new Set<PortfolioCapitalAvailabilityState>(["AVAILABLE", "CONSTRAINED", "UNKNOWN"]);
+const PORTFOLIO_FIT_STATES = new Set<PortfolioFitState>(["SUPPORTIVE", "CONSTRAINED", "UNKNOWN"]);
+const REPLACEMENT_REVIEW_STATES = new Set<ReplacementReviewState>(["NOT_REQUIRED", "WORTH_REVIEW", "NOT_PROVEN", "UNKNOWN"]);
+const CAMPAIGN_STRATEGY_VALUES = new Set(["SHORT", "SWING", "MEDIUM"]);
+const PORTFOLIO_CAPITAL_CONTEXT_SCHEMA_VERSION = "portfolio_capital_context.v0.1";
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function stringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(nonEmptyString);
+}
+
+function nullableFiniteNumber(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function nullableCount(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isInteger(value) && value >= 0);
+}
+
+function finalAllowedActions(actionEnvelope: unknown): string[] | null {
+  const envelope = recordOf(actionEnvelope);
+  const actions = envelope?.allowed_actions;
+  return stringArray(actions) ? actions.slice() : null;
+}
+
+function unknownPortfolioCapital(finalActions: string[] | null): PortfolioCapitalContextPresentation {
+  return {
+    valid: false,
+    schemaVersion: null,
+    capitalAvailability: { state: "UNKNOWN", confirmedCash: null, reasonCodes: [] },
+    portfolioFit: { state: "UNKNOWN", existingPositionCount: null, reasonCodes: [] },
+    replacementReview: { state: "UNKNOWN", reasonCodes: [], candidates: [] },
+    positionSizingStatus: "UNKNOWN",
+    authorityRefs: [],
+    finalAllowedActions: finalActions,
+  };
+}
+
+/** Read-only CAP1 projection. Missing or malformed authority data fails closed. */
+export function presentPortfolioCapitalContext(
+  portfolioView: unknown,
+  actionEnvelope: unknown,
+): PortfolioCapitalContextPresentation {
+  const finalActions = finalAllowedActions(actionEnvelope);
+  const view = recordOf(portfolioView);
+  const context = recordOf(view?.portfolio_capital_context);
+  const availability = recordOf(context?.capital_availability);
+  const fit = recordOf(context?.portfolio_fit);
+  const replacement = recordOf(context?.replacement_review);
+  const candidates = replacement?.candidates;
+
+  if (
+    !context
+    || context.schema_version !== PORTFOLIO_CAPITAL_CONTEXT_SCHEMA_VERSION
+    || !availability
+    || !CAPITAL_AVAILABILITY_STATES.has(availability.state as PortfolioCapitalAvailabilityState)
+    || !nullableFiniteNumber(availability.confirmed_cash)
+    || (availability.state !== "UNKNOWN" && availability.confirmed_cash === null)
+    || !stringArray(availability.reason_codes)
+    || !fit
+    || !PORTFOLIO_FIT_STATES.has(fit.state as PortfolioFitState)
+    || !nullableCount(fit.existing_position_count)
+    || (fit.state !== "UNKNOWN" && fit.existing_position_count === null)
+    || !stringArray(fit.reason_codes)
+    || !replacement
+    || !REPLACEMENT_REVIEW_STATES.has(replacement.state as ReplacementReviewState)
+    || !stringArray(replacement.reason_codes)
+    || !Array.isArray(candidates)
+    || !nonEmptyString(context.position_sizing_status)
+    || !stringArray(context.authority_refs)
+  ) return unknownPortfolioCapital(finalActions);
+
+  const normalizedCandidates: PortfolioCapitalReplacementCandidate[] = [];
+  for (const candidateValue of candidates) {
+    const candidate = recordOf(candidateValue);
+    if (
+      !candidate
+      || !nonEmptyString(candidate.security_code)
+      || !/^\d{6}$/.test(candidate.security_code)
+      || !nonEmptyString(candidate.campaign_id)
+      || !nonEmptyString(candidate.strategy)
+      || !CAMPAIGN_STRATEGY_VALUES.has(candidate.strategy)
+      || !stringArray(candidate.reason_codes)
+    ) return unknownPortfolioCapital(finalActions);
+    normalizedCandidates.push({
+      security_code: candidate.security_code,
+      campaign_id: candidate.campaign_id,
+      strategy: candidate.strategy as PortfolioCapitalReplacementCandidate["strategy"],
+      reason_codes: candidate.reason_codes.slice(),
+    });
+  }
+
+  const availabilityState = availability.state as PortfolioCapitalAvailabilityState;
+  const fitState = fit.state as PortfolioFitState;
+  const replacementState = replacement.state as ReplacementReviewState;
+  return {
+    valid: true,
+    schemaVersion: context.schema_version,
+    capitalAvailability: {
+      state: availabilityState,
+      confirmedCash: availabilityState === "UNKNOWN" ? null : availability.confirmed_cash,
+      reasonCodes: availability.reason_codes.slice(),
+    },
+    portfolioFit: {
+      state: fitState,
+      existingPositionCount: fitState === "UNKNOWN" ? null : fit.existing_position_count,
+      reasonCodes: fit.reason_codes.slice(),
+    },
+    replacementReview: {
+      state: replacementState,
+      reasonCodes: replacement.reason_codes.slice(),
+      candidates: replacementState === "UNKNOWN" ? [] : normalizedCandidates,
+    },
+    positionSizingStatus: context.position_sizing_status,
+    authorityRefs: context.authority_refs.slice(),
+    finalAllowedActions: finalActions,
+  };
 }
 
 export function candidateWorkspaceHref(code: string): string {
