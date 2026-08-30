@@ -47,6 +47,9 @@ _REASON_ACCOUNT_TOTAL_ASSETS_UNPROVEN = "ACCOUNT_TOTAL_ASSETS_UNPROVEN"
 _REASON_ACCOUNT_FACT_STALE = "ACCOUNT_FACT_STALE_RECONFIRM_REQUIRED"
 _REASON_ACCOUNT_MUTATION_TIME_INVALID = "ACCOUNT_MUTATION_TIME_INVALID"
 _REASON_POSITION_AUTHORITY_NOT_CANONICAL = "POSITION_AUTHORITY_NOT_CANONICAL"
+_REASON_ACCOUNT_CASH_RECONCILIATION_MISMATCH = "ACCOUNT_CASH_RECONCILIATION_MISMATCH"
+_REASON_ACCOUNT_CASH_RECONCILIATION_UNKNOWN = "ACCOUNT_CASH_RECONCILIATION_UNKNOWN"
+_REASON_ACCOUNT_COVERAGE_INCOMPLETE = "ACCOUNT_COVERAGE_INCOMPLETE"
 _REASON_NAV_COMPONENT_CUTOFF_MISMATCH = "NAV_COMPONENT_CUTOFF_MISMATCH"
 _TEMPORAL_UNPROVEN = "UNPROVEN"
 _TEMPORAL_PROVEN = "PROVEN"
@@ -490,8 +493,17 @@ def get_account_reality() -> dict[str, Any]:
     position_canonical = derived.get("canonical") is True
     cash_subfact_canonical = current_fact.get("authority_state") == "CANONICAL"
     total_assets_canonical = total_assets_fact.get("authority_state") == "CANONICAL"
+    reconciliation_eligible = cash_recon["status"] == "MATCH"
+    # Corporate actions can only be proven irrelevant when this ledger has never
+    # contained a security position. Any current or closed position keeps aggregate
+    # Account coverage partial while preserving the narrower confirmed subfacts.
+    coverage_eligible = not derived.get("positions")
     account_canonical = bool(
-        position_canonical and cash_subfact_canonical and total_assets_canonical
+        position_canonical
+        and cash_subfact_canonical
+        and total_assets_canonical
+        and reconciliation_eligible
+        and coverage_eligible
     )
     canonical_reason_codes: list[str] = []
     if not position_canonical:
@@ -504,6 +516,12 @@ def get_account_reality() -> dict[str, Any]:
         canonical_reason_codes.append(
             total_assets_fact.get("reason_code") or _REASON_ACCOUNT_TOTAL_ASSETS_UNPROVEN
         )
+    if cash_recon["status"] == "MISMATCH":
+        canonical_reason_codes.append(_REASON_ACCOUNT_CASH_RECONCILIATION_MISMATCH)
+    elif cash_recon["status"] != "MATCH":
+        canonical_reason_codes.append(_REASON_ACCOUNT_CASH_RECONCILIATION_UNKNOWN)
+    if not coverage_eligible:
+        canonical_reason_codes.append(_REASON_ACCOUNT_COVERAGE_INCOMPLETE)
     fact_authority_states = {
         current_fact.get("authority_state"),
         total_assets_fact.get("authority_state"),
@@ -516,6 +534,8 @@ def get_account_reality() -> dict[str, Any]:
         account_authority_state = "CORRUPTED"
     elif "UNKNOWN" in fact_authority_states:
         account_authority_state = "UNKNOWN"
+    elif position_canonical and cash_subfact_canonical and total_assets_canonical:
+        account_authority_state = "PARTIAL"
     else:
         account_authority_state = "UNPROVEN"
 

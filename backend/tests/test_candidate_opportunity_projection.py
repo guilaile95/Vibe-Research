@@ -281,13 +281,33 @@ def test_capital_context_a_to_e_is_fail_closed_and_never_auto_replaces():
     ]
 
 
-def test_noncanonical_account_is_unknown_not_confirmed_capital():
+def test_confirmed_mismatch_account_is_unknown_not_confirmed_capital():
     result = _project(
         account_reality={
             "canonical": False,
             "confidence": "MEDIUM",
+            "canonical_reason_codes": ["ACCOUNT_CASH_RECONCILIATION_MISMATCH"],
+            "account_authority": {"state": "PARTIAL"},
+            "account_total_assets": {
+                "current_fact": {
+                    "status": "AVAILABLE",
+                    "value": 1_000_000,
+                    "authority_state": "CANONICAL",
+                    "effective_at": "2026-08-15T12:00:00.000000Z",
+                }
+            },
             "settled_nav": 1_000_000,
-            "cash": {"current_fact": {"status": "AVAILABLE", "value": 200_000}},
+            "nav_canonical": False,
+            "cash": {
+                "reconciliation": "MISMATCH",
+                "cash_subfact_canonical": True,
+                "current_fact": {
+                    "status": "AVAILABLE",
+                    "value": 200_000,
+                    "authority_state": "CANONICAL",
+                    "effective_at": "2026-08-15T12:00:00.000000Z",
+                },
+            },
             "positions": [],
         }
     )

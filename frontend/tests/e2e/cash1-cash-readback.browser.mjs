@@ -257,7 +257,7 @@ astock.kline = _cash1_kline
     await page.getByTestId("account-authority-status").waitFor();
 
     await openPortfolio();
-    // Account/Cash authority 正式成立；ledger candidate 不被升级成第二 authority。
+    // Cash 子事实 authority 成立；mismatch 时 aggregate Account 必须 fail closed。
     assert.ok(await page.getByText("¥88,888.00").first().isVisible());
     assert.equal(
       await page.getByTestId("account-authority-status").getAttribute("data-authority-state"),
@@ -272,10 +272,11 @@ astock.kline = _cash1_kline
 
     const reality = await jsonRequest(backend, "/api/account/reality");
     assert.equal(reality.cash.current_fact.status, "AVAILABLE");
-    assert.equal(reality.canonical, true);
+    assert.equal(reality.canonical, false);
     assert.equal(reality.cash.cash_subfact_canonical, true);
     assert.equal(reality.cash.ledger_candidate.status, "AVAILABLE");
     assert.equal(reality.cash.reconciliation, "MISMATCH");
+    assert.ok(reality.canonical_reason_codes.includes("ACCOUNT_CASH_RECONCILIATION_MISMATCH"));
     assert.ok(reality.cash.current_fact.effective_at.endsWith("Z"));
     assert.equal(reality.cash.current_fact.effective_at, reality.cash.current_fact.recorded_at);
     assert.ok(reality.cash.current_fact.confirmation_id.startsWith("account_confirmation_"));

@@ -114,7 +114,7 @@ class TestAR1ConfirmedAuthority:
     def test_confirmed_profile_proves_account_and_cash_but_not_settled_nav(self, profile_file):
         _bootstrap([], opening_cash=100000.0)
         account_profile.save_account_profile(
-            200000.0, 50000.0, confirm_current=True
+            200000.0, 100000.0, confirm_current=True
         )
 
         reality = svc.get_account_reality()
@@ -131,7 +131,7 @@ class TestAR1ConfirmedAuthority:
     def test_relevant_event_after_confirmation_requires_reconfirmation(self, profile_file):
         _bootstrap([], opening_cash=100000.0)
         account_profile.save_account_profile(
-            200000.0, 50000.0, confirm_current=True
+            200000.0, 100000.0, confirm_current=True
         )
         before = svc.get_account_reality()
         cash_event_service.create_cash_event({
@@ -147,6 +147,58 @@ class TestAR1ConfirmedAuthority:
         assert after["cash"]["current_fact"]["status"] == "STALE"
         assert after["cash"]["current_fact"]["reason_code"] == "ACCOUNT_FACT_STALE_RECONFIRM_REQUIRED"
         assert after["cash"]["cash_subfact_canonical"] is False
+
+        account_profile.save_account_profile(
+            199000.0, 99000.0, confirm_current=True
+        )
+        restored = svc.get_account_reality()
+        assert restored["cash"]["reconciliation"] == "MATCH"
+        assert restored["canonical"] is True
+
+    def test_confirmed_cash_mismatch_preserves_subfacts_but_not_aggregate(self, profile_file):
+        _bootstrap([], opening_cash=100000.0)
+        account_profile.save_account_profile(
+            200000.0, 50000.0, confirm_current=True
+        )
+
+        reality = svc.get_account_reality()
+
+        assert reality["cash"]["reconciliation"] == "MISMATCH"
+        assert reality["cash"]["cash_subfact_canonical"] is True
+        assert reality["account_total_assets"]["current_fact"]["authority_state"] == "CANONICAL"
+        assert reality["canonical"] is False
+        assert reality["account_authority"]["state"] == "PARTIAL"
+        assert "ACCOUNT_CASH_RECONCILIATION_MISMATCH" in reality["canonical_reason_codes"]
+
+    def test_confirmed_cash_unknown_reconciliation_preserves_provenance(self, profile_file):
+        _bootstrap([], opening_cash=None)
+        account_profile.save_account_profile(
+            200000.0, 50000.0, confirm_current=True
+        )
+
+        reality = svc.get_account_reality()
+
+        assert reality["cash"]["reconciliation"] == "UNKNOWN"
+        assert reality["cash"]["cash_subfact_canonical"] is True
+        assert reality["cash"]["current_fact"]["confirmation_id"] is not None
+        assert reality["canonical"] is False
+        assert reality["account_authority"]["state"] == "PARTIAL"
+        assert "ACCOUNT_CASH_RECONCILIATION_UNKNOWN" in reality["canonical_reason_codes"]
+
+    def test_security_history_keeps_unsupported_corporate_action_coverage_partial(self, profile_file):
+        _bootstrap([_legacy("600519", 100, 10.0)], opening_cash=100000.0)
+        account_profile.save_account_profile(
+            200000.0, 100000.0, confirm_current=True
+        )
+
+        reality = svc.get_account_reality()
+
+        assert reality["cash"]["reconciliation"] == "MATCH"
+        assert reality["cash"]["cash_subfact_canonical"] is True
+        assert reality["canonical"] is False
+        assert reality["account_authority"]["state"] == "PARTIAL"
+        assert "ACCOUNT_COVERAGE_INCOMPLETE" in reality["canonical_reason_codes"]
+        assert "CORPORATE_ACTION_UNSUPPORTED" in reality["reason_codes"]
 
     def test_retrieval_clock_is_not_part_of_account_identity(self, profile_file):
         _bootstrap([], opening_cash=100000.0)
