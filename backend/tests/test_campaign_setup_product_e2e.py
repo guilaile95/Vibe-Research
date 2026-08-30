@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import pytest
 import uuid
+from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -138,7 +139,7 @@ def _transition(client, campaign_id: str, expected: str, to: str) -> dict:
             expected_status=expected,
             to_status=to,
             transition_id=f"campaign_transition_{uuid.uuid4().hex}",
-            transitioned_at="2026-08-30T00:00:00.000000Z",
+            transitioned_at=campaign_store._format_timestamp(datetime.now(timezone.utc)),
         )
         return {"campaign": campaign, "transition": transition}
     resp = client.post(

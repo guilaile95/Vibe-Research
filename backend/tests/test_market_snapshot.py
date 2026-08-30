@@ -110,6 +110,7 @@ def test_snapshot_single_page_list(monkeypatch):
     assert set(a.keys()) == {
         "code", "name", "market", "price", "change_pct", "change",
         "volume", "amount", "amplitude_pct", "turnover_pct",
+        "pe_ttm", "pb", "listing_date",
         "high", "low", "open", "prev_close", "market_cap", "float_market_cap",
         "industry",
     }
