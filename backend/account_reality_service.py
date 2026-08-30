@@ -91,6 +91,12 @@ def _latest_relevant_mutation() -> tuple[str | None, str | None]:
         trades = trade_ledger_store.list_records(db_path, include_voided=True, limit=None)
     except Exception:
         return None, _REASON_ACCOUNT_MUTATION_TIME_INVALID
+    trades = [
+        row
+        for row in trades
+        if row.get("execution_status") in {"full", "partial"}
+        and (row.get("actual_quantity") or 0) > 0
+    ]
     for row, fields in (
         *((row, ("created_at", "voided_at")) for row in events),
         *((row, ("created_at", "voided_at", "executed_at")) for row in trades),

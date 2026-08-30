@@ -200,6 +200,21 @@ class TestAR1ConfirmedAuthority:
         assert "ACCOUNT_COVERAGE_INCOMPLETE" in reality["canonical_reason_codes"]
         assert "CORPORATE_ACTION_UNSUPPORTED" in reality["reason_codes"]
 
+    def test_voiding_effective_trade_stales_confirmed_account(self, profile_file):
+        _bootstrap([], opening_cash=100000.0)
+        trade = _trade("600519", "buy", 10.0, 100)
+        account_profile.save_account_profile(
+            200000.0, 99000.0, confirm_current=True
+        )
+        before = svc.get_account_reality()
+
+        trade_ledger_service.void_trade(trade["trade_id"], "撤销已成交记录")
+        after = svc.get_account_reality()
+
+        assert before["cash"]["current_fact"]["authority_state"] == "CANONICAL"
+        assert after["cash"]["current_fact"]["status"] == "STALE"
+        assert after["cash"]["current_fact"]["reason_code"] == "ACCOUNT_FACT_STALE_RECONFIRM_REQUIRED"
+
     def test_retrieval_clock_is_not_part_of_account_identity(self, profile_file):
         _bootstrap([], opening_cash=100000.0)
         account_profile.save_account_profile(
