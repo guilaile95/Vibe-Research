@@ -15,6 +15,8 @@ import account_event_store
 import account_profile
 import account_reality_service as svc
 import astock
+import candidate_opportunity_projection as candidate
+import cash_event_service
 import portfolio
 import position_reality_service
 import trade_ledger_service
@@ -94,6 +96,69 @@ def _legacy(code: str, shares: int, cost_basis: float, name: str = "测试股票
 
 _BAR_20260804 = {"datetime": "2026-08-04 15:00:00", "close": 20.0}
 _BAR_20260805 = {"datetime": "2026-08-05 15:00:00", "close": 21.0}
+
+
+class TestAR1ConfirmedAuthority:
+    def test_confirmed_cash_subfact_does_not_promote_unbootstrapped_account(self, profile_file):
+        account_profile.save_account_profile(
+            200000.0, 50000.0, confirm_current=True
+        )
+
+        reality = svc.get_account_reality()
+
+        assert reality["cash"]["cash_subfact_canonical"] is True
+        assert reality["canonical"] is False
+        assert reality["account_authority"]["state"] == "UNPROVEN"
+        assert "POSITION_AUTHORITY_NOT_CANONICAL" in reality["canonical_reason_codes"]
+
+    def test_confirmed_profile_proves_account_and_cash_but_not_settled_nav(self, profile_file):
+        _bootstrap([], opening_cash=100000.0)
+        account_profile.save_account_profile(
+            200000.0, 50000.0, confirm_current=True
+        )
+
+        reality = svc.get_account_reality()
+
+        assert reality["canonical"] is True
+        assert reality["canonical_reason_codes"] == []
+        assert reality["cash"]["cash_subfact_canonical"] is True
+        assert reality["cash"]["current_fact"]["temporal_status"] == "PROVEN"
+        assert reality["account_total_assets"]["current_fact"]["authority_state"] == "CANONICAL"
+        assert reality["nav_canonical"] is False
+        assert reality["nav_temporal_state"] == "MIXED_UNPROVEN"
+        assert "NAV_COMPONENT_CUTOFF_MISMATCH" in reality["nav_temporal_reason_codes"]
+
+    def test_relevant_event_after_confirmation_requires_reconfirmation(self, profile_file):
+        _bootstrap([], opening_cash=100000.0)
+        account_profile.save_account_profile(
+            200000.0, 50000.0, confirm_current=True
+        )
+        before = svc.get_account_reality()
+        cash_event_service.create_cash_event({
+            "event_type": "CASH_WITHDRAWAL",
+            "amount": 1000.0,
+        })
+
+        after = svc.get_account_reality()
+
+        assert before["canonical"] is True
+        assert after["canonical"] is False
+        assert after["account_authority"]["state"] == "STALE"
+        assert after["cash"]["current_fact"]["status"] == "STALE"
+        assert after["cash"]["current_fact"]["reason_code"] == "ACCOUNT_FACT_STALE_RECONFIRM_REQUIRED"
+        assert after["cash"]["cash_subfact_canonical"] is False
+
+    def test_retrieval_clock_is_not_part_of_account_identity(self, profile_file):
+        _bootstrap([], opening_cash=100000.0)
+        account_profile.save_account_profile(
+            200000.0, 50000.0, confirm_current=True
+        )
+        first = svc.get_account_reality()
+        second = svc.get_account_reality()
+        first["as_of"] = "2026-08-31T00:00:01+00:00"
+        second["as_of"] = "2026-08-31T00:00:02+00:00"
+
+        assert candidate._account_identity(first) == candidate._account_identity(second)
 
 
 # ---------------------------------------------------------------------------

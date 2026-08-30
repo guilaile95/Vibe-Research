@@ -57,7 +57,7 @@ def test_get_corrupted_is_not_unconfigured_and_does_not_rewrite():
 def test_put_and_get_round_trip():
     """正常保存 → 读取一致。"""
     resp = client.put("/api/account-profile", json={
-        "total_assets": 100000, "available_cash": 20000,
+        "total_assets": 100000, "available_cash": 20000, "confirm_current": True,
     })
     assert resp.status_code == 200
     body = resp.json()
@@ -77,16 +77,18 @@ def test_put_and_get_round_trip():
 def test_put_rejects_invalid():
     """各类非法输入 → 400，不写文件。"""
     cases = [
-        {"total_assets": 0, "available_cash": 0},
-        {"total_assets": -100, "available_cash": 0},
-        {"total_assets": 100000, "available_cash": -1},
-        {"total_assets": 100000, "available_cash": 100001},
-        {"total_assets": "100000", "available_cash": 20000},
-        {"total_assets": True, "available_cash": 20000},
-        {"total_assets": 100000, "available_cash": float("nan")},
-        {"total_assets": 100000, "available_cash": 20000, "extra": 1},
+        {"total_assets": 0, "available_cash": 0, "confirm_current": True},
+        {"total_assets": -100, "available_cash": 0, "confirm_current": True},
+        {"total_assets": 100000, "available_cash": -1, "confirm_current": True},
+        {"total_assets": 100000, "available_cash": 100001, "confirm_current": True},
+        {"total_assets": "100000", "available_cash": 20000, "confirm_current": True},
+        {"total_assets": True, "available_cash": 20000, "confirm_current": True},
+        {"total_assets": 100000, "available_cash": float("nan"), "confirm_current": True},
+        {"total_assets": 100000, "available_cash": 20000, "confirm_current": True, "extra": 1},
         {"total_assets": 100000, "available_cash": 20000,
-         "updated_at": "2026-01-01 00:00:00"},
+         "confirm_current": True, "updated_at": "2026-01-01 00:00:00"},
+        {"total_assets": 100000, "available_cash": 20000},
+        {"total_assets": 100000, "available_cash": 20000, "confirm_current": False},
     ]
     for c in cases:
         resp = client.put("/api/account-profile", json=c)
@@ -99,7 +101,8 @@ def test_put_rejects_invalid():
 def test_put_extra_fields_forbidden():
     """Pydantic extra=forbid 拒绝未知字段。"""
     resp = client.put("/api/account-profile", json={
-        "total_assets": 100000, "available_cash": 20000, "foo": "bar",
+        "total_assets": 100000, "available_cash": 20000,
+        "confirm_current": True, "foo": "bar",
     })
     assert resp.status_code == 400
 
@@ -113,7 +116,7 @@ def test_put_does_not_modify_portfolio():
         json.dump(sentinel, f)
 
     client.put("/api/account-profile", json={
-        "total_assets": 100000, "available_cash": 20000,
+        "total_assets": 100000, "available_cash": 20000, "confirm_current": True,
     })
 
     with open(portfolio_file, encoding="utf-8") as f:
@@ -131,7 +134,7 @@ def test_api_only_writes_tmp_cache_dir(tmp_path):
         json.dump(sentinel, f)
 
     client.put("/api/account-profile", json={
-        "total_assets": 500000, "available_cash": 100000,
+        "total_assets": 500000, "available_cash": 100000, "confirm_current": True,
     })
 
     # 账户文件只应在 CACHE_DIR 内

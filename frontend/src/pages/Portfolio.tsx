@@ -395,6 +395,7 @@ export function Portfolio() {
   const [acctOpen, setAcctOpen] = useState(false);
   const [accTotal, setAccTotal] = useState("");
   const [accCash, setAccCash] = useState("");
+  const [accConfirmCurrent, setAccConfirmCurrent] = useState(false);
   const [acctSaving, setAcctSaving] = useState(false);
   const [acctErr, setAcctErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -577,12 +578,14 @@ export function Portfolio() {
     setAccTotal(acct ? fmtCny(acct.total_assets).replace(/[¥,]/g, "") : "");
     setAccCash(acct ? fmtCny(acct.available_cash).replace(/[¥,]/g, "") : "");
     setAcctErr(null);
+    setAccConfirmCurrent(false);
     setAcctOpen(true);
   };
 
   const closeAcct = () => {
     setAcctOpen(false);
     setAcctErr(null);
+    setAccConfirmCurrent(false);
   };
 
   // 账户资金：保存
@@ -593,16 +596,23 @@ export function Portfolio() {
     if (!(total > 0)) { setAcctErr("账户总资产必须大于 0"); return; }
     if (!(cash >= 0)) { setAcctErr("可用现金不能小于 0"); return; }
     if (cash > total) { setAcctErr("可用现金不能大于账户总资产"); return; }
+    if (!accConfirmCurrent) { setAcctErr("请明确确认这些数字是当前账户事实"); return; }
     setAcctSaving(true);
     setAcctErr(null);
     try {
-      const resp = await api.saveAccountProfile({ total_assets: total, available_cash: cash });
+      const resp = await api.saveAccountProfile({
+        total_assets: total,
+        available_cash: cash,
+        confirm_current: true,
+      });
       // resp 现在是 AccountProfileResponse（由于使用了 unwrapData=false）。
       if (resp.status === "valid" && resp.configured && resp.data) {
         setAcctStatus("valid");
         setAcctConfigured(true);
         setAcct(resp.data);
         setAcctOpen(false);
+        setAccConfirmCurrent(false);
+        await loadAcct();
       } else {
         // 服务端返回非法结构：不关闭弹窗、保留输入、显示错误
         setAcctErr("服务端返回数据异常，请重试");
@@ -844,11 +854,31 @@ export function Portfolio() {
                 </span>
               )}
             </div>
+            <div
+              data-testid="account-authority-status"
+              data-authority-state={acctReality?.cash?.current_fact?.authority_state ?? acct.confirmation_status}
+              className={cn(
+                "rounded-md border px-2 py-1 text-xs",
+                acctReality?.cash?.current_fact?.authority_state === "CANONICAL"
+                  ? "border-success/30 bg-success/10 text-success"
+                  : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+              )}
+            >
+              {acctReality?.cash?.current_fact?.authority_state === "CANONICAL"
+                ? "已确认的当前账户事实"
+                : acctReality?.cash?.current_fact?.authority_state === "STALE"
+                  ? "账户发生变化，需要重新确认"
+                  : "旧快照未证明为当前账户事实"}
+            </div>
             <div className="ml-auto flex flex-col items-end gap-1">
-              <span className="text-[11px] text-muted-foreground/60">快照保存于 {acct.updated_at}（provenance，非资金 effective_at）</span>
+              <span className="text-[11px] text-muted-foreground/60">
+                {acct.confirmation_status === "CONFIRMED" && acct.effective_at
+                  ? `账户事实确认于 ${acct.effective_at}`
+                  : `快照保存于 ${acct.updated_at}（非 effective_at）`}
+              </span>
               <button onClick={openAcct}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25">
-                编辑
+                重新确认
               </button>
             </div>
           </div>
@@ -921,7 +951,10 @@ export function Portfolio() {
               <>
                 <b>{acctReality.nav_temporal_state}：settled NAV 是 mixed/unproven temporal candidate</b>：价格日期
                 {acctReality.pricing?.unified_price_date ? ` ${acctReality.pricing.unified_price_date}` : ""}
-                与现金的 effective_at 未证明，不能视为统一 cutoff 下的正式账户事实。
+                {acctReality.cash.current_fact.temporal_status === "PROVEN"
+                  ? ` 与已确认现金 effective_at ${acctReality.cash.current_fact.effective_at ?? "未知"} 无法证明属于同一 cutoff，`
+                  : " 与现金的 effective_at 未证明，"}
+                不能视为统一 cutoff 下的正式账户事实。
               </>
             ) : (
               <>settled NAV temporal state：{acctReality.nav_temporal_state}；统一账户时间截面不可用，未知不作正常事实展示。</>
@@ -939,6 +972,7 @@ export function Portfolio() {
             <div className="mb-3">
               <label className="mb-1 block text-xs text-muted-foreground">账户总资产</label>
               <input
+                data-testid="account-total-assets-input"
                 value={accTotal}
                 onChange={(e) => setAccTotal(e.target.value.replace(/[^\d.]/g, ""))}
                 placeholder="如 100000"
@@ -948,12 +982,25 @@ export function Portfolio() {
             <div className="mb-3">
               <label className="mb-1 block text-xs text-muted-foreground">可用现金</label>
               <input
+                data-testid="account-available-cash-input"
                 value={accCash}
                 onChange={(e) => setAccCash(e.target.value.replace(/[^\d.]/g, ""))}
                 placeholder="如 20000"
                 className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
               />
             </div>
+            <label className="mb-3 flex items-start gap-2 rounded-lg border border-border/70 bg-muted/20 p-3 text-xs text-foreground">
+              <input
+                data-testid="account-confirm-current"
+                type="checkbox"
+                checked={accConfirmCurrent}
+                onChange={(event) => setAccConfirmCurrent(event.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                我确认以上总资产与可用现金是当前账户事实。系统将在本次确认时生成 effective_at；之后发生交易或现金事件需要重新确认。
+              </span>
+            </label>
             {acctErr && (
               <div className="mb-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2.5 text-sm text-destructive">
                 <AlertCircle className="h-4 w-4 shrink-0" /> {acctErr}
@@ -964,9 +1011,9 @@ export function Portfolio() {
                 className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
                 取消
               </button>
-              <button onClick={saveAcct} disabled={acctSaving}
+              <button data-testid="account-profile-confirm-save" onClick={saveAcct} disabled={acctSaving}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
-                {acctSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} 保存
+                {acctSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} 确认并保存
               </button>
             </div>
           </div>

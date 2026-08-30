@@ -995,12 +995,13 @@ def portfolio_update(h: HoldingUpdate):
 # ---- 账户资金（用户手工填写，存本地、不上传、不进仓库）----
 
 class AccountProfileIn(BaseModel):
-    """账户资金手工填写请求。updated_at 由后端生成，禁止客户端提交。"""
+    """账户资金显式确认请求。时间与 identity 只由后端生成。"""
 
     model_config = ConfigDict(extra="forbid")
 
     total_assets: float
     available_cash: float
+    confirm_current: bool
 
     @model_validator(mode="before")
     @classmethod
@@ -1011,6 +1012,8 @@ class AccountProfileIn(BaseModel):
                 v = values.get(field)
                 if isinstance(v, bool) or isinstance(v, str):
                     raise ValueError(f"{field} 必须是数字，不能是 {type(v).__name__}")
+            if values.get("confirm_current") is not True:
+                raise ValueError("必须显式确认这些数字是当前账户事实")
         return values
 
 
@@ -1031,10 +1034,13 @@ def account_profile_get():
 
 @app.put("/api/account-profile")
 def account_profile_save(req: AccountProfileIn):
-    """保存账户资金。后端校验 + 生成 updated_at，返回保存后的数据。"""
+    """显式确认账户资金；后端生成 confirmation/effective identity。"""
     try:
-        total, cash = account_profile.validate_account_payload(req.model_dump())
-        data = account_profile.save_account_profile(total, cash)
+        total, cash = account_profile.validate_account_payload({
+            "total_assets": req.total_assets,
+            "available_cash": req.available_cash,
+        })
+        data = account_profile.save_account_profile(total, cash, confirm_current=True)
         return {"configured": True, "status": "valid", "reason_code": None, "data": data}
     except ValueError as e:
         raise HTTPException(400, str(e)) from e

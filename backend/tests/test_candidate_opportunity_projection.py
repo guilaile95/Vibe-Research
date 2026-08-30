@@ -297,6 +297,45 @@ def test_noncanonical_account_is_unknown_not_confirmed_capital():
     assert candidate.BUY_ACTIONS <= set(result.action_envelope["blocked_actions"])
 
 
+def test_user_confirmed_account_total_assets_is_cap1_capital_base_not_settled_nav():
+    result = _project(
+        account_reality={
+            "canonical": True,
+            "confidence": "HIGH",
+            "account_total_assets": {
+                "current_fact": {
+                    "status": "AVAILABLE",
+                    "value": 1_000_000,
+                    "authority_state": "CANONICAL",
+                    "effective_at": "2026-08-15T12:00:00.000000Z",
+                    "confirmation_id": "account_confirmation_" + "1" * 32,
+                }
+            },
+            "cash": {
+                "current_fact": {
+                    "status": "AVAILABLE",
+                    "value": 200_000,
+                    "authority_state": "CANONICAL",
+                    "effective_at": "2026-08-15T12:00:00.000000Z",
+                    "confirmation_id": "account_confirmation_" + "1" * 32,
+                }
+            },
+            "settled_nav": 999_999,
+            "nav_canonical": False,
+            "positions": [],
+        }
+    )
+
+    risk_cap = result.portfolio_view["risk_cap"]
+    capital = result.portfolio_view["portfolio_capital_context"]["capital_availability"]
+    assert risk_cap["capital_base_source"] == "USER_CONFIRMED_TOTAL_ASSETS"
+    assert risk_cap["capital_base_value"] == 1_000_000
+    assert risk_cap["settled_nav"] is None
+    assert capital["state"] == "AVAILABLE"
+    assert capital["cash_authority"] == "USER_CONFIRMED_AVAILABLE_CASH"
+    assert capital["capital_base_source"] == "USER_CONFIRMED_TOTAL_ASSETS"
+
+
 def test_existing_portfolio_without_exposure_authority_keeps_fit_unknown():
     result = _project(
         account_reality={
@@ -636,6 +675,65 @@ def test_cap1_account_retrieval_clock_is_not_a_false_stale_signal(monkeypatch):
         CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
     )
     assert after["proposal_fingerprint"] == before["proposal_fingerprint"]
+
+
+def test_ar1_account_stale_state_changes_fingerprint_and_blocks_commit(monkeypatch):
+    ports, state = _ports()
+    state["account"] = {
+        "canonical": True,
+        "confidence": "HIGH",
+        "account_authority": {
+            "state": "CANONICAL",
+            "confirmation_id": "account_confirmation_" + "1" * 32,
+            "effective_at": "2026-08-15T12:00:00.000000Z",
+            "recorded_at": "2026-08-15T12:00:00.000000Z",
+        },
+        "account_total_assets": {
+            "current_fact": {
+                "status": "AVAILABLE",
+                "value": 1_000_000,
+                "authority_state": "CANONICAL",
+                "effective_at": "2026-08-15T12:00:00.000000Z",
+            }
+        },
+        "cash": {
+            "current_fact": {
+                "status": "AVAILABLE",
+                "value": 200_000,
+                "authority_state": "CANONICAL",
+                "effective_at": "2026-08-15T12:00:00.000000Z",
+                "confirmation_id": "account_confirmation_" + "1" * 32,
+            }
+        },
+        "nav_canonical": False,
+        "positions": [],
+    }
+    _clear_hard_risk(monkeypatch)
+    before = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
+    )
+
+    state["account"]["canonical"] = False
+    state["account"]["account_authority"]["state"] = "UNPROVEN"
+    state["account"]["cash"]["current_fact"]["status"] = "STALE"
+    state["account"]["cash"]["current_fact"]["authority_state"] = "STALE"
+    after = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
+    )
+
+    assert after["proposal_fingerprint"] != before["proposal_fingerprint"]
+    with pytest.raises(runtime.ProposalStaleError):
+        runtime.commit_decision_proposal(
+            CAMPAIGN_ID,
+            {
+                **_draft(),
+                "as_of": AS_OF,
+                "expected_proposal_fingerprint": before["proposal_fingerprint"],
+                "user_confirmed": True,
+            },
+            ports=ports,
+        )
+    assert state["writes"] == 0
 
 
 def test_current_thesis_delta_evidence_conflict_changes_fingerprint_and_freeze_refs(monkeypatch):

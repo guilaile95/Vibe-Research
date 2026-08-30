@@ -39,6 +39,7 @@ function chromiumPath() {
   ];
   for (const base of bases) {
     if (!base || !existsSync(base)) continue;
+    if (path.extname(base).toLowerCase() === ".exe") return base;
     for (const entry of readdirSync(base)) {
       if (!entry.startsWith("chromium-") || entry.includes("headless")) continue;
       const candidates = [
@@ -247,15 +248,22 @@ astock.kline = _cash1_kline
       "ledger cash must reflect buy cash outflow (100000 - 500)",
     );
 
-    // ---- D. 手工快照与推演并存时语义区分、mismatch 显式 -------------------
-    await jsonRequest(backend, "/api/account-profile", "PUT", {
-      total_assets: 200000,
-      available_cash: 88888,
-    });
+    // ---- D. 用户显式确认当前 Account Fact；ledger 仍只做 reconciliation ---
+    await page.getByRole("button", { name: "填写手工快照" }).click();
+    await page.getByTestId("account-total-assets-input").fill("200000");
+    await page.getByTestId("account-available-cash-input").fill("88888");
+    await page.getByTestId("account-confirm-current").check();
+    await page.getByTestId("account-profile-confirm-save").click();
+    await page.getByTestId("account-authority-status").waitFor();
 
     await openPortfolio();
-    // 配置后显示手工快照（用户显式确认值），不冒充 canonical。
+    // Account/Cash authority 正式成立；ledger candidate 不被升级成第二 authority。
     assert.ok(await page.getByText("¥88,888.00").first().isVisible());
+    assert.equal(
+      await page.getByTestId("account-authority-status").getAttribute("data-authority-state"),
+      "CANONICAL",
+    );
+    assert.ok((await page.getByTestId("account-authority-status").innerText()).includes("已确认"));
     const reconBadge = page.getByTestId("account-cash-reconciliation");
     await reconBadge.waitFor();
     const badgeText = await reconBadge.innerText();
@@ -264,21 +272,26 @@ astock.kline = _cash1_kline
 
     const reality = await jsonRequest(backend, "/api/account/reality");
     assert.equal(reality.cash.current_fact.status, "AVAILABLE");
+    assert.equal(reality.canonical, true);
+    assert.equal(reality.cash.cash_subfact_canonical, true);
     assert.equal(reality.cash.ledger_candidate.status, "AVAILABLE");
     assert.equal(reality.cash.reconciliation, "MISMATCH");
-    assert.equal(reality.cash.current_fact.effective_at, null);
+    assert.ok(reality.cash.current_fact.effective_at.endsWith("Z"));
+    assert.equal(reality.cash.current_fact.effective_at, reality.cash.current_fact.recorded_at);
+    assert.ok(reality.cash.current_fact.confirmation_id.startsWith("account_confirmation_"));
     assert.equal(reality.cash.ledger_candidate.effective_at, null);
-    assert.equal(reality.cash.current_fact.temporal_status, "UNPROVEN");
+    assert.equal(reality.cash.current_fact.temporal_status, "PROVEN");
     assert.equal(reality.pricing.status, "COMPLETE");
     assert.ok(reality.pricing.unified_price_date, "pricing date remains separately available");
     assert.equal(reality.data_cutoff, null, "cash and pricing must not claim a unified cutoff");
     assert.equal(reality.nav_temporal_state, "MIXED_UNPROVEN");
-    assert.ok(reality.nav_temporal_reason_codes.includes("CASH_EFFECTIVE_AT_UNPROVEN"));
+    assert.equal(reality.nav_canonical, false);
+    assert.ok(reality.nav_temporal_reason_codes.includes("NAV_COMPONENT_CUTOFF_MISMATCH"));
     const temporalView = page.getByTestId("account-nav-temporal-state");
     await temporalView.waitFor();
     const temporalText = await temporalView.innerText();
     assert.ok(temporalText.includes("MIXED_UNPROVEN"));
-    assert.ok(temporalText.includes("effective_at 未证明"));
+    assert.ok(temporalText.includes("无法证明属于同一 cutoff"));
     assert.equal(temporalText.includes("统一 cutoff 下的正式账户事实"), true);
 
     // ---- E. 损坏手工快照必须与未配置严格区分，并全链路 fail closed ----

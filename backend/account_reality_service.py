@@ -1,14 +1,14 @@
-"""P0-S1B-A: Canonical Account Reality & Settled NAV Candidate v0.1.
+"""AR1: Canonical manual Account Reality & Settled NAV Candidate v0.1.
 
 把 S1A ledger-derived positions + 手工当前账户事实（account_profile）+ settled
 收盘价事实（kline 日线 close/date）放进一个可审计、可对账、fail-closed 的账户现实层。
 
 本轮边界：
-- canonical 保持 false / candidate semantics（source switch 未授权）
-- ledger cash 是 TRADES_ONLY candidate，不是 canonical cash
+- primary authority 是用户显式确认的 account_profile；legacy profile 不自动提升
+- ledger cash 是 reconciliation candidate，不是第二 canonical cash
 - settled NAV 使用 MANUAL CURRENT CASH FACT（account_profile.available_cash），
   ledger_cash_candidate 与 cash_reconciliation 同时输出供审计
-- 不实现 Intraday NAV（DEFERRED）；不建 NAV history / drawdown
+- settled NAV 的跨组件 cutoff 未证明，保持 non-canonical；不建 NAV history / drawdown
 - positions 只来自 S1A derivation（不求和 portfolio.json）
 """
 from __future__ import annotations
@@ -43,7 +43,13 @@ _REASON_PRICING_PARTIAL = "PRICING_PARTIAL"
 _REASON_PRICING_UNAVAILABLE = "PRICING_UNAVAILABLE"
 _REASON_PRICING_MIXED_CUTOFF = "PRICING_MIXED_CUTOFF"
 _REASON_CASH_EFFECTIVE_AT_UNPROVEN = "CASH_EFFECTIVE_AT_UNPROVEN"
+_REASON_ACCOUNT_TOTAL_ASSETS_UNPROVEN = "ACCOUNT_TOTAL_ASSETS_UNPROVEN"
+_REASON_ACCOUNT_FACT_STALE = "ACCOUNT_FACT_STALE_RECONFIRM_REQUIRED"
+_REASON_ACCOUNT_MUTATION_TIME_INVALID = "ACCOUNT_MUTATION_TIME_INVALID"
+_REASON_POSITION_AUTHORITY_NOT_CANONICAL = "POSITION_AUTHORITY_NOT_CANONICAL"
+_REASON_NAV_COMPONENT_CUTOFF_MISMATCH = "NAV_COMPONENT_CUTOFF_MISMATCH"
 _TEMPORAL_UNPROVEN = "UNPROVEN"
+_TEMPORAL_PROVEN = "PROVEN"
 _NAV_TEMPORAL_MIXED_UNPROVEN = "MIXED_UNPROVEN"
 _NAV_TEMPORAL_UNAVAILABLE = "UNAVAILABLE"
 
@@ -54,6 +60,50 @@ class AccountRealityError(RuntimeError):
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+def _parse_utc(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _latest_relevant_mutation() -> tuple[str | None, str | None]:
+    """Return the latest durable account mutation recording/effective time.
+
+    Reads active and voided rows so a correction/void cannot make a newer mutation
+    disappear from the freshness decision. Invalid stored time fails the authority
+    closed without rewriting either ledger.
+    """
+    db_path = trade_ledger_service.resolve_db_path()
+    timestamps: list[datetime] = []
+    try:
+        events = account_event_store.list_events(db_path, include_voided=True)
+        trades = trade_ledger_store.list_records(db_path, include_voided=True, limit=None)
+    except Exception:
+        return None, _REASON_ACCOUNT_MUTATION_TIME_INVALID
+    for row, fields in (
+        *((row, ("created_at", "voided_at")) for row in events),
+        *((row, ("created_at", "voided_at", "executed_at")) for row in trades),
+    ):
+        for field in fields:
+            raw = row.get(field)
+            if raw in (None, ""):
+                continue
+            parsed = _parse_utc(raw)
+            if parsed is None:
+                return None, _REASON_ACCOUNT_MUTATION_TIME_INVALID
+            timestamps.append(parsed)
+    if not timestamps:
+        return None, None
+    latest = max(timestamps)
+    return latest.isoformat(timespec="microseconds"), None
 
 
 def _valid_price(value: Any) -> float | None:
@@ -86,9 +136,14 @@ def _valid_price_date(value: Any) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _current_cash_fact() -> dict[str, Any]:
-    """读取 MANUAL CURRENT FACT，保留 Profile 缺失与损坏三态。"""
-    status = account_profile.get_account_profile_status()
+def _manual_profile_fact(
+    field: str,
+    *,
+    unproven_reason: str,
+    status: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project one profile field without promoting legacy updated_at to effective_at."""
+    status = status or account_profile.get_account_profile_status()
     profile = status.get("data")
     if status["status"] != "valid" or profile is None:
         fact_status = (
@@ -105,24 +160,89 @@ def _current_cash_fact() -> dict[str, Any]:
             "value": None,
             "source": _CASH_SOURCE_ACCOUNT_PROFILE,
             "updated_at": None,
+            "recorded_at": None,
             "effective_at": None,
             "temporal_status": _TEMPORAL_UNPROVEN,
-            "temporal_reason_code": _REASON_CASH_EFFECTIVE_AT_UNPROVEN,
+            "temporal_reason_code": unproven_reason,
+            "authority": None,
+            "authority_state": "CORRUPTED" if fact_status == "CORRUPTED" else "UNPROVEN",
+            "confirmation_id": None,
             "fact_type": _FACT_MANUAL,
             "status": fact_status,
             "reason_code": reason_code,
         }
+    confirmed = profile.get("confirmation_status") == "CONFIRMED"
     return {
-        "value": round(float(profile["available_cash"]), 2),
+        "value": round(float(profile[field]), 2),
         "source": _CASH_SOURCE_ACCOUNT_PROFILE,
         "updated_at": profile.get("updated_at"),
-        "effective_at": None,
-        "temporal_status": _TEMPORAL_UNPROVEN,
-        "temporal_reason_code": _REASON_CASH_EFFECTIVE_AT_UNPROVEN,
+        "recorded_at": profile.get("recorded_at") if confirmed else None,
+        "effective_at": profile.get("effective_at") if confirmed else None,
+        "temporal_status": _TEMPORAL_PROVEN if confirmed else _TEMPORAL_UNPROVEN,
+        "temporal_reason_code": None if confirmed else unproven_reason,
+        "authority": profile.get("authority") if confirmed else None,
+        "authority_state": "CANONICAL" if confirmed else "UNPROVEN",
+        "confirmation_id": profile.get("confirmation_id") if confirmed else None,
         "fact_type": _FACT_MANUAL,
         "status": "AVAILABLE",
-        "reason_code": None,
+        "reason_code": None if confirmed else unproven_reason,
     }
+
+
+def _current_cash_fact(status: dict[str, Any] | None = None) -> dict[str, Any]:
+    return _manual_profile_fact(
+        "available_cash",
+        unproven_reason=_REASON_CASH_EFFECTIVE_AT_UNPROVEN,
+        status=status,
+    )
+
+
+def _current_total_assets_fact(status: dict[str, Any] | None = None) -> dict[str, Any]:
+    return _manual_profile_fact(
+        "total_assets",
+        unproven_reason=_REASON_ACCOUNT_TOTAL_ASSETS_UNPROVEN,
+        status=status,
+    )
+
+
+def _apply_mutation_freshness(
+    fact: dict[str, Any],
+    latest_mutation_at: str | None,
+    mutation_error: str | None,
+) -> dict[str, Any]:
+    if fact.get("authority_state") != "CANONICAL":
+        return fact
+    if mutation_error is not None:
+        return {
+            **fact,
+            "status": "UNKNOWN",
+            "authority_state": "UNKNOWN",
+            "temporal_status": _TEMPORAL_UNPROVEN,
+            "temporal_reason_code": mutation_error,
+            "reason_code": mutation_error,
+        }
+    recorded = _parse_utc(fact.get("recorded_at"))
+    latest = _parse_utc(latest_mutation_at)
+    if recorded is None:
+        return {
+            **fact,
+            "status": "UNKNOWN",
+            "authority_state": "UNKNOWN",
+            "temporal_status": _TEMPORAL_UNPROVEN,
+            "temporal_reason_code": _REASON_ACCOUNT_MUTATION_TIME_INVALID,
+            "reason_code": _REASON_ACCOUNT_MUTATION_TIME_INVALID,
+        }
+    if latest is not None and latest > recorded:
+        return {
+            **fact,
+            "status": "STALE",
+            "authority_state": "STALE",
+            "temporal_status": "STALE",
+            "temporal_reason_code": _REASON_ACCOUNT_FACT_STALE,
+            "reason_code": _REASON_ACCOUNT_FACT_STALE,
+            "stale_since": latest_mutation_at,
+        }
+    return fact
 
 
 def _ledger_cash_candidate(derived: dict[str, Any]) -> dict[str, Any]:
@@ -356,9 +476,48 @@ def get_account_reality() -> dict[str, Any]:
     """组装 Current Account Reality Candidate（只读，不写任何源）。"""
     derived = position_reality_service.derive_positions()
 
-    current_fact = _current_cash_fact()
+    profile_status = account_profile.get_account_profile_status()
+    latest_mutation_at, mutation_error = _latest_relevant_mutation()
+    current_fact = _apply_mutation_freshness(
+        _current_cash_fact(profile_status), latest_mutation_at, mutation_error
+    )
+    total_assets_fact = _apply_mutation_freshness(
+        _current_total_assets_fact(profile_status), latest_mutation_at, mutation_error
+    )
     ledger_candidate = _ledger_cash_candidate(derived)
     cash_recon = _cash_reconciliation(current_fact, ledger_candidate)
+
+    position_canonical = derived.get("canonical") is True
+    cash_subfact_canonical = current_fact.get("authority_state") == "CANONICAL"
+    total_assets_canonical = total_assets_fact.get("authority_state") == "CANONICAL"
+    account_canonical = bool(
+        position_canonical and cash_subfact_canonical and total_assets_canonical
+    )
+    canonical_reason_codes: list[str] = []
+    if not position_canonical:
+        canonical_reason_codes.append(_REASON_POSITION_AUTHORITY_NOT_CANONICAL)
+    if not cash_subfact_canonical:
+        canonical_reason_codes.append(
+            current_fact.get("reason_code") or _REASON_CASH_EFFECTIVE_AT_UNPROVEN
+        )
+    if not total_assets_canonical:
+        canonical_reason_codes.append(
+            total_assets_fact.get("reason_code") or _REASON_ACCOUNT_TOTAL_ASSETS_UNPROVEN
+        )
+    fact_authority_states = {
+        current_fact.get("authority_state"),
+        total_assets_fact.get("authority_state"),
+    }
+    if account_canonical:
+        account_authority_state = "CANONICAL"
+    elif "STALE" in fact_authority_states:
+        account_authority_state = "STALE"
+    elif "CORRUPTED" in fact_authority_states:
+        account_authority_state = "CORRUPTED"
+    elif "UNKNOWN" in fact_authority_states:
+        account_authority_state = "UNKNOWN"
+    else:
+        account_authority_state = "UNPROVEN"
 
     open_positions = [p for p in derived.get("positions", []) if p.get("status") == "OPEN"]
     pricing = _settled_pricing(open_positions)
@@ -383,7 +542,6 @@ def get_account_reality() -> dict[str, Any]:
         "account_profile_total_assets": None,
         "computed_nav": None,
     }
-    profile_status = account_profile.get_account_profile_status()
     profile = profile_status.get("data")
     if (
         profile_status["status"] == "valid"
@@ -399,7 +557,9 @@ def get_account_reality() -> dict[str, Any]:
         }
 
     # confidence：确定性规则映射（非虚构权重）
-    if settled_nav is not None:
+    if account_canonical:
+        confidence = "HIGH"
+    elif settled_nav is not None:
         confidence = "HIGH" if cash_recon["status"] == "MATCH" else "MEDIUM"
     else:
         confidence = "LOW"
@@ -412,7 +572,12 @@ def get_account_reality() -> dict[str, Any]:
         else _NAV_TEMPORAL_UNAVAILABLE
     )
     nav_temporal_reason_codes = sorted({
-        _REASON_CASH_EFFECTIVE_AT_UNPROVEN,
+        (
+            _REASON_NAV_COMPONENT_CUTOFF_MISMATCH
+            if current_fact.get("temporal_status") == _TEMPORAL_PROVEN
+            else current_fact.get("temporal_reason_code")
+            or _REASON_CASH_EFFECTIVE_AT_UNPROVEN
+        ),
         *([nav_skip] if nav_skip else []),
         *(
             [_REASON_PRICING_MIXED_CUTOFF]
@@ -421,14 +586,28 @@ def get_account_reality() -> dict[str, Any]:
         ),
     })
     return {
-        "account_status": derived.get("bootstrap_status", "UNKNOWN"),
-        "canonical": False,
+        "account_status": "CANONICAL" if account_canonical else derived.get("bootstrap_status", "UNKNOWN"),
+        "canonical": account_canonical,
+        "canonical_reason_codes": list(dict.fromkeys(canonical_reason_codes)),
+        "account_authority": {
+            "state": account_authority_state,
+            "source": _CASH_SOURCE_ACCOUNT_PROFILE,
+            "confirmation_id": current_fact.get("confirmation_id"),
+            "effective_at": current_fact.get("effective_at"),
+            "recorded_at": current_fact.get("recorded_at"),
+            "latest_relevant_mutation_at": latest_mutation_at,
+            "reason_codes": list(dict.fromkeys(canonical_reason_codes)),
+        },
         "bootstrap_status": derived.get("bootstrap_status"),
+        "account_total_assets": {
+            "current_fact": total_assets_fact,
+        },
         "cash": {
             "current_fact": current_fact,
             "ledger_candidate": ledger_candidate,
             "reconciliation": cash_recon["status"],
             "coverage": _CASH_COVERAGE_TRADES_PLUS_CASH_EVENTS,
+            "cash_subfact_canonical": cash_subfact_canonical,
         },
         "cash_event_support": {
             "supported": sorted(cash_event_service.CASH_EVENT_TYPES),
@@ -444,6 +623,8 @@ def get_account_reality() -> dict[str, Any]:
         },
         "market_value": pricing["priced_market_value"],
         "settled_nav": settled_nav,
+        "nav_authority": "SETTLED_NAV_CANDIDATE",
+        "nav_canonical": False,
         "nav_cash_source": _CASH_SOURCE_ACCOUNT_PROFILE if settled_nav is not None else None,
         "nav_reconciliation": {
             **nav_recon,

@@ -8,6 +8,7 @@ and narrow the existing Frozen Decision Action Envelope.
 
 from __future__ import annotations
 
+import copy
 import math
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -205,23 +206,48 @@ def _position_state(
     return "NOT_HELD", "EVALUATED", [], normalized
 
 
-def _account_state(account: Mapping[str, Any] | None) -> tuple[str, str, float | None, float | None, list[str]]:
+def _account_state(
+    account: Mapping[str, Any] | None,
+    as_of: datetime,
+) -> tuple[str, str, float | None, float | None, list[str], str | None]:
     if account is None:
-        return "UNKNOWN", "NOT_EVALUATED", None, None, ["ACCOUNT_AUTHORITY_NOT_WIRED"]
+        return "UNKNOWN", "NOT_EVALUATED", None, None, ["ACCOUNT_AUTHORITY_NOT_WIRED"], None
     if account.get("_candidate_read_error") is True:
-        return "UNKNOWN", "ERROR", None, None, ["ACCOUNT_AUTHORITY_ERROR"]
+        return "UNKNOWN", "ERROR", None, None, ["ACCOUNT_AUTHORITY_ERROR"], None
     cash = account.get("cash")
     current = cash.get("current_fact") if isinstance(cash, Mapping) else None
-    nav = _finite_positive(account.get("settled_nav"))
     cash_value = _finite_nonnegative(current.get("value")) if isinstance(current, Mapping) else None
+    total_assets = account.get("account_total_assets")
+    total_fact = (
+        total_assets.get("current_fact") if isinstance(total_assets, Mapping) else None
+    )
+    capital_base = None
+    capital_base_source = None
     if (
-        not isinstance(current, Mapping)
+        isinstance(total_fact, Mapping)
+        and total_fact.get("status") == "AVAILABLE"
+        and total_fact.get("authority_state") == "CANONICAL"
+        and _source_time(total_fact.get("effective_at"), as_of) is not None
+    ):
+        capital_base = _finite_positive(total_fact.get("value"))
+        capital_base_source = "USER_CONFIRMED_TOTAL_ASSETS"
+    elif account.get("nav_canonical") is not False:
+        capital_base = _finite_positive(account.get("settled_nav"))
+        capital_base_source = "SETTLED_NAV" if capital_base is not None else None
+    if (
+        account.get("canonical") is not True
+        or not isinstance(current, Mapping)
         or current.get("status") != "AVAILABLE"
-        or nav is None
+        or current.get("authority_state") not in (None, "CANONICAL")
+        or (
+            current.get("authority_state") == "CANONICAL"
+            and _source_time(current.get("effective_at"), as_of) is None
+        )
+        or capital_base is None
         or cash_value is None
     ):
-        return "UNKNOWN", "UNKNOWN", None, None, ["ACCOUNT_CAPACITY_UNKNOWN"]
-    return "USABLE", "EVALUATED", nav, cash_value, []
+        return "UNKNOWN", "UNKNOWN", None, None, ["ACCOUNT_CAPACITY_UNKNOWN"], None
+    return "USABLE", "EVALUATED", capital_base, cash_value, [], capital_base_source
 
 
 def _confidence(asset_view: Mapping[str, Any]) -> tuple[dict[str, str], str, list[str]]:
@@ -358,14 +384,23 @@ def _account_identity(account: Mapping[str, Any] | None) -> dict[str, Any] | Non
         "canonical": account.get("canonical") if isinstance(account.get("canonical"), bool) else None,
         "account_status": account.get("account_status"),
         "bootstrap_status": account.get("bootstrap_status"),
+        "account_authority": copy.deepcopy(account.get("account_authority")),
+        "account_total_assets": copy.deepcopy(account.get("account_total_assets")),
         "cash": {
             "status": current.get("status"),
             "value": current.get("value"),
             "source": current.get("source"),
             "updated_at": current.get("updated_at"),
+            "recorded_at": current.get("recorded_at"),
+            "effective_at": current.get("effective_at"),
+            "confirmation_id": current.get("confirmation_id"),
+            "authority": current.get("authority"),
+            "authority_state": current.get("authority_state"),
             "temporal_status": current.get("temporal_status"),
         },
         "settled_nav": account.get("settled_nav"),
+        "nav_authority": account.get("nav_authority"),
+        "nav_canonical": account.get("nav_canonical"),
         "nav_temporal_state": account.get("nav_temporal_state"),
         "confidence": account.get("confidence"),
     }
@@ -611,6 +646,12 @@ def _portfolio_capital_context(
         "capital_availability": {
             "state": capital_state,
             "confirmed_cash": confirmed_cash,
+            "cash_authority": (
+                "USER_CONFIRMED_AVAILABLE_CASH"
+                if confirmed_cash is not None
+                else None
+            ),
+            "capital_base_source": risk_cap.get("capital_base_source"),
             "required_capital": (
                 round(required_capital, 2) if required_capital is not None else None
             ),
@@ -677,7 +718,14 @@ def project_candidate_opportunity(
     position_state, position_eval, position_reasons, holdings = _position_state(
         position_snapshot, security_code
     )
-    account_state, account_eval, nav, cash, account_reasons = _account_state(account_reality)
+    (
+        account_state,
+        account_eval,
+        capital_base,
+        cash,
+        account_reasons,
+        capital_base_source,
+    ) = _account_state(account_reality, as_of_dt)
     account_canonical = (
         account_reality.get("canonical")
         if isinstance(account_reality, Mapping)
@@ -720,6 +768,9 @@ def project_candidate_opportunity(
     risk_reward: dict[str, Any] = {"status": "UNKNOWN", "ratio": None}
     risk_cap: dict[str, Any] = {
         "status": "UNKNOWN",
+        "capital_base_value": None,
+        "capital_base_source": None,
+        "settled_nav": None,
         "risk_allowed_position_value": None,
         "max_position_value": None,
         "max_shares": None,
@@ -746,9 +797,9 @@ def project_candidate_opportunity(
             "base_mid": round(base_mid, 4),
             "invalidation_price": invalidation,
         }
-        if account_state == "USABLE" and nav is not None and cash is not None:
+        if account_state == "USABLE" and capital_base is not None and cash is not None:
             distance = (entry["high"] - invalidation) / entry["high"]
-            risk_budget = round(nav * RISK_BUDGET_RATE[strategy], 2)
+            risk_budget = round(capital_base * RISK_BUDGET_RATE[strategy], 2)
             risk_allowed_value = risk_budget / distance
             value_cap = min(cash, risk_allowed_value)
             shares = math.floor(value_cap / entry["high"] / 100) * 100
@@ -762,7 +813,13 @@ def project_candidate_opportunity(
                 ),
                 "risk_budget_rate": RISK_BUDGET_RATE[strategy],
                 "risk_budget_value": risk_budget,
-                "settled_nav": round(nav, 2),
+                "capital_base_value": round(capital_base, 2),
+                "capital_base_source": capital_base_source,
+                "settled_nav": (
+                    round(capital_base, 2)
+                    if capital_base_source == "SETTLED_NAV"
+                    else None
+                ),
                 "cash_cap": round(cash, 2),
                 "risk_allowed_position_value": round(risk_allowed_value, 2),
                 "max_position_value": round(min(value_cap, shares * entry["high"]), 2),
@@ -937,7 +994,7 @@ def project_candidate_opportunity(
                 AUTHORITY_REF,
                 CAPITAL_ALLOCATION_AUTHORITY_REF,
                 "position_reality:current_holdings_snapshot",
-                "account_reality:settled_nav_candidate",
+                "account_reality:current_account_authority",
                 *capital_context["authority_refs"],
                 *hard_risk_refs,
                 *critical_refs,

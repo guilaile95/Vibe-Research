@@ -751,6 +751,11 @@ export interface AccountProfileData {
   total_assets: number;
   available_cash: number;
   updated_at: string;
+  confirmation_status: "CONFIRMED" | "LEGACY_UNPROVEN";
+  confirmation_id: string | null;
+  effective_at: string | null;
+  recorded_at: string | null;
+  authority: "MANUAL_EXPLICIT_CONFIRMATION" | null;
 }
 
 
@@ -767,6 +772,7 @@ export interface AccountProfileResponse {
 export interface AccountProfileRequest {
   total_assets: number;
   available_cash: number;
+  confirm_current: true;
 }
 
 
@@ -777,11 +783,15 @@ export interface AccountRealityCashFact {
   value: number | null;
   source: string;
   fact_type: string;
-  status: "AVAILABLE" | "UNKNOWN" | "CORRUPTED";
+  status: "AVAILABLE" | "STALE" | "UNKNOWN" | "CORRUPTED";
   reason_code?: string;
   updated_at?: string | null;
+  recorded_at?: string | null;
   effective_at?: string | null;
-  temporal_status?: "UNPROVEN" | string;
+  confirmation_id?: string | null;
+  authority?: string | null;
+  authority_state?: "CANONICAL" | "UNPROVEN" | "STALE" | "UNKNOWN" | "CORRUPTED" | string;
+  temporal_status?: "PROVEN" | "UNPROVEN" | "STALE" | string;
   temporal_reason_code?: string;
   coverage?: string;
 }
@@ -800,11 +810,25 @@ export interface AccountReality {
   account_status?: string;
   bootstrap_status?: string;
   canonical?: boolean;
+  canonical_reason_codes?: string[];
+  account_authority?: {
+    state: "CANONICAL" | "UNPROVEN" | "STALE" | "UNKNOWN" | "CORRUPTED" | string;
+    source: string;
+    confirmation_id: string | null;
+    effective_at: string | null;
+    recorded_at: string | null;
+    latest_relevant_mutation_at: string | null;
+    reason_codes: string[];
+  };
+  account_total_assets?: {
+    current_fact: AccountRealityCashFact;
+  };
   cash: {
     current_fact: AccountRealityCashFact;
     ledger_candidate: AccountRealityCashFact;
     reconciliation: "MATCH" | "MISMATCH" | "UNKNOWN";
     coverage?: string;
+    cash_subfact_canonical?: boolean;
   };
   positions?: AccountRealityPosition[];
   pricing?: {
@@ -816,6 +840,8 @@ export interface AccountReality {
   };
   market_value?: number | null;
   settled_nav?: number | null;
+  nav_authority?: string | null;
+  nav_canonical?: boolean;
   nav_cash_source?: string | null;
   nav_reconciliation?: {
     status: "MATCH" | "MISMATCH" | "UNKNOWN";

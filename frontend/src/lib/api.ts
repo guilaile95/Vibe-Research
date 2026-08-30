@@ -645,6 +645,7 @@ export const api = {
     put<AccountProfileResponse>("/account-profile", {
       total_assets: data.total_assets,
       available_cash: data.available_cash,
+      confirm_current: data.confirm_current,
     }, { unwrapData: false }),
   /** 只读账户现实（P1-CASH1）：canonical ledger cash candidate 与 manual fact 的对账 read model。 */
   getAccountReality: () => get<AccountReality>("/account/reality"),

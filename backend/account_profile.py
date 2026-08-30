@@ -3,13 +3,16 @@
 存本地 ~/.vibe-research/account_profile.json（不上传、不进仓库）。
 存储位置与 portfolio.json 一致（VR_DATA_DIR 可覆盖）。
 
-文件不存在表示「未配置」，不把未解释为 0；updated_at 由后端生成。
+文件不存在表示「未配置」，不把未解释为 0。旧文件只有 updated_at，仍是
+LEGACY_UNPROVEN；只有用户显式确认才由后端生成 effective/recorded identity。
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import threading
+import uuid
 from datetime import datetime, timezone, timedelta
 
 CACHE_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
@@ -18,10 +21,60 @@ ACCOUNT_FILE = os.path.join(CACHE_DIR, "account_profile.json")
 BEIJING = timezone(timedelta(hours=8))
 _LOCK = threading.Lock()
 ACCOUNT_PROFILE_CORRUPTED_REASON = "ACCOUNT_PROFILE_CORRUPTED"
+ACCOUNT_CONFIRMATION_AUTHORITY = "MANUAL_EXPLICIT_CONFIRMATION"
+ACCOUNT_CONFIRMATION_ID_RE = re.compile(r"^account_confirmation_[0-9a-f]{32}$")
 
 
-def _now() -> str:
-    return datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
+def _now(moment: datetime | None = None) -> str:
+    value = moment or datetime.now(timezone.utc)
+    return value.astimezone(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _utc_timestamp(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _confirmation_metadata(raw: dict) -> dict:
+    fields = ("confirmation_id", "effective_at", "recorded_at", "authority")
+    present = [field in raw for field in fields]
+    if not any(present):
+        return {
+            "confirmation_status": "LEGACY_UNPROVEN",
+            "confirmation_id": None,
+            "effective_at": None,
+            "recorded_at": None,
+            "authority": None,
+        }
+    if not all(present):
+        raise ValueError("confirmation metadata incomplete")
+    confirmation_id = raw.get("confirmation_id")
+    effective_at = raw.get("effective_at")
+    recorded_at = raw.get("recorded_at")
+    authority = raw.get("authority")
+    if (
+        not isinstance(confirmation_id, str)
+        or ACCOUNT_CONFIRMATION_ID_RE.fullmatch(confirmation_id) is None
+        or authority != ACCOUNT_CONFIRMATION_AUTHORITY
+    ):
+        raise ValueError("confirmation metadata invalid")
+    parsed: list[datetime] = []
+    for value in (effective_at, recorded_at):
+        if not isinstance(value, str) or not value.endswith("Z"):
+            raise ValueError("confirmation timestamp invalid")
+        try:
+            timestamp = datetime.fromisoformat(value[:-1] + "+00:00")
+        except ValueError as exc:
+            raise ValueError("confirmation timestamp invalid") from exc
+        parsed.append(timestamp)
+    if parsed[0] != parsed[1]:
+        raise ValueError("manual current confirmation must share one effective/recorded instant")
+    return {
+        "confirmation_status": "CONFIRMED",
+        "confirmation_id": confirmation_id,
+        "effective_at": effective_at,
+        "recorded_at": recorded_at,
+        "authority": authority,
+    }
 
 
 def _account_path() -> str:
@@ -79,19 +132,34 @@ def get_account_profile_status() -> dict:
             "total_assets": total,
             "available_cash": cash,
             "updated_at": updated_at.strip(),
+            **_confirmation_metadata(d),
         })
     except Exception:
         return _status("corrupted")
 
 
 
-def save_account_profile(total_assets: float, available_cash: float) -> dict:
-    """原子写入账户资金，updated_at 由后端生成。返回保存后的数据（含 updated_at）。"""
+def save_account_profile(
+    total_assets: float,
+    available_cash: float,
+    *,
+    confirm_current: bool = False,
+) -> dict:
+    """原子写入账户资金；只有显式确认才产生正式 effective identity。"""
+    moment = datetime.now(timezone.utc)
     payload = {
         "total_assets": round(float(total_assets), 2),
         "available_cash": round(float(available_cash), 2),
-        "updated_at": _now(),
+        "updated_at": _now(moment),
     }
+    if confirm_current:
+        timestamp = _utc_timestamp(moment)
+        payload.update({
+            "confirmation_id": f"account_confirmation_{uuid.uuid4().hex}",
+            "effective_at": timestamp,
+            "recorded_at": timestamp,
+            "authority": ACCOUNT_CONFIRMATION_AUTHORITY,
+        })
     account_file = _account_path()
     with _LOCK:
         os.makedirs(CACHE_DIR, exist_ok=True)
@@ -109,7 +177,7 @@ def save_account_profile(total_assets: float, available_cash: float) -> dict:
                     os.remove(tmp)
             except OSError:
                 pass  # 清理失败只忽略，不掩盖原始业务异常
-    return payload
+    return {**payload, **_confirmation_metadata(payload)}
 
 
 def validate_account_payload(raw: dict) -> tuple[float, float]:
