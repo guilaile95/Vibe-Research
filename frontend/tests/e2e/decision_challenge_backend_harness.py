@@ -30,4 +30,3 @@ def _fixed_first_projection(*args: Any, **kwargs: Any) -> dict[str, Any]:
 campaign_critical_data_runtime.project_campaign_critical_data = _fixed_first_projection
 
 from app import app  # noqa: E402  (patch Critical Data before app/runtime import)
-
