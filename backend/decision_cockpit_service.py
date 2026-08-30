@@ -14,7 +14,7 @@ import json
 import re
 from typing import Any, Callable
 
-import account_profile
+import account_reality_service
 import ai_result_service
 import astock
 import chat as chat_layer
@@ -487,19 +487,57 @@ def _market_short_summary() -> dict:
 
 
 def _account_funding_summary() -> dict:
-    st = account_profile.get_account_profile_status()
-    if st["status"] != "valid":
+    try:
+        reality = account_reality_service.get_account_reality()
+    except Exception:  # noqa: BLE001 — current execution funding must fail closed.
         return {
             "configured": False,
+            "canonical": False,
             "data": None,
-            "status": st.get("status"),
-            "reason_code": st.get("reason_code"),
+            "status": "partial",
+            "reason_code": "ACCOUNT_REALITY_UNAVAILABLE",
+            "canonical_reason_codes": ["ACCOUNT_REALITY_UNAVAILABLE"],
         }
+    cash = reality.get("cash") if isinstance(reality, dict) else None
+    cash_fact = cash.get("current_fact") if isinstance(cash, dict) else None
+    total = reality.get("account_total_assets") if isinstance(reality, dict) else None
+    total_fact = total.get("current_fact") if isinstance(total, dict) else None
+    configured = (
+        isinstance(cash_fact, dict)
+        and cash_fact.get("value") is not None
+        and isinstance(total_fact, dict)
+        and total_fact.get("value") is not None
+    )
+    canonical = reality.get("canonical") is True
+    reasons = list(reality.get("canonical_reason_codes") or [])
+    corrupted = any(
+        isinstance(fact, dict) and fact.get("status") == "CORRUPTED"
+        for fact in (cash_fact, total_fact)
+    )
     return {
-        "configured": True,
-        "data": st["data"],
-        "status": "valid",
-        "reason_code": None,
+        "configured": configured,
+        "canonical": canonical,
+        "data": {
+            "total_assets": total_fact["value"],
+            "available_cash": cash_fact["value"],
+            "updated_at": cash_fact.get("updated_at"),
+        }
+        if configured
+        else None,
+        "status": (
+            "valid"
+            if canonical
+            else "corrupted"
+            if corrupted
+            else "partial"
+            if configured
+            else "not_configured"
+        ),
+        "reason_code": None if canonical else reasons[0] if reasons else None,
+        "canonical_reason_codes": reasons,
+        "confirmation_id": (
+            cash_fact.get("confirmation_id") if isinstance(cash_fact, dict) else None
+        ),
     }
 
 
@@ -675,7 +713,25 @@ def _portfolio_summary(advice_snapshot: dict | None = None) -> dict:
     """持仓只读摘要 + 基于建议动作的现金可执行性。"""
     snap = pf.get_portfolio_holdings_snapshot().get("holdings", [])
     cash = _account_funding_summary()
-    cash_avail = cash["data"]["available_cash"] if cash["configured"] else None
+    advice_payload = advice_snapshot.get("payload") if isinstance(advice_snapshot, dict) else None
+    advice_funding = (
+        advice_payload.get("account_funding") if isinstance(advice_payload, dict) else None
+    )
+    advice_matches_current_account = (
+        isinstance(advice_funding, dict)
+        and advice_funding.get("canonical") is True
+        and isinstance(advice_funding.get("confirmation_id"), str)
+        and advice_funding.get("confirmation_id") == cash.get("confirmation_id")
+    )
+    cash_avail = (
+        cash["data"]["available_cash"]
+        if (
+            cash["configured"]
+            and cash.get("canonical") is True
+            and advice_matches_current_account
+        )
+        else None
+    )
     holdings_view: list[dict] = []
     for h in snap:
         if not isinstance(h, dict):

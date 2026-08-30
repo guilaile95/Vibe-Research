@@ -1061,6 +1061,7 @@ export interface AiGeneratedResult<TPayload> {
   model_name: string;
   stale: boolean;
   stale_message?: string;
+  stale_reason_code?: string;
 }
 
 

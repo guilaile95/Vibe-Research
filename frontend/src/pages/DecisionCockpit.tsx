@@ -872,11 +872,18 @@ function SummaryBlock({ account, advice }: { account: Overview["account_funding"
             未配置。请到「我的持仓」填写账户总资产与可用现金。现金可执行性将标记为 cash_unconfigured。
           </p>
         ) : (
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <span className="text-muted-foreground">总资产</span><span className="font-mono">{account.data?.total_assets ?? "—"}</span>
-            <span className="text-muted-foreground">可用现金</span><span className="font-mono">{account.data?.available_cash ?? "—"}</span>
-            <span className="text-muted-foreground">更新时间</span><span className="font-mono">{account.data?.updated_at ?? "—"}</span>
-          </div>
+          <>
+            {account.canonical !== true && (
+              <p className="mb-2 text-xs text-amber-700 dark:text-amber-400" data-testid="cockpit-account-noncanonical">
+                账户金额已记录，但 aggregate Account 尚未 canonical；现金可执行性保持不可用（{account.reason_code ?? "ACCOUNT_REALITY_UNAVAILABLE"}）。
+              </p>
+            )}
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <span className="text-muted-foreground">总资产</span><span className="font-mono">{account.data?.total_assets ?? "—"}</span>
+              <span className="text-muted-foreground">可用现金</span><span className="font-mono">{account.data?.available_cash ?? "—"}</span>
+              <span className="text-muted-foreground">更新时间</span><span className="font-mono">{account.data?.updated_at ?? "—"}</span>
+            </div>
+          </>
         )}
       </GlassCard>
       <GlassCard>

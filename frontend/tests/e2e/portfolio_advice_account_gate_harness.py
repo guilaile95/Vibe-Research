@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
+import account_reality_service
 import astock
 import daily_review
 import portfolio_advice_service
@@ -136,9 +139,20 @@ def _model(_cfg, _messages):
     )
 
 
+_real_account_reality = account_reality_service.get_account_reality
+
+
+def _account_reality():
+    override = Path(os.environ["VR_DATA_DIR"]) / "account_reality_harness.json"
+    if override.exists():
+        return json.loads(override.read_text(encoding="utf-8"))
+    return _real_account_reality()
+
+
 astock.tencent_quote = _quotes
 astock.kline = _kline
 daily_review.generate_daily_review = _review
+account_reality_service.get_account_reality = _account_reality
 portfolio_advice_service._default_model_runner = _model
 
 from app import app  # noqa: E402,F401

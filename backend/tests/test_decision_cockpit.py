@@ -509,6 +509,83 @@ class TestDecisionCockpitServiceGates:
         assert svc._portfolio_advice_full_snapshot("2026-07-20") is None
         assert svc._portfolio_advice_full_snapshot(None) is None
 
+    def test_noncanonical_account_displays_confirmed_cash_but_blocks_cash_execution(
+        self, monkeypatch
+    ):
+        import decision_cockpit_service as svc
+
+        def reality(canonical, confirmation_id, reasons=None):
+            fact = {
+                "value": 100000.0,
+                "status": "CONFIRMED",
+                "confirmation_id": confirmation_id,
+                "updated_at": "2026-08-31T06:00:00+08:00",
+            }
+            return {
+                "canonical": canonical,
+                "canonical_reason_codes": reasons or [],
+                "cash": {"current_fact": fact},
+                "account_total_assets": {"current_fact": {**fact, "value": 200000.0}},
+            }
+
+        monkeypatch.setattr(
+            svc.account_reality_service,
+            "get_account_reality",
+            lambda: reality(
+                False,
+                "confirmation-a",
+                ["ACCOUNT_CASH_RECONCILIATION_MISMATCH"],
+            ),
+        )
+        monkeypatch.setattr(svc.pf, "get_portfolio_holdings_snapshot", lambda: {"holdings": []})
+        monkeypatch.setattr(svc, "_quote_map", lambda _codes: {"600519": {"price": 10.0}})
+
+        advice = {
+            "payload": {
+                "account_funding": {
+                    "canonical": True,
+                    "confirmation_id": "confirmation-a",
+                },
+                "holdings": [
+                    {
+                        "code": "600519",
+                        "name": "贵州茅台",
+                        "action": "add",
+                        "execution_quantity": 100,
+                        "estimated_amount": 1000.0,
+                        "current_price": 10.0,
+                    }
+                ],
+            }
+        }
+        portfolio = svc._portfolio_summary(advice)
+
+        assert portfolio["cash"]["configured"] is True
+        assert portfolio["cash"]["canonical"] is False
+        assert portfolio["cash"]["data"]["available_cash"] == 100000.0
+        cash_exec = portfolio["cash_executability"]
+        assert cash_exec["cash_configured"] is False
+        assert cash_exec["actions"][0]["is_executable"] is False
+        assert cash_exec["actions"][0]["reason"] == "cash_unconfigured"
+
+        monkeypatch.setattr(
+            svc.account_reality_service,
+            "get_account_reality",
+            lambda: reality(True, "confirmation-b"),
+        )
+        identity_changed = svc._portfolio_summary(advice)["cash_executability"]
+        assert identity_changed["cash_configured"] is False
+        assert identity_changed["actions"][0]["is_executable"] is False
+
+        monkeypatch.setattr(
+            svc.account_reality_service,
+            "get_account_reality",
+            lambda: reality(True, "confirmation-a"),
+        )
+        matched = svc._portfolio_summary(advice)["cash_executability"]
+        assert matched["cash_configured"] is True
+        assert matched["actions"][0]["is_executable"] is True
+
     def test_signal_schema_persists_rule_version_and_refs(self, tmp_path):
         db = self.db
         store.upsert_evidence(db, "kline/600519", {"n": 10})
