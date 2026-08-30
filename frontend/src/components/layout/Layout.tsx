@@ -46,6 +46,7 @@ const PRIMARY_NAV = [
   { to: "/daily-review", icon: Activity, label: "今天" },
   { to: "/market-cloud", icon: BarChart3, label: "市场热力" },
   { to: "/intel", icon: BookOpen, label: "资讯" },
+  { to: "/screener", icon: Search, label: "发现" },
   { to: "/watchlist", icon: Star, label: "自选" },
   { to: "/stock-data", icon: Search, label: "研究" },
   { to: "/portfolio", icon: Wallet, label: "持仓" },
@@ -80,6 +81,7 @@ const SYSTEM_NAV = [
 ];
 
 const RESEARCH_WORKFLOW_PATHS = [
+  "/screener",
   "/stock-data",
   "/candidates",
   "/thesis",

@@ -35,6 +35,7 @@ import {
 } from "@/lib/recoveredScreener";
 import { loadWatchAuthoritative } from "@/lib/watchlist";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
+import { DiscoveryWorkspace } from "@/components/discovery/DiscoveryWorkspace";
 
 type FullMarketValueMetric = Exclude<FullMarketMetric, "code" | "latest_date">;
 
@@ -148,7 +149,7 @@ function ResultGroup({ title, items }: { title: string; items: ScreenerStockResu
 }
 
 export function Screener() {
-  const [mode, setMode] = useState<"candidate" | "full-market">("candidate");
+  const [mode, setMode] = useState<"discovery" | "candidate" | "full-market">("discovery");
   const [codeText, setCodeText] = useState("");
   const [conditions, setConditions] = useState<ScreenerCondition[]>([
     defaultCondition("price_gt_sma20"),
@@ -291,7 +292,7 @@ export function Screener() {
     }
   };
 
-  const switchMode = (nextMode: "candidate" | "full-market") => {
+  const switchMode = (nextMode: "discovery" | "candidate" | "full-market") => {
     controllerRef.current?.abort();
     controllerRef.current = null;
     setLoading(false);
@@ -304,24 +305,33 @@ export function Screener() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="信号筛选"
-        subtitle={mode === "candidate" ? "对候选代码执行技术条件 AND 筛选；结果用于研究，不产生交易建议。" : "基于本地 RDP artifact 的有界全市场横截面；结果用于研究，不产生交易建议。"}
+        title="市场发现"
+        subtitle={mode === "discovery"
+          ? "从 Core A 股批量扫描中生成分策略研究队列；只回答先研究谁、为什么。"
+          : mode === "candidate"
+            ? "对候选代码执行技术条件 AND 筛选；结果用于研究，不产生交易建议。"
+            : "基于本地 RDP artifact 的有界全市场横截面；结果用于研究，不产生交易建议。"}
       />
 
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span>{mode === "candidate" ? `恢复自历史功能链 · 最多 ${MAX_CODES} 个代码` : "Full Market · set-based · 不回退逐票请求"}</span>
+        <span>{mode === "discovery" ? "Discovery · batch-first · no AI ranking" : mode === "candidate" ? `恢复自历史功能链 · 最多 ${MAX_CODES} 个代码` : "Full Market · set-based · 不回退逐票请求"}</span>
         <span>·</span>
         <Link className="hover:text-foreground" to="/market-history">查看北向成交历史</Link>
       </div>
 
       <div className="flex gap-1 rounded-xl border border-border/60 bg-muted/20 p-1" role="tablist" aria-label="筛选模式">
+        <button type="button" role="tab" aria-selected={mode === "discovery"} data-testid="discovery-tab" onClick={() => switchMode("discovery")} className={`rounded-lg px-3 py-1.5 text-sm ${mode === "discovery" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+          机会发现
+        </button>
         <button type="button" role="tab" aria-selected={mode === "candidate"} data-testid="candidate-pool-tab" onClick={() => switchMode("candidate")} className={`rounded-lg px-3 py-1.5 text-sm ${mode === "candidate" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
-          Candidate Pool
+          技术筛选
         </button>
         <button type="button" role="tab" aria-selected={mode === "full-market"} data-testid="full-market-tab" onClick={() => switchMode("full-market")} className={`rounded-lg px-3 py-1.5 text-sm ${mode === "full-market" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
           Full Market
         </button>
       </div>
+
+      {mode === "discovery" ? <DiscoveryWorkspace /> : null}
 
       {mode === "candidate" ? (
         <>
@@ -386,7 +396,7 @@ export function Screener() {
             {(error || draftError) ? <div className="flex items-center gap-2 text-xs text-destructive"><AlertCircle className="h-4 w-4" />{error || draftError}</div> : null}
           </GlassCard>
         </>
-      ) : (
+      ) : mode === "full-market" ? (
         <GlassCard className="space-y-4 p-4" data-testid="full-market-form">
           <div className="flex flex-wrap items-center gap-3">
             <label className="inline-flex items-center gap-2 text-sm">
@@ -440,7 +450,7 @@ export function Screener() {
           {error ? <div className="flex items-center gap-2 text-xs text-destructive"><AlertCircle className="h-4 w-4" />{error}</div> : null}
           <p className="text-xs text-muted-foreground">当前 RDP schema 仅有 volume；不声明 turnover、amount 或 liquidity amount。历史不足保持不可评估。</p>
         </GlassCard>
-      )}
+      ) : null}
 
       {mode === "candidate" && result ? (
         <>
