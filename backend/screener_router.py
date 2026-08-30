@@ -17,9 +17,28 @@ if not hasattr(ti, "PRICE_RANGE_TRIGGER_UNAVAILABLE_PREFIX"):
     ti.PRICE_RANGE_TRIGGER_UNAVAILABLE_PREFIX = "价格区间触发不可评估"
 
 import screener_service as svc
+import discovery_service as discovery
 from screener_models import ScreenerEvaluateIn, ScreenerEvaluateOut, SectorRepresentativesOut
 
 router = APIRouter(prefix="/api/screener", tags=["screener"])
+
+
+@router.get("/discovery")
+def discovery_endpoint(refresh: bool = Query(False)):
+    """Full-market research discovery; never creates formal state or trading output."""
+    try:
+        return discovery.get_discovery(force_refresh=refresh)
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "schema_version": discovery.SCHEMA_VERSION,
+                "status": "error",
+                "detail": "市场发现服务暂时不可用",
+                "queues": {strategy: [] for strategy in discovery.STRATEGIES},
+                "excluded": [],
+            },
+        )
 
 
 @router.post("/evaluate", response_model=ScreenerEvaluateOut)

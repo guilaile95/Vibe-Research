@@ -201,3 +201,95 @@ export type FullMarketQuery = {
   limit?: number;
   offset?: number;
 };
+
+export type DiscoveryStrategy = "SHORT" | "SWING" | "MEDIUM";
+export type DiscoveryPriority = "HIGH" | "MEDIUM" | "LOW";
+export type DiscoveryEvidenceGate =
+  | "SUFFICIENT_FOR_RESEARCH"
+  | "PARTIAL"
+  | "INSUFFICIENT"
+  | "UNKNOWN"
+  | "ERROR";
+
+export type DiscoveryObservation = {
+  code: string;
+  label: string;
+  value: unknown;
+  source_ref: string;
+};
+
+export type DiscoveryRestrictedStatus = {
+  status: "CLEAR" | "RESTRICTED" | "UNKNOWN";
+  reason_codes: string[];
+  listing_age_status: "KNOWN" | "UNKNOWN";
+};
+
+export type DiscoveryOpportunityItem = {
+  security_code: string;
+  name: string;
+  strategy: DiscoveryStrategy;
+  sector: string | null;
+  themes: string[];
+  discovery_state: "QUEUED" | "BLOCKED" | "EXCLUDED";
+  research_priority: DiscoveryPriority;
+  reason_codes: string[];
+  supporting_observations: DiscoveryObservation[];
+  uncertainties: string[];
+  data_health: "normal" | "partial" | "unknown" | "error";
+  catalyst_status: "AVAILABLE" | "PARTIAL" | "UNKNOWN" | "ERROR";
+  fundamental_status: "AVAILABLE" | "PARTIAL" | "UNKNOWN" | "ERROR";
+  evidence_gate: DiscoveryEvidenceGate;
+  restricted_universe: DiscoveryRestrictedStatus;
+  discovered_at: string;
+  as_of: string;
+  provenance_refs: string[];
+};
+
+export type DiscoveryExcludedItem = Partial<DiscoveryOpportunityItem> & {
+  security_code: string;
+  name: string;
+  strategy?: DiscoveryStrategy;
+  reason_codes: string[];
+  data_health: string;
+  restricted_universe?: DiscoveryRestrictedStatus;
+  as_of?: string;
+};
+
+export type DiscoveryDatasetStatus = {
+  dataset_id: string;
+  status: "normal" | "partial" | "stale" | "unavailable" | "error";
+  as_of: string | null;
+  fetched_at: string;
+  reason_code: string | null;
+  provenance_refs: string[];
+};
+
+export type DiscoverySnapshot = {
+  schema_version: string;
+  status: "normal" | "partial" | "stale" | "unavailable" | "error";
+  as_of: string;
+  fetched_at: string;
+  last_successful_at: string | null;
+  market_context: {
+    status: string;
+    core_universe_count: number;
+    outside_core_count?: number;
+    sector_count: number;
+    market_average_change_pct?: number | null;
+    amount_median?: number | null;
+    turnover_active_threshold?: number | null;
+    source_ref?: string;
+  };
+  funnel: {
+    core_universe: number;
+    cheap_scan_passed: number;
+    qualification_candidates: number;
+    queue_items: Record<DiscoveryStrategy, number>;
+    excluded: number;
+  };
+  datasets: DiscoveryDatasetStatus[];
+  queues: Record<DiscoveryStrategy, DiscoveryOpportunityItem[]>;
+  excluded: DiscoveryExcludedItem[];
+  limitations: string[];
+  cache: { hit: boolean; age_seconds: number | null; refresh_failed?: boolean };
+};

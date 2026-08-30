@@ -1,6 +1,6 @@
 # Current Stage — Recovery Coordinates
 
-Last reviewed: 2026-08-29
+Last reviewed: 2026-08-30
 
 This file is a recovery pointer, not Engineering Truth and not a second task database.
 Always resolve live GitHub state before acting; do not persist an exact stable SHA here.
@@ -47,6 +47,11 @@ The accepted stable line already contains the product foundation required for th
 - local data snapshot/restore and local API boundary;
 - local Native Intel for Intel, StockData and Watchlist without TrendRadar sidecar or MCP runtime
   dependency.
+- Candidate Research for an explicitly chosen security, including PRE-ENTRY research, formal
+  evidence/thesis, bounded decision preview and immutable decision commit.
+- bounded, deterministic full-market Discovery on `/screener`, with separate SHORT/SWING/MEDIUM
+  research queues and an explicit handoff to Candidate Research; Discovery creates no formal state
+  and emits no BUY action.
 
 These capabilities being present and tested does not prove product value. The next truth gate is real
 usage, not another feature-completeness pass.
@@ -89,7 +94,7 @@ Do not start these merely because they remain conceivable:
 - new formal states, ledgers or authority layers;
 - Native Intel vector/AI relevance infrastructure;
 - notification or background-agent expansion;
-- bulk/full-market discovery expansion such as #220;
+- Discovery follow-ons beyond the bounded #244 v0.1 vertical;
 - behavioral scoring, calibration, risk-budget expansion or model governance;
 - historical Draft PR cleanup as part of a product feature.
 

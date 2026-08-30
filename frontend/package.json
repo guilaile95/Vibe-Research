@@ -40,6 +40,7 @@
     "test:e2e:watchlist-anomaly": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/watchlist-anomaly.browser.mjs",
     "test:e2e:full-market": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/full-market-source-to-sink.browser.mjs",
     "test:e2e:candidate-campaign": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/candidate-campaign.browser.mjs",
+    "test:e2e:discovery": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/discovery-workspace.browser.mjs",
     "test:e2e:ai-draft-206": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/ai-draft-206.browser.mjs"
   },
   "dependencies": {

@@ -6,6 +6,7 @@ import type {
   ScreenerSectorRepresentativesResult,
   FullMarketQuery,
   FullMarketResult,
+  DiscoverySnapshot,
 } from "./recoveredMarketTypes.ts";
 
 export const recoveredMarketApi = {
@@ -41,4 +42,10 @@ export const recoveredMarketApi = {
       unwrapData: false,
     });
   },
+
+  getDiscovery: (refresh = false, signal?: AbortSignal) =>
+    get<DiscoverySnapshot>(`/screener/discovery?refresh=${refresh ? "true" : "false"}`, {
+      signal,
+      unwrapData: false,
+    }),
 };

@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 
 const WORKFLOW_NAV = [
   { to: "/stock-data", label: "数据" },
-  { to: "/screener", label: "筛选" },
+  { to: "/screener", label: "发现" },
   { to: "/thesis", label: "逻辑" },
   { to: "/decision-evidence", label: "依据" },
   { to: "/portfolio", label: "持仓" },

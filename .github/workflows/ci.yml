@@ -112,6 +112,10 @@ jobs:
         working-directory: frontend
         run: npm run test:e2e:candidate-campaign
 
+      - name: Run Full-Market Discovery E2E
+        working-directory: frontend
+        run: npm run test:e2e:discovery
+
   e2e-thesis-smoke:
     name: Playwright thesis smoke E2E
     runs-on: ubuntu-latest
