@@ -708,6 +708,7 @@ class RuntimePorts:
     critical_data_reader: Callable[[Mapping[str, Any], str], Mapping[str, Any]] | None = None
     position_reader: Callable[[], Mapping[str, Any]] | None = None
     account_reader: Callable[[], Mapping[str, Any]] | None = None
+    incumbent_reader: Callable[[str], Mapping[str, Any]] | None = None
 
 
 def _production_critical_data_reader(
@@ -729,11 +730,178 @@ def _production_position_reader() -> Mapping[str, Any]:
     }
 
 
+def _incumbent_thesis_identity(campaign_id: str) -> Mapping[str, Any] | None:
+    try:
+        value = formal_thesis_projection.project_current_thesis(campaign_id)
+    except campaign_service.ThesisBindingNotFoundError:
+        return None
+    if not isinstance(value, Mapping):
+        raise DecisionCommitRuntimeError("incumbent Current Thesis is invalid")
+    deltas = value.get("deltas")
+    if not isinstance(deltas, list):
+        raise DecisionCommitRuntimeError("incumbent Current Thesis deltas are invalid")
+    identity_deltas: list[dict[str, Any]] = []
+    for delta in deltas:
+        if not isinstance(delta, Mapping):
+            raise DecisionCommitRuntimeError("incumbent Current Thesis delta is invalid")
+        links = delta.get("evidence_links")
+        links = links if isinstance(links, list) else []
+        identity_deltas.append(
+            {
+                "delta_id": delta.get("delta_id"),
+                "delta_sequence": delta.get("delta_sequence"),
+                "delta_state": delta.get("delta_state"),
+                "confirmed_at": delta.get("confirmed_at"),
+                "evidence_ids": sorted(
+                    {
+                        link.get("evidence_id")
+                        for link in links
+                        if isinstance(link, Mapping)
+                        and isinstance(link.get("evidence_id"), str)
+                    }
+                ),
+            }
+        )
+    return {
+        "campaign_id": value.get("campaign_id"),
+        "thesis_id": value.get("thesis_id"),
+        "frozen_revision": value.get("frozen_revision"),
+        "formal_status": value.get("formal_status"),
+        "effective_state": value.get("effective_state"),
+        "deltas": identity_deltas,
+    }
+
+
+def _production_incumbent_reader(as_of: str) -> Mapping[str, Any]:
+    # Local import avoids a module cycle: Decision Inbox already reuses this
+    # runtime's named authority evaluation for each incumbent Campaign.
+    import decision_inbox_runtime_assembler as inbox_runtime
+
+    snapshot = inbox_runtime.assemble_current_decision_inbox(as_of=as_of)
+    if not isinstance(snapshot, Mapping):
+        raise DecisionCommitRuntimeError("incumbent authority is invalid")
+    if snapshot.get("evaluation_status") != "EVALUATED":
+        return {
+            "evaluation_status": snapshot.get("evaluation_status", "NOT_EVALUATED"),
+            "canonical": False,
+            "reason_codes": copy.deepcopy(snapshot.get("reason_codes", [])),
+            "holding_setup_items": [],
+            "campaign_items": [],
+            "authority_refs": ["decision_inbox_runtime:current_snapshot"],
+        }
+    raw_items = snapshot.get("campaign_items")
+    raw_setup = snapshot.get("holding_setup_items")
+    if not isinstance(raw_items, list) or not isinstance(raw_setup, list):
+        raise DecisionCommitRuntimeError("incumbent authority shape is invalid")
+    items: list[dict[str, Any]] = []
+    authority_refs = ["decision_inbox_runtime:current_snapshot"]
+    for raw in raw_items:
+        if not isinstance(raw, Mapping) or not isinstance(raw.get("campaign_id"), str):
+            raise DecisionCommitRuntimeError("incumbent Campaign identity is invalid")
+        thesis_identity = _incumbent_thesis_identity(raw["campaign_id"])
+        current = raw.get("current_thesis")
+        current_state = (
+            current.get("current_thesis") if isinstance(current, Mapping) else "UNKNOWN"
+        )
+        if (
+            thesis_identity is not None
+            and thesis_identity.get("formal_status") == "READY"
+            and thesis_identity.get("effective_state") != current_state
+        ):
+            raise DecisionCommitRuntimeError("incumbent Current Thesis snapshot drifted")
+        authority_refs.append(f"incumbent_campaign:{raw['campaign_id']}")
+        if (
+            thesis_identity is not None
+            and isinstance(thesis_identity.get("thesis_id"), str)
+            and isinstance(thesis_identity.get("frozen_revision"), int)
+        ):
+            authority_refs.append(
+                "current_thesis:"
+                f"{raw['campaign_id']}:{thesis_identity['thesis_id']}:"
+                f"v{thesis_identity['frozen_revision']}"
+            )
+        sell = raw.get("sell_engine")
+        sell = sell if isinstance(sell, Mapping) else {}
+        frozen = raw.get("last_frozen_decision")
+        compact_frozen = None
+        if isinstance(frozen, Mapping) and isinstance(frozen.get("decision_id"), str):
+            full_frozen = frozen_decision_service.get_decision(frozen["decision_id"])
+            if (
+                not isinstance(full_frozen, Mapping)
+                or full_frozen.get("campaign_id") != raw["campaign_id"]
+                or not isinstance(full_frozen.get("snapshot_hash"), str)
+            ):
+                raise DecisionCommitRuntimeError(
+                    "incumbent Frozen Decision identity is invalid"
+                )
+            snapshot_hash = full_frozen["snapshot_hash"]
+            compact_frozen = {
+                "frozen_decision_ref": f"{frozen['decision_id']}:{snapshot_hash}",
+                "frozen_at": frozen.get("committed_at"),
+                "review_by": frozen.get("review_by"),
+                "next_best_action": frozen.get("previous_next_best_action"),
+            }
+            authority_refs.append(
+                f"frozen_decision:{compact_frozen['frozen_decision_ref']}"
+            )
+        hard_refs = raw.get("hard_risk_authority_refs")
+        hard_refs = hard_refs if isinstance(hard_refs, list) else []
+        authority_refs.extend(
+            ref for ref in hard_refs if isinstance(ref, str) and ref
+        )
+        items.append(
+            {
+                "security_code": raw.get("security_code"),
+                "strategy": raw.get("strategy"),
+                "campaign_id": raw.get("campaign_id"),
+                "campaign_status": raw.get("campaign_status"),
+                "current_thesis_state": current_state,
+                "thesis_identity": copy.deepcopy(thesis_identity),
+                "last_frozen_decision": compact_frozen,
+                "hard_risk_state": raw.get("hard_risk_state"),
+                "hard_risk_reason_codes": copy.deepcopy(
+                    raw.get("hard_risk_reason_codes", [])
+                ),
+                "material_change_state": raw.get("material_change_state"),
+                "material_change_reason_codes": copy.deepcopy(
+                    raw.get("material_change_reason_codes", [])
+                ),
+                "sell_state": sell.get("sell_state"),
+                "reason_codes": copy.deepcopy(raw.get("reason_codes", [])),
+            }
+        )
+    items.sort(
+        key=lambda item: (
+            str(item.get("security_code", "")),
+            str(item.get("strategy", "")),
+            str(item.get("campaign_id", "")),
+        )
+    )
+    setup = [
+        {
+            "security_code": item.get("security_code"),
+            "reason_codes": copy.deepcopy(item.get("reason_codes", [])),
+        }
+        for item in raw_setup
+        if isinstance(item, Mapping)
+    ]
+    setup.sort(key=lambda item: str(item.get("security_code", "")))
+    return {
+        "evaluation_status": "EVALUATED",
+        "canonical": snapshot.get("canonical") is True,
+        "reason_codes": copy.deepcopy(snapshot.get("reason_codes", [])),
+        "holding_setup_items": setup,
+        "campaign_items": items,
+        "authority_refs": list(dict.fromkeys(authority_refs)),
+    }
+
+
 PRODUCTION_PORTS = RuntimePorts(
     critical_data_reader=_production_critical_data_reader,
     freeze_writer_with_pre_write_validation=_production_freeze_writer_with_pre_write_validation,
     position_reader=_production_position_reader,
     account_reader=account_reality_service.get_account_reality,
+    incumbent_reader=_production_incumbent_reader,
 )
 _COMMIT_LOCK = threading.Lock()
 
@@ -811,14 +979,35 @@ def _read_candidate_authority(
 
 
 def _read_candidate_authorities(
-    ports: RuntimePorts, campaign: Mapping[str, Any]
-) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
+    ports: RuntimePorts, campaign: Mapping[str, Any], as_of: str
+) -> tuple[
+    Mapping[str, Any] | None,
+    Mapping[str, Any] | None,
+    Mapping[str, Any] | None,
+]:
     if campaign.get("status") != "PRE-ENTRY":
-        return None, None
-    return (
-        _read_candidate_authority(ports.position_reader),
-        _read_candidate_authority(ports.account_reader),
-    )
+        return None, None, None
+    position = _read_candidate_authority(ports.position_reader)
+    account = _read_candidate_authority(ports.account_reader)
+    holdings = position.get("holdings") if isinstance(position, Mapping) else None
+    incumbent = None
+    if (
+        isinstance(holdings, list)
+        and isinstance(account, Mapping)
+        and account.get("canonical") is True
+        and any(
+            isinstance(item, Mapping)
+            and isinstance(item.get("shares"), (int, float))
+            and not isinstance(item.get("shares"), bool)
+            and item["shares"] > 0
+            for item in holdings
+        )
+        and ports.incumbent_reader is not None
+    ):
+        incumbent = _read_candidate_authority(
+            lambda: ports.incumbent_reader(as_of)
+        )
+    return position, account, incumbent
 
 
 def _read_frozen(ports: RuntimePorts, campaign: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -877,6 +1066,7 @@ def _build_proposal(
     critical_data: Mapping[str, Any],
     candidate_position: Mapping[str, Any] | None = None,
     candidate_account: Mapping[str, Any] | None = None,
+    candidate_incumbents: Mapping[str, Any] | None = None,
     evidence_reader: Callable[[Mapping[str, Any]], Sequence[evidence_delta.NormalizedEvidenceItem]] | None = None,
     view_provenance: Mapping[str, Any] | None = None,
 ) -> tuple[proposal_projection.DecisionProposal, AuthorityEvaluations]:
@@ -921,6 +1111,7 @@ def _build_proposal(
             evidence_links=evidence_links,
             position_snapshot=candidate_position,
             account_reality=candidate_account,
+            incumbent_context=candidate_incumbents,
             model_proposed=model_proposed,
         )
     result = proposal_projection.project_decision_proposal(
@@ -1117,7 +1308,9 @@ def preview_decision_proposal(
     raw_thesis = _read_thesis_once(ports, campaign_key)
     frozen = _read_frozen(ports, campaign)
     critical_data = _read_critical_data(ports, campaign, snapshot_as_of)
-    candidate_position, candidate_account = _read_candidate_authorities(ports, campaign)
+    candidate_position, candidate_account, candidate_incumbents = (
+        _read_candidate_authorities(ports, campaign, snapshot_as_of)
+    )
     validated_witness = None
     provenance = None
     if draft_witness is not None:
@@ -1146,6 +1339,7 @@ def preview_decision_proposal(
         critical_data=critical_data,
         candidate_position=candidate_position,
         candidate_account=candidate_account,
+        candidate_incumbents=candidate_incumbents,
         view_provenance=provenance,
     )
     fingerprint = _fingerprint(
@@ -1361,7 +1555,9 @@ def commit_decision_proposal(
         raw_thesis = _read_thesis_once(ports, campaign_key)
         frozen = _read_frozen(ports, campaign)
         critical_data = _read_critical_data(ports, campaign, as_of)
-        candidate_position, candidate_account = _read_candidate_authorities(ports, campaign)
+        candidate_position, candidate_account, candidate_incumbents = (
+            _read_candidate_authorities(ports, campaign, as_of)
+        )
         validated_witness = None
         provenance = None
         if draft_witness is not None:
@@ -1400,6 +1596,7 @@ def commit_decision_proposal(
             critical_data=critical_data,
             candidate_position=candidate_position,
             candidate_account=candidate_account,
+            candidate_incumbents=candidate_incumbents,
             evidence_reader=snapshot_evidence_reader,
             view_provenance=provenance,
         )
@@ -1444,6 +1641,7 @@ def commit_decision_proposal(
                 critical_data=critical_data,
                 candidate_position=candidate_position,
                 candidate_account=candidate_account,
+                candidate_incumbents=candidate_incumbents,
                 evidence_reader=snapshot_evidence_reader,
                 view_provenance=provenance,
             )

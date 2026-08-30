@@ -2582,6 +2582,42 @@ export interface DecisionInboxSnapshot {
 // P0-DC1：Current Thesis → uncommitted Decision Proposal → explicit Freeze
 // ---------------------------------------------------------------------------
 
+export type PortfolioCapitalAvailabilityState = "AVAILABLE" | "CONSTRAINED" | "UNKNOWN";
+export type PortfolioFitState = "SUPPORTIVE" | "CONSTRAINED" | "UNKNOWN";
+export type ReplacementReviewState = "NOT_REQUIRED" | "WORTH_REVIEW" | "NOT_PROVEN" | "UNKNOWN";
+
+export interface PortfolioCapitalReplacementCandidate {
+  security_code: string;
+  campaign_id: string;
+  strategy: CampaignStrategy;
+  reason_codes: string[];
+}
+
+export interface PortfolioCapitalContext {
+  schema_version: "portfolio_capital_context.v0.1";
+  capital_availability: {
+    state: PortfolioCapitalAvailabilityState;
+    confirmed_cash: number | null;
+    reason_codes: string[];
+  };
+  portfolio_fit: {
+    state: PortfolioFitState;
+    existing_position_count: number | null;
+    reason_codes: string[];
+  };
+  replacement_review: {
+    state: ReplacementReviewState;
+    reason_codes: string[];
+    candidates: PortfolioCapitalReplacementCandidate[];
+  };
+  position_sizing_status: string;
+  authority_refs: string[];
+}
+
+export interface DecisionProposalPortfolioView extends Record<string, unknown> {
+  portfolio_capital_context?: PortfolioCapitalContext | null;
+}
+
 export interface DecisionProposalProjection {
   schema_version: string;
   proposal_status: "UNCOMMITTED";
@@ -2594,7 +2630,7 @@ export interface DecisionProposalProjection {
   as_of: string;
   asset_view: Record<string, unknown>;
   trade_view: Record<string, unknown>;
-  portfolio_view: Record<string, unknown>;
+  portfolio_view: DecisionProposalPortfolioView;
   view_provenance: Record<string, { view_origin?: string; provenance_refs?: string[] } | unknown>;
   next_best_action: string;
   action_envelope: Record<string, unknown>;

@@ -9,6 +9,7 @@ import {
   buildCandidateValuationCase,
   candidateWorkspaceHref,
   deriveCandidatePosition,
+  presentPortfolioCapitalContext,
   selectCandidateCampaigns,
   summarizeCandidateEvidence,
 } from "../src/lib/candidateCampaign.ts";
@@ -147,4 +148,93 @@ test("PRE-ENTRY builders require complete scenarios and invalidation below entry
     execution_style: "SCALE_IN",
   });
   assert.equal(buildCandidateTradeTerms({ entryLow: "1250", entryHigh: "1300", invalidationPrice: "1260", executionStyle: "" }), null);
+});
+
+function capitalContext(
+  capitalState: "AVAILABLE" | "CONSTRAINED" | "UNKNOWN",
+  fitState: "SUPPORTIVE" | "CONSTRAINED" | "UNKNOWN",
+  replacementState: "NOT_REQUIRED" | "WORTH_REVIEW" | "NOT_PROVEN" | "UNKNOWN",
+) {
+  return {
+    view: "PORTFOLIO",
+    portfolio_capital_context: {
+      schema_version: "portfolio_capital_context.v0.1",
+      capital_availability: { state: capitalState, confirmed_cash: 125000, reason_codes: [`CAPITAL_${capitalState}`] },
+      portfolio_fit: { state: fitState, existing_position_count: 3, reason_codes: [`FIT_${fitState}`] },
+      replacement_review: {
+        state: replacementState,
+        reason_codes: [`REPLACEMENT_${replacementState}`],
+        candidates: replacementState === "WORTH_REVIEW" ? [{
+          security_code: "000001",
+          campaign_id: "campaign_incumbent",
+          strategy: "SWING",
+          reason_codes: ["INCUMBENT_REVIEW_WORTHY"],
+        }] : [],
+      },
+      position_sizing_status: capitalState === "AVAILABLE" ? "AVAILABLE" : capitalState,
+      authority_refs: ["portfolio_capital:fixture"],
+    },
+  };
+}
+
+test("portfolio capital presenter preserves the frozen CAP1 states and final actions", () => {
+  const cases = [
+    ["AVAILABLE", "SUPPORTIVE", "NOT_REQUIRED"],
+    ["CONSTRAINED", "CONSTRAINED", "WORTH_REVIEW"],
+    ["CONSTRAINED", "CONSTRAINED", "NOT_PROVEN"],
+  ] as const;
+  for (const [capital, fit, replacement] of cases) {
+    const view = presentPortfolioCapitalContext(capitalContext(capital, fit, replacement), {
+      allowed_actions: ["WAIT", "RESEARCH MORE"],
+    });
+    assert.equal(view.valid, true);
+    assert.equal(view.capitalAvailability.state, capital);
+    assert.equal(view.portfolioFit.state, fit);
+    assert.equal(view.replacementReview.state, replacement);
+    assert.deepEqual(view.finalAllowedActions, ["WAIT", "RESEARCH MORE"]);
+  }
+});
+
+test("portfolio capital UNKNOWN never presents supplied zero as a known fact", () => {
+  const raw = capitalContext("UNKNOWN", "UNKNOWN", "UNKNOWN");
+  raw.portfolio_capital_context.capital_availability.confirmed_cash = 0;
+  raw.portfolio_capital_context.portfolio_fit.existing_position_count = 0;
+  raw.portfolio_capital_context.replacement_review.candidates = [{
+    security_code: "000001",
+    campaign_id: "campaign_incumbent",
+    strategy: "SWING",
+    reason_codes: ["SHOULD_NOT_RENDER_WITH_UNKNOWN_STATE"],
+  }];
+  const view = presentPortfolioCapitalContext(raw, { allowed_actions: ["RESEARCH MORE"] });
+  assert.equal(view.capitalAvailability.state, "UNKNOWN");
+  assert.equal(view.capitalAvailability.confirmedCash, null);
+  assert.equal(view.portfolioFit.state, "UNKNOWN");
+  assert.equal(view.portfolioFit.existingPositionCount, null);
+  assert.equal(view.replacementReview.state, "UNKNOWN");
+  assert.deepEqual(view.replacementReview.candidates, []);
+  assert.deepEqual(view.finalAllowedActions, ["RESEARCH MORE"]);
+});
+
+test("portfolio capital malformed authority fails closed without discarding a valid final envelope", () => {
+  const raw = capitalContext("AVAILABLE", "SUPPORTIVE", "NOT_REQUIRED");
+  raw.portfolio_capital_context.replacement_review.candidates = [{
+    security_code: "bad-code",
+    campaign_id: "campaign_incumbent",
+    strategy: "SWING",
+    reason_codes: [],
+  }];
+  const view = presentPortfolioCapitalContext(raw, { allowed_actions: ["WAIT"] });
+  assert.equal(view.valid, false);
+  assert.equal(view.capitalAvailability.state, "UNKNOWN");
+  assert.equal(view.portfolioFit.state, "UNKNOWN");
+  assert.equal(view.replacementReview.state, "UNKNOWN");
+  assert.equal(view.capitalAvailability.confirmedCash, null);
+  assert.deepEqual(view.finalAllowedActions, ["WAIT"]);
+  const missing = presentPortfolioCapitalContext({}, {});
+  assert.equal(missing.valid, false);
+  assert.equal(missing.capitalAvailability.state, "UNKNOWN");
+  assert.equal(missing.portfolioFit.state, "UNKNOWN");
+  assert.equal(missing.replacementReview.state, "UNKNOWN");
+  assert.equal(missing.capitalAvailability.confirmedCash, null);
+  assert.equal(missing.finalAllowedActions, null);
 });

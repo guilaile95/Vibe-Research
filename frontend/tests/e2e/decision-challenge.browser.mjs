@@ -212,9 +212,12 @@ async function run() {
       VIBE_RESEARCH_DECISION_CHALLENGE_DB: join(tempDataDir, "decision_challenges.sqlite3"),
       PYTHONUNBUFFERED: "1",
     };
-    backendProc = spawn(py.cmd, [...py.args, "app:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
+    backendProc = spawn(py.cmd, [...py.args, "decision_challenge_backend_harness:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
       cwd: backendDir,
-      env,
+      env: {
+        ...env,
+        PYTHONPATH: [__dirname, backendDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     backendProc.stdout.on("data", (chunk) => { backendLog += chunk.toString(); });
