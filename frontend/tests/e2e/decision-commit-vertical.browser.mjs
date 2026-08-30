@@ -229,8 +229,9 @@ async function run() {
       // P1-SB1 Origin gate：page.route 转发保留 frontend Origin，
       // 与 decision-challenge.browser.mjs 相同，显式加入白名单。
       VR_ALLOW_ORIGINS: frontend,
+      PYTHONPATH: [__dirname, backendDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
     };
-    backendProc = spawn(py.cmd, [...py.args, "app:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
+    backendProc = spawn(py.cmd, [...py.args, "decision_challenge_backend_harness:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
       cwd: backendDir,
       env,
       stdio: ["ignore", "pipe", "pipe"],

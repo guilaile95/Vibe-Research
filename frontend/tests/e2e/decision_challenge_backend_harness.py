@@ -1,4 +1,4 @@
-"""DCH1 E2E app: keep the first real Critical Data projection stable per preview."""
+"""Decision Proposal E2E app: freeze the first real Critical Data projection."""
 
 from __future__ import annotations
 
