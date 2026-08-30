@@ -201,6 +201,7 @@ async function run() {
     assert.equal(reality.cash.reconciliation, "MATCH");
     assert.equal(reality.canonical, false);
     assert.ok(reality.canonical_reason_codes.includes("ACCOUNT_COVERAGE_INCOMPLETE"));
+    const livePortfolio = await jsonRequest(backend, "/api/portfolio");
 
     staticServer = await startStaticServer(frontendDist, frontendPort);
     const launchOptions = { headless: true };
@@ -239,6 +240,16 @@ async function run() {
 
     await page.goto(`${frontend}/portfolio`, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: /生成持仓操作建议/ }).waitFor({ timeout: 30000 });
+
+    // ---- PEX1. 不生成 AI 建议也能读取 Security Exposure ------------------
+    await page.getByTestId("security-exposure-card").waitFor();
+    await page.getByTestId("security-exposure-account-basis").getByText("MANUAL_CONFIRMED_TOTAL_ASSETS").waitFor();
+    assert.equal((await page.getByTestId("security-exposure-quote-basis").innerText()).trim(), "QUOTE_COVERAGE_COMPLETE");
+    assert.equal((await page.getByTestId("security-exposure-account-basis").innerText()).trim(), "MANUAL_CONFIRMED_TOTAL_ASSETS");
+    assert.equal((await page.getByTestId("security-exposure-stock-account-pct").innerText()).trim(), "18.03%");
+    assert.equal((await page.getByTestId("security-exposure-cash-account-pct").innerText()).trim(), "81.97%");
+    assert.equal((await page.getByTestId("security-exposure-stock-600519").innerText()).trim(), "54.55%");
+    assert.equal((await page.getByTestId("security-exposure-account-600519").innerText()).trim(), "9.84%");
 
     // ---- A. 成功路径：点击生成 → 渲染 Advice -----------------------------
     await page.route("**/api/portfolio/advice", async (route) => {
@@ -349,7 +360,62 @@ async function run() {
     assert.ok(!staleAddText.includes("建议买入数量"));
     assert.ok(!staleAddText.includes("预计所需金额"));
 
-    console.log("[E2E] Portfolio Advice error observability + Account/confirmation gate vertical passed");
+    // ---- PEX1 fail closed：行情覆盖不完整 + Account fact stale ------------
+    await page.route("**/api/portfolio", async (route) => {
+      const holdings = livePortfolio.holdings.map((holding) =>
+        holding.code === "000001"
+          ? { ...holding, price: null, market_value: null, pnl: null, pnl_pct: null, data_status: "unavailable" }
+          : holding,
+      );
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            ...livePortfolio,
+            holdings,
+            totals: { ...livePortfolio.totals, market_value: null, pnl: null, pnl_pct: null },
+            data_status: "partial",
+            quote_coverage: { valid_holdings: 1, total_holdings: 2, complete: false },
+          },
+        }),
+      });
+    });
+    const mismatchedReality = canonicalReality("confirmation-b");
+    mismatchedReality.canonical = false;
+    mismatchedReality.canonical_reason_codes = ["ACCOUNT_CONFIRMATION_IDENTITY_MISMATCH"];
+    mismatchedReality.cash.current_fact.authority_state = "CANONICAL";
+    mismatchedReality.account_total_assets.current_fact.authority_state = "CANONICAL";
+    mismatchedReality.account_total_assets.current_fact.confirmation_id = "confirmation-c";
+    let accountRealityOverride = mismatchedReality;
+    await page.route("**/api/account/reality", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: accountRealityOverride }),
+      });
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByTestId("security-exposure-account-basis").getByText("MANUAL_CONFIRMED_TOTAL_ASSETS").waitFor();
+    assert.equal((await page.getByTestId("security-exposure-quote-basis").innerText()).trim(), "QUOTE_COVERAGE_PARTIAL");
+    assert.equal((await page.getByTestId("security-exposure-account-600519").innerText()).trim(), "9.84%");
+    assert.equal((await page.getByTestId("security-exposure-cash-account-pct").innerText()).trim(), "—");
+
+    const staleReality = canonicalReality("confirmation-b");
+    staleReality.canonical = false;
+    staleReality.canonical_reason_codes = ["ACCOUNT_FACT_STALE"];
+    staleReality.cash.current_fact.authority_state = "STALE";
+    staleReality.account_total_assets.current_fact.authority_state = "STALE";
+    accountRealityOverride = staleReality;
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator('[data-testid="account-authority-status"][data-authority-state="STALE"]').waitFor();
+    assert.equal((await page.getByTestId("security-exposure-account-basis").innerText()).trim(), "ACCOUNT_BASIS_UNKNOWN");
+    assert.equal((await page.getByTestId("security-exposure-stock-account-pct").innerText()).trim(), "—");
+    assert.equal((await page.getByTestId("security-exposure-cash-account-pct").innerText()).trim(), "—");
+    assert.equal((await page.getByTestId("security-exposure-stock-600519").innerText()).trim(), "—");
+    assert.equal((await page.getByTestId("security-exposure-account-600519").innerText()).trim(), "—");
+
+    console.log("[E2E] Portfolio Advice + Account/confirmation gate + read-only Security Exposure vertical passed");
   } catch (error) {
     console.error(error);
     throw error;
