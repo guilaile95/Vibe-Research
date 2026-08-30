@@ -25,6 +25,7 @@ import market
 import native_intel_service
 import native_intel_store
 import research_data_plane as rdp
+from trade_calendar import OBSERVATION_AUTHORITY_REF, observation_trade_date_at
 
 SCHEMA_VERSION = "full-market-discovery.v0.1"
 STRATEGIES = ("SHORT", "SWING", "MEDIUM")
@@ -37,6 +38,7 @@ QUALIFICATION_TIMEOUT_SECONDS = 45.0
 CATALYST_WINDOW_DAYS = 30
 EARLY_LISTING_CALENDAR_DAYS = 90
 CACHE_TTL_SECONDS = 10 * 60
+FINANCIAL_FRESHNESS_REASON = "REPORT_PERIOD_APPLICABILITY_NOT_RESOLVED"
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _CACHE_LOCK = threading.Lock()
@@ -70,11 +72,11 @@ def _iso_now(now: datetime | None = None) -> str:
     return instant.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _as_of(now: datetime | None = None) -> str:
+def _beijing_date(now: datetime | None = None) -> date:
     instant = now or datetime.now(timezone.utc)
     if instant.tzinfo is None:
         instant = instant.replace(tzinfo=timezone.utc)
-    return instant.astimezone(_BEIJING).date().isoformat()
+    return instant.astimezone(_BEIJING).date()
 
 
 def _core_board(code: str) -> str | None:
@@ -194,28 +196,52 @@ def _dataset(
     }
 
 
-def _full_market_rows(providers: DiscoveryProviders, fetched_at: str) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, Any]]:
+def _full_market_rows(
+    providers: DiscoveryProviders,
+    fetched_at: str,
+    market_as_of: str | None,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, Any]]:
     try:
         envelope = providers.full_market()
         status = str(envelope.get("status") or "unavailable")
         if status != "normal":
             raise rdp.ResearchDataPlaneUnavailableError("RDP full-market is unavailable")
         rows: dict[str, dict[str, Any]] = {}
-        target_date = str(envelope.get("as_of") or "")
+        temporal_reasons: set[str] = set()
         for raw in envelope.get("rows") or []:
             if not isinstance(raw, dict) or not str(raw.get("code") or "").isdigit():
                 continue
             row = dict(raw)
-            row["_discovery_stale"] = bool(target_date and str(row.get("latest_date") or "") != target_date)
+            latest_date = str(row.get("latest_date") or "")
+            temporal_reason: str | None = None
+            try:
+                if latest_date:
+                    date.fromisoformat(latest_date)
+            except ValueError:
+                latest_date = ""
+            if market_as_of is None:
+                temporal_reason = "MARKET_TRADE_DATE_UNKNOWN"
+            elif not latest_date:
+                temporal_reason = "RDP_LATEST_DATE_UNKNOWN"
+            elif latest_date < market_as_of:
+                temporal_reason = "RDP_LATEST_DATE_BEHIND_MARKET"
+            elif latest_date > market_as_of:
+                temporal_reason = "RDP_LATEST_DATE_AFTER_MARKET"
+            row["_discovery_stale"] = temporal_reason == "RDP_LATEST_DATE_BEHIND_MARKET"
+            row["_discovery_temporal_reason"] = temporal_reason
+            if temporal_reason:
+                temporal_reasons.add(temporal_reason)
             rows[str(row["code"])] = row
         provenance = envelope.get("provenance") or {}
         ref = provenance.get("artifact_sha256") or provenance.get("source_name") or "local-rdp"
+        dataset_status = "partial" if temporal_reasons else "normal"
         dataset = _dataset(
             "research_data_plane.full_market",
-            "normal",
+            dataset_status,
             as_of=envelope.get("as_of"),
             fetched_at=str(envelope.get("fetched_at") or fetched_at),
             provenance_refs=[f"research-data-plane:{ref}"],
+            reason_code=sorted(temporal_reasons)[0] if temporal_reasons else None,
         )
         return envelope, rows, dataset
     except Exception:  # provider boundary: degrade to UNKNOWN instead of failing the whole scan
@@ -285,6 +311,14 @@ def _cheap_strategy(
     elif amount is None:
         missing.append("AMOUNT_UNKNOWN")
 
+    history_temporal_reason = (history or {}).get("_discovery_temporal_reason")
+    history_temporal_unusable = isinstance(history_temporal_reason, str) and bool(history_temporal_reason)
+    history_stale = bool((history or {}).get("_discovery_stale"))
+    if history_temporal_unusable:
+        if history_stale:
+            missing.append("HISTORICAL_ROW_STALE")
+        missing.append(history_temporal_reason)
+
     if strategy == "SHORT":
         if history is None:
             missing.append("HISTORICAL_MARKET_CONTEXT_UNKNOWN")
@@ -301,15 +335,12 @@ def _cheap_strategy(
         return {"passed": passed, "status": "NORMAL" if not missing else "PARTIAL", "reason_codes": reasons, "missing": missing, "observations": observations}
 
     metric = "return_20d" if strategy == "SWING" else "return_60d"
-    history_stale = bool((history or {}).get("_discovery_stale"))
     metric_status = str((history or {}).get(f"{metric}_status") or "")
-    momentum = _finite((history or {}).get(metric)) if metric_status == "normal" and not history_stale else None
+    momentum = _finite((history or {}).get(metric)) if metric_status == "normal" and not history_temporal_unusable else None
     history_available = momentum is not None
     if history_available and momentum > 0:
         observe(f"POSITIVE_{metric.upper()}", f"{metric.removeprefix('return_').upper()} 日收益为正", momentum, f"research-data-plane:{metric}")
-    elif history_stale:
-        missing.append("HISTORICAL_ROW_STALE")
-    elif not history_available:
+    elif not history_temporal_unusable:
         missing.append(f"{metric.upper()}_UNKNOWN")
 
     sector_supportive = bool(sector and sector.get("status") == "SUPPORTIVE")
@@ -356,16 +387,32 @@ def _qualification_codes(candidates: dict[str, list[dict[str, Any]]]) -> list[st
 
 def _fundamental_result(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict) or not payload:
-        return {"status": "UNKNOWN", "clue": None, "source_ref": "astock.financials"}
+        return {
+            "status": "UNKNOWN",
+            "temporal_state": "UNKNOWN",
+            "clue": None,
+            "reason_codes": ["FINANCIAL_PAYLOAD_EMPTY"],
+            "source_ref": "astock.financials",
+        }
     available = any(payload.get(key) is not None for key in ("revenue", "net_profit", "operating_cash_flow", "roe"))
     quality = payload.get("data_quality") if isinstance(payload.get("data_quality"), dict) else {}
-    status = "AVAILABLE" if available and quality.get("status") != "partial" else "PARTIAL" if available else "UNKNOWN"
+    quality_status = str(quality.get("status") or "unknown").lower()
+    status = "ERROR" if quality_status == "error" else "PARTIAL" if available else "UNKNOWN"
+    reason_codes = [FINANCIAL_FRESHNESS_REASON] if available else ["FINANCIAL_FACTS_MISSING"]
+    if available and quality_status != "normal":
+        reason_codes.append("FINANCIAL_DATA_QUALITY_NOT_NORMAL")
     clue = {
         key: payload.get(key)
         for key in ("period", "revenue_yoy", "net_profit_yoy", "operating_cash_flow", "roe")
         if payload.get(key) is not None
     } or None
-    return {"status": status, "clue": clue, "source_ref": "astock.financials"}
+    return {
+        "status": status,
+        "temporal_state": "UNKNOWN",
+        "clue": clue,
+        "reason_codes": reason_codes,
+        "source_ref": "astock.financials",
+    }
 
 
 def _announcement_date(row: dict[str, Any]) -> date | None:
@@ -500,7 +547,7 @@ def _evidence_gate(
     catalyst_available = announcements == "AVAILABLE" or intel_mentions > 0
     if fundamental == "ERROR" and announcements == "ERROR" and intel_mentions == 0:
         return "ERROR"
-    if restricted["status"] == "RESTRICTED" and not (fundamental == "AVAILABLE" and catalyst_available):
+    if restricted["status"] == "RESTRICTED" and not (fundamental in {"AVAILABLE", "PARTIAL"} and catalyst_available):
         return "INSUFFICIENT"
     if fundamental == "AVAILABLE" and catalyst_available and sector and sector.get("status") != "UNKNOWN" and cheap["status"] == "NORMAL":
         return "SUFFICIENT_FOR_RESEARCH"
@@ -536,7 +583,7 @@ def _opportunity_item(
     sector: dict[str, Any] | None,
     themes: list[str],
     *,
-    as_of: str,
+    as_of: str | None,
     fetched_at: str,
 ) -> tuple[dict[str, Any], str]:
     restricted = base["restricted"]
@@ -555,6 +602,8 @@ def _opportunity_item(
         uncertainties.append("LISTING_AGE_NOT_EVALUATED")
     if qualification["fundamental"]["status"] in {"UNKNOWN", "ERROR"}:
         uncertainties.append("FUNDAMENTAL_FACTS_UNKNOWN")
+    elif qualification["fundamental"]["status"] == "PARTIAL":
+        uncertainties.append("FUNDAMENTAL_FRESHNESS_UNKNOWN")
     if catalyst_status != "AVAILABLE":
         uncertainties.append("CATALYST_EVIDENCE_UNKNOWN")
     if (qualification.get("native_intel") or {}).get("mapping_status") != "MAPPED":
@@ -562,6 +611,7 @@ def _opportunity_item(
 
     reason_codes = list(dict.fromkeys([
         *cheap["reason_codes"],
+        *qualification["fundamental"].get("reason_codes", []),
         f"DISCOVERY_EVIDENCE_{gate}",
         *(restricted["reason_codes"] if restricted["status"] == "RESTRICTED" else []),
     ]))
@@ -576,7 +626,7 @@ def _opportunity_item(
     if qualification["fundamental"].get("clue"):
         supporting.append({
             "code": "FUNDAMENTAL_FACT_AVAILABLE",
-            "label": "近期财务事实可用于继续研究",
+            "label": "财务事实存在；报告期 freshness 仍按时间 authority 评估",
             "value": qualification["fundamental"]["clue"],
             "source_ref": qualification["fundamental"]["source_ref"],
         })
@@ -621,20 +671,20 @@ def run_discovery(
     providers: DiscoveryProviders = DEFAULT_PROVIDERS,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    fetched_at = _iso_now(now)
-    fallback_as_of = _as_of(now)
+    refresh_attempted_at = _iso_now(now)
     try:
         snapshot = providers.market_snapshot()
     except Exception:
         return {
             "schema_version": SCHEMA_VERSION,
             "status": "unavailable",
-            "as_of": fallback_as_of,
-            "fetched_at": fetched_at,
+            "as_of": None,
+            "fetched_at": refresh_attempted_at,
             "last_successful_at": None,
+            "refresh_attempted_at": refresh_attempted_at,
             "market_context": {"status": "unavailable", "core_universe_count": 0, "sector_count": 0},
             "funnel": {"core_universe": 0, "cheap_scan_passed": 0, "qualification_candidates": 0, "queue_items": {strategy: 0 for strategy in STRATEGIES}, "excluded": 0},
-            "datasets": [_dataset("market.a_share_snapshot", "unavailable", as_of=fallback_as_of, fetched_at=fetched_at, provenance_refs=[], reason_code="UPSTREAM_UNAVAILABLE")],
+            "datasets": [_dataset("market.a_share_snapshot", "unavailable", as_of=None, fetched_at=refresh_attempted_at, provenance_refs=[], reason_code="UPSTREAM_UNAVAILABLE")],
             "queues": {strategy: [] for strategy in STRATEGIES},
             "excluded": [],
             "limitations": ["全 A 股批量快照不可用；Discovery 不回退为逐股抓取。"],
@@ -644,17 +694,22 @@ def run_discovery(
         return {
             "schema_version": SCHEMA_VERSION,
             "status": "unavailable",
-            "as_of": fallback_as_of,
-            "fetched_at": fetched_at,
+            "as_of": None,
+            "fetched_at": refresh_attempted_at,
             "last_successful_at": None,
+            "refresh_attempted_at": refresh_attempted_at,
             "market_context": {"status": "unavailable", "core_universe_count": 0, "sector_count": 0},
             "funnel": {"core_universe": 0, "cheap_scan_passed": 0, "qualification_candidates": 0, "queue_items": {strategy: 0 for strategy in STRATEGIES}, "excluded": 0},
-            "datasets": [_dataset("market.a_share_snapshot", "unavailable", as_of=fallback_as_of, fetched_at=fetched_at, provenance_refs=[], reason_code="EMPTY_SNAPSHOT")],
+            "datasets": [_dataset("market.a_share_snapshot", "unavailable", as_of=None, fetched_at=refresh_attempted_at, provenance_refs=[], reason_code="EMPTY_SNAPSHOT")],
             "queues": {strategy: [] for strategy in STRATEGIES},
             "excluded": [],
             "limitations": ["全 A 股批量快照为空；Discovery 不回退为逐股抓取。"],
             "cache": {"hit": False, "age_seconds": 0},
         }
+
+    fetched_at = _iso_now(now) if now is not None else _iso_now()
+    evaluation_date = _beijing_date(now)
+    market_as_of = observation_trade_date_at(fetched_at)
 
     core_rows: list[dict[str, Any]] = []
     outside_core: list[dict[str, Any]] = []
@@ -673,27 +728,27 @@ def run_discovery(
             "code": code,
             "name": name,
             "board": board,
-            "restricted": _restricted(raw, date.fromisoformat(fallback_as_of)),
+            "restricted": _restricted(raw, evaluation_date),
         })
     core_rows.sort(key=lambda row: row["code"])
     if not core_rows:
         return {
             "schema_version": SCHEMA_VERSION,
             "status": "unavailable",
-            "as_of": fallback_as_of,
+            "as_of": market_as_of,
             "fetched_at": fetched_at,
             "last_successful_at": None,
+            "refresh_attempted_at": refresh_attempted_at,
             "market_context": {"status": "unavailable", "core_universe_count": 0, "sector_count": 0},
             "funnel": {"core_universe": 0, "cheap_scan_passed": 0, "qualification_candidates": 0, "queue_items": {strategy: 0 for strategy in STRATEGIES}, "excluded": len(outside_core)},
-            "datasets": [_dataset("market.a_share_snapshot", "partial", as_of=fallback_as_of, fetched_at=fetched_at, provenance_refs=["market:a-share-snapshot"], reason_code="NO_CORE_ROWS")],
+            "datasets": [_dataset("market.a_share_snapshot", "partial", as_of=market_as_of, fetched_at=fetched_at, provenance_refs=["market:a-share-snapshot", OBSERVATION_AUTHORITY_REF], reason_code="NO_CORE_ROWS")],
             "queues": {strategy: [] for strategy in STRATEGIES},
             "excluded": outside_core[:EXCLUDED_LIMIT],
             "limitations": ["批量快照没有可识别的沪深主板、创业板或科创板股票。"],
             "cache": {"hit": False, "age_seconds": 0},
         }
 
-    rdp_envelope, histories, rdp_dataset = _full_market_rows(providers, fetched_at)
-    effective_as_of = fallback_as_of
+    rdp_envelope, histories, rdp_dataset = _full_market_rows(providers, fetched_at, market_as_of)
     sectors, market_average = _sector_context(core_rows)
     amounts = [value for row in core_rows if (value := _finite(row.get("amount"), positive=True)) is not None]
     turnovers = [value for row in core_rows if (value := _finite(row.get("turnover_pct"))) is not None]
@@ -716,15 +771,6 @@ def run_discovery(
             "restricted": row["restricted"],
         }
         history = histories.get(code)
-        if history and history.get("_discovery_stale"):
-            base["restricted"] = {
-                **base["restricted"],
-                "status": "RESTRICTED",
-                "reason_codes": list(dict.fromkeys([
-                    *base["restricted"]["reason_codes"],
-                    "RDP_LATEST_DATE_BEHIND_MARKET",
-                ])),
-            }
         base_by_code[code] = base
         for strategy in STRATEGIES:
             cheap = _cheap_strategy(
@@ -735,6 +781,12 @@ def run_discovery(
                 amount_median=amount_median,
                 turnover_upper=turnover_upper,
             )
+            if market_as_of is None:
+                cheap["status"] = "PARTIAL"
+                cheap["missing"] = list(dict.fromkeys([
+                    *cheap["missing"],
+                    "MARKET_TRADE_DATE_UNKNOWN",
+                ]))
             cheap_by_code_strategy[(code, strategy)] = cheap
             if cheap["passed"]:
                 candidates[strategy].append(base)
@@ -748,14 +800,14 @@ def run_discovery(
                     "reason_codes": cheap["missing"] or ["CHEAP_SCAN_NOT_QUALIFIED"],
                     "data_health": "unknown" if cheap["missing"] else "normal",
                     "restricted_universe": row["restricted"],
-                    "as_of": effective_as_of,
+                    "as_of": market_as_of,
                 })
 
     qualification_codes = _qualification_codes(candidates)
     qualifications, intel_summary, provider_summary = _qualify(
         qualification_codes,
         providers,
-        as_of=date.fromisoformat(effective_as_of),
+        as_of=evaluation_date,
     )
     themes_by_code: dict[str, list[str]] = {}
     for code, terms in intel_summary["terms_by_code"].items():
@@ -779,7 +831,7 @@ def run_discovery(
                 qualifications[code],
                 sectors.get(base.get("sector")) if base.get("sector") else None,
                 themes_by_code.get(code, []),
-                as_of=effective_as_of,
+                as_of=market_as_of,
                 fetched_at=fetched_at,
             )
             if gate in {"INSUFFICIENT", "ERROR"}:
@@ -796,33 +848,47 @@ def run_discovery(
     excluded = excluded[:EXCLUDED_LIMIT]
     market_dataset = _dataset(
         "market.a_share_snapshot",
-        "normal",
-        as_of=fallback_as_of,
+        "normal" if market_as_of is not None else "partial",
+        as_of=market_as_of,
         fetched_at=fetched_at,
-        provenance_refs=["market:a-share-snapshot:eastmoney-clist"],
+        provenance_refs=["market:a-share-snapshot:eastmoney-clist", OBSERVATION_AUTHORITY_REF],
+        reason_code=None if market_as_of is not None else "MARKET_TRADE_DATE_UNKNOWN",
     )
     intel_dataset = _dataset(
         "native_intel.security_mentions",
         intel_summary["status"],
-        as_of=effective_as_of,
+        as_of=evaluation_date.isoformat(),
         fetched_at=fetched_at,
         provenance_refs=[native_intel_service.AUTHORITY_REF] if intel_summary["status"] in {"normal", "partial", "stale"} else [],
         reason_code=intel_summary["reason_code"],
     )
-    stage3_status = "normal"
-    if provider_summary["timed_out"]:
-        stage3_status = "partial"
-    if any(
-        value.get(domain, {}).get("status") == "ERROR"
+    financial_partial = bool(provider_summary["timed_out"]) or any(
+        value.get("fundamental", {}).get("status") != "AVAILABLE"
         for value in qualifications.values()
-        for domain in ("fundamental", "announcements")
-    ):
-        stage3_status = "partial"
+    )
+    announcements_partial = bool(provider_summary["timed_out"]) or any(
+        value.get("announcements", {}).get("status") == "ERROR"
+        for value in qualifications.values()
+    )
     datasets = [
         market_dataset,
         rdp_dataset,
-        _dataset("financials.snapshot", stage3_status, as_of=effective_as_of, fetched_at=fetched_at, provenance_refs=["astock.financials"]),
-        _dataset("announcements.recent", stage3_status, as_of=effective_as_of, fetched_at=fetched_at, provenance_refs=["astock.announcements"]),
+        _dataset(
+            "financials.snapshot",
+            "partial" if financial_partial else "normal",
+            as_of=None,
+            fetched_at=fetched_at,
+            provenance_refs=["astock.financials"],
+            reason_code=FINANCIAL_FRESHNESS_REASON if financial_partial else None,
+        ),
+        _dataset(
+            "announcements.recent",
+            "partial" if announcements_partial else "normal",
+            as_of=evaluation_date.isoformat(),
+            fetched_at=fetched_at,
+            provenance_refs=["astock.announcements"],
+            reason_code="PROVIDER_PARTIAL" if announcements_partial else None,
+        ),
         intel_dataset,
     ]
     overall = "normal" if all(item["status"] == "normal" for item in datasets) else "partial"
@@ -832,17 +898,22 @@ def run_discovery(
         "Theme 仅复用已有 Native Intel 实体映射；没有映射时保持 UNKNOWN。",
     ]
     if rdp_dataset["status"] != "normal":
-        limitations.append("RDP 历史横截面不可用；SWING/MEDIUM 仅使用当前批量快照与行业上下文，优先级不会升级为 HIGH。")
-    if stage3_status != "normal":
-        limitations.append("部分财务或公告资格检查失败/超时；对应股票保持 PARTIAL、UNKNOWN 或 ERROR。")
+        limitations.append("RDP 历史上下文为 PARTIAL/UNKNOWN；它会收窄 Data Health、Evidence Gate 与优先级，但不会把股票本身标记为 Restricted。")
+    if market_as_of is None:
+        limitations.append("行情交易日无法由权威市场观察时间证明；行情 as_of 保持 UNKNOWN，优先级不会升级为 HIGH。")
+    if financial_partial:
+        limitations.append("财务报告期 applicability/freshness 尚未被现有 authority 证明；财务线索保持 PARTIAL，不贡献 fully-current HIGH 优先级。")
+    if announcements_partial:
+        limitations.append("部分公告资格检查失败/超时；对应股票保持 PARTIAL、UNKNOWN 或 ERROR。")
     return {
         "schema_version": SCHEMA_VERSION,
         "status": overall,
-        "as_of": effective_as_of,
+        "as_of": market_as_of,
         "fetched_at": fetched_at,
         "last_successful_at": fetched_at,
+        "refresh_attempted_at": refresh_attempted_at,
         "market_context": {
-            "status": "normal",
+            "status": "normal" if market_as_of is not None else "partial",
             "core_universe_count": len(core_rows),
             "outside_core_count": len(outside_core),
             "sector_count": len(sectors),
@@ -850,6 +921,7 @@ def run_discovery(
             "amount_median": amount_median,
             "turnover_active_threshold": turnover_upper,
             "source_ref": "market:a-share-snapshot:eastmoney-clist",
+            "temporal_authority_ref": OBSERVATION_AUTHORITY_REF,
         },
         "funnel": {
             "core_universe": len(core_rows),
@@ -893,7 +965,7 @@ def get_discovery(*, force_refresh: bool = False) -> dict[str, Any]:
         return result
     if previous is not None:
         previous["status"] = "stale"
-        previous["fetched_at"] = result["fetched_at"]
+        previous["refresh_attempted_at"] = result.get("refresh_attempted_at") or result["fetched_at"]
         previous["limitations"] = [*previous.get("limitations", []), "本次刷新失败；当前展示最后一次成功结果。"]
         previous["cache"] = {"hit": True, "age_seconds": None, "refresh_failed": True}
         return previous

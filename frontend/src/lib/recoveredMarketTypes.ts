@@ -241,7 +241,7 @@ export type DiscoveryOpportunityItem = {
   evidence_gate: DiscoveryEvidenceGate;
   restricted_universe: DiscoveryRestrictedStatus;
   discovered_at: string;
-  as_of: string;
+  as_of: string | null;
   provenance_refs: string[];
 };
 
@@ -252,7 +252,7 @@ export type DiscoveryExcludedItem = Partial<DiscoveryOpportunityItem> & {
   reason_codes: string[];
   data_health: string;
   restricted_universe?: DiscoveryRestrictedStatus;
-  as_of?: string;
+  as_of?: string | null;
 };
 
 export type DiscoveryDatasetStatus = {
@@ -267,9 +267,10 @@ export type DiscoveryDatasetStatus = {
 export type DiscoverySnapshot = {
   schema_version: string;
   status: "normal" | "partial" | "stale" | "unavailable" | "error";
-  as_of: string;
+  as_of: string | null;
   fetched_at: string;
   last_successful_at: string | null;
+  refresh_attempted_at: string | null;
   market_context: {
     status: string;
     core_universe_count: number;

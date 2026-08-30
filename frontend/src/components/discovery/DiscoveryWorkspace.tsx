@@ -6,7 +6,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import {
   discoverySectors,
-  displayDiscoveryTime,
+  discoveryTimeSummary,
   filterDiscoveryItems,
   statusLabel,
   type DiscoveryFilters,
@@ -100,7 +100,7 @@ function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
       ) : null}
 
       <div className="flex items-center justify-between border-t border-border/50 pt-3 text-xs text-muted-foreground">
-        <span>As of {item.as_of}</span>
+        <span>行情归属 {item.as_of ?? "未知"}</span>
         <Link
           to={candidateWorkspaceHref(item.security_code)}
           className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
@@ -181,7 +181,7 @@ export function DiscoveryWorkspace() {
               <h2 className="font-medium">全市场发现漏斗</h2>
               <Badge tone={snapshot.status}>{statusLabel(snapshot.status)}</Badge>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">As of {snapshot.as_of} · 更新于 {displayDiscoveryTime(snapshot.fetched_at)}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{discoveryTimeSummary(snapshot)}</p>
           </div>
           <button type="button" onClick={() => void load(true)} disabled={refreshing} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50" data-testid="refresh-discovery">
             {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}

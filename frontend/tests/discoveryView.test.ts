@@ -5,6 +5,7 @@ import test from "node:test";
 import { candidateWorkspaceHref } from "../src/lib/candidateCampaign.ts";
 import {
   discoverySectors,
+  discoveryTimeSummary,
   filterDiscoveryItems,
   type DiscoveryFilters,
 } from "../src/lib/discoveryView.ts";
@@ -40,7 +41,7 @@ function opportunity(
       listing_age_status: "KNOWN",
     },
     discovered_at: "2026-08-30T03:00:00Z",
-    as_of: "2026-08-29",
+    as_of: "2026-08-28",
     provenance_refs: ["eastmoney:spot"],
     ...overrides,
   };
@@ -64,9 +65,10 @@ const medium = opportunity("600004", "MEDIUM", { sector: "医药", themes: ["创
 const snapshot: DiscoverySnapshot = {
   schema_version: "full-market-discovery.v0.1",
   status: "partial",
-  as_of: "2026-08-29",
+  as_of: "2026-08-28",
   fetched_at: "2026-08-30T03:00:00Z",
   last_successful_at: null,
+  refresh_attempted_at: "2026-08-30T03:00:00Z",
   market_context: { status: "partial", core_universe_count: 4, sector_count: 3 },
   funnel: {
     core_universe: 4,
@@ -123,4 +125,18 @@ test("Discovery only links into Candidate Research and exposes no BUY or hidden 
   );
   assert.match(source, /candidateWorkspaceHref\(item\.security_code\)/);
   assert.doesNotMatch(source, /\/api\/campaigns|\b(?:score|ranking|BUY NOW|BUY SMALL|SCALE IN)\b/i);
+});
+
+test("Discovery stale summary preserves the last successful timestamp", () => {
+  assert.equal(
+    discoveryTimeSummary({
+      ...snapshot,
+      status: "stale",
+      fetched_at: "2026-08-30T02:00:00Z",
+      last_successful_at: "2026-08-30T02:00:00Z",
+      refresh_attempted_at: "2026-08-30T04:00:00Z",
+      cache: { hit: true, age_seconds: null, refresh_failed: true },
+    }),
+    "行情归属 2026-08-28 · 最后成功更新于 2026-08-30 10:00 · 刷新失败于 2026-08-30 12:00",
+  );
 });

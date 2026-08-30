@@ -56,3 +56,19 @@ export function displayDiscoveryTime(value: string | null | undefined): string {
     hour12: false,
   }).format(date).replace(/\//g, "-");
 }
+
+export function discoveryTimeSummary(
+  snapshot: Pick<DiscoverySnapshot, "as_of" | "status" | "fetched_at" | "last_successful_at" | "refresh_attempted_at" | "cache">,
+): string {
+  const marketDate = snapshot.as_of ?? "未知";
+  if (snapshot.status === "stale" || snapshot.cache.refresh_failed) {
+    const lastSuccessful = snapshot.last_successful_at
+      ? displayDiscoveryTime(snapshot.last_successful_at)
+      : "未知";
+    const failedAttempt = snapshot.refresh_attempted_at
+      ? ` · 刷新失败于 ${displayDiscoveryTime(snapshot.refresh_attempted_at)}`
+      : "";
+    return `行情归属 ${marketDate} · 最后成功更新于 ${lastSuccessful}${failedAttempt}`;
+  }
+  return `行情归属 ${marketDate} · 抓取于 ${displayDiscoveryTime(snapshot.fetched_at)}`;
+}

@@ -43,7 +43,7 @@ def _row(
 def _history(code: str, return_20d: float, return_60d: float) -> dict:
     return {
         "code": code,
-        "latest_date": "2026-08-29",
+        "latest_date": "2026-08-28",
         "return_20d": return_20d,
         "return_20d_status": "normal",
         "return_60d": return_60d,
@@ -125,8 +125,8 @@ def _providers(
         market_snapshot=lambda: rows,
         full_market=lambda: {
             "status": "normal",
-            "as_of": "2026-08-29",
-            "fetched_at": "2026-08-29T01:00:00Z",
+            "as_of": "2026-08-28",
+            "fetched_at": "2026-08-28T07:00:00Z",
             "rows": histories,
             "provenance": {"artifact_sha256": "fixture-hash"},
         },
@@ -154,7 +154,10 @@ def _assert_no_investment_output(value) -> None:
 def test_normal_discovery_separates_strategy_queues_and_explains_research_priority():
     result = discovery.run_discovery(providers=_providers(), now=NOW)
 
-    assert result["status"] == "normal"
+    assert result["status"] == "partial"
+    assert result["as_of"] == "2026-08-28"
+    assert result["as_of"] != "2026-08-30"
+    assert result["fetched_at"] == "2026-08-30T01:00:00Z"
     assert result["funnel"]["core_universe"] == 6
     assert {item["security_code"] for item in result["queues"]["SHORT"]} == {"600001"}
     assert {item["security_code"] for item in result["queues"]["SWING"]} == {"600002"}
@@ -163,7 +166,9 @@ def test_normal_discovery_separates_strategy_queues_and_explains_research_priori
         assert item["reason_codes"]
         assert item["supporting_observations"]
         assert item["provenance_refs"]
-        assert item["evidence_gate"] == "SUFFICIENT_FOR_RESEARCH"
+        assert item["evidence_gate"] == "PARTIAL"
+        assert item["research_priority"] != "HIGH"
+        assert item["as_of"] == "2026-08-28"
         assert item["discovery_state"] == "QUEUED"
     _assert_no_investment_output(result)
     assert "campaign" not in json.dumps(result, ensure_ascii=False).lower()
@@ -196,6 +201,28 @@ def test_partial_sources_keep_truthful_unknowns_and_do_not_create_fake_high_prio
         for item in [*_all_queue_items(result), *result["excluded"]]
     )
     assert result["queues"]["SHORT"], "a usable stock must survive a sibling provider failure"
+
+
+def test_market_snapshot_without_authoritative_trade_date_stays_partial(monkeypatch):
+    monkeypatch.setattr(discovery, "observation_trade_date_at", lambda _fetched_at: None)
+
+    result = discovery.run_discovery(providers=_providers(), now=NOW)
+
+    market_dataset = next(
+        item for item in result["datasets"]
+        if item["dataset_id"] == "market.a_share_snapshot"
+    )
+    assert result["status"] == "partial"
+    assert result["as_of"] is None
+    assert result["market_context"]["status"] == "partial"
+    assert market_dataset["status"] == "partial"
+    assert market_dataset["as_of"] is None
+    assert market_dataset["reason_code"] == "MARKET_TRADE_DATE_UNKNOWN"
+    assert _all_queue_items(result)
+    assert all(item["as_of"] is None for item in _all_queue_items(result))
+    assert all(item["research_priority"] != "HIGH" for item in _all_queue_items(result))
+    assert all("MARKET_TRADE_DATE_UNKNOWN" in item["uncertainties"] for item in _all_queue_items(result))
+    assert all("HISTORICAL_ROW_STALE" not in item["uncertainties"] for item in _all_queue_items(result))
 
 
 def test_restricted_universe_is_visible_but_uses_stricter_qualification():
@@ -277,25 +304,64 @@ def test_unmapped_intel_and_out_of_window_announcements_stay_unknown():
         assert all(observation["code"] != "CATALYST_CLUE_AVAILABLE" for observation in item["supporting_observations"])
 
 
-def test_stale_history_is_restricted_and_never_used_as_current_momentum():
+def test_stale_history_narrows_health_without_marking_security_restricted():
     histories = [
         {**_history("600001", 0.5, 0.5), "latest_date": "2026-08-01"},
         *[_history(code, 0.2, 0.2) for code in ("600002", "600003", "000001", "000002", "300001")],
     ]
 
     result = discovery.run_discovery(providers=_providers(histories=histories), now=NOW)
-    items = [
-        item for item in [*_all_queue_items(result), *result["excluded"]]
-        if item.get("security_code") == "600001"
-    ]
-
-    assert items
-    assert any("HISTORICAL_ROW_STALE" in item.get("uncertainties", item.get("reason_codes", [])) for item in items)
-    assert all(
-        "RDP_LATEST_DATE_BEHIND_MARKET" in item["restricted_universe"]["reason_codes"]
-        for item in items
-        if "restricted_universe" in item
+    item = next(
+        item for item in result["queues"]["SHORT"]
+        if item["security_code"] == "600001"
     )
+    rdp_dataset = next(
+        dataset for dataset in result["datasets"]
+        if dataset["dataset_id"] == "research_data_plane.full_market"
+    )
+
+    assert item["restricted_universe"]["status"] == "CLEAR"
+    assert "RDP_LATEST_DATE_BEHIND_MARKET" not in item["restricted_universe"]["reason_codes"]
+    assert "HISTORICAL_ROW_STALE" in item["uncertainties"]
+    assert "RDP_LATEST_DATE_BEHIND_MARKET" in item["uncertainties"]
+    assert item["data_health"] == "partial"
+    assert item["evidence_gate"] == "PARTIAL"
+    assert item["research_priority"] != "HIGH"
+    assert rdp_dataset["status"] == "partial"
+    assert rdp_dataset["reason_code"] == "RDP_LATEST_DATE_BEHIND_MARKET"
+
+
+def test_unproven_financial_period_cannot_contribute_fully_current_high_priority():
+    base = _providers()
+    providers = discovery.DiscoveryProviders(
+        market_snapshot=base.market_snapshot,
+        full_market=base.full_market,
+        financials=lambda _code: {
+            "period": "2022-12-31",
+            "revenue": 100,
+            "net_profit": 10,
+            "data_quality": {"status": "normal"},
+        },
+        announcements=base.announcements,
+        native_intel=base.native_intel,
+    )
+
+    result = discovery.run_discovery(providers=providers, now=NOW)
+    item = next(item for item in result["queues"]["SHORT"] if item["security_code"] == "600001")
+    financial_dataset = next(
+        dataset for dataset in result["datasets"]
+        if dataset["dataset_id"] == "financials.snapshot"
+    )
+
+    assert item["fundamental_status"] == "PARTIAL"
+    assert item["evidence_gate"] == "PARTIAL"
+    assert item["research_priority"] != "HIGH"
+    assert item["data_health"] == "partial"
+    assert "FUNDAMENTAL_FRESHNESS_UNKNOWN" in item["uncertainties"]
+    assert discovery.FINANCIAL_FRESHNESS_REASON in item["reason_codes"]
+    assert financial_dataset["status"] == "partial"
+    assert financial_dataset["as_of"] is None
+    assert financial_dataset["reason_code"] == discovery.FINANCIAL_FRESHNESS_REASON
 
 
 def test_unknown_listing_age_stays_unknown_and_cannot_receive_high_priority():
@@ -372,6 +438,7 @@ def test_cache_serves_latest_snapshot_and_failed_refresh_returns_stale(monkeypat
         **normal,
         "status": "unavailable",
         "fetched_at": "2026-08-30T04:00:00Z",
+        "refresh_attempted_at": "2026-08-30T04:00:00Z",
         "queues": {strategy: [] for strategy in discovery.STRATEGIES},
     }
     results = iter((normal, unavailable))
@@ -382,11 +449,15 @@ def test_cache_serves_latest_snapshot_and_failed_refresh_returns_stale(monkeypat
         cached = discovery.get_discovery()
         stale = discovery.get_discovery(force_refresh=True)
 
-        assert first["status"] == "normal"
+        assert first["status"] == "partial"
         assert cached["cache"]["hit"] is True
         assert stale["status"] == "stale"
         assert stale["cache"]["refresh_failed"] is True
         assert stale["queues"] == normal["queues"]
+        assert stale["fetched_at"] == normal["fetched_at"]
+        assert stale["last_successful_at"] == normal["last_successful_at"]
+        assert stale["refresh_attempted_at"] == unavailable["refresh_attempted_at"]
+        assert stale["fetched_at"] != unavailable["fetched_at"]
     finally:
         discovery.clear_cache()
 

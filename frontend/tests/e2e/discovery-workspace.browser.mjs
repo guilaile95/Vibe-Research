@@ -71,7 +71,7 @@ function opportunity(overrides) {
     evidence_gate: "SUFFICIENT_FOR_RESEARCH",
     restricted_universe: { status: "CLEAR", reason_codes: [], listing_age_status: "KNOWN" },
     discovered_at: "2026-08-30T02:00:00Z",
-    as_of: "2026-08-29",
+    as_of: "2026-08-28",
     provenance_refs: ["market:fixture", "rdp:fixture"],
     ...overrides,
   };
@@ -124,18 +124,21 @@ const unknown = opportunity({
   evidence_gate: "UNKNOWN",
 });
 
-function snapshot({ partial = false } = {}) {
+function snapshot({ partial = false, stale = false } = {}) {
+  const degraded = partial || stale;
+  const fetchedAt = degraded ? "2026-08-30T03:00:00Z" : "2026-08-30T02:00:00Z";
   return {
     schema_version: "full-market-discovery.v0.1",
-    status: partial ? "partial" : "normal",
-    as_of: "2026-08-29",
-    fetched_at: partial ? "2026-08-30T03:00:00Z" : "2026-08-30T02:00:00Z",
-    last_successful_at: "2026-08-30T02:00:00Z",
+    status: stale ? "stale" : partial ? "partial" : "normal",
+    as_of: "2026-08-28",
+    fetched_at: fetchedAt,
+    last_successful_at: fetchedAt,
+    refresh_attempted_at: stale ? "2026-08-30T04:00:00Z" : fetchedAt,
     market_context: {
-      status: partial ? "partial" : "normal",
+      status: degraded ? "partial" : "normal",
       core_universe_count: 5280,
       outside_core_count: 120,
-      sector_count: partial ? 2 : 4,
+      sector_count: degraded ? 2 : 4,
       market_average_change_pct: 0.38,
       amount_median: 180000000,
       turnover_active_threshold: 2.1,
@@ -145,18 +148,18 @@ function snapshot({ partial = false } = {}) {
       core_universe: 5280,
       cheap_scan_passed: 96,
       qualification_candidates: 24,
-      queue_items: { SHORT: 1, SWING: partial ? 3 : 2, MEDIUM: 1 },
+      queue_items: { SHORT: 1, SWING: degraded ? 3 : 2, MEDIUM: 1 },
       excluded: 1,
     },
     datasets: [
-      { dataset_id: "market-snapshot", status: "normal", as_of: "2026-08-29", fetched_at: "2026-08-30T03:00:00Z", reason_code: null, provenance_refs: ["market:fixture"] },
-      { dataset_id: "sector-context", status: partial ? "unavailable" : "normal", as_of: partial ? null : "2026-08-29", fetched_at: "2026-08-30T03:00:00Z", reason_code: partial ? "PROVIDER_UNAVAILABLE" : null, provenance_refs: ["sector:fixture"] },
-      { dataset_id: "fundamental-qualification", status: partial ? "partial" : "normal", as_of: "2026-08-29", fetched_at: "2026-08-30T03:00:00Z", reason_code: partial ? "SOME_SECURITIES_UNKNOWN" : null, provenance_refs: ["financial:fixture"] },
-      { dataset_id: "catalyst-qualification", status: partial ? "partial" : "normal", as_of: "2026-08-29", fetched_at: "2026-08-30T03:00:00Z", reason_code: partial ? "SOURCE_PARTIAL" : null, provenance_refs: ["announcement:fixture", "native-intel:fixture"] },
+      { dataset_id: "market-snapshot", status: "normal", as_of: "2026-08-28", fetched_at: fetchedAt, reason_code: null, provenance_refs: ["market:fixture"] },
+      { dataset_id: "sector-context", status: degraded ? "unavailable" : "normal", as_of: degraded ? null : "2026-08-28", fetched_at: fetchedAt, reason_code: degraded ? "PROVIDER_UNAVAILABLE" : null, provenance_refs: ["sector:fixture"] },
+      { dataset_id: "fundamental-qualification", status: degraded ? "partial" : "normal", as_of: null, fetched_at: fetchedAt, reason_code: degraded ? "SOME_SECURITIES_UNKNOWN" : null, provenance_refs: ["financial:fixture"] },
+      { dataset_id: "catalyst-qualification", status: degraded ? "partial" : "normal", as_of: "2026-08-30", fetched_at: fetchedAt, reason_code: degraded ? "SOURCE_PARTIAL" : null, provenance_refs: ["announcement:fixture", "native-intel:fixture"] },
     ],
     queues: {
       SHORT: [shortOnly],
-      SWING: partial ? [swing, unknown, restricted] : [swing, restricted],
+      SWING: degraded ? [swing, unknown, restricted] : [swing, restricted],
       MEDIUM: [mediumOnly],
     },
     excluded: [{
@@ -166,10 +169,10 @@ function snapshot({ partial = false } = {}) {
       reason_codes: ["RESTRICTED_QUALIFICATION_BLOCKED"],
       data_health: "partial",
       restricted_universe: { status: "RESTRICTED", reason_codes: ["DELISTING_RISK"], listing_age_status: "KNOWN" },
-      as_of: "2026-08-29",
+      as_of: "2026-08-28",
     }],
-    limitations: partial ? ["部分来源失败；UNKNOWN 保持 UNKNOWN，其他可用股票继续形成研究队列。"] : [],
-    cache: { hit: false, age_seconds: 0, refresh_failed: false },
+    limitations: degraded ? ["部分来源失败；UNKNOWN 保持 UNKNOWN，其他可用股票继续形成研究队列。"] : [],
+    cache: { hit: stale, age_seconds: stale ? null : 0, refresh_failed: stale },
   };
 }
 
@@ -193,6 +196,7 @@ let server;
 let browser;
 const apiRequests = [];
 const browserErrors = [];
+let discoveryRefreshes = 0;
 try {
   assert.ok(existsSync(path.join(dist, "index.html")), "frontend/dist missing; run npm run build first");
   const port = await freePort();
@@ -207,7 +211,12 @@ try {
     const url = new URL(request.url());
     apiRequests.push({ method: request.method(), pathname: url.pathname, search: url.search });
     if (url.pathname === "/api/screener/discovery" && request.method() === "GET") {
-      const payload = snapshot({ partial: url.searchParams.get("refresh") === "true" });
+      const refresh = url.searchParams.get("refresh") === "true";
+      if (refresh) discoveryRefreshes += 1;
+      const payload = snapshot({
+        partial: refresh && discoveryRefreshes === 1,
+        stale: refresh && discoveryRefreshes > 1,
+      });
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
       return;
     }
@@ -239,6 +248,8 @@ try {
   assert.equal(await page.getByTestId("discovery-tab").getAttribute("aria-selected"), "true");
   assert.equal(await page.getByTestId("strategy-SWING").getAttribute("aria-selected"), "true");
   assert.equal(await page.getByTestId("full-market-form").count(), 0);
+  await page.getByTestId("discovery-summary").getByText(/行情归属 2026-08-28/).waitFor();
+  assert.doesNotMatch(await page.getByTestId("discovery-summary").innerText(), /行情归属 2026-08-30/);
   await page.getByTestId("discovery-item-SWING-600519").getByText("CATALYST_DISCLOSED", { exact: true }).waitFor();
   const discoveryText = await workspace.innerText();
   assert.doesNotMatch(discoveryText, /\bBUY\b|Opportunity Score|综合评分/);
@@ -281,6 +292,16 @@ try {
   await unknownCard.getByText("未知", { exact: true }).waitFor();
   assert.equal((await unknownCard.getByText("HIGH 优先", { exact: true }).count()), 0);
   await page.getByTestId("discovery-item-SWING-600519").waitFor();
+
+  // Failed refresh keeps the successful snapshot timestamp and labels the separate attempt time.
+  const staleResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/screener/discovery" && new URL(response.url()).searchParams.get("refresh") === "true");
+  await page.getByTestId("refresh-discovery").click();
+  assert.equal((await staleResponse).status(), 200);
+  await page.getByTestId("discovery-summary").getByText("历史结果", { exact: true }).waitFor();
+  const staleSummary = await page.getByTestId("discovery-summary").innerText();
+  assert.match(staleSummary, /最后成功更新于 2026-08-30 11:00/);
+  assert.match(staleSummary, /刷新失败于 2026-08-30 12:00/);
+  assert.doesNotMatch(staleSummary, /抓取于 2026-08-30 12:00/);
 
   // E: explicit handoff preserves identity and loads P1 Candidate without creating formal state.
   await page.getByTestId("discovery-candidate-600519").click();
