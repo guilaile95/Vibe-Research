@@ -21,11 +21,18 @@ from portfolio_advice_cash_constraint import apply_available_cash_constraints
 from portfolio_advice_policy import CASH_RESERVE_PCT, POLICY
 
 
-def _base_result(*, holdings: list[dict], cash: float | None, configured: bool = True) -> dict:
+def _base_result(
+    *,
+    holdings: list[dict],
+    cash: float | None,
+    configured: bool = True,
+    canonical: bool = True,
+) -> dict:
     funding: dict
     if configured and cash is not None:
         funding = {
             "configured": True,
+            "canonical": canonical,
             "total_assets": 100000.0,
             "available_cash": cash,
             "available_cash_pct": round(cash / 100000.0 * 100, 2),
@@ -41,6 +48,7 @@ def _base_result(*, holdings: list[dict], cash: float | None, configured: bool =
     else:
         funding = {
             "configured": False,
+            "canonical": False,
             "total_assets": None,
             "available_cash": None,
             "available_cash_pct": None,
@@ -219,12 +227,30 @@ def test_unconfigured_account_add_nulls_executable_qty() -> None:
     assert out["estimated_amount"] is None
     assert out["execution_size_pct_of_holding"] == 10  # 方向性参考保留
     assert any("未配置账户资金" in m for m in res["data_limitations"])
-    assert any("无法形成可执行加仓数量" in m for m in res["data_limitations"])
     assert res["data_limitations"].count(
         cash_constraint._LIMITATION_UNCONFIGURED
     ) == 1
-    # 不得出现「看起来可执行」的数量
-    assert out["execution_quantity"] is None
+
+
+def test_configured_noncanonical_account_nulls_add_but_not_reduce() -> None:
+    add = _add_holding(qty=100, amount=1000.0, price=10.0)
+    reduce = _add_holding(code="600519", qty=100, amount=160000.0, price=1600.0)
+    reduce["action"] = "reduce"
+
+    res = apply_available_cash_constraints(
+        _base_result(
+            holdings=[add, reduce],
+            cash=20000.0,
+            canonical=False,
+        )
+    )
+
+    assert res["holdings"][0]["action"] == "add"
+    assert res["holdings"][0]["execution_quantity"] is None
+    assert res["holdings"][0]["estimated_amount"] is None
+    assert res["holdings"][1]["action"] == "reduce"
+    assert res["holdings"][1]["execution_quantity"] == 100
+    assert cash_constraint._LIMITATION_ACCOUNT_NOT_CANONICAL in res["data_limitations"]
 
 
 def test_multiple_adds_do_not_silent_allocate_by_order() -> None:
@@ -308,6 +334,8 @@ def tmp_env(tmp_path, monkeypatch):
     monkeypatch.setattr(pf, "PF_FILE", str(tmp_path / "portfolio.json"))
     monkeypatch.setattr(account_profile, "CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(account_profile, "ACCOUNT_FILE", str(tmp_path / "account_profile.json"))
+    monkeypatch.setenv("VIBE_RESEARCH_TRADE_LEDGER_DB", str(tmp_path / "trade_ledger.sqlite3"))
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(
         portfolio_advice_service.ai_result_service,
         "save_portfolio_advice",
@@ -341,14 +369,6 @@ def tmp_env(tmp_path, monkeypatch):
 def _write_pf(tmp_path, holdings: list[dict]) -> None:
     with open(tmp_path / "portfolio.json", "w", encoding="utf-8") as f:
         json.dump({"holdings": holdings, "last_refresh": None}, f)
-
-
-def _write_acct(tmp_path, total: float, cash: float) -> None:
-    with open(tmp_path / "account_profile.json", "w", encoding="utf-8") as f:
-        json.dump(
-            {"total_assets": total, "available_cash": cash, "updated_at": "2026-01-01 10:00:00"},
-            f,
-        )
 
 
 def _mock_runner(_cfg, _messages):
@@ -399,10 +419,20 @@ def _mock_runner(_cfg, _messages):
     )
 
 
-def test_service_cash_5000_add_1000_unchanged(tmp_env) -> None:
+def test_service_cash_5000_add_1000_unchanged(tmp_env, monkeypatch) -> None:
     """回归：cash=5000 usable=4500 > 1000，服务端数量不变。"""
     _write_pf(tmp_env, [{"code": "000001", "shares": 1500, "cost": 14.0}])
-    _write_acct(tmp_env, 100000.0, 5000.0)
+    monkeypatch.setattr(
+        portfolio_advice_service.account_reality_service,
+        "get_account_reality",
+        lambda: {
+            "canonical": True,
+            "canonical_reason_codes": [],
+            "account_authority": {"state": "CANONICAL"},
+            "account_total_assets": {"current_fact": {"value": 100000.0}},
+            "cash": {"current_fact": {"value": 5000.0}},
+        },
+    )
     res = portfolio_advice_service.generate_portfolio_advice({}, model_runner=_mock_runner)
     h = res["holdings"][0]
     assert h["action"] == "add"

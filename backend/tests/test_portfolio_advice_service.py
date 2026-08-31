@@ -455,7 +455,7 @@ def test_generate_save_failure_is_failure_not_success(monkeypatch):
     }
     monkeypatch.setattr(svc, "prepare_portfolio_advice_messages", lambda _request=None: prepared)
     monkeypatch.setattr(svc.portfolio_advice_validator, "validate_portfolio_advice", lambda *_a: _ai_json_for())
-    monkeypatch.setattr(svc, "attach_account_funding_metrics", lambda result, _pf: result)
+    monkeypatch.setattr(svc, "attach_account_funding_metrics", lambda result, *_a: result)
     monkeypatch.setattr(
         svc.ai_result_service,
         "save_portfolio_advice",
@@ -467,6 +467,71 @@ def test_generate_save_failure_is_failure_not_success(monkeypatch):
             {"provider": "deepseek", "model": "m"},
             model_runner=lambda *_a: json.dumps(_ai_json_for()),
         )
+
+
+def test_account_reality_read_failure_blocks_add_but_keeps_reduce(monkeypatch):
+    holdings = [
+        _holding("600519", shares=1000, price=12, cost=10),
+        _holding("000001", name="平安银行", shares=1000, price=10, cost=8),
+    ]
+    prepared = {
+        "portfolio": _portfolio(holdings),
+        "input_fingerprint": "c" * 64,
+        "daily_review": _review(),
+        "context": {"holdings": [{"code": "600519"}, {"code": "000001"}]},
+        "context_json": "{}",
+        "messages": _msgs(),
+    }
+    validated = {
+        "schema_version": "portfolio-advice-v0.1",
+        "generated_at": "2026-07-21T16:00:00",
+        "trade_date": "2026-07-21",
+        "holdings": [
+            {
+                "code": "600519",
+                "shares": 1000,
+                "current_price": 12,
+                "action": "add",
+                "execution_quantity": 100,
+                "estimated_amount": 1200,
+                "data_limitations": [],
+            },
+            {
+                "code": "000001",
+                "shares": 1000,
+                "current_price": 10,
+                "action": "reduce",
+                "execution_quantity": 200,
+                "estimated_amount": None,
+                "data_limitations": [],
+            },
+        ],
+        "data_limitations": [],
+    }
+    monkeypatch.setattr(svc, "prepare_portfolio_advice_messages", lambda _request=None: prepared)
+    monkeypatch.setattr(
+        svc.portfolio_advice_validator,
+        "validate_portfolio_advice",
+        lambda *_a: copy.deepcopy(validated),
+    )
+    monkeypatch.setattr(
+        svc.account_reality_service,
+        "get_account_reality",
+        MagicMock(side_effect=RuntimeError("authority unavailable")),
+    )
+    monkeypatch.setattr(svc.ai_result_service, "save_portfolio_advice", MagicMock())
+
+    result = generate_portfolio_advice(
+        {"provider": "deepseek", "model": "m"},
+        model_runner=lambda *_a: json.dumps(_ai_json_for()),
+    )
+
+    by_code = {item["code"]: item for item in result["holdings"]}
+    assert result["account_funding"]["reason_code"] == "ACCOUNT_REALITY_UNAVAILABLE"
+    assert by_code["600519"]["execution_quantity"] is None
+    assert by_code["600519"]["estimated_amount"] is None
+    assert by_code["000001"]["execution_quantity"] == 200
+    assert by_code["000001"]["sellable_quantity_advisory"] == 200
 
 
 # ---------------------------------------------------------------------------

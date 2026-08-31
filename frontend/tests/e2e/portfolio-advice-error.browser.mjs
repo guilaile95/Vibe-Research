@@ -12,7 +12,7 @@
  * test_portfolio_advice_error_mapping.py against the real FastAPI app.
  */
 import assert from "node:assert/strict";
-import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -40,6 +40,7 @@ function chromiumPath() {
   ];
   for (const base of bases) {
     if (!base || !existsSync(base)) continue;
+    if (path.extname(base).toLowerCase() === ".exe") return base;
     for (const entry of readdirSync(base)) {
       if (!entry.startsWith("chromium-") || entry.includes("headless")) continue;
       const candidates = [
@@ -172,21 +173,34 @@ async function run() {
       VIBE_RESEARCH_TRADE_ORIGIN_DB: join(tempDataDir, "trade_origins.sqlite3"),
       VR_ALLOW_ORIGINS: frontend,
       PYTHONUNBUFFERED: "1",
+      PYTHONPATH: [__dirname, backendDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
     };
-    backendProc = spawn(py.cmd, [...py.args, "app:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
+    backendProc = spawn(py.cmd, [...py.args, "portfolio_advice_account_gate_harness:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
       cwd: backendDir,
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     await waitHttp(`${backend}/api/health`);
 
-    // 隔离环境：bootstrap 一只持仓（canonical），让 Portfolio 页可发起建议
+    // 隔离环境：两只 canonical Position；Account 因正式 coverage limitation 保持 partial。
     await jsonRequest(backend, "/api/position/bootstrap-commit", "POST", {
       ledger_start_at: "2026-08-01",
       opening_cash: 100000,
       note: "advice error vertical",
-      positions: [{ code: "600519", shares: 100, cost_basis: 10 }],
+      positions: [
+        { code: "600519", shares: 1000, cost_basis: 10 },
+        { code: "000001", shares: 1000, cost_basis: 8 },
+      ],
     });
+    await jsonRequest(backend, "/api/account-profile", "PUT", {
+      total_assets: 122000,
+      available_cash: 100000,
+      confirm_current: true,
+    });
+    const reality = await jsonRequest(backend, "/api/account/reality");
+    assert.equal(reality.cash.reconciliation, "MATCH");
+    assert.equal(reality.canonical, false);
+    assert.ok(reality.canonical_reason_codes.includes("ACCOUNT_COVERAGE_INCOMPLETE"));
 
     staticServer = await startStaticServer(frontendDist, frontendPort);
     const launchOptions = { headless: true };
@@ -274,7 +288,68 @@ async function run() {
     assert.ok(!errorText.includes("sk-not-a-real-key"), "C: api key must never render");
     assert.ok(!errorText.includes("10.255.255.1"), "C: baseURL must never render");
 
-    console.log("[E2E] Portfolio Advice error observability vertical passed");
+    // ---- D. 真实 Account Gate：partial 只阻断新增风险，不阻断减仓 ----------
+    await page.unroute("**/api/portfolio/advice");
+    await page.getByRole("button", { name: /生成持仓操作建议|重新生成/ }).click();
+    const authority = page.getByTestId("account-funding-authority-status");
+    await authority.waitFor({ timeout: 15000 });
+    assert.ok((await authority.innerText()).includes("ACCOUNT_COVERAGE_INCOMPLETE"));
+
+    const addCard = page.getByTestId("portfolio-advice-holding-600519");
+    await addCard.waitFor();
+    const addText = await addCard.innerText();
+    assert.ok(addText.includes("加仓"));
+    assert.ok(addText.includes("暂无具体买入数量与预计金额"));
+    assert.ok(!addText.includes("建议买入数量"));
+    assert.ok(!addText.includes("预计所需金额"));
+
+    const reduceCard = page.getByTestId("portfolio-advice-holding-000001");
+    await reduceCard.waitFor();
+    const reduceText = await reduceCard.innerText();
+    assert.ok(reduceText.includes("减仓"));
+    assert.ok(reduceText.includes("建议操作数量"));
+    assert.ok(reduceText.includes("200"));
+
+    // ---- E. 已保存建议绑定 Account confirmation：identity 变化后旧买入数量失效 ----
+    const accountRealityPath = join(tempDataDir, "account_reality_harness.json");
+    const canonicalReality = (confirmationId) => ({
+      canonical: true,
+      canonical_reason_codes: [],
+      account_authority: { state: "CANONICAL", confirmation_id: confirmationId },
+      cash: {
+        current_fact: {
+          value: 100000,
+          status: "CONFIRMED",
+          confirmation_id: confirmationId,
+          effective_at: "2026-08-28T15:00:00+08:00",
+          recorded_at: "2026-08-28T15:01:00+08:00",
+          updated_at: "2026-08-28T15:01:00+08:00",
+        },
+      },
+      account_total_assets: {
+        current_fact: {
+          value: 122000,
+          status: "CONFIRMED",
+          confirmation_id: confirmationId,
+          effective_at: "2026-08-28T15:00:00+08:00",
+          recorded_at: "2026-08-28T15:01:00+08:00",
+          updated_at: "2026-08-28T15:01:00+08:00",
+        },
+      },
+    });
+    writeFileSync(accountRealityPath, JSON.stringify(canonicalReality("confirmation-a")), "utf8");
+    await page.getByRole("button", { name: /生成持仓操作建议|重新生成/ }).click();
+    await page.getByTestId("portfolio-advice-holding-600519").getByText("建议买入数量").waitFor({ timeout: 15000 });
+
+    writeFileSync(accountRealityPath, JSON.stringify(canonicalReality("confirmation-b")), "utf8");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByText("账户事实或确认身份已发生变化，旧建议的加仓数量与金额已失效，请重新生成。").waitFor({ timeout: 15000 });
+    const staleAddText = await page.getByTestId("portfolio-advice-holding-600519").innerText();
+    assert.ok(staleAddText.includes("暂无具体买入数量与预计金额"));
+    assert.ok(!staleAddText.includes("建议买入数量"));
+    assert.ok(!staleAddText.includes("预计所需金额"));
+
+    console.log("[E2E] Portfolio Advice error observability + Account/confirmation gate vertical passed");
   } catch (error) {
     console.error(error);
     throw error;

@@ -26,6 +26,8 @@ from portfolio_advice_policy import CASH_RESERVE_PCT
 
 # 未配置账户：无法形成可执行加仓数量（方向性 action 仍保留）
 _LIMITATION_UNCONFIGURED = "未配置账户资金，无法形成可执行加仓数量"
+_LIMITATION_ACCOUNT_NOT_CANONICAL = "账户事实未达到 canonical，无法形成可执行加仓数量"
+_LIMITATION_ACCOUNT_UNAVAILABLE = "账户现实暂不可用，无法形成可执行加仓数量"
 _LIMITATION_POLICY_CORRUPTED = "账户执行策略文件读取失败或损坏，未计算可执行加仓数量"
 _LIMITATION_INSUFFICIENT = (
     "可用现金不足（已预留可用现金安全垫），本次加仓无法形成可执行数量"
@@ -86,6 +88,8 @@ def _funding_usable_cash(result: dict, policy: dict[str, Any] | None = None) -> 
         return False, None
     if funding.get("configured") is not True:
         return False, None
+    if funding.get("canonical") is not True:
+        return False, None
     cash = funding.get("available_cash")
     if (
         isinstance(cash, bool)
@@ -111,6 +115,39 @@ def _null_add_executables(holding: dict[str, Any]) -> dict[str, Any]:
     h["execution_quantity"] = None
     h["estimated_amount"] = None
     return h
+
+
+def apply_noncanonical_account_gate(result: dict) -> dict:
+    """Read/generation shared gate: non-canonical funding cannot expose add execution."""
+    if not isinstance(result, dict):
+        return result
+    funding = result.get("account_funding")
+    if isinstance(funding, dict) and funding.get("canonical") is True:
+        return result
+    holdings = result.get("holdings")
+    if not isinstance(holdings, list) or not any(
+        isinstance(item, dict) and item.get("action") == "add" for item in holdings
+    ):
+        return result
+    result["holdings"] = [
+        _null_add_executables(item)
+        if isinstance(item, dict) and item.get("action") == "add"
+        else dict(item)
+        if isinstance(item, dict)
+        else item
+        for item in holdings
+    ]
+    limitations = list(result.get("data_limitations") or [])
+    reason = funding.get("reason_code") if isinstance(funding, dict) else None
+    if reason == "ACCOUNT_REALITY_UNAVAILABLE":
+        limitation = _LIMITATION_ACCOUNT_UNAVAILABLE
+    elif isinstance(funding, dict) and funding.get("configured") is True:
+        limitation = _LIMITATION_ACCOUNT_NOT_CANONICAL
+    else:
+        limitation = _LIMITATION_UNCONFIGURED
+    _append_limitation(limitations, limitation)
+    result["data_limitations"] = limitations
+    return result
 
 
 def apply_available_cash_constraints(result: dict) -> dict:
@@ -159,13 +196,17 @@ def apply_available_cash_constraints(result: dict) -> dict:
         result["data_limitations"] = top_limitations
         return result
 
+    funding = result.get("account_funding")
+    if not isinstance(funding, dict) or funding.get("canonical") is not True:
+        return apply_noncanonical_account_gate(result)
+
     policy = policy_status["data"]
     lot_unit = int(policy.get("lot_size", LOT_SIZE))
     funding_valid, remaining = _funding_usable_cash(result, policy=policy)
 
     multi_add = len(add_indices) > 1
 
-    # 1) 账户未配置：方向保留，可执行数量/金额清空
+    # 1) canonical 资金对象异常：方向保留，可执行数量/金额清空
     if not funding_valid:
         if has_add:
             new_holdings: list[Any] = []
@@ -177,7 +218,7 @@ def apply_available_cash_constraints(result: dict) -> dict:
                 else:
                     new_holdings.append(item)
             result["holdings"] = new_holdings
-            _append_limitation(top_limitations, _LIMITATION_UNCONFIGURED)
+            _append_limitation(top_limitations, _LIMITATION_ACCOUNT_UNAVAILABLE)
             result["data_limitations"] = top_limitations
         return result
 

@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 
 import ai_result_store
+import account_reality_service
 import daily_review
 import daily_review_cache
 import portfolio
@@ -22,6 +23,11 @@ DAILY_REVIEW_AI = "daily_review_ai"
 PORTFOLIO_ADVICE = "portfolio_advice"
 ALLOWED_RESULT_TYPES = frozenset({DAILY_REVIEW_AI, PORTFOLIO_ADVICE})
 PORTFOLIO_STALE_MESSAGE = "持仓已发生变化，该建议基于生成时的持仓，可能已经过期。"
+PORTFOLIO_ACCOUNT_STALE_MESSAGE = (
+    "账户事实或确认身份已发生变化，旧建议的加仓数量与金额已失效，请重新生成。"
+)
+_REASON_ACCOUNT_REALITY_UNAVAILABLE = "ACCOUNT_REALITY_UNAVAILABLE"
+_REASON_ACCOUNT_CONFIRMATION_CHANGED = "ACCOUNT_FUNDING_CONFIRMATION_CHANGED"
 BEIJING = timezone(timedelta(hours=8))
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -405,14 +411,45 @@ def _validate_portfolio_authoritative_payload(
                 "tracked_stock_weight_pct",
                 "quote_coverage",
             },
-            {"status", "reason_code"},
+            {
+                "status",
+                "reason_code",
+                "canonical",
+                "canonical_reason_codes",
+                "authority_state",
+                "confirmation_id",
+                "effective_at",
+                "recorded_at",
+            },
         )
         if not isinstance(funding["configured"], bool):
             raise AiResultValidationError("account_funding.configured 必须是布尔值")
-        if "status" in funding and funding["status"] not in {"valid", "not_configured", "corrupted"}:
+        if "canonical" in funding and not isinstance(funding["canonical"], bool):
+            raise AiResultValidationError("account_funding.canonical 必须是布尔值")
+        if "status" in funding and funding["status"] not in {
+            "valid",
+            "partial",
+            "not_configured",
+            "corrupted",
+        }:
             raise AiResultValidationError("account_funding.status 非法")
         if "reason_code" in funding and funding["reason_code"] is not None and not isinstance(funding["reason_code"], str):
             raise AiResultValidationError("account_funding.reason_code 必须是字符串或 null")
+        if "canonical_reason_codes" in funding:
+            _string_list(
+                funding["canonical_reason_codes"],
+                "account_funding.canonical_reason_codes",
+            )
+        for field in ("authority_state", "confirmation_id"):
+            if field in funding and funding[field] is not None:
+                _nonempty_string(funding[field], f"account_funding.{field}")
+        for field in ("effective_at", "recorded_at"):
+            if field in funding:
+                _valid_timestamp(
+                    funding[field],
+                    f"account_funding.{field}",
+                    allow_none=True,
+                )
         for field in (
             "total_assets",
             "available_cash",
@@ -536,19 +573,82 @@ def _cached_display_trade_date() -> str | None:
         return None
 
 
+def _account_confirmation_id(reality: Any) -> str | None:
+    if not isinstance(reality, dict):
+        return None
+    cash = reality.get("cash")
+    cash_fact = cash.get("current_fact") if isinstance(cash, dict) else None
+    total = reality.get("account_total_assets")
+    total_fact = total.get("current_fact") if isinstance(total, dict) else None
+    cash_id = cash_fact.get("confirmation_id") if isinstance(cash_fact, dict) else None
+    total_id = total_fact.get("confirmation_id") if isinstance(total_fact, dict) else None
+    if not isinstance(cash_id, str) or not cash_id or cash_id != total_id:
+        return None
+    return cash_id
+
+
+def _project_current_account_gate(payload: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    from portfolio_advice_cash_constraint import apply_noncanonical_account_gate
+
+    funding = payload.get("account_funding")
+    if not isinstance(funding, dict) or funding.get("canonical") is not True:
+        return apply_noncanonical_account_gate(payload), None
+
+    stored_id = funding.get("confirmation_id")
+    try:
+        current = account_reality_service.get_account_reality()
+    except Exception:  # Current Account authority failure must fail positive risk closed.
+        current = None
+        reasons = [_REASON_ACCOUNT_REALITY_UNAVAILABLE]
+    else:
+        current_id = _account_confirmation_id(current)
+        if (
+            current.get("canonical") is True
+            and isinstance(stored_id, str)
+            and stored_id
+            and stored_id == current_id
+        ):
+            return payload, None
+        if current.get("canonical") is True:
+            reasons = [_REASON_ACCOUNT_CONFIRMATION_CHANGED]
+        else:
+            reasons = [
+                reason
+                for reason in current.get("canonical_reason_codes") or []
+                if isinstance(reason, str) and reason
+            ] or [_REASON_ACCOUNT_REALITY_UNAVAILABLE]
+
+    funding["canonical"] = False
+    funding["status"] = "partial"
+    funding["reason_code"] = reasons[0]
+    funding["canonical_reason_codes"] = reasons
+    return apply_noncanonical_account_gate(payload), reasons[0]
+
+
 def _safe_api_result(record: dict[str, Any], *, stale: bool) -> dict[str, Any]:
+    payload = copy.deepcopy(record["payload"])
+    account_stale_reason = None
+    if record["result_type"] == PORTFOLIO_ADVICE:
+        payload, account_stale_reason = _project_current_account_gate(payload)
+        stale = stale or account_stale_reason is not None
     result = {
         "result_type": record["result_type"],
         "trade_date": record["trade_date"],
         "schema_version": record["schema_version"],
-        "payload": copy.deepcopy(record["payload"]),
+        "payload": payload,
         "generated_at": record["generated_at"],
         "model_provider": record["model_provider"],
         "model_name": record["model_name"],
         "stale": stale,
     }
     if stale:
-        result["stale_message"] = PORTFOLIO_STALE_MESSAGE
+        result["stale_message"] = (
+            PORTFOLIO_ACCOUNT_STALE_MESSAGE
+            if account_stale_reason is not None
+            else PORTFOLIO_STALE_MESSAGE
+        )
+    if account_stale_reason is not None:
+        result["stale_reason_code"] = account_stale_reason
     return result
 
 

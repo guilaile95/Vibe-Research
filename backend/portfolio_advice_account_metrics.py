@@ -12,10 +12,14 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-import account_profile
+import account_reality_service
 
 
-def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
+def attach_account_funding_metrics(
+    result: dict,
+    portfolio_data: dict,
+    account_reality: dict | None = None,
+) -> dict:
     """在 validator 权威结果后，追加只读账户资金指标。
 
     Parameters
@@ -33,7 +37,18 @@ def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
         estimated_amount 绝不被触碰。
     """
     res = result
-    st = account_profile.get_account_profile_status()
+    reality = (
+        account_reality
+        if account_reality is not None
+        else account_reality_service.get_account_reality()
+    )
+    cash = reality.get("cash") if isinstance(reality, dict) else None
+    cash_fact = cash.get("current_fact") if isinstance(cash, dict) else None
+    total_assets = reality.get("account_total_assets") if isinstance(reality, dict) else None
+    total_fact = (
+        total_assets.get("current_fact") if isinstance(total_assets, dict) else None
+    )
+    authority = reality.get("account_authority") if isinstance(reality, dict) else None
 
     holdings_data = portfolio_data.get("holdings", []) if isinstance(portfolio_data, dict) else []
     holding_price_map: dict[str, Any] = {}
@@ -47,17 +62,24 @@ def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
     valid_holdings = 0
     tracked_stock_mv_sum = Decimal("0")
 
-    is_valid = (st["status"] == "valid" and st["data"] is not None)
-    if is_valid:
-        total_assets_dec = Decimal(str(st["data"]["total_assets"]))
-        cash_dec = Decimal(str(st["data"]["available_cash"]))
+    configured = (
+        isinstance(cash_fact, dict)
+        and cash_fact.get("value") is not None
+        and isinstance(total_fact, dict)
+        and total_fact.get("value") is not None
+    )
+    canonical = reality.get("canonical") is True
+    canonical_reason_codes = list(reality.get("canonical_reason_codes") or [])
+    if configured:
+        total_assets_dec = Decimal(str(total_fact["value"]))
+        cash_dec = Decimal(str(cash_fact["value"]))
         cash_pct_dec = (cash_dec / total_assets_dec * Decimal("100")).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
         available_cash_pct = float(cash_pct_dec)
-        total_assets_val = st["data"]["total_assets"]
-        available_cash_val = st["data"]["available_cash"]
-        updated_at_val = st["data"]["updated_at"]
+        total_assets_val = total_fact["value"]
+        available_cash_val = cash_fact["value"]
+        updated_at_val = cash_fact.get("updated_at")
     else:
         available_cash_pct = None
         total_assets_val = None
@@ -99,7 +121,7 @@ def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
             )
             tracked_stock_mv_sum += mv_dec
             mv_val = float(mv_dec)
-            if is_valid:
+            if configured:
                 acct_weight_dec = (mv_dec / total_assets_dec * Decimal("100")).quantize(
                     Decimal("0.01"), rounding=ROUND_HALF_UP
                 )
@@ -120,7 +142,7 @@ def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
     res["holdings"] = new_holdings
     complete = total_holdings > 0 and valid_holdings == total_holdings
 
-    if is_valid:
+    if configured:
         if complete:
             tracked_mv_val = float(
                 tracked_stock_mv_sum.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -135,8 +157,20 @@ def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
 
         res["account_funding"] = {
             "configured": True,
-            "status": "valid",
-            "reason_code": None,
+            "canonical": canonical,
+            "status": "valid" if canonical else "partial",
+            "reason_code": (
+                None
+                if canonical
+                else canonical_reason_codes[0]
+                if canonical_reason_codes
+                else "ACCOUNT_REALITY_NOT_CANONICAL"
+            ),
+            "canonical_reason_codes": canonical_reason_codes,
+            "authority_state": authority.get("state") if isinstance(authority, dict) else None,
+            "confirmation_id": cash_fact.get("confirmation_id"),
+            "effective_at": cash_fact.get("effective_at"),
+            "recorded_at": cash_fact.get("recorded_at"),
             "total_assets": total_assets_val,
             "available_cash": available_cash_val,
             "available_cash_pct": available_cash_pct,
@@ -150,10 +184,25 @@ def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
             },
         }
     else:
+        current_status = cash_fact.get("status") if isinstance(cash_fact, dict) else None
+        corrupted = current_status == "CORRUPTED"
+        unavailable = "ACCOUNT_REALITY_UNAVAILABLE" in canonical_reason_codes
         res["account_funding"] = {
             "configured": False,
-            "status": st["status"],
-            "reason_code": st.get("reason_code"),
+            "canonical": False,
+            "status": "corrupted" if corrupted else "partial" if unavailable else "not_configured",
+            "reason_code": (
+                cash_fact.get("reason_code")
+                if isinstance(cash_fact, dict) and cash_fact.get("reason_code")
+                else canonical_reason_codes[0]
+                if canonical_reason_codes
+                else None
+            ),
+            "canonical_reason_codes": canonical_reason_codes,
+            "authority_state": authority.get("state") if isinstance(authority, dict) else None,
+            "confirmation_id": None,
+            "effective_at": None,
+            "recorded_at": None,
             "total_assets": None,
             "available_cash": None,
             "available_cash_pct": None,
@@ -168,9 +217,11 @@ def attach_account_funding_metrics(result: dict, portfolio_data: dict) -> dict:
         }
 
     data_limitations = list(res.get("data_limitations", []))
-    if st["status"] == "corrupted":
+    if res["account_funding"]["status"] == "corrupted":
         data_limitations.append("账户资金配置文件读取失败或损坏，未计算账户级仓位指标")
-    if is_valid and not complete:
+    if configured and not canonical:
+        data_limitations.append("账户事实未达到 canonical，新增风险操作不形成可执行数量")
+    if configured and not complete:
         data_limitations.append("部分持仓行情不可用，已跟踪持仓占总资产比例未计算")
     res["data_limitations"] = data_limitations
 
