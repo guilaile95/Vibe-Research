@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
+import account_profile
+import account_reality_service
 import candidate_opportunity_projection as candidate
 import decision_commit_runtime as runtime
 import decision_inbox_runtime_assembler as inbox_runtime
+import position_reality_service
+import trade_ledger_service
 from hard_risk_contract import HardRiskEvaluation
 
 
@@ -281,13 +286,33 @@ def test_capital_context_a_to_e_is_fail_closed_and_never_auto_replaces():
     ]
 
 
-def test_noncanonical_account_is_unknown_not_confirmed_capital():
+def test_confirmed_mismatch_account_is_unknown_not_confirmed_capital():
     result = _project(
         account_reality={
             "canonical": False,
             "confidence": "MEDIUM",
+            "canonical_reason_codes": ["ACCOUNT_CASH_RECONCILIATION_MISMATCH"],
+            "account_authority": {"state": "PARTIAL"},
+            "account_total_assets": {
+                "current_fact": {
+                    "status": "AVAILABLE",
+                    "value": 1_000_000,
+                    "authority_state": "CANONICAL",
+                    "effective_at": "2026-08-15T12:00:00.000000Z",
+                }
+            },
             "settled_nav": 1_000_000,
-            "cash": {"current_fact": {"status": "AVAILABLE", "value": 200_000}},
+            "nav_canonical": False,
+            "cash": {
+                "reconciliation": "MISMATCH",
+                "cash_subfact_canonical": True,
+                "current_fact": {
+                    "status": "AVAILABLE",
+                    "value": 200_000,
+                    "authority_state": "CANONICAL",
+                    "effective_at": "2026-08-15T12:00:00.000000Z",
+                },
+            },
             "positions": [],
         }
     )
@@ -295,6 +320,45 @@ def test_noncanonical_account_is_unknown_not_confirmed_capital():
     assert context["capital_availability"]["state"] == "UNKNOWN"
     assert context["capital_availability"]["confirmed_cash"] is None
     assert candidate.BUY_ACTIONS <= set(result.action_envelope["blocked_actions"])
+
+
+def test_user_confirmed_account_total_assets_is_cap1_capital_base_not_settled_nav():
+    result = _project(
+        account_reality={
+            "canonical": True,
+            "confidence": "HIGH",
+            "account_total_assets": {
+                "current_fact": {
+                    "status": "AVAILABLE",
+                    "value": 1_000_000,
+                    "authority_state": "CANONICAL",
+                    "effective_at": "2026-08-15T12:00:00.000000Z",
+                    "confirmation_id": "account_confirmation_" + "1" * 32,
+                }
+            },
+            "cash": {
+                "current_fact": {
+                    "status": "AVAILABLE",
+                    "value": 200_000,
+                    "authority_state": "CANONICAL",
+                    "effective_at": "2026-08-15T12:00:00.000000Z",
+                    "confirmation_id": "account_confirmation_" + "1" * 32,
+                }
+            },
+            "settled_nav": 999_999,
+            "nav_canonical": False,
+            "positions": [],
+        }
+    )
+
+    risk_cap = result.portfolio_view["risk_cap"]
+    capital = result.portfolio_view["portfolio_capital_context"]["capital_availability"]
+    assert risk_cap["capital_base_source"] == "USER_CONFIRMED_TOTAL_ASSETS"
+    assert risk_cap["capital_base_value"] == 1_000_000
+    assert risk_cap["settled_nav"] is None
+    assert capital["state"] == "AVAILABLE"
+    assert capital["cash_authority"] == "USER_CONFIRMED_AVAILABLE_CASH"
+    assert capital["capital_base_source"] == "USER_CONFIRMED_TOTAL_ASSETS"
 
 
 def test_existing_portfolio_without_exposure_authority_keeps_fit_unknown():
@@ -533,6 +597,30 @@ def _ports(thesis: dict | None = None):
     ), state
 
 
+def _real_account_ports(tmp_path, monkeypatch):
+    data_dir = tmp_path / "real_account"
+    data_dir.mkdir()
+    monkeypatch.setenv(
+        "VIBE_RESEARCH_TRADE_LEDGER_DB", str(data_dir / "trade_ledger.sqlite3")
+    )
+    monkeypatch.setenv("VR_DATA_DIR", str(data_dir))
+    monkeypatch.setattr(account_profile, "CACHE_DIR", str(data_dir))
+    position_reality_service.bootstrap_commit({
+        "ledger_start_at": "2026-08-01",
+        "opening_cash": 200_000,
+        "positions": [],
+    })
+    account_profile.save_account_profile(
+        1_000_000, 200_000, confirm_current=True
+    )
+    ports, state = _ports()
+    return replace(
+        ports,
+        position_reader=runtime._production_position_reader,
+        account_reader=account_reality_service.get_account_reality,
+    ), state
+
+
 def _clear_hard_risk(monkeypatch):
     monkeypatch.setattr(
         runtime,
@@ -636,6 +724,135 @@ def test_cap1_account_retrieval_clock_is_not_a_false_stale_signal(monkeypatch):
         CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
     )
     assert after["proposal_fingerprint"] == before["proposal_fingerprint"]
+
+
+def test_not_executed_trade_and_void_do_not_stale_account_or_preview(
+    tmp_path, monkeypatch
+):
+    ports, _state = _real_account_ports(tmp_path, monkeypatch)
+    _clear_hard_risk(monkeypatch)
+    as_of = runtime.utc_now_iso()
+    draft = {**_draft(), "review_by": "2026-09-30T00:00:00.000000Z"}
+    before = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, draft, ports=ports, as_of=as_of
+    )
+
+    trade = trade_ledger_service.create_trade({
+        "code": "600519",
+        "name": "贵州茅台",
+        "operation": "buy",
+        "execution_status": "not_executed",
+        "planned_price": 100.0,
+        "planned_quantity": 100,
+        "unexecuted_reason": "未成交",
+    })
+    after_record = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, draft, ports=ports, as_of=as_of
+    )
+    trade_ledger_service.void_trade(trade["trade_id"], "撤销未成交记录")
+    after_void = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, draft, ports=ports, as_of=as_of
+    )
+
+    reality = account_reality_service.get_account_reality()
+    assert reality["canonical"] is True
+    assert reality["cash"]["current_fact"]["authority_state"] == "CANONICAL"
+    assert after_record["proposal_fingerprint"] == before["proposal_fingerprint"]
+    assert after_void["proposal_fingerprint"] == before["proposal_fingerprint"]
+
+
+def test_effective_trade_stales_account_and_rejects_old_preview(tmp_path, monkeypatch):
+    ports, state = _real_account_ports(tmp_path, monkeypatch)
+    _clear_hard_risk(monkeypatch)
+    as_of = runtime.utc_now_iso()
+    draft = {**_draft(), "review_by": "2026-09-30T00:00:00.000000Z"}
+    before = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, draft, ports=ports, as_of=as_of
+    )
+
+    trade_ledger_service.create_trade({
+        "code": "600519",
+        "name": "贵州茅台",
+        "operation": "buy",
+        "execution_status": "full",
+        "actual_price": 100.0,
+        "actual_quantity": 100,
+        "executed_at": runtime.utc_now_iso(),
+    })
+
+    reality = account_reality_service.get_account_reality()
+    assert reality["cash"]["current_fact"]["status"] == "STALE"
+    with pytest.raises(runtime.ProposalStaleError):
+        runtime.commit_decision_proposal(
+            CAMPAIGN_ID,
+            {
+                **draft,
+                "as_of": as_of,
+                "expected_proposal_fingerprint": before["proposal_fingerprint"],
+                "user_confirmed": True,
+            },
+            ports=ports,
+        )
+    assert state["writes"] == 0
+
+
+def test_ar1_account_stale_state_changes_fingerprint_and_blocks_commit(monkeypatch):
+    ports, state = _ports()
+    state["account"] = {
+        "canonical": True,
+        "confidence": "HIGH",
+        "account_authority": {
+            "state": "CANONICAL",
+            "confirmation_id": "account_confirmation_" + "1" * 32,
+            "effective_at": "2026-08-15T12:00:00.000000Z",
+            "recorded_at": "2026-08-15T12:00:00.000000Z",
+        },
+        "account_total_assets": {
+            "current_fact": {
+                "status": "AVAILABLE",
+                "value": 1_000_000,
+                "authority_state": "CANONICAL",
+                "effective_at": "2026-08-15T12:00:00.000000Z",
+            }
+        },
+        "cash": {
+            "current_fact": {
+                "status": "AVAILABLE",
+                "value": 200_000,
+                "authority_state": "CANONICAL",
+                "effective_at": "2026-08-15T12:00:00.000000Z",
+                "confirmation_id": "account_confirmation_" + "1" * 32,
+            }
+        },
+        "nav_canonical": False,
+        "positions": [],
+    }
+    _clear_hard_risk(monkeypatch)
+    before = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
+    )
+
+    state["account"]["canonical"] = False
+    state["account"]["account_authority"]["state"] = "UNPROVEN"
+    state["account"]["cash"]["current_fact"]["status"] = "STALE"
+    state["account"]["cash"]["current_fact"]["authority_state"] = "STALE"
+    after = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
+    )
+
+    assert after["proposal_fingerprint"] != before["proposal_fingerprint"]
+    with pytest.raises(runtime.ProposalStaleError):
+        runtime.commit_decision_proposal(
+            CAMPAIGN_ID,
+            {
+                **_draft(),
+                "as_of": AS_OF,
+                "expected_proposal_fingerprint": before["proposal_fingerprint"],
+                "user_confirmed": True,
+            },
+            ports=ports,
+        )
+    assert state["writes"] == 0
 
 
 def test_current_thesis_delta_evidence_conflict_changes_fingerprint_and_freeze_refs(monkeypatch):

@@ -58,6 +58,21 @@ def test_save_and_load_round_trip():
     assert loaded["total_assets"] == 100000.0
     assert loaded["available_cash"] == 20000.0
     assert loaded["updated_at"] == saved["updated_at"]
+    assert loaded["confirmation_status"] == "LEGACY_UNPROVEN"
+    assert loaded["effective_at"] is None
+
+
+def test_explicit_confirmation_creates_server_owned_effective_identity():
+    saved = account_profile.save_account_profile(
+        100000, 20000, confirm_current=True
+    )
+
+    assert saved["confirmation_status"] == "CONFIRMED"
+    assert saved["confirmation_id"].startswith("account_confirmation_")
+    assert saved["authority"] == "MANUAL_EXPLICIT_CONFIRMATION"
+    assert saved["effective_at"] == saved["recorded_at"]
+    assert saved["effective_at"].endswith("Z")
+    assert account_profile.load_account_profile() == saved
 
 
 def test_available_cash_zero_is_valid():
