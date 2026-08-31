@@ -19,7 +19,7 @@ import ai_result_service
 import astock
 import chat as chat_layer
 import market
-import portfolio as pf
+import position_reality_service
 import review_history
 import sector_research_data as srd
 import watchlist_store
@@ -168,9 +168,12 @@ def _get_sector_codes() -> list[str]:
     return codes
 
 
-def _get_candidate_pool_inputs() -> dict:
+def _get_candidate_pool_inputs(holdings: list[dict] | None = None) -> dict:
     """读取候选池所需的各数据源。"""
-    holdings = pf.get_portfolio_holdings_snapshot().get("holdings", [])
+    if holdings is None:
+        holdings = position_reality_service.read_current_holdings_snapshot().get(
+            "holdings", []
+        )
     wl = watchlist_store.load_watchlist()
     sector_codes = _get_sector_codes()
 
@@ -709,9 +712,15 @@ def _cash_executability_from_advice(
     }
 
 
-def _portfolio_summary(advice_snapshot: dict | None = None) -> dict:
+def _portfolio_summary(
+    advice_snapshot: dict | None = None,
+    holdings: list[dict] | None = None,
+) -> dict:
     """持仓只读摘要 + 基于建议动作的现金可执行性。"""
-    snap = pf.get_portfolio_holdings_snapshot().get("holdings", [])
+    if holdings is None:
+        holdings = position_reality_service.read_current_holdings_snapshot().get(
+            "holdings", []
+        )
     cash = _account_funding_summary()
     advice_payload = advice_snapshot.get("payload") if isinstance(advice_snapshot, dict) else None
     advice_funding = (
@@ -733,7 +742,7 @@ def _portfolio_summary(advice_snapshot: dict | None = None) -> dict:
         else None
     )
     holdings_view: list[dict] = []
-    for h in snap:
+    for h in holdings:
         if not isinstance(h, dict):
             continue
         holdings_view.append({
@@ -912,7 +921,7 @@ def generate_tomorrow_plan(
     advice_snapshot = _portfolio_advice_full_snapshot(trade_date)
     if advice_snapshot is None:
         warnings.append("该交易日没有已保存持仓建议")
-    portfolio = _portfolio_summary(advice_snapshot)
+    portfolio = _portfolio_summary(advice_snapshot, inp["holdings"])
     explanation = generate_explanation(cfg, trade_date, market_short, signals)
 
     # 候选级三维摘要（value/trend/short；≥3 可用信号才聚合，否则 unknown）

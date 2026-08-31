@@ -13,8 +13,8 @@ TRADE_DATE = "2026-07-24"
 
 def _patch_common(monkeypatch, *, portfolio=None, plan=None, advice=None, watchlist=None, quotes=None):
     monkeypatch.setattr(
-        today.pf,
-        "get_portfolio",
+        today.position_reality_service,
+        "read_portfolio_authority",
         lambda: portfolio
         if portfolio is not None
         else {
@@ -229,6 +229,34 @@ class TestGetTodayActions:
         # 最大 |change| 优先：11,10,9,...
         assert movers[0]["change_pct"] == 11.0
         assert movers[1]["change_pct"] == 10.0
+
+@pytest.mark.parametrize("target,method,path,json_body", [
+    ("get_overview", "GET", f"/api/decision-cockpit/overview?trade_date={TRADE_DATE}", None),
+    ("get_today_actions", "GET", f"/api/decision-cockpit/today-actions?trade_date={TRADE_DATE}", None),
+    (
+        "generate_tomorrow_plan",
+        "POST",
+        "/api/decision-cockpit/tomorrow-plan/generate",
+        {"trade_date": TRADE_DATE},
+    ),
+])
+def test_holding_authority_http_paths_fail_closed(
+    monkeypatch, target, method, path, json_body
+):
+    from fastapi.testclient import TestClient
+    import app as app_module
+    from position_reality_service import PositionDerivationError
+
+    def fail(*args, **kwargs):
+        raise PositionDerivationError("sensitive ledger detail")
+
+    monkeypatch.setattr(app_module, target, fail)
+    client = TestClient(app_module.app, raise_server_exceptions=False)
+    response = client.request(method, path, json=json_body)
+
+    assert response.status_code == 503
+    assert "sensitive ledger detail" not in response.text
+    assert "data" not in response.json()
 
 
 def test_compress_plan_signals_rank_strong_medium_weak_unknown():

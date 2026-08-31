@@ -1488,6 +1488,8 @@ def decision_cockpit_overview(
     """
     try:
         return {"data": get_overview(trade_date)}
+    except prs.PositionDerivationError:
+        raise HTTPException(503, _HOLDING_AUTHORITY_UNPROVEN_READ_DETAIL) from None
     except DecisionCockpitError as e:
         # trade_date 非法 / 未来日等
         raise HTTPException(400, str(e)) from e
@@ -1505,6 +1507,8 @@ def decision_cockpit_today_actions(
     """
     try:
         return {"data": get_today_actions(trade_date)}
+    except prs.PositionDerivationError:
+        raise HTTPException(503, _HOLDING_AUTHORITY_UNPROVEN_READ_DETAIL) from None
     except DecisionCockpitError as e:
         raise HTTPException(400, str(e)) from e
     except Exception:  # noqa: BLE001 — 不向客户端暴露内部细节
@@ -1538,6 +1542,8 @@ def decision_cockpit_generate(req: TomorrowPlanGenerateIn):
         raise HTTPException(409, str(e)) from e
     except DecisionCockpitModelError as e:
         raise HTTPException(502, f"明日计划解释生成失败：{e}") from e
+    except prs.PositionDerivationError:
+        raise HTTPException(503, _HOLDING_AUTHORITY_UNPROVEN_READ_DETAIL) from None
     except DecisionCockpitError as e:
         msg = str(e)
         # 日期格式/日历/未来日 → 400；业务拒绝（空池等）→ 409

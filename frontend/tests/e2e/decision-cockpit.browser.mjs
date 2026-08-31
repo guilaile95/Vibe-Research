@@ -308,13 +308,15 @@ async function runViewport(browser, errors, { width, height, label }) {
 
   // 2) Explicit generate → draft
   const genPostsBefore = bag.generatePost;
+  const generateResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().includes("/decision-cockpit/tomorrow-plan/generate"),
+    { timeout: 60000 },
+  );
   await page.getByRole("button", { name: /生成明日计划/ }).click();
-  // wait until generate POST observed or UI shows draft (up to ~12s)
-  for (let i = 0; i < 30; i++) {
-    if (bag.generatePost > genPostsBefore) break;
-    await page.waitForTimeout(400);
-  }
-  await page.waitForTimeout(1500);
+  await generateResponse;
+  await page.waitForTimeout(500);
   // Accept either draft panel or info banner
   const draftOk =
     (await page.getByTestId("plan-status").isVisible().catch(() => false)) ||
@@ -364,25 +366,75 @@ async function runViewport(browser, errors, { width, height, label }) {
     if (!frozen) errors.push(`${label}: freeze did not update status`);
   }
 
-  // 4) History block
+  // 4) Frozen plan and Today must use canonical ledger holdings, never the stale legacy archive.
+  const authorityState = await readE2eStatus();
+  const authorityTradeDate = authorityState?.trade_date;
+  if (!authorityTradeDate) {
+    errors.push(`${label}: missing harness trade_date for holding-authority check`);
+  } else {
+    const authorityReadback = await page.evaluate(async (tradeDate) => {
+      const [planResponse, todayResponse] = await Promise.all([
+        fetch(`/api/decision-cockpit/tomorrow-plan/current?trade_date=${encodeURIComponent(tradeDate)}`),
+        fetch(`/api/decision-cockpit/today-actions?trade_date=${encodeURIComponent(tradeDate)}`),
+      ]);
+      return {
+        planStatus: planResponse.status,
+        plan: (await planResponse.json().catch(() => ({})))?.data,
+        todayStatus: todayResponse.status,
+        today: (await todayResponse.json().catch(() => ({})))?.data,
+      };
+    }, authorityTradeDate);
+    const frozenHoldings = authorityReadback.plan?.payload?.portfolio?.holdings ?? [];
+    const todayHoldings = authorityReadback.today?.holdings ?? [];
+    if (authorityReadback.planStatus !== 200 || authorityReadback.todayStatus !== 200) {
+      errors.push(
+        `${label}: holding-authority readback failed plan=${authorityReadback.planStatus} today=${authorityReadback.todayStatus}`,
+      );
+    }
+    if (
+      frozenHoldings.length !== 1 ||
+      frozenHoldings[0]?.code !== "600519" ||
+      Number(frozenHoldings[0]?.shares) !== 200
+    ) {
+      errors.push(`${label}: frozen plan did not preserve canonical 600519/200 holdings`);
+    }
+    if ((authorityReadback.plan?.payload?.candidates ?? []).some((row) => row?.code === "601318")) {
+      errors.push(`${label}: legacy-only 601318 leaked into candidate pool`);
+    }
+    if (
+      todayHoldings.length !== 1 ||
+      todayHoldings[0]?.code !== "600519" ||
+      Number(todayHoldings[0]?.shares) !== 200
+    ) {
+      errors.push(`${label}: Today did not preserve canonical 600519/200 holdings`);
+    }
+  }
+
+  // 5) History block
   const hist = page.getByText("历史版本");
   if (await hist.isVisible().catch(() => false)) {
     await hist.click();
     await page.waitForTimeout(500);
   }
 
-  // 5) Watchlist migration entry (button exists; may no-op without local draft)
+  // 6) Watchlist migration entry (button exists; may no-op without local draft)
   const syncBtn = page.getByRole("button", { name: /同步自选草稿/ });
   if (await syncBtn.isVisible().catch(() => false)) {
     await syncBtn.click();
     await page.waitForTimeout(500);
   }
 
-  // 6) Today placeholder (PR B)
+  // 7) Today UI renders the canonical security and never the legacy-only archive row.
   await page.getByText("今日实时行动").first().click();
-  await page.getByText(/PR B|后续/).first().waitFor({ timeout: 5000 }).catch(() => {
-    errors.push(`${label}: today placeholder missing`);
+  const todayPanel = page.getByTestId("today-holdings");
+  await todayPanel.waitFor({ timeout: 10000 }).catch(() => {
+    errors.push(`${label}: today holdings panel missing`);
   });
+  const todayText = await todayPanel.innerText().catch(() => "");
+  if (!todayText.includes("600519")) errors.push(`${label}: canonical holding missing from Today UI`);
+  if (todayText.includes("601318") || todayText.includes("legacy-only")) {
+    errors.push(`${label}: legacy-only holding leaked into Today UI`);
+  }
 
   await page.screenshot({
     path: path.join(shotDir, `${label}-after.png`),
@@ -394,6 +446,7 @@ async function runViewport(browser, errors, { width, height, label }) {
   );
   if (overflow) errors.push(`${label}: horizontal overflow`);
 
+  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
   await context.close();
   return bag;
 }
@@ -418,6 +471,7 @@ async function main() {
     VR_DATA_DIR: dataDir,
     VR_REPORTS_DIR: reportsDir,
     VIBE_RESEARCH_REVIEW_DB: reviewDb,
+    VR_ALLOW_ORIGINS: `http://127.0.0.1:${frontendPort}`,
     PYTHONPATH: [backendDir, e2eDir, process.env.PYTHONPATH || ""].filter(Boolean).join(path.delimiter),
   };
 
