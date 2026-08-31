@@ -88,6 +88,11 @@ const fmtPct = (v: number | null | undefined) => {
   if (v == null || Number.isNaN(v)) return "—";
   return `${v > 0 ? "+" : ""}${v}%`;
 };
+const exposurePct = (part: number | null | undefined, whole: number | null | undefined) =>
+  typeof part === "number" && Number.isFinite(part) && typeof whole === "number" && Number.isFinite(whole) && whole > 0
+    ? Math.round((part / whole) * 10000) / 100
+    : null;
+const fmtExposurePct = (v: number | null) => (v == null ? "—" : `${v.toFixed(2)}%`);
 const fmtSigned = (v: number | null | undefined) => {
   if (v == null || Number.isNaN(v)) return "—";
   const s = fmt(v);
@@ -266,6 +271,97 @@ function AccountFundingCard({ funding, corrupted }: { funding?: AccountFundingDa
         </p>
       )}
     </div>
+  );
+}
+
+function readOnlyExposureBasis(portfolio: PortfolioData | null, reality: AccountReality | null) {
+  const totalFact = reality?.account_total_assets?.current_fact;
+  const cashFact = reality?.cash?.current_fact;
+  const totalAssets =
+    totalFact?.authority_state === "CANONICAL" && typeof totalFact.value === "number" && totalFact.value > 0
+      ? totalFact.value
+      : null;
+  const sameConfirmation =
+    typeof totalFact?.confirmation_id === "string" &&
+    totalFact.confirmation_id.length > 0 &&
+    totalFact.confirmation_id === cashFact?.confirmation_id;
+  const cash =
+    cashFact?.authority_state === "CANONICAL" &&
+    sameConfirmation &&
+    typeof cashFact.value === "number" &&
+    cashFact.value >= 0
+      ? cashFact.value
+      : null;
+  const quoteCoverageComplete = portfolio?.quote_coverage?.complete === true;
+  const stockMarketValue =
+    quoteCoverageComplete && typeof portfolio?.totals.market_value === "number"
+      ? portfolio.totals.market_value
+      : null;
+  return {
+    totalAssets,
+    cash,
+    stockMarketValue,
+    quoteCoverageComplete,
+    accountBasisConfirmed: totalAssets !== null,
+    accountEffectiveAt: totalFact?.effective_at ?? null,
+  };
+}
+
+function SecurityExposureCard({
+  portfolio,
+  basis,
+}: {
+  portfolio: PortfolioData;
+  basis: ReturnType<typeof readOnlyExposureBasis>;
+}) {
+  return (
+    <GlassCard className="mb-4" data-testid="security-exposure-card">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold">组合敞口（只读事实）</h3>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            只展示现有 Position、行情与手工确认账户子事实；不生成集中度结论，也不改变任何操作建议。
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-1.5 text-[10px] font-mono">
+          <span
+            data-testid="security-exposure-quote-basis"
+            className={cn("rounded px-1.5 py-0.5", basis.quoteCoverageComplete ? "bg-success/15 text-success" : "bg-amber-500/15 text-amber-700 dark:text-amber-300")}
+          >
+            {basis.quoteCoverageComplete ? "QUOTE_COVERAGE_COMPLETE" : "QUOTE_COVERAGE_PARTIAL"}
+          </span>
+          <span
+            data-testid="security-exposure-account-basis"
+            className={cn("rounded px-1.5 py-0.5", basis.accountBasisConfirmed ? "bg-primary/10 text-primary" : "bg-amber-500/15 text-amber-700 dark:text-amber-300")}
+          >
+            {basis.accountBasisConfirmed ? "MANUAL_CONFIRMED_TOTAL_ASSETS" : "ACCOUNT_BASIS_UNKNOWN"}
+          </span>
+        </div>
+      </div>
+      <div className="grid gap-2 text-xs sm:grid-cols-3">
+        <div className="rounded-md border border-border/40 p-2">
+          <p className="text-muted-foreground">完整行情股票市值</p>
+          <p className="mt-1 font-mono font-semibold" data-testid="security-exposure-stock-market-value">
+            {fmtCny(basis.stockMarketValue)}
+          </p>
+        </div>
+        <div className="rounded-md border border-border/40 p-2">
+          <p className="text-muted-foreground">股票市值 / 已确认总资产</p>
+          <p className="mt-1 font-mono font-semibold" data-testid="security-exposure-stock-account-pct">
+            {fmtExposurePct(exposurePct(basis.stockMarketValue, basis.totalAssets))}
+          </p>
+        </div>
+        <div className="rounded-md border border-border/40 p-2">
+          <p className="text-muted-foreground">可用现金 / 已确认总资产</p>
+          <p className="mt-1 font-mono font-semibold" data-testid="security-exposure-cash-account-pct">
+            {fmtExposurePct(exposurePct(basis.cash, basis.totalAssets))}
+          </p>
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] leading-4 text-muted-foreground">
+        行情刷新于 {portfolio.updated || "未知"}；账户分母 effective_at {basis.accountEffectiveAt ?? "未知"}。两者未证明属于同一 cutoff，以上账户比例仅是 mixed-time visibility，不是 Official Settled NAV exposure。
+      </p>
+    </GlassCard>
   );
 }
 
@@ -732,6 +828,7 @@ export function Portfolio() {
   const ledgerCash = acctReality?.cash?.ledger_candidate;
   const ledgerCashAvailable =
     acctStatus === "not_configured" && !acctConfigured && ledgerCash?.status === "AVAILABLE" && typeof ledgerCash.value === "number";
+  const exposureBasis = readOnlyExposureBasis(data, acctReality);
   const summary = advice?.portfolio_summary;
   const account = advice?.account_action;
 
@@ -985,6 +1082,8 @@ export function Portfolio() {
         <p className="mt-2 text-[11px] text-muted-foreground/60">手工填写、存在本地，不上传、不进仓库。用于后续持仓建议参考（本轮仅维护展示）。</p>
       </GlassCard>
 
+      {data && <SecurityExposureCard portfolio={data} basis={exposureBasis} />}
+
       {/* 账户资金填写窗口 */}
       {acctOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={closeAcct}>
@@ -1171,7 +1270,7 @@ export function Portfolio() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-                  {["名称", "现价", "数量", "成本", "市值", "浮动盈亏", "盈亏%", ""].map((h) => (
+                  {["名称", "现价", "数量", "成本", "市值", "占股票持仓", "占已确认总资产", "浮动盈亏", "盈亏%", ""].map((h) => (
                     <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
                   ))}
                 </tr>
@@ -1187,6 +1286,12 @@ export function Portfolio() {
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(h.shares)}</td>
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmtPx(h.cost)}</td>
                     <td className="px-2 py-2.5 font-mono">{fmt(h.market_value)}</td>
+                    <td className="px-2 py-2.5 font-mono" data-testid={`security-exposure-stock-${h.code}`}>
+                      {fmtExposurePct(exposurePct(h.market_value, exposureBasis.stockMarketValue))}
+                    </td>
+                    <td className="px-2 py-2.5 font-mono" data-testid={`security-exposure-account-${h.code}`}>
+                      {fmtExposurePct(exposurePct(h.market_value, exposureBasis.totalAssets))}
+                    </td>
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{fmtSigned(h.pnl)}</td>
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{fmtPct(h.pnl_pct)}</td>
                     <td className="px-2 py-2.5">
