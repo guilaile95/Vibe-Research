@@ -7,10 +7,14 @@ Seeds one daily_review_snapshots row so generate can bind an immutable snapshot.
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
+import json
+from pathlib import Path
 
 import app as app_module
 import market
 import astock
+import portfolio
+import position_reality_service
 import review_history
 import review_store
 import watchlist_store
@@ -45,6 +49,34 @@ def _seed_watchlist() -> None:
         watchlist_store.save_watchlist(["600519", "000001", "300750"])
     except Exception:
         pass
+
+
+def _seed_canonical_holding_with_stale_legacy_archive() -> None:
+    position_reality_service.bootstrap_commit(
+        {
+            "ledger_start_at": "2026-08-01",
+            "opening_cash": 100_000,
+            "note": "cockpit holding-authority e2e",
+            "positions": [
+                {"code": "600519", "shares": 200, "cost_basis": 8.0},
+            ],
+        }
+    )
+    legacy_path = Path(portfolio.PF_FILE)
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_text(
+        json.dumps(
+            {
+                "holdings": [
+                    {"code": "600519", "name": "legacy", "shares": 999, "cost": 1.0},
+                    {"code": "601318", "name": "legacy-only", "shares": 77, "cost": 1.0},
+                ],
+                "last_refresh": None,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _fake_breadth():
@@ -177,6 +209,7 @@ astock.tencent_quote = _fake_tencent_quote  # type: ignore[assignment]
 
 _seed_review_snapshot()
 _seed_watchlist()
+_seed_canonical_holding_with_stale_legacy_archive()
 
 
 @app.get("/api/decision-cockpit/e2e-status")

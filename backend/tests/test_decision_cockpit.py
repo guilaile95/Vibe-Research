@@ -509,6 +509,45 @@ class TestDecisionCockpitServiceGates:
         assert svc._portfolio_advice_full_snapshot("2026-07-20") is None
         assert svc._portfolio_advice_full_snapshot(None) is None
 
+    def test_candidate_and_portfolio_reuse_authoritative_snapshot(self, monkeypatch):
+        import decision_cockpit_service as svc
+
+        canonical = [{"code": "600519", "name": "贵州茅台", "shares": 100}]
+        reads = 0
+
+        def read_canonical():
+            nonlocal reads
+            reads += 1
+            return {"holdings": canonical}
+
+        monkeypatch.setattr(
+            svc.position_reality_service,
+            "read_current_holdings_snapshot",
+            read_canonical,
+        )
+        monkeypatch.setattr(
+            svc.position_reality_service.portfolio,
+            "get_portfolio_holdings_snapshot",
+            lambda: {"holdings": [{"code": "000001", "name": "旧持仓"}]},
+        )
+        monkeypatch.setattr(svc.watchlist_store, "load_watchlist", lambda: [])
+        monkeypatch.setattr(svc, "_get_sector_codes", lambda: [])
+        monkeypatch.setattr(svc.market, "get_short_term_emotion", lambda: {})
+        monkeypatch.setattr(svc.market, "get_market_breadth", lambda: {})
+        monkeypatch.setattr(svc.market, "get_turnover_top", lambda: {})
+        monkeypatch.setattr(
+            svc,
+            "_account_funding_summary",
+            lambda: {"configured": False, "canonical": False, "data": None},
+        )
+
+        inputs = svc._get_candidate_pool_inputs()
+        portfolio = svc._portfolio_summary(None, inputs["holdings"])
+
+        assert reads == 1
+        assert inputs["holdings"] == canonical
+        assert portfolio["holdings"][0]["code"] == "600519"
+
     def test_noncanonical_account_displays_confirmed_cash_but_blocks_cash_execution(
         self, monkeypatch
     ):
@@ -537,7 +576,11 @@ class TestDecisionCockpitServiceGates:
                 ["ACCOUNT_CASH_RECONCILIATION_MISMATCH"],
             ),
         )
-        monkeypatch.setattr(svc.pf, "get_portfolio_holdings_snapshot", lambda: {"holdings": []})
+        monkeypatch.setattr(
+            svc.position_reality_service,
+            "read_current_holdings_snapshot",
+            lambda: {"holdings": []},
+        )
         monkeypatch.setattr(svc, "_quote_map", lambda _codes: {"600519": {"price": 10.0}})
 
         advice = {

@@ -1,7 +1,7 @@
 """决策驾驶舱「今日实时行动」只读聚合。
 
 规则确定性、不调模型、GET 路径零写库：
-- portfolio.get_portfolio() 持仓 + 行情
+- position_reality_service.read_portfolio_authority() 持仓 + 行情
 - get_current_plan(trade_date) 信号压缩
 - ai_result_service.get_ai_result(portfolio_advice) 精确 trade_date 匹配
 - watchlist_store + quote，按 |change_pct| 取前 8
@@ -13,7 +13,7 @@ from typing import Any
 
 import ai_result_service
 import astock
-import portfolio as pf
+import position_reality_service
 import watchlist_store
 from decision_cockpit_service import (
     DecisionCockpitError,
@@ -224,11 +224,7 @@ def get_today_actions(trade_date: str) -> dict[str, Any]:
     warnings: list[str] = []
 
     # 1) 持仓 + 行情
-    try:
-        portfolio = pf.get_portfolio()
-    except Exception as e:  # noqa: BLE001
-        portfolio = {"holdings": []}
-        warnings.append(f"持仓行情读取失败：{type(e).__name__}")
+    portfolio = position_reality_service.read_portfolio_authority()
 
     holdings_raw = portfolio.get("holdings") if isinstance(portfolio, dict) else []
     if not isinstance(holdings_raw, list):
