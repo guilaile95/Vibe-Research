@@ -481,7 +481,7 @@ async function run() {
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
       VR_FACT_LAKE_ROOT: join(tempDataDir, "fact-lake"),
-      OL1_CF_EVALUATION_AS_OF: "2026-09-01T00:00:00.000000Z",
+      OL1_CF_EVALUATION_AS_OF: "2026-09-01T08:00:00.000000Z",
       VIBE_RESEARCH_TRADE_LEDGER_DB: join(tempDataDir, "trade_ledger.sqlite3"),
       VIBE_RESEARCH_REVIEW_DB: join(tempDataDir, "review_history.db"),
       VIBE_RESEARCH_EVIDENCE_THESIS_DB: join(tempDataDir, "evidence_thesis.db"),
@@ -589,7 +589,7 @@ async function run() {
       "2099-09-10T10:00",
     );
     const fixtures = prepareTradeAndFactLake(env, pythonScriptConfig(), firstRun.committed.committed, secondRun.committed.committed);
-    const evaluationAsOf = "2026-09-01T00:00:00.000000Z";
+    const evaluationAsOf = "2026-09-01T08:00:00.000000Z";
     assert.ok(firstRun.committed.committed.source_refs, JSON.stringify(firstRun.committed));
     const firstBefore = await jsonRequest(
       backend,
