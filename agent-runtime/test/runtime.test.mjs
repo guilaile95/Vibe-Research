@@ -106,13 +106,20 @@ test("page chat reuses one isolated thread and never creates formal authority st
   await runtime.chat({
     session: "stock-600519",
     message: "继续",
-    context: "证券代码：600519",
+    context: "证券代码：600519；最新价格：1600",
+    history: [
+      { role: "user", content: "概括风险" },
+      { role: "assistant", content: "此前回答" },
+    ],
   });
 
   assert.equal(startCount, 1);
   assert.match(prompts[0], /NON_AUTHORITATIVE_AI_DRAFT/);
   assert.match(prompts[0], /证券代码：600519/);
   assert.equal(prompts[1].includes("NON_AUTHORITATIVE_AI_DRAFT"), false, "preamble is sent once per thread");
+  assert.equal(prompts[1].includes("Prior Conversation Record"), false, "history is not repeated into a live thread");
+  assert.match(prompts[1], /最新价格：1600/);
+  assert.match(prompts[1], /replaces every earlier Page Context/);
   assert.deepEqual(threadOptions[0], {
     workingDirectory: threadOptions[0].workingDirectory,
     sandboxMode: "read-only",
@@ -127,6 +134,110 @@ test("page chat reuses one isolated thread and never creates formal authority st
   assert.match(codexOptions.configOverrides[0], /^mcp_servers=/);
   assert.equal(events.at(-1).classification, "NON_AUTHORITATIVE_AI_DRAFT");
   assert.deepEqual(fs.readdirSync(dataRoot), ["agent-runtime"]);
+});
+
+test("runtime restart rehydrates the displayed complete history", async (t) => {
+  const dataRoot = tempDir(t, "vibe-agent-restart");
+  const prompts = [];
+  const codexFactory = () => ({
+    startThread() {
+      return {
+        async runStreamed(prompt) {
+          prompts.push(prompt);
+          return {
+            events: (async function* () {
+              yield { type: "item.completed", item: { type: "agent_message", text: "回答" } };
+              yield { type: "turn.completed", usage: {} };
+            })(),
+          };
+        },
+      };
+    },
+  });
+  const ready = (runtime) => {
+    runtime.status = () => ({ installed: true, authenticated: true, available: true, status: "ready" });
+    return runtime;
+  };
+
+  const first = ready(new AgentRuntime({ sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot }, codexFactory }));
+  await first.chat({ session: "page-restart", message: "TURN_1", context: "价格：100" });
+  first.shutdown();
+
+  const second = ready(new AgentRuntime({ sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot }, codexFactory }));
+  t.after(() => second.shutdown());
+  await second.chat({
+    session: "page-restart",
+    message: "TURN_2：引用上一轮",
+    context: "价格：101",
+    history: [
+      { role: "user", content: "TURN_1" },
+      { role: "assistant", content: "TURN_1_ANSWER" },
+    ],
+  });
+
+  assert.match(prompts[1], /Prior Conversation Record/);
+  assert.match(prompts[1], /TURN_1_ANSWER/);
+  assert.match(prompts[1], /价格：101/);
+});
+
+test("capacity eviction rehydrates the same session from complete history", async (t) => {
+  const dataRoot = tempDir(t, "vibe-agent-eviction");
+  const prompts = [];
+  const runtime = new AgentRuntime({
+    sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot },
+    codexFactory: () => ({
+      startThread() {
+        return {
+          async runStreamed(prompt) {
+            prompts.push(prompt);
+            return {
+              events: (async function* () {
+                yield { type: "item.completed", item: { type: "agent_message", text: "回答" } };
+                yield { type: "turn.completed", usage: {} };
+              })(),
+            };
+          },
+        };
+      },
+    }),
+  });
+  t.after(() => runtime.shutdown());
+  runtime.status = () => ({ installed: true, authenticated: true, available: true, status: "ready" });
+
+  await runtime.chat({ session: "evicted-page", message: "保留这个事实", context: "状态：旧" });
+  for (let index = 0; index < 64; index += 1) {
+    await runtime.chat({ session: `other-${index}`, message: "占位", context: "其他页面" });
+  }
+  await runtime.chat({
+    session: "evicted-page",
+    message: "这个事实是什么？",
+    context: "状态：新",
+    history: [
+      { role: "user", content: "保留这个事实" },
+      { role: "assistant", content: "EVICTION_FACT" },
+    ],
+  });
+
+  assert.match(prompts.at(-1), /Prior Conversation Record/);
+  assert.match(prompts.at(-1), /EVICTION_FACT/);
+  assert.match(prompts.at(-1), /状态：新/);
+});
+
+test("history limits and message shape fail closed", async (t) => {
+  const dataRoot = tempDir(t, "vibe-agent-history-shape");
+  const runtime = new AgentRuntime({ sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot }, codexFactory: () => ({}) });
+  t.after(() => runtime.shutdown());
+  runtime.status = () => ({ installed: true, authenticated: true, available: true, status: "ready" });
+
+  await assert.rejects(
+    runtime.chat({
+      session: "bad-history",
+      message: "继续",
+      context: "页面",
+      history: [{ role: "assistant", content: "不能从 assistant 开始" }],
+    }),
+    (error) => error instanceof RuntimeError && error.code === "BAD_REQUEST",
+  );
 });
 
 test("any completed tool item fails closed and discards the session", async (t) => {

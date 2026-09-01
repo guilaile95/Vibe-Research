@@ -657,6 +657,34 @@ class ChatReq(BaseModel):
     llm: LLMConfig
 
 
+_AGENT_HISTORY_MAX_MESSAGES = 40
+_AGENT_HISTORY_MAX_CHARS = 80_000
+
+
+def _agent_runtime_turn(messages: list[dict]) -> tuple[str, list[dict[str, str]]]:
+    """Return the current question and complete prior turns for Codex rehydration."""
+    normalized: list[dict[str, str]] = []
+    for raw in messages:
+        if not isinstance(raw, dict) or raw.get("role") not in {"user", "assistant"}:
+            raise agent_runtime.AgentRuntimeError("BAD_REQUEST", "对话历史格式无效", 400)
+        content = raw.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise agent_runtime.AgentRuntimeError("BAD_REQUEST", "对话历史格式无效", 400)
+        normalized.append({"role": raw["role"], "content": content})
+
+    if not normalized or normalized[-1]["role"] != "user":
+        raise agent_runtime.AgentRuntimeError("BAD_REQUEST", "对话问题不能为空", 400)
+    history = normalized[:-1]
+    if len(history) > _AGENT_HISTORY_MAX_MESSAGES or sum(len(item["content"]) for item in history) > _AGENT_HISTORY_MAX_CHARS:
+        raise agent_runtime.AgentRuntimeError("BAD_REQUEST", "对话历史超过安全恢复上限", 400)
+    if len(history) % 2 or any(
+        item["role"] != ("user" if index % 2 == 0 else "assistant")
+        for index, item in enumerate(history)
+    ):
+        raise agent_runtime.AgentRuntimeError("BAD_REQUEST", "对话历史不是完整轮次", 400)
+    return normalized[-1]["content"].strip(), history
+
+
 @app.post("/api/chat")
 def chat(req: ChatReq):
     """系统 AI 对话，**流式** NDJSON（每行一个事件 {type: tool|delta|done|error}）。
@@ -689,20 +717,12 @@ def chat(req: ChatReq):
     def gen():
         try:
             if is_codex_runtime:
-                question = next(
-                    (
-                        str(message.get("content") or "").strip()
-                        for message in reversed(req.messages)
-                        if message.get("role") == "user" and str(message.get("content") or "").strip()
-                    ),
-                    "",
-                )
-                if not question:
-                    raise agent_runtime.AgentRuntimeError("BAD_REQUEST", "对话问题不能为空", 400)
+                question, history = _agent_runtime_turn(req.messages)
                 events = agent_runtime.stream_chat(
                     session=req.session,
                     message=question,
                     context=req.context,
+                    history=history,
                     cancel_event=disconnect_event,
                 )
             else:
