@@ -85,7 +85,8 @@ def cancel(session: str) -> bool:
 
 
 def stream_chat(
-    *, session: str, message: str, context: str, cancel_event: threading.Event
+    *, session: str, message: str, context: str, cancel_event: threading.Event,
+    history: list[dict[str, str]] | tuple = (),
 ) -> Iterator[dict]:
     finished = threading.Event()
 
@@ -104,7 +105,7 @@ def stream_chat(
     try:
         with requests.post(
             f"{_base_url()}/chat",
-            json={"session": session, "message": message, "context": context},
+            json={"session": session, "message": message, "context": context, "history": list(history)},
             stream=True,
             timeout=(4, 190),
         ) as response:
