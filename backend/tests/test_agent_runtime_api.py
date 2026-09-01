@@ -86,7 +86,13 @@ def test_codex_chat_uses_agent_runtime_without_cli_or_api_fallback(monkeypatch):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy CLI fallback")),
     )
 
-    response = client.post("/api/chat", json=_request())
+    body = _request()
+    body["messages"] = [
+        {"role": "user", "content": "第一轮问题"},
+        {"role": "assistant", "content": "第一轮回答"},
+        {"role": "user", "content": "只解释当前页面"},
+    ]
+    response = client.post("/api/chat", json=body)
 
     assert response.status_code == 200
     events = [json.loads(line) for line in response.text.splitlines()]
@@ -94,6 +100,10 @@ def test_codex_chat_uses_agent_runtime_without_cli_or_api_fallback(monkeypatch):
     assert captured["session"] == "stock-600519"
     assert captured["message"] == "只解释当前页面"
     assert captured["context"] == "证券代码：600519"
+    assert captured["history"] == [
+        {"role": "user", "content": "第一轮问题"},
+        {"role": "assistant", "content": "第一轮回答"},
+    ]
 
 
 def test_codex_unavailable_fails_explicitly_without_fallback(monkeypatch):
@@ -154,6 +164,34 @@ def test_agent_runtime_status_and_login_are_safe_projections(monkeypatch):
     }
     assert login_response.status_code == 202
     assert login_response.json() == {"runtime": "Codex Subscription", "state": "started"}
+
+
+def test_agent_runtime_forwards_complete_history_as_conversation_data(monkeypatch):
+    captured = {}
+
+    def post(*_args, **kwargs):
+        captured.update(kwargs)
+        return _StreamResponse([b'{"type":"done"}'])
+
+    monkeypatch.setattr(agent_runtime.requests, "post", post)
+    history = [
+        {"role": "user", "content": "第一轮"},
+        {"role": "assistant", "content": "上一轮回答"},
+    ]
+
+    assert list(agent_runtime.stream_chat(
+        session="history-forward",
+        message="继续",
+        context="最新页面",
+        history=history,
+        cancel_event=threading.Event(),
+    )) == [{"type": "done"}]
+    assert captured["json"] == {
+        "session": "history-forward",
+        "message": "继续",
+        "context": "最新页面",
+        "history": history,
+    }
 
 
 def test_api_compatible_chat_path_is_unchanged(monkeypatch):

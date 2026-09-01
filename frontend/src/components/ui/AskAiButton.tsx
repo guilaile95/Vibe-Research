@@ -28,6 +28,7 @@ const CHAT_EPOCH_PREFIX = "vr-askai-epoch:";
 // 单页对话上限。localStorage 总配额约 5MB，而一轮研报级回答可能上万字；
 // 不设上限迟早写爆，届时 storageSet 静默失败、用户以为存上了。
 const MAX_PERSISTED_MSGS = 40;
+const MAX_PERSISTED_CHARS = 80_000;
 
 type StoredMsg = ChatMsg & {
   tools?: ToolUse[];
@@ -44,11 +45,11 @@ function loadChat(key: string): StoredMsg[] {
     const parsed = JSON.parse(raw);
     // 存量数据可能来自旧版本或被手工改坏，形状不对就当没有，别让页面崩。
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
+    return boundedCompleteTurns(parsed.filter(
       (m): m is StoredMsg =>
         m && typeof m === "object" && typeof m.content === "string" &&
         (m.role === "user" || m.role === "assistant"),
-    );
+    ));
   } catch {
     return [];
   }
@@ -69,17 +70,36 @@ function completeTurns(msgs: StoredMsg[]): StoredMsg[] {
   return out;
 }
 
+// UI、持久化和发给模型的历史使用同一上限与同一完整轮次集合。
+// 从尾部保留最新内容；若边界落在 assistant，丢掉该孤立回答。
+function boundedCompleteTurns(msgs: StoredMsg[]): StoredMsg[] {
+  const complete = completeTurns(msgs);
+  if (complete.length % 2) return [];
+  const out: StoredMsg[] = [];
+  let chars = 0;
+  for (let index = complete.length - 2; index >= 0; index -= 2) {
+    const user = complete[index];
+    const assistant = complete[index + 1];
+    if (user.role !== "user" || assistant.role !== "assistant") return [];
+    const pairChars = user.content.length + assistant.content.length;
+    if (out.length + 2 > MAX_PERSISTED_MSGS || chars + pairChars > MAX_PERSISTED_CHARS) break;
+    out.unshift(user, assistant);
+    chars += pairChars;
+  }
+  return out;
+}
+
 function saveChat(key: string, msgs: StoredMsg[]): void {
   if (!msgs.length) {
     storageRemove(key);
     return;
   }
-  const keep = completeTurns(msgs);
+  const keep = boundedCompleteTurns(msgs);
   if (!keep.length) {
     storageRemove(key);
     return;
   }
-  storageSet(key, JSON.stringify(keep.slice(-MAX_PERSISTED_MSGS)));
+  storageSet(key, JSON.stringify(keep));
 }
 
 function loadEpoch(key: string): number {
@@ -115,12 +135,13 @@ interface ToolUse { name: string; arg: string }
 
 export function AskAiButton({ context, suggestions = [], label = "问 AI", scopeKey, reportIds = [] }: Props) {
   const { pathname } = useLocation();
-  const chatKey = CHAT_KEY_PREFIX + pathname + (scopeKey ? `#${scopeKey}` : "");
   const selectedLlm = loadLlm();
   const isCodexRuntime = selectedLlm?.provider === "cli-codex";
 
   const [open, setOpen] = useState(false);
   const [configured, setConfigured] = useState(false);
+  const [runtimeKey, setRuntimeKey] = useState(() => llmIdentity());
+  const chatKey = CHAT_KEY_PREFIX + pathname + (scopeKey ? `#${scopeKey}` : "") + `@${runtimeKey}`;
   // key 与消息放在**同一个 state 里原子更新**——这是正确性的关键，不是风格问题。
   // 若分成 msgs + 一个记录归属的 ref，key 变化那一帧 ref 已指向新 key 而 msgs 仍是旧的
   // （setState 下一帧才生效），落盘守卫会误放行，把来源页对话写进目标 key、
@@ -140,7 +161,6 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [runtimeKey, setRuntimeKey] = useState(() => llmIdentity());
   const [epoch, setEpoch] = useState(() => loadEpoch(chatKey));
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -237,15 +257,16 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     setErr(null);
     // 未完成的轮次整轮不进 history（半截回答 + 它的提问）：
     // 模型会把残句当成自己上一轮的完整发言继续推理，孤立的提问则会被当成待答问题。
+    const visibleHistory = boundedCompleteTurns(msgs);
     const history: ChatMsg[] = [
-      ...completeTurns(msgs).map(({ role, content }) => ({ role, content })),
+      ...visibleHistory.map(({ role, content }) => ({ role, content })),
       { role: "user", content: q },
     ];
     // assistant 气泡**从创建就是 partial**，只有流式正常结束才摘掉这个标记。
     // 这样「流到一半用户换页/换标的」时，落盘的那份天然就不含这条残句——
     // 靠中止时再补标记是来不及的：每个 delta 都会触发落盘。
-    setMsgs((m) => [
-      ...m,
+    setMsgs([
+      ...visibleHistory,
       { role: "user", content: q },
       { role: "assistant", content: "", tools: [], partial: true },
     ]);
@@ -256,7 +277,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     const ac = new AbortController();
     abortRef.current = ac;
     const startedKey = chatKeyRef.current;   // 这次请求属于哪份对话
-    const session = chatSessionId(`${startedKey}:${runtimeKey}:${epoch}`);
+    const session = chatSessionId(`${startedKey}:${epoch}`);
     // 只有仍是「当前这次请求」才允许写 UI——旧请求的迟到 chunk 直接丢弃
     const alive = () => abortRef.current === ac && !ac.signal.aborted;
     try {

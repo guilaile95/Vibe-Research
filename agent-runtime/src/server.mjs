@@ -67,6 +67,7 @@ export function createAgentServer(runtime = new AgentRuntime()) {
             session: body.session,
             message: body.message,
             context: body.context,
+            history: body.history,
             signal: controller.signal,
             onEvent: (event) => res.write(`${JSON.stringify(event)}\n`),
           });
