@@ -2542,15 +2542,24 @@ export interface CurrentThesisReady {
 export type CampaignCurrentThesis = CurrentThesisNotReady | CurrentThesisReady;
 
 export type ResearchContinuityChangeType =
-  | "ADDED" | "REMOVED" | "CHANGED" | "COVERAGE_CHANGED" | "SOURCE_CONFLICT";
+  | "ADDED" | "REMOVED" | "CHANGED" | "SOURCE_CONFLICT";
+
+export interface ResearchContinuityEvidenceSnapshot {
+  record_key: string;
+  claim_identity: string;
+  source: string | null;
+  field_states: Record<string, "UNKNOWN" | "ERROR" | "NOT_EVALUATED" | "EMPTY" | "VALUE">;
+  values: Record<string, string | null>;
+}
 
 export interface ResearchContinuityChange {
   change_type: ResearchContinuityChangeType;
   record_key: string;
-  before?: unknown;
-  after?: unknown;
+  changed_fields?: string[];
+  before?: ResearchContinuityEvidenceSnapshot | null;
+  after?: ResearchContinuityEvidenceSnapshot | null;
   sources?: string[];
-  records?: unknown[];
+  records?: ResearchContinuityEvidenceSnapshot[];
 }
 
 export interface ResearchContinuity {
@@ -2581,6 +2590,10 @@ export interface ResearchContinuity {
   };
   authority_refs: string[];
   writes: { thesis: 0; decision: 0; campaign: 0; trade: 0 };
+}
+
+export interface ResearchContinuityBatch {
+  items: ResearchContinuity[];
 }
 
 // ---------------------------------------------------------------------------

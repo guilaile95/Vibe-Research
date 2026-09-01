@@ -17,6 +17,7 @@ import type {
   DecisionInboxSnapshot,
   PositionBootstrapInput,
   PositionBootstrapPreview,
+  ResearchContinuity,
 } from "@/lib/api/types";
 import {
   CAMPAIGN_STRATEGIES,
@@ -619,6 +620,7 @@ export default function DecisionInbox() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [nextActions, setNextActions] = useState<Record<string, CampaignNextActions | null>>({});
+  const [continuityByCampaign, setContinuityByCampaign] = useState<Record<string, ResearchContinuity | null>>({});
   const [creatingFor, setCreatingFor] = useState<string | null>(null);
   const [focusedSetupCampaignId, setFocusedSetupCampaignId] = useState<string | null>(null);
   const [formGeneration, setFormGeneration] = useState(0);
@@ -637,19 +639,30 @@ export default function DecisionInbox() {
         ...snap.campaign_items.map((item) => item.campaign_id),
         ...setup.map((campaign) => campaign.campaign_id),
       ];
-      const entries = await Promise.all(
-        ids.map(async (id) => {
-          try {
-            const actions = await api.getCampaignNextActions(id);
-            return [id, actions] as const;
-          } catch {
-            return [id, null] as const;
-          }
-        }),
-      );
+      const continuityIds = snap.campaign_items.map((item) => item.campaign_id);
+      const [entries, continuityBatch] = await Promise.all([
+        Promise.all(
+          ids.map(async (id) => {
+            try {
+              const actions = await api.getCampaignNextActions(id);
+              return [id, actions] as const;
+            } catch {
+              return [id, null] as const;
+            }
+          }),
+        ),
+        continuityIds.length
+          ? api.getResearchContinuityBatch(continuityIds).catch(() => null)
+          : Promise.resolve({ items: [] }),
+      ]);
       setSnapshot(snap);
       setSetupCampaigns(setup);
       setNextActions(Object.fromEntries(entries));
+      setContinuityByCampaign(
+        continuityBatch
+          ? Object.fromEntries(continuityBatch.items.map((item) => [item.campaign_id, item]))
+          : Object.fromEntries(continuityIds.map((campaignId) => [campaignId, null])),
+      );
     } catch (err: unknown) {
       setLoadError(errorMessage(err));
     } finally {
@@ -882,7 +895,10 @@ export default function DecisionInbox() {
                     }}
                     onChanged={() => void refresh()}
                   />
-                  <ResearchContinuityCard campaignId={item.campaign_id} />
+                  <ResearchContinuityCard
+                    campaignId={item.campaign_id}
+                    prefetched={continuityByCampaign[item.campaign_id] ?? null}
+                  />
                   <HardRiskPanel item={item} />
                   <DecisionActionPanel item={item} />
                   <DecisionCommitInboxStatus

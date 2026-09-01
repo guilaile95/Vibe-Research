@@ -3,6 +3,10 @@ from __future__ import annotations
 from datetime import date
 
 import campaign_service
+import evidence_thesis_service
+import evidence_thesis_store
+import formal_thesis_projection
+import frozen_decision_service
 import research_continuity_service as service
 from fastapi.testclient import TestClient
 
@@ -29,11 +33,11 @@ def _evidence(evidence_id: str, **overrides) -> dict:
 
 def test_evidence_change_types_and_unknown_are_distinct():
     baseline = [
-        _evidence("same", coverage_status="UNKNOWN"),
+        _evidence("same"),
         _evidence("removed", claim="removed claim"),
     ]
     current = [
-        _evidence("same", confidence="medium", coverage_status="PARTIAL"),
+        _evidence("same", confidence="medium"),
         _evidence("added", claim="new claim"),
         _evidence("conflict-a", source_title="source A", source_url="https://a.test", stance="support"),
         _evidence("conflict-b", source_title="source B", source_url="https://b.test", stance="oppose"),
@@ -42,9 +46,12 @@ def test_evidence_change_types_and_unknown_are_distinct():
     changes = service.compare_evidence(baseline, current)
     assert {item["change_type"] for item in changes} == set(service.CHANGE_TYPES)
     same = next(item for item in changes if item["change_type"] == "CHANGED" and item["record_key"] == "same")
-    assert same["before"]["field_states"]["period"] == "UNKNOWN"
-    assert same["before"]["field_states"]["coverage_status"] == "UNKNOWN"
-    assert same["after"]["field_states"]["coverage_status"] == "VALUE"
+    assert same["changed_fields"] == ["confidence"]
+    assert same["before"]["values"]["confidence"] == "high"
+    assert same["after"]["values"]["confidence"] == "medium"
+    unsupported = {"period", "unit", "adjustment", "semantic_contract", "coverage_status"}
+    assert unsupported.isdisjoint(same["before"])
+    assert unsupported.isdisjoint(same["before"]["values"])
 
 
 def test_disclosure_calendar_semantics(monkeypatch):
@@ -143,3 +150,139 @@ def test_campaign_continuity_api_is_read_only(monkeypatch):
     response = TestClient(app_module.app).get(f"/api/campaigns/{CAMPAIGN_ID}/research-continuity")
     assert response.status_code == 200
     assert response.json()["data"] == expected
+
+    monkeypatch.setattr(
+        app_module.campaign_router.research_continuity_service,
+        "get_research_continuities",
+        lambda campaign_ids: [{**expected, "campaign_id": campaign_id} for campaign_id in campaign_ids],
+    )
+    batch = TestClient(app_module.app).post(
+        "/api/campaigns/research-continuity/batch",
+        json={"campaign_ids": [CAMPAIGN_ID]},
+    )
+    assert batch.status_code == 200
+    assert batch.json()["data"]["items"] == [expected]
+
+
+def _decision_payload(campaign: dict, thesis_id: str, revision: int, evidence_id: str) -> dict:
+    return {
+        "security_code": campaign["security_code"],
+        "strategy": campaign["strategy"],
+        "campaign_id": campaign["campaign_id"],
+        "thesis_id": thesis_id,
+        "thesis_revision": revision,
+        "asset_view": {}, "trade_view": {}, "portfolio_view": {},
+        "next_best_action": "RESEARCH MORE",
+        "action_envelope": {},
+        "maintain_conditions": [], "upgrade_conditions": [],
+        "downgrade_conditions": [], "invalidation_conditions": [],
+        "strategy_horizon": "5-20 trading days",
+        "review_by": "2026-09-30T00:00:00Z",
+        "key_assumptions": [], "event_invalidation_conditions": [],
+        "risk_policy_version": "test", "opportunity_policy_version": "test",
+        "decision_policy_version": "test", "behavior_model_version": "test",
+        "data_quality": {}, "evidence_confidence": 0.8,
+        "inference_confidence": "medium", "decision_confidence": None,
+        "evidence_refs": [evidence_id], "risk_refs": [], "source_refs": [],
+        "user_confirmed": True,
+    }
+
+
+def test_persisted_chain_exposes_only_real_immutable_evidence_fields(tmp_path, monkeypatch):
+    evidence_db = tmp_path / "evidence.sqlite3"
+    monkeypatch.setenv("VIBE_RESEARCH_EVIDENCE_THESIS_DB", str(evidence_db))
+    monkeypatch.setenv("VIBE_RESEARCH_CAMPAIGN_DB", str(tmp_path / "campaigns.sqlite3"))
+    monkeypatch.setenv("VIBE_RESEARCH_FROZEN_DECISION_DB", str(tmp_path / "decisions.sqlite3"))
+    evidence_thesis_store.initialize_store(evidence_db)
+
+    evidence = evidence_thesis_service.create_evidence(evidence_db, {
+        "subject_type": "stock", "subject_id": "600519", "evidence_type": "news",
+        "claim": "原始事实", "source_title": "来源 A", "source_url": "https://a.test",
+        "source_date": "2026-08-01", "accessed_at": "2026-08-01T01:00:00Z",
+        "classification": "fact", "confidence": "high",
+    })
+    thesis = evidence_thesis_service.create_thesis(evidence_db, {
+        "subject_type": "stock", "subject_id": "600519", "title": "正式 Thesis",
+        "summary": "summary", "core_claims": ["a", "b", "c"], "catalysts": [],
+        "risks": [], "invalidation_conditions": [],
+    })
+    thesis_id = thesis["thesis"]["id"]
+    linked = evidence_thesis_service.link_evidence(
+        evidence_db, thesis_id, evidence["id"], "support", 1,
+    )
+    evidence_thesis_service.begin_formalization(evidence_db, thesis_id)
+    edited = evidence_thesis_service.update_thesis(evidence_db, thesis_id, {
+        "title": "正式 Thesis", "summary": "summary", "status": "active",
+        "core_claims": ["a", "b", "c"], "catalysts": [], "risks": [],
+        "invalidation_conditions": [], "strategy": "SWING",
+        "expected_horizon": {"unit": "TRADING_DAY", "min": 5, "max": 20, "anchor": "FREEZE_AT"},
+        "free_notes": "note",
+    }, linked["thesis"]["current_revision"])
+    revision = edited["thesis"]["current_revision"]
+    evidence_thesis_service.confirm_formalization(evidence_db, thesis_id, revision)
+    frozen = evidence_thesis_service.freeze_formalization(evidence_db, thesis_id, revision)
+    campaign = campaign_service.create_campaign("600519", "SWING")
+    campaign_service.bind_campaign_thesis(campaign["campaign_id"], thesis_id)
+
+    evidence_thesis_service.update_evidence(evidence_db, evidence["id"], {
+        "evidence_type": "news", "claim": "更新事实", "source_title": "来源 B",
+        "source_url": "https://b.test", "source_date": "2026-08-02",
+        "accessed_at": "2026-08-02T01:00:00Z", "classification": "fact",
+        "confidence": "medium",
+    })
+    evidence_thesis_service.create_thesis_delta(
+        evidence_db, thesis_id, "WEAKENED", "事实已更新", [evidence["id"]],
+    )
+    frozen_decision_service.freeze_decision(
+        _decision_payload(campaign, thesis_id, frozen["frozen_revision"], evidence["id"]),
+    )
+    monkeypatch.setattr(service, "_calendar", lambda *_args: {
+        "state": "NO_RECORD", "next": None, "latest_actual": None,
+        "fetched_at": "x", "source": "test",
+    })
+
+    projection = formal_thesis_projection.project_current_thesis(campaign["campaign_id"])
+    original_fields = set(projection["original_snapshot"]["evidence_links"][0])
+    delta_fields = set(projection["deltas"][0]["evidence_links"][0])
+    assert original_fields == {
+        "evidence_id", "evidence_type", "stance", "claim", "classification",
+        "confidence", "source_title", "source_url", "source_date", "accessed_at",
+    }
+    assert delta_fields == original_fields | {"delta_id", "captured_at"}
+    result = service.get_research_continuity(campaign["campaign_id"])
+    assert result["baseline"]["authority_type"] == "FROZEN_DECISION"
+    assert result["changes"]["status"] == "NOT_EVALUATED"
+
+
+def test_batch_fetches_disclosure_calendar_once_per_security(monkeypatch):
+    campaign_ids = [f"campaign_{index:032x}" for index in range(20)]
+    codes = ["600519"] * 10 + ["000001"] * 5 + ["300750"] * 5
+    campaigns = {
+        campaign_id: {"campaign_id": campaign_id, "security_code": code, "strategy": "SWING"}
+        for campaign_id, code in zip(campaign_ids, codes, strict=True)
+    }
+    monkeypatch.setattr(service.campaign_service, "get_campaign", campaigns.__getitem__)
+    monkeypatch.setattr(service, "_continuity", lambda _campaign: {
+        "baseline": {"status": "NO_BASELINE", "authority_type": None},
+        "changes": {"status": "NO_BASELINE", "items": [], "observation_count": 0},
+        "authority_refs": [],
+    })
+    provider_calls = []
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"result": {"data": []}}
+
+    def em_get(*_args, **kwargs):
+        provider_calls.append(kwargs["params"]["filter"])
+        return Response()
+
+    monkeypatch.setattr(service.astock, "em_get", em_get)
+    assert len(service.get_research_continuities(campaign_ids)) == 20
+    assert len(provider_calls) == 3
+
+    assert service.get_research_continuity(campaign_ids[0])["campaign_id"] == campaign_ids[0]
+    assert len(provider_calls) == 4

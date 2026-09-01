@@ -15,11 +15,10 @@ import frozen_decision_service
 
 
 SCHEMA_VERSION = "research_continuity.v0.1"
-CHANGE_TYPES = ("ADDED", "REMOVED", "CHANGED", "COVERAGE_CHANGED", "SOURCE_CONFLICT")
+CHANGE_TYPES = ("ADDED", "REMOVED", "CHANGED", "SOURCE_CONFLICT")
 _COMPARE_FIELDS = (
     "claim", "evidence_type", "classification", "confidence", "stance",
-    "source_title", "source_url", "source_date", "period", "unit",
-    "adjustment", "semantic_contract", "coverage_status",
+    "source_title", "source_url", "source_date", "accessed_at",
 )
 
 
@@ -71,21 +70,12 @@ def _normalize(item: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "record_key": _record_key(item),
         "claim_identity": values["claim"],
-        "period": values["period"],
-        "unit": values["unit"],
-        "adjustment": values["adjustment"],
-        "semantic_contract": values["semantic_contract"],
         "source": source,
         "field_states": {
             key: _field_state(value)
             for key, value in {
                 "claim_identity": values["claim"],
-                "period": values["period"],
-                "unit": values["unit"],
-                "adjustment": values["adjustment"],
-                "semantic_contract": values["semantic_contract"],
                 "source": source,
-                "coverage_status": values["coverage_status"],
             }.items()
         },
         "values": values,
@@ -116,31 +106,26 @@ def compare_evidence(
         changes.append({"change_type": "ADDED", "record_key": key, "before": None, "after": after[key]})
     for key in sorted(before.keys() & after.keys()):
         old, new = before[key], after[key]
-        old_fact = {field: value for field, value in old["values"].items() if field != "coverage_status"}
-        new_fact = {field: value for field, value in new["values"].items() if field != "coverage_status"}
-        if old_fact != new_fact:
-            changes.append({"change_type": "CHANGED", "record_key": key, "before": old, "after": new})
-        if old["values"]["coverage_status"] != new["values"]["coverage_status"]:
+        changed_fields = [
+            field for field in _COMPARE_FIELDS
+            if old["values"][field] != new["values"][field]
+        ]
+        if changed_fields:
             changes.append({
-                "change_type": "COVERAGE_CHANGED", "record_key": key,
-                "before": old["values"]["coverage_status"],
-                "after": new["values"]["coverage_status"],
+                "change_type": "CHANGED", "record_key": key,
+                "changed_fields": changed_fields, "before": old, "after": new,
             })
 
-    grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for item in after.values():
-        semantic_key = (
-            _semantic_key(item["claim_identity"]), _semantic_key(item["period"]),
-            _semantic_key(item["unit"]), _semantic_key(item["adjustment"]),
-            _semantic_key(item["semantic_contract"]),
-        )
+        semantic_key = _semantic_key(item["claim_identity"])
         grouped.setdefault(semantic_key, []).append(item)
     for items in grouped.values():
         sources = {item["source"] for item in items if item["source"]}
         conclusions = {
             (
                 item["values"]["classification"], item["values"]["confidence"],
-                item["values"]["stance"], item["values"]["coverage_status"],
+                item["values"]["stance"],
             )
             for item in items
         }
@@ -356,11 +341,8 @@ def _calendar(security_code: str, fetched_at: str) -> dict[str, Any]:
         }
 
 
-def get_research_continuity(campaign_id: str) -> dict[str, Any]:
-    campaign = campaign_service.get_campaign(campaign_id)
-    fetched_at = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+def _result(campaign: Mapping[str, Any], fetched_at: str, calendar: dict[str, Any]) -> dict[str, Any]:
     continuity = _continuity(campaign)
-    calendar = _calendar(campaign["security_code"], fetched_at)
     overall = "NORMAL"
     if continuity["changes"]["status"] in {"UNAVAILABLE"} or calendar["state"] == "ERROR":
         overall = "PARTIAL"
@@ -375,3 +357,20 @@ def get_research_continuity(campaign_id: str) -> dict[str, Any]:
         "decision_calendar": calendar,
         "writes": {"thesis": 0, "decision": 0, "campaign": 0, "trade": 0},
     }
+
+
+def get_research_continuities(campaign_ids: list[str]) -> list[dict[str, Any]]:
+    campaigns = [campaign_service.get_campaign(campaign_id) for campaign_id in dict.fromkeys(campaign_ids)]
+    fetched_at = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    calendars = {
+        security_code: _calendar(security_code, fetched_at)
+        for security_code in sorted({campaign["security_code"] for campaign in campaigns})
+    }
+    return [
+        _result(campaign, fetched_at, calendars[campaign["security_code"]])
+        for campaign in campaigns
+    ]
+
+
+def get_research_continuity(campaign_id: str) -> dict[str, Any]:
+    return get_research_continuities([campaign_id])[0]

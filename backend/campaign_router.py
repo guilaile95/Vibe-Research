@@ -23,7 +23,7 @@ graph 变更。
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 
 import campaign_service
@@ -110,6 +110,12 @@ class CampaignTradeActivationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     trade_id: str
+
+
+class ResearchContinuityBatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    campaign_ids: list[str] = Field(min_length=1, max_length=100)
 
 
 @router.post("/campaigns", status_code=201)
@@ -366,3 +372,19 @@ def get_research_continuity(campaign_id: str) -> dict:
     except Exception:  # noqa: BLE001 — stable safe boundary
         raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
     return {"data": result}
+
+
+@router.post("/campaigns/research-continuity/batch")
+def get_research_continuity_batch(body: ResearchContinuityBatchIn) -> dict:
+    """Read many Campaigns while fetching one disclosure calendar per security."""
+    try:
+        items = research_continuity_service.get_research_continuities(body.campaign_ids)
+    except CampaignInputError:
+        raise HTTPException(422, _INVALID_INPUT_DETAIL) from None
+    except CampaignNotFoundError:
+        raise HTTPException(404, _NOT_FOUND_DETAIL) from None
+    except CampaignServiceError:
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    except Exception:  # noqa: BLE001 — stable safe boundary
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    return {"data": {"items": items}}

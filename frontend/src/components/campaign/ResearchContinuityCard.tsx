@@ -1,15 +1,78 @@
 import { useEffect, useState } from "react";
 import { AlertCircle, CalendarClock, Loader2, RefreshCw } from "lucide-react";
-import { api, ApiError, type ResearchContinuity } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  type ResearchContinuity,
+  type ResearchContinuityChange,
+  type ResearchContinuityEvidenceSnapshot,
+} from "@/lib/api";
 import { GlassCard } from "@/components/ui/GlassCard";
 
 const changeLabel = {
   ADDED: "新增事实",
   REMOVED: "移除事实",
   CHANGED: "事实变化",
-  COVERAGE_CHANGED: "覆盖变化",
   SOURCE_CONFLICT: "来源冲突",
 };
+
+const fieldLabel: Record<string, string> = {
+  claim: "事实",
+  evidence_type: "证据类型",
+  classification: "分类",
+  confidence: "置信度",
+  stance: "立场",
+  source_title: "来源标题",
+  source_url: "来源链接",
+  source_date: "来源日期",
+  accessed_at: "读取时间",
+};
+
+function shown(value: string | null | undefined): string {
+  return value === null || value === undefined || value === "" ? "未知" : value;
+}
+
+function evidenceLine(snapshot: ResearchContinuityEvidenceSnapshot | null | undefined) {
+  if (!snapshot) return null;
+  return (
+    <>
+      <p className="mt-1 font-medium">{shown(snapshot.claim_identity)}</p>
+      <p className="mt-0.5 text-muted-foreground">来源：{shown(snapshot.source)}</p>
+    </>
+  );
+}
+
+function changeDetails(item: ResearchContinuityChange) {
+  if (item.change_type === "ADDED") return evidenceLine(item.after);
+  if (item.change_type === "REMOVED") return evidenceLine(item.before);
+  if (item.change_type === "CHANGED") {
+    return (
+      <>
+        <p className="mt-1 font-medium">{shown(item.after?.claim_identity || item.before?.claim_identity)}</p>
+        <ul className="mt-1 space-y-0.5 text-muted-foreground">
+          {(item.changed_fields || []).map((field) => (
+            <li key={field}>
+              {fieldLabel[field] || field}：{shown(item.before?.values[field])} → {shown(item.after?.values[field])}
+            </li>
+          ))}
+        </ul>
+        <p className="mt-0.5 text-muted-foreground">来源：{shown(item.after?.source || item.before?.source)}</p>
+      </>
+    );
+  }
+  return (
+    <>
+      <p className="mt-1 font-medium">{shown(item.records?.[0]?.claim_identity)}</p>
+      <ul className="mt-1 space-y-0.5 text-warning">
+        {(item.records || []).map((record) => (
+          <li key={record.record_key}>
+            {shown(record.source)}：{shown(record.values.stance)} / {shown(record.values.classification)} / {shown(record.values.confidence)}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
 
 function calendarText(value: ResearchContinuity["decision_calendar"]): string {
   if (value.state === "ERROR") return "ERROR · 披露日历暂不可用";
@@ -26,10 +89,16 @@ function calendarText(value: ResearchContinuity["decision_calendar"]): string {
     : "CONFIRMED";
 }
 
-export function ResearchContinuityCard({ campaignId }: { campaignId: string }) {
-  const [data, setData] = useState<ResearchContinuity | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+export function ResearchContinuityCard({
+  campaignId,
+  prefetched,
+}: {
+  campaignId: string;
+  prefetched?: ResearchContinuity | null;
+}) {
+  const [data, setData] = useState<ResearchContinuity | null>(prefetched ?? null);
+  const [loading, setLoading] = useState(prefetched === undefined);
+  const [error, setError] = useState(prefetched === null ? "批量读取失败，可单独刷新" : "");
 
   const load = async () => {
     setLoading(true);
@@ -45,6 +114,12 @@ export function ResearchContinuityCard({ campaignId }: { campaignId: string }) {
   };
 
   useEffect(() => {
+    if (prefetched !== undefined) {
+      setData(prefetched);
+      setError(prefetched === null ? "批量读取失败，可单独刷新" : "");
+      setLoading(false);
+      return;
+    }
     let active = true;
     setLoading(true);
     setError("");
@@ -54,7 +129,7 @@ export function ResearchContinuityCard({ campaignId }: { campaignId: string }) {
       .catch((cause) => { if (active) setError(cause instanceof ApiError ? cause.message : "Research Continuity 读取失败"); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [campaignId]);
+  }, [campaignId, prefetched]);
 
   return (
     <GlassCard data-testid="research-continuity" data-campaign-id={campaignId}>
@@ -91,10 +166,14 @@ export function ResearchContinuityCard({ campaignId }: { campaignId: string }) {
             ) : (
               <ul className="mt-2 space-y-1.5">
                 {data.changes.items.slice(0, 8).map((item) => (
-                  <li key={`${item.change_type}:${item.record_key}`} className="rounded bg-muted/40 px-2 py-1.5">
+                  <li
+                    key={`${item.change_type}:${item.record_key}`}
+                    className="rounded bg-muted/40 px-2 py-1.5"
+                    data-testid={`research-change-${item.change_type.toLowerCase()}`}
+                  >
                     <span className="font-medium">{changeLabel[item.change_type]}</span>
-                    <span className="ml-2 font-mono text-[10px] text-muted-foreground">{item.record_key}</span>
-                    {item.sources?.length ? <span className="ml-2 text-warning">{item.sources.join(" / ")}</span> : null}
+                    {changeDetails(item)}
+                    <p className="mt-1 font-mono text-[10px] text-muted-foreground">Evidence ID：{item.record_key}</p>
                   </li>
                 ))}
               </ul>

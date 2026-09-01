@@ -444,6 +444,64 @@ async function fillCandidateAnchors(page) {
   await page.getByLabel("Candidate invalidation price").fill("90");
 }
 
+function continuityEvidence(recordKey, claim, source, overrides = {}) {
+  return {
+    record_key: recordKey,
+    claim_identity: claim,
+    source,
+    field_states: { claim_identity: "VALUE", source: "VALUE" },
+    values: {
+      claim,
+      evidence_type: "news",
+      classification: "fact",
+      confidence: "high",
+      stance: "support",
+      source_title: source,
+      source_url: null,
+      source_date: "2026-08-30",
+      accessed_at: "2026-08-30T01:00:00Z",
+      ...overrides,
+    },
+  };
+}
+
+const researchContinuity = {
+  schema_version: "research_continuity.v0.1",
+  status: "NORMAL",
+  campaign_id: CAMPAIGN_A,
+  security_code: "600519",
+  strategy: "MEDIUM",
+  fetched_at: "2026-08-30T02:00:00Z",
+  baseline: { status: "READY", authority_type: "FROZEN_DECISION" },
+  changes: {
+    status: "NORMAL",
+    observation_count: 1,
+    items: [
+      { change_type: "ADDED", record_key: "added", before: null, after: continuityEvidence("added", "新增订单事实", "交易所公告") },
+      { change_type: "REMOVED", record_key: "removed", before: continuityEvidence("removed", "原产能假设", "公司年报"), after: null },
+      {
+        change_type: "CHANGED",
+        record_key: "changed",
+        changed_fields: ["confidence"],
+        before: continuityEvidence("changed", "利润增长", "公司公告", { confidence: "medium" }),
+        after: continuityEvidence("changed", "利润增长", "公司公告", { confidence: "high" }),
+      },
+      {
+        change_type: "SOURCE_CONFLICT",
+        record_key: "conflict-a,conflict-b",
+        sources: ["来源 A", "来源 B"],
+        records: [
+          continuityEvidence("conflict-a", "需求趋势", "来源 A", { stance: "support" }),
+          continuityEvidence("conflict-b", "需求趋势", "来源 B", { stance: "oppose" }),
+        ],
+      },
+    ],
+  },
+  decision_calendar: { state: "NO_RECORD", next: null, latest_actual: null, fetched_at: "2026-08-30T02:00:00Z", source: "fixture" },
+  authority_refs: [],
+  writes: { thesis: 0, decision: 0, campaign: 0, trade: 0 },
+};
+
 let server;
 let browser;
 try {
@@ -461,6 +519,7 @@ try {
     committed: false,
     capitalScenario: "A",
     failNextCommitStale: false,
+    continuityRequests: 0,
     apiPaths: [],
   };
 
@@ -587,6 +646,12 @@ try {
       const campaign = [...state.campaigns, ...fixedCampaigns].find((item) => item.campaign_id === currentThesisMatch[1]);
       assert.ok(campaign, "current thesis requested for unknown campaign");
       await route.fulfill(ok(thesisContext(campaign).current));
+      return;
+    }
+    const continuityMatch = pathname.match(/^\/api\/campaigns\/([^/]+)\/research-continuity$/);
+    if (continuityMatch && request.method() === "GET") {
+      state.continuityRequests += 1;
+      await route.fulfill(ok({ ...researchContinuity, campaign_id: continuityMatch[1] }));
       return;
     }
     const thesisAggregateMatch = pathname.match(/^\/api\/thesis\/([^/]+)$/);
@@ -767,6 +832,18 @@ try {
   await panel.locator('[data-campaign-status="DRAFT"]').waitFor();
   assert.deepEqual(state.createdPayloads, [{ security_code: "600519", strategy: "SHORT" }]);
   assert.equal(state.transitionPayloads.length, 0, "creation must not auto-transition beyond DRAFT");
+  const continuity = panel.getByTestId("research-continuity");
+  await continuity.getByTestId("research-change-added").getByText("新增订单事实", { exact: true }).waitFor();
+  await continuity.getByTestId("research-change-added").getByText("来源：交易所公告", { exact: true }).waitFor();
+  await continuity.getByTestId("research-change-removed").getByText("原产能假设", { exact: true }).waitFor();
+  await continuity.getByTestId("research-change-changed").getByText("置信度：medium → high", { exact: true }).waitFor();
+  await continuity.getByTestId("research-change-source_conflict").getByText("来源 A：support / fact / high", { exact: true }).waitFor();
+  await continuity.getByTestId("research-change-source_conflict").getByText("来源 B：oppose / fact / high", { exact: true }).waitFor();
+  const beforeRefresh = state.continuityRequests;
+  const refreshed = page.waitForResponse((response) => response.url().includes("/research-continuity"));
+  await continuity.getByRole("button", { name: "刷新研究连续性" }).click();
+  await refreshed;
+  assert.equal(state.continuityRequests, beforeRefresh + 1, "single Candidate card refresh must remain independent");
 
   await panel.getByRole("button", { name: "继续研究", exact: true }).click();
   await panel.locator('[data-campaign-status="RESEARCHING"]').waitFor();

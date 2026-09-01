@@ -142,6 +142,7 @@ import type {
   DecisionProposalDraftWitness,
   CampaignAIDraftGenerateResult,
   ResearchContinuity,
+  ResearchContinuityBatch,
   DecisionProposalCommitResult,
   CommittedDecisionRuntimeRead,
   StreamLlmConfig,
@@ -1068,6 +1069,7 @@ export const api = {
   getCampaignThesisBinding: (campaignId: string) => getCampaignThesisBinding(campaignId),
   getCampaignCurrentThesis: (campaignId: string) => getCampaignCurrentThesis(campaignId),
   getResearchContinuity: (campaignId: string) => getResearchContinuity(campaignId),
+  getResearchContinuityBatch: (campaignIds: string[]) => getResearchContinuityBatch(campaignIds),
   generateCampaignAIDraft: (campaignId: string, llm: StreamLlmConfig) =>
     generateCampaignAIDraft(campaignId, llm),
   previewDecisionProposal: (campaignId: string, body: DecisionProposalDraftInput) =>
@@ -1423,6 +1425,16 @@ export async function getResearchContinuity(
 ): Promise<ResearchContinuity> {
   return get<ResearchContinuity>(
     `/campaigns/${encodeURIComponent(campaignId)}/research-continuity`,
+  );
+}
+
+export async function getResearchContinuityBatch(
+  campaignIds: string[],
+): Promise<ResearchContinuityBatch> {
+  return request<ResearchContinuityBatch>(
+    "/campaigns/research-continuity/batch",
+    "POST",
+    { campaign_ids: campaignIds },
   );
 }
 
