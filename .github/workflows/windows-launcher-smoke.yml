@@ -8,6 +8,8 @@ on:
       - "Start-Vibe.cmd"
       - "start-vibe.ps1"
       - "backend/app.py"
+      - "backend/agent_runtime.py"
+      - "agent-runtime/**"
       - "backend/native_intel_service.py"
       - "backend/requirements*.txt"
       - "frontend/package.json"
@@ -19,6 +21,8 @@ on:
       - "Start-Vibe.cmd"
       - "start-vibe.ps1"
       - "backend/app.py"
+      - "backend/agent_runtime.py"
+      - "agent-runtime/**"
       - "backend/native_intel_service.py"
       - "backend/requirements*.txt"
       - "frontend/package.json"
@@ -54,7 +58,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            agent-runtime/package-lock.json
 
       - name: Run the real double-click entry in smoke mode
         shell: pwsh
@@ -75,7 +81,7 @@ jobs:
       - name: Prove launcher cleaned up its ports
         shell: pwsh
         run: |
-          foreach ($port in 8900, 5899) {
+          foreach ($port in 8911, 8900, 5899) {
             $connected = $false
             $client = [System.Net.Sockets.TcpClient]::new()
             try {

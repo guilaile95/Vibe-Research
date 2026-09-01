@@ -28,6 +28,6 @@ test("Ask AI renders assistant messages with the markdown stack", async () => {
   assert.match(source, /import remarkGfm from "remark-gfm";/);
   assert.match(
     source,
-    /m\.role === "assistant"\s*\?\s*\(\s*<div className="prose[^"]*">\s*<ReactMarkdown remarkPlugins=\{\[remarkGfm\]\}>\{m\.content\}<\/ReactMarkdown>\s*<\/div>/s,
+    /m\.role === "assistant"\s*\?\s*\(\s*<>[\s\S]*?NON_AUTHORITATIVE_AI_DRAFT[\s\S]*?<div className="prose[^"]*">\s*<ReactMarkdown remarkPlugins=\{\[remarkGfm\]\}>\{m\.content\}<\/ReactMarkdown>\s*<\/div>[\s\S]*?<\/>/s,
   );
 });

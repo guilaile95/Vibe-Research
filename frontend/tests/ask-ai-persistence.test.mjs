@@ -112,3 +112,13 @@ test("a request that fails before any content removes its question too", () => {
   assert.match(block[0], /const dropUser = m\[m\.length - 2\]\?\.role === "user";/);
   assert.match(block[0], /m\.slice\(0, dropUser \? -2 : -1\)/);
 });
+
+test("runtime switch, explicit stop, and page session stay bound to the active request", () => {
+  assert.match(source, /window\.addEventListener\(LLM_CHANGED_EVENT, refreshRuntime\)/);
+  assert.match(source, /const refreshRuntime = \(\) => \{[\s\S]*?abortRef\.current\?\.abort\(\)/);
+  assert.match(source, /const stop = \(\) => \{[\s\S]*?abortRef\.current\?\.abort\(\)/);
+  assert.match(source, /aria-label="停止生成"/);
+  assert.match(source, /chatSessionId\(`\$\{startedKey\}:\$\{runtimeKey\}:\$\{epoch\}`\)/);
+  assert.match(source, /runtimeLabel\(selectedLlm\)/);
+  assert.match(source, /NON_AUTHORITATIVE_AI_DRAFT/);
+});

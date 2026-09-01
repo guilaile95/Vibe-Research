@@ -37,6 +37,7 @@ import ai_result_service
 import astock
 import chat as chat_layer
 import cli_runtime
+import agent_runtime
 import daily_review
 import debate as debate_layer
 import gstock
@@ -652,6 +653,7 @@ def _require_llm_ready(llm: LLMConfig) -> bool:
 class ChatReq(BaseModel):
     messages: list[dict]
     context: str = ""
+    session: str = ""
     llm: LLMConfig
 
 
@@ -665,7 +667,17 @@ def chat(req: ChatReq):
     """
     if not req.messages:
         raise HTTPException(400, "messages 不能为空")
-    is_cli = _require_llm_ready(req.llm)
+    is_codex_runtime = (req.llm.provider or "").strip() == "cli-codex"
+    if is_codex_runtime:
+        if not (req.session or "").strip():
+            raise HTTPException(400, "Codex Subscription 对话缺少页面 session")
+        runtime_status = agent_runtime.status()
+        if not runtime_status["available"]:
+            code = 401 if runtime_status["status"] in {"not_authenticated", "login_pending", "login_failed"} else 503
+            raise HTTPException(code, "Codex Subscription 尚未连接，请先在设置页登录")
+        is_cli = False
+    else:
+        is_cli = _require_llm_ready(req.llm)
 
     cfg = req.llm.model_dump()
     # P0-SEC2：CLI 订阅接入需要 ASGI disconnect → cancel 传播（与 /api/daily-review/analyze 对齐）。
@@ -676,7 +688,27 @@ def chat(req: ChatReq):
 
     def gen():
         try:
-            events = (chat_layer.run_chat_cli_stream if is_cli else chat_layer.run_chat_stream)(cfg, req.messages, req.context)
+            if is_codex_runtime:
+                question = next(
+                    (
+                        str(message.get("content") or "").strip()
+                        for message in reversed(req.messages)
+                        if message.get("role") == "user" and str(message.get("content") or "").strip()
+                    ),
+                    "",
+                )
+                if not question:
+                    raise agent_runtime.AgentRuntimeError("BAD_REQUEST", "对话问题不能为空", 400)
+                events = agent_runtime.stream_chat(
+                    session=req.session,
+                    message=question,
+                    context=req.context,
+                    cancel_event=disconnect_event,
+                )
+            else:
+                events = (chat_layer.run_chat_cli_stream if is_cli else chat_layer.run_chat_stream)(
+                    cfg, req.messages, req.context
+                )
             for ev in events:
                 if disconnect_event.is_set():
                     return
@@ -690,6 +722,28 @@ def chat(req: ChatReq):
         media_type="application/x-ndjson",
         disconnect_event=disconnect_event,
     )
+
+
+@app.get("/api/agent-runtime/status")
+def agent_runtime_status():
+    return agent_runtime.status()
+
+
+@app.post("/api/agent-runtime/login", status_code=202)
+def agent_runtime_login():
+    try:
+        return agent_runtime.start_login()
+    except agent_runtime.AgentRuntimeError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from None
+
+
+class AgentRuntimeCancelReq(BaseModel):
+    session: str
+
+
+@app.post("/api/agent-runtime/cancel")
+def agent_runtime_cancel(req: AgentRuntimeCancelReq):
+    return {"cancelled": agent_runtime.cancel(req.session)}
 
 
 class DebateReq(BaseModel):

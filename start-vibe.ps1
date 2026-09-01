@@ -14,16 +14,21 @@ $global:LASTEXITCODE = 0
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackendDir = Join-Path $RepoRoot "backend"
 $FrontendDir = Join-Path $RepoRoot "frontend"
+$AgentRuntimeDir = Join-Path $RepoRoot "agent-runtime"
 $RuntimeDir = Join-Path $RepoRoot ".vibe-runtime"
 $BackendLock = Join-Path $BackendDir "requirements-dev-windows-py312.lock.txt"
 $BackendVenv = Join-Path $BackendDir ".venv"
 $BackendPython = Join-Path $BackendVenv "Scripts\python.exe"
 $FrontendLock = Join-Path $FrontendDir "package-lock.json"
 $FrontendModules = Join-Path $FrontendDir "node_modules"
+$AgentRuntimeLock = Join-Path $AgentRuntimeDir "package-lock.json"
+$AgentRuntimeModules = Join-Path $AgentRuntimeDir "node_modules"
 $BackendMarker = Join-Path $RuntimeDir "backend-lock.sha256"
 $FrontendMarker = Join-Path $RuntimeDir "frontend-lock.sha256"
+$AgentRuntimeMarker = Join-Path $RuntimeDir "agent-runtime-lock.sha256"
 $BackendUrl = "http://127.0.0.1:8900"
 $FrontendUrl = "http://127.0.0.1:5899"
+$AgentRuntimeUrl = "http://127.0.0.1:8911"
 
 function Assert-ProjectLayout {
     $required = @(
@@ -31,6 +36,8 @@ function Assert-ProjectLayout {
         $BackendLock,
         (Join-Path $FrontendDir "package.json"),
         $FrontendLock,
+        (Join-Path $AgentRuntimeDir "package.json"),
+        $AgentRuntimeLock,
         (Join-Path $RepoRoot "Start-Vibe.cmd")
     )
     foreach ($path in $required) {
@@ -132,17 +139,31 @@ function Ensure-BackendEnvironment {
     }
 }
 
-function Ensure-FrontendEnvironment {
+function Resolve-NodeToolchain {
     $node = Get-Command "node.exe" -ErrorAction SilentlyContinue
     $npm = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
     if ($null -eq $node -or $null -eq $npm) {
-        throw "未找到 Node.js 22 / npm.cmd。请先安装 Node.js 22。"
+        throw "未找到 Node.js / npm.cmd。请先安装 Node.js 22.6 或更高版本。"
     }
 
     $nodeVersion = (& $node.Source --version 2>$null | Select-Object -First 1)
-    if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v22\.') {
-        throw "当前 Node.js 版本为 $nodeVersion；Vibe-Research 需要 Node.js 22。"
+    $parsedVersion = $null
+    if ($LASTEXITCODE -eq 0 -and $nodeVersion -match '^v(?<version>\d+\.\d+\.\d+)$') {
+        $parsedVersion = [version]$Matches.version
     }
+    if ($null -eq $parsedVersion -or $parsedVersion -lt [version]"22.6.0") {
+        throw "当前 Node.js 版本为 $nodeVersion；Vibe-Research 需要 Node.js 22.6 或更高版本。"
+    }
+
+    return [pscustomobject]@{
+        Node = $node.Source
+        Npm = $npm.Source
+        Version = $parsedVersion
+    }
+}
+
+function Ensure-FrontendEnvironment {
+    param([Parameter(Mandatory)] [pscustomobject]$Toolchain)
 
     $expected = Get-ContentHash $FrontendLock
     $actual = if (Test-Path -LiteralPath $FrontendMarker) {
@@ -155,14 +176,35 @@ function Ensure-FrontendEnvironment {
     if ($Setup -or -not (Test-Path -LiteralPath $FrontendModules) -or $actual -ne $expected) {
         Write-Host "同步前端依赖……" -ForegroundColor Cyan
         Invoke-CheckedCommand `
-            -FilePath $npm.Source `
+            -FilePath $Toolchain.Npm `
             -ArgumentList @("ci") `
             -WorkingDirectory $FrontendDir `
             -Description "安装前端依赖"
         Set-Content -LiteralPath $FrontendMarker -Value $expected -NoNewline -Encoding utf8
     }
 
-    return $npm.Source
+}
+
+function Ensure-AgentRuntimeEnvironment {
+    param([Parameter(Mandatory)] [pscustomobject]$Toolchain)
+
+    $expected = Get-ContentHash $AgentRuntimeLock
+    $actual = if (Test-Path -LiteralPath $AgentRuntimeMarker) {
+        (Get-Content -LiteralPath $AgentRuntimeMarker -Raw).Trim().ToLowerInvariant()
+    }
+    else {
+        ""
+    }
+
+    if ($Setup -or -not (Test-Path -LiteralPath $AgentRuntimeModules) -or $actual -ne $expected) {
+        Write-Host "同步 Agent Runtime 依赖……" -ForegroundColor Cyan
+        Invoke-CheckedCommand `
+            -FilePath $Toolchain.Npm `
+            -ArgumentList @("ci") `
+            -WorkingDirectory $AgentRuntimeDir `
+            -Description "安装 Agent Runtime 依赖"
+        Set-Content -LiteralPath $AgentRuntimeMarker -Value $expected -NoNewline -Encoding utf8
+    }
 }
 
 function Test-HttpEndpoint {
@@ -302,7 +344,31 @@ $exitCode = 0
 
 try {
     Ensure-BackendEnvironment
-    $npmPath = Ensure-FrontendEnvironment
+    $nodeToolchain = Resolve-NodeToolchain
+    Ensure-FrontendEnvironment -Toolchain $nodeToolchain
+    Ensure-AgentRuntimeEnvironment -Toolchain $nodeToolchain
+
+    $agentRuntimeEntry = $null
+    if (Test-HttpEndpoint -Uri "$AgentRuntimeUrl/health" -ExpectedText "vibe-agent-runtime") {
+        Write-Host "Agent Runtime 已在运行，直接复用。" -ForegroundColor Green
+    }
+    else {
+        if (Test-TcpPort -Port 8911) {
+            throw "端口 8911 已被其他程序占用，但不是可用的 Vibe Agent Runtime。"
+        }
+        Write-Host "启动 Agent Runtime……" -ForegroundColor Cyan
+        $agentRuntimeEntry = Start-OwnedProcess `
+            -Name "agent-runtime" `
+            -FilePath $nodeToolchain.Node `
+            -ArgumentList @("src/server.mjs") `
+            -WorkingDirectory $AgentRuntimeDir
+        $ownedProcesses += $agentRuntimeEntry
+        Wait-ForService `
+            -Name "Agent Runtime" `
+            -Probe { Test-HttpEndpoint -Uri "$AgentRuntimeUrl/health" -ExpectedText "vibe-agent-runtime" } `
+            -Process $agentRuntimeEntry.Process
+    }
+    $env:VR_AGENT_RUNTIME_URL = $AgentRuntimeUrl
 
     $backendEntry = $null
     if (Test-HttpEndpoint -Uri "$BackendUrl/api/health") {
@@ -336,7 +402,7 @@ try {
         Write-Host "启动前端……" -ForegroundColor Cyan
         $frontendEntry = Start-OwnedProcess `
             -Name "frontend" `
-            -FilePath $npmPath `
+            -FilePath $nodeToolchain.Npm `
             -ArgumentList @("run", "dev", "--", "--host", "127.0.0.1", "--port", "5899", "--strictPort") `
             -WorkingDirectory $FrontendDir
         $ownedProcesses += $frontendEntry
