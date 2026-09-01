@@ -156,9 +156,9 @@ def test_campaign_continuity_api_is_read_only(monkeypatch):
         "get_research_continuities",
         lambda campaign_ids: [{**expected, "campaign_id": campaign_id} for campaign_id in campaign_ids],
     )
-    batch = TestClient(app_module.app).post(
+    batch = TestClient(app_module.app).get(
         "/api/campaigns/research-continuity/batch",
-        json={"campaign_ids": [CAMPAIGN_ID]},
+        params=[("campaign_id", CAMPAIGN_ID)],
     )
     assert batch.status_code == 200
     assert batch.json()["data"]["items"] == [expected]

@@ -1431,10 +1431,10 @@ export async function getResearchContinuity(
 export async function getResearchContinuityBatch(
   campaignIds: string[],
 ): Promise<ResearchContinuityBatch> {
-  return request<ResearchContinuityBatch>(
-    "/campaigns/research-continuity/batch",
-    "POST",
-    { campaign_ids: campaignIds },
+  const query = new URLSearchParams();
+  for (const campaignId of campaignIds) query.append("campaign_id", campaignId);
+  return get<ResearchContinuityBatch>(
+    `/campaigns/research-continuity/batch?${query.toString()}`,
   );
 }
 

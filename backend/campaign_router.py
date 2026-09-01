@@ -22,8 +22,8 @@ graph 变更。
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
 from typing import Literal
 
 import campaign_service
@@ -110,12 +110,6 @@ class CampaignTradeActivationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     trade_id: str
-
-
-class ResearchContinuityBatchIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    campaign_ids: list[str] = Field(min_length=1, max_length=100)
 
 
 @router.post("/campaigns", status_code=201)
@@ -374,11 +368,13 @@ def get_research_continuity(campaign_id: str) -> dict:
     return {"data": result}
 
 
-@router.post("/campaigns/research-continuity/batch")
-def get_research_continuity_batch(body: ResearchContinuityBatchIn) -> dict:
+@router.get("/campaigns/research-continuity/batch")
+def get_research_continuity_batch(
+    campaign_id: list[str] = Query(min_length=1, max_length=100),
+) -> dict:
     """Read many Campaigns while fetching one disclosure calendar per security."""
     try:
-        items = research_continuity_service.get_research_continuities(body.campaign_ids)
+        items = research_continuity_service.get_research_continuities(campaign_id)
     except CampaignInputError:
         raise HTTPException(422, _INVALID_INPUT_DETAIL) from None
     except CampaignNotFoundError:
