@@ -42,10 +42,17 @@ import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
  * - 决策：下一步应该做什么？（Decision Inbox 是正式决策主入口）
  * - 交易 / 复盘：Inbox → Formal Decision → Trade → Review/Outcome 主链直达。
  */
+/**
+ * 「今天」是可展开父级，下挂当日视角的两个二级入口：市场热力 / 资讯雷达。
+ * 二级入口复用现有独立路由（/market-cloud、/intel），不新建页面。
+ */
+const TODAY_PARENT = { to: "/daily-review", icon: Activity, label: "今天" };
+const TODAY_CHILDREN = [
+  { to: "/market-cloud", label: "市场热力" },
+  { to: "/intel", label: "资讯雷达" },
+];
+
 const PRIMARY_NAV = [
-  { to: "/daily-review", icon: Activity, label: "今天" },
-  { to: "/market-cloud", icon: BarChart3, label: "市场热力" },
-  { to: "/intel", icon: BookOpen, label: "资讯" },
   { to: "/screener", icon: Search, label: "发现" },
   { to: "/watchlist", icon: Star, label: "自选" },
   { to: "/stock-data", icon: Search, label: "研究" },
@@ -99,7 +106,7 @@ const SECTOR_PATHS = [
   "/sectors/ai-pharma",
 ];
 
-const ALL_NAV = [...PRIMARY_NAV, ...LIBRARY_NAV, ...ANALYSIS_NAV, ...SYSTEM_NAV];
+const ALL_NAV = [TODAY_PARENT, ...TODAY_CHILDREN, ...PRIMARY_NAV, ...LIBRARY_NAV, ...ANALYSIS_NAV, ...SYSTEM_NAV];
 
 function isActive(pathname: string, to: string) {
   if (to === "/") return pathname === "/";
@@ -147,6 +154,7 @@ export function Layout() {
   const [isDesktop, setIsDesktop] = useState(readDesktop);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [analysisOpen, setAnalysisOpen] = useState(false);
+  const [todayOpen, setTodayOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
@@ -157,6 +165,9 @@ export function Layout() {
 
   useEffect(() => {
     setMobileOpen(false);
+    if (isActive(pathname, TODAY_PARENT.to) || TODAY_CHILDREN.some(({ to }) => isActive(pathname, to))) {
+      setTodayOpen(true);
+    }
     if (LIBRARY_NAV.some(({ to }) => isActive(pathname, to))) {
       setLibraryOpen(true);
     }
@@ -241,6 +252,9 @@ export function Layout() {
   const currentNavPath = getCurrentNavPath(pathname);
   const libraryActive = LIBRARY_NAV.some(({ to }) => currentNavPath === to);
   const analysisActive = ANALYSIS_NAV.some(({ to }) => currentNavPath === to);
+  const todayActive =
+    currentNavPath === TODAY_PARENT.to || TODAY_CHILDREN.some(({ to }) => currentNavPath === to);
+  const TodayIcon = TODAY_PARENT.icon;
   const showResearchWorkflow = RESEARCH_WORKFLOW_PATHS.some((to) => isActive(pathname, to));
 
   const iconNavItem = ({ to, icon: Icon, label }: IconNavItem) => {
@@ -338,7 +352,61 @@ export function Layout() {
         </div>
 
         <nav aria-label="主导航" className={cn("flex-1 overflow-y-auto px-2 pb-3 pt-1", compact && "px-1.5")}>
-          <div className="space-y-0.5">{PRIMARY_NAV.map(iconNavItem)}</div>
+          <div className="space-y-0.5">
+            <div className="relative">
+              <Link
+                to={TODAY_PARENT.to}
+                title={compact ? TODAY_PARENT.label : undefined}
+                aria-current={currentNavPath === TODAY_PARENT.to ? "page" : undefined}
+                className={cn(
+                  "flex min-h-9 items-center rounded-lg text-[13px] transition-colors duration-150",
+                  compact ? "justify-center px-2" : "gap-2.5 px-2.5 pr-8",
+                  currentNavPath === TODAY_PARENT.to
+                    ? "bg-sidebar-active font-medium text-foreground"
+                    : todayActive
+                      ? "bg-sidebar-hover text-foreground"
+                      : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-foreground",
+                )}
+              >
+                <TodayIcon className="h-[17px] w-[17px] shrink-0" />
+                {!compact && <span className="truncate">{TODAY_PARENT.label}</span>}
+              </Link>
+              {!compact && (
+                <button
+                  type="button"
+                  onClick={() => setTodayOpen((v) => !v)}
+                  aria-expanded={todayOpen}
+                  aria-label={todayOpen ? "收起今天分组" : "展开今天分组"}
+                  className="absolute right-1 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-sidebar-muted transition-colors hover:bg-sidebar-hover hover:text-foreground"
+                >
+                  <ChevronDown className={cn("h-4 w-4 transition-transform", todayOpen && "rotate-180")} />
+                </button>
+              )}
+              {todayOpen && !compact && (
+                <div className="mt-0.5 space-y-0.5 pl-4">
+                  {TODAY_CHILDREN.map(({ to, label }) => {
+                    const active = currentNavPath === to;
+                    return (
+                      <Link
+                        key={to}
+                        to={to}
+                        aria-current={active ? "page" : undefined}
+                        className={cn(
+                          "block min-h-8 truncate rounded-lg px-2.5 py-1.5 text-[12px] transition-colors",
+                          active
+                            ? "bg-sidebar-active font-medium text-foreground"
+                            : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-foreground",
+                        )}
+                      >
+                        {label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            {PRIMARY_NAV.map(iconNavItem)}
+          </div>
 
           <div className="mt-5">
             <button
