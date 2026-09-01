@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
+import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 import agent_runtime
@@ -9,6 +13,32 @@ import app as app_module
 
 
 client = TestClient(app_module.app)
+
+
+class _StreamResponse:
+    def __init__(self, lines=(), *, status_code=200):
+        self.lines = lines
+        self.status_code = status_code
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def iter_lines(self):
+        return iter(self.lines)
+
+
+def _watcher_count() -> int:
+    return sum(thread.name == "vibe-agent-runtime-cancel" for thread in threading.enumerate())
+
+
+def _wait_for_watcher_count(expected: int, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and _watcher_count() != expected:
+        time.sleep(0.02)
+    assert _watcher_count() == expected
 
 
 def _request(provider: str = "cli-codex") -> dict:
@@ -141,3 +171,154 @@ def test_api_compatible_chat_path_is_unchanged(monkeypatch):
 
     assert response.status_code == 200
     assert [json.loads(line)["type"] for line in response.text.splitlines()] == ["delta", "done"]
+
+
+def test_agent_runtime_watchers_exit_after_normal_completion_and_error(monkeypatch):
+    baseline = _watcher_count()
+    monkeypatch.setattr(
+        agent_runtime.requests,
+        "post",
+        lambda *_args, **_kwargs: _StreamResponse([b'{"type":"done"}']),
+    )
+
+    for index in range(50):
+        assert list(
+            agent_runtime.stream_chat(
+                session=f"normal-{index}",
+                message="test",
+                context="context",
+                cancel_event=threading.Event(),
+            )
+        ) == [{"type": "done"}]
+
+    _wait_for_watcher_count(baseline)
+
+    monkeypatch.setattr(
+        agent_runtime.requests,
+        "post",
+        lambda *_args, **_kwargs: _StreamResponse(status_code=500),
+    )
+    with pytest.raises(agent_runtime.AgentRuntimeError, match="拒绝"):
+        list(
+            agent_runtime.stream_chat(
+                session="runtime-error",
+                message="test",
+                context="context",
+                cancel_event=threading.Event(),
+            )
+        )
+    _wait_for_watcher_count(baseline)
+
+
+def test_agent_runtime_user_cancel_calls_cancel_once_and_exits(monkeypatch):
+    baseline = _watcher_count()
+    cancelled = threading.Event()
+    calls = []
+
+    def fake_cancel(session):
+        calls.append(session)
+        cancelled.set()
+        return True
+
+    class CancelledResponse(_StreamResponse):
+        def iter_lines(self):
+            assert cancelled.wait(timeout=1)
+            return iter(())
+
+    monkeypatch.setattr(agent_runtime, "cancel", fake_cancel)
+    monkeypatch.setattr(
+        agent_runtime.requests,
+        "post",
+        lambda *_args, **_kwargs: CancelledResponse(),
+    )
+    cancel_event = threading.Event()
+    cancel_event.set()
+
+    assert list(
+        agent_runtime.stream_chat(
+            session="user-cancel",
+            message="test",
+            context="context",
+            cancel_event=cancel_event,
+        )
+    ) == []
+    _wait_for_watcher_count(baseline)
+    assert calls == ["user-cancel"]
+
+
+def test_agent_runtime_http_disconnect_cancels_once_and_exits(monkeypatch):
+    baseline = _watcher_count()
+    cancelled = threading.Event()
+    calls = []
+
+    monkeypatch.setattr(
+        agent_runtime,
+        "status",
+        lambda: {
+            "runtime": "Codex Subscription",
+            "installed": True,
+            "authenticated": True,
+            "available": True,
+            "status": "ready",
+            "version": "test",
+        },
+    )
+
+    def fake_cancel(session):
+        calls.append(session)
+        cancelled.set()
+        return True
+
+    class DisconnectResponse(_StreamResponse):
+        def iter_lines(self):
+            yield b'{"type":"delta","text":"chunk"}'
+            assert cancelled.wait(timeout=2)
+
+    monkeypatch.setattr(agent_runtime, "cancel", fake_cancel)
+    monkeypatch.setattr(
+        agent_runtime.requests,
+        "post",
+        lambda *_args, **_kwargs: DisconnectResponse(),
+    )
+    body = json.dumps(_request()).encode("utf-8")
+
+    async def exercise_disconnect():
+        first_body_sent = asyncio.Event()
+        sent = False
+
+        async def receive():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await first_body_sent.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.body" and message.get("body"):
+                first_body_sent.set()
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/chat",
+            "raw_path": b"/api/chat",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [
+                (b"host", b"testserver"),
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "state": {},
+        }
+        await app_module.app(scope, receive, send)
+
+    asyncio.run(exercise_disconnect())
+    _wait_for_watcher_count(baseline)
+    assert calls == ["stock-600519"]
