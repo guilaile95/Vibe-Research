@@ -90,9 +90,10 @@ def stream_chat(
     finished = threading.Event()
 
     def _cancel_when_disconnected() -> None:
-        cancel_event.wait()
-        if not finished.is_set():
-            cancel(session)
+        while not finished.wait(timeout=0.1):
+            if cancel_event.is_set():
+                cancel(session)
+                return
 
     watcher = threading.Thread(
         target=_cancel_when_disconnected,
