@@ -49,6 +49,7 @@ import type {
   BootstrapPositionRow,
 } from "@/lib/positionBootstrap";
 import { CampaignLifecycleCard } from "@/components/campaign/CampaignLifecycleCard";
+import { ResearchContinuityCard } from "@/components/campaign/ResearchContinuityCard";
 import { CampaignThesisActivationCard } from "@/components/campaign/CampaignThesisActivationCard";
 import { HardRiskPanel } from "@/components/campaign/HardRiskPanel";
 import { DecisionActionPanel } from "@/components/campaign/DecisionActionPanel";
@@ -881,6 +882,7 @@ export default function DecisionInbox() {
                     }}
                     onChanged={() => void refresh()}
                   />
+                  <ResearchContinuityCard campaignId={item.campaign_id} />
                   <HardRiskPanel item={item} />
                   <DecisionActionPanel item={item} />
                   <DecisionCommitInboxStatus

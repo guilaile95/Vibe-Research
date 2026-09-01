@@ -6,6 +6,7 @@ import { CAMPAIGN_STRATEGIES, CAMPAIGN_STRATEGY_LABELS, errorMessage } from "@/l
 import { selectCandidateCampaigns } from "@/lib/candidateCampaign";
 import { CampaignLifecycleCard } from "./CampaignLifecycleCard";
 import { CampaignThesisActivationCard } from "./CampaignThesisActivationCard";
+import { ResearchContinuityCard } from "./ResearchContinuityCard";
 
 /**
  * StockData 的候选研究 continuation。
@@ -150,6 +151,7 @@ export function CandidateCampaignPanel({
                 researchContext
                 onChanged={() => void load()}
               />
+              <ResearchContinuityCard campaignId={campaign.campaign_id} />
               {workspace && (
                 <section className="space-y-2" data-testid="candidate-thesis-decision-step">
                   <div>

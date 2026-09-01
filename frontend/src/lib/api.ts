@@ -141,6 +141,7 @@ import type {
   DecisionProposalPreview,
   DecisionProposalDraftWitness,
   CampaignAIDraftGenerateResult,
+  ResearchContinuity,
   DecisionProposalCommitResult,
   CommittedDecisionRuntimeRead,
   StreamLlmConfig,
@@ -1066,6 +1067,7 @@ export const api = {
     bindCampaignThesis(campaignId, thesisId),
   getCampaignThesisBinding: (campaignId: string) => getCampaignThesisBinding(campaignId),
   getCampaignCurrentThesis: (campaignId: string) => getCampaignCurrentThesis(campaignId),
+  getResearchContinuity: (campaignId: string) => getResearchContinuity(campaignId),
   generateCampaignAIDraft: (campaignId: string, llm: StreamLlmConfig) =>
     generateCampaignAIDraft(campaignId, llm),
   previewDecisionProposal: (campaignId: string, body: DecisionProposalDraftInput) =>
@@ -1413,6 +1415,14 @@ export async function getCampaignCurrentThesis(
 ): Promise<CampaignCurrentThesis> {
   return get<CampaignCurrentThesis>(
     `/campaigns/${encodeURIComponent(campaignId)}/current-thesis`,
+  );
+}
+
+export async function getResearchContinuity(
+  campaignId: string,
+): Promise<ResearchContinuity> {
+  return get<ResearchContinuity>(
+    `/campaigns/${encodeURIComponent(campaignId)}/research-continuity`,
   );
 }
 

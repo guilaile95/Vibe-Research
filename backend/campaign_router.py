@@ -45,6 +45,7 @@ from campaign_service import (
 
 import formal_thesis_projection
 from formal_thesis_projection import CurrentThesisProjectionError
+import research_continuity_service
 
 router = APIRouter(prefix="/api", tags=["campaigns"])
 
@@ -349,3 +350,19 @@ def get_current_thesis(campaign_id: str) -> dict:
     except Exception:  # noqa: BLE001 — 未预期逃逸，安全兜底
         raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
     return {"data": projection}
+
+
+@router.get("/campaigns/{campaign_id}/research-continuity")
+def get_research_continuity(campaign_id: str) -> dict:
+    """Read-only immutable evidence delta and next disclosure context."""
+    try:
+        result = research_continuity_service.get_research_continuity(campaign_id)
+    except CampaignInputError:
+        raise HTTPException(422, _INVALID_INPUT_DETAIL) from None
+    except CampaignNotFoundError:
+        raise HTTPException(404, _NOT_FOUND_DETAIL) from None
+    except CampaignServiceError:
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    except Exception:  # noqa: BLE001 — stable safe boundary
+        raise HTTPException(500, _INTERNAL_ERROR_DETAIL) from None
+    return {"data": result}
