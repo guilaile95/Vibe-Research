@@ -57,6 +57,49 @@ function chromiumPath() {
   return undefined;
 }
 
+function deriveCompletedSessionEvaluationAsOf(python, startAsOf) {
+  const script = `
+import json
+import os
+from datetime import datetime, timedelta, timezone
+from trade_calendar import completed_trade_date_at
+
+start_as_of = os.environ['OL1_DERIVATION_START_AS_OF']
+start_trade_date = completed_trade_date_at(start_as_of)
+assert start_trade_date
+start_at = datetime.fromisoformat(start_as_of.replace('Z', '+00:00'))
+candidate_date = start_at.date()
+for _ in range(370):
+    candidate_at = datetime(candidate_date.year, candidate_date.month, candidate_date.day, 8, tzinfo=timezone.utc)
+    candidate_as_of = candidate_at.isoformat(timespec='microseconds').replace('+00:00', 'Z')
+    candidate_trade_date = completed_trade_date_at(candidate_as_of)
+    if candidate_at > start_at and candidate_trade_date and candidate_trade_date > start_trade_date:
+        print(json.dumps({
+            'start_as_of': start_as_of,
+            'start_trade_date': start_trade_date,
+            'evaluation_as_of': candidate_as_of,
+            'end_trade_date': candidate_trade_date,
+        }))
+        break
+    candidate_date += timedelta(days=1)
+else:
+    raise AssertionError(f'no completed session after {start_trade_date}')
+`;
+  const result = spawnSync(python.cmd, [...python.args, "-c", script], {
+    cwd: backendDir,
+    env: {
+      ...process.env,
+      OL1_DERIVATION_START_AS_OF: startAsOf,
+      PYTHONPATH: [__dirname, backendDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+    },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const derived = JSON.parse(result.stdout.trim());
+  assert.ok(derived.end_trade_date > derived.start_trade_date, JSON.stringify(derived));
+  return derived;
+}
+
 function freePort() {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -481,7 +524,6 @@ async function run() {
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
       VR_FACT_LAKE_ROOT: join(tempDataDir, "fact-lake"),
-      OL1_CF_EVALUATION_AS_OF: "2026-09-01T00:00:00.000000Z",
       VIBE_RESEARCH_TRADE_LEDGER_DB: join(tempDataDir, "trade_ledger.sqlite3"),
       VIBE_RESEARCH_REVIEW_DB: join(tempDataDir, "review_history.db"),
       VIBE_RESEARCH_EVIDENCE_THESIS_DB: join(tempDataDir, "evidence_thesis.db"),
@@ -555,6 +597,16 @@ async function run() {
       tempDataDir,
       "2026-08-01T10:00",
     );
+    const normalSessionCase = deriveCompletedSessionEvaluationAsOf(
+      pythonScriptConfig(),
+      "2026-09-01T08:00:00Z",
+    );
+    const weekendHolidayCase = deriveCompletedSessionEvaluationAsOf(
+      pythonScriptConfig(),
+      "2026-10-01T08:00:00Z",
+    );
+    assert.ok(normalSessionCase.end_trade_date > normalSessionCase.start_trade_date, JSON.stringify(normalSessionCase));
+    assert.ok(weekendHolidayCase.end_trade_date > weekendHolidayCase.start_trade_date, JSON.stringify(weekendHolidayCase));
     const secondRun = await freezeThroughBrowser(
       page,
       backend,
@@ -588,8 +640,13 @@ async function run() {
       tempDataDir,
       "2099-09-10T10:00",
     );
+    const runtimeEvaluation = deriveCompletedSessionEvaluationAsOf(
+      pythonScriptConfig(),
+      firstRun.committed.committed.committed_at,
+    );
+    const evaluationAsOf = runtimeEvaluation.evaluation_as_of;
+    env.OL1_CF_EVALUATION_AS_OF = evaluationAsOf;
     const fixtures = prepareTradeAndFactLake(env, pythonScriptConfig(), firstRun.committed.committed, secondRun.committed.committed);
-    const evaluationAsOf = "2026-09-01T00:00:00.000000Z";
     assert.ok(firstRun.committed.committed.source_refs, JSON.stringify(firstRun.committed));
     const firstBefore = await jsonRequest(
       backend,
