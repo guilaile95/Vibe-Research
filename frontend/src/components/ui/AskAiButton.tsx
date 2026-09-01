@@ -95,6 +95,7 @@ interface Props {
   // 一个 AskAiButton、且一个路由对应一个对象，够用。
   // ⚠️ 不换路由就能换标的的页面（如个股页）必须传入已解析的代码，否则对话会串台。
   scopeKey?: string;
+  reportIds?: string[];
 }
 
 const TOOL_LABEL: Record<string, string> = {
@@ -112,7 +113,7 @@ const argStr = (a: Record<string, unknown>): string => {
 
 interface ToolUse { name: string; arg: string }
 
-export function AskAiButton({ context, suggestions = [], label = "问 AI", scopeKey }: Props) {
+export function AskAiButton({ context, suggestions = [], label = "问 AI", scopeKey, reportIds = [] }: Props) {
   const { pathname } = useLocation();
   const chatKey = CHAT_KEY_PREFIX + pathname + (scopeKey ? `#${scopeKey}` : "");
   const selectedLlm = loadLlm();
@@ -262,7 +263,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
       await chatStream(history, context, {
         onTool: (tool, args) => { if (alive()) patchLast((msg) => ({ ...msg, tools: [...(msg.tools || []), { name: tool, arg: argStr(args) }] })); },
         onDelta: (t) => { if (alive()) patchLast((msg) => ({ ...msg, content: msg.content + t })); },
-      }, ac.signal, session);
+      }, ac.signal, session, reportIds);
       // 正常收完：摘掉 partial，这条回答才开始落盘、才进下一轮 history。
       if (alive()) patchLast((msg) => {
         const { partial: _drop, ...rest } = msg;

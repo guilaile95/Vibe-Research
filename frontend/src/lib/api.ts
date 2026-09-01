@@ -7,6 +7,9 @@ export type * from "./api/types.ts";
 import type { MarketCloudEnvelope } from "./marketCloud.ts";
 import type {
   MyReport,
+  MyReportTextHit,
+  MyReportTextIndexPreview,
+  MyReportTextIndexBatchResult,
   IntelDigestLatestResult,
   IntelDigestSaveIn,
   IntelDigestSaveResult,
@@ -719,6 +722,24 @@ export const api = {
   },
   searchMyReports: (q: string) =>
     get<MyReport[]>(`/myreports/search?q=${encodeURIComponent(q)}`),
+  searchMyReportText: (q: string, reportIds?: string[], limit = 20) => {
+    const params = new URLSearchParams({ q, limit: String(limit) });
+    for (const reportId of reportIds ?? []) params.append("report_ids", reportId);
+    return get<MyReportTextHit[]>(`/myreports/fulltext-search?${params.toString()}`);
+  },
+  previewMyReportTextIndex: (reportIds?: string[]) => {
+    const params = new URLSearchParams();
+    for (const reportId of reportIds ?? []) params.append("report_ids", reportId);
+    const query = params.toString();
+    return get<MyReportTextIndexPreview>(`/myreports/text-index/preview${query ? `?${query}` : ""}`);
+  },
+  indexMyReportText: (id: string) =>
+    request<MyReport>(`/myreports/${id}/text-index`, "POST", {}),
+  batchIndexMyReportText: (reportIds: string[]) =>
+    request<MyReportTextIndexBatchResult>("/myreports/text-index/batch", "POST", {
+      report_ids: reportIds,
+      confirm: true,
+    }),
   patchReport: (id: string, meta: {
     title?: string; institution?: string; publish_date?: string;
     sector_keys?: string[]; source_url?: string; source_kind?: string;

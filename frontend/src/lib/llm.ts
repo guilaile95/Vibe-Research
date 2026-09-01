@@ -103,10 +103,16 @@ export async function chatStream(
   handlers: ChatHandlers = {},
   signal?: AbortSignal,
   session?: string,
+  reportIds: string[] = [],
 ): Promise<ChatResult> {
   const llm = loadLlm();
   if (!llm) throw new ApiError("尚未接入 AI，请先在「接入 AI」里配置", 400);
-  return streamNdjson("/chat", { messages, context, session: session || "", llm }, handlers, signal);
+  return streamNdjson(
+    "/chat",
+    { messages, context, session: session || "", report_ids: reportIds, llm },
+    handlers,
+    signal,
+  );
 }
 
 // 非流式便捷包装（不需要逐字 UI 的调用方用它）。
