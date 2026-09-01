@@ -11,7 +11,6 @@ import { GlassCard } from "@/components/ui/GlassCard";
 
 const changeLabel = {
   ADDED: "新增事实",
-  REMOVED: "移除事实",
   CHANGED: "事实变化",
   SOURCE_CONFLICT: "来源冲突",
 };
@@ -44,7 +43,6 @@ function evidenceLine(snapshot: ResearchContinuityEvidenceSnapshot | null | unde
 
 function changeDetails(item: ResearchContinuityChange) {
   if (item.change_type === "ADDED") return evidenceLine(item.after);
-  if (item.change_type === "REMOVED") return evidenceLine(item.before);
   if (item.change_type === "CHANGED") {
     return (
       <>
@@ -92,12 +90,14 @@ function calendarText(value: ResearchContinuity["decision_calendar"]): string {
 export function ResearchContinuityCard({
   campaignId,
   prefetched,
+  awaitingPrefetch = false,
 }: {
   campaignId: string;
   prefetched?: ResearchContinuity | null;
+  awaitingPrefetch?: boolean;
 }) {
   const [data, setData] = useState<ResearchContinuity | null>(prefetched ?? null);
-  const [loading, setLoading] = useState(prefetched === undefined);
+  const [loading, setLoading] = useState(awaitingPrefetch || prefetched === undefined);
   const [error, setError] = useState(prefetched === null ? "批量读取失败，可单独刷新" : "");
 
   const load = async () => {
@@ -114,6 +114,12 @@ export function ResearchContinuityCard({
   };
 
   useEffect(() => {
+    if (awaitingPrefetch) {
+      setData(null);
+      setError("");
+      setLoading(true);
+      return;
+    }
     if (prefetched !== undefined) {
       setData(prefetched);
       setError(prefetched === null ? "批量读取失败，可单独刷新" : "");
@@ -129,7 +135,7 @@ export function ResearchContinuityCard({
       .catch((cause) => { if (active) setError(cause instanceof ApiError ? cause.message : "Research Continuity 读取失败"); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [campaignId, prefetched]);
+  }, [awaitingPrefetch, campaignId, prefetched]);
 
   return (
     <GlassCard data-testid="research-continuity" data-campaign-id={campaignId}>

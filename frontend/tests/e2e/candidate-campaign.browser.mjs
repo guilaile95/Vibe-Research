@@ -196,6 +196,7 @@ const evidenceRecords = [{
 const CAMPAIGN_A = `campaign_${"c".repeat(32)}`;
 const CAMPAIGN_B = `campaign_${"d".repeat(32)}`;
 const CAMPAIGN_C = `campaign_${"e".repeat(32)}`;
+const CAMPAIGN_INBOX = `campaign_${"7".repeat(32)}`;
 const DECISION_A = `decision_${"f".repeat(32)}`;
 const CHALLENGE_A = `decision_challenge_${"a".repeat(32)}`;
 const FINGERPRINTS = {
@@ -207,7 +208,33 @@ const FINGERPRINTS = {
 const fixedCampaigns = [
   { campaign_id: CAMPAIGN_B, security_code: "000001", strategy: "SWING", status: "PRE-ENTRY", created_at: "2026-08-26T00:00:00.000Z" },
   { campaign_id: CAMPAIGN_C, security_code: "300750", strategy: "MEDIUM", status: "PRE-ENTRY", created_at: "2026-08-26T00:00:00.000Z" },
+  { campaign_id: CAMPAIGN_INBOX, security_code: "601318", strategy: "SWING", status: "ACTIVE", created_at: "2026-08-26T00:00:00.000Z" },
 ];
+
+const decisionInboxSnapshot = {
+  schema_version: "decision_inbox_runtime.v0.1",
+  as_of: "2026-08-30T02:00:00Z",
+  evaluation_status: "EVALUATED",
+  canonical: true,
+  reason_codes: [],
+  holding_setup_items: [],
+  campaign_items: [{
+    schema_version: "decision_inbox_runtime.v0.1",
+    visible_state: "BLOCKED_BY_DATA",
+    reason_codes: [],
+    security_code: "601318",
+    strategy: "SWING",
+    campaign_id: CAMPAIGN_INBOX,
+    campaign_status: "ACTIVE",
+    as_of: "2026-08-30T02:00:00Z",
+    formal_decision_evaluation: "NOT_EVALUATED",
+    hard_risk_state: "NOT_EVALUATED",
+    hard_risk_evaluation: "NOT_EVALUATED",
+    hard_risk_reason_codes: ["HARD_RISK_NOT_EVALUATED"],
+  }],
+  total_holdings: 0,
+  total_campaign_items: 1,
+};
 
 function thesisContext(campaign) {
   const thesisId = campaign.campaign_id.slice(-32);
@@ -478,7 +505,6 @@ const researchContinuity = {
     observation_count: 1,
     items: [
       { change_type: "ADDED", record_key: "added", before: null, after: continuityEvidence("added", "新增订单事实", "交易所公告") },
-      { change_type: "REMOVED", record_key: "removed", before: continuityEvidence("removed", "原产能假设", "公司年报"), after: null },
       {
         change_type: "CHANGED",
         record_key: "changed",
@@ -520,6 +546,9 @@ try {
     capitalScenario: "A",
     failNextCommitStale: false,
     continuityRequests: 0,
+    continuityBatchRequests: 0,
+    continuityBatchMode: "pending",
+    releaseContinuity: null,
     apiPaths: [],
   };
 
@@ -596,9 +625,30 @@ try {
       await route.fulfill(ok(nativeIntelContext));
       return;
     }
+    if (pathname === "/api/decision-inbox" && request.method() === "GET") {
+      await route.fulfill(ok(decisionInboxSnapshot));
+      return;
+    }
+    if (pathname === "/api/campaigns/research-continuity/batch" && request.method() === "GET") {
+      state.continuityBatchRequests += 1;
+      if (state.continuityBatchMode === "pending") {
+        await new Promise((resolve) => { state.releaseContinuity = resolve; });
+      }
+      if (state.continuityBatchMode === "failure") {
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "fixture failure" }) });
+      } else {
+        await route.fulfill(ok({ items: [{ ...researchContinuity, campaign_id: CAMPAIGN_INBOX, security_code: "601318" }] }));
+      }
+      return;
+    }
     if (pathname === "/api/campaigns" && request.method() === "GET") {
-      assert.equal(url.searchParams.get("security_code"), "600519", "Candidate Research must query the active security only");
-      await route.fulfill(ok(state.campaigns));
+      const securityCode = url.searchParams.get("security_code");
+      if (securityCode) {
+        assert.equal(securityCode, "600519", "Candidate Research must query the active security only");
+        await route.fulfill(ok(state.campaigns));
+      } else {
+        await route.fulfill(ok(fixedCampaigns));
+      }
       return;
     }
     if (pathname === "/api/campaigns" && request.method() === "POST") {
@@ -629,7 +679,7 @@ try {
     }
     if (pathname === "/api/thesis" && request.method() === "GET") {
       assert.equal(url.searchParams.get("subject_type"), "stock");
-      assert.equal(url.searchParams.get("subject_id"), "600519");
+      assert.ok(["600519", "601318"].includes(url.searchParams.get("subject_id")));
       await route.fulfill(ok({ items: [], total: 0, limit: 200, offset: 0 }));
       return;
     }
@@ -735,14 +785,14 @@ try {
 
     const nextActionsMatch = pathname.match(/^\/api\/campaigns\/([^/]+)\/next-actions$/);
     if (nextActionsMatch && request.method() === "GET") {
-      const campaign = state.campaigns.find((item) => item.campaign_id === nextActionsMatch[1]);
+      const campaign = [...state.campaigns, ...fixedCampaigns].find((item) => item.campaign_id === nextActionsMatch[1]);
       assert.ok(campaign, "next-actions requested for unknown candidate campaign");
       await route.fulfill(ok({
         campaign_id: campaign.campaign_id,
         security_code: campaign.security_code,
         strategy: campaign.strategy,
         status: campaign.status,
-        next_actions: campaignsByStatus[campaign.status],
+        next_actions: campaignsByStatus[campaign.status] || [],
       }));
       return;
     }
@@ -835,7 +885,6 @@ try {
   const continuity = panel.getByTestId("research-continuity");
   await continuity.getByTestId("research-change-added").getByText("新增订单事实", { exact: true }).waitFor();
   await continuity.getByTestId("research-change-added").getByText("来源：交易所公告", { exact: true }).waitFor();
-  await continuity.getByTestId("research-change-removed").getByText("原产能假设", { exact: true }).waitFor();
   await continuity.getByTestId("research-change-changed").getByText("置信度：medium → high", { exact: true }).waitFor();
   await continuity.getByTestId("research-change-source_conflict").getByText("来源 A：support / fact / high", { exact: true }).waitFor();
   await continuity.getByTestId("research-change-source_conflict").getByText("来源 B：oppose / fact / high", { exact: true }).waitFor();
@@ -998,6 +1047,34 @@ try {
   for (const action of ["BUY NOW", "BUY SMALL", "SCALE IN"]) {
     await page.locator('[data-action-envelope]').getByText(action, { exact: true }).waitFor();
   }
+
+  // Research Continuity is secondary hydration: a pending or failed batch must
+  // never block the Decision Inbox snapshot, Campaign, or action panels.
+  const individualBeforeInbox = state.continuityRequests;
+  state.continuityBatchMode = "pending";
+  state.releaseContinuity = null;
+  await page.goto(`http://127.0.0.1:${port}/decision-inbox`, { waitUntil: "domcontentloaded" });
+  await page.locator(`[data-campaign-status="ACTIVE"]`).waitFor();
+  await page.locator(`[data-decision-action-panel="${CAMPAIGN_INBOX}"]`).waitFor();
+  const inboxContinuity = page.locator(`[data-testid="research-continuity"][data-campaign-id="${CAMPAIGN_INBOX}"]`);
+  await inboxContinuity.getByText("读取不可变基线与披露日历…", { exact: true }).waitFor();
+  assert.equal(await page.getByText("正在加载决策待办…", { exact: true }).count(), 0, "continuity pending must not keep the core inbox loading");
+  for (let attempt = 0; attempt < 50 && !state.releaseContinuity; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(typeof state.releaseContinuity, "function", "continuity batch did not reach pending fixture");
+  state.continuityBatchMode = "success";
+  state.releaseContinuity();
+  await inboxContinuity.getByTestId("research-change-added").getByText("新增订单事实", { exact: true }).waitFor();
+
+  state.continuityBatchMode = "failure";
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator(`[data-campaign-status="ACTIVE"]`).waitFor();
+  await page.locator(`[data-decision-action-panel="${CAMPAIGN_INBOX}"]`).getByText("重新形成 Formal Decision →", { exact: true }).waitFor();
+  await page.locator(`[data-testid="research-continuity"][data-campaign-id="${CAMPAIGN_INBOX}"]`)
+    .getByRole("alert").getByText("批量读取失败，可单独刷新", { exact: true }).waitFor();
+  assert.equal(state.continuityBatchRequests, 2);
+  assert.equal(state.continuityRequests, individualBeforeInbox, "Decision Inbox must use only the batch continuity request");
 
   assert.deepEqual(state.createdPayloads, [
     { security_code: "600519", strategy: "SHORT" },

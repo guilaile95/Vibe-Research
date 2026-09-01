@@ -15,7 +15,7 @@ import frozen_decision_service
 
 
 SCHEMA_VERSION = "research_continuity.v0.1"
-CHANGE_TYPES = ("ADDED", "REMOVED", "CHANGED", "SOURCE_CONFLICT")
+CHANGE_TYPES = ("ADDED", "CHANGED", "SOURCE_CONFLICT")
 _COMPARE_FIELDS = (
     "claim", "evidence_type", "classification", "confidence", "stance",
     "source_title", "source_url", "source_date", "accessed_at",
@@ -48,8 +48,6 @@ def _parse_date(value: Any) -> date | None:
 
 
 def _field_state(value: Any) -> str:
-    if isinstance(value, str) and value in {"UNKNOWN", "ERROR", "NOT_EVALUATED"}:
-        return str(value)
     if value is None:
         return "UNKNOWN"
     if value == "":
@@ -100,8 +98,6 @@ def compare_evidence(
         raise ResearchContinuityError("duplicate immutable evidence record key")
 
     changes: list[dict[str, Any]] = []
-    for key in sorted(before.keys() - after.keys()):
-        changes.append({"change_type": "REMOVED", "record_key": key, "before": before[key], "after": None})
     for key in sorted(after.keys() - before.keys()):
         changes.append({"change_type": "ADDED", "record_key": key, "before": None, "after": after[key]})
     for key in sorted(before.keys() & after.keys()):

@@ -34,11 +34,10 @@ def _evidence(evidence_id: str, **overrides) -> dict:
 def test_evidence_change_types_and_unknown_are_distinct():
     baseline = [
         _evidence("same"),
-        _evidence("removed", claim="removed claim"),
     ]
     current = [
         _evidence("same", confidence="medium"),
-        _evidence("added", claim="new claim"),
+        _evidence("added", claim="new claim", classification="unknown"),
         _evidence("conflict-a", source_title="source A", source_url="https://a.test", stance="support"),
         _evidence("conflict-b", source_title="source B", source_url="https://b.test", stance="oppose"),
     ]
@@ -188,28 +187,40 @@ def _decision_payload(campaign: dict, thesis_id: str, revision: int, evidence_id
     }
 
 
-def test_persisted_chain_exposes_only_real_immutable_evidence_fields(tmp_path, monkeypatch):
+def test_persisted_chain_proves_supported_changes_from_real_authorities(tmp_path, monkeypatch):
     evidence_db = tmp_path / "evidence.sqlite3"
     monkeypatch.setenv("VIBE_RESEARCH_EVIDENCE_THESIS_DB", str(evidence_db))
     monkeypatch.setenv("VIBE_RESEARCH_CAMPAIGN_DB", str(tmp_path / "campaigns.sqlite3"))
     monkeypatch.setenv("VIBE_RESEARCH_FROZEN_DECISION_DB", str(tmp_path / "decisions.sqlite3"))
     evidence_thesis_store.initialize_store(evidence_db)
 
-    evidence = evidence_thesis_service.create_evidence(evidence_db, {
-        "subject_type": "stock", "subject_id": "600519", "evidence_type": "news",
-        "claim": "原始事实", "source_title": "来源 A", "source_url": "https://a.test",
-        "source_date": "2026-08-01", "accessed_at": "2026-08-01T01:00:00Z",
-        "classification": "fact", "confidence": "high",
-    })
+    def create_evidence(claim: str, source: str, url: str) -> dict:
+        return evidence_thesis_service.create_evidence(evidence_db, {
+            "subject_type": "stock", "subject_id": "600519", "evidence_type": "news",
+            "claim": claim, "source_title": source, "source_url": url,
+            "source_date": "2026-08-01", "accessed_at": "2026-08-01T01:00:00Z",
+            "classification": "fact", "confidence": "high",
+        })
+
+    original = create_evidence("利润增长", "来源 A", "https://a.test")
+    added = create_evidence("新增订单", "交易所公告", "https://added.test")
+    conflict_a = create_evidence("需求趋势", "来源 C", "https://c.test")
+    conflict_b = create_evidence("需求趋势", "来源 D", "https://d.test")
     thesis = evidence_thesis_service.create_thesis(evidence_db, {
         "subject_type": "stock", "subject_id": "600519", "title": "正式 Thesis",
         "summary": "summary", "core_claims": ["a", "b", "c"], "catalysts": [],
         "risks": [], "invalidation_conditions": [],
     })
     thesis_id = thesis["thesis"]["id"]
-    linked = evidence_thesis_service.link_evidence(
-        evidence_db, thesis_id, evidence["id"], "support", 1,
-    )
+    revision = 1
+    for evidence, stance in (
+        (original, "support"), (added, "support"),
+        (conflict_a, "support"), (conflict_b, "oppose"),
+    ):
+        linked = evidence_thesis_service.link_evidence(
+            evidence_db, thesis_id, evidence["id"], stance, revision,
+        )
+        revision = linked["thesis"]["current_revision"]
     evidence_thesis_service.begin_formalization(evidence_db, thesis_id)
     edited = evidence_thesis_service.update_thesis(evidence_db, thesis_id, {
         "title": "正式 Thesis", "summary": "summary", "status": "active",
@@ -217,24 +228,25 @@ def test_persisted_chain_exposes_only_real_immutable_evidence_fields(tmp_path, m
         "invalidation_conditions": [], "strategy": "SWING",
         "expected_horizon": {"unit": "TRADING_DAY", "min": 5, "max": 20, "anchor": "FREEZE_AT"},
         "free_notes": "note",
-    }, linked["thesis"]["current_revision"])
+    }, revision)
     revision = edited["thesis"]["current_revision"]
     evidence_thesis_service.confirm_formalization(evidence_db, thesis_id, revision)
     frozen = evidence_thesis_service.freeze_formalization(evidence_db, thesis_id, revision)
     campaign = campaign_service.create_campaign("600519", "SWING")
     campaign_service.bind_campaign_thesis(campaign["campaign_id"], thesis_id)
 
-    evidence_thesis_service.update_evidence(evidence_db, evidence["id"], {
-        "evidence_type": "news", "claim": "更新事实", "source_title": "来源 B",
+    frozen_decision_service.freeze_decision(
+        _decision_payload(campaign, thesis_id, frozen["frozen_revision"], original["id"]),
+    )
+    evidence_thesis_service.update_evidence(evidence_db, original["id"], {
+        "evidence_type": "news", "claim": "利润增长", "source_title": "来源 B",
         "source_url": "https://b.test", "source_date": "2026-08-02",
         "accessed_at": "2026-08-02T01:00:00Z", "classification": "fact",
         "confidence": "medium",
     })
     evidence_thesis_service.create_thesis_delta(
-        evidence_db, thesis_id, "WEAKENED", "事实已更新", [evidence["id"]],
-    )
-    frozen_decision_service.freeze_decision(
-        _decision_payload(campaign, thesis_id, frozen["frozen_revision"], evidence["id"]),
+        evidence_db, thesis_id, "WEAKENED", "事实已更新",
+        [original["id"], added["id"], conflict_a["id"], conflict_b["id"]],
     )
     monkeypatch.setattr(service, "_calendar", lambda *_args: {
         "state": "NO_RECORD", "next": None, "latest_actual": None,
@@ -251,7 +263,20 @@ def test_persisted_chain_exposes_only_real_immutable_evidence_fields(tmp_path, m
     assert delta_fields == original_fields | {"delta_id", "captured_at"}
     result = service.get_research_continuity(campaign["campaign_id"])
     assert result["baseline"]["authority_type"] == "FROZEN_DECISION"
-    assert result["changes"]["status"] == "NOT_EVALUATED"
+    assert result["changes"]["status"] == "NORMAL"
+    change_types = {item["change_type"] for item in result["changes"]["items"]}
+    assert change_types == set(service.CHANGE_TYPES)
+    assert any(
+        item["change_type"] == "ADDED" and item["record_key"] == added["id"]
+        for item in result["changes"]["items"]
+    )
+    changed = next(
+        item for item in result["changes"]["items"]
+        if item["change_type"] == "CHANGED" and item["record_key"] == original["id"]
+    )
+    assert {"confidence", "source_title", "source_url", "source_date", "accessed_at"} <= set(changed["changed_fields"])
+    conflict = next(item for item in result["changes"]["items"] if item["change_type"] == "SOURCE_CONFLICT")
+    assert {record["source"] for record in conflict["records"]} == {"https://c.test", "https://d.test"}
 
 
 def test_batch_fetches_disclosure_calendar_once_per_security(monkeypatch):

@@ -629,9 +629,13 @@ export default function DecisionInbox() {
   const refresh = useCallback(async () => {
     setThesisReloadEpoch((epoch) => epoch + 1);
     setLoadError("");
+    setNextActions({});
+    setContinuityByCampaign({});
     try {
-      const snap = await api.getDecisionInbox();
-      const allCampaigns = await api.listCampaigns();
+      const [snap, allCampaigns] = await Promise.all([
+        api.getDecisionInbox(),
+        api.listCampaigns(),
+      ]);
       const universe = collectHoldingUniverseSecurityCodes(snap);
       const setup = selectSetupCampaigns(allCampaigns, universe);
 
@@ -640,29 +644,32 @@ export default function DecisionInbox() {
         ...setup.map((campaign) => campaign.campaign_id),
       ];
       const continuityIds = snap.campaign_items.map((item) => item.campaign_id);
-      const [entries, continuityBatch] = await Promise.all([
-        Promise.all(
-          ids.map(async (id) => {
-            try {
-              const actions = await api.getCampaignNextActions(id);
-              return [id, actions] as const;
-            } catch {
-              return [id, null] as const;
-            }
-          }),
-        ),
-        continuityIds.length
-          ? api.getResearchContinuityBatch(continuityIds).catch(() => null)
-          : Promise.resolve({ items: [] }),
-      ]);
       setSnapshot(snap);
       setSetupCampaigns(setup);
-      setNextActions(Object.fromEntries(entries));
-      setContinuityByCampaign(
-        continuityBatch
-          ? Object.fromEntries(continuityBatch.items.map((item) => [item.campaign_id, item]))
-          : Object.fromEntries(continuityIds.map((campaignId) => [campaignId, null])),
-      );
+      setLoading(false);
+
+      void Promise.all(
+        ids.map(async (id) => {
+          try {
+            return [id, await api.getCampaignNextActions(id)] as const;
+          } catch {
+            return [id, null] as const;
+          }
+        }),
+      ).then((entries) => setNextActions(Object.fromEntries(entries)));
+
+      if (continuityIds.length) {
+        void api.getResearchContinuityBatch(continuityIds)
+          .then((batch) => setContinuityByCampaign(
+            Object.fromEntries(continuityIds.map((campaignId) => [
+              campaignId,
+              batch.items.find((item) => item.campaign_id === campaignId) ?? null,
+            ])),
+          ))
+          .catch(() => setContinuityByCampaign(
+            Object.fromEntries(continuityIds.map((campaignId) => [campaignId, null])),
+          ));
+      }
     } catch (err: unknown) {
       setLoadError(errorMessage(err));
     } finally {
@@ -897,7 +904,8 @@ export default function DecisionInbox() {
                   />
                   <ResearchContinuityCard
                     campaignId={item.campaign_id}
-                    prefetched={continuityByCampaign[item.campaign_id] ?? null}
+                    prefetched={continuityByCampaign[item.campaign_id]}
+                    awaitingPrefetch={!Object.prototype.hasOwnProperty.call(continuityByCampaign, item.campaign_id)}
                   />
                   <HardRiskPanel item={item} />
                   <DecisionActionPanel item={item} />

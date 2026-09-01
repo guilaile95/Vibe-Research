@@ -2542,13 +2542,13 @@ export interface CurrentThesisReady {
 export type CampaignCurrentThesis = CurrentThesisNotReady | CurrentThesisReady;
 
 export type ResearchContinuityChangeType =
-  | "ADDED" | "REMOVED" | "CHANGED" | "SOURCE_CONFLICT";
+  | "ADDED" | "CHANGED" | "SOURCE_CONFLICT";
 
 export interface ResearchContinuityEvidenceSnapshot {
   record_key: string;
   claim_identity: string;
   source: string | null;
-  field_states: Record<string, "UNKNOWN" | "ERROR" | "NOT_EVALUATED" | "EMPTY" | "VALUE">;
+  field_states: Record<string, "UNKNOWN" | "EMPTY" | "VALUE">;
   values: Record<string, string | null>;
 }
 
