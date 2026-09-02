@@ -26,6 +26,7 @@ jobs:
       - name: Regenerate Linux authority locks
         working-directory: backend
         run: |
+          python -m pip install -r requirements-dev-linux-py311.lock.txt
           python -m pip install -r requirements-tooling.txt
           python -m piptools compile --no-emit-index-url --output-file=requirements-linux-py311.lock.txt requirements.txt
           python -m piptools compile --no-emit-index-url --output-file=requirements-dev-linux-py311.lock.txt requirements.txt requirements-dev.txt
