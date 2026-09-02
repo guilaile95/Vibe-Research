@@ -726,12 +726,13 @@ def chat(req: ChatReq):
                 "",
             )
             context = req.context
-            source_preamble = ""
+            sources = []
             if req.report_ids:
                 hits = mr.search_report_text(question, report_ids=req.report_ids, limit=8)
-                report_context, source_preamble = mr.build_chat_report_context(hits)
+                report_context, sources = mr.build_chat_report_context(hits)
                 context = f"{context or '（无页面数据）'}\n\n{report_context}"
-                yield json.dumps({"type": "delta", "text": source_preamble}, ensure_ascii=False) + "\n"
+                if sources:
+                    yield json.dumps({"type": "sources", "items": sources}, ensure_ascii=False) + "\n"
             if is_codex_runtime:
                 question, history = _agent_runtime_turn(req.messages)
                 events = agent_runtime.stream_chat(

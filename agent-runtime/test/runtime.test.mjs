@@ -109,7 +109,7 @@ test("page chat reuses one isolated thread and never creates formal authority st
     context: "证券代码：600519；最新价格：1600",
     history: [
       { role: "user", content: "概括风险" },
-      { role: "assistant", content: "此前回答" },
+      { role: "assistant", content: "页面草稿" },
     ],
   });
 
@@ -134,6 +134,90 @@ test("page chat reuses one isolated thread and never creates formal authority st
   assert.match(codexOptions.configOverrides[0], /^mcp_servers=/);
   assert.equal(events.at(-1).classification, "NON_AUTHORITATIVE_AI_DRAFT");
   assert.deepEqual(fs.readdirSync(dataRoot), ["agent-runtime"]);
+});
+
+test("history window truncation rejects the hidden old thread and rehydrates visible history", async (t) => {
+  const dataRoot = tempDir(t, "vibe-agent-window");
+  const prompts = [];
+  let starts = 0;
+  let answers = 0;
+  const runtime = new AgentRuntime({
+    sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot },
+    codexFactory: () => ({
+      startThread() {
+        starts += 1;
+        return {
+          async runStreamed(prompt) {
+            prompts.push(prompt);
+            answers += 1;
+            return {
+              events: (async function* () {
+                yield { type: "item.completed", item: { type: "agent_message", text: `A${answers}` } };
+                yield { type: "turn.completed", usage: {} };
+              })(),
+            };
+          },
+        };
+      },
+    }),
+  });
+  t.after(() => runtime.shutdown());
+  runtime.status = () => ({ installed: true, authenticated: true, available: true, status: "ready" });
+
+  const complete = [];
+  for (let turn = 1; turn <= 21; turn += 1) {
+    const question = turn === 1 ? "DROPPED_SENTINEL" : `Q${turn}`;
+    await runtime.chat({ session: "bounded-page", message: question, context: "页面", history: complete.slice(-40) });
+    complete.push({ role: "user", content: question }, { role: "assistant", content: `A${turn}` });
+  }
+  await runtime.chat({ session: "bounded-page", message: "Q22", context: "页面", history: complete.slice(-40) });
+
+  assert.equal(starts, 2);
+  assert.match(prompts.at(-1), /Prior Conversation Record/);
+  assert.doesNotMatch(prompts.at(-1), /DROPPED_SENTINEL/);
+  assert.match(prompts.at(-1), /Q21/);
+});
+
+test("same-length changed history rejects the hidden old thread", async (t) => {
+  const dataRoot = tempDir(t, "vibe-agent-history-digest");
+  const prompts = [];
+  let starts = 0;
+  const runtime = new AgentRuntime({
+    sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot },
+    codexFactory: () => ({
+      startThread() {
+        starts += 1;
+        return {
+          async runStreamed(prompt) {
+            prompts.push(prompt);
+            return {
+              events: (async function* () {
+                yield { type: "item.completed", item: { type: "agent_message", text: "原始回答" } };
+                yield { type: "turn.completed", usage: {} };
+              })(),
+            };
+          },
+        };
+      },
+    }),
+  });
+  t.after(() => runtime.shutdown());
+  runtime.status = () => ({ installed: true, authenticated: true, available: true, status: "ready" });
+
+  await runtime.chat({ session: "edited-page", message: "第一问", context: "页面" });
+  await runtime.chat({
+    session: "edited-page",
+    message: "继续",
+    context: "页面",
+    history: [
+      { role: "user", content: "第一问" },
+      { role: "assistant", content: "修改回答" },
+    ],
+  });
+
+  assert.equal(starts, 2);
+  assert.match(prompts.at(-1), /Prior Conversation Record/);
+  assert.match(prompts.at(-1), /修改回答/);
 });
 
 test("runtime restart rehydrates the displayed complete history", async (t) => {

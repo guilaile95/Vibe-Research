@@ -45,6 +45,8 @@ export interface MyReportTextHit {
   source_url: string;
 }
 
+export type ReportChatSource = Pick<MyReportTextHit, "report_id" | "title" | "page">;
+
 export interface MyReportTextIndexPreviewItem {
   report_id: string;
   title: string;
@@ -1446,6 +1448,7 @@ export interface DailyReviewAnalyzeRequest {
 export interface NdjsonStreamHandlers {
   onDelta?: (text: string) => void;
   onTool?: (tool: string, args: Record<string, unknown>) => void;
+  onSources?: (items: ReportChatSource[]) => void;
 }
 
 

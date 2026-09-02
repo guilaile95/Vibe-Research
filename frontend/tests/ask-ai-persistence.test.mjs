@@ -101,6 +101,7 @@ test("streaming replies are partial from creation and only cleared on success", 
   // 回到该对话时还会以完整发言的身份进入下一轮 history。
   assert.match(source, /partial\?: boolean/);
   assert.match(source, /role: "assistant", content: "", tools: \[\], partial: true/); // 创建即标
+  assert.match(source, /boundedCompleteTurns\(current\.map/);                       // 成功即压回同一可见上限
   assert.match(source, /const \{ partial: _drop, \.\.\.rest \} = msg;/);            // 成功才摘
   assert.match(source, /const keep = boundedCompleteTurns\(msgs\)/);                 // 不落盘且同一上限
   assert.match(source, /const visibleHistory = boundedCompleteTurns\(msgs\)/);       // 不进 history且同一上限
@@ -130,4 +131,12 @@ test("runtime switch, explicit stop, and page session stay bound to the active r
   assert.match(source, /chatSessionId\(`\$\{startedKey\}:\$\{epoch\}`\)/);
   assert.match(source, /runtimeLabel\(selectedLlm\)/);
   assert.match(source, /NON_AUTHORITATIVE_AI_DRAFT/);
+});
+
+test("report sources stay visible metadata and never enter follow-up role/content history", () => {
+  assert.match(source, /sources\?: ChatReportSource\[\]/);
+  assert.match(source, /onSources: \(items\).*sources: items/);
+  assert.match(source, /m\.sources\.map/);
+  assert.match(source, /report_id=\{source\.report_id\}/);
+  assert.match(source, /visibleHistory\.map\(\(\{ role, content \}\) => \(\{ role, content \}\)\)/);
 });

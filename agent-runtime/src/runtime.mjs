@@ -99,6 +99,10 @@ function normalizeHistory(value) {
   });
 }
 
+function historyDigest(history) {
+  return crypto.createHash("sha256").update(JSON.stringify(history)).digest("hex");
+}
+
 function killProcessTree(child) {
   if (!child || child.exitCode !== null) return;
   try {
@@ -194,7 +198,7 @@ export class AgentRuntime {
     return { cancelled: true };
   }
 
-  #makeSession(session) {
+  #makeSession(session, transcriptDigest) {
     while (this.sessions.size >= MAX_SESSIONS) {
       const idle = [...this.sessions.entries()].find(([, value]) => !value.controller);
       if (!idle) throw new RuntimeError("SESSION_BUSY", 409);
@@ -216,7 +220,7 @@ export class AgentRuntime {
       approvalPolicy: "never",
       webSearchMode: "disabled",
     });
-    const value = { thread, controller: null, turns: 0 };
+    const value = { thread, controller: null, turns: 0, transcriptDigest };
     this.sessions.set(session, value);
     return value;
   }
@@ -234,8 +238,14 @@ export class AgentRuntime {
     if (!status.installed) throw new RuntimeError("RUNTIME_UNAVAILABLE", 503);
     if (!status.authenticated) throw new RuntimeError("NOT_AUTHENTICATED", 401);
 
-    const current = this.sessions.get(sid) ?? this.#makeSession(sid);
-    if (current.controller) throw new RuntimeError("SESSION_BUSY", 409);
+    const incomingDigest = historyDigest(priorHistory);
+    let current = this.sessions.get(sid);
+    if (current?.controller) throw new RuntimeError("SESSION_BUSY", 409);
+    if (current && current.transcriptDigest !== incomingDigest) {
+      this.sessions.delete(sid);
+      current = null;
+    }
+    current ??= this.#makeSession(sid, incomingDigest);
     const controller = new AbortController();
     current.controller = controller;
     const forwardAbort = () => controller.abort();
@@ -256,7 +266,7 @@ export class AgentRuntime {
         if (event.type === "item.completed" && event.item?.type === "agent_message") {
           const text = String(event.item.text ?? "");
           if (text) {
-            answer = text;
+            answer += text;
             onEvent?.({ type: "delta", text });
           }
         }
@@ -271,6 +281,11 @@ export class AgentRuntime {
       }
       if (!completed || !answer.trim()) throw new RuntimeError("EMPTY_RESPONSE", 502);
       current.turns += 1;
+      current.transcriptDigest = historyDigest([
+        ...priorHistory,
+        { role: "user", content: question },
+        { role: "assistant", content: answer },
+      ]);
       onEvent?.({ type: "done", runtime: "Codex Subscription", classification: "NON_AUTHORITATIVE_AI_DRAFT" });
       return answer;
     } catch (error) {

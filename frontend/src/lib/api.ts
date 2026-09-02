@@ -146,6 +146,7 @@ import type {
   DecisionProposalCommitResult,
   CommittedDecisionRuntimeRead,
   StreamLlmConfig,
+  ReportChatSource,
 } from "./api/types.ts";
 
 
@@ -335,6 +336,24 @@ export function applyNdjsonLine(
       return;
     }
     handlers.onTool?.(String(event.tool || ""), event.args || {});
+  } else if (event.type === "sources") {
+    if (state.sawDone || !Array.isArray(event.items) || event.items.length > 8) {
+      state.sawError = true;
+      state.errorMessage = "后端研报引用格式错误";
+      return;
+    }
+    const items: ReportChatSource[] = [];
+    for (const item of event.items) {
+      if (!item || typeof item !== "object" || typeof item.report_id !== "string" || !item.report_id ||
+          typeof item.title !== "string" || !item.title ||
+          !(item.page === null || (Number.isInteger(item.page) && item.page > 0))) {
+        state.sawError = true;
+        state.errorMessage = "后端研报引用格式错误";
+        return;
+      }
+      items.push({ report_id: item.report_id, title: item.title, page: item.page });
+    }
+    handlers.onSources?.(items);
   } else if (event.type === "done") {
     if (state.sawDone) {
       state.sawError = true;
