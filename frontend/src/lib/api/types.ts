@@ -2544,6 +2544,61 @@ export interface CurrentThesisReady {
 
 export type CampaignCurrentThesis = CurrentThesisNotReady | CurrentThesisReady;
 
+export type ResearchContinuityChangeType =
+  | "ADDED" | "CHANGED" | "SOURCE_CONFLICT";
+
+export interface ResearchContinuityEvidenceSnapshot {
+  record_key: string;
+  claim_identity: string;
+  source: string | null;
+  field_states: Record<string, "UNKNOWN" | "EMPTY" | "VALUE">;
+  values: Record<string, string | null>;
+}
+
+export interface ResearchContinuityChange {
+  change_type: ResearchContinuityChangeType;
+  record_key: string;
+  changed_fields?: string[];
+  before?: ResearchContinuityEvidenceSnapshot | null;
+  after?: ResearchContinuityEvidenceSnapshot | null;
+  sources?: string[];
+  records?: ResearchContinuityEvidenceSnapshot[];
+}
+
+export interface ResearchContinuity {
+  schema_version: "research_continuity.v0.1";
+  status: "NORMAL" | "PARTIAL";
+  campaign_id: string;
+  security_code: string;
+  strategy: CampaignStrategy;
+  fetched_at: string;
+  baseline: {
+    status: "READY" | "NO_BASELINE" | "UNAVAILABLE";
+    authority_type: "FROZEN_DECISION" | "CANDIDATE_RESEARCH_FORMAL_ORIGINAL" | null;
+    decision_id?: string | null;
+    as_of?: string | null;
+    snapshot_hash?: string | null;
+  };
+  changes: {
+    status: "NORMAL" | "NO_BASELINE" | "UNAVAILABLE" | "NOT_EVALUATED";
+    items: ResearchContinuityChange[];
+    observation_count: number;
+  };
+  decision_calendar: {
+    state: "EXPECTED" | "CONFIRMED" | "DELAYED_SIGNAL" | "NO_RECORD" | "UNAVAILABLE" | "ERROR";
+    next: { report_date: string; appointment_date: string | null; actual_date: string | null; semantics: string } | null;
+    latest_actual: { report_date: string; appointment_date: string | null; actual_date: string | null; semantics: "CONFIRMED" } | null;
+    fetched_at: string;
+    source: string;
+  };
+  authority_refs: string[];
+  writes: { thesis: 0; decision: 0; campaign: 0; trade: 0 };
+}
+
+export interface ResearchContinuityBatch {
+  items: ResearchContinuity[];
+}
+
 // ---------------------------------------------------------------------------
 // Decision Inbox（P0-CS1）：只读快照，前端只展示 + 调用正式写 API。
 // ---------------------------------------------------------------------------

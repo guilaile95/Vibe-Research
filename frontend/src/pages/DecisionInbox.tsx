@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   PlusCircle,
@@ -17,6 +17,7 @@ import type {
   DecisionInboxSnapshot,
   PositionBootstrapInput,
   PositionBootstrapPreview,
+  ResearchContinuity,
 } from "@/lib/api/types";
 import {
   CAMPAIGN_STRATEGIES,
@@ -49,6 +50,7 @@ import type {
   BootstrapPositionRow,
 } from "@/lib/positionBootstrap";
 import { CampaignLifecycleCard } from "@/components/campaign/CampaignLifecycleCard";
+import { ResearchContinuityCard } from "@/components/campaign/ResearchContinuityCard";
 import { CampaignThesisActivationCard } from "@/components/campaign/CampaignThesisActivationCard";
 import { HardRiskPanel } from "@/components/campaign/HardRiskPanel";
 import { DecisionActionPanel } from "@/components/campaign/DecisionActionPanel";
@@ -618,17 +620,26 @@ export default function DecisionInbox() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [nextActions, setNextActions] = useState<Record<string, CampaignNextActions | null>>({});
+  const [continuityByCampaign, setContinuityByCampaign] = useState<Record<string, ResearchContinuity | null>>({});
   const [creatingFor, setCreatingFor] = useState<string | null>(null);
   const [focusedSetupCampaignId, setFocusedSetupCampaignId] = useState<string | null>(null);
   const [formGeneration, setFormGeneration] = useState(0);
   const [thesisReloadEpoch, setThesisReloadEpoch] = useState(0);
+  const refreshGenerationRef = useRef(0);
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGenerationRef.current;
+    const isCurrent = () => refreshGenerationRef.current === generation;
     setThesisReloadEpoch((epoch) => epoch + 1);
     setLoadError("");
+    setNextActions({});
+    setContinuityByCampaign({});
     try {
-      const snap = await api.getDecisionInbox();
-      const allCampaigns = await api.listCampaigns();
+      const [snap, allCampaigns] = await Promise.all([
+        api.getDecisionInbox(),
+        api.listCampaigns(),
+      ]);
+      if (!isCurrent()) return;
       const universe = collectHoldingUniverseSecurityCodes(snap);
       const setup = selectSetupCampaigns(allCampaigns, universe);
 
@@ -636,28 +647,51 @@ export default function DecisionInbox() {
         ...snap.campaign_items.map((item) => item.campaign_id),
         ...setup.map((campaign) => campaign.campaign_id),
       ];
-      const entries = await Promise.all(
+      const continuityIds = snap.campaign_items.map((item) => item.campaign_id);
+      setSnapshot(snap);
+      setSetupCampaigns(setup);
+      setLoading(false);
+
+      void Promise.all(
         ids.map(async (id) => {
           try {
-            const actions = await api.getCampaignNextActions(id);
-            return [id, actions] as const;
+            return [id, await api.getCampaignNextActions(id)] as const;
           } catch {
             return [id, null] as const;
           }
         }),
-      );
-      setSnapshot(snap);
-      setSetupCampaigns(setup);
-      setNextActions(Object.fromEntries(entries));
+      ).then((entries) => {
+        if (isCurrent()) setNextActions(Object.fromEntries(entries));
+      });
+
+      if (continuityIds.length) {
+        void api.getResearchContinuityBatch(continuityIds)
+          .then((batch) => {
+            if (isCurrent()) setContinuityByCampaign(
+              Object.fromEntries(continuityIds.map((campaignId) => [
+                campaignId,
+                batch.items.find((item) => item.campaign_id === campaignId) ?? null,
+              ])),
+            );
+          })
+          .catch(() => {
+            if (isCurrent()) setContinuityByCampaign(
+              Object.fromEntries(continuityIds.map((campaignId) => [campaignId, null])),
+            );
+          });
+      }
     } catch (err: unknown) {
-      setLoadError(errorMessage(err));
+      if (isCurrent()) setLoadError(errorMessage(err));
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void refresh();
+    return () => {
+      refreshGenerationRef.current += 1;
+    };
   }, [refresh]);
 
   const handleCreated = useCallback((campaign: CampaignRecord) => {
@@ -880,6 +914,11 @@ export default function DecisionInbox() {
                       reason_codes: item.reason_codes,
                     }}
                     onChanged={() => void refresh()}
+                  />
+                  <ResearchContinuityCard
+                    campaignId={item.campaign_id}
+                    prefetched={continuityByCampaign[item.campaign_id]}
+                    awaitingPrefetch={!Object.prototype.hasOwnProperty.call(continuityByCampaign, item.campaign_id)}
                   />
                   <HardRiskPanel item={item} />
                   <DecisionActionPanel item={item} />

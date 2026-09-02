@@ -196,6 +196,7 @@ const evidenceRecords = [{
 const CAMPAIGN_A = `campaign_${"c".repeat(32)}`;
 const CAMPAIGN_B = `campaign_${"d".repeat(32)}`;
 const CAMPAIGN_C = `campaign_${"e".repeat(32)}`;
+const CAMPAIGN_INBOX = `campaign_${"7".repeat(32)}`;
 const DECISION_A = `decision_${"f".repeat(32)}`;
 const CHALLENGE_A = `decision_challenge_${"a".repeat(32)}`;
 const FINGERPRINTS = {
@@ -207,7 +208,33 @@ const FINGERPRINTS = {
 const fixedCampaigns = [
   { campaign_id: CAMPAIGN_B, security_code: "000001", strategy: "SWING", status: "PRE-ENTRY", created_at: "2026-08-26T00:00:00.000Z" },
   { campaign_id: CAMPAIGN_C, security_code: "300750", strategy: "MEDIUM", status: "PRE-ENTRY", created_at: "2026-08-26T00:00:00.000Z" },
+  { campaign_id: CAMPAIGN_INBOX, security_code: "601318", strategy: "SWING", status: "ACTIVE", created_at: "2026-08-26T00:00:00.000Z" },
 ];
+
+const decisionInboxSnapshot = {
+  schema_version: "decision_inbox_runtime.v0.1",
+  as_of: "2026-08-30T02:00:00Z",
+  evaluation_status: "EVALUATED",
+  canonical: true,
+  reason_codes: [],
+  holding_setup_items: [],
+  campaign_items: [{
+    schema_version: "decision_inbox_runtime.v0.1",
+    visible_state: "BLOCKED_BY_DATA",
+    reason_codes: [],
+    security_code: "601318",
+    strategy: "SWING",
+    campaign_id: CAMPAIGN_INBOX,
+    campaign_status: "ACTIVE",
+    as_of: "2026-08-30T02:00:00Z",
+    formal_decision_evaluation: "NOT_EVALUATED",
+    hard_risk_state: "NOT_EVALUATED",
+    hard_risk_evaluation: "NOT_EVALUATED",
+    hard_risk_reason_codes: ["HARD_RISK_NOT_EVALUATED"],
+  }],
+  total_holdings: 0,
+  total_campaign_items: 1,
+};
 
 function thesisContext(campaign) {
   const thesisId = campaign.campaign_id.slice(-32);
@@ -444,6 +471,63 @@ async function fillCandidateAnchors(page) {
   await page.getByLabel("Candidate invalidation price").fill("90");
 }
 
+function continuityEvidence(recordKey, claim, source, overrides = {}) {
+  return {
+    record_key: recordKey,
+    claim_identity: claim,
+    source,
+    field_states: { claim_identity: "VALUE", source: "VALUE" },
+    values: {
+      claim,
+      evidence_type: "news",
+      classification: "fact",
+      confidence: "high",
+      stance: "support",
+      source_title: source,
+      source_url: null,
+      source_date: "2026-08-30",
+      accessed_at: "2026-08-30T01:00:00Z",
+      ...overrides,
+    },
+  };
+}
+
+const researchContinuity = {
+  schema_version: "research_continuity.v0.1",
+  status: "NORMAL",
+  campaign_id: CAMPAIGN_A,
+  security_code: "600519",
+  strategy: "MEDIUM",
+  fetched_at: "2026-08-30T02:00:00Z",
+  baseline: { status: "READY", authority_type: "FROZEN_DECISION" },
+  changes: {
+    status: "NORMAL",
+    observation_count: 1,
+    items: [
+      { change_type: "ADDED", record_key: "added", before: null, after: continuityEvidence("added", "新增订单事实", "交易所公告") },
+      {
+        change_type: "CHANGED",
+        record_key: "changed",
+        changed_fields: ["confidence"],
+        before: continuityEvidence("changed", "利润增长", "公司公告", { confidence: "medium" }),
+        after: continuityEvidence("changed", "利润增长", "公司公告", { confidence: "high" }),
+      },
+      {
+        change_type: "SOURCE_CONFLICT",
+        record_key: "conflict-a,conflict-b",
+        sources: ["来源 A", "来源 B"],
+        records: [
+          continuityEvidence("conflict-a", "需求趋势", "来源 A", { stance: "support" }),
+          continuityEvidence("conflict-b", "需求趋势", "来源 B", { stance: "oppose" }),
+        ],
+      },
+    ],
+  },
+  decision_calendar: { state: "NO_RECORD", next: null, latest_actual: null, fetched_at: "2026-08-30T02:00:00Z", source: "fixture" },
+  authority_refs: [],
+  writes: { thesis: 0, decision: 0, campaign: 0, trade: 0 },
+};
+
 let server;
 let browser;
 try {
@@ -461,6 +545,17 @@ try {
     committed: false,
     capitalScenario: "A",
     failNextCommitStale: false,
+    continuityRequests: 0,
+    continuityBatchRequests: 0,
+    continuityBatchMode: "pending",
+    releaseContinuity: null,
+    refreshOverlapMode: "none",
+    overlapCoreRequests: 0,
+    overlapNextActionRequests: 0,
+    overlapContinuityRequests: 0,
+    releaseOldCore: null,
+    releaseOldNextAction: null,
+    releaseOldContinuity: null,
     apiPaths: [],
   };
 
@@ -537,9 +632,63 @@ try {
       await route.fulfill(ok(nativeIntelContext));
       return;
     }
+    if (pathname === "/api/decision-inbox" && request.method() === "GET") {
+      if (state.refreshOverlapMode === "core") {
+        const requestIndex = ++state.overlapCoreRequests;
+        if (requestIndex === 1) {
+          await new Promise((resolve) => { state.releaseOldCore = resolve; });
+        }
+        await route.fulfill(ok({
+          ...decisionInboxSnapshot,
+          as_of: requestIndex === 1 ? "2026-09-01T02:00:00Z" : "2026-09-02T02:00:00Z",
+        }));
+      } else {
+        await route.fulfill(ok(decisionInboxSnapshot));
+      }
+      return;
+    }
+    if (pathname === "/api/campaigns/research-continuity/batch" && request.method() === "GET") {
+      state.continuityBatchRequests += 1;
+      if (state.refreshOverlapMode === "children") {
+        const requestIndex = ++state.overlapContinuityRequests;
+        if (requestIndex === 1) {
+          await new Promise((resolve) => { state.releaseOldContinuity = resolve; });
+        }
+        const claim = requestIndex === 1 ? "OLD CONTINUITY" : "LATEST CONTINUITY";
+        await route.fulfill(ok({ items: [{
+          ...researchContinuity,
+          campaign_id: CAMPAIGN_INBOX,
+          security_code: "601318",
+          changes: {
+            ...researchContinuity.changes,
+            items: [{
+              change_type: "ADDED",
+              record_key: claim,
+              before: null,
+              after: continuityEvidence(claim, claim, "fixture"),
+            }],
+          },
+        }] }));
+        return;
+      }
+      if (state.continuityBatchMode === "pending") {
+        await new Promise((resolve) => { state.releaseContinuity = resolve; });
+      }
+      if (state.continuityBatchMode === "failure") {
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "fixture failure" }) });
+      } else {
+        await route.fulfill(ok({ items: [{ ...researchContinuity, campaign_id: CAMPAIGN_INBOX, security_code: "601318" }] }));
+      }
+      return;
+    }
     if (pathname === "/api/campaigns" && request.method() === "GET") {
-      assert.equal(url.searchParams.get("security_code"), "600519", "Candidate Research must query the active security only");
-      await route.fulfill(ok(state.campaigns));
+      const securityCode = url.searchParams.get("security_code");
+      if (securityCode) {
+        assert.equal(securityCode, "600519", "Candidate Research must query the active security only");
+        await route.fulfill(ok(state.campaigns));
+      } else {
+        await route.fulfill(ok(fixedCampaigns));
+      }
       return;
     }
     if (pathname === "/api/campaigns" && request.method() === "POST") {
@@ -570,7 +719,7 @@ try {
     }
     if (pathname === "/api/thesis" && request.method() === "GET") {
       assert.equal(url.searchParams.get("subject_type"), "stock");
-      assert.equal(url.searchParams.get("subject_id"), "600519");
+      assert.ok(["600519", "601318"].includes(url.searchParams.get("subject_id")));
       await route.fulfill(ok({ items: [], total: 0, limit: 200, offset: 0 }));
       return;
     }
@@ -587,6 +736,12 @@ try {
       const campaign = [...state.campaigns, ...fixedCampaigns].find((item) => item.campaign_id === currentThesisMatch[1]);
       assert.ok(campaign, "current thesis requested for unknown campaign");
       await route.fulfill(ok(thesisContext(campaign).current));
+      return;
+    }
+    const continuityMatch = pathname.match(/^\/api\/campaigns\/([^/]+)\/research-continuity$/);
+    if (continuityMatch && request.method() === "GET") {
+      state.continuityRequests += 1;
+      await route.fulfill(ok({ ...researchContinuity, campaign_id: continuityMatch[1] }));
       return;
     }
     const thesisAggregateMatch = pathname.match(/^\/api\/thesis\/([^/]+)$/);
@@ -670,14 +825,23 @@ try {
 
     const nextActionsMatch = pathname.match(/^\/api\/campaigns\/([^/]+)\/next-actions$/);
     if (nextActionsMatch && request.method() === "GET") {
-      const campaign = state.campaigns.find((item) => item.campaign_id === nextActionsMatch[1]);
+      const campaign = [...state.campaigns, ...fixedCampaigns].find((item) => item.campaign_id === nextActionsMatch[1]);
       assert.ok(campaign, "next-actions requested for unknown candidate campaign");
+      if (state.refreshOverlapMode === "children") {
+        const requestIndex = ++state.overlapNextActionRequests;
+        if (requestIndex === 1) {
+          await new Promise((resolve) => { state.releaseOldNextAction = resolve; });
+        } else {
+          await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "latest fixture failure" }) });
+          return;
+        }
+      }
       await route.fulfill(ok({
         campaign_id: campaign.campaign_id,
         security_code: campaign.security_code,
         strategy: campaign.strategy,
         status: campaign.status,
-        next_actions: campaignsByStatus[campaign.status],
+        next_actions: campaignsByStatus[campaign.status] || [],
       }));
       return;
     }
@@ -767,6 +931,17 @@ try {
   await panel.locator('[data-campaign-status="DRAFT"]').waitFor();
   assert.deepEqual(state.createdPayloads, [{ security_code: "600519", strategy: "SHORT" }]);
   assert.equal(state.transitionPayloads.length, 0, "creation must not auto-transition beyond DRAFT");
+  const continuity = panel.getByTestId("research-continuity");
+  await continuity.getByTestId("research-change-added").getByText("新增订单事实", { exact: true }).waitFor();
+  await continuity.getByTestId("research-change-added").getByText("来源：交易所公告", { exact: true }).waitFor();
+  await continuity.getByTestId("research-change-changed").getByText("置信度：medium → high", { exact: true }).waitFor();
+  await continuity.getByTestId("research-change-source_conflict").getByText("来源 A：support / fact / high", { exact: true }).waitFor();
+  await continuity.getByTestId("research-change-source_conflict").getByText("来源 B：oppose / fact / high", { exact: true }).waitFor();
+  const beforeRefresh = state.continuityRequests;
+  const refreshed = page.waitForResponse((response) => response.url().includes("/research-continuity"));
+  await continuity.getByRole("button", { name: "刷新研究连续性" }).click();
+  await refreshed;
+  assert.equal(state.continuityRequests, beforeRefresh + 1, "single Candidate card refresh must remain independent");
 
   await panel.getByRole("button", { name: "继续研究", exact: true }).click();
   await panel.locator('[data-campaign-status="RESEARCHING"]').waitFor();
@@ -921,6 +1096,75 @@ try {
   for (const action of ["BUY NOW", "BUY SMALL", "SCALE IN"]) {
     await page.locator('[data-action-envelope]').getByText(action, { exact: true }).waitFor();
   }
+
+  // Research Continuity is secondary hydration: a pending or failed batch must
+  // never block the Decision Inbox snapshot, Campaign, or action panels.
+  const individualBeforeInbox = state.continuityRequests;
+  state.continuityBatchMode = "pending";
+  state.releaseContinuity = null;
+  await page.goto(`http://127.0.0.1:${port}/decision-inbox`, { waitUntil: "domcontentloaded" });
+  await page.locator(`[data-campaign-status="ACTIVE"]`).waitFor();
+  await page.locator(`[data-decision-action-panel="${CAMPAIGN_INBOX}"]`).waitFor();
+  const inboxContinuity = page.locator(`[data-testid="research-continuity"][data-campaign-id="${CAMPAIGN_INBOX}"]`);
+  await inboxContinuity.getByText("读取不可变基线与披露日历…", { exact: true }).waitFor();
+  assert.equal(await page.getByText("正在加载决策待办…", { exact: true }).count(), 0, "continuity pending must not keep the core inbox loading");
+  for (let attempt = 0; attempt < 50 && !state.releaseContinuity; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(typeof state.releaseContinuity, "function", "continuity batch did not reach pending fixture");
+  state.continuityBatchMode = "success";
+  state.releaseContinuity();
+  await inboxContinuity.getByTestId("research-change-added").getByText("新增订单事实", { exact: true }).waitFor();
+
+  state.continuityBatchMode = "failure";
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator(`[data-campaign-status="ACTIVE"]`).waitFor();
+  await page.locator(`[data-decision-action-panel="${CAMPAIGN_INBOX}"]`).getByText("重新形成 Formal Decision →", { exact: true }).waitFor();
+  await page.locator(`[data-testid="research-continuity"][data-campaign-id="${CAMPAIGN_INBOX}"]`)
+    .getByRole("alert").getByText("批量读取失败，可单独刷新", { exact: true }).waitFor();
+  assert.equal(state.continuityBatchRequests, 2);
+  assert.equal(state.continuityRequests, individualBeforeInbox, "Decision Inbox must use only the batch continuity request");
+
+  // A late core response cannot overwrite a newer refresh.
+  const inboxRefresh = page.getByRole("button", { name: "刷新", exact: true });
+  state.continuityBatchMode = "success";
+  state.refreshOverlapMode = "core";
+  state.overlapCoreRequests = 0;
+  state.releaseOldCore = null;
+  await inboxRefresh.click();
+  for (let attempt = 0; attempt < 50 && !state.releaseOldCore; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(typeof state.releaseOldCore, "function", "old core refresh was not held");
+  await inboxRefresh.click();
+  await page.getByText(/快照时间：2026-09-02T02:00:00Z/).waitFor();
+  state.releaseOldCore();
+  await page.waitForTimeout(100);
+  assert.equal(await page.getByText(/快照时间：2026-09-01T02:00:00Z/).count(), 0, "old core refresh must not overwrite latest snapshot");
+
+  // Older secondary results are ignored even when they resolve after the
+  // latest refresh has already succeeded or failed independently.
+  state.refreshOverlapMode = "children";
+  state.overlapNextActionRequests = 0;
+  state.overlapContinuityRequests = 0;
+  state.releaseOldNextAction = null;
+  state.releaseOldContinuity = null;
+  await inboxRefresh.click();
+  for (let attempt = 0; attempt < 50 && (!state.releaseOldNextAction || !state.releaseOldContinuity); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(typeof state.releaseOldNextAction, "function", "old next-actions request was not held");
+  assert.equal(typeof state.releaseOldContinuity, "function", "old continuity request was not held");
+  await inboxRefresh.click();
+  await inboxContinuity.getByText("LATEST CONTINUITY", { exact: true }).waitFor();
+  await page.getByText("无法获取下一合法动作。刷新后以后端状态为准，不会猜测可执行步骤。", { exact: true }).waitFor();
+  state.releaseOldNextAction();
+  state.releaseOldContinuity();
+  await page.waitForTimeout(100);
+  assert.equal(await inboxContinuity.getByText("OLD CONTINUITY", { exact: true }).count(), 0);
+  assert.equal(await inboxContinuity.getByText("LATEST CONTINUITY", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("已处于终态，无下一合法动作。", { exact: true }).count(), 0);
+  state.refreshOverlapMode = "none";
 
   assert.deepEqual(state.createdPayloads, [
     { security_code: "600519", strategy: "SHORT" },
