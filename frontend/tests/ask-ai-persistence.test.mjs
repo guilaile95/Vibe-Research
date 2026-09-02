@@ -20,12 +20,21 @@ test("Ask AI persists the conversation through the safe storage helper", () => {
 
 test("conversations are keyed per route, not shared across pages", () => {
   assert.match(source, /useLocation/);
-  assert.match(source, /CHAT_KEY_PREFIX\s*\+\s*pathname/);
+  assert.match(source, /CHAT_KEY_PREFIX \+ pathname/);
+});
+
+test("provider identity is part of the transcript key", () => {
+  assert.match(source, /const \[runtimeKey, setRuntimeKey\] = useState\(\(\) => llmIdentity\(\)\)/);
+  assert.match(source, /chatKey = CHAT_KEY_PREFIX \+ pathname[\s\S]*`@\$\{runtimeKey\}`/);
+  assert.match(source, /setRuntimeKey\(llmIdentity\(\)\)/);
 });
 
 test("persisted history is capped so localStorage cannot be blown out", () => {
   assert.match(source, /MAX_PERSISTED_MSGS\s*=\s*\d+/);
-  assert.match(source, /slice\(-MAX_PERSISTED_MSGS\)/);
+  assert.match(source, /MAX_PERSISTED_CHARS\s*=\s*\d+/);
+  assert.match(source, /function boundedCompleteTurns/);
+  assert.match(source, /out\.length \+ 2 > MAX_PERSISTED_MSGS/);
+  assert.match(source, /chars \+ pairChars > MAX_PERSISTED_CHARS/);
 });
 
 test("malformed stored data is ignored instead of crashing the panel", () => {
@@ -63,7 +72,7 @@ test("callers can scope a conversation below the route level", () => {
   // 个股页不换路由就能换标的：只按 pathname 分 key 会让 A 股票的历史
   // 作为 history 发给正在问 B 股票的模型。
   assert.match(source, /scopeKey\?: string/);
-  assert.match(source, /CHAT_KEY_PREFIX \+ pathname \+ \(scopeKey \? `#\$\{scopeKey\}` : ""\)/);
+  assert.match(source, /CHAT_KEY_PREFIX \+ pathname \+ \(scopeKey \? `#\$\{scopeKey\}` : ""\) \+ `@\$\{runtimeKey\}`/);
 });
 
 test("the stock page actually passes a per-symbol scope", async () => {
@@ -92,9 +101,10 @@ test("streaming replies are partial from creation and only cleared on success", 
   // 回到该对话时还会以完整发言的身份进入下一轮 history。
   assert.match(source, /partial\?: boolean/);
   assert.match(source, /role: "assistant", content: "", tools: \[\], partial: true/); // 创建即标
+  assert.match(source, /boundedCompleteTurns\(current\.map/);                       // 成功即压回同一可见上限
   assert.match(source, /const \{ partial: _drop, \.\.\.rest \} = msg;/);            // 成功才摘
-  assert.match(source, /const keep = completeTurns\(msgs\)/);                        // 不落盘
-  assert.match(source, /completeTurns\(msgs\)\.map/);                                // 不进 history
+  assert.match(source, /const keep = boundedCompleteTurns\(msgs\)/);                 // 不落盘且同一上限
+  assert.match(source, /const visibleHistory = boundedCompleteTurns\(msgs\)/);       // 不进 history且同一上限
 });
 
 test("an interrupted turn drops the question too, not just the half answer", () => {
@@ -111,4 +121,14 @@ test("a request that fails before any content removes its question too", () => {
   assert.ok(block, "未找到 catch 块");
   assert.match(block[0], /const dropUser = m\[m\.length - 2\]\?\.role === "user";/);
   assert.match(block[0], /m\.slice\(0, dropUser \? -2 : -1\)/);
+});
+
+test("runtime switch, explicit stop, and page session stay bound to the active request", () => {
+  assert.match(source, /window\.addEventListener\(LLM_CHANGED_EVENT, refreshRuntime\)/);
+  assert.match(source, /const refreshRuntime = \(\) => \{[\s\S]*?abortRef\.current\?\.abort\(\)/);
+  assert.match(source, /const stop = \(\) => \{[\s\S]*?abortRef\.current\?\.abort\(\)/);
+  assert.match(source, /aria-label="停止生成"/);
+  assert.match(source, /chatSessionId\(`\$\{startedKey\}:\$\{epoch\}`\)/);
+  assert.match(source, /runtimeLabel\(selectedLlm\)/);
+  assert.match(source, /NON_AUTHORITATIVE_AI_DRAFT/);
 });

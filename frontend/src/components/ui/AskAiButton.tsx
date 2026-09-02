@@ -1,10 +1,19 @@
 import { useState, useRef, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Sparkles, X, Settings, Send, Loader2, Wrench, AlertCircle, Trash2 } from "lucide-react";
+import { Sparkles, X, Settings, Send, Loader2, Wrench, AlertCircle, Trash2, Square } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
-import { hasLlm, chatStream, type ChatMsg } from "@/lib/llm";
+import {
+  LLM_CHANGED_EVENT,
+  chatSessionId,
+  chatStream,
+  hasLlm,
+  llmIdentity,
+  loadLlm,
+  runtimeLabel,
+  type ChatMsg,
+} from "@/lib/llm";
 import { ApiError } from "@/lib/api";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { storageGet, storageSet, storageRemove } from "@/lib/storage";
@@ -15,9 +24,11 @@ import { storageGet, storageSet, storageRemove } from "@/lib/storage";
 // 按路由分开存：不同页面的「问 AI」上下文不同（个股页 vs 板块页），
 // 混在一起会把上一页的对话带到下一页，比不存更让人困惑。
 const CHAT_KEY_PREFIX = "vr-askai-chat:";
+const CHAT_EPOCH_PREFIX = "vr-askai-epoch:";
 // 单页对话上限。localStorage 总配额约 5MB，而一轮研报级回答可能上万字；
 // 不设上限迟早写爆，届时 storageSet 静默失败、用户以为存上了。
 const MAX_PERSISTED_MSGS = 40;
+const MAX_PERSISTED_CHARS = 80_000;
 
 type StoredMsg = ChatMsg & {
   tools?: ToolUse[];
@@ -34,11 +45,11 @@ function loadChat(key: string): StoredMsg[] {
     const parsed = JSON.parse(raw);
     // 存量数据可能来自旧版本或被手工改坏，形状不对就当没有，别让页面崩。
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
+    return boundedCompleteTurns(parsed.filter(
       (m): m is StoredMsg =>
         m && typeof m === "object" && typeof m.content === "string" &&
         (m.role === "user" || m.role === "assistant"),
-    );
+    ));
   } catch {
     return [];
   }
@@ -59,17 +70,41 @@ function completeTurns(msgs: StoredMsg[]): StoredMsg[] {
   return out;
 }
 
+// UI、持久化和发给模型的历史使用同一上限与同一完整轮次集合。
+// 从尾部保留最新内容；若边界落在 assistant，丢掉该孤立回答。
+function boundedCompleteTurns(msgs: StoredMsg[]): StoredMsg[] {
+  const complete = completeTurns(msgs);
+  if (complete.length % 2) return [];
+  const out: StoredMsg[] = [];
+  let chars = 0;
+  for (let index = complete.length - 2; index >= 0; index -= 2) {
+    const user = complete[index];
+    const assistant = complete[index + 1];
+    if (user.role !== "user" || assistant.role !== "assistant") return [];
+    const pairChars = user.content.length + assistant.content.length;
+    if (out.length + 2 > MAX_PERSISTED_MSGS || chars + pairChars > MAX_PERSISTED_CHARS) break;
+    out.unshift(user, assistant);
+    chars += pairChars;
+  }
+  return out;
+}
+
 function saveChat(key: string, msgs: StoredMsg[]): void {
   if (!msgs.length) {
     storageRemove(key);
     return;
   }
-  const keep = completeTurns(msgs);
+  const keep = boundedCompleteTurns(msgs);
   if (!keep.length) {
     storageRemove(key);
     return;
   }
-  storageSet(key, JSON.stringify(keep.slice(-MAX_PERSISTED_MSGS)));
+  storageSet(key, JSON.stringify(keep));
+}
+
+function loadEpoch(key: string): number {
+  const value = Number(storageGet(CHAT_EPOCH_PREFIX + key) ?? 0);
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 interface Props {
@@ -99,10 +134,13 @@ interface ToolUse { name: string; arg: string }
 
 export function AskAiButton({ context, suggestions = [], label = "问 AI", scopeKey }: Props) {
   const { pathname } = useLocation();
-  const chatKey = CHAT_KEY_PREFIX + pathname + (scopeKey ? `#${scopeKey}` : "");
+  const selectedLlm = loadLlm();
+  const isCodexRuntime = selectedLlm?.provider === "cli-codex";
 
   const [open, setOpen] = useState(false);
   const [configured, setConfigured] = useState(false);
+  const [runtimeKey, setRuntimeKey] = useState(() => llmIdentity());
+  const chatKey = CHAT_KEY_PREFIX + pathname + (scopeKey ? `#${scopeKey}` : "") + `@${runtimeKey}`;
   // key 与消息放在**同一个 state 里原子更新**——这是正确性的关键，不是风格问题。
   // 若分成 msgs + 一个记录归属的 ref，key 变化那一帧 ref 已指向新 key 而 msgs 仍是旧的
   // （setState 下一帧才生效），落盘守卫会误放行，把来源页对话写进目标 key、
@@ -122,6 +160,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [epoch, setEpoch] = useState(() => loadEpoch(chatKey));
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   // 始终镜像当前 chatKey，供异步回调判断「对话是否已经被换掉」。
@@ -129,8 +168,27 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
   chatKeyRef.current = chatKey;
 
   useEffect(() => {
-    if (open) setConfigured(hasLlm());
+    if (open) {
+      setConfigured(hasLlm());
+      setRuntimeKey(llmIdentity());
+    }
   }, [open]);
+
+  useEffect(() => {
+    const refreshRuntime = () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setLoading(false);
+      setConfigured(hasLlm());
+      setRuntimeKey(llmIdentity());
+    };
+    window.addEventListener(LLM_CHANGED_EVENT, refreshRuntime);
+    window.addEventListener("storage", refreshRuntime);
+    return () => {
+      window.removeEventListener(LLM_CHANGED_EVENT, refreshRuntime);
+      window.removeEventListener("storage", refreshRuntime);
+    };
+  }, []);
 
   // 换页面/换标的 = 换一份对话（key 变了），把目标 key 已存的读进来。
   // 同时**中止在跑的流式请求**：否则它的 alive() 仍然成立，迟到的 chunk 会被
@@ -139,6 +197,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     abortRef.current?.abort();
     abortRef.current = null;
     setLoading(false);
+    setEpoch(loadEpoch(chatKey));
     setChat({ key: chatKey, msgs: loadChat(chatKey) });
   }, [chatKey]);
 
@@ -157,6 +216,11 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     setLoading(false);
     setErr(null);
     setMsgs([]);          // saveChat 见空数组会 storageRemove，不留空壳
+    setEpoch((current) => {
+      const next = current + 1;
+      storageSet(CHAT_EPOCH_PREFIX + chatKey, String(next));
+      return next;
+    });
   };
 
   const close = () => {
@@ -164,6 +228,12 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     abortRef.current = null;
     setLoading(false);
     setOpen(false);
+  };
+
+  const stop = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -186,15 +256,16 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     setErr(null);
     // 未完成的轮次整轮不进 history（半截回答 + 它的提问）：
     // 模型会把残句当成自己上一轮的完整发言继续推理，孤立的提问则会被当成待答问题。
+    const visibleHistory = boundedCompleteTurns(msgs);
     const history: ChatMsg[] = [
-      ...completeTurns(msgs).map(({ role, content }) => ({ role, content })),
+      ...visibleHistory.map(({ role, content }) => ({ role, content })),
       { role: "user", content: q },
     ];
     // assistant 气泡**从创建就是 partial**，只有流式正常结束才摘掉这个标记。
     // 这样「流到一半用户换页/换标的」时，落盘的那份天然就不含这条残句——
     // 靠中止时再补标记是来不及的：每个 delta 都会触发落盘。
-    setMsgs((m) => [
-      ...m,
+    setMsgs([
+      ...visibleHistory,
       { role: "user", content: q },
       { role: "assistant", content: "", tools: [], partial: true },
     ]);
@@ -205,18 +276,20 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     const ac = new AbortController();
     abortRef.current = ac;
     const startedKey = chatKeyRef.current;   // 这次请求属于哪份对话
+    const session = chatSessionId(`${startedKey}:${epoch}`);
     // 只有仍是「当前这次请求」才允许写 UI——旧请求的迟到 chunk 直接丢弃
     const alive = () => abortRef.current === ac && !ac.signal.aborted;
     try {
       await chatStream(history, context, {
         onTool: (tool, args) => { if (alive()) patchLast((msg) => ({ ...msg, tools: [...(msg.tools || []), { name: tool, arg: argStr(args) }] })); },
         onDelta: (t) => { if (alive()) patchLast((msg) => ({ ...msg, content: msg.content + t })); },
-      }, ac.signal);
+      }, ac.signal, session);
       // 正常收完：摘掉 partial，这条回答才开始落盘、才进下一轮 history。
-      if (alive()) patchLast((msg) => {
+      if (alive()) setMsgs((current) => boundedCompleteTurns(current.map((msg, index) => {
+        if (index !== current.length - 1 || msg.role !== "assistant") return msg;
         const { partial: _drop, ...rest } = msg;
         return rest;
-      });
+      })));
     } catch (e) {
       // 三种「不该清理」的情况要分开判，不能简单用 abortRef.current === ac：
       //   · 有更新的请求接管了（abortRef 指向别人）→ 别删人家的气泡
@@ -266,6 +339,9 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                   <Sparkles className="h-3.5 w-3.5" />
                 </span>
                 Vibe AI
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  {runtimeLabel(selectedLlm)}
+                </span>
               </span>
               <div className="flex items-center gap-1">
                 {msgs.length > 0 && (
@@ -296,7 +372,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                 <div className="mb-5">
                   <h2 className="text-lg font-semibold">接入你的 AI</h2>
                   <p className="mt-1.5 text-sm leading-6 text-muted-foreground">
-                    配置后，Vibe 会把当前页面上下文带入对话，并允许模型按需查询行情、估值、研报和新闻。
+                    配置后，Vibe 会把当前页面上下文带入对话。Codex Subscription 只使用页面上下文；API Compatible 保留现有数据工具能力。
                   </p>
                 </div>
                 <div className="mb-5 rounded-xl bg-card/70 p-4">
@@ -323,7 +399,11 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                           <Sparkles className="h-4 w-4" />
                         </span>
                         <p className="mt-3 font-medium">就当前页面开始提问</p>
-                        <p className="mt-1 text-xs text-muted-foreground">AI 会自动带上本页上下文，并按需调用数据工具。</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {isCodexRuntime
+                            ? "Codex 只使用当前页面上下文，不会读取本机文件或调用数据工具。"
+                            : "AI 会自动带上本页上下文，并按需调用 Vibe 数据工具。"}
+                        </p>
                       </div>
                     )}
 
@@ -346,9 +426,14 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                               </div>
                             )}
                             {m.role === "assistant" ? (
-                              <div className="prose prose-sm dark:prose-invert max-w-none break-words text-foreground">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
-                              </div>
+                              <>
+                                <div className="mb-1 text-[9px] font-semibold tracking-wide text-muted-foreground">
+                                  NON_AUTHORITATIVE_AI_DRAFT
+                                </div>
+                                <div className="prose prose-sm dark:prose-invert max-w-none break-words text-foreground">
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                                </div>
+                              </>
                             ) : (
                               <p className="whitespace-pre-wrap break-words">{m.content}</p>
                             )}
@@ -362,7 +447,8 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
 
                     {loading && (
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> AI 正在思考 / 调取数据…
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        {isCodexRuntime ? "Codex 正在根据当前页面思考…" : "AI 正在思考 / 调取数据…"}
                       </div>
                     )}
                     {err && (
@@ -399,18 +485,30 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                         placeholder="询问 Vibe..."
                         className="max-h-32 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
                       />
-                      <button
-                        type="button"
-                        onClick={() => send(input)}
-                        disabled={loading || !input.trim()}
-                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-90 disabled:opacity-30"
-                        aria-label="发送"
-                      >
-                        <Send className="h-4 w-4" />
-                      </button>
+                      {loading ? (
+                        <button
+                          type="button"
+                          onClick={stop}
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-90"
+                          aria-label="停止生成"
+                          title="停止生成"
+                        >
+                          <Square className="h-3.5 w-3.5 fill-current" />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => send(input)}
+                          disabled={!input.trim()}
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-90 disabled:opacity-30"
+                          aria-label="发送"
+                        >
+                          <Send className="h-4 w-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
-                  <p className="mt-2 text-center text-[10px] text-muted-foreground/70">Vibe 可能会出错，请结合原始数据判断。</p>
+                  <p className="mt-2 text-center text-[10px] text-muted-foreground/70">非正式 AI 草稿；需要正式操作时请进入对应 Vibe 页面。</p>
                 </div>
               </>
             )}

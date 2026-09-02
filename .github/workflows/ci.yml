@@ -74,6 +74,28 @@ jobs:
         working-directory: frontend
         run: npm test
 
+  agent-runtime:
+    name: Agent Runtime tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: agent-runtime/package-lock.json
+
+      - name: Install Agent Runtime dependencies
+        working-directory: agent-runtime
+        run: npm ci
+
+      - name: Run Agent Runtime tests
+        working-directory: agent-runtime
+        run: npm test
+
   e2e-smoke:
     name: Playwright smoke E2E
     runs-on: ubuntu-latest

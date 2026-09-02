@@ -141,8 +141,10 @@ def test_windows_launcher_contract_uses_pwsh_and_keeps_runtime_state_private() -
     assert "One-click launcher smoke: PASS" in script
     assert "app:app" in script
     assert 'Get-Command "node.exe"' in script
-    assert "'^v22\\.'" in script
+    assert '22.6.0' in script
     assert '$FrontendUrl = "http://127.0.0.1:5899"' in script
+    assert '$AgentRuntimeUrl = "http://127.0.0.1:8911"' in script
+    assert 'Join-Path $RepoRoot "agent-runtime"' in script
     assert "npm.cmd" in script
     assert ".vibe-runtime/" in ignore
 

@@ -37,6 +37,7 @@ import ai_result_service
 import astock
 import chat as chat_layer
 import cli_runtime
+import agent_runtime
 import daily_review
 import debate as debate_layer
 import gstock
@@ -652,7 +653,36 @@ def _require_llm_ready(llm: LLMConfig) -> bool:
 class ChatReq(BaseModel):
     messages: list[dict]
     context: str = ""
+    session: str = ""
     llm: LLMConfig
+
+
+_AGENT_HISTORY_MAX_MESSAGES = 40
+_AGENT_HISTORY_MAX_CHARS = 80_000
+
+
+def _agent_runtime_turn(messages: list[dict]) -> tuple[str, list[dict[str, str]]]:
+    """Return the current question and complete prior turns for Codex rehydration."""
+    normalized: list[dict[str, str]] = []
+    for raw in messages:
+        if not isinstance(raw, dict) or raw.get("role") not in {"user", "assistant"}:
+            raise agent_runtime.AgentRuntimeError("BAD_REQUEST", "对话历史格式无效", 400)
+        content = raw.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise agent_runtime.AgentRuntimeError("BAD_REQUEST", "对话历史格式无效", 400)
+        normalized.append({"role": raw["role"], "content": content})
+
+    if not normalized or normalized[-1]["role"] != "user":
+        raise agent_runtime.AgentRuntimeError("BAD_REQUEST", "对话问题不能为空", 400)
+    history = normalized[:-1]
+    if len(history) > _AGENT_HISTORY_MAX_MESSAGES or sum(len(item["content"]) for item in history) > _AGENT_HISTORY_MAX_CHARS:
+        raise agent_runtime.AgentRuntimeError("BAD_REQUEST", "对话历史超过安全恢复上限", 400)
+    if len(history) % 2 or any(
+        item["role"] != ("user" if index % 2 == 0 else "assistant")
+        for index, item in enumerate(history)
+    ):
+        raise agent_runtime.AgentRuntimeError("BAD_REQUEST", "对话历史不是完整轮次", 400)
+    return normalized[-1]["content"].strip(), history
 
 
 @app.post("/api/chat")
@@ -665,7 +695,17 @@ def chat(req: ChatReq):
     """
     if not req.messages:
         raise HTTPException(400, "messages 不能为空")
-    is_cli = _require_llm_ready(req.llm)
+    is_codex_runtime = (req.llm.provider or "").strip() == "cli-codex"
+    if is_codex_runtime:
+        if not (req.session or "").strip():
+            raise HTTPException(400, "Codex Subscription 对话缺少页面 session")
+        runtime_status = agent_runtime.status()
+        if not runtime_status["available"]:
+            code = 401 if runtime_status["status"] in {"not_authenticated", "login_pending", "login_failed"} else 503
+            raise HTTPException(code, "Codex Subscription 尚未连接，请先在设置页登录")
+        is_cli = False
+    else:
+        is_cli = _require_llm_ready(req.llm)
 
     cfg = req.llm.model_dump()
     # P0-SEC2：CLI 订阅接入需要 ASGI disconnect → cancel 传播（与 /api/daily-review/analyze 对齐）。
@@ -676,7 +716,19 @@ def chat(req: ChatReq):
 
     def gen():
         try:
-            events = (chat_layer.run_chat_cli_stream if is_cli else chat_layer.run_chat_stream)(cfg, req.messages, req.context)
+            if is_codex_runtime:
+                question, history = _agent_runtime_turn(req.messages)
+                events = agent_runtime.stream_chat(
+                    session=req.session,
+                    message=question,
+                    context=req.context,
+                    history=history,
+                    cancel_event=disconnect_event,
+                )
+            else:
+                events = (chat_layer.run_chat_cli_stream if is_cli else chat_layer.run_chat_stream)(
+                    cfg, req.messages, req.context
+                )
             for ev in events:
                 if disconnect_event.is_set():
                     return
@@ -690,6 +742,28 @@ def chat(req: ChatReq):
         media_type="application/x-ndjson",
         disconnect_event=disconnect_event,
     )
+
+
+@app.get("/api/agent-runtime/status")
+def agent_runtime_status():
+    return agent_runtime.status()
+
+
+@app.post("/api/agent-runtime/login", status_code=202)
+def agent_runtime_login():
+    try:
+        return agent_runtime.start_login()
+    except agent_runtime.AgentRuntimeError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from None
+
+
+class AgentRuntimeCancelReq(BaseModel):
+    session: str
+
+
+@app.post("/api/agent-runtime/cancel")
+def agent_runtime_cancel(req: AgentRuntimeCancelReq):
+    return {"cancelled": agent_runtime.cancel(req.session)}
 
 
 class DebateReq(BaseModel):

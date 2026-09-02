@@ -1,9 +1,16 @@
-import { useState } from "react";
-import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal } from "lucide-react";
+import { useEffect, useState } from "react";
+import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal, Loader2, RefreshCw } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { toast } from "sonner";
-import { loadLlm, saveLlm, clearLlm } from "@/lib/llm";
+import {
+  clearLlm,
+  getAgentRuntimeStatus,
+  loadLlm,
+  saveLlm,
+  startAgentRuntimeLogin,
+  type AgentRuntimeStatus,
+} from "@/lib/llm";
 import { loadAccessKey, saveAccessKey } from "@/lib/api";
 import { subscriptionModels, apiModels, PROVIDER_BASE, isCliProvider, aiModels, type ProviderId } from "@/lib/ai-models";
 
@@ -22,8 +29,38 @@ export function Settings() {
   const [apiKey, setApiKey] = useState(existing && !existingIsCli ? existing.apiKey : "");
   // 后端访问密钥（对应部署时的 VR_API_KEY）；本机自用不设鉴权时留空
   const [accessKey, setAccessKey] = useState(loadAccessKey());
+  const [runtimeStatus, setRuntimeStatus] = useState<AgentRuntimeStatus | null>(null);
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
 
   const providerOf = (id: string): ProviderId => aiModels.find((m) => m.id === id)?.provider ?? "openai-compatible";
+
+  const refreshRuntime = async () => {
+    setRuntimeBusy(true);
+    try {
+      setRuntimeStatus(await getAgentRuntimeStatus());
+    } catch {
+      setRuntimeStatus({
+        runtime: "Codex Subscription",
+        installed: false,
+        authenticated: false,
+        available: false,
+        status: "runtime_unavailable",
+        version: null,
+      });
+    } finally {
+      setRuntimeBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (mode === "subscription") void refreshRuntime();
+  }, [mode]);
+
+  useEffect(() => {
+    if (runtimeStatus?.status !== "login_pending") return;
+    const timer = window.setInterval(() => void refreshRuntime(), 1500);
+    return () => window.clearInterval(timer);
+  }, [runtimeStatus?.status]);
 
   const pickApiModel = (id: string) => {
     const m = apiModels.find((x) => x.id === id);
@@ -48,8 +85,25 @@ export function Settings() {
       toast.error("请选择一个可用的订阅（暂不支持标「即将支持」的）");
       return;
     }
+    if (m.provider === "cli-codex" && !runtimeStatus?.available) {
+      toast.error("Codex Subscription 尚未连接，请先完成登录");
+      return;
+    }
     saveLlm({ provider: m.provider, baseURL: "", apiKey: "", model: m.id });
-    toast.success(`已选「${m.name}」订阅，全站「问 AI / 复盘」将调用本机 ${m.name}`);
+    toast.success(`已选「${m.name}」订阅，现有「问 AI」将调用 ${runtimeStatus?.runtime || m.name}`);
+  };
+
+  const loginCodex = async () => {
+    setRuntimeBusy(true);
+    try {
+      await startAgentRuntimeLogin();
+      setRuntimeStatus((current) => current ? { ...current, status: "login_pending", available: false } : current);
+      toast.success("已打开 Codex 登录流程，请在浏览器中完成连接");
+    } catch {
+      toast.error("无法启动 Codex 登录；请确认 Agent Runtime 已启动");
+    } finally {
+      setRuntimeBusy(false);
+    }
   };
 
   const forget = () => {
@@ -84,7 +138,7 @@ export function Settings() {
             <h3 className="font-semibold">订阅接入</h3>
             {mode === "subscription" && <Check className="ml-auto h-4 w-4 text-primary" />}
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">调本机已登录的 AI CLI（Claude Code / Qwen / DeepSeek / Codex…），用订阅额度，<b className="text-foreground">免 API key</b>。需后端在本机跑。</p>
+          <p className="mt-1 text-xs text-muted-foreground">使用产品独立登录的 Codex / ChatGPT 订阅，<b className="text-foreground">免 API key</b>。第一版仅支持 Codex。</p>
         </GlassCard>
 
         <GlassCard glow={mode === "api"} onClick={() => setMode("api")}
@@ -102,9 +156,39 @@ export function Settings() {
         {mode === "subscription" ? (
           <div className="space-y-3 text-sm">
             <p className="text-xs text-muted-foreground">
-              选一个你本机已安装并登录的 CLI。Vibe-Research 后端会用它以你的订阅额度作答，<b className="text-foreground">不用填 key</b>。
-              <span className="text-muted-foreground/60">（仅当后端跑在你本机时可用；复盘 / 今日要点 / 个股问 AI 等场景。）</span>
+              Codex 使用 Vibe 自己的数据目录保存登录态；账号信息和 Token 不进入 Vibe 数据库或日志。
+              <span className="text-muted-foreground/60"> Agent 只能接收当前页面上下文，没有 Shell、磁盘读取、网页搜索、MCP 或正式写权限。</span>
             </p>
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/20 p-3 text-xs">
+              <span className={runtimeStatus?.available ? "text-success" : "text-muted-foreground"}>
+                Runtime：{runtimeStatus?.runtime || "Codex Subscription"} · {
+                  runtimeStatus?.status === "ready" ? "已连接" :
+                  runtimeStatus?.status === "login_pending" ? "等待登录" :
+                  runtimeStatus?.status === "login_failed" ? "登录未完成" :
+                  runtimeStatus?.status === "not_authenticated" ? "未连接" : "Runtime 未启动"
+                }
+                {runtimeStatus?.version ? ` · ${runtimeStatus.version}` : ""}
+              </span>
+              <button
+                type="button"
+                onClick={() => void refreshRuntime()}
+                disabled={runtimeBusy}
+                className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-muted-foreground hover:bg-muted disabled:opacity-50"
+              >
+                {runtimeBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                检查
+              </button>
+              {!runtimeStatus?.available && runtimeStatus?.status !== "login_pending" && (
+                <button
+                  type="button"
+                  onClick={() => void loginCodex()}
+                  disabled={runtimeBusy || runtimeStatus?.status === "runtime_unavailable"}
+                  className="rounded-md bg-primary/15 px-2 py-1 font-medium text-primary disabled:opacity-40"
+                >
+                  连接 Codex
+                </button>
+              )}
+            </div>
             <div className="grid gap-2 sm:grid-cols-2">
               {subscriptionModels.map((m) => {
                 const on = cliId === m.id;
