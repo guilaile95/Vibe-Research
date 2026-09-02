@@ -12,6 +12,7 @@ import {
   llmIdentity,
   loadLlm,
   runtimeLabel,
+  type ChatReportSource,
   type ChatMsg,
 } from "@/lib/llm";
 import { ApiError } from "@/lib/api";
@@ -32,6 +33,7 @@ const MAX_PERSISTED_CHARS = 80_000;
 
 type StoredMsg = ChatMsg & {
   tools?: ToolUse[];
+  sources?: ChatReportSource[];
   // 流式中途被中止、只收到半截的回答。**不落盘、也不进下一轮 history**：
   // 否则刷新后它会以「完整回答」的身份被喂回模型，后续推理建立在残句上。
   // UI 仍然显示，用户能看到已经拿到的部分。
@@ -49,7 +51,14 @@ function loadChat(key: string): StoredMsg[] {
       (m): m is StoredMsg =>
         m && typeof m === "object" && typeof m.content === "string" &&
         (m.role === "user" || m.role === "assistant"),
-    ));
+    ).map((m) => ({
+      ...m,
+      sources: Array.isArray(m.sources) ? m.sources.filter(
+        (source) => source && typeof source.report_id === "string" &&
+          typeof source.title === "string" &&
+          (source.page === null || (Number.isInteger(source.page) && source.page > 0)),
+      ).slice(0, 8) : undefined,
+    })));
   } catch {
     return [];
   }
@@ -283,6 +292,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     try {
       await chatStream(history, context, {
         onTool: (tool, args) => { if (alive()) patchLast((msg) => ({ ...msg, tools: [...(msg.tools || []), { name: tool, arg: argStr(args) }] })); },
+        onSources: (items) => { if (alive()) patchLast((msg) => ({ ...msg, sources: items })); },
         onDelta: (t) => { if (alive()) patchLast((msg) => ({ ...msg, content: msg.content + t })); },
       }, ac.signal, session, reportIds);
       // 正常收完：摘掉 partial，这条回答才开始落盘、才进下一轮 history。
@@ -434,6 +444,16 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                                 <div className="prose prose-sm dark:prose-invert max-w-none break-words text-foreground">
                                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
                                 </div>
+                                {m.sources && m.sources.length > 0 && (
+                                  <div className="mt-3 rounded-xl border border-border/50 bg-muted/40 p-3 text-xs text-muted-foreground">
+                                    <p className="mb-1 font-medium text-foreground">检索依据</p>
+                                    {m.sources.map((source) => (
+                                      <p key={`${source.report_id}:${source.page ?? 0}`}>
+                                        {source.title} · report_id={source.report_id} · {source.page ? `第 ${source.page} 页` : "页码不可用"}
+                                      </p>
+                                    ))}
+                                  </div>
+                                )}
                               </>
                             ) : (
                               <p className="whitespace-pre-wrap break-words">{m.content}</p>

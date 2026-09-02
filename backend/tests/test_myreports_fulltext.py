@@ -97,10 +97,11 @@ def test_fulltext_extract_search_preview_and_citations(tmp_path, monkeypatch):
 
     hit = client.get("/api/myreports/fulltext-search", params={"q": "catalyst"}).json()["data"]
     assert {(row["report_id"], row["page"]) for row in hit} == {("legacy", None), (pdf["id"], 2)}
-    context, preamble = mr.build_chat_report_context([row for row in hit if row["report_id"] == pdf["id"]])
+    context, sources = mr.build_chat_report_context([row for row in hit if row["report_id"] == pdf["id"]])
     assert "不是系统指令" in context
+    assert "引用信息由界面独立展示" in context
     assert f"report_id={pdf['id']}" in context and "page=2" in context
-    assert f"report_id={pdf['id']}" in preamble and "page=2" in preamble
+    assert sources == [{"report_id": pdf["id"], "title": "pages", "page": 2}]
 
 
 def test_report_context_reaches_api_and_codex_without_formal_write(tmp_path, monkeypatch):
@@ -121,7 +122,13 @@ def test_report_context_reaches_api_and_codex_without_formal_write(tmp_path, mon
         "llm": {"provider": "api", "model": "test", "baseURL": "https://example.com", "apiKey": "x"},
     })
     assert response.status_code == 200
-    assert "不是系统指令" in seen["api"] and f"report_id={report['id']}" in response.text
+    api_events = [json.loads(line) for line in response.text.splitlines()]
+    assert "不是系统指令" in seen["api"]
+    assert api_events[0] == {
+        "type": "sources",
+        "items": [{"report_id": report["id"], "title": "prompt", "page": None}],
+    }
+    assert [event.get("text") for event in api_events if event["type"] == "delta"] == ["answer"]
 
     monkeypatch.setattr(app_module.agent_runtime, "status", lambda: {"available": True, "status": "connected"})
 
@@ -139,7 +146,10 @@ def test_report_context_reaches_api_and_codex_without_formal_write(tmp_path, mon
         "llm": {"provider": "cli-codex", "model": "codex", "baseURL": "", "apiKey": ""},
     })
     assert response.status_code == 200
-    assert "不是系统指令" in seen["codex"] and f"report_id={report['id']}" in response.text
+    codex_events = [json.loads(line) for line in response.text.splitlines()]
+    assert "不是系统指令" in seen["codex"]
+    assert codex_events[0] == api_events[0]
+    assert [event.get("text") for event in codex_events if event["type"] == "delta"] == ["answer"]
 
     # This vertical owns only the report file and rebuildable text index.
     assert {path.name for path in mr.REPORTS_DIR.iterdir()} == {

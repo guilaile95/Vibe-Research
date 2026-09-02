@@ -132,3 +132,11 @@ test("runtime switch, explicit stop, and page session stay bound to the active r
   assert.match(source, /runtimeLabel\(selectedLlm\)/);
   assert.match(source, /NON_AUTHORITATIVE_AI_DRAFT/);
 });
+
+test("report sources stay visible metadata and never enter follow-up role/content history", () => {
+  assert.match(source, /sources\?: ChatReportSource\[\]/);
+  assert.match(source, /onSources: \(items\).*sources: items/);
+  assert.match(source, /m\.sources\.map/);
+  assert.match(source, /report_id=\{source\.report_id\}/);
+  assert.match(source, /visibleHistory\.map\(\(\{ role, content \}\) => \(\{ role, content \}\)\)/);
+});
