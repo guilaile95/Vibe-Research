@@ -549,6 +549,13 @@ try {
     continuityBatchRequests: 0,
     continuityBatchMode: "pending",
     releaseContinuity: null,
+    refreshOverlapMode: "none",
+    overlapCoreRequests: 0,
+    overlapNextActionRequests: 0,
+    overlapContinuityRequests: 0,
+    releaseOldCore: null,
+    releaseOldNextAction: null,
+    releaseOldContinuity: null,
     apiPaths: [],
   };
 
@@ -626,11 +633,44 @@ try {
       return;
     }
     if (pathname === "/api/decision-inbox" && request.method() === "GET") {
-      await route.fulfill(ok(decisionInboxSnapshot));
+      if (state.refreshOverlapMode === "core") {
+        const requestIndex = ++state.overlapCoreRequests;
+        if (requestIndex === 1) {
+          await new Promise((resolve) => { state.releaseOldCore = resolve; });
+        }
+        await route.fulfill(ok({
+          ...decisionInboxSnapshot,
+          as_of: requestIndex === 1 ? "2026-09-01T02:00:00Z" : "2026-09-02T02:00:00Z",
+        }));
+      } else {
+        await route.fulfill(ok(decisionInboxSnapshot));
+      }
       return;
     }
     if (pathname === "/api/campaigns/research-continuity/batch" && request.method() === "GET") {
       state.continuityBatchRequests += 1;
+      if (state.refreshOverlapMode === "children") {
+        const requestIndex = ++state.overlapContinuityRequests;
+        if (requestIndex === 1) {
+          await new Promise((resolve) => { state.releaseOldContinuity = resolve; });
+        }
+        const claim = requestIndex === 1 ? "OLD CONTINUITY" : "LATEST CONTINUITY";
+        await route.fulfill(ok({ items: [{
+          ...researchContinuity,
+          campaign_id: CAMPAIGN_INBOX,
+          security_code: "601318",
+          changes: {
+            ...researchContinuity.changes,
+            items: [{
+              change_type: "ADDED",
+              record_key: claim,
+              before: null,
+              after: continuityEvidence(claim, claim, "fixture"),
+            }],
+          },
+        }] }));
+        return;
+      }
       if (state.continuityBatchMode === "pending") {
         await new Promise((resolve) => { state.releaseContinuity = resolve; });
       }
@@ -787,6 +827,15 @@ try {
     if (nextActionsMatch && request.method() === "GET") {
       const campaign = [...state.campaigns, ...fixedCampaigns].find((item) => item.campaign_id === nextActionsMatch[1]);
       assert.ok(campaign, "next-actions requested for unknown candidate campaign");
+      if (state.refreshOverlapMode === "children") {
+        const requestIndex = ++state.overlapNextActionRequests;
+        if (requestIndex === 1) {
+          await new Promise((resolve) => { state.releaseOldNextAction = resolve; });
+        } else {
+          await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "latest fixture failure" }) });
+          return;
+        }
+      }
       await route.fulfill(ok({
         campaign_id: campaign.campaign_id,
         security_code: campaign.security_code,
@@ -1075,6 +1124,47 @@ try {
     .getByRole("alert").getByText("批量读取失败，可单独刷新", { exact: true }).waitFor();
   assert.equal(state.continuityBatchRequests, 2);
   assert.equal(state.continuityRequests, individualBeforeInbox, "Decision Inbox must use only the batch continuity request");
+
+  // A late core response cannot overwrite a newer refresh.
+  const inboxRefresh = page.getByRole("button", { name: "刷新", exact: true });
+  state.continuityBatchMode = "success";
+  state.refreshOverlapMode = "core";
+  state.overlapCoreRequests = 0;
+  state.releaseOldCore = null;
+  await inboxRefresh.click();
+  for (let attempt = 0; attempt < 50 && !state.releaseOldCore; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(typeof state.releaseOldCore, "function", "old core refresh was not held");
+  await inboxRefresh.click();
+  await page.getByText(/快照时间：2026-09-02T02:00:00Z/).waitFor();
+  state.releaseOldCore();
+  await page.waitForTimeout(100);
+  assert.equal(await page.getByText(/快照时间：2026-09-01T02:00:00Z/).count(), 0, "old core refresh must not overwrite latest snapshot");
+
+  // Older secondary results are ignored even when they resolve after the
+  // latest refresh has already succeeded or failed independently.
+  state.refreshOverlapMode = "children";
+  state.overlapNextActionRequests = 0;
+  state.overlapContinuityRequests = 0;
+  state.releaseOldNextAction = null;
+  state.releaseOldContinuity = null;
+  await inboxRefresh.click();
+  for (let attempt = 0; attempt < 50 && (!state.releaseOldNextAction || !state.releaseOldContinuity); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(typeof state.releaseOldNextAction, "function", "old next-actions request was not held");
+  assert.equal(typeof state.releaseOldContinuity, "function", "old continuity request was not held");
+  await inboxRefresh.click();
+  await inboxContinuity.getByText("LATEST CONTINUITY", { exact: true }).waitFor();
+  await page.getByText("无法获取下一合法动作。刷新后以后端状态为准，不会猜测可执行步骤。", { exact: true }).waitFor();
+  state.releaseOldNextAction();
+  state.releaseOldContinuity();
+  await page.waitForTimeout(100);
+  assert.equal(await inboxContinuity.getByText("OLD CONTINUITY", { exact: true }).count(), 0);
+  assert.equal(await inboxContinuity.getByText("LATEST CONTINUITY", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("已处于终态，无下一合法动作。", { exact: true }).count(), 0);
+  state.refreshOverlapMode = "none";
 
   assert.deepEqual(state.createdPayloads, [
     { security_code: "600519", strategy: "SHORT" },
