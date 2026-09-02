@@ -45,7 +45,7 @@ reasoning; the user owns the final decision.
 - 自选股、持仓、账户资金与执行约束；
 - Thesis、Evidence、Decision Evidence 与 Signal Ledger；
 - Trade Ledger、Decision Feedback、Decision Performance 与 Performance Attribution；
-- Data Health、OpenAI-compatible API、本机 CLI 与 MCP 辅助入口。
+- Data Health、OpenAI-compatible API、Codex 订阅 Agent Runtime、本机 CLI 与 MCP 辅助入口。
 
 当前恢复坐标见 [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md)，架构与边界见
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。实时工程状态始终以 GitHub 的稳定分支、
@@ -84,8 +84,8 @@ Start-Vibe.cmd
 1. 创建或复用 `backend\.venv`；
 2. 按 Windows exact lock 同步后端依赖；
 3. 按 `package-lock.json` 同步前端依赖；
-4. 启动后端和前端；
-5. 等待两个服务真实就绪；
+4. 启动三个进程：Backend（:8900）、Agent Runtime（:8911）与 Frontend（:5899）；
+5. 等待三个服务真实就绪；
 6. 自动打开 `http://127.0.0.1:5899`。
 
 首次安装依赖会比后续启动更久。保持启动窗口开启；按 `Ctrl+C` 会停止本次启动器创建的
@@ -143,6 +143,7 @@ npm.cmd run dev
 Vibe-Research/
 ├── frontend/            React 19 + TypeScript + Vite
 ├── backend/             FastAPI、数据适配、研究与决策相关 API
+├── agent-runtime/       Codex 订阅 page-aware chat 运行时（Node，:8911）
 ├── a-stock-data/        A 股数据工具与说明
 ├── global-stock-data/   全球市场数据工具与说明
 └── docs/                架构、状态、治理和研究记录
@@ -156,8 +157,16 @@ Vibe-Research/
 AI 功能是可选的。稳定版本包含：
 
 - OpenAI-compatible API 配置；
+- Codex 订阅接入：本机 Agent Runtime（`agent-runtime/` + `backend/agent_runtime.py`，:8911）
+  提供的 page-aware Ask AI；
+- MyReports 全文检索与提问，回答附来源与页码引用；
 - 调用本机已安装 CLI 的运行路径；
 - `backend/mcp_server.py` 提供的 MCP 数据工具入口。
+
+Agent Runtime 的真实边界：它是页面上下文内的文本生成器（page-aware Ask AI），
+不是 autonomous research / shell / web / MCP / formal decision agent——无 shell、无 web、
+无本地磁盘直接访问、不接 Vibe MCP 工具、无插件与外部技能、无多智能体、不写 Formal authority；
+输出一律为 `NON_AUTHORITATIVE_AI_DRAFT`。
 
 具体模型、CLI 和外部端点由使用者自行配置。模型密钥不应写入仓库；相关运行说明见
 [`backend/README.md`](backend/README.md)。

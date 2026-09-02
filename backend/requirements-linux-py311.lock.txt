@@ -94,7 +94,9 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
     # via uvicorn
 pyyaml==6.0.3
-    # via uvicorn
+    # via
+    #   -r requirements.txt
+    #   uvicorn
 requests==2.34.2
     # via
     #   -r requirements.txt
