@@ -1,6 +1,6 @@
 # Current Stage — Recovery Coordinates
 
-Last reviewed: 2026-08-30
+Last reviewed: 2026-09-03
 
 This file is a recovery pointer, not Engineering Truth and not a second task database.
 Always resolve live GitHub state before acting; do not persist an exact stable SHA here.
@@ -52,6 +52,12 @@ The accepted stable line already contains the product foundation required for th
 - bounded, deterministic full-market Discovery on `/screener`, with separate SHORT/SWING/MEDIUM
   research queues and an explicit handoff to Candidate Research; Discovery creates no formal state
   and emits no BUY action.
+- Wave 1 (UPSYNC2, PRs #262/#263/#264) already merged into stable:
+  - isolated Codex subscription page-aware chat runtime (`agent-runtime/` + `backend/agent_runtime.py`,
+    :8911; NON_AUTHORITATIVE_AI_DRAFT, no shell / web / local disk / Vibe MCP / plugins /
+    multi-agent / Formal authority write);
+  - MyReports full-text knowledge and retrieval with source/page citations;
+  - Research Continuity change digest and decision calendar read model.
 
 These capabilities being present and tested does not prove product value. The next truth gate is real
 usage, not another feature-completeness pass.

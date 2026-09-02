@@ -14,8 +14,17 @@ backend/app.py (FastAPI)
     ├── portfolio.*             本地持仓读写
     ├── portfolio_advice_*      持仓建议编排 / 上下文 / 提示 / 校验
     ├── chat / cli_runtime      模型调用
+    ├── agent_runtime           Codex 订阅 page-aware chat 客户端 → agent-runtime/ (Node :8911)
+    ├── myreports_fulltext      MyReports 全文索引 / 检索 + 来源与页码引用
+    ├── research_continuity_*   Research Continuity read model（变更摘要 / 决策日历）
     └── review_store / history  SQLite 显式历史（与运行时缓存分离）
 ```
+
+Agent Runtime（Wave 1，PR #262）是独立 Node 进程（`agent-runtime/`，:8911），
+由 `backend/agent_runtime.py` 以 loopback HTTP 调用，仅提供页面上下文内的
+文本生成（page-aware Ask AI）：无 shell / web / 本地磁盘直接访问 / Vibe MCP 工具 /
+插件 / 外部技能 / 多智能体，不写 Formal authority，输出一律
+`NON_AUTHORITATIVE_AI_DRAFT`。
 
 ---
 
