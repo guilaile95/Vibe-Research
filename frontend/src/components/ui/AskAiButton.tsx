@@ -286,10 +286,11 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
         onDelta: (t) => { if (alive()) patchLast((msg) => ({ ...msg, content: msg.content + t })); },
       }, ac.signal, session, reportIds);
       // 正常收完：摘掉 partial，这条回答才开始落盘、才进下一轮 history。
-      if (alive()) patchLast((msg) => {
+      if (alive()) setMsgs((current) => boundedCompleteTurns(current.map((msg, index) => {
+        if (index !== current.length - 1 || msg.role !== "assistant") return msg;
         const { partial: _drop, ...rest } = msg;
         return rest;
-      });
+      })));
     } catch (e) {
       // 三种「不该清理」的情况要分开判，不能简单用 abortRef.current === ac：
       //   · 有更新的请求接管了（abortRef 指向别人）→ 别删人家的气泡
