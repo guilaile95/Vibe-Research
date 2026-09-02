@@ -70,21 +70,6 @@ export interface MyReportTextIndexBatchResult {
 export type MyReportsBrowseGroup = "year" | "industry" | "institution";
 
 
-export interface MyReportsBrowseGroupItem {
-  key: string;
-  label: string;
-  count: number;
-  months?: { key: string; label: string; count: number }[];
-  sector_keys?: string[];
-}
-
-
-export interface MyReportsBrowseResult {
-  groups: MyReportsBrowseGroupItem[];
-  total: number;
-}
-
-
 /** 板块研报发现 scope：行业 / 公司 / 全部 */
 export type SectorReportScope = "industry" | "company" | "all";
 
@@ -374,38 +359,8 @@ export interface TimedComponentEnvelope<T> extends ComponentEnvelope<T> {
 }
 
 
-/** 兼容旧 overview.sentiment（其他页面可能仍用 marketOverview） */
-export interface MarketSentiment {
-  status?: MarketDataStatus;
-  source?: string;
-  warnings?: string[];
-  up: number | null;
-  down: number | null;
-  flat: number | null;
-  zt: number | null;
-  zt_real?: number | null;
-  dt: number | null;
-  dt_real?: number | null;
-  active: string;
-  active_metric?: string;
-  up_ratio?: number | null;
-  breadth: string | null;
-  speculation: string | null;
-  stock_count?: number | null;
-  valid_count?: number | null;
-  up_3pct_count?: number | null;
-  down_3pct_count?: number | null;
-  total_amount?: number | null;
-  date: string;
-  limit_count_source?: string;
-}
-
 export interface SectorFlow {
   name: string; pct: number; net: number; inflow: number; outflow: number; firms: number;
-}
-
-export interface MarketOverview {
-  sentiment: MarketSentiment; sectors: SectorFlow[]; updated: string;
 }
 
 

@@ -13,8 +13,6 @@ import type {
   IntelDigestLatestResult,
   IntelDigestSaveIn,
   IntelDigestSaveResult,
-  MyReportsBrowseGroup,
-  MyReportsBrowseResult,
   SectorReportScope,
   SectorReportsDiscoveryResult,
   SectorDynamicData,
@@ -28,10 +26,6 @@ import type {
   NewsItem,
   IndexQuote,
   TimedComponentEnvelope,
-  MarketOverview,
-  ShortTermEmotion,
-  TurnoverTop,
-  MarketBreadthData,
   BoardRankingData,
   DailyReviewCacheMeta,
   DailyReviewData,
@@ -72,7 +66,6 @@ import type {
   IndustryData,
   KlineBar,
   DisclosureItem,
-  GlobalIndex,
   GlobalStock,
   HkCashflow,
   GpuRentData,
@@ -132,7 +125,6 @@ import type {
   CampaignRecord,
   CampaignStrategy,
   CampaignStatus,
-  CampaignTransitionRecord,
   CampaignTransitionResult,
   CampaignTradeActivationResult,
   CampaignNextActions,
@@ -469,9 +461,6 @@ export async function dailyReviewAnalyzeStream(
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   indices: () => get<IndexQuote[]>("/indices"),
-  marketOverview: () => get<MarketOverview>("/market/overview"),
-  emotion: () => get<ShortTermEmotion>("/market/emotion"),
-  turnoverTop: () => get<TurnoverTop>("/market/turnover-top"),
   /**
    * 结构化每日复盘聚合包（一次请求覆盖指数/广度/情绪/成交/板块）。
    * 保留 data；附带可选 cache_meta（stale 时前端可轮询）。
@@ -576,7 +565,6 @@ export const api = {
     if (params.stock_limit != null) q.set("stock_limit", String(params.stock_limit));
     return get<DailyReviewComparison>(`/daily-review/history/compare?${q.toString()}`);
   },
-  marketBreadth: () => get<TimedComponentEnvelope<MarketBreadthData>>("/market/breadth"),
   marketNorthbound: () => get<NorthboundCapitalFlow>("/market/northbound"),
   marketCloud: (scope: string, period: string, signal?: AbortSignal) =>
     get<MarketCloudEnvelope>(
@@ -596,7 +584,6 @@ export const api = {
     ),
   marketBoards: (type: "industry" | "concept" | "region" = "industry", topN = 20) =>
     get<TimedComponentEnvelope<BoardRankingData>>(`/market/boards?type=${type}&top_n=${topN}`),
-  globalIndices: () => get<GlobalIndex[]>("/global/indices"),
   globalStock: (symbol: string) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`),
   hkCashflow: (symbol: string) => get<HkCashflow>(`/global/hk/cashflow?symbol=${encodeURIComponent(symbol)}`),
   // ---- Native Intel（NATIVE-INTEL1，Vibe 本地持久化，无 sidecar / MCP）----
@@ -736,13 +723,6 @@ export const api = {
     }),
   deleteReport: (id: string) => request<{ ok: boolean }>(`/myreports/${id}`, "DELETE"),
   // 注意：get()/request() 已自动加 /api 前缀，这里只传 /myreports/... 即可，禁止重复 /api。
-  browseMyReports: (group: MyReportsBrowseGroup, sectorKey?: string) => {
-    const q = new URLSearchParams({ group });
-    if (sectorKey) q.set("sector_key", sectorKey);
-    return get<MyReportsBrowseResult>(`/myreports/browse?${q.toString()}`);
-  },
-  searchMyReports: (q: string) =>
-    get<MyReport[]>(`/myreports/search?q=${encodeURIComponent(q)}`),
   searchMyReportText: (q: string, reportIds?: string[], limit = 20) => {
     const params = new URLSearchParams({ q, limit: String(limit) });
     for (const reportId of reportIds ?? []) params.append("report_ids", reportId);
@@ -1080,7 +1060,6 @@ export const api = {
     transitionCampaign(campaignId, expectedStatus, toStatus),
   activateCampaignFromTrade: (campaignId: string, tradeId: string) =>
     activateCampaignFromTrade(campaignId, tradeId),
-  getCampaignTransitions: (campaignId: string) => getCampaignTransitions(campaignId),
   getCampaignNextActions: (campaignId: string) => getCampaignNextActions(campaignId),
   // P0-CT1：Campaign ↔ Formal Thesis 绑定 / Current Thesis 投影
   bindCampaignThesis: (campaignId: string, thesisId: string) =>
@@ -1388,14 +1367,6 @@ export async function activateCampaignFromTrade(
     `/campaigns/${encodeURIComponent(campaignId)}/activate-from-trade`,
     "POST",
     { trade_id: tradeId },
-  );
-}
-
-export async function getCampaignTransitions(
-  campaignId: string,
-): Promise<CampaignTransitionRecord[]> {
-  return get<CampaignTransitionRecord[]>(
-    `/campaigns/${encodeURIComponent(campaignId)}/transitions`,
   );
 }
 
