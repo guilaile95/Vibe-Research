@@ -7,6 +7,9 @@ export type * from "./api/types.ts";
 import type { MarketCloudEnvelope } from "./marketCloud.ts";
 import type {
   MyReport,
+  MyReportTextHit,
+  MyReportTextIndexPreview,
+  MyReportTextIndexBatchResult,
   IntelDigestLatestResult,
   IntelDigestSaveIn,
   IntelDigestSaveResult,
@@ -141,6 +144,7 @@ import type {
   DecisionProposalCommitResult,
   CommittedDecisionRuntimeRead,
   StreamLlmConfig,
+  ReportChatSource,
 } from "./api/types.ts";
 
 
@@ -330,6 +334,24 @@ export function applyNdjsonLine(
       return;
     }
     handlers.onTool?.(String(event.tool || ""), event.args || {});
+  } else if (event.type === "sources") {
+    if (state.sawDone || !Array.isArray(event.items) || event.items.length > 8) {
+      state.sawError = true;
+      state.errorMessage = "后端研报引用格式错误";
+      return;
+    }
+    const items: ReportChatSource[] = [];
+    for (const item of event.items) {
+      if (!item || typeof item !== "object" || typeof item.report_id !== "string" || !item.report_id ||
+          typeof item.title !== "string" || !item.title ||
+          !(item.page === null || (Number.isInteger(item.page) && item.page > 0))) {
+        state.sawError = true;
+        state.errorMessage = "后端研报引用格式错误";
+        return;
+      }
+      items.push({ report_id: item.report_id, title: item.title, page: item.page });
+    }
+    handlers.onSources?.(items);
   } else if (event.type === "done") {
     if (state.sawDone) {
       state.sawError = true;
@@ -719,6 +741,24 @@ export const api = {
   },
   searchMyReports: (q: string) =>
     get<MyReport[]>(`/myreports/search?q=${encodeURIComponent(q)}`),
+  searchMyReportText: (q: string, reportIds?: string[], limit = 20) => {
+    const params = new URLSearchParams({ q, limit: String(limit) });
+    for (const reportId of reportIds ?? []) params.append("report_ids", reportId);
+    return get<MyReportTextHit[]>(`/myreports/fulltext-search?${params.toString()}`);
+  },
+  previewMyReportTextIndex: (reportIds?: string[]) => {
+    const params = new URLSearchParams();
+    for (const reportId of reportIds ?? []) params.append("report_ids", reportId);
+    const query = params.toString();
+    return get<MyReportTextIndexPreview>(`/myreports/text-index/preview${query ? `?${query}` : ""}`);
+  },
+  indexMyReportText: (id: string) =>
+    request<MyReport>(`/myreports/${id}/text-index`, "POST", {}),
+  batchIndexMyReportText: (reportIds: string[]) =>
+    request<MyReportTextIndexBatchResult>("/myreports/text-index/batch", "POST", {
+      report_ids: reportIds,
+      confirm: true,
+    }),
   patchReport: (id: string, meta: {
     title?: string; institution?: string; publish_date?: string;
     sector_keys?: string[]; source_url?: string; source_kind?: string;

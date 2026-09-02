@@ -19,6 +19,51 @@ export interface MyReport {
   report_type?: string;
   // 同内容去重标记：上传内容与已有归档完全一致时，不写重复文件，返回既有条目 + deduped=true。
   deduped?: boolean;
+  text_index_status?: MyReportTextIndexStatus;
+  text_index_error?: string;
+  indexed_at?: string;
+  page_count?: number | null;
+}
+
+
+export type MyReportTextIndexStatus =
+  | "SEARCHABLE"
+  | "NOT_INDEXED"
+  | "OCR_REQUIRED"
+  | "ARCHIVED_NOT_SEARCHABLE"
+  | "INDEX_ERROR";
+
+export interface MyReportTextHit {
+  report_id: string;
+  title: string;
+  name: string;
+  page: number | null;
+  snippet: string;
+  score: number;
+  publish_date: string;
+  institution: string;
+  source_url: string;
+}
+
+export type ReportChatSource = Pick<MyReportTextHit, "report_id" | "title" | "page">;
+
+export interface MyReportTextIndexPreviewItem {
+  report_id: string;
+  title: string;
+  status: MyReportTextIndexStatus;
+  eligible: boolean;
+  error_code: string;
+}
+
+export interface MyReportTextIndexPreview {
+  items: MyReportTextIndexPreviewItem[];
+  total: number;
+  writes: 0;
+}
+
+export interface MyReportTextIndexBatchResult {
+  items: { report_id: string; status: MyReportTextIndexStatus; error_code: string }[];
+  total: number;
 }
 
 
@@ -1403,6 +1448,7 @@ export interface DailyReviewAnalyzeRequest {
 export interface NdjsonStreamHandlers {
   onDelta?: (text: string) => void;
   onTool?: (tool: string, args: Record<string, unknown>) => void;
+  onSources?: (items: ReportChatSource[]) => void;
 }
 
 

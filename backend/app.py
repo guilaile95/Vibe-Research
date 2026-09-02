@@ -654,6 +654,7 @@ class ChatReq(BaseModel):
     messages: list[dict]
     context: str = ""
     session: str = ""
+    report_ids: list[str] = Field(default_factory=list, max_length=100)
     llm: LLMConfig
 
 
@@ -716,18 +717,34 @@ def chat(req: ChatReq):
 
     def gen():
         try:
+            question = next(
+                (
+                    str(message.get("content") or "").strip()
+                    for message in reversed(req.messages)
+                    if message.get("role") == "user" and str(message.get("content") or "").strip()
+                ),
+                "",
+            )
+            context = req.context
+            sources = []
+            if req.report_ids:
+                hits = mr.search_report_text(question, report_ids=req.report_ids, limit=8)
+                report_context, sources = mr.build_chat_report_context(hits)
+                context = f"{context or '（无页面数据）'}\n\n{report_context}"
+                if sources:
+                    yield json.dumps({"type": "sources", "items": sources}, ensure_ascii=False) + "\n"
             if is_codex_runtime:
                 question, history = _agent_runtime_turn(req.messages)
                 events = agent_runtime.stream_chat(
                     session=req.session,
                     message=question,
-                    context=req.context,
+                    context=context,
                     history=history,
                     cancel_event=disconnect_event,
                 )
             else:
                 events = (chat_layer.run_chat_cli_stream if is_cli else chat_layer.run_chat_stream)(
-                    cfg, req.messages, req.context
+                    cfg, req.messages, context
                 )
             for ev in events:
                 if disconnect_event.is_set():
@@ -1147,6 +1164,12 @@ class ReportMetaPatch(BaseModel):
     source_kind: str | None = None
 
 
+class ReportTextIndexBatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    report_ids: list[str] = Field(min_length=1, max_length=100)
+    confirm: bool
+
+
 @app.get("/api/myreports")
 def myreports_list():
     return {"data": mr.list_reports()}
@@ -1192,8 +1215,46 @@ def myreports_browse(group: str = Query(...), sector_key: str | None = None):
 
 @app.get("/api/myreports/search")
 def myreports_search(q: str = ""):
-    """全文检索：匹配 name / title / institution / sector_keys。"""
+    """元数据检索：匹配 name / title / institution / sector_keys。"""
     return {"data": mr.search_reports(mr.list_reports(), q)}
+
+
+@app.get("/api/myreports/fulltext-search")
+def myreports_fulltext_search(
+    q: str,
+    report_ids: list[str] | None = Query(default=None),
+    symbol: str | None = None,
+    sector: str | None = None,
+    limit: int = Query(default=20, ge=1, le=50),
+):
+    try:
+        return {"data": mr.search_report_text(
+            q, report_ids=report_ids, symbol=symbol, sector=sector, limit=limit,
+        )}
+    except (ValueError, mr.fulltext.ReportTextIndexError) as e:
+        raise HTTPException(400 if isinstance(e, ValueError) else 500, str(e)) from e
+
+
+@app.get("/api/myreports/text-index/preview")
+def myreports_text_index_preview(report_ids: list[str] | None = Query(default=None)):
+    return {"data": mr.preview_text_index(report_ids)}
+
+
+@app.post("/api/myreports/text-index/batch")
+def myreports_text_index_batch(body: ReportTextIndexBatchIn):
+    if body.confirm is not True:
+        raise HTTPException(400, "批量建立正文索引需要显式确认")
+    return {"data": mr.batch_index_report_text(body.report_ids)}
+
+
+@app.post("/api/myreports/{rid}/text-index")
+def myreports_text_index_one(rid: str):
+    try:
+        return {"data": mr.index_report_text(rid)}
+    except mr.ReportError as e:
+        raise HTTPException(404, str(e)) from e
+    except mr.fulltext.ReportTextIndexError as e:
+        raise HTTPException(500, str(e)) from e
 
 
 @app.patch("/api/myreports/{rid}")

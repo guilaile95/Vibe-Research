@@ -3,11 +3,12 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Upload, FileText, Trash2, Download, Loader2, FolderOpen, Search, Pencil, ExternalLink, Save, X } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { AskAiButton } from "@/components/ui/AskAiButton";
 import sectorsData from "@/data/sectors.json";
 import { cn } from "@/lib/utils";
 import {
   api, ApiError, downloadReport,
-  type MyReport, type MyReportsBrowseGroup,
+  type MyReport, type MyReportTextHit, type MyReportsBrowseGroup,
 } from "@/lib/api";
 import {
   filterReports,
@@ -70,7 +71,9 @@ export function MyReports() {
 
   const [q, setQ] = useState("");
   const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState<MyReport[] | null>(null);
+  const [results, setResults] = useState<MyReportTextHit[] | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [indexBusy, setIndexBusy] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditForm>(EMPTY_EDIT);
@@ -127,7 +130,7 @@ export function MyReports() {
     }
     setSearching(true);
     let alive = true;
-    api.searchMyReports(q)
+    api.searchMyReportText(q)
       .then((r) => { if (alive) setResults(r); })
       .catch(() => { if (alive) setResults([]); });
     return () => { alive = false; };
@@ -157,10 +160,44 @@ export function MyReports() {
     if (!confirm(`删除「${r.title || r.name}」？（同时从本地归档目录移除）`)) return;
     try {
       await api.deleteReport(r.id);
+      setSelectedIds((ids) => ids.filter((id) => id !== r.id));
       if (editingId === r.id) setEditingId(null);
       await refreshAll();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "删除失败");
+    }
+  };
+
+  const indexOne = async (reportId: string) => {
+    setIndexBusy(reportId);
+    setErr(null);
+    try {
+      await api.indexMyReportText(reportId);
+      await refreshAll();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "正文索引失败");
+    } finally {
+      setIndexBusy(null);
+    }
+  };
+
+  const indexLegacy = async () => {
+    setIndexBusy("all");
+    setErr(null);
+    try {
+      const preview = await api.previewMyReportTextIndex();
+      const eligible = preview.items.filter((item) => item.eligible).map((item) => item.report_id);
+      if (!eligible.length) {
+        setErr("没有需要建立正文索引的旧研报");
+        return;
+      }
+      if (!confirm(`将为 ${eligible.length} 份旧研报建立本地正文索引，继续？`)) return;
+      await api.batchIndexMyReportText(eligible);
+      await refreshAll();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "批量正文索引失败");
+    } finally {
+      setIndexBusy(null);
     }
   };
 
@@ -239,6 +276,15 @@ export function MyReports() {
         )}
       >
         <div className="flex items-start gap-2.5 py-2.5">
+          <input
+            type="checkbox"
+            checked={selectedIds.includes(r.id)}
+            onChange={(event) => setSelectedIds((ids) => (
+              event.target.checked ? [...ids, r.id] : ids.filter((id) => id !== r.id)
+            ))}
+            aria-label={`选择 ${displayTitle(r)}`}
+            className="mt-1"
+          />
           <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium">{displayTitle(r)}</p>
@@ -248,6 +294,13 @@ export function MyReports() {
               {" · "}{fmtSize(r.size)}
             </p>
             <div className="mt-1 flex flex-wrap items-center gap-1">
+              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {r.text_index_status === "SEARCHABLE" ? "正文可检索"
+                  : r.text_index_status === "OCR_REQUIRED" ? "扫描件：需要 OCR"
+                    : r.text_index_status === "ARCHIVED_NOT_SEARCHABLE" ? "仅归档"
+                      : r.text_index_status === "INDEX_ERROR" ? "索引失败"
+                        : "正文未索引"}
+              </span>
               {(r.sector_keys ?? []).map((key) => (
                 <Link
                   key={key}
@@ -277,6 +330,15 @@ export function MyReports() {
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            {(r.text_index_status === "NOT_INDEXED" || r.text_index_status === "INDEX_ERROR") && (
+              <button
+                onClick={() => indexOne(r.id)}
+                disabled={indexBusy !== null}
+                className="rounded border border-border/50 px-2 py-1 text-[10px] text-muted-foreground hover:text-primary disabled:opacity-50"
+              >
+                {indexBusy === r.id ? "索引中…" : "建立正文索引"}
+              </button>
+            )}
             <button
               onClick={() => startEdit(r)}
               className={cn("shrink-0 text-muted-foreground/60 hover:text-primary", editing && "text-primary")}
@@ -470,7 +532,7 @@ export function MyReports() {
             {busy ? "上传中…" : "把研报拖到这里，或点击选择文件"}
           </p>
           <p className="text-xs text-muted-foreground/70">
-            支持 PDF / Word / txt / md / 表格 / 图片，单个 ≤ 25MB，可一次多选
+            PDF / DOCX / UTF-8 txt、md、csv 可检索正文；其他支持格式仅归档。单个 ≤ 25MB
           </p>
           <input
             ref={inputRef}
@@ -514,12 +576,29 @@ export function MyReports() {
             </button>
           ))}
         </div>
+        <button
+          type="button"
+          onClick={indexLegacy}
+          disabled={indexBusy !== null}
+          className="rounded border border-border/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-primary disabled:opacity-50"
+        >
+          {indexBusy === "all" ? "索引中…" : "索引旧研报"}
+        </button>
+        {selectedIds.length > 0 && (
+          <AskAiButton
+            label={`基于所选资料提问（${selectedIds.length}）`}
+            context={`用户选择了 ${selectedIds.length} 份本地研报。回答只能使用服务端检索返回的正文片段。`}
+            reportIds={selectedIds}
+            scopeKey={`reports:${[...selectedIds].sort().join(",")}`}
+            suggestions={["概括所选资料的核心判断", "所选资料有哪些一致观点和分歧？"]}
+          />
+        )}
         <div className="ml-auto flex items-center gap-1">
           <Search className="h-4 w-4 text-muted-foreground" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="搜索标题 / 机构 / 赛道…"
+            placeholder="搜索研报正文…"
             className="w-40 rounded border border-border/50 bg-background px-2 py-1 text-sm placeholder:text-muted-foreground/50 sm:w-56"
           />
         </div>
@@ -534,7 +613,15 @@ export function MyReports() {
           {results && results.length > 0 ? (
             <GlassCard>
               <div className="divide-y divide-border/30">
-                {results.map(renderReportRow)}
+                {results.map((hit) => (
+                  <div key={`${hit.report_id}:${hit.page ?? 0}`} className="py-3">
+                    <p className="text-sm font-medium">{hit.title}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      report_id={hit.report_id}{hit.page ? ` · 第 ${hit.page} 页` : " · 页码不可用"}
+                    </p>
+                    <p className="mt-1 text-sm text-muted-foreground">{hit.snippet}</p>
+                  </div>
+                ))}
               </div>
             </GlassCard>
           ) : (
