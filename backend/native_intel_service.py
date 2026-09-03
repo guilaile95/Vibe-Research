@@ -1032,6 +1032,8 @@ def item_rank_history(item_id: int, path: str | None = None) -> dict[str, Any] |
             "ON_LIST": "最近一次来源抓取成功且条目在榜",
             "OFF_LIST": "最近一次来源抓取成功但条目未出现（真实掉榜，不写假 rank）",
             "UNKNOWN": "来源最近一次抓取失败或尚未抓取：现状未知，绝不当作掉榜",
+            "DISABLED": "来源已停用或已删除：保留末次观测供审计，不当实时在榜",
+            "STALE": "抓取数据已过期（超出时效窗口）：保留末次已知排名，不当实时在榜",
             "NO_RANK_SEMANTICS": "来源无真实排名（RSS），rank 恒为 NULL",
         },
     }

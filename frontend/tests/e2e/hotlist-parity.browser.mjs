@@ -218,9 +218,33 @@ try {
   const hotlistPanel = page.getByTestId("native-intel-hotlist-panel");
   await hotlistPanel.waitFor({ state: "visible", timeout: 10000 });
 
-  // 验证后端 SQLite 中的种子条目真实渲染
+  // 2.1 新鲜状态验证：标题、徽章与实时排名
   await hotlistPanel.getByText("科技股全线走强", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
   await hotlistPanel.getByRole("button", { name: "财联社热门" }).waitFor({ state: "visible", timeout: 5000 });
+  await hotlistPanel.getByText("实时热榜追踪").waitFor({ state: "visible", timeout: 5000 });
+  await hotlistPanel.getByTestId("hotlist-freshness-badge").waitFor({ state: "visible", timeout: 5000 });
+  assert.equal(await hotlistPanel.getByTestId("hotlist-freshness-badge").innerText(), "原生热点观测");
+  assert.equal(await hotlistPanel.getByTestId("hotlist-stale-banner").count(), 0);
+
+  // 2.2 过期状态诚实性验证：抓取时间超过 6 小时后，UI 必须显式降级为非实时 / 已过期
+  await fetch(`http://127.0.0.1:${backendPort}/api/test/make-stale`, { method: "POST" });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const hotlistTab2 = page.locator("button", { hasText: "实时热榜" });
+  await hotlistTab2.waitFor({ state: "visible", timeout: 10000 });
+  await hotlistTab2.click();
+  const stalePanel = page.getByTestId("native-intel-hotlist-panel");
+  await stalePanel.waitFor({ state: "visible", timeout: 10000 });
+
+  // 校验过期标识与警告条
+  await stalePanel.getByTestId("hotlist-stale-banner").waitFor({ state: "visible", timeout: 5000 });
+  await stalePanel.getByText("热榜数据追踪（非实时）").waitFor({ state: "visible", timeout: 5000 });
+  assert.equal(await stalePanel.getByTestId("hotlist-freshness-badge").innerText(), "数据已过期 (非实时)");
+  // 校验排名降级为 —，保留末次 rank 供审计说明
+  await stalePanel.getByText("末次 #1 (已过期)").waitFor({ state: "visible", timeout: 5000 });
+  assert.ok((await stalePanel.getByText("已过期").count()) > 0);
+
+  // 2.3 恢复新鲜数据
+  await fetch(`http://127.0.0.1:${backendPort}/api/test/make-fresh`, { method: "POST" });
 
   assert.deepEqual(pageErrors, []);
   console.log("Hotlist parity real browser + real backend E2E: PASS");

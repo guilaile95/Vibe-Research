@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI
 
@@ -86,3 +86,23 @@ service.ensure_directory = lambda _path=None, **_kwargs: {
 
 app = FastAPI(title="Hotlist Parity E2E harness")
 app.include_router(native_intel_router.router)
+
+
+@app.post("/api/test/make-stale")
+def _make_stale():
+    with store._LOCK:
+        with store._connect(DB_PATH) as conn:
+            with conn:
+                old_time = (datetime.now(timezone.utc) - timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                conn.execute("UPDATE intel_fetch_runs SET started_at = ?", (old_time,))
+    return {"status": "ok"}
+
+
+@app.post("/api/test/make-fresh")
+def _make_fresh():
+    with store._LOCK:
+        with store._connect(DB_PATH) as conn:
+            with conn:
+                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                conn.execute("UPDATE intel_fetch_runs SET started_at = ?", (now,))
+    return {"status": "ok"}

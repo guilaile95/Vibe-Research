@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -723,3 +724,101 @@ def test_user_source_uuid_chinese_collision_soft_delete(tmp_path: Path) -> None:
         raise AssertionError("系统源删除必须被阻止")
     except store.SystemSourceDeleteBlocked:
         pass
+
+
+def test_stale_source_state_and_rank_honesty(tmp_path: Path) -> None:
+    """过期数据诚实性验证：超过 STALE_AFTER_HOURS 的数据降级为 STALE，绝不伪装为当前 ON_LIST。
+
+    1. 抓取时间超过 6 小时：get_item_rank_state 返回 current_state=STALE，保留末次已知 rank 供审计；
+    2. hotlist_board 整体 status 同步反映为 stale；
+    3. 新一轮成功抓取完成后，状态恢复为实时 ON_LIST，rank_delta 连续推导。
+    """
+    path = tmp_path / "intel_stale.sqlite3"
+    cls_src = {
+        "source_id": "hotlist-cls-hot",
+        "name": "财联社热门",
+        "hint": "macro",
+        "url": "https://newsnow.busiyi.world/api/s?id=cls-hot&latest",
+        "source_type": "hotlist",
+        "has_real_rank": True,
+        "origin": "system",
+    }
+    store.upsert_sources([cls_src], path)
+
+    # 1. 模拟 7 小时前的过期抓取
+    old_time = (datetime.now(timezone.utc) - timedelta(hours=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    store.start_run("stale-run-1", "fixture", 1, path, started_at=old_time)
+    item_id, is_new = store.upsert_observation(
+        "stale-run-1",
+        "hotlist-cls-hot",
+        {
+            "item_key": "hotlist-cls-hot:https://www.cls.cn/detail/999",
+            "canonical_url": "https://www.cls.cn/detail/999",
+            "url": "https://www.cls.cn/detail/999",
+            "title": "早期宏观数据发布",
+            "title_key": "早期宏观数据发布",
+            "summary": "7 小时前的历史热点",
+            "hint": "macro",
+            "published_at": None,
+            "published_ts": 0,
+            "rank": 3,
+        },
+        observed_at=old_time,
+        has_real_rank=True,
+        db_path=path,
+    )
+    assert is_new is True
+    store.record_source_run("stale-run-1", "hotlist-cls-hot", status=store.SOURCE_RUN_OK, item_count=1, db_path=path)
+    store.finish_run("stale-run-1", status=store.RUN_STATUS_OK, source_ok=1, source_failed=0, item_seen=1, item_new=1, db_path=path)
+
+    # 2. 读取单条状态：必须为 STALE，绝不得返回 ON_LIST
+    stale_state = store.get_item_rank_state(item_id, path)
+    assert stale_state["current_state"] == store.ITEM_STATE_STALE
+    assert stale_state["current_state"] != store.ITEM_STATE_ON_LIST
+    assert stale_state["current_state"] != store.ITEM_STATE_OFF_LIST
+    # 历史末次 rank 保留供审计与展示
+    assert stale_state["current_rank"] == 3
+
+    # 3. 读取热榜看板：看板整体状态为 stale，条目 current_state 为 STALE
+    board = service.hotlist_board(str(path))
+    assert board["status"] == "stale"
+    assert len(board["items"]) == 1
+    assert board["items"][0]["current_state"] == "STALE"
+    assert board["items"][0]["rank"] == 3
+
+    # 4. 新一轮成功抓取完成（新鲜数据）
+    fresh_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    store.start_run("fresh-run-2", "fixture", 1, path, started_at=fresh_time)
+    store.upsert_observation(
+        "fresh-run-2",
+        "hotlist-cls-hot",
+        {
+            "item_key": "hotlist-cls-hot:https://www.cls.cn/detail/999",
+            "canonical_url": "https://www.cls.cn/detail/999",
+            "url": "https://www.cls.cn/detail/999",
+            "title": "早期宏观数据发布",
+            "title_key": "早期宏观数据发布",
+            "summary": "7 小时前的历史热点",
+            "hint": "macro",
+            "published_at": None,
+            "published_ts": 0,
+            "rank": 1,
+        },
+        observed_at=fresh_time,
+        has_real_rank=True,
+        db_path=path,
+    )
+    store.record_source_run("fresh-run-2", "hotlist-cls-hot", status=store.SOURCE_RUN_OK, item_count=1, db_path=path)
+    store.finish_run("fresh-run-2", status=store.RUN_STATUS_OK, source_ok=1, source_failed=0, item_seen=1, item_new=0, db_path=path)
+
+    # 5. 重新读取：恢复为当前实时在榜 ON_LIST，delta 正常推导
+    fresh_state = store.get_item_rank_state(item_id, path)
+    assert fresh_state["current_state"] == store.ITEM_STATE_ON_LIST
+    assert fresh_state["current_rank"] == 1
+    assert fresh_state["previous_rank"] == 3
+    assert fresh_state["rank_delta"] == 2
+
+    fresh_board = service.hotlist_board(str(path))
+    assert fresh_board["status"] == "normal"
+    assert fresh_board["items"][0]["current_state"] == "ON_LIST"
+    assert fresh_board["items"][0]["rank"] == 1

@@ -21,7 +21,7 @@ import json
 import os
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -627,12 +627,16 @@ ITEM_STATE_ON_LIST = "ON_LIST"
 ITEM_STATE_OFF_LIST = "OFF_LIST"
 ITEM_STATE_UNKNOWN = "UNKNOWN"
 ITEM_STATE_DISABLED = "DISABLED"
+ITEM_STATE_STALE = "STALE"
 ITEM_STATE_NO_RANK_SEMANTICS = "NO_RANK_SEMANTICS"
+STALE_AFTER_HOURS = 6
 
 
 def get_item_rank_state(
     item_id: int,
     db_path: str | Path | None = None,
+    *,
+    stale_after_hours: int = STALE_AFTER_HOURS,
 ) -> dict[str, Any]:
     """推导条目的当前排名状态（Wave 1 off-list / disabled 语义的唯一权威读法）。
 
@@ -765,6 +769,31 @@ def get_item_rank_state(
                     )
                     return result
 
+                # 3. 数据时效（Freshness / Stale 检查）：超过时效窗口的数据必须标记为 STALE，不得伪造实时在榜
+                is_stale = False
+                if last_run and last_run.get("started_at"):
+                    try:
+                        started_dt = datetime.fromisoformat(
+                            str(last_run["started_at"]).replace("Z", "+00:00")
+                        )
+                        if datetime.now(timezone.utc) - started_dt > timedelta(hours=stale_after_hours):
+                            is_stale = True
+                    except ValueError:
+                        is_stale = True
+
+                if is_stale:
+                    result["current_state"] = ITEM_STATE_STALE
+                    result["current_rank"] = observations[-1]["rank"] if observations else None
+                    result["previous_rank"] = (
+                        observations[-2]["rank"] if len(observations) >= 2 else None
+                    )
+                    result["rank_delta"] = (
+                        result["previous_rank"] - result["current_rank"]
+                        if result["current_rank"] is not None and result["previous_rank"] is not None
+                        else None
+                    )
+                    return result
+
                 present = False
                 if last_run is not None:
                     seen = conn.execute(
@@ -810,6 +839,8 @@ def start_run(
     trigger: str,
     source_total: int,
     db_path: str | Path | None = None,
+    *,
+    started_at: str | None = None,
 ) -> None:
     path = Path(db_path) if db_path else get_default_db_path()
     initialize_store(path)
@@ -823,7 +854,7 @@ def start_run(
                             (run_id, started_at, status, trigger, source_total)
                         VALUES (?, ?, ?, ?, ?)
                         """,
-                        (run_id, utc_now_iso(), RUN_STATUS_RUNNING, trigger, source_total),
+                        (run_id, started_at or utc_now_iso(), RUN_STATUS_RUNNING, trigger, source_total),
                     )
         except sqlite3.DatabaseError as e:
             raise NativeIntelStoreError() from e

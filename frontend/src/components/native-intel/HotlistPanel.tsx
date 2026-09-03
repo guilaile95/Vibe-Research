@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 export function HotlistPanel() {
   const [items, setItems] = useState<NativeIntelHotlistItem[]>([]);
   const [sources, setSources] = useState<NativeIntelHotlistSource[]>([]);
+  const [boardStatus, setBoardStatus] = useState<string>("normal");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +46,7 @@ export function HotlistPanel() {
       const res = await api.nativeIntelHotlist(100);
       setItems(res.items || []);
       setSources(res.sources || []);
+      setBoardStatus(res.status || "normal");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "读取热榜失败");
     } finally {
@@ -92,13 +94,25 @@ export function HotlistPanel() {
           <div>
             <div className="flex items-center gap-2">
               <Flame className="h-5 w-5 text-amber-500" />
-              <h2 className="text-lg font-semibold text-foreground">实时热榜追踪</h2>
-              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-                原生热点观测
+              <h2 className="text-lg font-semibold text-foreground">
+                {boardStatus === "stale" ? "热榜数据追踪（非实时）" : "实时热榜追踪"}
+              </h2>
+              <span
+                data-testid="hotlist-freshness-badge"
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-xs font-medium border",
+                  boardStatus === "stale"
+                    ? "bg-amber-500/15 text-amber-500 border-amber-500/30"
+                    : "bg-primary/10 text-primary border-transparent",
+                )}
+              >
+                {boardStatus === "stale" ? "数据已过期 (非实时)" : "原生热点观测"}
               </span>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              实时捕捉财联社、华尔街见闻等权威热榜，追踪位次升降与真实掉榜轨迹，不产出伪造买卖信号。
+              {boardStatus === "stale"
+                ? "当前热榜抓取数据已超出 6 小时时效窗口，展示历史最后观测位次，不代表当前实时在榜。"
+                : "实时捕捉财联社、华尔街见闻等权威热榜，追踪位次升降与真实掉榜轨迹，不产出伪造买卖信号。"}
             </p>
           </div>
           <button
@@ -111,6 +125,22 @@ export function HotlistPanel() {
             {refreshing ? "抓取中…" : "刷新热榜"}
           </button>
         </div>
+
+        {/* 过期数据提示 */}
+        {boardStatus === "stale" && (
+          <div
+            className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-500"
+            data-testid="hotlist-stale-banner"
+          >
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <span className="font-semibold">热榜数据已过期：</span>
+              <span>
+                距离最近一次成功抓取已超过 6 小时，当前展示位次均为历史末次观测，非实时在榜。请点击右侧「刷新热榜」重新抓取。
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* 来源状态提示 */}
         {failingSources.length > 0 && (
@@ -196,9 +226,17 @@ export function HotlistPanel() {
                     {/* 排名徽章 */}
                     <div
                       className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/60 font-mono text-xs font-bold text-foreground"
-                      title={item.current_state === "DISABLED" ? `末次 #${item.rank ?? "-"} (来源已停用)` : undefined}
+                      title={
+                        item.current_state === "DISABLED"
+                          ? `末次 #${item.rank ?? "-"} (来源已停用)`
+                          : item.current_state === "STALE"
+                          ? `末次 #${item.rank ?? "-"} (数据已过期)`
+                          : undefined
+                      }
                     >
-                      {item.current_state === "DISABLED" ? "—" : (item.rank ?? "-")}
+                      {item.current_state === "DISABLED" || item.current_state === "STALE"
+                        ? "—"
+                        : (item.rank ?? "-")}
                     </div>
 
                     <div className="min-w-0 flex-1">
@@ -219,7 +257,13 @@ export function HotlistPanel() {
                         {item.current_state === "DISABLED" && item.rank != null && (
                           <>
                             <span>·</span>
-                            <span className="text-amber-500/80">末次 #{item.rank}</span>
+                            <span className="text-amber-500/80">末次 #{item.rank} (已停用)</span>
+                          </>
+                        )}
+                        {item.current_state === "STALE" && item.rank != null && (
+                          <>
+                            <span>·</span>
+                            <span className="text-amber-500/80 font-medium">末次 #{item.rank} (已过期)</span>
                           </>
                         )}
                         <span>·</span>

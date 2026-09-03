@@ -63,6 +63,8 @@ export function formatStateBadge(state: NativeIntelHotlistItem["current_state"])
       return { label: "已掉榜", className: "bg-muted text-muted-foreground border-border" };
     case "DISABLED":
       return { label: "已停用", className: "bg-muted text-muted-foreground border-border" };
+    case "STALE":
+      return { label: "已过期", className: "bg-amber-500/15 text-amber-500 border-amber-500/30" };
     case "UNKNOWN":
       return { label: "源失败/未知", className: "bg-amber-500/15 text-amber-500 border-amber-500/30" };
     case "NO_RANK_SEMANTICS":

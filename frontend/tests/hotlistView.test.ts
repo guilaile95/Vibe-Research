@@ -11,10 +11,11 @@ test("formatRankDelta formats up, down, flat, and new arrivals honestly", () => 
   // 严格只有 ON_LIST + previousRank==null + rank!=null 才判定为“新上榜”
   assert.deepEqual(formatRankDelta(null, null, "ON_LIST", 5), { text: "新上榜", type: "new" });
 
-  // OFF_LIST / UNKNOWN / DISABLED 即使 previousRank==null 也绝不能显示为“新上榜”
+  // OFF_LIST / UNKNOWN / DISABLED / STALE 即使 previousRank==null 也绝不能显示为“新上榜”
   assert.deepEqual(formatRankDelta(null, null, "OFF_LIST", 5), { text: "-", type: "flat" });
   assert.deepEqual(formatRankDelta(null, null, "UNKNOWN", 5), { text: "-", type: "flat" });
   assert.deepEqual(formatRankDelta(null, null, "DISABLED", 5), { text: "-", type: "flat" });
+  assert.deepEqual(formatRankDelta(null, null, "STALE", 5), { text: "-", type: "flat" });
   assert.deepEqual(formatRankDelta(null, null, "NO_RANK_SEMANTICS", null), { text: "-", type: "flat" });
 
   // 常规升降持平
@@ -102,6 +103,7 @@ test("formatStateBadge maps all rank states correctly", () => {
   assert.equal(formatStateBadge("ON_LIST").label, "在榜");
   assert.equal(formatStateBadge("OFF_LIST").label, "已掉榜");
   assert.equal(formatStateBadge("DISABLED").label, "已停用");
+  assert.equal(formatStateBadge("STALE").label, "已过期");
   assert.equal(formatStateBadge("UNKNOWN").label, "源失败/未知");
   assert.equal(formatStateBadge("NO_RANK_SEMANTICS").label, "无排名");
 });
