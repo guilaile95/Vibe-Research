@@ -80,12 +80,6 @@ def test_codex_chat_uses_agent_runtime_without_cli_or_api_fallback(monkeypatch):
         "run_chat_stream",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("API fallback")),
     )
-    monkeypatch.setattr(
-        app_module.chat_layer,
-        "run_chat_cli_stream",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy CLI fallback")),
-    )
-
     body = _request()
     body["messages"] = [
         {"role": "user", "content": "第一轮问题"},
@@ -104,6 +98,33 @@ def test_codex_chat_uses_agent_runtime_without_cli_or_api_fallback(monkeypatch):
         {"role": "user", "content": "第一轮问题"},
         {"role": "assistant", "content": "第一轮回答"},
     ]
+
+
+def test_structured_codex_messages_use_agent_runtime(monkeypatch):
+    captured = {}
+
+    def stream_chat(**kwargs):
+        captured.update(kwargs)
+        yield {"type": "delta", "text": '{"ok":true}'}
+        yield {"type": "done", "runtime": "Codex Subscription"}
+
+    monkeypatch.setattr(agent_runtime, "stream_chat", stream_chat)
+    events = list(app_module.chat_layer.stream_messages(
+        {"provider": "cli-codex", "model": "codex", "baseURL": "", "apiKey": ""},
+        [
+            {"role": "system", "content": "只返回 JSON"},
+            {"role": "user", "content": "当前组合数据"},
+        ],
+        use_tools=False,
+    ))
+
+    assert captured["session"].startswith("ai-")
+    assert "只返回 JSON" in captured["message"]
+    assert "当前组合数据" in captured["context"]
+    assert captured["history"] == []
+    assert [event["type"] for event in events] == ["delta", "done"]
+    assert events[-1]["rounds"] == 1
+    assert events[-1]["trace"] == []
 
 
 def test_codex_unavailable_fails_explicitly_without_fallback(monkeypatch):

@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import sys
 import threading
 import time
 from unittest.mock import MagicMock
@@ -14,7 +12,6 @@ from fastapi.testclient import TestClient
 
 import app as app_module
 import chat as chat_layer
-import cli_runtime
 
 client = TestClient(app_module.app)
 
@@ -681,43 +678,27 @@ def test_analyze_disconnect_during_save_cancels_transaction(monkeypatch):
     assert b'"type": "done"' not in response_chunks
 
 
-def test_analyze_cli_disconnect_without_more_output_reaps_immediately(monkeypatch):
+def test_analyze_codex_disconnect_cancels_agent_runtime(monkeypatch):
     monkeypatch.setattr(
         chat_layer, "prepare_daily_review_analysis", MagicMock(return_value=_prepared())
     )
-    # P0-SEC2：模拟已 opt-in + 鉴权 + fake provider 已证明 text-only 的部署
-    monkeypatch.setattr(cli_runtime, "VR_ENABLE_LOCAL_CLI", True)
-    monkeypatch.setattr(cli_runtime, "VR_API_KEY", "test-key")
-    monkeypatch.setitem(
-        cli_runtime.CLI_SECURITY_CAPABILITIES, "fake",
-        {"text_only_proven": True, "proof_mode": "TEST", "http_allowed": True},
+    monkeypatch.setattr(
+        app_module.agent_runtime,
+        "status",
+        lambda: {"available": True, "status": "ready"},
     )
-    monkeypatch.setattr(cli_runtime, "CLI_TOTAL_DEADLINE_SECONDS", 3)
-    monkeypatch.setitem(cli_runtime._CLI_DEFS, "fake", {
-        "bins": [sys.executable],
-        "delivery": "stdin",
-        "build_args": lambda _: [
-            "-c",
-            "import time\nprint('piece', flush=True)\ntime.sleep(30)",
-        ],
-        "env": {},
-    })
-    real_popen = cli_runtime.subprocess.Popen
     captured = {}
 
-    def capture_popen(*args, **kwargs):
-        argv = args[0] if args else []
-        if argv and os.path.basename(str(argv[0])).lower().startswith("taskkill"):
-            return real_popen(*args, **kwargs)  # 树终止系统调用：不捕获
-        proc = real_popen(*args, **kwargs)
-        captured["proc"] = proc
-        return proc
+    def stream_chat(**kwargs):
+        captured.update(kwargs)
+        yield {"type": "delta", "text": "piece"}
+        assert kwargs["cancel_event"].wait(timeout=2)
 
-    monkeypatch.setattr(cli_runtime.subprocess, "Popen", capture_popen)
+    monkeypatch.setattr(chat_layer.agent_runtime, "stream_chat", stream_chat)
     body = json.dumps({
         "llm": {
-            "provider": "cli-fake",
-            "model": "local-test",
+            "provider": "cli-codex",
+            "model": "codex",
             "baseURL": "",
             "apiKey": "",
         }
@@ -764,12 +745,5 @@ def test_analyze_cli_disconnect_without_more_output_reaps_immediately(monkeypatc
     asyncio.run(exercise_disconnect())
     elapsed = time.monotonic() - started_at
 
-    proc = captured["proc"]
     assert elapsed < 1.5
-    assert proc.poll() is not None
-    assert proc.stdin.closed
-    assert proc.stdout.closed
-    assert not any(
-        thread.name == "vibe-cli-fake-stdout" and thread.is_alive()
-        for thread in cli_runtime.threading.enumerate()
-    )
+    assert captured["cancel_event"].is_set()

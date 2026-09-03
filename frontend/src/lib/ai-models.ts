@@ -1,6 +1,6 @@
 // 接入 AI 的模型清单（移植自 SDesign-opensource / open-design，按 Vibe-Research 适配）。
 // 两类：
-//   订阅版（provider "cli-*"）= 调本机已登录的 CLI，用订阅额度、免 API key（仅本地自托管可用）。
+//   Codex Subscription = 调产品独立登录的 Codex Agent Runtime，用订阅额度、免 API key。
 //   API 版 = 填自己的 key，走 OpenAI 兼容 /chat/completions。
 // key 一律只存本地浏览器、随请求发给你自己的后端；不上传、不进仓库。
 
@@ -14,23 +14,16 @@ export type ProviderId =
   | "together"
   | "mimo"
   | "openai-compatible"
-  | "cli-claude"
-  | "cli-qwen"
-  | "cli-deepseek"
-  | "cli-codex"
-  | "cli-opencode"
-  | "cli-cursor"
-  | "cli-kimi";
+  | "cli-codex";
 
 export interface ModelConfig {
-  id: string;        // 实际传给接口/CLI 的 model 名
+  id: string;        // 实际传给 API / Codex Runtime 的 model 名
   name: string;      // 下拉里显示的品牌名
   description: string;
   provider: ProviderId;
-  comingSoon?: boolean; // true = 列出但暂不可选（开发中）
 }
 
-export const isCliProvider = (p: ProviderId): boolean => p.startsWith("cli-");
+export const isCliProvider = (p: ProviderId): boolean => p === "cli-codex";
 
 // 各 API provider 的默认接口地址（OpenAI 兼容）。选中即自动填 baseURL，用户只需填 key。
 export const PROVIDER_BASE: Partial<Record<ProviderId, string>> = {
@@ -46,14 +39,8 @@ export const PROVIDER_BASE: Partial<Record<ProviderId, string>> = {
 };
 
 export const aiModels: ModelConfig[] = [
-  // —— 订阅版（免 API key，调本机已登录的 CLI）——
-  { id: "claude-code", name: "Claude Code", description: "本轮未接入", provider: "cli-claude", comingSoon: true },
-  { id: "qwen-code", name: "Qwen Code", description: "本轮未接入", provider: "cli-qwen", comingSoon: true },
-  { id: "deepseek-cli", name: "DeepSeek CLI", description: "本轮未接入", provider: "cli-deepseek", comingSoon: true },
+  // —— Codex Subscription（免 API key）——
   { id: "codex", name: "Codex", description: "ChatGPT 订阅 · 产品独立登录", provider: "cli-codex" },
-  { id: "opencode", name: "OpenCode", description: "OpenCode 订阅", provider: "cli-opencode", comingSoon: true },
-  { id: "cursor-agent", name: "Cursor Agent", description: "Cursor Agent 订阅", provider: "cli-cursor", comingSoon: true },
-  { id: "kimi", name: "Kimi", description: "Kimi 订阅", provider: "cli-kimi", comingSoon: true },
   // —— API 版（填自己的 key）——
   { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", description: "DeepSeek 官方 · 快而省 · 思考/非思考双模", provider: "deepseek" },
   { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", description: "DeepSeek 官方 · 旗舰 · 最强推理", provider: "deepseek" },

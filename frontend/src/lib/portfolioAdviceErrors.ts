@@ -38,7 +38,7 @@ function asOutputInvalidDetail(detail: unknown): OutputInvalidDetail | null {
 const PORTFOLIO_ADVICE_502_MESSAGES = new Set([
   "持仓建议模型调用失败",
   "持仓建议模型输出无效",
-  "持仓建议模型鉴权失败，请检查 API Key 或重新登录 CLI",
+  "持仓建议模型鉴权失败，请检查 API Key 或重新连接 Codex",
   "持仓建议模型网络调用失败，请检查网络后重试",
   "持仓建议模型配置无效，请检查 Base URL 与模型名",
   "未检测到本机 CLI，请先安装并登录，或改用 API 接入",

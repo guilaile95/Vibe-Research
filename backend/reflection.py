@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import chat
-import cli_runtime
 
 MAX_SOURCE_CHARS = 12000  # 待审文本上限，超出截断（反思本身不该把上下文吃光）
 
@@ -51,20 +50,15 @@ def run_reflection_stream(cfg: dict, source: str, title: str = ""):
         {"role": "user", "content": header + text + "\n\n请开始审计。"},
     ]
 
-    provider = str(cfg.get("provider", ""))
     buf: list[str] = []
     try:
-        if provider.startswith("cli-"):
-            content = cli_runtime.run_cli(provider[4:], REFLECT_PROMPT, messages[-1]["content"])
-            buf.append(content)
-            yield {"type": "delta", "text": content}
-        else:
-            resp = chat._call_llm_stream(cfg, messages, use_tools=False)
-            for delta in chat._iter_sse_deltas(resp):
-                piece = delta.get("content")
-                if piece:
-                    buf.append(piece)
-                    yield {"type": "delta", "text": piece}
+        for event in chat.stream_messages(cfg, messages, use_tools=False):
+            if event.get("type") == "error":
+                raise RuntimeError(event.get("message") or "模型调用失败")
+            piece = event.get("text") if event.get("type") == "delta" else None
+            if piece:
+                buf.append(piece)
+                yield {"type": "delta", "text": piece}
     except Exception as e:  # noqa: BLE001 — 运行时错误以流内事件上报
         yield {"type": "error", "message": f"反思失败：{e}"}
         return

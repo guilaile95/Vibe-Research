@@ -43,17 +43,13 @@ def test_chat_api_missing_key_400():
     assert r.status_code == 400
 
 
-def test_chat_cli_not_installed_400(monkeypatch):
-    # P0-SEC2：订阅接入默认被 HTTP 执行门拦截（未 opt-in → 403，fail-closed），
-    # 不再泄露本机是否安装了某 CLI（gate 先于 detect_cli）。
-    monkeypatch.setattr(app_module.cli_runtime, "VR_ENABLE_LOCAL_CLI", False)
-    monkeypatch.setattr(app_module.cli_runtime, "VR_API_KEY", "")
+def test_chat_rejects_legacy_cli_provider():
     r = client.post("/api/chat", json={
         "messages": [{"role": "user", "content": "hi"}],
         "llm": {"provider": "cli-qwen", "model": "qwen-code", "baseURL": "", "apiKey": ""},
     })
-    assert r.status_code == 403
-    assert "CLI" in r.json()["detail"] or "CLI" in r.text or "未启用" in r.text
+    assert r.status_code == 400
+    assert "仅支持 Codex" in r.json()["detail"]
 
 
 def test_global_stock_404(monkeypatch):

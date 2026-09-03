@@ -17,7 +17,7 @@ class PortfolioAdviceValidationError(ValueError):
 
 # 对外 502 文案（固定安全字符串，不回传上游原始 body / 密钥）
 MODEL_ERR_GENERIC = "持仓建议模型调用失败"
-MODEL_ERR_AUTH = "持仓建议模型鉴权失败，请检查 API Key 或重新登录 CLI"
+MODEL_ERR_AUTH = "持仓建议模型鉴权失败，请检查 API Key 或重新连接 Codex"
 MODEL_ERR_NETWORK = "持仓建议模型网络调用失败，请检查网络后重试"
 MODEL_ERR_CONFIG = "持仓建议模型配置无效，请检查 Base URL 与模型名"
 MODEL_ERR_CLI = "未检测到本机 CLI，请先安装并登录，或改用 API 接入"

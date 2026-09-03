@@ -38,7 +38,7 @@ class CampaignAIDraftGenerateIn(BaseModel):
 def generate_campaign_ai_draft(
     campaign_id: str, body: CampaignAIDraftGenerateIn
 ) -> dict[str, Any]:
-    # app owns the existing LLMConfig and readiness/CLI authorization boundary.
+    # app owns the existing LLMConfig and provider readiness boundary.
     # Import lazily because app includes this router before its LLM classes are
     # declared during module initialization.
     try:

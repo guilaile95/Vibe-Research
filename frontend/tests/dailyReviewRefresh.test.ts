@@ -71,11 +71,11 @@ test("portfolioAdvice body only user_request + llm", async () => {
     const { api } = await import("../src/lib/api.ts");
     await api.portfolioAdvice({
       user_request: null,
-      llm: { provider: "cli-claude", baseURL: "", apiKey: "", model: "claude-code" },
+      llm: { provider: "cli-codex", baseURL: "", apiKey: "", model: "codex" },
     });
     assert.deepEqual(Object.keys(body).sort(), ["llm", "user_request"]);
     assert.equal(body.user_request, null);
-    assert.equal(body.llm.provider, "cli-claude");
+    assert.equal(body.llm.provider, "cli-codex");
     assert.equal(body.holdings, undefined);
     assert.equal(body.context, undefined);
     assert.equal(body.messages, undefined);

@@ -57,7 +57,7 @@ test("provider key and default estimates", () => {
     PORTFOLIO_ADVICE_DEFAULT_API_MS,
   );
   assert.equal(
-    getEstimatedPortfolioAdviceDuration({ provider: "cli-claude", model: "opus" }, memoryStorage()),
+    getEstimatedPortfolioAdviceDuration({ provider: "cli-codex", model: "codex" }, memoryStorage()),
     PORTFOLIO_ADVICE_DEFAULT_CLI_MS,
   );
 });

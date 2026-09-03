@@ -19,9 +19,9 @@ _LLM = {
     "apiKey": "sk-test-secret",
 }
 
-_CLI_LLM = {
-    "provider": "cli-claude",
-    "model": "claude-code",
+_CODEX_LLM = {
+    "provider": "cli-codex",
+    "model": "codex",
     "baseURL": "",
     "apiKey": "",
 }
@@ -36,21 +36,17 @@ def test_legal_api_llm_enters_service(monkeypatch):
     assert gen.call_args[0][0]["provider"] == "deepseek"
 
 
-def test_legal_cli_llm_enters_service(monkeypatch):
+def test_legal_codex_llm_enters_service(monkeypatch):
     gen = MagicMock(return_value={"schema_version": "portfolio-advice-v0.1"})
     monkeypatch.setattr(app_module.portfolio_advice_service, "generate_portfolio_advice", gen)
-    # 不依赖本机是否真的安装了 CLI
-    monkeypatch.setattr(app_module.cli_runtime, "detect_cli", lambda _kind: "/usr/bin/claude")
-    # P0-SEC2：模拟已 opt-in + 鉴权 + claude 已证明 text-only 的部署
-    monkeypatch.setattr(app_module.cli_runtime, "VR_ENABLE_LOCAL_CLI", True)
-    monkeypatch.setattr(app_module.cli_runtime, "VR_API_KEY", "test-key")
-    monkeypatch.setitem(
-        app_module.cli_runtime.CLI_SECURITY_CAPABILITIES, "claude",
-        {"text_only_proven": True, "proof_mode": "TEST", "http_allowed": True},
+    monkeypatch.setattr(
+        app_module.agent_runtime,
+        "status",
+        lambda: {"available": True, "status": "ready"},
     )
-    r = client.post("/api/portfolio/advice", json={"user_request": None, "llm": _CLI_LLM})
+    r = client.post("/api/portfolio/advice", json={"user_request": None, "llm": _CODEX_LLM})
     assert r.status_code == 200
-    assert gen.call_args[0][0]["provider"] == "cli-claude"
+    assert gen.call_args[0][0]["provider"] == "cli-codex"
     assert gen.call_args[0][0]["apiKey"] == ""
 
 
@@ -110,7 +106,7 @@ def test_model_auth_error_502_classified(monkeypatch):
     r = client.post("/api/portfolio/advice", json={"llm": _LLM})
     assert r.status_code == 502
     detail = r.json()["detail"]
-    assert detail == "持仓建议模型鉴权失败，请检查 API Key 或重新登录 CLI"
+    assert detail == "持仓建议模型鉴权失败，请检查 API Key 或重新连接 Codex"
     assert "sk-" not in detail
     assert "****" not in detail
     assert "invalid" not in detail.lower()
@@ -170,20 +166,17 @@ def test_missing_model_400(monkeypatch):
     gen.assert_not_called()
 
 
-def test_cli_not_installed_400(monkeypatch):
+def test_codex_runtime_unavailable_503(monkeypatch):
     gen = MagicMock(return_value={"schema_version": "portfolio-advice-v0.1"})
     monkeypatch.setattr(app_module.portfolio_advice_service, "generate_portfolio_advice", gen)
-    # P0-SEC2：先满足执行门（opt-in + 鉴权 + proven），再验证「已授权但 CLI 未安装 → 400」
-    monkeypatch.setattr(app_module.cli_runtime, "VR_ENABLE_LOCAL_CLI", True)
-    monkeypatch.setattr(app_module.cli_runtime, "VR_API_KEY", "test-key")
-    monkeypatch.setitem(
-        app_module.cli_runtime.CLI_SECURITY_CAPABILITIES, "claude",
-        {"text_only_proven": True, "proof_mode": "TEST", "http_allowed": True},
+    monkeypatch.setattr(
+        app_module.agent_runtime,
+        "status",
+        lambda: {"available": False, "status": "runtime_unavailable"},
     )
-    monkeypatch.setattr(app_module.cli_runtime, "detect_cli", lambda _kind: None)
-    r = client.post("/api/portfolio/advice", json={"user_request": None, "llm": _CLI_LLM})
-    assert r.status_code == 400
-    assert "未检测到" in r.json()["detail"]
+    r = client.post("/api/portfolio/advice", json={"user_request": None, "llm": _CODEX_LLM})
+    assert r.status_code == 503
+    assert "Codex Subscription 尚未连接" in r.json()["detail"]
     gen.assert_not_called()
 
 
@@ -273,7 +266,7 @@ def test_public_model_error_detail_classifies_auth_and_strips_secrets():
         '模型接口 HTTP 401: {"error":{"message":"Authentication Fails, Your api key: sk-secret is invalid","type":"authentication_error"}}'
     )
     detail = advice_svc.public_model_error_detail(raw)
-    assert detail == "持仓建议模型鉴权失败，请检查 API Key 或重新登录 CLI"
+    assert detail == "持仓建议模型鉴权失败，请检查 API Key 或重新连接 Codex"
     assert "sk-secret" not in detail
     assert "Authentication" not in detail
 
