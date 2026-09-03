@@ -1,7 +1,7 @@
 // 研究记录（沉淀）—— 把 AI 复盘 / 今日要点 / 问 AI 的结果存本地，形成个人投研记录。
 // 只存本地 localStorage，不上传、不进仓库。对应投研框架第 7 层「沉淀」。
 
-import { storageGet, storageSet, storageRemove } from "@/lib/storage";
+import { storageGet, storageSet, storageRemove } from "./storage.ts";
 
 export interface Note {
   id: string;       // 记录身份
