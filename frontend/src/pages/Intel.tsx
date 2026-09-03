@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Activity, AlertCircle, ExternalLink, FileText, Loader2, Newspaper, RefreshCw, Star, TrendingUp } from "lucide-react";
+import { Activity, AlertCircle, ExternalLink, FileText, Flame, Loader2, Newspaper, RefreshCw, Star, TrendingUp } from "lucide-react";
 import MarketIntelPanel from "@/components/market/MarketIntelPanel";
+import { HotlistPanel } from "@/components/native-intel/HotlistPanel";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { api, ApiError, type Announcement, type NewsItem } from "@/lib/api";
@@ -10,6 +11,7 @@ import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import { cn } from "@/lib/utils";
 
 const TABS = [
+  { key: "hotlist", label: "实时热榜", icon: Flame, desc: "财联社热门、华尔街见闻等权威热榜与位次轨迹" },
   { key: "market-intel", label: "市场情报", icon: Activity, desc: "关注趋势、赛道要点与去重后的最新公开资讯" },
   { key: "events", label: "事件概率", icon: TrendingUp, desc: "全球宏观预期概率（公开数据、免登录只读），后续接入" },
   { key: "filings", label: "A股公告", icon: FileText, desc: "汇总关注列表里各个股的近期公告（东财公开披露）" },
@@ -181,7 +183,9 @@ export function Intel() {
         ))}
       </div>
 
-      {current.key === "market-intel" ? (
+      {current.key === "hotlist" ? (
+        <HotlistPanel />
+      ) : current.key === "market-intel" ? (
         <MarketIntelPanel />
       ) : (
         <GlassCard glow>

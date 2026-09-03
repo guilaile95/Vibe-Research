@@ -31,6 +31,8 @@ import native_intel_store as store
 # 复用 Vibe 自有的 MIT newsradar 实现
 import newsradar
 
+import native_intel_hotlist as hotlist
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SOURCES_FILE = os.path.join(HERE, "news_sources.json")
 
@@ -113,6 +115,27 @@ def load_registry() -> dict[str, Any]:
                 "source_type": str(raw.get("type") or "rss").strip(),
                 # RSS 没有真实排名；只有明确声明排名的来源才写 rank
                 "has_real_rank": bool(raw.get("has_real_rank")),
+            }
+        )
+    for raw in cfg.get("hotlists", []):
+        name = str(raw.get("name") or "").strip()
+        platform = str(raw.get("platform") or "").strip()
+        if not name or not platform:
+            continue
+        hint = str(raw.get("hint") or "macro").strip()
+        source_id = f"hotlist-{_slug(platform)}"
+        if source_id in seen:
+            continue
+        seen.add(source_id)
+        sources.append(
+            {
+                "source_id": source_id,
+                "name": name,
+                "hint": hint,
+                # url 存完整抓取地址：来源表自描述，user/API 侧无需额外字段
+                "url": hotlist.build_source_url(platform),
+                "source_type": "hotlist",
+                "has_real_rank": True,
             }
         )
     fingerprint = hashlib.sha256(
@@ -280,20 +303,27 @@ def run_fetch(
     registry: dict[str, Any] | None = None,
     sources_override: list[dict[str, Any]] | None = None,
     fetcher: Callable[..., tuple[list[dict[str, Any]], str | None, str | None]] | None = None,
+    hotlist_fetcher: Callable[..., tuple[list[dict[str, Any]], str | None, str | None]] | None = None,
 ) -> dict[str, Any]:
     """执行一次全量抓取；已加锁防并发，返回结构化 run 结果。
 
-    ``sources_override`` / ``fetcher`` 供测试注入失败源，生产路径不传。
+    抓取清单来自 DB 中 ``enabled=1`` 的来源（系统 seed 同步后），因此用户停用 /
+    自建来源即时生效。按类型分发：hotlist 源走 ``hotlist_fetcher``（默认真实
+    热榜抓取），其余走 ``fetcher``（默认 RSS 抓取）；测试按类型注入，互不泄漏。
+    ``sources_override`` 仅供测试固定抓取清单，生产路径不传。
     """
     target = path or db_path()
     reg = registry or load_registry()
     store.initialize_store(target)
     store.upsert_sources(reg["sources"], target)
 
-    sources = sources_override if sources_override is not None else reg["sources"]
+    sources = sources_override if sources_override is not None else store.list_sources(
+        target, enabled_only=True
+    )
     cutoff = datetime.now(timezone.utc) - timedelta(days=reg["recent_days"])
     redline = reg["redline"]
     do_fetch = fetcher or _fetch_source_items
+    hotlist_do = hotlist_fetcher or hotlist.fetch_hotlist_items
 
     run_id = f"run-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{os.getpid()}-{uuid4_short()}"
     observed_at = utc_now_iso()
@@ -303,9 +333,14 @@ def run_fetch(
 
         def task(source: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], str | None, str | None, int]:
             started = time.monotonic()
-            items, kind, detail = do_fetch(
-                source, per=reg["per_source"], cutoff=cutoff, redline=redline
-            )
+            if str(source.get("source_type") or "rss") == "hotlist":
+                items, kind, detail = hotlist_do(
+                    source, timeout=FETCH_TIMEOUT, redline=redline
+                )
+            else:
+                items, kind, detail = do_fetch(
+                    source, per=reg["per_source"], cutoff=cutoff, redline=redline
+                )
             return source, items, kind, detail, int((time.monotonic() - started) * 1000)
 
         with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
@@ -826,7 +861,12 @@ def trending(
                 "item_count": 0,
                 "items": [],
                 "entities": [],
-                "rank_history": {"available": False, "reason": "registry_sources_have_no_real_rank"},
+                "rank_history": {
+                    "available": store.any_source_has_real_rank(target),
+                    "reason": None
+                    if store.any_source_has_real_rank(target)
+                    else "registry_sources_have_no_real_rank",
+                },
             }
         current_rows, _ = store.query_items(target, since=since, limit=500, order_by="last_seen")
         prev_rows, _ = store.query_items(
@@ -841,16 +881,36 @@ def trending(
         error = str(exc)
 
     prev_titles = {r["title_key"] for r in prev_rows}
+    has_rank_sources = store.any_source_has_real_rank(target)
     items: list[dict[str, Any]] = []
     for row in current_rows:
-        items.append(
-            {
-                **row,
-                "is_new_in_window": row["title_key"] not in prev_titles,
-                "rank": None,
-                "rank_history": [],
-            }
-        )
+        entry = {
+            **row,
+            "is_new_in_window": row["title_key"] not in prev_titles,
+        }
+        if row.get("has_real_rank"):
+            # 热榜条目：附真实当前/上次排名与 delta（观测推导，非伪造）
+            state = store.get_item_rank_state(int(row["item_id"]), target)
+            entry.update(
+                {
+                    "rank": state.get("current_rank"),
+                    "previous_rank": state.get("previous_rank"),
+                    "rank_delta": state.get("rank_delta"),
+                    "current_state": state.get("current_state"),
+                    "rank_history": state.get("observations", []),
+                }
+            )
+        else:
+            entry.update(
+                {
+                    "rank": None,
+                    "previous_rank": None,
+                    "rank_delta": None,
+                    "current_state": None,
+                    "rank_history": [],
+                }
+            )
+        items.append(entry)
     items.sort(
         key=lambda r: (
             -int(bool(r["is_new_in_window"])),
@@ -870,11 +930,197 @@ def trending(
         "items": items[: max(1, min(int(top_n), 100))],
         "entities": entity_rows[: max(1, min(int(top_n), 100))],
         "rank_history": {
-            "available": False,
-            "reason": "registry_sources_have_no_real_rank",
-            "semantics": "RSS 源不提供真实排名；此处热度只统计跨来源出现次数与环比变化，不补序号",
+            "available": has_rank_sources,
+            "reason": None if has_rank_sources else "registry_sources_have_no_real_rank",
+            "semantics": (
+                "热榜条目携带上游真实排名与 delta；RSS 条目 rank 恒为 NULL，"
+                "热度只统计跨来源出现次数与环比变化，不补序号"
+            ),
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 1：热榜板面 / 排名轨迹 / 来源管理
+# 排名全部来自 intel_observations 的真实观测；ON_LIST / OFF_LIST / UNKNOWN
+# 状态由「最近一次来源级 run 成败 + 条目是否在榜」读取侧推导（store.get_item_rank_state），
+# 绝不写回存储、绝不伪造 rank=0/999。
+# ---------------------------------------------------------------------------
+
+
+def _hotlist_enrich_row(row: dict[str, Any], target: str) -> dict[str, Any]:
+    state = store.get_item_rank_state(int(row["item_id"]), target)
+    return {
+        **row,
+        "rank": state.get("current_rank"),
+        "previous_rank": state.get("previous_rank"),
+        "rank_delta": state.get("rank_delta"),
+        "current_state": state.get("current_state"),
+        "last_run_id": state.get("last_run_id"),
+    }
+
+
+def hotlist_board(
+    path: str | None = None,
+    *,
+    limit: int = 60,
+) -> dict[str, Any]:
+    """热榜板面：hotlist 来源的条目 + 真实排名与变化。
+
+    来源失败 ≠ 掉榜：失败来源的条目 current_state=UNKNOWN（保留最后真实排名）。
+    实体映射沿用既有 entity mapping；无可靠映射就不显示（不猜证券关联）。
+    """
+    target = path or db_path()
+    result: dict[str, Any] = {
+        "status": STATUS_NORMAL,
+        "authority_ref": AUTHORITY_REF,
+        "usage_boundary": USAGE_BOUNDARY,
+        "generated_at": utc_now_iso(),
+        "sources": [],
+        "items": [],
+    }
+    try:
+        plane = data_status(target)
+        result["status"] = str(plane["status"])
+        result["error"] = plane.get("error")
+        source_rows = store.list_sources(target, enabled_only=False)
+        hotlist_sources = [s for s in source_rows if str(s.get("source_type")) == "hotlist"]
+        for src in hotlist_sources:
+            last_run = store.latest_source_run(str(src["source_id"]), target)
+            result["sources"].append(
+                {
+                    "source_id": src["source_id"],
+                    "name": src["name"],
+                    "hint": src["hint"],
+                    "enabled": bool(src["enabled"]),
+                    "origin": src.get("origin") or "system",
+                    "last_run_status": last_run["status"] if last_run else None,
+                    "last_run_error_kind": last_run.get("error_kind") if last_run else None,
+                }
+            )
+        rows = store.list_hotlist_items(target, limit=limit)
+        entity_map = store.list_item_entities(
+            [int(r["item_id"]) for r in rows], target
+        )
+        for row in rows:
+            enriched = _hotlist_enrich_row(row, target)
+            enriched["entities"] = entity_map.get(int(row["item_id"]), [])
+            result["items"].append(enriched)
+    except store.NativeIntelStoreError as exc:
+        result["status"] = STATUS_UNAVAILABLE
+        result["error"] = str(exc)
+    return result
+
+
+def item_rank_history(item_id: int, path: str | None = None) -> dict[str, Any] | None:
+    """单条目排名轨迹（H 契约）。条目不存在返回 None（路由层 404）。"""
+    target = path or db_path()
+    state = store.get_item_rank_state(int(item_id), target)
+    if not state:
+        return None
+    try:
+        base = _load_item(int(item_id), target) or {}
+    except store.NativeIntelStoreError:
+        base = {}
+    return {
+        **state,
+        "title": base.get("title"),
+        "url": base.get("url"),
+        "hint": base.get("hint"),
+        "state_semantics": {
+            "ON_LIST": "最近一次来源抓取成功且条目在榜",
+            "OFF_LIST": "最近一次来源抓取成功但条目未出现（真实掉榜，不写假 rank）",
+            "UNKNOWN": "来源最近一次抓取失败或尚未抓取：现状未知，绝不当作掉榜",
+            "NO_RANK_SEMANTICS": "来源无真实排名（RSS），rank 恒为 NULL",
+        },
+    }
+
+
+def sources_list(path: str | None = None) -> dict[str, Any]:
+    """来源注册表（含 origin / enabled / 最近一次 run 状态）。"""
+    target = path or db_path()
+    try:
+        rows = store.list_sources(target, enabled_only=False)
+    except store.NativeIntelStoreError as exc:
+        return {"status": STATUS_UNAVAILABLE, "error": str(exc), "sources": []}
+    sources: list[dict[str, Any]] = []
+    for row in rows:
+        last_run = store.latest_source_run(str(row["source_id"]), target)
+        sources.append(
+            {
+                "source_id": row["source_id"],
+                "name": row["name"],
+                "hint": row["hint"],
+                "url": row["url"],
+                "source_type": row["source_type"],
+                "has_real_rank": bool(row["has_real_rank"]),
+                "enabled": bool(row["enabled"]),
+                "origin": row.get("origin") or "system",
+                "updated_at": row.get("updated_at"),
+                "last_run_status": last_run["status"] if last_run else None,
+            }
+        )
+    return {"status": STATUS_NORMAL, "sources": sources}
+
+
+_URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
+
+
+def create_user_source(payload: dict[str, Any], path: str | None = None) -> dict[str, Any]:
+    """新增用户 RSS 源（origin=user）；输入非法抛 ValueError，重名抛 store 冲突。"""
+    name = str((payload or {}).get("name") or "").strip()
+    url = str((payload or {}).get("url") or "").strip()
+    hint = str((payload or {}).get("hint") or "").strip()
+    enabled = bool((payload or {}).get("enabled", True))
+    if not name or len(name) > 80:
+        raise ValueError("name 必填且不超过 80 字符")
+    if not _URL_RE.fullmatch(url):
+        raise ValueError("url 必须是 http(s) 地址")
+    if len(hint) > 20:
+        raise ValueError("hint 不超过 20 字符")
+    source_id = f"user-{_slug(name)}"
+    try:
+        row = store.insert_user_source(
+            source_id=source_id, name=name, url=url, hint=hint, enabled=enabled, db_path=path
+        )
+    except store.SourceAlreadyExistsError as exc:
+        raise _SourceConflictError(source_id) from exc
+    return {**row, "has_real_rank": bool(row.get("has_real_rank")), "enabled": bool(row["enabled"])}
+
+
+class _SourceConflictError(RuntimeError):
+    def __init__(self, source_id: str):
+        self.source_id = source_id
+        super().__init__(source_id)
+
+
+def update_source(source_id: str, payload: dict[str, Any], path: str | None = None) -> dict[str, Any] | None:
+    """更新来源；系统源仅允许 enabled，用户源允许 enabled + name。"""
+    data = payload or {}
+    enabled = data.get("enabled")
+    name = data.get("name")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ValueError("enabled 必须是布尔值")
+    if name is not None:
+        name = str(name).strip()
+        if not name or len(name) > 80:
+            raise ValueError("name 不能为空且不超过 80 字符")
+    current = store.get_source(source_id, path)
+    if current is None:
+        return None
+    if str(current.get("origin") or "system") != "user" and name is not None and name != current["name"]:
+        raise ValueError("系统来源不允许改名（可停用）")
+    return store.update_source(
+        source_id,
+        enabled=enabled,
+        name=name if isinstance(name, str) else None,
+        db_path=path,
+    )
+
+
+def delete_source(source_id: str, path: str | None = None) -> dict[str, Any]:
+    """删除来源；系统源 fail closed（SystemSourceDeleteBlocked）。"""
+    return store.delete_user_source(source_id, path)
 
 
 def _entity_trend_rows(target: str, since: str, prev_since: str) -> list[dict[str, Any]]:
@@ -986,11 +1232,16 @@ def security_context(
 
     enriched: list[dict[str, Any]] = []
     for item in items:
+        state = store.get_item_rank_state(int(item["item_id"]), target)
         enriched.append(
             {
                 **item,
-                "rank": None,
-                "rank_history": store.get_item_rank_history(int(item["item_id"]), target),
+                # 热榜条目带真实当前排名；RSS 条目保持 None（无排名语义）
+                "rank": state.get("current_rank"),
+                "previous_rank": state.get("previous_rank"),
+                "rank_delta": state.get("rank_delta"),
+                "current_state": state.get("current_state"),
+                "rank_history": state.get("observations", []),
             }
         )
 

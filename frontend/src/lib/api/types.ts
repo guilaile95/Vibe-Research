@@ -2962,3 +2962,112 @@ export interface NativeIntelRefreshResult {
   failed_sources?: string[];
   error?: string;
 }
+
+// ---------------------------------------------------------------------------
+// TREND-PARITY Wave 1: Hotlist, Rank History & Source Registry
+// ---------------------------------------------------------------------------
+
+export type NativeIntelRankState = "ON_LIST" | "OFF_LIST" | "UNKNOWN" | "NO_RANK_SEMANTICS";
+
+export interface NativeIntelHotlistItem {
+  item_id: number;
+  title: string;
+  url: string;
+  canonical_url?: string;
+  source_id: string;
+  source_name?: string | null;
+  source_type?: string | null;
+  hint: string;
+  published_at?: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+  observation_count: number;
+  rank?: number | null;
+  previous_rank?: number | null;
+  rank_delta?: number | null;
+  current_state: NativeIntelRankState;
+  last_run_id?: string | null;
+  entities?: Array<{
+    term: string;
+    term_kind: string;
+    security_code?: string | null;
+  }>;
+}
+
+export interface NativeIntelHotlistSource {
+  source_id: string;
+  name: string;
+  hint: string;
+  enabled: boolean;
+  origin: "system" | "user";
+  last_run_status?: string | null;
+  last_run_error_kind?: string | null;
+}
+
+export interface NativeIntelHotlistBoardResponse {
+  status: NativeIntelStatusValue;
+  error?: string | null;
+  authority_ref?: string;
+  usage_boundary?: string;
+  generated_at?: string;
+  sources: NativeIntelHotlistSource[];
+  items: NativeIntelHotlistItem[];
+}
+
+export interface NativeIntelRankObservation {
+  observed_at: string;
+  rank: number;
+}
+
+export interface NativeIntelItemRankHistoryResponse {
+  item_id: number;
+  source_id: string;
+  source_name?: string | null;
+  source_type?: string | null;
+  has_real_rank: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+  observation_count: number;
+  observations: NativeIntelRankObservation[];
+  current_state: NativeIntelRankState;
+  current_rank?: number | null;
+  previous_rank?: number | null;
+  rank_delta?: number | null;
+  last_run_id?: string | null;
+  title?: string | null;
+  url?: string | null;
+  hint?: string | null;
+  state_semantics?: Record<string, string>;
+}
+
+export interface NativeIntelSourceRecord {
+  source_id: string;
+  name: string;
+  hint: string;
+  url: string;
+  source_type: string;
+  has_real_rank: boolean;
+  enabled: boolean;
+  origin: "system" | "user";
+  updated_at?: string;
+  last_run_status?: string | null;
+}
+
+export interface NativeIntelSourcesResponse {
+  status: NativeIntelStatusValue;
+  sources: NativeIntelSourceRecord[];
+  error?: string | null;
+}
+
+export interface CreateUserSourceInput {
+  name: string;
+  url: string;
+  hint?: string;
+  enabled?: boolean;
+}
+
+export interface UpdateSourceInput {
+  enabled?: boolean;
+  name?: string;
+}
+

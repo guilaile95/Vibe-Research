@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS intel_sources (
     source_type TEXT NOT NULL,
     has_real_rank INTEGER NOT NULL DEFAULT 0,
     enabled INTEGER NOT NULL DEFAULT 1,
+    origin TEXT NOT NULL DEFAULT 'system',
     updated_at TEXT NOT NULL
 );
 
@@ -231,6 +232,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "industry" not in directory_columns:
         conn.execute("ALTER TABLE intel_security_directory ADD COLUMN industry TEXT")
 
+    source_columns = {
+        str(row["name"]) for row in conn.execute("PRAGMA table_info(intel_sources)")
+    }
+    if "origin" not in source_columns:
+        # TREND-PARITY Wave 1：系统 seed 源 origin=system，用户自建源 origin=user；
+        # 删除权限只看 origin，已有库存量行全部视为系统源。
+        conn.execute("ALTER TABLE intel_sources ADD COLUMN origin TEXT NOT NULL DEFAULT 'system'")
+
     item_entity_pk = [
         str(row["name"])
         for row in sorted(
@@ -330,6 +339,368 @@ def list_sources(
         try:
             with _connect(path) as conn:
                 return [dict(row) for row in conn.execute(sql).fetchall()]
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+class SourceAlreadyExistsError(NativeIntelStoreError):
+    """来源 ID 冲突（用户自建重名）。"""
+
+
+class SourceNotFoundError(NativeIntelStoreError):
+    """来源不存在。"""
+
+
+class SystemSourceDeleteBlocked(NativeIntelStoreError):
+    """系统来源禁止删除（fail closed；允许停用）。"""
+
+
+def get_source(
+    source_id: str,
+    db_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                row = conn.execute(
+                    "SELECT * FROM intel_sources WHERE source_id = ?", (source_id,)
+                ).fetchone()
+                return dict(row) if row else None
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def insert_user_source(
+    *,
+    source_id: str,
+    name: str,
+    url: str,
+    hint: str,
+    enabled: bool = True,
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """新增用户自建 RSS 源（origin=user）；source_id 冲突时拒绝。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    now = utc_now_iso()
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    exists = conn.execute(
+                        "SELECT 1 FROM intel_sources WHERE source_id = ?", (source_id,)
+                    ).fetchone()
+                    if exists:
+                        raise SourceAlreadyExistsError()
+                    conn.execute(
+                        """
+                        INSERT INTO intel_sources
+                            (source_id, name, hint, url, source_type, has_real_rank,
+                             enabled, origin, updated_at)
+                        VALUES (?, ?, ?, ?, 'rss', 0, ?, 'user', ?)
+                        """,
+                        (source_id, name, hint, url, 1 if enabled else 0, now),
+                    )
+                row = conn.execute(
+                    "SELECT * FROM intel_sources WHERE source_id = ?", (source_id,)
+                ).fetchone()
+                return dict(row)
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def update_source(
+    source_id: str,
+    *,
+    enabled: bool | None = None,
+    name: str | None = None,
+    db_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """更新来源；``enabled`` 系统源与用户源均可，``name`` 仅用户源可改。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    assignments: list[str] = []
+    args: list[Any] = []
+    if enabled is not None:
+        assignments.append("enabled = ?")
+        args.append(1 if enabled else 0)
+    if name is not None:
+        assignments.append("name = ?")
+        args.append(name)
+    if not assignments:
+        return get_source(source_id, path)
+    assignments.append("updated_at = ?")
+    args.append(utc_now_iso())
+    args.append(source_id)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    cursor = conn.execute(
+                        f"UPDATE intel_sources SET {', '.join(assignments)} WHERE source_id = ?",
+                        tuple(args),
+                    )
+                    if cursor.rowcount == 0:
+                        return None
+                row = conn.execute(
+                    "SELECT * FROM intel_sources WHERE source_id = ?", (source_id,)
+                ).fetchone()
+                return dict(row) if row else None
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def delete_user_source(source_id: str, db_path: str | Path | None = None) -> dict[str, Any]:
+    """删除用户源；系统源删除请求 fail closed（可停用，不可删除）。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    row = conn.execute(
+                        "SELECT * FROM intel_sources WHERE source_id = ?", (source_id,)
+                    ).fetchone()
+                    if row is None:
+                        raise SourceNotFoundError()
+                    if str(row["origin"]) != "user":
+                        raise SystemSourceDeleteBlocked()
+                    conn.execute(
+                        "DELETE FROM intel_sources WHERE source_id = ?", (source_id,)
+                    )
+                    return dict(row)
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def any_source_has_real_rank(db_path: str | Path | None = None) -> bool:
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM intel_sources WHERE has_real_rank = 1 AND enabled = 1 LIMIT 1"
+                ).fetchone()
+                return row is not None
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def list_hotlist_items(
+    db_path: str | Path | None = None,
+    *,
+    limit: int = 60,
+) -> list[dict[str, Any]]:
+    """热榜板面基础行：全部 hotlist 来源的条目（不含排名状态，读取侧另行推导）。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT i.*, s.name AS source_name, s.source_type, s.has_real_rank
+                    FROM intel_items i
+                    JOIN intel_sources s ON s.source_id = i.source_id
+                    WHERE s.source_type = 'hotlist'
+                    ORDER BY i.last_seen_at DESC, i.item_id DESC
+                    LIMIT ?
+                    """,
+                    (max(1, min(int(limit), 200)),),
+                ).fetchall()
+                return [_item_row(row) for row in rows]
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def list_item_entities(
+    item_ids: list[int],
+    db_path: str | Path | None = None,
+) -> dict[int, list[dict[str, Any]]]:
+    """批量读取条目的实体映射；返回 ``{item_id: [entity]}``。"""
+    if not item_ids:
+        return {}
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    placeholders = ",".join("?" for _ in item_ids)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT item_id, term_kind, term, security_code
+                    FROM intel_item_entities
+                    WHERE item_id IN ({placeholders})
+                    """,
+                    tuple(int(i) for i in item_ids),
+                ).fetchall()
+                out: dict[int, list[dict[str, Any]]] = {}
+                for row in rows:
+                    out.setdefault(int(row["item_id"]), []).append(
+                        {
+                            "term_kind": row["term_kind"],
+                            "term": row["term"],
+                            "security_code": row["security_code"],
+                        }
+                    )
+                return out
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def latest_source_run(
+    source_id: str,
+    db_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """某来源最近一次 fetch run 中的单源结果（ok/empty/failed）。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                row = conn.execute(
+                    """
+                    SELECT run_id, status, error_kind FROM intel_source_runs
+                    WHERE source_id = ?
+                    ORDER BY rowid DESC
+                    LIMIT 1
+                    """,
+                    (source_id,),
+                ).fetchone()
+                return dict(row) if row else None
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+# 排名轨迹状态：只在读取侧推导，绝不写回 items/observations（不造第二份 authority）。
+ITEM_STATE_ON_LIST = "ON_LIST"
+ITEM_STATE_OFF_LIST = "OFF_LIST"
+ITEM_STATE_UNKNOWN = "UNKNOWN"
+ITEM_STATE_NO_RANK_SEMANTICS = "NO_RANK_SEMANTICS"
+
+
+def get_item_rank_state(
+    item_id: int,
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """推导条目的当前排名状态（Wave 1 off-list 语义的唯一权威读法）。
+
+    - 无排名语义来源（RSS）→ NO_RANK_SEMANTICS，rank 恒 None；
+    - 最近一次「来源级 run」失败（或尚无 run）→ UNKNOWN：失败绝不当掉榜；
+    - 该 run 抓取成功且条目未出现 → OFF_LIST（不写 rank=0，rank 保持最后真实值）；
+    - 该 run 抓取成功且条目出现 → ON_LIST，rank 为该 run 观测到的真实排名；
+    - ``previous_rank`` / ``rank_delta`` 取相邻两次真实观测（delta 正数 = 排名上升）。
+    """
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                item = conn.execute(
+                    """
+                    SELECT i.item_id, i.source_id, i.first_seen_at, i.last_seen_at,
+                           i.observation_count, s.has_real_rank, s.source_type,
+                           s.name AS source_name
+                    FROM intel_items i
+                    LEFT JOIN intel_sources s ON s.source_id = i.source_id
+                    WHERE i.item_id = ?
+                    """,
+                    (item_id,),
+                ).fetchone()
+                if item is None:
+                    return {}
+                has_real_rank = bool(item["has_real_rank"])
+                observations = [
+                    {"observed_at": r["observed_at"], "rank": int(r["rank"])}
+                    for r in conn.execute(
+                        """
+                        SELECT observed_at, rank FROM intel_observations
+                        WHERE item_id = ? AND rank IS NOT NULL
+                        ORDER BY observed_at ASC, obs_id ASC
+                        """,
+                        (item_id,),
+                    ).fetchall()
+                ]
+                result: dict[str, Any] = {
+                    "item_id": int(item["item_id"]),
+                    "source_id": item["source_id"],
+                    "source_name": item["source_name"],
+                    "source_type": item["source_type"],
+                    "has_real_rank": has_real_rank,
+                    "first_seen_at": item["first_seen_at"],
+                    "last_seen_at": item["last_seen_at"],
+                    "observation_count": int(item["observation_count"] or 0),
+                    "observations": observations,
+                }
+                if not has_real_rank:
+                    result["current_state"] = ITEM_STATE_NO_RANK_SEMANTICS
+                    result["current_rank"] = None
+                    result["previous_rank"] = None
+                    result["rank_delta"] = None
+                    result["last_run_id"] = None
+                    return result
+
+                last_run_row = conn.execute(
+                    """
+                    SELECT run_id, status, error_kind FROM intel_source_runs
+                    WHERE source_id = ?
+                    ORDER BY rowid DESC
+                    LIMIT 1
+                    """,
+                    (str(item["source_id"]),),
+                ).fetchone()
+                last_run = dict(last_run_row) if last_run_row else None
+                result["last_run_id"] = last_run["run_id"] if last_run else None
+                last_successful = (
+                    last_run is not None
+                    and last_run["status"] in (SOURCE_RUN_OK, SOURCE_RUN_EMPTY)
+                )
+                if not last_successful:
+                    # 从未抓取成功，或最近一次失败：现状未知，保留最后真实排名
+                    result["current_state"] = ITEM_STATE_UNKNOWN
+                    result["current_rank"] = observations[-1]["rank"] if observations else None
+                    result["previous_rank"] = observations[-2]["rank"] if len(observations) >= 2 else None
+                    result["rank_delta"] = (
+                        result["previous_rank"] - result["current_rank"]
+                        if result["current_rank"] is not None and result["previous_rank"] is not None
+                        else None
+                    )
+                    return result
+
+                present = False
+                if last_run is not None:
+                    seen = conn.execute(
+                        "SELECT 1 FROM intel_observations WHERE item_id = ? AND run_id = ?",
+                        (item_id, last_run["run_id"]),
+                    ).fetchone()
+                    present = seen is not None
+                current_rank = None
+                if present and last_run is not None:
+                    row = conn.execute(
+                        """
+                        SELECT rank FROM intel_observations
+                        WHERE item_id = ? AND run_id = ? AND rank IS NOT NULL
+                        ORDER BY observed_at DESC, obs_id DESC LIMIT 1
+                        """,
+                        (item_id, last_run["run_id"]),
+                    ).fetchone()
+                    current_rank = int(row["rank"]) if row and row["rank"] is not None else None
+                previous_rank = observations[-2]["rank"] if len(observations) >= 2 else None
+                if current_rank is None:
+                    current_rank = observations[-1]["rank"] if observations else None
+                    previous_rank = observations[-2]["rank"] if len(observations) >= 2 else None
+                result["current_state"] = ITEM_STATE_ON_LIST if present else ITEM_STATE_OFF_LIST
+                result["current_rank"] = current_rank
+                result["previous_rank"] = previous_rank
+                result["rank_delta"] = (
+                    previous_rank - current_rank
+                    if current_rank is not None and previous_rank is not None
+                    else None
+                )
+                return result
         except sqlite3.DatabaseError as e:
             raise NativeIntelStoreError() from e
 
@@ -778,7 +1149,14 @@ def query_items(
                 )
                 rows = conn.execute(
                     f"""
-                    SELECT i.*, s.name AS source_name, s.source_type, s.has_real_rank
+                    SELECT i.*, s.name AS source_name, s.source_type, s.has_real_rank,
+                           (
+                               SELECT o.rank
+                               FROM intel_observations o
+                               WHERE o.item_id = i.item_id AND o.rank IS NOT NULL
+                               ORDER BY o.observed_at DESC, o.obs_id DESC
+                               LIMIT 1
+                           ) AS rank
                     FROM intel_items i
                     LEFT JOIN intel_sources s ON s.source_id = i.source_id
                     {where}
@@ -812,6 +1190,8 @@ def _item_row(row: sqlite3.Row) -> dict[str, Any]:
         "observation_count": row["observation_count"],
         "created_at": row["created_at"],
         "has_real_rank": bool(row["has_real_rank"]) if row["has_real_rank"] is not None else False,
+        # 仅暴露已有真实 observation；RSS 没有排名时保持 None。
+        "rank": row["rank"] if "rank" in row.keys() else None,
     }
 
 
