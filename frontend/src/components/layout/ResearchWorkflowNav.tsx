@@ -2,12 +2,12 @@ import { Link, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
 const WORKFLOW_NAV = [
-  { to: "/stock-data", label: "数据" },
+  { to: "/stock-data", label: "个股" },
   { to: "/screener", label: "发现" },
-  { to: "/thesis", label: "逻辑" },
-  { to: "/decision-evidence", label: "依据" },
+  { to: "/thesis", label: "投资逻辑" },
+  { to: "/decision-evidence", label: "决策依据" },
   { to: "/portfolio", label: "持仓" },
-  { to: "/decision-feedback", label: "复盘" },
+  { to: "/decision-feedback", label: "决策反馈" },
 ];
 
 function isActive(pathname: string, to: string) {

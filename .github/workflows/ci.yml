@@ -126,6 +126,10 @@ jobs:
         working-directory: frontend
         run: npm run test:e2e:smoke
 
+      - name: Run core navigation smoke E2E
+        working-directory: frontend
+        run: npm run test:e2e:core-navigation
+
       - name: Run top-risk real E2E
         working-directory: frontend
         run: npm run test:e2e:top-risk

@@ -1,9 +1,9 @@
 /**
- * P1-NAV1 核心工作流导航 smoke（纯前端，无后端依赖）。
+ * 核心工作流导航 smoke（纯前端，无后端依赖）。
  *
- * 验证正式主链从主导航直达：
- * - 主导航「决策」指向 Decision Inbox（不再是 legacy Cockpit）；
- * - 「交易」「复盘」在主导航直接可达；
+ * 验证每条核心路由在主侧栏和研究链路使用同一个用户名称；
+ * - 主导航「决策」指向 Decision Inbox；
+ * - 「交易」「决策复盘」在主导航直接可达；
  * - legacy Cockpit 降级到「分析」折叠区且带 Legacy 标识；
  * - Inbox → Formal Decision 的 campaign 提案页归属「决策」高亮。
  */
@@ -61,10 +61,21 @@ async function freePort() {
   return port;
 }
 
-const PRIMARY_LINKS = [
+const PRIMARY_WORKFLOW_LINKS = [
   { label: "决策", href: "/decision-inbox" },
   { label: "交易", href: "/trades" },
-  { label: "复盘", href: "/decision-performance" },
+  { label: "决策复盘", href: "/decision-performance" },
+];
+
+const CANONICAL_ROUTE_LABELS = [
+  { label: "今天", href: "/daily-review" },
+  { label: "发现", href: "/screener" },
+  { label: "个股", href: "/stock-data" },
+  { label: "投资逻辑", href: "/thesis" },
+  { label: "决策依据", href: "/decision-evidence" },
+  { label: "持仓", href: "/portfolio" },
+  { label: "决策反馈", href: "/decision-feedback" },
+  { label: "决策复盘", href: "/decision-performance" },
 ];
 
 let server;
@@ -83,20 +94,46 @@ try {
   const sidebar = page.getByTestId("app-sidebar");
 
   // 1) 主导航包含核心工作流直达入口，且「决策」指向 Decision Inbox。
-  for (const { label, href } of PRIMARY_LINKS) {
+  for (const { label, href } of PRIMARY_WORKFLOW_LINKS) {
     const link = sidebar.getByRole("link", { name: label, exact: true });
     assert.equal(await link.count(), 1, `主导航应恰好有一个「${label}」入口`);
     assert.equal(await link.getAttribute("href"), href, `「${label}」应指向 ${href}`);
   }
 
-  // 2) legacy Cockpit 不再出现在主导航顶层。
+  // 2) 展开两个低频分组后，主侧栏每条核心路由都使用唯一名称。
+  await sidebar.getByRole("button", { name: "资料" }).click();
+  await sidebar.getByRole("button", { name: "分析" }).click();
+  const mainNav = sidebar.getByRole("navigation", { name: "主导航" });
+  for (const { label, href } of CANONICAL_ROUTE_LABELS) {
+    const link = mainNav.locator(`a[href="${href}"]`);
+    assert.equal(await link.count(), 1, `主侧栏应恰好有一个 ${href} 入口`);
+    assert.equal((await link.innerText()).trim(), label, `${href} 应显示为「${label}」`);
+  }
+
+  const discoveryIcon = await mainNav.locator('a[href="/screener"] svg').getAttribute("class");
+  const stockIcon = await mainNav.locator('a[href="/stock-data"] svg').getAttribute("class");
+  assert.match(discoveryIcon || "", /lucide-search/, "发现应继续使用 Search 图标");
+  assert.doesNotMatch(stockIcon || "", /lucide-search/, "个股不得与发现重复使用 Search 图标");
+
+  // 3) 研究链路复用同一组用户名称与路由。
+  await page.goto(`${frontend}/stock-data`, { waitUntil: "networkidle" });
+  const workflowNav = page.getByRole("navigation", { name: "研究链路" });
+  for (const { label, href } of CANONICAL_ROUTE_LABELS.filter(({ href }) =>
+    ["/screener", "/stock-data", "/thesis", "/decision-evidence", "/portfolio", "/decision-feedback"].includes(href)
+  )) {
+    const link = workflowNav.locator(`a[href="${href}"]`);
+    assert.equal(await link.count(), 1, `研究链路应恰好有一个 ${href} 入口`);
+    assert.equal((await link.innerText()).trim(), label, `研究链路 ${href} 应显示为「${label}」`);
+  }
+
+  // 4) legacy Cockpit 不再出现在主导航顶层。
   assert.equal(
     await sidebar.locator(`nav[aria-label="主导航"] > div:first-child a[href="/cockpit"]`).count(),
     0,
     "主导航第一分区不应再有 /cockpit 入口",
   );
 
-  // 3) 点击主链：决策 → 交易 → 复盘，全程不需要打开任何折叠菜单。
+  // 5) 点击主链：决策 → 交易 → 决策复盘，全程不需要打开任何折叠菜单。
   // aria-current 由 React 提交渲染；waitForURL 先于 commit 返回，直接读会偶发 null，
   // 因此轮询等待属性就位（断言仍是严格 "page"，只是允许渲染提交的时差）。
   const expectAriaCurrent = async (selector) => {
@@ -119,15 +156,17 @@ try {
   await sidebar.getByRole("link", { name: "交易", exact: true }).click();
   await page.waitForURL("**/trades");
 
-  await sidebar.getByRole("link", { name: "复盘", exact: true }).click();
+  await sidebar.getByRole("link", { name: "决策复盘", exact: true }).click();
   await page.waitForURL("**/decision-performance");
 
-  // 4) campaign Formal Decision 提案页归属「决策」高亮。
+  // 6) campaign Formal Decision 提案页归属「决策」高亮。
   await page.goto(`${frontend}/campaigns/c-smoke/decision-proposal`, { waitUntil: "networkidle" });
   await expectAriaCurrent('a[href="/decision-inbox"]');
 
-  // 5) legacy Cockpit 保留在「分析」折叠区并带 Legacy 标识。
-  await sidebar.getByRole("button", { name: "分析" }).click();
+  // 7) legacy Cockpit 保留在「分析」折叠区并带 Legacy 标识。
+  if (!(await sidebar.locator('a[href="/cockpit"]').isVisible())) {
+    await sidebar.getByRole("button", { name: "分析" }).click();
+  }
   const legacyLink = sidebar.locator('a[href="/cockpit"]');
   assert.equal(await legacyLink.count(), 1, "分析菜单应保留 Cockpit 入口");
   assert.match(await legacyLink.innerText(), /Legacy/, "Cockpit 应带 Legacy 标识");
