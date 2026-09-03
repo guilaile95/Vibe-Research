@@ -430,7 +430,7 @@ async function run() {
     await challengeErrorSection.waitFor();
     await challengeErrorSection.getByText("决策挑战读取失败", { exact: false }).waitFor();
     assert.equal(await page.getByRole("button", { name: "完成决策挑战" }).isDisabled(), true);
-    assert.equal(await page.getByRole("checkbox", { name: /Freeze 将绑定|未找到已 Finalize|Challenge 状态当前无法安全验证/ }).isDisabled(), true);
+    assert.equal(await page.getByRole("checkbox", { name: /决策挑战状态当前无法安全验证/ }).isDisabled(), true);
     await page.getByRole("checkbox", { name: /我已检查股票判断、操作倾向、组合限制/ }).check();
     assert.equal(await page.getByRole("button", { name: "确认并冻结正式决策" }).isDisabled(), true);
     assert.equal(await page.locator("[data-challenge-id]").getAttribute("data-challenge-id"), "");
