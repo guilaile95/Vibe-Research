@@ -428,7 +428,8 @@ async function runE2E() {
     await page.getByRole("link", { name: "返回 Decision Inbox" }).click();
     await thesisCard.getByText("已绑定", { exact: true }).waitFor();
     await thesisCard.getByText("已冻结", { exact: false }).waitFor();
-    await thesisCard.getByText("当前状态：STABLE", { exact: true }).waitFor();
+    await thesisCard.locator('[data-current-thesis-status="STABLE"]').getByText("当前状态：稳定", { exact: true }).waitFor();
+    assert.ok(await thesisCard.getByText("effective_state：STABLE", { exact: true }).count() >= 1);
     const reviewCta = thesisCard.getByTestId("formal-decision-review-cta");
     await reviewCta.waitFor();
     assert.equal(
@@ -491,7 +492,7 @@ async function runE2E() {
 
     projectionMode = "unknown";
     await page.reload({ waitUntil: "networkidle" });
-    await gatedThesisCard.getByText("当前状态：UNKNOWN", { exact: true }).waitFor();
+    await gatedThesisCard.locator('[data-current-thesis-status="UNKNOWN"]').getByText("当前状态：信息不足", { exact: true }).waitFor();
     assert.equal(await gatedThesisCard.getByTestId("formal-decision-review-cta").count(), 0);
 
     projectionMode = "error";

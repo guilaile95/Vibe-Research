@@ -1,13 +1,6 @@
 import { Link } from "react-router-dom";
 import type { DecisionInboxCampaignItem } from "@/lib/api/types";
-import { presentFrozenDecision, presentSellEngine } from "@/lib/decisionActionView";
-
-function evaluationLabel(value: string | null | undefined): string {
-  if (value === "EVALUATED") return "已评估";
-  if (value === "UNKNOWN") return "信息不足";
-  if (value === "ERROR") return "读取失败";
-  return "尚未评估";
-}
+import { decisionEvaluationLabel, presentFrozenDecision, presentSellEngine } from "@/lib/decisionActionView";
 
 export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem }) {
   const frozen = presentFrozenDecision(item);
@@ -22,11 +15,13 @@ export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem 
       <div
         className="space-y-2 rounded-md border border-border/50 bg-background/40 p-3"
         data-frozen-decision-state={frozen.state}
+        data-frozen-decision-evaluation={item.formal_decision_evaluation ?? ""}
+        data-frozen-decision-id={frozen.decisionId ?? ""}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-medium">{frozen.title}</h3>
-          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]" title={item.formal_decision_evaluation ?? "NOT_EVALUATED"}>
-            {evaluationLabel(item.formal_decision_evaluation)}
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
+            {decisionEvaluationLabel(item.formal_decision_evaluation)}
           </span>
         </div>
         <p className="text-base font-semibold" data-frozen-decision-action={frozen.action ?? ""}>
@@ -34,9 +29,6 @@ export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem 
         </p>
         {frozen.decisionId ? (
           <div className="space-y-1 text-muted-foreground">
-            <p className="font-mono text-[10px]" title={frozen.decisionId}>
-              {frozen.decisionId}
-            </p>
             <p>冻结于：{frozen.committedAt}</p>
             <p>
               复核边界：{frozen.reviewBy}
@@ -44,6 +36,11 @@ export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem 
                 ? " · 已到复核时点"
                 : frozen.reviewState === "UPCOMING" ? " · 尚未到期" : " · 状态未知"}
             </p>
+            <details className="text-[10px]">
+              <summary className="cursor-pointer select-none hover:text-foreground">技术详情</summary>
+              <p className="mt-1 font-mono">decision_id：{frozen.decisionId}</p>
+              <p className="font-mono">evaluation：{item.formal_decision_evaluation ?? "NOT_EVALUATED"}</p>
+            </details>
           </div>
         ) : null}
         <p className="leading-5 text-muted-foreground">
@@ -72,8 +69,8 @@ export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem 
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-medium">当前卖出复核（只读）</h3>
-          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]" title={sell.evaluation}>
-            {evaluationLabel(sell.evaluation)}
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
+            {decisionEvaluationLabel(sell.evaluation)}
           </span>
         </div>
         <p className="text-base font-semibold">{sell.sellLabel}</p>

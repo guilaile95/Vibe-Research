@@ -362,8 +362,7 @@ async function run() {
     if (actualEvaluation !== "EVALUATED") {
       throw new Error(`[DCH2] bound Freeze returned evaluation=${actualEvaluation}; alerts=${JSON.stringify(commitError)}; trace=${JSON.stringify(apiTrace)}`);
     }
-    const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
-    const boundId = committedLine.replace(/^decision_id：/, "").trim();
+    const boundId = await page.locator("[data-formal-decision-evaluation]").getAttribute("data-committed-decision-id");
     const bound = await jsonRequest(backend, `/api/campaigns/${withChallenge.campaign_id}/decision-proposal/committed/${boundId}`);
     assert.ok(
       bound.committed.source_refs.includes(`decision_challenge:${challengeId}`),
@@ -411,8 +410,7 @@ async function run() {
     await page.getByRole("checkbox", { name: /我已检查股票判断、操作倾向、组合限制/ }).check();
     await page.getByRole("button", { name: "确认并冻结正式决策" }).click();
     await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor({ timeout: 180000 });
-    const plainLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
-    const plainId = plainLine.replace(/^decision_id：/, "").trim();
+    const plainId = await page.locator("[data-formal-decision-evaluation]").getAttribute("data-committed-decision-id");
     const plain = await jsonRequest(backend, `/api/campaigns/${withoutChallenge.campaign_id}/decision-proposal/committed/${plainId}`);
     assert.equal(
       plain.committed.source_refs.some((item) => String(item).startsWith("decision_challenge:")),

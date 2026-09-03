@@ -311,8 +311,7 @@ async function freezeThroughBrowser(page, backend, frontend, campaignId, withCha
 
   await page.getByRole("button", { name: "确认并冻结正式决策" }).click();
   await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor({ timeout: 180000 });
-  const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
-  const decisionId = committedLine.replace(/^decision_id：/, "").trim();
+  const decisionId = await page.locator("[data-formal-decision-evaluation]").getAttribute("data-committed-decision-id");
   assert.match(decisionId, /^decision_[0-9a-f]{32}$/);
   const committed = await jsonRequest(backend, `/api/campaigns/${campaignId}/decision-proposal/committed/${decisionId}`);
   if (withChallenge) {

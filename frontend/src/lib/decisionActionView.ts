@@ -1,4 +1,5 @@
 import type {
+  CampaignCurrentThesis,
   DecisionInboxCampaignItem,
   DecisionInboxFrozenDecision,
   DecisionInboxSellEngine,
@@ -21,7 +22,7 @@ const EVALUATIONS = new Set(["EVALUATED", "UNKNOWN", "NOT_EVALUATED", "ERROR"]);
 const ACTION_LABELS: Record<string, string> = {
   "BUY NOW": "立即买入",
   "BUY SMALL": "小仓位买入",
-  "SCALE IN": "逐步加仓",
+  "SCALE IN": "分批加仓",
   WAIT: "等待",
   HOLD: "继续持有",
   "WATCH TO REDUCE": "观察并准备减仓",
@@ -29,6 +30,17 @@ const ACTION_LABELS: Record<string, string> = {
   EXIT: "退出",
   AVOID: "回避",
   "RESEARCH MORE": "继续研究",
+};
+
+const CURRENT_THESIS_LABELS: Record<string, string> = {
+  STABLE: "稳定",
+  STRENGTHENED: "增强",
+  WEAKENED: "减弱",
+  DISPROVEN: "已被证伪",
+  INVALIDATED: "已失效",
+  UNKNOWN: "信息不足",
+  READY: "已就绪",
+  NOT_READY: "尚未就绪",
 };
 
 const SELL_LABELS: Record<string, string> = {
@@ -77,6 +89,30 @@ export interface SellEnginePresentation {
 
 function validIso(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "" && Number.isFinite(Date.parse(value));
+}
+
+export function decisionActionLabel(value: unknown): string {
+  return typeof value === "string"
+    ? ACTION_LABELS[value] ?? "无法识别的操作"
+    : "无法识别的操作";
+}
+
+export function decisionEvaluationLabel(value: unknown): string {
+  if (value === "EVALUATED") return "已评估";
+  if (value === "NOT_EVALUATED" || value === null || value === undefined || value === "") return "尚未评估";
+  if (value === "UNKNOWN") return "信息不足";
+  if (value === "ERROR") return "读取失败";
+  return "无法识别的状态";
+}
+
+export function currentThesisStatusLabel(value: unknown): string {
+  return typeof value === "string"
+    ? CURRENT_THESIS_LABELS[value] ?? "无法识别的状态"
+    : "无法识别的状态";
+}
+
+export function currentThesisStatusValue(value: CampaignCurrentThesis): string {
+  return value.ready ? value.effective_state : value.formal_status;
 }
 
 function validFrozenDecision(value: unknown): value is DecisionInboxFrozenDecision {
@@ -135,8 +171,7 @@ export function presentFrozenDecision(
       : "上一份已确认决策（历史）",
     decisionId: frozen.decision_id,
     action: frozen.previous_next_best_action,
-    actionLabel: ACTION_LABELS[frozen.previous_next_best_action]
-      ?? frozen.previous_next_best_action,
+    actionLabel: decisionActionLabel(frozen.previous_next_best_action),
     committedAt: frozen.committed_at,
     reviewBy: frozen.review_by,
     reviewState,
@@ -217,7 +252,7 @@ export function presentSellEngine(
       state: "ERROR",
       evaluation: "ERROR",
       sellState: null,
-      sellLabel: "HOLD 缺少正面证明，已停止展示结论",
+      sellLabel: "“继续持有”缺少正面证明，已停止展示结论",
       primaryReason: value.primary_reason,
       primaryReasonLabel: value.primary_reason
         ? REASON_LABELS[value.primary_reason] ?? value.primary_reason

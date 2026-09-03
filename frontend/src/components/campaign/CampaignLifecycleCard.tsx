@@ -10,7 +10,6 @@ import {
   CAMPAIGN_STATUS_LABELS,
   CAMPAIGN_STRATEGY_LABELS,
   TRANSITION_ACTION_LABELS,
-  formatCampaignIdShort,
   isDestructiveTransition,
   presentReasonCodes,
   renderableTransitionTargets,
@@ -133,14 +132,13 @@ export function CampaignLifecycleCard({
               {setupContext ? "建立中" : "当前投资计划"}
             </span>
           </div>
-          <p
-            className="font-mono text-[11px] leading-4 text-muted-foreground"
-            title={campaignId}
-          >
-            ID {formatCampaignIdShort(campaignId)}
-          </p>
         </div>
       </header>
+
+      <details className="text-[10px] text-muted-foreground">
+        <summary className="cursor-pointer select-none hover:text-foreground">技术详情</summary>
+        <p className="mt-1 font-mono">campaign_id：{campaignId}</p>
+      </details>
 
       {setupContext ? (
         <p className="text-xs leading-5 text-amber-700 dark:text-amber-400">
@@ -159,7 +157,6 @@ export function CampaignLifecycleCard({
             <span className="font-medium text-foreground">
               {visibleStateLabel(decision.visible_state)}
             </span>
-            <span className="sr-only"> {decision.visible_state}</span>
           </p>
           {reasons.primary.length > 0 && (
             <ul className="space-y-0.5 text-muted-foreground">

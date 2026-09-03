@@ -13,6 +13,7 @@ import {
   canOpenFormalDecisionReview,
   selectCampaignThesisCandidates,
 } from "@/lib/campaignThesis";
+import { currentThesisStatusLabel, currentThesisStatusValue } from "@/lib/decisionActionView";
 
 const FORMAL_LABELS: Record<string, string> = {
   draft: "正式草稿",
@@ -152,7 +153,10 @@ export function CampaignThesisActivationCard({
       ) : error ? (
         <p className="mt-3 text-xs text-destructive" role="alert">{error}</p>
       ) : binding && boundThesis && current ? (
-        <div className="mt-3 space-y-2 text-xs">
+        <div
+          className="mt-3 space-y-2 text-xs"
+          data-current-thesis-status={currentThesisStatusValue(current)}
+        >
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded bg-success/15 px-1.5 py-0.5 text-success">已绑定</span>
             <span className="font-medium">{boundThesis.title}</span>
@@ -161,9 +165,14 @@ export function CampaignThesisActivationCard({
           <div className="grid gap-1 text-muted-foreground sm:grid-cols-2">
             <p>正式状态：{FORMAL_LABELS[boundThesis.formal_state ?? ""] ?? "未开始"}</p>
             <p>冻结版本：{boundThesis.frozen_revision ? `v${boundThesis.frozen_revision}` : "—"}</p>
-            <p>当前状态：{current.ready ? current.effective_state : current.formal_status}</p>
+            <p>当前状态：{currentThesisStatusLabel(currentThesisStatusValue(current))}</p>
             <p>更新时间：{fmt(boundThesis.updated_at)}</p>
           </div>
+          <details className="text-[10px] text-muted-foreground">
+            <summary className="cursor-pointer select-none hover:text-foreground">技术状态</summary>
+            <p className="mt-1 font-mono">formal_status：{current.formal_status}</p>
+            {current.ready ? <p className="font-mono">effective_state：{current.effective_state}</p> : null}
+          </details>
           <Link to={`/thesis/${boundThesis.id}?${query}`} className="inline-flex text-primary hover:underline">
             查看当前投资逻辑 →
           </Link>

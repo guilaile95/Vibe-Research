@@ -8,6 +8,7 @@ import { VIEW_STANCE_LABELS, VIEW_STANCE_OPTIONS, buildJudgedView, buildPortfoli
 import { hydratedHorizonValue, resolveDecisionContext, type DecisionContextHydrationResult } from "@/lib/decisionContextHydration";
 import { browserTimeZoneName, formatUtcOffsetMinutes, parseReviewBoundary } from "@/lib/reviewBoundaryInput";
 import { buildEvaluatedTradeContinuationHref } from "@/lib/tradeContinuation";
+import { currentThesisStatusLabel, currentThesisStatusValue, decisionActionLabel, decisionEvaluationLabel } from "@/lib/decisionActionView";
 import {
   CANDIDATE_CONFIDENCE_LEVELS,
   buildCandidateTradeTerms,
@@ -36,7 +37,6 @@ const emptyChallenge = (): Record<DecisionChallengeDimensionName, DecisionChalle
 });
 
 const inputCls = "mt-1 w-full rounded-md border border-border/60 bg-background px-2.5 py-2 text-sm outline-none focus:border-primary/60";
-const codeCls = "rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px]";
 
 type CandidateScenarioName = "bear" | "base" | "bull";
 type CandidateConfidenceName = "data_quality" | "evidence_confidence" | "inference_confidence" | "decision_confidence";
@@ -53,6 +53,33 @@ const CANDIDATE_CONFIDENCE_LABELS: Record<CandidateConfidenceName, string> = {
   inference_confidence: "推断把握程度",
   decision_confidence: "最终判断把握程度",
 };
+const CANDIDATE_CONFIDENCE_VALUE_LABELS: Record<CandidateConfidence, string> = {
+  HIGH: "高",
+  MEDIUM: "中",
+  LOW: "低",
+  UNKNOWN: "信息不足",
+};
+const DECISION_ASSURANCE_LABELS: Record<string, string> = {
+  FORMAL_THESIS: "正式投资逻辑",
+  FORMAL_DECISION: "正式决策",
+  HARD_RISK: "硬风险",
+  MATERIAL_CHANGE: "重大变化",
+  CRITICAL_DATA: "关键数据",
+};
+const CANDIDATE_PRIMARY_FIELDS = [
+  ["估值状态", "valuation_status"],
+  ["持仓状态", "position_state"],
+  ["账户状态", "account_state"],
+  ["账户数据是否可信", "account_canonical"],
+  ["账户信息可信度", "account_confidence"],
+  ["硬风险", "hard_risk_state"],
+  ["关键数据", "critical_data_state"],
+  ["整体把握程度", "confidence"],
+  ["最高可用把握程度", "confidence_ceiling"],
+  ["证据状态", "evidence"],
+  ["风险收益", "risk_reward"],
+  ["风险上限", "risk_cap"],
+] as const;
 
 function emptyCandidateCase(): CandidateValuationCaseDraft {
   return {
@@ -90,12 +117,93 @@ function presentAuthorityValue(value: unknown): string {
   if (value === "NOT_REQUIRED") return "无需复核";
   if (value === "WORTH_REVIEW") return "值得复核";
   if (value === "NOT_PROVEN") return "尚未证明";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value === "AVAILABLE_CANDIDATE") return "候选上限可用";
+  if (value === "AVAILABLE_CANONICALITY_UNKNOWN") return "账户可信状态未确认";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value === "string") return "无法识别当前状态";
   if (Array.isArray(value)) return value.map(presentAuthorityValue).join("、") || "—";
   const record = recordValue(value);
   if (!record) return "信息不足";
   const entries = Object.entries(record).map(([key, item]) => `${key}: ${presentAuthorityValue(item)}`);
   return entries.join(" · ") || "—";
+}
+
+function candidateEnumLabel(value: unknown, labels: Record<string, string>): string {
+  if (value === null || value === undefined || value === "") return "信息不足";
+  return typeof value === "string"
+    ? labels[value] ?? "无法识别当前状态"
+    : "无法识别当前状态";
+}
+
+function presentCandidateValue(key: string, value: unknown): string {
+  if (key === "valuation_status") {
+    return candidateEnumLabel(value, { READY: "资料已就绪", EVALUATED: "已评估", UNKNOWN: "信息不足" });
+  }
+  if (key === "position_state") {
+    return candidateEnumLabel(value, { HELD: "当前持有", NOT_HELD: "当前未持有", UNKNOWN: "信息不足" });
+  }
+  if (key === "account_state") {
+    return candidateEnumLabel(value, { USABLE: "可用", AVAILABLE: "可用", UNAVAILABLE: "不可用", CONSTRAINED: "受限", UNKNOWN: "信息不足" });
+  }
+  if (key === "account_canonical") {
+    return value === true ? "已确认可信" : value === false ? "未形成完整可信账户" : "信息不足";
+  }
+  if (key === "account_confidence" || key === "confidence_ceiling") {
+    return candidateEnumLabel(value, CANDIDATE_CONFIDENCE_VALUE_LABELS);
+  }
+  if (key === "hard_risk_state") {
+    return candidateEnumLabel(value, { CLEAR: "未发现硬风险", CONFIRMED: "已确认硬风险", NOT_PROVEN: "尚未证明", NOT_EVALUATED: "尚未评估", UNKNOWN: "信息不足", ERROR: "读取失败" });
+  }
+  if (key === "critical_data_state") {
+    return candidateEnumLabel(value, { USABLE: "可用", UNAVAILABLE: "不可用", NOT_EVALUATED: "尚未评估", UNKNOWN: "信息不足", ERROR: "读取失败" });
+  }
+  if (key === "confidence") {
+    if (typeof value === "string") return candidateEnumLabel(value, CANDIDATE_CONFIDENCE_VALUE_LABELS);
+    const confidence = recordValue(value);
+    if (!confidence) return "信息不足";
+    return (Object.keys(CANDIDATE_CONFIDENCE_LABELS) as CandidateConfidenceName[])
+      .map((name) => `${CANDIDATE_CONFIDENCE_LABELS[name]}：${candidateEnumLabel(confidence[name], CANDIDATE_CONFIDENCE_VALUE_LABELS)}`)
+      .join("；");
+  }
+  if (key === "evidence") {
+    const evidence = recordValue(value);
+    if (!evidence) return "信息不足";
+    const status = candidateEnumLabel(evidence.status, {
+      SUFFICIENT: "证据充分",
+      INSUFFICIENT: "证据不足",
+      CONFLICT: "证据存在冲突",
+      UNKNOWN: "信息不足",
+    });
+    return typeof evidence.total_count === "number" ? `${status}（共 ${evidence.total_count} 条）` : status;
+  }
+  if (key === "risk_reward") {
+    const riskReward = recordValue(value);
+    if (!riskReward) return "信息不足";
+    const status = candidateEnumLabel(riskReward.status, { AVAILABLE: "可用", UNKNOWN: "信息不足" });
+    if (riskReward.status !== "AVAILABLE") return status;
+    const ratio = typeof riskReward.ratio === "number" ? riskReward.ratio : null;
+    const required = typeof riskReward.required_ratio === "number"
+      ? riskReward.required_ratio
+      : typeof riskReward.gate === "number" ? riskReward.gate : null;
+    return ratio === null ? status : `${status} · 风险收益比 ${ratio}${required === null ? "" : `（最低 ${required}）`}`;
+  }
+  if (key === "risk_cap") {
+    const riskCap = recordValue(value);
+    if (!riskCap) return "信息不足";
+    const status = candidateEnumLabel(riskCap.status, {
+      AVAILABLE: "可用",
+      AVAILABLE_CANDIDATE: "候选上限可用",
+      AVAILABLE_CANONICALITY_UNKNOWN: "账户可信状态未确认",
+      UNKNOWN: "信息不足",
+    });
+    const maxValue = typeof riskCap.max_position_value === "number"
+      ? ` · 最高仓位金额 ¥${riskCap.max_position_value.toLocaleString("zh-CN")}`
+      : "";
+    const maxShares = typeof riskCap.max_shares === "number" ? ` · 最多 ${riskCap.max_shares} 股` : "";
+    return `${status}${maxValue}${maxShares}`;
+  }
+  return "无法识别当前状态";
 }
 
 function portfolioCapitalBadgeClass(state: string): string {
@@ -135,13 +243,6 @@ function evaluationOf(value: unknown): string {
     ?? record.material_change_evaluation
     ?? record.sell_evaluation;
   return typeof evaluation === "string" ? evaluation : "NOT_EVALUATED";
-}
-
-function authorityLabel(evaluation: string): string {
-  if (evaluation === "EVALUATED") return "已评估";
-  if (evaluation === "UNKNOWN") return "信息不足";
-  if (evaluation === "ERROR") return "读取失败";
-  return "尚未评估";
 }
 
 function stringList(value: unknown): string[] {
@@ -500,11 +601,12 @@ export function DecisionProposalReview() {
     }
   };
 
-  const challengeStateLabel = challengeReadState === "FOUND"
-    ? "FOUND"
-    : challengeReadState === "ABSENT"
-      ? "UNFINALIZED"
-      : challengeReadState;
+  const challengeStateLabel = {
+    FOUND: "已完成",
+    ABSENT: "尚未完成",
+    PENDING: "正在读取",
+    ERROR: "读取失败",
+  }[challengeReadState];
   const challengeReadError = challengeReadState === "ERROR";
   const challengeReadPending = challengeReadState === "PENDING";
 
@@ -517,9 +619,6 @@ export function DecisionProposalReview() {
   const envelope = preview?.proposal.action_envelope as Record<string, unknown> | undefined;
   const portfolioCapital = presentPortfolioCapitalContext(preview?.proposal.portfolio_view, envelope);
   const candidateOpportunity = recordValue(preview?.proposal.authority_facts?.candidate_opportunity);
-  const candidatePolicyFacts = candidateOpportunity
-    ? Object.entries(candidateOpportunity).filter(([key]) => key === "analysis_metadata" || key.endsWith("policy_version"))
-    : [];
   const challengeRequiredForFreeze = Boolean(preview?.commit_requirements.challenge_required)
     || (campaign?.status === "PRE-ENTRY" && Boolean(preview && isCandidateBuyAction(preview.proposal.next_best_action)));
   const requiredChallengeReady = !challengeRequiredForFreeze
@@ -558,17 +657,36 @@ export function DecisionProposalReview() {
       <section className="rounded-lg border border-border/60 bg-background/35 p-4 space-y-3" data-decision-context={contextState} data-context-binding={binding?.thesis_id ?? ""} data-context-bound-thesis={boundThesis?.thesis.id ?? ""}>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="text-muted-foreground">投资计划</span>
-          <span className={codeCls}>{(campaign?.campaign_id ?? campaignId) || "缺少 campaign_id"}</span>
           <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-700">系统读取</span>
           {contextState === "loading" && <span className="text-muted-foreground">正在读取上下文…</span>}
         </div>
         <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-5">
           <div><p className="text-muted-foreground">股票代码</p><p className="mt-1 font-medium" data-context-security>{campaign?.security_code ?? "信息不足"}</p></div>
           <div><p className="text-muted-foreground">研究策略</p><p className="mt-1 font-medium" data-context-strategy>{campaign?.strategy ?? "信息不足"}</p></div>
-          <div><p className="text-muted-foreground">当前投资逻辑</p><p className="mt-1 font-medium" data-context-thesis-status>{currentThesis?.ready ? currentThesis.effective_state : currentThesis?.formal_status ?? "不可用"}</p></div>
+          <div>
+            <p className="text-muted-foreground">当前投资逻辑</p>
+            <p
+              className="mt-1 font-medium"
+              data-context-thesis-status={currentThesis ? currentThesisStatusValue(currentThesis) : "UNAVAILABLE"}
+            >
+              {currentThesis
+                ? currentThesisStatusLabel(currentThesisStatusValue(currentThesis))
+                : "不可用"}
+            </p>
+          </div>
           <div><p className="text-muted-foreground">已冻结逻辑版本</p><p className="mt-1 font-medium" data-context-frozen-revision>{hydration?.frozenRevision ? `v${hydration.frozenRevision}` : "信息不足"}</p></div>
           <div><p className="text-muted-foreground">关注时间范围</p><p className="mt-1 font-medium" data-context-horizon>{hydration?.status === "READY" ? hydration.horizonText : "信息不足"}</p></div>
         </div>
+        <details className="text-[10px] text-muted-foreground">
+          <summary className="cursor-pointer select-none hover:text-foreground">技术详情</summary>
+          <p className="mt-1 font-mono">campaign_id：{(campaign?.campaign_id ?? campaignId) || "MISSING"}</p>
+          {currentThesis ? (
+            <>
+              <p className="font-mono">formal_status：{currentThesis.formal_status}</p>
+              {currentThesis.ready ? <p className="font-mono">effective_state：{currentThesis.effective_state}</p> : null}
+            </>
+          ) : null}
+        </details>
         {contextState === "ready" ? (
           <p className="text-xs leading-5 text-success" data-horizon-source="CURRENT_THESIS">
             关注时间范围已从当前投资逻辑预填，不是新的用户声明；你仍可按本次判断需要修改。
@@ -697,7 +815,7 @@ export function DecisionProposalReview() {
                     className={inputCls}
                   >
                     <option value="">请选择</option>
-                    {CANDIDATE_CONFIDENCE_LEVELS.map((level) => <option key={level} value={level}>{level === "UNKNOWN" ? "信息不足" : level}</option>)}
+                    {CANDIDATE_CONFIDENCE_LEVELS.map((level) => <option key={level} value={level}>{CANDIDATE_CONFIDENCE_VALUE_LABELS[level]}</option>)}
                   </select>
                 </label>
               ))}
@@ -817,11 +935,12 @@ export function DecisionProposalReview() {
       </div>
       {aiDraft && (
         <section className="rounded-md border border-primary/40 bg-primary/5 p-3 text-xs" data-ai-draft-status="UNCOMMITTED">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="font-medium">AI 草稿 / 尚未提交</p>
-            <span className="font-mono text-[10px]">{aiDraft.draft_id}</span>
-          </div>
+          <p className="font-medium">AI 草稿 / 尚未提交</p>
           <p className="mt-1 text-muted-foreground">已填入下方表单。你修改任一判断后，系统会把该部分视为用户草稿。</p>
+          <details className="mt-1 text-[10px] text-muted-foreground">
+            <summary className="cursor-pointer select-none hover:text-foreground">技术详情</summary>
+            <p className="mt-1 font-mono">draft_id：{aiDraft.draft_id}</p>
+          </details>
           <button type="button" onClick={() => applyAIDraft(aiDraft)} disabled={busy !== null || aiBusy} className="mt-2 rounded border border-border/60 px-2 py-1 hover:bg-muted">再次填入</button>
         </section>
       )}
@@ -831,9 +950,12 @@ export function DecisionProposalReview() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-sm font-semibold">决策草案 <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-700">尚未提交</span></h2>
-              <p className="mt-1 text-[11px] text-muted-foreground">as_of：<span className="font-mono">{preview.proposal.as_of}</span></p>
+              <p className="mt-1 text-[11px] text-muted-foreground">评估时间：<span className="font-mono">{preview.proposal.as_of}</span></p>
             </div>
-            <span className="font-mono text-[10px] text-muted-foreground" title={preview.proposal_fingerprint}>fingerprint {preview.proposal_fingerprint.slice(0, 16)}…</span>
+            <details className="text-[10px] text-muted-foreground">
+              <summary className="cursor-pointer select-none hover:text-foreground">技术详情</summary>
+              <p className="mt-1 font-mono">fingerprint：{preview.proposal_fingerprint}</p>
+            </details>
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
@@ -857,7 +979,7 @@ export function DecisionProposalReview() {
                 } : {})}
               >
                 <p className="text-muted-foreground">{String(label)}</p>
-                <p className="mt-1 font-medium">{authorityLabel(evaluation)}</p>
+                <p className="mt-1 font-medium">{decisionEvaluationLabel(evaluation)}</p>
                 <details className="mt-1 text-[10px] text-muted-foreground">
                   <summary className="cursor-pointer">技术状态</summary>
                   <p className="mt-1 font-mono">{evaluation}</p>
@@ -877,47 +999,38 @@ export function DecisionProposalReview() {
                 <p className="mt-1 text-[11px] text-muted-foreground">这些状态由系统根据当前事实计算；页面只读呈现，不会从表单或浏览器猜测仓位。</p>
               </div>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                {[
-                  ["估值状态", "valuation_status"],
-                  ["持仓状态", "position_state"],
-                  ["账户状态", "account_state"],
-                  ["账户数据是否可信", "account_canonical"],
-                  ["账户信息可信度", "account_confidence"],
-                  ["硬风险", "hard_risk_state"],
-                  ["关键数据", "critical_data_state"],
-                  ["整体把握程度", "confidence"],
-                  ["最高可用把握程度", "confidence_ceiling"],
-                  ["证据状态", "evidence"],
-                  ["证据引用", "evidence_refs"],
-                  ["风险收益", "risk_reward"],
-                  ["风险上限", "risk_cap"],
-                ].map(([label, key]) => (
-                  <div key={key} className="rounded border border-border/50 bg-background/45 p-2">
+                {CANDIDATE_PRIMARY_FIELDS.map(([label, key]) => (
+                  <div
+                    key={key}
+                    className="rounded border border-border/50 bg-background/45 p-2"
+                    data-candidate-field={key}
+                    data-candidate-raw={typeof candidateOpportunity[key] === "object" ? JSON.stringify(candidateOpportunity[key]) : String(candidateOpportunity[key] ?? "")}
+                  >
                     <p className="text-muted-foreground">{label}</p>
-                    <p className="mt-1 break-words font-medium">{presentAuthorityValue(candidateOpportunity[key])}</p>
+                    <p className="mt-1 break-words font-medium">{presentCandidateValue(key, candidateOpportunity[key])}</p>
                   </div>
                 ))}
               </div>
-              {stringList(candidateOpportunity.reason_codes).length > 0 && (
-                <div>
-                  <details className="text-muted-foreground">
-                    <summary className="cursor-pointer font-medium">技术详情</summary>
+              <details className="text-muted-foreground">
+                <summary className="cursor-pointer font-medium">技术详情</summary>
+                {stringList(candidateOpportunity.evidence_refs).length > 0 && (
+                  <div className="mt-1">
+                    <p>证据引用</p>
+                    <ul className="mt-1 list-disc space-y-0.5 pl-4 font-mono text-[11px]">
+                      {stringList(candidateOpportunity.evidence_refs).map((ref) => <li key={ref}>{ref}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {stringList(candidateOpportunity.reason_codes).length > 0 && (
+                  <div className="mt-1">
+                    <p>原因代码</p>
                     <ul className="mt-1 list-disc space-y-0.5 pl-4 font-mono text-[11px]">
                       {stringList(candidateOpportunity.reason_codes).map((reason) => <li key={reason}>{reason}</li>)}
                     </ul>
-                  </details>
-                </div>
-              )}
-              {candidatePolicyFacts.length > 0 && (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {candidatePolicyFacts.map(([key, value]) => (
-                    <div key={key} className="rounded border border-border/40 bg-background/35 p-2">
-                      <p className="font-mono text-[10px] text-muted-foreground">{key}</p>
-                      <p className="mt-1 break-words">{presentAuthorityValue(value)}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
+                  </div>
+                )}
+                <pre className="mt-1 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px]">{JSON.stringify(candidateOpportunity, null, 2)}</pre>
+              </details>
             </section>
           )}
 
@@ -1015,7 +1128,9 @@ export function DecisionProposalReview() {
                   ) : portfolioCapital.finalAllowedActions.length > 0 ? (
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       {portfolioCapital.finalAllowedActions.map((action) => (
-                        <span key={action} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">{action}</span>
+                        <span key={action} className="rounded bg-muted px-1.5 py-0.5 text-[10px]" data-action-enum={action}>
+                          {decisionActionLabel(action)}
+                        </span>
                       ))}
                     </div>
                   ) : (
@@ -1029,10 +1144,12 @@ export function DecisionProposalReview() {
                   <p className="font-medium">需要对比复核的现有计划</p>
                   {portfolioCapital.replacementReview.candidates.map((candidate) => (
                     <div key={`${candidate.campaign_id}:${candidate.security_code}`} className="rounded border border-border/40 bg-background/40 p-2">
-                      <p className="font-mono text-[11px]">{candidate.security_code} · {candidate.strategy} · {candidate.campaign_id}</p>
-                      <p className="mt-1 font-mono text-[10px] text-muted-foreground">
-                        {candidate.reason_codes.length > 0 ? candidate.reason_codes.join(" · ") : "—"}
-                      </p>
+                      <p className="text-[11px]">{candidate.security_code} · {candidate.strategy}</p>
+                      <details className="mt-1 text-[10px] text-muted-foreground">
+                        <summary className="cursor-pointer select-none hover:text-foreground">技术详情</summary>
+                        <p className="mt-1 font-mono">campaign_id：{candidate.campaign_id}</p>
+                        <p className="font-mono">reason_codes：{candidate.reason_codes.length > 0 ? candidate.reason_codes.join(" · ") : "—"}</p>
+                      </details>
                     </div>
                   ))}
                 </div>
@@ -1059,17 +1176,35 @@ export function DecisionProposalReview() {
             ))}
           </div>
 
-          <div className="rounded-md border border-border/50 bg-background/35 p-3 text-xs">
+          <div className="rounded-md border border-border/50 bg-background/35 p-3 text-xs" data-testid="decision-assurance">
             <p className="font-medium">决策完整性检查（同一评估时点）</p>
+            <p className="mt-1 text-muted-foreground">
+              {previewAssurance?.coverage_complete === true
+                ? "所有必要检查项均已完成。"
+                : previewAssurance?.coverage_complete === false
+                  ? "仍有检查项未完成或信息不足；系统不会据此放宽决策。"
+                  : "当前无法确认检查完整性；系统会保持保守。"}
+            </p>
             <div className="mt-2 grid gap-1.5 sm:grid-cols-2 lg:grid-cols-5">
-              {Object.entries(dimensions).map(([dimension, value]) => <span key={dimension} className="flex items-center justify-between gap-2 rounded bg-muted/40 px-2 py-1"><span>{dimension}</span><span className="font-mono">{String(value)}</span></span>)}
+              {Object.entries(dimensions).map(([dimension, value]) => (
+                <span key={dimension} className="flex items-center justify-between gap-2 rounded bg-muted/40 px-2 py-1">
+                  <span>{DECISION_ASSURANCE_LABELS[dimension] ?? "未识别检查项"}</span>
+                  <span>{decisionEvaluationLabel(value)}</span>
+                </span>
+              ))}
             </div>
+            <details className="mt-2 text-[10px] text-muted-foreground">
+              <summary className="cursor-pointer select-none hover:text-foreground">技术详情</summary>
+              <pre className="mt-1 overflow-auto whitespace-pre-wrap break-all font-mono">{JSON.stringify(dimensions, null, 2)}</pre>
+            </details>
           </div>
 
           <div className="rounded-md border border-border/50 bg-background/35 p-3 text-xs" data-action-envelope>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="font-medium">限制条件与可执行范围</p>
-              <span className="font-mono text-[10px] text-muted-foreground">{preview.proposal.constraint_evaluation}</span>
+              <span className="text-[10px] text-muted-foreground" data-constraint-evaluation={preview.proposal.constraint_evaluation}>
+                {decisionEvaluationLabel(preview.proposal.constraint_evaluation)}
+              </span>
             </div>
             <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {[
@@ -1083,7 +1218,11 @@ export function DecisionProposalReview() {
                 <div key={key} className="rounded border border-border/40 bg-background/40 p-2">
                   <p className="text-muted-foreground">{label}</p>
                   <ul className="mt-1 list-disc space-y-0.5 pl-4">
-                    {stringList(envelope?.[key]).map((item) => <li key={item}>{item}</li>)}
+                    {stringList(envelope?.[key]).map((item) => (
+                      <li key={item} {...(key === "allowed_actions" || key === "blocked_actions" ? { "data-action-enum": item } : {})}>
+                        {key === "allowed_actions" || key === "blocked_actions" ? decisionActionLabel(item) : item}
+                      </li>
+                    ))}
                   </ul>
                 </div>
               ))}
@@ -1092,7 +1231,9 @@ export function DecisionProposalReview() {
 
           <div className="rounded-md border border-border/50 bg-background/35 p-3 text-xs">
             <p className="font-medium">当前建议的下一步</p>
-            <p className="mt-1 text-base font-semibold">{preview.proposal.next_best_action}</p>
+            <p className="mt-1 text-base font-semibold" data-next-best-action={preview.proposal.next_best_action}>
+              {decisionActionLabel(preview.proposal.next_best_action)}
+            </p>
             <p className="mt-1 text-muted-foreground">任何尚未评估或信息不足的关键状态，都会把草案收窄到“等待 / 继续研究”，不会开放更激进的操作。</p>
           </div>
 
@@ -1106,7 +1247,7 @@ export function DecisionProposalReview() {
               <h3 className="text-sm font-semibold">
                 决策挑战（{challengeRequiredForFreeze ? "本次新增风险操作必需" : "可选"}；读取失败时不会放宽要求）
               </h3>
-              <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
+              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
                 {challengeStateLabel}
               </span>
             </div>
@@ -1218,15 +1359,24 @@ export function DecisionProposalReview() {
       )}
 
       {committed && (
-        <section className="space-y-3 rounded-lg border border-success/40 bg-success/5 p-4" data-formal-decision-evaluation={evaluationOf(committed.formal_decision)} role="status">
+        <section
+          className="space-y-3 rounded-lg border border-success/40 bg-success/5 p-4"
+          data-formal-decision-evaluation={evaluationOf(committed.formal_decision)}
+          data-committed-decision-id={String(committed.committed.decision_id ?? "")}
+          role="status"
+        >
           <h2 className="flex items-center gap-2 text-sm font-semibold"><CheckCircle2 className="h-4 w-4 text-success" />正式决策已保存并重新读取确认</h2>
-          <p className="text-xs text-muted-foreground">当前决策状态：{authorityLabel(evaluationOf(committed.formal_decision))} · 评估时间：<span className="font-mono">{committed.as_of}</span></p>
-          <p className="font-mono text-[11px] text-muted-foreground">decision_id：{String(committed.committed.decision_id ?? "—")}</p>
+          <p className="text-xs text-muted-foreground">当前决策状态：{decisionEvaluationLabel(evaluationOf(committed.formal_decision))} · 评估时间：<span className="font-mono">{committed.as_of}</span></p>
           <div className="grid gap-2 sm:grid-cols-3">
-            <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">正式投资逻辑：{authorityLabel(evaluationOf(committed.formal_thesis))}</div>
-            <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">硬风险：{authorityLabel(evaluationOf(committed.hard_risk))}</div>
-            <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">重大变化：{authorityLabel(evaluationOf(committed.material_change))}</div>
+            <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">正式投资逻辑：{decisionEvaluationLabel(evaluationOf(committed.formal_thesis))}</div>
+            <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">硬风险：{decisionEvaluationLabel(evaluationOf(committed.hard_risk))}</div>
+            <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">重大变化：{decisionEvaluationLabel(evaluationOf(committed.material_change))}</div>
           </div>
+          <details className="text-[10px] text-muted-foreground">
+            <summary className="cursor-pointer select-none hover:text-foreground">技术详情</summary>
+            <p className="mt-1 font-mono">decision_id：{String(committed.committed.decision_id ?? "—")}</p>
+            <p className="font-mono">evaluation：{evaluationOf(committed.formal_decision)}</p>
+          </details>
           <p className="text-xs text-muted-foreground">决策待办会在下次刷新时读取这条记录；它是已确认的历史决策，不等于系统自动给出的当前建议。</p>
           <div className="flex flex-wrap gap-x-4 gap-y-2">
             <Link to="/decision-inbox" className="inline-flex text-xs text-primary hover:underline">打开决策待办 →</Link>

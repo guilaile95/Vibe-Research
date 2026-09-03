@@ -394,8 +394,7 @@ async function run() {
     const committedSuccess = page.locator('[data-formal-decision-evaluation="EVALUATED"]');
     if (readbackVariant === "valid") {
       await committedSuccess.waitFor({ timeout: 30000 });
-      const committedLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
-      const committedId = committedLine.replace(/^decision_id：/, "").trim();
+      const committedId = await page.locator("[data-formal-decision-evaluation]").getAttribute("data-committed-decision-id");
       assert.equal(committedId, committedDecisionId);
     } else {
       assert.equal(await committedSuccess.count(), 0, `${readbackVariant} must not render committed success UI`);
@@ -434,7 +433,10 @@ async function run() {
       await actionPanel.locator("[data-frozen-decision-action]").getAttribute("data-frozen-decision-action"),
       item.last_frozen_decision.previous_next_best_action,
     );
-    await actionPanel.getByText(committedDecisionId, { exact: true }).waitFor();
+    assert.equal(
+      await actionPanel.locator("[data-frozen-decision-id]").getAttribute("data-frozen-decision-id"),
+      committedDecisionId,
+    );
     await actionPanel.getByText("当前卖出复核（只读）", { exact: true }).waitFor();
     assert.ok(item.sell_engine, "Decision Inbox backend must contain the Sell Engine projection");
     assert.equal(

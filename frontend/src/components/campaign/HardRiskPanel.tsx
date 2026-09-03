@@ -65,7 +65,6 @@ export function HardRiskPanel({ item }: { item: DecisionInboxCampaignItem }) {
         >
           <ToneIcon tone={view.tone} />
           {view.statusLabel}
-          <span className="sr-only">{item.hard_risk_state ?? "MISSING"}</span>
         </span>
         {view.evaluationLabel && (
           <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
@@ -93,14 +92,16 @@ export function HardRiskPanel({ item }: { item: DecisionInboxCampaignItem }) {
       )}
 
       {view.authorityRefs.length > 0 && (
-        <div className="text-xs text-muted-foreground">
-          <p className="text-[11px]">技术依据：</p>
-          <ul className="mt-0.5 space-y-0.5 font-mono text-[11px]">
+        <details className="text-xs text-muted-foreground">
+          <summary className="cursor-pointer select-none hover:text-foreground">
+            技术依据（{view.authorityRefs.length}）
+          </summary>
+          <ul className="mt-1 space-y-0.5 font-mono text-[11px]">
             {view.authorityRefs.map((ref) => (
               <li key={ref}>{ref}</li>
             ))}
           </ul>
-        </div>
+        </details>
       )}
 
       {view.tone === "safe" && (

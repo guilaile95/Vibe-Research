@@ -430,7 +430,16 @@ function previewFor(campaign, body, capitalScenario = "A") {
       critical_data: { critical_data_evaluation: isB ? "ERROR" : "EVALUATED", critical_data_state: candidate.critical_data_state, reason_codes: candidate.reason_codes },
       material_change: { evaluation: "EVALUATED" }, sell_engine: { evaluation: "NOT_EVALUATED" },
     },
-    decision_assurance: { dimension_states: {} },
+    decision_assurance: {
+      coverage_complete: false,
+      dimension_states: {
+        FORMAL_THESIS: "EVALUATED",
+        FORMAL_DECISION: "NOT_EVALUATED",
+        HARD_RISK: "EVALUATED",
+        MATERIAL_CHANGE: "UNKNOWN",
+        CRITICAL_DATA: "ERROR",
+      },
+    },
     commit_requirements: { user_confirmed: true, expected_proposal_fingerprint: FINGERPRINTS[campaign.campaign_id], challenge_required: isA },
   };
 }
@@ -994,11 +1003,19 @@ try {
   await page.locator('[data-decision-context="ready"]').waitFor();
   await fillDecisionBasics(page);
   await fillConfidence(page, "MEDIUM");
+  assert.equal(await page.getByLabel("最终判断把握程度").locator("option:checked").textContent(), "中");
   await fillCandidateAnchors(page);
   await page.getByRole("button", { name: "预览决策草案" }).click();
   await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
-  await page.getByText("BUY SMALL", { exact: true }).first().waitFor();
-  await page.getByTestId("candidate-opportunity-authority").getByText("NOT_HELD", { exact: true }).waitFor();
+  await page.locator('[data-next-best-action="BUY SMALL"]').getByText("小仓位买入", { exact: true }).waitFor();
+  const aPosition = page.locator('[data-candidate-field="position_state"][data-candidate-raw="NOT_HELD"]');
+  await aPosition.getByText("当前未持有", { exact: true }).waitFor();
+  const assurance = page.getByTestId("decision-assurance");
+  await assurance.getByText("正式投资逻辑", { exact: true }).waitFor();
+  await assurance.getByText("已评估", { exact: true }).first().waitFor();
+  await assurance.getByText("正式决策", { exact: true }).waitFor();
+  await assurance.getByText("尚未评估", { exact: true }).waitFor();
+  assert.match(await assurance.locator("details").textContent(), /FORMAL_THESIS/, "raw assurance key remains in technical details");
   const capitalCard = page.getByTestId("portfolio-capital-context");
   await capitalCard.locator('[data-capital-dimension="capital-availability"]').getByText("可用", { exact: true }).waitFor();
   assert.equal(await capitalCard.getAttribute("data-portfolio-fit"), "SUPPORTIVE");
@@ -1066,13 +1083,14 @@ try {
   await page.getByLabel("关键盈利估值和入场依据不可用").check();
   await page.getByRole("button", { name: "预览决策草案" }).click();
   await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
-  await page.getByText("RESEARCH MORE", { exact: true }).first().waitFor();
+  await page.locator('[data-next-best-action="RESEARCH MORE"]').getByText("继续研究", { exact: true }).waitFor();
   const bDraft = state.previewPayloads[CAMPAIGN_B];
   assert.equal(Object.hasOwn(bDraft.asset_view, "candidate_valuation"), false);
   assert.equal(Object.hasOwn(bDraft.trade_view, "entry_range"), false);
   assert.equal(bDraft.asset_view.data_quality, "UNKNOWN");
   const bAuthority = page.getByTestId("candidate-opportunity-authority");
-  await bAuthority.getByText("UNAVAILABLE", { exact: true }).first().waitFor();
+  await bAuthority.locator('[data-candidate-field="account_state"][data-candidate-raw="UNAVAILABLE"]').getByText("不可用", { exact: true }).waitFor();
+  await bAuthority.locator('[data-candidate-field="evidence"]').getByText(/证据不足/).waitFor();
   assert.ok(await bAuthority.getByText(/INSUFFICIENT/).count() >= 1, "technical insufficiency reason remains available in details");
   const bCapital = page.getByTestId("portfolio-capital-context");
   assert.equal(await bCapital.getAttribute("data-capital-availability"), "UNKNOWN");
@@ -1088,13 +1106,13 @@ try {
   await fillCandidateAnchors(page);
   await page.getByRole("button", { name: "预览决策草案" }).click();
   await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
-  await page.getByText("AVOID", { exact: true }).first().waitFor();
-  await page.getByTestId("candidate-opportunity-authority").getByText("CONFIRMED", { exact: true }).waitFor();
+  await page.locator('[data-next-best-action="AVOID"]').getByText("回避", { exact: true }).waitFor();
+  await page.locator('[data-candidate-field="hard_risk_state"][data-candidate-raw="CONFIRMED"]').getByText("已确认硬风险", { exact: true }).waitFor();
   assert.ok(await page.getByText("HARD_RISK_CONFIRMED", { exact: true }).count() >= 1, "technical hard-risk reason remains available in details");
   assert.equal(await page.getByTestId("portfolio-capital-context").getAttribute("data-replacement-review"), "WORTH_REVIEW");
   assert.ok(await page.getByTestId("portfolio-capital-context").getByText("INCUMBENT_THESIS_WEAKENED", { exact: true }).count() >= 1, "technical replacement reason remains available in details");
-  for (const action of ["BUY NOW", "BUY SMALL", "SCALE IN"]) {
-    await page.locator('[data-action-envelope]').getByText(action, { exact: true }).waitFor();
+  for (const [action, label] of [["BUY NOW", "立即买入"], ["BUY SMALL", "小仓位买入"], ["SCALE IN", "分批加仓"]]) {
+    await page.locator(`[data-action-envelope] [data-action-enum="${action}"]`).getByText(label, { exact: true }).waitFor();
   }
 
   // Research Continuity is secondary hydration: a pending or failed batch must
