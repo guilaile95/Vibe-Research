@@ -93,25 +93,27 @@ export function mergeNotesFromBackup(
   current: readonly Note[],
   imported: readonly Note[],
 ): NotesImportResult {
-  const seen = new Set(current.map((note) => note.id));
-  const addedIds = new Set<string>();
+  const existing = current.slice(0, NOTES_LIMIT);
+  const seen = new Set(existing.map((note) => note.id));
   const additions: Note[] = [];
 
   for (const note of imported) {
     if (seen.has(note.id)) continue;
     seen.add(note.id);
-    addedIds.add(note.id);
     additions.push(note);
   }
 
-  const notes = [...current, ...additions]
+  const available = Math.max(0, NOTES_LIMIT - existing.length);
+  const accepted = additions
     .sort((left, right) => right.ts - left.ts || left.id.localeCompare(right.id))
-    .slice(0, NOTES_LIMIT);
-  const added = notes.reduce((count, note) => count + (addedIds.has(note.id) ? 1 : 0), 0);
+    .slice(0, available);
+  const notes = [...existing, ...accepted]
+    .sort((left, right) => right.ts - left.ts || left.id.localeCompare(right.id));
+
   return {
     notes,
-    added,
-    skipped: imported.length - added,
+    added: accepted.length,
+    skipped: imported.length - accepted.length,
   };
 }
 
