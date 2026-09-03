@@ -489,4 +489,3 @@ function SourceRegistrySection() {
     </GlassCard>
   );
 }
-

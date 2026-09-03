@@ -4,14 +4,29 @@
 > `sansan0/TrendRadar@8ee26026ba6c11dec41a95fb3895a7162876caa1`（v6.10.0）为参照，
 > 逐项记录 Vibe-Research Native Intel 的对齐状态。
 >
+> 规划路线：全量对齐 TrendRadar 功能，统一划分为 7 个规划波次（Wave 1 ~ Wave 7）。
+> 不设单方面判定“不重要”或“跳过”的状态，后续波次均标记为 `PLANNED_WAVE_X`，循序渐进落地。
+>
 > 规则：
-> - 每项只允许 `PARITY` / `SUPERSEDED_BY_VIBE` / `PLANNED_WAVE_N` / `ARCHITECTURE_ONLY`；
+> - 状态枚举：`PARITY`（已对齐并验证） / `PLANNED_WAVE_N`（规划波次中实现）；
 > - Vibe 实现为独立实现（Vibe-native），**不复制 TrendRadar GPL 代码**，不引入其
 >   runtime / MCP / Docker / package 依赖；
 > - 热榜数据来自第三方公开服务 NewsNow（`ourongxing/newsnow`，MIT 许可）的公共 HTTP API；
 >   Vibe 直接调用该公开接口，行为契约（`status`/`items`/1-based 排名/HTTPS 域名校验）
 >   经 2026-09-03 实测核验（cls-hot 13 条 / wallstreetcn-hot 10 条）。
 > - 本文件是规划与状态文档，不是 Engineering Truth；实现以代码与测试为准。
+
+## 7 个波次总览（Full Parity Roadmap）
+
+- **Wave 1（当前波次）**：原生热榜基础设施（热榜抓取、双榜支持、排名历史、离榜检测、资讯源管理、E2E）
+- **Wave 2**：关键词过滤与分类体系对齐（标题+简介过滤、黑白名单、多模式匹配）
+- **Wave 3**：完整热榜源覆盖对齐（扩展剩余 9 个平台源，全量对齐）
+- **Wave 4**：聚合与时间线对齐（时间窗口预设、多源归一化、聚类分析）
+- **Wave 5**：AI 分析与国际化（多模型摘要、实体提取、多语言翻译、情感分析、Agent MCP 分析）
+- **Wave 6**：多渠道通知与存储（Bark/飞书/钉钉/TG/邮件通知、TXT/HTML/S3 远端存储）
+- **Wave 7**：可视化、部署与自托管（WebUI/大屏、Docker/1Panel 一键部署）
+
+---
 
 ## 上游参照事实（实测 / 读码核验）
 
@@ -23,7 +38,9 @@
 | `status=cache` 与 `success` 都算成功 | `fetcher.py` 行为研究 |
 | 掉榜 = 「抓取成功且历史上存在但当前列表缺失」；来源失败不得当掉榜 | 上游 README/存储语义 + 本项目独立推导 |
 
-## Wave 1（本轮）范围
+---
+
+## Wave 1（已实现交付物）：原生热榜基础设施
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
@@ -32,114 +49,93 @@
 | Rank observation（真实排名观测） | **PARITY** | `intel_observations.rank`（仅 has_real_rank 来源写 rank；RSS 恒 NULL）；`intel_items.first_seen_at/last_seen_at/observation_count` |
 | Rank history（排名轨迹读取） | **PARITY** | `GET /api/native-intel/items/{item_id}/rank-history` + `GET /api/native-intel/hotlist`（current/previous/delta 由观测推导，不落第二份 authority） |
 | Off-list / 掉榜语义 | **PARITY** | 仅「来源本轮抓取成功 + 条目曾存在 + 当前榜单缺失」→ `OFF_LIST`；来源失败 → `UNKNOWN`；绝不写 rank=0/999 |
-| Source enable / disable | **PARITY** | `intel_sources.enabled` + `PATCH /api/native-intel/sources/{id}`；禁用源不参与抓取 |
-| Custom RSS（用户自建 RSS） | **PARITY** | `POST /api/native-intel/sources`（origin=user，DB 持久化，`news_sources.json` 不再是唯一真值） |
+| Source enable / disable | **PARITY** | `intel_sources.enabled` + `PATCH /api/native-intel/sources/{id}`；禁用源不参与抓取；状态返回 `DISABLED` |
+| Custom RSS（用户自建 RSS） | **PARITY** | `POST /api/native-intel/sources`（origin=user，UUID source_id，DB 持久化，软删除支持） |
 | RSS（系统策展源） | **PARITY** | 既有能力保持：`news_sources.json` 降级为系统 seed，首次初始化入 DB |
 | 单源失败隔离 / PARTIAL 语义 | **PARITY** | 既有 `intel_source_runs` + `RUN_STATUS_PARTIAL` 保持；热榜失败不影响 RSS 与其他热榜 |
-| A 股实体映射 | **PARITY**（Vibe 增强） | 热榜条目走既有 `intel_entity_terms` / `intel_item_entities` 映射；StockData / Watchlist context 自动可见（上游无此能力，SUPERSEDED_BY_VIBE 语义） |
+| A 股实体映射 | **PARITY** | 热榜条目走既有 `intel_entity_terms` / `intel_item_entities` 映射；StockData / Watchlist context 自动可见 |
+| E2E 测试验证 | **PARITY** | `tests/e2e/hotlist-parity.browser.mjs` 真浏览器 + 真后端 SQLite 持久化验证，CI 自动化接入 |
 
-## Wave 1B（下一批热榜平台，provider 表各加一行即可）
+---
+
+## Wave 2：关键词过滤与分类体系对齐
+
+| 项目 | 状态 | 说明 |
+| --- | --- | --- |
+| 标题+简介过滤（Keyword filtering） | PLANNED_WAVE_2 | 上游关键词过滤配置；Vibe 将基于本地规则引擎提供标题与简介的多字段关键词匹配 |
+| 黑名单/白名单机制（Blacklist / Whitelist） | PLANNED_WAVE_2 | 支持精准包含与排除过滤 |
+| 多模式匹配（Regex / Wildcard） | PLANNED_WAVE_2 | 支持正则与通配符规则匹配 |
+| 分类标签与来源分组（Platform grouping） | PLANNED_WAVE_2 | 支持按平台和主题维度定制视图聚合 |
+
+---
+
+## Wave 3：完整热榜源覆盖对齐
 
 | 项目 | 状态 | 上游 platform id / expected_domain |
 | --- | --- | --- |
-| toutiao（今日头条） | PLANNED_WAVE_1B | `toutiao` / toutiao.com |
-| baidu（百度热搜） | PLANNED_WAVE_1B | `baidu` / baidu.com |
-| thepaper（澎湃新闻） | PLANNED_WAVE_1B | `thepaper` / thepaper.cn |
-| bilibili-hot-search | PLANNED_WAVE_1B | `bilibili-hot-search` / bilibili.com |
-| ifeng（凤凰网） | PLANNED_WAVE_1B | `ifeng` / ifeng.com |
-| tieba（贴吧） | PLANNED_WAVE_1B | `tieba` / baidu.com |
-| weibo（微博） | PLANNED_WAVE_1B | `weibo` / weibo.com |
-| douyin（抖音） | PLANNED_WAVE_1B | `douyin` / douyin.com |
-| zhihu（知乎） | PLANNED_WAVE_1B | `zhihu` / zhihu.com |
+| toutiao（今日头条） | PLANNED_WAVE_3 | `toutiao` / toutiao.com |
+| baidu（百度热搜） | PLANNED_WAVE_3 | `baidu` / baidu.com |
+| thepaper（澎湃新闻） | PLANNED_WAVE_3 | `thepaper` / thepaper.cn |
+| bilibili-hot-search | PLANNED_WAVE_3 | `bilibili-hot-search` / bilibili.com |
+| ifeng（凤凰网） | PLANNED_WAVE_3 | `ifeng` / ifeng.com |
+| tieba（贴吧） | PLANNED_WAVE_3 | `tieba` / baidu.com |
+| weibo（微博） | PLANNED_WAVE_3 | `weibo` / weibo.com |
+| douyin（抖音） | PLANNED_WAVE_3 | `douyin` / douyin.com |
+| zhihu（知乎） | PLANNED_WAVE_3 | `zhihu` / zhihu.com |
 
-## Filtering
+---
 
-| 项目 | 状态 | 说明 |
-| --- | --- | --- |
-| 关键词过滤（本地 keyword） | SUPERSEDED_BY_VIBE | Vibe 已有本地实体词匹配（`intel_entity_terms`）+ 红线词过滤（`news_sources.json` redline_keywords，热榜标题同样适用）；无上游「关注关键词→报告」的配置面，本地映射是更强的等价物 |
-| AI filter（LLM 相关性筛选） | PLANNED_WAVE_2 | 上游 `trendradar/ai/filter.py`；Vibe 侧下一 Wave 评估（须复用现有可插拔 AI 层，不引第二套 LLM） |
-| AI interests（个人兴趣配置） | PLANNED_WAVE_2 | 上游 `config/ai_interests.txt` |
-| AI tag update（标签自更新） | PLANNED_WAVE_2 | 上游 `config/ai_filter/update_tags_prompt.txt` |
-
-## Rank / Observation
+## Wave 4：聚合与时间线对齐
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| current rank | **PARITY** | Wave 1 交付（仅真实 rank，不伪造） |
-| rank timeline / history | **PARITY** | Wave 1 交付（observations 全量保留 + 读取 API） |
-| first seen / last seen | **PARITY** | 既有 `intel_items.first_seen_at / last_seen_at` |
-| frequency（出现次数） | **PARITY** | 既有 `observation_count` |
-| new item（新上榜） | **PARITY** | Wave 1 交付（`is_new` + rank history 首点 = 当前点；UI「新上榜」筛选） |
-| off-list semantics | **PARITY** | Wave 1 交付（成功 run 推导，见上） |
+| 时间窗口预设（Timeline presets） | PLANNED_WAVE_4 | 上游 timeline 抓取时点与时间切片预设 |
+| 多源归一化与相似新闻聚合（Similar news clustering） | PLANNED_WAVE_4 | 跨平台相同事件识别与聚类关联（不污染各平台原始 rank） |
+| 话题生命周期（Topic lifecycle） | PLANNED_WAVE_4 | 单话题自上榜至离榜全周期跟踪 |
+| 爆发检测（Viral detection） | PLANNED_WAVE_4 | 排名跃升与多源共振突发检测 |
+| 平台活跃度对比（Platform activity comparison） | PLANNED_WAVE_4 | 跨平台热点分发节奏与覆盖率对比 |
 
-## Analytics
+---
 
-| 项目 | 状态 | 说明 |
-| --- | --- | --- |
-| trending topics（关注趋势） | PARITY（Vibe 语义） | 既有 `GET /api/native-intel/trending`（跨来源出现次数 + 实体环比，无伪造排名）；Wave 1 起热榜条目附带真实 current/previous rank 与 delta |
-| topic trend（单话题轨迹） | PLANNED_WAVE_3 | 读取侧可由 rank-history + 观测聚合实现，UI 未做 |
-| lifecycle（话题生命周期） | PLANNED_WAVE_3 | — |
-| viral detection（爆发检测） | PLANNED_WAVE_3 | 上游为启发式；Vibe 待定义诚实阈值语义 |
-| prediction（预测） | PLANNED_WAVE_3 | 上游为启发式；须先满足 investment authority 边界审查 |
-| platform comparison（平台对比） | PLANNED_WAVE_3 | 数据已具备（observations per source），无 UI |
-| platform activity（平台活跃度） | PLANNED_WAVE_3 | 同上 |
-| keyword co-occurrence | PLANNED_WAVE_3 | — |
-| sentiment（情感） | PLANNED_WAVE_N | 依赖 AI 层；明确不做「热度→买卖」映射 |
-| similar news（相似新闻） | PLANNED_WAVE_3 | 现有 title_key 归一是基础 |
-| entity search（实体检索） | PARITY（Vibe 增强） | 既有 `intel_entity_terms` + StockData/Watchlist context；SUPERSEDED_BY_VIBE（上游 MCP 检索 < 本地结构化映射） |
-
-## Reports
+## Wave 5：AI 分析与国际化
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| current report（当前快照） | SUPERSEDED_BY_VIBE | Intel 页 / MarketIntelPanel 即时渲染本地观测 |
-| daily report（日报） | PLANNED_WAVE_3 | 上游输出 TXT/HTML；Vibe 候选形态是 DailyReview 面板扩展，不新建第二套 output |
-| incremental report | PLANNED_WAVE_3 | — |
-| keyword grouping | SUPERSEDED_BY_VIBE | 本地实体/赛道（hint）分组已覆盖核心诉求 |
-| platform grouping | PLANNED_WAVE_2 | 热榜 UI 按来源筛选已是一部分 |
-| standalone HTML | PLANNED_WAVE_N | 上游为静态站点发布场景；Vibe 是本地应用，除非 Owner 明确要求否则不排期 |
-| AI analysis（AI 分析报告） | PLANNED_WAVE_2 | 须走 Vibe 可插拔 AI 层 |
+| 多模型智能摘要（AI Summarization） | PLANNED_WAVE_5 | 走 Vibe 可插拔 AI 适配层（支持 DeepSeek、Doubao、OpenAI 等） |
+| 实体提取（AI Entity Extraction） | PLANNED_WAVE_5 | 自动抽取事件关联实体与概念 |
+| 多语言翻译（AI Translation） | PLANNED_WAVE_5 | 国际资讯与多语言热榜翻译 |
+| 情感分析（Sentiment Analysis） | PLANNED_WAVE_5 | 资讯情绪倾向分类（仅客观事实标注，保持 observation-only 边界） |
+| Agent MCP 分析能力（Agent MCP Analytics） | PLANNED_WAVE_5 | 通过 MCP 对外暴露热榜分析与多源综合查询接口 |
 
-## AI
+---
 
-| 项目 | 状态 | 说明 |
-| --- | --- | --- |
-| AI filtering | PLANNED_WAVE_2 | 见 Filtering |
-| AI analysis | PLANNED_WAVE_2 | — |
-| AI translation | PLANNED_WAVE_N | 中文用户价值低，除非 Owner 明确要求 |
-
-## Scheduler
+## Wave 6：多渠道通知与存储
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 周期抓取 | PARITY（Vibe 语义） | 既有 `native_intel_service.start_scheduler` + 启动补偿抓取；上游 timeline.yaml 的多时点编排不做 |
-| timeline presets | ARCHITECTURE_ONLY | 上游按 GitHub Actions / cron 编排；Vibe 本地常驻调度器语义不同，保留架构说明 |
+| 飞书机器人通知（Feishu Webhook） | PLANNED_WAVE_6 | 支持消息卡片与告警推送 |
+| 钉钉机器人通知（DingTalk Webhook） | PLANNED_WAVE_6 | 支持群机器人推送 |
+| 企业微信通知（WeCom Webhook） | PLANNED_WAVE_6 | 支持图文推送 |
+| Telegram 通知（Telegram Bot） | PLANNED_WAVE_6 | 支持频道与群组推送 |
+| 邮件通知（Email / SMTP） | PLANNED_WAVE_6 | 支持定时汇总与即时邮件 |
+| Bark / ntfy / Slack / Generic Webhook | PLANNED_WAVE_6 | 移动端与开发者通用推送 |
+| 多格式本地存储（TXT / HTML 报告输出） | PLANNED_WAVE_6 | 支持快照生成与离线导出 |
+| 远端存储集成（Remote S3-compatible storage） | PLANNED_WAVE_6 | 支持远端对象存储归档 |
 
-## Notifications
+---
 
-| 项目 | 状态 |
-| --- | --- |
-| Feishu / DingTalk / WeCom / Telegram / Email / ntfy / Bark / Slack / generic webhook | PLANNED_WAVE_N（全部：上游核心卖点之一，但本地单用户产品当前无推送场景；逐项保留在矩阵，禁止静默删除） |
-
-## Storage / Output
-
-| 项目 | 状态 | 说明 |
-| --- | --- | --- |
-| SQLite | PARITY（Vibe 语义） | 单库 `native_intel.sqlite3`（sources/runs/items/observations/entities），纳入完整数据包备份 |
-| TXT 输出 | PLANNED_WAVE_N | — |
-| HTML 输出 | PLANNED_WAVE_N | — |
-| remote S3-compatible storage | PLANNED_WAVE_N | Vibe 是本地优先产品；远端存储与隐私边界冲突，需 Owner 单独决策 |
-
-## Agent / MCP capability
+## Wave 7：可视化、部署与自托管
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| query / search / analytics | SUPERSEDED_BY_VIBE | Vibe 自有 MCP（`backend/mcp_server.py`）暴露数据工具；资讯读取面已可经 `/api/native-intel/*` 复用；不引入 TrendRadar MCP |
-| status | PARITY | `GET /api/native-intel/status` |
-| crawl（agent 触发抓取） | PLANNED_WAVE_2 | 现有 `POST /api/native-intel/refresh` 已是等价物，MCP 侧包装待做 |
+| 独立 WebUI / 监控大屏（Dashboard & Wallboard） | PLANNED_WAVE_7 | 跨终端热点全景大屏与监控面板 |
+| 一键部署模板（Docker Compose / 1Panel） | PLANNED_WAVE_7 | 容器化一键部署与自托管配置 |
 
-## 明确不引入（架构红线）
+---
 
-- TrendRadar runtime / Docker / Python package / MCP / `fastmcp` / TrendRadar DB / 第二套 output/
-- `trendradar_*` 模块命名（长期 owner 是 Vibe：`native_intel_*`）
-- 任何「排名/热度 → 投资建议」映射（Native Intel 保持 observation_only）
+## 架构红线（约束原则）
+
+- 不复制 TrendRadar GPL 源码，不引入其 runtime / Docker / package 作为依赖；
+- 模块由 Vibe 独立实现与维护（`native_intel_*`），不引入 `trendradar_*` 模块命名；
+- 任何「排名/热度」严格遵循 `observation_only`，不得未经决策层伪造为买卖权威建议；
+- 跨平台数据必须按平台隔离排名轨迹，不得相互污染真实平台序号。

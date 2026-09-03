@@ -180,7 +180,12 @@ export function HotlistPanel() {
         ) : (
           <div className="divide-y divide-border/30">
             {visibleItems.map((item) => {
-              const delta = formatRankDelta(item.rank_delta, item.previous_rank);
+              const delta = formatRankDelta(
+                item.rank_delta,
+                item.previous_rank,
+                item.current_state,
+                item.rank,
+              );
               const badge = formatStateBadge(item.current_state);
               return (
                 <div
@@ -189,8 +194,11 @@ export function HotlistPanel() {
                 >
                   <div className="flex min-w-0 items-start gap-3">
                     {/* 排名徽章 */}
-                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/60 font-mono text-xs font-bold text-foreground">
-                      {item.rank ?? "-"}
+                    <div
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/60 font-mono text-xs font-bold text-foreground"
+                      title={item.current_state === "DISABLED" ? `末次 #${item.rank ?? "-"} (来源已停用)` : undefined}
+                    >
+                      {item.current_state === "DISABLED" ? "—" : (item.rank ?? "-")}
                     </div>
 
                     <div className="min-w-0 flex-1">
@@ -208,6 +216,12 @@ export function HotlistPanel() {
 
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                         <span>{item.source_name || item.source_id}</span>
+                        {item.current_state === "DISABLED" && item.rank != null && (
+                          <>
+                            <span>·</span>
+                            <span className="text-amber-500/80">末次 #{item.rank}</span>
+                          </>
+                        )}
                         <span>·</span>
                         <span>首次上榜: {formatShanghaiTime(item.first_seen_at)}</span>
                         <span>·</span>

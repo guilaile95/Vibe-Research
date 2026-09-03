@@ -89,7 +89,10 @@ CREATE TABLE IF NOT EXISTS intel_sources (
     has_real_rank INTEGER NOT NULL DEFAULT 0,
     enabled INTEGER NOT NULL DEFAULT 1,
     origin TEXT NOT NULL DEFAULT 'system',
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    re_enabled_at TEXT,
+    re_enabled_after_run_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS intel_fetch_runs (
@@ -239,6 +242,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         # TREND-PARITY Wave 1：系统 seed 源 origin=system，用户自建源 origin=user；
         # 删除权限只看 origin，已有库存量行全部视为系统源。
         conn.execute("ALTER TABLE intel_sources ADD COLUMN origin TEXT NOT NULL DEFAULT 'system'")
+    if "deleted_at" not in source_columns:
+        conn.execute("ALTER TABLE intel_sources ADD COLUMN deleted_at TEXT")
+    if "re_enabled_at" not in source_columns:
+        conn.execute("ALTER TABLE intel_sources ADD COLUMN re_enabled_at TEXT")
+    if "re_enabled_after_run_id" not in source_columns:
+        conn.execute("ALTER TABLE intel_sources ADD COLUMN re_enabled_after_run_id TEXT")
 
     item_entity_pk = [
         str(row["name"])
@@ -328,12 +337,15 @@ def list_sources(
     db_path: str | Path | None = None,
     *,
     enabled_only: bool = True,
+    include_deleted: bool = False,
 ) -> list[dict[str, Any]]:
     path = Path(db_path) if db_path else get_default_db_path()
     initialize_store(path)
-    sql = "SELECT * FROM intel_sources"
+    sql = "SELECT * FROM intel_sources WHERE 1=1"
+    if not include_deleted:
+        sql += " AND deleted_at IS NULL"
     if enabled_only:
-        sql += " WHERE enabled = 1"
+        sql += " AND enabled = 1"
     sql += " ORDER BY hint, name"
     with _LOCK:
         try:
@@ -344,7 +356,7 @@ def list_sources(
 
 
 class SourceAlreadyExistsError(NativeIntelStoreError):
-    """来源 ID 冲突（用户自建重名）。"""
+    """来源冲突（同名或同 URL 的活跃自建源已存在）。"""
 
 
 class SourceNotFoundError(NativeIntelStoreError):
@@ -358,15 +370,18 @@ class SystemSourceDeleteBlocked(NativeIntelStoreError):
 def get_source(
     source_id: str,
     db_path: str | Path | None = None,
+    *,
+    include_deleted: bool = False,
 ) -> dict[str, Any] | None:
     path = Path(db_path) if db_path else get_default_db_path()
     initialize_store(path)
+    sql = "SELECT * FROM intel_sources WHERE source_id = ?"
+    if not include_deleted:
+        sql += " AND deleted_at IS NULL"
     with _LOCK:
         try:
             with _connect(path) as conn:
-                row = conn.execute(
-                    "SELECT * FROM intel_sources WHERE source_id = ?", (source_id,)
-                ).fetchone()
+                row = conn.execute(sql, (source_id,)).fetchone()
                 return dict(row) if row else None
         except sqlite3.DatabaseError as e:
             raise NativeIntelStoreError() from e
@@ -381,7 +396,7 @@ def insert_user_source(
     enabled: bool = True,
     db_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """新增用户自建 RSS 源（origin=user）；source_id 冲突时拒绝。"""
+    """新增用户自建 RSS 源（origin=user）；source_id 或活跃 (name, url) 冲突时拒绝。"""
     path = Path(db_path) if db_path else get_default_db_path()
     initialize_store(path)
     now = utc_now_iso()
@@ -390,7 +405,11 @@ def insert_user_source(
             with _connect(path) as conn:
                 with conn:
                     exists = conn.execute(
-                        "SELECT 1 FROM intel_sources WHERE source_id = ?", (source_id,)
+                        """
+                        SELECT 1 FROM intel_sources
+                        WHERE source_id = ? OR ((name = ? OR url = ?) AND deleted_at IS NULL)
+                        """,
+                        (source_id, name, url),
                     ).fetchone()
                     if exists:
                         raise SourceAlreadyExistsError()
@@ -421,23 +440,45 @@ def update_source(
     """更新来源；``enabled`` 系统源与用户源均可，``name`` 仅用户源可改。"""
     path = Path(db_path) if db_path else get_default_db_path()
     initialize_store(path)
-    assignments: list[str] = []
-    args: list[Any] = []
-    if enabled is not None:
-        assignments.append("enabled = ?")
-        args.append(1 if enabled else 0)
-    if name is not None:
-        assignments.append("name = ?")
-        args.append(name)
-    if not assignments:
-        return get_source(source_id, path)
-    assignments.append("updated_at = ?")
-    args.append(utc_now_iso())
-    args.append(source_id)
     with _LOCK:
         try:
             with _connect(path) as conn:
                 with conn:
+                    current = conn.execute(
+                        "SELECT enabled, deleted_at FROM intel_sources WHERE source_id = ?",
+                        (source_id,),
+                    ).fetchone()
+                    if current is None or current["deleted_at"] is not None:
+                        return None
+                    was_enabled = bool(current["enabled"])
+                    assignments: list[str] = []
+                    args: list[Any] = []
+                    if enabled is not None:
+                        assignments.append("enabled = ?")
+                        args.append(1 if enabled else 0)
+                        if enabled and not was_enabled:
+                            assignments.append("re_enabled_at = ?")
+                            args.append(utc_now_iso())
+                            last_run = conn.execute(
+                                "SELECT run_id FROM intel_source_runs WHERE source_id = ? ORDER BY rowid DESC LIMIT 1",
+                                (source_id,),
+                            ).fetchone()
+                            assignments.append("re_enabled_after_run_id = ?")
+                            args.append(str(last_run["run_id"]) if last_run else "__NONE__")
+                        elif not enabled:
+                            assignments.append("re_enabled_at = NULL")
+                            assignments.append("re_enabled_after_run_id = NULL")
+                    if name is not None:
+                        assignments.append("name = ?")
+                        args.append(name)
+                    if not assignments:
+                        row = conn.execute(
+                            "SELECT * FROM intel_sources WHERE source_id = ?", (source_id,)
+                        ).fetchone()
+                        return dict(row) if row else None
+                    assignments.append("updated_at = ?")
+                    args.append(utc_now_iso())
+                    args.append(source_id)
                     cursor = conn.execute(
                         f"UPDATE intel_sources SET {', '.join(assignments)} WHERE source_id = ?",
                         tuple(args),
@@ -453,9 +494,10 @@ def update_source(
 
 
 def delete_user_source(source_id: str, db_path: str | Path | None = None) -> dict[str, Any]:
-    """删除用户源；系统源删除请求 fail closed（可停用，不可删除）。"""
+    """删除用户源（软删除保留历史 provenance）；系统源删除请求 fail closed（可停用，不可删除）。"""
     path = Path(db_path) if db_path else get_default_db_path()
     initialize_store(path)
+    now = utc_now_iso()
     with _LOCK:
         try:
             with _connect(path) as conn:
@@ -463,12 +505,17 @@ def delete_user_source(source_id: str, db_path: str | Path | None = None) -> dic
                     row = conn.execute(
                         "SELECT * FROM intel_sources WHERE source_id = ?", (source_id,)
                     ).fetchone()
-                    if row is None:
+                    if row is None or row["deleted_at"] is not None:
                         raise SourceNotFoundError()
                     if str(row["origin"]) != "user":
                         raise SystemSourceDeleteBlocked()
                     conn.execute(
-                        "DELETE FROM intel_sources WHERE source_id = ?", (source_id,)
+                        """
+                        UPDATE intel_sources
+                        SET deleted_at = ?, enabled = 0, updated_at = ?
+                        WHERE source_id = ?
+                        """,
+                        (now, now, source_id),
                     )
                     return dict(row)
         except sqlite3.DatabaseError as e:
@@ -579,6 +626,7 @@ def latest_source_run(
 ITEM_STATE_ON_LIST = "ON_LIST"
 ITEM_STATE_OFF_LIST = "OFF_LIST"
 ITEM_STATE_UNKNOWN = "UNKNOWN"
+ITEM_STATE_DISABLED = "DISABLED"
 ITEM_STATE_NO_RANK_SEMANTICS = "NO_RANK_SEMANTICS"
 
 
@@ -586,12 +634,15 @@ def get_item_rank_state(
     item_id: int,
     db_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """推导条目的当前排名状态（Wave 1 off-list 语义的唯一权威读法）。
+    """推导条目的当前排名状态（Wave 1 off-list / disabled 语义的唯一权威读法）。
 
     - 无排名语义来源（RSS）→ NO_RANK_SEMANTICS，rank 恒 None；
+    - 来源已停用 / 已删除（enabled=false 或 deleted_at 非空）→ DISABLED；保留末次 rank 供审计，但不当实时在榜；
+    - 来源重新启用后尚未完成新一次成功抓取 → UNKNOWN，绝不拿旧 run 伪造在榜；
     - 最近一次「来源级 run」失败（或尚无 run）→ UNKNOWN：失败绝不当掉榜；
     - 该 run 抓取成功且条目未出现 → OFF_LIST（不写 rank=0，rank 保持最后真实值）；
     - 该 run 抓取成功且条目出现 → ON_LIST，rank 为该 run 观测到的真实排名；
+    - 排名身份以 SOURCE + ITEM 严格隔离，绝不跨平台串联历史；
     - ``previous_rank`` / ``rank_delta`` 取相邻两次真实观测（delta 正数 = 排名上升）。
     """
     path = Path(db_path) if db_path else get_default_db_path()
@@ -603,7 +654,8 @@ def get_item_rank_state(
                     """
                     SELECT i.item_id, i.source_id, i.first_seen_at, i.last_seen_at,
                            i.observation_count, s.has_real_rank, s.source_type,
-                           s.name AS source_name
+                           s.name AS source_name, s.enabled, s.deleted_at, s.re_enabled_at,
+                           s.re_enabled_after_run_id
                     FROM intel_items i
                     LEFT JOIN intel_sources s ON s.source_id = i.source_id
                     WHERE i.item_id = ?
@@ -613,20 +665,22 @@ def get_item_rank_state(
                 if item is None:
                     return {}
                 has_real_rank = bool(item["has_real_rank"])
+                source_id = str(item["source_id"])
+                # 严格按 (item_id, source_id) 双重限定，杜绝跨平台 rank 污染
                 observations = [
                     {"observed_at": r["observed_at"], "rank": int(r["rank"])}
                     for r in conn.execute(
                         """
                         SELECT observed_at, rank FROM intel_observations
-                        WHERE item_id = ? AND rank IS NOT NULL
+                        WHERE item_id = ? AND source_id = ? AND rank IS NOT NULL
                         ORDER BY observed_at ASC, obs_id ASC
                         """,
-                        (item_id,),
+                        (item_id, source_id),
                     ).fetchall()
                 ]
                 result: dict[str, Any] = {
                     "item_id": int(item["item_id"]),
-                    "source_id": item["source_id"],
+                    "source_id": source_id,
                     "source_name": item["source_name"],
                     "source_type": item["source_type"],
                     "has_real_rank": has_real_rank,
@@ -635,6 +689,40 @@ def get_item_rank_state(
                     "observation_count": int(item["observation_count"] or 0),
                     "observations": observations,
                 }
+
+                last_run_row = conn.execute(
+                    """
+                    SELECT sr.run_id, sr.status, sr.error_kind, r.started_at
+                    FROM intel_source_runs sr
+                    JOIN intel_fetch_runs r ON r.run_id = sr.run_id
+                    WHERE sr.source_id = ?
+                    ORDER BY sr.rowid DESC
+                    LIMIT 1
+                    """,
+                    (source_id,),
+                ).fetchone()
+                last_run = dict(last_run_row) if last_run_row else None
+                result["last_run_id"] = last_run["run_id"] if last_run else None
+
+                # 1. 停用 / 删除：状态必须显式降级为 DISABLED，绝不伪装为 ON_LIST / OFF_LIST
+                is_disabled = (
+                    item["enabled"] is None
+                    or not bool(item["enabled"])
+                    or item["deleted_at"] is not None
+                )
+                if is_disabled:
+                    result["current_state"] = ITEM_STATE_DISABLED
+                    result["current_rank"] = observations[-1]["rank"] if observations else None
+                    result["previous_rank"] = (
+                        observations[-2]["rank"] if len(observations) >= 2 else None
+                    )
+                    result["rank_delta"] = (
+                        result["previous_rank"] - result["current_rank"]
+                        if result["current_rank"] is not None and result["previous_rank"] is not None
+                        else None
+                    )
+                    return result
+
                 if not has_real_rank:
                     result["current_state"] = ITEM_STATE_NO_RANK_SEMANTICS
                     result["current_rank"] = None
@@ -643,17 +731,22 @@ def get_item_rank_state(
                     result["last_run_id"] = None
                     return result
 
-                last_run_row = conn.execute(
-                    """
-                    SELECT run_id, status, error_kind FROM intel_source_runs
-                    WHERE source_id = ?
-                    ORDER BY rowid DESC
-                    LIMIT 1
-                    """,
-                    (str(item["source_id"]),),
-                ).fetchone()
-                last_run = dict(last_run_row) if last_run_row else None
-                result["last_run_id"] = last_run["run_id"] if last_run else None
+                # 2. 重新启用：在新的成功抓取发生前，必须保持 UNKNOWN，不得由旧 run 恢复为 ON_LIST
+                re_after = item["re_enabled_after_run_id"]
+                if re_after is not None:
+                    if last_run is None or last_run["run_id"] == re_after:
+                        result["current_state"] = ITEM_STATE_UNKNOWN
+                        result["current_rank"] = observations[-1]["rank"] if observations else None
+                        result["previous_rank"] = (
+                            observations[-2]["rank"] if len(observations) >= 2 else None
+                        )
+                        result["rank_delta"] = (
+                            result["previous_rank"] - result["current_rank"]
+                            if result["current_rank"] is not None and result["previous_rank"] is not None
+                            else None
+                        )
+                        return result
+
                 last_successful = (
                     last_run is not None
                     and last_run["status"] in (SOURCE_RUN_OK, SOURCE_RUN_EMPTY)
@@ -662,7 +755,9 @@ def get_item_rank_state(
                     # 从未抓取成功，或最近一次失败：现状未知，保留最后真实排名
                     result["current_state"] = ITEM_STATE_UNKNOWN
                     result["current_rank"] = observations[-1]["rank"] if observations else None
-                    result["previous_rank"] = observations[-2]["rank"] if len(observations) >= 2 else None
+                    result["previous_rank"] = (
+                        observations[-2]["rank"] if len(observations) >= 2 else None
+                    )
                     result["rank_delta"] = (
                         result["previous_rank"] - result["current_rank"]
                         if result["current_rank"] is not None and result["previous_rank"] is not None
@@ -673,8 +768,8 @@ def get_item_rank_state(
                 present = False
                 if last_run is not None:
                     seen = conn.execute(
-                        "SELECT 1 FROM intel_observations WHERE item_id = ? AND run_id = ?",
-                        (item_id, last_run["run_id"]),
+                        "SELECT 1 FROM intel_observations WHERE item_id = ? AND source_id = ? AND run_id = ?",
+                        (item_id, source_id, last_run["run_id"]),
                     ).fetchone()
                     present = seen is not None
                 current_rank = None
@@ -682,10 +777,10 @@ def get_item_rank_state(
                     row = conn.execute(
                         """
                         SELECT rank FROM intel_observations
-                        WHERE item_id = ? AND run_id = ? AND rank IS NOT NULL
+                        WHERE item_id = ? AND source_id = ? AND run_id = ? AND rank IS NOT NULL
                         ORDER BY observed_at DESC, obs_id DESC LIMIT 1
                         """,
-                        (item_id, last_run["run_id"]),
+                        (item_id, source_id, last_run["run_id"]),
                     ).fetchone()
                     current_rank = int(row["rank"]) if row and row["rank"] is not None else None
                 previous_rank = observations[-2]["rank"] if len(observations) >= 2 else None
@@ -997,13 +1092,19 @@ def upsert_observation(
     title = str(item.get("title") or "")
     summary = item.get("summary") or ""
 
+    item_key = str(item.get("item_key") or "")
+    # 热榜条目排名身份严格以 SOURCE + ITEM 绑定，杜绝跨平台 rank 污染
+    if has_real_rank or source_id.startswith("hotlist-"):
+        if not item_key.startswith(f"{source_id}:"):
+            item_key = f"{source_id}:{item_key}"
+
     with _LOCK:
         try:
             with _connect(path) as conn:
                 with conn:
                     row = conn.execute(
                         "SELECT item_id, observation_count FROM intel_items WHERE item_key = ?",
-                        (item["item_key"],),
+                        (item_key,),
                     ).fetchone()
                     if row is None:
                         cursor = conn.execute(
@@ -1015,9 +1116,9 @@ def upsert_observation(
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                             """,
                             (
-                                item["item_key"],
-                                item["canonical_url"],
-                                item["url"],
+                                item_key,
+                                item.get("canonical_url") or item.get("url") or "",
+                                item.get("url") or item.get("canonical_url") or "",
                                 title,
                                 item["title_key"],
                                 summary,

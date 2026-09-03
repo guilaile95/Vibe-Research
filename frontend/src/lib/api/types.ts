@@ -2967,7 +2967,7 @@ export interface NativeIntelRefreshResult {
 // TREND-PARITY Wave 1: Hotlist, Rank History & Source Registry
 // ---------------------------------------------------------------------------
 
-export type NativeIntelRankState = "ON_LIST" | "OFF_LIST" | "UNKNOWN" | "NO_RANK_SEMANTICS";
+export type NativeIntelRankState = "ON_LIST" | "OFF_LIST" | "UNKNOWN" | "DISABLED" | "NO_RANK_SEMANTICS";
 
 export interface NativeIntelHotlistItem {
   item_id: number;
@@ -3070,4 +3070,3 @@ export interface UpdateSourceInput {
   enabled?: boolean;
   name?: string;
 }
-

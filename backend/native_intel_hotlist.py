@@ -120,6 +120,9 @@ def fetch_hotlist_items(
     platform = platform_of(url)
     if not platform:
         return [], store.ERROR_KIND_PARSE, "HotlistPlatformMissing"
+    source_id = str(source.get("source_id") or "")
+    if not source_id:
+        source_id = f"hotlist-{platform}"
     expected_domain = _PROVIDERS.get(platform, "")
     if not expected_domain:
         # 未知平台：fail closed，不把它当空榜单
@@ -156,10 +159,12 @@ def fetch_hotlist_items(
         blob = title.lower()
         if any(keyword in blob for keyword in redline):
             continue
+        base_key = canonical or f"title:{newsradar._normalize_title(title)}"
         items.append(
             {
-                # 热榜条目没有可靠发布时间：published 恒未知，绝不伪造
-                "item_key": canonical or f"title:{newsradar._normalize_title(title)}",
+                # 热榜条目没有可靠发布时间：published 恒未知，绝不伪造；
+                # 排名身份以 SOURCE + ITEM 严格限定（hotlist-<platform>:...），杜绝跨平台污染
+                "item_key": f"{source_id}:{base_key}",
                 "canonical_url": canonical or url_value,
                 "url": url_value or canonical,
                 "title": title,

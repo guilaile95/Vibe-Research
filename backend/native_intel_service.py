@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Callable
+import uuid
 
 import native_intel_store as store
 
@@ -1078,7 +1079,7 @@ def create_user_source(payload: dict[str, Any], path: str | None = None) -> dict
         raise ValueError("url 必须是 http(s) 地址")
     if len(hint) > 20:
         raise ValueError("hint 不超过 20 字符")
-    source_id = f"user-{_slug(name)}"
+    source_id = f"user-rss-{uuid.uuid4().hex[:12]}"
     try:
         row = store.insert_user_source(
             source_id=source_id, name=name, url=url, hint=hint, enabled=enabled, db_path=path

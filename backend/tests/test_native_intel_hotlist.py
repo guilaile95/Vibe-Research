@@ -412,7 +412,7 @@ def test_hotlist_provider_unit_behaviour(monkeypatch) -> None:
     # 无 URL 条目保留（rank 是热榜的核心事实），item_key 回退标题归一
     assert len(items) == 2
     assert items[0]["rank"] == 1 and items[0]["url"]
-    assert items[1]["rank"] == 2 and items[1]["item_key"].startswith("title:")
+    assert items[1]["rank"] == 2 and items[1]["item_key"].startswith("hotlist-fixture:title:")
     assert items[0]["published_at"] is None  # 绝不伪造发布时间
 
     # 未知平台 fail closed
@@ -480,3 +480,246 @@ def test_rank_history_api_routes(tmp_path: Path, monkeypatch) -> None:
         json={"name": "API RSS", "url": "https://example.test/api.xml"},
     )
     assert dup.status_code == 409
+
+
+def test_cross_source_same_item_rank_isolation(tmp_path: Path) -> None:
+    """A. P0 — 同一新闻在财联社与华尔街见闻同时出现，排名轨迹必须严格按平台隔离。
+
+    Round 1: CLS rank=3, WSCN rank=10
+    Round 2: CLS rank=1, WSCN rank=7
+    证明：
+    - CLS history = [3, 1], delta = +2
+    - WSCN history = [10, 7], delta = +3
+    - 同一 canonical_url 形成两个独立 hotlist item
+    - CLS source_id 永远不会读取 WSCN rank，反之亦然。
+    """
+    path = tmp_path / "native-intel.sqlite3"
+    cls_src = {
+        "source_id": "hotlist-cls-hot",
+        "name": "财联社热门",
+        "hint": "macro",
+        "url": hotlist.build_source_url("cls-hot"),
+        "source_type": "hotlist",
+        "has_real_rank": True,
+    }
+    wscn_src = {
+        "source_id": "hotlist-wallstreetcn-hot",
+        "name": "华尔街见闻",
+        "hint": "macro",
+        "url": hotlist.build_source_url("wallstreetcn-hot"),
+        "source_type": "hotlist",
+        "has_real_rank": True,
+    }
+    canonical_shared_url = "https://example.com/breaking-news-x"
+    news_title = "新闻 X"
+
+    class MultiSourceRoundFetcher:
+        def __init__(self):
+            self.round = 1
+
+        def __call__(self, source, *, timeout, redline, **_kwargs):
+            src_id = source["source_id"]
+            if self.round == 1:
+                rank = 3 if src_id == "hotlist-cls-hot" else 10
+            else:
+                rank = 1 if src_id == "hotlist-cls-hot" else 7
+            return [
+                {
+                    "item_key": f"{src_id}:{canonical_shared_url}",
+                    "canonical_url": canonical_shared_url,
+                    "url": canonical_shared_url,
+                    "title": news_title,
+                    "title_key": news_title,
+                    "summary": "",
+                    "hint": "macro",
+                    "published_at": None,
+                    "published_ts": 0,
+                    "rank": rank,
+                }
+            ], None, None
+
+    fetcher = MultiSourceRoundFetcher()
+    reg = {
+        "sources": [cls_src, wscn_src],
+        "registry_version": "multi-test",
+        "redline": [],
+        "recent_days": 7,
+        "per_source": 6,
+    }
+
+    # Round 1
+    fetcher.round = 1
+    service.run_fetch(
+        "test", str(path), registry=reg, sources_override=[cls_src, wscn_src], hotlist_fetcher=fetcher
+    )
+    board1 = service.hotlist_board(str(path))
+    cls_item_1 = next(it for it in board1["items"] if it["source_id"] == "hotlist-cls-hot")
+    wscn_item_1 = next(it for it in board1["items"] if it["source_id"] == "hotlist-wallstreetcn-hot")
+    assert cls_item_1["item_id"] != wscn_item_1["item_id"]
+    assert cls_item_1["canonical_url"] == wscn_item_1["canonical_url"] == canonical_shared_url
+    assert cls_item_1["rank"] == 3
+    assert wscn_item_1["rank"] == 10
+
+    # Round 2
+    fetcher.round = 2
+    service.run_fetch(
+        "test", str(path), registry=reg, sources_override=[cls_src, wscn_src], hotlist_fetcher=fetcher
+    )
+
+    # 验证 CLS
+    cls_history = service.item_rank_history(cls_item_1["item_id"], str(path))
+    assert cls_history is not None
+    assert cls_history["source_id"] == "hotlist-cls-hot"
+    assert [o["rank"] for o in cls_history["observations"]] == [3, 1]
+    assert cls_history["current_rank"] == 1
+    assert cls_history["previous_rank"] == 3
+    assert cls_history["rank_delta"] == 2  # 3 - 1 = +2
+
+    # 验证 WSCN
+    wscn_history = service.item_rank_history(wscn_item_1["item_id"], str(path))
+    assert wscn_history is not None
+    assert wscn_history["source_id"] == "hotlist-wallstreetcn-hot"
+    assert [o["rank"] for o in wscn_history["observations"]] == [10, 7]
+    assert wscn_history["current_rank"] == 7
+    assert wscn_history["previous_rank"] == 10
+    assert wscn_history["rank_delta"] == 3  # 10 - 7 = +3
+
+    # CLS 绝对不包含 WSCN 的排名点，反之亦然
+    assert 10 not in [o["rank"] for o in cls_history["observations"]]
+    assert 7 not in [o["rank"] for o in cls_history["observations"]]
+    assert 3 not in [o["rank"] for o in wscn_history["observations"]]
+    assert 1 not in [o["rank"] for o in wscn_history["observations"]]
+
+
+def test_disabled_source_state_and_reenable(tmp_path: Path) -> None:
+    """B. 停用来源显式降级为 DISABLED；重启用在完成新抓取前不得直接伪造 ON_LIST。"""
+    path = tmp_path / "native-intel.sqlite3"
+    fetcher = _RoundFetcher([[("新闻 A", 3)], [("新闻 A", 1)]])
+    service.run_fetch(
+        "test",
+        str(path),
+        registry=_registry(),
+        sources_override=[_hot_source()],
+        hotlist_fetcher=fetcher,
+    )
+    board = service.hotlist_board(str(path))
+    item = _item_by_title(board, "新闻 A")
+    assert item["current_state"] == store.ITEM_STATE_ON_LIST
+    assert item["rank"] == 3
+
+    # 停用来源
+    service.update_source("hotlist-fixture", {"enabled": False}, str(path))
+    state_disabled = store.get_item_rank_state(item["item_id"], path)
+    assert state_disabled["current_state"] == store.ITEM_STATE_DISABLED
+    # 保留末次真实排名供审计
+    assert state_disabled["current_rank"] == 3
+    assert state_disabled["current_state"] != store.ITEM_STATE_ON_LIST
+    assert state_disabled["current_state"] != store.ITEM_STATE_OFF_LIST
+
+    # 重新启用来源（尚未触发新抓取）
+    service.update_source("hotlist-fixture", {"enabled": True}, str(path))
+    state_re_enabled = store.get_item_rank_state(item["item_id"], path)
+    # 不得直接根据旧 run 恢复成实时 ON_LIST，必须保持 UNKNOWN
+    assert state_re_enabled["current_state"] == store.ITEM_STATE_UNKNOWN
+    assert state_re_enabled["current_state"] != store.ITEM_STATE_ON_LIST
+
+    # 执行新一轮抓取
+    service.run_fetch(
+        "test",
+        str(path),
+        registry=_registry(),
+        sources_override=[_hot_source()],
+        hotlist_fetcher=fetcher,
+    )
+    state_after_run = store.get_item_rank_state(item["item_id"], path)
+    assert state_after_run["current_state"] == store.ITEM_STATE_ON_LIST
+    assert state_after_run["current_rank"] == 1
+    assert state_after_run["previous_rank"] == 3
+    assert state_after_run["rank_delta"] == 2
+
+
+def test_user_source_uuid_chinese_collision_soft_delete(tmp_path: Path) -> None:
+    """E. 中文名称 source_id 不冲突 + 软删除保留历史 provenance。"""
+    path = tmp_path / "native-intel.sqlite3"
+    store.initialize_store(path)
+
+    # 1. 创建两个中文名称 user RSS
+    src_a = service.create_user_source(
+        {"name": "半导体观察", "url": "https://example.test/semi.xml", "hint": "tech"},
+        str(path),
+    )
+    src_b = service.create_user_source(
+        {"name": "液冷情报", "url": "https://example.test/liquid.xml", "hint": "tech"},
+        str(path),
+    )
+
+    # 2. source_id 解耦为 UUID，不冲突且不退化为 user-src
+    assert src_a["source_id"].startswith("user-rss-")
+    assert src_b["source_id"].startswith("user-rss-")
+    assert src_a["source_id"] != src_b["source_id"]
+    assert src_a["source_id"] != "user-src"
+    assert src_b["source_id"] != "user-src"
+
+    # 3. 在 A 下写入历史条目与观测
+    store.start_run("run-a-1", "test", 1, path)
+    item_id, is_new = store.upsert_observation(
+        "run-a-1",
+        src_a["source_id"],
+        {
+            "item_key": "https://example.test/semi/101",
+            "canonical_url": "https://example.test/semi/101",
+            "url": "https://example.test/semi/101",
+            "title": "半导体最新动态",
+            "title_key": "半导体最新动态",
+            "summary": "半导体产业链技术突破。",
+            "hint": "tech",
+            "published_at": None,
+            "published_ts": 0,
+            "rank": None,
+        },
+        observed_at=store.utc_now_iso(),
+        has_real_rank=False,
+        db_path=path,
+    )
+    store.finish_run(
+        "run-a-1",
+        status=store.RUN_STATUS_OK,
+        source_ok=1,
+        source_failed=0,
+        item_seen=1,
+        item_new=1,
+        db_path=path,
+    )
+
+    # 4. 删除 A
+    deleted = service.delete_source(src_a["source_id"], str(path))
+    assert deleted["source_id"] == src_a["source_id"]
+
+    # 5. A 不再参与 fetch (enabled_only=True)
+    fetch_sources = store.list_sources(path, enabled_only=True)
+    assert src_a["source_id"] not in {s["source_id"] for s in fetch_sources}
+
+    # 6. active source list 不再出现 A
+    active_sources = service.sources_list(str(path))
+    assert src_a["source_id"] not in {s["source_id"] for s in active_sources["sources"]}
+
+    # 7. A 历史 item 仍能读取原 source_name / source_type provenance
+    item_state = store.get_item_rank_state(item_id, path)
+    assert item_state["source_name"] == "半导体观察"
+    assert item_state["source_type"] == "rss"
+    assert item_state["current_state"] == store.ITEM_STATE_DISABLED
+
+    # 8. B 完全不受影响
+    b_source = store.get_source(src_b["source_id"], path)
+    assert b_source is not None
+    assert b_source["name"] == "液冷情报"
+    assert b_source["enabled"] == 1
+    assert src_b["source_id"] in {s["source_id"] for s in service.sources_list(str(path))["sources"]}
+
+    # 9. 系统源删除仍然 409
+    service.sync_registry(str(path))
+    try:
+        service.delete_source("hotlist-cls-hot", str(path))
+        raise AssertionError("系统源删除必须被阻止")
+    except store.SystemSourceDeleteBlocked:
+        pass
