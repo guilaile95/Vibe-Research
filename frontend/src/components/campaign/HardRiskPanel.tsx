@@ -59,7 +59,7 @@ export function HardRiskPanel({ item }: { item: DecisionInboxCampaignItem }) {
       data-hard-risk-campaign={item.campaign_id}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground">Hard Risk</span>
+        <span className="text-xs text-muted-foreground">硬风险</span>
         <span
           className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium ${BADGE_CLASS[view.tone]}`}
         >
@@ -94,7 +94,7 @@ export function HardRiskPanel({ item }: { item: DecisionInboxCampaignItem }) {
 
       {view.authorityRefs.length > 0 && (
         <div className="text-xs text-muted-foreground">
-          <p className="text-[11px]">Authority 引用：</p>
+          <p className="text-[11px]">技术依据：</p>
           <ul className="mt-0.5 space-y-0.5 font-mono text-[11px]">
             {view.authorityRefs.map((ref) => (
               <li key={ref}>{ref}</li>
@@ -106,7 +106,7 @@ export function HardRiskPanel({ item }: { item: DecisionInboxCampaignItem }) {
       {view.tone === "safe" && (
         <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
           <Info className="h-3 w-3" aria-hidden="true" />
-          显示为安全仅因为 backend 明确给出 positive-proof CLEAR。
+          只有系统取得明确的正面证明时，才会显示为安全。
         </p>
       )}
     </section>

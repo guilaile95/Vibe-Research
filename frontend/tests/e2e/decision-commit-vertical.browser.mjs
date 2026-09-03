@@ -333,40 +333,40 @@ async function run() {
       }
     });
     await page.goto(`${frontend}/campaigns/${campaign.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
-    await page.getByRole("heading", { name: "Formal Decision Review" }).waitFor();
+    await page.getByRole("heading", { name: "正式决策" }).waitFor();
     if (process.env.DF2_FORCE_CONTEXT_FALLBACK === "1") {
       await page.locator('[data-horizon-source="MANUAL_FALLBACK"]').waitFor({ timeout: 30000 });
       assert.equal(authorityFailure, true, "fallback mode must intercept an authority request");
-      assert.equal(await page.getByLabel("Strategy horizon").inputValue(), "", "fallback must not guess horizon");
-      await page.getByLabel("Strategy horizon").fill("10 至 30 交易日");
+      assert.equal(await page.getByLabel("这次判断关注的时间范围").inputValue(), "", "fallback must not guess horizon");
+      await page.getByLabel("这次判断关注的时间范围").fill("10 至 30 交易日");
     } else {
       await page.locator('[data-horizon-source="CURRENT_THESIS"]').waitFor({ timeout: 30000 });
-      assert.equal(await page.getByLabel("Strategy horizon").inputValue(), "10–30 个交易日");
+      assert.equal(await page.getByLabel("这次判断关注的时间范围").inputValue(), "10–30 个交易日");
     }
     // P1-DF3：结构化 review boundary——用户显式选择本地时间，页面展示
     // 解析时区与最终 canonical ISO；断言 canonical 确实等于所选时刻。
-    await page.getByLabel("Review by").fill("2026-08-30T10:00");
+    await page.getByLabel("下次必须重新检查的时间").fill("2026-08-30T10:00");
     const expectedCanonicalIso = await page.evaluate(() => new Date("2026-08-30T10:00").toISOString());
     const displayedCanonical = (await page.locator("[data-review-by-canonical]").innerText()).trim();
     assert.equal(displayedCanonical, expectedCanonicalIso, "displayed canonical ISO must equal the user-selected local time");
     assert.match(displayedCanonical, /Z$/);
     const tzText = await page.locator("[data-review-by-tz]").innerText();
     assert.match(tzText, /解析时区/);
-    await page.getByLabel("Key assumptions").fill("流动性保持稳定");
-    await page.getByLabel("Event invalidation conditions").fill("业绩发生重大反转");
+    await page.getByLabel("这个判断成立依赖什么").fill("流动性保持稳定");
+    await page.getByLabel("出现什么情况说明判断错了").fill("业绩发生重大反转");
     // P1-DF1：三视图结构化表单——普通用户零 JSON 完成输入
-    await page.getByLabel("Asset stance").selectOption("SUPPORT");
-    await page.getByLabel("Asset note").fill("高端白酒需求稳定");
-    await page.getByLabel("Trade stance").selectOption("WAIT");
-    await page.getByLabel("Trade note").fill("等待缩量回调再入场");
-    await page.getByLabel("Portfolio constraint").fill("单笔风险不超过组合 2%");
+    await page.getByLabel("对这只股票的判断").selectOption("SUPPORT");
+    await page.getByLabel("股票判断说明").fill("高端白酒需求稳定");
+    await page.getByLabel("当前操作倾向").selectOption("WAIT");
+    await page.getByLabel("操作倾向说明").fill("等待缩量回调再入场");
+    await page.getByLabel("组合层面的限制").fill("单笔风险不超过组合 2%");
     const previewResponsePromise = page.waitForResponse((response) => (
       response.request().method() === "POST"
       && response.url().includes(
         `/api/campaigns/${campaign.campaign_id}/decision-proposal/preview`,
       )
     ), { timeout: 180000 });
-    await page.getByRole("button", { name: "Preview Proposal" }).click();
+    await page.getByRole("button", { name: "预览决策草案" }).click();
     const previewResponse = await previewResponsePromise;
     assert.equal(previewResponse.ok(), true, `Preview failed: ${await previewResponse.text()}`);
     await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
@@ -383,9 +383,9 @@ async function run() {
     assert.ok(previewCriticalData.evaluation, "Preview must expose Critical Data evaluation");
     assert.notEqual(previewCriticalData.evaluation, "HEALTHY", "Critical Data must use authority evaluation vocabulary");
     assert.equal(existsSync(join(tempDataDir, "frozen_decisions.sqlite3")), false, "Preview must not create Frozen DB");
-    const freeze = page.getByRole("button", { name: "Freeze Formal Decision" });
+    const freeze = page.getByRole("button", { name: "确认并冻结正式决策" });
     assert.equal(await freeze.isEnabled(), false, "Freeze must be closed before checkbox");
-    await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
+    await page.getByRole("checkbox", { name: /我已检查股票判断、操作倾向、组合限制/ }).check();
     assert.equal(await freeze.isEnabled(), true);
     await freeze.click();
     await page.waitForFunction(() => document.querySelector('[data-formal-decision-evaluation]') !== null || document.querySelector('[role="alert"]') !== null, null, { timeout: 180000 });
@@ -400,7 +400,7 @@ async function run() {
     } else {
       assert.equal(await committedSuccess.count(), 0, `${readbackVariant} must not render committed success UI`);
       const readbackError = await page.locator('[role="alert"]').innerText();
-      assert.match(readbackError, /COMMITTED_DECISION_READ_ERROR/);
+      assert.match(readbackError, /正式决策已保存，但/);
     }
     const reread = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed/${committedDecisionId}`);
     assert.equal(reread.formal_decision.evaluation, "EVALUATED");
@@ -435,7 +435,7 @@ async function run() {
       item.last_frozen_decision.previous_next_best_action,
     );
     await actionPanel.getByText(committedDecisionId, { exact: true }).waitFor();
-    await actionPanel.getByText("当前 Sell Review（只读）", { exact: true }).waitFor();
+    await actionPanel.getByText("当前卖出复核（只读）", { exact: true }).waitFor();
     assert.ok(item.sell_engine, "Decision Inbox backend must contain the Sell Engine projection");
     assert.equal(
       await actionPanel.locator("[data-sell-engine-evaluation]").getAttribute("data-sell-engine-evaluation"),
@@ -453,7 +453,7 @@ async function run() {
       "Frozen Decision must never be presented as CURRENT_RECOMMENDATION",
     );
     assert.equal(
-      await actionPanel.getByRole("link", { name: "重新形成 Formal Decision →" }).getAttribute("href"),
+      await actionPanel.getByRole("link", { name: "重新形成正式决策 →" }).getAttribute("href"),
       `/campaigns/${campaign.campaign_id}/decision-proposal`,
     );
     assert.equal(

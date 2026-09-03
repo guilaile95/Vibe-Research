@@ -108,8 +108,8 @@ function base(
 function unavailableView(input: HardRiskInput): HardRiskViewModel {
   return base(input, {
     tone: "muted",
-    statusLabel: "Hard Risk 状态未知",
-    description: "Hard Risk 评估结果缺失或不一致（缺少评估状态 / 专属权威引用 / 专属原因码），不能视为安全。",
+    statusLabel: "硬风险状态未知",
+    description: "硬风险评估结果缺失或不一致，不能视为安全。",
   });
 }
 
@@ -143,8 +143,8 @@ export function hardRiskDisplay(input: HardRiskInput): HardRiskViewModel {
     case "CLEAR": {
       return base(input, {
         tone: "safe",
-        statusLabel: "已确认无 Hard Risk",
-        description: "后端已给出 positive-proof CLEAR，当前无已确认的 Hard Risk。这不免除后续重新评估。",
+        statusLabel: "已确认无硬风险",
+        description: "当前没有已确认的硬风险，但后续仍需按新的事实重新评估。",
         showSafeGreen: true,
       });
     }
@@ -153,30 +153,30 @@ export function hardRiskDisplay(input: HardRiskInput): HardRiskViewModel {
       // 绝不表达任何自动交易指令（禁止出现卖出 / 退出 / 清仓 / EXIT / SELL）。
       return base(input, {
         tone: "danger",
-        statusLabel: "已确认 Hard Risk",
-        description: "需要重新审查 Decision / Action Envelope。Hard Risk 只改变审查与决策边界，不构成任何自动交易动作。",
+        statusLabel: "已确认硬风险",
+        description: "需要重新审查正式决策和可执行操作。硬风险只改变审查与决策边界，不构成任何自动交易动作。",
       });
     }
     case "UNKNOWN": {
       if (evaluation === "ERROR") {
         return base(input, {
           tone: "unknown",
-          statusLabel: "Hard Risk 评估失败",
-          description: "Hard Risk 评估失败或不可用，风险状态无法确定。请修复数据后重新评估，不能视为安全。",
-          evaluationLabel: "ERROR",
+          statusLabel: "硬风险读取失败",
+          description: "硬风险评估失败或不可用，风险状态无法确定。请修复数据后重新评估，不能视为安全。",
+          evaluationLabel: "读取失败",
         });
       }
       return base(input, {
         tone: "unknown",
-        statusLabel: "Hard Risk 状态未知",
+        statusLabel: "硬风险状态未知",
         description: "风险状态无法确定，不能视为安全。",
       });
     }
     case "NOT_EVALUATED": {
       return base(input, {
         tone: "muted",
-        statusLabel: "尚未完成 Hard Risk 评估",
-        description: "尚未完成 Hard Risk 评估，不能视为安全。",
+        statusLabel: "尚未完成硬风险评估",
+        description: "尚未完成硬风险评估，不能视为安全。",
       });
     }
   }

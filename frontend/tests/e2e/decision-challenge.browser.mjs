@@ -172,13 +172,13 @@ const draft = {
 };
 
 async function fillProposalDraft(page) {
-  await page.getByLabel("Review by").fill(draft.reviewBy);
-  await page.getByLabel("Strategy horizon").fill(draft.horizon);
-  await page.getByLabel("Key assumptions").fill(draft.assumptions);
-  await page.getByLabel("Event invalidation conditions").fill(draft.invalidations);
+  await page.getByLabel("下次必须重新检查的时间").fill(draft.reviewBy);
+  await page.getByLabel("这次判断关注的时间范围").fill(draft.horizon);
+  await page.getByLabel("这个判断成立依赖什么").fill(draft.assumptions);
+  await page.getByLabel("出现什么情况说明判断错了").fill(draft.invalidations);
   await page.waitForFunction((expected) => {
-    const review = document.querySelector('[aria-label="Review by"]');
-    const horizon = document.querySelector('[aria-label="Strategy horizon"]');
+    const review = document.querySelector('[aria-label="下次必须重新检查的时间"]');
+    const horizon = document.querySelector('[aria-label="这次判断关注的时间范围"]');
     return Boolean(
       review && review.value === expected.reviewBy
       && horizon && horizon.value === expected.horizon
@@ -286,7 +286,7 @@ async function run() {
     });
 
     await page.goto(`${frontend}/campaigns/${withChallenge.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
-    await page.getByRole("heading", { name: "Formal Decision Review" }).waitFor();
+    await page.getByRole("heading", { name: "正式决策" }).waitFor();
     await page.locator(`[data-decision-proposal-page="${withChallenge.campaign_id}"]`).waitFor();
     await fillProposalDraft(page);
     const previewResponsePromise = page.waitForResponse((response) => (
@@ -295,7 +295,7 @@ async function run() {
         `/api/campaigns/${withChallenge.campaign_id}/decision-proposal/preview`
       )
     ), { timeout: 180000 });
-    await page.getByRole("button", { name: "Preview Proposal" }).click();
+    await page.getByRole("button", { name: "预览决策草案" }).click();
     const previewResponse = await previewResponsePromise;
     const previewBody = await previewResponse.text();
     if (!previewResponse.ok()) {
@@ -309,14 +309,14 @@ async function run() {
     assert.equal(existsSync(join(tempDataDir, "decision_challenges.sqlite3")), false, "Preview must not write Challenge DB");
     assert.equal(existsSync(join(tempDataDir, "frozen_decisions.sqlite3")), false, "Preview must not write Frozen DB");
 
-    await page.getByRole("textbox", { name: "Strongest supporting evidence" }).fill("渠道与报表支持当前等待");
-    await page.getByRole("textbox", { name: "Strongest opposing evidence" }).fill("估值不便宜");
-    await page.getByLabel("Pre-mortem status", { exact: true }).selectOption("UNKNOWN");
-    await page.getByRole("textbox", { name: "Pre-mortem" }).fill("还没有足够的失效路径样本");
-    await page.getByRole("textbox", { name: "Invalidation facts" }).fill("连续两个季度毛利率下修则失效");
-    const finalize = page.getByRole("button", { name: "Finalize Decision Challenge" });
+    await page.getByRole("textbox", { name: "最有力的支持证据" }).fill("渠道与报表支持当前等待");
+    await page.getByRole("textbox", { name: "最有力的反对证据" }).fill("估值不便宜");
+    await page.getByLabel("如果判断失败，最可能的原因 status", { exact: true }).selectOption("UNKNOWN");
+    await page.getByRole("textbox", { name: "如果判断失败，最可能的原因" }).fill("还没有足够的失效路径样本");
+    await page.getByRole("textbox", { name: "哪些事实会推翻判断" }).fill("连续两个季度毛利率下修则失效");
+    const finalize = page.getByRole("button", { name: "完成决策挑战" });
     assert.equal(await finalize.isEnabled(), false, "Finalize must require explicit confirmation");
-    await page.getByRole("checkbox", { name: /我已显式填写四个挑战维度/ }).check();
+    await page.getByRole("checkbox", { name: /我已明确填写四个挑战问题/ }).check();
     assert.equal(await finalize.isEnabled(), true);
     const finalizeResponsePromise = page.waitForResponse((response) => (
       response.request().method() === "POST"
@@ -345,8 +345,8 @@ async function run() {
       response.request().method() === "POST"
       && response.url().includes(`/api/campaigns/${withChallenge.campaign_id}/decision-proposal/commit`)
     ));
-    await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
-    await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
+    await page.getByRole("checkbox", { name: /我已检查股票判断、操作倾向、组合限制/ }).check();
+    await page.getByRole("button", { name: "确认并冻结正式决策" }).click();
     const commitResponse = await commitResponsePromise;
     const commitBody = await commitResponse.json();
     if (!commitResponse.ok()) {
@@ -406,10 +406,10 @@ async function run() {
     const withoutChallenge = await createFrozenCurrentThesis(backend, env, "DCH1 without challenge");
     await page.goto(`${frontend}/campaigns/${withoutChallenge.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
     await fillProposalDraft(page);
-    await page.getByRole("button", { name: "Preview Proposal" }).click();
+    await page.getByRole("button", { name: "预览决策草案" }).click();
     await page.locator('[data-challenge-state="ABSENT"]').waitFor();
-    await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
-    await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
+    await page.getByRole("checkbox", { name: /我已检查股票判断、操作倾向、组合限制/ }).check();
+    await page.getByRole("button", { name: "确认并冻结正式决策" }).click();
     await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor({ timeout: 180000 });
     const plainLine = await page.locator("[data-formal-decision-evaluation] p.font-mono").innerText();
     const plainId = plainLine.replace(/^decision_id：/, "").trim();
@@ -425,14 +425,14 @@ async function run() {
     challengeReadFailureStatus = 500;
     await page.goto(`${frontend}/campaigns/${readErrorCampaign.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
     await fillProposalDraft(page);
-    await page.getByRole("button", { name: "Preview Proposal" }).click();
+    await page.getByRole("button", { name: "预览决策草案" }).click();
     const challengeErrorSection = page.locator('[data-challenge-state="ERROR"]');
     await challengeErrorSection.waitFor();
-    await challengeErrorSection.getByText("CHALLENGE_READ_ERROR", { exact: false }).waitFor();
-    assert.equal(await page.getByRole("button", { name: "Finalize Decision Challenge" }).isDisabled(), true);
+    await challengeErrorSection.getByText("决策挑战读取失败", { exact: false }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "完成决策挑战" }).isDisabled(), true);
     assert.equal(await page.getByRole("checkbox", { name: /Freeze 将绑定|未找到已 Finalize|Challenge 状态当前无法安全验证/ }).isDisabled(), true);
-    await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
-    assert.equal(await page.getByRole("button", { name: "Freeze Formal Decision" }).isDisabled(), true);
+    await page.getByRole("checkbox", { name: /我已检查股票判断、操作倾向、组合限制/ }).check();
+    assert.equal(await page.getByRole("button", { name: "确认并冻结正式决策" }).isDisabled(), true);
     assert.equal(await page.locator("[data-challenge-id]").getAttribute("data-challenge-id"), "");
     assert.equal(existsSync(join(tempDataDir, "frozen_decisions.sqlite3")), true, "prior freezes may exist, but error path adds no linkage");
 

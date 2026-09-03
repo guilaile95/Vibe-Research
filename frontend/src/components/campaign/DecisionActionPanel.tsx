@@ -2,6 +2,13 @@ import { Link } from "react-router-dom";
 import type { DecisionInboxCampaignItem } from "@/lib/api/types";
 import { presentFrozenDecision, presentSellEngine } from "@/lib/decisionActionView";
 
+function evaluationLabel(value: string | null | undefined): string {
+  if (value === "EVALUATED") return "已评估";
+  if (value === "UNKNOWN") return "信息不足";
+  if (value === "ERROR") return "读取失败";
+  return "尚未评估";
+}
+
 export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem }) {
   const frozen = presentFrozenDecision(item);
   const sell = presentSellEngine(item);
@@ -18,8 +25,8 @@ export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem 
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-medium">{frozen.title}</h3>
-          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-            {item.formal_decision_evaluation ?? "NOT_EVALUATED"}
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]" title={item.formal_decision_evaluation ?? "NOT_EVALUATED"}>
+            {evaluationLabel(item.formal_decision_evaluation)}
           </span>
         </div>
         <p className="text-base font-semibold" data-frozen-decision-action={frozen.action ?? ""}>
@@ -40,7 +47,7 @@ export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem 
           </div>
         ) : null}
         <p className="leading-5 text-muted-foreground">
-          这是用户已冻结的记录，不是 AI 动态生成的行动建议；只有 backend 在本次 snapshot 中评估为适用时才开放执行续接。
+          这是你已确认并冻结的记录，不是 AI 动态生成的行动建议；只有当前数据证明它仍适用时，才会开放后续操作。
         </p>
         <div className="flex flex-wrap gap-x-4 gap-y-2">
           {frozen.tradeHref ? (
@@ -64,9 +71,9 @@ export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem 
         data-sell-engine-evaluation={sell.evaluation}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-medium">当前 Sell Review（只读）</h3>
-          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-            {sell.evaluation}
+          <h3 className="font-medium">当前卖出复核（只读）</h3>
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]" title={sell.evaluation}>
+            {evaluationLabel(sell.evaluation)}
           </span>
         </div>
         <p className="text-base font-semibold">{sell.sellLabel}</p>
@@ -88,10 +95,10 @@ export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem 
           ) : null}
         </div>
         <p className="leading-5 text-muted-foreground">
-          Sell Review 只解释当前卖出侧压力，不会修改 Frozen Decision，也不会自动创建交易。
+          卖出复核只解释当前卖出侧压力，不会修改已确认决策，也不会自动创建交易。
         </p>
         <Link to={proposalHref} className="font-medium text-primary hover:underline">
-          重新形成 Formal Decision →
+          重新形成正式决策 →
         </Link>
       </div>
     </section>

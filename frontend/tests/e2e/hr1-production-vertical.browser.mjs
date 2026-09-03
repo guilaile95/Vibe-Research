@@ -329,7 +329,7 @@ async function runE2E() {
     await panelA.waitFor();
     assert.equal(await panelA.getAttribute("data-hard-risk-state"), "CONFIRMED");
     assert.equal(await panelA.getAttribute("data-hard-risk-safe"), "false");
-    await panelA.getByText("已确认 Hard Risk", { exact: false }).first().waitFor();
+    await panelA.getByText("已确认硬风险", { exact: false }).first().waitFor();
     // 展开 reason details 后断言专属 reason codes
     await panelA.getByText("评估说明", { exact: false }).click();
     await panelA.getByText("THESIS_CORE_FACT_DISPROVEN", { exact: false }).waitFor();
@@ -345,7 +345,7 @@ async function runE2E() {
     await panelB.waitFor();
     assert.equal(await panelB.getAttribute("data-hard-risk-state"), "UNKNOWN");
     assert.equal(await panelB.getAttribute("data-hard-risk-safe"), "false");
-    await panelB.getByText("Hard Risk 状态未知", { exact: false }).first().waitFor();
+    await panelB.getByText("硬风险状态未知", { exact: false }).first().waitFor();
 
     // sibling 隔离：A 面板不含 B 的 provenance，B 面板不含 A 的 provenance
     const panelBText = await panelB.innerText();
