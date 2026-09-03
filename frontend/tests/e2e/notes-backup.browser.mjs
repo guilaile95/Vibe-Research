@@ -87,7 +87,8 @@ try {
 
   browser = await chromium.launch({ headless: true, executablePath: findChromium() });
   const page = await browser.newPage();
-  await page.addInitScript(() => {
+  await page.goto(`${frontend}/notes`, { waitUntil: "networkidle" });
+  await page.evaluate(() => {
     localStorage.setItem("vr-notes", JSON.stringify([{
       id: "note-backup-e2e",
       kind: "今日要点",
@@ -99,8 +100,8 @@ try {
     localStorage.setItem("vr-access-key", "SECRET_ACCESS_KEY");
     localStorage.setItem("vr-askai-chat:test", "SECRET_CHAT_HISTORY");
   });
+  await page.reload({ waitUntil: "networkidle" });
 
-  await page.goto(`${frontend}/notes`, { waitUntil: "networkidle" });
   await page.getByText("研究记录只保存在当前浏览器中。", { exact: true }).waitFor();
   await page.getByText("备份恢复验证", { exact: true }).waitFor();
 
