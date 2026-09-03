@@ -389,7 +389,7 @@ async function runE2E() {
     assert.deepEqual(calls, { begin: 0, confirm: 0, freeze: 0, bind: 0 });
 
     await page.goto(`${frontendUrl}/decision-inbox`, { waitUntil: "networkidle" });
-    await thesisCard.getByRole("link", { name: "新建 Formal Thesis 草稿" }).click();
+    await thesisCard.getByRole("link", { name: "新建正式投资逻辑草稿" }).click();
     await page.getByRole("heading", { name: "新建投资逻辑" }).waitFor();
     assert.equal(await page.getByLabel("主体代码/标识 *").inputValue(), "600519");
     assert.equal(await page.getByLabel("策略").inputValue(), "SWING");
@@ -428,7 +428,7 @@ async function runE2E() {
     await page.getByRole("link", { name: "返回 Decision Inbox" }).click();
     await thesisCard.getByText("已绑定", { exact: true }).waitFor();
     await thesisCard.getByText("已冻结", { exact: false }).waitFor();
-    await thesisCard.getByText("Current 状态：STABLE", { exact: true }).waitFor();
+    await thesisCard.getByText("当前状态：STABLE", { exact: true }).waitFor();
     const reviewCta = thesisCard.getByTestId("formal-decision-review-cta");
     await reviewCta.waitFor();
     assert.equal(
@@ -491,7 +491,7 @@ async function runE2E() {
 
     projectionMode = "unknown";
     await page.reload({ waitUntil: "networkidle" });
-    await gatedThesisCard.getByText("Current 状态：UNKNOWN", { exact: true }).waitFor();
+    await gatedThesisCard.getByText("当前状态：UNKNOWN", { exact: true }).waitFor();
     assert.equal(await gatedThesisCard.getByTestId("formal-decision-review-cta").count(), 0);
 
     projectionMode = "error";
