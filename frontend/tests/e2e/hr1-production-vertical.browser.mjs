@@ -334,6 +334,7 @@ async function runE2E() {
     await panelA.getByText("评估说明", { exact: false }).click();
     await panelA.getByText("THESIS_CORE_FACT_DISPROVEN", { exact: false }).waitFor();
     // provenance 只来自 HR 专属 namespace（current_thesis:...）
+    await panelA.getByText("技术依据（", { exact: false }).click();
     await panelA.getByText(`current_thesis:${campaignA.campaign_id}:`, { exact: false }).waitFor();
     // 无 EXIT/SELL 文案
     const panelAText = await panelA.innerText();
