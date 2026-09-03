@@ -4,12 +4,12 @@
 > `sansan0/TrendRadar@8ee26026ba6c11dec41a95fb3895a7162876caa1`（v6.10.0）为参照，
 > 逐项记录 Vibe-Research Native Intel 的对齐状态。
 >
-> 规划路线：全量对齐 TrendRadar 功能，统一划分为 7 个规划波次（Wave 1 ~ Wave 7）。
-> 遵循 FULL_TRENDRADAR_FUNCTIONAL_PARITY 原则，完整枚举上游已核验的全部配置项与功能路径，
-> 不做单方面裁减或遗漏；后续波次均明确标记为 `PLANNED_WAVE_X`，循序渐进落地。
+> 规划路线：全量对齐 TrendRadar 功能，严格遵照 Owner 批准的波次路线图推进。
+> 遵循 FULL_TRENDRADAR_FUNCTIONAL_PARITY 原则，完整枚举上游已核验的全部配置项、抓取特性与功能路径，
+> 杜绝单方面裁减、隐匿或提前宣称 PARITY；后续波次均实事求是标记为 `PLANNED_WAVE_X`。
 >
 > 规则：
-> - 状态枚举：`PARITY`（已对齐并验证） / `PLANNED_WAVE_N`（规划波次中实现）；
+> - 状态枚举：`PARITY`（已在代码中完整实现并获自动化测试验证） / `PLANNED_WAVE_N`（规划波次中实现）；
 > - Vibe 实现为独立实现（Vibe-native），**不复制 TrendRadar GPL 代码**，不引入其
 >   runtime / MCP / Docker / package 依赖；
 > - 热榜数据来自第三方公开服务 NewsNow（`ourongxing/newsnow`，MIT 许可）的公共 HTTP API；
@@ -17,15 +17,16 @@
 >   经 2026-09-03 实测核验（cls-hot 13 条 / wallstreetcn-hot 10 条）。
 > - 本文件是规划与状态文档，不是 Engineering Truth；实现以代码与测试为准。
 
-## 7 个波次总览（Full Parity Roadmap）
+## 全量对齐波次总览（Full Parity Roadmap）
 
-- **Wave 1（当前波次）**：原生热榜基础设施（热榜抓取、双榜支持、排名历史、离榜检测、资讯源管理、数据时效真实性、E2E）
-- **Wave 2**：关键词与 AI 智能过滤体系对齐（标题+简介过滤、AI 相关性筛选、个人兴趣配置、标签自更新、黑白名单）
-- **Wave 3**：完整热榜源覆盖对齐（扩展剩余 9 个平台源，全量对齐）
-- **Wave 4**：聚合、报告与时间线对齐（三类报告模式、时间窗口预设、相似新闻聚类、生命周期与走势预测）
-- **Wave 5**：AI 分析与国际化（多模型摘要、实体提取、多语言翻译、情感分析、Agent MCP 综合查询）
-- **Wave 6**：多渠道通知与存储（9 类通知渠道推送、TXT/HTML 静态报告输出、S3 远端对象存储）
-- **Wave 7**：可视化、部署与自托管（WebUI/大屏、Docker/1Panel 一键部署）
+- **Wave 1（当前交付）**：原生热榜基础设施（热榜抓取、双榜支持、真实排名历史、掉榜与失败隔离语义、资讯源管理、数据时效 STALE 真实性、HTTP 状态 API、真浏览器 E2E）
+- **Wave 1B**：剩余 9 个热榜平台源覆盖对齐（扩展今日头条、百度、澎湃、B站、凤凰网、贴吧、微博、抖音、知乎）
+- **Wave 2**：关键词与 AI 智能过滤双轨体系（标题+简介过滤、filter.method = keyword / ai、AI 智能相关性打分、个人兴趣偏好配置 ai_interests、标签自更新 update_tags_prompt、黑白名单、多模式正则/通配符匹配、分类标签与平台分组）
+- **Wave 3**：抓取高级能力、新鲜度过滤与代理展示体系（RSS 全局与单源独立的 max_age_days 新鲜度过滤、Crawler / RSS HTTP/SOCKS5 代理支持、display.standalone 独立免过滤展示区、展示区域开关与排序控制）
+- **Wave 4**：聚合、三模报告与时间线走势对齐（三类报告输出模式 report.mode = current / daily / incremental、用户可配置关键词报告分组聚合、timeline.yaml 调度预设与时间切片、相似新闻聚类、单话题位次走势图、话题全生命周期跟踪、爆发异动突发检测、趋势预测分析、平台活跃度横向对比、关键词共现分析）
+- **Wave 5**：AI 深度分析、国际化与 Agent MCP 体系对齐（多模型智能摘要、实体提取、多语言热榜翻译、情感倾向分类、Agent MCP 综合查询工具、Agent 按需触发抓取工具、Agent MCP 系统状态工具）
+- **Wave 6**：多渠道推送通知与格式存储（9 类通知渠道推送飞书/钉钉/企微/TG/邮件/Bark/ntfy/Slack/Webhook、TXT 本地快照报告输出、HTML 独立静态报告输出、S3 兼容远端对象存储归档）
+- **Wave 7**：可视化大屏、自托管部署与全量对齐闭环审计（独立 WebUI/监控大屏 Wallboard、Docker Compose / 1Panel 容器化一键部署、FULL_TRENDRADAR_FUNCTIONAL_PARITY 终局能力闭环审计 Capability Closure Audit）
 
 ---
 
@@ -41,6 +42,9 @@
 | 过滤模式支持双轨：`filter.method = keyword \| ai` | `config/config.yaml`（filter 块） |
 | 报告输出支持三模：`report.mode = daily \| current \| incremental` | `config/config.yaml`（report 块） |
 | 个人兴趣配置与标签更新提示词 | `config/ai_interests.txt`、`config/ai_filter/update_tags_prompt.txt` |
+| RSS 新鲜度天数过滤（全局与单源） | `config/config.yaml`（rss.max_age_days / feeds[].max_age_days） |
+| 网络代理配置支持（爬虫与 RSS） | `config/config.yaml`（crawler.proxy / rss.proxy） |
+| 独立免过滤展示区与区域开关 | `config/config.yaml`（display.standalone / display.regions） |
 | 时间调度编排预设 | `config/timeline.yaml` |
 
 ---
@@ -55,20 +59,37 @@
 | Rank history（排名轨迹读取） | **PARITY** | `GET /api/native-intel/items/{item_id}/rank-history` + `GET /api/native-intel/hotlist`（current/previous/delta 由观测推导，不落第二份 authority） |
 | Off-list / 掉榜语义 | **PARITY** | 仅「来源本轮抓取成功 + 条目曾存在 + 当前榜单缺失」→ `OFF_LIST`；来源失败 → `UNKNOWN`；绝不写 rank=0/999 |
 | Source enable / disable | **PARITY** | `intel_sources.enabled` + `PATCH /api/native-intel/sources/{id}`；禁用源不参与抓取；条目推导为 `DISABLED` 并保留末次 rank |
-| Custom RSS（用户自建 RSS） | **PARITY** | `POST /api/native-intel/sources`（origin=user，UUID source_id，DB 持久化，软删除保留 provenance） |
-| RSS（系统策展源） | **PARITY** | 既有能力保持：`news_sources.json` 降级为系统 seed，首次初始化入 DB |
+| Custom RSS（用户自建 RSS） | **PARITY** | `POST /api/native-intel/sources`（origin=user，UUID source_id，DB 持久化，软删除保留历史 provenance） |
+| RSS（系统策展源 seed） | **PARITY** | 既有能力保持：`news_sources.json` 降级为系统 seed，首次初始化入 DB |
 | 单源失败隔离 / PARTIAL 语义 | **PARITY** | 既有 `intel_source_runs` + `RUN_STATUS_PARTIAL` 保持；热榜失败不影响 RSS 与其他热榜 |
-| 数据时效真实性（Stale / Freshness Truth） | **PARITY** | 超过 6 小时未成功抓取自动降级为 `STALE`，UI 显示过期警告条与非实时状态，保留末次 rank 供审计，绝不伪造当前在榜 |
-| A 股实体映射 | **PARITY** | 热榜条目走既有 `intel_entity_terms` / `intel_item_entities` 映射；StockData / Watchlist context 自动可见 |
+| 数据时效真实性（Stale / Freshness Truth） | **PARITY** | 超过 6 小时未成功抓取自动降级为 `STALE`，UI 显示非实时警告条与警示徽章，保留末次 rank 供审计，绝不伪造当前在榜 |
+| HTTP 系统与抓取状态接口（HTTP Status API） | **PARITY** | `GET /api/native-intel/status` 实时返回抓取运行状态、成功/失败来源数与数据平面健康度 |
+| A 股实体映射 | **PARITY**（Vibe 增强） | 热榜条目走既有 `intel_entity_terms` / `intel_item_entities` 映射；StockData / Watchlist context 自动可见 |
 | E2E 测试验证 | **PARITY** | `tests/e2e/hotlist-parity.browser.mjs` 真浏览器 + 真后端 SQLite 持久化与过期诚实性验证，CI 自动化接入 |
 
 ---
 
-## Wave 2：关键词与 AI 智能过滤体系对齐
+## Wave 1B：剩余 9 个热榜平台源覆盖对齐
+
+| 项目 | 状态 | 上游 platform id / expected_domain |
+| --- | --- | --- |
+| toutiao（今日头条） | PLANNED_WAVE_1B | `toutiao` / toutiao.com |
+| baidu（百度热搜） | PLANNED_WAVE_1B | `baidu` / baidu.com |
+| thepaper（澎湃新闻） | PLANNED_WAVE_1B | `thepaper` / thepaper.cn |
+| bilibili-hot-search | PLANNED_WAVE_1B | `bilibili-hot-search` / bilibili.com |
+| ifeng（凤凰网） | PLANNED_WAVE_1B | `ifeng` / ifeng.com |
+| tieba（贴吧） | PLANNED_WAVE_1B | `tieba` / baidu.com |
+| weibo（微博） | PLANNED_WAVE_1B | `weibo` / weibo.com |
+| douyin（抖音） | PLANNED_WAVE_1B | `douyin` / douyin.com |
+| zhihu（知乎） | PLANNED_WAVE_1B | `zhihu` / zhihu.com |
+
+---
+
+## Wave 2：关键词与 AI 智能过滤双轨体系
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 过滤模式双轨支持（filter.method = keyword / ai） | PLANNED_WAVE_2 | 上游配置支持切换关键词过滤与 AI 过滤双轨模式 |
+| 过滤模式双轨支持（filter.method = keyword / ai） | PLANNED_WAVE_2 | 上游配置支持切换关键词过滤与 AI 智能过滤双轨模式 |
 | 本地关键词过滤（Keyword filtering） | PLANNED_WAVE_2 | 基于本地规则引擎提供标题与简介的多字段关键词匹配 |
 | AI 智能相关性筛选（AI intelligent filter） | PLANNED_WAVE_2 | 上游 `trendradar/ai/filter.py`；Vibe 复用既有可插拔 LLM 适配层进行资讯相关性智能打分与过滤 |
 | 个人兴趣偏好配置（AI interests） | PLANNED_WAVE_2 | 上游 `config/ai_interests.txt`；支持用户定制关注的行业、赛道与主题兴趣描述 |
@@ -79,30 +100,26 @@
 
 ---
 
-## Wave 3：完整热榜源覆盖对齐
-
-| 项目 | 状态 | 上游 platform id / expected_domain |
-| --- | --- | --- |
-| toutiao（今日头条） | PLANNED_WAVE_3 | `toutiao` / toutiao.com |
-| baidu（百度热搜） | PLANNED_WAVE_3 | `baidu` / baidu.com |
-| thepaper（澎湃新闻） | PLANNED_WAVE_3 | `thepaper` / thepaper.cn |
-| bilibili-hot-search | PLANNED_WAVE_3 | `bilibili-hot-search` / bilibili.com |
-| ifeng（凤凰网） | PLANNED_WAVE_3 | `ifeng` / ifeng.com |
-| tieba（贴吧） | PLANNED_WAVE_3 | `tieba` / baidu.com |
-| weibo（微博） | PLANNED_WAVE_3 | `weibo` / weibo.com |
-| douyin（抖音） | PLANNED_WAVE_3 | `douyin` / douyin.com |
-| zhihu（知乎） | PLANNED_WAVE_3 | `zhihu` / zhihu.com |
-
----
-
-## Wave 4：聚合、报告与时间线对齐
+## Wave 3：抓取高级能力、新鲜度过滤与代理展示体系
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 当前快照报告（report.mode = current） | **PARITY** | Vibe Intel 资讯页 / MarketIntelPanel 即时渲染本地观测事实 |
-| 每日汇总日报（report.mode = daily） | PLANNED_WAVE_4 | 上游定时日报生成模式；Vibe 规划与 DailyReview 面板深度整合 |
-| 增量变化报告（report.mode = incremental） | PLANNED_WAVE_4 | 上游两抓取窗口间新上榜与异动增量对比报告 |
-| 关键词与赛道分组（Keyword grouping） | **PARITY** | Vibe 本地实体词与赛道 hint 映射已实现结构化分组 |
+| RSS 全局新鲜度过滤（Global max_age_days） | PLANNED_WAVE_3 | 上游 `rss.max_age_days`；按天数统一过滤陈旧历史 RSS 条目 |
+| RSS 单源独立新鲜度过滤（Per-feed max_age_days） | PLANNED_WAVE_3 | 上游 `feeds[].max_age_days`；支持为更新频率不同的源独立设置时效阈值 |
+| 爬虫与抓取代理支持（Crawler / RSS Proxy） | PLANNED_WAVE_3 | 上游 `crawler.proxy` / `rss.proxy`；支持配置 HTTP/HTTPS/SOCKS5 网络代理通道 |
+| 独立免过滤展示区（display.standalone） | PLANNED_WAVE_3 | 上游 `display.standalone`；支持将重点源条目绕过过滤规则在独立区域完整展示 |
+| 展示区域控制与顺序（Display region ordering & toggle） | PLANNED_WAVE_3 | 上游 `display.regions`；支持配置热榜、RSS、独立区域的显示开关与上下排序 |
+
+---
+
+## Wave 4：聚合、三模报告与时间线走势对齐
+
+| 项目 | 状态 | 说明 |
+| --- | --- | --- |
+| 当前快照报告模式（report.mode = current） | PLANNED_WAVE_4 | 上游当前时点完整快照报告生成与推送（非仅即时 Web UI 渲染，包含完整报告格式化输出） |
+| 每日汇总日报模式（report.mode = daily） | PLANNED_WAVE_4 | 上游定时日报生成模式；Vibe 规划与 DailyReview 面板深度整合 |
+| 增量变化报告模式（report.mode = incremental） | PLANNED_WAVE_4 | 上游两抓取窗口间新上榜与位次异动增量对比报告输出 |
+| 用户关键词报告分组（Keyword grouping in reports） | PLANNED_WAVE_4 | 上游报告中按用户设定的关注关键词进行条目归类聚合（不同于 Vibe 既有的股票实体/赛道映射） |
 | 时间窗口预设（Timeline presets） | PLANNED_WAVE_4 | 上游 `config/timeline.yaml` 编排预设与时间切片分析 |
 | 多源归一化与相似新闻聚类（Similar news clustering） | PLANNED_WAVE_4 | 跨平台相同事件识别与聚类关联（按平台严格隔离原始 rank） |
 | 关注度趋势（Trending topics） | **PARITY** | 既有 `GET /api/native-intel/trending` 跨源频次与实体环比统计 |
@@ -115,7 +132,7 @@
 
 ---
 
-## Wave 5：AI 分析与国际化
+## Wave 5：AI 深度分析、国际化与 Agent MCP 体系对齐
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
@@ -125,12 +142,12 @@
 | 情感倾向分类（Sentiment Analysis） | PLANNED_WAVE_5 | 资讯情绪倾向分类（仅客观事实标注，保持 observation-only 边界） |
 | 实体检索与关联分析（Entity search） | **PARITY** | 既有 `intel_entity_terms` + StockData/Watchlist 结构化联动已覆盖 |
 | Agent MCP 综合查询接口（MCP Query & Search） | PLANNED_WAVE_5 | 通过 Vibe MCP 向外部 Agent 暴露热榜位次、轨迹与实体分析工具 |
-| Agent 按需触发抓取（MCP Crawl Trigger） | PLANNED_WAVE_5 | 现有 `POST /api/native-intel/refresh` 包装为 Agent MCP 工具 |
-| 系统状态查询（MCP Status） | **PARITY** | 现有 `GET /api/native-intel/status` 提供抓取运行状态查询 |
+| Agent 按需触发抓取（MCP Crawl Trigger） | PLANNED_WAVE_5 | 将现有 `POST /api/native-intel/refresh` 包装为 Agent MCP 工具暴露 |
+| Agent MCP 系统状态工具（MCP Status Tool） | PLANNED_WAVE_5 | 向外部 Agent 暴露 Native Intel 运行状态与健康度查询 MCP 工具（区别于已有的 HTTP API） |
 
 ---
 
-## Wave 6：多渠道通知与存储
+## Wave 6：多渠道推送通知与格式存储
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
@@ -149,12 +166,13 @@
 
 ---
 
-## Wave 7：可视化、部署与自托管
+## Wave 7：可视化大屏、自托管部署与全量对齐闭环审计
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
 | 独立 WebUI / 监控大屏（Dashboard & Wallboard） | PLANNED_WAVE_7 | 跨终端热点全景大屏与监控展示看板 |
 | 一键部署模板（Docker Compose / 1Panel） | PLANNED_WAVE_7 | 容器化一键部署编排与 1Panel 应用商店集成 |
+| 终局能力闭环审计（Capability Closure Audit） | PLANNED_WAVE_7 | 针对全部上游特性的全量实测与工程闭环核验（FULL_PARITY 终局验收） |
 
 ---
 
