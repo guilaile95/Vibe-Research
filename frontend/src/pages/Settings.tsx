@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal, Loader2, RefreshCw } from "lucide-react";
+import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal, Loader2, RefreshCw, Rss, Plus } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { toast } from "sonner";
@@ -11,7 +11,7 @@ import {
   startAgentRuntimeLogin,
   type AgentRuntimeStatus,
 } from "@/lib/llm";
-import { loadAccessKey, saveAccessKey } from "@/lib/api";
+import { api, ApiError, loadAccessKey, saveAccessKey, type NativeIntelSourceRecord } from "@/lib/api";
 import { subscriptionModels, apiModels, PROVIDER_BASE, isCliProvider, aiModels, type ProviderId } from "@/lib/ai-models";
 
 export function Settings() {
@@ -281,6 +281,211 @@ export function Settings() {
           </button>
         </div>
       </GlassCard>
+
+      {/* 资讯来源管理（NATIVE-INTEL1 / TREND-PARITY Wave 1） */}
+      <SourceRegistrySection />
     </div>
+  );
+}
+
+function SourceRegistrySection() {
+  const [sources, setSources] = useState<NativeIntelSourceRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newName, setNewName] = useState("");
+  const [newUrl, setNewUrl] = useState("");
+  const [newHint, setNewHint] = useState("macro");
+  const [submitting, setSubmitting] = useState(false);
+
+  const fetchSources = async () => {
+    try {
+      const res = await api.nativeIntelSources();
+      setSources(res.sources || []);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "获取来源列表失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void fetchSources();
+  }, []);
+
+  const handleToggle = async (source: NativeIntelSourceRecord) => {
+    try {
+      await api.updateNativeIntelSource(source.source_id, { enabled: !source.enabled });
+      toast.success(source.enabled ? `已停用 ${source.name}` : `已启用 ${source.name}`);
+      await fetchSources();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "切换来源状态失败");
+    }
+  };
+
+  const handleAddUserSource = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newName.trim() || !newUrl.trim()) {
+      toast.error("请完整填写来源名称与 URL");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api.createNativeIntelSource({
+        name: newName.trim(),
+        url: newUrl.trim(),
+        hint: newHint.trim() || "macro",
+        enabled: true,
+      });
+      toast.success("成功添加自定义 RSS 源");
+      setNewName("");
+      setNewUrl("");
+      await fetchSources();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "添加来源失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeleteUserSource = async (sourceId: string, name: string) => {
+    try {
+      await api.deleteNativeIntelSource(sourceId);
+      toast.success(`已删除自定义来源 ${name}`);
+      await fetchSources();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "删除来源失败");
+    }
+  };
+
+  return (
+    <GlassCard className="mt-4">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+          <Rss className="h-4 w-4 text-primary" /> 资讯源与热榜管理
+        </h3>
+        <button
+          type="button"
+          onClick={() => void fetchSources()}
+          disabled={loading}
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
+          刷新
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground mb-4">
+        管理原生资讯与热榜采集清单。系统预设源支持启停（禁止删除），自定义 RSS 源保存在本地数据库中。
+      </p>
+
+      {/* 新增用户自定义 RSS 源表单 */}
+      <form onSubmit={handleAddUserSource} className="mb-4 rounded-lg border border-border/70 bg-background/50 p-3 text-xs space-y-2.5">
+        <div className="font-medium text-foreground flex items-center gap-1">
+          <Plus className="h-3.5 w-3.5 text-primary" /> 新增自定义 RSS 资讯源
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <input
+            type="text"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="来源名称（例如：自选科技博客）"
+            className="rounded border border-border bg-black/20 px-2.5 py-1.5 text-xs outline-none focus:border-primary/50"
+          />
+          <input
+            type="url"
+            value={newUrl}
+            onChange={(e) => setNewUrl(e.target.value)}
+            placeholder="RSS / Atom 地址 (https://...)"
+            className="rounded border border-border bg-black/20 px-2.5 py-1.5 text-xs outline-none focus:border-primary/50 sm:col-span-2"
+          />
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">分类标签:</span>
+            <select
+              value={newHint}
+              onChange={(e) => setNewHint(e.target.value)}
+              className="rounded border border-border bg-black/20 px-2 py-1 text-xs outline-none"
+            >
+              <option value="macro">宏观 / 综合</option>
+              <option value="tech">科技 / 算力</option>
+              <option value="finance">金融 / 市场</option>
+              <option value="industry">行业 / 产业</option>
+            </select>
+          </div>
+          <button
+            type="submit"
+            disabled={submitting}
+            className="rounded bg-primary/15 px-3 py-1 text-xs font-medium text-primary hover:bg-primary/25 disabled:opacity-50"
+          >
+            {submitting ? "添加中…" : "添加源"}
+          </button>
+        </div>
+      </form>
+
+      {/* 来源列表 */}
+      <div className="max-h-80 overflow-y-auto divide-y divide-border/30 rounded-lg border border-border/60 bg-background/40">
+        {loading && sources.length === 0 ? (
+          <div className="p-4 text-center text-xs text-muted-foreground">
+            <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
+            读取来源中…
+          </div>
+        ) : sources.length === 0 ? (
+          <div className="p-4 text-center text-xs text-muted-foreground">暂无可用来源</div>
+        ) : (
+          sources.map((src) => (
+            <div
+              key={src.source_id}
+              className="flex items-center justify-between p-2.5 text-xs hover:bg-muted/20"
+            >
+              <div className="min-w-0 flex-1 pr-3">
+                <div className="flex items-center gap-2">
+                  <span className={`font-medium ${src.enabled ? "text-foreground" : "text-muted-foreground line-through"}`}>
+                    {src.name}
+                  </span>
+                  <span className="rounded bg-muted px-1.5 py-0.2 text-[10px] text-muted-foreground">
+                    {src.source_type}
+                  </span>
+                  {src.origin === "system" ? (
+                    <span className="rounded bg-blue-500/10 text-blue-500 text-[10px] px-1">系统</span>
+                  ) : (
+                    <span className="rounded bg-emerald-500/10 text-emerald-500 text-[10px] px-1">自定义</span>
+                  )}
+                  {src.has_real_rank && (
+                    <span className="rounded bg-amber-500/10 text-amber-500 text-[10px] px-1">真实排名</span>
+                  )}
+                </div>
+                <div className="mt-0.5 truncate text-[10px] text-muted-foreground/70 font-mono">
+                  {src.url}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void handleToggle(src)}
+                  className={`rounded px-2 py-1 text-[11px] font-medium border ${
+                    src.enabled
+                      ? "border-border text-muted-foreground hover:text-foreground"
+                      : "border-primary/40 text-primary bg-primary/10"
+                  }`}
+                >
+                  {src.enabled ? "停用" : "启用"}
+                </button>
+
+                {src.origin === "user" && (
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteUserSource(src.source_id, src.name)}
+                    className="rounded p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    title="删除自定义源"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </GlassCard>
   );
 }

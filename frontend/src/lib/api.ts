@@ -40,6 +40,12 @@ import type {
   NativeIntelSecurityContext,
   NativeIntelWatchlistContext,
   NativeIntelRefreshResult,
+  NativeIntelHotlistBoardResponse,
+  NativeIntelItemRankHistoryResponse,
+  NativeIntelSourcesResponse,
+  NativeIntelSourceRecord,
+  CreateUserSourceInput,
+  UpdateSourceInput,
   PortfolioData,
   PositionBootstrapInput,
   PositionBootstrapPreview,
@@ -611,6 +617,27 @@ export const api = {
       "/native-intel/watchlist-context",
       signal ? { signal } : undefined,
     ),
+  nativeIntelHotlist: (limit = 60, signal?: AbortSignal) =>
+    get<NativeIntelHotlistBoardResponse>(
+      `/native-intel/hotlist?limit=${limit}`,
+      { unwrapData: false, ...(signal ? { signal } : {}) },
+    ),
+  nativeIntelItemRankHistory: (itemId: number, signal?: AbortSignal) =>
+    get<NativeIntelItemRankHistoryResponse>(
+      `/native-intel/items/${itemId}/rank-history`,
+      { unwrapData: false, ...(signal ? { signal } : {}) },
+    ),
+  nativeIntelSources: (signal?: AbortSignal) =>
+    get<NativeIntelSourcesResponse>(
+      "/native-intel/sources",
+      { unwrapData: false, ...(signal ? { signal } : {}) },
+    ),
+  createNativeIntelSource: (payload: CreateUserSourceInput) =>
+    request<{ data: NativeIntelSourceRecord }>("/native-intel/sources", "POST", payload),
+  updateNativeIntelSource: (sourceId: string, payload: UpdateSourceInput) =>
+    request<{ data: NativeIntelSourceRecord }>(`/native-intel/sources/${encodeURIComponent(sourceId)}`, "PATCH", payload),
+  deleteNativeIntelSource: (sourceId: string) =>
+    request<{ data: NativeIntelSourceRecord }>(`/native-intel/sources/${encodeURIComponent(sourceId)}`, "DELETE"),
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
   gpuRent: () => get<GpuRentData>("/signals/gpu-rent"),

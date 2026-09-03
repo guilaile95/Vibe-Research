@@ -68,6 +68,7 @@ def get_items(
             "total": 0,
         }
     plane = service.data_status(_db_path())
+    rank_available = service.store.any_source_has_real_rank(_db_path() or service.db_path())
     return {
         "status": plane["status"],
         "error": plane.get("error"),
@@ -76,8 +77,9 @@ def get_items(
         "limit": limit,
         "offset": offset,
         "rank_history": {
-            "available": False,
-            "reason": "registry_sources_have_no_real_rank",
+            "available": rank_available,
+            "reason": None if rank_available else "registry_sources_have_no_real_rank",
+            "note": "热榜条目自带真实 rank 与 delta；RSS 条目 rank 恒为 NULL",
         },
     }
 
@@ -154,3 +156,97 @@ def get_watchlist_context(
             status_code=422,
             detail={"status": "BAD_ARGUMENT", "error": "watchlist contains invalid codes"},
         ) from None
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 1：热榜板面 / 排名轨迹 / 来源管理
+# 排名是数据事实（上游真实序号）；本组端点不提供任何「热度→投资建议」映射。
+# ---------------------------------------------------------------------------
+
+
+@router.get("/hotlist")
+def get_hotlist(
+    limit: int = Query(default=60, ge=1, le=200),
+) -> dict[str, Any]:
+    """热榜板面：财联社 / 华尔街见闻等 hotlist 来源条目 + 真实排名与变化。"""
+    return service.hotlist_board(_db_path(), limit=limit)
+
+
+@router.get("/items/{item_id}/rank-history")
+def get_item_rank_history(item_id: int) -> dict[str, Any]:
+    """单条目排名轨迹；真实观测全量返回，ON_LIST/OFF_LIST/UNKNOWN 由读取侧推导。"""
+    if item_id < 1:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "BAD_ARGUMENT", "error": "item_id must be a positive integer"},
+        )
+    result = service.item_rank_history(item_id, _db_path())
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "NOT_FOUND", "error": "item not found"},
+        )
+    return result
+
+
+@router.get("/sources")
+def get_sources() -> dict[str, Any]:
+    """来源注册表（系统 seed + 用户自建；origin 区分删除权限）。"""
+    return service.sources_list(_db_path())
+
+
+@router.post("/sources")
+def post_source(payload: dict[str, Any]) -> dict[str, Any]:
+    """新增用户 RSS 源（origin=user）。输入非法 422；来源 ID 冲突 409。"""
+    try:
+        row = service.create_user_source(payload, _db_path())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "BAD_ARGUMENT", "error": str(exc)},
+        ) from exc
+    except (service.store.SourceAlreadyExistsError, service._SourceConflictError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"status": "SOURCE_ALREADY_EXISTS", "error": "同名来源已存在"},
+        ) from exc
+    return {"data": row}
+
+
+@router.patch("/sources/{source_id}")
+def patch_source(source_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """更新来源：系统源仅允许 enabled；用户源允许 enabled + name。"""
+    try:
+        row = service.update_source(source_id, payload, _db_path())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "BAD_ARGUMENT", "error": str(exc)},
+        ) from exc
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "NOT_FOUND", "error": "source not found"},
+        )
+    return {"data": row}
+
+
+@router.delete("/sources/{source_id}")
+def remove_source(source_id: str) -> dict[str, Any]:
+    """删除来源；系统来源 fail closed 拒绝（409，可停用不可删除）。"""
+    try:
+        row = service.delete_source(source_id, _db_path())
+    except service.store.SystemSourceDeleteBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "status": "SYSTEM_SOURCE_DELETE_BLOCKED",
+                "error": "系统来源不可删除；可停用",
+            },
+        ) from exc
+    except service.store.SourceNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "NOT_FOUND", "error": "source not found"},
+        ) from exc
+    return {"data": row}

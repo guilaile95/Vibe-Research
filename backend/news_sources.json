@@ -1,10 +1,26 @@
 {
- "_comment": "tier-1 策展源(每行业公认大媒体,高信号,纯RSS)。",
+ "_comment": "tier-1 策展源(每行业公认大媒体,高信号,纯RSS)。热榜源(type=hotlist)经 NewsNow 公共 API（ourongxing/newsnow，MIT）抓取，has_real_rank=true，rank 为上游真实排名。",
  "fetch": {
   "per_source": 6,
   "timeout": 15,
   "recent_days": 7
  },
+ "hotlists": [
+  {
+   "name": "财联社热门",
+   "hint": "macro",
+   "type": "hotlist",
+   "platform": "cls-hot",
+   "expected_domain": "cls.cn"
+  },
+  {
+   "name": "华尔街见闻",
+   "hint": "macro",
+   "type": "hotlist",
+   "platform": "wallstreetcn-hot",
+   "expected_domain": "wallstreetcn.com"
+  }
+ ],
  "industries": [
   {
    "key": "ai",
