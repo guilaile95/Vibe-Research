@@ -1,0 +1,40 @@
+name: Notes backup temporary verification
+
+on:
+  push:
+    branches:
+      - feat/notes-backup-import-export-v01
+
+permissions:
+  contents: read
+
+jobs:
+  notes-backup-browser:
+    name: Notes backup browser E2E
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install Playwright Chromium
+        uses: ./.github/actions/setup-playwright
+        timeout-minutes: 15
+
+      - name: Run research notes backup E2E
+        working-directory: frontend
+        run: npm run test:e2e:notes-backup
