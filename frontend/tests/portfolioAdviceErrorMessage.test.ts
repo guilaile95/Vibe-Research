@@ -32,9 +32,9 @@ test("passes through classified 502 model messages", () => {
   );
   assert.equal(
     getPortfolioAdviceErrorMessage(
-      apiError("持仓建议模型鉴权失败，请检查 API Key 或重新登录 CLI", 502),
+      apiError("持仓建议模型鉴权失败，请检查 API Key 或重新连接 Codex", 502),
     ),
-    "持仓建议模型鉴权失败，请检查 API Key 或重新登录 CLI",
+    "持仓建议模型鉴权失败，请检查 API Key 或重新连接 Codex",
   );
   assert.equal(
     getPortfolioAdviceErrorMessage(

@@ -19,7 +19,7 @@ export function Settings() {
   const existingIsCli = existing ? isCliProvider(existing.provider) : false;
 
   const [mode, setMode] = useState<"api" | "subscription">(existing && existingIsCli ? "subscription" : "api");
-  // 订阅：选中的 CLI model id
+  // 订阅：固定为 Codex model id
   const [cliId, setCliId] = useState(existing && existingIsCli ? existing.model : "");
   // API：选中的模型 id + 可编辑的 baseURL / model / key
   const firstApi = apiModels[0];
@@ -76,13 +76,13 @@ export function Settings() {
       return;
     }
     saveLlm({ provider: providerOf(apiId), baseURL: baseURL.trim(), apiKey: apiKey.trim(), model: modelName.trim() });
-    toast.success("已保存到本地，全站「问 AI / 复盘」现在可用");
+    toast.success("已保存到本地，全站 AI 功能现在可用");
   };
 
   const saveSubscription = () => {
     const m = subscriptionModels.find((x) => x.id === cliId);
-    if (!m || m.comingSoon) {
-      toast.error("请选择一个可用的订阅（暂不支持标「即将支持」的）");
+    if (!m) {
+      toast.error("请选择 Codex Subscription");
       return;
     }
     if (m.provider === "cli-codex" && !runtimeStatus?.available) {
@@ -90,7 +90,7 @@ export function Settings() {
       return;
     }
     saveLlm({ provider: m.provider, baseURL: "", apiKey: "", model: m.id });
-    toast.success(`已选「${m.name}」订阅，现有「问 AI」将调用 ${runtimeStatus?.runtime || m.name}`);
+    toast.success(`已选「${m.name}」订阅，全站 AI 功能将调用 ${runtimeStatus?.runtime || m.name}`);
   };
 
   const loginCodex = async () => {
@@ -122,7 +122,7 @@ export function Settings() {
 
   return (
     <div>
-      <PageHeader title="接入 AI" subtitle="配置一次，全站的「问 AI」「复盘」都能用你自己的模型" />
+      <PageHeader title="接入 AI" subtitle="配置一次，全站所有 AI 功能统一使用 Codex Subscription 或 API Compatible" />
 
       <div className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
@@ -138,7 +138,7 @@ export function Settings() {
             <h3 className="font-semibold">订阅接入</h3>
             {mode === "subscription" && <Check className="ml-auto h-4 w-4 text-primary" />}
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">使用产品独立登录的 Codex / ChatGPT 订阅，<b className="text-foreground">免 API key</b>。第一版仅支持 Codex。</p>
+          <p className="mt-1 text-xs text-muted-foreground">使用产品独立登录的 Codex / ChatGPT 订阅，<b className="text-foreground">免 API key</b>。所有 AI 功能统一走 Codex。</p>
         </GlassCard>
 
         <GlassCard glow={mode === "api"} onClick={() => setMode("api")}
@@ -193,11 +193,9 @@ export function Settings() {
               {subscriptionModels.map((m) => {
                 const on = cliId === m.id;
                 return (
-                  <button key={m.id} disabled={m.comingSoon} onClick={() => setCliId(m.id)}
+                  <button key={m.id} onClick={() => setCliId(m.id)}
                     className={`flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                      m.comingSoon
-                        ? "cursor-not-allowed border-border/50 opacity-40"
-                        : on
+                      on
                         ? "border-primary/50 bg-primary/10"
                         : "border-border hover:bg-muted/40"
                     }`}>
@@ -205,7 +203,6 @@ export function Settings() {
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 font-medium">
                         {m.name}
-                        {m.comingSoon && <span className="rounded bg-muted/60 px-1 py-0.5 text-[9px] text-muted-foreground">即将支持</span>}
                         {on && <Check className="h-3.5 w-3.5 text-primary" />}
                       </div>
                       <div className="truncate text-[11px] text-muted-foreground">{m.description}</div>

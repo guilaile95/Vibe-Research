@@ -6,8 +6,8 @@ import { storageSet, storageRemove } from "./storage.ts";
 
 export interface LlmConfig {
   provider: ProviderId;
-  baseURL: string; // CLI 订阅时留空
-  apiKey: string;  // CLI 订阅时留空
+  baseURL: string; // Codex Subscription 时留空
+  apiKey: string;  // Codex Subscription 时留空
   model: string;
 }
 
@@ -32,7 +32,7 @@ export function loadLlm(): LlmConfig | null {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
     const c = JSON.parse(raw) as LlmConfig;
-    // 订阅(CLI)：有 model 即可，免 key；API：需 baseURL + key + model。
+    // Codex Subscription：有 model 即可，免 key；API Compatible：需 baseURL + key + model。
     const ok = c.model && (isCliProvider(c.provider) || (c.baseURL && c.apiKey));
     return ok ? c : null;
   } catch {

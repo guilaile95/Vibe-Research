@@ -36,7 +36,6 @@ import account_profile
 import ai_result_service
 import astock
 import chat as chat_layer
-import cli_runtime
 import agent_runtime
 import daily_review
 import debate as debate_layer
@@ -614,7 +613,7 @@ def health():
 
 
 class LLMConfig(BaseModel):
-    provider: str = ""       # cli-* = 订阅接入（调本机 CLI）；其余 = API 接入
+    provider: str = ""       # cli-codex = Codex Subscription；其余 = API Compatible
     baseURL: str = ""        # 订阅接入时留空
     apiKey: str = ""         # 订阅接入时留空
     model: str
@@ -626,25 +625,19 @@ def _require_llm_ready(llm: LLMConfig) -> bool:
     Returns
     -------
     bool
-        True 表示订阅 CLI 路径；False 表示 API 路径。
+        True 表示 Codex Subscription；False 表示 API Compatible。
     """
     if not (llm.model or "").strip():
         raise HTTPException(400, "缺少模型配置，请先在「接入 AI」里选择")
-    is_cli = (llm.provider or "").startswith("cli-")
-    if is_cli:
-        kind = llm.provider[4:]
-        # P0-SEC2：HTTP 可达 CLI 执行门在 CLI 存在性检查之前（fail-closed），
-        # 未授权直接 403，不泄露本机是否安装了某 CLI。
-        try:
-            cli_runtime.assert_http_cli_authorized(kind)
-        except cli_runtime.CliExecutionDisabled as e:
-            raise HTTPException(403, str(e)) from None
-        if not cli_runtime.detect_cli(kind):
-            raise HTTPException(
-                400,
-                f"未检测到「{kind}」对应的本机命令。请先安装并登录该 CLI，或改用「API 接入」。",
-            )
+    provider = (llm.provider or "").strip()
+    if provider == "cli-codex":
+        runtime_status = agent_runtime.status()
+        if not runtime_status["available"]:
+            code = 401 if runtime_status["status"] in {"not_authenticated", "login_pending", "login_failed"} else 503
+            raise HTTPException(code, "Codex Subscription 尚未连接，请先在设置页登录")
         return True
+    if provider.startswith("cli-"):
+        raise HTTPException(400, "当前订阅接入仅支持 Codex Subscription；也可以改用 API Compatible")
     if not (llm.apiKey or "").strip() or not (llm.baseURL or "").strip():
         raise HTTPException(400, "缺少 Base URL 或 API Key，请先在「接入 AI」里填写")
     return False
@@ -691,8 +684,8 @@ def chat(req: ChatReq):
     """系统 AI 对话，**流式** NDJSON（每行一个事件 {type: tool|delta|done|error}）。
 
     - API 接入：OpenAI 兼容 function-calling，边流答案边推工具调用事件。
-    - 订阅接入（provider=cli-*）：调本机已登录的 CLI，stdout 边出边流（数据靠 context）。
-    配置错误（缺 key / 未装 CLI）走 HTTP 400；运行时错误走流内 error 事件。用户配置随请求传入，后端不持久化。
+    - Codex Subscription：经安全 Agent Runtime 调用已登录的 Codex。
+    配置错误（缺 key / Codex 未连接）在开流前失败；运行时错误走流内 error 事件。用户配置随请求传入，后端不持久化。
     """
     if not req.messages:
         raise HTTPException(400, "messages 不能为空")
@@ -700,18 +693,10 @@ def chat(req: ChatReq):
     if is_codex_runtime:
         if not (req.session or "").strip():
             raise HTTPException(400, "Codex Subscription 对话缺少页面 session")
-        runtime_status = agent_runtime.status()
-        if not runtime_status["available"]:
-            code = 401 if runtime_status["status"] in {"not_authenticated", "login_pending", "login_failed"} else 503
-            raise HTTPException(code, "Codex Subscription 尚未连接，请先在设置页登录")
-        is_cli = False
-    else:
-        is_cli = _require_llm_ready(req.llm)
+    _require_llm_ready(req.llm)
 
     cfg = req.llm.model_dump()
-    # P0-SEC2：CLI 订阅接入需要 ASGI disconnect → cancel 传播（与 /api/daily-review/analyze 对齐）。
-    # run_chat_cli_stream 把 cancel_event 传给 cli_runtime.run_cli_stream，disconnect 时
-    # 终止进程树并清理；API 路径忽略 _cancel_event，语义不变。
+    # Codex Subscription 需要 ASGI disconnect → Agent Runtime cancel 传播；API 路径忽略。
     disconnect_event = threading.Event()
     cfg["_cancel_event"] = disconnect_event
 
@@ -743,9 +728,7 @@ def chat(req: ChatReq):
                     cancel_event=disconnect_event,
                 )
             else:
-                events = (chat_layer.run_chat_cli_stream if is_cli else chat_layer.run_chat_stream)(
-                    cfg, req.messages, context
-                )
+                events = chat_layer.run_chat_stream(cfg, req.messages, context)
             for ev in events:
                 if disconnect_event.is_set():
                     return
@@ -794,13 +777,14 @@ def debate(req: DebateReq):
     """多空辩论：后端先拉客观事实底稿，再让多方 / 空方 / 中立主持依次发言，**流式** NDJSON。
 
     刻意不产出买卖结论——终点是「分歧点 + 验证清单」，判断留给用户自己。
-    配置校验复用 /api/chat 的 _require_llm_ready（含 P0-SEC2 CLI 执行门）。
+    配置校验复用 /api/chat 的 _require_llm_ready。
     """
     code = _validate(req.code)
     _require_llm_ready(req.llm)
     rounds = 2 if req.rounds >= 2 else 1
     cfg = req.llm.model_dump()
     disconnect_event = threading.Event()
+    cfg["_cancel_event"] = disconnect_event
 
     def gen():
         try:
@@ -833,6 +817,7 @@ def reflect(req: ReflectReq):
     _require_llm_ready(req.llm)
     cfg = req.llm.model_dump()
     disconnect_event = threading.Event()
+    cfg["_cancel_event"] = disconnect_event
 
     def gen():
         try:
@@ -960,9 +945,9 @@ def portfolio_advice(req: PortfolioAdviceRequest):
     """独立持仓操作建议（普通 JSON，非流式）。
 
     服务器链路：校验 LLM → get_portfolio → generate_daily_review → context → 模型 → validator → save。
-    未配置模型 / 缺 key / 未装 CLI → 400；
+    未配置模型 / 缺 key / Codex 未连接 → 4xx；
     空持仓 → 409；行情/市场不可用 → 503；
-    模型调用失败 → 502（区分鉴权/网络/CLI/通用，不回传密钥与上游 body）；
+    模型调用失败 → 502（不回传密钥与上游 body）；
     模型输出无效 → 502；
     内部 TypeError/ValueError → 500（安全日志，不再误报「请求参数无效」）。
     请求结构错误由 Pydantic → 422。不接受客户端持仓/context/messages。
@@ -1661,14 +1646,9 @@ def decision_cockpit_generate(req: TomorrowPlanGenerateIn):
     - LLM 调用失败 → 自动回退确定性摘要（仍返回 200，但 explanation.source=deterministic）
     """
     try:
+        if req.llm:
+            _require_llm_ready(req.llm)
         cfg = req.llm.model_dump() if req.llm else None
-        # P0-SEC2：本路由不走 _require_llm_ready，cli-* 需在此显式过执行门。
-        # 未授权直接 403（CLI_EXECUTION_DISABLED），禁止静默回退确定性文本伪装成功。
-        if cfg and (cfg.get("provider") or "").startswith("cli-"):
-            try:
-                cli_runtime.assert_http_cli_authorized(cfg["provider"][4:])
-            except cli_runtime.CliExecutionDisabled as e:
-                raise HTTPException(403, str(e)) from None
         result = generate_tomorrow_plan(req.trade_date, cfg=cfg, force=req.force)
         return {"data": result}
     except DecisionCockpitMarketDataError as e:

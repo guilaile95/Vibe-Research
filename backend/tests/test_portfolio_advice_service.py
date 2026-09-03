@@ -850,7 +850,7 @@ def test_default_runner_auth_error_classified():
     ) as m_val:
         with pytest.raises(PortfolioAdviceModelError) as ei:
             generate_portfolio_advice({})
-        assert str(ei.value) == "持仓建议模型鉴权失败，请检查 API Key 或重新登录 CLI"
+        assert str(ei.value) == "持仓建议模型鉴权失败，请检查 API Key 或重新连接 Codex"
         assert "sk-leak" not in str(ei.value)
     m_val.assert_not_called()
 

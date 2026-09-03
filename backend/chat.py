@@ -10,11 +10,13 @@ import ipaddress
 import json
 import os
 import socket
+import threading
+import uuid
 from urllib.parse import urlparse
 
 import requests
 
-import cli_runtime
+import agent_runtime
 import daily_review
 import daily_review_ai_prompt
 import daily_review_context
@@ -178,20 +180,6 @@ def run_chat(cfg: dict, user_messages: list, context: str = "") -> dict:
     return {"content": data["choices"][0]["message"].get("content") or "", "trace": trace, "rounds": MAX_ROUNDS}
 
 
-def run_chat_cli(cfg: dict, user_messages: list, context: str = "") -> dict:
-    """订阅接入：用本机已登录的 CLI 一次性作答（无 function-calling）。
-
-    CLI 不能像 API 那条自己调数据工具，所以数据必须已在 context 里（每日复盘 / 今日要点 /
-    个股页问 AI 等场景，前端已把当页数据塞进 context）。
-    """
-    provider = str(cfg.get("provider", ""))
-    kind = provider[4:] if provider.startswith("cli-") else provider
-    system = SYSTEM_PROMPT.format(context=context or "（无）")
-    user = "\n\n".join(m.get("content", "") for m in user_messages if m.get("content")) or "（无问题）"
-    content = cli_runtime.run_cli(kind, system, user, via_http=True)
-    return {"content": content, "trace": [], "rounds": 1}
-
-
 # ---------------------------------------------------------------------------
 # 流式版：yield 事件字典 {type: tool|delta|done|error}，供 /api/chat 以 NDJSON 推给前端
 # ---------------------------------------------------------------------------
@@ -294,33 +282,39 @@ def prepare_daily_review_messages(
 def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
     """底层消息流入口：已组装好的 messages 直接发给模型，不注入 SYSTEM_PROMPT。
 
-    - use_tools=False：单次流式补全（每日复盘等已注入上下文场景）；支持 API 与 cli-*。
+    - use_tools=False：单次流式补全（每日复盘等已注入上下文场景）；支持 API 与 Codex Subscription。
     - use_tools=True：function-calling 循环（通用聊天 API 路径）。
     事件协议与 /api/chat 一致：{type: tool|delta|done|error}。
     """
     provider = str(cfg.get("provider", ""))
-    if not use_tools and provider.startswith("cli-"):
-        kind = provider[4:]
-        system = ""
-        user_parts: list[str] = []
+    if not use_tools and provider == "cli-codex":
+        instructions: list[str] = []
+        context_parts: list[str] = []
         for m in messages:
             role = m.get("role")
             content = m.get("content") or ""
             if role == "system":
-                system = content
-            elif role == "user" and content:
-                user_parts.append(content)
-        user = "\n\n".join(user_parts) or "（无问题）"
-        for chunk in cli_runtime.run_cli_stream(
-            kind,
-            system,
-            user,
-            via_http=True,
-            cancel_event=cfg.get("_cancel_event"),
-        ):
-            yield {"type": "delta", "text": chunk}
-        yield {"type": "done", "trace": [], "rounds": 1}
+                instructions.append(content)
+            elif role in {"user", "assistant"} and content:
+                context_parts.append(f"【{role}】\n{content}")
+        message = "\n\n".join(instructions) or "请完成当前 Vibe AI 任务。"
+        message += "\n\n请仅基于当前任务输入完成本轮，不执行任何正式写入。"
+        context = "\n\n".join(context_parts) or "（无任务输入）"
+        events = agent_runtime.stream_chat(
+            session=f"ai-{uuid.uuid4().hex}",
+            message=message,
+            context=context,
+            history=[],
+            cancel_event=cfg.get("_cancel_event") or threading.Event(),
+        )
+        for event in events:
+            if event.get("type") == "done":
+                yield {**event, "trace": [], "rounds": 1}
+            else:
+                yield event
         return
+    if provider.startswith("cli-"):
+        raise RuntimeError("当前订阅接入仅支持 Codex Subscription")
 
     if not use_tools:
         resp = _call_llm_stream(cfg, messages, use_tools=False)
@@ -398,20 +392,3 @@ def run_chat_stream(cfg: dict, user_messages: list, context: str = ""):
     messages = [{"role": "system", "content": SYSTEM_PROMPT.format(context=context or "（无）")}]
     messages.extend(user_messages)
     yield from stream_messages(cfg, messages, use_tools=True)
-
-
-def run_chat_cli_stream(cfg: dict, user_messages: list, context: str = ""):
-    """订阅接入流式：CLI stdout 边出边推 delta。
-
-    cancel_event（来自 HTTP disconnect，见 app.py /api/chat）传给
-    cli_runtime.run_cli_stream，disconnect 时终止进程树并清理。
-    """
-    provider = str(cfg.get("provider", ""))
-    kind = provider[4:] if provider.startswith("cli-") else provider
-    system = SYSTEM_PROMPT.format(context=context or "（无）")
-    user = "\n\n".join(m.get("content", "") for m in user_messages if m.get("content")) or "（无问题）"
-    for chunk in cli_runtime.run_cli_stream(
-        kind, system, user, via_http=True, cancel_event=cfg.get("_cancel_event")
-    ):
-        yield {"type": "delta", "text": chunk}
-    yield {"type": "done", "trace": [], "rounds": 1}

@@ -827,85 +827,20 @@ def test_posix_real_output_limit_kills_full_tree(monkeypatch):
     _assert_no_cli_threads_alive()
 
 
-# ---------- BLOCKER C：/api/chat HTTP disconnect → cancel → 进程树清理 ----------
+# ---------- 旧 HTTP CLI 产品入口已关闭 ----------
 
-def test_chat_cli_http_disconnect_propagates_cancel(monkeypatch):
-    """/api/chat 的 CLI 订阅接入：真实 ASGI disconnect 必须传播 cancel_event，
-    终止进程树并清理（与 /api/daily-review/analyze 对齐）。"""
-    import asyncio
-    import json
-
+def test_chat_rejects_legacy_http_cli_before_execution(monkeypatch):
     import app as app_module
+    from fastapi.testclient import TestClient
 
-    _register_fake(monkeypatch, code="import time\nprint('chunk', flush=True)\ntime.sleep(30)")
-    _authorize_fake(monkeypatch)
-    monkeypatch.setattr(cli_runtime, "CLI_TOTAL_DEADLINE_SECONDS", 30)  # 靠 cancel 终止，不靠 deadline
-    sem = _fresh_sem(monkeypatch, value=1)
-    real_popen = cli_runtime.subprocess.Popen
-    captured = {}
-
-    def capture_popen(*args, **kwargs):
-        argv = args[0] if args else []
-        if argv and os.path.basename(str(argv[0])).lower().startswith("taskkill"):
-            return real_popen(*args, **kwargs)
-        proc = real_popen(*args, **kwargs)
-        captured["proc"] = proc
-        return proc
-
-    monkeypatch.setattr(cli_runtime.subprocess, "Popen", capture_popen)
-
-    body = json.dumps({
+    popen = MagicMock(side_effect=AssertionError("legacy CLI must not execute"))
+    monkeypatch.setattr(cli_runtime.subprocess, "Popen", popen)
+    response = TestClient(app_module.app).post("/api/chat", json={
         "messages": [{"role": "user", "content": "hi"}],
         "context": "",
         "llm": {"provider": "cli-fake", "model": "local-test", "baseURL": "", "apiKey": ""},
-    }).encode("utf-8")
+    })
 
-    async def exercise_disconnect():
-        first_body_sent = asyncio.Event()
-        sent = False
-
-        async def receive():
-            nonlocal sent
-            if not sent:
-                sent = True
-                return {"type": "http.request", "body": body, "more_body": False}
-            await first_body_sent.wait()
-            return {"type": "http.disconnect"}
-
-        async def send(message):
-            if message["type"] == "http.response.body" and message.get("body"):
-                first_body_sent.set()
-
-        scope = {
-            "type": "http",
-            "asgi": {"version": "3.0", "spec_version": "2.3"},
-            "http_version": "1.1",
-            "method": "POST",
-            "scheme": "http",
-            "path": "/api/chat",
-            "raw_path": b"/api/chat",
-            "query_string": b"",
-            "root_path": "",
-            "headers": [
-                (b"host", b"testserver"),
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode("ascii")),
-            ],
-            "client": ("127.0.0.1", 12345),
-            "server": ("testserver", 80),
-            "state": {},
-        }
-        await app_module.app(scope, receive, send)
-
-    started = time.monotonic()
-    asyncio.run(exercise_disconnect())
-    elapsed = time.monotonic() - started
-
-    # disconnect 后 request 必须快速返回（cancel 传播，不等到 30s deadline）
-    assert elapsed < 5.0, f"disconnect 未及时传播 cancel：{elapsed:.2f}s"
-    proc = captured["proc"]
-    assert _wait_poll(proc) is not None        # CLI parent dead
-    assert proc.stdin.closed                   # stdin closed
-    assert proc.stdout.closed                  # stdout closed
-    _assert_no_cli_threads_alive()             # writer + pump 均死
-    assert sem._value == 1                     # semaphore released
+    assert response.status_code == 400
+    assert "仅支持 Codex" in response.json()["detail"]
+    popen.assert_not_called()

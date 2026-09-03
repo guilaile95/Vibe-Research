@@ -20,7 +20,6 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import chat
-import cli_runtime
 import ai_tools as tools
 
 # 底稿抓取清单：覆盖「估值 / 财报 / 资金 / 事件 / 行业」五个面，与 chat.ANALYSIS_FRAMEWORK 对齐。
@@ -256,9 +255,6 @@ def run_debate_stream(cfg: dict, code: str, rounds: int = 1):
     事件类型：dossier（底稿就绪）/ stage（角色开始）/ delta（增量文本）/
              stage_done（角色发言完成）/ done（全部完成）/ error
     """
-    provider = str(cfg.get("provider", ""))
-    is_cli = provider.startswith("cli-")
-
     yield {"type": "status", "message": "正在拉取客观事实底稿…"}
     dossier = yield from collect_dossier(code)
     # 只有「无记录」说明、没有一条真实数据时同样算取数失败——
@@ -278,18 +274,13 @@ def run_debate_stream(cfg: dict, code: str, rounds: int = 1):
         messages = _build_messages(stage, facts, transcript)
         buf: list[str] = []
         try:
-            if is_cli:
-                content = cli_runtime.run_cli(provider[4:], messages[0]["content"], messages[-1]["content"])
-                buf.append(content)
-                yield {"type": "delta", "stage": stage, "text": content}
-            else:
-                # _call_llm_stream 返回的是上游 Response，需配 _iter_sse_deltas 解析 SSE
-                resp = chat._call_llm_stream(cfg, messages, use_tools=False)
-                for delta in chat._iter_sse_deltas(resp):
-                    text = delta.get("content")
-                    if text:
-                        buf.append(text)
-                        yield {"type": "delta", "stage": stage, "text": text}
+            for event in chat.stream_messages(cfg, messages, use_tools=False):
+                if event.get("type") == "error":
+                    raise RuntimeError(event.get("message") or "模型调用失败")
+                text = event.get("text") if event.get("type") == "delta" else None
+                if text:
+                    buf.append(text)
+                    yield {"type": "delta", "stage": stage, "text": text}
         except Exception as e:  # noqa: BLE001 — 单个角色失败不该毁掉整场辩论
             # 必须补一个终态事件：前端按 stage_done 把该角色标记为完成，
             # 只发 error 的话这个角色会永远停在「生成中…」，并让「全部完成」判定不成立、
