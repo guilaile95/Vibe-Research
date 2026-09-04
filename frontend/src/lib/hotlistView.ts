@@ -1,6 +1,6 @@
 import type { NativeIntelHotlistItem } from "@/lib/api/types";
 
-export type HotlistFilter = "all" | "cls" | "wallstreetcn" | "rising" | "new";
+export type HotlistFilter = "all" | "rising" | "new" | `source:${string}`;
 
 export interface FormattedRankDelta {
   text: string;
@@ -31,16 +31,6 @@ export function filterHotlistItems(
   filter: HotlistFilter,
 ): NativeIntelHotlistItem[] {
   if (filter === "all") return items;
-  if (filter === "cls") {
-    return items.filter(
-      (item) => item.source_id.includes("cls") || (item.source_name || "").includes("财联社"),
-    );
-  }
-  if (filter === "wallstreetcn") {
-    return items.filter(
-      (item) => item.source_id.includes("wallstreetcn") || (item.source_name || "").includes("华尔街见闻"),
-    );
-  }
   if (filter === "rising") {
     return items.filter((item) => (item.rank_delta ?? 0) > 0);
   }
@@ -48,6 +38,10 @@ export function filterHotlistItems(
     return items.filter(
       (item) => item.current_state === "ON_LIST" && item.previous_rank == null && item.rank != null,
     );
+  }
+  if (filter.startsWith("source:")) {
+    const targetSourceId = filter.slice("source:".length);
+    return items.filter((item) => item.source_id === targetSourceId);
   }
   return items;
 }

@@ -19,6 +19,69 @@
    "type": "hotlist",
    "platform": "wallstreetcn-hot",
    "expected_domain": "wallstreetcn.com"
+  },
+  {
+   "name": "今日头条",
+   "hint": "macro",
+   "type": "hotlist",
+   "platform": "toutiao",
+   "expected_domain": "toutiao.com"
+  },
+  {
+   "name": "百度热搜",
+   "hint": "macro",
+   "type": "hotlist",
+   "platform": "baidu",
+   "expected_domain": "baidu.com"
+  },
+  {
+   "name": "澎湃新闻",
+   "hint": "macro",
+   "type": "hotlist",
+   "platform": "thepaper",
+   "expected_domain": "thepaper.cn"
+  },
+  {
+   "name": "Bilibili 热搜",
+   "hint": "macro",
+   "type": "hotlist",
+   "platform": "bilibili-hot-search",
+   "expected_domain": "bilibili.com"
+  },
+  {
+   "name": "凤凰网",
+   "hint": "macro",
+   "type": "hotlist",
+   "platform": "ifeng",
+   "expected_domain": "ifeng.com"
+  },
+  {
+   "name": "贴吧",
+   "hint": "macro",
+   "type": "hotlist",
+   "platform": "tieba",
+   "expected_domain": "baidu.com"
+  },
+  {
+   "name": "微博",
+   "hint": "macro",
+   "type": "hotlist",
+   "platform": "weibo",
+   "expected_domain": "weibo.com"
+  },
+  {
+   "name": "抖音",
+   "hint": "macro",
+   "type": "hotlist",
+   "platform": "douyin",
+   "expected_domain": "douyin.com"
+  },
+  {
+   "name": "知乎",
+   "hint": "macro",
+   "type": "hotlist",
+   "platform": "zhihu",
+   "expected_domain": "zhihu.com"
   }
  ],
  "industries": [

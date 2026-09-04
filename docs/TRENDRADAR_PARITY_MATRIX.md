@@ -19,8 +19,8 @@
 
 ## 全量对齐波次总览（Full Parity Roadmap）
 
-- **Wave 1（当前交付）**：原生热榜基础设施（热榜抓取、双榜支持、真实排名历史、掉榜与失败隔离语义、资讯源管理、数据时效 STALE 真实性、HTTP 状态 API、真浏览器 E2E）
-- **Wave 1B**：剩余 9 个热榜平台源覆盖对齐（扩展今日头条、百度、澎湃、B站、凤凰网、贴吧、微博、抖音、知乎）
+- **Wave 1（已合并验证）**：原生热榜基础设施（热榜抓取、双榜支持、真实排名历史、掉榜与失败隔离语义、资讯源管理、数据时效 STALE 真实性、HTTP 状态 API、真浏览器 E2E）
+- **Wave 1B（当前交付）**：剩余 9 个热榜平台源覆盖对齐（扩展今日头条、百度、澎湃、B站、凤凰网、贴吧、微博、抖音、知乎，达到 11 个默认热榜平台全量覆盖，支持轻量动态来源下拉筛选与系统源启停）
 - **Wave 2**：关键词与 AI 智能过滤双轨体系（标题+简介过滤、filter.method = keyword / ai、AI 智能相关性打分、个人兴趣偏好配置 ai_interests、标签自更新 update_tags_prompt、黑白名单、多模式正则/通配符匹配、分类标签与平台分组）
 - **Wave 3**：抓取高级能力、新鲜度过滤与代理展示体系（RSS 全局与单源独立的 max_age_days 新鲜度过滤、Crawler / RSS HTTP/SOCKS5 代理支持、display.standalone 独立免过滤展示区、展示区域开关与排序控制）
 - **Wave 4**：聚合、三模报告与时间线走势对齐（三类报告输出模式 report.mode = current / daily / incremental、用户可配置关键词报告分组聚合、timeline.yaml 调度预设与时间切片、相似新闻聚类、单话题位次走势图、话题全生命周期跟踪、爆发异动突发检测、趋势预测分析、平台活跃度横向对比、关键词共现分析）
@@ -69,19 +69,21 @@
 
 ---
 
-## Wave 1B：剩余 9 个热榜平台源覆盖对齐
+## Wave 1B（已实现交付物）：剩余 9 个热榜平台源覆盖对齐
 
-| 项目 | 状态 | 上游 platform id / expected_domain |
-| --- | --- | --- |
-| toutiao（今日头条） | PLANNED_WAVE_1B | `toutiao` / toutiao.com |
-| baidu（百度热搜） | PLANNED_WAVE_1B | `baidu` / baidu.com |
-| thepaper（澎湃新闻） | PLANNED_WAVE_1B | `thepaper` / thepaper.cn |
-| bilibili-hot-search | PLANNED_WAVE_1B | `bilibili-hot-search` / bilibili.com |
-| ifeng（凤凰网） | PLANNED_WAVE_1B | `ifeng` / ifeng.com |
-| tieba（贴吧） | PLANNED_WAVE_1B | `tieba` / baidu.com |
-| weibo（微博） | PLANNED_WAVE_1B | `weibo` / weibo.com |
-| douyin（抖音） | PLANNED_WAVE_1B | `douyin` / douyin.com |
-| zhihu（知乎） | PLANNED_WAVE_1B | `zhihu` / zhihu.com |
+| 项目 | 状态 | 上游 platform id / expected_domain | 说明 |
+| --- | --- | --- | --- |
+| toutiao（今日头条） | **PARITY** | `toutiao` / toutiao.com | Vibe-native provider，NewsNow 契约实测验证（30条），1-based 真实排名，域名防劫持校验通过 |
+| baidu（百度热搜） | **PARITY** | `baidu` / baidu.com | Vibe-native provider，NewsNow 契约实测验证（30条），1-based 真实排名，域名防劫持校验通过 |
+| thepaper（澎湃新闻） | **PARITY** | `thepaper` / thepaper.cn | Vibe-native provider，NewsNow 契约实测验证（20条），1-based 真实排名，域名防劫持校验通过 |
+| bilibili-hot-search | **PARITY** | `bilibili-hot-search` / bilibili.com | Vibe-native provider，NewsNow 契约实测验证（30条），1-based 真实排名，域名防劫持校验通过 |
+| ifeng（凤凰网） | **PARITY** | `ifeng` / ifeng.com | Vibe-native provider，NewsNow 契约实测验证（12条），1-based 真实排名，域名防劫持校验通过 |
+| tieba（贴吧） | **PARITY** | `tieba` / baidu.com | Vibe-native provider，NewsNow 契约实测验证（30条），1-based 真实排名，域名防劫持校验通过 |
+| weibo（微博） | **PARITY** | `weibo` / weibo.com | Vibe-native provider，NewsNow 契约实测验证（30条），1-based 真实排名，域名防劫持校验通过 |
+| douyin（抖音） | **PARITY** | `douyin` / douyin.com | Vibe-native provider，NewsNow 契约实测验证（30条），1-based 真实排名，域名防劫持校验通过 |
+| zhihu（知乎） | **PARITY** | `zhihu` / zhihu.com | Vibe-native provider，NewsNow 契约实测验证（20条），1-based 真实排名，域名防劫持校验通过 |
+| 动态来源下拉筛选（Dynamic Source Filter） | **PARITY** | UI 交互能力 | 前端 `HotlistPanel` 与 `hotlistView` 升级为通用 `source:<source_id>` 动态下拉筛选，杜绝硬编码按钮 |
+| 11 平台设置管理（Settings 11 Platforms） | **PARITY** | 来源管理能力 | 设置页完整呈现 11 个系统热榜源，支持用户独立启停，跨刷新持久化，系统源删除保护（409） |
 
 ---
 
