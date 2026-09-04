@@ -32,6 +32,10 @@ DB_FILENAME = "native_intel.sqlite3"
 
 # fetch run 状态
 RUN_STATUS_RUNNING = "running"
+ANALYSIS_STATE_CLASSIFIED = "CLASSIFIED"
+ANALYSIS_STATE_NOT_RELEVANT = "NOT_RELEVANT"
+ANALYSIS_STATE_ERROR = "ERROR"
+
 RUN_STATUS_OK = "ok"
 RUN_STATUS_PARTIAL = "partial"
 RUN_STATUS_FAILED = "failed"
@@ -199,6 +203,17 @@ CREATE TABLE IF NOT EXISTS intel_item_classifications (
     provider_identity TEXT,
     PRIMARY KEY (item_id, profile_id, profile_fingerprint)
 );
+
+CREATE TABLE IF NOT EXISTS intel_item_filter_analysis (
+    item_id INTEGER NOT NULL,
+    profile_id TEXT NOT NULL,
+    profile_fingerprint TEXT NOT NULL,
+    analysis_state TEXT NOT NULL,
+    analyzed_at TEXT NOT NULL,
+    provider_identity TEXT,
+    error_kind TEXT,
+    PRIMARY KEY (item_id, profile_id, profile_fingerprint)
+);
 """
 
 _INDEX_SQL = (
@@ -213,6 +228,7 @@ _INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_intel_classifications_lookup ON intel_item_classifications (profile_id, profile_fingerprint, relevance_score DESC)",
     "CREATE INDEX IF NOT EXISTS idx_intel_classifications_tag ON intel_item_classifications (profile_id, profile_fingerprint, primary_tag)",
     "CREATE INDEX IF NOT EXISTS idx_intel_classifications_item ON intel_item_classifications (item_id)",
+    "CREATE INDEX IF NOT EXISTS idx_intel_analysis_lookup ON intel_item_filter_analysis (profile_id, profile_fingerprint, analysis_state)",
 )
 
 
@@ -2007,6 +2023,212 @@ def list_recent_items_for_filter(
                         "first_seen_at": r["first_seen_at"],
                         "last_seen_at": r["last_seen_at"],
                         "published_at": r["published_at"],
+                    }
+                    for r in rows
+                ]
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+def record_item_analyses(
+    analyses: list[dict[str, Any]],
+    db_path: str | Path | None = None,
+) -> int:
+    """批量记录条目分析状态（CLASSIFIED / NOT_RELEVANT / ERROR）。"""
+    if not analyses:
+        return 0
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    now = utc_now_iso()
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    conn.executemany(
+                        """
+                        INSERT OR REPLACE INTO intel_item_filter_analysis (
+                            item_id, profile_id, profile_fingerprint,
+                            analysis_state, analyzed_at, provider_identity, error_kind
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            (
+                                int(a["item_id"]),
+                                str(a["profile_id"]),
+                                str(a["profile_fingerprint"]),
+                                str(a["analysis_state"]),
+                                str(a.get("analyzed_at") or now),
+                                a.get("provider_identity"),
+                                a.get("error_kind"),
+                            )
+                            for a in analyses
+                        ],
+                    )
+                return len(analyses)
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def get_item_analyses(
+    profile_id: str,
+    profile_fingerprint: str,
+    item_ids: list[int] | None = None,
+    db_path: str | Path | None = None,
+) -> dict[int, dict[str, Any]]:
+    """获取指定 profile 与 fingerprint 下的条目分析状态字典。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    clauses = ["profile_id = ?", "profile_fingerprint = ?"]
+    args: list[Any] = [profile_id, profile_fingerprint]
+    if item_ids:
+        placeholders = ",".join("?" for _ in item_ids)
+        clauses.append(f"item_id IN ({placeholders})")
+        args.extend(item_ids)
+
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT item_id, profile_id, profile_fingerprint,
+                           analysis_state, analyzed_at, provider_identity, error_kind
+                    FROM intel_item_filter_analysis
+                    WHERE {' AND '.join(clauses)}
+                    """,
+                    tuple(args),
+                ).fetchall()
+                return {
+                    int(r["item_id"]): {
+                        "item_id": int(r["item_id"]),
+                        "profile_id": r["profile_id"],
+                        "profile_fingerprint": r["profile_fingerprint"],
+                        "analysis_state": r["analysis_state"],
+                        "analyzed_at": r["analyzed_at"],
+                        "provider_identity": r["provider_identity"],
+                        "error_kind": r["error_kind"],
+                    }
+                    for r in rows
+                }
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def carry_forward_analysis_and_classifications(
+    profile_id: str,
+    old_fingerprint: str,
+    new_fingerprint: str,
+    kept_tags: list[str],
+    carry_forward_not_relevant: bool = False,
+    carry_not_relevant: bool | None = None,
+    db_path: str | Path | None = None,
+) -> tuple[int, int]:
+    if carry_not_relevant is not None:
+        carry_forward_not_relevant = carry_not_relevant
+    """增量继承：将仍有效保留标签下的分类结果与分析状态顺延到新 fingerprint。"""
+    if not kept_tags and not carry_forward_not_relevant:
+        return 0, 0
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    now = utc_now_iso()
+
+    carried_cls = 0
+    carried_ana = 0
+
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                with conn:
+                    # 1. 顺延保留标签的分类
+                    if kept_tags:
+                        placeholders = ",".join("?" for _ in kept_tags)
+                        cur_cls = conn.execute(
+                            f"""
+                            INSERT OR REPLACE INTO intel_item_classifications (
+                                item_id, profile_id, profile_fingerprint,
+                                primary_tag, relevance_score, classified_at, provider_identity
+                            )
+                            SELECT item_id, profile_id, ?, primary_tag, relevance_score, ?, provider_identity
+                            FROM intel_item_classifications
+                            WHERE profile_id = ? AND profile_fingerprint = ? AND primary_tag IN ({placeholders})
+                            """,
+                            [new_fingerprint, now, profile_id, old_fingerprint, *kept_tags],
+                        )
+                        carried_cls = cur_cls.rowcount
+
+                        # 顺延这些分类条目的 CLASSIFIED 分析状态
+                        cur_ana = conn.execute(
+                            f"""
+                            INSERT OR REPLACE INTO intel_item_filter_analysis (
+                                item_id, profile_id, profile_fingerprint,
+                                analysis_state, analyzed_at, provider_identity, error_kind
+                            )
+                            SELECT c.item_id, c.profile_id, ?, 'CLASSIFIED', ?, c.provider_identity, NULL
+                            FROM intel_item_classifications c
+                            WHERE c.profile_id = ? AND c.profile_fingerprint = ? AND c.primary_tag IN ({placeholders})
+                            """,
+                            [new_fingerprint, now, profile_id, old_fingerprint, *kept_tags],
+                        )
+                        carried_ana += cur_ana.rowcount
+
+                    # 2. 如果未新增任何标签（纯删减标签），历史 NOT_RELEVANT 仍然不相关，可安全继承
+                    if carry_forward_not_relevant:
+                        cur_nr = conn.execute(
+                            """
+                            INSERT OR REPLACE INTO intel_item_filter_analysis (
+                                item_id, profile_id, profile_fingerprint,
+                                analysis_state, analyzed_at, provider_identity, error_kind
+                            )
+                            SELECT item_id, profile_id, ?, 'NOT_RELEVANT', ?, provider_identity, error_kind
+                            FROM intel_item_filter_analysis
+                            WHERE profile_id = ? AND profile_fingerprint = ? AND analysis_state = 'NOT_RELEVANT'
+                            """,
+                            [new_fingerprint, now, profile_id, old_fingerprint],
+                        )
+                        carried_ana += cur_nr.rowcount
+
+                return carried_cls, carried_ana
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def list_all_recent_items_with_sources(
+    db_path: str | Path | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """获取最近条目（含热榜与 RSS 全源），附带来源元数据（source_name, source_type 等）。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT i.item_id, i.title, i.summary, i.source_id, i.url, i.canonical_url,
+                           i.hint, i.published_at, i.first_seen_at, i.last_seen_at, i.observation_count,
+                           s.name AS source_name, s.source_type, s.has_real_rank, s.enabled AS source_enabled
+                    FROM intel_items i
+                    LEFT JOIN intel_sources s ON s.source_id = i.source_id
+                    ORDER BY i.last_seen_at DESC, i.item_id DESC
+                    LIMIT ?
+                    """,
+                    (max(1, min(int(limit), 500)),),
+                ).fetchall()
+                return [
+                    {
+                        "item_id": int(r["item_id"]),
+                        "title": r["title"],
+                        "summary": r["summary"],
+                        "source_id": r["source_id"],
+                        "url": r["url"],
+                        "canonical_url": r["canonical_url"],
+                        "hint": r["hint"],
+                        "published_at": r["published_at"],
+                        "first_seen_at": r["first_seen_at"],
+                        "last_seen_at": r["last_seen_at"],
+                        "observation_count": int(r["observation_count"] or 1),
+                        "source_name": r["source_name"],
+                        "source_type": r["source_type"],
+                        "has_real_rank": bool(r["has_real_rank"]),
+                        "source_enabled": bool(r["source_enabled"]),
                     }
                     for r in rows
                 ]

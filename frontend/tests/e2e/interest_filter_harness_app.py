@@ -112,35 +112,32 @@ def _mock_update_interest_tags(old_tags, new_interests_text, cfg=None, model_run
     new_tags = list(old_tags or []) + [{"id": len(old_tags or []) + 1, "tag": "具身智能", "description": "人形机器人驱动"}]
     return {
         "keep": [t.get("tag") for t in (old_tags or [])],
-        "add": ["具身智能"],
+        "add": [{"tag": "具身智能", "description": "人形机器人驱动"}],
         "remove": [],
         "new_tags": new_tags,
         "change_ratio": 0.25,
     }
 
-def _mock_classify_items_batch(items, tags, profile_id="default", profile_fingerprint="fp", cfg=None, model_runner=None):
+def _mock_classify_items_batch(items, tags, interests_text="", cfg=None, batch_size=15, model_runner=None):
     results = []
+    not_relevant_ids = []
     for item in items:
         text = f"{item.get('title', '')} {item.get('summary', '')}"
         if "半导体" in text or "芯片" in text:
             results.append({
                 "item_id": item["item_id"],
-                "score": 0.92,
+                "relevance_score": 0.92,
                 "primary_tag": "芯片制造",
             })
         elif "大模型" in text or "人工智能" in text:
             results.append({
                 "item_id": item["item_id"],
-                "score": 0.88,
+                "relevance_score": 0.88,
                 "primary_tag": "AI技术",
             })
         else:
-            results.append({
-                "item_id": item["item_id"],
-                "score": 0.15,
-                "primary_tag": "",
-            })
-    return results, []
+            not_relevant_ids.append(item["item_id"])
+    return results, not_relevant_ids, []
 
 filter_engine.extract_interest_tags = _mock_extract_interest_tags
 filter_engine.update_interest_tags = _mock_update_interest_tags

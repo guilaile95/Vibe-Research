@@ -92,13 +92,13 @@
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
 | 过滤模式双轨支持（filter.method = keyword / ai） | **PARITY** | `backend/native_intel_filter.py` + `backend/native_intel_store.py`；支持本地关键词与 AI 语义双轨模式，独立配置持久化于 `intel_filter_profiles`，支持无缝热切换且配置不丢失 |
-| 本地关键词过滤（Keyword filtering） | **PARITY** | `filter_by_keywords()`；多字段（title + summary）匹配，支持全局排除与分组专属排除，遵循 Exclude Wins 优先原则，支持纯文本与正则表达式 |
-| AI 智能相关性筛选（AI intelligent filter） | **PARITY** | `classify_items_batch()`；复用既有统一 AI 适配层（Codex / OpenAI-compatible），批量相关性打分（min_score 阈值筛选），严格隔离不可信输入，失败诚实上报不造假 |
-| 个人兴趣偏好配置（AI interests） | **PARITY** | `extract_interest_tags()`；支持自然语言兴趣描述，结构化提取多标签并计算 profile fingerprint 保持确定性 |
-| 标签自更新机制（AI tag update） | **PARITY** | `update_interest_tags()`；对比新旧标签集，计算 `change_ratio`，输出保持/新增/移除明细，变化率超过阈值触发重算 |
-| 黑名单/白名单机制（Blacklist / Whitelist） | **PARITY** | 全局排除词 `global_excludes` + 分组包含/排除规则，精确控制展示条目 |
-| 多模式匹配（Regex / Wildcard） | **PARITY** | 支持纯文本子串包含与 `/regex/` 不区分大小写正则表达式匹配 |
-| 分类标签与来源分组（Platform grouping） | **PARITY** | 关键词分组与 AI 兴趣标签双轨打标，前端 `HotlistPanel` 动态渲染彩色徽章并支持 `mode=my_interests` 过滤视图与筛选设置弹窗 |
+| 本地关键词过滤语法（Keyword filtering parity） | **PARITY** (VIBE_NATIVE_SUPERSET) | `evaluate_keyword_rules()`；完整对齐上游 required（AND 必须词）、includes（OR 普通词）、excludes（排除词）、filter_terms、global_excludes（Exclude Wins 优先原则）及 max_count 组内条目上限；且上游仅对 title 过滤，Vibe 原生扩展对 title + summary 同时匹配（VIBE_NATIVE_SUPERSET） |
+| AI 智能相关性筛选（AI intelligent filter） | **PARITY** | `classify_items_batch()`；复用既有统一 AI 适配层（Codex / OpenAI-compatible），批量相关性打分（min_score 阈值筛选），严格隔离不可信输入，失败诚实上报不造假；三态缓存（CLASSIFIED/NOT_RELEVANT/ERROR）精准隔离 |
+| 个人兴趣偏好配置（AI interests） | **PARITY** | `extract_interest_tags()`；支持自然语言兴趣描述，结构化提取多标签并计算 profile fingerprint 保持确定性；统一 AI 密钥零落盘防泄露保护 |
+| 标签增量更新与阈值分流（AI tag update & thresholding） | **PARITY** | `update_interest_tags()` 与 `apply_interest_update()`；对比新旧标签集计算 `change_ratio`；低于阈值增量继承（INCREMENTAL），高于阈值全量重跑（FULL） |
+| 黑名单/白名单机制（Blacklist / Whitelist） | **PARITY** | 全局排除词 `global_excludes` + 分组包含/必须/排除规则，精确控制展示条目 |
+| 匹配模式对齐（Regex / Substring / Wildcard Truth） | **PARITY** | 上游未实现独立通配符 DSL（UPSTREAM_HAS_NO_STANDALONE_WILDCARD_DSL），其过滤语法由纯文本子串包含与 `/regex/` 正则构成；Vibe 完整实现纯文本子串包含与 `/regex/`（支持 `/pattern/i`、`/pattern/g` 等正则修饰符，默认忽略大小写），达到上游语法完整等价 |
+| 分类标签与来源分组（Platform grouping） | **PARITY** | 关键词分组与 AI 兴趣标签双轨打标，前端 `HotlistPanel` 动态渲染彩色徽章并支持 `mode=my_interests` 过滤视图与筛选设置弹窗；支持热榜与 RSS 全源过滤与诚实状态栏呈现 |
 | E2E 测试验证 | **PARITY** | `tests/e2e/interest-filter.browser.mjs` 真浏览器 + 真后端 SQLite 持久化、模式切换、标签提取与设置同步验证，CI 自动化接入 |
 
 ---

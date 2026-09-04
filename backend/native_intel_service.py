@@ -1019,6 +1019,7 @@ def hotlist_board(
             result["filter_meta"] = {
                 **f_meta,
                 "mode": mode,
+                "status": "normal",
             }
             if mode == "my_interests":
                 result["items"] = matched_items
@@ -1027,11 +1028,18 @@ def hotlist_board(
                 for it in result["items"]:
                     it["filter_match"] = matched_map.get(int(it["item_id"]))
         except Exception as filter_err:
-            _LOGGER.warning("热榜兴趣过滤异常，降级显示全量条目: %s", filter_err)
+            _LOGGER.warning("热榜兴趣过滤异常: %s", filter_err)
+            safe_error = str(filter_err)
             result["filter_meta"] = {
-                "error": str(filter_err),
+                "status": "UNAVAILABLE",
+                "error": safe_error,
                 "mode": mode,
+                "profile_id": profile_id,
+                "total_evaluated": len(result["items"]),
+                "matched_count": 0,
             }
+            if mode == "my_interests":
+                result["items"] = []
     except store.NativeIntelStoreError as exc:
         result["status"] = STATUS_UNAVAILABLE
         result["error"] = str(exc)
@@ -1781,15 +1789,21 @@ def classify_items(
     cfg: dict[str, Any] | None = None,
     model_runner: Callable[[Any, list[dict[str, str]]], str] | None = None,
     path: str | None = None,
+    batch_size: int = 15,
+    **kwargs: Any,
 ) -> dict[str, Any]:
-    """批量调用 AI 对未分类条目执行分类。
+    """批量调用 AI 对未分类或分类失败的条目执行分类。
 
-    失败隔离：批次失败如实标记失败，不造假数据，不中断业务。
-    缓存机制：基于 (item_id, profile_id, profile_fingerprint) 命中缓存，避免重复消费。
+    状态模型：
+    - CLASSIFIED: 命中并已分类（cache hit，不重复请求）
+    - NOT_RELEVANT: 成功评估但未命中（cache hit，不重复请求）
+    - ERROR: 批次失败（允许重试）
+    - UNCLASSIFIED: 尚未评估（调用 AI）
     """
     target = path or db_path()
     prof = get_filter_profile(profile_id, target)
     tags = prof.get("tags") or []
+    fp = prof["profile_fingerprint"]
     if not tags:
         return {
             "status": "NO_TAGS",
@@ -1798,7 +1812,7 @@ def classify_items(
             "classified": 0,
             "failed": 0,
             "unclassified": 0,
-            "profile_fingerprint": prof["profile_fingerprint"],
+            "profile_fingerprint": fp,
         }
 
     if item_ids is not None:
@@ -1814,39 +1828,47 @@ def classify_items(
             "classified": 0,
             "failed": 0,
             "unclassified": 0,
-            "profile_fingerprint": prof["profile_fingerprint"],
+            "profile_fingerprint": fp,
         }
 
-    fp = prof["profile_fingerprint"]
-    existing = store.get_item_classifications(
-        profile_id=profile_id,
-        profile_fingerprint=fp,
-        item_ids=[i["item_id"] for i in items],
-        db_path=target,
-    )
+    candidate_ids = [int(i["item_id"]) for i in items]
+    analyses = store.get_item_analyses(profile_id, fp, candidate_ids, db_path=target)
 
-    unclassified = [i for i in items if i["item_id"] not in existing]
-    if not unclassified:
+    # 仅当 analysis_state 为 ERROR 或未在 analyses 中时，才需要发送给 AI
+    pending_items = [
+        i for i in items
+        if int(i["item_id"]) not in analyses or analyses[int(i["item_id"])]["analysis_state"] == store.ANALYSIS_STATE_ERROR
+    ]
+
+    existing_classified = [
+        iid for iid, a in analyses.items() if a["analysis_state"] == store.ANALYSIS_STATE_CLASSIFIED
+    ]
+
+    if not pending_items:
         return {
             "status": "UP_TO_DATE",
             "total": len(items),
-            "classified": len(existing),
+            "classified": len(existing_classified),
             "failed": 0,
             "unclassified": 0,
             "profile_fingerprint": fp,
         }
 
-    succeeded, failed_ids = filter_engine.classify_items_batch(
-        items=unclassified,
+    succeeded, not_relevant_ids, failed_ids = filter_engine.classify_items_batch(
+        items=pending_items,
         tags=tags,
         interests_text=prof.get("interests_text", ""),
         cfg=cfg,
+        batch_size=batch_size,
         model_runner=model_runner,
     )
 
-    records = []
     now = utc_now_iso()
-    provider_id = (cfg or {}).get("provider") or "cli-codex"
+    provider_id = filter_engine.get_provider_identity(cfg)
+
+    # 1. 保存命中的分类记录
+    records = []
+    analysis_records = []
     for s in succeeded:
         records.append({
             "item_id": s["item_id"],
@@ -1855,20 +1877,182 @@ def classify_items(
             "primary_tag": s["primary_tag"],
             "relevance_score": s["relevance_score"],
             "classified_at": now,
-            "provider_identity": str(provider_id),
+            "provider_identity": provider_id,
+        })
+        analysis_records.append({
+            "item_id": s["item_id"],
+            "profile_id": profile_id,
+            "profile_fingerprint": fp,
+            "analysis_state": store.ANALYSIS_STATE_CLASSIFIED,
+            "analyzed_at": now,
+            "provider_identity": provider_id,
+            "error_kind": None,
         })
     store.save_item_classifications(records, db_path=target)
+
+    # 2. 保存未命中的 NOT_RELEVANT 记录（不写 classifications 表）
+    for n_id in not_relevant_ids:
+        analysis_records.append({
+            "item_id": n_id,
+            "profile_id": profile_id,
+            "profile_fingerprint": fp,
+            "analysis_state": store.ANALYSIS_STATE_NOT_RELEVANT,
+            "analyzed_at": now,
+            "provider_identity": provider_id,
+            "error_kind": None,
+        })
+
+    # 3. 保存失败批次的 ERROR 记录
+    for f_id in failed_ids:
+        analysis_records.append({
+            "item_id": f_id,
+            "profile_id": profile_id,
+            "profile_fingerprint": fp,
+            "analysis_state": store.ANALYSIS_STATE_ERROR,
+            "analyzed_at": now,
+            "provider_identity": provider_id,
+            "error_kind": "BATCH_FAILURE",
+        })
+
+    store.record_item_analyses(analysis_records, db_path=target)
 
     return {
         "status": "PARTIAL_FAILURE" if failed_ids else "SUCCESS",
         "total": len(items),
-        "classified": len(existing) + len(succeeded),
+        "classified": len(existing_classified) + len(succeeded),
         "newly_classified": len(succeeded),
+        "not_relevant": len(not_relevant_ids),
         "failed": len(failed_ids),
-        "unclassified": len(unclassified) - len(succeeded),
+        "unclassified": max(0, len(pending_items) - len(succeeded) - len(not_relevant_ids) - len(failed_ids)),
         "failed_item_ids": failed_ids,
         "profile_fingerprint": fp,
     }
+
+
+def apply_interest_update(
+    profile_id: str = "default",
+    interests_text: str = "",
+    new_interests_text: str = "",
+    cfg: dict[str, Any] | None = None,
+    ai_config: dict[str, Any] | None = None,
+    full_reclassify_threshold: float | None = None,
+    model_runner: Callable[[Any, list[dict[str, str]]], str] | None = None,
+    path: str | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """完整编排兴趣更新与重分类决策（FULL vs INCREMENTAL）。"""
+    target = path or db_path()
+    prof = get_filter_profile(profile_id, target)
+    old_tags = prof.get("tags") or []
+    old_fp = prof["profile_fingerprint"]
+    clean_text = (interests_text or new_interests_text or kwargs.get("interests_text") or kwargs.get("new_interests_text") or "").strip()
+    if not clean_text:
+        raise ValueError("兴趣描述文本为空")
+    effective_cfg = cfg or ai_config or kwargs.get("cfg") or kwargs.get("ai_config")
+
+    # 首次配置，无旧标签 -> 必须执行完整提取
+    if not old_tags:
+        new_tags = filter_engine.extract_interest_tags(clean_text, cfg=ai_config, model_runner=model_runner)
+        updated = update_filter_profile(
+            profile_id=profile_id,
+            payload={
+                "interests_text": clean_text,
+                "tags": new_tags,
+                "method": filter_engine.METHOD_AI,
+            },
+            path=target,
+        )
+        return {
+            "reclassification_mode": "FULL",
+            "full_reclassify_required": True,
+            "change_ratio": 1.0,
+            "profile": updated,
+        }
+
+    # 已有标签时，先尝试对比更新
+    update_res = None
+    try:
+        update_res = filter_engine.update_interest_tags(
+            old_tags, clean_text, cfg=ai_config, model_runner=model_runner
+        )
+    except Exception as update_err:
+        _LOGGER.warning("对比更新标签失败，尝试回退全量提取: %s", update_err)
+        try:
+            fallback_tags = filter_engine.extract_interest_tags(
+                clean_text, cfg=ai_config, model_runner=model_runner
+            )
+            update_res = {
+                "keep": [],
+                "add": fallback_tags,
+                "remove": [t.get("tag") for t in old_tags],
+                "change_ratio": 1.0,
+                "new_tags": fallback_tags,
+            }
+        except Exception as extract_err:
+            _LOGGER.error("回退全量提取亦失败，Fail Closed 保持原配置不变: %s", extract_err)
+            raise ValueError(f"AI 标签更新与提取均失败: {extract_err}") from extract_err
+
+    change_ratio = update_res.get("change_ratio", 0.5)
+    threshold = float(full_reclassify_threshold if full_reclassify_threshold is not None else prof.get("reclassify_threshold", filter_engine.DEFAULT_RECLASSIFY_THRESHOLD))
+
+    if change_ratio >= threshold:
+        # FULL 重分类：使用全新标签，不继承旧分析结果
+        new_tags = update_res.get("new_tags") or []
+        updated = update_filter_profile(
+            profile_id=profile_id,
+            payload={
+                "interests_text": clean_text,
+                "tags": new_tags,
+                "method": filter_engine.METHOD_AI,
+            },
+            path=target,
+        )
+        return {
+            "decision": "FULL",
+            "reclassification_mode": "FULL",
+            "full_reclassify_required": True,
+            "change_ratio": change_ratio,
+            "profile": updated,
+        }
+    else:
+        # INCREMENTAL 增量更新：保留 tags 的分类继承到新 fingerprint
+        new_tags = update_res.get("new_tags") or []
+        updated = update_filter_profile(
+            profile_id=profile_id,
+            payload={
+                "interests_text": clean_text,
+                "tags": new_tags,
+                "method": filter_engine.METHOD_AI,
+            },
+            path=target,
+        )
+        new_fp = updated["profile_fingerprint"]
+        kept_tag_names = [
+            str(k.get("tag") if isinstance(k, dict) else k).strip()
+            for k in (update_res.get("keep") or [])
+        ]
+        has_added_tags = len(update_res.get("add") or []) > 0
+
+        carried_cls, carried_ana = store.carry_forward_analysis_and_classifications(
+            profile_id=profile_id,
+            old_fingerprint=old_fp,
+            new_fingerprint=new_fp,
+            kept_tags=kept_tag_names,
+            carry_not_relevant=not has_added_tags,
+            db_path=target,
+        )
+        return {
+            "decision": "INCREMENTAL",
+            "reclassification_mode": "INCREMENTAL",
+            "full_reclassify_required": False,
+            "change_ratio": change_ratio,
+            "keep": update_res.get("keep") or [],
+            "add": update_res.get("add") or [],
+            "remove": update_res.get("remove") or [],
+            "carried_classifications": carried_cls,
+            "carried_analyses": carried_ana,
+            "profile": updated,
+        }
 
 
 def filter_items(
@@ -1885,20 +2069,52 @@ def filter_items(
 
     if method == filter_engine.METHOD_KEYWORD:
         rules = prof.get("keyword_rules") or {}
+        # 预先获取每个 group 的 max_count
+        group_max_counts: dict[str, int] = {}
+        if isinstance(rules, dict):
+            for g in rules.get("groups") or []:
+                if isinstance(g, dict) and g.get("name") and g.get("max_count") is not None:
+                    try:
+                        group_max_counts[str(g["name"])] = int(g["max_count"])
+                    except (ValueError, TypeError):
+                        pass
+
+        group_emitted_counts: dict[str, int] = {}
         for item in items:
             title = item.get("title") or ""
             summary = item.get("summary")
             matched, groups = filter_engine.evaluate_keyword_rules(title, summary, rules)
             if matched:
+                # 检查 max_count 限制
+                if group_max_counts:
+                    eligible_groups = [
+                        g for g in groups
+                        if g not in group_max_counts or group_emitted_counts.get(g, 0) < group_max_counts[g]
+                    ]
+                    if groups and not eligible_groups:
+                        continue
+                    for g in groups:
+                        group_emitted_counts[g] = group_emitted_counts.get(g, 0) + 1
+
                 item_copy = dict(item)
                 item_copy["filter_match"] = {
                     "method": "keyword",
                     "matched_groups": groups,
                 }
                 filtered.append(item_copy)
+        classified_count = len(filtered)
+        not_relevant_count = max(0, len(items) - len(filtered))
+        error_count = 0
+        unclassified_count = 0
     else:
         fp = prof["profile_fingerprint"]
         item_ids = [int(i["item_id"]) for i in items if i.get("item_id")]
+        analyses = store.get_item_analyses(profile_id, fp, item_ids, db_path=target)
+        classified_count = sum(1 for a in analyses.values() if a["analysis_state"] == store.ANALYSIS_STATE_CLASSIFIED)
+        not_relevant_count = sum(1 for a in analyses.values() if a["analysis_state"] == store.ANALYSIS_STATE_NOT_RELEVANT)
+        error_count = sum(1 for a in analyses.values() if a["analysis_state"] == store.ANALYSIS_STATE_ERROR)
+        unclassified_count = max(0, len(item_ids) - len(analyses))
+
         classifications = store.get_item_classifications(
             profile_id=profile_id,
             profile_fingerprint=fp,
@@ -1925,26 +2141,129 @@ def filter_items(
         "profile_fingerprint": prof["profile_fingerprint"],
         "total_evaluated": len(items),
         "matched_count": len(filtered),
+        "classified_count": classified_count,
+        "not_relevant_count": not_relevant_count,
+        "unclassified_count": unclassified_count,
+        "error_count": error_count,
     }
     return filtered, meta
 
 
+def list_filtered_items(
+    profile_id: str = "default",
+    source_type: str = "all",
+    mode: str = "my_interests",
+    limit: int = 100,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """统一返回经过个人兴趣过滤的近期资讯（包含热榜与 RSS 真实全源）。"""
+    target = path or db_path()
+    raw_items = store.list_all_recent_items_with_sources(limit=max(limit * 2, 100), db_path=target)
+
+    # 来源类型筛选
+    if source_type == "hotlist":
+        filtered_by_src = [i for i in raw_items if i.get("source_type") == "hotlist"]
+    elif source_type == "rss":
+        filtered_by_src = [i for i in raw_items if i.get("source_type") != "hotlist"]
+    else:
+        filtered_by_src = raw_items
+
+    # 实体关联与热榜位次补充
+    item_ids = [int(i["item_id"]) for i in filtered_by_src]
+    entity_map = store.list_item_entities(item_ids, target)
+
+    enriched_items: list[dict[str, Any]] = []
+    plane = data_status(target)
+    is_plane_stale = plane.get("status") == STATUS_STALE
+
+    for it in filtered_by_src:
+        row = dict(it)
+        iid = int(it["item_id"])
+        row["entities"] = entity_map.get(iid, [])
+
+        if it.get("source_type") == "hotlist":
+            state = store.get_item_rank_state(iid, target)
+            row["rank"] = state.get("current_rank")
+            row["previous_rank"] = state.get("previous_rank")
+            row["rank_delta"] = state.get("rank_delta")
+            row["observation_count"] = int(it.get("observation_count") or 1)
+            row["current_state"] = state.get("current_state") or ("STALE" if is_plane_stale else "ON_LIST")
+        else:
+            row["rank"] = None
+            row["previous_rank"] = None
+            row["rank_delta"] = None
+            row["observation_count"] = int(it.get("observation_count") or 1)
+            row["current_state"] = "NORMAL"
+
+        enriched_items.append(row)
+
+    enriched_items = enriched_items[:limit]
+
+    try:
+        matched_items, f_meta = filter_items(enriched_items, profile_id=profile_id, path=target)
+        f_meta["mode"] = mode
+        f_meta["source_type"] = source_type
+        f_meta["status"] = "normal"
+        if mode == "my_interests":
+            display_items = matched_items
+        else:
+            matched_map = {int(m["item_id"]): m.get("filter_match") for m in matched_items}
+            display_items = []
+            for it in enriched_items:
+                it_copy = dict(it)
+                it_copy["filter_match"] = matched_map.get(int(it["item_id"]))
+                display_items.append(it_copy)
+    except Exception as filter_err:
+        _LOGGER.warning("资讯过滤失败: %s", filter_err)
+        f_meta = {
+            "status": "UNAVAILABLE",
+            "error": str(filter_err),
+            "mode": mode,
+            "source_type": source_type,
+            "profile_id": profile_id,
+            "total_evaluated": len(enriched_items),
+            "matched_count": 0,
+        }
+        if mode == "my_interests":
+            display_items = []
+        else:
+            display_items = enriched_items
+
+    return {
+        "status": "normal",
+        "items": display_items,
+        "filter_meta": f_meta,
+    }
+
+
 def filter_status(profile_id: str = "default", path: str | None = None) -> dict[str, Any]:
-    """查询过滤器当前运行状态与覆盖统计。"""
+    """查询过滤器运行状态与条目分类覆盖率统计（支持诚实状态呈现）。"""
     target = path or db_path()
     prof = get_filter_profile(profile_id, target)
     fp = prof["profile_fingerprint"]
 
     recent_items = store.list_recent_items_for_filter(target, limit=100)
     total_recent = len(recent_items)
+    item_ids = [int(i["item_id"]) for i in recent_items]
+
     if prof["method"] == filter_engine.METHOD_AI:
-        cls_map = store.get_item_classifications(
+        analyses = store.get_item_analyses(profile_id, fp, item_ids, db_path=target)
+        classifications = store.get_item_classifications(
             profile_id=profile_id,
             profile_fingerprint=fp,
-            item_ids=[i["item_id"] for i in recent_items],
+            item_ids=item_ids,
             db_path=target,
         )
-        classified_count = len(cls_map)
+
+        classified_count = sum(1 for a in analyses.values() if a["analysis_state"] == store.ANALYSIS_STATE_CLASSIFIED)
+        not_relevant_count = sum(1 for a in analyses.values() if a["analysis_state"] == store.ANALYSIS_STATE_NOT_RELEVANT)
+        error_count = sum(1 for a in analyses.values() if a["analysis_state"] == store.ANALYSIS_STATE_ERROR)
+        analyzed_set = set(analyses.keys())
+        unclassified_count = max(0, sum(1 for iid in item_ids if iid not in analyzed_set))
+
+        min_score = float(prof.get("min_score", filter_engine.DEFAULT_MIN_SCORE))
+        matched_count = sum(1 for c in classifications.values() if float(c["relevance_score"]) >= min_score)
+        below_threshold_count = max(0, classified_count - matched_count)
     else:
         rules = prof.get("keyword_rules") or {}
         matched_cnt = 0
@@ -1953,15 +2272,22 @@ def filter_status(profile_id: str = "default", path: str | None = None) -> dict[
             if m:
                 matched_cnt += 1
         classified_count = matched_cnt
+        not_relevant_count = max(0, total_recent - matched_cnt)
+        error_count = 0
+        unclassified_count = 0
+        below_threshold_count = 0
+        matched_count = matched_cnt
 
     return {
         "status": "normal",
         "profile": prof,
         "metrics": {
             "recent_items_count": total_recent,
-            "classified_or_matched_count": classified_count,
-            "unclassified_count": max(0, total_recent - classified_count)
-            if prof["method"] == filter_engine.METHOD_AI
-            else 0,
+            "classified_count": classified_count,
+            "not_relevant_count": not_relevant_count,
+            "unclassified_count": unclassified_count,
+            "error_count": error_count,
+            "below_threshold_count": below_threshold_count,
+            "matched_count": matched_count,
         },
     }

@@ -657,6 +657,29 @@ export const api = {
       payload || {},
       { unwrapData: false },
     ),
+  applyNativeIntelInterestUpdate: (payload: {
+    interests_text: string;
+    profile_id?: string;
+    ai_config?: Record<string, any>;
+    full_reclassify_threshold?: number;
+  }) =>
+    request<Record<string, any>>(
+      "/native-intel/filter/apply-interest-update",
+      "POST",
+      payload,
+      { unwrapData: false },
+    ),
+  nativeIntelFilteredItems: (
+    sourceType: "all" | "hotlist" | "rss" = "all",
+    mode: "all" | "my_interests" = "my_interests",
+    profileId = "default",
+    limit = 100,
+    signal?: AbortSignal,
+  ) =>
+    get<Record<string, any>>(
+      `/native-intel/filter/items?source_type=${sourceType}&mode=${mode}&profile_id=${encodeURIComponent(profileId)}&limit=${limit}`,
+      { unwrapData: false, ...(signal ? { signal } : {}) },
+    ),
   nativeIntelFilterStatus: (profileId = "default", signal?: AbortSignal) =>
     get<Record<string, any>>(
       `/native-intel/filter/status?profile_id=${encodeURIComponent(profileId)}`,

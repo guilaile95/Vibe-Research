@@ -554,13 +554,18 @@ function NativeIntelFilterSettingsSection() {
   };
 
   const handleExtractTags = async () => {
+    const llm = loadLlm();
+    if (!llm) {
+      toast.error("尚未接入 AI，请先到「接入 AI」配置。");
+      return;
+    }
     if (!interestsText.trim()) {
       toast.error("请先填写个人兴趣描述");
       return;
     }
     setExtracting(true);
     try {
-      const res = await api.extractNativeIntelFilterTags(interestsText);
+      const res = await api.extractNativeIntelFilterTags(interestsText, llm);
       setTags(res.tags || []);
       toast.success(`成功提取 ${res.tags.length} 个分类标签`);
     } catch (err) {
@@ -571,13 +576,18 @@ function NativeIntelFilterSettingsSection() {
   };
 
   const handleUpdateTags = async () => {
+    const llm = loadLlm();
+    if (!llm) {
+      toast.error("尚未接入 AI，请先到「接入 AI」配置。");
+      return;
+    }
     if (!interestsText.trim()) {
       toast.error("请先填写新的兴趣描述");
       return;
     }
     setUpdatingTags(true);
     try {
-      const res = await api.updateNativeIntelFilterTags(tags, interestsText);
+      const res = await api.updateNativeIntelFilterTags(tags, interestsText, llm);
       setTags(res.new_tags || []);
       toast.success(
         `增量更新完成（变动率 ${Math.round(res.change_ratio * 100)}%，保留 ${res.keep.length}，新增 ${res.add.length}，移除 ${res.remove.length}）`
@@ -589,18 +599,39 @@ function NativeIntelFilterSettingsSection() {
     }
   };
 
-  const handleClassify = async () => {
+  const handleSaveAndClassify = async () => {
+    const llm = loadLlm();
+    if (!llm) {
+      toast.error("尚未接入 AI，请先到「接入 AI」配置。");
+      return;
+    }
     if (tags.length === 0) {
       toast.error("请先提取或配置分类标签");
       return;
     }
     setClassifying(true);
     try {
-      const res = await api.classifyNativeIntelItems({ limit: 100 });
+      const updatedProfile = await api.updateNativeIntelFilterProfile({
+        name: profile?.name || "默认关注",
+        method,
+        interests_text: interestsText,
+        min_score: minScore,
+        keyword_rules: {
+          global_excludes: globalExcludes,
+          groups,
+        },
+        tags,
+      });
+      setProfile(updatedProfile);
+      const res = await api.classifyNativeIntelItems({
+        profile_id: updatedProfile.profile_id || "default",
+        limit: 100,
+        ai_config: llm,
+      });
       toast.success(`AI 批量分类完成：新分类 ${res.newly_classified ?? 0} 条，共计 ${res.classified ?? 0} 条`);
       await fetchProfile();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "执行批量分类失败");
+      toast.error(err instanceof ApiError ? err.message : "保存并执行分类失败");
     } finally {
       setClassifying(false);
     }
@@ -900,7 +931,8 @@ function NativeIntelFilterSettingsSection() {
 
               <button
                 type="button"
-                onClick={() => void handleClassify()}
+                data-testid="settings-save-and-classify-button"
+                onClick={() => void handleSaveAndClassify()}
                 disabled={classifying || tags.length === 0}
                 className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-background py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
               >
@@ -909,7 +941,7 @@ function NativeIntelFilterSettingsSection() {
                 ) : (
                   <Sparkles className="h-3.5 w-3.5 text-purple-400" />
                 )}
-                批量执行 AI 分类
+                保存并执行 AI 分类
               </button>
             </div>
           )}

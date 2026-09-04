@@ -603,3 +603,303 @@ def test_router_filter_endpoints(client: TestClient):
     board = r.json()
     assert "filter_meta" in board
     assert board["filter_meta"]["mode"] == "my_interests"
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 2 Follow-up: Gate Comprehensive Coverage Tests
+# ---------------------------------------------------------------------------
+
+def test_keyword_grammar_parity_required_and_max_count():
+    # 1. Test required (AND logic) + includes (OR logic)
+    rules = filter_engine.KeywordRules(
+        global_excludes=[],
+        filter_terms=["垃圾广告"],
+        groups=[
+            filter_engine.KeywordGroup(
+                name="AI算力",
+                required=["算力", "GPU"],
+                includes=["英伟达", "华为"],
+                max_count=2,
+            ),
+        ],
+    )
+    # Missing required word "GPU" -> should NOT match
+    m, _ = filter_engine.evaluate_keyword_rules("华为最新算力中心落成", None, rules)
+    assert m is False
+
+    # Has both required ("算力", "GPU") and one include ("英伟达") -> MATCH
+    m, g = filter_engine.evaluate_keyword_rules("英伟达发布下一代 GPU 算力芯片", None, rules)
+    assert m is True
+    assert "AI算力" in g
+
+    # Filter terms hit -> reject
+    m, _ = filter_engine.evaluate_keyword_rules("英伟达发布下一代 GPU 算力芯片，垃圾广告请勿理会", None, rules)
+    assert m is False
+
+    # 2. Regex flags: /pattern/i and /pattern/g
+    regex_rules = filter_engine.KeywordRules(
+        global_excludes=[],
+        groups=[
+            filter_engine.KeywordGroup(
+                name="芯片测试",
+                includes=["/gpu/i", "/npu/g"],
+            ),
+        ],
+    )
+    m, g = filter_engine.evaluate_keyword_rules("搭载顶级 GpU 加速器", None, regex_rules)
+    assert m is True
+    assert "芯片测试" in g
+
+    # 3. Empty groups -> match all non-excluded
+    empty_rules = filter_engine.KeywordRules(
+        global_excludes=["黑名单词"],
+        groups=[],
+    )
+    m, _ = filter_engine.evaluate_keyword_rules("任意标题", None, empty_rules)
+    assert m is True
+    m, _ = filter_engine.evaluate_keyword_rules("包含黑名单词的标题", None, empty_rules)
+    assert m is False
+
+
+def test_score_zero_preservation():
+    tags = [{"id": 1, "tag": "半导体", "description": "芯片"}]
+    items = [{"item_id": 101, "title": "完全不相关的某娱乐八卦", "summary": ""}]
+
+    def mock_runner(cfg: Any, msgs: list[dict[str, str]]) -> str:
+        return json.dumps([{"id": 101, "tag_id": 1, "score": 0.0}])
+
+    succeeded, not_relevant, failed = filter_engine.classify_items_batch(
+        items, tags, model_runner=mock_runner
+    )
+    assert len(succeeded) == 1
+    assert succeeded[0]["item_id"] == 101
+    assert succeeded[0]["relevance_score"] == 0.0  # Must NOT become 0.5
+
+
+def test_three_state_caching_and_error_isolation(test_db: str):
+    # Setup 4 items in test_db
+    now = store.utc_now_iso()
+    inserted_ids = []
+    with store._connect(test_db) as conn:
+        for i in range(1, 5):
+            cur = conn.execute(
+                """
+                INSERT INTO intel_items (
+                    item_key, canonical_url, url, title, title_key, summary,
+                    source_id, hint, published_at, published_ts, first_seen_at,
+                    last_seen_at, observation_count, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'cls-hot', 'macro', NULL, 0, ?, ?, 1, ?)
+                """,
+                (f"k-{i}", f"u-{i}", f"u-{i}", f"标题 {i}", f"k-{i}", f"摘要 {i}", now, now, now),
+            )
+            inserted_ids.append(cur.lastrowid)
+
+    tags = [{"id": 1, "tag": "科技", "description": "科技资讯"}]
+    prof = service.update_filter_profile(
+        "default",
+        {"method": "ai", "tags": tags, "interests_text": "关注科技", "min_score": 0.7},
+        test_db,
+    )
+    fp = prof["profile_fingerprint"]
+
+    # First run: item 1 classified (0.9), item 2 not relevant (0.0 or omitted), item 3 & 4 error
+    call_idx = 0
+    def mock_runner(cfg: Any, msgs: list[dict[str, str]]) -> str:
+        nonlocal call_idx
+        call_idx += 1
+        if "标题 3" in msgs[-1]["content"] or "标题 4" in msgs[-1]["content"]:
+            raise RuntimeError("Simulation LLM timeout")
+        return json.dumps([
+            {"id": inserted_ids[0], "tag_id": 1, "score": 0.9},
+        ])
+
+    # Run batch size = 2 so items 1&2 succeed, items 3&4 fail
+    res = service.classify_items(
+        "default",
+        item_ids=inserted_ids,
+        batch_size=2,
+        model_runner=mock_runner,
+        path=test_db,
+    )
+
+    analyses = store.get_item_analyses("default", fp, inserted_ids, db_path=test_db)
+    assert analyses[inserted_ids[0]]["analysis_state"] == store.ANALYSIS_STATE_CLASSIFIED
+    assert analyses[inserted_ids[1]]["analysis_state"] == store.ANALYSIS_STATE_NOT_RELEVANT
+    assert analyses[inserted_ids[2]]["analysis_state"] == store.ANALYSIS_STATE_ERROR
+    assert analyses[inserted_ids[3]]["analysis_state"] == store.ANALYSIS_STATE_ERROR
+
+    # Check filter_status honest metric counts
+    status = service.filter_status("default", test_db)
+    metrics = status["metrics"]
+    assert metrics["classified_count"] == 1
+    assert metrics["not_relevant_count"] == 1
+    assert metrics["error_count"] == 2
+    assert metrics["matched_count"] == 1
+
+
+def test_incremental_carry_forward_and_threshold_branching(test_db: str):
+    # Setup items
+    now = store.utc_now_iso()
+    with store._connect(test_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO intel_items (
+                item_key, canonical_url, url, title, title_key, summary,
+                source_id, hint, published_at, published_ts, first_seen_at,
+                last_seen_at, observation_count, created_at
+            ) VALUES ('k1', 'u1', 'u1', '半导体重大突破', 'k1', '芯片', 'cls-hot', 'macro', NULL, 0, ?, ?, 1, ?)
+            """,
+            (now, now, now),
+        )
+        item_id = conn.execute("SELECT item_id FROM intel_items WHERE item_key = 'k1'").fetchone()["item_id"]
+
+    # Profile 1 with tag "芯片"
+    old_tags = [{"id": 1, "tag": "芯片", "description": "半导体芯片"}]
+    p1 = service.update_filter_profile(
+        "default",
+        {"method": "ai", "tags": old_tags, "interests_text": "关注芯片", "min_score": 0.7},
+        test_db,
+    )
+    fp1 = p1["profile_fingerprint"]
+
+    # Classify item 1 under fp1
+    def mock_runner(cfg: Any, msgs: list[dict[str, str]]) -> str:
+        return json.dumps([{"id": item_id, "tag_id": 1, "score": 0.95}])
+
+    service.classify_items("default", item_ids=[item_id], model_runner=mock_runner, path=test_db)
+    cls1 = store.get_item_classifications("default", fp1, [item_id], db_path=test_db)
+    assert item_id in cls1
+
+    # Incremental update: keep "芯片", change_ratio = 0.2 < threshold 0.5
+    def mock_update_runner(cfg: Any, msgs: list[dict[str, str]]) -> str:
+        return json.dumps({
+            "keep": [{"tag": "芯片", "description": "半导体芯片"}],
+            "add": [],
+            "remove": [],
+            "change_ratio": 0.1,
+        })
+
+    res_plan = service.apply_interest_update(
+        "default",
+        "关注芯片与半导体制造",
+        model_runner=mock_update_runner,
+        full_reclassify_threshold=0.5,
+        path=test_db,
+    )
+    assert res_plan["decision"] == "INCREMENTAL"
+    p2 = service.get_filter_profile("default", test_db)
+    fp2 = p2["profile_fingerprint"]
+    assert fp1 != fp2
+
+    # Verify classification carried forward to fp2 without re-calling classify
+    cls2 = store.get_item_classifications("default", fp2, [item_id], db_path=test_db)
+    assert item_id in cls2
+    assert cls2[item_id]["relevance_score"] == 0.95
+    ana2 = store.get_item_analyses("default", fp2, [item_id], db_path=test_db)
+    assert ana2[item_id]["analysis_state"] == store.ANALYSIS_STATE_CLASSIFIED
+
+
+def test_unified_filter_items_and_rss_parity(test_db: str):
+    now = store.utc_now_iso()
+    with store._connect(test_db) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO intel_sources (source_id, name, hint, url, source_type, origin, enabled, has_real_rank, updated_at)
+            VALUES ('cls-hot', '财联社热门', 'macro', 'https://cls.cn', 'hotlist', 'system', 1, 1, ?),
+                   ('feed-user-1', '用户RSS', 'macro', 'https://rss.example', 'rss', 'user', 1, 0, ?)
+            """,
+            (now, now),
+        )
+        # Hotlist item
+        conn.execute(
+            """
+            INSERT INTO intel_items (
+                item_key, canonical_url, url, title, title_key, summary,
+                source_id, hint, published_at, published_ts, first_seen_at,
+                last_seen_at, observation_count, created_at
+            ) VALUES ('k-hl', 'u-hl', 'u-hl', '热榜：具身机器人量产', 'k-hl', '机器人', 'cls-hot', 'macro', NULL, 0, ?, ?, 1, ?)
+            """,
+            (now, now, now),
+        )
+        # RSS item
+        conn.execute(
+            """
+            INSERT INTO intel_items (
+                item_key, canonical_url, url, title, title_key, summary,
+                source_id, hint, published_at, published_ts, first_seen_at,
+                last_seen_at, observation_count, created_at
+            ) VALUES ('k-rss', 'u-rss', 'u-rss', 'RSS订阅：具身机器人核心零部件报告', 'k-rss', '产业链深度', 'feed-user-1', 'macro', ?, 0, ?, ?, 1, ?)
+            """,
+            (now, now, now, now),
+        )
+
+    # Set keyword rules targeting 机器人
+    service.update_filter_profile(
+        "default",
+        {
+            "method": "keyword",
+            "keyword_rules": {
+                "global_excludes": [],
+                "groups": [{"name": "机器人", "includes": ["机器人"], "excludes": []}],
+            },
+        },
+        test_db,
+    )
+
+    # 1. Query source_type=all
+    all_res = service.list_filtered_items(profile_id="default", source_type="all", mode="my_interests", path=test_db)
+    assert all_res["status"] == "normal"
+    assert len(all_res["items"]) == 2
+
+    # 2. Query source_type=rss
+    rss_res = service.list_filtered_items(profile_id="default", source_type="rss", mode="my_interests", path=test_db)
+    assert len(rss_res["items"]) == 1
+    assert rss_res["items"][0]["title"] == "RSS订阅：具身机器人核心零部件报告"
+    assert rss_res["items"][0]["rank"] is None  # RSS items must not have faked rank
+
+    # 3. Query source_type=hotlist
+    hl_res = service.list_filtered_items(profile_id="default", source_type="hotlist", mode="my_interests", path=test_db)
+    assert len(hl_res["items"]) == 1
+    assert "热榜" in hl_res["items"][0]["title"]
+
+
+def test_fail_closed_on_filter_error_in_hotlist_board(test_db: str, monkeypatch: pytest.MonkeyPatch):
+    # Insert an item
+    now = store.utc_now_iso()
+    with store._connect(test_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO intel_items (
+                item_key, canonical_url, url, title, title_key, summary,
+                source_id, hint, published_at, published_ts, first_seen_at,
+                last_seen_at, observation_count, created_at
+            ) VALUES ('k-err', 'u-err', 'u-err', '测试标题', 'k-err', '测试', 'cls-hot', 'macro', NULL, 0, ?, ?, 1, ?)
+            """,
+            (now, now, now),
+        )
+
+    # Mock filter_items to raise unexpected exception
+    def mock_fail(*args, **kwargs):
+        raise RuntimeError("Filter engine critical fault")
+
+    monkeypatch.setattr(service, "filter_items", mock_fail)
+
+    # When mode=my_interests, fail closed: items must be empty, filter_meta status UNAVAILABLE
+    res = service.hotlist_board(test_db, mode="my_interests")
+    assert res["items"] == []
+    assert res["filter_meta"]["status"] == "UNAVAILABLE"
+    assert "Filter engine critical fault" in res["filter_meta"]["error"]
+
+
+def test_router_apply_interest_update_and_filter_items(client: TestClient):
+    # Test POST /api/native-intel/filter/apply-interest-update
+    # Without interests_text -> 422
+    r = client.post("/api/native-intel/filter/apply-interest-update", json={})
+    assert r.status_code == 422
+
+    # Test GET /api/native-intel/filter/items
+    r = client.get("/api/native-intel/filter/items?source_type=all&mode=my_interests")
+    assert r.status_code == 200
+    data = r.json()
+    assert "items" in data
+    assert "filter_meta" in data

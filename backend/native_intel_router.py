@@ -393,3 +393,68 @@ def get_filter_status(
             status_code=500,
             detail={"status": "ERROR", "error": str(exc)},
         ) from exc
+
+
+@router.post("/filter/apply-interest-update")
+def post_apply_interest_update(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """一键应用兴趣变更：自动执行阶段 A/A'、更新 Profile 并根据阈值分流。"""
+    body = payload or {}
+    interests_text = str(body.get("interests_text") or "").strip()
+    if not interests_text:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "BAD_ARGUMENT", "error": "interests_text 不能为空"},
+        )
+    profile_id = str(body.get("profile_id") or "default")
+    cfg = body.get("ai_config") or body.get("cfg")
+    threshold = float(body.get("full_reclassify_threshold") or 0.5)
+    try:
+        return service.apply_interest_update(
+            profile_id=profile_id,
+            interests_text=interests_text,
+            cfg=cfg,
+            full_reclassify_threshold=threshold,
+            path=_db_path(),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "APPLY_UPDATE_FAILED", "error": str(exc)},
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"status": "AI_ERROR", "error": str(exc)},
+        ) from exc
+
+
+@router.get("/filter/items")
+def get_filtered_items(
+    profile_id: str = Query(default="default"),
+    source_type: str = Query(default="all", pattern="^(all|hotlist|rss)$"),
+    mode: str = Query(default="my_interests", pattern="^(all|my_interests)$"),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    """统一过滤端点：支持全量(all)、仅热榜(hotlist)、仅RSS(rss)的个人兴趣或全量过滤查询。"""
+    try:
+        return service.list_filtered_items(
+            profile_id=profile_id,
+            source_type=source_type,
+            mode=mode,
+            limit=limit,
+            path=_db_path(),
+        )
+    except Exception as exc:
+        return {
+            "status": service.STATUS_UNAVAILABLE,
+            "error": str(exc),
+            "items": [],
+            "total": 0,
+            "filter_meta": {
+                "mode": mode,
+                "status": "UNAVAILABLE",
+                "error": str(exc),
+            },
+        }

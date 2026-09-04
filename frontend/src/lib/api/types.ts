@@ -3065,6 +3065,11 @@ export interface FilterMeta {
   profile_fingerprint?: string;
   total_evaluated?: number;
   matched_count?: number;
+  classified_count?: number;
+  not_relevant_count?: number;
+  unclassified_count?: number;
+  error_count?: number;
+  status?: "OK" | "UNAVAILABLE" | "normal";
   error?: string;
 }
 

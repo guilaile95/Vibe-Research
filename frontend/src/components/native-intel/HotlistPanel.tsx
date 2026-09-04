@@ -43,6 +43,8 @@ export function HotlistPanel() {
 
   // 一级模式：全部热榜 vs 我的关注
   const [interestMode, setInterestMode] = useState<"all" | "my_interests">("all");
+  // 当在“我的关注”模式时，支持切换资讯类型：全部 / 仅热榜 / 仅RSS
+  const [sourceTypeFilter, setSourceTypeFilter] = useState<"all" | "hotlist" | "rss">("hotlist");
   // 二级筛选：全部 / 升温 / 新上榜 / 来源
   const [filter, setFilter] = useState<HotlistFilter>("all");
 
@@ -54,17 +56,27 @@ export function HotlistPanel() {
   const loadData = useCallback(async () => {
     try {
       setError(null);
-      const res = await api.nativeIntelHotlist(100, interestMode);
-      setItems(res.items || []);
-      setSources(res.sources || []);
-      setBoardStatus(res.status || "normal");
-      setFilterMeta(res.filter_meta || null);
+      if (interestMode === "my_interests") {
+        const res = await api.nativeIntelFilteredItems(sourceTypeFilter, "my_interests");
+        setItems(res.items || []);
+        setFilterMeta(res.filter_meta || null);
+        setBoardStatus(res.status || "normal");
+        if (sources.length === 0) {
+          api.nativeIntelSources().then((s) => setSources(s.sources || [])).catch(() => {});
+        }
+      } else {
+        const res = await api.nativeIntelHotlist(100, "all");
+        setItems(res.items || []);
+        setSources(res.sources || []);
+        setBoardStatus(res.status || "normal");
+        setFilterMeta(res.filter_meta || null);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "读取热榜失败");
     } finally {
       setLoading(false);
     }
-  }, [interestMode]);
+  }, [interestMode, sourceTypeFilter, sources.length]);
 
   useEffect(() => {
     void loadData();
@@ -223,13 +235,41 @@ export function HotlistPanel() {
         </button>
       </div>
 
-      {/* 当处于“我的关注”模式时的状态说明条 */}
-      {interestMode === "my_interests" && (
+      {/* 兴趣过滤异常安全降级提示 */}
+      {interestMode === "my_interests" && filterMeta?.status === "UNAVAILABLE" && (
+        <div
+          data-testid="filter-unavailable-card"
+          className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+              <div>
+                <p className="font-semibold">个人兴趣过滤服务不可用</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  原因：{filterMeta?.error || "过滤引擎异常"}。为保证投资信息安全，已安全停用过滤（不展示模糊/不确定数据）。
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              data-testid="switch-to-all-hotlist-btn"
+              onClick={() => setInterestMode("all")}
+              className="rounded-lg bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 transition-colors shrink-0"
+            >
+              切回全部热榜
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 当处于“我的关注”模式且服务正常时的状态说明条 */}
+      {interestMode === "my_interests" && filterMeta?.status !== "UNAVAILABLE" && (
         <div
           data-testid="hotlist-filter-status-pill"
-          className="flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary"
         >
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <Sparkles className="h-3.5 w-3.5" />
             <span>
               当前过滤规则：
@@ -237,10 +277,59 @@ export function HotlistPanel() {
                 ? "AI 智能语义匹配"
                 : "本地关键词 / 正则匹配"}
             </span>
+            <span className="text-muted-foreground font-mono ml-2">
+              (已分类 {filterMeta?.classified_count ?? visibleItems.length} · 不相关 {filterMeta?.not_relevant_count ?? 0} · 待分类 {filterMeta?.unclassified_count ?? 0} · 失败 {filterMeta?.error_count ?? 0})
+            </span>
           </div>
           <span className="font-mono font-semibold">
             匹配命中 {visibleItems.length} 条
           </span>
+        </div>
+      )}
+
+      {/* 我的关注模式下：资讯类型切换（热榜 vs RSS） */}
+      {interestMode === "my_interests" && filterMeta?.status !== "UNAVAILABLE" && (
+        <div className="flex items-center gap-1 bg-muted/40 p-1 rounded-lg w-fit text-xs">
+          <span className="text-muted-foreground px-2">资讯范围:</span>
+          <button
+            type="button"
+            data-testid="filter-source-type-hotlist"
+            onClick={() => setSourceTypeFilter("hotlist")}
+            className={cn(
+              "px-2.5 py-1 rounded-md font-medium transition-colors",
+              sourceTypeFilter === "hotlist"
+                ? "bg-background text-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            仅热榜
+          </button>
+          <button
+            type="button"
+            data-testid="filter-source-type-rss"
+            onClick={() => setSourceTypeFilter("rss")}
+            className={cn(
+              "px-2.5 py-1 rounded-md font-medium transition-colors",
+              sourceTypeFilter === "rss"
+                ? "bg-background text-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            仅 RSS
+          </button>
+          <button
+            type="button"
+            data-testid="filter-source-type-all"
+            onClick={() => setSourceTypeFilter("all")}
+            className={cn(
+              "px-2.5 py-1 rounded-md font-medium transition-colors",
+              sourceTypeFilter === "all"
+                ? "bg-background text-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            全量资讯
+          </button>
         </div>
       )}
 
@@ -368,14 +457,18 @@ export function HotlistPanel() {
                     <div
                       className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/60 font-mono text-xs font-bold text-foreground"
                       title={
-                        item.current_state === "DISABLED"
+                        item.source_type === "rss" || item.rank == null
+                          ? "RSS 资讯 (无排名)"
+                          : item.current_state === "DISABLED"
                           ? `末次 #${item.rank ?? "-"} (来源已停用)`
                           : item.current_state === "STALE"
                           ? `末次 #${item.rank ?? "-"} (数据已过期)`
                           : undefined
                       }
                     >
-                      {item.current_state === "DISABLED" || item.current_state === "STALE"
+                      {item.source_type === "rss" || item.rank == null
+                        ? "RSS"
+                        : item.current_state === "DISABLED" || item.current_state === "STALE"
                         ? "—"
                         : (item.rank ?? "-")}
                     </div>
@@ -488,14 +581,16 @@ export function HotlistPanel() {
                       {badge.label}
                     </span>
 
-                    <button
-                      type="button"
-                      onClick={() => void handleShowHistory(item.item_id)}
-                      className="inline-flex items-center gap-1 rounded-md border border-border/80 bg-background/50 px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-                    >
-                      <History className="h-3 w-3" />
-                      轨迹
-                    </button>
+                    {item.source_type !== "rss" && item.rank != null && (
+                      <button
+                        type="button"
+                        onClick={() => void handleShowHistory(item.item_id)}
+                        className="inline-flex items-center gap-1 rounded-md border border-border/80 bg-background/50 px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                      >
+                        <History className="h-3 w-3" />
+                        轨迹
+                      </button>
+                    )}
                   </div>
                 </div>
               );

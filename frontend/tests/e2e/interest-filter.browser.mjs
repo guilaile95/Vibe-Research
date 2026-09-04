@@ -131,6 +131,15 @@ try {
   browser = await launchBrowser();
 
   const page = await browser.newPage();
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "vr-llm",
+      JSON.stringify({
+        provider: "cli-codex",
+        model: "gpt-5-codex",
+      }),
+    );
+  });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
