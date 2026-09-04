@@ -29,12 +29,19 @@ import newsradar
 # NewsNow 公共实例（TrendRadar 默认同源；自部署实例可直接改 source url）
 DEFAULT_API_BASE = "https://newsnow.busiyi.world/api/s"
 
-# Wave 1 平台白名单：id → expected_domain（响应链接必须 HTTPS 且命中该域名及其子域）。
-# Wave 1B 扩平台（toutiao/weibo/zhihu/...）在这里各加一行即可，见
-# docs/TRENDRADAR_PARITY_MATRIX.md。
+# Wave 1 + Wave 1B 平台白名单：id → expected_domain（响应链接必须 HTTPS 且命中该域名及其子域）。
 _PROVIDERS: dict[str, str] = {
     "cls-hot": "cls.cn",
     "wallstreetcn-hot": "wallstreetcn.com",
+    "toutiao": "toutiao.com",
+    "baidu": "baidu.com",
+    "thepaper": "thepaper.cn",
+    "bilibili-hot-search": "bilibili.com",
+    "ifeng": "ifeng.com",
+    "tieba": "baidu.com",
+    "weibo": "weibo.com",
+    "douyin": "douyin.com",
+    "zhihu": "zhihu.com",
 }
 
 # 一次抓取保留的榜单长度上限（上游榜单通常 10~50 条；截断只影响展示宽度，

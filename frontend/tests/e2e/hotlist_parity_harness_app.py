@@ -17,61 +17,55 @@ NOW = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _seed() -> None:
-    sources = [
-        {
-            "source_id": "hotlist-cls-hot",
-            "name": "财联社热门",
-            "hint": "macro",
-            "url": "https://newsnow.busiyi.world/api/s?id=cls-hot&latest",
-            "source_type": "hotlist",
-            "has_real_rank": True,
-            "origin": "system",
-        },
-        {
-            "source_id": "hotlist-wallstreetcn-hot",
-            "name": "华尔街见闻",
-            "hint": "macro",
-            "url": "https://newsnow.busiyi.world/api/s?id=wallstreetcn-hot&latest",
-            "source_type": "hotlist",
-            "has_real_rank": True,
-            "origin": "system",
-        },
+    reg = service.load_registry()
+    hotlists = [s for s in reg["sources"] if s["source_type"] == "hotlist"]
+    store.upsert_sources(hotlists, DB_PATH)
+
+    run_id = "hotlist-parity-e2e"
+    store.start_run(run_id, "fixture", len(hotlists), DB_PATH)
+
+    seed_items = [
+        ("hotlist-cls-hot", "科技股全线走强", "https://cls.cn/detail/101", "半导体与人工智能板块领涨。", 1),
+        ("hotlist-weibo", "微博热议人工智能", "https://weibo.com/ai-trend", "全网热议新一代大模型突破。", 2),
+        ("hotlist-zhihu", "知乎深度解析芯片突破", "https://zhihu.com/question/semi-breakthrough", "行业专家深度拆解先进制程工艺。", 3),
+        ("hotlist-baidu", "百度热搜机器人产业", "https://baidu.com/s?wd=robotics", "智能人形机器人落地进展迅速。", 4),
     ]
-    store.upsert_sources(sources, DB_PATH)
-    store.start_run("hotlist-parity-e2e", "fixture", 2, DB_PATH)
-    item_id, _ = store.upsert_observation(
-        "hotlist-parity-e2e",
-        "hotlist-cls-hot",
-        {
-            "item_key": "hotlist-cls-hot:https://www.cls.cn/detail/101",
-            "canonical_url": "https://www.cls.cn/detail/101",
-            "url": "https://www.cls.cn/detail/101",
-            "title": "科技股全线走强",
-            "title_key": "科技股全线走强",
-            "summary": "半导体与人工智能板块领涨。",
-            "hint": "macro",
-            "published_at": None,
-            "published_ts": 0,
-            "rank": 1,
-        },
-        observed_at=NOW,
-        has_real_rank=True,
-        db_path=DB_PATH,
-    )
-    store.record_source_run(
-        "hotlist-parity-e2e",
-        "hotlist-cls-hot",
-        status=store.SOURCE_RUN_OK,
-        item_count=1,
-        db_path=DB_PATH,
-    )
+
+    for sid, title, url, summary, rank in seed_items:
+        store.upsert_observation(
+            run_id,
+            sid,
+            {
+                "item_key": f"{sid}:{url}",
+                "canonical_url": url,
+                "url": url,
+                "title": title,
+                "title_key": title,
+                "summary": summary,
+                "hint": "macro",
+                "published_at": None,
+                "published_ts": 0,
+                "rank": rank,
+            },
+            observed_at=NOW,
+            has_real_rank=True,
+            db_path=DB_PATH,
+        )
+        store.record_source_run(
+            run_id,
+            sid,
+            status=store.SOURCE_RUN_OK,
+            item_count=1,
+            db_path=DB_PATH,
+        )
+
     store.finish_run(
-        "hotlist-parity-e2e",
+        run_id,
         status=store.RUN_STATUS_OK,
-        source_ok=1,
+        source_ok=len(seed_items),
         source_failed=0,
-        item_seen=1,
-        item_new=1,
+        item_seen=len(seed_items),
+        item_new=len(seed_items),
         db_path=DB_PATH,
     )
 

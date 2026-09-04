@@ -153,12 +153,46 @@ try {
   });
 
   // -------------------------------------------------------------------------
-  // 1. 设置页：自建源生命周期与 SQLite 持久化测试
+  // 1. 设置页：11 个系统热榜展示、启停持久化与自建源生命周期
   // -------------------------------------------------------------------------
   await page.goto(`http://127.0.0.1:${frontendPort}/settings`, { waitUntil: "domcontentloaded" });
   const sectionTitle = page.locator("text=资讯源与热榜管理");
   await sectionTitle.waitFor({ state: "visible", timeout: 15000 });
 
+  // 1.1 校验全部 11 个系统热榜均在设置页可见
+  const expectedHotlists = [
+    "财联社热门",
+    "华尔街见闻",
+    "今日头条",
+    "百度热搜",
+    "澎湃新闻",
+    "Bilibili 热搜",
+    "凤凰网",
+    "贴吧",
+    "微博",
+    "抖音",
+    "知乎",
+  ];
+  for (const name of expectedHotlists) {
+    await page.locator(`.divide-y > div:has-text("${name}")`).first().waitFor({ state: "visible", timeout: 10000 });
+  }
+
+  // 1.2 校验系统源启停并跨刷新保持持久化（以微博为例）
+  const weiboRow = page.locator('.divide-y > div:has-text("微博")').first();
+  const weiboToggle = weiboRow.locator('button:has-text("停用")');
+  await weiboToggle.waitFor({ state: "visible", timeout: 5000 });
+  await weiboToggle.click();
+  await weiboRow.locator('button:has-text("启用")').waitFor({ state: "visible", timeout: 5000 });
+
+  // 刷新后仍为停用（enabled=false 持久化）
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const weiboRowReloaded = page.locator('.divide-y > div:has-text("微博")').first();
+  await weiboRowReloaded.locator('button:has-text("启用")').waitFor({ state: "visible", timeout: 10000 });
+  // 恢复启用
+  await weiboRowReloaded.locator('button:has-text("启用")').click();
+  await weiboRowReloaded.locator('button:has-text("停用")').waitFor({ state: "visible", timeout: 5000 });
+
+  // 1.3 用户自定义 RSS 源新增、持久化与软删除
   const nameInput = page.locator('input[placeholder*="来源名称"]');
   const urlInput = page.locator('input[placeholder*="RSS / Atom"]');
   const submitBtn = page.locator('button:has-text("添加源")');
@@ -208,7 +242,7 @@ try {
   assert.equal(await page.locator(".divide-y > div", { hasText: "E2E自选科技源" }).count(), 0);
 
   // -------------------------------------------------------------------------
-  // 2. 资讯页：热榜面板真实渲染与数据驱动（硬断言，绝不静默跳过）
+  // 2. 资讯页：多平台热榜面板渲染与动态下拉筛选（硬断言，绝不静默跳过）
   // -------------------------------------------------------------------------
   await page.goto(`http://127.0.0.1:${frontendPort}/intel`, { waitUntil: "domcontentloaded" });
   const hotlistTab = page.locator("button", { hasText: "实时热榜" });
@@ -218,15 +252,43 @@ try {
   const hotlistPanel = page.getByTestId("native-intel-hotlist-panel");
   await hotlistPanel.waitFor({ state: "visible", timeout: 10000 });
 
-  // 2.1 新鲜状态验证：标题、徽章与实时排名
-  await hotlistPanel.getByText("科技股全线走强", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
-  await hotlistPanel.getByRole("button", { name: "财联社热门" }).waitFor({ state: "visible", timeout: 5000 });
+  // 2.1 新鲜状态验证：标题、徽章与各平台种子条目
   await hotlistPanel.getByText("实时热榜追踪").waitFor({ state: "visible", timeout: 5000 });
   await hotlistPanel.getByTestId("hotlist-freshness-badge").waitFor({ state: "visible", timeout: 5000 });
   assert.equal(await hotlistPanel.getByTestId("hotlist-freshness-badge").innerText(), "原生热点观测");
   assert.equal(await hotlistPanel.getByTestId("hotlist-stale-banner").count(), 0);
 
-  // 2.2 过期状态诚实性验证：抓取时间超过 6 小时后，UI 必须显式降级为非实时 / 已过期
+  // 校验动态来源选择器存在
+  const sourceSelect = hotlistPanel.locator('[data-testid="hotlist-source-select"]');
+  await sourceSelect.waitFor({ state: "visible", timeout: 5000 });
+
+  // 校验初始全量条目均可见
+  await hotlistPanel.getByText("科技股全线走强", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
+  await hotlistPanel.getByText("微博热议人工智能", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
+  await hotlistPanel.getByText("知乎深度解析芯片突破", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
+  await hotlistPanel.getByText("百度热搜机器人产业", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
+
+  // 2.2 动态来源筛选：选微博 → 只出现微博条目
+  await sourceSelect.selectOption("hotlist-weibo");
+  await hotlistPanel.getByText("微博热议人工智能", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
+  assert.equal(await hotlistPanel.getByText("科技股全线走强", { exact: true }).count(), 0);
+  assert.equal(await hotlistPanel.getByText("知乎深度解析芯片突破", { exact: true }).count(), 0);
+  assert.equal(await hotlistPanel.getByText("百度热搜机器人产业", { exact: true }).count(), 0);
+
+  // 2.3 动态来源筛选：选知乎 → 只出现知乎条目
+  await sourceSelect.selectOption("hotlist-zhihu");
+  await hotlistPanel.getByText("知乎深度解析芯片突破", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
+  assert.equal(await hotlistPanel.getByText("微博热议人工智能", { exact: true }).count(), 0);
+  assert.equal(await hotlistPanel.getByText("科技股全线走强", { exact: true }).count(), 0);
+
+  // 2.4 切回全部来源 → 多平台同时恢复
+  await sourceSelect.selectOption("");
+  await hotlistPanel.getByText("科技股全线走强", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
+  await hotlistPanel.getByText("微博热议人工智能", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
+  await hotlistPanel.getByText("知乎深度解析芯片突破", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
+  await hotlistPanel.getByText("百度热搜机器人产业", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
+
+  // 2.5 过期状态诚实性验证：抓取时间超过 6 小时后，UI 必须显式降级为非实时 / 已过期
   await fetch(`http://127.0.0.1:${backendPort}/api/test/make-stale`, { method: "POST" });
   await page.reload({ waitUntil: "domcontentloaded" });
   const hotlistTab2 = page.locator("button", { hasText: "实时热榜" });
@@ -243,7 +305,7 @@ try {
   await stalePanel.getByText("末次 #1 (已过期)").waitFor({ state: "visible", timeout: 5000 });
   assert.ok((await stalePanel.getByText("已过期").count()) > 0);
 
-  // 2.3 恢复新鲜数据
+  // 2.6 恢复新鲜数据
   await fetch(`http://127.0.0.1:${backendPort}/api/test/make-fresh`, { method: "POST" });
 
   assert.deepEqual(pageErrors, []);

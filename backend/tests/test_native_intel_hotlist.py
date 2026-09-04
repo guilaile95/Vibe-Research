@@ -417,7 +417,7 @@ def test_hotlist_provider_unit_behaviour(monkeypatch) -> None:
     assert items[0]["published_at"] is None  # 绝不伪造发布时间
 
     # 未知平台 fail closed
-    unknown = {**source, "url": hotlist.build_source_url("weibo")}
+    unknown = {**source, "url": hotlist.build_source_url("unsupported-platform-xyz")}
     items, kind, detail = hotlist.fetch_hotlist_items(unknown, timeout=5, redline=[])
     assert items == [] and kind == store.ERROR_KIND_PARSE
 
@@ -822,3 +822,328 @@ def test_stale_source_state_and_rank_honesty(tmp_path: Path) -> None:
     assert fresh_board["status"] == "normal"
     assert fresh_board["items"][0]["current_state"] == "ON_LIST"
     assert fresh_board["items"][0]["rank"] == 1
+
+
+# ===========================================================================
+# Wave 1B: 11 平台全量覆盖对齐测试集
+# ===========================================================================
+
+EXPECTED_11_PLATFORMS = [
+    ("cls-hot", "财联社热门", "cls.cn"),
+    ("wallstreetcn-hot", "华尔街见闻", "wallstreetcn.com"),
+    ("toutiao", "今日头条", "toutiao.com"),
+    ("baidu", "百度热搜", "baidu.com"),
+    ("thepaper", "澎湃新闻", "thepaper.cn"),
+    ("bilibili-hot-search", "Bilibili 热搜", "bilibili.com"),
+    ("ifeng", "凤凰网", "ifeng.com"),
+    ("tieba", "贴吧", "baidu.com"),
+    ("weibo", "微博", "weibo.com"),
+    ("douyin", "抖音", "douyin.com"),
+    ("zhihu", "知乎", "zhihu.com"),
+]
+
+
+def test_system_registry_has_all_11_hotlists() -> None:
+    """A. Registry Test: 断言系统默认共有 11 个 hotlist sources 并逐一核对元数据。"""
+    reg = service.load_registry()
+    hotlists = [s for s in reg["sources"] if s["source_type"] == "hotlist"]
+    assert len(hotlists) == 11, f"Expected 11 hotlist sources, got {len(hotlists)}"
+
+    by_platform = {
+        hotlist.platform_of(s["url"]): s
+        for s in hotlists
+    }
+
+    for platform, name, domain in EXPECTED_11_PLATFORMS:
+        assert platform in by_platform, f"Platform {platform} missing from registry"
+        src = by_platform[platform]
+        assert src["source_id"] == f"hotlist-{platform}"
+        assert src["name"] == name
+        assert src["source_type"] == "hotlist"
+        assert src["has_real_rank"] is True
+        assert hotlist._PROVIDERS[platform] == domain
+        assert src["url"] == hotlist.build_source_url(platform)
+
+
+def test_all_11_providers_contract_fixtures(monkeypatch) -> None:
+    """B. Provider Contract Fixtures: 对 11 个平台全部验证契约归一化、1-based 排名与 source-qualified item_key。"""
+    for platform, name, domain in EXPECTED_11_PLATFORMS:
+        source = {
+            "source_id": f"hotlist-{platform}",
+            "name": name,
+            "url": hotlist.build_source_url(platform),
+            "source_type": "hotlist",
+            "has_real_rank": True,
+        }
+        monkeypatch.setattr(
+            hotlist,
+            "_http_get_json",
+            lambda url, *, timeout, d=domain: {
+                "status": "success",
+                "items": [
+                    {"title": f"{platform} 头条新闻", "url": f"https://www.{d}/item/1"},
+                    {"title": f"{platform} 第二热点", "url": f"https://sub.{d}/item/2"},
+                ],
+            },
+        )
+        items, kind, detail = hotlist.fetch_hotlist_items(source, timeout=5, redline=[])
+        assert kind is None, f"{platform} fetch failed: {kind} {detail}"
+        assert len(items) == 2
+        assert items[0]["rank"] == 1
+        assert items[1]["rank"] == 2
+        assert items[0]["item_key"].startswith(f"hotlist-{platform}:")
+        assert items[1]["item_key"].startswith(f"hotlist-{platform}:")
+        assert items[0]["published_at"] is None  # 绝不伪造发布时间
+        assert items[1]["published_at"] is None
+
+
+def test_all_11_providers_domain_fail_closed(monkeypatch) -> None:
+    """C. Domain Fail-Closed: 11 个平台遭遇域名违例（如被篡改为劫持地址），必须整源报错，绝不写入 observation。"""
+    for platform, name, domain in EXPECTED_11_PLATFORMS:
+        source = {
+            "source_id": f"hotlist-{platform}",
+            "name": name,
+            "url": hotlist.build_source_url(platform),
+            "source_type": "hotlist",
+            "has_real_rank": True,
+        }
+        monkeypatch.setattr(
+            hotlist,
+            "_http_get_json",
+            lambda url, *, timeout: {
+                "status": "success",
+                "items": [
+                    {"title": "可疑链接", "url": "https://evil.example.com/phishing"},
+                ],
+            },
+        )
+        items, kind, detail = hotlist.fetch_hotlist_items(source, timeout=5, redline=[])
+        assert items == []
+        assert kind == store.ERROR_KIND_HTTP
+        assert detail == "HotlistDomainViolation"
+
+
+def test_11_sources_mixed_run_isolation(tmp_path: Path) -> None:
+    """D. 11-source mixed run: 模拟 10 个成功、1 个失败，整体为 PARTIAL，失败源 UNKNOWN，成功源不受影响。"""
+    path = tmp_path / "native-intel.sqlite3"
+    reg = service.load_registry()
+    hotlists = [s for s in reg["sources"] if s["source_type"] == "hotlist"]
+    assert len(hotlists) == 11
+
+    # 模拟 fetcher：weibo 抛异常失败，其余 10 个成功返回 1 条数据
+    def mock_fetcher(source, **kwargs):
+        sid = source.get("source_id")
+        if sid == "hotlist-weibo":
+            return [], store.ERROR_KIND_NETWORK, "ConnectionResetError"
+        platform = hotlist.platform_of(source.get("url"))
+        domain = hotlist._PROVIDERS.get(platform, "example.com")
+        return [
+            {
+                "source_id": sid,
+                "item_key": f"{sid}:https://{domain}/item1",
+                "title": f"{source.get('name')} 头条",
+                "url": f"https://{domain}/item1",
+                "canonical_url": f"https://{domain}/item1",
+                "title_key": f"{source.get('name')} 头条",
+                "summary": "",
+                "hint": "macro",
+                "published_at": None,
+                "published_ts": 0,
+                "rank": 1,
+            }
+        ], None, None
+
+    result = service.run_fetch(
+        "mixed-11-run",
+        str(path),
+        registry=reg,
+        sources_override=hotlists,
+        hotlist_fetcher=mock_fetcher,
+    )
+
+    assert result["status"] == store.RUN_STATUS_PARTIAL
+    assert result["source_ok"] == 10
+    assert result["source_failed"] == 1
+    assert result["item_seen"] == 10
+
+    board = service.hotlist_board(str(path))
+    assert board["status"] == "partial"
+    # 成功源条目均为 ON_LIST
+    assert len(board["items"]) == 10
+    for it in board["items"]:
+        assert it["current_state"] == "ON_LIST"
+        assert it["rank"] == 1
+        assert it["source_id"] != "hotlist-weibo"
+
+
+def test_disabled_persistence_across_sync_registry(tmp_path: Path) -> None:
+    """E. Disabled persistence: 用户停用系统源（如 hotlist-weibo），sync_registry 绝不重新开启。"""
+    path = tmp_path / "native-intel.sqlite3"
+    reg = service.load_registry()
+    hotlists = [s for s in reg["sources"] if s["source_type"] == "hotlist"]
+
+    # 1. 首次入库
+    store.upsert_sources(hotlists, path)
+    weibo = store.get_source("hotlist-weibo", path)
+    assert weibo is not None
+    assert weibo["enabled"] == 1
+
+    # 2. 用户手动停用
+    store.update_source("hotlist-weibo", enabled=False, db_path=path)
+    weibo_disabled = store.get_source("hotlist-weibo", path)
+    assert weibo_disabled["enabled"] == 0
+
+    # 3. 再次执行系统 sync_registry（通过 upsert_sources）
+    store.upsert_sources(hotlists, path)
+    weibo_after_sync = store.get_source("hotlist-weibo", path)
+    # enabled 状态必须坚守为 0，不能被 seed 覆盖
+    assert weibo_after_sync["enabled"] == 0
+
+    # 4. 同时验证用户自建源 soft-deleted 也不受系统源同步影响
+    custom_src = service.create_user_source(
+        {"name": "我的自建源", "url": "https://custom.test/rss.xml", "hint": "macro"},
+        str(path),
+    )
+    service.delete_source(custom_src["source_id"], str(path))
+    assert store.get_source(custom_src["source_id"], path) is None
+    deleted_src = store.get_source(custom_src["source_id"], path, include_deleted=True)
+    assert deleted_src is not None
+    assert deleted_src["deleted_at"] is not None
+
+    store.upsert_sources(hotlists, path)
+    assert store.get_source(custom_src["source_id"], path) is None
+    deleted_again = store.get_source(custom_src["source_id"], path, include_deleted=True)
+    assert deleted_again is not None
+    assert deleted_again["deleted_at"] is not None
+
+
+def test_cross_source_rank_isolation_three_new_platforms(tmp_path: Path) -> None:
+    """F. Cross-source rank isolation: weibo, zhihu, baidu 共享同一条新闻 URL，必须生成 3 个独立 rank history。"""
+    path = tmp_path / "native-intel.sqlite3"
+    same_url = "https://news.example.com/major-breaking-event-2026"
+    title = "重要科技突发事件全网热议"
+
+    wb_src = {"source_id": "hotlist-weibo", "name": "微博", "hint": "macro", "url": hotlist.build_source_url("weibo"), "source_type": "hotlist", "has_real_rank": True}
+    zh_src = {"source_id": "hotlist-zhihu", "name": "知乎", "hint": "macro", "url": hotlist.build_source_url("zhihu"), "source_type": "hotlist", "has_real_rank": True}
+    bd_src = {"source_id": "hotlist-baidu", "name": "百度热搜", "hint": "macro", "url": hotlist.build_source_url("baidu"), "source_type": "hotlist", "has_real_rank": True}
+
+    def make_item(src_id: str, rank: int) -> dict:
+        return {
+            "source_id": src_id,
+            "item_key": f"{src_id}:{same_url}",
+            "title": title,
+            "url": same_url,
+            "canonical_url": same_url,
+            "title_key": title,
+            "summary": "",
+            "hint": "macro",
+            "published_at": None,
+            "published_ts": 0,
+            "rank": rank,
+        }
+
+    test_reg = {
+        "sources": [wb_src, zh_src, bd_src],
+        "registry_version": "three-iso",
+        "redline": [],
+        "recent_days": 7,
+        "per_source": 6,
+    }
+
+    # Round 1: weibo #2, zhihu #7, baidu #4
+    r1_items = {
+        "hotlist-weibo": [make_item("hotlist-weibo", 2)],
+        "hotlist-zhihu": [make_item("hotlist-zhihu", 7)],
+        "hotlist-baidu": [make_item("hotlist-baidu", 4)],
+    }
+    service.run_fetch(
+        "iso-run-1",
+        str(path),
+        registry=test_reg,
+        sources_override=[wb_src, zh_src, bd_src],
+        hotlist_fetcher=lambda src, **kw: (r1_items[src["source_id"]], None, None),
+    )
+
+    # Round 2: weibo #1 (delta +1), zhihu #5 (delta +2), baidu #9 (delta -5)
+    r2_items = {
+        "hotlist-weibo": [make_item("hotlist-weibo", 1)],
+        "hotlist-zhihu": [make_item("hotlist-zhihu", 5)],
+        "hotlist-baidu": [make_item("hotlist-baidu", 9)],
+    }
+    service.run_fetch(
+        "iso-run-2",
+        str(path),
+        registry=test_reg,
+        sources_override=[wb_src, zh_src, bd_src],
+        hotlist_fetcher=lambda src, **kw: (r2_items[src["source_id"]], None, None),
+    )
+
+    board = service.hotlist_board(str(path))
+    assert len(board["items"]) == 3
+
+    wb_item = next(it for it in board["items"] if it["source_id"] == "hotlist-weibo")
+    zh_item = next(it for it in board["items"] if it["source_id"] == "hotlist-zhihu")
+    bd_item = next(it for it in board["items"] if it["source_id"] == "hotlist-baidu")
+
+    # 验证三个平台虽然 canonical_url 相同，但 item_id 完全独立
+    assert len({wb_item["item_id"], zh_item["item_id"], bd_item["item_id"]}) == 3
+
+    # 验证各平台排名轨迹完全隔离
+    wb_hist = service.item_rank_history(wb_item["item_id"], str(path))
+    assert [o["rank"] for o in wb_hist["observations"]] == [2, 1]
+    assert wb_hist["current_rank"] == 1
+    assert wb_hist["rank_delta"] == 1
+
+    zh_hist = service.item_rank_history(zh_item["item_id"], str(path))
+    assert [o["rank"] for o in zh_hist["observations"]] == [7, 5]
+    assert zh_hist["current_rank"] == 5
+    assert zh_hist["rank_delta"] == 2
+
+    bd_hist = service.item_rank_history(bd_item["item_id"], str(path))
+    assert [o["rank"] for o in bd_hist["observations"]] == [4, 9]
+    assert bd_hist["current_rank"] == 9
+    assert bd_hist["rank_delta"] == -5
+
+
+def test_a_share_entity_mapping_shared_across_new_hotlists(tmp_path: Path, monkeypatch) -> None:
+    """L. A 股实体映射验证：新增热榜条目自然进入统一 entity 映射 pipeline。"""
+    path = tmp_path / "native-intel.sqlite3"
+    _seed_entity_world(path, monkeypatch)
+
+    wb_src = {"source_id": "hotlist-weibo", "name": "微博", "hint": "macro", "url": hotlist.build_source_url("weibo"), "source_type": "hotlist", "has_real_rank": True}
+
+    item = {
+        "source_id": "hotlist-weibo",
+        "item_key": "hotlist-weibo:https://weibo.com/maotai-1",
+        "title": "贵州茅台今日发布业绩超预期公告",
+        "url": "https://weibo.com/maotai-1",
+        "canonical_url": "https://weibo.com/maotai-1",
+        "title_key": "贵州茅台今日发布业绩超预期公告",
+        "summary": "茅台业绩大幅增长",
+        "hint": "macro",
+        "published_at": None,
+        "published_ts": 0,
+        "rank": 1,
+    }
+
+    test_reg = {
+        "sources": [wb_src],
+        "registry_version": "entity-test",
+        "redline": [],
+        "recent_days": 7,
+        "per_source": 6,
+    }
+    service.run_fetch(
+        "entity-run",
+        str(path),
+        registry=test_reg,
+        sources_override=[wb_src],
+        hotlist_fetcher=lambda src, **kw: ([item], None, None),
+    )
+
+    ctx = service.security_context("600519", str(path))
+    titles = [row["title"] for row in ctx["observation"]["items"]]
+    assert "贵州茅台今日发布业绩超预期公告" in titles
+    matched = next(row for row in ctx["observation"]["items"] if row["title"] == "贵州茅台今日发布业绩超预期公告")
+    assert matched["source_id"] == "hotlist-weibo"
+    assert matched["rank"] == 1

@@ -90,8 +90,9 @@ test("filterHotlistItems handles cls, wallstreetcn, rising, and new arrivals", (
   ];
 
   assert.equal(filterHotlistItems(sampleItems, "all").length, 4);
-  assert.equal(filterHotlistItems(sampleItems, "cls").length, 3);
-  assert.equal(filterHotlistItems(sampleItems, "wallstreetcn").length, 1);
+  assert.equal(filterHotlistItems(sampleItems, "source:hotlist-cls-hot").length, 3);
+  assert.equal(filterHotlistItems(sampleItems, "source:hotlist-wallstreetcn-hot").length, 1);
+  assert.equal(filterHotlistItems(sampleItems, "source:hotlist-weibo").length, 0);
   assert.equal(filterHotlistItems(sampleItems, "rising").length, 1);
   assert.equal(filterHotlistItems(sampleItems, "rising")[0].item_id, 1);
   // item 4 (DISABLED) 即使 previous_rank == null 也绝不能进入 new

@@ -168,29 +168,72 @@ export function HotlistPanel() {
 
       {/* 筛选选项 */}
       <div className="flex flex-wrap items-center gap-2">
-        {(
-          [
-            { key: "all", label: "全部热榜" },
-            { key: "cls", label: "财联社热门" },
-            { key: "wallstreetcn", label: "华尔街见闻" },
-            { key: "rising", label: "位次升温" },
-            { key: "new", label: "新上榜" },
-          ] as const
-        ).map(({ key, label }) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setFilter(key)}
+        <button
+          type="button"
+          onClick={() => setFilter("all")}
+          className={cn(
+            "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+            filter === "all"
+              ? "bg-primary text-primary-foreground shadow"
+              : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+        >
+          全部热榜
+        </button>
+        <button
+          type="button"
+          onClick={() => setFilter("rising")}
+          className={cn(
+            "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+            filter === "rising"
+              ? "bg-primary text-primary-foreground shadow"
+              : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+        >
+          位次升温
+        </button>
+        <button
+          type="button"
+          onClick={() => setFilter("new")}
+          className={cn(
+            "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+            filter === "new"
+              ? "bg-primary text-primary-foreground shadow"
+              : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+        >
+          新上榜
+        </button>
+
+        {/* 动态来源选择器 */}
+        <div className="flex items-center gap-1.5 pl-2 border-l border-border/60">
+          <span className="text-xs text-muted-foreground">来源:</span>
+          <select
+            aria-label="热榜来源筛选"
+            data-testid="hotlist-source-select"
+            value={filter.startsWith("source:") ? filter.slice("source:".length) : ""}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val) {
+                setFilter(`source:${val}`);
+              } else {
+                setFilter("all");
+              }
+            }}
             className={cn(
-              "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-              filter === key
-                ? "bg-primary text-primary-foreground shadow"
-                : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
+              "rounded-lg border border-border bg-background px-2.5 py-1 text-xs text-foreground transition-colors focus:border-primary focus:outline-none",
+              filter.startsWith("source:") && "border-primary font-medium text-primary",
             )}
           >
-            {label}
-          </button>
-        ))}
+            <option value="">全部来源</option>
+            {sources.map((s) => (
+              <option key={s.source_id} value={s.source_id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <span className="ml-auto text-xs text-muted-foreground">
           显示 {visibleItems.length} 条热榜条目
         </span>
