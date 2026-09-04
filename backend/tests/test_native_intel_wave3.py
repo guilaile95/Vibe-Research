@@ -29,6 +29,7 @@ Covers all 24 required scenarios:
 
 from __future__ import annotations
 
+import gc
 import http.server
 import json
 import os
@@ -878,8 +879,12 @@ def test_scenario_24_backup_restore_preserves_wave3_config(tmp_path: Path, monke
 
     for p in (review, fact / "control.sqlite3"):
         p.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(p) as conn:
+        conn = sqlite3.connect(p)
+        try:
             conn.execute("CREATE TABLE records (value TEXT)")
+            conn.commit()
+        finally:
+            conn.close()
 
     # Set Wave 3 config and source max_age_days
     store.insert_user_source(
@@ -902,6 +907,9 @@ def test_scenario_24_backup_restore_preserves_wave3_config(tmp_path: Path, monke
         },
         db_path=db_file,
     )
+
+    # Collect any unclosed SQLite connections so SQLite cleanly finalizes transient WAL/SHM files
+    gc.collect()
 
     monkeypatch.setenv("VR_DATA_DIR", str(data))
     monkeypatch.setenv("VIBE_RESEARCH_REVIEW_DB", str(review))
