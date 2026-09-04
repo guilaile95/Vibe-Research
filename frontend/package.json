@@ -25,6 +25,7 @@
     "test:e2e:interest-filter": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/interest-filter.browser.mjs",
     "test:e2e:today-market-context": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/today-market-context.browser.mjs",
     "test:e2e:core-navigation": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/core-navigation.browser.mjs",
+    "test:e2e:notes-backup": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/notes-backup.browser.mjs",
     "test:e2e:decision-inbox": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/decision-inbox.browser.mjs",
     "test:e2e:account-bootstrap": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/account-bootstrap.browser.mjs",
     "test:e2e:portfolio-advice-error": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/portfolio-advice-error.browser.mjs",
