@@ -1243,5 +1243,3 @@ def test_gap_e_status_freshness_excluded_count(test_db: Path):
     stat_enabled = service.status(str(test_db))
     assert stat_enabled["freshness"]["enabled"] is True
     assert stat_enabled["freshness"]["excluded_count"] == 3
-
-
