@@ -44,6 +44,8 @@ import type {
   NativeIntelItemRankHistoryResponse,
   NativeIntelSourcesResponse,
   NativeIntelSourceRecord,
+  NativeIntelConfig,
+  NativeIntelStandaloneResponse,
   CreateUserSourceInput,
   UpdateSourceInput,
   FilterProfile,
@@ -702,6 +704,18 @@ export const api = {
     request<{ data: NativeIntelSourceRecord }>(`/native-intel/sources/${encodeURIComponent(sourceId)}`, "PATCH", payload),
   deleteNativeIntelSource: (sourceId: string) =>
     request<{ data: NativeIntelSourceRecord }>(`/native-intel/sources/${encodeURIComponent(sourceId)}`, "DELETE"),
+  nativeIntelConfig: (signal?: AbortSignal) =>
+    get<NativeIntelConfig>(
+      "/native-intel/config",
+      { unwrapData: false, ...(signal ? { signal } : {}) },
+    ),
+  updateNativeIntelConfig: (payload: Partial<NativeIntelConfig>) =>
+    request<NativeIntelConfig>("/native-intel/config", "PUT", payload),
+  nativeIntelStandalone: (signal?: AbortSignal) =>
+    get<NativeIntelStandaloneResponse>(
+      "/native-intel/standalone",
+      { unwrapData: false, ...(signal ? { signal } : {}) },
+    ),
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
   gpuRent: () => get<GpuRentData>("/signals/gpu-rent"),

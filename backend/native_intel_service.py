@@ -28,6 +28,7 @@ from typing import Any, Callable
 import uuid
 
 import native_intel_store as store
+import native_intel_freshness as freshness
 
 # 复用 Vibe 自有的 MIT newsradar 实现
 import newsradar
@@ -189,11 +190,12 @@ def _fetch_source_items(
     per: int,
     cutoff: datetime | None,
     redline: list[str],
+    proxy_url: str | None = None,
 ) -> tuple[list[dict[str, Any]], str | None, str | None]:
     """抓单个源；返回 ``(items, error_kind, error_detail)``。
 
     与 ``newsradar._fetch_source`` 的区别：失败时保留结构化错误类别而不是返回 None，
-    这样「源失败」永远不会退化成「该源没有数据」。
+    这样「源失败」永远不会退化成「该源没有数据」。支持 HTTP/HTTPS 代理。
     """
     try:
         req = urllib.request.Request(
@@ -203,8 +205,14 @@ def _fetch_source_items(
                 "Accept": "application/rss+xml,application/atom+xml,application/xml,text/xml,*/*",
             },
         )
-        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
-            raw = resp.read()
+        if proxy_url:
+            handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+            opener = urllib.request.build_opener(handler)
+            with opener.open(req, timeout=FETCH_TIMEOUT) as resp:
+                raw = resp.read()
+        else:
+            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
+                raw = resp.read()
         root = ET.fromstring(raw)
     except Exception as exc:  # noqa: BLE001 - 单源失败必须被隔离，不能向上冒泡
         kind, detail = _classify_error(exc)
@@ -333,16 +341,41 @@ def run_fetch(
     with _FETCH_LOCK:
         store.start_run(run_id, trigger, len(sources), target)
 
+        cfg = store.get_native_intel_config(target)
+        crawler_proxy = store.resolve_crawler_proxy(cfg)
+        rss_proxy = store.resolve_rss_proxy(cfg)
+
         def task(source: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], str | None, str | None, int]:
             started = time.monotonic()
             if str(source.get("source_type") or "rss") == "hotlist":
-                items, kind, detail = hotlist_do(
-                    source, timeout=FETCH_TIMEOUT, redline=redline
-                )
+                if crawler_proxy:
+                    try:
+                        items, kind, detail = hotlist_do(
+                            source, timeout=FETCH_TIMEOUT, redline=redline, proxy_url=crawler_proxy
+                        )
+                    except TypeError:
+                        items, kind, detail = hotlist_do(
+                            source, timeout=FETCH_TIMEOUT, redline=redline
+                        )
+                else:
+                    items, kind, detail = hotlist_do(
+                        source, timeout=FETCH_TIMEOUT, redline=redline
+                    )
             else:
-                items, kind, detail = do_fetch(
-                    source, per=reg["per_source"], cutoff=cutoff, redline=redline
-                )
+                # Wave 3：入库事实保留全量数据（cutoff=None），新鲜度在展示与分析侧作为 Policy 过滤
+                if rss_proxy:
+                    try:
+                        items, kind, detail = do_fetch(
+                            source, per=reg["per_source"], cutoff=None, redline=redline, proxy_url=rss_proxy
+                        )
+                    except TypeError:
+                        items, kind, detail = do_fetch(
+                            source, per=reg["per_source"], cutoff=None, redline=redline
+                        )
+                else:
+                    items, kind, detail = do_fetch(
+                        source, per=reg["per_source"], cutoff=None, redline=redline
+                    )
             return source, items, kind, detail, int((time.monotonic() - started) * 1000)
 
         with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
@@ -1094,6 +1127,7 @@ def sources_list(path: str | None = None) -> dict[str, Any]:
                 "origin": row.get("origin") or "system",
                 "updated_at": row.get("updated_at"),
                 "last_run_status": last_run["status"] if last_run else None,
+                "max_age_days": row.get("max_age_days"),
             }
         )
     return {"status": STATUS_NORMAL, "sources": sources}
@@ -1114,10 +1148,19 @@ def create_user_source(payload: dict[str, Any], path: str | None = None) -> dict
         raise ValueError("url 必须是 http(s) 地址")
     if len(hint) > 20:
         raise ValueError("hint 不超过 20 字符")
+    max_age_arg = None
+    if "max_age_days" in (payload or {}):
+        val = (payload or {})["max_age_days"]
+        if val is not None:
+            if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+                raise ValueError("max_age_days 必须为非负整数或 None")
+            max_age_arg = int(val)
+
     source_id = f"user-rss-{uuid.uuid4().hex[:12]}"
     try:
         row = store.insert_user_source(
-            source_id=source_id, name=name, url=url, hint=hint, enabled=enabled, db_path=path
+            source_id=source_id, name=name, url=url, hint=hint, enabled=enabled,
+            max_age_days=max_age_arg, db_path=path
         )
     except store.SourceAlreadyExistsError as exc:
         raise _SourceConflictError(source_id) from exc
@@ -1131,7 +1174,7 @@ class _SourceConflictError(RuntimeError):
 
 
 def update_source(source_id: str, payload: dict[str, Any], path: str | None = None) -> dict[str, Any] | None:
-    """更新来源；系统源仅允许 enabled，用户源允许 enabled + name。"""
+    """更新来源；系统源仅允许 enabled，用户源允许 enabled + name。支持 RSS 独立的 max_age_days 设置。"""
     data = payload or {}
     enabled = data.get("enabled")
     name = data.get("name")
@@ -1141,15 +1184,33 @@ def update_source(source_id: str, payload: dict[str, Any], path: str | None = No
         name = str(name).strip()
         if not name or len(name) > 80:
             raise ValueError("name 不能为空且不超过 80 字符")
+
     current = store.get_source(source_id, path)
     if current is None:
         return None
     if str(current.get("origin") or "system") != "user" and name is not None and name != current["name"]:
         raise ValueError("系统来源不允许改名（可停用）")
+
+    max_age_arg = store._UNSET
+    if "max_age_days" in data:
+        st = str(current.get("source_type") or "rss").lower()
+        if st != "rss":
+            raise ValueError("仅 RSS 来源支持设置 max_age_days")
+        val = data["max_age_days"]
+        if val is not None:
+            if isinstance(val, bool) or not isinstance(val, int):
+                raise ValueError("max_age_days 必须为非负整数或 None")
+            if val < 0:
+                raise ValueError("max_age_days 不能为负数")
+            max_age_arg = int(val)
+        else:
+            max_age_arg = None
+
     return store.update_source(
         source_id,
         enabled=enabled,
         name=name if isinstance(name, str) else None,
+        max_age_days=max_age_arg,
         db_path=path,
     )
 
@@ -1506,6 +1567,36 @@ def status(path: str | None = None) -> dict[str, Any]:
             "reason": "registry_sources_have_no_real_rank",
             "semantics": "RSS 源不提供真实排名；rank / rank_history 恒为空，不补 0",
         },
+        "freshness": {
+            "enabled": bool(store.get_native_intel_config(target).get("rss_freshness_enabled")),
+            "global_max_age_days": int(store.get_native_intel_config(target).get("rss_global_max_age_days", 1)),
+        },
+        "proxies": {
+            "crawler_proxy": {
+                "enabled": bool(store.get_native_intel_config(target).get("crawler_proxy_enabled")),
+                "configured": bool(store.get_native_intel_config(target).get("crawler_proxy_url")),
+                "url": store.redact_proxy_url(store.get_native_intel_config(target).get("crawler_proxy_url")),
+            },
+            "rss_proxy": {
+                "enabled": bool(store.get_native_intel_config(target).get("rss_proxy_enabled")),
+                "configured": bool(store.get_native_intel_config(target).get("rss_proxy_url")),
+                "url": store.redact_proxy_url(store.resolve_rss_proxy(store.get_native_intel_config(target))),
+                "using_crawler_fallback": bool(
+                    store.get_native_intel_config(target).get("rss_proxy_enabled")
+                    and not store.get_native_intel_config(target).get("rss_proxy_url")
+                    and store.get_native_intel_config(target).get("crawler_proxy_url")
+                ),
+            },
+        },
+        "standalone": {
+            "enabled": bool(store.get_native_intel_config(target).get("standalone_enabled")),
+            "source_count": len(store.get_native_intel_config(target).get("standalone_source_ids", [])),
+            "max_items": int(store.get_native_intel_config(target).get("standalone_max_items", 20)),
+        },
+        "display": {
+            "region_order": store.get_native_intel_config(target).get("region_order", list(store.DEFAULT_NATIVE_INTEL_CONFIG["region_order"])),
+            "regions_enabled": store.get_native_intel_config(target).get("regions_enabled", dict(store.DEFAULT_NATIVE_INTEL_CONFIG["regions_enabled"])),
+        },
     }
 
 
@@ -1830,6 +1921,23 @@ def classify_items(
             "unclassified": 0,
             "profile_fingerprint": fp,
         }
+
+    # Wave 3：在 AI 分类候选收集时剔除已过期的 RSS 条目，旧事实保留于库中但不浪费 AI 配额
+    cfg = store.get_native_intel_config(target)
+    fresh_items = []
+    for item in items:
+        st = str(item.get("source_type") or "rss")
+        if st == "rss":
+            res = freshness.evaluate_item_freshness(
+                item,
+                global_enabled=bool(cfg.get("rss_freshness_enabled")),
+                global_max_age_days=int(cfg.get("rss_global_max_age_days", 1)),
+                source_max_age_days=item.get("source_max_age_days") if item.get("source_max_age_days") is not None else item.get("max_age_days"),
+            )
+            if not res.eligible:
+                continue
+        fresh_items.append(item)
+    items = fresh_items
 
     candidate_ids = [int(i["item_id"]) for i in items]
     analyses = store.get_item_analyses(profile_id, fp, candidate_ids, db_path=target)
@@ -2188,6 +2296,25 @@ def list_filtered_items(
     else:
         filtered_by_src = raw_items
 
+    # Wave 3：应用 RSS 新鲜度过滤（先于关键词/AI过滤，不影响热榜与原始事实）
+    cfg = store.get_native_intel_config(target)
+    fresh_candidates = []
+    freshness_excluded_count = 0
+    for it in filtered_by_src:
+        st = str(it.get("source_type") or "rss")
+        if st == "rss":
+            res = freshness.evaluate_item_freshness(
+                it,
+                global_enabled=bool(cfg.get("rss_freshness_enabled")),
+                global_max_age_days=int(cfg.get("rss_global_max_age_days", 1)),
+                source_max_age_days=it.get("source_max_age_days") if it.get("source_max_age_days") is not None else it.get("max_age_days"),
+            )
+            if not res.eligible:
+                freshness_excluded_count += 1
+                continue
+        fresh_candidates.append(it)
+    filtered_by_src = fresh_candidates
+
     # 实体关联与热榜位次补充
     item_ids = [int(i["item_id"]) for i in filtered_by_src]
     entity_map = store.list_item_entities(item_ids, target)
@@ -2224,6 +2351,7 @@ def list_filtered_items(
         f_meta["mode"] = mode
         f_meta["source_type"] = source_type
         f_meta["status"] = "normal"
+        f_meta["freshness_excluded_count"] = freshness_excluded_count
         if mode == "my_interests":
             display_items = matched_items
         else:
@@ -2310,4 +2438,104 @@ def filter_status(profile_id: str = "default", path: str | None = None) -> dict[
             "below_threshold_count": below_threshold_count,
             "matched_count": matched_count,
         },
+    }
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 3：独立免过滤展示区 (Standalone Region)
+# 语义：绕过关键词与 AI 个人兴趣过滤，但 RSS 仍然遵守新鲜度策略；
+# Hotlist 保持真实排名与位次变化轨迹。
+# ---------------------------------------------------------------------------
+
+
+def get_standalone_items(path: str | None = None) -> dict[str, Any]:
+    """获取独立展示区条目数据。"""
+    target = path or db_path()
+    store.initialize_store(target)
+    cfg = store.get_native_intel_config(target)
+
+    if not cfg.get("standalone_enabled", True):
+        return {
+            "status": "disabled",
+            "items": [],
+            "total": 0,
+            "configured_sources": [],
+            "freshness_excluded_count": 0,
+        }
+
+    source_ids = cfg.get("standalone_source_ids") or []
+    if not source_ids:
+        return {
+            "status": "empty",
+            "items": [],
+            "total": 0,
+            "configured_sources": [],
+            "freshness_excluded_count": 0,
+        }
+
+    max_per_source = int(cfg.get("standalone_max_items", 20))
+    plane = data_status(target)
+    is_plane_stale = plane.get("status") == STATUS_STALE
+
+    items_out: list[dict[str, Any]] = []
+    freshness_excluded_count = 0
+
+    all_recent = store.list_all_recent_items_with_sources(limit=500, db_path=target)
+    # 按来源分组
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    for it in all_recent:
+        sid = it.get("source_id")
+        if sid in source_ids:
+            by_source.setdefault(sid, []).append(it)
+
+    for sid in source_ids:
+        src_items = by_source.get(sid, [])
+        emitted = 0
+        for it in src_items:
+            if emitted >= max_per_source:
+                break
+            st = str(it.get("source_type") or "rss")
+            if st == "rss":
+                res = freshness.evaluate_item_freshness(
+                    it,
+                    global_enabled=bool(cfg.get("rss_freshness_enabled")),
+                    global_max_age_days=int(cfg.get("rss_global_max_age_days", 1)),
+                    source_max_age_days=it.get("source_max_age_days") if it.get("source_max_age_days") is not None else it.get("max_age_days"),
+                )
+                if not res.eligible:
+                    freshness_excluded_count += 1
+                    continue
+            items_out.append(it)
+            emitted += 1
+
+    # 补充实体与排名状态
+    item_ids = [int(i["item_id"]) for i in items_out]
+    entity_map = store.list_item_entities(item_ids, target)
+
+    enriched: list[dict[str, Any]] = []
+    for it in items_out:
+        row = dict(it)
+        iid = int(it["item_id"])
+        row["entities"] = entity_map.get(iid, [])
+        if it.get("source_type") == "hotlist":
+            state = store.get_item_rank_state(iid, target)
+            row["rank"] = state.get("current_rank")
+            row["previous_rank"] = state.get("previous_rank")
+            row["rank_delta"] = state.get("rank_delta")
+            row["observation_count"] = int(it.get("observation_count") or 1)
+            row["current_state"] = state.get("current_state") or ("STALE" if is_plane_stale else "ON_LIST")
+        else:
+            row["rank"] = None
+            row["previous_rank"] = None
+            row["rank_delta"] = None
+            row["observation_count"] = int(it.get("observation_count") or 1)
+            row["current_state"] = "NORMAL"
+        enriched.append(row)
+
+    return {
+        "status": "normal",
+        "items": enriched,
+        "total": len(enriched),
+        "configured_sources": source_ids,
+        "freshness_excluded_count": freshness_excluded_count,
     }

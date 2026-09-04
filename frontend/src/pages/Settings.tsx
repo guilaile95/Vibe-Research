@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal, Loader2, RefreshCw, Rss, Plus, SlidersHorizontal, Tag } from "lucide-react";
+import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal, Loader2, RefreshCw, Rss, Plus, SlidersHorizontal, Tag, Globe, Layers, ArrowUp, ArrowDown } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { toast } from "sonner";
@@ -287,6 +287,9 @@ export function Settings() {
 
       {/* 资讯来源管理（NATIVE-INTEL1 / TREND-PARITY Wave 1） */}
       <SourceRegistrySection />
+
+      {/* 资讯展示与抓取高级控制（TREND-PARITY Wave 3） */}
+      <NativeIntelDisplayAndProxySection />
     </div>
   );
 }
@@ -356,6 +359,16 @@ function SourceRegistrySection() {
       await fetchSources();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "删除来源失败");
+    }
+  };
+
+  const handleUpdateFreshness = async (sourceId: string, maxAgeDays: number | null) => {
+    try {
+      await api.updateNativeIntelSource(sourceId, { max_age_days: maxAgeDays });
+      toast.success("已更新新鲜度设置");
+      await fetchSources();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "更新新鲜度失败");
     }
   };
 
@@ -459,6 +472,55 @@ function SourceRegistrySection() {
                 <div className="mt-0.5 truncate text-[10px] text-muted-foreground/70 font-mono">
                   {src.url}
                 </div>
+                {src.source_type === "rss" && (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                    <span>时效过滤:</span>
+                    <select
+                      data-testid={`source-freshness-select-${src.source_id}`}
+                      value={
+                        src.max_age_days === null || src.max_age_days === undefined
+                          ? "inherit"
+                          : src.max_age_days === 0
+                          ? "disabled"
+                          : "custom"
+                      }
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "inherit") {
+                          void handleUpdateFreshness(src.source_id, null);
+                        } else if (val === "disabled") {
+                          void handleUpdateFreshness(src.source_id, 0);
+                        } else {
+                          void handleUpdateFreshness(src.source_id, 1);
+                        }
+                      }}
+                      className="rounded border border-border bg-black/20 px-1.5 py-0.5 text-xs outline-none"
+                    >
+                      <option value="inherit">继承全局</option>
+                      <option value="disabled">不过滤 (0)</option>
+                      <option value="custom">自定义天数</option>
+                    </select>
+                    {src.max_age_days !== null && src.max_age_days !== undefined && src.max_age_days > 0 && (
+                      <div className="inline-flex items-center gap-1">
+                        <input
+                          type="number"
+                          min={1}
+                          max={365}
+                          data-testid={`source-freshness-input-${src.source_id}`}
+                          defaultValue={src.max_age_days}
+                          onBlur={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            if (!isNaN(v) && v > 0) {
+                              void handleUpdateFreshness(src.source_id, v);
+                            }
+                          }}
+                          className="w-14 rounded border border-border bg-black/20 px-1.5 py-0.5 text-xs outline-none"
+                        />
+                        <span>天</span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
@@ -1080,6 +1142,417 @@ function NativeIntelFilterSettingsSection() {
               </button>
             </div>
           )}
+        </div>
+      )}
+    </GlassCard>
+  );
+}
+
+
+function NativeIntelDisplayAndProxySection() {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [sources, setSources] = useState<NativeIntelSourceRecord[]>([]);
+
+  const [rssFreshnessEnabled, setRssFreshnessEnabled] = useState(false);
+  const [rssGlobalMaxAgeDays, setRssGlobalMaxAgeDays] = useState(1);
+
+  const [crawlerProxyEnabled, setCrawlerProxyEnabled] = useState(false);
+  const [crawlerProxyUrl, setCrawlerProxyUrl] = useState("");
+  const [rssProxyEnabled, setRssProxyEnabled] = useState(false);
+  const [rssProxyUrl, setRssProxyUrl] = useState("");
+
+  const [standaloneEnabled, setStandaloneEnabled] = useState(true);
+  const [standaloneSourceIds, setStandaloneSourceIds] = useState<string[]>([]);
+  const [standaloneMaxItems, setStandaloneMaxItems] = useState(20);
+
+  const [regionOrder, setRegionOrder] = useState<string[]>(["hotlist", "rss", "standalone"]);
+  const [regionsEnabled, setRegionsEnabled] = useState<Record<string, boolean>>({
+    hotlist: true,
+    rss: true,
+    standalone: true,
+  });
+
+  const loadConfig = async () => {
+    setLoading(true);
+    try {
+      const [cfg, srcRes] = await Promise.all([
+        api.nativeIntelConfig(),
+        api.nativeIntelSources(),
+      ]);
+      setSources(srcRes.sources || []);
+      setRssFreshnessEnabled(Boolean(cfg.rss_freshness_enabled));
+      setRssGlobalMaxAgeDays(Number(cfg.rss_global_max_age_days ?? 1));
+      setCrawlerProxyEnabled(Boolean(cfg.crawler_proxy_enabled));
+      setCrawlerProxyUrl(cfg.crawler_proxy_url || "");
+      setRssProxyEnabled(Boolean(cfg.rss_proxy_enabled));
+      setRssProxyUrl(cfg.rss_proxy_url || "");
+      setStandaloneEnabled(cfg.standalone_enabled !== false);
+      setStandaloneSourceIds(cfg.standalone_source_ids || []);
+      setStandaloneMaxItems(Number(cfg.standalone_max_items ?? 20));
+      if (Array.isArray(cfg.region_order) && cfg.region_order.length > 0) {
+        setRegionOrder(cfg.region_order);
+      }
+      if (cfg.regions_enabled) {
+        setRegionsEnabled(cfg.regions_enabled);
+      }
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "读取展示与抓取配置失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadConfig();
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await api.updateNativeIntelConfig({
+        rss_freshness_enabled: rssFreshnessEnabled,
+        rss_global_max_age_days: rssGlobalMaxAgeDays,
+        crawler_proxy_enabled: crawlerProxyEnabled,
+        crawler_proxy_url: crawlerProxyUrl.trim(),
+        rss_proxy_enabled: rssProxyEnabled,
+        rss_proxy_url: rssProxyUrl.trim(),
+        standalone_enabled: standaloneEnabled,
+        standalone_source_ids: standaloneSourceIds,
+        standalone_max_items: standaloneMaxItems,
+        region_order: regionOrder,
+        regions_enabled: regionsEnabled,
+      });
+      toast.success("已保存展示与抓取高级设置");
+      await loadConfig();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "保存配置失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleStandaloneSource = (sid: string) => {
+    setStandaloneSourceIds((prev) =>
+      prev.includes(sid) ? prev.filter((id) => id !== sid) : [...prev, sid],
+    );
+  };
+
+  const moveRegion = (index: number, direction: "up" | "down") => {
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= regionOrder.length) return;
+    const nextOrder = [...regionOrder];
+    const temp = nextOrder[index];
+    nextOrder[index] = nextOrder[targetIndex];
+    nextOrder[targetIndex] = temp;
+    setRegionOrder(nextOrder);
+  };
+
+  const regionNames: Record<string, string> = {
+    hotlist: "实时热榜 (hotlist)",
+    rss: "RSS 资讯 (rss)",
+    standalone: "重点独立展示区 (standalone)",
+    new_items: "新上榜与异动 (new_items - Wave 4 规划中)",
+    ai_analysis: "AI 深度分析 (ai_analysis - Wave 5 规划中)",
+  };
+
+  return (
+    <GlassCard className="mt-4" data-testid="native-intel-wave3-settings">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+          <Layers className="h-4 w-4 text-primary" /> 资讯展示与抓取高级控制 (Wave 3)
+        </h3>
+        <button
+          type="button"
+          onClick={() => void loadConfig()}
+          disabled={loading}
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
+          刷新配置
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground mb-4">
+        配置 RSS 新鲜度过滤阈值、抓取网络代理通道、重点免过滤独立展示区以及板面区域开关与渲染顺序。
+      </p>
+
+      {loading ? (
+        <div className="p-6 text-center text-xs text-muted-foreground">
+          <Loader2 className="mr-1.5 inline h-4 w-4 animate-spin" />
+          正在读取配置…
+        </div>
+      ) : (
+        <div className="space-y-5">
+          {/* 1. RSS 全局新鲜度过滤 */}
+          <div className="rounded-lg border border-border/70 bg-background/50 p-3 text-xs space-y-2.5">
+            <div className="font-medium text-foreground flex items-center gap-1">
+              <Rss className="h-3.5 w-3.5 text-primary" /> RSS 全局时效过滤 (Freshness Policy)
+            </div>
+            <p className="text-muted-foreground text-[11px]">
+              根据文章发布时间过滤陈旧历史资讯；未声明发布时间的文章自动保留，绝不因缺少时间而误丢弃。
+            </p>
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  data-testid="wave3-rss-freshness-enabled"
+                  checked={rssFreshnessEnabled}
+                  onChange={(e) => setRssFreshnessEnabled(e.target.checked)}
+                  className="rounded border-border accent-primary"
+                />
+                <span className="font-medium">启用全局 RSS 新鲜度过滤</span>
+              </label>
+
+              <div className="flex items-center gap-1.5">
+                <span className="text-muted-foreground">全局最大文章年龄:</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={365}
+                  data-testid="wave3-rss-global-max-age"
+                  value={rssGlobalMaxAgeDays}
+                  onChange={(e) => setRssGlobalMaxAgeDays(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  className="w-16 rounded border border-border bg-black/20 px-2 py-1 text-xs outline-none focus:border-primary/50"
+                />
+                <span>天 (0 表示不过滤)</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 2. 网络代理设置 */}
+          <div className="rounded-lg border border-border/70 bg-background/50 p-3 text-xs space-y-2.5">
+            <div className="font-medium text-foreground flex items-center gap-1">
+              <Globe className="h-3.5 w-3.5 text-primary" /> 网络抓取代理通道 (Crawler & RSS Proxy)
+            </div>
+            <p className="text-muted-foreground text-[11px]">
+              支持配置 HTTP/HTTPS 网络代理通道。代理仅存本地，密码脱敏防泄露，代理失败严格记录独立源错误不伪造成功。
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {/* 爬虫代理 */}
+              <div className="space-y-1.5 rounded border border-border/40 p-2.5 bg-card/30">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    data-testid="wave3-crawler-proxy-enabled"
+                    checked={crawlerProxyEnabled}
+                    onChange={(e) => setCrawlerProxyEnabled(e.target.checked)}
+                    className="rounded border-border accent-primary"
+                  />
+                  <span className="font-medium">热榜爬虫代理通道</span>
+                </label>
+                <input
+                  type="text"
+                  data-testid="wave3-crawler-proxy-url"
+                  value={crawlerProxyUrl}
+                  onChange={(e) => setCrawlerProxyUrl(e.target.value)}
+                  placeholder="http://127.0.0.1:7890"
+                  className="w-full rounded border border-border bg-black/20 px-2.5 py-1 text-xs outline-none focus:border-primary/50"
+                />
+                <span className="text-[10px] text-muted-foreground block">
+                  应用于 11 个公开热榜平台的数据抓取通道
+                </span>
+              </div>
+
+              {/* RSS 代理 */}
+              <div className="space-y-1.5 rounded border border-border/40 p-2.5 bg-card/30">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    data-testid="wave3-rss-proxy-enabled"
+                    checked={rssProxyEnabled}
+                    onChange={(e) => setRssProxyEnabled(e.target.checked)}
+                    className="rounded border-border accent-primary"
+                  />
+                  <span className="font-medium">RSS 抓取代理通道</span>
+                </label>
+                <input
+                  type="text"
+                  data-testid="wave3-rss-proxy-url"
+                  value={rssProxyUrl}
+                  onChange={(e) => setRssProxyUrl(e.target.value)}
+                  placeholder="留空时自动复用热榜爬虫代理"
+                  className="w-full rounded border border-border bg-black/20 px-2.5 py-1 text-xs outline-none focus:border-primary/50"
+                />
+                <span className="text-[10px] text-muted-foreground block">
+                  留空且启用时，自动回退使用爬虫代理 URL
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* 3. 重点独立展示区 (Standalone) */}
+          <div className="rounded-lg border border-border/70 bg-background/50 p-3 text-xs space-y-2.5">
+            <div className="font-medium text-foreground flex items-center gap-1">
+              <Sparkles className="h-3.5 w-3.5 text-primary" /> 重点独立展示区 (display.standalone)
+            </div>
+            <p className="text-muted-foreground text-[11px]">
+              选中的重点资讯源条目将绕过个人兴趣与关键词过滤完整呈现；Hotlist 保持真实排名与异动轨迹，RSS 依然遵守新鲜度时效。
+            </p>
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  data-testid="wave3-standalone-enabled"
+                  checked={standaloneEnabled}
+                  onChange={(e) => setStandaloneEnabled(e.target.checked)}
+                  className="rounded border-border accent-primary"
+                />
+                <span className="font-medium">启用重点独立展示区</span>
+              </label>
+
+              <div className="flex items-center gap-1.5">
+                <span className="text-muted-foreground">每来源最多展示:</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  data-testid="wave3-standalone-max-items"
+                  value={standaloneMaxItems}
+                  onChange={(e) => setStandaloneMaxItems(Math.max(1, parseInt(e.target.value, 10) || 20))}
+                  className="w-16 rounded border border-border bg-black/20 px-2 py-1 text-xs outline-none focus:border-primary/50"
+                />
+                <span>条</span>
+              </div>
+            </div>
+
+            <div>
+              <span className="text-muted-foreground block mb-1">选择纳入独立展示区的来源:</span>
+              <div className="max-h-36 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 gap-1.5 rounded border border-border/60 bg-card/40 p-2">
+                {sources.map((s) => (
+                  <label
+                    key={s.source_id}
+                    className="flex items-center gap-1.5 text-[11px] hover:text-foreground cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      data-testid={`wave3-standalone-source-${s.source_id}`}
+                      checked={standaloneSourceIds.includes(s.source_id)}
+                      onChange={() => toggleStandaloneSource(s.source_id)}
+                      className="rounded border-border accent-primary"
+                    />
+                    <span className="truncate">{s.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 4. 资讯展示区域开关与排序 */}
+          <div className="rounded-lg border border-border/70 bg-background/50 p-3 text-xs space-y-2.5">
+            <div className="font-medium text-foreground flex items-center gap-1">
+              <Layers className="h-3.5 w-3.5 text-primary" /> 资讯板面区域开关与排序 (Display Regions)
+            </div>
+            <p className="text-muted-foreground text-[11px]">
+              控制板面上各区域的显示与上下排列顺序。全部关闭时诚实显示已关闭提示。
+            </p>
+
+            <div className="flex flex-wrap gap-4 py-1">
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  data-testid="wave3-region-toggle-hotlist"
+                  checked={regionsEnabled.hotlist !== false}
+                  onChange={(e) =>
+                    setRegionsEnabled((prev) => ({ ...prev, hotlist: e.target.checked }))
+                  }
+                  className="rounded border-border accent-primary"
+                />
+                <span>实时热榜 (hotlist)</span>
+              </label>
+
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  data-testid="wave3-region-toggle-rss"
+                  checked={regionsEnabled.rss !== false}
+                  onChange={(e) =>
+                    setRegionsEnabled((prev) => ({ ...prev, rss: e.target.checked }))
+                  }
+                  className="rounded border-border accent-primary"
+                />
+                <span>RSS 资讯 (rss)</span>
+              </label>
+
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  data-testid="wave3-region-toggle-standalone"
+                  checked={regionsEnabled.standalone !== false}
+                  onChange={(e) =>
+                    setRegionsEnabled((prev) => ({ ...prev, standalone: e.target.checked }))
+                  }
+                  className="rounded border-border accent-primary"
+                />
+                <span>重点独立区 (standalone)</span>
+              </label>
+
+              <div className="flex items-center gap-1 text-muted-foreground/60 opacity-60">
+                <span className="rounded bg-muted px-1 text-[10px]">Wave 4 规划中</span>
+                <span>新上榜异动 (new_items)</span>
+              </div>
+
+              <div className="flex items-center gap-1 text-muted-foreground/60 opacity-60">
+                <span className="rounded bg-muted px-1 text-[10px]">Wave 5 规划中</span>
+                <span>AI 深度分析 (ai_analysis)</span>
+              </div>
+            </div>
+
+            {/* 区域排序列表 */}
+            <div>
+              <span className="text-muted-foreground block mb-1">区域从上到下排列顺序:</span>
+              <div
+                data-testid="wave3-region-order-list"
+                className="space-y-1.5 rounded border border-border/60 bg-card/40 p-2 max-w-md"
+              >
+                {regionOrder
+                  .filter((r) => ["hotlist", "rss", "standalone"].includes(r))
+                  .map((r, idx, arr) => (
+                    <div
+                      key={r}
+                      className="flex items-center justify-between rounded bg-background/80 px-2.5 py-1.5 border border-border/40 text-xs"
+                    >
+                      <span className="font-medium text-foreground">
+                        {idx + 1}. {regionNames[r] || r}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          disabled={idx === 0}
+                          data-testid={`wave3-move-up-${r}`}
+                          onClick={() => moveRegion(regionOrder.indexOf(r), "up")}
+                          className="rounded p-1 hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-30"
+                          title="上移"
+                        >
+                          <ArrowUp className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === arr.length - 1}
+                          data-testid={`wave3-move-down-${r}`}
+                          onClick={() => moveRegion(regionOrder.indexOf(r), "down")}
+                          className="rounded p-1 hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-30"
+                          title="下移"
+                        >
+                          <ArrowDown className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 保存按钮 */}
+          <button
+            type="button"
+            data-testid="wave3-save-config-btn"
+            onClick={() => void handleSave()}
+            disabled={saving}
+            className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            {saving ? "保存中…" : "保存展示与抓取设置"}
+          </button>
         </div>
       )}
     </GlassCard>

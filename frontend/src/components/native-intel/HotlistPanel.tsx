@@ -20,7 +20,9 @@ import {
   type NativeIntelHotlistSource,
   type NativeIntelItemRankHistoryResponse,
   type FilterMeta,
+  type NativeIntelConfig,
 } from "@/lib/api";
+import { Rss } from "lucide-react";
 import {
   filterHotlistItems,
   formatRankDelta,
@@ -34,6 +36,9 @@ import { FilterSettingsModal } from "./FilterSettingsModal";
 
 export function HotlistPanel() {
   const [items, setItems] = useState<NativeIntelHotlistItem[]>([]);
+  const [rssItems, setRssItems] = useState<NativeIntelHotlistItem[]>([]);
+  const [standaloneItems, setStandaloneItems] = useState<NativeIntelHotlistItem[]>([]);
+  const [config, setConfig] = useState<NativeIntelConfig | null>(null);
   const [sources, setSources] = useState<NativeIntelHotlistSource[]>([]);
   const [boardStatus, setBoardStatus] = useState<string>("normal");
   const [filterMeta, setFilterMeta] = useState<FilterMeta | null>(null);
@@ -59,26 +64,42 @@ export function HotlistPanel() {
     const currentReqId = ++reqIdRef.current;
     try {
       setError(null);
+      const [cfg, standaloneRes] = await Promise.all([
+        api.nativeIntelConfig().catch(() => null),
+        api.nativeIntelStandalone().catch(() => ({ items: [] as NativeIntelHotlistItem[] })),
+      ]);
+      if (currentReqId !== reqIdRef.current) return;
+      if (cfg) setConfig(cfg);
+      setStandaloneItems(standaloneRes.items || []);
+
       if (interestMode === "my_interests") {
-        const res = await api.nativeIntelFilteredItems(sourceTypeFilter, "my_interests");
+        const [hotlistRes, rssRes] = await Promise.all([
+          api.nativeIntelFilteredItems("hotlist", "my_interests"),
+          api.nativeIntelFilteredItems("rss", "my_interests"),
+        ]);
         if (currentReqId !== reqIdRef.current) return;
-        setItems(res.items || []);
-        setFilterMeta(res.filter_meta || null);
-        setBoardStatus(res.status || "normal");
+        setItems(hotlistRes.items || []);
+        setRssItems(rssRes.items || []);
+        setFilterMeta(hotlistRes.filter_meta || null);
+        setBoardStatus(hotlistRes.status || "normal");
         api.nativeIntelSources().then((s) => {
           if (currentReqId === reqIdRef.current) setSources(s.sources || []);
         }).catch(() => {});
       } else {
-        const res = await api.nativeIntelHotlist(100, "all");
+        const [hotlistRes, rssRes] = await Promise.all([
+          api.nativeIntelHotlist(100, "all"),
+          api.nativeIntelFilteredItems("rss", "all"),
+        ]);
         if (currentReqId !== reqIdRef.current) return;
-        setItems(res.items || []);
-        setSources(res.sources || []);
-        setBoardStatus(res.status || "normal");
-        setFilterMeta(res.filter_meta || null);
+        setItems(hotlistRes.items || []);
+        setRssItems(rssRes.items || []);
+        setSources(hotlistRes.sources || []);
+        setBoardStatus(hotlistRes.status || "normal");
+        setFilterMeta(hotlistRes.filter_meta || null);
       }
     } catch (err) {
       if (currentReqId !== reqIdRef.current) return;
-      setError(err instanceof ApiError ? err.message : "读取热榜失败");
+      setError(err instanceof ApiError ? err.message : "读取资讯失败");
     } finally {
       if (currentReqId === reqIdRef.current) {
         setLoading(false);
@@ -414,198 +435,332 @@ export function HotlistPanel() {
         </span>
       </div>
 
-      {/* 列表正文 */}
-      <div className="rounded-xl border border-border/60 bg-card/50">
-        {loading && items.length === 0 ? (
-          <div className="flex items-center justify-center p-12 text-sm text-muted-foreground">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            正在读取热榜与排名轨迹…
-          </div>
-        ) : visibleItems.length === 0 ? (
-          interestMode === "my_interests" ? (
+      {/* 区域渲染逻辑：支持 hotlist, rss, standalone 按照 region_order 动态排序 */}
+      {(() => {
+        const isHotlistEnabled = config?.regions_enabled?.hotlist !== false;
+        const isRssEnabled = config?.regions_enabled?.rss !== false;
+        const isStandaloneEnabled =
+          config?.regions_enabled?.standalone !== false && config?.standalone_enabled !== false;
+        const allRegionsDisabled =
+          Boolean(config) && !isHotlistEnabled && !isRssEnabled && !isStandaloneEnabled;
+
+        if (allRegionsDisabled) {
+          return (
             <div
-              className="p-12 text-center text-sm space-y-3"
-              data-testid="hotlist-empty-interests"
+              data-testid="all-regions-disabled-empty"
+              className="rounded-xl border border-border/60 bg-card/50 p-12 text-center text-sm text-muted-foreground space-y-2"
             >
-              <p className="text-muted-foreground">
-                当前个人关注规则未匹配到任何热榜条目。
+              <p className="font-medium text-foreground">
+                当前所有资讯展示区域均已关闭，可到设置中重新开启。
               </p>
-              <button
-                type="button"
-                onClick={() => setSettingsOpen(true)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs text-primary hover:bg-muted font-medium transition-colors"
-              >
-                <SlidersHorizontal className="h-3.5 w-3.5" />
-                调整兴趣与关键词规则
-              </button>
+              <Link to="/settings" className="text-primary hover:underline text-xs inline-block">
+                前往系统设置
+              </Link>
             </div>
-          ) : (
-            <div className="p-12 text-center text-sm text-muted-foreground">
-              暂无匹配的热榜数据。
-            </div>
-          )
-        ) : (
-          <div className="divide-y divide-border/30">
-            {visibleItems.map((item) => {
-              const delta = formatRankDelta(
-                item.rank_delta,
-                item.previous_rank,
-                item.current_state,
-                item.rank,
-              );
-              const badge = formatStateBadge(item.current_state);
-              const filterBadge = formatFilterBadge(item.filter_match);
-              return (
+          );
+        }
+
+        const renderItemRow = (
+          item: NativeIntelHotlistItem,
+          testIdPrefix: string,
+        ) => {
+          const delta = formatRankDelta(
+            item.rank_delta,
+            item.previous_rank,
+            item.current_state,
+            item.rank,
+          );
+          const badge = formatStateBadge(item.current_state);
+          const filterBadge = formatFilterBadge(item.filter_match);
+          return (
+            <div
+              key={item.item_id}
+              data-testid={`${testIdPrefix}-item`}
+              className="flex flex-col gap-2 p-3 transition-colors hover:bg-muted/30 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="flex min-w-0 items-start gap-3">
+                {/* 排名徽章 */}
                 <div
-                  key={item.item_id}
-                  className="flex flex-col gap-2 p-3 transition-colors hover:bg-muted/30 sm:flex-row sm:items-center sm:justify-between"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/60 font-mono text-xs font-bold text-foreground"
+                  title={
+                    item.source_type === "rss" || item.rank == null
+                      ? "RSS 资讯 (无排名)"
+                      : item.current_state === "DISABLED"
+                      ? `末次 #${item.rank ?? "-"} (来源已停用)`
+                      : item.current_state === "STALE"
+                      ? `末次 #${item.rank ?? "-"} (数据已过期)`
+                      : undefined
+                  }
                 >
-                  <div className="flex min-w-0 items-start gap-3">
-                    {/* 排名徽章 */}
-                    <div
-                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/60 font-mono text-xs font-bold text-foreground"
-                      title={
-                        item.source_type === "rss" || item.rank == null
-                          ? "RSS 资讯 (无排名)"
-                          : item.current_state === "DISABLED"
-                          ? `末次 #${item.rank ?? "-"} (来源已停用)`
-                          : item.current_state === "STALE"
-                          ? `末次 #${item.rank ?? "-"} (数据已过期)`
-                          : undefined
-                      }
+                  {item.source_type === "rss" || item.rank == null
+                    ? "RSS"
+                    : item.current_state === "DISABLED" || item.current_state === "STALE"
+                    ? "—"
+                    : (item.rank ?? "-")}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="group inline-flex items-center gap-1 font-medium text-foreground hover:text-primary hover:underline text-sm"
                     >
-                      {item.source_type === "rss" || item.rank == null
-                        ? "RSS"
-                        : item.current_state === "DISABLED" || item.current_state === "STALE"
-                        ? "—"
-                        : (item.rank ?? "-")}
-                    </div>
+                      <span className="truncate">{item.title}</span>
+                      <ExternalLink className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-70" />
+                    </a>
 
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <a
-                          href={item.url}
-                          target="_blank"
-                          rel="noreferrer noopener"
-                          className="group inline-flex items-center gap-1 font-medium text-foreground hover:text-primary hover:underline text-sm"
+                    {filterBadge &&
+                      filterBadge.labels.map((lbl, i) => (
+                        <span
+                          key={i}
+                          data-testid="hotlist-item-filter-badge"
+                          className={cn(
+                            "rounded px-1.5 py-0.2 text-[10px] font-medium border",
+                            filterBadge.className,
+                          )}
                         >
-                          <span className="truncate">{item.title}</span>
-                          <ExternalLink className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-70" />
-                        </a>
-
-                        {/* 兴趣标签 / 关键词分组徽章 */}
-                        {filterBadge &&
-                          filterBadge.labels.map((lbl, i) => (
-                            <span
-                              key={i}
-                              data-testid="hotlist-item-filter-badge"
-                              className={cn(
-                                "rounded px-1.5 py-0.2 text-[10px] font-medium border",
-                                filterBadge.className,
-                              )}
-                            >
-                              {lbl}
-                            </span>
-                          ))}
-                      </div>
-
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                        <span>{item.source_name || item.source_id}</span>
-                        {item.current_state === "DISABLED" && item.rank != null && (
-                          <>
-                            <span>·</span>
-                            <span className="text-amber-500/80">末次 #{item.rank} (已停用)</span>
-                          </>
-                        )}
-                        {item.current_state === "STALE" && item.rank != null && (
-                          <>
-                            <span>·</span>
-                            <span className="text-amber-500/80 font-medium">末次 #{item.rank} (已过期)</span>
-                          </>
-                        )}
-                        <span>·</span>
-                        <span>首次上榜: {formatShanghaiTime(item.first_seen_at)}</span>
-                        <span>·</span>
-                        <span>观测: {item.observation_count}次</span>
-
-                        {/* 实体关联（若映射到具体 A 股） */}
-                        {item.entities && item.entities.length > 0 && (
-                          <div className="flex items-center gap-1 pl-1">
-                            {item.entities.slice(0, 3).map((entity, idx) => {
-                              const code = entity.security_code;
-                              return code ? (
-                                <Link
-                                  key={idx}
-                                  to={candidateWorkspaceHref(code)}
-                                  className="rounded bg-primary/10 px-1.5 py-0.5 text-primary hover:underline"
-                                  data-testid={`hotlist-candidate-${code}`}
-                                >
-                                  {entity.term}
-                                </Link>
-                              ) : (
-                                <span
-                                  key={idx}
-                                  className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground"
-                                >
-                                  {entity.term}
-                                </span>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
+                          {lbl}
+                        </span>
+                      ))}
                   </div>
 
-                  {/* 排名状态与轨迹动作 */}
-                  <div className="flex items-center gap-2.5 sm:shrink-0">
-                    <div className="flex items-center gap-1.5 text-xs font-mono">
-                      {delta.type === "up" && (
-                        <span className="flex items-center text-emerald-500 font-medium">
-                          <TrendingUp className="mr-0.5 h-3 w-3" />
-                          {delta.text}
-                        </span>
-                      )}
-                      {delta.type === "down" && (
-                        <span className="text-rose-500 font-medium">{delta.text}</span>
-                      )}
-                      {delta.type === "new" && (
-                        <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary font-medium">
-                          新上榜
-                        </span>
-                      )}
-                      {delta.type === "flat" && (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                    <span>{item.source_name || item.source_id}</span>
+                    {item.current_state === "DISABLED" && item.rank != null && (
+                      <>
+                        <span>·</span>
+                        <span className="text-amber-500/80">末次 #{item.rank} (已停用)</span>
+                      </>
+                    )}
+                    {item.current_state === "STALE" && item.rank != null && (
+                      <>
+                        <span>·</span>
+                        <span className="text-amber-500/80 font-medium">末次 #{item.rank} (已过期)</span>
+                      </>
+                    )}
+                    {item.first_seen_at && (
+                      <>
+                        <span>·</span>
+                        <span>首次上榜: {formatShanghaiTime(item.first_seen_at)}</span>
+                      </>
+                    )}
+                    {item.published_at && (
+                      <>
+                        <span>·</span>
+                        <span>发布: {formatShanghaiTime(item.published_at)}</span>
+                      </>
+                    )}
+                    <span>·</span>
+                    <span>观测: {item.observation_count ?? 1}次</span>
 
-                    <span
-                      data-testid={`hotlist-state-${item.item_id}`}
-                      className={cn(
-                        "rounded px-2 py-0.5 text-xs font-medium border",
-                        badge.className,
-                      )}
-                    >
-                      {badge.label}
-                    </span>
-
-                    {item.source_type !== "rss" && item.rank != null && (
-                      <button
-                        type="button"
-                        onClick={() => void handleShowHistory(item.item_id)}
-                        className="inline-flex items-center gap-1 rounded-md border border-border/80 bg-background/50 px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-                      >
-                        <History className="h-3 w-3" />
-                        轨迹
-                      </button>
+                    {item.entities && item.entities.length > 0 && (
+                      <div className="flex items-center gap-1 pl-1">
+                        {item.entities.slice(0, 3).map((entity, idx) => {
+                          const code = entity.security_code;
+                          return code ? (
+                            <Link
+                              key={idx}
+                              to={candidateWorkspaceHref(code)}
+                              className="rounded bg-primary/10 px-1.5 py-0.5 text-primary hover:underline"
+                              data-testid={`hotlist-candidate-${code}`}
+                            >
+                              {entity.term}
+                            </Link>
+                          ) : (
+                            <span
+                              key={idx}
+                              className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground"
+                            >
+                              {entity.term}
+                            </span>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
                 </div>
-              );
+              </div>
+
+              <div className="flex items-center gap-2.5 sm:shrink-0">
+                <div className="flex items-center gap-1.5 text-xs font-mono">
+                  {delta.type === "up" && (
+                    <span className="flex items-center text-emerald-500 font-medium">
+                      <TrendingUp className="mr-0.5 h-3 w-3" />
+                      {delta.text}
+                    </span>
+                  )}
+                  {delta.type === "down" && (
+                    <span className="text-rose-500 font-medium">{delta.text}</span>
+                  )}
+                  {delta.type === "new" && (
+                    <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary font-medium">
+                      新上榜
+                    </span>
+                  )}
+                  {delta.type === "flat" && (
+                    <span className="text-muted-foreground">-</span>
+                  )}
+                </div>
+
+                <span
+                  data-testid={`hotlist-state-${item.item_id}`}
+                  className={cn(
+                    "rounded px-2 py-0.5 text-xs font-medium border",
+                    badge.className,
+                  )}
+                >
+                  {badge.label}
+                </span>
+
+                {item.source_type !== "rss" && item.rank != null && (
+                  <button
+                    type="button"
+                    onClick={() => void handleShowHistory(item.item_id)}
+                    className="inline-flex items-center gap-1 rounded-md border border-border/80 bg-background/50 px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                  >
+                    <History className="h-3 w-3" />
+                    轨迹
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        };
+
+        const activeOrder = (config?.region_order || ["hotlist", "rss", "standalone"]).filter(
+          (r) => ["hotlist", "rss", "standalone"].includes(r),
+        );
+
+        return (
+          <div className="space-y-4">
+            {activeOrder.map((regionKey) => {
+              if (regionKey === "hotlist" && isHotlistEnabled) {
+                return (
+                  <div
+                    key="hotlist"
+                    data-testid="display-region-hotlist"
+                    className="rounded-xl border border-border/60 bg-card/50"
+                  >
+                    <div className="flex items-center justify-between border-b border-border/40 p-3 bg-muted/20">
+                      <div className="flex items-center gap-2">
+                        <Flame className="h-4 w-4 text-amber-500" />
+                        <h3 className="font-semibold text-sm">实时热榜</h3>
+                        <span className="rounded-full bg-amber-500/10 text-amber-500 border border-amber-500/20 px-2 py-0.2 text-[10px]">
+                          Hotlist
+                        </span>
+                      </div>
+                      <span className="text-xs text-muted-foreground">
+                        共 {visibleItems.length} 条
+                      </span>
+                    </div>
+
+                    {loading && items.length === 0 ? (
+                      <div className="flex items-center justify-center p-8 text-sm text-muted-foreground">
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        正在读取热榜与排名轨迹…
+                      </div>
+                    ) : visibleItems.length === 0 ? (
+                      interestMode === "my_interests" ? (
+                        <div
+                          className="p-8 text-center text-sm space-y-2"
+                          data-testid="hotlist-empty-interests"
+                        >
+                          <p className="text-muted-foreground">
+                            当前个人关注规则未匹配到任何热榜条目。
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="p-8 text-center text-sm text-muted-foreground">
+                          暂无匹配的热榜数据。
+                        </div>
+                      )
+                    ) : (
+                      <div className="divide-y divide-border/30">
+                        {visibleItems.map((item) => renderItemRow(item, "hotlist"))}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              if (regionKey === "rss" && isRssEnabled) {
+                return (
+                  <div
+                    key="rss"
+                    data-testid="display-region-rss"
+                    className="rounded-xl border border-border/60 bg-card/50"
+                  >
+                    <div className="flex items-center justify-between border-b border-border/40 p-3 bg-muted/20">
+                      <div className="flex items-center gap-2">
+                        <Rss className="h-4 w-4 text-primary" />
+                        <h3 className="font-semibold text-sm">RSS 资讯</h3>
+                        <span className="rounded-full bg-primary/10 text-primary border border-primary/20 px-2 py-0.2 text-[10px]">
+                          RSS
+                        </span>
+                      </div>
+                      <span className="text-xs text-muted-foreground">
+                        共 {rssItems.length} 条
+                      </span>
+                    </div>
+
+                    {loading && rssItems.length === 0 ? (
+                      <div className="flex items-center justify-center p-8 text-sm text-muted-foreground">
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        正在读取 RSS 资讯…
+                      </div>
+                    ) : rssItems.length === 0 ? (
+                      <div className="p-8 text-center text-sm text-muted-foreground">
+                        暂无符合条件的 RSS 资讯。
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-border/30">
+                        {rssItems.map((item) => renderItemRow(item, "rss"))}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              if (regionKey === "standalone" && isStandaloneEnabled) {
+                return (
+                  <div
+                    key="standalone"
+                    data-testid="display-region-standalone"
+                    className="rounded-xl border border-primary/30 bg-card/50"
+                  >
+                    <div className="flex items-center justify-between border-b border-border/40 p-3 bg-primary/5">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="h-4 w-4 text-purple-400" />
+                        <h3 className="font-semibold text-sm">重点独立展示区</h3>
+                        <span className="rounded-full bg-purple-500/15 text-purple-400 border border-purple-500/30 px-2 py-0.2 text-[10px] font-medium">
+                          免过滤
+                        </span>
+                      </div>
+                      <span className="text-xs text-muted-foreground">
+                        共 {standaloneItems.length} 条
+                      </span>
+                    </div>
+
+                    {standaloneItems.length === 0 ? (
+                      <div className="p-8 text-center text-sm text-muted-foreground">
+                        独立展示区暂无条目（可在设置中选择重点来源）。
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-border/30">
+                        {standaloneItems.map((item) => renderItemRow(item, "standalone"))}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              return null;
             })}
           </div>
-        )}
-      </div>
+        );
+      })()}
 
       {/* 筛选设置弹窗 */}
       <FilterSettingsModal

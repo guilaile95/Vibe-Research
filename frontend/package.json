@@ -23,6 +23,7 @@
     "test:e2e:native-intel": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/native-intel.browser.mjs",
     "test:e2e:hotlist-parity": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/hotlist-parity.browser.mjs",
     "test:e2e:interest-filter": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/interest-filter.browser.mjs",
+    "test:e2e:wave3-display-controls": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/wave3-display-controls.browser.mjs",
     "test:e2e:today-market-context": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/today-market-context.browser.mjs",
     "test:e2e:core-navigation": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/core-navigation.browser.mjs",
     "test:e2e:decision-inbox": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/decision-inbox.browser.mjs",

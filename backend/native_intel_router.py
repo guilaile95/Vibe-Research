@@ -483,3 +483,49 @@ def get_filtered_items(
                 "error": str(exc),
             },
         }
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 3：配置管理与独立展示区 API
+# ---------------------------------------------------------------------------
+
+
+@router.get("/config")
+def get_config() -> dict[str, Any]:
+    """获取 Native Intel 全局配置（新鲜度过滤、爬虫/RSS代理、展示区域控制）。"""
+    try:
+        return service.store.get_native_intel_config(_db_path())
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "ERROR", "error": str(exc)},
+        ) from exc
+
+
+@router.put("/config")
+def put_config(payload: dict[str, Any]) -> dict[str, Any]:
+    """更新 Native Intel 全局配置。输入非法 422。"""
+    try:
+        return service.store.update_native_intel_config(payload, _db_path())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "BAD_ARGUMENT", "error": str(exc)},
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "ERROR", "error": str(exc)},
+        ) from exc
+
+
+@router.get("/standalone")
+def get_standalone() -> dict[str, Any]:
+    """获取独立免过滤展示区（display.standalone）条目数据。"""
+    try:
+        return service.get_standalone_items(_db_path())
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "ERROR", "error": str(exc)},
+        ) from exc

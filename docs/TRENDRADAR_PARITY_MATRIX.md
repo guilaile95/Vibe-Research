@@ -22,7 +22,7 @@
 - **Wave 1（已合并验证）**：原生热榜基础设施（热榜抓取、双榜支持、真实排名历史、掉榜与失败隔离语义、资讯源管理、数据时效 STALE 真实性、HTTP 状态 API、真浏览器 E2E）
 - **Wave 1B（已合并验证）**：剩余 9 个热榜平台源覆盖对齐（扩展今日头条、百度、澎湃、B站、凤凰网、贴吧、微博、抖音、知乎，达到 11 个默认热榜平台全量覆盖，支持轻量动态来源下拉筛选与系统源启停）
 - **Wave 2（已实现交付物）**：关键词与 AI 智能过滤双轨体系（标题+简介过滤、filter.method = keyword / ai、AI 智能相关性打分、个人兴趣偏好配置 ai_interests、标签自更新 update_tags_prompt、黑白名单、多模式正则/通配符匹配、分类标签与平台分组、真浏览器与真 SQLite E2E）
-- **Wave 3**：抓取高级能力、新鲜度过滤与代理展示体系（RSS 全局与单源独立的 max_age_days 新鲜度过滤、Crawler / RSS HTTP/SOCKS5 代理支持、display.standalone 独立免过滤展示区、展示区域开关与排序控制）
+- **Wave 3（已实现交付物）**：抓取高级能力、新鲜度过滤与代理展示体系（RSS 全局与单源独立的 max_age_days 新鲜度过滤、Crawler / RSS HTTP 代理支持并脱敏防泄露、display.standalone 独立免过滤展示区保留热榜真实排名、展示区域开关与排序控制、全区域关闭诚实空态、真浏览器与真 SQLite E2E 验证）
 - **Wave 4**：聚合、三模报告与时间线走势对齐（三类报告输出模式 report.mode = current / daily / incremental、用户可配置关键词报告分组聚合、timeline.yaml 调度预设与时间切片、相似新闻聚类、单话题位次走势图、话题全生命周期跟踪、爆发异动突发检测、趋势预测分析、平台活跃度横向对比、关键词共现分析）
 - **Wave 5**：AI 深度分析、国际化与 Agent MCP 体系对齐（多模型智能摘要、实体提取、多语言热榜翻译、情感倾向分类、Agent MCP 综合查询工具、Agent 按需触发抓取工具、Agent MCP 系统状态工具）
 - **Wave 6**：多渠道推送通知与格式存储（9 类通知渠道推送飞书/钉钉/企微/TG/邮件/Bark/ntfy/Slack/Webhook、TXT 本地快照报告输出、HTML 独立静态报告输出、S3 兼容远端对象存储归档）
@@ -103,15 +103,16 @@
 
 ---
 
-## Wave 3：抓取高级能力、新鲜度过滤与代理展示体系
+## Wave 3（已实现交付物）：抓取高级能力、新鲜度过滤与代理展示体系
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| RSS 全局新鲜度过滤（Global max_age_days） | PLANNED_WAVE_3 | 上游 `rss.max_age_days`；按天数统一过滤陈旧历史 RSS 条目 |
-| RSS 单源独立新鲜度过滤（Per-feed max_age_days） | PLANNED_WAVE_3 | 上游 `feeds[].max_age_days`；支持为更新频率不同的源独立设置时效阈值 |
-| 爬虫与抓取代理支持（Crawler / RSS Proxy） | PLANNED_WAVE_3 | 上游 `crawler.proxy` / `rss.proxy`；支持配置 HTTP/HTTPS/SOCKS5 网络代理通道 |
-| 独立免过滤展示区（display.standalone） | PLANNED_WAVE_3 | 上游 `display.standalone`；支持将重点源条目绕过过滤规则在独立区域完整展示 |
-| 展示区域控制与顺序（Display region ordering & toggle） | PLANNED_WAVE_3 | 上游 `display.regions`；支持配置热榜、RSS、独立区域的显示开关与上下排序 |
+| RSS 全局新鲜度过滤（Global max_age_days） | **PARITY** | `backend/native_intel_freshness.py` + `backend/native_intel_store.py`；按发布时间过滤陈旧历史 RSS，未标注时间条目保留（PUBLISHED_AT_UNKNOWN），非破坏性保留 SQLite 原始数据，前端与设置页完整可配置并实时生效 |
+| RSS 单源独立新鲜度过滤（Per-feed max_age_days） | **PARITY** | `intel_sources.max_age_days`；支持单源覆盖全局（NULL 继承全局，0 禁用新鲜度过滤，正整数指定天数），前端来源列表提供独立下拉/输入，跨刷新持久化 |
+| 爬虫与抓取代理支持（Crawler / RSS Proxy） | **PARITY** | `backend/native_intel_hotlist.py` + `backend/native_intel_service.py`；支持配置热榜爬虫与 RSS 抓取代理通道（HTTP/HTTPS），RSS 代理支持自动回退爬虫代理，密码严格脱敏防泄露，来源失败严格隔离 |
+| 独立免过滤展示区（display.standalone） | **PARITY** | `GET /api/native-intel/standalone`；支持配置独立重点来源，绕过关键词与 AI 个人兴趣过滤，热榜条目保留真实位次与轨迹，RSS 条目遵循时效过滤 |
+| 展示区域控制与顺序（Display region ordering & toggle） | **PARITY** | `GET/PUT /api/native-intel/config`；支持 hotlist、rss、standalone 区域独立启停，按 `region_order` 自定义上下顺序，全部关闭时显示诚实空态组件 `all-regions-disabled-empty` |
+| E2E 测试验证 | **PARITY** | `tests/e2e/wave3-display-controls.browser.mjs` 真浏览器 + 真后端 SQLite 持久化、时效切换、免过滤独立区、区域动态排序与全关空态验证，CI 自动化接入 |
 
 ---
 
