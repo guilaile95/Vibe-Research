@@ -167,9 +167,14 @@ def get_watchlist_context(
 @router.get("/hotlist")
 def get_hotlist(
     limit: int = Query(default=60, ge=1, le=200),
+    mode: str = Query(default="all", pattern="^(all|my_interests)$"),
+    profile_id: str = Query(default="default"),
 ) -> dict[str, Any]:
-    """热榜板面：财联社 / 华尔街见闻等 hotlist 来源条目 + 真实排名与变化。"""
-    return service.hotlist_board(_db_path(), limit=limit)
+    """热榜板面：财联社 / 华尔街见闻等 hotlist 来源条目 + 真实排名与变化。
+
+    支持 mode='my_interests' 个人兴趣过滤与 mode='all' 全量透传。
+    """
+    return service.hotlist_board(_db_path(), limit=limit, mode=mode, profile_id=profile_id)
 
 
 @router.get("/items/{item_id}/rank-history")
@@ -250,3 +255,231 @@ def remove_source(source_id: str) -> dict[str, Any]:
             detail={"status": "NOT_FOUND", "error": "source not found"},
         ) from exc
     return {"data": row}
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 2：个人兴趣与关键词过滤 API
+# ---------------------------------------------------------------------------
+
+
+@router.get("/filter/profile")
+def get_filter_profile(
+    profile_id: str = Query(default="default"),
+) -> dict[str, Any]:
+    """获取当前个人兴趣与关键词过滤配置 Profile。"""
+    try:
+        return service.get_filter_profile(profile_id, _db_path())
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "ERROR", "error": str(exc)},
+        ) from exc
+
+
+@router.put("/filter/profile")
+def put_filter_profile(
+    payload: dict[str, Any],
+    profile_id: str = Query(default="default"),
+) -> dict[str, Any]:
+    """更新个人兴趣与关键词过滤配置 Profile（支持关键词/AI切换）。"""
+    try:
+        return service.update_filter_profile(profile_id, payload, _db_path())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "BAD_ARGUMENT", "error": str(exc)},
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "ERROR", "error": str(exc)},
+        ) from exc
+
+
+@router.post("/filter/extract-tags")
+def post_extract_tags(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """根据自然语言兴趣描述提取结构化分类标签（阶段 A）。"""
+    interests_text = str((payload or {}).get("interests_text") or "").strip()
+    if not interests_text:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "BAD_ARGUMENT", "error": "interests_text 不能为空"},
+        )
+    cfg = payload.get("ai_config")
+    try:
+        tags = service.extract_filter_tags(interests_text, cfg=cfg)
+        return {"tags": tags}
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "EXTRACTION_FAILED", "error": str(exc)},
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"status": "AI_ERROR", "error": str(exc)},
+        ) from exc
+
+
+@router.post("/filter/update-tags")
+def post_update_tags(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """对比旧标签与新兴趣描述，增量评估变化度与标签增删方案（阶段 A'）。"""
+    interests_text = str((payload or {}).get("interests_text") or "").strip()
+    if not interests_text:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "BAD_ARGUMENT", "error": "interests_text 不能为空"},
+        )
+    old_tags = (payload or {}).get("old_tags") or []
+    if not isinstance(old_tags, list):
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "BAD_ARGUMENT", "error": "old_tags 必须为列表"},
+        )
+    cfg = payload.get("ai_config")
+    try:
+        plan = service.update_filter_tags(old_tags, interests_text, cfg=cfg)
+        return plan
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "UPDATE_FAILED", "error": str(exc)},
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"status": "AI_ERROR", "error": str(exc)},
+        ) from exc
+
+
+@router.post("/filter/classify")
+def post_classify_items(
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """触发条目 AI 批量分类（阶段 B）。失败隔离，绝不返回假相关度。"""
+    body = payload or {}
+    profile_id = str(body.get("profile_id") or "default")
+    limit = int(body.get("limit") or 100)
+    item_ids = body.get("item_ids")
+    cfg = body.get("ai_config")
+    try:
+        return service.classify_items(
+            profile_id=profile_id,
+            item_ids=item_ids,
+            limit=limit,
+            cfg=cfg,
+            path=_db_path(),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "ERROR", "error": str(exc)},
+        ) from exc
+
+
+@router.get("/filter/status")
+def get_filter_status(
+    profile_id: str = Query(default="default"),
+) -> dict[str, Any]:
+    """查询过滤器运行状态与条目分类覆盖率统计。"""
+    try:
+        return service.filter_status(profile_id, _db_path())
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "ERROR", "error": str(exc)},
+        ) from exc
+
+
+@router.post("/filter/apply-interest-update")
+def post_apply_interest_update(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """一键应用兴趣变更：自动执行阶段 A/A'、更新 Profile 并根据阈值分流。"""
+    body = payload or {}
+    interests_text = str(body.get("interests_text") or "").strip()
+    if not interests_text:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "BAD_ARGUMENT", "error": "interests_text 不能为空"},
+        )
+    profile_id = str(body.get("profile_id") or "default")
+    cfg = body.get("ai_config") or body.get("cfg")
+
+    threshold: float | None = None
+    if "full_reclassify_threshold" in body and body["full_reclassify_threshold"] is not None:
+        try:
+            threshold = float(body["full_reclassify_threshold"])
+            if not (0.0 <= threshold <= 1.0):
+                raise ValueError("full_reclassify_threshold 必须在 0.0 到 1.0 之间")
+        except (ValueError, TypeError) as val_err:
+            raise HTTPException(
+                status_code=422,
+                detail={"status": "BAD_ARGUMENT", "error": f"非法的 full_reclassify_threshold: {val_err}"},
+            ) from val_err
+
+    min_score: float | None = None
+    if "min_score" in body and body["min_score"] is not None:
+        try:
+            min_score = float(body["min_score"])
+            if not (0.0 <= min_score <= 1.0):
+                raise ValueError("min_score 必须在 0.0 到 1.0 之间")
+        except (ValueError, TypeError) as val_err:
+            raise HTTPException(
+                status_code=422,
+                detail={"status": "BAD_ARGUMENT", "error": f"非法的 min_score: {val_err}"},
+            ) from val_err
+
+    try:
+        return service.apply_interest_update(
+            profile_id=profile_id,
+            interests_text=interests_text,
+            cfg=cfg,
+            full_reclassify_threshold=threshold,
+            min_score=min_score,
+            path=_db_path(),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "APPLY_UPDATE_FAILED", "error": str(exc)},
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"status": "AI_ERROR", "error": str(exc)},
+        ) from exc
+
+
+@router.get("/filter/items")
+def get_filtered_items(
+    profile_id: str = Query(default="default"),
+    source_type: str = Query(default="all", pattern="^(all|hotlist|rss)$"),
+    mode: str = Query(default="my_interests", pattern="^(all|my_interests)$"),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    """统一过滤端点：支持全量(all)、仅热榜(hotlist)、仅RSS(rss)的个人兴趣或全量过滤查询。"""
+    try:
+        return service.list_filtered_items(
+            profile_id=profile_id,
+            source_type=source_type,
+            mode=mode,
+            limit=limit,
+            path=_db_path(),
+        )
+    except Exception as exc:
+        return {
+            "status": service.STATUS_UNAVAILABLE,
+            "error": str(exc),
+            "items": [],
+            "total": 0,
+            "filter_meta": {
+                "mode": mode,
+                "status": "UNAVAILABLE",
+                "error": str(exc),
+            },
+        }
