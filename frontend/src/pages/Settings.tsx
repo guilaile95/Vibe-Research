@@ -1430,7 +1430,7 @@ function NativeIntelDisplayAndProxySection() {
                       onChange={() => toggleStandaloneSource(s.source_id)}
                       className="rounded border-border accent-primary"
                     />
-                    <span className="truncate">{s.name}</span>
+                    <span className="truncate font-mono text-[10px]">{s.source_id}</span>
                   </label>
                 ))}
               </div>

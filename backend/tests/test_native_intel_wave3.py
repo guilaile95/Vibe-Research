@@ -848,6 +848,14 @@ def test_scenario_23_source_registry_sync_preserves_overrides(test_db: Path):
 
 def test_scenario_24_backup_restore_preserves_wave3_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """24. backup/restore -> Wave 3 config survives."""
+    for name in list(os.environ):
+        if (
+            name in {"VR_DATA_DIR", "VR_REPORTS_DIR", "VR_FACT_LAKE_ROOT", "VIBE_RESEARCH_RESEARCH_DATA_DIR"}
+            or (name.startswith("VIBE_RESEARCH_") and name.endswith("_DB"))
+            or name == "VIBE_NATIVE_INTEL_DB"
+        ):
+            monkeypatch.delenv(name, raising=False)
+
     import sqlite3
 
     data = tmp_path / "data"
