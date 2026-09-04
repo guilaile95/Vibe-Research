@@ -2261,6 +2261,111 @@ def list_all_recent_items_with_sources(
             raise NativeIntelStoreError() from e
 
 
+def list_recent_items_by_source_ids(
+    source_ids: list[str],
+    limit_per_source: int = 50,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """按 source_id 列表分别查询每个来源的最近条目（附带来源元数据），解决全局 500 limit 截断导致的源饿死。"""
+    if not source_ids:
+        return []
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    lim = max(1, min(int(limit_per_source), 200))
+    res: list[dict[str, Any]] = []
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                for sid in source_ids:
+                    rows = conn.execute(
+                        """
+                        SELECT i.item_id, i.title, i.summary, i.source_id, i.url, i.canonical_url,
+                               i.hint, i.published_at, i.published_ts, i.first_seen_at, i.last_seen_at, i.observation_count,
+                               s.name AS source_name, s.source_type, s.has_real_rank, s.enabled AS source_enabled,
+                               s.max_age_days AS source_max_age_days
+                        FROM intel_items i
+                        LEFT JOIN intel_sources s ON s.source_id = i.source_id
+                        WHERE i.source_id = ?
+                        ORDER BY i.last_seen_at DESC, i.item_id DESC
+                        LIMIT ?
+                        """,
+                        (sid, lim),
+                    ).fetchall()
+                    for r in rows:
+                        res.append(
+                            {
+                                "item_id": int(r["item_id"]),
+                                "title": r["title"],
+                                "summary": r["summary"],
+                                "source_id": r["source_id"],
+                                "url": r["url"],
+                                "canonical_url": r["canonical_url"],
+                                "hint": r["hint"],
+                                "published_at": r["published_at"],
+                                "first_seen_at": r["first_seen_at"],
+                                "last_seen_at": r["last_seen_at"],
+                                "observation_count": int(r["observation_count"] or 1),
+                                "source_name": r["source_name"],
+                                "source_type": r["source_type"],
+                                "has_real_rank": bool(r["has_real_rank"]),
+                                "source_enabled": bool(r["source_enabled"]),
+                                "published_ts": int(r["published_ts"] or 0),
+                                "source_max_age_days": r["source_max_age_days"],
+                                "max_age_days": r["source_max_age_days"],
+                            }
+                        )
+            return res
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def count_freshness_excluded_rss_items(
+    db_path: str | Path | None = None,
+    now: datetime | None = None,
+) -> int:
+    """根据当前生效的 RSS 新鲜度策略，统计库中被判为过期的条目总数（未启用新鲜度时返回 0）。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    cfg = get_native_intel_config(path)
+    if not cfg.get("rss_freshness_enabled"):
+        return 0
+    global_max_age_days = int(cfg.get("rss_global_max_age_days", 1))
+    if global_max_age_days <= 0:
+        return 0
+
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT i.published_at, i.published_ts, s.max_age_days
+                    FROM intel_items i
+                    JOIN intel_sources s ON s.source_id = i.source_id
+                    WHERE s.source_type = 'rss'
+                    """
+                ).fetchall()
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+    import native_intel_freshness as freshness
+
+    excluded = 0
+    for r in rows:
+        res = freshness.evaluate_freshness(
+            source_type="rss",
+            published_at=r["published_at"],
+            published_ts=r["published_ts"],
+            source_max_age_days=r["max_age_days"],
+            global_enabled=True,
+            global_max_age_days=global_max_age_days,
+            now=now,
+        )
+        if not res.eligible:
+            excluded += 1
+    return excluded
+
+
+
 # ---------------------------------------------------------------------------
 # TREND-PARITY Wave 3：配置管理、代理与展示控制
 # ---------------------------------------------------------------------------

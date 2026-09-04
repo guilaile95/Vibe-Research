@@ -330,6 +330,95 @@ try {
   );
   console.log("Scenario 5 passed.");
 
+  // =========================================================================
+  // Scenario 6: Gap B Source scope filtering in "我的关注" mode and UNAVAILABLE resilience
+  // =========================================================================
+  console.log("--- Starting Scenario 6: Gap B Source Scope Filtering & UNAVAILABLE Resilience ---");
+  // 1. Re-enable all regions in settings
+  await page.goto(`http://127.0.0.1:${frontendPort}/settings`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("wave3-region-toggle-hotlist").click(); // re-enable hotlist
+  await page.getByTestId("wave3-region-toggle-rss").click(); // re-enable rss
+  await page.getByTestId("wave3-region-toggle-standalone").click(); // re-enable standalone
+  await page.getByTestId("wave3-save-config-btn").click();
+  await page.getByText("已保存展示与抓取高级设置").waitFor({ state: "visible", timeout: 5000 });
+  await sleep(600);
+
+  // 2. Return to /intel -> 实时热榜 -> Switch to 我的关注
+  await page.goto(`http://127.0.0.1:${frontendPort}/intel`, { waitUntil: "domcontentloaded" });
+  await page.locator("button", { hasText: "实时热榜" }).click();
+  await hotlistPanel.waitFor({ state: "visible", timeout: 10000 });
+
+  const myInterestsBtn = page.getByTestId("hotlist-mode-interests");
+  await myInterestsBtn.click();
+  await sleep(600);
+
+  // 3. Verify scope buttons are visible
+  const scopeHotlist = page.getByTestId("filter-source-type-hotlist");
+  const scopeRss = page.getByTestId("filter-source-type-rss");
+  const scopeAll = page.getByTestId("filter-source-type-all");
+  await scopeHotlist.waitFor({ state: "visible", timeout: 5000 });
+  await scopeRss.waitFor({ state: "visible", timeout: 5000 });
+  await scopeAll.waitFor({ state: "visible", timeout: 5000 });
+
+  // 4. Test "仅热榜": hotlist region visible, rss region hidden
+  await scopeHotlist.click();
+  await sleep(400);
+  await page.getByTestId("display-region-hotlist").waitFor({ state: "visible", timeout: 5000 });
+  await page.getByTestId("display-region-rss").waitFor({ state: "hidden", timeout: 5000 });
+
+  // 5. Test "仅 RSS": rss region visible, hotlist region hidden
+  await scopeRss.click();
+  await sleep(400);
+  await page.getByTestId("display-region-rss").waitFor({ state: "visible", timeout: 5000 });
+  await page.getByTestId("display-region-hotlist").waitFor({ state: "hidden", timeout: 5000 });
+
+  // 6. Test "全量资讯": both hotlist and rss regions visible
+  await scopeAll.click();
+  await sleep(400);
+  await page.getByTestId("display-region-hotlist").waitFor({ state: "visible", timeout: 5000 });
+  await page.getByTestId("display-region-rss").waitFor({ state: "visible", timeout: 5000 });
+
+  // 7. Test UNAVAILABLE fail-closed and scope buttons remain visible
+  // Intercept RSS filter to simulate UNAVAILABLE
+  await page.route("**/api/native-intel/filter/items?source_type=rss*", (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Simulated RSS Filter Service Outage" }),
+    }),
+  );
+
+  // Trigger data reload by switching back and forth
+  await page.getByTestId("hotlist-mode-all").click();
+  await sleep(400);
+  await page.getByTestId("hotlist-mode-interests").click();
+  await sleep(600);
+
+  // In "全量资讯", since RSS filter failed, filter-unavailable-card must be displayed and not mask the error!
+  const unavailableCard = page.getByTestId("filter-unavailable-card");
+  await unavailableCard.waitFor({ state: "visible", timeout: 5000 });
+  const cardText = await unavailableCard.innerText();
+  assert.ok(cardText.includes("RSS"), `Unavailable card must mention RSS failure: ${cardText}`);
+
+  // CRITICAL REQUIREMENT: Scope buttons MUST still be visible in UNAVAILABLE state!
+  await scopeHotlist.waitFor({ state: "visible", timeout: 5000 });
+  await scopeRss.waitFor({ state: "visible", timeout: 5000 });
+  await scopeAll.waitFor({ state: "visible", timeout: 5000 });
+
+  // User switches to healthy "仅热榜": UNAVAILABLE card disappears, hotlist is shown!
+  await scopeHotlist.click();
+  await sleep(400);
+  await unavailableCard.waitFor({ state: "hidden", timeout: 5000 });
+  await page.getByTestId("display-region-hotlist").waitFor({ state: "visible", timeout: 5000 });
+
+  // User switches to "仅 RSS": UNAVAILABLE card is displayed!
+  await scopeRss.click();
+  await sleep(400);
+  await unavailableCard.waitFor({ state: "visible", timeout: 5000 });
+
+  await page.unroute("**/api/native-intel/filter/items?source_type=rss*");
+  console.log("Scenario 6 passed.");
+
   assert.equal(pageErrors.length, 0, `Page errors: ${pageErrors.join("; ")}`);
   console.log("ALL WAVE 3 BROWSER SCENARIOS PASSED!");
 } finally {

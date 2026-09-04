@@ -940,3 +940,308 @@ def test_scenario_24_backup_restore_preserves_wave3_config(tmp_path: Path, monke
     src = store.get_source("backup-rss", restored_db)
     assert src is not None
     assert src["max_age_days"] == 7
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 3 Final Gate Follow-Up Tests (Gaps A, C, D, E)
+# ---------------------------------------------------------------------------
+
+
+def test_gap_a_global_freshness_switch_dominance():
+    """Gap A: global OFF + per-feed max_age_days=1 + 10-day-old RSS -> eligible -> FRESHNESS_DISABLED."""
+    now = datetime.now(timezone.utc)
+    old_published_at = (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # 1. global OFF + per-feed 1 + 10-day-old -> eligible, FRESHNESS_DISABLED
+    res = freshness.evaluate_freshness(
+        source_type="rss",
+        published_at=old_published_at,
+        source_max_age_days=1,
+        global_enabled=False,
+        global_max_age_days=1,
+        now=now,
+    )
+    assert res.eligible is True
+    assert res.reason == freshness.REASON_FRESHNESS_DISABLED
+    assert res.effective_max_age_days is None
+
+    # 2. global OFF + per-feed 0 + 10-day-old -> eligible, FRESHNESS_DISABLED
+    res_zero = freshness.evaluate_freshness(
+        source_type="rss",
+        published_at=old_published_at,
+        source_max_age_days=0,
+        global_enabled=False,
+        now=now,
+    )
+    assert res_zero.eligible is True
+    assert res_zero.reason == freshness.REASON_FRESHNESS_DISABLED
+
+    # 3. global OFF + per-feed None + 10-day-old -> eligible, FRESHNESS_DISABLED
+    res_none = freshness.evaluate_freshness(
+        source_type="rss",
+        published_at=old_published_at,
+        source_max_age_days=None,
+        global_enabled=False,
+        now=now,
+    )
+    assert res_none.eligible is True
+    assert res_none.reason == freshness.REASON_FRESHNESS_DISABLED
+
+    # 4. global ON + per-feed 1 + 10-day-old -> not eligible, EXPIRED
+    res_on = freshness.evaluate_freshness(
+        source_type="rss",
+        published_at=old_published_at,
+        source_max_age_days=1,
+        global_enabled=True,
+        global_max_age_days=1,
+        now=now,
+    )
+    assert res_on.eligible is False
+    assert res_on.reason == freshness.REASON_EXPIRED
+    assert res_on.effective_max_age_days == 1
+
+
+def test_gap_c_proxy_fail_closed_unresolved(test_db: Path):
+    """Gap C: proxy enabled without configured URL -> fail closed (no direct connection)."""
+    # 1. Crawler proxy enabled but no URL
+    store.update_native_intel_config(
+        {
+            "crawler_proxy_enabled": True,
+            "crawler_proxy_url": "",
+            "rss_proxy_enabled": False,
+        },
+        db_path=test_db,
+    )
+    hotlist_src = {
+        "source_id": "hotlist-cls",
+        "name": "财联社热门",
+        "url": "https://newsnow.busiyi.world/api/s?id=cls-hot&latest",
+        "source_type": "hotlist",
+    }
+    run_res = service.run_fetch(
+        trigger="manual",
+        path=str(test_db),
+        sources_override=[hotlist_src],
+    )
+    assert run_res["source_failed"] == 1
+    runs = store.get_source_runs(run_res["run_id"], test_db)
+    assert len(runs) == 1
+    assert runs[0]["status"] == "failed"
+    assert runs[0]["error_kind"] == store.ERROR_KIND_NETWORK
+    assert runs[0]["error_detail"] == "CrawlerProxyUnresolved"
+
+    # 2. RSS proxy enabled but no URL and no crawler fallback
+    store.update_native_intel_config(
+        {
+            "crawler_proxy_enabled": False,
+            "crawler_proxy_url": "",
+            "rss_proxy_enabled": True,
+            "rss_proxy_url": "",
+        },
+        db_path=test_db,
+    )
+    rss_src = {
+        "source_id": "rss-test-fail-closed",
+        "name": "RSS测试源",
+        "url": "https://example.com/rss.xml",
+        "source_type": "rss",
+    }
+    run_res_rss = service.run_fetch(
+        trigger="manual",
+        path=str(test_db),
+        sources_override=[rss_src],
+    )
+    assert run_res_rss["source_failed"] == 1
+    runs_rss = store.get_source_runs(run_res_rss["run_id"], test_db)
+    assert len(runs_rss) == 1
+    assert runs_rss[0]["status"] == "failed"
+    assert runs_rss[0]["error_kind"] == store.ERROR_KIND_NETWORK
+    assert runs_rss[0]["error_detail"] == "RssProxyUnresolved"
+
+
+def test_gap_c_local_http_proxy_harness(test_db: Path):
+    """Gap C: deterministic local HTTP proxy test harness (proves traffic actually passes through proxy)."""
+    requests_received: list[str] = []
+
+    rss_xml = b"""<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Proxy Feed</title>
+    <item>
+      <title>Proxy RSS Article</title>
+      <link>https://example.com/item1</link>
+      <pubDate>Fri, 05 Sep 2026 00:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>"""
+
+    class MockProxyHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests_received.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/rss+xml; charset=utf-8")
+            self.send_header("Content-Length", str(len(rss_xml)))
+            self.end_headers()
+            self.wfile.write(rss_xml)
+
+        def log_message(self, format, *args):
+            pass  # suppress console noise
+
+    proxy_server = http.server.HTTPServer(("127.0.0.1", 0), MockProxyHandler)
+    proxy_port = proxy_server.server_address[1]
+    server_thread = threading.Thread(target=proxy_server.serve_forever, daemon=True)
+    server_thread.start()
+
+    try:
+        proxy_url = f"http://127.0.0.1:{proxy_port}"
+        src = {
+            "source_id": "rss-proxy-test",
+            "name": "RSS代理源",
+            "url": "http://example.com/rss.xml",
+            "source_type": "rss",
+            "hint": "macro",
+        }
+        items, kind, detail = service._fetch_source_items(
+            src, per=5, cutoff=None, redline=[], proxy_url=proxy_url
+        )
+        assert kind is None
+        assert len(items) == 1
+        assert items[0]["title"] == "Proxy RSS Article"
+
+        # Explicit proof: the mock proxy server received and recorded the exact request!
+        assert len(requests_received) >= 1
+        assert any("example.com/rss.xml" in req for req in requests_received)
+
+        # Test proxy failure does not secretly fallback to direct
+        items_err, kind_err, detail_err = service._fetch_source_items(
+            src, per=5, cutoff=None, redline=[], proxy_url="http://127.0.0.1:59998"
+        )
+        assert len(items_err) == 0
+        assert kind_err == store.ERROR_KIND_NETWORK
+    finally:
+        proxy_server.shutdown()
+        proxy_server.server_close()
+
+
+def test_gap_d_standalone_starvation_immunity(test_db: Path):
+    """Gap D: 500+ items from other sources do NOT starve standalone sources."""
+    now = datetime.now(timezone.utc)
+    store.initialize_store(test_db)
+    with store._connect(test_db) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO intel_sources (source_id, name, hint, url, source_type, has_real_rank, enabled, updated_at)
+                VALUES ('noise-source', '噪声源', 'macro', 'https://example.com/noise.xml', 'rss', 0, 1, ?)
+                """,
+                (store.utc_now_iso(),),
+            )
+            conn.execute(
+                """
+                INSERT INTO intel_sources (source_id, name, hint, url, source_type, has_real_rank, enabled, updated_at)
+                VALUES ('standalone-src', '独立重点源', 'macro', 'https://example.com/st.xml', 'rss', 0, 1, ?)
+                """,
+                (store.utc_now_iso(),),
+            )
+            for i in range(520):
+                seen = (now - timedelta(minutes=i)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                conn.execute(
+                    """
+                    INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, source_id, hint, first_seen_at, last_seen_at, observation_count, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'noise-source', 'macro', ?, ?, 1, ?)
+                    """,
+                    (f"noise-{i}", f"https://example.com/noise/{i}", f"https://example.com/noise/{i}", f"噪声资讯条目 #{i}", f"noise-{i}", seen, seen, seen),
+                )
+            for i in range(3):
+                seen = (now - timedelta(days=1, hours=i)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                conn.execute(
+                    """
+                    INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, source_id, hint, first_seen_at, last_seen_at, observation_count, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'standalone-src', 'company', ?, ?, 1, ?)
+                    """,
+                    (f"st-{i}", f"https://example.com/st/{i}", f"https://example.com/st/{i}", f"独立展示区关键资讯 #{i}", f"st-{i}", seen, seen, seen),
+                )
+
+    store.update_native_intel_config(
+        {
+            "standalone_enabled": True,
+            "standalone_source_ids": ["standalone-src"],
+            "standalone_max_items": 2,
+            "rss_freshness_enabled": False,
+        },
+        db_path=test_db,
+    )
+
+    st_res = service.get_standalone_items(str(test_db))
+    assert st_res["status"] == "normal"
+    assert st_res["total"] == 2
+    assert len(st_res["items"]) == 2
+    assert all(it["source_id"] == "standalone-src" for it in st_res["items"])
+    assert st_res["items"][0]["title"] == "独立展示区关键资讯 #0"
+    assert st_res["items"][1]["title"] == "独立展示区关键资讯 #1"
+
+
+def test_gap_e_status_freshness_excluded_count(test_db: Path):
+    """Gap E: /status exposes freshness.excluded_count correctly."""
+    now = datetime.now(timezone.utc)
+    store.initialize_store(test_db)
+    with store._connect(test_db) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO intel_sources (source_id, name, hint, url, source_type, has_real_rank, enabled, updated_at)
+                VALUES ('rss-freshness-counter', '新鲜度计数测试源', 'macro', 'https://example.com/feed.xml', 'rss', 0, 1, ?)
+                """,
+                (store.utc_now_iso(),),
+            )
+            # 2 fresh items (1 hour old)
+            for i in range(2):
+                dt = now - timedelta(hours=1, minutes=i)
+                iso = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                ts = int(dt.timestamp())
+                conn.execute(
+                    """
+                    INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, source_id, hint, published_at, published_ts, first_seen_at, last_seen_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'rss-freshness-counter', 'macro', ?, ?, ?, ?, ?)
+                    """,
+                    (f"fresh-{i}", f"https://example.com/fresh/{i}", f"https://example.com/fresh/{i}", f"新鲜条目 #{i}", f"fresh-{i}", iso, ts, iso, iso, iso),
+                )
+            # 3 expired items (10 days old)
+            for i in range(3):
+                dt = now - timedelta(days=10, minutes=i)
+                iso = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                ts = int(dt.timestamp())
+                conn.execute(
+                    """
+                    INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, source_id, hint, published_at, published_ts, first_seen_at, last_seen_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'rss-freshness-counter', 'macro', ?, ?, ?, ?, ?)
+                    """,
+                    (f"expired-{i}", f"https://example.com/expired/{i}", f"https://example.com/expired/{i}", f"过期条目 #{i}", f"expired-{i}", iso, ts, iso, iso, iso),
+                )
+
+    # 1. When freshness is disabled -> excluded_count == 0
+    store.update_native_intel_config(
+        {
+            "rss_freshness_enabled": False,
+            "rss_global_max_age_days": 1,
+        },
+        db_path=test_db,
+    )
+    stat = service.status(str(test_db))
+    assert "freshness" in stat
+    assert stat["freshness"]["enabled"] is False
+    assert stat["freshness"]["excluded_count"] == 0
+
+    # 2. When freshness is enabled with 1 day max age -> excluded_count == 3
+    store.update_native_intel_config(
+        {
+            "rss_freshness_enabled": True,
+            "rss_global_max_age_days": 1,
+        },
+        db_path=test_db,
+    )
+    stat_enabled = service.status(str(test_db))
+    assert stat_enabled["freshness"]["enabled"] is True
+    assert stat_enabled["freshness"]["excluded_count"] == 3
+
+

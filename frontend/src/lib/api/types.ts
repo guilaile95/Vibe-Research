@@ -2864,6 +2864,24 @@ export interface NativeIntelStatus {
     last_item_count: number;
     last_error_kind?: string | null;
   }>;
+  freshness?: {
+    enabled: boolean;
+    global_max_age_days: number;
+    excluded_count?: number;
+  };
+  proxies?: {
+    crawler_proxy?: { enabled: boolean; configured: boolean; url?: string | null };
+    rss_proxy?: { enabled: boolean; configured: boolean; url?: string | null; using_crawler_fallback?: boolean };
+  };
+  standalone?: {
+    enabled: boolean;
+    source_count: number;
+    max_items: number;
+  };
+  display?: {
+    region_order: string[];
+    regions_enabled: Record<string, boolean>;
+  };
 }
 
 export interface NativeIntelItemsResponse {

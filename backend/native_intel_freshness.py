@@ -99,7 +99,16 @@ def evaluate_freshness(
             effective_max_age_days=None,
         )
 
-    # 2. Feed 级别 0 表示显式禁用该源新鲜度过滤
+    # 2. 全局开关未开启时，所有 RSS 都不做时效过滤，不论 per-feed 是 NULL / 0 / 正整数
+    if not global_enabled:
+        return FreshnessResult(
+            eligible=True,
+            reason=REASON_FRESHNESS_DISABLED,
+            effective_max_age_days=None,
+        )
+
+    # 3. 只有 global_enabled = True 时，才继续解释 per-feed 配置：
+    #    0 → feed freshness disabled
     if source_max_age_days == 0:
         return FreshnessResult(
             eligible=True,
@@ -107,24 +116,10 @@ def evaluate_freshness(
             effective_max_age_days=0,
         )
 
-    # 3. 若全局新鲜度未启用，且 feed 未显式覆盖正整数阈值
-    if not global_enabled and (source_max_age_days is None or source_max_age_days < 0):
-        return FreshnessResult(
-            eligible=True,
-            reason=REASON_FRESHNESS_DISABLED,
-            effective_max_age_days=None,
-        )
-
-    # 4. 计算生效的 max_age_days
+    #    N > 0 → override global; NULL / <=0 → inherit global
     if source_max_age_days is not None and source_max_age_days > 0:
         effective_days = int(source_max_age_days)
     else:
-        if not global_enabled:
-            return FreshnessResult(
-                eligible=True,
-                reason=REASON_FRESHNESS_DISABLED,
-                effective_max_age_days=None,
-            )
         effective_days = int(global_max_age_days)
 
     if effective_days <= 0:

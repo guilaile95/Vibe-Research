@@ -347,31 +347,26 @@ def run_fetch(
 
         def task(source: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], str | None, str | None, int]:
             started = time.monotonic()
-            if str(source.get("source_type") or "rss") == "hotlist":
-                if crawler_proxy:
-                    try:
-                        items, kind, detail = hotlist_do(
-                            source, timeout=FETCH_TIMEOUT, redline=redline, proxy_url=crawler_proxy
-                        )
-                    except TypeError:
-                        items, kind, detail = hotlist_do(
-                            source, timeout=FETCH_TIMEOUT, redline=redline
-                        )
+            stype = str(source.get("source_type") or "rss")
+            if stype == "hotlist":
+                if bool(cfg.get("crawler_proxy_enabled")):
+                    if not crawler_proxy:
+                        return source, [], store.ERROR_KIND_NETWORK, "CrawlerProxyUnresolved", int((time.monotonic() - started) * 1000)
+                    items, kind, detail = hotlist_do(
+                        source, timeout=FETCH_TIMEOUT, redline=redline, proxy_url=crawler_proxy
+                    )
                 else:
                     items, kind, detail = hotlist_do(
                         source, timeout=FETCH_TIMEOUT, redline=redline
                     )
             else:
                 # Wave 3：入库事实保留全量数据（cutoff=None），新鲜度在展示与分析侧作为 Policy 过滤
-                if rss_proxy:
-                    try:
-                        items, kind, detail = do_fetch(
-                            source, per=reg["per_source"], cutoff=None, redline=redline, proxy_url=rss_proxy
-                        )
-                    except TypeError:
-                        items, kind, detail = do_fetch(
-                            source, per=reg["per_source"], cutoff=None, redline=redline
-                        )
+                if bool(cfg.get("rss_proxy_enabled")):
+                    if not rss_proxy:
+                        return source, [], store.ERROR_KIND_NETWORK, "RssProxyUnresolved", int((time.monotonic() - started) * 1000)
+                    items, kind, detail = do_fetch(
+                        source, per=reg["per_source"], cutoff=None, redline=redline, proxy_url=rss_proxy
+                    )
                 else:
                     items, kind, detail = do_fetch(
                         source, per=reg["per_source"], cutoff=None, redline=redline
@@ -1570,6 +1565,7 @@ def status(path: str | None = None) -> dict[str, Any]:
         "freshness": {
             "enabled": bool(store.get_native_intel_config(target).get("rss_freshness_enabled")),
             "global_max_age_days": int(store.get_native_intel_config(target).get("rss_global_max_age_days", 1)),
+            "excluded_count": store.count_freshness_excluded_rss_items(target),
         },
         "proxies": {
             "crawler_proxy": {
@@ -2480,12 +2476,15 @@ def get_standalone_items(path: str | None = None) -> dict[str, Any]:
     items_out: list[dict[str, Any]] = []
     freshness_excluded_count = 0
 
-    all_recent = store.list_all_recent_items_with_sources(limit=500, db_path=target)
-    # 按来源分组
+    # Wave 3 Gap D：按 source_id 精确查询，解决全局 500 limit 截断导致的源饿死
+    fetch_per_source = max(max_per_source * 2, 50)
+    source_items_list = store.list_recent_items_by_source_ids(
+        source_ids, limit_per_source=fetch_per_source, db_path=target
+    )
     by_source: dict[str, list[dict[str, Any]]] = {}
-    for it in all_recent:
+    for it in source_items_list:
         sid = it.get("source_id")
-        if sid in source_ids:
+        if sid:
             by_source.setdefault(sid, []).append(it)
 
     for sid in source_ids:

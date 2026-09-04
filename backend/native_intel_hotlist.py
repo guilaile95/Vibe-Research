@@ -143,10 +143,7 @@ def fetch_hotlist_items(
 
     try:
         if proxy_url:
-            try:
-                data = _http_get_json(url, timeout=timeout, proxy_url=proxy_url)
-            except TypeError:
-                data = _http_get_json(url, timeout=timeout)
+            data = _http_get_json(url, timeout=timeout, proxy_url=proxy_url)
         else:
             data = _http_get_json(url, timeout=timeout)
     except Exception as exc:  # noqa: BLE001 - 单源失败必须被隔离

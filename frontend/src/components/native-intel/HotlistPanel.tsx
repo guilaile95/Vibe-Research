@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ExternalLink,
@@ -40,8 +40,10 @@ export function HotlistPanel() {
   const [standaloneItems, setStandaloneItems] = useState<NativeIntelHotlistItem[]>([]);
   const [config, setConfig] = useState<NativeIntelConfig | null>(null);
   const [sources, setSources] = useState<NativeIntelHotlistSource[]>([]);
-  const [boardStatus, setBoardStatus] = useState<string>("normal");
-  const [filterMeta, setFilterMeta] = useState<FilterMeta | null>(null);
+  const [hotlistStatus, setHotlistStatus] = useState<string>("normal");
+  const [rssStatus, setRssStatus] = useState<string>("normal");
+  const [hotlistFilterMeta, setHotlistFilterMeta] = useState<FilterMeta | null>(null);
+  const [rssFilterMeta, setRssFilterMeta] = useState<FilterMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,14 +76,26 @@ export function HotlistPanel() {
 
       if (interestMode === "my_interests") {
         const [hotlistRes, rssRes] = await Promise.all([
-          api.nativeIntelFilteredItems("hotlist", "my_interests"),
-          api.nativeIntelFilteredItems("rss", "my_interests"),
+          api.nativeIntelFilteredItems("hotlist", "my_interests").catch((err) => ({
+            status: "unavailable" as const,
+            items: [] as NativeIntelHotlistItem[],
+            sources: [] as NativeIntelHotlistSource[],
+            filter_meta: { status: "UNAVAILABLE" as const, error: String(err?.message || err || "热榜过滤服务异常") },
+          })),
+          api.nativeIntelFilteredItems("rss", "my_interests").catch((err) => ({
+            status: "unavailable" as const,
+            items: [] as NativeIntelHotlistItem[],
+            sources: [] as NativeIntelHotlistSource[],
+            filter_meta: { status: "UNAVAILABLE" as const, error: String(err?.message || err || "RSS 过滤服务异常") },
+          })),
         ]);
         if (currentReqId !== reqIdRef.current) return;
         setItems(hotlistRes.items || []);
         setRssItems(rssRes.items || []);
-        setFilterMeta(hotlistRes.filter_meta || null);
-        setBoardStatus(hotlistRes.status || "normal");
+        setHotlistFilterMeta(hotlistRes.filter_meta || null);
+        setRssFilterMeta(rssRes.filter_meta || null);
+        setHotlistStatus(hotlistRes.status || "normal");
+        setRssStatus(rssRes.status || "normal");
         api.nativeIntelSources().then((s) => {
           if (currentReqId === reqIdRef.current) setSources(s.sources || []);
         }).catch(() => {});
@@ -94,8 +108,10 @@ export function HotlistPanel() {
         setItems(hotlistRes.items || []);
         setRssItems(rssRes.items || []);
         setSources(hotlistRes.sources || []);
-        setBoardStatus(hotlistRes.status || "normal");
-        setFilterMeta(hotlistRes.filter_meta || null);
+        setHotlistStatus(hotlistRes.status || "normal");
+        setRssStatus(rssRes.status || "normal");
+        setHotlistFilterMeta(hotlistRes.filter_meta || null);
+        setRssFilterMeta(rssRes.filter_meta || null);
       }
     } catch (err) {
       if (currentReqId !== reqIdRef.current) return;
@@ -105,7 +121,54 @@ export function HotlistPanel() {
         setLoading(false);
       }
     }
-  }, [interestMode, sourceTypeFilter]);
+  }, [interestMode]);
+
+  const effectiveFilterMeta = useMemo(() => {
+    if (interestMode !== "my_interests") return hotlistFilterMeta;
+    if (sourceTypeFilter === "hotlist") return hotlistFilterMeta;
+    if (sourceTypeFilter === "rss") return rssFilterMeta;
+
+    // "all": 若任一侧失败或两者都失败，UNAVAILABLE card 必须诚实暴露失败信息，不得吞掉任一侧错误
+    const hotlistFailed = hotlistFilterMeta?.status === "UNAVAILABLE";
+    const rssFailed = rssFilterMeta?.status === "UNAVAILABLE";
+    if (hotlistFailed && rssFailed) {
+      return {
+        status: "UNAVAILABLE" as const,
+        error: `热榜与 RSS 过滤均不可用: [热榜: ${hotlistFilterMeta?.error || "异常"}] [RSS: ${rssFilterMeta?.error || "异常"}]`,
+      };
+    }
+    if (hotlistFailed) {
+      return {
+        status: "UNAVAILABLE" as const,
+        error: `热榜过滤不可用: ${hotlistFilterMeta?.error || "异常"}`,
+      };
+    }
+    if (rssFailed) {
+      return {
+        status: "UNAVAILABLE" as const,
+        error: `RSS 过滤不可用: ${rssFilterMeta?.error || "异常"}`,
+      };
+    }
+    if (!hotlistFilterMeta && !rssFilterMeta) return null;
+    return {
+      status: "NORMAL" as const,
+      method: hotlistFilterMeta?.method || rssFilterMeta?.method || "keyword",
+      profile_name: hotlistFilterMeta?.profile_name || rssFilterMeta?.profile_name,
+      classified_count: (hotlistFilterMeta?.classified_count ?? 0) + (rssFilterMeta?.classified_count ?? 0),
+      not_relevant_count: (hotlistFilterMeta?.not_relevant_count ?? 0) + (rssFilterMeta?.not_relevant_count ?? 0),
+      unclassified_count: (hotlistFilterMeta?.unclassified_count ?? 0) + (rssFilterMeta?.unclassified_count ?? 0),
+      error_count: (hotlistFilterMeta?.error_count ?? 0) + (rssFilterMeta?.error_count ?? 0),
+    };
+  }, [interestMode, sourceTypeFilter, hotlistFilterMeta, rssFilterMeta]);
+
+  const boardStatus = useMemo(() => {
+    if (sourceTypeFilter === "hotlist") return hotlistStatus;
+    if (sourceTypeFilter === "rss") return rssStatus;
+    if (hotlistStatus === "stale" || rssStatus === "stale") return "stale";
+    if (hotlistStatus === "unavailable" || rssStatus === "unavailable") return "unavailable";
+    if (hotlistStatus === "partial" || rssStatus === "partial") return "partial";
+    return "normal";
+  }, [sourceTypeFilter, hotlistStatus, rssStatus]);
 
   useEffect(() => {
     void loadData();
@@ -264,60 +327,8 @@ export function HotlistPanel() {
         </button>
       </div>
 
-      {/* 兴趣过滤异常安全降级提示 */}
-      {interestMode === "my_interests" && filterMeta?.status === "UNAVAILABLE" && (
-        <div
-          data-testid="filter-unavailable-card"
-          className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-start gap-2">
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
-              <div>
-                <p className="font-semibold">个人兴趣过滤服务不可用</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  原因：{filterMeta?.error || "过滤引擎异常"}。为保证投资信息安全，已安全停用过滤（不展示模糊/不确定数据）。
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              data-testid="switch-to-all-hotlist-btn"
-              onClick={() => setInterestMode("all")}
-              className="rounded-lg bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 transition-colors shrink-0"
-            >
-              切回全部热榜
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 当处于“我的关注”模式且服务正常时的状态说明条 */}
-      {interestMode === "my_interests" && filterMeta?.status !== "UNAVAILABLE" && (
-        <div
-          data-testid="hotlist-filter-status-pill"
-          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary"
-        >
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Sparkles className="h-3.5 w-3.5" />
-            <span>
-              当前过滤规则：
-              {filterMeta?.method === "ai"
-                ? "AI 智能语义匹配"
-                : "本地关键词 / 正则匹配"}
-            </span>
-            <span className="text-muted-foreground font-mono ml-2">
-              (已分类 {filterMeta?.classified_count ?? visibleItems.length} · 不相关 {filterMeta?.not_relevant_count ?? 0} · 待分类 {filterMeta?.unclassified_count ?? 0} · 失败 {filterMeta?.error_count ?? 0})
-            </span>
-          </div>
-          <span className="font-mono font-semibold">
-            匹配命中 {visibleItems.length} 条
-          </span>
-        </div>
-      )}
-
-      {/* 我的关注模式下：资讯类型切换（热榜 vs RSS） */}
-      {interestMode === "my_interests" && filterMeta?.status !== "UNAVAILABLE" && (
+      {/* 我的关注模式下：资讯范围选择器（热榜 vs RSS vs 全量）始终可见可用，即使处于 UNAVAILABLE 状态 */}
+      {interestMode === "my_interests" && (
         <div className="flex items-center gap-1 bg-muted/40 p-1 rounded-lg w-fit text-xs">
           <span className="text-muted-foreground px-2">资讯范围:</span>
           <button
@@ -359,6 +370,58 @@ export function HotlistPanel() {
           >
             全量资讯
           </button>
+        </div>
+      )}
+
+      {/* 兴趣过滤异常安全降级提示 */}
+      {interestMode === "my_interests" && effectiveFilterMeta?.status === "UNAVAILABLE" && (
+        <div
+          data-testid="filter-unavailable-card"
+          className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+              <div>
+                <p className="font-semibold">个人兴趣过滤服务不可用</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  原因：{effectiveFilterMeta?.error || "过滤引擎异常"}。为保证投资信息安全，已安全停用过滤（不展示模糊/不确定数据）。
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              data-testid="switch-to-all-hotlist-btn"
+              onClick={() => setInterestMode("all")}
+              className="rounded-lg bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 transition-colors shrink-0"
+            >
+              切回全部热榜
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 当处于“我的关注”模式且服务正常时的状态说明条 */}
+      {interestMode === "my_interests" && effectiveFilterMeta?.status !== "UNAVAILABLE" && (
+        <div
+          data-testid="hotlist-filter-status-pill"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary"
+        >
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Sparkles className="h-3.5 w-3.5" />
+            <span>
+              当前过滤规则：
+              {effectiveFilterMeta?.method === "ai"
+                ? "AI 智能语义匹配"
+                : "本地关键词 / 正则匹配"}
+            </span>
+            <span className="text-muted-foreground font-mono ml-2">
+              (已分类 {effectiveFilterMeta?.classified_count ?? (visibleItems.length + (sourceTypeFilter === "all" ? rssItems.length : 0))} · 不相关 {effectiveFilterMeta?.not_relevant_count ?? 0} · 待分类 {effectiveFilterMeta?.unclassified_count ?? 0} · 失败 {effectiveFilterMeta?.error_count ?? 0})
+            </span>
+          </div>
+          <span className="font-mono font-semibold">
+            匹配命中 {sourceTypeFilter === "rss" ? rssItems.length : sourceTypeFilter === "hotlist" ? visibleItems.length : visibleItems.length + rssItems.length} 条
+          </span>
         </div>
       )}
 
@@ -437,14 +500,24 @@ export function HotlistPanel() {
 
       {/* 区域渲染逻辑：支持 hotlist, rss, standalone 按照 region_order 动态排序 */}
       {(() => {
-        const isHotlistEnabled = config?.regions_enabled?.hotlist !== false;
-        const isRssEnabled = config?.regions_enabled?.rss !== false;
+        const isUnavailable = interestMode === "my_interests" && effectiveFilterMeta?.status === "UNAVAILABLE";
+        const isHotlistEnabled =
+          !isUnavailable &&
+          config?.regions_enabled?.hotlist !== false &&
+          (interestMode !== "my_interests" || sourceTypeFilter === "all" || sourceTypeFilter === "hotlist");
+        const isRssEnabled =
+          !isUnavailable &&
+          config?.regions_enabled?.rss !== false &&
+          (interestMode !== "my_interests" || sourceTypeFilter === "all" || sourceTypeFilter === "rss");
         const isStandaloneEnabled =
           config?.regions_enabled?.standalone !== false && config?.standalone_enabled !== false;
-        const allRegionsDisabled =
-          Boolean(config) && !isHotlistEnabled && !isRssEnabled && !isStandaloneEnabled;
+        const allRegionsConfigDisabled =
+          Boolean(config) &&
+          config?.regions_enabled?.hotlist === false &&
+          config?.regions_enabled?.rss === false &&
+          (config?.regions_enabled?.standalone === false || config?.standalone_enabled === false);
 
-        if (allRegionsDisabled) {
+        if (allRegionsConfigDisabled) {
           return (
             <div
               data-testid="all-regions-disabled-empty"
