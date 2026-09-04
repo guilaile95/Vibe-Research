@@ -1936,6 +1936,7 @@ def apply_interest_update(
     cfg: dict[str, Any] | None = None,
     ai_config: dict[str, Any] | None = None,
     full_reclassify_threshold: float | None = None,
+    min_score: float | None = None,
     model_runner: Callable[[Any, list[dict[str, str]]], str] | None = None,
     path: str | None = None,
     **kwargs: Any,
@@ -1952,16 +1953,32 @@ def apply_interest_update(
     if not effective_cfg and model_runner is None:
         raise ValueError("AI_CONFIG_REQUIRED: 未提供有效的 AI 模型配置")
 
+    effective_min_score: float | None = None
+    raw_min_score = min_score if min_score is not None else kwargs.get("min_score")
+    if raw_min_score is not None:
+        try:
+            effective_min_score = float(raw_min_score)
+        except (ValueError, TypeError):
+            raise ValueError("min_score 必须为有效浮点数") from None
+        if not (0.0 <= effective_min_score <= 1.0):
+            raise ValueError("min_score 必须在 0.0 到 1.0 之间")
+
+    def _build_payload(tags_list: list[dict[str, Any]]) -> dict[str, Any]:
+        payload_data: dict[str, Any] = {
+            "interests_text": clean_text,
+            "tags": tags_list,
+            "method": filter_engine.METHOD_AI,
+        }
+        if effective_min_score is not None:
+            payload_data["min_score"] = effective_min_score
+        return payload_data
+
     # 首次配置，无旧标签 -> 必须执行完整提取
     if not old_tags:
         new_tags = filter_engine.extract_interest_tags(clean_text, cfg=effective_cfg, model_runner=model_runner)
         updated = update_filter_profile(
             profile_id=profile_id,
-            payload={
-                "interests_text": clean_text,
-                "tags": new_tags,
-                "method": filter_engine.METHOD_AI,
-            },
+            payload=_build_payload(new_tags),
             path=target,
         )
         return {
@@ -2011,11 +2028,7 @@ def apply_interest_update(
         )
         updated = update_filter_profile(
             profile_id=profile_id,
-            payload={
-                "interests_text": clean_text,
-                "tags": fresh_tags,
-                "method": filter_engine.METHOD_AI,
-            },
+            payload=_build_payload(fresh_tags),
             path=target,
         )
         return {
@@ -2030,11 +2043,7 @@ def apply_interest_update(
         new_tags = update_res.get("new_tags") or []
         updated = update_filter_profile(
             profile_id=profile_id,
-            payload={
-                "interests_text": clean_text,
-                "tags": new_tags,
-                "method": filter_engine.METHOD_AI,
-            },
+            payload=_build_payload(new_tags),
             path=target,
         )
         new_fp = updated["profile_fingerprint"]

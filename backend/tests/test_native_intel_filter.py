@@ -1215,3 +1215,167 @@ def test_keyword_required_filter_terms_and_max_count_persistence_and_filtering(t
     assert len(res["items"]) == 1
     assert "英伟达" in res["items"][0]["title"]
     assert "GPU" in res["items"][0]["title"]
+
+
+def test_apply_interest_update_with_min_score_persistence_and_filtered_readback(test_db: str, client: TestClient):
+    now = store.utc_now_iso()
+    # 1. 插入两篇条目：Item A (score 0.90) 与 Item B (score 0.80)
+    with store._connect(test_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO intel_fetch_runs (run_id, started_at, finished_at, status, trigger, source_total, source_ok, source_failed, item_seen, item_new)
+            VALUES ('run-min-score-test', ?, ?, 'ok', 'manual', 1, 1, 0, 2, 2)
+            """,
+            (now, now),
+        )
+        cur = conn.execute(
+            """
+            INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, summary, source_id, hint, published_at, published_ts, first_seen_at, last_seen_at, observation_count, created_at)
+            VALUES ('item-a', 'http://a', 'http://a', '人形机器人谐波减速器量产突破', 'k-a', '减速器订单放量', 'cls-hot', 'macro', NULL, 0, ?, ?, 1, ?)
+            """,
+            (now, now, now),
+        )
+        item_a_id = cur.lastrowid
+        conn.execute(
+            """
+            INSERT INTO intel_observations (run_id, item_id, source_id, observed_at, rank, observed_title, published_at)
+            VALUES ('run-min-score-test', ?, 'cls-hot', ?, 1, '人形机器人谐波减速器量产突破', ?)
+            """,
+            (item_a_id, now, now),
+        )
+
+        cur = conn.execute(
+            """
+            INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, summary, source_id, hint, published_at, published_ts, first_seen_at, last_seen_at, observation_count, created_at)
+            VALUES ('item-b', 'http://b', 'http://b', '轻型四足机器狗开售', 'k-b', '四足消费级机器狗上市', 'cls-hot', 'macro', NULL, 0, ?, ?, 1, ?)
+            """,
+            (now, now, now),
+        )
+        item_b_id = cur.lastrowid
+        conn.execute(
+            """
+            INSERT INTO intel_observations (run_id, item_id, source_id, observed_at, rank, observed_title, published_at)
+            VALUES ('run-min-score-test', ?, 'cls-hot', ?, 2, '轻型四足机器狗开售', ?)
+            """,
+            (item_b_id, now, now),
+        )
+
+    # 初始 profile: min_score = 0.70
+    service.update_filter_profile(
+        "default",
+        {
+            "method": "ai",
+            "interests_text": "关注工业机器人",
+            "min_score": 0.70,
+            "tags": [{"id": 1, "tag": "工业机器人", "description": "传统工业自动化臂"}],
+        },
+        test_db,
+    )
+
+    # Mock runner：返回新 tags，并在打分时给 item A 0.90，给 item B 0.80
+    def mock_runner(cfg: Any, msgs: list[dict[str, str]]) -> str:
+        prompt_str = str(msgs)
+        if "update_tags" in prompt_str or "提炼出" in prompt_str or "新描述" in prompt_str or "tags" in prompt_str and "score" not in prompt_str:
+            return json.dumps({
+                "keep": [],
+                "add": [
+                    {"tag": "人形机器人", "description": "具身智能与核心零部件"},
+                    {"tag": "四足机器人", "description": "四足机器狗与巡检机器人"},
+                ],
+                "remove": ["工业机器人"],
+                "change_ratio": 1.0,
+                "new_tags": [
+                    {"id": 1, "tag": "人形机器人", "description": "具身智能与核心零部件"},
+                    {"id": 2, "tag": "四足机器人", "description": "四足机器狗与巡检机器人"},
+                ],
+                "tags": [
+                    {"id": 1, "tag": "人形机器人", "description": "具身智能与核心零部件"},
+                    {"id": 2, "tag": "四足机器人", "description": "四足机器狗与巡检机器人"},
+                ],
+            })
+        # 批量打分
+        return json.dumps([
+            {"id": item_a_id, "tag_id": 1, "score": 0.90},
+            {"id": item_b_id, "tag_id": 2, "score": 0.80},
+        ])
+
+    # 2. 用户同一次操作：修改 interests_text 并将 min_score 改为 0.85
+    new_interests = "重点关注人形机器人核心零部件与四足机器人"
+    res = service.apply_interest_update(
+        profile_id="default",
+        interests_text=new_interests,
+        min_score=0.85,
+        cfg={"provider": "cli-codex", "model": "gpt-5-codex"},
+        model_runner=mock_runner,
+        path=test_db,
+    )
+
+    # 验证返回的 profile 包含了 0.85
+    assert res["profile"]["min_score"] == 0.85
+    assert res["profile"]["interests_text"] == new_interests
+    canonical_fp = res["profile"]["profile_fingerprint"]
+
+    # 验证持久化落库（Reload Persistence）
+    reloaded = service.get_filter_profile("default", test_db)
+    assert reloaded["min_score"] == 0.85
+    assert reloaded["interests_text"] == new_interests
+    assert reloaded["profile_fingerprint"] == canonical_fp
+
+    # 3. 执行分类
+    cls_res = service.classify_items(
+        profile_id="default",
+        cfg={"provider": "cli-codex", "model": "gpt-5-codex"},
+        model_runner=mock_runner,
+        path=test_db,
+    )
+    assert cls_res["status"] == "SUCCESS"
+    assert cls_res["classified"] == 2
+
+    # 4. 验证 filtered readback 真实受新 min_score=0.85 影响：
+    # Item A (score 0.90 >= 0.85) -> 可见
+    # Item B (score 0.80 < 0.85)  -> 不可见
+    filtered = service.list_filtered_items(profile_id="default", source_type="all", mode="my_interests", path=test_db)
+    assert filtered["status"] == "normal"
+    filtered_ids = [i["item_id"] for i in filtered["items"]]
+    assert item_a_id in filtered_ids
+    assert item_b_id not in filtered_ids
+
+    # 5. 验证 all 模式：两篇都返回，但 Item A filter_match 有效，Item B filter_match 为 None
+    all_view = service.list_filtered_items(profile_id="default", source_type="all", mode="all", path=test_db)
+    all_map = {i["item_id"]: i for i in all_view["items"]}
+    assert all_map[item_a_id]["filter_match"] is not None
+    assert all_map[item_a_id]["filter_match"]["relevance_score"] == 0.90
+    assert all_map[item_b_id]["filter_match"] is None
+
+
+def test_apply_interest_update_router_min_score_and_validation(client: TestClient, test_db: str):
+    # 1. 正常传入 min_score = 0.82
+    resp = client.post(
+        "/api/native-intel/filter/apply-interest-update",
+        json={
+            "interests_text": "关注新能源固态电池",
+            "min_score": 0.82,
+            "cfg": {"provider": "cli-codex", "model": "gpt-5-codex"},
+        },
+    )
+    # 若没有 mock runner 可能会报 AI_ERROR 或 422，但如果是参数校验错误会是 BAD_ARGUMENT
+    # 测试非法 min_score 校验
+    bad_resp1 = client.post(
+        "/api/native-intel/filter/apply-interest-update",
+        json={
+            "interests_text": "关注新能源",
+            "min_score": 1.5,
+        },
+    )
+    assert bad_resp1.status_code == 422
+    assert "min_score 必须在 0.0 到 1.0 之间" in bad_resp1.json()["detail"]["error"]
+
+    bad_resp2 = client.post(
+        "/api/native-intel/filter/apply-interest-update",
+        json={
+            "interests_text": "关注新能源",
+            "min_score": "not-a-number",
+        },
+    )
+    assert bad_resp2.status_code == 422
+    assert "非法的 min_score" in bad_resp2.json()["detail"]["error"]

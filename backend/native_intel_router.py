@@ -422,12 +422,25 @@ def post_apply_interest_update(
                 detail={"status": "BAD_ARGUMENT", "error": f"非法的 full_reclassify_threshold: {val_err}"},
             ) from val_err
 
+    min_score: float | None = None
+    if "min_score" in body and body["min_score"] is not None:
+        try:
+            min_score = float(body["min_score"])
+            if not (0.0 <= min_score <= 1.0):
+                raise ValueError("min_score 必须在 0.0 到 1.0 之间")
+        except (ValueError, TypeError) as val_err:
+            raise HTTPException(
+                status_code=422,
+                detail={"status": "BAD_ARGUMENT", "error": f"非法的 min_score: {val_err}"},
+            ) from val_err
+
     try:
         return service.apply_interest_update(
             profile_id=profile_id,
             interests_text=interests_text,
             cfg=cfg,
             full_reclassify_threshold=threshold,
+            min_score=min_score,
             path=_db_path(),
         )
     except ValueError as exc:

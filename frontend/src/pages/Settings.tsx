@@ -558,6 +558,7 @@ function NativeIntelFilterSettingsSection() {
           profile_id: profile?.profile_id || "default",
           interests_text: interestsText,
           ai_config: llm,
+          min_score: minScore,
         });
         setProfile(res.profile);
         setTags(res.profile.tags || []);
@@ -624,6 +625,7 @@ function NativeIntelFilterSettingsSection() {
         profile_id: profile?.profile_id || "default",
         interests_text: interestsText,
         ai_config: llm,
+        min_score: minScore,
       });
       setProfile(res.profile);
       setTags(res.profile.tags || []);
@@ -655,6 +657,7 @@ function NativeIntelFilterSettingsSection() {
           profile_id: profile?.profile_id || "default",
           interests_text: interestsText,
           ai_config: llm,
+          min_score: minScore,
         });
         canonicalProfile = updateRes.profile;
         setProfile(canonicalProfile);
@@ -1051,6 +1054,7 @@ function NativeIntelFilterSettingsSection() {
                 </div>
                 <input
                   type="range"
+                  data-testid="settings-filter-min-score-slider"
                   min="0.1"
                   max="1.0"
                   step="0.05"

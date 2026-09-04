@@ -99,6 +99,7 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
           profile_id: profile?.profile_id || "default",
           interests_text: interestsText,
           ai_config: llm,
+          min_score: minScore,
         });
         setProfile(res.profile);
         setTags(res.profile.tags || []);
@@ -168,6 +169,7 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
         profile_id: profile?.profile_id || "default",
         interests_text: interestsText,
         ai_config: llm,
+        min_score: minScore,
       });
       setProfile(res.profile);
       setTags(res.profile.tags || []);
@@ -199,6 +201,7 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
           profile_id: profile?.profile_id || "default",
           interests_text: interestsText,
           ai_config: llm,
+          min_score: minScore,
         });
         canonicalProfile = updateRes.profile;
         setProfile(canonicalProfile);
@@ -605,6 +608,7 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
                     </div>
                     <input
                       type="range"
+                      data-testid="filter-min-score-slider"
                       min="0.1"
                       max="1.0"
                       step="0.05"

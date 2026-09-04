@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   ExternalLink,
@@ -53,30 +53,38 @@ export function HotlistPanel() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyData, setHistoryData] = useState<NativeIntelItemRankHistoryResponse | null>(null);
 
+  const reqIdRef = useRef(0);
+
   const loadData = useCallback(async () => {
+    const currentReqId = ++reqIdRef.current;
     try {
       setError(null);
       if (interestMode === "my_interests") {
         const res = await api.nativeIntelFilteredItems(sourceTypeFilter, "my_interests");
+        if (currentReqId !== reqIdRef.current) return;
         setItems(res.items || []);
         setFilterMeta(res.filter_meta || null);
         setBoardStatus(res.status || "normal");
-        if (sources.length === 0) {
-          api.nativeIntelSources().then((s) => setSources(s.sources || [])).catch(() => {});
-        }
+        api.nativeIntelSources().then((s) => {
+          if (currentReqId === reqIdRef.current) setSources(s.sources || []);
+        }).catch(() => {});
       } else {
         const res = await api.nativeIntelHotlist(100, "all");
+        if (currentReqId !== reqIdRef.current) return;
         setItems(res.items || []);
         setSources(res.sources || []);
         setBoardStatus(res.status || "normal");
         setFilterMeta(res.filter_meta || null);
       }
     } catch (err) {
+      if (currentReqId !== reqIdRef.current) return;
       setError(err instanceof ApiError ? err.message : "读取热榜失败");
     } finally {
-      setLoading(false);
+      if (currentReqId === reqIdRef.current) {
+        setLoading(false);
+      }
     }
-  }, [interestMode, sourceTypeFilter, sources.length]);
+  }, [interestMode, sourceTypeFilter]);
 
   useEffect(() => {
     void loadData();

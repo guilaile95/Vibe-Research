@@ -156,9 +156,7 @@ try {
       body: request.postDataBuffer() || undefined,
     });
     const bodyBuf = Buffer.from(await response.arrayBuffer());
-    if (response.status >= 400 || url.pathname.includes("apply") || url.pathname.includes("classify")) {
-      console.log(`API [${request.method()} ${url.pathname}]: ${response.status}`, bodyBuf.toString());
-    }
+    console.log(`API [${request.method()} ${url.pathname}${url.search}]: ${response.status}`);
     await route.fulfill({
       status: response.status,
       headers: Object.fromEntries(response.headers.entries()),
@@ -195,6 +193,7 @@ try {
 
   // 切换到 "我的关注" 模式
   await modeInterestsBtn.click();
+  await sleep(600);
   await hotlistPanel.getByText("娱乐圈八卦明星动态", { exact: true }).waitFor({ state: "hidden", timeout: 5000 });
   await hotlistPanel.getByText("独家广告赞助大促销活动", { exact: true }).waitFor({ state: "hidden", timeout: 5000 });
 
@@ -305,6 +304,17 @@ try {
   const interestTextArea = modal.locator("textarea").first();
   await interestTextArea.fill("重点关注芯片半导体以及大模型前沿技术");
 
+  // 同时修改 min_score 为 0.85
+  const minScoreSlider = modal.getByTestId("filter-min-score-slider");
+  await minScoreSlider.waitFor({ state: "visible", timeout: 5000 });
+  await minScoreSlider.evaluate((el, val) => {
+    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    nativeSetter.call(el, val);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }, "0.85");
+  await modal.getByText("85%").waitFor({ state: "visible", timeout: 5000 });
+
   // 点击"保存并执行 AI 分类" (必须走 apply_interest_update 真实用户路径)
   const saveAndClassifyBtn = modal.getByTestId("save-and-classify-button");
   await saveAndClassifyBtn.waitFor({ state: "visible", timeout: 5000 });
@@ -312,12 +322,38 @@ try {
   await modal.waitFor({ state: "hidden", timeout: 10000 });
   await sleep(600);
 
-  // 直连后端验证：生效模式已更新为 ai，且指纹与分类结果已真实落库
+  // 直连后端验证：生效模式已更新为 ai，且 min_score=0.85 与指纹真实落库
   const res2 = await fetch(`http://127.0.0.1:${backendPort}/api/native-intel/filter/profile`);
   const profile2 = await res2.json();
   assert.equal(profile2.method, "ai", "Filter method must be updated to ai in SQLite");
+  assert.equal(profile2.min_score, 0.85, "min_score must be updated to 0.85 in SQLite");
   assert.ok(profile2.profile_fingerprint, "Canonical profile fingerprint must exist");
   assert.ok(profile2.tags.length >= 2, "AI tags must be persisted");
+
+  // 验证 filtered readback 真实受新 min_score=0.85 影响：
+  // Item A: "科技突破：先进制程半导体量产" (score 0.90 >= 0.85) -> 可见
+  // Item B: "微博热议大模型前沿算法发布" (score 0.80 < 0.85) -> 不可见
+  await hotlistPanel.getByText("科技突破：先进制程半导体量产", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
+  assert.equal(await hotlistPanel.getByText("微博热议大模型前沿算法发布", { exact: true }).count(), 0);
+
+  // 刷新页面校验持久化（Reload persistence）
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator("button", { hasText: "实时热榜" }).click();
+  await hotlistPanel.waitFor({ state: "visible", timeout: 10000 });
+  // 在我的关注模式下再次确认：Item A 可见，Item B 不可见
+  const reloadedModeInterestsBtn = hotlistPanel.getByTestId("hotlist-mode-interests");
+  await reloadedModeInterestsBtn.click();
+  await hotlistPanel.getByText("微博热议大模型前沿算法发布", { exact: true }).waitFor({ state: "hidden", timeout: 5000 });
+  assert.equal(await hotlistPanel.getByText("微博热议大模型前沿算法发布", { exact: true }).count(), 0);
+  await hotlistPanel.getByText("科技突破：先进制程半导体量产", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
+
+  // 打开弹窗确认 min_score 回显仍是 0.85 (85%)
+  await hotlistPanel.getByTestId("hotlist-filter-settings-btn").click();
+  await modal.waitFor({ state: "visible", timeout: 5000 });
+  await modal.getByText("85%").waitFor({ state: "visible", timeout: 5000 });
+  assert.equal(await modal.getByTestId("filter-min-score-slider").inputValue(), "0.85");
+  await modal.getByTestId("close-filter-settings-modal").click();
+  await modal.waitFor({ state: "hidden", timeout: 5000 });
 
   // -------------------------------------------------------------------------
   // 4. 我的关注模式下的 RSS 与全源支持验证
@@ -331,25 +367,51 @@ try {
   await hotlistPanel.getByText("RSS简讯：半导体芯片智算中心交付", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
 
   // -------------------------------------------------------------------------
-  // 4. 设置页：跨页面一致性与持久化验证
+  // 5. 设置页：跨页面一致性与持久化验证 (包含 min_score 与 interest 同步保存)
   // -------------------------------------------------------------------------
   await page.goto(`http://127.0.0.1:${frontendPort}/settings`, { waitUntil: "domcontentloaded" });
-  const filterSection = page.locator("text=资讯兴趣与智能筛选");
-  await filterSection.waitFor({ state: "visible", timeout: 15000 });
+  const filterHeading = page.locator("text=资讯兴趣与智能筛选");
+  await filterHeading.waitFor({ state: "visible", timeout: 15000 });
 
-  // 验证当前生效的是 AI 智能语义过滤
+  // 验证当前生效的是 AI 智能语义过滤且 min_score 仍为 0.85 (85%)
   const aiBtnInSettings = page.locator('button:has-text("AI 智能语义过滤")').first();
   await aiBtnInSettings.waitFor({ state: "visible", timeout: 5000 });
+  await page.getByText("85%").waitFor({ state: "visible", timeout: 5000 });
+  assert.equal(await page.getByTestId("settings-filter-min-score-slider").inputValue(), "0.85");
+
+  // 在设置页同时修改 interests_text 和 min_score (改为 0.90 / 90%)
+  const settingsInterestTextarea = page.locator("textarea").first();
+  await settingsInterestTextarea.fill("重点关注芯片半导体以及大模型前沿技术 (Settings更新)");
+  const settingsMinScoreSlider = page.getByTestId("settings-filter-min-score-slider");
+  await settingsMinScoreSlider.evaluate((el, val) => {
+    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    nativeSetter.call(el, val);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }, "0.9");
+  await page.getByText("90%").waitFor({ state: "visible", timeout: 5000 });
+
+  // 点击"保存筛选设置"
+  const saveInSettingsBtn = page.getByRole("button", { name: "保存筛选设置" });
+  await saveInSettingsBtn.click();
+  await sleep(800);
+
+  // 验证后端更新：min_score 变为 0.9，且 interests_text 变为新文本
+  const resSettings = await fetch(`http://127.0.0.1:${backendPort}/api/native-intel/filter/profile`);
+  const profileSettings = await resSettings.json();
+  assert.equal(profileSettings.min_score, 0.9, "min_score must be updated to 0.9 via Settings page");
+  assert.equal(profileSettings.interests_text, "重点关注芯片半导体以及大模型前沿技术 (Settings更新)");
 
   // 刷新页面，验证持久化
   await page.reload({ waitUntil: "domcontentloaded" });
-  const filterSectionReloaded = page.locator("text=资讯兴趣与智能筛选");
-  await filterSectionReloaded.waitFor({ state: "visible", timeout: 10000 });
+  const filterHeadingReloaded = page.locator("text=资讯兴趣与智能筛选");
+  await filterHeadingReloaded.waitFor({ state: "visible", timeout: 10000 });
+  await page.getByText("90%").waitFor({ state: "visible", timeout: 5000 });
+  assert.equal(await page.getByTestId("settings-filter-min-score-slider").inputValue(), "0.9");
 
   // 在设置页切换回关键词过滤并保存
   const kwBtnInSettings = page.locator('button:has-text("本地关键词 / 正则过滤")').first();
   await kwBtnInSettings.click();
-  const saveInSettingsBtn = page.getByRole("button", { name: "保存筛选设置" });
   await saveInSettingsBtn.click();
   await sleep(800);
 

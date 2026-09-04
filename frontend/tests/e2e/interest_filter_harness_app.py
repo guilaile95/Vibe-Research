@@ -151,13 +151,13 @@ def _mock_classify_items_batch(items, tags, interests_text="", cfg=None, batch_s
         if "半导体" in text or "芯片" in text:
             results.append({
                 "item_id": item["item_id"],
-                "relevance_score": 0.92,
+                "relevance_score": 0.90,
                 "primary_tag": "芯片制造",
             })
         elif "大模型" in text or "人工智能" in text:
             results.append({
                 "item_id": item["item_id"],
-                "relevance_score": 0.88,
+                "relevance_score": 0.80,
                 "primary_tag": "AI技术",
             })
         else:

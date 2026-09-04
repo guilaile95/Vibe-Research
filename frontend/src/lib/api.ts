@@ -662,6 +662,7 @@ export const api = {
     profile_id?: string;
     ai_config?: Record<string, any>;
     full_reclassify_threshold?: number;
+    min_score?: number;
   }) =>
     request<Record<string, any>>(
       "/native-intel/filter/apply-interest-update",
