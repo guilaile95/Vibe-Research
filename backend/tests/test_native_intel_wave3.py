@@ -1243,3 +1243,136 @@ def test_gap_e_status_freshness_excluded_count(test_db: Path):
     stat_enabled = service.status(str(test_db))
     assert stat_enabled["freshness"]["enabled"] is True
     assert stat_enabled["freshness"]["excluded_count"] == 3
+
+
+def test_standalone_applies_freshness_before_cap(test_db: Path):
+    """Gap A: Standalone 必须真正 freshness-first，再做 per-source cap（同一源早期大量过期条目不饿死后续新鲜条目）。"""
+    now = datetime.now(timezone.utc)
+    store.initialize_store(test_db)
+    with store._connect(test_db) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO intel_sources (source_id, name, hint, url, source_type, has_real_rank, enabled, updated_at)
+                VALUES ('feed-standalone-deep', '深度独立源', 'macro', 'https://example.com/deep.xml', 'rss', 0, 1, ?)
+                """,
+                (store.utc_now_iso(),),
+            )
+            # 最近 60 条全部过期 (10 days old, last_seen = now - i minutes)
+            for i in range(1, 61):
+                seen = (now - timedelta(minutes=i)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                pub_dt = now - timedelta(days=10, minutes=i)
+                pub_iso = pub_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                pub_ts = int(pub_dt.timestamp())
+                conn.execute(
+                    """
+                    INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, source_id, hint, published_at, published_ts, first_seen_at, last_seen_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'feed-standalone-deep', 'macro', ?, ?, ?, ?, ?)
+                    """,
+                    (f"item-{i}", f"https://example.com/item/{i}", f"https://example.com/item/{i}", f"item {i} expired", f"item-{i}", pub_iso, pub_ts, seen, seen, seen),
+                )
+            # 第 61~63 条全部新鲜 (1 hour old, but last_seen = now - 60 - i minutes)
+            for i in (61, 62, 63):
+                seen = (now - timedelta(minutes=i)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                pub_dt = now - timedelta(hours=1, minutes=i)
+                pub_iso = pub_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                pub_ts = int(pub_dt.timestamp())
+                conn.execute(
+                    """
+                    INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, source_id, hint, published_at, published_ts, first_seen_at, last_seen_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'feed-standalone-deep', 'macro', ?, ?, ?, ?, ?)
+                    """,
+                    (f"item-{i}", f"https://example.com/item/{i}", f"https://example.com/item/{i}", f"item {i} fresh", f"item-{i}", pub_iso, pub_ts, seen, seen, seen),
+                )
+
+    store.update_native_intel_config(
+        {
+            "standalone_enabled": True,
+            "standalone_source_ids": ["feed-standalone-deep"],
+            "standalone_max_items": 2,
+            "rss_freshness_enabled": True,
+            "rss_global_max_age_days": 3,
+        },
+        db_path=test_db,
+    )
+
+    st_res = service.get_standalone_items(str(test_db))
+    assert st_res["status"] == "normal"
+    assert st_res["total"] == 2
+    assert len(st_res["items"]) == 2
+    assert st_res["items"][0]["title"] == "item 61 fresh"
+    assert st_res["items"][1]["title"] == "item 62 fresh"
+
+
+def test_status_excluded_count_respects_feed_override_when_global_zero(test_db: Path):
+    """Gap B: freshness.excluded_count 在全局 global_max_age_days=0 时仍正确解释 per-feed 覆盖。"""
+    now = datetime.now(timezone.utc)
+    store.initialize_store(test_db)
+    ten_days_ago = now - timedelta(days=10)
+    ten_days_iso = ten_days_ago.strftime("%Y-%m-%dT%H:%M:%SZ")
+    ten_days_ts = int(ten_days_ago.timestamp())
+
+    with store._connect(test_db) as conn:
+        with conn:
+            # Feed A: max_age_days = NULL
+            conn.execute(
+                """
+                INSERT INTO intel_sources (source_id, name, hint, url, source_type, has_real_rank, enabled, max_age_days, updated_at)
+                VALUES ('feed-a', 'Feed A', 'macro', 'https://example.com/a.xml', 'rss', 0, 1, NULL, ?)
+                """,
+                (store.utc_now_iso(),),
+            )
+            # Feed B: max_age_days = 1
+            conn.execute(
+                """
+                INSERT INTO intel_sources (source_id, name, hint, url, source_type, has_real_rank, enabled, max_age_days, updated_at)
+                VALUES ('feed-b', 'Feed B', 'macro', 'https://example.com/b.xml', 'rss', 0, 1, 1, ?)
+                """,
+                (store.utc_now_iso(),),
+            )
+            # Feed C: max_age_days = 0
+            conn.execute(
+                """
+                INSERT INTO intel_sources (source_id, name, hint, url, source_type, has_real_rank, enabled, max_age_days, updated_at)
+                VALUES ('feed-c', 'Feed C', 'macro', 'https://example.com/c.xml', 'rss', 0, 1, 0, ?)
+                """,
+                (store.utc_now_iso(),),
+            )
+
+            # Each feed has a 10-day old item
+            for fid in ("feed-a", "feed-b", "feed-c"):
+                conn.execute(
+                    """
+                    INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, source_id, hint, published_at, published_ts, first_seen_at, last_seen_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 'macro', ?, ?, ?, ?, ?)
+                    """,
+                    (f"{fid}-old", f"https://example.com/{fid}", f"https://example.com/{fid}", f"{fid} 10-day old", f"{fid}-old", fid, ten_days_iso, ten_days_ts, ten_days_iso, ten_days_iso, ten_days_iso),
+                )
+
+    # 1. When global enabled with max_age_days=0:
+    # Feed A (NULL) -> not excluded
+    # Feed B (1) -> excluded (10 > 1)
+    # Feed C (0) -> not excluded
+    store.update_native_intel_config(
+        {
+            "rss_freshness_enabled": True,
+            "rss_global_max_age_days": 0,
+        },
+        db_path=test_db,
+    )
+    stat = service.status(str(test_db))
+    assert stat["freshness"]["enabled"] is True
+    assert stat["freshness"]["excluded_count"] == 1
+
+    # 2. When global freshness is false:
+    # excluded_count must be 0
+    store.update_native_intel_config(
+        {
+            "rss_freshness_enabled": False,
+            "rss_global_max_age_days": 0,
+        },
+        db_path=test_db,
+    )
+    stat_disabled = service.status(str(test_db))
+    assert stat_disabled["freshness"]["enabled"] is False
+    assert stat_disabled["freshness"]["excluded_count"] == 0

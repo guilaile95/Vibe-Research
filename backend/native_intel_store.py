@@ -2261,6 +2261,63 @@ def list_all_recent_items_with_sources(
             raise NativeIntelStoreError() from e
 
 
+def list_recent_items_by_source(
+    source_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """按 source_id 查询该来源的最近条目（支持分页 offset / limit），附带来源元数据。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    lim = max(1, int(limit))
+    off = max(0, int(offset))
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT i.item_id, i.title, i.summary, i.source_id, i.url, i.canonical_url,
+                           i.hint, i.published_at, i.published_ts, i.first_seen_at, i.last_seen_at, i.observation_count,
+                           s.name AS source_name, s.source_type, s.has_real_rank, s.enabled AS source_enabled,
+                           s.max_age_days AS source_max_age_days
+                    FROM intel_items i
+                    LEFT JOIN intel_sources s ON s.source_id = i.source_id
+                    WHERE i.source_id = ?
+                    ORDER BY i.last_seen_at DESC, i.item_id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (source_id, lim, off),
+                ).fetchall()
+                res: list[dict[str, Any]] = []
+                for r in rows:
+                    res.append(
+                        {
+                            "item_id": int(r["item_id"]),
+                            "title": r["title"],
+                            "summary": r["summary"],
+                            "source_id": r["source_id"],
+                            "url": r["url"],
+                            "canonical_url": r["canonical_url"],
+                            "hint": r["hint"],
+                            "published_at": r["published_at"],
+                            "first_seen_at": r["first_seen_at"],
+                            "last_seen_at": r["last_seen_at"],
+                            "observation_count": int(r["observation_count"] or 1),
+                            "source_name": r["source_name"],
+                            "source_type": r["source_type"],
+                            "has_real_rank": bool(r["has_real_rank"]),
+                            "source_enabled": bool(r["source_enabled"]),
+                            "published_ts": int(r["published_ts"] or 0),
+                            "source_max_age_days": r["source_max_age_days"],
+                            "max_age_days": r["source_max_age_days"],
+                        }
+                    )
+                return res
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
 def list_recent_items_by_source_ids(
     source_ids: list[str],
     limit_per_source: int = 50,
@@ -2270,53 +2327,10 @@ def list_recent_items_by_source_ids(
     if not source_ids:
         return []
     path = Path(db_path) if db_path else get_default_db_path()
-    initialize_store(path)
-    lim = max(1, min(int(limit_per_source), 200))
     res: list[dict[str, Any]] = []
-    with _LOCK:
-        try:
-            with _connect(path) as conn:
-                for sid in source_ids:
-                    rows = conn.execute(
-                        """
-                        SELECT i.item_id, i.title, i.summary, i.source_id, i.url, i.canonical_url,
-                               i.hint, i.published_at, i.published_ts, i.first_seen_at, i.last_seen_at, i.observation_count,
-                               s.name AS source_name, s.source_type, s.has_real_rank, s.enabled AS source_enabled,
-                               s.max_age_days AS source_max_age_days
-                        FROM intel_items i
-                        LEFT JOIN intel_sources s ON s.source_id = i.source_id
-                        WHERE i.source_id = ?
-                        ORDER BY i.last_seen_at DESC, i.item_id DESC
-                        LIMIT ?
-                        """,
-                        (sid, lim),
-                    ).fetchall()
-                    for r in rows:
-                        res.append(
-                            {
-                                "item_id": int(r["item_id"]),
-                                "title": r["title"],
-                                "summary": r["summary"],
-                                "source_id": r["source_id"],
-                                "url": r["url"],
-                                "canonical_url": r["canonical_url"],
-                                "hint": r["hint"],
-                                "published_at": r["published_at"],
-                                "first_seen_at": r["first_seen_at"],
-                                "last_seen_at": r["last_seen_at"],
-                                "observation_count": int(r["observation_count"] or 1),
-                                "source_name": r["source_name"],
-                                "source_type": r["source_type"],
-                                "has_real_rank": bool(r["has_real_rank"]),
-                                "source_enabled": bool(r["source_enabled"]),
-                                "published_ts": int(r["published_ts"] or 0),
-                                "source_max_age_days": r["source_max_age_days"],
-                                "max_age_days": r["source_max_age_days"],
-                            }
-                        )
-            return res
-        except sqlite3.DatabaseError as e:
-            raise NativeIntelStoreError() from e
+    for sid in source_ids:
+        res.extend(list_recent_items_by_source(sid, limit=limit_per_source, offset=0, db_path=path))
+    return res
 
 
 def count_freshness_excluded_rss_items(
@@ -2330,8 +2344,6 @@ def count_freshness_excluded_rss_items(
     if not cfg.get("rss_freshness_enabled"):
         return 0
     global_max_age_days = int(cfg.get("rss_global_max_age_days", 1))
-    if global_max_age_days <= 0:
-        return 0
 
     with _LOCK:
         try:

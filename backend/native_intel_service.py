@@ -2476,36 +2476,36 @@ def get_standalone_items(path: str | None = None) -> dict[str, Any]:
     items_out: list[dict[str, Any]] = []
     freshness_excluded_count = 0
 
-    # Wave 3 Gap D：按 source_id 精确查询，解决全局 500 limit 截断导致的源饿死
-    fetch_per_source = max(max_per_source * 2, 50)
-    source_items_list = store.list_recent_items_by_source_ids(
-        source_ids, limit_per_source=fetch_per_source, db_path=target
-    )
-    by_source: dict[str, list[dict[str, Any]]] = {}
-    for it in source_items_list:
-        sid = it.get("source_id")
-        if sid:
-            by_source.setdefault(sid, []).append(it)
-
+    # Wave 3 Standalone：真正 freshness-first，再做 per-source cap（PER_SOURCE_QUERY -> FRESHNESS -> CAP）
     for sid in source_ids:
-        src_items = by_source.get(sid, [])
-        emitted = 0
-        for it in src_items:
-            if emitted >= max_per_source:
+        emitted_for_source = 0
+        offset = 0
+        batch_size = max(50, max_per_source)
+        while emitted_for_source < max_per_source:
+            batch = store.list_recent_items_by_source(
+                sid, limit=batch_size, offset=offset, db_path=target
+            )
+            if not batch:
                 break
-            st = str(it.get("source_type") or "rss")
-            if st == "rss":
-                res = freshness.evaluate_item_freshness(
-                    it,
-                    global_enabled=bool(cfg.get("rss_freshness_enabled")),
-                    global_max_age_days=int(cfg.get("rss_global_max_age_days", 1)),
-                    source_max_age_days=it.get("source_max_age_days") if it.get("source_max_age_days") is not None else it.get("max_age_days"),
-                )
-                if not res.eligible:
-                    freshness_excluded_count += 1
-                    continue
-            items_out.append(it)
-            emitted += 1
+            for it in batch:
+                st = str(it.get("source_type") or "rss").lower()
+                if st == "rss":
+                    res = freshness.evaluate_item_freshness(
+                        it,
+                        global_enabled=bool(cfg.get("rss_freshness_enabled")),
+                        global_max_age_days=int(cfg.get("rss_global_max_age_days", 1)),
+                        source_max_age_days=it.get("source_max_age_days") if it.get("source_max_age_days") is not None else it.get("max_age_days"),
+                    )
+                    if not res.eligible:
+                        freshness_excluded_count += 1
+                        continue
+                items_out.append(it)
+                emitted_for_source += 1
+                if emitted_for_source >= max_per_source:
+                    break
+            offset += len(batch)
+            if len(batch) < batch_size:
+                break
 
     # 补充实体与排名状态
     item_ids = [int(i["item_id"]) for i in items_out]
