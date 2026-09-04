@@ -1949,10 +1949,12 @@ def apply_interest_update(
     if not clean_text:
         raise ValueError("兴趣描述文本为空")
     effective_cfg = cfg or ai_config or kwargs.get("cfg") or kwargs.get("ai_config")
+    if not effective_cfg and model_runner is None:
+        raise ValueError("AI_CONFIG_REQUIRED: 未提供有效的 AI 模型配置")
 
     # 首次配置，无旧标签 -> 必须执行完整提取
     if not old_tags:
-        new_tags = filter_engine.extract_interest_tags(clean_text, cfg=ai_config, model_runner=model_runner)
+        new_tags = filter_engine.extract_interest_tags(clean_text, cfg=effective_cfg, model_runner=model_runner)
         updated = update_filter_profile(
             profile_id=profile_id,
             payload={
@@ -1963,6 +1965,7 @@ def apply_interest_update(
             path=target,
         )
         return {
+            "decision": "FULL",
             "reclassification_mode": "FULL",
             "full_reclassify_required": True,
             "change_ratio": 1.0,
@@ -1973,13 +1976,13 @@ def apply_interest_update(
     update_res = None
     try:
         update_res = filter_engine.update_interest_tags(
-            old_tags, clean_text, cfg=ai_config, model_runner=model_runner
+            old_tags, clean_text, cfg=effective_cfg, model_runner=model_runner
         )
     except Exception as update_err:
         _LOGGER.warning("对比更新标签失败，尝试回退全量提取: %s", update_err)
         try:
             fallback_tags = filter_engine.extract_interest_tags(
-                clean_text, cfg=ai_config, model_runner=model_runner
+                clean_text, cfg=effective_cfg, model_runner=model_runner
             )
             update_res = {
                 "keep": [],
@@ -1992,17 +1995,25 @@ def apply_interest_update(
             _LOGGER.error("回退全量提取亦失败，Fail Closed 保持原配置不变: %s", extract_err)
             raise ValueError(f"AI 标签更新与提取均失败: {extract_err}") from extract_err
 
-    change_ratio = update_res.get("change_ratio", 0.5)
-    threshold = float(full_reclassify_threshold if full_reclassify_threshold is not None else prof.get("reclassify_threshold", filter_engine.DEFAULT_RECLASSIFY_THRESHOLD))
+    change_ratio = float(update_res.get("change_ratio", 0.5))
+    threshold = (
+        float(full_reclassify_threshold)
+        if full_reclassify_threshold is not None
+        else float(prof.get("reclassify_threshold", filter_engine.DEFAULT_RECLASSIFY_THRESHOLD))
+    )
 
     if change_ratio >= threshold:
-        # FULL 重分类：使用全新标签，不继承旧分析结果
-        new_tags = update_res.get("new_tags") or []
+        # FULL 重分类（对齐 TrendRadar）：
+        # 确认触发 FULL 决策后，执行一次完整的 fresh extract_interest_tags
+        # 若 fresh extract 失败，立即抛出异常且不修改数据库，保持旧配置与旧分析状态完全不变（Fail-Closed / Rollback）
+        fresh_tags = filter_engine.extract_interest_tags(
+            clean_text, cfg=effective_cfg, model_runner=model_runner
+        )
         updated = update_filter_profile(
             profile_id=profile_id,
             payload={
                 "interests_text": clean_text,
-                "tags": new_tags,
+                "tags": fresh_tags,
                 "method": filter_engine.METHOD_AI,
             },
             path=target,

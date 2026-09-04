@@ -30,6 +30,8 @@ def _seed() -> None:
         ("hotlist-weibo", "微博热议大模型前沿算法发布", "https://weibo.com/ai-202", "新一代AI人工智能大模型推理框架开源。", 2),
         ("hotlist-zhihu", "娱乐圈八卦明星动态", "https://zhihu.com/question/star-203", "当红演员参加巡回演出盛况分享。", 3),
         ("hotlist-baidu", "独家广告赞助大促销活动", "https://baidu.com/s?wd=ad-204", "电商平台年中大促领券优惠活动。", 4),
+        ("hotlist-cls-hot", "英伟达发布新一代GPU硬件", "https://cls.cn/detail/205", "英伟达GPU算力硬件正式发布。", 5),
+        ("hotlist-cls-hot", "英伟达高管减持股票公告", "https://cls.cn/detail/206", "英伟达最新股东权益变动公告。", 6),
     ]
 
     for sid, title, url, summary, rank in seed_items:
@@ -69,6 +71,29 @@ def _seed() -> None:
         item_new=len(seed_items),
         db_path=DB_PATH,
     )
+
+    # Seed RSS source and RSS item
+    store.upsert_sources([
+        {
+            "source_id": "rss-semi-tech",
+            "name": "半导体产业快讯",
+            "hint": "macro",
+            "url": "https://rss.example/semi",
+            "source_type": "rss",
+            "origin": "user",
+            "enabled": True,
+            "has_real_rank": False,
+        }
+    ], DB_PATH)
+
+    with store._connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, summary, source_id, hint, published_at, published_ts, first_seen_at, last_seen_at, observation_count, created_at)
+            VALUES ('rss-item-1', 'https://rss.example/1', 'https://rss.example/1', 'RSS简讯：半导体芯片智算中心交付', 'rss-item-1', '半导体算力基础设施建设加速', 'rss-semi-tech', 'macro', ?, 0, ?, ?, 1, ?)
+            """,
+            (NOW, NOW, NOW, NOW),
+        )
 
     # Seed initial keyword profile
     init_profile = {

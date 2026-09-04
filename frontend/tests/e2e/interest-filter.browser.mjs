@@ -142,6 +142,7 @@ try {
   });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("console", (msg) => console.log("PAGE LOG:", msg.type(), msg.text()));
 
   // Proxy API requests to backend
   await page.route("**/api/**", async (route) => {
@@ -154,10 +155,14 @@ try {
       headers: reqHeaders,
       body: request.postDataBuffer() || undefined,
     });
+    const bodyBuf = Buffer.from(await response.arrayBuffer());
+    if (response.status >= 400 || url.pathname.includes("apply") || url.pathname.includes("classify")) {
+      console.log(`API [${request.method()} ${url.pathname}]: ${response.status}`, bodyBuf.toString());
+    }
     await route.fulfill({
       status: response.status,
       headers: Object.fromEntries(response.headers.entries()),
-      body: Buffer.from(await response.arrayBuffer()),
+      body: bodyBuf,
     });
   });
 
@@ -185,18 +190,17 @@ try {
   await hotlistPanel.getByText("独家广告赞助大促销活动", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
 
   // 校验命中规则的条目带有徽章
-  await hotlistPanel.getByTestId("hotlist-item-filter-badge").filter({ hasText: "半导体芯片" }).waitFor({ state: "visible", timeout: 5000 });
-  await hotlistPanel.getByTestId("hotlist-item-filter-badge").filter({ hasText: "AI大模型" }).waitFor({ state: "visible", timeout: 5000 });
+  await hotlistPanel.getByTestId("hotlist-item-filter-badge").filter({ hasText: "半导体芯片" }).first().waitFor({ state: "visible", timeout: 5000 });
+  await hotlistPanel.getByTestId("hotlist-item-filter-badge").filter({ hasText: "AI大模型" }).first().waitFor({ state: "visible", timeout: 5000 });
 
   // 切换到 "我的关注" 模式
   await modeInterestsBtn.click();
-  await sleep(600);
+  await hotlistPanel.getByText("娱乐圈八卦明星动态", { exact: true }).waitFor({ state: "hidden", timeout: 5000 });
+  await hotlistPanel.getByText("独家广告赞助大促销活动", { exact: true }).waitFor({ state: "hidden", timeout: 5000 });
 
-  // 校验仅展示命中的2条，未命中与排除条目被过滤
+  // 校验仅展示命中的条目
   await hotlistPanel.getByText("科技突破：先进制程半导体量产", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
   await hotlistPanel.getByText("微博热议大模型前沿算法发布", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
-  assert.equal(await hotlistPanel.getByText("娱乐圈八卦明星动态", { exact: true }).count(), 0);
-  assert.equal(await hotlistPanel.getByText("独家广告赞助大促销活动", { exact: true }).count(), 0);
 
   // 校验过滤元数据统计提示
   const statusPill = hotlistPanel.getByTestId("hotlist-filter-status-pill");
@@ -228,9 +232,14 @@ try {
   await closeBtn.click();
   await modal.waitFor({ state: "hidden", timeout: 5000 });
 
-  // 重新打开弹窗以添加新规则组
+  // 重新打开弹窗以添加新规则组并配置完整关键词能力 (required, includes, max_count, filter_terms)
   await settingsBtn.click();
   await modal.waitFor({ state: "visible", timeout: 5000 });
+
+  // 配置全局过滤词 (filter_terms)
+  const filterTermsInput = modal.getByTestId("filter-input-filter-terms");
+  await filterTermsInput.waitFor({ state: "visible", timeout: 5000 });
+  await filterTermsInput.fill("独家广告, 赞助大促销");
 
   // 添加新规则组
   const addGroupBtn = modal.getByText("添加分组", { exact: true });
@@ -239,59 +248,87 @@ try {
   // 找到新增组的名称输入框（最后一个）
   const groupInputs = modal.locator('input[placeholder*="分组名称"]');
   const lastGroupInput = groupInputs.last();
-  await lastGroupInput.fill("娱乐明星");
+  await lastGroupInput.fill("英伟达GPU算力");
 
-  // 为其添加包含词
-  const includeInputs = modal.locator('input[placeholder*="芯片"]');
-  const lastIncludeInput = includeInputs.last();
-  await lastIncludeInput.fill("娱乐圈, 明星");
+  // 为其配置: includes = 英伟达, required = GPU, max_count = 1
+  const lastIncludeInput = modal.getByTestId("filter-group-includes-2");
+  await lastIncludeInput.fill("英伟达");
+
+  const lastRequiredInput = modal.getByTestId("filter-group-required-2");
+  await lastRequiredInput.fill("GPU");
+
+  const lastMaxCountInput = modal.getByTestId("filter-group-max-count-2");
+  await lastMaxCountInput.fill("1");
 
   // 点击保存配置（保存后自动关闭弹窗）
   const saveBtn = modal.getByTestId("save-filter-settings-button");
   await saveBtn.click();
   await modal.waitFor({ state: "hidden", timeout: 5000 });
 
-  // 直连后端检验已持久化到 SQLite
-  const res1 = await fetch(`http://127.0.0.1:${backendPort}/api/native-intel/filter/profile`);
-  const profile1 = await res1.json();
-  const hasStarGroup = profile1.keyword_rules.groups.some((g) => g.name === "娱乐明星");
-  assert.ok(hasStarGroup, "New group must be persisted in SQLite");
+  // 刷新页面检验持久化 (Persistence check)
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator("button", { hasText: "实时热榜" }).click();
+  const reopenedSettingsBtn = hotlistPanel.getByTestId("hotlist-filter-settings-btn");
+  await reopenedSettingsBtn.click();
+  await modal.waitFor({ state: "visible", timeout: 5000 });
 
-  // 再次切换到 "我的关注"，此时"娱乐圈八卦明星动态"也应当命中展现！
+  // 校验保存 reload 后配置仍存在
+  assert.equal(await modal.getByTestId("filter-group-includes-2").inputValue(), "英伟达");
+  assert.equal(await modal.getByTestId("filter-group-required-2").inputValue(), "GPU");
+  assert.equal(await modal.getByTestId("filter-group-max-count-2").inputValue(), "1");
+  assert.ok((await modal.getByTestId("filter-input-filter-terms").inputValue()).includes("独家广告"));
+
+  await modal.getByTestId("close-filter-settings-modal").click();
+  await modal.waitFor({ state: "hidden", timeout: 5000 });
+
+  // 切换到 "我的关注"，验证过滤语义：
   await modeInterestsBtn.click();
   await sleep(600);
-  await hotlistPanel.getByText("娱乐圈八卦明星动态", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
-  // 广告依然被排除
+  // "英伟达发布新一代GPU硬件" 满足 includes=英伟达 且 required=GPU -> 命中展现！
+  await hotlistPanel.getByText("英伟达发布新一代GPU硬件", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
+  // "英伟达高管减持股票公告" 缺少 required GPU -> 必须被过滤！
+  assert.equal(await hotlistPanel.getByText("英伟达高管减持股票公告", { exact: true }).count(), 0);
+  // "独家广告赞助大促销活动" 命中 filter_terms -> 必须被过滤！
   assert.equal(await hotlistPanel.getByText("独家广告赞助大促销活动", { exact: true }).count(), 0);
 
   // -------------------------------------------------------------------------
-  // 3. 弹窗配置：AI 智能过滤标签提取与切换
+  // 3. 弹窗配置：AI 智能过滤、真实 apply_interest_update 编排与保存并执行分类
   // -------------------------------------------------------------------------
-  await settingsBtn.click();
+  await reopenedSettingsBtn.click();
   await modal.waitFor({ state: "visible", timeout: 5000 });
 
   // 切换模式至 AI 智能过滤
   const aiModeBtn = modal.getByTestId("filter-mode-select-ai");
   await aiModeBtn.click();
 
-  // 点击提取标签
-  const extractBtn = modal.getByTestId("extract-tags-button");
-  await extractBtn.waitFor({ state: "visible", timeout: 5000 });
-  await extractBtn.click();
+  // 修改自然语言兴趣描述
+  const interestTextArea = modal.locator("textarea").first();
+  await interestTextArea.fill("重点关注芯片半导体以及大模型前沿技术");
+
+  // 点击"保存并执行 AI 分类" (必须走 apply_interest_update 真实用户路径)
+  const saveAndClassifyBtn = modal.getByTestId("save-and-classify-button");
+  await saveAndClassifyBtn.waitFor({ state: "visible", timeout: 5000 });
+  await saveAndClassifyBtn.click();
+  await modal.waitFor({ state: "hidden", timeout: 10000 });
   await sleep(600);
 
-  // 校验 mock 的提取结果出现在标签列表中
-  await modal.getByText("智能算力").waitFor({ state: "visible", timeout: 5000 });
-  await modal.getByText("芯片制造").waitFor({ state: "visible", timeout: 5000 });
-
-  // 保存配置（保存后自动关闭弹窗）
-  await modal.getByTestId("save-filter-settings-button").click();
-  await modal.waitFor({ state: "hidden", timeout: 5000 });
-
-  // 直连后端验证生效模式已更新为 ai
+  // 直连后端验证：生效模式已更新为 ai，且指纹与分类结果已真实落库
   const res2 = await fetch(`http://127.0.0.1:${backendPort}/api/native-intel/filter/profile`);
   const profile2 = await res2.json();
   assert.equal(profile2.method, "ai", "Filter method must be updated to ai in SQLite");
+  assert.ok(profile2.profile_fingerprint, "Canonical profile fingerprint must exist");
+  assert.ok(profile2.tags.length >= 2, "AI tags must be persisted");
+
+  // -------------------------------------------------------------------------
+  // 4. 我的关注模式下的 RSS 与全源支持验证
+  // -------------------------------------------------------------------------
+  const rssToggleAll = hotlistPanel.getByTestId("filter-source-type-all");
+  await rssToggleAll.waitFor({ state: "visible", timeout: 5000 });
+  await rssToggleAll.click();
+  await sleep(600);
+
+  // RSS 资讯条目应当可见，且徽章不带有虚假排名
+  await hotlistPanel.getByText("RSS简讯：半导体芯片智算中心交付", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
 
   // -------------------------------------------------------------------------
   // 4. 设置页：跨页面一致性与持久化验证

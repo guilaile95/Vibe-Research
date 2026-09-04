@@ -39,6 +39,7 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
   const [interestsText, setInterestsText] = useState("");
   const [minScore, setMinScore] = useState(0.7);
   const [globalExcludes, setGlobalExcludes] = useState<string[]>([]);
+  const [filterTerms, setFilterTerms] = useState<string[]>([]);
   const [groups, setGroups] = useState<KeywordGroup[]>([]);
   const [tags, setTags] = useState<InterestTag[]>([]);
 
@@ -55,7 +56,16 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
         setInterestsText(res.interests_text || "");
         setMinScore(res.min_score ?? 0.7);
         setGlobalExcludes(res.keyword_rules?.global_excludes || []);
-        setGroups(res.keyword_rules?.groups || []);
+        setFilterTerms(res.keyword_rules?.filter_terms || []);
+        setGroups(
+          (res.keyword_rules?.groups || []).map((g) => ({
+            name: g.name || "",
+            includes: g.includes || [],
+            required: g.required || [],
+            excludes: g.excludes || [],
+            max_count: g.max_count ?? null,
+          }))
+        );
         setTags(res.tags || []);
       })
       .catch((err) => {
@@ -74,18 +84,43 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
   const handleSave = async () => {
     setSaving(true);
     try {
-      await api.updateNativeIntelFilterProfile({
-        name: profile?.name || "默认关注",
-        method,
-        interests_text: interestsText,
-        min_score: minScore,
-        keyword_rules: {
-          global_excludes: globalExcludes,
-          groups,
-        },
-        tags,
-      });
-      toast.success("筛选偏好已保存");
+      const isInterestsChanged =
+        method === "ai" &&
+        interestsText.trim() !== (profile?.interests_text || "").trim();
+
+      if (isInterestsChanged) {
+        const llm = loadLlm();
+        if (!llm) {
+          toast.error("尚未接入 AI，请先到「接入 AI」配置。");
+          setSaving(false);
+          return;
+        }
+        const res = await api.applyNativeIntelInterestUpdate({
+          profile_id: profile?.profile_id || "default",
+          interests_text: interestsText,
+          ai_config: llm,
+        });
+        setProfile(res.profile);
+        setTags(res.profile.tags || []);
+        toast.success(
+          `兴趣偏好已更新（${res.decision === "INCREMENTAL" ? "增量更新" : "全量重算"}）`
+        );
+      } else {
+        const updated = await api.updateNativeIntelFilterProfile({
+          name: profile?.name || "默认关注",
+          method,
+          interests_text: interestsText,
+          min_score: minScore,
+          keyword_rules: {
+            global_excludes: globalExcludes,
+            filter_terms: filterTerms,
+            groups,
+          },
+          tags,
+        });
+        setProfile(updated);
+        toast.success("筛选偏好已保存");
+      }
       if (onSaved) onSaved();
       onClose();
     } catch (err) {
@@ -129,10 +164,16 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
     }
     setUpdatingTags(true);
     try {
-      const res = await api.updateNativeIntelFilterTags(tags, interestsText, llm);
-      setTags(res.new_tags || []);
+      const res = await api.applyNativeIntelInterestUpdate({
+        profile_id: profile?.profile_id || "default",
+        interests_text: interestsText,
+        ai_config: llm,
+      });
+      setProfile(res.profile);
+      setTags(res.profile.tags || []);
+      const modeText = res.decision === "INCREMENTAL" ? "增量更新" : "全量重算";
       toast.success(
-        `增量更新完成（变动率 ${Math.round(res.change_ratio * 100)}%，保留 ${res.keep.length}，新增 ${res.add.length}，移除 ${res.remove.length}）`
+        `增量更新完成（${modeText}，变动率 ${Math.round(res.change_ratio * 100)}%，保留 ${res.keep?.length ?? 0}，新增 ${res.add?.length ?? 0}，移除 ${res.remove?.length ?? 0}）`
       );
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "增量更新标签失败");
@@ -147,31 +188,51 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
       toast.error("尚未接入 AI，请先到「接入 AI」配置。");
       return;
     }
-    if (tags.length === 0) {
-      toast.error("请先提取或配置分类标签");
-      return;
-    }
     setClassifying(true);
     try {
-      const updatedProfile = await api.updateNativeIntelFilterProfile({
-        name: profile?.name || "默认关注",
-        method,
-        interests_text: interestsText,
-        min_score: minScore,
-        keyword_rules: {
-          global_excludes: globalExcludes,
-          groups,
-        },
-        tags,
-      });
-      setProfile(updatedProfile);
+      let canonicalProfile: FilterProfile;
+      const isInterestsChanged =
+        interestsText.trim() !== (profile?.interests_text || "").trim();
+
+      if (isInterestsChanged) {
+        const updateRes = await api.applyNativeIntelInterestUpdate({
+          profile_id: profile?.profile_id || "default",
+          interests_text: interestsText,
+          ai_config: llm,
+        });
+        canonicalProfile = updateRes.profile;
+        setProfile(canonicalProfile);
+        setTags(canonicalProfile.tags || []);
+      } else {
+        canonicalProfile = await api.updateNativeIntelFilterProfile({
+          name: profile?.name || "默认关注",
+          method,
+          interests_text: interestsText,
+          min_score: minScore,
+          keyword_rules: {
+            global_excludes: globalExcludes,
+            filter_terms: filterTerms,
+            groups,
+          },
+          tags,
+        });
+        setProfile(canonicalProfile);
+      }
+
+      if (!canonicalProfile?.tags || canonicalProfile.tags.length === 0) {
+        toast.error("请先提取或配置分类标签");
+        setClassifying(false);
+        return;
+      }
+
       const res = await api.classifyNativeIntelItems({
-        profile_id: updatedProfile.profile_id || "default",
+        profile_id: canonicalProfile.profile_id || "default",
         limit: 100,
         ai_config: llm,
       });
       toast.success(`AI 批量分类完成：新分类 ${res.newly_classified ?? 0} 条，共计 ${res.classified ?? 0} 条`);
       if (onSaved) onSaved();
+      onClose();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "保存并执行分类失败");
     } finally {
@@ -180,7 +241,7 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
   };
 
   const addGroup = () => {
-    setGroups([...groups, { name: "新分组", includes: [""], excludes: [] }]);
+    setGroups([...groups, { name: "新分组", includes: [""], required: [], excludes: [], max_count: null }]);
   };
 
   const updateGroupName = (idx: number, name: string) => {
@@ -198,12 +259,29 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
     setGroups(updated);
   };
 
+  const updateGroupRequired = (idx: number, text: string) => {
+    const updated = [...groups];
+    updated[idx].required = text
+      .split(/[,，\n]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    setGroups(updated);
+  };
+
   const updateGroupExcludes = (idx: number, text: string) => {
     const updated = [...groups];
     updated[idx].excludes = text
       .split(/[,，\n]/)
       .map((s) => s.trim())
       .filter(Boolean);
+    setGroups(updated);
+  };
+
+  const updateGroupMaxCount = (idx: number, val: string) => {
+    const updated = [...groups];
+    const trimmed = val.trim();
+    const num = trimmed === "" ? null : parseInt(trimmed, 10);
+    updated[idx].max_count = num != null && !isNaN(num) ? num : null;
     setGroups(updated);
   };
 
@@ -299,24 +377,48 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
               {/* 关键词模式配置 */}
               {method === "keyword" && (
                 <div className="space-y-4 rounded-lg border border-border/60 bg-background/40 p-4">
-                  <div>
-                    <label className="block text-xs font-medium text-foreground mb-1">
-                      全局排除词（命中即排除，最高优先级）
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="逗号分隔，如：震惊, /赌博|博彩/, 辟谣"
-                      value={globalExcludes.join(", ")}
-                      onChange={(e) =>
-                        setGlobalExcludes(
-                          e.target.value
-                            .split(/[,，]/)
-                            .map((s) => s.trim())
-                            .filter(Boolean)
-                        )
-                      }
-                      className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none font-mono"
-                    />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-foreground mb-1">
+                        全局排除词（[GLOBAL_FILTER]，命中即排除）
+                      </label>
+                      <input
+                        type="text"
+                        data-testid="filter-input-global-excludes"
+                        placeholder="逗号分隔，如：震惊, /赌博|博彩/, 辟谣"
+                        value={globalExcludes.join(", ")}
+                        onChange={(e) =>
+                          setGlobalExcludes(
+                            e.target.value
+                              .split(/[,，]/)
+                              .map((s) => s.trim())
+                              .filter(Boolean)
+                          )
+                        }
+                        className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-foreground mb-1">
+                        全局过滤词（!过滤词 filter_terms，命中即排除）
+                      </label>
+                      <input
+                        type="text"
+                        data-testid="filter-input-filter-terms"
+                        placeholder="逗号分隔，如：广告, 推广, /辟谣/"
+                        value={filterTerms.join(", ")}
+                        onChange={(e) =>
+                          setFilterTerms(
+                            e.target.value
+                              .split(/[,，]/)
+                              .map((s) => s.trim())
+                              .filter(Boolean)
+                          )
+                        }
+                        className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none font-mono"
+                      />
+                    </div>
                   </div>
 
                   <div className="space-y-3">
@@ -340,7 +442,7 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
                         <div className="flex items-center justify-between gap-2">
                           <input
                             type="text"
-                            placeholder="分组名称，如：机器人与具身智能"
+                            placeholder="分组名称，如：半导体与算力"
                             value={grp.name}
                             onChange={(e) => updateGroupName(idx, e.target.value)}
                             className="flex-1 font-semibold text-foreground bg-transparent border-b border-border/60 pb-0.5 focus:border-primary focus:outline-none"
@@ -355,26 +457,58 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
                           </button>
                         </div>
 
-                        <div>
-                          <span className="text-[11px] text-muted-foreground">包含词 (满足任一匹配):</span>
-                          <input
-                            type="text"
-                            placeholder="如：芯片, 半导体, 光刻机, /gpu|npu/"
-                            value={grp.includes.join(", ")}
-                            onChange={(e) => updateGroupIncludes(idx, e.target.value)}
-                            className="mt-0.5 w-full rounded border border-border/60 bg-background px-2 py-1 text-xs font-mono text-foreground focus:border-primary focus:outline-none"
-                          />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-[11px] text-muted-foreground">普通包含词 (满足任一 OR):</span>
+                            <input
+                              type="text"
+                              data-testid={`filter-group-includes-${idx}`}
+                              placeholder="如：芯片, 半导体, /gpu|npu/"
+                              value={grp.includes.join(", ")}
+                              onChange={(e) => updateGroupIncludes(idx, e.target.value)}
+                              className="mt-0.5 w-full rounded border border-border/60 bg-background px-2 py-1 text-xs font-mono text-foreground focus:border-primary focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <span className="text-[11px] text-muted-foreground">必须包含词 (+必须词 AND，缺一不可):</span>
+                            <input
+                              type="text"
+                              data-testid={`filter-group-required-${idx}`}
+                              placeholder="如：GPU, 算力"
+                              value={grp.required?.join(", ") || ""}
+                              onChange={(e) => updateGroupRequired(idx, e.target.value)}
+                              className="mt-0.5 w-full rounded border border-border/60 bg-background px-2 py-1 text-xs font-mono text-foreground focus:border-primary focus:outline-none"
+                            />
+                          </div>
                         </div>
 
-                        <div>
-                          <span className="text-[11px] text-muted-foreground">分组专属排除词:</span>
-                          <input
-                            type="text"
-                            placeholder="如：玩具机器人"
-                            value={grp.excludes.join(", ")}
-                            onChange={(e) => updateGroupExcludes(idx, e.target.value)}
-                            className="mt-0.5 w-full rounded border border-border/60 bg-background px-2 py-1 text-xs font-mono text-foreground focus:border-primary focus:outline-none"
-                          />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-[11px] text-muted-foreground">分组专属排除词:</span>
+                            <input
+                              type="text"
+                              data-testid={`filter-group-excludes-${idx}`}
+                              placeholder="如：玩具芯片"
+                              value={grp.excludes.join(", ")}
+                              onChange={(e) => updateGroupExcludes(idx, e.target.value)}
+                              className="mt-0.5 w-full rounded border border-border/60 bg-background px-2 py-1 text-xs font-mono text-foreground focus:border-primary focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <span className="text-[11px] text-muted-foreground">该组最大条数上限 (@N，留空不限):</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={100}
+                              data-testid={`filter-group-max-count-${idx}`}
+                              placeholder="留空不限，如：5"
+                              value={grp.max_count ?? ""}
+                              onChange={(e) => updateGroupMaxCount(idx, e.target.value)}
+                              className="mt-0.5 w-full rounded border border-border/60 bg-background px-2 py-1 text-xs font-mono text-foreground focus:border-primary focus:outline-none"
+                            />
+                          </div>
                         </div>
                       </div>
                     ))}

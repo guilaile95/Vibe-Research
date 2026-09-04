@@ -903,3 +903,315 @@ def test_router_apply_interest_update_and_filter_items(client: TestClient):
     data = r.json()
     assert "items" in data
     assert "filter_meta" in data
+
+
+# ---------------------------------------------------------------------------
+# Independent Gate Follow-up Closure Tests (A - K)
+# ---------------------------------------------------------------------------
+
+def test_apply_interest_update_cfg_propagation_and_no_fallback(test_db: str):
+    """验证 apply_interest_update 严格传递 effective_cfg，无 cfg 时抛出 AI_CONFIG_REQUIRED，且不修改 provider。"""
+    # 1. 无 cfg 且无 runner -> AI_CONFIG_REQUIRED
+    with pytest.raises(ValueError, match="AI_CONFIG_REQUIRED"):
+        service.apply_interest_update(
+            profile_id="default",
+            interests_text="关注机器人与半导体",
+            path=test_db,
+        )
+
+    # 2. 传递 cli-codex cfg -> runner 真实收到该 cfg
+    received_cfgs = []
+
+    def mock_runner(cfg, messages):
+        received_cfgs.append(cfg)
+        return '{"tags": [{"id": 1, "tag": "芯片", "description": "半导体"}]}'
+
+    res = service.apply_interest_update(
+        profile_id="default",
+        interests_text="关注芯片领域",
+        cfg={"provider": "cli-codex", "model": "gpt-5-codex"},
+        model_runner=mock_runner,
+        path=test_db,
+    )
+    assert len(received_cfgs) > 0
+    assert received_cfgs[0]["provider"] == "cli-codex"
+    assert received_cfgs[0]["model"] == "gpt-5-codex"
+
+    # 3. 传递 openai-compatible cfg -> 必须保留，绝不转为 codex
+    received_cfgs.clear()
+    res2 = service.apply_interest_update(
+        profile_id="default",
+        interests_text="关注芯片与光刻机",
+        cfg={"provider": "openai-compatible", "baseURL": "https://api.openai.com/v1", "apiKey": "sk-mock", "model": "gpt-4o"},
+        model_runner=mock_runner,
+        path=test_db,
+    )
+    assert len(received_cfgs) > 0
+    assert received_cfgs[0]["provider"] == "openai-compatible"
+    assert received_cfgs[0]["baseURL"] == "https://api.openai.com/v1"
+    assert received_cfgs[0]["model"] == "gpt-4o"
+
+
+def test_reclassify_threshold_router_and_service_truth(client: TestClient, test_db: str):
+    """验证 router 与 service 的 threshold 真实流转：未传使用 profile 默认值 (0.6)，显式 0.0 保留，非法输入报 422。"""
+    # 1. 确保 profile 拥有 0.6 threshold
+    prof = service.get_filter_profile("default", test_db)
+    assert prof["reclassify_threshold"] == 0.6
+
+    # 先初始化 profile 拥有初始标签 ["芯片"]
+    service.update_filter_profile(
+        "default",
+        {
+            "interests_text": "关注芯片",
+            "tags": [{"id": 1, "tag": "芯片", "description": "半导体"}],
+            "reclassify_threshold": 0.6,
+            "method": "ai",
+        },
+        test_db,
+    )
+
+    orig_update = filter_engine.update_interest_tags
+    orig_extract = filter_engine.extract_interest_tags
+    try:
+        filter_engine.update_interest_tags = lambda old_tags, text, cfg=None, model_runner=None: {
+            "keep": ["芯片"],
+            "add": [{"id": 2, "tag": "具身智能", "description": "机器人"}],
+            "remove": [],
+            "new_tags": [{"id": 1, "tag": "芯片", "description": "半导体"}, {"id": 2, "tag": "具身智能", "description": "机器人"}],
+            "change_ratio": 0.55,
+        }
+
+        filter_engine.extract_interest_tags = lambda text, cfg=None, model_runner=None: [
+            {"id": 1, "tag": "全新提取标签", "description": "fresh"}
+        ]
+
+        # A. Router 不传 threshold -> 应当读取 profile 的 0.6。因为 change_ratio 0.55 < 0.6，必须走 INCREMENTAL
+        r = client.post(
+            "/api/native-intel/filter/apply-interest-update",
+            json={
+                "profile_id": "default",
+                "interests_text": "关注芯片与具身智能",
+                "ai_config": {"provider": "cli-codex", "model": "gpt-5-codex"},
+            },
+        )
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["decision"] == "INCREMENTAL"
+        assert data["change_ratio"] == 0.55
+
+        # B. Router 显式传 0.5 -> 0.55 >= 0.5，走 FULL
+        r2 = client.post(
+            "/api/native-intel/filter/apply-interest-update",
+            json={
+                "profile_id": "default",
+                "interests_text": "关注芯片与具身智能",
+                "ai_config": {"provider": "cli-codex", "model": "gpt-5-codex"},
+                "full_reclassify_threshold": 0.5,
+            },
+        )
+        assert r2.status_code == 200, r2.text
+        data2 = r2.json()
+        assert data2["decision"] == "FULL"
+        assert data2["profile"]["tags"][0]["tag"] == "全新提取标签"
+
+        # C. Router 显式传 0.0 -> 0.0 保留并生效 (0.55 >= 0.0 -> FULL)
+        r3 = client.post(
+            "/api/native-intel/filter/apply-interest-update",
+            json={
+                "profile_id": "default",
+                "interests_text": "关注芯片与具身智能",
+                "ai_config": {"provider": "cli-codex", "model": "gpt-5-codex"},
+                "full_reclassify_threshold": 0.0,
+            },
+        )
+        assert r3.status_code == 200, r3.text
+        assert r3.json()["decision"] == "FULL"
+
+        # D. Router 传入非法 threshold -> 422 BAD_ARGUMENT
+        r4 = client.post(
+            "/api/native-intel/filter/apply-interest-update",
+            json={
+                "profile_id": "default",
+                "interests_text": "关注芯片与具身智能",
+                "ai_config": {"provider": "cli-codex", "model": "gpt-5-codex"},
+                "full_reclassify_threshold": "not-a-number",
+            },
+        )
+        assert r4.status_code == 422
+        assert r4.json()["detail"]["status"] == "BAD_ARGUMENT"
+
+        r5 = client.post(
+            "/api/native-intel/filter/apply-interest-update",
+            json={
+                "profile_id": "default",
+                "interests_text": "关注芯片与具身智能",
+                "ai_config": {"provider": "cli-codex", "model": "gpt-5-codex"},
+                "full_reclassify_threshold": 1.5,
+            },
+        )
+        assert r5.status_code == 422
+        assert r5.json()["detail"]["status"] == "BAD_ARGUMENT"
+    finally:
+        filter_engine.update_interest_tags = orig_update
+        filter_engine.extract_interest_tags = orig_extract
+
+
+def test_full_branch_fresh_extract_and_failure_rollback(test_db: str):
+    """验证 FULL 分支必须执行 fresh extract 且用 fresh 标签创建 profile，若 fresh extract 失败旧状态完整保留 (Fail-Closed)。"""
+    # 1. 设置初始 profile
+    initial_tags = [{"id": 1, "tag": "旧半导体", "description": "芯片"}]
+    initial_prof = service.update_filter_profile(
+        "default",
+        {
+            "interests_text": "旧关注半导体",
+            "tags": initial_tags,
+            "reclassify_threshold": 0.5,
+            "method": "ai",
+        },
+        test_db,
+    )
+    initial_fp = initial_prof["profile_fingerprint"]
+
+    # 模拟 update_tags 返回临时 new_tags，change_ratio = 0.8 >= 0.5
+    orig_update = filter_engine.update_interest_tags
+    orig_extract = filter_engine.extract_interest_tags
+    try:
+        filter_engine.update_interest_tags = lambda old_tags, text, cfg=None, model_runner=None: {
+            "keep": [],
+            "add": [{"id": 2, "tag": "错误临时候选", "description": "temp"}],
+            "remove": ["旧半导体"],
+            "new_tags": [{"id": 2, "tag": "错误临时候选", "description": "temp"}],
+            "change_ratio": 0.8,
+        }
+
+        # Fresh extract 返回真正标签 ["机器人", "液冷"]
+        filter_engine.extract_interest_tags = lambda text, cfg=None, model_runner=None: [
+            {"id": 10, "tag": "机器人", "description": "减速器"},
+            {"id": 11, "tag": "液冷", "description": "数据中心"},
+        ]
+
+        res = service.apply_interest_update(
+            profile_id="default",
+            interests_text="关注机器人与数据中心液冷",
+            cfg={"provider": "cli-codex", "model": "gpt-5-codex"},
+            path=test_db,
+        )
+        assert res["decision"] == "FULL"
+        # 验证最终 profile 来自 fresh extract，而不是 update_tags 的 "错误临时候选"
+        prof_after = service.get_filter_profile("default", test_db)
+        tag_names = [t["tag"] for t in prof_after["tags"]]
+        assert tag_names == ["机器人", "液冷"]
+        assert "错误临时候选" not in tag_names
+        new_fp = prof_after["profile_fingerprint"]
+        assert new_fp != initial_fp
+
+        # 2. 测试 Fail Closed：若 fresh extract 抛出异常，旧 profile 必须完全不被修改
+        def fail_extract(text, cfg=None, model_runner=None):
+            raise RuntimeError("Fresh extraction service timed out")
+
+        filter_engine.extract_interest_tags = fail_extract
+
+        with pytest.raises(RuntimeError, match="Fresh extraction service timed out"):
+            service.apply_interest_update(
+                profile_id="default",
+                interests_text="尝试改变为航空航天",
+                cfg={"provider": "cli-codex", "model": "gpt-5-codex"},
+                path=test_db,
+            )
+
+        # 检查数据库：profile 必须保持上一步的 ["机器人", "液冷"]，指纹与文本未被篡改
+        prof_unmodified = service.get_filter_profile("default", test_db)
+        assert [t["tag"] for t in prof_unmodified["tags"]] == ["机器人", "液冷"]
+        assert prof_unmodified["profile_fingerprint"] == new_fp
+        assert prof_unmodified["interests_text"] == "关注机器人与数据中心液冷"
+    finally:
+        filter_engine.update_interest_tags = orig_update
+        filter_engine.extract_interest_tags = orig_extract
+
+
+def test_keyword_required_filter_terms_and_max_count_persistence_and_filtering(test_db: str):
+    """验证 required、filter_terms、max_count 的持久化与完整过滤语义。"""
+    now = store.utc_now_iso()
+    with store._connect(test_db) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO intel_sources (source_id, name, hint, url, source_type, origin, enabled, has_real_rank, updated_at)
+            VALUES ('cls-hot', '财联社热门', 'macro', 'https://cls.cn', 'hotlist', 'system', 1, 1, ?)
+            """,
+            (now,),
+        )
+        # item 1: 有 GPU 和 英伟达 (符合 required 和 includes)
+        conn.execute(
+            """
+            INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, summary, source_id, hint, published_at, published_ts, first_seen_at, last_seen_at, observation_count, created_at)
+            VALUES ('item-1', 'u1', 'u1', '英伟达发布新一代GPU架构', 'k1', '算力突破', 'cls-hot', 'macro', NULL, 0, ?, ?, 1, ?)
+            """,
+            (now, now, now),
+        )
+        # item 2: 同样符合该组 (用于测试 max_count=1)
+        conn.execute(
+            """
+            INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, summary, source_id, hint, published_at, published_ts, first_seen_at, last_seen_at, observation_count, created_at)
+            VALUES ('item-2', 'u2', 'u2', '英伟达GPU供应链出货翻倍', 'k2', '产业链爆单', 'cls-hot', 'macro', NULL, 0, ?, ?, 1, ?)
+            """,
+            (now, now, now),
+        )
+        # item 3: 只有英伟达，没有 GPU (缺少 required，应被拒绝)
+        conn.execute(
+            """
+            INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, summary, source_id, hint, published_at, published_ts, first_seen_at, last_seen_at, observation_count, created_at)
+            VALUES ('item-3', 'u3', 'u3', '英伟达股价小幅波动', 'k3', '市场评论', 'cls-hot', 'macro', NULL, 0, ?, ?, 1, ?)
+            """,
+            (now, now, now),
+        )
+        # item 4: 命中了 filter_terms (如广告推广，应被拒绝)
+        conn.execute(
+            """
+            INSERT INTO intel_items (item_key, canonical_url, url, title, title_key, summary, source_id, hint, published_at, published_ts, first_seen_at, last_seen_at, observation_count, created_at)
+            VALUES ('item-4', 'u4', 'u4', '商业推广：英伟达GPU算力租借优惠', 'k4', '特惠', 'cls-hot', 'macro', NULL, 0, ?, ?, 1, ?)
+            """,
+            (now, now, now),
+        )
+
+    rules_payload = {
+        "global_excludes": ["震惊"],
+        "filter_terms": ["商业推广", "广告"],
+        "groups": [
+            {
+                "name": "英伟达算力",
+                "includes": ["英伟达"],
+                "required": ["GPU"],
+                "excludes": ["玩具"],
+                "max_count": 1,
+            }
+        ],
+    }
+
+    updated_prof = service.update_filter_profile(
+        "default",
+        {
+            "method": "keyword",
+            "keyword_rules": rules_payload,
+        },
+        test_db,
+    )
+
+    # 1. 验证持久化
+    reloaded_prof = service.get_filter_profile("default", test_db)
+    kw_rules = reloaded_prof["keyword_rules"]
+    assert kw_rules["filter_terms"] == ["商业推广", "广告"]
+    group0 = kw_rules["groups"][0]
+    assert group0["name"] == "英伟达算力"
+    assert group0["includes"] == ["英伟达"]
+    assert group0["required"] == ["GPU"]
+    assert group0["max_count"] == 1
+
+    # 2. 验证过滤语义：
+    # item 4 命中 filter_terms -> 排除
+    # item 3 缺少 required("GPU") -> 排除
+    # item 1 和 item 2 都满足，但 max_count=1 -> 只有 1 条被采纳
+    res = service.list_filtered_items(profile_id="default", source_type="all", mode="my_interests", path=test_db)
+    assert res["status"] == "normal"
+    assert len(res["items"]) == 1
+    assert "英伟达" in res["items"][0]["title"]
+    assert "GPU" in res["items"][0]["title"]

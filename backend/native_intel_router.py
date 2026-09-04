@@ -409,7 +409,19 @@ def post_apply_interest_update(
         )
     profile_id = str(body.get("profile_id") or "default")
     cfg = body.get("ai_config") or body.get("cfg")
-    threshold = float(body.get("full_reclassify_threshold") or 0.5)
+
+    threshold: float | None = None
+    if "full_reclassify_threshold" in body and body["full_reclassify_threshold"] is not None:
+        try:
+            threshold = float(body["full_reclassify_threshold"])
+            if not (0.0 <= threshold <= 1.0):
+                raise ValueError("full_reclassify_threshold 必须在 0.0 到 1.0 之间")
+        except (ValueError, TypeError) as val_err:
+            raise HTTPException(
+                status_code=422,
+                detail={"status": "BAD_ARGUMENT", "error": f"非法的 full_reclassify_threshold: {val_err}"},
+            ) from val_err
+
     try:
         return service.apply_interest_update(
             profile_id=profile_id,

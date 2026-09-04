@@ -3025,11 +3025,14 @@ export type FilterMethod = "keyword" | "ai";
 export interface KeywordGroup {
   name: string;
   includes: string[];
+  required: string[];
   excludes: string[];
+  max_count?: number | null;
 }
 
 export interface KeywordRules {
   global_excludes: string[];
+  filter_terms?: string[];
   groups: KeywordGroup[];
 }
 
