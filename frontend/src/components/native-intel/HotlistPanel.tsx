@@ -8,6 +8,8 @@ import {
   RefreshCw,
   TrendingUp,
   X,
+  SlidersHorizontal,
+  Sparkles,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
@@ -17,25 +19,34 @@ import {
   type NativeIntelHotlistItem,
   type NativeIntelHotlistSource,
   type NativeIntelItemRankHistoryResponse,
+  type FilterMeta,
 } from "@/lib/api";
 import {
   filterHotlistItems,
   formatRankDelta,
   formatStateBadge,
+  formatFilterBadge,
   type HotlistFilter,
 } from "@/lib/hotlistView";
 import { formatShanghaiTime } from "@/lib/intelDigestView";
 import { cn } from "@/lib/utils";
+import { FilterSettingsModal } from "./FilterSettingsModal";
 
 export function HotlistPanel() {
   const [items, setItems] = useState<NativeIntelHotlistItem[]>([]);
   const [sources, setSources] = useState<NativeIntelHotlistSource[]>([]);
   const [boardStatus, setBoardStatus] = useState<string>("normal");
+  const [filterMeta, setFilterMeta] = useState<FilterMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 一级模式：全部热榜 vs 我的关注
+  const [interestMode, setInterestMode] = useState<"all" | "my_interests">("all");
+  // 二级筛选：全部 / 升温 / 新上榜 / 来源
   const [filter, setFilter] = useState<HotlistFilter>("all");
 
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeItemId, setActiveItemId] = useState<number | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyData, setHistoryData] = useState<NativeIntelItemRankHistoryResponse | null>(null);
@@ -43,16 +54,17 @@ export function HotlistPanel() {
   const loadData = useCallback(async () => {
     try {
       setError(null);
-      const res = await api.nativeIntelHotlist(100);
+      const res = await api.nativeIntelHotlist(100, interestMode);
       setItems(res.items || []);
       setSources(res.sources || []);
       setBoardStatus(res.status || "normal");
+      setFilterMeta(res.filter_meta || null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "读取热榜失败");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [interestMode]);
 
   useEffect(() => {
     void loadData();
@@ -166,7 +178,73 @@ export function HotlistPanel() {
         )}
       </div>
 
-      {/* 筛选选项 */}
+      {/* 模式选择与筛选控制栏 */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* 一级模式：全部热榜 vs 我的关注 */}
+        <div className="flex items-center rounded-lg border border-border bg-background p-0.5">
+          <button
+            type="button"
+            data-testid="hotlist-mode-all"
+            onClick={() => setInterestMode("all")}
+            className={cn(
+              "rounded-md px-3 py-1 text-xs font-medium transition-colors",
+              interestMode === "all"
+                ? "bg-primary text-primary-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            全部热榜
+          </button>
+          <button
+            type="button"
+            data-testid="hotlist-mode-interests"
+            onClick={() => setInterestMode("my_interests")}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-colors",
+              interestMode === "my_interests"
+                ? "bg-primary text-primary-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Sparkles className="h-3 w-3 text-amber-400" />
+            我的关注
+          </button>
+        </div>
+
+        {/* 筛选设置按钮 */}
+        <button
+          type="button"
+          data-testid="hotlist-filter-settings-btn"
+          onClick={() => setSettingsOpen(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          筛选设置
+        </button>
+      </div>
+
+      {/* 当处于“我的关注”模式时的状态说明条 */}
+      {interestMode === "my_interests" && (
+        <div
+          data-testid="hotlist-filter-status-pill"
+          className="flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary"
+        >
+          <div className="flex items-center gap-1.5">
+            <Sparkles className="h-3.5 w-3.5" />
+            <span>
+              当前过滤规则：
+              {filterMeta?.method === "ai"
+                ? "AI 智能语义匹配"
+                : "本地关键词 / 正则匹配"}
+            </span>
+          </div>
+          <span className="font-mono font-semibold">
+            匹配命中 {visibleItems.length} 条
+          </span>
+        </div>
+      )}
+
+      {/* 二级筛选选项 */}
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
@@ -174,11 +252,11 @@ export function HotlistPanel() {
           className={cn(
             "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
             filter === "all"
-              ? "bg-primary text-primary-foreground shadow"
+              ? "bg-primary text-primary-foreground shadow-xs"
               : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
           )}
         >
-          全部热榜
+          全部
         </button>
         <button
           type="button"
@@ -186,7 +264,7 @@ export function HotlistPanel() {
           className={cn(
             "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
             filter === "rising"
-              ? "bg-primary text-primary-foreground shadow"
+              ? "bg-primary text-primary-foreground shadow-xs"
               : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
           )}
         >
@@ -198,7 +276,7 @@ export function HotlistPanel() {
           className={cn(
             "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
             filter === "new"
-              ? "bg-primary text-primary-foreground shadow"
+              ? "bg-primary text-primary-foreground shadow-xs"
               : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
           )}
         >
@@ -247,9 +325,28 @@ export function HotlistPanel() {
             正在读取热榜与排名轨迹…
           </div>
         ) : visibleItems.length === 0 ? (
-          <div className="p-12 text-center text-sm text-muted-foreground">
-            暂无匹配的热榜数据。
-          </div>
+          interestMode === "my_interests" ? (
+            <div
+              className="p-12 text-center text-sm space-y-3"
+              data-testid="hotlist-empty-interests"
+            >
+              <p className="text-muted-foreground">
+                当前个人关注规则未匹配到任何热榜条目。
+              </p>
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs text-primary hover:bg-muted font-medium transition-colors"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                调整兴趣与关键词规则
+              </button>
+            </div>
+          ) : (
+            <div className="p-12 text-center text-sm text-muted-foreground">
+              暂无匹配的热榜数据。
+            </div>
+          )
         ) : (
           <div className="divide-y divide-border/30">
             {visibleItems.map((item) => {
@@ -260,6 +357,7 @@ export function HotlistPanel() {
                 item.rank,
               );
               const badge = formatStateBadge(item.current_state);
+              const filterBadge = formatFilterBadge(item.filter_match);
               return (
                 <div
                   key={item.item_id}
@@ -293,6 +391,21 @@ export function HotlistPanel() {
                           <span className="truncate">{item.title}</span>
                           <ExternalLink className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-70" />
                         </a>
+
+                        {/* 兴趣标签 / 关键词分组徽章 */}
+                        {filterBadge &&
+                          filterBadge.labels.map((lbl, i) => (
+                            <span
+                              key={i}
+                              data-testid="hotlist-item-filter-badge"
+                              className={cn(
+                                "rounded px-1.5 py-0.2 text-[10px] font-medium border",
+                                filterBadge.className,
+                              )}
+                            >
+                              {lbl}
+                            </span>
+                          ))}
                       </div>
 
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
@@ -348,7 +461,7 @@ export function HotlistPanel() {
                     <div className="flex items-center gap-1.5 text-xs font-mono">
                       {delta.type === "up" && (
                         <span className="flex items-center text-emerald-500 font-medium">
-                          <TrendingUp className="mr-0.5 h-3.5 w-3.5" />
+                          <TrendingUp className="mr-0.5 h-3 w-3" />
                           {delta.text}
                         </span>
                       )}
@@ -356,16 +469,19 @@ export function HotlistPanel() {
                         <span className="text-rose-500 font-medium">{delta.text}</span>
                       )}
                       {delta.type === "new" && (
-                        <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[10px] text-amber-500 font-medium">
+                        <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary font-medium">
                           新上榜
                         </span>
                       )}
-                      {delta.type === "flat" && <span className="text-muted-foreground">-</span>}
+                      {delta.type === "flat" && (
+                        <span className="text-muted-foreground">-</span>
+                      )}
                     </div>
 
                     <span
+                      data-testid={`hotlist-state-${item.item_id}`}
                       className={cn(
-                        "rounded border px-1.5 py-0.5 text-[10px] font-medium",
+                        "rounded px-2 py-0.5 text-xs font-medium border",
                         badge.className,
                       )}
                     >
@@ -375,7 +491,7 @@ export function HotlistPanel() {
                     <button
                       type="button"
                       onClick={() => void handleShowHistory(item.item_id)}
-                      className="inline-flex items-center gap-1 rounded border border-border/70 bg-background/50 px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                      className="inline-flex items-center gap-1 rounded-md border border-border/80 bg-background/50 px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
                     >
                       <History className="h-3 w-3" />
                       轨迹
@@ -387,6 +503,13 @@ export function HotlistPanel() {
           </div>
         )}
       </div>
+
+      {/* 筛选设置弹窗 */}
+      <FilterSettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={() => void loadData()}
+      />
 
       {/* 单条目轨迹抽屉/对话框 */}
       {activeItemId !== null && (

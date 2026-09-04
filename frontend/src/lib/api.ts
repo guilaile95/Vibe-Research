@@ -46,6 +46,8 @@ import type {
   NativeIntelSourceRecord,
   CreateUserSourceInput,
   UpdateSourceInput,
+  FilterProfile,
+  InterestTag,
   PortfolioData,
   PositionBootstrapInput,
   PositionBootstrapPreview,
@@ -617,9 +619,47 @@ export const api = {
       "/native-intel/watchlist-context",
       signal ? { signal } : undefined,
     ),
-  nativeIntelHotlist: (limit = 60, signal?: AbortSignal) =>
+  nativeIntelHotlist: (limit = 60, mode: "all" | "my_interests" = "all", signal?: AbortSignal) =>
     get<NativeIntelHotlistBoardResponse>(
-      `/native-intel/hotlist?limit=${limit}`,
+      `/native-intel/hotlist?limit=${limit}&mode=${mode}`,
+      { unwrapData: false, ...(signal ? { signal } : {}) },
+    ),
+  nativeIntelFilterProfile: (profileId = "default", signal?: AbortSignal) =>
+    get<FilterProfile>(
+      `/native-intel/filter/profile?profile_id=${encodeURIComponent(profileId)}`,
+      { unwrapData: false, ...(signal ? { signal } : {}) },
+    ),
+  updateNativeIntelFilterProfile: (payload: Partial<FilterProfile>, profileId = "default") =>
+    request<FilterProfile>(
+      `/native-intel/filter/profile?profile_id=${encodeURIComponent(profileId)}`,
+      "PUT",
+      payload,
+      { unwrapData: false },
+    ),
+  extractNativeIntelFilterTags: (interestsText: string, aiConfig?: Record<string, any>) =>
+    request<{ tags: InterestTag[] }>(
+      "/native-intel/filter/extract-tags",
+      "POST",
+      { interests_text: interestsText, ai_config: aiConfig },
+      { unwrapData: false },
+    ),
+  updateNativeIntelFilterTags: (oldTags: InterestTag[], interestsText: string, aiConfig?: Record<string, any>) =>
+    request<{ keep: any[]; add: any[]; remove: string[]; change_ratio: number; new_tags: InterestTag[] }>(
+      "/native-intel/filter/update-tags",
+      "POST",
+      { old_tags: oldTags, interests_text: interestsText, ai_config: aiConfig },
+      { unwrapData: false },
+    ),
+  classifyNativeIntelItems: (payload?: { profile_id?: string; limit?: number; item_ids?: number[]; ai_config?: Record<string, any> }) =>
+    request<Record<string, any>>(
+      "/native-intel/filter/classify",
+      "POST",
+      payload || {},
+      { unwrapData: false },
+    ),
+  nativeIntelFilterStatus: (profileId = "default", signal?: AbortSignal) =>
+    get<Record<string, any>>(
+      `/native-intel/filter/status?profile_id=${encodeURIComponent(profileId)}`,
       { unwrapData: false, ...(signal ? { signal } : {}) },
     ),
   nativeIntelItemRankHistory: (itemId: number, signal?: AbortSignal) =>

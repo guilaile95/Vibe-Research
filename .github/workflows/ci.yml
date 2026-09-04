@@ -306,6 +306,12 @@ jobs:
           PYTHON: python
         run: npm run test:e2e:hotlist-parity
 
+      - name: Run Interest filter E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:interest-filter
+
       - name: Run Today market context E2E
         working-directory: frontend
         run: npm run test:e2e:today-market-context

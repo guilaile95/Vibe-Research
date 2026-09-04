@@ -2992,6 +2992,7 @@ export interface NativeIntelHotlistItem {
     term_kind: string;
     security_code?: string | null;
   }>;
+  filter_match?: FilterMatch | null;
 }
 
 export interface NativeIntelHotlistSource {
@@ -3012,6 +3013,59 @@ export interface NativeIntelHotlistBoardResponse {
   generated_at?: string;
   sources: NativeIntelHotlistSource[];
   items: NativeIntelHotlistItem[];
+  filter_meta?: FilterMeta | null;
+}
+
+// ---------------------------------------------------------------------------
+// TREND-PARITY Wave 2: Personal Interest & Keyword Filtering
+// ---------------------------------------------------------------------------
+
+export type FilterMethod = "keyword" | "ai";
+
+export interface KeywordGroup {
+  name: string;
+  includes: string[];
+  excludes: string[];
+}
+
+export interface KeywordRules {
+  global_excludes: string[];
+  groups: KeywordGroup[];
+}
+
+export interface InterestTag {
+  id: number;
+  tag: string;
+  description: string;
+}
+
+export interface FilterProfile {
+  profile_id: string;
+  name: string;
+  method: FilterMethod;
+  interests_text: string;
+  min_score: number;
+  keyword_rules: KeywordRules;
+  tags: InterestTag[];
+  profile_fingerprint: string;
+  reclassify_threshold: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type FilterMatch =
+  | { method: "keyword"; matched_groups: string[] }
+  | { method: "ai"; primary_tag: string; relevance_score: number };
+
+export interface FilterMeta {
+  profile_id?: string;
+  profile_name?: string;
+  method?: FilterMethod;
+  mode?: "all" | "my_interests";
+  profile_fingerprint?: string;
+  total_evaluated?: number;
+  matched_count?: number;
+  error?: string;
 }
 
 export interface NativeIntelRankObservation {

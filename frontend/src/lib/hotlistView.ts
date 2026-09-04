@@ -66,3 +66,32 @@ export function formatStateBadge(state: NativeIntelHotlistItem["current_state"])
       return { label: "无排名", className: "bg-muted text-muted-foreground border-border" };
   }
 }
+
+export interface FormattedFilterBadge {
+  type: "keyword" | "ai";
+  labels: string[];
+  className: string;
+}
+
+export function formatFilterBadge(
+  match?: NativeIntelHotlistItem["filter_match"],
+): FormattedFilterBadge | null {
+  if (!match) return null;
+  if (match.method === "keyword") {
+    if (!match.matched_groups || match.matched_groups.length === 0) return null;
+    return {
+      type: "keyword",
+      labels: match.matched_groups,
+      className: "bg-cyan-500/15 text-cyan-400 border-cyan-500/30",
+    };
+  }
+  if (match.method === "ai") {
+    const pct = Math.round((match.relevance_score ?? 0) * 100);
+    return {
+      type: "ai",
+      labels: [`${match.primary_tag} (${pct}%)`],
+      className: "bg-purple-500/15 text-purple-400 border-purple-500/30",
+    };
+  }
+  return null;
+}

@@ -20,8 +20,8 @@
 ## 全量对齐波次总览（Full Parity Roadmap）
 
 - **Wave 1（已合并验证）**：原生热榜基础设施（热榜抓取、双榜支持、真实排名历史、掉榜与失败隔离语义、资讯源管理、数据时效 STALE 真实性、HTTP 状态 API、真浏览器 E2E）
-- **Wave 1B（当前交付）**：剩余 9 个热榜平台源覆盖对齐（扩展今日头条、百度、澎湃、B站、凤凰网、贴吧、微博、抖音、知乎，达到 11 个默认热榜平台全量覆盖，支持轻量动态来源下拉筛选与系统源启停）
-- **Wave 2**：关键词与 AI 智能过滤双轨体系（标题+简介过滤、filter.method = keyword / ai、AI 智能相关性打分、个人兴趣偏好配置 ai_interests、标签自更新 update_tags_prompt、黑白名单、多模式正则/通配符匹配、分类标签与平台分组）
+- **Wave 1B（已合并验证）**：剩余 9 个热榜平台源覆盖对齐（扩展今日头条、百度、澎湃、B站、凤凰网、贴吧、微博、抖音、知乎，达到 11 个默认热榜平台全量覆盖，支持轻量动态来源下拉筛选与系统源启停）
+- **Wave 2（已实现交付物）**：关键词与 AI 智能过滤双轨体系（标题+简介过滤、filter.method = keyword / ai、AI 智能相关性打分、个人兴趣偏好配置 ai_interests、标签自更新 update_tags_prompt、黑白名单、多模式正则/通配符匹配、分类标签与平台分组、真浏览器与真 SQLite E2E）
 - **Wave 3**：抓取高级能力、新鲜度过滤与代理展示体系（RSS 全局与单源独立的 max_age_days 新鲜度过滤、Crawler / RSS HTTP/SOCKS5 代理支持、display.standalone 独立免过滤展示区、展示区域开关与排序控制）
 - **Wave 4**：聚合、三模报告与时间线走势对齐（三类报告输出模式 report.mode = current / daily / incremental、用户可配置关键词报告分组聚合、timeline.yaml 调度预设与时间切片、相似新闻聚类、单话题位次走势图、话题全生命周期跟踪、爆发异动突发检测、趋势预测分析、平台活跃度横向对比、关键词共现分析）
 - **Wave 5**：AI 深度分析、国际化与 Agent MCP 体系对齐（多模型智能摘要、实体提取、多语言热榜翻译、情感倾向分类、Agent MCP 综合查询工具、Agent 按需触发抓取工具、Agent MCP 系统状态工具）
@@ -87,18 +87,19 @@
 
 ---
 
-## Wave 2：关键词与 AI 智能过滤双轨体系
+## Wave 2（已实现交付物）：关键词与 AI 智能过滤双轨体系
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 过滤模式双轨支持（filter.method = keyword / ai） | PLANNED_WAVE_2 | 上游配置支持切换关键词过滤与 AI 智能过滤双轨模式 |
-| 本地关键词过滤（Keyword filtering） | PLANNED_WAVE_2 | 基于本地规则引擎提供标题与简介的多字段关键词匹配 |
-| AI 智能相关性筛选（AI intelligent filter） | PLANNED_WAVE_2 | 上游 `trendradar/ai/filter.py`；Vibe 复用既有可插拔 LLM 适配层进行资讯相关性智能打分与过滤 |
-| 个人兴趣偏好配置（AI interests） | PLANNED_WAVE_2 | 上游 `config/ai_interests.txt`；支持用户定制关注的行业、赛道与主题兴趣描述 |
-| 标签自更新机制（AI tag update） | PLANNED_WAVE_2 | 上游 `config/ai_filter/update_tags_prompt.txt`；根据热点演进自动提炼与迭代新标签 |
-| 黑名单/白名单机制（Blacklist / Whitelist） | PLANNED_WAVE_2 | 支持精准包含与排除过滤规则 |
-| 多模式匹配（Regex / Wildcard） | PLANNED_WAVE_2 | 支持正则表达式与通配符规则匹配 |
-| 分类标签与来源分组（Platform grouping） | PLANNED_WAVE_2 | 支持按平台、板块和主题维度定制视图聚合与筛选 |
+| 过滤模式双轨支持（filter.method = keyword / ai） | **PARITY** | `backend/native_intel_filter.py` + `backend/native_intel_store.py`；支持本地关键词与 AI 语义双轨模式，独立配置持久化于 `intel_filter_profiles`，支持无缝热切换且配置不丢失 |
+| 本地关键词过滤（Keyword filtering） | **PARITY** | `filter_by_keywords()`；多字段（title + summary）匹配，支持全局排除与分组专属排除，遵循 Exclude Wins 优先原则，支持纯文本与正则表达式 |
+| AI 智能相关性筛选（AI intelligent filter） | **PARITY** | `classify_items_batch()`；复用既有统一 AI 适配层（Codex / OpenAI-compatible），批量相关性打分（min_score 阈值筛选），严格隔离不可信输入，失败诚实上报不造假 |
+| 个人兴趣偏好配置（AI interests） | **PARITY** | `extract_interest_tags()`；支持自然语言兴趣描述，结构化提取多标签并计算 profile fingerprint 保持确定性 |
+| 标签自更新机制（AI tag update） | **PARITY** | `update_interest_tags()`；对比新旧标签集，计算 `change_ratio`，输出保持/新增/移除明细，变化率超过阈值触发重算 |
+| 黑名单/白名单机制（Blacklist / Whitelist） | **PARITY** | 全局排除词 `global_excludes` + 分组包含/排除规则，精确控制展示条目 |
+| 多模式匹配（Regex / Wildcard） | **PARITY** | 支持纯文本子串包含与 `/regex/` 不区分大小写正则表达式匹配 |
+| 分类标签与来源分组（Platform grouping） | **PARITY** | 关键词分组与 AI 兴趣标签双轨打标，前端 `HotlistPanel` 动态渲染彩色徽章并支持 `mode=my_interests` 过滤视图与筛选设置弹窗 |
+| E2E 测试验证 | **PARITY** | `tests/e2e/interest-filter.browser.mjs` 真浏览器 + 真后端 SQLite 持久化、模式切换、标签提取与设置同步验证，CI 自动化接入 |
 
 ---
 
