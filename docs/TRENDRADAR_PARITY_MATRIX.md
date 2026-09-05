@@ -120,19 +120,30 @@
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 当前快照报告模式（report.mode = current） | PLANNED_WAVE_4 | 上游当前时点完整快照报告生成与推送（非仅即时 Web UI 渲染，包含完整报告格式化输出） |
-| 每日汇总日报模式（report.mode = daily） | PLANNED_WAVE_4 | 上游定时日报生成模式；Vibe 规划与 DailyReview 面板深度整合 |
-| 增量变化报告模式（report.mode = incremental） | PLANNED_WAVE_4 | 上游两抓取窗口间新上榜与位次异动增量对比报告输出 |
-| 用户关键词报告分组（Keyword grouping in reports） | PLANNED_WAVE_4 | 上游报告中按用户设定的关注关键词进行条目归类聚合（不同于 Vibe 既有的股票实体/赛道映射） |
-| 时间窗口预设（Timeline presets） | PLANNED_WAVE_4 | 上游 `config/timeline.yaml` 编排预设与时间切片分析 |
-| 多源归一化与相似新闻聚类（Similar news clustering） | PLANNED_WAVE_4 | 跨平台相同事件识别与聚类关联（按平台严格隔离原始 rank） |
+| 当前快照报告模式（report.mode = current） | **PARITY** | 原生 CURRENT 最新来源列表；GET 预览 / POST 生成；`/intel` 报告页展示分组结果，不提前实现 Wave 6 推送与导出 |
+| 每日汇总日报模式（report.mode = daily） | **PARITY** | Asia/Shanghai 零点（含）至当前观测时刻的当天汇总；包含早先列表，沿用 Wave 3 RSS freshness；不修改 DailyReview |
+| 增量变化报告模式（report.mode = incremental） | **PARITY**（明确扩展） | 同一 SQLite 中持久 cursor；成功才推进。新 source/item、标题/发布时间/真实位次变化；重复观察不当新增。上游仅新标题/URL；Vibe 的有效变化是显式 deterministic 扩展 |
+| 用户关键词报告分组（Keyword grouping in reports） | **PARITY** | 复用 Wave 2 唯一规则；关键词/平台/来源分组、第一命中组、组级上限优先、位置/计数排序；RSS 发布时间排序且 rank 恒 NULL |
+| 时间窗口预设（Timeline presets） | **PARITY** | always_on / morning_evening / office_hours / night_owl / custom；半开区间、跨午夜、非法重叠 422；现有 fetch loop 执行报告机会，once/config 可恢复，无第二 daemon |
+| 相似新闻（Similar news） | **PARITY** | 真实算法是标题 SequenceMatcher ratio，阈值 0.6，排除相同标题；不是事件识别或语义聚类模型 |
 | 关注度趋势（Trending topics） | **PARITY** | 既有 `GET /api/native-intel/trending` 跨源频次与实体环比统计 |
-| 单话题位次轨迹走势（Topic trend） | PLANNED_WAVE_4 | 基于 rank-history 观测推导单话题在各榜单上的位次演变走势图 |
-| 话题生命周期跟踪（Topic lifecycle） | PLANNED_WAVE_4 | 单话题自首见、爆发、衰退至掉榜的全生命周期状态机 |
-| 爆发突发热点检测（Viral detection） | PLANNED_WAVE_4 | 基于排名跃升速率与多源共振的多维度异动突发检测算法 |
-| 趋势预测分析（Trend prediction） | PLANNED_WAVE_4 | 话题热度延续性评估（严格保持 observation-only，不伪造投资权威） |
-| 平台活跃度与横向对比（Platform comparison & activity） | PLANNED_WAVE_4 | 跨平台热点分发节奏、活跃度与覆盖度横向对比面板 |
-| 关键词共现分析（Keyword co-occurrence） | PLANNED_WAVE_4 | 热点事件关联关键词与概念网络分析 |
+| 日桶话题趋势（Topic daily trend） | **PARITY** | 每来源/每日不同标题计数，来源数/平台数/环比；明确 RAW_HISTORY 或 CURRENT_ELIGIBLE，缺采集不冒充零 |
+| 单话题位次轨迹走势（Topic rank timeline） | **PARITY** | 单 source/item 的真实 observation rank 折线与时间卡片；微博/百度分开，不生成综合排名，RSS 不入排名 |
+| 话题生命周期跟踪（Topic lifecycle） | **PARITY** | pinned 的前3/后3日与峰值简单规则：上升期/衰退期/爆发期/稳定期；不是正式状态机，返回实际输入和依据 |
+| 爆发突发热点检测（Viral detection） | **PARITY** | 今日/昨日 >=3；零基线至少5。是每日条数阈值，不是原规划中未经证实的多维模型 |
+| 趋势预测分析（Trend prediction） | **PARITY** | 近期已出现日桶末次增长严格 >30%，规则强度0.6/0.7/0.9，默认>=0.7；UI 明确“趋势推断（规则）”，不是概率或 AI |
+| 14 天分析（14_DAY_ANALYTICS） | **PARITY** | 14 天 + 前 14 天比较；5,000 行分批聚合，432,000 条历史回归核对精确聚合，不再因 raw rows >100k 拒绝 |
+| 30 天分析（30_DAY_ANALYTICS） | **PARITY** | 30 天 + 前 30 天比较；同一 SQLite 分批聚合；统计不截断，仅轨迹返回最近 10,000 点并显式标注，附精确总数 |
+| 平台活跃度与横向对比（Platform comparison & activity） | **PARITY**（原生差异见契约） | Hotlist 逐来源 + RSS 逐来源 + RSS 分组汇总行；汇总行不能与单源行再次求和。日去重数/话题命中/首次观测数/真实排名观察/前窗变化，RSS 无排名；source-run 计数替代文件名更新频率 |
+| 关键词组共现（Keyword co-occurrence） | **PARITY**（Owner 指定差异） | 按 Native Intel item identity 同时命中 Wave 2 Group A/B 计一次；热榜身份包含来源，同一故事跨平台可能分别计数，不声称故事级跨来源去重。附样本，不推断因果 |
+| 新出现区域（new_items） | **PARITY** | 现有 display config 正式启用 slot；NEW_ON_LIST（每平台）与 NEWLY_OBSERVED（首次本地 RSS，非刚发布）独立 badge；沿用 scope/freshness/组上限 |
+
+Wave 4 行为证据：[独立输入输出契约](NATIVE_INTEL_WAVE4_CONTRACT.md)；
+`backend/tests/test_native_intel_reporting.py` 的真实 SQLite 定向回归；
+包括 432,000 条历史下 CURRENT/DAILY/INCREMENTAL 与 14/30 天精确聚合、失败来源日报真值、重新启用边界；
+`frontend/tests/e2e/wave4-report-analytics.browser.mjs` 的 Chromium → FastAPI → 隔离 SQLite 六场景，
+加入既有 Intel digest CI job。PARITY 是这里列明的已实现并自动验证行为，不替代项目经理 Independent Gate；
+与 pinned 的差异及计算上限均以契约为准。
 
 ---
 

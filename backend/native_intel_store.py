@@ -22,6 +22,7 @@ import os
 import sqlite3
 import threading
 import urllib.parse
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -216,6 +217,14 @@ CREATE TABLE IF NOT EXISTS intel_item_filter_analysis (
     error_kind TEXT,
     PRIMARY KEY (item_id, profile_id, profile_fingerprint)
 );
+
+CREATE TABLE IF NOT EXISTS intel_report_cursors (
+    report_key TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    observation_boundary INTEGER NOT NULL
+);
 """
 
 _INDEX_SQL = (
@@ -224,6 +233,7 @@ _INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_intel_items_published ON intel_items (published_ts DESC)",
     "CREATE INDEX IF NOT EXISTS idx_intel_obs_item ON intel_observations (item_id, observed_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_intel_obs_run ON intel_observations (run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_intel_obs_time ON intel_observations (observed_at, obs_id)",
     "CREATE INDEX IF NOT EXISTS idx_intel_source_runs_src ON intel_source_runs (source_id, run_id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_intel_item_entities_code ON intel_item_entities (security_code, item_id)",
     "CREATE INDEX IF NOT EXISTS idx_intel_entity_terms_code ON intel_entity_terms (security_code)",
@@ -696,6 +706,8 @@ def get_item_rank_state(
     db_path: str | Path | None = None,
     *,
     stale_after_hours: int = STALE_AFTER_HOURS,
+    include_history: bool = True,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """推导条目的当前排名状态（Wave 1 off-list / disabled 语义的唯一权威读法）。
 
@@ -736,11 +748,12 @@ def get_item_rank_state(
                         """
                         SELECT observed_at, rank FROM intel_observations
                         WHERE item_id = ? AND source_id = ? AND rank IS NOT NULL
-                        ORDER BY observed_at ASC, obs_id ASC
+                        ORDER BY observed_at DESC, obs_id DESC LIMIT ?
                         """,
-                        (item_id, source_id),
+                        (item_id, source_id, -1 if include_history else 2),
                     ).fetchall()
                 ]
+                observations.reverse()
                 result: dict[str, Any] = {
                     "item_id": int(item["item_id"]),
                     "source_id": source_id,
@@ -835,7 +848,7 @@ def get_item_rank_state(
                         started_dt = datetime.fromisoformat(
                             str(last_run["started_at"]).replace("Z", "+00:00")
                         )
-                        if datetime.now(timezone.utc) - started_dt > timedelta(hours=stale_after_hours):
+                        if (now or datetime.now(timezone.utc)) - started_dt > timedelta(hours=stale_after_hours):
                             is_stale = True
                     except ValueError:
                         is_stale = True
@@ -1806,6 +1819,138 @@ def to_json(payload: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
+REPORT_PAGE_SIZE = 5000
+
+
+def _report_rows(cursor):
+    """Consume a SQLite cursor without retaining previous raw pages."""
+    while rows := cursor.fetchmany(REPORT_PAGE_SIZE):
+        for row in rows:
+            yield dict(row)
+
+
+@contextmanager
+def read_report_history(since: str, until: str, db_path: str | Path | None = None,
+                        *, baseline: int = 0, mode: str = "HISTORY",
+                        day_start: str | None = None, rank_threshold: int = 5):
+    """Stream purpose-scoped rows from one read snapshot; no total-history ceiling.
+
+    Consumers must aggregate each page, not materialize the observation iterator.
+    SQLite owns grouping/sorting; Python retains only aggregates and output items.
+    """
+    path = db_path or get_default_db_path()
+    initialize_store(path)
+    with _LOCK, _connect(path) as conn:
+        conn.execute("BEGIN")
+        # A running fetch may already have inserted observations. Do not skip its
+        # IDs forever when it later finishes, even if another fetch finishes first.
+        boundary = conn.execute("""
+            SELECT COALESCE(MIN(CASE WHEN r.status = 'running' OR o.observed_at >= ? THEN o.obs_id END) - 1,
+                            MAX(o.obs_id), 0)
+            FROM intel_observations o JOIN intel_fetch_runs r USING (run_id)
+        """, (until,)).fetchone()[0]
+        latest = {r["source_id"]: dict(r) for r in conn.execute("""
+            SELECT sr.*, r.started_at, r.finished_at FROM intel_source_runs sr
+            JOIN intel_fetch_runs r USING (run_id)
+            WHERE sr.rowid IN (
+                SELECT MAX(sr.rowid) FROM intel_source_runs sr JOIN intel_fetch_runs r USING (run_id)
+                WHERE r.started_at < ? AND r.status != 'running' GROUP BY sr.source_id
+            )
+        """, (until,))}
+        predicates = {
+            "HISTORY": "o.observed_at >= :since",
+            "DAILY": "o.observed_at >= :since",
+            "CURRENT": "s.enabled = 1 AND s.deleted_at IS NULL AND sr.rowid IN ("
+                       "SELECT MAX(sr.rowid) FROM intel_source_runs sr JOIN intel_fetch_runs r USING (run_id) "
+                       "WHERE r.started_at < :until AND r.status != 'running' GROUP BY sr.source_id)",
+            "INCREMENTAL": "(o.obs_id > :baseline OR o.obs_id IN ("
+                           "SELECT MAX(b.obs_id) FROM intel_observations b "
+                           "JOIN intel_source_runs bs ON bs.run_id=b.run_id AND bs.source_id=b.source_id "
+                           "WHERE b.obs_id <= :baseline AND bs.status IN ('ok', 'empty') "
+                           "GROUP BY b.item_id, b.source_id))",
+        }
+        predicate = predicates[mode]
+        params = {"since": since, "until": until, "boundary": boundary, "baseline": baseline}
+        # Only report rows need previous-list membership; analytics needs origins only.
+        new_on_list = "0"
+        if mode != "HISTORY":
+            new_on_list = """EXISTS (
+                SELECT 1 FROM intel_source_runs prev
+                WHERE prev.rowid = (SELECT MAX(p.rowid) FROM intel_source_runs p
+                    JOIN intel_fetch_runs pr USING (run_id)
+                    WHERE p.source_id=o.source_id AND p.rowid<sr.rowid
+                      AND p.status IN ('ok','empty') AND pr.status!='running')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM intel_observations po
+                    WHERE po.run_id=prev.run_id AND po.source_id=o.source_id AND po.item_id=o.item_id)
+            )"""
+        rows = conn.execute(f"""
+            WITH origins AS (
+                SELECT item_id, source_id, MIN(obs_id) AS first_obs_id
+                FROM intel_observations GROUP BY item_id, source_id
+            )
+            SELECT o.*, i.url, i.summary, i.first_seen_at, 0 AS published_ts,
+                   s.name AS source_name, s.source_type, s.hint, s.has_real_rank,
+                   s.enabled, s.deleted_at, s.re_enabled_at, s.max_age_days AS source_max_age_days,
+                   origins.first_obs_id, {new_on_list} AS returned_to_list
+            FROM intel_observations o
+            JOIN intel_items i USING (item_id)
+            JOIN intel_sources s ON s.source_id = o.source_id
+            JOIN origins ON origins.item_id = o.item_id AND origins.source_id = o.source_id
+            JOIN intel_source_runs sr ON sr.run_id = o.run_id AND sr.source_id = o.source_id
+            WHERE ({predicate}) AND o.observed_at < :until AND o.obs_id <= :boundary
+              AND sr.status IN ('ok', 'empty')
+            ORDER BY o.obs_id
+        """, params)
+        runs = conn.execute("""
+            SELECT sr.*, r.started_at, r.finished_at, r.status AS fetch_status
+            FROM intel_source_runs sr JOIN intel_fetch_runs r USING (run_id)
+            WHERE r.started_at >= ? AND r.started_at < ? AND r.status != 'running'
+            ORDER BY sr.rowid
+        """, (since, until))
+        stats = {}
+        if day_start is not None:
+            stats = {(r["source_id"], r["item_id"]): dict(r) for r in conn.execute("""
+                SELECT o.source_id, o.item_id, COUNT(*) AS observation_count,
+                       COUNT(o.rank) AS rank_count, MIN(o.rank) AS best_rank,
+                       SUM(10 * (11 - MIN(o.rank, 10))) AS rank_strength,
+                       SUM(CASE WHEN o.rank <= ? THEN 1 ELSE 0 END) AS highlighted
+                FROM intel_observations o JOIN intel_source_runs sr
+                  ON sr.run_id=o.run_id AND sr.source_id=o.source_id
+                WHERE o.observed_at >= ? AND o.observed_at < ? AND o.obs_id <= ?
+                  AND sr.status IN ('ok','empty')
+                GROUP BY o.source_id, o.item_id
+            """, (rank_threshold, day_start, until, boundary))}
+        yield {"observations": _report_rows(rows), "runs": _report_rows(runs),
+               "latest_runs": latest, "day_stats": stats, "boundary": int(boundary),
+               "sources": [dict(r) for r in conn.execute("SELECT * FROM intel_sources")]}
+
+
+def read_report_cursor(report_key: str, db_path: str | Path | None = None) -> dict[str, Any] | None:
+    path = db_path or get_default_db_path()
+    initialize_store(path)
+    with _LOCK, _connect(path) as conn:
+        row = conn.execute("SELECT * FROM intel_report_cursors WHERE report_key = ?", (report_key,)).fetchone()
+        return dict(row) if row else None
+
+
+def advance_report_cursor(report_key: str, profile_id: str, mode: str, generated_at: str,
+                          boundary: int, previous: dict[str, Any] | None,
+                          db_path: str | Path | None = None) -> None:
+    """Compare-and-swap prevents overlapping report requests consuming one baseline."""
+    path = db_path or get_default_db_path()
+    with _LOCK, _connect(path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM intel_report_cursors WHERE report_key = ?", (report_key,)).fetchone()
+        if (dict(row) if row else None) != previous:
+            raise ValueError("REPORT_BASELINE_CHANGED: 另一报告已完成，请重新生成")
+        conn.execute("""
+            INSERT INTO intel_report_cursors VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(report_key) DO UPDATE SET generated_at = excluded.generated_at,
+                observation_boundary = excluded.observation_boundary
+        """, (report_key, profile_id, mode, generated_at, boundary))
+
+
 def get_filter_profile(
     profile_id: str = "default",
     db_path: str | Path | None = None,
@@ -2383,7 +2528,7 @@ def count_freshness_excluded_rss_items(
 # ---------------------------------------------------------------------------
 
 CANONICAL_REGIONS = ("hotlist", "rss", "standalone", "new_items", "ai_analysis")
-AVAILABLE_REGIONS = ("hotlist", "rss", "standalone")
+AVAILABLE_REGIONS = ("hotlist", "rss", "standalone", "new_items")
 
 DEFAULT_NATIVE_INTEL_CONFIG: dict[str, Any] = {
     "rss_freshness_enabled": False,

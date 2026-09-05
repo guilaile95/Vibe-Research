@@ -318,6 +318,12 @@ jobs:
           PYTHON: python
         run: npm run test:e2e:wave3-display-controls
 
+      - name: Run Wave 4 Reports and Analytics E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:wave4-report-analytics
+
       - name: Run Today market context E2E
         working-directory: frontend
         run: npm run test:e2e:today-market-context

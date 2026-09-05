@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Activity, AlertCircle, ExternalLink, FileText, Flame, Loader2, Newspaper, RefreshCw, Star, TrendingUp } from "lucide-react";
 import MarketIntelPanel from "@/components/market/MarketIntelPanel";
 import { HotlistPanel } from "@/components/native-intel/HotlistPanel";
+import { IntelReportPanel, IntelAnalyticsPanel } from "@/components/native-intel/IntelReports";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { api, ApiError, type Announcement, type NewsItem } from "@/lib/api";
@@ -11,6 +12,8 @@ import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import { cn } from "@/lib/utils";
 
 const TABS = [
+  { key: "reports", label: "报告", icon: FileText, desc: "当前、今日与增量报告" },
+  { key: "analytics", label: "趋势分析", icon: TrendingUp, desc: "可解释的非 AI 统计分析" },
   { key: "hotlist", label: "实时热榜", icon: Flame, desc: "财联社热门、华尔街见闻等权威热榜与位次轨迹" },
   { key: "market-intel", label: "市场情报", icon: Activity, desc: "关注趋势、赛道要点与去重后的最新公开资讯" },
   { key: "events", label: "事件概率", icon: TrendingUp, desc: "全球宏观预期概率（公开数据、免登录只读），后续接入" },
@@ -183,7 +186,7 @@ export function Intel() {
         ))}
       </div>
 
-      {current.key === "hotlist" ? (
+      {current.key === "reports" ? <IntelReportPanel /> : current.key === "analytics" ? <IntelAnalyticsPanel /> : current.key === "hotlist" ? (
         <HotlistPanel />
       ) : current.key === "market-intel" ? (
         <MarketIntelPanel />

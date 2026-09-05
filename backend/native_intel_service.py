@@ -1728,7 +1728,8 @@ def start_scheduler(interval: int | None = None) -> None:
             while True:
                 time.sleep(seconds)
                 try:
-                    run_fetch("scheduled")
+                    from native_intel_timeline import scheduled_tick
+                    scheduled_tick()
                 except Exception:  # noqa: BLE001
                     pass
 
