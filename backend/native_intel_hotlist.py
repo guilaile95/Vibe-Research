@@ -99,7 +99,7 @@ def _check_domain_safety(items: list[dict[str, Any]], expected_domain: str) -> s
     return None
 
 
-def _http_get_json(url: str, *, timeout: int) -> dict[str, Any]:
+def _http_get_json(url: str, *, timeout: int, proxy_url: str | None = None) -> dict[str, Any]:
     req = urllib.request.Request(
         url,
         headers={
@@ -107,6 +107,11 @@ def _http_get_json(url: str, *, timeout: int) -> dict[str, Any]:
             "Accept": "application/json, text/plain, */*",
         },
     )
+    if proxy_url:
+        handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+        opener = urllib.request.build_opener(handler)
+        with opener.open(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8", errors="replace"))
 
@@ -116,6 +121,7 @@ def fetch_hotlist_items(
     *,
     timeout: int,
     redline: list[str],
+    proxy_url: str | None = None,
     **_ignored: Any,
 ) -> tuple[list[dict[str, Any]], str | None, str | None]:
     """抓单个热榜源；返回 ``(items, error_kind, error_detail)``。
@@ -136,7 +142,10 @@ def fetch_hotlist_items(
         return [], store.ERROR_KIND_PARSE, "HotlistPlatformUnsupported"
 
     try:
-        data = _http_get_json(url, timeout=timeout)
+        if proxy_url:
+            data = _http_get_json(url, timeout=timeout, proxy_url=proxy_url)
+        else:
+            data = _http_get_json(url, timeout=timeout)
     except Exception as exc:  # noqa: BLE001 - 单源失败必须被隔离
         kind, detail = _classify_error(exc)
         return [], kind, detail

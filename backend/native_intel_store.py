@@ -21,6 +21,7 @@ import json
 import os
 import sqlite3
 import threading
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -96,7 +97,8 @@ CREATE TABLE IF NOT EXISTS intel_sources (
     updated_at TEXT NOT NULL,
     deleted_at TEXT,
     re_enabled_at TEXT,
-    re_enabled_after_run_id TEXT
+    re_enabled_after_run_id TEXT,
+    max_age_days INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS intel_fetch_runs (
@@ -292,6 +294,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE intel_sources ADD COLUMN re_enabled_at TEXT")
     if "re_enabled_after_run_id" not in source_columns:
         conn.execute("ALTER TABLE intel_sources ADD COLUMN re_enabled_after_run_id TEXT")
+    if "max_age_days" not in source_columns:
+        conn.execute("ALTER TABLE intel_sources ADD COLUMN max_age_days INTEGER")
 
     item_entity_pk = [
         str(row["name"])
@@ -438,6 +442,7 @@ def insert_user_source(
     url: str,
     hint: str,
     enabled: bool = True,
+    max_age_days: int | None = None,
     db_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """新增用户自建 RSS 源（origin=user）；source_id 或活跃 (name, url) 冲突时拒绝。"""
@@ -461,10 +466,10 @@ def insert_user_source(
                         """
                         INSERT INTO intel_sources
                             (source_id, name, hint, url, source_type, has_real_rank,
-                             enabled, origin, updated_at)
-                        VALUES (?, ?, ?, ?, 'rss', 0, ?, 'user', ?)
+                             enabled, origin, updated_at, max_age_days)
+                        VALUES (?, ?, ?, ?, 'rss', 0, ?, 'user', ?, ?)
                         """,
-                        (source_id, name, hint, url, 1 if enabled else 0, now),
+                        (source_id, name, hint, url, 1 if enabled else 0, now, max_age_days),
                     )
                 row = conn.execute(
                     "SELECT * FROM intel_sources WHERE source_id = ?", (source_id,)
@@ -474,11 +479,15 @@ def insert_user_source(
             raise NativeIntelStoreError() from e
 
 
+_UNSET = object()
+
+
 def update_source(
     source_id: str,
     *,
     enabled: bool | None = None,
     name: str | None = None,
+    max_age_days: int | None | object = _UNSET,
     db_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
     """更新来源；``enabled`` 系统源与用户源均可，``name`` 仅用户源可改。"""
@@ -515,6 +524,12 @@ def update_source(
                     if name is not None:
                         assignments.append("name = ?")
                         args.append(name)
+                    if max_age_days is not _UNSET:
+                        if max_age_days is None:
+                            assignments.append("max_age_days = NULL")
+                        else:
+                            assignments.append("max_age_days = ?")
+                            args.append(int(max_age_days))
                     if not assignments:
                         row = conn.execute(
                             "SELECT * FROM intel_sources WHERE source_id = ?", (source_id,)
@@ -2004,10 +2019,12 @@ def list_recent_items_for_filter(
             with _connect(path) as conn:
                 rows = conn.execute(
                     """
-                    SELECT item_id, title, summary, source_id, url, canonical_url,
-                           first_seen_at, last_seen_at, published_at
-                    FROM intel_items
-                    ORDER BY last_seen_at DESC, item_id DESC
+                    SELECT i.item_id, i.title, i.summary, i.source_id, i.url, i.canonical_url,
+                           i.first_seen_at, i.last_seen_at, i.published_at, i.published_ts,
+                           s.source_type, s.max_age_days AS source_max_age_days
+                    FROM intel_items i
+                    LEFT JOIN intel_sources s ON s.source_id = i.source_id
+                    ORDER BY i.last_seen_at DESC, i.item_id DESC
                     LIMIT ?
                     """,
                     (max(1, min(int(limit), 500)),),
@@ -2023,6 +2040,10 @@ def list_recent_items_for_filter(
                         "first_seen_at": r["first_seen_at"],
                         "last_seen_at": r["last_seen_at"],
                         "published_at": r["published_at"],
+                        "published_ts": int(r["published_ts"] or 0),
+                        "source_type": r["source_type"],
+                        "source_max_age_days": r["source_max_age_days"],
+                        "max_age_days": r["source_max_age_days"],
                     }
                     for r in rows
                 ]
@@ -2203,8 +2224,9 @@ def list_all_recent_items_with_sources(
                 rows = conn.execute(
                     """
                     SELECT i.item_id, i.title, i.summary, i.source_id, i.url, i.canonical_url,
-                           i.hint, i.published_at, i.first_seen_at, i.last_seen_at, i.observation_count,
-                           s.name AS source_name, s.source_type, s.has_real_rank, s.enabled AS source_enabled
+                           i.hint, i.published_at, i.published_ts, i.first_seen_at, i.last_seen_at, i.observation_count,
+                           s.name AS source_name, s.source_type, s.has_real_rank, s.enabled AS source_enabled,
+                           s.max_age_days AS source_max_age_days
                     FROM intel_items i
                     LEFT JOIN intel_sources s ON s.source_id = i.source_id
                     ORDER BY i.last_seen_at DESC, i.item_id DESC
@@ -2229,8 +2251,325 @@ def list_all_recent_items_with_sources(
                         "source_type": r["source_type"],
                         "has_real_rank": bool(r["has_real_rank"]),
                         "source_enabled": bool(r["source_enabled"]),
+                        "published_ts": int(r["published_ts"] or 0),
+                        "source_max_age_days": r["source_max_age_days"],
+                        "max_age_days": r["source_max_age_days"],
                     }
                     for r in rows
                 ]
         except sqlite3.DatabaseError as e:
             raise NativeIntelStoreError() from e
+
+
+def list_recent_items_by_source(
+    source_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """按 source_id 查询该来源的最近条目（支持分页 offset / limit），附带来源元数据。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    lim = max(1, int(limit))
+    off = max(0, int(offset))
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT i.item_id, i.title, i.summary, i.source_id, i.url, i.canonical_url,
+                           i.hint, i.published_at, i.published_ts, i.first_seen_at, i.last_seen_at, i.observation_count,
+                           s.name AS source_name, s.source_type, s.has_real_rank, s.enabled AS source_enabled,
+                           s.max_age_days AS source_max_age_days
+                    FROM intel_items i
+                    LEFT JOIN intel_sources s ON s.source_id = i.source_id
+                    WHERE i.source_id = ?
+                    ORDER BY i.last_seen_at DESC, i.item_id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (source_id, lim, off),
+                ).fetchall()
+                res: list[dict[str, Any]] = []
+                for r in rows:
+                    res.append(
+                        {
+                            "item_id": int(r["item_id"]),
+                            "title": r["title"],
+                            "summary": r["summary"],
+                            "source_id": r["source_id"],
+                            "url": r["url"],
+                            "canonical_url": r["canonical_url"],
+                            "hint": r["hint"],
+                            "published_at": r["published_at"],
+                            "first_seen_at": r["first_seen_at"],
+                            "last_seen_at": r["last_seen_at"],
+                            "observation_count": int(r["observation_count"] or 1),
+                            "source_name": r["source_name"],
+                            "source_type": r["source_type"],
+                            "has_real_rank": bool(r["has_real_rank"]),
+                            "source_enabled": bool(r["source_enabled"]),
+                            "published_ts": int(r["published_ts"] or 0),
+                            "source_max_age_days": r["source_max_age_days"],
+                            "max_age_days": r["source_max_age_days"],
+                        }
+                    )
+                return res
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def list_recent_items_by_source_ids(
+    source_ids: list[str],
+    limit_per_source: int = 50,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """按 source_id 列表分别查询每个来源的最近条目（附带来源元数据），解决全局 500 limit 截断导致的源饿死。"""
+    if not source_ids:
+        return []
+    path = Path(db_path) if db_path else get_default_db_path()
+    res: list[dict[str, Any]] = []
+    for sid in source_ids:
+        res.extend(list_recent_items_by_source(sid, limit=limit_per_source, offset=0, db_path=path))
+    return res
+
+
+def count_freshness_excluded_rss_items(
+    db_path: str | Path | None = None,
+    now: datetime | None = None,
+) -> int:
+    """根据当前生效的 RSS 新鲜度策略，统计库中被判为过期的条目总数（未启用新鲜度时返回 0）。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    cfg = get_native_intel_config(path)
+    if not cfg.get("rss_freshness_enabled"):
+        return 0
+    global_max_age_days = int(cfg.get("rss_global_max_age_days", 1))
+
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT i.published_at, i.published_ts, s.max_age_days
+                    FROM intel_items i
+                    JOIN intel_sources s ON s.source_id = i.source_id
+                    WHERE s.source_type = 'rss'
+                    """
+                ).fetchall()
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+    import native_intel_freshness as freshness
+
+    excluded = 0
+    for r in rows:
+        res = freshness.evaluate_freshness(
+            source_type="rss",
+            published_at=r["published_at"],
+            published_ts=r["published_ts"],
+            source_max_age_days=r["max_age_days"],
+            global_enabled=True,
+            global_max_age_days=global_max_age_days,
+            now=now,
+        )
+        if not res.eligible:
+            excluded += 1
+    return excluded
+
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 3：配置管理、代理与展示控制
+# ---------------------------------------------------------------------------
+
+CANONICAL_REGIONS = ("hotlist", "rss", "standalone", "new_items", "ai_analysis")
+AVAILABLE_REGIONS = ("hotlist", "rss", "standalone")
+
+DEFAULT_NATIVE_INTEL_CONFIG: dict[str, Any] = {
+    "rss_freshness_enabled": False,
+    "rss_global_max_age_days": 1,
+    "crawler_proxy_enabled": False,
+    "crawler_proxy_url": "",
+    "rss_proxy_enabled": False,
+    "rss_proxy_url": "",
+    "standalone_enabled": True,
+    "standalone_source_ids": [],
+    "standalone_max_items": 20,
+    "region_order": ["hotlist", "rss", "standalone"],
+    "regions_enabled": {
+        "hotlist": True,
+        "rss": True,
+        "standalone": True,
+    },
+}
+
+
+def redact_proxy_url(url: str | None) -> str:
+    """脱敏代理 URL 中的用户名密码，保留 scheme/host/port。"""
+    if not url:
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.password:
+            user = parsed.username or ""
+            host = parsed.hostname or ""
+            port = f":{parsed.port}" if parsed.port else ""
+            netloc = f"{user}:***@{host}{port}"
+            return urllib.parse.urlunsplit(
+                (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+            )
+        return url
+    except Exception:
+        return "<invalid-proxy-url>"
+
+
+def validate_proxy_url(url: str, name: str = "proxy_url") -> str:
+    """校验代理 URL；仅支持 HTTP/HTTPS 协议，拒绝 SOCKS5 或未知 scheme。"""
+    trimmed = url.strip()
+    if not trimmed:
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(trimmed)
+    except Exception as exc:
+        raise ValueError(f"{name} 格式非法: {exc}") from exc
+
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(f"UNSUPPORTED_PROXY_SCHEME: {name} 仅支持 HTTP/HTTPS 代理，当前 scheme 为 '{scheme}'")
+    if not parsed.netloc:
+        raise ValueError(f"{name} 必须包含主机名与端口")
+    return trimmed
+
+
+def resolve_rss_proxy(config: dict[str, Any]) -> str | None:
+    """根据优先级解析 RSS 抓取应使用的代理 URL。"""
+    if not config.get("rss_proxy_enabled"):
+        return None
+    rss_url = (config.get("rss_proxy_url") or "").strip()
+    if rss_url:
+        return rss_url
+    # 留空且启用了 rss_proxy 时，回退使用 crawler_proxy_url
+    crawler_url = (config.get("crawler_proxy_url") or "").strip()
+    if crawler_url:
+        return crawler_url
+    return None
+
+
+def resolve_crawler_proxy(config: dict[str, Any]) -> str | None:
+    """解析热榜爬虫应使用的代理 URL。"""
+    if not config.get("crawler_proxy_enabled"):
+        return None
+    crawler_url = (config.get("crawler_proxy_url") or "").strip()
+    return crawler_url or None
+
+
+def get_native_intel_config(db_path: str | Path | None = None) -> dict[str, Any]:
+    """读取 Native Intel 本地展示与抓取高级配置。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    val = get_meta("native_intel_config", path)
+    if not val:
+        return dict(DEFAULT_NATIVE_INTEL_CONFIG)
+    try:
+        data = json.loads(val)
+        if not isinstance(data, dict):
+            return dict(DEFAULT_NATIVE_INTEL_CONFIG)
+        merged = dict(DEFAULT_NATIVE_INTEL_CONFIG)
+        merged.update(data)
+        if isinstance(data.get("regions_enabled"), dict):
+            re_map = dict(DEFAULT_NATIVE_INTEL_CONFIG["regions_enabled"])
+            re_map.update(data["regions_enabled"])
+            merged["regions_enabled"] = re_map
+        return merged
+    except Exception:
+        return dict(DEFAULT_NATIVE_INTEL_CONFIG)
+
+
+def update_native_intel_config(
+    payload: dict[str, Any],
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """更新 Native Intel 配置；严格校验参数，非法时抛出 ValueError。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    current = get_native_intel_config(path)
+    updates: dict[str, Any] = {}
+
+    if "rss_freshness_enabled" in payload:
+        val = payload["rss_freshness_enabled"]
+        if not isinstance(val, bool):
+            raise ValueError("rss_freshness_enabled 必须为布尔值")
+        updates["rss_freshness_enabled"] = val
+
+    if "rss_global_max_age_days" in payload:
+        val = payload["rss_global_max_age_days"]
+        if isinstance(val, bool) or not isinstance(val, int):
+            raise ValueError("rss_global_max_age_days 必须为非负整数")
+        if val < 0:
+            raise ValueError("rss_global_max_age_days 不能为负数")
+        updates["rss_global_max_age_days"] = val
+
+    if "crawler_proxy_enabled" in payload:
+        val = payload["crawler_proxy_enabled"]
+        if not isinstance(val, bool):
+            raise ValueError("crawler_proxy_enabled 必须为布尔值")
+        updates["crawler_proxy_enabled"] = val
+
+    if "crawler_proxy_url" in payload:
+        val = str(payload["crawler_proxy_url"] or "").strip()
+        updates["crawler_proxy_url"] = validate_proxy_url(val, "crawler_proxy_url")
+
+    if "rss_proxy_enabled" in payload:
+        val = payload["rss_proxy_enabled"]
+        if not isinstance(val, bool):
+            raise ValueError("rss_proxy_enabled 必须为布尔值")
+        updates["rss_proxy_enabled"] = val
+
+    if "rss_proxy_url" in payload:
+        val = str(payload["rss_proxy_url"] or "").strip()
+        updates["rss_proxy_url"] = validate_proxy_url(val, "rss_proxy_url")
+
+    if "standalone_enabled" in payload:
+        val = payload["standalone_enabled"]
+        if not isinstance(val, bool):
+            raise ValueError("standalone_enabled 必须为布尔值")
+        updates["standalone_enabled"] = val
+
+    if "standalone_source_ids" in payload:
+        val = payload["standalone_source_ids"]
+        if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
+            raise ValueError("standalone_source_ids 必须为字符串数组")
+        updates["standalone_source_ids"] = [x.strip() for x in val if x.strip()]
+
+    if "standalone_max_items" in payload:
+        val = payload["standalone_max_items"]
+        if isinstance(val, bool) or not isinstance(val, int):
+            raise ValueError("standalone_max_items 必须为整数")
+        if val < 1 or val > 200:
+            raise ValueError("standalone_max_items 必须在 1 到 200 之间")
+        updates["standalone_max_items"] = val
+
+    if "region_order" in payload:
+        val = payload["region_order"]
+        if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
+            raise ValueError("region_order 必须为字符串数组")
+        for r in val:
+            if r not in CANONICAL_REGIONS:
+                raise ValueError(f"region_order 包含未知区域: {r}")
+        updates["region_order"] = val
+
+    if "regions_enabled" in payload:
+        val = payload["regions_enabled"]
+        if not isinstance(val, dict):
+            raise ValueError("regions_enabled 必须为字典")
+        merged_re = dict(current.get("regions_enabled", {}))
+        for k, v in val.items():
+            if k in CANONICAL_REGIONS:
+                if not isinstance(v, bool):
+                    raise ValueError(f"regions_enabled[{k}] 必须为布尔值")
+                merged_re[k] = v
+        updates["regions_enabled"] = merged_re
+
+    current.update(updates)
+    set_meta("native_intel_config", json.dumps(current, ensure_ascii=False), path)
+    return current

@@ -27,7 +27,7 @@ interface FilterSettingsModalProps {
 }
 
 export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsModalProps) {
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [updatingTags, setUpdatingTags] = useState(false);
@@ -44,7 +44,10 @@ export function FilterSettingsModal({ open, onClose, onSaved }: FilterSettingsMo
   const [tags, setTags] = useState<InterestTag[]>([]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setLoading(true);
+      return;
+    }
     let mounted = true;
     setLoading(true);
     api

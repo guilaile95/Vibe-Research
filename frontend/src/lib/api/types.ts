@@ -2864,6 +2864,24 @@ export interface NativeIntelStatus {
     last_item_count: number;
     last_error_kind?: string | null;
   }>;
+  freshness?: {
+    enabled: boolean;
+    global_max_age_days: number;
+    excluded_count?: number;
+  };
+  proxies?: {
+    crawler_proxy?: { enabled: boolean; configured: boolean; url?: string | null };
+    rss_proxy?: { enabled: boolean; configured: boolean; url?: string | null; using_crawler_fallback?: boolean };
+  };
+  standalone?: {
+    enabled: boolean;
+    source_count: number;
+    max_items: number;
+  };
+  display?: {
+    region_order: string[];
+    regions_enabled: Record<string, boolean>;
+  };
 }
 
 export interface NativeIntelItemsResponse {
@@ -3113,6 +3131,7 @@ export interface NativeIntelSourceRecord {
   origin: "system" | "user";
   updated_at?: string;
   last_run_status?: string | null;
+  max_age_days?: number | null;
 }
 
 export interface NativeIntelSourcesResponse {
@@ -3126,9 +3145,33 @@ export interface CreateUserSourceInput {
   url: string;
   hint?: string;
   enabled?: boolean;
+  max_age_days?: number | null;
 }
 
 export interface UpdateSourceInput {
   enabled?: boolean;
   name?: string;
+  max_age_days?: number | null;
+}
+
+export interface NativeIntelConfig {
+  rss_freshness_enabled: boolean;
+  rss_global_max_age_days: number;
+  crawler_proxy_enabled: boolean;
+  crawler_proxy_url: string;
+  rss_proxy_enabled: boolean;
+  rss_proxy_url: string;
+  standalone_enabled: boolean;
+  standalone_source_ids: string[];
+  standalone_max_items: number;
+  region_order: string[];
+  regions_enabled: Record<string, boolean>;
+}
+
+export interface NativeIntelStandaloneResponse {
+  status: string;
+  items: NativeIntelHotlistItem[];
+  total: number;
+  configured_sources: string[];
+  freshness_excluded_count?: number;
 }
