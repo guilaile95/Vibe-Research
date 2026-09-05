@@ -12,13 +12,78 @@ import os
 import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 import native_intel_service as service
+import native_intel_reporting as reporting
+import native_intel_timeline as timeline
 
 router = APIRouter(prefix="/api/native-intel", tags=["native-intel"])
 
 _CODE_RE = re.compile(r"^\d{6}$")
+
+
+@router.api_route("/report", methods=["GET", "POST"])
+def intel_report(
+    request: Request,
+    mode: str = Query(default="CURRENT", pattern="^(CURRENT|DAILY|INCREMENTAL)$"),
+    scope: str = Query(default="all", pattern="^(all|my_interests)$"),
+    profile_id: str = Query(default="default", min_length=1, max_length=80),
+    group_by: str = Query(default="keyword", pattern="^(keyword|platform|source)$"),
+    rank_threshold: int = Query(default=5, ge=1, le=1000),
+    max_news_per_keyword: int = Query(default=0, ge=0, le=500),
+    sort_by_position_first: bool = False,
+) -> dict[str, Any]:
+    """GET previews; an explicit POST generates successfully before advancing a cursor."""
+    try:
+        return reporting.generate_report(_db_path(), mode=mode, scope=scope, profile_id=profile_id,
+            group_by=group_by, rank_threshold=rank_threshold, max_news_per_keyword=max_news_per_keyword,
+            sort_by_position_first=sort_by_position_first, commit=request.method == "POST")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception:
+        raise HTTPException(status_code=503, detail="报告生成失败，增量基线未推进") from None
+
+
+@router.get("/timeline")
+def intel_timeline() -> dict[str, Any]:
+    return timeline.resolve_policy(_db_path())
+
+
+@router.put("/timeline")
+def save_intel_timeline(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        timeline.save_policy(payload, _db_path())
+        return timeline.resolve_policy(_db_path())
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/analytics")
+def intel_analytics(topic: str = Query(min_length=1, max_length=120),
+                    days: int = Query(default=7, ge=2, le=30),
+                    profile_id: str = Query(default="default", min_length=1, max_length=80),
+                    data_basis: str = Query(default="RAW_HISTORY", pattern="^(RAW_HISTORY|CURRENT_ELIGIBLE)$")) -> dict[str, Any]:
+    try:
+        return reporting.analyze_topic(_db_path(), topic=topic, days=days, profile_id=profile_id, data_basis=data_basis)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception:
+        raise HTTPException(status_code=503, detail="历史分析不可用，未生成统计结论") from None
+
+
+@router.get("/analytics/similar")
+def intel_similar(item_id: int = Query(ge=1), threshold: float = Query(default=0.6, ge=0, le=1)) -> dict[str, Any]:
+    try:
+        return reporting.similar_items(item_id, _db_path(), threshold=threshold)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/new-items")
+def intel_new_items(scope: str = Query(default="all", pattern="^(all|my_interests)$")) -> dict[str, Any]:
+    report = reporting.generate_report(_db_path(), commit=False, scope=scope, report_profile="new-region")
+    return {"items": report["new_items"], "status": report["status"], "data_basis": report["data_basis"]}
 
 
 def _db_path() -> str | None:

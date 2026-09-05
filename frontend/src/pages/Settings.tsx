@@ -1252,7 +1252,7 @@ function NativeIntelDisplayAndProxySection() {
     hotlist: "实时热榜 (hotlist)",
     rss: "RSS 资讯 (rss)",
     standalone: "重点独立展示区 (standalone)",
-    new_items: "新上榜与异动 (new_items - Wave 4 规划中)",
+    new_items: "新出现资讯 (new_items)",
     ai_analysis: "AI 深度分析 (ai_analysis - Wave 5 规划中)",
   };
 
@@ -1486,10 +1486,15 @@ function NativeIntelDisplayAndProxySection() {
                 <span>重点独立区 (standalone)</span>
               </label>
 
-              <div className="flex items-center gap-1 text-muted-foreground/60 opacity-60">
-                <span className="rounded bg-muted px-1 text-[10px]">Wave 4 规划中</span>
-                <span>新上榜异动 (new_items)</span>
-              </div>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" data-testid="wave4-region-toggle-new_items"
+                  checked={regionsEnabled.new_items === true}
+                  onChange={(e) => {
+                    setRegionsEnabled((prev) => ({ ...prev, new_items: e.target.checked }));
+                    if (e.target.checked) setRegionOrder((prev) => prev.includes("new_items") ? prev : [...prev, "new_items"]);
+                  }} className="rounded border-border accent-primary" />
+                <span>新出现资讯 (new_items)</span>
+              </label>
 
               <div className="flex items-center gap-1 text-muted-foreground/60 opacity-60">
                 <span className="rounded bg-muted px-1 text-[10px]">Wave 5 规划中</span>
@@ -1505,7 +1510,7 @@ function NativeIntelDisplayAndProxySection() {
                 className="space-y-1.5 rounded border border-border/60 bg-card/40 p-2 max-w-md"
               >
                 {regionOrder
-                  .filter((r) => ["hotlist", "rss", "standalone"].includes(r))
+                  .filter((r) => ["hotlist", "rss", "standalone", "new_items"].includes(r))
                   .map((r, idx, arr) => (
                     <div
                       key={r}

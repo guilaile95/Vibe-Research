@@ -33,6 +33,7 @@ import {
 import { formatShanghaiTime } from "@/lib/intelDigestView";
 import { cn } from "@/lib/utils";
 import { FilterSettingsModal } from "./FilterSettingsModal";
+import { NewIntelItems } from "./IntelReports";
 
 export function HotlistPanel() {
   const [items, setItems] = useState<NativeIntelHotlistItem[]>([]);
@@ -498,7 +499,7 @@ export function HotlistPanel() {
         </span>
       </div>
 
-      {/* 区域渲染逻辑：支持 hotlist, rss, standalone 按照 region_order 动态排序 */}
+      {/* 已启用区域按现有 region_order 排序。 */}
       {(() => {
         const isUnavailable = interestMode === "my_interests" && effectiveFilterMeta?.status === "UNAVAILABLE";
         const isHotlistEnabled =
@@ -515,7 +516,8 @@ export function HotlistPanel() {
           Boolean(config) &&
           config?.regions_enabled?.hotlist === false &&
           config?.regions_enabled?.rss === false &&
-          (config?.regions_enabled?.standalone === false || config?.standalone_enabled === false);
+          (config?.regions_enabled?.standalone === false || config?.standalone_enabled === false) &&
+          !(config?.regions_enabled?.new_items === true && config.region_order.includes("new_items"));
 
         if (allRegionsConfigDisabled) {
           return (
@@ -703,12 +705,15 @@ export function HotlistPanel() {
         };
 
         const activeOrder = (config?.region_order || ["hotlist", "rss", "standalone"]).filter(
-          (r) => ["hotlist", "rss", "standalone"].includes(r),
+          (r) => ["hotlist", "rss", "standalone", "new_items"].includes(r),
         );
 
         return (
           <div className="space-y-4">
             {activeOrder.map((regionKey) => {
+              if (regionKey === "new_items" && config?.regions_enabled?.new_items === true && !isUnavailable) {
+                return <NewIntelItems key={`new_items-${reqIdRef.current}`} scope={interestMode} sourceType={interestMode === "my_interests" ? sourceTypeFilter : "all"} />;
+              }
               if (regionKey === "hotlist" && isHotlistEnabled) {
                 return (
                   <div

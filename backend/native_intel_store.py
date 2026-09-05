@@ -216,6 +216,14 @@ CREATE TABLE IF NOT EXISTS intel_item_filter_analysis (
     error_kind TEXT,
     PRIMARY KEY (item_id, profile_id, profile_fingerprint)
 );
+
+CREATE TABLE IF NOT EXISTS intel_report_cursors (
+    report_key TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    observation_boundary INTEGER NOT NULL
+);
 """
 
 _INDEX_SQL = (
@@ -224,6 +232,7 @@ _INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_intel_items_published ON intel_items (published_ts DESC)",
     "CREATE INDEX IF NOT EXISTS idx_intel_obs_item ON intel_observations (item_id, observed_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_intel_obs_run ON intel_observations (run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_intel_obs_time ON intel_observations (observed_at, obs_id)",
     "CREATE INDEX IF NOT EXISTS idx_intel_source_runs_src ON intel_source_runs (source_id, run_id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_intel_item_entities_code ON intel_item_entities (security_code, item_id)",
     "CREATE INDEX IF NOT EXISTS idx_intel_entity_terms_code ON intel_entity_terms (security_code)",
@@ -1806,6 +1815,80 @@ def to_json(payload: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
+def read_report_history(since: str, until: str, db_path: str | Path | None = None,
+                        *, baseline: int = 0) -> dict[str, Any]:
+    """One bounded SQLite snapshot; exclude unfinished fetches from report cursors."""
+    path = db_path or get_default_db_path()
+    initialize_store(path)
+    with _LOCK, _connect(path) as conn:
+        conn.execute("BEGIN")
+        # A running fetch may already have inserted observations. Do not skip its
+        # IDs forever when it later finishes, even if another fetch finishes first.
+        boundary = conn.execute("""
+            SELECT COALESCE(MIN(CASE WHEN r.status = 'running' OR o.observed_at >= ? THEN o.obs_id END) - 1,
+                            MAX(o.obs_id), 0)
+            FROM intel_observations o JOIN intel_fetch_runs r USING (run_id)
+        """, (until,)).fetchone()[0]
+        rows = conn.execute("""
+            WITH origins AS (
+                SELECT item_id, source_id, MIN(obs_id) AS first_obs_id
+                FROM intel_observations GROUP BY item_id, source_id
+            )
+            SELECT o.*, i.url, i.summary, i.first_seen_at, 0 AS published_ts,
+                   s.name AS source_name, s.source_type, s.hint, s.has_real_rank,
+                   s.enabled, s.deleted_at, s.re_enabled_at, s.max_age_days AS source_max_age_days,
+                   origins.first_obs_id
+            FROM intel_observations o
+            JOIN intel_items i USING (item_id)
+            JOIN intel_sources s ON s.source_id = o.source_id
+            JOIN origins ON origins.item_id = o.item_id AND origins.source_id = o.source_id
+            JOIN intel_source_runs sr ON sr.run_id = o.run_id AND sr.source_id = o.source_id
+            WHERE (o.observed_at >= ? OR (? > 0 AND o.obs_id IN (
+                SELECT MAX(obs_id) FROM intel_observations WHERE obs_id <= ? GROUP BY item_id, source_id
+            ))) AND o.observed_at < ? AND o.obs_id <= ?
+              AND sr.status IN ('ok', 'empty')
+            ORDER BY o.obs_id LIMIT 100001
+        """, (since, baseline, baseline, until, boundary)).fetchall()
+        if len(rows) > 100000:
+            # ponytail: bounded in-memory analysis; paginate SQL if real windows exceed 100k.
+            raise ValueError("HISTORY_WINDOW_TOO_LARGE: 请缩小分析时间窗口")
+        runs = conn.execute("""
+            SELECT sr.*, r.started_at, r.finished_at, r.status AS fetch_status
+            FROM intel_source_runs sr JOIN intel_fetch_runs r USING (run_id)
+            WHERE r.started_at >= ? AND r.started_at < ? AND r.status != 'running'
+            ORDER BY sr.rowid LIMIT 100001
+        """, (since, until)).fetchall()
+        if len(runs) > 100000:
+            raise ValueError("HISTORY_WINDOW_TOO_LARGE: 请缩小分析时间窗口")
+        return {"observations": [dict(r) for r in rows], "runs": [dict(r) for r in runs],
+                "boundary": int(boundary), "sources": [dict(r) for r in conn.execute("SELECT * FROM intel_sources")]}
+
+
+def read_report_cursor(report_key: str, db_path: str | Path | None = None) -> dict[str, Any] | None:
+    path = db_path or get_default_db_path()
+    initialize_store(path)
+    with _LOCK, _connect(path) as conn:
+        row = conn.execute("SELECT * FROM intel_report_cursors WHERE report_key = ?", (report_key,)).fetchone()
+        return dict(row) if row else None
+
+
+def advance_report_cursor(report_key: str, profile_id: str, mode: str, generated_at: str,
+                          boundary: int, previous: dict[str, Any] | None,
+                          db_path: str | Path | None = None) -> None:
+    """Compare-and-swap prevents overlapping report requests consuming one baseline."""
+    path = db_path or get_default_db_path()
+    with _LOCK, _connect(path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM intel_report_cursors WHERE report_key = ?", (report_key,)).fetchone()
+        if (dict(row) if row else None) != previous:
+            raise ValueError("REPORT_BASELINE_CHANGED: 另一报告已完成，请重新生成")
+        conn.execute("""
+            INSERT INTO intel_report_cursors VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(report_key) DO UPDATE SET generated_at = excluded.generated_at,
+                observation_boundary = excluded.observation_boundary
+        """, (report_key, profile_id, mode, generated_at, boundary))
+
+
 def get_filter_profile(
     profile_id: str = "default",
     db_path: str | Path | None = None,
@@ -2383,7 +2466,7 @@ def count_freshness_excluded_rss_items(
 # ---------------------------------------------------------------------------
 
 CANONICAL_REGIONS = ("hotlist", "rss", "standalone", "new_items", "ai_analysis")
-AVAILABLE_REGIONS = ("hotlist", "rss", "standalone")
+AVAILABLE_REGIONS = ("hotlist", "rss", "standalone", "new_items")
 
 DEFAULT_NATIVE_INTEL_CONFIG: dict[str, Any] = {
     "rss_freshness_enabled": False,
