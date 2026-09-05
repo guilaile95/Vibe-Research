@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from itertools import combinations
@@ -21,6 +21,7 @@ import native_intel_store as store
 
 LOCAL = timezone(timedelta(hours=8))
 BOUNDARY = "observation_only_not_an_investment_authority"
+RANK_TIMELINE_POINT_LIMIT = 10000
 
 
 def _iso(value: datetime) -> str:
@@ -43,10 +44,12 @@ def _fact(row: dict[str, Any]) -> tuple[Any, ...]:
     return row["observed_title"], row["rank"], row["published_at"]
 
 
-def _fresh(rows: list[dict[str, Any]], cfg: dict[str, Any], when: datetime) -> list[dict[str, Any]]:
-    return [r for r in rows if freshness.evaluate_item_freshness(
-        r, global_enabled=cfg["rss_freshness_enabled"],
-        global_max_age_days=cfg["rss_global_max_age_days"], now=when).eligible]
+def _eligible(row: dict[str, Any], cfg: dict[str, Any], when: datetime) -> bool:
+    return bool(row["enabled"] and not row["deleted_at"]
+                and (not row["re_enabled_at"] or row["observed_at"] >= row["re_enabled_at"])
+                and freshness.evaluate_item_freshness(
+                    row, global_enabled=cfg["rss_freshness_enabled"],
+                    global_max_age_days=cfg["rss_global_max_age_days"], now=when).eligible)
 
 
 def _item(row: dict[str, Any]) -> dict[str, Any]:
@@ -57,36 +60,20 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
             "rank": row["rank"] if row["has_real_rank"] else None}
 
 
-def _new_kind(row: dict[str, Any], runs: list[dict[str, Any]], membership: dict[str, set]) -> str | None:
+def _new_kind(row: dict[str, Any]) -> str | None:
     if not row["has_real_rank"]:
         return "NEWLY_OBSERVED" if row["obs_id"] == row["first_obs_id"] else None
-    if row["obs_id"] == row["first_obs_id"]:
-        return "NEW_ON_LIST"
-    previous = None
-    for run in runs:
-        if run["source_id"] != row["source_id"]:
-            continue
-        if run["run_id"] == row["run_id"]:
-            break
-        previous = run
-    if previous and previous["status"] in ("ok", "empty") and _identity(row) not in membership.get(previous["run_id"], set()):
+    if row["obs_id"] == row["first_obs_id"] or row["returned_to_list"]:
         return "NEW_ON_LIST"
     return None
 
 
-def _membership(rows: list[dict[str, Any]]) -> dict[str, set]:
-    result: dict[str, set] = defaultdict(set)
-    for row in rows:
-        result[row["run_id"]].add(_identity(row))
-    return result
-
-
-def _display_order(ranks: list[int], threshold: int) -> float:
-    if not ranks:
+def _display_order(stats: dict[str, Any]) -> float:
+    count = stats.get("rank_count", 0)
+    if not count:
         return 0.0
-    return (0.6 * mean([10 * (11 - min(r, 10)) for r in ranks])
-            + 0.3 * 10 * min(len(ranks), 10)
-            + 0.1 * 100 * sum(r <= threshold for r in ranks) / len(ranks))
+    return (0.6 * stats["rank_strength"] / count + 0.3 * 10 * min(count, 10)
+            + 0.1 * 100 * stats["highlighted"] / count)
 
 
 def generate_report(path: str | None = None, *, mode: str = "CURRENT", scope: str = "all",
@@ -117,42 +104,37 @@ def generate_report(path: str | None = None, *, mode: str = "CURRENT", scope: st
     baseline = previous["observation_boundary"] if previous else 0
     if mode == "INCREMENTAL" and previous and _time(previous["generated_at"]) < start:
         raise ValueError("BASELINE_OUTSIDE_HISTORY_WINDOW: 增量基线超过 30 天，请使用新报告配置")
-    snapshot = store.read_report_history(_iso(start), _iso(when + timedelta(seconds=1)), target, baseline=baseline)
-    observations = snapshot["observations"]
-    membership = _membership(observations)
-    latest_run = {r["source_id"]: r for r in snapshot["runs"]}
-    grouped: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
-    for row in observations:
-        grouped[_identity(row)].append(row)
+    read_mode = "CURRENT" if mode == "INCREMENTAL" and previous is None else mode
+    latest, earlier, new_kinds = {}, {}, {}
+    with store.read_report_history(_iso(day), _iso(when + timedelta(seconds=1)), target,
+                                   mode=read_mode, baseline=baseline, day_start=_iso(day),
+                                   rank_threshold=rank_threshold) as snapshot:
+        for row in snapshot["observations"]:
+            pair = _identity(row)
+            if read_mode == "INCREMENTAL" and row["obs_id"] <= baseline:
+                earlier[pair] = row
+                continue
+            latest[pair] = row
+            kind = _new_kind(row)
+            if row["obs_id"] > baseline and kind and _eligible(row, cfg, when):
+                new_kinds[pair] = kind
     selected = []
-    for pair, history in grouped.items():
-        row = history[-1]
-        if not row["enabled"] or row["deleted_at"] or (row["re_enabled_at"] and row["observed_at"] < row["re_enabled_at"]):
+    for pair, row in latest.items():
+        if not _eligible(row, cfg, when):
             continue
-        run = latest_run.get(row["source_id"])
-        if mode == "DAILY":
-            relevant = [r for r in history if r["observed_at"] >= _iso(day)]
-        elif mode == "CURRENT" or (mode == "INCREMENTAL" and previous is None):
-            relevant = [r for r in history if run and run["status"] in ("ok", "empty") and r["run_id"] == run["run_id"]]
-        else:
-            earlier = [r for r in history if r["obs_id"] <= baseline]
-            changes = [r for r in history if r["obs_id"] > baseline]
-            relevant = changes if changes and (not earlier or _fact(changes[-1]) != _fact(earlier[-1])
-                                               or _new_kind(changes[-1], snapshot["runs"], membership)) else []
-        if not relevant:
-            continue
-        row = relevant[-1]
-        if not _fresh([row], cfg, when):
+        if read_mode == "INCREMENTAL" and pair in earlier and _fact(row) == _fact(earlier[pair]) and not _new_kind(row):
             continue
         result = _item(row)
-        ranks = [r["rank"] for r in history if r["rank"] is not None and r["observed_at"] >= _iso(day)]
+        stats = snapshot["day_stats"].get(pair, {})
+        run = snapshot["latest_runs"].get(row["source_id"])
         result["highlight"] = result["rank"] is not None and result["rank"] <= rank_threshold
-        result["display_order_score"] = round(_display_order(ranks, rank_threshold), 3)
-        result["best_rank"] = min(ranks) if ranks else None
-        result["observation_count"] = sum(r["observed_at"] >= _iso(day) for r in history)
-        result["current_state"] = "STALE" if not run or (_time(run["started_at"]) < when - timedelta(hours=6)) else "OBSERVED"
-        new_rows = [r for r in relevant if r["obs_id"] > baseline and _new_kind(r, snapshot["runs"], membership)]
-        result["new_kind"] = _new_kind(new_rows[-1], snapshot["runs"], membership) if new_rows else None
+        result["display_order_score"] = round(_display_order(stats), 3)
+        result["best_rank"] = stats.get("best_rank")
+        result["observation_count"] = stats.get("observation_count", 0)
+        result["latest_source_status"] = run["status"].upper() if run else "UNKNOWN"
+        result["current_state"] = store.get_item_rank_state(
+            row["item_id"], target, include_history=False, now=when).get("current_state", "UNKNOWN") if row["has_real_rank"] else store.ITEM_STATE_NO_RANK_SEMANTICS
+        result["new_kind"] = new_kinds.get(pair)
         result["change_kind"] = result["new_kind"] or ("CHANGED" if mode == "INCREMENTAL" else None)
         matched, names = filtering.evaluate_keyword_rules(result["title"], result["summary"], profile["keyword_rules"])
         result["keyword_groups"] = names
@@ -199,7 +181,9 @@ def generate_report(path: str | None = None, *, mode: str = "CURRENT", scope: st
     plane = service.data_status(target)
     result = {"status": "partial" if incomplete_filter else plane["status"], "mode": mode, "scope": scope,
               "profile_id": profile_id, "group_by": group_by, "generated_at": _iso(when),
-              "data_basis": "CURRENT_ELIGIBLE", "window": {"start": _iso(day if mode == "DAILY" else start), "end": _iso(when)},
+              "data_basis": "CURRENT_ELIGIBLE", "window": {
+                  "start": _iso(day) if mode == "DAILY" else previous["generated_at"] if read_mode == "INCREMENTAL"
+                  else min((r["observed_at"] for r in selected), default=_iso(when)), "end": _iso(when)},
               "baseline": previous, "observation_boundary": snapshot["boundary"],
               "sections": output, "total": len(selected), "unique_item_count": len({r["item_id"] for r in selected}),
               "new_items": [r for section in output for r in section["items"] if r["new_kind"]], "filter_meta": filter_meta,
@@ -259,41 +243,78 @@ def analyze_topic(path: str | None = None, *, topic: str, profile_id: str = "def
     day = when.replace(hour=0, minute=0, second=0, microsecond=0)
     start = day - timedelta(days=days - 1)
     before = start - timedelta(days=days)
-    snapshot = store.read_report_history(_iso(before), _iso(when + timedelta(seconds=1)), target)
-    rows = snapshot["observations"]
-    if data_basis == "CURRENT_ELIGIBLE":
-        rows = _fresh([r for r in rows if r["enabled"] and not r["deleted_at"]], store.get_native_intel_config(target), when)
+    cfg = store.get_native_intel_config(target)
     profile = service.get_filter_profile(profile_id, target)
     rules = profile["keyword_rules"]
     group_names = [g["name"] for g in rules.get("groups", [])]
-    for row in rows:
-        _, row["groups"] = filtering.evaluate_keyword_rules(row["observed_title"], row["summary"], rules)
-        row["topic_hit"] = topic in row["groups"] if topic in group_names else topic.lower() in row["observed_title"].lower()
-        row["day"] = _time(row["observed_at"]).astimezone(LOCAL).date().isoformat()
-    current = [r for r in rows if r["observed_at"] >= _iso(start)]
-    matched = [r for r in current if r["topic_hit"]]
+    # Retain distinct aggregation keys, not repeated raw observations/source runs.
+    daily = defaultdict(lambda: {k: set() for k in ("mentions", "items", "sources", "platforms", "ok", "failed")})
+    latest = {}
+    points = deque(maxlen=RANK_TIMELINE_POINT_LIMIT)
+    point_count = 0
+    start_iso = _iso(start)
+    with store.read_report_history(_iso(before), _iso(when + timedelta(seconds=1)), target) as snapshot:
+        stats = {s["source_id"]: {"current": set(), "past": set(), "hits": set(), "items": set(),
+                 "new": set(), "days": set(), "rank_count": 0, "rank_sum": 0, "updates": 0}
+                 for s in snapshot["sources"]}
+        for row in snapshot["observations"]:
+            if data_basis == "CURRENT_ELIGIBLE" and not _eligible(row, cfg, when):
+                continue
+            date = _time(row["observed_at"]).astimezone(LOCAL).date().isoformat()
+            stat = stats[row["source_id"]]
+            title_key = (date, row["observed_title"])
+            if row["observed_at"] < start_iso:
+                stat["past"].add(title_key)
+                continue
+            _, row["groups"] = filtering.evaluate_keyword_rules(row["observed_title"], row["summary"], rules)
+            hit = topic in row["groups"] if topic in group_names else topic.lower() in row["observed_title"].lower()
+            stat["current"].add(title_key)
+            stat["items"].add(row["item_id"])
+            stat["days"].add(date)
+            if row["obs_id"] == row["first_obs_id"]:
+                stat["new"].add(row["item_id"])
+            ranked = row["has_real_rank"] and row["rank"] is not None
+            if ranked:
+                stat["rank_count"] += 1
+                stat["rank_sum"] += row["rank"]
+            pair = _identity(row)
+            latest[pair] = row
+            if hit:
+                stat["hits"].add(title_key)
+                bucket = daily[date]
+                bucket["mentions"].add((row["source_id"], row["observed_title"]))
+                bucket["items"].add(row["item_id"])
+                bucket["sources"].add(row["source_id"])
+                if row["has_real_rank"]:
+                    bucket["platforms"].add(row["source_id"])
+                if ranked:
+                    point_count += 1
+                    points.append((pair, {"observed_at": row["observed_at"], "rank": row["rank"], "run_id": row["run_id"]}))
+        for run in snapshot["runs"]:
+            if run["started_at"] < start_iso:
+                continue
+            date = _time(run["started_at"]).astimezone(LOCAL).date().isoformat()
+            if run["status"] in ("ok", "empty"):
+                daily[date]["ok"].add(run["source_id"])
+                stats[run["source_id"]]["updates"] += 1
+            elif run["status"] == "failed":
+                daily[date]["failed"].add(run["source_id"])
     buckets = []
     for offset in range(days):
         date = (start + timedelta(days=offset)).date().isoformat()
-        observed = [r for r in matched if r["day"] == date]
-        source_runs = [r for r in snapshot["runs"] if _time(r["started_at"]).astimezone(LOCAL).date().isoformat() == date]
-        successes = {r["source_id"] for r in source_runs if r["status"] in ("ok", "empty")}
-        failures = {r["source_id"] for r in source_runs if r["status"] == "failed"}
-        buckets.append({"date": date, "mention_count": len({(r["source_id"], r["observed_title"]) for r in observed}),
-                        "unique_item_count": len({r["item_id"] for r in observed}),
-                        "source_count": len({r["source_id"] for r in observed}),
-                        "platform_count": len({r["source_id"] for r in observed if r["has_real_rank"]}),
-                        "coverage": "PARTIAL" if failures else "OBSERVED" if successes else "UNKNOWN",
-                        "successful_sources": len(successes), "failed_sources": len(failures)})
+        observed = daily[date]
+        buckets.append({"date": date, "mention_count": len(observed["mentions"]),
+                        "unique_item_count": len(observed["items"]), "source_count": len(observed["sources"]),
+                        "platform_count": len(observed["platforms"]),
+                        "coverage": "PARTIAL" if observed["failed"] else "OBSERVED" if observed["ok"] else "UNKNOWN",
+                        "successful_sources": len(observed["ok"]), "failed_sources": len(observed["failed"])})
     for index, bucket in enumerate(buckets):
         bucket["change"] = _change(bucket["mention_count"], buckets[index - 1]["mention_count"]) if index else None
     counts = [b["mention_count"] for b in buckets]
     heuristics = summarize_counts(counts, complete=all(b["coverage"] == "OBSERVED" for b in buckets))
     trajectories: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
-    for row in matched:
-        if row["has_real_rank"] and row["rank"] is not None:
-            trajectories[_identity(row)].append({"observed_at": row["observed_at"], "rank": row["rank"], "run_id": row["run_id"]})
-    latest = {_identity(r): r for r in current}
+    for pair, point in points:
+        trajectories[pair].append(point)
     rank_timeline = [{"source_id": pair[0], "source_name": latest[pair]["source_name"],
                       "item_id": pair[1], "title": latest[pair]["observed_title"], "points": points}
                      for pair, points in trajectories.items()]
@@ -307,42 +328,47 @@ def analyze_topic(path: str | None = None, *, topic: str, profile_id: str = "def
         comparison_sources.append(({"source_id": "rss-group:" + hint, "name": "RSS 分组 · " + hint,
                                     "source_type": "rss", "has_real_rank": False, "hint": hint}, source_ids))
     for source, source_ids in comparison_sources:
-        current_source = [r for r in current if r["source_id"] in source_ids]
-        past_source = [r for r in rows if r["observed_at"] < _iso(start) and r["source_id"] in source_ids]
-        if not current_source and not past_source:
+        parts = [stats[sid] for sid in source_ids]
+        daily_count = sum(len(p["current"]) for p in parts)
+        past_count = sum(len(p["past"]) for p in parts)
+        if not daily_count and not past_count:
             continue
-        daily_count = len({(r["day"], r["source_id"], r["observed_title"]) for r in current_source})
-        past_count = len({(r["day"], r["source_id"], r["observed_title"]) for r in past_source})
-        active_days = len({r["day"] for r in current_source})
-        real_ranks = [r["rank"] for r in current_source if r["has_real_rank"] and r["rank"] is not None]
+        active_days = len(set().union(*(p["days"] for p in parts)))
+        rank_count = sum(p["rank_count"] for p in parts)
         platforms.append({"source_id": source["source_id"], "name": source["name"], "source_type": source["source_type"],
                           "group": source["source_id"] if source["has_real_rank"] else "RSS:" + source["hint"],
                           "source_ids": sorted(source_ids), "coverage_ratio": round(active_days / days, 3),
-                          "item_count": daily_count, "unique_item_count": len({r["item_id"] for r in current_source}),
-                          "topic_hit_count": len({(r["day"], r["source_id"], r["observed_title"]) for r in current_source if r["topic_hit"]}),
-                          "new_item_count": len({_identity(r) for r in current_source if r["obs_id"] == r["first_obs_id"]}),
-                          "ranked_visibility": len(real_ranks), "mean_observed_rank": round(mean(real_ranks), 2) if real_ranks else None,
+                          "item_count": daily_count, "unique_item_count": len(set().union(*(p["items"] for p in parts))),
+                          "topic_hit_count": sum(len(p["hits"]) for p in parts),
+                          "new_item_count": sum(len(p["new"]) for p in parts),
+                          "ranked_visibility": rank_count,
+                          "mean_observed_rank": round(sum(p["rank_sum"] for p in parts) / rank_count, 2) if rank_count else None,
                           "activity_change": _change(daily_count, past_count), "previous_item_count": past_count,
                           "news_per_active_day": round(daily_count / active_days, 2) if active_days else 0,
-                          "updates": len({(r["source_id"], r["run_id"]) for r in snapshot["runs"] if r["source_id"] in source_ids
-                                          and r["started_at"] >= _iso(start) and r["status"] in ("ok", "empty")})})
+                          "updates": sum(p["updates"] for p in parts)})
     platforms.sort(key=lambda r: -r["news_per_active_day"])
-    unique = {r["item_id"]: r for r in current}
-    pairs: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    unique = {r["item_id"]: r for r in sorted(latest.values(), key=lambda r: r["obs_id"])}
+    pairs = {}
     for row in unique.values():
         for pair in combinations(sorted(set(row["groups"])), 2):
-            pairs[pair].append(_item(row))
-    cooccurrence = [{"pair": list(pair), "count": len(items), "sample_items": items[:3]}
-                    for pair, items in sorted(pairs.items(), key=lambda x: -len(x[1]))]
+            aggregate = pairs.setdefault(pair, {"pair": list(pair), "count": 0, "sample_items": []})
+            aggregate["count"] += 1
+            if len(aggregate["sample_items"]) < 3:
+                aggregate["sample_items"].append(_item(row))
+    cooccurrence = sorted(pairs.values(), key=lambda p: -p["count"])
     first = next((c for c in counts if c), 0)
     change = _change(counts[-1], first) if first else 0
     return {"status": service.data_status(target)["status"], "topic": topic, "topics": group_names,
             "data_basis": data_basis, "window": {"start": _iso(start), "end": _iso(when)},
             "trend": buckets, "change_percent": change,
             "trend_direction": "上升" if change and change > 10 else "下降" if change and change < -10 else "稳定",
-            "rank_timeline": rank_timeline, "cross_source_visibility": len({r["source_id"] for r in matched}),
+            "rank_timeline": rank_timeline,
+            "rank_timeline_sample": {"total_points": point_count, "returned_points": len(points),
+                                     "limit": RANK_TIMELINE_POINT_LIMIT, "truncated": point_count > len(points),
+                                     "selection": "latest_observation_ids"},
+            "cross_source_visibility": len(set().union(*(b["sources"] for b in daily.values()))),
             **heuristics, "platforms": platforms, "cooccurrence": cooccurrence,
-            "platform_note": "热榜是平台排名观察；RSS 是订阅文章流，分组按来源累加。活跃度为日去重条目数，与前一个等天数窗口比较；今天尚未完成，不代表全网热度；RSS 无排名。",
+            "platform_note": "逐个热榜来源、逐个 RSS 来源及 RSS 分组汇总分别展示；汇总行不可与单源行再次求和。活跃度为来源/日去重条目数，与前一个等天数窗口比较；今天尚未完成，不代表全网热度；RSS 无排名。",
             "usage_boundary": BOUNDARY}
 
 
@@ -353,8 +379,8 @@ def similar_items(item_id: int, path: str | None = None, *, threshold: float = 0
     when = _now(now)
     start = when.replace(hour=0, minute=0, second=0, microsecond=0)
     target = path or service.db_path()
-    snapshot = store.read_report_history(_iso(start), _iso(when + timedelta(seconds=1)), target)
-    latest = {r["item_id"]: r for r in snapshot["observations"]}
+    with store.read_report_history(_iso(start), _iso(when + timedelta(seconds=1)), target) as snapshot:
+        latest = {r["item_id"]: r for r in snapshot["observations"]}
     reference = latest.get(item_id)
     if reference is None:
         raise ValueError("今日窗口内未找到参考条目")

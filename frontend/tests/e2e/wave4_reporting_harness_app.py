@@ -58,6 +58,14 @@ def profile():
     return {"data": {}}
 
 
+@app.post("/__test/source-failure")
+def source_failure():
+    global CLOCK
+    CLOCK += timedelta(minutes=1)
+    seed(DB, CLOCK, [], failed=("weibo",))
+    return {"status": "failed"}
+
+
 @app.get("/api/radar")
 def radar():
     return {"generated_at": None, "recent_days": 3, "industries": [],

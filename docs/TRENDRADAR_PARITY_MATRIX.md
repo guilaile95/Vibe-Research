@@ -132,12 +132,15 @@
 | 话题生命周期跟踪（Topic lifecycle） | **PARITY** | pinned 的前3/后3日与峰值简单规则：上升期/衰退期/爆发期/稳定期；不是正式状态机，返回实际输入和依据 |
 | 爆发突发热点检测（Viral detection） | **PARITY** | 今日/昨日 >=3；零基线至少5。是每日条数阈值，不是原规划中未经证实的多维模型 |
 | 趋势预测分析（Trend prediction） | **PARITY** | 近期已出现日桶末次增长严格 >30%，规则强度0.6/0.7/0.9，默认>=0.7；UI 明确“趋势推断（规则）”，不是概率或 AI |
-| 平台活跃度与横向对比（Platform comparison & activity） | **PARITY**（原生差异见契约） | Hotlist 逐平台 + RSS source group；日去重数/话题命中/首次观测数/真实排名观察/前窗变化，RSS 排名不适用；source-run 计数替代文件名更新频率 |
-| 关键词组共现（Keyword co-occurrence） | **PARITY**（Owner 指定差异） | Wave 2 Group A/B 每个 item 同时命中计一次、跨来源不重复，附样本；不沿用上游分词对最少3次口径，不推断因果 |
+| 14 天分析（14_DAY_ANALYTICS） | **PARITY** | 14 天 + 前 14 天比较；5,000 行分批聚合，432,000 条历史回归核对精确聚合，不再因 raw rows >100k 拒绝 |
+| 30 天分析（30_DAY_ANALYTICS） | **PARITY** | 30 天 + 前 30 天比较；同一 SQLite 分批聚合；统计不截断，仅轨迹返回最近 10,000 点并显式标注，附精确总数 |
+| 平台活跃度与横向对比（Platform comparison & activity） | **PARITY**（原生差异见契约） | Hotlist 逐来源 + RSS 逐来源 + RSS 分组汇总行；汇总行不能与单源行再次求和。日去重数/话题命中/首次观测数/真实排名观察/前窗变化，RSS 无排名；source-run 计数替代文件名更新频率 |
+| 关键词组共现（Keyword co-occurrence） | **PARITY**（Owner 指定差异） | 按 Native Intel item identity 同时命中 Wave 2 Group A/B 计一次；热榜身份包含来源，同一故事跨平台可能分别计数，不声称故事级跨来源去重。附样本，不推断因果 |
 | 新出现区域（new_items） | **PARITY** | 现有 display config 正式启用 slot；NEW_ON_LIST（每平台）与 NEWLY_OBSERVED（首次本地 RSS，非刚发布）独立 badge；沿用 scope/freshness/组上限 |
 
 Wave 4 行为证据：[独立输入输出契约](NATIVE_INTEL_WAVE4_CONTRACT.md)；
 `backend/tests/test_native_intel_reporting.py` 的真实 SQLite 定向回归；
+包括 432,000 条历史下 CURRENT/DAILY/INCREMENTAL 与 14/30 天精确聚合、失败来源日报真值、重新启用边界；
 `frontend/tests/e2e/wave4-report-analytics.browser.mjs` 的 Chromium → FastAPI → 隔离 SQLite 六场景，
 加入既有 Intel digest CI job。PARITY 是这里列明的已实现并自动验证行为，不替代项目经理 Independent Gate；
 与 pinned 的差异及计算上限均以契约为准。

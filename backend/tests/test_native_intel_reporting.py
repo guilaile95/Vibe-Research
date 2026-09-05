@@ -150,7 +150,7 @@ def test_daily_counts_rank_isolation_platforms_cooccurrence_and_similar(tmp_path
         {"name": "机器人", "includes": ["机器人"]}, {"name": "芯片", "includes": ["芯片"]}]}}, path)
     for offset in range(7):
         seed(path, NOW-timedelta(days=6-offset, minutes=10), [("weibo", "a", "机器人芯片获得新订单", 18-offset),
-             ("baidu", "b", "机器人芯片获得大订单", 9-offset), ("rss-a", "c", "机器人芯片产业新闻", None)])
+             ("baidu", "b", "机器人芯片获得新订单", 9-offset), ("rss-a", "c", "机器人芯片获得订单报道", None)])
     seed(path, NOW-timedelta(minutes=1), [("weibo", "a", "机器人芯片获得新订单", 4)])
     result = reports.analyze_topic(path, topic="机器人", now=NOW)
     assert [b["mention_count"] for b in result["trend"]] == [3]*7
@@ -160,6 +160,10 @@ def test_daily_counts_rank_isolation_platforms_cooccurrence_and_similar(tmp_path
     assert paths["baidu"][-1]["rank"] == 3
     assert len(paths) == 2
     assert result["cooccurrence"][0]["count"] == 3
+    hot_samples = [r for r in result["cooccurrence"][0]["sample_items"] if r["source_type"] == "hotlist"]
+    assert len({r["title"] for r in hot_samples}) == 1
+    assert len({r["item_id"] for r in hot_samples}) == 2  # Same story, distinct Native Intel identities.
+    assert {p["source_id"] for p in result["platforms"]} == {"weibo", "baidu", "rss-a", "rss-group:research"}
     rss = next(p for p in result["platforms"] if p["source_id"] == "rss-a")
     assert rss["item_count"] == 7 and rss["ranked_visibility"] == 0 and rss["mean_observed_rank"] is None
     group = next(p for p in result["platforms"] if p["source_id"] == "rss-group:research")
@@ -235,3 +239,80 @@ def test_backup_restores_cursor_and_custom_policy(tmp_path, monkeypatch):
     assert timeline.get_policy(str(restored_db))["preset"] == "custom"
     result = reports.generate_report(str(restored_db), mode="INCREMENTAL", now=NOW+timedelta(seconds=1))
     assert result["total"] == 0 and result["baseline"]["observation_boundary"] == generated["observation_boundary"]
+
+
+def test_large_history_reports_and_14_30_day_aggregates(tmp_path):
+    path = str(tmp_path / "native_intel.sqlite3")
+    first = NOW.astimezone(reports.LOCAL).replace(hour=0, minute=0, second=0) - timedelta(days=59)
+    sources = ("weibo", "baidu", "rss-a")
+    entries = [(s, f"{s}-{i}", f"机器人芯片{i}", i+1 if s != "rss-a" else None)
+               for s in sources for i in range(50)]
+    ids = seed(path, first, entries)
+    # 432,000 short observations, bulk inserted; no network or production DB.
+    instants = [first + timedelta(days=d, minutes=15*n) for d in range(60) for n in range(48)]
+    with sqlite3.connect(path) as conn:
+        conn.executemany("INSERT INTO intel_fetch_runs (run_id,started_at,finished_at,status,trigger,source_total,source_ok) "
+                         "VALUES (?,?,?,'ok','fixture',3,3)",
+                         ((reports._iso(t),)*3 for t in instants[1:]))
+        conn.executemany("INSERT INTO intel_source_runs (run_id,source_id,status,item_count) VALUES (?,?,'ok',50)",
+                         ((reports._iso(t), s) for t in instants[1:] for s in sources))
+        conn.executemany("INSERT INTO intel_observations (run_id,item_id,source_id,observed_at,rank,observed_title,published_at) "
+                         "VALUES (?,?,?,?,?,?,?)",
+                         ((reports._iso(t), iid, row[0], reports._iso(t), row[3], row[2], reports._iso(first))
+                          for t in instants[1:] for iid, row in zip(ids, entries)))
+        conn.execute("UPDATE intel_items SET observation_count=2880, last_seen_at=?", (reports._iso(instants[-1]),))
+        assert conn.execute("SELECT COUNT(*) FROM intel_observations").fetchone()[0] == 432000
+    service.update_filter_profile("default", {"keyword_rules": {"groups": [
+        {"name": "机器人", "includes": ["机器人"]}, {"name": "芯片", "includes": ["芯片"]}]}}, path)
+    for mode in ("CURRENT", "DAILY", "INCREMENTAL"):
+        result = reports.generate_report(path, mode=mode, now=NOW)
+        assert result["total"] == result["unique_item_count"] == 150
+        assert sum(i["observation_count"] for i in items(result)) == 48*150
+        assert next(i for i in items(result) if i["source_id"] == "weibo" and i["rank"] == 1)["display_order_score"] == 100
+    assert reports.generate_report(path, mode="INCREMENTAL", now=NOW)["total"] == 0
+    for days in (14, 30):
+        result = reports.analyze_topic(path, topic="机器人", days=days, now=NOW)
+        assert [b["mention_count"] for b in result["trend"]] == [150]*days
+        assert all(b["source_count"] == 3 and b["platform_count"] == 2 and b["unique_item_count"] == 150 for b in result["trend"])
+        assert result["cross_source_visibility"] == 3 and result["cooccurrence"][0]["count"] == 150
+        for p in result["platforms"]:
+            assert p["item_count"] == p["topic_hit_count"] == p["previous_item_count"] == days*50
+            assert p["unique_item_count"] == 50 and p["updates"] == days*48
+            assert p["activity_change"] == 0 and p["new_item_count"] == 0
+            assert p["ranked_visibility"] == (days*48*50 if p["source_type"] == "hotlist" else 0)
+            assert p["mean_observed_rank"] == (25.5 if p["source_type"] == "hotlist" else None)
+        assert result["rank_timeline_sample"]["total_points"] == days*48*100
+        assert result["rank_timeline_sample"]["truncated"] is True
+        assert sum(len(t["points"]) for t in result["rank_timeline"]) == reports.RANK_TIMELINE_POINT_LIMIT
+
+
+def test_daily_preserves_fact_but_latest_source_failure_is_unknown(tmp_path):
+    path = str(tmp_path / "native_intel.sqlite3")
+    day = NOW.astimezone(reports.LOCAL).replace(hour=0, minute=0, second=0)
+    seed(path, day+timedelta(hours=9), [("weibo", "a", "机器人新闻", 1), ("rss-a", "b", "机器人文章", None)])
+    seed(path, day+timedelta(hours=11), [], failed=("weibo", "rss-a"))
+    when = day+timedelta(hours=12)
+    daily = items(reports.generate_report(path, mode="DAILY", now=when, commit=False))
+    assert len(daily) == 2 and all(i["latest_source_status"] == "FAILED" for i in daily)
+    hot = next(i for i in daily if i["source_type"] == "hotlist")
+    assert hot["current_state"] == store.get_item_rank_state(hot["item_id"], path, now=when)["current_state"] == "UNKNOWN"
+    rss = next(i for i in daily if i["source_type"] == "rss")
+    assert rss["rank"] is None and rss["current_state"] == "NO_RANK_SEMANTICS"
+    assert reports.generate_report(path, mode="CURRENT", now=when, commit=False)["total"] == 0
+
+
+def test_analytics_reenable_eligibility_preserves_raw_history(tmp_path, monkeypatch):
+    path = str(tmp_path / "native_intel.sqlite3")
+    seed(path, NOW-timedelta(hours=2), [("weibo", "a", "机器人新闻", 1)])
+    monkeypatch.setattr(store, "utc_now_iso", lambda: reports._iso(NOW-timedelta(hours=1)))
+    store.update_source("weibo", enabled=False, db_path=path)
+    store.update_source("weibo", enabled=True, db_path=path)
+    def count(basis):
+        return sum(b["mention_count"] for b in reports.analyze_topic(path, topic="机器人", data_basis=basis, now=NOW)["trend"])
+    assert count("RAW_HISTORY") == 1 and count("CURRENT_ELIGIBLE") == 0
+    assert reports.generate_report(path, now=NOW, commit=False)["total"] == 0
+    seed(path, NOW-timedelta(minutes=1), [("weibo", "a", "机器人新闻", 2)])
+    assert count("RAW_HISTORY") == count("CURRENT_ELIGIBLE") == 1
+    assert reports.generate_report(path, now=NOW, commit=False)["total"] == 1
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM intel_observations").fetchone()[0] == 2

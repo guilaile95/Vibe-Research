@@ -41,13 +41,29 @@ Audited: `config/config.yaml`, `config/timeline.yaml`, `trendradar/core/analyzer
   published) from a source-specific first or confirmed return to a hotlist
   (NEW_ON_LIST). Source failure cannot establish a return to a list.
   CURRENT does not present a failed source's old list as current; DAILY can show
-  its earlier observed facts with the data-plane failure/staleness status.
+  its earlier observed facts with explicit latest_source_status (e.g. FAILED)
+  and the existing Wave 1 rank state (UNKNOWN after failure, never OBSERVED).
+  RSS exposes source status but keeps NO_RANK_SEMANTICS and NULL rank.
   Raw history is untouched. Re-enabled sources wait for a new observation.
 
-The local compute window is bounded: reports inspect at most 30 calendar days;
-analytics support 2–30 days plus the previous equal-length comparison window.
-At 100,000 observations or source runs the query rejects rather than silently
-truncating. A report baseline older than that lookback is explicitly rejected.
+CURRENT reads the active sources' latest completed runs, DAILY only the Shanghai
+calendar day, and INCREMENTAL only each source/item's last valid observation at
+or before its cursor plus observations after the cursor. Daily display-rank
+statistics are separately SQL-aggregated, not loaded as raw history. Only an
+incremental baseline older than the supported 30-day lookback is rejected.
+Analytics supports 2–30 days plus the previous equal-length comparison window.
+Observations and source runs stream through 5,000-row pages in one SQLite read
+snapshot; each page is aggregated before the next. There is no total raw-row
+rejection. Memory holds distinct aggregation keys/latest items, not all repeated
+observations. No second analytics store is introduced.
+All counts use the complete window. Only returned rank trajectories are capped
+to the latest 10,000 matching observation IDs across trajectories, with explicit
+total/returned/truncated metadata and a UI notice; cooccurrence samples remain
+at most three items per pair. Reports and CURRENT_ELIGIBLE analytics share the
+same source-enabled/deleted/re_enabled_at guard and existing freshness evaluator.
+RAW_HISTORY retains pre-reenable observations unchanged.
+The deterministic 432,000-observation regression verifies CURRENT, DAILY,
+INCREMENTAL and exact 14/30-day aggregates, including the previous window.
 Titles/ranks/publication timestamps come from observations; item URL/summary and
 source labels use the existing current metadata, not a new snapshot authority.
 
@@ -91,8 +107,8 @@ from observed zero counts. Counts deduplicate repeated fetches within a source/d
 | Lifecycle type | At most two active days and peak > twice nonzero-day mean => 昙花一现; else active days >=60% of window => 持续热点; else 周期性热点 | Same rules, including the mathematically unreachable short-spike condition; no invented replacement |
 | Viral | Today/yesterday >=3 (inclusive); yesterday zero requires today >=5. High alert when ratio >6, else medium | Same thresholds for explicit topics/groups; absent coverage is UNKNOWN, not an invented zero baseline. Reference time_window parameter does not alter its day comparison |
 | Prediction | Prior three days plus today; latest/previous growth >30% (strict). Two populated buckets strength 0.6; >=3 nondecreasing buckets 0.9, otherwise 0.7; default threshold 0.7 | Preserve actual nonzero-day reference sequence and expose it alongside full buckets; never label strength a probability. No forecast horizon is inferred from the unused reference lookahead parameter |
-| Platform comparison | Sum daily distinct source titles, matching topic count, distinct titles, topic coverage percentage. Activity divides news count by active days; reference update/hour counts derive from snapshot filenames | Native successful source-run counts replace filename-derived update frequency (not updates/hour); real Hotlist platforms remain separate; RSS groups sum their member source/day counts; add first-observed item counts, ranked visibility, observed-day coverage and previous equal-day-window change. Today is partial and explicitly labelled; RSS never enters rank metrics |
-| Co-occurrence | Pairs of whitespace/punctuation-extracted title tokens per source/title, default minimum 3 | Owner-directed Wave 2 group pairs, once per unique item across sources, with sample items. Multi-group matches retained here, even though reports assign the first group. Explicit semantic difference, no causal claim |
+| Platform comparison | Sum daily distinct source titles, matching topic count, distinct titles, topic coverage percentage. Activity divides news count by active days; reference update/hour counts derive from snapshot filenames | Individual Hotlist sources + individual RSS sources + RSS grouped aggregate rows (native superset). Aggregate rows must not be summed again with individual rows. Native successful source-run counts replace filename-derived update frequency (not updates/hour); add first-observed item counts, ranked visibility, observed-day coverage and previous equal-day-window change. Today is partial and explicitly labelled; RSS never enters rank metrics |
+| Co-occurrence | Pairs of whitespace/punctuation-extracted title tokens per source/title, default minimum 3 | Owner-directed Wave 2 group pairs, counted per Native Intel item identity, with samples. Hotlist identities are source-qualified: the same story on Weibo and Baidu can count separately. No story-level cross-source deduplication is claimed. Multi-group matches are retained; no causal claim |
 
 The reference token extractor does not provide Chinese semantic segmentation and
 may count repeated tokens. Vibe's existing configured keyword groups are the sole

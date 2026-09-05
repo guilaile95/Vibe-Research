@@ -5,6 +5,7 @@ export interface IntelReportItem {
   item_id: number; title: string; url: string; source_id: string; source_name: string;
   source_type: string; rank: number | null; published_at: string | null; observed_at: string;
   highlight?: boolean; new_kind?: "NEW_ON_LIST" | "NEWLY_OBSERVED" | null; change_kind?: string | null;
+  latest_source_status?: string; current_state?: string;
 }
 export interface IntelReport {
   status: string; mode: ReportMode; total: number; generated_at: string; data_basis: string;
@@ -28,6 +29,7 @@ export interface IntelAnalysis {
   window: { start: string; end: string };
   trend: { date: string; mention_count: number; source_count: number; platform_count: number; change: number | null; coverage: string }[];
   rank_timeline: { source_id: string; source_name: string; item_id: number; title: string; points: { observed_at: string; rank: number }[] }[];
+  rank_timeline_sample?: { total_points: number; returned_points: number; truncated: boolean };
   lifecycle: { status: string; reason: string; topic_type: string; input_counts: number[] };
   viral: { detected: boolean | null; reason: string; current_count: number; baseline_count: number; growth: number | null };
   prediction: { direction: string; strength: number | null; reason: string; input_counts: number[] };

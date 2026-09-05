@@ -22,6 +22,8 @@ function NewsRows({ items, onSimilar }: { items: IntelReportItem[]; onSimilar?: 
     </div>
     <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
       <span>{item.source_name} · {item.source_type === "rss" ? "RSS · 无排名" : "热榜"}</span>
+      {item.latest_source_status && <span>来源最近抓取：{item.latest_source_status}</span>}
+      {item.current_state && item.source_type === "hotlist" && <span>当前榜单状态：{item.current_state}</span>}
       <span>观测 {formatShanghaiTime(item.observed_at)}</span>
       <span>发布 {item.published_at ? formatShanghaiTime(item.published_at) : "时间未知"}</span>
       {onSimilar && <button className="text-primary" onClick={() => onSimilar(item.item_id)}>相似资讯</button>}
@@ -200,6 +202,7 @@ export function IntelAnalyticsPanel() {
         <div className={box} data-testid="topic-prediction"><h3 className="font-semibold">趋势推断（规则）</h3><p>{result.prediction.direction} · 强度档位 {result.prediction.strength ?? "未评估"}</p><p className="text-xs text-muted-foreground">{result.prediction.reason}</p></div>
       </div>
       <div className={box}><h3 className="font-semibold">各平台真实排名轨迹</h3><p className="text-xs text-muted-foreground">每个平台、每条资讯独立展示；不会生成综合排名。RSS 无排名。</p>
+        {result.rank_timeline_sample?.truncated && <p className="text-xs text-muted-foreground">轨迹仅展示最近 {result.rank_timeline_sample.returned_points} / {result.rank_timeline_sample.total_points} 个观测点；趋势和平台统计使用完整窗口。</p>}
         {!!result.rank_timeline.length && <div data-testid="rank-timeline-chart" role="img" aria-label="各来源独立真实排名折线图">
           <EChart height={280} option={{ useUTC: true, animation: false,
             grid: { left: 48, right: 20, top: 20, bottom: 38 },
@@ -217,7 +220,7 @@ export function IntelAnalyticsPanel() {
       <div className={box}><h3 className="font-semibold">平台与 RSS 活跃度对比</h3><p className="text-xs text-muted-foreground">{result.platform_note}</p><div className="overflow-x-auto"><table className="w-full text-left text-sm" data-testid="platform-comparison"><thead><tr>{["来源 / 组", "条数", "话题命中", "新出现", "排名观察", "活跃变化"].map(t => <th className="p-2" key={t}>{t}</th>)}</tr></thead><tbody>
         {result.platforms.map(p => <tr key={p.source_id} className="border-t border-border"><td className="p-2">{p.name} / {p.group}</td><td>{p.item_count}</td><td>{p.topic_hit_count}</td><td>{p.new_item_count}</td><td>{p.source_type === "rss" ? "不适用" : p.ranked_visibility}</td><td>{pct(p.activity_change)}</td></tr>)}
       </tbody></table></div></div>
-      <div className={box} data-testid="keyword-cooccurrence"><h3 className="font-semibold">关键词组共现</h3><p className="text-xs text-muted-foreground">同一资讯同时命中两个关注组计一次；仅表述共同出现，不代表因果关系。</p>
+      <div className={box} data-testid="keyword-cooccurrence"><h3 className="font-semibold">关键词组共现</h3><p className="text-xs text-muted-foreground">按 Native Intel 条目身份计数；同一故事在不同热榜平台可能分别计数。仅表述共同出现，不代表因果关系。</p>
         {result.cooccurrence.length ? result.cooccurrence.map(p => <div key={p.pair.join("/")}><p className="font-medium">{p.pair.join(" × ")} · {p.count} 次</p><NewsRows items={p.sample_items} /></div>) : <p>本窗口没有关键词组共现。</p>}
       </div>
     </>}

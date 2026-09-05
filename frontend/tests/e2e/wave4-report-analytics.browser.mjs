@@ -115,6 +115,8 @@ try {
   await page.getByTestId("rank-timeline-chart").locator("canvas").waitFor();
   assert.match(await page.getByTestId("platform-comparison").innerText(), /RSS 分组/);
   assert.match(await page.getByTestId("keyword-cooccurrence").innerText(), /机器人.*芯片|芯片.*机器人/);
+  assert.match(await page.getByTestId("keyword-cooccurrence").innerText(), /按 Native Intel 条目身份计数/);
+  assert.match(await page.getByText(/汇总行不可与单源行再次求和/).innerText(), /RSS/);
   const shot = path.join(isolated, "analytics.png");
   await page.screenshot({ path: shot, fullPage: true });
   await page.getByTestId("rank-timeline-chart").scrollIntoViewIfNeeded();
@@ -138,6 +140,17 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: path.join(isolated, "new-items-mobile.png"), fullPage: true });
   console.log("MOBILE_SCREENSHOT = " + path.join(isolated, "new-items-mobile.png"));
+  assert.ok((await fetch(api + "/__test/source-failure", { method: "POST" })).ok);
+  await page.getByRole("button", { name: "报告", exact: true }).click();
+  await result.waitFor();
+  assert.doesNotMatch(await result.innerText(), /基线后的唯一机器人新增/);
+  await page.getByLabel("报告模式").selectOption("DAILY");
+  await page.waitForFunction(() => document.querySelector('[data-testid="intel-report-result"]')?.textContent.includes("今日报告"));
+  await result.getByText("基线后的唯一机器人新增", { exact: true }).waitFor();
+  assert.ok(await result.getByText("来源最近抓取：FAILED", { exact: true }).count());
+  assert.ok(await result.getByText("当前榜单状态：UNKNOWN", { exact: true }).count());
+  assert.deepEqual(failedIntel, []); assert.deepEqual(errors, []); assert.deepEqual(consoleErrors, []);
+  console.log("DAILY_FACT_WITH_FAILED_SOURCE_AND_CURRENT_EXCLUSION = PASS");
   console.log("WAVE4_BROWSER_E2E = PASS");
 } catch (error) {
   console.error(logs);
