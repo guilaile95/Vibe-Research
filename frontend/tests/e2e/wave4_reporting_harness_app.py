@@ -34,6 +34,12 @@ def setup():
         ("rss-a", "archived", "首次采集的机器人旧文", None, reports._iso(CLOCK-timedelta(days=30)))])
     store.update_native_intel_config({"regions_enabled": {"hotlist": False, "rss": False,
         "standalone": False, "new_items": True}, "region_order": ["new_items"]}, DB)
+    returning = ("return-source", "return", "机器人确认再上榜", 2)
+    continuous = ("continuous-source", "continuous", "机器人持续在榜非新增", 2)
+    seed(DB, CLOCK-timedelta(seconds=50), [returning, continuous])
+    seed(DB, CLOCK-timedelta(seconds=40), [("return-source", "other", "其他条目", 1)])
+    seed(DB, CLOCK-timedelta(seconds=30), [], failed=("return-source", "continuous-source"))
+    seed(DB, CLOCK-timedelta(seconds=20), [returning, continuous])
     # Labels are registry metadata; observations above still use the real service path.
     with store._connect(DB) as conn:
         conn.execute("UPDATE intel_sources SET name='微博' WHERE source_id='weibo'")

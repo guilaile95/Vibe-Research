@@ -1878,8 +1878,9 @@ def read_report_history(since: str, until: str, db_path: str | Path | None = Non
                 SELECT 1 FROM intel_source_runs prev
                 WHERE prev.rowid = (SELECT MAX(p.rowid) FROM intel_source_runs p
                     JOIN intel_fetch_runs pr USING (run_id)
-                    WHERE p.source_id=o.source_id AND p.rowid<sr.rowid AND pr.status!='running')
-                  AND prev.status IN ('ok','empty') AND NOT EXISTS (
+                    WHERE p.source_id=o.source_id AND p.rowid<sr.rowid
+                      AND p.status IN ('ok','empty') AND pr.status!='running')
+                  AND NOT EXISTS (
                     SELECT 1 FROM intel_observations po
                     WHERE po.run_id=prev.run_id AND po.source_id=o.source_id AND po.item_id=o.item_id)
             )"""

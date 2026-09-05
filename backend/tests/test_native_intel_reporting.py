@@ -204,6 +204,39 @@ def test_cursor_schema_upgrade_preserves_facts(tmp_path):
     assert reports.generate_report(path, now=NOW)["cursor_advanced"]
 
 
+def test_new_on_list_skips_failed_run_and_uses_previous_success(tmp_path, monkeypatch):
+    path = str(tmp_path / "native_intel.sqlite3")
+    row = ("weibo", "a", "机器人再上榜", 2)
+    seed(path, NOW-timedelta(minutes=4), [row])
+    seed(path, NOW-timedelta(minutes=3), [("weibo", "b", "其他新闻", 1)])
+    seed(path, NOW-timedelta(minutes=2), [], failed=("weibo",))
+    seed(path, NOW-timedelta(minutes=1), [row])
+    assert items(reports.generate_report(path, now=NOW, commit=False))[0]["new_kind"] == "NEW_ON_LIST"
+    monkeypatch.setenv("VIBE_NATIVE_INTEL_DB", path)
+    monkeypatch.setattr(reports, "_now", lambda value: NOW.astimezone(reports.LOCAL))
+    app = FastAPI()
+    app.include_router(router.router)
+    response = TestClient(app).get("/api/native-intel/new-items")
+    assert response.status_code == 200
+    assert [(i["title"], i["new_kind"]) for i in response.json()["items"]] == [(row[2], "NEW_ON_LIST")]
+
+
+def test_new_on_list_not_false_positive_after_failed_run(tmp_path, monkeypatch):
+    path = str(tmp_path / "native_intel.sqlite3")
+    row = ("weibo", "a", "机器人持续在榜", 2)
+    iid = seed(path, NOW-timedelta(minutes=3), [row])[0]
+    seed(path, NOW-timedelta(minutes=2), [], failed=("weibo",))
+    assert store.get_item_rank_state(iid, path, now=NOW)["current_state"] == "UNKNOWN"
+    seed(path, NOW-timedelta(minutes=1), [row])
+    assert items(reports.generate_report(path, now=NOW, commit=False))[0]["new_kind"] is None
+    monkeypatch.setenv("VIBE_NATIVE_INTEL_DB", path)
+    monkeypatch.setattr(reports, "_now", lambda value: NOW.astimezone(reports.LOCAL))
+    app = FastAPI()
+    app.include_router(router.router)
+    response = TestClient(app).get("/api/native-intel/new-items")
+    assert response.status_code == 200 and response.json()["items"] == []
+
+
 def test_scheduled_fetch_report_once_and_disabled_segment(tmp_path, monkeypatch):
     path = str(tmp_path / "native_intel.sqlite3")
     seed(path, NOW-timedelta(minutes=1), [("rss-a", "a", "机器人", None)])

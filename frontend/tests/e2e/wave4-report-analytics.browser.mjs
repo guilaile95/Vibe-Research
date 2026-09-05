@@ -130,6 +130,13 @@ try {
   await news.getByTestId("badge-NEWLY_OBSERVED").first().waitFor();
   assert.match(await news.innerText(), /首次本地采集/);
   assert.match(await news.innerText(), /新见榜/);
+  await news.getByText("机器人确认再上榜", { exact: true }).waitFor();
+  await news.getByRole("listitem").filter({ hasText: "机器人确认再上榜" }).getByTestId("badge-NEW_ON_LIST").waitFor();
+  assert.equal(await news.getByText("机器人持续在榜非新增", { exact: true }).count(), 0);
+  const newItems = await (await fetch(api + "/api/native-intel/new-items")).json();
+  assert.equal(newItems.items.find(i => i.title === "机器人确认再上榜")?.new_kind, "NEW_ON_LIST");
+  assert.ok(!newItems.items.some(i => i.title === "机器人持续在榜非新增"));
+  console.log("CONFIRMED_RETURN_SKIPS_FAILURE_WITHOUT_FALSE_BADGE = PASS");
   assert.equal(await page.getByTestId("display-region-rss").count(), 0);
   assert.deepEqual(failedIntel, []);
   assert.deepEqual(errors, []);
