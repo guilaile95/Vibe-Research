@@ -59,13 +59,12 @@ export function HardRiskPanel({ item }: { item: DecisionInboxCampaignItem }) {
       data-hard-risk-campaign={item.campaign_id}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground">Hard Risk</span>
+        <span className="text-xs text-muted-foreground">硬风险</span>
         <span
           className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium ${BADGE_CLASS[view.tone]}`}
         >
           <ToneIcon tone={view.tone} />
           {view.statusLabel}
-          <span className="sr-only">{item.hard_risk_state ?? "MISSING"}</span>
         </span>
         {view.evaluationLabel && (
           <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
@@ -93,20 +92,22 @@ export function HardRiskPanel({ item }: { item: DecisionInboxCampaignItem }) {
       )}
 
       {view.authorityRefs.length > 0 && (
-        <div className="text-xs text-muted-foreground">
-          <p className="text-[11px]">Authority 引用：</p>
-          <ul className="mt-0.5 space-y-0.5 font-mono text-[11px]">
+        <details className="text-xs text-muted-foreground">
+          <summary className="cursor-pointer select-none hover:text-foreground">
+            技术依据（{view.authorityRefs.length}）
+          </summary>
+          <ul className="mt-1 space-y-0.5 font-mono text-[11px]">
             {view.authorityRefs.map((ref) => (
               <li key={ref}>{ref}</li>
             ))}
           </ul>
-        </div>
+        </details>
       )}
 
       {view.tone === "safe" && (
         <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
           <Info className="h-3 w-3" aria-hidden="true" />
-          显示为安全仅因为 backend 明确给出 positive-proof CLEAR。
+          只有系统取得明确的正面证明时，才会显示为安全。
         </p>
       )}
     </section>

@@ -26,6 +26,12 @@ const positionTone: Record<CandidatePositionPresentation["state"], string> = {
   UNKNOWN: "bg-warning/15 text-warning",
 };
 
+const positionStateLabel: Record<CandidatePositionPresentation["state"], string> = {
+  HELD: "当前持有",
+  NOT_HELD: "当前未持有",
+  UNKNOWN: "无法确认",
+};
+
 function errorMessage(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback;
 }
@@ -47,14 +53,14 @@ export function CandidateWorkspace() {
         if (!cancelled) setPosition({ status: "ready", value: deriveCandidatePosition(result, code), error: "" });
       })
       .catch((cause) => {
-        if (!cancelled) setPosition({ status: "error", value: null, error: errorMessage(cause, "Position Reality 读取失败") });
+        if (!cancelled) setPosition({ status: "error", value: null, error: errorMessage(cause, "当前持仓读取失败") });
       });
     const evidenceRequest = api.evidenceList({ subject_type: "stock", subject_id: code, limit: 200, offset: 0 })
       .then((result) => {
         if (!cancelled) setEvidence({ status: "ready", value: { records: result.items, total: result.total }, error: "" });
       })
       .catch((cause) => {
-        if (!cancelled) setEvidence({ status: "error", value: null, error: errorMessage(cause, "Evidence Ledger 读取失败") });
+        if (!cancelled) setEvidence({ status: "error", value: null, error: errorMessage(cause, "证据记录读取失败") });
       });
     void Promise.allSettled([positionRequest, evidenceRequest]);
 
@@ -64,11 +70,11 @@ export function CandidateWorkspace() {
   if (!validCode) {
     return (
       <div className="space-y-6" data-testid="candidate-workspace-invalid">
-        <PageHeader title="Candidate Workspace" subtitle="候选研究只接受 6 位 A 股代码。" />
+        <PageHeader title="候选研究" subtitle="候选研究只接受 6 位 A 股代码。" />
         <GlassCard>
           <div className="flex items-start gap-2 text-sm text-warning" role="alert">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>代码无效或缺失；未读取 Position、Evidence、Native Intel 或 Campaign authority。</span>
+            <span>代码无效或缺失，暂时无法读取持仓、证据、市场资讯或投资计划。</span>
           </div>
           <Link to="/stock-data" className="mt-4 inline-flex items-center gap-1.5 text-sm text-primary hover:underline">
             <ArrowLeft className="h-4 w-4" /> 返回个股数据
@@ -84,8 +90,8 @@ export function CandidateWorkspace() {
   return (
     <div className="space-y-6" data-testid="candidate-workspace" data-security-code={code}>
       <PageHeader
-        title={`Candidate Workspace · ${code}`}
-        subtitle="从候选事实到 Campaign、Formal Thesis 与 Decision 的三步工作区；不会自动买入、建仓或把 UNKNOWN 当事实。"
+        title={`候选研究 · ${code}`}
+        subtitle="按三步核对事实、建立投资计划并形成正式决策；系统不会自动买入，也不会把信息不足猜成事实。"
         actions={(
           <Link
             to={`/stock-data?code=${encodeURIComponent(code)}`}
@@ -101,30 +107,30 @@ export function CandidateWorkspace() {
         <div>
           <h2 id="candidate-step-context" className="text-base font-semibold">步骤 1 · 核对事实、来源与缺口</h2>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            Position 来自 canonical ledger；Native Intel 保留去重观察与来源状态；Evidence gap 只是现有账本库存盘点，不是新的充分性 authority。
+            先确认当前持仓、公开资讯和证据记录是否完整。任何无法证明的信息都会明确保留为“信息不足”。
           </p>
         </div>
 
         <GlassCard data-testid="candidate-position-card">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold">Position Reality</h3>
-              <p className="mt-1 text-xs text-muted-foreground">来源：GET /api/position/derived；非 canonical 或未 bootstrap 时保持 UNKNOWN。</p>
+              <h3 className="text-sm font-semibold">当前持仓</h3>
+              <p className="mt-1 text-xs text-muted-foreground">只有可信持仓记录成立时才显示数量；否则保持“无法确认”，不会猜成未持有。</p>
             </div>
             {position.status === "loading" ? (
               <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />读取中</span>
             ) : position.status === "error" ? (
-              <span className={`rounded px-2 py-1 text-xs font-semibold ${positionTone.UNKNOWN}`} data-position-state="UNKNOWN">UNKNOWN</span>
+              <span className={`rounded px-2 py-1 text-xs font-semibold ${positionTone.UNKNOWN}`} data-position-state="UNKNOWN">读取失败</span>
             ) : (
               <span className={`rounded px-2 py-1 text-xs font-semibold ${positionTone[position.value.state]}`} data-position-state={position.value.state}>
-                {position.value.state}
+                {positionStateLabel[position.value.state]}
               </span>
             )}
           </div>
           {position.status === "ready" && (
             <div className="mt-3 space-y-1 text-xs">
               <p>{position.value.reason}</p>
-              <p className="text-muted-foreground">shares：{position.value.shares ?? "UNKNOWN"}</p>
+              <p className="text-muted-foreground">持有数量：{position.value.shares ?? "信息不足"}</p>
             </div>
           )}
           {position.status === "error" && <p className="mt-3 text-xs text-warning" role="alert">{position.error}；不会把读取失败解释为未持有。</p>}
@@ -135,9 +141,9 @@ export function CandidateWorkspace() {
         <GlassCard data-testid="candidate-evidence-gap">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 className="flex items-center gap-1.5 text-sm font-semibold"><FileSearch className="h-4 w-4 text-primary" />Evidence gap</h3>
+              <h3 className="flex items-center gap-1.5 text-sm font-semibold"><FileSearch className="h-4 w-4 text-primary" />还缺什么信息</h3>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                只统计 subject=stock/{code} 的 Evidence Ledger 记录。0 条表示本账本未覆盖，不代表外部世界没有证据，也不替代 Evidence Gate。
+                这里只盘点股票 {code} 已保存的证据记录。0 条表示本地尚未记录，不代表外部世界没有相关事实。
               </p>
             </div>
             <div className="flex gap-3 text-xs">
@@ -146,15 +152,15 @@ export function CandidateWorkspace() {
                 className="text-primary hover:underline"
                 data-testid="candidate-add-evidence"
               >
-                新增 Evidence
+                新增证据
               </Link>
-              <Link to="/evidence" className="text-primary hover:underline">打开 Ledger</Link>
+              <Link to="/evidence" className="text-primary hover:underline">查看全部证据</Link>
             </div>
           </div>
           {evidence.status === "loading" ? (
-            <p className="mt-4 flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />正在盘点 Evidence Ledger…</p>
+            <p className="mt-4 flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />正在盘点证据记录…</p>
           ) : evidence.status === "error" ? (
-            <p className="mt-4 text-xs text-warning" role="alert">UNKNOWN · {evidence.error}；不会据此声明 evidence gap 已确认。</p>
+            <p className="mt-4 text-xs text-warning" role="alert">信息不足：{evidence.error}。系统不会把读取失败当成“没有证据”。</p>
           ) : (
             <>
               <div className="mt-4 grid gap-2 sm:grid-cols-3">
@@ -164,31 +170,31 @@ export function CandidateWorkspace() {
                       <span className="font-medium">{item.label}</span>
                       {item.gap ? <span className="text-warning">未覆盖</span> : <CheckCircle2 className="h-3.5 w-3.5 text-success" />}
                     </div>
-                    <p className="mt-1 text-muted-foreground">Ledger 记录 {item.count} 条</p>
+                    <p className="mt-1 text-muted-foreground">已记录 {item.count} 条</p>
                   </div>
                 ))}
               </div>
               <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded border border-border/40 bg-background/35 p-2">
-                  <p className="text-muted-foreground">Classification</p>
-                  <p className="mt-1">FACT {evidenceGap?.classificationCounts.fact ?? 0} · INFERENCE {evidenceGap?.classificationCounts.inference ?? 0} · UNKNOWN {evidenceGap?.classificationCounts.unknown ?? 0}</p>
+                  <p className="text-muted-foreground">证据类型</p>
+                  <p className="mt-1">事实 {evidenceGap?.classificationCounts.fact ?? 0} · 推断 {evidenceGap?.classificationCounts.inference ?? 0} · 未分类 {evidenceGap?.classificationCounts.unknown ?? 0}</p>
                 </div>
                 <div className="rounded border border-border/40 bg-background/35 p-2">
-                  <p className="text-muted-foreground">High-confidence fact</p>
+                  <p className="text-muted-foreground">高可信事实</p>
                   <p className="mt-1">{evidenceGap?.highConfidenceFactCount ?? 0} 条</p>
                 </div>
                 <div className="rounded border border-border/40 bg-background/35 p-2" data-evidence-freshness="NOT_EVALUATED">
-                  <p className="text-muted-foreground">Freshness</p>
-                  <p className="mt-1 font-mono">NOT_EVALUATED</p>
-                  <p className="mt-1 text-[10px] text-muted-foreground">最新 source_date：{evidenceGap?.latestSourceDate ?? "UNKNOWN"}；无 policy，不能判定过期。</p>
+                  <p className="text-muted-foreground">时效状态</p>
+                  <p className="mt-1 font-medium">尚未评估</p>
+                  <p className="mt-1 text-[10px] text-muted-foreground">最新来源日期：{evidenceGap?.latestSourceDate ?? "信息不足"}；当前没有统一时效规则，不能判断是否过期。</p>
                 </div>
                 <div className="rounded border border-border/40 bg-background/35 p-2" data-evidence-source-conflict="UNKNOWN">
-                  <p className="text-muted-foreground">Source conflict</p>
-                  <p className="mt-1 font-mono">UNKNOWN</p>
-                  <p className="mt-1 text-[10px] text-muted-foreground">Ledger 无 conflict authority，不能声称不存在冲突。</p>
+                  <p className="text-muted-foreground">来源是否存在冲突</p>
+                  <p className="mt-1 font-medium">信息不足</p>
+                  <p className="mt-1 text-[10px] text-muted-foreground">当前记录无法证明来源之间没有冲突。</p>
                 </div>
               </div>
-              <p className="mt-3 text-[11px] text-muted-foreground">当前筛选共 {evidence.value.total} 条；classification 是账本字段，不是本页判断。other 记录未被强行归类。</p>
+              <p className="mt-3 text-[11px] text-muted-foreground">当前共 {evidence.value.total} 条记录；证据类型来自原记录，本页不会擅自重新分类。</p>
               {evidenceGap?.highestImpactQuestion && (
                 <div className="mt-3 rounded-md border border-warning/30 bg-warning/5 p-3 text-xs" data-testid="candidate-highest-impact-question">
                   <p className="font-medium text-warning">最高影响的下一研究问题</p>

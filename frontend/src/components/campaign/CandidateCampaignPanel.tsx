@@ -59,13 +59,13 @@ export function CandidateCampaignPanel({
       for (const [campaignId, value] of results) actions[campaignId] = value;
       setNextActions(actions);
       if (results.some(([, value]) => value === null)) {
-        setNextActionWarning("部分 Campaign 的 backend next-actions 读取失败；未猜测可执行步骤，请刷新后重试。");
+        setNextActionWarning("部分投资计划的下一步读取失败；系统没有猜测可执行操作，请刷新后重试。");
       }
     } catch (err: unknown) {
       if (generation !== loadGeneration.current) return;
       setCampaigns([]);
       setNextActions({});
-      setError(err instanceof ApiError ? err.message : "候选 Campaign 读取失败");
+      setError(err instanceof ApiError ? err.message : "候选投资计划读取失败");
     } finally {
       if (generation === loadGeneration.current) setLoading(false);
     }
@@ -86,7 +86,7 @@ export function CandidateCampaignPanel({
     try {
       const created = await api.createCampaign(code, selectedStrategy);
       if (created.status !== "DRAFT") {
-        setError(`后端创建结果为 ${created.status}，不是预期的 DRAFT；已停止继续操作。`);
+        setError(`创建结果为 ${created.status}，不是预期的草稿状态；已停止继续操作。`);
         return;
       }
       setSelectedStrategy(null);
@@ -103,10 +103,10 @@ export function CandidateCampaignPanel({
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h3 className="text-sm font-semibold">
-            {workspace ? "步骤 2 · 建立 Candidate Campaign" : "Candidate Research · PRE-ENTRY"}
+            {workspace ? "步骤 2 · 建立候选投资计划" : "候选研究 · 入场前"}
           </h3>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            仅显示该证券现有的 DRAFT / RESEARCHING / PRE-ENTRY Campaign。每一步都需要你显式选择；这里不自动创建 Thesis、推进状态或产生买入动作。
+            这里只显示该证券尚未生效的草稿、研究中和待入场计划。每一步都需要你明确选择；这里不会自动创建投资逻辑、推进状态或产生买入动作。
           </p>
         </div>
         <button
@@ -114,7 +114,7 @@ export function CandidateCampaignPanel({
           onClick={() => void load()}
           disabled={loading || creating}
           className="rounded border border-border/50 p-1.5 text-muted-foreground hover:text-foreground disabled:opacity-50"
-          aria-label="刷新候选 Campaign"
+          aria-label="刷新候选投资计划"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
         </button>
@@ -122,7 +122,7 @@ export function CandidateCampaignPanel({
 
       {loading && (
         <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" /> 正在读取 Campaign 与 backend next-actions…
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> 正在读取投资计划和可执行的下一步…
         </div>
       )}
 
@@ -155,9 +155,9 @@ export function CandidateCampaignPanel({
               {workspace && (
                 <section className="space-y-2" data-testid="candidate-thesis-decision-step">
                   <div>
-                    <h4 className="text-sm font-semibold">步骤 3 · 固化 Thesis，再进入 Formal Decision</h4>
+                    <h4 className="text-sm font-semibold">步骤 3 · 固化投资逻辑，再进入正式决策</h4>
                     <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      先把 Formal Thesis 确认并冻结；满足 backend gate 后才会开放 Decision Review。
+                      先确认并冻结正式投资逻辑；满足必要条件后才会开放正式决策。
                     </p>
                   </div>
                   <CampaignThesisActivationCard
@@ -177,12 +177,12 @@ export function CandidateCampaignPanel({
       {!loading && campaigns.length === 0 && !error && (
         <div className="mt-4 space-y-3 rounded-lg border border-dashed border-border/70 bg-background/30 p-4">
           <div>
-            <p className="text-sm font-medium">暂无候选 Campaign</p>
+            <p className="text-sm font-medium">暂无候选投资计划</p>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              请选择研究策略，然后显式创建一个 DRAFT Candidate Campaign。创建不会绑定 Thesis，也不会推进到研究中。
+              请选择研究策略，然后明确创建一个草稿投资计划。创建不会绑定投资逻辑，也不会自动推进到研究中。
             </p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Candidate Campaign 策略">
+          <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="候选投资计划策略">
             {CAMPAIGN_STRATEGIES.map((strategy) => (
               <label
                 key={strategy}
@@ -212,7 +212,7 @@ export function CandidateCampaignPanel({
             data-testid="create-candidate-campaign"
           >
             {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlusCircle className="h-3.5 w-3.5" />}
-            Create Candidate Campaign
+            创建候选投资计划
           </button>
         </div>
       )}

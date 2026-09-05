@@ -69,14 +69,14 @@ function DecisionCommitInboxStatus({
   const evaluated = status === "EVALUATED";
   const unsupported = status === FORMAL_DECISION_EVALUATION_UNKNOWN;
   const statusMessage = unsupported
-    ? "Formal Decision evaluation 不属于已知 backend contract，已停止导航。"
+    ? "系统返回了无法识别的决策状态，已停止继续操作。"
     : status === "NOT_EVALUATED"
-      ? "尚未完成 Formal Decision 评估。"
+      ? "尚未完成决策评估。"
       : status === "UNKNOWN"
-        ? "当前无法评价 Formal Decision。"
+        ? "当前信息不足，暂时无法判断。"
         : status === "ERROR"
-          ? "Formal Decision 评估读取失败。"
-          : "已读取适用的 Frozen Decision。";
+          ? "决策状态读取失败。"
+          : "已有可用的正式决策。";
   return (
     <div
       className="space-y-3 rounded-lg border border-border/60 bg-background/35 p-3 text-xs"
@@ -84,19 +84,16 @@ function DecisionCommitInboxStatus({
       data-formal-decision-evaluation-status={status}
     >
       <div>
-        <p className="font-medium">Formal Decision</p>
-        <p className="mt-0.5 text-muted-foreground">
-          当前 backend Decision Inbox snapshot：<span className="font-mono">{String(evaluation)}</span>
-          {unsupported ? "（未知状态）" : `（${statusMessage}）`}
-        </p>
+        <p className="font-medium">正式决策</p>
+        <p className="mt-0.5 text-muted-foreground">当前决策状态：{statusMessage}</p>
         {unsupported ? (
-          <p className="mt-1 font-mono text-[11px] text-muted-foreground">
-            {FORMAL_DECISION_EVALUATION_UNKNOWN}
-          </p>
+          <details className="mt-1 text-[11px] text-muted-foreground">
+            <summary className="cursor-pointer">技术详情</summary>
+            <p className="mt-1 font-mono">{FORMAL_DECISION_EVALUATION_UNKNOWN} · {String(evaluation)}</p>
+          </details>
         ) : (
           <p className="mt-1 text-muted-foreground">
-            {statusMessage}
-            {evaluated && "已有 Frozen Decision 不代表需要立刻 Freeze 新 Decision；以下入口均需由你显式选择。"}
+            {evaluated && "这不代表需要立刻形成新决策；以下操作仍需由你明确选择。"}
           </p>
         )}
       </div>
@@ -213,7 +210,7 @@ function CreateCampaignForm({
           className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         >
           {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          确认创建 Campaign
+          确认创建投资计划
         </button>
         <button
           type="button"
@@ -354,8 +351,8 @@ function BootstrapActivationCard({ onBootstrapped }: { onBootstrapped: () => voi
       <div className="space-y-1">
         <h2 className="text-sm font-semibold">初始化持仓事实</h2>
         <p className="text-xs leading-5 text-muted-foreground">
-          账户事实尚未初始化：决策待办无法建立 canonical 持仓。
-          请确认下方持仓快照并显式初始化；这不会自动创建 Campaign、投资逻辑或正式决策。
+          持仓记录尚未初始化，当前无法可靠生成决策待办。
+          请确认下方持仓信息并明确初始化；这不会自动创建投资计划、投资逻辑或正式决策。
         </p>
       </div>
 
@@ -725,7 +722,7 @@ export default function DecisionInbox() {
     <div className="space-y-6">
       <PageHeader
         title="决策待办"
-        subtitle="查看未建立、正在建立与已进入当前期的 Campaign。创建和每一步生命周期变更都需要你单独确认，不会自动推进。"
+        subtitle="查看尚未建立、正在研究和当前有效的投资计划。创建及每一步状态变更都需要你明确确认，不会自动推进。"
         actions={
           <button
             type="button"
@@ -793,7 +790,7 @@ export default function DecisionInbox() {
               <ClipboardList className="mx-auto h-5 w-5 text-muted-foreground" />
               <p className="mt-2 text-sm font-medium">暂无待办</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                当前没有待处理的持仓设置项或 Campaign。
+                当前没有待处理的持仓设置项或投资计划。
               </p>
             </div>
           )}
@@ -801,9 +798,9 @@ export default function DecisionInbox() {
           {snapshot.holding_setup_items.length > 0 && (
             <section className="space-y-3">
               <div>
-                <h2 className="text-sm font-semibold">待建立 Campaign 的持仓</h2>
+                <h2 className="text-sm font-semibold">尚未建立投资计划的持仓</h2>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  这些持仓还没有当前 Campaign，需要你显式创建。
+                  这些持仓还没有当前投资计划，需要你明确创建。
                 </p>
               </div>
               {snapshot.holding_setup_items.map((holding) => (
@@ -815,7 +812,7 @@ export default function DecisionInbox() {
                     <span className="font-mono font-semibold">{holding.security_code}</span>
                     <span className="text-muted-foreground">{holding.security_name}</span>
                     <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-xs text-amber-700 dark:text-amber-400">
-                      未分配 Campaign
+                      尚无投资计划
                     </span>
                     {holding.next_workflow_action === "CREATE_CAMPAIGN"
                       && creatingFor !== holding.security_code && (
@@ -829,7 +826,7 @@ export default function DecisionInbox() {
                         className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
                       >
                         <PlusCircle className="h-3.5 w-3.5" />
-                        创建 Campaign
+                        创建投资计划
                       </button>
                     )}
                   </div>
@@ -849,9 +846,9 @@ export default function DecisionInbox() {
           {setupCampaigns.length > 0 && (
             <section className="space-y-3">
               <div>
-                <h2 className="text-sm font-semibold">正在建立的 Campaign</h2>
+                <h2 className="text-sm font-semibold">正在建立的投资计划</h2>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  草稿 / 研究中 / 待入场尚未进入当前 Campaign，需要逐步显式推进。
+                  草稿、研究中和待入场计划尚未生效，需要你逐步明确推进。
                 </p>
               </div>
               {setupCampaigns.map((campaign) => {
@@ -895,7 +892,7 @@ export default function DecisionInbox() {
           {snapshot.campaign_items.length > 0 && (
             <section className="space-y-3">
               <div>
-                <h2 className="text-sm font-semibold">当前 Campaign</h2>
+                <h2 className="text-sm font-semibold">当前投资计划</h2>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   仅进行中或减仓中属于当前期。这里不表示买卖建议已批准。
                 </p>
@@ -938,7 +935,7 @@ export default function DecisionInbox() {
           )}
 
           <p className="text-xs text-muted-foreground">
-            快照时间：{snapshot.as_of}（{snapshot.total_holdings} 持仓 / {snapshot.total_campaign_items} Campaign 项）
+            数据更新时间：{snapshot.as_of}（{snapshot.total_holdings} 个持仓 / {snapshot.total_campaign_items} 个投资计划）
           </p>
         </>
       ) : (

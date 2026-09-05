@@ -266,7 +266,7 @@ async function run() {
     assert.equal(Number(portfolioApi.holdings[0].shares), inboxShares);
 
     await page.goto(`${frontend}/decision-inbox`, { waitUntil: "networkidle" });
-    await page.getByText("待建立 Campaign 的持仓").waitFor();
+    await page.getByText("尚未建立投资计划的持仓").waitFor();
     assert.ok(await page.getByText("600519").first().isVisible());
 
     // ---- F. trade propagation to both surfaces ---------------------------

@@ -430,29 +430,38 @@ function previewFor(campaign, body, capitalScenario = "A") {
       critical_data: { critical_data_evaluation: isB ? "ERROR" : "EVALUATED", critical_data_state: candidate.critical_data_state, reason_codes: candidate.reason_codes },
       material_change: { evaluation: "EVALUATED" }, sell_engine: { evaluation: "NOT_EVALUATED" },
     },
-    decision_assurance: { dimension_states: {} },
+    decision_assurance: {
+      coverage_complete: false,
+      dimension_states: {
+        FORMAL_THESIS: "EVALUATED",
+        FORMAL_DECISION: "NOT_EVALUATED",
+        HARD_RISK: "EVALUATED",
+        MATERIAL_CHANGE: "UNKNOWN",
+        CRITICAL_DATA: "ERROR",
+      },
+    },
     commit_requirements: { user_confirmed: true, expected_proposal_fingerprint: FINGERPRINTS[campaign.campaign_id], challenge_required: isA },
   };
 }
 
 async function fillDecisionBasics(page) {
-  await page.getByLabel("Review by").fill("2026-09-30T12:00");
-  await page.getByLabel("Key assumptions").fill("业务保持稳定");
-  await page.getByLabel("Event invalidation conditions").fill("关键事实反转");
-  await page.getByLabel("Asset stance").selectOption("SUPPORT");
-  await page.getByLabel("Trade stance").selectOption("SUPPORT");
-  await page.getByLabel("Portfolio constraint").fill("单笔风险受限");
+  await page.getByLabel("下次必须重新检查的时间").fill("2026-09-30T12:00");
+  await page.getByLabel("这个判断成立依赖什么").fill("业务保持稳定");
+  await page.getByLabel("出现什么情况说明判断错了").fill("关键事实反转");
+  await page.getByLabel("对这只股票的判断").selectOption("SUPPORT");
+  await page.getByLabel("当前操作倾向").selectOption("SUPPORT");
+  await page.getByLabel("组合层面的限制").fill("单笔风险受限");
 }
 
 async function fillConfidence(page, value) {
-  for (const name of ["Data quality", "Evidence confidence", "Inference confidence", "Decision confidence"]) {
+  for (const name of ["数据可靠程度", "证据可信程度", "推断把握程度", "最终判断把握程度"]) {
     await page.getByLabel(name).selectOption(value);
   }
 }
 
 async function fillCandidateAnchors(page) {
   let index = 0;
-  for (const scenario of ["Bear", "Base", "Bull"]) {
+  for (const scenario of ["悲观", "基准", "乐观"]) {
     const low = 80 + index * 30;
     await page.getByLabel(`${scenario} price low`).fill(String(low));
     await page.getByLabel(`${scenario} price high`).fill(String(low + 10));
@@ -918,7 +927,7 @@ try {
   await page.getByTestId("candidate-workspace").waitFor();
 
   const panel = page.getByTestId("candidate-campaign-panel");
-  await panel.getByText("暂无候选 Campaign", { exact: true }).waitFor();
+  await panel.getByText("暂无候选投资计划", { exact: true }).waitFor();
   const create = panel.getByTestId("create-candidate-campaign");
   assert.equal(await create.isDisabled(), true, "strategy must be explicitly selected before create");
 
@@ -959,7 +968,7 @@ try {
   );
   await panel.getByRole("button", { name: "停止研究（已拒绝）", exact: true }).click();
   await panel.getByRole("button", { name: "确认停止研究（已拒绝）", exact: true }).click();
-  await panel.getByText("暂无候选 Campaign", { exact: true }).waitFor();
+  await panel.getByText("暂无候选投资计划", { exact: true }).waitFor();
 
   const swingRadio = panel.getByRole("radio", { name: "SWING · 波段" });
   await swingRadio.evaluate((element) => element.click());
@@ -971,7 +980,7 @@ try {
   await panel.locator('[data-campaign-status="PRE-ENTRY"]').waitFor();
   await panel.getByRole("button", { name: "停止研究（已过期）", exact: true }).click();
   await panel.getByRole("button", { name: "确认停止研究（已过期）", exact: true }).click();
-  await panel.getByText("暂无候选 Campaign", { exact: true }).waitFor();
+  await panel.getByText("暂无候选投资计划", { exact: true }).waitFor();
 
   // A: complete evidence + NOT_HELD + structured scenarios + mandatory Challenge
   // produces a bounded BUY, can Freeze, and exposes the explicit Trade continuation.
@@ -994,13 +1003,21 @@ try {
   await page.locator('[data-decision-context="ready"]').waitFor();
   await fillDecisionBasics(page);
   await fillConfidence(page, "MEDIUM");
+  assert.equal(await page.getByLabel("最终判断把握程度").locator("option:checked").textContent(), "中");
   await fillCandidateAnchors(page);
-  await page.getByRole("button", { name: "Preview Proposal" }).click();
+  await page.getByRole("button", { name: "预览决策草案" }).click();
   await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
-  await page.getByText("BUY SMALL", { exact: true }).first().waitFor();
-  await page.getByTestId("candidate-opportunity-authority").getByText("NOT_HELD", { exact: true }).waitFor();
+  await page.locator('[data-next-best-action="BUY SMALL"]').getByText("小仓位买入", { exact: true }).waitFor();
+  const aPosition = page.locator('[data-candidate-field="position_state"][data-candidate-raw="NOT_HELD"]');
+  await aPosition.getByText("当前未持有", { exact: true }).waitFor();
+  const assurance = page.getByTestId("decision-assurance");
+  await assurance.getByText("正式投资逻辑", { exact: true }).waitFor();
+  await assurance.getByText("已评估", { exact: true }).first().waitFor();
+  await assurance.getByText("正式决策", { exact: true }).waitFor();
+  await assurance.getByText("尚未评估", { exact: true }).waitFor();
+  assert.match(await assurance.locator("details").textContent(), /FORMAL_THESIS/, "raw assurance key remains in technical details");
   const capitalCard = page.getByTestId("portfolio-capital-context");
-  await capitalCard.locator('[data-capital-dimension="capital-availability"]').getByText("AVAILABLE", { exact: true }).waitFor();
+  await capitalCard.locator('[data-capital-dimension="capital-availability"]').getByText("可用", { exact: true }).waitFor();
   assert.equal(await capitalCard.getAttribute("data-portfolio-fit"), "SUPPORTIVE");
   assert.equal(await capitalCard.getAttribute("data-replacement-review"), "NOT_REQUIRED");
   const themeToggle = page.getByRole("button", { name: /^(亮色|暗色)模式$/ });
@@ -1023,32 +1040,32 @@ try {
   ]) {
     const [name, availability, fit, replacement, reason] = scenario;
     state.capitalScenario = name;
-    await page.getByRole("button", { name: "Preview Proposal" }).click();
+    await page.getByRole("button", { name: "预览决策草案" }).click();
     await page.locator(
       `[data-testid="portfolio-capital-context"][data-capital-availability="${availability}"][data-portfolio-fit="${fit}"][data-replacement-review="${replacement}"]`,
     ).waitFor();
-    await capitalCard.getByText(reason, { exact: true }).first().waitFor();
+    assert.ok(await capitalCard.getByText(reason, { exact: true }).count() >= 1, "technical reason remains available in details");
   }
   assert.equal(await capitalCard.getByRole("button").count(), 0, "Replacement Review must not create an automatic action control");
   state.capitalScenario = "A";
-  await page.getByRole("button", { name: "Preview Proposal" }).click();
+  await page.getByRole("button", { name: "预览决策草案" }).click();
   await page.locator('[data-testid="portfolio-capital-context"][data-capital-availability="AVAILABLE"]').waitFor();
 
-  for (const label of ["Strongest supporting evidence", "Strongest opposing evidence", "Pre-mortem", "Invalidation facts"]) {
+  for (const label of ["最有力的支持证据", "最有力的反对证据", "如果判断失败，最可能的原因", "哪些事实会推翻判断"]) {
     await page.getByRole("textbox", { name: label }).fill(`${label} fixture`);
   }
-  await page.getByRole("checkbox", { name: /我已显式填写四个挑战维度/ }).check();
-  await page.getByRole("button", { name: "Finalize Decision Challenge" }).click();
+  await page.getByRole("checkbox", { name: /我已明确填写四个挑战问题/ }).check();
+  await page.getByRole("button", { name: "完成决策挑战" }).click();
   await page.locator('[data-challenge-state="FOUND"]').waitFor();
-  await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
+  await page.getByRole("checkbox", { name: /我已检查股票判断、操作倾向、组合限制/ }).check();
   state.failNextCommitStale = true;
-  await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
-  await page.getByRole("alert").getByText(/Proposal 已失效/).waitFor();
+  await page.getByRole("button", { name: "确认并冻结正式决策" }).click();
+  await page.getByRole("alert").getByText(/决策草案已失效/).waitFor();
   assert.equal(state.committed, false, "stale CAP1 Preview must not create a Frozen Decision");
-  await page.getByRole("button", { name: "Preview Proposal" }).click();
+  await page.getByRole("button", { name: "预览决策草案" }).click();
   await page.locator('[data-testid="portfolio-capital-context"][data-capital-availability="AVAILABLE"]').waitFor();
-  await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
-  await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
+  await page.getByRole("checkbox", { name: /我已检查股票判断、操作倾向、组合限制/ }).check();
+  await page.getByRole("button", { name: "确认并冻结正式决策" }).click();
   await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
   const tradeContinuation = page.getByTestId("committed-decision-trade-continuation");
   const tradeHref = await tradeContinuation.getAttribute("href");
@@ -1063,22 +1080,23 @@ try {
   await page.locator('[data-decision-context="ready"]').waitFor();
   await fillDecisionBasics(page);
   await fillConfidence(page, "UNKNOWN");
-  await page.getByLabel("Candidate valuation anchors unavailable").check();
-  await page.getByRole("button", { name: "Preview Proposal" }).click();
+  await page.getByLabel("关键盈利估值和入场依据不可用").check();
+  await page.getByRole("button", { name: "预览决策草案" }).click();
   await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
-  await page.getByText("RESEARCH MORE", { exact: true }).first().waitFor();
+  await page.locator('[data-next-best-action="RESEARCH MORE"]').getByText("继续研究", { exact: true }).waitFor();
   const bDraft = state.previewPayloads[CAMPAIGN_B];
   assert.equal(Object.hasOwn(bDraft.asset_view, "candidate_valuation"), false);
   assert.equal(Object.hasOwn(bDraft.trade_view, "entry_range"), false);
   assert.equal(bDraft.asset_view.data_quality, "UNKNOWN");
   const bAuthority = page.getByTestId("candidate-opportunity-authority");
-  await bAuthority.getByText("UNAVAILABLE", { exact: true }).first().waitFor();
-  await bAuthority.getByText(/INSUFFICIENT/).waitFor();
+  await bAuthority.locator('[data-candidate-field="account_state"][data-candidate-raw="UNAVAILABLE"]').getByText("不可用", { exact: true }).waitFor();
+  await bAuthority.locator('[data-candidate-field="evidence"]').getByText(/证据不足/).waitFor();
+  assert.ok(await bAuthority.getByText(/INSUFFICIENT/).count() >= 1, "technical insufficiency reason remains available in details");
   const bCapital = page.getByTestId("portfolio-capital-context");
   assert.equal(await bCapital.getAttribute("data-capital-availability"), "UNKNOWN");
   assert.equal(await bCapital.getAttribute("data-portfolio-fit"), "UNKNOWN");
   assert.equal(await bCapital.getAttribute("data-replacement-review"), "UNKNOWN");
-  assert.equal(await bCapital.getByTestId("portfolio-capital-confirmed-cash").textContent(), "UNKNOWN");
+  assert.equal(await bCapital.getByTestId("portfolio-capital-confirmed-cash").textContent(), "信息不足");
 
   // C: Hard Risk CONFIRMED blocks all added-risk actions and remains traceable.
   await page.goto(`http://127.0.0.1:${port}/campaigns/${CAMPAIGN_C}/decision-proposal`, { waitUntil: "domcontentloaded" });
@@ -1086,15 +1104,15 @@ try {
   await fillDecisionBasics(page);
   await fillConfidence(page, "HIGH");
   await fillCandidateAnchors(page);
-  await page.getByRole("button", { name: "Preview Proposal" }).click();
+  await page.getByRole("button", { name: "预览决策草案" }).click();
   await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
-  await page.getByText("AVOID", { exact: true }).first().waitFor();
-  await page.getByTestId("candidate-opportunity-authority").getByText("CONFIRMED", { exact: true }).waitFor();
-  await page.getByText("HARD_RISK_CONFIRMED", { exact: true }).waitFor();
+  await page.locator('[data-next-best-action="AVOID"]').getByText("回避", { exact: true }).waitFor();
+  await page.locator('[data-candidate-field="hard_risk_state"][data-candidate-raw="CONFIRMED"]').getByText("已确认硬风险", { exact: true }).waitFor();
+  assert.ok(await page.getByText("HARD_RISK_CONFIRMED", { exact: true }).count() >= 1, "technical hard-risk reason remains available in details");
   assert.equal(await page.getByTestId("portfolio-capital-context").getAttribute("data-replacement-review"), "WORTH_REVIEW");
-  await page.getByTestId("portfolio-capital-context").getByText("INCUMBENT_THESIS_WEAKENED", { exact: true }).first().waitFor();
-  for (const action of ["BUY NOW", "BUY SMALL", "SCALE IN"]) {
-    await page.locator('[data-action-envelope]').getByText(action, { exact: true }).waitFor();
+  assert.ok(await page.getByTestId("portfolio-capital-context").getByText("INCUMBENT_THESIS_WEAKENED", { exact: true }).count() >= 1, "technical replacement reason remains available in details");
+  for (const [action, label] of [["BUY NOW", "立即买入"], ["BUY SMALL", "小仓位买入"], ["SCALE IN", "分批加仓"]]) {
+    await page.locator(`[data-action-envelope] [data-action-enum="${action}"]`).getByText(label, { exact: true }).waitFor();
   }
 
   // Research Continuity is secondary hydration: a pending or failed batch must
@@ -1119,7 +1137,7 @@ try {
   state.continuityBatchMode = "failure";
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator(`[data-campaign-status="ACTIVE"]`).waitFor();
-  await page.locator(`[data-decision-action-panel="${CAMPAIGN_INBOX}"]`).getByText("重新形成 Formal Decision →", { exact: true }).waitFor();
+  await page.locator(`[data-decision-action-panel="${CAMPAIGN_INBOX}"]`).getByText("重新形成正式决策 →", { exact: true }).waitFor();
   await page.locator(`[data-testid="research-continuity"][data-campaign-id="${CAMPAIGN_INBOX}"]`)
     .getByRole("alert").getByText("批量读取失败，可单独刷新", { exact: true }).waitFor();
   assert.equal(state.continuityBatchRequests, 2);
@@ -1137,10 +1155,10 @@ try {
   }
   assert.equal(typeof state.releaseOldCore, "function", "old core refresh was not held");
   await inboxRefresh.click();
-  await page.getByText(/快照时间：2026-09-02T02:00:00Z/).waitFor();
+  await page.getByText(/数据更新时间：2026-09-02T02:00:00Z/).waitFor();
   state.releaseOldCore();
   await page.waitForTimeout(100);
-  assert.equal(await page.getByText(/快照时间：2026-09-01T02:00:00Z/).count(), 0, "old core refresh must not overwrite latest snapshot");
+  assert.equal(await page.getByText(/数据更新时间：2026-09-01T02:00:00Z/).count(), 0, "old core refresh must not overwrite latest snapshot");
 
   // Older secondary results are ignored even when they resolve after the
   // latest refresh has already succeeded or failed independently.

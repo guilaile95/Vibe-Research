@@ -17,11 +17,11 @@ test("Formal Decision Review renders CCD state/evaluation verbatim", () => {
 
 test("Formal Decision Review only renders committed success after validated durable readback", () => {
   assert.match(reviewSource, /CommittedDecisionReadError/);
-  assert.match(reviewSource, /COMMITTED_DECISION_READ_ERROR/);
+  assert.match(reviewSource, /正式决策已保存，但/);
   assert.match(reviewSource, /api\.getCommittedDecisionRuntime\(campaignId, decisionId\)/);
   assert.match(reviewSource, /setCommitted\(reread\)/);
   assert.match(reviewSource, /setCommitted\(null\);/);
-  assert.match(reviewSource, /Frozen Decision 已由 backend re-read/);
+  assert.match(reviewSource, /正式决策已保存并重新读取确认/);
 });
 
 test("Formal Decision Review exposes truthful optional Decision Challenge read states", () => {
@@ -29,11 +29,11 @@ test("Formal Decision Review exposes truthful optional Decision Challenge read s
   for (const state of ["PENDING", "FOUND", "ABSENT", "ERROR"]) {
     assert.match(reviewSource, new RegExp(`\\"${state}\\"`));
   }
-  assert.match(reviewSource, /CHALLENGE_READ_ERROR/);
+  assert.match(reviewSource, /决策挑战读取失败/);
   assert.match(reviewSource, /challengeReadState !== "FOUND"/);
   assert.match(reviewSource, /challengeReadState === "ABSENT"/);
-  assert.match(reviewSource, /Finalize Decision Challenge/);
+  assert.match(reviewSource, /完成决策挑战/);
   assert.match(reviewSource, /data-decision-quality="NOT_EVALUATED"/);
-  assert.match(reviewSource, /不会写入假的 challenge 引用/);
+  assert.match(reviewSource, /不会写入虚假引用/);
   assert.doesNotMatch(reviewSource, /quality_score/);
 });
