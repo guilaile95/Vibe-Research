@@ -13,6 +13,12 @@ from datetime import datetime, timezone, timedelta
 import astock
 import gstock
 
+from market_descriptive_labels import breadth_label, speculation_label
+
+# 向后兼容 re-export（阈值唯一权威在 market_descriptive_labels）
+_breadth_label = breadth_label
+_speculation_label = speculation_label
+
 BEIJING = timezone(timedelta(hours=8))
 _CACHE: dict = {}
 _TTL = 300  # 5 分钟；全站共享，省数据源压力
@@ -36,45 +42,6 @@ def _num(v) -> int:
     except (ValueError, TypeError):
         return 0
 
-
-def _breadth_label(up_ratio: float | None) -> str | None:
-    """大盘宽度标签（按上涨占比机械分档，不再用绝对家数）。
-
-    up_ratio is None → None
-    <0.25 冰点 · <0.40 偏弱 · <=0.60 中性 · <=0.75 偏强 · >0.75 普涨
-    """
-    if up_ratio is None:
-        return None
-    if not isinstance(up_ratio, (int, float)) or isinstance(up_ratio, bool):
-        return None
-    if up_ratio != up_ratio:  # NaN
-        return None
-    r = float(up_ratio)
-    if r < 0.25:
-        return "冰点"
-    if r < 0.40:
-        return "偏弱"
-    if r <= 0.60:
-        return "中性"
-    if r <= 0.75:
-        return "偏强"
-    return "普涨"
-
-
-def _speculation_label(zt_count: int | None) -> str | None:
-    """题材投机标签（按涨停家数机械分档）。"""
-    if zt_count is None:
-        return None
-    if not isinstance(zt_count, (int, float)) or isinstance(zt_count, bool):
-        return None
-    z = int(zt_count)
-    if z >= 100:
-        return "亢奋"
-    if z >= 60:
-        return "活跃"
-    if z >= 30:
-        return "普通"
-    return "冰点"
 
 
 def _sentiment() -> dict:
@@ -149,7 +116,7 @@ def _sentiment() -> dict:
             "active_metric": "up_ratio",
             "up_ratio": None,
             "breadth": None,
-            "speculation": _speculation_label(zt),
+            "speculation": speculation_label(zt),
             "stock_count": None, "valid_count": None,
             "up_3pct_count": None, "down_3pct_count": None, "total_amount": None,
             "date": date,
@@ -205,8 +172,8 @@ def _sentiment() -> dict:
         "active": active,
         "active_metric": "up_ratio",
         "up_ratio": up_ratio_f,
-        "breadth": _breadth_label(up_ratio_f),
-        "speculation": _speculation_label(zt),
+        "breadth": breadth_label(up_ratio_f),
+        "speculation": speculation_label(zt),
         "stock_count": stock_count if isinstance(stock_count, (int, float)) else None,
         "valid_count": valid_count if isinstance(valid_count, (int, float)) else None,
         "up_3pct_count": up_3pct if isinstance(up_3pct, (int, float)) else None,

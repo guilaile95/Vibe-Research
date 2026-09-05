@@ -49,6 +49,7 @@ from version import read_version
 import portfolio as pf
 import portfolio_advice_service
 import market
+import market_overview_runtime_router
 import myreports as mr
 import review_compare
 import review_history
@@ -1373,6 +1374,17 @@ def market_emotion():
         return {"data": market.get_short_term_emotion()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"短线情绪异常：{e}") from e
+
+
+@app.get("/api/market/overview/facts")
+def market_overview_facts(trade_date: str | None = None):
+    """当前 A 股 Market Overview（facts-based read model，P0-MO1）。
+
+    组合既有 short_term_market_facts authority，诚实标注 freshness/coverage。
+    不提供 trade_date → UNAVAILABLE（不猜 today）。只读、非决策权威。
+    """
+    return market_overview_runtime_router.market_overview_facts(
+        trade_date=trade_date)
 
 
 @app.get("/api/market/turnover-top")
