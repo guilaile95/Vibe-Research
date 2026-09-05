@@ -324,6 +324,12 @@ jobs:
           PYTHON: python
         run: npm run test:e2e:wave4-report-analytics
 
+      - name: Run Wave 5 AI Agent Tools E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:wave5-ai-agent
+
       - name: Run Today market context E2E
         working-directory: frontend
         run: npm run test:e2e:today-market-context

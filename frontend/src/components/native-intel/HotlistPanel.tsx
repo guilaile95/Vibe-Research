@@ -10,6 +10,9 @@ import {
   X,
   SlidersHorizontal,
   Sparkles,
+  Languages,
+  Tag,
+  SmilePlus,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
@@ -34,6 +37,7 @@ import { formatShanghaiTime } from "@/lib/intelDigestView";
 import { cn } from "@/lib/utils";
 import { FilterSettingsModal } from "./FilterSettingsModal";
 import { NewIntelItems } from "./IntelReports";
+import { AiAnalysisRegion } from "./AiAnalysisRegion";
 
 export function HotlistPanel() {
   const [items, setItems] = useState<NativeIntelHotlistItem[]>([]);
@@ -44,6 +48,50 @@ export function HotlistPanel() {
   const [hotlistStatus, setHotlistStatus] = useState<string>("normal");
   const [rssStatus, setRssStatus] = useState<string>("normal");
   const [hotlistFilterMeta, setHotlistFilterMeta] = useState<FilterMeta | null>(null);
+
+  // Wave 5 AI Item Actions State
+  const [itemTranslations, setItemTranslations] = useState<Record<number, string>>({});
+  const [itemEntities, setItemEntities] = useState<Record<number, Array<{ name: string; type: string; code?: string | null }>>>({});
+  const [itemSentiments, setItemSentiments] = useState<Record<number, { sentiment: string; confidence: number; reason: string }>>({});
+
+  const handleItemTranslate = async (itemId: number, text: string) => {
+    try {
+      const res = await api.nativeIntelAiTranslate({ text });
+      setItemTranslations((prev) => ({ ...prev, [itemId]: res.translated_text || text }));
+    } catch {
+      setItemTranslations((prev) => ({ ...prev, [itemId]: "翻译失败" }));
+    }
+  };
+
+  const handleItemEntities = async (itemId: number, title: string, summary?: string) => {
+    try {
+      const text = [title, summary].filter(Boolean).join("\n");
+      const res = await api.nativeIntelAiEntities({ text, title, summary });
+      setItemEntities((prev) => ({ ...prev, [itemId]: res.entities || [] }));
+    } catch {
+      setItemEntities((prev) => ({ ...prev, [itemId]: [] }));
+    }
+  };
+
+  const handleItemSentiment = async (itemId: number, title: string, summary?: string) => {
+    try {
+      const text = [title, summary].filter(Boolean).join("\n");
+      const res = await api.nativeIntelAiSentiment({ text, title, summary });
+      setItemSentiments((prev) => ({
+        ...prev,
+        [itemId]: {
+          sentiment: res.sentiment,
+          confidence: res.confidence,
+          reason: res.reasoning || res.reason || "",
+        },
+      }));
+    } catch {
+      setItemSentiments((prev) => ({
+        ...prev,
+        [itemId]: { sentiment: "uncertain", confidence: 0, reason: "分析失败" },
+      }));
+    }
+  };
   const [rssFilterMeta, setRssFilterMeta] = useState<FilterMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -512,12 +560,16 @@ export function HotlistPanel() {
           (interestMode !== "my_interests" || sourceTypeFilter === "all" || sourceTypeFilter === "rss");
         const isStandaloneEnabled =
           config?.regions_enabled?.standalone !== false && config?.standalone_enabled !== false;
+        const isAiAnalysisEnabled =
+          !isUnavailable &&
+          config?.regions_enabled?.ai_analysis === true;
         const allRegionsConfigDisabled =
           Boolean(config) &&
           config?.regions_enabled?.hotlist === false &&
           config?.regions_enabled?.rss === false &&
           (config?.regions_enabled?.standalone === false || config?.standalone_enabled === false) &&
-          !(config?.regions_enabled?.new_items === true && config.region_order.includes("new_items"));
+          !(config?.regions_enabled?.new_items === true && config.region_order.includes("new_items")) &&
+          !(config?.regions_enabled?.ai_analysis === true && config.region_order.includes("ai_analysis"));
 
         if (allRegionsConfigDisabled) {
           return (
@@ -699,13 +751,80 @@ export function HotlistPanel() {
                     轨迹
                   </button>
                 )}
+
+                {/* Wave 5 AI Item Actions */}
+                <button
+                  type="button"
+                  data-testid="wave5-item-translate"
+                  onClick={() => void handleItemTranslate(item.item_id, item.title)}
+                  title="AI 翻译标题"
+                  className="inline-flex items-center gap-0.5 rounded-md border border-border/80 bg-background/50 px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                >
+                  <Languages className="h-3 w-3" />
+                  译
+                </button>
+                <button
+                  type="button"
+                  data-testid="wave5-item-entities"
+                  onClick={() => void handleItemEntities(item.item_id, item.title, item.summary || undefined)}
+                  title="AI 实体抽取"
+                  className="inline-flex items-center gap-0.5 rounded-md border border-border/80 bg-background/50 px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                >
+                  <Tag className="h-3 w-3" />
+                  实体
+                </button>
+                <button
+                  type="button"
+                  data-testid="wave5-item-sentiment"
+                  onClick={() => void handleItemSentiment(item.item_id, item.title, item.summary || undefined)}
+                  title="AI 舆情分析"
+                  className="inline-flex items-center gap-0.5 rounded-md border border-border/80 bg-background/50 px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                >
+                  <SmilePlus className="h-3 w-3" />
+                  情绪
+                </button>
               </div>
+
+              {/* Wave 5 Item AI Results */}
+              {(itemTranslations[item.item_id] || (itemEntities[item.item_id] && itemEntities[item.item_id].length > 0) || itemSentiments[item.item_id]) && (
+                <div className="w-full pl-10 space-y-1">
+                  {itemTranslations[item.item_id] && (
+                    <div data-testid={`wave5-trans-result-${item.item_id}`} className="rounded bg-primary/5 border border-primary/20 px-2.5 py-1 text-xs text-primary flex items-center gap-1.5">
+                      <Languages className="h-3.5 w-3.5 shrink-0" />
+                      <span>{itemTranslations[item.item_id]}</span>
+                    </div>
+                  )}
+                  {itemEntities[item.item_id] && itemEntities[item.item_id].length > 0 && (
+                    <div data-testid={`wave5-entities-result-${item.item_id}`} className="flex flex-wrap gap-1.5">
+                      {itemEntities[item.item_id].map((e, idx) => (
+                        <span key={idx} className="rounded bg-muted/70 border border-border/70 px-1.5 py-0.5 text-[10px] text-muted-foreground font-mono">
+                          {e.name} <span className="text-primary/70">({e.type}{e.code ? ` · ${e.code}` : ""})</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {itemSentiments[item.item_id] && (
+                    <div data-testid={`wave5-sentiment-result-${item.item_id}`} className="flex items-center gap-2 text-xs">
+                      <span className={cn(
+                        "rounded px-1.5 py-0.5 text-[10px] font-medium border",
+                        itemSentiments[item.item_id].sentiment === "positive" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
+                        itemSentiments[item.item_id].sentiment === "negative" ? "bg-rose-500/10 text-rose-400 border-rose-500/20" :
+                        itemSentiments[item.item_id].sentiment === "controversial" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
+                        "bg-muted text-muted-foreground border-border/40"
+                      )}>
+                        {itemSentiments[item.item_id].sentiment} ({(itemSentiments[item.item_id].confidence * 100).toFixed(0)}%)
+                      </span>
+                      <span className="text-[11px] text-muted-foreground">{itemSentiments[item.item_id].reason}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         };
 
         const activeOrder = (config?.region_order || ["hotlist", "rss", "standalone"]).filter(
-          (r) => ["hotlist", "rss", "standalone", "new_items"].includes(r),
+          (r) => ["hotlist", "rss", "standalone", "new_items", "ai_analysis"].includes(r),
         );
 
         return (
@@ -831,6 +950,17 @@ export function HotlistPanel() {
                       </div>
                     )}
                   </div>
+                );
+              }
+
+              if (regionKey === "ai_analysis" && isAiAnalysisEnabled) {
+                return (
+                  <AiAnalysisRegion
+                    key={`ai_analysis-${reqIdRef.current}`}
+                    mode="current"
+                    scope={interestMode}
+                    config={config}
+                  />
                 );
               }
 

@@ -2992,6 +2992,7 @@ export interface NativeIntelHotlistItem {
   title: string;
   url: string;
   canonical_url?: string;
+  summary?: string | null;
   source_id: string;
   source_name?: string | null;
   source_type?: string | null;
@@ -3166,6 +3167,14 @@ export interface NativeIntelConfig {
   standalone_max_items: number;
   region_order: string[];
   regions_enabled: Record<string, boolean>;
+  ai_analysis_enabled?: boolean;
+  ai_analysis_provider?: string;
+  ai_analysis_model?: string;
+  ai_analysis_max_news?: number;
+  ai_analysis_include_rss?: boolean;
+  ai_analysis_include_standalone?: boolean;
+  ai_translation_enabled?: boolean;
+  ai_translation_target_language?: string;
 }
 
 export interface NativeIntelStandaloneResponse {
@@ -3174,4 +3183,66 @@ export interface NativeIntelStandaloneResponse {
   total: number;
   configured_sources: string[];
   freshness_excluded_count?: number;
+}
+
+export interface NativeIntelAiAnalysisResponse {
+  artifact_id: string;
+  mode: string;
+  scope: string;
+  status: string;
+  error?: string | null;
+  error_kind?: string | null;
+  core_trends: string;
+  sentiment_controversy: string;
+  signals: string;
+  rss_insights: string;
+  outlook_strategy: string;
+  standalone_summaries: Record<string, string>;
+  counts: {
+    total_news: number;
+    analyzed_news: number;
+    max_news_limit: number;
+    hotlist_count: number;
+    rss_count: number;
+    hotlist_analyzed: number;
+    rss_analyzed: number;
+    standalone_analyzed: number;
+  };
+  disclaimer: string;
+  provider: string;
+  model: string;
+  cached: boolean;
+  generated_at: string;
+}
+
+export interface NativeIntelAiTranslateResponse {
+  artifact_id?: string;
+  original_text?: string;
+  translated_text?: string;
+  target_language?: string;
+  status: string;
+  error?: string | null;
+  cached?: boolean;
+}
+
+export interface NativeIntelAiEntityResponse {
+  artifact_id?: string;
+  entities: Array<{
+    name: string;
+    type: string;
+    code?: string | null;
+  }>;
+  status: string;
+  cached?: boolean;
+}
+
+export interface NativeIntelAiSentimentResponse {
+  artifact_id?: string;
+  sentiment: "positive" | "negative" | "neutral" | "controversial" | "uncertain";
+  controversy?: boolean;
+  confidence: number;
+  reason?: string;
+  reasoning?: string;
+  status: string;
+  cached?: boolean;
 }

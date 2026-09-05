@@ -15,13 +15,32 @@ MODES = ("CURRENT", "DAILY", "INCREMENTAL")
 
 
 def _slot(name: str, start: str, end: str, mode: str, days: list[int] | None = None,
-          report: bool = True, once: bool = True) -> dict[str, Any]:
-    return {"name": name, "start": start, "end": end, "days": days or list(range(1, 8)),
-            "fetch": True, "report": report, "mode": mode, "once": once}
+          report: bool = True, once: bool = True,
+          ai_analysis: bool = False, ai_mode: str | None = None, ai_once: bool = True) -> dict[str, Any]:
+    return {
+        "name": name, "start": start, "end": end, "days": days or list(range(1, 8)),
+        "fetch": True, "report": report, "mode": mode, "once": once,
+        "ai_analysis": ai_analysis, "ai_mode": ai_mode or mode, "ai_once": ai_once,
+    }
+
+
+def _migrate_segment(segment: dict[str, Any]) -> dict[str, Any]:
+    """保证旧版 timeline segment 平滑升级，自动填入合法 AI 字段默认值。"""
+    seg = dict(segment)
+    if "ai_analysis" not in seg:
+        seg["ai_analysis"] = False
+    if "ai_mode" not in seg:
+        seg["ai_mode"] = seg.get("mode", "CURRENT")
+    if "ai_once" not in seg:
+        seg["ai_once"] = True
+    return seg
 
 
 def preset_policy(preset: str) -> dict[str, Any]:
-    default = {"fetch": True, "report": False, "mode": "CURRENT", "once": False}
+    default = {
+        "fetch": True, "report": False, "mode": "CURRENT", "once": False,
+        "ai_analysis": False, "ai_mode": "CURRENT", "ai_once": True,
+    }
     segments: list[dict[str, Any]] = []
     if preset == "always_on":
         default.update(report=True, mode="INCREMENTAL")
@@ -48,8 +67,17 @@ def preset_policy(preset: str) -> dict[str, Any]:
 
 def get_policy(path: str | None = None) -> dict[str, Any]:
     value = store.get_meta("native_intel_timeline", path)
-    return json.loads(value) if value else {"enabled": False, "preset": "morning_evening",
-                                           "custom": preset_policy("custom")}
+    if not value:
+        return {"enabled": False, "preset": "morning_evening", "custom": preset_policy("custom")}
+    raw = json.loads(value)
+    # legacy config migration
+    if "custom" in raw and isinstance(raw["custom"], dict):
+        custom = raw["custom"]
+        if "default" in custom and isinstance(custom["default"], dict):
+            custom["default"] = _migrate_segment(custom["default"])
+        if "segments" in custom and isinstance(custom["segments"], list):
+            custom["segments"] = [_migrate_segment(s) for s in custom["segments"] if isinstance(s, dict)]
+    return raw
 
 
 def _minute(value: Any) -> int:
@@ -81,12 +109,20 @@ def save_policy(payload: dict[str, Any], path: str | None = None) -> dict[str, A
     names: set[str] = set()
     occupied = {day: set() for day in range(1, 8)}
     for index, segment in enumerate([custom["default"], *segments]):
-        fields = {"fetch", "report", "mode", "once"}
+        # 平滑补齐缺失的 AI 字段
+        if "ai_analysis" not in segment:
+            segment["ai_analysis"] = False
+        if "ai_mode" not in segment:
+            segment["ai_mode"] = segment.get("mode", "CURRENT")
+        if "ai_once" not in segment:
+            segment["ai_once"] = True
+
+        fields = {"fetch", "report", "mode", "once", "ai_analysis", "ai_mode", "ai_once"}
         if index:
             fields |= {"name", "start", "end", "days"}
         if not isinstance(segment, dict) or set(segment) != fields:
             raise ValueError("timeline 行为字段不完整或包含未知字段")
-        if any(type(segment[k]) is not bool for k in ("fetch", "report", "once")) or segment["mode"] not in MODES:
+        if any(type(segment[k]) is not bool for k in ("fetch", "report", "once", "ai_analysis", "ai_once")) or segment["mode"] not in MODES or segment["ai_mode"] not in MODES:
             raise ValueError("timeline 行为必须使用布尔开关及合法报告模式")
         if not index:
             continue
@@ -110,6 +146,12 @@ def resolve_policy(path: str | None = None, *, now: datetime | None = None) -> d
     cfg = get_policy(path)
     now = (now or datetime.now(timezone.utc)).astimezone(LOCAL)
     policy = cfg["custom"] if cfg["preset"] == "custom" else preset_policy(cfg["preset"])
+    # 确保 policy 内部的 segment 也有默认 AI 字段
+    if "default" in policy:
+        policy["default"] = _migrate_segment(policy["default"])
+    if "segments" in policy:
+        policy["segments"] = [_migrate_segment(s) for s in policy["segments"]]
+
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     selected = None
     for segment in policy["segments"]:
@@ -136,35 +178,89 @@ def resolve_policy(path: str | None = None, *, now: datetime | None = None) -> d
                     if point > now:
                         transitions.append(point)
     if not cfg["enabled"]:
-        behavior = {"fetch": True, "report": False, "mode": "CURRENT", "once": False}
+        behavior = {
+            "fetch": True, "report": False, "mode": "CURRENT", "once": False,
+            "ai_analysis": False, "ai_mode": "CURRENT", "ai_once": True,
+        }
     return {"preset": cfg["preset"], "enabled": cfg["enabled"],
             "current_segment": selected["name"] if selected and cfg["enabled"] else "默认",
             "segment_start": start.isoformat(), "segment_end": end.isoformat(),
             "active": bool(behavior["report"]), "next_transition": min(transitions).isoformat(),
             **behavior, "timezone": "Asia/Shanghai", "config": cfg,
             "last_scheduled_report": json.loads(store.get_meta("native_intel_last_scheduled_report", path) or "null"),
+            "last_scheduled_ai": json.loads(store.get_meta("native_intel_last_scheduled_ai", path) or "null"),
             "usage_boundary": "observation_only_not_an_investment_authority"}
 
 
-def scheduled_tick(path: str | None = None, *, now: datetime | None = None) -> None:
+def scheduled_tick(path: str | None = None, *, now: datetime | None = None, ai_runner: Any = None) -> None:
     from native_intel_service import run_fetch
     from native_intel_reporting import generate_report
+    import native_intel_ai as ai_engine
 
     when = (now or datetime.now(timezone.utc)).astimezone(LOCAL)
     status = resolve_policy(path, now=when)
     if status["fetch"]:
         run_fetch("scheduled", path)
-    if not status["active"]:
+    if not status["active"] and not status.get("ai_analysis"):
         return
+
     execution_key = "timeline:" + status["preset"] + ":" + status["current_segment"]
     previous = store.read_report_cursor(execution_key, path)
-    # The reference once rule is keyed by local date, including midnight resets.
-    if status["once"] and previous and datetime.fromisoformat(previous["generated_at"].replace("Z", "+00:00")).astimezone(LOCAL).date() == when.date():
-        return
-    result = generate_report(path, mode=status["mode"], report_profile="scheduled", now=now)
-    if result["cursor_advanced"]:
-        store.advance_report_cursor(execution_key, "default", status["mode"], result["generated_at"],
-                                    result["observation_boundary"], previous, path)
-        store.set_meta("native_intel_last_scheduled_report", json.dumps({
-            "generated_at": result["generated_at"], "mode": result["mode"], "item_count": result["total"],
-            "status": result["status"], "segment": status["current_segment"]}), path)
+
+    if status["active"]:
+        # The reference once rule is keyed by local date, including midnight resets.
+        can_run = True
+        if status["once"] and previous and datetime.fromisoformat(previous["generated_at"].replace("Z", "+00:00")).astimezone(LOCAL).date() == when.date():
+            can_run = False
+
+        if can_run:
+            result = generate_report(path, mode=status["mode"], report_profile="scheduled", now=now)
+            if result["cursor_advanced"]:
+                store.advance_report_cursor(execution_key, "default", status["mode"], result["generated_at"],
+                                            result["observation_boundary"], previous, path)
+                store.set_meta("native_intel_last_scheduled_report", json.dumps({
+                    "generated_at": result["generated_at"], "mode": result["mode"], "item_count": result["total"],
+                    "status": result["status"], "segment": status["current_segment"]}), path)
+
+    # Scheduled AI Analysis with Failure Isolation
+    if status.get("ai_analysis"):
+        ai_execution_key = "timeline_ai:" + status["preset"] + ":" + status["current_segment"]
+        ai_previous = store.read_report_cursor(ai_execution_key, path)
+        can_run_ai = True
+        if status.get("ai_once", True) and ai_previous and datetime.fromisoformat(ai_previous["generated_at"].replace("Z", "+00:00")).astimezone(LOCAL).date() == when.date():
+            can_run_ai = False
+
+        if can_run_ai:
+            ai_mode = status.get("ai_mode") or status["mode"]
+            try:
+                # 预览报告（commit=False），绝不消耗或推进 INCREMENTAL report baseline
+                preview_report = generate_report(path, mode=ai_mode, report_profile="scheduled_preview", now=now, commit=False)
+                ai_res = ai_engine.analyze_report(
+                    preview_report,
+                    scope="all",
+                    model_runner=ai_runner,
+                    path=path,
+                )
+                ai_status = ai_res.get("status", "SUCCESS")
+                ai_error = ai_res.get("error")
+                if ai_status == "SUCCESS":
+                    store.advance_report_cursor(
+                        ai_execution_key, "default", ai_mode, when.strftime("%Y-%m-%dT%H:%M:%SZ"), 0, ai_previous, path
+                    )
+                store.set_meta("native_intel_last_scheduled_ai", json.dumps({
+                    "generated_at": when.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "mode": ai_mode,
+                    "status": ai_status,
+                    "segment": status["current_segment"],
+                    "artifact_id": ai_res.get("artifact_id", ""),
+                    "error": ai_error,
+                }), path)
+            except Exception as e:
+                # Failure Isolation：AI 异常绝不能破坏本次 tick 或让正常抓取/报告被标记失败
+                store.set_meta("native_intel_last_scheduled_ai", json.dumps({
+                    "generated_at": when.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "mode": ai_mode,
+                    "status": "ERROR",
+                    "segment": status["current_segment"],
+                    "error": str(e)[:200],
+                }), path)
