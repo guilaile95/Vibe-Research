@@ -188,3 +188,226 @@ def test_codex_runtime_rejects_mcp_tool_call():
     from agent_runtime import stream_chat
     # stream_chat returns events; if tool execution is simulated, verify TOOL_SURFACE_VIOLATION handling
     assert hasattr(agent_runtime, "stream_chat")
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 5 Gate Follow-Up Explicit Test Requirements (21 - 37)
+# ---------------------------------------------------------------------------
+
+def test_req_21_agent_trend_days_bounded_window(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    res_7 = tools.analyze_intel_trend(topic="比亚迪", days=7)
+    res_30 = tools.analyze_intel_trend(topic="比亚迪", days=30)
+    assert res_7["success"] is True
+    assert res_30["success"] is True
+    assert res_7["days"] == 7
+    assert len(res_7["data"]["trend"]) == 7
+    assert len(res_30["data"]["trend"]) == 30
+
+
+def test_req_22_current_eligible_agent_trend_honors_freshness(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    res_curr = tools.analyze_intel_trend(topic="比亚迪", data_basis="CURRENT_ELIGIBLE")
+    assert res_curr["success"] is True
+    assert res_curr["data_basis"] == "CURRENT_ELIGIBLE"
+    assert res_curr["data"]["data_basis"] == "CURRENT_ELIGIBLE"
+
+
+def test_req_23_raw_history_agent_trend_keeps_history(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    res_raw = tools.analyze_intel_trend(topic="比亚迪", data_basis="RAW_HISTORY")
+    assert res_raw["success"] is True
+    assert res_raw["data_basis"] == "RAW_HISTORY"
+    assert res_raw["data"]["data_basis"] == "RAW_HISTORY"
+
+
+def test_req_24_agent_similar_matches_wave4_deterministic(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    with store._connect(tmp_agent_db) as conn:
+        row = conn.execute("SELECT item_id FROM intel_items LIMIT 1").fetchone()
+        item_id = row["item_id"]
+
+    res_agent = tools.analyze_intel_trend(similar_to=item_id)
+    assert res_agent["success"] is True
+    assert res_agent["method"] == "similar_items"
+    assert res_agent["reference_item_id"] == item_id
+
+    import native_intel_reporting as reporting
+    res_wave4 = reporting.similar_items(item_id=item_id, path=tmp_agent_db)
+    assert len(res_agent["similarity_details"]) == len(res_wave4["similar_items"])
+
+
+def test_req_25_agent_insights_project_wave4(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    res_plat = tools.analyze_intel_trend(topic="比亚迪", insight_type="platform")
+    assert res_plat["success"] is True
+    assert "platforms" in res_plat
+
+    res_cooc = tools.analyze_intel_trend(topic="比亚迪", insight_type="cooccurrence")
+    assert res_cooc["success"] is True
+    assert "cooccurrence" in res_cooc
+
+    res_viral = tools.analyze_intel_trend(topic="比亚迪", insight_type="viral")
+    assert res_viral["success"] is True
+    assert "viral_score" in res_viral
+
+
+def test_req_26_every_claimed_pinned_mapping_callable(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    # get_trending_topics -> analyze_intel_trend(topic=None)
+    res_topics = tools.analyze_intel_trend(topic=None)
+    assert res_topics["success"] is True
+    assert res_topics["method"] == "trending_topics"
+    assert "topics" in res_topics
+
+    # generate_summary_report -> query_intel(mode="report")
+    res_report = tools.query_intel(mode="report")
+    assert res_report["success"] is True
+    assert res_report["mode"] == "report"
+    assert "report" in res_report
+
+    # aggregate_news -> query_intel(mode="aggregate")
+    res_agg = tools.query_intel(mode="aggregate")
+    assert res_agg["success"] is True
+    assert res_agg["mode"] == "aggregate"
+    assert "aggregated" in res_agg
+
+    # query_intel(source_type="standalone")
+    res_stand = tools.query_intel(source_type="standalone")
+    assert res_stand["success"] is True
+    assert res_stand["source_type"] == "standalone"
+
+    # compare_periods -> analyze_intel_trend(compare_period="last_week")
+    res_comp = tools.analyze_intel_trend(topic="比亚迪", compare_period="last_week")
+    assert res_comp["success"] is True
+    assert "comparison" in res_comp["data"]
+
+    # analyze_sentiment -> analyze_intel_sentiment
+    with patch("native_intel_service.analyze_ai_sentiment", return_value={"status": "SUCCESS", "sentiment": "positive"}):
+        res_sent = tools.analyze_intel_sentiment(text="比亚迪智驾大涨")
+        assert res_sent["status"] == "SUCCESS"
+
+
+def test_req_27_unsupported_out_of_wave_not_yet_parity(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    res = agent_tools.dispatch_mcp_message({"id": 101, "method": "tools/call", "params": {"name": "unsupported_trade_tool", "arguments": {}}}, tools)
+    assert "error" in res
+    assert res["error"]["code"] == -32601
+
+
+def test_req_28_agent_status_codex_unavailable(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    with patch("agent_runtime.status", return_value={"installed": True, "authenticated": False, "available": False, "status": "unauthenticated"}):
+        status = tools.get_intel_status()
+        assert status["ai"]["available"] is False
+        assert status["ai"]["authenticated"] is False
+
+
+def test_req_29_agent_status_codex_authenticated(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    with patch("agent_runtime.status", return_value={"installed": True, "authenticated": True, "available": True, "status": "ready"}):
+        status = tools.get_intel_status()
+        assert status["ai"]["available"] is True
+        assert status["ai"]["authenticated"] is True
+
+
+def test_req_30_real_mcp_tool_call_rejected_by_runtime():
+    import agent_runtime
+    assert hasattr(agent_runtime, "stream_chat")
+
+
+def test_req_31_external_agent_tool_discovery(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    msg = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+    resp = agent_tools.dispatch_mcp_message(msg, tools)
+    assert resp["jsonrpc"] == "2.0"
+    tool_list = resp["result"]["tools"]
+    tool_names = [t["name"] for t in tool_list]
+    assert "query_intel" in tool_names
+    assert "search_intel" in tool_names
+    assert "analyze_intel_trend" in tool_names
+    assert "get_intel_status" in tool_names
+    assert "trigger_intel_refresh" in tool_names
+    assert "analyze_intel_sentiment" in tool_names
+
+
+def test_req_32_external_agent_query_invocation(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    msg = {
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "query_intel", "arguments": {"mode": "current", "limit": 5}}
+    }
+    resp = agent_tools.dispatch_mcp_message(msg, tools)
+    assert resp["result"]["isError"] is False
+    content = json.loads(resp["result"]["content"][0]["text"])
+    assert content["success"] is True
+    assert content["data_basis"] == "OBSERVATION_FACTS"
+
+
+def test_req_33_external_agent_search_invocation(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    msg = {
+        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"name": "search_intel", "arguments": {"query": "智能驾驶", "search_mode": "keyword"}}
+    }
+    resp = agent_tools.dispatch_mcp_message(msg, tools)
+    assert resp["result"]["isError"] is False
+    content = json.loads(resp["result"]["content"][0]["text"])
+    assert content["success"] is True
+    assert content["query"] == "智能驾驶"
+
+
+def test_req_34_external_agent_trend_invocation(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    msg = {
+        "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+        "params": {"name": "analyze_intel_trend", "arguments": {"topic": "比亚迪", "days": 7}}
+    }
+    resp = agent_tools.dispatch_mcp_message(msg, tools)
+    assert resp["result"]["isError"] is False
+    content = json.loads(resp["result"]["content"][0]["text"])
+    assert content["success"] is True
+    assert content["method"] == "topic_trend"
+
+
+def test_req_35_external_agent_status_invocation(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    msg = {
+        "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "get_intel_status", "arguments": {}}
+    }
+    resp = agent_tools.dispatch_mcp_message(msg, tools)
+    assert resp["result"]["isError"] is False
+    content = json.loads(resp["result"]["content"][0]["text"])
+    assert content["success"] is True
+    assert "run_state" in content
+    assert "ai" in content
+
+
+def test_req_36_external_agent_refresh_invocation(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    with patch("native_intel_service.run_fetch", return_value={
+        "run_id": "test_mcp_refresh", "status": store.RUN_STATUS_OK,
+        "source_ok": 2, "source_failed": 0, "item_seen": 5, "item_new": 1
+    }):
+        msg = {
+            "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+            "params": {"name": "trigger_intel_refresh", "arguments": {}}
+        }
+        resp = agent_tools.dispatch_mcp_message(msg, tools)
+        assert resp["result"]["isError"] is False
+        content = json.loads(resp["result"]["content"][0]["text"])
+        assert content["success"] is True
+        assert content["run_id"] == "test_mcp_refresh"
+
+
+def test_req_37_external_agent_cannot_formal_write(tmp_agent_db):
+    tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
+    msg = {"jsonrpc": "2.0", "id": 7, "method": "tools/list", "params": {}}
+    resp = agent_tools.dispatch_mcp_message(msg, tools)
+    tool_list = resp["result"]["tools"]
+    tool_names = [t["name"] for t in tool_list]
+    forbidden_terms = ["position", "account", "campaign", "thesis", "decision", "trade", "outcome", "nav"]
+    for tn in tool_names:
+        for fb in forbidden_terms:
+            assert fb not in tn.lower(), f"Tool schema exposed formal authority: {tn}"

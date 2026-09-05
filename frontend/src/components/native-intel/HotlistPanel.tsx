@@ -38,6 +38,7 @@ import { cn } from "@/lib/utils";
 import { FilterSettingsModal } from "./FilterSettingsModal";
 import { NewIntelItems } from "./IntelReports";
 import { AiAnalysisRegion } from "./AiAnalysisRegion";
+import { loadLlm } from "@/lib/llm";
 
 export function HotlistPanel() {
   const [items, setItems] = useState<NativeIntelHotlistItem[]>([]);
@@ -56,7 +57,8 @@ export function HotlistPanel() {
 
   const handleItemTranslate = async (itemId: number, text: string) => {
     try {
-      const res = await api.nativeIntelAiTranslate({ text });
+      const llm = loadLlm();
+      const res = await api.nativeIntelAiTranslate({ text, llm });
       setItemTranslations((prev) => ({ ...prev, [itemId]: res.translated_text || text }));
     } catch {
       setItemTranslations((prev) => ({ ...prev, [itemId]: "翻译失败" }));
@@ -65,8 +67,9 @@ export function HotlistPanel() {
 
   const handleItemEntities = async (itemId: number, title: string, summary?: string) => {
     try {
+      const llm = loadLlm();
       const text = [title, summary].filter(Boolean).join("\n");
-      const res = await api.nativeIntelAiEntities({ text, title, summary });
+      const res = await api.nativeIntelAiEntities({ text, title, summary, llm });
       setItemEntities((prev) => ({ ...prev, [itemId]: res.entities || [] }));
     } catch {
       setItemEntities((prev) => ({ ...prev, [itemId]: [] }));
@@ -75,8 +78,9 @@ export function HotlistPanel() {
 
   const handleItemSentiment = async (itemId: number, title: string, summary?: string) => {
     try {
+      const llm = loadLlm();
       const text = [title, summary].filter(Boolean).join("\n");
-      const res = await api.nativeIntelAiSentiment({ text, title, summary });
+      const res = await api.nativeIntelAiSentiment({ text, title, summary, llm });
       setItemSentiments((prev) => ({
         ...prev,
         [itemId]: {

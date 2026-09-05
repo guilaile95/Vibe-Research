@@ -154,15 +154,15 @@ TrendRadar pinned commit exposes 27 FastMCP tools across several categories:
 | `get_system_status` | System/Status | In Scope | `get_intel_status()` |
 | `check_version` | System/Status | In Scope | `get_intel_status()` |
 | `trigger_crawl` | Trigger | In Scope | `trigger_intel_refresh()` |
-| `sync_from_remote` | Storage | Out of Scope (Wave 6/7) | N/A (Local SQLite authority) |
+| `sync_from_remote` | Storage | Out of Scope (Wave 6/7) | `NOT_YET_PARITY` |
 | `get_storage_status` | Storage | In Scope | `get_intel_status()` |
 | `list_available_dates` | Storage/Query | In Scope | `query_intel(mode="dates")` |
-| `read_article` | Crawler | Out of Scope | N/A (Forbidden broad web fetch) |
-| `read_articles_batch` | Crawler | Out of Scope | N/A (Forbidden broad web fetch) |
+| `read_article` | Crawler | Out of Scope | `NOT_YET_PARITY` (Forbidden broad web fetch) |
+| `read_articles_batch` | Crawler | Out of Scope | `NOT_YET_PARITY` (Forbidden broad web fetch) |
 | `resolve_date_range` | Util | In Scope | `resolve_intel_date_range(expression)` |
-| `get_channel_format_guide`| Notification | Out of Scope (Wave 6) | N/A |
-| `get_notification_channels`| Notification | Out of Scope (Wave 6) | N/A |
-| `send_notification` | Notification | Out of Scope (Wave 6) | N/A |
+| `get_channel_format_guide`| Notification | Out of Scope (Wave 6) | `NOT_YET_PARITY` |
+| `get_notification_channels`| Notification | Out of Scope (Wave 6) | `NOT_YET_PARITY` |
+| `send_notification` | Notification | Out of Scope (Wave 6) | `NOT_YET_PARITY` |
 
 ### Tool Execution & Security Boundaries
 - Read-only tools query existing `native_intel_store.py` / `native_intel_service.py` functions without raw SQL injection.

@@ -608,7 +608,7 @@ def post_ai_analysis(payload: dict[str, Any]) -> dict[str, Any]:
         scope = str(payload.get("scope") or "all")
         profile_id = str(payload.get("profile_id") or "default")
         date = payload.get("date")
-        cfg = payload.get("ai_config") or payload.get("cfg")
+        cfg = payload.get("llm") or payload.get("ai_config") or payload.get("cfg")
         max_news = int(payload.get("max_news", 50))
         language = str(payload.get("language") or "Chinese")
         include_rss = bool(payload.get("include_rss", True))
@@ -646,7 +646,7 @@ def post_ai_translate(payload: dict[str, Any]) -> dict[str, Any]:
     """多语言翻译（支持单条 text 或批量 texts 列表）。"""
     try:
         target_lang = str(payload.get("target_language") or "Chinese")
-        cfg = payload.get("ai_config") or payload.get("cfg")
+        cfg = payload.get("llm") or payload.get("ai_config") or payload.get("cfg")
         if "texts" in payload:
             texts = payload.get("texts")
             if not isinstance(texts, list):
@@ -669,7 +669,7 @@ def post_ai_entities(payload: dict[str, Any]) -> dict[str, Any]:
         if not text:
             parts = [payload.get("title"), payload.get("summary")]
             text = "\n".join(str(p).strip() for p in parts if p)
-        cfg = payload.get("ai_config") or payload.get("cfg")
+        cfg = payload.get("llm") or payload.get("ai_config") or payload.get("cfg")
         return service.extract_ai_entities(text, cfg=cfg, path=_db_path())
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -686,7 +686,7 @@ def post_ai_sentiment(payload: dict[str, Any]) -> dict[str, Any]:
             parts = [payload.get("title"), payload.get("summary")]
             text = "\n".join(str(p).strip() for p in parts if p)
         topic = payload.get("topic")
-        cfg = payload.get("ai_config") or payload.get("cfg")
+        cfg = payload.get("llm") or payload.get("ai_config") or payload.get("cfg")
         return service.analyze_ai_sentiment(text, topic=topic, cfg=cfg, path=_db_path())
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -770,9 +770,32 @@ def agent_tool_refresh(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     return tools.trigger_intel_refresh(sources=sources)
 
 
+@router.post("/agent/tools/sentiment")
+def agent_tool_sentiment(payload: dict[str, Any]) -> dict[str, Any]:
+    """Agent 舆情风向与争议分析工具。"""
+    try:
+        tools = service.get_agent_tools(_db_path())
+        text = str(payload.get("text") or "")
+        topic = payload.get("topic")
+        return tools.analyze_intel_sentiment(text=text, topic=topic)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.post("/agent/tools/date-range")
 def agent_tool_date_range(payload: dict[str, Any]) -> dict[str, Any]:
     """自然语言日期解析工具。"""
     from native_intel_agent_tools import resolve_intel_date_range
     expression = str(payload.get("expression") or "")
     return resolve_intel_date_range(expression)
+
+
+@router.post("/mcp")
+def native_intel_mcp_rpc(payload: dict[str, Any]) -> dict[str, Any]:
+    """Vibe-Native MCP JSON-RPC 2.0 协议标准端点。
+
+    支持 initialize, ping, tools/list, tools/call。
+    """
+    from native_intel_agent_tools import dispatch_mcp_message
+    tools = service.get_agent_tools(_db_path())
+    return dispatch_mcp_message(payload, tools)

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Sparkles, RefreshCw, Loader2, AlertCircle, FileText, BarChart3, ShieldAlert, BookOpen, Layers, Newspaper } from "lucide-react";
 import { api } from "../../lib/api";
+import { loadLlm } from "../../lib/llm";
 import type { NativeIntelAiAnalysisResponse, NativeIntelConfig } from "../../lib/api/types";
 
 interface AiAnalysisRegionProps {
@@ -64,12 +65,14 @@ export function AiAnalysisRegion({ mode = "current", scope = "all", config }: Ai
     setLoading(true);
     setError(null);
     try {
+      const llm = loadLlm();
       const res = await api.nativeIntelAiAnalysis({
         mode: mode.toUpperCase(),
         scope,
         max_news: config?.ai_analysis_max_news ?? 50,
         include_rss: config?.ai_analysis_include_rss !== false,
         include_standalone: Boolean(config?.ai_analysis_include_standalone),
+        llm,
       });
       setAnalysis(res);
       if (res.status === "ERROR") {

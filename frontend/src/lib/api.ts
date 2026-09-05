@@ -720,13 +720,13 @@ export const api = {
       "/native-intel/standalone",
       { unwrapData: false, ...(signal ? { signal } : {}) },
     ),
-  nativeIntelAiAnalysis: (payload: { mode?: string; scope?: string; max_news?: number; include_rss?: boolean; include_standalone?: boolean } = {}, signal?: AbortSignal) =>
+  nativeIntelAiAnalysis: (payload: { mode?: string; scope?: string; max_news?: number; include_rss?: boolean; include_standalone?: boolean; llm?: { provider?: string; baseURL?: string; apiKey?: string; model?: string } | null } = {}, signal?: AbortSignal) =>
     request<NativeIntelAiAnalysisResponse>("/native-intel/ai/analysis", "POST", payload, { signal, unwrapData: false }),
-  nativeIntelAiTranslate: (payload: { text: string; target_language?: string }, signal?: AbortSignal) =>
+  nativeIntelAiTranslate: (payload: { text: string; target_language?: string; llm?: { provider?: string; baseURL?: string; apiKey?: string; model?: string } | null }, signal?: AbortSignal) =>
     request<NativeIntelAiTranslateResponse>("/native-intel/ai/translate", "POST", payload, { signal, unwrapData: false }),
-  nativeIntelAiEntities: (payload: { text?: string; title?: string; summary?: string }, signal?: AbortSignal) =>
+  nativeIntelAiEntities: (payload: { text?: string; title?: string; summary?: string; llm?: { provider?: string; baseURL?: string; apiKey?: string; model?: string } | null }, signal?: AbortSignal) =>
     request<NativeIntelAiEntityResponse>("/native-intel/ai/entities", "POST", payload, { signal, unwrapData: false }),
-  nativeIntelAiSentiment: (payload: { text?: string; topic?: string; title?: string; summary?: string }, signal?: AbortSignal) =>
+  nativeIntelAiSentiment: (payload: { text?: string; topic?: string; title?: string; summary?: string; llm?: { provider?: string; baseURL?: string; apiKey?: string; model?: string } | null }, signal?: AbortSignal) =>
     request<NativeIntelAiSentimentResponse>("/native-intel/ai/sentiment", "POST", payload, { signal, unwrapData: false }),
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),

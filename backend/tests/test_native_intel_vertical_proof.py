@@ -215,8 +215,9 @@ def test_vertical_proof_real_ai_and_agent_tools(proof_db):
     t_res = tools.analyze_intel_trend(keyword="液冷")
     assert t_res["success"] is True
     assert t_res["topic"] == "液冷"
-    assert t_res["data"]["mention_count"] >= 1
-    print(f"Agent Tool Trend: Mentions={t_res['data']['mention_count']}")
+    total_mentions = sum(b["mention_count"] for b in t_res["data"]["trend"])
+    assert total_mentions >= 1
+    print(f"Agent Tool Trend: Mentions={total_mentions}")
 
     # 5e. resolve_intel_date_range
     r_res = tools.resolve_intel_date_range("最近7天")

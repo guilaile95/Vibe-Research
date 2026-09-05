@@ -179,9 +179,13 @@ try {
   const aiRegionToggle = page.locator('[data-testid="wave5-region-toggle-ai_analysis"]');
   await aiRegionToggle.waitFor({ state: "visible", timeout: 10000 });
 
-  // Verify settings section exists
+  // Verify settings section and unified authority notice exists
   const aiSettingsSection = page.locator('[data-testid="wave5-ai-settings-section"]');
   await aiSettingsSection.waitFor({ state: "visible", timeout: 5000 });
+  const authorityNotice = page.locator('[data-testid="wave5-ai-authority-notice"]');
+  await authorityNotice.waitFor({ state: "visible", timeout: 5000 });
+  assert.equal(await page.locator('[data-testid="wave5-ai-provider-select"]').count(), 0);
+  assert.equal(await page.locator('input[name="aiAnalysisProvider"]').count(), 0);
 
   // Toggle checkbox off then on to ensure dirty change
   if (await aiRegionToggle.isChecked()) {
@@ -201,7 +205,7 @@ try {
   const reloadedToggle = page.locator('[data-testid="wave5-region-toggle-ai_analysis"]');
   await reloadedToggle.waitFor({ state: "visible", timeout: 10000 });
   assert.equal(await reloadedToggle.isChecked(), true);
-  console.log("PASS: Scenario 1 - Settings toggle and persistence verified");
+  console.log("PASS: Scenario 1 - Settings toggle, single authority notice, and persistence verified");
 
   // =========================================================================
   // Scenario 2: HotlistPanel rendering display-region-ai_analysis
@@ -224,10 +228,24 @@ try {
   const generateBtn = page.locator('[data-testid="wave5-generate-ai-analysis"]');
   await generateBtn.waitFor({ state: "visible", timeout: 5000 });
   const analysisPromise = page.waitForResponse((r) => r.url().includes("/api/native-intel/ai/analysis"));
+  let capturedAnalysisReqBody = null;
+  const analysisReqHandler = (req) => {
+    if (req.url().includes("/api/native-intel/ai/analysis")) {
+      try {
+        capturedAnalysisReqBody = JSON.parse(req.postData() || "{}");
+      } catch {}
+    }
+  };
+  page.on("request", analysisReqHandler);
   await generateBtn.click();
   const analysisResp = await analysisPromise;
   const analysisJson = await analysisResp.json();
   console.log("ANALYSIS RESPONSE IS:", JSON.stringify(analysisJson));
+
+  // Verify full-site Codex configuration was forwarded
+  assert.ok(capturedAnalysisReqBody !== null, "Analysis request body must be captured");
+  assert.equal(capturedAnalysisReqBody.llm?.provider, "cli-codex");
+  assert.equal(capturedAnalysisReqBody.llm?.model, "gpt-5-codex");
 
   // Wait for 6 section tabs to be visible
   const tabs = [
@@ -272,12 +290,35 @@ try {
   console.log("PASS: Scenario 3 - AI Deep Analysis 6 tabs, watermark, and CACHE_HIT verified");
 
   // =========================================================================
-  // Scenario 4: Single Item AI Translation
+  // Scenario 4: Single Item AI Translation with Global API Compatible Configuration
   // =========================================================================
-  console.log("--- Starting Scenario 4: Single Item AI Translation ---");
+  console.log("--- Starting Scenario 4: Single Item AI Translation (API Compatible Mode) ---");
+  // Set global AI configuration to API Compatible mode in localStorage
+  await page.evaluate(() => {
+    localStorage.setItem(
+      "vr-llm",
+      JSON.stringify({
+        provider: "deepseek",
+        baseURL: "https://api.deepseek.com/v1",
+        apiKey: "sk-test-deepseek-12345",
+        model: "deepseek-chat",
+      }),
+    );
+  });
+
   // Item 1 has title: "Data center liquid cooling demand rises"
   const item1Title = page.locator("text=Data center liquid cooling demand rises");
   await item1Title.waitFor({ state: "visible", timeout: 10000 });
+
+  let capturedTranslateReqBody = null;
+  const translateReqHandler = (req) => {
+    if (req.url().includes("/api/native-intel/ai/translate")) {
+      try {
+        capturedTranslateReqBody = JSON.parse(req.postData() || "{}");
+      } catch {}
+    }
+  };
+  page.on("request", translateReqHandler);
 
   const transBtns = page.locator('[data-testid="wave5-item-translate"]');
   assert.ok((await transBtns.count()) > 0, "Translate button should exist for items");
@@ -290,9 +331,16 @@ try {
   console.log("TRANSLATED TEXT IS:", JSON.stringify(translatedText));
   assert.ok(translatedText.includes("数据中心液冷需求持续攀升") || translatedText.includes("【AI 翻译】"), "Translation text should match");
 
+  // Verify global API Compatible configuration was forwarded to translation
+  assert.ok(capturedTranslateReqBody !== null, "Translate request body must be captured");
+  assert.equal(capturedTranslateReqBody.llm?.provider, "deepseek");
+  assert.equal(capturedTranslateReqBody.llm?.baseURL, "https://api.deepseek.com/v1");
+  assert.equal(capturedTranslateReqBody.llm?.model, "deepseek-chat");
+  assert.equal(capturedTranslateReqBody.llm?.apiKey, "sk-test-deepseek-12345");
+
   // Verify original text is still intact and visible!
   assert.ok((await page.locator("text=Data center liquid cooling demand rises").count()) > 0);
-  console.log("PASS: Scenario 4 - Single translation rendered without mutating original title");
+  console.log("PASS: Scenario 4 - Single translation rendered with global API authority and without mutating original title");
 
   // =========================================================================
   // Scenario 5: Batch translation array index preservation

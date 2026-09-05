@@ -1175,8 +1175,6 @@ function NativeIntelDisplayAndProxySection() {
     ai_analysis: false,
   });
   const [aiAnalysisEnabled, setAiAnalysisEnabled] = useState(false);
-  const [aiAnalysisProvider, setAiAnalysisProvider] = useState("cli-codex");
-  const [aiAnalysisModel, setAiAnalysisModel] = useState("gpt-5-codex");
   const [aiAnalysisMaxNews, setAiAnalysisMaxNews] = useState(50);
   const [aiAnalysisIncludeRss, setAiAnalysisIncludeRss] = useState(true);
   const [aiAnalysisIncludeStandalone, setAiAnalysisIncludeStandalone] = useState(false);
@@ -1207,8 +1205,6 @@ function NativeIntelDisplayAndProxySection() {
         setRegionsEnabled(cfg.regions_enabled);
       }
       setAiAnalysisEnabled(Boolean(cfg.ai_analysis_enabled));
-      setAiAnalysisProvider(cfg.ai_analysis_provider || "cli-codex");
-      setAiAnalysisModel(cfg.ai_analysis_model || "gpt-5-codex");
       setAiAnalysisMaxNews(Number(cfg.ai_analysis_max_news ?? 50));
       setAiAnalysisIncludeRss(cfg.ai_analysis_include_rss !== false);
       setAiAnalysisIncludeStandalone(Boolean(cfg.ai_analysis_include_standalone));
@@ -1241,8 +1237,6 @@ function NativeIntelDisplayAndProxySection() {
         region_order: regionOrder,
         regions_enabled: regionsEnabled,
         ai_analysis_enabled: aiAnalysisEnabled,
-        ai_analysis_provider: aiAnalysisProvider,
-        ai_analysis_model: aiAnalysisModel,
         ai_analysis_max_news: aiAnalysisMaxNews,
         ai_analysis_include_rss: aiAnalysisIncludeRss,
         ai_analysis_include_standalone: aiAnalysisIncludeStandalone,
@@ -1604,30 +1598,9 @@ function NativeIntelDisplayAndProxySection() {
                   <span className="font-medium">启用 AI 深度分析研报</span>
                 </label>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <span className="text-[11px] text-muted-foreground block mb-1">提供商</span>
-                    <select
-                      data-testid="wave5-ai-analysis-provider"
-                      value={aiAnalysisProvider}
-                      onChange={(e) => setAiAnalysisProvider(e.target.value)}
-                      className="w-full rounded border border-border bg-black/20 px-2 py-1 text-xs outline-none focus:border-primary/50"
-                    >
-                      <option value="cli-codex">Codex CLI / 订阅</option>
-                      <option value="openai-compatible">OpenAI Compatible</option>
-                    </select>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-muted-foreground block mb-1">模型名称</span>
-                    <input
-                      type="text"
-                      data-testid="wave5-ai-analysis-model"
-                      value={aiAnalysisModel}
-                      onChange={(e) => setAiAnalysisModel(e.target.value)}
-                      className="w-full rounded border border-border bg-black/20 px-2 py-1 text-xs outline-none focus:border-primary/50"
-                      placeholder="gpt-5-codex"
-                    />
-                  </div>
+                <div className="rounded border border-primary/20 bg-primary/5 p-2 text-[11px] text-muted-foreground" data-testid="wave5-ai-authority-notice">
+                  <span className="font-medium text-foreground">AI 接入方式：</span>
+                  复用全站统一配置（Codex Subscription 或 API Compatible）。如需切换或修改 Key，请在上方「接入 AI」中设置。
                 </div>
 
                 <div className="flex items-center gap-2">

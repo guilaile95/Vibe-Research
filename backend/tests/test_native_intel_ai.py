@@ -666,3 +666,261 @@ def test_backup_restore_ai_artifacts_and_config(tmp_db, tmp_path):
     cfg = store.get_native_intel_config(backup_file)
     assert cfg["ai_analysis_enabled"] is True
     assert cfg["ai_analysis_max_news"] == 88
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 5 Gate Follow-Up Explicit Test Requirements (1 - 20 & 38)
+# ---------------------------------------------------------------------------
+
+def test_req_02_global_api_selection_uses_request_config(tmp_db):
+    calls = []
+    def mock_runner(cfg, messages):
+        calls.append(cfg)
+        return json.dumps({
+            "core_trends": "API分析", "sentiment_controversy": "中立", "signals": "无",
+            "rss_insights": "无", "outlook_strategy": "观望", "standalone_summaries": {}
+        })
+
+    report = reporting.generate_report(path=tmp_db, mode="CURRENT", commit=False)
+    cfg = {
+        "provider": "deepseek",
+        "baseURL": "https://api.deepseek.com/v1",
+        "apiKey": "sk-deepseek-12345",
+        "model": "deepseek-chat"
+    }
+    res = ai.analyze_report(report, cfg=cfg, model_runner=mock_runner, path=tmp_db)
+    assert res["status"] == "SUCCESS"
+    assert len(calls) == 1
+    assert calls[0]["provider"] == "deepseek"
+    assert calls[0]["baseURL"] == "https://api.deepseek.com/v1"
+    assert calls[0]["model"] == "deepseek-chat"
+    assert calls[0]["apiKey"] == "sk-deepseek-12345"
+
+
+def test_req_03_native_intel_no_second_provider_authority(tmp_db):
+    cfg = store.get_native_intel_config(tmp_db)
+    assert "ai_analysis_provider" not in cfg or cfg.get("ai_analysis_provider") is None
+    eff = ai.get_effective_ai_config(request_cfg=None, path=tmp_db)
+    assert eff["provider"] == "cli-codex"
+    assert eff["model"] == "gpt-5-codex"
+
+
+def test_req_04_manual_api_key_never_persisted_to_sqlite(tmp_db):
+    secret_key = "sk-super-secret-key-99999"
+    cfg = {
+        "provider": "openrouter",
+        "baseURL": "https://openrouter.ai/api/v1",
+        "apiKey": secret_key,
+        "model": "deepseek/deepseek-r1"
+    }
+    def mock_runner(c, msgs):
+        return json.dumps({
+            "core_trends": "无泄漏", "sentiment_controversy": "平稳", "signals": "无",
+            "rss_insights": "无", "outlook_strategy": "无", "standalone_summaries": {}
+        })
+    report = reporting.generate_report(path=tmp_db, mode="CURRENT", commit=False)
+    res = ai.analyze_report(report, cfg=cfg, model_runner=mock_runner, path=tmp_db)
+    assert res["status"] == "SUCCESS"
+
+    store.update_native_intel_config({"ai_analysis_max_news": 50}, tmp_db)
+
+    with store._connect(tmp_db) as conn:
+        tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        for t in tables:
+            tname = t["name"]
+            cols = [c["name"] for c in conn.execute(f"PRAGMA table_info({tname})").fetchall()]
+            for cname in cols:
+                rows = conn.execute(f"SELECT {cname} FROM {tname} WHERE CAST({cname} AS TEXT) LIKE ?", (f"%{secret_key}%",)).fetchall()
+                assert len(rows) == 0, f"Secret API key leaked into table {tname}, column {cname}!"
+
+
+def test_req_07_to_10_standalone_in_out_expired_and_exact_counts(tmp_db):
+    store.upsert_sources([
+        {"source_id": "hotlist-stand", "name": "独立热榜", "hint": "重点", "url": "https://stand-hot.com", "source_type": "hotlist", "has_real_rank": 1, "enabled": 1},
+        {"source_id": "rss-stand", "name": "独立RSS", "hint": "重点快讯", "url": "https://stand-rss.com", "source_type": "rss", "has_real_rank": 0, "enabled": 1, "max_age_days": 1},
+    ], db_path=tmp_db)
+
+    store.update_native_intel_config({
+        "standalone_enabled": True,
+        "standalone_source_ids": ["hotlist-stand", "rss-stand"],
+        "rss_freshness_enabled": True,
+        "rss_global_max_age_days": 1,
+    }, tmp_db)
+
+    run_id = "run_stand_01"
+    now_dt = datetime.now(timezone.utc)
+    now_iso = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    store.start_run(run_id, "test", 2, db_path=tmp_db, started_at=now_iso)
+
+    item_hot = {
+        "item_key": "hotlist-stand:1", "canonical_url": "https://stand-hot.com/1", "url": "https://stand-hot.com/1",
+        "title": "独家重磅热点新闻", "summary": "独立热榜头条", "published_at": now_iso, "published_ts": int(now_dt.timestamp()), "rank": 1
+    }
+    item_rss_fresh = {
+        "item_key": "rss-stand:fresh", "canonical_url": "https://stand-rss.com/fresh", "url": "https://stand-rss.com/fresh",
+        "title": "今日最新快讯新闻", "summary": "新鲜快讯", "published_at": now_iso, "published_ts": int(now_dt.timestamp()), "rank": None
+    }
+    old_ts = int(now_dt.timestamp()) - 86400 * 10
+    old_iso = datetime.fromtimestamp(old_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    item_rss_expired = {
+        "item_key": "rss-stand:expired", "canonical_url": "https://stand-rss.com/expired", "url": "https://stand-rss.com/expired",
+        "title": "十天前过期资讯新闻", "summary": "过期快讯", "published_at": old_iso, "published_ts": old_ts, "rank": None
+    }
+    store.upsert_observation(run_id, "hotlist-stand", item_hot, observed_at=now_iso, has_real_rank=True, db_path=tmp_db)
+    store.upsert_observation(run_id, "rss-stand", item_rss_fresh, observed_at=now_iso, has_real_rank=False, db_path=tmp_db)
+    store.upsert_observation(run_id, "rss-stand", item_rss_expired, observed_at=old_iso, has_real_rank=False, db_path=tmp_db)
+    store.record_source_run(run_id, "hotlist-stand", status="ok", item_count=1, db_path=tmp_db)
+    store.record_source_run(run_id, "rss-stand", status="ok", item_count=2, db_path=tmp_db)
+    store.finish_run(run_id, status=store.RUN_STATUS_OK, source_ok=2, source_failed=0, item_seen=3, item_new=3, db_path=tmp_db)
+
+    service.update_filter_profile(
+        "default",
+        {
+            "method": "keyword",
+            "keyword_rules": {
+                "groups": [{"name": "机器人专区", "includes": ["机器人"]}],
+            },
+        },
+        path=str(tmp_db),
+    )
+    report = reporting.generate_report(path=tmp_db, mode="CURRENT", scope="my_interests", commit=False)
+
+    captured_prompts = []
+    def mock_runner(cfg, messages):
+        captured_prompts.append(messages[1]["content"])
+        return json.dumps({
+            "core_trends": "独立区测试", "sentiment_controversy": "无", "signals": "无",
+            "rss_insights": "无", "outlook_strategy": "无", "standalone_summaries": {"独家重磅热点新闻": "总结"}
+        })
+
+    # Test 7: Standalone OFF -> not in prompt
+    res_off = ai.analyze_report(report, cfg={"provider": "cli-codex"}, model_runner=mock_runner, include_standalone=False, path=tmp_db)
+    assert "独家重磅热点新闻" not in captured_prompts[0]
+    assert "今日最新快讯新闻" not in captured_prompts[0]
+    assert res_off["counts"]["standalone_analyzed"] == 0
+
+    # Test 8, 9, 10: Standalone ON -> real Standalone fact in prompt, expired RSS not in prompt, counts exact
+    res_on = ai.analyze_report(report, cfg={"provider": "cli-codex"}, model_runner=mock_runner, include_standalone=True, path=tmp_db)
+    prompt_on = captured_prompts[1]
+    assert "独家重磅热点新闻" in prompt_on
+    assert "今日最新快讯新闻" in prompt_on
+    assert "十天前过期资讯新闻" not in prompt_on
+
+    assert res_on["counts"]["standalone_analyzed"] == 2
+    assert res_on["counts"]["standalone_count"] == 2
+
+
+def test_req_11_to_15_cache_fingerprint_mutations_and_hit(tmp_db):
+    call_count = 0
+    def mock_runner(cfg, messages):
+        nonlocal call_count
+        call_count += 1
+        return json.dumps({
+            "core_trends": f"分析版本{call_count}", "sentiment_controversy": "无", "signals": "无",
+            "rss_insights": "无", "outlook_strategy": "无", "standalone_summaries": {}
+        })
+
+    cfg = {"provider": "cli-codex", "model": "gpt-5-codex"}
+    base_item = {
+        "item_key": "fixed_key_001", "url": "https://news.com/1",
+        "title": "基准新闻标题", "summary": "基准摘要内容", "published_at": "2026-09-05T08:00:00Z",
+        "rank": 10, "source_id": "hotlist-weibo", "source_name": "微博热搜", "ordering_score": 10.0
+    }
+    base_report = {
+        "report_id": "rep_test", "mode": "CURRENT", "scope": "all",
+        "items": [base_item], "cursor_advanced": False, "generated_at": "2026-09-05T08:00:00Z"
+    }
+
+    res1 = ai.analyze_report(base_report, cfg=cfg, model_runner=mock_runner, path=tmp_db)
+    assert call_count == 1
+    assert res1["cached"] is False
+
+    # Test 15: Identical prompt input -> CACHE_HIT
+    res_hit = ai.analyze_report(base_report, cfg=cfg, model_runner=mock_runner, path=tmp_db)
+    assert call_count == 1
+    assert res_hit["cached"] is True
+
+    # Test 11: same item key + rank mutation -> CACHE_MISS
+    mut_rank = dict(base_report, items=[dict(base_item, rank=2)])
+    res_rank = ai.analyze_report(mut_rank, cfg=cfg, model_runner=mock_runner, path=tmp_db)
+    assert call_count == 2
+    assert res_rank["cached"] is False
+
+    # Test 12: same item key + title mutation -> CACHE_MISS
+    mut_title = dict(base_report, items=[dict(base_item, title="标题被修改了")])
+    res_title = ai.analyze_report(mut_title, cfg=cfg, model_runner=mock_runner, path=tmp_db)
+    assert call_count == 3
+    assert res_title["cached"] is False
+
+    # Test 13: same item key + summary mutation -> CACHE_MISS
+    mut_summary = dict(base_report, items=[dict(base_item, summary="摘要发生了变更")])
+    res_summary = ai.analyze_report(mut_summary, cfg=cfg, model_runner=mock_runner, path=tmp_db)
+    assert call_count == 4
+    assert res_summary["cached"] is False
+
+    # Test 14: same item key + publication mutation -> CACHE_MISS
+    mut_pub = dict(base_report, items=[dict(base_item, published_at="2026-09-05T12:00:00Z")])
+    res_pub = ai.analyze_report(mut_pub, cfg=cfg, model_runner=mock_runner, path=tmp_db)
+    assert call_count == 5
+    assert res_pub["cached"] is False
+
+
+def test_req_16_analysis_root_list_honest_failure_no_500(tmp_db):
+    def mock_runner(cfg, messages):
+        return "[]"
+
+    report = reporting.generate_report(path=tmp_db, mode="CURRENT", commit=False)
+    res = ai.analyze_report(report, cfg={"provider": "cli-codex"}, model_runner=mock_runner, path=tmp_db)
+    assert res["status"] == "ERROR"
+    assert res["error_kind"] == "schema_error"
+    assert "Analysis root must be a JSON object/dict" in res["error"]
+
+
+def test_req_17_analysis_missing_required_schema_one_repair_failure(tmp_db):
+    repair_attempts = 0
+    def mock_runner(cfg, messages):
+        nonlocal repair_attempts
+        repair_attempts += 1
+        return json.dumps({"foo": f"bar_{repair_attempts}"})
+
+    report = reporting.generate_report(path=tmp_db, mode="CURRENT", commit=False)
+    res = ai.analyze_report(report, cfg={"provider": "cli-codex"}, model_runner=mock_runner, path=tmp_db)
+    assert repair_attempts == 2  # initial + exactly 1 repair retry
+    assert res["status"] == "ERROR"
+    assert res["error_kind"] == "schema_error"
+    assert "core_trends" in res["error"]
+
+
+def test_req_18_sentiment_wrong_root_type_honest_failure(tmp_db):
+    def mock_runner(cfg, messages):
+        return '["positive"]'
+
+    res = ai.analyze_sentiment("测试文本", model_runner=mock_runner, path=tmp_db)
+    assert res["status"] == "ERROR"
+    assert res["error_kind"] == "schema_error"
+
+
+def test_req_19_sentiment_confidence_out_of_range_normalized_or_rejected(tmp_db):
+    def mock_runner(cfg, messages):
+        return json.dumps({
+            "sentiment": "positive", "controversy": False, "confidence": 7.5,
+            "reasoning": "超范围置信度"
+        })
+
+    res = ai.analyze_sentiment("测试文本", model_runner=mock_runner, path=tmp_db)
+    assert res["status"] == "SUCCESS"
+    assert 0.0 <= res["confidence"] <= 1.0
+
+
+def test_req_20_invalid_entity_type_confidence_dropped(tmp_db):
+    def mock_runner(cfg, messages):
+        return json.dumps([
+            {"type": "super_alien_concept", "name": "外星科技", "confidence": 9.9, "evidence": "不存在"},
+            {"type": "company", "name": "比亚迪", "confidence": 0.95, "evidence": "正常实体"}
+        ])
+
+    res = ai.extract_entities("比亚迪研发外星科技", model_runner=mock_runner, path=tmp_db)
+    assert res["status"] == "SUCCESS"
+    entity_names = [e["name"] for e in res["entities"]]
+    assert "外星科技" not in entity_names
+    assert "比亚迪" in entity_names
