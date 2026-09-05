@@ -594,3 +594,208 @@ def get_standalone() -> dict[str, Any]:
             status_code=500,
             detail={"status": "ERROR", "error": str(exc)},
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 5: AI Analysis & Agent Tools API
+# ---------------------------------------------------------------------------
+
+@router.post("/ai/analysis")
+def post_ai_analysis(payload: dict[str, Any]) -> dict[str, Any]:
+    """生成 AI 深度分析报告。只读预览报告事实，绝不推进 INCREMENTAL 基线。"""
+    try:
+        mode = str(payload.get("mode") or "CURRENT").upper()
+        scope = str(payload.get("scope") or "all")
+        profile_id = str(payload.get("profile_id") or "default")
+        date = payload.get("date")
+        cfg = payload.get("llm") or payload.get("ai_config") or payload.get("cfg")
+        max_news = int(payload.get("max_news", 50))
+        language = str(payload.get("language") or "Chinese")
+        include_rss = bool(payload.get("include_rss", True))
+        include_standalone = bool(payload.get("include_standalone", False))
+
+        return service.analyze_ai_report(
+            mode=mode,
+            scope=scope,
+            profile_id=profile_id,
+            date=date,
+            cfg=cfg,
+            max_news=max_news,
+            language=language,
+            include_rss=include_rss,
+            include_standalone=include_standalone,
+            path=_db_path(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/ai/analysis/{artifact_id}")
+def get_ai_analysis_artifact(artifact_id: str) -> dict[str, Any]:
+    """获取指定 artifact_id 的 AI 分析报告工件。"""
+    art = service.store.get_ai_artifact(artifact_id, _db_path())
+    if not art:
+        raise HTTPException(status_code=404, detail="AI 工件不存在")
+    return art
+
+
+@router.post("/ai/translate")
+def post_ai_translate(payload: dict[str, Any]) -> dict[str, Any]:
+    """多语言翻译（支持单条 text 或批量 texts 列表）。"""
+    try:
+        target_lang = str(payload.get("target_language") or "Chinese")
+        cfg = payload.get("llm") or payload.get("ai_config") or payload.get("cfg")
+        if "texts" in payload:
+            texts = payload.get("texts")
+            if not isinstance(texts, list):
+                raise ValueError("texts 必须为数组")
+            return service.translate_ai_batch(texts, target_language=target_lang, cfg=cfg, path=_db_path())
+        else:
+            text = str(payload.get("text") or "")
+            return service.translate_ai_text(text, target_language=target_lang, cfg=cfg, path=_db_path())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/ai/entities")
+def post_ai_entities(payload: dict[str, Any]) -> dict[str, Any]:
+    """AI 实体与概念提取。"""
+    try:
+        text = str(payload.get("text") or "")
+        if not text:
+            parts = [payload.get("title"), payload.get("summary")]
+            text = "\n".join(str(p).strip() for p in parts if p)
+        cfg = payload.get("llm") or payload.get("ai_config") or payload.get("cfg")
+        return service.extract_ai_entities(text, cfg=cfg, path=_db_path())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/ai/sentiment")
+def post_ai_sentiment(payload: dict[str, Any]) -> dict[str, Any]:
+    """AI 舆情风向与争议分析。"""
+    try:
+        text = str(payload.get("text") or "")
+        if not text:
+            parts = [payload.get("title"), payload.get("summary")]
+            text = "\n".join(str(p).strip() for p in parts if p)
+        topic = payload.get("topic")
+        cfg = payload.get("llm") or payload.get("ai_config") or payload.get("cfg")
+        return service.analyze_ai_sentiment(text, topic=topic, cfg=cfg, path=_db_path())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/ai/status")
+def get_ai_status() -> dict[str, Any]:
+    """查询 AI 引擎状态。绝不暴露 API Key / Token。"""
+    tools = service.get_agent_tools(_db_path())
+    status = tools.get_intel_status()
+    return status.get("ai", {})
+
+
+# ---------------------------------------------------------------------------
+# Agent Tools Endpoints (外部/受控 Agent 调用接口)
+# ---------------------------------------------------------------------------
+
+@router.post("/agent/tools/query")
+def agent_tool_query(payload: dict[str, Any]) -> dict[str, Any]:
+    """Agent 资讯与报告查询工具。"""
+    try:
+        mode = str(payload.get("mode") or "current")
+        scope = str(payload.get("scope") or "all")
+        source_type = str(payload.get("source_type") or "all")
+        limit = int(payload.get("limit", 50))
+        date = payload.get("date")
+        tools = service.get_agent_tools(_db_path())
+        return tools.query_intel(mode=mode, scope=scope, source_type=source_type, limit=limit, date=date)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/agent/tools/search")
+def agent_tool_search(payload: dict[str, Any]) -> dict[str, Any]:
+    """Agent 资讯检索工具（支持关键词或实体）。"""
+    try:
+        query = str(payload.get("query") or "")
+        search_mode = str(payload.get("search_mode") or "keyword")
+        source_type = str(payload.get("source_type") or "all")
+        limit = int(payload.get("limit", 20))
+        tools = service.get_agent_tools(_db_path())
+        return tools.search_intel(query=query, search_mode=search_mode, source_type=source_type, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/agent/tools/trend")
+def agent_tool_trend(payload: dict[str, Any]) -> dict[str, Any]:
+    """Agent 趋势与洞察分析工具。"""
+    try:
+        topic = payload.get("topic")
+        similar_to = payload.get("similar_to")
+        insight_type = payload.get("insight_type")
+        days = int(payload.get("days", 7))
+        tools = service.get_agent_tools(_db_path())
+        return tools.analyze_intel_trend(topic=topic, similar_to=similar_to, insight_type=insight_type, days=days)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/agent/tools/status")
+def agent_tool_status() -> dict[str, Any]:
+    """Agent 系统状态工具。"""
+    tools = service.get_agent_tools(_db_path())
+    return tools.get_intel_status()
+
+
+@router.post("/agent/tools/refresh")
+def agent_tool_refresh(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Agent 显式触发抓取刷新工具。"""
+    tools = service.get_agent_tools(_db_path())
+    sources = payload.get("sources") if payload else None
+    return tools.trigger_intel_refresh(sources=sources)
+
+
+@router.post("/agent/tools/sentiment")
+def agent_tool_sentiment(payload: dict[str, Any]) -> dict[str, Any]:
+    """Agent 舆情风向与争议分析工具。"""
+    try:
+        tools = service.get_agent_tools(_db_path())
+        text = str(payload.get("text") or "")
+        topic = payload.get("topic")
+        return tools.analyze_intel_sentiment(text=text, topic=topic)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/agent/tools/date-range")
+def agent_tool_date_range(payload: dict[str, Any]) -> dict[str, Any]:
+    """自然语言日期解析工具。"""
+    from native_intel_agent_tools import resolve_intel_date_range
+    expression = str(payload.get("expression") or "")
+    return resolve_intel_date_range(expression)
+
+
+@router.post("/mcp")
+def native_intel_mcp_rpc(payload: dict[str, Any]) -> dict[str, Any]:
+    """Vibe-Native MCP JSON-RPC 2.0 协议标准端点。
+
+    支持 initialize, ping, tools/list, tools/call。
+    """
+    from native_intel_agent_tools import dispatch_mcp_message
+    tools = service.get_agent_tools(_db_path())
+    return dispatch_mcp_message(payload, tools)

@@ -2539,3 +2539,129 @@ def get_standalone_items(path: str | None = None) -> dict[str, Any]:
         "configured_sources": source_ids,
         "freshness_excluded_count": freshness_excluded_count,
     }
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 5: AI Analysis, Translation, Entities, Sentiment, Agent Tools
+# ---------------------------------------------------------------------------
+
+def analyze_ai_report(
+    mode: str = "CURRENT",
+    scope: str = "all",
+    profile_id: str = "default",
+    date: str | None = None,
+    cfg: dict[str, Any] | None = None,
+    model_runner: Callable | None = None,
+    max_news: int = 50,
+    language: str = "Chinese",
+    include_rss: bool = True,
+    include_standalone: bool = False,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """生成 AI 深度分析报告。使用只读 preview (commit=False)，绝不推进报告基线。"""
+    target = path or db_path()
+    import native_intel_reporting as reporting
+    import native_intel_ai as ai_engine
+
+    now_dt = None
+    if date:
+        try:
+            now_dt = datetime.fromisoformat(date)
+        except Exception:
+            pass
+
+    report = reporting.generate_report(
+        mode=mode.upper(),
+        scope=scope,
+        path=target,
+        profile_id=profile_id,
+        commit=False,
+        now=now_dt,
+    )
+    return ai_engine.analyze_report(
+        report_data=report,
+        scope=scope,
+        cfg=cfg,
+        model_runner=model_runner,
+        max_news=max_news,
+        language=language,
+        include_rss=include_rss,
+        include_standalone=include_standalone,
+        path=target,
+    )
+
+
+def translate_ai_text(
+    text: str,
+    target_language: str = "Chinese",
+    cfg: dict[str, Any] | None = None,
+    model_runner: Callable | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    target = path or db_path()
+    import native_intel_ai as ai_engine
+    return ai_engine.translate_text(
+        text=text,
+        target_language=target_language,
+        cfg=cfg,
+        model_runner=model_runner,
+        path=target,
+    )
+
+
+def translate_ai_batch(
+    texts: list[str],
+    target_language: str = "Chinese",
+    cfg: dict[str, Any] | None = None,
+    model_runner: Callable | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    target = path or db_path()
+    import native_intel_ai as ai_engine
+    return ai_engine.translate_batch(
+        texts=texts,
+        target_language=target_language,
+        cfg=cfg,
+        model_runner=model_runner,
+        path=target,
+    )
+
+
+def extract_ai_entities(
+    text: str,
+    cfg: dict[str, Any] | None = None,
+    model_runner: Callable | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    target = path or db_path()
+    import native_intel_ai as ai_engine
+    return ai_engine.extract_entities(
+        text=text,
+        cfg=cfg,
+        model_runner=model_runner,
+        path=target,
+    )
+
+
+def analyze_ai_sentiment(
+    text: str,
+    topic: str | None = None,
+    cfg: dict[str, Any] | None = None,
+    model_runner: Callable | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    target = path or db_path()
+    import native_intel_ai as ai_engine
+    return ai_engine.analyze_sentiment(
+        text=text,
+        topic=topic,
+        cfg=cfg,
+        model_runner=model_runner,
+        path=target,
+    )
+
+
+def get_agent_tools(path: str | None = None) -> Any:
+    target = path or db_path()
+    from native_intel_agent_tools import NativeIntelAgentTools
+    return NativeIntelAgentTools(db_path=target)

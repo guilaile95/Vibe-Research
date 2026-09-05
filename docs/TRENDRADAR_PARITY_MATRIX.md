@@ -151,21 +151,20 @@ Wave 4 行为证据：[独立输入输出契约](NATIVE_INTEL_WAVE4_CONTRACT.md)
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 多模型智能摘要（AI Summarization） | PLANNED_WAVE_5 | 走 Vibe 可插拔 AI 适配层（支持 DeepSeek、Doubao、OpenAI 等） |
-| AI 实体与概念提取（AI Entity Extraction） | PLANNED_WAVE_5 | 自动抽取非结构化资讯中的实体、企业与概念词 |
-| 多语言热榜翻译（AI Translation） | PLANNED_WAVE_5 | 国际资讯与跨语言热榜双向翻译 |
-| 情感倾向分类（Sentiment Analysis） | PLANNED_WAVE_5 | 资讯情绪倾向分类（仅客观事实标注，保持 observation-only 边界） |
-| 实体检索与关联分析（Entity search） | **PARITY** | 既有 `intel_entity_terms` + StockData/Watchlist 结构化联动已覆盖 |
-| Agent MCP 综合查询接口（MCP Query & Search） | PLANNED_WAVE_5 | 通过 Vibe MCP 向外部 Agent 暴露热榜位次、轨迹与实体分析工具 |
-| Agent 按需触发抓取（MCP Crawl Trigger） | PLANNED_WAVE_5 | 将现有 `POST /api/native-intel/refresh` 包装为 Agent MCP 工具暴露 |
-| Agent MCP 系统状态工具（MCP Status Tool） | PLANNED_WAVE_5 | 向外部 Agent 暴露 Native Intel 运行状态与健康度查询 MCP 工具（区别于已有的 HTTP API） |
+| 多模型智能摘要（AI Summarization） | **PARITY** | 支持现有 Provider（Codex Subscription、API 兼容层），6 模块结构化深度研报生成与双向缓存 |
+| AI 实体与概念提取（AI Entity Extraction） | **PARITY** | 提取公司、行业、概念、人物、机构等结构化实体，确定性精准匹配 A 股证券代码且绝不污染确定性表 |
+| 多语言热榜翻译（AI Translation） | **PARITY** | 支持单条即时翻译与保持精确数组下标对应的批量翻译，空输入原样返回，不篡改原事实 |
+| 情感倾向分类（Sentiment Analysis） | **PARITY** | 5 档中立客观情感分类（positive/negative/neutral/controversial/uncertain），带信心度与争议标注，非交易信号 |
+| 实体检索与关联分析（Entity search） | **PARITY** | 既有 `intel_entity_terms` + StockData/Watchlist 结构化联动已覆盖，同时具备 Agent 实体检索能力 |
+| Agent 综合查询接口（Agent Tools Query & Search） | **PARITY** | 提供受控只读 Agent Tools（`query_intel`, `search_intel`, `analyze_intel_trend`），严格限定 observation_only |
+| Agent 按需触发抓取（Agent Refresh Trigger） | **PARITY** | 提供受控 Agent 工具（`trigger_intel_refresh`），显式触发抓取并返回真实运行事实与统计，绝不触发正式投资决策 |
+| Agent 系统状态工具（Agent Status Tool） | **PARITY** | 提供受控 Agent 工具（`get_intel_status` 与 `resolve_intel_date_range`），绝不泄露 API Key / Token 等凭证 |
 
 ---
 
 ## Wave 6：多渠道推送通知与格式存储
 
 | 项目 | 状态 | 说明 |
-| --- | --- | --- |
 | 飞书机器人通知（Feishu Webhook） | PLANNED_WAVE_6 | 支持富文本消息卡片与告警推送 |
 | 钉钉机器人通知（DingTalk Webhook） | PLANNED_WAVE_6 | 支持 Markdown 群机器人推送 |
 | 企业微信通知（WeCom Webhook） | PLANNED_WAVE_6 | 支持图文卡片与即时推送 |
