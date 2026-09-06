@@ -93,8 +93,13 @@ export interface ResearchBriefModel {
   };
   freshness: {
     frozenAt: string | null;
-    calendarText: string;
     gaps: string[];
+  };
+  verification: {
+    catalysts: string[];
+    catalystsNote: string;
+    calendarState: string | null;
+    calendarLine: string;
   };
 }
 
@@ -577,6 +582,18 @@ export function buildResearchBrief(input: {
     gaps.push(`披露日历：${calendar.state}`);
   }
 
+  // 任务 D：原研究 catalysts 与披露日历状态只做诚实并列展示；
+  // 不用标题相似度或模型推测建立假设—事件—证据关联。
+  const catalysts = snapshot?.thesis.catalysts ?? [];
+  let catalystsNote: string;
+  if (!snapshot) {
+    catalystsNote = "上下文未就绪或校验未通过；不展示待核验节点。";
+  } else if (catalysts.length === 0) {
+    catalystsNote = "最初冻结版本没有记录 catalysts（待核验节点）；这不等于没有需要核验的事件。";
+  } else {
+    catalystsNote = "以下是最初冻结时显式记录的催化剂 / 待核验点。摘要不会自动把它们与新闻、披露或已确认变更加以关联；是否兑现需要人工对照下方日历状态与已确认变更判断。";
+  }
+
   return {
     campaignId: campaign?.campaign_id || input.campaignId,
     securityCode: campaign?.security_code || "UNKNOWN",
@@ -600,8 +617,13 @@ export function buildResearchBrief(input: {
     invalidation: { conditions, note: invalidationNote },
     freshness: {
       frozenAt: snapshot?.thesis.frozen_at ?? null,
-      calendarText: calendarText(continuityScoped?.decision_calendar),
       gaps,
+    },
+    verification: {
+      catalysts,
+      catalystsNote,
+      calendarState: continuityScoped?.decision_calendar.state ?? null,
+      calendarLine: calendarText(continuityScoped?.decision_calendar),
     },
   };
 }
