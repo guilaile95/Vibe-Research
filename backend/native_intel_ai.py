@@ -45,11 +45,15 @@ REQUIRED_ANALYSIS_KEYS = [
 # ---------------------------------------------------------------------------
 
 def get_effective_ai_config(cfg: dict[str, Any] | None = None, path: str | None = None, request_cfg: dict[str, Any] | None = None) -> dict[str, Any]:
-    """获取当前生效的 AI 配置。优先使用请求中传入的配置；未显式传入时读取 store 默认设置。
-    绝不将 apiKey 持久化到 SQLite / 日志 / Git。
+    """Resolve AI runtime config.
+
+    Authority order: explicit request cfg, then local Settings credential mirror,
+    else UNAVAILABLE_CREDENTIAL. Native Intel SQLite ai_analysis_provider / ai_model
+    are not runtime authority. Never default to cli-codex.
+    path is the Native Intel DB and is not a provider authority.
     """
     target_cfg = cfg or request_cfg
-    if target_cfg and target_cfg.get("provider"):
+    if target_cfg and str(target_cfg.get("provider") or "").strip():
         provider = str(target_cfg["provider"]).strip()
         model = str(target_cfg.get("model") or "")
         if provider == "cli-codex" and not model:
@@ -60,16 +64,20 @@ def get_effective_ai_config(cfg: dict[str, Any] | None = None, path: str | None 
             "baseURL": str(target_cfg.get("baseURL") or ""),
             "apiKey": str(target_cfg.get("apiKey") or ""),
         }
-    # 尝试从 store 的 native_intel_config 或系统配置中提取
-    saved_cfg = store.get_native_intel_config(path)
-    provider = saved_cfg.get("ai_provider") or saved_cfg.get("ai_analysis_provider") or "cli-codex"
-    model = saved_cfg.get("ai_model") or saved_cfg.get("ai_analysis_model") or ("gpt-5-codex" if provider == "cli-codex" else "")
-    return {
-        "provider": provider,
-        "model": model,
-        "baseURL": saved_cfg.get("ai_base_url", ""),
-        "apiKey": saved_cfg.get("ai_api_key", ""),
-    }
+    import ai_credential_store as cred_store
+
+    scheduled, error = cred_store.scheduled_config()
+    if scheduled is not None and str(scheduled.get("provider") or "").strip():
+        return {
+            "provider": str(scheduled["provider"]),
+            "model": str(scheduled.get("model") or ""),
+            "baseURL": str(scheduled.get("baseURL") or ""),
+            "apiKey": str(scheduled.get("apiKey") or ""),
+        }
+    code = error or cred_store.UNAVAILABLE_CREDENTIAL
+    raise ValueError(
+        f"{code}: 本机后台尚未保存全站 AI 凭据。请在「接入 AI」中保存一次。"
+    )
 
 
 def invoke_llm_text(

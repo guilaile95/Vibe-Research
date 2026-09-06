@@ -436,6 +436,7 @@ def test_scheduled_error_redacts_secret(
 def test_injected_runner_still_bypasses_store(data_dir: Path, tmp_path: Path) -> None:
     db = _seed_intel(tmp_path / "intel.sqlite3")
     _enable_ai_segment(db)
+    cred.save({"provider": "cli-codex", "model": "gpt-5-codex"})
 
     def runner(_cfg, _messages):
         return json.dumps(ANALYSIS, ensure_ascii=False)
@@ -443,3 +444,141 @@ def test_injected_runner_still_bypasses_store(data_dir: Path, tmp_path: Path) ->
     timeline.scheduled_tick(str(db), now=_tick_now(), ai_runner=runner)
     last_ai = _meta(db, "native_intel_last_scheduled_ai")
     assert last_ai["status"] == "SUCCESS"
+
+
+SENTIMENT = {
+    "sentiment": "positive",
+    "controversy": False,
+    "confidence": 0.8,
+    "reasoning": "订单景气",
+}
+
+
+def _sentiment_json() -> str:
+    return json.dumps(SENTIMENT, ensure_ascii=False)
+
+
+def test_request_less_sentiment_uses_api_mirror(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    import native_intel_agent_tools as agent_tools
+    import native_intel_ai as ai_engine
+
+    db = _seed_intel(tmp_path / "intel.sqlite3")
+    store.update_native_intel_config(
+        {"ai_analysis_provider": "cli-codex", "ai_analysis_model": "gpt-5-codex"},
+        db_path=db,
+    )
+    cred.save(
+        {
+            "provider": "deepseek",
+            "baseURL": "http://127.0.0.1:9/v1",
+            "model": "deepseek-chat",
+            "apiKey": SECRET,
+        }
+    )
+    captured: list[dict] = []
+
+    def fake_invoke(cfg, messages, model_runner=None):
+        captured.append(dict(cfg or {}))
+        return _sentiment_json()
+
+    tools = agent_tools.NativeIntelAgentTools(str(db))
+    with (
+        patch("native_intel_ai.invoke_llm_text", side_effect=fake_invoke),
+        patch("agent_runtime.stream_chat") as codex,
+    ):
+        res = tools.analyze_intel_sentiment(text="液冷订单增长")
+        codex.assert_not_called()
+    assert res["status"] == "SUCCESS"
+    assert captured[0]["provider"] == "deepseek"
+    assert captured[0]["baseURL"] == "http://127.0.0.1:9/v1"
+    assert captured[0]["model"] == "deepseek-chat"
+    assert captured[0]["apiKey"] == SECRET
+    assert ai_engine.get_effective_ai_config(path=str(db))["provider"] == "deepseek"
+
+
+def test_request_less_sentiment_uses_codex_mirror(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    import native_intel_agent_tools as agent_tools
+
+    db = _seed_intel(tmp_path / "intel.sqlite3")
+    cred.save({"provider": "cli-codex", "model": "gpt-5-codex"})
+    captured: list[dict] = []
+
+    def fake_invoke(cfg, messages, model_runner=None):
+        captured.append(dict(cfg or {}))
+        return _sentiment_json()
+
+    tools = agent_tools.NativeIntelAgentTools(str(db))
+    with patch("native_intel_ai.invoke_llm_text", side_effect=fake_invoke):
+        res = tools.analyze_intel_sentiment(text="液冷订单增长")
+    assert res["status"] == "SUCCESS"
+    assert captured[0]["provider"] == "cli-codex"
+    assert captured[0]["model"] == "gpt-5-codex"
+
+
+def test_request_less_sentiment_missing_credential_is_unavailable(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    import native_intel_agent_tools as agent_tools
+
+    db = _seed_intel(tmp_path / "intel.sqlite3")
+    tools = agent_tools.NativeIntelAgentTools(str(db))
+    with (
+        patch("native_intel_ai.invoke_llm_text") as mocked,
+        patch("agent_runtime.stream_chat") as codex,
+    ):
+        res = tools.analyze_intel_sentiment(text="液冷订单增长")
+        mocked.assert_not_called()
+        codex.assert_not_called()
+    assert res.get("success") is False
+    assert "UNAVAILABLE_CREDENTIAL" in str(res.get("error"))
+
+
+def test_request_less_sentiment_corrupt_credential_is_unavailable(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    import native_intel_agent_tools as agent_tools
+
+    path = cred.credential_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not-json", encoding="utf-8")
+    db = _seed_intel(tmp_path / "intel.sqlite3")
+    tools = agent_tools.NativeIntelAgentTools(str(db))
+    with (
+        patch("native_intel_ai.invoke_llm_text") as mocked,
+        patch("agent_runtime.stream_chat") as codex,
+    ):
+        res = tools.analyze_intel_sentiment(text="液冷订单增长")
+        mocked.assert_not_called()
+        codex.assert_not_called()
+    assert res.get("success") is False
+    assert "UNAVAILABLE_CREDENTIAL" in str(res.get("error"))
+
+
+def test_legacy_sqlite_deepseek_does_not_win_without_mirror(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    import native_intel_agent_tools as agent_tools
+    import native_intel_ai as ai_engine
+
+    db = _seed_intel(tmp_path / "intel.sqlite3")
+    store.update_native_intel_config(
+        {
+            "ai_analysis_provider": "deepseek",
+            "ai_analysis_model": "deepseek-chat",
+            "ai_base_url": "http://legacy.example/v1",
+            "ai_api_key": SECRET,
+        },
+        db_path=db,
+    )
+    with pytest.raises(ValueError, match="UNAVAILABLE_CREDENTIAL"):
+        ai_engine.get_effective_ai_config(request_cfg=None, path=str(db))
+    tools = agent_tools.NativeIntelAgentTools(str(db))
+    with patch("native_intel_ai.invoke_llm_text") as mocked:
+        res = tools.analyze_intel_sentiment(text="液冷订单增长")
+        mocked.assert_not_called()
+    assert res.get("success") is False
+    assert "UNAVAILABLE_CREDENTIAL" in str(res.get("error"))

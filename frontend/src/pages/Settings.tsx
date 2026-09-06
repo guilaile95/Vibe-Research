@@ -183,7 +183,8 @@ export function Settings() {
         </GlassCard>
 
         <GlassCard glow={mode === "api"} onClick={() => setMode("api")}
-          className={mode === "api" ? "ring-1 ring-primary/40" : "opacity-80"}>
+          className={mode === "api" ? "ring-1 ring-primary/40" : "opacity-80"}
+          data-testid="wave5-api-mode-card">
           <div className="flex items-center gap-2">
             <KeyRound className="h-5 w-5 text-primary" />
             <h3 className="font-semibold">API 接入</h3>
@@ -277,12 +278,12 @@ export function Settings() {
 
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Base URL</label>
-              <input value={baseURL} onChange={(e) => setBaseURL(e.target.value)} placeholder="https://api.deepseek.com"
+              <input data-testid="wave5-base-url-input" value={baseURL} onChange={(e) => setBaseURL(e.target.value)} placeholder="https://api.deepseek.com"
                 className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
             </div>
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Model</label>
-              <input value={modelName} onChange={(e) => setModelName(e.target.value)} placeholder="模型名称（豆包填 ep-… 接入点 ID）"
+              <input data-testid="wave5-model-input" value={modelName} onChange={(e) => setModelName(e.target.value)} placeholder="模型名称（豆包填 ep-… 接入点 ID）"
                 className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
             </div>
             <div>

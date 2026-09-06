@@ -152,10 +152,23 @@ try {
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
+  let failCredentialPut = false;
   // Proxy API requests to backend
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const request = route.request();
+    if (
+      failCredentialPut &&
+      url.pathname === "/api/ai/credential" &&
+      request.method() === "PUT"
+    ) {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "后台凭据保存失败" }),
+      });
+      return;
+    }
     const reqHeaders = { ...request.headers() };
     delete reqHeaders["host"];
     const response = await fetch(`http://127.0.0.1:${backendPort}${url.pathname}${url.search}`, {
@@ -354,6 +367,12 @@ try {
     body: JSON.stringify({
       texts: ["Title Alpha", "Data center liquid cooling demand rises", "Title Gamma"],
       target_language: "Chinese",
+      llm: {
+        provider: "deepseek",
+        baseURL: "https://api.deepseek.com/v1",
+        apiKey: "sk-test-deepseek-12345",
+        model: "deepseek-chat",
+      },
     }),
   });
   assert.equal(batchResp.status, 200);
@@ -459,34 +478,42 @@ try {
   await notice.waitFor({ state: "visible", timeout: 10000 });
   assert.match(await notice.innerText(), /本机后台/);
 
-  const putResp = await fetch(`http://127.0.0.1:${backendPort}/api/ai/credential`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      provider: "openai-compatible",
-      baseURL: "http://127.0.0.1:9/v1",
-      model: "fixture-model",
-      apiKey: "e2e-secret-never-log",
-    }),
-  });
-  assert.equal(putResp.status, 200);
-  const putJson = await putResp.json();
-  assert.equal(putJson.configured, true);
-  assert.equal(putJson.scheduled_credential_available, true);
-  assert.equal("apiKey" in putJson, false);
-  assert.equal(JSON.stringify(putJson).includes("e2e-secret-never-log"), false);
+  await page.locator('[data-testid="wave5-api-mode-card"]').click();
+  await page.locator('[data-testid="wave5-base-url-input"]').fill("http://127.0.0.1:9/v1");
+  await page.locator('[data-testid="wave5-model-input"]').fill("fixture-model");
+  await page.locator('[data-testid="wave5-api-key-input"]').fill("e2e-secret-never-log");
+  await page.locator('[data-testid="wave5-save-api-btn"]').click();
+  await page.getByText("已保存到本机浏览器和 Vibe 本机后台").waitFor({ timeout: 10000 });
 
-  const statusResp2 = await fetch(`http://127.0.0.1:${backendPort}/api/ai/credential-status`);
-  assert.equal(statusResp2.status, 200);
-  const statusJson2 = await statusResp2.json();
+  const stored = JSON.parse(await page.evaluate(() => localStorage.getItem("vr-llm") || "null"));
+  assert.equal(stored.apiKey, "e2e-secret-never-log");
+  assert.equal(stored.baseURL, "http://127.0.0.1:9/v1");
+  assert.equal(stored.model, "fixture-model");
+
+  const statusJson2 = await (await fetch(`http://127.0.0.1:${backendPort}/api/ai/credential-status`)).json();
   assert.equal(statusJson2.configured, true);
+  assert.equal(statusJson2.scheduled_credential_available, true);
+  assert.equal("apiKey" in statusJson2, false);
   assert.equal(JSON.stringify(statusJson2).includes("e2e-secret-never-log"), false);
 
-  const delResp = await fetch(`http://127.0.0.1:${backendPort}/api/ai/credential`, { method: "DELETE" });
-  assert.equal(delResp.status, 200);
+  await page.locator('[data-testid="wave5-forget-btn"]').first().click();
+  await page.getByText("已清除本机浏览器和后台凭据").waitFor({ timeout: 10000 });
+  const afterClear = JSON.parse(await page.evaluate(() => localStorage.getItem("vr-llm") || "null"));
+  assert.equal(afterClear, null);
   const afterDel = await (await fetch(`http://127.0.0.1:${backendPort}/api/ai/credential-status`)).json();
   assert.equal(afterDel.configured, false);
-  console.log("PASS: Scenario 9 - Local credential mirror save/status/clear hides secret");
+
+  failCredentialPut = true;
+  await page.locator('[data-testid="wave5-api-mode-card"]').click();
+  await page.locator('[data-testid="wave5-base-url-input"]').fill("http://127.0.0.1:9/v1");
+  await page.locator('[data-testid="wave5-model-input"]').fill("fixture-model");
+  await page.locator('[data-testid="wave5-api-key-input"]').fill("e2e-secret-never-log");
+  await page.locator('[data-testid="wave5-save-api-btn"]').click();
+  await page.getByText("后台凭据保存失败").waitFor({ timeout: 10000 });
+  const afterFail = JSON.parse(await page.evaluate(() => localStorage.getItem("vr-llm") || "null"));
+  assert.equal(afterFail, null);
+  failCredentialPut = false;
+  console.log("PASS: Scenario 9 - Settings save/clear syncs localStorage and backend; save failure is honest");
 
   console.log("ALL 9 WAVE 5 BROWSER SCENARIOS PASSED!");
 } finally {

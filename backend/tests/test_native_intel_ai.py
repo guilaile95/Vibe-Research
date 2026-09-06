@@ -56,6 +56,9 @@ def tmp_db(tmp_path: Path):
     store.record_source_run(run_id, "rss-cls", status="ok", item_count=1, db_path=db_file)
     store.finish_run(run_id, status=store.RUN_STATUS_OK, source_ok=3, source_failed=0, item_seen=4, item_new=4, db_path=db_file)
 
+    import ai_credential_store as cred_store
+    cred_store.save({"provider": "cli-codex", "model": "gpt-5-codex"})
+
     return db_file
 
 
@@ -698,11 +701,19 @@ def test_req_02_global_api_selection_uses_request_config(tmp_db):
 
 
 def test_req_03_native_intel_no_second_provider_authority(tmp_db):
+    import ai_credential_store as cred_store
+
+    cred_store.delete()
     cfg = store.get_native_intel_config(tmp_db)
     assert "ai_analysis_provider" not in cfg or cfg.get("ai_analysis_provider") is None
-    eff = ai.get_effective_ai_config(request_cfg=None, path=tmp_db)
-    assert eff["provider"] == "cli-codex"
-    assert eff["model"] == "gpt-5-codex"
+    with pytest.raises(ValueError, match="UNAVAILABLE_CREDENTIAL"):
+        ai.get_effective_ai_config(request_cfg=None, path=tmp_db)
+    store.update_native_intel_config(
+        {"ai_analysis_provider": "deepseek", "ai_analysis_model": "deepseek-chat"},
+        tmp_db,
+    )
+    with pytest.raises(ValueError, match="UNAVAILABLE_CREDENTIAL"):
+        ai.get_effective_ai_config(request_cfg=None, path=tmp_db)
 
 
 def test_req_04_manual_api_key_never_persisted_to_sqlite(tmp_db):
