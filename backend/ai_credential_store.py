@@ -65,7 +65,10 @@ def redact(text: str, secret: str = "") -> str:
 
 def _chmod_owner_only(path: Path) -> None:
     try:
-        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        if path.is_dir():
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+        else:
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
     except OSError:
         return
 

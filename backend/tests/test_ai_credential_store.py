@@ -160,8 +160,10 @@ def test_save_api_and_status_hides_secret(data_dir: Path) -> None:
     raw = json.loads(cred.credential_path().read_text(encoding="utf-8"))
     assert raw["apiKey"] == SECRET
     if os.name != "nt":
-        mode = stat.S_IMODE(cred.credential_path().stat().st_mode)
-        assert mode == 0o600
+        file_mode = stat.S_IMODE(cred.credential_path().stat().st_mode)
+        dir_mode = stat.S_IMODE(cred.credential_path().parent.stat().st_mode)
+        assert file_mode == 0o600
+        assert dir_mode == 0o700
 
 
 def test_save_rejects_incomplete_api(data_dir: Path) -> None:
