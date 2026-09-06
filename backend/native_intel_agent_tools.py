@@ -592,10 +592,11 @@ class NativeIntelAgentTools:
                 "status": "runtime_unavailable",
             }
 
-        ai_provider = (
-            cfg.get("ai_provider") or cfg.get("ai_analysis_provider") or "cli-codex"
-        )
-        ai_model = cfg.get("ai_model") or cfg.get("ai_analysis_model") or "gpt-5-codex"
+        import ai_credential_store as cred_store
+
+        scheduled = cred_store.status()
+        ai_provider = scheduled.get("provider") or "cli-codex"
+        ai_model = scheduled.get("model") or "gpt-5-codex"
 
         if ai_provider == "cli-codex":
             ai_available = bool(codex_rt.get("available"))
@@ -603,14 +604,10 @@ class NativeIntelAgentTools:
             ai_authenticated = bool(codex_rt.get("authenticated"))
             ai_runtime_status = str(codex_rt.get("status") or "runtime_unavailable")
         else:
-            # API Compatible: 检查是否配置了有效凭据（绝不在返回中暴露密钥）
-            has_credentials = bool(cfg.get("ai_base_url") and cfg.get("ai_api_key"))
-            ai_available = has_credentials
+            ai_available = bool(scheduled.get("scheduled_available"))
             ai_installed = True
-            ai_authenticated = has_credentials
-            ai_runtime_status = (
-                "ready" if has_credentials else "credentials_missing_in_server_context"
-            )
+            ai_authenticated = ai_available
+            ai_runtime_status = "ready" if ai_available else "UNAVAILABLE_CREDENTIAL"
 
         return {
             "success": True,
@@ -647,6 +644,10 @@ class NativeIntelAgentTools:
                 "runtime_status": ai_runtime_status,
                 "analysis_enabled": cfg.get("ai_analysis_enabled", False),
                 "translation_enabled": cfg.get("ai_translation_enabled", False),
+                "scheduled_provider": scheduled.get("provider"),
+                "scheduled_credential_available": bool(
+                    scheduled.get("scheduled_credential_available")
+                ),
             },
             "usage_boundary": "OBSERVATION_ONLY_NOT_AN_INVESTMENT_AUTHORITY",
         }

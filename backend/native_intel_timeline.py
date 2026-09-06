@@ -232,28 +232,28 @@ def scheduled_tick(path: str | None = None, *, now: datetime | None = None, ai_r
 
         if can_run_ai:
             ai_mode = status.get("ai_mode") or status["mode"]
+            scheduled_cfg = None
             try:
                 # 预览报告（commit=False），绝不消耗或推进 INCREMENTAL report baseline
                 preview_report = generate_report(path, mode=ai_mode, report_profile="scheduled_preview", now=now, commit=False)
 
-                # 当无注入 ai_runner 时（生产路径），检查当前 effective provider。
-                # API Compatible 没有服务端凭证，不能在无浏览器请求上下文中静默使用 Codex 替代：
-                # 必须显式记录 UNAVAILABLE_WITH_BROWSER_ONLY_CREDENTIAL 并跳过。
                 if ai_runner is None:
-                    effective_cfg = ai_engine.get_effective_ai_config(cfg=None, path=path)
-                    if effective_cfg.get("provider", "cli-codex") != "cli-codex":
+                    import ai_credential_store as cred_store
+                    scheduled_cfg, cred_error = cred_store.scheduled_config()
+                    if scheduled_cfg is None:
                         store.set_meta("native_intel_last_scheduled_ai", json.dumps({
                             "generated_at": when.strftime("%Y-%m-%dT%H:%M:%SZ"),
                             "mode": ai_mode,
-                            "status": "UNAVAILABLE_WITH_BROWSER_ONLY_CREDENTIAL",
+                            "status": cred_error or cred_store.UNAVAILABLE_CREDENTIAL,
                             "segment": status["current_segment"],
-                            "error": "OWNER_DECISION_REQUIRED: 定时 AI 分析使用 API Compatible 模式，但 API Key 仅存储在浏览器中，服务端无法访问。如需定时 AI 分析，请选择 Codex Subscription 或批准服务端凭证存储。",
+                            "error": "UNAVAILABLE_CREDENTIAL: 本机后台尚未保存全站 AI 凭据。请在「接入 AI」中保存一次。",
                         }), path)
                         return
 
                 ai_res = ai_engine.analyze_report(
                     preview_report,
                     scope="all",
+                    cfg=scheduled_cfg,
                     model_runner=ai_runner,
                     path=path,
                 )
@@ -273,10 +273,15 @@ def scheduled_tick(path: str | None = None, *, now: datetime | None = None, ai_r
                 }), path)
             except Exception as e:
                 # Failure Isolation：AI 异常绝不能破坏本次 tick 或让正常抓取/报告被标记失败
+                secret = ""
+                if scheduled_cfg:
+                    secret = str(scheduled_cfg.get("apiKey") or "")
+                import ai_credential_store as cred_store
+                public_error = cred_store.redact(str(e)[:200], secret)
                 store.set_meta("native_intel_last_scheduled_ai", json.dumps({
                     "generated_at": when.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "mode": ai_mode,
                     "status": "ERROR",
                     "segment": status["current_segment"],
-                    "error": str(e)[:200],
+                    "error": public_error,
                 }), path)

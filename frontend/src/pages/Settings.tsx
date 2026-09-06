@@ -70,16 +70,42 @@ export function Settings() {
     setBaseURL(PROVIDER_BASE[m.provider] || "");
   };
 
-  const saveApi = () => {
+  const [scheduledStatus, setScheduledStatus] = useState<{
+    configured: boolean;
+    provider: string | null;
+    scheduled_available: boolean;
+  } | null>(null);
+
+  const refreshScheduledStatus = async () => {
+    try {
+      setScheduledStatus(await api.getAiCredentialStatus());
+    } catch {
+      setScheduledStatus(null);
+    }
+  };
+
+  useEffect(() => {
+    void refreshScheduledStatus();
+  }, []);
+
+  const saveApi = async () => {
     if (!baseURL.trim() || !apiKey.trim() || !modelName.trim()) {
       toast.error("请填完 Base URL、API Key、Model");
       return;
     }
-    saveLlm({ provider: providerOf(apiId), baseURL: baseURL.trim(), apiKey: apiKey.trim(), model: modelName.trim() });
-    toast.success("已保存到本地，全站 AI 功能现在可用");
+    const cfg = { provider: providerOf(apiId), baseURL: baseURL.trim(), apiKey: apiKey.trim(), model: modelName.trim() };
+    try {
+      await api.putAiCredential(cfg);
+    } catch {
+      toast.error("后台凭据保存失败");
+      return;
+    }
+    saveLlm(cfg);
+    await refreshScheduledStatus();
+    toast.success("已保存到本机浏览器和 Vibe 本机后台");
   };
 
-  const saveSubscription = () => {
+  const saveSubscription = async () => {
     const m = subscriptionModels.find((x) => x.id === cliId);
     if (!m) {
       toast.error("请选择 Codex Subscription");
@@ -89,7 +115,15 @@ export function Settings() {
       toast.error("Codex Subscription 尚未连接，请先完成登录");
       return;
     }
-    saveLlm({ provider: m.provider, baseURL: "", apiKey: "", model: m.id });
+    const cfg = { provider: m.provider, baseURL: "", apiKey: "", model: m.id };
+    try {
+      await api.putAiCredential(cfg);
+    } catch {
+      toast.error("后台凭据保存失败");
+      return;
+    }
+    saveLlm(cfg);
+    await refreshScheduledStatus();
     toast.success(`已选「${m.name}」订阅，全站 AI 功能将调用 ${runtimeStatus?.runtime || m.name}`);
   };
 
@@ -106,11 +140,18 @@ export function Settings() {
     }
   };
 
-  const forget = () => {
+  const forget = async () => {
+    try {
+      await api.deleteAiCredential();
+    } catch {
+      toast.error("后台凭据删除失败");
+      return;
+    }
     clearLlm();
     setApiKey("");
     setCliId("");
-    toast.success("已清除本地配置");
+    await refreshScheduledStatus();
+    toast.success("已清除本机浏览器和后台凭据");
   };
 
   const saveAccess = () => {
@@ -126,7 +167,7 @@ export function Settings() {
 
       <div className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-        <span>API key <b className="text-foreground">只存在你本地浏览器</b>，仅在你提问时发给你自己的后端去调模型，不上传、不进仓库。</span>
+        <span data-testid="wave5-global-ai-notice">API Key 仅保存在你的本机浏览器和 Vibe 本机后台，用于手动及定时 AI；不会进入 Git、投资数据库或日志。</span>
       </div>
 
       {/* 两种接入方式 */}
@@ -212,11 +253,11 @@ export function Settings() {
               })}
             </div>
             <div className="flex items-center gap-2 pt-1">
-              <button onClick={saveSubscription} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
+              <button data-testid="wave5-save-subscription-btn" onClick={() => void saveSubscription()} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
                 保存
               </button>
               {existing && (
-                <button onClick={forget} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:text-destructive">
+                <button data-testid="wave5-forget-btn" onClick={() => void forget()} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:text-destructive">
                   <Trash2 className="h-4 w-4" /> 清除
                 </button>
               )}
@@ -246,16 +287,21 @@ export function Settings() {
             </div>
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">API Key</label>
-              <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-…"
+              <input data-testid="wave5-api-key-input" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-…"
                 className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
             </div>
 
+            {existing && !existingIsCli && scheduledStatus && !scheduledStatus.configured ? (
+              <p className="text-xs text-amber-600" data-testid="wave5-scheduled-credential-unsynced">
+                后台定时凭据尚未同步。请点击保存，把当前全站 AI 配置写入本机后台。
+              </p>
+            ) : null}
             <div className="flex items-center gap-2">
-              <button onClick={saveApi} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
+              <button data-testid="wave5-save-api-btn" onClick={() => void saveApi()} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
                 保存（存本地）
               </button>
               {existing && (
-                <button onClick={forget} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:text-destructive">
+                <button data-testid="wave5-forget-btn" onClick={() => void forget()} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:text-destructive">
                   <Trash2 className="h-4 w-4" /> 清除
                 </button>
               )}
@@ -1600,7 +1646,7 @@ function NativeIntelDisplayAndProxySection() {
 
                 <div className="rounded border border-primary/20 bg-primary/5 p-2 text-[11px] text-muted-foreground" data-testid="wave5-ai-authority-notice">
                   <span className="font-medium text-foreground">AI 接入方式：</span>
-                  复用全站统一配置（Codex Subscription 或 API Compatible）。如需切换或修改 Key，请在上方「接入 AI」中设置。
+                  复用全站统一配置（Codex Subscription 或 API Compatible）。保存后同步到本机后台，供定时 AI 使用。如需切换或修改 Key，请在上方「接入 AI」中设置。
                 </div>
 
                 <div className="flex items-center gap-2">

@@ -474,6 +474,25 @@ export async function dailyReviewAnalyzeStream(
 
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
+  putAiCredential: (payload: {
+    provider: string;
+    model: string;
+    baseURL?: string;
+    apiKey?: string;
+  }) => request("/ai/credential", "PUT", payload, { unwrapData: false }),
+  getAiCredentialStatus: () =>
+    request<{
+      configured: boolean;
+      provider: string | null;
+      model: string | null;
+      baseURL: string;
+      updated_at: string | null;
+      scheduled_available: boolean;
+      scheduled_credential_available: boolean;
+      error: string | null;
+    }>("/ai/credential-status", "GET", undefined, { unwrapData: false }),
+  deleteAiCredential: () =>
+    request("/ai/credential", "DELETE", undefined, { unwrapData: false }),
   indices: () => get<IndexQuote[]>("/indices"),
   /**
    * 结构化每日复盘聚合包（一次请求覆盖指数/广度/情绪/成交/板块）。

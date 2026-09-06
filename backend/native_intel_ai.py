@@ -113,8 +113,14 @@ def invoke_llm_text(
             elif etype == "done":
                 break
     except Exception as e:
-        # 严格隔离错误，绝不静默换 provider
-        logger.error("AI invocation failed for provider %s: %s", provider, e)
+        # 严格隔离错误，绝不静默换 provider；日志不得含 apiKey
+        import ai_credential_store as cred_store
+        secret = str((cfg or {}).get("apiKey") or "")
+        logger.error(
+            "AI invocation failed for provider %s: %s",
+            provider,
+            cred_store.redact(str(e), secret),
+        )
         raise
 
     return "".join(parts)
@@ -539,7 +545,10 @@ def analyze_report(
     except Exception as e:
         status = "ERROR"
         error_kind = "invocation_error"
-        error_message = str(e)
+        import ai_credential_store as cred_store
+        error_message = cred_store.redact(
+            str(e), str(effective_cfg.get("apiKey") or "")
+        )
         parsed_data = _empty_analysis_dict()
 
     # 填充结果

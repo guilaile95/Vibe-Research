@@ -145,7 +145,7 @@ def _synthetic_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[s
     _wal_sqlite_snapshot(external)
 
     # These names are explicitly outside the complete bundle contract.
-    for excluded in ("runtime", ".venv", "node_modules", ".vibe-runtime"):
+    for excluded in ("runtime", ".venv", "node_modules", ".vibe-runtime", "private"):
         hidden = data / excluded
         hidden.mkdir()
         (hidden / "must-not-back-up.txt").write_text("excluded", encoding="utf-8")
@@ -204,6 +204,14 @@ def test_complete_bundle_snapshot_verify_restore_drill(
         "schema_version": 1
     }
     assert not (restored / "data" / "research_data_plane").exists()
+
+    assert not (restored / "data" / "private").exists()
+    with zipfile.ZipFile(archive) as archive_file:
+        assert not any(
+            part == "private"
+            for name in archive_file.namelist()
+            for part in Path(name).parts
+        )
 
     restored_sqlite = [
         restored / "data" / "native_intel.sqlite3",

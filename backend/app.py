@@ -37,6 +37,7 @@ import ai_result_service
 import astock
 import chat as chat_layer
 import agent_runtime
+import ai_credential_router
 import daily_review
 import debate as debate_layer
 import gstock
@@ -412,6 +413,7 @@ app.include_router(bk11_history_router.router)
 app.include_router(intel_digest_router.router)
 # NATIVE-INTEL1：Vibe 自有资讯能力（MIT 原生，无 TrendRadar sidecar/runtime）
 app.include_router(native_intel_router.router)
+app.include_router(ai_credential_router.router)
 # Official MCP Streamable HTTP mount, hosted by this same FastAPI process.
 app.mount("/api/native-intel/mcp", native_intel_mcp.mcp_http_app, name="native-intel-mcp")
 # P0-S1A 持仓事实链：bootstrap / correction / derived / reconciliation

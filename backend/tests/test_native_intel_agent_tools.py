@@ -667,7 +667,9 @@ def test_b1_similar_title_exact_resolves_item_id(tmp_agent_db):
 # ---------------------------------------------------------------------------
 
 
-def _seed_observation(db_file: Path, source_id: str, title: str, when: datetime, *, rank: int = 1) -> None:
+def _seed_observation(
+    db_file: Path, source_id: str, title: str, when: datetime, *, rank: int = 1
+) -> None:
     iso = when.strftime("%Y-%m-%dT%H:%M:%SZ")
     run_id = f"run-{when.strftime('%Y%m%d%H%M%S')}-{abs(hash(title)) % 10000}"
     store.start_run(run_id, "test", 1, db_path=db_file, started_at=iso)
@@ -689,7 +691,9 @@ def _seed_observation(db_file: Path, source_id: str, title: str, when: datetime,
         has_real_rank=True,
         db_path=db_file,
     )
-    store.record_source_run(run_id, source_id, status="ok", item_count=1, db_path=db_file)
+    store.record_source_run(
+        run_id, source_id, status="ok", item_count=1, db_path=db_file
+    )
     store.finish_run(
         run_id,
         status=store.RUN_STATUS_OK,
@@ -990,11 +994,13 @@ def test_d_real_mcp_protocol_client_over_http(tmp_agent_db):
 # ---------------------------------------------------------------------------
 
 
-def test_e4_scheduled_api_compatible_records_unavailable(tmp_agent_db):
-    """E4: When user has selected API-Compatible and scheduled_tick runs without ai_runner,
-    it must NOT silently use Codex. It must record UNAVAILABLE_WITH_BROWSER_ONLY_CREDENTIAL.
-    """
+def test_e4_scheduled_api_compatible_records_unavailable(
+    tmp_agent_db, tmp_path, monkeypatch
+):
+    """E4: Without a server credential mirror, scheduled API must not silently use Codex."""
     from datetime import timezone
+
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path / "cred-data"))
 
     import native_intel_timeline as timeline
 
@@ -1047,5 +1053,5 @@ def test_e4_scheduled_api_compatible_records_unavailable(tmp_agent_db):
     last_ai_raw = store.get_meta("native_intel_last_scheduled_ai", tmp_agent_db)
     assert last_ai_raw is not None
     last_ai = json.loads(last_ai_raw)
-    assert last_ai["status"] == "UNAVAILABLE_WITH_BROWSER_ONLY_CREDENTIAL"
-    assert "OWNER_DECISION_REQUIRED" in last_ai["error"]
+    assert last_ai["status"] == "UNAVAILABLE_CREDENTIAL"
+    assert "UNAVAILABLE_CREDENTIAL" in last_ai["error"]

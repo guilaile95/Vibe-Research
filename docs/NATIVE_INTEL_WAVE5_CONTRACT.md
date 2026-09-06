@@ -181,7 +181,7 @@ TrendRadar pinned commit exposes 27 FastMCP tools across several categories:
 2. Wave 2 multi-field keyword/regex filtering, exclude-wins priority, and AI interest classification with dynamic fingerprinting.
 3. Wave 3 fine-grained RSS display controls, per-source max age, global/per-feed freshness override, proxy support, and standalone display.
 4. Wave 4 deterministic 3-mode reporting (`CURRENT`, `DAILY`, `INCREMENTAL`), cross-platform co-occurrence, platform coverage, velocity metrics, and observation/formal separation.
-5. Single global Settings LLM authority (`cli-codex` subscription vs `api-compatible`). Wave 5 Native Intel AI consumes that selection; it does not keep a second Native Intel provider/model control. API keys stay browser-local and are not persisted server-side. Zero auto-fallback. Scheduled API-Compatible AI is unavailable until Owner decides server-side credential storage.
+5. Single global Settings LLM authority (`cli-codex` subscription vs `api-compatible`). Wave 5 Native Intel AI consumes that selection; it does not keep a second Native Intel provider/model control. Zero auto-fallback. Owner option B: Settings save/clear mirrors the same authority to a local file under `VR_DATA_DIR/private/ai_credentials.json` (`SUPPORTED_WITH_LOCAL_SERVER_CREDENTIAL`). Secrets stay off Git, SQLite, logs, artifacts, and complete-data backups. Scheduled AI reads that mirror; missing/corrupt is `UNAVAILABLE_CREDENTIAL`. Pinned `compare_periods` remains `NOT_YET_PARITY`.
 
 ### Wave 5 Additions:
 1. `backend/native_intel_ai.py`:

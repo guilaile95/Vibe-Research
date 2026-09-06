@@ -1,6 +1,6 @@
 /**
  * Real browser + real backend E2E for Native Intel AI Analysis & Agent Tools (TREND-PARITY Wave 5).
- * Tests all 8 required browser scenarios.
+ * Tests Wave 5 browser scenarios including local credential mirror.
  */
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readdirSync } from "node:fs";
@@ -124,6 +124,7 @@ try {
         ...process.env,
         PYTHONPATH: `${backendDir}${path.delimiter}${join(root, "frontend", "tests", "e2e")}`,
         VIBE_NATIVE_INTEL_DB: dbPath,
+        VR_DATA_DIR: tempDir,
         PYTHONUNBUFFERED: "1",
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -449,7 +450,45 @@ try {
   assert.equal(await aiRegionAfterDisable.count(), 0, "ai_analysis region should not be in DOM when disabled");
   console.log("PASS: Scenario 8 - Agent tools verified and disabling region removes it from DOM");
 
-  console.log("ALL 8 WAVE 5 BROWSER SCENARIOS PASSED!");
+  // =========================================================================
+  // Scenario 9: Settings save mirrors credential to local backend; status hides secret
+  // =========================================================================
+  console.log("--- Starting Scenario 9: Local server credential mirror ---");
+  await page.goto(`http://127.0.0.1:${frontendPort}/settings`, { waitUntil: "domcontentloaded" });
+  const notice = page.locator('[data-testid="wave5-global-ai-notice"]');
+  await notice.waitFor({ state: "visible", timeout: 10000 });
+  assert.match(await notice.innerText(), /本机后台/);
+
+  const putResp = await fetch(`http://127.0.0.1:${backendPort}/api/ai/credential`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      provider: "openai-compatible",
+      baseURL: "http://127.0.0.1:9/v1",
+      model: "fixture-model",
+      apiKey: "e2e-secret-never-log",
+    }),
+  });
+  assert.equal(putResp.status, 200);
+  const putJson = await putResp.json();
+  assert.equal(putJson.configured, true);
+  assert.equal(putJson.scheduled_credential_available, true);
+  assert.equal("apiKey" in putJson, false);
+  assert.equal(JSON.stringify(putJson).includes("e2e-secret-never-log"), false);
+
+  const statusResp2 = await fetch(`http://127.0.0.1:${backendPort}/api/ai/credential-status`);
+  assert.equal(statusResp2.status, 200);
+  const statusJson2 = await statusResp2.json();
+  assert.equal(statusJson2.configured, true);
+  assert.equal(JSON.stringify(statusJson2).includes("e2e-secret-never-log"), false);
+
+  const delResp = await fetch(`http://127.0.0.1:${backendPort}/api/ai/credential`, { method: "DELETE" });
+  assert.equal(delResp.status, 200);
+  const afterDel = await (await fetch(`http://127.0.0.1:${backendPort}/api/ai/credential-status`)).json();
+  assert.equal(afterDel.configured, false);
+  console.log("PASS: Scenario 9 - Local credential mirror save/status/clear hides secret");
+
+  console.log("ALL 9 WAVE 5 BROWSER SCENARIOS PASSED!");
 } finally {
   if (browser) await browser.close();
   if (frontend) frontend.close();

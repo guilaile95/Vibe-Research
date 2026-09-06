@@ -14,6 +14,7 @@ if _backend_dir not in sys.path:
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+import ai_credential_router
 import native_intel_ai as ai
 import native_intel_router
 import native_intel_service as service
@@ -26,6 +27,7 @@ ONE_DAY_AGO = (now_dt - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 app = FastAPI()
 app.include_router(native_intel_router.router)
+app.include_router(ai_credential_router.router)
 
 simulate_error = False
 

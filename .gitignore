@@ -13,6 +13,8 @@ public/user-data/
 .vibe-runtime/
 
 # ── 密钥 / 环境（绝不进仓库） ──────────────────────────────────────
+**/private/
+**/ai_credentials.json
 .env
 .env.*
 !.env.example

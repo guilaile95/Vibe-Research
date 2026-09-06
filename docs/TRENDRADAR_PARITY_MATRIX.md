@@ -9,6 +9,7 @@
 > 杜绝单方面裁减、隐匿或提前宣称 PARITY；后续波次均实事求是标记为 `PLANNED_WAVE_X`。
 >
 > 规则：
+>
 > - 状态枚举：`PARITY`（已在代码中完整实现并获自动化测试验证） / `PLANNED_WAVE_N`（规划波次中实现）；
 > - Vibe 实现为独立实现（Vibe-native），**不复制 TrendRadar GPL 代码**，不引入其
 >   runtime / MCP / Docker / package 依赖；
@@ -159,7 +160,8 @@ Wave 4 行为证据：[独立输入输出契约](NATIVE_INTEL_WAVE4_CONTRACT.md)
 | Agent 综合查询接口（Agent Tools Query & Search） | **PARITY** | 官方 MCP SDK Streamable HTTP（`initialize` / `tools/list` / `tools/call`）托管在现有 FastAPI 进程；`query_intel` / `search_intel` 对隔离 SQLite 的真实 client proof 已通过。内部 page-aware Codex 仍拒绝 `mcp_tool_call` |
 | Agent Analytics（similar / viral / compare_periods） | **NOT_YET_PARITY** | similar 只走 Wave 4 `reporting.similar_items()`（标题先确定性解析 `item_id`）；viral 直接投影 `analyze_topic()["viral"]`。Pinned `compare_periods(period1, period2, compare_type)` 无法在当前 Wave 4 `analyze_topic(now, days)` 上完整表达，仅提供相邻等长窗口 `previous_equal_window`，不伪称 PARITY |
 | Agent 按需触发抓取（Agent Refresh Trigger） | **PARITY** | `trigger_intel_refresh(sources=...)` 校验已存在且 enabled 的 `source_id`，调用 `run_fetch(source_ids=...)`；未知/停用显式 BAD_ARGUMENT；未传 sources 抓全部 enabled；PARTIAL 保持诚实 |
-| Agent 系统状态工具（Agent Status Tool） | **PARITY** | `get_intel_status` 读取真实 Codex runtime 就绪/认证状态，绝不泄露 API Key / Token |
+| Agent 系统状态工具（Agent Status Tool） | **PARITY** | `get_intel_status` 读取真实 Codex runtime 就绪/认证状态与本机 scheduled credential 是否可用，绝不泄露 API Key / Token |
+| Scheduled AI（Codex 或 API Compatible） | **PARITY** (`SUPPORTED_WITH_LOCAL_SERVER_CREDENTIAL`) | 全站 Settings 保存时同步本机 `VR_DATA_DIR/private/` 凭据镜像；定时 AI 读取该镜像，不静默换 Codex；缺失记 `UNAVAILABLE_CREDENTIAL`；不进 Git/SQLite/备份 |
 
 ---
 
