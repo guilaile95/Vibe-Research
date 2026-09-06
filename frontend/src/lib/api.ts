@@ -6,6 +6,9 @@ export type * from "./api/types.ts";
 
 import type { MarketCloudEnvelope } from "./marketCloud.ts";
 import type {
+  CurrentThesisDelta,
+  ThesisDeltaCreatePayload,
+  ThesisDeltaListResult,
   MyReport,
   MyReportTextHit,
   MyReportTextIndexPreview,
@@ -983,6 +986,10 @@ export const api = {
     request<ThesisAggregate>(`/thesis/${encodeURIComponent(id)}/confirm`, "POST", { expected_revision }),
   thesisFreeze: (id: string, expected_revision: number) =>
     request<FormalThesisSnapshot>(`/thesis/${encodeURIComponent(id)}/freeze`, "POST", { expected_revision }),
+  thesisCreateDelta: (id: string, body: ThesisDeltaCreatePayload) =>
+    request<CurrentThesisDelta>(`/thesis/${encodeURIComponent(id)}/deltas`, "POST", body),
+  thesisListDeltas: (id: string) =>
+    get<ThesisDeltaListResult>(`/thesis/${encodeURIComponent(id)}/deltas`),
   thesisArchive: (id: string, expected_revision: number, change_summary?: string) => {
     const q = new URLSearchParams({ confirm: "true", expected_revision: String(expected_revision) });
     if (change_summary) q.set("change_summary", change_summary);

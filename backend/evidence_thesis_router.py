@@ -88,11 +88,28 @@ class FormalRevisionIn(BaseModel):
     expected_revision: StrictPositiveInt
 
 
+class ThesisDeltaNewEvidenceIn(BaseModel):
+    """Post-freeze evidence addition for one confirmed delta.
+
+    ``stance`` is the user's explicit choice for THIS delta (the frozen
+    original's link table is not consulted); ``expected_updated_at`` is the
+    evidence version the user confirmed against - a mismatch rejects the
+    confirmation with 409 so the user re-reviews instead of silently
+    snapshotting a newer version.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    evidence_id: str
+    stance: str
+    expected_updated_at: str | None = None
+
+
 class ThesisDeltaCreateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     delta_state: str
     reason: str
     evidence_ids: list[str] = Field(default_factory=list)
+    new_evidence: list[ThesisDeltaNewEvidenceIn] = Field(default_factory=list)
     # Optional for backwards-compatible clients; service always persists the
     # thesis's frozen_revision and rejects a supplied mismatch.
     base_revision: StrictPositiveInt | None = None
@@ -331,6 +348,7 @@ def create_thesis_delta(thesis_id: str, body: ThesisDeltaCreateIn):
             body.reason,
             body.evidence_ids,
             body.base_revision,
+            new_evidence=[item.model_dump() for item in body.new_evidence],
         )
         return {"data": result}
     except Exception as e:

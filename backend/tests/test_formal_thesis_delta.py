@@ -161,3 +161,94 @@ def test_delta_routes_are_append_only():
     delta_routes = [r for r in router.router.routes if r.path.endswith("/deltas")]
     methods = {method for route in delta_routes for method in (route.methods or set())}
     assert methods == {"GET", "POST"}
+
+
+def _post_freeze_evidence(db, claim='冻结后才有的一手信息'):
+    return svc.create_evidence(db, {
+        'subject_type': 'stock', 'subject_id': '600519', 'evidence_type': 'news',
+        'claim': claim, 'source_title': '新纪要', 'source_url': None,
+        'source_date': '2026-09-01', 'accessed_at': '2026-09-01T00:00:00+00:00',
+        'classification': 'fact', 'confidence': 'medium',
+    })
+
+
+def test_post_freeze_new_evidence_enters_delta_chain(db):
+    tid = _frozen(db)
+    ev = _post_freeze_evidence(db)
+    # 冻结后原始关联仍锁定：这是被保护的行为，不是要删除的护栏。
+    with pytest.raises(svc.ContentLockedError):
+        svc.link_evidence(db, tid, ev['id'], 'oppose', 3)
+    delta = svc.create_thesis_delta(db, tid, 'WEAKENED', '新证据削弱核心假设', new_evidence=[
+        {'evidence_id': ev['id'], 'stance': 'oppose', 'expected_updated_at': ev['updated_at']},
+    ])
+    assert delta['delta_sequence'] == 1
+    assert len(delta['evidence_links']) == 1
+    snapshot = delta['evidence_links'][0]
+    assert snapshot['evidence_id'] == ev['id']
+    assert snapshot['stance'] == 'oppose'  # 本次变更的显式立场，非旧 link 继承
+    assert snapshot['claim'] == '冻结后才有的一手信息'
+    assert snapshot['source_title'] == '新纪要'
+    assert snapshot['captured_at'] == delta['confirmed_at']
+    # canonical 读回一致
+    readback = svc.list_thesis_deltas(db, tid)['items'][0]
+    assert readback['evidence_links'][0]['stance'] == 'oppose'
+    assert readback['evidence_links'][0]['claim'] == '冻结后才有的一手信息'
+    # 冻结原文的关联表未被反向写入；快照只存在于 delta 链
+    conn = sqlite3.connect(db)
+    assert conn.execute(
+        'SELECT COUNT(*) FROM thesis_evidence_links WHERE thesis_id=?', (tid,)
+    ).fetchone()[0] == 0
+
+
+def test_post_freeze_new_evidence_rejections_leave_no_partial_delta(db):
+    tid = _frozen(db)
+    other = svc.create_evidence(db, {
+        'subject_type': 'stock', 'subject_id': '000001', 'evidence_type': 'news',
+        'claim': '别的标的', 'source_title': 's', 'source_url': None,
+        'source_date': '2026-09-01', 'accessed_at': '2026-09-01T00:00:00+00:00',
+        'classification': 'fact', 'confidence': 'high',
+    })
+    with pytest.raises(svc.SubjectMismatchError):
+        svc.create_thesis_delta(db, tid, 'WEAKENED', 'x', new_evidence=[
+            {'evidence_id': other['id'], 'stance': 'oppose'},
+        ])
+    ev = _post_freeze_evidence(db)
+    with pytest.raises(svc.ThesisDeltaConflictError, match='重新核对'):
+        svc.create_thesis_delta(db, tid, 'WEAKENED', 'x', new_evidence=[
+            {'evidence_id': ev['id'], 'stance': 'oppose', 'expected_updated_at': '2000-01-01T00:00:00+00:00'},
+        ])
+    with pytest.raises(svc.ValidationError):
+        svc.create_thesis_delta(db, tid, 'WEAKENED', 'x', new_evidence=[
+            {'evidence_id': ev['id'], 'stance': 'guess'},
+        ])
+    with pytest.raises(svc.ValidationError):
+        svc.create_thesis_delta(db, tid, 'WEAKENED', 'x', evidence_ids=[ev['id']], new_evidence=[
+            {'evidence_id': ev['id'], 'stance': 'oppose'},
+        ])
+    # 失败不得留下半个 delta 或部分关联
+    conn = sqlite3.connect(db)
+    assert conn.execute('SELECT COUNT(*) FROM thesis_deltas').fetchone()[0] == 0
+    assert conn.execute('SELECT COUNT(*) FROM thesis_delta_evidence_links').fetchone()[0] == 0
+    # 已删除证据不能作为新的正常确认输入
+    svc.soft_delete_evidence(db, ev['id'])
+    with pytest.raises(svc.EvidenceNotFoundError):
+        svc.create_thesis_delta(db, tid, 'WEAKENED', 'x', new_evidence=[
+            {'evidence_id': ev['id'], 'stance': 'oppose'},
+        ])
+
+
+def test_evidence_edit_after_confirm_keeps_immutable_snapshot(db):
+    tid = _frozen(db)
+    ev = _post_freeze_evidence(db)
+    svc.create_thesis_delta(db, tid, 'STABLE', '确认一条新证据', new_evidence=[
+        {'evidence_id': ev['id'], 'stance': 'neutral'},
+    ])
+    before = svc.list_thesis_deltas(db, tid)['items'][0]['evidence_links'][0]
+    svc.update_evidence(db, ev['id'], {
+        'evidence_type': 'news', 'claim': '事后被编辑过的陈述',
+        'source_title': '新纪要', 'source_url': None,
+        'source_date': '2026-09-01', 'accessed_at': '2026-09-01T00:00:00+00:00',
+        'classification': 'fact', 'confidence': 'high',
+    })
+    after = svc.list_thesis_deltas(db, tid)['items'][0]['evidence_links'][0]
+    assert after == before  # 历史快照不被后续编辑倒改
