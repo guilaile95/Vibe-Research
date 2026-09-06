@@ -3021,6 +3021,10 @@ export interface NativeIntelHotlistItem {
     num_comments?: number | null;
     github_stars?: number | null;
     github_repo?: string | null;
+    hn_story_id?: number | null;
+    score?: number | null;
+    author?: string | null;
+    discussion_url?: string | null;
   } | null;
 }
 

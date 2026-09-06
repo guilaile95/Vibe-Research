@@ -148,7 +148,12 @@ try {
   await page.getByTestId("intel-source-facts-hf").waitFor({ state: "visible", timeout: 15000 });
   const hfFacts = await page.getByTestId("intel-source-facts-hf").innerText();
   assert.match(hfFacts, /42/);
-  console.log("Native Intel GitHub Trending + HF Daily Papers: PASS");
+  await page.getByText("Show HN: Example").waitFor({ timeout: 15000 });
+  await page.getByTestId("intel-source-facts-hn").waitFor({ state: "visible", timeout: 15000 });
+  const hnFacts = await page.getByTestId("intel-source-facts-hn").innerText();
+  assert.match(hnFacts, /321/);
+  assert.match(hnFacts, /87/);
+  console.log("Native Intel GitHub Trending + HF Daily Papers + HN: PASS");
 } finally {
   if (browser) await browser.close();
   if (frontend) frontend.close();

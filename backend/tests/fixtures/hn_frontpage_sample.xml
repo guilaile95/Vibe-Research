@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Hacker News: Front Page</title>
+    <link>https://news.ycombinator.com/</link>
+    <item>
+      <title>Show HN: Example</title>
+      <link>https://example.com/article</link>
+      <comments>https://news.ycombinator.com/item?id=123456</comments>
+      <guid isPermaLink="false">https://news.ycombinator.com/item?id=123456</guid>
+      <pubDate>Thu, 01 Jan 2026 00:00:00 +0000</pubDate>
+      <description>An example story</description>
+    </item>
+    <item>
+      <title>Ask HN: Survives enrichment failure</title>
+      <link>https://news.ycombinator.com/item?id=999001</link>
+      <comments>https://news.ycombinator.com/item?id=999001</comments>
+      <guid isPermaLink="false">https://news.ycombinator.com/item?id=999001</guid>
+      <description>Keep me even if Firebase fails</description>
+    </item>
+  </channel>
+</rss>

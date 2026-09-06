@@ -25,6 +25,14 @@ HF_SOURCE = {
     "source_type": "rss",
     "has_real_rank": False,
 }
+HN_SOURCE = {
+    "source_id": "tech-hacker-news",
+    "name": "Hacker News",
+    "hint": "tech",
+    "url": "https://hnrss.org/frontpage",
+    "source_type": "rss",
+    "has_real_rank": False,
+}
 
 
 def test_github_trending_parses_repos_filters_sponsored_and_ranks():
@@ -125,3 +133,71 @@ def test_source_facts_history_preserves_observations(tmp_path: Path):
     assert len(facts) == 2
     assert json.loads(facts[0])["stars_total"] == 100
     assert json.loads(facts[1])["stars_total"] == 150
+
+
+def test_hacker_news_rss_identity_enrichment_and_history(tmp_path: Path):
+    xml = (FIXTURES / "hn_frontpage_sample.xml").read_text(encoding="utf-8")
+
+    def loader(story_id: int):
+        if story_id == 123456:
+            return {
+                "id": 123456,
+                "score": 321,
+                "descendants": 87,
+                "by": "pg",
+                "time": 1735689600,
+                "url": "https://example.com/article",
+            }
+        raise TimeoutError("firebase timeout")
+
+    items, kind, detail = ext.fetch_hacker_news(
+        HN_SOURCE, timeout=5, redline=[], rss_xml=xml, item_loader=loader
+    )
+    assert kind is None and detail is None
+    assert [it["title"] for it in items] == ["Show HN: Example", "Ask HN: Survives enrichment failure"]
+    enriched = items[0]
+    assert enriched["item_key"] == "tech-hacker-news:hn:123456"
+    assert enriched["url"] == "https://example.com/article"
+    assert enriched["rank"] is None
+    facts = enriched["source_facts"]
+    assert facts["hn_story_id"] == 123456
+    assert facts["score"] == 321
+    assert facts["num_comments"] == 87
+    assert facts["author"] == "pg"
+    assert facts["discussion_url"] == "https://news.ycombinator.com/item?id=123456"
+
+    survived = items[1]
+    assert survived["item_key"] == "tech-hacker-news:hn:999001"
+    assert survived["rank"] is None
+    assert survived["source_facts"]["hn_story_id"] == 999001
+    assert survived["source_facts"]["score"] is None
+    assert survived["source_facts"]["discussion_url"] == "https://news.ycombinator.com/item?id=999001"
+
+    db = tmp_path / "hn-facts.sqlite3"
+    store.initialize_store(db)
+    store.upsert_sources([HN_SOURCE], db)
+    store.start_run("hn-a", "test", 1, db, started_at="2026-01-01T00:00:00Z")
+    store.upsert_observation(
+        "hn-a", HN_SOURCE["source_id"], enriched, observed_at="2026-01-01T00:00:00Z", has_real_rank=False, db_path=db
+    )
+    store.finish_run("hn-a", status=store.RUN_STATUS_OK, source_ok=1, source_failed=0, item_seen=1, item_new=1, db_path=db)
+    later = dict(enriched)
+    later["source_facts"] = dict(facts)
+    later["source_facts"]["score"] = 400
+    store.start_run("hn-b", "test", 1, db, started_at="2026-01-02T00:00:00Z")
+    store.upsert_observation(
+        "hn-b", HN_SOURCE["source_id"], later, observed_at="2026-01-02T00:00:00Z", has_real_rank=False, db_path=db
+    )
+    store.finish_run("hn-b", status=store.RUN_STATUS_OK, source_ok=1, source_failed=0, item_seen=1, item_new=0, db_path=db)
+    rows, _ = store.query_items(db, source_id=HN_SOURCE["source_id"], limit=10)
+    current = next(r for r in rows if r["title"] == "Show HN: Example")
+    assert current["source_facts"]["score"] == 400
+    with store._connect(db) as conn:
+        history = [
+            json.loads(r["source_facts_json"])["score"]
+            for r in conn.execute(
+                "SELECT source_facts_json FROM intel_observations WHERE item_id = ? ORDER BY observed_at",
+                (current["item_id"],),
+            ).fetchall()
+        ]
+    assert history == [321, 400]
