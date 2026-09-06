@@ -659,6 +659,22 @@ export function HotlistPanel() {
 
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                     <span>{item.source_name || item.source_id}</span>
+                    {item.source_facts?.stars_period != null || item.source_facts?.stars_total != null ? (
+                      <span data-testid="intel-source-facts-github">
+                        {item.source_facts.stars_period != null ? `+${item.source_facts.stars_period}` : ""}
+                        {item.source_facts.stars_period != null && item.source_facts.stars_total != null ? " · " : ""}
+                        {item.source_facts.stars_total != null ? `${item.source_facts.stars_total}★` : ""}
+                        {item.source_facts.language ? ` · ${item.source_facts.language}` : ""}
+                      </span>
+                    ) : null}
+                    {item.source_facts?.upvotes != null || item.source_facts?.num_comments != null ? (
+                      <span data-testid="intel-source-facts-hf">
+                        {item.source_facts.upvotes != null ? `▲${item.source_facts.upvotes}` : ""}
+                        {item.source_facts.upvotes != null && item.source_facts.num_comments != null ? " · " : ""}
+                        {item.source_facts.num_comments != null ? `${item.source_facts.num_comments} comments` : ""}
+                        {item.source_facts.github_repo ? ` · ${item.source_facts.github_repo}` : ""}
+                      </span>
+                    ) : null}
                     {item.current_state === "DISABLED" && item.rank != null && (
                       <>
                         <span>·</span>

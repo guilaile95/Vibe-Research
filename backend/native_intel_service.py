@@ -372,6 +372,31 @@ def run_fetch(
         def task(source: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], str | None, str | None, int]:
             started = time.monotonic()
             stype = str(source.get("source_type") or "rss")
+            import native_intel_ext_sources as ext_sources
+            if ext_sources.is_github_trending(source):
+                if bool(cfg.get("crawler_proxy_enabled")):
+                    if not crawler_proxy:
+                        return source, [], store.ERROR_KIND_NETWORK, "CrawlerProxyUnresolved", int((time.monotonic() - started) * 1000)
+                    items, kind, detail = ext_sources.fetch_github_trending(
+                        source, timeout=FETCH_TIMEOUT, redline=redline, proxy_url=crawler_proxy
+                    )
+                else:
+                    items, kind, detail = ext_sources.fetch_github_trending(
+                        source, timeout=FETCH_TIMEOUT, redline=redline
+                    )
+                return source, items, kind, detail, int((time.monotonic() - started) * 1000)
+            if ext_sources.is_hf_daily_papers(source):
+                if bool(cfg.get("rss_proxy_enabled")):
+                    if not rss_proxy:
+                        return source, [], store.ERROR_KIND_NETWORK, "RssProxyUnresolved", int((time.monotonic() - started) * 1000)
+                    items, kind, detail = ext_sources.fetch_hf_daily_papers(
+                        source, timeout=FETCH_TIMEOUT, redline=redline, proxy_url=rss_proxy
+                    )
+                else:
+                    items, kind, detail = ext_sources.fetch_hf_daily_papers(
+                        source, timeout=FETCH_TIMEOUT, redline=redline
+                    )
+                return source, items, kind, detail, int((time.monotonic() - started) * 1000)
             if stype == "hotlist":
                 if bool(cfg.get("crawler_proxy_enabled")):
                     if not crawler_proxy:

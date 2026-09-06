@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS intel_observations (
     rank INTEGER,
     observed_title TEXT NOT NULL,
     published_at TEXT,
+    source_facts_json TEXT,
     UNIQUE (run_id, source_id, item_id)
 );
 
@@ -324,6 +325,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE intel_sources ADD COLUMN re_enabled_after_run_id TEXT")
     if "max_age_days" not in source_columns:
         conn.execute("ALTER TABLE intel_sources ADD COLUMN max_age_days INTEGER")
+
+    observation_columns = {
+        str(row["name"]) for row in conn.execute("PRAGMA table_info(intel_observations)")
+    }
+    if "source_facts_json" not in observation_columns:
+        conn.execute("ALTER TABLE intel_observations ADD COLUMN source_facts_json TEXT")
 
     item_entity_pk = [
         str(row["name"])
@@ -587,24 +594,23 @@ def delete_user_source(source_id: str, db_path: str | Path | None = None) -> dic
     now = utc_now_iso()
     with _LOCK:
         try:
-            with _connect(path) as conn:
-                with conn:
-                    row = conn.execute(
-                        "SELECT * FROM intel_sources WHERE source_id = ?", (source_id,)
-                    ).fetchone()
-                    if row is None or row["deleted_at"] is not None:
-                        raise SourceNotFoundError()
-                    if str(row["origin"]) != "user":
-                        raise SystemSourceDeleteBlocked()
-                    conn.execute(
-                        """
+            with _connect(path) as conn, conn:
+                row = conn.execute(
+                    "SELECT * FROM intel_sources WHERE source_id = ?", (source_id,)
+                ).fetchone()
+                if row is None or row["deleted_at"] is not None:
+                    raise SourceNotFoundError()
+                if str(row["origin"]) != "user":
+                    raise SystemSourceDeleteBlocked()
+                conn.execute(
+                    """
                         UPDATE intel_sources
                         SET deleted_at = ?, enabled = 0, updated_at = ?
                         WHERE source_id = ?
                         """,
-                        (now, now, source_id),
-                    )
-                    return dict(row)
+                    (now, now, source_id),
+                )
+                return dict(row)
         except sqlite3.DatabaseError as e:
             raise NativeIntelStoreError() from e
 
@@ -636,7 +642,14 @@ def list_hotlist_items(
             with _connect(path) as conn:
                 rows = conn.execute(
                     """
-                    SELECT i.*, s.name AS source_name, s.source_type, s.has_real_rank
+                    SELECT i.*, s.name AS source_name, s.source_type, s.has_real_rank,
+                           (
+                               SELECT o.source_facts_json
+                               FROM intel_observations o
+                               WHERE o.item_id = i.item_id AND o.source_facts_json IS NOT NULL
+                               ORDER BY o.observed_at DESC, o.obs_id DESC
+                               LIMIT 1
+                           ) AS source_facts_json
                     FROM intel_items i
                     JOIN intel_sources s ON s.source_id = i.source_id
                     WHERE s.source_type = 'hotlist'
@@ -1165,22 +1178,21 @@ def recover_stale_runs(db_path: str | Path | None = None) -> int:
     initialize_store(path)
     with _LOCK:
         try:
-            with _connect(path) as conn:
-                with conn:
-                    cursor = conn.execute(
-                        """
+            with _connect(path) as conn, conn:
+                cursor = conn.execute(
+                    """
                         UPDATE intel_fetch_runs
                         SET status = ?, finished_at = ?, note = ?
                         WHERE status = ?
                         """,
-                        (
-                            RUN_STATUS_FAILED,
-                            utc_now_iso(),
-                            "interrupted_by_process_restart",
-                            RUN_STATUS_RUNNING,
-                        ),
-                    )
-                    return int(cursor.rowcount or 0)
+                    (
+                        RUN_STATUS_FAILED,
+                        utc_now_iso(),
+                        "interrupted_by_process_restart",
+                        RUN_STATUS_RUNNING,
+                    ),
+                )
+                return int(cursor.rowcount or 0)
         except sqlite3.DatabaseError as e:
             raise NativeIntelStoreError() from e
 
@@ -1212,6 +1224,10 @@ def upsert_observation(
     published_ts = int(item.get("published_ts") or 0)
     title = str(item.get("title") or "")
     summary = item.get("summary") or ""
+    facts = item.get("source_facts")
+    source_facts_json = None
+    if isinstance(facts, dict) and facts:
+        source_facts_json = json.dumps(facts, ensure_ascii=False, sort_keys=True)
 
     item_key = str(item.get("item_key") or "")
     # 热榜条目排名身份严格以 SOURCE + ITEM 绑定，杜绝跨平台 rank 污染
@@ -1281,15 +1297,16 @@ def upsert_observation(
                     conn.execute(
                         """
                         INSERT INTO intel_observations
-                            (run_id, item_id, source_id, observed_at, rank, observed_title, published_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                            (run_id, item_id, source_id, observed_at, rank, observed_title, published_at, source_facts_json)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(run_id, source_id, item_id) DO UPDATE SET
                             observed_at = excluded.observed_at,
                             rank = excluded.rank,
                             observed_title = excluded.observed_title,
-                            published_at = excluded.published_at
+                            published_at = excluded.published_at,
+                            source_facts_json = excluded.source_facts_json
                         """,
-                        (run_id, item_id, source_id, observed_at, rank, title, published_at),
+                        (run_id, item_id, source_id, observed_at, rank, title, published_at, source_facts_json),
                     )
                     return item_id, is_new
         except sqlite3.DatabaseError as e:
@@ -1378,7 +1395,14 @@ def query_items(
                                WHERE o.item_id = i.item_id AND o.rank IS NOT NULL
                                ORDER BY o.observed_at DESC, o.obs_id DESC
                                LIMIT 1
-                           ) AS rank
+                           ) AS rank,
+                           (
+                               SELECT o.source_facts_json
+                               FROM intel_observations o
+                               WHERE o.item_id = i.item_id AND o.source_facts_json IS NOT NULL
+                               ORDER BY o.observed_at DESC, o.obs_id DESC
+                               LIMIT 1
+                           ) AS source_facts_json
                     FROM intel_items i
                     LEFT JOIN intel_sources s ON s.source_id = i.source_id
                     {where}
@@ -1390,6 +1414,18 @@ def query_items(
                 return [_item_row(row) for row in rows], total
         except sqlite3.DatabaseError as e:
             raise NativeIntelStoreError() from e
+
+
+def _decode_source_facts(raw: Any) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    try:
+        data = json.loads(str(raw))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _item_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -1414,6 +1450,9 @@ def _item_row(row: sqlite3.Row) -> dict[str, Any]:
         "has_real_rank": bool(row["has_real_rank"]) if row["has_real_rank"] is not None else False,
         # 仅暴露已有真实 observation；RSS 没有排名时保持 None。
         "rank": row["rank"] if "rank" in row.keys() else None,
+        "source_facts": _decode_source_facts(
+            row["source_facts_json"] if "source_facts_json" in row.keys() else None
+        ),
     }
 
 
@@ -1797,15 +1836,14 @@ def set_meta(key: str, value: str, db_path: str | Path | None = None) -> None:
     initialize_store(path)
     with _LOCK:
         try:
-            with _connect(path) as conn:
-                with conn:
-                    conn.execute(
-                        """
+            with _connect(path) as conn, conn:
+                conn.execute(
+                    """
                         INSERT INTO intel_meta (key, value) VALUES (?, ?)
                         ON CONFLICT(key) DO UPDATE SET value = excluded.value
                         """,
-                        (key, value),
-                    )
+                    (key, value),
+                )
         except sqlite3.DatabaseError as e:
             raise NativeIntelStoreError() from e
 
@@ -2397,7 +2435,14 @@ def list_all_recent_items_with_sources(
                     SELECT i.item_id, i.title, i.summary, i.source_id, i.url, i.canonical_url,
                            i.hint, i.published_at, i.published_ts, i.first_seen_at, i.last_seen_at, i.observation_count,
                            s.name AS source_name, s.source_type, s.has_real_rank, s.enabled AS source_enabled,
-                           s.max_age_days AS source_max_age_days
+                           s.max_age_days AS source_max_age_days,
+                           (
+                               SELECT o.source_facts_json
+                               FROM intel_observations o
+                               WHERE o.item_id = i.item_id AND o.source_facts_json IS NOT NULL
+                               ORDER BY o.observed_at DESC, o.obs_id DESC
+                               LIMIT 1
+                           ) AS source_facts_json
                     FROM intel_items i
                     LEFT JOIN intel_sources s ON s.source_id = i.source_id
                     ORDER BY i.last_seen_at DESC, i.item_id DESC
@@ -2425,6 +2470,7 @@ def list_all_recent_items_with_sources(
                         "published_ts": int(r["published_ts"] or 0),
                         "source_max_age_days": r["source_max_age_days"],
                         "max_age_days": r["source_max_age_days"],
+                        "source_facts": _decode_source_facts(r["source_facts_json"]),
                     }
                     for r in rows
                 ]

@@ -3012,6 +3012,16 @@ export interface NativeIntelHotlistItem {
     security_code?: string | null;
   }>;
   filter_match?: FilterMatch | null;
+  source_facts?: {
+    stars_total?: number | null;
+    forks_total?: number | null;
+    stars_period?: number | null;
+    language?: string | null;
+    upvotes?: number | null;
+    num_comments?: number | null;
+    github_stars?: number | null;
+    github_repo?: string | null;
+  } | null;
 }
 
 export interface NativeIntelHotlistSource {

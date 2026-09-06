@@ -148,6 +148,20 @@
  ],
  "sources": [
   {
+   "name": "GitHub Trending",
+   "hint": "tech",
+   "type": "hotlist",
+   "url": "https://github.com/trending?since=daily",
+   "has_real_rank": true
+  },
+  {
+   "name": "Hugging Face Daily Papers",
+   "hint": "ai",
+   "type": "rss",
+   "url": "https://huggingface.co/api/daily_papers",
+   "has_real_rank": false
+  },
+  {
    "name": "OpenAI",
    "hint": "ai",
    "type": "rss",
