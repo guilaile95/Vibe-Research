@@ -2,35 +2,31 @@
 
 Hosted inside the existing Vibe FastAPI process. This is not a second daemon
 and is never exposed to the internal page-aware Codex runtime.
+
+Each FastAPI lifespan gets a fresh MCPServer/session manager. The SDK manager
+can only be started once per instance, and TestClient re-enters lifespan.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Literal
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any, Literal
 
 from mcp.server import MCPServer
+from starlette.types import Receive, Scope, Send
 
 import native_intel_service as service
 from version import read_version
 
 SERVER_NAME = "vibe-native-intel"
 
-mcp_server = MCPServer(
-    SERVER_NAME,
-    version=read_version(),
-    instructions=(
-        "Observation-only Native Intel tools. No Position, Account, Campaign, "
-        "Thesis, Frozen Decision, Trade, Outcome, or NAV authority is exposed."
-    ),
-)
-
 
 def _result(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, allow_nan=False)
 
 
-@mcp_server.tool(structured_output=False)
 def query_intel(
     mode: Literal["current", "daily", "incremental", "report", "aggregate", "dates"] = "current",
     scope: Literal["all", "my_interests"] = "all",
@@ -50,7 +46,6 @@ def query_intel(
     )
 
 
-@mcp_server.tool(structured_output=False)
 def search_intel(
     query: str,
     search_mode: Literal["keyword", "entity"] = "keyword",
@@ -68,7 +63,6 @@ def search_intel(
     )
 
 
-@mcp_server.tool(structured_output=False)
 def analyze_intel_trend(
     topic: str | None = None,
     similar_to: str | int | None = None,
@@ -90,32 +84,77 @@ def analyze_intel_trend(
     )
 
 
-@mcp_server.tool(structured_output=False)
 def analyze_intel_sentiment(text: str = "", topic: str | None = None) -> str:
     """Run the non-authoritative structured sentiment analysis authority."""
     return _result(service.get_agent_tools().analyze_intel_sentiment(text=text, topic=topic))
 
 
-@mcp_server.tool(structured_output=False)
 def get_intel_status() -> str:
     """Return Native Intel run, source, freshness, proxy, and AI readiness status."""
     return _result(service.get_agent_tools().get_intel_status())
 
 
-@mcp_server.tool(structured_output=False)
 def trigger_intel_refresh(sources: list[str] | None = None) -> str:
     """Refresh all enabled sources or an explicit enabled source_id subset."""
     return _result(service.get_agent_tools().trigger_intel_refresh(sources=sources))
 
 
-@mcp_server.tool(structured_output=False)
 def resolve_intel_date_range(expression: str) -> str:
     """Resolve a bounded natural-language date expression."""
     return _result(service.get_agent_tools().resolve_intel_date_range(expression=expression))
 
 
-# Parent FastAPI lifespan owns session_manager.run(); this starts no daemon.
-mcp_http_app = mcp_server.streamable_http_app(
-    streamable_http_path="/",
-    json_response=True,
-)
+def build_mcp_server() -> MCPServer[Any]:
+    server = MCPServer(
+        SERVER_NAME,
+        version=read_version(),
+        instructions=(
+            "Observation-only Native Intel tools. No Position, Account, Campaign, "
+            "Thesis, Frozen Decision, Trade, Outcome, or NAV authority is exposed."
+        ),
+    )
+    for fn in (
+        query_intel,
+        search_intel,
+        analyze_intel_trend,
+        analyze_intel_sentiment,
+        get_intel_status,
+        trigger_intel_refresh,
+        resolve_intel_date_range,
+    ):
+        server.add_tool(fn, structured_output=False)
+    return server
+
+
+class McpMount:
+    """ASGI proxy so FastAPI can mount a path before a lifespan-scoped server exists."""
+
+    def __init__(self) -> None:
+        self._app: Any = None
+
+    def attach(self, app: Any) -> None:
+        self._app = app
+
+    def detach(self) -> None:
+        self._app = None
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if self._app is None:
+            raise RuntimeError("Native Intel MCP mount is not running")
+        await self._app(scope, receive, send)
+
+
+mcp_http_app = McpMount()
+
+
+@asynccontextmanager
+async def running_mcp(mount: McpMount | None = None) -> AsyncIterator[MCPServer[Any]]:
+    target = mount if mount is not None else mcp_http_app
+    server = build_mcp_server()
+    asgi = server.streamable_http_app(streamable_http_path="/", json_response=True)
+    target.attach(asgi)
+    try:
+        async with server.session_manager.run():
+            yield server
+    finally:
+        target.detach()

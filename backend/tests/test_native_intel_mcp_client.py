@@ -100,13 +100,15 @@ def test_real_mcp_client_e2e(tmp_agent_db, monkeypatch):
     monkeypatch.setenv("VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH", "1")
     monkeypatch.setenv("VIBE_NATIVE_INTEL_DISABLE_SCHEDULER", "1")
 
+    mount = native_intel_mcp.McpMount()
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        async with native_intel_mcp.mcp_server.session_manager.run():
+        async with native_intel_mcp.running_mcp(mount):
             yield
 
     app = FastAPI(lifespan=lifespan)
-    app.mount("/api/native-intel/mcp", native_intel_mcp.mcp_http_app)
+    app.mount("/api/native-intel/mcp", mount)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))

@@ -57,6 +57,7 @@ fastapi==0.141.1
 h11==0.16.0
     # via
     #   httpcore
+    #   httpcore2
     #   uvicorn
 html5lib==1.1
     # via akshare
@@ -203,8 +204,6 @@ typing-inspection==0.4.2
     #   fastapi
     #   mcp
     #   pydantic
-tzdata==2026.3
-    # via pandas
 urllib3==2.7.0
     # via
     #   akshare

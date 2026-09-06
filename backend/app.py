@@ -363,8 +363,8 @@ _ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"} | _parse_trusted_hosts(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start existing schedulers and the in-process Native Intel MCP transport."""
-    async with native_intel_mcp.mcp_server.session_manager.run():
+    """Start existing schedulers and a lifespan-scoped Native Intel MCP transport."""
+    async with native_intel_mcp.running_mcp():
         pf.start_scheduler(1800)
         # NATIVE-INTEL1：本地资讯数据层建库 / 回收中断 run / 缺数据时首抓 / 启动定时抓取
         try:

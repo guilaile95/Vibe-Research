@@ -197,7 +197,9 @@ urllib3==2.7.0
     #   akshare
     #   requests
 uvicorn[standard]==0.52.1
-    # via -r requirements.txt
+    # via
+    #   -r requirements.txt
+    #   mcp
 uvloop==0.22.1
     # via uvicorn
 watchfiles==1.2.0
