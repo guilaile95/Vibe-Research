@@ -62,6 +62,10 @@ def _history_metrics(history: list[dict[str, Any]]) -> dict[str, Any]:
                 turnover_ratio = round(latest / average, 4)
     return {
         "trade_date": history[-1].get("date") if history else None,
+        # Sample provenance: what the windows above are actually computed from.
+        "history_session_count": len(history),
+        "history_start_date": history[0].get("date") if history else None,
+        "history_end_date": history[-1].get("date") if history else None,
         "return_5d_pct": current_5d,
         "return_20d_pct": current_20d,
         "return_60d_pct": _return_pct(history, 60),

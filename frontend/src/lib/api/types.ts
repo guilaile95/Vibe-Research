@@ -158,6 +158,9 @@ export type SectorMarketIndex = {
 
 export type SectorMarketMetrics = {
   trade_date: string | null;
+  history_session_count: number | null;
+  history_start_date: string | null;
+  history_end_date: string | null;
   return_5d_pct: number | null;
   return_20d_pct: number | null;
   return_60d_pct: number | null;
