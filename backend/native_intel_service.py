@@ -310,6 +310,7 @@ def run_fetch(
     trigger: str = "manual",
     path: str | None = None,
     *,
+    source_ids: list[str] | None = None,
     registry: dict[str, Any] | None = None,
     sources_override: list[dict[str, Any]] | None = None,
     fetcher: Callable[..., tuple[list[dict[str, Any]], str | None, str | None]] | None = None,
@@ -321,16 +322,39 @@ def run_fetch(
     自建来源即时生效。按类型分发：hotlist 源走 ``hotlist_fetcher``（默认真实
     热榜抓取），其余走 ``fetcher``（默认 RSS 抓取）；测试按类型注入，互不泄漏。
     ``sources_override`` 仅供测试固定抓取清单，生产路径不传。
+    ``source_ids`` 只允许已存在且 enabled 的 source_id；未知/停用抛 BAD_ARGUMENT。
     """
     target = path or db_path()
     reg = registry or load_registry()
     store.initialize_store(target)
     store.upsert_sources(reg["sources"], target)
 
-    sources = sources_override if sources_override is not None else store.list_sources(
-        target, enabled_only=True
-    )
-    cutoff = datetime.now(timezone.utc) - timedelta(days=reg["recent_days"])
+    if sources_override is not None:
+        sources = sources_override
+    elif source_ids is None:
+        sources = store.list_sources(target, enabled_only=True)
+    else:
+        valid_source_ids = (
+            isinstance(source_ids, list)
+            and bool(source_ids)
+            and all(isinstance(source_id, str) and source_id.strip() for source_id in source_ids)
+            and len(source_ids) == len(set(source_ids))
+        )
+        if not valid_source_ids:
+            raise ValueError(
+                "BAD_ARGUMENT: source_ids must be a non-empty list of unique source_id strings"
+            )
+        all_ids = {source["source_id"] for source in store.list_sources(target, enabled_only=False)}
+        enabled_by_id = {
+            source["source_id"]: source
+            for source in store.list_sources(target, enabled_only=True)
+        }
+        for source_id in source_ids:
+            if source_id not in all_ids:
+                raise ValueError(f"BAD_ARGUMENT: unknown source_id '{source_id}'")
+            if source_id not in enabled_by_id:
+                raise ValueError(f"BAD_ARGUMENT: source_id '{source_id}' is disabled")
+        sources = [enabled_by_id[source_id] for source_id in source_ids]
     redline = reg["redline"]
     do_fetch = fetcher or _fetch_source_items
     hotlist_do = hotlist_fetcher or hotlist.fetch_hotlist_items

@@ -156,9 +156,10 @@ Wave 4 行为证据：[独立输入输出契约](NATIVE_INTEL_WAVE4_CONTRACT.md)
 | 多语言热榜翻译（AI Translation） | **PARITY** | 支持单条即时翻译与保持精确数组下标对应的批量翻译，空输入原样返回，不篡改原事实 |
 | 情感倾向分类（Sentiment Analysis） | **PARITY** | 5 档中立客观情感分类（positive/negative/neutral/controversial/uncertain），带信心度与争议标注，非交易信号 |
 | 实体检索与关联分析（Entity search） | **PARITY** | 既有 `intel_entity_terms` + StockData/Watchlist 结构化联动已覆盖，同时具备 Agent 实体检索能力 |
-| Agent 综合查询接口（Agent Tools Query & Search） | **PARITY** | 提供受控只读 Agent Tools（`query_intel`, `search_intel`, `analyze_intel_trend`），严格限定 observation_only |
-| Agent 按需触发抓取（Agent Refresh Trigger） | **PARITY** | 提供受控 Agent 工具（`trigger_intel_refresh`），显式触发抓取并返回真实运行事实与统计，绝不触发正式投资决策 |
-| Agent 系统状态工具（Agent Status Tool） | **PARITY** | 提供受控 Agent 工具（`get_intel_status` 与 `resolve_intel_date_range`），绝不泄露 API Key / Token 等凭证 |
+| Agent 综合查询接口（Agent Tools Query & Search） | **PARITY** | 官方 MCP SDK Streamable HTTP（`initialize` / `tools/list` / `tools/call`）托管在现有 FastAPI 进程；`query_intel` / `search_intel` 对隔离 SQLite 的真实 client proof 已通过。内部 page-aware Codex 仍拒绝 `mcp_tool_call` |
+| Agent Analytics（similar / viral / compare_periods） | **NOT_YET_PARITY** | similar 只走 Wave 4 `reporting.similar_items()`（标题先确定性解析 `item_id`）；viral 直接投影 `analyze_topic()["viral"]`。Pinned `compare_periods(period1, period2, compare_type)` 无法在当前 Wave 4 `analyze_topic(now, days)` 上完整表达，仅提供相邻等长窗口 `previous_equal_window`，不伪称 PARITY |
+| Agent 按需触发抓取（Agent Refresh Trigger） | **PARITY** | `trigger_intel_refresh(sources=...)` 校验已存在且 enabled 的 `source_id`，调用 `run_fetch(source_ids=...)`；未知/停用显式 BAD_ARGUMENT；未传 sources 抓全部 enabled；PARTIAL 保持诚实 |
+| Agent 系统状态工具（Agent Status Tool） | **PARITY** | `get_intel_status` 读取真实 Codex runtime 就绪/认证状态，绝不泄露 API Key / Token |
 
 ---
 

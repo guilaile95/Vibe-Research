@@ -148,7 +148,7 @@ TrendRadar pinned commit exposes 27 FastMCP tools across several categories:
 | `find_related_news` | Analytics | In Scope | `analyze_intel_trend(similar_to=...)` |
 | `generate_summary_report`| Report | In Scope | `query_intel(mode="report", ...)` |
 | `aggregate_news` | Query | In Scope | `query_intel(mode="aggregate", ...)` |
-| `compare_periods` | Analytics | In Scope | `analyze_intel_trend(compare_period=...)` |
+| `compare_periods` | Analytics | In Scope | `NOT_YET_PARITY` for pinned period1/period2/compare_type; Wave 4 only honestly supports `analyze_intel_trend(compare_period="previous_equal_window")` |
 | `search_news` | Search | In Scope | `search_intel(query=...)` |
 | `get_current_config` | Config/Status | In Scope | `get_intel_status()` |
 | `get_system_status` | System/Status | In Scope | `get_intel_status()` |
@@ -167,7 +167,9 @@ TrendRadar pinned commit exposes 27 FastMCP tools across several categories:
 ### Tool Execution & Security Boundaries
 - Read-only tools query existing `native_intel_store.py` / `native_intel_service.py` functions without raw SQL injection.
 - `trigger_intel_refresh` invokes native `run_fetch` and returns honest counts (`run_id`, `status`, `source_ok`, `source_failed`, `item_seen`, `item_new`).
-- External Agent tool surface is hosted via Vibe HTTP API and Python service adapter.
+- External Agent tool surface is hosted in-process by the official MCP Python SDK Streamable HTTP mount at `/api/native-intel/mcp`. Existing HTTP `/agent/tools/*` endpoints remain convenience adapters, not the protocol proof.
+- `find_related_news` / similar: title input is resolved to a unique `item_id` then delegated to Wave 4 `reporting.similar_items()`; no second similarity algorithm.
+- `trigger_intel_refresh(sources)` validates enabled `source_id` values and calls `run_fetch(source_ids=...)`. Unknown or disabled ids return `BAD_ARGUMENT`.
 - Internal page-aware Codex agent runtime (`agent-runtime/src/runtime.mjs`) continues to enforce `mcp_tool_call = TOOL_SURFACE_VIOLATION`.
 
 ---
@@ -179,7 +181,7 @@ TrendRadar pinned commit exposes 27 FastMCP tools across several categories:
 2. Wave 2 multi-field keyword/regex filtering, exclude-wins priority, and AI interest classification with dynamic fingerprinting.
 3. Wave 3 fine-grained RSS display controls, per-source max age, global/per-feed freshness override, proxy support, and standalone display.
 4. Wave 4 deterministic 3-mode reporting (`CURRENT`, `DAILY`, `INCREMENTAL`), cross-platform co-occurrence, platform coverage, velocity metrics, and observation/formal separation.
-5. Isolated dual-provider AI routing (`cli-codex` subscription vs `api-compatible`) with zero auto-fallback leakage.
+5. Single global Settings LLM authority (`cli-codex` subscription vs `api-compatible`). Wave 5 Native Intel AI consumes that selection; it does not keep a second Native Intel provider/model control. API keys stay browser-local and are not persisted server-side. Zero auto-fallback. Scheduled API-Compatible AI is unavailable until Owner decides server-side credential storage.
 
 ### Wave 5 Additions:
 1. `backend/native_intel_ai.py`:

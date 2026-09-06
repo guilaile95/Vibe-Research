@@ -19,7 +19,6 @@ Security Boundaries:
 
 from __future__ import annotations
 
-import difflib
 import json
 import logging
 import re
@@ -39,7 +38,9 @@ logger = logging.getLogger(__name__)
 LOCAL_TZ = timezone(timedelta(hours=8))
 
 
-def resolve_intel_date_range(expression: str, now: datetime | None = None) -> dict[str, Any]:
+def resolve_intel_date_range(
+    expression: str, now: datetime | None = None
+) -> dict[str, Any]:
     """将自然语言日期表达式解析为标准日期范围。"""
     expr = (expression or "").strip().lower()
     current = (now or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
@@ -78,7 +79,10 @@ def resolve_intel_date_range(expression: str, now: datetime | None = None) -> di
     else:
         m = re.match(r"(?:最近|last\s*)(\d+)(?:天|\s*days?)", expr)
         if m:
-            days = int(m.group(1))
+            try:
+                days = int(m.group(1))
+            except ValueError:
+                days = 7
             start = today - timedelta(days=max(1, days) - 1)
             end = today
             desc = f"最近{days}天"
@@ -191,7 +195,9 @@ class NativeIntelAgentTools:
             raw_items = report.get("items", [])
             aggregated: dict[str, list[dict]] = {}
             for it in raw_items:
-                st = it.get("source_type") or ("rss" if it.get("hint") == "rss" else "hotlist")
+                st = it.get("source_type") or (
+                    "rss" if it.get("hint") == "rss" else "hotlist"
+                )
                 aggregated.setdefault(st, []).append(it)
             return {
                 "success": True,
@@ -221,7 +227,9 @@ class NativeIntelAgentTools:
             raw_items = report.get("items", [])
             filtered_items = []
             for it in raw_items:
-                st = it.get("source_type") or ("rss" if it.get("hint") == "rss" else "hotlist")
+                st = it.get("source_type") or (
+                    "rss" if it.get("hint") == "rss" else "hotlist"
+                )
                 if source_type != "all" and st != source_type:
                     continue
                 filtered_items.append(it)
@@ -240,15 +248,10 @@ class NativeIntelAgentTools:
                 "usage_boundary": "OBSERVATION_ONLY_NOT_AN_INVESTMENT_AUTHORITY",
             }
 
-        # 默认返回热榜
-        hotlist_data = service.get_hotlist(limit=limit, scope=scope, path=self.db_path)
         return {
-            "success": True,
-            "mode": "current",
-            "items": hotlist_data.get("items", []),
-            "total": len(hotlist_data.get("items", [])),
-            "data_basis": "OBSERVATION_FACTS",
-            "usage_boundary": "OBSERVATION_ONLY_NOT_AN_INVESTMENT_AUTHORITY",
+            "success": False,
+            "error": "BAD_ARGUMENT",
+            "message": f"unsupported query mode '{mode}'",
         }
 
     def search_intel(
@@ -263,7 +266,13 @@ class NativeIntelAgentTools:
         if not clean_query:
             return {"success": True, "query": "", "total": 0, "items": []}
 
-        max_limit = max(1, min(int(limit), 100))
+        if not isinstance(limit, int):
+            return {
+                "success": False,
+                "error": "BAD_ARGUMENT",
+                "message": "limit 必须为整数",
+            }
+        max_limit = max(1, min(limit, 100))
         path = Path(self.db_path) if self.db_path else store.get_default_db_path()
         store.initialize_store(path)
 
@@ -279,7 +288,9 @@ class NativeIntelAgentTools:
                             WHERE e.term LIKE ? OR e.security_code LIKE ?
                             ORDER BY i.last_seen_at DESC LIMIT ?
                         """
-                        rows = conn.execute(sql, (f"%{clean_query}%", f"%{clean_query}%", max_limit)).fetchall()
+                        rows = conn.execute(
+                            sql, (f"%{clean_query}%", f"%{clean_query}%", max_limit)
+                        ).fetchall()
                     else:
                         sql = """
                             SELECT i.item_id, i.item_key, i.title, i.summary,
@@ -290,7 +301,7 @@ class NativeIntelAgentTools:
                             LEFT JOIN intel_sources s ON i.source_id = s.source_id
                             WHERE (i.title LIKE ? OR i.summary LIKE ?)
                         """
-                        params = [f"%{clean_query}%", f"%{clean_query}%"]
+                        params: list[Any] = [f"%{clean_query}%", f"%{clean_query}%"]
                         if source_type == "rss":
                             sql += " AND s.source_type = 'rss'"
                         elif source_type == "hotlist":
@@ -301,16 +312,20 @@ class NativeIntelAgentTools:
 
                     items = []
                     for r in rows:
-                        items.append({
-                            "item_id": r["item_id"],
-                            "item_key": r["item_key"],
-                            "title": r["title"],
-                            "summary": r["summary"] or "",
-                            "source_id": r["source_id"],
-                            "hint": r["item_hint"] if "item_hint" in r.keys() else (r["hint"] if "hint" in r.keys() else ""),
-                            "published_at": r["published_at"],
-                            "last_seen_at": r["last_seen_at"],
-                        })
+                        items.append(
+                            {
+                                "item_id": r["item_id"],
+                                "item_key": r["item_key"],
+                                "title": r["title"],
+                                "summary": r["summary"] or "",
+                                "source_id": r["source_id"],
+                                "hint": r["item_hint"]
+                                if "item_hint" in r.keys()
+                                else (r["hint"] if "hint" in r.keys() else ""),
+                                "published_at": r["published_at"],
+                                "last_seen_at": r["last_seen_at"],
+                            }
+                        )
 
                     return {
                         "success": True,
@@ -337,66 +352,74 @@ class NativeIntelAgentTools:
         """趋势与洞察分析工具。严格复用 Wave 4 reporting 权威计算。"""
         try:
             target_topic = (topic or keyword or "").strip()
-            path = self.db_path or store.get_default_db_path()
+            path = self.db_path or str(store.get_default_db_path())
 
-            # 1. 相似资讯检索（复用 Wave 4 确定性 SequenceMatcher）
+            # 1. 相似资讯检索：标题只负责确定性解析 reference item_id；
+            # 相似度、阈值与窗口全部由 Wave 4 reporting.similar_items 唯一决定。
             if similar_to:
-                # 若为数字或可转为 int，则直接调用 reporting.similar_items
-                is_item_id = False
                 try:
-                    sim_id = int(similar_to)
-                    is_item_id = True
+                    reference_item_id = int(similar_to)
+                    reference_title = None
                 except (ValueError, TypeError):
-                    sim_id = None
-
-                if is_item_id and sim_id is not None:
-                    sim_res = reporting.similar_items(item_id=sim_id, path=path)
-                    return {
-                        "success": True,
-                        "method": "similar_items",
-                        "reference_item_id": sim_id,
-                        "items": [it["item"] for it in sim_res.get("similar_items", [])],
-                        "similarity_details": sim_res.get("similar_items", []),
-                        "data_basis": "RAW_HISTORY",
-                        "usage_boundary": "OBSERVATION_ONLY_NOT_AN_INVESTMENT_AUTHORITY",
-                    }
-                else:
-                    # 基于文本标题使用 SequenceMatcher 确定性比对
-                    target_title = str(similar_to).strip()
+                    reference_title = str(similar_to).strip()
                     with store._connect(path) as conn:
                         rows = conn.execute(
-                            "SELECT item_id, item_key, title, summary, source_id, published_at FROM intel_items ORDER BY last_seen_at DESC LIMIT 200"
+                            "SELECT item_id, title FROM intel_items WHERE title = ? ORDER BY item_id ASC",
+                            (reference_title,),
                         ).fetchall()
-                    matches = []
-                    for r in rows:
-                        t = r["title"]
-                        if t == target_title:
-                            continue
-                        ratio = difflib.SequenceMatcher(None, target_title, t).ratio()
-                        if ratio >= 0.4:
-                            matches.append({
-                                "item_id": r["item_id"],
-                                "item_key": r["item_key"],
-                                "title": r["title"],
-                                "summary": r["summary"] or "",
-                                "source_id": r["source_id"],
-                                "similarity_score": round(ratio, 3),
-                            })
-                    matches.sort(key=lambda x: -x["similarity_score"])
+                    if not rows:
+                        return {
+                            "success": False,
+                            "error": "REFERENCE_ITEM_NOT_FOUND",
+                            "message": f"未找到标题为 '{reference_title}' 的参考条目",
+                        }
+                    if len(rows) > 1:
+                        return {
+                            "success": False,
+                            "error": "REFERENCE_ITEM_AMBIGUOUS",
+                            "message": f"标题 '{reference_title}' 匹配到多个条目",
+                            "matching_item_ids": [row["item_id"] for row in rows],
+                        }
+                    reference_item_id = rows[0]["item_id"]
+
+                try:
+                    similar_result = reporting.similar_items(
+                        item_id=reference_item_id,
+                        path=path,
+                    )
+                except ValueError as exc:
                     return {
-                        "success": True,
-                        "method": "similar_items",
-                        "reference": target_title,
-                        "items": matches[:20],
-                        "data_basis": "RAW_HISTORY",
-                        "usage_boundary": "OBSERVATION_ONLY_NOT_AN_INVESTMENT_AUTHORITY",
+                        "success": False,
+                        "error": "REFERENCE_ITEM_NOT_FOUND",
+                        "message": str(exc),
                     }
+                result = {
+                    "success": True,
+                    "method": "similar_items",
+                    "reference_item_id": reference_item_id,
+                    "items": [
+                        entry["item"] for entry in similar_result["similar_items"]
+                    ],
+                    "similarity_details": similar_result["similar_items"],
+                    "threshold": similar_result["threshold"],
+                    "algorithm": similar_result["algorithm"],
+                    "data_basis": similar_result["data_basis"],
+                    "usage_boundary": "OBSERVATION_ONLY_NOT_AN_INVESTMENT_AUTHORITY",
+                }
+                if reference_title is not None:
+                    result["reference_title"] = reference_title
+                return result
 
             # 2. 当 topic 为空时，作为 get_trending_topics 对等入口，返回当前热点与话题
             if not target_topic:
                 profile = service.get_filter_profile("default", path)
-                topics = [g["name"] for g in profile.get("keyword_rules", {}).get("groups", [])]
-                report = reporting.generate_report(path=path, mode="CURRENT", commit=False)
+                topics = [
+                    g["name"]
+                    for g in profile.get("keyword_rules", {}).get("groups", [])
+                ]
+                report = reporting.generate_report(
+                    path=path, mode="CURRENT", commit=False
+                )
                 top_items = report.get("items", [])[:15]
                 return {
                     "success": True,
@@ -409,21 +432,69 @@ class NativeIntelAgentTools:
 
             # 3. 话题趋势分析：调用 Wave 4 reporting.analyze_topic
             bounded_days = max(2, min(30, int(days)))
-            valid_basis = "RAW_HISTORY" if str(data_basis).upper() == "RAW_HISTORY" else "CURRENT_ELIGIBLE"
+            valid_basis = (
+                "RAW_HISTORY"
+                if str(data_basis).upper() == "RAW_HISTORY"
+                else "CURRENT_ELIGIBLE"
+            )
+            analysis_now = datetime.now(timezone.utc)
             topic_res = reporting.analyze_topic(
                 path=path,
                 topic=target_topic,
                 days=bounded_days,
                 data_basis=valid_basis,
+                now=analysis_now,
             )
 
-            # 4. compare_periods 支持
+            # 4. 仅提供 Wave 4 能诚实表达的相邻等长窗口比较。
+            # Pinned compare_periods 的任意 period1/period2/compare_type 仍标 NOT_YET_PARITY。
             if compare_period:
-                topic_res["compare_period"] = compare_period
+                if compare_period != "previous_equal_window":
+                    return {
+                        "success": False,
+                        "error": "BAD_ARGUMENT",
+                        "message": "compare_period 仅支持 previous_equal_window",
+                    }
+                previous_result = reporting.analyze_topic(
+                    path=path,
+                    topic=target_topic,
+                    days=bounded_days,
+                    data_basis=valid_basis,
+                    now=analysis_now - timedelta(days=bounded_days),
+                )
+                current_count = sum(
+                    bucket["mention_count"] for bucket in topic_res["trend"]
+                )
+                previous_count = sum(
+                    bucket["mention_count"] for bucket in previous_result["trend"]
+                )
+                change_percent = (
+                    round((current_count - previous_count) * 100 / previous_count, 2)
+                    if previous_count
+                    else None
+                )
+                if previous_count == 0:
+                    direction = "上升" if current_count else "稳定"
+                elif change_percent is not None and change_percent > 10:
+                    direction = "上升"
+                elif change_percent is not None and change_percent < -10:
+                    direction = "下降"
+                else:
+                    direction = "稳定"
                 topic_res["comparison"] = {
-                    "current_period_days": bounded_days,
-                    "change_percent": topic_res.get("change_percent"),
-                    "trend_direction": topic_res.get("trend_direction"),
+                    "semantics": "ADJACENT_EQUAL_WINDOWS",
+                    "authority": "native_intel_reporting.analyze_topic",
+                    "period_a": {
+                        "window": topic_res["window"],
+                        "mention_count": current_count,
+                    },
+                    "period_b": {
+                        "window": previous_result["window"],
+                        "mention_count": previous_count,
+                    },
+                    "delta_mention_count": current_count - previous_count,
+                    "change_percent": change_percent,
+                    "trend_direction": direction,
                 }
 
             # 5. insight_type 投影支持（直接投影 Wave 4 输出，不重新计算）
@@ -457,12 +528,12 @@ class NativeIntelAgentTools:
                         "data_basis": valid_basis,
                         "usage_boundary": "OBSERVATION_ONLY_NOT_AN_INVESTMENT_AUTHORITY",
                     }
-                elif itype in ("viral", "viral_score"):
+                elif itype == "viral":
                     return {
                         "success": True,
-                        "insight_type": itype,
+                        "insight_type": "viral",
                         "topic": target_topic,
-                        "viral_score": topic_res.get("viral_score"),
+                        "viral": topic_res["viral"],
                         "data_basis": valid_basis,
                         "usage_boundary": "OBSERVATION_ONLY_NOT_AN_INVESTMENT_AUTHORITY",
                     }
@@ -489,10 +560,14 @@ class NativeIntelAgentTools:
             logger.error("analyze_intel_trend failed: %s", e)
             return {"success": False, "error": str(e)}
 
-    def analyze_intel_sentiment(self, text: str = "", topic: str | None = None) -> dict[str, Any]:
+    def analyze_intel_sentiment(
+        self, text: str = "", topic: str | None = None
+    ) -> dict[str, Any]:
         """舆情风向与争议分析工具。"""
         try:
-            return service.analyze_ai_sentiment(text=text, topic=topic, path=self.db_path)
+            return service.analyze_ai_sentiment(
+                text=text, topic=topic, path=self.db_path
+            )
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -517,7 +592,9 @@ class NativeIntelAgentTools:
                 "status": "runtime_unavailable",
             }
 
-        ai_provider = cfg.get("ai_provider") or cfg.get("ai_analysis_provider") or "cli-codex"
+        ai_provider = (
+            cfg.get("ai_provider") or cfg.get("ai_analysis_provider") or "cli-codex"
+        )
         ai_model = cfg.get("ai_model") or cfg.get("ai_analysis_model") or "gpt-5-codex"
 
         if ai_provider == "cli-codex":
@@ -531,17 +608,22 @@ class NativeIntelAgentTools:
             ai_available = has_credentials
             ai_installed = True
             ai_authenticated = has_credentials
-            ai_runtime_status = "ready" if has_credentials else "credentials_missing_in_server_context"
+            ai_runtime_status = (
+                "ready" if has_credentials else "credentials_missing_in_server_context"
+            )
 
         return {
             "success": True,
             "status": base_status.get("status"),
             "run_state": base_status.get("last_run", {}),
             "sources_summary": base_status.get("sources", {}),
-            "freshness": base_status.get("freshness", {
-                "rss_freshness_enabled": cfg.get("rss_freshness_enabled", False),
-                "rss_global_max_age_days": cfg.get("rss_global_max_age_days", 1),
-            }),
+            "freshness": base_status.get(
+                "freshness",
+                {
+                    "rss_freshness_enabled": cfg.get("rss_freshness_enabled", False),
+                    "rss_global_max_age_days": cfg.get("rss_global_max_age_days", 1),
+                },
+            ),
             "proxy": {
                 "crawler_proxy_enabled": cfg.get("crawler_proxy_enabled", False),
                 "crawler_proxy_configured": bool(cfg.get("crawler_proxy_url")),
@@ -574,19 +656,52 @@ class NativeIntelAgentTools:
 
         调用已有的 run_fetch。绝不触发任何正式投资决策或交易。
         """
-        res = service.run_fetch(trigger="agent", path=self.db_path)
+        if sources is not None:
+            valid_sources = (
+                isinstance(sources, list)
+                and bool(sources)
+                and all(
+                    isinstance(source_id, str) and source_id.strip()
+                    for source_id in sources
+                )
+                and len(sources) == len(set(sources))
+            )
+            if not valid_sources:
+                return {
+                    "success": False,
+                    "error": "BAD_ARGUMENT",
+                    "message": "sources 必须为非空、无重复的 source_id 字符串数组",
+                }
+
+        try:
+            result = service.run_fetch(
+                trigger="agent",
+                path=self.db_path or str(store.get_default_db_path()),
+                source_ids=sources,
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error": "BAD_ARGUMENT",
+                "message": str(exc),
+            }
         return {
-            "success": res.get("status") in (store.RUN_STATUS_OK, store.RUN_STATUS_PARTIAL),
-            "run_id": res.get("run_id", ""),
-            "status": res.get("status", ""),
-            "source_ok": res.get("source_ok", 0),
-            "source_failed": res.get("source_failed", 0),
-            "item_seen": res.get("item_seen", 0),
-            "item_new": res.get("item_new", 0),
+            "success": result["status"]
+            in (store.RUN_STATUS_OK, store.RUN_STATUS_PARTIAL),
+            "run_id": result["run_id"],
+            "status": result["status"],
+            "source_ok": result["source_ok"],
+            "source_failed": result["source_failed"],
+            "item_seen": result["item_seen"],
+            "item_new": result["item_new"],
+            "requested_sources": sources,
+            "data_basis": "OBSERVATION_FACTS",
             "usage_boundary": "OBSERVATION_ONLY_NOT_AN_INVESTMENT_AUTHORITY",
         }
 
-    def resolve_intel_date_range(self, expression: str, now: datetime | None = None) -> dict[str, Any]:
+    def resolve_intel_date_range(
+        self, expression: str, now: datetime | None = None
+    ) -> dict[str, Any]:
         """自然语言日期范围解析。"""
         return resolve_intel_date_range(expression, now=now)
 
@@ -604,13 +719,32 @@ NATIVE_INTEL_MCP_TOOLS = [
             "properties": {
                 "mode": {
                     "type": "string",
-                    "enum": ["current", "daily", "incremental", "report", "aggregate", "dates"],
+                    "enum": [
+                        "current",
+                        "daily",
+                        "incremental",
+                        "report",
+                        "aggregate",
+                        "dates",
+                    ],
                     "default": "current",
                     "description": "查询模式",
                 },
-                "scope": {"type": "string", "enum": ["all", "my_interests"], "default": "all"},
-                "source_type": {"type": "string", "enum": ["all", "hotlist", "rss", "standalone"], "default": "all"},
-                "limit": {"type": "integer", "default": 50, "description": "最大返回条数"},
+                "scope": {
+                    "type": "string",
+                    "enum": ["all", "my_interests"],
+                    "default": "all",
+                },
+                "source_type": {
+                    "type": "string",
+                    "enum": ["all", "hotlist", "rss", "standalone"],
+                    "default": "all",
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 50,
+                    "description": "最大返回条数",
+                },
                 "date": {"type": "string", "description": "YYYY-MM-DD (供 daily 模式)"},
             },
         },
@@ -622,8 +756,16 @@ NATIVE_INTEL_MCP_TOOLS = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "搜索词"},
-                "search_mode": {"type": "string", "enum": ["keyword", "entity"], "default": "keyword"},
-                "source_type": {"type": "string", "enum": ["all", "hotlist", "rss"], "default": "all"},
+                "search_mode": {
+                    "type": "string",
+                    "enum": ["keyword", "entity"],
+                    "default": "keyword",
+                },
+                "source_type": {
+                    "type": "string",
+                    "enum": ["all", "hotlist", "rss"],
+                    "default": "all",
+                },
                 "limit": {"type": "integer", "default": 20},
             },
             "required": ["query"],
@@ -635,15 +777,31 @@ NATIVE_INTEL_MCP_TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "topic": {"type": "string", "description": "话题名称，为空时返回当前热点话题列表"},
-                "similar_to": {"type": "string", "description": "用于相似性比对的标题或条目ID"},
+                "topic": {
+                    "type": "string",
+                    "description": "话题名称，为空时返回当前热点话题列表",
+                },
+                "similar_to": {
+                    "type": "string",
+                    "description": "用于相似性比对的标题或条目ID",
+                },
                 "insight_type": {
                     "type": "string",
-                    "enum": ["platform", "cooccurrence", "lifecycle", "viral", "prediction"],
+                    "enum": [
+                        "platform",
+                        "cooccurrence",
+                        "lifecycle",
+                        "viral",
+                        "prediction",
+                    ],
                     "description": "特定洞察维度投影",
                 },
                 "days": {"type": "integer", "default": 7, "minimum": 2, "maximum": 30},
-                "data_basis": {"type": "string", "enum": ["CURRENT_ELIGIBLE", "RAW_HISTORY"], "default": "CURRENT_ELIGIBLE"},
+                "data_basis": {
+                    "type": "string",
+                    "enum": ["CURRENT_ELIGIBLE", "RAW_HISTORY"],
+                    "default": "CURRENT_ELIGIBLE",
+                },
                 "compare_period": {"type": "string", "description": "周期对比参数"},
             },
         },
@@ -691,7 +849,9 @@ NATIVE_INTEL_MCP_TOOLS = [
 ]
 
 
-def dispatch_mcp_message(msg: dict[str, Any], tools: NativeIntelAgentTools) -> dict[str, Any]:
+def dispatch_mcp_message(
+    msg: dict[str, Any], tools: NativeIntelAgentTools
+) -> dict[str, Any]:
     """处理标准 MCP JSON-RPC 2.0 协议请求。"""
     rid = msg.get("id")
     method = msg.get("method")
@@ -766,7 +926,9 @@ def dispatch_mcp_message(msg: dict[str, Any], tools: NativeIntelAgentTools) -> d
             elif tool_name == "trigger_intel_refresh":
                 data = tools.trigger_intel_refresh(sources=args.get("sources"))
             elif tool_name == "resolve_intel_date_range":
-                data = tools.resolve_intel_date_range(expression=str(args.get("expression") or ""))
+                data = tools.resolve_intel_date_range(
+                    expression=str(args.get("expression") or "")
+                )
             else:
                 return {
                     "jsonrpc": "2.0",
@@ -774,12 +936,16 @@ def dispatch_mcp_message(msg: dict[str, Any], tools: NativeIntelAgentTools) -> d
                     "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"},
                 }
 
-            is_error = isinstance(data, dict) and (data.get("success") is False or "error" in data)
+            is_error = isinstance(data, dict) and (
+                not data.get("success", True) or "error" in data
+            )
             return {
                 "jsonrpc": "2.0",
                 "id": rid,
                 "result": {
-                    "content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False)}],
+                    "content": [
+                        {"type": "text", "text": json.dumps(data, ensure_ascii=False)}
+                    ],
                     "isError": is_error,
                 },
             }
@@ -788,7 +954,14 @@ def dispatch_mcp_message(msg: dict[str, Any], tools: NativeIntelAgentTools) -> d
                 "jsonrpc": "2.0",
                 "id": rid,
                 "result": {
-                    "content": [{"type": "text", "text": json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)}],
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {"success": False, "error": str(e)}, ensure_ascii=False
+                            ),
+                        }
+                    ],
                     "isError": True,
                 },
             }

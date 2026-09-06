@@ -41,6 +41,7 @@ import daily_review
 import debate as debate_layer
 import gstock
 import hithink_finance_client as hithink
+import native_intel_mcp
 import native_intel_service
 import newsradar
 import reflection as reflect_layer
@@ -362,17 +363,18 @@ _ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"} | _parse_trusted_hosts(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用启动时确保后台刷新调度器已启动（幂等）。"""
-    pf.start_scheduler(1800)
-    # NATIVE-INTEL1：本地资讯数据层建库 / 回收中断 run / 缺数据时首抓 / 启动定时抓取
-    try:
-        native_intel_service.startup_recover()
-    except Exception as exc:  # noqa: BLE001 - 资讯不可用不能阻止 Vibe 主应用启动
-        logging.getLogger("native_intel").warning(
-            "Native Intel startup recovery unavailable: %s", type(exc).__name__
-        )
-    native_intel_service.start_scheduler()
-    yield
+    """Start existing schedulers and the in-process Native Intel MCP transport."""
+    async with native_intel_mcp.mcp_server.session_manager.run():
+        pf.start_scheduler(1800)
+        # NATIVE-INTEL1：本地资讯数据层建库 / 回收中断 run / 缺数据时首抓 / 启动定时抓取
+        try:
+            native_intel_service.startup_recover()
+        except Exception as exc:  # noqa: BLE001 - 资讯不可用不能阻止 Vibe 主应用启动
+            logging.getLogger("native_intel").warning(
+                "Native Intel startup recovery unavailable: %s", type(exc).__name__
+            )
+        native_intel_service.start_scheduler()
+        yield
 
 
 __version__ = read_version()
@@ -408,8 +410,10 @@ app.include_router(technical_indicators_router.router)
 app.include_router(bk11_history_router.router)
 # Intel Daily Digest
 app.include_router(intel_digest_router.router)
-# NATIVE-INTEL1：Vibe 自有资讯能力（MIT 原生，无 sidecar / 无 MCP 依赖）
+# NATIVE-INTEL1：Vibe 自有资讯能力（MIT 原生，无 TrendRadar sidecar/runtime）
 app.include_router(native_intel_router.router)
+# Official MCP Streamable HTTP mount, hosted by this same FastAPI process.
+app.mount("/api/native-intel/mcp", native_intel_mcp.mcp_http_app, name="native-intel-mcp")
 # P0-S1A 持仓事实链：bootstrap / correction / derived / reconciliation
 app.include_router(position_reality_router.router)
 # P0-S1B-A 账户现实层（只读）：cash 双源 / settled 定价 / settled NAV candidate

@@ -788,14 +788,3 @@ def agent_tool_date_range(payload: dict[str, Any]) -> dict[str, Any]:
     from native_intel_agent_tools import resolve_intel_date_range
     expression = str(payload.get("expression") or "")
     return resolve_intel_date_range(expression)
-
-
-@router.post("/mcp")
-def native_intel_mcp_rpc(payload: dict[str, Any]) -> dict[str, Any]:
-    """Vibe-Native MCP JSON-RPC 2.0 协议标准端点。
-
-    支持 initialize, ping, tools/list, tools/call。
-    """
-    from native_intel_agent_tools import dispatch_mcp_message
-    tools = service.get_agent_tools(_db_path())
-    return dispatch_mcp_message(payload, tools)
