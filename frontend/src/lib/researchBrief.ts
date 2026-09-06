@@ -11,6 +11,8 @@ import type { DecisionContextHydrationResult } from "./decisionContextHydration.
 
 export type ResearchBriefContextState = "loading" | "ready" | "unavailable";
 
+export type ResearchBriefStateKind = "positive" | "caution" | "terminal" | "unknown";
+
 export interface ResearchBriefEvidenceItem {
   claim: string;
   stance: EvidenceLink["stance"];
@@ -23,11 +25,32 @@ export interface ResearchBriefEvidenceItem {
   evidenceId: string;
 }
 
+export interface ResearchBriefEffectiveState {
+  state: string | null;
+  label: string;
+  kind: ResearchBriefStateKind;
+  terminal: boolean;
+  note: string;
+}
+
+export interface ResearchBriefConfirmedUpdate {
+  deltaId: string;
+  sequence: number;
+  stateLabel: string;
+  stateKind: ResearchBriefStateKind;
+  reason: string;
+  confirmedAt: string | null;
+  baseRevision: number | null;
+  evidence: ResearchBriefEvidenceItem[];
+}
+
 export interface ResearchBriefChangeItem {
   kind: "ADDED" | "CHANGED" | "SOURCE_CONFLICT";
   label: string;
+  recordKey: string;
   claim: string;
   source: string;
+  classificationLabel: string | null;
   detail: string | null;
 }
 
@@ -40,6 +63,7 @@ export interface ResearchBriefModel {
   thesisVersionText: string;
   horizonSource: "CURRENT_THESIS" | "MANUAL_FALLBACK" | "LOADING";
   contextState: ResearchBriefContextState;
+  effectiveState: ResearchBriefEffectiveState;
   confirmed: {
     status: "CONFIRMED" | "NOT_CONFIRMED" | "UNAVAILABLE";
     title: string | null;
@@ -47,10 +71,15 @@ export interface ResearchBriefModel {
     claims: string[];
     note: string;
   };
+  confirmedUpdates: ResearchBriefConfirmedUpdate[];
+  updatesNote: string;
   changes: {
     status: string;
     note: string;
     items: ResearchBriefChangeItem[];
+    baselineText: string | null;
+    fetchedAt: string | null;
+    observationCount: number | null;
   };
   evidence: {
     supporting: ResearchBriefEvidenceItem[];
@@ -70,10 +99,21 @@ export interface ResearchBriefModel {
 }
 
 const CHANGE_LABEL = {
-  ADDED: "新增事实",
-  CHANGED: "事实变化",
+  ADDED: "新增证据",
+  CHANGED: "证据变化",
   SOURCE_CONFLICT: "来源冲突",
 } as const;
+
+const STATE_META: Record<string, { label: string; kind: ResearchBriefStateKind }> = {
+  STABLE: { label: "稳定", kind: "positive" },
+  STRENGTHENED: { label: "增强", kind: "positive" },
+  WEAKENED: { label: "削弱", kind: "caution" },
+  DISPROVEN: { label: "已证伪", kind: "terminal" },
+  INVALIDATED: { label: "已失效", kind: "terminal" },
+  UNKNOWN: { label: "未知", kind: "unknown" },
+};
+
+const TERMINAL_STATES = new Set(["DISPROVEN", "INVALIDATED"]);
 
 const CLASSIFICATION_LABEL: Record<string, string> = {
   fact: "事实",
@@ -81,8 +121,25 @@ const CLASSIFICATION_LABEL: Record<string, string> = {
   unknown: "未知",
 };
 
+const FIELD_LABELS: Record<string, string> = {
+  claim: "陈述",
+  evidence_type: "类型",
+  classification: "分类",
+  confidence: "置信度",
+  stance: "立场",
+  source_title: "来源标题",
+  source_url: "来源 URL",
+  source_date: "来源日期",
+  accessed_at: "记录时间",
+};
+
 function shown(value: string | null | undefined): string {
   return value === null || value === undefined || value === "" ? "未知" : value;
+}
+
+function classificationLabel(value: unknown): string | null {
+  if (typeof value !== "string" || value === "") return null;
+  return CLASSIFICATION_LABEL[value] || value;
 }
 
 function classificationKind(value: string): ResearchBriefEvidenceItem["classificationKind"] {
@@ -104,11 +161,109 @@ function mapEvidence(link: EvidenceLink): ResearchBriefEvidenceItem {
   };
 }
 
-function confirmedSnapshot(current: CampaignCurrentThesis | null): ThesisAggregate | null {
+function isEvidenceLinkLike(value: unknown): value is EvidenceLink {
+  return Boolean(
+    value
+    && typeof value === "object"
+    && typeof (value as EvidenceLink).evidence_id === "string"
+    && typeof (value as EvidenceLink).claim === "string",
+  );
+}
+
+/** 上下文校验通过（contextState=ready）才允许把冻结快照当作已确认内容展示。 */
+function confirmedSnapshot(
+  current: CampaignCurrentThesis | null,
+  contextState: ResearchBriefContextState,
+): ThesisAggregate | null {
+  if (contextState !== "ready") return null;
   if (!current?.ready) return null;
   const snapshot = current.original_snapshot;
   if (!snapshot?.thesis || !Array.isArray(snapshot.evidence_links)) return null;
   return snapshot;
+}
+
+function mapEffectiveState(
+  current: CampaignCurrentThesis | null,
+  contextState: ResearchBriefContextState,
+): ResearchBriefEffectiveState {
+  if (contextState === "loading") {
+    return {
+      state: null,
+      label: "未知",
+      kind: "unknown",
+      terminal: false,
+      note: "正在读取当前确认状态。",
+    };
+  }
+  if (contextState === "unavailable") {
+    return {
+      state: null,
+      label: "未知",
+      kind: "unknown",
+      terminal: false,
+      note: "上下文校验未通过，不能声称当前确认状态。",
+    };
+  }
+  if (!current?.ready) {
+    return {
+      state: null,
+      label: "未知",
+      kind: "unknown",
+      terminal: false,
+      note: "Current Thesis 投影未就绪，没有当前确认状态。",
+    };
+  }
+  const meta = STATE_META[current.effective_state]
+    || { label: String(current.effective_state), kind: "unknown" as const };
+  const terminal = TERMINAL_STATES.has(current.effective_state);
+  return {
+    state: current.effective_state,
+    label: meta.label,
+    kind: meta.kind,
+    terminal,
+    note: terminal
+      ? "backend 投影已把该研究标记为终态。最初冻结观点不再成立，不能作为当前研究结论引用。"
+      : "ready=true 只代表投影可读取；当前结论以上方确认状态与下方已确认变更为准。",
+  };
+}
+
+function mapDeltas(
+  current: CampaignCurrentThesis | null,
+  contextState: ResearchBriefContextState,
+): { updates: ResearchBriefConfirmedUpdate[]; malformedCount: number } {
+  if (contextState !== "ready" || !current?.ready || !Array.isArray(current.deltas)) {
+    return { updates: [], malformedCount: 0 };
+  }
+  const updates: ResearchBriefConfirmedUpdate[] = [];
+  let malformedCount = 0;
+  for (const item of current.deltas) {
+    const state = (item as { delta_state?: unknown } | null)?.delta_state;
+    const deltaId = (item as { delta_id?: unknown } | null)?.delta_id;
+    const meta = typeof state === "string" ? STATE_META[state] : undefined;
+    if (!item || typeof item !== "object" || !meta || typeof deltaId !== "string") {
+      malformedCount += 1;
+      continue;
+    }
+    const record = item as {
+      delta_sequence?: unknown;
+      reason?: unknown;
+      confirmed_at?: unknown;
+      base_revision?: unknown;
+      evidence_links?: unknown;
+    };
+    const links = Array.isArray(record.evidence_links) ? record.evidence_links : [];
+    updates.push({
+      deltaId,
+      sequence: typeof record.delta_sequence === "number" ? record.delta_sequence : 0,
+      stateLabel: meta.label,
+      stateKind: meta.kind,
+      reason: typeof record.reason === "string" && record.reason ? record.reason : "未知原因",
+      confirmedAt: typeof record.confirmed_at === "string" ? record.confirmed_at : null,
+      baseRevision: typeof record.base_revision === "number" ? record.base_revision : null,
+      evidence: links.filter(isEvidenceLinkLike).map(mapEvidence),
+    });
+  }
+  return { updates, malformedCount };
 }
 
 function calendarText(value: ResearchContinuity["decision_calendar"] | undefined): string {
@@ -127,12 +282,62 @@ function calendarText(value: ResearchContinuity["decision_calendar"] | undefined
     : String(value.state);
 }
 
-function mapChanges(continuity: ResearchContinuity | null, continuityError: string | null): ResearchBriefModel["changes"] {
+function baselineText(continuity: ResearchContinuity): string | null {
+  const baseline = continuity.baseline;
+  if (!baseline || baseline.status !== "READY") return null;
+  const authority = baseline.authority_type === "FROZEN_DECISION"
+    ? "Frozen Decision"
+    : baseline.authority_type === "CANDIDATE_RESEARCH_FORMAL_ORIGINAL"
+      ? "Candidate Research Formal Original"
+      : shown(baseline.authority_type);
+  return `基线 ${authority}${baseline.as_of ? ` · as_of ${baseline.as_of}` : ""}（口径：Current Thesis 的不可变 Evidence 快照）`;
+}
+
+function changeDetail(item: ResearchContinuity["changes"]["items"][number]): string | null {
+  const before = item.before?.values ?? null;
+  const after = item.after?.values ?? null;
+  if (item.change_type === "CHANGED") {
+    const fields = item.changed_fields?.length
+      ? item.changed_fields
+      : Object.keys(after ?? {});
+    const parts = fields.map(
+      (field) =>
+        `${FIELD_LABELS[field] || field}：${shown(before?.[field] ?? null)} → ${shown(after?.[field] ?? null)}`,
+    );
+    return parts.length ? parts.join("；") : null;
+  }
+  if (item.change_type === "ADDED" && after) {
+    const bits: string[] = [];
+    const classification = classificationLabel(after.classification);
+    if (classification) bits.push(`分类：${classification}`);
+    if (after.confidence) bits.push(`置信度：${after.confidence}`);
+    if (after.evidence_type) bits.push(`类型：${after.evidence_type}`);
+    return bits.length ? bits.join(" · ") : null;
+  }
+  if (item.change_type === "SOURCE_CONFLICT" && item.records?.length) {
+    return item.records
+      .map((record) => {
+        const classification = classificationLabel(record.values?.classification);
+        return `${shown(record.source)}${classification ? `（分类：${classification}）` : ""}`;
+      })
+      .join(" / ");
+  }
+  return null;
+}
+
+function mapChanges(
+  continuity: ResearchContinuity | null,
+  continuityError: string | null,
+  campaignId: string,
+): ResearchBriefModel["changes"] {
   if (continuityError) {
     return {
       status: "UNAVAILABLE",
       note: `变化摘要读取失败（${continuityError}）。不能声称没有变化。`,
       items: [],
+      baselineText: null,
+      fetchedAt: null,
+      observationCount: null,
     };
   }
   if (!continuity) {
@@ -140,6 +345,19 @@ function mapChanges(continuity: ResearchContinuity | null, continuityError: stri
       status: "NOT_EVALUATED",
       note: "尚未读到研究连续性。不能声称没有变化。",
       items: [],
+      baselineText: null,
+      fetchedAt: null,
+      observationCount: null,
+    };
+  }
+  if (continuity.campaign_id !== campaignId) {
+    return {
+      status: "UNAVAILABLE",
+      note: "研究连续性与当前 Campaign 不一致；已拒绝展示，避免混入其他研究的内容。",
+      items: [],
+      baselineText: null,
+      fetchedAt: null,
+      observationCount: null,
     };
   }
   const status = continuity.changes.status;
@@ -148,6 +366,9 @@ function mapChanges(continuity: ResearchContinuity | null, continuityError: stri
       status,
       note: "NO_BASELINE · 尚无 Frozen Decision 或已提交的 Formal Original，不能声称没有变化。",
       items: [],
+      baselineText: null,
+      fetchedAt: continuity.fetched_at,
+      observationCount: continuity.changes.observation_count,
     };
   }
   if (status === "NOT_EVALUATED") {
@@ -155,6 +376,9 @@ function mapChanges(continuity: ResearchContinuity | null, continuityError: stri
       status,
       note: "NOT_EVALUATED · 只有基线，没有后续不可变观察，不能声称没有变化。",
       items: [],
+      baselineText: baselineText(continuity),
+      fetchedAt: continuity.fetched_at,
+      observationCount: continuity.changes.observation_count,
     };
   }
   if (status === "UNAVAILABLE") {
@@ -162,6 +386,9 @@ function mapChanges(continuity: ResearchContinuity | null, continuityError: stri
       status,
       note: "UNAVAILABLE · 基线或 Evidence 链无法完整验证，不能声称没有变化。",
       items: [],
+      baselineText: null,
+      fetchedAt: continuity.fetched_at,
+      observationCount: continuity.changes.observation_count,
     };
   }
   const items: ResearchBriefChangeItem[] = continuity.changes.items.map((item) => {
@@ -171,29 +398,38 @@ function mapChanges(continuity: ResearchContinuity | null, continuityError: stri
       || item.records?.[0]?.claim_identity
       || "未知事实";
     const source = shown(item.after?.source || item.before?.source || item.records?.[0]?.source);
-    let detail: string | null = null;
-    if (item.change_type === "CHANGED" && item.changed_fields?.length) {
-      detail = item.changed_fields.join("、");
-    }
-    if (item.change_type === "SOURCE_CONFLICT" && item.records?.length) {
-      detail = item.records.map((record) => shown(record.source)).join(" / ");
-    }
     return {
       kind: item.change_type,
       label: CHANGE_LABEL[item.change_type],
+      recordKey: item.record_key,
       claim,
       source,
-      detail,
+      classificationLabel: classificationLabel(
+        item.after?.values?.classification
+          ?? item.before?.values?.classification
+          ?? item.records?.[0]?.values?.classification,
+      ),
+      detail: changeDetail(item),
     };
   });
   if (items.length === 0) {
     return {
       status,
-      note: "已有后续观察，未发现事实字段变化。这不是“没有变化”的投资结论。",
-      items: [],
+      note: "已有后续观察，完成比较后未发现证据字段变化。这不是“没有变化”的投资结论。",
+      items,
+      baselineText: baselineText(continuity),
+      fetchedAt: continuity.fetched_at,
+      observationCount: continuity.changes.observation_count,
     };
   }
-  return { status, note: "只比较 Current Thesis 的不可变 Evidence 快照。", items };
+  return {
+    status,
+    note: "只比较 Current Thesis 的不可变 Evidence 快照；变化内容保留比较双方原文。",
+    items,
+    baselineText: baselineText(continuity),
+    fetchedAt: continuity.fetched_at,
+    observationCount: continuity.changes.observation_count,
+  };
 }
 
 export function buildResearchBrief(input: {
@@ -211,7 +447,10 @@ export function buildResearchBrief(input: {
   const strategyLabel = campaign
     ? CAMPAIGN_STRATEGY_LABELS[campaign.strategy] || campaign.strategy
     : "未知";
-  const snapshot = confirmedSnapshot(input.currentThesis);
+  // 只有上下文校验通过才展示冻结快照；校验失败绝不输出 CONFIRMED。
+  const snapshot = confirmedSnapshot(input.currentThesis, input.contextState);
+  const { updates, malformedCount } = mapDeltas(input.currentThesis, input.contextState);
+  const effectiveState = mapEffectiveState(input.currentThesis, input.contextState);
   const hydration = input.hydration;
   let horizonText = "未知";
   let horizonSource: ResearchBriefModel["horizonSource"] = "LOADING";
@@ -224,22 +463,33 @@ export function buildResearchBrief(input: {
   }
 
   let thesisVersionText = "未知";
-  if (input.currentThesis?.ready) {
+  if (input.contextState !== "ready") {
+    thesisVersionText = input.contextState === "loading"
+      ? "正在读取"
+      : "Current Thesis 不可用";
+  } else if (input.currentThesis?.ready) {
     thesisVersionText = `已确认冻结 v${input.currentThesis.frozen_revision}`;
   } else if (input.currentThesis) {
     thesisVersionText = `未就绪（${input.currentThesis.formal_status}）`;
-  } else if (input.contextState === "unavailable") {
-    thesisVersionText = "Current Thesis 不可用";
   }
 
   let confirmed: ResearchBriefModel["confirmed"];
-  if (input.contextState === "unavailable" && !snapshot) {
+  if (input.contextState === "unavailable") {
+    // 校验失败（identity / binding / revision）时，即使投影可读也不当作已确认内容。
     confirmed = {
       status: "UNAVAILABLE",
       title: null,
       summary: null,
       claims: [],
-      note: `已确认研究观点当前不可用：${input.contextMessage || "UNKNOWN"}。不会把未确认草稿当作正式观点。`,
+      note: `已确认研究观点当前不可用：${input.contextMessage || "UNKNOWN"}。不会把未确认草稿当作正式观点，也不展示校验失败对象的证据与失效条件。`,
+    };
+  } else if (input.contextState === "loading") {
+    confirmed = {
+      status: "NOT_CONFIRMED",
+      title: null,
+      summary: null,
+      claims: [],
+      note: "正在读取 Campaign / Current Thesis 上下文；尚未确认是否已有可引用的确认版本。",
     };
   } else if (snapshot) {
     const revision = input.currentThesis?.ready
@@ -250,7 +500,7 @@ export function buildResearchBrief(input: {
       title: snapshot.thesis.title || null,
       summary: snapshot.thesis.summary || null,
       claims: snapshot.thesis.core_claims || [],
-      note: `来源：Current Thesis 冻结快照 v${revision ?? "?"}。`,
+      note: `来源：Current Thesis 冻结快照 v${revision ?? "?"}（${snapshot.thesis.frozen_at ?? "冻结时间未知"}）。以下是最初冻结原文，不代表其后没有被削弱或推翻；当前结论以上方确认状态与已确认变更为准。`,
     };
   } else {
     confirmed = {
@@ -264,38 +514,66 @@ export function buildResearchBrief(input: {
     };
   }
 
+  let updatesNote: string;
+  if (input.contextState !== "ready" || !input.currentThesis?.ready) {
+    updatesNote = "当前确认状态未读取或校验未通过；不展示已确认变更。";
+  } else if (updates.length === 0) {
+    updatesNote = "冻结后没有已确认变更记录（backend deltas 为空）；这不等于没有新证据或新变化。";
+  } else {
+    const latest = updates[updates.length - 1];
+    updatesNote = `共 ${updates.length} 条已确认变更；最新一条：${latest.stateLabel} · ${latest.reason}${latest.confirmedAt ? ` · ${latest.confirmedAt}` : ""}。`;
+  }
+
   const links = snapshot?.evidence_links ?? [];
   const supporting = links.filter((item) => item.stance === "support").map(mapEvidence);
   const opposing = links.filter((item) => item.stance === "oppose").map(mapEvidence);
-  let evidenceNote = "证据来自已确认冻结快照的关联记录，并标出事实 / 推断 / 未知。";
+  const opposingFromUpdates = updates.reduce(
+    (count, update) => count + update.evidence.filter((item) => item.stance === "oppose").length,
+    0,
+  );
+  let evidenceNote = "证据来自已确认冻结快照与已确认变更的不可变关联记录，并标出事实 / 推断 / 未知。";
   if (!snapshot) {
     evidenceNote = "没有已确认版本的证据快照，不展示未确认草稿中的证据。";
-  } else if (opposing.length === 0) {
-    evidenceNote = "当前确认版本没有反对立场的证据记录；这不等于没有反对证据。";
+  } else if (opposing.length === 0 && opposingFromUpdates === 0) {
+    evidenceNote = "最初冻结版本及其后的已确认变更都没有反对立场的证据记录；这不等于没有反对证据。";
   }
 
   const conditions = snapshot?.thesis.invalidation_conditions ?? [];
-  const invalidationNote = snapshot
-    ? (conditions.length
-      ? "以下是已记录的失效条件，不是这些条件已经触发。"
-      : "已确认版本没有记录失效条件；这不等于不存在失效风险。")
-    : "没有已确认版本，不把表单里的失效条件当作正式记录。";
+  const invalidationNote = input.contextState !== "ready"
+    ? "上下文未就绪或校验未通过；不把任何失效条件当作已确认内容展示。"
+    : snapshot
+      ? (conditions.length
+        ? "以下是已记录的失效条件，不是这些条件已经触发。"
+        : "已确认版本没有记录失效条件；这不等于不存在失效风险。")
+      : "没有已确认版本，不把表单里的失效条件当作正式记录。";
 
   const gaps: string[] = [];
+  // 只有与当前 Campaign 同源的 continuity 才参与展示；不匹配视为未读取。
+  const continuityScoped = input.continuity && input.continuity.campaign_id === input.campaignId
+    ? input.continuity
+    : null;
   if (input.contextState === "unavailable") {
     gaps.push(`Campaign / Current Thesis 上下文：${input.contextMessage || "不可用"}`);
   }
   if (!snapshot) gaps.push("缺少已确认冻结 Thesis 快照");
+  if (malformedCount > 0) gaps.push(`存在 ${malformedCount} 条无法解析的已确认变更记录`);
   if (input.continuityError) gaps.push(`研究连续性读取失败：${input.continuityError}`);
-  else if (!input.continuity) gaps.push("尚未读到研究连续性");
-  else if (input.continuity.changes.status !== "NORMAL") {
-    gaps.push(`变化比较：${input.continuity.changes.status}`);
+  else if (input.continuity && input.continuity.campaign_id !== input.campaignId) {
+    gaps.push("研究连续性与当前 Campaign 不一致");
+  } else if (!continuityScoped) gaps.push("尚未读到研究连续性");
+  else if (continuityScoped.changes.status !== "NORMAL") {
+    gaps.push(`变化比较：${continuityScoped.changes.status}`);
   }
-  if (snapshot && opposing.length === 0) gaps.push("确认版本未记录反对证据");
+  if (snapshot && opposing.length === 0 && opposingFromUpdates === 0) {
+    gaps.push("确认版本未记录反对证据");
+  }
   if (snapshot && conditions.length === 0) gaps.push("确认版本未记录失效条件");
   if (horizonSource !== "CURRENT_THESIS") gaps.push("预期周期无法从已确认 Thesis 读取");
-  const calendar = input.continuity?.decision_calendar;
-  if (calendar && (calendar.state === "NO_RECORD" || calendar.state === "UNAVAILABLE" || calendar.state === "ERROR")) {
+  const calendar = continuityScoped?.decision_calendar;
+  if (
+    calendar
+    && (calendar.state === "NO_RECORD" || calendar.state === "UNAVAILABLE" || calendar.state === "ERROR")
+  ) {
     gaps.push(`披露日历：${calendar.state}`);
   }
 
@@ -308,18 +586,21 @@ export function buildResearchBrief(input: {
     thesisVersionText,
     horizonSource,
     contextState: input.contextState,
+    effectiveState,
     confirmed,
-    changes: mapChanges(input.continuity, input.continuityError),
+    confirmedUpdates: updates,
+    updatesNote,
+    changes: mapChanges(input.continuity, input.continuityError, input.campaignId),
     evidence: {
       supporting,
       opposing,
-      opposingRecorded: opposing.length > 0,
+      opposingRecorded: opposing.length + opposingFromUpdates > 0,
       note: evidenceNote,
     },
     invalidation: { conditions, note: invalidationNote },
     freshness: {
       frozenAt: snapshot?.thesis.frozen_at ?? null,
-      calendarText: calendarText(input.continuity?.decision_calendar),
+      calendarText: calendarText(continuityScoped?.decision_calendar),
       gaps,
     },
   };

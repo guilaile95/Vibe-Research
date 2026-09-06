@@ -2484,6 +2484,26 @@ export interface CurrentThesisNotReady {
   reason: string;
 }
 
+/** 冻结后追加的已确认变更（backend thesis_deltas 行，按 delta_sequence 升序） */
+export type ThesisDeltaState =
+  | "STRENGTHENED" | "STABLE" | "WEAKENED" | "DISPROVEN" | "INVALIDATED" | "UNKNOWN";
+
+export interface CurrentThesisDeltaEvidenceLink extends EvidenceLink {
+  delta_id?: string;
+  captured_at?: string | null;
+}
+
+export interface CurrentThesisDelta {
+  delta_id: string;
+  thesis_id: string;
+  delta_sequence: number;
+  base_revision: number;
+  delta_state: ThesisDeltaState;
+  reason: string | null;
+  confirmed_at: string | null;
+  evidence_links: CurrentThesisDeltaEvidenceLink[];
+}
+
 /** 投影就绪（frozen）：Formal Original（frozen_revision 快照）+ deltas + effective_state */
 export interface CurrentThesisReady {
   campaign_id: string;
@@ -2491,7 +2511,7 @@ export interface CurrentThesisReady {
   binding: CampaignThesisBindingAudit;
   frozen_revision: number;
   original_snapshot: FormalThesisSnapshot;
-  deltas: unknown[];
+  deltas: CurrentThesisDelta[];
   effective_state: string;
   ready: true;
   formal_status: "READY";

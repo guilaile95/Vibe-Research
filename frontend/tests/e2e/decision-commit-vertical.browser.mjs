@@ -158,11 +158,49 @@ async function jsonRequest(base, pathname, method = "GET", body, expected = 200)
   return payload.data;
 }
 
-async function createFrozenCurrentThesis(base, env) {
+async function createFrozenCurrentThesis(base, env, { disprovenScenario = false } = {}) {
   const campaign = await jsonRequest(base, "/api/campaigns", "POST", {
     security_code: "600519",
     strategy: "SWING",
   }, 201);
+  // 有来源、可核对的支持 / 反对依据（进入最初冻结快照）。
+  const evSupport = await jsonRequest(base, "/api/evidence", "POST", {
+    subject_type: "stock",
+    subject_id: "600519",
+    evidence_type: "news",
+    claim: "终端动销保持稳定",
+    source_title: "渠道调研周报",
+    source_url: "https://example.com/channel-report",
+    source_date: "2026-08-01",
+    accessed_at: "2026-08-01T00:00:00.000Z",
+    classification: "fact",
+    confidence: "high",
+  });
+  const evOppose = await jsonRequest(base, "/api/evidence", "POST", {
+    subject_type: "stock",
+    subject_id: "600519",
+    evidence_type: "news",
+    claim: "竞品正在放量",
+    source_title: "竞品跟踪简报",
+    source_url: "https://example.com/competitor-note",
+    source_date: "2026-08-02",
+    accessed_at: "2026-08-02T00:00:00.000Z",
+    classification: "inference",
+    confidence: "medium",
+  });
+  // 冻结后确认 delta 只能引用冻结前已关联的证据（backend 校验 link 必须存在）。
+  const evDeltaOppose = await jsonRequest(base, "/api/evidence", "POST", {
+    subject_type: "stock",
+    subject_id: "600519",
+    evidence_type: "news",
+    claim: "7 月渠道复核显示动销略低于预期",
+    source_title: "渠道复核纪要",
+    source_url: "https://example.com/channel-recheck",
+    source_date: "2026-08-25",
+    accessed_at: "2026-08-25T00:00:00.000Z",
+    classification: "fact",
+    confidence: "medium",
+  });
   const created = await jsonRequest(base, "/api/thesis", "POST", {
     subject_type: "stock",
     subject_id: "600519",
@@ -175,6 +213,22 @@ async function createFrozenCurrentThesis(base, env) {
     change_summary: "DC1 browser fixture",
   }, 200);
   const thesisId = created.thesis.id;
+  const currentRevision = async () => (await jsonRequest(base, `/api/thesis/${thesisId}`)).thesis.current_revision;
+  await jsonRequest(base, `/api/thesis/${thesisId}/evidence`, "POST", {
+    evidence_id: evSupport.id,
+    stance: "support",
+    expected_revision: await currentRevision(),
+  });
+  await jsonRequest(base, `/api/thesis/${thesisId}/evidence`, "POST", {
+    evidence_id: evOppose.id,
+    stance: "oppose",
+    expected_revision: await currentRevision(),
+  });
+  await jsonRequest(base, `/api/thesis/${thesisId}/evidence`, "POST", {
+    evidence_id: evDeltaOppose.id,
+    stance: "oppose",
+    expected_revision: await currentRevision(),
+  });
   const begun = await jsonRequest(base, `/api/thesis/${thesisId}/begin-formalization`, "POST", {}, 200);
   const updated = await jsonRequest(base, `/api/thesis/${thesisId}`, "PUT", {
     title: begun.thesis.title,
@@ -206,12 +260,23 @@ async function createFrozenCurrentThesis(base, env) {
       to_status: to,
     }, 200);
   }
+  // 一条不终止研究的已确认变更（WEAKENED）；disproven 场景改用终态 DISPROVEN，
+  // 只用于研究摘要截图与终态展示验证，不进入 Commit 流程。
+  const deltaCreated = await jsonRequest(base, `/api/thesis/${thesisId}/deltas`, "POST", {
+    delta_state: disprovenScenario ? "DISPROVEN" : "WEAKENED",
+    reason: disprovenScenario
+      ? "渠道复核数据证伪核心假设"
+      : "渠道复核显示动销略低于预期，核心假设被削弱但未推翻",
+    evidence_ids: [evDeltaOppose.id],
+  });
+  assert.equal(deltaCreated.delta_state, disprovenScenario ? "DISPROVEN" : "WEAKENED");
   seedActiveCampaign(backendDir, env, campaign.campaign_id);
   return campaign;
 }
 
 async function run() {
   assert.ok(existsSync(frontendDist), "frontend/dist must be built before Chromium E2E");
+  const disprovenScenario = process.env.BRIEF_SCENARIO === "disproven";
   const tempDataDir = mkdtempSync(join(tmpdir(), "vr-dc1-decision-commit-e2e-"));
   let backendProc;
   let backendLog = "";
@@ -251,7 +316,7 @@ async function run() {
       opening_cash: 100000,
       positions: [{ code: "600519", name: "贵州茅台", shares: 100, cost_basis: 150000 }],
     }, 200);
-    const campaign = await createFrozenCurrentThesis(backend, env);
+    const campaign = await createFrozenCurrentThesis(backend, env, { disprovenScenario });
     staticServer = await startStaticServer(frontendDist, frontendPort);
     const launchOptions = { headless: true };
     const executablePath = chromiumPath();
@@ -276,6 +341,14 @@ async function run() {
     page.on("requestfailed", (request) => failedRequests.push({ url: request.url(), error: request.failure()?.errorText }));
     page.on("response", (response) => {
       if (response.status() === 404) notFoundResponses.push(new URL(response.url()).pathname);
+    });
+    // 研究摘要零业务写入监控：打开 / 展开摘要不得产生任何非只读 API 请求。
+    const apiWriteRequests = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname.startsWith("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) {
+        apiWriteRequests.push(`${request.method()} ${url.pathname}`);
+      }
     });
     // 与 decision-challenge.browser.mjs 相同方向的 node 侧代理：
     // route.continue({url}) 在当前 Chromium/Playwright 组合下会挂起；
@@ -365,14 +438,65 @@ async function run() {
       assert.match(viewText, /未确认草稿|不可用/);
     } else {
       assert.match(viewText, /claim one/);
+      assert.match(viewText, /最初冻结/, "original frozen view must be explicitly labeled as historical");
       assert.match(await page.getByTestId("research-brief-invalidation").innerText(), /不是这些条件已经触发/);
     }
-    assert.match(await page.getByTestId("research-brief-evidence").innerText(), /不等于没有反对证据|不展示未确认草稿/);
-    assert.match(await page.getByTestId("research-brief-changes").innerText(), /不能声称没有变化|未发现事实字段变化/);
+    const evidenceText = await page.getByTestId("research-brief-evidence").innerText();
+    const changesText = await page.getByTestId("research-brief-changes").innerText();
+    if (process.env.DF2_FORCE_CONTEXT_FALLBACK === "1") {
+      assert.match(evidenceText, /不展示未确认草稿/);
+      assert.match(changesText, /不能声称没有变化|未发现证据字段变化/);
+    } else {
+      // 有来源的支持 / 反对依据必须真实展示。
+      assert.match(evidenceText, /终端动销保持稳定/);
+      assert.match(evidenceText, /渠道调研周报/);
+      assert.match(evidenceText, /竞品正在放量/);
+      assert.equal(
+        await evidenceText.includes("没有反对记录"),
+        false,
+        "fixture links opposing evidence, so the no-opposing disclaimer must not show",
+      );
+      assert.match(changesText, /不能声称没有变化|未发现证据字段变化/);
+      assert.match(changesText, /基线 Candidate Research Formal Original/);
+      assert.match(changesText, /读取时间 \d{4}-\d{2}-\d{2}T/);
+    }
     await page.getByTestId("research-brief-freshness").waitFor();
+    if (!process.env.DF2_FORCE_CONTEXT_FALLBACK) {
+      // 当前确认状态与已确认变更来自 backend 投影，不只是最初冻结原文。
+      const effectiveStateText = (await page.locator("[data-context-effective-state]").innerText()).trim();
+      const updateItems = page.getByTestId("research-brief-update-item");
+      await updateItems.first().waitFor();
+      const updateText = await updateItems.first().innerText();
+      if (disprovenScenario) {
+        assert.equal(effectiveStateText, "已证伪");
+        await page.getByTestId("research-brief-terminal-state").waitFor();
+        assert.match(await page.getByTestId("research-brief-terminal-state").innerText(), /已证伪/);
+        assert.match(updateText, /已证伪/);
+      } else {
+        assert.equal(effectiveStateText, "削弱");
+        assert.equal(await page.getByTestId("research-brief-terminal-state").count(), 0, "WEAKENED is not terminal");
+        assert.match(updateText, /削弱/);
+      }
+      assert.match(updateText, /确认时间：/);
+      assert.match(updateText, /渠道复核/);
+      // 展开已确认依据：反对依据带来源，且展开动作不产生任何业务写请求。
+      await updateItems.first().locator("summary").click();
+      await page.getByTestId("research-brief-evidence-oppose").filter({ hasText: "7 月渠道复核显示动销略低于预期" }).first().waitFor();
+      assert.equal(apiWriteRequests.length, 0, `opening/expanding the brief must make no business writes, saw ${JSON.stringify(apiWriteRequests)}`);
+    }
     const shotDir = join(root, ".pi", "generated-images");
     mkdirSync(shotDir, { recursive: true });
-    await brief.screenshot({ path: join(shotDir, process.env.DF2_FORCE_CONTEXT_FALLBACK === "1" ? "research-brief-fallback.png" : "research-brief-after.png") });
+    const shotName = process.env.DF2_FORCE_CONTEXT_FALLBACK === "1"
+      ? "research-brief-fallback.png"
+      : disprovenScenario
+        ? "research-brief-disproven-after.png"
+        : "research-brief-after.png";
+    await brief.screenshot({ path: join(shotDir, shotName) });
+    if (disprovenScenario) {
+      // 已证伪案例不进入 Preview / Commit：终态研究不要求成功提交正式决定。
+      console.log("[E2E] research-brief disproven scenario captured");
+      return;
+    }
     // P1-DF3：结构化 review boundary——用户显式选择本地时间，页面展示
     // 解析时区与最终 canonical ISO；断言 canonical 确实等于所选时刻。
     await page.getByLabel("Review by").fill("2026-08-30T10:00");
