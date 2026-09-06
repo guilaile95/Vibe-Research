@@ -380,3 +380,101 @@ test("研究连续性与当前 Campaign 不一致时不混入其内容", () => {
   assert.ok(brief.freshness.gaps.includes("研究连续性与当前 Campaign 不一致"));
   assert.match(brief.freshness.calendarText, /未读取/);
 });
+
+test("来源冲突保留双方立场与来源时间，立场交换产生可辨识差异", () => {
+  const conflict = (stanceA: string, stanceB: string) =>
+    buildResearchBrief(briefInput({
+      currentThesis: readyThesis([]),
+      continuity: continuity("NORMAL", [
+        {
+          change_type: "SOURCE_CONFLICT",
+          record_key: "k-conflict",
+          records: [
+            {
+              record_key: "src-a",
+              claim_identity: "竞品正在放量",
+              source: "https://example.com/a",
+              field_states: {},
+              values: {
+                claim: "竞品正在放量", classification: "fact", confidence: "high",
+                stance: stanceA, source_title: "来源A", source_url: "https://example.com/a",
+                source_date: "2026-08-01", accessed_at: "2026-08-02T00:00:00.000Z",
+              },
+            },
+            {
+              record_key: "src-b",
+              claim_identity: "竞品正在放量",
+              source: "https://example.com/b",
+              field_states: {},
+              values: {
+                claim: "竞品正在放量", classification: "inference", confidence: "medium",
+                stance: stanceB, source_title: "来源B", source_url: "https://example.com/b",
+                source_date: "2026-08-03", accessed_at: "2026-08-04T00:00:00.000Z",
+              },
+            },
+          ],
+        },
+      ]),
+    }));
+  const ab = conflict("support", "oppose");
+  const ba = conflict("oppose", "support");
+  const records = ab.changes.items[0].conflictRecords;
+  assert.ok(records, "SOURCE_CONFLICT item must carry structured conflict records");
+  assert.equal(records.length, 2);
+  assert.equal(records[0].stanceLabel, "支持");
+  assert.equal(records[0].sourceTitle, "来源A");
+  assert.equal(records[0].sourceUrl, "https://example.com/a");
+  assert.equal(records[0].sourceDate, "2026-08-01");
+  assert.equal(records[0].recordedAt, "2026-08-02T00:00:00.000Z");
+  assert.equal(records[0].confidence, "high");
+  assert.equal(records[1].stanceLabel, "反对");
+  assert.equal(records[1].classificationLabel, "推断");
+  // 立场交换后输出必须可辨识，不允许只有相同来源名的两份输出。
+  assert.notDeepEqual(ab.changes.items[0].conflictRecords, ba.changes.items[0].conflictRecords);
+  assert.notEqual(ab.changes.items[0].detail, ba.changes.items[0].detail);
+  assert.match(ab.changes.items[0].detail ?? "", /来源A：立场 支持 \/ 来源B：立场 反对/);
+  // 不推断赢家：摘要不出现任何"正确/更可信"判定。
+  assert.equal((ab.changes.items[0].detail ?? "").includes("正确"), false);
+});
+
+test("ADDED 与 CHANGED 保留来源时间，不把读取时间当发布日期", () => {
+  const brief = buildResearchBrief(briefInput({
+    currentThesis: readyThesis([]),
+    continuity: continuity("NORMAL", [
+      {
+        change_type: "ADDED",
+        record_key: "k-added",
+        after: {
+          record_key: "k-added",
+          claim_identity: "动销走弱",
+          source: "渠道调研",
+          field_states: {},
+          values: {
+            claim: "动销走弱", classification: "inference", confidence: "medium",
+            evidence_type: "field_report", source_date: "2026-08-20",
+            accessed_at: "2026-08-22T00:00:00.000Z",
+          },
+        },
+      },
+      {
+        change_type: "CHANGED",
+        record_key: "k-changed",
+        changed_fields: ["confidence"],
+        before: {
+          record_key: "k-changed", claim_identity: "高端需求稳定", source: "券商纪要",
+          field_states: {}, values: { claim: "高端需求稳定", confidence: "high", source_date: "2026-08-10", accessed_at: "2026-08-11T00:00:00.000Z" },
+        },
+        after: {
+          record_key: "k-changed", claim_identity: "高端需求稳定", source: "券商纪要",
+          field_states: {}, values: { claim: "高端需求稳定", confidence: "low", source_date: "2026-08-20", accessed_at: "2026-08-22T00:00:00.000Z" },
+        },
+      },
+    ]),
+  }));
+  const added = brief.changes.items[0];
+  assert.match(added.detail ?? "", /来源日期：2026-08-20/);
+  assert.match(added.detail ?? "", /记录时间：2026-08-22T00:00:00.000Z/);
+  const changed = brief.changes.items[1];
+  assert.match(changed.detail ?? "", /置信度：high → low/);
+  assert.match(changed.detail ?? "", /来源日期：2026-08-20/);
+});

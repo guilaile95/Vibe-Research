@@ -174,6 +174,31 @@ export function ResearchBrief({
                 {item.classificationLabel && <span className="ml-1 text-muted-foreground">分类：{item.classificationLabel}</span>}
                 <p className="mt-0.5">{item.claim}</p>
                 <p className="mt-0.5 text-muted-foreground">来源：{item.source}{item.detail ? ` · ${item.detail}` : ""}</p>
+                {item.conflictRecords && item.conflictRecords.length > 0 && (
+                  <details className="mt-1" data-testid="research-brief-conflict-records">
+                    <summary className="cursor-pointer text-muted-foreground">冲突双方原文（{item.conflictRecords.length} 条）</summary>
+                    <ul className="mt-1 space-y-1">
+                      {item.conflictRecords.map((record) => (
+                        <li key={`${record.source}:${record.claim}`} className="rounded bg-background/60 px-2 py-1" data-conflict-stance={record.stance ?? "unknown"}>
+                          <p>
+                            {record.stanceLabel && <span className="font-medium">[{record.stanceLabel}]</span>}
+                            {record.claim}
+                          </p>
+                          <p className="mt-0.5 text-muted-foreground">
+                            {record.classificationLabel || "分类未知"}
+                            {record.confidence ? ` · 置信度 ${record.confidence}` : " · 置信度未知"}
+                            {" · 来源："}
+                            {record.sourceUrl
+                              ? <a href={record.sourceUrl} className="underline" target="_blank" rel="noreferrer">{record.sourceTitle || record.sourceUrl}</a>
+                              : record.sourceTitle || record.source}
+                            {record.sourceDate ? ` · 来源日期 ${record.sourceDate}` : " · 来源日期未知"}
+                            {record.recordedAt ? ` · 记录时间 ${record.recordedAt}` : ""}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
               </li>
             ))}
           </ul>
