@@ -77,7 +77,7 @@ export function ResearchBrief({
         </div>
         {model.horizonSource === "CURRENT_THESIS" ? (
           <p className="mt-2 text-xs leading-5 text-success" data-horizon-source="CURRENT_THESIS">
-            预期周期来自已确认 Current Thesis，不是本页表单里的临时填写。
+            来源：Current Thesis。预期周期已从已确认冻结快照读取，不是本页表单里的临时填写。
           </p>
         ) : model.horizonSource === "MANUAL_FALLBACK" ? (
           <p className="mt-2 text-xs leading-5 text-warning" role="status" data-horizon-source="MANUAL_FALLBACK">

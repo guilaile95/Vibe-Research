@@ -579,6 +579,7 @@ export function DecisionProposalReview() {
         )}
       />
 
+      {/* 来源：Current Thesis；摘要只读展示 backend hydration，不从 URL query 推导 horizon/review_by */}
       <ResearchBrief
         model={researchBrief}
         bindingThesisId={binding?.thesis_id ?? ""}
