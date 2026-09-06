@@ -39,7 +39,12 @@ def test_github_trending_parses_repos_filters_sponsored_and_ranks():
     assert facts["language"] == "Python"
     assert "ads/not-a-repo" not in [it["title"] for it in items]
 
-    bad, kind, detail = ext.parse_github_trending_html("<html><body>nope</body></html>", GH_SOURCE, [])
+    filtered, kind, detail = ext.parse_github_trending_html(html, GH_SOURCE, redline=["whisper"])
+    assert kind is None and detail is None
+    assert [it["title"] for it in filtered] == ["vercel/next.js"]
+    assert filtered[0]["rank"] == 2
+
+    bad, kind, detail = ext.parse_github_trending_html("<html><body>Trending https://github.com</body></html>", GH_SOURCE, [])
     assert bad == []
     assert kind == store.ERROR_KIND_PARSE
     assert kind != store.SOURCE_RUN_EMPTY

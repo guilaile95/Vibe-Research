@@ -98,12 +98,11 @@ def parse_github_trending_html(
         flags=re.IGNORECASE | re.DOTALL,
     )
     if not articles:
-        if "Trending" in text and "github.com" in text.lower():
-            return [], None, None
         return [], store.ERROR_KIND_PARSE, "GitHubTrendingUnparseable"
 
     source_id = str(source.get("source_id") or "tech-github-trending")
     items: list[dict[str, Any]] = []
+    upstream_rank = 0
     for article in articles:
         if _SPONSOR_LABEL.search(article):
             continue
@@ -116,6 +115,7 @@ def parse_github_trending_html(
                 break
         if not repo:
             continue
+        upstream_rank += 1
         title = repo
         desc_match = re.search(
             r"<p\b[^>]*>(.*?)</p>", article, flags=re.IGNORECASE | re.DOTALL
@@ -167,7 +167,7 @@ def parse_github_trending_html(
                 "hint": source.get("hint") or "tech",
                 "published_at": None,
                 "published_ts": 0,
-                "rank": len(items) + 1,
+                "rank": upstream_rank,
                 "source_facts": {
                     "stars_total": stars_total,
                     "forks_total": forks_total,
@@ -176,6 +176,8 @@ def parse_github_trending_html(
                 },
             }
         )
+    if upstream_rank == 0:
+        return [], store.ERROR_KIND_PARSE, "GitHubTrendingUnparseable"
     return items, None, None
 
 
