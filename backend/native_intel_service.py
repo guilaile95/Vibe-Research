@@ -397,6 +397,18 @@ def run_fetch(
                         source, timeout=FETCH_TIMEOUT, redline=redline
                     )
                 return source, items, kind, detail, int((time.monotonic() - started) * 1000)
+            if ext_sources.is_hacker_news(source):
+                if bool(cfg.get("rss_proxy_enabled")):
+                    if not rss_proxy:
+                        return source, [], store.ERROR_KIND_NETWORK, "RssProxyUnresolved", int((time.monotonic() - started) * 1000)
+                    items, kind, detail = ext_sources.fetch_hacker_news(
+                        source, timeout=FETCH_TIMEOUT, redline=redline, proxy_url=rss_proxy, per=reg["per_source"]
+                    )
+                else:
+                    items, kind, detail = ext_sources.fetch_hacker_news(
+                        source, timeout=FETCH_TIMEOUT, redline=redline, per=reg["per_source"]
+                    )
+                return source, items, kind, detail, int((time.monotonic() - started) * 1000)
             if stype == "hotlist":
                 if bool(cfg.get("crawler_proxy_enabled")):
                     if not crawler_proxy:

@@ -32,10 +32,18 @@ def _seed() -> None:
                 "source_type": "rss",
                 "has_real_rank": False,
             },
+            {
+                "source_id": "tech-hacker-news",
+                "name": "Hacker News",
+                "hint": "tech",
+                "url": "https://hnrss.org/frontpage",
+                "source_type": "rss",
+                "has_real_rank": False,
+            },
         ],
         DB_PATH,
     )
-    store.start_run("gh-hf-e2e", "fixture", 2, DB_PATH)
+    store.start_run("gh-hf-e2e", "fixture", 3, DB_PATH)
     store.upsert_observation(
         "gh-hf-e2e",
         "tech-github-trending",
@@ -80,6 +88,32 @@ def _seed() -> None:
         has_real_rank=False,
         db_path=DB_PATH,
     )
+    store.upsert_observation(
+        "gh-hf-e2e",
+        "tech-hacker-news",
+        {
+            "item_key": "tech-hacker-news:hn:123456",
+            "canonical_url": "https://example.com/article",
+            "url": "https://example.com/article",
+            "title": "Show HN: Example",
+            "title_key": "show hn example",
+            "summary": "An example story",
+            "hint": "tech",
+            "published_at": NOW,
+            "published_ts": int(datetime.now(timezone.utc).timestamp()),
+            "rank": None,
+            "source_facts": {
+                "hn_story_id": 123456,
+                "score": 321,
+                "num_comments": 87,
+                "author": "pg",
+                "discussion_url": "https://news.ycombinator.com/item?id=123456",
+            },
+        },
+        observed_at=NOW,
+        has_real_rank=False,
+        db_path=DB_PATH,
+    )
     store.record_source_run(
         "gh-hf-e2e", "tech-github-trending", status=store.SOURCE_RUN_OK, item_count=1, db_path=DB_PATH
     )
@@ -90,13 +124,16 @@ def _seed() -> None:
         item_count=1,
         db_path=DB_PATH,
     )
+    store.record_source_run(
+        "gh-hf-e2e", "tech-hacker-news", status=store.SOURCE_RUN_OK, item_count=1, db_path=DB_PATH
+    )
     store.finish_run(
         "gh-hf-e2e",
         status=store.RUN_STATUS_OK,
-        source_ok=2,
+        source_ok=3,
         source_failed=0,
-        item_seen=2,
-        item_new=2,
+        item_seen=3,
+        item_new=3,
         db_path=DB_PATH,
     )
 

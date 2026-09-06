@@ -667,7 +667,13 @@ export function HotlistPanel() {
                         {item.source_facts.language ? ` · ${item.source_facts.language}` : ""}
                       </span>
                     ) : null}
-                    {item.source_facts?.upvotes != null || item.source_facts?.num_comments != null ? (
+                    {item.source_facts?.hn_story_id != null || item.source_facts?.score != null ? (
+                      <span data-testid="intel-source-facts-hn">
+                        {item.source_facts.score != null ? `▲${item.source_facts.score}` : ""}
+                        {item.source_facts.score != null && item.source_facts.num_comments != null ? " · " : ""}
+                        {item.source_facts.num_comments != null ? `${item.source_facts.num_comments} comments` : ""}
+                      </span>
+                    ) : item.source_facts?.upvotes != null || item.source_facts?.num_comments != null ? (
                       <span data-testid="intel-source-facts-hf">
                         {item.source_facts.upvotes != null ? `▲${item.source_facts.upvotes}` : ""}
                         {item.source_facts.upvotes != null && item.source_facts.num_comments != null ? " · " : ""}
