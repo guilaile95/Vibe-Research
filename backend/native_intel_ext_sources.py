@@ -53,7 +53,8 @@ def is_hacker_news(source: dict[str, Any]) -> bool:
 def _classify_error(exc: BaseException) -> tuple[str, str]:
     name = type(exc).__name__
     if isinstance(exc, TimeoutError) or (
-        isinstance(exc, (urllib.error.URLError, OSError)) and "timed out" in str(exc).lower()
+        isinstance(exc, (urllib.error.URLError, OSError))
+        and "timed out" in str(exc).lower()
     ):
         return store.ERROR_KIND_TIMEOUT, name
     if isinstance(exc, urllib.error.HTTPError):
@@ -68,7 +69,9 @@ def _classify_error(exc: BaseException) -> tuple[str, str]:
     return store.ERROR_KIND_UNKNOWN, name
 
 
-def _http_get(url: str, *, timeout: int, accept: str, proxy_url: str | None = None) -> bytes:
+def _http_get(
+    url: str, *, timeout: int, accept: str, proxy_url: str | None = None
+) -> bytes:
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError("unsupported url scheme")
@@ -122,7 +125,13 @@ def parse_github_trending_html(
         for match in _REPO_HREF.finditer(article):
             href = match.group(1)
             parts = href.strip("/").split("/")
-            if len(parts) == 2 and parts[0] not in {"topics", "settings", "orgs", "ads", "sponsors"}:
+            if len(parts) == 2 and parts[0] not in {
+                "topics",
+                "settings",
+                "orgs",
+                "ads",
+                "sponsors",
+            }:
                 repo = "/".join(parts)
                 break
         if not repo:
@@ -206,7 +215,10 @@ def fetch_github_trending(
     if html is None:
         try:
             raw = _http_get(
-                url, timeout=timeout, accept="text/html,application/xhtml+xml", proxy_url=proxy_url
+                url,
+                timeout=timeout,
+                accept="text/html,application/xhtml+xml",
+                proxy_url=proxy_url,
             )
         except Exception as exc:  # noqa: BLE001 - source failure is isolated
             kind, detail = _classify_error(exc)
@@ -260,7 +272,9 @@ def parse_hf_daily_papers(
                 from datetime import datetime
 
                 published_ts = int(
-                    datetime.fromisoformat(published_at.replace("Z", "+00:00")).timestamp()
+                    datetime.fromisoformat(
+                        published_at.replace("Z", "+00:00")
+                    ).timestamp()
                 )
             except (TypeError, ValueError):
                 published_ts = 0
@@ -329,7 +343,9 @@ def fetch_hf_daily_papers(
     url = str(source.get("url") or HF_DAILY_PAPERS_URL)
     if payload is None:
         try:
-            raw = _http_get(url, timeout=timeout, accept="application/json", proxy_url=proxy_url)
+            raw = _http_get(
+                url, timeout=timeout, accept="application/json", proxy_url=proxy_url
+            )
             payload = json.loads(raw.decode("utf-8", errors="replace"))
         except Exception as exc:  # noqa: BLE001 - source failure is isolated
             kind, detail = _classify_error(exc)
@@ -395,7 +411,9 @@ def parse_hn_rss(
         if any(keyword in blob for keyword in redline):
             continue
         story_id = _hn_story_id(comments, guid, url, summary)
-        discussion_url = _hn_discussion_url(story_id) if story_id else (comments or None)
+        discussion_url = (
+            _hn_discussion_url(story_id) if story_id else (comments or None)
+        )
         published_at: str | None = None
         published_ts = 0
         parsed = newsradar._parse_dt(raw_time)
@@ -437,9 +455,13 @@ def parse_hn_rss(
 
 def _hydrate_hn_item(item: dict[str, Any], payload: dict[str, Any]) -> None:
     facts = dict(item.get("source_facts") or {})
-    story_id = payload.get("id") if payload.get("id") is not None else facts.get("hn_story_id")
+    story_id = (
+        payload.get("id") if payload.get("id") is not None else facts.get("hn_story_id")
+    )
     if story_id is not None:
-        facts["hn_story_id"] = int(story_id) if not isinstance(story_id, int) else story_id
+        facts["hn_story_id"] = (
+            int(story_id) if not isinstance(story_id, int) else story_id
+        )
         if not isinstance(facts["hn_story_id"], int):
             parsed_id = _parse_int(str(story_id))
             if parsed_id is not None:
@@ -450,7 +472,9 @@ def _hydrate_hn_item(item: dict[str, Any], payload: dict[str, Any]) -> None:
     descendants = payload.get("descendants")
     if descendants is not None:
         facts["num_comments"] = (
-            descendants if isinstance(descendants, int) else _parse_int(str(descendants))
+            descendants
+            if isinstance(descendants, int)
+            else _parse_int(str(descendants))
         )
     by = payload.get("by")
     if by:
@@ -463,10 +487,14 @@ def _hydrate_hn_item(item: dict[str, Any], payload: dict[str, Any]) -> None:
     firebase_url = payload.get("url")
     if firebase_url:
         item["url"] = str(firebase_url)
-        item["canonical_url"] = newsradar._normalize_url(str(firebase_url)) or str(firebase_url)
+        item["canonical_url"] = newsradar._normalize_url(str(firebase_url)) or str(
+            firebase_url
+        )
     elif isinstance(sid, int):
         discussion = facts["discussion_url"]
-        if not item.get("url") or "news.ycombinator.com/item" in str(item.get("url") or ""):
+        if not item.get("url") or "news.ycombinator.com/item" in str(
+            item.get("url") or ""
+        ):
             item["url"] = discussion
         if not item.get("canonical_url") or "news.ycombinator.com/item" in str(
             item.get("canonical_url") or ""
@@ -527,8 +555,15 @@ def fetch_hacker_news(
             continue
         try:
             payload = _load(story_id)
+            if not isinstance(payload, dict):
+                continue
+            candidate = {
+                **item,
+                "source_facts": dict(facts) if isinstance(facts, dict) else facts,
+            }
+            _hydrate_hn_item(candidate, payload)
+            item.clear()
+            item.update(candidate)
         except Exception:  # noqa: BLE001 - enrichment must not fail the source
             continue
-        if isinstance(payload, dict):
-            _hydrate_hn_item(item, payload)
     return items, None, None

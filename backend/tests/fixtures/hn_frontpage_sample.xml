@@ -18,5 +18,13 @@
       <guid isPermaLink="false">https://news.ycombinator.com/item?id=999001</guid>
       <description>Keep me even if Firebase fails</description>
     </item>
+    <item>
+      <title>Bad HN time stays on RSS</title>
+      <link>https://rss.example.com/original</link>
+      <comments>https://news.ycombinator.com/item?id=888002</comments>
+      <guid isPermaLink="false">https://news.ycombinator.com/item?id=888002</guid>
+      <pubDate>Thu, 01 Jan 2026 00:00:00 +0000</pubDate>
+      <description>RSS time must survive apply failure</description>
+    </item>
   </channel>
 </rss>
