@@ -9,6 +9,7 @@
 > 杜绝单方面裁减、隐匿或提前宣称 PARITY；后续波次均实事求是标记为 `PLANNED_WAVE_X`。
 >
 > 规则：
+>
 > - 状态枚举：`PARITY`（已在代码中完整实现并获自动化测试验证） / `PLANNED_WAVE_N`（规划波次中实现）；
 > - Vibe 实现为独立实现（Vibe-native），**不复制 TrendRadar GPL 代码**，不引入其
 >   runtime / MCP / Docker / package 依赖；
@@ -151,21 +152,22 @@ Wave 4 行为证据：[独立输入输出契约](NATIVE_INTEL_WAVE4_CONTRACT.md)
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 多模型智能摘要（AI Summarization） | PLANNED_WAVE_5 | 走 Vibe 可插拔 AI 适配层（支持 DeepSeek、Doubao、OpenAI 等） |
-| AI 实体与概念提取（AI Entity Extraction） | PLANNED_WAVE_5 | 自动抽取非结构化资讯中的实体、企业与概念词 |
-| 多语言热榜翻译（AI Translation） | PLANNED_WAVE_5 | 国际资讯与跨语言热榜双向翻译 |
-| 情感倾向分类（Sentiment Analysis） | PLANNED_WAVE_5 | 资讯情绪倾向分类（仅客观事实标注，保持 observation-only 边界） |
-| 实体检索与关联分析（Entity search） | **PARITY** | 既有 `intel_entity_terms` + StockData/Watchlist 结构化联动已覆盖 |
-| Agent MCP 综合查询接口（MCP Query & Search） | PLANNED_WAVE_5 | 通过 Vibe MCP 向外部 Agent 暴露热榜位次、轨迹与实体分析工具 |
-| Agent 按需触发抓取（MCP Crawl Trigger） | PLANNED_WAVE_5 | 将现有 `POST /api/native-intel/refresh` 包装为 Agent MCP 工具暴露 |
-| Agent MCP 系统状态工具（MCP Status Tool） | PLANNED_WAVE_5 | 向外部 Agent 暴露 Native Intel 运行状态与健康度查询 MCP 工具（区别于已有的 HTTP API） |
+| 多模型智能摘要（AI Summarization） | **PARITY** | 支持现有 Provider（Codex Subscription、API 兼容层），6 模块结构化深度研报生成与双向缓存 |
+| AI 实体与概念提取（AI Entity Extraction） | **PARITY** | 提取公司、行业、概念、人物、机构等结构化实体，确定性精准匹配 A 股证券代码且绝不污染确定性表 |
+| 多语言热榜翻译（AI Translation） | **PARITY** | 支持单条即时翻译与保持精确数组下标对应的批量翻译，空输入原样返回，不篡改原事实 |
+| 情感倾向分类（Sentiment Analysis） | **PARITY** | 5 档中立客观情感分类（positive/negative/neutral/controversial/uncertain），带信心度与争议标注，非交易信号 |
+| 实体检索与关联分析（Entity search） | **PARITY** | 既有 `intel_entity_terms` + StockData/Watchlist 结构化联动已覆盖，同时具备 Agent 实体检索能力 |
+| Agent 综合查询接口（Agent Tools Query & Search） | **PARITY** | 官方 MCP SDK Streamable HTTP（`initialize` / `tools/list` / `tools/call`）托管在现有 FastAPI 进程；`query_intel` / `search_intel` 对隔离 SQLite 的真实 client proof 已通过。内部 page-aware Codex 仍拒绝 `mcp_tool_call` |
+| Agent Analytics（similar / viral / compare_periods） | **NOT_YET_PARITY** | similar 只走 Wave 4 `reporting.similar_items()`（标题先确定性解析 `item_id`）；viral 直接投影 `analyze_topic()["viral"]`。Pinned `compare_periods(period1, period2, compare_type)` 无法在当前 Wave 4 `analyze_topic(now, days)` 上完整表达，仅提供相邻等长窗口 `previous_equal_window`，不伪称 PARITY |
+| Agent 按需触发抓取（Agent Refresh Trigger） | **PARITY** | `trigger_intel_refresh(sources=...)` 校验已存在且 enabled 的 `source_id`，调用 `run_fetch(source_ids=...)`；未知/停用显式 BAD_ARGUMENT；未传 sources 抓全部 enabled；PARTIAL 保持诚实 |
+| Agent 系统状态工具（Agent Status Tool） | **PARITY** | `get_intel_status` 读取真实 Codex runtime 就绪/认证状态与本机 scheduled credential 是否可用，绝不泄露 API Key / Token |
+| Scheduled AI（Codex 或 API Compatible） | **PARITY** (`SUPPORTED_WITH_LOCAL_SERVER_CREDENTIAL`) | 全站 Settings 保存时同步本机 `VR_DATA_DIR/private/` 凭据镜像；定时 AI 读取该镜像，不静默换 Codex；缺失记 `UNAVAILABLE_CREDENTIAL`；不进 Git/SQLite/备份 |
 
 ---
 
 ## Wave 6：多渠道推送通知与格式存储
 
 | 项目 | 状态 | 说明 |
-| --- | --- | --- |
 | 飞书机器人通知（Feishu Webhook） | PLANNED_WAVE_6 | 支持富文本消息卡片与告警推送 |
 | 钉钉机器人通知（DingTalk Webhook） | PLANNED_WAVE_6 | 支持 Markdown 群机器人推送 |
 | 企业微信通知（WeCom Webhook） | PLANNED_WAVE_6 | 支持图文卡片与即时推送 |

@@ -46,6 +46,10 @@ import type {
   NativeIntelSourceRecord,
   NativeIntelConfig,
   NativeIntelStandaloneResponse,
+  NativeIntelAiAnalysisResponse,
+  NativeIntelAiTranslateResponse,
+  NativeIntelAiEntityResponse,
+  NativeIntelAiSentimentResponse,
   CreateUserSourceInput,
   UpdateSourceInput,
   FilterProfile,
@@ -470,6 +474,25 @@ export async function dailyReviewAnalyzeStream(
 
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
+  putAiCredential: (payload: {
+    provider: string;
+    model: string;
+    baseURL?: string;
+    apiKey?: string;
+  }) => request("/ai/credential", "PUT", payload, { unwrapData: false }),
+  getAiCredentialStatus: () =>
+    request<{
+      configured: boolean;
+      provider: string | null;
+      model: string | null;
+      baseURL: string;
+      updated_at: string | null;
+      scheduled_available: boolean;
+      scheduled_credential_available: boolean;
+      error: string | null;
+    }>("/ai/credential-status", "GET", undefined, { unwrapData: false }),
+  deleteAiCredential: () =>
+    request("/ai/credential", "DELETE", undefined, { unwrapData: false }),
   indices: () => get<IndexQuote[]>("/indices"),
   /**
    * 结构化每日复盘聚合包（一次请求覆盖指数/广度/情绪/成交/板块）。
@@ -716,6 +739,14 @@ export const api = {
       "/native-intel/standalone",
       { unwrapData: false, ...(signal ? { signal } : {}) },
     ),
+  nativeIntelAiAnalysis: (payload: { mode?: string; scope?: string; max_news?: number; include_rss?: boolean; include_standalone?: boolean; llm?: { provider?: string; baseURL?: string; apiKey?: string; model?: string } | null } = {}, signal?: AbortSignal) =>
+    request<NativeIntelAiAnalysisResponse>("/native-intel/ai/analysis", "POST", payload, { signal, unwrapData: false }),
+  nativeIntelAiTranslate: (payload: { text: string; target_language?: string; llm?: { provider?: string; baseURL?: string; apiKey?: string; model?: string } | null }, signal?: AbortSignal) =>
+    request<NativeIntelAiTranslateResponse>("/native-intel/ai/translate", "POST", payload, { signal, unwrapData: false }),
+  nativeIntelAiEntities: (payload: { text?: string; title?: string; summary?: string; llm?: { provider?: string; baseURL?: string; apiKey?: string; model?: string } | null }, signal?: AbortSignal) =>
+    request<NativeIntelAiEntityResponse>("/native-intel/ai/entities", "POST", payload, { signal, unwrapData: false }),
+  nativeIntelAiSentiment: (payload: { text?: string; topic?: string; title?: string; summary?: string; llm?: { provider?: string; baseURL?: string; apiKey?: string; model?: string } | null }, signal?: AbortSignal) =>
+    request<NativeIntelAiSentimentResponse>("/native-intel/ai/sentiment", "POST", payload, { signal, unwrapData: false }),
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
   gpuRent: () => get<GpuRentData>("/signals/gpu-rent"),

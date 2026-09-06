@@ -357,3 +357,31 @@ test("any completed tool item fails closed and discards the session", async (t) 
   );
   assert.equal(starts, 2, "a violated thread must never be reused");
 });
+
+test("internal Codex runtime rejects mcp_tool_call with TOOL_SURFACE_VIOLATION", async (t) => {
+  const dataRoot = tempDir(t, "vr-agent-runtime-mcp");
+
+  const runtime = new AgentRuntime({
+    sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot },
+    codexFactory: () => ({
+      startThread() {
+        return {
+          async runStreamed() {
+            return {
+              events: (async function* () {
+                yield { type: "item.completed", item: { type: "mcp_tool_call" } };
+              })(),
+            };
+          },
+        };
+      },
+    }),
+  });
+  t.after(() => runtime.shutdown());
+  runtime.status = () => ({ installed: true, authenticated: true, available: true, status: "ready" });
+
+  await assert.rejects(
+    runtime.chat({ session: "page-mcp", message: "x", context: "y" }),
+    (error) => error instanceof RuntimeError && error.code === "TOOL_SURFACE_VIOLATION",
+  );
+});

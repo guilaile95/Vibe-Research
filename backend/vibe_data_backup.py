@@ -37,7 +37,7 @@ UNCERTAIN = "UNCERTAIN"
 
 _KNOWN_PORTS = (8900, 5899)
 _EXCLUDED_NAMES = frozenset(
-    {".git", ".venv", ".vibe-runtime", "node_modules", "runtime"}
+    {".git", ".venv", ".vibe-runtime", "node_modules", "runtime", "private"}
 )
 _ASSET_STATUSES = frozenset(
     {"PRESENT", "ABSENT_OPTIONAL", "EXTERNAL_OVERRIDE_INCLUDED"}

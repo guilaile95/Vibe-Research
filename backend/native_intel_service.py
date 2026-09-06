@@ -310,6 +310,7 @@ def run_fetch(
     trigger: str = "manual",
     path: str | None = None,
     *,
+    source_ids: list[str] | None = None,
     registry: dict[str, Any] | None = None,
     sources_override: list[dict[str, Any]] | None = None,
     fetcher: Callable[..., tuple[list[dict[str, Any]], str | None, str | None]] | None = None,
@@ -321,16 +322,39 @@ def run_fetch(
     自建来源即时生效。按类型分发：hotlist 源走 ``hotlist_fetcher``（默认真实
     热榜抓取），其余走 ``fetcher``（默认 RSS 抓取）；测试按类型注入，互不泄漏。
     ``sources_override`` 仅供测试固定抓取清单，生产路径不传。
+    ``source_ids`` 只允许已存在且 enabled 的 source_id；未知/停用抛 BAD_ARGUMENT。
     """
     target = path or db_path()
     reg = registry or load_registry()
     store.initialize_store(target)
     store.upsert_sources(reg["sources"], target)
 
-    sources = sources_override if sources_override is not None else store.list_sources(
-        target, enabled_only=True
-    )
-    cutoff = datetime.now(timezone.utc) - timedelta(days=reg["recent_days"])
+    if sources_override is not None:
+        sources = sources_override
+    elif source_ids is None:
+        sources = store.list_sources(target, enabled_only=True)
+    else:
+        valid_source_ids = (
+            isinstance(source_ids, list)
+            and bool(source_ids)
+            and all(isinstance(source_id, str) and source_id.strip() for source_id in source_ids)
+            and len(source_ids) == len(set(source_ids))
+        )
+        if not valid_source_ids:
+            raise ValueError(
+                "BAD_ARGUMENT: source_ids must be a non-empty list of unique source_id strings"
+            )
+        all_ids = {source["source_id"] for source in store.list_sources(target, enabled_only=False)}
+        enabled_by_id = {
+            source["source_id"]: source
+            for source in store.list_sources(target, enabled_only=True)
+        }
+        for source_id in source_ids:
+            if source_id not in all_ids:
+                raise ValueError(f"BAD_ARGUMENT: unknown source_id '{source_id}'")
+            if source_id not in enabled_by_id:
+                raise ValueError(f"BAD_ARGUMENT: source_id '{source_id}' is disabled")
+        sources = [enabled_by_id[source_id] for source_id in source_ids]
     redline = reg["redline"]
     do_fetch = fetcher or _fetch_source_items
     hotlist_do = hotlist_fetcher or hotlist.fetch_hotlist_items
@@ -2539,3 +2563,129 @@ def get_standalone_items(path: str | None = None) -> dict[str, Any]:
         "configured_sources": source_ids,
         "freshness_excluded_count": freshness_excluded_count,
     }
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 5: AI Analysis, Translation, Entities, Sentiment, Agent Tools
+# ---------------------------------------------------------------------------
+
+def analyze_ai_report(
+    mode: str = "CURRENT",
+    scope: str = "all",
+    profile_id: str = "default",
+    date: str | None = None,
+    cfg: dict[str, Any] | None = None,
+    model_runner: Callable | None = None,
+    max_news: int = 50,
+    language: str = "Chinese",
+    include_rss: bool = True,
+    include_standalone: bool = False,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """生成 AI 深度分析报告。使用只读 preview (commit=False)，绝不推进报告基线。"""
+    target = path or db_path()
+    import native_intel_reporting as reporting
+    import native_intel_ai as ai_engine
+
+    now_dt = None
+    if date:
+        try:
+            now_dt = datetime.fromisoformat(date)
+        except Exception:
+            pass
+
+    report = reporting.generate_report(
+        mode=mode.upper(),
+        scope=scope,
+        path=target,
+        profile_id=profile_id,
+        commit=False,
+        now=now_dt,
+    )
+    return ai_engine.analyze_report(
+        report_data=report,
+        scope=scope,
+        cfg=cfg,
+        model_runner=model_runner,
+        max_news=max_news,
+        language=language,
+        include_rss=include_rss,
+        include_standalone=include_standalone,
+        path=target,
+    )
+
+
+def translate_ai_text(
+    text: str,
+    target_language: str = "Chinese",
+    cfg: dict[str, Any] | None = None,
+    model_runner: Callable | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    target = path or db_path()
+    import native_intel_ai as ai_engine
+    return ai_engine.translate_text(
+        text=text,
+        target_language=target_language,
+        cfg=cfg,
+        model_runner=model_runner,
+        path=target,
+    )
+
+
+def translate_ai_batch(
+    texts: list[str],
+    target_language: str = "Chinese",
+    cfg: dict[str, Any] | None = None,
+    model_runner: Callable | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    target = path or db_path()
+    import native_intel_ai as ai_engine
+    return ai_engine.translate_batch(
+        texts=texts,
+        target_language=target_language,
+        cfg=cfg,
+        model_runner=model_runner,
+        path=target,
+    )
+
+
+def extract_ai_entities(
+    text: str,
+    cfg: dict[str, Any] | None = None,
+    model_runner: Callable | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    target = path or db_path()
+    import native_intel_ai as ai_engine
+    return ai_engine.extract_entities(
+        text=text,
+        cfg=cfg,
+        model_runner=model_runner,
+        path=target,
+    )
+
+
+def analyze_ai_sentiment(
+    text: str,
+    topic: str | None = None,
+    cfg: dict[str, Any] | None = None,
+    model_runner: Callable | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    target = path or db_path()
+    import native_intel_ai as ai_engine
+    return ai_engine.analyze_sentiment(
+        text=text,
+        topic=topic,
+        cfg=cfg,
+        model_runner=model_runner,
+        path=target,
+    )
+
+
+def get_agent_tools(path: str | None = None) -> Any:
+    target = path or db_path()
+    from native_intel_agent_tools import NativeIntelAgentTools
+    return NativeIntelAgentTools(db_path=target)

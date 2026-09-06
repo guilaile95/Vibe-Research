@@ -218,6 +218,22 @@ CREATE TABLE IF NOT EXISTS intel_item_filter_analysis (
     PRIMARY KEY (item_id, profile_id, profile_fingerprint)
 );
 
+CREATE TABLE IF NOT EXISTS intel_ai_artifacts (
+    artifact_id TEXT PRIMARY KEY,
+    artifact_kind TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    input_fingerprint TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    target_language TEXT,
+    status TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    error_kind TEXT,
+    error_message TEXT,
+    generated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS intel_report_cursors (
     report_key TEXT PRIMARY KEY,
     profile_id TEXT NOT NULL,
@@ -240,7 +256,9 @@ _INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_intel_classifications_lookup ON intel_item_classifications (profile_id, profile_fingerprint, relevance_score DESC)",
     "CREATE INDEX IF NOT EXISTS idx_intel_classifications_tag ON intel_item_classifications (profile_id, profile_fingerprint, primary_tag)",
     "CREATE INDEX IF NOT EXISTS idx_intel_classifications_item ON intel_item_classifications (item_id)",
-    "CREATE INDEX IF NOT EXISTS idx_intel_analysis_lookup ON intel_item_filter_analysis (profile_id, profile_fingerprint, analysis_state)",
+        "CREATE INDEX IF NOT EXISTS idx_intel_analysis_lookup ON intel_item_filter_analysis (profile_id, profile_fingerprint, analysis_state)",
+    "CREATE INDEX IF NOT EXISTS idx_intel_ai_artifacts_lookup ON intel_ai_artifacts (artifact_kind, input_fingerprint, provider, model)",
+    "CREATE INDEX IF NOT EXISTS idx_intel_ai_artifacts_scope ON intel_ai_artifacts (scope, artifact_kind, generated_at DESC)",
 )
 
 
@@ -1223,7 +1241,7 @@ def upsert_observation(
                                 item.get("canonical_url") or item.get("url") or "",
                                 item.get("url") or item.get("canonical_url") or "",
                                 title,
-                                item["title_key"],
+                                str(item.get("title_key") or title),
                                 summary,
                                 source_id,
                                 item.get("hint") or "",
@@ -1934,6 +1952,14 @@ def read_report_cursor(report_key: str, db_path: str | Path | None = None) -> di
         return dict(row) if row else None
 
 
+def list_report_cursors(db_path: str | Path | None = None) -> list[dict[str, Any]]:
+    path = db_path or get_default_db_path()
+    initialize_store(path)
+    with _LOCK, _connect(path) as conn:
+        rows = conn.execute("SELECT * FROM intel_report_cursors").fetchall()
+        return [dict(r) for r in rows]
+
+
 def advance_report_cursor(report_key: str, profile_id: str, mode: str, generated_at: str,
                           boundary: int, previous: dict[str, Any] | None,
                           db_path: str | Path | None = None) -> None:
@@ -2528,7 +2554,7 @@ def count_freshness_excluded_rss_items(
 # ---------------------------------------------------------------------------
 
 CANONICAL_REGIONS = ("hotlist", "rss", "standalone", "new_items", "ai_analysis")
-AVAILABLE_REGIONS = ("hotlist", "rss", "standalone", "new_items")
+AVAILABLE_REGIONS = ("hotlist", "rss", "standalone", "new_items", "ai_analysis")
 
 DEFAULT_NATIVE_INTEL_CONFIG: dict[str, Any] = {
     "rss_freshness_enabled": False,
@@ -2545,7 +2571,15 @@ DEFAULT_NATIVE_INTEL_CONFIG: dict[str, Any] = {
         "hotlist": True,
         "rss": True,
         "standalone": True,
+        "new_items": True,
+        "ai_analysis": False,
     },
+    "ai_analysis_enabled": False,
+    "ai_analysis_max_news": 50,
+    "ai_analysis_include_rss": True,
+    "ai_analysis_include_standalone": False,
+    "ai_translation_enabled": False,
+    "ai_translation_target_language": "English",
 }
 
 
@@ -2715,6 +2749,257 @@ def update_native_intel_config(
                 merged_re[k] = v
         updates["regions_enabled"] = merged_re
 
+    if "ai_analysis_enabled" in payload:
+        val = payload["ai_analysis_enabled"]
+        if not isinstance(val, bool):
+            raise ValueError("ai_analysis_enabled 必须为布尔值")
+        updates["ai_analysis_enabled"] = val
+
+    if "ai_analysis_provider" in payload:
+        val = str(payload["ai_analysis_provider"] or "").strip()
+        updates["ai_analysis_provider"] = val
+
+    if "ai_analysis_model" in payload:
+        val = str(payload["ai_analysis_model"] or "").strip()
+        updates["ai_analysis_model"] = val
+
+    if "ai_analysis_max_news" in payload:
+        val = payload["ai_analysis_max_news"]
+        if isinstance(val, bool) or not isinstance(val, int):
+            raise ValueError("ai_analysis_max_news 必须为整数")
+        if val < 1 or val > 200:
+            raise ValueError("ai_analysis_max_news 必须在 1 到 200 之间")
+        updates["ai_analysis_max_news"] = val
+
+    if "ai_analysis_include_rss" in payload:
+        val = payload["ai_analysis_include_rss"]
+        if not isinstance(val, bool):
+            raise ValueError("ai_analysis_include_rss 必须为布尔值")
+        updates["ai_analysis_include_rss"] = val
+
+    if "ai_analysis_include_standalone" in payload:
+        val = payload["ai_analysis_include_standalone"]
+        if not isinstance(val, bool):
+            raise ValueError("ai_analysis_include_standalone 必须为布尔值")
+        updates["ai_analysis_include_standalone"] = val
+
+    if "ai_translation_enabled" in payload:
+        val = payload["ai_translation_enabled"]
+        if not isinstance(val, bool):
+            raise ValueError("ai_translation_enabled 必须为布尔值")
+        updates["ai_translation_enabled"] = val
+
+    if "ai_translation_target_language" in payload:
+        val = str(payload["ai_translation_target_language"] or "").strip()
+        updates["ai_translation_target_language"] = val
+
     current.update(updates)
     set_meta("native_intel_config", json.dumps(current, ensure_ascii=False), path)
     return current
+
+
+# ---------------------------------------------------------------------------
+# TREND-PARITY Wave 5: AI Artifact Persistence & Caching
+# ---------------------------------------------------------------------------
+
+def save_ai_artifact(
+    artifact_id: str,
+    artifact_kind: str,
+    scope: str,
+    input_fingerprint: str,
+    provider: str,
+    model: str,
+    prompt_version: str,
+    status: str,
+    payload: dict[str, Any] | list[Any],
+    target_language: str | None = None,
+    error_kind: str | None = None,
+    error_message: str | None = None,
+    generated_at: str | None = None,
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """保存或更新可恢复的 AI 分析/翻译/实体/情感工件与缓存。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    now_iso = generated_at or utc_now_iso()
+    payload_json = json.dumps(payload, ensure_ascii=False)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO intel_ai_artifacts (
+                        artifact_id, artifact_kind, scope, input_fingerprint,
+                        provider, model, prompt_version, target_language,
+                        status, payload_json, error_kind, error_message, generated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(artifact_id) DO UPDATE SET
+                        status = excluded.status,
+                        payload_json = excluded.payload_json,
+                        error_kind = excluded.error_kind,
+                        error_message = excluded.error_message,
+                        generated_at = excluded.generated_at
+                    """,
+                    (
+                        artifact_id, artifact_kind, scope, input_fingerprint,
+                        provider, model, prompt_version, target_language,
+                        status, payload_json, error_kind, error_message, now_iso
+                    ),
+                )
+                conn.commit()
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+    return {
+        "artifact_id": artifact_id,
+        "artifact_kind": artifact_kind,
+        "scope": scope,
+        "input_fingerprint": input_fingerprint,
+        "provider": provider,
+        "model": model,
+        "prompt_version": prompt_version,
+        "target_language": target_language,
+        "status": status,
+        "payload": payload,
+        "error_kind": error_kind,
+        "error_message": error_message,
+        "generated_at": now_iso,
+    }
+
+
+def get_ai_artifact(artifact_id: str, db_path: str | Path | None = None) -> dict[str, Any] | None:
+    """按 artifact_id 查询单条 AI 工件。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                row = conn.execute(
+                    """
+                    SELECT artifact_id, artifact_kind, scope, input_fingerprint,
+                           provider, model, prompt_version, target_language,
+                           status, payload_json, error_kind, error_message, generated_at
+                    FROM intel_ai_artifacts
+                    WHERE artifact_id = ?
+                    """,
+                    (artifact_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                return {
+                    "artifact_id": row["artifact_id"],
+                    "artifact_kind": row["artifact_kind"],
+                    "scope": row["scope"],
+                    "input_fingerprint": row["input_fingerprint"],
+                    "provider": row["provider"],
+                    "model": row["model"],
+                    "prompt_version": row["prompt_version"],
+                    "target_language": row["target_language"],
+                    "status": row["status"],
+                    "payload": json.loads(row["payload_json"]),
+                    "error_kind": row["error_kind"],
+                    "error_message": row["error_message"],
+                    "generated_at": row["generated_at"],
+                }
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def find_cached_ai_artifact(
+    artifact_kind: str,
+    input_fingerprint: str,
+    provider: str,
+    model: str,
+    db_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """根据 input_fingerprint、provider 与 model 查找可用的 SUCCESS 缓存工件。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                row = conn.execute(
+                    """
+                    SELECT artifact_id, artifact_kind, scope, input_fingerprint,
+                           provider, model, prompt_version, target_language,
+                           status, payload_json, error_kind, error_message, generated_at
+                    FROM intel_ai_artifacts
+                    WHERE artifact_kind = ? AND input_fingerprint = ?
+                      AND provider = ? AND model = ? AND status = 'SUCCESS'
+                    ORDER BY generated_at DESC LIMIT 1
+                    """,
+                    (artifact_kind, input_fingerprint, provider, model),
+                ).fetchone()
+                if not row:
+                    return None
+                return {
+                    "artifact_id": row["artifact_id"],
+                    "artifact_kind": row["artifact_kind"],
+                    "scope": row["scope"],
+                    "input_fingerprint": row["input_fingerprint"],
+                    "provider": row["provider"],
+                    "model": row["model"],
+                    "prompt_version": row["prompt_version"],
+                    "target_language": row["target_language"],
+                    "status": row["status"],
+                    "payload": json.loads(row["payload_json"]),
+                    "error_kind": row["error_kind"],
+                    "error_message": row["error_message"],
+                    "generated_at": row["generated_at"],
+                }
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def list_ai_artifacts(
+    artifact_kind: str | None = None,
+    scope: str | None = None,
+    limit: int = 20,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """列表查询最近的 AI 工件。"""
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    query = """
+        SELECT artifact_id, artifact_kind, scope, input_fingerprint,
+               provider, model, prompt_version, target_language,
+               status, payload_json, error_kind, error_message, generated_at
+        FROM intel_ai_artifacts
+    """
+    params = []
+    clauses = []
+    if artifact_kind:
+        clauses.append("artifact_kind = ?")
+        params.append(artifact_kind)
+    if scope:
+        clauses.append("scope = ?")
+        params.append(scope)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY generated_at DESC LIMIT ?"
+    params.append(max(1, min(int(limit), 100)))
+
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                rows = conn.execute(query, tuple(params)).fetchall()
+                results = []
+                for r in rows:
+                    results.append({
+                        "artifact_id": r["artifact_id"],
+                        "artifact_kind": r["artifact_kind"],
+                        "scope": r["scope"],
+                        "input_fingerprint": r["input_fingerprint"],
+                        "provider": r["provider"],
+                        "model": r["model"],
+                        "prompt_version": r["prompt_version"],
+                        "target_language": r["target_language"],
+                        "status": r["status"],
+                        "payload": json.loads(r["payload_json"]),
+                        "error_kind": r["error_kind"],
+                        "error_message": r["error_message"],
+                        "generated_at": r["generated_at"],
+                    })
+                return results
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e

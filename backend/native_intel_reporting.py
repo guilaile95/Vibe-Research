@@ -185,7 +185,7 @@ def generate_report(path: str | None = None, *, mode: str = "CURRENT", scope: st
                   "start": _iso(day) if mode == "DAILY" else previous["generated_at"] if read_mode == "INCREMENTAL"
                   else min((r["observed_at"] for r in selected), default=_iso(when)), "end": _iso(when)},
               "baseline": previous, "observation_boundary": snapshot["boundary"],
-              "sections": output, "total": len(selected), "unique_item_count": len({r["item_id"] for r in selected}),
+              "sections": output, "items": [r for section in output for r in section["items"]], "total": len(selected), "unique_item_count": len({r["item_id"] for r in selected}),
               "new_items": [r for section in output for r in section["items"] if r["new_kind"]], "filter_meta": filter_meta,
               "cursor_advanced": False, "usage_boundary": BOUNDARY}
     # Serialization is part of generation: invalid output must not consume a cursor.

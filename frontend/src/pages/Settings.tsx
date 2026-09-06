@@ -70,16 +70,42 @@ export function Settings() {
     setBaseURL(PROVIDER_BASE[m.provider] || "");
   };
 
-  const saveApi = () => {
+  const [scheduledStatus, setScheduledStatus] = useState<{
+    configured: boolean;
+    provider: string | null;
+    scheduled_available: boolean;
+  } | null>(null);
+
+  const refreshScheduledStatus = async () => {
+    try {
+      setScheduledStatus(await api.getAiCredentialStatus());
+    } catch {
+      setScheduledStatus(null);
+    }
+  };
+
+  useEffect(() => {
+    void refreshScheduledStatus();
+  }, []);
+
+  const saveApi = async () => {
     if (!baseURL.trim() || !apiKey.trim() || !modelName.trim()) {
       toast.error("请填完 Base URL、API Key、Model");
       return;
     }
-    saveLlm({ provider: providerOf(apiId), baseURL: baseURL.trim(), apiKey: apiKey.trim(), model: modelName.trim() });
-    toast.success("已保存到本地，全站 AI 功能现在可用");
+    const cfg = { provider: providerOf(apiId), baseURL: baseURL.trim(), apiKey: apiKey.trim(), model: modelName.trim() };
+    try {
+      await api.putAiCredential(cfg);
+    } catch {
+      toast.error("后台凭据保存失败");
+      return;
+    }
+    saveLlm(cfg);
+    await refreshScheduledStatus();
+    toast.success("已保存到本机浏览器和 Vibe 本机后台");
   };
 
-  const saveSubscription = () => {
+  const saveSubscription = async () => {
     const m = subscriptionModels.find((x) => x.id === cliId);
     if (!m) {
       toast.error("请选择 Codex Subscription");
@@ -89,7 +115,15 @@ export function Settings() {
       toast.error("Codex Subscription 尚未连接，请先完成登录");
       return;
     }
-    saveLlm({ provider: m.provider, baseURL: "", apiKey: "", model: m.id });
+    const cfg = { provider: m.provider, baseURL: "", apiKey: "", model: m.id };
+    try {
+      await api.putAiCredential(cfg);
+    } catch {
+      toast.error("后台凭据保存失败");
+      return;
+    }
+    saveLlm(cfg);
+    await refreshScheduledStatus();
     toast.success(`已选「${m.name}」订阅，全站 AI 功能将调用 ${runtimeStatus?.runtime || m.name}`);
   };
 
@@ -106,11 +140,18 @@ export function Settings() {
     }
   };
 
-  const forget = () => {
+  const forget = async () => {
+    try {
+      await api.deleteAiCredential();
+    } catch {
+      toast.error("后台凭据删除失败");
+      return;
+    }
     clearLlm();
     setApiKey("");
     setCliId("");
-    toast.success("已清除本地配置");
+    await refreshScheduledStatus();
+    toast.success("已清除本机浏览器和后台凭据");
   };
 
   const saveAccess = () => {
@@ -126,7 +167,7 @@ export function Settings() {
 
       <div className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-        <span>API key <b className="text-foreground">只存在你本地浏览器</b>，仅在你提问时发给你自己的后端去调模型，不上传、不进仓库。</span>
+        <span data-testid="wave5-global-ai-notice">API Key 仅保存在你的本机浏览器和 Vibe 本机后台，用于手动及定时 AI；不会进入 Git、投资数据库或日志。</span>
       </div>
 
       {/* 两种接入方式 */}
@@ -142,7 +183,8 @@ export function Settings() {
         </GlassCard>
 
         <GlassCard glow={mode === "api"} onClick={() => setMode("api")}
-          className={mode === "api" ? "ring-1 ring-primary/40" : "opacity-80"}>
+          className={mode === "api" ? "ring-1 ring-primary/40" : "opacity-80"}
+          data-testid="wave5-api-mode-card">
           <div className="flex items-center gap-2">
             <KeyRound className="h-5 w-5 text-primary" />
             <h3 className="font-semibold">API 接入</h3>
@@ -212,11 +254,11 @@ export function Settings() {
               })}
             </div>
             <div className="flex items-center gap-2 pt-1">
-              <button onClick={saveSubscription} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
+              <button data-testid="wave5-save-subscription-btn" onClick={() => void saveSubscription()} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
                 保存
               </button>
               {existing && (
-                <button onClick={forget} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:text-destructive">
+                <button data-testid="wave5-forget-btn" onClick={() => void forget()} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:text-destructive">
                   <Trash2 className="h-4 w-4" /> 清除
                 </button>
               )}
@@ -236,26 +278,31 @@ export function Settings() {
 
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Base URL</label>
-              <input value={baseURL} onChange={(e) => setBaseURL(e.target.value)} placeholder="https://api.deepseek.com"
+              <input data-testid="wave5-base-url-input" value={baseURL} onChange={(e) => setBaseURL(e.target.value)} placeholder="https://api.deepseek.com"
                 className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
             </div>
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Model</label>
-              <input value={modelName} onChange={(e) => setModelName(e.target.value)} placeholder="模型名称（豆包填 ep-… 接入点 ID）"
+              <input data-testid="wave5-model-input" value={modelName} onChange={(e) => setModelName(e.target.value)} placeholder="模型名称（豆包填 ep-… 接入点 ID）"
                 className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
             </div>
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">API Key</label>
-              <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-…"
+              <input data-testid="wave5-api-key-input" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-…"
                 className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
             </div>
 
+            {existing && !existingIsCli && scheduledStatus && !scheduledStatus.configured ? (
+              <p className="text-xs text-amber-600" data-testid="wave5-scheduled-credential-unsynced">
+                后台定时凭据尚未同步。请点击保存，把当前全站 AI 配置写入本机后台。
+              </p>
+            ) : null}
             <div className="flex items-center gap-2">
-              <button onClick={saveApi} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
+              <button data-testid="wave5-save-api-btn" onClick={() => void saveApi()} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
                 保存（存本地）
               </button>
               {existing && (
-                <button onClick={forget} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:text-destructive">
+                <button data-testid="wave5-forget-btn" onClick={() => void forget()} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:text-destructive">
                   <Trash2 className="h-4 w-4" /> 清除
                 </button>
               )}
@@ -1171,7 +1218,15 @@ function NativeIntelDisplayAndProxySection() {
     hotlist: true,
     rss: true,
     standalone: true,
+    new_items: false,
+    ai_analysis: false,
   });
+  const [aiAnalysisEnabled, setAiAnalysisEnabled] = useState(false);
+  const [aiAnalysisMaxNews, setAiAnalysisMaxNews] = useState(50);
+  const [aiAnalysisIncludeRss, setAiAnalysisIncludeRss] = useState(true);
+  const [aiAnalysisIncludeStandalone, setAiAnalysisIncludeStandalone] = useState(false);
+  const [aiTranslationEnabled, setAiTranslationEnabled] = useState(false);
+  const [aiTranslationTargetLanguage, setAiTranslationTargetLanguage] = useState("English");
 
   const loadConfig = async () => {
     setLoading(true);
@@ -1196,6 +1251,12 @@ function NativeIntelDisplayAndProxySection() {
       if (cfg.regions_enabled) {
         setRegionsEnabled(cfg.regions_enabled);
       }
+      setAiAnalysisEnabled(Boolean(cfg.ai_analysis_enabled));
+      setAiAnalysisMaxNews(Number(cfg.ai_analysis_max_news ?? 50));
+      setAiAnalysisIncludeRss(cfg.ai_analysis_include_rss !== false);
+      setAiAnalysisIncludeStandalone(Boolean(cfg.ai_analysis_include_standalone));
+      setAiTranslationEnabled(Boolean(cfg.ai_translation_enabled));
+      setAiTranslationTargetLanguage(cfg.ai_translation_target_language || "English");
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "读取展示与抓取配置失败");
     } finally {
@@ -1222,6 +1283,12 @@ function NativeIntelDisplayAndProxySection() {
         standalone_max_items: standaloneMaxItems,
         region_order: regionOrder,
         regions_enabled: regionsEnabled,
+        ai_analysis_enabled: aiAnalysisEnabled,
+        ai_analysis_max_news: aiAnalysisMaxNews,
+        ai_analysis_include_rss: aiAnalysisIncludeRss,
+        ai_analysis_include_standalone: aiAnalysisIncludeStandalone,
+        ai_translation_enabled: aiTranslationEnabled,
+        ai_translation_target_language: aiTranslationTargetLanguage,
       });
       toast.success("已保存展示与抓取高级设置");
       await loadConfig();
@@ -1253,7 +1320,7 @@ function NativeIntelDisplayAndProxySection() {
     rss: "RSS 资讯 (rss)",
     standalone: "重点独立展示区 (standalone)",
     new_items: "新出现资讯 (new_items)",
-    ai_analysis: "AI 深度分析 (ai_analysis - Wave 5 规划中)",
+    ai_analysis: "AI 深度分析与研报 (ai_analysis)",
   };
 
   return (
@@ -1496,10 +1563,19 @@ function NativeIntelDisplayAndProxySection() {
                 <span>新出现资讯 (new_items)</span>
               </label>
 
-              <div className="flex items-center gap-1 text-muted-foreground/60 opacity-60">
-                <span className="rounded bg-muted px-1 text-[10px]">Wave 5 规划中</span>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  data-testid="wave5-region-toggle-ai_analysis"
+                  checked={regionsEnabled.ai_analysis === true}
+                  onChange={(e) => {
+                    setRegionsEnabled((prev) => ({ ...prev, ai_analysis: e.target.checked }));
+                    if (e.target.checked) setRegionOrder((prev) => prev.includes("ai_analysis") ? prev : [...prev, "ai_analysis"]);
+                  }}
+                  className="rounded border-border accent-primary"
+                />
                 <span>AI 深度分析 (ai_analysis)</span>
-              </div>
+              </label>
             </div>
 
             {/* 区域排序列表 */}
@@ -1510,7 +1586,7 @@ function NativeIntelDisplayAndProxySection() {
                 className="space-y-1.5 rounded border border-border/60 bg-card/40 p-2 max-w-md"
               >
                 {regionOrder
-                  .filter((r) => ["hotlist", "rss", "standalone", "new_items"].includes(r))
+                  .filter((r) => ["hotlist", "rss", "standalone", "new_items", "ai_analysis"].includes(r))
                   .map((r, idx, arr) => (
                     <div
                       key={r}
@@ -1543,6 +1619,100 @@ function NativeIntelDisplayAndProxySection() {
                       </div>
                     </div>
                   ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 5. AI 深度分析与多语言翻译 (Wave 5) */}
+          <div className="rounded-lg border border-border/70 bg-background/50 p-3 text-xs space-y-3" data-testid="wave5-ai-settings-section">
+            <div className="font-medium text-foreground flex items-center gap-1">
+              <Sparkles className="h-3.5 w-3.5 text-primary" /> AI 深度分析与多语言翻译 (Wave 5)
+            </div>
+            <p className="text-muted-foreground text-[11px]">
+              统一接入 Codex 或 OpenAI 兼容大模型，支持实时/全天/增量资讯 6 大板块深度研报生成，以及多语言翻译。
+            </p>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2 rounded border border-border/40 p-2.5 bg-card/30">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    data-testid="wave5-ai-analysis-enabled"
+                    checked={aiAnalysisEnabled}
+                    onChange={(e) => setAiAnalysisEnabled(e.target.checked)}
+                    className="rounded border-border accent-primary"
+                  />
+                  <span className="font-medium">启用 AI 深度分析研报</span>
+                </label>
+
+                <div className="rounded border border-primary/20 bg-primary/5 p-2 text-[11px] text-muted-foreground" data-testid="wave5-ai-authority-notice">
+                  <span className="font-medium text-foreground">AI 接入方式：</span>
+                  复用全站统一配置（Codex Subscription 或 API Compatible）。保存后同步到本机后台，供定时 AI 使用。如需切换或修改 Key，请在上方「接入 AI」中设置。
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-muted-foreground">分析最大资讯数:</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    data-testid="wave5-ai-analysis-max-news"
+                    value={aiAnalysisMaxNews}
+                    onChange={(e) => setAiAnalysisMaxNews(Math.max(1, Math.min(200, parseInt(e.target.value, 10) || 50)))}
+                    className="w-16 rounded border border-border bg-black/20 px-2 py-1 text-xs outline-none focus:border-primary/50"
+                  />
+                </div>
+
+                <div className="flex items-center gap-3 pt-1">
+                  <label className="flex items-center gap-1.5 cursor-pointer text-[11px]">
+                    <input
+                      type="checkbox"
+                      data-testid="wave5-ai-include-rss"
+                      checked={aiAnalysisIncludeRss}
+                      onChange={(e) => setAiAnalysisIncludeRss(e.target.checked)}
+                      className="rounded border-border accent-primary"
+                    />
+                    <span>纳入 RSS</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer text-[11px]">
+                    <input
+                      type="checkbox"
+                      data-testid="wave5-ai-include-standalone"
+                      checked={aiAnalysisIncludeStandalone}
+                      onChange={(e) => setAiAnalysisIncludeStandalone(e.target.checked)}
+                      className="rounded border-border accent-primary"
+                    />
+                    <span>纳入独立源摘要</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="space-y-2 rounded border border-border/40 p-2.5 bg-card/30">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    data-testid="wave5-ai-translation-enabled"
+                    checked={aiTranslationEnabled}
+                    onChange={(e) => setAiTranslationEnabled(e.target.checked)}
+                    className="rounded border-border accent-primary"
+                  />
+                  <span className="font-medium">启用 AI 多语言翻译</span>
+                </label>
+
+                <div>
+                  <span className="text-[11px] text-muted-foreground block mb-1">默认目标语言</span>
+                  <input
+                    type="text"
+                    data-testid="wave5-ai-translation-target-lang"
+                    value={aiTranslationTargetLanguage}
+                    onChange={(e) => setAiTranslationTargetLanguage(e.target.value)}
+                    className="w-full rounded border border-border bg-black/20 px-2 py-1 text-xs outline-none focus:border-primary/50"
+                    placeholder="English / Chinese / Japanese"
+                  />
+                </div>
+                <span className="text-[10px] text-muted-foreground block">
+                  资讯条目可一键翻译标题与摘要，支持单条与批量，严格保持编号映射。
+                </span>
               </div>
             </div>
           </div>

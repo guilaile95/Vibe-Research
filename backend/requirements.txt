@@ -1,6 +1,8 @@
 # 核心（轻量、秒装）——行情 + 研报即刻可用
 fastapi>=0.110
 uvicorn[standard]>=0.29
+# Official client/server protocol implementation for the in-process Native Intel MCP mount.
+mcp==2.1.1
 requests
 duckdb>=1.4,<2
 pypdf>=6,<7

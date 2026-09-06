@@ -83,7 +83,6 @@ def test_put_rejects_invalid():
         {"total_assets": 100000, "available_cash": 100001, "confirm_current": True},
         {"total_assets": "100000", "available_cash": 20000, "confirm_current": True},
         {"total_assets": True, "available_cash": 20000, "confirm_current": True},
-        {"total_assets": 100000, "available_cash": float("nan"), "confirm_current": True},
         {"total_assets": 100000, "available_cash": 20000, "confirm_current": True, "extra": 1},
         {"total_assets": 100000, "available_cash": 20000,
          "confirm_current": True, "updated_at": "2026-01-01 00:00:00"},
@@ -93,6 +92,12 @@ def test_put_rejects_invalid():
     for c in cases:
         resp = client.put("/api/account-profile", json=c)
         assert resp.status_code == 400, f"期望 400，得到 {resp.status_code}: {c}"
+    nan_resp = client.put(
+        "/api/account-profile",
+        content='{"total_assets":100000,"available_cash":NaN,"confirm_current":true}',
+        headers={"Content-Type": "application/json"},
+    )
+    assert nan_resp.status_code in (400, 422)
 
     # 未写入
     assert client.get("/api/account-profile").json()["configured"] is False
