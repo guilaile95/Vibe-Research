@@ -6,7 +6,7 @@
  * Inbox.  The only persistence location is a temporary VR_DATA_DIR.
  */
 import assert from "node:assert/strict";
-import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { request as httpRequest } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
@@ -126,7 +126,14 @@ function chromiumPath() {
   ];
   for (const base of bases) {
     if (!base || !existsSync(base)) continue;
-    for (const entry of readdirSync(base)) {
+    if (base.endsWith(".exe") || base.endsWith("chrome") || base.endsWith("Chromium")) return base;
+    let entries;
+    try {
+      entries = readdirSync(base);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
       if (!entry.startsWith("chromium-") || entry.includes("headless")) continue;
       const candidates = [
         join(base, entry, "chrome-win64", "chrome.exe"),
@@ -176,7 +183,7 @@ async function createFrozenCurrentThesis(base, env) {
     core_claims: begun.thesis.core_claims,
     catalysts: [],
     risks: [],
-    invalidation_conditions: [],
+    invalidation_conditions: ["业绩发生重大反转"],
     strategy: "SWING",
     expected_horizon: { unit: "TRADING_DAY", min: 10, max: 30, anchor: "FREEZE_AT" },
     free_notes: null,
@@ -249,7 +256,11 @@ async function run() {
     const launchOptions = { headless: true };
     const executablePath = chromiumPath();
     if (executablePath) launchOptions.executablePath = executablePath;
-    browser = await chromium.launch(launchOptions);
+    try {
+      browser = await chromium.launch(launchOptions);
+    } catch {
+      browser = await chromium.launch({ headless: true, channel: "chrome" });
+    }
     const page = await browser.newPage();
     const consoleErrors = [];
     const failedRequests = [];
@@ -343,6 +354,25 @@ async function run() {
       await page.locator('[data-horizon-source="CURRENT_THESIS"]').waitFor({ timeout: 30000 });
       assert.equal(await page.getByLabel("Strategy horizon").inputValue(), "10–30 个交易日");
     }
+    const brief = page.getByTestId("research-brief");
+    await brief.waitFor();
+    assert.equal(await brief.locator("input, textarea, select").count(), 0, "research brief must stay read-only");
+    const subjectText = await page.getByTestId("research-brief-subject").innerText();
+    assert.match(subjectText, /600519/);
+    assert.match(subjectText, /波段|SWING/);
+    const viewText = await page.getByTestId("research-brief-view").innerText();
+    if (process.env.DF2_FORCE_CONTEXT_FALLBACK === "1") {
+      assert.match(viewText, /未确认草稿|不可用/);
+    } else {
+      assert.match(viewText, /claim one/);
+      assert.match(await page.getByTestId("research-brief-invalidation").innerText(), /不是这些条件已经触发/);
+    }
+    assert.match(await page.getByTestId("research-brief-evidence").innerText(), /不等于没有反对证据|不展示未确认草稿/);
+    assert.match(await page.getByTestId("research-brief-changes").innerText(), /不能声称没有变化|未发现事实字段变化/);
+    await page.getByTestId("research-brief-freshness").waitFor();
+    const shotDir = join(root, ".pi", "generated-images");
+    mkdirSync(shotDir, { recursive: true });
+    await brief.screenshot({ path: join(shotDir, process.env.DF2_FORCE_CONTEXT_FALLBACK === "1" ? "research-brief-fallback.png" : "research-brief-after.png") });
     // P1-DF3：结构化 review boundary——用户显式选择本地时间，页面展示
     // 解析时区与最终 canonical ISO；断言 canonical 确实等于所选时刻。
     await page.getByLabel("Review by").fill("2026-08-30T10:00");
