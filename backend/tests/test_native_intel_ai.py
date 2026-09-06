@@ -18,7 +18,8 @@ import native_intel_timeline as timeline
 
 
 @pytest.fixture
-def tmp_db(tmp_path: Path):
+def tmp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path / "vr-data"))
     db_file = tmp_path / "test_native_intel_ai.sqlite3"
     store.initialize_store(db_file)
     # Seed sources
@@ -58,6 +59,8 @@ def tmp_db(tmp_path: Path):
 
     import ai_credential_store as cred_store
     cred_store.save({"provider": "cli-codex", "model": "gpt-5-codex"})
+    cred_path = cred_store.credential_path().resolve()
+    assert tmp_path.resolve() in cred_path.parents
 
     return db_file
 
@@ -714,6 +717,33 @@ def test_req_03_native_intel_no_second_provider_authority(tmp_db):
     )
     with pytest.raises(ValueError, match="UNAVAILABLE_CREDENTIAL"):
         ai.get_effective_ai_config(request_cfg=None, path=tmp_db)
+
+
+def test_credential_ops_do_not_touch_real_user_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import ai_credential_store as cred_store
+
+    fake_home = tmp_path / "fake-home"
+    sentinel = fake_home / ".vibe-research" / "private" / "ai_credentials.json"
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_text("SENTINEL-DO-NOT-TOUCH", encoding="utf-8")
+    before = sentinel.read_bytes()
+    monkeypatch.setattr(cred_store.Path, "home", classmethod(lambda cls: fake_home))
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path / "vr-data"))
+
+    cred_path = cred_store.credential_path().resolve()
+    assert tmp_path.resolve() in cred_path.parents
+    assert fake_home.resolve() not in cred_path.parents
+    cred_store.save({"provider": "cli-codex", "model": "gpt-5-codex"})
+    cred_store.delete()
+    cred_path.write_text("{not-json", encoding="utf-8")
+    cfg, error = cred_store.scheduled_config()
+    assert cfg is None
+    assert error == cred_store.UNAVAILABLE_CREDENTIAL
+    cred_store.delete()
+
+    assert sentinel.read_bytes() == before
 
 
 def test_req_04_manual_api_key_never_persisted_to_sqlite(tmp_db):
