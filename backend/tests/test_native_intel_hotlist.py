@@ -844,10 +844,15 @@ EXPECTED_11_PLATFORMS = [
 
 
 def test_system_registry_has_all_11_hotlists() -> None:
-    """A. Registry Test: 断言系统默认共有 11 个 hotlist sources 并逐一核对元数据。"""
+    """A. Registry Test: 11 个 newsnow 热榜平台仍在；GitHub Trending 作为额外 hotlist 存在。"""
     reg = service.load_registry()
     hotlists = [s for s in reg["sources"] if s["source_type"] == "hotlist"]
-    assert len(hotlists) == 11, f"Expected 11 hotlist sources, got {len(hotlists)}"
+    assert {s["source_id"] for s in hotlists} >= {
+        f"hotlist-{platform}" for platform, _name, _domain in EXPECTED_11_PLATFORMS
+    }
+    github = next(s for s in hotlists if s["source_id"] == "tech-github-trending")
+    assert github["has_real_rank"] is True
+    assert github["url"].startswith("https://github.com/trending")
 
     by_platform = {
         hotlist.platform_of(s["url"]): s
@@ -927,7 +932,8 @@ def test_11_sources_mixed_run_isolation(tmp_path: Path) -> None:
     """D. 11-source mixed run: 模拟 10 个成功、1 个失败，整体为 PARTIAL，失败源 UNKNOWN，成功源不受影响。"""
     path = tmp_path / "native-intel.sqlite3"
     reg = service.load_registry()
-    hotlists = [s for s in reg["sources"] if s["source_type"] == "hotlist"]
+    expected_ids = {f"hotlist-{platform}" for platform, _name, _domain in EXPECTED_11_PLATFORMS}
+    hotlists = [s for s in reg["sources"] if s["source_id"] in expected_ids]
     assert len(hotlists) == 11
 
     # 模拟 fetcher：weibo 抛异常失败，其余 10 个成功返回 1 条数据

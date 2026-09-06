@@ -1,0 +1,21 @@
+[
+  {
+    "title": "Scaling Laws for Neural Language Models",
+    "summary": "We study empirical scaling laws.",
+    "publishedAt": "2020-01-23T00:00:00.000Z",
+    "upvotes": 42,
+    "numComments": 7,
+    "paper": {
+      "id": "2001.08361",
+      "title": "Scaling Laws for Neural Language Models",
+      "summary": "We study empirical scaling laws.",
+      "authors": [{"name": "Jared Kaplan"}, {"name": "Sam McCandlish"}],
+      "publishedAt": "2020-01-23T00:00:00.000Z",
+      "upvotes": 40,
+      "githubRepo": "openai/scaling-laws",
+      "githubStars": 1200,
+      "ai_summary": "IGNORE THIS",
+      "ai_keywords": ["ignore"]
+    }
+  }
+]
