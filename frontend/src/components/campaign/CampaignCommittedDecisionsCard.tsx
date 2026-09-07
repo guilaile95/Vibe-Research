@@ -54,7 +54,7 @@ export function CampaignCommittedDecisionsCard({ campaignId }: { campaignId: str
     >
       <p className="text-sm font-semibold">已提交的正式决定（{state.data.total}）</p>
       <p className="text-muted-foreground">
-        「已作决定」≠「已发生交易」：以下决定尚未记录对应成交，Campaign 也未因此激活。
+        本面板仅展示已提交决定；决定本身不代表交易已经发生，也不会自动激活研究计划。
         打开详情可查看决定提交时的完整依据。
       </p>
       <ul className="space-y-1.5">
@@ -69,7 +69,7 @@ export function CampaignCommittedDecisionsCard({ campaignId }: { campaignId: str
             </p>
             <Link
               className="inline-block text-primary underline"
-              to={`/campaigns/${campaignId}/decision-proposal`}
+              to={`/campaigns/${campaignId}/decision-proposal?${new URLSearchParams({ decision_id: item.decision_id })}`}
             >
               查看详情（含当时依据）→
             </Link>
