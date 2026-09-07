@@ -81,7 +81,7 @@ export function Notes() {
             return (
               <GlassCard key={n.id} className="!p-0 overflow-hidden">
                 <div className="flex items-center gap-2 px-4 py-3">
-                  <button onClick={() => setOpenId(open ? null : n.id)} className="flex flex-1 items-center gap-2 text-left">
+                  <button onClick={() => setOpenId(open ? null : n.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
                     {open ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
                     <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${KIND_COLOR[n.kind] || "bg-muted/50 text-muted-foreground"}`}>{n.kind}</span>
                     <span className="flex-1 truncate text-sm font-medium">{n.title}</span>
