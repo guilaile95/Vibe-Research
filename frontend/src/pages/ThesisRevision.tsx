@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Loader2, ExternalLink } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -48,6 +48,14 @@ const labelCls = "block text-xs text-muted-foreground";
 
 export function ThesisRevision() {
   const { id, rev } = useParams<{ id: string; rev: string }>();
+  const [searchParams] = useSearchParams();
+  const thesisPath = `/thesis/${id}`;
+  const requestedReturnTo = searchParams.get("return_to") ?? "";
+  const returnTo = requestedReturnTo === thesisPath
+    || requestedReturnTo.startsWith(`${thesisPath}?`)
+    || requestedReturnTo.startsWith(`${thesisPath}#`)
+    ? requestedReturnTo
+    : thesisPath;
   const revNum = rev ? Number(rev) : NaN;
   const [data, setData] = useState<ThesisRevisionData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -79,7 +87,7 @@ export function ThesisRevision() {
   return (
     <div>
       <Link
-        to={`/thesis/${id}`}
+        to={returnTo}
         className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="h-4 w-4" /> 返回详情
