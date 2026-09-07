@@ -133,6 +133,12 @@ export type FullMarketMetric =
 
 export type FullMarketFilterOperator = "gt" | "gte" | "lt" | "lte" | "eq" | "neq";
 
+export type FullMarketFilter = {
+  metric: Exclude<FullMarketMetric, "code" | "latest_date">;
+  operator: FullMarketFilterOperator;
+  value: number;
+};
+
 export type FullMarketRow = {
   code: string;
   latest_date: string | null;
@@ -193,6 +199,7 @@ export type FullMarketResult = {
 export type FullMarketQuery = {
   as_of?: string;
   latest?: boolean;
+  filters?: FullMarketFilter[];
   filter_metric?: Exclude<FullMarketMetric, "code" | "latest_date">;
   filter_operator?: FullMarketFilterOperator;
   filter_value?: number;

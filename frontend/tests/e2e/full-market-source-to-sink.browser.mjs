@@ -19,7 +19,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
 const backendDir = path.join(root, "backend");
 const frontendDist = path.join(root, "frontend", "dist");
-const screenshotDir = path.join(root, "docs", "screenshots", "full-market-source-to-sink");
+const screenshotDir = process.env.E2E_SCREENSHOT_DIR || path.join(root, "docs", "screenshots", "full-market-source-to-sink");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -327,7 +327,8 @@ async function runNormalScenario(browser, fixture) {
   });
   page.on("pageerror", (error) => consoleErrors.push(`pageerror: ${error.message}`));
   try {
-    await page.goto(`${baseUrl}/screener`, { waitUntil: "networkidle" });
+    await page.goto(`${baseUrl}/screener`, { waitUntil: "domcontentloaded" });
+    await page.getByTestId("full-market-tab").waitFor({ state: "visible" });
     await assertVisible(page.getByRole("tab", { name: "Full Market" }), "Full Market tab on /screener");
     await page.screenshot({ path: path.join(screenshotDir, "normal-01-screener.png"), fullPage: true });
 
@@ -337,6 +338,10 @@ async function runNormalScenario(browser, fixture) {
       throw new Error("Full Market tab did not become selected");
     }
     await page.screenshot({ path: path.join(screenshotDir, "normal-02-full-market-form.png"), fullPage: true });
+
+    await page.getByLabel("使用最新可用日期", { exact: true }).uncheck();
+    await page.getByLabel("Full Market as of", { exact: true }).fill("2026-02-20");
+    await page.getByLabel("使用最新可用日期", { exact: true }).check();
 
     const responsePromise = page.waitForResponse((response) => {
       try {
@@ -351,9 +356,11 @@ async function runNormalScenario(browser, fixture) {
     const payload = await response.json();
     const requestUrl = new URL(response.url());
     if (requestUrl.searchParams.get("latest") !== "true") throw new Error("query latest=true missing");
-    if (requestUrl.searchParams.get("filter_metric") !== "return_20d") throw new Error("query filter_metric missing");
-    if (requestUrl.searchParams.get("filter_operator") !== "gte") throw new Error("query filter_operator missing");
-    if (requestUrl.searchParams.get("filter_value") !== "0") throw new Error("query filter_value missing");
+    if (requestUrl.searchParams.has("as_of")) throw new Error("latest query retained a hidden historical cutoff");
+    const filters = JSON.parse(requestUrl.searchParams.get("filters") || "null");
+    if (JSON.stringify(filters) !== JSON.stringify([{ metric: "return_20d", operator: "gte", value: 0 }])) {
+      throw new Error("default Full Market filter was not submitted");
+    }
     if (requestUrl.searchParams.get("sort_by") !== "return_20d") throw new Error("query sort_by missing");
     if (requestUrl.searchParams.get("sort_order") !== "desc") throw new Error("query sort_order missing");
     if (requestUrl.searchParams.get("limit") !== "50" || requestUrl.searchParams.get("offset") !== "0") {
@@ -388,6 +395,37 @@ async function runNormalScenario(browser, fixture) {
     await assertVisible(page.getByRole("link", { name: "000001" }), "000001 result link");
     await page.screenshot({ path: path.join(screenshotDir, "normal-03-result-provenance.png"), fullPage: true });
 
+    await page.getByTestId("full-market-add-filter").click();
+    if (await page.getByTestId("full-market-results").count()) throw new Error("adding a condition retained stale results");
+    await page.getByLabel("Full Market filter metric", { exact: true }).nth(1).selectOption("latest_close");
+    await page.getByLabel("Full Market filter operator", { exact: true }).nth(1).selectOption("lt");
+    await page.getByLabel("Full Market filter value", { exact: true }).nth(1).fill("80");
+    const combinedResponsePromise = page.waitForResponse((item) => new URL(item.url()).pathname === "/api/screener/full-market");
+    await page.getByTestId("run-full-market").click();
+    const combinedResponse = await combinedResponsePromise;
+    const combined = await combinedResponse.json();
+    const combinedFilters = JSON.parse(new URL(combinedResponse.url()).searchParams.get("filters") || "null");
+    if (combinedFilters?.length !== 2 || combinedFilters[1].metric !== "latest_close" || combinedFilters[1].operator !== "lt" || combinedFilters[1].value !== 80) {
+      throw new Error("UI did not submit both AND conditions");
+    }
+    if (combinedResponse.status() !== 200 || combined.total_rows !== 1 || combined.rows[0]?.code !== "000001") {
+      throw new Error("AND query did not narrow the two matching rows to 000001");
+    }
+    if (combined.coverage?.universe_count !== 3 || combined.breadth.ma20.evaluable_count !== 2) {
+      throw new Error("AND filtering changed the full-universe coverage or breadth");
+    }
+    await page.getByTestId("full-market-results").waitFor({ state: "visible" });
+    const candidate = page.getByTestId("full-market-results").getByRole("link", { name: "候选研究" });
+    if (await candidate.getAttribute("href") !== "/candidates/000001") throw new Error("AND result lost its candidate research handoff");
+    await page.screenshot({ path: path.join(screenshotDir, "normal-05-and-results.png"), fullPage: true });
+    await page.getByTestId("full-market-results").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(screenshotDir, "normal-07-and-result-table.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByTestId("full-market-form").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(screenshotDir, "normal-06-and-mobile.png"), fullPage: true });
+    await page.setViewportSize({ width: 1280, height: 720 });
+    console.log(`[E2E] AND conditions=2 rows=${combined.total_rows}; candidate=/candidates/000001; url=${baseUrl}/screener`);
+
     await page.getByRole("link", { name: "000001" }).click();
     await page.waitForURL(`${baseUrl}/stock-data?code=000001`);
     if (page.url() !== `${baseUrl}/stock-data?code=000001`) throw new Error(`code link URL mismatch: ${page.url()}`);
@@ -409,7 +447,8 @@ async function runFailureClearsScenario(browser, fixture) {
   const baseUrl = `http://127.0.0.1:${frontendPort}`;
   const page = await browser.newPage();
   try {
-    await page.goto(`${baseUrl}/screener`, { waitUntil: "networkidle" });
+    await page.goto(`${baseUrl}/screener`, { waitUntil: "domcontentloaded" });
+    await page.getByTestId("full-market-tab").waitFor({ state: "visible" });
     await page.getByTestId("full-market-tab").click();
 
     const firstResponsePromise = page.waitForResponse((response) => {
@@ -470,7 +509,8 @@ async function runModeSwitchScenario(browser, fixture) {
   const baseUrl = `http://127.0.0.1:${frontendPort}`;
   const page = await browser.newPage();
   try {
-    await page.goto(`${baseUrl}/screener`, { waitUntil: "networkidle" });
+    await page.goto(`${baseUrl}/screener`, { waitUntil: "domcontentloaded" });
+    await page.getByTestId("full-market-tab").waitFor({ state: "visible" });
     await page.getByTestId("full-market-tab").click();
     await page.getByTestId("run-full-market").click();
     await timing.started;
@@ -518,7 +558,8 @@ async function runUnavailableScenario(browser, rdpRoot, tempDir, kind, expectedR
   const page = await browser.newPage();
   const prefix = kind === "corrupt" ? "corrupt" : "unavailable";
   try {
-    await page.goto(`${baseUrl}/screener`, { waitUntil: "networkidle" });
+    await page.goto(`${baseUrl}/screener`, { waitUntil: "domcontentloaded" });
+    await page.getByTestId("full-market-tab").waitFor({ state: "visible" });
     await page.screenshot({ path: path.join(screenshotDir, `${prefix}-01-screener.png`), fullPage: true });
     await page.getByTestId("full-market-tab").click();
     await page.screenshot({ path: path.join(screenshotDir, `${prefix}-02-full-market-form.png`), fullPage: true });

@@ -3,6 +3,7 @@ import { AlertCircle, Filter, Loader2, Play, Plus, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import type {
+  FullMarketFilter,
   FullMarketFilterOperator,
   FullMarketMetric,
   FullMarketQuery,
@@ -23,6 +24,7 @@ import {
   FULL_MARKET_FILTER_OPERATORS,
   FULL_MARKET_METRIC_CATALOG,
   MAX_CODES,
+  MAX_CONDITIONS,
   buildEvaluatePayload,
   buildFullMarketQuery,
   defaultCondition,
@@ -38,6 +40,7 @@ import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import { DiscoveryWorkspace } from "@/components/discovery/DiscoveryWorkspace";
 
 type FullMarketValueMetric = Exclude<FullMarketMetric, "code" | "latest_date">;
+type FullMarketFilterDraft = Omit<FullMarketFilter, "value"> & { value: string };
 
 function FullMarketResultTable({ result }: { result: FullMarketResult }) {
   const metric = (row: FullMarketResult["rows"][number], key: FullMarketValueMetric) => {
@@ -162,9 +165,9 @@ export function Screener() {
   const [fullMarketResult, setFullMarketResult] = useState<FullMarketResult | null>(null);
   const [fullMarketAsOf, setFullMarketAsOf] = useState("");
   const [fullMarketLatest, setFullMarketLatest] = useState(true);
-  const [fullMarketMetric, setFullMarketMetric] = useState<Exclude<FullMarketMetric, "code" | "latest_date">>("return_20d");
-  const [fullMarketOperator, setFullMarketOperator] = useState<FullMarketFilterOperator>("gte");
-  const [fullMarketValue, setFullMarketValue] = useState("0");
+  const [fullMarketFilters, setFullMarketFilters] = useState<FullMarketFilterDraft[]>([
+    { metric: "return_20d", operator: "gte", value: "0" },
+  ]);
   const [fullMarketSort, setFullMarketSort] = useState<FullMarketMetric>("return_20d");
   const [fullMarketSortOrder, setFullMarketSortOrder] = useState<"asc" | "desc">("desc");
   const [fullMarketOffset, setFullMarketOffset] = useState(0);
@@ -173,6 +176,19 @@ export function Screener() {
   const codes = useMemo(() => normalizeCodes(parseCodeDraft(codeText)), [codeText]);
   const draftError = useMemo(() => validateScreenerDraft(codes, conditions), [codes, conditions]);
   const groups = groupResults(result);
+
+  const resetFullMarketResult = () => {
+    setFullMarketResult(null);
+    setFullMarketOffset(0);
+    setError(null);
+  };
+
+  const updateFullMarketFilter = (index: number, patch: Partial<FullMarketFilterDraft>) => {
+    setFullMarketFilters((current) => current.map((filter, currentIndex) => (
+      currentIndex === index ? { ...filter, ...patch } : filter
+    )));
+    resetFullMarketResult();
+  };
 
   const applySource = (incoming: string[]) => {
     const loaded = loadSourceCodes(incoming);
@@ -250,8 +266,8 @@ export function Screener() {
 
   const runFullMarket = async (offset = fullMarketOffset) => {
     if (loading) return;
-    const numericValue = Number(fullMarketValue);
-    if (!Number.isFinite(numericValue)) {
+    const filters = fullMarketFilters.map((filter) => ({ ...filter, value: Number(filter.value) }));
+    if (fullMarketFilters.some((filter) => filter.value.trim() === "") || filters.some((filter) => !Number.isFinite(filter.value))) {
       setFullMarketResult(null);
       setError("全市场阈值必须是有效数字");
       return;
@@ -265,11 +281,9 @@ export function Screener() {
     setHint(null);
     try {
       const query: FullMarketQuery = buildFullMarketQuery({
-        as_of: fullMarketAsOf || undefined,
+        as_of: fullMarketLatest ? undefined : fullMarketAsOf || undefined,
         latest: fullMarketLatest,
-        filter_metric: fullMarketMetric,
-        filter_operator: fullMarketOperator,
-        filter_value: numericValue,
+        filters,
         sort_by: fullMarketSort,
         sort_order: fullMarketSortOrder,
         limit: 50,
@@ -400,36 +414,48 @@ export function Screener() {
         <GlassCard className="space-y-4 p-4" data-testid="full-market-form">
           <div className="flex flex-wrap items-center gap-3">
             <label className="inline-flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={fullMarketLatest} onChange={(event) => setFullMarketLatest(event.target.checked)} />
+              <input type="checkbox" checked={fullMarketLatest} disabled={loading} onChange={(event) => { setFullMarketLatest(event.target.checked); resetFullMarketResult(); }} />
               使用最新可用日期
             </label>
             {!fullMarketLatest ? (
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 As of
-                <input aria-label="Full Market as of" type="date" value={fullMarketAsOf} onChange={(event) => setFullMarketAsOf(event.target.value)} className="rounded border border-border bg-background px-2 py-1 text-xs text-foreground" />
+                <input aria-label="Full Market as of" type="date" value={fullMarketAsOf} disabled={loading} onChange={(event) => { setFullMarketAsOf(event.target.value); resetFullMarketResult(); }} className="rounded border border-border bg-background px-2 py-1 text-xs text-foreground" />
               </label>
             ) : null}
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <label className="space-y-1 text-xs text-muted-foreground">
-              筛选指标
-              <select aria-label="Full Market filter metric" value={fullMarketMetric} onChange={(event) => setFullMarketMetric(event.target.value as FullMarketValueMetric)} className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground">
-                {FULL_MARKET_METRIC_CATALOG.filter((item) => item.id !== "latest_date" && item.id !== "code").map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-              </select>
-            </label>
-            <label className="space-y-1 text-xs text-muted-foreground">
-              运算符
-              <select aria-label="Full Market filter operator" value={fullMarketOperator} onChange={(event) => setFullMarketOperator(event.target.value as FullMarketFilterOperator)} className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground">
-                {FULL_MARKET_FILTER_OPERATORS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-              </select>
-            </label>
-            <label className="space-y-1 text-xs text-muted-foreground">
-              阈值
-              <input aria-label="Full Market filter value" type="number" step="any" value={fullMarketValue} onChange={(event) => setFullMarketValue(event.target.value)} className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground" />
-            </label>
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>筛选条件：全部同时满足（AND）</span>
+              <button type="button" data-testid="full-market-add-filter" onClick={() => { setFullMarketFilters((current) => [...current, { metric: "return_20d", operator: "gte", value: "0" }]); resetFullMarketResult(); }} disabled={loading || fullMarketFilters.length >= MAX_CONDITIONS} className="rounded border border-border px-2 py-1 disabled:opacity-40">添加条件</button>
+              <span>最多 {MAX_CONDITIONS} 项</span>
+            </div>
+            {fullMarketFilters.map((filter, index) => (
+              <div key={index} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+                <label className="space-y-1 text-xs text-muted-foreground">
+                  筛选指标
+                  <select aria-label="Full Market filter metric" value={filter.metric} disabled={loading} onChange={(event) => updateFullMarketFilter(index, { metric: event.target.value as FullMarketValueMetric })} className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground">
+                    {FULL_MARKET_METRIC_CATALOG.filter((item) => item.id !== "latest_date" && item.id !== "code").map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                  </select>
+                </label>
+                <label className="space-y-1 text-xs text-muted-foreground">
+                  运算符
+                  <select aria-label="Full Market filter operator" value={filter.operator} disabled={loading} onChange={(event) => updateFullMarketFilter(index, { operator: event.target.value as FullMarketFilterOperator })} className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground">
+                    {FULL_MARKET_FILTER_OPERATORS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                  </select>
+                </label>
+                <label className="space-y-1 text-xs text-muted-foreground">
+                  阈值
+                  <input aria-label="Full Market filter value" type="number" step="any" value={filter.value} disabled={loading} onChange={(event) => updateFullMarketFilter(index, { value: event.target.value })} className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground" />
+                </label>
+                <button type="button" aria-label={`删除条件 ${index + 1}`} onClick={() => { setFullMarketFilters((current) => current.filter((_, currentIndex) => currentIndex !== index)); resetFullMarketResult(); }} disabled={loading} className="self-end rounded border border-border px-2 py-1.5 text-xs disabled:opacity-40">删除</button>
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-xs text-muted-foreground">
               排序指标
-              <select aria-label="Full Market sort metric" value={fullMarketSort} onChange={(event) => setFullMarketSort(event.target.value as FullMarketMetric)} className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground">
+              <select aria-label="Full Market sort metric" value={fullMarketSort} disabled={loading} onChange={(event) => { setFullMarketSort(event.target.value as FullMarketMetric); resetFullMarketResult(); }} className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground">
                 {FULL_MARKET_METRIC_CATALOG.filter((item) => item.id !== "latest_date" && item.id !== "code").map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
                 <option value="code">代码</option>
               </select>
@@ -438,7 +464,7 @@ export function Screener() {
           <div className="flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
               排序方向
-              <select aria-label="Full Market sort order" value={fullMarketSortOrder} onChange={(event) => setFullMarketSortOrder(event.target.value as "asc" | "desc")} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground">
+              <select aria-label="Full Market sort order" value={fullMarketSortOrder} disabled={loading} onChange={(event) => { setFullMarketSortOrder(event.target.value as "asc" | "desc"); resetFullMarketResult(); }} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground">
                 <option value="desc">降序</option><option value="asc">升序</option>
               </select>
             </label>

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   MAX_CODES,
   buildEvaluatePayload,
+  buildFullMarketQuery,
   defaultCondition,
   groupResults,
   loadSourceCodes,
@@ -11,6 +12,7 @@ import {
   parseCodeDraft,
   validateScreenerDraft,
 } from "../src/lib/recoveredScreener.ts";
+import { recoveredMarketApi } from "../src/lib/recoveredMarketApi.ts";
 import type { ScreenerEvaluateResult } from "../src/lib/recoveredMarketTypes.ts";
 
 test("screener code normalization dedupes, sorts and does not silently truncate", () => {
@@ -32,6 +34,31 @@ test("evaluate payload keeps validated AND conditions", () => {
   const payload = buildEvaluatePayload(["600519", "000001"], [defaultCondition("price_gt_sma20")]);
   assert.deepEqual(payload.codes, ["000001", "600519"]);
   assert.equal(payload.conditions[0].id, "price_gt_sma20");
+});
+
+test("Full Market filters support AND arrays, legacy input, and reject invalid values", async () => {
+  const filters = [
+    { metric: "return_20d" as const, operator: "gte" as const, value: 0.05 },
+    { metric: "return_20d" as const, operator: "lte" as const, value: 0.2 },
+  ];
+  assert.deepEqual(buildFullMarketQuery({ filters }).filters, filters);
+  assert.deepEqual(buildFullMarketQuery({ filters: [] }).filters, []);
+  assert.equal(buildFullMarketQuery({ filter_metric: "return_20d", filter_operator: "gte", filter_value: 0 }).filter_value, 0);
+  assert.throws(() => buildFullMarketQuery({ filters: [{ ...filters[0], value: Number.NaN }] }), /全市场筛选参数无效/);
+  assert.throws(() => buildFullMarketQuery({ filters: Array.from({ length: 21 }, () => filters[0]) }), /全市场筛选参数无效/);
+
+  const originalFetch = globalThis.fetch;
+  let requestedUrl = "";
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requestedUrl = typeof input === "string" ? input : input.toString();
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    await recoveredMarketApi.getFullMarket({ filters });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.deepEqual(JSON.parse(new URL(requestedUrl, "http://localhost").searchParams.get("filters") || "null"), filters);
 });
 
 test("result grouping preserves matched/rejected/unavailable buckets", () => {

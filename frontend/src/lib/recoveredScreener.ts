@@ -1,5 +1,6 @@
 import type {
   FullMarketFilterOperator,
+  FullMarketFilter,
   FullMarketMetric,
   FullMarketQuery,
   ScreenerCondition,
@@ -115,6 +116,11 @@ export const FULL_MARKET_FILTER_OPERATORS: Array<{ id: FullMarketFilterOperator;
 export function buildFullMarketQuery(query: FullMarketQuery): FullMarketQuery {
   const next: FullMarketQuery = { latest: true, sort_by: "code", sort_order: "asc", limit: 50, offset: 0, ...query };
   if (next.latest === false && !next.as_of) throw new Error("latest=false 时必须指定 as_of");
+  if (next.filters && (next.filters.length > MAX_CONDITIONS || next.filters.some((filter: FullMarketFilter) => (
+    !filter.metric || !filter.operator || !Number.isFinite(filter.value)
+  )))) {
+    throw new Error("全市场筛选参数无效");
+  }
   if (next.filter_metric && (!next.filter_operator || next.filter_value == null || !Number.isFinite(next.filter_value))) {
     throw new Error("全市场筛选参数无效");
   }

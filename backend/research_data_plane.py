@@ -516,11 +516,12 @@ def _validate_full_market_query(
     filter_metric: str | None,
     filter_operator: str | None,
     filter_value: float | None,
+    filters: list[dict[str, Any]] | None,
     sort_by: str,
     sort_order: str,
     limit: int,
     offset: int,
-) -> None:
+) -> list[tuple[str, str, float]]:
     if as_of is not None:
         if not _DATE_RE.fullmatch(as_of):
             raise ResearchDataPlaneQueryValidationError("as_of must use YYYY-MM-DD")
@@ -532,11 +533,47 @@ def _validate_full_market_query(
         raise ResearchDataPlaneQueryValidationError("latest must be boolean")
     if not latest and as_of is None:
         raise ResearchDataPlaneQueryValidationError("as_of is required when latest=false")
-    if filter_metric is None:
+    if filters is not None:
+        if filter_metric is not None or filter_operator is not None or filter_value is not None:
+            raise ResearchDataPlaneQueryValidationError(
+                "filters cannot be combined with legacy filter fields"
+            )
+        if not isinstance(filters, list):
+            raise ResearchDataPlaneQueryValidationError("filters must be a JSON array")
+        if len(filters) > 20:
+            raise ResearchDataPlaneQueryValidationError("filters must contain at most 20 conditions")
+        normalized_filters: list[tuple[str, str, float]] = []
+        for item in filters:
+            if not isinstance(item, dict) or set(item) != {"metric", "operator", "value"}:
+                raise ResearchDataPlaneQueryValidationError(
+                    "each filter must contain metric, operator, and value"
+                )
+            metric = item["metric"]
+            operator = item["operator"]
+            value = item["value"]
+            if not isinstance(metric, str) or metric not in _FULL_MARKET_NUMERIC_METRICS:
+                raise ResearchDataPlaneQueryValidationError(
+                    f"filter metric must be a numeric named metric: {', '.join(sorted(_FULL_MARKET_NUMERIC_METRICS))}"
+                )
+            if not isinstance(operator, str) or operator not in _FULL_MARKET_OPERATORS:
+                raise ResearchDataPlaneQueryValidationError(
+                    f"filter operator must be one of: {', '.join(sorted(_FULL_MARKET_OPERATORS))}"
+                )
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ResearchDataPlaneQueryValidationError("filter value must be a finite number")
+            try:
+                numeric = float(value)
+            except OverflowError as exc:
+                raise ResearchDataPlaneQueryValidationError("filter value must be a finite number") from exc
+            if not math.isfinite(numeric):
+                raise ResearchDataPlaneQueryValidationError("filter value must be a finite number")
+            normalized_filters.append((metric, operator, numeric))
+    elif filter_metric is None:
         if filter_operator is not None or filter_value is not None:
             raise ResearchDataPlaneQueryValidationError(
                 "filter_metric is required when a filter is provided"
             )
+        normalized_filters = []
     else:
         if filter_metric not in _FULL_MARKET_NUMERIC_METRICS:
             raise ResearchDataPlaneQueryValidationError(
@@ -554,6 +591,7 @@ def _validate_full_market_query(
             raise ResearchDataPlaneQueryValidationError("filter_value must be numeric") from exc
         if not math.isfinite(numeric):
             raise ResearchDataPlaneQueryValidationError("filter_value must be finite")
+        normalized_filters = [(filter_metric, filter_operator, numeric)]
     if sort_by not in _FULL_MARKET_METRICS:
         raise ResearchDataPlaneQueryValidationError(
             f"sort_by must be one of: {', '.join(sorted(_FULL_MARKET_METRICS))}"
@@ -564,6 +602,7 @@ def _validate_full_market_query(
         raise ResearchDataPlaneQueryValidationError(f"limit must be between 1 and {_MAX_LIMIT}")
     if not 0 <= offset <= _MAX_OFFSET:
         raise ResearchDataPlaneQueryValidationError(f"offset must be between 0 and {_MAX_OFFSET}")
+    return normalized_filters
 
 
 def _full_market_provenance(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -628,6 +667,7 @@ def query_full_market(
     filter_metric: str | None = None,
     filter_operator: str | None = None,
     filter_value: float | None = None,
+    filters: list[dict[str, Any]] | None = None,
     sort_by: str = "code",
     sort_order: str = "asc",
     sort_metric: str | None = None,
@@ -645,12 +685,13 @@ def query_full_market(
         if sort_by != "code":
             raise ResearchDataPlaneValidationError("use only one of sort_by and sort_metric")
         sort_by = sort_metric
-    _validate_full_market_query(
+    normalized_filters = _validate_full_market_query(
         as_of=as_of,
         latest=latest,
         filter_metric=filter_metric,
         filter_operator=filter_operator,
         filter_value=filter_value,
+        filters=filters,
         sort_by=sort_by,
         sort_order=sort_order,
         limit=limit,
@@ -742,9 +783,12 @@ def query_full_market(
 
             filter_clause = ""
             filter_params: list[Any] = []
-            if filter_metric is not None:
-                filter_clause = f" WHERE {filter_metric} {_FULL_MARKET_OPERATORS_SQL[filter_operator]} ?"
-                filter_params.append(float(filter_value))
+            if normalized_filters:
+                filter_clause = " WHERE " + " AND ".join(
+                    f"{metric} {_FULL_MARKET_OPERATORS_SQL[operator]} ?"
+                    for metric, operator, _ in normalized_filters
+                )
+                filter_params = [value for _, _, value in normalized_filters]
             rows_query = (
                 base_cte
                 + "SELECT code, latest_date, latest_close, return_5d, return_20d, return_60d, "
