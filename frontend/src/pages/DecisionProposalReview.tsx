@@ -550,16 +550,32 @@ export function DecisionProposalReview() {
           <p className="font-mono text-[11px] text-muted-foreground">decision_id：{String(displayedDecision.committed.decision_id ?? "—")}</p>
           <p className="text-xs text-muted-foreground">历史确认内容保留提交时原貌；下列当前评估按读取时间重新核对，不代表当时结论被改写。</p>
           <dl className="grid gap-2 text-xs sm:grid-cols-2" data-testid="committed-decision-snapshot">
-            {Object.entries(displayedDecision.committed).filter(([key]) => key !== "snapshot_json").map(([key, value]) => (
-              <div key={key} className="min-w-0"><dt className="text-muted-foreground">{key}</dt><dd className="whitespace-pre-wrap break-words">{typeof value === "object" ? JSON.stringify(value, null, 2) : String(value ?? "未知")}</dd></div>
+            {[
+              ["决定 ID", displayedDecision.committed.decision_id],
+              ["当时结论", displayedDecision.committed.next_best_action],
+              ["提交时间", displayedDecision.committed.committed_at],
+              ["来源 Thesis / 版本", `${displayedDecision.committed.thesis_id} / v${displayedDecision.committed.thesis_revision}`],
+              ["当时资产判断", recordValue(displayedDecision.committed.asset_view)?.note],
+              ["当时交易判断", recordValue(displayedDecision.committed.trade_view)?.note],
+              ["组合约束", recordValue(displayedDecision.committed.portfolio_view)?.constraint],
+              ["关键假设", displayedDecision.committed.key_assumptions],
+              ["复核期限", displayedDecision.committed.review_by],
+              ["事件失效条件", displayedDecision.committed.event_invalidation_conditions],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="min-w-0"><dt className="text-muted-foreground">{String(label)}</dt><dd className="whitespace-pre-wrap break-words">{presentAuthorityValue(value)}</dd></div>
             ))}
           </dl>
+          <details className="text-xs">
+            <summary className="cursor-pointer text-primary">展开提交时完整快照与来源引用</summary>
+            <pre className="mt-2 whitespace-pre-wrap break-words">{JSON.stringify(Object.fromEntries(Object.entries(displayedDecision.committed).filter(([key]) => key !== "snapshot_json")), null, 2)}</pre>
+          </details>
+          <p className="text-xs">当前评估原因：{presentAuthorityValue(displayedDecision.formal_decision.reason_codes)}</p>
           <div className="grid gap-2 sm:grid-cols-3">
             <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">Formal Thesis：{authorityLabel(evaluationOf(displayedDecision.formal_thesis))}</div>
             <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">Hard Risk：{authorityLabel(evaluationOf(displayedDecision.hard_risk))}</div>
             <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">Material：{authorityLabel(evaluationOf(displayedDecision.material_change))}</div>
           </div>
-          <p className="text-xs text-muted-foreground">Decision Inbox 将在下一次 backend snapshot 中读取这条 LAST_FROZEN_DECISION；它不是 CURRENT_RECOMMENDATION。</p>
+          <p className="text-xs text-muted-foreground">{historicalId === null ? "Decision Inbox 将在下一次 backend snapshot 中读取这条 LAST_FROZEN_DECISION；它不是 CURRENT_RECOMMENDATION。" : "此处只读展示指定历史决定；旧决定不会自动成为当前建议。"}</p>
           <div className="flex flex-wrap gap-x-4 gap-y-2">
             <Link to="/decision-inbox" className="inline-flex text-xs text-primary hover:underline">打开 Decision Inbox →</Link>
             {historicalId === null && committedTradeHref ? (
