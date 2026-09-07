@@ -1221,16 +1221,16 @@ export function Trades() {
               <div className="space-y-6 text-xs">
                 {/* 基础与作废标头 */}
                 <div className="rounded-lg bg-muted/30 p-4 space-y-2 border border-border/40">
-                  <div className="flex items-center justify-between">
-                    <div>
+                  <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
                       <span className="text-base font-bold text-foreground">
                         {detailTrade.name} ({detailTrade.code})
                       </span>
-                      <span className="ml-2 font-mono text-[11px] text-muted-foreground">
+                      <span className="ml-0 block break-all font-mono text-[11px] text-muted-foreground sm:ml-2 sm:inline">
                         ID: {detailTrade.trade_id}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="rounded-full bg-primary/15 px-2.5 py-0.5 font-medium text-primary">
                         {operationLabel(detailTrade.operation)}
                       </span>
@@ -1270,12 +1270,12 @@ export function Trades() {
                     <div className="rounded border border-rose-500/20 bg-rose-500/10 p-2 text-rose-400">归属候选加载失败：{candidateError}</div>
                   )}
                   {reconciliation && (
-                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                    <div className="grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
                       <div><span className="text-muted-foreground">状态：</span><span className="font-semibold text-foreground">{reconciliation.allocation_state}</span></div>
                       <div><span className="text-muted-foreground">对账：</span><span className="font-semibold text-foreground">{reconciliation.reconciliation_requirement}</span></div>
-                      {reconciliation.campaign_id && <div><span className="text-muted-foreground">Campaign：</span><span className="font-mono text-foreground">{reconciliation.campaign_id}</span></div>}
-                      {reconciliation.decision_id && <div><span className="text-muted-foreground">Frozen Decision：</span><span className="font-mono text-foreground">{reconciliation.decision_id}</span></div>}
-                      {reconciliation.origin === "UNPLANNED" && <div className="col-span-2 text-amber-400">来源：明确 UNPLANNED（pre_trade_decision=NONE，pre_trade_thesis=NONE）</div>}
+                      {reconciliation.campaign_id && <div className="break-all"><span className="text-muted-foreground">Campaign：</span><span className="font-mono text-foreground">{reconciliation.campaign_id}</span></div>}
+                      {reconciliation.decision_id && <div className="break-all"><span className="text-muted-foreground">Frozen Decision：</span><span className="font-mono text-foreground">{reconciliation.decision_id}</span></div>}
+                      {reconciliation.origin === "UNPLANNED" && <div className="text-amber-400 sm:col-span-2">来源：明确 UNPLANNED（pre_trade_decision=NONE，pre_trade_thesis=NONE）</div>}
                     </div>
                   )}
 
