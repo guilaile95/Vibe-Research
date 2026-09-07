@@ -49,7 +49,7 @@ function delta(
 function readyThesis(
   links: EvidenceLink[],
   invalidation: string[] = ["渠道崩塌"],
-  opts: { deltas?: CurrentThesisDelta[]; effectiveState?: string } = {},
+  opts: { deltas?: CurrentThesisDelta[]; effectiveState?: string; catalysts?: string[] } = {},
 ): CampaignCurrentThesis {
   return {
     campaign_id: campaign.campaign_id,
@@ -70,7 +70,7 @@ function readyThesis(
         summary: "需求仍在，等待更好价格。",
         status: "active",
         core_claims: ["高端需求稳定", "库存可控", "估值回到可接受区间"],
-        catalysts: [],
+        catalysts: opts.catalysts ?? [],
         risks: [],
         invalidation_conditions: invalidation,
         created_at: "2026-08-01T00:00:00.000Z",
@@ -378,7 +378,46 @@ test("研究连续性与当前 Campaign 不一致时不混入其内容", () => {
   assert.match(brief.changes.note, /与当前 Campaign 不一致/);
   assert.equal(brief.changes.items.length, 0);
   assert.ok(brief.freshness.gaps.includes("研究连续性与当前 Campaign 不一致"));
-  assert.match(brief.freshness.calendarText, /未读取/);
+  assert.equal(brief.verification.calendarState, null);
+});
+
+test("原研究 catalysts 与披露日历诚实并列：预计/已发生/已确认分层可追溯", () => {
+  const cont = continuity("NORMAL", [], {
+    decision_calendar: {
+      state: "EXPECTED",
+      next: { report_date: "2026-08-30", appointment_date: "2026-08-28", actual_date: null, semantics: "预约披露日" },
+      latest_actual: null,
+      fetched_at: "2026-08-22T00:00:00.000Z",
+      source: "cninfo",
+    },
+  });
+  const brief = buildResearchBrief(briefInput({
+    currentThesis: readyThesis(
+      [evidence({ evidence_id: "ev1", stance: "support", claim: "终端动销仍在", classification: "fact" })],
+      ["渠道崩塌"],
+      { catalysts: ["6 月渠道发布会", "中报披露"], deltas: [delta({ delta_id: "delta_w1", delta_state: "WEAKENED" })] },
+    ),
+    continuity: cont,
+  }));
+  assert.deepEqual(brief.verification.catalysts, ["6 月渠道发布会", "中报披露"]);
+  assert.match(brief.verification.catalystsNote, /不会自动/);
+  assert.equal(brief.verification.calendarState, "EXPECTED");
+  assert.match(brief.verification.calendarLine, /预约披露日 2026-08-28/);
+  assert.match(brief.verification.calendarLine, /不是公司保证日期/);
+  // 已确认支持/削弱只在已确认变更区，不与 catalysts 伪造关联。
+  assert.equal(brief.confirmedUpdates.length, 1);
+  assert.equal(brief.confirmedUpdates[0].stateLabel, "削弱");
+});
+
+test("未关联案例：无 catalysts、无日历记录时不伪造核验结论", () => {
+  const brief = buildResearchBrief(briefInput({
+    currentThesis: readyThesis([evidence({ evidence_id: "ev1", stance: "support", claim: "终端动销仍在", classification: "fact" })]),
+    continuity: continuity("NO_BASELINE"),
+  }));
+  assert.equal(brief.verification.catalysts.length, 0);
+  assert.match(brief.verification.catalystsNote, /没有记录 catalysts/);
+  assert.equal(brief.verification.calendarState, "NO_RECORD");
+  assert.match(brief.verification.calendarLine, /暂无可核验的定期报告日程/);
 });
 
 test("来源冲突保留双方立场与来源时间，立场交换产生可辨识差异", () => {

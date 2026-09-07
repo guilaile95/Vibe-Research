@@ -235,10 +235,32 @@ export function ResearchBrief({
         )}
       </section>
 
+      <section data-testid="research-brief-verification">
+        <h3 className="text-xs font-semibold">原研究记录了哪些待核验节点，现在是什么状态？</h3>
+        <p className="mt-1 text-[11px] text-muted-foreground">{model.verification.catalystsNote}</p>
+        {model.verification.catalysts.length > 0 && (
+          <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
+            {model.verification.catalysts.map((item) => (
+              <li key={item} data-verification-catalyst>
+                {item}
+                <span className="ml-1 text-muted-foreground">（核验状态无法由现有结构化记录确认；尚无可读取的显式关联）</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {model.verification.calendarState && (
+          <p className="mt-2 text-xs" data-verification-calendar-state={model.verification.calendarState}>
+            {model.verification.calendarLine}
+          </p>
+        )}
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          「预计发生」≠「已实际发生」，「已实际披露」≠「业绩符合预期」；已确认支持 / 削弱 / 证伪只看上方「已确认变更」。预约日已过只代表延迟信号，不是违规或延期认定。
+        </p>
+      </section>
+
       <section data-testid="research-brief-freshness">
-        <h3 className="text-xs font-semibold">材料对应什么时间，还有哪些数据缺口或待核验节点？</h3>
+        <h3 className="text-xs font-semibold">材料对应什么时间，还有哪些数据缺口？</h3>
         <p className="mt-2 text-xs">冻结时间：{model.freshness.frozenAt || "未知"}</p>
-        <p className="mt-1 text-xs">{model.freshness.calendarText}</p>
         {model.freshness.gaps.length > 0 && (
           <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground" data-testid="research-brief-gaps">
             {model.freshness.gaps.map((gap) => <li key={gap}>{gap}</li>)}
