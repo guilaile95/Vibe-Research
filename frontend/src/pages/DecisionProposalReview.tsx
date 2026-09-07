@@ -308,6 +308,18 @@ export function DecisionProposalReview() {
     contextMessage,
   }), [campaignId, campaign, currentThesis, hydration, continuity, continuityError, contextState, contextMessage]);
 
+  const currentThesisEntryHref = contextState === "ready"
+    && campaign
+    && binding
+    && campaign.campaign_id === campaignId
+    ? `/thesis/${binding.thesis_id}?${new URLSearchParams({
+      campaign_id: campaign.campaign_id,
+      security_code: campaign.security_code,
+      strategy: campaign.strategy,
+      return_to: "/decision-inbox",
+    }).toString()}`
+    : null;
+
   // P1-DF3：review boundary 只来自用户在 datetime-local 控件里的显式选择；
   // 过去时间等业务校验仍由 backend Preview authority 负责，这里不复制规则。
   const reviewBoundary = useMemo(() => parseReviewBoundary(reviewByLocal), [reviewByLocal]);
@@ -649,6 +661,15 @@ export function DecisionProposalReview() {
             >
               <ArrowLeft className="h-3.5 w-3.5" /> 返回 Decision Inbox
             </Link>
+            {currentThesisEntryHref && (
+              <Link
+                to={currentThesisEntryHref}
+                className="inline-flex items-center gap-1.5 rounded border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+                data-testid="decision-review-current-thesis-entry"
+              >
+                查看研究与记录证据
+              </Link>
+            )}
             <button type="button" onClick={() => navigate(-1)} className="inline-flex items-center gap-1.5 rounded border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
               返回
             </button>
