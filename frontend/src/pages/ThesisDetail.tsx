@@ -1588,7 +1588,9 @@ export function ThesisDetail() {
               {revisions.map((r) => (
                 <Link
                   key={r.id}
-                  to={`/thesis/${id}/revision/${r.revision_number}`}
+                  to={`/thesis/${id}/revision/${r.revision_number}?${new URLSearchParams({
+                    return_to: `${location.pathname}${location.search}${location.hash}`,
+                  })}`}
                   className="block py-2.5 transition-colors hover:bg-primary/5"
                 >
                   <div className="flex items-center gap-2">

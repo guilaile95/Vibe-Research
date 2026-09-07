@@ -4,11 +4,12 @@
  * 内容来自不可变 Frozen Decision 读取接口，读取失败如实显示为失败。
  */
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 import { ApiError, listCommittedDecisions, type CommittedDecisionsListResult } from "@/lib/api";
 
 export function CampaignCommittedDecisionsCard({ campaignId }: { campaignId: string }) {
+  const { hash } = useLocation();
   const [state, setState] = useState<{
     loading: boolean;
     error: string | null;
@@ -32,6 +33,17 @@ export function CampaignCommittedDecisionsCard({ campaignId }: { campaignId: str
       });
     return () => { active = false; };
   }, [campaignId]);
+
+  useEffect(() => {
+    const item = state.data?.items.find(
+      ({ decision_id }) => hash === `#committed-decision-${campaignId}-${decision_id}`,
+    );
+    if (!item) return;
+    const target = document.getElementById(`committed-decision-${campaignId}-${item.decision_id}`);
+    if (!target) return;
+    target.scrollIntoView({ block: "center" });
+    target.focus({ preventScroll: true });
+  }, [campaignId, hash, state.data]);
 
   if (state.loading) return null;
   if (state.error) {
@@ -59,7 +71,12 @@ export function CampaignCommittedDecisionsCard({ campaignId }: { campaignId: str
       </p>
       <ul className="space-y-1.5">
         {state.data.items.map((item) => (
-          <li key={item.decision_id} className="rounded bg-muted/30 px-2 py-1.5 space-y-0.5">
+          <li
+            key={item.decision_id}
+            id={`committed-decision-${campaignId}-${item.decision_id}`}
+            tabIndex={-1}
+            className="rounded bg-muted/30 px-2 py-1.5 space-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+          >
             <p className="font-mono">{item.decision_id}</p>
             <p className="text-muted-foreground">
               提交时间：{item.committed_at || "未知"}
@@ -69,7 +86,10 @@ export function CampaignCommittedDecisionsCard({ campaignId }: { campaignId: str
             </p>
             <Link
               className="inline-block text-primary underline"
-              to={`/campaigns/${campaignId}/decision-proposal?${new URLSearchParams({ decision_id: item.decision_id })}`}
+              to={`/campaigns/${campaignId}/decision-proposal?${new URLSearchParams({
+                decision_id: item.decision_id,
+                return_to: `/decision-inbox#committed-decision-${campaignId}-${item.decision_id}`,
+              })}`}
             >
               查看详情（含当时依据）→
             </Link>

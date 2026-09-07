@@ -156,6 +156,13 @@ export function DecisionProposalReview() {
   const [historyRetry, setHistoryRetry] = useState(0);
   const { campaignId = "" } = useParams();
   const navigate = useNavigate();
+  const expectedHistoricalReturnTo = historicalId === null
+    ? null
+    : `/decision-inbox#committed-decision-${campaignId}-${historicalId}`;
+  const historicalInboxHref = expectedHistoricalReturnTo !== null
+    && searchParams.get("return_to") === expectedHistoricalReturnTo
+    ? expectedHistoricalReturnTo
+    : "/decision-inbox";
   // 三视图结构化输入（P1-DF1）：用户通过 select/text 控件表达判断，
   // payload 由 decisionProposalForm 纯函数生成，不再手写 JSON。
   const [assetStance, setAssetStance] = useState<ViewStance>("WAIT");
@@ -622,7 +629,7 @@ export function DecisionProposalReview() {
           </div>
           <p className="text-xs text-muted-foreground">{historicalId === null ? "Decision Inbox 将在下一次 backend snapshot 中读取这条 LAST_FROZEN_DECISION；它不是 CURRENT_RECOMMENDATION。" : "此处只读展示指定历史决定；旧决定不会自动成为当前建议。"}</p>
           <div className="flex flex-wrap gap-x-4 gap-y-2">
-            <Link to="/decision-inbox" className="inline-flex text-xs text-primary hover:underline">打开 Decision Inbox →</Link>
+            <Link to={historicalInboxHref} className="inline-flex text-xs text-primary hover:underline">打开 Decision Inbox →</Link>
             {historicalId === null && committedTradeHref ? (
               <Link
                 to={committedTradeHref}
@@ -639,7 +646,7 @@ export function DecisionProposalReview() {
   if (historicalId !== null) return (
     <div className="space-y-4" data-testid="historical-decision-detail">
       <PageHeader title="历史正式决定" subtitle={`Campaign ${campaignId} · 决定 ${historicalId}`} />
-      <Link to="/decision-inbox" className="text-primary underline">返回 Decision Inbox</Link>
+      <Link to={historicalInboxHref} className="text-primary underline">返回 Decision Inbox</Link>
       {(!historyRead || historyRead.id !== `${campaignId}:${historicalId}`) && <p role="status">正在读取指定决定…</p>}
       {historyRead?.id === `${campaignId}:${historicalId}` && historyRead.error && <p role="alert">历史决定读取失败：{historyRead.error}；未切换到其他决定。</p>}
       <button type="button" className="ml-3 underline" onClick={() => setHistoryRetry((value) => value + 1)}>重新读取此决定</button>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Plus, Loader2, FileText, Filter, ChevronLeft, ChevronRight } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -66,8 +66,20 @@ export function EvidenceList() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const [subjectType, setSubjectType] = useState("");
-  const [subjectId, setSubjectId] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawSubjectType = searchParams.get("subject_type") ?? "";
+  const subjectType = ["stock", "sector", "theme"].includes(rawSubjectType) ? rawSubjectType : "";
+  const subjectId = searchParams.get("subject_id") ?? "";
+  const listReturnTo = `/evidence${searchParams.toString() ? `?${searchParams}` : ""}`;
+
+  const setFilter = (key: "subject_type" | "subject_id", value: string) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (value) next.set(key, value);
+      else next.delete(key);
+      return next;
+    }, { replace: true });
+  };
 
   const runIdRef = useRef(0);
 
@@ -131,7 +143,7 @@ export function EvidenceList() {
             <span className="text-muted-foreground">主体类型</span>
             <select
               value={subjectType}
-              onChange={(e) => setSubjectType(e.target.value)}
+              onChange={(e) => setFilter("subject_type", e.target.value)}
               className="mt-0.5 block rounded border border-border/50 bg-background px-2 py-1 text-sm"
             >
               <option value="">全部</option>
@@ -144,7 +156,7 @@ export function EvidenceList() {
             <span className="text-muted-foreground">主体代码/标识</span>
             <input
               value={subjectId}
-              onChange={(e) => setSubjectId(e.target.value)}
+              onChange={(e) => setFilter("subject_id", e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") void load(0); }}
               placeholder="如 600519"
               className="mt-0.5 block w-40 rounded border border-border/50 bg-background px-2 py-1 text-sm"
@@ -185,7 +197,7 @@ export function EvidenceList() {
             {items.map((e) => (
               <Link
                 key={e.id}
-                to={`/evidence/${e.id}`}
+                to={`/evidence/${e.id}?${new URLSearchParams({ return_to: listReturnTo })}`}
                 className="block py-3 transition-colors hover:bg-primary/5"
               >
                 <div className="flex items-start gap-2.5">
