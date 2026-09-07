@@ -51,7 +51,9 @@ export function EvidenceNew() {
   const initialSubjectType = querySubjectType === "stock" || querySubjectType === "sector" || querySubjectType === "theme"
     ? querySubjectType
     : "stock";
-  const initialSubjectId = initialSubjectType === "stock" && /^\d{6}$/.test(querySubjectId) ? querySubjectId : "";
+  const initialSubjectId = initialSubjectType === "stock"
+    ? /^\d{6}$/.test(querySubjectId) ? querySubjectId : ""
+    : querySubjectId;
   // return_to 只接受站内路径（以单个 "/" 开头），支持从 Thesis 页等入口创建后回跳。
   const returnTo = queryReturnTo.startsWith("/") && !queryReturnTo.startsWith("//") ? queryReturnTo : "";
   const returnToLabel = returnTo === `/candidates/${initialSubjectId}`

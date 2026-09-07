@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft, Pencil, Save, X, Loader2, Lock, Plus, Link2, Unlink,
   RefreshCw, GitCompareArrows, History, ExternalLink, BookOpen,
@@ -224,6 +224,7 @@ const toEditForm = (
 
 export function ThesisDetail() {
   const { id } = useParams<{ id: string }>();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const campaignId = searchParams.get("campaign_id") || "";
   const querySecurityCode = searchParams.get("security_code") || "";
@@ -893,6 +894,11 @@ export function ThesisDetail() {
 
   if (!aggregate) return null;
   const t = aggregate.thesis;
+  const newEvidenceHref = `/evidence/new?${new URLSearchParams({
+    subject_type: t.subject_type,
+    subject_id: t.subject_id,
+    return_to: `${location.pathname}${location.search}${location.hash}`,
+  }).toString()}`;
 
   return (
     <div>
@@ -1369,9 +1375,21 @@ export function ThesisDetail() {
                   <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" /> 加载证据列表…
                   </div>
+                ) : linkErr && evidenceOptions.length === 0 ? (
+                  <div className="py-2 text-xs text-destructive" role="alert">
+                    <p>无法读取同主体证据：{linkErr}</p>
+                    <button
+                      type="button"
+                      onClick={openLinkPanel}
+                      disabled={busy}
+                      className="mt-1 text-primary hover:underline disabled:opacity-60"
+                    >
+                      重试读取
+                    </button>
+                  </div>
                 ) : evidenceOptions.length === 0 ? (
                   <p className="py-2 text-xs text-muted-foreground">
-                    没有同主体的证据。<Link to="/evidence/new" className="text-primary">去新建一条</Link>
+                    没有同主体的证据。<Link to={newEvidenceHref} className="text-primary">去新建一条</Link>
                   </p>
                 ) : (
                   <div className="space-y-2">
@@ -1415,7 +1433,7 @@ export function ThesisDetail() {
                     </div>
                   </div>
                 )}
-                {linkErr && <p className="mt-2 text-xs text-destructive">{linkErr}</p>}
+                {linkErr && evidenceOptions.length > 0 && <p className="mt-2 text-xs text-destructive">{linkErr}</p>}
                 <div className="mt-2 flex items-center gap-2">
                   <button
                     onClick={submitLink}

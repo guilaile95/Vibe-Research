@@ -7,7 +7,7 @@
  * 确认后的内容一律来自服务端读回（deltas API），不把本地表单渲染成成功结果。
  */
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { AlertCircle, Loader2 } from "lucide-react";
 
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -45,6 +45,7 @@ export function ThesisDeltaConfirm({
   subjectType: string;
   subjectId: string;
 }) {
+  const location = useLocation();
   const [evidenceItems, setEvidenceItems] = useState<EvidenceRecord[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(true);
   const [evidenceError, setEvidenceError] = useState<string | null>(null);
@@ -179,7 +180,7 @@ export function ThesisDeltaConfirm({
           to={`/evidence/new?${new URLSearchParams({
             subject_type: subjectType,
             subject_id: subjectId,
-            return_to: `/thesis/${thesisId}`,
+            return_to: `${location.pathname}${location.search}${location.hash}`,
           }).toString()}`}
           className="rounded-md border border-primary/40 px-2.5 py-1 text-xs text-primary hover:bg-primary/5"
         >
