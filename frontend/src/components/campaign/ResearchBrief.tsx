@@ -218,7 +218,7 @@ export function ResearchBrief({
             {model.verification.catalysts.map((item) => (
               <li key={item} data-verification-catalyst>
                 {item}
-                <span className="ml-1 text-muted-foreground">（尚未核验：摘要未发现与该节点已建立的证据关联）</span>
+                <span className="ml-1 text-muted-foreground">（核验状态无法由现有结构化记录确认；尚无可读取的显式关联）</span>
               </li>
             ))}
           </ul>
