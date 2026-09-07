@@ -72,7 +72,7 @@ function reviewWorklistItem(item: FormalReviewWorklistItem, onFocus: (decisionId
       className="w-full rounded-md border border-border/60 p-3 text-left hover:bg-accent/40"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-mono text-xs font-medium">{item.decision_id}</span>
+        <span className="break-all font-mono text-xs font-medium">{item.decision_id}</span>
         <span className="rounded bg-muted px-2 py-0.5 text-xs">{item.due_state}</span>
       </div>
       <div className="mt-1 text-sm">{item.security_code || "—"} · {item.strategy || "—"}</div>
