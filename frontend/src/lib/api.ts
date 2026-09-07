@@ -1797,6 +1797,29 @@ export async function getCommittedDecisionRuntime(
   return parseCommittedDecisionRuntimeRead(result, campaignId, decisionId);
 }
 
+/** R5：某 Campaign 全部已提交（不可变）决定列表；只读，不区分激活状态。 */
+export interface CommittedDecisionListItem {
+  decision_id: string;
+  campaign_id: string;
+  committed_at: string;
+  next_best_action?: string | null;
+  review_by?: string | null;
+  validity_status_at_commit?: string | null;
+}
+
+export interface CommittedDecisionsListResult {
+  items: CommittedDecisionListItem[];
+  total: number;
+}
+
+export async function listCommittedDecisions(
+  campaignId: string,
+): Promise<CommittedDecisionsListResult> {
+  return get<CommittedDecisionsListResult>(
+    `/campaigns/${encodeURIComponent(campaignId)}/decision-proposal/committed`,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Decision Inbox（P0-CS1）：只读快照。
 // ---------------------------------------------------------------------------

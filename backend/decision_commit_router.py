@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 import campaign_ai_draft_service as ai_draft_service
 import campaign_service
 import decision_commit_runtime as runtime
+import frozen_decision_service
 
 
 router = APIRouter(prefix="/api", tags=["decision-commit"])
@@ -113,6 +114,30 @@ def commit_decision_proposal(
     except Exception:  # noqa: BLE001 — stable fail-closed boundary
         raise HTTPException(500, _COMMIT_UNAVAILABLE) from None
     return {"data": result}
+
+
+@router.get("/campaigns/{campaign_id}/decision-proposal/committed")
+def list_committed_decisions(campaign_id: str) -> dict[str, Any]:
+    """Read-only list of this campaign's immutable frozen decisions.
+
+    Deterministic order (committed_at ASC, decision_id ASC) straight from the
+    existing frozen-decision read path; no runtime projection, no preview or
+    draft content. Lets non-holding (e.g. PRE-ENTRY) campaigns surface their
+    already-committed decisions without activating anything.
+    """
+    try:
+        campaign_service.get_campaign(campaign_id)
+    except campaign_service.CampaignNotFoundError:
+        raise HTTPException(404, _CAMPAIGN_NOT_FOUND) from None
+    except campaign_service.CampaignServiceError:
+        raise HTTPException(500, _COMMIT_UNAVAILABLE) from None
+    try:
+        items = frozen_decision_service.list_decisions(
+            campaign_id=campaign_id, limit=1000
+        )
+    except Exception:  # noqa: BLE001 — stable fail-closed boundary
+        raise HTTPException(500, _COMMIT_UNAVAILABLE) from None
+    return {"data": {"items": items, "total": len(items)}}
 
 
 @router.get("/campaigns/{campaign_id}/decision-proposal/committed/{decision_id}")
