@@ -52,6 +52,7 @@ import type {
 import { CampaignLifecycleCard } from "@/components/campaign/CampaignLifecycleCard";
 import { ResearchContinuityCard } from "@/components/campaign/ResearchContinuityCard";
 import { CampaignThesisActivationCard } from "@/components/campaign/CampaignThesisActivationCard";
+import { CampaignCommittedDecisionsCard } from "@/components/campaign/CampaignCommittedDecisionsCard";
 import { HardRiskPanel } from "@/components/campaign/HardRiskPanel";
 import { DecisionActionPanel } from "@/components/campaign/DecisionActionPanel";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -886,6 +887,7 @@ export default function DecisionInbox() {
                       strategy={campaign.strategy}
                       reloadEpoch={thesisReloadEpoch}
                     />
+                    <CampaignCommittedDecisionsCard campaignId={campaign.campaign_id} />
                   </div>
                 );
               })}

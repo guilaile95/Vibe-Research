@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { loadLlm } from "@/lib/llm";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, LockKeyhole } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ApiError, CommittedDecisionReadError, api, DECISION_CHALLENGE_DIMENSIONS, type DecisionChallengeDimensionInput, type DecisionChallengeDimensionName, type DecisionChallengePacket, type DecisionProposalDraftInput, type DecisionProposalPreview, type CommittedDecisionRuntimeRead } from "@/lib/api";
@@ -150,6 +150,10 @@ function shortestReason(value: unknown): string {
 }
 
 export function DecisionProposalReview() {
+  const [searchParams] = useSearchParams();
+  const historicalId = searchParams.get("decision_id");
+  const [historyRead, setHistoryRead] = useState<{ id: string; data: CommittedDecisionRuntimeRead | null; error: string } | null>(null);
+  const [historyRetry, setHistoryRetry] = useState(0);
   const { campaignId = "" } = useParams();
   const navigate = useNavigate();
   // 三视图结构化输入（P1-DF1）：用户通过 select/text 控件表达判断，
@@ -207,6 +211,17 @@ export function DecisionProposalReview() {
   const [continuityError, setContinuityError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (historicalId === null) return;
+    let active = true;
+    setHistoryRead(null);
+    api.getCommittedDecisionRuntime(campaignId, historicalId)
+      .then((data) => { if (active) setHistoryRead({ id: `${campaignId}:${historicalId}`, data, error: "" }); })
+      .catch((cause) => { if (active) setHistoryRead({ id: `${campaignId}:${historicalId}`, data: null, error: cause instanceof Error ? cause.message : "历史决定读取失败" }); });
+    return () => { active = false; };
+  }, [campaignId, historicalId, historyRetry]);
+
+  useEffect(() => {
+    if (historicalId !== null) return;
     const generation = ++contextGeneration.current;
     let cancelled = false;
     setContextState("loading");
@@ -261,7 +276,7 @@ export function DecisionProposalReview() {
       cancelled = true;
       contextGeneration.current += 1;
     };
-  }, [campaignId]);
+  }, [campaignId, historicalId]);
 
   useEffect(() => {
     if (!campaignId) {
@@ -557,6 +572,68 @@ export function DecisionProposalReview() {
         formalDecisionEvaluation: evaluationOf(committed.formal_decision),
       })
     : null;
+
+  const displayedDecision = historicalId === null ? committed
+    : historyRead?.id === `${campaignId}:${historicalId}` ? historyRead.data : null;
+  const decisionReadbackSection = (<>
+      {displayedDecision && (
+        <section className="space-y-3 rounded-lg border border-success/40 bg-success/5 p-4" data-formal-decision-evaluation={evaluationOf(displayedDecision.formal_decision)} role="status">
+          <h2 className="flex items-center gap-2 text-sm font-semibold"><CheckCircle2 className="h-4 w-4 text-success" />Frozen Decision 已由 backend re-read</h2>
+          <p className="text-xs text-muted-foreground">Formal Decision evaluation：<span className="font-mono">{evaluationOf(displayedDecision.formal_decision)}</span> · as_of：<span className="font-mono">{displayedDecision.as_of}</span></p>
+          <p className="font-mono text-[11px] text-muted-foreground">decision_id：{String(displayedDecision.committed.decision_id ?? "—")}</p>
+          <p className="text-xs text-muted-foreground">历史确认内容保留提交时原貌；下列当前评估按读取时间重新核对，不代表当时结论被改写。</p>
+          <dl className="grid gap-2 text-xs sm:grid-cols-2" data-testid="committed-decision-snapshot">
+            {[
+              ["决定 ID", displayedDecision.committed.decision_id],
+              ["当时结论", displayedDecision.committed.next_best_action],
+              ["提交时间", displayedDecision.committed.committed_at],
+              ["来源 Thesis / 版本", `${displayedDecision.committed.thesis_id} / v${displayedDecision.committed.thesis_revision}`],
+              ["当时资产判断", recordValue(displayedDecision.committed.asset_view)?.note],
+              ["当时交易判断", recordValue(displayedDecision.committed.trade_view)?.note],
+              ["组合约束", recordValue(displayedDecision.committed.portfolio_view)?.constraint],
+              ["关键假设", displayedDecision.committed.key_assumptions],
+              ["复核期限", displayedDecision.committed.review_by],
+              ["事件失效条件", displayedDecision.committed.event_invalidation_conditions],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="min-w-0"><dt className="text-muted-foreground">{String(label)}</dt><dd className="whitespace-pre-wrap break-words">{presentAuthorityValue(value)}</dd></div>
+            ))}
+          </dl>
+          <details className="text-xs">
+            <summary className="cursor-pointer text-primary">展开提交时完整快照与来源引用</summary>
+            <pre className="mt-2 whitespace-pre-wrap break-words">{JSON.stringify(Object.fromEntries(Object.entries(displayedDecision.committed).filter(([key]) => key !== "snapshot_json")), null, 2)}</pre>
+          </details>
+          <p className="text-xs">当前评估原因：{presentAuthorityValue(displayedDecision.formal_decision.reason_codes)}</p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">Formal Thesis：{authorityLabel(evaluationOf(displayedDecision.formal_thesis))}</div>
+            <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">Hard Risk：{authorityLabel(evaluationOf(displayedDecision.hard_risk))}</div>
+            <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">Material：{authorityLabel(evaluationOf(displayedDecision.material_change))}</div>
+          </div>
+          <p className="text-xs text-muted-foreground">{historicalId === null ? "Decision Inbox 将在下一次 backend snapshot 中读取这条 LAST_FROZEN_DECISION；它不是 CURRENT_RECOMMENDATION。" : "此处只读展示指定历史决定；旧决定不会自动成为当前建议。"}</p>
+          <div className="flex flex-wrap gap-x-4 gap-y-2">
+            <Link to="/decision-inbox" className="inline-flex text-xs text-primary hover:underline">打开 Decision Inbox →</Link>
+            {historicalId === null && committedTradeHref ? (
+              <Link
+                to={committedTradeHref}
+                className="inline-flex text-xs font-medium text-primary hover:underline"
+                data-testid="committed-decision-trade-continuation"
+              >
+                如已实际执行，记录交易 →
+              </Link>
+            ) : null}
+          </div>
+        </section>
+      )}
+  </>);
+  if (historicalId !== null) return (
+    <div className="space-y-4" data-testid="historical-decision-detail">
+      <PageHeader title="历史正式决定" subtitle={`Campaign ${campaignId} · 决定 ${historicalId}`} />
+      <Link to="/decision-inbox" className="text-primary underline">返回 Decision Inbox</Link>
+      {(!historyRead || historyRead.id !== `${campaignId}:${historicalId}`) && <p role="status">正在读取指定决定…</p>}
+      {historyRead?.id === `${campaignId}:${historicalId}` && historyRead.error && <p role="alert">历史决定读取失败：{historyRead.error}；未切换到其他决定。</p>}
+      <button type="button" className="ml-3 underline" onClick={() => setHistoryRetry((value) => value + 1)}>重新读取此决定</button>
+      {decisionReadbackSection}
+    </div>
+  );
 
   return (
     <div className="space-y-6" data-decision-proposal-page={campaignId}>
@@ -1208,31 +1285,7 @@ export function DecisionProposalReview() {
         </section>
       )}
 
-      {committed && (
-        <section className="space-y-3 rounded-lg border border-success/40 bg-success/5 p-4" data-formal-decision-evaluation={evaluationOf(committed.formal_decision)} role="status">
-          <h2 className="flex items-center gap-2 text-sm font-semibold"><CheckCircle2 className="h-4 w-4 text-success" />Frozen Decision 已由 backend re-read</h2>
-          <p className="text-xs text-muted-foreground">Formal Decision evaluation：<span className="font-mono">{evaluationOf(committed.formal_decision)}</span> · as_of：<span className="font-mono">{committed.as_of}</span></p>
-          <p className="font-mono text-[11px] text-muted-foreground">decision_id：{String(committed.committed.decision_id ?? "—")}</p>
-          <div className="grid gap-2 sm:grid-cols-3">
-            <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">Formal Thesis：{authorityLabel(evaluationOf(committed.formal_thesis))}</div>
-            <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">Hard Risk：{authorityLabel(evaluationOf(committed.hard_risk))}</div>
-            <div className="rounded border border-border/50 bg-background/40 p-2 text-xs">Material：{authorityLabel(evaluationOf(committed.material_change))}</div>
-          </div>
-          <p className="text-xs text-muted-foreground">Decision Inbox 将在下一次 backend snapshot 中读取这条 LAST_FROZEN_DECISION；它不是 CURRENT_RECOMMENDATION。</p>
-          <div className="flex flex-wrap gap-x-4 gap-y-2">
-            <Link to="/decision-inbox" className="inline-flex text-xs text-primary hover:underline">打开 Decision Inbox →</Link>
-            {committedTradeHref ? (
-              <Link
-                to={committedTradeHref}
-                className="inline-flex text-xs font-medium text-primary hover:underline"
-                data-testid="committed-decision-trade-continuation"
-              >
-                如已实际执行，记录交易 →
-              </Link>
-            ) : null}
-          </div>
-        </section>
-      )}
+      {decisionReadbackSection}
     </div>
   );
 }
