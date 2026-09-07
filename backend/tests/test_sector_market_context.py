@@ -43,6 +43,14 @@ def test_history_metrics_keep_windows_and_formula_explicit():
     assert short["return_60d_pct"] is None
 
 
+def test_history_metrics_expose_sample_provenance():
+    metrics = context._history_metrics(_history(61))
+    assert metrics["history_session_count"] == 61
+    assert metrics["history_start_date"] == "2026-01-01"
+    assert metrics["history_end_date"] == "2026-01-61"
+    assert metrics["trade_date"] == "2026-01-61"
+
+
 def test_current_breadth_is_current_constituent_intersection_and_preserves_missing():
     breadth = context._current_breadth(
         [
