@@ -67,6 +67,7 @@ const LIBRARY_NAV = [
   { to: "/sectors", label: "板块" },
   { to: "/signals", label: "产业信号" },
   { to: "/thesis", label: "投资逻辑" },
+  { to: "/evidence", label: "证据库" },
   { to: "/my-reports", label: "研报" },
   { to: "/debate", label: "多空辩论" },
   { to: "/notes", label: "笔记" },
@@ -116,7 +117,6 @@ function isActive(pathname: string, to: string) {
 function getCurrentNavPath(pathname: string) {
   if (SECTOR_PATHS.some((to) => isActive(pathname, to))) return "/sectors";
   if (pathname.startsWith("/thesis/")) return "/thesis";
-  if (pathname.startsWith("/evidence")) return "/decision-evidence";
   if (pathname.startsWith("/campaigns/")) return "/decision-inbox";
   if (pathname.startsWith("/candidates/")) return "/stock-data";
   return ALL_NAV.reduce<string | null>((best, item) => {
@@ -171,7 +171,7 @@ export function Layout() {
     if (LIBRARY_NAV.some(({ to }) => isActive(pathname, to))) {
       setLibraryOpen(true);
     }
-    if (ANALYSIS_NAV.some(({ to }) => isActive(pathname, to)) || pathname.startsWith("/evidence")) {
+    if (ANALYSIS_NAV.some(({ to }) => isActive(pathname, to))) {
       setAnalysisOpen(true);
     }
   }, [pathname]);
