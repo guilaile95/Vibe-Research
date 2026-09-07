@@ -2522,6 +2522,24 @@ export interface CurrentThesisReady {
 
 export type CampaignCurrentThesis = CurrentThesisNotReady | CurrentThesisReady;
 
+export interface ThesisDeltaNewEvidenceInput {
+  evidence_id: string;
+  stance: EvidenceLink["stance"];
+  expected_updated_at?: string | null;
+}
+
+export interface ThesisDeltaCreatePayload {
+  delta_state: ThesisDeltaState;
+  reason: string;
+  evidence_ids?: string[];
+  new_evidence?: ThesisDeltaNewEvidenceInput[];
+}
+
+export interface ThesisDeltaListResult {
+  items: CurrentThesisDelta[];
+  total: number;
+}
+
 export type ResearchContinuityChangeType =
   | "ADDED" | "CHANGED" | "SOURCE_CONFLICT";
 
