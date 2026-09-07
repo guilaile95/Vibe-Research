@@ -44,6 +44,19 @@ export interface ResearchBriefConfirmedUpdate {
   evidence: ResearchBriefEvidenceItem[];
 }
 
+export interface ResearchBriefConflictRecord {
+  source: string;
+  claim: string;
+  stance: string | null;
+  stanceLabel: string | null;
+  classificationLabel: string | null;
+  confidence: string | null;
+  sourceTitle: string | null;
+  sourceUrl: string | null;
+  sourceDate: string | null;
+  recordedAt: string | null;
+}
+
 export interface ResearchBriefChangeItem {
   kind: "ADDED" | "CHANGED" | "SOURCE_CONFLICT";
   label: string;
@@ -52,6 +65,7 @@ export interface ResearchBriefChangeItem {
   source: string;
   classificationLabel: string | null;
   detail: string | null;
+  conflictRecords?: ResearchBriefConflictRecord[];
 }
 
 export interface ResearchBriefModel {
@@ -298,6 +312,12 @@ function baselineText(continuity: ResearchContinuity): string | null {
   return `基线 ${authority}${baseline.as_of ? ` · as_of ${baseline.as_of}` : ""}（口径：Current Thesis 的不可变 Evidence 快照）`;
 }
 
+const STANCE_LABELS: Record<string, string> = {
+  support: "支持",
+  oppose: "反对",
+  neutral: "中立",
+};
+
 function changeDetail(item: ResearchContinuity["changes"]["items"][number]): string | null {
   const before = item.before?.values ?? null;
   const after = item.after?.values ?? null;
@@ -309,6 +329,9 @@ function changeDetail(item: ResearchContinuity["changes"]["items"][number]): str
       (field) =>
         `${FIELD_LABELS[field] || field}：${shown(before?.[field] ?? null)} → ${shown(after?.[field] ?? null)}`,
     );
+    // 资料自身时间来自记录字段；读取时间（fetched_at）单独展示，不混作发布日期。
+    if (after?.source_date) parts.push(`来源日期：${after.source_date}`);
+    if (after?.accessed_at) parts.push(`记录时间：${after.accessed_at}`);
     return parts.length ? parts.join("；") : null;
   }
   if (item.change_type === "ADDED" && after) {
@@ -317,17 +340,45 @@ function changeDetail(item: ResearchContinuity["changes"]["items"][number]): str
     if (classification) bits.push(`分类：${classification}`);
     if (after.confidence) bits.push(`置信度：${after.confidence}`);
     if (after.evidence_type) bits.push(`类型：${after.evidence_type}`);
+    // 资料自身的时间来自记录字段；读取时间（fetched_at）单独展示，不混作发布日期。
+    if (after.source_date) bits.push(`来源日期：${after.source_date}`);
+    if (after.accessed_at) bits.push(`记录时间：${after.accessed_at}`);
     return bits.length ? bits.join(" · ") : null;
   }
   if (item.change_type === "SOURCE_CONFLICT" && item.records?.length) {
+    // 默认摘要只保留关键差异（来源与立场）；完整原文与溯源在 conflictRecords 展开区。
     return item.records
       .map((record) => {
-        const classification = classificationLabel(record.values?.classification);
-        return `${shown(record.source)}${classification ? `（分类：${classification}）` : ""}`;
+        const stance = typeof record.values?.stance === "string"
+          ? STANCE_LABELS[record.values.stance] || record.values.stance
+          : null;
+        const sourceName = (typeof record.values?.source_title === "string" && record.values.source_title)
+          || shown(record.source);
+        return `${sourceName}：${stance ? `立场 ${stance}` : "立场未知"}`;
       })
       .join(" / ");
   }
   return null;
+}
+
+function conflictRecords(item: ResearchContinuity["changes"]["items"][number]): ResearchBriefConflictRecord[] | undefined {
+  if (item.change_type !== "SOURCE_CONFLICT" || !item.records?.length) return undefined;
+  return item.records.map((record) => {
+    const values = record.values ?? {};
+    const stance = typeof values.stance === "string" ? values.stance : null;
+    return {
+      source: shown(record.source),
+      claim: record.claim_identity || shown(values.claim ?? null),
+      stance,
+      stanceLabel: stance ? STANCE_LABELS[stance] || stance : null,
+      classificationLabel: classificationLabel(values.classification),
+      confidence: typeof values.confidence === "string" ? values.confidence : null,
+      sourceTitle: typeof values.source_title === "string" && values.source_title ? values.source_title : null,
+      sourceUrl: typeof values.source_url === "string" && values.source_url ? values.source_url : null,
+      sourceDate: typeof values.source_date === "string" && values.source_date ? values.source_date : null,
+      recordedAt: typeof values.accessed_at === "string" && values.accessed_at ? values.accessed_at : null,
+    };
+  });
 }
 
 function mapChanges(
@@ -415,6 +466,7 @@ function mapChanges(
           ?? item.records?.[0]?.values?.classification,
       ),
       detail: changeDetail(item),
+      conflictRecords: conflictRecords(item),
     };
   });
   if (items.length === 0) {

@@ -188,6 +188,20 @@ async function createFrozenCurrentThesis(base, env, { disprovenScenario = false 
     classification: "inference",
     confidence: "medium",
   });
+  // 与 evOppose 同一事实陈述但立场/来源不同 → 研究连续性产出 SOURCE_CONFLICT，
+  // 用于验证冲突双方原文、立场与来源时间在摘要中可核对。
+  const evConflict = await jsonRequest(base, "/api/evidence", "POST", {
+    subject_type: "stock",
+    subject_id: "600519",
+    evidence_type: "news",
+    claim: "竞品正在放量",
+    source_title: "卖方晨会纪要",
+    source_url: "https://example.com/morning-note",
+    source_date: "2026-08-05",
+    accessed_at: "2026-08-06T00:00:00.000Z",
+    classification: "fact",
+    confidence: "medium",
+  });
   // 冻结后确认 delta 只能引用冻结前已关联的证据（backend 校验 link 必须存在）。
   const evDeltaOppose = await jsonRequest(base, "/api/evidence", "POST", {
     subject_type: "stock",
@@ -222,6 +236,11 @@ async function createFrozenCurrentThesis(base, env, { disprovenScenario = false 
   await jsonRequest(base, `/api/thesis/${thesisId}/evidence`, "POST", {
     evidence_id: evOppose.id,
     stance: "oppose",
+    expected_revision: await currentRevision(),
+  });
+  await jsonRequest(base, `/api/thesis/${thesisId}/evidence`, "POST", {
+    evidence_id: evConflict.id,
+    stance: "support",
     expected_revision: await currentRevision(),
   });
   await jsonRequest(base, `/api/thesis/${thesisId}/evidence`, "POST", {
@@ -445,7 +464,7 @@ async function run() {
     const changesText = await page.getByTestId("research-brief-changes").innerText();
     if (process.env.DF2_FORCE_CONTEXT_FALLBACK === "1") {
       assert.match(evidenceText, /不展示未确认草稿/);
-      assert.match(changesText, /不能声称没有变化|未发现证据字段变化/);
+      assert.match(changesText, /来源冲突/);
     } else {
       // 有来源的支持 / 反对依据必须真实展示。
       assert.match(evidenceText, /终端动销保持稳定/);
@@ -456,9 +475,27 @@ async function run() {
         false,
         "fixture links opposing evidence, so the no-opposing disclaimer must not show",
       );
-      assert.match(changesText, /不能声称没有变化|未发现证据字段变化/);
       assert.match(changesText, /基线 Candidate Research Formal Original/);
       assert.match(changesText, /读取时间 \d{4}-\d{2}-\d{2}T/);
+      // 来源冲突：默认摘要含双方来源与立场；展开后原文、分类、置信度、来源时间可核对。
+      assert.match(changesText, /来源冲突/);
+      assert.match(changesText, /竞品跟踪简报：立场 反对/);
+      assert.match(changesText, /卖方晨会纪要：立场 支持/);
+      const conflictDetails = page.getByTestId("research-brief-conflict-records").first();
+      await conflictDetails.locator("summary").click();
+      const conflictText = await conflictDetails.innerText();
+      assert.match(conflictText, /\[反对\] ?竞品正在放量/);
+      assert.match(conflictText, /\[支持\] ?竞品正在放量/);
+      assert.match(conflictText, /竞品跟踪简报/);
+      assert.match(conflictText, /卖方晨会纪要/);
+      assert.match(conflictText, /来源日期 2026-08-02/);
+      assert.match(conflictText, /来源日期 2026-08-05/);
+      assert.match(conflictText, /记录时间 2026-08-06T00:00:00/);
+      assert.equal(
+        await conflictText.includes("正确"),
+        false,
+        "conflict rendering must not declare a winner",
+      );
     }
     await page.getByTestId("research-brief-freshness").waitFor();
     if (!process.env.DF2_FORCE_CONTEXT_FALLBACK) {
