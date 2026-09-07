@@ -697,6 +697,9 @@ async function run() {
     await page.goto(`${frontend}/campaigns/${campaign.campaign_id}/decision-proposal`, { waitUntil: "domcontentloaded" });
     await page.locator('[data-horizon-source="CURRENT_THESIS"]').waitFor({ timeout: 30000 });
     assert.equal((await page.locator("[data-context-effective-state]").innerText()).trim(), "削弱");
+    // 连续性请求与上下文并行返回，CI 上可能晚到；必须等 ADDED 条目真实渲染后再读 brief。
+    const changesAfterUpdate = page.getByTestId("research-brief-changes");
+    await changesAfterUpdate.getByText("冻结后渠道复核显示动销连续两周走弱").waitFor({ timeout: 30000 });
     const briefAfterUpdate = await page.getByTestId("research-brief").innerText();
     assert.match(briefAfterUpdate, /claim one/, "original frozen view must stay intact");
     assert.match(briefAfterUpdate, /冻结后渠道复核显示动销连续两周走弱/, "confirmed update evidence must surface in the brief");
