@@ -15,7 +15,7 @@ test("创建成功后使用真实 TradeRecord 关闭表单并自动选中", () =
   const region = createSubmitRegion(source);
   assert.match(region, /const created = await api\.createTrade\(payload\)/);
   assert.match(region, /setIsCreateOpen\(false\)/);
-  assert.match(region, /setSelectedTradeId\(created\.trade_id\)/);
+  assert.match(region, /selectTrade\(created\.trade_id\)/);
 });
 
 test("创建续接路径不自动归属、不自动 UNPLANNED、不自动写引用", () => {
