@@ -52,7 +52,7 @@ export function ThesisDeltaConfirm({
   const [stance, setStance] = useState<"" | "support" | "oppose" | "neutral">("");
   const [deltaState, setDeltaState] = useState<"" | ThesisDeltaState>("");
   const [reason, setReason] = useState("");
-  const [confirmed, setConfirmed] = useState(false);
+  const [confirmedInputs, setConfirmedInputs] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [staleEvidence, setStaleEvidence] = useState(false);
@@ -90,15 +90,15 @@ export function ThesisDeltaConfirm({
   }, [thesisId]);
 
   const selected = evidenceItems.find((item) => item.id === selectedEvidenceId) ?? null;
-  useEffect(() => {
-    setConfirmed(false);
-  }, [selectedEvidenceId, selected?.updated_at, stance, deltaState, reason, thesisId]);
+  const inputIdentity = JSON.stringify([thesisId, subjectType, subjectId, selectedEvidenceId,
+    selected?.updated_at, stance, deltaState, reason.trim()]);
+  const confirmed = confirmedInputs === inputIdentity;
   const canSubmit = Boolean(selected && stance && deltaState && reason.trim() && confirmed
     && !busy && !pendingWrite && !evidenceLoading && !evidenceError && !staleEvidence);
 
   const refreshEvidence = async () => {
     const generation = ++epoch.current;
-    setConfirmed(false);
+    setConfirmedInputs(null);
     setEvidenceLoading(true);
     setEvidenceError(null);
     try {
@@ -141,7 +141,7 @@ export function ThesisDeltaConfirm({
     if (!canSubmit || submitting.current || !selected || !stance || !deltaState) return;
     submitting.current = true;
     setBusy(true);
-    setConfirmed(false);
+    setConfirmedInputs(null);
     setError(null);
     let pending: { deltaId: string | null } = { deltaId: null };
     try {
@@ -208,7 +208,7 @@ export function ThesisDeltaConfirm({
             <select
               aria-label="选择证据"
               value={selectedEvidenceId}
-              onChange={(event) => setSelectedEvidenceId(event.target.value)}
+              onChange={(event) => { setConfirmedInputs(null); setSelectedEvidenceId(event.target.value); }}
               disabled={busy || pendingWrite !== null}
               className={`mt-1 ${inputCls}`}
             >
@@ -240,14 +240,14 @@ export function ThesisDeltaConfirm({
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="text-muted-foreground">该证据对当前观点的立场（显式选择，不从文字推断）</span>
-              <select disabled={busy || pendingWrite !== null} aria-label="本次变更立场" value={stance} onChange={(event) => setStance(event.target.value as typeof stance)} className={`mt-1 ${inputCls}`}>
+              <select disabled={busy || pendingWrite !== null} aria-label="本次变更立场" value={stance} onChange={(event) => { setConfirmedInputs(null); setStance(event.target.value as typeof stance); }} className={`mt-1 ${inputCls}`}>
                 <option value="">请选择</option>
                 {STANCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
             <label className="block">
               <span className="text-muted-foreground">研究变化状态（沿用既有状态集合）</span>
-              <select disabled={busy || pendingWrite !== null} aria-label="研究变化状态" value={deltaState} onChange={(event) => setDeltaState(event.target.value as typeof deltaState)} className={`mt-1 ${inputCls}`}>
+              <select disabled={busy || pendingWrite !== null} aria-label="研究变化状态" value={deltaState} onChange={(event) => { setConfirmedInputs(null); setDeltaState(event.target.value as typeof deltaState); }} className={`mt-1 ${inputCls}`}>
                 <option value="">请选择</option>
                 {DELTA_STATE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
@@ -261,7 +261,7 @@ export function ThesisDeltaConfirm({
               rows={2}
               disabled={busy || pendingWrite !== null}
               value={reason}
-              onChange={(event) => setReason(event.target.value)}
+              onChange={(event) => { setConfirmedInputs(null); setReason(event.target.value); }}
               className={`mt-1 ${inputCls}`}
             />
           </label>
@@ -285,7 +285,7 @@ export function ThesisDeltaConfirm({
               type="checkbox"
               checked={confirmed}
               disabled={busy || pendingWrite !== null || staleEvidence || evidenceLoading}
-              onChange={(event) => setConfirmed(event.target.checked)}
+              onChange={(event) => setConfirmedInputs(event.target.checked ? inputIdentity : null)}
               className="mt-0.5"
               aria-label="我已核对证据内容与本次立场，确认追加这条研究变化"
             />

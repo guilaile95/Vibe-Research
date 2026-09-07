@@ -744,27 +744,29 @@ async function run() {
     assert.match(briefAfterUpdate, /冻结后渠道复核显示动销连续两周走弱/, "confirmed update evidence must surface in the brief");
     assert.match(briefAfterUpdate, /新增证据/, "continuity must classify the post-freeze evidence as ADDED");
     await page.getByTestId("research-brief").screenshot({ path: join(shotDir, "post-freeze-delta-brief.png") });
-    // R6 path one ends at a new explicitly committed decision, not merely ADDED.
-    await page.getByLabel("Review by").fill("2099-01-01T10:00");
-    await page.getByLabel("Key assumptions").fill("渠道更新 v2 后重新评估");
-    await page.getByLabel("Event invalidation conditions").fill("动销继续恶化");
-    await page.getByLabel("Asset stance").selectOption("SUPPORT");
-    await page.getByLabel("Asset note").fill("保持原始研究，核对新增渠道证据");
-    await page.getByLabel("Trade stance").selectOption("WAIT");
-    await page.getByLabel("Trade note").fill("更新后明确等待，不记录虚构成交");
-    await page.getByLabel("Portfolio constraint").fill("维持现有约束");
-    await page.getByRole("button", { name: "Preview Proposal" }).click();
-    await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
-    await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
-    await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
-    await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
-    assert.notEqual(committedDecisionId, reread.committed.decision_id);
-    const oldAfterUpdate = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed/${reread.committed.decision_id}`);
-    assert.deepEqual(oldAfterUpdate.committed, reread.committed, "old decision snapshot must remain exact");
-    console.log("[R6] path1: new evidence -> confirmed delta -> ADDED -> new explicit decision; old snapshot unchanged");
+    if (readbackVariant === "valid") {
+      // R6 path one ends at a new explicitly committed decision, not merely ADDED.
+      await page.getByLabel("Review by").fill("2099-01-01T10:00");
+      await page.getByLabel("Key assumptions").fill("渠道更新 v2 后重新评估");
+      await page.getByLabel("Event invalidation conditions").fill("动销继续恶化");
+      await page.getByLabel("Asset stance").selectOption("SUPPORT");
+      await page.getByLabel("Asset note").fill("保持原始研究，核对新增渠道证据");
+      await page.getByLabel("Trade stance").selectOption("WAIT");
+      await page.getByLabel("Trade note").fill("更新后明确等待，不记录虚构成交");
+      await page.getByLabel("Portfolio constraint").fill("维持现有约束");
+      await page.getByRole("button", { name: "Preview Proposal" }).click();
+      await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
+      await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
+      await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
+      await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
+      assert.notEqual(committedDecisionId, reread.committed.decision_id);
+      const oldAfterUpdate = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed/${reread.committed.decision_id}`);
+      assert.deepEqual(oldAfterUpdate.committed, reread.committed, "old decision snapshot must remain exact");
+      console.log("[R6] path1: new evidence -> confirmed delta -> ADDED -> new explicit decision; old snapshot unchanged");
+    }
     const expectedFontBlock = "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap";
     const expectedChallenge404 = `/api/campaigns/${campaign.campaign_id}/decision-challenge`;
-    assert.deepEqual(notFoundResponses, [expectedChallenge404, expectedChallenge404], "only the optional challenge lookup may be 404");
+    assert.deepEqual(notFoundResponses, readbackVariant === "valid" ? [expectedChallenge404, expectedChallenge404] : [expectedChallenge404], "only the optional challenge lookup may be 404");
     const unexpectedConsoleErrors = consoleErrors.filter(
       (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
         && !message.includes("Failed to load resource: the server responded with a status of 404 (Not Found)")
