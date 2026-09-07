@@ -1,4 +1,4 @@
-"""signal_effect_study v0.2 合成数据验收 — 只锁本原型的主路径行为。
+"""signal_effect_study v0.3 合成数据验收 — 只锁本原型的主路径行为。
 
 固定协议下的可复算样本（全部为手工可算的合成序列，非市场结论）：
 - 600001：session 80 发生唯一一次 False→True 金叉；5d/20d 前向收益手工可算；
@@ -8,6 +8,8 @@
 """
 
 from __future__ import annotations
+
+import csv
 
 from datetime import date, timedelta
 from pathlib import Path
@@ -132,11 +134,21 @@ def test_signal_effect_study_fixed_protocol_on_synthetic_bars(tmp_path: Path):
     outputs = ses.write_outputs(report, str(tmp_path / "out" / "study"))
     json_path, csv_path_out = Path(outputs[0]), Path(outputs[1])
     assert json_path.is_file() and csv_path_out.is_file()
-    csv_text = csv_path_out.read_text(encoding="utf-8")
-    # 台账完整性：EVALUATED/IMMATURE/EXCLUDED 都在 CSV 中，可与汇总计数核对。
-    assert "EVALUATED" in csv_text and "IMMATURE" in csv_text and "EXCLUDED_UNKNOWN_PRIOR" in csv_text
-    assert "yes" in csv_text  # is_worst 标记
-    assert ",yes," not in csv_text.replace("is_worst", "") or True
+    with csv_path_out.open(encoding="utf-8", newline="") as handle:
+        exported = list(csv.DictReader(handle))
+    for window, bucket in report["results"].items():
+        rows = [row for row in exported if row["window"] == window]
+        assert len(rows) == len(bucket["rows"])
+        for actual, expected in zip(rows, bucket["rows"]):
+            assert actual["status"] == expected["status"]
+            assert actual["is_worst"] == ("yes" if expected["is_worst"] else "")
+            assert actual["is_failure"] == ("yes" if expected["is_failure"] else "")
+        for status, count in [("EVALUATED", "events_evaluated"), ("IMMATURE", "events_immature"),
+                              ("MISSING_EXIT", "events_missing_exit"),
+                              ("EXCLUDED_UNKNOWN_PRIOR", "events_excluded_unknown_prior")]:
+            assert sum(row["status"] == status for row in rows) == bucket[count]
+        assert sum(row["is_worst"] == "yes" for row in rows) == 1
+        assert sum(row["is_failure"] == "yes" for row in rows) == bucket["failures"]
 
 
 def test_benchmark_must_share_both_endpoints(tmp_path: Path):
@@ -195,3 +207,28 @@ def test_out_of_sample_benchmark_never_pollutes_sample(tmp_path: Path):
     # 有基准且全为正 → failures=0；worst_observation 始终存在
     assert with_benchmark["results"]["5"]["failures"] == 0
     assert with_benchmark["results"]["5"]["worst_observation"] is not None
+
+
+def test_worst_observation_uses_one_basis_with_missing_benchmark(tmp_path: Path):
+    # A: -20 absolute / -7 excess; B: -8 absolute / unavailable excess.
+    dates_a, dates_b = DATES[:86], DATES[1:87]
+    report = ses.build_report(
+        {"600001": (dates_a, [100.0] * 80 + [101.0] * 5 + [80.8]),
+         "600003": (dates_b, [100.0] * 80 + [101.0] * 5 + [92.92])},
+        (dates_a, [100.0] * 85 + [87.0]), {"root": "synthetic"}, windows=(5,),
+    )
+    bucket = report["results"]["5"]
+    assert bucket["worst_observation"]["code"] == "600001"
+    assert bucket["worst_observation_basis"] == "return_pct"
+    assert bucket["worst_observation_scope"] == "all EVALUATED events"
+    assert bucket["worst_observation_eligible_count"] == 2
+    assert bucket["excess_return"]["count"] == 1
+    assert bucket["benchmark_events_missing"] == 1
+    assert bucket["failures"] == 1
+    outputs = ses.write_outputs(report, str(tmp_path / "mixed"))
+    with Path(outputs[1]).open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [(r["code"], r["status"], r["is_worst"], r["is_failure"]) for r in rows] == [
+        ("600001", "EVALUATED", "yes", "yes"), ("600003", "EVALUATED", "", ""),
+    ]
+    assert rows[1]["excess_return_pct"] == ""

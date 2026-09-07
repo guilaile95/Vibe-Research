@@ -1,4 +1,4 @@
-"""单一信号有效性验证原型 v0.2 — RESEARCH ONLY，不进入正式决定/风险/推荐。
+"""单一信号有效性验证原型 v0.3 — RESEARCH ONLY，不进入正式决定/风险/推荐。
 
 回答的问题：「某个固定定义的研究信号，历史上之后发生了什么？」
 本脚本只做观察统计，不证明策略盈利，不产出交易建议。
@@ -33,7 +33,7 @@ EVENT LEDGER
   逐事件明细核对；不存在「只报告保留样本」的输出。
 
 WORST / FAILURE
-  worst_observation = 可评估事件中最差者（有基准按超额、无基准按绝对收益），
+  worst_observation = 全部可评估事件中绝对收益 return_pct 最低者（不混用超额），
   只是描述性标注。FAILURE 预先定义：有基准时 excess_return_pct < 0；
   无基准时不做失败判定（failures=null）。全部为正 → failures=0，不制造失败。
 
@@ -61,7 +61,7 @@ from typing import Any
 
 import research_data_plane as rdp
 
-SCHEMA_VERSION = "signal_effect_study.v0.2"
+SCHEMA_VERSION = "signal_effect_study.v0.3"
 SIGNAL_ID = "sma20_gt_sma60"
 SIGNAL_VERSION = "signal_effect_study.v0.2@7485848"
 SMA_FAST, SMA_SLOW = 20, 60
@@ -270,11 +270,7 @@ def run_study(
         if evaluated_rows:
             worst_observation = min(
                 evaluated_rows,
-                key=lambda row: (
-                    row["excess_return_pct"]
-                    if row["excess_return_pct"] is not None
-                    else row["return_pct"]
-                ),
+                key=lambda row: row["return_pct"],
             )
         for row in ledger:
             row["is_worst"] = worst_observation is not None and row is worst_observation
@@ -304,6 +300,9 @@ def run_study(
             "benchmark_return": benchmark_stats,
             "excess_return": excess_stats,
             "worst_observation": worst_observation,
+            "worst_observation_basis": "return_pct",
+            "worst_observation_scope": "all EVALUATED events",
+            "worst_observation_eligible_count": len(evaluated_rows),
             "rows": ledger,
         }
     return {"studies_by_code": studies, "windows": results}
@@ -370,11 +369,23 @@ def build_report(
             "window_semantics": "the W-th stored observation after the signal; no trading calendar applied; per-event start/end dates are kept in the ledger",
             "observation": "close-to-close forward return pct on UNADJUSTED bars",
             "benchmark_policy": "independent comparison series aligned on BOTH the signal date and the exit date; a missing endpoint -> null with reason, never forward-filled, interpolated or zero",
+            "worst_observation_policy": "minimum return_pct among all EVALUATED events; never mixed with excess returns",
             "failure_definition": "excess_return_pct < 0 vs benchmark; without a benchmark no failure judgement is made (failures=null)",
             "immature_policy": "signals within the last W stored observations are IMMATURE: counted in the ledger, never scored as success or failure",
             "missing_policy": "missing closes -> MISSING_EXIT in the ledger, never filled with 0",
         },
-        "data": data_provenance,
+        "data": {
+            **data_provenance,
+            "actual_sample_ranges": {
+                code: {"date_from": one["first_date"], "date_to": one["last_date"],
+                       "observations": one["sessions"]}
+                for code, one in per_code.items()
+            },
+            "actual_benchmark_range": {
+                "date_from": benchmark[0][0], "date_to": benchmark[0][-1],
+                "observations": len(benchmark[0]),
+            } if benchmark and benchmark[0] else None,
+        },
         "sample_codes": sorted(series_by_code.keys()),
         "per_code": per_code,
         "historical_validity": {"status": HISTORICAL_VALIDITY, "reasons": list(VALIDITY_REASONS)},
@@ -444,6 +455,8 @@ def main() -> int:
         "coverage_start": manifest.get("coverage_start"),
         "coverage_end": manifest.get("coverage_end"),
         "artifact_sha256": manifest.get("artifact_sha256"),
+        "requested_date_from": args.date_from,
+        "requested_date_to": args.date_to,
         "requested_sample_codes": codes,
         "sample_codes_with_data": sorted(series.keys()),
         "sample_codes_missing_data": [code for code in codes if code not in series],
