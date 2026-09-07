@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Pencil, Save, X, Trash2, Loader2, ExternalLink } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -109,6 +109,11 @@ const temporalBasisLabel: Record<string, string> = {
 
 export function EvidenceDetail() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const requestedReturnTo = searchParams.get("return_to") ?? "";
+  const returnTo = requestedReturnTo === "/evidence" || requestedReturnTo.startsWith("/evidence?")
+    ? requestedReturnTo
+    : "/evidence";
   const [record, setRecord] = useState<EvidenceRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -257,7 +262,7 @@ export function EvidenceDetail() {
   if (loading && !record) {
     return (
       <div>
-        <Link to="/evidence" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+        <Link to={returnTo} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
           <ArrowLeft className="h-4 w-4" /> 证据库
         </Link>
         <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
@@ -270,7 +275,7 @@ export function EvidenceDetail() {
   if (err && !record) {
     return (
       <div>
-        <Link to="/evidence" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+        <Link to={returnTo} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
           <ArrowLeft className="h-4 w-4" /> 证据库
         </Link>
         <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
@@ -284,7 +289,7 @@ export function EvidenceDetail() {
 
   return (
     <div>
-      <Link to="/evidence" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+      <Link to={returnTo} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-4 w-4" /> 证据库
       </Link>
 
