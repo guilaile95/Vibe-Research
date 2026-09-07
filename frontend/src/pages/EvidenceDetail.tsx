@@ -324,7 +324,7 @@ export function EvidenceDetail() {
       )}
 
       <GlassCard>
-        {editErr && (
+        {!editing && editErr && (
           <p className="mb-3 text-sm text-destructive">{editErr}</p>
         )}
         {!editing ? (
@@ -525,6 +525,10 @@ export function EvidenceDetail() {
                 />
               </label>
             </div>
+
+            {editErr && (
+              <p className="mt-3 text-sm text-destructive">{editErr}</p>
+            )}
 
             <div className="mt-4 flex items-center gap-2">
               <button
