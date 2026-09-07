@@ -58,6 +58,8 @@ export function ThesisDeltaConfirm({
   const [staleEvidence, setStaleEvidence] = useState(false);
   const [readback, setReadback] = useState<CurrentThesisDelta[] | null>(null);
   const epoch = useRef(0);
+  const submitting = useRef(false);
+  const [pendingWrite, setPendingWrite] = useState<{ deltaId: string | null } | null>(null);
 
   useEffect(() => {
     const generation = ++epoch.current;
@@ -88,11 +90,17 @@ export function ThesisDeltaConfirm({
   }, [thesisId]);
 
   const selected = evidenceItems.find((item) => item.id === selectedEvidenceId) ?? null;
-  const canSubmit = Boolean(selected && stance && deltaState && reason.trim() && confirmed && !busy);
+  useEffect(() => {
+    setConfirmed(false);
+  }, [selectedEvidenceId, selected?.updated_at, stance, deltaState, reason, thesisId]);
+  const canSubmit = Boolean(selected && stance && deltaState && reason.trim() && confirmed
+    && !busy && !pendingWrite && !evidenceLoading && !evidenceError && !staleEvidence);
 
   const refreshEvidence = async () => {
     const generation = ++epoch.current;
+    setConfirmed(false);
     setEvidenceLoading(true);
+    setEvidenceError(null);
     try {
       const result = await api.evidenceList({ subject_type: subjectType, subject_id: subjectId, limit: 200 });
       if (generation !== epoch.current) return;
@@ -105,40 +113,56 @@ export function ThesisDeltaConfirm({
     }
   };
 
-  const submit = async () => {
-    if (!selected || !stance || !deltaState || !reason.trim()) return;
+  const verifyWrite = async (pending: { deltaId: string | null }) => {
     setBusy(true);
-    setError(null);
     try {
-      const created = await api.thesisCreateDelta(thesisId, {
-        delta_state: deltaState,
-        reason: reason.trim(),
-        new_evidence: [{
-          evidence_id: selected.id,
-          stance,
-          expected_updated_at: selected.updated_at,
-        }],
-      });
       const list = await api.thesisListDeltas(thesisId);
+      if (list.items.some((item) => item.thesis_id !== thesisId)) throw new Error("对象不匹配");
       setReadback(list.items);
-      setStaleEvidence(false);
-      setConfirmed(false);
+      if (!pending.deltaId || !list.items.some((item) => item.delta_id === pending.deltaId)) {
+        setError(pending.deltaId ? "已写入，读回暂不可验证：尚未读到本次变更。" : "写入结果未知；已读取现有变更，无法唯一确认本次结果，请勿重复追加。");
+        return;
+      }
+      setPendingWrite(null);
+      submitting.current = false;
+      setError(null);
       setSelectedEvidenceId("");
       setStance("");
       setDeltaState("");
       setReason("");
-      void created;
-    } catch (cause) {
-      if (cause instanceof ApiError) {
-        setError(cause.message);
-        // 证据在预览后被修改：保留草稿，要求重新核对证据内容。
-        if (cause.status === 409) setStaleEvidence(true);
-      } else {
-        setError("确认失败：结果未知，请刷新后核对已确认变更，避免盲目重发。");
-      }
+    } catch {
+      setError(pending.deltaId ? "已写入，读回暂不可验证。" : "写入结果未知，读回暂不可验证；请勿重复追加。");
     } finally {
       setBusy(false);
     }
+  };
+
+  const submit = async () => {
+    if (!canSubmit || submitting.current || !selected || !stance || !deltaState) return;
+    submitting.current = true;
+    setBusy(true);
+    setConfirmed(false);
+    setError(null);
+    let pending: { deltaId: string | null } = { deltaId: null };
+    try {
+      const created = await api.thesisCreateDelta(thesisId, {
+        delta_state: deltaState,
+        reason: reason.trim(),
+        new_evidence: [{ evidence_id: selected.id, stance, expected_updated_at: selected.updated_at }],
+      });
+      if (created.thesis_id === thesisId && created.delta_id) pending = { deltaId: created.delta_id };
+    } catch (cause) {
+      // Explicit validation rejection is safe to correct; timeout/5xx can hide a committed write.
+      if (cause instanceof ApiError && [400, 401, 403, 404, 409, 422].includes(cause.status)) {
+        setError(cause.message);
+        if (cause.status === 409) setStaleEvidence(true);
+        submitting.current = false;
+        setBusy(false);
+        return;
+      }
+    }
+    setPendingWrite(pending);
+    await verifyWrite(pending);
   };
 
   return (
@@ -184,7 +208,8 @@ export function ThesisDeltaConfirm({
             <select
               aria-label="选择证据"
               value={selectedEvidenceId}
-              onChange={(event) => { setSelectedEvidenceId(event.target.value); setStaleEvidence(false); }}
+              onChange={(event) => setSelectedEvidenceId(event.target.value)}
+              disabled={busy || pendingWrite !== null}
               className={`mt-1 ${inputCls}`}
             >
               <option value="">请选择</option>
@@ -215,14 +240,14 @@ export function ThesisDeltaConfirm({
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="text-muted-foreground">该证据对当前观点的立场（显式选择，不从文字推断）</span>
-              <select aria-label="本次变更立场" value={stance} onChange={(event) => setStance(event.target.value as typeof stance)} className={`mt-1 ${inputCls}`}>
+              <select disabled={busy || pendingWrite !== null} aria-label="本次变更立场" value={stance} onChange={(event) => setStance(event.target.value as typeof stance)} className={`mt-1 ${inputCls}`}>
                 <option value="">请选择</option>
                 {STANCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
             <label className="block">
               <span className="text-muted-foreground">研究变化状态（沿用既有状态集合）</span>
-              <select aria-label="研究变化状态" value={deltaState} onChange={(event) => setDeltaState(event.target.value as typeof deltaState)} className={`mt-1 ${inputCls}`}>
+              <select disabled={busy || pendingWrite !== null} aria-label="研究变化状态" value={deltaState} onChange={(event) => setDeltaState(event.target.value as typeof deltaState)} className={`mt-1 ${inputCls}`}>
                 <option value="">请选择</option>
                 {DELTA_STATE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
@@ -234,6 +259,7 @@ export function ThesisDeltaConfirm({
             <textarea
               aria-label="变更原因"
               rows={2}
+              disabled={busy || pendingWrite !== null}
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               className={`mt-1 ${inputCls}`}
@@ -258,6 +284,7 @@ export function ThesisDeltaConfirm({
             <input
               type="checkbox"
               checked={confirmed}
+              disabled={busy || pendingWrite !== null || staleEvidence || evidenceLoading}
               onChange={(event) => setConfirmed(event.target.checked)}
               className="mt-0.5"
               aria-label="我已核对证据内容与本次立场，确认追加这条研究变化"
@@ -269,7 +296,7 @@ export function ThesisDeltaConfirm({
 
           {staleEvidence && (
             <p className="text-xs text-warning" role="status">
-              证据内容可能已在预览后发生变化，草稿已保留：请重新选择证据核对内容与来源后再确认。
+              证据内容可能已在预览后发生变化，草稿已保留：请重新读取证据核对内容与来源后再确认。
               <button type="button" onClick={() => void refreshEvidence()} className="ml-1 underline">
                 重新读取证据
               </button>
@@ -282,6 +309,12 @@ export function ThesisDeltaConfirm({
             </p>
           )}
 
+          {pendingWrite && (
+            <div role="status" data-testid="delta-write-status">
+              <p>{pendingWrite.deltaId ? `已写入，读回暂不可验证 · ${pendingWrite.deltaId}` : "写入结果未知，禁止重复追加；请只读核对。"}</p>
+              <button type="button" disabled={busy} onClick={() => void verifyWrite(pendingWrite)} className="underline">只读重试核对</button>
+            </div>
+          )}
           <button
             type="button"
             onClick={() => void submit()}

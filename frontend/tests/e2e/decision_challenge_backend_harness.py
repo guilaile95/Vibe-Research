@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import os
+from dataclasses import replace
 import threading
 from collections.abc import Mapping
 from typing import Any
@@ -20,6 +22,14 @@ def _fixed_first_projection(*args: Any, **kwargs: Any) -> dict[str, Any]:
     as_of = kwargs.get("as_of", args[1] if len(args) > 1 else None)
     if not isinstance(campaign, Mapping) or not isinstance(as_of, str):
         return _project(*args, **kwargs)
+    if os.environ.get("E2E_OFFLINE_CRITICAL_DATA") == "1":
+        # Isolated UI recovery tests need stable missing-data inputs, not live providers.
+        ports = kwargs.get("ports", campaign_critical_data_runtime.PRODUCTION_PORTS)
+        kwargs["ports"] = replace(ports,
+            market_sector_evaluator=lambda _lake, definition: campaign_critical_data_runtime._not_evaluated_result(campaign_critical_data_runtime.market_sector_adapter.DEPENDENCY_ID, definition["as_of"]),
+            disclosures_evaluator=lambda _lake, definition: campaign_critical_data_runtime._not_evaluated_result(campaign_critical_data_runtime.disclosures_adapter.DEPENDENCY_ID, definition["as_of"]),
+            financials_evaluator=lambda _lake, definition: campaign_critical_data_runtime._not_evaluated_result(campaign_critical_data_runtime.financials_adapter.DEPENDENCY_ID, definition["as_of"]),
+        )
     key = (str(campaign.get("campaign_id", "")), as_of)
     with _lock:
         if key not in _snapshots:
