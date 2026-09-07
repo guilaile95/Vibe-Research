@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { ThesisDeltaConfirm } from "@/components/thesis/ThesisDeltaConfirm";
 import {
   api, ApiError,
   type ThesisAggregate, type ThesisRevisionListItem, type ThesisDiff,
@@ -1058,6 +1059,14 @@ export function ThesisDetail() {
         )}
         {lifecycleErr && <p className="mt-3 text-sm text-destructive" role="alert">{lifecycleErr}</p>}
       </GlassCard>
+
+      {t.formal_state === "frozen" && t.status !== "archived" && (
+        <ThesisDeltaConfirm
+          thesisId={t.id}
+          subjectType={t.subject_type}
+          subjectId={t.subject_id}
+        />
+      )}
 
       {/* Tab 切换 */}
       <div className="mb-4 flex items-center gap-1 border-b border-border/30">

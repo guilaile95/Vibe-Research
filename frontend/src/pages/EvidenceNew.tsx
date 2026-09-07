@@ -52,7 +52,13 @@ export function EvidenceNew() {
     ? querySubjectType
     : "stock";
   const initialSubjectId = initialSubjectType === "stock" && /^\d{6}$/.test(querySubjectId) ? querySubjectId : "";
-  const returnTo = queryReturnTo === `/candidates/${initialSubjectId}` ? queryReturnTo : "";
+  // return_to 只接受站内路径（以单个 "/" 开头），支持从 Thesis 页等入口创建后回跳。
+  const returnTo = queryReturnTo.startsWith("/") && !queryReturnTo.startsWith("//") ? queryReturnTo : "";
+  const returnToLabel = returnTo === `/candidates/${initialSubjectId}`
+    ? "Candidate Workspace"
+    : returnTo
+      ? "返回"
+      : "证据库";
   const [form, setForm] = useState(() => ({
     subject_type: initialSubjectType as "stock" | "sector" | "theme",
     subject_id: initialSubjectId,
@@ -104,7 +110,7 @@ export function EvidenceNew() {
   return (
     <div>
       <Link to={returnTo || "/evidence"} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="h-4 w-4" /> {returnTo ? "Candidate Workspace" : "证据库"}
+        <ArrowLeft className="h-4 w-4" /> {returnToLabel}
       </Link>
 
       <PageHeader title="新建证据" subtitle="记录一条可追溯到来源的客观信息或推断，便于后续关联到投资逻辑。" />

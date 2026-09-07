@@ -6,7 +6,7 @@
  * Inbox.  The only persistence location is a temporary VR_DATA_DIR.
  */
 import assert from "node:assert/strict";
-import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { request as httpRequest } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
@@ -126,7 +126,14 @@ function chromiumPath() {
   ];
   for (const base of bases) {
     if (!base || !existsSync(base)) continue;
-    for (const entry of readdirSync(base)) {
+    if (base.endsWith(".exe") || base.endsWith("chrome") || base.endsWith("Chromium")) return base;
+    let entries;
+    try {
+      entries = readdirSync(base);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
       if (!entry.startsWith("chromium-") || entry.includes("headless")) continue;
       const candidates = [
         join(base, entry, "chrome-win64", "chrome.exe"),
@@ -151,11 +158,63 @@ async function jsonRequest(base, pathname, method = "GET", body, expected = 200)
   return payload.data;
 }
 
-async function createFrozenCurrentThesis(base, env) {
+async function createFrozenCurrentThesis(base, env, { disprovenScenario = false } = {}) {
   const campaign = await jsonRequest(base, "/api/campaigns", "POST", {
     security_code: "600519",
     strategy: "SWING",
   }, 201);
+  // 有来源、可核对的支持 / 反对依据（进入最初冻结快照）。
+  const evSupport = await jsonRequest(base, "/api/evidence", "POST", {
+    subject_type: "stock",
+    subject_id: "600519",
+    evidence_type: "news",
+    claim: "终端动销保持稳定",
+    source_title: "渠道调研周报",
+    source_url: "https://example.com/channel-report",
+    source_date: "2026-08-01",
+    accessed_at: "2026-08-01T00:00:00.000Z",
+    classification: "fact",
+    confidence: "high",
+  });
+  const evOppose = await jsonRequest(base, "/api/evidence", "POST", {
+    subject_type: "stock",
+    subject_id: "600519",
+    evidence_type: "news",
+    claim: "竞品正在放量",
+    source_title: "竞品跟踪简报",
+    source_url: "https://example.com/competitor-note",
+    source_date: "2026-08-02",
+    accessed_at: "2026-08-02T00:00:00.000Z",
+    classification: "inference",
+    confidence: "medium",
+  });
+  // 与 evOppose 同一事实陈述但立场/来源不同 → 研究连续性产出 SOURCE_CONFLICT，
+  // 用于验证冲突双方原文、立场与来源时间在摘要中可核对。
+  const evConflict = await jsonRequest(base, "/api/evidence", "POST", {
+    subject_type: "stock",
+    subject_id: "600519",
+    evidence_type: "news",
+    claim: "竞品正在放量",
+    source_title: "卖方晨会纪要",
+    source_url: "https://example.com/morning-note",
+    source_date: "2026-08-05",
+    accessed_at: "2026-08-06T00:00:00.000Z",
+    classification: "fact",
+    confidence: "medium",
+  });
+  // 冻结后确认 delta 只能引用冻结前已关联的证据（backend 校验 link 必须存在）。
+  const evDeltaOppose = await jsonRequest(base, "/api/evidence", "POST", {
+    subject_type: "stock",
+    subject_id: "600519",
+    evidence_type: "news",
+    claim: "7 月渠道复核显示动销略低于预期",
+    source_title: "渠道复核纪要",
+    source_url: "https://example.com/channel-recheck",
+    source_date: "2026-08-25",
+    accessed_at: "2026-08-25T00:00:00.000Z",
+    classification: "fact",
+    confidence: "medium",
+  });
   const created = await jsonRequest(base, "/api/thesis", "POST", {
     subject_type: "stock",
     subject_id: "600519",
@@ -168,6 +227,27 @@ async function createFrozenCurrentThesis(base, env) {
     change_summary: "DC1 browser fixture",
   }, 200);
   const thesisId = created.thesis.id;
+  const currentRevision = async () => (await jsonRequest(base, `/api/thesis/${thesisId}`)).thesis.current_revision;
+  await jsonRequest(base, `/api/thesis/${thesisId}/evidence`, "POST", {
+    evidence_id: evSupport.id,
+    stance: "support",
+    expected_revision: await currentRevision(),
+  });
+  await jsonRequest(base, `/api/thesis/${thesisId}/evidence`, "POST", {
+    evidence_id: evOppose.id,
+    stance: "oppose",
+    expected_revision: await currentRevision(),
+  });
+  await jsonRequest(base, `/api/thesis/${thesisId}/evidence`, "POST", {
+    evidence_id: evConflict.id,
+    stance: "support",
+    expected_revision: await currentRevision(),
+  });
+  await jsonRequest(base, `/api/thesis/${thesisId}/evidence`, "POST", {
+    evidence_id: evDeltaOppose.id,
+    stance: "oppose",
+    expected_revision: await currentRevision(),
+  });
   const begun = await jsonRequest(base, `/api/thesis/${thesisId}/begin-formalization`, "POST", {}, 200);
   const updated = await jsonRequest(base, `/api/thesis/${thesisId}`, "PUT", {
     title: begun.thesis.title,
@@ -176,7 +256,7 @@ async function createFrozenCurrentThesis(base, env) {
     core_claims: begun.thesis.core_claims,
     catalysts: [],
     risks: [],
-    invalidation_conditions: [],
+    invalidation_conditions: ["业绩发生重大反转"],
     strategy: "SWING",
     expected_horizon: { unit: "TRADING_DAY", min: 10, max: 30, anchor: "FREEZE_AT" },
     free_notes: null,
@@ -199,12 +279,23 @@ async function createFrozenCurrentThesis(base, env) {
       to_status: to,
     }, 200);
   }
+  // 一条不终止研究的已确认变更（WEAKENED）；disproven 场景改用终态 DISPROVEN，
+  // 只用于研究摘要截图与终态展示验证，不进入 Commit 流程。
+  const deltaCreated = await jsonRequest(base, `/api/thesis/${thesisId}/deltas`, "POST", {
+    delta_state: disprovenScenario ? "DISPROVEN" : "WEAKENED",
+    reason: disprovenScenario
+      ? "渠道复核数据证伪核心假设"
+      : "渠道复核显示动销略低于预期，核心假设被削弱但未推翻",
+    evidence_ids: [evDeltaOppose.id],
+  });
+  assert.equal(deltaCreated.delta_state, disprovenScenario ? "DISPROVEN" : "WEAKENED");
   seedActiveCampaign(backendDir, env, campaign.campaign_id);
-  return campaign;
+  return { campaign, thesisId };
 }
 
 async function run() {
   assert.ok(existsSync(frontendDist), "frontend/dist must be built before Chromium E2E");
+  const disprovenScenario = process.env.BRIEF_SCENARIO === "disproven";
   const tempDataDir = mkdtempSync(join(tmpdir(), "vr-dc1-decision-commit-e2e-"));
   let backendProc;
   let backendLog = "";
@@ -226,6 +317,7 @@ async function run() {
       VIBE_RESEARCH_CAMPAIGN_DB: join(tempDataDir, "campaigns.sqlite3"),
       VIBE_RESEARCH_FROZEN_DECISION_DB: join(tempDataDir, "frozen_decisions.sqlite3"),
       PYTHONUNBUFFERED: "1",
+      E2E_OFFLINE_CRITICAL_DATA: "1",
       // P1-SB1 Origin gate：page.route 转发保留 frontend Origin，
       // 与 decision-challenge.browser.mjs 相同，显式加入白名单。
       VR_ALLOW_ORIGINS: frontend,
@@ -244,17 +336,23 @@ async function run() {
       opening_cash: 100000,
       positions: [{ code: "600519", name: "贵州茅台", shares: 100, cost_basis: 150000 }],
     }, 200);
-    const campaign = await createFrozenCurrentThesis(backend, env);
+    const { campaign, thesisId } = await createFrozenCurrentThesis(backend, env, { disprovenScenario });
     staticServer = await startStaticServer(frontendDist, frontendPort);
     const launchOptions = { headless: true };
     const executablePath = chromiumPath();
     if (executablePath) launchOptions.executablePath = executablePath;
-    browser = await chromium.launch(launchOptions);
+    try {
+      browser = await chromium.launch(launchOptions);
+    } catch {
+      browser = await chromium.launch({ headless: true, channel: "chrome" });
+    }
     const page = await browser.newPage();
+    await page.route("https://fonts.googleapis.com/**", (route) => route.fulfill({ contentType: "text/css", body: "" }));
     const consoleErrors = [];
     const failedRequests = [];
     const notFoundResponses = [];
     let authorityFailure = false;
+    let failDeltaReadback = false;
     let committedDecisionId = null;
     const readbackVariant = process.env.DCR1_READBACK_VARIANT || "valid";
     assert.ok(
@@ -266,6 +364,14 @@ async function run() {
     page.on("response", (response) => {
       if (response.status() === 404) notFoundResponses.push(new URL(response.url()).pathname);
     });
+    // 研究摘要零业务写入监控：打开 / 展开摘要不得产生任何非只读 API 请求。
+    const apiWriteRequests = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname.startsWith("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) {
+        apiWriteRequests.push(`${request.method()} ${url.pathname}`);
+      }
+    });
     // 与 decision-challenge.browser.mjs 相同方向的 node 侧代理：
     // route.continue({url}) 在当前 Chromium/Playwright 组合下会挂起；
     // undici fetch 连接池会复用已被 uvicorn keep-alive 超时关闭的连接
@@ -275,6 +381,10 @@ async function run() {
       const request = route.request();
       const url = new URL(request.url());
       const method = request.method();
+      if (failDeltaReadback && method === "GET" && url.pathname === `/api/thesis/${thesisId}/deltas`) {
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "synthetic readback outage" }) });
+        return;
+      }
       const contextPath = `/api/campaigns/${campaign.campaign_id}`;
       const committedPathPrefix = `${contextPath}/decision-proposal/committed/`;
       if (method === "GET" && url.pathname.startsWith(committedPathPrefix)) {
@@ -332,7 +442,7 @@ async function run() {
         });
       }
     });
-    await page.goto(`${frontend}/campaigns/${campaign.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
+    await page.goto(`${frontend}/campaigns/${campaign.campaign_id}/decision-proposal`, { waitUntil: "domcontentloaded" });
     await page.getByRole("heading", { name: "Formal Decision Review" }).waitFor();
     if (process.env.DF2_FORCE_CONTEXT_FALLBACK === "1") {
       await page.locator('[data-horizon-source="MANUAL_FALLBACK"]').waitFor({ timeout: 30000 });
@@ -342,6 +452,95 @@ async function run() {
     } else {
       await page.locator('[data-horizon-source="CURRENT_THESIS"]').waitFor({ timeout: 30000 });
       assert.equal(await page.getByLabel("Strategy horizon").inputValue(), "10–30 个交易日");
+    }
+    const brief = page.getByTestId("research-brief");
+    await brief.waitFor();
+    assert.equal(await brief.locator("input, textarea, select").count(), 0, "research brief must stay read-only");
+    const subjectText = await page.getByTestId("research-brief-subject").innerText();
+    assert.match(subjectText, /600519/);
+    assert.match(subjectText, /波段|SWING/);
+    const viewText = await page.getByTestId("research-brief-view").innerText();
+    if (process.env.DF2_FORCE_CONTEXT_FALLBACK === "1") {
+      assert.match(viewText, /未确认草稿|不可用/);
+    } else {
+      assert.match(viewText, /claim one/);
+      assert.match(viewText, /最初冻结/, "original frozen view must be explicitly labeled as historical");
+      assert.match(await page.getByTestId("research-brief-invalidation").innerText(), /不是这些条件已经触发/);
+    }
+    const evidenceText = await page.getByTestId("research-brief-evidence").innerText();
+    await page.getByTestId("research-brief-changes").getByText(/来源冲突/).first().waitFor({ timeout: 30000 });
+    const changesText = await page.getByTestId("research-brief-changes").innerText();
+    if (process.env.DF2_FORCE_CONTEXT_FALLBACK === "1") {
+      assert.match(evidenceText, /不展示未确认草稿/);
+      assert.match(changesText, /来源冲突/);
+    } else {
+      // 有来源的支持 / 反对依据必须真实展示。
+      assert.match(evidenceText, /终端动销保持稳定/);
+      assert.match(evidenceText, /渠道调研周报/);
+      assert.match(evidenceText, /竞品正在放量/);
+      assert.equal(
+        await evidenceText.includes("没有反对记录"),
+        false,
+        "fixture links opposing evidence, so the no-opposing disclaimer must not show",
+      );
+      assert.match(changesText, /基线 Candidate Research Formal Original/);
+      assert.match(changesText, /读取时间 \d{4}-\d{2}-\d{2}T/);
+      // 来源冲突：默认摘要含双方来源与立场；展开后原文、分类、置信度、来源时间可核对。
+      assert.match(changesText, /来源冲突/);
+      assert.match(changesText, /竞品跟踪简报：立场 反对/);
+      assert.match(changesText, /卖方晨会纪要：立场 支持/);
+      const conflictDetails = page.getByTestId("research-brief-conflict-records").first();
+      await conflictDetails.locator("summary").click();
+      const conflictText = await conflictDetails.innerText();
+      assert.match(conflictText, /\[反对\] ?竞品正在放量/);
+      assert.match(conflictText, /\[支持\] ?竞品正在放量/);
+      assert.match(conflictText, /竞品跟踪简报/);
+      assert.match(conflictText, /卖方晨会纪要/);
+      assert.match(conflictText, /来源日期 2026-08-02/);
+      assert.match(conflictText, /来源日期 2026-08-05/);
+      assert.match(conflictText, /记录时间 2026-08-06T00:00:00/);
+      assert.equal(
+        await conflictText.includes("正确"),
+        false,
+        "conflict rendering must not declare a winner",
+      );
+    }
+    await page.getByTestId("research-brief-freshness").waitFor();
+    if (!process.env.DF2_FORCE_CONTEXT_FALLBACK) {
+      // 当前确认状态与已确认变更来自 backend 投影，不只是最初冻结原文。
+      const effectiveStateText = (await page.locator("[data-context-effective-state]").innerText()).trim();
+      const updateItems = page.getByTestId("research-brief-update-item");
+      await updateItems.first().waitFor();
+      const updateText = await updateItems.first().innerText();
+      if (disprovenScenario) {
+        assert.equal(effectiveStateText, "已证伪");
+        await page.getByTestId("research-brief-terminal-state").waitFor();
+        assert.match(await page.getByTestId("research-brief-terminal-state").innerText(), /已证伪/);
+        assert.match(updateText, /已证伪/);
+      } else {
+        assert.equal(effectiveStateText, "削弱");
+        assert.equal(await page.getByTestId("research-brief-terminal-state").count(), 0, "WEAKENED is not terminal");
+        assert.match(updateText, /削弱/);
+      }
+      assert.match(updateText, /确认时间：/);
+      assert.match(updateText, /渠道复核/);
+      // 展开已确认依据：反对依据带来源，且展开动作不产生任何业务写请求。
+      await updateItems.first().locator("summary").click();
+      await page.getByTestId("research-brief-evidence-oppose").filter({ hasText: "7 月渠道复核显示动销略低于预期" }).first().waitFor();
+      assert.equal(apiWriteRequests.length, 0, `opening/expanding the brief must make no business writes, saw ${JSON.stringify(apiWriteRequests)}`);
+    }
+    const shotDir = process.env.E2E_SCREENSHOT_DIR || join(root, ".pi", "generated-images");
+    mkdirSync(shotDir, { recursive: true });
+    const shotName = process.env.DF2_FORCE_CONTEXT_FALLBACK === "1"
+      ? "research-brief-fallback.png"
+      : disprovenScenario
+        ? "research-brief-disproven-after.png"
+        : "research-brief-after.png";
+    await brief.screenshot({ path: join(shotDir, shotName) });
+    if (disprovenScenario) {
+      // 已证伪案例不进入 Preview / Commit：终态研究不要求成功提交正式决定。
+      console.log("[E2E] research-brief disproven scenario captured");
+      return;
     }
     // P1-DF3：结构化 review boundary——用户显式选择本地时间，页面展示
     // 解析时区与最终 canonical ISO；断言 canonical 确实等于所选时刻。
@@ -421,7 +620,7 @@ async function run() {
     assert.equal(item.critical_data.campaign_id, reread.critical_data.campaign_id);
     assert.equal(item.critical_data.security_code, reread.critical_data.security_code);
     assert.equal(item.critical_data.strategy, reread.critical_data.strategy);
-    await page.goto(`${frontend}/decision-inbox`, { waitUntil: "networkidle" });
+    await page.goto(`${frontend}/decision-inbox`, { waitUntil: "domcontentloaded" });
     await page.getByRole("heading", { name: "决策待办" }).waitFor();
     const actionPanel = page.locator(`[data-decision-action-panel="${campaign.campaign_id}"]`);
     await actionPanel.waitFor();
@@ -460,14 +659,123 @@ async function run() {
       await actionPanel.getByRole("link", { name: "打开决策复盘 →" }).getAttribute("href"),
       "/decision-performance",
     );
+
+    // ── 冻结后研究更新（R2/R3/R4）：冻结原文不变，新证据经 UI 显式确认进入 delta，
+    //    连续性识别为 ADDED，旧决定的 baseline 截断保持其当时依据。 ──
+    await page.waitForLoadState("networkidle");
+    const apiWriteMarker = apiWriteRequests.length;
+    // 1) 通过正常界面创建此前不存在的新证据（evidence 创建 ≠ 研究变化已确认）。
+    await page.goto(`${frontend}/evidence/new?subject_type=stock&subject_id=600519&return_to=${encodeURIComponent(`/thesis/${thesisId}`)}`, { waitUntil: "domcontentloaded" });
+    await page.locator("select").first().waitFor();
+    await page.locator("select").nth(1).selectOption("news");
+    await page.fill('input[placeholder*="600519"]', "600519");
+    await page.fill('textarea[placeholder*="一句话"]', "冻结后渠道复核显示动销连续两周走弱");
+    await page.fill('input[placeholder*="XX公司"]', "渠道复核周记");
+    await page.fill('input[placeholder*="https://"]', "https://example.com/post-freeze-recheck");
+    await page.fill('input[type="date"]', "2026-08-28");
+    await page.locator("label:has-text('分类') select").selectOption("fact");
+    await page.locator("label:has-text('置信度') select").selectOption("medium");
+    await page.fill('input[type="datetime-local"]', "2026-08-28T18:00");
+    await page.locator('button:has-text("保存")').click();
+    await page.waitForURL(new RegExp(`/thesis/${thesisId}$`));
+    // 2) 在冻结研究页完成 显式立场/状态/原因 → 预览 → 勾选 → 确认。
+    const deltaPanel = page.getByTestId("thesis-delta-confirm");
+    await deltaPanel.waitFor();
+    const newOption = page.locator("select[aria-label='选择证据'] option", { hasText: "冻结后渠道复核显示动销连续两周走弱" }).last();
+    const newOptionValue = await newOption.getAttribute("value");
+    assert.ok(newOptionValue, "newly created evidence must appear in the selection list");
+    await page.getByLabel("选择证据").selectOption(newOptionValue);
+    await page.getByTestId("delta-evidence-summary").waitFor();
+    await page.getByLabel("本次变更立场").selectOption("oppose");
+    await page.getByLabel("研究变化状态").selectOption("WEAKENED");
+    await page.getByLabel("变更原因").fill("冻结后渠道复核走弱，核心假设被削弱但未推翻");
+    await page.getByTestId("delta-preview").waitFor();
+    await page.getByLabel("我已核对证据内容与本次立场，确认追加这条研究变化").check();
+    // Another editor changes this evidence after the user reviewed its previous version.
+    const evidenceBefore = await jsonRequest(backend, `/api/evidence/${newOptionValue}`);
+    const updatedEvidence = Object.fromEntries(["evidence_type", "claim", "source_title", "source_url", "source_date", "accessed_at", "classification", "confidence"].map((key) => [key, evidenceBefore[key]]));
+    updatedEvidence.source_title = "渠道复核周记 v2";
+    await jsonRequest(backend, `/api/evidence/${newOptionValue}`, "PUT", updatedEvidence);
+    const rejected = page.waitForResponse((response) => response.url().endsWith(`/thesis/${thesisId}/deltas`) && response.request().method() === "POST" && response.status() === 409);
+    await page.getByTestId("confirm-thesis-delta").click();
+    await rejected;
+    await page.getByRole("button", { name: "重新读取证据" }).click();
+    await page.getByTestId("delta-evidence-summary").getByText(/渠道复核周记 v2/).waitFor();
+    const acknowledgment = page.getByLabel("我已核对证据内容与本次立场，确认追加这条研究变化");
+    assert.equal(await acknowledgment.isChecked(), false, "409 refresh must invalidate acknowledgment");
+    assert.equal(await page.getByTestId("confirm-thesis-delta").isDisabled(), true);
+    assert.equal((await jsonRequest(backend, `/api/thesis/${thesisId}/deltas`)).items.length, 1);
+    await acknowledgment.check();
+    await page.getByLabel("变更原因").fill("冻结后渠道复核走弱，重新核对 v2 后确认削弱");
+    assert.equal(await acknowledgment.isChecked(), false, "draft edits must invalidate acknowledgment");
+    await acknowledgment.check();
+    failDeltaReadback = true;
+    await page.getByTestId("confirm-thesis-delta").click();
+    await page.getByTestId("delta-write-status").waitFor({ timeout: 10000 });
+    assert.equal(await page.getByTestId("confirm-thesis-delta").isDisabled(), true);
+    const persistedAfterWrite = await jsonRequest(backend, `/api/thesis/${thesisId}/deltas`);
+    assert.equal(persistedAfterWrite.items.length, 2);
+    await deltaPanel.screenshot({ path: join(shotDir, "delta-written-readback-unavailable.png") });
+    const writesBeforeRetry = apiWriteRequests.length;
+    failDeltaReadback = false;
+    await page.getByRole("button", { name: "只读重试核对" }).click();
+    const readbackPanel = page.getByTestId("delta-readback");
+    // fixture 里已有 1 条旧 delta；UI 确认成功后服务端读回必须出现第 2 条。
+    await readbackPanel.getByText("#2 · WEAKENED").waitFor({ timeout: 30000 });
+    assert.equal(apiWriteRequests.length, writesBeforeRetry, "readback retry must not POST");
+    assert.equal((await jsonRequest(backend, `/api/thesis/${thesisId}/deltas`)).items.length, 2);
+    assert.match(await readbackPanel.innerText(), /\[反对\] 冻结后渠道复核显示动销连续两周走弱/);
+    // 本段的业务写入必须恰好是：一次证据创建 + 一次 delta 确认，无其他隐式写入。
+    assert.deepEqual(
+      apiWriteRequests.slice(apiWriteMarker),
+      ["POST /api/evidence", `POST /api/thesis/${thesisId}/deltas`, `POST /api/thesis/${thesisId}/deltas`],
+      "the only business writes must be evidence creation and the explicit delta confirmation",
+    );
+    await deltaPanel.screenshot({ path: join(shotDir, "delta-readback-recovered.png") });
+    // 3) 决策复核页：摘要接住新 delta（当前状态削弱），连续性识别 ADDED，冻结原文未改写。
+    await page.goto(`${frontend}/campaigns/${campaign.campaign_id}/decision-proposal`, { waitUntil: "domcontentloaded" });
+    await page.locator('[data-horizon-source="CURRENT_THESIS"]').waitFor({ timeout: 30000 });
+    assert.equal((await page.locator("[data-context-effective-state]").innerText()).trim(), "削弱");
+    // 连续性请求与上下文并行返回，CI 上可能晚到；必须等 ADDED 条目真实渲染后再读 brief。
+    const changesAfterUpdate = page.getByTestId("research-brief-changes");
+    await changesAfterUpdate.getByText("冻结后渠道复核显示动销连续两周走弱").waitFor({ timeout: 30000 });
+    const briefAfterUpdate = await page.getByTestId("research-brief").innerText();
+    assert.match(briefAfterUpdate, /claim one/, "original frozen view must stay intact");
+    assert.match(briefAfterUpdate, /冻结后渠道复核显示动销连续两周走弱/, "confirmed update evidence must surface in the brief");
+    assert.match(briefAfterUpdate, /新增证据/, "continuity must classify the post-freeze evidence as ADDED");
+    await page.getByTestId("research-brief").screenshot({ path: join(shotDir, "post-freeze-delta-brief.png") });
+    if (readbackVariant === "valid") {
+      // R6 path one ends at a new explicitly committed decision, not merely ADDED.
+      await page.getByLabel("Review by").fill("2099-01-01T10:00");
+      await page.getByLabel("Key assumptions").fill("渠道更新 v2 后重新评估");
+      await page.getByLabel("Event invalidation conditions").fill("动销继续恶化");
+      await page.getByLabel("Asset stance").selectOption("SUPPORT");
+      await page.getByLabel("Asset note").fill("保持原始研究，核对新增渠道证据");
+      await page.getByLabel("Trade stance").selectOption("WAIT");
+      await page.getByLabel("Trade note").fill("更新后明确等待，不记录虚构成交");
+      await page.getByLabel("Portfolio constraint").fill("维持现有约束");
+      await page.getByRole("button", { name: "Preview Proposal" }).click();
+      await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
+      await page.getByRole("checkbox", { name: /我已检查三个独立 View/ }).check();
+      await page.getByRole("button", { name: "Freeze Formal Decision" }).click();
+      await page.locator('[data-formal-decision-evaluation="EVALUATED"]').waitFor();
+      assert.notEqual(committedDecisionId, reread.committed.decision_id);
+      const oldAfterUpdate = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed/${reread.committed.decision_id}`);
+      assert.deepEqual(oldAfterUpdate.committed, reread.committed, "old decision snapshot must remain exact");
+      console.log("[R6] path1: new evidence -> confirmed delta -> ADDED -> new explicit decision; old snapshot unchanged");
+    }
     const expectedFontBlock = "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap";
     const expectedChallenge404 = `/api/campaigns/${campaign.campaign_id}/decision-challenge`;
-    assert.deepEqual(notFoundResponses, [expectedChallenge404], "only the optional challenge lookup may be 404");
+    assert.deepEqual(notFoundResponses, readbackVariant === "valid" ? [expectedChallenge404, expectedChallenge404] : [expectedChallenge404], "only the optional challenge lookup may be 404");
     const unexpectedConsoleErrors = consoleErrors.filter(
       (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
-        && !message.includes("Failed to load resource: the server responded with a status of 404 (Not Found)"),
+        && !message.includes("Failed to load resource: the server responded with a status of 404 (Not Found)")
+        && !message.includes("503 (Service Unavailable)")
+        && !message.includes("409 (Conflict)"),
     );
-    const unexpectedFailedRequests = failedRequests.filter((request) => request.url !== expectedFontBlock);
+    const unexpectedFailedRequests = failedRequests.filter((request) =>
+  request.url !== expectedFontBlock && !request.url.includes("fonts.gstatic.com"),
+);
     assert.equal(unexpectedConsoleErrors.length, 0, `unexpected browser console errors: ${JSON.stringify(unexpectedConsoleErrors)}`);
     assert.equal(unexpectedFailedRequests.length, 0, `unexpected failed requests: ${JSON.stringify(unexpectedFailedRequests)}`);
     if (failedRequests.length > 0) console.log(`[E2E] environment-only blocked asset: ${expectedFontBlock}`);

@@ -311,3 +311,66 @@ def test_batch_fetches_disclosure_calendar_once_per_security(monkeypatch):
 
     assert service.get_research_continuity(campaign_ids[0])["campaign_id"] == campaign_ids[0]
     assert len(provider_calls) == 4
+
+
+def test_post_freeze_new_evidence_delta_reaches_continuity_and_keeps_old_decision(tmp_path, monkeypatch):
+    """R4 链条：冻结原文 → 冻结后新证据 → new_evidence delta → continuity ADDED；
+    旧 Frozen Decision 的 baseline 截断保持其当时依据。"""
+    evidence_db = tmp_path / "evidence.sqlite3"
+    monkeypatch.setenv("VIBE_RESEARCH_EVIDENCE_THESIS_DB", str(evidence_db))
+    monkeypatch.setenv("VIBE_RESEARCH_CAMPAIGN_DB", str(tmp_path / "campaigns.sqlite3"))
+    monkeypatch.setenv("VIBE_RESEARCH_FROZEN_DECISION_DB", str(tmp_path / "decisions.sqlite3"))
+    evidence_thesis_store.initialize_store(evidence_db)
+
+    original = evidence_thesis_service.create_evidence(evidence_db, {
+        "subject_type": "stock", "subject_id": "600519", "evidence_type": "news",
+        "claim": "利润增长", "source_title": "年报", "source_url": "https://a.test",
+        "source_date": "2026-08-01", "accessed_at": "2026-08-01T01:00:00Z",
+        "classification": "fact", "confidence": "high",
+    })
+    thesis = evidence_thesis_service.create_thesis(evidence_db, {
+        "subject_type": "stock", "subject_id": "600519", "title": "正式 Thesis",
+        "summary": "summary", "core_claims": ["a", "b", "c"], "catalysts": [],
+        "risks": [], "invalidation_conditions": [],
+    })
+    thesis_id = thesis["thesis"]["id"]
+    evidence_thesis_service.begin_formalization(evidence_db, thesis_id)
+    linked = evidence_thesis_service.link_evidence(evidence_db, thesis_id, original["id"], "support", 1)
+    edited = evidence_thesis_service.update_thesis(evidence_db, thesis_id, {
+        "title": "正式 Thesis", "summary": "summary", "status": "active",
+        "core_claims": ["a", "b", "c"], "catalysts": [], "risks": [],
+        "invalidation_conditions": [], "strategy": "SWING",
+        "expected_horizon": {"unit": "TRADING_DAY", "min": 5, "max": 20, "anchor": "FREEZE_AT"},
+        "free_notes": "note",
+    }, linked["thesis"]["current_revision"])
+    revision = edited["thesis"]["current_revision"]
+    evidence_thesis_service.confirm_formalization(evidence_db, thesis_id, revision)
+    frozen = evidence_thesis_service.freeze_formalization(evidence_db, thesis_id, revision)
+    campaign = campaign_service.create_campaign("600519", "SWING")
+    campaign_service.bind_campaign_thesis(campaign["campaign_id"], thesis_id)
+    frozen_decision_service.freeze_decision(
+        _decision_payload(campaign, thesis_id, frozen["frozen_revision"], original["id"]),
+    )
+
+    # 冻结之后才创建的新证据，经 new_evidence 显式确认进入 delta。
+    late = evidence_thesis_service.create_evidence(evidence_db, {
+        "subject_type": "stock", "subject_id": "600519", "evidence_type": "news",
+        "claim": "冻结后渠道复核走弱", "source_title": "新纪要", "source_url": None,
+        "source_date": "2026-09-01", "accessed_at": "2026-09-01T01:00:00Z",
+        "classification": "fact", "confidence": "medium",
+    })
+    evidence_thesis_service.create_thesis_delta(
+        evidence_db, thesis_id, "WEAKENED", "冻结后新证据削弱",
+        new_evidence=[{"evidence_id": late["id"], "stance": "oppose"}],
+    )
+    monkeypatch.setattr(service, "_calendar", lambda *_args: {
+        "state": "NO_RECORD", "next": None, "latest_actual": None,
+        "fetched_at": "x", "source": "test",
+    })
+
+    result = service.get_research_continuity(campaign["campaign_id"])
+    assert result["baseline"]["authority_type"] == "FROZEN_DECISION"
+    added = [item for item in result["changes"]["items"] if item["change_type"] == "ADDED"]
+    assert [item["record_key"] for item in added] == [late["id"]]
+    assert added[0]["after"]["values"]["stance"] == "oppose"
+    assert added[0]["after"]["values"]["claim"] == "冻结后渠道复核走弱"

@@ -1064,11 +1064,20 @@ def create_thesis_delta(
     reason: str | None = None,
     evidence_ids: list[str] | None = None,
     base_revision: int | None = None,
+    new_evidence: list[dict] | None = None,
 ) -> dict:
     """Append one immutable canonical delta to a frozen, active thesis.
 
     Sequence allocation and evidence snapshotting happen in one BEGIN IMMEDIATE
     transaction supplied by :func:`store.write_transaction`.
+
+    ``evidence_ids`` keeps its original meaning: pre-linked evidence whose
+    snapshot stance comes from the original thesis link. ``new_evidence`` (list
+    of {evidence_id, stance, expected_updated_at?}) allows post-freeze
+    additions without touching the frozen original's link table: the stance is
+    the user's explicit choice for THIS delta, the server snapshots the
+    canonical evidence content, and a supplied ``expected_updated_at`` that no
+    longer matches forces a 409 re-review instead of a silent newer snapshot.
     """
     # Accept the service-layer convention used by create_evidence/create_thesis
     # (a body dict) as well as the explicit argument form used by the router.
@@ -1078,6 +1087,7 @@ def create_thesis_delta(
         reason = body.get("reason")
         evidence_ids = body.get("evidence_ids", [])
         base_revision = body.get("base_revision")
+        new_evidence = body.get("new_evidence", [])
     if not isinstance(delta_state, str) or delta_state not in _DELTA_STATES:
         raise ValidationError(f"delta_state 必须是 {sorted(_DELTA_STATES)} 之一")
     if not isinstance(reason, str) or not reason.strip():
@@ -1092,6 +1102,39 @@ def create_thesis_delta(
     # Duplicate links cannot produce two snapshots for one evidence record.
     if len(set(evidence_ids)) != len(evidence_ids):
         raise ValidationError("evidence_ids 不得重复")
+
+    # Post-freeze additions: explicitly user-confirmed new evidence that has no
+    # original thesis link (the original link table stays locked after freeze).
+    # Each entry states its own delta stance and, optionally, the evidence
+    # updated_at the user confirmed against; a mismatch forces re-review
+    # instead of silently snapshotting a newer version.
+    new_evidence_items: list[dict] = []
+    if new_evidence:
+        if not isinstance(new_evidence, list):
+            raise ValidationError("new_evidence 必须是对象数组")
+        for entry in new_evidence:
+            if not isinstance(entry, dict):
+                raise ValidationError("new_evidence 项必须是对象")
+            entry_evidence_id = entry.get("evidence_id")
+            entry_stance = entry.get("stance")
+            entry_expected = entry.get("expected_updated_at")
+            if not isinstance(entry_evidence_id, str) or not entry_evidence_id.strip():
+                raise ValidationError("new_evidence[].evidence_id 必须是非空字符串")
+            if entry_stance not in _VALID_STANCES:
+                raise ValidationError(
+                    f"new_evidence[].stance 必须是 {sorted(_VALID_STANCES)} 之一"
+                )
+            if entry_expected is not None and not isinstance(entry_expected, str):
+                raise ValidationError(
+                    "new_evidence[].expected_updated_at 必须是字符串或 null"
+                )
+            new_evidence_items.append({
+                "evidence_id": entry_evidence_id,
+                "stance": entry_stance,
+                "expected_updated_at": entry_expected,
+            })
+    if len({*evidence_ids, *(item["evidence_id"] for item in new_evidence_items)}) != len(evidence_ids) + len(new_evidence_items):
+        raise ValidationError("同一证据不得在同一个 delta 中重复提交")
 
     now = _utc_now_iso()
 
@@ -1157,6 +1200,39 @@ def create_thesis_delta(
                     ev_row["classification"], ev_row["confidence"], ev_row["source_title"],
                     ev_row["source_url"], ev_row["source_date"], ev_row["accessed_at"],
                     link_row["stance"], now,
+                ),
+            )
+
+        # Post-freeze additions: server-validated content snapshots with the
+        # user-chosen delta stance. The frozen original's link table is NOT
+        # touched; the immutable snapshot lives only in thesis_delta_evidence_links.
+        for item in new_evidence_items:
+            ev_row = store._get_evidence_row(conn, item["evidence_id"])
+            if ev_row is None or int(ev_row["deleted"]) == 1:
+                raise EvidenceNotFoundError(f"证据 {item['evidence_id']} 不存在")
+            if (
+                ev_row["subject_type"] != thesis_row["subject_type"]
+                or ev_row["subject_id"] != thesis_row["subject_id"]
+            ):
+                raise SubjectMismatchError()
+            if (
+                item["expected_updated_at"] is not None
+                and ev_row["updated_at"] != item["expected_updated_at"]
+            ):
+                raise ThesisDeltaConflictError(
+                    f"证据 {item['evidence_id']} 在确认前已被修改（updated_at 不一致），"
+                    "请重新核对证据内容后再确认"
+                )
+            conn.execute(
+                """INSERT INTO thesis_delta_evidence_links
+                   (delta_id, evidence_id, evidence_type, claim, classification, confidence,
+                    source_title, source_url, source_date, accessed_at, stance, captured_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    delta_id, item["evidence_id"], ev_row["evidence_type"], ev_row["claim"],
+                    ev_row["classification"], ev_row["confidence"], ev_row["source_title"],
+                    ev_row["source_url"], ev_row["source_date"], ev_row["accessed_at"],
+                    item["stance"], now,
                 ),
             )
 

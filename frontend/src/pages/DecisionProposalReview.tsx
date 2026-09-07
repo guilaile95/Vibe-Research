@@ -17,7 +17,9 @@ import {
   type CandidateTradeTermsDraft,
   type CandidateValuationCaseDraft,
 } from "@/lib/candidateCampaign";
-import type { CampaignRecord, CampaignThesisBinding, CampaignCurrentThesis, ThesisAggregate, CampaignAIDraftGenerateResult, DecisionProposalDraftWitness } from "@/lib/api";
+import type { CampaignRecord, CampaignThesisBinding, CampaignCurrentThesis, ThesisAggregate, CampaignAIDraftGenerateResult, DecisionProposalDraftWitness, ResearchContinuity } from "@/lib/api";
+import { ResearchBrief } from "@/components/campaign/ResearchBrief";
+import { buildResearchBrief } from "@/lib/researchBrief";
 
 type ChallengeReadState = "PENDING" | "FOUND" | "ABSENT" | "ERROR";
 
@@ -36,7 +38,6 @@ const emptyChallenge = (): Record<DecisionChallengeDimensionName, DecisionChalle
 });
 
 const inputCls = "mt-1 w-full rounded-md border border-border/60 bg-background px-2.5 py-2 text-sm outline-none focus:border-primary/60";
-const codeCls = "rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px]";
 
 type CandidateScenarioName = "bear" | "base" | "bull";
 type CandidateConfidenceName = "data_quality" | "evidence_confidence" | "inference_confidence" | "decision_confidence";
@@ -206,6 +207,8 @@ export function DecisionProposalReview() {
   const [challengePacket, setChallengePacket] = useState<DecisionChallengePacket | null>(null);
   const [challengeReadState, setChallengeReadState] = useState<ChallengeReadState>("ABSENT");
   const [bindChallenge, setBindChallenge] = useState(false);
+  const [continuity, setContinuity] = useState<ResearchContinuity | null>(null);
+  const [continuityError, setContinuityError] = useState<string | null>(null);
 
   useEffect(() => {
     if (historicalId === null) return;
@@ -274,6 +277,36 @@ export function DecisionProposalReview() {
       contextGeneration.current += 1;
     };
   }, [campaignId, historicalId]);
+
+  useEffect(() => {
+    if (!campaignId) {
+      setContinuity(null);
+      setContinuityError(null);
+      return;
+    }
+    let active = true;
+    setContinuity(null);
+    setContinuityError(null);
+    api.getResearchContinuity(campaignId)
+      .then((value) => { if (active) setContinuity(value); })
+      .catch((cause) => {
+        if (!active) return;
+        setContinuity(null);
+        setContinuityError(cause instanceof ApiError ? cause.message : "研究连续性读取失败");
+      });
+    return () => { active = false; };
+  }, [campaignId]);
+
+  const researchBrief = useMemo(() => buildResearchBrief({
+    campaignId,
+    campaign,
+    currentThesis,
+    hydration,
+    continuity,
+    continuityError,
+    contextState,
+    contextMessage,
+  }), [campaignId, campaign, currentThesis, hydration, continuity, continuityError, contextState, contextMessage]);
 
   // P1-DF3：review boundary 只来自用户在 datetime-local 控件里的显式选择；
   // 过去时间等业务校验仍由 backend Preview authority 负责，这里不复制规则。
@@ -623,32 +656,12 @@ export function DecisionProposalReview() {
         )}
       />
 
-      <section className="rounded-lg border border-border/60 bg-background/35 p-4 space-y-3" data-decision-context={contextState} data-context-binding={binding?.thesis_id ?? ""} data-context-bound-thesis={boundThesis?.thesis.id ?? ""}>
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-muted-foreground">Campaign</span>
-          <span className={codeCls}>{(campaign?.campaign_id ?? campaignId) || "缺少 campaign_id"}</span>
-          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-700">backend authority</span>
-          {contextState === "loading" && <span className="text-muted-foreground">正在读取上下文…</span>}
-        </div>
-        <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-5">
-          <div><p className="text-muted-foreground">Security</p><p className="mt-1 font-medium" data-context-security>{campaign?.security_code ?? "UNKNOWN"}</p></div>
-          <div><p className="text-muted-foreground">Campaign Strategy</p><p className="mt-1 font-medium" data-context-strategy>{campaign?.strategy ?? "UNKNOWN"}</p></div>
-          <div><p className="text-muted-foreground">Current Thesis 状态</p><p className="mt-1 font-medium" data-context-thesis-status>{currentThesis?.ready ? currentThesis.effective_state : currentThesis?.formal_status ?? "UNAVAILABLE"}</p></div>
-          <div><p className="text-muted-foreground">Frozen Thesis / revision</p><p className="mt-1 font-medium" data-context-frozen-revision>{hydration?.frozenRevision ? `v${hydration.frozenRevision}` : "UNKNOWN"}</p></div>
-          <div><p className="text-muted-foreground">Expected Horizon</p><p className="mt-1 font-medium" data-context-horizon>{hydration?.status === "READY" ? hydration.horizonText : "UNKNOWN"}</p></div>
-        </div>
-        {contextState === "ready" ? (
-          <p className="text-xs leading-5 text-success" data-horizon-source="CURRENT_THESIS">
-            Strategy horizon 已从 Current Thesis 的 backend authority 预填。来源：Current Thesis；不是用户重新声明。你仍可按当前 Proposal 需要修改。
-          </p>
-        ) : contextState === "unavailable" ? (
-          <p className="text-xs leading-5 text-warning" role="status" data-horizon-source="MANUAL_FALLBACK">
-            Current Thesis authority 当前不可用于合法 horizon（{contextMessage || "UNKNOWN"}）。不会猜测 horizon；请在下方手工填写 strategy horizon。
-          </p>
-        ) : (
-          <p className="text-xs leading-5 text-muted-foreground">证券代码、策略、Thesis id/revision 都由 backend 根据真实 Campaign 与 Current Thesis 读取；页面不提交这些 authority 字段。</p>
-        )}
-      </section>
+      {/* 来源：Current Thesis；摘要只读展示 backend hydration，不从 URL query 推导 horizon/review_by */}
+      <ResearchBrief
+        model={researchBrief}
+        bindingThesisId={binding?.thesis_id ?? ""}
+        boundThesisId={boundThesis?.thesis.id ?? ""}
+      />
 
       <section className="grid gap-4 lg:grid-cols-3">
         <fieldset className="rounded-md border border-border/50 bg-background/35 p-3 text-xs" data-view-form="asset_view">

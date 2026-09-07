@@ -88,10 +88,11 @@ export function SectorMarketContext({ sectorKey }: { sectorKey: string }) {
             <div>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
                 <span>当前成分 <strong>{item.breadth.constituents_total}</strong></span>
+                <span>可读取快照 <strong>{item.breadth.snapshot_valid_count}</strong>/{item.breadth.constituents_total}{item.breadth.coverage_ratio == null ? "" : `（覆盖 ${(item.breadth.coverage_ratio * 100).toFixed(1)}%）`}</span>
                 <span className="text-rose-600 dark:text-rose-400">上涨 {item.breadth.up_count}</span>
                 <span className="text-emerald-600 dark:text-emerald-400">下跌 {item.breadth.down_count}</span>
                 <span>平盘 {item.breadth.flat_count}</span>
-                <span>上涨占比 {item.breadth.up_ratio == null ? "—" : `${(item.breadth.up_ratio * 100).toFixed(1)}%`}</span>
+                <span>上涨占比 <span title="分母为可读取快照的成分，不含缺失行情">{item.breadth.up_ratio == null ? "—" : `${(item.breadth.up_ratio * 100).toFixed(1)}%`}</span></span>
                 <span>当前成分等权代理 <strong className={valueClass(item.breadth.equal_weight_change_pct)}>{formatSectorPercent(item.breadth.equal_weight_change_pct)}</strong></span>
               </div>
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -108,6 +109,9 @@ export function SectorMarketContext({ sectorKey }: { sectorKey: string }) {
 
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             5日动能变化 = 当前5日收益 − 前一段5日收益；成交活跃度 = 最新交易日成交额 / 此前20日均值，未做盘中时段归一。当前成分仅代表最新截面，不用于历史回填，也不代表指数权重或真实个股贡献。
+          </p>
+          <p className="text-[11px] leading-relaxed text-muted-foreground" data-sector-sample-provenance>
+            指数样本：{item.metrics.history_session_count ?? "—"} 个交易日{item.metrics.history_start_date ? `（${item.metrics.history_start_date} ~ ${item.metrics.history_end_date ?? item.metrics.trade_date}）` : ""}；上述收益窗口均基于该样本计算，最新数据是否包含当日收盘以指数日期 {item.metrics.trade_date ?? "—"} 为准。上涨占比与等权代理的分母为可读取快照的成分，行情缺失不参与计算。
           </p>
           {item.warnings.length > 0 && (
             <p className="text-[10px] text-muted-foreground">{item.warnings.join(" · ")}</p>
