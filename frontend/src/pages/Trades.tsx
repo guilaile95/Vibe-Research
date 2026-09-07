@@ -73,6 +73,7 @@ export function Trades() {
 
   // 详情 modal state
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
+  const selectionTokenRef = useRef<{ tradeId: string } | null>(null);
   const [detailTrade, setDetailTrade] = useState<TradeRecord | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -103,6 +104,11 @@ export function Trades() {
   const [voidLoading, setVoidLoading] = useState(false);
   const [voidError, setVoidError] = useState<string | null>(null);
 
+  const selectTrade = (tradeId: string | null) => {
+    selectionTokenRef.current = tradeId ? { tradeId } : null;
+    setSelectedTradeId(tradeId);
+  };
+
   // 加载数据
   const loadTrades = useCallback(async () => {
     setLoading(true);
@@ -129,13 +135,15 @@ export function Trades() {
   }, [loadTrades]);
 
   // 加载单条详情
-  const loadDetail = useCallback(async (id: string) => {
+  const loadDetail = useCallback(async (id: string, selection: { tradeId: string }) => {
+    if (selectionTokenRef.current !== selection || selection.tradeId !== id) return;
     setDetailLoading(true);
     setDetailError(null);
     try {
       const record = await api.getTrade(id);
-      setDetailTrade(record);
+      if (selectionTokenRef.current === selection) setDetailTrade(record);
     } catch (e) {
+      if (selectionTokenRef.current !== selection) return;
       if (e instanceof ApiError) {
         setDetailError(e.message);
       } else if (e instanceof Error) {
@@ -144,17 +152,21 @@ export function Trades() {
         setDetailError("获取交易详情失败");
       }
     } finally {
-      setDetailLoading(false);
+      if (selectionTokenRef.current === selection) setDetailLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    const selection = selectionTokenRef.current;
+    setReconciliationActionLoading(false);
+    setActivationLoading(false);
     setActivationError(null);
     setActivatedCampaignId(null);
-    if (selectedTradeId) {
-      loadDetail(selectedTradeId);
+    if (selectedTradeId && selection?.tradeId === selectedTradeId) {
+      loadDetail(selectedTradeId, selection);
     } else {
       setDetailTrade(null);
+      setDetailLoading(false);
       setDetailError(null);
     }
   }, [selectedTradeId, loadDetail]);
@@ -196,15 +208,16 @@ export function Trades() {
     return () => { active = false; };
   }, [selectedTradeId]);
 
-  const refreshReconciliation = async () => {
-    if (!selectedTradeId) return;
+  const refreshReconciliation = async (tradeId: string, selection: { tradeId: string }) => {
+    if (selectionTokenRef.current !== selection || selection.tradeId !== tradeId) return;
     setReconciliationLoading(true);
     setReconciliationError(null);
     setCandidateError(null);
     const [reconciliationResult, candidatesResult] = await Promise.allSettled([
-      api.getTradeReconciliation(selectedTradeId),
-      api.listTradeAttributionCandidates(selectedTradeId),
+      api.getTradeReconciliation(tradeId),
+      api.listTradeAttributionCandidates(tradeId),
     ]);
+    if (selectionTokenRef.current !== selection) return;
     if (reconciliationResult.status === "fulfilled") {
       setReconciliation(reconciliationResult.value);
     } else {
@@ -222,51 +235,66 @@ export function Trades() {
   };
 
   const handleAttribution = async (decisionId: string) => {
-    if (!selectedTradeId) return;
+    const selection = selectionTokenRef.current;
+    if (!selectedTradeId || !selection || selection.tradeId !== selectedTradeId) return;
+    const tradeId = selectedTradeId;
     setReconciliationActionLoading(true);
     setReconciliationError(null);
     try {
-      await api.attributeTrade(selectedTradeId, decisionId);
-      await refreshReconciliation();
+      await api.attributeTrade(tradeId, decisionId);
+      await refreshReconciliation(tradeId, selection);
     } catch (e) {
-      setReconciliationError(e instanceof Error ? e.message : "交易归属失败");
+      if (selectionTokenRef.current === selection) {
+        setReconciliationError(e instanceof Error ? e.message : "交易归属失败");
+      }
     } finally {
-      setReconciliationActionLoading(false);
+      if (selectionTokenRef.current === selection) setReconciliationActionLoading(false);
     }
   };
 
   const handleMarkUnplanned = async () => {
-    if (!selectedTradeId) return;
+    const selection = selectionTokenRef.current;
+    if (!selectedTradeId || !selection || selection.tradeId !== selectedTradeId) return;
+    const tradeId = selectedTradeId;
     setReconciliationActionLoading(true);
     setReconciliationError(null);
     try {
-      await api.markTradeUnplanned(selectedTradeId);
-      await refreshReconciliation();
+      await api.markTradeUnplanned(tradeId);
+      await refreshReconciliation(tradeId, selection);
     } catch (e) {
-      setReconciliationError(e instanceof Error ? e.message : "标记 UNPLANNED 失败");
+      if (selectionTokenRef.current === selection) {
+        setReconciliationError(e instanceof Error ? e.message : "标记 UNPLANNED 失败");
+      }
     } finally {
-      setReconciliationActionLoading(false);
+      if (selectionTokenRef.current === selection) setReconciliationActionLoading(false);
     }
   };
 
   const handleActivateCampaign = async () => {
-    if (!selectedTradeId || !reconciliation?.campaign_id) return;
+    const selection = selectionTokenRef.current;
+    if (!selectedTradeId || !reconciliation?.campaign_id || !selection || selection.tradeId !== selectedTradeId) return;
+    const tradeId = selectedTradeId;
+    const campaignId = reconciliation.campaign_id;
     setActivationLoading(true);
     setActivationError(null);
     try {
       const result = await api.activateCampaignFromTrade(
-        reconciliation.campaign_id,
-        selectedTradeId,
+        campaignId,
+        tradeId,
       );
-      setActivatedCampaignId(result.campaign.campaign_id);
-      setSuccessMsg("真实买入已核验，PRE-ENTRY Campaign 已显式激活");
-      setTimeout(() => setSuccessMsg(null), 3000);
+      if (selectionTokenRef.current === selection) {
+        setActivatedCampaignId(result.campaign.campaign_id);
+        setSuccessMsg("真实买入已核验，PRE-ENTRY Campaign 已显式激活");
+        setTimeout(() => setSuccessMsg(null), 3000);
+      }
     } catch (error) {
-      setActivationError(
-        error instanceof Error ? error.message : "Campaign 激活失败",
-      );
+      if (selectionTokenRef.current === selection) {
+        setActivationError(
+          error instanceof Error ? error.message : "Campaign 激活失败",
+        );
+      }
     } finally {
-      setActivationLoading(false);
+      if (selectionTokenRef.current === selection) setActivationLoading(false);
     }
   };
 
@@ -371,7 +399,7 @@ export function Trades() {
       }
       setIsCreateOpen(false);
       setActiveContinuation(null);
-      setSelectedTradeId(created.trade_id);
+      selectTrade(created.trade_id);
       setSuccessMsg("交易流水创建成功，已打开该笔交易详情");
       setTimeout(() => setSuccessMsg(null), 3000);
       loadTrades();
@@ -398,6 +426,8 @@ export function Trades() {
   const handleVoidSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!voidTarget) return;
+    const voidedId = voidTarget.trade_id;
+    const selection = selectionTokenRef.current;
 
     if (!voidReason.trim()) {
       setVoidError("作废原因不能为空");
@@ -408,14 +438,13 @@ export function Trades() {
     setVoidError(null);
 
     try {
-      await api.voidTrade(voidTarget.trade_id, voidReason.trim());
-      const voidedId = voidTarget.trade_id;
+      await api.voidTrade(voidedId, voidReason.trim());
       setVoidTarget(null);
       setSuccessMsg("交易已成功作废");
       setTimeout(() => setSuccessMsg(null), 3000);
       loadTrades();
-      if (selectedTradeId === voidedId) {
-        loadDetail(voidedId);
+      if (selection && selection.tradeId === voidedId && selectionTokenRef.current === selection) {
+        await loadDetail(voidedId, selection);
       }
     } catch (e) {
       if (e instanceof ApiError) {
@@ -713,7 +742,7 @@ export function Trades() {
                       <td className="p-3 text-center space-x-2">
                         <button
                           type="button"
-                          onClick={() => setSelectedTradeId(item.trade_id)}
+                          onClick={() => selectTrade(item.trade_id)}
                           className="text-primary hover:underline font-medium text-xs"
                         >
                           详情
@@ -1201,7 +1230,7 @@ export function Trades() {
               <h3 className="text-base font-semibold text-foreground">交易流水详情</h3>
               <button
                 type="button"
-                onClick={() => setSelectedTradeId(null)}
+                onClick={() => selectTrade(null)}
                 className="rounded-lg p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 <X className="h-5 w-5" />
@@ -1564,7 +1593,7 @@ export function Trades() {
               <button
                 type="button"
                 onClick={() => {
-                  setSelectedTradeId(null);
+                  selectTrade(null);
                   setAttributionHint(null);
                 }}
                 className="rounded-md border border-input px-4 py-1.5 text-xs font-medium hover:bg-accent"

@@ -170,9 +170,11 @@ export function EvidenceList() {
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             查询
           </button>
-          <div className="ml-auto text-xs text-muted-foreground">
-            共 {total} 条 · 第 {currentPage} / {totalPages} 页
-          </div>
+          {(!err || items.length > 0) && (
+            <div className="ml-auto text-xs text-muted-foreground">
+              共 {total} 条 · 第 {currentPage} / {totalPages} 页
+            </div>
+          )}
         </div>
       </GlassCard>
 
@@ -187,7 +189,7 @@ export function EvidenceList() {
           <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 加载中…
           </div>
-        ) : items.length === 0 ? (
+        ) : items.length === 0 && !err ? (
           <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
             <FileText className="h-8 w-8 text-muted-foreground/40" />
             还没有证据。点右上角「新建证据」开始沉淀。
