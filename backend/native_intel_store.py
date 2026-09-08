@@ -1316,6 +1316,7 @@ def upsert_observation(
 def query_items(
     db_path: str | Path | None = None,
     *,
+    item_id: int | None = None,
     hint: str | None = None,
     source_id: str | None = None,
     include: list[str] | None = None,
@@ -1337,6 +1338,9 @@ def query_items(
     initialize_store(path)
     clauses: list[str] = []
     args: list[Any] = []
+    if item_id is not None:
+        clauses.append("i.item_id = ?")
+        args.append(int(item_id))
     if hint:
         clauses.append("i.hint = ?")
         args.append(hint)
@@ -1414,6 +1418,15 @@ def query_items(
                 return [_item_row(row) for row in rows], total
         except sqlite3.DatabaseError as e:
             raise NativeIntelStoreError() from e
+
+
+def get_item(
+    item_id: int,
+    db_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """按统一条目投影读取单条资讯，复用 query_items 的来源事实联接。"""
+    rows, _ = query_items(db_path, item_id=item_id, limit=1)
+    return rows[0] if rows else None
 
 
 def _decode_source_facts(raw: Any) -> dict[str, Any] | None:

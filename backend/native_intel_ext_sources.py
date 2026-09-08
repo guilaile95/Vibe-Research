@@ -8,6 +8,8 @@ hotness score, or GitHub Search fallback.
 from __future__ import annotations
 
 import json
+import html as html_lib
+import ipaddress
 import re
 import urllib.error
 import urllib.parse
@@ -70,7 +72,12 @@ def _classify_error(exc: BaseException) -> tuple[str, str]:
 
 
 def _http_get(
-    url: str, *, timeout: int, accept: str, proxy_url: str | None = None
+    url: str,
+    *,
+    timeout: int,
+    accept: str,
+    proxy_url: str | None = None,
+    max_bytes: int | None = None,
 ) -> bytes:
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in ("http", "https"):
@@ -86,9 +93,15 @@ def _http_get(
         handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
         opener = urllib.request.build_opener(handler)
         with opener.open(req, timeout=timeout) as resp:
-            return resp.read()
+            data = resp.read() if max_bytes is None else resp.read(max_bytes + 1)
+            if max_bytes is not None and len(data) > max_bytes:
+                raise ValueError("response too large")
+            return data
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+        data = resp.read() if max_bytes is None else resp.read(max_bytes + 1)
+        if max_bytes is not None and len(data) > max_bytes:
+            raise ValueError("response too large")
+        return data
 
 
 def _parse_int(raw: str | None) -> int | None:
@@ -567,3 +580,199 @@ def fetch_hacker_news(
         except Exception:  # noqa: BLE001 - enrichment must not fail the source
             continue
     return items, None, None
+
+
+# ---------------------------------------------------------------------------
+# On-demand source reading (bounded, non-authoritative enrichment)
+# ---------------------------------------------------------------------------
+
+DEEP_READ_TITLE_ONLY = "TITLE_ONLY"
+DEEP_READ_SUMMARY = "SUMMARY"
+DEEP_READ_EXCERPT = "EXCERPT"
+DEEP_READ_ARTICLE_BODY = "ARTICLE_BODY"
+DEEP_READ_MAX_BYTES = 1_000_000
+DEEP_READ_MAX_CHARS = 12_000
+
+_DEEP_READ_TAG_RE = re.compile(r"<[^>]+>", re.DOTALL)
+_DEEP_READ_SCRIPT_RE = re.compile(
+    r"<(?:script|style|noscript|template)\b[^>]*>.*?</(?:script|style|noscript|template)>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _deep_read_public_url(url: str) -> bool:
+    """Reject malformed/local targets before following an external source link."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    if port is not None and port not in (80, 443):
+        return False
+    host = parsed.hostname.lower().rstrip(".")
+    if host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".local"):
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return not (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_unspecified
+    )
+
+
+def _deep_read_repo_slug(value: Any) -> str | None:
+    raw = str(value or "").strip().strip("/")
+    if raw.startswith(("http://", "https://")):
+        try:
+            parsed = urllib.parse.urlsplit(raw)
+        except ValueError:
+            return None
+        if (parsed.hostname or "").lower() != "github.com":
+            return None
+        raw = parsed.path.strip("/")
+    parts = raw.split("/")
+    if len(parts) != 2 or not all(re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in parts):
+        return None
+    return "/".join(parts)
+
+
+def _deep_read_candidates(item: dict[str, Any]) -> list[tuple[str, str]]:
+    facts = item.get("source_facts") if isinstance(item.get("source_facts"), dict) else {}
+    original_url = str(item.get("url") or item.get("canonical_url") or "").strip()
+    candidates: list[tuple[str, str]] = []
+
+    repo = _deep_read_repo_slug(facts.get("github_repo"))
+    if repo is None:
+        repo = _deep_read_repo_slug(original_url)
+    if repo:
+        candidates.extend(
+            [
+                (f"https://raw.githubusercontent.com/{repo}/main/README.md", "repository"),
+                (f"https://raw.githubusercontent.com/{repo}/master/README.md", "repository"),
+            ]
+        )
+
+    arxiv_url = str(facts.get("arxiv_url") or "").strip()
+    if arxiv_url:
+        try:
+            parsed = urllib.parse.urlsplit(arxiv_url)
+            paper_id = parsed.path.strip("/").removeprefix("abs/")
+        except ValueError:
+            paper_id = ""
+        if paper_id:
+            candidates.append((f"https://arxiv.org/html/{paper_id}", "paper"))
+            candidates.append((f"https://arxiv.org/abs/{paper_id}", "paper"))
+
+    if original_url:
+        try:
+            host = (urllib.parse.urlsplit(original_url).hostname or "").lower()
+        except ValueError:
+            host = ""
+        if host != "news.ycombinator.com":
+            candidates.append((original_url, "article"))
+        discussion_url = str(facts.get("discussion_url") or "").strip()
+        if discussion_url:
+            candidates.append((discussion_url, "discussion"))
+        elif host == "news.ycombinator.com":
+            candidates.append((original_url, "discussion"))
+
+    seen: set[str] = set()
+    unique: list[tuple[str, str]] = []
+    for url, kind in candidates:
+        if url in seen:
+            continue
+        seen.add(url)
+        unique.append((url, kind))
+    return unique
+
+
+def _deep_read_text(raw: bytes) -> tuple[str, bool]:
+    decoded = raw.decode("utf-8", errors="replace")
+    is_html = bool(re.search(r"<\s*(?:html|body|article|main|p|div)\b", decoded, re.IGNORECASE))
+    if is_html:
+        decoded = _DEEP_READ_SCRIPT_RE.sub(" ", decoded)
+        decoded = _DEEP_READ_TAG_RE.sub(" ", decoded)
+    text = html_lib.unescape(decoded)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text, is_html
+
+
+def read_source_content(
+    item: dict[str, Any],
+    *,
+    timeout: int = 15,
+    proxy_url: str | None = None,
+    fetcher: Callable[[str], bytes] | None = None,
+) -> dict[str, Any]:
+    """Read one bounded first-party/article representation without persisting raw text."""
+    original_url = str(item.get("url") or item.get("canonical_url") or "").strip()
+    failures: list[dict[str, str]] = []
+    for url, kind in _deep_read_candidates(item):
+        if not _deep_read_public_url(url):
+            failures.append({"kind": "security", "detail": "URL_NOT_ALLOWED"})
+            continue
+        try:
+            raw = (
+                fetcher(url)
+                if fetcher is not None
+                else _http_get(
+                    url,
+                    timeout=timeout,
+                    accept="text/html,application/xhtml+xml,text/plain,application/json;q=0.8,*/*;q=0.1",
+                    proxy_url=proxy_url,
+                    max_bytes=DEEP_READ_MAX_BYTES,
+                )
+            )
+            text, _is_html = _deep_read_text(raw)
+            if not text:
+                failures.append({"kind": "parse", "detail": "EMPTY_CONTENT"})
+                continue
+            level = DEEP_READ_ARTICLE_BODY
+            if len(text) > DEEP_READ_MAX_CHARS:
+                level = DEEP_READ_EXCERPT
+                text = text[:DEEP_READ_MAX_CHARS].rstrip()
+            return {
+                "status": "success",
+                "original_url": original_url,
+                "source_url": url,
+                "source_kind": kind,
+                "content_level": level,
+                "content": text,
+                "failure": None,
+                "fetched_at": store.utc_now_iso(),
+            }
+        except Exception as exc:  # noqa: BLE001 - source failure remains explicit and isolated
+            error_kind, _detail = _classify_error(exc)
+            failures.append({"kind": error_kind, "detail": type(exc).__name__})
+
+    summary = str(item.get("summary") or "").strip()
+    if summary:
+        return {
+            "status": "partial",
+            "original_url": original_url,
+            "source_url": None,
+            "source_kind": None,
+            "content_level": DEEP_READ_SUMMARY,
+            "content": summary[:DEEP_READ_MAX_CHARS],
+            "failure": failures[-1] if failures else {"kind": "network", "detail": "SOURCE_UNAVAILABLE"},
+            "fetched_at": None,
+        }
+    return {
+        "status": "unavailable",
+        "original_url": original_url,
+        "source_url": None,
+        "source_kind": None,
+        "content_level": DEEP_READ_TITLE_ONLY,
+        "content": str(item.get("title") or "").strip(),
+        "failure": failures[-1] if failures else {"kind": "parse", "detail": "SOURCE_URL_MISSING"},
+        "fetched_at": None,
+    }

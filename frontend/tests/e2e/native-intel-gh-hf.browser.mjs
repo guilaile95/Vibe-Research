@@ -126,9 +126,17 @@ try {
   browser = await launchBrowser();
   const page = await browser.newPage();
   await page.route("**/api/**", async (route) => {
+    const request = route.request();
     const url = new URL(route.request().url());
+    if (url.pathname.includes("/deep-read")) {
+      await route.continue({ url: `http://127.0.0.1:${backendPort}${url.pathname}${url.search}` });
+      return;
+    }
+    const requestBody = route.request().postDataBuffer();
     const response = await fetch(`http://127.0.0.1:${backendPort}${url.pathname}${url.search}`, {
       method: route.request().method(),
+      headers: requestBody ? { "content-type": route.request().headerValue("content-type") || "application/json" } : undefined,
+      body: requestBody || undefined,
     });
     await route.fulfill({
       status: response.status,
@@ -153,6 +161,22 @@ try {
   const hnFacts = await page.getByTestId("intel-source-facts-hn").innerText();
   assert.match(hnFacts, /321/);
   assert.match(hnFacts, /87/);
+
+  await page.evaluate(() => localStorage.setItem("vr-llm", JSON.stringify({
+    provider: "cli-codex",
+    baseURL: "",
+    apiKey: "",
+    model: "native-intel-deep-read-fixture",
+  })));
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "实时热榜" }).click();
+  await page.getByText("openai/whisper").waitFor({ timeout: 15000 });
+  await page.getByRole("button", { name: "深读来源", exact: true }).first().click();
+  await page.getByTestId("native-intel-deep-read-modal").waitFor({ timeout: 15000 });
+  await page.getByTestId("native-intel-deep-read-content").getByText(/First-party repository README/).waitFor();
+  await page.getByTestId("native-intel-deep-read-analysis").getByText(/fixture source was read/).waitFor();
+  assert.match(await page.getByTestId("native-intel-deep-read-content").innerText(), /First-party repository README/);
+  assert.match(await page.getByTestId("native-intel-deep-read-analysis").innerText(), /facts stay non-authoritative/);
   console.log("Native Intel GitHub Trending + HF Daily Papers + HN: PASS");
 } finally {
   if (browser) await browser.close();

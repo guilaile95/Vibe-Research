@@ -2606,6 +2606,83 @@ def get_standalone_items(path: str | None = None) -> dict[str, Any]:
 # TREND-PARITY Wave 5: AI Analysis, Translation, Entities, Sentiment, Agent Tools
 # ---------------------------------------------------------------------------
 
+def deep_read_item(
+    item_id: int,
+    cfg: dict[str, Any] | None = None,
+    model_runner: Callable | None = None,
+    path: str | None = None,
+) -> dict[str, Any] | None:
+    """Read one Native Intel source on demand and return bounded non-authoritative context."""
+    target = path or db_path()
+    item = store.get_item(item_id, target)
+    if item is None:
+        return None
+
+    import native_intel_ext_sources as ext_sources
+
+    native_cfg = store.get_native_intel_config(target)
+    source_type = str(item.get("source_type") or "rss").lower()
+    proxy_url = (
+        store.resolve_crawler_proxy(native_cfg)
+        if source_type == "hotlist"
+        else store.resolve_rss_proxy(native_cfg)
+    )
+    source = ext_sources.read_source_content(
+        item,
+        timeout=FETCH_TIMEOUT,
+        proxy_url=proxy_url,
+    )
+
+    analysis: dict[str, Any]
+    if source["content_level"] == ext_sources.DEEP_READ_TITLE_ONLY:
+        analysis = {
+            "status": "SKIPPED",
+            "error_kind": "content_unavailable",
+            "error": "CONTENT_NOT_AVAILABLE",
+            "analysis": "",
+            "cached": False,
+        }
+    else:
+        import native_intel_ai as ai_engine
+
+        analysis = ai_engine.analyze_deep_read(
+            item=item,
+            content=source["content"],
+            content_level=source["content_level"],
+            original_url=source["original_url"],
+            source_url=source.get("source_url"),
+            source_kind=source.get("source_kind"),
+            cfg=cfg,
+            model_runner=model_runner,
+            path=target,
+        )
+
+    overall_status = source["status"]
+    if source["status"] == "success" and analysis.get("status") != "SUCCESS":
+        overall_status = "partial"
+    return {
+        "status": overall_status,
+        "item_id": item["item_id"],
+        "title": item["title"],
+        "summary": item.get("summary"),
+        "source_name": item.get("source_name"),
+        "source_type": item.get("source_type"),
+        "original_url": source["original_url"],
+        "source_url": source.get("source_url"),
+        "source_kind": source.get("source_kind"),
+        "content_level": source["content_level"],
+        "content": source["content"],
+        "fetched_at": source.get("fetched_at"),
+        "failure": source.get("failure"),
+        "analysis_status": analysis.get("status"),
+        "analysis_error_kind": analysis.get("error_kind"),
+        "analysis_error": analysis.get("error"),
+        "analysis": analysis.get("analysis") or "",
+        "analysis_artifact_id": analysis.get("artifact_id"),
+        "analysis_cached": bool(analysis.get("cached")),
+        "disclaimer": analysis.get("disclaimer") or "外部来源内容与 AI 标注均非正式投资决策依据",
+    }
+
 def analyze_ai_report(
     mode: str = "CURRENT",
     scope: str = "all",

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  BookOpen,
   ExternalLink,
   Flame,
   History,
@@ -24,6 +25,7 @@ import {
   type NativeIntelItemRankHistoryResponse,
   type FilterMeta,
   type NativeIntelConfig,
+  type NativeIntelDeepReadResponse,
 } from "@/lib/api";
 import { Rss } from "lucide-react";
 import {
@@ -40,6 +42,13 @@ import { NewIntelItems } from "./IntelReports";
 import { AiAnalysisRegion } from "./AiAnalysisRegion";
 import { loadLlm } from "@/lib/llm";
 
+const DEEP_READ_LEVEL_LABELS: Record<NativeIntelDeepReadResponse["content_level"], string> = {
+  TITLE_ONLY: "仅标题",
+  SUMMARY: "来源摘要",
+  EXCERPT: "来源摘录",
+  ARTICLE_BODY: "来源正文",
+};
+
 export function HotlistPanel() {
   const [items, setItems] = useState<NativeIntelHotlistItem[]>([]);
   const [rssItems, setRssItems] = useState<NativeIntelHotlistItem[]>([]);
@@ -54,6 +63,10 @@ export function HotlistPanel() {
   const [itemTranslations, setItemTranslations] = useState<Record<number, string>>({});
   const [itemEntities, setItemEntities] = useState<Record<number, Array<{ name: string; type: string; code?: string | null }>>>({});
   const [itemSentiments, setItemSentiments] = useState<Record<number, { sentiment: string; confidence: number; reason: string }>>({});
+  const [deepReadItemId, setDeepReadItemId] = useState<number | null>(null);
+  const [deepReadData, setDeepReadData] = useState<NativeIntelDeepReadResponse | null>(null);
+  const [deepReadLoading, setDeepReadLoading] = useState(false);
+  const [deepReadError, setDeepReadError] = useState("");
 
   const handleItemTranslate = async (itemId: number, text: string) => {
     try {
@@ -94,6 +107,21 @@ export function HotlistPanel() {
         ...prev,
         [itemId]: { sentiment: "uncertain", confidence: 0, reason: "分析失败" },
       }));
+    }
+  };
+
+  const handleDeepRead = async (itemId: number) => {
+    setDeepReadItemId(itemId);
+    setDeepReadData(null);
+    setDeepReadError("");
+    setDeepReadLoading(true);
+    try {
+      const res = await api.nativeIntelDeepRead(itemId, { llm: loadLlm() });
+      setDeepReadData(res);
+    } catch (err) {
+      setDeepReadError(err instanceof ApiError ? err.message : "来源深读失败");
+    } finally {
+      setDeepReadLoading(false);
     }
   };
   const [rssFilterMeta, setRssFilterMeta] = useState<FilterMeta | null>(null);
@@ -809,6 +837,16 @@ export function HotlistPanel() {
                   <SmilePlus className="h-3 w-3" />
                   情绪
                 </button>
+                <button
+                  type="button"
+                  data-testid={`native-intel-deep-read-${item.item_id}`}
+                  onClick={() => void handleDeepRead(item.item_id)}
+                  title="深读来源"
+                  className="inline-flex items-center gap-0.5 rounded-md border border-border/80 bg-background/50 px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                >
+                  <BookOpen className="h-3 w-3" />
+                  深读来源
+                </button>
               </div>
 
               {/* Wave 5 Item AI Results */}
@@ -1063,6 +1101,120 @@ export function HotlistPanel() {
                 </div>
               ) : (
                 <p className="py-8 text-center text-xs text-muted-foreground">未能获取该条目轨迹。</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 单条目来源深读：原始外部内容按纯文本展示，避免把不可信 HTML 当作页面执行。 */}
+      {deepReadItemId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div
+            className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-xl border border-border bg-card p-5 shadow-xl"
+            data-testid="native-intel-deep-read-modal"
+          >
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <BookOpen className="h-4 w-4 shrink-0 text-primary" />
+                <h3 className="truncate font-semibold text-sm">来源深读</h3>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭来源深读"
+                onClick={() => {
+                  setDeepReadItemId(null);
+                  setDeepReadData(null);
+                  setDeepReadError("");
+                }}
+                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-4 min-h-0 space-y-4 overflow-y-auto">
+              {deepReadLoading && (
+                <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  正在读取来源并生成分析…
+                </div>
+              )}
+              {deepReadError && (
+                <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive" role="alert">
+                  {deepReadError}
+                </p>
+              )}
+              {deepReadData && (
+                <div className="space-y-4">
+                  <div>
+                    <h4 className="font-medium text-sm text-foreground">{deepReadData.title}</h4>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <span>{deepReadData.source_name || "Native Intel 来源"}</span>
+                      <span className="rounded border border-primary/20 bg-primary/5 px-1.5 py-0.5 text-primary">
+                        {DEEP_READ_LEVEL_LABELS[deepReadData.content_level]}
+                      </span>
+                      {deepReadData.status !== "success" && <span>来源读取部分可用</span>}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                    <a
+                      href={deepReadData.original_url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="text-primary hover:underline"
+                    >
+                      原始来源 ↗
+                    </a>
+                    {deepReadData.source_url && deepReadData.source_url !== deepReadData.original_url && (
+                      <a
+                        href={deepReadData.source_url}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="text-primary hover:underline"
+                      >
+                        实际读取来源 ↗
+                      </a>
+                    )}
+                  </div>
+
+                  {deepReadData.failure && (
+                    <p className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
+                      来源读取未完全成功：{deepReadData.failure.detail}
+                    </p>
+                  )}
+
+                  <div className="rounded-lg border border-border/50 bg-background/50 p-3">
+                    <div className="mb-2 text-xs font-medium text-muted-foreground">来源内容（不作为指令执行）</div>
+                    <pre
+                      data-testid="native-intel-deep-read-content"
+                      className="whitespace-pre-wrap break-words font-sans text-xs leading-5 text-foreground"
+                    >
+                      {deepReadData.content}
+                    </pre>
+                  </div>
+
+                  <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2 text-xs font-medium text-primary">
+                      <span>AI 分析</span>
+                      {deepReadData.analysis_cached && <span className="font-normal">缓存命中</span>}
+                    </div>
+                    {deepReadData.analysis ? (
+                      <pre
+                        data-testid="native-intel-deep-read-analysis"
+                        className="whitespace-pre-wrap break-words font-sans text-xs leading-5 text-foreground"
+                      >
+                        {deepReadData.analysis}
+                      </pre>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        AI 分析暂不可用：{deepReadData.analysis_error || "未生成分析"}
+                      </p>
+                    )}
+                  </div>
+                  <p className="text-[11px] leading-5 text-muted-foreground">{deepReadData.disclaimer}</p>
+                </div>
               )}
             </div>
           </div>
