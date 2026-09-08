@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -61,7 +62,7 @@ def test_full_market_cross_section_is_set_based_and_explicit(tmp_path):
     assert result["breadth"]["ma60"]["breadth"] == pytest.approx(2 / 2)
 
 
-def test_full_market_explicit_as_of_filter_sort_pagination(tmp_path):
+def test_full_market_and_filters_sort_pagination_and_legacy_compatibility(tmp_path):
     root = tmp_path / "rdp"
     rdp.import_csv(_write_fixture(tmp_path), root=root)
 
@@ -69,9 +70,10 @@ def test_full_market_explicit_as_of_filter_sort_pagination(tmp_path):
         root=root,
         as_of="2026-02-20",
         latest=False,
-        filter_metric="return_5d",
-        filter_operator="gt",
-        filter_value=0.05,
+        filters=[
+            {"metric": "return_5d", "operator": "gt", "value": 0.05},
+            {"metric": "return_20d", "operator": "gt", "value": 0.4},
+        ],
         sort_by="latest_close",
         sort_order="desc",
         limit=1,
@@ -82,6 +84,27 @@ def test_full_market_explicit_as_of_filter_sort_pagination(tmp_path):
     assert result["total_rows"] == 2
     assert result["next_offset"] == 1
     assert result["rows"][0]["code"] == "000002"
+
+    intersection = rdp.query_full_market(
+        root=root,
+        as_of="2026-02-20",
+        latest=False,
+        filters=[
+            {"metric": "return_5d", "operator": "gt", "value": 0.05},
+            {"metric": "return_20d", "operator": "gt", "value": 0.45},
+        ],
+    )
+    assert intersection["total_rows"] == 1
+    assert [row["code"] for row in intersection["rows"]] == ["000001"]
+
+    legacy = rdp.query_full_market(
+        root=root,
+        filter_metric="return_20d",
+        filter_operator="neq",
+        filter_value=0,
+    )
+    assert legacy["coverage"]["universe_count"] == 3
+    assert legacy["total_rows"] == 2  # 600519's missing return_20d is not a match.
 
     with pytest.raises(rdp.ResearchDataPlaneValidationError, match="as_of is required"):
         rdp.query_full_market(root=root, latest=False)
@@ -134,9 +157,10 @@ def test_screener_full_market_wrapper_is_fail_closed_and_not_candidate_pool(tmp_
         params={
             "latest": "false",
             "as_of": "2026-02-20",
-            "filter_metric": "return_5d",
-            "filter_operator": "gt",
-            "filter_value": "0.05",
+            "filters": json.dumps([
+                {"metric": "return_5d", "operator": "gt", "value": 0.05},
+                {"metric": "return_20d", "operator": "gt", "value": 0.4},
+            ]),
             "sort_by": "latest_close",
             "sort_order": "desc",
             "limit": "1",
@@ -167,3 +191,26 @@ def test_screener_full_market_wrapper_keeps_query_validation_distinct(tmp_path, 
     )
     assert response.status_code == 422
     assert "as_of is required" in response.json()["detail"]
+
+    response = TestClient(app_module.app).get(
+        "/api/screener/full-market",
+        params={
+            "filters": json.dumps([{"metric": "return_5d", "operator": "gt", "value": 0.05}]),
+            "filter_metric": "return_5d",
+        },
+    )
+    assert response.status_code == 422
+    assert "cannot be combined" in response.json()["detail"]
+
+    response = TestClient(app_module.app).get(
+        "/api/screener/full-market",
+        params={"filters": "null"},
+    )
+    assert response.status_code == 422
+    assert "JSON array" in response.json()["detail"]
+
+    with pytest.raises(rdp.ResearchDataPlaneQueryValidationError, match="finite number"):
+        rdp.query_full_market(
+            root=root,
+            filters=[{"metric": "return_5d", "operator": "gt", "value": 10**400}],
+        )

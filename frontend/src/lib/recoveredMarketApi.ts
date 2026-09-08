@@ -29,6 +29,7 @@ export const recoveredMarketApi = {
     const params = new URLSearchParams();
     if (query.as_of) params.set("as_of", query.as_of);
     if (query.latest != null) params.set("latest", String(query.latest));
+    if (query.filters != null) params.set("filters", JSON.stringify(query.filters));
     if (query.filter_metric) params.set("filter_metric", query.filter_metric);
     if (query.filter_operator) params.set("filter_operator", query.filter_operator);
     if (query.filter_value != null) params.set("filter_value", String(query.filter_value));
