@@ -2,6 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+.market-cloud--today {
+  --market-cloud-chart-height: clamp(600px, 72vh, 760px);
+}
+
+@media (max-width: 767px) {
+  .market-cloud--today {
+    --market-cloud-chart-height: clamp(420px, 62vh, 560px);
+  }
+}
+
 @layer base {
   /* ChatGPT-inspired workspace variant: neutral canvas, soft chrome, low container noise. */
   :root {

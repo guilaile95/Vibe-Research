@@ -142,7 +142,12 @@ async function main() {
     }
     console.log(`Backend server running at http://127.0.0.1:${backendPort}`);
 
-    const browser = await chromium.launch({ headless: true, executablePath: findChromium() });
+    let browser;
+    try {
+      browser = await chromium.launch({ headless: true, executablePath: findChromium() });
+    } catch {
+      browser = await chromium.launch({ headless: true, channel: "chrome" });
+    }
     const context = await browser.newContext();
     const page = await context.newPage();
 

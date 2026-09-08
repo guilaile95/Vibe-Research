@@ -48,7 +48,11 @@ interface Digest {
 
 const errorMessage = (cause: unknown, fallback: string) => cause instanceof ApiError ? cause.message : fallback;
 
-export default function MarketIntelPanel() {
+interface MarketIntelPanelProps {
+  embedded?: boolean;
+}
+
+export default function MarketIntelPanel({ embedded = false }: MarketIntelPanelProps) {
   const [radar, setRadar] = useState<RadarData | null>(null);
   const [runtime, setRuntime] = useState<NativeIntelStatus | null>(null);
   const [items, setItems] = useState<NativeIntelItemsResponse | null>(null);
@@ -372,15 +376,26 @@ export default function MarketIntelPanel() {
             </div>
             <p className="mt-1 text-xs text-muted-foreground">来源状态与本地保存历史 · 更新时间 {formatShanghaiTime(updatedAt || radar?.generated_at)}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            disabled={loading || refreshing || bulk.running}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-          >
-            {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {refreshing ? "刷新中…" : "刷新"}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {embedded && (
+              <Link
+                to="/intel"
+                className="text-xs text-primary hover:underline"
+                data-testid="today-intel-link"
+              >
+                进入完整资讯中心
+              </Link>
+            )}
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              disabled={loading || refreshing || bulk.running}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+            >
+              {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {refreshing ? "刷新中…" : "刷新"}
+            </button>
+          </div>
         </div>
 
         {loading && !hasAnyData ? (

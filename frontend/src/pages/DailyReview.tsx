@@ -20,6 +20,8 @@ import {
   type Bk11HistoryEnvelope,
 } from "@/lib/api";
 import { NorthboundCapitalFlowCard } from "@/components/market/NorthboundCapitalFlowCard";
+import { MarketCloud } from "@/components/market/MarketCloud";
+import MarketIntelPanel from "@/components/market/MarketIntelPanel";
 import { ShortTermHistoryCard } from "@/components/dailyReview/ShortTermHistoryCard";
 import { northboundErrorMessage } from "@/lib/northboundView";
 import { loadLlm } from "@/lib/llm";
@@ -988,6 +990,11 @@ export function DailyReview() {
         title="今天"
         subtitle="每日复盘与自选观察"
       />
+
+      <section data-testid="today-market-surface" className="mb-10 space-y-8">
+        <MarketCloud embedded />
+        <MarketIntelPanel embedded />
+      </section>
 
       <section aria-labelledby="daily-review-section-title" className="mb-4 flex flex-wrap items-start justify-between gap-3 border-t border-border/60 pt-6">
         <div>

@@ -25,7 +25,11 @@ const PERIOD_OPTIONS: { value: MarketCloudPeriod; label: string }[] = [
   { value: "today", label: "今日" },
 ];
 
-export function MarketCloud() {
+interface MarketCloudProps {
+  embedded?: boolean;
+}
+
+export function MarketCloud({ embedded = false }: MarketCloudProps) {
   const navigate = useNavigate();
   const [scope, setScope] = useState<MarketCloudScope>("all");
   const [period] = useState<MarketCloudPeriod>("today");
@@ -127,7 +131,7 @@ export function MarketCloud() {
         },
       ],
     };
-  }, [treemapData]);
+  }, [treemapData, data?.fetched_at]);
 
   const handleClick = useCallback(
     (params: unknown) => {
@@ -144,10 +148,10 @@ export function MarketCloud() {
   const status = data?.status;
   const warnings = data?.warnings ?? [];
 
-  const chartHeight = "clamp(560px, 68vh, 700px)";
+  const chartHeight = embedded ? "var(--market-cloud-chart-height)" : "clamp(560px, 68vh, 700px)";
 
   return (
-    <section data-market-cloud aria-labelledby="market-cloud-title" className="mb-10">
+    <section data-market-cloud aria-labelledby="market-cloud-title" className={cn("mb-10", embedded && "market-cloud--today mb-0")}>
       <header className="mb-3 flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -166,6 +170,15 @@ export function MarketCloud() {
         </div>
 
         <div className="flex flex-wrap items-center justify-end gap-2">
+          {embedded && (
+            <Link
+              to="/market-cloud"
+              className="text-xs text-primary hover:underline"
+              data-testid="today-market-cloud-link"
+            >
+              打开完整市场热力
+            </Link>
+          )}
           <div className="flex items-center gap-1 rounded-lg border border-primary/30 bg-card/70 p-1 shadow-sm">
             <input
               aria-label="候选研究代码"

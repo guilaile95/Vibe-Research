@@ -106,9 +106,9 @@ const nativeTrending = {
   entities: [{ term: "半导体", term_kind: "concept", security_code: null, item_count: 1, source_count: 2, previous_item_count: 0, delta: 1 }],
 };
 
-const marketCloud = (scope) => ({
-  status: "normal",
-  warnings: [],
+const marketCloud = (scope, status = "normal") => ({
+  status,
+  warnings: status === "partial" ? ["部分行业数据缺失，仍显示有效快照"] : [],
   is_stale: false,
   fetched_at: now,
   data: {
@@ -154,18 +154,50 @@ async function handleApi(route) {
     const scope = url.searchParams.get("scope") || "all";
     requestedScopes.push(scope);
     marketCloudAuthorization.push(request.headers()["authorization"] || null);
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: marketCloud(scope) }) });
+    if (scenario === "cloud-fail") {
+      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "market cloud unavailable" }) });
+    }
+    const cloudStatus = scenario === "cloud-partial" || scenario === "both-partial" ? "partial" : "normal";
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: marketCloud(scope, cloudStatus) }) });
   }
-  if (pathName === "/api/native-intel/status") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(nativeRuntime) });
-  if (pathName === "/api/native-intel/items") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(nativeItems) });
-  if (pathName === "/api/native-intel/trending") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(nativeTrending) });
+  if (pathName === "/api/native-intel/status") {
+    if (scenario === "native-fail") return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "native intel unavailable" }) });
+    const status = scenario === "native-unavailable" ? "unavailable" : scenario === "both-partial" ? "partial" : "normal";
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      ...nativeRuntime,
+      status,
+      sources: status === "unavailable" ? { ...nativeRuntime.sources, healthy: 0, failing: 2, failing_names: ["公开来源"] } : nativeRuntime.sources,
+    }) });
+  }
+  if (pathName === "/api/native-intel/items") {
+    if (scenario === "native-fail") return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "native intel unavailable" }) });
+    const status = scenario === "native-unavailable" ? "unavailable" : "normal";
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      ...nativeItems,
+      status,
+      items: status === "unavailable" ? [] : nativeItems.items,
+      total: status === "unavailable" ? 0 : nativeItems.total,
+    }) });
+  }
+  if (pathName === "/api/native-intel/trending") {
+    if (scenario === "native-fail") return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "native intel unavailable" }) });
+    const status = scenario === "native-unavailable" ? "unavailable" : "normal";
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      ...nativeTrending,
+      status,
+      items: status === "unavailable" ? [] : nativeTrending.items,
+      entities: status === "unavailable" ? [] : nativeTrending.entities,
+    }) });
+  }
   if (pathName === "/api/native-intel/refresh") {
     nativeRefreshCalls += 1;
     if (scenario === "native-fail") return route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ detail: "native refresh failed" }) });
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ accepted: true, status: "normal" }) });
   }
   if (pathName === "/api/radar" && request.method() === "GET") {
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(radar) });
+    if (scenario === "radar-fail") return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "radar unavailable" }) });
+    const radarPayload = scenario === "both-partial" ? { ...radar, stats: { ...radar.stats, failed_sources: 1 } } : radar;
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(radarPayload) });
   }
   if (pathName === "/api/radar/refresh") {
     radarRefreshCalls += 1;
@@ -173,6 +205,9 @@ async function handleApi(route) {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(radar) });
   }
   if (pathName === "/api/daily-review") {
+    if (scenario === "daily-fail") {
+      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "daily review unavailable" }) });
+    }
     return route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -227,18 +262,27 @@ try {
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "今天", exact: true }).waitFor();
   await page.locator("#daily-review-section-title").waitFor();
-  assert.equal(await page.locator("[data-market-cloud]").count(), 0, "Today must not embed Market Cloud");
-  assert.equal(await page.getByTestId("market-intel-panel").count(), 0, "Today must not embed market intel");
+  const todaySurface = page.getByTestId("today-market-surface");
+  const todayCloud = todaySurface.locator("[data-market-cloud]");
+  const todayIntel = todaySurface.getByTestId("market-intel-panel");
+  await todayCloud.locator("[data-market-cloud-chart]").waitFor({ state: "visible", timeout: 15000 });
+  await todayIntel.getByText("半导体产业链出现重要进展", { exact: true }).waitFor();
+  assert.equal(await todaySurface.locator("[data-market-cloud]").count(), 1, "Today should embed one Market Cloud");
+  assert.equal(await todaySurface.getByTestId("market-intel-panel").count(), 1, "Today should embed one market intel panel");
+  assert.equal(await todaySurface.getByTestId("today-market-cloud-link").getAttribute("href"), "/market-cloud");
+  assert.equal(await todaySurface.getByTestId("today-intel-link").getAttribute("href"), "/intel");
+  const todayCloudBox = await todayCloud.boundingBox();
+  const todayIntelBox = await todayIntel.boundingBox();
+  const dailyReviewBox = await page.locator("#daily-review-section-title").boundingBox();
+  assert.ok(todayCloudBox && todayIntelBox && dailyReviewBox && todayCloudBox.y < todayIntelBox.y && todayIntelBox.y < dailyReviewBox.y, "Today should order Market Cloud, market intel, then Daily Review");
   const mainNav = page.locator('nav[aria-label="主导航"]');
   const todayGroup = mainNav.locator(':scope > div[class~="space-y-0.5"] > div.relative').first();
   const todayLink = todayGroup.locator(':scope > a');
   const todayChildren = todayGroup.locator(':scope > div[class*="pl-4"] > a');
-  await todayChildren.first().waitFor({ state: "visible" });
 
-  // Final IA: 今天 owns the two secondary destinations, before the next primary entries.
+  // Final IA: 今天 is the canonical entry; full Market Cloud and Intel routes remain in-page links.
   assert.equal(await todayLink.getAttribute("href"), "/daily-review");
-  assert.deepEqual((await todayChildren.allTextContents()).map((value) => value.trim()), ["市场热力", "资讯雷达"]);
-  assert.deepEqual(await todayChildren.evaluateAll((links) => links.map((link) => link.getAttribute("href"))), ["/market-cloud", "/intel"]);
+  assert.equal(await todayChildren.count(), 0, "Today must not duplicate Market Cloud or Intel in the sidebar");
   const navOrder = await mainNav.locator(':scope > div[class~="space-y-0.5"]').evaluate((container) => (
     Array.from(container.children).flatMap((entry) => {
       if (entry.matches(".relative")) {
@@ -251,12 +295,25 @@ try {
       .filter((link) => link instanceof HTMLAnchorElement)
       .map((link) => link.textContent.trim())
   ));
-  assert.deepEqual(navOrder.slice(0, 5), ["今天", "市场热力", "资讯雷达", "发现", "自选"]);
-  assert.ok(navOrder.indexOf("资讯雷达") < navOrder.indexOf("发现"));
+  assert.deepEqual(navOrder.slice(0, 5), ["今天", "发现", "自选", "个股", "持仓"]);
   assert.equal(await mainNav.locator('a[href="/daily-review"]').count(), 1, "Today must have one primary-nav entry");
-  assert.equal(await mainNav.locator('a[href="/market-cloud"]').count(), 1, "Market Heat must not be duplicated");
-  assert.equal(await mainNav.locator('a[href="/intel"]').count(), 1, "Intel Radar must not be duplicated");
+  assert.equal(await mainNav.locator('a[href="/market-cloud"]').count(), 0, "Market Heat must not be duplicated in the sidebar");
+  assert.equal(await mainNav.locator('a[href="/intel"]').count(), 0, "Intel Radar must not be duplicated in the sidebar");
   assert.equal(await page.getByRole("link", { name: "资讯", exact: true }).count(), 0, "legacy short Intel label must not remain");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("today-market-surface").locator("[data-market-cloud-chart]").waitFor({ state: "visible", timeout: 15000 });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), "Today must not overflow horizontally on narrow screens");
+  const narrowToolbar = await page.getByTestId("today-market-surface").locator('[role="toolbar"]').boundingBox();
+  assert.ok(narrowToolbar && narrowToolbar.width <= 382, `narrow scope controls should fit viewport, got ${narrowToolbar?.width}`);
+  await page.getByTestId("nav-drawer-trigger").click();
+  const narrowSidebar = page.getByTestId("app-sidebar");
+  await narrowSidebar.getByRole("link", { name: "今天", exact: true }).waitFor();
+  assert.equal(await narrowSidebar.locator('a[href="/market-cloud"]').count(), 0);
+  assert.equal(await narrowSidebar.locator('a[href="/intel"]').count(), 0);
+  await page.getByTestId("nav-drawer-trigger").click();
+  await page.setViewportSize({ width: 1920, height: 1080 });
 
   await page.goto(`http://127.0.0.1:${port}/market-cloud`, { waitUntil: "domcontentloaded" });
   const chart = page.locator("[data-market-cloud-chart]");
@@ -265,6 +322,7 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" });
   await chart.waitFor({ state: "visible", timeout: 15000 });
   assert.equal(new URL(page.url()).pathname, "/market-cloud");
+  assert.equal(await mainNav.locator('a[href="/daily-review"]').getAttribute("aria-current"), "page");
 
   const chartBox = await chart.boundingBox();
   assert.ok(chartBox && chartBox.width > 1400, `expected wide market cloud, got ${chartBox?.width}`);
@@ -290,6 +348,7 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" });
   await marketPanel.waitFor({ state: "visible", timeout: 15000 });
   assert.equal(new URL(page.url()).pathname, "/intel");
+  assert.equal(await mainNav.locator('a[href="/daily-review"]').getAttribute("aria-current"), "page");
   assert.equal(await page.getByRole("heading", { name: "市场情报", exact: true }).count(), 1);
   assert.equal(await page.locator("[data-market-cloud]").count(), 0, "Intel must not embed Market Cloud");
   assert.equal(await page.getByText("Investment News", { exact: true }).count(), 0);
@@ -319,6 +378,47 @@ try {
   await marketPanel.getByRole("button", { name: /AI 人工智能/ }).waitFor();
   assert.equal(nativeRefreshCalls, 1);
   assert.equal(radarRefreshCalls, 1);
+
+  // Initial-load fixtures: each surface keeps its own honest state.
+  scenario = "cloud-fail";
+  await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
+  await page.getByText("市场快照暂不可用", { exact: true }).first().waitFor();
+  await page.getByTestId("market-intel-panel").getByText("半导体产业链出现重要进展", { exact: true }).waitFor();
+  await page.locator("#daily-review-section-title").waitFor();
+
+  scenario = "cloud-partial";
+  await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("today-market-surface").getByText("部分数据缺失", { exact: true }).waitFor();
+  await page.getByTestId("today-market-surface").locator("[data-market-cloud-chart]").waitFor({ state: "visible" });
+
+  scenario = "native-unavailable";
+  await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
+  const unavailableIntel = page.getByTestId("market-intel-panel");
+  await unavailableIntel.getByText("PARTIAL · 部分可用", { exact: true }).waitFor();
+  await unavailableIntel.getByText("公开资讯：", { exact: false }).waitFor();
+  await unavailableIntel.getByRole("button", { name: /AI 人工智能/ }).waitFor();
+  await page.getByTestId("today-market-surface").locator("[data-market-cloud-chart]").waitFor({ state: "visible" });
+
+  scenario = "radar-fail";
+  await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
+  const radarUnavailableIntel = page.getByTestId("market-intel-panel");
+  await radarUnavailableIntel.getByText("PARTIAL · 部分可用", { exact: true }).waitFor();
+  await radarUnavailableIntel.getByText("半导体产业链出现重要进展", { exact: true }).waitFor();
+  await radarUnavailableIntel.getByText("赛道摘要：", { exact: false }).waitFor();
+
+  scenario = "daily-fail";
+  await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
+  await page.getByText("每日复盘请求失败：", { exact: false }).waitFor();
+  await page.getByTestId("today-market-surface").locator("[data-market-cloud-chart]").waitFor({ state: "visible" });
+  await page.getByTestId("market-intel-panel").getByText("半导体产业链出现重要进展", { exact: true }).waitFor();
+
+  scenario = "both-partial";
+  await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("today-market-surface").getByText("部分数据缺失", { exact: true }).waitFor();
+  await page.getByTestId("market-intel-panel").getByText("PARTIAL · 部分可用", { exact: true }).waitFor();
+  await page.getByTestId("today-market-surface").locator("[data-market-cloud-chart]").waitFor({ state: "visible" });
+
+  scenario = "normal";
 
   await page.goto(`http://127.0.0.1:${port}/sectors`, { waitUntil: "domcontentloaded" });
   await page.getByText("板块强度", { exact: true }).waitFor();

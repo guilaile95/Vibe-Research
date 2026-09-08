@@ -87,7 +87,11 @@ try {
   server = await staticServer(dist, port);
   const frontend = `http://127.0.0.1:${port}`;
 
-  browser = await chromium.launch({ headless: true, executablePath: chromiumPath() });
+  try {
+    browser = await chromium.launch({ headless: true, executablePath: chromiumPath() });
+  } catch {
+    browser = await chromium.launch({ headless: true, channel: "chrome" });
+  }
   const page = await browser.newPage();
 
   await page.goto(frontend, { waitUntil: "networkidle" });
