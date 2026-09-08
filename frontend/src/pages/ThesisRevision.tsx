@@ -101,6 +101,14 @@ export function ThesisRevision() {
       {err && (
         <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
           {err}
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading}
+            className="ml-2 underline underline-offset-2 disabled:opacity-50"
+          >
+            重试读取此版本
+          </button>
         </div>
       )}
 
