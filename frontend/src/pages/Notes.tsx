@@ -1,11 +1,29 @@
 import { useRef, useState } from "react";
-import { Trash2, ChevronDown, ChevronRight, NotebookPen, ScanSearch, Save } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  NotebookPen,
+  Save,
+  ScanSearch,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Disclaimer } from "@/components/ui/Disclaimer";
-import { loadNotes, deleteNote, clearNotes, addNote, type Note } from "@/lib/notes";
+import {
+  addNote,
+  clearNotes,
+  createNotesBackupJson,
+  deleteNote,
+  importNotesBackupJson,
+  loadNotes,
+  type Note,
+} from "@/lib/notes";
 import { reflectStream } from "@/lib/agents";
 import { ApiError } from "@/lib/api";
 
@@ -26,7 +44,10 @@ export function Notes() {
   const [reflectErr, setReflectErr] = useState("");
   const [reflecting, setReflecting] = useState(false);
   const [reflectSaved, setReflectSaved] = useState(false);
+  const [backupStatus, setBackupStatus] = useState("");
+  const [backupError, setBackupError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   async function runReflect(n: Note) {
     abortRef.current?.abort();
@@ -52,26 +73,104 @@ export function Notes() {
     setReflectSaved(true);
   }
 
+  function downloadBackup() {
+    setBackupError("");
+    const blob = new Blob([createNotesBackupJson(notes)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `vibe-research-notes-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    document.body.appendChild(link);
+    try {
+      link.click();
+      setBackupStatus(`已导出 ${notes.length} 条研究记录。`);
+    } finally {
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  async function importBackup(file: File | undefined) {
+    if (!file) return;
+    setBackupStatus("");
+    setBackupError("");
+    try {
+      const result = importNotesBackupJson(await file.text());
+      setNotes(result.notes);
+      setBackupStatus(
+        result.added > 0
+          ? `已导入 ${result.added} 条研究记录${result.skipped > 0 ? `，另有 ${result.skipped} 条重复或超出上限` : ""}。`
+          : `没有新增记录；${result.skipped} 条记录已存在或超出上限。`,
+      );
+    } catch (error) {
+      setBackupError(error instanceof Error ? error.message : "研究记录导入失败");
+    }
+  }
+
   const fmt = (ts: number) => new Date(ts).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 
   return (
     <div>
       <PageHeader
         title="研究记录"
-        subtitle="把 AI 复盘 / 要点 / 问答沉淀在本地，随时回看。数据只存本地、不上传。"
-        actions={notes.length > 0 && (
-          <button onClick={() => { if (confirm("清空所有研究记录？")) { clearNotes(); setNotes([]); } }}
-            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:text-destructive">
-            <Trash2 className="h-4 w-4" /> 清空
-          </button>
+        subtitle="把 AI 复盘、今日要点和问答保存在当前浏览器中，随时回看。"
+        actions={(
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={downloadBackup}
+              disabled={notes.length === 0}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Download className="h-4 w-4" /> 导出备份
+            </button>
+            <button
+              type="button"
+              onClick={() => importInputRef.current?.click()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+            >
+              <Upload className="h-4 w-4" /> 导入备份
+            </button>
+            <input
+              ref={importInputRef}
+              data-testid="notes-backup-input"
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = "";
+                void importBackup(file);
+              }}
+            />
+            {notes.length > 0 && (
+              <button
+                type="button"
+                onClick={() => { if (confirm("清空所有研究记录？")) { clearNotes(); setNotes([]); } }}
+                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="h-4 w-4" /> 清空
+              </button>
+            )}
+          </div>
         )}
       />
+
+      <div className="mb-4 flex gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+        <div>
+          <p className="font-medium text-foreground">研究记录只保存在当前浏览器中。</p>
+          <p>清理浏览器数据、切换浏览器 Profile 或更换设备前，请先导出备份。备份文件只包含研究记录，不包含模型密钥、访问密钥或 AI 对话。</p>
+        </div>
+      </div>
+      {backupStatus && <p className="mb-3 text-xs text-success" role="status">{backupStatus}</p>}
+      {backupError && <p className="mb-3 text-xs text-destructive" role="alert">{backupError}</p>}
 
       {notes.length === 0 ? (
         <GlassCard>
           <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
             <NotebookPen className="h-8 w-8 text-muted-foreground/40" />
-            还没有记录。在「每日复盘」「资讯雷达」或「问 AI」里点 <b className="text-foreground">「存入沉淀」</b> 保存分析结果。
+            还没有记录。在「每日复盘」「资讯雷达」或「问 AI」里点 <b className="text-foreground">「存入沉淀」</b> 保存分析结果，或从已有 JSON 备份导入。
           </div>
         </GlassCard>
       ) : (

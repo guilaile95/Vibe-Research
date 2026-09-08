@@ -340,6 +340,10 @@ jobs:
         working-directory: frontend
         run: npm run test:e2e:today-market-context
 
+      - name: Run research notes backup E2E
+        working-directory: frontend
+        run: npm run test:e2e:notes-backup
+
   e2e-decision-inbox:
     name: Playwright decision inbox E2E
     runs-on: ubuntu-latest
