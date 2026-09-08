@@ -377,16 +377,16 @@ async function runE2E() {
     assert.equal(await commitBtn.isDisabled(), false);
     await commitBtn.click();
     await page.waitForFunction(() => {
-      return document.body.textContent.includes("待建立 Campaign 的持仓");
+      return document.body.textContent.includes("尚未建立投资计划的持仓");
     });
     assert.equal(commitCount, 1, "commit called exactly once");
     assert.deepEqual(commitBodies[0], previewBodies[1], "commit payload == preview payload");
 
     // 8. commit 成功 → 自动刷新 → canonical holdings + CREATE_CAMPAIGN
     console.log("[E2E] 8. canonical holdings + CREATE_CAMPAIGN entry...");
-    await page.waitForSelector("h2:has-text('待建立 Campaign 的持仓')");
+    await page.waitForSelector("h2:has-text('尚未建立投资计划的持仓')");
     await page.waitForSelector("text=001896");
-    await page.waitForSelector("button:has-text('创建 Campaign')");
+    await page.waitForSelector("button:has-text('创建投资计划')");
     assert.equal(
       await page.locator("h2:has-text('初始化持仓事实')").count(),
       0,

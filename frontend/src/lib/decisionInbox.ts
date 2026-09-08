@@ -53,8 +53,8 @@ export const VISIBLE_STATE_LABELS: Record<string, string> = {
 
 /** reason_code → 用户可读主解释；未知码原样回退，绝不改写 semantic 值。 */
 export const REASON_CODE_LABELS: Record<string, string> = {
-  UNASSIGNED_HOLDING: "持仓尚未分配 Campaign",
-  CAMPAIGN_NOT_IN_SCOPE: "该 Campaign 不在当前决策范围",
+  UNASSIGNED_HOLDING: "持仓尚未建立投资计划",
+  CAMPAIGN_NOT_IN_SCOPE: "该投资计划不在当前决策范围",
   THESIS_MISSING: "尚未绑定正式投资逻辑",
   THESIS_NOT_READY: "投资逻辑尚未就绪",
   THESIS_NOT_FROZEN: "投资逻辑尚未冻结",
@@ -127,10 +127,10 @@ export const TRANSITION_ACTION_LABELS: Record<CampaignStatus, string> = {
   DRAFT: "回到草稿",
   RESEARCHING: "开始研究",
   "PRE-ENTRY": "标记待入场",
-  ACTIVE: "激活 Campaign",
+  ACTIVE: "启用投资计划",
   REDUCING: "开始减仓",
-  CLOSED: "关闭 Campaign",
-  REJECTED: "拒绝 Campaign",
+  CLOSED: "关闭投资计划",
+  REJECTED: "放弃投资计划",
   EXPIRED: "标记过期",
 };
 
@@ -270,12 +270,12 @@ export function formalDecisionNextSteps(
     case "EVALUATED":
       return [
         { kind: "review", label: "打开决策复盘", href: "/decision-performance" },
-        { kind: "new-decision", label: "形成新的 Formal Decision", href: proposalHref },
+        { kind: "new-decision", label: "形成新的正式决策", href: proposalHref },
       ];
     case "NOT_EVALUATED":
     case "UNKNOWN":
     case "ERROR":
-      return [{ kind: "proposal", label: "打开 Formal Decision Review", href: proposalHref }];
+      return [{ kind: "proposal", label: "进入正式决策", href: proposalHref }];
   }
 }
 

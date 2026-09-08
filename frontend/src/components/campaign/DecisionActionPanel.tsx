@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import type { DecisionInboxCampaignItem } from "@/lib/api/types";
-import { presentFrozenDecision, presentSellEngine } from "@/lib/decisionActionView";
+import { decisionEvaluationLabel, presentFrozenDecision, presentSellEngine } from "@/lib/decisionActionView";
 
 export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem }) {
   const frozen = presentFrozenDecision(item);
@@ -15,11 +15,13 @@ export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem 
       <div
         className="space-y-2 rounded-md border border-border/50 bg-background/40 p-3"
         data-frozen-decision-state={frozen.state}
+        data-frozen-decision-evaluation={item.formal_decision_evaluation ?? ""}
+        data-frozen-decision-id={frozen.decisionId ?? ""}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-medium">{frozen.title}</h3>
-          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-            {item.formal_decision_evaluation ?? "NOT_EVALUATED"}
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
+            {decisionEvaluationLabel(item.formal_decision_evaluation)}
           </span>
         </div>
         <p className="text-base font-semibold" data-frozen-decision-action={frozen.action ?? ""}>
@@ -27,9 +29,6 @@ export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem 
         </p>
         {frozen.decisionId ? (
           <div className="space-y-1 text-muted-foreground">
-            <p className="font-mono text-[10px]" title={frozen.decisionId}>
-              {frozen.decisionId}
-            </p>
             <p>冻结于：{frozen.committedAt}</p>
             <p>
               复核边界：{frozen.reviewBy}
@@ -37,10 +36,15 @@ export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem 
                 ? " · 已到复核时点"
                 : frozen.reviewState === "UPCOMING" ? " · 尚未到期" : " · 状态未知"}
             </p>
+            <details className="text-[10px]">
+              <summary className="cursor-pointer select-none hover:text-foreground">技术详情</summary>
+              <p className="mt-1 font-mono">decision_id：{frozen.decisionId}</p>
+              <p className="font-mono">evaluation：{item.formal_decision_evaluation ?? "NOT_EVALUATED"}</p>
+            </details>
           </div>
         ) : null}
         <p className="leading-5 text-muted-foreground">
-          这是用户已冻结的记录，不是 AI 动态生成的行动建议；只有 backend 在本次 snapshot 中评估为适用时才开放执行续接。
+          这是你已确认并冻结的记录，不是 AI 动态生成的行动建议；只有当前数据证明它仍适用时，才会开放后续操作。
         </p>
         <div className="flex flex-wrap gap-x-4 gap-y-2">
           {frozen.tradeHref ? (
@@ -64,9 +68,9 @@ export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem 
         data-sell-engine-evaluation={sell.evaluation}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-medium">当前 Sell Review（只读）</h3>
-          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-            {sell.evaluation}
+          <h3 className="font-medium">当前卖出复核（只读）</h3>
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
+            {decisionEvaluationLabel(sell.evaluation)}
           </span>
         </div>
         <p className="text-base font-semibold">{sell.sellLabel}</p>
@@ -88,10 +92,10 @@ export function DecisionActionPanel({ item }: { item: DecisionInboxCampaignItem 
           ) : null}
         </div>
         <p className="leading-5 text-muted-foreground">
-          Sell Review 只解释当前卖出侧压力，不会修改 Frozen Decision，也不会自动创建交易。
+          卖出复核只解释当前卖出侧压力，不会修改已确认决策，也不会自动创建交易。
         </p>
         <Link to={proposalHref} className="font-medium text-primary hover:underline">
-          重新形成 Formal Decision →
+          重新形成正式决策 →
         </Link>
       </div>
     </section>

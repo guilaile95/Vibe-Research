@@ -73,18 +73,18 @@ function changeDetails(item: ResearchContinuityChange) {
 }
 
 function calendarText(value: ResearchContinuity["decision_calendar"]): string {
-  if (value.state === "ERROR") return "ERROR · 披露日历暂不可用";
-  if (value.state === "UNAVAILABLE") return "UNAVAILABLE · 披露日期无法可靠解析";
-  if (value.state === "NO_RECORD") return "NO_RECORD · 暂无可核验的定期报告日程";
+  if (value.state === "ERROR") return "读取失败：披露日历暂不可用";
+  if (value.state === "UNAVAILABLE") return "信息不足：披露日期无法可靠解析";
+  if (value.state === "NO_RECORD") return "暂无可核验的定期报告日程";
   if (value.state === "DELAYED_SIGNAL" && value.next?.appointment_date) {
-    return `DELAYED_SIGNAL · 预约日 ${value.next.appointment_date} 已过，尚未见实际披露`;
+    return `预约日 ${value.next.appointment_date} 已过，尚未见实际披露`;
   }
   if (value.state === "EXPECTED" && value.next?.appointment_date) {
-    return `EXPECTED · 预约披露日 ${value.next.appointment_date}（不是公司保证日期）`;
+    return `预计披露日 ${value.next.appointment_date}（不是公司保证日期）`;
   }
   return value.latest_actual?.actual_date
-    ? `CONFIRMED · 最近实际披露 ${value.latest_actual.actual_date}`
-    : "CONFIRMED";
+    ? `最近实际披露 ${value.latest_actual.actual_date}`
+    : "已确认";
 }
 
 export function ResearchContinuityCard({
@@ -107,7 +107,7 @@ export function ResearchContinuityCard({
       setData(await api.getResearchContinuity(campaignId));
     } catch (cause) {
       setData(null);
-      setError(cause instanceof ApiError ? cause.message : "Research Continuity 读取失败");
+      setError(cause instanceof ApiError ? cause.message : "研究变化读取失败");
     } finally {
       setLoading(false);
     }
@@ -132,7 +132,7 @@ export function ResearchContinuityCard({
     setData(null);
     api.getResearchContinuity(campaignId)
       .then((value) => { if (active) setData(value); })
-      .catch((cause) => { if (active) setError(cause instanceof ApiError ? cause.message : "Research Continuity 读取失败"); })
+      .catch((cause) => { if (active) setError(cause instanceof ApiError ? cause.message : "研究变化读取失败"); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [awaitingPrefetch, campaignId, prefetched]);
@@ -143,7 +143,7 @@ export function ResearchContinuityCard({
         <div>
           <h3 className="text-sm font-semibold">自上次正式检查以来</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            只比较 Current Thesis 的不可变 Evidence 快照；不修改 Thesis、Decision、Campaign 或 Trade。
+            只比较已保存的正式投资逻辑和证据记录，不会修改投资逻辑、决策、投资计划或交易。
           </p>
         </div>
         <button type="button" onClick={() => void load()} disabled={loading} aria-label="刷新研究连续性" className="rounded border border-border/50 p-1.5 text-muted-foreground hover:text-foreground disabled:opacity-50">
@@ -154,19 +154,19 @@ export function ResearchContinuityCard({
       {loading ? (
         <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />读取不可变基线与披露日历…</p>
       ) : error || !data ? (
-        <p className="mt-3 flex items-center gap-2 text-xs text-warning" role="alert"><AlertCircle className="h-3.5 w-3.5" />{error || "UNAVAILABLE"}</p>
+        <p className="mt-3 flex items-center gap-2 text-xs text-warning" role="alert"><AlertCircle className="h-3.5 w-3.5" />{error || "当前信息不可用"}</p>
       ) : (
         <div className="mt-3 space-y-3 text-xs">
           <div className="rounded border border-border/50 bg-background/35 p-3">
             <p className="font-medium">
-              基线：{data.baseline.status === "READY" ? data.baseline.authority_type : data.baseline.status}
+              对比基线：{data.baseline.status === "READY" ? "已建立" : "尚未建立"}
             </p>
             {data.changes.status === "NO_BASELINE" ? (
-              <p className="mt-1 text-muted-foreground">NO_BASELINE · 尚无 Frozen Decision 或已提交的 Formal Original，不能声称没有变化。</p>
+              <p className="mt-1 text-muted-foreground">尚无已确认决策或正式初始投资逻辑，暂时无法比较变化。</p>
             ) : data.changes.status === "NOT_EVALUATED" ? (
-              <p className="mt-1 text-muted-foreground">NOT_EVALUATED · 只有基线，没有后续不可变观察，不能声称没有变化。</p>
+              <p className="mt-1 text-muted-foreground">尚未评估：目前只有基线，没有后续记录，不能声称“没有变化”。</p>
             ) : data.changes.status === "UNAVAILABLE" ? (
-              <p className="mt-1 text-warning">UNAVAILABLE · 基线或 Evidence 链无法完整验证。</p>
+              <p className="mt-1 text-warning">信息不足：基线或证据链无法完整验证。</p>
             ) : data.changes.items.length === 0 ? (
               <p className="mt-1 text-muted-foreground">已有后续观察，未发现事实字段变化。</p>
             ) : (

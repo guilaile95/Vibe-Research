@@ -290,7 +290,7 @@ async function run() {
 
     console.log("Environment preparation is complete; formal testing is beginning.");
     await page.goto(`${frontend}/campaigns/${campaign.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
-    await page.getByRole("heading", { name: "Formal Decision Review" }).waitFor();
+    await page.getByRole("heading", { name: "正式决策" }).waitFor();
     await page.locator(`[data-decision-proposal-page="${campaign.campaign_id}"]`).waitFor();
     await page.locator('[data-decision-context="ready"]').waitFor();
     await page.screenshot({ path: join(evidenceDir, "t0-context.png"), fullPage: true });
@@ -304,7 +304,7 @@ async function run() {
       response.request().method() === "POST"
       && response.url().includes(`/api/campaigns/${campaign.campaign_id}/ai-draft/generate`)
     ), { timeout: 180000 });
-    await page.getByRole("button", { name: "Generate AI Draft" }).click();
+    await page.getByRole("button", { name: "生成 AI 草稿" }).click();
     const generationResponse = await generationResponsePromise;
     assert.equal(generationResponse.status(), 200, await generationResponse.text());
     const generationBody = await generationResponse.json();
@@ -314,25 +314,25 @@ async function run() {
     assert.match(generation.draft_id, /^campaign_ai_draft_[0-9a-f]{32}$/);
     await page.locator('[data-ai-draft-status="UNCOMMITTED"]').waitFor();
     await page.screenshot({ path: join(evidenceDir, "t1-ai-draft.png"), fullPage: true });
-    assert.equal(await page.getByLabel("Asset stance").inputValue(), "SUPPORT");
-    assert.equal(await page.getByLabel("Trade stance").inputValue(), "WAIT");
-    assert.equal(await page.getByLabel("Strategy horizon").inputValue(), "AI horizon 2-4 weeks");
-    assert.equal(await page.getByLabel("Key assumptions").inputValue(), "AI assumption one\nAI assumption two");
-    assert.equal(await page.getByLabel("Event invalidation conditions").inputValue(), "AI invalidation");
+    assert.equal(await page.getByLabel("对这只股票的判断").inputValue(), "SUPPORT");
+    assert.equal(await page.getByLabel("当前操作倾向").inputValue(), "WAIT");
+    assert.equal(await page.getByLabel("这次判断关注的时间范围").inputValue(), "AI horizon 2-4 weeks");
+    assert.equal(await page.getByLabel("这个判断成立依赖什么").inputValue(), "AI assumption one\nAI assumption two");
+    assert.equal(await page.getByLabel("出现什么情况说明判断错了").inputValue(), "AI invalidation");
     assert.match(await page.locator('[data-ai-draft-status="UNCOMMITTED"]').innerText(), /AI DRAFT \/ UNCOMMITTED/);
 
     await page.getByRole("button", { name: "Apply again" }).click();
     await page.screenshot({ path: join(evidenceDir, "t1b-applied.png"), fullPage: true });
-    assert.equal(await page.getByLabel("Asset stance").inputValue(), "SUPPORT");
-    assert.equal(await page.getByLabel("Trade stance").inputValue(), "WAIT");
-    assert.match(await page.getByLabel("Key assumptions").inputValue(), /\n/);
+    assert.equal(await page.getByLabel("对这只股票的判断").inputValue(), "SUPPORT");
+    assert.equal(await page.getByLabel("当前操作倾向").inputValue(), "WAIT");
+    assert.match(await page.getByLabel("这个判断成立依赖什么").inputValue(), /\n/);
 
     const previewResponsePromise = () => page.waitForResponse((response) => (
       response.request().method() === "POST"
       && response.url().includes(`/api/campaigns/${campaign.campaign_id}/decision-proposal/preview`)
     ), { timeout: 180000 });
     let previewResponse = previewResponsePromise();
-    await page.getByRole("button", { name: "Preview Proposal" }).click();
+    await page.getByRole("button", { name: "预览决策草案" }).click();
     let preview = await previewResponse;
     assert.equal(preview.status(), 200, await preview.text());
     await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
@@ -344,11 +344,11 @@ async function run() {
     assert.ok(bodyHasProvenance(proposalBody, "portfolio_view", "MODEL_PROPOSAL"), proposalBody);
     assert.match(proposalBody, /UNCOMMITTED/);
 
-    await page.getByLabel("Trade stance").selectOption("OPPOSE");
+    await page.getByLabel("当前操作倾向").selectOption("OPPOSE");
     await page.screenshot({ path: join(evidenceDir, "t3-edited-user-view.png"), fullPage: true });
-    assert.equal(await page.getByLabel("Trade stance").inputValue(), "OPPOSE");
+    assert.equal(await page.getByLabel("当前操作倾向").inputValue(), "OPPOSE");
     previewResponse = previewResponsePromise();
-    await page.getByRole("button", { name: "Preview Proposal" }).click();
+    await page.getByRole("button", { name: "预览决策草案" }).click();
     preview = await previewResponse;
     assert.equal(preview.status(), 200, await preview.text());
     await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();

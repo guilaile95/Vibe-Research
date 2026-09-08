@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  decisionEvaluationLabel,
   presentFrozenDecision,
   presentSellEngine,
 } from "../src/lib/decisionActionView.ts";
@@ -9,6 +10,12 @@ import type { DecisionInboxCampaignItem } from "../src/lib/api/types.ts";
 
 const CAMPAIGN_ID = "campaign_" + "a".repeat(32);
 const DECISION_ID = "decision_" + "b".repeat(32);
+
+test("unsupported runtime evaluations fail closed instead of looking not evaluated", () => {
+  assert.equal(decisionEvaluationLabel("NOT_EVALUATED"), "尚未评估");
+  assert.equal(decisionEvaluationLabel("FUTURE_RUNTIME_ENUM"), "无法识别的状态");
+  assert.notEqual(decisionEvaluationLabel("FUTURE_RUNTIME_ENUM"), "尚未评估");
+});
 
 function item(
   overrides: Partial<DecisionInboxCampaignItem> = {},

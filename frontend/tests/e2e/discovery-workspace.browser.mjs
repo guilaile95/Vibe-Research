@@ -310,7 +310,7 @@ try {
   await candidate.waitFor();
   assert.equal(await candidate.getAttribute("data-security-code"), "600519");
   await candidate.locator('[data-position-state="NOT_HELD"]').waitFor();
-  await candidate.getByTestId("candidate-campaign-panel").getByText("暂无候选 Campaign", { exact: true }).waitFor();
+  await candidate.getByTestId("candidate-campaign-panel").getByText("暂无候选投资计划", { exact: true }).waitFor();
   assert.equal(
     apiRequests.filter(({ method, pathname }) => method !== "GET" && ["/api/campaigns", "/api/evidence", "/api/thesis"].includes(pathname)).length,
     0,
