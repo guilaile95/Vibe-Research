@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 
 import native_intel_router
 import native_intel_store as store
+import native_intel_ai
+import native_intel_ext_sources
 from fastapi import FastAPI
 
 DB_PATH = os.environ["VIBE_NATIVE_INTEL_DB"]
@@ -139,5 +141,24 @@ def _seed() -> None:
 
 
 _seed()
+
+
+def _deep_read_fixture_http_get(url: str, **_kwargs):
+    if url == "https://raw.githubusercontent.com/openai/whisper/main/README.md":
+        return b"# Whisper\nFirst-party repository README for browser deep reading."
+    if url == "https://raw.githubusercontent.com/openai/whisper/master/README.md":
+        raise RuntimeError("fixture fallback should not be selected")
+    if url == "https://example.com/article":
+        return b"<html><article>First-party article fixture for HN deep reading.</article></html>"
+    raise RuntimeError(f"unexpected deep-read fixture URL: {url}")
+
+
+def _deep_read_fixture_llm(_cfg, messages, **_kwargs):
+    assert "<<<UNTRUSTED_EXTERNAL_DATA_BEGIN>>>" in messages[1]["content"]
+    return "摘要\n- fixture source was read\n关键点\n- facts stay non-authoritative\n待核验\n- verify the original source"
+
+
+native_intel_ext_sources._http_get = _deep_read_fixture_http_get
+native_intel_ai.invoke_llm_text = _deep_read_fixture_llm
 app = FastAPI(title="Native Intel GH/HF E2E harness")
 app.include_router(native_intel_router.router)

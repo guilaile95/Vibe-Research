@@ -3240,6 +3240,29 @@ export interface NativeIntelStandaloneResponse {
   freshness_excluded_count?: number;
 }
 
+export interface NativeIntelDeepReadResponse {
+  status: "success" | "partial" | "unavailable";
+  item_id: number;
+  title: string;
+  summary?: string | null;
+  source_name?: string | null;
+  source_type?: string | null;
+  original_url: string;
+  source_url?: string | null;
+  source_kind?: string | null;
+  content_level: "TITLE_ONLY" | "SUMMARY" | "EXCERPT" | "ARTICLE_BODY";
+  content: string;
+  fetched_at?: string | null;
+  failure?: { kind: string; detail: string } | null;
+  analysis_status?: "SUCCESS" | "ERROR" | "SKIPPED";
+  analysis_error_kind?: string | null;
+  analysis_error?: string | null;
+  analysis: string;
+  analysis_artifact_id?: string | null;
+  analysis_cached?: boolean;
+  disclaimer: string;
+}
+
 export interface NativeIntelAiAnalysisResponse {
   artifact_id: string;
   mode: string;

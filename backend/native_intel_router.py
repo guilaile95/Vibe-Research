@@ -600,6 +600,24 @@ def get_standalone() -> dict[str, Any]:
 # TREND-PARITY Wave 5: AI Analysis & Agent Tools API
 # ---------------------------------------------------------------------------
 
+@router.post("/items/{item_id}/deep-read")
+def post_deep_read(item_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    """按条目读取外部来源；原文只在本次响应中返回，不写入 Native Intel。"""
+    if item_id < 1:
+        raise HTTPException(status_code=422, detail="item_id 必须为正整数")
+    try:
+        cfg = payload.get("llm") or payload.get("ai_config") or payload.get("cfg")
+        result = service.deep_read_item(item_id, cfg=cfg, path=_db_path())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except service.store.NativeIntelStoreError:
+        raise HTTPException(status_code=503, detail="资讯存储不可用，未生成深读结果") from None
+    except Exception:
+        raise HTTPException(status_code=503, detail="来源深读失败，未生成分析结果") from None
+    if result is None:
+        raise HTTPException(status_code=404, detail="资讯条目不存在")
+    return result
+
 @router.post("/ai/analysis")
 def post_ai_analysis(payload: dict[str, Any]) -> dict[str, Any]:
     """生成 AI 深度分析报告。只读预览报告事实，绝不推进 INCREMENTAL 基线。"""

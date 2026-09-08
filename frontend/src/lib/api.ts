@@ -49,6 +49,7 @@ import type {
   NativeIntelSourceRecord,
   NativeIntelConfig,
   NativeIntelStandaloneResponse,
+  NativeIntelDeepReadResponse,
   NativeIntelAiAnalysisResponse,
   NativeIntelAiTranslateResponse,
   NativeIntelAiEntityResponse,
@@ -741,6 +742,17 @@ export const api = {
     get<NativeIntelStandaloneResponse>(
       "/native-intel/standalone",
       { unwrapData: false, ...(signal ? { signal } : {}) },
+    ),
+  nativeIntelDeepRead: (
+    itemId: number,
+    payload: { llm?: { provider?: string; baseURL?: string; apiKey?: string; model?: string } | null } = {},
+    signal?: AbortSignal,
+  ) =>
+    request<NativeIntelDeepReadResponse>(
+      `/native-intel/items/${itemId}/deep-read`,
+      "POST",
+      payload,
+      { signal, unwrapData: false },
     ),
   nativeIntelAiAnalysis: (payload: { mode?: string; scope?: string; max_news?: number; include_rss?: boolean; include_standalone?: boolean; llm?: { provider?: string; baseURL?: string; apiKey?: string; model?: string } | null } = {}, signal?: AbortSignal) =>
     request<NativeIntelAiAnalysisResponse>("/native-intel/ai/analysis", "POST", payload, { signal, unwrapData: false }),
