@@ -128,8 +128,8 @@ try {
   assert.equal(payload.notes[0].title, "备份恢复验证");
   assert.doesNotMatch(raw, /SECRET_LLM_CONFIG|SECRET_ACCESS_KEY|SECRET_CHAT_HISTORY/);
 
-  await page.evaluate(() => localStorage.removeItem("vr-notes"));
-  await page.reload({ waitUntil: "networkidle" });
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "清空", exact: true }).click();
   await page.getByText(/还没有记录/).waitFor();
 
   const input = page.getByTestId("notes-backup-input");
