@@ -3,8 +3,9 @@ import { Link } from "react-router-dom";
 import { Activity, ChevronRight, Flame, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { SectorIndustryMatrix } from "@/components/sectors/SectorIndustryMatrix";
 import sectorsData from "@/data/sectors.json";
-import { api, type BoardRankingData, type SectorMarketContextData, type TimedComponentEnvelope } from "@/lib/api";
+import { api, type BoardRankingData, type SectorIndustryContextData, type SectorMarketContextData, type TimedComponentEnvelope } from "@/lib/api";
 import { formatActivity, formatSectorPercent, mappedSectorRows } from "@/lib/sectorMarketView";
 import { cn } from "@/lib/utils";
 import {
@@ -21,21 +22,29 @@ export function Sectors() {
   const sectors = sectorsData.sectors as SectorRow[];
   const hotCount = sectors.filter((s) => s.hot).length;
   const [marketContext, setMarketContext] = useState<SectorMarketContextData | null>(null);
+  const [industryContext, setIndustryContext] = useState<SectorIndustryContextData | null>(null);
   const [industryBoards, setIndustryBoards] = useState<TimedComponentEnvelope<BoardRankingData> | null>(null);
   const [loading, setLoading] = useState(true);
   const [contextError, setContextError] = useState(false);
+  const [industryError, setIndustryError] = useState(false);
   const [boardsError, setBoardsError] = useState(false);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    Promise.allSettled([api.getSectorMarketContext(), api.marketBoards("industry", 8)])
-      .then(([contextResult, boardsResult]) => {
+    Promise.allSettled([
+      api.getSectorMarketContext(),
+      api.marketBoards("industry", 8),
+      api.getSectorIndustryContext(),
+    ])
+      .then(([contextResult, boardsResult, industryResult]) => {
         if (!alive) return;
         if (contextResult.status === "fulfilled") setMarketContext(contextResult.value);
         else setContextError(true);
         if (boardsResult.status === "fulfilled") setIndustryBoards(boardsResult.value);
         else setBoardsError(true);
+        if (industryResult.status === "fulfilled") setIndustryContext(industryResult.value);
+        else setIndustryError(true);
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -96,6 +105,8 @@ export function Sectors() {
                 <p className="text-xs text-muted-foreground">{boardsError ? "今日行业横截面暂不可用。" : "当前无可用行业排名。"}</p>
               )}
             </section>
+
+            <SectorIndustryMatrix data={industryContext} loading={loading} error={industryError} />
 
             <section>
               <h3 className="mb-2 text-xs font-medium text-muted-foreground">Vibe 赛道多周期观察</h3>

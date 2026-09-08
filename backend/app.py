@@ -56,6 +56,7 @@ import review_compare
 import review_history
 import sector_research_data as srd
 import sector_market_context as smc
+import sector_industry_context as sic
 import northbound_capital_flow as ncf
 import top_risk_service as trs
 import watchlist_store
@@ -2659,6 +2660,21 @@ def sector_research_market_context(sector_key: str | None = Query(None)):
         raise HTTPException(404, str(e)) from e
     except Exception as e:  # noqa: BLE001 — unexpected orchestration failure
         raise HTTPException(502, f"板块市场上下文异常：{type(e).__name__}") from e
+    _DC_CACHE.set(key, data)
+    return {"data": data}
+
+
+@app.get("/api/sector-research/industry-context")
+def sector_research_industry_context():
+    """Current Eastmoney industry matrix joined to the read-only RDP."""
+    key = ("sector_industry_context", "overview")
+    hit = _DC_CACHE.get(key, 300)
+    if hit is not _CACHE_MISS:
+        return {"data": hit}
+    try:
+        data = sic.build_sector_industry_context()
+    except Exception as e:  # noqa: BLE001 — keep provider details out of clients
+        raise HTTPException(502, "行业环境矩阵异常") from e
     _DC_CACHE.set(key, data)
     return {"data": data}
 

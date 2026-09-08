@@ -344,6 +344,12 @@ jobs:
         working-directory: frontend
         run: npm run test:e2e:today-market-context
 
+      - name: Run Sector industry context E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:sector-industry-context
+
       - name: Run research notes backup E2E
         working-directory: frontend
         run: npm run test:e2e:notes-backup

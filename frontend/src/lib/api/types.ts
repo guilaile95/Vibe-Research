@@ -212,6 +212,98 @@ export type SectorMarketContextData = {
   items: SectorMarketContextItem[];
 };
 
+
+export type SectorIndustryContextItem = {
+  industry_key: string;
+  industry_name: string;
+  classification_status: "KNOWN" | "UNKNOWN";
+  status: "normal" | "partial" | "unavailable";
+  expected_member_count: number;
+  current_member_count: number;
+  rdp_usable_member_count: number;
+  unavailable_member_count: number;
+  coverage_ratio: number | null;
+  as_of: string;
+  snapshot_as_of: string;
+  rdp_as_of: string | null;
+  provenance: {
+    classification_provider: "EASTMONEY";
+    membership_source: string;
+    membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT";
+    rdp: Record<string, unknown> | null;
+  };
+  metrics: {
+    member_aggregate_return_5d_pct: number | null;
+    member_aggregate_return_20d_pct: number | null;
+    return_5d_usable_count: number;
+    return_20d_usable_count: number;
+    member_aggregate_acceleration_5d_pct: number | null;
+    acceleration_5d_status: string;
+  };
+  breadth: {
+    up_member_count: number;
+    down_member_count: number;
+    flat_member_count: number;
+    change_usable_count: number;
+    change_unavailable_count: number;
+    up_ratio: number | null;
+    down_ratio: number | null;
+    flat_ratio: number | null;
+    basis: string;
+    above_ma20_count: number;
+    ma20_usable_count: number;
+    ma20_unavailable_count: number;
+    above_ma20_ratio: number | null;
+    ma20_basis: string;
+  };
+  participation: {
+    turnover_pct_avg: number | null;
+    turnover_usable_count: number;
+    amount_total: number | null;
+    amount_usable_count: number;
+    volume_ratio_20d_avg: number | null;
+    volume_ratio_20d_usable_count: number;
+    semantics: "TRANSPARENT_PARTICIPATION_PROXY_ONLY";
+  };
+  crowding: {
+    status: "PROXY_ONLY";
+    semantics: "TRANSPARENT_PARTICIPATION_PROXY_ONLY";
+  };
+  valuation: {
+    status: "UNAVAILABLE_IN_V0_1";
+    message: string;
+  };
+  warnings: string[];
+  limitations: string[];
+};
+
+
+export type SectorIndustryContextData = {
+  schema_version: "sector_industry_context.v0.1";
+  status: "normal" | "partial" | "unavailable";
+  source: string;
+  fetched_at: string;
+  as_of: string;
+  classification_provider: "EASTMONEY";
+  membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT";
+  historical_membership_validity: "NOT_PROVEN";
+  crowding_semantics: "TRANSPARENT_PARTICIPATION_PROXY_ONLY";
+  valuation_status: "UNAVAILABLE_IN_V0_1";
+  valuation_message: string;
+  universe_status: "normal" | "empty";
+  universe: {
+    current_member_count: number;
+    industry_count: number;
+    classified_member_count?: number;
+    unknown_member_count?: number;
+  };
+  rdp_as_of?: string | null;
+  rdp_provenance?: Record<string, unknown> | null;
+  items: SectorIndustryContextItem[];
+  warnings: string[];
+  limitations: string[];
+};
+
 export interface IntelDigestInputItem {
   title?: string;
   source?: string;

@@ -28,6 +28,7 @@
     "test:e2e:wave4-report-analytics": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/wave4-report-analytics.browser.mjs",
     "test:e2e:wave5-ai-agent": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/wave5-ai-agent.browser.mjs",
     "test:e2e:today-market-context": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/today-market-context.browser.mjs",
+    "test:e2e:sector-industry-context": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/sector-industry-context.browser.mjs",
     "test:e2e:core-navigation": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/core-navigation.browser.mjs",
     "test:e2e:notes-backup": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/notes-backup.browser.mjs",
     "test:e2e:decision-inbox": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/decision-inbox.browser.mjs",
