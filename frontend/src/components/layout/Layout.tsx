@@ -42,15 +42,8 @@ import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
  * - 决策：下一步应该做什么？（Decision Inbox 是正式决策主入口）
  * - 交易 / 复盘：Inbox → Formal Decision → Trade → Review/Outcome 主链直达。
  */
-/**
- * 「今天」是可展开父级，下挂当日视角的两个二级入口：市场热力 / 资讯雷达。
- * 二级入口复用现有独立路由（/market-cloud、/intel），不新建页面。
- */
+/** Today is the canonical entry for the current market and review context. */
 const TODAY_PARENT = { to: "/daily-review", icon: Activity, label: "今天" };
-const TODAY_CHILDREN = [
-  { to: "/market-cloud", label: "市场热力" },
-  { to: "/intel", label: "资讯雷达" },
-];
 
 const PRIMARY_NAV = [
   { to: "/screener", icon: Search, label: "发现" },
@@ -107,7 +100,8 @@ const SECTOR_PATHS = [
   "/sectors/ai-pharma",
 ];
 
-const ALL_NAV = [TODAY_PARENT, ...TODAY_CHILDREN, ...PRIMARY_NAV, ...LIBRARY_NAV, ...ANALYSIS_NAV, ...SYSTEM_NAV];
+const ALL_NAV = [TODAY_PARENT, ...PRIMARY_NAV, ...LIBRARY_NAV, ...ANALYSIS_NAV, ...SYSTEM_NAV];
+const WIDE_WORKSPACE_PATHS = ["/daily-review", "/market-cloud"];
 
 function isActive(pathname: string, to: string) {
   if (to === "/") return pathname === "/";
@@ -115,6 +109,7 @@ function isActive(pathname: string, to: string) {
 }
 
 function getCurrentNavPath(pathname: string) {
+  if (isActive(pathname, "/market-cloud") || isActive(pathname, "/intel")) return TODAY_PARENT.to;
   if (SECTOR_PATHS.some((to) => isActive(pathname, to))) return "/sectors";
   if (pathname.startsWith("/thesis/")) return "/thesis";
   if (pathname.startsWith("/campaigns/")) return "/decision-inbox";
@@ -154,7 +149,6 @@ export function Layout() {
   const [isDesktop, setIsDesktop] = useState(readDesktop);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [analysisOpen, setAnalysisOpen] = useState(false);
-  const [todayOpen, setTodayOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
@@ -165,9 +159,6 @@ export function Layout() {
 
   useEffect(() => {
     setMobileOpen(false);
-    if (isActive(pathname, TODAY_PARENT.to) || TODAY_CHILDREN.some(({ to }) => isActive(pathname, to))) {
-      setTodayOpen(true);
-    }
     if (LIBRARY_NAV.some(({ to }) => isActive(pathname, to))) {
       setLibraryOpen(true);
     }
@@ -252,8 +243,6 @@ export function Layout() {
   const currentNavPath = getCurrentNavPath(pathname);
   const libraryActive = LIBRARY_NAV.some(({ to }) => currentNavPath === to);
   const analysisActive = ANALYSIS_NAV.some(({ to }) => currentNavPath === to);
-  const todayActive =
-    currentNavPath === TODAY_PARENT.to || TODAY_CHILDREN.some(({ to }) => currentNavPath === to);
   const TodayIcon = TODAY_PARENT.icon;
   const showResearchWorkflow = RESEARCH_WORKFLOW_PATHS.some((to) => isActive(pathname, to));
 
@@ -360,50 +349,15 @@ export function Layout() {
                 aria-current={currentNavPath === TODAY_PARENT.to ? "page" : undefined}
                 className={cn(
                   "flex min-h-9 items-center rounded-lg text-[13px] transition-colors duration-150",
-                  compact ? "justify-center px-2" : "gap-2.5 px-2.5 pr-8",
+                  compact ? "justify-center px-2" : "gap-2.5 px-2.5",
                   currentNavPath === TODAY_PARENT.to
                     ? "bg-sidebar-active font-medium text-foreground"
-                    : todayActive
-                      ? "bg-sidebar-hover text-foreground"
-                      : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-foreground",
+                    : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-foreground",
                 )}
               >
                 <TodayIcon className="h-[17px] w-[17px] shrink-0" />
                 {!compact && <span className="truncate">{TODAY_PARENT.label}</span>}
               </Link>
-              {!compact && (
-                <button
-                  type="button"
-                  onClick={() => setTodayOpen((v) => !v)}
-                  aria-expanded={todayOpen}
-                  aria-label={todayOpen ? "收起今天分组" : "展开今天分组"}
-                  className="absolute right-1 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-sidebar-muted transition-colors hover:bg-sidebar-hover hover:text-foreground"
-                >
-                  <ChevronDown className={cn("h-4 w-4 transition-transform", todayOpen && "rotate-180")} />
-                </button>
-              )}
-              {todayOpen && !compact && (
-                <div className="mt-0.5 space-y-0.5 pl-4">
-                  {TODAY_CHILDREN.map(({ to, label }) => {
-                    const active = currentNavPath === to;
-                    return (
-                      <Link
-                        key={to}
-                        to={to}
-                        aria-current={active ? "page" : undefined}
-                        className={cn(
-                          "block min-h-8 truncate rounded-lg px-2.5 py-1.5 text-[12px] transition-colors",
-                          active
-                            ? "bg-sidebar-active font-medium text-foreground"
-                            : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-foreground",
-                        )}
-                      >
-                        {label}
-                      </Link>
-                    );
-                  })}
-                </div>
-              )}
             </div>
             {PRIMARY_NAV.map(iconNavItem)}
           </div>
@@ -555,7 +509,7 @@ export function Layout() {
         <div
           className={cn(
             "mx-auto w-full px-4 pb-12 pt-16 sm:px-6 md:px-8 md:pt-7 lg:px-10",
-            pathname === "/market-cloud" ? "max-w-[1760px]" : "max-w-[1320px]",
+            WIDE_WORKSPACE_PATHS.includes(pathname) ? "max-w-[1760px]" : "max-w-[1320px]",
           )}
         >
           <DailyReviewAiTaskIndicator />
