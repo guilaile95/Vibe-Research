@@ -55,11 +55,11 @@ const TODAY_CHILDREN = [
 const PRIMARY_NAV = [
   { to: "/screener", icon: Search, label: "发现" },
   { to: "/watchlist", icon: Star, label: "自选" },
-  { to: "/stock-data", icon: Search, label: "研究" },
+  { to: "/stock-data", icon: LineChart, label: "个股" },
   { to: "/portfolio", icon: Wallet, label: "持仓" },
   { to: "/decision-inbox", icon: Inbox, label: "决策" },
   { to: "/trades", icon: ReceiptText, label: "交易" },
-  { to: "/decision-performance", icon: BarChart3, label: "复盘" },
+  { to: "/decision-performance", icon: BarChart3, label: "决策复盘" },
 ];
 
 /** Research artifacts and market context live in a lower-frequency library. */

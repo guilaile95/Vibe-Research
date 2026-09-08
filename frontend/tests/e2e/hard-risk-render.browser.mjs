@@ -250,7 +250,7 @@ async function run() {
     await confirmedPanel.waitFor();
     assert.equal(await confirmedPanel.getAttribute("data-hard-risk-tone"), "danger");
     assert.equal(await confirmedPanel.getAttribute("data-hard-risk-safe"), "false");
-    await confirmedPanel.getByText("已确认 Hard Risk", { exact: false }).first().waitFor();
+    await confirmedPanel.getByText("已确认硬风险", { exact: false }).first().waitFor();
     await confirmedPanel.getByText("重新审查", { exact: false }).waitFor();
 
     // 2. CONFIRMED != EXIT/SELL：面板文本绝不含自动交易指令词
@@ -266,7 +266,7 @@ async function run() {
     await clearPanel.waitFor();
     assert.equal(await clearPanel.getAttribute("data-hard-risk-tone"), "safe");
     assert.equal(await clearPanel.getAttribute("data-hard-risk-safe"), "true");
-    await clearPanel.getByText("已确认无 Hard Risk", { exact: false }).waitFor();
+    await clearPanel.getByText("已确认无硬风险", { exact: false }).waitFor();
     await clearPanel.getByText("hard-risk:fixture-clear", { exact: false }).waitFor();
 
     // BLOCKER 回归：CLEAR 缺少专属 evaluation/refs（generic CLEAN 存在）→ fail closed
@@ -275,9 +275,9 @@ async function run() {
     );
     await malformedClearPanel.waitFor();
     assert.equal(await malformedClearPanel.getAttribute("data-hard-risk-tone"), "muted");
-    await malformedClearPanel.getByText("Hard Risk 状态未知", { exact: false }).first().waitFor();
+    await malformedClearPanel.getByText("硬风险状态未知", { exact: false }).first().waitFor();
     const malformedText = await malformedClearPanel.innerText();
-    assert.equal(malformedText.includes("已确认无 Hard Risk"), false, "malformed CLEAR 不得显示已确认安全");
+    assert.equal(malformedText.includes("已确认无硬风险"), false, "malformed CLEAR 不得显示已确认安全");
 
     // 污染回归：generic reason 存在（含 HARD_RISK_CONFIRMED）但专属 evidence 缺失
     // → 不得声称已确认，必须 fail closed。
@@ -287,14 +287,14 @@ async function run() {
     await genericOnlyPanel.waitFor();
     assert.equal(await genericOnlyPanel.getAttribute("data-hard-risk-safe"), "false");
     const genericOnlyText = await genericOnlyPanel.innerText();
-    assert.equal(genericOnlyText.includes("已确认 Hard Risk"), false, "generic reason 不得证明 CONFIRMED");
-    await genericOnlyPanel.getByText("Hard Risk 状态未知", { exact: false }).first().waitFor();
+    assert.equal(genericOnlyText.includes("已确认硬风险"), false, "generic reason 不得证明 CONFIRMED");
+    await genericOnlyPanel.getByText("硬风险状态未知", { exact: false }).first().waitFor();
 
     // 4/5. NOT_EVALUATED / ERROR：一律不绿
     const notEvaluatedPanel = page.locator(`[data-hard-risk-state="NOT_EVALUATED"]`);
     await notEvaluatedPanel.waitFor();
     assert.equal(await notEvaluatedPanel.getAttribute("data-hard-risk-safe"), "false");
-    await notEvaluatedPanel.getByText("尚未完成 Hard Risk 评估", { exact: false }).first().waitFor();
+    await notEvaluatedPanel.getByText("尚未完成硬风险评估", { exact: false }).first().waitFor();
 
     // DIUX3：适用 Frozen Decision 只提供两个显式、语义分离的下一步入口。
     const evaluatedDecision = page.locator(
@@ -311,8 +311,8 @@ async function run() {
       await evaluatedDecision.getByTestId("formal-decision-next-step-new-decision").getAttribute("href"),
       `/campaigns/${encodeURIComponent(EVALUATED_ITEM.campaign_id)}/decision-proposal`,
     );
-    await evaluatedDecision.getByText("已有 Frozen Decision 不代表需要立刻 Freeze 新 Decision", { exact: false }).waitFor();
-    assert.equal(await evaluatedDecision.getByText("打开 Formal Decision Review", { exact: true }).count(), 0);
+    await evaluatedDecision.getByText("这不代表需要立刻形成新决策", { exact: false }).waitFor();
+    assert.equal(await evaluatedDecision.getByText("进入正式决策", { exact: true }).count(), 0);
 
     const notEvaluatedDecision = page.locator(
       `[data-formal-decision-inbox-evaluation="NOT_EVALUATED"]`,
@@ -323,7 +323,7 @@ async function run() {
     assert.equal(await notEvaluatedDecision.getByTestId("formal-decision-next-step-new-decision").count(), 0);
     assert.equal(
       await notEvaluatedDecision.getByTestId("formal-decision-next-step-proposal").innerText(),
-      "打开 Formal Decision Review →",
+      "进入正式决策 →",
     );
 
     const unknownFormalDecision = page.locator(
@@ -334,11 +334,11 @@ async function run() {
       await unknownFormalDecision.getAttribute("data-formal-decision-evaluation-status"),
       "UNKNOWN",
     );
-    await unknownFormalDecision.getByText("当前无法评价 Formal Decision。", { exact: true }).waitFor();
+    await unknownFormalDecision.getByText("当前决策状态：当前信息不足，暂时无法判断。", { exact: true }).waitFor();
     await unknownFormalDecision.getByTestId("formal-decision-next-step-proposal").waitFor();
     assert.equal(
       await unknownFormalDecision.getByTestId("formal-decision-next-step-proposal").innerText(),
-      "打开 Formal Decision Review →",
+      "进入正式决策 →",
     );
     assert.equal(await unknownFormalDecision.getByTestId("formal-decision-next-step-review").count(), 0);
     assert.equal(await unknownFormalDecision.getByTestId("formal-decision-next-step-new-decision").count(), 0);
@@ -351,11 +351,11 @@ async function run() {
       await errorFormalDecision.getAttribute("data-formal-decision-evaluation-status"),
       "ERROR",
     );
-    await errorFormalDecision.getByText("Formal Decision 评估读取失败。", { exact: true }).waitFor();
+    await errorFormalDecision.getByText("当前决策状态：决策状态读取失败。", { exact: true }).waitFor();
     await errorFormalDecision.getByTestId("formal-decision-next-step-proposal").waitFor();
     assert.equal(
       await errorFormalDecision.getByTestId("formal-decision-next-step-proposal").innerText(),
-      "打开 Formal Decision Review →",
+      "进入正式决策 →",
     );
     assert.equal(await errorFormalDecision.getByTestId("formal-decision-next-step-review").count(), 0);
     assert.equal(await errorFormalDecision.getByTestId("formal-decision-next-step-new-decision").count(), 0);

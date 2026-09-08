@@ -10,7 +10,6 @@ import {
   CAMPAIGN_STATUS_LABELS,
   CAMPAIGN_STRATEGY_LABELS,
   TRANSITION_ACTION_LABELS,
-  formatCampaignIdShort,
   isDestructiveTransition,
   presentReasonCodes,
   renderableTransitionTargets,
@@ -130,25 +129,24 @@ export function CampaignLifecycleCard({
                   : "border border-foreground/25 text-foreground"
               }`}
             >
-              {setupContext ? "建立中" : "当前 Campaign"}
+              {setupContext ? "建立中" : "当前投资计划"}
             </span>
           </div>
-          <p
-            className="font-mono text-[11px] leading-4 text-muted-foreground"
-            title={campaignId}
-          >
-            ID {formatCampaignIdShort(campaignId)}
-          </p>
         </div>
       </header>
 
+      <details className="text-[10px] text-muted-foreground">
+        <summary className="cursor-pointer select-none hover:text-foreground">技术详情</summary>
+        <p className="mt-1 font-mono">campaign_id：{campaignId}</p>
+      </details>
+
       {setupContext ? (
         <p className="text-xs leading-5 text-amber-700 dark:text-amber-400">
-          尚未进入当前 Campaign，不能当作已激活的持仓身份。
+          这项投资计划尚未生效，不能当作当前持仓的有效计划。
         </p>
       ) : (
         <p className="text-xs leading-5 text-muted-foreground">
-          已进入当前 Campaign。这不是买入、持有或投资建议已批准。
+          这项投资计划当前有效，但不代表买入、持有或其他投资建议已经获批。
         </p>
       )}
 
@@ -159,7 +157,6 @@ export function CampaignLifecycleCard({
             <span className="font-medium text-foreground">
               {visibleStateLabel(decision.visible_state)}
             </span>
-            <span className="sr-only"> {decision.visible_state}</span>
           </p>
           {reasons.primary.length > 0 && (
             <ul className="space-y-0.5 text-muted-foreground">
@@ -220,7 +217,7 @@ export function CampaignLifecycleCard({
           {destructiveTargets.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs text-muted-foreground">
-                {researchContext ? "停止研究：" : "结束此 Campaign："}
+                {researchContext ? "停止研究：" : "结束这项投资计划："}
               </span>
               {destructiveTargets.map((to) => (
                 <button

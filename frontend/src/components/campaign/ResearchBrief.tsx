@@ -73,14 +73,14 @@ export function ResearchBrief({
         <div>
           <h2 className="text-sm font-semibold">研究摘要</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            只读整理当前 Campaign 的已确认研究。打开或展开本摘要不会改写 Thesis、Decision 或交易。
+            只读整理当前投资计划的已确认研究。打开或展开本摘要不会改写投资逻辑、决策或交易。
           </p>
         </div>
-        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-700">只读 · backend authority</span>
+          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-700">只读 · 系统读取</span>
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="text-muted-foreground">Campaign</span>
+        <span className="text-muted-foreground">投资计划</span>
         <span className={codeCls}>{model.campaignId || "缺少 campaign_id"}</span>
         {model.contextState === "loading" && <span className="text-muted-foreground">正在读取上下文…</span>}
       </div>
@@ -100,14 +100,14 @@ export function ResearchBrief({
         <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-5">
           <div><p className="text-muted-foreground">证券</p><p className="mt-1 font-medium" data-context-security>{model.securityCode}</p></div>
           <div><p className="text-muted-foreground">策略</p><p className="mt-1 font-medium" data-context-strategy>{model.strategyLabel}{model.strategyCode ? `（${model.strategyCode}）` : ""}</p></div>
-          <div><p className="text-muted-foreground">Current Thesis</p><p className="mt-1 font-medium" data-context-thesis-status>{model.thesisVersionText}</p></div>
+          <div><p className="text-muted-foreground">当前投资逻辑</p><p className="mt-1 font-medium" data-context-thesis-status>{model.thesisVersionText}</p></div>
           <div><p className="text-muted-foreground">当前确认状态</p><p className="mt-1 font-medium" data-context-effective-state>{model.effectiveState.label}</p></div>
           <div><p className="text-muted-foreground">预期周期</p><p className="mt-1 font-medium" data-context-horizon>{model.horizonText}</p></div>
         </div>
         <p className="mt-2 text-xs leading-5 text-muted-foreground">{model.effectiveState.note}</p>
         {model.horizonSource === "CURRENT_THESIS" && (
           <p className="mt-1 text-xs leading-5 text-success" data-horizon-source="CURRENT_THESIS">
-            来源：Current Thesis。预期周期已从已确认冻结快照读取，不是本页表单里的临时填写。
+            来源：当前投资逻辑。预期周期已从已确认冻结快照读取，不是本页表单里的临时填写。
           </p>
         )}
         {model.horizonSource === "MANUAL_FALLBACK" && (

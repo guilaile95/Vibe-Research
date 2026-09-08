@@ -355,7 +355,7 @@ test("EVALUATED exposes review first and a separate explicit new-decision entry"
     },
     {
       kind: "new-decision",
-      label: "形成新的 Formal Decision",
+      label: "形成新的正式决策",
       href: "/campaigns/campaign_abc%2Funsafe/decision-proposal",
     },
   ]);
@@ -366,7 +366,7 @@ test("known non-evaluated statuses keep only the existing proposal workflow", ()
     assert.deepEqual(formalDecisionNextSteps(evaluation, "campaign_demo"), [
       {
         kind: "proposal",
-        label: "打开 Formal Decision Review",
+        label: "进入正式决策",
         href: "/campaigns/campaign_demo/decision-proposal",
       },
     ]);

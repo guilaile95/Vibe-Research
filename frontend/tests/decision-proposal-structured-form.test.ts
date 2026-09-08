@@ -63,17 +63,17 @@ test("页面不再要求手写三份 JSON object，改用结构化控件", () =>
   assert.doesNotMatch(source, /parseObject/);
   assert.doesNotMatch(source, /JSON\.stringify\(\{ view:/);
   // 新结构化控件存在
-  assert.match(source, /aria-label="Asset stance"/);
-  assert.match(source, /aria-label="Trade stance"/);
-  assert.match(source, /aria-label="Asset note"/);
-  assert.match(source, /aria-label="Trade note"/);
-  assert.match(source, /aria-label="Portfolio constraint"/);
+  assert.match(source, /aria-label="对这只股票的判断"/);
+  assert.match(source, /aria-label="当前操作倾向"/);
+  assert.match(source, /aria-label="股票判断说明"/);
+  assert.match(source, /aria-label="操作倾向说明"/);
+  assert.match(source, /aria-label="组合层面的限制"/);
   // payload 仍由纯模块生成，Preview → Confirm → Freeze 流程不变
   assert.match(source, /buildJudgedView\("ASSET", assetStance, assetNote\)/);
   assert.match(source, /buildJudgedView\("TRADE", tradeStance, tradeNote\)/);
   assert.match(source, /buildPortfolioView\(portfolioConstraint\)/);
-  assert.match(source, /Preview Proposal/);
-  assert.match(source, /Freeze Formal Decision/);
+  assert.match(source, /预览决策草案/);
+  assert.match(source, /确认并冻结正式决策/);
 });
 
 test("PRE-ENTRY 使用结构化 Candidate Opportunity 表单且不暴露 JSON 输入", () => {
@@ -91,6 +91,6 @@ test("PRE-ENTRY 使用结构化 Candidate Opportunity 表单且不暴露 JSON �
   }
   assert.match(source, /assetView\.candidate_valuation = candidateValuation\.cases/);
   assert.match(source, /Object\.assign\(tradeView, candidateTradeTerms\)/);
-  assert.match(source, /UNKNOWN；这不会伪装成低置信度/);
+  assert.match(source, /信息不足.*继续研究/);
   assert.doesNotMatch(source, /Candidate Opportunity（JSON/);
 });

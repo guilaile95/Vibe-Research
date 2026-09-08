@@ -44,7 +44,7 @@ function assertNoAutoExitText(text: string) {
 function assertUnavailable(view: ReturnType<typeof hardRiskDisplay>, label: string) {
   assert.equal(view.showSafeGreen, false, `${label}: 不得显示安全绿色`);
   assert.notEqual(view.tone, "safe", `${label}: tone 不得为 safe`);
-  assert.equal(view.statusLabel, "Hard Risk 状态未知", `${label}: 必须 fail closed 为未知`);
+  assert.equal(view.statusLabel, "硬风险状态未知", `${label}: 必须 fail closed 为未知`);
 }
 
 // ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ test("A2：CLEAR + EVALUATED + 专属 refs → safe green", () => {
   });
   assert.equal(view.tone, "safe");
   assert.equal(view.showSafeGreen, true);
-  assert.equal(view.statusLabel, "已确认无 Hard Risk");
+  assert.equal(view.statusLabel, "已确认无硬风险");
 });
 
 test("A3：CLEAR + EVALUATED + 无专属 refs → fail closed", () => {
@@ -112,7 +112,7 @@ test("B1：CONFIRMED + EVALUATED + 专属 refs + 专属 reasons → danger 已�
   });
   assert.equal(view.tone, "danger");
   assert.equal(view.showSafeGreen, false);
-  assert.equal(view.statusLabel, "已确认 Hard Risk");
+  assert.equal(view.statusLabel, "已确认硬风险");
 });
 
 test("B2：CONFIRMED missing evaluation → fail closed（证据不足不声称已确认）", () => {
@@ -158,7 +158,7 @@ test("B5：CONFIRMED 文案绝不包含自动交易指令词", () => {
   assertNoAutoExitText(view.statusLabel);
   assertNoAutoExitText(view.description);
   assert.match(view.description, /重新审查/);
-  assert.match(view.description, /Action Envelope/);
+  assert.match(view.description, /正式决策和可执行操作/);
 });
 
 // ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ test("C1：UNKNOWN + UNKNOWN + 专属 reasons → unknown 不绿", () => {
   });
   assert.equal(view.tone, "unknown");
   assert.equal(view.showSafeGreen, false);
-  assert.equal(view.statusLabel, "Hard Risk 状态未知");
+  assert.equal(view.statusLabel, "硬风险状态未知");
 });
 
 test("C2：UNKNOWN missing evaluation → fail closed", () => {
@@ -204,8 +204,8 @@ test("D1：UNKNOWN + ERROR + 专属 reasons → 明确评估失败，不得 sile
   });
   assert.equal(view.showSafeGreen, false);
   assert.equal(view.tone, "unknown");
-  assert.equal(view.statusLabel, "Hard Risk 评估失败");
-  assert.equal(view.evaluationLabel, "ERROR");
+  assert.equal(view.statusLabel, "硬风险读取失败");
+  assert.equal(view.evaluationLabel, "读取失败");
 });
 
 test("D2：UNKNOWN + ERROR + 无专属 reasons → fail closed", () => {
@@ -226,7 +226,7 @@ test("E1：NOT_EVALUATED + NOT_EVALUATED + 专属 reasons → 尚未评估 不�
   });
   assert.equal(view.tone, "muted");
   assert.equal(view.showSafeGreen, false);
-  assert.equal(view.statusLabel, "尚未完成 Hard Risk 评估");
+  assert.equal(view.statusLabel, "尚未完成硬风险评估");
 });
 
 test("E2：NOT_EVALUATED missing evaluation → fail closed", () => {
@@ -270,7 +270,7 @@ test("anti-B：generic reason 不得证明 CONFIRMED（item.reason_codes 不生�
     reason_codes: ["HARD_RISK_CONFIRMED"],
   });
   assertUnavailable(view, "generic reason cannot prove CONFIRMED");
-  assert.notEqual(view.statusLabel, "已确认 Hard Risk");
+  assert.notEqual(view.statusLabel, "已确认硬风险");
   assert.deepEqual(view.reasonCodes, []);
 });
 
@@ -282,7 +282,7 @@ test("anti-C：专属 evidence 正常显示（prefixed payload）", () => {
     hard_risk_reason_codes: ["DELISTING_RISK_CONFIRMED"],
   });
   assert.equal(view.tone, "danger");
-  assert.equal(view.statusLabel, "已确认 Hard Risk");
+  assert.equal(view.statusLabel, "已确认硬风险");
   assert.deepEqual(view.reasonCodes, ["DELISTING_RISK_CONFIRMED"]);
   assert.deepEqual(view.authorityRefs, ["hard-risk:proof"]);
 });
@@ -348,7 +348,7 @@ test("missing：state / evaluation 缺失或非法枚举 → fail closed 不绿"
       hard_risk_reason_codes: ["SOME_REASON"],
     });
     assert.equal(view.showSafeGreen, false);
-    assert.equal(view.statusLabel, "Hard Risk 状态未知");
+    assert.equal(view.statusLabel, "硬风险状态未知");
   }
   for (const evaluation of [undefined, null, "SOMETIMES"]) {
     const view = hardRiskDisplay({
@@ -357,7 +357,7 @@ test("missing：state / evaluation 缺失或非法枚举 → fail closed 不绿"
       hard_risk_authority_refs: ["hard-risk:ref"],
     });
     assert.equal(view.showSafeGreen, false);
-    assert.equal(view.statusLabel, "Hard Risk 状态未知");
+    assert.equal(view.statusLabel, "硬风险状态未知");
   }
 });
 

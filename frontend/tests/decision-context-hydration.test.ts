@@ -139,7 +139,9 @@ test("页面通过 backend authority hydration，不从 URL query 推导 horizon
   assert.match(source, /api\.getCampaignThesisBinding\(campaignId\)/);
   assert.match(source, /api\.getCampaignCurrentThesis\(campaignId\)/);
   assert.match(source, /api\.thesisGet\(nextBinding\.thesis_id\)/);
-  assert.match(source, /来源：Current Thesis/);
+  const briefSource = readFileSync(new URL("../src/components/campaign/ResearchBrief.tsx", import.meta.url), "utf8");
+  assert.match(briefSource, /data-horizon-source="CURRENT_THESIS"/);
+  assert.match(briefSource, /来源：当前投资逻辑/);
   assert.doesNotMatch(source, /searchParams.*strategy_horizon/);
   assert.doesNotMatch(source, /expected_horizon.*reviewBy/);
 });
