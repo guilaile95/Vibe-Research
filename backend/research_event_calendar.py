@@ -413,6 +413,8 @@ def _announcement_events(
         if not isinstance(row, Mapping):
             raise ValueError("announcement provider returned a malformed row")
         event_date = _parse_date(row.get("date"))
+        if event_date is None:
+            raise ValueError("announcement provider returned a row without a valid publication date")
         identity = _identity({
             "date": row.get("date"), "title": row.get("title"),
             "type": row.get("type"), "url": row.get("url"),
@@ -428,7 +430,7 @@ def _announcement_events(
             security=security,
             event_type="ANNOUNCEMENT",
             event_date=event_date,
-            state="CONFIRMED" if event_date else "UNKNOWN",
+            state="CONFIRMED",
             title=title,
             details={
                 "type": row.get("type"),
@@ -578,12 +580,11 @@ def build_research_event_calendar(
                     for event in rows:
                         events.setdefault(event["event_id"], event)
                     security_statuses.append({"security_code": code, "status": source_state})
-            except Exception as exc:  # noqa: BLE001 - one source/security must not erase other observations
+            except Exception:  # noqa: BLE001 - one source/security must not erase other observations
                 security_statuses.append({
                     "security_code": code,
                     "status": "ERROR",
                     "reason": "PROVIDER_FAILURE",
-                    "error_type": type(exc).__name__,
                 })
         source_summaries.append(_source_summary(event_type, security_statuses))
 

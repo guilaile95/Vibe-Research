@@ -186,6 +186,17 @@ def test_future_announcement_is_not_promoted_to_calendar_prediction(monkeypatch)
     assert _events(result, "ANNOUNCEMENT") == []
 
 
+def test_announcement_without_date_fails_closed_as_source_error(monkeypatch):
+    _base(monkeypatch, [_campaign("600001", "a")])
+    monkeypatch.setattr(astock, "announcements", lambda code, **_: [{
+        "date": "", "title": "unknown date", "type": "公告", "url": "",
+    }])
+    result = calendar.build_research_event_calendar(today=AS_OF, event_types=["ANNOUNCEMENT"])
+    assert _events(result, "ANNOUNCEMENT") == []
+    assert result["status"] == "UNAVAILABLE"
+    assert result["sources"][0]["security_statuses"][0]["status"] == "ERROR"
+
+
 def test_one_source_failure_does_not_erase_other_source(monkeypatch):
     _base(monkeypatch, [_campaign("600001", "a"), _campaign("000002", "b")])
     monkeypatch.setattr(research_continuity_service, "_calendar", lambda code, fetched_at: _calendar("EXPECTED", appointment="2026-09-20"))

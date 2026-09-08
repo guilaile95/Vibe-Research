@@ -423,7 +423,6 @@ export interface ResearchEventCalendarSourceStatus {
     status: "NORMAL" | "NO_RECORD" | "ERROR" | "UNAVAILABLE";
     state?: string;
     reason?: string;
-    error_type?: string;
   }>;
   limitations: string[];
 }
