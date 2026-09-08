@@ -1,18 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   Thermometer, RefreshCw, Loader2, AlertCircle, Info, Gauge, CalendarClock, History, LineChart,
+  FlaskConical, Database, ShieldAlert, Table2,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Disclaimer } from "@/components/ui/Disclaimer";
 import { EChart } from "@/components/ui/EChart";
-import { api, ApiError, type GpuRentData, type GpuSpot, type ForwardMonth } from "@/lib/api";
+import {
+  api, ApiError, type GpuRentData, type GpuSpot, type ForwardMonth,
+  type HistoricalSignalValidationReport, type HistoricalSignalValidationRequest,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { benchmarkNegativeSummary, metricText, validationStatusLabel } from "@/lib/historicalSignalValidationView";
 
 // 产业信号：每期从公开零鉴权数据源移植一个「一句话信号」小栏目，逐期在此添加。
 const TABS = [
   { key: "gpu-rent", label: "GPU租金", icon: Thermometer, desc: "近一年走势 + 现货中位价 + 远期资金预期" },
+  { key: "validation", label: "历史验证", icon: FlaskConical, desc: "固定信号定义的历史观察统计（研究用途）" },
 ];
 
 // 各型号折线颜色（主题橙留给旗舰 B200；中性灰文字两种主题下都可读）
@@ -380,6 +386,255 @@ function GpuRentPanel() {
   );
 }
 
+function ValidationMetric({ label, value }: { label: string; value: number | null | undefined }) {
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/15 p-3">
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="mt-1 font-mono text-sm font-semibold">{metricText(value)}</div>
+    </div>
+  );
+}
+
+function parseCodes(value: string): string[] {
+  return [...new Set(value.split(/[\s,，]+/).map((item) => item.trim()).filter(Boolean))];
+}
+
+function HistoricalSignalValidationPanel() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [registry, setRegistry] = useState<HistoricalSignalValidationReport["signal"][] | null>(null);
+  const [selectedSignal, setSelectedSignal] = useState(searchParams.get("signal") || "sma20_gt_sma60");
+  const [codes, setCodes] = useState((searchParams.get("codes") || "600001").split(",").join("\n"));
+  const [benchmarkCode, setBenchmarkCode] = useState(searchParams.get("benchmark") || "");
+  const [dateFrom, setDateFrom] = useState(searchParams.get("from") || "");
+  const [dateTo, setDateTo] = useState(searchParams.get("to") || "");
+  const [report, setReport] = useState<HistoricalSignalValidationReport | null>(null);
+  const [activeWindow, setActiveWindow] = useState("5");
+  const [loadingRegistry, setLoadingRegistry] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    api.historicalSignalValidationRegistry()
+      .then((payload) => {
+        if (!mounted) return;
+        setRegistry(payload.signals);
+        if (!payload.signals.some((signal) => signal.id === selectedSignal)) {
+          setSelectedSignal(payload.signals[0]?.id || "");
+        }
+      })
+      .catch((reason) => {
+        if (mounted) setError(reason instanceof ApiError ? reason.message : "历史验证目录加载失败");
+      })
+      .finally(() => mounted && setLoadingRegistry(false));
+    return () => { mounted = false; };
+  }, []);
+
+  const evaluate = async (payload: HistoricalSignalValidationRequest, persist: boolean) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const next = await api.historicalSignalValidationEvaluate(payload);
+      setReport(next);
+      const windows = Object.keys(next.results);
+      if (windows.length && !windows.includes(activeWindow)) setActiveWindow(windows[0]);
+      if (persist) {
+        const nextParams = new URLSearchParams({ signal: payload.signal_id, codes: payload.codes.join(",") });
+        if (payload.benchmark_code) nextParams.set("benchmark", payload.benchmark_code);
+        if (payload.date_from) nextParams.set("from", payload.date_from);
+        if (payload.date_to) nextParams.set("to", payload.date_to);
+        setSearchParams(nextParams, { replace: true });
+      }
+    } catch (reason) {
+      setReport(null);
+      setError(reason instanceof ApiError ? reason.message : "历史验证失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const storedCodes = searchParams.get("codes");
+    if (!registry || report || !storedCodes) return;
+    const requestedSignal = searchParams.get("signal") || registry[0]?.id;
+    const requestedCodes = parseCodes(storedCodes);
+    if (!requestedSignal || !requestedCodes.length) return;
+    void evaluate({
+      signal_id: requestedSignal,
+      codes: requestedCodes,
+      benchmark_code: searchParams.get("benchmark") || null,
+      date_from: searchParams.get("from") || null,
+      date_to: searchParams.get("to") || null,
+    }, false);
+  }, [registry]);
+
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const requestedCodes = parseCodes(codes);
+    if (!requestedCodes.length) {
+      setError("至少输入一个六位股票代码");
+      return;
+    }
+    void evaluate({
+      signal_id: selectedSignal,
+      codes: requestedCodes,
+      benchmark_code: benchmarkCode.trim() || null,
+      date_from: dateFrom || null,
+      date_to: dateTo || null,
+    }, true);
+  };
+
+  const signal = report?.signal || registry?.find((item) => item.id === selectedSignal);
+  const result = report?.results[activeWindow] || (report ? Object.values(report.results)[0] : undefined);
+  const data = report?.data;
+  const negative = result ? benchmarkNegativeSummary(result) : null;
+  const protocolWindows = (report?.protocol.observation_windows_stored_observations as number[] | undefined) || [5, 20];
+
+  return (
+    <div className="space-y-4" data-testid="historical-signal-validation">
+      <div className="rounded-xl border border-warning/40 bg-warning/10 p-4 text-sm leading-relaxed">
+        <div className="flex items-center gap-2 font-semibold text-warning">
+          <ShieldAlert className="h-4 w-4" /> RESEARCH ONLY · Historical validity not proven
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          这是固定信号定义的历史观察，不是回测、交易建议或正式决策；不会写入 Thesis、Evidence、Signal Ledger、Portfolio 或 Account。
+        </p>
+      </div>
+
+      <form onSubmit={submit} className="rounded-xl border border-border/60 bg-muted/15 p-4">
+        <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
+          <FlaskConical className="h-4 w-4 text-primary" /> 运行固定定义验证
+        </div>
+        <div className="grid gap-3 lg:grid-cols-[1fr_1.3fr_1fr]">
+          <label className="text-xs text-muted-foreground">
+            信号
+            <select value={selectedSignal} onChange={(event) => setSelectedSignal(event.target.value)} disabled={loadingRegistry}
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground">
+              {(registry || []).map((item) => <option key={item.id} value={item.id}>{item.id}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-muted-foreground">
+            显式样本代码（逗号或换行）
+            <textarea aria-label="显式样本代码" value={codes} onChange={(event) => setCodes(event.target.value)} rows={2}
+              className="mt-1 w-full resize-y rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground" />
+          </label>
+          <label className="text-xs text-muted-foreground">
+            可选 benchmark code
+            <input aria-label="benchmark code" value={benchmarkCode} onChange={(event) => setBenchmarkCode(event.target.value)} placeholder="例如 000300"
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground" />
+            <span className="mt-1 block text-[11px] text-muted-foreground/70">两端点缺失时不填充、不当作 0。</span>
+          </label>
+        </div>
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <label className="text-xs text-muted-foreground">起始日期<input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="mt-1 block rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground" /></label>
+          <label className="text-xs text-muted-foreground">结束日期<input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="mt-1 block rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground" /></label>
+          <button type="submit" disabled={loading || loadingRegistry || !selectedSignal}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
+            {loading ? "计算中…" : "运行验证"}
+          </button>
+        </div>
+      </form>
+
+      {error && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"><AlertCircle className="mr-1 inline h-4 w-4" />{error}</div>}
+      {loadingRegistry && <div role="status" className="rounded-lg border border-dashed border-border/70 p-6 text-center text-sm text-muted-foreground">正在读取稳定信号目录…</div>}
+
+      {report?.status === "unavailable" && (
+        <div role="status" className="rounded-xl border border-border/60 bg-muted/20 p-4 text-sm">
+          <div className="flex items-center gap-2 font-medium"><Database className="h-4 w-4 text-warning" /> Research Data Plane 不可用</div>
+          <p className="mt-2 text-xs text-muted-foreground">没有把缺失数据伪装成空收益；请先配置可验证的 RDP artifact。</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">{report.limitations.slice(0, 3).map((item) => <li key={item}>{item}</li>)}</ul>
+        </div>
+      )}
+
+      {!report && !loadingRegistry && !error && (
+        <div className="rounded-xl border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground">
+          输入显式样本后运行；页面不会自动选择全市场或写入任何正式账本。
+        </div>
+      )}
+
+      {report?.status === "normal" && signal && (
+        <>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-border/60 bg-muted/15 p-4">
+              <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><FlaskConical className="h-4 w-4 text-primary" /> Signal Definition</div>
+              <dl className="space-y-1.5 text-xs leading-relaxed">
+                <div><dt className="inline text-muted-foreground">ID / Version：</dt><dd className="inline font-mono">{signal.id} · {signal.version}</dd></div>
+                <div><dt className="inline text-muted-foreground">定义：</dt><dd className="inline"> {signal.definition}</dd></div>
+                <div><dt className="inline text-muted-foreground">可用时点：</dt><dd className="inline"> {signal.availability}</dd></div>
+                <div><dt className="inline text-muted-foreground">事件语义：</dt><dd className="inline"> {signal.event_semantics}</dd></div>
+                <div><dt className="inline text-muted-foreground">窗口：</dt><dd className="inline">第 {protocolWindows.join(" / ")} 条已存储观测，不称交易日。</dd></div>
+                <div><dt className="inline text-muted-foreground">样本范围：</dt><dd className="inline">仅显式输入 codes；不自动扩展全市场。</dd></div>
+              </dl>
+            </div>
+            <div className="rounded-xl border border-border/60 bg-muted/15 p-4">
+              <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><Database className="h-4 w-4 text-primary" /> Data Provenance</div>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                <dt className="text-muted-foreground">dataset</dt><dd className="font-mono">{data?.dataset_id || "—"}</dd>
+                <dt className="text-muted-foreground">adjustment</dt><dd className="font-mono">{data?.adjustment || "—"}</dd>
+                <dt className="text-muted-foreground">as-of</dt><dd>{data?.as_of || "—"}</dd>
+                <dt className="text-muted-foreground">coverage</dt><dd>{data?.coverage ? `${data.coverage.start} → ${data.coverage.end}` : "—"}</dd>
+                <dt className="text-muted-foreground">请求样本</dt><dd className="font-mono">{(data?.requested_sample_codes || []).join(", ") || "—"}</dd>
+                <dt className="text-muted-foreground">实际样本</dt><dd className="font-mono">{(data?.sample_codes_with_data || []).join(", ") || "—"}</dd>
+                <dt className="text-muted-foreground">缺失样本</dt><dd className="font-mono">{(data?.sample_codes_missing_data || []).join(", ") || "无"}</dd>
+              </dl>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border/60 bg-muted/15 p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm font-semibold"><Table2 className="h-4 w-4 text-primary" /> Summary</div>
+              <div className="flex gap-2">{Object.keys(report.results).map((key) => <button key={key} onClick={() => setActiveWindow(key)} className={cn("rounded-full border px-3 py-1 font-mono text-xs", activeWindow === key ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground")}>{key} 条观测</button>)}</div>
+            </div>
+            {result ? (
+              <>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                  <div className="rounded-lg border border-border/60 bg-background/40 p-3"><div className="text-[11px] text-muted-foreground">总事件</div><div className="mt-1 font-mono text-lg font-semibold">{result.events_total}</div></div>
+                  <div className="rounded-lg border border-border/60 bg-background/40 p-3"><div className="text-[11px] text-muted-foreground">已评估</div><div className="mt-1 font-mono text-lg font-semibold">{result.events_evaluated}</div></div>
+                  <div className="rounded-lg border border-border/60 bg-background/40 p-3"><div className="text-[11px] text-muted-foreground">未成熟</div><div className="mt-1 font-mono text-lg font-semibold">{result.events_immature}</div></div>
+                  <div className="rounded-lg border border-border/60 bg-background/40 p-3"><div className="text-[11px] text-muted-foreground">退出缺失</div><div className="mt-1 font-mono text-lg font-semibold">{result.events_missing_exit}</div></div>
+                  <div className="rounded-lg border border-border/60 bg-background/40 p-3"><div className="text-[11px] text-muted-foreground">先验未知排除</div><div className="mt-1 font-mono text-lg font-semibold">{result.events_excluded_unknown_prior}</div></div>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                  <ValidationMetric label="均值" value={result.signal_return?.mean} />
+                  <ValidationMetric label="中位数" value={result.signal_return?.median} />
+                  <ValidationMetric label="P10" value={result.signal_return?.p10} />
+                  <ValidationMetric label="P90" value={result.signal_return?.p90} />
+                  <ValidationMetric label="最小值" value={result.signal_return?.min} />
+                  <ValidationMetric label="最大值" value={result.signal_return?.max} />
+                </div>
+                <div className="mt-3 rounded-lg border border-border/60 bg-background/40 p-3 text-xs">
+                  {result.benchmark_return && result.excess_return && negative ? (
+                    <div className="flex flex-wrap gap-x-5 gap-y-1"><span>Benchmark 均值 / 中位数：<b className="font-mono">{metricText(result.benchmark_return.mean)} / {metricText(result.benchmark_return.median)}</b></span><span>超额均值 / 中位数：<b className="font-mono">{metricText(result.excess_return.mean)} / {metricText(result.excess_return.median)}</b></span><span>负超额：<b className="font-mono">{negative.count}/{result.excess_return.count}（{negative.ratio}%）</b></span><span>基准缺失：{result.benchmark_events_missing}</span></div>
+                  ) : <div className="flex flex-wrap gap-x-5 gap-y-1 text-muted-foreground"><span>基准缺失：{result.benchmark_events_missing}</span><span>没有可用的完整 benchmark 双端点，不计算 benchmark 统计或负超额比例。</span></div>}
+                </div>
+              </>
+            ) : <p className="text-sm text-muted-foreground">当前范围没有可展示的窗口结果。</p>}
+          </div>
+
+          {result && (
+            <div className="rounded-xl border border-border/60 bg-muted/15 p-4">
+              <div className="mb-3 flex items-center gap-2 text-sm font-semibold"><Table2 className="h-4 w-4 text-primary" /> Event Ledger · {activeWindow} 条已存储观测</div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[860px] text-left text-xs">
+                  <thead className="border-b border-border/60 text-muted-foreground"><tr><th className="px-2 py-2">代码</th><th className="px-2 py-2">信号日</th><th className="px-2 py-2">退出日</th><th className="px-2 py-2">状态</th><th className="px-2 py-2">样本收益</th><th className="px-2 py-2">Benchmark</th><th className="px-2 py-2">超额</th><th className="px-2 py-2">备注</th></tr></thead>
+                  <tbody>{result.rows.map((row, index) => <tr key={`${row.code}-${row.signal_date || "excluded"}-${index}`} className="border-b border-border/40 last:border-0"><td className="px-2 py-2 font-mono">{row.code}</td><td className="px-2 py-2">{row.signal_date || "—"}</td><td className="px-2 py-2">{row.exit_date || "—"}</td><td className="px-2 py-2"><span className={cn("rounded-full px-2 py-0.5", row.status === "EVALUATED" ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")}>{validationStatusLabel(row.status)}</span></td><td className="px-2 py-2 font-mono">{metricText(row.return_pct)}</td><td className="px-2 py-2 font-mono">{metricText(row.benchmark_return_pct)}</td><td className="px-2 py-2 font-mono">{metricText(row.excess_return_pct)}</td><td className="px-2 py-2 text-muted-foreground">{row.benchmark_missing_reason || (row.is_worst ? "最差绝对收益观察" : "")}</td></tr>)}</tbody>
+                </table>
+              </div>
+              {!result.rows.length && <p className="py-4 text-center text-sm text-muted-foreground">当前范围没有信号事件；没有把空样本当成成功。</p>}
+            </div>
+          )}
+
+          <div className="rounded-xl border border-warning/30 bg-warning/5 p-4 text-xs leading-relaxed">
+            <div className="mb-1 font-semibold text-warning">Data / Limitation · Historical validity not proven</div>
+            <ul className="list-disc space-y-1 pl-5 text-muted-foreground">{report.limitations.map((item) => <li key={item}>{item}</li>)}</ul>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function Signals() {
   // 当前小栏目由路由驱动（/signals/:tab），与侧栏子项联动；不认识的参数回落到第一个
   const { tab: tabParam } = useParams();
@@ -408,10 +663,11 @@ export function Signals() {
           <span className="text-xs text-muted-foreground">{cur.desc}</span>
         </div>
         {cur.key === "gpu-rent" && <GpuRentPanel />}
+        {cur.key === "validation" && <HistoricalSignalValidationPanel />}
       </GlassCard>
 
       <p className="mt-3 text-[11px] text-muted-foreground/60">
-        只呈现公开接口的价格事实与合约报价，不产出「过剩 / 短缺」的判断、不构成任何建议——怎么解读，交给你自己接入的 AI（工具名 query_gpu_rent）。
+        {tab === "validation" ? "历史验证只做研究观察，不是正式状态写入、交易策略或历史有效性证明。" : "只呈现公开接口的价格事实与合约报价，不产出「过剩 / 短缺」的判断、不构成任何建议——怎么解读，交给你自己接入的 AI（工具名 query_gpu_rent）。"}
       </p>
       <Disclaimer />
     </div>

@@ -89,6 +89,7 @@ import decision_commit_router
 import decision_challenge_router
 import formal_decision_outcome_router
 import research_data_plane_router
+import historical_signal_validation_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -436,6 +437,8 @@ app.include_router(decision_challenge_router.router)
 app.include_router(formal_decision_outcome_router.router)
 # Local bulk research read model; never a Canonical Fact or decision authority.
 app.include_router(research_data_plane_router.router)
+# Historical Signal Validation: read-only research computation; no formal writes.
+app.include_router(historical_signal_validation_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)

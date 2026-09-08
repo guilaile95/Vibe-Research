@@ -1203,6 +1203,128 @@ export interface GpuRentData {
   errors: string[] | null;
 }
 
+// ---------------------------------------------------------------------------
+// Historical Signal Validation v0.1 (research-only, POST /api/signals/validation/evaluate)
+// ---------------------------------------------------------------------------
+
+export interface HistoricalSignalDefinition {
+  id: string;
+  version: string;
+  definition: string;
+  availability: string;
+  event_semantics: string;
+  required_fields: string[];
+  evaluability: string;
+  stable: boolean;
+}
+
+export interface HistoricalSignalValidationRequest {
+  signal_id: string;
+  codes: string[];
+  benchmark_code?: string | null;
+  date_from?: string | null;
+  date_to?: string | null;
+}
+
+export interface HistoricalSignalValidationStats {
+  count: number;
+  mean: number;
+  median: number;
+  p10: number;
+  p90: number;
+  min: number;
+  max: number;
+}
+
+export interface HistoricalSignalValidationEvent {
+  code: string;
+  signal_date: string | null;
+  signal_close: number | null;
+  status: "EVALUATED" | "IMMATURE" | "MISSING_EXIT" | "EXCLUDED_UNKNOWN_PRIOR" | string;
+  exit_date: string | null;
+  exit_close: number | null;
+  return_pct: number | null;
+  benchmark_return_pct: number | null;
+  excess_return_pct: number | null;
+  benchmark_missing_reason: string | null;
+  is_worst: boolean;
+  is_failure: boolean;
+}
+
+export interface HistoricalSignalValidationWindow {
+  events_total: number;
+  events_evaluated: number;
+  events_immature: number;
+  events_missing_exit: number;
+  events_excluded_unknown_prior: number;
+  benchmark_events_missing: number;
+  failures: number | null;
+  failure_definition: string | null;
+  signal_return: HistoricalSignalValidationStats | null;
+  benchmark_return: HistoricalSignalValidationStats | null;
+  excess_return: HistoricalSignalValidationStats | null;
+  worst_observation: HistoricalSignalValidationEvent | null;
+  worst_observation_basis: string;
+  worst_observation_scope: string;
+  worst_observation_eligible_count: number;
+  rows: HistoricalSignalValidationEvent[];
+}
+
+export interface HistoricalSignalValidationData {
+  dataset_id: string | null;
+  provider_id: string | null;
+  adjustment: string | null;
+  source_kind: string | null;
+  source_name: string | null;
+  license_status: string | null;
+  artifact_sha256?: string | null;
+  as_of: string | null;
+  coverage: { start: string; end: string; row_count: number; code_count: number } | null;
+  requested_date_from?: string | null;
+  requested_date_to?: string | null;
+  requested_sample_codes?: string[];
+  sample_codes_with_data?: string[];
+  sample_codes_missing_data?: string[];
+  requested_benchmark_code?: string | null;
+  benchmark_available?: boolean;
+  benchmark_missing_data?: boolean;
+  benchmark_in_sample_list?: boolean;
+  actual_sample_ranges?: Record<string, { date_from: string | null; date_to: string | null; observations: number }>;
+  actual_benchmark_range?: { date_from: string; date_to: string; observations: number } | null;
+  rows?: unknown[];
+  limitations?: string[];
+}
+
+export interface HistoricalSignalValidationReport {
+  schema_version: string;
+  status: "normal" | "unavailable" | string;
+  research_only: true;
+  generated_at: string;
+  signal: HistoricalSignalDefinition;
+  protocol: Record<string, unknown>;
+  request: HistoricalSignalValidationRequest;
+  data: HistoricalSignalValidationData;
+  sample_codes: string[];
+  per_code: Record<string, {
+    sessions: number;
+    first_date: string | null;
+    last_date: string | null;
+    excluded_unknown_prior_state: number;
+    event_dates: string[];
+  }>;
+  historical_validity: { status: string; reasons: string[] };
+  results: Record<string, HistoricalSignalValidationWindow>;
+  limitations: string[];
+  formal_state_write: { performed: false; scope: string };
+}
+
+export interface HistoricalSignalValidationRegistry {
+  schema_version: string;
+  research_only: true;
+  signals: HistoricalSignalDefinition[];
+  limitations: string[];
+}
+
 
 // ---------------------------------------------------------------------------
 // 北向资金（GET /api/market/northbound）
