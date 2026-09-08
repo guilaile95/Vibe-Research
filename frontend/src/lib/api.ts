@@ -87,6 +87,9 @@ import type {
   GlobalStock,
   HkCashflow,
   GpuRentData,
+  HistoricalSignalValidationRegistry,
+  HistoricalSignalValidationReport,
+  HistoricalSignalValidationRequest,
   NorthboundCapitalFlow,
   TechnicalIndicators,
   TopRiskAnalysis,
@@ -766,6 +769,10 @@ export const api = {
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
   gpuRent: () => get<GpuRentData>("/signals/gpu-rent"),
   gpuRentRefresh: () => request<GpuRentData>("/signals/gpu-rent/refresh", "POST"),
+  historicalSignalValidationRegistry: (signal?: AbortSignal) =>
+    get<HistoricalSignalValidationRegistry>("/signals/validation/registry", { signal }),
+  historicalSignalValidationEvaluate: (payload: HistoricalSignalValidationRequest, signal?: AbortSignal) =>
+    request<HistoricalSignalValidationReport>("/signals/validation/evaluate", "POST", payload, { signal, unwrapData: false }),
   getIntelDigestLatest: (sectorKey: string) =>
     get<IntelDigestLatestResult>(`/intel-digests/latest?sector_key=${encodeURIComponent(sectorKey)}`, { unwrapData: false }),
   saveIntelDigest: (payload: IntelDigestSaveIn, signal?: AbortSignal) =>
