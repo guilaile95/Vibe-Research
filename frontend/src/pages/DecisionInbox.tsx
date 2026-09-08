@@ -51,6 +51,7 @@ import type {
 } from "@/lib/positionBootstrap";
 import { CampaignLifecycleCard } from "@/components/campaign/CampaignLifecycleCard";
 import { ResearchContinuityCard } from "@/components/campaign/ResearchContinuityCard";
+import { ResearchEventCalendar } from "@/components/campaign/ResearchEventCalendar";
 import { CampaignThesisActivationCard } from "@/components/campaign/CampaignThesisActivationCard";
 import { CampaignCommittedDecisionsCard } from "@/components/campaign/CampaignCommittedDecisionsCard";
 import { HardRiskPanel } from "@/components/campaign/HardRiskPanel";
@@ -736,6 +737,8 @@ export default function DecisionInbox() {
         }
       />
 
+      <ResearchEventCalendar reloadEpoch={thesisReloadEpoch} />
+
       {loading ? (
         <div
           className="flex min-h-[20vh] items-center justify-center gap-2 text-sm text-muted-foreground"
@@ -857,6 +860,7 @@ export default function DecisionInbox() {
                 return (
                   <div
                     key={campaign.campaign_id}
+                    id={`campaign-${campaign.campaign_id}`}
                     className={`space-y-2 rounded-lg transition-shadow ${focused ? "ring-2 ring-primary/60 ring-offset-2 ring-offset-background" : ""}`}
                     data-campaign-setup-card={campaign.campaign_id}
                     data-campaign-setup-focused={focused ? "true" : "false"}
@@ -900,7 +904,7 @@ export default function DecisionInbox() {
                 </p>
               </div>
               {snapshot.campaign_items.map((item) => (
-                <div key={item.campaign_id} className="space-y-2">
+                <div key={item.campaign_id} id={`campaign-${item.campaign_id}`} className="space-y-2">
                   <CampaignLifecycleCard
                     campaignId={item.campaign_id}
                     securityCode={item.security_code}

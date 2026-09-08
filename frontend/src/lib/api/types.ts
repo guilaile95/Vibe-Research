@@ -384,6 +384,81 @@ export interface Announcement {
   date: string; title: string; type: string; url: string;
 }
 
+// PLANNING-PARITY-EVENT-CALENDAR1：只读、bounded 的跨 Campaign 事件投影。
+export type ResearchEventCalendarStatus = "NORMAL" | "PARTIAL" | "UNAVAILABLE";
+export type ResearchEventType =
+  | "PERIODIC_REPORT"
+  | "LOCKUP_EXPIRY"
+  | "DIVIDEND_BONUS"
+  | "ANNOUNCEMENT";
+
+export interface ResearchEventCalendarEvent {
+  event_id: string;
+  security_code: string;
+  security_name: string | null;
+  campaign_ids: string[];
+  event_type: ResearchEventType;
+  event_date: string | null;
+  date_semantics: "DATE_ONLY" | "UNKNOWN" | string;
+  state: string;
+  title: string;
+  details: Record<string, unknown>;
+  source: string;
+  source_record_identity: string;
+  fetched_at: string;
+  limitations: string[];
+}
+
+export interface ResearchEventCalendarSourceStatus {
+  event_type: ResearchEventType;
+  source: string;
+  status: "NORMAL" | "PARTIAL" | "UNAVAILABLE" | "NOT_REQUESTED";
+  security_count: number;
+  success_count: number;
+  failure_count: number;
+  unavailable_count: number;
+  no_record_count: number;
+  security_statuses: Array<{
+    security_code: string;
+    status: "NORMAL" | "NO_RECORD" | "ERROR" | "UNAVAILABLE";
+    state?: string;
+    reason?: string;
+    error_type?: string;
+  }>;
+  limitations: string[];
+}
+
+export interface ResearchEventCalendar {
+  schema_version: "research_event_calendar.v0.1";
+  status: ResearchEventCalendarStatus;
+  as_of: string;
+  fetched_at: string;
+  window: { date_from: string; date_to: string; semantics: "CALENDAR_DAYS" | string };
+  universe: {
+    kind: "ACTIVE_RESEARCH_CAMPAIGNS" | string;
+    status: "NORMAL" | "EMPTY" | "OVER_LIMIT" | string;
+    campaign_count: number;
+    unique_security_count: number;
+    max_unique_securities: number;
+    securities: Array<{
+      security_code: string;
+      security_name: string | null;
+      campaign_ids: string[];
+    }>;
+  };
+  events: ResearchEventCalendarEvent[];
+  sources: ResearchEventCalendarSourceStatus[];
+  limitations: string[];
+  writes: {
+    campaign: 0;
+    thesis: 0;
+    evidence: 0;
+    decision: 0;
+    trade: 0;
+    account: 0;
+  };
+}
+
 
 export interface FinancialPeriod {
   period: string | null;

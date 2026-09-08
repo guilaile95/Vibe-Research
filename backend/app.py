@@ -91,6 +91,7 @@ import decision_challenge_router
 import formal_decision_outcome_router
 import research_data_plane_router
 import historical_signal_validation_router
+import research_event_calendar_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -440,6 +441,9 @@ app.include_router(formal_decision_outcome_router.router)
 app.include_router(research_data_plane_router.router)
 # Historical Signal Validation: read-only research computation; no formal writes.
 app.include_router(historical_signal_validation_router.router)
+# PLANNING-PARITY-EVENT-CALENDAR1: bounded read-only aggregation over existing
+# Decision Calendar / StockData contracts; no event persistence or writes.
+app.include_router(research_event_calendar_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)

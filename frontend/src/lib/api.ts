@@ -157,6 +157,8 @@ import type {
   CampaignAIDraftGenerateResult,
   ResearchContinuity,
   ResearchContinuityBatch,
+  ResearchEventCalendar,
+  ResearchEventType,
   DecisionProposalCommitResult,
   CommittedDecisionRuntimeRead,
   StreamLlmConfig,
@@ -1235,6 +1237,7 @@ export const api = {
   getCampaignCurrentThesis: (campaignId: string) => getCampaignCurrentThesis(campaignId),
   getResearchContinuity: (campaignId: string) => getResearchContinuity(campaignId),
   getResearchContinuityBatch: (campaignIds: string[]) => getResearchContinuityBatch(campaignIds),
+  getResearchEventCalendar: (params?: ResearchEventCalendarQuery) => getResearchEventCalendar(params),
   generateCampaignAIDraft: (campaignId: string, llm: StreamLlmConfig) =>
     generateCampaignAIDraft(campaignId, llm),
   previewDecisionProposal: (campaignId: string, body: DecisionProposalDraftInput) =>
@@ -1592,6 +1595,29 @@ export async function getResearchContinuityBatch(
   for (const campaignId of campaignIds) query.append("campaign_id", campaignId);
   return get<ResearchContinuityBatch>(
     `/campaigns/research-continuity/batch?${query.toString()}`,
+  );
+}
+
+export interface ResearchEventCalendarQuery {
+  date_from?: string;
+  date_to?: string;
+  event_types?: ResearchEventType[];
+  campaign_ids?: string[];
+  signal?: AbortSignal;
+}
+
+export async function getResearchEventCalendar(
+  params?: ResearchEventCalendarQuery,
+): Promise<ResearchEventCalendar> {
+  const query = new URLSearchParams();
+  if (params?.date_from) query.set("date_from", params.date_from);
+  if (params?.date_to) query.set("date_to", params.date_to);
+  for (const eventType of params?.event_types ?? []) query.append("event_types", eventType);
+  for (const campaignId of params?.campaign_ids ?? []) query.append("campaign_ids", campaignId);
+  const qs = query.toString();
+  return get<ResearchEventCalendar>(
+    `/research-events${qs ? `?${qs}` : ""}`,
+    params?.signal ? { signal: params.signal } : undefined,
   );
 }
 
