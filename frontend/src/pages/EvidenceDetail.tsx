@@ -324,6 +324,9 @@ export function EvidenceDetail() {
       )}
 
       <GlassCard>
+        {!editing && editErr && (
+          <p className="mb-3 text-sm text-destructive">{editErr}</p>
+        )}
         {!editing ? (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

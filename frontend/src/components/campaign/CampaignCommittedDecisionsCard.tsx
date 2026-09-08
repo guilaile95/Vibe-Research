@@ -10,6 +10,7 @@ import { ApiError, listCommittedDecisions, type CommittedDecisionsListResult } f
 
 export function CampaignCommittedDecisionsCard({ campaignId }: { campaignId: string }) {
   const { hash } = useLocation();
+  const [retryEpoch, setRetryEpoch] = useState(0);
   const [state, setState] = useState<{
     loading: boolean;
     error: string | null;
@@ -32,7 +33,7 @@ export function CampaignCommittedDecisionsCard({ campaignId }: { campaignId: str
         });
       });
     return () => { active = false; };
-  }, [campaignId]);
+  }, [campaignId, retryEpoch]);
 
   useEffect(() => {
     const item = state.data?.items.find(
@@ -54,6 +55,13 @@ export function CampaignCommittedDecisionsCard({ campaignId }: { campaignId: str
         className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-1.5 text-xs text-destructive"
       >
         已提交决定读取失败：{state.error}。这不代表没有已提交决定。
+        <button
+          type="button"
+          onClick={() => setRetryEpoch((epoch) => epoch + 1)}
+          className="ml-2 underline underline-offset-2"
+        >
+          重试读取已提交决定
+        </button>
       </div>
     );
   }

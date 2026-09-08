@@ -49,6 +49,7 @@ function ArrayEditor({ label, placeholder, items, onChange }: ArrayEditorProps) 
         <button
           type="button"
           onClick={add}
+          aria-label={`添加${label}`}
           className="shrink-0 rounded border border-border/50 px-2 text-muted-foreground hover:border-primary/40 hover:text-primary"
         >
           <Plus className="h-3.5 w-3.5" />
@@ -63,6 +64,7 @@ function ArrayEditor({ label, placeholder, items, onChange }: ArrayEditorProps) 
               <button
                 type="button"
                 onClick={() => onChange(items.filter((_, idx) => idx !== i))}
+                aria-label={`移除${label}第${i + 1}条`}
                 className="shrink-0 text-muted-foreground/60 hover:text-destructive"
               >
                 <X className="h-3 w-3" />

@@ -934,6 +934,7 @@ export default function DecisionInbox() {
                     strategy={item.strategy}
                     reloadEpoch={thesisReloadEpoch}
                   />
+                  <CampaignCommittedDecisionsCard campaignId={item.campaign_id} />
                 </div>
               ))}
             </section>
