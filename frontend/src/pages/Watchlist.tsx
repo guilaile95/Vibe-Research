@@ -53,6 +53,8 @@ export function Watchlist() {
   const [input, setInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
+  const [watchlistLoading, setWatchlistLoading] = useState(true);
+  const [watchlistError, setWatchlistError] = useState<string | null>(null);
   const [anomalies, setAnomalies] = useState<WatchlistAnomalies | null>(null);
   const [anomalyLoading, setAnomalyLoading] = useState(false);
   const [anomalyError, setAnomalyError] = useState<string | null>(null);
@@ -73,6 +75,8 @@ export function Watchlist() {
   };
 
   const load = useCallback(async () => {
+    setWatchlistLoading(true);
+    setWatchlistError(null);
     try {
       const r = await loadWatchAuthoritative();
       setCodes(r.codes);
@@ -81,7 +85,9 @@ export function Watchlist() {
         setHint(`已从本地草稿迁移至后端权威自选（共 ${r.codes.length} 只）`);
       }
     } catch (e) {
-      setHint(e instanceof Error ? e.message : "加载自选失败");
+      setWatchlistError(e instanceof Error ? e.message : "加载自选失败");
+    } finally {
+      setWatchlistLoading(false);
     }
   }, []);
 
@@ -123,6 +129,7 @@ export function Watchlist() {
       const r = await saveWatchAuthoritative(next, etag);
       setCodes(r.codes);
       setEtag(r.etag);
+      setWatchlistError(null);
       if (msg) setHint(msg);
     } catch (e) {
       setHint(e instanceof Error ? e.message : "保存失败（可能版本冲突，请刷新）");
@@ -263,7 +270,7 @@ export function Watchlist() {
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h3 className="flex items-center gap-1.5 font-semibold">
             <Star className="h-4 w-4 text-primary" /> 自选总览
-            <span className="text-xs font-normal text-muted-foreground">（{codes.length}）</span>
+            <span className="text-xs font-normal text-muted-foreground">{watchlistLoading || watchlistError ? "（未确认）" : `（${codes.length}）`}</span>
           </h3>
           <div className="flex items-center gap-2 text-[11px] text-muted-foreground/70">
             {error ? (
@@ -293,7 +300,14 @@ export function Watchlist() {
             </button>
           </div>
         </div>
-            {codes.length === 0 ? (
+            {watchlistLoading ? (
+              <p className="py-8 text-center text-sm text-muted-foreground" role="status">正在读取自选股…</p>
+            ) : watchlistError ? (
+              <div className="py-8 text-center text-sm text-warning" role="alert">
+                <p>自选股读取失败：{watchlistError}</p>
+                <button type="button" onClick={() => void load()} className="mt-2 text-primary hover:underline">重试读取自选</button>
+              </div>
+            ) : codes.length === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground/60">
                 还没有自选股，用上面的框粘贴一串代码批量添加。
               </p>
