@@ -230,8 +230,8 @@ def test_patterns_missing_window_values_remain_not_evaluable_without_deduplicati
         "close60_count": 66,
         "prior_high_count": 19,
         "prior_high": None,
-        "prior_low_count": 20,
-        "prior_low": 9.0,
+        "prior_low_count": 19,
+        "prior_low": None,
         "sma20": 10.0,
         "sma60": 10.0,
         "previous_sma20": 10.0,
@@ -246,9 +246,10 @@ def test_patterns_missing_window_values_remain_not_evaluable_without_deduplicati
     events, not_evaluable = rdp._evaluate_pattern_record(row, rdp._PATTERN_EVENT_REGISTRY)
 
     assert events == []
-    assert {item["reason_code"] for item in not_evaluable} == {"MISSING_HIGH", "MISSING_VOLUME"}
+    assert {item["reason_code"] for item in not_evaluable} == {"MISSING_HIGH", "MISSING_LOW", "MISSING_VOLUME"}
     assert {item["event_type"] for item in not_evaluable} == {
         "close_above_20d_high",
+        "close_below_20d_low",
         "volume_surge",
     }
 
