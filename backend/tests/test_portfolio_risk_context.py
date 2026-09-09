@@ -225,6 +225,8 @@ def test_position_failure_is_fail_closed_without_partial_fake_holdings():
     )
     assert result["status"] == "UNAVAILABLE"
     assert result["holding_count"] == 0
+    assert result["account_fact_status"]["total_assets"]["confirmation_id"] is None
+    assert result["account_fact_status"]["cash"]["confirmation_id"] is None
     assert result["writes"] == {"formal_state": 0, "account": 0, "position": 0, "trade": 0, "portfolio": 0}
 
 

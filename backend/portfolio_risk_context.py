@@ -121,8 +121,8 @@ def _position_unavailable(fetched_at: str) -> dict[str, Any]:
         },
         "account_fact_status": {
             "status": "UNAVAILABLE",
-            "total_assets": {"status": "UNAVAILABLE", "value": None},
-            "cash": {"status": "UNAVAILABLE", "value": None},
+            "total_assets": {"status": "UNAVAILABLE", "value": None, "confirmation_id": None, "reason_code": "TOTAL_ASSETS_UNAVAILABLE"},
+            "cash": {"status": "UNAVAILABLE", "value": None, "confirmation_id": None, "reason_code": "CASH_UNAVAILABLE"},
             "confirmation_id": None,
             "reason_code": "POSITION_REALITY_UNAVAILABLE",
         },
