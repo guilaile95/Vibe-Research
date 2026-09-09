@@ -1,7 +1,7 @@
 import { AlertCircle } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import type { PortfolioRiskContext } from "@/lib/api";
-import { buildRiskContextCapabilities, formatRiskMoney, formatRiskPercent, hasCompleteConcentration, riskContextStatusLabel } from "@/lib/portfolioRiskContext";
+import { buildRiskContextCapabilities, formatRiskMoney, formatRiskPercent, hasCompleteConcentration, isLegacyPositionAuthority, positionAuthorityLabel, riskContextStatusLabel } from "@/lib/portfolioRiskContext";
 import { cn } from "@/lib/utils";
 
 function StateBadge({ status }: { status: string }) {
@@ -39,6 +39,7 @@ export function PortfolioRiskContextCard({ context, error }: { context: Portfoli
   const coverage = context.industry_coverage;
   const capabilities = buildRiskContextCapabilities(context);
   const completeConcentration = hasCompleteConcentration(context);
+  const legacyPositionAuthority = isLegacyPositionAuthority(context);
 
   return (
     <GlassCard className="mb-4" data-testid="portfolio-risk-context-card">
@@ -48,6 +49,26 @@ export function PortfolioRiskContextCard({ context, error }: { context: Portfoli
           <p className="mt-1 text-[11px] leading-4 text-muted-foreground">只读当前组合事实：先显示现在知道什么，再显示当前没有足够 authority 计算什么。</p>
         </div>
         <span data-testid="portfolio-risk-context-status"><StateBadge status={context.status} /></span>
+      </div>
+
+      <div
+        className={cn(
+          "mb-3 rounded-md border p-3 text-xs",
+          legacyPositionAuthority ? "border-amber-500/40 bg-amber-500/10" : "border-border/40",
+        )}
+        data-testid="portfolio-risk-context-position-authority"
+      >
+        <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <span className="text-muted-foreground">持仓事实</span>
+          <span className={cn("font-medium", legacyPositionAuthority ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground")}>
+            {positionAuthorityLabel(context)}
+          </span>
+        </div>
+        {legacyPositionAuthority && (
+          <p className="mt-1 break-words leading-4 text-amber-800 dark:text-amber-200" data-testid="portfolio-risk-context-legacy-authority">
+            尚未完成 canonical Position Reality；当前持仓来自 legacy fallback，仅用于可见性，不应视为完整当前组合风险事实。
+          </p>
+        )}
       </div>
 
       <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">

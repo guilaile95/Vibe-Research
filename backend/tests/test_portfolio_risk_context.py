@@ -55,6 +55,9 @@ def _build(portfolio, account=None, industries=None, industry_reader=None):
 def test_complete_quote_coverage_and_deterministic_top_concentration():
     result = _build(_portfolio(500, 300, 200), industries={"600001": "电子", "600002": "医药", "600003": "银行"})
     concentration = result["security_concentration"]
+    assert result["status"] == "NORMAL"
+    assert result["position_authority_state"] == "CANONICAL"
+    assert result["position_context"]["status"] == "NORMAL"
     assert result["quote_coverage"] == {
         "status": "COMPLETE",
         "usable_holdings": 3,
@@ -260,7 +263,14 @@ def test_no_score_or_recommendation_is_created():
 
 def test_legacy_position_authority_is_reported_without_new_authority():
     result = _build(_portfolio(100, authority="LEGACY"))
+    assert result["status"] == "PARTIAL"
+    assert result["status"] != "NORMAL"
     assert result["position_context"]["authority_state"] == "LEGACY"
+    assert result["position_context"]["status"] == "LEGACY"
+    assert result["position_context"]["reason_code"] == "LEGACY_POSITION_AUTHORITY"
+    assert "LEGACY_HOLDINGS_VISIBILITY_ONLY" in result["position_context"]["limitations"]
+    assert any("canonical Position Reality" in limitation for limitation in result["position_context"]["limitations"])
+    assert any(limitation.startswith("LEGACY_POSITION_AUTHORITY") for limitation in result["limitations"])
     assert result["position_context"]["source"] == "POSITION_REALITY_AND_CURRENT_PORTFOLIO"
 
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { PortfolioRiskContext } from "../src/lib/api/types.ts";
-import { buildRiskContextCapabilities, formatRiskMoney, formatRiskPercent, hasCompleteConcentration, riskContextStatusLabel } from "../src/lib/portfolioRiskContext.ts";
+import { buildRiskContextCapabilities, formatRiskMoney, formatRiskPercent, hasCompleteConcentration, isLegacyPositionAuthority, positionAuthorityLabel, riskContextStatusLabel } from "../src/lib/portfolioRiskContext.ts";
 
 function context(overrides: Partial<PortfolioRiskContext> = {}): PortfolioRiskContext {
   return {
@@ -37,10 +37,30 @@ function context(overrides: Partial<PortfolioRiskContext> = {}): PortfolioRiskCo
 
 test("full current-risk context exposes top1/top3 and cash", () => {
   const value = context();
+  assert.equal(isLegacyPositionAuthority(value), false);
+  assert.equal(positionAuthorityLabel(value), "Canonical Position Reality");
   assert.equal(hasCompleteConcentration(value), true);
   assert.equal(formatRiskPercent(value.security_concentration.top1_pct), "50.00%");
   assert.equal(formatRiskPercent(value.security_concentration.top3_pct), "100.00%");
   assert.equal(formatRiskPercent(value.cash_buffer.ratio_pct), "20.00%");
+});
+
+test("legacy position authority is visible as a fallback", () => {
+  const value = context({
+    status: "PARTIAL",
+    position_authority_state: "LEGACY",
+    position_context: {
+      ...context().position_context,
+      status: "LEGACY",
+      authority_state: "LEGACY",
+      reason_code: "LEGACY_POSITION_AUTHORITY",
+      limitations: ["LEGACY_HOLDINGS_VISIBILITY_ONLY"],
+    },
+  });
+  assert.equal(isLegacyPositionAuthority(value), true);
+  assert.equal(positionAuthorityLabel(value), "Legacy fallback");
+  assert.equal(value.status, "PARTIAL");
+  assert.equal(buildRiskContextCapabilities(value).hasRecommendation, false);
 });
 
 test("partial quote is not complete concentration", () => {

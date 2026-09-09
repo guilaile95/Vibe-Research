@@ -20,6 +20,18 @@ export function riskContextStatusLabel(status: string): string {
   }[status] ?? status;
 }
 
+export function isLegacyPositionAuthority(context: PortfolioRiskContext): boolean {
+  return context.position_authority_state === "LEGACY" || context.position_context.authority_state === "LEGACY";
+}
+
+export function positionAuthorityLabel(context: PortfolioRiskContext): string {
+  if (isLegacyPositionAuthority(context)) return "Legacy fallback";
+  if (context.position_authority_state === "CANONICAL" && context.position_context.authority_state === "CANONICAL") {
+    return "Canonical Position Reality";
+  }
+  return context.position_authority_state || "Unknown authority";
+}
+
 export function buildRiskContextCapabilities(context: PortfolioRiskContext) {
   return {
     singleTrade: context.single_trade_risk_budget_capability.status === "IMPLEMENTED_IN_PRE_ENTRY_CANDIDATE_FLOW",

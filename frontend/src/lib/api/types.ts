@@ -936,6 +936,7 @@ export interface PortfolioRiskContext {
     status: string;
     authority_state: string;
     holding_count: number;
+    reason_code?: string;
     source?: string;
     limitations?: string[];
   };
