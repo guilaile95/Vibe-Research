@@ -201,6 +201,23 @@ class TestTriggers:
         types = [t["type"] for t in result["triggers"]]
         assert "volume_spike" in types
 
+    def test_volume_spike_includes_exact_threshold(self):
+        # 24 个 1000 加上今天 11000：SMA(5)=3000，SMA(20)=1500，边界比值正好为 2.0。
+        vols = [1000] * 24 + [11000]
+        closes = [10.0] * 25
+        klines = _klines_from_closes(closes, vols=vols)
+        result = ti.compute_indicators(
+            klines,
+            code="000001",
+            period="daily",
+            days=25,
+            trade_date="2026-01-25",
+            fetched_at="2026-01-25T00:00:00",
+        )
+        types = [t["type"] for t in result["triggers"]]
+        assert result["latest"]["volume_ratio_5_20"] == pytest.approx(2.0)
+        assert "volume_spike" in types
+
 
 # ── 无未来函数 ────────────────────────────────────────────────────────
 

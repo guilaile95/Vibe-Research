@@ -8,6 +8,8 @@ import type {
   FullMarketMetric,
   FullMarketQuery,
   FullMarketResult,
+  PatternEventType,
+  PatternResult,
 } from "@/lib/recoveredMarketTypes";
 
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -42,6 +44,61 @@ import { DragonTigerDiscoveryPanel } from "@/components/discovery/DragonTigerDis
 
 type FullMarketValueMetric = Exclude<FullMarketMetric, "code" | "latest_date">;
 type FullMarketFilterDraft = Omit<FullMarketFilter, "value"> & { value: string };
+
+function formatPatternValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "不可评估";
+}
+
+function formatPatternEvidence(evidence: Record<string, unknown>) {
+  return Object.entries(evidence)
+    .filter(([key]) => key !== "source_trigger_type")
+    .map(([key, value]) => `${key}=${typeof value === "number" ? formatPatternValue(value) : String(value)}`)
+    .join(" · ");
+}
+
+function PatternResultTable({ result }: { result: PatternResult }) {
+  return (
+    <GlassCard className="overflow-hidden p-0" data-testid="pattern-results">
+      <div className="border-b border-border/50 px-4 py-3 text-sm font-medium">
+        形态扫描结果 <span className="text-muted-foreground">({result.total_events})</span>
+      </div>
+      {result.events.length === 0 ? (
+        <p className="px-4 py-6 text-center text-xs text-muted-foreground">暂无命中事件；不可评估不等于未触发。</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] text-xs">
+            <thead className="border-b border-border/40 text-left text-muted-foreground">
+              <tr>
+                <th className="px-4 py-2">代码</th>
+                <th className="px-4 py-2">交易日</th>
+                <th className="px-4 py-2">事件</th>
+                <th className="px-4 py-2">当前收盘</th>
+                <th className="px-4 py-2">证据</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/40">
+              {result.events.map((event) => (
+                <tr key={`${event.code}-${event.trade_date}-${event.event_type}`} className="align-top hover:bg-muted/30">
+                  <td className="px-4 py-2 font-medium">
+                    <Link className="font-mono hover:text-primary hover:underline" to={`/stock-data?code=${event.code}`}>{event.code}</Link>
+                    <Link className="ml-2 text-[10px] text-primary hover:underline" to={candidateWorkspaceHref(event.code)}>候选研究</Link>
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2">{event.trade_date || "—"}</td>
+                  <td className="px-4 py-2">
+                    <div className="font-medium">{event.event_label}</div>
+                    <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{event.event_type}</div>
+                  </td>
+                  <td className="px-4 py-2">{formatPatternValue(event.current_close)}</td>
+                  <td className="max-w-[420px] whitespace-normal px-4 py-2 text-muted-foreground">{formatPatternEvidence(event.evidence)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </GlassCard>
+  );
+}
 
 function FullMarketResultTable({ result }: { result: FullMarketResult }) {
   const metric = (row: FullMarketResult["rows"][number], key: FullMarketValueMetric) => {
@@ -153,7 +210,7 @@ function ResultGroup({ title, items }: { title: string; items: ScreenerStockResu
 }
 
 export function Screener() {
-  const [mode, setMode] = useState<"discovery" | "candidate" | "full-market" | "dragon-tiger">("discovery");
+  const [mode, setMode] = useState<"discovery" | "candidate" | "full-market" | "patterns" | "dragon-tiger">("discovery");
   const [codeText, setCodeText] = useState("");
   const [conditions, setConditions] = useState<ScreenerCondition[]>([
     defaultCondition("price_gt_sma20"),
@@ -172,6 +229,11 @@ export function Screener() {
   const [fullMarketSort, setFullMarketSort] = useState<FullMarketMetric>("return_20d");
   const [fullMarketSortOrder, setFullMarketSortOrder] = useState<"asc" | "desc">("desc");
   const [fullMarketOffset, setFullMarketOffset] = useState(0);
+  const [patternResult, setPatternResult] = useState<PatternResult | null>(null);
+  const [patternAsOf, setPatternAsOf] = useState("");
+  const [patternLatest, setPatternLatest] = useState(true);
+  const [patternEventType, setPatternEventType] = useState<PatternEventType | "">("");
+  const [patternOffset, setPatternOffset] = useState(0);
   const controllerRef = useRef<AbortController | null>(null);
 
   const codes = useMemo(() => normalizeCodes(parseCodeDraft(codeText)), [codeText]);
@@ -181,6 +243,12 @@ export function Screener() {
   const resetFullMarketResult = () => {
     setFullMarketResult(null);
     setFullMarketOffset(0);
+    setError(null);
+  };
+
+  const resetPatternResult = () => {
+    setPatternResult(null);
+    setPatternOffset(0);
     setError(null);
   };
 
@@ -307,11 +375,45 @@ export function Screener() {
     }
   };
 
-  const switchMode = (nextMode: "discovery" | "candidate" | "full-market" | "dragon-tiger") => {
+  const runPatterns = async (offset = patternOffset) => {
+    if (loading) return;
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setPatternResult(null);
+    setLoading(true);
+    setError(null);
+    setHint(null);
+    try {
+      const next = await recoveredMarketApi.getPatterns({
+        latest: patternLatest,
+        as_of: patternLatest ? undefined : patternAsOf || undefined,
+        event_type: patternEventType || undefined,
+        limit: 50,
+        offset,
+      }, controller.signal);
+      if (!controller.signal.aborted && controllerRef.current === controller) {
+        setPatternResult(next);
+        setPatternOffset(offset);
+      }
+    } catch (cause) {
+      if (controller.signal.aborted) return;
+      setPatternResult(null);
+      setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : "形态扫描失败");
+    } finally {
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        setLoading(false);
+      }
+    }
+  };
+
+  const switchMode = (nextMode: "discovery" | "candidate" | "full-market" | "patterns" | "dragon-tiger") => {
     controllerRef.current?.abort();
     controllerRef.current = null;
     setLoading(false);
     setFullMarketResult(null);
+    setPatternResult(null);
     setMode(nextMode);
     setError(null);
     setHint(null);
@@ -327,16 +429,18 @@ export function Screener() {
             ? "对候选代码执行技术条件 AND 筛选；结果用于研究，不产生交易建议。"
             : mode === "full-market"
               ? "基于本地 RDP artifact 的有界全市场横截面；结果用于研究，不产生交易建议。"
-              : "读取现有 Eastmoney 龙虎榜报告的市场级公开记录；不产生交易建议。"}
+              : mode === "patterns"
+                ? "复用本地 RDP 历史 OHLCV 的五类确定性技术事件；结果用于研究，不产生交易建议。"
+                : "读取现有 Eastmoney 龙虎榜报告的市场级公开记录；不产生交易建议。"}
       />
 
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span>{mode === "discovery" ? "Discovery · batch-first · no AI ranking" : mode === "candidate" ? `候选筛选 · 最多 ${MAX_CODES} 个代码` : mode === "full-market" ? "Full Market · set-based · 不回退逐票请求" : "龙虎榜 · source facts · no ranking"}</span>
+        <span>{mode === "discovery" ? "Discovery · batch-first · no AI ranking" : mode === "candidate" ? `候选筛选 · 最多 ${MAX_CODES} 个代码` : mode === "full-market" ? "Full Market · set-based · 不回退逐票请求" : mode === "patterns" ? "形态扫描 · RDP-only · deterministic events" : "龙虎榜 · source facts · no ranking"}</span>
         <span>·</span>
         <Link className="hover:text-foreground" to="/market-history">查看北向成交历史</Link>
       </div>
 
-      <div className="flex gap-1 rounded-xl border border-border/60 bg-muted/20 p-1" role="tablist" aria-label="筛选模式">
+      <div className="flex flex-wrap gap-1 rounded-xl border border-border/60 bg-muted/20 p-1" role="tablist" aria-label="筛选模式">
         <button type="button" role="tab" aria-selected={mode === "discovery"} data-testid="discovery-tab" onClick={() => switchMode("discovery")} className={`rounded-lg px-3 py-1.5 text-sm ${mode === "discovery" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
           机会发现
         </button>
@@ -345,6 +449,9 @@ export function Screener() {
         </button>
         <button type="button" role="tab" aria-selected={mode === "full-market"} data-testid="full-market-tab" onClick={() => switchMode("full-market")} className={`rounded-lg px-3 py-1.5 text-sm ${mode === "full-market" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
           Full Market
+        </button>
+        <button type="button" role="tab" aria-selected={mode === "patterns"} data-testid="pattern-discovery-tab" onClick={() => switchMode("patterns")} className={`rounded-lg px-3 py-1.5 text-sm ${mode === "patterns" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+          形态扫描
         </button>
         <button type="button" role="tab" aria-selected={mode === "dragon-tiger"} data-testid="dragon-tiger-tab" onClick={() => switchMode("dragon-tiger")} className={`rounded-lg px-3 py-1.5 text-sm ${mode === "dragon-tiger" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
           龙虎榜
@@ -482,6 +589,40 @@ export function Screener() {
           {error ? <div className="flex items-center gap-2 text-xs text-destructive"><AlertCircle className="h-4 w-4" />{error}</div> : null}
           <p className="text-xs text-muted-foreground">当前 RDP schema 仅有 volume；不声明 turnover、amount 或 liquidity amount。历史不足保持不可评估。</p>
         </GlassCard>
+      ) : mode === "patterns" ? (
+        <GlassCard className="space-y-4 p-4" data-testid="pattern-form">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={patternLatest} disabled={loading} onChange={(event) => { setPatternLatest(event.target.checked); resetPatternResult(); }} />
+              使用最新 artifact 日期
+            </label>
+            {!patternLatest ? (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                As of
+                <input aria-label="Pattern as of" type="date" value={patternAsOf} disabled={loading} onChange={(event) => { setPatternAsOf(event.target.value); resetPatternResult(); }} className="rounded border border-border bg-background px-2 py-1 text-xs text-foreground" />
+              </label>
+            ) : null}
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              事件类型
+              <select aria-label="Pattern event type" value={patternEventType} disabled={loading} onChange={(event) => { setPatternEventType(event.target.value as PatternEventType | ""); resetPatternResult(); }} className="rounded border border-border bg-background px-2 py-1 text-xs text-foreground">
+                <option value="">全部五类事件</option>
+                <option value="close_above_20d_high">收盘突破20日高点</option>
+                <option value="close_below_20d_low">收盘跌破20日低点</option>
+                <option value="sma20_cross_above_sma60">SMA20 上穿 SMA60</option>
+                <option value="sma20_cross_below_sma60">SMA20 下穿 SMA60</option>
+                <option value="volume_surge">5/20 日均量比达到 2.0</option>
+              </select>
+            </label>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs text-muted-foreground">只读取现有 RDP artifact；不可评估不等于未触发。</span>
+            <button type="button" data-testid="run-patterns" onClick={() => runPatterns(0)} disabled={loading} className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-40">
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              {loading ? "扫描中…" : "运行形态扫描"}
+            </button>
+          </div>
+          {error ? <div className="flex items-center gap-2 text-xs text-destructive"><AlertCircle className="h-4 w-4" />{error}</div> : null}
+        </GlassCard>
       ) : mode === "dragon-tiger" ? <DragonTigerDiscoveryPanel /> : null}
 
       {mode === "candidate" && result ? (
@@ -546,6 +687,43 @@ export function Screener() {
             <div className="flex gap-2">
               <button type="button" onClick={() => runFullMarket(Math.max(0, fullMarketOffset - 50))} disabled={loading || fullMarketOffset === 0} className="rounded-lg border border-border px-2.5 py-1.5 disabled:opacity-40">上一页</button>
               <button type="button" onClick={() => fullMarketResult.next_offset != null && runFullMarket(fullMarketResult.next_offset)} disabled={loading || fullMarketResult.next_offset == null} className="rounded-lg border border-border px-2.5 py-1.5 disabled:opacity-40">下一页</button>
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      {mode === "patterns" && patternResult ? (
+        <>
+          <GlassCard className="space-y-3 p-4" data-testid="pattern-summary">
+            <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+              <span>形态扫描数据</span>
+              <span className={patternResult.status === "normal" ? "text-emerald-600" : patternResult.status === "partial" ? "text-amber-600" : "text-destructive"}>
+                {patternResult.status === "normal" ? "可用" : patternResult.status === "partial" ? "部分可评估" : "不可用"}
+              </span>
+              <span className="text-xs text-muted-foreground">As of：{patternResult.as_of || "未知"}</span>
+            </div>
+            {patternResult.source_scope ? (
+              <p className="text-xs text-muted-foreground">
+                来源范围：{patternResult.source_scope.start} 至 {patternResult.source_scope.end} · {patternResult.source_scope.row_count} 行 · {patternResult.source_scope.code_count} 个代码 · 可评估 {patternResult.evaluable_count} · 命中股票 {patternResult.matched_stock_count}
+              </p>
+            ) : <p className="text-xs text-destructive">RDP artifact 不可用，形态扫描不可用；没有逐票请求回退。</p>}
+            <p className="text-xs text-muted-foreground">
+              Artifact：{patternResult.artifact_identity?.sha256 || "未提供"} · Source：{patternResult.source?.source_name || patternResult.source?.source_kind || "未知"} · 不可评估事件：{patternResult.not_evaluable_count}
+            </p>
+            {patternResult.not_evaluable.length > 0 ? (
+              <div className="space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs" data-testid="pattern-not-evaluable">
+                <p className="font-medium text-amber-700 dark:text-amber-300">不可评估（不是未触发）</p>
+                {patternResult.not_evaluable.map((item) => <p key={`${item.code}-${item.trade_date}-${item.event_type}`}>{item.code} · {item.trade_date || "—"} · {item.event_type} · {item.reason_code}</p>)}
+              </div>
+            ) : null}
+            {patternResult.limitations.map((line) => <p key={line} className="text-xs text-muted-foreground">{line}</p>)}
+          </GlassCard>
+          <PatternResultTable result={patternResult} />
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>显示 {patternResult.returned_events} / {patternResult.total_events}</span>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => runPatterns(Math.max(0, patternOffset - 50))} disabled={loading || patternOffset === 0} className="rounded-lg border border-border px-2.5 py-1.5 disabled:opacity-40">上一页</button>
+              <button type="button" onClick={() => patternResult.next_offset != null && runPatterns(patternResult.next_offset)} disabled={loading || patternResult.next_offset == null} className="rounded-lg border border-border px-2.5 py-1.5 disabled:opacity-40">下一页</button>
             </div>
           </div>
         </>

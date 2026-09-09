@@ -6,6 +6,8 @@ import type {
   ScreenerSectorRepresentativesResult,
   FullMarketQuery,
   FullMarketResult,
+  PatternQuery,
+  PatternResult,
   DiscoverySnapshot,
   DragonTigerDiscovery,
 } from "./recoveredMarketTypes.ts";
@@ -40,6 +42,20 @@ export const recoveredMarketApi = {
     if (query.offset != null) params.set("offset", String(query.offset));
     const qs = params.toString();
     return get<FullMarketResult>(`/screener/full-market${qs ? `?${qs}` : ""}`, {
+      signal,
+      unwrapData: false,
+    });
+  },
+
+  getPatterns: (query: PatternQuery = {}, signal?: AbortSignal) => {
+    const params = new URLSearchParams();
+    if (query.as_of) params.set("as_of", query.as_of);
+    if (query.latest != null) params.set("latest", String(query.latest));
+    if (query.event_type) params.set("event_type", query.event_type);
+    if (query.limit != null) params.set("limit", String(query.limit));
+    if (query.offset != null) params.set("offset", String(query.offset));
+    const qs = params.toString();
+    return get<PatternResult>(`/research-data/patterns${qs ? `?${qs}` : ""}`, {
       signal,
       unwrapData: false,
     });
