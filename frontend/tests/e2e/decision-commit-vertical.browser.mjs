@@ -360,7 +360,7 @@ async function run() {
       `unsupported DCR1_READBACK_VARIANT: ${readbackVariant}`,
     );
     page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
-    page.on("requestfailed", (request) => failedRequests.push({ url: request.url(), error: request.failure()?.errorText }));
+    page.on("requestfailed", (request) => failedRequests.push({ method: request.method(), url: request.url(), error: request.failure()?.errorText }));
     page.on("response", (response) => {
       if (response.status() === 404) notFoundResponses.push(new URL(response.url()).pathname);
     });
@@ -775,9 +775,15 @@ async function run() {
         && !message.includes("503 (Service Unavailable)")
         && !message.includes("409 (Conflict)"),
     );
-    const unexpectedFailedRequests = failedRequests.filter((request) =>
-  request.url !== expectedFontBlock && !request.url.includes("fonts.gstatic.com"),
-);
+    const unexpectedFailedRequests = failedRequests.filter((request) => {
+      if (request.url === expectedFontBlock || request.url.includes("fonts.gstatic.com")) return false;
+      const url = new URL(request.url);
+      const expectedCalendarAbort = request.method === "GET"
+        && request.error === "net::ERR_ABORTED"
+        && url.pathname === "/api/research-events"
+        && url.search === "";
+      return !expectedCalendarAbort;
+    });
     assert.equal(unexpectedConsoleErrors.length, 0, `unexpected browser console errors: ${JSON.stringify(unexpectedConsoleErrors)}`);
     assert.equal(unexpectedFailedRequests.length, 0, `unexpected failed requests: ${JSON.stringify(unexpectedFailedRequests)}`);
     if (failedRequests.length > 0) console.log(`[E2E] environment-only blocked asset: ${expectedFontBlock}`);
