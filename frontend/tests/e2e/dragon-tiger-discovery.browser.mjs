@@ -20,7 +20,7 @@ const root = path.resolve(__dirname, "../../..");
 const backendDir = path.join(root, "backend");
 const harnessDir = __dirname;
 const frontendDist = path.join(root, "frontend", "dist");
-const screenshotDir = path.join(root, "docs", "screenshots", "dragon-tiger-discovery1");
+const screenshotDir = path.join(root, "docs", "screenshots", "dragon-tiger-discovery1-r2");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -255,8 +255,12 @@ async function main() {
     if (normal.schema_version !== "dragon_tiger_discovery.v0.1" || normal.status !== "NORMAL" || normal.trade_date !== "2026-09-09") {
       throw new Error(`unexpected normal envelope: ${JSON.stringify(normal)}`);
     }
-    if (normal.pagination.returned_rows !== 3 || normal.pagination.source_count !== 3 || normal.completeness.status !== "COMPLETE") {
+    if (normal.pagination.returned_rows !== 66 || normal.pagination.source_count !== 66 || normal.pagination.source_pages !== 2 || normal.pagination.fetched_pages !== 2 || normal.pagination.truncated || normal.completeness.status !== "COMPLETE" || normal.rows.length !== 66) {
       throw new Error(`normal completeness mismatch: ${JSON.stringify(normal.pagination)}`);
+    }
+    const sameSecurityRows = normal.rows.filter((row) => row.security_code === "000001");
+    if (sameSecurityRows.length !== 2 || new Set(sameSecurityRows.map((row) => row.source_record_identity)).size !== 2 || new Set(sameSecurityRows.map((row) => row.reason)).size !== 2) {
+      throw new Error("normal fixture did not preserve distinct same-security source records");
     }
     if (normal.formal_state_write?.performed !== false) throw new Error("normal discovery reported a formal write");
     const result = page.getByTestId("dragon-tiger-discovery-result");
@@ -267,7 +271,7 @@ async function main() {
       "源交易日：2026-09-09",
       "来源：EASTMONEY_DATA_CENTER",
       "报告：RPT_DAILYBILLBOARD_DETAILSNEW",
-      "返回记录：3 / 3",
+      "返回记录：66 / 66",
       "已覆盖源报告记录",
     ]) {
       if (!normalText.includes(expected)) throw new Error(`normal UI missing ${expected}`);
@@ -282,6 +286,9 @@ async function main() {
     if (await result.getByText("BUY", { exact: true }).count() || await result.getByText("SELL", { exact: true }).count()) {
       throw new Error("Dragon-Tiger panel exposed BUY/SELL semantics");
     }
+    if (await result.getByTestId("dragon-tiger-discovery-row").count() !== 66) {
+      throw new Error("normal UI did not render the complete multi-page result");
+    }
     await assertNoOverflow(page, "desktop Dragon-Tiger result");
     await page.screenshot({ path: path.join(screenshotDir, "normal-desktop.png"), fullPage: true });
 
@@ -292,6 +299,21 @@ async function main() {
     }
 
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByTestId("dragon-tiger-trade-date").fill("2026-09-08");
+    const overlap = await requestPayload(page, "load-dragon-tiger-discovery");
+    if (overlap.schema_version !== "dragon_tiger_discovery.v0.1" || overlap.status !== "UNAVAILABLE" || overlap.completeness.status !== "UNAVAILABLE" || overlap.rows.length !== 0 || !overlap.limitations.includes("SOURCE_PAGE_IDENTITY_OVERLAP")) {
+      throw new Error(`unexpected overlap envelope: ${JSON.stringify(overlap)}`);
+    }
+    const overlapText = await result.innerText();
+    for (const expected of ["数据状态：源暂不可用", "源交易日：2026-09-08", "未完成读取", "限制：SOURCE_PAGE_IDENTITY_OVERLAP"]) {
+      if (!overlapText.includes(expected)) throw new Error(`overlap UI missing ${expected}`);
+    }
+    if (overlapText.includes("已覆盖源报告记录") || await page.getByTestId("dragon-tiger-discovery-table").count()) {
+      throw new Error("overlap UI presented a complete Dragon-Tiger result");
+    }
+    await assertNoOverflow(page, "narrow overlapping Dragon-Tiger result");
+    await page.screenshot({ path: path.join(screenshotDir, "overlap-narrow.png"), fullPage: true });
+
     await page.getByTestId("dragon-tiger-trade-date").fill("2026-09-06");
     const empty = await requestPayload(page, "load-dragon-tiger-discovery");
     if (empty.schema_version !== "dragon_tiger_discovery.v0.1" || empty.status !== "EMPTY" || empty.trade_date !== null || empty.requested_trade_date !== "2026-09-06") {
@@ -307,8 +329,11 @@ async function main() {
     await assertNoOverflow(page, "narrow empty Dragon-Tiger result");
     await page.screenshot({ path: path.join(screenshotDir, "empty-narrow.png"), fullPage: true });
 
+    const allMarketRequests = apiRequests.filter((url) => url.includes("/api/market/dragon-tiger"));
+    if (allMarketRequests.length !== 3) throw new Error(`expected three market discovery requests, got ${allMarketRequests.length}`);
+
     if (consoleErrors.length) throw new Error(`browser console errors: ${consoleErrors.join(" | ")}`);
-    console.log(`[E2E] normal=${normal.status} rows=${normal.rows.length}; empty=${empty.status}; screenshots=${screenshotDir}`);
+    console.log(`[E2E] normal=${normal.status} rows=${normal.rows.length}; overlap=${overlap.status}; empty=${empty.status}; screenshots=${screenshotDir}`);
     console.log("[E2E] Dragon-Tiger market discovery source-to-sink browser acceptance OK");
   } finally {
     await page.close().catch(() => {});
