@@ -209,6 +209,94 @@ export type FullMarketQuery = {
   offset?: number;
 };
 
+export type PatternEventType =
+  | "close_above_20d_high"
+  | "close_below_20d_low"
+  | "sma20_cross_above_sma60"
+  | "sma20_cross_below_sma60"
+  | "volume_surge";
+
+export type PatternRegistryItem = {
+  event_type: PatternEventType;
+  source_trigger_type: string;
+  label: string;
+};
+
+export type PatternEvent = {
+  code: string;
+  trade_date: string | null;
+  event_type: PatternEventType;
+  event_label: string;
+  status: "MATCHED";
+  current_close: number | null;
+  evidence: Record<string, unknown>;
+};
+
+export type PatternNotEvaluable = {
+  code: string;
+  trade_date: string | null;
+  event_type: PatternEventType;
+  status: "NOT_EVALUABLE";
+  reason_code: string;
+  reason: string;
+};
+
+export type PatternResult = {
+  schema_version: string;
+  dataset_id: string;
+  provider_id: string;
+  adjustment: string;
+  status: "normal" | "partial" | "unavailable";
+  fetched_at: string | null;
+  requested_as_of: string | null;
+  as_of: string | null;
+  as_of_semantics: string;
+  latest_date: string | null;
+  source: {
+    dataset_id: string;
+    provider_id: string;
+    adjustment: string;
+    source_kind: string | null;
+    source_name: string | null;
+    license_status: string | null;
+  } | null;
+  artifact_identity: { sha256: string; file: string } | null;
+  coverage: {
+    start: string;
+    end: string;
+    row_count: number;
+    code_count: number;
+  } | null;
+  source_scope: {
+    start: string;
+    end: string;
+    row_count: number;
+    code_count: number;
+  } | null;
+  pattern_registry: PatternRegistryItem[];
+  event_type_filter: PatternEventType | null;
+  total_universe: number;
+  evaluable_count: number;
+  matched_stock_count: number;
+  not_evaluable_count: number;
+  not_evaluable_returned: number;
+  not_evaluable: PatternNotEvaluable[];
+  events: PatternEvent[];
+  returned_events: number;
+  total_events: number;
+  next_offset: number | null;
+  formal_state_write: { performed: false; scope: string };
+  limitations: string[];
+};
+
+export type PatternQuery = {
+  as_of?: string;
+  latest?: boolean;
+  event_type?: PatternEventType;
+  limit?: number;
+  offset?: number;
+};
+
 export type DragonTigerDiscoveryStatus = "NORMAL" | "PARTIAL" | "EMPTY" | "UNAVAILABLE";
 
 export type DragonTigerDiscoveryRow = {

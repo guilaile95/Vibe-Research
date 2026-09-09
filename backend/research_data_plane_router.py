@@ -68,6 +68,34 @@ def full_market(
         )
 
 
+@router.get("/patterns")
+def patterns(
+    as_of: str | None = Query(None),
+    latest: bool = Query(True),
+    event_type: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=rdp._PATTERN_MAX_LIMIT),
+    offset: int = Query(0, ge=0),
+):
+    """Set-based, read-only scan over the five existing technical events."""
+    try:
+        return rdp.query_patterns(
+            as_of=as_of,
+            latest=latest,
+            event_type=event_type,
+            limit=limit,
+            offset=offset,
+        )
+    except rdp.ResearchDataPlaneUnavailableError as exc:
+        return rdp.build_patterns_unavailable_envelope(str(exc), as_of=as_of)
+    except rdp.ResearchDataPlaneQueryValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except rdp.ResearchDataPlaneValidationError as exc:
+        return rdp.build_patterns_unavailable_envelope(
+            f"Pattern 数据校验失败：{exc}",
+            as_of=as_of,
+        )
+
+
 @router.get("/manifest")
 def manifest():
     try:

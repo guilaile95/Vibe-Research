@@ -417,7 +417,7 @@ def _detect_triggers(
 
     # 4. 5/20 日均量比触发
     vr = volume_ratio[idx] if idx < len(volume_ratio) else None
-    if vr is not None and vr > 2.0:
+    if vr is not None and vr >= 2.0:
         triggers.append(
             {
                 "type": "volume_spike",

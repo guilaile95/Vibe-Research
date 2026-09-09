@@ -23,6 +23,7 @@ from research_data_plane_path import resolve_research_data_root as resolve_root
 
 SCHEMA_VERSION = "research-data-plane.v0.1"
 FULL_MARKET_SCHEMA_VERSION = "research-data-plane.full-market.v0.1"
+PATTERN_SCHEMA_VERSION = "research-data-plane.patterns.v0.1"
 DATASET_ID = "ashare_daily_unadjusted"
 PROVIDER_ID = "local_bulk_dump"
 ADJUSTMENT = "UNADJUSTED"
@@ -73,6 +74,43 @@ _FULL_MARKET_OPERATORS_SQL = {
     "eq": "=",
     "neq": "<>",
 }
+
+# The single-stock technical API predates the RDP pattern read model and keeps
+# its historical trigger names.  The RDP contract uses stable semantic codes;
+# the source alias is retained in each event's evidence for parity audits.
+_PATTERN_EVENT_REGISTRY = (
+    {
+        "event_type": "close_above_20d_high",
+        "source_trigger_type": "close_above_20d_high",
+        "label": "收盘突破20日高点",
+    },
+    {
+        "event_type": "close_below_20d_low",
+        "source_trigger_type": "close_below_20d_low",
+        "label": "收盘跌破20日低点",
+    },
+    {
+        "event_type": "sma20_cross_above_sma60",
+        "source_trigger_type": "sma_golden_cross",
+        "label": "SMA20 上穿 SMA60",
+    },
+    {
+        "event_type": "sma20_cross_below_sma60",
+        "source_trigger_type": "sma_death_cross",
+        "label": "SMA20 下穿 SMA60",
+    },
+    {
+        "event_type": "volume_surge",
+        "source_trigger_type": "volume_spike",
+        "label": "5/20 日均量比达到 2.0",
+    },
+)
+_PATTERN_EVENT_TYPES = frozenset(item["event_type"] for item in _PATTERN_EVENT_REGISTRY)
+_PATTERN_EVENT_ORDER = {
+    item["event_type"]: index for index, item in enumerate(_PATTERN_EVENT_REGISTRY)
+}
+_PATTERN_MAX_LIMIT = 100
+_PATTERN_AS_OF_SEMANTICS = "ARTIFACT_DERIVED_LATEST_TRADE_DATE_AT_OR_BEFORE_REQUESTED_AS_OF"
 
 
 class ResearchDataPlaneError(RuntimeError):
@@ -871,6 +909,540 @@ def query_full_market(
             "当前 schema 仅提供 volume；未声明 turnover、amount 或 liquidity amount。",
             "各指标在历史观测不足时返回 null，并标记 INSUFFICIENT_HISTORY。",
         ],
+    }
+
+
+def _validate_pattern_query(
+    *,
+    as_of: str | None,
+    latest: bool,
+    event_type: str | None,
+    limit: int,
+    offset: int,
+) -> str | None:
+    if as_of is not None:
+        if not _DATE_RE.fullmatch(as_of):
+            raise ResearchDataPlaneQueryValidationError("as_of must use YYYY-MM-DD")
+        try:
+            date.fromisoformat(as_of)
+        except ValueError as exc:
+            raise ResearchDataPlaneQueryValidationError("as_of is invalid") from exc
+    if not isinstance(latest, bool):
+        raise ResearchDataPlaneQueryValidationError("latest must be boolean")
+    if not latest and as_of is None:
+        raise ResearchDataPlaneQueryValidationError("as_of is required when latest=false")
+    if event_type is not None and event_type not in _PATTERN_EVENT_TYPES:
+        raise ResearchDataPlaneQueryValidationError(
+            "event_type must be one of: " + ", ".join(item["event_type"] for item in _PATTERN_EVENT_REGISTRY)
+        )
+    if not 1 <= limit <= _PATTERN_MAX_LIMIT:
+        raise ResearchDataPlaneQueryValidationError(
+            f"limit must be between 1 and {_PATTERN_MAX_LIMIT}"
+        )
+    if not 0 <= offset <= _MAX_OFFSET:
+        raise ResearchDataPlaneQueryValidationError(
+            f"offset must be between 0 and {_MAX_OFFSET}"
+        )
+    return event_type
+
+
+def _pattern_provenance(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "dataset_id": manifest["dataset_id"],
+        "provider_id": manifest.get("provider_id", PROVIDER_ID),
+        "adjustment": manifest.get("adjustment", ADJUSTMENT),
+        "source_kind": manifest.get("source_kind"),
+        "source_name": manifest.get("source_name"),
+        "license_status": manifest.get("license_status", LICENSE_STATUS),
+    }
+
+
+def build_patterns_unavailable_envelope(
+    reason: str,
+    *,
+    as_of: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": PATTERN_SCHEMA_VERSION,
+        "dataset_id": DATASET_ID,
+        "provider_id": PROVIDER_ID,
+        "adjustment": ADJUSTMENT,
+        "status": "unavailable",
+        "fetched_at": _utc_now(),
+        "requested_as_of": as_of,
+        "as_of": None,
+        "as_of_semantics": _PATTERN_AS_OF_SEMANTICS,
+        "latest_date": None,
+        "source": None,
+        "artifact_identity": None,
+        "coverage": None,
+        "source_scope": None,
+        "pattern_registry": list(_PATTERN_EVENT_REGISTRY),
+        "event_type_filter": None,
+        "total_universe": 0,
+        "evaluable_count": 0,
+        "matched_stock_count": 0,
+        "not_evaluable_count": 0,
+        "not_evaluable": [],
+        "not_evaluable_returned": 0,
+        "events": [],
+        "returned_events": 0,
+        "total_events": 0,
+        "next_offset": None,
+        "formal_state_write": {"performed": False, "scope": "pattern discovery read-only"},
+        "limitations": [reason, "Pattern 扫描只使用现有本地 RDP artifact；未回退逐票 HTTP 请求。"],
+    }
+
+
+def _pattern_number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _pattern_date(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _evaluate_pattern_record(
+    row: dict[str, Any],
+    registry: Iterable[dict[str, str]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Shape one set-based latest-row result into matched or NOT_EVALUABLE events."""
+    code = str(row["code"])
+    trade_date = _pattern_date(row.get("trade_date"))
+    current_close = _pattern_number(row.get("close"))
+    observations_count = int(row.get("observations_count") or 0)
+    prior_high_count = int(row.get("prior_high_count") or 0)
+    prior_low_count = int(row.get("prior_low_count") or 0)
+    close20_count = int(row.get("close20_count") or 0)
+    close60_count = int(row.get("close60_count") or 0)
+    volume5_count = int(row.get("volume5_count") or 0)
+    volume20_count = int(row.get("volume20_count") or 0)
+    prior_high = _pattern_number(row.get("prior_high"))
+    prior_low = _pattern_number(row.get("prior_low"))
+    sma20 = _pattern_number(row.get("sma20"))
+    sma60 = _pattern_number(row.get("sma60"))
+    previous_sma20 = _pattern_number(row.get("previous_sma20"))
+    previous_sma60 = _pattern_number(row.get("previous_sma60"))
+    avg_volume5 = _pattern_number(row.get("avg_volume5"))
+    avg_volume20 = _pattern_number(row.get("avg_volume20"))
+    current_volume = _pattern_number(row.get("volume"))
+
+    events: list[dict[str, Any]] = []
+    not_evaluable: list[dict[str, Any]] = []
+
+    reason_text = {
+        "INSUFFICIENT_HISTORY": "历史观测不足，不能把未触发与不可评估混同。",
+        "MISSING_CLOSE": "所需收盘价历史含缺失值。",
+        "MISSING_HIGH": "过去20日 high 历史含缺失值。",
+        "MISSING_LOW": "过去20日 low 历史含缺失值。",
+        "MISSING_VOLUME": "所需成交量历史含缺失值。",
+        "ZERO_VOLUME_BASELINE": "20日平均成交量为零，量比不可评估。",
+    }
+
+    def unavailable(spec: dict[str, str], reason_code: str) -> None:
+        not_evaluable.append(
+            {
+                "code": code,
+                "trade_date": trade_date,
+                "event_type": spec["event_type"],
+                "status": "NOT_EVALUABLE",
+                "reason_code": reason_code,
+                "reason": reason_text[reason_code],
+            }
+        )
+
+    def matched(spec: dict[str, str], evidence: dict[str, Any]) -> None:
+        events.append(
+            {
+                "code": code,
+                "trade_date": trade_date,
+                "event_type": spec["event_type"],
+                "event_label": spec["label"],
+                "status": "MATCHED",
+                "current_close": current_close,
+                "evidence": {
+                    **evidence,
+                    "source_trigger_type": spec["source_trigger_type"],
+                },
+            }
+        )
+
+    for spec in registry:
+        event_type = spec["event_type"]
+        if event_type == "close_above_20d_high":
+            if observations_count < 21:
+                unavailable(spec, "INSUFFICIENT_HISTORY")
+            elif prior_high_count < 20:
+                unavailable(spec, "MISSING_HIGH")
+            elif current_close is None or prior_high is None:
+                unavailable(spec, "MISSING_CLOSE" if current_close is None else "MISSING_HIGH")
+            elif current_close > prior_high:
+                matched(
+                    spec,
+                    {
+                        "current_close": current_close,
+                        "previous_20d_high": prior_high,
+                        "window_size": 20,
+                        "comparison": "current_close > previous_20d_high",
+                    },
+                )
+        elif event_type == "close_below_20d_low":
+            if observations_count < 21:
+                unavailable(spec, "INSUFFICIENT_HISTORY")
+            elif prior_low_count < 20:
+                unavailable(spec, "MISSING_LOW")
+            elif current_close is None or prior_low is None:
+                unavailable(spec, "MISSING_CLOSE" if current_close is None else "MISSING_LOW")
+            elif current_close < prior_low:
+                matched(
+                    spec,
+                    {
+                        "current_close": current_close,
+                        "previous_20d_low": prior_low,
+                        "window_size": 20,
+                        "comparison": "current_close < previous_20d_low",
+                    },
+                )
+        elif event_type == "sma20_cross_above_sma60":
+            if observations_count < 61:
+                unavailable(spec, "INSUFFICIENT_HISTORY")
+            elif (
+                close20_count < 20
+                or close60_count < 60
+                or any(value is None for value in (sma20, sma60, previous_sma20, previous_sma60))
+            ):
+                unavailable(spec, "MISSING_CLOSE")
+            elif previous_sma20 <= previous_sma60 and sma20 > sma60:
+                matched(
+                    spec,
+                    {
+                        "previous_sma20": previous_sma20,
+                        "previous_sma60": previous_sma60,
+                        "current_sma20": sma20,
+                        "current_sma60": sma60,
+                        "comparison": "previous_sma20 <= previous_sma60 and current_sma20 > current_sma60",
+                    },
+                )
+        elif event_type == "sma20_cross_below_sma60":
+            if observations_count < 61:
+                unavailable(spec, "INSUFFICIENT_HISTORY")
+            elif (
+                close20_count < 20
+                or close60_count < 60
+                or any(value is None for value in (sma20, sma60, previous_sma20, previous_sma60))
+            ):
+                unavailable(spec, "MISSING_CLOSE")
+            elif previous_sma20 >= previous_sma60 and sma20 < sma60:
+                matched(
+                    spec,
+                    {
+                        "previous_sma20": previous_sma20,
+                        "previous_sma60": previous_sma60,
+                        "current_sma20": sma20,
+                        "current_sma60": sma60,
+                        "comparison": "previous_sma20 >= previous_sma60 and current_sma20 < current_sma60",
+                    },
+                )
+        elif event_type == "volume_surge":
+            if observations_count < 20:
+                unavailable(spec, "INSUFFICIENT_HISTORY")
+            elif volume5_count < 5 or volume20_count < 20:
+                unavailable(spec, "MISSING_VOLUME")
+            elif avg_volume5 is None or avg_volume20 is None or current_volume is None:
+                unavailable(spec, "MISSING_VOLUME")
+            elif avg_volume20 <= 0:
+                unavailable(spec, "ZERO_VOLUME_BASELINE")
+            else:
+                ratio = avg_volume5 / avg_volume20
+                if ratio >= 2.0:
+                    matched(
+                        spec,
+                        {
+                            "current_volume": current_volume,
+                            "avg_volume_5": avg_volume5,
+                            "avg_volume_20": avg_volume20,
+                            "volume_ratio_5_20": ratio,
+                            "threshold": 2.0,
+                            "comparison": "avg_volume_5 / avg_volume_20 >= 2.0",
+                        },
+                    )
+
+    return events, not_evaluable
+
+
+def query_patterns(
+    *,
+    root: str | Path | None = None,
+    as_of: str | None = None,
+    latest: bool = True,
+    event_type: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Scan the local RDP artifact once for the five existing technical events.
+
+    SQL computes one latest observation row per code with bounded windows.  Python
+    only shapes those rows into the read model; it never fetches or evaluates a
+    stock through a per-security HTTP/K-line path.
+    """
+    selected_event_type = _validate_pattern_query(
+        as_of=as_of,
+        latest=latest,
+        event_type=event_type,
+        limit=limit,
+        offset=offset,
+    )
+    manifest = read_manifest(root)
+    root_path = resolve_root(root)
+    artifact = _artifact_path(root_path, str(manifest["artifact_sha256"]))
+    registry = tuple(
+        item for item in _PATTERN_EVENT_REGISTRY
+        if selected_event_type is None or item["event_type"] == selected_event_type
+    )
+    cutoff = as_of or manifest["coverage_end"]
+    query = """
+        WITH source AS (
+            SELECT
+                code,
+                CAST(trade_date AS DATE) AS trade_date,
+                high,
+                low,
+                close,
+                volume
+            FROM read_parquet(?)
+            WHERE trade_date <= CAST(? AS DATE)
+        ), meta AS (
+            SELECT
+                COUNT(*) AS raw_row_count,
+                COUNT(DISTINCT code || '|' || CAST(trade_date AS VARCHAR)) AS unique_observation_count,
+                COUNT(*) FILTER (WHERE code IS NULL OR trade_date IS NULL) AS invalid_identity_count,
+                COUNT(DISTINCT code) AS total_universe,
+                CAST(MIN(trade_date) AS VARCHAR) AS source_start,
+                CAST(MAX(trade_date) AS VARCHAR) AS source_end
+            FROM source
+        ), ordered AS (
+            SELECT
+                source.*,
+                ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_date ASC) AS sequence_no
+            FROM source
+        ), windows AS (
+            SELECT
+                ordered.*,
+                COUNT(close) OVER (
+                    PARTITION BY code ORDER BY trade_date
+                    ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+                ) AS close20_count,
+                AVG(close) OVER (
+                    PARTITION BY code ORDER BY trade_date
+                    ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+                ) AS sma20,
+                COUNT(close) OVER (
+                    PARTITION BY code ORDER BY trade_date
+                    ROWS BETWEEN 59 PRECEDING AND CURRENT ROW
+                ) AS close60_count,
+                AVG(close) OVER (
+                    PARTITION BY code ORDER BY trade_date
+                    ROWS BETWEEN 59 PRECEDING AND CURRENT ROW
+                ) AS sma60,
+                COUNT(high) OVER (
+                    PARTITION BY code ORDER BY trade_date
+                    ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
+                ) AS prior_high_count,
+                MAX(high) OVER (
+                    PARTITION BY code ORDER BY trade_date
+                    ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
+                ) AS prior_high,
+                COUNT(low) OVER (
+                    PARTITION BY code ORDER BY trade_date
+                    ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
+                ) AS prior_low_count,
+                MIN(low) OVER (
+                    PARTITION BY code ORDER BY trade_date
+                    ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
+                ) AS prior_low,
+                COUNT(volume) OVER (
+                    PARTITION BY code ORDER BY trade_date
+                    ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
+                ) AS volume5_count,
+                AVG(volume) OVER (
+                    PARTITION BY code ORDER BY trade_date
+                    ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
+                ) AS avg_volume5,
+                COUNT(volume) OVER (
+                    PARTITION BY code ORDER BY trade_date
+                    ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+                ) AS volume20_count,
+                AVG(volume) OVER (
+                    PARTITION BY code ORDER BY trade_date
+                    ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+                ) AS avg_volume20
+            FROM ordered
+        ), crossings AS (
+            SELECT
+                windows.*,
+                LAG(sma20) OVER (PARTITION BY code ORDER BY trade_date) AS previous_sma20,
+                LAG(sma60) OVER (PARTITION BY code ORDER BY trade_date) AS previous_sma60
+            FROM windows
+        ), latest AS (
+            SELECT
+                crossings.*,
+                ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_date DESC) AS reverse_sequence,
+                COUNT(*) OVER (PARTITION BY code) AS observations_count
+            FROM crossings
+        )
+        SELECT
+            meta.raw_row_count,
+            meta.unique_observation_count,
+            meta.invalid_identity_count,
+            meta.total_universe,
+            meta.source_start,
+            meta.source_end,
+            latest.code,
+            latest.trade_date,
+            latest.close,
+            latest.observations_count,
+            latest.close20_count,
+            latest.close60_count,
+            latest.prior_high_count,
+            latest.prior_high,
+            latest.prior_low_count,
+            latest.prior_low,
+            latest.sma20,
+            latest.sma60,
+            latest.previous_sma20,
+            latest.previous_sma60,
+            latest.volume5_count,
+            latest.avg_volume5,
+            latest.volume20_count,
+            latest.avg_volume20,
+            latest.volume
+        FROM meta
+        LEFT JOIN latest ON latest.reverse_sequence = 1
+        ORDER BY latest.code ASC NULLS LAST
+    """
+    connection = duckdb.connect(database=":memory:")
+    try:
+        try:
+            rows_result = connection.execute(query, [str(artifact), cutoff]).fetchall()
+        except Exception as exc:
+            raise ResearchDataPlaneValidationError("pattern scan query failed closed") from exc
+    finally:
+        connection.close()
+
+    columns = (
+        "raw_row_count", "unique_observation_count", "invalid_identity_count", "total_universe",
+        "source_start", "source_end", "code", "trade_date", "close", "observations_count",
+        "close20_count", "close60_count", "prior_high_count", "prior_high", "prior_low_count",
+        "prior_low", "sma20", "sma60", "previous_sma20", "previous_sma60", "volume5_count",
+        "avg_volume5", "volume20_count", "avg_volume20", "volume",
+    )
+    if not rows_result:
+        return build_patterns_unavailable_envelope("as_of 之前没有可用的研究数据", as_of=as_of)
+    raw_rows = [dict(zip(columns, raw)) for raw in rows_result]
+    meta = raw_rows[0]
+    raw_row_count = int(meta["raw_row_count"] or 0)
+    unique_observation_count = int(meta["unique_observation_count"] or 0)
+    invalid_identity_count = int(meta["invalid_identity_count"] or 0)
+    if raw_row_count == 0 or not meta["source_end"]:
+        return build_patterns_unavailable_envelope("as_of 之前没有可用的研究数据", as_of=as_of)
+    if invalid_identity_count or unique_observation_count != raw_row_count:
+        return build_patterns_unavailable_envelope(
+            "PATTERN_SOURCE_DUPLICATE_OR_INVALID_OBSERVATION_IDENTITY",
+            as_of=as_of,
+        )
+
+    events: list[dict[str, Any]] = []
+    not_evaluable: list[dict[str, Any]] = []
+    evaluable_by_code: dict[str, int] = {}
+    for row in raw_rows:
+        if row["code"] is None:
+            continue
+        row_events, row_not_evaluable = _evaluate_pattern_record(row, registry)
+        events.extend(row_events)
+        not_evaluable.extend(row_not_evaluable)
+        code = str(row["code"])
+        evaluable_by_code[code] = len(registry) - len(row_not_evaluable)
+
+    events.sort(
+        key=lambda item: (
+            -(date.fromisoformat(item["trade_date"]).toordinal() if item["trade_date"] else 0),
+            item["code"],
+            _PATTERN_EVENT_ORDER[item["event_type"]],
+        )
+    )
+    not_evaluable.sort(
+        key=lambda item: (
+            item["code"],
+            item["trade_date"] or "",
+            _PATTERN_EVENT_ORDER[item["event_type"]],
+        )
+    )
+    page = events[offset : offset + limit]
+    target_date = str(meta["source_end"])
+    status = "partial" if not_evaluable else "normal"
+    limitations = [
+        "Research Runtime 数据不是 Canonical Fact Authority。",
+        "Pattern 仅复用现有五类技术触发语义；不包含评分、预测、买卖建议或写入。",
+        "source date 取自 artifact 中不晚于 requested as_of 的最新交易日；未使用未来行。",
+    ]
+    if not_evaluable:
+        limitations.append("存在 NOT_EVALUABLE 技术事件；不可评估不等于未触发。")
+    if selected_event_type:
+        limitations.append(f"当前仅筛选 event_type={selected_event_type}。")
+    return {
+        "schema_version": PATTERN_SCHEMA_VERSION,
+        "dataset_id": manifest["dataset_id"],
+        "provider_id": manifest.get("provider_id", PROVIDER_ID),
+        "adjustment": manifest.get("adjustment", ADJUSTMENT),
+        "status": status,
+        "fetched_at": manifest.get("imported_at"),
+        "requested_as_of": as_of,
+        "as_of": target_date,
+        "as_of_semantics": _PATTERN_AS_OF_SEMANTICS,
+        "latest_date": target_date,
+        "source": _pattern_provenance(manifest),
+        "artifact_identity": {
+            "sha256": manifest["artifact_sha256"],
+            "file": manifest["artifact_file"],
+        },
+        "coverage": {
+            "start": manifest["coverage_start"],
+            "end": manifest["coverage_end"],
+            "row_count": manifest["row_count"],
+            "code_count": manifest["code_count"],
+        },
+        "source_scope": {
+            "start": meta["source_start"],
+            "end": meta["source_end"],
+            "row_count": raw_row_count,
+            "code_count": int(meta["total_universe"] or 0),
+        },
+        "pattern_registry": list(_PATTERN_EVENT_REGISTRY),
+        "event_type_filter": selected_event_type,
+        "total_universe": int(meta["total_universe"] or 0),
+        "evaluable_count": sum(
+            count == len(registry) for count in evaluable_by_code.values()
+        ),
+        "matched_stock_count": len({item["code"] for item in events}),
+        "not_evaluable_count": len(not_evaluable),
+        "not_evaluable": not_evaluable[:limit],
+        "not_evaluable_returned": min(limit, len(not_evaluable)),
+        "events": page,
+        "returned_events": len(page),
+        "total_events": len(events),
+        "next_offset": offset + len(page) if offset + len(page) < len(events) else None,
+        "formal_state_write": {"performed": False, "scope": "pattern discovery read-only"},
+        "limitations": limitations,
     }
 
 
