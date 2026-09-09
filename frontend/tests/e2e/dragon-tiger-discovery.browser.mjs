@@ -244,7 +244,8 @@ async function main() {
     console.log(`[E2E] browser=${label}`);
     await page.goto(`${baseUrl}/screener`, { waitUntil: "networkidle" });
     for (const name of ["机会发现", "候选筛选", "Full Market", "龙虎榜"]) {
-      if (!(await page.getByRole("tab", { name, exact: true }).isVisible())) throw new Error(`missing /screener tab: ${name}`);
+      const tab = page.getByRole("tab", { name, exact: true });
+      await tab.waitFor({ state: "visible", timeout: 15000 });
     }
     await page.getByTestId("dragon-tiger-tab").click();
     if (await page.getByTestId("dragon-tiger-tab").getAttribute("aria-selected") !== "true") {
