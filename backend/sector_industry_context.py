@@ -371,3 +371,22 @@ def build_sector_industry_context(
     result["rdp_as_of"] = rdp_as_of
     result["rdp_provenance"] = rdp_provenance
     return result
+
+
+def read_current_industry_classification(
+    *, snapshot_reader: SnapshotReader | None = None,
+) -> dict[str, str]:
+    """Read the existing Eastmoney current-membership classification only.
+
+    Portfolio projections need the same ``industry=f100`` source as the full
+    sector context, but must not pay for or imply the sector RDP/history
+    aggregation.  Keep this helper read-only and reuse the existing snapshot
+    normalization and UNKNOWN semantics.
+    """
+    read_snapshot = snapshot_reader or astock.a_share_snapshot
+    groups, _invalid_rows = _normalize_snapshot(read_snapshot())
+    return {
+        member["code"]: industry
+        for industry, members in groups.items()
+        for member in members
+    }
