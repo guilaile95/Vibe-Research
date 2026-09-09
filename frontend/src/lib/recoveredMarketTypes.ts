@@ -209,6 +209,57 @@ export type FullMarketQuery = {
   offset?: number;
 };
 
+export type DragonTigerDiscoveryStatus = "NORMAL" | "PARTIAL" | "EMPTY" | "UNAVAILABLE";
+
+export type DragonTigerDiscoveryRow = {
+  trade_date: string;
+  security_code: string;
+  security_name: string | null;
+  reason: string | null;
+  billboard_net_amount: number | null;
+  billboard_net_amount_unit: "YUAN";
+  turnover_rate_pct: number | null;
+  source_record_identity: string;
+};
+
+export type DragonTigerDiscovery = {
+  schema_version: string;
+  provider: string;
+  report_name: string;
+  source: {
+    provider: string;
+    report_name: string;
+    query_scope: string;
+    date_semantics: string;
+    billboard_net_amount_semantics: string;
+  };
+  status: DragonTigerDiscoveryStatus;
+  trade_date: string | null;
+  requested_trade_date: string | null;
+  date_semantics: string;
+  fetched_at: string;
+  pagination: {
+    page_size: number;
+    max_pages: number;
+    max_rows: number;
+    fetched_pages: number;
+    source_count: number | null;
+    source_pages: number | null;
+    returned_rows: number;
+    truncated: boolean;
+  };
+  completeness: {
+    status: "COMPLETE" | "PARTIAL" | "TRUNCATED" | "NO_RECORD" | "UNAVAILABLE" | string;
+    source_count: number | null;
+    returned_rows: number;
+    truncated: boolean;
+    malformed_rows: number;
+  };
+  rows: DragonTigerDiscoveryRow[];
+  limitations: string[];
+  formal_state_write: { performed: false; scope: string };
+};
+
 export type DiscoveryStrategy = "SHORT" | "SWING" | "MEDIUM";
 export type DiscoveryPriority = "HIGH" | "MEDIUM" | "LOW";
 export type DiscoveryEvidenceGate =

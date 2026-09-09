@@ -103,6 +103,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements-linux-py311.lock.txt
+
+      - name: Install backend runtime dependencies (exact Linux lock)
+        run: python -m pip install -r backend/requirements-linux-py311.lock.txt
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
@@ -137,6 +148,10 @@ jobs:
       - name: Run Candidate Research E2E
         working-directory: frontend
         run: npm run test:e2e:candidate-campaign
+
+      - name: Run Dragon-Tiger Market Discovery E2E
+        working-directory: frontend
+        run: npm run test:e2e:dragon-tiger-discovery
 
       - name: Run Full-Market Discovery E2E
         working-directory: frontend

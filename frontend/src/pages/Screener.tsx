@@ -38,6 +38,7 @@ import {
 import { loadWatchAuthoritative } from "@/lib/watchlist";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import { DiscoveryWorkspace } from "@/components/discovery/DiscoveryWorkspace";
+import { DragonTigerDiscoveryPanel } from "@/components/discovery/DragonTigerDiscoveryPanel";
 
 type FullMarketValueMetric = Exclude<FullMarketMetric, "code" | "latest_date">;
 type FullMarketFilterDraft = Omit<FullMarketFilter, "value"> & { value: string };
@@ -152,7 +153,7 @@ function ResultGroup({ title, items }: { title: string; items: ScreenerStockResu
 }
 
 export function Screener() {
-  const [mode, setMode] = useState<"discovery" | "candidate" | "full-market">("discovery");
+  const [mode, setMode] = useState<"discovery" | "candidate" | "full-market" | "dragon-tiger">("discovery");
   const [codeText, setCodeText] = useState("");
   const [conditions, setConditions] = useState<ScreenerCondition[]>([
     defaultCondition("price_gt_sma20"),
@@ -306,7 +307,7 @@ export function Screener() {
     }
   };
 
-  const switchMode = (nextMode: "discovery" | "candidate" | "full-market") => {
+  const switchMode = (nextMode: "discovery" | "candidate" | "full-market" | "dragon-tiger") => {
     controllerRef.current?.abort();
     controllerRef.current = null;
     setLoading(false);
@@ -324,11 +325,13 @@ export function Screener() {
           ? "从 Core A 股批量扫描中生成分策略研究队列；只回答先研究谁、为什么。"
           : mode === "candidate"
             ? "对候选代码执行技术条件 AND 筛选；结果用于研究，不产生交易建议。"
-            : "基于本地 RDP artifact 的有界全市场横截面；结果用于研究，不产生交易建议。"}
+            : mode === "full-market"
+              ? "基于本地 RDP artifact 的有界全市场横截面；结果用于研究，不产生交易建议。"
+              : "读取现有 Eastmoney 龙虎榜报告的市场级公开记录；不产生交易建议。"}
       />
 
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span>{mode === "discovery" ? "Discovery · batch-first · no AI ranking" : mode === "candidate" ? `恢复自历史功能链 · 最多 ${MAX_CODES} 个代码` : "Full Market · set-based · 不回退逐票请求"}</span>
+        <span>{mode === "discovery" ? "Discovery · batch-first · no AI ranking" : mode === "candidate" ? `候选筛选 · 最多 ${MAX_CODES} 个代码` : mode === "full-market" ? "Full Market · set-based · 不回退逐票请求" : "龙虎榜 · source facts · no ranking"}</span>
         <span>·</span>
         <Link className="hover:text-foreground" to="/market-history">查看北向成交历史</Link>
       </div>
@@ -338,10 +341,13 @@ export function Screener() {
           机会发现
         </button>
         <button type="button" role="tab" aria-selected={mode === "candidate"} data-testid="candidate-pool-tab" onClick={() => switchMode("candidate")} className={`rounded-lg px-3 py-1.5 text-sm ${mode === "candidate" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
-          技术筛选
+          候选筛选
         </button>
         <button type="button" role="tab" aria-selected={mode === "full-market"} data-testid="full-market-tab" onClick={() => switchMode("full-market")} className={`rounded-lg px-3 py-1.5 text-sm ${mode === "full-market" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
           Full Market
+        </button>
+        <button type="button" role="tab" aria-selected={mode === "dragon-tiger"} data-testid="dragon-tiger-tab" onClick={() => switchMode("dragon-tiger")} className={`rounded-lg px-3 py-1.5 text-sm ${mode === "dragon-tiger" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+          龙虎榜
         </button>
       </div>
 
@@ -476,7 +482,7 @@ export function Screener() {
           {error ? <div className="flex items-center gap-2 text-xs text-destructive"><AlertCircle className="h-4 w-4" />{error}</div> : null}
           <p className="text-xs text-muted-foreground">当前 RDP schema 仅有 volume；不声明 turnover、amount 或 liquidity amount。历史不足保持不可评估。</p>
         </GlassCard>
-      ) : null}
+      ) : mode === "dragon-tiger" ? <DragonTigerDiscoveryPanel /> : null}
 
       {mode === "candidate" && result ? (
         <>
