@@ -253,6 +253,7 @@ async function runNormalScenario(browser, fixture, screenshotDir) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const apiRequests = [];
   const consoleErrors = [];
+  await page.route("https://fonts.googleapis.com/**", (route) => route.fulfill({ contentType: "text/css", body: "" }));
   page.on("request", (request) => { if (request.url().includes("/api/")) apiRequests.push(request.url()); });
   page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
   page.on("pageerror", (error) => consoleErrors.push(`pageerror: ${error.message}`));
@@ -311,6 +312,7 @@ async function runOverlapScenario(browser, fixture, screenshotDir) {
   const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port);
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const consoleErrors = [];
+  await page.route("https://fonts.googleapis.com/**", (route) => route.fulfill({ contentType: "text/css", body: "" }));
   page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
   page.on("pageerror", (error) => consoleErrors.push(`pageerror: ${error.message}`));
   try {
