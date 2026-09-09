@@ -551,17 +551,27 @@ def build_portfolio_risk_context(
         position_status = "LEGACY"
     else:
         position_status = authority_state
+    position_limitations = ["持仓 universe 只来自当前 Position/Portfolio authority。"]
     position_context = {
         "status": position_status,
         "authority_state": authority_state,
         "holding_count": total_holdings,
         "source": "POSITION_REALITY_AND_CURRENT_PORTFOLIO",
-        "limitations": ["持仓 universe 只来自当前 Position/Portfolio authority。"],
+        "limitations": position_limitations,
     }
+    if authority_state == "LEGACY":
+        position_context["reason_code"] = "LEGACY_POSITION_AUTHORITY"
+        position_limitations.extend(
+            [
+                "LEGACY_HOLDINGS_VISIBILITY_ONLY",
+                "当前持仓来自 legacy fallback，尚未达到 canonical Position Reality；这些数据仅用于可见性，不应视为完整当前组合风险事实。",
+            ]
+        )
 
     partial_inputs = (
         quote_status in {"PARTIAL", "UNAVAILABLE"}
         or account_facts["status"] != "CANONICAL"
+        or authority_state == "LEGACY"
         or authority_state not in {"CANONICAL", "LEGACY"}
         or cash_buffer["status"] != "AVAILABLE"
         or industry_exposure["status"] == "UNAVAILABLE"
@@ -572,6 +582,13 @@ def build_portfolio_risk_context(
         "当前行业是 Eastmoney 当前快照；历史 membership validity 未证明。",
         "正式账户回撤与组合压力测试在本 v0.1 明确不可用/延期。",
     ]
+    if authority_state == "LEGACY":
+        limitations.extend(
+            [
+                "LEGACY_POSITION_AUTHORITY：当前持仓仅为 legacy visibility fallback，不能按 canonical current holdings 解读。",
+                "LEGACY_HOLDINGS_VISIBILITY_ONLY：Legacy fallback 会保留只读可见性，但 overall 不表示完整当前组合风险事实。",
+            ]
+        )
     if concentration["status"] == "PARTIAL":
         limitations.append("行情覆盖不完整，集中度标记为 NOT_FULLY_EVALUABLE。")
     if industry_exposure["status"] == "UNAVAILABLE":

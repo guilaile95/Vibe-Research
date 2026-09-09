@@ -1,5 +1,5 @@
 /**
- * PLANNING-PARITY-PORTFOLIO-RISK1-R1 browser acceptance.
+ * PLANNING-PARITY-PORTFOLIO-RISK1-R2 browser acceptance.
  *
  * Real production frontend + real FastAPI app.  Only the existing astock
  * adapter boundary receives deterministic synthetic facts; all data stores
@@ -20,7 +20,7 @@ const root = path.resolve(__dirname, "../../..");
 const frontendDist = path.join(root, "frontend", "dist");
 const backendDir = path.join(root, "backend");
 const fixtureDir = path.join(__dirname, "portfolio_risk_context_fixture");
-const screenshotDir = process.env.PORTFOLIO_RISK_CONTEXT_SCREENSHOT_DIR || path.join(tmpdir(), "vibe-research-portfolio-risk1-r1");
+const screenshotDir = process.env.PORTFOLIO_RISK_CONTEXT_SCREENSHOT_DIR || path.join(tmpdir(), "vibe-research-portfolio-risk1-r2");
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
@@ -156,6 +156,16 @@ async function main() {
   const factLakeDir = await mkdtemp(path.join(tmpdir(), "vr-portfolio-risk1-fact-lake-"));
   const modeFile = path.join(dataDir, "fixture-mode.txt");
   await writeFile(modeFile, "normal", "utf8");
+  await writeFile(path.join(dataDir, "portfolio.json"), JSON.stringify({
+    holdings: [
+      { code: "600001", name: "Alpha电子", shares: 100, cost: 80 },
+      { code: "600002", name: "Beta医药", shares: 100, cost: 40 },
+      { code: "600003", name: "Gamma未分类", shares: 100, cost: 15 },
+      { code: "600004", name: "Delta银行", shares: 100, cost: 8 },
+    ],
+    closed: [],
+    last_refresh: null,
+  }), "utf8");
   const backendPort = await freePort();
   const frontendPort = await freePort();
   const python = resolvePython();
@@ -198,35 +208,24 @@ async function main() {
       throw new Error(`${error.message}; backend log: ${backendLog || "<empty>"}`);
     });
 
-    await jsonRequest(backendBase, "/api/position/bootstrap-commit", "POST", {
-      ledger_start_at: "2026-09-01",
-      opening_cash: 25000,
-      note: "portfolio risk context isolated browser fixture",
-      positions: [
-        { code: "600001", shares: 100, cost_basis: 80 },
-        { code: "600002", shares: 100, cost_basis: 40 },
-        { code: "600003", shares: 100, cost_basis: 15 },
-        { code: "600004", shares: 100, cost_basis: 8 },
-      ],
-    });
     await jsonRequest(backendBase, "/api/account-profile", "PUT", {
       total_assets: 50000,
       available_cash: 25000,
       confirm_current: true,
     });
-    const direct = await jsonRequest(backendBase, "/api/portfolio/risk-context");
-    assert.equal(direct.schema_version, "portfolio_risk_context.v0.1");
-    assert.equal(direct.holding_count, 4);
-    assert.equal(direct.position_authority_state, "CANONICAL");
-    assert.equal(direct.quote_coverage.status, "COMPLETE");
-    assert.equal(direct.security_concentration.top1_pct, 55.56);
-    assert.equal(direct.security_concentration.top3_pct, 94.44);
-    assert.equal(direct.cash_buffer.ratio_pct, 50);
-    assert.equal(direct.industry_coverage.unknown_industry_holdings, 1);
-    assert.equal(direct.industry_exposure.items.find((item) => item.industry === "UNKNOWN_INDUSTRY").weight_in_tracked_stock_pct, 11.11);
-    assert.equal(direct.drawdown.status, "UNAVAILABLE_NO_OFFICIAL_NAV_HISTORY");
-    assert.equal(direct.stress_test.status, "DEFERRED_NO_ACCEPTED_SCENARIO_CONTRACT");
-    assert.deepEqual(direct.writes, { formal_state: 0, account: 0, position: 0, trade: 0, portfolio: 0 });
+    const legacyDirect = await jsonRequest(backendBase, "/api/portfolio/risk-context");
+    assert.equal(legacyDirect.schema_version, "portfolio_risk_context.v0.1");
+    assert.equal(legacyDirect.holding_count, 4);
+    assert.equal(legacyDirect.position_authority_state, "LEGACY");
+    assert.equal(legacyDirect.status, "PARTIAL");
+    assert.equal(legacyDirect.position_context.status, "LEGACY");
+    assert.equal(legacyDirect.position_context.reason_code, "LEGACY_POSITION_AUTHORITY");
+    assert.ok(legacyDirect.position_context.limitations.includes("LEGACY_HOLDINGS_VISIBILITY_ONLY"));
+    assert.equal(legacyDirect.quote_coverage.status, "COMPLETE");
+    assert.equal(legacyDirect.security_concentration.top1_pct, 55.56);
+    assert.equal(legacyDirect.security_concentration.top3_pct, 94.44);
+    assert.equal(legacyDirect.cash_buffer.ratio_pct, 50);
+    assert.deepEqual(legacyDirect.writes, { formal_state: 0, account: 0, position: 0, trade: 0, portfolio: 0 });
 
     staticServer = await startStaticServer(frontendDist, frontendPort, backendPort);
     await waitHttp(`${frontendOrigin}/`);
@@ -238,9 +237,41 @@ async function main() {
       { name: "desktop-1440", width: 1440, height: 900 },
       { name: "narrow-390", width: 390, height: 844 },
     ];
-    const scenarios = ["normal", "partial", "industry-failure"];
+    const scenarios = ["legacy", "normal", "partial", "industry-failure"];
     for (const scenario of scenarios) {
-      if (scenario !== "normal") await writeFile(modeFile, scenario, "utf8");
+      if (scenario === "normal") {
+        await jsonRequest(backendBase, "/api/position/bootstrap-commit", "POST", {
+          ledger_start_at: "2026-09-01",
+          opening_cash: 25000,
+          note: "portfolio risk context isolated browser fixture",
+          positions: [
+            { code: "600001", shares: 100, cost_basis: 80 },
+            { code: "600002", shares: 100, cost_basis: 40 },
+            { code: "600003", shares: 100, cost_basis: 15 },
+            { code: "600004", shares: 100, cost_basis: 8 },
+          ],
+        });
+        await jsonRequest(backendBase, "/api/account-profile", "PUT", {
+          total_assets: 50000,
+          available_cash: 25000,
+          confirm_current: true,
+        });
+        const canonicalDirect = await jsonRequest(backendBase, "/api/portfolio/risk-context");
+        assert.equal(canonicalDirect.position_authority_state, "CANONICAL");
+        assert.equal(canonicalDirect.status, "NORMAL");
+        assert.equal(canonicalDirect.position_context.status, "NORMAL");
+        assert.equal(canonicalDirect.quote_coverage.status, "COMPLETE");
+        assert.equal(canonicalDirect.security_concentration.top1_pct, 55.56);
+        assert.equal(canonicalDirect.security_concentration.top3_pct, 94.44);
+        assert.equal(canonicalDirect.cash_buffer.ratio_pct, 50);
+        assert.equal(canonicalDirect.industry_coverage.unknown_industry_holdings, 1);
+        assert.equal(canonicalDirect.industry_exposure.items.find((item) => item.industry === "UNKNOWN_INDUSTRY").weight_in_tracked_stock_pct, 11.11);
+        assert.equal(canonicalDirect.drawdown.status, "UNAVAILABLE_NO_OFFICIAL_NAV_HISTORY");
+        assert.equal(canonicalDirect.stress_test.status, "DEFERRED_NO_ACCEPTED_SCENARIO_CONTRACT");
+        assert.deepEqual(canonicalDirect.writes, { formal_state: 0, account: 0, position: 0, trade: 0, portfolio: 0 });
+      } else if (scenario !== "legacy") {
+        await writeFile(modeFile, scenario, "utf8");
+      }
       for (const viewport of viewports) {
         const browserContext = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
         const page = await browserContext.newPage();
@@ -267,7 +298,19 @@ async function main() {
         await page.getByRole("heading", { name: "持仓操作建议" }).waitFor();
         const dimensions = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
         assert.ok(dimensions.scroll <= dimensions.client + 2, `${evidenceName} document overflow: ${JSON.stringify(dimensions)}`);
-        if (scenario === "normal") {
+        if (scenario === "legacy") {
+          assert.equal(await page.getByTestId("portfolio-risk-context-status").innerText(), "部分可读");
+          assert.match(await page.getByTestId("portfolio-risk-context-position-authority").innerText(), /Legacy fallback/);
+          const legacyNotice = page.getByTestId("portfolio-risk-context-legacy-authority");
+          await legacyNotice.waitFor();
+          assert.match(await legacyNotice.innerText(), /尚未完成 canonical Position Reality/);
+          assert.equal(await page.getByTestId("portfolio-risk-context-top1").innerText(), "Top 1 55.56%");
+          assert.equal(await page.getByTestId("portfolio-risk-context-top3").innerText(), "Top 3 94.44%");
+          assert.equal(await page.getByTestId("portfolio-risk-context-limitations").evaluate((element) => element.open), false);
+        } else if (scenario === "normal") {
+          assert.equal(await page.getByTestId("portfolio-risk-context-status").innerText(), "当前事实可读");
+          assert.match(await page.getByTestId("portfolio-risk-context-position-authority").innerText(), /Canonical Position Reality/);
+          assert.equal(await page.getByTestId("portfolio-risk-context-legacy-authority").count(), 0);
           await page.getByTestId("portfolio-risk-context-top1").waitFor();
           await page.getByTestId("portfolio-risk-context-top3").waitFor();
           assert.equal(await page.getByTestId("portfolio-risk-context-top1").innerText(), "Top 1 55.56%");
@@ -294,13 +337,15 @@ async function main() {
     assert.deepEqual(mutations, [], `portfolio risk context issued mutations after setup: ${mutations.join(" | ")}`);
     assert.ok(riskResponses.some((item) => item.status === 200 && item.body?.data?.schema_version === "portfolio_risk_context.v0.1"), "browser did not read the real risk-context route");
     const readme = [
-      "# PLANNING-PARITY-PORTFOLIO-RISK1-R1 browser evidence",
+      "# PLANNING-PARITY-PORTFOLIO-RISK1-R2 browser evidence",
       "",
       `Generated: ${new Date().toISOString()}`,
       "Backend: real FastAPI app, isolated Position Ledger/account profile, deterministic astock adapter fixture.",
       "Frontend: production build served as static dist; no page.route API mocks.",
       "",
       "## Checks",
+      "- Canonical and pre-bootstrap LEGACY fallback holdings use the same isolated fixture",
+      "- LEGACY is visibility-only, explicitly labeled, and overall PARTIAL (never NORMAL)",
       "- Four synthetic active holdings / complete deterministic quote coverage",
       "- Top 1 = 55.56%, Top 3 = 94.44%, cash buffer = 50.00%",
       "- Multiple current Eastmoney industries plus UNKNOWN_INDUSTRY",
