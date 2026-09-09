@@ -29,6 +29,7 @@ PAGE_SIZE = 50
 MAX_PAGES = 4
 MAX_ROWS = PAGE_SIZE * MAX_PAGES
 NO_DATA_CODE = 9201
+SOURCE_PAGE_IDENTITY_OVERLAP = "SOURCE_PAGE_IDENTITY_OVERLAP"
 
 
 class DragonTigerDiscoveryValidationError(ValueError):
@@ -282,13 +283,18 @@ def _empty_envelope(*, fetched_at: str, requested_trade_date: str | None, fetche
     return envelope
 
 
-def _unavailable_envelope(*, fetched_at: str, requested_trade_date: str | None) -> dict[str, Any]:
+def _unavailable_envelope(
+    *,
+    fetched_at: str,
+    requested_trade_date: str | None,
+    limitations: list[str] | None = None,
+) -> dict[str, Any]:
     envelope = _base_envelope(
         status="UNAVAILABLE",
         fetched_at=fetched_at,
         requested_trade_date=requested_trade_date,
     )
-    envelope["limitations"] = ["SOURCE_UNAVAILABLE"]
+    envelope["limitations"] = list(limitations) if limitations is not None else ["SOURCE_UNAVAILABLE"]
     return envelope
 
 
@@ -327,6 +333,15 @@ def build_dragon_tiger_discovery(trade_date: str | None = None) -> dict[str, Any
         source_count = exact_page.count
         source_pages = exact_page.pages
         raw_rows = list(exact_page.rows)
+        raw_source_identities: list[str] = []
+        seen_source_identities: set[str] = set()
+        identity_overlap = False
+        for raw in raw_rows:
+            identity = _source_record_identity(raw)
+            raw_source_identities.append(identity)
+            if identity in seen_source_identities:
+                identity_overlap = True
+            seen_source_identities.add(identity)
         pages_to_fetch = min(source_pages, MAX_PAGES)
         for page_number in range(2, pages_to_fetch + 1):
             page = _query_page(
@@ -338,9 +353,29 @@ def build_dragon_tiger_discovery(trade_date: str | None = None) -> dict[str, Any
             if page.count != source_count or page.pages != source_pages:
                 raise DragonTigerDiscoveryProviderError("source pagination metadata changed")
             raw_rows.extend(page.rows)
+            for raw in page.rows:
+                identity = _source_record_identity(raw)
+                raw_source_identities.append(identity)
+                if identity in seen_source_identities:
+                    identity_overlap = True
+                seen_source_identities.add(identity)
 
         truncated = source_pages > MAX_PAGES or source_count > MAX_ROWS
         raw_rows = raw_rows[:MAX_ROWS]
+        raw_source_identities = raw_source_identities[:MAX_ROWS]
+        raw_row_count = len(raw_rows)
+        unique_source_identity_count = len(set(raw_source_identities))
+        identity_overlap = identity_overlap or unique_source_identity_count != raw_row_count
+        if not truncated and (
+            raw_row_count != source_count
+            or unique_source_identity_count != source_count
+            or identity_overlap
+        ):
+            return _unavailable_envelope(
+                fetched_at=fetched_at,
+                requested_trade_date=requested_trade_date,
+                limitations=[SOURCE_PAGE_IDENTITY_OVERLAP] if identity_overlap else ["SOURCE_UNAVAILABLE"],
+            )
         rows: list[dict[str, Any]] = []
         malformed_rows = 0
         for raw in raw_rows:
@@ -375,6 +410,8 @@ def build_dragon_tiger_discovery(trade_date: str | None = None) -> dict[str, Any
         envelope["limitations"] = []
         if truncated:
             envelope["limitations"].append("BOUNDED_PAGE_OR_ROW_LIMIT_REACHED")
+        if identity_overlap:
+            envelope["limitations"].append(SOURCE_PAGE_IDENTITY_OVERLAP)
         if malformed_rows:
             envelope["limitations"].append("MALFORMED_SOURCE_ROWS_SKIPPED")
         return envelope
@@ -393,6 +430,7 @@ __all__ = [
     "PROVIDER",
     "REPORT_NAME",
     "SCHEMA_VERSION",
+    "SOURCE_PAGE_IDENTITY_OVERLAP",
     "DragonTigerDiscoveryProviderError",
     "DragonTigerDiscoveryValidationError",
     "build_dragon_tiger_discovery",

@@ -68,6 +68,7 @@ def test_latest_source_date_and_exact_date_pages_are_bounded_and_security_free(m
 
     assert result["status"] == "NORMAL"
     assert result["trade_date"] == "2026-09-09"
+    assert result["completeness"]["status"] == "COMPLETE"
     assert result["pagination"] == {
         "page_size": 2,
         "max_pages": 2,
@@ -85,6 +86,28 @@ def test_latest_source_date_and_exact_date_pages_are_bounded_and_security_free(m
     assert all("SECURITY_CODE" not in call["filter"] for call in calls)
     assert calls[0]["filter"] == ""
     assert calls[1]["filter"] == "(TRADE_DATE='2026-09-09')"
+
+
+def test_cross_page_duplicate_identity_fails_closed_with_plausible_metadata(monkeypatch):
+    monkeypatch.setattr(dtd, "PAGE_SIZE", 2)
+    page_one = [
+        _row(date="2026-09-09", reason="reason-a", trade_id="a"),
+        _row(date="2026-09-09", reason="reason-b", trade_id="b"),
+    ]
+    page_two = [_row(date="2026-09-09", reason="reason-b", trade_id="b")]
+
+    def fake_get(_url, *, params, **_kwargs):
+        rows = page_one if params["pageNumber"] == "1" else page_two
+        return _Response(_payload(rows, count=3, pages=2))
+
+    monkeypatch.setattr(dtd.astock, "em_get", fake_get)
+    result = dtd.build_dragon_tiger_discovery("2026-09-09")
+
+    assert result["status"] == "UNAVAILABLE"
+    assert result["completeness"]["status"] == "UNAVAILABLE"
+    assert result["limitations"] == [dtd.SOURCE_PAGE_IDENTITY_OVERLAP]
+    assert result["rows"] == []
+    assert result["formal_state_write"]["performed"] is False
 
 
 def test_explicit_date_skips_latest_resolution_and_retains_duplicate_reasons(monkeypatch):
@@ -147,6 +170,34 @@ def test_pagination_bound_is_explicitly_partial(monkeypatch):
     assert result["completeness"]["truncated"] is True
     assert result["pagination"]["source_count"] == 5
     assert len(calls) == 1
+    assert dtd.SOURCE_PAGE_IDENTITY_OVERLAP not in result["limitations"]
+
+
+def test_truncated_pagination_exposes_identity_overlap_without_claiming_complete(monkeypatch):
+    monkeypatch.setattr(dtd, "PAGE_SIZE", 2)
+    monkeypatch.setattr(dtd, "MAX_PAGES", 2)
+    monkeypatch.setattr(dtd, "MAX_ROWS", 4)
+    page_one = [
+        _row(date="2026-09-09", trade_id="a"),
+        _row(date="2026-09-09", trade_id="b"),
+    ]
+    page_two = [
+        _row(date="2026-09-09", reason="reason-b-again", trade_id="b"),
+        _row(date="2026-09-09", trade_id="c"),
+    ]
+
+    def fake_get(_url, *, params, **_kwargs):
+        rows = page_one if params["pageNumber"] == "1" else page_two
+        return _Response(_payload(rows, count=5, pages=3))
+
+    monkeypatch.setattr(dtd.astock, "em_get", fake_get)
+    result = dtd.build_dragon_tiger_discovery("2026-09-09")
+
+    assert result["status"] == "PARTIAL"
+    assert result["completeness"]["status"] == "TRUNCATED"
+    assert result["completeness"]["truncated"] is True
+    assert dtd.SOURCE_PAGE_IDENTITY_OVERLAP in result["limitations"]
+    assert len(result["rows"]) == 4
 
 
 def test_market_route_wraps_read_only_envelope_and_existing_per_security_route_is_unchanged(monkeypatch):

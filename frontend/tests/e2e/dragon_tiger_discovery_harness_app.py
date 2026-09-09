@@ -40,43 +40,54 @@ def _row(*, trade_date: str, code: str, reason: str, net: float | None, turnover
     }
 
 
-_ROWS_BY_DATE = {
-    "2026-09-09": [
+def _multi_page_rows(trade_date: str, prefix: str) -> list[dict[str, Any]]:
+    rows = [
         _row(
-            trade_date="2026-09-09",
+            trade_date=trade_date,
             code="000001",
             reason="收盘价格涨幅偏离值达到7%",
             net=123456.0,
             turnover=2.5,
-            trade_id="e2e-0909-a",
+            trade_id=f"{prefix}-a",
         ),
         _row(
-            trade_date="2026-09-09",
+            trade_date=trade_date,
             code="000001",
             reason="日价格振幅达到15%",
             net=0.0,
             turnover=None,
-            trade_id="e2e-0909-b",
+            trade_id=f"{prefix}-b",
         ),
         _row(
-            trade_date="2026-09-09",
+            trade_date=trade_date,
             code="600519",
             reason="换手率达到20%",
             net=-50000.0,
             turnover=20.0,
-            trade_id="e2e-0909-c",
+            trade_id=f"{prefix}-c",
         ),
-    ],
-    "2026-09-08": [
+    ]
+    rows.extend(
         _row(
-            trade_date="2026-09-08",
-            code="300750",
-            reason="连续三个交易日涨幅偏离值累计达到20%",
-            net=None,
-            turnover=4.25,
-            trade_id="e2e-0908-a",
-        ),
-    ],
+            trade_date=trade_date,
+            code=f"{100000 + index:06d}",
+            reason=f"测试上榜原因-{index}",
+            net=float(index * 1000),
+            turnover=float(index) / 10,
+            trade_id=f"{prefix}-{index:02d}",
+        )
+        for index in range(3, 66)
+    )
+    return rows
+
+
+_NORMAL_ROWS = _multi_page_rows("2026-09-09", "e2e-0909")
+_OVERLAP_SOURCE_ROWS = _multi_page_rows("2026-09-08", "e2e-0908")
+_OVERLAP_ROWS = _OVERLAP_SOURCE_ROWS[:50] + [_OVERLAP_SOURCE_ROWS[0]] + _OVERLAP_SOURCE_ROWS[51:]
+
+_ROWS_BY_DATE = {
+    "2026-09-09": _NORMAL_ROWS,
+    "2026-09-08": _OVERLAP_ROWS,
 }
 
 
