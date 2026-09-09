@@ -258,11 +258,13 @@ def disclosure(code: str) -> list[dict]:
     return df.head(30).to_dict("records") if df is not None and not df.empty else []
 
 
-def announcements(code: str, limit: int = 15) -> list[dict]:
+def announcements(code: str, limit: int = 15, *, strict: bool = False) -> list[dict]:
     """个股近期公告（东财公开接口，仅 requests，稳定）。返回 日期/标题/类型/详情链接。
 
     与其他东财数据路径一致使用固定直连会话（trust_env=False）：系统代理
     （Clash 等）停机会把该请求掐断，公告能力不应受代理环境影响。
+    ``strict`` 仅供需要区分“真实空结果”和“源失败”的只读组合层使用；
+    默认保持既有调用方的异常语义。
     """
     r = _em_session(True).get(
         "https://np-anotice-stock.eastmoney.com/api/security/ann",
@@ -270,7 +272,17 @@ def announcements(code: str, limit: int = 15) -> list[dict]:
                 "client_source": "web", "stock_list": code, "f_node": 0, "s_node": 0},
         headers={"User-Agent": UA}, timeout=20,
     )
-    lst = (r.json().get("data") or {}).get("list") or []
+    if strict and getattr(r, "status_code", 200) >= 400:
+        raise RuntimeError("announcement provider returned an error status")
+    payload = r.json()
+    if strict:
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+            raise ValueError("announcement provider response missing data")
+        if not isinstance(payload["data"].get("list"), list):
+            raise ValueError("announcement provider response missing list")
+    lst = (payload.get("data") or {}).get("list") or []
+    if strict and any(not isinstance(item, dict) for item in lst):
+        raise ValueError("announcement provider response contains malformed rows")
     out = []
     for a in lst:
         cols = [c.get("column_name") for c in (a.get("columns") or []) if c.get("column_name")]
@@ -1403,16 +1415,33 @@ def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: i
 
 
 def eastmoney_datacenter(report_name: str, columns: str = "ALL", filter_str: str = "",
-                         page_size: int = 50, sort_columns: str = "", sort_types: str = "-1") -> list[dict]:
-    """东财数据中心统一查询 —— 龙虎榜/解禁/融资融券/大宗交易/股东户数/分红 共用（已内置限流）。"""
+                         page_size: int = 50, sort_columns: str = "", sort_types: str = "-1",
+                         *, strict: bool = False) -> list[dict]:
+    """东财数据中心统一查询 —— 龙虎榜/解禁/融资融券/大宗交易/股东户数/分红 共用（已内置限流）。
+
+    ``strict`` 仅供需要区分“真实空结果”和“源失败”的只读组合层使用；
+    默认保持既有调用方的空结果降级语义。
+    """
     params = {
         "reportName": report_name, "columns": columns, "filter": filter_str,
         "pageNumber": "1", "pageSize": str(page_size),
         "sortColumns": sort_columns, "sortTypes": sort_types, "source": "WEB", "client": "WEB",
     }
     try:
-        d = em_get(_DATACENTER_URL, params=params, timeout=15).json()
+        response = em_get(_DATACENTER_URL, params=params, timeout=15)
+        if strict and getattr(response, "status_code", 200) >= 400:
+            raise RuntimeError("eastmoney datacenter returned an error status")
+        d = response.json()
+        if strict:
+            if not isinstance(d, dict) or not isinstance(d.get("result"), dict):
+                raise ValueError("eastmoney datacenter response missing result")
+            data = d["result"].get("data")
+            if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
+                raise ValueError("eastmoney datacenter response contains malformed data")
+            return data
     except Exception:
+        if strict:
+            raise
         return []
     if d.get("result") and d["result"].get("data"):
         return d["result"]["data"]
@@ -1464,11 +1493,15 @@ def holder_num_change(code: str, page_size: int = 10) -> list[dict]:
     } for r in data]
 
 
-def dividend_history(code: str, page_size: int = 20) -> list[dict]:
-    """分红送转历史：每股派息（税前）/ 每10股转增 / 每10股送股 / 进度。"""
+def dividend_history(code: str, page_size: int = 20, *, strict: bool = False) -> list[dict]:
+    """分红送转历史：每股派息（税前）/ 每10股转增 / 每10股送股 / 进度。
+
+    ``strict`` 仅供需要区分“真实空结果”和“源失败”的只读组合层使用；
+    默认保持既有调用方的空结果降级语义。
+    """
     data = eastmoney_datacenter(
         "RPT_SHAREBONUS_DET", filter_str=f'(SECURITY_CODE="{code}")',
-        page_size=page_size, sort_columns="EX_DIVIDEND_DATE", sort_types="-1")
+        page_size=page_size, sort_columns="EX_DIVIDEND_DATE", sort_types="-1", strict=strict)
     return [{
         "date": str(r.get("EX_DIVIDEND_DATE", ""))[:10],
         "bonus_rmb": r.get("PRETAX_BONUS_RMB", 0),
@@ -1559,11 +1592,14 @@ def dragon_tiger_board(code: str, trade_date: str | None = None, look_back: int 
     return {"records": records, "seats": seats, "institution": institution}
 
 
-def lockup_expiry(code: str, trade_date: str | None = None, forward_days: int = 90) -> dict:
+def lockup_expiry(code: str, trade_date: str | None = None, forward_days: int = 90,
+                  *, strict: bool = False) -> dict:
     """限售解禁日历：历史解禁记录 + 未来 N 天待解禁事件。
 
     字段随东财 2026 改列名同步（a-stock-data §3.6）：旧 LIMITED_STOCK_TYPE/FREE_SHARES_NUM
     已废、致 type/shares 恒空 → 改 FREE_SHARES_TYPE/FREE_SHARES，并补 able_shares（实际可流通股数）。
+    ``strict`` 仅供需要区分“真实空结果”和“源失败”的只读组合层使用；
+    默认保持既有调用方的空结果降级语义。
     """
     trade_date = trade_date or datetime.now().strftime("%Y-%m-%d")
     history = [{
@@ -1572,7 +1608,7 @@ def lockup_expiry(code: str, trade_date: str | None = None, forward_days: int = 
         "ratio": r.get("FREE_RATIO", 0),
     } for r in eastmoney_datacenter(
         "RPT_LIFT_STAGE", filter_str=f'(SECURITY_CODE="{code}")',
-        page_size=15, sort_columns="FREE_DATE", sort_types="-1")]
+        page_size=15, sort_columns="FREE_DATE", sort_types="-1", strict=strict)]
 
     end = (datetime.strptime(trade_date, "%Y-%m-%d") + timedelta(days=forward_days)).strftime("%Y-%m-%d")
     upcoming = [{
@@ -1582,7 +1618,7 @@ def lockup_expiry(code: str, trade_date: str | None = None, forward_days: int = 
     } for r in eastmoney_datacenter(
         "RPT_LIFT_STAGE",
         filter_str=f'(SECURITY_CODE="{code}")(FREE_DATE>=\'{trade_date}\')(FREE_DATE<=\'{end}\')',
-        page_size=20, sort_columns="FREE_DATE", sort_types="1")]
+        page_size=20, sort_columns="FREE_DATE", sort_types="1", strict=strict)]
     return {"history": history, "upcoming": upcoming}
 
 

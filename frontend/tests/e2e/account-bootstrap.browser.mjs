@@ -296,7 +296,7 @@ async function runE2E() {
       true,
       "preview stays disabled while prefilling",
     );
-    await page.fill("input[type='date']", "2026-08-01");
+    await page.fill("#bootstrap-ledger-start", "2026-08-01");
     assert.equal(
       await previewBtn.isDisabled(),
       true,
@@ -317,13 +317,13 @@ async function runE2E() {
     assert.equal(commitCount, 0, "prefill must never trigger commit");
 
     // ledger_start_at 仍是独立必填门：prefill 完成后为空也不得 Preview。
-    await page.fill("input[type='date']", "");
+    await page.fill("#bootstrap-ledger-start", "");
     assert.equal(
       await previewBtn.isDisabled(),
       true,
       "preview stays disabled without ledger_start_at after prefilling",
     );
-    await page.fill("input[type='date']", "2026-08-01");
+    await page.fill("#bootstrap-ledger-start", "2026-08-01");
     assert.equal(
       await previewBtn.isDisabled(),
       false,

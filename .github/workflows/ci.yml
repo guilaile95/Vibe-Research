@@ -396,6 +396,11 @@ jobs:
         env:
           PYTHON: python
         run: npm run test:e2e:decision-inbox
+      - name: Run Research Event Calendar real E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:research-event-calendar
       - name: Run DCR1 Decision Commit valid readback E2E
         working-directory: frontend
         env:
