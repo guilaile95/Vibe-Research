@@ -7,6 +7,7 @@ import type {
   FullMarketQuery,
   FullMarketResult,
   DiscoverySnapshot,
+  DragonTigerDiscovery,
 } from "./recoveredMarketTypes.ts";
 
 export const recoveredMarketApi = {
@@ -49,4 +50,9 @@ export const recoveredMarketApi = {
       signal,
       unwrapData: false,
     }),
+
+  getDragonTigerDiscovery: (tradeDate?: string, signal?: AbortSignal) => {
+    const qs = tradeDate ? `?trade_date=${encodeURIComponent(tradeDate)}` : "";
+    return get<DragonTigerDiscovery>(`/market/dragon-tiger${qs}`, { signal });
+  },
 };

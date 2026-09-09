@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 import alert_rule_router
 import app as app_module
 import astock
+import dragon_tiger_discovery as dtd
 import northbound_capital_flow as ncf
 import technical_indicators as ti
 
@@ -133,6 +134,28 @@ def get_technical_indicators(
 northbound_history_router = APIRouter(prefix="/api/market/northbound", tags=["market"])
 
 
+dragon_tiger_discovery_router = APIRouter(prefix="/api/market", tags=["market"])
+
+
+@dragon_tiger_discovery_router.get("/dragon-tiger")
+def market_dragon_tiger(trade_date: str | None = Query(None)):
+    """Market-level Dragon-Tiger report rows; read-only and explicitly bounded."""
+    try:
+        requested = dtd.normalize_trade_date(trade_date)
+    except dtd.DragonTigerDiscoveryValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    key = ("dragon_tiger_market", requested or "latest")
+    hit = app_module._DC_CACHE.get(key, 300)
+    if hit is not app_module._CACHE_MISS:
+        return {"data": hit}
+
+    data = dtd.build_dragon_tiger_discovery(requested)
+    if data.get("status") != "UNAVAILABLE":
+        app_module._DC_CACHE.set(key, data)
+    return {"data": data}
+
+
 @northbound_history_router.get("/history")
 def market_northbound_history(
     days: int = Query(20, description="历史交易日点数，仅支持 10、20、30"),
@@ -195,3 +218,4 @@ def market_northbound_history(
 router.routes.extend(alert_rule_router.router.routes)
 router.routes.extend(screener_router.router.routes)
 router.routes.extend(northbound_history_router.routes)
+router.routes.extend(dragon_tiger_discovery_router.routes)
