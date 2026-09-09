@@ -3,10 +3,12 @@ import { Link } from "react-router-dom";
 import { Plus, ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle, Sparkles, RotateCw, Pencil } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { PortfolioRiskContextCard } from "@/components/portfolio/PortfolioRiskContextCard";
 import {
   api,
   ApiError,
   type PortfolioData,
+  type PortfolioRiskContext,
   type PortfolioAdviceHoldingAdvice,
   type PortfolioAdviceHoldingAction,
   type PortfolioAdviceAccountAction,
@@ -509,6 +511,8 @@ export function Portfolio() {
   // P1-CASH1：canonical ledger cash readback（bootstrap 后无需重复填写即可见正常资金状态）。
   const [acctReality, setAcctReality] = useState<AccountReality | null>(null);
   const [acctRealityError, setAcctRealityError] = useState<string | null>(null);
+  const [riskContext, setRiskContext] = useState<PortfolioRiskContext | null>(null);
+  const [riskContextError, setRiskContextError] = useState<string | null>(null);
   const [acctOpen, setAcctOpen] = useState(false);
   const [accTotal, setAccTotal] = useState("");
   const [accCash, setAccCash] = useState("");
@@ -545,18 +549,29 @@ export function Portfolio() {
     await usePortfolioAdviceTaskStore.getState().restore();
   }, []);
 
+  const loadRiskContext = useCallback(async () => {
+    try {
+      setRiskContext(await api.portfolioRiskContext());
+      setRiskContextError(null);
+    } catch (e) {
+      setRiskContext(null);
+      setRiskContextError(e instanceof ApiError ? e.message : "组合风险概览读取失败");
+    }
+  }, []);
+
   const load = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
     try {
       setData(manual ? await api.refreshPortfolio() : await api.portfolio());
       setErr(null);
       await refreshSavedAdvice();
+      await loadRiskContext();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "加载失败");
     } finally {
       if (manual) setRefreshing(false);
     }
-  }, [refreshSavedAdvice]);
+  }, [loadRiskContext, refreshSavedAdvice]);
 
   const loadAcct = useCallback(async () => {
     setAcctLoading(true);
@@ -604,11 +619,12 @@ export function Portfolio() {
         setErr(e instanceof ApiError ? e.message : "加载失败");
       }
       await loadAcct();
+      await loadRiskContext();
     };
     boot();
     const t = setInterval(() => load(), REFRESH_MS); // 每半小时自动刷新
     return () => clearInterval(t);
-  }, [load, loadAcct, refreshSavedAdvice]);
+  }, [load, loadAcct, loadRiskContext, refreshSavedAdvice]);
 
   // 数量校验：空值 / 含非数字字符（除负号和小数点）/ 非整数 / <=0 / NaN·Infinity → 拒绝
   const validateShares = (raw: string): number | null => {
@@ -1083,6 +1099,7 @@ export function Portfolio() {
       </GlassCard>
 
       {data && <SecurityExposureCard portfolio={data} basis={exposureBasis} />}
+      <PortfolioRiskContextCard context={riskContext} error={riskContextError} />
 
       {/* 账户资金填写窗口 */}
       {acctOpen && (

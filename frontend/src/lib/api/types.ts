@@ -912,6 +912,128 @@ export interface PortfolioData {
 }
 
 
+export interface PortfolioRiskContextSecurity {
+  code: string;
+  name: string;
+  shares: number;
+  market_value: number | null;
+  quote_status: "AVAILABLE" | "UNAVAILABLE" | string;
+  weight_in_tracked_stock_pct: number | null;
+  account_exposure_pct: number | null;
+  industry: string | null;
+  industry_status: "CLASSIFIED" | "UNKNOWN" | "UNAVAILABLE" | "PENDING" | string;
+}
+
+export interface PortfolioRiskContext {
+  schema_version: "portfolio_risk_context.v0.1" | string;
+  status: "NORMAL" | "PARTIAL" | "UNAVAILABLE" | string;
+  as_of: string;
+  fetched_at: string;
+  holding_count: number;
+  position_authority_state: string;
+  securities: PortfolioRiskContextSecurity[];
+  position_context: {
+    status: string;
+    authority_state: string;
+    holding_count: number;
+    source?: string;
+    limitations?: string[];
+  };
+  quote_coverage: {
+    status: "COMPLETE" | "PARTIAL" | "EMPTY" | "UNAVAILABLE" | string;
+    usable_holdings: number;
+    total_holdings: number;
+    complete: boolean;
+    usable_market_value: number | null;
+    source?: string;
+  };
+  account_fact_status: {
+    status: string;
+    total_assets: { status: string; value: number | null; confirmation_id: string | null; reason_code?: string };
+    cash: { status: string; value: number | null; confirmation_id: string | null; reason_code?: string };
+    aggregate_canonical?: boolean;
+    confirmation_id: string | null;
+  };
+  security_concentration: {
+    status: "COMPLETE" | "PARTIAL" | "UNKNOWN" | string;
+    evaluable: boolean;
+    reason_code: string | null;
+    semantics?: string;
+    denominator_market_value: number | null;
+    top1_pct: number | null;
+    top3_pct: number | null;
+    top5_pct: number | null;
+    holdings_ranked: Array<{
+      code: string;
+      name: string;
+      market_value: number | null;
+      weight_in_tracked_stock_pct: number | null;
+    }>;
+    limitations?: string[];
+  };
+  account_exposure: {
+    status: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE" | string;
+    denominator: {
+      value: number | null;
+      source: string;
+      authority_state: string;
+      semantics: string;
+    };
+    tracked_stock_market_value: number | null;
+    tracked_stock_account_pct: number | null;
+    known_security_count: number;
+    limitations?: string[];
+  };
+  cash_buffer: {
+    status: "AVAILABLE" | "UNAVAILABLE" | string;
+    value: number | null;
+    ratio_pct: number | null;
+    confirmation_id: string | null;
+    reason_code: string | null;
+    semantics: string;
+  };
+  industry_exposure: {
+    status: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE" | "EMPTY" | string;
+    provider: string;
+    membership_semantics: string;
+    denominator_market_value: number | null;
+    items: Array<{
+      industry: string;
+      securities: string[];
+      market_value: number;
+      weight_in_tracked_stock_pct: number | null;
+      member_count: number;
+    }>;
+    reason_code: string | null;
+    limitations?: string[];
+  };
+  industry_coverage: {
+    status: string;
+    total_holdings: number;
+    quote_usable_holdings: number;
+    industry_classified_holdings: number;
+    unknown_industry_holdings: number;
+    coverage_ratio: number | null;
+    provider: string;
+    membership_semantics: string;
+    reason_code: string | null;
+  };
+  single_trade_risk_budget_capability: {
+    status: string;
+    policy_version: string;
+    rates: Record<string, number>;
+    rates_pct: Record<string, number | null>;
+    source: string;
+    semantics: string;
+  };
+  portfolio_aggregated_risk_budget: { status: string; reason_code: string; semantics: string };
+  drawdown: { status: string; nav_authority: string; nav_canonical: boolean; message: string };
+  stress_test: { status: string; message: string };
+  limitations: string[];
+  writes: { formal_state: number; account: number; position: number; trade: number; portfolio: number };
+}
+
+
 // ---------------------------------------------------------------------------
 // 账户资金（手工填写，GET /api/account-profile 与 PUT /api/account-profile）
 // ---------------------------------------------------------------------------

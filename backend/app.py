@@ -82,6 +82,7 @@ import position_reality_router
 import position_reality_service as prs
 import account_reality_router
 import cash_event_router
+import portfolio_risk_context_router
 import campaign_router
 import campaign_ai_draft_router
 import holdings_campaign_composition_router
@@ -424,6 +425,8 @@ app.include_router(position_reality_router.router)
 # P0-S1B-A 账户现实层（只读）：cash 双源 / settled 定价 / settled NAV candidate
 app.include_router(account_reality_router.router)
 app.include_router(cash_event_router.router)
+# PLANNING-PARITY-PORTFOLIO-RISK1-R1: current, read-only portfolio context.
+app.include_router(portfolio_risk_context_router.router)
 app.include_router(campaign_router.router)
 # #206 explicit server-owned Campaign AI Draft; ephemeral witness only.
 app.include_router(campaign_ai_draft_router.router)

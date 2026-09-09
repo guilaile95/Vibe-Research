@@ -60,6 +60,7 @@ import type {
   FilterProfile,
   InterestTag,
   PortfolioData,
+  PortfolioRiskContext,
   PositionBootstrapInput,
   PositionBootstrapPreview,
   PositionBootstrapCommitResult,
@@ -781,6 +782,8 @@ export const api = {
   saveIntelDigest: (payload: IntelDigestSaveIn, signal?: AbortSignal) =>
     request<IntelDigestSaveResult>("/intel-digests", "POST", payload, { signal }),
   portfolio: () => get<PortfolioData>("/portfolio"),
+  /** PLANNING-PARITY-PORTFOLIO-RISK1-R1：只读组合风险事实，不写任何 authority。 */
+  portfolioRiskContext: (signal?: AbortSignal) => get<PortfolioRiskContext>("/portfolio/risk-context", { signal }),
   /**
    * 账户初始化（P0-AB2）：仅复用 stable 既有 position reality authority。
    * preview 零写；commit 由用户显式确认后才允许调用。

@@ -34,6 +34,7 @@
     "test:e2e:decision-inbox": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/decision-inbox.browser.mjs",
     "test:e2e:research-event-calendar": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/research-event-calendar.browser.mjs",
     "test:e2e:account-bootstrap": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/account-bootstrap.browser.mjs",
+    "test:e2e:portfolio-risk-context": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/portfolio-risk-context.browser.mjs",
     "test:e2e:portfolio-advice-error": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/portfolio-advice-error.browser.mjs",
     "test:e2e:signals": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/signals-gpu-rent.browser.mjs",
     "test:e2e:historical-signal-validation": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/historical-signal-validation.browser.mjs",
