@@ -7,6 +7,7 @@ import {
   factorIcText,
   factorObservationHasCoverageLimitation,
   factorRatioText,
+  factorValidationReasonLabel,
   factorReturnText,
   factorValidationStatusLabel,
 } from "@/lib/factorValidationView";
@@ -167,6 +168,16 @@ export function FactorValidationPanel() {
             <FactorMetric label="Pair 总数" value={undefined} format={() => String(aggregate.pair_count_total)} />
           </div>
 
+          <div className="rounded-xl border border-border/60 bg-muted/15 p-4 text-xs leading-relaxed" data-testid="factor-validation-date-eligibility">
+            <div className="mb-1 font-medium">当日横截面日期资格</div>
+            <div className="flex flex-wrap gap-x-5 gap-y-1">
+              <span>当日有效横截面累计：<span className="font-mono">{sample.exact_date_rows_total}</span></span>
+              <span>排除旧日期数据：<span className="font-mono">{sample.stale_source_rows_total}</span></span>
+              <span>Full Market as-of rows：<span className="font-mono">{sample.source_asof_rows_total}</span></span>
+            </div>
+            <div className="mt-1 text-muted-foreground">当日横截面只包含 factor date 当天在 RDP 中有真实观测的证券；只有更早最后已知数据的证券不会参与当日 IC 或 High-Low。</div>
+          </div>
+
           <div className="rounded-xl border border-border/60 bg-muted/15 p-4 text-xs leading-relaxed">
             <div className="mb-2 flex flex-wrap gap-x-5 gap-y-1 font-medium">
               <span>requested：{sample.requested_date_from || "artifact start"} → {sample.requested_date_to || "artifact end"}</span>
@@ -175,8 +186,8 @@ export function FactorValidationPanel() {
               <span>immature：{sample.immature_factor_dates[activeWindow] ?? 0}</span>
               {sample.truncated && <span className="text-warning">已按最多 {sample.max_factor_dates} 个 factor dates 截断</span>}
             </div>
-            <div className="text-muted-foreground">Observed universe：<span className="font-mono">{sample.universe}</span>；不等于历史成分股 Universe。当前研究数据为 <span className="font-mono">{report.source.adjustment}</span>；历史统计不等于未来预测。</div>
-            <div className="mt-1 text-muted-foreground">Parity：{report.parity.security_factor_values_checked} 个 security-factor values · {report.parity.factor_dates_checked} 个日期 · mismatches {report.parity.mismatches ?? "—"}。</div>
+            <div className="text-muted-foreground">Observed universe：<span className="font-mono">{sample.universe}</span>；eligibility：factor date 当天存在 stored observation；不等于历史成分股 Universe。当前研究数据为 <span className="font-mono">{report.source.adjustment}</span>；历史统计不等于未来预测。</div>
+            <div className="mt-1 text-muted-foreground">Parity：{report.parity.security_factor_values_checked} 个 source rows · {report.parity.exact_date_factor_values_checked ?? "—"} 个 exact-date factor values · {report.parity.factor_dates_checked} 个日期 · mismatches {report.parity.mismatches ?? "—"}。</div>
           </div>
 
           <div className="rounded-xl border border-border/60 bg-muted/15 p-4">
@@ -194,9 +205,9 @@ export function FactorValidationPanel() {
             <details open className="mt-3 rounded-lg border border-border/60 bg-background/30 p-3">
               <summary className="cursor-pointer text-sm font-medium">展开历史横截面（{aggregate.observations.length} 个 factor dates）</summary>
               <div className="mt-3 overflow-x-auto">
-                <table className="w-full min-w-[1050px] text-left text-xs" data-testid="factor-validation-observations">
-                  <thead className="border-b border-border/60 text-muted-foreground"><tr><th className="px-2 py-2">日期</th><th className="px-2 py-2">Universe</th><th className="px-2 py-2">Pairs</th><th className="px-2 py-2">IC</th><th className="px-2 py-2">High</th><th className="px-2 py-2">Low</th><th className="px-2 py-2">Spread</th><th className="px-2 py-2">状态 / reason</th></tr></thead>
-                  <tbody>{aggregate.observations.map((observation) => <tr key={`${observation.factor_date}-${observation.forward_window}`} className="border-b border-border/40 last:border-0"><td className="px-2 py-2 font-mono">{observation.factor_date}</td><td className="px-2 py-2">{observation.universe_count} / {observation.factor_non_null_count}</td><td className="px-2 py-2">{observation.pair_count}</td><td className="px-2 py-2 font-mono">{factorIcText(observation.rank_ic)}</td><td className="px-2 py-2 font-mono">{factorReturnText(observation.high_bucket_mean_return)}</td><td className="px-2 py-2 font-mono">{factorReturnText(observation.low_bucket_mean_return)}</td><td className="px-2 py-2 font-mono">{factorReturnText(observation.high_minus_low_spread)}</td><td className="px-2 py-2"><span className={cn("rounded-full px-2 py-0.5", observation.status === "EVALUATED" ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")}>{factorValidationStatusLabel(observation.status)}</span>{observation.reason && <span className="ml-2 text-muted-foreground">{observation.reason}</span>}{factorObservationHasCoverageLimitation(observation) && <div className="mt-1 text-warning">存在排除：factor null {observation.factor_null_count} · immature {observation.immature_outcome_count}</div>}</td></tr>)}</tbody>
+                <table className="w-full min-w-[1250px] text-left text-xs" data-testid="factor-validation-observations">
+                  <thead className="border-b border-border/60 text-muted-foreground"><tr><th className="px-2 py-2">日期</th><th className="px-2 py-2">Source as-of</th><th className="px-2 py-2">当日有效横截面</th><th className="px-2 py-2">旧日期排除</th><th className="px-2 py-2">Pairs</th><th className="px-2 py-2">IC</th><th className="px-2 py-2">High</th><th className="px-2 py-2">Low</th><th className="px-2 py-2">Spread</th><th className="px-2 py-2">状态 / 说明</th></tr></thead>
+                  <tbody>{aggregate.observations.map((observation) => <tr key={`${observation.factor_date}-${observation.forward_window}`} className="border-b border-border/40 last:border-0"><td className="px-2 py-2 font-mono">{observation.factor_date}</td><td className="px-2 py-2">{observation.source_asof_row_count}</td><td className="px-2 py-2">{observation.exact_date_universe_count} / {observation.factor_non_null_count}</td><td className="px-2 py-2 text-warning">{observation.stale_source_row_count}</td><td className="px-2 py-2">{observation.pair_count}</td><td className="px-2 py-2 font-mono">{factorIcText(observation.rank_ic)}</td><td className="px-2 py-2 font-mono">{factorReturnText(observation.high_bucket_mean_return)}</td><td className="px-2 py-2 font-mono">{factorReturnText(observation.low_bucket_mean_return)}</td><td className="px-2 py-2 font-mono">{factorReturnText(observation.high_minus_low_spread)}</td><td className="px-2 py-2"><span className={cn("rounded-full px-2 py-0.5", observation.status === "EVALUATED" ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")}>{factorValidationStatusLabel(observation.status)}</span>{observation.reason && <span className="ml-2 text-muted-foreground">{factorValidationReasonLabel(observation.reason)}</span>}{factorObservationHasCoverageLimitation(observation) && <div className="mt-1 text-warning">存在排除：旧日期数据 {observation.stale_source_row_count} · factor null {observation.factor_null_count} · immature {observation.immature_outcome_count}</div>}</td></tr>)}</tbody>
                 </table>
               </div>
               {!aggregate.observations.length && <p className="py-4 text-center text-sm text-muted-foreground">该范围没有 RDP factor date。</p>}

@@ -90,6 +90,10 @@ async function seedRdp() {
   for (let index = 0; index < 90; index += 1) {
     const tradeDate = new Date(start + index * 86400000).toISOString().slice(0, 10);
     for (let codeIndex = 0; codeIndex < 61; codeIndex += 1) {
+      // Temporary missing factor-date observation: Full Market keeps the
+      // T-1 as-of row, while Factor Validation must exclude it at T and
+      // allow the security back in at T+1.
+      if (codeIndex === 59 && index === 60) continue;
       // One observed security ends early: its factor can be visible but its
       // forward outcome is immature, proving the null/immature path.
       if (codeIndex === 60 && index > 63) continue;
@@ -203,7 +207,25 @@ async function run() {
     assert.equal(direct.parity.source_metric, "return_5d");
     assert.equal(direct.parity.mismatches, 0);
     assert.equal(direct.parity.security_factor_values_checked, 5490);
+    assert.equal(direct.parity.exact_date_factor_values_checked, 5463);
+    const fullMarketResponse = await fetch(`http://127.0.0.1:${backendPort}/api/screener/full-market?as_of=2026-03-02&latest=false&limit=1000&offset=0`);
+    assert.equal(fullMarketResponse.status, 200);
+    const fullMarket = await fullMarketResponse.json();
+    const staleSourceRow = fullMarket.rows.find((row) => row.code === "600060");
+    assert.equal(staleSourceRow.latest_date, "2026-03-01");
     const observations = direct.results["5"].observations;
+    const missingDateObservation = observations.find((item) => item.factor_date === "2026-03-02");
+    assert.equal(missingDateObservation.source_asof_row_count, 61);
+    assert.equal(missingDateObservation.exact_date_universe_count, 60);
+    assert.equal(missingDateObservation.universe_count, 60);
+    assert.equal(missingDateObservation.stale_source_row_count, 1);
+    assert.equal(missingDateObservation.factor_null_count, 0);
+    assert.equal(missingDateObservation.pair_count, 59);
+    assert.match(missingDateObservation.reason, /STALE_AT_FACTOR_DATE/);
+    const reentryObservation = observations.find((item) => item.factor_date === "2026-03-03");
+    assert.equal(reentryObservation.exact_date_universe_count, 61);
+    assert.equal(reentryObservation.stale_source_row_count, 0);
+    assert.equal(reentryObservation.pair_count, 60);
     assert.ok(observations.some((item) => item.rank_ic > 0), "fixture has positive IC");
     assert.ok(observations.some((item) => item.rank_ic < 0), "fixture has negative IC");
     assert.equal(observations.find((item) => item.factor_date === "2026-03-22").rank_ic, 0);
@@ -238,6 +260,9 @@ async function run() {
     const desktopBody = await page.locator("body").innerText();
     assert.match(desktopBody, /RDP_OBSERVED_CROSS_SECTION/);
     assert.match(desktopBody, /UNADJUSTED/);
+    assert.match(desktopBody, /当日有效横截面累计/);
+    assert.match(desktopBody, /排除旧日期数据/);
+    assert.match(desktopBody, /因子日期当天没有 RDP 记录/);
     assert.match(desktopBody, /0\.0000/);
     assert.match(desktopBody, /—/);
     await page.screenshot({ path: path.join(screenshotDir, "factor-validation-desktop.png"), fullPage: false });
