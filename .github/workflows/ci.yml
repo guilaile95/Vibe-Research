@@ -157,6 +157,12 @@ jobs:
         working-directory: frontend
         run: npm run test:e2e:patterns
 
+      - name: Run Factor Validation E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+        run: npm run test:e2e:factor-validation
+
       - name: Run Full-Market Discovery E2E
         working-directory: frontend
         run: npm run test:e2e:discovery

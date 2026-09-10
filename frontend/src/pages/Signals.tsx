@@ -14,11 +14,13 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { benchmarkNegativeSummary, metricText, validationStatusLabel } from "@/lib/historicalSignalValidationView";
+import { FactorValidationPanel } from "@/components/signals/FactorValidationPanel";
 
 // 产业信号：每期从公开零鉴权数据源移植一个「一句话信号」小栏目，逐期在此添加。
 const TABS = [
   { key: "gpu-rent", label: "GPU租金", icon: Thermometer, desc: "近一年走势 + 现货中位价 + 远期资金预期" },
   { key: "validation", label: "历史验证", icon: FlaskConical, desc: "固定信号定义的历史观察统计（研究用途）" },
+  { key: "factor-validation", label: "因子有效性", icon: LineChart, desc: "既有 RDP 指标的横截面 IC 与分桶描述统计" },
 ];
 
 // 各型号折线颜色（主题橙留给旗舰 B200；中性灰文字两种主题下都可读）
@@ -664,6 +666,7 @@ export function Signals() {
         </div>
         {cur.key === "gpu-rent" && <GpuRentPanel />}
         {cur.key === "validation" && <HistoricalSignalValidationPanel />}
+        {cur.key === "factor-validation" && <FactorValidationPanel />}
       </GlassCard>
 
       <p className="mt-3 text-[11px] text-muted-foreground/60">
