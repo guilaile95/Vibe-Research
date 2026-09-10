@@ -558,6 +558,13 @@ jobs:
           PIP_NO_INDEX: ""
         run: |
           python -m piptools compile --no-emit-index-url --output-file=requirements-dev-windows-py312.lock.txt requirements.txt requirements-dev.txt
+          $lockFile = "requirements-dev-windows-py312.lock.txt"
+          $lockText = [System.IO.File]::ReadAllText($lockFile)
+          $lockText = $lockText.Replace(
+            "#    pip-compile --no-emit-index-url --no-index --output-file=requirements-dev-windows-py312.lock.txt requirements-dev.txt requirements.txt",
+            "#    pip-compile --no-emit-index-url --output-file=requirements-dev-windows-py312.lock.txt requirements-dev.txt requirements.txt"
+          )
+          [System.IO.File]::WriteAllText($lockFile, $lockText, [System.Text.UTF8Encoding]::new($false))
           git diff --exit-code -- requirements-dev-windows-py312.lock.txt
 
       - name: Install backend dependencies (exact Windows lock)
