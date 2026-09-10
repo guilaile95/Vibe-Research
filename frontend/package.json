@@ -38,6 +38,7 @@
     "test:e2e:portfolio-advice-error": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/portfolio-advice-error.browser.mjs",
     "test:e2e:signals": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/signals-gpu-rent.browser.mjs",
     "test:e2e:historical-signal-validation": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/historical-signal-validation.browser.mjs",
+    "test:e2e:factor-validation": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/factor-validation.browser.mjs",
     "test:e2e:account-execution-policy": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/account-execution-policy.browser.mjs",
     "test:e2e:local-api-security": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/local-api-security.browser.mjs",
     "test:e2e:hr1-vertical": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/hr1-production-vertical.browser.mjs",

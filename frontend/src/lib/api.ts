@@ -92,6 +92,9 @@ import type {
   HistoricalSignalValidationRegistry,
   HistoricalSignalValidationReport,
   HistoricalSignalValidationRequest,
+  FactorValidationRegistry,
+  FactorValidationReport,
+  FactorValidationRequest,
   NorthboundCapitalFlow,
   TechnicalIndicators,
   TopRiskAnalysis,
@@ -777,6 +780,10 @@ export const api = {
     get<HistoricalSignalValidationRegistry>("/signals/validation/registry", { signal }),
   historicalSignalValidationEvaluate: (payload: HistoricalSignalValidationRequest, signal?: AbortSignal) =>
     request<HistoricalSignalValidationReport>("/signals/validation/evaluate", "POST", payload, { signal, unwrapData: false }),
+  factorValidationRegistry: (signal?: AbortSignal) =>
+    get<FactorValidationRegistry>("/signals/factor-validation/registry", { signal }),
+  factorValidationEvaluate: (payload: FactorValidationRequest, signal?: AbortSignal) =>
+    request<FactorValidationReport>("/signals/factor-validation/evaluate", "POST", payload, { signal, unwrapData: false }),
   getIntelDigestLatest: (sectorKey: string) =>
     get<IntelDigestLatestResult>(`/intel-digests/latest?sector_key=${encodeURIComponent(sectorKey)}`, { unwrapData: false }),
   saveIntelDigest: (payload: IntelDigestSaveIn, signal?: AbortSignal) =>

@@ -1616,6 +1616,121 @@ export interface HistoricalSignalValidationRegistry {
 
 
 // ---------------------------------------------------------------------------
+// Cross-Sectional Factor Validation v0.1 (research-only, RDP-only)
+// ---------------------------------------------------------------------------
+
+export interface FactorValidationDefinition {
+  factor_id: string;
+  label: string;
+  source_metric: string;
+  higher_value_semantics: string;
+  required_history: number;
+}
+
+export interface FactorValidationRequest {
+  factor_id: string;
+  forward_windows?: number[];
+  date_from?: string | null;
+  date_to?: string | null;
+}
+
+export interface FactorValidationObservation {
+  factor_date: string;
+  forward_window: number;
+  universe_count: number;
+  factor_non_null_count: number;
+  mature_outcome_count: number;
+  pair_count: number;
+  factor_null_count: number;
+  immature_outcome_count: number;
+  invalid_outcome_count: number;
+  rank_ic: number | null;
+  high_bucket_count: number;
+  high_bucket_mean_return: number | null;
+  low_bucket_count: number;
+  low_bucket_mean_return: number | null;
+  high_minus_low_spread: number | null;
+  status: string;
+  reason: string | null;
+}
+
+export interface FactorValidationAggregate {
+  forward_window: number;
+  factor_dates_attempted: number;
+  factor_dates_evaluated: number;
+  immature_factor_dates: number;
+  mean_ic: number | null;
+  median_ic: number | null;
+  ic_stddev: number | null;
+  positive_ic_date_ratio: number | null;
+  mean_high_minus_low_spread: number | null;
+  median_high_minus_low_spread: number | null;
+  positive_spread_date_ratio: number | null;
+  pair_count_total: number;
+  sample_start: string | null;
+  sample_end: string | null;
+  observations: FactorValidationObservation[];
+}
+
+export interface FactorValidationReport {
+  schema_version: string;
+  status: "normal" | "unavailable" | string;
+  research_only: true;
+  generated_at: string;
+  factor: FactorValidationDefinition;
+  request: FactorValidationRequest & { forward_windows: number[] };
+  source: {
+    dataset_id: string | null;
+    provider_id: string | null;
+    adjustment: string | null;
+    source_kind: string | null;
+    source_name: string | null;
+    license_status: string | null;
+    artifact_sha256: string | null;
+    query_contract: string;
+  };
+  sample: {
+    universe: string;
+    requested_date_from: string | null;
+    requested_date_to: string | null;
+    requested_range?: { start: string; end: string };
+    effective_date_from: string | null;
+    effective_date_to: string | null;
+    artifact_coverage?: { start: string; end: string; row_count: number; code_count: number };
+    factor_dates_attempted: number;
+    factor_dates_evaluated: Record<string, number>;
+    immature_factor_dates: Record<string, number>;
+    max_factor_dates: number;
+    truncated: boolean;
+    excluded_observations: number;
+  };
+  parity: {
+    status: string;
+    source_contract: string;
+    source_metric: string;
+    mode: string;
+    comparison?: string;
+    artifact_sha256: string | null;
+    factor_dates_checked: number;
+    security_factor_values_checked: number;
+    mismatches: number | null;
+  };
+  results: Record<string, FactorValidationAggregate>;
+  historical_validity: { status: string; reasons: string[] };
+  limitations: string[];
+  formal_state_write: { performed: false; scope: string };
+}
+
+export interface FactorValidationRegistry {
+  schema_version: string;
+  research_only: true;
+  factors: FactorValidationDefinition[];
+  forward_windows: number[];
+  limitations: string[];
+}
+
+
+// ---------------------------------------------------------------------------
 // 北向资金（GET /api/market/northbound）
 // ---------------------------------------------------------------------------
 
