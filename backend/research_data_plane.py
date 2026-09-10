@@ -102,7 +102,7 @@ _PATTERN_EVENT_REGISTRY = (
     {
         "event_type": "volume_surge",
         "source_trigger_type": "volume_spike",
-        "label": "5/20 日均量比达到 2.0",
+        "label": "5/20 日均量比超过 2.0",
     },
 )
 _PATTERN_EVENT_TYPES = frozenset(item["event_type"] for item in _PATTERN_EVENT_REGISTRY)
@@ -1164,7 +1164,7 @@ def _evaluate_pattern_record(
                 unavailable(spec, "ZERO_VOLUME_BASELINE")
             else:
                 ratio = avg_volume5 / avg_volume20
-                if ratio >= 2.0:
+                if ratio > 2.0:
                     matched(
                         spec,
                         {
@@ -1173,7 +1173,7 @@ def _evaluate_pattern_record(
                             "avg_volume_20": avg_volume20,
                             "volume_ratio_5_20": ratio,
                             "threshold": 2.0,
-                            "comparison": "avg_volume_5 / avg_volume_20 >= 2.0",
+                            "comparison": "avg_volume_5 / avg_volume_20 > 2.0",
                         },
                     )
 

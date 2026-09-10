@@ -610,7 +610,7 @@ export function Screener() {
                 <option value="close_below_20d_low">收盘跌破20日低点</option>
                 <option value="sma20_cross_above_sma60">SMA20 上穿 SMA60</option>
                 <option value="sma20_cross_below_sma60">SMA20 下穿 SMA60</option>
-                <option value="volume_surge">5/20 日均量比达到 2.0</option>
+                <option value="volume_surge">5/20 日均量比超过 2.0</option>
               </select>
             </label>
           </div>

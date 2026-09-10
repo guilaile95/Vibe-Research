@@ -201,7 +201,7 @@ class TestTriggers:
         types = [t["type"] for t in result["triggers"]]
         assert "volume_spike" in types
 
-    def test_volume_spike_includes_exact_threshold(self):
+    def test_volume_spike_uses_strict_gt_two_boundary(self):
         # 24 个 1000 加上今天 11000：SMA(5)=3000，SMA(20)=1500，边界比值正好为 2.0。
         vols = [1000] * 24 + [11000]
         closes = [10.0] * 25
@@ -216,7 +216,7 @@ class TestTriggers:
         )
         types = [t["type"] for t in result["triggers"]]
         assert result["latest"]["volume_ratio_5_20"] == pytest.approx(2.0)
-        assert "volume_spike" in types
+        assert "volume_spike" not in types
 
 
 # ── 无未来函数 ────────────────────────────────────────────────────────

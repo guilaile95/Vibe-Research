@@ -73,6 +73,8 @@ test("Screener exposes Pattern Discovery as a same-level read-only mode", () => 
   assert.match(source, /data-testid="pattern-results"/);
   assert.match(source, /data-testid="pattern-not-evaluable"/);
   assert.match(source, /不可评估（不是未触发）/);
+  assert.match(source, /5\/20 日均量比超过 2\.0/);
+  assert.doesNotMatch(source, /5\/20 日均量比达到 2\.0/);
   assert.match(source, /candidateWorkspaceHref\(event\.code\)/);
 });
 
