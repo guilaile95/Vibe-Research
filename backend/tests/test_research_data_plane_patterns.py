@@ -19,7 +19,13 @@ def _write_pattern_fixture(tmp_path: Path, *, include_short: bool = True) -> tup
         writer = csv.writer(handle)
         writer.writerow(["code", "trade_date", "open", "high", "low", "close", "volume"])
         start = date(2026, 1, 1)
-        for code, direction in (("000001", "up"), ("000002", "down"), ("000003", "flat")):
+        for code, direction in (
+            ("000001", "up"),
+            ("000002", "down"),
+            ("000003", "flat"),
+            ("000004", "exact-volume"),
+            ("000005", "above-volume"),
+        ):
             rows_by_code[code] = []
             for index in range(66):
                 trade_date = (start + timedelta(days=index)).isoformat()
@@ -29,7 +35,12 @@ def _write_pattern_fixture(tmp_path: Path, *, include_short: bool = True) -> tup
                     close = 1.0
                 else:
                     close = 10.0
-                volume = 100_000.0 if index == 65 and direction != "flat" else 1_000.0
+                if index == 65 and direction == "exact-volume":
+                    volume = 11_000.0
+                elif index == 65 and direction == "above-volume":
+                    volume = 11_001.0
+                else:
+                    volume = 100_000.0 if index == 65 and direction in {"up", "down"} else 1_000.0
                 row = {
                     "code": code,
                     "trade_date": trade_date,
@@ -107,20 +118,30 @@ def test_patterns_reuse_five_existing_triggers_and_match_single_stock_semantics(
     assert result["source_scope"] == {
         "start": "2026-01-01",
         "end": "2026-03-07",
-        "row_count": 208,
-        "code_count": 4,
+        "row_count": 340,
+        "code_count": 6,
     }
-    assert result["evaluable_count"] == 3
+    assert result["evaluable_count"] == 5
     assert result["not_evaluable_count"] == 5
+    assert result["matched_stock_count"] == 3
+    assert result["total_events"] == 7
     assert result["formal_state_write"]["performed"] is False
 
     set_based_keys = {
         (event["code"], event["trade_date"], event["event_type"])
         for event in result["events"]
     }
-    expected = _single_stock_event_keys(rows["000001"], "000001") | _single_stock_event_keys(rows["000002"], "000002")
+    expected = (
+        _single_stock_event_keys(rows["000001"], "000001")
+        | _single_stock_event_keys(rows["000002"], "000002")
+        | _single_stock_event_keys(rows["000005"], "000005")
+    )
     assert set_based_keys == expected
     assert len([event for event in result["events"] if event["code"] == "000001"]) == 3
+    assert not any(event["code"] == "000004" and event["event_type"] == "volume_surge" for event in result["events"])
+    above_boundary = [event for event in result["events"] if event["code"] == "000005" and event["event_type"] == "volume_surge"]
+    assert len(above_boundary) == 1
+    assert above_boundary[0]["evidence"]["volume_ratio_5_20"] > 2.0
     assert {event["evidence"]["source_trigger_type"] for event in result["events"]} == {
         "close_above_20d_high",
         "close_below_20d_low",
@@ -151,11 +172,11 @@ def test_patterns_event_filter_and_pagination_are_bounded_and_deterministic(tmp_
     filtered = rdp.query_patterns(root=root, event_type="volume_surge", limit=10)
 
     assert first["returned_events"] == 1
-    assert first["total_events"] == 6
+    assert first["total_events"] == 7
     assert first["next_offset"] == 1
     assert second["events"][0] != first["events"][0]
     assert filtered["event_type_filter"] == "volume_surge"
-    assert filtered["total_events"] == 2
+    assert filtered["total_events"] == 3
     assert {event["event_type"] for event in filtered["events"]} == {"volume_surge"}
 
 
@@ -172,7 +193,7 @@ def test_patterns_not_evaluable_is_distinct_from_no_trigger(tmp_path):
     assert flat_events == []
 
 
-def test_pattern_volume_event_keeps_the_exact_two_times_boundary():
+def test_pattern_volume_event_uses_strict_gt_two_boundary():
     row = {
         "code": "000001",
         "trade_date": "2026-03-07",
@@ -195,14 +216,23 @@ def test_pattern_volume_event_keeps_the_exact_two_times_boundary():
         "volume": 11000.0,
     }
 
-    events, not_evaluable = rdp._evaluate_pattern_record(
+    exact_events, exact_not_evaluable = rdp._evaluate_pattern_record(
         row,
         (next(item for item in rdp._PATTERN_EVENT_REGISTRY if item["event_type"] == "volume_surge"),),
     )
 
-    assert not not_evaluable
-    assert [event["event_type"] for event in events] == ["volume_surge"]
-    assert events[0]["evidence"]["volume_ratio_5_20"] == pytest.approx(2.0)
+    assert exact_events == []
+    assert exact_not_evaluable == []
+
+    above_events, above_not_evaluable = rdp._evaluate_pattern_record(
+        {**row, "avg_volume5": 3000.1},
+        (next(item for item in rdp._PATTERN_EVENT_REGISTRY if item["event_type"] == "volume_surge"),),
+    )
+
+    assert not above_not_evaluable
+    assert [event["event_type"] for event in above_events] == ["volume_surge"]
+    assert above_events[0]["evidence"]["volume_ratio_5_20"] > 2.0
+    assert above_events[0]["evidence"]["comparison"] == "avg_volume_5 / avg_volume_20 > 2.0"
 
 
 def test_patterns_fail_closed_for_missing_source_and_preserve_duplicate_import_guard(tmp_path):

@@ -4,6 +4,8 @@
 
 日期：2026-09-10
 
+> Correction note: this v0.1 evidence recorded the PR #303 drifted `>= 2.0` volume boundary. It is superseded for the volume contract by `pattern-discovery1-r2-semantic-integrity-2026-09-10.md`; the original record is retained as history.
+
 ## 证据边界
 
 - 当前 stable：`feature/research-system-v01@c4d7513a6313c5368b2f584a13ac1fbf70efdf5e`。
@@ -22,9 +24,9 @@
 | `close_below_20d_low` | `close_below_20d_low` | 当前 close < 不含当前日的前 20 个 low 的最小值 |
 | `sma20_cross_above_sma60` | `sma_golden_cross` | prev SMA20 ≤ prev SMA60 且 current SMA20 > current SMA60 |
 | `sma20_cross_below_sma60` | `sma_death_cross` | prev SMA20 ≥ prev SMA60 且 current SMA20 < current SMA60 |
-| `volume_surge` | `volume_spike` | SMA(volume, 5) / SMA(volume, 20) ≥ 2.0，20 日基准必须 > 0 |
+| `volume_surge` | `volume_spike` | 历史记录中的 PR #303 drift：SMA(volume, 5) / SMA(volume, 20) ≥ 2.0；该边界已由 R2 恢复为严格 > 2.0 |
 
-SMA 与量比 alias 保留在 event evidence 中，避免改动现有单票 API type 名称。量比数值阈值仍为 2.0；单票边界测试补证了精确等于 2.0 时的既有事件语义。
+SMA 与量比 alias 保留在 event evidence 中，避免改动现有单票 API type 名称。原始记录把精确等于 2.0 写成事件语义，这一结论已被 R2 更正；当前合同见 R2 evidence。
 
 没有加入 MACD/KDJ/RSI/BOLL、跳空、评分、预测、leader、BUY/SELL 或推荐语义。
 

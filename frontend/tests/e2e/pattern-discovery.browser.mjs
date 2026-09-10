@@ -182,11 +182,14 @@ async function seedFixture() {
   const rdpRoot = path.join(tempDir, "research-data-plane");
   const lines = ["code,trade_date,open,high,low,close,volume"];
   const start = Date.UTC(2026, 0, 1);
-  for (const [code, kind] of [["000001", "up"], ["000002", "down"], ["000003", "flat"]]) {
+  for (const [code, kind] of [["000001", "up"], ["000002", "down"], ["000003", "flat"], ["000004", "exact-volume"], ["000005", "above-volume"]]) {
     for (let index = 0; index < 66; index += 1) {
       const tradeDate = new Date(start + index * 86400000).toISOString().slice(0, 10);
       const close = kind === "up" && index === 65 ? 20 : kind === "down" && index === 65 ? 1 : 10;
-      const volume = index === 65 && kind !== "flat" ? 100000 : 1000;
+      const volume = index === 65 && kind === "exact-volume" ? 11000
+        : index === 65 && kind === "above-volume" ? 11001
+          : index === 65 && (kind === "up" || kind === "down") ? 100000
+            : 1000;
       lines.push(`${code},${tradeDate},${close},${close + 0.5},${Math.max(0.1, close - 0.5)},${close},${volume}`);
     }
   }
@@ -267,19 +270,28 @@ async function runNormalScenario(browser, fixture, screenshotDir) {
     const response = await responsePromise;
     const payload = await response.json();
     if (response.status() !== 200 || payload.schema_version !== "research-data-plane.patterns.v0.1") throw new Error(`unexpected Pattern response: ${JSON.stringify(payload)}`);
-    if (payload.status !== "partial" || payload.total_events !== 6 || payload.matched_stock_count !== 2 || payload.not_evaluable_count !== 5) {
+    if (payload.status !== "partial" || payload.total_events !== 7 || payload.matched_stock_count !== 3 || payload.not_evaluable_count !== 5) {
       throw new Error(`unexpected Pattern counts: ${JSON.stringify(payload)}`);
     }
     if (payload.events.some((event) => !["close_above_20d_high", "close_below_20d_low", "sma20_cross_above_sma60", "sma20_cross_below_sma60", "volume_surge"].includes(event.event_type))) {
       throw new Error("Pattern response contained an event outside the five-event registry");
     }
+    if (payload.events.some((event) => event.code === "000004" && event.event_type === "volume_surge")) {
+      throw new Error("exact volume ratio 2.0 incorrectly rendered as volume_surge");
+    }
+    const aboveBoundary = payload.events.find((event) => event.code === "000005" && event.event_type === "volume_surge");
+    if (!aboveBoundary || Number(aboveBoundary.evidence?.volume_ratio_5_20) <= 2.0) {
+      throw new Error(`volume ratio above 2.0 did not render as volume_surge: ${JSON.stringify(payload.events)}`);
+    }
     if (apiRequests.filter((url) => url.includes("/api/research-data/patterns")).length !== 1) throw new Error("expected one Pattern request");
     if (apiRequests.some((url) => url.includes("/api/kline") || url.includes("/api/screener/evaluate"))) throw new Error("Pattern scan emitted a per-security request");
     const summary = await page.getByTestId("pattern-summary").innerText();
-    for (const expected of ["部分可评估", "不可评估（不是未触发）", "600519", "INSUFFICIENT_HISTORY", "命中股票 2"]) {
+    for (const expected of ["部分可评估", "不可评估（不是未触发）", "600519", "INSUFFICIENT_HISTORY", "命中股票 3"]) {
       if (!summary.includes(expected)) throw new Error(`Pattern summary missing ${expected}: ${summary}`);
     }
     if (await page.getByTestId("pattern-results").getByRole("link", { name: "000001" }).count() !== 3) throw new Error("same-stock multiple events were compressed");
+    if (await page.getByTestId("pattern-results").getByRole("link", { name: "000004" }).count() !== 0) throw new Error("exact 2.0 boundary rendered a result link");
+    if (await page.getByTestId("pattern-results").getByRole("link", { name: "000005" }).count() !== 1) throw new Error("above 2.0 boundary did not render one result link");
     await page.screenshot({ path: path.join(screenshotDir, "pattern-normal-desktop.png"), fullPage: true });
     await assertNoOverflow(page, "desktop Pattern page");
 

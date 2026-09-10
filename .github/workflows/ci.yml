@@ -153,6 +153,10 @@ jobs:
         working-directory: frontend
         run: npm run test:e2e:dragon-tiger-discovery
 
+      - name: Run Pattern Discovery E2E
+        working-directory: frontend
+        run: npm run test:e2e:patterns
+
       - name: Run Full-Market Discovery E2E
         working-directory: frontend
         run: npm run test:e2e:discovery
@@ -549,6 +553,8 @@ jobs:
 
       - name: Canonical Windows lock check
         working-directory: backend
+        env:
+          PIP_NO_INDEX: "0"
         run: |
           python -m piptools compile --no-emit-index-url --output-file=requirements-dev-windows-py312.lock.txt requirements.txt requirements-dev.txt
           git diff --exit-code -- requirements-dev-windows-py312.lock.txt
