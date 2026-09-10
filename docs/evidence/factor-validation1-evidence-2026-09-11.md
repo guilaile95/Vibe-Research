@@ -4,6 +4,8 @@
 
 本文件记录本轮 bounded implementation、source-to-sink contract 和本地验证证据。GitHub PR、exact-head CI、merge commit 与 post-merge CI 以 live GitHub 和 #203 最终 recovery coordinate 为准，不在此文件中预填未知坐标。
 
+> Historical correction: PR #307's initial implementation allowed stale as-of Full Market rows into a factor-date cross-section. The R2 exact-date cross-section correction is recorded in `factor-validation1-r2-exact-date-cross-section-2026-09-11.md`; this v0.1 evidence remains the historical implementation record.
+
 ## Scope
 
 - source 只使用现有 RDP Parquet / DuckDB 和 `query_full_market(as_of=T, latest=false)`。

@@ -22,12 +22,15 @@ FORWARD_WINDOWS = (5, 20)
 MAX_FACTOR_DATES = 250
 BUCKET_PERCENTILE = 0.20
 UNIVERSE_NAME = "RDP_OBSERVED_CROSS_SECTION"
+UNIVERSE_ELIGIBILITY = "stored observation exists exactly on factor_date"
 FULL_MARKET_CONTRACT = "query_full_market(as_of=T, latest=false)"
 FACTOR_PARITY_MODE = "DIRECT_SOURCE_METRIC_REUSE"
+STALE_SOURCE_ROW_REASON = "STALE_AT_FACTOR_DATE"
+FUTURE_SOURCE_ROW_REASON = "FUTURE_ROW_AT_FACTOR_DATE"
 
 FACTOR_LIMITATIONS = (
     "结果只使用现有本地 RDP artifact；Research Runtime 不是 Canonical Fact Authority。",
-    "RDP_OBSERVED_CROSS_SECTION 是日期 T 在当前 artifact 中实际可见的证券集合，不是历史全市场或历史可投资成分股 Universe。",
+    "Factor date T 的 RDP_OBSERVED_CROSS_SECTION 只包含 latest_date == T 的证券；更早的 as-of rows 会被排除并单独计数，不是历史全市场或历史可投资成分股 Universe。",
     "当前 RDP 为 UNADJUSTED；除权、除息等 corporate action 可能影响历史价格收益。",
     "forward window 按已存储观测条数计，不称严格交易日历 T+5/T+20。",
     "High/Low 是描述性的因子分桶统计，不是 long-short strategy、可交易组合、PnL 或收益承诺。",
@@ -224,6 +227,40 @@ def _finite_or_none(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _exact_date_rows(
+    rows: list[dict[str, Any]], factor_date: str
+) -> tuple[list[dict[str, Any]], int]:
+    """Separate exact-date rows from stale as-of rows without changing Full Market."""
+    target_date = date.fromisoformat(factor_date)
+    exact_rows: list[dict[str, Any]] = []
+    stale_count = 0
+    for row in rows:
+        latest_date = row.get("latest_date")
+        try:
+            observed_date = date.fromisoformat(str(latest_date))
+        except (TypeError, ValueError) as exc:
+            raise rdp.ResearchDataPlaneValidationError(
+                "MISSING_SOURCE_ROW_DATE_AT_FACTOR_DATE"
+            ) from exc
+        if observed_date == target_date:
+            exact_rows.append(row)
+        elif observed_date < target_date:
+            stale_count += 1
+        else:
+            raise rdp.ResearchDataPlaneValidationError(
+                FUTURE_SOURCE_ROW_REASON
+            )
+    return exact_rows, stale_count
+
+
+def _join_reasons(*reasons: str | None) -> str | None:
+    unique: list[str] = []
+    for reason in reasons:
+        if reason and reason not in unique:
+            unique.append(reason)
+    return ";".join(unique) if unique else None
+
+
 def _average_ranks(values: list[float]) -> list[float]:
     ordered = sorted(enumerate(values), key=lambda pair: pair[1])
     ranks = [0.0] * len(values)
@@ -336,6 +373,7 @@ def _unavailable_report(
         },
         "sample": {
             "universe": UNIVERSE_NAME,
+            "universe_eligibility": UNIVERSE_ELIGIBILITY,
             "requested_date_from": request.get("date_from"),
             "requested_date_to": request.get("date_to"),
             "effective_date_from": None,
@@ -345,6 +383,9 @@ def _unavailable_report(
             "immature_factor_dates": {str(window): 0 for window in FORWARD_WINDOWS},
             "max_factor_dates": MAX_FACTOR_DATES,
             "truncated": False,
+            "source_asof_rows_total": 0,
+            "exact_date_rows_total": 0,
+            "stale_source_rows_total": 0,
             "excluded_observations": 0,
         },
         "parity": {
@@ -404,7 +445,11 @@ def evaluate_rdp(
 
     observations_by_window: dict[int, list[dict[str, Any]]] = {window: [] for window in windows}
     parity_rows_checked = 0
+    parity_exact_rows_checked = 0
     parity_dates_checked = 0
+    source_asof_rows_total = 0
+    exact_date_rows_total = 0
+    stale_source_rows_total = 0
     excluded_total = 0
     for factor_date in effective_dates:
         market = _all_full_market_rows(root, factor_date)
@@ -419,9 +464,16 @@ def evaluate_rdp(
         rows = market.get("rows") or []
         parity_dates_checked += 1
         parity_rows_checked += len(rows)
+        exact_rows, stale_source_row_count = _exact_date_rows(rows, factor_date)
+        source_asof_row_count = len(rows)
+        exact_date_universe_count = len(exact_rows)
+        source_asof_rows_total += source_asof_row_count
+        exact_date_rows_total += exact_date_universe_count
+        stale_source_rows_total += stale_source_row_count
+        parity_exact_rows_checked += exact_date_universe_count
         factor_rows = [
             (row, _finite_or_none(row.get(factor["source_metric"])))
-            for row in rows
+            for row in exact_rows
         ]
         factor_non_null = sum(value is not None for _, value in factor_rows)
         for window in windows:
@@ -435,8 +487,7 @@ def evaluate_rdp(
                     factor_null_count += 1
                     continue
                 code = str(row.get("code"))
-                latest_date = str(row.get("latest_date"))
-                current_index = index_by_code.get(code, {}).get(latest_date)
+                current_index = index_by_code.get(code, {}).get(factor_date)
                 code_series = series.get(code, [])
                 if current_index is None or current_index + window >= len(code_series):
                     immature_count += 1
@@ -458,21 +509,36 @@ def evaluate_rdp(
             )
             if factor_non_null == 0:
                 status = "NOT_EVALUABLE"
-                reason = "FACTOR_VALUES_UNAVAILABLE"
+                reason = _join_reasons(
+                    STALE_SOURCE_ROW_REASON if stale_source_row_count else None,
+                    "FACTOR_VALUES_UNAVAILABLE",
+                )
             elif immature_count == factor_non_null and mature_outcomes == 0:
                 status = "IMMATURE_FORWARD_WINDOW"
-                reason = "IMMATURE_FORWARD_WINDOW"
+                reason = _join_reasons(
+                    STALE_SOURCE_ROW_REASON if stale_source_row_count else None,
+                    "IMMATURE_FORWARD_WINDOW",
+                )
             elif rank_ic is None:
                 status = "NOT_EVALUABLE"
-                reason = ic_reason or bucket_reason or "RANK_IC_UNAVAILABLE"
+                reason = _join_reasons(
+                    STALE_SOURCE_ROW_REASON if stale_source_row_count else None,
+                    ic_reason or bucket_reason or "RANK_IC_UNAVAILABLE",
+                )
             else:
                 status = "EVALUATED"
-                reason = "PARTIAL_FORWARD_COVERAGE" if excluded else None
+                reason = _join_reasons(
+                    STALE_SOURCE_ROW_REASON if stale_source_row_count else None,
+                    "PARTIAL_FORWARD_COVERAGE" if excluded else None,
+                )
             observations_by_window[window].append(
                 {
                     "factor_date": factor_date,
                     "forward_window": window,
-                    "universe_count": len(rows),
+                    "source_asof_row_count": source_asof_row_count,
+                    "exact_date_universe_count": exact_date_universe_count,
+                    "stale_source_row_count": stale_source_row_count,
+                    "universe_count": exact_date_universe_count,
                     "factor_non_null_count": factor_non_null,
                     "mature_outcome_count": mature_outcomes,
                     "pair_count": len(pairs),
@@ -516,6 +582,9 @@ def evaluate_rdp(
             "median_high_minus_low_spread": _round_statistic(spread_values, "median"),
             "positive_spread_date_ratio": _percentage(sum(value > 0 for value in spread_values), spread_dates),
             "pair_count_total": sum(row["pair_count"] for row in observations),
+            "source_asof_row_count_total": sum(row["source_asof_row_count"] for row in observations),
+            "exact_date_universe_count_total": sum(row["exact_date_universe_count"] for row in observations),
+            "stale_source_row_count_total": sum(row["stale_source_row_count"] for row in observations),
             "sample_start": effective_dates[0] if effective_dates else None,
             "sample_end": effective_dates[-1] if effective_dates else None,
             "observations": observations,
@@ -540,6 +609,7 @@ def evaluate_rdp(
         },
         "sample": {
             "universe": UNIVERSE_NAME,
+            "universe_eligibility": UNIVERSE_ELIGIBILITY,
             "requested_date_from": date_from,
             "requested_date_to": date_to,
             "requested_range": {"start": requested_from, "end": requested_to},
@@ -560,6 +630,9 @@ def evaluate_rdp(
             },
             "max_factor_dates": MAX_FACTOR_DATES,
             "truncated": truncated,
+            "source_asof_rows_total": source_asof_rows_total,
+            "exact_date_rows_total": exact_date_rows_total,
+            "stale_source_rows_total": stale_source_rows_total,
             "excluded_observations": excluded_total,
         },
         "parity": {
@@ -571,6 +644,7 @@ def evaluate_rdp(
             "artifact_sha256": manifest["artifact_sha256"],
             "factor_dates_checked": parity_dates_checked,
             "security_factor_values_checked": parity_rows_checked,
+            "exact_date_factor_values_checked": parity_exact_rows_checked,
             "mismatches": 0,
         },
         "results": results,

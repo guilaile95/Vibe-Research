@@ -1637,6 +1637,9 @@ export interface FactorValidationRequest {
 export interface FactorValidationObservation {
   factor_date: string;
   forward_window: number;
+  source_asof_row_count: number;
+  exact_date_universe_count: number;
+  stale_source_row_count: number;
   universe_count: number;
   factor_non_null_count: number;
   mature_outcome_count: number;
@@ -1667,6 +1670,9 @@ export interface FactorValidationAggregate {
   median_high_minus_low_spread: number | null;
   positive_spread_date_ratio: number | null;
   pair_count_total: number;
+  source_asof_row_count_total: number;
+  exact_date_universe_count_total: number;
+  stale_source_row_count_total: number;
   sample_start: string | null;
   sample_end: string | null;
   observations: FactorValidationObservation[];
@@ -1696,12 +1702,16 @@ export interface FactorValidationReport {
     requested_range?: { start: string; end: string };
     effective_date_from: string | null;
     effective_date_to: string | null;
+    universe_eligibility?: string;
     artifact_coverage?: { start: string; end: string; row_count: number; code_count: number };
     factor_dates_attempted: number;
     factor_dates_evaluated: Record<string, number>;
     immature_factor_dates: Record<string, number>;
     max_factor_dates: number;
     truncated: boolean;
+    source_asof_rows_total: number;
+    exact_date_rows_total: number;
+    stale_source_rows_total: number;
     excluded_observations: number;
   };
   parity: {
@@ -1713,6 +1723,7 @@ export interface FactorValidationReport {
     artifact_sha256: string | null;
     factor_dates_checked: number;
     security_factor_values_checked: number;
+    exact_date_factor_values_checked?: number;
     mismatches: number | null;
   };
   results: Record<string, FactorValidationAggregate>;

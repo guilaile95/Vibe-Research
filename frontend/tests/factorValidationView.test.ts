@@ -7,6 +7,7 @@ import {
   factorObservationHasCoverageLimitation,
   factorRatioText,
   factorReturnText,
+  factorValidationReasonLabel,
   factorValidationStatusLabel,
 } from "../src/lib/factorValidationView.ts";
 
@@ -21,7 +22,9 @@ test("factor validation keeps null and real zero distinct", () => {
 test("factor validation labels bounded observations and coverage limitations", () => {
   assert.equal(factorValidationStatusLabel("EVALUATED"), "已评估");
   assert.equal(factorValidationStatusLabel("IMMATURE_FORWARD_WINDOW"), "未来窗口未成熟");
+  assert.match(factorValidationReasonLabel("STALE_AT_FACTOR_DATE;PARTIAL_FORWARD_COVERAGE"), /因子日期当天没有 RDP 记录/);
   assert.equal(factorAggregateLabel({ forward_window: 5 } as any), "5 条已存储观测");
+  assert.equal(factorObservationHasCoverageLimitation({ stale_source_row_count: 1, factor_null_count: 0, immature_outcome_count: 0, invalid_outcome_count: 0 } as any), true);
   assert.equal(factorObservationHasCoverageLimitation({ factor_null_count: 0, immature_outcome_count: 1, invalid_outcome_count: 0 } as any), true);
   assert.equal(factorObservationHasCoverageLimitation({ factor_null_count: 0, immature_outcome_count: 0, invalid_outcome_count: 0 } as any), false);
 });
