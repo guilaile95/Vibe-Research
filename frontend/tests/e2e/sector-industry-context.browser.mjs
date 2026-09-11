@@ -103,8 +103,11 @@ async function assertMatrix(page, label, errors) {
   if (!url.endsWith("/sectors")) errors.push(`${label}: wrong URL ${url}`);
   if (!title) errors.push(`${label}: missing page title`);
   const body = await page.locator("body").innerText();
-  for (const expected of ["行业环境 / 横向比较", "分类：Eastmoney 当前行业", "成员口径：当前快照成员", "历史成员有效性：未证明", "板块估值：不可用", "电子", "医药", "不可用"]) {
+  for (const expected of ["行业环境 / 横向比较", "分类：Eastmoney 当前行业", "成员口径：当前快照成员", "历史成员有效性：未证明", "当前 Eastmoney 行业成员的 PE/PB 分布", "不是行业指数估值，也不是历史估值分位", "PE+ 中位数", "PB+ 中位数", "0值", "电子", "医药", "UNKNOWN"]) {
     if (!body.includes(expected)) errors.push(`${label}: missing visible text ${expected}`);
+  }
+  for (const forbidden of ["便宜", "昂贵", "买入", "卖出", "推荐"]) {
+    if (body.includes(forbidden)) errors.push(`${label}: forbidden valuation/recommendation text ${forbidden}`);
   }
   if (body.includes("Vite Error") || body.includes("Unhandled Runtime Error")) errors.push(`${label}: framework error overlay visible`);
   const width = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
@@ -161,7 +164,7 @@ async function main() {
         await page.goto(`http://127.0.0.1:${frontendPort}/sectors`, { waitUntil: "networkidle" });
         await assertMatrix(page, viewport.name, errors);
         if (viewport.name === "desktop-1440") {
-          await page.getByLabel("行业矩阵排序").selectOption("member_aggregate_return_20d_pct");
+          await page.getByLabel("行业矩阵排序").selectOption("pe_ttm_positive_median");
           const firstRowBefore = await page.getByTestId("sector-industry-table").locator("tbody tr").first().innerText();
           if (!firstRowBefore) errors.push("desktop-1440: sorting produced no first row");
           await page.getByRole("link", { name: "市场云图" }).first().click();
@@ -172,16 +175,25 @@ async function main() {
         await context.close();
       }
     } finally { await browser.close().catch(() => {}); }
-    if (!industryResponses.some((item) => item.status === 200 && item.body?.data?.schema_version === "sector_industry_context.v0.1")) {
-      errors.push("industry-context API did not return the real matrix envelope");
+    const industryPayload = industryResponses.find((item) => item.status === 200)?.body?.data;
+    if (!industryPayload || industryPayload.schema_version !== "sector_industry_context.v0.2") {
+      errors.push("industry-context API did not return the real valuation matrix envelope");
+    } else {
+      const electronics = industryPayload.items.find((item) => item.industry_name === "电子");
+      const medicine = industryPayload.items.find((item) => item.industry_name === "医药");
+      const unknown = industryPayload.items.find((item) => item.industry_name === "UNKNOWN");
+      if (!electronics || electronics.valuation.pe_ttm.positive_median !== 15 || electronics.valuation.pb.positive_median !== 1.5) errors.push("electronics valuation medians were not preserved");
+      if (!electronics || electronics.valuation.pe_ttm.zero_count !== 1 || electronics.valuation.pb.negative_count !== 1) errors.push("electronics non-positive valuation counts were not preserved");
+      if (!medicine || medicine.valuation.pe_ttm.status !== "PARTIAL" || medicine.valuation.pe_ttm.missing_count !== 1) errors.push("partial valuation coverage was not exposed");
+      if (!unknown || unknown.classification_status !== "UNKNOWN") errors.push("UNKNOWN industry was not retained");
     }
     const readme = [
       "# PLANNING-PARITY-SECTOR-CROWD1-R1 browser evidence", "",
       `Generated: ${new Date().toISOString()}`,
       "Browser plugin: not available; regular Playwright Chromium used.",
       "Backend: real FastAPI app route with isolated snapshot input and imported isolated RDP fixture.",
-      "Core matrix calculation: production service, not HTTP-mocked.", "",
-      "## Checks", "- Desktop 1440x900 and narrow 390x844", "- Multi-industry current snapshot", "- Positive and negative member aggregates", "- Partial coverage", "- Current-membership disclaimer", "- Valuation unavailable", "- Sorting and row navigation", "- No pageerror/console error/document overflow", "",
+      "Core matrix calculation: production service, not HTTP-mocked.", "Current-member PE/PB distribution with positive-only medians, explicit non-positive and missing counts, and transparent market-cap coverage.", "",
+      "## Checks", "- Desktop 1440x900 and narrow 390x844", "- Multi-industry current snapshot", "- Positive and negative member aggregates", "- Partial coverage", "- Current-membership disclaimer", "- Current-member PE/PB distribution", "- RDP/valuation failure isolation when SECTOR_INDUSTRY_E2E_RDP_FAILURE=1", "- Sorting and row navigation", "- No pageerror/console error/document overflow", "",
       `API responses: ${JSON.stringify(industryResponses)}`, "", `Errors: ${errors.length ? errors.join(" | ") : "none"}`, "",
       "Screenshots: desktop-1440.png, narrow-390.png", "",
     ].join("\n");

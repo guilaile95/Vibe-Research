@@ -5,6 +5,7 @@ import type { SectorIndustryContextData } from "@/lib/api";
 import {
   formatMatrixAmount,
   formatMatrixCount,
+  formatMatrixNumber,
   formatMatrixPercent,
   sectorIndustryMatrixState,
   sortSectorIndustryRows,
@@ -18,6 +19,8 @@ const SORT_OPTIONS: Array<{ value: SectorIndustrySortKey; label: string }> = [
   { value: "up_ratio", label: "上涨比例" },
   { value: "above_ma20_ratio", label: "Above MA20" },
   { value: "turnover_pct_avg", label: "换手 participation" },
+  { value: "pe_ttm_positive_median", label: "PE 正值中位数" },
+  { value: "pb_positive_median", label: "PB 正值中位数" },
 ];
 
 type Props = {
@@ -52,8 +55,8 @@ export function SectorIndustryMatrix({ data, loading, error }: Props) {
     <section data-sector-industry-matrix aria-labelledby="sector-industry-matrix-title" className="space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3 id="sector-industry-matrix-title" className="text-sm font-semibold">行业环境 / 横向比较</h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">当前行业成员与 RDP 个股历史行情的透明聚合，不是行业指数。</p>
+            <h3 id="sector-industry-matrix-title" className="text-sm font-semibold">行业环境 / 横向比较</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">当前行业成员与 RDP 个股历史行情的透明聚合，不是行业指数。</p>
         </div>
         {data && <span className="rounded-md bg-muted/40 px-2 py-1 text-[10px] text-muted-foreground">{statusLabel(data.status)}</span>}
       </div>
@@ -61,7 +64,9 @@ export function SectorIndustryMatrix({ data, loading, error }: Props) {
       <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground" data-testid="sector-industry-disclaimer">
         <p>分类：Eastmoney 当前行业 · 成员口径：当前快照成员</p>
         <p>历史强弱：基于当前成员回看个股历史行情的聚合，不代表历史行业指数 · 历史成员有效性：未证明</p>
-        <p>板块估值：不可用 · CROWDING：仅透明 participation proxy，不生成综合分数</p>
+        <p>这里只统计当前 Eastmoney 行业成员的 PE/PB 分布，不是行业指数估值，也不是历史估值分位。</p>
+        <p>中位数仅对正值样本计算；0、负值和缺失分别计数，不会被当成 0 或静默删除。</p>
+        <p>CROWDING：仅透明 participation proxy，不生成综合分数</p>
       </div>
 
       {state === "loading" && (
@@ -83,7 +88,7 @@ export function SectorIndustryMatrix({ data, loading, error }: Props) {
       {(state === "normal" || state === "partial") && data && (
         <>
           <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-muted-foreground">
-            <span>{data.universe.current_member_count} 个当前成员 · {data.universe.industry_count} 个行业 · RDP as_of {data.rdp_as_of ?? "—"}</span>
+            <span>{data.universe.current_member_count} 个当前成员 · {data.universe.industry_count} 个行业 · Eastmoney 当前快照，获取时间：{data.snapshot_fetched_at} · RDP as_of {data.rdp_as_of ?? "—"}</span>
             <label className="flex items-center gap-1.5">
               <span>排序</span>
               <select
@@ -116,7 +121,7 @@ export function SectorIndustryMatrix({ data, loading, error }: Props) {
                   <th className="px-3 py-2">上涨 / 下跌 / 平盘</th>
                   <th className="px-3 py-2">Above MA20</th>
                   <th className="px-3 py-2">Participation</th>
-                  <th className="px-3 py-2">估值</th>
+                  <th className="px-3 py-2">当前成员 PE / PB 分布</th>
                   <th className="px-3 py-2">入口</th>
                 </tr>
               </thead>
@@ -124,6 +129,9 @@ export function SectorIndustryMatrix({ data, loading, error }: Props) {
                 {rows.map((row) => {
                   const five = row.metrics.member_aggregate_return_5d_pct;
                   const twenty = row.metrics.member_aggregate_return_20d_pct;
+                  const pe = row.valuation.pe_ttm;
+                  const pb = row.valuation.pb;
+                  const marketCap = row.valuation.market_cap;
                   return (
                     <tr key={row.industry_key} className="hover:bg-muted/15" data-testid={`sector-industry-row-${row.industry_key}`}>
                       <td className="px-3 py-2">
@@ -137,7 +145,13 @@ export function SectorIndustryMatrix({ data, loading, error }: Props) {
                       <td className="px-3 py-2">{formatMatrixPercent(row.breadth.up_ratio, true)} / {formatMatrixPercent(row.breadth.down_ratio, true)} / {formatMatrixPercent(row.breadth.flat_ratio, true)}</td>
                       <td className="px-3 py-2">{formatMatrixPercent(row.breadth.above_ma20_ratio, true)}<span className="ml-1 text-[10px] text-muted-foreground">{row.breadth.above_ma20_count}/{row.breadth.ma20_usable_count}</span></td>
                       <td className="px-3 py-2">换手 {formatMatrixPercent(row.participation.turnover_pct_avg)}<br /><span className="text-[10px] text-muted-foreground">量比 {row.participation.volume_ratio_20d_avg == null ? "—" : `${row.participation.volume_ratio_20d_avg.toFixed(2)}×`} · 额 {formatMatrixAmount(row.participation.amount_total)}</span></td>
-                      <td className="px-3 py-2 text-muted-foreground" title={row.valuation.message}>不可用</td>
+                      <td className="px-3 py-2 text-muted-foreground" title={row.valuation.message} data-testid={`sector-industry-valuation-${row.industry_key}`}>
+                        <div>PE+ 中位数 {formatMatrixNumber(pe.positive_median)} · 观测 {formatMatrixPercent(pe.observed_coverage_ratio, true)} · 正值 {formatMatrixPercent(pe.positive_coverage_ratio, true)}</div>
+                        <div className="text-[10px]">观测 {pe.observed_count}/{row.current_member_count} · 正值 {pe.positive_count} · 0值 {pe.zero_count} · 负值 {pe.negative_count}</div>
+                        <div className="mt-1">PB+ 中位数 {formatMatrixNumber(pb.positive_median)} · 观测 {formatMatrixPercent(pb.observed_coverage_ratio, true)} · 正值 {formatMatrixPercent(pb.positive_coverage_ratio, true)}</div>
+                        <div className="text-[10px]">观测 {pb.observed_count}/{row.current_member_count} · 正值 {pb.positive_count} · 0值 {pb.zero_count} · 负值 {pb.negative_count}</div>
+                        <div className="mt-1 text-[10px]">市值有效 {marketCap.observed_count}/{row.current_member_count} · 正 PE 市值覆盖 {formatMatrixPercent(pe.positive_market_cap_coverage_ratio, true)} · 正 PB 市值覆盖 {formatMatrixPercent(pb.positive_market_cap_coverage_ratio, true)}</div>
+                      </td>
                       <td className="px-3 py-2"><Link to="/market-cloud" className="text-primary hover:underline" title="仅进入现有当前市场环境，不创建行业研究工作台">市场云图</Link></td>
                     </tr>
                   );
