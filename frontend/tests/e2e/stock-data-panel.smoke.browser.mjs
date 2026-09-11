@@ -854,8 +854,8 @@ async function runSmoke(page, mock, errors) {
       "CURRENT_MEMBERSHIP_SNAPSHOT",
       "UNADJUSTED / 未复权",
       "12.00%",
-      "+6.00%",
-      "+7.00%",
+      "+6.00 个百分点",
+      "+7.00 个百分点",
       "行业有效样本：3 / 3（100.0%）",
       "市场有效样本：4 / 4（100.0%）",
     ]) {

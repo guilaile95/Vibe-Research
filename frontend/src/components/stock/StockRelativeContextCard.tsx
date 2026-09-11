@@ -1,7 +1,11 @@
 import { LineChart, Loader2 } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import type { StockRelativeContext, StockRelativeHorizon } from "@/lib/api";
-import { formatSampleCoverage, formatStockRelativePercent } from "@/lib/stockRelativeContextView";
+import {
+  formatSampleCoverage,
+  formatStockRelativePercent,
+  formatStockRelativePoints,
+} from "@/lib/stockRelativeContextView";
 
 interface Props {
   data: StockRelativeContext | null;
@@ -68,7 +72,7 @@ export function StockRelativeContextCard({ data, loading, error }: Props) {
           )}
 
           <p className="mb-3 text-[11px] text-muted-foreground/70">
-            下表为原始价格变化，不是复权收益或总回报；行业仅按当前成员快照观察。
+            下表为原始价格变化，不是复权收益或总回报；相对列为个股减 benchmark 的百分点差值；行业仅按当前成员快照观察。
           </p>
 
           <div className="overflow-x-auto">
@@ -78,9 +82,9 @@ export function StockRelativeContextCard({ data, loading, error }: Props) {
                   <th className="py-1.5 pr-3 text-left font-normal">周期</th>
                   <th className="px-2 py-1.5 text-right font-normal">个股</th>
                   <th className="px-2 py-1.5 text-right font-normal">行业中位数</th>
-                  <th className="px-2 py-1.5 text-right font-normal">相对行业</th>
+                  <th className="px-2 py-1.5 text-right font-normal">相对行业（百分点）</th>
                   <th className="px-2 py-1.5 text-right font-normal">市场中位数</th>
-                  <th className="pl-2 py-1.5 text-right font-normal">相对市场</th>
+                  <th className="pl-2 py-1.5 text-right font-normal">相对市场（百分点）</th>
                 </tr>
               </thead>
               <tbody>
@@ -94,9 +98,9 @@ export function StockRelativeContextCard({ data, loading, error }: Props) {
                       </td>
                       <td className="px-2 py-2 text-right font-mono">{formatStockRelativePercent(period.stock_return_pct)}</td>
                       <td className="px-2 py-2 text-right font-mono">{formatStockRelativePercent(period.industry_median_pct)}</td>
-                      <td className="px-2 py-2 text-right font-mono">{formatStockRelativePercent(period.vs_industry_pct_points)}</td>
+                      <td className="px-2 py-2 text-right font-mono">{formatStockRelativePoints(period.vs_industry_pct_points)}</td>
                       <td className="px-2 py-2 text-right font-mono">{formatStockRelativePercent(period.market_median_pct)}</td>
-                      <td className="pl-2 py-2 text-right font-mono">{formatStockRelativePercent(period.vs_market_pct_points)}</td>
+                      <td className="pl-2 py-2 text-right font-mono">{formatStockRelativePoints(period.vs_market_pct_points)}</td>
                     </tr>
                   );
                 })}

@@ -4,6 +4,12 @@ export function formatStockRelativePercent(value: number | null | undefined): st
   return `${number > 0 ? "+" : ""}${number.toFixed(2)}%`;
 }
 
+export function formatStockRelativePoints(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
+  const number = Number(value);
+  return `${number > 0 ? "+" : ""}${number.toFixed(2)} 个百分点`;
+}
+
 export function formatSampleCoverage(
   validCount: number,
   totalCount: number,

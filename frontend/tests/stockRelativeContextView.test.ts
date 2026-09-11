@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   formatSampleCoverage,
   formatStockRelativePercent,
+  formatStockRelativePoints,
 } from "../src/lib/stockRelativeContextView.ts";
 
 test("relative percentage formatting preserves positive, negative, zero, and null", () => {
@@ -13,6 +14,12 @@ test("relative percentage formatting preserves positive, negative, zero, and nul
   assert.equal(formatStockRelativePercent(0), "0.00%");
   assert.equal(formatStockRelativePercent(null), "—");
   assert.equal(formatStockRelativePercent(Number.NaN), "—");
+});
+
+test("relative differences are rendered as percentage points", () => {
+  assert.equal(formatStockRelativePoints(7.3), "+7.30 个百分点");
+  assert.equal(formatStockRelativePoints(-2.5), "-2.50 个百分点");
+  assert.equal(formatStockRelativePoints(null), "—");
 });
 
 test("sample coverage exposes counts without fabricating unavailable coverage", () => {
@@ -27,6 +34,7 @@ test("StockData relative card keeps the accepted disclosure and null-safe paths"
     "utf8",
   );
   assert.match(source, /UNADJUSTED/);
+  assert.match(source, /百分点/);
   assert.match(source, /industry_membership_semantics/);
   assert.match(source, /UNKNOWN/);
   assert.match(source, /行业有效样本/);
