@@ -213,6 +213,42 @@ export type SectorMarketContextData = {
 };
 
 
+export type SectorIndustryValuationMetric = {
+  status: "NORMAL" | "PARTIAL" | "UNAVAILABLE";
+  observed_count: number;
+  missing_count: number;
+  positive_count: number;
+  zero_count: number;
+  negative_count: number;
+  positive_median: number | null;
+  median_status: "NORMAL" | "NO_POSITIVE_VALUES";
+  observed_coverage_ratio: number | null;
+  positive_coverage_ratio: number | null;
+  positive_coverage_denominator: "CURRENT_MEMBER_COUNT";
+  positive_market_cap_coverage_ratio: number | null;
+  market_cap_coverage_denominator: "ALL_CURRENT_MEMBERS_WITH_VALID_POSITIVE_MARKET_CAP";
+};
+
+export type SectorIndustryContextValuation = {
+  status: "NORMAL" | "PARTIAL" | "UNAVAILABLE";
+  semantics: "CURRENT_MEMBER_VALUATION_DISTRIBUTION_ONLY";
+  message: string;
+  pe_ttm: SectorIndustryValuationMetric;
+  pb: SectorIndustryValuationMetric;
+  market_cap_observed_count: number;
+  market_cap_missing_or_invalid_count: number;
+  market_cap: {
+    status: "NORMAL" | "PARTIAL" | "UNAVAILABLE";
+    observed_count: number;
+    missing_count: number;
+    positive_total: number | null;
+    basis: "VALID_POSITIVE_MARKET_CAP_ONLY";
+  };
+  historical_percentile: { status: "NOT_AVAILABLE" };
+  sector_index_valuation_authority: { status: "NOT_AVAILABLE" };
+  limitations: string[];
+};
+
 export type SectorIndustryContextItem = {
   industry_key: string;
   industry_name: string;
@@ -269,17 +305,14 @@ export type SectorIndustryContextItem = {
     status: "PROXY_ONLY";
     semantics: "TRANSPARENT_PARTICIPATION_PROXY_ONLY";
   };
-  valuation: {
-    status: "UNAVAILABLE_IN_V0_1";
-    message: string;
-  };
+  valuation: SectorIndustryContextValuation;
   warnings: string[];
   limitations: string[];
 };
 
 
 export type SectorIndustryContextData = {
-  schema_version: "sector_industry_context.v0.1";
+  schema_version: "sector_industry_context.v0.2";
   status: "normal" | "partial" | "unavailable";
   source: string;
   fetched_at: string;
@@ -288,8 +321,11 @@ export type SectorIndustryContextData = {
   membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT";
   historical_membership_validity: "NOT_PROVEN";
   crowding_semantics: "TRANSPARENT_PARTICIPATION_PROXY_ONLY";
-  valuation_status: "UNAVAILABLE_IN_V0_1";
+  valuation_status: "CURRENT_MEMBER_VALUATION_DISTRIBUTION_ONLY";
+  valuation_semantics: "CURRENT_MEMBER_VALUATION_DISTRIBUTION_ONLY";
+  historical_valuation_status: "NOT_AVAILABLE";
   valuation_message: string;
+  snapshot_fetched_at: string;
   universe_status: "normal" | "empty";
   universe: {
     current_member_count: number;

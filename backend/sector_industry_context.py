@@ -12,18 +12,22 @@ import math
 import re
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
+from statistics import median
 from typing import Any
 
 import astock
 import research_data_plane as rdp
 
 
-SCHEMA_VERSION = "sector_industry_context.v0.1"
+SCHEMA_VERSION = "sector_industry_context.v0.2"
 CLASSIFICATION_PROVIDER = "EASTMONEY"
 MEMBERSHIP_SEMANTICS = "CURRENT_MEMBERSHIP_SNAPSHOT"
 HISTORICAL_MEMBERSHIP_VALIDITY = "NOT_PROVEN"
 CROWDING_SEMANTICS = "TRANSPARENT_PARTICIPATION_PROXY_ONLY"
-VALUATION_STATUS = "UNAVAILABLE_IN_V0_1"
+VALUATION_SEMANTICS = "CURRENT_MEMBER_VALUATION_DISTRIBUTION_ONLY"
+VALUATION_MESSAGE = "这里只统计当前 Eastmoney 行业成员的 PE/PB 分布，不是行业指数估值，也不是历史估值分位。"
+VALUATION_LIMITATION = "中位数仅对正值样本计算；0、负值和缺失分别计数，不会被当成 0 或静默删除。"
+HISTORICAL_VALUATION_STATUS = "NOT_AVAILABLE"
 _CODE_RE = re.compile(r"^\d{6}$")
 _UNKNOWN_INDUSTRY = "UNKNOWN"
 _RDP_PAGE_SIZE = 1000
@@ -85,6 +89,9 @@ def _normalize_snapshot(snapshot: Any) -> tuple[dict[str, list[dict[str, Any]]],
                 "change_pct": raw.get("change_pct"),
                 "turnover_pct": raw.get("turnover_pct"),
                 "amount": raw.get("amount"),
+                "pe_ttm": raw.get("pe_ttm"),
+                "pb": raw.get("pb"),
+                "market_cap": raw.get("market_cap"),
             }
         )
     return groups, invalid_rows
@@ -153,6 +160,103 @@ def _build_breadth(members: list[dict[str, Any]]) -> dict[str, Any]:
         "down_ratio": _ratio(down_count, len(changes)),
         "flat_ratio": _ratio(flat_count, len(changes)),
         "basis": "CURRENT_MEMBERS_WITH_CHANGE_PCT",
+    }
+
+
+def _metric_status(observed_count: int, member_count: int) -> str:
+    if observed_count == 0:
+        return "UNAVAILABLE"
+    if observed_count < member_count:
+        return "PARTIAL"
+    return "NORMAL"
+
+
+def _build_valuation_metric(
+    members: list[dict[str, Any]],
+    field: str,
+    *,
+    market_cap_total: float | None,
+) -> dict[str, Any]:
+    values: list[float] = []
+    positive_values: list[float] = []
+    zero_count = 0
+    negative_count = 0
+    positive_market_cap = 0.0
+
+    for member in members:
+        value = _number(member.get(field))
+        market_cap = _number(member.get("market_cap"))
+        if value is None:
+            continue
+        values.append(value)
+        if value > 0:
+            positive_values.append(value)
+            if market_cap is not None and market_cap > 0:
+                positive_market_cap += market_cap
+        elif value == 0:
+            zero_count += 1
+        else:
+            negative_count += 1
+
+    member_count = len(members)
+    observed_count = len(values)
+    return {
+        "status": _metric_status(observed_count, member_count),
+        "observed_count": observed_count,
+        "missing_count": member_count - observed_count,
+        "positive_count": len(positive_values),
+        "zero_count": zero_count,
+        "negative_count": negative_count,
+        "positive_median": median(positive_values) if positive_values else None,
+        "median_status": "NORMAL" if positive_values else "NO_POSITIVE_VALUES",
+        "observed_coverage_ratio": _ratio(observed_count, member_count),
+        # This is positive members / all current members, not positive / observed.
+        "positive_coverage_ratio": _ratio(len(positive_values), member_count),
+        "positive_coverage_denominator": "CURRENT_MEMBER_COUNT",
+        "positive_market_cap_coverage_ratio": (
+            positive_market_cap / market_cap_total
+            if market_cap_total is not None
+            else None
+        ),
+        "market_cap_coverage_denominator": "ALL_CURRENT_MEMBERS_WITH_VALID_POSITIVE_MARKET_CAP",
+    }
+
+
+def _build_valuation(members: list[dict[str, Any]]) -> dict[str, Any]:
+    positive_market_caps = [
+        value
+        for value in (_number(member.get("market_cap")) for member in members)
+        if value is not None and value > 0
+    ]
+    market_cap_total = sum(positive_market_caps) if positive_market_caps else None
+    market_cap_observed_count = len(positive_market_caps)
+    pe_ttm = _build_valuation_metric(members, "pe_ttm", market_cap_total=market_cap_total)
+    pb = _build_valuation_metric(members, "pb", market_cap_total=market_cap_total)
+    valuation_status = (
+        "NORMAL"
+        if pe_ttm["status"] == pb["status"] == "NORMAL"
+        else "UNAVAILABLE"
+        if pe_ttm["status"] == pb["status"] == "UNAVAILABLE"
+        else "PARTIAL"
+    )
+    return {
+        "status": valuation_status,
+        "semantics": VALUATION_SEMANTICS,
+        "message": VALUATION_MESSAGE,
+        "market_cap_observed_count": market_cap_observed_count,
+        "market_cap_missing_or_invalid_count": len(members) - market_cap_observed_count,
+        "pe_ttm": pe_ttm,
+        "pb": pb,
+        "market_cap": {
+            "status": _metric_status(market_cap_observed_count, len(members)),
+            "observed_count": market_cap_observed_count,
+            "missing_count": len(members) - market_cap_observed_count,
+            "positive_total": market_cap_total,
+            "basis": "VALID_POSITIVE_MARKET_CAP_ONLY",
+        },
+        "historical_percentile": {"status": HISTORICAL_VALUATION_STATUS},
+        "sector_index_valuation_authority": {"status": "NOT_AVAILABLE"},
+        "limitations": [VALUATION_MESSAGE, VALUATION_LIMITATION],
     }
 
 
@@ -253,10 +357,7 @@ def _build_item(
             "status": "PROXY_ONLY",
             "semantics": CROWDING_SEMANTICS,
         },
-        "valuation": {
-            "status": VALUATION_STATUS,
-            "message": "当前数据源未提供可信行业级估值。",
-        },
+        "valuation": _build_valuation(members),
         "warnings": warnings,
         "limitations": [
             "分类：Eastmoney 当前行业。",
@@ -264,7 +365,8 @@ def _build_item(
             "历史强弱基于当前成员回看个股历史行情的聚合，不代表历史行业指数。",
             "历史成员有效性：未证明。",
             "缺失成员不按 0 参与聚合。",
-            "行业级估值在 v0.1 不可用。",
+            VALUATION_MESSAGE,
+            VALUATION_LIMITATION,
         ],
     }
 
@@ -280,8 +382,11 @@ def _base_envelope(*, status: str, fetched_at: str, warnings: list[str], items: 
         "membership_semantics": MEMBERSHIP_SEMANTICS,
         "historical_membership_validity": HISTORICAL_MEMBERSHIP_VALIDITY,
         "crowding_semantics": CROWDING_SEMANTICS,
-        "valuation_status": VALUATION_STATUS,
-        "valuation_message": "当前数据源未提供可信行业级估值。",
+        "valuation_status": VALUATION_SEMANTICS,
+        "valuation_semantics": VALUATION_SEMANTICS,
+        "historical_valuation_status": HISTORICAL_VALUATION_STATUS,
+        "valuation_message": VALUATION_MESSAGE,
+        "snapshot_fetched_at": fetched_at,
         "universe_status": "normal",
         "universe": {"current_member_count": sum(item["current_member_count"] for item in items), "industry_count": len(items)},
         "items": items,
@@ -291,7 +396,8 @@ def _base_envelope(*, status: str, fetched_at: str, warnings: list[str], items: 
             "当前成员回看个股 RDP 历史行情，不代表历史行业指数。",
             "历史行业成员有效性未证明。",
             "CROWDING 仅为透明 participation proxy，不生成综合分数。",
-            "行业级估值在 v0.1 不可用。",
+            VALUATION_MESSAGE,
+            VALUATION_LIMITATION,
         ],
     }
 

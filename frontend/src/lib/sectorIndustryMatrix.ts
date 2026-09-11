@@ -5,7 +5,9 @@ export type SectorIndustrySortKey =
   | "member_aggregate_return_20d_pct"
   | "up_ratio"
   | "above_ma20_ratio"
-  | "turnover_pct_avg";
+  | "turnover_pct_avg"
+  | "pe_ttm_positive_median"
+  | "pb_positive_median";
 
 export function sectorIndustrySortValue(row: SectorIndustryContextItem, key: SectorIndustrySortKey): number | null {
   switch (key) {
@@ -14,6 +16,8 @@ export function sectorIndustrySortValue(row: SectorIndustryContextItem, key: Sec
     case "up_ratio": return row.breadth.up_ratio;
     case "above_ma20_ratio": return row.breadth.above_ma20_ratio;
     case "turnover_pct_avg": return row.participation.turnover_pct_avg;
+    case "pe_ttm_positive_median": return row.valuation.pe_ttm.positive_median;
+    case "pb_positive_median": return row.valuation.pb.positive_median;
   }
 }
 
@@ -43,6 +47,10 @@ export function formatMatrixCount(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value) ? "—" : String(value);
 }
 
+export function formatMatrixNumber(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? "—" : value.toFixed(2);
+}
+
 export function formatMatrixAmount(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—";
   if (value >= 100_000_000) return `${(value / 100_000_000).toFixed(2)}亿`;
@@ -57,7 +65,10 @@ export function sectorIndustryMatrixState(
 ): "loading" | "error" | "unavailable" | "empty" | "normal" | "partial" {
   if (loading) return "loading";
   if (error) return "error";
-  if (!data || data.status === "unavailable") return "unavailable";
-  if (data.universe_status === "empty" || data.items.length === 0) return "empty";
+  if (!data) return "unavailable";
+  if (data.items.length === 0) return data.status === "unavailable" ? "unavailable" : "empty";
+  // RDP failure can leave current-membership valuation rows usable. Keep the
+  // matrix visible so the independent valuation status is not hidden.
+  if (data.status === "unavailable") return "partial";
   return data.status;
 }
