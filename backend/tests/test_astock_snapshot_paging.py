@@ -17,7 +17,7 @@ def _row(code: str, name: str | None = None, **extra):
         "f2": 10.0, "f3": 1.0, "f4": 0.1, "f5": 1000.0, "f6": 1e7, "f7": 1.0, "f8": 1.0,
         "f12": code, "f13": 1, "f14": name if name is not None else f"股{code}",
         "f15": 11.0, "f16": 9.0, "f17": 10.0, "f18": 9.9,
-        "f20": 1e9, "f21": 1e9, "f9": 20.5, "f23": 2.3, "f26": 20200102,
+        "f20": 1e9, "f21": 1e9, "f9": 30.5, "f115": 20.5, "f23": 2.3, "f26": 20200102,
     }
     d.update(extra)
     return d
@@ -198,8 +198,8 @@ def test_missing_code_skipped(monkeypatch):
 
 def test_snapshot_maps_optional_valuation_and_listing_date_without_fake_defaults(monkeypatch):
     rows = [
-        _row("600001", f9=18.2, f23=1.7, f26=20260801),
-        _row("600002", f9="-", f23=None, f26="bad"),
+        _row("600001", f9=99.9, f115=18.2, f23=1.7, f26=20260801),
+        _row("600002", f9=88.8, f115="-", f23=None, f26="bad"),
     ]
     _install(monkeypatch, lambda _url, _params: {"data": {"total": 2, "diff": rows}})
 
