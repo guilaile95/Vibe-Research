@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
+import astock
 import sector_industry_context as context
 
 
@@ -183,6 +184,41 @@ def _valuation_snapshot() -> list[dict]:
 
 def _valuation_rdp() -> list[dict]:
     return [{"code": f"00000{index}", "return_5d": 0.1, "return_20d": 0.2, "close_vs_ma20": 0.05} for index in range(1, 8)]
+
+
+def test_valuation_aggregates_ttm_from_raw_provider_fields_without_f9_fallback():
+    raw_rows = [
+        {"f12": "000001", "f14": "甲", "f13": 0, "f9": 100.0, "f115": 10.0, "f20": 100.0, "f23": 1.0, "f100": "电子"},
+        {"f12": "000002", "f14": "乙", "f13": 0, "f9": 200.0, "f115": 20.0, "f20": 200.0, "f23": 2.0, "f100": "电子"},
+        {"f12": "000003", "f14": "丙", "f13": 0, "f9": 50.0, "f115": 0.0, "f20": 0.0, "f23": -1.0, "f100": "电子"},
+        {"f12": "000004", "f14": "丁", "f13": 0, "f9": -60.0, "f115": 5.0, "f20": 50.0, "f23": 1.0, "f100": "医药"},
+        {"f12": "000005", "f14": "戊", "f13": 0, "f9": 70.0, "f115": -5.0, "f20": 60.0, "f23": 3.0, "f100": "医药"},
+        {"f12": "000006", "f14": "己", "f13": 0, "f9": 80.0, "f115": None, "f20": 70.0, "f23": 0.0, "f100": None},
+        {"f12": "000007", "f14": "庚", "f13": 0, "f9": 90.0, "f115": "-", "f20": 80.0, "f23": 4.0, "f100": "医药"},
+    ]
+
+    def snapshot():
+        return [mapped for raw in raw_rows if (mapped := astock._map_a_share_row(raw)) is not None]
+
+    result = context.build_sector_industry_context(
+        snapshot_reader=snapshot,
+        rdp_reader=_rdp_reader(_valuation_rdp()),
+    )
+
+    electronics = next(item for item in result["items"] if item["industry_name"] == "电子")
+    pe = electronics["valuation"]["pe_ttm"]
+    assert pe["positive_median"] == pytest.approx(15.0)
+    assert pe["positive_count"] == 2
+    assert pe["zero_count"] == 1
+    assert pe["negative_count"] == 0
+    assert electronics["valuation"]["pb"]["positive_median"] == pytest.approx(1.5)
+    assert electronics["valuation"]["market_cap"]["positive_total"] == pytest.approx(300.0)
+
+    medicine = next(item for item in result["items"] if item["industry_name"] == "医药")
+    assert medicine["valuation"]["pe_ttm"]["status"] == "PARTIAL"
+    assert medicine["valuation"]["pe_ttm"]["positive_median"] == pytest.approx(5.0)
+    assert medicine["valuation"]["pe_ttm"]["negative_count"] == 1
+    assert medicine["valuation"]["pe_ttm"]["missing_count"] == 1
 
 
 def test_current_member_valuation_distributions_preserve_signs_medians_and_market_cap_coverage():

@@ -865,7 +865,8 @@ def _optional_float(value) -> float | None:
     if not s or s in ("-", "--"):
         return None
     try:
-        return float(s)
+        parsed = float(s)
+        return parsed if math.isfinite(parsed) else None
     except (TypeError, ValueError):
         return None
 
@@ -928,7 +929,9 @@ def market_turnover_rank(n: int = 20) -> list[dict]:
 # 全 A 股行情快照（沪深京 · 分页 clist）
 # ---------------------------------------------------------------------------
 _A_SHARE_FS = "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048"
-_A_SHARE_FIELDS = "f2,f3,f4,f5,f6,f7,f8,f9,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f26,f100"
+# Eastmoney clist/get: f9 is dynamic PE; f115 is the same-source TTM PE ratio.
+# Keep both in the request so the public ``pe_ttm`` contract never consumes f9.
+_A_SHARE_FIELDS = "f2,f3,f4,f5,f6,f7,f8,f9,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f26,f100,f115"
 _A_SHARE_PAGE_SIZE = 500
 _A_SHARE_CLIST_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
 
@@ -970,7 +973,7 @@ def _map_a_share_row(d: dict) -> dict | None:
         "amount": _optional_float(d.get("f6")),
         "amplitude_pct": _optional_float(d.get("f7")),
         "turnover_pct": _optional_float(d.get("f8")),
-        "pe_ttm": _optional_float(d.get("f9")),
+        "pe_ttm": _optional_float(d.get("f115")),
         "high": _optional_float(d.get("f15")),
         "low": _optional_float(d.get("f16")),
         "open": _optional_float(d.get("f17")),

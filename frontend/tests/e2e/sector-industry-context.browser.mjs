@@ -182,9 +182,9 @@ async function main() {
       const electronics = industryPayload.items.find((item) => item.industry_name === "电子");
       const medicine = industryPayload.items.find((item) => item.industry_name === "医药");
       const unknown = industryPayload.items.find((item) => item.industry_name === "UNKNOWN");
-      if (!electronics || electronics.valuation.pe_ttm.positive_median !== 15 || electronics.valuation.pb.positive_median !== 1.5) errors.push("electronics valuation medians were not preserved");
+      if (!electronics || electronics.valuation.pe_ttm.positive_median !== 15 || electronics.valuation.pb.positive_median !== 1.5) errors.push("electronics TTM valuation medians were not preserved from the raw source fixture");
       if (!electronics || electronics.valuation.pe_ttm.zero_count !== 1 || electronics.valuation.pb.negative_count !== 1) errors.push("electronics non-positive valuation counts were not preserved");
-      if (!medicine || medicine.valuation.pe_ttm.status !== "PARTIAL" || medicine.valuation.pe_ttm.missing_count !== 1) errors.push("partial valuation coverage was not exposed");
+      if (!medicine || medicine.valuation.pe_ttm.status !== "PARTIAL" || medicine.valuation.pe_ttm.observed_count !== 1 || medicine.valuation.pe_ttm.missing_count !== 1 || medicine.valuation.pe_ttm.positive_median !== 5) errors.push("TTM-missing member was not kept missing without dynamic PE fallback");
       if (!unknown || unknown.classification_status !== "UNKNOWN") errors.push("UNKNOWN industry was not retained");
     }
     const readme = [

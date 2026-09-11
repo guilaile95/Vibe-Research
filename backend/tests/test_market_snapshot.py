@@ -35,6 +35,7 @@ def _row(
         "f12": code, "f13": f13, "f14": name,
         "f15": f15, "f16": f16, "f17": f17, "f18": f18,
         "f20": f20, "f21": f21, "f100": f100,
+        "f9": 30.5, "f115": 20.5, "f23": 1.5,
     }
     d.update(extra)
     return d
@@ -81,6 +82,7 @@ def test_snapshot_single_page_list(monkeypatch):
         assert params["pz"] == "500"
         assert "f12" in params["fields"] and "f2" in params["fields"]
         assert "f100" in params["fields"], "a_share_snapshot 必须请求 f100（行业归属）"
+        assert "f115" in params["fields"], "a_share_snapshot 必须请求同源 TTM PE 字段 f115"
         return {"data": {"total": 2, "diff": rows}}
 
     calls = _install_em_get(monkeypatch, handler)
@@ -105,6 +107,8 @@ def test_snapshot_single_page_list(monkeypatch):
     assert a["prev_close"] == pytest.approx(1679.0)
     assert a["market_cap"] == pytest.approx(2.1e12)
     assert a["float_market_cap"] == pytest.approx(2.0e12)
+    assert a["pe_ttm"] == pytest.approx(20.5)
+    assert a["pb"] == pytest.approx(1.5)
     # f100 → industry 映射（市场云图必需字段）
     assert a["industry"] == "白酒"
     assert set(a.keys()) == {
@@ -177,6 +181,8 @@ def test_optional_float_and_missing_fields(monkeypatch):
     assert astock._optional_float("--") is None
     assert astock._optional_float("abc") is None
     assert astock._optional_float("12.5") == pytest.approx(12.5)
+    assert astock._optional_float("nan") is None
+    assert astock._optional_float("inf") is None
     assert astock._optional_float(0) == pytest.approx(0.0)
     assert astock._optional_float(0.0) == pytest.approx(0.0)
     assert astock._optional_float("0") == pytest.approx(0.0)
@@ -202,6 +208,28 @@ def test_optional_float_and_missing_fields(monkeypatch):
     assert s["turnover_pct"] == pytest.approx(0.0)
     assert s["high"] is None
     assert s["low"] == pytest.approx(0.0)
+
+
+def test_snapshot_uses_ttm_field_without_dynamic_fallback_and_preserves_other_fields(monkeypatch):
+    rows = [
+        _row("600001", "TTM 与动态不同", f9=100.0, f115=10.0, f23=1.2, f20=100.0),
+        _row("600002", "TTM 缺失", f9=80.0, f115="-", f23=2.3, f20=200.0),
+        _row("600003", "TTM 负值", f9=5.0, f115=-4.0, f23=-1.0, f20=300.0),
+        _row("600004", "TTM 零值", f9=-5.0, f115=0.0, f23=0.0, f20=400.0),
+        _row("600005", "TTM 非有限", f9=7.0, f115="nan", f23=3.0, f20=500.0),
+    ]
+
+    def handler(url, params):
+        assert "clist/get" in url
+        assert "f9" in params["fields"] and "f115" in params["fields"]
+        return {"data": {"total": len(rows), "diff": rows}}
+
+    _install_em_get(monkeypatch, handler)
+    result = astock.a_share_snapshot()
+
+    assert [row["pe_ttm"] for row in result] == [10.0, None, -4.0, 0.0, None]
+    assert [row["pb"] for row in result] == [1.2, 2.3, -1.0, 0.0, 3.0]
+    assert [row["market_cap"] for row in result] == [100.0, 200.0, 300.0, 400.0, 500.0]
 
 
 # ── 5. 异常数据 ─────────────────────────────────────────────────────

@@ -1,5 +1,10 @@
 # Sector Valuation 1 · Live Source and Vertical Evidence
 
+> Historical R1 evidence only. The `f9 -> pe_ttm` source conclusion in this file is
+> superseded and invalidated by `sector-valuation1-r2-pe-source-semantics-2026-09-11.md`:
+> AKShare identifies Eastmoney `f9` as dynamic PE. Do not use the R1 `f9` mapping or its
+> aggregate counts as TTM evidence.
+
 任务：`PLANNING-PARITY-SECTOR-VALUATION1`
 
 日期：2026-09-11
