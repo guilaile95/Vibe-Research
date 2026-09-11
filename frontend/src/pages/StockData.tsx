@@ -10,6 +10,7 @@ import { AskAiButton } from "@/components/ui/AskAiButton";
 import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
 import { OptionalDataPanel } from "@/components/ui/OptionalDataPanel";
 import { StockThesisPanel } from "@/components/stock/StockThesisPanel";
+import { StockRelativeContextCard } from "@/components/stock/StockRelativeContextCard";
 import { TechnicalIndicatorsCard } from "@/components/stock/TechnicalIndicatorsCard";
 import { TopRiskAnalysisCard } from "@/components/market/TopRiskAnalysisCard";
 import { NativeIntelSecurityContext } from "@/components/native-intel/NativeIntelSecurityContext";
@@ -30,6 +31,7 @@ import {
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
   type DividendRow, type FundFlowRow, type DragonTiger, type Lockup, type Blocks, type HotConcept, type QaRow,
   type GlobalStock, type HkCashflow, type KlineBar, type DisclosureItem, type TechnicalIndicators, type TopRiskAnalysis,
+  type StockRelativeContext,
 } from "@/lib/api";
 import { indicatorErrorMessage } from "@/lib/technicalIndicatorsView";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
@@ -136,6 +138,9 @@ export function StockData() {
   const [topRisk, setTopRisk] = useState<TopRiskAnalysis | null>(null);
   const [topRiskErr, setTopRiskErr] = useState<string | null>(null);
   const [topRiskLoading, setTopRiskLoading] = useState(false);
+  const [stockRelativeContext, setStockRelativeContext] = useState<StockRelativeContext | null>(null);
+  const [stockRelativeLoading, setStockRelativeLoading] = useState(false);
+  const [stockRelativeError, setStockRelativeError] = useState<string | null>(null);
   const [panelStates, setPanelStates] = useState<PanelStates>(() => createInitialPanelStates());
   // 技术指标与价格触发（独立 fetch，与 K 线面板解耦）
   const [tiEnv, setTiEnv] = useState<TechnicalIndicators | null>(null);
@@ -322,6 +327,9 @@ export function StockData() {
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
     setGStock(null);
     setCashflow(null);
+    setStockRelativeContext(null);
+    setStockRelativeError(null);
+    setStockRelativeLoading(false);
     setKline([]); setKlineErr(null); setFinance({}); setFinanceErr(null); setInfo({}); setInfoErr(null); setDisc([]); setDiscErr(null);
     setTiEnv(null); setTiLoading(false); setTiError(null);
     commitPanelStates(resetPanelStates());
@@ -361,6 +369,12 @@ export function StockData() {
       if (rid === runIdRef.current) setTopRiskErr(e instanceof ApiError ? e.message : "顶部风险分析失败");
     }).finally(() => {
       if (rid === runIdRef.current) setTopRiskLoading(false);
+    });
+    setStockRelativeLoading(true);
+    api.stockRelativeContext(c).then(ok(setStockRelativeContext)).catch((e) => {
+      if (rid === runIdRef.current) setStockRelativeError(e instanceof ApiError ? e.message : "相对表现数据暂不可用");
+    }).finally(() => {
+      if (rid === runIdRef.current) setStockRelativeLoading(false);
     });
     // K 线 / 季报财务 / 基本面 / 巨潮公告：均为可选依赖，改为按需展开加载（避免每次查询都发 501）
     try {
@@ -611,6 +625,12 @@ export function StockData() {
           </GlassCard>
 
           <TopRiskAnalysisCard env={topRisk} loading={topRiskLoading} error={topRiskErr} />
+
+          <StockRelativeContextCard
+            data={stockRelativeContext}
+            loading={stockRelativeLoading}
+            error={stockRelativeError}
+          />
 
           <NativeIntelSecurityContext code={activeCode} />
 

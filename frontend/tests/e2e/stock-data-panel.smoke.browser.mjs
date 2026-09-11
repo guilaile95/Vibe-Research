@@ -140,6 +140,94 @@ function valuationPayload(code) {
   };
 }
 
+function stockRelativeContextPayload(code, status = "normal") {
+  if (status === "unavailable") {
+    const emptyPeriod = {
+      stock_return_pct: null,
+      industry_median_pct: null,
+      vs_industry_pct_points: null,
+      market_median_pct: null,
+      vs_market_pct_points: null,
+      industry_valid_count: 0,
+      industry_member_count: 0,
+      industry_coverage: null,
+      market_valid_count: 0,
+      market_total_count: 0,
+      market_coverage: null,
+    };
+    return {
+      schema_version: "stock-relative-context.v0.1",
+      status,
+      source: "RESEARCH_DATA_PLANE+EASTMONEY_CURRENT_INDUSTRY",
+      fetched_at: "2026-09-11T08:00:00Z",
+      code,
+      comparison_date: null,
+      industry_name: "电子",
+      industry_status: "unavailable",
+      industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+      dataset_id: "ashare_daily_unadjusted",
+      provider_id: "local_bulk_dump",
+      adjustment: "UNADJUSTED",
+      return_semantics: "UNADJUSTED_RAW_PRICE_CHANGE",
+      relative_unit: "PERCENTAGE_POINTS",
+      stock: { return_5d_pct: null, return_20d_pct: null, return_60d_pct: null },
+      periods: { "5D": emptyPeriod, "20D": emptyPeriod, "60D": emptyPeriod },
+      provenance: {
+        classification_provider: "EASTMONEY",
+        membership_source: "astock.a_share_snapshot.industry=f100",
+        membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+        rdp: null,
+      },
+      warnings: ["RDP fixture unavailable；未将缺失数据伪装成 0。"],
+      limitations: [],
+    };
+  }
+
+  const period = (stock, industry, vsIndustry, market, vsMarket) => ({
+    stock_return_pct: stock,
+    industry_median_pct: industry,
+    vs_industry_pct_points: vsIndustry,
+    market_median_pct: market,
+    vs_market_pct_points: vsMarket,
+    industry_valid_count: 3,
+    industry_member_count: 3,
+    industry_coverage: 1,
+    market_valid_count: 4,
+    market_total_count: 4,
+    market_coverage: 1,
+  });
+  return {
+    schema_version: "stock-relative-context.v0.1",
+    status: "normal",
+    source: "RESEARCH_DATA_PLANE+EASTMONEY_CURRENT_INDUSTRY",
+    fetched_at: "2026-09-11T08:00:00Z",
+    code,
+    comparison_date: "2026-09-11",
+    industry_name: "电子",
+    industry_status: "normal",
+    industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+    dataset_id: "ashare_daily_unadjusted",
+    provider_id: "local_bulk_dump",
+    adjustment: "UNADJUSTED",
+    return_semantics: "UNADJUSTED_RAW_PRICE_CHANGE",
+    relative_unit: "PERCENTAGE_POINTS",
+    stock: { return_5d_pct: 12, return_20d_pct: 10, return_60d_pct: 30 },
+    periods: {
+      "5D": period(12, 6, 6, 5, 7),
+      "20D": period(10, 8, 2, 5.5, 4.5),
+      "60D": period(30, 20, 10, 15, 15),
+    },
+    provenance: {
+      classification_provider: "EASTMONEY",
+      membership_source: "astock.a_share_snapshot.industry=f100",
+      membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+      rdp: { artifact_sha256: "fixture" },
+    },
+    warnings: [],
+    limitations: [],
+  };
+}
+
 function klineBars(code) {
   const base = code === "000001" ? 11 : 8;
   return Array.from({ length: 5 }, (_, i) => ({
@@ -320,6 +408,8 @@ function createApiMockController() {
     valuationCalls: [],
     technicalIndicatorsStatus: "normal",
     technicalIndicatorsCalls: [],
+    relativeContextStatus: "normal",
+    relativeContextCalls: [],
     attentionContextStatus: "normal",
     attentionContextCalls: [],
     attentionContextHoldCode: null,
@@ -352,6 +442,12 @@ function createApiMockController() {
 
     const pathname = pathnameOf(url);
     const code = codeOf(url);
+
+    if (pathname.endsWith("/stock-relative-context")) {
+      state.relativeContextCalls.push({ code, url, ts: Date.now() });
+      await route.fulfill(jsonOk(stockRelativeContextPayload(code, state.relativeContextStatus)));
+      return;
+    }
 
     // K-line: delayed / error / hold for race tests
     if (pathname === "/api/kline" || pathname.endsWith("/kline")) {
@@ -661,6 +757,9 @@ function createApiMockController() {
     setTechnicalIndicatorsStatus(status) {
       state.technicalIndicatorsStatus = status;
     },
+    setRelativeContextStatus(status) {
+      state.relativeContextStatus = status;
+    },
     setAttentionContextStatus(status) {
       state.attentionContextStatus = status;
     },
@@ -743,6 +842,38 @@ async function runSmoke(page, mock, errors) {
     return;
   }
 
+  // Stock Relative Context: one production-page card exposes the same-date
+  // stock/industry/market facts and the unadjusted/current-membership limits.
+  try {
+    const relative = page.getByTestId("stock-relative-context");
+    await relative.waitFor({ state: "visible", timeout: 10000 });
+    for (const text of [
+      "市场 / 行业相对表现",
+      "比较日期：2026-09-11",
+      "当前行业：电子",
+      "CURRENT_MEMBERSHIP_SNAPSHOT",
+      "UNADJUSTED / 未复权",
+      "12.00%",
+      "+6.00%",
+      "+7.00%",
+      "行业有效样本：3 / 3（100.0%）",
+      "市场有效样本：4 / 4（100.0%）",
+    ]) {
+      if (!(await relative.getByText(text, { exact: false }).first().isVisible().catch(() => false))) {
+        errors.push(`${label}: relative context text not visible: ${text}`);
+      }
+    }
+    const relativeText = await relative.innerText();
+    for (const forbidden of ["建议买入", "建议卖出", "综合评分", "BUY", "SELL"]) {
+      if (relativeText.includes(forbidden)) errors.push(`${label}: forbidden relative wording present: ${forbidden}`);
+    }
+    if (mock.state.relativeContextCalls.length < 1) {
+      errors.push(`${label}: relative context endpoint was not requested`);
+    }
+  } catch (e) {
+    errors.push(`${label}: relative context success scenario failed: ${e.message}`);
+  }
+
   // Attention Context 只读面板：绑定已提交代码，展示映射、观察和 provenance。
   try {
     const attention = page.getByTestId("native-intel-security-context");
@@ -773,6 +904,7 @@ async function runSmoke(page, mock, errors) {
 
   // Native Intel 不可用只影响资讯区块，不遮蔽正式 StockData 主数据。
   mock.setAttentionContextStatus("unavailable");
+  mock.setRelativeContextStatus("unavailable");
   await fillCode(page, "000002");
   await clickQuery(page);
   try {
@@ -791,7 +923,17 @@ async function runSmoke(page, mock, errors) {
   } catch (e) {
     errors.push(`${label}: attention context unavailable scenario failed: ${e.message}`);
   }
+  try {
+    const relativeUnavailable = page.getByTestId("stock-relative-context");
+    await relativeUnavailable.getByText("数据不可用", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
+    const unavailableText = await relativeUnavailable.innerText();
+    if (!unavailableText.includes("—")) errors.push(`${label}: unavailable relative context did not show null marker`);
+    if (unavailableText.includes("0.00%")) errors.push(`${label}: unavailable relative context fabricated 0.00%`);
+  } catch (e) {
+    errors.push(`${label}: relative context unavailable scenario failed: ${e.message}`);
+  }
   mock.setAttentionContextStatus("normal");
+  mock.setRelativeContextStatus("normal");
   await fillCode(page, "000001");
   await clickQuery(page);
   try {
@@ -1198,8 +1340,34 @@ async function main() {
     page.on("pageerror", (err) => {
       errors.push(`pageerror: ${err.message}`);
     });
+    page.on("console", (message) => {
+      const sourceUrl = message.location().url || "unknown";
+      // The existing K-line retry scenario intentionally returns one mocked
+      // 500; do not treat that expected fixture transition as a page defect.
+      if (message.type() === "error" && !sourceUrl.includes("/api/kline")) {
+        errors.push(`console.error: ${message.text()} @ ${sourceUrl}`);
+      }
+    });
 
     await runSmoke(page, mock, errors);
+    await page.setViewportSize({ width: 390, height: 844 });
+    try {
+      const narrowRelative = page.getByTestId("stock-relative-context");
+      await narrowRelative.waitFor({ state: "visible", timeout: 10000 });
+      if (!(await narrowRelative.getByText("市场 / 行业相对表现", { exact: true }).isVisible())) {
+        errors.push("stock-data-smoke narrow: relative context heading not visible");
+      }
+      const viewportState = await page.evaluate(() => ({
+        viewport: window.innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        bodyWidth: document.body.scrollWidth,
+      }));
+      if (viewportState.documentWidth > viewportState.viewport + 1 || viewportState.bodyWidth > viewportState.viewport + 1) {
+        errors.push(`stock-data-smoke narrow: page overflow ${JSON.stringify(viewportState)}`);
+      }
+    } catch (e) {
+      errors.push(`stock-data-smoke narrow: relative context check failed: ${e.message}`);
+    }
     await context.close();
   } catch (e) {
     errors.push(`fatal: ${e && e.stack ? e.stack : String(e)}`);
