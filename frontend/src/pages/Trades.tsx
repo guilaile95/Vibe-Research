@@ -27,6 +27,11 @@ import {
   type TradeContinuationContext,
 } from "@/lib/tradeContinuation";
 import {
+  allocationStateLabel,
+  formalOutcomeIdentityTitle,
+  scanStateLabel,
+} from "@/lib/formalOutcomeWorklist";
+import {
   AlertCircle,
   CheckCircle2,
   Filter,
@@ -1300,8 +1305,19 @@ export function Trades() {
                   )}
                   {reconciliation && (
                     <div className="grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
-                      <div><span className="text-muted-foreground">状态：</span><span className="font-semibold text-foreground">{reconciliation.allocation_state}</span></div>
+                      <div>
+                        <span className="text-muted-foreground">状态：</span>
+                        <span className="font-semibold text-foreground">{allocationStateLabel(reconciliation.allocation_state)}</span>
+                        <span className="ml-1 font-mono text-muted-foreground">{reconciliation.allocation_state}</span>
+                      </div>
                       <div><span className="text-muted-foreground">对账：</span><span className="font-semibold text-foreground">{reconciliation.reconciliation_requirement}</span></div>
+                      {candidateScanState && (
+                        <div className="sm:col-span-2">
+                          <span className="text-muted-foreground">扫描：</span>
+                          <span className="font-semibold text-foreground">{scanStateLabel(candidateScanState)}</span>
+                          <span className="ml-1 font-mono text-muted-foreground">{candidateScanState}</span>
+                        </div>
+                      )}
                       {reconciliation.campaign_id && <div className="break-all"><span className="text-muted-foreground">Campaign：</span><span className="font-mono text-foreground">{reconciliation.campaign_id}</span></div>}
                       {reconciliation.decision_id && <div className="break-all"><span className="text-muted-foreground">Frozen Decision：</span><span className="font-mono text-foreground">{reconciliation.decision_id}</span></div>}
                       {reconciliation.origin === "UNPLANNED" && <div className="text-amber-400 sm:col-span-2">来源：明确 UNPLANNED（pre_trade_decision=NONE，pre_trade_thesis=NONE）</div>}
@@ -1331,8 +1347,16 @@ export function Trades() {
                           data-continuation-candidate={preferred ? "preferred" : "available"}
                         >
                           <div className="min-w-0">
-                            <div className="truncate font-mono text-[11px] text-foreground">{candidate.decision_id}</div>
-                            <div className="text-[10px] text-muted-foreground">Campaign {candidate.campaign_id} · {candidate.strategy} · {formatTradeTime(candidate.committed_at)}</div>
+                            <div className="truncate text-[11px] font-medium text-foreground">
+                              {formalOutcomeIdentityTitle({
+                                security_code: candidate.security_code,
+                                strategy: candidate.strategy,
+                                next_best_action: candidate.next_best_action,
+                              })}
+                            </div>
+                            <div className="truncate font-mono text-[10px] text-muted-foreground">{candidate.decision_id}</div>
+                            <div className="truncate font-mono text-[10px] text-muted-foreground">{candidate.campaign_id}</div>
+                            <div className="text-[10px] text-muted-foreground">{formatTradeTime(candidate.committed_at)}</div>
                             {preferred ? (
                               <div className="mt-1 text-[10px] font-medium text-primary">
                                 来自 Frozen Decision 续接；仍需你明确归属

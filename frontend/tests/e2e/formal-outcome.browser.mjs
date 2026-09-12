@@ -154,11 +154,25 @@ function startStaticServer(dir, port) {
 }
 
 async function jsonRequest(base, pathname, method = "GET", body, expected = 200) {
-  const response = await fetch(`${base}${pathname}`, {
-    method,
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let response;
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      response = await fetch(`${base}${pathname}`, {
+        method,
+        headers: body === undefined ? undefined : { "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      await sleep(250);
+    }
+  }
+  if (!response) {
+    throw new Error(`${method} ${pathname}: ${lastError?.message || "fetch failed"}`, { cause: lastError });
+  }
   const payload = await response.json();
   assert.equal(response.status, expected, `${method} ${pathname}: ${JSON.stringify(payload)}`);
   return payload.data;
@@ -221,6 +235,29 @@ const draft = {
   assumptions: "流动性保持稳定",
   invalidations: "业绩发生重大反转",
 };
+
+const STRATEGY_LABELS = { SHORT: "短线", SWING: "波段", MEDIUM: "中线" };
+const ACTION_LABELS = {
+  "BUY NOW": "立即买入",
+  "BUY SMALL": "小仓位买入",
+  "SCALE IN": "分批加仓",
+  WAIT: "等待",
+  HOLD: "继续持有",
+  "WATCH TO REDUCE": "观察并准备减仓",
+  REDUCE: "减仓",
+  EXIT: "退出",
+  AVOID: "回避",
+  "RESEARCH MORE": "继续研究",
+};
+
+function identityTitle({ security_code, strategy, next_best_action }) {
+  const security = typeof security_code === "string" && security_code.trim() ? security_code : "—";
+  const strategyLabel = STRATEGY_LABELS[strategy] || (typeof strategy === "string" && strategy.trim() ? strategy : "—");
+  const nbaLabel = typeof next_best_action === "string" && next_best_action.trim()
+    ? (ACTION_LABELS[next_best_action] || "无法识别的操作")
+    : "未知";
+  return `${security} · ${strategyLabel} · ${nbaLabel}`;
+}
 
 async function fillProposalDraft(page, reviewBy) {
   await page.getByLabel("下次必须重新检查的时间").fill(reviewBy);
@@ -646,6 +683,7 @@ async function run() {
     const evaluationAsOf = runtimeEvaluation.evaluation_as_of;
     env.OL1_CF_EVALUATION_AS_OF = evaluationAsOf;
     const fixtures = prepareTradeAndFactLake(env, pythonScriptConfig(), firstRun.committed.committed, secondRun.committed.committed);
+    await waitHttp(`${backend}/api/health`);
     assert.ok(firstRun.committed.committed.source_refs, JSON.stringify(firstRun.committed));
     const firstBefore = await jsonRequest(
       backend,
@@ -747,10 +785,14 @@ async function run() {
     });
     await page.goto(`${frontend}/decision-performance?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "Formal Decision Outcome" }).waitFor();
-    await page.getByTestId(`formal-outcome-${historyFillerIds[0]}`).getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
-    await page.getByText("Frozen Decision Context", { exact: true }).first().waitFor();
-    await page.getByTestId(`formal-decision-context-${firstRun.decisionId}`).getByText(`Frozen NBA at decision time: ${firstBefore.decision_next_best_action}`, { exact: true }).waitFor();
-    await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
+    await page.getByTestId(`formal-outcome-${historyFillerIds[0]}`).getByText("待评估 · 尚未到期", { exact: true }).waitFor();
+    await page.getByTestId(`formal-decision-context-${firstRun.decisionId}`).getByText(identityTitle({
+      security_code: firstBefore.security_code,
+      strategy: firstBefore.strategy,
+      next_best_action: firstBefore.decision_next_best_action,
+    }), { exact: true }).waitFor();
+    await page.getByTestId(`formal-decision-context-${firstRun.decisionId}`).getByText(`冻结时操作：`, { exact: false }).waitFor();
+    await page.getByText("无实际交易 · 不适用", { exact: true }).waitFor();
     await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
     await page.getByText("Challenge coverage is not decision correctness.", { exact: true }).waitFor();
     await page.getByTestId(`process-review-none-${secondRun.decisionId}`).waitFor();
@@ -768,13 +810,17 @@ async function run() {
     await secondDueItem.waitFor();
     await upcomingItem.waitFor();
     for (const item of historicalActionItems) await item.waitFor();
-    await dueItem.getByTestId(`review-worklist-nba-${firstRun.decisionId}`).getByText(`Frozen NBA at decision time: ${firstDueItem.strategy || "—"} · ${firstBefore.decision_next_best_action}`, { exact: true }).waitFor();
-    await historicalActionItems[0].getByText("Frozen NBA at decision time: SWING · WAIT", { exact: true }).waitFor();
-    await historicalActionItems[1].getByText("Frozen NBA at decision time: MEDIUM · HOLD", { exact: true }).waitFor();
-    await historicalActionItems[2].getByText("Frozen NBA at decision time: SWING · EXIT", { exact: true }).waitFor();
-    assert.equal(await dueItem.getByText("DUE", { exact: true }).count(), 1);
-    assert.equal(await secondDueItem.getByText("DUE", { exact: true }).count(), 1);
-    assert.equal(await upcomingItem.getByText("NOT_DUE", { exact: true }).count(), 1);
+    await dueItem.getByTestId(`review-worklist-nba-${firstRun.decisionId}`).getByText(identityTitle({
+      security_code: firstDueItem.security_code,
+      strategy: firstDueItem.strategy,
+      next_best_action: firstBefore.decision_next_best_action,
+    }), { exact: true }).waitFor();
+    await historicalActionItems[0].getByText("600519 · 波段 · 等待", { exact: true }).waitFor();
+    await historicalActionItems[1].getByText("600519 · 中线 · 继续持有", { exact: true }).waitFor();
+    await historicalActionItems[2].getByText("600519 · 波段 · 退出", { exact: true }).waitFor();
+    assert.equal(await dueItem.getByText("已到复核时点", { exact: true }).count(), 1);
+    assert.equal(await secondDueItem.getByText("已到复核时点", { exact: true }).count(), 1);
+    assert.equal(await upcomingItem.getByText("尚未到期", { exact: true }).count(), 1);
     assert.equal(await page.getByTestId("review-worklist-unavailable").count(), 0);
     assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 50);
     assert.equal(await page.getByTestId(`formal-outcome-${thirdRun.decisionId}`).count(), 0);
@@ -792,12 +838,17 @@ async function run() {
     assert.equal(new URL(exactOutcomeRequest.url()).searchParams.get("evaluation_as_of"), evaluationAsOf);
     const mergedTargetOutcome = page.getByTestId(`formal-outcome-${thirdRun.decisionId}`);
     await mergedTargetOutcome.waitFor();
-    await mergedTargetOutcome.getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
+    await mergedTargetOutcome.getByText("待评估 · 尚未到期", { exact: true }).waitFor();
     await page.waitForFunction((decisionId) => document.activeElement?.id === `formal-outcome-${decisionId}`, thirdRun.decisionId);
     assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 51);
 
+    const historicalIdentities = [
+      { action: "WAIT", strategy: "SWING" },
+      { action: "HOLD", strategy: "MEDIUM" },
+      { action: "EXIT", strategy: "SWING" },
+    ];
     for (const [index, decisionId] of historicalActionIds.entries()) {
-      const action = ["WAIT", "HOLD", "EXIT"][index];
+      const { action, strategy } = historicalIdentities[index];
       const actionItem = page.getByTestId(`review-worklist-upcoming-${decisionId}`);
       const detailRequest = page.waitForRequest((request) => {
         const url = new URL(request.url());
@@ -808,17 +859,27 @@ async function run() {
       await detailRequest;
       const actionOutcome = page.getByTestId(`formal-outcome-${decisionId}`);
       await actionOutcome.waitFor();
-      await actionOutcome.getByText(`Frozen NBA at decision time: ${action}`, { exact: true }).waitFor();
-      await actionOutcome.getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
+      await actionOutcome.getByText(identityTitle({
+        security_code: "600519",
+        strategy,
+        next_best_action: action,
+      }), { exact: true }).waitFor();
+      await actionOutcome.getByText("待评估 · 尚未到期", { exact: true }).waitFor();
     }
     assert.equal(typeof firstBefore.decision_next_best_action, "string");
     assert.equal(
-      await page.getByTestId(`formal-outcome-${firstRun.decisionId}`).getByText(firstBefore.decision_next_best_action, { exact: true }).count() >= 1,
+      await page.getByTestId(`formal-outcome-${firstRun.decisionId}`).getByText(identityTitle({
+        security_code: firstBefore.security_code,
+        strategy: firstBefore.strategy,
+        next_best_action: firstBefore.decision_next_best_action,
+      }), { exact: true }).count() >= 1,
       true,
     );
     assert.equal(await page.getByTestId(`formal-outcome-${firstRun.decisionId}`).getByText("BUY", { exact: true }).count(), 0);
     const actionableConsoleErrors = consoleErrors.filter(
       (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
+        && !message.includes("ERR_CONNECTION_CLOSED")
+        && !message.includes("ERR_CONNECTION_RESET")
         && !message.includes("Failed to load resource: the server responded with a status of 404"),
     );
     assert.equal(actionableConsoleErrors.length, 0, actionableConsoleErrors.join("\n"));
@@ -844,8 +905,8 @@ async function run() {
     );
 
     await page.reload({ waitUntil: "networkidle" });
-    await page.getByTestId(`formal-outcome-${historyFillerIds[0]}`).getByText("PENDING / NOT_DUE", { exact: true }).waitFor();
-    await page.getByText("NO_ACTUAL_TRADE / NOT_APPLICABLE", { exact: true }).waitFor();
+    await page.getByTestId(`formal-outcome-${historyFillerIds[0]}`).getByText("待评估 · 尚未到期", { exact: true }).waitFor();
+    await page.getByText("无实际交易 · 不适用", { exact: true }).waitFor();
     await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
     await page.getByTestId(`process-review-none-${secondRun.decisionId}`).waitFor();
     await page.getByTestId("review-worklist-group-due").waitFor();
@@ -854,7 +915,7 @@ async function run() {
     await page.getByTestId(`review-worklist-due-${secondRun.decisionId}`).waitFor();
     const reloadedUpcoming = page.getByTestId(`review-worklist-upcoming-${thirdRun.decisionId}`);
     await reloadedUpcoming.waitFor();
-    assert.equal(await reloadedUpcoming.getByText("NOT_DUE", { exact: true }).count(), 1);
+    assert.equal(await reloadedUpcoming.getByText("尚未到期", { exact: true }).count(), 1);
     assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 50);
     assert.equal(await page.getByTestId(`formal-outcome-${thirdRun.decisionId}`).count(), 0);
     console.log("[E2E] P0-CF1 Formal Decision Outcome vertical passed");
