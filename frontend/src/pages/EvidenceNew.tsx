@@ -4,6 +4,7 @@ import { ArrowLeft, Save, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError } from "@/lib/api";
+import { safeInternalReturnTo } from "@/lib/internalReturnTo";
 
 const SUBJECT_TYPES = [
   { value: "stock", label: "个股" },
@@ -47,15 +48,13 @@ export function EvidenceNew() {
   const [searchParams] = useSearchParams();
   const querySubjectType = searchParams.get("subject_type");
   const querySubjectId = searchParams.get("subject_id") ?? "";
-  const queryReturnTo = searchParams.get("return_to") ?? "";
   const initialSubjectType = querySubjectType === "stock" || querySubjectType === "sector" || querySubjectType === "theme"
     ? querySubjectType
     : "stock";
   const initialSubjectId = initialSubjectType === "stock"
     ? /^\d{6}$/.test(querySubjectId) ? querySubjectId : ""
     : querySubjectId;
-  // return_to 只接受站内路径（以单个 "/" 开头），支持从 Thesis 页等入口创建后回跳。
-  const returnTo = queryReturnTo.startsWith("/") && !queryReturnTo.startsWith("//") ? queryReturnTo : "";
+  const returnTo = safeInternalReturnTo(searchParams.get("return_to"), "");
   const returnToLabel = returnTo === `/candidates/${initialSubjectId}`
     ? "Candidate Workspace"
     : returnTo
