@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
@@ -42,6 +43,7 @@ _SOURCE_NAMES = {
     "DIVIDEND_BONUS": "eastmoney:RPT_SHAREBONUS_DET",
     "ANNOUNCEMENT": "eastmoney:np-anotice-stock",
 }
+_SECURITY_CODE_RE = re.compile(r"^[0-9]{6}$")
 _CATALYST_LIMITATION = "NO_EXPLICIT_EVENT_CATALYST_LINK"
 _PERIODIC_LIMITATIONS = (
     "APPOINTMENT_DATE_IS_NOT_A_COMPANY_GUARANTEE",
@@ -178,6 +180,37 @@ def _group_campaigns(campaigns: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for entry in result:
         entry["campaign_ids"].sort()
     return result
+
+
+def _normalise_security_code(value: Any) -> str:
+    if not isinstance(value, str) or _SECURITY_CODE_RE.fullmatch(value) is None:
+        raise ResearchEventCalendarValidationError("security_code 必须是 6 位数字")
+    return value
+
+
+def _try_active_campaign_ids_for_security(security_code: str) -> list[str]:
+    """Best-effort attach of matching active campaign ids; never fail the stock calendar."""
+    try:
+        records = campaign_service.list_campaigns()
+    except Exception:  # noqa: BLE001 - SINGLE_SECURITY remains available
+        return []
+    if not isinstance(records, list) or any(not isinstance(item, Mapping) for item in records):
+        return []
+    attached: list[str] = []
+    seen: set[str] = set()
+    for item in records:
+        campaign_id = item.get("campaign_id")
+        if (
+            item.get("security_code") == security_code
+            and item.get("status") in ACTIVE_RESEARCH_CAMPAIGN_STATUSES
+            and isinstance(campaign_id, str)
+            and campaign_id
+            and campaign_id not in seen
+        ):
+            seen.add(campaign_id)
+            attached.append(campaign_id)
+    attached.sort()
+    return attached
 
 
 def _base_event(
@@ -481,22 +514,12 @@ def build_research_event_calendar(
     date_to: str | None = None,
     event_types: list[str] | None = None,
     campaign_ids: list[str] | None = None,
+    security_code: str | None = None,
     today: date | None = None,
 ) -> dict[str, Any]:
     """Build the bounded projection without creating or mutating any record."""
     as_of, start, end = resolve_window(date_from, date_to, today=today)
     selected_types = _normalise_event_types(event_types)
-    campaigns = _active_campaigns(campaign_ids)
-    securities = _group_campaigns(campaigns)
-    fetched_at = _fetched_at()
-    universe = {
-        "kind": "ACTIVE_RESEARCH_CAMPAIGNS",
-        "status": "NORMAL" if securities else "EMPTY",
-        "campaign_count": len(campaigns),
-        "unique_security_count": len(securities),
-        "max_unique_securities": MAX_UNIQUE_SECURITIES,
-        "securities": securities,
-    }
     writes = {
         "campaign": 0,
         "thesis": 0,
@@ -505,34 +528,65 @@ def build_research_event_calendar(
         "trade": 0,
         "account": 0,
     }
-    if len(securities) > MAX_UNIQUE_SECURITIES:
-        universe["status"] = "OVER_LIMIT"
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "status": "UNAVAILABLE",
-            "as_of": as_of.isoformat(),
-            "fetched_at": fetched_at,
-            "window": {"date_from": start.isoformat(), "date_to": end.isoformat(), "semantics": "CALENDAR_DAYS"},
-            "universe": universe,
-            "events": [],
-            "sources": [],
-            "limitations": ["ACTIVE_RESEARCH_CAMPAIGN_UNIVERSE_EXCEEDS_BOUND", _CATALYST_LIMITATION],
-            "writes": writes,
-        }
-
-    if not securities:
-        return {
-            "schema_version": SCHEMA_VERSION,
+    if security_code is not None:
+        code = _normalise_security_code(security_code)
+        if campaign_ids:
+            raise ResearchEventCalendarValidationError("security_code 不能与 campaign_ids 同时使用")
+        attached = _try_active_campaign_ids_for_security(code)
+        securities = [{
+            "security_code": code,
+            "security_name": None,
+            "campaign_ids": attached,
+        }]
+        fetched_at = _fetched_at()
+        universe = {
+            "kind": "SINGLE_SECURITY",
             "status": "NORMAL",
-            "as_of": as_of.isoformat(),
-            "fetched_at": fetched_at,
-            "window": {"date_from": start.isoformat(), "date_to": end.isoformat(), "semantics": "CALENDAR_DAYS"},
-            "universe": universe,
-            "events": [],
-            "sources": [],
-            "limitations": [_CATALYST_LIMITATION],
-            "writes": writes,
+            "campaign_count": len(attached),
+            "unique_security_count": 1,
+            "max_unique_securities": 1,
+            "securities": securities,
         }
+    else:
+        campaigns = _active_campaigns(campaign_ids)
+        securities = _group_campaigns(campaigns)
+        fetched_at = _fetched_at()
+        universe = {
+            "kind": "ACTIVE_RESEARCH_CAMPAIGNS",
+            "status": "NORMAL" if securities else "EMPTY",
+            "campaign_count": len(campaigns),
+            "unique_security_count": len(securities),
+            "max_unique_securities": MAX_UNIQUE_SECURITIES,
+            "securities": securities,
+        }
+        if len(securities) > MAX_UNIQUE_SECURITIES:
+            universe["status"] = "OVER_LIMIT"
+            return {
+                "schema_version": SCHEMA_VERSION,
+                "status": "UNAVAILABLE",
+                "as_of": as_of.isoformat(),
+                "fetched_at": fetched_at,
+                "window": {"date_from": start.isoformat(), "date_to": end.isoformat(), "semantics": "CALENDAR_DAYS"},
+                "universe": universe,
+                "events": [],
+                "sources": [],
+                "limitations": ["ACTIVE_RESEARCH_CAMPAIGN_UNIVERSE_EXCEEDS_BOUND", _CATALYST_LIMITATION],
+                "writes": writes,
+            }
+
+        if not securities:
+            return {
+                "schema_version": SCHEMA_VERSION,
+                "status": "NORMAL",
+                "as_of": as_of.isoformat(),
+                "fetched_at": fetched_at,
+                "window": {"date_from": start.isoformat(), "date_to": end.isoformat(), "semantics": "CALENDAR_DAYS"},
+                "universe": universe,
+                "events": [],
+                "sources": [],
+                "limitations": [_CATALYST_LIMITATION],
+                "writes": writes,
+            }
 
     events: dict[str, dict[str, Any]] = {}
     source_summaries: list[dict[str, Any]] = []

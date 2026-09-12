@@ -12,6 +12,7 @@ import { OptionalDataPanel } from "@/components/ui/OptionalDataPanel";
 import { StockThesisPanel } from "@/components/stock/StockThesisPanel";
 import { TechnicalIndicatorsCard } from "@/components/stock/TechnicalIndicatorsCard";
 import { TopRiskAnalysisCard } from "@/components/market/TopRiskAnalysisCard";
+import { ResearchEventCalendar } from "@/components/campaign/ResearchEventCalendar";
 import { NativeIntelSecurityContext } from "@/components/native-intel/NativeIntelSecurityContext";
 import {
   type PanelId,
@@ -611,6 +612,12 @@ export function StockData() {
           </GlassCard>
 
           <TopRiskAnalysisCard env={topRisk} loading={topRiskLoading} error={topRiskErr} />
+
+          {/^\d{6}$/.test(activeCode) && (
+            <div className="mb-4">
+              <ResearchEventCalendar key={activeCode} securityCode={activeCode} />
+            </div>
+          )}
 
           <NativeIntelSecurityContext code={activeCode} />
 

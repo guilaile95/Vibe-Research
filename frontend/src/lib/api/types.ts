@@ -470,7 +470,7 @@ export interface ResearchEventCalendar {
   fetched_at: string;
   window: { date_from: string; date_to: string; semantics: "CALENDAR_DAYS" | string };
   universe: {
-    kind: "ACTIVE_RESEARCH_CAMPAIGNS" | string;
+    kind: "ACTIVE_RESEARCH_CAMPAIGNS" | "SINGLE_SECURITY" | string;
     status: "NORMAL" | "EMPTY" | "OVER_LIMIT" | string;
     campaign_count: number;
     unique_security_count: number;
