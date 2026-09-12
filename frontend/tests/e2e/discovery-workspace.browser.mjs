@@ -249,6 +249,7 @@ try {
   assert.equal(await page.getByTestId("strategy-SWING").getAttribute("aria-selected"), "true");
   assert.equal(await page.getByTestId("full-market-form").count(), 0);
   await page.getByTestId("discovery-summary").getByText(/行情归属 2026-08-28/).waitFor();
+  await page.getByTestId("discovery-summary").getByText("核心池", { exact: true }).waitFor();
   assert.doesNotMatch(await page.getByTestId("discovery-summary").innerText(), /行情归属 2026-08-30/);
   await page.getByTestId("discovery-item-SWING-600519").getByText("CATALYST_DISCLOSED", { exact: true }).waitFor();
   const discoveryText = await workspace.innerText();
@@ -257,13 +258,13 @@ try {
   assert.doesNotMatch(discoveryText, /Market Cloud|市场情报/);
 
   // C: Restricted items remain discoverable but visibly carry stricter, research-only semantics.
-  await page.getByLabel("Discovery restricted").selectOption("RESTRICTED");
+  await page.getByTestId("discovery-restricted-filter").selectOption("RESTRICTED");
   const restrictedCard = page.getByTestId("discovery-item-SWING-600221");
   await restrictedCard.waitFor();
-  await restrictedCard.getByText("Restricted", { exact: true }).waitFor();
+  await restrictedCard.getByText("受限研究", { exact: true }).waitFor();
   await restrictedCard.getByText("RESTRICTED_RESEARCH_ONLY", { exact: true }).waitFor();
   assert.equal(await page.getByTestId("discovery-item-SWING-600519").count(), 0);
-  await page.getByLabel("Discovery restricted").selectOption("ALL");
+  await page.getByTestId("discovery-restricted-filter").selectOption("ALL");
 
   // D: strategy queues differ; there is no unified score forcing one common ranking.
   await page.getByTestId("strategy-SHORT").click();
@@ -304,6 +305,7 @@ try {
   assert.doesNotMatch(staleSummary, /抓取于 2026-08-30 12:00/);
 
   // E: explicit handoff preserves identity and loads P1 Candidate without creating formal state.
+  await page.getByTestId("discovery-candidate-600519").getByText("进入候选研究").waitFor();
   await page.getByTestId("discovery-candidate-600519").click();
   await page.waitForURL(/\/candidates\/600519$/);
   const candidate = page.getByTestId("candidate-workspace");
