@@ -291,6 +291,67 @@ function technicalIndicatorsEnvelope(code, { status = "normal" } = {}) {
   };
 }
 
+function researchEventCalendarEnvelope(code) {
+  return {
+    schema_version: "research_event_calendar.v0.1",
+    status: "NORMAL",
+    as_of: "2026-09-09",
+    fetched_at: "2026-09-09T00:00:00.000000Z",
+    window: { date_from: "2026-08-26", date_to: "2026-12-08", semantics: "CALENDAR_DAYS" },
+    universe: {
+      kind: "SINGLE_SECURITY",
+      status: "NORMAL",
+      campaign_count: 0,
+      unique_security_count: 1,
+      max_unique_securities: 1,
+      securities: [{ security_code: code, security_name: null, campaign_ids: [] }],
+    },
+    events: [
+      {
+        event_id: `event_periodic_${code}`,
+        security_code: code,
+        security_name: null,
+        campaign_ids: [],
+        event_type: "PERIODIC_REPORT",
+        event_date: "2026-09-20",
+        date_semantics: "DATE_ONLY",
+        state: "EXPECTED",
+        title: "预计披露日（不是公司保证日期）",
+        details: {
+          report_date: "2026-06-30",
+          appointment_date: "2026-09-20",
+          actual_date: null,
+          semantics: "预约披露日不是公司保证日期；预约日已过不等同于违规；实际披露不代表符合预期",
+        },
+        source: "eastmoney:RPT_PUBLIC_BS_APPOIN",
+        source_record_identity: `report:2026-06-30|appointment:2026-09-20|actual:None|next|${code}`,
+        fetched_at: "2026-09-09T00:00:00.000000Z",
+        limitations: [
+          "APPOINTMENT_DATE_IS_NOT_A_COMPANY_GUARANTEE",
+          "ACTUAL_DISCLOSURE_IS_NOT_AN_EXPECTATION_JUDGEMENT",
+          "NO_EXPLICIT_EVENT_CATALYST_LINK",
+        ],
+      },
+    ],
+    sources: [
+      {
+        event_type: "PERIODIC_REPORT",
+        source: "eastmoney:RPT_PUBLIC_BS_APPOIN",
+        status: "NORMAL",
+        security_count: 1,
+        success_count: 1,
+        failure_count: 0,
+        unavailable_count: 0,
+        no_record_count: 0,
+        security_statuses: [{ security_code: code, status: "NORMAL", state: "EXPECTED" }],
+        limitations: ["NO_EXPLICIT_EVENT_CATALYST_LINK"],
+      },
+    ],
+    limitations: ["NO_EXPLICIT_EVENT_CATALYST_LINK"],
+    writes: { campaign: 0, thesis: 0, evidence: 0, decision: 0, trade: 0, account: 0 },
+  };
+}
+
 function jsonOk(body) {
   return {
     status: 200,
@@ -632,6 +693,12 @@ function createApiMockController() {
       return;
     }
 
+    if (pathname === "/api/research-events" || pathname.endsWith("/research-events")) {
+      const securityCode = new URL(url).searchParams.get("security_code") || code || "000001";
+      await route.fulfill(jsonOk(researchEventCalendarEnvelope(securityCode)));
+      return;
+    }
+
     // Fallback for any other /api/*
     await route.fulfill(jsonOk({}));
   }
@@ -769,6 +836,46 @@ async function runSmoke(page, mock, errors) {
     }
   } catch (e) {
     errors.push(`${label}: attention context success scenario failed: ${e.message}`);
+  }
+
+  try {
+    const calendar = page.getByTestId("research-event-calendar");
+    await calendar.waitFor({ state: "visible", timeout: 10000 });
+    if ((await calendar.getAttribute("data-security-code")) !== "000001") {
+      errors.push(`${label}: event calendar is not bound to submitted 000001`);
+    }
+    const row = calendar.getByTestId("research-event-row").first();
+    if ((await row.getAttribute("data-event-type")) !== "PERIODIC_REPORT") {
+      errors.push(`${label}: expected one PERIODIC_REPORT event row`);
+    }
+    if (!(await calendar.getByText("预计披露日（不是公司保证日期）", { exact: true }).first().isVisible().catch(() => false))) {
+      errors.push(`${label}: PERIODIC_REPORT title not visible`);
+    }
+    if (await calendar.getByText("全部股票", { exact: true }).isVisible().catch(() => false)) {
+      errors.push(`${label}: stock-scoped calendar still shows the security filter`);
+    }
+    const limitationToggle = calendar.getByText("来源与限制").first();
+    if (await limitationToggle.isVisible().catch(() => false)) {
+      await limitationToggle.click();
+    }
+    const calendarText = await calendar.innerText();
+    if (!calendarText.includes("未自动绑定研究 Catalyst") && !calendarText.includes("NO_EXPLICIT_EVENT_CATALYST_LINK")) {
+      errors.push(`${label}: catalyst limitation not visible`);
+    }
+    if (calendarText.includes("实际披露日")) {
+      errors.push(`${label}: null actual_date was fabricated into the event row`);
+    }
+    if (calendarText.includes("active research Campaign") || calendarText.includes("active Campaign")) {
+      errors.push(`${label}: stock-scoped calendar still claims it only covers active Campaigns`);
+    }
+    for (const forbidden of ["建议买入", "建议卖出", "BUY", "SELL"]) {
+      if (calendarText.includes(forbidden)) errors.push(`${label}: forbidden calendar wording present: ${forbidden}`);
+    }
+    if (!(await page.getByRole("heading", { name: "平安银行" }).isVisible().catch(() => false))) {
+      errors.push(`${label}: event calendar hid the StockData header`);
+    }
+  } catch (e) {
+    errors.push(`${label}: research event calendar success scenario failed: ${e.message}`);
   }
 
   // Native Intel 不可用只影响资讯区块，不遮蔽正式 StockData 主数据。

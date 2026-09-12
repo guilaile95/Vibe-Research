@@ -173,7 +173,13 @@ function EventRow({ event }: { event: ResearchEventCalendarEvent }) {
   );
 }
 
-export function ResearchEventCalendar({ reloadEpoch = 0 }: { reloadEpoch?: number }) {
+export function ResearchEventCalendar({
+  reloadEpoch = 0,
+  securityCode,
+}: {
+  reloadEpoch?: number;
+  securityCode?: string;
+}) {
   const [data, setData] = useState<ResearchEventCalendarData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -182,13 +188,14 @@ export function ResearchEventCalendar({ reloadEpoch = 0 }: { reloadEpoch?: numbe
   const [appliedWindow, setAppliedWindow] = useState<{ date_from?: string; date_to?: string }>({});
   const [filters, setFilters] = useState<ResearchEventFilters>({ securityCode: "", eventType: "ALL", state: "ALL" });
   const generationRef = useRef(0);
+  const scoped = Boolean(securityCode);
 
   const load = useCallback((windowParams: { date_from?: string; date_to?: string }) => {
     const generation = ++generationRef.current;
     const controller = new AbortController();
     setLoading(true);
     setError("");
-    void api.getResearchEventCalendar({ ...windowParams, signal: controller.signal })
+    void api.getResearchEventCalendar({ ...windowParams, security_code: securityCode, signal: controller.signal })
       .then((result) => {
         if (!shouldApplyResearchEventResponse(generation, generationRef.current)) return;
         setData(result);
@@ -204,7 +211,7 @@ export function ResearchEventCalendar({ reloadEpoch = 0 }: { reloadEpoch?: numbe
         if (shouldApplyResearchEventResponse(generation, generationRef.current)) setLoading(false);
       });
     return () => controller.abort();
-  }, []);
+  }, [securityCode]);
 
   useEffect(() => {
     const cancel = load(appliedWindow);
@@ -234,7 +241,11 @@ export function ResearchEventCalendar({ reloadEpoch = 0 }: { reloadEpoch?: numbe
   };
 
   return (
-    <section className="min-w-0 space-y-4 rounded-lg border border-border/60 bg-card/50 p-4" data-testid="research-event-calendar">
+    <section
+      className="min-w-0 space-y-4 rounded-lg border border-border/60 bg-card/50 p-4"
+      data-testid="research-event-calendar"
+      data-security-code={securityCode}
+    >
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -243,7 +254,9 @@ export function ResearchEventCalendar({ reloadEpoch = 0 }: { reloadEpoch?: numbe
             {data && <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">{statusLabel(data.status)}</span>}
           </div>
           <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">
-            汇总当前 active research Campaign 的已观察事件与 provider 支持的日期，不是提醒、预测或买卖判断。
+            {scoped
+              ? "展示当前股票的已观察事件与 provider 支持的日期，不是提醒、预测或买卖判断。"
+              : "汇总当前 active research Campaign 的已观察事件与 provider 支持的日期，不是提醒、预测或买卖判断。"}
           </p>
         </div>
         <button
@@ -271,12 +284,12 @@ export function ResearchEventCalendar({ reloadEpoch = 0 }: { reloadEpoch?: numbe
       )}
       {!loading && !error && data && (
         <>
-          {data.universe.status === "EMPTY" && (
+          {!scoped && data.universe.status === "EMPTY" && (
             <div className="rounded-md border border-dashed border-border/60 bg-background/30 p-4 text-xs text-muted-foreground" data-testid="research-event-empty-universe">
               当前没有 active Campaign，事件日历不会扫描全市场、Watchlist 或真实持仓。
             </div>
           )}
-          {data.universe.status === "OVER_LIMIT" && (
+          {!scoped && data.universe.status === "OVER_LIMIT" && (
             <div className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-xs text-red-700 dark:text-red-400" data-testid="research-event-over-limit">
               当前 active research Campaign 对应证券超过 {data.universe.max_unique_securities} 只，已停止请求，未静默截断。
             </div>
@@ -304,14 +317,16 @@ export function ResearchEventCalendar({ reloadEpoch = 0 }: { reloadEpoch?: numbe
             <button type="submit" className="self-end rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90">应用范围</button>
           </form>
 
-          <div className="grid min-w-0 gap-2 sm:grid-cols-3" data-testid="research-event-filters">
-            <label className="grid min-w-0 gap-1 text-[11px] text-muted-foreground">
-              股票
-              <select value={filters.securityCode} onChange={(event) => setFilters((current) => ({ ...current, securityCode: event.target.value }))} className="min-w-0 rounded border border-border/60 bg-background px-2 py-1.5 text-xs text-foreground">
-                <option value="">全部股票</option>
-                {securityOptions.map((security) => <option key={security.security_code} value={security.security_code}>{security.security_code}</option>)}
-              </select>
-            </label>
+          <div className={`grid min-w-0 gap-2 ${scoped ? "sm:grid-cols-2" : "sm:grid-cols-3"}`} data-testid="research-event-filters">
+            {!scoped && (
+              <label className="grid min-w-0 gap-1 text-[11px] text-muted-foreground">
+                股票
+                <select value={filters.securityCode} onChange={(event) => setFilters((current) => ({ ...current, securityCode: event.target.value }))} className="min-w-0 rounded border border-border/60 bg-background px-2 py-1.5 text-xs text-foreground">
+                  <option value="">全部股票</option>
+                  {securityOptions.map((security) => <option key={security.security_code} value={security.security_code}>{security.security_code}</option>)}
+                </select>
+              </label>
+            )}
             <label className="grid min-w-0 gap-1 text-[11px] text-muted-foreground">
               事件类型
               <select value={filters.eventType} onChange={(event) => setFilters((current) => ({ ...current, eventType: event.target.value as ResearchEventType | "ALL" }))} className="min-w-0 rounded border border-border/60 bg-background px-2 py-1.5 text-xs text-foreground">
@@ -332,7 +347,9 @@ export function ResearchEventCalendar({ reloadEpoch = 0 }: { reloadEpoch?: numbe
 
           {data.universe.status === "NORMAL" && filteredEvents.length === 0 && (
             <div className="rounded-md border border-dashed border-border/60 bg-background/30 p-4 text-xs text-muted-foreground" data-testid="research-event-no-events">
-              有 active Campaign，但当前窗口和筛选条件内没有事件。NO_RECORD 与 provider failure 仍会在上方来源状态中分别显示。
+              {scoped
+                ? "当前窗口和筛选条件内没有该股票的事件。NO_RECORD 与 provider failure 仍会在上方来源状态中分别显示。"
+                : "有 active Campaign，但当前窗口和筛选条件内没有事件。NO_RECORD 与 provider failure 仍会在上方来源状态中分别显示。"}
             </div>
           )}
           {groups.length > 0 && (

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, CheckCircle2, FileSearch, Loader2 } from "lucide-react";
 import { CandidateCampaignPanel } from "@/components/campaign/CandidateCampaignPanel";
+import { ResearchEventCalendar } from "@/components/campaign/ResearchEventCalendar";
 import { NativeIntelSecurityContext } from "@/components/native-intel/NativeIntelSecurityContext";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -137,6 +138,8 @@ export function CandidateWorkspace() {
         </GlassCard>
 
         <NativeIntelSecurityContext code={code} />
+
+        <ResearchEventCalendar key={code} securityCode={code} />
 
         <GlassCard data-testid="candidate-evidence-gap">
           <div className="flex flex-wrap items-start justify-between gap-3">
