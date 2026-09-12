@@ -496,3 +496,16 @@ def read_current_industry_classification(
         for industry, members in groups.items()
         for member in members
     }
+
+
+def read_current_membership_groups(
+    *, snapshot_reader: SnapshotReader | None = None,
+) -> tuple[dict[str, list[dict[str, Any]]], int]:
+    """Return the current Eastmoney membership groups without RDP history."""
+    read_snapshot = snapshot_reader or astock.a_share_snapshot
+    return _normalize_snapshot(read_snapshot())
+
+
+def build_current_member_valuation(members: list[dict[str, Any]]) -> dict[str, Any]:
+    """Current-member PE/PB distribution; not an index or historical percentile."""
+    return _build_valuation(members)
