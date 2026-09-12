@@ -192,6 +192,48 @@ function nativeIntelUnavailableEnvelope(code) {
   };
 }
 
+function stockRelativeContextUnavailableEnvelope(code) {
+  const emptyPeriod = {
+    stock_return_pct: null,
+    industry_median_pct: null,
+    vs_industry_pct_points: null,
+    market_median_pct: null,
+    vs_market_pct_points: null,
+    industry_valid_count: 0,
+    industry_member_count: 0,
+    industry_coverage: null,
+    market_valid_count: 0,
+    market_total_count: 0,
+    market_coverage: null,
+  };
+  return {
+    schema_version: "stock-relative-context.v0.1",
+    status: "unavailable",
+    source: "RESEARCH_DATA_PLANE+EASTMONEY_CURRENT_INDUSTRY",
+    fetched_at: "2026-07-30T09:30:12.123456Z",
+    code,
+    comparison_date: null,
+    industry_name: null,
+    industry_status: "unavailable",
+    industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+    dataset_id: "ashare_daily_unadjusted",
+    provider_id: "local_bulk_dump",
+    adjustment: "UNADJUSTED",
+    return_semantics: "UNADJUSTED_RAW_PRICE_CHANGE",
+    relative_unit: "PERCENTAGE_POINTS",
+    stock: { return_5d_pct: null, return_20d_pct: null, return_60d_pct: null },
+    periods: { "5D": emptyPeriod, "20D": emptyPeriod, "60D": emptyPeriod },
+    provenance: {
+      classification_provider: "EASTMONEY",
+      membership_source: "astock.a_share_snapshot.industry=f100",
+      membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+      rdp: null,
+    },
+    warnings: ["top-risk E2E 未提供相对表现数据；保持 unavailable。"],
+    limitations: [],
+  };
+}
+
 /**
  * Build a realistic normal top risk envelope.
  */
@@ -395,6 +437,14 @@ function createApiMockController() {
     if (pathname.startsWith("/api/native-intel/security-context/")) {
       const code = pathname.split("/").pop() || "000001";
       await route.fulfill(jsonOk(nativeIntelUnavailableEnvelope(code)));
+      return;
+    }
+
+    // StockData requests this independent read-only panel on every A-share
+    // query; keep this top-risk-only fixture explicit and non-failing.
+    if (pathname === "/api/stock-relative-context") {
+      const code = new URL(url).searchParams.get("code") || "000001";
+      await route.fulfill(jsonOk(stockRelativeContextUnavailableEnvelope(code)));
       return;
     }
 
