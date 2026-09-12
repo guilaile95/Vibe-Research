@@ -405,10 +405,10 @@ export function StockData() {
     void run(initialCode);
   }, []);
 
-  const metrics = val ? [
+  const metrics: { k: string; v: string; testId?: string }[] = val ? [
     { k: "现价", v: fmt(val.price) },
-    { k: "PE(TTM)", v: fmt(val.pe_ttm) },
-    { k: "PB", v: fmt(val.pb) },
+    { k: "PE(TTM)", v: fmt(val.pe_ttm), testId: "stock-header-pe-ttm" },
+    { k: "PB", v: fmt(val.pb), testId: "stock-header-pb" },
     { k: "总市值", v: fmt(val.mcap_yi, " 亿") },
     { k: "26E EPS", v: fmt(val.eps_26e) },
     { k: "前向PE", v: fmt(val.pe_26e) },
@@ -417,7 +417,7 @@ export function StockData() {
   ] : [];
 
   const aiContext = val
-    ? `个股：${val.name}（${val.code}）\n现价 ${val.price} · PE(TTM) ${val.pe_ttm} · PB ${val.pb} · 市值 ${val.mcap_yi}亿\n` +
+    ? `个股：${val.name}（${val.code}）\n现价 ${val.price} · PE(TTM) ${fmt(val.pe_ttm)} · PB ${fmt(val.pb)} · 市值 ${val.mcap_yi}亿\n` +
       `26E EPS ${val.eps_26e ?? "—"} · 前向PE ${val.pe_26e ?? "—"} · PEG ${val.peg ?? "—"} · 消化 ${val.digest_years ?? "—"}年 · 机构覆盖 ${val.analyst_count} 家\n` +
       (pctl?.metrics.pe_ttm ? `估值历史分位(近5年)：PE-TTM 处于 ${pctl.metrics.pe_ttm.percentile}% 分位、PB 处于 ${pctl.metrics.pb?.percentile ?? "—"}% 分位\n` : "") +
       (fin?.revenue ? `财务快照(报告期末${fin.period_end ?? "未知"}，披露日期未知，非PIT)：营收 ${fin.revenue}(同比${fin.revenue_yoy ?? "未知"})、净利润 ${fin.net_profit ?? "未知"}(同比${fin.net_profit_yoy ?? "未知"})、扣非净利润同比 ${fin.deduct_net_profit_yoy ?? "未知"}、ROE ${fin.roe ?? "未知"}、毛利率 ${fin.gross_margin ?? "未知"}、经营现金流 ${fin.operating_cash_flow ?? "未知"}、现金转化率 ${fin.cash_conversion_ratio ?? "未知"}、自由现金流 ${fin.free_cash_flow ?? "未知"}、资产负债率 ${fin.debt_ratio ?? "未知"}\n` : "") +
@@ -599,12 +599,15 @@ export function StockData() {
             </div>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {metrics.map((m) => (
-                <div key={m.k} className="rounded-lg bg-muted/30 p-3">
+                <div key={m.k} className="rounded-lg bg-muted/30 p-3" data-testid={m.testId}>
                   <p className="text-xs text-muted-foreground">{m.k}</p>
                   <p className="mt-0.5 font-mono text-lg font-bold">{m.v}</p>
                 </div>
               ))}
             </div>
+            <p className="mt-3 text-[11px] text-muted-foreground/60" data-testid="stock-header-pe-source">
+              PE-TTM 来源 Eastmoney f115；缺失不显示为 0。
+            </p>
             {val.forecast_note && (
               <p className="mt-3 text-xs text-warning">{val.forecast_note}</p>
             )}
