@@ -64,7 +64,10 @@ export function StockRelativeContextCard({ data, loading, error }: Props) {
           </div>
 
           {data.industry_status !== "normal" && (
-            <p className="mb-3 rounded border border-warning/30 bg-warning/5 p-2 text-xs text-warning">
+            <p
+              className="mb-3 rounded border border-warning/30 bg-warning/5 p-2 text-xs text-warning"
+              data-testid="stock-relative-industry-notice"
+            >
               {data.industry_status === "unknown"
                 ? "当前行业为 UNKNOWN，行业中位数不计算；市场比较仍可独立显示。"
                 : "当前行业快照不可用，行业中位数不计算；市场比较仍独立显示。"}
@@ -91,7 +94,11 @@ export function StockRelativeContextCard({ data, loading, error }: Props) {
                 {HORIZONS.map((horizon) => {
                   const period = data.periods[horizon];
                   return (
-                    <tr key={horizon} className="border-t border-border/40">
+                    <tr
+                      key={horizon}
+                      className="border-t border-border/40"
+                      data-testid={`stock-relative-horizon-${horizon}`}
+                    >
                       <td className="py-2 pr-3 font-mono">
                         <span>{horizon}</span>
                         <span className="ml-1 text-[10px] text-muted-foreground">原始价格变化</span>
