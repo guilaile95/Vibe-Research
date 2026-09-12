@@ -5,6 +5,7 @@ import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, LockKeyhole } from "luci
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ApiError, CommittedDecisionReadError, api, DECISION_CHALLENGE_DIMENSIONS, type DecisionChallengeDimensionInput, type DecisionChallengeDimensionName, type DecisionChallengePacket, type DecisionProposalDraftInput, type DecisionProposalPreview, type CommittedDecisionRuntimeRead } from "@/lib/api";
 import { VIEW_STANCE_LABELS, VIEW_STANCE_OPTIONS, buildJudgedView, buildPortfolioView, joinDraftLines, type ViewStance } from "@/lib/decisionProposalForm";
+import { CHALLENGE_DIMENSIONS_INPUT_MESSAGE, challengeDimensionsReady, challengeFinalizeFailureReadState } from "@/lib/decisionChallengeForm";
 import { hydratedHorizonValue, resolveDecisionContext, type DecisionContextHydrationResult } from "@/lib/decisionContextHydration";
 import { browserTimeZoneName, formatUtcOffsetMinutes, parseReviewBoundary } from "@/lib/reviewBoundaryInput";
 import { buildEvaluatedTradeContinuationHref } from "@/lib/tradeContinuation";
@@ -583,8 +584,10 @@ export function DecisionProposalReview() {
     }
   };
 
+  const challengeDraftReady = challengeDimensionsReady(challengeDraft);
+
   const handleFinalizeChallenge = async () => {
-    if (!preview || !draft || !challengeConfirmed || challengeReadState !== "ABSENT") return;
+    if (!preview || !draft || !challengeConfirmed || !challengeDraftReady || challengeReadState !== "ABSENT") return;
     setBusy("challenge");
     setChallengeReadState("PENDING");
     setChallengePacket(null);
@@ -598,19 +601,32 @@ export function DecisionProposalReview() {
         user_confirmed: true,
         dimensions: challengeDraft,
       });
-      const reread = await api.getDecisionChallenge(result.challenge.challenge_id);
-      setChallengePacket(reread.challenge);
-      setChallengeReadState("FOUND");
-      setBindChallenge(true);
+      try {
+        const reread = await api.getDecisionChallenge(result.challenge.challenge_id);
+        setChallengePacket(reread.challenge);
+        setChallengeReadState("FOUND");
+        setBindChallenge(true);
+      } catch (err) {
+        setChallengeReadState("ERROR");
+        setChallengePacket(null);
+        setBindChallenge(false);
+        setError(err instanceof ApiError ? `决策挑战读取失败：${err.message}` : "决策挑战状态当前无法验证。");
+      }
     } catch (err) {
-      setChallengeReadState("ERROR");
       setChallengePacket(null);
       setBindChallenge(false);
       if (err instanceof ApiError && err.status === 409) {
         setPreview(null);
+        setChallengeReadState("ERROR");
         setError("决策草案已失效，挑战记录未写入，请重新预览。");
       } else {
-        setError(err instanceof ApiError ? `决策挑战读取失败：${err.message}` : "决策挑战状态当前无法验证。");
+        const nextState = challengeFinalizeFailureReadState(err);
+        setChallengeReadState(nextState);
+        setError(
+          nextState === "ABSENT"
+            ? CHALLENGE_DIMENSIONS_INPUT_MESSAGE
+            : err instanceof ApiError ? `决策挑战读取失败：${err.message}` : "决策挑战状态当前无法验证。",
+        );
       }
     } finally {
       setBusy(null);
@@ -1423,7 +1439,7 @@ export function DecisionProposalReview() {
                 <button
                   type="button"
                   onClick={() => void handleFinalizeChallenge()}
-                  disabled={!challengeConfirmed || busy !== null || !draft || challengeReadState !== "ABSENT"}
+                  disabled={!challengeConfirmed || !challengeDraftReady || busy !== null || !draft || challengeReadState !== "ABSENT"}
                   className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50"
                 >
                   {busy === "challenge" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
